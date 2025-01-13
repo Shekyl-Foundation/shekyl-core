@@ -1652,8 +1652,7 @@ bool simple_wallet::submit_multisig_main(const std::vector<std::string> &args, b
       return false;
     }
 
-    // actually commit the transactions
-    commit_or_save(txs.m_ptx, /* do_not_relay */ false);
+    commit_or_save(txs.m_ptx, m_do_not_relay);
   }
   catch (const std::exception &e)
   {
