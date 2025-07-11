@@ -1277,8 +1277,7 @@ namespace cryptonote
         res.status = "Failed, size of data mismatch";
         return true;
       }
-      key_images.emplace_back();
-      crypto::key_image &ki = key_images.back();
+      crypto::key_image &ki = key_images.emplace_back();
       memcpy(&ki, b.data(), sizeof(crypto::key_image));
     }
     std::vector<bool> spent_status;
