@@ -644,7 +644,11 @@ bool t_rpc_command_executor::print_connections() {
     }
   }
 
-  tools::msg_writer() << std::setw(30) << std::left << "Remote Host"
+  int host_field_width = 15;
+  for (const auto &conn : res.connections)
+    host_field_width = std::max(host_field_width, 8 + (int) conn.address.length());
+
+  tools::msg_writer() << std::setw(host_field_width) << std::left << "Remote Host"
       << std::setw(8) << "Type"
       << std::setw(6) << "SSL"
       << std::setw(20) << "Peer id"
