@@ -55,6 +55,10 @@ static std::string db_path;
 static uint64_t records_per_sync = 128;
 static const size_t slack = 512 * 1024 * 1024;
 
+static constexpr uint32_t MAX_SUPPORTED_DB_VERSION = 5;
+
+static std::vector<bool> is_v1;
+
 static std::error_code replace_file(const boost::filesystem::path& replacement_name, const boost::filesystem::path& replaced_name)
 {
   std::error_code ec = tools::replace_file(replacement_name.string(), replaced_name.string());
@@ -149,7 +153,44 @@ static bool resize_point(size_t nrecords, MDB_env *env, MDB_txn **txn, size_t &b
   return true;
 }
 
-static void copy_table(MDB_env *env0, MDB_env *env1, const char *table, unsigned int flags, unsigned int putflags, int (*cmp)(const MDB_val*, const MDB_val*)=0)
+static uint32_t get_blockchain_db_version(MDB_env *env)
+{
+  MDB_dbi properties_dbi;
+  MDB_txn *txn;
+  bool tx_active = false;
+  int rc;
+  MDB_val k;
+  MDB_val v;
+  uint32_t db_version = std::numeric_limits<uint32_t>::max();
+
+  const epee::misc_utils::auto_scope_leave_caller txn_dtor = epee::misc_utils::create_scope_leave_handler([&](){
+    if (tx_active) mdb_txn_abort(txn);
+  });
+
+  rc = mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
+  if (rc) throw std::runtime_error("Failed to create LMDB transaction: " + std::string(mdb_strerror(rc)));
+  tx_active = true;
+  rc = mdb_dbi_open(txn, "properties", /*flags=*/0, &properties_dbi);
+  if (rc) throw std::runtime_error("Failed to open LMDB properties dbi: " + std::string(mdb_strerror(rc)));
+  mdb_set_compare(txn, properties_dbi, BlockchainLMDB::compare_string);
+
+  char VERSION_KEY[] = "version";
+  k.mv_data = reinterpret_cast<void*>(VERSION_KEY);
+  k.mv_size = sizeof(VERSION_KEY);
+  v = {};
+  rc = mdb_get(txn, properties_dbi, &k, &v);
+  if (rc) throw std::runtime_error("Failed to get version from properties table: " + std::string(mdb_strerror(rc)));
+  if (v.mv_data == nullptr || v.mv_size != sizeof(db_version))
+    throw std::runtime_error("Fetched version entry is wrong size");
+  memcpy(&db_version, v.mv_data, sizeof(db_version));
+
+  tx_active = false;
+  mdb_txn_commit(txn);
+
+  return db_version;
+}
+
+static void copy_table(MDB_env *env0, MDB_env *env1, const char *table, unsigned int flags, unsigned int putflags, int (*cmp)(const MDB_val*, const MDB_val*)=0, void (*f)(const MDB_val&, const MDB_val&) = 0)
 {
   MDB_dbi dbi0, dbi1;
   MDB_txn *txn0, *txn1;
@@ -597,12 +638,25 @@ int main(int argc, char* argv[])
   core_storage[1]->deinit();
   core_storage[1].reset(NULL);
 
-  MINFO("Pruning...");
+  MINFO("Opening source database...");
   MDB_env *env0 = NULL, *env1 = NULL;
   open(env0, paths[0], db_flags, true);
+  const uint32_t db_version = get_blockchain_db_version(env0);
+  MDEBUG("Blockchain DB has version " << db_version);
+  if (db_version > MAX_SUPPORTED_DB_VERSION)
+  {
+    MERROR("Source database has unrecognized blockchain DB version " << db_version
+      << ". Code for blockchain_prune may need to be updated.");
+    close(env0);
+    return 1;
+  }
+
+  MINFO("Opening target database...");
   open(env1, paths[1], db_flags, false);
-  copy_table(env0, env1, "blocks", MDB_INTEGERKEY, MDB_APPEND);
-  copy_table(env0, env1, "block_info", MDB_INTEGERKEY | MDB_DUPSORT| MDB_DUPFIXED, MDB_APPENDDUP, BlockchainLMDB::compare_uint64);
+
+  MINFO("Copying unpruned tables...");
+  copy_table(env0, env1, "blocks", MDB_INTEGERKEY, 0);
+  copy_table(env0, env1, "block_info", MDB_INTEGERKEY | MDB_DUPSORT| MDB_DUPFIXED, 0, BlockchainLMDB::compare_uint64);
   copy_table(env0, env1, "block_heights", MDB_INTEGERKEY | MDB_DUPSORT| MDB_DUPFIXED, 0, BlockchainLMDB::compare_hash32);
   //copy_table(env0, env1, "txs", MDB_INTEGERKEY);
   copy_table(env0, env1, "txs_pruned", MDB_INTEGERKEY, MDB_APPEND);
@@ -619,11 +673,13 @@ int main(int argc, char* argv[])
   copy_table(env0, env1, "properties", 0, 0, BlockchainLMDB::compare_string);
   if (already_pruned)
   {
-    copy_table(env0, env1, "txs_prunable", MDB_INTEGERKEY, MDB_APPEND, BlockchainLMDB::compare_uint64);
-    copy_table(env0, env1, "txs_prunable_tip", MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED, MDB_NODUPDATA, BlockchainLMDB::compare_uint64);
+    MINFO("Copying already-pruned tables...");
+    copy_table(env0, env1, "txs_prunable", MDB_INTEGERKEY, 0, BlockchainLMDB::compare_uint64);
+    copy_table(env0, env1, "txs_prunable_tip", MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED, 0, BlockchainLMDB::compare_uint64);
   }
   else
   {
+    MINFO("Pruning...");
     prune(env0, env1);
   }
   close(env1);
