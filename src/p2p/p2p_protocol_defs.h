@@ -54,8 +54,6 @@ namespace nodetool
     s << std::hex << peer_id;
     return epee::string_tools::pad_string(s.str(), 16, '0', true);
   }
-
-#pragma pack (push, 1)
   
   struct network_address_old
   {
@@ -139,9 +137,6 @@ namespace nodetool
     END_SERIALIZE()
   };
   typedef connection_entry_base<epee::net_utils::network_address> connection_entry;
-
-#pragma pack(pop)
-
   inline 
   std::string print_peerlist_to_string(const std::vector<peerlist_entry>& pl)
   {
