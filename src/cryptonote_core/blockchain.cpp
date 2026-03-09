@@ -1363,31 +1363,38 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
     return false;
   }
 
-  // Post-fork: compute fee burn split — miner only receives miner_fee_income
+  // Component 4: split emission between miner and staker pool
+  // TODO: genesis_ng_height should come from hardfork table
+  shekyl::EmissionSplit em_split = shekyl::compute_emission_split(base_reward, m_db->height(), 0, version);
+  uint64_t miner_base_reward = em_split.miner_emission;
+
+  // Component 2: fee burn split — miner only receives miner_fee_income
   // TODO: pass real tx_volume, circulating_supply, stake_ratio from chain state
   shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, already_generated_coins, 0, version);
   uint64_t effective_fee = burn.miner_fee_income;
 
-  if(base_reward + effective_fee < money_in_use)
+  if(miner_base_reward + effective_fee < money_in_use)
   {
-    MERROR_VER("coinbase transaction spend too much money (" << print_money(money_in_use) << "). Block reward is " << print_money(base_reward + effective_fee) << "(" << print_money(base_reward) << "+" << print_money(effective_fee) << "), cumulative_block_weight " << cumulative_block_weight);
+    MERROR_VER("coinbase transaction spend too much money (" << print_money(money_in_use) << "). Block reward is " << print_money(miner_base_reward + effective_fee) << "(" << print_money(miner_base_reward) << "+" << print_money(effective_fee) << "), cumulative_block_weight " << cumulative_block_weight);
     return false;
   }
   if (version < 2 || version >= HF_VERSION_EXACT_COINBASE)
   {
-    if(base_reward + effective_fee != money_in_use)
+    if(miner_base_reward + effective_fee != money_in_use)
     {
-      MDEBUG("coinbase transaction doesn't use full amount of block reward:  spent: " << money_in_use << ",  block reward " << base_reward + effective_fee << "(" << base_reward << "+" << effective_fee << ")");
+      MDEBUG("coinbase transaction doesn't use full amount of block reward:  spent: " << money_in_use << ",  block reward " << miner_base_reward + effective_fee << "(" << miner_base_reward << "+" << effective_fee << ")");
       return false;
     }
   }
   else
   {
-    CHECK_AND_ASSERT_MES(money_in_use - effective_fee <= base_reward, false, "base reward calculation bug");
-    if(base_reward + effective_fee != money_in_use)
+    CHECK_AND_ASSERT_MES(money_in_use - effective_fee <= miner_base_reward, false, "base reward calculation bug");
+    if(miner_base_reward + effective_fee != money_in_use)
       partial_block_reward = true;
-    base_reward = money_in_use - effective_fee;
+    miner_base_reward = money_in_use - effective_fee;
   }
+  // Update base_reward to reflect what the miner actually received (for caller tracking)
+  base_reward = miner_base_reward;
   return true;
 }
 //------------------------------------------------------------------

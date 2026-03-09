@@ -173,6 +173,48 @@ pub extern "C" fn shekyl_calc_stake_ratio(total_staked: u64, circulating_supply:
         / circulating_supply as u128) as u64
 }
 
+// ─── Emission Share (Component 4) ───────────────────────────────────────────
+
+/// Calculate the effective staker emission share at a given block height.
+///
+/// Returns fixed-point SCALE value (e.g., 150_000 = 15%).
+#[no_mangle]
+pub extern "C" fn shekyl_calc_emission_share(
+    current_height: u64,
+    genesis_height: u64,
+    initial_share: u64,
+    annual_decay: u64,
+    blocks_per_year: u64,
+) -> u64 {
+    shekyl_economics::emission_share::calc_effective_emission_share(
+        current_height,
+        genesis_height,
+        initial_share,
+        annual_decay,
+        blocks_per_year,
+    )
+}
+
+/// Split block emission between miner and staker pool.
+#[repr(C)]
+pub struct ShekylEmissionSplit {
+    pub miner_emission: u64,
+    pub staker_emission: u64,
+}
+
+#[no_mangle]
+pub extern "C" fn shekyl_split_block_emission(
+    block_emission: u64,
+    effective_share: u64,
+) -> ShekylEmissionSplit {
+    let (miner, staker) =
+        shekyl_economics::emission_share::split_block_emission(block_emission, effective_share);
+    ShekylEmissionSplit {
+        miner_emission: miner,
+        staker_emission: staker,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +251,24 @@ mod tests {
     fn test_stake_ratio_ffi() {
         let ratio = shekyl_calc_stake_ratio(500_000_000, 1_000_000_000);
         assert_eq!(ratio, 500_000); // 0.5
+    }
+
+    #[test]
+    fn test_emission_share_genesis() {
+        let share = shekyl_calc_emission_share(0, 0, 150_000, 900_000, 262_800);
+        assert_eq!(share, 150_000);
+    }
+
+    #[test]
+    fn test_emission_share_year_1() {
+        let share = shekyl_calc_emission_share(262_800, 0, 150_000, 900_000, 262_800);
+        assert_eq!(share, 135_000);
+    }
+
+    #[test]
+    fn test_emission_split_ffi() {
+        let split = shekyl_split_block_emission(1_000_000_000, 150_000);
+        assert_eq!(split.staker_emission, 150_000_000);
+        assert_eq!(split.miner_emission, 850_000_000);
     }
 }

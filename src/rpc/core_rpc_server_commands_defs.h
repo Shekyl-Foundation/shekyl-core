@@ -745,12 +745,13 @@ namespace cryptonote
       bool synchronized;
       bool restricted;
 
-      // Shekyl NG three-component economics fields
+      // Shekyl NG four-component economics fields
       uint64_t release_multiplier;
       uint64_t burn_pct;
       uint64_t stake_ratio;
       uint64_t total_burned;
       uint64_t staker_pool_balance;
+      uint64_t staker_emission_share_effective;
       std::string emission_era;
 
       BEGIN_KV_SERIALIZE_MAP()
@@ -799,6 +800,7 @@ namespace cryptonote
         KV_SERIALIZE(stake_ratio)
         KV_SERIALIZE(total_burned)
         KV_SERIALIZE(staker_pool_balance)
+        KV_SERIALIZE(staker_emission_share_effective)
         KV_SERIALIZE(emission_era)
       END_KV_SERIALIZE_MAP()
     };

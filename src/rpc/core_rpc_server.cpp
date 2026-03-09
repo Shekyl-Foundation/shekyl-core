@@ -46,6 +46,7 @@ using namespace epee;
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "cryptonote_config.h"
+#include "shekyl/shekyl_ffi.h"
 #include "cryptonote_basic/merge_mining.h"
 #include "cryptonote_core/tx_sanity_check.h"
 #include "misc_language.h"
@@ -572,12 +573,16 @@ namespace cryptonote
     res.busy_syncing = m_p2p.get_payload_object().is_busy_syncing();
     res.restricted = restricted;
 
-    // Shekyl NG economics fields (populated with current chain state)
+    // Shekyl NG four-component economics fields
     res.release_multiplier = SHEKYL_FIXED_POINT_SCALE; // 1.0x default
     res.burn_pct = 0;
     res.stake_ratio = 0;
     res.total_burned = 0;
     res.staker_pool_balance = 0;
+
+    // Component 4: effective staker emission share at current height
+    res.staker_emission_share_effective = shekyl_calc_emission_share(
+        res.height, 0, SHEKYL_STAKER_EMISSION_SHARE, SHEKYL_STAKER_EMISSION_DECAY, SHEKYL_BLOCKS_PER_YEAR);
 
     uint64_t already_generated = 0;
     if (res.height > 0)

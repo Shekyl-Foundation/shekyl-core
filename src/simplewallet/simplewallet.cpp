@@ -6411,6 +6411,7 @@ bool simple_wallet::show_chain_health(const std::vector<std::string>& args)
   double release = (double)res.release_multiplier / 1000000.0;
   double burn = (double)res.burn_pct / 10000.0;
   double stake = (double)res.stake_ratio / 10000.0;
+  double emission_share = (double)res.staker_emission_share_effective / 10000.0;
 
   success_msg_writer()
     << "\n  === Shekyl Chain Health ===\n"
@@ -6419,6 +6420,7 @@ bool simple_wallet::show_chain_health(const std::vector<std::string>& args)
     << "  Release Multiplier: " << release << "x\n"
     << "  Fee Burn Rate:      " << burn << "%\n"
     << "  Stake Ratio:        " << stake << "%\n"
+    << "  Emission Share:     " << emission_share << "% (to stakers, decaying)\n"
     << "  Total Burned:       " << cryptonote::print_money(res.total_burned) << " SHEKYL\n"
     << "  Staker Pool:        " << cryptonote::print_money(res.staker_pool_balance) << " SHEKYL\n";
 

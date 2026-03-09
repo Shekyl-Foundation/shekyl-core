@@ -50,4 +50,21 @@ uint64_t shekyl_stake_lock_blocks(uint8_t tier_id);
 uint64_t shekyl_stake_yield_multiplier(uint8_t tier_id);
 uint64_t shekyl_calc_stake_ratio(uint64_t total_staked, uint64_t circulating_supply);
 
+// Emission share (Component 4)
+uint64_t shekyl_calc_emission_share(
+    uint64_t current_height,
+    uint64_t genesis_height,
+    uint64_t initial_share,
+    uint64_t annual_decay,
+    uint64_t blocks_per_year);
+
+struct ShekylEmissionSplit {
+    uint64_t miner_emission;
+    uint64_t staker_emission;
+};
+
+ShekylEmissionSplit shekyl_split_block_emission(
+    uint64_t block_emission,
+    uint64_t effective_share);
+
 } // extern "C"

@@ -99,11 +99,16 @@ namespace cryptonote
       return false;
     }
 
+    // Component 4: split emission between miner and staker pool
+    // TODO: genesis_ng_height should come from hardfork table
+    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, 0, hard_fork_version);
+    block_reward = em_split.miner_emission;
+
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
-    LOG_PRINT_L1("Creating block template: reward " << block_reward <<
-      ", fee " << fee);
+    LOG_PRINT_L1("Creating block template: miner_emission " << block_reward <<
+      ", staker_emission " << em_split.staker_emission << ", fee " << fee);
 #endif
-    // Post-fork: apply adaptive fee burn
+    // Component 2: adaptive fee burn
     shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, stake_ratio, hard_fork_version);
     block_reward += burn.miner_fee_income;
 
