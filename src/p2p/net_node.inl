@@ -731,9 +731,16 @@ namespace nodetool
   std::set<std::string> node_server<t_payload_net_handler>::get_ip_seed_nodes() const
   {
     std::set<std::string> full_addrs;
+    static const std::array<const char *, 4> default_seed_hosts = {
+      "134.199.166.22",
+      "45.77.147.65",
+      "45.76.171.128",
+      "45.77.66.189"
+    };
     if (m_nettype == cryptonote::TESTNET)
     {
-      // Shekyl testnet seed nodes -- to be populated
+      for (const char *host : default_seed_hosts)
+        full_addrs.insert(std::string(host) + ":" + std::to_string(::config::testnet::P2P_DEFAULT_PORT));
     }
     else if (m_nettype == cryptonote::STAGENET)
     {
@@ -744,7 +751,8 @@ namespace nodetool
     }
     else
     {
-      // Shekyl mainnet seed nodes -- to be populated
+      for (const char *host : default_seed_hosts)
+        full_addrs.insert(std::string(host) + ":" + std::to_string(::config::P2P_DEFAULT_PORT));
     }
     return full_addrs;
   }

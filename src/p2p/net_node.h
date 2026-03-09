@@ -305,6 +305,10 @@ namespace nodetool
     // Shekyl DNS seed nodes -- to be configured when DNS infrastructure is ready
     const std::vector<std::string> m_seed_nodes_list =
     {
+      "seedaus.shekyl.org",
+      "seedusw.shekyl.org",
+      "seeduse.shekyl.org",
+      "seedeu.shekyl.org",
     };
 
     bool islimitup=false;

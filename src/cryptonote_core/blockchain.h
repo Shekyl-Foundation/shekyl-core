@@ -1206,6 +1206,12 @@ namespace cryptonote
     uint64_t m_long_term_effective_median_block_weight;
     mutable crypto::hash m_long_term_block_weights_cache_tip_hash;
     mutable epee::misc_utils::rolling_median_t<uint64_t> m_long_term_block_weights_cache_rolling_median;
+    // Cached state for incremental stake-ratio computation (component 3 inputs).
+    mutable bool m_stake_ratio_cache_initialized;
+    mutable uint64_t m_stake_ratio_cache_height;
+    mutable uint64_t m_stake_ratio_cache_total_staked;
+    mutable crypto::hash m_stake_ratio_cache_last_block_hash;
+    mutable std::unordered_map<uint64_t, uint64_t> m_stake_unlock_schedule;
 
     epee::critical_section m_difficulty_lock;
     crypto::hash m_difficulty_for_next_block_top_hash;

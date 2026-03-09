@@ -99,6 +99,11 @@ Blockchain::Blockchain(tx_memory_pool& tx_pool) :
   m_long_term_effective_median_block_weight(0),
   m_long_term_block_weights_cache_tip_hash(crypto::null_hash),
   m_long_term_block_weights_cache_rolling_median(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE),
+  m_stake_ratio_cache_initialized(false),
+  m_stake_ratio_cache_height(0),
+  m_stake_ratio_cache_total_staked(0),
+  m_stake_ratio_cache_last_block_hash(crypto::null_hash),
+  m_stake_unlock_schedule(),
   m_difficulty_for_next_block_top_hash(crypto::null_hash),
   m_difficulty_for_next_block(1),
   m_btc_valid(false),
@@ -1369,9 +1374,9 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
     return false;
   }
 
-  // Component 4: split emission between miner and staker pool
-  // TODO: genesis_ng_height should come from hardfork table
-  shekyl::EmissionSplit em_split = shekyl::compute_emission_split(base_reward, block_height, 0, version);
+  // Component 4: split emission between miner and staker pool.
+  const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
+  shekyl::EmissionSplit em_split = shekyl::compute_emission_split(base_reward, block_height, genesis_ng_height, version);
   uint64_t miner_base_reward = em_split.miner_emission;
 
   // Component 2: fee burn split — miner only receives miner_fee_income
@@ -1701,7 +1706,8 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
   const uint64_t tx_volume_avg = get_tx_volume_avg(height);
   const uint64_t circulating_supply = already_generated_coins;
   const uint64_t stake_ratio = get_stake_ratio(height);
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, stake_ratio);
+  const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
+  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, stake_ratio, genesis_ng_height);
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -1710,7 +1716,7 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, stake_ratio);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, stake_ratio, genesis_ng_height);
 
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
     size_t coinbase_weight = get_transaction_weight(b.miner_tx);
@@ -1820,43 +1826,78 @@ uint64_t Blockchain::get_stake_ratio(uint64_t height) const
   if (circulating_supply == 0)
     return 0;
 
-  uint64_t total_staked = 0;
+  const auto reset_stake_ratio_cache = [&]()
+  {
+    m_stake_ratio_cache_initialized = true;
+    m_stake_ratio_cache_height = 0;
+    m_stake_ratio_cache_total_staked = 0;
+    m_stake_ratio_cache_last_block_hash = crypto::null_hash;
+    m_stake_unlock_schedule.clear();
+  };
 
-  auto accumulate_staked_outputs = [&](const transaction &tx)
+  if (!m_stake_ratio_cache_initialized || height < m_stake_ratio_cache_height)
+    reset_stake_ratio_cache();
+
+  if (m_stake_ratio_cache_height > 0)
+  {
+    const crypto::hash cached_tip_hash = m_db->get_block_hash_from_height(m_stake_ratio_cache_height - 1);
+    if (cached_tip_hash != m_stake_ratio_cache_last_block_hash)
+      reset_stake_ratio_cache();
+  }
+
+  auto add_staked_outputs = [&](const transaction &tx, uint64_t eval_height)
   {
     for (const auto &out : tx.vout)
     {
       const auto *staked = boost::get<txout_to_staked_key>(&out.target);
-      if (!staked)
-        continue;
-      if (staked->lock_until <= height)
+      if (!staked || staked->lock_until <= eval_height)
         continue;
 
-      if (out.amount > UINT64_MAX - total_staked)
-        total_staked = UINT64_MAX;
+      if (out.amount > UINT64_MAX - m_stake_ratio_cache_total_staked)
+        m_stake_ratio_cache_total_staked = UINT64_MAX;
       else
-        total_staked += out.amount;
+        m_stake_ratio_cache_total_staked += out.amount;
+
+      uint64_t &scheduled_unlock = m_stake_unlock_schedule[staked->lock_until];
+      if (out.amount > UINT64_MAX - scheduled_unlock)
+        scheduled_unlock = UINT64_MAX;
+      else
+        scheduled_unlock += out.amount;
     }
   };
 
-  for (uint64_t h = 0; h < height; ++h)
+  while (m_stake_ratio_cache_height < height)
   {
-    const block blk = m_db->get_block_from_height(h);
-    accumulate_staked_outputs(blk.miner_tx);
+    const uint64_t next_eval_height = m_stake_ratio_cache_height + 1;
+    auto unlock_it = m_stake_unlock_schedule.find(next_eval_height);
+    if (unlock_it != m_stake_unlock_schedule.end())
+    {
+      if (unlock_it->second >= m_stake_ratio_cache_total_staked)
+        m_stake_ratio_cache_total_staked = 0;
+      else
+        m_stake_ratio_cache_total_staked -= unlock_it->second;
+      m_stake_unlock_schedule.erase(unlock_it);
+    }
 
-    if (blk.tx_hashes.empty())
-      continue;
+    const block blk = m_db->get_block_from_height(m_stake_ratio_cache_height);
+    add_staked_outputs(blk.miner_tx, next_eval_height);
 
-    std::vector<transaction> txs;
-    std::vector<crypto::hash> missed_txs;
-    if (!get_transactions(blk.tx_hashes, txs, missed_txs, true))
-      continue;
+    if (!blk.tx_hashes.empty())
+    {
+      std::vector<transaction> txs;
+      std::vector<crypto::hash> missed_txs;
+      if (get_transactions(blk.tx_hashes, txs, missed_txs, true))
+      {
+        for (const auto &tx : txs)
+          add_staked_outputs(tx, next_eval_height);
+      }
+    }
 
-    for (const auto &tx : txs)
-      accumulate_staked_outputs(tx);
+    m_stake_ratio_cache_last_block_hash = m_db->get_block_hash_from_height(m_stake_ratio_cache_height);
+    m_stake_ratio_cache_height = next_eval_height;
   }
 
-  return shekyl_calc_stake_ratio(total_staked, circulating_supply);
+  return shekyl_calc_stake_ratio(m_stake_ratio_cache_total_staked, circulating_supply);
 }
 //------------------------------------------------------------------
 // for an alternate chain, get the timestamps from the main chain to complete

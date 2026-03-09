@@ -5884,6 +5884,16 @@ void wallet2::generate(const std::string& wallet_, const epee::wipeable_string& 
   }
 
   m_account.create_from_keys(account_public_address, spendkey, viewkey);
+  // Legacy restore paths can provide key material without PQC components.
+  // Generate PQC keys so post-HF17 v3 tx construction can succeed.
+  if (m_account.get_keys().m_account_address.m_pqc_public_key.empty() &&
+      m_account.get_keys().m_pqc_secret_key.empty())
+  {
+    THROW_WALLET_EXCEPTION_IF(
+      !m_account.generate_pqc_for_restored_address(),
+      error::wallet_internal_error,
+      "Failed to generate PQC key material for restored wallet");
+  }
   init_type(hw::device::device_type::SOFTWARE);
   m_account_public_address = account_public_address;
   setup_keys(password);

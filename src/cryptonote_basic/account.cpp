@@ -291,8 +291,7 @@ DISABLE_VS_WARNINGS(4244 4345)
   //-----------------------------------------------------------------
   void account_base::create_from_viewkey(const cryptonote::account_public_address& address, const crypto::secret_key& viewkey)
   {
-    crypto::secret_key fake;
-    memset(&unwrap(unwrap(fake)), 0, sizeof(fake));
+    crypto::secret_key fake{};
     create_from_keys(address, fake, viewkey);
   }
   //-----------------------------------------------------------------

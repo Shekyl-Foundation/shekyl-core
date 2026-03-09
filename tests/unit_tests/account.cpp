@@ -69,3 +69,28 @@ TEST(account, encrypt_keys)
   ASSERT_EQ(account.get_keys().m_spend_secret_key, keys.m_spend_secret_key);
   ASSERT_EQ(account.get_keys().m_view_secret_key, keys.m_view_secret_key);
 }
+
+TEST(account, generate_pqc_for_restored_address)
+{
+  cryptonote::account_base generated;
+  generated.generate();
+  const auto generated_keys = generated.get_keys();
+  cryptonote::account_public_address legacy_address = generated_keys.m_account_address;
+  legacy_address.m_pqc_public_key.clear();
+
+  cryptonote::account_base restored;
+  restored.create_from_keys(
+    legacy_address,
+    generated_keys.m_spend_secret_key,
+    generated_keys.m_view_secret_key);
+
+  ASSERT_TRUE(restored.get_keys().m_pqc_secret_key.empty());
+  ASSERT_TRUE(restored.get_keys().m_account_address.m_pqc_public_key.empty());
+
+  ASSERT_TRUE(restored.generate_pqc_for_restored_address());
+  ASSERT_FALSE(restored.get_keys().m_pqc_secret_key.empty());
+  ASSERT_FALSE(restored.get_keys().m_account_address.m_pqc_public_key.empty());
+
+  // The helper is one-shot and should not overwrite existing PQC material.
+  ASSERT_FALSE(restored.generate_pqc_for_restored_address());
+}
