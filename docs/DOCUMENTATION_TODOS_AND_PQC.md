@@ -12,7 +12,7 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 |------|-------------|
 | **Emission Economics (TODO)** | Original Shekyl `MONEY_SUPPLY` (2^32 in atomic units with 12 decimals) yields ~0.004 coins. Needs redesign before mainnet: reduce decimals (e.g. 8), choose different supply, or redesign emission curve. Currently using upstream default supply for testnet. |
 | **Snapshot / UTXO** | Locate and extract original Shekyl UTXO set; implement snapshot restoration logic (Phase 2); mainnet launch after full testing. |
-| **PQC transaction format** | Post-genesis blocks are planned to use a reboot-only hybrid PQ spend/ownership format with dedicated authorization fields — defined in `POST_QUANTUM_CRYPTOGRAPHY.md`; wallet/core binding work is still in progress. |
+| **PQC transaction format** | Post-genesis blocks use a reboot-only hybrid PQ spend/ownership format with dedicated authorization fields — defined in `POST_QUANTUM_CRYPTOGRAPHY.md`; v3 tx format, core validation, and wallet construction are implemented. |
 
 ### 1.2 DESIGN_CONCEPTS.md
 
@@ -66,6 +66,14 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 - **PORTABLE_STORAGE.md**: No TODOs; reference doc.
 - **INSTALLATION_GUIDE.md**: Shekyl-native; no critical TODOs.
 - **PUBLIC_NARRATIVE_FAQ.md**: Narrative/positioning; no technical TODOs.
+
+### 1.10 Economics and PoW modularization status
+
+| Item | Description |
+|------|-------------|
+| **Economics chain-state wiring** | `tx_volume_avg` is now computed from recent chain history and passed into miner template construction, tx pool block-reward estimation, and miner reward validation. `circulating_supply` is sourced from `already_generated_coins`; `stake_ratio` remains a documented stub (`0`) until staking state is consensus-tracked. |
+| **Modular PoW schema** | PoW hashing now routes through a schema interface and registry (`IPowSchema`, RandomX schema, Cryptonight schema) while preserving historic behavior (`major_version >= RX_BLOCK_VERSION` => RandomX; older => Cryptonight variants). |
+| **Follow-up TODO** | Add configuration-driven PoW activation policy and expand test coverage for schema-selection parity against legacy `get_block_longhash` behavior. |
 
 ---
 
@@ -138,13 +146,17 @@ Completed:
 - explicit Rust-owned buffer release helper exists
 - ABI expectations are documented in `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
+Completed:
+
+- C++ transaction serialization for the reboot-only v3 format (pqc_auth in transaction)
+- hybrid layer bound to spend/ownership via PqcAuthentication and signed payload
+- Rust verify called from core validation (verify_transaction_pqc_auth)
+- Rust sign called from wallet transaction construction when hf_version >= HF_VERSION_SHEKYL_NG
+- reboot-chain transaction version rules enforced (max_tx_version, version gates)
+
 Remaining:
 
 - make the v3 transaction/account rollout explicit in operator and wallet docs
-- add C++ transaction serialization for the reboot-only v3 format
-- bind the hybrid layer to spend/ownership semantics rather than a detached wrapper-only signature
-- call Rust verify from core validation and Rust sign from wallet transaction construction
-- enforce reboot-chain transaction version rules in the relevant validation paths
 
 ### Phase 4: Documentation and audit
 
@@ -175,7 +187,8 @@ Remaining:
 | Anonymity | Timestamp offset; broadcast delay; circuit rotation | — |
 | Release | Full checklist; Shekyl-specific seeds, wallets, exchanges | — |
 | Seeds | Populate DNS/IP seeds; runtime seed add; Shekyl naming | — |
-| **PQC** | **Hybrid signatures and FFI are in place; wallet/core v3 spend-binding, measured sizing, test vectors, and audit remain** | **Core of this document** |
+| Economics / PoW | Finish stake-ratio chain state and config-driven proof activation | Modular PoW scaffolding implemented; further policy work pending |
+| **PQC** | **v3 tx format, core validation, and wallet construction implemented; measured sizing, test vectors, and audit remain** | **Core of this document** |
 
 ---
 

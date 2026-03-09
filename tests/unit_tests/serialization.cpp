@@ -1207,3 +1207,23 @@ TEST(Serialization, adl_free_function)
   const std::string expected = "{\"custom_fieldname\": " + std::to_string(msg.size()) + '"' + epee::string_tools::buff_to_hex_nodelimer(msg) + "\"}";
   EXPECT_EQ(expected, ss.str());
 }
+
+TEST(Serialization, pqc_authentication_round_trip)
+{
+  cryptonote::pqc_authentication auth0, auth1;
+  auth0.auth_version = 1;
+  auth0.scheme_id = 1;
+  auth0.flags = 0;
+  auth0.hybrid_public_key = {1, 2, 3, 32};  // placeholder
+  auth0.hybrid_signature = {4, 5, 6, 64};   // placeholder
+
+  std::string blob;
+  ASSERT_TRUE(serialization::dump_binary(auth0, blob));
+  ASSERT_TRUE(serialization::parse_binary(blob, auth1));
+
+  EXPECT_EQ(auth0.auth_version, auth1.auth_version);
+  EXPECT_EQ(auth0.scheme_id, auth1.scheme_id);
+  EXPECT_EQ(auth0.flags, auth1.flags);
+  EXPECT_EQ(auth0.hybrid_public_key, auth1.hybrid_public_key);
+  EXPECT_EQ(auth0.hybrid_signature, auth1.hybrid_signature);
+}

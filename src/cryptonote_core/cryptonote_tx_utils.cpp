@@ -38,6 +38,9 @@ using namespace epee;
 #include "cryptonote_tx_utils.h"
 #include "cryptonote_config.h"
 #include "blockchain.h"
+#include "crypto/pow_registry.h"
+#include "tx_pqc_verify.h"
+#include "shekyl/shekyl_ffi.h"
 #include "cryptonote_basic/miner.h"
 #include "cryptonote_basic/tx_extra.h"
 #include "shekyl/economics.h"
@@ -211,7 +214,7 @@ namespace cryptonote
     return addr.m_view_public_key;
   }
   //---------------------------------------------------------------
-  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const boost::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, const std::vector<crypto::secret_key> &additional_tx_keys, bool rct, const rct::RCTConfig &rct_config, bool shuffle_outs, bool use_view_tags)
+  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const boost::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, const std::vector<crypto::secret_key> &additional_tx_keys, bool rct, const rct::RCTConfig &rct_config, bool shuffle_outs, bool use_view_tags, uint8_t hf_version)
   {
     hw::device &hwdev = sender_account_keys.get_device();
 
@@ -225,7 +228,7 @@ namespace cryptonote
     tx.set_null();
     amount_keys.clear();
 
-    tx.version = rct ? 2 : 1;
+    tx.version = (rct && hf_version >= HF_VERSION_SHEKYL_NG) ? 3 : (rct ? 2 : 1);
     tx.unlock_time = 0;
 
     tx.extra = extra;
@@ -609,12 +612,53 @@ namespace cryptonote
       MCINFO("construct_tx", "transaction_created: " << get_transaction_hash(tx) << ENDL << obj_to_json_str(tx) << ENDL);
     }
 
+    if (tx.version >= 3)
+    {
+      if (sender_account_keys.m_pqc_secret_key.empty())
+      {
+        LOG_ERROR("Cannot create v3 transaction: wallet has no PQC secret key (restored from keys without PQ?)");
+        return false;
+      }
+      if (sender_account_keys.m_account_address.m_pqc_public_key.empty())
+      {
+        LOG_ERROR("Cannot create v3 transaction: wallet has no PQC public key");
+        return false;
+      }
+      pqc_authentication auth;
+      auth.auth_version = 1;
+      auth.scheme_id = 1;
+      auth.flags = 0;
+      auth.hybrid_public_key = sender_account_keys.m_account_address.m_pqc_public_key;
+      auth.hybrid_signature.clear();
+      tx.pqc_auth = auth;
+      std::string payload_blob;
+      if (!get_transaction_signed_payload(tx, payload_blob))
+      {
+        LOG_ERROR("Failed to build PQC signed payload");
+        return false;
+      }
+      crypto::hash payload_hash;
+      cryptonote::get_blob_hash(payload_blob, payload_hash);
+      ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
+          sender_account_keys.m_pqc_secret_key.data(),
+          sender_account_keys.m_pqc_secret_key.size(),
+          reinterpret_cast<const uint8_t*>(payload_hash.data),
+          sizeof(payload_hash.data));
+      if (!sig_result.success)
+      {
+        LOG_ERROR("PQC hybrid signing failed");
+        return false;
+      }
+      tx.pqc_auth->hybrid_signature.assign(sig_result.signature.ptr, sig_result.signature.ptr + sig_result.signature.len);
+      shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
+    }
+
     tx.invalidate_hashes();
 
     return true;
   }
   //---------------------------------------------------------------
-  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const boost::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, std::vector<crypto::secret_key> &additional_tx_keys, bool rct, const rct::RCTConfig &rct_config, bool use_view_tags)
+  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const boost::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, std::vector<crypto::secret_key> &additional_tx_keys, bool rct, const rct::RCTConfig &rct_config, bool use_view_tags, uint8_t hf_version)
   {
     hw::device &hwdev = sender_account_keys.get_device();
     hwdev.open_tx(tx_key);
@@ -635,7 +679,7 @@ namespace cryptonote
       }
 
       bool shuffle_outs = true;
-      bool r = construct_tx_with_tx_key(sender_account_keys, subaddresses, sources, destinations, change_addr, extra, tx, tx_key, additional_tx_keys, rct, rct_config, shuffle_outs, use_view_tags);
+      bool r = construct_tx_with_tx_key(sender_account_keys, subaddresses, sources, destinations, change_addr, extra, tx, tx_key, additional_tx_keys, rct, rct_config, shuffle_outs, use_view_tags, hf_version);
       hwdev.close_tx();
       return r;
     } catch(...) {
@@ -694,23 +738,27 @@ namespace cryptonote
       epee::string_tools::hex_to_pod(longhash_202612, res);
       return true;
     }
+    const IPowSchema& pow_schema = get_pow_for_height(height, major_version);
+    const crypto::hash* resolved_seed_hash = seed_hash;
+    crypto::hash resolved_seed = crypto::null_hash;
+
     if (major_version >= RX_BLOCK_VERSION)
     {
-      crypto::hash hash;
       if (pbc != NULL)
       {
         const uint64_t seed_height = rx_seedheight(height);
-        hash = seed_hash ? *seed_hash : pbc->get_pending_block_id_by_height(seed_height);
-      } else
-      {
-        memset(&hash, 0, sizeof(hash));  // only happens when generating genesis block
+        resolved_seed = seed_hash ? *seed_hash : pbc->get_pending_block_id_by_height(seed_height);
+        resolved_seed_hash = &resolved_seed;
       }
-      rx_slow_hash(hash.data, bd.data(), bd.size(), res.data);
-    } else {
-      const int pow_variant = major_version >= 7 ? major_version - 6 : 0;
-      crypto::cn_slow_hash(bd.data(), bd.size(), res, pow_variant, height);
+      else
+      {
+        // only happens when generating genesis block
+        memset(&resolved_seed, 0, sizeof(resolved_seed));
+        resolved_seed_hash = &resolved_seed;
+      }
     }
-    return true;
+
+    return pow_schema.hash(bd.data(), bd.size(), height, resolved_seed_hash, miners, res);
   }
 
   bool get_block_longhash(const Blockchain *pbc, const block& b, crypto::hash& res, const uint64_t height, const crypto::hash *seed_hash, const int miners)

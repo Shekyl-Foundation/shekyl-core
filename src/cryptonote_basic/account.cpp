@@ -282,6 +282,13 @@ DISABLE_VS_WARNINGS(4244 4345)
   }
 
   //-----------------------------------------------------------------
+  bool account_base::generate_pqc_for_restored_address()
+  {
+    if (!m_keys.m_account_address.m_pqc_public_key.empty() || !m_keys.m_pqc_secret_key.empty())
+      return false;
+    return generate_pqc_key_material(m_keys);
+  }
+  //-----------------------------------------------------------------
   void account_base::create_from_viewkey(const cryptonote::account_public_address& address, const crypto::secret_key& viewkey)
   {
     crypto::secret_key fake;

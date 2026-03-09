@@ -44,6 +44,9 @@ set(crypto_sources
   keccak.c
   oaes_lib.c
   random.c
+  pow_cryptonight.cpp
+  pow_randomx.cpp
+  pow_registry.cpp
   skein.c
   slow-hash.c
   rx-slow-hash.c

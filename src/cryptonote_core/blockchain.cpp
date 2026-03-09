@@ -38,6 +38,7 @@
 #include "include_base_utils.h"
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "tx_pool.h"
+#include "tx_pqc_verify.h"
 #include "blockchain.h"
 #include "blockchain_db/blockchain_db.h"
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
@@ -1332,6 +1333,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
 bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, bool &partial_block_reward, uint8_t version)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
+  const uint64_t block_height = boost::get<txin_gen>(b.miner_tx.vin[0]).height;
   uint64_t money_in_use = 0;
   for (auto& o: b.miner_tx.vout)
     money_in_use += o.amount;
@@ -1357,7 +1359,11 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
     get_last_n_blocks_weights(last_blocks_weights, CRYPTONOTE_REWARD_BLOCKS_WINDOW);
     median_weight = epee::misc_utils::median(last_blocks_weights);
   }
-  if (!get_block_reward(median_weight, cumulative_block_weight, already_generated_coins, base_reward, version))
+  const uint64_t tx_volume_avg = get_tx_volume_avg(block_height);
+  const uint64_t circulating_supply = already_generated_coins;
+  const uint64_t stake_ratio = get_stake_ratio(block_height);
+
+  if (!get_block_reward(median_weight, cumulative_block_weight, already_generated_coins, base_reward, version, tx_volume_avg))
   {
     MERROR_VER("block weight " << cumulative_block_weight << " is bigger than allowed for this blockchain");
     return false;
@@ -1365,12 +1371,11 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
 
   // Component 4: split emission between miner and staker pool
   // TODO: genesis_ng_height should come from hardfork table
-  shekyl::EmissionSplit em_split = shekyl::compute_emission_split(base_reward, m_db->height(), 0, version);
+  shekyl::EmissionSplit em_split = shekyl::compute_emission_split(base_reward, block_height, 0, version);
   uint64_t miner_base_reward = em_split.miner_emission;
 
   // Component 2: fee burn split — miner only receives miner_fee_income
-  // TODO: pass real tx_volume, circulating_supply, stake_ratio from chain state
-  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, already_generated_coins, 0, version);
+  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume_avg, circulating_supply, stake_ratio, version);
   uint64_t effective_fee = burn.miner_fee_income;
 
   if(miner_base_reward + effective_fee < money_in_use)
@@ -1628,7 +1633,7 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
 
   size_t txs_weight;
   uint64_t fee;
-  if (!m_tx_pool.fill_block_template(b, median_weight, already_generated_coins, txs_weight, fee, expected_reward, b.major_version))
+  if (!m_tx_pool.fill_block_template(b, median_weight, already_generated_coins, height, txs_weight, fee, expected_reward, b.major_version))
   {
     return false;
   }
@@ -1693,7 +1698,10 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
   //make blocks coin-base tx looks close to real coinbase tx to get truthful blob weight
   uint8_t hf_version = b.major_version;
   size_t max_outs = hf_version >= 4 ? 1 : 11;
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version);
+  const uint64_t tx_volume_avg = get_tx_volume_avg(height);
+  const uint64_t circulating_supply = already_generated_coins;
+  const uint64_t stake_ratio = get_stake_ratio(height);
+  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, stake_ratio);
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -1702,7 +1710,7 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume_avg, circulating_supply, stake_ratio);
 
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
     size_t coinbase_weight = get_transaction_weight(b.miner_tx);
@@ -1781,6 +1789,32 @@ bool Blockchain::get_miner_data(uint8_t& major_version, uint64_t& height, crypto
   m_tx_pool.get_block_template_backlog(tx_backlog);
 
   return true;
+}
+//------------------------------------------------------------------
+uint64_t Blockchain::get_tx_volume_avg(uint64_t height) const
+{
+  if (height == 0)
+    return 0;
+
+  const uint64_t start_height = height > SHEKYL_TX_VOLUME_WINDOW ? height - SHEKYL_TX_VOLUME_WINDOW : 0;
+  const uint64_t blocks = height - start_height;
+  if (blocks == 0)
+    return 0;
+
+  uint64_t tx_count_sum = 0;
+  for (uint64_t h = start_height; h < height; ++h)
+  {
+    const block blk = m_db->get_block_from_height(h);
+    tx_count_sum += blk.tx_hashes.size();
+  }
+
+  return tx_count_sum / blocks;
+}
+//------------------------------------------------------------------
+uint64_t Blockchain::get_stake_ratio(uint64_t /*height*/) const
+{
+  // Staking state is not consensus-tracked yet.
+  return 0;
 }
 //------------------------------------------------------------------
 // for an alternate chain, get the timestamps from the main chain to complete
@@ -3154,7 +3188,7 @@ bool Blockchain::have_tx_keyimges_as_spent(const transaction &tx) const
 bool Blockchain::expand_transaction_2(transaction &tx, const crypto::hash &tx_prefix_hash, const std::vector<std::vector<rct::ctkey>> &pubkeys)
 {
   PERF_TIMER(expand_transaction_2);
-  CHECK_AND_ASSERT_MES(tx.version == 2, false, "Transaction version is not 2");
+  CHECK_AND_ASSERT_MES(tx.version >= 2, false, "Transaction version is not 2 or 3");
 
   rct::rctSig &rv = tx.rct_signatures;
 
@@ -3349,7 +3383,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     }
 
     // min/max tx version based on HF, and we accept v1 txes if having a non mixable
-    const size_t max_tx_version = (hf_version <= 3) ? 1 : 2;
+    const size_t max_tx_version = (hf_version <= 3) ? 1 : (hf_version >= HF_VERSION_SHEKYL_NG ? 3 : 2);
     if (tx.version > max_tx_version)
     {
       MERROR_VER("transaction version " << (unsigned)tx.version << " is higher than max accepted version " << max_tx_version);
@@ -3608,6 +3642,18 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       }
     }
   }
+
+  // v3 PQC hybrid signature verification
+  if (tx.version >= 3 && hf_version >= HF_VERSION_SHEKYL_NG && !tx.vin.empty() && tx.vin[0].type() != typeid(txin_gen))
+  {
+    if (!verify_transaction_pqc_auth(tx))
+    {
+      MERROR_VER("Failed to verify PQC hybrid signature on v3 transaction");
+      tvc.m_verifivation_failed = true;
+      return false;
+    }
+  }
+
   return true;
 }
 

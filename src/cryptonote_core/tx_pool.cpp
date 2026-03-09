@@ -1546,7 +1546,7 @@ namespace cryptonote
   }
   //---------------------------------------------------------------------------------
   //TODO: investigate whether boolean return is appropriate
-  bool tx_memory_pool::fill_block_template(block &bl, size_t median_weight, uint64_t already_generated_coins, size_t &total_weight, uint64_t &fee, uint64_t &expected_reward, uint8_t version)
+  bool tx_memory_pool::fill_block_template(block &bl, size_t median_weight, uint64_t already_generated_coins, uint64_t block_height, size_t &total_weight, uint64_t &fee, uint64_t &expected_reward, uint8_t version)
   {
     CRITICAL_REGION_LOCAL(m_transactions_lock);
     CRITICAL_REGION_LOCAL1(m_blockchain);
@@ -1554,9 +1554,10 @@ namespace cryptonote
     uint64_t best_coinbase = 0, coinbase = 0;
     total_weight = 0;
     fee = 0;
+    const uint64_t tx_volume_avg = m_blockchain.get_tx_volume_avg(block_height);
     
     //baseline empty block
-    if (!get_block_reward(median_weight, total_weight, already_generated_coins, best_coinbase, version))
+    if (!get_block_reward(median_weight, total_weight, already_generated_coins, best_coinbase, version, tx_volume_avg))
     {
       MERROR("Failed to get block reward for empty block");
       return false;
@@ -1610,7 +1611,7 @@ namespace cryptonote
         // If we're getting lower coinbase tx,
         // stop including more tx
         uint64_t block_reward;
-        if(!get_block_reward(median_weight, total_weight + meta.weight, already_generated_coins, block_reward, version))
+        if(!get_block_reward(median_weight, total_weight + meta.weight, already_generated_coins, block_reward, version, tx_volume_avg))
         {
           LOG_PRINT_L2("  would exceed maximum block weight");
           continue;

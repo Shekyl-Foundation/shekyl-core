@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include <boost/optional.hpp>
 #include <boost/variant.hpp>
 #include <boost/functional/hash/hash.hpp>
 #include <vector>
@@ -186,6 +187,23 @@ namespace cryptonote
 
   };
 
+  struct pqc_authentication
+  {
+    uint8_t auth_version;
+    uint8_t scheme_id;
+    uint16_t flags;
+    std::vector<uint8_t> hybrid_public_key;   // canonical HybridPublicKey
+    std::vector<uint8_t> hybrid_signature;    // canonical HybridSignature
+
+    BEGIN_SERIALIZE_OBJECT()
+      FIELD(auth_version)
+      FIELD(scheme_id)
+      FIELD(flags)
+      FIELD(hybrid_public_key)
+      FIELD(hybrid_signature)
+    END_SERIALIZE()
+  };
+
   class transaction_prefix
   {
 
@@ -231,6 +249,7 @@ namespace cryptonote
   public:
     std::vector<std::vector<crypto::signature> > signatures; //count signatures  always the same as inputs count
     rct::rctSig rct_signatures;
+    boost::optional<pqc_authentication> pqc_auth;
 
     // hash cash
     mutable crypto::hash hash;
@@ -330,6 +349,21 @@ namespace cryptonote
             ar.end_object();
           }
         }
+        if (version >= 3 && !vin.empty() && vin[0].type() != typeid(txin_gen))
+        {
+          ar.tag("pqc_auth");
+          pqc_authentication auth_val;
+          if (typename Archive<W>::is_saving())
+          {
+            if (!pqc_auth) return false;
+            auth_val = *pqc_auth;
+          }
+          if (!::do_serialize(ar, auth_val)) return false;
+          if (!typename Archive<W>::is_saving())
+            pqc_auth = auth_val;
+          if (std::is_same<Archive<W>, binary_archive<W>>())
+            unprunable_size = ar.getpos() - start_pos;
+        }
       }
       if (!typename Archive<W>::is_saving())
         pruned = false;
@@ -353,6 +387,19 @@ namespace cryptonote
           if (!r || !ar.good()) return false;
           ar.end_object();
         }
+        if (version >= 3 && !vin.empty() && vin[0].type() != typeid(txin_gen))
+        {
+          ar.tag("pqc_auth");
+          pqc_authentication auth_val;
+          if (typename Archive<W>::is_saving())
+          {
+            if (!pqc_auth) return false;
+            auth_val = *pqc_auth;
+          }
+          if (!::do_serialize(ar, auth_val)) return false;
+          if (!typename Archive<W>::is_saving())
+            pqc_auth = auth_val;
+        }
       }
       if (!typename Archive<W>::is_saving())
         pruned = true;
@@ -370,6 +417,7 @@ namespace cryptonote
     blob_size_valid(false),
     signatures(t.signatures),
     rct_signatures(t.rct_signatures),
+    pqc_auth(t.pqc_auth),
     pruned(t.pruned),
     unprunable_size(t.unprunable_size.load()),
     prefix_size(t.prefix_size.load())
@@ -400,6 +448,7 @@ namespace cryptonote
     set_blob_size_valid(false);
     signatures = t.signatures;
     rct_signatures = t.rct_signatures;
+    pqc_auth = t.pqc_auth;
     if (t.is_hash_valid())
     {
       hash = t.hash;
@@ -438,6 +487,7 @@ namespace cryptonote
     transaction_prefix::set_null();
     signatures.clear();
     rct_signatures.type = rct::RCTTypeNull;
+    pqc_auth = boost::none;
     set_hash_valid(false);
     set_prunable_hash_valid(false);
     set_blob_size_valid(false);

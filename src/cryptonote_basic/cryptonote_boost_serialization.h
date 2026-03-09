@@ -35,6 +35,7 @@
 #include <boost/serialization/variant.hpp>
 #include <boost/serialization/set.hpp>
 #include <boost/serialization/map.hpp>
+#include <boost/serialization/optional.hpp>
 #include <boost/serialization/is_bitwise_serializable.hpp>
 #include <boost/archive/portable_binary_iarchive.hpp>
 #include <boost/archive/portable_binary_oarchive.hpp>
@@ -178,6 +179,16 @@ namespace boost
   }
 
   template <class Archive>
+  inline void serialize(Archive &a, cryptonote::pqc_authentication &x, const boost::serialization::version_type ver)
+  {
+    a & x.auth_version;
+    a & x.scheme_id;
+    a & x.flags;
+    a & x.hybrid_public_key;
+    a & x.hybrid_signature;
+  }
+
+  template <class Archive>
   inline void serialize(Archive &a, cryptonote::transaction &x, const boost::serialization::version_type ver)
   {
     a & x.version;
@@ -194,6 +205,8 @@ namespace boost
       a & (rct::rctSigBase&)x.rct_signatures;
       if (x.rct_signatures.type != rct::RCTTypeNull)
         a & x.rct_signatures.p;
+      if (x.version >= 3 && !x.vin.empty() && x.vin[0].type() != typeid(cryptonote::txin_gen))
+        a & x.pqc_auth;
     }
   }
 

@@ -213,6 +213,15 @@ TransactionV3 {
 }
 ```
 
+Coinbase and block-level note:
+
+- `pqc_auth` is required for user transactions (`vin[0] != txin_gen`) on the
+  rebooted chain.
+- Miner transactions (coinbase) are explicitly excluded from `pqc_auth`
+  serialization and verification.
+- Block construction itself (`block_header`, `miner_tx`, `tx_hashes`) does not
+  require structural changes for v3 PQC.
+
 Where:
 
 ```text
@@ -345,7 +354,7 @@ Where:
 - `TransactionPrefixV3` is the full serialized transaction prefix, including
   `extra`
 - `RctSigningBody` is the non-PQC RingCT body data required to bind the actual
-  transaction economics, outputs, and spend semantics
+  transaction economics, outputs, and spend semantics (see layout below)
 - `PqcAuthHeader` is:
 
 ```text
@@ -356,6 +365,19 @@ PqcAuthHeader {
   hybrid_ownership_material
 }
 ```
+
+### RctSigningBody Layout
+
+`RctSigningBody` is the output of `rctSig.serialize_rctsig_base(ar, num_inputs, num_outputs)`.
+It comprises the base (non-prunable) RingCT structure: type, message, mixRing
+(or equivalent for the RCT variant), pseudoOuts/ecdhInfo as applicable.
+This is the same byte sequence used as the base RCT component in the v3
+transaction hash calculation.
+
+### Measured Sizes (Phase 1)
+
+- `HybridPublicKey` (Ed25519 + ML-DSA-65): ~32 + 4 + ML-DSA-65 public key bytes
+- `HybridSignature` (Ed25519 + ML-DSA-65): ~64 + 4 + ML-DSA-65 signature bytes
 
 Importantly:
 

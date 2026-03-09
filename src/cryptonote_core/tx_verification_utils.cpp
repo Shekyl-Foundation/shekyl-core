@@ -136,7 +136,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
     std::vector<const rct::rctSig*> rvv;
     rvv.reserve(static_cast<size_t>(std::distance(tx_begin, tx_end)));
 
-    const size_t max_tx_version = hf_version < HF_VERSION_DYNAMIC_FEE ? 1 : 2;
+    const size_t max_tx_version = hf_version < HF_VERSION_DYNAMIC_FEE ? 1 : (hf_version >= HF_VERSION_SHEKYL_NG ? 3 : 2);
 
     const size_t tx_weight_limit = get_transaction_weight_limit(hf_version);
 
@@ -226,7 +226,7 @@ bool ver_rct_non_semantics_simple_cached
     // mixring. Future versions of the protocol may differ in this regard, but if this assumptions
     // holds true in the future, enable the verification hash by modifying the `untested_tx`
     // condition below.
-    const bool untested_tx = tx.version > 2 || tx.rct_signatures.type > rct::RCTTypeBulletproofPlus;
+    const bool untested_tx = tx.version > 3 || tx.rct_signatures.type > rct::RCTTypeBulletproofPlus;
     VER_ASSERT(!untested_tx, "Unknown TX type. Make sure RCT cache works correctly with this type and then enable it in the code here.");
 
     // Don't cache older (or newer) rctSig types

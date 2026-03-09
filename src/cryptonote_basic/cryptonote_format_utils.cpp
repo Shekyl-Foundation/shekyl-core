@@ -1342,15 +1342,15 @@ namespace cryptonote
     // v1 transactions hash the entire blob
     CHECK_AND_ASSERT_THROW_MES(t.version > 1, "Hash for pruned v1 tx cannot be calculated");
 
-    // v2 transactions hash different parts together, than hash the set of those hashes
-    crypto::hash hashes[3];
+    transaction &tt = const_cast<transaction&>(t);
+    const bool has_pqc = t.version >= 3 && !t.vin.empty() && t.vin[0].type() != typeid(txin_gen);
 
     // prefix
-    get_transaction_prefix_hash(t, hashes[0]);
-
-    transaction &tt = const_cast<transaction&>(t);
+    crypto::hash prefix_hash;
+    get_transaction_prefix_hash(t, prefix_hash);
 
     // base rct
+    crypto::hash base_rct_hash;
     {
       std::stringstream ss;
       binary_archive<true> ba(ss);
@@ -1358,17 +1358,38 @@ namespace cryptonote
       const size_t outputs = t.vout.size();
       bool r = tt.rct_signatures.serialize_rctsig_base(ba, inputs, outputs);
       CHECK_AND_ASSERT_THROW_MES(r, "Failed to serialize rct signatures base");
-      cryptonote::get_blob_hash(ss.str(), hashes[1]);
+      cryptonote::get_blob_hash(ss.str(), base_rct_hash);
     }
 
     // prunable rct
+    crypto::hash prunable_hash;
     if (t.rct_signatures.type == rct::RCTTypeNull)
-      hashes[2] = crypto::null_hash;
+      prunable_hash = crypto::null_hash;
     else
-      hashes[2] = pruned_data_hash;
+      prunable_hash = pruned_data_hash;
 
-    // the tx hash is the hash of the 3 hashes
-    crypto::hash res = cn_fast_hash(hashes, sizeof(hashes));
+    crypto::hash res;
+    if (has_pqc && t.pqc_auth)
+    {
+      // v3: hash(prefix, base_rct, pqc_auth, prunable)
+      crypto::hash pqc_auth_hash;
+      std::stringstream ss;
+      binary_archive<true> ba(ss);
+      pqc_authentication auth_tmp = *t.pqc_auth;
+      bool r = ::do_serialize(ba, auth_tmp);
+      CHECK_AND_ASSERT_THROW_MES(r, "Failed to serialize pqc_auth");
+      cryptonote::get_blob_hash(ss.str(), pqc_auth_hash);
+
+      crypto::hash hashes[4] = { prefix_hash, base_rct_hash, pqc_auth_hash, prunable_hash };
+      res = cn_fast_hash(hashes, sizeof(hashes));
+    }
+    else
+    {
+      // v2: hash(prefix, base_rct, prunable)
+      crypto::hash hashes[3] = { prefix_hash, base_rct_hash, prunable_hash };
+      res = cn_fast_hash(hashes, sizeof(hashes));
+    }
+
     t.set_hash(res);
     return res;
   }
@@ -1384,33 +1405,60 @@ namespace cryptonote
       return get_object_hash(t, res, blob_size_ref);
     }
 
-    // v2 transactions hash different parts together, than hash the set of those hashes
-    crypto::hash hashes[3];
-
-    // prefix
-    get_transaction_prefix_hash(t, hashes[0]);
+    // v2+ transactions hash different parts together, than hash the set of those hashes
+    crypto::hash prefix_hash;
+    get_transaction_prefix_hash(t, prefix_hash);
 
     const blobdata blob = tx_to_blob(t);
     const unsigned int unprunable_size = t.unprunable_size;
     const unsigned int prefix_size = t.prefix_size;
+    const bool has_pqc = t.version >= 3 && !t.vin.empty() && t.vin[0].type() != typeid(txin_gen);
 
-    // base rct
     CHECK_AND_ASSERT_MES(prefix_size <= unprunable_size && unprunable_size <= blob.size(), false, "Inconsistent transaction prefix, unprunable and blob sizes");
-    cryptonote::get_blob_hash(blobdata_ref(blob.data() + prefix_size, unprunable_size - prefix_size), hashes[1]);
+
+    // base rct (blob from prefix_size to end of rct base; for v3, we must serialize separately since pqc_auth follows)
+    crypto::hash base_rct_hash;
+    {
+      transaction &tt = const_cast<transaction&>(t);
+      std::stringstream ss;
+      binary_archive<true> ba(ss);
+      const size_t inputs = t.vin.size();
+      const size_t outputs = t.vout.size();
+      bool r = tt.rct_signatures.serialize_rctsig_base(ba, inputs, outputs);
+      CHECK_AND_ASSERT_MES(r, false, "Failed to serialize rct signatures base");
+      cryptonote::get_blob_hash(ss.str(), base_rct_hash);
+    }
 
     // prunable rct
+    crypto::hash prunable_hash;
     if (t.rct_signatures.type == rct::RCTTypeNull)
-    {
-      hashes[2] = crypto::null_hash;
-    }
+      prunable_hash = crypto::null_hash;
     else
     {
       cryptonote::blobdata_ref blobref(blob);
-      CHECK_AND_ASSERT_MES(calculate_transaction_prunable_hash(t, &blobref, hashes[2]), false, "Failed to get tx prunable hash");
+      CHECK_AND_ASSERT_MES(calculate_transaction_prunable_hash(t, &blobref, prunable_hash), false, "Failed to get tx prunable hash");
     }
 
-    // the tx hash is the hash of the 3 hashes
-    res = cn_fast_hash(hashes, sizeof(hashes));
+    if (has_pqc && t.pqc_auth)
+    {
+      // v3: hash(prefix, base_rct, pqc_auth, prunable)
+      crypto::hash pqc_auth_hash;
+      std::stringstream ss;
+      binary_archive<true> ba(ss);
+      pqc_authentication auth_tmp = *t.pqc_auth;
+      bool r = ::do_serialize(ba, auth_tmp);
+      CHECK_AND_ASSERT_MES(r, false, "Failed to serialize pqc_auth");
+      cryptonote::get_blob_hash(ss.str(), pqc_auth_hash);
+
+      crypto::hash hashes[4] = { prefix_hash, base_rct_hash, pqc_auth_hash, prunable_hash };
+      res = cn_fast_hash(hashes, sizeof(hashes));
+    }
+    else
+    {
+      // v2: hash(prefix, base_rct, prunable)
+      crypto::hash hashes[3] = { prefix_hash, base_rct_hash, prunable_hash };
+      res = cn_fast_hash(hashes, sizeof(hashes));
+    }
 
     // we still need the size
     if (blob_size)

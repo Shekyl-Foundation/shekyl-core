@@ -46,8 +46,10 @@ Final mechanism remains to be chosen before mainnet.
 
 - Block height 0: New genesis block with snapshot commitment.
 - Block height 1+: New consensus rules (RandomX PoW, modern CryptoNote/Shekyl features).
-- All user transactions on the rebooted chain will use the new PQ-enabled
-  transaction format defined in `docs/POST_QUANTUM_CRYPTOGRAPHY.md`.
+- PoW execution is modularized behind a schema interface so future proof modules
+  can be added without changing core validation call sites.
+- All user transactions on the rebooted chain use the new PQ-enabled
+  transaction format (TransactionV3) defined in `docs/POST_QUANTUM_CRYPTOGRAPHY.md`.
 - Legacy transaction coexistence is not required on the rebooted runtime.
 
 ## Testnet Strategy

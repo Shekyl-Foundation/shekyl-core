@@ -42,7 +42,7 @@
 #define CRYPTONOTE_MAX_TX_PER_BLOCK                     0x10000000
 #define CRYPTONOTE_PUBLIC_ADDRESS_TEXTBLOB_VER          0
 #define CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW            60
-#define CURRENT_TRANSACTION_VERSION                     2
+#define CURRENT_TRANSACTION_VERSION                     3
 #define CURRENT_BLOCK_MAJOR_VERSION                     1
 #define CURRENT_BLOCK_MINOR_VERSION                     0
 #define CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT              60*60*2
@@ -228,7 +228,7 @@
 #define HF_VERSION_2021_SCALING                 15
 #define HF_VERSION_SHEKYL_NG                    17  // Three-component economics: release rate, burn, staking
 
-#define PER_KB_FEE_QUANTIZATION_DECIMALS        8
+#define PER_KB_FEE_QUANTIZATION_DECIMALS        6
 #define CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES 2
 
 #define HASH_OF_HASHES_STEP                     512

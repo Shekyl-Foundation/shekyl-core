@@ -412,6 +412,8 @@ namespace cryptonote
      * @return true if block template filled in successfully, else false
      */
     bool get_miner_data(uint8_t& major_version, uint64_t& height, crypto::hash& prev_id, crypto::hash& seed_hash, difficulty_type& difficulty, uint64_t& median_weight, uint64_t& already_generated_coins, std::vector<tx_block_template_backlog_entry>& tx_backlog);
+    uint64_t get_tx_volume_avg(uint64_t height) const;
+    uint64_t get_stake_ratio(uint64_t height) const;
 
     /**
      * @brief checks if a block is known about with a given hash

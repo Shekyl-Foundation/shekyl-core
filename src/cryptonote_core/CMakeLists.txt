@@ -30,6 +30,7 @@ set(cryptonote_core_sources
   blockchain.cpp
   cryptonote_core.cpp
   tx_pool.cpp
+  tx_pqc_verify.cpp
   tx_sanity_check.cpp
   cryptonote_tx_utils.cpp
   tx_verification_utils.cpp

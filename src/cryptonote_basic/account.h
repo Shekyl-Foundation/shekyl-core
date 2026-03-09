@@ -80,6 +80,9 @@ namespace cryptonote
     void create_from_device(const std::string &device_name);
     void create_from_device(hw::device &hwdev);
     void create_from_keys(const cryptonote::account_public_address& address, const crypto::secret_key& spendkey, const crypto::secret_key& viewkey);
+    /// Generate PQC keys for a restored address that lacks them. Enables v3 sending capability.
+    /// Returns true if keys were generated; false if address already has PQC keys or generation failed.
+    bool generate_pqc_for_restored_address();
     void create_from_viewkey(const cryptonote::account_public_address& address, const crypto::secret_key& viewkey);
     bool make_multisig(const crypto::secret_key &view_secret_key, const crypto::secret_key &spend_secret_key, const crypto::public_key &spend_public_key, const std::vector<crypto::secret_key> &multisig_keys);
     const account_keys& get_keys() const;

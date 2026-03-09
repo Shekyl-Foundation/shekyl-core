@@ -36,6 +36,7 @@
 #include "cryptonote_basic_impl.h"
 #include "cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
+#include "crypto/pow_registry.h"
 #include "file_io_utils.h"
 #include "common/command_line.h"
 #include "common/util.h"
@@ -576,9 +577,10 @@ namespace cryptonote
       b.nonce = nonce;
       crypto::hash h;
 
-      if ((b.major_version >= RX_BLOCK_VERSION) && !rx_set)
+      if (!rx_set)
       {
-        crypto::rx_set_miner_thread(th_local_index, tools::get_max_concurrency());
+        const cryptonote::IPowSchema& pow_schema = cryptonote::get_pow_for_height(height, b.major_version);
+        pow_schema.prepare_miner_thread(th_local_index, tools::get_max_concurrency());
         rx_set = true;
       }
 
