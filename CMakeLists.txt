@@ -610,6 +610,19 @@ add_definitions(-DAUTO_INITIALIZE_EASYLOGGINGPP)
 set(MONERO_GENERATED_HEADERS_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_include")
 include_directories(${MONERO_GENERATED_HEADERS_DIR})
 
+# Single source of truth for economics constants consumed by C++ and Rust.
+set(SHEKYL_ECONOMICS_CONFIG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/config/economics_params.json")
+set(SHEKYL_ECONOMICS_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_economics_params.py")
+set(SHEKYL_ECONOMICS_GENERATED_HEADER "${MONERO_GENERATED_HEADERS_DIR}/shekyl/economics_params_generated.h")
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+execute_process(
+  COMMAND ${Python3_EXECUTABLE} "${SHEKYL_ECONOMICS_GENERATOR}" "${SHEKYL_ECONOMICS_CONFIG_JSON}" "${SHEKYL_ECONOMICS_GENERATED_HEADER}"
+  RESULT_VARIABLE SHEKYL_ECONOMICS_GEN_RESULT
+)
+if(NOT SHEKYL_ECONOMICS_GEN_RESULT EQUAL 0)
+  message(FATAL_ERROR "Failed generating economics constants header from ${SHEKYL_ECONOMICS_CONFIG_JSON}")
+endif()
+
 # As of OpenBSD 6.8, -march=<anything> breaks the build
 function(set_default_arch)
   if (OPENBSD)

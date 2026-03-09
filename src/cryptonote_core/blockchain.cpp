@@ -1811,10 +1811,52 @@ uint64_t Blockchain::get_tx_volume_avg(uint64_t height) const
   return tx_count_sum / blocks;
 }
 //------------------------------------------------------------------
-uint64_t Blockchain::get_stake_ratio(uint64_t /*height*/) const
+uint64_t Blockchain::get_stake_ratio(uint64_t height) const
 {
-  // Staking state is not consensus-tracked yet.
-  return 0;
+  if (height == 0)
+    return 0;
+
+  const uint64_t circulating_supply = m_db->get_block_already_generated_coins(height - 1);
+  if (circulating_supply == 0)
+    return 0;
+
+  uint64_t total_staked = 0;
+
+  auto accumulate_staked_outputs = [&](const transaction &tx)
+  {
+    for (const auto &out : tx.vout)
+    {
+      const auto *staked = boost::get<txout_to_staked_key>(&out.target);
+      if (!staked)
+        continue;
+      if (staked->lock_until <= height)
+        continue;
+
+      if (out.amount > UINT64_MAX - total_staked)
+        total_staked = UINT64_MAX;
+      else
+        total_staked += out.amount;
+    }
+  };
+
+  for (uint64_t h = 0; h < height; ++h)
+  {
+    const block blk = m_db->get_block_from_height(h);
+    accumulate_staked_outputs(blk.miner_tx);
+
+    if (blk.tx_hashes.empty())
+      continue;
+
+    std::vector<transaction> txs;
+    std::vector<crypto::hash> missed_txs;
+    if (!get_transactions(blk.tx_hashes, txs, missed_txs, true))
+      continue;
+
+    for (const auto &tx : txs)
+      accumulate_staked_outputs(tx);
+  }
+
+  return shekyl_calc_stake_ratio(total_staked, circulating_supply);
 }
 //------------------------------------------------------------------
 // for an alternate chain, get the timestamps from the main chain to complete

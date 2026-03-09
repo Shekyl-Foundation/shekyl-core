@@ -331,9 +331,22 @@ fn read_vec(bytes: &[u8], cursor: &mut usize, len: usize) -> Result<Vec<u8>, Cry
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     fn scheme() -> HybridEd25519MlDsa {
         HybridEd25519MlDsa
+    }
+
+    fn from_hex(s: &str) -> Vec<u8> {
+        assert_eq!(s.len() % 2, 0, "hex string must have even length");
+        let mut out = Vec::with_capacity(s.len() / 2);
+        let bytes = s.as_bytes();
+        for i in (0..bytes.len()).step_by(2) {
+            let hi = (bytes[i] as char).to_digit(16).expect("invalid hex") as u8;
+            let lo = (bytes[i + 1] as char).to_digit(16).expect("invalid hex") as u8;
+            out.push((hi << 4) | lo);
+        }
+        out
     }
 
     #[test]
@@ -343,6 +356,39 @@ mod tests {
         let msg = b"shekyl hybrid pq signature test";
         let sig = scheme.sign(&sk, msg).unwrap();
         assert!(scheme.verify(&pk, msg, &sig).unwrap());
+    }
+
+    #[test]
+    fn documented_vector_verifies() {
+        let raw = include_str!("../../../docs/PQC_TEST_VECTOR_001.json");
+        let v: Value = serde_json::from_str(raw).unwrap();
+
+        let message_hex = v["message_hex"].as_str().unwrap();
+        let public_key_hex = v["hybrid_public_key_hex"].as_str().unwrap();
+        let signature_hex = v["hybrid_signature_hex"].as_str().unwrap();
+
+        let message = from_hex(message_hex);
+        let public_key_bytes = from_hex(public_key_hex);
+        let signature_bytes = from_hex(signature_hex);
+
+        assert_eq!(
+            public_key_bytes.len(),
+            v["hybrid_public_key_len"].as_u64().unwrap() as usize
+        );
+        assert_eq!(
+            signature_bytes.len(),
+            v["hybrid_signature_len"].as_u64().unwrap() as usize
+        );
+
+        let pk = HybridPublicKey::from_canonical_bytes(&public_key_bytes).unwrap();
+        let sig = HybridSignature::from_canonical_bytes(&signature_bytes).unwrap();
+        let scheme = scheme();
+
+        assert!(scheme.verify(&pk, &message, &sig).unwrap());
+
+        let mut tampered = message.clone();
+        tampered[0] ^= 0x01;
+        assert!(!scheme.verify(&pk, &tampered, &sig).unwrap());
     }
 
     #[test]

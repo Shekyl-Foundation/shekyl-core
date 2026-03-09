@@ -376,8 +376,37 @@ transaction hash calculation.
 
 ### Measured Sizes (Phase 1)
 
-- `HybridPublicKey` (Ed25519 + ML-DSA-65): ~32 + 4 + ML-DSA-65 public key bytes
-- `HybridSignature` (Ed25519 + ML-DSA-65): ~64 + 4 + ML-DSA-65 signature bytes
+Measured from canonical serialization output in
+`docs/PQC_TEST_VECTOR_001.json`:
+
+- `HybridPublicKey` canonical bytes: `1996` bytes
+- `HybridSignature` canonical bytes: `3385` bytes
+- `PqcAuthentication` payload contribution (`u8,u8,u16` + key + signature):
+  `4 + 1996 + 3385 = 5385` bytes
+
+The measured values match the canonical field layout:
+
+- `HybridPublicKey`: `1 + 1 + 2 + 4 + 32 + 4 + 1952 = 1996`
+- `HybridSignature`: `1 + 1 + 2 + 4 + 64 + 4 + 3309 = 3385`
+
+### Test Vectors (Phase 1)
+
+Canonical vector material is published in:
+
+- `docs/PQC_TEST_VECTOR_001.json`
+
+The vector contains:
+
+- fixed message bytes (`message_hex`)
+- canonical encoded `HybridPublicKey`
+- canonical encoded `HybridSignature`
+- expected encoded lengths
+- expected verify result (`true`)
+
+The Rust crate validates this vector in
+`rust/shekyl-crypto-pq/src/signature.rs` via
+`documented_vector_verifies`, including a negative check with a tampered
+message.
 
 Importantly:
 
@@ -450,8 +479,30 @@ Operational consequences:
 - ZMQ/RPC consumers must expect larger transaction payloads
 - documentation and operator guidance must explicitly call this out
 
-Exact byte counts must be documented once the chosen Rust crates are finalized
-and verified against real encoded outputs.
+### v3 Privacy Boundary (Operator-Facing)
+
+`TransactionV3` phase-1 protection boundary is:
+
+- **Protected by hybrid PQ auth**
+  - authorization metadata in `pqc_auth`
+  - canonical payload hash over prefix + RingCT base + PQ auth header
+  - dual verification requirement (`Ed25519 && ML-DSA-65`)
+- **Still classical in phase 1**
+  - ring anonymity machinery (`CLSAG`, RingCT internals)
+  - stealth addressing and one-time output derivation
+  - broader privacy assumptions of current CryptoNote stack
+
+Operationally: v3 raises the cost of key-compromise style spend forgery under
+future quantum pressure, but it is not yet a full PQ privacy rewrite.
+
+### v3 Rollout Notes
+
+- `HF_VERSION_SHEKYL_NG` (`17`) gates `TransactionV3` validation behavior.
+- Coinbase transactions remain excluded from `pqc_auth`.
+- Nodes, wallets, and indexers should budget for ~5.3KB extra auth material per
+  user transaction (before other serialization overhead).
+- RPC/ZMQ consumers should avoid rigid tx-size assumptions and update parser
+  limits accordingly.
 
 ## Deferred Scope
 

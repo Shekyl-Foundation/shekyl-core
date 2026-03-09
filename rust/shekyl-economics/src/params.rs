@@ -2,7 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const SCALE: u64 = 1_000_000;
+include!(concat!(env!("OUT_DIR"), "/params_generated.rs"));
+
+pub const SCALE: u64 = GENERATED_SCALE;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EconomicParams {
@@ -18,13 +20,13 @@ pub struct EconomicParams {
 impl Default for EconomicParams {
     fn default() -> Self {
         Self {
-            release_min: 800_000,           // 0.8x
-            release_max: 1_300_000,         // 1.3x
-            tx_volume_baseline: 100,
-            burn_base_rate: 400_000,        // 40%
-            burn_cap: 900_000,              // 90%
-            staker_pool_share: 200_000,     // 20%
-            money_supply: 4_294_967_296_000_000_000,
+            release_min: GENERATED_RELEASE_MIN,
+            release_max: GENERATED_RELEASE_MAX,
+            tx_volume_baseline: GENERATED_TX_VOLUME_BASELINE,
+            burn_base_rate: GENERATED_BURN_BASE_RATE,
+            burn_cap: GENERATED_BURN_CAP,
+            staker_pool_share: GENERATED_STAKER_POOL_SHARE,
+            money_supply: GENERATED_MONEY_SUPPLY,
         }
     }
 }

@@ -71,7 +71,7 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 
 | Item | Description |
 |------|-------------|
-| **Economics chain-state wiring** | `tx_volume_avg` is now computed from recent chain history and passed into miner template construction, tx pool block-reward estimation, and miner reward validation. `circulating_supply` is sourced from `already_generated_coins`; `stake_ratio` remains a documented stub (`0`) until staking state is consensus-tracked. |
+| **Economics chain-state wiring** | `tx_volume_avg` is now computed from recent chain history and passed into miner template construction, tx pool block-reward estimation, and miner reward validation. `circulating_supply` is sourced from `already_generated_coins`; `stake_ratio` is now computed from chain-state scanning of locked `txout_to_staked_key` outputs. |
 | **Modular PoW schema** | PoW hashing now routes through a schema interface and registry (`IPowSchema`, RandomX schema, Cryptonight schema) while preserving historic behavior (`major_version >= RX_BLOCK_VERSION` => RandomX; older => Cryptonight variants). |
 | **Follow-up TODO** | Add configuration-driven PoW activation policy and expand test coverage for schema-selection parity against legacy `get_block_longhash` behavior. |
 
@@ -105,10 +105,10 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 
 - Dedicated PQC design doc now exists: `docs/POST_QUANTUM_CRYPTOGRAPHY.md`.
 - Remaining work: keep the PQC spec aligned with implementation as code lands.
-- No finalized implementation write-up yet for exact crate choices, measured encoded sizes, or test vectors.
-- No finalized operator-facing explanation yet for relay/mempool impact from larger hybrid signatures.
-- No finalized implementation note yet for how wallet scanning metadata and hybrid spend/ownership authorization coexist.
-- No **test vectors** or **interop spec** for hybrid signatures/KEM.
+- Exact measured encoded sizes and a publishable vector are now documented (`docs/POST_QUANTUM_CRYPTOGRAPHY.md`, `docs/PQC_TEST_VECTOR_001.json`).
+- Operator-facing rollout notes now exist (`docs/V3_ROLLOUT.md`).
+- Wallet scanning vs hybrid authorization coexistence is now documented in `docs/POST_QUANTUM_CRYPTOGRAPHY.md`.
+- Hybrid signature vector verification is now covered in Rust unit tests (`documented_vector_verifies`).
 - **RingCT / stealth addresses**: hybrid PQ spend protection is specified as an augmentation of the existing privacy primitives, but the production integration still needs implementation and review.
 - **v3 boundary**: address/account PQ groundwork can land now, but anonymous per-input PQ ownership enforcement remains deferred so v3 does not regress ring privacy.
 
@@ -127,8 +127,7 @@ Completed:
 
 Remaining:
 
-- document measured encoded sizes from real outputs
-- add publishable test vectors / interop fixtures
+- extend vector set with additional malformed/negative vectors and future KEM vectors
 
 ### Phase 2: KEM (`HybridX25519MlKem`)
 
@@ -156,7 +155,7 @@ Completed:
 
 Remaining:
 
-- make the v3 transaction/account rollout explicit in operator and wallet docs
+- expand wallet RPC docs with claim-flow details once staker claim tx format is finalized
 
 ### Phase 4: Documentation and audit
 
@@ -187,8 +186,8 @@ Remaining:
 | Anonymity | Timestamp offset; broadcast delay; circuit rotation | — |
 | Release | Full checklist; Shekyl-specific seeds, wallets, exchanges | — |
 | Seeds | Populate DNS/IP seeds; runtime seed add; Shekyl naming | — |
-| Economics / PoW | Finish stake-ratio chain state and config-driven proof activation | Modular PoW scaffolding implemented; further policy work pending |
-| **PQC** | **v3 tx format, core validation, and wallet construction implemented; measured sizing, test vectors, and audit remain** | **Core of this document** |
+| Economics / PoW | Finish config-driven proof activation and staker-claim transaction grammar | Stake-ratio chain-state tracking implemented; modular PoW scaffolding implemented |
+| **PQC** | **v3 tx format, core validation, wallet construction, measured sizing, and first published vector are implemented; audit and extended vectors remain** | **Core of this document** |
 
 ---
 
