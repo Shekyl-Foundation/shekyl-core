@@ -1,0 +1,20 @@
+[Unit]
+Description=Shekyl Full Node
+After=network-online.target
+
+[Service]
+User=shekyl
+Group=shekyl
+WorkingDirectory=~
+StateDirectory=shekyl
+LogsDirectory=shekyl
+
+Type=simple
+ExecStart=/usr/local/bin/shekyld --config-file /etc/shekyl/shekyld.conf --non-interactive
+StandardOutput=null
+StandardError=null
+
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

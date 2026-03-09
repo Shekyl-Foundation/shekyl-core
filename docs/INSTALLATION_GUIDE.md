@@ -266,5 +266,4 @@ Rebuild with `-DBACKCOMPAT=ON`.
 - `README.md` (full dependency matrix and platform specifics)
 - `Makefile` (build targets)
 - `CMakeLists.txt` (build options, submodule checks, linker flags)
-- `docs/SEEDS_SETUP.md` (seed bootstrap and network seeding operations)
 - `docs/POST_QUANTUM_CRYPTOGRAPHY.md` (canonical PQC spec and reboot-only transaction format)

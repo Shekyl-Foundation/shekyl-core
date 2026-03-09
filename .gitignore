@@ -30,8 +30,6 @@ contrib/gitian/builder/
 contrib/gitian/docker/
 contrib/gitian/sigs/
 
-# Created by https://www.gitignore.io
-
 ### C++ ###
 # Compiled Object files
 *.slo
@@ -62,6 +60,9 @@ contrib/gitian/sigs/
 *.out
 *.app
 
+# Tests
+tests/data/
+
 
 ### CMake ###
 CMakeCache.txt
@@ -78,6 +79,7 @@ cmake-build-debug/
 
 ### VSCode ###
 .vscode/
+.cursor/
 
 ### Eclipse ###
 *.pydevproject
