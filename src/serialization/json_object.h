@@ -233,6 +233,9 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txout_to_key& txout)
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txout_to_tagged_key& txout);
 void fromJsonValue(const rapidjson::Value& val, cryptonote::txout_to_tagged_key& txout);
 
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::txout_to_staked_key& txout);
+void fromJsonValue(const rapidjson::Value& val, cryptonote::txout_to_staked_key& txout);
+
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::tx_out& txout);
 void fromJsonValue(const rapidjson::Value& val, cryptonote::tx_out& txout);
 

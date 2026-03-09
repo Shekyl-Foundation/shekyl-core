@@ -65,6 +65,7 @@ set(unit_tests_sources
   lmdb.cpp
   main.cpp
   memwipe.cpp
+  mining_parity.cpp
   mlocker.cpp
   mnemonics.cpp
   mul_div.cpp
@@ -125,6 +126,7 @@ target_link_libraries(unit_tests
     serialization
     wallet
     p2p
+    shekyl_ffi
     version
     ${Boost_CHRONO_LIBRARY}
     ${Boost_THREAD_LIBRARY}
@@ -132,6 +134,9 @@ target_link_libraries(unit_tests
     ${CMAKE_THREAD_LIBS_INIT}
     ${EXTRA_LIBRARIES}
     ${ZMQ_LIB})
+if(UNIX AND NOT APPLE)
+  target_link_libraries(unit_tests PRIVATE pthread dl)
+endif()
 set_property(TARGET unit_tests
   PROPERTY
     FOLDER "tests")
