@@ -1558,7 +1558,9 @@ void wallet2::set_seed_language(const std::string &language)
 cryptonote::account_public_address wallet2::get_subaddress(const cryptonote::subaddress_index& index) const
 {
   hw::device &hwdev = m_account.get_device();
-  return hwdev.get_subaddress(m_account.get_keys(), index);
+  cryptonote::account_public_address address = hwdev.get_subaddress(m_account.get_keys(), index);
+  address.m_pqc_public_key = m_account.get_keys().m_account_address.m_pqc_public_key;
+  return address;
 }
 //----------------------------------------------------------------------------------------------------
 boost::optional<cryptonote::subaddress_index> wallet2::get_subaddress_index(const cryptonote::account_public_address& address) const
@@ -6700,7 +6702,8 @@ void wallet2::load_wallet_cache(const bool use_fs, const std::string& cache_buf)
     }
     THROW_WALLET_EXCEPTION_IF(
       m_account_public_address.m_spend_public_key != m_account.get_keys().m_account_address.m_spend_public_key ||
-      m_account_public_address.m_view_public_key  != m_account.get_keys().m_account_address.m_view_public_key,
+      m_account_public_address.m_view_public_key  != m_account.get_keys().m_account_address.m_view_public_key ||
+      m_account_public_address.m_pqc_public_key   != m_account.get_keys().m_account_address.m_pqc_public_key,
       error::wallet_files_doesnt_correspond, m_keys_file, m_wallet_file);
   }
 }
@@ -13317,7 +13320,8 @@ std::string wallet2::get_reserve_proof(const boost::optional<std::pair<uint32_t,
 
   // compute signature prefix hash
   std::string prefix_data = message;
-  prefix_data.append((const char*)&m_account.get_keys().m_account_address, sizeof(cryptonote::account_public_address));
+  const cryptonote::blobdata account_address_blob = cryptonote::t_serializable_object_to_blob(m_account.get_keys().m_account_address);
+  prefix_data.append(account_address_blob.data(), account_address_blob.size());
   for (size_t i = 0; i < selected_transfers.size(); ++i)
   {
     prefix_data.append((const char*)&m_transfers[selected_transfers[i]].m_key_image, sizeof(crypto::key_image));
@@ -13445,7 +13449,8 @@ bool wallet2::check_reserve_proof(const cryptonote::account_public_address &addr
 
   // compute signature prefix hash
   std::string prefix_data = message;
-  prefix_data.append((const char*)&address, sizeof(cryptonote::account_public_address));
+  const cryptonote::blobdata address_blob = cryptonote::t_serializable_object_to_blob(address);
+  prefix_data.append(address_blob.data(), address_blob.size());
   for (size_t i = 0; i < proofs.size(); ++i)
   {
     prefix_data.append((const char*)&proofs[i].key_image, sizeof(crypto::key_image));

@@ -42,6 +42,7 @@ namespace cryptonote
     account_public_address m_account_address;
     crypto::secret_key   m_spend_secret_key;
     crypto::secret_key   m_view_secret_key;
+    std::vector<uint8_t> m_pqc_secret_key;
     std::vector<crypto::secret_key> m_multisig_keys;
     hw::device *m_device = &hw::get_device("default");
     crypto::chacha_iv m_encryption_iv;
@@ -50,6 +51,7 @@ namespace cryptonote
       KV_SERIALIZE(m_account_address)
       KV_SERIALIZE_VAL_POD_AS_BLOB_FORCE(m_spend_secret_key)
       KV_SERIALIZE_VAL_POD_AS_BLOB_FORCE(m_view_secret_key)
+      KV_SERIALIZE_OPT(m_pqc_secret_key, std::vector<uint8_t>())
       KV_SERIALIZE_CONTAINER_POD_AS_BLOB(m_multisig_keys)
       const crypto::chacha_iv default_iv{{0, 0, 0, 0, 0, 0, 0, 0}};
       KV_SERIALIZE_VAL_POD_AS_BLOB_OPT(m_encryption_iv, default_iv)

@@ -531,21 +531,25 @@ namespace cryptonote
   {
     crypto::public_key m_spend_public_key;
     crypto::public_key m_view_public_key;
+    std::vector<uint8_t> m_pqc_public_key;
 
     BEGIN_SERIALIZE_OBJECT()
       FIELD(m_spend_public_key)
       FIELD(m_view_public_key)
+      FIELD(m_pqc_public_key)
     END_SERIALIZE()
 
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE_VAL_POD_AS_BLOB_FORCE(m_spend_public_key)
       KV_SERIALIZE_VAL_POD_AS_BLOB_FORCE(m_view_public_key)
+      KV_SERIALIZE_OPT(m_pqc_public_key, std::vector<uint8_t>())
     END_KV_SERIALIZE_MAP()
 
     bool operator==(const account_public_address& rhs) const
     {
       return m_spend_public_key == rhs.m_spend_public_key &&
-             m_view_public_key == rhs.m_view_public_key;
+             m_view_public_key == rhs.m_view_public_key &&
+             m_pqc_public_key == rhs.m_pqc_public_key;
     }
 
     bool operator!=(const account_public_address& rhs) const
@@ -580,6 +584,7 @@ namespace std {
       size_t res = 17;
       res = res * 31 + hash<crypto::public_key>()(addr.m_spend_public_key);
       res = res * 31 + hash<crypto::public_key>()(addr.m_view_public_key);
+      res = res * 31 + boost::hash_range(addr.m_pqc_public_key.begin(), addr.m_pqc_public_key.end());
       return res;
     }
   };

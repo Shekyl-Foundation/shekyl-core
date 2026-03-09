@@ -10,3 +10,5 @@ thiserror.workspace = true
 serde.workspace = true
 zeroize = { version = "1", features = ["derive"] }
 rand = "0.8"
+ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
+fips204 = "0.4.6"

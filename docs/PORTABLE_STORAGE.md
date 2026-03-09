@@ -2,8 +2,8 @@
 
 ## Background
 
-Monero makes use of a set of helper classes from a small library named
-[epee](https://github.com/monero-project/monero/tree/master/contrib/epee). Part
+Shekyl makes use of a set of helper classes from a small library named
+[epee](https://github.com/monero-project/monero/tree/master/contrib/epee) (inherited from Monero). Part
 of this library implements a networking protocol called
 [Levin](https://github.com/monero-project/monero/blob/master/contrib/epee/include/net/levin_base.h),
 which internally uses a storage format called [Portable
@@ -159,7 +159,7 @@ that most will be familiar with):
 ```json
 {
   "short_quote": "Give me liberty or give me death!",
-  "long_quote": "Monero is more than just a technology. It's also what the technology stands for.",
+  "long_quote": "Shekyl builds on proven CryptoNote lineage for privacy and resilience.",
   "signed_32bit_int": 20140418,
   "array_of_bools": [true, false, true, true],
   "nested_section": {
@@ -173,7 +173,7 @@ This would translate to:
 
 ![Epee binary storage format example](/docs/images/storage_binary_example.png)
 
-## Monero specifics
+## Shekyl / CryptoNote specifics
 
 ### Entry values
 
@@ -186,12 +186,12 @@ These are stored as strings, `SERIALIZE_TYPE_STRING`.
 These can be arrays of standard integer types, strings or
 `SERIALIZE_TYPE_OBJECT`'s for structs.
 
-#### Links to some Monero struct definitions
+#### Links to struct definitions in this repository
 
 - [Core RPC
-  definitions](https://github.com/monero-project/monero/blob/master/src/rpc/core_rpc_server_commands_defs.h)
+  definitions](https://github.com/monero-project/monero/blob/master/src/rpc/core_rpc_server_commands_defs.h) (upstream; see `src/rpc/core_rpc_server_commands_defs.h` in Shekyl)
 - [CryptoNote protocol
-  definitions](https://github.com/monero-project/monero/blob/master/src/cryptonote_protocol/cryptonote_protocol_defs.h)
+  definitions](https://github.com/monero-project/monero/blob/master/src/cryptonote_protocol/cryptonote_protocol_defs.h) (upstream; see `src/cryptonote_protocol/` in Shekyl)
 
 
 

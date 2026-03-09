@@ -1,44 +1,48 @@
 - [ ] Security audit
 - [ ] Code audit
+- [ ] PQC specification frozen
+  - [ ] `docs/POST_QUANTUM_CRYPTOGRAPHY.md` matches implementation
+  - [ ] canonical transaction/signature serialization documented
+  - [ ] signed payload definition documented
+- [ ] PQC crypto review
+  - [ ] hybrid sign/verify implementation reviewed
+  - [ ] FFI ownership / zeroization reviewed
+  - [ ] test vectors generated and archived
+- [ ] PQC interoperability verification
+  - [ ] wallet sign/daemon verify path tested
+  - [ ] malformed hybrid signature rejection tested
+  - [ ] encoded transaction size impact measured
 - [ ] Ledger integration
-  - [ ] Implemented in Monero codebase (if needed)
+  - [ ] Implemented in Shekyl codebase (if needed)
   - [ ] Ledger app integration coded by Ledger
-  - [ ] Ledger Monero app update available
+  - [ ] Ledger Shekyl app (or Monero-compatible app) update available
 - [ ] Trezor integration
-  - [ ] Implemented in Monero codebase (if needed)
+  - [ ] Implemented in Shekyl codebase (if needed)
   - [ ] Trezor app integration coded by Trezor
   - [ ] Trezor firmware update available (if needed)
 - [ ] Fork height set
-  - [ ] Monero-announce mailer notice
+  - [ ] Shekyl announcement mailer / notice
   - [ ] Twitter announcement
   - [ ] Reddit announcement
-  - [ ] Getmonero.org announcement
+  - [ ] Project website announcement
 - [ ] Notify wallets
-  - [ ] MyMonero
-  - [ ] Coinomi
-  - [ ] Exa Wallet
-  - [ ] Wookey Wallet
-  - [ ] X Wallet
-  - [ ] Guarda
-  - [ ] ZelCore
+  - [ ] (Update with Shekyl-compatible or compatible third-party wallets)
   - [ ] Cake Wallet
   - [ ] Monerujo
-  - [ ] Edge Wallet
-  - [ ] Exodus
-  - [ ] XMRWallet
+  - [ ] Other compatible wallets as applicable
 - [ ] Notify exchanges
-  - [ ] https://web.getmonero.org/community/merchants/#exchanges
+  - [ ] Project website / community merchant list (exchanges)
 - [ ] Notify 3rd party payment processors
-  - [ ] https://web.getmonero.org/community/merchants/#payment-gateways
+  - [ ] Project website / community merchant list (payment gateways)
 - [ ] Notify mining pools
-  - [ ] https://miningpoolstats.stream/monero
+  - [ ] Mining pool listing / pool operators
 - [ ] Release tagged
   - [ ] Update src/version.cpp.in with new version AND new name (if necessary)
   - [ ] Update Gitian YML files in contrib/gitian/ to the new version number
-  - [ ] Update README.md with new fork table entry (or at least update the Recommended Monero version)
+  - [ ] Update README.md with new fork table entry (or recommended Shekyl version)
   - [ ] Update contrib/gitian/README.md so that the instructions reflect the current version
   - [ ] Update src/checkpoints/checkpoints.cpp with a recent hardcoded checkpoint
-  - [ ] Update src/blocks/checkpoints.dat with ./monero-blockchain-export --output-file checkpoints.dat --block-stop <recent block height> --blocksdat
+  - [ ] Update src/blocks/checkpoints.dat with ./shekyl-blockchain-export (or equivalent) --output-file checkpoints.dat --block-stop <recent block height> --blocksdat
   - [ ] Update expected_block_hashes_hash in src/cryptonote_core/blockchain.cpp with checkpoints.dat sha256 hash
 - [ ] Testnet forked
 - [ ] Testnet testing/verification
@@ -46,23 +50,27 @@
   - [ ] Trezor
   - [ ] Release-specific testing
   - [ ] RPC testing/update RPC documentation
+  - [ ] PQC transaction validation testing
+  - [ ] PQC wallet send/receive testing
+  - [ ] ZMQ/RPC consumer regression testing for larger transactions
 - [ ] CLI reproducible builds validated
+- [ ] Rust/PQC reproducible build inputs documented
 - [ ] CLI released
-  - [ ] https://web.getmonero.org/downloads/ updated
+  - [ ] Project downloads page updated
   - [ ] Update hashes.txt on website
   - [ ] Update downloads.yml on website
   - [ ] Update auto-update DNS records
   - [ ] Update redirects on downloads box
   - [ ] Update seed nodes
-- [ ] GUI released
-  - [ ] https://web.getmonero.org/downloads/ updated
+- [ ] GUI released (if applicable)
+  - [ ] Project downloads page updated
   - [ ] Update hashes.txt on website
   - [ ] Update hashes.txt.sig on website
   - [ ] Update downloads.yml on website
   - [ ] Update auto-update DNS records
   - [ ] Update redirects on downloads box
 - [ ] Release Announcements
-  - [ ] Monero-announce mailer notice
+  - [ ] Shekyl announcement mailer notice
   - [ ] Twitter announcement
   - [ ] Reddit announcement
-  - [ ] Getmonero.org announcement
+  - [ ] Project website announcement

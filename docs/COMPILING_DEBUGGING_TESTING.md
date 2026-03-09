@@ -1,19 +1,27 @@
 # Compiling, debugging and testing efficiently
 
 This document describes ways of compiling, debugging and testing efficiently for various use cases.
-The intended audience are developers, who want to leverage newly added tricks to Monero via `CMake`. The document will lower the entry point for these developers.
+The intended audience are developers, who want to leverage build and test tricks in Shekyl via `CMake`. The document will lower the entry point for these developers.
 Before reading this document, please consult section "Build instructions" in the main README.md. 
 Some information from README.md will be repeated here, but the aim is to go beyond it.
 
+PQC note:
+
+- Shekyl's rebooted chain design depends on Rust-based PQC components
+- once PQC transaction authentication is enabled for the rebooted chain, Rust
+  should be treated as required for consensus-valid builds
+- the canonical PQC format/spec is documented in
+  `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
+
 ## Basic compilation
 
-Monero can be compiled via the main `Makefile`, using one of several targets listed there.
+Shekyl can be compiled via the main `Makefile`, using one of several targets listed there.
 The targets are actually presets for `CMake` calls with various options, plus `make` commands for building or in some cases `make test` for testing.
-It is possible to extract these `CMake` calls and modify them for your specific needs. For example, a minimal external cmake command to compile Monero, executed from within a newly created build directory could look like:
+It is possible to extract these `CMake` calls and modify them for your specific needs. For example, a minimal external cmake command to compile Shekyl, executed from within a newly created build directory could look like:
 
 `cmake -S "$DIR_SRC" -DCMAKE_BUILD_TYPE=Release && make`
 
-where the variable `DIR_SRC` is expected to store the path to the Monero source code.
+where the variable `DIR_SRC` is expected to store the path to the Shekyl source code.
 
 ## Use cases
 
@@ -35,7 +43,7 @@ For instance, in order to generate Makefiles and project files for the Code::Blo
 
 `cmake -G "CodeBlocks - Unix Makefiles" (...)`
 
-The additional artifact of the above call is the `monero.cbp` Code::Blocks project file in the build directory.
+The additional artifact of the above call is the `shekyl.cbp` Code::Blocks project file in the build directory.
 
 ### Debugging in Code::Blocks (CB)
 
@@ -43,7 +51,7 @@ First prepare the build directory for debugging using the following example comm
 
 `cmake -S "$DIR_SRC" -G "CodeBlocks - Unix Makefiles" -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON && make -j 2`
 
-After a successful build, open the `monero.cbp` with CB. From the CB's menu bar select the target, that you want debug. Assuming these are unit tests:
+After a successful build, open the `shekyl.cbp` with CB. From the CB's menu bar select the target, that you want debug. Assuming these are unit tests:
 
 `Build -> Select target -> Select target -> unit_tests`
 
@@ -72,6 +80,9 @@ If everything looks fine, then after setting some breakpoints of your choice, th
 `Debug -> Start/Continue`
 
 ## To be done (and merged):
+
+Upstream Monero PRs that may be adopted or reimplemented for Shekyl:
+
 ### Multihost parallel compilation
 https://github.com/monero-project/monero/pull/7160
 
@@ -83,4 +94,15 @@ https://github.com/monero-project/monero/pull/7216
 
 ### Unity builds
 https://github.com/monero-project/monero/pull/7217
+
+## PQC-focused testing guidance
+
+As PQC code lands, developers should add a dedicated validation loop covering:
+
+- Rust unit tests in `rust/shekyl-crypto-pq`
+- FFI ABI tests in `rust/shekyl-ffi`
+- transaction serialization tests for the reboot-only PQ transaction format
+- wallet sign/core verify integration tests
+- malformed signature and malformed length rejection tests
+- encoded-size regression checks for mempool, RPC, and ZMQ consumers
 

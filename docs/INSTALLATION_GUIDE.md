@@ -60,6 +60,23 @@ curl https://sh.rustup.rs -sSf | sh
 source "$HOME/.cargo/env"
 ```
 
+### PQC build note
+
+Shekyl's rebooted chain design depends on Rust-based PQC components.
+
+Today:
+
+- some Rust modules are optional at build time
+- PQC implementation is still being completed
+
+Target state for the rebooted mainnet:
+
+- Rust toolchain will be a required dependency for consensus-valid builds
+- node operators, wallet builders, and release builders should assume a
+  Rust-enabled build is mandatory
+- the canonical PQC design and transaction format are documented in
+  `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
+
 ---
 
 ## 4) Clone and prepare source
@@ -153,7 +170,7 @@ For a common release flow:
 - `build/release/bin/shekyl-wallet-cli`
 - `build/release/bin/shekyl-wallet-rpc`
 
-Note: some legacy docs/config examples still use `monerod` naming. Use Shekyl names above for this repository.
+Note: some legacy or upstream docs/config examples may still use older daemon/wallet names; use Shekyl names above for this repository.
 
 ---
 
@@ -250,3 +267,4 @@ Rebuild with `-DBACKCOMPAT=ON`.
 - `Makefile` (build targets)
 - `CMakeLists.txt` (build options, submodule checks, linker flags)
 - `docs/SEEDS_SETUP.md` (seed bootstrap and network seeding operations)
+- `docs/POST_QUANTUM_CRYPTOGRAPHY.md` (canonical PQC spec and reboot-only transaction format)

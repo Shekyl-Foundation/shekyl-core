@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 extern "C" {
@@ -11,6 +12,40 @@ extern "C" {
 const char* shekyl_rust_version();
 bool shekyl_rust_init();
 const char* shekyl_active_consensus_module();
+
+// Generic Rust-owned buffer
+struct ShekylBuffer {
+    uint8_t* ptr;
+    size_t len;
+};
+
+void shekyl_buffer_free(uint8_t* ptr, size_t len);
+
+// PQC: Hybrid signatures
+struct ShekylPqcKeypair {
+    ShekylBuffer public_key;
+    ShekylBuffer secret_key;
+    bool success;
+};
+
+struct ShekylPqcSignatureResult {
+    ShekylBuffer signature;
+    bool success;
+};
+
+ShekylPqcKeypair shekyl_pqc_keypair_generate();
+ShekylPqcSignatureResult shekyl_pqc_sign(
+    const uint8_t* secret_key_ptr,
+    size_t secret_key_len,
+    const uint8_t* message_ptr,
+    size_t message_len);
+bool shekyl_pqc_verify(
+    const uint8_t* public_key_ptr,
+    size_t public_key_len,
+    const uint8_t* message_ptr,
+    size_t message_len,
+    const uint8_t* signature_ptr,
+    size_t signature_len);
 
 // Release rate
 uint64_t shekyl_calc_release_multiplier(

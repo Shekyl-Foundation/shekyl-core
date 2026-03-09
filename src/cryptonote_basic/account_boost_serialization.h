@@ -44,6 +44,7 @@ namespace boost
       a & x.m_account_address;
       a & x.m_spend_secret_key;
       a & x.m_view_secret_key;
+      a & x.m_pqc_secret_key;
     }
 
     template <class Archive>
@@ -51,6 +52,7 @@ namespace boost
     {
       a & x.m_spend_public_key;
       a & x.m_view_public_key;
+      a & x.m_pqc_public_key;
     }
 
   }

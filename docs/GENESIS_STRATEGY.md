@@ -2,12 +2,18 @@
 
 ## Overview
 
-Shekyl NG uses a snapshot-based genesis approach to honor early miners from the
-2018-2019 chain while rebasing on a modern Monero v0.18.4.5 codebase.
+Shekyl NG uses a new-genesis reboot approach while retaining the option to honor
+early miners from the 2018-2019 chain through a snapshot-derived allocation.
+
+Important distinction:
+
+- economic/accounting continuity may be preserved through snapshot data
+- runtime consensus and transaction validation do not need legacy-chain
+  backward compatibility on the rebooted network
 
 ## Approach
 
-### Phase 1: Snapshot Collection (Pre-Fork)
+### Phase 1: Optional Snapshot Collection
 
 1. Identify the last valid block from the original Shekyl chain (2018-2019 era).
 2. Extract the full UTXO set at that block height.
@@ -22,20 +28,27 @@ The NG genesis block embeds:
 - A unique genesis nonce (already configured: 10000).
 - The Shekyl network ID to prevent cross-chain contamination.
 
-### Phase 3: Balance Restoration
+### Phase 3: Optional Balance Restoration
 
-At chain launch, a special "airdrop" mechanism in the first N blocks creates
-outputs matching the snapshot UTXO set. This uses a deterministic process:
-- Each original UTXO maps to a new output with the same one-time address.
-- Original key holders can spend these outputs with their existing keys.
-- No new keys are needed -- backward compatibility preserved.
+If snapshot honoring is retained for mainnet, a special allocation mechanism in
+the first N blocks can create outputs matching the agreed snapshot set. This is
+an accounting migration, not a requirement to preserve legacy transaction rules.
 
-### Phase 4: Hard Fork Activation
+Possible approaches:
+
+- deterministic outputs derived from the snapshot set
+- claim-based restoration using agreed proofs/keys
+- a governance-decided partial allocation honoring only specific balances
+
+Final mechanism remains to be chosen before mainnet.
+
+### Phase 4: Reboot Activation
 
 - Block height 0: New genesis block with snapshot commitment.
-- Block height 1+: New consensus rules (RandomX PoW, modern Monero features).
-- All post-genesis blocks use v2.0 transaction format with hybrid PQ signatures
-  (once the PQ crypto module is complete).
+- Block height 1+: New consensus rules (RandomX PoW, modern CryptoNote/Shekyl features).
+- All user transactions on the rebooted chain will use the new PQ-enabled
+  transaction format defined in `docs/POST_QUANTUM_CRYPTOGRAPHY.md`.
+- Legacy transaction coexistence is not required on the rebooted runtime.
 
 ## Testnet Strategy
 
@@ -43,6 +56,8 @@ For development, the testnet uses:
 - A fresh genesis (no snapshot needed).
 - The existing testnet config (ports 12021/12029/12025).
 - Accelerated difficulty adjustment for faster block times during testing.
+- The reboot-only transaction model and PQC work can be developed here without
+  carrying legacy transaction compatibility logic.
 
 ## Emission Economics (TODO)
 
@@ -55,12 +70,13 @@ Options:
 - Choose a different total supply that fits 12 decimal places.
 - Redesign emission curve parameters (speed factor, final subsidy).
 
-Currently using Monero's default supply (uint64 max) for testnet development.
+Currently using the same default supply as upstream (uint64 max) for testnet development.
 
 ## Timeline
 
 1. Stand up testnet with fresh genesis -- DONE.
-2. Locate and extract original Shekyl UTXO set -- requires chain data.
-3. Design final emission economics -- before mainnet.
-4. Implement snapshot restoration logic -- Phase 2 development.
-5. Mainnet launch with snapshot genesis -- after full testing.
+2. Finalize reboot-only transaction and PQC specification.
+3. Decide whether snapshot honoring remains part of mainnet launch.
+4. Design final emission economics -- before mainnet.
+5. If retained, implement snapshot restoration/allocation logic.
+6. Mainnet launch with new genesis -- after full testing.

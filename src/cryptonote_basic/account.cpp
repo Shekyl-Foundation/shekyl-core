@@ -41,6 +41,7 @@ extern "C"
 #include "cryptonote_basic_impl.h"
 #include "cryptonote_format_utils.h"
 #include "cryptonote_config.h"
+#include "shekyl/shekyl_ffi.h"
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "account"
@@ -51,6 +52,32 @@ DISABLE_VS_WARNINGS(4244 4345)
 
   namespace cryptonote
 {
+  namespace
+  {
+    void copy_rust_buffer(std::vector<uint8_t> &out, const ShekylBuffer &buffer)
+    {
+      out.assign(buffer.ptr, buffer.ptr + buffer.len);
+    }
+
+    bool generate_pqc_key_material(account_keys &keys)
+    {
+      ShekylPqcKeypair keypair = shekyl_pqc_keypair_generate();
+      if (!keypair.success || keypair.public_key.ptr == nullptr || keypair.secret_key.ptr == nullptr)
+      {
+        if (keypair.public_key.ptr != nullptr)
+          shekyl_buffer_free(keypair.public_key.ptr, keypair.public_key.len);
+        if (keypair.secret_key.ptr != nullptr)
+          shekyl_buffer_free(keypair.secret_key.ptr, keypair.secret_key.len);
+        return false;
+      }
+
+      copy_rust_buffer(keys.m_account_address.m_pqc_public_key, keypair.public_key);
+      copy_rust_buffer(keys.m_pqc_secret_key, keypair.secret_key);
+      shekyl_buffer_free(keypair.public_key.ptr, keypair.public_key.len);
+      shekyl_buffer_free(keypair.secret_key.ptr, keypair.secret_key.len);
+      return true;
+    }
+  }
 
   //-----------------------------------------------------------------
   hw::device& account_keys::get_device() const  {
@@ -87,12 +114,15 @@ DISABLE_VS_WARNINGS(4244 4345)
   void account_keys::xor_with_key_stream(const crypto::chacha_key &key)
   {
     // encrypt a large enough byte stream with chacha20
-    epee::wipeable_string key_stream = get_key_stream(key, m_encryption_iv, sizeof(crypto::secret_key) * (2 + m_multisig_keys.size()));
+    const size_t pq_bytes = m_pqc_secret_key.size();
+    epee::wipeable_string key_stream = get_key_stream(key, m_encryption_iv, sizeof(crypto::secret_key) * (2 + m_multisig_keys.size()) + pq_bytes);
     const char *ptr = key_stream.data();
     for (size_t i = 0; i < sizeof(crypto::secret_key); ++i)
       m_spend_secret_key.data[i] ^= *ptr++;
     for (size_t i = 0; i < sizeof(crypto::secret_key); ++i)
       m_view_secret_key.data[i] ^= *ptr++;
+    for (size_t i = 0; i < m_pqc_secret_key.size(); ++i)
+      m_pqc_secret_key[i] ^= static_cast<uint8_t>(*ptr++);
     for (crypto::secret_key &k: m_multisig_keys)
     {
       for (size_t i = 0; i < sizeof(crypto::secret_key); ++i)
@@ -149,6 +179,7 @@ DISABLE_VS_WARNINGS(4244 4345)
   void account_base::forget_spend_key()
   {
     m_keys.m_spend_secret_key = crypto::secret_key();
+    m_keys.m_pqc_secret_key.clear();
     m_keys.m_multisig_keys.clear();
   }
   //-----------------------------------------------------------------
@@ -172,6 +203,7 @@ DISABLE_VS_WARNINGS(4244 4345)
     keccak((uint8_t *)&m_keys.m_spend_secret_key, sizeof(crypto::secret_key), (uint8_t *)&second, sizeof(crypto::secret_key));
 
     generate_keys(m_keys.m_account_address.m_view_public_key, m_keys.m_view_secret_key, second, two_random ? false : true);
+    CHECK_AND_ASSERT_THROW_MES(generate_pqc_key_material(m_keys), "Failed to generate hybrid PQ account keys");
 
     struct tm timestamp = {0};
     timestamp.tm_year = 2014 - 1900;  // year 2014
@@ -199,6 +231,7 @@ DISABLE_VS_WARNINGS(4244 4345)
     m_keys.m_account_address = address;
     m_keys.m_spend_secret_key = spendkey;
     m_keys.m_view_secret_key = viewkey;
+    m_keys.m_pqc_secret_key.clear();
 
     struct tm timestamp = {0};
     timestamp.tm_year = 2014 - 1900;  // year 2014
@@ -230,6 +263,7 @@ DISABLE_VS_WARNINGS(4244 4345)
     try {
       CHECK_AND_ASSERT_THROW_MES(hwdev.get_public_address(m_keys.m_account_address), "Cannot get a device address");
       CHECK_AND_ASSERT_THROW_MES(hwdev.get_secret_keys(m_keys.m_view_secret_key, m_keys.m_spend_secret_key), "Cannot get device secret");
+      CHECK_AND_ASSERT_THROW_MES(generate_pqc_key_material(m_keys), "Failed to generate hybrid PQ account keys");
     } catch (const std::exception &e){
       hwdev.disconnect();
       throw;
@@ -260,6 +294,7 @@ DISABLE_VS_WARNINGS(4244 4345)
     m_keys.m_account_address.m_spend_public_key = spend_public_key;
     m_keys.m_view_secret_key = view_secret_key;
     m_keys.m_spend_secret_key = spend_secret_key;
+    m_keys.m_pqc_secret_key.clear();
     m_keys.m_multisig_keys = multisig_keys;
     return crypto::secret_key_to_public_key(view_secret_key, m_keys.m_account_address.m_view_public_key);
   }

@@ -415,7 +415,7 @@ Mechanism-design and mining-incentive literature indicates:
 - **Tail emission floor:** Miners always receive a minimum block reward regardless of transaction volume, preventing fee-only instability.
 - **Release-rate scaling:** During high-activity periods, miners earn more from accelerated emission — their security contribution is rewarded proportionally to the chain's actual usage.
 - **Adaptive burn protection:** During low-activity periods, the burn rate drops, directing more fee revenue to miners and maintaining security incentives when the chain is most vulnerable.
-- **Monero precedent:** Monero's tail emission (0.6 XMR/block since May 2022) has operated successfully in production for nearly four years, validating the approach for CryptoNote-family chains.
+- **CryptoNote precedent:** Tail emission in production CryptoNote chains (e.g. Monero's 0.6 XMR/block since May 2022) has operated successfully for years, validating the approach for Shekyl.
 
 ---
 
@@ -427,12 +427,11 @@ If this design is adopted:
    - Use a single, explicit activation height.
 
 2. **Versioned monetary semantics**
-   - Keep pre-fork validation semantics intact.
-   - Activate new supply/precision constants only for post-fork blocks.
-   - Activate release-rate scaling, burn mechanism, and staking at the same fork height.
+   - For the rebooted chain, apply the new supply/precision semantics from launch.
+   - Activate release-rate scaling, burn mechanism, staking, and PQ-enabled transaction rules as part of the rebooted runtime.
 
 3. **Wallet/UI migration**
-   - Preserve legacy display compatibility where needed.
+   - Preserve legacy display compatibility only where historical data or exported reports require it.
    - Introduce user-facing denomination aliases (e.g., milli-SHEKYL) if useful.
    - Implement the chain health dashboard (see Section 10).
 
@@ -440,6 +439,7 @@ If this design is adopted:
    - Ensure all amount fields remain atomic-unit based.
    - Add explicit metadata for display precision in docs and client SDKs.
    - Expose new fields: `release_multiplier`, `burn_pct`, `stake_ratio`, `staker_pool_balance`, `staker_emission_share_effective`, `staker_yield_annualized`.
+   - Document the reboot-only PQ transaction format separately in `docs/POST_QUANTUM_CRYPTOGRAPHY.md`.
 
 5. **Test coverage**
    - Unit tests for reward curve and tail state.
@@ -448,7 +448,7 @@ If this design is adopted:
    - Unit tests for emission share decay schedule accuracy over 30+ years.
    - Property tests for overflow boundaries (`uint64_t` limits), including worst-case bonus emission over a 1000-year horizon.
    - Property tests for intermediate arithmetic overflow in burn and reward calculations.
-   - Integration tests for pre-/post-fork chain sync.
+   - Integration tests for rebooted-chain transaction validation and node/wallet interoperability.
    - Simulation tests for stuffing profitability under various hash power distributions.
 
 ---
@@ -653,7 +653,7 @@ RELEASE_MIN/MAX ◄── tx volume ──────┤
 ### Protocol and ecosystem docs
 
 - Bitcoin BIP process (BIP-42 context): <https://bips.dev/42>
-- Monero technical specs: <https://docs.getmonero.org/technical-specs/>
+- Monero technical specs (CryptoNote/Shekyl lineage): <https://docs.getmonero.org/technical-specs/>
 - Monero tail emission rationale: <https://web.getmonero.org/resources/moneropedia/tail-emission.html>
 - Ethereum EIP-1559 specification: <https://eips.ethereum.org/EIPS/eip-1559>
 - Cardano monetary policy: <https://docs.cardano.org/about-cardano/explore-more/monetary-policy>
