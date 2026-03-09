@@ -745,6 +745,14 @@ namespace cryptonote
       bool synchronized;
       bool restricted;
 
+      // Shekyl NG three-component economics fields
+      uint64_t release_multiplier;
+      uint64_t burn_pct;
+      uint64_t stake_ratio;
+      uint64_t total_burned;
+      uint64_t staker_pool_balance;
+      std::string emission_era;
+
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_access_response_base)
         KV_SERIALIZE(height)
@@ -786,6 +794,12 @@ namespace cryptonote
         KV_SERIALIZE(version)
         KV_SERIALIZE(synchronized)
         KV_SERIALIZE(restricted)
+        KV_SERIALIZE(release_multiplier)
+        KV_SERIALIZE(burn_pct)
+        KV_SERIALIZE(stake_ratio)
+        KV_SERIALIZE(total_burned)
+        KV_SERIALIZE(staker_pool_balance)
+        KV_SERIALIZE(emission_era)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

@@ -1,0 +1,16 @@
+[package]
+name = "shekyl-ffi"
+description = "FFI bridge between C++ Monero core and Rust modules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "shekyl_ffi"
+crate-type = ["staticlib"]
+
+[dependencies]
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-consensus = { path = "../shekyl-consensus" }
+shekyl-economics = { path = "../shekyl-economics" }
+shekyl-staking = { path = "../shekyl-staking" }

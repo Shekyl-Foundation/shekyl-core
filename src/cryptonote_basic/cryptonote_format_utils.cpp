@@ -928,6 +928,8 @@ namespace cryptonote
       output_public_key = boost::get< txout_to_key >(out.target).key;
     else if (out.target.type() == typeid(txout_to_tagged_key))
       output_public_key = boost::get< txout_to_tagged_key >(out.target).key;
+    else if (out.target.type() == typeid(txout_to_staked_key))
+      output_public_key = boost::get< txout_to_staked_key >(out.target).key;
     else
     {
       LOG_ERROR("Unexpected output target type found: " << out.target.type().name());
@@ -939,9 +941,11 @@ namespace cryptonote
   //---------------------------------------------------------------
   boost::optional<crypto::view_tag> get_output_view_tag(const cryptonote::tx_out& out)
   {
-    return out.target.type() == typeid(txout_to_tagged_key)
-      ? boost::optional<crypto::view_tag>(boost::get< txout_to_tagged_key >(out.target).view_tag)
-      : boost::optional<crypto::view_tag>();
+    if (out.target.type() == typeid(txout_to_tagged_key))
+      return boost::optional<crypto::view_tag>(boost::get< txout_to_tagged_key >(out.target).view_tag);
+    if (out.target.type() == typeid(txout_to_staked_key))
+      return boost::optional<crypto::view_tag>(boost::get< txout_to_staked_key >(out.target).view_tag);
+    return boost::optional<crypto::view_tag>();
   }
   //---------------------------------------------------------------
   std::string short_hash_str(const crypto::hash& h)
@@ -975,9 +979,16 @@ namespace cryptonote
   {
     for (const auto &o: tx.vout)
     {
-      if (hf_version > HF_VERSION_VIEW_TAGS)
+      if (hf_version >= HF_VERSION_SHEKYL_NG)
       {
-        // from v15, require outputs have view tags
+        // post-NG: allow tagged_key and staked_key outputs
+        CHECK_AND_ASSERT_MES(
+          o.target.type() == typeid(txout_to_tagged_key) || o.target.type() == typeid(txout_to_staked_key),
+          false, "wrong variant type: " << o.target.type().name()
+            << ", expected txout_to_tagged_key or txout_to_staked_key in transaction id=" << get_transaction_hash(tx));
+      }
+      else if (hf_version > HF_VERSION_VIEW_TAGS)
+      {
         CHECK_AND_ASSERT_MES(o.target.type() == typeid(txout_to_tagged_key), false, "wrong variant type: "
           << o.target.type().name() << ", expected txout_to_tagged_key in transaction id=" << get_transaction_hash(tx));
       }
@@ -1151,7 +1162,7 @@ namespace cryptonote
     switch (decimal_point)
     {
       case 12:
-        return "monero";
+        return "shekyl";
       case 9:
         return "millinero";
       case 6:

@@ -1,0 +1,12 @@
+[package]
+name = "shekyl-staking"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stake registry, reward distribution, and lock tier management"
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+shekyl-economics = { path = "../shekyl-economics" }

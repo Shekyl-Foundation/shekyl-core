@@ -302,11 +302,9 @@ namespace nodetool
     virtual void clear_used_stripe_peers();
 
   private:
+    // Shekyl DNS seed nodes -- to be configured when DNS infrastructure is ready
     const std::vector<std::string> m_seed_nodes_list =
-    { "seeds.moneroseeds.se"
-    , "seeds.moneroseeds.ae.org"
-    , "seeds.moneroseeds.ch"
-    , "seeds.moneroseeds.li"
+    {
     };
 
     bool islimitup=false;

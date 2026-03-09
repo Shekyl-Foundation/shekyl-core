@@ -45,6 +45,7 @@ using namespace epee;
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/cryptonote_basic_impl.h"
+#include "cryptonote_config.h"
 #include "cryptonote_basic/merge_mining.h"
 #include "cryptonote_core/tx_sanity_check.h"
 #include "misc_language.h"
@@ -570,6 +571,26 @@ namespace cryptonote
     res.synchronized = check_core_ready();
     res.busy_syncing = m_p2p.get_payload_object().is_busy_syncing();
     res.restricted = restricted;
+
+    // Shekyl NG economics fields (populated with current chain state)
+    res.release_multiplier = SHEKYL_FIXED_POINT_SCALE; // 1.0x default
+    res.burn_pct = 0;
+    res.stake_ratio = 0;
+    res.total_burned = 0;
+    res.staker_pool_balance = 0;
+
+    uint64_t already_generated = 0;
+    if (res.height > 0)
+      already_generated = m_core.get_blockchain_storage().get_db().get_block_already_generated_coins(res.height - 1);
+    double emission_pct = (double)already_generated / (double)MONEY_SUPPLY;
+    if (emission_pct < 0.30)
+      res.emission_era = "Founding";
+    else if (emission_pct < 0.60)
+      res.emission_era = "Growth";
+    else if (emission_pct < 0.85)
+      res.emission_era = "Maturity";
+    else
+      res.emission_era = "Tail";
 
     res.status = CORE_RPC_STATUS_OK;
     return true;
@@ -3128,7 +3149,7 @@ namespace cryptonote
       return true;
     }
 
-    static const char software[] = "monero";
+    static const char software[] = "shekyl";
 #ifdef BUILD_TAG
     static const char buildtag[] = BOOST_PP_STRINGIZE(BUILD_TAG);
     static const char subdir[] = "cli";

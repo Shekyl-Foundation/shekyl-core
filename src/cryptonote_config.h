@@ -50,10 +50,12 @@
 
 #define BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW               60
 
-// MONEY_SUPPLY - total number coins to be generated
-#define MONEY_SUPPLY                                    ((uint64_t)(-1))
+// MONEY_SUPPLY - total number of atomic units to be generated
+// 2^32 whole SHEKYL * 10^9 atomic units per coin = 4,294,967,296,000,000,000
+// uint64 max = 18,446,744,073,709,551,615 → headroom factor ~4.3x
+#define MONEY_SUPPLY                                    UINT64_C(4294967296000000000)
 #define EMISSION_SPEED_FACTOR_PER_MINUTE                (20)
-#define FINAL_SUBSIDY_PER_MINUTE                        ((uint64_t)300000000000) // 3 * pow(10, 11)
+#define FINAL_SUBSIDY_PER_MINUTE                        ((uint64_t)300000000) // 0.3 SHEKYL/min (placeholder, pending simulation)
 
 #define CRYPTONOTE_REWARD_BLOCKS_WINDOW                 100
 #define CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2    60000 //size of block (bytes) after which reward for block calculated using block size
@@ -62,17 +64,44 @@
 #define CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE   100000 // size in blocks of the long term block weight median window
 #define CRYPTONOTE_SHORT_TERM_BLOCK_WEIGHT_SURGE_FACTOR 50
 #define CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE          600
-#define CRYPTONOTE_DISPLAY_DECIMAL_POINT                12
-// COIN - number of smallest units in one coin
-#define COIN                                            ((uint64_t)1000000000000) // pow(10, 12)
+#define CRYPTONOTE_DISPLAY_DECIMAL_POINT                9
+// COIN - number of smallest units in one coin (10^9 for 9-decimal atomic precision)
+#define COIN                                            ((uint64_t)1000000000) // pow(10, 9)
 
-#define FEE_PER_KB_OLD                                  ((uint64_t)10000000000) // pow(10, 10)
-#define FEE_PER_KB                                      ((uint64_t)2000000000) // 2 * pow(10, 9)
-#define FEE_PER_BYTE                                    ((uint64_t)300000)
-#define DYNAMIC_FEE_PER_KB_BASE_FEE                     ((uint64_t)2000000000) // 2 * pow(10,9)
-#define DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD            ((uint64_t)10000000000000) // 10 * pow(10,12)
-#define DYNAMIC_FEE_PER_KB_BASE_FEE_V5                  ((uint64_t)2000000000 * (uint64_t)CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2 / CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5)
+#define FEE_PER_KB_OLD                                  ((uint64_t)10000000) // pow(10, 7)
+#define FEE_PER_KB                                      ((uint64_t)2000000) // 2 * pow(10, 6)
+#define FEE_PER_BYTE                                    ((uint64_t)300)
+#define DYNAMIC_FEE_PER_KB_BASE_FEE                     ((uint64_t)2000000) // 2 * pow(10, 6)
+#define DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD            ((uint64_t)10000000000) // 10 * pow(10, 9)
+#define DYNAMIC_FEE_PER_KB_BASE_FEE_V5                  ((uint64_t)2000000 * (uint64_t)CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2 / CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5)
 #define DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT         ((uint64_t)3000)
+
+// ---------------------------------------------------------------------------
+// Three-Component Economic System constants (active post HF_VERSION_SHEKYL_NG)
+// ---------------------------------------------------------------------------
+
+// Fixed-point precision: values below use 10^6 scale (1000000 = 1.0)
+#define SHEKYL_FIXED_POINT_SCALE                        UINT64_C(1000000)
+
+// Component 1: Transaction-responsive release rate
+#define SHEKYL_RELEASE_MIN                              UINT64_C(800000)   // 0.8x floor
+#define SHEKYL_RELEASE_MAX                              UINT64_C(1300000)  // 1.3x ceiling
+#define SHEKYL_TX_VOLUME_WINDOW                         720                // blocks (~1 day at 2-min blocks)
+#define SHEKYL_TX_VOLUME_BASELINE                       UINT64_C(100)      // placeholder, set from testnet data
+
+// Component 2: Adaptive fee burn
+#define SHEKYL_BURN_BASE_RATE                           UINT64_C(400000)   // 40%
+#define SHEKYL_BURN_CAP                                 UINT64_C(900000)   // 90%
+#define SHEKYL_STAKER_POOL_SHARE                        UINT64_C(200000)   // 20% of burn → staker pool
+
+// Component 3: Staking tiers (lock durations in blocks)
+#define SHEKYL_STAKE_TIER_SHORT_BLOCKS                  UINT64_C(1000)     // ~33 hours
+#define SHEKYL_STAKE_TIER_MEDIUM_BLOCKS                 UINT64_C(25000)    // ~35 days
+#define SHEKYL_STAKE_TIER_LONG_BLOCKS                   UINT64_C(150000)   // ~208 days
+#define SHEKYL_STAKE_YIELD_MULT_SHORT                   UINT64_C(1000000)  // 1.0x
+#define SHEKYL_STAKE_YIELD_MULT_MEDIUM                  UINT64_C(1500000)  // 1.5x
+#define SHEKYL_STAKE_YIELD_MULT_LONG                    UINT64_C(2000000)  // 2.0x
+#define SHEKYL_STAKE_NUM_TIERS                          3
 
 #define ORPHANED_BLOCKS_MAX_COUNT                       100
 
@@ -162,7 +191,7 @@
 
 #define RPC_IP_FAILS_BEFORE_BLOCK                       3
 
-#define CRYPTONOTE_NAME                         "bitmonero"
+#define CRYPTONOTE_NAME                         "shekyl"
 #define CRYPTONOTE_BLOCKCHAINDATA_FILENAME      "data.mdb"
 #define CRYPTONOTE_BLOCKCHAINDATA_LOCK_FILENAME "lock.mdb"
 #define P2P_NET_DATA_FILENAME                   "p2pstate.bin"
@@ -192,6 +221,7 @@
 #define HF_VERSION_BULLETPROOF_PLUS             15
 #define HF_VERSION_VIEW_TAGS                    15
 #define HF_VERSION_2021_SCALING                 15
+#define HF_VERSION_SHEKYL_NG                    17  // Three-component economics: release rate, burn, staking
 
 #define PER_KB_FEE_QUANTIZATION_DECIMALS        8
 #define CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES 2
@@ -219,21 +249,21 @@
 // New constants are intended to go here
 namespace config
 {
-  uint64_t const DEFAULT_FEE_ATOMIC_XMR_PER_KB = 500; // Just a placeholder!  Change me!
+  uint64_t const DEFAULT_FEE_ATOMIC_SKL_PER_KB = 500; // placeholder
   uint8_t const FEE_CALCULATION_MAX_RETRIES = 10;
-  uint64_t const DEFAULT_DUST_THRESHOLD = ((uint64_t)2000000000); // 2 * pow(10, 9)
-  uint64_t const BASE_REWARD_CLAMP_THRESHOLD = ((uint64_t)100000000); // pow(10, 8)
+  uint64_t const DEFAULT_DUST_THRESHOLD = ((uint64_t)2000000); // 2 * pow(10, 6) = 0.002 SKL
+  uint64_t const BASE_REWARD_CLAMP_THRESHOLD = ((uint64_t)100000); // pow(10, 5) = 0.0001 SKL
 
-  uint64_t const CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX = 18;
-  uint64_t const CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX = 19;
-  uint64_t const CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX = 42;
-  uint16_t const P2P_DEFAULT_PORT = 18080;
-  uint16_t const RPC_DEFAULT_PORT = 18081;
-  uint16_t const ZMQ_RPC_DEFAULT_PORT = 18082;
+  uint64_t const CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX = 55;
+  uint64_t const CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX = 56;
+  uint64_t const CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX = 50;
+  uint16_t const P2P_DEFAULT_PORT = 11021;
+  uint16_t const RPC_DEFAULT_PORT = 11029;
+  uint16_t const ZMQ_RPC_DEFAULT_PORT = 11025;
   boost::uuids::uuid const NETWORK_ID = { {
-      0x12 ,0x30, 0xF1, 0x71 , 0x61, 0x04 , 0x41, 0x61, 0x17, 0x31, 0x00, 0x82, 0x16, 0xA1, 0xA1, 0x10
+      0x6F, 0x04, 0x08, 0x0F, 0x10, 0x17, 0x2A, 0x6F, 0x6F, 0x04, 0x08, 0x0F, 0x10, 0x17, 0x2A, 0x6F
     } }; // Bender's nightmare
-  std::string const GENESIS_TX = "013c01ff0001ffffffffffff03029b2e4c0281c0b02e7c53291a94d1d0cbff8883f8024f5142ee494ffbbd08807121017767aafcde9be00dcfd098715ebcf7f410daebc582fda69d24a28e9d0bc890d1";
+  std::string const GENESIS_TX = "013c01ff0001ffffffffffff03029b2e4c0281c0b02e7c53291a94d1d0cbff8883f8024f5142ee494ffbbd08807121017767aafcde9be00dcfd098715ebcf7f410daebc582fda69d24a28e9d0bc890c0";
   uint32_t const GENESIS_NONCE = 10000;
 
   // Hash domain separators
@@ -270,14 +300,14 @@ namespace config
     uint64_t const CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX = 53;
     uint64_t const CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX = 54;
     uint64_t const CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX = 63;
-    uint16_t const P2P_DEFAULT_PORT = 28080;
-    uint16_t const RPC_DEFAULT_PORT = 28081;
-    uint16_t const ZMQ_RPC_DEFAULT_PORT = 28082;
+    uint16_t const P2P_DEFAULT_PORT = 12021;
+    uint16_t const RPC_DEFAULT_PORT = 12029;
+    uint16_t const ZMQ_RPC_DEFAULT_PORT = 12025;
     boost::uuids::uuid const NETWORK_ID = { {
-        0x12 ,0x30, 0xF1, 0x71 , 0x61, 0x04 , 0x41, 0x61, 0x17, 0x31, 0x00, 0x82, 0x16, 0xA1, 0xA1, 0x11
+        0xDE, 0x04, 0x08, 0x0F, 0x10, 0x17, 0x2A, 0xDE, 0xDE, 0x04, 0x08, 0x0F, 0x10, 0x17, 0x2A, 0xDE
       } }; // Bender's daydream
     std::string const GENESIS_TX = "013c01ff0001ffffffffffff03029b2e4c0281c0b02e7c53291a94d1d0cbff8883f8024f5142ee494ffbbd08807121017767aafcde9be00dcfd098715ebcf7f410daebc582fda69d24a28e9d0bc890d1";
-    uint32_t const GENESIS_NONCE = 10001;
+    uint32_t const GENESIS_NONCE = 10101;
   }
 
   namespace stagenet

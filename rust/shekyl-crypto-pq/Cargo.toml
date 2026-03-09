@@ -1,0 +1,12 @@
+[package]
+name = "shekyl-crypto-pq"
+description = "Post-quantum cryptographic primitives for Shekyl (ML-DSA, ML-KEM, hybrid signatures)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+zeroize = { version = "1", features = ["derive"] }
+rand = "0.8"

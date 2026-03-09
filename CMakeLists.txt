@@ -46,7 +46,7 @@ endif()
 cmake_minimum_required(VERSION 3.5)
 message(STATUS "CMake version ${CMAKE_VERSION}")
 
-project(monero)
+project(shekyl)
 
 option (USE_CCACHE "Use ccache if a usable instance is found" ON)
 if (USE_CCACHE)
@@ -1247,6 +1247,7 @@ if(PROTOKIT_LIBRARY)
 endif()
 
 include(external/supercop/functions.cmake) # place after setting flags and before src directory inclusion
+include(BuildRust) # Build Shekyl Rust workspace (PQ crypto, modular consensus, FFI)
 add_subdirectory(contrib)
 add_subdirectory(src)
 

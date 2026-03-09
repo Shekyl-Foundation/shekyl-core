@@ -120,3 +120,19 @@ nbproject
 __pycache__/
 *.pyc
 *.log
+
+# Rust (keep source, ignore build outputs)
+/target/
+**/target/
+
+# Additional CMake/Ninja generated files
+cmake-build-*/
+compile_commands.json
+.ninja_deps
+.ninja_log
+build.ninja
+Testing/
+CTestTestfile.cmake
+
+# Common editor/office lock artifacts
+.~lock.*#

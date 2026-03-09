@@ -1,0 +1,10 @@
+[package]
+name = "shekyl-consensus"
+description = "Modular consensus system for Shekyl (PoW/PoS/hybrid pluggable proofs)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true

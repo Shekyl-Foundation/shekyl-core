@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "shekyl-ffi",
+    "shekyl-crypto-pq",
+    "shekyl-consensus",
+    "shekyl-economics",
+    "shekyl-staking",
+]
+resolver = "2"
+
+[workspace.package]
+version = "2.0.0"
+edition = "2021"
+license = "BSD-3-Clause"
+repository = "https://github.com/radawson/Shekyl"
+
+[workspace.dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }

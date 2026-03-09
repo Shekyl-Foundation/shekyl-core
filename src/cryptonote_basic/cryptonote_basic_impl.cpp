@@ -37,6 +37,7 @@ using namespace epee;
 #include "cryptonote_format_utils.h"
 #include "cryptonote_config.h"
 #include "misc_language.h"
+#include "shekyl/shekyl_ffi.h"
 #include "common/base58.h"
 #include "crypto/hash.h"
 #include "int-util.h"
@@ -124,6 +125,26 @@ namespace cryptonote {
     assert(reward_lo < base_reward);
 
     reward = reward_lo;
+    return true;
+  }
+  //-----------------------------------------------------------------------------------------------
+  bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version, uint64_t tx_volume_avg)
+  {
+    if (!get_block_reward(median_weight, current_block_weight, already_generated_coins, reward, version))
+      return false;
+
+    if (version >= HF_VERSION_SHEKYL_NG && SHEKYL_TX_VOLUME_BASELINE > 0)
+    {
+      uint64_t multiplier = shekyl_calc_release_multiplier(
+          tx_volume_avg, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
+      reward = shekyl_apply_release_multiplier(reward, multiplier);
+
+      // Clamp so effective_reward never exceeds remaining supply
+      uint64_t remaining = MONEY_SUPPLY - already_generated_coins;
+      if (reward > remaining)
+        reward = remaining;
+    }
+
     return true;
   }
   //------------------------------------------------------------------------------------

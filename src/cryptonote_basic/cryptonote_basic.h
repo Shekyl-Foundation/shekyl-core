@@ -96,6 +96,25 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
+  // outputs >= HF_VERSION_SHEKYL_NG — staked outputs with enforced lock period
+  struct txout_to_staked_key
+  {
+    txout_to_staked_key() : lock_tier(0), lock_until(0) { }
+    txout_to_staked_key(const crypto::public_key &_key, const crypto::view_tag &_view_tag, uint8_t _tier, uint64_t _lock_until)
+      : key(_key), view_tag(_view_tag), lock_tier(_tier), lock_until(_lock_until) { }
+    crypto::public_key key;
+    crypto::view_tag view_tag;
+    uint8_t lock_tier;       // 0=short, 1=medium, 2=long
+    uint64_t lock_until;     // block height when unlockable
+
+    BEGIN_SERIALIZE_OBJECT()
+      FIELD(key)
+      FIELD(view_tag)
+      FIELD(lock_tier)
+      VARINT_FIELD(lock_until)
+    END_SERIALIZE()
+  };
+
   /* inputs */
 
   struct txin_gen
@@ -151,7 +170,7 @@ namespace cryptonote
 
   typedef boost::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key> txin_v;
 
-  typedef boost::variant<txout_to_script, txout_to_scripthash, txout_to_key, txout_to_tagged_key> txout_target_v;
+  typedef boost::variant<txout_to_script, txout_to_scripthash, txout_to_key, txout_to_tagged_key, txout_to_staked_key> txout_target_v;
 
   //typedef std::pair<uint64_t, txout> out_t;
   struct tx_out
@@ -577,6 +596,7 @@ VARIANT_TAG(binary_archive, cryptonote::txout_to_script, 0x0);
 VARIANT_TAG(binary_archive, cryptonote::txout_to_scripthash, 0x1);
 VARIANT_TAG(binary_archive, cryptonote::txout_to_key, 0x2);
 VARIANT_TAG(binary_archive, cryptonote::txout_to_tagged_key, 0x3);
+VARIANT_TAG(binary_archive, cryptonote::txout_to_staked_key, 0x4);
 VARIANT_TAG(binary_archive, cryptonote::transaction, 0xcc);
 VARIANT_TAG(binary_archive, cryptonote::block, 0xbb);
 
@@ -588,6 +608,7 @@ VARIANT_TAG(json_archive, cryptonote::txout_to_script, "script");
 VARIANT_TAG(json_archive, cryptonote::txout_to_scripthash, "scripthash");
 VARIANT_TAG(json_archive, cryptonote::txout_to_key, "key");
 VARIANT_TAG(json_archive, cryptonote::txout_to_tagged_key, "tagged_key");
+VARIANT_TAG(json_archive, cryptonote::txout_to_staked_key, "staked_key");
 VARIANT_TAG(json_archive, cryptonote::transaction, "tx");
 VARIANT_TAG(json_archive, cryptonote::block, "block");
 
@@ -599,5 +620,6 @@ VARIANT_TAG(debug_archive, cryptonote::txout_to_script, "script");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_scripthash, "scripthash");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_key, "key");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_tagged_key, "tagged_key");
+VARIANT_TAG(debug_archive, cryptonote::txout_to_staked_key, "staked_key");
 VARIANT_TAG(debug_archive, cryptonote::transaction, "tx");
 VARIANT_TAG(debug_archive, cryptonote::block, "block");

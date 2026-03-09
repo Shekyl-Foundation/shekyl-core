@@ -45,6 +45,7 @@
 #include "cryptonote_config.h"
 #include "cryptonote_basic/miner.h"
 #include "hardforks/hardforks.h"
+#include "shekyl/economics.h"
 #include "misc_language.h"
 #include "profile_tools.h"
 #include "file_io_utils.h"
@@ -1331,7 +1332,6 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
 bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, bool &partial_block_reward, uint8_t version)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
-  //validate reward
   uint64_t money_in_use = 0;
   for (auto& o: b.miner_tx.vout)
     money_in_use += o.amount;
@@ -1362,29 +1362,31 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
     MERROR_VER("block weight " << cumulative_block_weight << " is bigger than allowed for this blockchain");
     return false;
   }
-  if(base_reward + fee < money_in_use)
+
+  // Post-fork: compute fee burn split — miner only receives miner_fee_income
+  // TODO: pass real tx_volume, circulating_supply, stake_ratio from chain state
+  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, already_generated_coins, 0, version);
+  uint64_t effective_fee = burn.miner_fee_income;
+
+  if(base_reward + effective_fee < money_in_use)
   {
-    MERROR_VER("coinbase transaction spend too much money (" << print_money(money_in_use) << "). Block reward is " << print_money(base_reward + fee) << "(" << print_money(base_reward) << "+" << print_money(fee) << "), cumulative_block_weight " << cumulative_block_weight);
+    MERROR_VER("coinbase transaction spend too much money (" << print_money(money_in_use) << "). Block reward is " << print_money(base_reward + effective_fee) << "(" << print_money(base_reward) << "+" << print_money(effective_fee) << "), cumulative_block_weight " << cumulative_block_weight);
     return false;
   }
-  // From hard fork 2 till 12, we allow a miner to claim less block reward than is allowed, in case a miner wants less dust
   if (version < 2 || version >= HF_VERSION_EXACT_COINBASE)
   {
-    if(base_reward + fee != money_in_use)
+    if(base_reward + effective_fee != money_in_use)
     {
-      MDEBUG("coinbase transaction doesn't use full amount of block reward:  spent: " << money_in_use << ",  block reward " << base_reward + fee << "(" << base_reward << "+" << fee << ")");
+      MDEBUG("coinbase transaction doesn't use full amount of block reward:  spent: " << money_in_use << ",  block reward " << base_reward + effective_fee << "(" << base_reward << "+" << effective_fee << ")");
       return false;
     }
   }
   else
   {
-    // from hard fork 2, since a miner can claim less than the full block reward, we update the base_reward
-    // to show the amount of coins that were actually generated, the remainder will be pushed back for later
-    // emission. This modifies the emission curve very slightly.
-    CHECK_AND_ASSERT_MES(money_in_use - fee <= base_reward, false, "base reward calculation bug");
-    if(base_reward + fee != money_in_use)
+    CHECK_AND_ASSERT_MES(money_in_use - effective_fee <= base_reward, false, "base reward calculation bug");
+    if(base_reward + effective_fee != money_in_use)
       partial_block_reward = true;
-    base_reward = money_in_use - fee;
+    base_reward = money_in_use - effective_fee;
   }
   return true;
 }

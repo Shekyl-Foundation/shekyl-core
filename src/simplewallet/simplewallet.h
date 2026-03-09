@@ -171,6 +171,9 @@ namespace cryptonote
     bool show_incoming_transfers(const std::vector<std::string> &args);
     bool show_payments(const std::vector<std::string> &args);
     bool show_blockchain_height(const std::vector<std::string> &args);
+    bool show_chain_health(const std::vector<std::string> &args);
+    bool stake_coins(const std::vector<std::string> &args);
+    bool unstake_coins(const std::vector<std::string> &args);
     bool transfer_main(const std::vector<std::string> &args, bool called_by_mms);
     bool transfer(const std::vector<std::string> &args);
     bool sweep_main(uint32_t account, uint64_t below, const std::vector<std::string> &args);

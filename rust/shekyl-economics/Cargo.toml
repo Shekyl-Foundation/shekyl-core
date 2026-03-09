@@ -1,0 +1,11 @@
+[package]
+name = "shekyl-economics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Three-component economic system: release rate, burn, staker rewards"
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
