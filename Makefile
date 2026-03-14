@@ -102,6 +102,10 @@ release-all:
 	mkdir -p $(builddir)/release
 	cd $(builddir)/release && cmake -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release $(topdir) && $(MAKE)
 
+release-seed:
+	mkdir -p $(builddir)/release
+	cd $(builddir)/release && cmake -D CMAKE_BUILD_TYPE=Release -D USE_HW_DEVICE=OFF -D BUILD_TESTS=OFF $(topdir) && $(MAKE) daemon
+
 release-static:
 	mkdir -p $(builddir)/release
 	cd $(builddir)/release && cmake -D STATIC=ON -D BUILD_64=ON -D CMAKE_BUILD_TYPE=Release $(topdir) && $(MAKE)
@@ -177,4 +181,4 @@ clean-all:
 tags:
 	ctags -R --sort=1 --c++-kinds=+p --fields=+iaS --extra=+q --language-force=C++ src contrib tests/gtest
 
-.PHONY: all cmake-debug debug debug-test debug-all cmake-release release release-test release-all clean tags
+.PHONY: all cmake-debug debug debug-test debug-all cmake-release release release-test release-all release-seed clean tags

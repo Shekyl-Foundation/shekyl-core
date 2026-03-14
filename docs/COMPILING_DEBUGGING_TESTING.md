@@ -106,6 +106,38 @@ As PQC code lands, developers should add a dedicated validation loop covering:
 - malformed signature and malformed length rejection tests
 - encoded-size regression checks for mempool, RPC, and ZMQ consumers
 
+## Seed node build (lean daemon)
+
+`make release-seed` builds only the daemon (`shekyld`) with hardware wallet
+support disabled (`-DUSE_HW_DEVICE=OFF`).  This eliminates HIDAPI, protobuf,
+and libusb as runtime dependencies -- libraries a seed node never needs.
+
+```bash
+make release-seed
+```
+
+The resulting binary is at `build/<platform>/release/bin/shekyld`.
+
+Equivalent manual cmake invocation:
+
+```bash
+cmake -S . -B build/seed-release \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DUSE_HW_DEVICE=OFF \
+  -DBUILD_TESTS=OFF
+cmake --build build/seed-release --target daemon -- -j"$(nproc)"
+```
+
+**Runtime dependencies** for a seed-built binary are reduced to:
+
+- Boost (chrono, date-time, filesystem, program-options, regex, serialization,
+  system, thread)
+- OpenSSL, ZeroMQ, libunbound, libsodium, readline, expat
+
+No HIDAPI, protobuf, or libusb packages are required on the target machine.
+
+See `shekyl-dev/docs/SEED_NODE_DEPLOYMENT.md` for full deployment instructions.
+
 ## Testnet build command cookbook
 
 Use out-of-source builds and keep a dedicated release directory for testnet.
