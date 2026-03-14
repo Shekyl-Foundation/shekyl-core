@@ -616,6 +616,7 @@ add_definitions(-DAUTO_INITIALIZE_EASYLOGGINGPP)
 
 set(MONERO_GENERATED_HEADERS_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_include")
 include_directories(${MONERO_GENERATED_HEADERS_DIR})
+file(MAKE_DIRECTORY "${MONERO_GENERATED_HEADERS_DIR}/shekyl")
 
 # Single source of truth for economics constants consumed by C++ and Rust.
 set(SHEKYL_ECONOMICS_CONFIG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/config/economics_params.json")
