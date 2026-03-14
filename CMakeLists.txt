@@ -1013,7 +1013,7 @@ else()
   endif(ARM)
 
   # random crash on startup when asan is on if pie is enabled
-  if(NOT SANITIZE AND ANDROID AND NOT BUILD_GUI_DEPS STREQUAL "ON" OR IOS)
+  if(NOT SANITIZE AND (ANDROID AND NOT BUILD_GUI_DEPS STREQUAL "ON" OR IOS))
     #From Android 5: "only position independent executables (PIE) are supported" 
     message(STATUS "Enabling PIE executable")
     set(PIC_FLAG "")

@@ -8,6 +8,7 @@ find_program(CARGO_EXECUTABLE cargo HINTS "$ENV{HOME}/.cargo/bin")
 if(NOT CARGO_EXECUTABLE)
     message(STATUS "Cargo not found -- Rust modules will not be built")
     set(SHEKYL_RUST_ENABLED OFF PARENT_SCOPE)
+    set(SHEKYL_FFI_LINK_LIBS "" PARENT_SCOPE)
     return()
 endif()
 
