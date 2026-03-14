@@ -41,6 +41,14 @@ set(checkpoints_sources
 
 set(checkpoints_headers)
 
+# GCC 14 ICE workaround: the alias oracle in the early_uninit pass segfaults
+# on the static const vector<string> initializers in load_checkpoints_from_dns.
+# Disabling strict aliasing for this TU avoids the crash without meaningful
+# performance impact (checkpoints are loaded once at startup).
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14")
+  set_source_files_properties(checkpoints.cpp PROPERTIES COMPILE_FLAGS "-fno-strict-aliasing")
+endif()
+
 monero_find_all_headers(checkpoints_private_headers "${CMAKE_CURRENT_SOURCE_DIR}")
 
 monero_private_headers(checkpoints

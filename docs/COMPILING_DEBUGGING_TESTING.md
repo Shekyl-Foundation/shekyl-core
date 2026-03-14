@@ -109,8 +109,10 @@ As PQC code lands, developers should add a dedicated validation loop covering:
 ## Seed node build (lean daemon)
 
 `make release-seed` builds only the daemon (`shekyld`) with hardware wallet
-support disabled (`-DUSE_HW_DEVICE=OFF`).  This eliminates HIDAPI, protobuf,
-and libusb as runtime dependencies -- libraries a seed node never needs.
+support disabled (`-DUSE_HW_DEVICE=OFF`) and `ARCH=default` (baseline x86_64).
+This eliminates HIDAPI, protobuf, and libusb as runtime dependencies -- libraries
+a seed node never needs -- and ensures the binary runs on any x86_64 host
+regardless of CPU generation (no AVX/SSE4.x required).
 
 ```bash
 make release-seed
@@ -123,6 +125,7 @@ Equivalent manual cmake invocation:
 ```bash
 cmake -S . -B build/seed-release \
   -DCMAKE_BUILD_TYPE=Release \
+  -DARCH="default" \
   -DUSE_HW_DEVICE=OFF \
   -DBUILD_TESTS=OFF
 cmake --build build/seed-release --target daemon -- -j"$(nproc)"
