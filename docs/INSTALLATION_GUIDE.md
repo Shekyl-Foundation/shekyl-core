@@ -266,4 +266,6 @@ Rebuild with `-DBACKCOMPAT=ON`.
 - `README.md` (full dependency matrix and platform specifics)
 - `Makefile` (build targets)
 - `CMakeLists.txt` (build options, submodule checks, linker flags)
+- `shekyl-dev/docs/SEEDS_SETUP.md` (seed bootstrap model and runtime seed/peer controls)
+- `shekyl-dev/docs/SEED_NODE_DEPLOYMENT.md` (step-by-step seed node and shekyl.org caching deployment)
 - `docs/POST_QUANTUM_CRYPTOGRAPHY.md` (canonical PQC spec and reboot-only transaction format)

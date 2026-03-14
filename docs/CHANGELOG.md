@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Documentation and operations
+
+- Added `utils/systemd/shekyld.service` for Shekyl-native daemon service
+  deployment (`/usr/local/bin/shekyld` + `/etc/shekyl/shekyld.conf`).
+- Updated `docs/INSTALLATION_GUIDE.md` related-doc references to include seed
+  operations documentation in the companion `shekyl-dev` docs set.
+
 ### Consensus and mining economics
 
 - Wired Four-Component economics to live chain-state inputs for miner reward
