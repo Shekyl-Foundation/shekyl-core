@@ -697,6 +697,68 @@ namespace cryptonote
      return construct_tx_and_get_tx_key(sender_account_keys, subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, additional_tx_keys, false, { rct::RangeProofBorromean, 0});
   }
   //---------------------------------------------------------------
+  bool build_genesis_coinbase_from_destinations(
+      const std::vector<tx_destination_entry>& destinations
+    , std::string& tx_hex_out
+    )
+  {
+    CHECK_AND_ASSERT_MES(!destinations.empty(), false,
+        "build_genesis_coinbase_from_destinations: destinations list is empty");
+
+    transaction tx{};
+    tx.version = 1;
+    tx.unlock_time = CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
+
+    txin_gen in;
+    in.height = 0;
+    tx.vin.push_back(in);
+
+    keypair txkey = keypair::generate(hw::get_device("default"));
+    add_tx_pub_key_to_extra(tx, txkey.pub);
+    if (!sort_tx_extra(tx.extra, tx.extra))
+      return false;
+
+    uint64_t summary_amounts = 0;
+    for (size_t i = 0; i < destinations.size(); ++i)
+    {
+      const auto& dest = destinations[i];
+
+      crypto::key_derivation derivation = AUTO_VAL_INIT(derivation);
+      crypto::public_key out_eph_public_key = AUTO_VAL_INIT(out_eph_public_key);
+
+      bool r = crypto::generate_key_derivation(
+          dest.addr.m_view_public_key, txkey.sec, derivation);
+      CHECK_AND_ASSERT_MES(r, false,
+          "genesis coinbase: failed to generate_key_derivation for output " << i);
+
+      r = crypto::derive_public_key(
+          derivation, i, dest.addr.m_spend_public_key, out_eph_public_key);
+      CHECK_AND_ASSERT_MES(r, false,
+          "genesis coinbase: failed to derive_public_key for output " << i);
+
+      tx_out out;
+      crypto::view_tag dummy_tag;
+      cryptonote::set_tx_out(dest.amount, out_eph_public_key,
+                             false /* use_view_tags */, dummy_tag, out);
+      tx.vout.push_back(out);
+      summary_amounts += dest.amount;
+    }
+
+    tx.invalidate_hashes();
+
+    blobdata blob;
+    if (!tx_to_blob(tx, blob))
+    {
+      LOG_ERROR("genesis coinbase: tx_to_blob failed");
+      return false;
+    }
+
+    tx_hex_out = string_tools::buff_to_hex_nodelimer(blob);
+    LOG_PRINT_L1("genesis coinbase: " << destinations.size() << " outputs, total "
+        << print_money(summary_amounts) << ", hex length " << tx_hex_out.size());
+    return true;
+  }
+  //---------------------------------------------------------------
   bool generate_genesis_block(
       block& bl
     , std::string const & genesis_tx

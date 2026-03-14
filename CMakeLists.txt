@@ -1278,6 +1278,11 @@ else()
   message(STATUS "Not building debug utilities")
 endif()
 
+if(GENESIS_TOOL_SRC_DIR)
+  message(STATUS "Building genesis_builder from ${GENESIS_TOOL_SRC_DIR}")
+  add_subdirectory(${GENESIS_TOOL_SRC_DIR} ${CMAKE_BINARY_DIR}/genesis_builder)
+endif()
+
 if(BUILD_DOCUMENTATION)
   set(DOC_GRAPHS "YES" CACHE STRING "Create dependency graphs (needs graphviz)")
   set(DOC_FULLGRAPHS "NO" CACHE STRING "Create call/callee graphs (large)")

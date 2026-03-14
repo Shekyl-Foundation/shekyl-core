@@ -137,6 +137,11 @@ namespace cryptonote
                                       crypto::public_key &out_eph_public_key,
                                       const bool use_view_tags, crypto::view_tag &view_tag) ;
 
+  bool build_genesis_coinbase_from_destinations(
+      const std::vector<tx_destination_entry>& destinations
+    , std::string& tx_hex_out
+    );
+
   bool generate_genesis_block(
       block& bl
     , std::string const & genesis_tx

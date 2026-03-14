@@ -106,3 +106,87 @@ As PQC code lands, developers should add a dedicated validation loop covering:
 - malformed signature and malformed length rejection tests
 - encoded-size regression checks for mempool, RPC, and ZMQ consumers
 
+## Testnet build command cookbook
+
+Use out-of-source builds and keep a dedicated release directory for testnet.
+
+### 1) Configure once (fresh testnet release build dir)
+
+```bash
+cmake -S . -B build/testnet-release \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTS=ON
+```
+
+If dependencies changed, rerun the configure command before building.
+
+### 2) Build everything (full compile)
+
+```bash
+cmake --build build/testnet-release -- -j"$(nproc)"
+```
+
+Equivalent target-explicit form:
+
+```bash
+cmake --build build/testnet-release --target all -- -j"$(nproc)"
+```
+
+### 3) Build only specific executables/components
+
+Daemon only:
+
+```bash
+cmake --build build/testnet-release --target daemon -- -j"$(nproc)"
+```
+
+Wallet CLI:
+
+```bash
+cmake --build build/testnet-release --target simplewallet -- -j"$(nproc)"
+```
+
+Wallet RPC:
+
+```bash
+cmake --build build/testnet-release --target wallet_rpc_server -- -j"$(nproc)"
+```
+
+Primary C++ test binaries:
+
+```bash
+cmake --build build/testnet-release --target unit_tests core_tests -- -j"$(nproc)"
+```
+
+Useful utilities:
+
+```bash
+cmake --build build/testnet-release --target \
+  blockchain_export blockchain_import blockchain_stats gen_multisig -- -j"$(nproc)"
+```
+
+Note: if your environment reports an issue with the aggregate `tests` meta-target,
+build `unit_tests` and `core_tests` directly as shown above.
+
+### 4) Verify available targets in your build dir
+
+```bash
+cmake --build build/testnet-release --target help
+```
+
+### 5) Fast recovery when you hit many compile errors
+
+Common fix sequence for stale/generated artifacts:
+
+```bash
+rm -rf build/testnet-release
+cmake -S . -B build/testnet-release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
+cmake --build build/testnet-release --target daemon -- -j"$(nproc)"
+```
+
+### 6) Testnet launch sanity command (runtime, not build)
+
+```bash
+./build/testnet-release/bin/shekyld --testnet --non-interactive --data-dir /var/lib/shekyl-testnet
+```
+
