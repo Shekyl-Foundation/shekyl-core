@@ -1,0 +1,68 @@
+name: release/tagged
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and publish tagged release
+    runs-on: ubuntu-22.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      BUILD_DIR: build/release
+      RELEASE_DIR: artifacts/release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake pkg-config git ccache \
+            libboost-all-dev libssl-dev libzmq3-dev libunbound-dev \
+            libsodium-dev libreadline-dev libexpat1-dev \
+            libhidapi-dev libusb-1.0-0-dev \
+            libprotobuf-dev protobuf-compiler
+
+      - name: Configure
+        run: |
+          cmake -S . -B "${BUILD_DIR}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DARCH=default \
+            -DBUILD_TESTS=ON
+
+      - name: Build release binaries
+        run: |
+          cmake --build "${BUILD_DIR}" --target daemon simplewallet wallet_rpc_server -- -j"$(nproc)"
+
+      - name: Smoke check binaries
+        run: |
+          "${BUILD_DIR}/bin/shekyld" --version
+          "${BUILD_DIR}/bin/shekyl-wallet-cli" --version || true
+          "${BUILD_DIR}/bin/shekyl-wallet-rpc" --version || true
+
+      - name: Package release artifacts
+        run: |
+          mkdir -p "${RELEASE_DIR}"
+          cp "${BUILD_DIR}/bin/shekyld" "${RELEASE_DIR}/"
+          if [ -f "${BUILD_DIR}/bin/shekyl-wallet-cli" ]; then cp "${BUILD_DIR}/bin/shekyl-wallet-cli" "${RELEASE_DIR}/"; fi
+          if [ -f "${BUILD_DIR}/bin/shekyl-wallet-rpc" ]; then cp "${BUILD_DIR}/bin/shekyl-wallet-rpc" "${RELEASE_DIR}/"; fi
+          if [ -f "${BUILD_DIR}/bin/shekyl-gen-trusted-multisig" ]; then cp "${BUILD_DIR}/bin/shekyl-gen-trusted-multisig" "${RELEASE_DIR}/"; fi
+          tar -C artifacts -czf "shekyl-${GITHUB_REF_NAME}-linux-x86_64.tar.gz" release
+          sha256sum "shekyl-${GITHUB_REF_NAME}-linux-x86_64.tar.gz" > "shekyl-${GITHUB_REF_NAME}-linux-x86_64.sha256"
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            shekyl-${{ github.ref_name }}-linux-x86_64.tar.gz
+            shekyl-${{ github.ref_name }}-linux-x86_64.sha256
+          generate_release_notes: true

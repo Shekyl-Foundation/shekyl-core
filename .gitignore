@@ -138,3 +138,12 @@ CTestTestfile.cmake
 
 # Common editor/office lock artifacts
 .~lock.*#
+
+# Local packaging/release outputs
+artifacts/
+release/
+*.tar.gz
+*.sha256
+
+# Nested build trees (eg tools/genesis_builder/build)
+**/build/
