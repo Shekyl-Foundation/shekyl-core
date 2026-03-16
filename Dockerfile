@@ -16,6 +16,7 @@ RUN set -ex && \
         curl \
         git \
         libtool \
+        python3 \
         pkg-config \
         gperf
 
