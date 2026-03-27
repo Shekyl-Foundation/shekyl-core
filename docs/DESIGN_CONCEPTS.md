@@ -91,7 +91,8 @@ So `2^32` whole + 12 decimals is not representable in `uint64_t`.
 | Headline supply target | `2^32` whole SHEKYL (4,294,967,296) | Large unit count avoids satoshi-style UX pain |
 | Atomic precision | 9 decimals | Maximum safe precision under `uint64_t` with `2^32` supply |
 | Atomic unit constant | `COIN = 10^9` | Standard CryptoNote convention |
-| Display precision default | 6 decimals | Sufficient for cent-scale payments across wide market-cap range |
+| Core display precision default | 9 decimals | Matches canonical accounting (`1 SHEKYL = 10^9 atomic`) |
+| Website/UI display precision | 6 decimals | Readability layer only; values are still stored/transmitted at 9-decimal fidelity |
 | Block time target | 2 minutes | Standard CryptoNote block interval |
 | Blocks per year | 262,800 | `(60/2) * 24 * 365` |
 | Emission speed factor (base) | 22 | CryptoNote geometric decay — 50% emitted ~year 11, 80% ~year 25 |
@@ -539,7 +540,7 @@ The following values are derived from simulation sweeps across ESF, burn rate, s
 |---|---|---|
 | `TOTAL_SUPPLY` | `2^32` (4,294,967,296) whole SHEKYL | Immutable ceiling |
 | `COIN` | `10^9` | 9-decimal atomic precision |
-| `DISPLAY_DECIMAL_POINT` | 6 | Wallet default; advanced mode shows 9 |
+| `DISPLAY_DECIMAL_POINT` | 9 | Core/wallet canonical display; parse/print aligns with `COIN = 10^9` |
 | `EMISSION_SPEED_FACTOR` | 22 | 50% emitted ~year 11, 80% ~year 25 |
 | `BLOCK_TIME_TARGET` | 120 seconds | Standard CryptoNote 2-minute blocks |
 | `FINAL_SUBSIDY_PER_MINUTE` | TBD (atomic units) | Tail emission floor; set from testnet economics |

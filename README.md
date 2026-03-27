@@ -1,5 +1,5 @@
 # Shekyl
-
+Copyright (c) 2018-2026 Shekyl Foundation
 Copyright (c) 2014-2022 The Monero Project.  
 Portions Copyright (c) 2012-2013 The Cryptonote developers.
 
@@ -102,6 +102,14 @@ This is the core implementation of Shekyl. It is open source and free to use und
 As with many development projects, the repository on GitHub is considered to be the "staging" area for the latest changes. Before changes are merged into that branch on the main repository, they are tested by individual developers in their own branches, submitted as a pull request, and then subsequently tested by contributors who focus on testing and code reviews. That having been said, the repository should be carefully considered before using it in a production environment, unless there is a patch in the repository for a particular show-stopping issue you are experiencing. It is generally a better idea to use a tagged release for stability.
 
 **Anyone is welcome to contribute to Shekyl's codebase.** For contribution workflow, see `docs/CONTRIBUTING.md`.
+
+## Monetary Units
+
+Shekyl uses a canonical 9-decimal accounting model:
+
+- `1 SKL = 1,000,000,000 atomic units`
+- Core chain/wallet parse and display behavior is aligned to this 9-decimal unit
+- External UIs may present a rounded/truncated 6-decimal view for readability, but storage and API transport should preserve canonical precision
 
 ## Supporting the project
 

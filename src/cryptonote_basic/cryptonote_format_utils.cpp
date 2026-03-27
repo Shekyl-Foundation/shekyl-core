@@ -1162,15 +1162,15 @@ namespace cryptonote
     switch (decimal_point)
     {
       case 12:
-        return "shekyl";
+        return "millishekyl";
       case 9:
-        return "millinero";
+        return "shekyl";
       case 6:
-        return "micronero";
+        return "kiloshekyl";
       case 3:
-        return "nanonero";
+        return "megashekyl";
       case 0:
-        return "piconero";
+        return "atomic-shekyl";
       default:
         ASSERT_MES_AND_THROW("Invalid decimal point specification: " << decimal_point);
     }
