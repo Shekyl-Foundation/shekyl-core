@@ -3,5 +3,5 @@
 NETWORK_FLAG="${NETWORK_FLAG:---testnet}"
 DAEMON_ADDR="${DAEMON_ADDR:-localhost:12029}"
 
-rlwrap monero-wallet-cli --wallet-file wallet_04.bin --password "" "$NETWORK_FLAG" --trusted-daemon --daemon-address "$DAEMON_ADDR" --log-file wallet_04.log
+rlwrap shekyl-wallet-cli --wallet-file wallet_04.bin --password "" "$NETWORK_FLAG" --trusted-daemon --daemon-address "$DAEMON_ADDR" --log-file wallet_04.log
 

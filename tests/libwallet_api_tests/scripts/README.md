@@ -22,6 +22,7 @@
   Scripts now accept:
   * ```NETWORK_FLAG``` (default ```--testnet```, can be set to ```--stagenet```)
   * ```DAEMON_ADDR``` (default ```localhost:12029```)
+  * Wallet CLI binary: ```shekyl-wallet-cli``` (available in your PATH)
 
 * ```mining_start.sh``` and ```mining_stop.sh``` - helper scripts to start and stop mining on miner wallet
 

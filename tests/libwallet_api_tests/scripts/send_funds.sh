@@ -7,7 +7,7 @@ function send_funds {
     local amount=$1
     local dest=$(cat "$2.address.txt")
 
-    monero-wallet-cli --wallet-file wallet_m --password "" \
+    shekyl-wallet-cli --wallet-file wallet_m --password "" \
         "$NETWORK_FLAG" --trusted-daemon --daemon-address "$DAEMON_ADDR" --log-file wallet_m.log \
         --command transfer "$dest" "$amount"
 }

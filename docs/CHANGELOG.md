@@ -16,6 +16,8 @@
   `13021` (P2P), `13029` (RPC), and `13025` (ZMQ), and aligned test/docs
   references so `--testnet` workflows use `12029` while scripts support
   overrideable network/daemon variables.
+- Updated libwallet API helper scripts to call `shekyl-wallet-cli` (not
+  `monero-wallet-cli`) so test tooling matches Shekyl binary names.
 
 ### Consensus and mining economics
 
