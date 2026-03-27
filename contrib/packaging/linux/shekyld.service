@@ -1,0 +1,29 @@
+[Unit]
+Description=Shekyl Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/shekyld --non-interactive --data-dir /var/lib/shekyl --log-file /var/log/shekyl/shekyld.log --detach=0
+ExecStartPre=/bin/mkdir -p /var/log/shekyl
+
+User=shekyl
+Group=shekyl
+
+RuntimeDirectory=shekyl
+StateDirectory=shekyl
+LogsDirectory=shekyl
+
+Restart=on-failure
+RestartSec=30
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/shekyl /var/log/shekyl
+
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

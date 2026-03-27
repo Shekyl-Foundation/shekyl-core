@@ -3,22 +3,30 @@ name: release/tagged
 on:
   push:
     tags:
-      - "*"
+      - "v*"
 
 permissions:
   contents: write
 
+env:
+  APT_SET_CONF: |
+    tee -a /etc/apt/apt.conf.d/80-custom << EOF
+    Acquire::Retries "3";
+    Acquire::http::Timeout "120";
+    Acquire::ftp::Timeout "120";
+    EOF
+  CCACHE_SETTINGS: |
+    ccache --max-size=150M
+    ccache --set-config=compression=true
+
 jobs:
-  build-and-release:
-    name: Build and publish tagged release
+  build-linux:
+    name: Linux x86_64
     runs-on: ubuntu-22.04
     env:
       DEBIAN_FRONTEND: noninteractive
-      BUILD_DIR: build/release
-      RELEASE_DIR: artifacts/release
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
 
@@ -30,39 +38,189 @@ jobs:
             libboost-all-dev libssl-dev libzmq3-dev libunbound-dev \
             libsodium-dev libreadline-dev libexpat1-dev \
             libhidapi-dev libusb-1.0-0-dev \
-            libprotobuf-dev protobuf-compiler
+            libprotobuf-dev protobuf-compiler \
+            ruby ruby-dev rubygems rpm
+          sudo gem install --no-document fpm
 
-      - name: Configure
-        run: |
-          cmake -S . -B "${BUILD_DIR}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DARCH=default \
-            -DBUILD_TESTS=ON
+      - uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-linux-x86_64-release-${{ github.sha }}
+          restore-keys: ccache-linux-x86_64-release-
 
-      - name: Build release binaries
+      - name: Build static release
         run: |
-          cmake --build "${BUILD_DIR}" --target daemon simplewallet wallet_rpc_server -- -j"$(nproc)"
+          ${{ env.CCACHE_SETTINGS }}
+          make release-static-linux-x86_64 -j$(nproc)
 
       - name: Smoke check binaries
         run: |
-          "${BUILD_DIR}/bin/shekyld" --version
-          "${BUILD_DIR}/bin/shekyl-wallet-cli" --version || true
-          "${BUILD_DIR}/bin/shekyl-wallet-rpc" --version || true
+          ./build/linux-x64-release/bin/shekyld --version
+          ./build/linux-x64-release/bin/shekyl-wallet-cli --version || true
+          ./build/linux-x64-release/bin/shekyl-wallet-rpc --version || true
 
-      - name: Package release artifacts
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Package tar.gz
         run: |
+          RELEASE_DIR="shekyl-${GITHUB_REF_NAME}-linux-x86_64"
           mkdir -p "${RELEASE_DIR}"
-          cp "${BUILD_DIR}/bin/shekyld" "${RELEASE_DIR}/"
-          if [ -f "${BUILD_DIR}/bin/shekyl-wallet-cli" ]; then cp "${BUILD_DIR}/bin/shekyl-wallet-cli" "${RELEASE_DIR}/"; fi
-          if [ -f "${BUILD_DIR}/bin/shekyl-wallet-rpc" ]; then cp "${BUILD_DIR}/bin/shekyl-wallet-rpc" "${RELEASE_DIR}/"; fi
-          if [ -f "${BUILD_DIR}/bin/shekyl-gen-trusted-multisig" ]; then cp "${BUILD_DIR}/bin/shekyl-gen-trusted-multisig" "${RELEASE_DIR}/"; fi
-          tar -C artifacts -czf "shekyl-${GITHUB_REF_NAME}-linux-x86_64.tar.gz" release
-          sha256sum "shekyl-${GITHUB_REF_NAME}-linux-x86_64.tar.gz" > "shekyl-${GITHUB_REF_NAME}-linux-x86_64.sha256"
+          cp build/linux-x64-release/bin/shekyld "${RELEASE_DIR}/"
+          cp build/linux-x64-release/bin/shekyl-wallet-cli "${RELEASE_DIR}/" 2>/dev/null || true
+          cp build/linux-x64-release/bin/shekyl-wallet-rpc "${RELEASE_DIR}/" 2>/dev/null || true
+          cp build/linux-x64-release/bin/shekyl-gen-trusted-multisig "${RELEASE_DIR}/" 2>/dev/null || true
+          cp build/linux-x64-release/bin/shekyl-blockchain-import "${RELEASE_DIR}/" 2>/dev/null || true
+          cp build/linux-x64-release/bin/shekyl-blockchain-export "${RELEASE_DIR}/" 2>/dev/null || true
+          tar -czf "${RELEASE_DIR}.tar.gz" "${RELEASE_DIR}"
 
-      - name: Publish GitHub release assets
+      - name: Package .deb
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          STAGE="$(pwd)/staging-deb"
+          mkdir -p "${STAGE}/usr/local/bin"
+          cp build/linux-x64-release/bin/shekyld "${STAGE}/usr/local/bin/"
+          cp build/linux-x64-release/bin/shekyl-wallet-cli "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          cp build/linux-x64-release/bin/shekyl-wallet-rpc "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          fpm -s dir -t deb \
+            --name shekyl \
+            --version "${VERSION}" \
+            --description "Shekyl cryptocurrency daemon and wallet tools" \
+            --url "https://github.com/Shekyl-Foundation/shekyl-core" \
+            --license "BSD-3-Clause" \
+            --architecture amd64 \
+            --maintainer "Shekyl Foundation <info@shekyl.org>" \
+            --deb-systemd contrib/packaging/linux/shekyld.service \
+            --deb-no-default-config-files \
+            -C "${STAGE}" \
+            .
+
+      - name: Package .rpm
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          STAGE="$(pwd)/staging-rpm"
+          mkdir -p "${STAGE}/usr/local/bin"
+          cp build/linux-x64-release/bin/shekyld "${STAGE}/usr/local/bin/"
+          cp build/linux-x64-release/bin/shekyl-wallet-cli "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          cp build/linux-x64-release/bin/shekyl-wallet-rpc "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          fpm -s dir -t rpm \
+            --name shekyl \
+            --version "${VERSION}" \
+            --description "Shekyl cryptocurrency daemon and wallet tools" \
+            --url "https://github.com/Shekyl-Foundation/shekyl-core" \
+            --license "BSD-3-Clause" \
+            --architecture x86_64 \
+            --maintainer "Shekyl Foundation <info@shekyl.org>" \
+            -C "${STAGE}" \
+            .
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: |
+            shekyl-${{ github.ref_name }}-linux-x86_64.tar.gz
+            shekyl_*.deb
+            shekyl-*.rpm
+
+  build-windows:
+    name: Windows x64
+    runs-on: ubuntu-22.04
+    container:
+      image: ubuntu:20.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+        CCACHE_TEMPDIR: /tmp/.ccache-temp
+    steps:
+      - name: Set apt conf
+        run: ${{ env.APT_SET_CONF }}
+
+      - name: Install dependencies
+        run: |
+          apt update
+          apt -y install build-essential libtool cmake autotools-dev automake \
+            pkg-config python3 gperf bsdmainutils curl git ca-certificates \
+            unzip ccache g++-mingw-w64-x86-64 nsis
+
+      - name: Configure MinGW
+        run: |
+          update-alternatives --set x86_64-w64-mingw32-g++ $(which x86_64-w64-mingw32-g++-posix)
+          update-alternatives --set x86_64-w64-mingw32-gcc $(which x86_64-w64-mingw32-gcc-posix)
+
+      - name: Configure git
+        run: git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-win-x64-release-${{ github.sha }}
+          restore-keys: ccache-win-x64-release-
+
+      - uses: actions/cache@v4
+        with:
+          path: contrib/depends/built
+          key: depends-x86_64-w64-mingw32-${{ hashFiles('contrib/depends/packages/*') }}
+          restore-keys: depends-x86_64-w64-mingw32-
+
+      - name: Build via depends
+        run: |
+          ${{ env.CCACHE_SETTINGS }}
+          make depends target=x86_64-w64-mingw32 -j$(nproc)
+
+      - name: Package .zip
+        run: |
+          RELEASE_DIR="shekyl-${GITHUB_REF_NAME}-win-x64"
+          mkdir -p "${RELEASE_DIR}"
+          cp build/x86_64-w64-mingw32/release/bin/shekyld.exe "${RELEASE_DIR}/" 2>/dev/null || true
+          cp build/x86_64-w64-mingw32/release/bin/shekyl-wallet-cli.exe "${RELEASE_DIR}/" 2>/dev/null || true
+          cp build/x86_64-w64-mingw32/release/bin/shekyl-wallet-rpc.exe "${RELEASE_DIR}/" 2>/dev/null || true
+          cp build/x86_64-w64-mingw32/release/bin/shekyl-gen-trusted-multisig.exe "${RELEASE_DIR}/" 2>/dev/null || true
+          apt -y install zip
+          zip -r "${RELEASE_DIR}.zip" "${RELEASE_DIR}"
+
+      - name: Build NSIS installer
+        run: |
+          makensis \
+            -DVERSION="${GITHUB_REF_NAME#v}" \
+            -DBIN_DIR="$(pwd)/build/x86_64-w64-mingw32/release/bin" \
+            -DLICENSE_FILE="$(pwd)/LICENSE" \
+            -DOUTPUT_FILE="$(pwd)/shekyl-${GITHUB_REF_NAME}-win-x64-setup.exe" \
+            contrib/packaging/windows/shekyl.nsi
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-x64
+          path: |
+            shekyl-${{ github.ref_name }}-win-x64.zip
+            shekyl-${{ github.ref_name }}-win-x64-setup.exe
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd release-assets
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            shekyl-${{ github.ref_name }}-linux-x86_64.tar.gz
-            shekyl-${{ github.ref_name }}-linux-x86_64.sha256
+          files: release-assets/*
           generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'RC') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}

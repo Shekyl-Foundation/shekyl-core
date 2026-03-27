@@ -244,7 +244,7 @@ jobs:
       - name: archive
         run: |
           pip install git-archive-all
-          export VERSION="monero-$(git describe)"
+          export VERSION="shekyl-$(git describe)"
           export OUTPUT="$VERSION.tar"
           echo "OUTPUT=$OUTPUT" >> $GITHUB_ENV
           git-archive-all --prefix "$VERSION/" --force-submodules "$OUTPUT"

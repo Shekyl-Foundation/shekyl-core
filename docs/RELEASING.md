@@ -1,0 +1,69 @@
+# Releasing Shekyl
+
+This document describes how to create a new Shekyl release.
+
+## Prerequisites
+
+- Push access to [Shekyl-Foundation/shekyl-core](https://github.com/Shekyl-Foundation/shekyl-core)
+- All changes merged to `main`
+
+## Creating a Release
+
+1. **Update the version** in any relevant source files (e.g., `src/version.cpp.in`).
+
+2. **Tag the release** from `main`:
+
+   ```bash
+   git tag -a v1.0.0 -m "Shekyl v1.0.0"
+   git push foundation v1.0.0
+   ```
+
+3. **GitHub Actions takes over.** The `release/tagged` workflow automatically:
+   - Builds static Linux x86_64 binaries
+   - Cross-compiles Windows x64 binaries via MinGW
+   - Packages Linux as `.tar.gz`, `.deb`, and `.rpm`
+   - Packages Windows as `.zip` and `.exe` installer (NSIS)
+   - Generates `SHA256SUMS` for all artifacts
+   - Publishes everything as a GitHub Release
+
+4. **Verify the release** at https://github.com/Shekyl-Foundation/shekyl-core/releases
+
+## Tag Naming
+
+- Release tags: `v1.0.0`, `v1.0.1`, `v1.1.0`
+- Pre-release tags: `v1.0.0-RC1`, `v1.0.0-alpha`, `v1.0.0-beta`
+- Tags containing `RC`, `alpha`, or `beta` are automatically marked as pre-releases
+
+## Release Artifacts
+
+Each release produces these files:
+
+| File | Description |
+|------|-------------|
+| `shekyl-vX.Y.Z-linux-x86_64.tar.gz` | Linux binaries (portable static build) |
+| `shekyl_X.Y.Z_amd64.deb` | Debian/Ubuntu package with systemd unit |
+| `shekyl-X.Y.Z.x86_64.rpm` | RPM package for Fedora/RHEL/SUSE |
+| `shekyl-vX.Y.Z-win-x64.zip` | Windows binaries (portable zip) |
+| `shekyl-vX.Y.Z-win-x64-setup.exe` | Windows installer (NSIS) |
+| `SHA256SUMS` | Checksums for all artifacts |
+
+## Linux Package Details
+
+The `.deb` and `.rpm` packages:
+- Install `shekyld`, `shekyl-wallet-cli`, and `shekyl-wallet-rpc` to `/usr/local/bin/`
+- Include a systemd service unit for `shekyld`
+- After install: `sudo systemctl enable --now shekyld`
+- Data directory: `/var/lib/shekyl`
+- Logs: systemd journal (`journalctl -u shekyld`)
+
+## Windows Installer Details
+
+The NSIS installer:
+- Installs binaries to `Program Files\Shekyl`
+- Optionally adds to system PATH
+- Creates Start Menu shortcuts
+- Registers a standard Windows uninstaller
+
+## Future Platforms
+
+macOS builds and native packages (`.dmg`) are planned for a future release.
