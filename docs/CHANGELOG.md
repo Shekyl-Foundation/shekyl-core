@@ -12,6 +12,10 @@
   models across Bitcoin, Ethereum, Monero, Solana, Polkadot, and Avalanche,
   and mapped those patterns to Shekyl's mainnet/testnet/stagenet/fakechain
   usage guidance.
+- Migrated Shekyl stagenet defaults from legacy Monero ports to
+  `13021` (P2P), `13029` (RPC), and `13025` (ZMQ), and aligned test/docs
+  references so `--testnet` workflows use `12029` while scripts support
+  overrideable network/daemon variables.
 
 ### Consensus and mining economics
 

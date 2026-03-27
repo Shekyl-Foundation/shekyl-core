@@ -228,7 +228,7 @@ From `src/cryptonote_config.h`:
 |---|---|---:|---:|---:|
 |Mainnet|Production|11021|11029|55|
 |Testnet|Protocol experimentation|12021|12029|53|
-|Stagenet|Production-like integration|38080|38081|24|
+|Stagenet|Production-like integration|13021|13029|24|
 |Fakechain|Local deterministic testing (`--regtest`)|n/a|n/a|n/a|
 
 ### Separation mechanisms in Shekyl

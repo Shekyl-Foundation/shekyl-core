@@ -1,5 +1,7 @@
 #!/bin/bash
 
+NETWORK_FLAG="${NETWORK_FLAG:---testnet}"
+DAEMON_ADDR="${DAEMON_ADDR:-localhost:12029}"
 
-rlwrap monero-wallet-cli --wallet-file wallet_02.bin --password "" --testnet --trusted-daemon --daemon-address localhost:38081  --log-file wallet_01.log
+rlwrap monero-wallet-cli --wallet-file wallet_02.bin --password "" "$NETWORK_FLAG" --trusted-daemon --daemon-address "$DAEMON_ADDR" --log-file wallet_01.log
 

@@ -1,12 +1,15 @@
 #!/bin/bash
 
+NETWORK_FLAG="${NETWORK_FLAG:---testnet}"
+DAEMON_ADDR="${DAEMON_ADDR:-localhost:12029}"
+
 function send_funds {
     local amount=$1
     local dest=$(cat "$2.address.txt")
 
     monero-wallet-cli --wallet-file wallet_m --password "" \
-        --testnet --trusted-daemon --daemon-address localhost:38081  --log-file wallet_m.log \
-        --command transfer $dest $amount 
+        "$NETWORK_FLAG" --trusted-daemon --daemon-address "$DAEMON_ADDR" --log-file wallet_m.log \
+        --command transfer "$dest" "$amount"
 }
 
 
