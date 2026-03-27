@@ -8,6 +8,10 @@
   deployment (`/usr/local/bin/shekyld` + `/etc/shekyl/shekyld.conf`).
 - Updated `docs/INSTALLATION_GUIDE.md` related-doc references to include seed
   operations documentation in the companion `shekyl-dev` docs set.
+- Added `docs/BLOCKCHAIN_NETWORKS.md` with a deep-dive comparison of network
+  models across Bitcoin, Ethereum, Monero, Solana, Polkadot, and Avalanche,
+  and mapped those patterns to Shekyl's mainnet/testnet/stagenet/fakechain
+  usage guidance.
 
 ### Consensus and mining economics
 
