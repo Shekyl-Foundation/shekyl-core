@@ -109,7 +109,7 @@ As PQC code lands, developers should add a dedicated validation loop covering:
 ## Seed node build (lean daemon)
 
 `make release-seed` builds only the daemon (`shekyld`) with hardware wallet
-support disabled (`-DUSE_HW_DEVICE=OFF`) and `ARCH=default` (baseline x86_64).
+support disabled (`-DUSE_HW_DEVICE=OFF`) and `ARCH=x86-64` (portable x86_64).
 This eliminates HIDAPI, protobuf, and libusb as runtime dependencies -- libraries
 a seed node never needs -- and ensures the binary runs on any x86_64 host
 regardless of CPU generation (no AVX/SSE4.x required).
@@ -125,11 +125,15 @@ Equivalent manual cmake invocation:
 ```bash
 cmake -S . -B build/seed-release \
   -DCMAKE_BUILD_TYPE=Release \
-  -DARCH="default" \
+  -DARCH="x86-64" \
   -DUSE_HW_DEVICE=OFF \
   -DBUILD_TESTS=OFF
 cmake --build build/seed-release --target daemon -- -j"$(nproc)"
 ```
+
+If you previously configured the same build directory with a different `ARCH`
+(for example `native`), delete that build directory before rebuilding so stale
+CMake cache values cannot leak architecture-specific flags.
 
 **Runtime dependencies** for a seed-built binary are reduced to:
 
@@ -224,4 +228,3 @@ cmake --build build/testnet-release --target daemon -- -j"$(nproc)"
 ```bash
 ./build/testnet-release/bin/shekyld --testnet --non-interactive --data-dir /var/lib/shekyl-testnet
 ```
-

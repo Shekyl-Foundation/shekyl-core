@@ -104,7 +104,7 @@ release-all:
 
 release-seed:
 	mkdir -p $(builddir)/release
-	cd $(builddir)/release && cmake -D CMAKE_BUILD_TYPE=Release -D ARCH="default" -D USE_HW_DEVICE=OFF -D BUILD_TESTS=OFF $(topdir) && $(MAKE)
+	cd $(builddir)/release && cmake -D CMAKE_BUILD_TYPE=Release -D ARCH="x86-64" -D USE_HW_DEVICE=OFF -D BUILD_TESTS=OFF $(topdir) && $(MAKE)
 
 release-static:
 	mkdir -p $(builddir)/release
