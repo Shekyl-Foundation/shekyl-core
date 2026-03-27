@@ -39,8 +39,16 @@ jobs:
             libsodium-dev libreadline-dev libexpat1-dev \
             libhidapi-dev libusb-1.0-0-dev \
             libprotobuf-dev protobuf-compiler \
+            libgtest-dev libnorm-dev libpgm-dev \
+            libnettle-dev libgmp-dev libevent-dev \
+            libunwind-dev liblzma-dev \
             ruby ruby-dev rubygems rpm
-          sudo gem install --no-document fpm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install fpm
+        run: sudo gem install --no-document fpm
 
       - uses: actions/cache@v4
         with:
@@ -51,13 +59,13 @@ jobs:
       - name: Build static release
         run: |
           ${{ env.CCACHE_SETTINGS }}
-          make release-static-linux-x86_64 -j$(nproc)
+          USE_SINGLE_BUILDDIR=1 make release-static-linux-x86_64 -j$(nproc)
 
       - name: Smoke check binaries
         run: |
-          ./build/linux-x64-release/bin/shekyld --version
-          ./build/linux-x64-release/bin/shekyl-wallet-cli --version || true
-          ./build/linux-x64-release/bin/shekyl-wallet-rpc --version || true
+          ./build/release/bin/shekyld --version
+          ./build/release/bin/shekyl-wallet-cli --version || true
+          ./build/release/bin/shekyl-wallet-rpc --version || true
 
       - name: Extract version from tag
         id: version
@@ -67,12 +75,12 @@ jobs:
         run: |
           RELEASE_DIR="shekyl-${GITHUB_REF_NAME}-linux-x86_64"
           mkdir -p "${RELEASE_DIR}"
-          cp build/linux-x64-release/bin/shekyld "${RELEASE_DIR}/"
-          cp build/linux-x64-release/bin/shekyl-wallet-cli "${RELEASE_DIR}/" 2>/dev/null || true
-          cp build/linux-x64-release/bin/shekyl-wallet-rpc "${RELEASE_DIR}/" 2>/dev/null || true
-          cp build/linux-x64-release/bin/shekyl-gen-trusted-multisig "${RELEASE_DIR}/" 2>/dev/null || true
-          cp build/linux-x64-release/bin/shekyl-blockchain-import "${RELEASE_DIR}/" 2>/dev/null || true
-          cp build/linux-x64-release/bin/shekyl-blockchain-export "${RELEASE_DIR}/" 2>/dev/null || true
+          cp build/release/bin/shekyld "${RELEASE_DIR}/"
+          cp build/release/bin/shekyl-wallet-cli "${RELEASE_DIR}/" 2>/dev/null || true
+          cp build/release/bin/shekyl-wallet-rpc "${RELEASE_DIR}/" 2>/dev/null || true
+          cp build/release/bin/shekyl-gen-trusted-multisig "${RELEASE_DIR}/" 2>/dev/null || true
+          cp build/release/bin/shekyl-blockchain-import "${RELEASE_DIR}/" 2>/dev/null || true
+          cp build/release/bin/shekyl-blockchain-export "${RELEASE_DIR}/" 2>/dev/null || true
           tar -czf "${RELEASE_DIR}.tar.gz" "${RELEASE_DIR}"
 
       - name: Package .deb
@@ -80,9 +88,9 @@ jobs:
           VERSION="${{ steps.version.outputs.VERSION }}"
           STAGE="$(pwd)/staging-deb"
           mkdir -p "${STAGE}/usr/local/bin"
-          cp build/linux-x64-release/bin/shekyld "${STAGE}/usr/local/bin/"
-          cp build/linux-x64-release/bin/shekyl-wallet-cli "${STAGE}/usr/local/bin/" 2>/dev/null || true
-          cp build/linux-x64-release/bin/shekyl-wallet-rpc "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          cp build/release/bin/shekyld "${STAGE}/usr/local/bin/"
+          cp build/release/bin/shekyl-wallet-cli "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          cp build/release/bin/shekyl-wallet-rpc "${STAGE}/usr/local/bin/" 2>/dev/null || true
           fpm -s dir -t deb \
             --name shekyl \
             --version "${VERSION}" \
@@ -101,9 +109,9 @@ jobs:
           VERSION="${{ steps.version.outputs.VERSION }}"
           STAGE="$(pwd)/staging-rpm"
           mkdir -p "${STAGE}/usr/local/bin"
-          cp build/linux-x64-release/bin/shekyld "${STAGE}/usr/local/bin/"
-          cp build/linux-x64-release/bin/shekyl-wallet-cli "${STAGE}/usr/local/bin/" 2>/dev/null || true
-          cp build/linux-x64-release/bin/shekyl-wallet-rpc "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          cp build/release/bin/shekyld "${STAGE}/usr/local/bin/"
+          cp build/release/bin/shekyl-wallet-cli "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          cp build/release/bin/shekyl-wallet-rpc "${STAGE}/usr/local/bin/" 2>/dev/null || true
           fpm -s dir -t rpm \
             --name shekyl \
             --version "${VERSION}" \
@@ -148,6 +156,12 @@ jobs:
           update-alternatives --set x86_64-w64-mingw32-g++ $(which x86_64-w64-mingw32-g++-posix)
           update-alternatives --set x86_64-w64-mingw32-gcc $(which x86_64-w64-mingw32-gcc-posix)
 
+      - name: Install Rust toolchain with Windows target
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          . "$HOME/.cargo/env"
+          rustup target add x86_64-pc-windows-gnu
+
       - name: Configure git
         run: git config --global --add safe.directory '*'
 
@@ -169,6 +183,7 @@ jobs:
 
       - name: Build via depends
         run: |
+          . "$HOME/.cargo/env"
           ${{ env.CCACHE_SETTINGS }}
           make depends target=x86_64-w64-mingw32 -j$(nproc)
 
