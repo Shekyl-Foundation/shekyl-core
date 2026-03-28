@@ -161,6 +161,16 @@ namespace boost
   }
 
   template <class Archive>
+  inline void serialize(Archive &a, cryptonote::txin_stake_claim &x, const boost::serialization::version_type ver)
+  {
+    a & x.amount;
+    a & x.staked_output_index;
+    a & x.from_height;
+    a & x.to_height;
+    a & x.k_image;
+  }
+
+  template <class Archive>
   inline void serialize(Archive &a, cryptonote::tx_out &x, const boost::serialization::version_type ver)
   {
     a & x.amount;

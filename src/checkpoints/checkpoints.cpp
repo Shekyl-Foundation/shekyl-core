@@ -235,13 +235,25 @@ namespace cryptonote
     std::vector<std::string> records;
 
     // Shekyl checkpoint DNS records -- to be configured when DNS infrastructure is ready
-    static const std::vector<std::string> dns_urls = { "checkpoints.shekyl.org"
+    static const std::vector<std::string> dns_urls = {
+      "checkpoints.shekyl.org",
+      "checkpoints.shekyl.net",
+      "checkpoints.shekyl.com",
+      "checkpoints.shekyl.biz"
     };
 
-    static const std::vector<std::string> testnet_dns_urls = { "testpoints.shekyl.org"
+    static const std::vector<std::string> testnet_dns_urls = {
+      "testpoints.shekyl.org",
+      "testpoints.shekyl.net",
+      "testpoints.shekyl.com",
+      "testpoints.shekyl.biz"
     };
 
-    static const std::vector<std::string> stagenet_dns_urls = { "stagenetpoints.shekyl.org"
+    static const std::vector<std::string> stagenet_dns_urls = {
+      "stagenetpoints.shekyl.org",
+      "stagenetpoints.shekyl.net",
+      "stagenetpoints.shekyl.com",
+      "stagenetpoints.shekyl.biz"
     };
 
     if (!tools::dns_utils::load_txt_records_from_dns(records, nettype == TESTNET ? testnet_dns_urls : nettype == STAGENET ? stagenet_dns_urls : dns_urls))

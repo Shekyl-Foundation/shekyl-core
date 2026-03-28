@@ -103,6 +103,21 @@ As with many development projects, the repository on GitHub is considered to be 
 
 **Anyone is welcome to contribute to Shekyl's codebase.** For contribution workflow, see `docs/CONTRIBUTING.md`.
 
+## Breaking Changes (Current Development)
+
+The following breaking changes are in the current development branch and will
+ship with the next tagged release:
+
+- **URI scheme**: `shekyl:` only. The legacy `monero:` URI scheme is no longer
+  accepted. Regenerate all payment QR codes and links.
+- **Wallet file formats**: Magic constants for wallet cache, key-image exports,
+  multisig exports, signed/unsigned tx sets, and output exports have been
+  rewritten from `Monero` to `Shekyl`. Old files must be re-exported.
+- **Message signing**: The hash domain separator changed. Messages signed with
+  the old domain will fail verification.
+
+See `docs/CHANGELOG.md` for the full list and operator migration checklist.
+
 ## Monetary Units
 
 Shekyl uses a canonical 9-decimal accounting model:

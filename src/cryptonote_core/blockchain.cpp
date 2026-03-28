@@ -3048,6 +3048,16 @@ bool Blockchain::check_for_double_spend(const transaction& tx, key_images_contai
     {
       return false;
     }
+    bool operator()(const txin_stake_claim& in) const
+    {
+      const crypto::key_image& ki = in.k_image;
+      auto r = m_spent_keys.insert(ki);
+      if(!r.second || m_db->has_key_image(ki))
+      {
+        return false;
+      }
+      return true;
+    }
   };
 
   for (const txin_v& in : tx.vin)
