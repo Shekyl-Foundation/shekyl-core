@@ -31,8 +31,10 @@
 - **Log file names**: All blockchain utility log files renamed from
   `monero-blockchain-*` to `shekyl-blockchain-*`.
 - **DNS seed/checkpoint domains**: Replaced `moneroseeds.*` and
-  `moneropulse.*` lookups with `shekyl.org`/`shekyl.net`/`shekyl.com`/
-  `shekyl.biz` (owned domains).
+  `moneropulse.*` lookups with 5-domain consensus set: `shekyl.org`,
+  `shekyl.net`, `shekyl.com`, `shekyl.biz`, `shekyl.io`. Majority
+  threshold is 3 of 5. See `shekyl-dev/docs/DNS_CONFIG.md` for the full
+  infrastructure reference.
 - **Update check**: Software name comparison for macOS `.dmg` extension
   switched from `monero-gui` to `shekyl-gui`.
 - **Hardware wallet**: Ledger app error message now references "Shekyl Ledger
@@ -53,7 +55,8 @@
 5. Update any scripts or integrations that parse URI scheme or file magic.
 6. Verify message signatures were not created with the old signing domain.
 7. Update log rotation configs if they reference `monero-blockchain-*` paths.
-8. Update DNS infrastructure to serve records under `shekyl.org`/`.net`/`.com`/`.biz`.
+8. Update DNS infrastructure to serve records under all 5 TLDs (`.org`,
+   `.net`, `.com`, `.biz`, `.io`). See `shekyl-dev/docs/DNS_CONFIG.md`.
 
 ### Post-quantum cryptography
 

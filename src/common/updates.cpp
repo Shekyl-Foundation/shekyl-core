@@ -49,7 +49,8 @@ namespace tools
         "updates.shekyl.org",
         "updates.shekyl.net",
         "updates.shekyl.com",
-        "updates.shekyl.biz"
+        "updates.shekyl.biz",
+        "updates.shekyl.io"
     };
 
     if (!tools::dns_utils::load_txt_records_from_dns(records, dns_urls))

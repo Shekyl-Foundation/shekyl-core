@@ -129,19 +129,19 @@ int main(int argc, char* argv[])
   mlog_configure("", true);
   mlog_set_categories("+" MONERO_DEFAULT_LOG_CATEGORY ":INFO");
 
-  lookup(LOOKUP_A, {"seeds.shekyl.org", "seeds.shekyl.net", "seeds.shekyl.com", "seeds.shekyl.biz"});
+  lookup(LOOKUP_A, {"seeds.shekyl.org", "seeds.shekyl.net", "seeds.shekyl.com", "seeds.shekyl.biz", "seeds.shekyl.io"});
 
-  lookup(LOOKUP_TXT, {"updates.shekyl.org", "updates.shekyl.net", "updates.shekyl.com", "updates.shekyl.biz"});
+  lookup(LOOKUP_TXT, {"updates.shekyl.org", "updates.shekyl.net", "updates.shekyl.com", "updates.shekyl.biz", "updates.shekyl.io"});
 
-  lookup(LOOKUP_TXT, {"checkpoints.shekyl.org", "checkpoints.shekyl.net", "checkpoints.shekyl.com", "checkpoints.shekyl.biz"});
+  lookup(LOOKUP_TXT, {"checkpoints.shekyl.org", "checkpoints.shekyl.net", "checkpoints.shekyl.com", "checkpoints.shekyl.biz", "checkpoints.shekyl.io"});
 
 #if 0
-  lookup(LOOKUP_TXT, {"testpoints.shekyl.org", "testpoints.shekyl.net", "testpoints.shekyl.com", "testpoints.shekyl.biz"});
+  lookup(LOOKUP_TXT, {"testpoints.shekyl.org", "testpoints.shekyl.net", "testpoints.shekyl.com", "testpoints.shekyl.biz", "testpoints.shekyl.io"});
 
-  lookup(LOOKUP_TXT, {"stagenetpoints.shekyl.org", "stagenetpoints.shekyl.net", "stagenetpoints.shekyl.com", "stagenetpoints.shekyl.biz"});
+  lookup(LOOKUP_TXT, {"stagenetpoints.shekyl.org", "stagenetpoints.shekyl.net", "stagenetpoints.shekyl.com", "stagenetpoints.shekyl.biz", "stagenetpoints.shekyl.io"});
 #endif
 
-  lookup(LOOKUP_TXT, {"segheights.shekyl.org", "segheights.shekyl.net", "segheights.shekyl.com", "segheights.shekyl.biz"});
+  lookup(LOOKUP_TXT, {"segheights.shekyl.org", "segheights.shekyl.net", "segheights.shekyl.com", "segheights.shekyl.biz", "segheights.shekyl.io"});
 
   return 0;
   CATCH_ENTRY_L0("main", 1);

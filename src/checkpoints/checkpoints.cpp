@@ -239,21 +239,24 @@ namespace cryptonote
       "checkpoints.shekyl.org",
       "checkpoints.shekyl.net",
       "checkpoints.shekyl.com",
-      "checkpoints.shekyl.biz"
+      "checkpoints.shekyl.biz",
+      "checkpoints.shekyl.io"
     };
 
     static const std::vector<std::string> testnet_dns_urls = {
       "testpoints.shekyl.org",
       "testpoints.shekyl.net",
       "testpoints.shekyl.com",
-      "testpoints.shekyl.biz"
+      "testpoints.shekyl.biz",
+      "testpoints.shekyl.io"
     };
 
     static const std::vector<std::string> stagenet_dns_urls = {
       "stagenetpoints.shekyl.org",
       "stagenetpoints.shekyl.net",
       "stagenetpoints.shekyl.com",
-      "stagenetpoints.shekyl.biz"
+      "stagenetpoints.shekyl.biz",
+      "stagenetpoints.shekyl.io"
     };
 
     if (!tools::dns_utils::load_txt_records_from_dns(records, nettype == TESTNET ? testnet_dns_urls : nettype == STAGENET ? stagenet_dns_urls : dns_urls))
