@@ -63,7 +63,9 @@ Section "Shekyl Core (required)" SecCore
 SectionEnd
 
 Section "Add to PATH" SecPath
-  EnVar::AddValue "PATH" "$INSTDIR"
+  ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path"
+  StrCpy $0 "$0;$INSTDIR"
+  WriteRegExpandStr HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path" "$0"
 SectionEnd
 
 Section "Start Menu Shortcuts" SecShortcuts
@@ -91,8 +93,6 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\Shekyl\Shekyl Wallet CLI.lnk"
   Delete "$SMPROGRAMS\Shekyl\Uninstall.lnk"
   RMDir "$SMPROGRAMS\Shekyl"
-
-  EnVar::DeleteValue "PATH" "$INSTDIR"
 
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Shekyl"
   DeleteRegKey HKLM "Software\Shekyl"
