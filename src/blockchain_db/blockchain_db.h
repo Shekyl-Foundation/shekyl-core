@@ -1523,6 +1523,15 @@ public:
   virtual bool has_key_image(const crypto::key_image& img) const = 0;
 
   /**
+   * @brief check if key images are stored as spent
+   *
+   * @param img the key images to check for
+   *
+   * @return true at element `i` if the `img[i]` is present, otherwise false
+   */
+  virtual std::vector<bool> has_key_images(const epee::span<const crypto::key_image> img) const;
+
+  /**
    * @brief add a txpool transaction
    *
    * @param details the details of the transaction to add
@@ -1625,20 +1634,6 @@ public:
    * @return success iff true
    */
   virtual bool check_pruning() = 0;
-
-  /**
-   * @brief get the max block size
-   */
-  virtual uint64_t get_max_block_size() = 0;
-
-  /**
-   * @brief add a new max block size
-   *
-   * The max block size will be the maximum of sz and the current block size
-   *
-   * @param: sz the block size
-   */
-  virtual void add_max_block_size(uint64_t sz) = 0;
 
   /**
    * @brief add a new alternative block

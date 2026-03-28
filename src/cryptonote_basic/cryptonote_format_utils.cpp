@@ -745,15 +745,19 @@ namespace cryptonote
   {
     CHECK_AND_ASSERT_MES(extra_nonce.size() <= TX_EXTRA_NONCE_MAX_COUNT, false, "extra nonce could be 255 bytes max");
     size_t start_pos = tx_extra.size();
-    tx_extra.resize(tx_extra.size() + 2 + extra_nonce.size());
+    const std::size_t len_varint_bytes = tools::get_varint_byte_size(extra_nonce.size());
+    tx_extra.resize(tx_extra.size() + 1 + len_varint_bytes + extra_nonce.size());
     //write tag
     tx_extra[start_pos] = TX_EXTRA_NONCE;
     //write len
     ++start_pos;
-    tx_extra[start_pos] = static_cast<uint8_t>(extra_nonce.size());
+    unsigned char * vp = tx_extra.data() + start_pos;
+    tools::write_varint(vp, extra_nonce.size());
+    assert(vp == tx_extra.data() + tx_extra.size() - extra_nonce.size());
     //write data
-    ++start_pos;
-    memcpy(&tx_extra[start_pos], extra_nonce.data(), extra_nonce.size());
+    start_pos += len_varint_bytes;
+    if (!extra_nonce.empty())
+      memcpy(&tx_extra[start_pos], extra_nonce.data(), extra_nonce.size());
     return true;
   }
   //---------------------------------------------------------------
@@ -1705,6 +1709,33 @@ namespace cryptonote
     for(auto& th: b.tx_hashes)
       txs_ids.push_back(th);
     return get_tx_tree_hash(txs_ids);
+  }
+  //---------------------------------------------------------------
+  crypto::hash get_block_longhash(const blobdata_ref block_hashing_blob,
+    const uint64_t height,
+    const uint8_t major_version,
+    const crypto::hash &seed_hash)
+  {
+    crypto::hash res;
+
+    if (height == 202612) // block 202612 bug workaround
+    {
+      static const std::string longhash_202612 = "84f64766475d51837ac9efbef1926486e58563c95a19fef4aec3254f03000000";
+      epee::string_tools::hex_to_pod(longhash_202612, res);
+    }
+    else if (major_version >= RX_BLOCK_VERSION) // RandomX
+    {
+      crypto::rx_slow_hash(seed_hash.data, block_hashing_blob.data(), block_hashing_blob.size(), res.data);
+    }
+    else // CryptoNight
+    {
+      static_assert(HF_VERSION_CRYPTONIGHT_VARIANT_1 >= 1);
+      const int pow_variant = major_version >= HF_VERSION_CRYPTONIGHT_VARIANT_1
+        ? major_version - (HF_VERSION_CRYPTONIGHT_VARIANT_1 - 1) : 0;
+      crypto::cn_slow_hash(block_hashing_blob.data(), block_hashing_blob.size(), res, pow_variant, height);
+    }
+
+    return res;
   }
   //---------------------------------------------------------------
   bool is_valid_decomposed_amount(uint64_t amount)

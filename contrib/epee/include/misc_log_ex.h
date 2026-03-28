@@ -46,6 +46,11 @@
     ss << x; \
     const std::string str = ss.str();
 
+#define LOG_TO_STRING(x) \
+    std::stringstream ss; \
+    ss << x; \
+    const std::string str = ss.str();
+
 #define MCLOG_TYPE(level, cat, color, type, x) do { \
     if (el::Loggers::allowed(level, cat)) { \
       LOG_TO_STRING(x); \

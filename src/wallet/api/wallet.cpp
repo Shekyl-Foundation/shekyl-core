@@ -188,7 +188,10 @@ struct Wallet2CallbackImpl : public tools::i_wallet2_callback
         }
     }
 
-    virtual void on_money_received(uint64_t height, const crypto::hash &txid, const cryptonote::transaction& tx, uint64_t amount, uint64_t burnt, const cryptonote::subaddress_index& subaddr_index, bool is_change, uint64_t unlock_time)
+    virtual void on_money_received(uint64_t height, const crypto::hash &txid,
+        const cryptonote::transaction& tx, uint64_t amount, uint64_t burnt,
+        const cryptonote::subaddress_index& subaddr_index, const crypto::hash &payment_id,
+        bool is_change, uint64_t unlock_time)
     {
 
         std::string tx_hash =  epee::string_tools::pod_to_hex(txid);
@@ -1667,7 +1670,7 @@ PendingTransaction *WalletImpl::createTransactionMultDest(const std::vector<stri
       
     cryptonote::address_parse_info info;
 
-    uint32_t adjusted_priority = m_wallet->adjust_priority(static_cast<uint32_t>(priority));
+    const auto adjusted_priority = m_wallet->adjust_priority(static_cast<uint32_t>(priority));
 
     PendingTransactionImpl * transaction = new PendingTransactionImpl(*this);
 
@@ -1940,7 +1943,7 @@ uint64_t WalletImpl::estimateTransactionFee(const std::vector<std::pair<std::str
         m_wallet->use_fork_rules(HF_VERSION_CLSAG, 0),
         m_wallet->use_fork_rules(HF_VERSION_BULLETPROOF_PLUS, 0),
         m_wallet->use_fork_rules(HF_VERSION_VIEW_TAGS, 0),
-        m_wallet->get_base_fee(priority),
+        m_wallet->get_base_fee(static_cast<uint32_t>(priority)),
         m_wallet->get_fee_quantization_mask());
 }
 

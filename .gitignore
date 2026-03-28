@@ -147,3 +147,4 @@ release/
 
 # Nested build trees (eg tools/genesis_builder/build)
 **/build/
+build-sync/

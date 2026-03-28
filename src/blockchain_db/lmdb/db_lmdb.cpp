@@ -2424,14 +2424,15 @@ bool BlockchainLMDB::for_all_alt_blocks(std::function<bool(const crypto::hash&, 
     const crypto::hash &blkid = *(const crypto::hash*)k.mv_data;
     if (v.mv_size < sizeof(alt_block_data_t))
       throw0(DB_ERROR("alt_blocks record is too small"));
-    const alt_block_data_t *data = (const alt_block_data_t*)v.mv_data;
+    alt_block_data_t data;
+    memcpy(&data, v.mv_data, sizeof(data));
     cryptonote::blobdata_ref bd;
     if (include_blob)
     {
       bd = {reinterpret_cast<const char*>(v.mv_data) + sizeof(alt_block_data_t), v.mv_size - sizeof(alt_block_data_t)};
     }
 
-    if (!f(blkid, *data, &bd)) {
+    if (!f(blkid, data, &bd)) {
       ret = false;
       break;
     }
@@ -2713,58 +2714,6 @@ std::vector<uint64_t> BlockchainLMDB::get_block_info_64bit_fields(uint64_t start
   TXN_POSTFIX_RDONLY();
   return ret;
 }
-
-uint64_t BlockchainLMDB::get_max_block_size()
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  TXN_PREFIX_RDONLY();
-  RCURSOR(properties)
-  MDB_val_str(k, "max_block_size");
-  MDB_val v;
-  int result = mdb_cursor_get(m_cur_properties, &k, &v, MDB_SET);
-  if (result == MDB_NOTFOUND)
-    return std::numeric_limits<uint64_t>::max();
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to retrieve max block size: ", result).c_str()));
-  if (v.mv_size != sizeof(uint64_t))
-    throw0(DB_ERROR("Failed to retrieve or create max block size: unexpected value size"));
-  uint64_t max_block_size;
-  memcpy(&max_block_size, v.mv_data, sizeof(max_block_size));
-  TXN_POSTFIX_RDONLY();
-  return max_block_size;
-}
-
-void BlockchainLMDB::add_max_block_size(uint64_t sz)
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-  mdb_txn_cursors *m_cursors = &m_wcursors;
-
-  CURSOR(properties)
-
-  MDB_val_str(k, "max_block_size");
-  MDB_val v;
-  int result = mdb_cursor_get(m_cur_properties, &k, &v, MDB_SET);
-  if (result && result != MDB_NOTFOUND)
-    throw0(DB_ERROR(lmdb_error("Failed to retrieve max block size: ", result).c_str()));
-  uint64_t max_block_size = 0;
-  if (result == 0)
-  {
-    if (v.mv_size != sizeof(uint64_t))
-      throw0(DB_ERROR("Failed to retrieve or create max block size: unexpected value size"));
-    memcpy(&max_block_size, v.mv_data, sizeof(max_block_size));
-  }
-  if (sz > max_block_size)
-    max_block_size = sz;
-  v.mv_data = (void*)&max_block_size;
-  v.mv_size = sizeof(max_block_size);
-  result = mdb_cursor_put(m_cur_properties, &k, &v, 0);
-  if (result)
-    throw0(DB_ERROR(lmdb_error("Failed to set max_block_size: ", result).c_str()));
-}
-
 
 std::vector<uint64_t> BlockchainLMDB::get_block_weights(uint64_t start_height, size_t count) const
 {
@@ -3579,6 +3528,27 @@ bool BlockchainLMDB::has_key_image(const crypto::key_image& img) const
 
   MDB_val k = {sizeof(img), (void *)&img};
   ret = (mdb_cursor_get(m_cur_spent_keys, (MDB_val *)&zerokval, &k, MDB_GET_BOTH) == 0);
+
+  TXN_POSTFIX_RDONLY();
+  return ret;
+}
+
+std::vector<bool> BlockchainLMDB::has_key_images(const epee::span<const crypto::key_image> img) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  std::vector<bool> ret(img.size(), true);
+
+  TXN_PREFIX_RDONLY();
+  RCURSOR(spent_keys);
+
+  for (std::size_t i = 0; i < img.size(); ++i)
+  {
+    crypto::key_image ki = img[i];
+    MDB_val k = {sizeof(ki), reinterpret_cast<void*>(&ki)};
+    ret[i] = (mdb_cursor_get(m_cur_spent_keys, const_cast<MDB_val *>(&zerokval), &k, MDB_GET_BOTH) == 0);
+  }
 
   TXN_POSTFIX_RDONLY();
   return ret;
@@ -4492,11 +4462,10 @@ bool BlockchainLMDB::get_alt_block(const crypto::hash &blkid, alt_block_data_t *
   if (v.mv_size < sizeof(alt_block_data_t))
     throw0(DB_ERROR("Record size is less than expected"));
 
-  const alt_block_data_t *ptr = (const alt_block_data_t*)v.mv_data;
   if (data)
-    *data = *ptr;
+    memcpy(data, v.mv_data, sizeof(alt_block_data_t));
   if (blob)
-    blob->assign((const char*)(ptr + 1), v.mv_size - sizeof(alt_block_data_t));
+    blob->assign(((const char*)(v.mv_data)) + sizeof(alt_block_data_t), v.mv_size - sizeof(alt_block_data_t));
 
   TXN_POSTFIX_RDONLY();
   return true;

@@ -56,6 +56,7 @@ using namespace epee;
 #include "rpc/rpc_args.h"
 #include "rpc/core_rpc_server_commands_defs.h"
 #include "daemonizer/daemonizer.h"
+#include "fee_priority.h"
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "wallet.rpc"
@@ -266,7 +267,7 @@ namespace tools
         }
       }
       return true;
-    }, auto_refresh_evaluation_ms.count());
+    }, auto_refresh_evaluation_ms);
     m_net_server.add_idle_handler([this](){
       if (m_stop.load(std::memory_order_relaxed))
       {
@@ -274,7 +275,7 @@ namespace tools
         return false;
       }
       return true;
-    }, 500);
+    }, std::chrono::milliseconds{500});
 
     //DO NOT START THIS SERVER IN MORE THEN 1 THREADS WITHOUT REFACTORING
     return epee::http_server_impl_base<wallet_rpc_server, connection_context>::run(1, true);
@@ -397,6 +398,7 @@ namespace tools
     }
 
     m_net_server.set_threads_prefix("RPC");
+    m_net_server.get_config_object().m_max_content_length = MAX_RPC_CONTENT_LENGTH * 100;
     auto rng = [](size_t len, uint8_t *ptr) { return crypto::rand(len, ptr); };
     return epee::http_server_impl_base<wallet_rpc_server, connection_context>::init(
       rng, std::move(bind_port), std::move(rpc_config->bind_ip),
@@ -705,24 +707,11 @@ namespace tools
   bool wallet_rpc_server::on_set_subaddr_lookahead(const wallet_rpc::COMMAND_RPC_SET_SUBADDR_LOOKAHEAD::request& req, wallet_rpc::COMMAND_RPC_SET_SUBADDR_LOOKAHEAD::response& res, epee::json_rpc::error& er, const connection_context *ctx)
   {
     if (!m_wallet) return not_open(er);
-    CHECK_IF_BACKGROUND_SYNCING();
-    const std::string wallet_file = m_wallet->get_wallet_file();
-    if (wallet_file == "" || m_wallet->verify_password(req.password))
-    {
-      try
-      {
-        m_wallet->set_subaddress_lookahead(req.major_idx, req.minor_idx);
-        m_wallet->rewrite(wallet_file, req.password);
-      }
-      catch (const std::exception& e) {
-        handle_rpc_exception(std::current_exception(), er, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
-        return false;
-      }
+    try {
+      m_wallet->set_subaddress_lookahead(req.major_idx, req.minor_idx);
     }
-    else
-    {
-      er.code = WALLET_RPC_ERROR_CODE_INVALID_PASSWORD;
-      er.message = "Invalid password.";
+    catch (const std::exception& e) {
+      handle_rpc_exception(std::current_exception(), er, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
       return false;
     }
     return true;
@@ -1248,6 +1237,12 @@ namespace tools
       er.message = "Transaction cannot have non-zero unlock time";
       return false;
     }
+    else if (!fee_priority_utilities::is_valid(req.priority))
+    {
+      er.code = WALLET_RPC_ERROR_CODE_INVALID_FEE_PRIORITY;
+      er.message = "Invalid priority value. Must be between 0 and 4.";
+      return false;
+    }
 
     CHECK_MULTISIG_ENABLED();
 
@@ -1260,7 +1255,7 @@ namespace tools
     try
     {
       uint64_t mixin = m_wallet->adjust_mixin(req.ring_size ? req.ring_size - 1 : 0);
-      uint32_t priority = m_wallet->adjust_priority(req.priority);
+      const fee_priority priority = m_wallet->adjust_priority(fee_priority_utilities::from_integral(req.priority));
       std::vector<wallet2::pending_tx> ptx_vector = m_wallet->create_transactions_2(dsts, mixin, priority, extra, req.account_index, req.subaddr_indices, req.subtract_fee_from_outputs);
 
       if (ptx_vector.empty())
@@ -1308,6 +1303,12 @@ namespace tools
       er.message = "Transaction cannot have non-zero unlock time";
       return false;
     }
+    else if (!fee_priority_utilities::is_valid(req.priority))
+    {
+      er.code = WALLET_RPC_ERROR_CODE_INVALID_FEE_PRIORITY;
+      er.message = "Invalid priority value. Must be between 0 and 4.";
+      return false;
+    }
 
     CHECK_MULTISIG_ENABLED();
 
@@ -1320,7 +1321,7 @@ namespace tools
     try
     {
       uint64_t mixin = m_wallet->adjust_mixin(req.ring_size ? req.ring_size - 1 : 0);
-      uint32_t priority = m_wallet->adjust_priority(req.priority);
+      const fee_priority priority = m_wallet->adjust_priority(fee_priority_utilities::from_integral(req.priority));
       LOG_PRINT_L2("on_transfer_split calling create_transactions_2");
       std::vector<wallet2::pending_tx> ptx_vector = m_wallet->create_transactions_2(dsts, mixin, priority, extra, req.account_index, req.subaddr_indices);
       LOG_PRINT_L2("on_transfer_split called create_transactions_2");
@@ -1753,6 +1754,12 @@ namespace tools
       er.message = "Transaction cannot have non-zero unlock time";
       return false;
     }
+    else if (!fee_priority_utilities::is_valid(req.priority))
+    {
+      er.code = WALLET_RPC_ERROR_CODE_INVALID_FEE_PRIORITY;
+      er.message = "Invalid priority value. Must be between 0 and 4.";
+      return false;
+    }
 
     CHECK_MULTISIG_ENABLED();
 
@@ -1787,7 +1794,7 @@ namespace tools
     try
     {
       uint64_t mixin = m_wallet->adjust_mixin(req.ring_size ? req.ring_size - 1 : 0);
-      uint32_t priority = m_wallet->adjust_priority(req.priority);
+      const fee_priority priority = m_wallet->adjust_priority(fee_priority_utilities::from_integral(req.priority));
       std::vector<wallet2::pending_tx> ptx_vector = m_wallet->create_transactions_all(req.below_amount, dsts[0].addr, dsts[0].is_subaddress, req.outputs, mixin, priority, extra, req.account_index, subaddr_indices);
 
       return fill_response(ptx_vector, req.get_tx_keys, res.tx_key_list, res.amount_list, res.amounts_by_dest_list, res.fee_list, res.weight_list, res.multisig_txset, res.unsigned_txset, req.do_not_relay,
@@ -1817,6 +1824,12 @@ namespace tools
     {
       er.code = WALLET_RPC_ERROR_CODE_NONZERO_UNLOCK_TIME;
       er.message = "Transaction cannot have non-zero unlock time";
+      return false;
+    }
+    else if (!fee_priority_utilities::is_valid(req.priority))
+    {
+      er.code = WALLET_RPC_ERROR_CODE_INVALID_FEE_PRIORITY;
+      er.message = "Invalid priority value. Must be between 0 and 4.";
       return false;
     }
 
@@ -1850,7 +1863,7 @@ namespace tools
     try
     {
       uint64_t mixin = m_wallet->adjust_mixin(req.ring_size ? req.ring_size - 1 : 0);
-      uint32_t priority = m_wallet->adjust_priority(req.priority);
+      const fee_priority priority = m_wallet->adjust_priority(fee_priority_utilities::from_integral(req.priority));
       std::vector<wallet2::pending_tx> ptx_vector = m_wallet->create_transactions_single(ki, dsts[0].addr, dsts[0].is_subaddress, req.outputs, mixin, priority, extra);
 
       if (ptx_vector.empty())
@@ -2225,6 +2238,11 @@ namespace tools
       {
         if (req.account_index != td.m_subaddr_index.major || (!req.subaddr_indices.empty() && req.subaddr_indices.count(td.m_subaddr_index.minor) == 0))
           continue;
+
+        // wallet2::is_transfer_unlocked() needs a daemon connection to work. if it fails, assume locked
+        bool unlocked = false;
+        try { unlocked = m_wallet->is_transfer_unlocked(td); } catch (...) {}
+
         wallet_rpc::transfer_details rpc_transfers;
         rpc_transfers.amount       = td.amount();
         rpc_transfers.spent        = td.m_spent;
@@ -2235,7 +2253,7 @@ namespace tools
         rpc_transfers.pubkey       = epee::string_tools::pod_to_hex(td.get_public_key());
         rpc_transfers.block_height = td.m_block_height;
         rpc_transfers.frozen       = td.m_frozen;
-        rpc_transfers.unlocked     = m_wallet->is_transfer_unlocked(td);
+        rpc_transfers.unlocked     = unlocked;
         res.transfers.push_back(rpc_transfers);
       }
     }
@@ -2430,7 +2448,7 @@ namespace tools
 
     try
     {
-      auto ptx_vector = m_wallet->create_staking_transaction(req.tier, req.amount, req.priority, 0, {});
+      auto ptx_vector = m_wallet->create_staking_transaction(req.tier, req.amount, fee_priority_utilities::from_integral(req.priority), 0, {});
       if (ptx_vector.empty())
       {
         er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
@@ -2469,7 +2487,7 @@ namespace tools
         er.message = "No matured staked outputs available for unstaking";
         return false;
       }
-      auto ptx_vector = m_wallet->create_unstake_transaction(matured, req.priority);
+      auto ptx_vector = m_wallet->create_unstake_transaction(matured, fee_priority_utilities::from_integral(req.priority));
       if (ptx_vector.empty())
       {
         er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
@@ -4968,14 +4986,14 @@ namespace tools
     if (!m_wallet) return not_open(er);
     try
     {
-      uint32_t priority = m_wallet->adjust_priority(0);
-      if (priority == 0)
+      const fee_priority priority = m_wallet->adjust_priority(fee_priority::Default);
+      if (priority == fee_priority::Default)
       {
         er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
         er.message = "Failed to get adjusted fee priority";
         return false;
       }
-      res.priority = priority;
+      res.priority = fee_priority_utilities::as_integral(priority);
     }
     catch (const std::exception& e)
     {

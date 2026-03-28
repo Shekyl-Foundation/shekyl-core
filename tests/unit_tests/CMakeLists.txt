@@ -42,6 +42,7 @@ set(unit_tests_sources
   checkpoints.cpp
   command_line.cpp
   crypto.cpp
+  cryptonote_format_utils.cpp
   decompose_amount_into_digits.cpp
   device.cpp
   difficulty.cpp
@@ -89,6 +90,7 @@ set(unit_tests_sources
   test_protocol_pack.cpp
   threadpool.cpp
   tx_proof.cpp
+  tx_verification_utils.cpp
   hardfork.cpp
   unbound.cpp
   uri.cpp

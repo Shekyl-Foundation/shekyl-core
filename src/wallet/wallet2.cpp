@@ -39,6 +39,8 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/join.hpp>
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/numeric/conversion/cast.hpp>
+#include <boost/archive/binary_iarchive.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/preprocessor/stringize.hpp>
@@ -437,7 +439,7 @@ std::unique_ptr<tools::wallet2> make_basic(const boost::program_options::variabl
   {
     proxy = command_line::get_arg(vm, opts.proxy);
     THROW_WALLET_EXCEPTION_IF(
-      !net::get_tcp_endpoint(proxy),
+      !net::socks::endpoint::get(proxy),
       tools::error::wallet_internal_error,
       std::string{"Invalid address specified for --"} + opts.proxy.name);
   }
@@ -1203,7 +1205,7 @@ wallet2::wallet2(network_type nettype, uint64_t kdf_rounds, bool unattended, std
   m_print_ring_members(false),
   m_store_tx_info(true),
   m_default_mixin(0),
-  m_default_priority(0),
+  m_default_priority(fee_priority::Default),
   m_refresh_type(RefreshOptimizeCoinbase),
   m_auto_refresh(true),
   m_first_refresh_done(false),
@@ -2003,7 +2005,27 @@ void wallet2::set_subaddress_lookahead(size_t major, size_t minor)
   if (old_major_lookahead >= major && old_minor_lookahead >= minor)
     return;
 
-  expand_subaddresses({0, 0});
+  hw::device &hwdev = m_account.get_device();
+  cryptonote::subaddress_index index2;
+  const uint32_t max_major_idx = this->get_num_subaddress_accounts() > 0 ? (this->get_num_subaddress_accounts() - 1) : 0;
+  const uint32_t major_end = get_subaddress_clamped_sum(max_major_idx, major);
+  for (index2.major = 0; index2.major < major_end; ++index2.major)
+  {
+    const uint32_t n_minor_subaddrs = this->get_num_subaddresses(index2.major);
+    const uint32_t max_minor_idx = n_minor_subaddrs > 0 ? (n_minor_subaddrs - 1) : 0;
+    const uint32_t begin = (n_minor_subaddrs || index2.major < old_major_lookahead) ? get_subaddress_clamped_sum(max_minor_idx, old_minor_lookahead) : 0;
+    const uint32_t end = get_subaddress_clamped_sum(max_minor_idx, minor);
+
+    if (begin >= end)
+      continue;
+
+    const std::vector<crypto::public_key> pkeys = hwdev.get_subaddress_spend_public_keys(m_account.get_keys(), index2.major, begin, end);
+    for (index2.minor = begin; index2.minor < end; ++index2.minor)
+    {
+      const crypto::public_key &D = pkeys.at(index2.minor - begin);
+      m_subaddresses[D] = index2;
+    }
+  }
 }
 //----------------------------------------------------------------------------------------------------
 /*!
@@ -2346,6 +2368,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
     }
   }
   const std::vector<tx_extra_field> &tx_extra_fields = tx_cache_data.tx_extra_fields.empty() ? local_tx_extra_fields : tx_cache_data.tx_extra_fields;
+  crypto::hash payment_id = crypto::null_hash;
 
   // Don't try to extract tx public key if tx has no ouputs
   size_t pk_index = 0;
@@ -2513,6 +2536,52 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
         }
       }
 
+      tx_extra_nonce extra_nonce;
+      if (find_tx_extra_field_by_type(tx_extra_fields, extra_nonce))
+      {
+        crypto::hash8 payment_id8 = null_hash8;
+        if(get_encrypted_payment_id_from_tx_extra_nonce(extra_nonce.nonce, payment_id8))
+        {
+          // We got a payment ID to go with this tx
+          LOG_PRINT_L2("Found encrypted payment ID: " << payment_id8);
+          MINFO("Consider using subaddresses instead of encrypted payment IDs");
+          if (tx_pub_key != null_pkey)
+          {
+            if (!m_account.get_device().decrypt_payment_id(payment_id8, tx_pub_key, m_account.get_keys().m_view_secret_key))
+            {
+              LOG_PRINT_L0("Failed to decrypt payment ID: " << payment_id8);
+            }
+            else
+            {
+              LOG_PRINT_L2("Decrypted payment ID: " << payment_id8);
+              // put the 64 bit decrypted payment id in the first 8 bytes
+              memcpy(payment_id.data, payment_id8.data, 8);
+              // rest is already 0, but guard against code changes above
+              memset(payment_id.data + 8, 0, 24);
+            }
+          }
+          else
+          {
+            LOG_PRINT_L1("No public key found in tx, unable to decrypt payment id");
+          }
+        }
+        else if (get_payment_id_from_tx_extra_nonce(extra_nonce.nonce, payment_id))
+        {
+          bool ignore = block_version >= IGNORE_LONG_PAYMENT_ID_FROM_BLOCK_VERSION;
+          if (ignore)
+          {
+            LOG_PRINT_L2("Found unencrypted payment ID in tx " << txid << " (ignored)");
+            MWARNING("Found OBSOLETE AND IGNORED unencrypted payment ID: these are bad for privacy, use subaddresses instead");
+            payment_id = crypto::null_hash;
+          }
+          else
+          {
+            LOG_PRINT_L2("Found unencrypted payment ID: " << payment_id);
+            MWARNING("Found unencrypted payment ID: these are bad for privacy, consider using subaddresses instead");
+          }
+        }
+      }
+
       for(size_t o: outs)
       {
 	THROW_WALLET_EXCEPTION_IF(tx.vout.size() <= o, error::wallet_internal_error, "wrong out in transaction: internal index=" +
@@ -2609,7 +2678,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
             }
 	    LOG_PRINT_L0("Received money: " << print_money(td.amount()) << ", with tx: " << txid);
 	    if (!ignore_callbacks && 0 != m_callback)
-	      m_callback->on_money_received(height, txid, tx, td.m_amount, 0, td.m_subaddr_index, spends_one_of_ours(tx), td.m_tx.unlock_time);
+	      m_callback->on_money_received(height, txid, tx, td.m_amount, 0, td.m_subaddr_index, payment_id, spends_one_of_ours(tx), td.m_tx.unlock_time);
           }
           total_received_1 += amount;
           notify = true;
@@ -2687,7 +2756,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
 
 	    LOG_PRINT_L0("Received money: " << print_money(td.amount()) << ", with tx: " << txid);
 	    if (!ignore_callbacks && 0 != m_callback)
-	      m_callback->on_money_received(height, txid, tx, td.m_amount, burnt, td.m_subaddr_index, spends_one_of_ours(tx), td.m_tx.unlock_time);
+	      m_callback->on_money_received(height, txid, tx, td.m_amount, burnt, td.m_subaddr_index, payment_id, spends_one_of_ours(tx), td.m_tx.unlock_time);
           }
           total_received_1 += extra_amount;
           notify = true;
@@ -2875,53 +2944,6 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
   // create payment_details for each incoming transfer to a subaddress index
   if (tx_money_got_in_outs.size() > 0)
   {
-    tx_extra_nonce extra_nonce;
-    crypto::hash payment_id = null_hash;
-    if (find_tx_extra_field_by_type(tx_extra_fields, extra_nonce))
-    {
-      crypto::hash8 payment_id8 = null_hash8;
-      if(get_encrypted_payment_id_from_tx_extra_nonce(extra_nonce.nonce, payment_id8))
-      {
-        // We got a payment ID to go with this tx
-        LOG_PRINT_L2("Found encrypted payment ID: " << payment_id8);
-        MINFO("Consider using subaddresses instead of encrypted payment IDs");
-        if (tx_pub_key != null_pkey)
-        {
-          if (!m_account.get_device().decrypt_payment_id(payment_id8, tx_pub_key, m_account.get_keys().m_view_secret_key))
-          {
-            LOG_PRINT_L0("Failed to decrypt payment ID: " << payment_id8);
-          }
-          else
-          {
-            LOG_PRINT_L2("Decrypted payment ID: " << payment_id8);
-            // put the 64 bit decrypted payment id in the first 8 bytes
-            memcpy(payment_id.data, payment_id8.data, 8);
-            // rest is already 0, but guard against code changes above
-            memset(payment_id.data + 8, 0, 24);
-          }
-        }
-        else
-        {
-          LOG_PRINT_L1("No public key found in tx, unable to decrypt payment id");
-        }
-      }
-      else if (get_payment_id_from_tx_extra_nonce(extra_nonce.nonce, payment_id))
-      {
-        bool ignore = block_version >= IGNORE_LONG_PAYMENT_ID_FROM_BLOCK_VERSION;
-        if (ignore)
-        {
-          LOG_PRINT_L2("Found unencrypted payment ID in tx " << txid << " (ignored)");
-          MWARNING("Found OBSOLETE AND IGNORED unencrypted payment ID: these are bad for privacy, use subaddresses instead");
-          payment_id = crypto::null_hash;
-        }
-        else
-        {
-          LOG_PRINT_L2("Found unencrypted payment ID: " << payment_id);
-          MWARNING("Found unencrypted payment ID: these are bad for privacy, consider using subaddresses instead");
-        }
-      }
-    }
-
     uint64_t total_received_2 = sub_change;
     for (const auto& i : tx_money_got_in_outs)
       total_received_2 += i.second;
@@ -3976,7 +3998,7 @@ void wallet2::fast_refresh(uint64_t stop_height, uint64_t &blocks_start_height, 
 {
   std::vector<crypto::hash> hashes;
 
-  const uint64_t checkpoint_height = m_checkpoints.get_max_height();
+  const uint64_t checkpoint_height = (stop_height < 1000) ? 0 : m_checkpoints.get_max_height();
   if ((stop_height > checkpoint_height && m_blockchain.size()-1 < checkpoint_height) && !force)
   {
     // we will drop all these, so don't bother getting them
@@ -4096,39 +4118,6 @@ void wallet2::refresh(bool trusted_daemon, uint64_t start_height, uint64_t & blo
   {
     blocks_fetched = 0;
     received_money = 0;
-    return;
-  }
-
-  if(m_light_wallet) {
-
-    // MyMonero get_address_info needs to be called occasionally to trigger wallet sync.
-    // This call is not really needed for other purposes and can be removed if mymonero changes their backend.
-    tools::COMMAND_RPC_GET_ADDRESS_INFO::response res;
-
-    // Get basic info
-    if(light_wallet_get_address_info(res)) {
-      // Last stored block height
-      uint64_t prev_height = m_light_wallet_blockchain_height;
-      // Update lw heights
-      m_light_wallet_scanned_block_height = res.scanned_block_height;
-      m_light_wallet_blockchain_height = res.blockchain_height;
-      // If new height - call new_block callback
-      if(m_light_wallet_blockchain_height != prev_height)
-      {
-        MDEBUG("new block since last time!");
-        m_callback->on_lw_new_block(m_light_wallet_blockchain_height - 1);
-      }
-      m_light_wallet_connected = true;
-      MDEBUG("lw scanned block height: " <<  m_light_wallet_scanned_block_height);
-      MDEBUG("lw blockchain height: " <<  m_light_wallet_blockchain_height);
-      MDEBUG(m_light_wallet_blockchain_height-m_light_wallet_scanned_block_height << " blocks behind");
-      // TODO: add wallet created block info
-
-      light_wallet_get_address_txs();
-    } else
-      m_light_wallet_connected = false;
-
-    // Lighwallet refresh done
     return;
   }
 
@@ -4742,7 +4731,7 @@ boost::optional<wallet2::keys_file_data> wallet2::get_keys_file_data(const crypt
   value2.SetUint(m_default_mixin);
   json.AddMember("default_mixin", value2, json.GetAllocator());
 
-  value2.SetUint(m_default_priority);
+  value2.SetUint(boost::numeric_cast<unsigned>(fee_priority_utilities::as_integral(m_default_priority)));
   json.AddMember("default_priority", value2, json.GetAllocator());
 
   value2.SetInt(m_auto_refresh ? 1 :0);
@@ -5071,7 +5060,7 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
     m_print_ring_members = false;
     m_store_tx_info = true;
     m_default_mixin = 0;
-    m_default_priority = 0;
+    m_default_priority = fee_priority::Default;
     m_auto_refresh = true;
     m_refresh_type = RefreshType::RefreshDefault;
     m_refresh_from_block_height = 0;
@@ -5208,15 +5197,15 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
     GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, default_priority, unsigned int, Uint, false, 0);
     if (field_default_priority_found)
     {
-      m_default_priority = field_default_priority;
+      m_default_priority = fee_priority_utilities::from_integral(boost::numeric_cast<uint32_t>(field_default_priority));
     }
     else
     {
       GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, default_fee_multiplier, unsigned int, Uint, false, 0);
       if (field_default_fee_multiplier_found)
-        m_default_priority = field_default_fee_multiplier;
+        m_default_priority = fee_priority_utilities::from_integral(boost::numeric_cast<uint32_t>(field_default_fee_multiplier));
       else
-        m_default_priority = 0;
+        m_default_priority = fee_priority::Default;
     }
     GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, auto_refresh, int, Int, false, true);
     m_auto_refresh = field_auto_refresh;
@@ -7610,24 +7599,7 @@ void wallet2::commit_tx(pending_tx& ptx)
 {
   using namespace cryptonote;
   
-  if(m_light_wallet) 
   {
-    cryptonote::COMMAND_RPC_SUBMIT_RAW_TX::request oreq;
-    cryptonote::COMMAND_RPC_SUBMIT_RAW_TX::response ores;
-    oreq.address = get_account().get_public_address_str(m_nettype);
-    oreq.view_key = string_tools::pod_to_hex(unwrap(unwrap(get_account().get_keys().m_view_secret_key)));
-    oreq.tx = epee::string_tools::buff_to_hex_nodelimer(tx_to_blob(ptx.tx));
-    {
-      const boost::lock_guard<boost::recursive_mutex> lock{m_daemon_rpc_mutex};
-      bool r = epee::net_utils::invoke_http_json("/submit_raw_tx", oreq, ores, *m_http_client, rpc_timeout, "POST");
-      THROW_WALLET_EXCEPTION_IF(!r, error::no_connection_to_daemon, "submit_raw_tx");
-      // MyMonero and OpenMonero use different status strings
-      THROW_WALLET_EXCEPTION_IF(ores.status != "OK" && ores.status != "success" , error::tx_rejected, ptx.tx, get_rpc_status(ores.status), ores.error);
-    }
-  }
-  else
-  {
-    // Normal submit
     COMMAND_RPC_SEND_RAW_TX::request req;
     req.tx_as_hex = epee::string_tools::buff_to_hex_nodelimer(tx_to_blob(ptx.tx));
     req.do_not_relay = false;
@@ -8559,42 +8531,45 @@ uint64_t wallet2::estimate_fee(bool use_per_byte_fee, bool use_rct, int n_inputs
   }
 }
 
-uint64_t wallet2::get_fee_multiplier(uint32_t priority, int fee_algorithm)
+uint64_t wallet2::get_fee_multiplier(fee_priority priority, fee_algorithm fee_algorithm)
 {
-  static const struct
+  struct fee_step
   {
-    size_t count;
-    uint64_t multipliers[4];
-  }
-  multipliers[] =
-  {
-    { 3, {1, 2, 3} },
-    { 3, {1, 20, 166} },
-    { 4, {1, 4, 20, 166} },
-    { 4, {1, 5, 25, 1000} },
+    fee_priority maximum_priority; // Determines the maximum priority available for said fee algorithm.
+    uint64_t fee_multipliers[4]; // Determines the fee multiplier applied at various priorities for said fee algorithm.
   };
 
-  if (fee_algorithm == -1)
+  static constexpr fee_step fee_steps[] =
+  {
+    { fee_priority::Elevated, {1, 2, 3} },
+    { fee_priority::Elevated, {1, 20, 166} },
+    { fee_priority::Priority, {1, 4, 20, 166} },
+    { fee_priority::Priority, {1, 5, 25, 1000} },
+  };
+
+  if (fee_algorithm == fee_algorithm::Unset)
     fee_algorithm = get_fee_algorithm();
 
   // 0 -> default (here, x1 till fee algorithm 2, x4 from it)
-  if (priority == 0)
+  if (priority == fee_priority::Default)
     priority = m_default_priority;
-  if (priority == 0)
+  if (priority == fee_priority::Default)
   {
-    if (fee_algorithm >= 2)
-      priority = 2;
+    if (fee_algorithm >= fee_algorithm::HardforkV5)
+      priority = fee_priority::Normal;
     else
-      priority = 1;
+      priority = fee_priority::Unimportant;
   }
 
-  THROW_WALLET_EXCEPTION_IF(fee_algorithm < 0 || fee_algorithm > 3, error::invalid_priority);
+  const auto fee_algorithm_index = fee_algorithm_utilities::as_integral(fee_algorithm);
+  THROW_WALLET_EXCEPTION_IF(fee_algorithm_index < 0 || fee_algorithm_index > static_cast<int>(sizeof(fee_steps)/sizeof(fee_steps[0])), error::invalid_priority);
 
   // 1 to 3/4 are allowed as priorities
-  const uint32_t max_priority = multipliers[fee_algorithm].count;
-  if (priority >= 1 && priority <= max_priority)
+  const fee_priority max_priority = fee_steps[fee_algorithm_index].maximum_priority;
+  if (priority >= fee_priority::Unimportant && priority <= max_priority)
   {
-    return multipliers[fee_algorithm].multipliers[priority-1];
+    const fee_priority adjusted_priority = fee_priority_utilities::decrease(priority);
+    return fee_steps[fee_algorithm_index].fee_multipliers[fee_priority_utilities::as_integral(adjusted_priority)];
   }
 
   THROW_WALLET_EXCEPTION_IF (false, error::invalid_priority);
@@ -8630,15 +8605,17 @@ uint64_t wallet2::get_base_fee()
 //----------------------------------------------------------------------------------------------------
 uint64_t wallet2::get_base_fee(uint32_t priority)
 {
+  return get_base_fee(fee_priority_utilities::from_integral(priority));
+}
+//----------------------------------------------------------------------------------------------------
+uint64_t wallet2::get_base_fee(fee_priority priority)
+{
   const bool use_2021_scaling = use_fork_rules(HF_VERSION_2021_SCALING, -30 * 1);
   if (use_2021_scaling)
   {
     // clamp and map to 0..3 indices, mapping 0 (default, but should not end up here) to 0, and 1..4 to 0..3
-    if (priority == 0)
-      priority = 1;
-    else if (priority > 4)
-      priority = 4;
-    --priority;
+    priority = fee_priority_utilities::clamp_modified(priority);
+    priority = fee_priority_utilities::decrease(priority);
 
     std::vector<uint64_t> fees;
     boost::optional<std::string> result = m_node_rpc_proxy.get_dynamic_base_fee_estimate_2021_scaling(FEE_ESTIMATE_GRACE_BLOCKS, fees);
@@ -8647,12 +8624,14 @@ uint64_t wallet2::get_base_fee(uint32_t priority)
       MERROR("Failed to determine base fee, using default");
       return FEE_PER_BYTE;
     }
-    if (priority >= fees.size())
+
+    const auto priority_index = fee_priority_utilities::as_integral(priority);
+    if (priority_index >= fees.size())
     {
-      MERROR("Failed to determine base fee for priority " << priority << ", using default");
+      MERROR("Failed to determine base fee for priority " << priority_index << ", using default");
       return FEE_PER_BYTE;
     }
-    return fees[priority];
+    return fees[priority_index];
   }
   else
   {
@@ -8679,16 +8658,16 @@ uint64_t wallet2::get_fee_quantization_mask()
   return fee_quantization_mask;
 }
 //----------------------------------------------------------------------------------------------------
-int wallet2::get_fee_algorithm()
+fee_algorithm wallet2::get_fee_algorithm()
 {
   // changes at v3, v5, v8
   if (use_fork_rules(HF_VERSION_PER_BYTE_FEE, 0))
-    return 3;
+    return fee_algorithm::HardforkV8;
   if (use_fork_rules(5, 0))
-    return 2;
+    return fee_algorithm::HardforkV5;
   if (use_fork_rules(3, -30 * 14))
-   return 1;
-  return 0;
+   return fee_algorithm::HardforkV3;
+  return fee_algorithm::PreHardforkV3;
 }
 //------------------------------------------------------------------------------------------------------------------------------
 uint64_t wallet2::get_min_ring_size()
@@ -8732,15 +8711,20 @@ uint64_t wallet2::adjust_mixin(uint64_t mixin)
   return mixin;
 }
 //----------------------------------------------------------------------------------------------------
-uint32_t wallet2::adjust_priority(uint32_t priority)
+fee_priority wallet2::adjust_priority(uint32_t priority)
 {
-  if (priority == 0 && m_default_priority == 0 && auto_low_priority())
+  return adjust_priority(fee_priority_utilities::from_integral(priority));
+}
+//----------------------------------------------------------------------------------------------------
+fee_priority wallet2::adjust_priority(fee_priority priority)
+{
+  if (priority == fee_priority::Default && m_default_priority == fee_priority::Default && auto_low_priority())
   {
     try
     {
       // check if there's a backlog in the tx pool
       const bool use_per_byte_fee = use_fork_rules(HF_VERSION_PER_BYTE_FEE, 0);
-      const uint64_t base_fee = get_base_fee(1);
+      const uint64_t base_fee = get_base_fee(fee_priority::Unimportant);
       const double fee_level = base_fee * (use_per_byte_fee ? 1 : (12/(double)13 / (double)1024));
       const std::vector<std::pair<uint64_t, uint64_t>> blocks = estimate_backlog({std::make_pair(fee_level, fee_level)});
       if (blocks.size() != 1)
@@ -8751,7 +8735,7 @@ uint32_t wallet2::adjust_priority(uint32_t priority)
       else if (blocks[0].first > 0)
       {
         MINFO("We don't use the low priority because there's a backlog in the tx pool.");
-        return 2;
+        return fee_priority::Normal;
       }
 
       // get the current full reward zone
@@ -8799,10 +8783,10 @@ uint32_t wallet2::adjust_priority(uint32_t priority)
       if (P > 80)
       {
         MINFO("We don't use the low priority because recent blocks are quite full.");
-        return 2;
+        return fee_priority::Normal;
       }
       MINFO("We'll use the low priority because probably it's safe to do so.");
-      return 1;
+      return fee_priority::Unimportant;
     }
     catch (const std::exception &e)
     {
@@ -9256,7 +9240,9 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
       return;
 
     const auto unique = outs_unique(outs);
-    if (tx_sanity_check(unique.first, unique.second, rct_offsets.empty() ? 0 : rct_offsets.back()))
+    const uint64_t rct_outs_available = rct_offsets.size() >= CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE
+      ? rct_offsets.at(rct_offsets.size() - CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE) : 0;
+    if (tx_sanity_check(unique.first, unique.second, rct_outs_available))
     {
       return;
     }
@@ -11066,7 +11052,7 @@ bool wallet2::light_wallet_key_image_is_ours(const crypto::key_image& key_image,
 // This system allows for sending (almost) the entire balance, since it does
 // not generate spurious change in all txes, thus decreasing the instantaneous
 // usable balance.
-std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryptonote::tx_destination_entry> dsts, const size_t fake_outs_count, uint32_t priority, const std::vector<uint8_t>& extra, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices, const unique_index_container& subtract_fee_from_outputs)
+std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryptonote::tx_destination_entry> dsts, const size_t fake_outs_count, fee_priority priority, const std::vector<uint8_t>& extra, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices, const unique_index_container& subtract_fee_from_outputs)
 {
   //ensure device is let in NONE mode in any case
   hw::device &hwdev = m_account.get_device();
@@ -11796,7 +11782,7 @@ uint64_t wallet2::get_staked_balance(uint64_t current_height) const
   return total;
 }
 //----------------------------------------------------------------------------------------------------
-std::vector<wallet2::pending_tx> wallet2::create_staking_transaction(uint8_t tier, uint64_t amount, uint32_t priority, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices)
+std::vector<wallet2::pending_tx> wallet2::create_staking_transaction(uint8_t tier, uint64_t amount, fee_priority priority, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices)
 {
   THROW_WALLET_EXCEPTION_IF(tier > 2, error::wallet_internal_error, "Staking tier must be 0, 1, or 2");
   THROW_WALLET_EXCEPTION_IF(amount == 0, error::wallet_internal_error, "Staking amount must be greater than 0");
@@ -11942,7 +11928,7 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
   return ptx_vector;
 }
 //----------------------------------------------------------------------------------------------------
-std::vector<wallet2::pending_tx> wallet2::create_unstake_transaction(const std::vector<size_t>& staked_indices, uint32_t priority)
+std::vector<wallet2::pending_tx> wallet2::create_unstake_transaction(const std::vector<size_t>& staked_indices, fee_priority priority)
 {
   THROW_WALLET_EXCEPTION_IF(staked_indices.empty(), error::wallet_internal_error, "No staked outputs to unstake");
 
@@ -12054,7 +12040,7 @@ bool wallet2::sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, c
   return true;
 }
 
-std::vector<wallet2::pending_tx> wallet2::create_transactions_all(uint64_t below, const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, const size_t fake_outs_count, uint32_t priority, const std::vector<uint8_t>& extra, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices)
+std::vector<wallet2::pending_tx> wallet2::create_transactions_all(uint64_t below, const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, const size_t fake_outs_count, fee_priority priority, const std::vector<uint8_t>& extra, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices)
 {
   std::vector<size_t> unused_transfers_indices;
   std::vector<size_t> unused_dust_indices;
@@ -12127,7 +12113,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_all(uint64_t below
   return create_transactions_from(address, is_subaddress, outputs, unused_transfers_indices, unused_dust_indices, fake_outs_count, priority, extra);
 }
 
-std::vector<wallet2::pending_tx> wallet2::create_transactions_single(const crypto::key_image &ki, const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, const size_t fake_outs_count, uint32_t priority, const std::vector<uint8_t>& extra)
+std::vector<wallet2::pending_tx> wallet2::create_transactions_single(const crypto::key_image &ki, const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, const size_t fake_outs_count, fee_priority priority, const std::vector<uint8_t>& extra)
 {
   std::vector<size_t> unused_transfers_indices;
   std::vector<size_t> unused_dust_indices;
@@ -12148,7 +12134,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_single(const crypt
   return create_transactions_from(address, is_subaddress, outputs, unused_transfers_indices, unused_dust_indices, fake_outs_count, priority, extra);
 }
 
-std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, std::vector<size_t> unused_transfers_indices, std::vector<size_t> unused_dust_indices, const size_t fake_outs_count, uint32_t priority, const std::vector<uint8_t>& extra)
+std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, std::vector<size_t> unused_transfers_indices, std::vector<size_t> unused_dust_indices, const size_t fake_outs_count, fee_priority priority, const std::vector<uint8_t>& extra)
 {
   //ensure device is let in NONE mode in any case
   hw::device &hwdev = m_account.get_device();
@@ -12627,7 +12613,7 @@ std::vector<wallet2::pending_tx> wallet2::create_unmixable_sweep_transactions()
   const bool hf1_rules = use_fork_rules(2, 10); // first hard fork has version 2
   tx_dust_policy dust_policy(hf1_rules ? 0 : ::config::DEFAULT_DUST_THRESHOLD);
 
-  const uint64_t base_fee  = get_base_fee(1);
+  const uint64_t base_fee  = get_base_fee(fee_priority::Unimportant);
 
   // may throw
   std::vector<size_t> unmixable_outputs = select_available_unmixable_outputs();
@@ -12648,7 +12634,7 @@ std::vector<wallet2::pending_tx> wallet2::create_unmixable_sweep_transactions()
       unmixable_transfer_outputs.push_back(n);
   }
 
-  return create_transactions_from(m_account_public_address, false, 1, unmixable_transfer_outputs, unmixable_dust_outputs, 0 /*fake_outs_count */, 1 /*priority */, std::vector<uint8_t>());
+  return create_transactions_from(m_account_public_address, false, 1, unmixable_transfer_outputs, unmixable_dust_outputs, 0 /*fake_outs_count */, fee_priority::Unimportant, std::vector<uint8_t>());
 }
 //----------------------------------------------------------------------------------------------------
 void wallet2::discard_unmixable_outputs()
