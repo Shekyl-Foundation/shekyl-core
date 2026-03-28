@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### CI/CD and build system
+
+- Added `release/tagged` GitHub Actions workflow: builds static Linux x86_64
+  binaries, cross-compiles Windows x64 via MinGW, and produces `.tar.gz`,
+  `.deb`, `.rpm`, `.zip`, and NSIS `.exe` installer artifacts on every `v*` tag.
+- Added `BuildRust.cmake` cross-compilation support: detects `CMAKE_SYSTEM_NAME`
+  and `CMAKE_SYSTEM_PROCESSOR` to derive Rust target triples for Windows, macOS,
+  Android, and FreeBSD; automatically configures the MinGW linker for Windows
+  cross-compilation.
+- Added Rust toolchain installation to all CI workflows (`build.yml`,
+  `depends.yml`, `release-tagged.yml`); required for `libshekyl_ffi.a` linking.
+- Replaced bundled Google Test 1.7.0 (2013) with CMake `FetchContent` for
+  GoogleTest v1.16.0. Fixes `GTEST_SKIP` compilation errors on all platforms
+  without a system gtest. Removes 34k lines of vendored source.
+- Upgraded all GitHub Actions workflows to Node.js 24 via
+  `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` ahead of the June 2026 deprecation.
+- Added Linux packaging files: `contrib/packaging/linux/shekyld.service`
+  (systemd unit) and `contrib/packaging/windows/shekyl.nsi` (NSIS installer).
+
 ### Documentation and operations
 
 - Added `utils/systemd/shekyld.service` for Shekyl-native daemon service

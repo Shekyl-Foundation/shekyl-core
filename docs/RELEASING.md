@@ -7,6 +7,16 @@ This document describes how to create a new Shekyl release.
 - Push access to [Shekyl-Foundation/shekyl-core](https://github.com/Shekyl-Foundation/shekyl-core)
 - All changes merged to `main`
 
+### Build Dependencies
+
+The CI workflows install all dependencies automatically. For local builds:
+
+- **C++ toolchain**: GCC or Clang with C++14 support
+- **Rust toolchain**: stable Rust via [rustup](https://rustup.rs/) (builds `libshekyl_ffi.a`)
+- **CMake** >= 3.14 (required for `FetchContent`)
+- **Google Test**: system `libgtest-dev` is preferred; if absent, CMake fetches GoogleTest v1.16.0 at configure time
+- **Boost, OpenSSL, ZeroMQ, libunbound, libsodium** and other standard Monero-derived dependencies
+
 ## Creating a Release
 
 1. **Update the version** in any relevant source files (e.g., `src/version.cpp.in`).
