@@ -38,7 +38,7 @@
 #include "crypto/crypto.h"
 #include <boost/thread/mutex.hpp>
 #include <boost/algorithm/string/join.hpp>
-#include <boost/optional.hpp>
+#include <optional>
 #include <boost/utility/string_ref.hpp>
 using namespace epee;
 
@@ -133,12 +133,12 @@ static const char *get_record_name(int record_type)
 }
 
 // fuck it, I'm tired of dealing with getnameinfo()/inet_ntop/etc
-boost::optional<std::string> ipv4_to_string(const char* src, size_t len)
+std::optional<std::string> ipv4_to_string(const char* src, size_t len)
 {
   if (len < 4)
   {
     MERROR("Invalid IPv4 address: " << std::string(src, len));
-    return boost::none;
+    return std::nullopt;
   }
 
   std::stringstream ss;
@@ -157,12 +157,12 @@ boost::optional<std::string> ipv4_to_string(const char* src, size_t len)
 
 // this obviously will need to change, but is here to reflect the above
 // stop-gap measure and to make the tests pass at least...
-boost::optional<std::string> ipv6_to_string(const char* src, size_t len)
+std::optional<std::string> ipv6_to_string(const char* src, size_t len)
 {
   if (len < 8)
   {
     MERROR("Invalid IPv4 address: " << std::string(src, len));
-    return boost::none;
+    return std::nullopt;
   }
 
   std::stringstream ss;
@@ -183,17 +183,17 @@ boost::optional<std::string> ipv6_to_string(const char* src, size_t len)
   return ss.str();
 }
 
-boost::optional<std::string> txt_to_string(const char* src, size_t len)
+std::optional<std::string> txt_to_string(const char* src, size_t len)
 {
   if (len == 0)
-    return boost::none;
+    return std::nullopt;
   return std::string(src+1, len-1);
 }
 
-boost::optional<std::string> tlsa_to_string(const char* src, size_t len)
+std::optional<std::string> tlsa_to_string(const char* src, size_t len)
 {
   if (len < 4)
-    return boost::none;
+    return std::nullopt;
   return std::string(src, len);
 }
 
@@ -323,7 +323,7 @@ DNSResolver::~DNSResolver()
   }
 }
 
-std::vector<std::string> DNSResolver::get_record(const std::string& url, int record_type, boost::optional<std::string> (*reader)(const char *,size_t), bool& dnssec_available, bool& dnssec_valid)
+std::vector<std::string> DNSResolver::get_record(const std::string& url, int record_type, std::optional<std::string> (*reader)(const char *,size_t), bool& dnssec_available, bool& dnssec_valid)
 {
   std::vector<std::string> addresses;
   dnssec_available = false;
@@ -345,7 +345,7 @@ std::vector<std::string> DNSResolver::get_record(const std::string& url, int rec
     {
       for (size_t i=0; result->data[i] != NULL; i++)
       {
-        boost::optional<std::string> res = (*reader)(result->data[i], result->len[i]);
+        std::optional<std::string> res = (*reader)(result->data[i], result->len[i]);
         if (res)
         {
           // do not dump dns record directly from dns into log

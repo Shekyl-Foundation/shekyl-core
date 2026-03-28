@@ -283,7 +283,7 @@ private:
       const std::string &proxy);
     bool set_bootstrap_daemon(
       const std::string &address,
-      const boost::optional<epee::net_utils::http::login> &credentials,
+      const std::optional<epee::net_utils::http::login> &credentials,
       const std::string &proxy);
     enum invoke_http_mode { JON, BIN, JON_RPC };
     template <typename COMMAND_TYPE>

@@ -35,7 +35,7 @@
 // (may contain code and/or modifications by other developers)
 // developer rfree: this code is caller of our new network code, and is modded; e.g. for rate limiting
 
-#include <boost/optional/optional.hpp>
+#include <optional>
 #include <list>
 #include <ctime>
 

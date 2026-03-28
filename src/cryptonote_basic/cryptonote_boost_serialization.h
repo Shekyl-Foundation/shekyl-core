@@ -38,8 +38,38 @@
 #include <boost/serialization/variant.hpp>
 #include <boost/serialization/set.hpp>
 #include <boost/serialization/map.hpp>
-#include <boost/serialization/optional.hpp>
 #include <boost/serialization/is_bitwise_serializable.hpp>
+#include <boost/serialization/split_free.hpp>
+#include <optional>
+
+namespace boost { namespace serialization {
+  template<class Archive, class T>
+  void save(Archive &ar, const std::optional<T> &o, const unsigned int /*version*/)
+  {
+    const bool has_value = o.has_value();
+    ar & has_value;
+    if (has_value)
+      ar & *o;
+  }
+  template<class Archive, class T>
+  void load(Archive &ar, std::optional<T> &o, const unsigned int /*version*/)
+  {
+    bool has_value = false;
+    ar & has_value;
+    if (has_value) {
+      T v;
+      ar & v;
+      o = std::move(v);
+    } else {
+      o = std::nullopt;
+    }
+  }
+  template<class Archive, class T>
+  void serialize(Archive &ar, std::optional<T> &o, const unsigned int version)
+  {
+    split_free(ar, o, version);
+  }
+}}
 #include <boost/archive/portable_binary_iarchive.hpp>
 #include <boost/archive/portable_binary_oarchive.hpp>
 #include "cryptonote_basic.h"

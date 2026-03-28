@@ -292,28 +292,28 @@ struct Wallet2CallbackImpl : public tools::i_wallet2_callback
       }
     }
 
-    virtual boost::optional<epee::wipeable_string> on_device_pin_request()
+    virtual std::optional<epee::wipeable_string> on_device_pin_request()
     {
       if (m_listener) {
         auto pin = m_listener->onDevicePinRequest();
         if (pin){
-          return boost::make_optional(epee::wipeable_string((*pin).data(), (*pin).size()));
+          return std::make_optional(epee::wipeable_string((*pin).data(), (*pin).size()));
         }
       }
-      return boost::none;
+      return std::nullopt;
     }
 
-    virtual boost::optional<epee::wipeable_string> on_device_passphrase_request(bool & on_device)
+    virtual std::optional<epee::wipeable_string> on_device_passphrase_request(bool & on_device)
     {
       if (m_listener) {
         auto passphrase = m_listener->onDevicePassphraseRequest(on_device);
         if (passphrase) {
-          return boost::make_optional(epee::wipeable_string((*passphrase).data(), (*passphrase).size()));
+          return std::make_optional(epee::wipeable_string((*passphrase).data(), (*passphrase).size()));
         }
       } else {
         on_device = true;
       }
-      return boost::none;
+      return std::nullopt;
     }
 
     virtual void on_device_progress(const hw::device_progress & event)
@@ -1398,9 +1398,9 @@ bool WalletImpl::setupBackgroundSync(const Wallet::BackgroundSyncType background
             default: setStatusError(tr("Unknown background sync type")); return false;
         }
 
-        boost::optional<epee::wipeable_string> bgc_password = background_cache_password
-            ? boost::optional<epee::wipeable_string>(*background_cache_password)
-            : boost::none;
+        std::optional<epee::wipeable_string> bgc_password = background_cache_password
+            ? std::optional<epee::wipeable_string>(*background_cache_password)
+            : std::nullopt;
 
         LOCK_REFRESH();
         m_wallet->setup_background_sync(bgs_type, wallet_password, bgc_password);
@@ -2224,7 +2224,7 @@ std::string WalletImpl::getReserveProof(bool all, uint32_t account_index, uint64
     try
     {
         clearStatus();
-        boost::optional<std::pair<uint32_t, uint64_t>> account_minreserve;
+        std::optional<std::pair<uint32_t, uint64_t>> account_minreserve;
         if (!all)
         {
             account_minreserve = std::make_pair(account_index, amount);
@@ -2825,7 +2825,7 @@ uint64_t WalletImpl::coldKeyImageSync(uint64_t &spent, uint64_t &unspent)
 
 void WalletImpl::deviceShowAddress(uint32_t accountIndex, uint32_t addressIndex, const std::string &paymentId)
 {
-    boost::optional<crypto::hash8> payment_id_param = boost::none;
+    std::optional<crypto::hash8> payment_id_param = std::nullopt;
     if (!paymentId.empty())
     {
         crypto::hash8 payment_id;

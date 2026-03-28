@@ -312,7 +312,7 @@ namespace cryptonote
       }
     }
 
-    boost::optional<subaddress_receive_info> subaddr_recv_info = is_out_to_acc_precomp(subaddresses, out_key, recv_derivation, additional_recv_derivations, real_output_index,hwdev);
+    std::optional<subaddress_receive_info> subaddr_recv_info = is_out_to_acc_precomp(subaddresses, out_key, recv_derivation, additional_recv_derivations, real_output_index,hwdev);
     CHECK_AND_ASSERT_MES(subaddr_recv_info, false, "key image helper: given output pubkey doesn't seem to belong to this address");
 
     return generate_key_image_helper_precomp(ack, out_key, subaddr_recv_info->derivation, real_output_index, subaddr_recv_info->index, in_ephemeral, ki, hwdev);
@@ -947,13 +947,13 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------
-  boost::optional<crypto::view_tag> get_output_view_tag(const cryptonote::tx_out& out)
+  std::optional<crypto::view_tag> get_output_view_tag(const cryptonote::tx_out& out)
   {
     if (out.target.type() == typeid(txout_to_tagged_key))
-      return boost::optional<crypto::view_tag>(boost::get< txout_to_tagged_key >(out.target).view_tag);
+      return std::optional<crypto::view_tag>(boost::get< txout_to_tagged_key >(out.target).view_tag);
     if (out.target.type() == typeid(txout_to_staked_key))
-      return boost::optional<crypto::view_tag>(boost::get< txout_to_staked_key >(out.target).view_tag);
-    return boost::optional<crypto::view_tag>();
+      return std::optional<crypto::view_tag>(boost::get< txout_to_staked_key >(out.target).view_tag);
+    return std::optional<crypto::view_tag>();
   }
   //---------------------------------------------------------------
   std::string short_hash_str(const crypto::hash& h)
@@ -1045,7 +1045,7 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------
-  bool out_can_be_to_acc(const boost::optional<crypto::view_tag>& view_tag_opt, const crypto::key_derivation& derivation, const size_t output_index, hw::device* hwdev)
+  bool out_can_be_to_acc(const std::optional<crypto::view_tag>& view_tag_opt, const crypto::key_derivation& derivation, const size_t output_index, hw::device* hwdev)
   {
     // If there is no view tag to check, the output can possibly belong to the account.
     // Will need to derive the output pub key to be certain whether or not the output belongs to the account.
@@ -1070,7 +1070,7 @@ namespace cryptonote
     return view_tag == derived_view_tag;
   }
   //---------------------------------------------------------------
-  bool is_out_to_acc(const account_keys& acc, const crypto::public_key& output_public_key, const crypto::public_key& tx_pub_key, const std::vector<crypto::public_key>& additional_tx_pub_keys, size_t output_index, const boost::optional<crypto::view_tag>& view_tag_opt)
+  bool is_out_to_acc(const account_keys& acc, const crypto::public_key& output_public_key, const crypto::public_key& tx_pub_key, const std::vector<crypto::public_key>& additional_tx_pub_keys, size_t output_index, const std::optional<crypto::view_tag>& view_tag_opt)
   {
     crypto::key_derivation derivation;
     bool r = acc.get_device().generate_key_derivation(tx_pub_key, acc.m_view_secret_key, derivation);
@@ -1100,13 +1100,13 @@ namespace cryptonote
     return false;
   }
   //---------------------------------------------------------------
-  boost::optional<subaddress_receive_info> is_out_to_acc_precomp(const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, const crypto::public_key& out_key, const crypto::key_derivation& derivation, const std::vector<crypto::key_derivation>& additional_derivations, size_t output_index, hw::device &hwdev, const boost::optional<crypto::view_tag>& view_tag_opt)
+  std::optional<subaddress_receive_info> is_out_to_acc_precomp(const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, const crypto::public_key& out_key, const crypto::key_derivation& derivation, const std::vector<crypto::key_derivation>& additional_derivations, size_t output_index, hw::device &hwdev, const std::optional<crypto::view_tag>& view_tag_opt)
   {
     // try the shared tx pubkey
     crypto::public_key subaddress_spendkey;
     if (out_can_be_to_acc(view_tag_opt, derivation, output_index, &hwdev))
     {
-      CHECK_AND_ASSERT_MES(hwdev.derive_subaddress_public_key(out_key, derivation, output_index, subaddress_spendkey), boost::none, "Failed to derive subaddress public key");
+      CHECK_AND_ASSERT_MES(hwdev.derive_subaddress_public_key(out_key, derivation, output_index, subaddress_spendkey), std::nullopt, "Failed to derive subaddress public key");
       auto found = subaddresses.find(subaddress_spendkey);
       if (found != subaddresses.end())
         return subaddress_receive_info{ found->second, derivation };
@@ -1115,16 +1115,16 @@ namespace cryptonote
     // try additional tx pubkeys if available
     if (!additional_derivations.empty())
     {
-      CHECK_AND_ASSERT_MES(output_index < additional_derivations.size(), boost::none, "wrong number of additional derivations");
+      CHECK_AND_ASSERT_MES(output_index < additional_derivations.size(), std::nullopt, "wrong number of additional derivations");
       if (out_can_be_to_acc(view_tag_opt, additional_derivations[output_index], output_index, &hwdev))
       {
-        CHECK_AND_ASSERT_MES(hwdev.derive_subaddress_public_key(out_key, additional_derivations[output_index], output_index, subaddress_spendkey), boost::none, "Failed to derive subaddress public key");
+        CHECK_AND_ASSERT_MES(hwdev.derive_subaddress_public_key(out_key, additional_derivations[output_index], output_index, subaddress_spendkey), std::nullopt, "Failed to derive subaddress public key");
         auto found = subaddresses.find(subaddress_spendkey);
         if (found != subaddresses.end())
           return subaddress_receive_info{ found->second, additional_derivations[output_index] };
       }
     }
-    return boost::none;
+    return std::nullopt;
   }
   //---------------------------------------------------------------
   bool lookup_acc_outs(const account_keys& acc, const transaction& tx, std::vector<size_t>& outs, uint64_t& money_transfered)

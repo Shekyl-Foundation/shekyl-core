@@ -37,7 +37,7 @@
 #include "common/updates.h"
 #include "version.h"
 #include "net/http_client.h"
-#include <boost/filesystem.hpp>
+#include <filesystem>
 #include <regex>
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
@@ -197,15 +197,15 @@ bool WalletManagerImpl::queryWalletDevice(Wallet::Device& device_type, const std
 std::vector<std::string> WalletManagerImpl::findWallets(const std::string &path)
 {
     std::vector<std::string> result;
-    boost::filesystem::path work_dir(path);
+    std::filesystem::path work_dir(path);
     // return empty result if path doesn't exist
-    if(!boost::filesystem::is_directory(path)){
+    if(!std::filesystem::is_directory(path)){
         return result;
     }
     const std::regex wallet_rx("(.*)\\.(keys)$");
-    boost::filesystem::recursive_directory_iterator end_itr;
-    for (boost::filesystem::recursive_directory_iterator itr(path); itr != end_itr; ++itr) {
-        if (!boost::filesystem::is_regular_file(itr->status()))
+    std::filesystem::recursive_directory_iterator end_itr;
+    for (std::filesystem::recursive_directory_iterator itr(path); itr != end_itr; ++itr) {
+        if (!std::filesystem::is_regular_file(itr->status()))
             continue;
         std::smatch what;
         std::string filename = itr->path().filename().string();
@@ -216,7 +216,7 @@ std::vector<std::string> WalletManagerImpl::findWallets(const std::string &path)
         if (matched) {
             // if keys file found, checking if there's wallet file itself
             std::string wallet_file = (itr->path().parent_path() /= what[1].str()).string();
-            if (boost::filesystem::exists(wallet_file)) {
+            if (std::filesystem::exists(wallet_file)) {
                 LOG_PRINT_L3("Found wallet: " << wallet_file);
                 result.push_back(wallet_file);
             }
@@ -232,7 +232,7 @@ std::string WalletManagerImpl::errorString() const
 
 void WalletManagerImpl::setDaemonAddress(const std::string &address)
 {
-    m_http_client.set_server(address, boost::none);
+    m_http_client.set_server(address, std::nullopt);
 }
 
 bool WalletManagerImpl::connected(uint32_t *version)

@@ -30,7 +30,7 @@
 
 #include <boost/preprocessor/stringize.hpp>
 #include <boost/uuid/nil_generator.hpp>
-#include <boost/filesystem.hpp>
+#include <filesystem>
 #include "include_base_utils.h"
 #include "string_tools.h"
 using namespace epee;
@@ -187,7 +187,7 @@ namespace cryptonote
     const std::string &username_password,
     const std::string &proxy)
   {
-    boost::optional<epee::net_utils::http::login> credentials;
+    std::optional<epee::net_utils::http::login> credentials;
     const auto loc = username_password.find(':');
     if (loc != std::string::npos)
     {
@@ -232,7 +232,7 @@ namespace cryptonote
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::set_bootstrap_daemon(
     const std::string &address,
-    const boost::optional<epee::net_utils::http::login> &credentials,
+    const std::optional<epee::net_utils::http::login> &credentials,
     const std::string &proxy)
   {
     boost::unique_lock<boost::shared_mutex> lock(m_bootstrap_daemon_mutex);
@@ -346,7 +346,7 @@ namespace cryptonote
       return false;
     }
 
-    boost::optional<epee::net_utils::http::login> http_login{};
+    std::optional<epee::net_utils::http::login> http_login{};
 
     if (rpc_config->login)
       http_login.emplace(std::move(rpc_config->login->username), std::move(rpc_config->login->password).password());
@@ -355,9 +355,9 @@ namespace cryptonote
       m_net_server.add_idle_handler([this](){ return m_rpc_payment->on_idle(); }, std::chrono::minutes{1});
 
     bool store_ssl_key = !restricted && rpc_config->ssl_options && rpc_config->ssl_options.auth.certificate_path.empty();
-    const auto ssl_base_path = (boost::filesystem::path{data_dir} / "rpc_ssl").string();
-    const bool ssl_cert_file_exists = boost::filesystem::exists(ssl_base_path + ".crt");
-    const bool ssl_pkey_file_exists = boost::filesystem::exists(ssl_base_path + ".key");
+    const auto ssl_base_path = (std::filesystem::path{data_dir} / "rpc_ssl").string();
+    const bool ssl_cert_file_exists = std::filesystem::exists(ssl_base_path + ".crt");
+    const bool ssl_pkey_file_exists = std::filesystem::exists(ssl_base_path + ".key");
     if (store_ssl_key)
     {
       // .key files are often given different read permissions as their corresponding .crt files.
@@ -1791,7 +1791,7 @@ namespace cryptonote
   {
     PERF_TIMER(on_set_bootstrap_daemon);
 
-    boost::optional<epee::net_utils::http::login> credentials;
+    std::optional<epee::net_utils::http::login> credentials;
     if (!req.username.empty() || !req.password.empty())
     {
       credentials = epee::net_utils::http::login(req.username, req.password);
@@ -2439,7 +2439,7 @@ namespace cryptonote
         m_bootstrap_height_check_time = current_time;
       }
 
-      boost::optional<std::pair<uint64_t, uint64_t>> bootstrap_daemon_height_info = m_bootstrap_daemon->get_height();
+      std::optional<std::pair<uint64_t, uint64_t>> bootstrap_daemon_height_info = m_bootstrap_daemon->get_height();
       if (!bootstrap_daemon_height_info)
       {
         MERROR("Failed to fetch bootstrap daemon height");
@@ -3235,7 +3235,7 @@ namespace cryptonote
       return true;
     }
 
-    boost::filesystem::path path;
+    std::filesystem::path path;
     if (req.path.empty())
     {
       std::string filename;

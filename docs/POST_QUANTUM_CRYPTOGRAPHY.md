@@ -237,7 +237,7 @@ PqcAuthentication {
   auth_version
   scheme_id
   flags
-  hybrid_ownership_material
+  hybrid_public_key
   hybrid_signature
 }
 ```
@@ -247,8 +247,8 @@ PqcAuthentication {
 - `auth_version`: version for the PQ authorization container
 - `scheme_id`: identifies the hybrid scheme, initially `ed25519_ml_dsa_65`
 - `flags`: reserved for future optional features; must be zero in phase 1
-- `hybrid_ownership_material`: public material used to bind the spend/ownership
-  path to hybrid verification
+- `hybrid_public_key`: canonical `HybridPublicKey` (Ed25519 pubkey || ML-DSA-65
+  public key) binding spend/ownership authorization to hybrid verification
 - `hybrid_signature`: dual signature over the canonical signing payload
 
 ## Canonical Serialization
@@ -362,7 +362,7 @@ PqcAuthHeader {
   auth_version
   scheme_id
   flags
-  hybrid_ownership_material
+  hybrid_public_key
 }
 ```
 
@@ -593,20 +593,25 @@ protection is stable:
 
 ## Implementation Mapping
 
-This spec maps directly to the next work items:
+All Phase-1 items are implemented. This table serves as an index into the
+codebase for each layer:
 
-1. `rust/shekyl-crypto-pq`
-   - implement `HybridEd25519MlDsa`
-2. `rust/shekyl-ffi`
-   - export stable sign/verify ABI
-3. `src/cryptonote_basic`
-   - add `TransactionV3` serialization fields
-4. `src/cryptonote_core`
-   - verify `TransactionV3` hybrid spend/ownership authorization using Rust FFI
-5. `src/wallet`
-   - construct and sign `TransactionV3` with hybrid ownership binding
-6. `docs/`
-   - update install, wire, privacy, release, and genesis docs
+| # | Layer | Status | Key files |
+|---|-------|--------|-----------|
+| 1 | Rust hybrid sign/verify | Done | `rust/shekyl-crypto-pq/src/signature.rs` |
+| 2 | FFI ABI (keygen/sign/verify) | Done | `rust/shekyl-ffi/src/lib.rs`, `src/shekyl/shekyl_ffi.h` |
+| 3 | TransactionV3 serialization | Done | `src/cryptonote_basic/cryptonote_basic.h` (`pqc_authentication`), boost serialization |
+| 4 | Core verification | Done | `src/cryptonote_core/tx_pqc_verify.cpp`, `blockchain.cpp` |
+| 5 | Wallet construction | Done | `src/cryptonote_core/cryptonote_tx_utils.cpp` (standard txs), `src/wallet/wallet2.cpp` (claim txs) |
+| 6 | Documentation | Done | `docs/POST_QUANTUM_CRYPTOGRAPHY.md`, `docs/DOCUMENTATION_TODOS_AND_PQC.md`, `docs/CHANGELOG.md` |
+
+Notes:
+- Staking and unstaking use `create_transactions_2` which routes through
+  `construct_tx_with_tx_key` (PQC signing built in).
+- Claim transactions use a dedicated PQC signing block in
+  `create_claim_transaction`.
+- Multisig wallets produce v2 transactions only; PQC secret key is
+  intentionally cleared on multisig creation.
 
 ## Open Items
 

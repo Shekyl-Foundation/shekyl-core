@@ -31,7 +31,7 @@
 #pragma once 
 
 #include <mutex>
-#include <boost/optional.hpp>
+#include <optional>
 #include <system_error>
 #include <csignal>
 #include <cstdio>
@@ -259,9 +259,9 @@ namespace tools
    */
   bool sha256sum(const std::string &filename, crypto::hash &hash);
 
-  boost::optional<bool> is_hdd(const char *path);
+  std::optional<bool> is_hdd(const char *path);
 
-  boost::optional<std::pair<uint32_t, uint32_t>> parse_subaddress_lookahead(const std::string& str);
+  std::optional<std::pair<uint32_t, uint32_t>> parse_subaddress_lookahead(const std::string& str);
 
   std::string glob_to_regex(const std::string &val);
 #ifdef _WIN32

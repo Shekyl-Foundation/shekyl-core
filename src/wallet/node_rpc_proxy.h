@@ -48,19 +48,19 @@ public:
   void invalidate();
   void set_offline(bool offline) { m_offline = offline; }
 
-  boost::optional<std::string> get_rpc_version(uint32_t &rpc_version, std::vector<std::pair<uint8_t, uint64_t>> &daemon_hard_forks, uint64_t &height, uint64_t &target_height);
-  boost::optional<std::string> get_height(uint64_t &height);
+  std::optional<std::string> get_rpc_version(uint32_t &rpc_version, std::vector<std::pair<uint8_t, uint64_t>> &daemon_hard_forks, uint64_t &height, uint64_t &target_height);
+  std::optional<std::string> get_height(uint64_t &height);
   void set_height(uint64_t h);
-  boost::optional<std::string> get_target_height(uint64_t &height);
-  boost::optional<std::string> get_block_weight_limit(uint64_t &block_weight_limit);
-  boost::optional<std::string> get_adjusted_time(uint64_t &adjusted_time);
-  boost::optional<std::string> get_earliest_height(uint8_t version, uint64_t &earliest_height);
-  boost::optional<std::string> get_dynamic_base_fee_estimate(uint64_t grace_blocks, uint64_t &fee);
-  boost::optional<std::string> get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, std::vector<uint64_t> &fees);
-  boost::optional<std::string> get_fee_quantization_mask(uint64_t &fee_quantization_mask);
-  boost::optional<std::string> get_rpc_payment_info(bool mining, bool &payment_required, uint64_t &credits, uint64_t &diff, uint64_t &credits_per_hash_found, cryptonote::blobdata &blob, uint64_t &height, uint64_t &seed_height, crypto::hash &seed_hash, crypto::hash &next_seed_hash, uint32_t &cookie);
-  boost::optional<std::string> get_transactions(const std::vector<crypto::hash> &txids, const std::function<void(const cryptonote::COMMAND_RPC_GET_TRANSACTIONS::request&, const cryptonote::COMMAND_RPC_GET_TRANSACTIONS::response&, bool)> &f);
-  boost::optional<std::string> get_block_header_by_height(uint64_t height, cryptonote::block_header_response &block_header);
+  std::optional<std::string> get_target_height(uint64_t &height);
+  std::optional<std::string> get_block_weight_limit(uint64_t &block_weight_limit);
+  std::optional<std::string> get_adjusted_time(uint64_t &adjusted_time);
+  std::optional<std::string> get_earliest_height(uint8_t version, uint64_t &earliest_height);
+  std::optional<std::string> get_dynamic_base_fee_estimate(uint64_t grace_blocks, uint64_t &fee);
+  std::optional<std::string> get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, std::vector<uint64_t> &fees);
+  std::optional<std::string> get_fee_quantization_mask(uint64_t &fee_quantization_mask);
+  std::optional<std::string> get_rpc_payment_info(bool mining, bool &payment_required, uint64_t &credits, uint64_t &diff, uint64_t &credits_per_hash_found, cryptonote::blobdata &blob, uint64_t &height, uint64_t &seed_height, crypto::hash &seed_hash, crypto::hash &next_seed_hash, uint32_t &cookie);
+  std::optional<std::string> get_transactions(const std::vector<crypto::hash> &txids, const std::function<void(const cryptonote::COMMAND_RPC_GET_TRANSACTIONS::request&, const cryptonote::COMMAND_RPC_GET_TRANSACTIONS::response&, bool)> &f);
+  std::optional<std::string> get_block_header_by_height(uint64_t height, cryptonote::block_header_response &block_header);
 
 private:
   template<typename T> void handle_payment_changes(const T &res, std::true_type) {
@@ -75,7 +75,7 @@ private:
   template<typename T> void handle_payment_changes(const T &res, std::false_type) {}
 
 private:
-  boost::optional<std::string> get_info();
+  std::optional<std::string> get_info();
 
   epee::net_utils::http::abstract_http_client &m_http_client;
   rpc_payment_state_t &m_rpc_payment_state;

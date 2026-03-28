@@ -4,7 +4,7 @@
 #include <map>
 #include <utility>
 
-#include <boost/optional/optional.hpp>
+#include <optional>
 #include <boost/thread/mutex.hpp>
 #include <boost/utility/string_ref.hpp>
 
@@ -25,12 +25,12 @@ namespace cryptonote
       const std::string &proxy);
     bootstrap_daemon(
       const std::string &address,
-      boost::optional<epee::net_utils::http::login> credentials,
+      std::optional<epee::net_utils::http::login> credentials,
       bool rpc_payment_enabled,
       const std::string &proxy);
 
     std::string address() const noexcept;
-    boost::optional<std::pair<uint64_t, uint64_t>> get_height();
+    std::optional<std::pair<uint64_t, uint64_t>> get_height();
     bool handle_result(bool success, const std::string &status);
 
     template <class t_request, class t_response>
@@ -77,7 +77,7 @@ namespace cryptonote
     void set_proxy(const std::string &address);
 
   private:
-    bool set_server(const std::string &address, const boost::optional<epee::net_utils::http::login> &credentials = boost::none);
+    bool set_server(const std::string &address, const std::optional<epee::net_utils::http::login> &credentials = std::nullopt);
     bool switch_server_if_needed();
 
   private:

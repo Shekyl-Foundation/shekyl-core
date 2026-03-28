@@ -27,12 +27,10 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
-// TODO(shekyl-v4): Migrate boost::format, boost::regex (user-influenced paths),
-// boost::filesystem, and boost::algorithm::string to std equivalents. Requires
-// C++17 for filesystem and careful audit of translated format strings.
-#include <boost/format.hpp>
+// TODO(shekyl-v4): Migrate boost::regex (user-influenced paths) and
+// boost::algorithm::string to std equivalents.
 #include <boost/asio/ip/address.hpp>
-#include <boost/filesystem/operations.hpp>
+#include <filesystem>
 #include <boost/algorithm/string.hpp>
 #include <boost/preprocessor/stringize.hpp>
 #include <cstdint>
@@ -141,7 +139,7 @@ namespace
 
   constexpr const char default_rpc_username[] = "shekyl";
 
-  boost::optional<tools::password_container> password_prompter(const char *prompt, bool verify)
+  std::optional<tools::password_container> password_prompter(const char *prompt, bool verify)
   {
     auto pwd_container = tools::password_container::prompt(verify, prompt);
     if (!pwd_container)
@@ -215,9 +213,8 @@ namespace tools
       const auto auto_refresh_interval_ms = std::chrono::milliseconds(auto_refresh_period * 1'000);
       if (auto_refresh_interval_ms <= auto_refresh_evaluation_ms)
       {
-        LOG_PRINT_L0((boost::format(tr("The auto wallet sync evaluation interval of %i ms must be larger than the refresh interval of %i ms"))
-          % auto_refresh_evaluation_ms.count()
-          % auto_refresh_interval_ms.count()).str());
+        LOG_PRINT_L0(tr("The auto wallet sync evaluation interval of ") << auto_refresh_evaluation_ms.count()
+          << tr(" ms must be larger than the refresh interval of ") << auto_refresh_interval_ms.count() << " ms");
         return true;
       }
 
@@ -244,7 +241,7 @@ namespace tools
       const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
       if (refresh_success)
-        LOG_PRINT_L3((boost::format(tr("Automated wallet block refresh took %i ms")) % elapsed.count()).str());
+        LOG_PRINT_L3(tr("Automated wallet block refresh took ") << elapsed.count() << " ms");
 
       const bool syncing_against_tip_of_chain = blocks_fetched < REFRESH_INDICATIVE_BLOCK_CHUNK_SIZE;
       if (syncing_against_tip_of_chain)
@@ -266,7 +263,7 @@ namespace tools
           // Let's freee up the network thread for between 200ms to 300ms (non-deterministic) to handle other requests.
           const auto refresh_throttle = auto_refresh_evaluation_ms + std::chrono::milliseconds(100);
           m_last_auto_refresh_time = end - auto_refresh_interval_ms + refresh_throttle;
-          LOG_PRINT_L3((boost::format(tr("Temporarily throttling wallet block refresh by around %i ms")) % refresh_throttle.count()).str());
+          LOG_PRINT_L3(tr("Temporarily throttling wallet block refresh by around ") << refresh_throttle.count() << " ms");
         }
       }
       return true;
@@ -303,7 +300,7 @@ namespace tools
 
     m_vm = vm;
 
-    boost::optional<epee::net_utils::http::login> http_login{};
+    std::optional<epee::net_utils::http::login> http_login{};
     std::string bind_port = command_line::get_arg(*m_vm, arg_rpc_bind_port);
     const bool disable_auth = command_line::get_arg(*m_vm, arg_disable_rpc_login);
     m_restricted = command_line::get_arg(*m_vm, arg_restricted);
@@ -325,7 +322,7 @@ namespace tools
 #ifdef _WIN32
         LOG_ERROR(tr("Failed to create directory ") + m_wallet_dir);
 #else
-        LOG_ERROR((boost::format(tr("Failed to create directory %s: %s")) % m_wallet_dir % strerror(errno)).str());
+        LOG_ERROR(tr("Failed to create directory ") << m_wallet_dir << ": " << strerror(errno));
 #endif
         return false;
       }
@@ -786,7 +783,7 @@ namespace tools
       if (!req.tag.empty() && account_tags.first.count(req.tag) == 0 && !req.regexp)
       {
         er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-        er.message = (boost::format(tr("Tag %s is unregistered.")) % req.tag).str();
+        er.message = std::string(tr("Tag ")) + req.tag + tr(" is unregistered.");
         return false;
       }
       for (; subaddr_index.major < m_wallet->get_num_subaddress_accounts(); ++subaddr_index.major)
@@ -809,7 +806,7 @@ namespace tools
       if (res.subaddress_accounts.size() == 0 && req.regexp)
       {
         er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-        er.message = (boost::format(tr("No matches for regex filter %s .")) % req.tag).str();
+        er.message = std::string(tr("No matches for regex filter ")) + req.tag + " .";
         return false;
       }
     }
@@ -2372,9 +2369,9 @@ namespace tools
     {
       PRE_VALIDATE_BACKGROUND_SYNC();
       const tools::wallet2::BackgroundSyncType background_sync_type = tools::wallet2::background_sync_type_from_str(req.background_sync_type);
-      boost::optional<epee::wipeable_string> background_cache_password = boost::none;
+      std::optional<epee::wipeable_string> background_cache_password = std::nullopt;
       if (background_sync_type == tools::wallet2::BackgroundSyncCustomPassword)
-        background_cache_password = boost::optional<epee::wipeable_string>(req.background_cache_password);
+        background_cache_password = std::optional<epee::wipeable_string>(req.background_cache_password);
       m_wallet->setup_background_sync(background_sync_type, req.wallet_password, background_cache_password);
     }
     catch (...)
@@ -3006,7 +3003,7 @@ namespace tools
     if (!m_wallet) return not_open(er);
     CHECK_IF_BACKGROUND_SYNCING();
 
-    boost::optional<std::pair<uint32_t, uint64_t>> account_minreserve;
+    std::optional<std::pair<uint32_t, uint64_t>> account_minreserve;
     if (!req.all)
     {
       if (req.account_index >= m_wallet->get_num_subaddress_accounts())
@@ -3079,11 +3076,11 @@ namespace tools
       max_height = req.max_height <= max_height ? req.max_height : max_height;
     }
 
-    boost::optional<uint32_t> account_index = req.account_index;
+    std::optional<uint32_t> account_index = req.account_index;
     std::set<uint32_t> subaddr_indices = req.subaddr_indices;
     if (req.all_accounts)
     {
-      account_index = boost::none;
+      account_index = std::nullopt;
       subaddr_indices.clear();
     }
 
@@ -3999,11 +3996,11 @@ namespace tools
     catch (const tools::error::tx_not_possible& e)
     {
       er.code = WALLET_RPC_ERROR_CODE_TX_NOT_POSSIBLE;
-      er.message = (boost::format(tr("Transaction not possible. Available only %s, transaction amount %s = %s + %s (fee)")) %
-        cryptonote::print_money(e.available()) %
-        cryptonote::print_money(e.tx_amount() + e.fee())  %
-        cryptonote::print_money(e.tx_amount()) %
-        cryptonote::print_money(e.fee())).str();
+      er.message = std::string(tr("Transaction not possible. Available only ")) +
+        cryptonote::print_money(e.available()) + tr(", transaction amount ") +
+        cryptonote::print_money(e.tx_amount() + e.fee()) + " = " +
+        cryptonote::print_money(e.tx_amount()) + " + " +
+        cryptonote::print_money(e.fee()) + tr(" (fee)");
       er.message = e.what();
     }
     catch (const tools::error::not_enough_outs_to_mix& e)
@@ -4092,8 +4089,8 @@ namespace tools
     {
       try
       {
-        boost::system::error_code ignored_ec;
-        THROW_WALLET_EXCEPTION_IF(boost::filesystem::exists(wallet_file, ignored_ec), error::file_exists, wallet_file);
+        std::error_code ignored_ec;
+        THROW_WALLET_EXCEPTION_IF(std::filesystem::exists(wallet_file, ignored_ec), error::file_exists, wallet_file);
       }
       catch (const std::exception &e)
       {
@@ -4262,8 +4259,8 @@ namespace tools
     {
       try
       {
-        boost::system::error_code ignored_ec;
-        THROW_WALLET_EXCEPTION_IF(boost::filesystem::exists(wallet_file, ignored_ec), error::file_exists, wallet_file);
+        std::error_code ignored_ec;
+        THROW_WALLET_EXCEPTION_IF(std::filesystem::exists(wallet_file, ignored_ec), error::file_exists, wallet_file);
       }
       catch (const std::exception &e)
       {
@@ -4919,7 +4916,7 @@ namespace tools
       return false;
     }
 
-    boost::optional<epee::net_utils::http::login> daemon_login{};
+    std::optional<epee::net_utils::http::login> daemon_login{};
     if (!req.username.empty() || !req.password.empty())
       daemon_login.emplace(req.username, req.password);
 
@@ -5244,7 +5241,7 @@ int main(int argc, char** argv) {
   daemonizer::init_options(hidden_options, desc_params);
   desc_params.add(hidden_options);
 
-  boost::optional<po::variables_map> vm;
+  std::optional<po::variables_map> vm;
   bool should_terminate = false;
   std::tie(vm, should_terminate) = wallet_args::main(
     argc, argv,

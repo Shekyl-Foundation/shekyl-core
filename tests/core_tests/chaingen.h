@@ -36,7 +36,7 @@
 #include <stdint.h>
 
 #include <boost/program_options.hpp>
-#include <boost/optional.hpp>
+#include <optional>
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/variant.hpp>
 #include <boost/serialization/optional.hpp>
@@ -137,7 +137,7 @@ private:
 typedef std::vector<std::pair<uint8_t, uint64_t>> v_hardforks_t;
 struct event_replay_settings
 {
-  boost::optional<v_hardforks_t> hard_forks;
+  std::optional<v_hardforks_t> hard_forks;
 
   event_replay_settings() = default;
 
@@ -241,11 +241,11 @@ public:
   bool construct_block(cryptonote::block& blk, uint64_t height, const crypto::hash& prev_id,
     const cryptonote::account_base& miner_acc, uint64_t timestamp, uint64_t already_generated_coins,
     std::vector<size_t>& block_weights, const std::list<cryptonote::transaction>& tx_list,
-    const boost::optional<uint8_t>& hf_ver = boost::none);
+    const std::optional<uint8_t>& hf_ver = std::nullopt);
   bool construct_block(cryptonote::block& blk, const cryptonote::account_base& miner_acc, uint64_t timestamp);
   bool construct_block(cryptonote::block& blk, const cryptonote::block& blk_prev, const cryptonote::account_base& miner_acc,
     const std::list<cryptonote::transaction>& tx_list = std::list<cryptonote::transaction>(),
-    const boost::optional<uint8_t>& hf_ver = boost::none);
+    const std::optional<uint8_t>& hf_ver = std::nullopt);
 
   bool construct_block_manually(cryptonote::block& blk, const cryptonote::block& prev_block,
     const cryptonote::account_base& miner_acc, int actual_params = bf_none, uint8_t major_ver = 0,
@@ -412,8 +412,8 @@ cryptonote::account_public_address get_address(const cryptonote::account_keys& i
 cryptonote::account_public_address get_address(const cryptonote::account_base& inp);
 cryptonote::account_public_address get_address(const cryptonote::tx_destination_entry& inp);
 
-inline cryptonote::difficulty_type get_test_difficulty(const boost::optional<uint8_t>& hf_ver=boost::none) {return !hf_ver || hf_ver.get() <= 1 ? 1 : 2;}
-inline uint64_t current_difficulty_window(const boost::optional<uint8_t>& hf_ver=boost::none){ return !hf_ver || hf_ver.get() <= 1 ? DIFFICULTY_TARGET_V1 : DIFFICULTY_TARGET_V2; }
+inline cryptonote::difficulty_type get_test_difficulty(const std::optional<uint8_t>& hf_ver=std::nullopt) {return !hf_ver || *hf_ver <= 1 ? 1 : 2;}
+inline uint64_t current_difficulty_window(const std::optional<uint8_t>& hf_ver=std::nullopt){ return !hf_ver || *hf_ver <= 1 ? DIFFICULTY_TARGET_V1 : DIFFICULTY_TARGET_V2; }
 
 cryptonote::tx_destination_entry build_dst(const var_addr_t& to, bool is_subaddr=false, uint64_t amount=0);
 std::vector<cryptonote::tx_destination_entry> build_dsts(const var_addr_t& to1, bool sub1=false, uint64_t am1=0);
@@ -449,7 +449,7 @@ cryptonote::transaction construct_tx_with_fee(std::vector<test_event_entry>& eve
 bool construct_tx_rct(const cryptonote::account_keys& sender_account_keys,
     std::vector<cryptonote::tx_source_entry>& sources,
     const std::vector<cryptonote::tx_destination_entry>& destinations,
-    const boost::optional<cryptonote::account_public_address>& change_addr,
+    const std::optional<cryptonote::account_public_address>& change_addr,
     std::vector<uint8_t> extra, cryptonote::transaction& tx,
     bool rct=false, rct::RangeProofType range_proof_type=rct::RangeProofBorromean, int bp_version = 0);
 
@@ -915,7 +915,7 @@ inline bool do_replay_file(const std::string& filename)
     BLK_NAME = blk_last;                                                              \
   }
 
-#define REWIND_BLOCKS_N(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, COUNT) REWIND_BLOCKS_N_HF(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, COUNT, boost::none)
+#define REWIND_BLOCKS_N(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, COUNT) REWIND_BLOCKS_N_HF(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, COUNT, std::nullopt)
 #define REWIND_BLOCKS(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC) REWIND_BLOCKS_N(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW)
 #define REWIND_BLOCKS_HF(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, HF) REWIND_BLOCKS_N_HF(VEC_EVENTS, BLK_NAME, PREV_BLOCK, MINER_ACC, CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW, HF)
 

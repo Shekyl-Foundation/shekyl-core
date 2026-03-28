@@ -1414,7 +1414,7 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
     throw DB_ERROR("Database file is NTFS compressed and compression could not be disabled");
 #endif
 
-  boost::optional<bool> is_hdd_result = tools::is_hdd(filename.c_str());
+  std::optional<bool> is_hdd_result = tools::is_hdd(filename.c_str());
   if (is_hdd_result)
   {
     if (is_hdd_result.value())

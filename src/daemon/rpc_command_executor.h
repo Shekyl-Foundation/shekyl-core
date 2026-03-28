@@ -38,7 +38,7 @@
 
 #pragma once
 
-#include <boost/optional/optional_fwd.hpp>
+#include <optional>
 
 #include "common/common_fwd.h"
 #include "common/rpc_client.h"
@@ -60,7 +60,7 @@ public:
   t_rpc_command_executor(
       uint32_t ip
     , uint16_t port
-    , const boost::optional<tools::login>& user
+    , const std::optional<tools::login>& user
     , const epee::net_utils::ssl_options_t& ssl_options
     , bool is_rpc = true
     , cryptonote::core_rpc_server* rpc_server = NULL

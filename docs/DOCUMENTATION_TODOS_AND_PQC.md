@@ -77,14 +77,17 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 
 ### 1.11 Boost Migration Status
 
-**Completed (C++17 bump + medium-effort migrations)**:
+**Completed migrations**:
 
-- C++ standard bumped from C++14 to C++17 (`CMAKE_CXX_STANDARD 17`).
+- C++ standard bumped from C++14 to C++17 (`CMAKE_CXX_STANDARD 17`) in both main CMakeLists.txt and macOS cross-compilation toolchain (`contrib/depends/toolchain.cmake.in`).
+- `boost::optional` → `std::optional` across ~93 files (~486 use sites). Added Boost.Serialization adapter for `std::optional` in `cryptonote_boost_serialization.h`. Replaced `BOOST_STATIC_ASSERT`/`boost::is_base_of` with C++17 `static_assert`/`std::is_base_of`.
 - `boost::algorithm::string` → `tools::string_util` (trim, to_lower, iequals, join).
-- `boost::format` → `snprintf` / stream output in utility and tool files.
+- `boost::format` → `snprintf` / stream output / string concat in `util.cpp`, `message_store.cpp`, `gen_ssl_cert.cpp`, `gen_multisig.cpp`, `wallet2.cpp`, `wallet_rpc_server.cpp`, `wallet_args.cpp`.
 - `boost::regex` → `std::regex` in `simplewallet.cpp`, `wallet_manager.cpp`.
 - `boost::mutex` / `boost::lock_guard` / `boost::unique_lock` / `boost::condition_variable` → `std::mutex` / `std::lock_guard` / `std::unique_lock` / `std::condition_variable` in `util.h`, `util.cpp`, `threadpool.h`, `threadpool.cpp`, `rpc_payment.h`, `rpc_payment.cpp`.
-- `boost::filesystem` → `std::filesystem` in `blockchain_export.cpp`, `blockchain_import.cpp`, `cn_deserialize.cpp`, `util.cpp`, `bootstrap_file.h`/`.cpp`, `blocksdat_file.h`/`.cpp`.
+- `boost::filesystem` → `std::filesystem` in `blockchain_export.cpp`, `blockchain_import.cpp`, `cn_deserialize.cpp`, `util.cpp`, `bootstrap_file.h`/`.cpp`, `blocksdat_file.h`/`.cpp`, `wallet_manager.cpp`, `wallet_rpc_server.cpp`, `core_rpc_server.cpp`, `wallet_args.cpp`.
+- `boost::chrono`/`boost::this_thread` → `std::chrono`/`std::this_thread` in `windows_service.cpp` (daemonizer).
+- Upstream Monero PRs #9628 (ASIO `io_service` → `io_context`), #6690 (serialization), #9544 (daemonizer) confirmed already absorbed.
 
 **Deferred hard areas** (tagged `TODO(shekyl-v4)` in source):
 
@@ -95,8 +98,8 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 | **Multi-index containers** | `net_peerlist.h` | Composite indices (by address, time, id) have no direct std equivalent |
 | **Spirit parser** | `http_auth.cpp` | Heavyweight compile dep; small grammar, but needs manual rewrite |
 | **Multiprecision** | `difficulty.h`, `int-util.cpp` | Consensus-critical 128-bit arithmetic; evaluate `__uint128_t` |
-| **Filesystem (high-coupling)** | `wallet2.cpp`, `wallet_rpc_server.cpp`, `wallet_manager.cpp`, `net_ssl.cpp`, `rpc/core_rpc_server.cpp` | Deeply interleaved with Boost ASIO and wallet serialization paths |
-| **boost::format (wallet/CLI)** | `wallet2.cpp`, `wallet_rpc_server.cpp`, `simplewallet.cpp`, `wallet_args.cpp` | Hundreds of translated format strings; migration needs i18n audit |
+| **Filesystem (net_ssl)** | `net_ssl.cpp` | epee SSL layer with permissions API coupling |
+| **boost::format (simplewallet)** | `simplewallet.cpp` | 106 translated format strings; migration needs i18n audit |
 | **boost::split (token_compress)** | `util.cpp` (vercmp, word_wrap) | `token_compress_on` has no direct std equivalent |
 | **boost::regex (network parsers)** | `http_base.cpp`, `http_client.h`, `wallet_rpc_server.cpp` | Parse untrusted network input; edge-case semantics must be verified |
 | **boost::posix_time / date_time** | `connection_context.h`, `block_queue.h`, `net_node.h` | Types cross P2P protocol boundaries; must migrate as a coordinated unit |
@@ -185,10 +188,16 @@ Completed:
 - Rust verify called from core validation (verify_transaction_pqc_auth)
 - Rust sign called from wallet transaction construction when hf_version >= HF_VERSION_SHEKYL_NG
 - reboot-chain transaction version rules enforced (max_tx_version, version gates)
+- `create_claim_transaction` (stake reward claims) wired with PQC hybrid signing
+- all v3 transaction paths audited: staking and unstaking go through
+  `construct_tx_with_tx_key` (already wired); claim tx now has its own PQC block
+- multisig wallets restricted to v2 (PQC secret cleared); documented as intentional
+- PQC verification enforced in mempool and block validation for all non-coinbase v3 txs
 
 Remaining:
 
-- expand wallet RPC docs with claim-flow details once staker claim tx format is finalized
+- expand wallet RPC docs with claim-flow details
+- document multisig PQC limitations in operator guidance
 
 ### Phase 4: Documentation and audit
 
@@ -220,7 +229,7 @@ Remaining:
 | Release | Full checklist; Shekyl-specific seeds, wallets, exchanges | — |
 | Seeds | Populate DNS/IP seeds; runtime seed add; Shekyl naming | — |
 | Economics / PoW | Finish config-driven proof activation and staker-claim transaction grammar | Stake-ratio chain-state tracking implemented; modular PoW scaffolding implemented |
-| **Boost migration** | C++17 bump complete; medium-effort items done (string utils, format, regex, mutex/cv, filesystem in utilities); hard areas deferred with `TODO(shekyl-v4)` tags (see §1.11) | C++17 unlocks `std::filesystem`, `std::optional` |
+| **Boost migration** | C++17 bump complete (incl. macOS toolchain); `boost::optional` fully migrated (~93 files); `boost::filesystem` migrated in wallet/RPC/utility layers; `boost::format` removed from wallet2/wallet_rpc/wallet_args; upstream PRs #9628/#6690/#9544 verified absorbed; remaining hard areas deferred with `TODO(shekyl-v4)` (see §1.11) | Majority of codebase now uses `std::optional`, `std::filesystem` |
 | **PQC** | **v3 complete; 4 published vectors (1 positive, 3 negative); V4 roadmap published; external audit and KEM implementation remain** | **Core of this document** |
 
 ---

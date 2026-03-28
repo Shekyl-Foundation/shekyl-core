@@ -60,6 +60,16 @@
 
 ### Post-quantum cryptography
 
+- **Phase 4 wallet/core PQC wiring completed**: all v3 transaction construction
+  paths now include hybrid Ed25519 + ML-DSA-65 signing via `pqc_auth`. Fixed
+  `create_claim_transaction` (staking reward claims) which previously built v3
+  transactions without PQC authentication, causing consensus rejection.
+- PQC verification enforced in both mempool acceptance and block validation for
+  all non-coinbase v3 transactions.
+- Multisig wallets intentionally restricted to v2 transactions (no PQC); the
+  PQC secret key is cleared on multisig creation with a documented design note.
+- Aligned `POST_QUANTUM_CRYPTOGRAPHY.md` field naming: `hybrid_ownership_material`
+  renamed to `hybrid_public_key` to match the canonical code implementation.
 - Added three negative PQC test vectors (`docs/PQC_TEST_VECTOR_002–004`) covering
   tampered ownership material, wrong scheme_id, and oversized/truncated signature
   blobs. Each vector is generated and verified by integration tests in
@@ -109,11 +119,33 @@
 
 ### C++17 and Boost migration
 
-- **C++17 standard bump**: `CMAKE_CXX_STANDARD` changed from 14 to 17. This
-  unblocks `std::filesystem`, `std::optional`, and other modern C++ features.
-  Upstream Monero cherry-picks that required C++14-to-C++17 back-ports now
-  compile without shims.
-- **Medium-effort Boost removals (completed)**:
+- **C++17 standard bump**: `CMAKE_CXX_STANDARD` changed from 14 to 17 in both
+  the main `CMakeLists.txt` and the macOS cross-compilation toolchain
+  (`contrib/depends/toolchain.cmake.in`). This unblocks `std::filesystem`,
+  `std::optional`, and other modern C++ features. Upstream Monero cherry-picks
+  that required C++14-to-C++17 back-ports now compile without shims.
+- **`boost::optional` → `std::optional` (complete)**:
+  Migrated ~486 use sites across ~93 files in `src/`, `contrib/epee/`, and
+  `tests/`. Replaced `boost::optional<T>` with `std::optional<T>`,
+  `boost::none` with `std::nullopt`, `boost::make_optional` with
+  `std::make_optional`, and `.get()` accessor calls with `*` / `->`.
+  Added a `std::optional` Boost.Serialization adapter in
+  `cryptonote_boost_serialization.h` so PQC auth fields serialize correctly.
+  Replaced `BOOST_STATIC_ASSERT`/`boost::is_base_of` with
+  `static_assert`/`std::is_base_of` in Trezor `messages_map.hpp`.
+- **`boost::filesystem` → `std::filesystem` (wallet/RPC layer)**:
+  Migrated `wallet_manager.cpp`, `wallet_rpc_server.cpp`,
+  `core_rpc_server.cpp`, and `wallet_args.cpp` from `boost::filesystem` to
+  `std::filesystem`. Combined with the earlier utility-file migration, this
+  covers all filesystem usage outside of `net_ssl.cpp` (epee, deferred due to
+  permissions API coupling).
+- **`boost::format` removal (wallet/RPC layer)**:
+  Replaced all `boost::format` calls in `wallet2.cpp` (4), `wallet_rpc_server.cpp`
+  (8), and `wallet_args.cpp` (1) with stream output or string concatenation.
+  `simplewallet.cpp` (106 uses, i18n-sensitive) remains deferred.
+- **`boost::chrono`/`boost::this_thread` in daemonizer**: Replaced with
+  `std::chrono`/`std::this_thread` in `windows_service.cpp` (PR #9544 equivalent).
+- **Medium-effort Boost removals (completed earlier)**:
   - `boost::algorithm::string` (trim, to_lower, iequals, join) replaced with
     `tools::string_util` helpers in `src/common/string_util.h`.
   - `boost::format` replaced with `snprintf`, stream output, or string
@@ -127,14 +159,18 @@
     `threadpool.h`, `threadpool.cpp`, and `rpc_payment.h`/`rpc_payment.cpp`.
   - `boost::thread::hardware_concurrency()` replaced with
     `std::thread::hardware_concurrency()`.
-- **Filesystem migration (utility files)**:
+- **Filesystem migration (utility files, completed earlier)**:
   - `boost::filesystem` replaced with `std::filesystem` in
     `blockchain_export.cpp`, `blockchain_import.cpp`, `cn_deserialize.cpp`,
     `util.cpp`, `bootstrap_file.h`/`.cpp`, and `blocksdat_file.h`/`.cpp`.
   - Eliminated `BOOST_VERSION` preprocessor conditional in `copy_file()`.
-- **Deferred Boost areas**: Hard migrations (serialization, ASIO, multi-index,
-  Spirit, multiprecision, wallet/daemon filesystem, wallet format strings)
-  tagged with `TODO(shekyl-v4)` in source. See `DOCUMENTATION_TODOS_AND_PQC.md`
+- **Upstream Monero cherry-pick verification**: Confirmed PRs #9628 (ASIO
+  `io_service` → `io_context`), #6690 (serialization overhaul), and #9544
+  (daemonizer chrono/thread) are already absorbed in our tree.
+- **Remaining deferred Boost areas**: Serialization overhaul, ASIO deep plumbing,
+  multi-index containers, Spirit parser, multiprecision, `net_ssl.cpp` filesystem,
+  `simplewallet.cpp` format strings, `boost::thread::attributes` (stack size).
+  Tagged with `TODO(shekyl-v4)` in source. See `DOCUMENTATION_TODOS_AND_PQC.md`
   section 1.11 for the full backlog.
 
 ### CI/CD and build system

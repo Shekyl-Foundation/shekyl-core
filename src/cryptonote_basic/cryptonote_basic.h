@@ -30,7 +30,7 @@
 
 #pragma once
 
-#include <boost/optional.hpp>
+#include <optional>
 #include <boost/variant.hpp>
 #include <boost/functional/hash/hash.hpp>
 #include <vector>
@@ -266,7 +266,7 @@ namespace cryptonote
   public:
     std::vector<std::vector<crypto::signature> > signatures; //count signatures  always the same as inputs count
     rct::rctSig rct_signatures;
-    boost::optional<pqc_authentication> pqc_auth;
+    std::optional<pqc_authentication> pqc_auth;
 
     // hash cash
     mutable crypto::hash hash;
@@ -504,7 +504,7 @@ namespace cryptonote
     transaction_prefix::set_null();
     signatures.clear();
     rct_signatures.type = rct::RCTTypeNull;
-    pqc_auth = boost::none;
+    pqc_auth = std::nullopt;
     set_hash_valid(false);
     set_prunable_hash_valid(false);
     set_blob_size_valid(false);

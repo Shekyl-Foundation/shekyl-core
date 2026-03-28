@@ -31,7 +31,7 @@
 
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/utility/string_ref.hpp>
-#include <boost/optional/optional.hpp>
+#include <optional>
 #include <cstdint>
 
 #include "common/expect.h"
@@ -72,7 +72,7 @@ namespace net
          * \return User and pass with percent encoding removed. `std::nullopt`
          *    if bad percent encoding
          */
-        static boost::optional<user_and_pass> get(boost::string_ref userinfo);
+        static std::optional<user_and_pass> get(boost::string_ref userinfo);
 
         std::string user;
         std::string pass;
@@ -92,7 +92,7 @@ namespace net
          *    percent encoding removed on user and pass. `std::nullopt` if
          *    bad percent encoding.
          */
-        static boost::optional<uri_components> get(boost::string_ref uri);
+        static std::optional<uri_components> get(boost::string_ref uri);
 
         std::string scheme;
         user_and_pass userinfo;

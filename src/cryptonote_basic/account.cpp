@@ -300,7 +300,7 @@ DISABLE_VS_WARNINGS(4244 4345)
     m_keys.m_account_address.m_spend_public_key = spend_public_key;
     m_keys.m_view_secret_key = view_secret_key;
     m_keys.m_spend_secret_key = spend_secret_key;
-    m_keys.m_pqc_secret_key.clear();
+    m_keys.m_pqc_secret_key.clear(); // PQ keys incompatible with multisig; v2 txs only
     m_keys.m_multisig_keys = multisig_keys;
     return crypto::secret_key_to_public_key(view_secret_key, m_keys.m_account_address.m_view_public_key);
   }

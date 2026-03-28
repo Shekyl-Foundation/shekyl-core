@@ -37,7 +37,7 @@
 #include <atomic>
 #include <algorithm>
 #include <boost/date_time/posix_time/posix_time.hpp>
-#include <boost/optional/optional_fwd.hpp>
+#include <optional>
 #include "net/net_utils_base.h"
 #include "crypto/hash.h"
 
@@ -98,7 +98,7 @@ namespace cryptonote
     //! Use this instead of `m_state = state_normal`.
     void set_state_normal();
 
-    boost::optional<crypto::hash> get_expected_hash(uint64_t height) const;
+    std::optional<crypto::hash> get_expected_hash(uint64_t height) const;
 
     state m_state;
     std::vector<std::pair<crypto::hash, uint64_t>> m_needed_objects;

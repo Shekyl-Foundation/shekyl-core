@@ -974,7 +974,7 @@ std::pair<bool, uint64_t> Blockchain::check_difficulty_checkpoints() const
   return {true, res};
 }
 //------------------------------------------------------------------
-size_t Blockchain::recalculate_difficulties(boost::optional<uint64_t> start_height_opt)
+size_t Blockchain::recalculate_difficulties(std::optional<uint64_t> start_height_opt)
 {
   if (m_fixed_difficulty)
   {

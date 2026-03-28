@@ -344,7 +344,7 @@ namespace crypto {
   // This handles use cases for both standard addresses and subaddresses
   //
   // NOTE: This generates old v1 proofs, and is for TESTING ONLY
-  void crypto_ops::generate_tx_proof_v1(const hash &prefix_hash, const public_key &R, const public_key &A, const boost::optional<public_key> &B, const public_key &D, const secret_key &r, signature &sig) {
+  void crypto_ops::generate_tx_proof_v1(const hash &prefix_hash, const public_key &R, const public_key &A, const std::optional<public_key> &B, const public_key &D, const secret_key &r, signature &sig) {
     // sanity check
     ge_p3 R_p3;
     ge_p3 A_p3;
@@ -420,7 +420,7 @@ namespace crypto {
   // This handles use cases for both standard addresses and subaddresses
   //
   // Generates only proofs for InProofV2 and OutProofV2
-  void crypto_ops::generate_tx_proof(const hash &prefix_hash, const public_key &R, const public_key &A, const boost::optional<public_key> &B, const public_key &D, const secret_key &r, signature &sig) {
+  void crypto_ops::generate_tx_proof(const hash &prefix_hash, const public_key &R, const public_key &A, const std::optional<public_key> &B, const public_key &D, const secret_key &r, signature &sig) {
     // sanity check
     ge_p3 R_p3;
     ge_p3 A_p3;
@@ -505,7 +505,7 @@ namespace crypto {
   }
 
   // Verify a proof: either v1 (version == 1) or v2 (version == 2)
-  bool crypto_ops::check_tx_proof(const hash &prefix_hash, const public_key &R, const public_key &A, const boost::optional<public_key> &B, const public_key &D, const signature &sig, const int version) {
+  bool crypto_ops::check_tx_proof(const hash &prefix_hash, const public_key &R, const public_key &A, const std::optional<public_key> &B, const public_key &D, const signature &sig, const int version) {
     // sanity check
     ge_p3 R_p3;
     ge_p3 A_p3;
