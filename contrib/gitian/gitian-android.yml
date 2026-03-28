@@ -91,6 +91,10 @@ script: |
   # gcc 7+ honors SOURCE_DATE_EPOCH, no faketime needed
   export SOURCE_DATE_EPOCH=`date -d 2000-01-01T12:00:00 +%s`
 
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  export PATH="$HOME/.cargo/bin:$PATH"
+  rustup target add aarch64-linux-android armv7-linux-androideabi
+
   git config --global core.abbrev 9
   cd shekyl
   # Set the version string that gets added to the tar archive name

@@ -73,10 +73,15 @@
   `.deb`, `.rpm`, `.zip`, and NSIS `.exe` installer artifacts on every `v*` tag.
 - Added `BuildRust.cmake` cross-compilation support: detects `CMAKE_SYSTEM_NAME`
   and `CMAKE_SYSTEM_PROCESSOR` to derive Rust target triples for Windows, macOS,
-  Android, and FreeBSD; automatically configures the MinGW linker for Windows
-  cross-compilation.
+  Android, FreeBSD, and Linux cross-targets (ARM, aarch64, i686, RISC-V);
+  automatically configures the MinGW linker for Windows cross-compilation.
 - Added Rust toolchain installation to all CI workflows (`build.yml`,
-  `depends.yml`, `release-tagged.yml`); required for `libshekyl_ffi.a` linking.
+  `depends.yml`, `release-tagged.yml`) and all 5 Gitian deterministic build
+  descriptors with appropriate cross-compilation targets; required for
+  `libshekyl_ffi.a` linking.
+- Fixed Gitian `gitian-build.py` to fetch tags explicitly (`--tags`) during
+  repository setup, preventing checkout failures for tag-based builds.
+- Fixed Doxygen project name from `Monero` to `Shekyl` in `cmake/Doxyfile.in`.
 - Replaced bundled Google Test 1.7.0 (2013) with CMake `FetchContent` for
   GoogleTest v1.16.0. Fixes `GTEST_SKIP` compilation errors on all platforms
   without a system gtest. Removes 34k lines of vendored source.

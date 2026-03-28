@@ -76,6 +76,10 @@ script: |
   create_per-host_faketime_wrappers "2000-01-01 12:00:00"
   export PATH=${WRAP_DIR}:${PATH}
 
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  export PATH="$HOME/.cargo/bin:$PATH"
+  rustup target add x86_64-apple-darwin aarch64-apple-darwin
+
   git config --global core.abbrev 9
   cd shekyl
   # Set the version string that gets added to the tar archive name

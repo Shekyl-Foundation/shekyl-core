@@ -115,6 +115,12 @@ script: |
   # gcc 7+ honors SOURCE_DATE_EPOCH, no faketime needed
   export SOURCE_DATE_EPOCH=`date -d 2000-01-01T12:00:00 +%s`
 
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  export PATH="$HOME/.cargo/bin:$PATH"
+  for target in armv7-unknown-linux-gnueabihf aarch64-unknown-linux-gnu i686-unknown-linux-gnu riscv64gc-unknown-linux-gnu; do
+    rustup target add $target
+  done
+
   git config --global core.abbrev 9
   cd shekyl
   # Set the version string that gets added to the tar archive name

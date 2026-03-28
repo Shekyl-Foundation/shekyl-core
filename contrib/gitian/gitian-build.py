@@ -184,7 +184,7 @@ def main():
         args.commit = subprocess.check_output(['git', 'show', '-s', '--format=%H', 'FETCH_HEAD'], universal_newlines=True).strip()
         args.version = 'pull-' + args.version
     print(args.commit)
-    subprocess.check_call(['git', 'fetch'])
+    subprocess.check_call(['git', 'fetch', '--tags'])
     try:
         subprocess.check_call(['git', 'checkout', args.commit])
     except subprocess.CalledProcessError:
