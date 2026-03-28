@@ -116,7 +116,7 @@ jobs:
         run: ${{env.APT_SET_CONF}}
       - name: update apt
         run: apt update
-      - name: install monero dependencies
+      - name: install build dependencies
         run: ${{env.APT_INSTALL_LINUX}}
       - name: install Rust
         run: ${{env.INSTALL_RUST}}
@@ -156,7 +156,7 @@ jobs:
         run: ${{env.APT_SET_CONF}}
       - name: update apt
         run: apt update
-      - name: install monero dependencies
+      - name: install build dependencies
         run: ${{env.APT_INSTALL_LINUX}}
       - name: install Rust
         run: ${{env.INSTALL_RUST}}
@@ -201,7 +201,7 @@ jobs:
         run: ${{env.APT_SET_CONF}}
       - name: update apt
         run: apt update
-      - name: install monero dependencies
+      - name: install build dependencies
         run: ${{env.APT_INSTALL_LINUX}}
       - name: install Rust
         run: ${{env.INSTALL_RUST}}

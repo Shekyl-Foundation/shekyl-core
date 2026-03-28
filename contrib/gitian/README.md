@@ -1,9 +1,9 @@
 Gitian building
 ================
 
-*Setup instructions for a Gitian build of Monero.*
+*Setup instructions for a Gitian build of Shekyl.*
 
-Gitian is the deterministic build process that is used to build the Monero CLI
+Gitian is the deterministic build process that is used to build the Shekyl CLI
 executables. It provides a way to be reasonably sure that the
 executables are really built from the git source. It also makes sure that
 the same, tested dependencies are used and statically built into the executable.
@@ -122,7 +122,7 @@ Initial Gitian Setup
 The `gitian-build.py` script will checkout different release tags, so it's best to copy it to the top level directory:
 
 ```bash
-cp monero/contrib/gitian/gitian-build.py .
+cp shekyl-core/contrib/gitian/gitian-build.py .
 ```
 
 ### Setup the required environment
@@ -133,7 +133,7 @@ Common setup part:
 su - gitianuser
 
 GH_USER=YOUR_GITHUB_USER_NAME
-VERSION=v0.18.4.5
+VERSION=v3.0.2
 ```
 
 Where `GH_USER` is your GitHub user name and `VERSION` is the version tag you want to build. 
@@ -153,11 +153,11 @@ Setup for docker:
 
 While gitian and this build script does provide a way for you to sign the build directly, it is recommended to sign in a separate step. This script is only there for convenience. Separate steps for building can still be taken.
 In order to sign gitian builds on your host machine, which has your PGP key, 
-fork the [gitian.sigs repository](https://github.com/monero-project/gitian.sigs) and clone it on your host machine, 
+fork the [gitian.sigs repository](https://github.com/Shekyl-Foundation/gitian.sigs) and clone it on your host machine, 
 or pass the signed assert file back to your build machine.
 
 ```bash
-git clone https://github.com/monero-project/gitian.sigs/
+git clone https://github.com/Shekyl-Foundation/gitian.sigs/
 pushd gitian.sigs
 git remote add $GH_USER https://github.com/$GH_USER/gitian.sigs
 popd
@@ -172,7 +172,7 @@ To build the most recent tag (pass in `--docker` if using docker):
 ./gitian-build.py --detach-sign --no-commit --build $GH_USER $VERSION
 ```
 
-To speed up the build, use `-j 5 --memory 10000` as the first arguments, where `5` is the number of CPU's you allocated to the VM plus one, and 10000 is a little bit less than then the MB's of RAM you allocated. If there is memory corruption on your machine, try to tweak these values. A good rule of thumb is, that Monero currently needs about 2 GB of RAM per core. 
+To speed up the build, use `-j 5 --memory 10000` as the first arguments, where `5` is the number of CPU's you allocated to the VM plus one, and 10000 is a little bit less than then the MB's of RAM you allocated. If there is memory corruption on your machine, try to tweak these values. A good rule of thumb is about 2 GB of RAM per core. 
 
 A full example for `docker` would look like the following:
 
@@ -206,7 +206,7 @@ popd
 Don't ignore the incorrect formatting of the found assert files. These files you'll have to compare manually (currently OSX and FreeBSD).
 
 
-You can also look in the [gitian.sigs](https://github.com/monero-project/gitian.sigs/) repo and / or [getmonero.org release checksums](https://web.getmonero.org/downloads/hashes.txt) to see if others got the same checksum for the same version tag.  If there is ever a mismatch -- **STOP! Something is wrong**.  Contact others on IRC / github to figure out what is going on.
+You can also look in the [gitian.sigs](https://github.com/Shekyl-Foundation/gitian.sigs/) repo to see if others got the same checksum for the same version tag.  If there is ever a mismatch -- **STOP! Something is wrong**.  Contact others on GitHub to figure out what is going on.
 
 
 Signing assert files
@@ -225,7 +225,7 @@ Submitting your signed assert files
 -----------------------------------
 
 Make a pull request (both the `.assert` and `.assert.sig` files) to the
-[monero-project/gitian.sigs](https://github.com/monero-project/gitian.sigs/) repository:
+[Shekyl-Foundation/gitian.sigs](https://github.com/Shekyl-Foundation/gitian.sigs/) repository:
 
 ```bash
 cd gitian.sigs
@@ -235,7 +235,7 @@ git commit -S -a -m "Add $GH_USER $VERSION"
 git push --set-upstream $GH_USER $VERSION
 ```
 
-**Note:** Please ensure your gpg public key is available to check signatures by adding it to the [gitian.sigs/gitian-pubkeys/](https://github.com/monero-project/gitian.sigs/tree/master/gitian-pubkeys) directory in a pull request.
+**Note:** Please ensure your gpg public key is available to check signatures by adding it to the [gitian.sigs/gitian-pubkeys/](https://github.com/Shekyl-Foundation/gitian.sigs/tree/master/gitian-pubkeys) directory in a pull request.
 
 
 More Build Options
@@ -243,7 +243,7 @@ More Build Options
 
 You can choose your own remote and commit hash by running for example:
 ```bash
-./gitian-build.py --detach-sign --no-commit --url https://github.com/moneromooo-monero/bitmonero -b moneromooo 1f5680c8db8f4cc7acc04a04c724b832003440fd
+./gitian-build.py --detach-sign --no-commit --url https://github.com/Shekyl-Foundation/shekyl-core -b your-signer v3.0.2
 ```
 
 Note that you won't be able to build commits authored before the gitian scripts

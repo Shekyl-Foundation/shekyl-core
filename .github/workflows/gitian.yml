@@ -36,10 +36,10 @@ jobs:
         chmod +x contrib/gitian/gitian-build.py
     - name: setup
       run: |
-        ./contrib/gitian/gitian-build.py --setup --docker github-actions ${{ github.ref_name }}
+        ./contrib/gitian/gitian-build.py --setup --docker --url https://github.com/${{ github.repository }} github-actions ${{ github.ref_name }}
     - name: build
       run: |
-        ./contrib/gitian/gitian-build.py --docker --detach-sign --no-commit --build -j 3 -o ${{ matrix.operating-system.option }} github-actions ${{ github.ref_name }}
+        ./contrib/gitian/gitian-build.py --docker --detach-sign --no-commit --build -j 3 -o ${{ matrix.operating-system.option }} --url https://github.com/${{ github.repository }} github-actions ${{ github.ref_name }}
     - name: post build
       run: |
         cd out/${{ github.ref_name }}

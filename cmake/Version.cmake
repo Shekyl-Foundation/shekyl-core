@@ -26,23 +26,35 @@
 # STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+# Development-build fallback when not building from a tag or tarball.
+# Update this before branching a new major/minor release series.
+set(SHEKYL_VERSION_DEFAULT "3.1.0")
+
 function (write_version tag)
-  set(VERSIONTAG "${tag}" CACHE STRING "The tag portion of the Monero software version" FORCE)
+  set(VERSIONTAG "${tag}" CACHE STRING "The tag portion of the Shekyl software version" FORCE)
   configure_file("${CMAKE_CURRENT_LIST_DIR}/../src/version.cpp.in" "${CMAKE_BINARY_DIR}/version.cpp")
 endfunction ()
 
 find_package(Git QUIET)
 if ("$Format:$" STREQUAL "")
-  # We're in a tarball; use hard-coded variables.
+  # Tarball build -- no git metadata available, use hardcoded default.
+  set(SHEKYL_VERSION "${SHEKYL_VERSION_DEFAULT}" CACHE STRING "Shekyl version" FORCE)
   set(VERSION_IS_RELEASE "true")
   write_version("release")
 elseif (GIT_FOUND OR Git_FOUND)
   message(STATUS "Found Git: ${GIT_EXECUTABLE}")
   include(GitVersion)
   get_version_tag_from_git("${GIT_EXECUTABLE}")
+  # Use tag-derived version when available, otherwise the dev default.
+  if(NOT SHEKYL_VERSION)
+    set(SHEKYL_VERSION "${SHEKYL_VERSION_DEFAULT}")
+  endif()
+  set(SHEKYL_VERSION "${SHEKYL_VERSION}" CACHE STRING "Shekyl version" FORCE)
+  message(STATUS "Shekyl version: ${SHEKYL_VERSION}")
   write_version("${VERSIONTAG}")
 else()
   message(STATUS "WARNING: Git was not found!")
+  set(SHEKYL_VERSION "${SHEKYL_VERSION_DEFAULT}" CACHE STRING "Shekyl version" FORCE)
   set(VERSION_IS_RELEASE "false")
   write_version("unknown")
 endif ()

@@ -38,8 +38,6 @@ function (get_version_tag_from_git GIT)
                     OUTPUT_STRIP_TRAILING_WHITESPACE)
 
     if(RET)
-        # Something went wrong, set the version tag to -unknown
-
         message(WARNING "Cannot determine current commit. Make sure that you are building either from a Git working tree or from a source archive.")
         set(VERSIONTAG "unknown")
         set(VERSION_IS_RELEASE "false")
@@ -47,25 +45,33 @@ function (get_version_tag_from_git GIT)
         string(SUBSTRING ${COMMIT} 0 9 COMMIT)
         message(STATUS "You are currently on commit ${COMMIT}")
 
-        # Get all the tags
         execute_process(COMMAND "${GIT}" tag -l --points-at HEAD
                         WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
                         RESULT_VARIABLE RET
                         OUTPUT_VARIABLE TAG
                         OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-        # Check if we're building that tagged commit or a different one
         if(TAG)
             message(STATUS "You are building a tagged release")
             set(VERSIONTAG "release")
             set(VERSION_IS_RELEASE "true")
+
+            # Extract version from the first v-prefixed tag (e.g. v3.0.2-RC1 → 3.0.2-RC1)
+            string(REGEX MATCH "v[^ \t\r\n]+" FIRST_VTAG "${TAG}")
+            if(FIRST_VTAG)
+                string(REGEX REPLACE "^v" "" SHEKYL_VERSION "${FIRST_VTAG}")
+                message(STATUS "Tag-derived version: ${SHEKYL_VERSION}")
+            endif()
         else()
             message(STATUS "You are ahead of or behind a tagged release")
             set(VERSIONTAG "${COMMIT}")
             set(VERSION_IS_RELEASE "false")
-        endif()	    
+        endif()
     endif()
 
     set(VERSIONTAG "${VERSIONTAG}" PARENT_SCOPE)
     set(VERSION_IS_RELEASE "${VERSION_IS_RELEASE}" PARENT_SCOPE)
+    if(SHEKYL_VERSION)
+        set(SHEKYL_VERSION "${SHEKYL_VERSION}" PARENT_SCOPE)
+    endif()
 endfunction()

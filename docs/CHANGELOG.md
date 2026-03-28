@@ -53,6 +53,21 @@
 
 ### CI/CD and build system
 
+- Fixed Gitian deterministic build pipeline: replaced all hardcoded Monero
+  repository URLs and internal package names with Shekyl equivalents across
+  `gitian-build.py`, all 5 gitian descriptor YAMLs, `dockrun.sh`, and the
+  `gitian.yml` GitHub Actions workflow. The workflow now passes `--url` to
+  ensure the correct repository is cloned. Added checkout error handling with
+  an actionable message when a tag/branch is missing.
+- Tag-driven versioning: `GitVersion.cmake` now extracts the version string
+  from git tags (e.g. `v3.0.2-RC1` → `3.0.2-RC1`). The hardcoded version in
+  `version.cpp.in` is replaced with the CMake-substituted `@SHEKYL_VERSION@`;
+  a default (`3.1.0`) is used for development builds not on a tag.
+  `Version.cmake` centralises the fallback default in `SHEKYL_VERSION_DEFAULT`.
+- Updated RPC version string validator (`rpc_version_str.cpp`) from Monero's
+  four-number format to Shekyl's three-number semver with optional pre-release
+  suffix (e.g. `3.0.2-RC1-release`).
+- Updated gitian descriptor names from Monero's `0.18` to Shekyl `3` series.
 - Added `release/tagged` GitHub Actions workflow: builds static Linux x86_64
   binaries, cross-compiles Windows x64 via MinGW, and produces `.tar.gz`,
   `.deb`, `.rpm`, `.zip`, and NSIS `.exe` installer artifacts on every `v*` tag.

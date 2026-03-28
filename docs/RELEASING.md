@@ -19,16 +19,22 @@ The CI workflows install all dependencies automatically. For local builds:
 
 ## Creating a Release
 
-1. **Update the version** in any relevant source files (e.g., `src/version.cpp.in`).
-
-2. **Tag the release** from `main`:
+1. **Tag the release** from `main`.  The version is derived automatically from
+   the tag name by CMake (see `cmake/GitVersion.cmake`), so there is no need
+   to manually edit `src/version.cpp.in`.
 
    ```bash
-   git tag -a v1.0.0 -m "Shekyl v1.0.0"
-   git push foundation v1.0.0
+   git tag -a v3.0.2 -m "Shekyl v3.0.2"
+   git push foundation v3.0.2
    ```
 
-3. **GitHub Actions takes over.** The `release/tagged` workflow automatically:
+   For pre-releases use a suffix: `v3.0.2-RC1`, `v3.0.2-alpha`, etc.
+
+2. **(Optional) Bump the dev default** -- after tagging, update
+   `SHEKYL_VERSION_DEFAULT` in `cmake/Version.cmake` to the next planned
+   version so that un-tagged development builds show the correct series.
+
+3. **GitHub Actions takes over.** The `release/tagged` and `gitian` workflows automatically:
    - Builds static Linux x86_64 binaries
    - Cross-compiles Windows x64 binaries via MinGW
    - Packages Linux as `.tar.gz`, `.deb`, and `.rpm`
@@ -40,8 +46,8 @@ The CI workflows install all dependencies automatically. For local builds:
 
 ## Tag Naming
 
-- Release tags: `v1.0.0`, `v1.0.1`, `v1.1.0`
-- Pre-release tags: `v1.0.0-RC1`, `v1.0.0-alpha`, `v1.0.0-beta`
+- Release tags: `v3.0.2`, `v3.0.3`, `v3.1.0`
+- Pre-release tags: `v3.0.2-RC1`, `v3.1.0-alpha`, `v3.1.0-beta`
 - Tags containing `RC`, `alpha`, or `beta` are automatically marked as pre-releases
 
 ## Release Artifacts
