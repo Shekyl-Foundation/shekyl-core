@@ -2,18 +2,17 @@
 
 #include <stdint.h>
 #include <string>
-#include <string_view>
 #include <array>
 #include <algorithm>
 #include <iterator>
-#include <optional>
 #include <iosfwd>
+
+#include <boost/optional/optional.hpp>
 
 namespace tools
 {
     enum class fee_priority : uint32_t
     {
-        // If adding or removing an enumeration, ensure to update enums and fee_priority_strings in the class below.
         Default = 0,
         Unimportant, /* Low */
         Normal, /* Medium */
@@ -25,11 +24,17 @@ namespace tools
 
     namespace fee_priority_utilities
     {
-        using EnumStringsType = std::array<std::string_view, 5>;
-        using EnumsType = std::array<fee_priority, 5>;
+        inline const std::array<std::string, 5>& fee_priority_strings()
+        {
+            static const std::array<std::string, 5> s = {{ "default", "unimportant", "normal", "elevated", "priority" }};
+            return s;
+        }
 
-        inline constexpr EnumStringsType fee_priority_strings = { { "default", "unimportant", "normal", "elevated", "priority" } };
-        inline constexpr EnumsType enums = { { fee_priority::Default, fee_priority::Unimportant, fee_priority::Normal, fee_priority::Elevated, fee_priority::Priority } };
+        inline const std::array<fee_priority, 5>& enums()
+        {
+            static const std::array<fee_priority, 5> e = {{ fee_priority::Default, fee_priority::Unimportant, fee_priority::Normal, fee_priority::Elevated, fee_priority::Priority }};
+            return e;
+        }
 
         inline fee_priority decrease(const fee_priority priority)
         {
@@ -52,12 +57,9 @@ namespace tools
 
         inline constexpr fee_priority from_integral(const uint32_t priority)
         {
-            if (priority >= as_integral(fee_priority::Priority))
-            {
-                return fee_priority::Priority;
-            }
-
-            return static_cast<fee_priority>(priority);
+            return (priority >= as_integral(fee_priority::Priority))
+                ? fee_priority::Priority
+                : static_cast<fee_priority>(priority);
         }
 
         inline bool is_valid(const uint32_t priority)
@@ -87,7 +89,6 @@ namespace tools
 
         inline fee_priority clamp_modified(const fee_priority priority)
         {
-            /* Map Default to an actionable priority. */
             if (priority == fee_priority::Default)
             {
                 return fee_priority::Unimportant;
@@ -98,20 +99,21 @@ namespace tools
             }
         }
 
-        inline std::string_view to_string(const fee_priority priority)
+        inline const std::string& to_string(const fee_priority priority)
         {
             const auto integralValue = as_integral(clamp(priority));
-            return fee_priority_strings.at(integralValue);
+            return fee_priority_strings().at(integralValue);
         }
 
-        inline std::optional<fee_priority> from_string(const std::string& str)
+        inline boost::optional<fee_priority> from_string(const std::string& str)
         {
-            const auto strIterator = std::find(fee_priority_strings.begin(), fee_priority_strings.end(), str);
-            if (strIterator == fee_priority_strings.end())
-                return std::nullopt;
+            const auto& strings = fee_priority_strings();
+            const auto strIterator = std::find(strings.begin(), strings.end(), str);
+            if (strIterator == strings.end())
+                return boost::none;
 
-            const auto distance = std::distance(fee_priority_strings.begin(), strIterator);
-            return enums.at(distance);
+            const auto distance = std::distance(strings.begin(), strIterator);
+            return enums().at(distance);
         }
 
     }

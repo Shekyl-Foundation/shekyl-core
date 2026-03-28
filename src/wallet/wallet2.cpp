@@ -7599,24 +7599,7 @@ void wallet2::commit_tx(pending_tx& ptx)
 {
   using namespace cryptonote;
   
-  if(m_light_wallet) 
   {
-    cryptonote::COMMAND_RPC_SUBMIT_RAW_TX::request oreq;
-    cryptonote::COMMAND_RPC_SUBMIT_RAW_TX::response ores;
-    oreq.address = get_account().get_public_address_str(m_nettype);
-    oreq.view_key = string_tools::pod_to_hex(unwrap(unwrap(get_account().get_keys().m_view_secret_key)));
-    oreq.tx = epee::string_tools::buff_to_hex_nodelimer(tx_to_blob(ptx.tx));
-    {
-      const boost::lock_guard<boost::recursive_mutex> lock{m_daemon_rpc_mutex};
-      bool r = epee::net_utils::invoke_http_json("/submit_raw_tx", oreq, ores, *m_http_client, rpc_timeout, "POST");
-      THROW_WALLET_EXCEPTION_IF(!r, error::no_connection_to_daemon, "submit_raw_tx");
-      // MyMonero and OpenMonero use different status strings
-      THROW_WALLET_EXCEPTION_IF(ores.status != "OK" && ores.status != "success" , error::tx_rejected, ptx.tx, get_rpc_status(ores.status), ores.error);
-    }
-  }
-  else
-  {
-    // Normal submit
     COMMAND_RPC_SEND_RAW_TX::request req;
     req.tx_as_hex = epee::string_tools::buff_to_hex_nodelimer(tx_to_blob(ptx.tx));
     req.do_not_relay = false;
@@ -8579,7 +8562,7 @@ uint64_t wallet2::get_fee_multiplier(fee_priority priority, fee_algorithm fee_al
   }
 
   const auto fee_algorithm_index = fee_algorithm_utilities::as_integral(fee_algorithm);
-  THROW_WALLET_EXCEPTION_IF(fee_algorithm_index < 0 || fee_algorithm_index > static_cast<int>(std::size(fee_steps)), error::invalid_priority);
+  THROW_WALLET_EXCEPTION_IF(fee_algorithm_index < 0 || fee_algorithm_index > static_cast<int>(sizeof(fee_steps)/sizeof(fee_steps[0])), error::invalid_priority);
 
   // 1 to 3/4 are allowed as priorities
   const fee_priority max_priority = fee_steps[fee_algorithm_index].maximum_priority;
@@ -11799,7 +11782,7 @@ uint64_t wallet2::get_staked_balance(uint64_t current_height) const
   return total;
 }
 //----------------------------------------------------------------------------------------------------
-std::vector<wallet2::pending_tx> wallet2::create_staking_transaction(uint8_t tier, uint64_t amount, uint32_t priority, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices)
+std::vector<wallet2::pending_tx> wallet2::create_staking_transaction(uint8_t tier, uint64_t amount, fee_priority priority, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices)
 {
   THROW_WALLET_EXCEPTION_IF(tier > 2, error::wallet_internal_error, "Staking tier must be 0, 1, or 2");
   THROW_WALLET_EXCEPTION_IF(amount == 0, error::wallet_internal_error, "Staking amount must be greater than 0");
@@ -11945,7 +11928,7 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
   return ptx_vector;
 }
 //----------------------------------------------------------------------------------------------------
-std::vector<wallet2::pending_tx> wallet2::create_unstake_transaction(const std::vector<size_t>& staked_indices, uint32_t priority)
+std::vector<wallet2::pending_tx> wallet2::create_unstake_transaction(const std::vector<size_t>& staked_indices, fee_priority priority)
 {
   THROW_WALLET_EXCEPTION_IF(staked_indices.empty(), error::wallet_internal_error, "No staked outputs to unstake");
 

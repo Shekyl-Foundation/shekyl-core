@@ -2448,7 +2448,7 @@ namespace tools
 
     try
     {
-      auto ptx_vector = m_wallet->create_staking_transaction(req.tier, req.amount, req.priority, 0, {});
+      auto ptx_vector = m_wallet->create_staking_transaction(req.tier, req.amount, fee_priority_utilities::from_integral(req.priority), 0, {});
       if (ptx_vector.empty())
       {
         er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
@@ -2487,7 +2487,7 @@ namespace tools
         er.message = "No matured staked outputs available for unstaking";
         return false;
       }
-      auto ptx_vector = m_wallet->create_unstake_transaction(matured, req.priority);
+      auto ptx_vector = m_wallet->create_unstake_transaction(matured, fee_priority_utilities::from_integral(req.priority));
       if (ptx_vector.empty())
       {
         er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;

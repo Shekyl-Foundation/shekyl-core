@@ -175,7 +175,7 @@ static std::string get_human_readable_timespan(uint64_t seconds);
 
 namespace
 {
-  constexpr std::array<std::string_view, 5> allowed_priority_strings = tools::fee_priority_utilities::fee_priority_strings;
+  const auto& allowed_priority_strings = tools::fee_priority_utilities::fee_priority_strings();
   const auto arg_wallet_file = wallet_args::arg_wallet_file();
   const auto arg_rpc_client_secret_key = wallet_args::arg_rpc_client_secret_key();
   const command_line::arg_descriptor<std::string> arg_generate_new_wallet = {"generate-new-wallet", sw::tr("Generate new wallet and save it to <arg>"), ""};
@@ -1045,7 +1045,7 @@ bool simple_wallet::print_fee_info(const std::vector<std::string> &args/* = std:
   message_writer() << (boost::format(tr("Current fee is %s %s per %s")) % print_money(base_fee) % cryptonote::get_unit(cryptonote::get_default_decimal_point()) % base).str();
 
   std::vector<uint64_t> fees;
-  for (const auto priority : tools::fee_priority_utilities::enums)
+  for (const auto priority : tools::fee_priority_utilities::enums())
   {
     if (priority == fee_priority::Default)
       continue;
@@ -1069,7 +1069,7 @@ bool simple_wallet::print_fee_info(const std::vector<std::string> &args/* = std:
     return true;
   }
 
-  for (const auto priority : tools::fee_priority_utilities::enums)
+  for (const auto priority : tools::fee_priority_utilities::enums())
   {
     if (priority == tools::fee_priority::Default)
       continue;
@@ -6493,7 +6493,7 @@ bool simple_wallet::stake_coins(const std::vector<std::string>& args)
 
   try
   {
-    auto ptx_vector = m_wallet->create_staking_transaction(tier, amount, m_current_subaddress_account, 0, {});
+    auto ptx_vector = m_wallet->create_staking_transaction(tier, amount, fee_priority::Default, m_current_subaddress_account, {});
     if (ptx_vector.empty())
     {
       fail_msg_writer() << tr("no transaction was created");
@@ -6571,7 +6571,7 @@ bool simple_wallet::unstake_coins(const std::vector<std::string>& args)
 
   try
   {
-    auto ptx_vector = m_wallet->create_unstake_transaction(matured, 0);
+    auto ptx_vector = m_wallet->create_unstake_transaction(matured, fee_priority::Default);
     if (ptx_vector.empty())
     {
       fail_msg_writer() << tr("no transaction was created");

@@ -48,7 +48,7 @@ namespace net
             {
                 if (out.size() - pos < 3)
                     return false;
-                if (!epee::from_hex::to_buffer({reinterpret_cast<std::uint8_t*>(out.data()) + pos, 1}, {out.data() + pos + 1, 2}))
+                if (!epee::from_hex::to_buffer({reinterpret_cast<std::uint8_t*>(&out[0]) + pos, 1}, {out.data() + pos + 1, 2}))
                     return false;
                 out.erase(pos + 1, 2);
                 pos = out.find('%', pos + 1);
@@ -90,10 +90,10 @@ namespace net
         hostport.assign(authority.data(), authority.size());
     }
 
-    std::optional<user_and_pass> user_and_pass::get(boost::string_ref userinfo)
+    boost::optional<user_and_pass> user_and_pass::get(boost::string_ref userinfo)
     {
-        static_assert(std::is_same<std::string::size_type, boost::string_ref::size_type>());
-        std::optional<user_and_pass> out{std::in_place};
+        static_assert(std::is_same<std::string::size_type, boost::string_ref::size_type>::value, "");
+        boost::optional<user_and_pass> out{user_and_pass{}};
 
         const auto split = userinfo.find(':');
         if (split != boost::string_ref::npos)
@@ -110,18 +110,18 @@ namespace net
         out->pass.assign(userinfo.data(), userinfo.size());
         if (percent_decoding(out->user) && percent_decoding(out->pass))
             return out;
-        return std::nullopt;
+        return boost::none;
     }
 
-    std::optional<uri_components> uri_components::get(const boost::string_ref uri)
+    boost::optional<uri_components> uri_components::get(const boost::string_ref uri)
     {
         scheme_and_authority result1{uri};
         userinfo_and_hostport result2{result1.authority};
         auto result3 = user_and_pass::get(result2.userinfo);
         if (!result3)
-            return std::nullopt;
+            return boost::none;
 
-        std::optional<uri_components> out{std::in_place};
+        boost::optional<uri_components> out{uri_components{}};
         out->scheme = std::move(result1.scheme);
         out->userinfo = std::move(*result3);
         out->hostport = std::move(result2.hostport);

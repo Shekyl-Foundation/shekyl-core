@@ -126,7 +126,7 @@ namespace tools {
     return read_varint<std::numeric_limits<T>::digits>(std::forward<InputIt>(first), std::forward<InputIt>(last), i);
   }
 
-  template <typename T, typename = std::enable_if_t<std::is_integral_v<T> && std::is_unsigned_v<T>>>
+  template <typename T, typename = typename std::enable_if<std::is_integral<T>::value && std::is_unsigned<T>::value>::type>
   constexpr std::size_t get_varint_byte_size(T val) {
     std::size_t bytes = 0;
     do {
