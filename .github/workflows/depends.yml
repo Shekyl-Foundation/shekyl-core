@@ -16,8 +16,8 @@ env:
     Acquire::ftp::Timeout "120";
     EOF
   CCACHE_SETTINGS: |
-        ccache --max-size=150M
-        ccache --set-config=compression=true
+    ccache --max-size=150M
+    ccache --set-config=compression=true
 
 jobs:
   build-cross:

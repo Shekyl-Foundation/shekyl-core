@@ -1,2 +1,2 @@
 .git* export-ignore
-version.cmake export-subst
+cmake/Version.cmake export-subst
