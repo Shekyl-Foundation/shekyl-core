@@ -160,6 +160,46 @@
 - Added Linux packaging files: `contrib/packaging/linux/shekyld.service`
   (systemd unit) and `contrib/packaging/windows/shekyl.nsi` (NSIS installer).
 
+### Upstream Monero sync (March 2026)
+
+Cherry-picked 62 upstream Monero commits (from `monero-project/monero` master)
+across five risk-phased integration rounds. Key improvements absorbed:
+
+- **Wallet**: Fee priority refactoring (`fee_priority` enum + utility functions),
+  improved subaddress lookahead logic, `set_subaddress_lookahead` RPC endpoint
+  (no longer requires password), incoming transfers without daemon connection,
+  HTTP body size limit, fast refresh checkpoint fix, ring index sanity checks,
+  `find_and_save_rings()` deprecation, pool spend identification during scan.
+- **Daemon/RPC**: Dynamic `print_connections` column width, ZMQ IPv6 support,
+  dynamic base fee estimates via ZMQ, `getblocks.bin` start height validation,
+  CryptoNight v1 error reporting, batch key image existence check, blockchain
+  prune DB version handling, removed `COMMAND_RPC_SUBMIT_RAW_TX` (light wallet
+  deprecated).
+- **P2P/Network**: Removed `state_idle` connection state, fixed inverted peerlist
+  ternary, removed `#pragma pack` from protocol defs, connection patches for
+  reliability, dynamic block sync span limits.
+- **Crypto/Serialization**: Fixed invalid `constexpr` on hash functions, added
+  `hash_combine.h`, aligned container pod-as-blob serialization, fixed
+  `apply_permutation()` for `std::vector<bool>`.
+- **Build system**: Removed iwyu/MSVC/obsolete CMake targets, added
+  `MANUAL_SUBMODULES` cache option, Trezor protobuf 30 compatibility, fixed
+  `FetchContent`/`ExternalProject` cmake usage.
+- **Tests**: New unit tests for format utils, threadpool, varint, logging,
+  serialization static asserts, cold signing functional test fixes.
+- **Misc**: Boost ASIO 1.87+ compatibility, fixed Trezor temporary binding,
+  fixed multisig key exchange intermediate message update, `constexpr`
+  `cn_variant1_check`, extra nonce length fix, removed redundant BP consensus rule.
+
+Skipped commits (deferred to future integration): input verification caching
+(conflicts with `txin_stake_claim`/PQC), `wallet_keys_unlocker` refactoring,
+`get_txids_loose` DB API (missing prerequisite), complex subaddress lookahead
+fixes, and several CMake/depends version bumps that conflict with Shekyl's
+build system divergences.
+
+All cherry-picked code adapted to C++14 compatibility (our standard); upstream
+C++17 features (`std::optional`, `std::string_view`, `std::size()`,
+`inline constexpr` variables) replaced with Boost/C++14 equivalents.
+
 ### Documentation and operations
 
 - Added `utils/systemd/shekyld.service` for Shekyl-native daemon service
