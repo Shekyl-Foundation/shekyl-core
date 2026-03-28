@@ -61,7 +61,7 @@
   - [ ] Project downloads page updated
   - [ ] Update hashes.txt on website
   - [ ] Update downloads.yml on website
-  - [ ] Update auto-update DNS records
+  - [ ] Update auto-update DNS records on all 5 TLDs (see `shekyl-dev/docs/DNS_CONFIG.md`)
   - [ ] Update redirects on downloads box
   - [ ] Update seed nodes
 - [ ] GUI released (if applicable)
@@ -69,7 +69,7 @@
   - [ ] Update hashes.txt on website
   - [ ] Update hashes.txt.sig on website
   - [ ] Update downloads.yml on website
-  - [ ] Update auto-update DNS records
+  - [ ] Update auto-update DNS records on all 5 TLDs (see `shekyl-dev/docs/DNS_CONFIG.md`)
   - [ ] Update redirects on downloads box
 - [ ] Release Announcements
   - [ ] Shekyl announcement mailer notice
