@@ -15,6 +15,41 @@ PQC note:
 - the PQC transaction/authentication structure is specified in
   `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
+### Measured v3 Impact on Anonymity Networks
+
+`TransactionV3` adds ~5,385 bytes of `pqc_auth` material per user transaction
+(see `docs/V3_ROLLOUT.md` for exact component sizes). Practical consequences
+for anonymity relay:
+
+- A typical 2-in/2-out RingCT transaction grows from ~2–3 KB to ~7–8 KB.
+- On Tor, a single cell is 512 bytes; a v3 transaction spans ~14–16 cells
+  vs ~4–6 cells pre-PQC. The burst pattern is more distinctive.
+- On I2P, tunnel messages are 1 KB; the same transaction requires ~7–8
+  fragments vs ~2–3.
+- Fragmented Levin messages (white noise feature) help pad smaller payloads
+  but cannot conceal large-burst events unless dummy traffic volume is
+  proportionally increased.
+
+### Known Leak Vectors vs Mitigations Matrix
+
+| Leak vector | Severity | Current mitigation | Residual risk |
+|---|---|---|---|
+| Timestamp correlation (timed sync) | Medium | System clock accuracy; future random offset | Fingerprintable if clock is skewed |
+| ISP link timing (intermittent sync) | Medium | Keep `shekyld` running continuously | Users who sync-send-quit are linkable |
+| Active bandwidth shaping | High | I2P preferred (non-circuit) | Tor circuits remain vulnerable |
+| Stream reuse (2+ tx same circuit) | Medium | Outgoing-only selection, 5-min rotation, 20-min change lock time | Small fixed outgoing pool → non-trivial reuse probability |
+| v3 tx size burst (new) | Medium | Fragmentation + dummy messages | Burst pattern still larger than pre-PQC; requires tuning dummy volume |
+| Levin 8-byte signature (DPI) | Low | SSL/BIP-151/Noise proposals | Not yet implemented; clearnet traffic is identifiable |
+
+### Recommended Pre-Mainnet Testing
+
+1. Replay a representative testnet transaction mix over Tor and I2P, measuring
+   circuit-level timing and cell/fragment counts before and after v3.
+2. Measure the ratio of real-to-dummy Levin messages required to make v3
+   bursts statistically indistinguishable from pre-PQC traffic.
+3. Validate that the 5-minute outgoing-connection rotation is sufficient given
+   the higher per-tx relay time for v3 payloads.
+
 
 ## Behavior
 

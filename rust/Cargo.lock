@@ -363,6 +363,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-economics-sim"
+version = "2.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "shekyl-economics",
+]
+
+[[package]]
 name = "shekyl-ffi"
 version = "2.0.0"
 dependencies = [

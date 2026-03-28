@@ -505,8 +505,8 @@ The following parameters were tuned via simulation sweeps and are now resolved (
 | `STAKER_EMISSION_DECAY` | **Resolved: 0.90/yr** | Tested against 0.80–1.0; 0.90 balances bootstrap with miner recovery |
 | `RELEASE_MIN / MAX` | **Resolved: 0.8 / 1.3** | Tight enough to limit stuffing, wide enough for demand response |
 | `BURN_CAP` | **Resolved: 90%** | High ceiling for mature chain, rarely reached in practice |
-| `tx_baseline` | **Pending** | Set from testnet data; simulation used 50 tx/block |
-| `FINAL_SUBSIDY_PER_MINUTE` | **Pending** | Tail emission floor; set from testnet economics |
+| `tx_baseline` | **Provisional: 50** | Validated by 8-scenario simulation sweep; locked pending testnet confirmation |
+| `FINAL_SUBSIDY_PER_MINUTE` | **Provisional: 300,000,000** | 0.3 SHEKYL/min floor; validated by late-tail simulation; locked pending testnet confirmation |
 | Lock tier durations | **Resolved** | 1,000 / 25,000 / 150,000 blocks |
 | Lock tier multipliers | **Resolved** | 1.0x / 1.5x / 2.0x |
 
@@ -520,6 +520,16 @@ The following parameters were tuned via simulation sweeps and are now resolved (
 6. **Mass unstaking event:** 80% of stakers unlocking within one epoch.
 7. **Chain bootstrap:** First 2 years from genesis with very low organic transaction volume.
 8. **Late-chain tail state:** 95%+ supply emitted, high burn, fee-market-dominated economy.
+
+### Simulation harness
+
+All eight scenarios above are implemented in `rust/shekyl-economics-sim/` and can be re-run with:
+
+```
+cargo run --package shekyl-economics-sim > docs/economics_sim_results.json
+```
+
+The harness uses the same formulas as the production `shekyl-economics` crate, driven from `config/economics_params.json`. The latest results are archived in `docs/economics_sim_results.json` for reproducibility and CI comparison.
 
 ---
 
@@ -551,7 +561,7 @@ The following values are derived from simulation sweeps across ESF, burn rate, s
 | `DISPLAY_DECIMAL_POINT` | 9 | Core/wallet canonical display; parse/print aligns with `COIN = 10^9` |
 | `EMISSION_SPEED_FACTOR` | 22 | 50% emitted ~year 11, 80% ~year 25 |
 | `BLOCK_TIME_TARGET` | 120 seconds | Standard CryptoNote 2-minute blocks |
-| `FINAL_SUBSIDY_PER_MINUTE` | TBD (atomic units) | Tail emission floor; set from testnet economics |
+| `FINAL_SUBSIDY_PER_MINUTE` | 300,000,000 (atomic units) | 0.3 SHEKYL/min tail floor; provisional, locked pending testnet |
 
 ### Release rate (Component 1)
 
@@ -560,7 +570,7 @@ The following values are derived from simulation sweeps across ESF, burn rate, s
 | `RELEASE_MULTIPLIER_MIN` | 0.8 | Floor: low activity slows emission by up to 20% |
 | `RELEASE_MULTIPLIER_MAX` | 1.3 | Ceiling: high activity accelerates emission by up to 30% |
 | `RELEASE_WINDOW_BLOCKS` | 720 | Rolling average window (~1 day at 2-min blocks) |
-| `TX_VOLUME_BASELINE` | TBD | Set from testnet data; target ~50 tx/block equivalent |
+| `TX_VOLUME_BASELINE` | 50 | ~50 tx/block equivalent; provisional, locked pending testnet |
 
 ### Adaptive burn (Component 2)
 
@@ -657,7 +667,102 @@ RELEASE_MIN/MAX ◄── tx volume ──────┤
 
 ---
 
-## 14) References
+## 14) Research Appendix: Reward-Driven Privacy Enhancement
+
+### Hypothesis
+
+Block rewards (both PoW and staker emission) create fresh UTXOs with no
+spending history. If the reward disbursement path is designed with privacy as
+a first-class constraint, these outputs could function as a built-in mixing
+layer — every block injects "clean" coins into circulation, increasing the
+effective anonymity set for all participants.
+
+### Candidate Mechanisms
+
+#### A. Delayed and Randomized Miner Reward Maturation
+
+Currently, coinbase outputs have a fixed unlock delay. If the unlock time
+were drawn from a random distribution (e.g., uniform over a configurable
+window), an observer could not predict when a specific miner reward becomes
+spendable. This desynchronizes miner-spend timing from block-found timing.
+
+**Privacy gain:** Reduces temporal correlation between "block mined at height
+H" and "coinbase output spent at height H+N."
+
+**Risk:** Miners need predictable cash flow. A wide random window hurts
+operational planning. Bounded randomness (e.g., base delay +/- 10%) is more
+practical.
+
+#### B. Staker Claim Batching and Route Obfuscation
+
+Staker rewards are currently claimed via `txin_stake_claim`. If the protocol
+encouraged (or mandated) batch claiming at coarser intervals — e.g., once
+per epoch rather than per block — the claim transactions become less frequent
+and less attributable to specific staking events.
+
+**Privacy gain:** Reduces the number of on-chain events that link a staker
+identity to a specific accrual period.
+
+**Risk:** Delayed claiming increases the staker pool balance and creates a
+larger target for accounting confusion. Batching must be exact or the pool
+will drift.
+
+#### C. Reward Output Shaping
+
+Instead of a single coinbase output per miner, the miner transaction could
+split the reward into K outputs of randomized denomination (summing to the
+correct total). These outputs enter the UTXO set as potential decoy ring
+members for future transactions.
+
+**Privacy gain:** More coinbase-shaped outputs in the UTXO set increase the
+ring decoy pool quality. Transactions spending miner rewards become harder
+to distinguish from non-miner transactions.
+
+**Risk:** Increases coinbase transaction size and adds consensus complexity.
+Anti-sybil enforcement is needed to prevent miners from creating outputs
+that only they can distinguish.
+
+### Hard Constraints (Do-Not-Break)
+
+Any reward-privacy mechanism must satisfy all of the following:
+
+1. **No anonymity-set regression.** The change must not reduce the effective
+   ring size or stealth-address unlinkability for any participant.
+2. **No stuffing vector reintroduction.** The mechanism must not create a new
+   profitable strategy for inflating transaction volume or manipulating reward
+   timing.
+3. **No hidden inflation or accounting ambiguity.** Total mined + staker
+   rewards must remain exactly verifiable from the chain. No probabilistic
+   or approximate accounting.
+4. **No key material exposure.** Per the PQC security policy, secret keys
+   must never be logged, serialized to plaintext, or exposed in error paths.
+5. **No consensus fragility.** Randomized parameters must have deterministic
+   seeds derived from block data so all validators produce identical results.
+
+### Adversarial Analysis Summary
+
+| Mechanism | Stuffing risk | Sybil risk | Inflation risk | Complexity |
+|---|---|---|---|---|
+| Random maturation delay | None (delay only) | None | None | Low |
+| Claim batching | None | Low (timing alignment) | None if exact | Medium |
+| Reward output shaping | Low (K is bounded) | Medium (distinguishable outputs) | None if sum-checked | High |
+
+### Recommendation
+
+**Random maturation delay** is low-risk and can be evaluated for v3 or early
+v4. **Claim batching** is a natural fit for the staker reward redesign
+already planned in the v4 privacy phase. **Reward output shaping** requires
+significantly more research and should only be considered after lattice-based
+ring signatures are available (V4-B or later), as the privacy benefit depends
+on ring decoy quality.
+
+**Gate:** Promote to protocol proposal only if simulation confirms a
+measurable privacy gain (e.g., >20% increase in effective anonymity set size
+for typical spend patterns) with zero regression on the hard constraints above.
+
+---
+
+## 15) References
 
 ### Protocol and ecosystem docs
 

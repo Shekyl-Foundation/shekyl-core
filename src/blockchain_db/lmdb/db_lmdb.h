@@ -430,6 +430,8 @@ private:
   virtual void remove_staker_accrual(uint64_t height) override;
   virtual void set_staker_pool_balance(uint64_t balance) override;
   virtual uint64_t get_staker_pool_balance() const override;
+  virtual void set_total_burned(uint64_t amount) override;
+  virtual uint64_t get_total_burned() const override;
   virtual void set_staker_claim_watermark(uint64_t output_index, uint64_t last_claimed_height) override;
   virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const override;
   virtual void remove_staker_claim_watermark(uint64_t output_index) override;

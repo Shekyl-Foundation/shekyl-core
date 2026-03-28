@@ -4607,11 +4607,11 @@ BlockchainDB::staker_accrual_record BlockchainLMDB::get_staker_accrual(uint64_t 
   MDB_val v;
   auto get_result = mdb_get(m_txn, m_staker_accrual, &k, &v);
   if (get_result == MDB_NOTFOUND)
-    return {0, 0, 0};
+    return {0, 0, 0, 0};
   if (get_result)
     throw0(DB_ERROR(lmdb_error("Failed to get staker accrual: ", get_result).c_str()));
-  staker_accrual_record record;
-  memcpy(&record, v.mv_data, sizeof(record));
+  staker_accrual_record record = {0, 0, 0, 0};
+  memcpy(&record, v.mv_data, std::min(v.mv_size, sizeof(record)));
   TXN_POSTFIX_RDONLY();
   return record;
 }
@@ -4661,6 +4661,42 @@ uint64_t BlockchainLMDB::get_staker_pool_balance() const
   memcpy(&balance, v.mv_data, sizeof(balance));
   TXN_POSTFIX_RDONLY();
   return balance;
+}
+
+void BlockchainLMDB::set_total_burned(uint64_t amount)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  const std::string key = "total_burned";
+  MDB_val k = {key.size(), (void *)key.data()};
+  MDB_val v = {sizeof(amount), (void *)&amount};
+  int result = mdb_put(*m_write_txn, m_properties, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to set total burned: ", result).c_str()));
+}
+
+uint64_t BlockchainLMDB::get_total_burned() const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  const std::string key = "total_burned";
+  MDB_val k = {key.size(), (void *)key.data()};
+  MDB_val v;
+  auto get_result = mdb_get(m_txn, m_properties, &k, &v);
+  if (get_result == MDB_NOTFOUND)
+  {
+    TXN_POSTFIX_RDONLY();
+    return 0;
+  }
+  if (get_result)
+    throw0(DB_ERROR(lmdb_error("Failed to get total burned: ", get_result).c_str()));
+  uint64_t amount;
+  memcpy(&amount, v.mv_data, sizeof(amount));
+  TXN_POSTFIX_RDONLY();
+  return amount;
 }
 
 void BlockchainLMDB::set_staker_claim_watermark(uint64_t output_index, uint64_t last_claimed_height)

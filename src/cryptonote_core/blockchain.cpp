@@ -688,11 +688,19 @@ block Blockchain::pop_block_from_blockchain()
     const uint64_t popped_height = m_db->height();
     auto accrual = m_db->get_staker_accrual(popped_height);
     uint64_t accrued = accrual.staker_emission + accrual.staker_fee_pool;
-    if (accrued > 0)
+    if (accrued > 0 || accrual.actually_destroyed > 0)
     {
       uint64_t pool_balance = m_db->get_staker_pool_balance();
       pool_balance = (accrued <= pool_balance) ? pool_balance - accrued : 0;
       m_db->set_staker_pool_balance(pool_balance);
+
+      if (accrual.actually_destroyed > 0)
+      {
+        uint64_t total_burned = m_db->get_total_burned();
+        total_burned = (accrual.actually_destroyed <= total_burned) ? total_burned - accrual.actually_destroyed : 0;
+        m_db->set_total_burned(total_burned);
+      }
+
       m_db->remove_staker_accrual(popped_height);
     }
   }
@@ -1911,6 +1919,12 @@ uint64_t Blockchain::get_stake_ratio(uint64_t height) const
   }
 
   return shekyl_calc_stake_ratio(m_stake_ratio_cache_total_staked, circulating_supply);
+}
+//------------------------------------------------------------------
+uint64_t Blockchain::get_total_staked(uint64_t height) const
+{
+  get_stake_ratio(height);
+  return m_stake_ratio_cache_total_staked;
 }
 //------------------------------------------------------------------
 // for an alternate chain, get the timestamps from the main chain to complete
@@ -4817,11 +4831,19 @@ leave:
     accrual_record.staker_emission = em_split.staker_emission;
     accrual_record.staker_fee_pool = burn.staker_pool_amount;
     accrual_record.total_weighted_stake = m_stake_ratio_cache_total_staked;
+    accrual_record.actually_destroyed = burn.actually_destroyed;
     m_db->add_staker_accrual(blockchain_height, accrual_record);
 
     uint64_t pool_balance = m_db->get_staker_pool_balance();
     pool_balance += em_split.staker_emission + burn.staker_pool_amount;
     m_db->set_staker_pool_balance(pool_balance);
+
+    if (burn.actually_destroyed > 0)
+    {
+      uint64_t total_burned = m_db->get_total_burned();
+      total_burned += burn.actually_destroyed;
+      m_db->set_total_burned(total_burned);
+    }
   }
 
   MINFO("+++++ BLOCK SUCCESSFULLY ADDED" << std::endl << "id:\t" << id << std::endl << "PoW:\t" << proof_of_work << std::endl << "HEIGHT " << new_height-1 << ", difficulty:\t" << current_diffic << std::endl << "block reward: " << print_money(fee_summary + base_reward) << "(" << print_money(base_reward) << " + " << print_money(fee_summary) << "), coinbase_weight: " << coinbase_weight << ", cumulative weight: " << cumulative_block_weight << ", " << block_processing_time << "(" << target_calculating_time << "/" << longhash_calculating_time << ")ms");

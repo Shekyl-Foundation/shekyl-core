@@ -36,6 +36,20 @@ Practical effect:
 - Hardware-wallet PQ support remains deferred; software wallets are the
   supported v3 path for now.
 
+## Payload Limit Guidance
+
+Operators and indexers must accommodate the increased per-transaction size:
+
+- **Minimum recommended mempool tx limit:** 6 KB above current median user tx
+  size (covers the ~5,385 byte `pqc_auth` body plus serialization overhead).
+- **ZMQ/RPC consumers:** adjust any hardcoded maximum payload buffers to at
+  least 150 KB per transaction (typical 2-input/2-output tx + PQC auth).
+- **Levin relay:** the existing 100 MB default message limit is sufficient, but
+  per-message transaction count assumptions should be revisited if batching
+  relay payloads.
+- **Monitoring dashboards:** alert thresholds tied to tx size should be
+  rebased against post-v3 norms, not pre-PQC averages.
+
 ## Node/Infrastructure Checklist
 
 - Ensure all validating nodes run HF17-capable binaries before activation.

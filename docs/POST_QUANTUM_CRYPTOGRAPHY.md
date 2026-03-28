@@ -504,6 +504,81 @@ future quantum pressure, but it is not yet a full PQ privacy rewrite.
 - RPC/ZMQ consumers should avoid rigid tx-size assumptions and update parser
   limits accordingly.
 
+## V4 Privacy Roadmap (Tentative)
+
+V3 protects the spend/ownership authorization layer with hybrid PQ
+signatures. The ring anonymity machinery (CLSAG, RingCT, stealth addresses)
+remains classical. V4 addresses this gap with a phased approach.
+
+### V4-A: Research and Specification
+
+Target: begin after v3 mainnet stabilization (~3 months post-launch).
+
+- Survey candidate PQ-anonymous ownership primitives:
+  - Lattice-based ring signatures (e.g. extensions of Esgin et al. 2019,
+    Lyubashevsky et al. 2022).
+  - PQ zero-knowledge proofs for membership/range (lattice-based Bulletproofs
+    analogues, PQ SNARKs/STARKs).
+  - Hybrid classical+PQ ring constructions that preserve existing anonymity set
+    sizes.
+- Evaluate ML-KEM-768 for PQ stealth address derivation:
+  - Combining rule: `shared_secret = KDF(X25519_ss || ML-KEM_ss)` using
+    `HKDF-SHA-512` with a domain-separated info string.
+  - Must not break one-time address unlinkability.
+- Define a formal threat model update that covers:
+  - Quantum adversary with selective ring-member de-anonymization capability.
+  - Harvest-now-decrypt-later attacks against stealth address material.
+  - Timing/size side channels introduced by PQ primitives.
+- Extend the `scheme_id` registry to accommodate new hybrid schemes.
+- Deliverable: published V4 specification draft in `docs/`.
+
+### V4-B: Prototype
+
+Target: ~6 months post-launch.
+
+- Implement candidate primitives as non-consensus Rust crates under
+  `rust/shekyl-crypto-pq-v4/`.
+- Benchmark transaction size, verification time, and memory usage against
+  v3 baseline.
+- Size budget target: total v4 transaction should not exceed 2x the v3 size
+  for equivalent ring size.
+- Deliverable: benchmark report and prototype crate with test vectors.
+
+### V4-C: Testnet Experiment
+
+Target: ~9-12 months post-launch.
+
+- Feature-gate v4 transaction format behind a testnet-only hard fork version.
+- Run privacy regression tests: verify that ring-member ambiguity is not
+  degraded vs v3.
+- Measure anonymity-network impact (Tor/I2P cell counts, burst patterns).
+- Identify any consensus-rule changes required for v4 activation.
+- Deliverable: testnet running v4 transactions; go/no-go report for mainnet.
+
+### V4-D: Activation
+
+Target: ~12-18 months post-launch (dependent on V4-C results).
+
+- Single hard fork activation height (same pattern as HF17).
+- Migration notes for wallets, indexers, and operators.
+- v3 transactions remain valid; v4 is opt-in initially, mandatory after a
+  grace period.
+
+### Pre-V4 Dependency: KEM Composition
+
+Before V4-A can finalize stealth-address PQ protection, the KEM combining
+rule must be decided. The current placeholder is in `rust/shekyl-crypto-pq/src/kem.rs`.
+
+Planned direction:
+
+- Classical: `X25519`
+- PQ: `ML-KEM-768` (NIST level 3)
+- Combining: `HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = "shekyl-kem-v1", info = context_bytes)`
+- The combined shared secret feeds into one-time address derivation, replacing
+  the current `X25519`-only path.
+- KEM must be implemented and tested in `shekyl-crypto-pq` before V4-A spec
+  work begins.
+
 ## Deferred Scope
 
 The following are explicitly deferred until after phase-1 hybrid spend/ownership
@@ -538,12 +613,20 @@ This spec maps directly to the next work items:
 The following still need final implementation confirmation, but this document
 sets the intended direction:
 
-- exact Rust crate selection for ML-DSA-65
-- exact `RctSigningBody` byte layout reused in the signing payload
-- exact ownership-material binding between the existing privacy layer and the
-  hybrid authorization path
 - exact `scheme_id` registry values if more hybrid schemes are introduced
-- exact max transaction size adjustments after real encoded-size measurements
+  beyond `ed25519_ml_dsa_65` (`scheme_id = 1`)
+
+### Resolved Items
+
+- **Rust crate for ML-DSA-65:** `fips204` crate (`ml_dsa_65` module).
+- **`RctSigningBody` layout:** `rctSig.serialize_rctsig_base` output; used in
+  the signing payload alongside prefix and PQ auth header.
+- **Ownership binding:** `PqcAuthentication` is attached to `TransactionV3`;
+  the signed payload covers prefix + RCT base + auth header (excluding the
+  signature itself). Implemented in `tx_pqc_verify.cpp`.
+- **Max transaction size:** Measured at 5,385 bytes per user tx for `pqc_auth`
+  (see Measured Sizes above). Operator limits documented in
+  `docs/V3_ROLLOUT.md` under "Payload Limit Guidance."
 
 ## Acceptance Criteria For This Spec
 

@@ -6,7 +6,7 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 
 ## 1) Key TODOs from Existing Documentation
 
-### 1.1 GENESIS_STRATEGY.md
+### 1.1 GENESIS_TRANSPARENCY.md (formerly referenced as GENESIS_STRATEGY.md)
 
 | Item | Description |
 |------|-------------|
@@ -18,8 +18,8 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 
 | Item | Description |
 |------|-------------|
-| **Pending parameters** | `tx_baseline` and `FINAL_SUBSIDY_PER_MINUTE` are marked **Pending** — to be set from testnet data. |
-| **Simulation scenarios** | Eight simulation scenarios are listed as required (baseline, boom-bust, stuffing attack, stake concentration, etc.) — run and validate before locking parameters. |
+| **Provisional parameters** | `tx_baseline` (50) and `FINAL_SUBSIDY_PER_MINUTE` (300,000,000) are provisionally locked after 8-scenario simulation sweep (`rust/shekyl-economics-sim`); final confirmation from testnet. |
+| **Simulation scenarios** | All eight scenarios implemented and run in `rust/shekyl-economics-sim/`; results in `docs/economics_sim_results.json`. |
 | **Test coverage** | Design doc calls for unit/property/integration tests for reward curve, burn formula, staker distribution, overflow boundaries, pre/post-fork sync. |
 
 ### 1.3 COMPILING_DEBUGGING_TESTING.md
@@ -86,7 +86,7 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 - **Transition**: Prefer **hybrid** constructions (e.g. Ed25519 + ML-DSA) during transition.
 - **Requirements**: No new crypto without quantum security evaluation; constant-time/side-channel resistance; no key material in logs or error messages.
 
-### 2.2 Genesis strategy (docs/GENESIS_STRATEGY.md)
+### 2.2 Genesis strategy (docs/GENESIS_TRANSPARENCY.md)
 
 - The rebooted chain is planned to use a single PQ-enabled transaction format from launch.
 - Legacy transaction coexistence is no longer a requirement on the rebooted runtime.
@@ -106,6 +106,7 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 - Dedicated PQC design doc now exists: `docs/POST_QUANTUM_CRYPTOGRAPHY.md`.
 - Remaining work: keep the PQC spec aligned with implementation as code lands.
 - Exact measured encoded sizes and a publishable vector are now documented (`docs/POST_QUANTUM_CRYPTOGRAPHY.md`, `docs/PQC_TEST_VECTOR_001.json`).
+- Negative/malformed test vectors (`PQC_TEST_VECTOR_002–004`) now cover tampered ownership, wrong scheme_id, and oversized blob rejection.
 - Operator-facing rollout notes now exist (`docs/V3_ROLLOUT.md`).
 - Wallet scanning vs hybrid authorization coexistence is now documented in `docs/POST_QUANTUM_CRYPTOGRAPHY.md`.
 - Hybrid signature vector verification is now covered in Rust unit tests (`documented_vector_verifies`).
@@ -127,7 +128,12 @@ Completed:
 
 Remaining:
 
-- extend vector set with additional malformed/negative vectors and future KEM vectors
+- ~~extend vector set with additional malformed/negative vectors~~ **Done** — three negative vectors added:
+  - `PQC_TEST_VECTOR_002_tampered_ownership.json` (corrupted Ed25519 public key byte)
+  - `PQC_TEST_VECTOR_003_wrong_scheme_id.json` (scheme_id 0x01 → 0x02)
+  - `PQC_TEST_VECTOR_004_oversized_blob.json` (ML-DSA length field inflated beyond blob)
+  - Integration tests in `rust/shekyl-crypto-pq/tests/negative_vectors.rs`
+- future KEM vectors (deferred until KEM protocol use is specified)
 
 ### Phase 2: KEM (`HybridX25519MlKem`)
 
@@ -180,21 +186,21 @@ Remaining:
 | Area | Key TODOs | PQC-related |
 |------|-----------|-------------|
 | Genesis / emission | Emission economics redesign; snapshot/UTXO; v2.0 tx format | v2.0 depends on PQC |
-| Design / economics | Pending params from testnet; simulation runs; test coverage | — |
+| Design / economics | Params provisionally locked; 8-scenario simulation complete (`shekyl-economics-sim`); test coverage expanding | — |
 | Build / test | Adopt or reimplement upstream build/test improvements | — |
 | Levin / wire | Complete list of data on wire | — |
 | Anonymity | Timestamp offset; broadcast delay; circuit rotation | — |
 | Release | Full checklist; Shekyl-specific seeds, wallets, exchanges | — |
 | Seeds | Populate DNS/IP seeds; runtime seed add; Shekyl naming | — |
 | Economics / PoW | Finish config-driven proof activation and staker-claim transaction grammar | Stake-ratio chain-state tracking implemented; modular PoW scaffolding implemented |
-| **PQC** | **v3 tx format, core validation, wallet construction, measured sizing, and first published vector are implemented; audit and extended vectors remain** | **Core of this document** |
+| **PQC** | **v3 complete; 4 published vectors (1 positive, 3 negative); V4 roadmap published; external audit and KEM implementation remain** | **Core of this document** |
 
 ---
 
 ## 5) References
 
 - **Project rules**: `.cursor/rules/privacy-security.mdc`
-- **Genesis**: `docs/GENESIS_STRATEGY.md`
+- **Genesis**: `docs/GENESIS_TRANSPARENCY.md`
 - **Design**: `docs/DESIGN_CONCEPTS.md`
 - **Rust PQC crate**: `rust/shekyl-crypto-pq/` (signature.rs, kem.rs, error.rs)
 - **FFI**: `rust/shekyl-ffi/src/lib.rs` (hybrid keygen/sign/verify exported)

@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### Post-quantum cryptography
+
+- Added three negative PQC test vectors (`docs/PQC_TEST_VECTOR_002–004`) covering
+  tampered ownership material, wrong scheme_id, and oversized/truncated signature
+  blobs. Each vector is generated and verified by integration tests in
+  `rust/shekyl-crypto-pq/tests/negative_vectors.rs`.
+- Reconciled `POST_QUANTUM_CRYPTOGRAPHY.md` Open Items: resolved Rust crate
+  selection, `RctSigningBody` layout, ownership binding, and max tx size;
+  only `scheme_id` registry extension remains open.
+- Added tentative V4 PQC Privacy Roadmap to `POST_QUANTUM_CRYPTOGRAPHY.md`
+  with four phases (V4-A Research, V4-B Prototype, V4-C Testnet,
+  V4-D Activation) and explicit KEM composition decision milestone
+  (`X25519 + ML-KEM-768` via `HKDF-SHA-512`).
+- Added payload limit guidance section to `V3_ROLLOUT.md` with recommended
+  minimum mempool/ZMQ/relay buffer sizes for post-PQC transactions.
+
+### Economics and simulation
+
+- Added `rust/shekyl-economics-sim` workspace crate: reproducible 8-scenario
+  simulation harness driven from `config/economics_params.json`. Scenarios
+  cover baseline, boom-bust, sustained growth, stuffing attack, stake
+  concentration, mass unstaking, chain bootstrap, and late-chain tail state.
+  Results archived in `docs/economics_sim_results.json`.
+- Provisionally locked `tx_baseline` (50) and `FINAL_SUBSIDY_PER_MINUTE`
+  (300,000,000) in `DESIGN_CONCEPTS.md` after simulation validation; pending
+  final testnet confirmation.
+- Wired live chain-health RPC fields in `get_info`: `release_multiplier` now
+  computed from rolling `tx_volume_avg`, `burn_pct` from current chain state,
+  `total_burned` persisted in LMDB and accumulated per block.
+- Wired `total_staked` in `get_staking_info` via new
+  `Blockchain::get_total_staked()` accessor backed by existing stake cache.
+- Added `total_burned` LMDB persistence: `set_total_burned`/`get_total_burned`
+  on `BlockchainDB`, with rollback support via extended `staker_accrual_record`
+  (`actually_destroyed` field).
+
+### Privacy and anonymity networks
+
+- Updated `ANONYMITY_NETWORKS.md` with measured v3 payload impact analysis
+  (cell/fragment counts for Tor and I2P), known leak vectors vs mitigations
+  matrix, and recommended pre-mainnet testing checklist.
+- Extended `LEVIN_PROTOCOL.md` wire inventory with per-command PQC size
+  impact, anonymity sensitivity ratings, and a summary table covering all
+  P2P and Cryptonote protocol commands.
+- Added privacy considerations section to `STAKER_REWARD_DISBURSEMENT.md`
+  covering claim timing, amount correlation, and staked output visibility.
+- Added reward-driven privacy/mixing research appendix to
+  `DESIGN_CONCEPTS.md` evaluating random maturation delay, claim batching,
+  and reward output shaping with adversarial analysis and go/no-go criteria.
+
 ### CI/CD and build system
 
 - Added `release/tagged` GitHub Actions workflow: builds static Linux x86_64

@@ -177,10 +177,54 @@ For the rebooted chain:
 ### Cryptonote Protocol Commands
 
 #### (`2001` Notification) New Block
+
+Carries a full serialized block. Post-v3, user transactions within the block
+include `pqc_auth` material (~5.4 KB per user tx). Miner coinbase remains
+excluded from `pqc_auth`.
+
 #### (`2002` Notification) New Transactions
+
+Carries one or more serialized transactions for mempool relay. This is the
+primary message type affected by v3 PQC sizing: each `TransactionV3` user
+transaction adds ~5,385 bytes of hybrid authentication data.
+
+Over anonymity networks, this message is the most fingerprinting-sensitive:
+it is sent shortly after a wallet constructs a transaction and is the
+strongest timing signal linking a peer to a spend event.
+
 #### (`2003` Notification) Request Get Objects
 #### (`2004` Notification) Response Get Objects
+
+Response carries requested block/transaction objects. Payload size is
+variable and scales linearly with the number of v3 transactions in the
+requested range.
+
 #### (`2006` Notification) Request Chain
 #### (`2007` Notification) Response Chain Entry
+
+Carries block hashes for chain synchronization. Not affected by v3 PQC
+sizing (block headers do not contain `pqc_auth`).
+
 #### (`2008` Notification) New Fluffy Block
+
+Carries block header plus transaction hashes (not full transactions). The
+receiving peer requests missing transactions via `2009`. Not directly
+affected by PQC sizing, but the follow-up `2002`/`2009` exchange is.
+
 #### (`2009` Notification) Request Fluffy Missing TX
+
+Requests specific transactions by hash. The response contains full
+serialized v3 transactions including `pqc_auth`.
+
+### Wire Data Privacy Summary
+
+| Command | PQC size impact | Anonymity sensitivity | Notes |
+|---|---|---|---|
+| 1001 Handshake | None | Low | Peer identity exchange |
+| 1002 Timed Sync | None | Medium | Timestamp fingerprinting risk |
+| 2001 New Block | Proportional to tx count | Low | Broadcast, not origin-attributable |
+| 2002 New Transactions | +5.4 KB per user tx | High | Origin-attributable timing signal |
+| 2003/2004 Get Objects | Proportional to tx count | Low | Sync protocol |
+| 2006/2007 Chain Entry | None | None | Hash-only |
+| 2008 Fluffy Block | Minimal | Low | Header + hashes |
+| 2009 Missing TX | +5.4 KB per requested tx | Medium | Follow-up to fluffy block |

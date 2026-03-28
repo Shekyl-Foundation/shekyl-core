@@ -1,17 +1,19 @@
 - [ ] Security audit
 - [ ] Code audit
 - [ ] PQC specification frozen
-  - [ ] `docs/POST_QUANTUM_CRYPTOGRAPHY.md` matches implementation
-  - [ ] canonical transaction/signature serialization documented
-  - [ ] signed payload definition documented
+  - [x] `docs/POST_QUANTUM_CRYPTOGRAPHY.md` matches implementation
+  - [x] canonical transaction/signature serialization documented
+  - [x] signed payload definition documented
+  - [x] V4 PQC Privacy Roadmap published
 - [ ] PQC crypto review
-  - [ ] hybrid sign/verify implementation reviewed
-  - [ ] FFI ownership / zeroization reviewed
-  - [ ] test vectors generated and archived
+  - [ ] hybrid sign/verify implementation reviewed (external audit pending)
+  - [ ] FFI ownership / zeroization reviewed (external audit pending)
+  - [x] test vectors generated and archived (4 vectors: 1 positive, 3 negative)
 - [ ] PQC interoperability verification
   - [ ] wallet sign/daemon verify path tested
-  - [ ] malformed hybrid signature rejection tested
-  - [ ] encoded transaction size impact measured
+  - [x] malformed hybrid signature rejection tested (3 negative vector integration tests)
+  - [x] encoded transaction size impact measured (~5,385 bytes per user tx)
+  - [x] payload limit guidance documented in V3_ROLLOUT.md
 - [ ] Ledger integration
   - [ ] Implemented in Shekyl codebase (if needed)
   - [ ] Ledger app integration coded by Ledger

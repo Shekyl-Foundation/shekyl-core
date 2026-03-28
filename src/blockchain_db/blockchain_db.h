@@ -1866,6 +1866,7 @@ public:
     uint64_t staker_emission;
     uint64_t staker_fee_pool;
     uint64_t total_weighted_stake;
+    uint64_t actually_destroyed;
   };
 
   virtual void add_staker_accrual(uint64_t height, const staker_accrual_record& record) = 0;
@@ -1874,6 +1875,9 @@ public:
 
   virtual void set_staker_pool_balance(uint64_t balance) = 0;
   virtual uint64_t get_staker_pool_balance() const = 0;
+
+  virtual void set_total_burned(uint64_t amount) = 0;
+  virtual uint64_t get_total_burned() const = 0;
 
   virtual void set_staker_claim_watermark(uint64_t output_index, uint64_t last_claimed_height) = 0;
   virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const = 0;

@@ -573,11 +573,21 @@ namespace cryptonote
     res.busy_syncing = m_p2p.get_payload_object().is_busy_syncing();
     res.restricted = restricted;
 
+    // Chain-state inputs for economics calculations
+    uint64_t already_generated = 0;
+    if (res.height > 0)
+      already_generated = m_core.get_blockchain_storage().get_db().get_block_already_generated_coins(res.height - 1);
+
     // Shekyl NG four-component economics fields
-    res.release_multiplier = SHEKYL_FIXED_POINT_SCALE; // 1.0x default
+    const uint64_t tx_vol_avg = m_core.get_blockchain_storage().get_tx_volume_avg(res.height);
+    res.release_multiplier = shekyl_calc_release_multiplier(
+        tx_vol_avg, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
     res.stake_ratio = m_core.get_blockchain_storage().get_stake_ratio(res.height);
-    res.burn_pct = 0;
-    res.total_burned = 0;
+    res.burn_pct = shekyl_calc_burn_pct(
+        tx_vol_avg, SHEKYL_TX_VOLUME_BASELINE,
+        already_generated, MONEY_SUPPLY,
+        res.stake_ratio, SHEKYL_BURN_BASE_RATE, SHEKYL_BURN_CAP);
+    res.total_burned = m_core.get_blockchain_storage().get_db().get_total_burned();
     res.staker_pool_balance = m_core.get_blockchain_storage().get_db().get_staker_pool_balance();
 
     // Component 4: effective staker emission share at current height
@@ -585,9 +595,6 @@ namespace cryptonote
     res.staker_emission_share_effective = shekyl_calc_emission_share(
         res.height, genesis_ng_height, SHEKYL_STAKER_EMISSION_SHARE, SHEKYL_STAKER_EMISSION_DECAY, SHEKYL_BLOCKS_PER_YEAR);
 
-    uint64_t already_generated = 0;
-    if (res.height > 0)
-      already_generated = m_core.get_blockchain_storage().get_db().get_block_already_generated_coins(res.height - 1);
     double emission_pct = (double)already_generated / (double)MONEY_SUPPLY;
     if (emission_pct < 0.30)
       res.emission_era = "Founding";
@@ -3562,7 +3569,7 @@ namespace cryptonote
     const uint64_t height = m_core.get_current_blockchain_height();
     res.height = height;
     res.stake_ratio = m_core.get_blockchain_storage().get_stake_ratio(height);
-    res.total_staked = 0;
+    res.total_staked = m_core.get_blockchain_storage().get_total_staked(height);
     res.staker_pool_balance = m_core.get_blockchain_storage().get_db().get_staker_pool_balance();
     const uint64_t genesis_ng_height = m_core.get_blockchain_storage().get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
     res.staker_emission_share = shekyl_calc_emission_share(

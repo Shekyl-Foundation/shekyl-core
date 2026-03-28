@@ -5,6 +5,7 @@ members = [
     "shekyl-consensus",
     "shekyl-economics",
     "shekyl-staking",
+    "shekyl-economics-sim",
 ]
 resolver = "2"
 

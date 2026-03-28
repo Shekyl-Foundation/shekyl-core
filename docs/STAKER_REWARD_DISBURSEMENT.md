@@ -106,6 +106,25 @@ and the pool balance is decremented by the reversed accrual amount.
 | `get_staking_info` | Returns current staking metrics: height, stake ratio, pool balance, emission share, tier lock durations |
 | `get_info` | Extended with `stake_ratio` and `staker_pool_balance` fields |
 
+## Privacy Considerations
+
+Staker claims (`txin_stake_claim`) create on-chain events that can be
+correlated with specific accrual periods and staking outputs. Privacy
+implications:
+
+- **Claim timing:** Frequent claims (e.g., every block) create a regular
+  on-chain heartbeat that may be linkable to a staker's identity. Wallets
+  should default to batched claiming at longer intervals.
+- **Amount correlation:** Claim amounts are proportional to stake size and
+  lock tier. Over multiple claims, the pattern may narrow the set of
+  possible stakers. Future protocol versions may introduce claim batching
+  at the consensus level (see `DESIGN_CONCEPTS.md` Section 14, Research
+  Appendix).
+- **Staked output visibility:** `txout_to_staked_key` outputs are
+  distinguishable from regular outputs on-chain. The lock duration is
+  publicly visible. This is an inherent trade-off of transparent staking
+  and cannot be mitigated without a full PQ privacy redesign (V4).
+
 ## Operator Notes
 
 - Staking economics are active from HF17 block height onward.
