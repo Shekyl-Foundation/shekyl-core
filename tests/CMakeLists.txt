@@ -45,31 +45,21 @@ find_package(GTest)
 if (GTest_FOUND)
   include_directories(SYSTEM ${GTEST_INCLUDE_DIRS})
 else ()
-  message(STATUS "GTest not found on the system: will use GTest bundled with this source")
+  message(STATUS "GTest not found on the system: fetching GoogleTest v1.16.0 via FetchContent")
 
-  include(ExternalProject)
-  ExternalProject_Add(googletest
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/gtest
-    BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/gtest
-    DOWNLOAD_COMMAND ""
-    UPDATE_COMMAND ""
-    INSTALL_COMMAND ""
+  include(FetchContent)
+  FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG        v1.16.0
+    GIT_SHALLOW    TRUE
   )
-  add_library(gtest      UNKNOWN IMPORTED)
-  add_library(gtest_main UNKNOWN IMPORTED)
-  set_target_properties(gtest PROPERTIES
-    IMPORTED_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/gtest/${CMAKE_STATIC_LIBRARY_PREFIX}gtest${CMAKE_STATIC_LIBRARY_SUFFIX}"
-  )
-  set_target_properties(gtest_main PROPERTIES
-    IMPORTED_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/gtest/${CMAKE_STATIC_LIBRARY_PREFIX}gtest_main${CMAKE_STATIC_LIBRARY_SUFFIX}"
-  )
-  add_dependencies(gtest      googletest)
-  add_dependencies(gtest_main googletest)
+  set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
+  set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(googletest)
 
-  # Emulate the FindGTest module's variable.
   set(GTEST_LIBRARIES gtest gtest_main)
   set(GTEST_BOTH_LIBRARIES gtest gtest_main)
-  include_directories(SYSTEM "${CMAKE_CURRENT_SOURCE_DIR}/gtest/include")
 endif (GTest_FOUND)
 
 message(STATUS "Copying test data directory...")
