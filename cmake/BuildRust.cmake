@@ -82,14 +82,32 @@ else()
     set(SHEKYL_FFI_LIBRARY "${RUST_BUILD_DIR}/libshekyl_ffi.a")
 endif()
 
-add_custom_command(
-    OUTPUT ${SHEKYL_FFI_LIBRARY}
-    COMMAND ${CMAKE_COMMAND} -E env ${RUST_CROSS_ENV}
-        ${CARGO_EXECUTABLE} build ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
-    WORKING_DIRECTORY ${RUST_SOURCE_DIR}
-    COMMENT "Building Shekyl Rust workspace${RUST_TARGET_TRIPLE:+ for ${RUST_TARGET_TRIPLE}}"
-    VERBATIM
-)
+# Build the comment string
+if(RUST_TARGET_TRIPLE)
+    set(_rust_comment "Building Shekyl Rust workspace for ${RUST_TARGET_TRIPLE}")
+else()
+    set(_rust_comment "Building Shekyl Rust workspace")
+endif()
+
+# Build the cargo command; use cmake -E env only when cross-compiling
+if(RUST_CROSS_ENV)
+    add_custom_command(
+        OUTPUT ${SHEKYL_FFI_LIBRARY}
+        COMMAND ${CMAKE_COMMAND} -E env "${RUST_CROSS_ENV}"
+            ${CARGO_EXECUTABLE} build ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
+        WORKING_DIRECTORY ${RUST_SOURCE_DIR}
+        COMMENT "${_rust_comment}"
+        VERBATIM
+    )
+else()
+    add_custom_command(
+        OUTPUT ${SHEKYL_FFI_LIBRARY}
+        COMMAND ${CARGO_EXECUTABLE} build ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
+        WORKING_DIRECTORY ${RUST_SOURCE_DIR}
+        COMMENT "${_rust_comment}"
+        VERBATIM
+    )
+endif()
 
 add_custom_target(shekyl_rust ALL DEPENDS ${SHEKYL_FFI_LIBRARY})
 
