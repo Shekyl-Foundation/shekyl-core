@@ -425,6 +425,15 @@ private:
   // fix up anything that may be wrong due to past bugs
   virtual void fixup();
 
+  virtual void add_staker_accrual(uint64_t height, const staker_accrual_record& record) override;
+  virtual staker_accrual_record get_staker_accrual(uint64_t height) const override;
+  virtual void remove_staker_accrual(uint64_t height) override;
+  virtual void set_staker_pool_balance(uint64_t balance) override;
+  virtual uint64_t get_staker_pool_balance() const override;
+  virtual void set_staker_claim_watermark(uint64_t output_index, uint64_t last_claimed_height) override;
+  virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const override;
+  virtual void remove_staker_claim_watermark(uint64_t output_index) override;
+
   // migrate from older DB version to current
   void migrate(const uint32_t oldversion);
 
@@ -474,6 +483,9 @@ private:
   MDB_dbi m_hf_versions;
 
   MDB_dbi m_properties;
+
+  MDB_dbi m_staker_accrual;
+  MDB_dbi m_staker_claims;
 
   mutable uint64_t m_cum_size;	// used in batch size estimation
   mutable unsigned int m_cum_count;

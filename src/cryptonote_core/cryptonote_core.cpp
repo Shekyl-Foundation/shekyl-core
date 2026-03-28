@@ -1013,9 +1013,22 @@ namespace cryptonote
     std::unordered_set<crypto::key_image> ki;
     for(const auto& in: tx.vin)
     {
-      CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
-      if(!ki.insert(tokey_in.k_image).second)
-        return false;
+      if (in.type() == typeid(txin_to_key))
+      {
+        if(!ki.insert(boost::get<txin_to_key>(in).k_image).second)
+          return false;
+      }
+      else if (in.type() == typeid(txin_stake_claim))
+      {
+        if(!ki.insert(boost::get<txin_stake_claim>(in).k_image).second)
+          return false;
+      }
+      else
+      {
+        CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
+        if(!ki.insert(tokey_in.k_image).second)
+          return false;
+      }
     }
     return true;
   }
@@ -1026,6 +1039,8 @@ namespace cryptonote
     {
       for(const auto& in: tx.vin)
       {
+        if (in.type() == typeid(txin_stake_claim))
+          continue;
         CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
         for (size_t n = 1; n < tokey_in.key_offsets.size(); ++n)
           if (tokey_in.key_offsets[n] == 0)
@@ -1040,6 +1055,15 @@ namespace cryptonote
     std::unordered_set<crypto::key_image> ki;
     for(const auto& in: tx.vin)
     {
+      if (in.type() == typeid(txin_stake_claim))
+      {
+        const auto& claim = boost::get<txin_stake_claim>(in);
+        if (rct::ki2rct(claim.k_image) == rct::identity())
+          return false;
+        if (!(rct::scalarmultKey(rct::ki2rct(claim.k_image), rct::curveOrder()) == rct::identity()))
+          return false;
+        continue;
+      }
       CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
       if (rct::ki2rct(tokey_in.k_image) == rct::identity())
         return false;

@@ -366,9 +366,20 @@ private:
       std::vector<rct::key> m_multisig_k;
       std::vector<multisig_info> m_multisig_info; // one per other participant
       std::vector<std::pair<uint64_t, crypto::hash>> m_uses;
+      bool m_staked;
+      uint8_t m_stake_tier;
+      uint64_t m_stake_lock_until;
+
+      transfer_details() : m_block_height(0), m_internal_output_index(0), m_global_output_index(0),
+        m_spent(false), m_frozen(false), m_spent_height(0), m_amount(0), m_rct(false),
+        m_key_image_known(false), m_key_image_request(false), m_pk_index(0),
+        m_key_image_partial(false), m_staked(false), m_stake_tier(0), m_stake_lock_until(0) {}
 
       bool is_rct() const { return m_rct; }
       uint64_t amount() const { return m_amount; }
+      bool is_staked() const { return m_staked; }
+      bool is_staked_and_locked(uint64_t current_height) const { return m_staked && current_height < m_stake_lock_until; }
+      bool is_staked_and_matured(uint64_t current_height) const { return m_staked && current_height >= m_stake_lock_until; }
       const crypto::public_key get_public_key() const {
         crypto::public_key output_public_key;
         THROW_WALLET_EXCEPTION_IF(m_tx.vout.size() <= m_internal_output_index,
@@ -399,6 +410,9 @@ private:
         FIELD(m_multisig_k)
         FIELD(m_multisig_info)
         FIELD(m_uses)
+        FIELD(m_staked)
+        FIELD(m_stake_tier)
+        VARINT_FIELD(m_stake_lock_until)
       END_SERIALIZE()
     };
 
@@ -1200,6 +1214,14 @@ private:
     std::vector<wallet2::pending_tx> create_transactions_all(uint64_t below, const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, const size_t fake_outs_count, uint32_t priority, const std::vector<uint8_t>& extra, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices);
     std::vector<wallet2::pending_tx> create_transactions_single(const crypto::key_image &ki, const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, const size_t fake_outs_count, uint32_t priority, const std::vector<uint8_t>& extra);
     std::vector<wallet2::pending_tx> create_transactions_from(const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, std::vector<size_t> unused_transfers_indices, std::vector<size_t> unused_dust_indices, const size_t fake_outs_count, uint32_t priority, const std::vector<uint8_t>& extra);
+    std::vector<wallet2::pending_tx> create_staking_transaction(uint8_t tier, uint64_t amount, uint32_t priority, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices);
+    std::vector<wallet2::pending_tx> create_unstake_transaction(const std::vector<size_t>& staked_indices, uint32_t priority);
+    std::vector<wallet2::pending_tx> create_claim_transaction(const std::vector<size_t>& staked_indices);
+    std::vector<size_t> get_matured_staked_outputs() const;
+    std::vector<size_t> get_locked_staked_outputs() const;
+    std::vector<size_t> get_claimable_staked_outputs() const;
+    uint64_t get_staked_balance(uint64_t current_height) const;
+    uint64_t estimate_claimable_reward(size_t transfer_index) const;
     bool sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, const std::vector<cryptonote::tx_destination_entry>& dsts, const unique_index_container& subtract_fee_from_outputs = {}) const;
     void cold_tx_aux_import(const std::vector<pending_tx>& ptx, const std::vector<std::string>& tx_device_aux);
     void cold_sign_tx(const std::vector<pending_tx>& ptx_vector, signed_tx_set &exported_txs, std::vector<cryptonote::address_parse_info> &dsts_info, std::vector<std::string> & tx_device_aux);

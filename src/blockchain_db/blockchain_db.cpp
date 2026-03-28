@@ -209,6 +209,15 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
     {
       add_spent_key(boost::get<txin_to_key>(tx_input).k_image);
     }
+    else if (tx_input.type() == typeid(txin_stake_claim))
+    {
+      const auto& claim = boost::get<txin_stake_claim>(tx_input);
+      add_spent_key(claim.k_image);
+      set_staker_claim_watermark(claim.staked_output_index, claim.to_height);
+      uint64_t pool_balance = get_staker_pool_balance();
+      if (claim.amount <= pool_balance)
+        set_staker_pool_balance(pool_balance - claim.amount);
+    }
     else if (tx_input.type() == typeid(txin_gen))
     {
       /* nothing to do here */

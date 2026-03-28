@@ -53,6 +53,7 @@ using namespace epee;
 #include "wallet2.h"
 #include "wallet_args.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
+#include "shekyl/shekyl_ffi.h"
 #include "net/parse.h"
 #include "rpc/core_rpc_server_commands_defs.h"
 #include "rpc/core_rpc_server_error_codes.h"
@@ -2577,6 +2578,22 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
               td.m_rct = false;
             }
             td.m_frozen = false;
+            {
+              uint8_t stk_tier = 0;
+              uint64_t stk_lock = 0;
+              if (cryptonote::get_output_staking_info(tx.vout[o], stk_tier, stk_lock))
+              {
+                td.m_staked = true;
+                td.m_stake_tier = stk_tier;
+                td.m_stake_lock_until = stk_lock;
+              }
+              else
+              {
+                td.m_staked = false;
+                td.m_stake_tier = 0;
+                td.m_stake_lock_until = 0;
+              }
+            }
 	    set_unspent(m_transfers.size()-1);
             if (td.m_key_image_known)
 	      m_key_images[td.m_key_image] = m_transfers.size()-1;
@@ -11742,6 +11759,222 @@ skip_tx:
   return ptx_vector;
 }
 
+std::vector<size_t> wallet2::get_matured_staked_outputs() const
+{
+  std::vector<size_t> result;
+  const uint64_t height = get_blockchain_current_height();
+  for (size_t i = 0; i < m_transfers.size(); ++i)
+  {
+    const auto& td = m_transfers[i];
+    if (td.m_staked && !td.m_spent && !td.m_frozen && td.m_stake_lock_until <= height)
+      result.push_back(i);
+  }
+  return result;
+}
+//----------------------------------------------------------------------------------------------------
+std::vector<size_t> wallet2::get_locked_staked_outputs() const
+{
+  std::vector<size_t> result;
+  const uint64_t height = get_blockchain_current_height();
+  for (size_t i = 0; i < m_transfers.size(); ++i)
+  {
+    const auto& td = m_transfers[i];
+    if (td.m_staked && !td.m_spent && !td.m_frozen && td.m_stake_lock_until > height)
+      result.push_back(i);
+  }
+  return result;
+}
+//----------------------------------------------------------------------------------------------------
+uint64_t wallet2::get_staked_balance(uint64_t current_height) const
+{
+  uint64_t total = 0;
+  for (const auto& td : m_transfers)
+  {
+    if (td.m_staked && !td.m_spent && !td.m_frozen)
+      total += td.m_amount;
+  }
+  return total;
+}
+//----------------------------------------------------------------------------------------------------
+std::vector<wallet2::pending_tx> wallet2::create_staking_transaction(uint8_t tier, uint64_t amount, uint32_t priority, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices)
+{
+  THROW_WALLET_EXCEPTION_IF(tier > 2, error::wallet_internal_error, "Staking tier must be 0, 1, or 2");
+  THROW_WALLET_EXCEPTION_IF(amount == 0, error::wallet_internal_error, "Staking amount must be greater than 0");
+  THROW_WALLET_EXCEPTION_IF(!use_fork_rules(HF_VERSION_SHEKYL_NG, 10), error::wallet_internal_error,
+    "Staking requires hardfork version " + std::to_string(HF_VERSION_SHEKYL_NG));
+
+  const uint64_t lock_blocks = shekyl_stake_lock_blocks(tier);
+  const uint64_t current_height = get_blockchain_current_height();
+  const uint64_t lock_until = current_height + lock_blocks;
+
+  cryptonote::address_parse_info self_address_info;
+  self_address_info.address = get_address();
+  self_address_info.is_subaddress = false;
+
+  cryptonote::tx_destination_entry de;
+  de.amount = amount;
+  de.addr = self_address_info.address;
+  de.is_subaddress = false;
+  de.is_integrated = false;
+  de.is_staking = true;
+  de.stake_tier = tier;
+  de.stake_lock_until = lock_until;
+
+  std::vector<cryptonote::tx_destination_entry> dsts;
+  dsts.push_back(de);
+
+  const size_t fake_outs_count = 0;
+  std::vector<uint8_t> extra;
+  return create_transactions_2(dsts, fake_outs_count, priority, extra, subaddr_account, subaddr_indices);
+}
+//----------------------------------------------------------------------------------------------------
+std::vector<size_t> wallet2::get_claimable_staked_outputs() const
+{
+  std::vector<size_t> result;
+  const uint64_t height = get_blockchain_current_height();
+  for (size_t i = 0; i < m_transfers.size(); ++i)
+  {
+    const auto& td = m_transfers[i];
+    if (td.m_staked && !td.m_spent && !td.m_frozen && td.m_stake_lock_until > height)
+      result.push_back(i);
+  }
+  return result;
+}
+//----------------------------------------------------------------------------------------------------
+uint64_t wallet2::estimate_claimable_reward(size_t transfer_index) const
+{
+  THROW_WALLET_EXCEPTION_IF(transfer_index >= m_transfers.size(), error::wallet_internal_error, "Invalid transfer index");
+  const auto& td = m_transfers[transfer_index];
+  THROW_WALLET_EXCEPTION_IF(!td.m_staked, error::wallet_internal_error, "Output is not staked");
+
+  return 0;
+}
+//----------------------------------------------------------------------------------------------------
+std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::vector<size_t>& staked_indices)
+{
+  THROW_WALLET_EXCEPTION_IF(staked_indices.empty(), error::wallet_internal_error, "No staked outputs to claim");
+  THROW_WALLET_EXCEPTION_IF(!use_fork_rules(HF_VERSION_SHEKYL_NG, 10), error::wallet_internal_error,
+    "Claiming requires hardfork version " + std::to_string(HF_VERSION_SHEKYL_NG));
+
+  const uint64_t current_height = get_blockchain_current_height();
+
+  cryptonote::transaction tx;
+  tx.version = 3;
+  tx.unlock_time = 0;
+
+  uint64_t total_claimed = 0;
+
+  for (size_t idx : staked_indices)
+  {
+    THROW_WALLET_EXCEPTION_IF(idx >= m_transfers.size(), error::wallet_internal_error, "Invalid transfer index");
+    const auto& td = m_transfers[idx];
+    THROW_WALLET_EXCEPTION_IF(!td.m_staked, error::wallet_internal_error, "Output is not staked");
+    THROW_WALLET_EXCEPTION_IF(td.m_spent, error::wallet_internal_error, "Output is already spent");
+    THROW_WALLET_EXCEPTION_IF(td.m_stake_lock_until <= current_height, error::wallet_internal_error,
+      "Staked output already matured; claim before unstaking");
+
+    uint64_t from_h = td.m_block_height;
+    uint64_t to_h = std::min(current_height, td.m_stake_lock_until);
+    static const uint64_t MAX_CLAIM_RANGE = 10000;
+    if (to_h - from_h > MAX_CLAIM_RANGE)
+      to_h = from_h + MAX_CLAIM_RANGE;
+
+    uint64_t reward = estimate_claimable_reward(idx);
+
+    cryptonote::txin_stake_claim claim;
+    claim.amount = reward;
+    claim.staked_output_index = td.m_global_output_index;
+    claim.from_height = from_h;
+    claim.to_height = to_h;
+
+    crypto::generate_key_image(td.get_public_key(), m_account.get_keys().m_spend_secret_key, claim.k_image);
+
+    tx.vin.push_back(claim);
+    total_claimed += reward;
+  }
+
+  if (total_claimed > 0)
+  {
+    crypto::secret_key tx_key;
+    crypto::generate_random_bytes_thread_safe(sizeof(tx_key), (uint8_t*)&tx_key);
+    crypto::public_key txkey_pub;
+    crypto::secret_key_to_public_key(tx_key, txkey_pub);
+    cryptonote::add_tx_pub_key_to_extra(tx, txkey_pub);
+
+    cryptonote::tx_destination_entry de;
+    de.amount = total_claimed;
+    de.addr = get_address();
+    de.is_subaddress = false;
+    de.is_staking = false;
+
+    crypto::public_key out_eph_public_key;
+    crypto::view_tag view_tag;
+    crypto::key_derivation derivation;
+    crypto::generate_key_derivation(de.addr.m_view_public_key, tx_key, derivation);
+    crypto::derive_public_key(derivation, 0, de.addr.m_spend_public_key, out_eph_public_key);
+    crypto::derive_view_tag(derivation, 0, view_tag);
+
+    cryptonote::tx_out out;
+    cryptonote::set_tx_out(total_claimed, out_eph_public_key, true, view_tag, out);
+    tx.vout.push_back(out);
+  }
+
+  tx.rct_signatures.type = rct::RCTTypeNull;
+  tx.rct_signatures.txnFee = 0;
+  tx.rct_signatures.outPk.resize(tx.vout.size());
+  for (size_t i = 0; i < tx.vout.size(); ++i)
+    tx.rct_signatures.outPk[i].mask = rct::identity();
+
+  pending_tx ptx;
+  ptx.tx = tx;
+  ptx.fee = 0;
+  ptx.change_dts = {};
+  ptx.selected_transfers = {};
+  ptx.key_images = "";
+  ptx.tx_key = crypto::secret_key{};
+  ptx.additional_tx_keys = {};
+  ptx.dests = {};
+  ptx.multisig_sigs = {};
+  ptx.construction_data = {};
+
+  std::vector<pending_tx> ptx_vector;
+  ptx_vector.push_back(ptx);
+  return ptx_vector;
+}
+//----------------------------------------------------------------------------------------------------
+std::vector<wallet2::pending_tx> wallet2::create_unstake_transaction(const std::vector<size_t>& staked_indices, uint32_t priority)
+{
+  THROW_WALLET_EXCEPTION_IF(staked_indices.empty(), error::wallet_internal_error, "No staked outputs to unstake");
+
+  const uint64_t current_height = get_blockchain_current_height();
+  uint64_t total_amount = 0;
+
+  for (size_t idx : staked_indices)
+  {
+    THROW_WALLET_EXCEPTION_IF(idx >= m_transfers.size(), error::wallet_internal_error, "Invalid transfer index");
+    const auto& td = m_transfers[idx];
+    THROW_WALLET_EXCEPTION_IF(!td.m_staked, error::wallet_internal_error, "Output is not staked");
+    THROW_WALLET_EXCEPTION_IF(td.m_spent, error::wallet_internal_error, "Output is already spent");
+    THROW_WALLET_EXCEPTION_IF(td.m_stake_lock_until > current_height, error::wallet_internal_error,
+      "Staked output not yet matured (unlocks at height " + std::to_string(td.m_stake_lock_until) + ", current: " + std::to_string(current_height) + ")");
+    total_amount += td.m_amount;
+  }
+
+  cryptonote::tx_destination_entry de;
+  de.amount = total_amount;
+  de.addr = get_address();
+  de.is_subaddress = false;
+  de.is_integrated = false;
+  de.is_staking = false;
+
+  std::vector<cryptonote::tx_destination_entry> dsts;
+  dsts.push_back(de);
+
+  const size_t fake_outs_count = 0;
+  std::vector<uint8_t> extra;
+  return create_transactions_2(dsts, fake_outs_count, priority, extra, 0, {});
+}
+//----------------------------------------------------------------------------------------------------
 bool wallet2::sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, const std::vector<cryptonote::tx_destination_entry>& dsts, const unique_index_container& subtract_fee_from_outputs) const
 {
   MDEBUG("sanity_check: " << ptx_vector.size() << " txes, " << dsts.size() << " destinations, subtract_fee_from_outputs " <<

@@ -168,8 +168,25 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
+  struct txin_stake_claim
+  {
+    uint64_t amount;                // claimed reward amount
+    uint64_t staked_output_index;   // global output index of the staked output
+    uint64_t from_height;           // claim range start (exclusive: last_claimed_height)
+    uint64_t to_height;             // claim range end (inclusive)
+    crypto::key_image k_image;      // prevents double-claim for this range
 
-  typedef boost::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key> txin_v;
+    BEGIN_SERIALIZE_OBJECT()
+      VARINT_FIELD(amount)
+      VARINT_FIELD(staked_output_index)
+      VARINT_FIELD(from_height)
+      VARINT_FIELD(to_height)
+      FIELD(k_image)
+    END_SERIALIZE()
+  };
+
+
+  typedef boost::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key, txin_stake_claim> txin_v;
 
   typedef boost::variant<txout_to_script, txout_to_scripthash, txout_to_key, txout_to_tagged_key, txout_to_staked_key> txout_target_v;
 
@@ -513,6 +530,7 @@ namespace cryptonote
       size_t operator()(const txin_to_script& txin) const{return 0;}
       size_t operator()(const txin_to_scripthash& txin) const{return 0;}
       size_t operator()(const txin_to_key& txin) const {return txin.key_offsets.size();}
+      size_t operator()(const txin_stake_claim& txin) const {return 1;}
     };
 
     return boost::apply_visitor(txin_signature_size_visitor(), tx_in);
@@ -647,6 +665,7 @@ VARIANT_TAG(binary_archive, cryptonote::txin_gen, 0xff);
 VARIANT_TAG(binary_archive, cryptonote::txin_to_script, 0x0);
 VARIANT_TAG(binary_archive, cryptonote::txin_to_scripthash, 0x1);
 VARIANT_TAG(binary_archive, cryptonote::txin_to_key, 0x2);
+VARIANT_TAG(binary_archive, cryptonote::txin_stake_claim, 0x3);
 VARIANT_TAG(binary_archive, cryptonote::txout_to_script, 0x0);
 VARIANT_TAG(binary_archive, cryptonote::txout_to_scripthash, 0x1);
 VARIANT_TAG(binary_archive, cryptonote::txout_to_key, 0x2);
@@ -659,6 +678,7 @@ VARIANT_TAG(json_archive, cryptonote::txin_gen, "gen");
 VARIANT_TAG(json_archive, cryptonote::txin_to_script, "script");
 VARIANT_TAG(json_archive, cryptonote::txin_to_scripthash, "scripthash");
 VARIANT_TAG(json_archive, cryptonote::txin_to_key, "key");
+VARIANT_TAG(json_archive, cryptonote::txin_stake_claim, "stake_claim");
 VARIANT_TAG(json_archive, cryptonote::txout_to_script, "script");
 VARIANT_TAG(json_archive, cryptonote::txout_to_scripthash, "scripthash");
 VARIANT_TAG(json_archive, cryptonote::txout_to_key, "key");
@@ -671,6 +691,7 @@ VARIANT_TAG(debug_archive, cryptonote::txin_gen, "gen");
 VARIANT_TAG(debug_archive, cryptonote::txin_to_script, "script");
 VARIANT_TAG(debug_archive, cryptonote::txin_to_scripthash, "scripthash");
 VARIANT_TAG(debug_archive, cryptonote::txin_to_key, "key");
+VARIANT_TAG(debug_archive, cryptonote::txin_stake_claim, "stake_claim");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_script, "script");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_scripthash, "scripthash");
 VARIANT_TAG(debug_archive, cryptonote::txout_to_key, "key");

@@ -575,14 +575,15 @@ namespace cryptonote
 
     // Shekyl NG four-component economics fields
     res.release_multiplier = SHEKYL_FIXED_POINT_SCALE; // 1.0x default
+    res.stake_ratio = m_core.get_blockchain_storage().get_stake_ratio(res.height);
     res.burn_pct = 0;
-    res.stake_ratio = 0;
     res.total_burned = 0;
-    res.staker_pool_balance = 0;
+    res.staker_pool_balance = m_core.get_blockchain_storage().get_db().get_staker_pool_balance();
 
     // Component 4: effective staker emission share at current height
+    const uint64_t genesis_ng_height = m_core.get_blockchain_storage().get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
     res.staker_emission_share_effective = shekyl_calc_emission_share(
-        res.height, 0, SHEKYL_STAKER_EMISSION_SHARE, SHEKYL_STAKER_EMISSION_DECAY, SHEKYL_BLOCKS_PER_YEAR);
+        res.height, genesis_ng_height, SHEKYL_STAKER_EMISSION_SHARE, SHEKYL_STAKER_EMISSION_DECAY, SHEKYL_BLOCKS_PER_YEAR);
 
     uint64_t already_generated = 0;
     if (res.height > 0)
@@ -3551,6 +3552,24 @@ namespace cryptonote
     RPC_TRACKER(flush_cache);
     if (req.bad_blocks)
       m_core.flush_invalid_blocks();
+    res.status = CORE_RPC_STATUS_OK;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_get_staking_info(const COMMAND_RPC_GET_STAKING_INFO::request& req, COMMAND_RPC_GET_STAKING_INFO::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
+  {
+    RPC_TRACKER(get_staking_info);
+    const uint64_t height = m_core.get_current_blockchain_height();
+    res.height = height;
+    res.stake_ratio = m_core.get_blockchain_storage().get_stake_ratio(height);
+    res.total_staked = 0;
+    res.staker_pool_balance = m_core.get_blockchain_storage().get_db().get_staker_pool_balance();
+    const uint64_t genesis_ng_height = m_core.get_blockchain_storage().get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
+    res.staker_emission_share = shekyl_calc_emission_share(
+        height, genesis_ng_height, SHEKYL_STAKER_EMISSION_SHARE, SHEKYL_STAKER_EMISSION_DECAY, SHEKYL_BLOCKS_PER_YEAR);
+    res.tier_0_lock_blocks = shekyl_stake_lock_blocks(0);
+    res.tier_1_lock_blocks = shekyl_stake_lock_blocks(1);
+    res.tier_2_lock_blocks = shekyl_stake_lock_blocks(2);
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }

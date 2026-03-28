@@ -2418,6 +2418,159 @@ namespace tools
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
+  bool wallet_rpc_server::on_stake(const wallet_rpc::COMMAND_RPC_STAKE::request& req, wallet_rpc::COMMAND_RPC_STAKE::response& res, epee::json_rpc::error& er, const connection_context *ctx)
+  {
+    if (!m_wallet) return not_open(er);
+    if (m_restricted)
+    {
+      er.code = WALLET_RPC_ERROR_CODE_DENIED;
+      er.message = "Command unavailable in restricted mode.";
+      return false;
+    }
+
+    try
+    {
+      auto ptx_vector = m_wallet->create_staking_transaction(req.tier, req.amount, req.priority, 0, {});
+      if (ptx_vector.empty())
+      {
+        er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
+        er.message = "No transaction was created";
+        return false;
+      }
+      auto& ptx = ptx_vector.front();
+      m_wallet->commit_tx(ptx);
+      res.tx_hash = epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx));
+      res.fee = ptx.fee;
+    }
+    catch (...)
+    {
+      handle_rpc_exception(std::current_exception(), er, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
+      return false;
+    }
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool wallet_rpc_server::on_unstake(const wallet_rpc::COMMAND_RPC_UNSTAKE::request& req, wallet_rpc::COMMAND_RPC_UNSTAKE::response& res, epee::json_rpc::error& er, const connection_context *ctx)
+  {
+    if (!m_wallet) return not_open(er);
+    if (m_restricted)
+    {
+      er.code = WALLET_RPC_ERROR_CODE_DENIED;
+      er.message = "Command unavailable in restricted mode.";
+      return false;
+    }
+
+    try
+    {
+      auto matured = m_wallet->get_matured_staked_outputs();
+      if (matured.empty())
+      {
+        er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
+        er.message = "No matured staked outputs available for unstaking";
+        return false;
+      }
+      auto ptx_vector = m_wallet->create_unstake_transaction(matured, req.priority);
+      if (ptx_vector.empty())
+      {
+        er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
+        er.message = "No transaction was created";
+        return false;
+      }
+      uint64_t total_amount = 0;
+      for (auto& ptx : ptx_vector)
+      {
+        m_wallet->commit_tx(ptx);
+        res.tx_hash = epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx));
+        for (const auto& o : ptx.tx.vout)
+          total_amount += o.amount;
+      }
+      res.amount = total_amount;
+    }
+    catch (...)
+    {
+      handle_rpc_exception(std::current_exception(), er, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
+      return false;
+    }
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool wallet_rpc_server::on_get_staked_outputs(const wallet_rpc::COMMAND_RPC_GET_STAKED_OUTPUTS::request& req, wallet_rpc::COMMAND_RPC_GET_STAKED_OUTPUTS::response& res, epee::json_rpc::error& er, const connection_context *ctx)
+  {
+    if (!m_wallet) return not_open(er);
+
+    try
+    {
+      const uint64_t current_height = m_wallet->get_blockchain_current_height();
+      uint64_t total_staked = 0;
+      for (size_t i = 0; i < m_wallet->get_num_transfer_details(); ++i)
+      {
+        const auto& td = m_wallet->get_transfer_details(i);
+        if (td.m_staked && !td.m_spent && !td.m_frozen)
+        {
+          wallet_rpc::COMMAND_RPC_GET_STAKED_OUTPUTS::staked_output_entry entry;
+          entry.amount = td.m_amount;
+          entry.tier = td.m_stake_tier;
+          entry.lock_until = td.m_stake_lock_until;
+          entry.matured = td.m_stake_lock_until <= current_height;
+          entry.global_index = td.m_global_output_index;
+          res.outputs.push_back(entry);
+          total_staked += td.m_amount;
+        }
+      }
+      res.total_staked = total_staked;
+    }
+    catch (...)
+    {
+      handle_rpc_exception(std::current_exception(), er, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
+      return false;
+    }
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool wallet_rpc_server::on_claim_rewards(const wallet_rpc::COMMAND_RPC_CLAIM_REWARDS::request& req, wallet_rpc::COMMAND_RPC_CLAIM_REWARDS::response& res, epee::json_rpc::error& er, const connection_context *ctx)
+  {
+    if (!m_wallet) return not_open(er);
+    if (m_restricted)
+    {
+      er.code = WALLET_RPC_ERROR_CODE_DENIED;
+      er.message = "Command unavailable in restricted mode.";
+      return false;
+    }
+
+    try
+    {
+      auto claimable = m_wallet->get_claimable_staked_outputs();
+      if (claimable.empty())
+      {
+        er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
+        er.message = "No claimable staked outputs";
+        return false;
+      }
+      auto ptx_vector = m_wallet->create_claim_transaction(claimable);
+      if (ptx_vector.empty())
+      {
+        er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
+        er.message = "No claim transaction was created";
+        return false;
+      }
+      uint64_t total = 0;
+      for (auto& ptx : ptx_vector)
+      {
+        m_wallet->commit_tx(ptx);
+        res.tx_hash = epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx));
+        for (const auto& o : ptx.tx.vout)
+          total += o.amount;
+      }
+      res.amount = total;
+    }
+    catch (...)
+    {
+      handle_rpc_exception(std::current_exception(), er, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
+      return false;
+    }
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
   bool wallet_rpc_server::on_sign(const wallet_rpc::COMMAND_RPC_SIGN::request& req, wallet_rpc::COMMAND_RPC_SIGN::response& res, epee::json_rpc::error& er, const connection_context *ctx)
   {
     if (!m_wallet) return not_open(er);

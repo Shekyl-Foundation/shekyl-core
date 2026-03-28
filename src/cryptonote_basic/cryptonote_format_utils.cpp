@@ -545,8 +545,12 @@ namespace cryptonote
     uint64_t amount_out = 0;
     for(auto& in: tx.vin)
     {
-      CHECK_AND_ASSERT_MES(in.type() == typeid(txin_to_key), 0, "unexpected type id in transaction");
-      amount_in += boost::get<txin_to_key>(in).amount;
+      if (in.type() == typeid(txin_to_key))
+        amount_in += boost::get<txin_to_key>(in).amount;
+      else if (in.type() == typeid(txin_stake_claim))
+        amount_in += boost::get<txin_stake_claim>(in).amount;
+      else
+        CHECK_AND_ASSERT_MES(false, 0, "unexpected type id in transaction");
     }
     for(auto& o: tx.vout)
       amount_out += o.amount;
@@ -855,8 +859,8 @@ namespace cryptonote
   {
     for(const auto& in: tx.vin)
     {
-      CHECK_AND_ASSERT_MES(in.type() == typeid(txin_to_key), false, "wrong variant type: "
-        << in.type().name() << ", expected " << typeid(txin_to_key).name()
+      CHECK_AND_ASSERT_MES(in.type() == typeid(txin_to_key) || in.type() == typeid(txin_stake_claim), false, "wrong variant type: "
+        << in.type().name() << ", expected txin_to_key or txin_stake_claim"
         << ", in transaction id=" << get_transaction_hash(tx));
 
     }
@@ -973,6 +977,29 @@ namespace cryptonote
       tk.key = output_public_key;
       out.target = tk;
     }
+  }
+  //---------------------------------------------------------------
+  void set_staked_tx_out(const uint64_t amount, const crypto::public_key& output_public_key, const crypto::view_tag& view_tag, uint8_t lock_tier, uint64_t lock_until, tx_out& out)
+  {
+    out.amount = amount;
+    txout_to_staked_key tsk;
+    tsk.key = output_public_key;
+    tsk.view_tag = view_tag;
+    tsk.lock_tier = lock_tier;
+    tsk.lock_until = lock_until;
+    out.target = tsk;
+  }
+  //---------------------------------------------------------------
+  bool get_output_staking_info(const tx_out& out, uint8_t& lock_tier, uint64_t& lock_until)
+  {
+    if (out.target.type() == typeid(txout_to_staked_key))
+    {
+      const auto& staked = boost::get<txout_to_staked_key>(out.target);
+      lock_tier = staked.lock_tier;
+      lock_until = staked.lock_until;
+      return true;
+    }
+    return false;
   }
   //---------------------------------------------------------------
   bool check_output_types(const transaction& tx, const uint8_t hf_version)

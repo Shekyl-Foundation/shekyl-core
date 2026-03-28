@@ -684,6 +684,19 @@ block Blockchain::pop_block_from_blockchain()
     m_tx_pool.validate(new_hf_version);
   }
 
+  {
+    const uint64_t popped_height = m_db->height();
+    auto accrual = m_db->get_staker_accrual(popped_height);
+    uint64_t accrued = accrual.staker_emission + accrual.staker_fee_pool;
+    if (accrued > 0)
+    {
+      uint64_t pool_balance = m_db->get_staker_pool_balance();
+      pool_balance = (accrued <= pool_balance) ? pool_balance - accrued : 0;
+      m_db->set_staker_pool_balance(pool_balance);
+      m_db->remove_staker_accrual(popped_height);
+    }
+  }
+
   return popped_block;
 }
 //------------------------------------------------------------------
@@ -3254,6 +3267,36 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     return false;
   }
 
+  if (hf_version >= HF_VERSION_SHEKYL_NG)
+  {
+    for (const auto &o : tx.vout)
+    {
+      if (o.target.type() == typeid(txout_to_staked_key))
+      {
+        const auto &staked = boost::get<txout_to_staked_key>(o.target);
+        if (staked.lock_tier > 2)
+        {
+          MERROR_VER("Invalid staking tier " << (int)staked.lock_tier << " (must be 0, 1, or 2)");
+          tvc.m_invalid_output = true;
+          return false;
+        }
+        if (staked.lock_until == 0)
+        {
+          MERROR_VER("Staked output has zero lock_until");
+          tvc.m_invalid_output = true;
+          return false;
+        }
+        const uint64_t expected_lock_blocks = shekyl_stake_lock_blocks(staked.lock_tier);
+        if (expected_lock_blocks == 0)
+        {
+          MERROR_VER("Unknown lock duration for tier " << (int)staked.lock_tier);
+          tvc.m_invalid_output = true;
+          return false;
+        }
+      }
+    }
+  }
+
   return true;
 }
 //------------------------------------------------------------------
@@ -3262,9 +3305,16 @@ bool Blockchain::have_tx_keyimges_as_spent(const transaction &tx) const
   LOG_PRINT_L3("Blockchain::" << __func__);
   for (const txin_v& in: tx.vin)
   {
-    CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, in_to_key, true);
-    if(have_tx_keyimg_as_spent(in_to_key.k_image))
-      return true;
+    if (in.type() == typeid(txin_to_key))
+    {
+      if (have_tx_keyimg_as_spent(boost::get<txin_to_key>(in).k_image))
+        return true;
+    }
+    else if (in.type() == typeid(txin_stake_claim))
+    {
+      if (have_tx_keyimg_as_spent(boost::get<txin_stake_claim>(in).k_image))
+        return true;
+    }
   }
   return false;
 }
@@ -3515,6 +3565,27 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     pmax_used_block_height = &max_used_block_height;
   for (const auto& txin : tx.vin)
   {
+    if (txin.type() == typeid(txin_stake_claim))
+    {
+      const txin_stake_claim& claim = boost::get<txin_stake_claim>(txin);
+      if (have_tx_keyimg_as_spent(claim.k_image))
+      {
+        MERROR_VER("Claim key image already spent: " << epee::string_tools::pod_to_hex(claim.k_image));
+        tvc.m_double_spend = true;
+        return false;
+      }
+
+      if (!check_stake_claim_input(claim, m_db->height()))
+      {
+        MERROR_VER("Invalid stake claim input");
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
+
+      ++sig_index;
+      continue;
+    }
+
     // make sure output being spent is of type txin_to_key, rather than
     // e.g. txin_gen, which is only used for miner transactions
     CHECK_AND_ASSERT_MES(txin.type() == typeid(txin_to_key), false, "wrong type id in tx input at Blockchain::check_tx_inputs");
@@ -3622,7 +3693,17 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     switch (rv.type)
     {
     case rct::RCTTypeNull: {
-      // we only accept no signatures for coinbase txes
+      bool all_claim_inputs = !tx.vin.empty();
+      for (const auto& vin : tx.vin)
+      {
+        if (vin.type() != typeid(txin_stake_claim))
+        {
+          all_claim_inputs = false;
+          break;
+        }
+      }
+      if (all_claim_inputs)
+        break;
       MERROR_VER("Null rct signature on non-coinbase tx");
       return false;
     }
@@ -4063,6 +4144,65 @@ bool Blockchain::check_tx_input(size_t tx_version, const txin_to_key& txin, cons
     CHECK_AND_ASSERT_MES(sig.size() == output_keys.size(), false, "internal error: tx signatures count=" << sig.size() << " mismatch with outputs keys count for inputs=" << output_keys.size());
   }
   // rct_signatures will be expanded after this
+  return true;
+}
+//------------------------------------------------------------------
+bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t current_height) const
+{
+  LOG_PRINT_L3("Blockchain::" << __func__);
+
+  static const uint64_t MAX_CLAIM_RANGE = 10000;
+
+  if (claim.to_height > current_height)
+  {
+    MERROR_VER("Claim to_height " << claim.to_height << " exceeds current height " << current_height);
+    return false;
+  }
+
+  if (claim.from_height >= claim.to_height)
+  {
+    MERROR_VER("Claim from_height " << claim.from_height << " must be less than to_height " << claim.to_height);
+    return false;
+  }
+
+  if (claim.to_height - claim.from_height > MAX_CLAIM_RANGE)
+  {
+    MERROR_VER("Claim range " << (claim.to_height - claim.from_height) << " exceeds maximum " << MAX_CLAIM_RANGE);
+    return false;
+  }
+
+  uint64_t watermark = m_db->get_staker_claim_watermark(claim.staked_output_index);
+  if (watermark > 0 && claim.from_height != watermark)
+  {
+    MERROR_VER("Claim from_height " << claim.from_height << " does not match watermark " << watermark);
+    return false;
+  }
+
+  uint64_t computed_reward = 0;
+  for (uint64_t h = claim.from_height + 1; h <= claim.to_height; ++h)
+  {
+    auto accrual = m_db->get_staker_accrual(h);
+    uint64_t total_reward_at_h = accrual.staker_emission + accrual.staker_fee_pool;
+    if (total_reward_at_h == 0 || accrual.total_weighted_stake == 0)
+      continue;
+
+    uint64_t weight = shekyl_stake_weight(0, 0);
+    computed_reward += (uint64_t)((double)total_reward_at_h * (double)weight / (double)accrual.total_weighted_stake);
+  }
+
+  if (claim.amount != computed_reward)
+  {
+    MERROR_VER("Claim amount " << claim.amount << " does not match computed reward " << computed_reward);
+    return false;
+  }
+
+  uint64_t pool_balance = m_db->get_staker_pool_balance();
+  if (claim.amount > pool_balance)
+  {
+    MERROR_VER("Claim amount " << claim.amount << " exceeds pool balance " << pool_balance);
+    return false;
+  }
+
   return true;
 }
 //------------------------------------------------------------------
@@ -4549,6 +4689,41 @@ leave:
     cumulative_block_weight = m_blocks_hash_check[blockchain_height].second;
   }
 
+  if (m_hardfork->get_current_version() >= HF_VERSION_SHEKYL_NG)
+  {
+    auto validate_staked_outputs_in_tx = [&](const transaction& tx) -> bool {
+      for (const auto &o : tx.vout)
+      {
+        if (o.target.type() == typeid(txout_to_staked_key))
+        {
+          const auto &staked = boost::get<txout_to_staked_key>(o.target);
+          const uint64_t expected_lock_blocks = shekyl_stake_lock_blocks(staked.lock_tier);
+          const uint64_t expected_lock_until = blockchain_height + expected_lock_blocks;
+          if (staked.lock_until != expected_lock_until)
+          {
+            MERROR_VER("Staked output lock_until " << staked.lock_until
+              << " does not match expected " << expected_lock_until
+              << " (height " << blockchain_height << " + tier " << (int)staked.lock_tier
+              << " lock " << expected_lock_blocks << ")");
+            return false;
+          }
+        }
+      }
+      return true;
+    };
+
+    for (const auto &tx_pair : txs)
+    {
+      if (!validate_staked_outputs_in_tx(tx_pair.first))
+      {
+        MERROR_VER("Block with id: " << id << " has a transaction with invalid staked output lock_until");
+        bvc.m_verifivation_failed = true;
+        return_txs_to_pool();
+        return false;
+      }
+    }
+  }
+
   TIME_MEASURE_START(vmt);
   uint64_t base_reward = 0;
   uint64_t already_generated_coins = blockchain_height ? m_db->get_block_already_generated_coins(blockchain_height - 1) : 0;
@@ -4621,6 +4796,32 @@ leave:
     MERROR("Failed to update next cumulative weight limit");
     pop_block_from_blockchain();
     return false;
+  }
+
+  if (m_hardfork->get_current_version() >= HF_VERSION_SHEKYL_NG && new_height > 0)
+  {
+    const uint64_t genesis_ng_height = m_hardfork->get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
+    const uint64_t prev_already_generated = blockchain_height ? m_db->get_block_already_generated_coins(blockchain_height - 1) : 0;
+
+    uint64_t full_block_emission = 0;
+    get_block_reward(0, 0, prev_already_generated, full_block_emission, m_hardfork->get_current_version());
+
+    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(
+        full_block_emission, blockchain_height, genesis_ng_height, m_hardfork->get_current_version());
+
+    uint64_t stake_ratio_at_height = get_stake_ratio(blockchain_height);
+    shekyl::BurnResult burn = shekyl::compute_fee_burn(
+        fee_summary, 0, prev_already_generated, stake_ratio_at_height, m_hardfork->get_current_version());
+
+    BlockchainDB::staker_accrual_record accrual_record;
+    accrual_record.staker_emission = em_split.staker_emission;
+    accrual_record.staker_fee_pool = burn.staker_pool_amount;
+    accrual_record.total_weighted_stake = m_stake_ratio_cache_total_staked;
+    m_db->add_staker_accrual(blockchain_height, accrual_record);
+
+    uint64_t pool_balance = m_db->get_staker_pool_balance();
+    pool_balance += em_split.staker_emission + burn.staker_pool_amount;
+    m_db->set_staker_pool_balance(pool_balance);
   }
 
   MINFO("+++++ BLOCK SUCCESSFULLY ADDED" << std::endl << "id:\t" << id << std::endl << "PoW:\t" << proof_of_work << std::endl << "HEIGHT " << new_height-1 << ", difficulty:\t" << current_diffic << std::endl << "block reward: " << print_money(fee_summary + base_reward) << "(" << print_money(base_reward) << " + " << print_money(fee_summary) << "), coinbase_weight: " << coinbase_weight << ", cumulative weight: " << cumulative_block_weight << ", " << block_processing_time << "(" << target_calculating_time << "/" << longhash_calculating_time << ")ms");

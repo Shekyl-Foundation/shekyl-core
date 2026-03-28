@@ -38,6 +38,43 @@
 - Updated libwallet API helper scripts to call `shekyl-wallet-cli` (not
   `monero-wallet-cli`) so test tooling matches Shekyl binary names.
 
+### Staking (end-to-end claim-based system)
+
+- Added `txout_to_staked_key` output target type for locking coins at a chosen
+  tier (short/medium/long). Outputs carry `lock_tier` and `lock_until` fields
+  enforced at the consensus layer.
+- Added `txin_stake_claim` input type for claiming accrued staking rewards.
+  Claims specify a height range and are validated against deterministic per-block
+  accrual records.
+- Extended LMDB schema with `staker_accrual` and `staker_claims` tables plus a
+  `staker_pool_balance` property for on-chain reward pool accounting.
+- Per-block accrual logic computes staker emission share and fee pool allocation
+  at block insertion time, with full reversal on reorg (block pop).
+- Consensus validation: `lock_until` enforcement on staked outputs, claim amount
+  verification against accrual records, watermark-based anti-double-claim,
+  maximum claim range (10,000 blocks), pool balance sufficiency checks.
+- Pure claim transactions (`txin_stake_claim`-only inputs) use `RCTTypeNull`
+  signatures, cleanly separated from ring-signature transaction validation.
+- Extended `tx_destination_entry` with `is_staking`, `stake_tier`, and
+  `stake_lock_until` fields. `construct_tx_with_tx_key` emits
+  `txout_to_staked_key` outputs when `is_staking` is set.
+- Extended `transfer_details` with `m_staked`, `m_stake_tier`, and
+  `m_stake_lock_until` for wallet-side staking metadata tracking.
+- Implemented wallet2 methods: `create_staking_transaction`,
+  `create_unstake_transaction`, `create_claim_transaction`,
+  `get_matured_staked_outputs`, `get_locked_staked_outputs`,
+  `get_claimable_staked_outputs`, `get_staked_balance`,
+  `estimate_claimable_reward`.
+- Added simplewallet commands: `stake <tier> <amount>`, `unstake`,
+  `claim_rewards`.
+- Added wallet RPC endpoints: `stake`, `unstake`, `get_staked_outputs`,
+  `claim_rewards`.
+- Added daemon RPC endpoint: `get_staking_info` returning current staking
+  metrics (height, stake ratio, pool balance, emission share, tier lock blocks).
+- Wired `stake_ratio` and `staker_pool_balance` in `/get_info` to live
+  blockchain state.
+- No minimum stake amount enforced (matches design doc).
+
 ### Consensus and mining economics
 
 - Wired Four-Component economics to live chain-state inputs for miner reward

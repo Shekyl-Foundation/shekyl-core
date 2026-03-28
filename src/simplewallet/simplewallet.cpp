@@ -76,6 +76,7 @@
 #include <stdexcept>
 #include "wallet/message_store.h"
 #include "QrCode.hpp"
+#include "shekyl/shekyl_ffi.h"
 
 #ifdef WIN32
 #include <boost/locale.hpp>
@@ -3435,6 +3436,10 @@ simple_wallet::simple_wallet()
                            boost::bind(&simple_wallet::on_command, this, &simple_wallet::unstake_coins, _1),
                            tr("unstake\n"
                               "  List and unlock expired staked outputs."));
+  m_cmd_binder.set_handler("claim_rewards",
+                           boost::bind(&simple_wallet::on_command, this, &simple_wallet::claim_rewards, _1),
+                           tr("claim_rewards\n"
+                              "  Claim accrued staking rewards from locked staked outputs."));
   m_cmd_binder.set_handler("transfer", boost::bind(&simple_wallet::on_command, this, &simple_wallet::transfer, _1),
                            tr(USAGE_TRANSFER),
                            tr("Transfer <address> <amount>. If the parameter \"index=<N1>[,<N2>,...]\" is specified, the wallet uses outputs received by addresses of those indices. If omitted, the wallet randomly chooses address indices to be used. In any case, it tries its best not to combine outputs across multiple addresses. <priority> is the priority of the transaction. The higher the priority, the higher the transaction fee. Valid values in priority order (from lowest to highest) are: unimportant, normal, elevated, priority. If omitted, the default value (see the command \"set priority\") is used. <ring_size> is the number of inputs to include for untraceability. Multiple payments can be made at once by adding URI_2 or <address_2> <amount_2> etcetera (before the payment ID, if it's included). The \"subtractfeefrom=\" list allows you to choose which destinations to fund the tx fee from instead of the change output. The fee will be split across the chosen destinations proportionally equally. For example, to make 3 transfers where the fee is taken from the first and third destinations, one could do: \"transfer <addr1> 3 <addr2> 0.5 <addr3> 1 subtractfeefrom=0,2\". Let's say the tx fee is 0.1. The balance would drop by exactly 4.5 XMR including fees, and addr1 & addr3 would receive 2.925 & 0.975 XMR, respectively. Use \"subtractfeefrom=all\" to spread the fee across all destinations."));
@@ -6450,16 +6455,187 @@ bool simple_wallet::stake_coins(const std::vector<std::string>& args)
     return true;
   }
 
-  // TODO: construct staking transaction with txout_to_staked_key output
-  success_msg_writer() << tr("Staking is not yet fully implemented in this build.");
-  success_msg_writer() << "Would stake " << args[1] << " SHEKYL in tier " << (int)tier;
+  uint64_t amount;
+  if (!cryptonote::parse_amount(amount, args[1]))
+  {
+    fail_msg_writer() << tr("amount is wrong: ") << args[1];
+    return true;
+  }
+
+  if (amount == 0)
+  {
+    fail_msg_writer() << tr("amount must be greater than 0");
+    return true;
+  }
+
+  const uint64_t lock_blocks = shekyl_stake_lock_blocks(tier);
+  const char* tier_names[] = {"Short", "Medium", "Long"};
+  double hours = lock_blocks * 2.0 / 60.0;
+
+  success_msg_writer() << "\n  Staking " << print_money(amount) << " SHEKYL";
+  success_msg_writer() << "  Tier:     " << (int)tier << " (" << tier_names[tier] << ")";
+  success_msg_writer() << "  Lock:     " << lock_blocks << " blocks (~" << std::fixed << std::setprecision(1) << hours << " hours)";
+  success_msg_writer() << "  Yield:    " << (tier == 0 ? "1.0x" : tier == 1 ? "1.5x" : "2.0x");
+
+  if (!command_line::is_yes(input_line("Confirm staking? (Y/Yes/N/No): ", true)))
+  {
+    fail_msg_writer() << tr("transaction cancelled.");
+    return true;
+  }
+
+  SCOPED_WALLET_UNLOCK();
+
+  try
+  {
+    auto ptx_vector = m_wallet->create_staking_transaction(tier, amount, m_current_subaddress_account, 0, {});
+    if (ptx_vector.empty())
+    {
+      fail_msg_writer() << tr("no transaction was created");
+      return true;
+    }
+
+    uint64_t total_fee = 0;
+    for (const auto& ptx : ptx_vector)
+      total_fee += ptx.fee;
+
+    success_msg_writer() << "  Fee:      " << print_money(total_fee) << " SHEKYL";
+
+    if (!command_line::is_yes(input_line("Commit staking transaction? (Y/Yes/N/No): ", true)))
+    {
+      fail_msg_writer() << tr("transaction cancelled.");
+      return true;
+    }
+
+    for (auto& ptx : ptx_vector)
+    {
+      m_wallet->commit_tx(ptx);
+      success_msg_writer(true) << tr("Staking transaction committed: ") << get_transaction_hash(ptx.tx);
+    }
+  }
+  catch (const std::exception& e)
+  {
+    fail_msg_writer() << tr("failed to create staking transaction: ") << e.what();
+  }
+
   return true;
 }
 //----------------------------------------------------------------------------------------------------
 bool simple_wallet::unstake_coins(const std::vector<std::string>& args)
 {
-  // TODO: scan wallet for expired staked outputs and construct unlock transactions
-  success_msg_writer() << tr("Unstaking is not yet fully implemented in this build.");
+  auto matured = m_wallet->get_matured_staked_outputs();
+  if (matured.empty())
+  {
+    auto locked = m_wallet->get_locked_staked_outputs();
+    if (locked.empty())
+      success_msg_writer() << tr("No staked outputs found.");
+    else
+    {
+      success_msg_writer() << tr("No matured staked outputs. Locked stakes:");
+      const uint64_t height = m_wallet->get_blockchain_current_height();
+      for (size_t idx : locked)
+      {
+        const auto& td = m_wallet->get_transfer_details(idx);
+        uint64_t remaining = td.m_stake_lock_until > height ? td.m_stake_lock_until - height : 0;
+        success_msg_writer() << "  [" << idx << "] " << print_money(td.m_amount)
+          << " SHEKYL  tier " << (int)td.m_stake_tier
+          << "  unlocks in " << remaining << " blocks";
+      }
+    }
+    return true;
+  }
+
+  success_msg_writer() << tr("Matured staked outputs available for unstaking:");
+  uint64_t total = 0;
+  for (size_t idx : matured)
+  {
+    const auto& td = m_wallet->get_transfer_details(idx);
+    success_msg_writer() << "  [" << idx << "] " << print_money(td.m_amount)
+      << " SHEKYL  tier " << (int)td.m_stake_tier;
+    total += td.m_amount;
+  }
+  success_msg_writer() << "  Total:  " << print_money(total) << " SHEKYL";
+
+  if (!command_line::is_yes(input_line("Unstake all matured outputs? (Y/Yes/N/No): ", true)))
+  {
+    fail_msg_writer() << tr("transaction cancelled.");
+    return true;
+  }
+
+  SCOPED_WALLET_UNLOCK();
+
+  try
+  {
+    auto ptx_vector = m_wallet->create_unstake_transaction(matured, 0);
+    if (ptx_vector.empty())
+    {
+      fail_msg_writer() << tr("no transaction was created");
+      return true;
+    }
+
+    for (auto& ptx : ptx_vector)
+    {
+      m_wallet->commit_tx(ptx);
+      success_msg_writer(true) << tr("Unstaking transaction committed: ") << get_transaction_hash(ptx.tx);
+    }
+  }
+  catch (const std::exception& e)
+  {
+    fail_msg_writer() << tr("failed to create unstaking transaction: ") << e.what();
+  }
+
+  return true;
+}
+//----------------------------------------------------------------------------------------------------
+bool simple_wallet::claim_rewards(const std::vector<std::string>& args)
+{
+  auto claimable = m_wallet->get_claimable_staked_outputs();
+  if (claimable.empty())
+  {
+    auto locked = m_wallet->get_locked_staked_outputs();
+    if (locked.empty())
+      success_msg_writer() << tr("No staked outputs found.");
+    else
+      success_msg_writer() << tr("No claimable staked outputs. You may need to wait for accrual to accumulate.");
+    return true;
+  }
+
+  success_msg_writer() << tr("Staked outputs with pending rewards:");
+  for (size_t idx : claimable)
+  {
+    const auto& td = m_wallet->get_transfer_details(idx);
+    success_msg_writer() << "  [" << idx << "] " << print_money(td.m_amount)
+      << " SHEKYL  tier " << (int)td.m_stake_tier
+      << "  locked until height " << td.m_stake_lock_until;
+  }
+
+  if (!command_line::is_yes(input_line("Claim rewards for all eligible staked outputs? (Y/Yes/N/No): ", true)))
+  {
+    fail_msg_writer() << tr("transaction cancelled.");
+    return true;
+  }
+
+  SCOPED_WALLET_UNLOCK();
+
+  try
+  {
+    auto ptx_vector = m_wallet->create_claim_transaction(claimable);
+    if (ptx_vector.empty())
+    {
+      fail_msg_writer() << tr("no claim transaction was created");
+      return true;
+    }
+
+    for (auto& ptx : ptx_vector)
+    {
+      m_wallet->commit_tx(ptx);
+      success_msg_writer(true) << tr("Claim transaction committed: ") << get_transaction_hash(ptx.tx);
+    }
+  }
+  catch (const std::exception& e)
+  {
+    fail_msg_writer() << tr("failed to create claim transaction: ") << e.what();
+  }
+
   return true;
 }
 //----------------------------------------------------------------------------------------------------

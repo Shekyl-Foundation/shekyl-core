@@ -2805,5 +2805,119 @@ namespace wallet_rpc
     };
     typedef epee::misc_utils::struct_init<response_t> response;
   };
+  struct COMMAND_RPC_STAKE
+  {
+    struct request_t
+    {
+      uint8_t tier;
+      uint64_t amount;
+      uint32_t priority;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(tier)
+        KV_SERIALIZE(amount)
+        KV_SERIALIZE_OPT(priority, (uint32_t)0)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    struct response_t
+    {
+      std::string tx_hash;
+      uint64_t fee;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(tx_hash)
+        KV_SERIALIZE(fee)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
+
+  struct COMMAND_RPC_UNSTAKE
+  {
+    struct request_t
+    {
+      uint32_t priority;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_OPT(priority, (uint32_t)0)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    struct response_t
+    {
+      std::string tx_hash;
+      uint64_t amount;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(tx_hash)
+        KV_SERIALIZE(amount)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
+
+  struct COMMAND_RPC_GET_STAKED_OUTPUTS
+  {
+    struct staked_output_entry
+    {
+      uint64_t amount;
+      uint8_t tier;
+      uint64_t lock_until;
+      bool matured;
+      uint64_t global_index;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(amount)
+        KV_SERIALIZE(tier)
+        KV_SERIALIZE(lock_until)
+        KV_SERIALIZE(matured)
+        KV_SERIALIZE(global_index)
+      END_KV_SERIALIZE_MAP()
+    };
+
+    struct request_t
+    {
+      BEGIN_KV_SERIALIZE_MAP()
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    struct response_t
+    {
+      std::vector<staked_output_entry> outputs;
+      uint64_t total_staked;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(outputs)
+        KV_SERIALIZE(total_staked)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
+
+  struct COMMAND_RPC_CLAIM_REWARDS
+  {
+    struct request_t
+    {
+      BEGIN_KV_SERIALIZE_MAP()
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    struct response_t
+    {
+      std::string tx_hash;
+      uint64_t amount;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(tx_hash)
+        KV_SERIALIZE(amount)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
 }
 }

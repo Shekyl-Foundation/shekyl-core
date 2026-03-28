@@ -90,6 +90,8 @@ namespace cryptonote
   bool get_payment_id_from_tx_extra_nonce(const blobdata& extra_nonce, crypto::hash& payment_id);
   bool get_encrypted_payment_id_from_tx_extra_nonce(const blobdata& extra_nonce, crypto::hash8& payment_id);
   void set_tx_out(const uint64_t amount, const crypto::public_key& output_public_key, const bool use_view_tags, const crypto::view_tag& view_tag, tx_out& out);
+  void set_staked_tx_out(const uint64_t amount, const crypto::public_key& output_public_key, const crypto::view_tag& view_tag, uint8_t lock_tier, uint64_t lock_until, tx_out& out);
+  bool get_output_staking_info(const tx_out& out, uint8_t& lock_tier, uint64_t& lock_until);
   bool check_output_types(const transaction& tx, const uint8_t hf_version);
   bool out_can_be_to_acc(const boost::optional<crypto::view_tag>& view_tag_opt, const crypto::key_derivation& derivation, const size_t output_index, hw::device *hwdev = nullptr);
   bool is_out_to_acc(const account_keys& acc, const crypto::public_key& output_public_key, const crypto::public_key& tx_pub_key, const std::vector<crypto::public_key>& additional_tx_public_keys, size_t output_index, const boost::optional<crypto::view_tag>& view_tag_opt = boost::optional<crypto::view_tag>());

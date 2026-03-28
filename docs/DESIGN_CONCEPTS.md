@@ -237,6 +237,13 @@ staker_reward = total_staker_pool * (staker_weight / total_weighted_stake)
 
 Any amount can be staked. The yield on 1 SHEKYL will be negligible, but participation should have no gate. The gesture of staking matters as much as the amount.
 
+#### Implementation reference
+
+Staking is implemented end-to-end. See `docs/STAKER_REWARD_DISBURSEMENT.md` for
+the full technical specification including transaction types (`txout_to_staked_key`,
+`txin_stake_claim`), on-chain LMDB storage schema, consensus validation rules,
+wallet commands, and RPC endpoints.
+
 #### Self-balancing dynamics
 
 - If too many people stake: yields per staker decrease (same pool, more participants). Some unstake, restoring equilibrium.
@@ -440,6 +447,7 @@ If this design is adopted:
    - Ensure all amount fields remain atomic-unit based.
    - Add explicit metadata for display precision in docs and client SDKs.
    - Expose new fields: `release_multiplier`, `burn_pct`, `stake_ratio`, `staker_pool_balance`, `staker_emission_share_effective`, `staker_yield_annualized`.
+     - **Implemented:** `stake_ratio` and `staker_pool_balance` are wired to live chain state in `/get_info`. The dedicated `/get_staking_info` RPC returns all staking metrics.
    - Document the reboot-only PQ transaction format separately in `docs/POST_QUANTUM_CRYPTOGRAPHY.md`.
 
 5. **Test coverage**
