@@ -38,3 +38,18 @@ FIND_PATH(UNBOUND_INCLUDE_DIR
 )
 
 find_library(UNBOUND_LIBRARIES unbound)
+
+# When linking statically, libunbound depends on nettle, hogweed, gmp,
+# and libevent for DNSSEC validation. These must be linked explicitly.
+if(STATIC AND UNBOUND_LIBRARIES AND UNIX)
+    find_library(GMP_LIBRARY gmp)
+    find_library(NETTLE_LIBRARY nettle)
+    find_library(HOGWEED_LIBRARY hogweed)
+    find_library(EVENT_LIBRARY event)
+    foreach(_lib ${EVENT_LIBRARY} ${HOGWEED_LIBRARY} ${NETTLE_LIBRARY} ${GMP_LIBRARY})
+        if(_lib)
+            list(APPEND UNBOUND_LIBRARIES ${_lib})
+        endif()
+    endforeach()
+    message(STATUS "Static libunbound deps: ${UNBOUND_LIBRARIES}")
+endif()
