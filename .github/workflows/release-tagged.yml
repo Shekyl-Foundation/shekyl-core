@@ -9,6 +9,7 @@ permissions:
   contents: write
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
@@ -40,7 +41,7 @@ jobs:
             libhidapi-dev libusb-1.0-0-dev \
             libprotobuf-dev protobuf-compiler \
             libgtest-dev libnorm-dev libpgm-dev \
-            libnettle-dev libgmp-dev libevent-dev \
+            nettle-dev libgmp-dev libevent-dev \
             libunwind-dev liblzma-dev \
             ruby ruby-dev rubygems rpm
 
@@ -161,6 +162,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           . "$HOME/.cargo/env"
           rustup target add x86_64-pc-windows-gnu
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Configure git
         run: git config --global --add safe.directory '*'
@@ -183,7 +185,6 @@ jobs:
 
       - name: Build via depends
         run: |
-          . "$HOME/.cargo/env"
           ${{ env.CCACHE_SETTINGS }}
           make depends target=x86_64-w64-mingw32 -j$(nproc)
 

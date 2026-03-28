@@ -8,6 +8,7 @@ on:
       - '**/README.md'
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
@@ -33,33 +34,43 @@ jobs:
           - name: "RISCV 64bit"
             host: "riscv64-linux-gnu"
             packages: "python3 gperf g++-riscv64-linux-gnu"
+            rust_target: "riscv64gc-unknown-linux-gnu"
           - name: "ARM v7"
             host: "arm-linux-gnueabihf"
             packages: "python3 gperf g++-arm-linux-gnueabihf"
+            rust_target: "armv7-unknown-linux-gnueabihf"
           - name: "ARM v8"
             host: "aarch64-linux-gnu"
             packages: "python3 gperf g++-aarch64-linux-gnu"
+            rust_target: "aarch64-unknown-linux-gnu"
           - name: "i686 Win"
             host: "i686-w64-mingw32"
             packages: "python3 g++-mingw-w64-i686"
+            rust_target: "i686-pc-windows-gnu"
           - name: "i686 Linux"
             host: "i686-pc-linux-gnu"
             packages: "gperf cmake g++-multilib python3-zmq"
+            rust_target: "i686-unknown-linux-gnu"
           - name: "Win64"
             host: "x86_64-w64-mingw32"
             packages: "cmake python3 g++-mingw-w64-x86-64"
+            rust_target: "x86_64-pc-windows-gnu"
           - name: "x86_64 Linux"
             host: "x86_64-unknown-linux-gnu"
             packages: "gperf cmake python3-zmq libdbus-1-dev libharfbuzz-dev"
+            rust_target: ""
           - name: "Cross-Mac x86_64"
             host: "x86_64-apple-darwin11"
             packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python-dev python3-setuptools-git libtinfo5"
+            rust_target: "x86_64-apple-darwin"
           - name: "Cross-Mac aarch64"
             host: "aarch64-apple-darwin11"
             packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python-dev python3-setuptools-git libtinfo5"
+            rust_target: "aarch64-apple-darwin"
           - name: "x86_64 Freebsd"
             host: "x86_64-unknown-freebsd"
             packages: "clang-8 gperf cmake python3-zmq libdbus-1-dev libharfbuzz-dev"
+            rust_target: "x86_64-unknown-freebsd"
     name: ${{ matrix.toolchain.name }}
     steps:
     - name: set apt conf
@@ -100,6 +111,14 @@ jobs:
       run: |
         update-alternatives --set ${{ matrix.toolchain.host }}-g++ $(which ${{ matrix.toolchain.host }}-g++-posix)
         update-alternatives --set ${{ matrix.toolchain.host }}-gcc $(which ${{ matrix.toolchain.host }}-gcc-posix)
+    - name: install Rust
+      run: |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        . "$HOME/.cargo/env"
+        if [ -n "${{ matrix.toolchain.rust_target }}" ]; then
+          rustup target add ${{ matrix.toolchain.rust_target }}
+        fi
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
     - name: build
       run: |
         ${{env.CCACHE_SETTINGS}}
