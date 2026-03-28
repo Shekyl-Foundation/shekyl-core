@@ -24,6 +24,8 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // 
 
+// TODO(shekyl-v4): Migrate Levin protocol handler from boost::asio to
+// standalone Asio. Tightly coupled to abstract_tcp_server2; migrate together.
 #pragma once
 #include <boost/asio/steady_timer.hpp>
 #include <boost/uuid/uuid_generators.hpp>

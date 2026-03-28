@@ -32,6 +32,10 @@
 #include <numeric>
 #include <tuple>
 #include <queue>
+// TODO(shekyl-v4): Migrate boost::format, boost::algorithm::string,
+// boost::filesystem, and boost::archive to std/custom equivalents.
+// wallet2 is the largest consumer of Boost in the codebase; requires C++17
+// for filesystem and a serialization transition plan for archive types.
 #include <boost/format.hpp>
 #include <boost/optional/optional.hpp>
 #include <boost/algorithm/string/classification.hpp>

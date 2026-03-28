@@ -28,6 +28,8 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+// TODO(shekyl-v4): Replace boost::serialization with a versioned binary codec.
+// Peerlist data is serialized to disk; migration requires backward-compat reads.
 #pragma once
 
 #include <cstring>

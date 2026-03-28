@@ -28,6 +28,9 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+// TODO(shekyl-v4): Evaluate replacing boost::multiprecision::uint128_t with
+// compiler __uint128_t or a lightweight 128-bit integer library. The difficulty
+// type is used pervasively in consensus-critical arithmetic.
 #pragma once
 
 #include <cstdint>

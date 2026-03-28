@@ -49,7 +49,7 @@
 #include <boost/program_options.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/format.hpp>
-#include <boost/regex.hpp>
+#include <regex>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/filesystem.hpp>
 #include "include_base_utils.h"
@@ -5728,10 +5728,9 @@ bool simple_wallet::set_daemon(const std::vector<std::string>& args)
     return true;
   }
 
-  boost::regex rgx("^(.*://)?([A-Za-z0-9\\-\\.]+)(:[0-9]+)?");
-  boost::cmatch match;
-  // If user input matches URL regex
-  if (boost::regex_match(args[0].c_str(), match, rgx))
+  std::regex rgx("^(.*://)?([A-Za-z0-9\\-\\.]+)(:[0-9]+)?");
+  std::cmatch match;
+  if (std::regex_match(args[0].c_str(), match, rgx))
   {
     if (match.length() < 4)
     {
@@ -5742,7 +5741,7 @@ bool simple_wallet::set_daemon(const std::vector<std::string>& args)
     if (!match[3].length())
     {
       uint16_t daemon_port = get_config(m_wallet->nettype()).RPC_DEFAULT_PORT;
-      daemon_url = match[1] + match[2] + std::string(":") + std::to_string(daemon_port);
+      daemon_url = match[1].str() + match[2].str() + ":" + std::to_string(daemon_port);
     } else {
       daemon_url = args[0];
     }

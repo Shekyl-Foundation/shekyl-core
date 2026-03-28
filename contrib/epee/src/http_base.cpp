@@ -24,6 +24,9 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // 
 
+// TODO(shekyl-v4): Migrate boost::regex in HTTP header parsing to std::regex.
+// These patterns parse network input; verify identical edge-case semantics
+// before switching.
 #include "net/http_base.h"
 #include "memwipe.h"
 #include "string_tools.h"

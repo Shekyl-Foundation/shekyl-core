@@ -32,6 +32,9 @@
 
 
 
+// TODO(shekyl-v4): Migrate epee TCP server from boost::asio to standalone Asio
+// or std networking TS. This is the core networking layer; changes propagate to
+// every P2P and RPC connection path.
 #ifndef _ABSTRACT_TCP_SERVER2_H_ 
 #define _ABSTRACT_TCP_SERVER2_H_ 
 

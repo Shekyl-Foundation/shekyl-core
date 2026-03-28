@@ -26,6 +26,7 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <filesystem>
 #include "bootstrap_file.h"
 #include "blocksdat_file.h"
 #include "common/command_line.h"
@@ -53,7 +54,7 @@ int main(int argc, char* argv[])
 
   tools::on_startup();
 
-  boost::filesystem::path output_file_path;
+  std::filesystem::path output_file_path;
 
   po::options_description desc_cmd_only("Command line options");
   po::options_description desc_cmd_sett("Command line options and settings options");
@@ -119,9 +120,9 @@ int main(int argc, char* argv[])
   m_config_folder = command_line::get_arg(vm, cryptonote::arg_data_dir);
 
   if (command_line::has_arg(vm, arg_output_file))
-    output_file_path = boost::filesystem::path(command_line::get_arg(vm, arg_output_file));
+    output_file_path = std::filesystem::path(command_line::get_arg(vm, arg_output_file));
   else
-    output_file_path = boost::filesystem::path(m_config_folder) / "export" / BLOCKCHAIN_RAW;
+    output_file_path = std::filesystem::path(m_config_folder) / "export" / BLOCKCHAIN_RAW;
   LOG_PRINT_L0("Export output file: " << output_file_path.string());
 
   // If we wanted to use the memory pool, we would set up a fake_core.
@@ -148,7 +149,7 @@ int main(int argc, char* argv[])
   }
   LOG_PRINT_L0("database: LMDB");
 
-  boost::filesystem::path folder(m_config_folder);
+  std::filesystem::path folder(m_config_folder);
   folder /= db->get_db_name();
   const std::string filename = folder.string();
 

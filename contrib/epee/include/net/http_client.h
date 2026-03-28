@@ -26,6 +26,8 @@
 
 
 
+// TODO(shekyl-v4): Migrate boost::regex in HTTP client to std::regex. Patterns
+// parse network input; verify identical edge-case semantics before switching.
 #pragma once
 #include <ctype.h>
 #include <boost/shared_ptr.hpp>

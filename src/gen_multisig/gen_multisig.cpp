@@ -36,8 +36,6 @@
 #include <iostream>
 #include <sstream>
 #include <boost/program_options.hpp>
-#include <boost/algorithm/string.hpp>
-#include <boost/format.hpp>
 #include "include_base_utils.h"
 #include "crypto/crypto.h"  // for crypto::secret_key definition
 #include "common/i18n.h"
@@ -77,7 +75,7 @@ namespace
 
 static bool generate_multisig(uint32_t threshold, uint32_t total, const std::string &basename, network_type nettype, bool create_address_file)
 {
-  tools::msg_writer() << (boost::format(genms::tr("Generating %u %u/%u multisig wallets")) % total % threshold % total).str();
+  tools::msg_writer() << genms::tr("Generating ") << total << " " << threshold << "/" << total << genms::tr(" multisig wallets");
 
   const auto pwd_container = tools::password_container::prompt(true, "Enter password for new multisig wallets");
 
@@ -217,7 +215,7 @@ int main(int argc, char* argv[])
   }
   if (threshold <= 1 || threshold > total)
   {
-    tools::fail_msg_writer() << (boost::format(genms::tr("Error: expected N > 1 and N <= M, but got N==%u and M==%d")) % threshold % total).str();
+    tools::fail_msg_writer() << genms::tr("Error: expected N > 1 and N <= M, but got N==") << threshold << genms::tr(" and M==") << total;
     return 1;
   }
   if (!(*vm)["filename-base"].defaulted() && !command_line::get_arg(*vm, arg_filename_base).empty())

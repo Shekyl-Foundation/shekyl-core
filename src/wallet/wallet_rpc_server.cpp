@@ -27,6 +27,9 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
+// TODO(shekyl-v4): Migrate boost::format, boost::regex (user-influenced paths),
+// boost::filesystem, and boost::algorithm::string to std equivalents. Requires
+// C++17 for filesystem and careful audit of translated format strings.
 #include <boost/format.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/filesystem/operations.hpp>

@@ -28,6 +28,9 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+// TODO(shekyl-v4): Migrate boost::posix_time usage to std::chrono. Coupled to
+// connection_context.h time types; migrate as a unit with connection_context
+// and net_node.
 #pragma once
 
 #include <string>

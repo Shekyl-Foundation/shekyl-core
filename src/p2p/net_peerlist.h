@@ -28,6 +28,10 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+// TODO(shekyl-v4): Evaluate replacing boost::multi_index_container with a
+// simpler data structure or standalone multi-index library. The peerlist uses
+// composite indices (by address, by last-seen time, by id) which have no
+// direct std equivalent.
 #pragma once
 
 #include <iosfwd>

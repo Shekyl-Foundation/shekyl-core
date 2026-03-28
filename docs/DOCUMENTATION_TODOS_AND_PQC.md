@@ -75,6 +75,33 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 | **Modular PoW schema** | PoW hashing now routes through a schema interface and registry (`IPowSchema`, RandomX schema, Cryptonight schema) while preserving historic behavior (`major_version >= RX_BLOCK_VERSION` => RandomX; older => Cryptonight variants). |
 | **Follow-up TODO** | Add configuration-driven PoW activation policy and expand test coverage for schema-selection parity against legacy `get_block_longhash` behavior. |
 
+### 1.11 Boost Migration Status
+
+**Completed (C++17 bump + medium-effort migrations)**:
+
+- C++ standard bumped from C++14 to C++17 (`CMAKE_CXX_STANDARD 17`).
+- `boost::algorithm::string` → `tools::string_util` (trim, to_lower, iequals, join).
+- `boost::format` → `snprintf` / stream output in utility and tool files.
+- `boost::regex` → `std::regex` in `simplewallet.cpp`, `wallet_manager.cpp`.
+- `boost::mutex` / `boost::lock_guard` / `boost::unique_lock` / `boost::condition_variable` → `std::mutex` / `std::lock_guard` / `std::unique_lock` / `std::condition_variable` in `util.h`, `util.cpp`, `threadpool.h`, `threadpool.cpp`, `rpc_payment.h`, `rpc_payment.cpp`.
+- `boost::filesystem` → `std::filesystem` in `blockchain_export.cpp`, `blockchain_import.cpp`, `cn_deserialize.cpp`, `util.cpp`, `bootstrap_file.h`/`.cpp`, `blocksdat_file.h`/`.cpp`.
+
+**Deferred hard areas** (tagged `TODO(shekyl-v4)` in source):
+
+| Area | Files | Rationale for deferral |
+|------|-------|----------------------|
+| **Serialization** | `cryptonote_boost_serialization.h`, `net_peerlist_boost_serialization.h` | Wire/disk format; needs versioned codec transition and backward-compat shim |
+| **ASIO / epee networking** | `abstract_tcp_server2.h`, `levin_protocol_handler_async.h` | Core networking layer; every P2P and RPC path depends on it |
+| **Multi-index containers** | `net_peerlist.h` | Composite indices (by address, time, id) have no direct std equivalent |
+| **Spirit parser** | `http_auth.cpp` | Heavyweight compile dep; small grammar, but needs manual rewrite |
+| **Multiprecision** | `difficulty.h`, `int-util.cpp` | Consensus-critical 128-bit arithmetic; evaluate `__uint128_t` |
+| **Filesystem (high-coupling)** | `wallet2.cpp`, `wallet_rpc_server.cpp`, `wallet_manager.cpp`, `net_ssl.cpp`, `rpc/core_rpc_server.cpp` | Deeply interleaved with Boost ASIO and wallet serialization paths |
+| **boost::format (wallet/CLI)** | `wallet2.cpp`, `wallet_rpc_server.cpp`, `simplewallet.cpp`, `wallet_args.cpp` | Hundreds of translated format strings; migration needs i18n audit |
+| **boost::split (token_compress)** | `util.cpp` (vercmp, word_wrap) | `token_compress_on` has no direct std equivalent |
+| **boost::regex (network parsers)** | `http_base.cpp`, `http_client.h`, `wallet_rpc_server.cpp` | Parse untrusted network input; edge-case semantics must be verified |
+| **boost::posix_time / date_time** | `connection_context.h`, `block_queue.h`, `net_node.h` | Types cross P2P protocol boundaries; must migrate as a coordinated unit |
+| **boost::thread (attributes)** | `threadpool.h` | `boost::thread::attributes` (stack size) has no std equivalent |
+
 ---
 
 ## 2) What Is Documented for PQC
@@ -193,6 +220,7 @@ Remaining:
 | Release | Full checklist; Shekyl-specific seeds, wallets, exchanges | — |
 | Seeds | Populate DNS/IP seeds; runtime seed add; Shekyl naming | — |
 | Economics / PoW | Finish config-driven proof activation and staker-claim transaction grammar | Stake-ratio chain-state tracking implemented; modular PoW scaffolding implemented |
+| **Boost migration** | C++17 bump complete; medium-effort items done (string utils, format, regex, mutex/cv, filesystem in utilities); hard areas deferred with `TODO(shekyl-v4)` tags (see §1.11) | C++17 unlocks `std::filesystem`, `std::optional` |
 | **PQC** | **v3 complete; 4 published vectors (1 positive, 3 negative); V4 roadmap published; external audit and KEM implementation remain** | **Core of this document** |
 
 ---

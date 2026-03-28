@@ -56,6 +56,7 @@
 
 #include "unbound.h"
 
+#include <thread>
 #include "include_base_utils.h"
 #include "file_io_utils.h"
 #include "wipeable_string.h"
@@ -81,10 +82,9 @@ using namespace epee;
   #include <sys/utsname.h>
   #include <sys/stat.h>
 #endif
-#include <boost/filesystem.hpp>
+#include <filesystem>
 #include <boost/algorithm/string.hpp>
 #include <boost/asio.hpp>
-#include <boost/format.hpp>
 #include <openssl/evp.h>
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
@@ -118,19 +118,10 @@ namespace tools
 
   void copy_file(const std::string& from, const std::string& to)
   {
-    using boost::filesystem::path;
-  #if BOOST_VERSION < 107400
-    // Remove this preprocessor if/else when we are bumping the boost version.
-    boost::filesystem::copy_file(
-        path(from),
-        path(to),
-        boost::filesystem::copy_option::overwrite_if_exists);
-  #else
-    boost::filesystem::copy_file(
-        path(from),
-        path(to),
-        boost::filesystem::copy_options::overwrite_existing);
-  #endif
+    std::filesystem::copy_file(
+        std::filesystem::path(from),
+        std::filesystem::path(to),
+        std::filesystem::copy_options::overwrite_existing);
   }
 
   std::function<void(int)> signal_handler::m_handler;
@@ -246,8 +237,8 @@ namespace tools
   private_file private_file::drop_and_recreate(std::string filename)
   {
     if (epee::file_io_utils::is_file_exist(filename)) {
-      boost::system::error_code ec{};
-      boost::filesystem::remove(filename, ec);
+      std::error_code ec{};
+      std::filesystem::remove(filename, ec);
       if (ec) {
         MERROR("Failed to remove " << filename << ": " << ec.message());
         return {};
@@ -264,8 +255,8 @@ namespace tools
   {
     try
     {
-      boost::system::error_code ec{};
-      boost::filesystem::remove(filename(), ec);
+      std::error_code ec{};
+      std::filesystem::remove(filename(), ec);
     }
     catch (...) {}
   }
@@ -636,7 +627,7 @@ std::string get_nix_version_display_string()
   {
     /* Please for the love of god refactor  the ifdefs out of this */
 
-    // namespace fs = boost::filesystem;
+    // namespace fs = std::filesystem;
     // Windows < Vista: C:\Documents and Settings\Username\Application Data\CRYPTONOTE_NAME
     // Windows >= Vista: C:\Users\Username\AppData\Roaming\CRYPTONOTE_NAME
     // Unix & Mac: ~/.CRYPTONOTE_NAME
@@ -659,8 +650,8 @@ std::string get_nix_version_display_string()
 
   bool create_directories_if_necessary(const std::string& path)
   {
-    namespace fs = boost::filesystem;
-    boost::system::error_code ec;
+    namespace fs = std::filesystem;
+    std::error_code ec;
     fs::path fs_path(path);
     if (fs::is_directory(fs_path, ec))
     {
@@ -724,11 +715,11 @@ std::string get_nix_version_display_string()
 
   bool sanitize_locale()
   {
-    // boost::filesystem throws for "invalid" locales, such as en_US.UTF-8, or kjsdkfs,
+    // std::filesystem may throw for "invalid" locales, such as en_US.UTF-8, or kjsdkfs,
     // so reset it here before any calls to it
     try
     {
-      boost::filesystem::path p {std::string("test")};
+      std::filesystem::path p {std::string("test")};
       p /= std::string("test");
     }
     catch (...)
@@ -885,24 +876,24 @@ std::string get_nix_version_display_string()
 
   namespace
   {
-    boost::mutex max_concurrency_lock;
-    unsigned max_concurrency = boost::thread::hardware_concurrency();
+    std::mutex max_concurrency_lock;
+    unsigned max_concurrency = std::thread::hardware_concurrency();
   }
 
   void set_max_concurrency(unsigned n)
   {
     if (n < 1)
-      n = boost::thread::hardware_concurrency();
-    unsigned hwc = boost::thread::hardware_concurrency();
+      n = std::thread::hardware_concurrency();
+    unsigned hwc = std::thread::hardware_concurrency();
     if (n > hwc)
       n = hwc;
-    boost::lock_guard<boost::mutex> lock(max_concurrency_lock);
+    std::lock_guard<std::mutex> lock(max_concurrency_lock);
     max_concurrency = n;
   }
 
   unsigned get_max_concurrency()
   {
-    boost::lock_guard<boost::mutex> lock(max_concurrency_lock);
+    std::lock_guard<std::mutex> lock(max_concurrency_lock);
     return max_concurrency;
   }
 
@@ -1166,7 +1157,9 @@ std::string get_nix_version_display_string()
         std::begin(sizes), std::end(sizes) - 1, byte_map{"", bytes}, bytes_less{}
     );
     const std::uint64_t divisor = size->bytes / 1024;
-    return (boost::format(size->format) % (double(bytes) / divisor)).str();
+    char buf[64];
+    snprintf(buf, sizeof(buf), size->format, double(bytes) / divisor);
+    return buf;
   }
 
   void clear_screen()

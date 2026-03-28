@@ -29,6 +29,9 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 // Parts of this file are originally copyright (c) 2006-2013, Andrey N. Sabelnikov, www.sabelnikov.net
 
+// TODO(shekyl-v4): Migrate boost::posix_time::ptime fields to
+// std::chrono::system_clock::time_point. This struct crosses P2P protocol
+// boundaries; change must be coordinated with block_queue and net_node.
 #pragma once
 #include <unordered_set>
 #include <atomic>

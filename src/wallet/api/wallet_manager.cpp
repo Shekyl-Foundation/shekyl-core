@@ -38,7 +38,7 @@
 #include "version.h"
 #include "net/http_client.h"
 #include <boost/filesystem.hpp>
-#include <boost/regex.hpp>
+#include <regex>
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "WalletAPI"
@@ -202,18 +202,17 @@ std::vector<std::string> WalletManagerImpl::findWallets(const std::string &path)
     if(!boost::filesystem::is_directory(path)){
         return result;
     }
-    const boost::regex wallet_rx("(.*)\\.(keys)$"); // searching for <wallet_name>.keys files
-    boost::filesystem::recursive_directory_iterator end_itr; // Default ctor yields past-the-end
+    const std::regex wallet_rx("(.*)\\.(keys)$");
+    boost::filesystem::recursive_directory_iterator end_itr;
     for (boost::filesystem::recursive_directory_iterator itr(path); itr != end_itr; ++itr) {
-        // Skip if not a file
         if (!boost::filesystem::is_regular_file(itr->status()))
             continue;
-        boost::smatch what;
+        std::smatch what;
         std::string filename = itr->path().filename().string();
 
         LOG_PRINT_L3("Checking filename: " << filename);
 
-        bool matched = boost::regex_match(filename, what, wallet_rx);
+        bool matched = std::regex_match(filename, what, wallet_rx);
         if (matched) {
             // if keys file found, checking if there's wallet file itself
             std::string wallet_file = (itr->path().parent_path() /= what[1].str()).string();

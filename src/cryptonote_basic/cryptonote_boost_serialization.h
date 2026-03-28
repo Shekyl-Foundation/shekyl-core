@@ -28,6 +28,9 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+// TODO(shekyl-v4): Replace boost::serialization with a zero-copy binary codec.
+// This header defines on-disk and P2P wire formats; migration requires a
+// versioned format transition and backward-compatibility shim.
 #pragma once
 
 #include <boost/serialization/vector.hpp>

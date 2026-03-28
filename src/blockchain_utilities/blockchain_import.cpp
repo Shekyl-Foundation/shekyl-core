@@ -31,7 +31,7 @@
 #include <algorithm>
 #include <fstream>
 
-#include <boost/filesystem.hpp>
+#include <filesystem>
 #include <boost/algorithm/string.hpp>
 #include <unistd.h>
 #include "misc_log_ex.h"
@@ -228,9 +228,9 @@ int import_from_file(cryptonote::core& core, const std::string& import_file_path
   // This aligns internal db counts with importer counts.
   core.get_blockchain_storage().get_db().reset_stats();
 
-  boost::filesystem::path fs_import_file_path(import_file_path);
-  boost::system::error_code ec;
-  if (!boost::filesystem::exists(fs_import_file_path, ec))
+  std::filesystem::path fs_import_file_path(import_file_path);
+  std::error_code ec;
+  if (!std::filesystem::exists(fs_import_file_path, ec))
   {
     MFATAL("bootstrap file not found: " << fs_import_file_path);
     return false;
@@ -685,12 +685,12 @@ int main(int argc, char* argv[])
 
   MINFO("Starting...");
 
-  boost::filesystem::path fs_import_file_path;
+  std::filesystem::path fs_import_file_path;
 
   if (command_line::has_arg(vm, arg_input_file))
-    fs_import_file_path = boost::filesystem::path(command_line::get_arg(vm, arg_input_file));
+    fs_import_file_path = std::filesystem::path(command_line::get_arg(vm, arg_input_file));
   else
-    fs_import_file_path = boost::filesystem::path(m_config_folder) / "export" / BLOCKCHAIN_RAW;
+    fs_import_file_path = std::filesystem::path(m_config_folder) / "export" / BLOCKCHAIN_RAW;
 
   import_file_path = fs_import_file_path.string();
 

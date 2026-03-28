@@ -27,9 +27,8 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <boost/program_options.hpp>
-#include <boost/format.hpp>
-#include <boost/algorithm/string.hpp>
 #include <openssl/ssl.h>
+#include "common/string_util.h"
 #include <openssl/pem.h>
 #include "include_base_utils.h"
 #include "file_io_utils.h"
@@ -167,8 +166,7 @@ int main(int argc, char* argv[])
         return 1;
       }
 
-      // Remove line breaks the user might have inserted
-      boost::trim_right_if(passphrase, boost::is_any_of("\r\n"));
+      tools::string_util::trim_right(passphrase, "\r\n");
       private_key_passphrase = passphrase;
       memwipe(&passphrase[0], passphrase.size());
     }
@@ -178,7 +176,8 @@ int main(int argc, char* argv[])
     private_key_passphrase = command_line::get_arg(vm, arg_passphrase);
   }
   if (private_key_passphrase.empty())
-    tools::msg_writer(epee::console_color_yellow) << (boost::format(tr("Empty passphrase, the private key will be saved to disk unencrypted, use --%s to set a passphrase or --%s to prompt for one")) % arg_passphrase.name % arg_prompt_for_passphrase.name).str();
+    tools::msg_writer(epee::console_color_yellow) << tr("Empty passphrase, the private key will be saved to disk unencrypted, use --")
+      << arg_passphrase.name << tr(" to set a passphrase or --") << arg_prompt_for_passphrase.name << tr(" to prompt for one");
 
   EVP_PKEY *pkey;
   X509 *cert;

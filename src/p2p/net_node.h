@@ -28,6 +28,9 @@
 //
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+// TODO(shekyl-v4): Migrate boost::posix_time and boost::thread types to
+// std::chrono and std::thread. This header defines the P2P node; time-type
+// changes cascade into connection_context and block_queue.
 #pragma once
 #include <array>
 #include <atomic>

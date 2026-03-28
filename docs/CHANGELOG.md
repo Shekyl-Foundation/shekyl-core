@@ -107,6 +107,36 @@
   `DESIGN_CONCEPTS.md` evaluating random maturation delay, claim batching,
   and reward output shaping with adversarial analysis and go/no-go criteria.
 
+### C++17 and Boost migration
+
+- **C++17 standard bump**: `CMAKE_CXX_STANDARD` changed from 14 to 17. This
+  unblocks `std::filesystem`, `std::optional`, and other modern C++ features.
+  Upstream Monero cherry-picks that required C++14-to-C++17 back-ports now
+  compile without shims.
+- **Medium-effort Boost removals (completed)**:
+  - `boost::algorithm::string` (trim, to_lower, iequals, join) replaced with
+    `tools::string_util` helpers in `src/common/string_util.h`.
+  - `boost::format` replaced with `snprintf`, stream output, or string
+    concatenation in `util.cpp`, `message_store.cpp`, `gen_ssl_cert.cpp`,
+    `gen_multisig.cpp`.
+  - `boost::regex` replaced with `std::regex` in `simplewallet.cpp` and
+    `wallet_manager.cpp`.
+  - `boost::mutex`, `boost::lock_guard`, `boost::unique_lock`, and
+    `boost::condition_variable` replaced with `std::mutex`, `std::lock_guard`,
+    `std::unique_lock`, and `std::condition_variable` in `util.h`, `util.cpp`,
+    `threadpool.h`, `threadpool.cpp`, and `rpc_payment.h`/`rpc_payment.cpp`.
+  - `boost::thread::hardware_concurrency()` replaced with
+    `std::thread::hardware_concurrency()`.
+- **Filesystem migration (utility files)**:
+  - `boost::filesystem` replaced with `std::filesystem` in
+    `blockchain_export.cpp`, `blockchain_import.cpp`, `cn_deserialize.cpp`,
+    `util.cpp`, `bootstrap_file.h`/`.cpp`, and `blocksdat_file.h`/`.cpp`.
+  - Eliminated `BOOST_VERSION` preprocessor conditional in `copy_file()`.
+- **Deferred Boost areas**: Hard migrations (serialization, ASIO, multi-index,
+  Spirit, multiprecision, wallet/daemon filesystem, wallet format strings)
+  tagged with `TODO(shekyl-v4)` in source. See `DOCUMENTATION_TODOS_AND_PQC.md`
+  section 1.11 for the full backlog.
+
 ### CI/CD and build system
 
 - Migrated version identifiers from legacy `MONERO_*` symbols to canonical
@@ -196,9 +226,9 @@ Skipped commits (deferred to future integration): input verification caching
 fixes, and several CMake/depends version bumps that conflict with Shekyl's
 build system divergences.
 
-All cherry-picked code adapted to C++14 compatibility (our standard); upstream
-C++17 features (`std::optional`, `std::string_view`, `std::size()`,
-`inline constexpr` variables) replaced with Boost/C++14 equivalents.
+Cherry-picked code was initially adapted to C++14 compatibility; with the
+subsequent C++17 standard bump, many of those back-ports are now unnecessary
+and can use native `std::optional`, `std::string_view`, etc.
 
 ### Documentation and operations
 

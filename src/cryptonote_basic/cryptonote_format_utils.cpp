@@ -29,7 +29,7 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #include <atomic>
-#include <boost/algorithm/string.hpp>
+#include "common/string_util.h"
 #include "wipeable_string.h"
 #include "string_tools.h"
 #include "string_tools_lexical.h"
@@ -410,7 +410,7 @@ namespace cryptonote
   bool parse_amount(uint64_t& amount, const std::string& str_amount_)
   {
     std::string str_amount = str_amount_;
-    boost::algorithm::trim(str_amount);
+    tools::string_util::trim(str_amount);
 
     size_t point_index = str_amount.find_first_of('.');
     size_t fraction_size;
