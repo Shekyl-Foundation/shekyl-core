@@ -1,4 +1,5 @@
 !include "MUI2.nsh"
+!include "StrFunc.nsh"
 
 !ifndef VERSION
   !define VERSION "0.0.0"
@@ -34,6 +35,11 @@ RequestExecutionLevel admin
 
 !insertmacro MUI_LANGUAGE "English"
 
+${StrStr}
+${UnStrStr}
+${StrRep}
+${UnStrRep}
+
 Section "Shekyl Core (required)" SecCore
   SectionIn RO
   SetOutPath "$INSTDIR"
@@ -64,8 +70,11 @@ SectionEnd
 
 Section "Add to PATH" SecPath
   ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path"
-  StrCpy $0 "$0;$INSTDIR"
-  WriteRegExpandStr HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path" "$0"
+  ${StrStr} $1 $0 $INSTDIR
+  StrCmp $1 "" 0 PathAlreadyPresent
+    StrCpy $0 "$0;$INSTDIR"
+    WriteRegExpandStr HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path" "$0"
+  PathAlreadyPresent:
 SectionEnd
 
 Section "Start Menu Shortcuts" SecShortcuts
@@ -93,6 +102,16 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\Shekyl\Shekyl Wallet CLI.lnk"
   Delete "$SMPROGRAMS\Shekyl\Uninstall.lnk"
   RMDir "$SMPROGRAMS\Shekyl"
+
+  ; Remove $INSTDIR from system PATH (handles ";dir", "dir;", and lone "dir")
+  ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path"
+  ${UnStrStr} $1 $0 $INSTDIR
+  StrCmp $1 "" PathCleanDone
+    ${UnStrRep} $0 $0 ";$INSTDIR" ""
+    ${UnStrRep} $0 $0 "$INSTDIR;" ""
+    ${UnStrRep} $0 $0 "$INSTDIR" ""
+    WriteRegExpandStr HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path" "$0"
+  PathCleanDone:
 
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Shekyl"
   DeleteRegKey HKLM "Software\Shekyl"

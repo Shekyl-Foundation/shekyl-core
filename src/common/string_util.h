@@ -47,7 +47,11 @@ namespace string_util
 
   inline void trim_right(std::string &s, const std::string &chars)
   {
-    s.erase(s.find_last_not_of(chars) + 1);
+    auto pos = s.find_last_not_of(chars);
+    if (pos == std::string::npos)
+      s.clear();
+    else
+      s.erase(pos + 1);
   }
 
   inline void to_lower(std::string &s)
