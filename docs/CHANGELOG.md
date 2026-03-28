@@ -53,6 +53,13 @@
 
 ### CI/CD and build system
 
+- Migrated version identifiers from legacy `MONERO_*` symbols to canonical
+  `SHEKYL_*` names (`SHEKYL_VERSION`, `SHEKYL_VERSION_TAG`,
+  `SHEKYL_RELEASE_NAME`, `SHEKYL_VERSION_FULL`, `SHEKYL_VERSION_IS_RELEASE`)
+  in `src/version.h` and `src/version.cpp.in`. The old `MONERO_*` names are
+  retained as preprocessor aliases so existing call sites and future Monero
+  upstream cherry-picks continue to compile unchanged. The aliases will be
+  removed in a single cleanup after v4 RingPQC stabilises.
 - Fixed Gitian deterministic build pipeline: replaced all hardcoded Monero
   repository URLs and internal package names with Shekyl equivalents across
   `gitian-build.py`, all 5 gitian descriptor YAMLs, `dockrun.sh`, and the
@@ -81,6 +88,13 @@
   `libshekyl_ffi.a` linking.
 - Fixed Gitian `gitian-build.py` to fetch tags explicitly (`--tags`) during
   repository setup, preventing checkout failures for tag-based builds.
+- Enhanced `gitian-build.py` error handling: robust `lsb_release` detection,
+  auto-correction of stale clone origins when `--url` changes, and detailed
+  diagnostics on checkout failure (lists available remote tags and suggests
+  the push command).
+- Added `workflow_dispatch` trigger to `gitian.yml` with configurable `tag` and
+  `repo_url` inputs, allowing manual re-runs and testing against forks without
+  retagging.
 - Fixed Doxygen project name from `Monero` to `Shekyl` in `cmake/Doxyfile.in`.
 - Replaced bundled Google Test 1.7.0 (2013) with CMake `FetchContent` for
   GoogleTest v1.16.0. Fixes `GTEST_SKIP` compilation errors on all platforms

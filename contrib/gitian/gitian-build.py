@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 
@@ -133,7 +134,10 @@ def main():
     args = parser.parse_args()
     workdir = os.getcwd()
 
-    args.is_bionic = b'bionic' in subprocess.check_output(['lsb_release', '-cs'])
+    try:
+        args.is_bionic = b'bionic' in subprocess.check_output(['lsb_release', '-cs'])
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        args.is_bionic = False
 
     if args.buildsign:
         args.build = True
@@ -179,18 +183,46 @@ def main():
 
     os.makedirs('builder/inputs/shekyl', exist_ok=True)
     os.chdir('builder/inputs/shekyl')
+
+    if not os.path.isdir('.git'):
+        print("ERROR: builder/inputs/shekyl is not a git repository.\n"
+              "Run with --setup first, or check that the clone from '{}' succeeded.".format(args.url))
+        sys.exit(1)
+
+    current_origin = subprocess.check_output(
+        ['git', 'remote', 'get-url', 'origin'], universal_newlines=True
+    ).strip()
+    if current_origin != args.url:
+        print("NOTE: Updating clone origin from '{}' to '{}'".format(current_origin, args.url))
+        subprocess.check_call(['git', 'remote', 'set-url', 'origin', args.url])
+
     if args.pull:
         subprocess.check_call(['git', 'fetch', args.url, 'refs/pull/'+args.version+'/merge'])
         args.commit = subprocess.check_output(['git', 'show', '-s', '--format=%H', 'FETCH_HEAD'], universal_newlines=True).strip()
         args.version = 'pull-' + args.version
-    print(args.commit)
+
+    print("Fetching from: {}".format(args.url))
+    print("Checking out:  {}".format(args.commit))
     subprocess.check_call(['git', 'fetch', '--tags'])
     try:
         subprocess.check_call(['git', 'checkout', args.commit])
     except subprocess.CalledProcessError:
-        print("ERROR: Could not checkout '{}' from '{}'.\n"
-              "Ensure the tag/branch exists in the repository and that --url points to the correct remote."
-              .format(args.commit, args.url))
+        refs = subprocess.check_output(
+            ['git', 'ls-remote', '--refs', 'origin'], universal_newlines=True
+        )
+        print("\nERROR: Could not checkout '{}' from '{}'.\n".format(args.commit, args.url))
+        if 'refs/tags/' + args.commit in refs:
+            print("The tag exists on the remote but was not fetched. Try deleting the local clone:\n"
+                  "  rm -rf builder/inputs/shekyl\n"
+                  "Then re-run with --setup.")
+        else:
+            print("The ref '{}' does not exist on the remote.".format(args.commit))
+            print("Available tags:")
+            for line in refs.splitlines():
+                if 'refs/tags/' in line and not line.endswith('^{}'):
+                    tag = line.split('refs/tags/')[-1]
+                    print("  " + tag)
+            print("\nDid you push the tag?  git push <remote> {}".format(args.commit))
         sys.exit(1)
     os.chdir(workdir)
 

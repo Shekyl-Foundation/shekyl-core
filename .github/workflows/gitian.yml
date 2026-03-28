@@ -4,9 +4,19 @@ on:
   push:
     tags:
       - '*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v3.0.2-RC1)'
+        required: true
+      repo_url:
+        description: 'Repository URL override (leave empty for default)'
+        required: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GITIAN_REPO_URL: ${{ inputs.repo_url || format('https://github.com/{0}', github.repository) }}
+  GITIAN_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build-gitian:
@@ -36,13 +46,13 @@ jobs:
         chmod +x contrib/gitian/gitian-build.py
     - name: setup
       run: |
-        ./contrib/gitian/gitian-build.py --setup --docker --url https://github.com/${{ github.repository }} github-actions ${{ github.ref_name }}
+        ./contrib/gitian/gitian-build.py --setup --docker --url "$GITIAN_REPO_URL" github-actions "$GITIAN_TAG"
     - name: build
       run: |
-        ./contrib/gitian/gitian-build.py --docker --detach-sign --no-commit --build -j 3 -o ${{ matrix.operating-system.option }} --url https://github.com/${{ github.repository }} github-actions ${{ github.ref_name }}
+        ./contrib/gitian/gitian-build.py --docker --detach-sign --no-commit --build -j 3 -o ${{ matrix.operating-system.option }} --url "$GITIAN_REPO_URL" github-actions "$GITIAN_TAG"
     - name: post build
       run: |
-        cd out/${{ github.ref_name }}
+        cd "out/$GITIAN_TAG"
         shasum -a256 *
         echo \`\`\` >> $GITHUB_STEP_SUMMARY
         shasum -a256 * >> $GITHUB_STEP_SUMMARY
@@ -51,4 +61,4 @@ jobs:
       with:
         name: ${{ matrix.operating-system.name }}
         path: |
-          out/${{ github.ref_name }}/*
+          out/${{ env.GITIAN_TAG }}/*
