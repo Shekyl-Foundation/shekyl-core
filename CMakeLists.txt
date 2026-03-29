@@ -1130,6 +1130,25 @@ elseif(Boost_FOUND)
   set(CMAKE_FIND_LIBRARY_SUFFIXES ${OLD_LIB_SUFFIXES})
 endif()
 
+# When Boost is found via CONFIG mode (1.85+), the old-style Boost_XXX_LIBRARY
+# variables may point to versioned .so paths that don't exist on rolling-release
+# distros (e.g. Arch). Remap them to imported targets which resolve correctly.
+if(_BOOST_USE_CONFIG)
+  foreach(_comp filesystem thread chrono system date_time serialization
+          program_options locale regex container atomic)
+    string(TOUPPER "${_comp}" _COMP_UPPER)
+    if(TARGET Boost::${_comp})
+      set(Boost_${_COMP_UPPER}_LIBRARY Boost::${_comp})
+    endif()
+  endforeach()
+  set(Boost_LIBRARIES "")
+  foreach(_comp IN LISTS BOOST_COMPONENTS)
+    if(TARGET Boost::${_comp})
+      list(APPEND Boost_LIBRARIES Boost::${_comp})
+    endif()
+  endforeach()
+endif()
+
 add_definitions(-DBOOST_ASIO_ENABLE_SEQUENTIAL_STRAND_ALLOCATION)
 add_definitions(-DBOOST_NO_AUTO_PTR)
 add_definitions(-DBOOST_UUID_DISABLE_ALIGNMENT) # This restores UUID's std::has_unique_object_representations property

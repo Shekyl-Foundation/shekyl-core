@@ -150,6 +150,19 @@
 - **CMake wiring**: `epee` library now links `${SHEKYL_FFI_LINK_LIBS}` and
   includes `${CMAKE_SOURCE_DIR}/src` for the FFI headers.
 
+### Build fixes
+
+- **Boost CONFIG-mode compatibility shim**: When Boost is found via cmake
+  CONFIG mode (Boost 1.85+), old-style `${Boost_XXX_LIBRARY}` variables may
+  resolve to versioned `.so` paths that don't exist on rolling-release distros
+  (e.g. Arch Linux with Boost 1.90). Added a shim in the root `CMakeLists.txt`
+  that remaps all `Boost_*_LIBRARY` variables to `Boost::*` imported targets
+  when CONFIG mode is active. Fixes linker failures on Arch.
+- **Removed duplicate `parse_amount` test**: Two identical
+  `TEST_pos(18446744073709551615, ...)` entries in
+  `tests/unit_tests/parse_amount.cpp` caused a redefinition error on macOS
+  Clang. Removed the duplicate.
+
 ### Warning cleanup and dead code removal
 
 - **Removed dead fork helpers**: Deleted unused `get_bulletproof_fork()`,
