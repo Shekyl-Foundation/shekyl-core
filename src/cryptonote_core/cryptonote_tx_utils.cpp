@@ -603,7 +603,8 @@ namespace cryptonote
         "build_genesis_coinbase_from_destinations: destinations list is empty");
 
     transaction tx{};
-    tx.version = 1;
+    // Emit modern genesis coinbase format for future regenesis operations.
+    tx.version = CURRENT_TRANSACTION_VERSION;
     tx.unlock_time = CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
 
     txin_gen in;

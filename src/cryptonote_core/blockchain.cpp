@@ -1329,7 +1329,9 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   LOG_PRINT_L3("Blockchain::" << __func__);
   CHECK_AND_ASSERT_MES(b.miner_tx.vin.size() == 1, false, "coinbase transaction in the block has no inputs");
   CHECK_AND_ASSERT_MES(std::holds_alternative<txin_gen>(b.miner_tx.vin[0]), false, "coinbase transaction in the block has the wrong type");
-  CHECK_AND_ASSERT_MES(b.miner_tx.version > 1, false, "Invalid coinbase transaction version");
+  const bool is_genesis_block = (height == 0);
+  const bool is_accepted_genesis_legacy_v1 = is_genesis_block && b.miner_tx.version == 1;
+  CHECK_AND_ASSERT_MES(b.miner_tx.version > 1 || is_accepted_genesis_legacy_v1, false, "Invalid coinbase transaction version");
 
   // for v2 txes (ringct), we only accept empty rct signatures for miner transactions,
   if (b.miner_tx.version >= 2)
@@ -1352,7 +1354,24 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
     return false;
   }
 
-  CHECK_AND_ASSERT_MES(check_output_types(b.miner_tx, hf_version), false, "miner transaction has invalid output type(s) in block " << get_block_hash(b));
+  if (is_genesis_block)
+  {
+    // Allow legacy genesis artifacts that still use txout_to_key while keeping
+    // all post-genesis output-type rules unchanged.
+    for (const auto &o: b.miner_tx.vout)
+    {
+      CHECK_AND_ASSERT_MES(
+        std::holds_alternative<txout_to_key>(o.target) ||
+        std::holds_alternative<txout_to_tagged_key>(o.target) ||
+        std::holds_alternative<txout_to_staked_key>(o.target),
+        false,
+        "miner transaction has invalid output type(s) in block " << get_block_hash(b));
+    }
+  }
+  else
+  {
+    CHECK_AND_ASSERT_MES(check_output_types(b.miner_tx, hf_version), false, "miner transaction has invalid output type(s) in block " << get_block_hash(b));
+  }
 
   return true;
 }
@@ -1365,6 +1384,15 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   uint64_t money_in_use = 0;
   for (auto& o: b.miner_tx.vout)
     money_in_use += o.amount;
+
+  if (block_height == 0)
+  {
+    // Genesis emission is hardcoded via GENESIS_TX and may not match the live
+    // runtime reward function after economics tuning. Validate structure in
+    // prevalidate_miner_transaction and accept the configured amount here.
+    base_reward = money_in_use;
+    return true;
+  }
 
   if (version == 3) {
     for (auto &o: b.miner_tx.vout) {
@@ -4494,7 +4522,9 @@ uint64_t Blockchain::get_next_long_term_block_weight(uint64_t block_weight) cons
   const uint64_t db_height = m_db->height();
   const uint64_t nblocks = std::min<uint64_t>(m_long_term_block_weights_window, db_height);
 
-  uint64_t long_term_median = get_long_term_block_weight_median(db_height - nblocks, nblocks);
+  uint64_t long_term_median = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
+  if (nblocks > 0)
+    long_term_median = get_long_term_block_weight_median(db_height - nblocks, nblocks);
   uint64_t long_term_effective_median_block_weight = std::max<uint64_t>(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, long_term_median);
 
   // long_term_block_weight = block_weight bounded to range [long-term-median/1.7, long-term-median*1.7]
@@ -4518,7 +4548,9 @@ bool Blockchain::update_next_cumulative_weight_limit(uint64_t *long_term_effecti
 
   {
     const uint64_t nblocks = std::min<uint64_t>(m_long_term_block_weights_window, db_height);
-    const uint64_t long_term_median = get_long_term_block_weight_median(db_height - nblocks, nblocks);
+    const uint64_t long_term_median = nblocks > 0
+      ? get_long_term_block_weight_median(db_height - nblocks, nblocks)
+      : CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
 
     m_long_term_effective_median_block_weight = std::max<uint64_t>(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5, long_term_median);
 

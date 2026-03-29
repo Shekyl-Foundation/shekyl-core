@@ -2,10 +2,28 @@
 
 ## Unreleased
 
+### GUI Wallet
+
+- New project: Shekyl GUI Wallet (`shekyl-gui-wallet`) at
+  [Shekyl-Foundation/shekyl-gui-wallet](https://github.com/Shekyl-Foundation/shekyl-gui-wallet).
+  Built with Tauri 2 (Rust backend) + Vite + React 19 + TypeScript + Tailwind CSS 4.
+  Initial scaffold includes 6 pages (Dashboard, Send, Receive, Staking,
+  Transactions, Settings), stub Tauri commands, Shekyl gold/purple design system,
+  and verified production builds for Linux (.deb, .rpm, .AppImage).
+  Phase 2 will add the C++ FFI bridge to `wallet2_api.h` for real wallet operations.
+
 ### Consensus timing alignment (HF1)
 
 - Fixed remaining runtime paths that still derived timing from legacy `DIFFICULTY_TARGET_V1` (`60s`) so active Shekyl HF1 behavior consistently uses `DIFFICULTY_TARGET_V2` (`120s`) for difficulty target selection, block reward minute-scaling, unlock-time leeway checks, sync ETA reporting, and wallet lock-time display.
 - Updated `docs/ECONOMY_TESTNET_READINESS_MATRIX.md` to mark the 120s block-time drift item as resolved (`code_fix_required` completed).
+
+### Genesis initialization compatibility
+
+- Fixed daemon initialization on fresh data directories by allowing legacy `tx.version == 1` coinbase only for the genesis block (`height == 0`), while keeping post-genesis v1 rejection in place.
+- Fixed genesis output-type validation to accept legacy `txout_to_key` only at `height == 0`, while preserving strict post-genesis HF1 output-type enforcement.
+- Fixed genesis reward validation to accept the hardcoded `GENESIS_TX` amount at `height == 0` while leaving post-genesis reward accounting unchanged.
+- Fixed startup edge case where long-term weight median calculations could evaluate with zero historical blocks during genesis initialization (`count == 0`), causing daemon boot failure on empty data dirs.
+- Updated genesis-construction helper (`build_genesis_coinbase_from_destinations`) to emit `CURRENT_TRANSACTION_VERSION` for future `GENESIS_TX` regeneration workflows.
 
 ### Testnet economy readiness checks
 
@@ -197,7 +215,9 @@
   sysroot was stuck at FreeBSD 11.3 (EOL Sept 2021), whose `base.txz`
   had been removed from FreeBSD mirrors (404). Updated to 14.4-RELEASE
   (March 2026), updated SHA256 hash, and fixed clang wrapper scripts
-  from clang-8 to clang-14 to match `hosts/freebsd.mk`.
+  from clang-8 to clang-14 to match `hosts/freebsd.mk`. Added
+  `-stdlib=libc++` to CXXFLAGS and LDFLAGS since FreeBSD uses libc++
+  and the Ubuntu host's clang-14 defaults to libstdc++.
 - **OpenSSL: disabled `devcrypto` engine for FreeBSD**: Added
   `no-devcrypto` to FreeBSD OpenSSL configure options. The `/dev/crypto`
   engine requires the `crypto/cryptodev.h` kernel header which is not
