@@ -62,7 +62,7 @@ jobs:
             rust_target: "aarch64-apple-darwin"
           - name: "x86_64 Freebsd"
             host: "x86_64-unknown-freebsd"
-            packages: "clang-14 gperf cmake python3-zmq libdbus-1-dev libharfbuzz-dev"
+            packages: "clang-14 libc++-14-dev libc++abi-14-dev gperf cmake python3-zmq libdbus-1-dev libharfbuzz-dev"
             rust_target: "x86_64-unknown-freebsd"
     name: ${{ matrix.toolchain.name }}
     steps:

@@ -224,7 +224,16 @@
   (March 2026), updated SHA256 hash, and fixed clang wrapper scripts
   from clang-8 to clang-14 to match `hosts/freebsd.mk`. Added
   `-stdlib=libc++` to CXXFLAGS and LDFLAGS since FreeBSD uses libc++
-  and the Ubuntu host's clang-14 defaults to libstdc++.
+  and the Ubuntu host's clang-14 defaults to libstdc++. Also added
+  `libc++-14-dev` and `libc++abi-14-dev` to CI packages for the FreeBSD
+  cross-build so the host compiler can find libc++ headers when
+  `-stdlib=libc++` is specified.
+- **Boost: skip CONFIG mode for depends builds**: The depends-built Boost
+  1.74.0 installs CMake config files whose variant detection fails for
+  darwin cross-builds (`boost_locale` reports "No suitable build variant").
+  `find_package(Boost ... CONFIG)` is now skipped when `DEPENDS` is true
+  (set by the depends toolchain), falling back to the more robust MODULE
+  mode (`FindBoost.cmake`).
 - **OpenSSL: disabled `devcrypto` engine for FreeBSD**: Added
   `no-devcrypto` to FreeBSD OpenSSL configure options. The `/dev/crypto`
   engine requires the `crypto/cryptodev.h` kernel header which is not
