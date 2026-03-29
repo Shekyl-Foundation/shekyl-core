@@ -2,6 +2,7 @@
 members = [
     "shekyl-ffi",
     "shekyl-crypto-pq",
+    "shekyl-crypto-hash",
     "shekyl-consensus",
     "shekyl-economics",
     "shekyl-staking",

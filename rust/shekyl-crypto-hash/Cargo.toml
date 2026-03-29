@@ -1,0 +1,9 @@
+[package]
+name = "shekyl-crypto-hash"
+description = "Keccak-256 (original, non-SHA3) hashing for Shekyl consensus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tiny-keccak = { version = "2", features = ["keccak"] }

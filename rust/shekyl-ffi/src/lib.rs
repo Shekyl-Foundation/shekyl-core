@@ -225,6 +225,62 @@ pub extern "C" fn shekyl_pqc_verify(
     scheme.verify(&public_key, message, &signature).unwrap_or(false)
 }
 
+// ─── Crypto: Hash Functions ──────────────────────────────────────────────────
+
+/// Compute Keccak-256 (cn_fast_hash) of `data_len` bytes at `data_ptr`.
+/// Result is written to `out_ptr` which must point to 32 writable bytes.
+/// Returns true on success, false if pointers are null.
+#[no_mangle]
+pub extern "C" fn shekyl_cn_fast_hash(
+    data_ptr: *const u8,
+    data_len: usize,
+    out_ptr: *mut u8,
+) -> bool {
+    if out_ptr.is_null() {
+        return false;
+    }
+    let data = match slice_from_ptr(data_ptr, data_len) {
+        Some(s) => s,
+        None => return false,
+    };
+    let hash = shekyl_crypto_hash::cn_fast_hash(data);
+    unsafe {
+        std::ptr::copy_nonoverlapping(hash.as_ptr(), out_ptr, 32);
+    }
+    true
+}
+
+/// Compute Merkle tree root hash from an array of 32-byte hashes.
+/// `hashes_ptr` points to `count * 32` contiguous bytes.
+/// Result is written to `out_ptr` (32 bytes).
+#[no_mangle]
+pub extern "C" fn shekyl_tree_hash(
+    hashes_ptr: *const u8,
+    count: usize,
+    out_ptr: *mut u8,
+) -> bool {
+    if out_ptr.is_null() || (count > 0 && hashes_ptr.is_null()) {
+        return false;
+    }
+    let hashes: Vec<shekyl_crypto_hash::Hash> = if count == 0 {
+        vec![]
+    } else {
+        let raw = unsafe { std::slice::from_raw_parts(hashes_ptr, count * 32) };
+        raw.chunks_exact(32)
+            .map(|c| {
+                let mut h = [0u8; 32];
+                h.copy_from_slice(c);
+                h
+            })
+            .collect()
+    };
+    let root = shekyl_crypto_hash::tree_hash(&hashes);
+    unsafe {
+        std::ptr::copy_nonoverlapping(root.as_ptr(), out_ptr, 32);
+    }
+    true
+}
+
 // ─── Economics: Release Rate ────────────────────────────────────────────────
 
 /// Calculate the release multiplier from transaction volume.

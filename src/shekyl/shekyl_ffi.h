@@ -47,6 +47,17 @@ bool shekyl_pqc_verify(
     const uint8_t* signature_ptr,
     size_t signature_len);
 
+// Crypto: Hash functions
+bool shekyl_cn_fast_hash(
+    const uint8_t* data_ptr,
+    size_t data_len,
+    uint8_t* out_ptr);
+
+bool shekyl_tree_hash(
+    const uint8_t* hashes_ptr,
+    size_t count,
+    uint8_t* out_ptr);
+
 // Release rate
 uint64_t shekyl_calc_release_multiplier(
     uint64_t tx_volume_avg,

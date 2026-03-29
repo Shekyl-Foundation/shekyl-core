@@ -364,7 +364,14 @@ Cherry-picked code was initially adapted to C++14 compatibility; with the
 subsequent C++17 standard bump, many of those back-ports are now unnecessary
 and can use native `std::optional`, `std::string_view`, etc.
 
-### Documentation and operations
+### Documentation
+
+- Added `docs/EXECUTABLES.md`: comprehensive reference for all 17 build
+  artifacts covering usage, CLI options, interactive commands, and examples
+  for `shekyld`, `shekyl-wallet-cli`, `shekyl-wallet-rpc`, blockchain
+  utilities, and debug tools.
+
+### Operations
 
 - Added `utils/systemd/shekyld.service` for Shekyl-native daemon service
   deployment (`/usr/local/bin/shekyld` + `/etc/shekyl/shekyld.conf`).
