@@ -91,6 +91,7 @@ if(DEVICE_TREZOR_READY)
             ${SODIUM_LIBRARY}
             ${Boost_CHRONO_LIBRARY}
             ${Protobuf_LIBRARY}
+            ${TREZOR_PROTOBUF_ABSEIL_LIBRARIES}
             ${TREZOR_LIBUSB_LIBRARIES}
             PRIVATE
             ${EXTRA_LIBRARIES})

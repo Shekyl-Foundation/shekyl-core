@@ -106,7 +106,8 @@ TEST(cn_format_utils, add_extra_nonce_to_tx_extra)
 
 TEST(cn_format_utils, add_mm_merkle_root_to_tx_extra)
 {
-    const std::vector<std::uint64_t> depths{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 63, 64, 127, 128, 16383, 16384};
+    // Implementation constrains depth < 32 and uses fixed 1-byte encoding.
+    const std::vector<std::uint64_t> depths{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 31};
 
     const crypto::hash mm_merkle_root = crypto::rand<crypto::hash>();
 
@@ -173,7 +174,7 @@ TEST(cn_format_utils, add_mm_merkle_root_to_tx_extra)
 
 TEST(cn_format_utils, tx_extra_merge_mining_tag_store_load)
 {
-    const std::vector<std::uint64_t> depths{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 63, 64, 127, 128, 16383, 16384};
+    const std::vector<std::uint64_t> depths{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 31};
 
     const crypto::hash mm_merkle_root = crypto::rand<crypto::hash>();
 

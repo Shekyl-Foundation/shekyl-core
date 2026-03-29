@@ -1077,16 +1077,30 @@ if(STATIC)
   endif()
 endif()
 
-# Find Boost headers
+# Find Boost headers and libraries.
+# Prefer CONFIG mode (Boost 1.85+ ships CMake config files) to avoid
+# FindBoost SO-version mismatches on rolling-release distros.
 set(BOOST_MIN_VER 1.74)
-find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED)
+set(BOOST_COMPONENTS filesystem thread date_time chrono serialization program_options locale)
+
+find_package(Boost ${BOOST_MIN_VER} QUIET CONFIG)
+if(Boost_FOUND)
+  message(STATUS "Found Boost ${Boost_VERSION_STRING} via CMake config mode")
+else()
+  find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED)
+endif()
 
 if(NOT Boost_FOUND)
   die("Could not find Boost libraries, please make sure you have installed Boost or libboost-all-dev (>=${BOOST_MIN_VER}) or the equivalent")
 elseif(Boost_FOUND)
+  if(NOT Boost_VERSION_STRING)
+    if(Boost_VERSION_MAJOR)
+      set(Boost_VERSION_STRING "${Boost_VERSION_MAJOR}.${Boost_VERSION_MINOR}.${Boost_VERSION_PATCH}")
+    else()
+      set(Boost_VERSION_STRING "${Boost_VERSION}")
+    endif()
+  endif()
   message(STATUS "Found Boost Version: ${Boost_VERSION_STRING}")
-
-  set(BOOST_COMPONENTS filesystem thread date_time chrono serialization program_options locale)
 
   # Boost System is header-only since 1.69
   if (Boost_VERSION_STRING VERSION_LESS 1.69.0)
@@ -1096,6 +1110,11 @@ elseif(Boost_FOUND)
   # Boost Regex is header-only since 1.77
   if (Boost_VERSION_STRING VERSION_LESS 1.77.0)
     list(APPEND BOOST_COMPONENTS regex)
+  endif()
+
+  # Boost Locale depends on container since 1.85
+  if (NOT Boost_VERSION_STRING VERSION_LESS 1.85.0)
+    list(APPEND BOOST_COMPONENTS container)
   endif()
 
   message(STATUS "Boost components: ${BOOST_COMPONENTS}")

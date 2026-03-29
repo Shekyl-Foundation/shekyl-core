@@ -83,9 +83,9 @@ namespace boost { namespace serialization {
 }}
 #endif
 
-// Boost does not provide std::optional serialization; always define our adapter
-#if __has_include(<boost/serialization/std_optional.hpp>)
-  #include <boost/serialization/std_optional.hpp>
+// Boost 1.84+ handles std::optional in <boost/serialization/optional.hpp>
+#if BOOST_VERSION >= 108400
+  #include <boost/serialization/optional.hpp>
 #else
 namespace boost { namespace serialization {
   template<class Archive, class T>

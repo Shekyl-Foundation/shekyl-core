@@ -55,12 +55,32 @@ if (USE_DEVICE_TREZOR)
         set(Protobuf_FOUND 1)  # override found if all rquired info was provided by variables
     endif()
 
+    set(TREZOR_PROTOBUF_ABSEIL_LIBRARIES "")
     if (Protobuf_VERSION VERSION_GREATER_EQUAL 22.0)
         add_definitions(-DPROTOBUF_HAS_ABSEIL)
-    endif()
-
-    if (Protobuf_VERSION VERSION_GREATER_EQUAL 22.0)
-        add_definitions(-DPROTOBUF_HAS_ABSEIL)
+        find_package(absl QUIET CONFIG)
+        if(absl_FOUND)
+            message(STATUS "Found abseil via CMake config (required by protobuf >= 22)")
+            set(TREZOR_PROTOBUF_ABSEIL_LIBRARIES
+                absl::log_internal_check_op
+                absl::log_internal_message
+                absl::status
+                absl::strings
+                absl::log_severity
+            )
+        else()
+            find_package(PkgConfig QUIET)
+            if(PKG_CONFIG_FOUND)
+                pkg_check_modules(ABSL QUIET absl_log_internal_check_op absl_strings)
+                if(ABSL_FOUND)
+                    message(STATUS "Found abseil via pkg-config (required by protobuf >= 22)")
+                    set(TREZOR_PROTOBUF_ABSEIL_LIBRARIES ${ABSL_LIBRARIES})
+                    link_directories(${ABSL_LIBRARY_DIRS})
+                else()
+                    message(STATUS "Abseil not found; protobuf >= 22 linking may fail")
+                endif()
+            endif()
+        endif()
     endif()
 
     if(TREZOR_DEBUG)
@@ -112,7 +132,7 @@ if(Protobuf_FOUND AND USE_DEVICE_TREZOR AND TREZOR_PYTHON)
         CMAKE_FLAGS
         "-DINCLUDE_DIRECTORIES=${Protobuf_INCLUDE_DIR};${CMAKE_BINARY_DIR}"
         "-DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}"
-        LINK_LIBRARIES ${Protobuf_LIBRARY}
+        LINK_LIBRARIES ${Protobuf_LIBRARY} ${TREZOR_PROTOBUF_ABSEIL_LIBRARIES}
         OUTPUT_VARIABLE OUTPUT
     )
     if(NOT Protobuf_COMPILE_TEST_PASSED)
@@ -178,6 +198,10 @@ if(Protobuf_FOUND AND USE_DEVICE_TREZOR AND TREZOR_PYTHON AND Protobuf_COMPILE_T
             if (Protobuf_LIBRARY)
                 list(APPEND TREZOR_DEP_LIBS ${Protobuf_LIBRARY})
                 string(APPEND TREZOR_DEP_LINKER " -lprotobuf")
+            endif()
+
+            if (TREZOR_PROTOBUF_ABSEIL_LIBRARIES)
+                list(APPEND TREZOR_DEP_LIBS ${TREZOR_PROTOBUF_ABSEIL_LIBRARIES})
             endif()
 
             if (TREZOR_LIBUSB_LIBRARIES)

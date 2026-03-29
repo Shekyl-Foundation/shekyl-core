@@ -55,14 +55,21 @@ namespace test
             for (auto const input : boost::adaptors::index(source.vout))
             {
                 source_amount += input.value().amount;
-                auto const& key = std::get<cryptonote::txout_to_key>(input.value().target);
+                crypto::public_key out_key{};
+                std::visit([&out_key](auto const& t) {
+                    using T = std::decay_t<decltype(t)>;
+                    if constexpr (std::is_same_v<T, cryptonote::txout_to_key>)
+                        out_key = t.key;
+                    else if constexpr (std::is_same_v<T, cryptonote::txout_to_tagged_key>)
+                        out_key = t.key;
+                }, input.value().target);
 
                 actual_sources.push_back(
                     {{}, 0, key_field.pub_key, {}, std::size_t(input.index()), input.value().amount, rct, rct::identity()}
                 );
 
                 for (unsigned ring = 0; ring < 10; ++ring)
-                    actual_sources.back().push_output(input.index(), key.key, input.value().amount);
+                    actual_sources.back().push_output(input.index(), out_key, input.value().amount);
             }
         }
 

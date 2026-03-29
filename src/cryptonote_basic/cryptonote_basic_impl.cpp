@@ -89,12 +89,10 @@ namespace cryptonote {
   /* Cryptonote helper functions                                          */
   /************************************************************************/
   //-----------------------------------------------------------------------------------------------
-  size_t get_min_block_weight(uint8_t version)
+  size_t get_min_block_weight(uint8_t /* version */)
   {
-    if (version < 2)
-      return CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V1;
-    if (version < 5)
-      return CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2;
+    // Shekyl activates all hard-fork features from genesis (HF1).
+    // The legacy Monero version ladder (ZONE_V1, ZONE_V2) is unused.
     return CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   }
   //-----------------------------------------------------------------------------------------------
