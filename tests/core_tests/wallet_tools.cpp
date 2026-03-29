@@ -41,7 +41,7 @@ void wallet_tools::process_transactions(tools::wallet2 * wallet, const std::vect
   find_block_chain(events, blockchain, mtx, get_block_hash(blk_head));
 
   if (blk_tail){
-    trim_block_chain(blockchain, blk_tail.get());
+    trim_block_chain(blockchain, *blk_tail);
   }
 
   process_transactions(wallet, blockchain, mtx, bt);
@@ -90,9 +90,9 @@ bool wallet_tools::fill_tx_sources(tools::wallet2 * wallet, std::vector<cryptono
 
 #define EVAL_BRK_COND() do {                         \
   brk_cond = 0;                                      \
-  if (num_utxo && num_utxo.get() <= cur_utxo)        \
+  if (num_utxo && *num_utxo <= cur_utxo)              \
     brk_cond += 1;                                   \
-  if (min_amount && min_amount.get() <= sum)         \
+  if (min_amount && *min_amount <= sum)         \
     brk_cond += 1;                                   \
   } while(0)
 
@@ -126,7 +126,7 @@ bool wallet_tools::fill_tx_sources(tools::wallet2 * wallet, std::vector<cryptono
         tx_source_info_crate_t c_info{.td=&td, .src=&src, .selected_idx=&selected_idx, .selected_kis=&selected_kis,
             .ntrans=ntrans, .iters=iters, .sum=sum, .cur_utxo=cur_utxo};
 
-        bool take_it = (fnc_accept.get())(c_info, abort);
+        bool take_it = (*fnc_accept)(c_info, abort);
         if (!take_it){
           continue;
         }

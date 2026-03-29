@@ -238,8 +238,8 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
                                      std::vector<size_t>& block_weights, const std::list<cryptonote::transaction>& tx_list,
                                      const std::optional<uint8_t>& hf_ver)
 {
-  blk.major_version = hf_ver ? hf_ver.get() : CURRENT_BLOCK_MAJOR_VERSION;
-  blk.minor_version = hf_ver ? hf_ver.get() : CURRENT_BLOCK_MINOR_VERSION;
+  blk.major_version = hf_ver ? *hf_ver : CURRENT_BLOCK_MAJOR_VERSION;
+  blk.minor_version = hf_ver ? *hf_ver : CURRENT_BLOCK_MINOR_VERSION;
   blk.timestamp = timestamp;
   blk.prev_id = prev_id;
 
@@ -266,7 +266,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
   size_t target_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
   while (true)
   {
-    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, total_fee, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), 10, hf_ver ? hf_ver.get() : 1))
+    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, total_fee, miner_acc.get_keys().m_account_address, blk.miner_tx, blobdata(), 10, hf_ver ? *hf_ver : 1))
       return false;
 
     size_t actual_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
@@ -311,7 +311,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
 
   fill_nonce(blk, get_test_difficulty(hf_ver), height);
   const uint64_t block_reward = get_outs_money_amount(blk.miner_tx) - total_fee;
-  add_block(blk, txs_weight, block_weights, already_generated_coins, block_reward, hf_ver ? hf_ver.get() : 1);
+  add_block(blk, txs_weight, block_weights, already_generated_coins, block_reward, hf_ver ? *hf_ver : 1);
 
   return true;
 }
@@ -1124,7 +1124,7 @@ bool extract_hard_forks(const std::vector<test_event_entry>& events, v_hardforks
       const auto & rep_settings = std::get<event_replay_settings>(ev);
       if (rep_settings.hard_forks)
       {
-        const auto & hf = rep_settings.hard_forks.get();
+        const auto & hf = *rep_settings.hard_forks;
         std::copy(hf.begin(), hf.end(), std::back_inserter(hard_forks));
       }
     }
