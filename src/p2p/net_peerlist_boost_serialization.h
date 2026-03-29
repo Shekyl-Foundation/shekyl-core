@@ -46,18 +46,16 @@ namespace boost
 {
   namespace serialization
   {
-    template <class T, class Archive>
-    inline void do_serialize(std::false_type, Archive &a, epee::net_utils::network_address& na)
+    template <class T, class IsSaving, class Archive>
+    inline void do_serialize(IsSaving, Archive &a, epee::net_utils::network_address& na)
     {
-      T addr{};
-      a & addr;
-      na = std::move(addr);
-    }
-
-    template <class T, class Archive>
-    inline void do_serialize(std::true_type, Archive &a, const epee::net_utils::network_address& na)
-    {
-      a & na.as<T>();
+      if constexpr (IsSaving::value) {
+        a & na.as<T>();
+      } else {
+        T addr{};
+        a & addr;
+        na = std::move(addr);
+      }
     }
 
     template <class Archive, class ver_type>
