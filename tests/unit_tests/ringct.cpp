@@ -44,100 +44,6 @@ using namespace std;
 using namespace crypto;
 using namespace rct;
 
-TEST(ringct, Borromean)
-{
-    int j = 0;
-
-        //Tests for Borromean signatures
-        //#boro true one, false one, C != sum Ci, and one out of the range..
-        int N = 64;
-        key64 xv;
-        key64 P1v;
-        key64 P2v;
-        bits indi;
-
-        for (j = 0 ; j < N ; j++) {
-            indi[j] = (int)randXmrAmount(2);
-
-            xv[j] = skGen();
-            if ( (int)indi[j] == 0 ) {
-                scalarmultBase(P1v[j], xv[j]);
-            } else {
-                addKeys1(P1v[j], xv[j], H2[j]);
-            }
-            subKeys(P2v[j], P1v[j], H2[j]);
-        }
-
-        //#true one
-        boroSig bb = genBorromean(xv, P1v, P2v, indi);
-        ASSERT_TRUE(verifyBorromean(bb, P1v, P2v));
-
-        //#false one
-        indi[3] = (indi[3] + 1) % 2;
-        bb = genBorromean(xv, P1v, P2v, indi);
-        ASSERT_FALSE(verifyBorromean(bb, P1v, P2v));
-
-        //#true one again
-        indi[3] = (indi[3] + 1) % 2;
-        bb = genBorromean(xv, P1v, P2v, indi);
-        ASSERT_TRUE(verifyBorromean(bb, P1v, P2v));
-
-        //#false one
-        bb = genBorromean(xv, P2v, P1v, indi);
-        ASSERT_FALSE(verifyBorromean(bb, P1v, P2v));
-}
-
-TEST(ringct, MG_sigs)
-{
-    int j = 0;
-    int N = 0;
-
-        //Tests for MG Sigs
-        //#MG sig: true one
-        N = 3;// #cols
-        int   R = 3;// #rows
-        keyV xtmp = skvGen(R);
-        keyM xm = keyMInit(R, N);// = [[None]*N] #just used to generate test public keys
-        keyV sk = skvGen(R);
-        keyM P  = keyMInit(R, N);// = keyM[[None]*N] #stores the public keys;
-        int ind = 2;
-        int i = 0;
-        for (j = 0 ; j < R ; j++) {
-            for (i = 0 ; i < N ; i++)
-            {
-                xm[i][j] = skGen();
-                P[i][j] = scalarmultBase(xm[i][j]);
-            }
-        }
-        for (j = 0 ; j < R ; j++) {
-            sk[j] = xm[ind][j];
-        }
-        key message = identity();
-        mgSig IIccss = MLSAG_Gen(message, P, sk, ind, R, hw::get_device("default"));
-        ASSERT_TRUE(MLSAG_Ver(message, P, IIccss, R));
-
-        //#MG sig: false one
-        N = 3;// #cols
-        R = 3;// #rows
-        xtmp = skvGen(R);
-        keyM xx(N, xtmp);// = [[None]*N] #just used to generate test public keys
-        sk = skvGen(R);
-        //P (N, xtmp);// = keyM[[None]*N] #stores the public keys;
-
-        ind = 2;
-        for (j = 0 ; j < R ; j++) {
-            for (i = 0 ; i < N ; i++)
-            {
-                xx[i][j] = skGen();
-                P[i][j] = scalarmultBase(xx[i][j]);
-            }
-            sk[j] = xx[ind][j];
-        }
-        sk[2] = skGen();//assume we don't know one of the private keys..
-        IIccss = MLSAG_Gen(message, P, sk, ind, R, hw::get_device("default"));
-        ASSERT_FALSE(MLSAG_Ver(message, P, IIccss, R));
-}
-
 TEST(ringct, CLSAG)
 {
   const size_t N = 11;
@@ -338,12 +244,6 @@ TEST(ringct, range_proofs)
 
         const rct::RCTConfig rct_config { RangeProofBorromean, 0 };
 
-        //compute rct data with mixin 3 - should fail since full type with > 1 input
-        bool ok = false;
-        try { genRct(rct::zero(), sc, pc, destinations, amounts, amount_keys, 3, rct_config, hw::get_device("default")); }
-        catch(...) { ok = true; }
-        ASSERT_TRUE(ok);
-
         //compute rct data with mixin 3
         rctSig s = genRctSimple(rct::zero(), sc, pc, destinations, inamounts, amounts, amount_keys, 0, 3, rct_config, hw::get_device("default"));
 
@@ -499,29 +399,35 @@ static rct::rctSig make_sample_rct_sig(int n_inputs, const uint64_t input_amount
 {
     ctkeyV sc, pc;
     ctkey sctmp, pctmp;
-    vector<xmr_amount >amounts;
+    vector<xmr_amount> inamounts, outamounts;
     keyV destinations;
     keyV amount_keys;
     key Sk, Pk;
+    uint64_t fee = 0;
 
     for (int n = 0; n < n_inputs; ++n) {
+        inamounts.push_back(input_amounts[n]);
         tie(sctmp, pctmp) = ctskpkGen(input_amounts[n]);
         sc.push_back(sctmp);
         pc.push_back(pctmp);
     }
 
     for (int n = 0; n < n_outputs; ++n) {
-        amounts.push_back(output_amounts[n]);
-        skpkGen(Sk, Pk);
-        if (n < n_outputs - 1 || !last_is_fee)
+        if (n == n_outputs - 1 && last_is_fee)
         {
+          fee = output_amounts[n];
+        }
+        else
+        {
+          outamounts.push_back(output_amounts[n]);
+          skpkGen(Sk, Pk);
           destinations.push_back(Pk);
           amount_keys.push_back(rct::hash_to_scalar(rct::zero()));
         }
     }
 
     const rct::RCTConfig rct_config { RangeProofBorromean, 0 };
-    return genRct(rct::zero(), sc, pc, destinations, amounts, amount_keys, 3, rct_config, hw::get_device("default"));
+    return genRctSimple(rct::zero(), sc, pc, destinations, inamounts, outamounts, amount_keys, fee, 3, rct_config, hw::get_device("default"));
 }
 
 static rct::rctSig make_sample_simple_rct_sig(int n_inputs, const uint64_t input_amounts[], int n_outputs, const uint64_t output_amounts[], uint64_t fee)
@@ -554,19 +460,16 @@ static rct::rctSig make_sample_simple_rct_sig(int n_inputs, const uint64_t input
 static bool range_proof_test(bool expected_valid,
     int n_inputs, const uint64_t input_amounts[], int n_outputs, const uint64_t output_amounts[], bool last_is_fee, bool simple)
 {
-    //compute rct data
     bool valid;
     try {
         rctSig s;
-        // simple takes fee as a parameter, non-simple takes it as an extra element to output amounts
         if (simple) {
           s = make_sample_simple_rct_sig(n_inputs, input_amounts, last_is_fee ? n_outputs - 1 : n_outputs, output_amounts, last_is_fee ? output_amounts[n_outputs - 1] : 0);
-          valid = verRctSimple(s);
         }
         else {
           s = make_sample_rct_sig(n_inputs, input_amounts, n_outputs, output_amounts, last_is_fee);
-          valid = verRct(s);
         }
+        valid = verRctSimple(s);
     }
     catch (const std::exception &e) {
         valid = false;
@@ -991,15 +894,6 @@ TEST(ringct, d2b)
   }
 }
 
-TEST(ringct, prooveRange_is_non_deterministic)
-{
-  key C[2], mask[2];
-  for (int n = 0; n < 2; ++n)
-    proveRange(C[n], mask[n], 80);
-  ASSERT_TRUE(memcmp(C[0].bytes, C[1].bytes, sizeof(C[0].bytes)));
-  ASSERT_TRUE(memcmp(mask[0].bytes, mask[1].bytes, sizeof(mask[0].bytes)));
-}
-
 TEST(ringct, fee_0_valid)
 {
   const uint64_t inputs[] = {2000};
@@ -1084,48 +978,6 @@ TEST(ringct, fee_burn_valid_zero_out_simple)
   EXPECT_TRUE(range_proof_test(true, NELTS(inputs), inputs, NELTS(outputs), outputs, true, true));
 }
 
-static rctSig make_sig()
-{
-  static const uint64_t inputs[] = {2000};
-  static const uint64_t outputs[] = {1000, 1000};
-  static rct::rctSig sig = make_sample_rct_sig(NELTS(inputs), inputs, NELTS(outputs), outputs, true);
-  return sig;
-}
-
-#define TEST_rctSig_elements(name, op) \
-TEST(ringct, rctSig_##name) \
-{ \
-  rct::rctSig sig = make_sig(); \
-  ASSERT_TRUE(rct::verRct(sig)); \
-  op; \
-  ASSERT_FALSE(rct::verRct(sig)); \
-}
-
-TEST_rctSig_elements(rangeSigs_empty, sig.p.rangeSigs.resize(0));
-TEST_rctSig_elements(rangeSigs_too_many, sig.p.rangeSigs.push_back(sig.p.rangeSigs.back()));
-TEST_rctSig_elements(rangeSigs_too_few, sig.p.rangeSigs.pop_back());
-TEST_rctSig_elements(mgSig_MG_empty, sig.p.MGs.resize(0));
-TEST_rctSig_elements(mgSig_ss_empty, sig.p.MGs[0].ss.resize(0));
-TEST_rctSig_elements(mgSig_ss_too_many, sig.p.MGs[0].ss.push_back(sig.p.MGs[0].ss.back()));
-TEST_rctSig_elements(mgSig_ss_too_few, sig.p.MGs[0].ss.pop_back());
-TEST_rctSig_elements(mgSig_ss0_empty, sig.p.MGs[0].ss[0].resize(0));
-TEST_rctSig_elements(mgSig_ss0_too_many, sig.p.MGs[0].ss[0].push_back(sig.p.MGs[0].ss[0].back()));
-TEST_rctSig_elements(mgSig_ss0_too_few, sig.p.MGs[0].ss[0].pop_back());
-TEST_rctSig_elements(mgSig_II_empty, sig.p.MGs[0].II.resize(0));
-TEST_rctSig_elements(mgSig_II_too_many, sig.p.MGs[0].II.push_back(sig.p.MGs[0].II.back()));
-TEST_rctSig_elements(mgSig_II_too_few, sig.p.MGs[0].II.pop_back());
-TEST_rctSig_elements(mixRing_empty, sig.mixRing.resize(0));
-TEST_rctSig_elements(mixRing_too_many, sig.mixRing.push_back(sig.mixRing.back()));
-TEST_rctSig_elements(mixRing_too_few, sig.mixRing.pop_back());
-TEST_rctSig_elements(mixRing0_empty, sig.mixRing[0].resize(0));
-TEST_rctSig_elements(mixRing0_too_many, sig.mixRing[0].push_back(sig.mixRing[0].back()));
-TEST_rctSig_elements(mixRing0_too_few, sig.mixRing[0].pop_back());
-TEST_rctSig_elements(ecdhInfo_empty, sig.ecdhInfo.resize(0));
-TEST_rctSig_elements(ecdhInfo_too_many, sig.ecdhInfo.push_back(sig.ecdhInfo.back()));
-TEST_rctSig_elements(ecdhInfo_too_few, sig.ecdhInfo.pop_back());
-TEST_rctSig_elements(outPk_empty, sig.outPk.resize(0));
-TEST_rctSig_elements(outPk_too_many, sig.outPk.push_back(sig.outPk.back()));
-TEST_rctSig_elements(outPk_too_few, sig.outPk.pop_back());
 
 static rct::rctSig make_sig_simple()
 {
@@ -1174,22 +1026,6 @@ TEST_rctSig_elements_simple(ecdhInfo_too_few, sig.ecdhInfo.pop_back());
 TEST_rctSig_elements_simple(outPk_empty, sig.outPk.resize(0));
 TEST_rctSig_elements_simple(outPk_too_many, sig.outPk.push_back(sig.outPk.back()));
 TEST_rctSig_elements_simple(outPk_too_few, sig.outPk.pop_back());
-
-TEST(ringct, reject_gen_simple_ver_non_simple)
-{
-  const uint64_t inputs[] = {1000, 1000};
-  const uint64_t outputs[] = {1000};
-  rct::rctSig sig = make_sample_simple_rct_sig(NELTS(inputs), inputs, NELTS(outputs), outputs, 1000);
-  ASSERT_FALSE(rct::verRct(sig));
-}
-
-TEST(ringct, reject_gen_non_simple_ver_simple)
-{
-  const uint64_t inputs[] = {2000};
-  const uint64_t outputs[] = {1000, 1000};
-  rct::rctSig sig = make_sample_rct_sig(NELTS(inputs), inputs, NELTS(outputs), outputs, true);
-  ASSERT_FALSE(rct::verRctSimple(sig));
-}
 
 TEST(ringct, key_ostream)
 {

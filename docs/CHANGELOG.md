@@ -58,24 +58,75 @@
 8. Update DNS infrastructure to serve records under all 5 TLDs (`.org`,
    `.net`, `.com`, `.biz`, `.io`). See `shekyl-dev/docs/DNS_CONFIG.md`.
 
-### Drop v1 transaction support from wallet
+### Dead Monero legacy code removal
 
-- **Removed unmixable sweep functions**: `select_available_unmixable_outputs()`,
-  `create_unmixable_sweep_transactions()`, and `discard_unmixable_outputs()` removed
-  from `wallet2`. The `sweep_dust` RPC and `createSweepUnmixableTransaction` API now
-  return errors, as Shekyl has no pre-RCT unmixable outputs.
-- **Removed v1 fee/amount paths**: `get_outgoing_amount()` and fee calculation in
-  `process_new_transaction` no longer branch on `tx.version == 1`.
-- **Simplified coinbase optimization**: `RefreshOptimizeCoinbase` no longer special-cases
-  `tx.version < 2` in cache sizing or output scanning.
-- **Replaced RangeProofBorromean defaults**: Serialization fallbacks for older
-  `tx_construction_data` archive versions now default to `RangeProofPaddedBulletproof`
-  instead of `RangeProofBorromean`. `transfer_selected` construction data updated to
-  use RCT with BulletproofPlus config.
-- **Removed dead non-RCT tx creation branches**: `create_transactions_2` and
-  `create_transactions_from` always use `transfer_selected_rct`; dead `else
-  transfer_selected(...)` branches removed. `create_transactions_from` now sets
-  `use_rct = true` unconditionally.
+- **Dead HF branch cleanup**: Collapsed all always-true / always-false hard fork
+  version branches across `blockchain.cpp` (~25 sites), `wallet2.cpp` (~22 sites),
+  `cryptonote_basic_impl.cpp` (2 sites), and `cryptonote_core.cpp` (2 sites).
+  Since all `HF_VERSION_*` constants are 1, every `hf_version >= HF_VERSION_*`
+  was always true and every `hf_version < HF_VERSION_*` was always false.
+  Collapsed fee algorithms, ring size ladders, tx version ladders, difficulty
+  target selection, sync block size selection, BP/CLSAG/BP+ gating, dynamic
+  fee scaling, long-term block weight calculations, and `use_fork_rules()` call
+  sites. Removed ~500-800 lines of dead conditional logic.
+
+- **Dropped v1 transaction support entirely**:
+  - **Consensus**: `check_tx_outputs` now rejects `tx.version == 1` outright.
+    `check_tx_inputs` sets `min_tx_version = 2` unconditionally; unmixable
+    output counting and ring-size exemptions removed. v1 ring signature
+    verification code and threaded v1 signature checking removed from
+    `check_tx_inputs`. `expand_transaction_2` only handles CLSAG and
+    BulletproofPlus; old RCTTypeFull/Simple/Bulletproof/Bulletproof2 branches
+    removed.
+  - **RingCT** (`rctSigs.cpp`/`.h`): Removed ~770 lines of dead crypto code:
+    `genBorromean`, `verifyBorromean`, `MLSAG_Gen`, `MLSAG_Ver`, `proveRange`,
+    `verRange`, `proveRctMG`, `proveRctMGSimple`, `verRctMG`, `verRctMGSimple`,
+    `populateFromBlockchain`, `genRct` (both overloads), `verRct`, `decodeRct`
+    (both overloads). `genRctSimple`, `verRctSemanticsSimple`,
+    `verRctNonSemanticsSimple`, and `decodeRctSimple` only accept
+    `RCTTypeCLSAG` and `RCTTypeBulletproofPlus`. Header reduced from 144 to
+    87 lines.
+  - **Transaction construction** (`cryptonote_tx_utils.cpp`): Removed v1
+    ring signature generation block and non-simple RCT construction
+    (`genRct`). All transactions now use `genRctSimple` (CLSAG path).
+  - **Tx verification utils**: Removed `RCTTypeSimple`, `RCTTypeFull`,
+    `RCTTypeBulletproof`, `RCTTypeBulletproof2` from batch semantics
+    verification.
+  - **Test fixups**: Updated all test files under `tests/` to match the
+    removed RCT primitives. Stubbed performance benchmarks for MLSAG
+    (`rct_mlsag.h`, `sig_mlsag.h`) and Borromean range proofs
+    (`range_proof.h`). Replaced `verRct` with `verRctNonSemanticsSimple`
+    in `check_tx_signature.h`. Removed `decodeRct` else-branches from
+    `rct.cpp`, `rct2.cpp`, `bulletproofs.cpp`, `bulletproof_plus.cpp`.
+    In `unit_tests/ringct.cpp`: removed Borromean, MLSAG, and
+    RCTTypeFull-only tests; rewrote `make_sample_rct_sig` to use
+    `genRctSimple`; replaced all `verRct` calls with `verRctSimple`.
+
+- **Wallet v1 cleanup**: Removed unmixable sweep functions, v1 fee/amount
+  paths, v1 coinbase optimization, dead non-RCT creation branches, and
+  replaced `RangeProofBorromean` defaults with `RangeProofPaddedBulletproof`.
+  `sweep_dust` RPC returns error; `createSweepUnmixableTransaction` API
+  returns empty result with error status.
+
+- **Trezor Shekyl rebrand**: Renamed all include guard macros from
+  `MONERO_*_H` to `SHEKYL_*_H` in 8 `device_trezor/` headers. Updated
+  derivation path comment and HTTP Origin URL. Protobuf message types and
+  wire protocol identifiers intentionally preserved (must match Trezor
+  firmware definitions).
+
+### Rust crypto infrastructure
+
+- **New `shekyl-crypto-hash` crate**: Implements `cn_fast_hash` (Keccak-256
+  with original padding, not SHA3) and `tree_hash` (Merkle tree) in Rust
+  using `tiny-keccak`. Both functions produce byte-identical output to the
+  C implementations in `src/crypto/hash.c` and `src/crypto/tree-hash.c`.
+- **FFI exports**: `shekyl_cn_fast_hash` and `shekyl_tree_hash` exposed
+  through `shekyl-ffi` with C-ABI declarations in `shekyl_ffi.h`. The C++
+  side can now call Rust hashing alongside or instead of the C path.
+- **Rust-preferred development rule**: Added `.cursor/rules/rust-preferred.mdc`
+  establishing policy for gradual C++ to Rust migration: new modules in Rust,
+  crypto primitives via RustCrypto crates, computational extraction to Rust
+  behind FFI when modifying existing C++ modules.
 
 ### Hardfork reboot and testnet wallet readiness
 

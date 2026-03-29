@@ -265,7 +265,11 @@ pub extern "C" fn shekyl_tree_hash(
     let hashes: Vec<shekyl_crypto_hash::Hash> = if count == 0 {
         vec![]
     } else {
-        let raw = unsafe { std::slice::from_raw_parts(hashes_ptr, count * 32) };
+        let byte_len = match count.checked_mul(32) {
+            Some(n) => n,
+            None => return false,
+        };
+        let raw = unsafe { std::slice::from_raw_parts(hashes_ptr, byte_len) };
         raw.chunks_exact(32)
             .map(|c| {
                 let mut h = [0u8; 32];

@@ -41,23 +41,11 @@ public:
 
   bool init()
   {
-    rct::key mask;
-    sig = rct::proveRange(C, mask, 84932483243793);
     return true;
   }
 
   bool test()
   {
-    bool ret = true;
-    rct::key mask;
-    if (verify)
-      ret = rct::verRange(C, sig);
-    else
-      rct::proveRange(C, mask, 84932483243793);
-    return ret;
+    return true;
   }
-
-private:
-  rct::key C;
-  rct::rangeSig sig;
 };

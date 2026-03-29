@@ -23,11 +23,23 @@ pub fn cn_fast_hash(data: &[u8]) -> Hash {
     out
 }
 
+/// Compute `tree_hash_cnt`: largest power of 2 strictly less than count.
+/// Equivalent to `tree_hash_cnt` in `src/crypto/tree-hash.c`.
+fn tree_hash_cnt(count: usize) -> usize {
+    debug_assert!(count >= 3);
+    let mut pow = 2usize;
+    while pow < count {
+        pow <<= 1;
+    }
+    pow >> 1
+}
+
 /// Compute Merkle tree hash from a list of 32-byte hashes.
 ///
-/// Matches `tree_hash` in `src/crypto/tree-hash.c`.
+/// Matches `tree_hash` in `src/crypto/tree-hash.c` exactly.
 pub fn tree_hash(hashes: &[Hash]) -> Hash {
-    match hashes.len() {
+    let count = hashes.len();
+    match count {
         0 => [0u8; HASH_SIZE],
         1 => hashes[0],
         2 => {
@@ -36,35 +48,32 @@ pub fn tree_hash(hashes: &[Hash]) -> Hash {
             buf[HASH_SIZE..].copy_from_slice(&hashes[1]);
             cn_fast_hash(&buf)
         }
-        count => {
-            let mut cnt = 1usize;
-            while cnt * 2 < count {
-                cnt *= 2;
-            }
-
+        _ => {
+            let mut cnt = tree_hash_cnt(count);
             let mut ints = vec![[0u8; HASH_SIZE]; cnt];
-            for (dst, src) in ints.iter_mut().zip(hashes[..cnt].iter()) {
-                *dst = *src;
-            }
 
-            let mut j = cnt;
-            while j < count {
+            let skip = 2 * cnt - count;
+            ints[..skip].copy_from_slice(&hashes[..skip]);
+
+            let mut i = skip;
+            let mut j = skip;
+            while j < cnt {
                 let mut buf = [0u8; 2 * HASH_SIZE];
-                buf[..HASH_SIZE].copy_from_slice(&ints[j - cnt]);
-                buf[HASH_SIZE..].copy_from_slice(&hashes[j]);
-                ints[j - cnt] = cn_fast_hash(&buf);
+                buf[..HASH_SIZE].copy_from_slice(&hashes[i]);
+                buf[HASH_SIZE..].copy_from_slice(&hashes[i + 1]);
+                ints[j] = cn_fast_hash(&buf);
+                i += 2;
                 j += 1;
             }
+            debug_assert_eq!(i, count);
 
             while cnt > 2 {
-                cnt /= 2;
-                let mut i = 0;
-                while i < cnt {
+                cnt >>= 1;
+                for k in 0..cnt {
                     let mut buf = [0u8; 2 * HASH_SIZE];
-                    buf[..HASH_SIZE].copy_from_slice(&ints[2 * i]);
-                    buf[HASH_SIZE..].copy_from_slice(&ints[2 * i + 1]);
-                    ints[i] = cn_fast_hash(&buf);
-                    i += 1;
+                    buf[..HASH_SIZE].copy_from_slice(&ints[2 * k]);
+                    buf[HASH_SIZE..].copy_from_slice(&ints[2 * k + 1]);
+                    ints[k] = cn_fast_hash(&buf);
                 }
             }
 
