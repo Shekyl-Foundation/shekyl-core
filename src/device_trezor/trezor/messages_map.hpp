@@ -73,7 +73,7 @@ namespace trezor {
     template<class t_message=google::protobuf::Message>
     static messages::MessageType get_message_wire_number() {
       static_assert(std::is_base_of<google::protobuf::Message, t_message>::value);
-      return get_message_wire_number(t_message::default_instance().GetDescriptor()->name());
+      return get_message_wire_number(std::string(t_message::default_instance().GetDescriptor()->name()));
     }
   };
 

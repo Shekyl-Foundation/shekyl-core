@@ -30,6 +30,7 @@
 #ifndef MONERO_EXCEPTIONS_H
 #define MONERO_EXCEPTIONS_H
 
+#include <cstdint>
 #include <exception>
 #include <string>
 #include <optional>
