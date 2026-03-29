@@ -63,11 +63,11 @@ namespace cryptonote
   template<typename T>
   bool find_tx_extra_field_by_type(const std::vector<tx_extra_field>& tx_extra_fields, T& field, size_t index = 0)
   {
-    auto it = std::find_if(tx_extra_fields.begin(), tx_extra_fields.end(), [&index](const tx_extra_field& f) { return typeid(T) == f.type() && !index--; });
+    auto it = std::find_if(tx_extra_fields.begin(), tx_extra_fields.end(), [&index](const tx_extra_field& f) { return std::holds_alternative<T>(f) && !index--; });
     if(tx_extra_fields.end() == it)
       return false;
 
-    field = boost::get<T>(*it);
+    field = std::get<T>(*it);
     return true;
   }
 
@@ -273,6 +273,6 @@ namespace cryptonote
   crypto::secret_key encrypt_key(crypto::secret_key key, const epee::wipeable_string &passphrase);
   crypto::secret_key decrypt_key(crypto::secret_key key, const epee::wipeable_string &passphrase);
 #define CHECKED_GET_SPECIFIC_VARIANT(variant_var, specific_type, variable_name, fail_return_val) \
-  CHECK_AND_ASSERT_MES(variant_var.type() == typeid(specific_type), fail_return_val, "wrong variant type: " << variant_var.type().name() << ", expected " << typeid(specific_type).name()); \
-  specific_type& variable_name = boost::get<specific_type>(variant_var);
+  CHECK_AND_ASSERT_MES(std::holds_alternative<std::remove_const_t<specific_type>>(variant_var), fail_return_val, "wrong variant type (index " << (variant_var).index() << "), expected " << typeid(specific_type).name()); \
+  specific_type& variable_name = std::get<std::remove_const_t<specific_type>>(variant_var);
 }

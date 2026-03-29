@@ -1,10 +1,9 @@
 package=boost                                                                                                                                                                                                                      
-$(package)_version=1.69.0
+$(package)_version=1.74.0
 $(package)_download_path=https://archives.boost.io/release/$($(package)_version)/source/
 $(package)_file_name=$(package)_$(subst .,_,$($(package)_version)).tar.gz
-$(package)_sha256_hash=9a2c2819310839ea373f42d69e733c339b4e9a19deab6bfec448281554aa4dbb
+$(package)_sha256_hash=afff36d392885120bcac079148c177d1f6f7730ec3d47233aa51b0afa4db94a5
 $(package)_dependencies=libiconv
-$(package)_patches=fix_aroptions.patch fix_arm_arch.patch
 
 define $(package)_set_vars
 $(package)_config_opts_release=variant=release
@@ -23,14 +22,12 @@ $(package)_archiver_$(host_os)=$($(package)_ar)
 $(package)_toolset_darwin=darwin
 $(package)_archiver_darwin=$($(package)_libtool)
 $(package)_config_libraries=chrono,filesystem,program_options,system,thread,test,date_time,regex,serialization,locale
-$(package)_cxxflags=-std=c++11
+$(package)_cxxflags=-std=c++17
 $(package)_cxxflags_linux=-fPIC
 $(package)_cxxflags_freebsd=-fPIC
 endef
 
 define $(package)_preprocess_cmds
-  patch -p1 < $($(package)_patch_dir)/fix_aroptions.patch &&\
-  patch -p1 < $($(package)_patch_dir)/fix_arm_arch.patch &&\
   echo "using $(boost_toolset_$(host_os)) : : $($(package)_cxx) : <cxxflags>\"$($(package)_cxxflags) $($(package)_cppflags)\" <linkflags>\"$($(package)_ldflags)\" <archiver>\"$(boost_archiver_$(host_os))\" <arflags>\"$($(package)_arflags)\" <striper>\"$(host_STRIP)\"  <ranlib>\"$(host_RANLIB)\" <rc>\"$(host_WINDRES)\" : ;" > user-config.jam
 endef
 

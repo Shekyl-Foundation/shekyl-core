@@ -603,8 +603,8 @@ namespace tx {
 
     CHECK_AND_ASSERT_THROW_MES(m_ct.tx.vin.size() == input_size, "Invalid vector size");
     std::sort(m_ct.source_permutation.begin(), m_ct.source_permutation.end(), [&](const size_t i0, const size_t i1) {
-      const cryptonote::txin_to_key &tk0 = boost::get<cryptonote::txin_to_key>(m_ct.tx.vin[i0]);
-      const cryptonote::txin_to_key &tk1 = boost::get<cryptonote::txin_to_key>(m_ct.tx.vin[i1]);
+      const cryptonote::txin_to_key &tk0 = std::get<cryptonote::txin_to_key>(m_ct.tx.vin[i0]);
+      const cryptonote::txin_to_key &tk1 = std::get<cryptonote::txin_to_key>(m_ct.tx.vin[i1]);
       return memcmp(&tk0.k_image, &tk1.k_image, sizeof(tk0.k_image)) > 0;
     });
 
@@ -785,19 +785,19 @@ namespace tx {
       rct::key commitment = m_ct.tx_out_pk[bidx].mask;
       commitment = rct::scalarmultKey(commitment, rct::INV_EIGHT);
       if (is_req_bulletproof_plus()) {
-        boost::get<rct::BulletproofPlus>(bproof).V.push_back(commitment);
+        std::get<rct::BulletproofPlus>(bproof).V.push_back(commitment);
       } else {
-        boost::get<rct::Bulletproof>(bproof).V.push_back(commitment);
+        std::get<rct::Bulletproof>(bproof).V.push_back(commitment);
       }
     }
 
     m_ct.tx_out_rsigs.emplace_back(bproof);
     if (is_req_bulletproof_plus()) {
-      if (!rct::bulletproof_plus_VERIFY(boost::get<rct::BulletproofPlus>(m_ct.tx_out_rsigs.back()))) {
+      if (!rct::bulletproof_plus_VERIFY(std::get<rct::BulletproofPlus>(m_ct.tx_out_rsigs.back()))) {
         throw exc::ProtocolException("Returned range signature is invalid");
       }
     } else {
-      if (!rct::bulletproof_VERIFY(boost::get<rct::Bulletproof>(m_ct.tx_out_rsigs.back()))) {
+      if (!rct::bulletproof_VERIFY(std::get<rct::Bulletproof>(m_ct.tx_out_rsigs.back()))) {
         throw exc::ProtocolException("Returned range signature is invalid");
       }
     }
@@ -870,9 +870,9 @@ namespace tx {
 
     for(size_t i = 0; i < m_ct.tx_out_rsigs.size(); ++i){
       if (is_req_bulletproof_plus()) {
-        m_ct.rv->p.bulletproofs_plus.push_back(boost::get<rct::BulletproofPlus>(m_ct.tx_out_rsigs[i]));
+        m_ct.rv->p.bulletproofs_plus.push_back(std::get<rct::BulletproofPlus>(m_ct.tx_out_rsigs[i]));
       } else {
-        m_ct.rv->p.bulletproofs.push_back(boost::get<rct::Bulletproof>(m_ct.tx_out_rsigs[i]));
+        m_ct.rv->p.bulletproofs.push_back(std::get<rct::Bulletproof>(m_ct.tx_out_rsigs[i]));
       }
     }
 

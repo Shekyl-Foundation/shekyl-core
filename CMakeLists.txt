@@ -1069,7 +1069,7 @@ if(STATIC)
 endif()
 
 # Find Boost headers
-set(BOOST_MIN_VER 1.62)
+set(BOOST_MIN_VER 1.74)
 find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED)
 
 if(NOT Boost_FOUND)

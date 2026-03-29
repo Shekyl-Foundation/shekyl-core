@@ -31,7 +31,7 @@
 #pragma once
 
 #include <optional>
-#include <boost/variant.hpp>
+#include <variant>
 #include <boost/functional/hash/hash.hpp>
 #include <vector>
 #include <cstring>  // memcmp
@@ -186,9 +186,9 @@ namespace cryptonote
   };
 
 
-  typedef boost::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key, txin_stake_claim> txin_v;
+  typedef std::variant<txin_gen, txin_to_script, txin_to_scripthash, txin_to_key, txin_stake_claim> txin_v;
 
-  typedef boost::variant<txout_to_script, txout_to_scripthash, txout_to_key, txout_to_tagged_key, txout_to_staked_key> txout_target_v;
+  typedef std::variant<txout_to_script, txout_to_scripthash, txout_to_key, txout_to_tagged_key, txout_to_staked_key> txout_target_v;
 
   //typedef std::pair<uint64_t, txout> out_t;
   struct tx_out
@@ -361,12 +361,12 @@ namespace cryptonote
             ar.tag("rctsig_prunable");
             ar.begin_object();
             r = rct_signatures.p.serialize_rctsig_prunable(ar, rct_signatures.type, vin.size(), vout.size(),
-                vin.size() > 0 && vin[0].type() == typeid(txin_to_key) ? boost::get<txin_to_key>(vin[0]).key_offsets.size() - 1 : 0);
+                vin.size() > 0 && std::holds_alternative<txin_to_key>(vin[0]) ? std::get<txin_to_key>(vin[0]).key_offsets.size() - 1 : 0);
             if (!r || !ar.good()) return false;
             ar.end_object();
           }
         }
-        if (version >= 3 && !vin.empty() && vin[0].type() != typeid(txin_gen))
+        if (version >= 3 && !vin.empty() && !std::holds_alternative<txin_gen>(vin[0]))
         {
           ar.tag("pqc_auth");
           pqc_authentication auth_val;
@@ -404,7 +404,7 @@ namespace cryptonote
           if (!r || !ar.good()) return false;
           ar.end_object();
         }
-        if (version >= 3 && !vin.empty() && vin[0].type() != typeid(txin_gen))
+        if (version >= 3 && !vin.empty() && !std::holds_alternative<txin_gen>(vin[0]))
         {
           ar.tag("pqc_auth");
           pqc_authentication auth_val;
@@ -524,7 +524,7 @@ namespace cryptonote
   inline
   size_t transaction::get_signature_size(const txin_v& tx_in)
   {
-    struct txin_signature_size_visitor : public boost::static_visitor<size_t>
+    struct txin_signature_size_visitor
     {
       size_t operator()(const txin_gen& txin) const{return 0;}
       size_t operator()(const txin_to_script& txin) const{return 0;}
@@ -533,7 +533,7 @@ namespace cryptonote
       size_t operator()(const txin_stake_claim& txin) const {return 1;}
     };
 
-    return boost::apply_visitor(txin_signature_size_visitor(), tx_in);
+    return std::visit(txin_signature_size_visitor(), tx_in);
   }
 
 

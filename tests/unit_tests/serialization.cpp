@@ -1,4 +1,5 @@
 // Copyright (c) 2014-2022, The Monero Project
+// Copyright (c) 2026, The Shekyl Project
 // 
 // All rights reserved.
 // 
@@ -32,6 +33,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <iostream>
+#include <variant>
 #include <vector>
 #include <boost/foreach.hpp>
 #include <boost/archive/portable_binary_iarchive.hpp>
@@ -120,7 +122,7 @@ static bool do_serialize(Archive &ar, Struct &s) {
 
 struct Struct1
 {
-  vector<boost::variant<Struct, int32_t>> si;
+  vector<std::variant<Struct, int32_t>> si;
   vector<int16_t> vi;
 
   BEGIN_SERIALIZE_OBJECT()

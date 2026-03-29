@@ -2111,8 +2111,8 @@ bool wallet2::frozen(const multisig_tx_set& txs) const
     {
       // Extract keys images from tx vin and construction data
       const crypto::key_image multisig_ki = rct::rct2ki(cd.sources[src_idx].multisig_kLRki.ki);
-      CHECK_AND_ASSERT_THROW_MES(ptx.tx.vin[src_idx].type() == typeid(cryptonote::txin_to_key), "multisig tx cannot be miner");
-      const crypto::key_image& vin_ki = boost::get<cryptonote::txin_to_key>(ptx.tx.vin[src_idx]).k_image;
+      CHECK_AND_ASSERT_THROW_MES(std::holds_alternative<cryptonote::txin_to_key>(ptx.tx.vin[src_idx]), "multisig tx cannot be miner");
+      const crypto::key_image& vin_ki = std::get<cryptonote::txin_to_key>(ptx.tx.vin[src_idx]).k_image;
 
       // Add key images to set (there will be some overlap)
       kis_to_sign.insert(multisig_ki);
@@ -2307,7 +2307,7 @@ void wallet2::cache_tx_data(const cryptonote::transaction& tx, const crypto::has
   }
 
   // Don't try to extract tx public key if tx has no ouputs
-  const bool is_miner = tx.vin.size() == 1 && tx.vin[0].type() == typeid(cryptonote::txin_gen);
+  const bool is_miner = tx.vin.size() == 1 && std::holds_alternative<cryptonote::txin_gen>(tx.vin[0]);
   if (!is_miner || m_refresh_type != RefreshType::RefreshNoCoinbase)
   {
     const size_t rec_size = (is_miner && m_refresh_type == RefreshType::RefreshOptimizeCoinbase && tx.version < 2) ? 1 : tx.vout.size();
@@ -2336,9 +2336,9 @@ bool wallet2::spends_one_of_ours(const cryptonote::transaction &tx) const
 {
   for (const auto &in: tx.vin)
   {
-    if (in.type() != typeid(cryptonote::txin_to_key))
+    if (!std::holds_alternative<cryptonote::txin_to_key>(in))
       continue;
-    const cryptonote::txin_to_key &in_to_key = boost::get<cryptonote::txin_to_key>(in);
+    const cryptonote::txin_to_key &in_to_key = std::get<cryptonote::txin_to_key>(in);
     auto it = m_key_images.find(in_to_key.k_image);
     if (it != m_key_images.end())
       return true;
@@ -2778,9 +2778,9 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
   // check all outputs for spending (compare key images)
   for(auto& in: tx.vin)
   {
-    if(in.type() != typeid(cryptonote::txin_to_key))
+    if(!std::holds_alternative<cryptonote::txin_to_key>(in))
       continue;
-    const cryptonote::txin_to_key &in_to_key = boost::get<cryptonote::txin_to_key>(in);
+    const cryptonote::txin_to_key &in_to_key = std::get<cryptonote::txin_to_key>(in);
     auto it = m_key_images.find(in_to_key.k_image);
     if(it != m_key_images.end())
     {
@@ -3046,9 +3046,9 @@ void wallet2::process_outgoing(const crypto::hash &txid, const cryptonote::trans
   entry.first->second.m_rings.clear();
   for (const auto &in: tx.vin)
   {
-    if (in.type() != typeid(cryptonote::txin_to_key))
+    if (!std::holds_alternative<cryptonote::txin_to_key>(in))
       continue;
-    const auto &txin = boost::get<cryptonote::txin_to_key>(in);
+    const auto &txin = std::get<cryptonote::txin_to_key>(in);
     entry.first->second.m_rings.push_back(std::make_pair(txin.k_image, txin.key_offsets));
   }
   entry.first->second.m_block_height = height;
@@ -3708,10 +3708,10 @@ void wallet2::process_unconfirmed_transfer(bool incremental, const crypto::hash 
   {
     for (size_t vini = 0; vini < tx_details.m_tx.vin.size(); ++vini)
     {
-      if (tx_details.m_tx.vin[vini].type() != typeid(txin_to_key))
+      if (!std::holds_alternative<txin_to_key>(tx_details.m_tx.vin[vini]))
         continue;
 
-      const crypto::key_image &key_image = boost::get<txin_to_key>(tx_details.m_tx.vin[vini]).k_image;
+      const crypto::key_image &key_image = std::get<txin_to_key>(tx_details.m_tx.vin[vini]).k_image;
       const auto it_ki = m_key_images.find(key_image);
       if (it_ki == m_key_images.end())
         continue;
@@ -7558,9 +7558,9 @@ void wallet2::add_unconfirmed_tx(const crypto::hash &txid, const cryptonote::tra
   utd.m_subaddr_indices = subaddr_indices;
   for (const auto &in: tx.vin)
   {
-    if (in.type() != typeid(cryptonote::txin_to_key))
+    if (!std::holds_alternative<cryptonote::txin_to_key>(in))
       continue;
-    const auto &txin = boost::get<cryptonote::txin_to_key>(in);
+    const auto &txin = std::get<cryptonote::txin_to_key>(in);
     utd.m_rings.push_back(std::make_pair(txin.k_image, txin.key_offsets));
   }
 }
@@ -12897,7 +12897,7 @@ std::string wallet2::get_spend_proof(const crypto::hash &txid, const std::string
 
   for(size_t i = 0; i < tx.vin.size(); ++i)
   {
-    const txin_to_key* const in_key = boost::get<txin_to_key>(std::addressof(tx.vin[i]));
+    const txin_to_key* const in_key = std::get_if<txin_to_key>(&tx.vin[i]);
     if (in_key == nullptr)
       continue;
 
@@ -13012,7 +13012,7 @@ bool wallet2::check_spend_proof(const crypto::hash &txid, const std::string &mes
   size_t num_sigs = 0;
   for(size_t i = 0; i < tx.vin.size(); ++i)
   {
-    const txin_to_key* const in_key = boost::get<txin_to_key>(std::addressof(tx.vin[i]));
+    const txin_to_key* const in_key = std::get_if<txin_to_key>(&tx.vin[i]);
     if (in_key != nullptr)
       num_sigs += in_key->key_offsets.size();
   }
@@ -13027,7 +13027,7 @@ bool wallet2::check_spend_proof(const crypto::hash &txid, const std::string &mes
   size_t offset = header_len;
   for(size_t i = 0; i < tx.vin.size(); ++i)
   {
-    const txin_to_key* const in_key = boost::get<txin_to_key>(std::addressof(tx.vin[i]));
+    const txin_to_key* const in_key = std::get_if<txin_to_key>(&tx.vin[i]);
     if (in_key == nullptr)
       continue;
     signatures.resize(signatures.size() + 1);
@@ -13051,7 +13051,7 @@ bool wallet2::check_spend_proof(const crypto::hash &txid, const std::string &mes
   std::vector<std::vector<crypto::signature>>::const_iterator sig_iter = signatures.cbegin();
   for(size_t i = 0; i < tx.vin.size(); ++i)
   {
-    const txin_to_key* const in_key = boost::get<txin_to_key>(std::addressof(tx.vin[i]));
+    const txin_to_key* const in_key = std::get_if<txin_to_key>(&tx.vin[i]);
     if (in_key == nullptr)
       continue;
 
@@ -14446,8 +14446,8 @@ uint64_t wallet2::import_key_images(const std::vector<std::pair<crypto::key_imag
   {
     for (const cryptonote::txin_v& in : td.m_tx.vin)
     {
-      if (in.type() == typeid(cryptonote::txin_to_key))
-        spent_key_images.insert(std::make_pair(boost::get<cryptonote::txin_to_key>(in).k_image, td.m_txid));
+      if (std::holds_alternative<cryptonote::txin_to_key>(in))
+        spent_key_images.insert(std::make_pair(std::get<cryptonote::txin_to_key>(in).k_image, td.m_txid));
     }
   }
   PERF_TIMER_STOP(import_key_images_C);
@@ -14574,14 +14574,14 @@ uint64_t wallet2::import_key_images(const std::vector<std::pair<crypto::key_imag
       std::set<uint32_t> subaddr_indices;
       for (const cryptonote::txin_v& in : spent_tx.vin)
       {
-        if (in.type() != typeid(cryptonote::txin_to_key))
+        if (!std::holds_alternative<cryptonote::txin_to_key>(in))
           continue;
-        auto it = m_key_images.find(boost::get<cryptonote::txin_to_key>(in).k_image);
+        auto it = m_key_images.find(std::get<cryptonote::txin_to_key>(in).k_image);
         if (it != m_key_images.end())
         {
           THROW_WALLET_EXCEPTION_IF(it->second >= m_transfers.size(), error::wallet_internal_error, std::string("Key images cache contains illegal transfer offset: ") + std::to_string(it->second) + std::string(" m_transfers.size() = ") + std::to_string(m_transfers.size()));
           const transfer_details& td = m_transfers[it->second];
-          uint64_t amount = boost::get<cryptonote::txin_to_key>(in).amount;
+          uint64_t amount = std::get<cryptonote::txin_to_key>(in).amount;
           if (amount > 0)
           {
             THROW_WALLET_EXCEPTION_IF(amount != td.amount(), error::wallet_internal_error,

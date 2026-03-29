@@ -35,14 +35,54 @@
 
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/utility.hpp>
-#include <boost/serialization/variant.hpp>
 #include <boost/serialization/set.hpp>
 #include <boost/serialization/map.hpp>
 #include <boost/serialization/is_bitwise_serializable.hpp>
 #include <boost/serialization/split_free.hpp>
 #include <optional>
+#include <variant>
 
 namespace boost { namespace serialization {
+
+  // std::variant serialization shim -- wire-compatible with boost::variant
+  // (writes 0-based int index followed by the active member's payload).
+  template<class Archive, typename... Ts>
+  void save(Archive &ar, const std::variant<Ts...> &v, const unsigned int /*version*/)
+  {
+    int which = static_cast<int>(v.index());
+    ar & which;
+    std::visit([&ar](const auto &val) { ar & val; }, v);
+  }
+
+  template<size_t I, class Archive, typename... Ts>
+  void variant_load_impl(Archive &ar, int which, std::variant<Ts...> &v)
+  {
+    if constexpr (I < sizeof...(Ts)) {
+      if (which == static_cast<int>(I)) {
+        std::variant_alternative_t<I, std::variant<Ts...>> val{};
+        ar & val;
+        v = std::move(val);
+      } else {
+        variant_load_impl<I + 1>(ar, which, v);
+      }
+    }
+  }
+
+  template<class Archive, typename... Ts>
+  void load(Archive &ar, std::variant<Ts...> &v, const unsigned int /*version*/)
+  {
+    int which;
+    ar & which;
+    variant_load_impl<0>(ar, which, v);
+  }
+
+  template<class Archive, typename... Ts>
+  void serialize(Archive &ar, std::variant<Ts...> &v, const unsigned int version)
+  {
+    boost::serialization::split_free(ar, v, version);
+  }
+
+  // std::optional serialization
   template<class Archive, class T>
   void save(Archive &ar, const std::optional<T> &o, const unsigned int /*version*/)
   {
@@ -248,7 +288,7 @@ namespace boost
       a & (rct::rctSigBase&)x.rct_signatures;
       if (x.rct_signatures.type != rct::RCTTypeNull)
         a & x.rct_signatures.p;
-      if (x.version >= 3 && !x.vin.empty() && x.vin[0].type() != typeid(cryptonote::txin_gen))
+      if (x.version >= 3 && !x.vin.empty() && !std::holds_alternative<cryptonote::txin_gen>(x.vin[0]))
         a & x.pqc_auth;
     }
   }

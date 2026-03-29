@@ -46,7 +46,7 @@ namespace cryptonote
 
 bool get_transaction_signed_payload(const transaction& tx, std::string& payload_out)
 {
-  if (tx.version < 3 || tx.vin.empty() || tx.vin[0].type() == typeid(txin_gen))
+  if (tx.version < 3 || tx.vin.empty() || std::holds_alternative<txin_gen>(tx.vin[0]))
     return false;
   if (!tx.pqc_auth)
     return false;
@@ -93,7 +93,7 @@ bool get_transaction_signed_payload(const transaction& tx, std::string& payload_
 
 bool verify_transaction_pqc_auth(const transaction& tx)
 {
-  if (tx.version < 3 || tx.vin.empty() || tx.vin[0].type() == typeid(txin_gen))
+  if (tx.version < 3 || tx.vin.empty() || std::holds_alternative<txin_gen>(tx.vin[0]))
     return true;  // not a v3 user tx, skip
   if (!tx.pqc_auth)
     return false;

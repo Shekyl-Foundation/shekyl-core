@@ -47,7 +47,7 @@ namespace boost
   namespace serialization
   {
     template <class T, class Archive>
-    inline void do_serialize(boost::mpl::false_, Archive &a, epee::net_utils::network_address& na)
+    inline void do_serialize(std::false_type, Archive &a, epee::net_utils::network_address& na)
     {
       T addr{};
       a & addr;
@@ -55,7 +55,7 @@ namespace boost
     }
 
     template <class T, class Archive>
-    inline void do_serialize(boost::mpl::true_, Archive &a, const epee::net_utils::network_address& na)
+    inline void do_serialize(std::true_type, Archive &a, const epee::net_utils::network_address& na)
     {
       a & na.as<T>();
     }

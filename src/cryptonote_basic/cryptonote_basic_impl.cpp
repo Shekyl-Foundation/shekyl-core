@@ -200,7 +200,7 @@ namespace cryptonote {
     if(tx.vin.size() != 1)
       return false;
 
-    if(tx.vin[0].type() != typeid(txin_gen))
+    if(!std::holds_alternative<txin_gen>(tx.vin[0]))
       return false;
 
     return true;

@@ -164,7 +164,7 @@ namespace tx {
   ::crypto::secret_key compute_enc_key(const ::crypto::secret_key & private_view_key, const std::string & aux, const std::string & salt);
   std::string compute_sealing_key(const std::string & master_key, size_t idx, bool is_iv=false);
 
-  typedef boost::variant<rct::Bulletproof, rct::BulletproofPlus> rsig_v;
+  typedef std::variant<rct::Bulletproof, rct::BulletproofPlus> rsig_v;
 
   /**
    * Transaction signer state holder.

@@ -202,7 +202,35 @@
 - **Upstream Monero cherry-pick verification**: Confirmed PRs #9628 (ASIO
   `io_service` → `io_context`), #6690 (serialization overhaul), and #9544
   (daemonizer chrono/thread) are already absorbed in our tree.
-- **Remaining deferred Boost areas**: Serialization overhaul, ASIO deep plumbing,
+- **`boost::variant` → `std::variant` (complete)**:
+  Full migration from `boost::variant` to C++17 `std::variant` across the
+  entire codebase (~100+ replacements in ~40 files):
+  - **Serialization layer rewrite** (`serialization/variant.h`): Replaced
+    Boost.MPL type-list iteration with C++17 `if constexpr` recursion for
+    deserialization and `std::visit` lambda for serialization. Removed all
+    `boost::mpl`, `boost::static_visitor`, and `boost::apply_visitor` usage.
+  - **Archive headers**: Replaced `boost::mpl::bool_<B>` with
+    `std::bool_constant<B>` in `binary_archive.h`, `json_archive.h`, and
+    `serialization.h`. Replaced `boost::true_type`/`false_type` and
+    `boost::is_integral` with `std` equivalents.
+  - **Core typedefs**: Changed `txin_v`, `txout_target_v`, `tx_extra_field`,
+    `transfer_view::block`, and Trezor `rsig_v` from `boost::variant` to
+    `std::variant`.
+  - **Boost.Serialization shim**: Added a local ~45-line `std::variant`
+    serialization adapter in `cryptonote_boost_serialization.h` (save/load
+    with index + payload, wire-compatible with old `boost::variant` format).
+    Removed dependency on `<boost/serialization/variant.hpp>`.
+  - **Mechanical replacements** across all `src/` and `tests/` files:
+    `boost::get<T>(v)` → `std::get<T>(v)`,
+    `boost::get<T>(&v)` → `std::get_if<T>(&v)`,
+    `v.type() == typeid(T)` → `std::holds_alternative<T>(v)`,
+    `v.which()` → `v.index()`,
+    `boost::apply_visitor(vis, v)` → `std::visit(vis, v)`.
+  - **P2P layer**: Updated `net_peerlist_boost_serialization.h` to use
+    `std::false_type`/`std::true_type` instead of `boost::mpl` equivalents.
+  - `tests/unit_tests/net.cpp` retains `boost::get<N>` for `boost::tuple`
+    access via `boost::combine` (not variant-related).
+- **Remaining deferred Boost areas**: ASIO deep plumbing,
   multi-index containers, Spirit parser, multiprecision, `net_ssl.cpp` filesystem,
   `simplewallet.cpp` format strings, `boost::thread::attributes` (stack size).
   Tagged with `TODO(shekyl-v4)` in source. See `DOCUMENTATION_TODOS_AND_PQC.md`
@@ -210,6 +238,15 @@
 
 ### CI/CD and build system
 
+- **Boost minimum bumped to 1.74**: `BOOST_MIN_VER` in `CMakeLists.txt` raised
+  from 1.62 to 1.74. The `contrib/depends` system now pins Boost 1.74.0
+  (previously 1.69.0) and builds with `-std=c++17`. Removed legacy Boost 1.64
+  patches (`fix_aroptions.patch`, `fix_arm_arch.patch`) that do not apply to 1.74.
+- **CI containers updated to Ubuntu 22.04 minimum**: Dropped Debian 11 and
+  Ubuntu 20.04 build jobs from `build.yml`, `depends.yml`, and
+  `release-tagged.yml`. Ubuntu 22.04 is now the lowest-common-denominator Linux
+  build environment (ships Boost 1.74+ and GCC 11+). Added Ubuntu 24.04 build
+  matrix entry.
 - Migrated version identifiers from legacy `MONERO_*` symbols to canonical
   `SHEKYL_*` names (`SHEKYL_VERSION`, `SHEKYL_VERSION_TAG`,
   `SHEKYL_RELEASE_NAME`, `SHEKYL_VERSION_FULL`, `SHEKYL_VERSION_IS_RELEASE`)

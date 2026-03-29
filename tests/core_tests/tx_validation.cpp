@@ -124,7 +124,7 @@ namespace
         m_tx.signatures.push_back(std::vector<crypto::signature>());
         std::vector<crypto::signature>& sigs = m_tx.signatures.back();
         sigs.resize(src_entr.outputs.size());
-        generate_ring_signature(m_tx_prefix_hash, boost::get<txin_to_key>(m_tx.vin[i]).k_image, keys_ptrs, m_in_contexts[i].sec, src_entr.real_output, sigs.data());
+        generate_ring_signature(m_tx_prefix_hash, std::get<txin_to_key>(m_tx.vin[i]).k_image, keys_ptrs, m_in_contexts[i].sec, src_entr.real_output, sigs.data());
         i++;
       }
     }
@@ -414,7 +414,7 @@ bool gen_tx_input_wo_key_offsets::generate(std::vector<test_event_entry>& events
   builder.step1_init();
   builder.step2_fill_inputs(miner_account.get_keys(), sources);
   builder.step3_fill_outputs(destinations);
-  txin_to_key& in_to_key = boost::get<txin_to_key>(builder.m_tx.vin.front());
+  txin_to_key& in_to_key = std::get<txin_to_key>(builder.m_tx.vin.front());
   uint64_t key_offset = in_to_key.key_offsets.front();
   in_to_key.key_offsets.pop_back();
   CHECK_AND_ASSERT_MES(in_to_key.key_offsets.empty(), false, "txin contained more than one key_offset");
@@ -454,7 +454,7 @@ bool gen_tx_key_offest_points_to_foreign_key::generate(std::vector<test_event_en
   tx_builder builder;
   builder.step1_init();
   builder.step2_fill_inputs(bob_account.get_keys(), sources_bob);
-  txin_to_key& in_to_key = boost::get<txin_to_key>(builder.m_tx.vin.front());
+  txin_to_key& in_to_key = std::get<txin_to_key>(builder.m_tx.vin.front());
   in_to_key.key_offsets.front() = sources_alice.front().outputs.front().first;
   builder.step3_fill_outputs(destinations_bob);
   builder.step4_calc_hash();
@@ -481,7 +481,7 @@ bool gen_tx_sender_key_offest_not_exist::generate(std::vector<test_event_entry>&
   tx_builder builder;
   builder.step1_init();
   builder.step2_fill_inputs(miner_account.get_keys(), sources);
-  txin_to_key& in_to_key = boost::get<txin_to_key>(builder.m_tx.vin.front());
+  txin_to_key& in_to_key = std::get<txin_to_key>(builder.m_tx.vin.front());
   in_to_key.key_offsets.front() = std::numeric_limits<uint64_t>::max();
   builder.step3_fill_outputs(destinations);
   builder.step4_calc_hash();
@@ -542,7 +542,7 @@ bool gen_tx_key_image_not_derive_from_tx_key::generate(std::vector<test_event_en
   builder.step1_init();
   builder.step2_fill_inputs(miner_account.get_keys(), sources);
 
-  txin_to_key& in_to_key = boost::get<txin_to_key>(builder.m_tx.vin.front());
+  txin_to_key& in_to_key = std::get<txin_to_key>(builder.m_tx.vin.front());
   keypair kp = keypair::generate(hw::get_device("default"));
   key_image another_ki;
   crypto::generate_key_image(kp.pub, kp.sec, another_ki);
@@ -578,7 +578,7 @@ bool gen_tx_key_image_is_invalid::generate(std::vector<test_event_entry>& events
   builder.step1_init();
   builder.step2_fill_inputs(miner_account.get_keys(), sources);
 
-  txin_to_key& in_to_key = boost::get<txin_to_key>(builder.m_tx.vin.front());
+  txin_to_key& in_to_key = std::get<txin_to_key>(builder.m_tx.vin.front());
   in_to_key.k_image = generate_invalid_key_image();
 
   builder.step3_fill_outputs(destinations);
@@ -675,7 +675,7 @@ bool gen_tx_txout_to_key_has_invalid_key::generate(std::vector<test_event_entry>
   builder.step2_fill_inputs(miner_account.get_keys(), sources);
   builder.step3_fill_outputs(destinations);
 
-  txout_to_key& out_to_key =  boost::get<txout_to_key>(builder.m_tx.vout.front().target);
+  txout_to_key& out_to_key =  std::get<txout_to_key>(builder.m_tx.vout.front().target);
   out_to_key.key = generate_invalid_pub_key();
 
   builder.step4_calc_hash();

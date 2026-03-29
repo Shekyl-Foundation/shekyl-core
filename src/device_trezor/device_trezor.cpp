@@ -584,7 +584,7 @@ namespace trezor {
           idx_map_src -= std::get<0>(unsigned_tx.transfers);
           CHECK_AND_ASSERT_THROW_MES(idx_map_src < signed_tx.key_images.size(), "Invalid key image index");
 
-          const auto vini = boost::get<cryptonote::txin_to_key>(cdata.tx.vin[src_idx]);
+          const auto vini = std::get<cryptonote::txin_to_key>(cdata.tx.vin[src_idx]);
           signed_tx.key_images[idx_map_src] = vini.k_image;
         }
       }

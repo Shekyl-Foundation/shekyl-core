@@ -81,6 +81,7 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 
 - C++ standard bumped from C++14 to C++17 (`CMAKE_CXX_STANDARD 17`) in both main CMakeLists.txt and macOS cross-compilation toolchain (`contrib/depends/toolchain.cmake.in`).
 - `boost::optional` → `std::optional` across ~93 files (~486 use sites). Added Boost.Serialization adapter for `std::optional` in `cryptonote_boost_serialization.h`. Replaced `BOOST_STATIC_ASSERT`/`boost::is_base_of` with C++17 `static_assert`/`std::is_base_of`.
+- `boost::variant` → `std::variant` (complete). Rewrote `serialization/variant.h` to use `if constexpr` recursion and `std::visit` (eliminated Boost.MPL dependency). Changed all 5 variant typedefs (`txin_v`, `txout_target_v`, `tx_extra_field`, `transfer_view::block`, Trezor `rsig_v`). Added local Boost.Serialization shim for `std::variant` in `cryptonote_boost_serialization.h`. Mechanical replacements across ~40 files in `src/` and `tests/` (~100+ sites). Replaced `boost::mpl::bool_` with `std::bool_constant` in archive headers.
 - `boost::algorithm::string` → `tools::string_util` (trim, to_lower, iequals, join).
 - `boost::format` → `snprintf` / stream output / string concat in `util.cpp`, `message_store.cpp`, `gen_ssl_cert.cpp`, `gen_multisig.cpp`, `wallet2.cpp`, `wallet_rpc_server.cpp`, `wallet_args.cpp`.
 - `boost::regex` → `std::regex` in `simplewallet.cpp`, `wallet_manager.cpp`.
@@ -88,12 +89,12 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 - `boost::filesystem` → `std::filesystem` in `blockchain_export.cpp`, `blockchain_import.cpp`, `cn_deserialize.cpp`, `util.cpp`, `bootstrap_file.h`/`.cpp`, `blocksdat_file.h`/`.cpp`, `wallet_manager.cpp`, `wallet_rpc_server.cpp`, `core_rpc_server.cpp`, `wallet_args.cpp`.
 - `boost::chrono`/`boost::this_thread` → `std::chrono`/`std::this_thread` in `windows_service.cpp` (daemonizer).
 - Upstream Monero PRs #9628 (ASIO `io_service` → `io_context`), #6690 (serialization), #9544 (daemonizer) confirmed already absorbed.
+- Boost minimum version bumped from 1.62 to 1.74 (`BOOST_MIN_VER` in `CMakeLists.txt`). `contrib/depends` Boost upgraded from 1.69.0 to 1.74.0 with C++17 flags. CI containers updated to Ubuntu 22.04 minimum (Debian 11 and Ubuntu 20.04 dropped).
 
 **Deferred hard areas** (tagged `TODO(shekyl-v4)` in source):
 
 | Area | Files | Rationale for deferral |
 |------|-------|----------------------|
-| **Serialization** | `cryptonote_boost_serialization.h`, `net_peerlist_boost_serialization.h` | Wire/disk format; needs versioned codec transition and backward-compat shim |
 | **ASIO / epee networking** | `abstract_tcp_server2.h`, `levin_protocol_handler_async.h` | Core networking layer; every P2P and RPC path depends on it |
 | **Multi-index containers** | `net_peerlist.h` | Composite indices (by address, time, id) have no direct std equivalent |
 | **Spirit parser** | `http_auth.cpp` | Heavyweight compile dep; small grammar, but needs manual rewrite |
@@ -247,7 +248,7 @@ Completed:
 | Release | Full checklist; Shekyl-specific seeds, wallets, exchanges | — |
 | Seeds | Populate DNS/IP seeds; runtime seed add; Shekyl naming | — |
 | Economics / PoW | Finish config-driven proof activation and staker-claim transaction grammar | Stake-ratio chain-state tracking implemented; modular PoW scaffolding implemented |
-| **Boost migration** | C++17 bump complete (incl. macOS toolchain); `boost::optional` fully migrated (~93 files); `boost::filesystem` migrated in wallet/RPC/utility layers; `boost::format` removed from wallet2/wallet_rpc/wallet_args; upstream PRs #9628/#6690/#9544 verified absorbed; remaining hard areas deferred with `TODO(shekyl-v4)` (see §1.11) | Majority of codebase now uses `std::optional`, `std::filesystem` |
+| **Boost migration** | C++17 bump complete; `boost::optional` fully migrated (~93 files); `boost::variant` fully migrated (~40 files); `boost::filesystem` migrated in wallet/RPC/utility layers; `boost::format` removed from wallet2/wallet_rpc/wallet_args; Boost minimum bumped to 1.74; CI updated to Ubuntu 22.04+; remaining hard areas deferred with `TODO(shekyl-v4)` (see §1.11) | Majority of codebase now uses `std::optional`, `std::variant`, `std::filesystem` |
 | **PQC** | **v3 complete; 4 published vectors (1 positive, 3 negative); V4 roadmap published; external audit and KEM implementation remain** | **Core of this document** |
 
 ---

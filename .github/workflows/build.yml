@@ -103,34 +103,6 @@ jobs:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
         run: ${{env.BUILD_DEFAULT_LINUX}}
 
-  build-debian:
-    # Oldest supported Debian version
-    name: 'Debian 11'
-    runs-on: ubuntu-latest
-    container:
-      image: debian:11
-      env:
-        DEBIAN_FRONTEND: noninteractive
-    steps:
-      - name: set apt conf
-        run: ${{env.APT_SET_CONF}}
-      - name: update apt
-        run: apt update
-      - name: install build dependencies
-        run: ${{env.APT_INSTALL_LINUX}}
-      - name: install Rust
-        run: ${{env.INSTALL_RUST}}
-      - name: configure git
-        run: git config --global --add safe.directory '*'
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - uses: ./.github/actions/set-make-job-count
-      - name: build
-        env:
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
-        run: ${{env.BUILD_DEFAULT_LINUX}}
-
   build-ubuntu:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -138,13 +110,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Oldest supported Ubuntu LTS version
-          - name: Ubuntu 20.04
-            container: ubuntu:20.04
-
-          # Most popular Ubuntu LTS version
+          # Minimum supported Ubuntu LTS (Boost >= 1.74)
           - name: Ubuntu 22.04
             container: ubuntu:22.04
+
+          - name: Ubuntu 24.04
+            container: ubuntu:24.04
     container:
       image: ${{ matrix.container }}
       env:
@@ -185,8 +156,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - name: Ubuntu 20.04
-            container: ubuntu:20.04
+          - name: Ubuntu 22.04
+            container: ubuntu:22.04
     container:
       image: ${{ matrix.container }}
       env:
@@ -236,7 +207,7 @@ jobs:
     name: "source archive"
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:20.04
+      image: ubuntu:22.04
       env:
         DEBIAN_FRONTEND: noninteractive
     steps:

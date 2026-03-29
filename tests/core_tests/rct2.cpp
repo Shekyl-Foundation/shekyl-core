@@ -105,7 +105,7 @@ bool gen_rct2_tx_validation_base::generate_with(std::vector<test_event_entry>& e
         if (blocks[m].miner_tx.vout[i].amount == needed_amount)
           index_in_tx = i;
       CHECK_AND_ASSERT_MES(blocks[m].miner_tx.vout[index_in_tx].amount == needed_amount, false, "Expected amount not found");
-      src.push_output(m, boost::get<txout_to_key>(blocks[m].miner_tx.vout[index_in_tx].target).key, src.amount);
+      src.push_output(m, std::get<txout_to_key>(blocks[m].miner_tx.vout[index_in_tx].target).key, src.amount);
       if (m == n)
         real_index_in_tx = index_in_tx;
     }

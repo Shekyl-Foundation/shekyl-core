@@ -89,15 +89,15 @@ TEST(cn_format_utils, add_extra_nonce_to_tx_extra)
             if (empty_prefix)
             {
                 ASSERT_EQ(1, tx_extra_fields.size());
-                const auto &nonce_field = boost::get<cryptonote::tx_extra_nonce>(tx_extra_fields.at(0));
+                const auto &nonce_field = std::get<cryptonote::tx_extra_nonce>(tx_extra_fields.at(0));
                 ASSERT_EQ(nonce, nonce_field.nonce);
             }
             else
             {
                 ASSERT_EQ(2, tx_extra_fields.size());
-                const auto &pk_field = boost::get<cryptonote::tx_extra_pub_key>(tx_extra_fields.at(0));
+                const auto &pk_field = std::get<cryptonote::tx_extra_pub_key>(tx_extra_fields.at(0));
                 ASSERT_EQ(crypto::get_H(), pk_field.pub_key);
-                const auto &nonce_field = boost::get<cryptonote::tx_extra_nonce>(tx_extra_fields.at(1));
+                const auto &nonce_field = std::get<cryptonote::tx_extra_nonce>(tx_extra_fields.at(1));
                 ASSERT_EQ(nonce, nonce_field.nonce);
             }
         }
@@ -154,16 +154,16 @@ TEST(cn_format_utils, add_mm_merkle_root_to_tx_extra)
             if (empty_prefix)
             {
                 ASSERT_EQ(1, tx_extra_fields.size());
-                const auto &mm_field = boost::get<cryptonote::tx_extra_merge_mining_tag>(tx_extra_fields.at(0));
+                const auto &mm_field = std::get<cryptonote::tx_extra_merge_mining_tag>(tx_extra_fields.at(0));
                 ASSERT_EQ(mm_merkle_root, mm_field.merkle_root);
                 ASSERT_EQ(mm_merkle_tree_depth, mm_field.depth);
             }
             else
             {
                 ASSERT_EQ(2, tx_extra_fields.size());
-                const auto &pk_field = boost::get<cryptonote::tx_extra_pub_key>(tx_extra_fields.at(0));
+                const auto &pk_field = std::get<cryptonote::tx_extra_pub_key>(tx_extra_fields.at(0));
                 ASSERT_EQ(crypto::get_H(), pk_field.pub_key);
-                const auto &mm_field = boost::get<cryptonote::tx_extra_merge_mining_tag>(tx_extra_fields.at(1));
+                const auto &mm_field = std::get<cryptonote::tx_extra_merge_mining_tag>(tx_extra_fields.at(1));
                 ASSERT_EQ(mm_merkle_root, mm_field.merkle_root);
                 ASSERT_EQ(mm_merkle_tree_depth, mm_field.depth);
             }
@@ -227,16 +227,16 @@ TEST(cn_format_utils, tx_extra_merge_mining_tag_store_load)
             if (empty_prefix)
             {
                 ASSERT_EQ(1, tx_extra_fields.size());
-                const auto &mm_field = boost::get<cryptonote::tx_extra_merge_mining_tag>(tx_extra_fields.at(0));
+                const auto &mm_field = std::get<cryptonote::tx_extra_merge_mining_tag>(tx_extra_fields.at(0));
                 ASSERT_EQ(mm_merkle_root, mm_field.merkle_root);
                 ASSERT_EQ(mm_merkle_tree_depth, mm_field.depth);
             }
             else
             {
                 ASSERT_EQ(2, tx_extra_fields.size());
-                const auto &pk_field = boost::get<cryptonote::tx_extra_pub_key>(tx_extra_fields.at(0));
+                const auto &pk_field = std::get<cryptonote::tx_extra_pub_key>(tx_extra_fields.at(0));
                 ASSERT_EQ(crypto::get_H(), pk_field.pub_key);
-                const auto &mm_field = boost::get<cryptonote::tx_extra_merge_mining_tag>(tx_extra_fields.at(1));
+                const auto &mm_field = std::get<cryptonote::tx_extra_merge_mining_tag>(tx_extra_fields.at(1));
                 ASSERT_EQ(mm_merkle_root, mm_field.merkle_root);
                 ASSERT_EQ(mm_merkle_tree_depth, mm_field.depth);
             }

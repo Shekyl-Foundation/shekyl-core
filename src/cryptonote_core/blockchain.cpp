@@ -1327,7 +1327,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   CHECK_AND_ASSERT_MES(b.miner_tx.vin.size() == 1, false, "coinbase transaction in the block has no inputs");
-  CHECK_AND_ASSERT_MES(b.miner_tx.vin[0].type() == typeid(txin_gen), false, "coinbase transaction in the block has the wrong type");
+  CHECK_AND_ASSERT_MES(std::holds_alternative<txin_gen>(b.miner_tx.vin[0]), false, "coinbase transaction in the block has the wrong type");
   CHECK_AND_ASSERT_MES(b.miner_tx.version > 1 || hf_version < HF_VERSION_MIN_V2_COINBASE_TX, false, "Invalid coinbase transaction version");
 
   // for v2 txes (ringct), we only accept empty rct signatures for miner transactions,
@@ -1336,9 +1336,9 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
     CHECK_AND_ASSERT_MES(b.miner_tx.rct_signatures.type == rct::RCTTypeNull, false, "RingCT signatures not allowed in coinbase transactions");
   }
 
-  if(boost::get<txin_gen>(b.miner_tx.vin[0]).height != height)
+  if(std::get<txin_gen>(b.miner_tx.vin[0]).height != height)
   {
-    MWARNING("The miner transaction in block has invalid height: " << boost::get<txin_gen>(b.miner_tx.vin[0]).height << ", expected: " << height);
+    MWARNING("The miner transaction in block has invalid height: " << std::get<txin_gen>(b.miner_tx.vin[0]).height << ", expected: " << height);
     return false;
   }
   MDEBUG("Miner tx hash: " << get_transaction_hash(b.miner_tx));
@@ -1360,7 +1360,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
 bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, bool &partial_block_reward, uint8_t version)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
-  const uint64_t block_height = boost::get<txin_gen>(b.miner_tx.vin[0]).height;
+  const uint64_t block_height = std::get<txin_gen>(b.miner_tx.vin[0]).height;
   uint64_t money_in_use = 0;
   for (auto& o: b.miner_tx.vout)
     money_in_use += o.amount;
@@ -1871,7 +1871,7 @@ uint64_t Blockchain::get_stake_ratio(uint64_t height) const
   {
     for (const auto &out : tx.vout)
     {
-      const auto *staked = boost::get<txout_to_staked_key>(&out.target);
+      const auto *staked = std::get_if<txout_to_staked_key>(&out.target);
       if (!staked || staked->lock_until <= eval_height)
         continue;
 
@@ -3007,7 +3007,7 @@ bool Blockchain::check_for_double_spend(const transaction& tx, key_images_contai
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
-  struct add_transaction_input_visitor: public boost::static_visitor<bool>
+  struct add_transaction_input_visitor
   {
     key_images_container& m_spent_keys;
     BlockchainDB* m_db;
@@ -3063,7 +3063,7 @@ bool Blockchain::check_for_double_spend(const transaction& tx, key_images_contai
 
   for (const txin_v& in : tx.vin)
   {
-    if(!boost::apply_visitor(add_transaction_input_visitor(keys_this_block, m_db), in))
+    if(!std::visit(add_transaction_input_visitor(keys_this_block, m_db), in))
     {
       LOG_ERROR("Double spend detected!");
       return false;
@@ -3133,7 +3133,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
   TIME_MEASURE_FINISH(a);
   if(m_show_time_stats)
   {
-    size_t ring_size = !tx.vin.empty() && tx.vin[0].type() == typeid(txin_to_key) ? boost::get<txin_to_key>(tx.vin[0]).key_offsets.size() : 0;
+    size_t ring_size = !tx.vin.empty() && std::holds_alternative<txin_to_key>(tx.vin[0]) ? std::get<txin_to_key>(tx.vin[0]).key_offsets.size() : 0;
     MINFO("HASH: " <<  get_transaction_hash(tx) << " I/M/O: " << tx.vin.size() << "/" << ring_size << "/" << tx.vout.size() << " H: " << max_used_block_height << " ms: " << a + m_fake_scan_time << " B: " << get_object_blobsize(tx) << " W: " << get_transaction_weight(tx));
   }
   if (!res)
@@ -3271,9 +3271,9 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
   {
     for (const auto &o : tx.vout)
     {
-      if (o.target.type() == typeid(txout_to_staked_key))
+      if (std::holds_alternative<txout_to_staked_key>(o.target))
       {
-        const auto &staked = boost::get<txout_to_staked_key>(o.target);
+        const auto &staked = std::get<txout_to_staked_key>(o.target);
         if (staked.lock_tier > 2)
         {
           MERROR_VER("Invalid staking tier " << (int)staked.lock_tier << " (must be 0, 1, or 2)");
@@ -3305,14 +3305,14 @@ bool Blockchain::have_tx_keyimges_as_spent(const transaction &tx) const
   LOG_PRINT_L3("Blockchain::" << __func__);
   for (const txin_v& in: tx.vin)
   {
-    if (in.type() == typeid(txin_to_key))
+    if (std::holds_alternative<txin_to_key>(in))
     {
-      if (have_tx_keyimg_as_spent(boost::get<txin_to_key>(in).k_image))
+      if (have_tx_keyimg_as_spent(std::get<txin_to_key>(in).k_image))
         return true;
     }
-    else if (in.type() == typeid(txin_stake_claim))
+    else if (std::holds_alternative<txin_stake_claim>(in))
     {
-      if (have_tx_keyimg_as_spent(boost::get<txin_stake_claim>(in).k_image))
+      if (have_tx_keyimg_as_spent(std::get<txin_stake_claim>(in).k_image))
         return true;
     }
   }
@@ -3381,7 +3381,7 @@ bool Blockchain::expand_transaction_2(transaction &tx, const crypto::hash &tx_pr
       rv.p.MGs.resize(1);
       rv.p.MGs[0].II.resize(tx.vin.size());
       for (size_t n = 0; n < tx.vin.size(); ++n)
-        rv.p.MGs[0].II[n] = rct::ki2rct(boost::get<txin_to_key>(tx.vin[n]).k_image);
+        rv.p.MGs[0].II[n] = rct::ki2rct(std::get<txin_to_key>(tx.vin[n]).k_image);
     }
   }
   else if (rv.type == rct::RCTTypeSimple || rv.type == rct::RCTTypeBulletproof || rv.type == rct::RCTTypeBulletproof2)
@@ -3392,7 +3392,7 @@ bool Blockchain::expand_transaction_2(transaction &tx, const crypto::hash &tx_pr
       for (size_t n = 0; n < tx.vin.size(); ++n)
       {
         rv.p.MGs[n].II.resize(1);
-        rv.p.MGs[n].II[0] = rct::ki2rct(boost::get<txin_to_key>(tx.vin[n]).k_image);
+        rv.p.MGs[n].II[0] = rct::ki2rct(std::get<txin_to_key>(tx.vin[n]).k_image);
       }
     }
   }
@@ -3403,7 +3403,7 @@ bool Blockchain::expand_transaction_2(transaction &tx, const crypto::hash &tx_pr
       CHECK_AND_ASSERT_MES(rv.p.CLSAGs.size() == tx.vin.size(), false, "Bad CLSAGs size");
       for (size_t n = 0; n < tx.vin.size(); ++n)
       {
-        rv.p.CLSAGs[n].I = rct::ki2rct(boost::get<txin_to_key>(tx.vin[n]).k_image);
+        rv.p.CLSAGs[n].I = rct::ki2rct(std::get<txin_to_key>(tx.vin[n]).k_image);
       }
     }
   }
@@ -3458,9 +3458,9 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     for (const auto& txin : tx.vin)
     {
       // non txin_to_key inputs will be rejected below
-      if (txin.type() == typeid(txin_to_key))
+      if (std::holds_alternative<txin_to_key>(txin))
       {
-        const txin_to_key& in_to_key = boost::get<txin_to_key>(txin);
+        const txin_to_key& in_to_key = std::get<txin_to_key>(txin);
         if (in_to_key.amount == 0)
         {
           // always consider rct inputs mixable. Even if there's not enough rct
@@ -3549,9 +3549,9 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     for (size_t n = 0; n < tx.vin.size(); ++n)
     {
       const txin_v &txin = tx.vin[n];
-      if (txin.type() == typeid(txin_to_key))
+      if (std::holds_alternative<txin_to_key>(txin))
       {
-        const txin_to_key& in_to_key = boost::get<txin_to_key>(txin);
+        const txin_to_key& in_to_key = std::get<txin_to_key>(txin);
         if (last_key_image && memcmp(&in_to_key.k_image, last_key_image, sizeof(*last_key_image)) >= 0)
         {
           MERROR_VER("transaction has unsorted inputs");
@@ -3576,9 +3576,9 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     pmax_used_block_height = &max_used_block_height;
   for (const auto& txin : tx.vin)
   {
-    if (txin.type() == typeid(txin_stake_claim))
+    if (std::holds_alternative<txin_stake_claim>(txin))
     {
-      const txin_stake_claim& claim = boost::get<txin_stake_claim>(txin);
+      const txin_stake_claim& claim = std::get<txin_stake_claim>(txin);
       if (have_tx_keyimg_as_spent(claim.k_image))
       {
         MERROR_VER("Claim key image already spent: " << epee::string_tools::pod_to_hex(claim.k_image));
@@ -3599,8 +3599,8 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 
     // make sure output being spent is of type txin_to_key, rather than
     // e.g. txin_gen, which is only used for miner transactions
-    CHECK_AND_ASSERT_MES(txin.type() == typeid(txin_to_key), false, "wrong type id in tx input at Blockchain::check_tx_inputs");
-    const txin_to_key& in_to_key = boost::get<txin_to_key>(txin);
+    CHECK_AND_ASSERT_MES(std::holds_alternative<txin_to_key>(txin), false, "wrong type id in tx input at Blockchain::check_tx_inputs");
+    const txin_to_key& in_to_key = std::get<txin_to_key>(txin);
 
     // make sure tx output has key offset(s) (is signed to be used)
     CHECK_AND_ASSERT_MES(in_to_key.key_offsets.size(), false, "empty in_to_key.key_offsets in transaction with id " << get_transaction_hash(tx));
@@ -3707,7 +3707,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       bool all_claim_inputs = !tx.vin.empty();
       for (const auto& vin : tx.vin)
       {
-        if (vin.type() != typeid(txin_stake_claim))
+        if (!std::holds_alternative<txin_stake_claim>(vin))
         {
           all_claim_inputs = false;
           break;
@@ -3782,7 +3782,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       }
       for (size_t n = 0; n < tx.vin.size(); ++n)
       {
-        if (memcmp(&boost::get<txin_to_key>(tx.vin[n]).k_image, &rv.p.MGs[0].II[n], 32))
+        if (memcmp(&std::get<txin_to_key>(tx.vin[n]).k_image, &rv.p.MGs[0].II[n], 32))
         {
           MERROR_VER("Failed to check ringct signatures: mismatched II/vin sizes");
           return false;
@@ -3803,7 +3803,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   }
 
   // v3 PQC hybrid signature verification
-  if (tx.version >= 3 && hf_version >= HF_VERSION_SHEKYL_NG && !tx.vin.empty() && tx.vin[0].type() != typeid(txin_gen))
+  if (tx.version >= 3 && hf_version >= HF_VERSION_SHEKYL_NG && !tx.vin.empty() && !std::holds_alternative<txin_gen>(tx.vin[0]))
   {
     if (!verify_transaction_pqc_auth(tx))
     {
@@ -4717,9 +4717,9 @@ leave:
     auto validate_staked_outputs_in_tx = [&](const transaction& tx) -> bool {
       for (const auto &o : tx.vout)
       {
-        if (o.target.type() == typeid(txout_to_staked_key))
+        if (std::holds_alternative<txout_to_staked_key>(o.target))
         {
-          const auto &staked = boost::get<txout_to_staked_key>(o.target);
+          const auto &staked = std::get<txout_to_staked_key>(o.target);
           const uint64_t expected_lock_blocks = shekyl_stake_lock_blocks(staked.lock_tier);
           const uint64_t expected_lock_until = blockchain_height + expected_lock_blocks;
           if (staked.lock_until != expected_lock_until)
@@ -5609,7 +5609,7 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
       // get all amounts from tx.vin(s)
       for (const auto &txin : tx.vin)
       {
-        const txin_to_key &in_to_key = boost::get < txin_to_key > (txin);
+        const txin_to_key &in_to_key = std::get<txin_to_key>(txin);
 
         // check for duplicate
         auto it = its->second.find(in_to_key.k_image);
@@ -5637,7 +5637,7 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
       // add new absolute_offsets to offset_map
       for (const auto &txin : tx.vin)
       {
-        const txin_to_key &in_to_key = boost::get < txin_to_key > (txin);
+        const txin_to_key &in_to_key = std::get<txin_to_key>(txin);
         // no need to check for duplicate here.
         auto absolute_offsets = relative_output_offsets_to_absolute(in_to_key.key_offsets);
         for (const auto & offset : absolute_offsets)
@@ -5703,7 +5703,7 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
 
       for (const auto &txin : tx.vin)
       {
-        const txin_to_key &in_to_key = boost::get < txin_to_key > (txin);
+        const txin_to_key &in_to_key = std::get<txin_to_key>(txin);
         auto needed_offsets = relative_output_offsets_to_absolute(in_to_key.key_offsets);
 
         std::vector<output_data_t> outputs;
