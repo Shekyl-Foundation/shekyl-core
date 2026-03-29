@@ -114,6 +114,42 @@
   wire protocol identifiers intentionally preserved (must match Trezor
   firmware definitions).
 
+### Epee Phase 1: Rust replacement for security-critical primitives
+
+- **SSL certificate generation migrated to Rust (`rcgen`)**: Replaced the
+  deprecated OpenSSL RSA/EC_KEY certificate generation in `net_ssl.cpp` with
+  Rust's `rcgen` crate (ECDSA P-256) via FFI. Eliminates all `RSA_new`,
+  `RSA_generate_key_ex`, `EC_KEY_new`, `EC_KEY_generate_key`, and other
+  OpenSSL 3.0-deprecated API calls. The `create_rsa_ssl_certificate` and
+  `create_ec_ssl_certificate` functions are replaced by a single
+  `create_ssl_certificate` that delegates to `shekyl_generate_ssl_certificate`
+  in the Rust FFI, returning PEM-encoded key+cert for loading into OpenSSL's
+  SSL_CTX via non-deprecated BIO APIs.
+- **Post-quantum hybrid key exchange enabled**: TLS context configuration now
+  prefers `X25519MLKEM768` (FIPS 203 ML-KEM-768 hybrid) key exchange groups,
+  falling back to classical `X25519:P-256:P-384` when the OpenSSL build lacks
+  PQ support. Also added explicit TLS 1.3 ciphersuite configuration. Removed
+  deprecated `SSL_CTX_set_ecdh_auto` call.
+- **Secure memory wiping migrated to Rust (`zeroize`)**: Replaced the
+  platform-specific `memwipe.c` implementation (memset_s / explicit_bzero /
+  compiler-barrier fallback) with a single call to the Rust `zeroize` crate
+  via `shekyl_memwipe` FFI. The `zeroize` crate uses `write_volatile` which
+  is guaranteed not to be optimized away, replacing the fragile compiler
+  barrier tricks.
+- **Memory locking migrated to Rust (`libc`)**: Replaced the GNUC-only
+  `mlock`/`munlock`/`sysconf` calls in `mlocker.cpp` with Rust FFI functions
+  (`shekyl_mlock`, `shekyl_munlock`, `shekyl_page_size`) backed by the `libc`
+  crate. Adds Windows `VirtualLock`/`VirtualUnlock` support that was
+  previously missing (`#warning Missing implementation`). The `mlocked<T>` and
+  `scrubbed<T>` C++ template wrappers are preserved unchanged.
+- **New Rust FFI dependencies**: Added `rcgen = "0.14"`, `zeroize = "1"`,
+  `libc = "0.2"` to `shekyl-ffi/Cargo.toml`.
+- **C-compatible FFI header**: Added `src/shekyl/shekyl_secure_mem.h` with
+  C-linkage declarations for the secure memory primitives, usable from both
+  C (`memwipe.c`) and C++ (`mlocker.cpp`) translation units.
+- **CMake wiring**: `epee` library now links `${SHEKYL_FFI_LINK_LIBS}` and
+  includes `${CMAKE_SOURCE_DIR}/src` for the FFI headers.
+
 ### Warning cleanup and dead code removal
 
 - **Removed dead fork helpers**: Deleted unused `get_bulletproof_fork()`,

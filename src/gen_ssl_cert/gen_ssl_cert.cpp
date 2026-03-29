@@ -179,9 +179,9 @@ int main(int argc, char* argv[])
     tools::msg_writer(epee::console_color_yellow) << tr("Empty passphrase, the private key will be saved to disk unencrypted, use --")
       << arg_passphrase.name << tr(" to set a passphrase or --") << arg_prompt_for_passphrase.name << tr(" to prompt for one");
 
-  EVP_PKEY *pkey;
-  X509 *cert;
-  r = epee::net_utils::create_rsa_ssl_certificate(pkey, cert);
+  EVP_PKEY *pkey = nullptr;
+  X509 *cert = nullptr;
+  r = epee::net_utils::create_ssl_certificate(pkey, cert);
   if (!r)
   {
     tools::fail_msg_writer() << gencert::tr("Failed to create certificate");

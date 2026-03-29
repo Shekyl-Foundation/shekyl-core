@@ -455,6 +455,140 @@ pub extern "C" fn shekyl_split_block_emission(
     }
 }
 
+// ─── SSL Certificate Generation ─────────────────────────────────────────────
+
+/// Generate a self-signed ECDSA P-256 TLS certificate.
+///
+/// Writes PEM-encoded private key to `key_pem_out` and PEM-encoded certificate
+/// to `cert_pem_out`. Caller owns both buffers and must free them with
+/// `shekyl_buffer_free`. Certificate validity follows rcgen defaults (~1 year).
+#[no_mangle]
+pub extern "C" fn shekyl_generate_ssl_certificate(
+    key_pem_out: *mut ShekylBuffer,
+    cert_pem_out: *mut ShekylBuffer,
+) -> bool {
+    if key_pem_out.is_null() || cert_pem_out.is_null() {
+        return false;
+    }
+
+    let key_pair = match rcgen::KeyPair::generate() {
+        Ok(kp) => kp,
+        Err(_) => return false,
+    };
+
+    let cert = match rcgen::CertificateParams::default().self_signed(&key_pair) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let key_pem_str = key_pair.serialize_pem();
+    let cert_pem_str = cert.pem();
+
+    unsafe {
+        *key_pem_out = ShekylBuffer::from_vec(key_pem_str.into_bytes());
+        *cert_pem_out = ShekylBuffer::from_vec(cert_pem_str.into_bytes());
+    }
+    true
+}
+
+// ─── Secure Memory ──────────────────────────────────────────────────────────
+
+/// Securely wipe memory at `ptr` for `len` bytes.
+///
+/// Uses `zeroize` to guarantee the write is not optimized away.
+/// C signature: `void shekyl_memwipe(void *ptr, size_t len)`
+#[no_mangle]
+pub extern "C" fn shekyl_memwipe(ptr: *mut libc::c_void, len: usize) {
+    if ptr.is_null() || len == 0 {
+        return;
+    }
+    unsafe {
+        use zeroize::Zeroize;
+        std::slice::from_raw_parts_mut(ptr as *mut u8, len).zeroize();
+    }
+}
+
+/// Lock memory pages containing `[ptr, ptr+len)` into RAM.
+///
+/// Returns 0 on success, -1 on failure (mirrors POSIX mlock).
+/// C signature: `int shekyl_mlock(const void *ptr, size_t len)`
+#[no_mangle]
+pub extern "C" fn shekyl_mlock(ptr: *const libc::c_void, len: usize) -> i32 {
+    if ptr.is_null() || len == 0 {
+        return -1;
+    }
+    #[cfg(unix)]
+    {
+        unsafe { libc::mlock(ptr, len) }
+    }
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn VirtualLock(lpAddress: *const libc::c_void, dwSize: usize) -> i32;
+        }
+        let ret = unsafe { VirtualLock(ptr, len) };
+        if ret != 0 { 0 } else { -1 }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        -1
+    }
+}
+
+/// Unlock previously locked memory pages.
+///
+/// Returns 0 on success, -1 on failure (mirrors POSIX munlock).
+/// C signature: `int shekyl_munlock(const void *ptr, size_t len)`
+#[no_mangle]
+pub extern "C" fn shekyl_munlock(ptr: *const libc::c_void, len: usize) -> i32 {
+    if ptr.is_null() || len == 0 {
+        return -1;
+    }
+    #[cfg(unix)]
+    {
+        unsafe { libc::munlock(ptr, len) }
+    }
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn VirtualUnlock(lpAddress: *const libc::c_void, dwSize: usize) -> i32;
+        }
+        let ret = unsafe { VirtualUnlock(ptr, len) };
+        if ret != 0 { 0 } else { -1 }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        -1
+    }
+}
+
+/// Return the system page size in bytes.
+///
+/// Returns 0 on failure.
+#[no_mangle]
+pub extern "C" fn shekyl_page_size() -> usize {
+    #[cfg(unix)]
+    {
+        let ret = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        if ret <= 0 { 0 } else { ret as usize }
+    }
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct SystemInfo { _pad: [u8; 4], dw_page_size: u32, _rest: [u8; 52] }
+        extern "system" {
+            fn GetSystemInfo(info: *mut SystemInfo);
+        }
+        let mut info = SystemInfo { _pad: [0; 4], dw_page_size: 0, _rest: [0; 52] };
+        unsafe { GetSystemInfo(&mut info); }
+        info.dw_page_size as usize
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -542,6 +676,39 @@ mod tests {
         shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
         shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
         shekyl_buffer_free(sig.signature.ptr, sig.signature.len);
+    }
+
+    #[test]
+    fn test_ssl_cert_generation_ecdsa() {
+        let mut key_pem = ShekylBuffer::null();
+        let mut cert_pem = ShekylBuffer::null();
+        let ok = shekyl_generate_ssl_certificate(
+            &mut key_pem,
+            &mut cert_pem,
+        );
+        assert!(ok);
+        assert!(!key_pem.ptr.is_null());
+        assert!(!cert_pem.ptr.is_null());
+        let key_str = unsafe { std::str::from_utf8(std::slice::from_raw_parts(key_pem.ptr, key_pem.len)).unwrap() };
+        let cert_str = unsafe { std::str::from_utf8(std::slice::from_raw_parts(cert_pem.ptr, cert_pem.len)).unwrap() };
+        assert!(key_str.contains("BEGIN PRIVATE KEY"));
+        assert!(cert_str.contains("BEGIN CERTIFICATE"));
+        shekyl_buffer_free(key_pem.ptr, key_pem.len);
+        shekyl_buffer_free(cert_pem.ptr, cert_pem.len);
+    }
+
+    #[test]
+    fn test_memwipe_zeroes_buffer() {
+        let mut buf = vec![0xABu8; 64];
+        shekyl_memwipe(buf.as_mut_ptr() as *mut libc::c_void, buf.len());
+        assert!(buf.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_page_size_nonzero() {
+        let ps = shekyl_page_size();
+        assert!(ps > 0, "page size should be > 0, got {}", ps);
+        assert!(ps.is_power_of_two(), "page size should be power of 2");
     }
 
     #[test]

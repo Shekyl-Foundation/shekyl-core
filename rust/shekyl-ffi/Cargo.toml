@@ -15,3 +15,6 @@ shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-consensus = { path = "../shekyl-consensus" }
 shekyl-economics = { path = "../shekyl-economics" }
 shekyl-staking = { path = "../shekyl-staking" }
+rcgen = "0.14"
+zeroize = "1"
+libc = "0.2"

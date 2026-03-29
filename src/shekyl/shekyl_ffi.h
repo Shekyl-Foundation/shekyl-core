@@ -113,4 +113,12 @@ ShekylEmissionSplit shekyl_split_block_emission(
     uint64_t block_emission,
     uint64_t effective_share);
 
+// SSL certificate generation (replaces deprecated OpenSSL RSA/EC_KEY APIs)
+bool shekyl_generate_ssl_certificate(
+    ShekylBuffer* key_pem_out,
+    ShekylBuffer* cert_pem_out);
+
 } // extern "C"
+
+// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h
+// (C-compatible header used by both memwipe.c and mlocker.cpp)

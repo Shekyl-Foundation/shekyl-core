@@ -689,7 +689,6 @@ namespace cryptonote
 
   bool get_block_longhash(const Blockchain *pbc, const blobdata& bd, crypto::hash& res, const uint64_t height, const int major_version, const crypto::hash *seed_hash, const int miners)
   {
-    crypto::hash seed_hash_ = crypto::null_hash;
     if (pbc != NULL && major_version >= RX_BLOCK_VERSION)
     {
       static const std::string longhash_202612 = "84f64766475d51837ac9efbef1926486e58563c95a19fef4aec3254f03000000";

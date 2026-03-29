@@ -4557,7 +4557,6 @@ void BlockchainLMDB::add_staker_accrual(uint64_t height, const staker_accrual_re
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
-  mdb_txn_cursors *m_cursors = &m_wcursors;
 
   MDB_val k = {sizeof(height), (void *)&height};
   MDB_val v = {sizeof(record), (void *)&record};

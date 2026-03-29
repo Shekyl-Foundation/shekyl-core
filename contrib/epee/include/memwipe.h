@@ -33,8 +33,9 @@
 #ifdef __cplusplus
 #include <array>
 #include <cstddef>
-
 extern "C" {
+#else
+#include <stddef.h>
 #endif
 
 void *memwipe(void *src, size_t n);
