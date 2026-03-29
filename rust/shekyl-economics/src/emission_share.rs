@@ -197,4 +197,20 @@ mod tests {
         );
         assert_eq!(share, 135_000);
     }
+
+    #[test]
+    fn test_share_is_non_increasing_over_time() {
+        let mut prev = INITIAL_SHARE;
+        for year in 0..=30u64 {
+            let share = calc_effective_emission_share(
+                year * BLOCKS_PER_YEAR,
+                0,
+                INITIAL_SHARE,
+                ANNUAL_DECAY,
+                BLOCKS_PER_YEAR,
+            );
+            assert!(share <= prev, "share increased at year {year}: {share} > {prev}");
+            prev = share;
+        }
+    }
 }

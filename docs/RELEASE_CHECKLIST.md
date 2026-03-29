@@ -48,6 +48,10 @@
   - [ ] Update expected_block_hashes_hash in src/cryptonote_core/blockchain.cpp with checkpoints.dat sha256 hash
 - [ ] Testnet forked
 - [ ] Testnet testing/verification
+  - [ ] Run deterministic tuple check across seed nodes:
+    - `python3 scripts/check_testnet_genesis_consensus.py --rpc http://SEED_EAST:12029 --rpc http://SEED_WEST:12029 --rpc http://SEED_EU:12029 --check-economy`
+  - [ ] Follow rehearsal runbook: `shekyl-dev/docs/TESTNET_MINER.md`
+  - [ ] Follow rehearsal gates: `shekyl-dev/docs/TESTNET_REHEARSAL_CHECKLIST.md`
   - [ ] Ledger
   - [ ] Trezor
   - [ ] Release-specific testing

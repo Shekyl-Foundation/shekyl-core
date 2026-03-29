@@ -169,8 +169,6 @@ genesis allocation:
 
 ### Specific Genesis Allocations
 
-### Specific Genesis Allocations
-
 | Recipient | Amount | Notes |
 |---|---|---|
 | Founder 1 | 20,000 SHEKYL | Equal share |

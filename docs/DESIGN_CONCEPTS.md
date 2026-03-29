@@ -44,9 +44,9 @@ Shekyl monetary policy should satisfy six constraints at once:
 
 ---
 
-## 2) Current Shekyl Baseline and Problem Statement
+## 2) Historical Shekyl Baseline and Problem Statement
 
-Current constants in `src/cryptonote_config.h`:
+Historical constants from the original chain configuration:
 
 - `MONEY_SUPPLY = 2^32`
 - `COIN = 10^12`
@@ -65,7 +65,9 @@ Reward logic in `src/cryptonote_basic/cryptonote_basic_impl.cpp`:
 - `base_reward = (MONEY_SUPPLY - already_generated_coins) >> emission_speed_factor`
 - `base_reward` is clamped to a minimum via `FINAL_SUBSIDY_PER_MINUTE`
 
-Given the mismatch above, the chain effectively enters minimum-subsidy behavior immediately.
+Given the mismatch above, the original chain effectively entered minimum-subsidy behavior immediately.
+
+For Shekyl NG, constants are generated from `config/economics_params.json` and included via generated headers referenced by `src/cryptonote_config.h`.
 
 ### Technical limit with `uint64_t`
 

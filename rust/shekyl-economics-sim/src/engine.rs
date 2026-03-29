@@ -247,3 +247,34 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         years: snapshots,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SimParams;
+    use serde_json::Value;
+
+    fn cfg_u64(cfg: &Value, key: &str) -> u64 {
+        cfg.get(key)
+            .and_then(Value::as_u64)
+            .unwrap_or_else(|| panic!("missing u64 key in economics config: {key}"))
+    }
+
+    #[test]
+    fn sim_defaults_match_canonical_economics_config() {
+        let cfg: Value = serde_json::from_str(include_str!("../../../config/economics_params.json"))
+            .expect("economics_params.json must be valid JSON");
+        let p = SimParams::default();
+
+        assert_eq!(p.money_supply, cfg_u64(&cfg, "money_supply"));
+        assert_eq!(p.final_subsidy_per_minute, cfg_u64(&cfg, "final_subsidy_per_minute"));
+        assert_eq!(p.blocks_per_year, cfg_u64(&cfg, "shekyl_blocks_per_year"));
+        assert_eq!(p.tx_volume_baseline, cfg_u64(&cfg, "shekyl_tx_volume_baseline"));
+        assert_eq!(p.release_min, cfg_u64(&cfg, "shekyl_release_min"));
+        assert_eq!(p.release_max, cfg_u64(&cfg, "shekyl_release_max"));
+        assert_eq!(p.burn_base_rate, cfg_u64(&cfg, "shekyl_burn_base_rate"));
+        assert_eq!(p.burn_cap, cfg_u64(&cfg, "shekyl_burn_cap"));
+        assert_eq!(p.staker_pool_share, cfg_u64(&cfg, "shekyl_staker_pool_share"));
+        assert_eq!(p.staker_emission_share, cfg_u64(&cfg, "shekyl_staker_emission_share"));
+        assert_eq!(p.staker_emission_decay, cfg_u64(&cfg, "shekyl_staker_emission_decay"));
+    }
+}

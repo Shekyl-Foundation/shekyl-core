@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Testnet economy readiness checks
+
+- Added `docs/ECONOMY_TESTNET_READINESS_MATRIX.md` to track design-vs-code status for economy testnet rehearsal with explicit drift tags (`doc_correction`, `code_fix_required`, `needs_decision`).
+- Added `scripts/check_testnet_genesis_consensus.py` to verify multi-node testnet tuple consistency (`height 0 block hash`, `miner tx hash`, `tx hex`) and optional economy field presence in `get_info`.
+- Added Rust parity/invariant tests:
+  - `shekyl-economics-sim`: validates `SimParams::default()` against `config/economics_params.json`.
+  - `shekyl-economics`: added release monotonicity, burn bounds, and emission-share monotonicity tests.
+  - `shekyl-ffi`: added direct FFI-vs-Rust consistency tests for burn pct and emission share.
+- Added functional RPC test `tests/functional_tests/economy_info.py` and included it in `functional_tests_rpc.py` default test list to assert required economy fields are exposed by `get_info`.
+- Corrected documentation errors without changing design intent:
+  - Clarified `DESIGN_CONCEPTS.md` Section 2 as historical baseline.
+  - Removed duplicate heading in `GENESIS_TRANSPARENCY.md`.
+  - Linked `RELEASE_CHECKLIST.md` testnet section to the rehearsal runbook/checklist and deterministic tuple check command.
+
 ### BREAKING: Second-pass rebrand (wallet, URI, serialization)
 
 - **URI scheme**: Wallet URI generation and parsing now use `shekyl:` only.

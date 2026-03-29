@@ -647,6 +647,37 @@ mod tests {
     }
 
     #[test]
+    fn test_burn_pct_ffi_matches_rust_impl() {
+        let cases = [
+            (50u64, 50u64, 1_000_000u64, 4_294_967_296_000_000_000u64, 100_000u64, 500_000u64, 900_000u64),
+            (200, 50, 2_000_000_000_000_000_000, 4_294_967_296_000_000_000, 250_000, 500_000, 900_000),
+            (500, 50, 3_000_000_000_000_000_000, 4_294_967_296_000_000_000, 400_000, 500_000, 900_000),
+        ];
+        for (txv, base, circ, total, stake, rate, cap) in cases {
+            let ffi = shekyl_calc_burn_pct(txv, base, circ, total, stake, rate, cap);
+            let direct = shekyl_economics::burn::calc_burn_pct(txv, base, circ, total, stake, rate, cap);
+            assert_eq!(ffi, direct);
+        }
+    }
+
+    #[test]
+    fn test_emission_share_ffi_matches_rust_impl() {
+        let cases = [
+            (0u64, 0u64, 150_000u64, 900_000u64, 262_800u64),
+            (262_800, 0, 150_000, 900_000, 262_800),
+            (2 * 262_800, 0, 150_000, 900_000, 262_800),
+            (10 * 262_800, 0, 150_000, 900_000, 262_800),
+        ];
+        for (height, genesis, initial, decay, bpy) in cases {
+            let ffi = shekyl_calc_emission_share(height, genesis, initial, decay, bpy);
+            let direct = shekyl_economics::emission_share::calc_effective_emission_share(
+                height, genesis, initial, decay, bpy,
+            );
+            assert_eq!(ffi, direct);
+        }
+    }
+
+    #[test]
     fn test_pqc_keygen_sign_verify_ffi() {
         let kp = shekyl_pqc_keypair_generate();
         assert!(kp.success);
