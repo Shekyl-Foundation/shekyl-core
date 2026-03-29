@@ -50,35 +50,35 @@ Drift labels:
 
 ## RPC/Test Visibility
 
-6. **Economy observability fields in daemon RPC (`get_info`/staking info)**
+1. **Economy observability fields in daemon RPC (`get_info`/staking info)**
    - Present: release multiplier, burn pct, stake ratio, pool totals, emission share fields.
    - Status: `implemented`
    - Drift: `partial` docs mention annualized yield field; daemon does not currently expose `staker_yield_annualized` directly.
    - Drift label: `needs_decision` (add field to code vs adjust docs wording)
 
-7. **Operator testnet runbook and rehearsal gates**
+2. **Operator testnet runbook and rehearsal gates**
    - Present in `shekyl-dev/docs/TESTNET_MINER.md` and `shekyl-dev/docs/TESTNET_REHEARSAL_CHECKLIST.md`.
    - Status: `implemented` (ops docs exist)
    - Drift: none
 
 ## Automation/Test Coverage
 
-8. **Rust unit tests for economics formulas**
+1. **Rust unit tests for economics formulas**
    - Present in `shekyl-economics` crate modules.
    - Status: `implemented`
    - Drift: none
 
-9. **Rust sim parity with canonical config**
+2. **Rust sim parity with canonical config**
    - Current sim defaults are hardcoded in `rust/shekyl-economics-sim/src/engine.rs`.
    - Status: `partial`
    - Drift label: `code_fix_required` (add config parity tests to prevent drift)
 
-10. **Rehearsal automation checks in Shekyl core**
+3. **Rehearsal automation checks in Shekyl core**
     - `TESTNET_REHEARSAL_CHECKLIST.md` references `scripts/check_testnet_genesis_consensus.py`; not present in this repo.
     - Status: `missing`
     - Drift label: `needs_decision` (import/add script here vs keep only in shekyl-dev)
 
-11. **Automated end-to-end economy assertions (live chain + RPC)**
+4. **Automated end-to-end economy assertions (live chain + RPC)**
     - Existing tests are mostly formula/unit-level or specific parity checks.
     - Status: `partial`
     - Drift label: `code_fix_required` (add economy-focused functional assertions)
@@ -86,9 +86,9 @@ Drift labels:
 ## High-Impact Mismatch Notes
 
 - **Block-time assumptions in docs vs current HF behavior**
-  - Some design/genesis prose references 2-minute assumptions (for day-count examples).
-  - Current rebooted HF table is single HF1; difficulty target logic should be treated as code truth for active network behavior.
-  - Drift label: `needs_decision` (if 120s remains design target, code needs update; if 60s target is intentional, docs need correction where they state concrete day conversions)
+  - Design/genesis references use 2-minute assumptions for day-count examples.
+  - Runtime now aligns with that design target by consistently using `DIFFICULTY_TARGET_V2` (`120s`) in active HF1 difficulty target, block reward scaling, unlock-time leeway, RPC block target reporting, and sync ETA output.
+  - Drift label: resolved (`code_fix_required` completed)
 
 - **HF naming in rehearsal checklist**
   - `TESTNET_REHEARSAL_CHECKLIST.md` says "post-HF17 rules" for v3 tx checks.

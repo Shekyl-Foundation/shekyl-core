@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Consensus timing alignment (HF1)
+
+- Fixed remaining runtime paths that still derived timing from legacy `DIFFICULTY_TARGET_V1` (`60s`) so active Shekyl HF1 behavior consistently uses `DIFFICULTY_TARGET_V2` (`120s`) for difficulty target selection, block reward minute-scaling, unlock-time leeway checks, sync ETA reporting, and wallet lock-time display.
+- Updated `docs/ECONOMY_TESTNET_READINESS_MATRIX.md` to mark the 120s block-time drift item as resolved (`code_fix_required` completed).
+
 ### Testnet economy readiness checks
 
 - Added `docs/ECONOMY_TESTNET_READINESS_MATRIX.md` to track design-vs-code status for economy testnet rehearsal with explicit drift tags (`doc_correction`, `code_fix_required`, `needs_decision`).
@@ -176,6 +181,31 @@
   `TEST_pos(18446744073709551615, ...)` entries in
   `tests/unit_tests/parse_amount.cpp` caused a redefinition error on macOS
   Clang. Removed the duplicate.
+- **Boost CONFIG-mode validation**: Added a cmake-configure-time check that
+  verifies Boost imported-target `IMPORTED_LOCATION` files exist on disk.
+  Gives a clear `FATAL_ERROR` with remediation steps instead of a cryptic
+  linker failure minutes into the build.
+- **Arch Linux CI**: Added `boost-libs` to the Arch pacman install to
+  provide shared `.so` files alongside the `boost` headers/cmake-config
+  package.
+- **Ubuntu 24.04 test matrix**: Added Ubuntu 24.04 to the `test-ubuntu`
+  CI matrix (previously only 22.04 was tested).
+
+### Depends system updates
+
+- **FreeBSD sysroot updated to 14.4-RELEASE**: The cross-compilation
+  sysroot was stuck at FreeBSD 11.3 (EOL Sept 2021), whose `base.txz`
+  had been removed from FreeBSD mirrors (404). Updated to 14.4-RELEASE
+  (March 2026), updated SHA256 hash, and fixed clang wrapper scripts
+  from clang-8 to clang-14 to match `hosts/freebsd.mk`.
+- **OpenSSL: disabled `devcrypto` engine for FreeBSD**: Added
+  `no-devcrypto` to FreeBSD OpenSSL configure options. The `/dev/crypto`
+  engine requires the `crypto/cryptodev.h` kernel header which is not
+  available in a cross-compilation sysroot.
+- **libsodium updated to 1.0.20**: The 1.0.18 tarball was removed from
+  `download.libsodium.org` (404). Updated to 1.0.20 with new SHA256 hash.
+  Removed the 1.0.18-specific patches (`fix-whitespace.patch`,
+  `disable-glibc-getrandom-getentropy.patch`) which no longer apply.
 
 ### Warning cleanup and dead code removal
 
