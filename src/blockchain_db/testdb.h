@@ -163,6 +163,20 @@ public:
   virtual uint64_t get_alt_block_count() override { return 0; }
   virtual void drop_alt_blocks() override {}
   virtual bool for_all_alt_blocks(std::function<bool(const crypto::hash &blkid, const alt_block_data_t &data, const cryptonote::blobdata_ref *blob)> f, bool include_blob = false) const override { return true; }
+
+  virtual void add_staker_accrual(uint64_t height, const staker_accrual_record& record) override {}
+  virtual staker_accrual_record get_staker_accrual(uint64_t height) const override { return {}; }
+  virtual void remove_staker_accrual(uint64_t height) override {}
+
+  virtual void set_staker_pool_balance(uint64_t balance) override {}
+  virtual uint64_t get_staker_pool_balance() const override { return 0; }
+
+  virtual void set_total_burned(uint64_t amount) override {}
+  virtual uint64_t get_total_burned() const override { return 0; }
+
+  virtual void set_staker_claim_watermark(uint64_t output_index, uint64_t last_claimed_height) override {}
+  virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const override { return 0; }
+  virtual void remove_staker_claim_watermark(uint64_t output_index) override {}
 };
 
 }

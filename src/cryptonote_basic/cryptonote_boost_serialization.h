@@ -39,21 +39,15 @@
 #include <boost/serialization/map.hpp>
 #include <boost/serialization/is_bitwise_serializable.hpp>
 #include <boost/serialization/split_free.hpp>
+#include <boost/version.hpp>
 #include <optional>
 #include <variant>
 
+// Use Boost's own std::variant serialization when available (Boost >= 1.78)
+#if __has_include(<boost/serialization/std_variant.hpp>)
+  #include <boost/serialization/std_variant.hpp>
+#else
 namespace boost { namespace serialization {
-
-  // std::variant serialization shim -- wire-compatible with boost::variant
-  // (writes 0-based int index followed by the active member's payload).
-  template<class Archive, typename... Ts>
-  void save(Archive &ar, const std::variant<Ts...> &v, const unsigned int /*version*/)
-  {
-    int which = static_cast<int>(v.index());
-    ar & which;
-    std::visit([&ar](const auto &val) { ar & val; }, v);
-  }
-
   template<size_t I, class Archive, typename... Ts>
   void variant_load_impl(Archive &ar, int which, std::variant<Ts...> &v)
   {
@@ -67,7 +61,13 @@ namespace boost { namespace serialization {
       }
     }
   }
-
+  template<class Archive, typename... Ts>
+  void save(Archive &ar, const std::variant<Ts...> &v, const unsigned int /*version*/)
+  {
+    int which = static_cast<int>(v.index());
+    ar & which;
+    std::visit([&ar](const auto &val) { ar & val; }, v);
+  }
   template<class Archive, typename... Ts>
   void load(Archive &ar, std::variant<Ts...> &v, const unsigned int /*version*/)
   {
@@ -75,14 +75,19 @@ namespace boost { namespace serialization {
     ar & which;
     variant_load_impl<0>(ar, which, v);
   }
-
   template<class Archive, typename... Ts>
   void serialize(Archive &ar, std::variant<Ts...> &v, const unsigned int version)
   {
     boost::serialization::split_free(ar, v, version);
   }
+}}
+#endif
 
-  // std::optional serialization
+// Boost does not provide std::optional serialization; always define our adapter
+#if __has_include(<boost/serialization/std_optional.hpp>)
+  #include <boost/serialization/std_optional.hpp>
+#else
+namespace boost { namespace serialization {
   template<class Archive, class T>
   void save(Archive &ar, const std::optional<T> &o, const unsigned int /*version*/)
   {
@@ -110,6 +115,7 @@ namespace boost { namespace serialization {
     split_free(ar, o, version);
   }
 }}
+#endif
 #include <boost/archive/portable_binary_iarchive.hpp>
 #include <boost/archive/portable_binary_oarchive.hpp>
 #include "cryptonote_basic.h"

@@ -46,6 +46,14 @@ endif()
 cmake_minimum_required(VERSION 3.5)
 message(STATUS "CMake version ${CMAKE_VERSION}")
 
+# CMake 4.x compatibility
+if(POLICY CMP0148)
+  cmake_policy(SET CMP0148 OLD)  # keep FindPythonInterp until migrated
+endif()
+if(POLICY CMP0167)
+  cmake_policy(SET CMP0167 NEW)  # use Boost's own cmake config instead of deprecated FindBoost
+endif()
+
 project(shekyl)
 
 option (USE_CCACHE "Use ccache if a usable instance is found" ON)
@@ -1058,7 +1066,6 @@ else()
 endif()
 
 set(OLD_LIB_SUFFIXES ${CMAKE_FIND_LIBRARY_SUFFIXES})
-set(Boost_NO_BOOST_CMAKE ON)
 if(STATIC)
   if(MINGW)
     set(CMAKE_FIND_LIBRARY_SUFFIXES .a)

@@ -98,6 +98,19 @@ namespace po = boost::program_options;
 typedef cryptonote::simple_wallet sw;
 using tools::fee_priority;
 
+namespace {
+  template <typename... Ts>
+  std::string variant_to_string(const std::variant<Ts...>& v)
+  {
+    return std::visit([](const auto& val) -> std::string {
+      if constexpr (std::is_arithmetic_v<std::decay_t<decltype(val)>>)
+        return std::to_string(val);
+      else
+        return val;
+    }, v);
+  }
+}
+
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "wallet.simplewallet"
 
@@ -9347,7 +9360,7 @@ bool simple_wallet::show_transfers(const std::vector<std::string> &args_)
     auto formatter = boost::format("%8.8llu %6.6s %8.8s %25.25s %20.20s %s %s %14.14s %s %s - %s");
 
     message_writer(color, false) << formatter
-      % transfer.block
+      % variant_to_string(transfer.block)
       % transfer.direction
       % transfer.unlocked
       % tools::get_human_readable_timestamp(transfer.timestamp)
@@ -9441,7 +9454,7 @@ bool simple_wallet::export_transfers(const std::vector<std::string>& args_)
     }
 
     file << formatter
-      % transfer.block
+      % variant_to_string(transfer.block)
       % transfer.direction
       % transfer.unlocked
       % tools::get_human_readable_timestamp(transfer.timestamp)
