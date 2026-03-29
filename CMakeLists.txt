@@ -1083,8 +1083,10 @@ endif()
 set(BOOST_MIN_VER 1.74)
 set(BOOST_COMPONENTS filesystem thread date_time chrono serialization program_options locale)
 
+set(_BOOST_USE_CONFIG FALSE)
 find_package(Boost ${BOOST_MIN_VER} QUIET CONFIG)
 if(Boost_FOUND)
+  set(_BOOST_USE_CONFIG TRUE)
   message(STATUS "Found Boost ${Boost_VERSION_STRING} via CMake config mode")
 else()
   find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED)
@@ -1119,8 +1121,12 @@ elseif(Boost_FOUND)
 
   message(STATUS "Boost components: ${BOOST_COMPONENTS}")
 
-  # Find required Boost libraries
-  find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED COMPONENTS ${BOOST_COMPONENTS})
+  # Find required Boost libraries (preserve CONFIG mode to avoid SO-version mismatches)
+  if(_BOOST_USE_CONFIG)
+    find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED CONFIG COMPONENTS ${BOOST_COMPONENTS})
+  else()
+    find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED COMPONENTS ${BOOST_COMPONENTS})
+  endif()
   set(CMAKE_FIND_LIBRARY_SUFFIXES ${OLD_LIB_SUFFIXES})
 endif()
 
