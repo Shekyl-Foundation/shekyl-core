@@ -179,10 +179,8 @@ jobs:
         run: ${{env.APT_INSTALL_LINUX}}
       - name: install Rust
         run: ${{env.INSTALL_RUST}}
-      - name: install pip
-        run: apt install -y python3-pip
       - name: install Python dependencies
-        run: pip install requests psutil monotonic zmq deepdiff
+        run: apt install -y python3-requests python3-psutil python3-monotonic python3-zmq python3-deepdiff
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
