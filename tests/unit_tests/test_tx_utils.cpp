@@ -132,7 +132,7 @@ TEST(parse_tx_extra, handles_pub_key_and_padding)
   ASSERT_TRUE(cryptonote::parse_tx_extra(extra, tx_extra_fields));
   ASSERT_EQ(2, tx_extra_fields.size());
   ASSERT_TRUE(std::holds_alternative<cryptonote::tx_extra_pub_key>(tx_extra_fields[0]));
-  ASSERT_EQ(typeid(cryptonote::tx_extra_padding), tx_extra_fields[1].type());
+  ASSERT_TRUE(std::holds_alternative<cryptonote::tx_extra_padding>(tx_extra_fields[1]));
 }
 
 TEST(parse_and_validate_tx_extra, is_valid_tx_extra_parsed)
@@ -298,7 +298,7 @@ TEST(remove_field_from_tx_extra, remove_first)
   ASSERT_TRUE(cryptonote::parse_tx_extra(extra, tx_extra_fields));
   ASSERT_EQ(2, tx_extra_fields.size());
   ASSERT_TRUE(std::holds_alternative<cryptonote::tx_extra_pub_key>(tx_extra_fields[0]));
-  ASSERT_EQ(typeid(cryptonote::tx_extra_nonce), tx_extra_fields[1].type());
+  ASSERT_TRUE(std::holds_alternative<cryptonote::tx_extra_nonce>(tx_extra_fields[1]));
 
   tx_extra_fields.clear();
   ASSERT_TRUE(cryptonote::remove_field_from_tx_extra(extra, typeid(cryptonote::tx_extra_pub_key)));
@@ -317,7 +317,7 @@ TEST(remove_field_from_tx_extra, remove_last)
   ASSERT_TRUE(cryptonote::parse_tx_extra(extra, tx_extra_fields));
   ASSERT_EQ(2, tx_extra_fields.size());
   ASSERT_TRUE(std::holds_alternative<cryptonote::tx_extra_pub_key>(tx_extra_fields[0]));
-  ASSERT_EQ(typeid(cryptonote::tx_extra_nonce), tx_extra_fields[1].type());
+  ASSERT_TRUE(std::holds_alternative<cryptonote::tx_extra_nonce>(tx_extra_fields[1]));
 
   tx_extra_fields.clear();
   ASSERT_TRUE(cryptonote::remove_field_from_tx_extra(extra, typeid(cryptonote::tx_extra_nonce)));
@@ -337,8 +337,8 @@ TEST(remove_field_from_tx_extra, remove_middle)
   ASSERT_TRUE(cryptonote::parse_tx_extra(extra, tx_extra_fields));
   ASSERT_EQ(3, tx_extra_fields.size());
   ASSERT_TRUE(std::holds_alternative<cryptonote::tx_extra_pub_key>(tx_extra_fields[0]));
-  ASSERT_EQ(typeid(cryptonote::tx_extra_nonce), tx_extra_fields[1].type());
-  ASSERT_EQ(typeid(cryptonote::tx_extra_pub_key), tx_extra_fields[2].type());
+  ASSERT_TRUE(std::holds_alternative<cryptonote::tx_extra_nonce>(tx_extra_fields[1]));
+  ASSERT_TRUE(std::holds_alternative<cryptonote::tx_extra_pub_key>(tx_extra_fields[2]));
 
   tx_extra_fields.clear();
   ASSERT_TRUE(cryptonote::remove_field_from_tx_extra(extra, typeid(cryptonote::tx_extra_nonce)));
