@@ -3616,6 +3616,73 @@ namespace cryptonote
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_estimate_claim_reward(const COMMAND_RPC_ESTIMATE_CLAIM_REWARD::request& req, COMMAND_RPC_ESTIMATE_CLAIM_REWARD::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
+  {
+    RPC_TRACKER(estimate_claim_reward);
+
+    const auto& db = m_core.get_blockchain_storage().get_db();
+    const uint64_t current_height = m_core.get_current_blockchain_height();
+
+    if (req.to_height > current_height)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT;
+      error_resp.message = "to_height exceeds current blockchain height";
+      return false;
+    }
+    if (req.from_height >= req.to_height)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "from_height must be less than to_height";
+      return false;
+    }
+
+    tx_out_index oi;
+    try { oi = db.get_output_tx_and_index_from_global(req.staked_output_index); }
+    catch (...)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "Staked output not found";
+      return false;
+    }
+
+    cryptonote::transaction staked_tx;
+    if (!db.get_tx(oi.first, staked_tx) || oi.second >= staked_tx.vout.size())
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "Cannot retrieve staked output transaction";
+      return false;
+    }
+
+    const cryptonote::tx_out& out = staked_tx.vout[oi.second];
+    uint8_t tier = 0;
+    uint64_t lock_until = 0;
+    if (!cryptonote::get_output_staking_info(out, tier, lock_until))
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "Output is not a staked output";
+      return false;
+    }
+
+    uint64_t staked_amount = out.amount;
+    res.tier = tier;
+    res.staked_amount = staked_amount;
+
+    uint64_t reward = 0;
+    for (uint64_t h = req.from_height + 1; h <= req.to_height; ++h)
+    {
+      auto accrual = db.get_staker_accrual(h);
+      uint64_t total_reward_at_h = accrual.staker_emission + accrual.staker_fee_pool;
+      if (total_reward_at_h == 0 || accrual.total_weighted_stake == 0)
+        continue;
+      uint64_t weight = shekyl_stake_weight(staked_amount, tier);
+      reward += (uint64_t)((double)total_reward_at_h * (double)weight / (double)accrual.total_weighted_stake);
+    }
+
+    res.reward = reward;
+    res.status = CORE_RPC_STATUS_OK;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_rpc_access_submit_nonce(const COMMAND_RPC_ACCESS_SUBMIT_NONCE::request& req, COMMAND_RPC_ACCESS_SUBMIT_NONCE::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
   {
     RPC_TRACKER(rpc_access_submit_nonce);

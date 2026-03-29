@@ -37,6 +37,7 @@
 
 #include "include_base_utils.h"
 #include "cryptonote_basic/cryptonote_basic_impl.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
 #include "tx_pool.h"
 #include "tx_pqc_verify.h"
 #include "blockchain.h"
@@ -1723,7 +1724,7 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
    */
   //make blocks coin-base tx looks close to real coinbase tx to get truthful blob weight
   uint8_t hf_version = b.major_version;
-  size_t max_outs = hf_version >= 4 ? 1 : 11;
+  size_t max_outs = hf_version >= HF_VERSION_DYNAMIC_FEE ? 1 : 11;
   const uint64_t tx_volume_avg = get_tx_volume_avg(height);
   const uint64_t circulating_supply = already_generated_coins;
   const uint64_t stake_ratio = get_stake_ratio(height);
@@ -3147,8 +3148,8 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
-  // from hard fork 2, we forbid dust and compound outputs
-  if (hf_version >= 2) {
+  // forbid dust and compound outputs
+  if (hf_version >= HF_VERSION_ENFORCE_RCT) {
     for (auto &o: tx.vout) {
       if (tx.version == 1)
       {
@@ -3161,7 +3162,7 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
   }
 
   // in a v2 tx, all outputs must have 0 amount
-  if (hf_version >= 3) {
+  if (hf_version >= HF_VERSION_DYNAMIC_FEE) {
     if (tx.version >= 2) {
       for (auto &o: tx.vout) {
         if (o.amount != 0) {
@@ -3172,21 +3173,8 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     }
   }
 
-  // from v8, allow bulletproofs
-  if (hf_version < 8) {
-    if (tx.version >= 2) {
-      const bool bulletproof = rct::is_rct_bulletproof(tx.rct_signatures.type);
-      if (bulletproof || !tx.rct_signatures.p.bulletproofs.empty())
-      {
-        MERROR_VER("Bulletproofs are not allowed before v8");
-        tvc.m_invalid_output = true;
-        return false;
-      }
-    }
-  }
-
-  // from v9, forbid borromean range proofs
-  if (hf_version > 8) {
+  // bulletproofs always allowed on rebooted chain; forbid borromean range proofs
+  {
     if (tx.version >= 2) {
       const bool borromean = rct::is_rct_borromean(tx.rct_signatures.type);
       if (borromean)
@@ -3210,12 +3198,12 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     }
   }
 
-  // from v11, allow only bulletproofs v2
-  if (hf_version > HF_VERSION_SMALLER_BP) {
+  // forbid old bulletproofs v1
+  if (hf_version >= HF_VERSION_SMALLER_BP) {
     if (tx.version >= 2) {
       if (tx.rct_signatures.type == rct::RCTTypeBulletproof)
       {
-        MERROR_VER("Ringct type " << (unsigned)rct::RCTTypeBulletproof << " is not allowed from v" << (HF_VERSION_SMALLER_BP + 1));
+        MERROR_VER("Ringct type " << (unsigned)rct::RCTTypeBulletproof << " is not allowed from v" << HF_VERSION_SMALLER_BP);
         tvc.m_invalid_output = true;
         return false;
       }
@@ -3234,26 +3222,14 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     }
   }
 
-  // from v14, allow only CLSAGs
-  if (hf_version > HF_VERSION_CLSAG) {
+  // forbid pre-CLSAG ring signature types
+  if (hf_version >= HF_VERSION_CLSAG) {
     if (tx.version >= 2) {
       if (tx.rct_signatures.type <= rct::RCTTypeBulletproof2)
       {
-        // two MLSAG txes went in due to a bug with txes that went into the txpool before the fork, grandfather them in
-        static const char * grandfathered[2] = { "c5151944f0583097ba0c88cd0f43e7fabb3881278aa2f73b3b0a007c5d34e910", "6f2f117cde6fbcf8d4a6ef8974fcac744726574ac38cf25d3322c996b21edd4c" };
-        crypto::hash h0, h1;
-        epee::string_tools::hex_to_pod(grandfathered[0], h0);
-        epee::string_tools::hex_to_pod(grandfathered[1], h1);
-        if (cryptonote::get_transaction_hash(tx) == h0 || cryptonote::get_transaction_hash(tx) == h1)
-        {
-          MDEBUG("Grandfathering cryptonote::get_transaction_hash(tx) in");
-        }
-        else
-        {
-          MERROR_VER("Ringct type " << (unsigned)tx.rct_signatures.type << " is not allowed from v" << (HF_VERSION_CLSAG + 1));
-          tvc.m_invalid_output = true;
-          return false;
-        }
+        MERROR_VER("Ringct type " << (unsigned)tx.rct_signatures.type << " is not allowed from v" << HF_VERSION_CLSAG);
+        tvc.m_invalid_output = true;
+        return false;
       }
     }
   }
@@ -3271,8 +3247,8 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     }
   }
 
-  // from v16, forbid bulletproofs
-  if (hf_version > HF_VERSION_BULLETPROOF_PLUS) {
+  // forbid non-plus bulletproofs
+  if (hf_version >= HF_VERSION_BULLETPROOF_PLUS) {
     if (tx.version >= 2) {
       const bool bulletproof = rct::is_rct_bulletproof(tx.rct_signatures.type);
       if (bulletproof)
@@ -3471,9 +3447,9 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     }
   }
 
-  // from hard fork 2, we require mixin at least 2 unless one output cannot mix with 2 others
+  // require mixin at least 2 unless one output cannot mix with 2 others
   // if one output cannot mix with 2 others, we accept at most 1 output that can mix
-  if (hf_version >= 2)
+  if (hf_version >= HF_VERSION_ENFORCE_RCT)
   {
     size_t n_unmixable = 0, n_mixable = 0;
     size_t min_actual_mixin = std::numeric_limits<size_t>::max();
@@ -3550,8 +3526,8 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       return false;
     }
 
-    // min/max tx version based on HF, and we accept v1 txes if having a non mixable
-    const size_t max_tx_version = (hf_version <= 3) ? 1 : (hf_version >= HF_VERSION_SHEKYL_NG ? 3 : 2);
+    // min/max tx version based on HF
+    const size_t max_tx_version = (hf_version >= HF_VERSION_SHEKYL_NG) ? 3 : (hf_version >= HF_VERSION_DYNAMIC_FEE ? 2 : 1);
     if (tx.version > max_tx_version)
     {
       MERROR_VER("transaction version " << (unsigned)tx.version << " is higher than max accepted version " << max_tx_version);
@@ -3567,8 +3543,8 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     }
   }
 
-  // from v7, sorted ins
-  if (hf_version >= 7) {
+  // sorted ins
+  if (hf_version >= HF_VERSION_CRYPTONIGHT_VARIANT_1) {
     const crypto::key_image *last_key_image = NULL;
     for (size_t n = 0; n < tx.vin.size(); ++n)
     {
@@ -4197,6 +4173,34 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
     return false;
   }
 
+  tx_out_index oi = m_db->get_output_tx_and_index_from_global(claim.staked_output_index);
+  transaction staked_tx;
+  if (!m_db->get_tx(oi.first, staked_tx))
+  {
+    MERROR_VER("Cannot find transaction for staked output index " << claim.staked_output_index);
+    return false;
+  }
+  if (oi.second >= staked_tx.vout.size())
+  {
+    MERROR_VER("Output index " << oi.second << " out of range for tx with " << staked_tx.vout.size() << " outputs");
+    return false;
+  }
+  const tx_out& staked_out = staked_tx.vout[oi.second];
+  uint8_t staked_tier = 0;
+  uint64_t staked_lock_until = 0;
+  if (!get_output_staking_info(staked_out, staked_tier, staked_lock_until))
+  {
+    MERROR_VER("Claimed output " << claim.staked_output_index << " is not a staked output");
+    return false;
+  }
+
+  uint64_t staked_amount = staked_out.amount;
+  if (staked_amount == 0 && staked_tx.version >= 2)
+  {
+    MERROR_VER("Cannot determine staked amount for RCT output in claim validation (output " << claim.staked_output_index << ")");
+    return false;
+  }
+
   uint64_t computed_reward = 0;
   for (uint64_t h = claim.from_height + 1; h <= claim.to_height; ++h)
   {
@@ -4205,7 +4209,7 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
     if (total_reward_at_h == 0 || accrual.total_weighted_stake == 0)
       continue;
 
-    uint64_t weight = shekyl_stake_weight(0, 0);
+    uint64_t weight = shekyl_stake_weight(staked_amount, staked_tier);
     computed_reward += (uint64_t)((double)total_reward_at_h * (double)weight / (double)accrual.total_weighted_stake);
   }
 

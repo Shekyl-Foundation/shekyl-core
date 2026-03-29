@@ -2448,7 +2448,7 @@ namespace tools
 
     try
     {
-      auto ptx_vector = m_wallet->create_staking_transaction(req.tier, req.amount, fee_priority_utilities::from_integral(req.priority), 0, {});
+      auto ptx_vector = m_wallet->create_staking_transaction(req.tier, req.amount, fee_priority_utilities::from_integral(req.priority), req.account_index, {});
       if (ptx_vector.empty())
       {
         er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
@@ -2498,7 +2498,7 @@ namespace tools
       for (auto& ptx : ptx_vector)
       {
         m_wallet->commit_tx(ptx);
-        res.tx_hash = epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx));
+        res.tx_hash_list.push_back(epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx)));
         for (const auto& o : ptx.tx.vout)
           total_amount += o.amount;
       }
@@ -2536,6 +2536,25 @@ namespace tools
         }
       }
       res.total_staked = total_staked;
+    }
+    catch (...)
+    {
+      handle_rpc_exception(std::current_exception(), er, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
+      return false;
+    }
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool wallet_rpc_server::on_get_staked_balance(const wallet_rpc::COMMAND_RPC_GET_STAKED_BALANCE::request& req, wallet_rpc::COMMAND_RPC_GET_STAKED_BALANCE::response& res, epee::json_rpc::error& er, const connection_context *ctx)
+  {
+    if (!m_wallet) return not_open(er);
+
+    try
+    {
+      const uint64_t height = m_wallet->get_blockchain_current_height();
+      res.staked_balance = m_wallet->get_staked_balance(height);
+      res.locked_count = m_wallet->get_locked_staked_outputs().size();
+      res.matured_count = m_wallet->get_matured_staked_outputs().size();
     }
     catch (...)
     {

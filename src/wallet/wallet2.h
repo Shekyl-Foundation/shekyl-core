@@ -1223,7 +1223,7 @@ private:
     std::vector<size_t> get_locked_staked_outputs() const;
     std::vector<size_t> get_claimable_staked_outputs() const;
     uint64_t get_staked_balance(uint64_t current_height) const;
-    uint64_t estimate_claimable_reward(size_t transfer_index) const;
+    uint64_t estimate_claimable_reward(size_t transfer_index);
     bool sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, const std::vector<cryptonote::tx_destination_entry>& dsts, const unique_index_container& subtract_fee_from_outputs = {}) const;
     void cold_tx_aux_import(const std::vector<pending_tx>& ptx, const std::vector<std::string>& tx_device_aux);
     void cold_sign_tx(const std::vector<pending_tx>& ptx_vector, signed_tx_set &exported_txs, std::vector<cryptonote::address_parse_info> &dsts_info, std::vector<std::string> & tx_device_aux);

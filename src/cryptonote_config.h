@@ -169,29 +169,31 @@
 
 #define THREAD_STACK_SIZE                       5 * 1024 * 1024
 
-#define HF_VERSION_DYNAMIC_FEE                  4
-#define HF_VERSION_MIN_MIXIN_4                  6
-#define HF_VERSION_MIN_MIXIN_6                  7
-#define HF_VERSION_CRYPTONIGHT_VARIANT_1        7
-#define HF_VERSION_MIN_MIXIN_10                 8
-#define HF_VERSION_MIN_MIXIN_15                 15
-#define HF_VERSION_ENFORCE_RCT                  6
-#define HF_VERSION_PER_BYTE_FEE                 8
-#define HF_VERSION_SMALLER_BP                   10
-#define HF_VERSION_LONG_TERM_BLOCK_WEIGHT       10
-#define HF_VERSION_MIN_2_OUTPUTS                12
-#define HF_VERSION_MIN_V2_COINBASE_TX           12
-#define HF_VERSION_SAME_MIXIN                   12
-#define HF_VERSION_REJECT_SIGS_IN_COINBASE      12
-#define HF_VERSION_ENFORCE_MIN_AGE              12
-#define HF_VERSION_EFFECTIVE_SHORT_TERM_MEDIAN_IN_PENALTY 12
-#define HF_VERSION_EXACT_COINBASE               13
-#define HF_VERSION_CLSAG                        13
-#define HF_VERSION_DETERMINISTIC_UNLOCK_TIME    13
-#define HF_VERSION_BULLETPROOF_PLUS             15
-#define HF_VERSION_VIEW_TAGS                    15
-#define HF_VERSION_2021_SCALING                 15
-#define HF_VERSION_SHEKYL_NG                    17  // Three-component economics: release rate, burn, staking
+// Rebooted chain: all legacy features active from genesis (HF 1).
+// Constants kept as named symbols for code clarity; all resolve to 1.
+#define HF_VERSION_DYNAMIC_FEE                  1
+#define HF_VERSION_MIN_MIXIN_4                  1
+#define HF_VERSION_MIN_MIXIN_6                  1
+#define HF_VERSION_CRYPTONIGHT_VARIANT_1        1
+#define HF_VERSION_MIN_MIXIN_10                 1
+#define HF_VERSION_MIN_MIXIN_15                 1
+#define HF_VERSION_ENFORCE_RCT                  1
+#define HF_VERSION_PER_BYTE_FEE                 1
+#define HF_VERSION_SMALLER_BP                   1
+#define HF_VERSION_LONG_TERM_BLOCK_WEIGHT       1
+#define HF_VERSION_MIN_2_OUTPUTS                1
+#define HF_VERSION_MIN_V2_COINBASE_TX           1
+#define HF_VERSION_SAME_MIXIN                   1
+#define HF_VERSION_REJECT_SIGS_IN_COINBASE      1
+#define HF_VERSION_ENFORCE_MIN_AGE              1
+#define HF_VERSION_EFFECTIVE_SHORT_TERM_MEDIAN_IN_PENALTY 1
+#define HF_VERSION_EXACT_COINBASE               1
+#define HF_VERSION_CLSAG                        1
+#define HF_VERSION_DETERMINISTIC_UNLOCK_TIME    1
+#define HF_VERSION_BULLETPROOF_PLUS             1
+#define HF_VERSION_VIEW_TAGS                    1
+#define HF_VERSION_2021_SCALING                 1
+#define HF_VERSION_SHEKYL_NG                    1  // Three-component economics: release rate, burn, staking
 
 #define PER_KB_FEE_QUANTIZATION_DECIMALS        6 // Keep fee quantization at 1e-6 SKL while display precision is 1e-9 SKL.
 #define CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES 2

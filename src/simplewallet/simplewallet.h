@@ -172,6 +172,7 @@ namespace cryptonote
     bool show_payments(const std::vector<std::string> &args);
     bool show_blockchain_height(const std::vector<std::string> &args);
     bool show_chain_health(const std::vector<std::string> &args);
+    bool staking_info(const std::vector<std::string> &args);
     bool stake_coins(const std::vector<std::string> &args);
     bool unstake_coins(const std::vector<std::string> &args);
     bool claim_rewards(const std::vector<std::string> &args);

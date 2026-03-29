@@ -3434,6 +3434,10 @@ simple_wallet::simple_wallet()
   m_cmd_binder.set_handler("chain_health",
                            boost::bind(&simple_wallet::on_command, this, &simple_wallet::show_chain_health, _1),
                            tr("Show Shekyl chain health: emission era, release rate, burn, staking."));
+  m_cmd_binder.set_handler("staking_info",
+                           boost::bind(&simple_wallet::on_command, this, &simple_wallet::staking_info, _1),
+                           tr("staking_info\n"
+                              "  Show wallet staking overview: staked balance, locked/matured outputs, and pending rewards."));
   m_cmd_binder.set_handler("stake",
                            boost::bind(&simple_wallet::on_command, this, &simple_wallet::stake_coins, _1),
                            tr("stake <tier> <amount>\n"
@@ -6168,8 +6172,10 @@ bool simple_wallet::show_balance_unlocked(bool detailed)
     unlock_time_message = (boost::format(" (%lu block(s) to unlock)") % blocks_to_unlock).str();
   else if (time_to_unlock > 0)
     unlock_time_message = (boost::format(" (%s to unlock)") % get_human_readable_timespan(time_to_unlock)).str();
+  uint64_t staked = m_wallet->get_staked_balance(m_wallet->get_blockchain_current_height());
   success_msg_writer() << tr("Balance: ") << print_money(m_wallet->balance(m_current_subaddress_account, false)) << ", "
-    << tr("unlocked balance: ") << print_money(unlocked_balance) << unlock_time_message << extra;
+    << tr("unlocked balance: ") << print_money(unlocked_balance) << unlock_time_message
+    << ", " << tr("staked: ") << print_money(staked) << extra;
   std::map<uint32_t, uint64_t> balance_per_subaddress = m_wallet->balance_per_subaddress(m_current_subaddress_account, false);
   std::map<uint32_t, std::pair<uint64_t, std::pair<uint64_t, uint64_t>>> unlocked_balance_per_subaddress = m_wallet->unlocked_balance_per_subaddress(m_current_subaddress_account, false);
   if (!detailed || balance_per_subaddress.empty())
@@ -6439,8 +6445,52 @@ bool simple_wallet::show_chain_health(const std::vector<std::string>& args)
   return true;
 }
 //----------------------------------------------------------------------------------------------------
+bool simple_wallet::staking_info(const std::vector<std::string>& args)
+{
+  const uint64_t height = m_wallet->get_blockchain_current_height();
+  uint64_t staked = m_wallet->get_staked_balance(height);
+
+  auto locked = m_wallet->get_locked_staked_outputs();
+  auto matured = m_wallet->get_matured_staked_outputs();
+  auto claimable = m_wallet->get_claimable_staked_outputs();
+
+  success_msg_writer()
+    << "\n  === Wallet Staking Overview ===\n"
+    << "  Height:          " << height << "\n"
+    << "  Staked balance:  " << print_money(staked) << " SHEKYL\n"
+    << "  Locked outputs:  " << locked.size() << "\n"
+    << "  Matured outputs: " << matured.size() << "\n"
+    << "  Claimable:       " << claimable.size();
+
+  auto print_output = [&](size_t idx, const char* status)
+  {
+    const auto& td = m_wallet->get_transfer_details(idx);
+    uint64_t remaining = td.m_stake_lock_until > height ? td.m_stake_lock_until - height : 0;
+    const char* tier_names[] = {"Short", "Medium", "Long"};
+    const char* tname = td.m_stake_tier <= 2 ? tier_names[td.m_stake_tier] : "???";
+    success_msg_writer() << "  [" << idx << "] " << print_money(td.m_amount)
+      << " SHEKYL  tier " << (int)td.m_stake_tier << " (" << tname << ")"
+      << "  " << status
+      << (remaining > 0 ? ("  " + std::to_string(remaining) + " blocks left") : "");
+  };
+
+  if (!locked.empty() || !matured.empty())
+  {
+    success_msg_writer() << "\n  --- Staked Outputs ---";
+    for (size_t idx : locked)
+      print_output(idx, "locked");
+    for (size_t idx : matured)
+      print_output(idx, "matured");
+  }
+
+  return true;
+}
+//----------------------------------------------------------------------------------------------------
 bool simple_wallet::stake_coins(const std::vector<std::string>& args)
 {
+  if (!try_connect_to_daemon())
+    return true;
+
   if (args.size() < 2)
   {
     fail_msg_writer() << tr("usage: stake <tier> <amount>");
@@ -6527,6 +6577,9 @@ bool simple_wallet::stake_coins(const std::vector<std::string>& args)
 //----------------------------------------------------------------------------------------------------
 bool simple_wallet::unstake_coins(const std::vector<std::string>& args)
 {
+  if (!try_connect_to_daemon())
+    return true;
+
   auto matured = m_wallet->get_matured_staked_outputs();
   if (matured.empty())
   {
@@ -6593,6 +6646,9 @@ bool simple_wallet::unstake_coins(const std::vector<std::string>& args)
 //----------------------------------------------------------------------------------------------------
 bool simple_wallet::claim_rewards(const std::vector<std::string>& args)
 {
+  if (!try_connect_to_daemon())
+    return true;
+
   auto claimable = m_wallet->get_claimable_staked_outputs();
   if (claimable.empty())
   {
@@ -6605,13 +6661,21 @@ bool simple_wallet::claim_rewards(const std::vector<std::string>& args)
   }
 
   success_msg_writer() << tr("Staked outputs with pending rewards:");
+  uint64_t total_reward = 0;
   for (size_t idx : claimable)
   {
     const auto& td = m_wallet->get_transfer_details(idx);
+    uint64_t reward = 0;
+    try { reward = m_wallet->estimate_claimable_reward(idx); }
+    catch (...) { /* daemon may be unreachable for estimate */ }
+    total_reward += reward;
     success_msg_writer() << "  [" << idx << "] " << print_money(td.m_amount)
       << " SHEKYL  tier " << (int)td.m_stake_tier
+      << "  reward ~" << print_money(reward) << " SHEKYL"
       << "  locked until height " << td.m_stake_lock_until;
   }
+  if (total_reward > 0)
+    success_msg_writer() << "  Estimated total reward: " << print_money(total_reward) << " SHEKYL";
 
   if (!command_line::is_yes(input_line("Claim rewards for all eligible staked outputs? (Y/Yes/N/No): ", true)))
   {

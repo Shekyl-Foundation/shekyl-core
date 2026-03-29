@@ -7080,7 +7080,7 @@ std::map<uint32_t, uint64_t> wallet2::balance_per_subaddress(uint32_t index_majo
   std::map<uint32_t, uint64_t> amount_per_subaddr;
   for (const auto& td: m_transfers)
   {
-    if (td.m_subaddr_index.major == index_major && !is_spent(td, strict) && !td.m_frozen)
+    if (td.m_subaddr_index.major == index_major && !is_spent(td, strict) && !td.m_frozen && !td.m_staked)
     {
       auto found = amount_per_subaddr.find(td.m_subaddr_index.minor);
       if (found == amount_per_subaddr.end())
@@ -7135,7 +7135,7 @@ std::map<uint32_t, std::pair<uint64_t, std::pair<uint64_t, uint64_t>>> wallet2::
   const uint64_t now = time(NULL);
   for(const transfer_details& td: m_transfers)
   {
-    if(td.m_subaddr_index.major == index_major && !is_spent(td, strict) && !td.m_frozen)
+    if(td.m_subaddr_index.major == index_major && !is_spent(td, strict) && !td.m_frozen && !td.m_staked)
     {
       uint64_t amount = 0, blocks_to_unlock = 0, time_to_unlock = 0;
       if (is_transfer_unlocked(td))
@@ -7343,6 +7343,8 @@ void wallet2::rescan_blockchain(bool hard, bool refresh, bool keep_key_images)
 //----------------------------------------------------------------------------------------------------
 bool wallet2::is_transfer_unlocked(const transfer_details& td)
 {
+  if (td.m_staked)
+    return false;
   return is_transfer_unlocked(td.m_tx.unlock_time, td.m_block_height);
 }
 //----------------------------------------------------------------------------------------------------
@@ -7372,10 +7374,7 @@ bool wallet2::is_tx_spendtime_unlocked(uint64_t unlock_time, uint64_t block_heig
     uint64_t adjusted_time;
     try { adjusted_time = get_daemon_adjusted_time(); }
     catch(...) { adjusted_time = time(NULL); } // use local time if no daemon to report blockchain time
-    // XXX: this needs to be fast, so we'd need to get the starting heights
-    // from the daemon to be correct once voting kicks in
-    uint64_t v2height = m_nettype == TESTNET ? 624634 : m_nettype == STAGENET ? 32000  : 1009827;
-    uint64_t leeway = block_height < v2height ? CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1 : CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V2;
+    uint64_t leeway = CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V2;
     if(adjusted_time + leeway >= unlock_time)
       return true;
     else
@@ -11830,13 +11829,32 @@ std::vector<size_t> wallet2::get_claimable_staked_outputs() const
   return result;
 }
 //----------------------------------------------------------------------------------------------------
-uint64_t wallet2::estimate_claimable_reward(size_t transfer_index) const
+uint64_t wallet2::estimate_claimable_reward(size_t transfer_index)
 {
   THROW_WALLET_EXCEPTION_IF(transfer_index >= m_transfers.size(), error::wallet_internal_error, "Invalid transfer index");
   const auto& td = m_transfers[transfer_index];
   THROW_WALLET_EXCEPTION_IF(!td.m_staked, error::wallet_internal_error, "Output is not staked");
 
-  return 0;
+  const uint64_t current_height = get_blockchain_current_height();
+  uint64_t from_h = td.m_block_height;
+  uint64_t to_h = std::min(current_height, td.m_stake_lock_until);
+  if (from_h >= to_h)
+    return 0;
+  static const uint64_t MAX_CLAIM_RANGE = 10000;
+  if (to_h - from_h > MAX_CLAIM_RANGE)
+    to_h = from_h + MAX_CLAIM_RANGE;
+
+  cryptonote::COMMAND_RPC_ESTIMATE_CLAIM_REWARD::request req{};
+  cryptonote::COMMAND_RPC_ESTIMATE_CLAIM_REWARD::response res{};
+  req.staked_output_index = td.m_global_output_index;
+  req.from_height = from_h;
+  req.to_height = to_h;
+
+  bool r = epee::net_utils::invoke_http_json_rpc("/json_rpc", "estimate_claim_reward", req, res, *m_http_client, rpc_timeout);
+  THROW_WALLET_EXCEPTION_IF(!r || res.status != "OK", error::wallet_internal_error,
+    "Failed to estimate claim reward from daemon");
+
+  return res.reward;
 }
 //----------------------------------------------------------------------------------------------------
 std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::vector<size_t>& staked_indices)
@@ -11973,8 +11991,8 @@ std::vector<wallet2::pending_tx> wallet2::create_unstake_transaction(const std::
   THROW_WALLET_EXCEPTION_IF(staked_indices.empty(), error::wallet_internal_error, "No staked outputs to unstake");
 
   const uint64_t current_height = get_blockchain_current_height();
-  uint64_t total_amount = 0;
 
+  std::vector<size_t> unstake_indices;
   for (size_t idx : staked_indices)
   {
     THROW_WALLET_EXCEPTION_IF(idx >= m_transfers.size(), error::wallet_internal_error, "Invalid transfer index");
@@ -11983,22 +12001,13 @@ std::vector<wallet2::pending_tx> wallet2::create_unstake_transaction(const std::
     THROW_WALLET_EXCEPTION_IF(td.m_spent, error::wallet_internal_error, "Output is already spent");
     THROW_WALLET_EXCEPTION_IF(td.m_stake_lock_until > current_height, error::wallet_internal_error,
       "Staked output not yet matured (unlocks at height " + std::to_string(td.m_stake_lock_until) + ", current: " + std::to_string(current_height) + ")");
-    total_amount += td.m_amount;
+    unstake_indices.push_back(idx);
   }
 
-  cryptonote::tx_destination_entry de;
-  de.amount = total_amount;
-  de.addr = get_address();
-  de.is_subaddress = false;
-  de.is_integrated = false;
-  de.is_staking = false;
-
-  std::vector<cryptonote::tx_destination_entry> dsts;
-  dsts.push_back(de);
-
-  const size_t fake_outs_count = 0;
+  const size_t fake_outs_count = use_fork_rules(HF_VERSION_MIN_MIXIN_15, 0) ? 15 : 0;
+  std::vector<size_t> empty_dust;
   std::vector<uint8_t> extra;
-  return create_transactions_2(dsts, fake_outs_count, priority, extra, 0, {});
+  return create_transactions_from(get_address(), false, 1, unstake_indices, empty_dust, fake_outs_count, priority, extra);
 }
 //----------------------------------------------------------------------------------------------------
 bool wallet2::sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, const std::vector<cryptonote::tx_destination_entry>& dsts, const unique_index_container& subtract_fee_from_outputs) const

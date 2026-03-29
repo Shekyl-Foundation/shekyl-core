@@ -2818,4 +2818,37 @@ namespace cryptonote
     typedef epee::misc_utils::struct_init<response_t> response;
   };
 
+  struct COMMAND_RPC_ESTIMATE_CLAIM_REWARD
+  {
+    struct request_t: public rpc_access_request_base
+    {
+      uint64_t staked_output_index;
+      uint64_t from_height;
+      uint64_t to_height;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_access_request_base)
+        KV_SERIALIZE(staked_output_index)
+        KV_SERIALIZE(from_height)
+        KV_SERIALIZE(to_height)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    struct response_t: public rpc_access_response_base
+    {
+      uint64_t reward;
+      uint8_t  tier;
+      uint64_t staked_amount;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_access_response_base)
+        KV_SERIALIZE(reward)
+        KV_SERIALIZE(tier)
+        KV_SERIALIZE(staked_amount)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
+
 }

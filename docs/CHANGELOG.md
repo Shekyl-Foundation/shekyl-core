@@ -58,6 +58,41 @@
 8. Update DNS infrastructure to serve records under all 5 TLDs (`.org`,
    `.net`, `.com`, `.biz`, `.io`). See `shekyl-dev/docs/DNS_CONFIG.md`.
 
+### Hardfork reboot and testnet wallet readiness
+
+- **Hardfork schedule rebooted**: All `HF_VERSION_*` constants collapsed to 1.
+  The chain starts with all features active from genesis -- no legacy migration
+  gates. Hardfork tables reduced to single-entry `{ 1, 1, 0, timestamp }` for
+  all three networks (mainnet, testnet, stagenet).
+- Removed all raw numeric HF version gates (`hf_version <= 3`, `>= 7`, `< 8`,
+  `> 8`, etc.) from consensus and transaction construction code, replacing them
+  with named `HF_VERSION_*` constants. Legacy Monero-era transition logic
+  (borromean proofs, bulletproofs v1, grandfathered txs) removed.
+- Coinbase transactions always v2 RCT with single output, zero dust threshold.
+- **Staked outputs excluded from spendable balance**: `is_transfer_unlocked()`
+  now returns false for staked outputs, preventing them from being selected
+  during normal transfers. `balance_per_subaddress` and
+  `unlocked_balance_per_subaddress` skip staked outputs.
+- **Unstake transaction fixed**: `create_unstake_transaction` now passes matured
+  staked output indices directly to `create_transactions_from`, properly using
+  the actual staked UTXOs as transaction inputs with standard ring signatures.
+- **Claim reward validation fixed**: `check_stake_claim_input` now looks up the
+  real staked output from the blockchain DB to get the actual amount and tier,
+  replacing the hardcoded `shekyl_stake_weight(0, 0)` placeholder.
+- **New daemon RPC `estimate_claim_reward`**: computes per-output reward
+  server-side using the accrual database, returning reward amount, tier, and
+  staked amount. Wallet `estimate_claimable_reward` now calls this RPC instead
+  of returning a hardcoded zero.
+- **CLI improvements**: `balance` command now shows staked balance alongside
+  liquid and unlocked balances. New `staking_info` command shows wallet staking
+  overview (locked/matured output counts with tier and remaining lock blocks).
+  `stake`, `unstake`, and `claim_rewards` commands now include daemon
+  connectivity guards.
+- **Wallet RPC fixes**: `unstake` response changed from single `tx_hash` to
+  `tx_hash_list` array to support multi-transaction unstaking. `stake` request
+  now accepts `account_index` parameter. New `get_staked_balance` RPC returns
+  staked balance with locked/matured output counts.
+
 ### Post-quantum cryptography
 
 - **Phase 4 wallet/core PQC wiring completed**: all v3 transaction construction

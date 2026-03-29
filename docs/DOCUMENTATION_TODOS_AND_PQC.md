@@ -199,6 +199,24 @@ Remaining:
 - expand wallet RPC docs with claim-flow details
 - document multisig PQC limitations in operator guidance
 
+### Phase 3b: Wallet testnet readiness
+
+Completed:
+
+- hardfork schedule rebooted: all HF_VERSION_* = 1, single-entry hardfork tables
+- raw numeric HF gates replaced with named HF_VERSION_* constants throughout
+  consensus, transaction construction, and core validation code
+- staked outputs excluded from is_transfer_unlocked, balance, and coin selection
+- create_unstake_transaction rewired to spend actual staked UTXOs via
+  create_transactions_from
+- check_stake_claim_input now looks up real amount/tier from blockchain DB
+- new daemon RPC estimate_claim_reward computes per-output reward server-side
+- wallet estimate_claimable_reward wired to daemon RPC (replaces hardcoded stub)
+- CLI: balance shows staked amount; new staking_info command; daemon guards on
+  stake/unstake/claim_rewards
+- wallet RPC: unstake returns tx_hash_list; stake accepts account_index;
+  new get_staked_balance endpoint
+
 ### Phase 4: Documentation and audit
 
 1. **PQC design doc**

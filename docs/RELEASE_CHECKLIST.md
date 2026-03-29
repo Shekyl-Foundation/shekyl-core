@@ -22,7 +22,7 @@
   - [ ] Implemented in Shekyl codebase (if needed)
   - [ ] Trezor app integration coded by Trezor
   - [ ] Trezor firmware update available (if needed)
-- [ ] Fork height set
+- [x] Fork height set (rebooted chain: all features at HF 1 from genesis)
   - [ ] Shekyl announcement mailer / notice
   - [ ] Twitter announcement
   - [ ] Reddit announcement
