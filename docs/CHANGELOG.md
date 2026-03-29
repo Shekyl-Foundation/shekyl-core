@@ -11,6 +11,13 @@
   Transactions, Settings), stub Tauri commands, Shekyl gold/purple design system,
   and verified production builds for Linux (.deb, .rpm, .AppImage).
   Phase 2 will add the C++ FFI bridge to `wallet2_api.h` for real wallet operations.
+- Added testing infrastructure: Vitest + React Testing Library for frontend
+  (20 tests across 6 suites), cargo test for Rust backend (10 tests), with
+  Tauri IPC mocking for isolated component testing.
+- Added CI/CD via GitHub Actions: `ci.yml` runs ESLint, TypeScript type-check,
+  Vitest, Rustfmt, Clippy, and cargo test on every PR; `release.yml` builds
+  multi-platform binaries (Linux x64, Windows x64, macOS ARM64 + Intel) via
+  `tauri-action` and creates draft GitHub releases.
 
 ### Consensus timing alignment (HF1)
 
