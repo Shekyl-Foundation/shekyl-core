@@ -1410,20 +1410,10 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
     MERROR_VER("coinbase transaction spend too much money (" << print_money(money_in_use) << "). Block reward is " << print_money(miner_base_reward + effective_fee) << "(" << print_money(miner_base_reward) << "+" << print_money(effective_fee) << "), cumulative_block_weight " << cumulative_block_weight);
     return false;
   }
-  if (version < 2 || version >= HF_VERSION_EXACT_COINBASE)
+  if(miner_base_reward + effective_fee != money_in_use)
   {
-    if(miner_base_reward + effective_fee != money_in_use)
-    {
-      MDEBUG("coinbase transaction doesn't use full amount of block reward:  spent: " << money_in_use << ",  block reward " << miner_base_reward + effective_fee << "(" << miner_base_reward << "+" << effective_fee << ")");
-      return false;
-    }
-  }
-  else
-  {
-    CHECK_AND_ASSERT_MES(money_in_use - effective_fee <= miner_base_reward, false, "base reward calculation bug");
-    if(miner_base_reward + effective_fee != money_in_use)
-      partial_block_reward = true;
-    miner_base_reward = money_in_use - effective_fee;
+    MDEBUG("coinbase transaction doesn't use full amount of block reward:  spent: " << money_in_use << ",  block reward " << miner_base_reward + effective_fee << "(" << miner_base_reward << "+" << effective_fee << ")");
+    return false;
   }
   // Update base_reward to reflect what the miner actually received (for caller tracking)
   base_reward = miner_base_reward;
