@@ -31,26 +31,19 @@ jobs:
       fail-fast: false
       matrix:
         toolchain:
-          - name: "RISCV 64bit"
-            host: "riscv64-linux-gnu"
-            packages: "python3 gperf g++-riscv64-linux-gnu"
-            rust_target: "riscv64gc-unknown-linux-gnu"
-          - name: "ARM v7"
-            host: "arm-linux-gnueabihf"
-            packages: "python3 gperf g++-arm-linux-gnueabihf"
-            rust_target: "armv7-unknown-linux-gnueabihf"
+          # Deferred targets -- re-enable when there is user demand:
+          # - name: "RISCV 64bit"
+          #   host: "riscv64-linux-gnu"
+          #   packages: "python3 gperf g++-riscv64-linux-gnu"
+          #   rust_target: "riscv64gc-unknown-linux-gnu"
+          # - name: "ARM v7"
+          #   host: "arm-linux-gnueabihf"
+          #   packages: "python3 gperf g++-arm-linux-gnueabihf"
+          #   rust_target: "armv7-unknown-linux-gnueabihf"
           - name: "ARM v8"
             host: "aarch64-linux-gnu"
             packages: "python3 gperf g++-aarch64-linux-gnu"
             rust_target: "aarch64-unknown-linux-gnu"
-          - name: "i686 Win"
-            host: "i686-w64-mingw32"
-            packages: "python3 g++-mingw-w64-i686"
-            rust_target: "i686-pc-windows-gnu"
-          - name: "i686 Linux"
-            host: "i686-pc-linux-gnu"
-            packages: "gperf cmake g++-multilib python3-zmq"
-            rust_target: "i686-unknown-linux-gnu"
           - name: "Win64"
             host: "x86_64-w64-mingw32"
             packages: "cmake python3 g++-mingw-w64-x86-64"
@@ -107,7 +100,7 @@ jobs:
         key: sdk-${{ matrix.toolchain.host }}-${{ matrix.toolchain.osx_sdk }}
         restore-keys: sdk-${{ matrix.toolchain.host }}-${{ matrix.toolchain.osx_sdk }}
     - name: prepare w64-mingw32
-      if: ${{ matrix.toolchain.host == 'x86_64-w64-mingw32' || matrix.toolchain.host == 'i686-w64-mingw32' }}
+      if: ${{ matrix.toolchain.host == 'x86_64-w64-mingw32' }}
       run: |
         update-alternatives --set ${{ matrix.toolchain.host }}-g++ $(which ${{ matrix.toolchain.host }}-g++-posix)
         update-alternatives --set ${{ matrix.toolchain.host }}-gcc $(which ${{ matrix.toolchain.host }}-gcc-posix)
@@ -124,7 +117,7 @@ jobs:
         ${{env.CCACHE_SETTINGS}}
         make depends target=${{ matrix.toolchain.host }} -j4
     - uses: actions/upload-artifact@v6
-      if: ${{ matrix.toolchain.host == 'x86_64-w64-mingw32' || matrix.toolchain.host == 'x86_64-apple-darwin11' || matrix.toolchain.host == 'x86_64-unknown-linux-gnu' || matrix.toolchain.host == 'aarch64-linux-gnu' }}
+      if: ${{ matrix.toolchain.host == 'x86_64-w64-mingw32' || matrix.toolchain.host == 'x86_64-apple-darwin11' || matrix.toolchain.host == 'aarch64-apple-darwin11' || matrix.toolchain.host == 'x86_64-unknown-linux-gnu' || matrix.toolchain.host == 'aarch64-linux-gnu' }}
       with:
         name: ${{ matrix.toolchain.name }}
         path: |

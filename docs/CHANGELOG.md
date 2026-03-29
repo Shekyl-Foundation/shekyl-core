@@ -293,8 +293,15 @@
 - Replaced bundled Google Test 1.7.0 (2013) with CMake `FetchContent` for
   GoogleTest v1.16.0. Fixes `GTEST_SKIP` compilation errors on all platforms
   without a system gtest. Removes 34k lines of vendored source.
-- Upgraded all GitHub Actions workflows to Node.js 24 via
-  `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` ahead of the June 2026 deprecation.
+- Upgraded all GitHub Actions workflows to Node.js 24: bumped `actions/checkout`
+  to v5, `actions/cache` to v5, `actions/upload-artifact` to v6, and
+  `actions/download-artifact` to v7 to resolve the Node.js 20 deprecation
+  warnings.
+- Trimmed `depends.yml` cross-compilation matrix: dropped i686 Win and i686
+  Linux (32-bit targets are dead); deferred RISCV 64-bit and ARM v7 until
+  user demand materialises. Active matrix is now ARM v8, Win64, x86_64 Linux,
+  Cross-Mac x86_64, Cross-Mac aarch64, and x86_64 FreeBSD (6 targets, down
+  from 10). Added Cross-Mac aarch64 to the artifact upload filter.
 - Added Linux packaging files: `contrib/packaging/linux/shekyld.service`
   (systemd unit) and `contrib/packaging/windows/shekyl.nsi` (NSIS installer).
 
