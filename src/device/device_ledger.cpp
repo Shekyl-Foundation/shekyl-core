@@ -46,6 +46,10 @@ namespace hw {
     #undef MONERO_DEFAULT_LOG_CATEGORY
     #define MONERO_DEFAULT_LOG_CATEGORY "device.ledger"
 
+    namespace {
+      bool apdu_verbose = true;
+    }
+
     /* ===================================================================== */
     /* ===                           Debug                              ==== */
     /* ===================================================================== */
