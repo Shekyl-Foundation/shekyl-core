@@ -129,6 +129,7 @@ add_custom_command(
     OUTPUT ${SHEKYL_FFI_LIBRARY}
     COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
         ${CARGO_EXECUTABLE} build ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
+        -p shekyl-ffi
     WORKING_DIRECTORY ${RUST_SOURCE_DIR}
     COMMENT "${_rust_comment}"
     VERBATIM

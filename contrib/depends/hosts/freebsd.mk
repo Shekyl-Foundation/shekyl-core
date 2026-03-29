@@ -1,5 +1,5 @@
-freebsd_CC=clang-8
-freebsd_CXX=clang++-8
+freebsd_CC=clang-14
+freebsd_CXX=clang++-14
 freebsd_AR=ar
 freebsd_RANLIB=ranlib
 freebsd_NM=nm

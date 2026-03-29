@@ -131,6 +131,10 @@ if(ARCHITECTURE STREQUAL "arm")
     set(BUILD_TAG "android-armv7")
   else()
     set(BUILD_TAG "linux-armv7")
+    # gnueabihf cross-compiler defaults to hard-float ABI; -march=armv7-a
+    # alone doesn't imply an FPU, so we must specify one explicitly.
+    set(CMAKE_C_FLAGS_INIT "${CMAKE_C_FLAGS_INIT} -mfpu=vfpv3-d16 -mfloat-abi=hard")
+    set(CMAKE_CXX_FLAGS_INIT "${CMAKE_CXX_FLAGS_INIT} -mfpu=vfpv3-d16 -mfloat-abi=hard")
   endif()
   set(ARM7)
 elseif(ARCHITECTURE STREQUAL "aarch64")
