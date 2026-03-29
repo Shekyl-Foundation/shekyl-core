@@ -1130,9 +1130,26 @@ elseif(Boost_FOUND)
   set(CMAKE_FIND_LIBRARY_SUFFIXES ${OLD_LIB_SUFFIXES})
 endif()
 
-# When Boost is found via CONFIG mode (1.85+), the old-style Boost_XXX_LIBRARY
-# variables may point to versioned .so paths that don't exist on rolling-release
-# distros (e.g. Arch). Remap them to imported targets which resolve correctly.
+# When Boost is found via CONFIG mode (1.85+), verify the resolved shared
+# libraries actually exist on disk. On rolling-release distros the boost-libs
+# package (shared .so files) may be missing or version-mismatched against the
+# cmake config shipped by the boost (headers) package.
+if(_BOOST_USE_CONFIG AND TARGET Boost::filesystem)
+  get_target_property(_boost_fs_loc Boost::filesystem IMPORTED_LOCATION_RELEASE)
+  if(NOT _boost_fs_loc)
+    get_target_property(_boost_fs_loc Boost::filesystem IMPORTED_LOCATION)
+  endif()
+  if(_boost_fs_loc AND NOT EXISTS "${_boost_fs_loc}")
+    message(FATAL_ERROR
+      "Boost CONFIG mode resolved Boost::filesystem to '${_boost_fs_loc}' "
+      "which does not exist. On Arch Linux, install the 'boost-libs' package "
+      "alongside 'boost' to provide the shared libraries.")
+  endif()
+endif()
+
+# Remap old-style Boost_XXX_LIBRARY variables to imported targets when CONFIG
+# mode is active. This avoids stale versioned .so paths in downstream
+# target_link_libraries() calls.
 if(_BOOST_USE_CONFIG)
   foreach(_comp filesystem thread chrono system date_time serialization
           program_options locale regex container atomic)
