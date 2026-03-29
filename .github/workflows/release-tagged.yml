@@ -27,7 +27,7 @@ jobs:
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -51,7 +51,7 @@ jobs:
       - name: Install fpm
         run: sudo gem install --no-document fpm
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ~/.ccache
           key: ccache-linux-x86_64-release-${{ github.sha }}
@@ -125,7 +125,7 @@ jobs:
             .
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: linux-x86_64
           path: |
@@ -167,17 +167,17 @@ jobs:
       - name: Configure git
         run: git config --global --add safe.directory '*'
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ~/.ccache
           key: ccache-win-x64-release-${{ github.sha }}
           restore-keys: ccache-win-x64-release-
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: contrib/depends/built
           key: depends-x86_64-w64-mingw32-${{ hashFiles('contrib/depends/packages/*') }}
@@ -209,7 +209,7 @@ jobs:
             contrib/packaging/windows/shekyl.nsi
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: win-x64
           path: |
@@ -222,7 +222,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: release-assets
           merge-multiple: true
