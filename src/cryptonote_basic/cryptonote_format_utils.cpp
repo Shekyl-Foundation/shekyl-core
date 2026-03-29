@@ -593,7 +593,7 @@ namespace cryptonote
   static bool pick(binary_archive<true> &ar, std::vector<tx_extra_field> &fields, uint8_t tag)
   {
     std::vector<tx_extra_field>::iterator it;
-    while ((it = std::find_if(fields.begin(), fields.end(), [](const tx_extra_field &f) { return f.type() == typeid(T); })) != fields.end())
+    while ((it = std::find_if(fields.begin(), fields.end(), [](const tx_extra_field &f) { return boost::get<T>(&f) != nullptr; })) != fields.end())
     {
       bool r = ::do_serialize(ar, tag);
       CHECK_AND_NO_ASSERT_MES_L1(r, false, "failed to serialize tx extra field");
