@@ -1072,7 +1072,9 @@ if(STATIC)
   endif()
 
   set(Boost_USE_STATIC_LIBS ON)
-  set(Boost_USE_STATIC_RUNTIME ON)
+  if(MINGW OR ANDROID)
+    set(Boost_USE_STATIC_RUNTIME ON)
+  endif()
 endif()
 
 # Find Boost headers
