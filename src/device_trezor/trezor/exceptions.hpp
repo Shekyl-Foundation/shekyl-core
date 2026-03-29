@@ -27,8 +27,8 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#ifndef MONERO_EXCEPTIONS_H
-#define MONERO_EXCEPTIONS_H
+#ifndef SHEKYL_EXCEPTIONS_H
+#define SHEKYL_EXCEPTIONS_H
 
 #include <cstdint>
 #include <exception>
@@ -191,4 +191,4 @@ namespace proto {
 }
 }
 }
-#endif //MONERO_EXCEPTIONS_H
+#endif //SHEKYL_EXCEPTIONS_H

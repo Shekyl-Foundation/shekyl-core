@@ -930,7 +930,7 @@ bool get_short_payment_id(crypto::hash8 &payment_id8, const tools::wallet2::pend
 
 uint64_t get_outgoing_amount(const cryptonote::transaction &tx, const uint64_t amount_spent)
 {
-  return tx.version == 1 ? get_outs_money_amount(tx) : (amount_spent - tx.rct_signatures.txnFee);
+  return amount_spent - tx.rct_signatures.txnFee;
 }
 
 tools::wallet2::tx_construction_data get_construction_data_with_decrypted_short_payment_id(const tools::wallet2::pending_tx &ptx, hw::device &hwdev)
@@ -2222,14 +2222,9 @@ static uint64_t decodeRct(const rct::rctSig & rv, const crypto::key_derivation &
   {
     switch (rv.type)
     {
-    case rct::RCTTypeSimple:
-    case rct::RCTTypeBulletproof:
-    case rct::RCTTypeBulletproof2:
     case rct::RCTTypeCLSAG:
     case rct::RCTTypeBulletproofPlus:
       return rct::decodeRctSimple(rv, rct::sk2rct(scalar1), i, mask, hwdev);
-    case rct::RCTTypeFull:
-      return rct::decodeRct(rv, rct::sk2rct(scalar1), i, mask, hwdev);
     default:
       LOG_ERROR("Unsupported rct type: " << rv.type);
       return 0;
@@ -2310,7 +2305,7 @@ void wallet2::cache_tx_data(const cryptonote::transaction& tx, const crypto::has
   const bool is_miner = tx.vin.size() == 1 && std::holds_alternative<cryptonote::txin_gen>(tx.vin[0]);
   if (!is_miner || m_refresh_type != RefreshType::RefreshNoCoinbase)
   {
-    const size_t rec_size = (is_miner && m_refresh_type == RefreshType::RefreshOptimizeCoinbase && tx.version < 2) ? 1 : tx.vout.size();
+    const size_t rec_size = tx.vout.size();
     if (!tx.vout.empty())
     {
       // if tx.vout is not empty, we loop through all tx pubkeys
@@ -2457,39 +2452,6 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
     if (miner_tx && m_refresh_type == RefreshNoCoinbase)
     {
       // assume coinbase isn't for us
-    }
-    else if (miner_tx && m_refresh_type == RefreshOptimizeCoinbase && tx.version < 2)
-    {
-      check_acc_out_precomp_once(tx.vout[0], derivation, additional_derivations, 0, is_out_data_ptr, tx_scan_info[0], output_found[0]);
-      THROW_WALLET_EXCEPTION_IF(tx_scan_info[0].error, error::acc_outs_lookup_error, tx, tx_pub_key, m_account.get_keys());
-
-      // this assumes that the miner tx pays a single address
-      if (tx_scan_info[0].received)
-      {
-        // process the other outs from that tx
-        // the first one was already checked
-        for (size_t i = 1; i < tx.vout.size(); ++i)
-        {
-          check_acc_out_precomp_once(tx.vout[i], derivation, additional_derivations, i, is_out_data_ptr, tx_scan_info[i], output_found[i]);
-        }
-        // then scan all outputs from 0
-        hw::device &hwdev = m_account.get_device();
-        boost::unique_lock<hw::device> hwdev_lock (hwdev);
-        hwdev.set_mode(hw::device::NONE);
-        for (size_t i = 0; i < tx.vout.size(); ++i)
-        {
-          THROW_WALLET_EXCEPTION_IF(tx_scan_info[i].error, error::acc_outs_lookup_error, tx, tx_pub_key, m_account.get_keys());
-          if (tx_scan_info[i].received)
-          {
-            hwdev.conceal_derivation(tx_scan_info[i].received->derivation, tx_pub_key, additional_tx_pub_keys.data, derivation, additional_derivations);
-            scan_output(tx, miner_tx, tx_pub_key, i, tx_scan_info[i], num_vouts_received, tx_money_got_in_outs, outs, pool);
-            if (!tx_scan_info[i].error)
-            {
-              tx_amounts_individual_outs[tx_scan_info[i].received->index].push_back(tx_scan_info[i].money_transfered);
-            }
-          }
-        }
-      }
     }
     else
     {
@@ -2898,7 +2860,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
     }
   }
 
-  uint64_t fee = miner_tx ? 0 : tx.version == 1 ? tx_money_spent_in_ins - get_outs_money_amount(tx) : tx.rct_signatures.txnFee;
+  uint64_t fee = miner_tx ? 0 : tx.rct_signatures.txnFee;
 
   if (tx_money_spent_in_ins > 0)
   {
@@ -3406,7 +3368,7 @@ void wallet2::process_parsed_blocks(uint64_t start_height, const std::vector<cry
     {
       THROW_WALLET_EXCEPTION_IF(txidx >= tx_cache_data.size(), error::wallet_internal_error, "txidx out of range");
       const cryptonote::transaction& tx = parsed_blocks[i].block.miner_tx;
-      const size_t n_vouts = (m_refresh_type == RefreshType::RefreshOptimizeCoinbase && tx.version < 2) ? 1 : tx.vout.size();
+      const size_t n_vouts = tx.vout.size();
       if (parsed_blocks[i].block.major_version >= hf_version_view_tags)
         geniods.push_back(geniod_params{ tx, n_vouts, txidx });
       else
@@ -10028,8 +9990,8 @@ void wallet2::transfer_selected(const std::vector<cryptonote::tx_destination_ent
   ptx.construction_data.selected_transfers = selected_transfers;
   ptx.construction_data.extra = tx.extra;
   ptx.construction_data.unlock_time = 0;
-  ptx.construction_data.use_rct = false;
-  ptx.construction_data.rct_config = { rct::RangeProofBorromean, 0 };
+  ptx.construction_data.use_rct = true;
+  ptx.construction_data.rct_config = { rct::RangeProofPaddedBulletproof, 4 };
   ptx.construction_data.use_view_tags = use_view_tags;
   ptx.construction_data.dests = dsts;
   // record which subaddress indices are being used as inputs
@@ -11537,12 +11499,8 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
       LOG_PRINT_L2("Trying to create a tx now, with " << tx.dsts.size() << " outputs and " <<
         tx.selected_transfers.size() << " inputs");
       auto tx_dsts = tx.get_adjusted_dsts(needed_fee);
-      if (use_rct)
-        transfer_selected_rct(tx_dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra,
-          test_tx, test_ptx, rct_config, use_view_tags);
-      else
-        transfer_selected(tx_dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra,
-          detail::digit_split_strategy, tx_dust_policy(::config::DEFAULT_DUST_THRESHOLD), test_tx, test_ptx, use_view_tags);
+      transfer_selected_rct(tx_dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra,
+        test_tx, test_ptx, rct_config, use_view_tags);
       auto txBlob = t_serializable_object_to_blob(test_ptx.tx);
       needed_fee = calculate_fee(use_per_byte_fee, test_ptx.tx, txBlob.size(), base_fee, fee_quantization_mask);
 
@@ -11581,12 +11539,8 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
         do {
           tx_dsts = tx.get_adjusted_dsts(needed_fee);
 
-          if (use_rct)
-            transfer_selected_rct(tx_dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra,
-              test_tx, test_ptx, rct_config, use_view_tags);
-          else
-            transfer_selected(tx_dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra,
-              detail::digit_split_strategy, tx_dust_policy(::config::DEFAULT_DUST_THRESHOLD), test_tx, test_ptx, use_view_tags);
+          transfer_selected_rct(tx_dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra,
+            test_tx, test_ptx, rct_config, use_view_tags);
           txBlob = t_serializable_object_to_blob(test_ptx.tx);
           needed_fee = calculate_fee(use_per_byte_fee, test_ptx.tx, txBlob.size(), base_fee, fee_quantization_mask);
           LOG_PRINT_L2("Made an attempt at a  final " << get_weight_string(test_ptx.tx, txBlob.size()) << " tx, with " << print_money(test_ptx.fee) <<
@@ -11652,32 +11606,8 @@ skip_tx:
 
     cryptonote::transaction test_tx;
     pending_tx test_ptx;
-    if (use_rct) {
-      transfer_selected_rct(tx_dsts,                    /* NOMOD std::vector<cryptonote::tx_destination_entry> dsts,*/
-                            tx.selected_transfers,      /* const std::list<size_t> selected_transfers */
-                            fake_outs_count,            /* CONST size_t fake_outputs_count, */
-                            tx.outs,                    /* MOD   std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs, */
-                            valid_public_keys_cache,
-                            tx.needed_fee,              /* CONST uint64_t fee, */
-                            extra,                      /* const std::vector<uint8_t>& extra, */
-                            test_tx,                    /* OUT   cryptonote::transaction& tx, */
-                            test_ptx,                   /* OUT   cryptonote::transaction& tx, */
-                            rct_config,
-                            use_view_tags);             /* const bool use_view_tags */
-    } else {
-      transfer_selected(tx_dsts,
-                        tx.selected_transfers,
-                        fake_outs_count,
-                        tx.outs,
-                        valid_public_keys_cache,
-                        tx.needed_fee,
-                        extra,
-                        detail::digit_split_strategy,
-                        tx_dust_policy(::config::DEFAULT_DUST_THRESHOLD),
-                        test_tx,
-                        test_ptx,
-                        use_view_tags);
-    }
+    transfer_selected_rct(tx_dsts, tx.selected_transfers, fake_outs_count, tx.outs, valid_public_keys_cache,
+                          tx.needed_fee, extra, test_tx, test_ptx, rct_config, use_view_tags);
     auto txBlob = t_serializable_object_to_blob(test_ptx.tx);
     tx.tx = test_tx;
     tx.ptx = test_ptx;
@@ -12166,7 +12096,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const crypton
   std::vector<std::vector<get_outs_entry>> outs;
 
   const bool use_per_byte_fee = true;
-  const bool use_rct = fake_outs_count > 0;
+  const bool use_rct = true;
   const bool bulletproof = true;
   const bool bulletproof_plus = true;
   const bool clsag = true;
@@ -12240,12 +12170,8 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const crypton
 
       LOG_PRINT_L2("Trying to create a tx now, with " << tx.dsts.size() << " destinations and " <<
         tx.selected_transfers.size() << " outputs");
-      if (use_rct)
-        transfer_selected_rct(tx.dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra,
-          test_tx, test_ptx, rct_config, use_view_tags);
-      else
-        transfer_selected(tx.dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra,
-          detail::digit_split_strategy, tx_dust_policy(::config::DEFAULT_DUST_THRESHOLD), test_tx, test_ptx, use_view_tags);
+      transfer_selected_rct(tx.dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra,
+        test_tx, test_ptx, rct_config, use_view_tags);
       auto txBlob = t_serializable_object_to_blob(test_ptx.tx);
       needed_fee = calculate_fee(use_per_byte_fee, test_ptx.tx, txBlob.size(), base_fee, fee_quantization_mask);
       available_for_fee = test_ptx.fee + test_ptx.change_dts.amount;
@@ -12277,12 +12203,8 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const crypton
           }
           dt.amount = dt_amount + dt_residue;
         }
-        if (use_rct)
-          transfer_selected_rct(tx.dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra, 
-            test_tx, test_ptx, rct_config, use_view_tags);
-        else
-          transfer_selected(tx.dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra,
-            detail::digit_split_strategy, tx_dust_policy(::config::DEFAULT_DUST_THRESHOLD), test_tx, test_ptx, use_view_tags);
+        transfer_selected_rct(tx.dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra,
+          test_tx, test_ptx, rct_config, use_view_tags);
         txBlob = t_serializable_object_to_blob(test_ptx.tx);
         needed_fee = calculate_fee(use_per_byte_fee, test_ptx.tx, txBlob.size(), base_fee, fee_quantization_mask);
         LOG_PRINT_L2("Made an attempt at a final " << get_weight_string(test_ptx.tx, txBlob.size()) << " tx, with " << print_money(test_ptx.fee) <<
@@ -12316,13 +12238,8 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const crypton
     TX &tx = *i;
     cryptonote::transaction test_tx;
     pending_tx test_ptx;
-    if (use_rct) {
-      transfer_selected_rct(tx.dsts, tx.selected_transfers, fake_outs_count, tx.outs, valid_public_keys_cache, tx.needed_fee, extra,
-        test_tx, test_ptx, rct_config, use_view_tags);
-    } else {
-      transfer_selected(tx.dsts, tx.selected_transfers, fake_outs_count, tx.outs, valid_public_keys_cache, tx.needed_fee, extra,
-        detail::digit_split_strategy, tx_dust_policy(::config::DEFAULT_DUST_THRESHOLD), test_tx, test_ptx, use_view_tags);
-    }
+    transfer_selected_rct(tx.dsts, tx.selected_transfers, fake_outs_count, tx.outs, valid_public_keys_cache, tx.needed_fee, extra,
+      test_tx, test_ptx, rct_config, use_view_tags);
     auto txBlob = t_serializable_object_to_blob(test_ptx.tx);
     tx.tx = test_tx;
     tx.ptx = test_ptx;
@@ -12589,55 +12506,10 @@ const wallet2::transfer_details &wallet2::get_transfer_details(size_t idx) const
   return m_transfers[idx];
 }
 //----------------------------------------------------------------------------------------------------
-std::vector<size_t> wallet2::select_available_unmixable_outputs()
-{
-  // request all outputs with less instances than the min ring size
-  return select_available_outputs_from_histogram(get_min_ring_size(), false, true, false);
-}
-//----------------------------------------------------------------------------------------------------
 std::vector<size_t> wallet2::select_available_mixable_outputs()
 {
   // request all outputs with at least as many instances as the min ring size
   return select_available_outputs_from_histogram(get_min_ring_size(), true, true, true);
-}
-//----------------------------------------------------------------------------------------------------
-std::vector<wallet2::pending_tx> wallet2::create_unmixable_sweep_transactions()
-{
-  // From hard fork 1, we don't consider small amounts to be dust anymore
-  tx_dust_policy dust_policy(0);
-
-  const uint64_t base_fee  = get_base_fee(fee_priority::Unimportant);
-
-  // may throw
-  std::vector<size_t> unmixable_outputs = select_available_unmixable_outputs();
-  size_t num_dust_outputs = unmixable_outputs.size();
-
-  if (num_dust_outputs == 0)
-  {
-    return std::vector<wallet2::pending_tx>();
-  }
-
-  // split in "dust" and "non dust" to make it easier to select outputs
-  std::vector<size_t> unmixable_transfer_outputs, unmixable_dust_outputs;
-  for (auto n: unmixable_outputs)
-  {
-    if (m_transfers[n].amount() < base_fee)
-      unmixable_dust_outputs.push_back(n);
-    else
-      unmixable_transfer_outputs.push_back(n);
-  }
-
-  return create_transactions_from(m_account_public_address, false, 1, unmixable_transfer_outputs, unmixable_dust_outputs, 0 /*fake_outs_count */, fee_priority::Unimportant, std::vector<uint8_t>());
-}
-//----------------------------------------------------------------------------------------------------
-void wallet2::discard_unmixable_outputs()
-{
-  // may throw
-  std::vector<size_t> unmixable_outputs = select_available_unmixable_outputs();
-  for (size_t idx : unmixable_outputs)
-  {
-    freeze(idx);
-  }
 }
 
 bool wallet2::get_tx_key_cached(const crypto::hash &txid, crypto::secret_key &tx_key, std::vector<crypto::secret_key> &additional_tx_keys) const
@@ -13067,7 +12939,7 @@ void wallet2::check_tx_key_helper(const cryptonote::transaction &tx, const crypt
     if (is_out_to_acc(address, output_public_key, derivation, additional_derivations, n, get_output_view_tag(tx.vout[n]), found_derivation))
     {
       uint64_t amount;
-      if (tx.version == 1 || tx.rct_signatures.type == rct::RCTTypeNull)
+      if (tx.rct_signatures.type == rct::RCTTypeNull)
       {
         amount = tx.vout[n].amount;
       }

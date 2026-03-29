@@ -1235,8 +1235,6 @@ private:
     bool sign_multisig_tx_from_file(const std::string &filename, std::vector<crypto::hash> &txids, std::function<bool(const multisig_tx_set&)> accept_func);
     bool sign_multisig_tx(multisig_tx_set &exported_txs, std::vector<crypto::hash> &txids);
     bool sign_multisig_tx_to_file(multisig_tx_set &exported_txs, const std::string &filename, std::vector<crypto::hash> &txids);
-    std::vector<pending_tx> create_unmixable_sweep_transactions();
-    void discard_unmixable_outputs();
     bool check_connection(uint32_t *version = NULL, bool *ssl = NULL, uint32_t timeout = 200000, bool *wallet_is_outdated = NULL, bool *daemon_is_outdated = NULL);
     bool check_version(uint32_t *version, bool *wallet_is_outdated, bool *daemon_is_outdated);
     bool check_hard_fork_version(cryptonote::network_type nettype, const std::vector<std::pair<uint8_t, uint64_t>> &daemon_hard_forks, const uint64_t height, const uint64_t target_height, bool *wallet_is_outdated, bool *daemon_is_outdated);
@@ -1595,7 +1593,6 @@ private:
     uint64_t estimate_blockchain_height();
     std::vector<size_t> select_available_outputs_from_histogram(uint64_t count, bool atleast, bool unlocked, bool allow_rct);
     std::vector<size_t> select_available_outputs(const std::function<bool(const transfer_details &td)> &f);
-    std::vector<size_t> select_available_unmixable_outputs();
     std::vector<size_t> select_available_mixable_outputs();
 
     size_t pop_best_value_from(const transfer_container &transfers, std::vector<size_t> &unused_dust_indices, const std::vector<size_t>& selected_transfers, bool smallest = false) const;
@@ -2600,22 +2597,22 @@ namespace boost
       if (ver < 2)
       {
         if (!typename Archive::is_saving())
-          x.rct_config = { rct::RangeProofBorromean, 0 };
+          x.rct_config = { rct::RangeProofPaddedBulletproof, 0 };
         return;
       }
       a & x.selected_transfers;
       if (ver < 3)
       {
         if (!typename Archive::is_saving())
-          x.rct_config = { rct::RangeProofBorromean, 0 };
+          x.rct_config = { rct::RangeProofPaddedBulletproof, 0 };
         return;
       }
       if (ver < 4)
       {
-        bool use_bulletproofs = x.rct_config.range_proof_type != rct::RangeProofBorromean;
+        bool use_bulletproofs = true;
         a & use_bulletproofs;
         if (!typename Archive::is_saving())
-          x.rct_config = { use_bulletproofs ? rct::RangeProofPaddedBulletproof : rct::RangeProofBorromean, 0 };
+          x.rct_config = { rct::RangeProofPaddedBulletproof, 0 };
         return;
       }
       a & x.rct_config;

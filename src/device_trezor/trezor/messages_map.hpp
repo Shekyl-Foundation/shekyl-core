@@ -27,8 +27,8 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#ifndef MONERO_MESSAGES_MAP_H
-#define MONERO_MESSAGES_MAP_H
+#ifndef SHEKYL_MESSAGES_MAP_H
+#define SHEKYL_MESSAGES_MAP_H
 
 #include <string>
 #include <type_traits>
@@ -99,4 +99,4 @@ namespace trezor {
 
 }}
 
-#endif //MONERO_MESSAGES_MAP_H
+#endif //SHEKYL_MESSAGES_MAP_H

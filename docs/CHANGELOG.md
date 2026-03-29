@@ -58,6 +58,25 @@
 8. Update DNS infrastructure to serve records under all 5 TLDs (`.org`,
    `.net`, `.com`, `.biz`, `.io`). See `shekyl-dev/docs/DNS_CONFIG.md`.
 
+### Drop v1 transaction support from wallet
+
+- **Removed unmixable sweep functions**: `select_available_unmixable_outputs()`,
+  `create_unmixable_sweep_transactions()`, and `discard_unmixable_outputs()` removed
+  from `wallet2`. The `sweep_dust` RPC and `createSweepUnmixableTransaction` API now
+  return errors, as Shekyl has no pre-RCT unmixable outputs.
+- **Removed v1 fee/amount paths**: `get_outgoing_amount()` and fee calculation in
+  `process_new_transaction` no longer branch on `tx.version == 1`.
+- **Simplified coinbase optimization**: `RefreshOptimizeCoinbase` no longer special-cases
+  `tx.version < 2` in cache sizing or output scanning.
+- **Replaced RangeProofBorromean defaults**: Serialization fallbacks for older
+  `tx_construction_data` archive versions now default to `RangeProofPaddedBulletproof`
+  instead of `RangeProofBorromean`. `transfer_selected` construction data updated to
+  use RCT with BulletproofPlus config.
+- **Removed dead non-RCT tx creation branches**: `create_transactions_2` and
+  `create_transactions_from` always use `transfer_selected_rct`; dead `else
+  transfer_selected(...)` branches removed. `create_transactions_from` now sets
+  `use_rct = true` unconditionally.
+
 ### Hardfork reboot and testnet wallet readiness
 
 - **Hardfork schedule rebooted**: All `HF_VERSION_*` constants collapsed to 1.

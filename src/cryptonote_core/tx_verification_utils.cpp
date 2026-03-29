@@ -273,26 +273,9 @@ bool ver_mixed_rct_semantics(std::vector<const rct::rctSig*> rvv)
         switch (rv.type)
         {
         case rct::RCTTypeNull:
-            // coinbase should not come here, so we reject for all other types
             MERROR("Unexpected Null rctSig type");
             return false;
             break;
-        case rct::RCTTypeSimple:
-            if (!rct::verRctSemanticsSimple(rv))
-            {
-                MERROR("rct signature semantics check failed: type simple");
-                return false;
-            }
-            break;
-        case rct::RCTTypeFull:
-            if (!rct::verRct(rv, /*semantics=*/true))
-            {
-                MERROR("rct signature semantics check failed: type full");
-                return false;
-            }
-            break;
-        case rct::RCTTypeBulletproof:
-        case rct::RCTTypeBulletproof2:
         case rct::RCTTypeCLSAG:
             if (!is_canonical_bulletproof_layout(rv.p.bulletproofs))
             {
