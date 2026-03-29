@@ -1356,7 +1356,8 @@ private:
       a & m_unconfirmed_payments.parent();
       if(ver < 23)
         return;
-      a & (std::pair<std::map<std::string, std::string>, std::vector<std::string>>&)m_account_tags;
+      a & m_account_tags.first.parent();
+      a & m_account_tags.second;
       if(ver < 24)
         return;
       a & m_ring_history_saved;

@@ -344,8 +344,6 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
   dest.StartObject();
   struct add_input
   {
-    using result_type = void;
-
     rapidjson::Writer<epee::byte_stream>& dest;
 
     void operator()(cryptonote::txin_to_key const& input) const
@@ -656,8 +654,6 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
 
   struct add_output
   {
-    using result_type = void;
-
     rapidjson::Writer<epee::byte_stream>& dest;
 
     void operator()(cryptonote::txout_to_key const& output) const

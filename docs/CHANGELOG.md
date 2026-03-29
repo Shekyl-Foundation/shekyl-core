@@ -114,6 +114,33 @@
   wire protocol identifiers intentionally preserved (must match Trezor
   firmware definitions).
 
+### Warning cleanup and dead code removal
+
+- **Removed dead fork helpers**: Deleted unused `get_bulletproof_fork()`,
+  `get_bulletproof_plus_fork()`, and `get_clsag_fork()` from `wallet2.cpp`.
+  These Monero-era version ladders had no call sites; Shekyl activates all
+  features from HF1.
+- **Removed dead variable**: Deleted unused `bool refreshed` in
+  `wallet2::refresh()`.
+- **Removed legacy `result_type` typedefs**: Deleted `using result_type = void`
+  from `add_input` and `add_output` visitor structs in `json_object.cpp`. These
+  were required by `boost::static_visitor` but are unused by `std::visit`.
+- **Fixed uninitialized-variable warning**: Zero-initialized `local_blocks_to_unlock`
+  and `local_time_to_unlock` in `wallet2::unlocked_balance_all()`.
+- **Fixed aliasing cast in wallet serialization**: Replaced C-style cast of
+  `m_account_tags` from `pair<serializable_map, vector>` to `pair<map, vector>&`
+  with direct `.parent()` accessor, eliminating formal undefined behavior.
+- **Suppressed epee warnings**: Added targeted `#pragma GCC diagnostic` guards
+  for `-Wclass-memaccess` (memcpy into `mlocked<scrubbed<>>` in
+  `keyvalue_serialization_overloads.h`) and `-Wstring-compare` (type_info
+  comparisons in `portable_storage.h`).
+- **Renamed test target**: `monero-wallet-crypto-bench` renamed to
+  `shekyl-wallet-crypto-bench`.
+- **Trezor Protobuf fixes**: Added `std::string()` wrapping for
+  `GetDescriptor()->name()` calls in `messages_map.cpp/.hpp` to handle
+  Protobuf 22+ returning `absl::string_view`/`std::string_view`. Added
+  missing `<cstdint>` include to `exceptions.hpp`.
+
 ### Rust crypto infrastructure
 
 - **New `shekyl-crypto-hash` crate**: Implements `cn_fast_hash` (Keccak-256

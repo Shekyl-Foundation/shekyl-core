@@ -263,12 +263,19 @@ namespace epee
         if(!pentry)
           return nullptr;
       }
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstring-compare"
+#endif
       if(pentry->type() != typeid(array_entry))
         *pentry = storage_entry(array_entry(array_entry_t<t_real_value>()));
 
       array_entry& arr = boost::get<array_entry>(*pentry);
       if(arr.type() != typeid(array_entry_t<t_real_value>))
         arr = array_entry(array_entry_t<t_real_value>());
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
       array_entry_t<t_real_value>& arr_typed = boost::get<array_entry_t<t_real_value> >(arr);
       arr_typed.insert_first_val(std::forward<t_value>(target));
