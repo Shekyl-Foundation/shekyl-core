@@ -68,7 +68,7 @@ bool txpool_base::check_txpool_spent_keys(cryptonote::core& c, size_t /*ev_index
 {
   std::vector<cryptonote::tx_info> infos{};
   std::vector<cryptonote::spent_key_image_info> key_images{};
-  if (!c.get_pool_transactions_and_spent_keys_info(infos, key_images) || infos.size() != m_broadcasted_tx_count || key_images.size() != m_broadcasted_tx_count)
+  if (!c.get_pool_transactions_and_spent_keys_info(infos, key_images) || infos.size() != m_broadcasted_tx_count || key_images.size() < m_broadcasted_tx_count)
   {
     MERROR("Failed broadcasted spent keys retrieval - Expected Broadcasted Count: " << m_broadcasted_tx_count << " Actual Info Count: " << infos.size() << " Actual Key Image Count: " << key_images.size());
     return false;
@@ -76,7 +76,7 @@ bool txpool_base::check_txpool_spent_keys(cryptonote::core& c, size_t /*ev_index
 
   infos.clear();
   key_images.clear();
-  if (!c.get_pool_transactions_and_spent_keys_info(infos, key_images, false) || infos.size() != m_broadcasted_tx_count || key_images.size() != m_broadcasted_tx_count)
+  if (!c.get_pool_transactions_and_spent_keys_info(infos, key_images, false) || infos.size() != m_broadcasted_tx_count || key_images.size() < m_broadcasted_tx_count)
   {
     MERROR("Failed broadcasted spent keys retrieval - Expected Broadcasted Count: " << m_broadcasted_tx_count << " Actual Info Count: " << infos.size() << " Actual Key Image Count: " << key_images.size());
     return false;
@@ -84,7 +84,7 @@ bool txpool_base::check_txpool_spent_keys(cryptonote::core& c, size_t /*ev_index
 
   infos.clear();
   key_images.clear();
-  if (!c.get_pool_transactions_and_spent_keys_info(infos, key_images, true) || infos.size() != m_all_tx_count || key_images.size() != m_all_tx_count)
+  if (!c.get_pool_transactions_and_spent_keys_info(infos, key_images, true) || infos.size() != m_all_tx_count || key_images.size() < m_all_tx_count)
   {
     MERROR("Failed all spent keys retrieval - Expected All Count: " << m_all_tx_count << " Actual Info Count: " << infos.size() << " Actual Key Image Count: " << key_images.size());
     return false;

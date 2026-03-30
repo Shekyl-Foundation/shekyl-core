@@ -768,7 +768,8 @@ bool gen_block_miner_tx_out_has_view_tag_before_hf_view_tags::generate(std::vect
   generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx);
   events.push_back(blk_1);
 
-  DO_CALLBACK(events, "check_block_purged");
+  // Shekyl: view tags are mandatory from HF1 (genesis), so this is accepted
+  DO_CALLBACK(events, "check_block_accepted");
 
   return true;
 }

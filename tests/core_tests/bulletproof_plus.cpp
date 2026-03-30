@@ -59,8 +59,8 @@ bool gen_bpp_tx_validation_base::generate_with(std::vector<test_event_entry>& ev
     miner_accounts[n].generate();
     CHECK_AND_ASSERT_MES(generator.construct_block_manually(blocks[n], *prev_block, miner_accounts[n],
         test_generator::bf_major_ver | test_generator::bf_minor_ver | test_generator::bf_timestamp | test_generator::bf_hf_version,
-        2, 2, prev_block->timestamp + DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN * 2, // v2 has blocks twice as long
-          crypto::hash(), 0, transaction(), std::vector<crypto::hash>(), 0, 0, 2),
+        1, 1, prev_block->timestamp + DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN * 2,
+          crypto::hash(), 0, transaction(), std::vector<crypto::hash>(), 0, 0, 1),
         false, "Failed to generate block");
     events.push_back(blocks[n]);
     prev_block = blocks + n;
@@ -74,8 +74,8 @@ bool gen_bpp_tx_validation_base::generate_with(std::vector<test_event_entry>& ev
     {
       CHECK_AND_ASSERT_MES(generator.construct_block_manually(blocks[12+i], blk_last, miner_account,
           test_generator::bf_major_ver | test_generator::bf_minor_ver | test_generator::bf_timestamp | test_generator::bf_hf_version,
-          2, 2, blk_last.timestamp + DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN * 2, // v2 has blocks twice as long
-          crypto::hash(), 0, transaction(), std::vector<crypto::hash>(), 0, 0, 2),
+          1, 1, blk_last.timestamp + DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN * 2,
+          crypto::hash(), 0, transaction(), std::vector<crypto::hash>(), 0, 0, 1),
           false, "Failed to generate block");
       events.push_back(blocks[12+i]);
       blk_last = blocks[12+i];
@@ -83,12 +83,34 @@ bool gen_bpp_tx_validation_base::generate_with(std::vector<test_event_entry>& ev
     blk_r = blk_last;
   }
 
+  // Pick the largest miner-tx output amount that appears in every block.
+  // Shekyl's emission differs from Monero, so we discover available amounts
+  // dynamically instead of hardcoding them.
+  uint64_t common_input_amount = 0;
+  {
+    CHECK_AND_ASSERT_MES(blocks[0].miner_tx.vout.size() > 0, false, "No outputs in miner tx");
+    for (size_t i = 0; i < blocks[0].miner_tx.vout.size(); ++i) {
+      uint64_t candidate = blocks[0].miner_tx.vout[i].amount;
+      if (candidate <= common_input_amount)
+        continue;
+      bool found_in_all = true;
+      for (size_t b = 1; b <= std::min((size_t)10, (size_t)11); ++b) {
+        bool found = false;
+        for (size_t j = 0; j < blocks[b].miner_tx.vout.size(); ++j)
+          if (blocks[b].miner_tx.vout[j].amount == candidate) { found = true; break; }
+        if (!found) { found_in_all = false; break; }
+      }
+      if (found_in_all)
+        common_input_amount = candidate;
+    }
+    CHECK_AND_ASSERT_MES(common_input_amount > 0, false, "No common amount found across miner blocks");
+  }
+
   // create 4 txes from these miners in another block, to generate some rct outputs
   std::vector<transaction> rct_txes;
   cryptonote::block blk_txes;
   std::vector<crypto::hash> starting_rct_tx_hashes;
   uint64_t fees = 0;
-  static const uint64_t input_amounts_available[] = {5000000000000, 30000000000000, 100000000000, 80000000000};
   for (size_t n = 0; n < n_txes; ++n)
   {
     std::vector<tx_source_entry> sources;
@@ -96,8 +118,8 @@ bool gen_bpp_tx_validation_base::generate_with(std::vector<test_event_entry>& ev
     sources.resize(1);
     tx_source_entry& src = sources.back();
 
-    const uint64_t needed_amount = input_amounts_available[n];
-    src.amount = input_amounts_available[n];
+    const uint64_t needed_amount = common_input_amount;
+    src.amount = needed_amount;
     size_t real_index_in_tx = 0;
     for (size_t m = 0; m <= mixin; ++m) {
       size_t index_in_tx = 0;
