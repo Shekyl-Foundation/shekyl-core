@@ -231,7 +231,7 @@ struct get_test_options<gen_block_low_coinbase> {
   };
 };
 
-struct gen_block_miner_tx_out_has_no_view_tag_before_hf_view_tags : public gen_block_accepted_base<2>
+struct gen_block_miner_tx_out_has_no_view_tag_before_hf_view_tags : public gen_block_verification_base<1>
 {
   bool generate(std::vector<test_event_entry>& events) const;
 };

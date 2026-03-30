@@ -57,6 +57,7 @@
 #include "chaingen.h"
 #include "device/device.hpp"
 #include "ringct/rctOps.h"
+#include "shekyl/economics.h"
 using namespace std;
 
 using namespace epee;
@@ -1038,14 +1039,18 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
   in.height = height;
   tx.vin.push_back(in);
 
-  // This will work, until size of constructed block is less then CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE
   uint64_t block_reward;
-  if (!get_block_reward(0, 0, already_generated_coins, block_reward, hf_version))
+  if (!get_block_reward(0, 0, already_generated_coins, block_reward, hf_version, 0))
   {
     LOG_PRINT_L0("Block is too big");
     return false;
   }
-  block_reward += fee;
+
+  shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, 0, hf_version);
+  block_reward = em_split.miner_emission;
+
+  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, 0, 0, hf_version);
+  block_reward += burn.miner_fee_income;
 
   crypto::key_derivation derivation;
   crypto::public_key out_eph_public_key;

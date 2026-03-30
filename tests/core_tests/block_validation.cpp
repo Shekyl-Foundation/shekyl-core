@@ -697,21 +697,19 @@ bool gen_block_miner_tx_out_has_no_view_tag_before_hf_view_tags::generate(std::v
 
   MAKE_MINER_TX_MANUALLY(miner_tx, blk_0);
 
-  CHECK_AND_ASSERT_MES(!cryptonote::get_output_view_tag(miner_tx.vout[0]), false, "output should not have a view tag");
-
   crypto::public_key output_public_key;
   crypto::view_tag view_tag;
   cryptonote::get_output_public_key(miner_tx.vout[0], output_public_key);
 
-  // explicitly call the setter to ensure it does not set a view tag on the miner tx output
   cryptonote::set_tx_out(miner_tx.vout[0].amount, output_public_key, use_view_tags, view_tag, miner_tx.vout[0]);
-  CHECK_AND_ASSERT_MES(!cryptonote::get_output_view_tag(miner_tx.vout[0]), false, "output should still not have a view tag");
+  CHECK_AND_ASSERT_MES(!cryptonote::get_output_view_tag(miner_tx.vout[0]), false, "output should not have a view tag");
 
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx);
   events.push_back(blk_1);
 
-  DO_CALLBACK(events, "check_block_accepted");
+  // Shekyl starts at HF1 where view tags are mandatory — block without view tags is rejected
+  DO_CALLBACK(events, "check_block_purged");
 
   return true;
 }
