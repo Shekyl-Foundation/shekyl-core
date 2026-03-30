@@ -32,7 +32,7 @@
 #include "chaingen.h"
 
 const size_t invalid_index_value = std::numeric_limits<size_t>::max();
-const uint64_t FIRST_BLOCK_REWARD = 17592186044415;
+const uint64_t FIRST_BLOCK_REWARD = 1392640000000;
 
 
 template<class concrete_test>

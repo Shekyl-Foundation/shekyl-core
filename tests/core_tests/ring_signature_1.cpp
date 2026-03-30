@@ -168,7 +168,7 @@ bool gen_ring_signature_2::generate(std::vector<test_event_entry>& events) const
   MAKE_NEXT_BLOCK_TX_LIST(events, blk_4, blk_3r, miner_account, txs_blk_4);                             // 10 + N
   DO_CALLBACK(events, "check_balances_1");                                                              // 11 + N
   REWIND_BLOCKS(events, blk_4r, blk_4, miner_account);                                                  // <N blocks>
-  MAKE_TX_MIX(events, tx_0, bob_account, alice_account, MK_COINS(52) - TESTS_DEFAULT_FEE, 3, blk_4);   // 12 + 2N
+  MAKE_TX_MIX(events, tx_0, bob_account, alice_account, MK_COINS(51), 3, blk_4);                       // 12 + 2N
   MAKE_NEXT_BLOCK_TX1(events, blk_5, blk_4r, miner_account, tx_0);                                      // 13 + 2N
   DO_CALLBACK(events, "check_balances_2");                                                              // 14 + 2N
 
@@ -208,8 +208,8 @@ bool gen_ring_signature_2::check_balances_2(cryptonote::core& c, size_t ev_index
   map_hash2tx_t mtx;
   r = find_block_chain(events, chain, mtx, get_block_hash(blocks.back()));
   CHECK_TEST_CONDITION(r);
-  CHECK_EQ(0, get_balance(m_bob_account, chain, mtx));
-  CHECK_EQ(MK_COINS(52) - TESTS_DEFAULT_FEE, get_balance(m_alice_account, chain, mtx));
+  CHECK_EQ(MK_COINS(52) - MK_COINS(51) - TESTS_DEFAULT_FEE, get_balance(m_bob_account, chain, mtx));
+  CHECK_EQ(MK_COINS(51), get_balance(m_alice_account, chain, mtx));
 
   return true;
 }

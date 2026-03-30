@@ -611,7 +611,6 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
                 ts.amount = oi.amount;
                 ts.mask = rct::identity();
             } else {
-                // Decrypt RCT amount and mask using the receiver's view key
                 const transaction &src_tx = *oi.p_tx;
                 crypto::key_derivation derivation;
                 if (!crypto::generate_key_derivation(ts.real_out_tx_key, from.get_keys().m_view_secret_key, derivation))
@@ -629,7 +628,6 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
                 ts.amount = rct::h2d(ecdh_info.amount);
                 ts.mask = ecdh_info.mask;
 
-                // Verify the commitment: C = mask*G + amount*H
                 rct::key C_expected = rct::commit(ts.amount, ts.mask);
                 if (!rct::equalKeys(C_expected, src_tx.rct_signatures.outPk[oi.out_no].mask)) {
                     LOG_ERROR("RCT output commitment mismatch for output " << oi.out_no);
@@ -988,7 +986,7 @@ void fill_tx_sources_and_destinations(const std::vector<test_event_entry>& event
   if (!fill_tx_sources(sources, events, blk_head, from, amount + fee, nmix))
     throw std::runtime_error("couldn't fill transaction sources");
 
-  fill_tx_destinations(from, to, amount, fee, sources, destinations, false);
+  fill_tx_destinations(from, to, amount, fee, sources, destinations, true);
 }
 
 void fill_tx_sources_and_destinations(const std::vector<test_event_entry>& events, const block& blk_head,
