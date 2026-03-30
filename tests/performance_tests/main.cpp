@@ -57,7 +57,6 @@
 #include "sc_check.h"
 #include "cn_fast_hash.h"
 #include "equality.h"
-#include "bulletproof.h"
 #include "bulletproof_plus.h"
 #include "crypto_ops.h"
 #include "multiexp.h"
@@ -141,17 +140,17 @@ int main(int argc, char** argv)
   TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 2, true);
   TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 10, true);
 
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 1, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 2, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 10, true, rct::RangeProofPaddedBulletproof, 2);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 1, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 2, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 10, true, rct::RangeProofPaddedBulletproof, 4);
 
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 1, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 2, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 10, true, rct::RangeProofPaddedBulletproof, 2);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 1, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 2, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 10, true, rct::RangeProofPaddedBulletproof, 4);
 
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 1, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 2, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 10, true, rct::RangeProofPaddedBulletproof, 2);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 1, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 2, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 10, true, rct::RangeProofPaddedBulletproof, 4);
 
   TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 1, 2, false);
   TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 2, 2, false);
@@ -159,14 +158,14 @@ int main(int argc, char** argv)
   TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 100, 2, false);
   TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 2, 10, false);
 
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 2, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 2, true, rct::RangeProofMultiOutputBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 10, 2, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 10, 2, true, rct::RangeProofMultiOutputBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 100, 2, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 100, 2, true, rct::RangeProofMultiOutputBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 10, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 10, true, rct::RangeProofMultiOutputBulletproof, 2);
+  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 2, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 2, true, rct::RangeProofMultiOutputBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 10, 2, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 10, 2, true, rct::RangeProofMultiOutputBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 100, 2, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 100, 2, true, rct::RangeProofMultiOutputBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 10, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 10, true, rct::RangeProofMultiOutputBulletproof, 4);
 
   TEST_PERFORMANCE3(filter, p, test_check_tx_signature_aggregated_bulletproofs, 2, 2, 64);
   TEST_PERFORMANCE3(filter, p, test_check_tx_signature_aggregated_bulletproofs, 10, 2, 64);
@@ -246,26 +245,6 @@ int main(int argc, char** argv)
   TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof_plus, true, 1, 8, 1, 1, 4); // 32 proofs, with 1, 2, 3, 4 amounts, 8 of each
   TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof_plus, false, 2, 1, 1, 0, 64);
   TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof_plus, true, 2, 1, 1, 0, 64); // 64 proof, each with 2 amounts
-
-  TEST_PERFORMANCE2(filter, p, test_bulletproof, true, 1); // 1 bulletproof with 1 amount
-  TEST_PERFORMANCE2(filter, p, test_bulletproof, false, 1);
-
-  TEST_PERFORMANCE2(filter, p, test_bulletproof, true, 2); // 1 bulletproof with 2 amounts
-  TEST_PERFORMANCE2(filter, p, test_bulletproof, false, 2);
-
-  TEST_PERFORMANCE2(filter, p, test_bulletproof, true, 15); // 1 bulletproof with 15 amounts
-  TEST_PERFORMANCE2(filter, p, test_bulletproof, false, 15);
-
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, false, 2, 1, 1, 0, 4);
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, true, 2, 1, 1, 0, 4); // 4 proofs, each with 2 amounts
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, false, 8, 1, 1, 0, 4);
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, true, 8, 1, 1, 0, 4); // 4 proofs, each with 8 amounts
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, false, 1, 1, 2, 0, 4);
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, true, 1, 1, 2, 0, 4); // 4 proofs with 1, 2, 4, 8 amounts
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, false, 1, 8, 1, 1, 4);
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, true, 1, 8, 1, 1, 4); // 32 proofs, with 1, 2, 3, 4 amounts, 8 of each
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, false, 2, 1, 1, 0, 64);
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, true, 2, 1, 1, 0, 64); // 64 proof, each with 2 amounts
 
   TEST_PERFORMANCE1(filter, p, test_crypto_ops, op_sc_add);
   TEST_PERFORMANCE1(filter, p, test_crypto_ops, op_sc_sub);

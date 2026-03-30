@@ -1,3 +1,4 @@
+// Copyright (c) 2026, The Shekyl Project
 // Copyright (c) 2014-2022, The Monero Project
 // 
 // All rights reserved.
@@ -34,6 +35,7 @@
 
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/cryptonote_basic.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "crypto/crypto.h"
 
@@ -58,9 +60,10 @@ public:
       if (!construct_miner_tx(0, 0, 0, 2, 0, m_miners[i].get_keys().m_account_address, m_miner_txs[i]))
         return false;
 
-      txout_to_key tx_out = std::get<txout_to_key>(m_miner_txs[i].vout[0].target);
-      output_entries.push_back(std::make_pair(i, rct::ctkey({rct::pk2rct(tx_out.key), rct::zeroCommit(m_miner_txs[i].vout[0].amount)})));
-      m_public_keys[i] = tx_out.key;
+      crypto::public_key tx_out_key;
+      cryptonote::get_output_public_key(m_miner_txs[i].vout[0], tx_out_key);
+      output_entries.push_back(std::make_pair(i, rct::ctkey({rct::pk2rct(tx_out_key), rct::zeroCommit(m_miner_txs[i].vout[0].amount)})));
+      m_public_keys[i] = tx_out_key;
       m_public_key_ptrs[i] = &m_public_keys[i];
     }
 

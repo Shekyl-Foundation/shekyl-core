@@ -59,7 +59,9 @@ namespace
   {
     cryptonote::tx_source_entry se;
     se.amount = tx.vout[out_idx].amount;
-    se.push_output(0, std::get<cryptonote::txout_to_key>(tx.vout[out_idx].target).key, se.amount);
+    crypto::public_key io_out_key;
+    cryptonote::get_output_public_key(tx.vout[out_idx], io_out_key);
+    se.push_output(0, io_out_key, se.amount);
     se.real_output = 0;
     se.rct = false;
     se.real_out_tx_key = get_tx_pub_key_from_extra(tx);

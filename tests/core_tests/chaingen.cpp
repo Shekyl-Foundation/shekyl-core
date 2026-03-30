@@ -1,5 +1,5 @@
-// Copyright (c) 2014-2022, The Monero Project
 // Copyright (c) 2026, The Shekyl Project
+// Copyright (c) 2014-2022, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -61,6 +61,17 @@ using namespace std;
 using namespace epee;
 using namespace crypto;
 using namespace cryptonote;
+
+static bool get_output_key_from_target(const txout_target_v &target, crypto::public_key &key)
+{
+  if (std::holds_alternative<txout_to_key>(target))
+    key = std::get<txout_to_key>(target).key;
+  else if (std::holds_alternative<txout_to_tagged_key>(target))
+    key = std::get<txout_to_tagged_key>(target).key;
+  else
+    return false;
+  return true;
+}
 
 namespace
 {
@@ -458,7 +469,7 @@ bool init_output_indices(map_output_idx_t& outs, std::map<uint64_t, std::vector<
                 oi.unlock_time = tx.unlock_time;
                 oi.is_coin_base = i == 0;
 
-                if (out.target.index() == 2) { // out_to_key
+                if (std::holds_alternative<txout_to_key>(out.target) || std::holds_alternative<txout_to_tagged_key>(out.target)) {
                     outs[out.amount].push_back(oi);
                     size_t tx_global_idx = outs[out.amount].size() - 1;
                     outs[out.amount][tx_global_idx].idx = tx_global_idx;
@@ -485,7 +496,8 @@ bool init_spent_output_indices(map_output_idx_t& outs, map_output_t& outs_mine, 
             // construct key image for this output
             crypto::key_image img;
             keypair in_ephemeral;
-            crypto::public_key out_key = std::get<txout_to_key>(oi.out).key;
+            crypto::public_key out_key;
+            CHECK_AND_ASSERT_MES(get_output_key_from_target(oi.out, out_key), false, "Invalid output target type in spent output");
             std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
             subaddresses[from.get_keys().m_account_address.m_spend_public_key] = {0,0};
             generate_key_image_helper(from.get_keys(), subaddresses, out_key, get_tx_pub_key_from_extra(*oi.p_tx), get_additional_tx_pub_keys_from_extra(*oi.p_tx), oi.out_no, in_ephemeral, img, hw::get_device(("default")));
@@ -537,8 +549,9 @@ bool fill_output_entries(std::vector<output_index>& out_indices, size_t sender_o
     if (append)
     {
       rct::key comm = oi.commitment();
-      const txout_to_key& otk = std::get<txout_to_key>(oi.out);
-      output_entries.push_back(tx_source_entry::output_entry(oi.idx, rct::ctkey({rct::pk2rct(otk.key), comm})));
+      crypto::public_key otk_key;
+      CHECK_AND_ASSERT_MES(get_output_key_from_target(oi.out, otk_key), false, "Invalid output target type in fill_output_entries");
+      output_entries.push_back(tx_source_entry::output_entry(oi.idx, rct::ctkey({rct::pk2rct(otk_key), comm})));
     }
   }
 
@@ -573,7 +586,7 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
             const output_index& oi = outs[o.first][sender_out];
             if (oi.spent)
                 continue;
-            if (oi.rct)
+            if (oi.rct && !oi.is_coin_base)
                 continue;
 
             cryptonote::tx_source_entry ts;
@@ -586,7 +599,7 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
 
             ts.real_output = realOutput;
             ts.rct = false;
-            ts.mask = rct::identity();  // non-rct has identity mask by definition
+            ts.mask = rct::identity();
 
             rct::key comm = rct::zeroCommit(ts.amount);
             for(auto & ot : ts.outputs)
@@ -719,7 +732,8 @@ void block_tracker::get_fake_outs(size_t num_outs, uint64_t amount, uint64_t glo
     auto & oi = vct[oi_idx];
     if (oi.idx == global_index)
       continue;
-    if (!std::holds_alternative<cryptonote::txout_to_key>(oi.out))
+    crypto::public_key oi_out_key;
+    if (!get_output_key_from_target(oi.out, oi_out_key))
       continue;
     if (oi.unlock_time > cur_height)
       continue;
@@ -727,8 +741,7 @@ void block_tracker::get_fake_outs(size_t num_outs, uint64_t amount, uint64_t glo
       continue;
 
     rct::key comm = oi.commitment();
-    auto out = std::get<txout_to_key>(oi.out);
-    auto item = std::make_tuple(oi.idx, out.key, comm);
+    auto item = std::make_tuple(oi.idx, oi_out_key, comm);
     outs.push_back(item);
     used.insert(oi_idx);
   }
@@ -744,12 +757,13 @@ std::string block_tracker::dump_data()
 
     for (const auto & oi : vct)
     {
-      auto out = std::get<txout_to_key>(oi.out);
+      crypto::public_key dump_key{};
+      get_output_key_from_target(oi.out, dump_key);
 
       ss << "    idx: " << oi.idx
       << ", rct: " << oi.rct
       << ", xmr: " << oi.amount
-      << ", key: " << dump_keys(out.key.data)
+      << ", key: " << dump_keys(dump_key.data)
       << ", msk: " << dump_keys(oi.comm.bytes)
       << ", txid: " << dump_keys(oi.p_tx->hash.data)
       << '\n';
@@ -1077,7 +1091,7 @@ bool construct_tx_rct(const cryptonote::account_keys& sender_account_keys, std::
   std::vector<crypto::secret_key> additional_tx_keys;
   std::vector<tx_destination_entry> destinations_copy = destinations;
   rct::RCTConfig rct_config = {range_proof_type, bp_version};
-  return construct_tx_and_get_tx_key(sender_account_keys, subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, additional_tx_keys, rct, rct_config);
+  return construct_tx_and_get_tx_key(sender_account_keys, subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, additional_tx_keys, rct, rct_config, true);
 }
 
 transaction construct_tx_with_fee(std::vector<test_event_entry>& events, const block& blk_head,

@@ -32,6 +32,7 @@
 
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/cryptonote_basic.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 
 #include "single_tx_test_base.h"
@@ -63,11 +64,12 @@ public:
   }
   bool test()
   {
-    const cryptonote::txout_to_key& tx_out = std::get<cryptonote::txout_to_key>(m_tx.vout[0].target);
+    crypto::public_key tx_out_key;
+    cryptonote::get_output_public_key(m_tx.vout[0], tx_out_key);
     std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
     subaddresses[m_bob.get_keys().m_account_address.m_spend_public_key] = {0,0};
     std::vector<crypto::key_derivation> additional_derivations;
-    std::optional<cryptonote::subaddress_receive_info> info = cryptonote::is_out_to_acc_precomp(subaddresses, tx_out.key, m_derivation, additional_derivations, 0, hw::get_device("default"));
+    std::optional<cryptonote::subaddress_receive_info> info = cryptonote::is_out_to_acc_precomp(subaddresses, tx_out_key, m_derivation, additional_derivations, 0, hw::get_device("default"));
     return (bool)info;
   }
 

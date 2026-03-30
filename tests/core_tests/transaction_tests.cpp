@@ -1,3 +1,4 @@
+// Copyright (c) 2026, The Shekyl Project
 // Copyright (c) 2014-2022, The Monero Project
 // 
 // All rights reserved.
@@ -30,6 +31,7 @@
 
 #include "include_base_utils.h"
 #include "cryptonote_basic/cryptonote_basic_impl.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_basic/account.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "misc_language.h"
@@ -77,17 +79,24 @@ bool test_transaction_generation_and_ring_signature()
   tx_source_entry& src = sources.back();
   src.amount = 70368744177663;
   {
-    src.push_output(0, std::get<txout_to_key>(tx_mine_1.vout[0].target).key, src.amount);
+    crypto::public_key pk;
+    cryptonote::get_output_public_key(tx_mine_1.vout[0], pk);
+    src.push_output(0, pk, src.amount);
 
-    src.push_output(1, std::get<txout_to_key>(tx_mine_2.vout[0].target).key, src.amount);
+    cryptonote::get_output_public_key(tx_mine_2.vout[0], pk);
+    src.push_output(1, pk, src.amount);
 
-    src.push_output(2, std::get<txout_to_key>(tx_mine_3.vout[0].target).key, src.amount);
+    cryptonote::get_output_public_key(tx_mine_3.vout[0], pk);
+    src.push_output(2, pk, src.amount);
 
-    src.push_output(3, std::get<txout_to_key>(tx_mine_4.vout[0].target).key, src.amount);
+    cryptonote::get_output_public_key(tx_mine_4.vout[0], pk);
+    src.push_output(3, pk, src.amount);
 
-    src.push_output(4, std::get<txout_to_key>(tx_mine_5.vout[0].target).key, src.amount);
+    cryptonote::get_output_public_key(tx_mine_5.vout[0], pk);
+    src.push_output(4, pk, src.amount);
 
-    src.push_output(5, std::get<txout_to_key>(tx_mine_6.vout[0].target).key, src.amount);
+    cryptonote::get_output_public_key(tx_mine_6.vout[0], pk);
+    src.push_output(5, pk, src.amount);
 
     src.real_out_tx_key = cryptonote::get_tx_pub_key_from_extra(tx_mine_2);
     src.real_output = 1;
@@ -106,13 +115,15 @@ bool test_transaction_generation_and_ring_signature()
   CHECK_AND_ASSERT_MES(r, false, "failed to construct transaction");
 
   crypto::hash pref_hash = get_transaction_prefix_hash(tx_rc1);
+  crypto::public_key out_keys[6];
+  cryptonote::get_output_public_key(tx_mine_1.vout[0], out_keys[0]);
+  cryptonote::get_output_public_key(tx_mine_2.vout[0], out_keys[1]);
+  cryptonote::get_output_public_key(tx_mine_3.vout[0], out_keys[2]);
+  cryptonote::get_output_public_key(tx_mine_4.vout[0], out_keys[3]);
+  cryptonote::get_output_public_key(tx_mine_5.vout[0], out_keys[4]);
+  cryptonote::get_output_public_key(tx_mine_6.vout[0], out_keys[5]);
   std::vector<const crypto::public_key *> output_keys;
-  output_keys.push_back(&std::get<txout_to_key>(tx_mine_1.vout[0].target).key);
-  output_keys.push_back(&std::get<txout_to_key>(tx_mine_2.vout[0].target).key);
-  output_keys.push_back(&std::get<txout_to_key>(tx_mine_3.vout[0].target).key);
-  output_keys.push_back(&std::get<txout_to_key>(tx_mine_4.vout[0].target).key);
-  output_keys.push_back(&std::get<txout_to_key>(tx_mine_5.vout[0].target).key);
-  output_keys.push_back(&std::get<txout_to_key>(tx_mine_6.vout[0].target).key);
+  for (auto &k : out_keys) output_keys.push_back(&k);
   r = crypto::check_ring_signature(pref_hash, std::get<txin_to_key>(tx_rc1.vin[0]).k_image, output_keys, &tx_rc1.signatures[0][0]);
   CHECK_AND_ASSERT_MES(r, false, "failed to check ring signature");
 

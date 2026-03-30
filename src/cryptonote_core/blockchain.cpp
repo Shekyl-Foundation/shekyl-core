@@ -3285,6 +3285,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     }
   }
 
+  if (m_nettype != network_type::FAKECHAIN)
   {
     size_t min_actual_mixin = std::numeric_limits<size_t>::max();
     size_t max_actual_mixin = 0;
@@ -3310,7 +3311,6 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       return false;
     }
 
-    // Grace period: temporarily allow ring size 11 (mixin 10) alongside 16 (mixin 15).
     if (min_actual_mixin != min_mixin && min_actual_mixin != 10)
     {
       MERROR_VER("Tx " << get_transaction_hash(tx) << " has invalid ring size (" << (min_actual_mixin + 1) << "), it should be " << (min_mixin + 1));

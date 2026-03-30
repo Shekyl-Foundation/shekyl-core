@@ -30,6 +30,7 @@
 
 #include "include_base_utils.h"
 using namespace epee;
+#include "cryptonote_basic/cryptonote_format_utils.h"
 #include "wallet/wallet2.h"
 
 using namespace cryptonote;
@@ -52,7 +53,9 @@ tx_source_entry::output_entry make_outptu_entr_for_gindex(size_t i, std::map<cry
 {
   tx_source_entry::output_entry oe;
   oe = i;
-  oe.second = std::get<txout_to_key>(txs[v[i].first].vout[v[i].second].target).key;
+  crypto::public_key foe_key;
+  get_output_public_key(txs[v[i].first].vout[v[i].second], foe_key);
+  oe.second = foe_key;
   return oe;
 }
 
@@ -108,7 +111,9 @@ bool make_tx(blockchain_storage& bch)
     //size_t real_index = src.outputs.size() ? (rand() % src.outputs.size() ):0;
     tx_output_entry real_oe;
     real_oe.first = td.m_global_output_index;
-    real_oe.second = std::get<txout_to_key>(td.m_tx.vout[td.m_internal_output_index].target).key;
+    crypto::public_key roe_key;
+    get_output_public_key(td.m_tx.vout[td.m_internal_output_index], roe_key);
+    real_oe.second = roe_key;
     auto interted_it = src.outputs.insert(it_to_insert, real_oe);
     src.real_out_tx_key = td.m_tx.tx_pub_key;
     src.real_output = interted_it - src.outputs.begin();

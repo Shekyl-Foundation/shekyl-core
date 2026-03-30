@@ -184,7 +184,9 @@ bool gen_rct_tx_validation_base::generate_with_full(std::vector<test_event_entry
       src.rct = true;
       for (int m = 0; m <= mixin; ++m) {
         rct::ctkey ctkey;
-        ctkey.dest = rct::pk2rct(std::get<txout_to_key>(rct_txes[rct_idx/4].vout[rct_idx&3].target).key);
+        crypto::public_key rct_out_pk;
+        cryptonote::get_output_public_key(rct_txes[rct_idx/4].vout[rct_idx&3], rct_out_pk);
+        ctkey.dest = rct::pk2rct(rct_out_pk);
         ctkey.mask = rct_txes[rct_idx/4].rct_signatures.outPk[rct_idx&3].mask;
         src.outputs.push_back(std::make_pair(global_rct_idx, ctkey));
         ++rct_idx;
@@ -202,7 +204,9 @@ bool gen_rct_tx_validation_base::generate_with_full(std::vector<test_event_entry
       src.mask = rct::identity();
       src.rct = false;
       for (int m = 0; m <= mixin; ++m) {
-        src.push_output(m, std::get<txout_to_key>(blocks[pre_rct_idx].miner_tx.vout[4].target).key, src.amount);
+        crypto::public_key pre_rct_pk;
+        cryptonote::get_output_public_key(blocks[pre_rct_idx].miner_tx.vout[4], pre_rct_pk);
+        src.push_output(m, pre_rct_pk, src.amount);
         ++pre_rct_idx;
       }
     }

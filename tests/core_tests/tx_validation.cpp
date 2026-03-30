@@ -675,8 +675,13 @@ bool gen_tx_txout_to_key_has_invalid_key::generate(std::vector<test_event_entry>
   builder.step2_fill_inputs(miner_account.get_keys(), sources);
   builder.step3_fill_outputs(destinations);
 
-  txout_to_key& out_to_key =  std::get<txout_to_key>(builder.m_tx.vout.front().target);
-  out_to_key.key = generate_invalid_pub_key();
+  auto& target = builder.m_tx.vout.front().target;
+  if (std::holds_alternative<txout_to_key>(target))
+    std::get<txout_to_key>(target).key = generate_invalid_pub_key();
+  else if (std::holds_alternative<txout_to_tagged_key>(target))
+    std::get<txout_to_tagged_key>(target).key = generate_invalid_pub_key();
+  else
+    return false;
 
   builder.step4_calc_hash();
   builder.step5_sign(sources);
