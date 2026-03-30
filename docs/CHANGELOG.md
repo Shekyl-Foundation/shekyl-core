@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Test suite cleanup for Shekyl HF1
+
+- **Removed 96 dead Borromean ringct tests**: All tests in
+  `tests/unit_tests/ringct.cpp` that exercised legacy Borromean range
+  proofs were removed. Shekyl HF1 rejects Borromean proofs at the
+  `genRctSimple` level. Retained 9 non-Borromean tests (CLSAG, HPow2,
+  d2h, d2b, key_ostream, zeroCommit, H, mul8).
+- **Updated transaction construction helpers to Bulletproofs+**: The
+  `test::make_transaction` helper (used by JSON serialization and ZMQ
+  tests) now constructs transactions with
+  `{ RangeProofPaddedBulletproof, 4 }` (BP+/CLSAG) instead of the
+  removed Borromean or unsupported BP v2 configs. Removed the obsolete
+  `bulletproof` parameter. Consolidated three JSON serialization tests
+  (RegularTransaction, RingctTransaction, BulletproofTransaction) into
+  one `BulletproofPlusTransaction` test. Fixes all 8 zmq_pub/zmq_server
+  test failures.
+- **Updated serialization round-trip test to BP+**: Changed
+  `Serialization.serializes_ringct_types` from `bp_version 2` (throws
+  "Unsupported BP version") to `bp_version 4` (Bulletproofs+). Updated
+  assertions from MGs to CLSAGs and from `bulletproofs` to
+  `bulletproofs_plus`.
+- **Fixed block_reward test expected values**: Updated emission curve
+  expectations to match Shekyl's `EMISSION_SPEED_FACTOR = 21` (120s
+  blocks) and per-block tail floor of
+  `FINAL_SUBSIDY_PER_MINUTE * target_minutes`.
+- **Rewrote mining_parity release multiplier test**: Replaced legacy
+  pre-Shekyl-NG equality assertion (which tested a non-existent version
+  0) with a test that verifies the release multiplier correctly scales
+  rewards above and below the tx volume baseline.
+- **Fixed Ubuntu 24.04 CI test runner**: Replaced `pip install` with
+  `apt install python3-*` packages to comply with PEP 668
+  (externally-managed-environment).
+
 ### GUI Wallet
 
 - New project: Shekyl GUI Wallet (`shekyl-gui-wallet`) at
@@ -30,7 +63,7 @@
 - Fixed genesis output-type validation to accept legacy `txout_to_key` only at `height == 0`, while preserving strict post-genesis HF1 output-type enforcement.
 - Fixed genesis reward validation to accept the hardcoded `GENESIS_TX` amount at `height == 0` while leaving post-genesis reward accounting unchanged.
 - Fixed startup edge case where long-term weight median calculations could evaluate with zero historical blocks during genesis initialization (`count == 0`), causing daemon boot failure on empty data dirs.
-- Updated genesis-construction helper (`build_genesis_coinbase_from_destinations`) to emit `CURRENT_TRANSACTION_VERSION` for future `GENESIS_TX` regeneration workflows.
+- Kept genesis-construction helper (`build_genesis_coinbase_from_destinations`) on coinbase `tx.version = 1` for compatibility with current static genesis tooling; runtime only permits this at `height == 0`.
 
 ### Testnet economy readiness checks
 

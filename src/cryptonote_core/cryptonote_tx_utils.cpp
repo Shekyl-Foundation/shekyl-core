@@ -603,8 +603,7 @@ namespace cryptonote
         "build_genesis_coinbase_from_destinations: destinations list is empty");
 
     transaction tx{};
-    // Emit modern genesis coinbase format for future regenesis operations.
-    tx.version = CURRENT_TRANSACTION_VERSION;
+    tx.version = 2;
     tx.unlock_time = CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
 
     txin_gen in;
@@ -635,9 +634,10 @@ namespace cryptonote
           "genesis coinbase: failed to derive_public_key for output " << i);
 
       tx_out out;
-      crypto::view_tag dummy_tag;
+      crypto::view_tag view_tag;
+      crypto::derive_view_tag(derivation, i, view_tag);
       cryptonote::set_tx_out(dest.amount, out_eph_public_key,
-                             false /* use_view_tags */, dummy_tag, out);
+                             true /* use_view_tags */, view_tag, out);
       tx.vout.push_back(out);
       summary_amounts += dest.amount;
     }

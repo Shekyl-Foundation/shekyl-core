@@ -539,9 +539,7 @@ TEST(Serialization, serializes_ringct_types)
   rct::ctkeyM ctkeym0, ctkeym1;
   rct::ecdhTuple ecdh0, ecdh1;
   rct::boroSig boro0, boro1;
-  rct::mgSig mg0, mg1;
   rct::clsag clsag0, clsag1;
-  rct::Bulletproof bp0, bp1;
   rct::rctSig s0, s1;
   cryptonote::transaction tx0, tx1;
 
@@ -655,35 +653,11 @@ TEST(Serialization, serializes_ringct_types)
   amount_keys.push_back(rct::hash_to_scalar(rct::zero()));
   rct::skpkGen(Sk, Pk);
   destinations.push_back(Pk);
-  //compute rct data with mixin 3
-  const rct::RCTConfig rct_config{ rct::RangeProofPaddedBulletproof, 2 };
+  //compute rct data with mixin 3 -- Bulletproofs+ (bp_version 4)
+  const rct::RCTConfig rct_config{ rct::RangeProofPaddedBulletproof, 4 };
   s0 = rct::genRctSimple(rct::zero(), sc, pc, destinations, inamounts, amounts, amount_keys, 0, 3, rct_config, hw::get_device("default"));
 
-  ASSERT_FALSE(s0.p.MGs.empty());
-  ASSERT_TRUE(s0.p.CLSAGs.empty());
-  mg0 = s0.p.MGs[0];
-  ASSERT_TRUE(serialization::dump_binary(mg0, blob));
-  ASSERT_TRUE(serialization::parse_binary(blob, mg1));
-  ASSERT_TRUE(mg0.ss.size() == mg1.ss.size());
-  for (size_t n = 0; n < mg0.ss.size(); ++n)
-  {
-    ASSERT_TRUE(mg0.ss[n] == mg1.ss[n]);
-  }
-  ASSERT_TRUE(mg0.cc == mg1.cc);
-
-  // mixRing and II are not serialized, they are meant to be reconstructed
-  ASSERT_TRUE(mg1.II.empty());
-
-  ASSERT_FALSE(s0.p.bulletproofs.empty());
-  bp0 = s0.p.bulletproofs.front();
-  ASSERT_TRUE(serialization::dump_binary(bp0, blob));
-  ASSERT_TRUE(serialization::parse_binary(blob, bp1));
-  bp1.V = bp0.V; // this is not saved, as it is reconstructed from other tx data
-  ASSERT_EQ(bp0, bp1);
-
-  const rct::RCTConfig rct_config_clsag{ rct::RangeProofPaddedBulletproof, 3 };
-  s0 = rct::genRctSimple(rct::zero(), sc, pc, destinations, inamounts, amounts, amount_keys, 0, 3, rct_config_clsag, hw::get_device("default"));
-
+  ASSERT_TRUE(s0.type == rct::RCTTypeBulletproofPlus);
   ASSERT_FALSE(s0.p.CLSAGs.empty());
   ASSERT_TRUE(s0.p.MGs.empty());
   clsag0 = s0.p.CLSAGs[0];
@@ -695,8 +669,16 @@ TEST(Serialization, serializes_ringct_types)
     ASSERT_TRUE(clsag0.s[n] == clsag1.s[n]);
   }
   ASSERT_TRUE(clsag0.c1 == clsag1.c1);
-  // I is not serialized, they are meant to be reconstructed
   ASSERT_TRUE(clsag0.D == clsag1.D);
+
+  ASSERT_TRUE(s0.p.bulletproofs.empty());
+  ASSERT_FALSE(s0.p.bulletproofs_plus.empty());
+  rct::BulletproofPlus bpp0 = s0.p.bulletproofs_plus.front();
+  rct::BulletproofPlus bpp1;
+  ASSERT_TRUE(serialization::dump_binary(bpp0, blob));
+  ASSERT_TRUE(serialization::parse_binary(blob, bpp1));
+  bpp1.V = bpp0.V; // this is not saved, as it is reconstructed from other tx data
+  ASSERT_EQ(bpp0, bpp1);
 }
 
 TEST(Serialization, portability_wallet)

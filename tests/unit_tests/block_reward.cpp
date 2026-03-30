@@ -53,23 +53,25 @@ namespace
 
   TEST_F(block_reward_and_already_generated_coins, handles_first_values)
   {
-    TEST_ALREADY_GENERATED_COINS(0, UINT64_C(1024000000000));
-    TEST_ALREADY_GENERATED_COINS(m_block_reward, UINT64_C(1023999755859));
-    TEST_ALREADY_GENERATED_COINS(UINT64_C(2756434948434199641), UINT64_C(366814696208));
+    TEST_ALREADY_GENERATED_COINS(0, UINT64_C(2048000000000));
+    TEST_ALREADY_GENERATED_COINS(m_block_reward, UINT64_C(2047999023437));
+    TEST_ALREADY_GENERATED_COINS(UINT64_C(2756434948434199641), UINT64_C(733629392416));
   }
 
   TEST_F(block_reward_and_already_generated_coins, correctly_steps_from_2_to_1)
   {
-    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY - ((2 << 20) + 1), FINAL_SUBSIDY_PER_MINUTE);
-    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY -  (2 << 20)     , FINAL_SUBSIDY_PER_MINUTE);
-    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY - ((2 << 20) - 1), FINAL_SUBSIDY_PER_MINUTE);
+    const uint64_t tail_per_block = FINAL_SUBSIDY_PER_MINUTE * (DIFFICULTY_TARGET_V2 / 60);
+    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY - ((2 << 20) + 1), tail_per_block);
+    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY -  (2 << 20)     , tail_per_block);
+    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY - ((2 << 20) - 1), tail_per_block);
   }
 
   TEST_F(block_reward_and_already_generated_coins, handles_max)
   {
-    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY - ((1 << 20) + 1), FINAL_SUBSIDY_PER_MINUTE);
-    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY -  (1 << 20)     , FINAL_SUBSIDY_PER_MINUTE);
-    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY - ((1 << 20) - 1), FINAL_SUBSIDY_PER_MINUTE);
+    const uint64_t tail_per_block = FINAL_SUBSIDY_PER_MINUTE * (DIFFICULTY_TARGET_V2 / 60);
+    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY - ((1 << 20) + 1), tail_per_block);
+    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY -  (1 << 20)     , tail_per_block);
+    TEST_ALREADY_GENERATED_COINS(MONEY_SUPPLY - ((1 << 20) - 1), tail_per_block);
   }
 
   //--------------------------------------------------------------------------------------------------------------------

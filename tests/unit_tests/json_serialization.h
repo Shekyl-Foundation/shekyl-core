@@ -38,6 +38,5 @@ namespace test
       cryptonote::account_keys const& from,
       std::vector<cryptonote::transaction> const& sources,
       std::vector<cryptonote::account_public_address> const& destinations,
-      bool rct,
-      bool bulletproof);
+      bool rct);
 }
