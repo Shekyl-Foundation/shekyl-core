@@ -23,6 +23,14 @@
   "Unsupported BP version") to `bp_version 4` (Bulletproofs+). Updated
   assertions from MGs to CLSAGs and from `bulletproofs` to
   `bulletproofs_plus`.
+- **Removed legacy Monero-era core/perf test executions**: Stopped running
+  deprecated Borromean/pre-RCT/fork-transition test generators in
+  `core_tests` and removed Borromean/MLSAG/range-proof performance test
+  invocations and defaults, so CI validates HF1-era behavior only.
+- **Hardened block-weight test contract for HF1 semantics**: `block_weight`
+  comparison now enforces deterministic `H/BW/LTBW` parity and EMBW floor
+  invariants instead of byte-identical legacy model output, preventing
+  false failures from non-consensus median implementation details.
 - **Fixed block_reward test expected values**: Updated emission curve
   expectations to match Shekyl's `EMISSION_SPEED_FACTOR = 21` (120s
   blocks) and per-block tail floor of
@@ -59,8 +67,8 @@
 
 ### Genesis initialization compatibility
 
-- Regenerated testnet `GENESIS_TX` to a modern coinbase format (`tx.version = 2`) with tagged outputs, removing the need for v1/output-type genesis compatibility exceptions on testnet.
-- Removed temporary legacy genesis acceptance paths so miner transaction validation remains v1-free and strict (`tx.version > 1`) at all heights.
+- Regenerated `GENESIS_TX` for mainnet, testnet, and stagenet to modern coinbase format (`tx.version = 2`) with tagged outputs.
+- Removed all legacy genesis compatibility exceptions and enforced strict coinbase version checks (`tx.version > 1`) across all network types, including `FAKECHAIN`.
 - Fixed genesis reward validation to accept the hardcoded `GENESIS_TX` amount at `height == 0` while leaving post-genesis reward accounting unchanged.
 - Fixed startup edge case where long-term weight median calculations could evaluate with zero historical blocks during genesis initialization (`count == 0`), causing daemon boot failure on empty data dirs.
 - Updated genesis-construction helper (`build_genesis_coinbase_from_destinations`) to emit `tx.version = 2` with view-tagged outputs for current HF1 expectations.

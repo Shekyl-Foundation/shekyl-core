@@ -36,7 +36,7 @@
 
 #include "multi_tx_test_base.h"
 
-template<size_t a_in_count, size_t a_out_count, bool a_rct, rct::RangeProofType range_proof_type = rct::RangeProofBorromean, int bp_version = 2>
+template<size_t a_in_count, size_t a_out_count, bool a_rct, rct::RangeProofType range_proof_type = rct::RangeProofPaddedBulletproof, int bp_version = 3>
 class test_construct_tx : private multi_tx_test_base<a_in_count>
 {
   static_assert(0 < a_in_count, "in_count must be greater than 0");

@@ -40,7 +40,7 @@
 
 #include "multi_tx_test_base.h"
 
-template<size_t a_ring_size, size_t a_outputs, bool a_rct, rct::RangeProofType range_proof_type = rct::RangeProofBorromean, int bp_version = 2>
+template<size_t a_ring_size, size_t a_outputs, bool a_rct, rct::RangeProofType range_proof_type = rct::RangeProofPaddedBulletproof, int bp_version = 3>
 class test_check_tx_signature : private multi_tx_test_base<a_ring_size>
 {
   static_assert(0 < a_ring_size, "ring_size must be greater than 0");
