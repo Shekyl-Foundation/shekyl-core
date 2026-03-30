@@ -1127,9 +1127,13 @@ elseif(Boost_FOUND)
 
   message(STATUS "Boost components: ${BOOST_COMPONENTS}")
 
-  # Find required Boost libraries (preserve CONFIG mode to avoid SO-version mismatches)
+  # Find required Boost libraries (preserve CONFIG mode to avoid SO-version mismatches).
+  # When building with depends, force MODULE mode because the depends-built Boost
+  # ships config files whose variant checks reject cross-compiled Darwin libraries.
   if(_BOOST_USE_CONFIG)
     find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED CONFIG COMPONENTS ${BOOST_COMPONENTS})
+  elseif(DEPENDS)
+    find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED MODULE COMPONENTS ${BOOST_COMPONENTS})
   else()
     find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED COMPONENTS ${BOOST_COMPONENTS})
   endif()
