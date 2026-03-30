@@ -56,6 +56,7 @@
 
 #include "chaingen.h"
 #include "device/device.hpp"
+#include "ringct/rctOps.h"
 using namespace std;
 
 using namespace epee;
@@ -464,20 +465,23 @@ bool init_output_indices(map_output_idx_t& outs, std::map<uint64_t, std::vector<
             for (size_t j = 0; j < tx.vout.size(); ++j) {
                 const tx_out &out = tx.vout[j];
 
+                bool is_miner = (i == 0);
                 output_index oi(out.target, out.amount, std::get<txin_gen>(*blk.miner_tx.vin.begin()).height, i, j, &blk, vtx[i]);
-                oi.set_rct(tx.version == 2);
+                oi.set_rct(tx.version >= 2);
                 oi.unlock_time = tx.unlock_time;
-                oi.is_coin_base = i == 0;
+                oi.is_coin_base = is_miner;
 
                 if (std::holds_alternative<txout_to_key>(out.target) || std::holds_alternative<txout_to_tagged_key>(out.target)) {
-                    outs[out.amount].push_back(oi);
-                    size_t tx_global_idx = outs[out.amount].size() - 1;
-                    outs[out.amount][tx_global_idx].idx = tx_global_idx;
-                    // Is out to me?
+                    // Mirror the DB's amount-bucket logic: v2 coinbase outputs
+                    // are stored under amount=0 with a zeroCommit commitment.
+                    uint64_t amount_key = (is_miner && tx.version == 2) ? 0 : out.amount;
+                    outs[amount_key].push_back(oi);
+                    size_t tx_global_idx = outs[amount_key].size() - 1;
+                    outs[amount_key][tx_global_idx].idx = tx_global_idx;
                     crypto::public_key output_public_key;
                     cryptonote::get_output_public_key(out, output_public_key);
                     if (is_out_to_acc(from.get_keys(), output_public_key, get_tx_pub_key_from_extra(tx), get_additional_tx_pub_keys_from_extra(tx), j)) {
-                        outs_mine[out.amount].push_back(tx_global_idx);
+                        outs_mine[amount_key].push_back(tx_global_idx);
                     }
                 }
             }
@@ -575,7 +579,6 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
     if (!init_spent_output_indices(outs, outs_mine, blockchain, mtx, from))
         return false;
 
-    // Iterate in reverse is more efficiency
     uint64_t sources_amount = 0;
     bool sources_found = false;
     BOOST_REVERSE_FOREACH(const map_output_t::value_type o, outs_mine)
@@ -586,24 +589,47 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
             const output_index& oi = outs[o.first][sender_out];
             if (oi.spent)
                 continue;
-            if (oi.rct && !oi.is_coin_base)
-                continue;
 
             cryptonote::tx_source_entry ts;
-            ts.amount = oi.amount;
             ts.real_output_in_tx_index = oi.out_no;
-            ts.real_out_tx_key = get_tx_pub_key_from_extra(*oi.p_tx); // incoming tx public key
+            ts.real_out_tx_key = get_tx_pub_key_from_extra(*oi.p_tx);
+            ts.rct = true;
+
+            if (oi.is_coin_base) {
+                ts.amount = oi.amount;
+                ts.mask = rct::identity();
+            } else {
+                // Decrypt RCT amount and mask using the receiver's view key
+                const transaction &src_tx = *oi.p_tx;
+                crypto::key_derivation derivation;
+                if (!crypto::generate_key_derivation(ts.real_out_tx_key, from.get_keys().m_view_secret_key, derivation))
+                    continue;
+                crypto::secret_key scalar;
+                crypto::derivation_to_scalar(derivation, oi.out_no, scalar);
+
+                if (src_tx.rct_signatures.type == rct::RCTTypeNull)
+                    continue;
+
+                rct::ecdhTuple ecdh_info = src_tx.rct_signatures.ecdhInfo[oi.out_no];
+                rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar),
+                    src_tx.rct_signatures.type == rct::RCTTypeBulletproofPlus);
+
+                ts.amount = rct::h2d(ecdh_info.amount);
+                ts.mask = ecdh_info.mask;
+
+                // Verify the commitment: C = mask*G + amount*H
+                rct::key C_expected = rct::commit(ts.amount, ts.mask);
+                if (!rct::equalKeys(C_expected, src_tx.rct_signatures.outPk[oi.out_no].mask)) {
+                    LOG_ERROR("RCT output commitment mismatch for output " << oi.out_no);
+                    continue;
+                }
+            }
+
             size_t realOutput;
             if (!fill_output_entries(outs[o.first], sender_out, nmix, realOutput, ts.outputs))
               continue;
 
             ts.real_output = realOutput;
-            ts.rct = false;
-            ts.mask = rct::identity();
-
-            rct::key comm = rct::zeroCommit(ts.amount);
-            for(auto & ot : ts.outputs)
-              ot.second.mask = comm;
 
             sources.push_back(ts);
 
@@ -1083,7 +1109,7 @@ bool construct_tx_to_key(cryptonote::transaction& tx,
   return construct_tx_rct(from.get_keys(), sources, all_destinations, get_address(from), std::vector<uint8_t>(), tx, rct, range_proof_type, bp_version);
 }
 
-bool construct_tx_rct(const cryptonote::account_keys& sender_account_keys, std::vector<cryptonote::tx_source_entry>& sources, const std::vector<cryptonote::tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, std::vector<uint8_t> extra, cryptonote::transaction& tx, bool rct, rct::RangeProofType range_proof_type, int bp_version)
+bool construct_tx_rct(const cryptonote::account_keys& sender_account_keys, std::vector<cryptonote::tx_source_entry>& sources, const std::vector<cryptonote::tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, std::vector<uint8_t> extra, cryptonote::transaction& tx, bool rct, rct::RangeProofType range_proof_type, int bp_version, uint8_t hf_version)
 {
   std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
   subaddresses[sender_account_keys.m_account_address.m_spend_public_key] = {0, 0};
@@ -1091,7 +1117,7 @@ bool construct_tx_rct(const cryptonote::account_keys& sender_account_keys, std::
   std::vector<crypto::secret_key> additional_tx_keys;
   std::vector<tx_destination_entry> destinations_copy = destinations;
   rct::RCTConfig rct_config = {range_proof_type, bp_version};
-  return construct_tx_and_get_tx_key(sender_account_keys, subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, additional_tx_keys, rct, rct_config, true);
+  return construct_tx_and_get_tx_key(sender_account_keys, subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, additional_tx_keys, rct, rct_config, true, hf_version);
 }
 
 transaction construct_tx_with_fee(std::vector<test_event_entry>& events, const block& blk_head,

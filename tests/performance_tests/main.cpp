@@ -107,39 +107,7 @@ int main(int argc, char** argv)
   performance_timer timer;
   timer.start();
 
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 1, 1, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 1, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 1, 10, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 1, 100, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 1, 1000, false);
-
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 1, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 10, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 100, false);
-
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 1, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 10, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 100, false);
-
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 1, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 10, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 100, false);
-
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 1, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 2, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 10, true);
-
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 1, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 2, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 10, true);
-
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 1, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 2, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 10, true);
-
+  // v3 RCT + BP+ transaction construction benchmarks
   TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 1, true, rct::RangeProofPaddedBulletproof, 4);
   TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 2, true, rct::RangeProofPaddedBulletproof, 4);
   TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 10, true, rct::RangeProofPaddedBulletproof, 4);
@@ -152,26 +120,13 @@ int main(int argc, char** argv)
   TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 2, true, rct::RangeProofPaddedBulletproof, 4);
   TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 10, true, rct::RangeProofPaddedBulletproof, 4);
 
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 1, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 2, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 10, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 100, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 2, 10, false);
-
+  // v3 RCT + BP+ signature verification benchmarks
   TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 2, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 2, true, rct::RangeProofMultiOutputBulletproof, 4);
   TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 10, 2, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 10, 2, true, rct::RangeProofMultiOutputBulletproof, 4);
   TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 100, 2, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 100, 2, true, rct::RangeProofMultiOutputBulletproof, 4);
   TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 10, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 10, true, rct::RangeProofMultiOutputBulletproof, 4);
 
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature_aggregated_bulletproofs, 2, 2, 64);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature_aggregated_bulletproofs, 10, 2, 64);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature_aggregated_bulletproofs, 100, 2, 64);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature_aggregated_bulletproofs, 2, 10, 64);
-
+  // Aggregated BP+ verification benchmarks
   TEST_PERFORMANCE4(filter, p, test_check_tx_signature_aggregated_bulletproofs, 2, 2, 62, 4);
   TEST_PERFORMANCE4(filter, p, test_check_tx_signature_aggregated_bulletproofs, 10, 2, 62, 4);
   TEST_PERFORMANCE4(filter, p, test_check_tx_signature_aggregated_bulletproofs, 2, 2, 56, 16);

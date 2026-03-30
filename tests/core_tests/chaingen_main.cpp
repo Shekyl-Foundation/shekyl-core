@@ -184,47 +184,15 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_double_spend_in_alt_chain_in_different_blocks<true>);
 
     GENERATE_AND_PLAY(gen_uint_overflow_1);
-    GENERATE_AND_PLAY(gen_uint_overflow_2);
 
     GENERATE_AND_PLAY(gen_block_reward);
 
-    GENERATE_AND_PLAY(gen_v2_tx_mixable_0_mixin);
-    GENERATE_AND_PLAY(gen_v2_tx_mixable_low_mixin);
-//    GENERATE_AND_PLAY(gen_v2_tx_unmixable_only);
-//    GENERATE_AND_PLAY(gen_v2_tx_unmixable_one);
-//    GENERATE_AND_PLAY(gen_v2_tx_unmixable_two);
-    GENERATE_AND_PLAY(gen_v2_tx_dust);
+    // Legacy Monero-era v2 mixin/dust, RCT, Borromean, and old BP tests removed.
+    // Shekyl enforces v3 (with PQC auth) for all non-coinbase transactions from genesis.
 
-    // Legacy Monero-era RCT/Borromean transition tests removed for Shekyl HF1.
-
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_22_1_2);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_22_1_2_many_inputs);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_22_2_1);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_33_1_23);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_33_3_21);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_23_1_2);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_23_1_3);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_23_2_1);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_23_2_3);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_45_1_234);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_45_4_135_many_inputs);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_89_3_1245789);
-    GENERATE_AND_PLAY(gen_multisig_tx_invalid_23_1__no_threshold);
-    GENERATE_AND_PLAY(gen_multisig_tx_invalid_45_5_23_no_threshold);
-    GENERATE_AND_PLAY(gen_multisig_tx_invalid_22_1__no_threshold);
-    GENERATE_AND_PLAY(gen_multisig_tx_invalid_33_1__no_threshold);
-    GENERATE_AND_PLAY(gen_multisig_tx_invalid_33_1_2_no_threshold);
-    GENERATE_AND_PLAY(gen_multisig_tx_invalid_33_1_3_no_threshold);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_24_1_2);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_24_1_2_many_inputs);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_25_1_2);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_25_1_2_many_inputs);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_48_1_234);
-    GENERATE_AND_PLAY(gen_multisig_tx_valid_48_1_234_many_inputs);
-    GENERATE_AND_PLAY(gen_multisig_tx_invalid_24_1_no_signers);
-    GENERATE_AND_PLAY(gen_multisig_tx_invalid_25_1_no_signers);
-    GENERATE_AND_PLAY(gen_multisig_tx_invalid_48_1_no_signers);
-    GENERATE_AND_PLAY(gen_multisig_tx_invalid_48_1_23_no_threshold);
+    // Multisig tests disabled: PQC keys are incompatible with multisig (account.cpp
+    // clears m_pqc_secret_key in make_multisig). Since v3 transactions require PQC auth,
+    // multisig spending needs a PQC-multisig protocol before these tests can be re-enabled.
 
     // HF1 policy: only BP+ (Bulletproofs Plus) range proofs are accepted from genesis.
     // Legacy BP/CLSAG/Borromean acceptance-path tests removed.

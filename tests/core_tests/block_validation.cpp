@@ -339,7 +339,13 @@ bool gen_block_miner_tx_has_2_in::generate(std::vector<test_event_entry>& events
   CHECK_AND_ASSERT_MES(cryptonote::get_output_public_key(blk_0.miner_tx.vout[0], blk0_out_key), false, "Invalid miner output key type");
   se.push_output(0, blk0_out_key, se.amount);
   se.real_output = 0;
-  se.rct = false;
+  se.rct = true;
+  se.mask = rct::identity();
+  {
+    rct::key comm = rct::zeroCommit(se.amount);
+    for (auto &ot : se.outputs)
+      ot.second.mask = comm;
+  }
   se.real_out_tx_key = get_tx_pub_key_from_extra(blk_0.miner_tx);
   se.real_output_in_tx_index = 0;
   std::vector<tx_source_entry> sources;
@@ -352,7 +358,7 @@ bool gen_block_miner_tx_has_2_in::generate(std::vector<test_event_entry>& events
   destinations.push_back(de);
 
   transaction tmp_tx;
-  if (!construct_tx(miner_account.get_keys(), sources, destinations, std::nullopt, std::vector<uint8_t>(), tmp_tx))
+  if (!construct_tx_rct(miner_account.get_keys(), sources, destinations, miner_account.get_keys().m_account_address, std::vector<uint8_t>(), tmp_tx))
     return false;
 
   MAKE_MINER_TX_MANUALLY(miner_tx, blk_0);
@@ -384,7 +390,13 @@ bool gen_block_miner_tx_with_txin_to_key::generate(std::vector<test_event_entry>
   CHECK_AND_ASSERT_MES(cryptonote::get_output_public_key(blk_1.miner_tx.vout[0], blk1_out_key), false, "Invalid miner output key type");
   se.push_output(0, blk1_out_key, se.amount);
   se.real_output = 0;
-  se.rct = false;
+  se.rct = true;
+  se.mask = rct::identity();
+  {
+    rct::key comm = rct::zeroCommit(se.amount);
+    for (auto &ot : se.outputs)
+      ot.second.mask = comm;
+  }
   se.real_out_tx_key = get_tx_pub_key_from_extra(blk_1.miner_tx);
   se.real_output_in_tx_index = 0;
   std::vector<tx_source_entry> sources;
@@ -397,7 +409,7 @@ bool gen_block_miner_tx_with_txin_to_key::generate(std::vector<test_event_entry>
   destinations.push_back(de);
 
   transaction tmp_tx;
-  if (!construct_tx(miner_account.get_keys(), sources, destinations, std::nullopt, std::vector<uint8_t>(), tmp_tx))
+  if (!construct_tx_rct(miner_account.get_keys(), sources, destinations, miner_account.get_keys().m_account_address, std::vector<uint8_t>(), tmp_tx))
     return false;
 
   MAKE_MINER_TX_MANUALLY(miner_tx, blk_1);
@@ -477,7 +489,9 @@ bool gen_block_miner_tx_has_out_to_alice::generate(std::vector<test_event_entry>
   tx_out out_to_alice;
   out_to_alice.amount = miner_tx.vout[0].amount / 2;
   miner_tx.vout[0].amount -= out_to_alice.amount;
-  out_to_alice.target = txout_to_key(out_eph_public_key);
+  crypto::view_tag vt;
+  crypto::derive_view_tag(derivation, 1, vt);
+  cryptonote::set_tx_out(out_to_alice.amount, out_eph_public_key, true, vt, out_to_alice);
   miner_tx.vout.push_back(out_to_alice);
 
   block blk_1;

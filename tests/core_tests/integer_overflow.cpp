@@ -55,21 +55,6 @@ namespace
     miner_tx.vout.push_back(out2);
   }
 
-  void append_tx_source_entry(std::vector<cryptonote::tx_source_entry>& sources, const transaction& tx, size_t out_idx)
-  {
-    cryptonote::tx_source_entry se;
-    se.amount = tx.vout[out_idx].amount;
-    crypto::public_key io_out_key;
-    cryptonote::get_output_public_key(tx.vout[out_idx], io_out_key);
-    se.push_output(0, io_out_key, se.amount);
-    se.real_output = 0;
-    se.rct = false;
-    se.real_out_tx_key = get_tx_pub_key_from_extra(tx);
-    se.real_out_additional_tx_keys = get_additional_tx_pub_keys_from_extra(tx);
-    se.real_output_in_tx_index = out_idx;
-
-    sources.push_back(se);
-  }
 }
 
 //======================================================================================================================
@@ -140,73 +125,6 @@ bool gen_uint_overflow_1::generate(std::vector<test_event_entry>& events) const
   return true;
 }
 
-//======================================================================================================================
-
-bool gen_uint_overflow_2::generate(std::vector<test_event_entry>& events) const
-{
-  uint64_t ts_start = 1338224400;
-
-  GENERATE_ACCOUNT(miner_account);
-  MAKE_GENESIS_BLOCK(events, blk_0, miner_account, ts_start);
-  MAKE_ACCOUNT(events, bob_account);
-  MAKE_ACCOUNT(events, alice_account);
-  REWIND_BLOCKS(events, blk_0r, blk_0, miner_account);
-  DO_CALLBACK(events, "mark_last_valid_block");
-
-  // Problem 1. Regular tx outputs overflow
-  std::vector<cryptonote::tx_source_entry> sources;
-  for (size_t i = 0; i < blk_0.miner_tx.vout.size(); ++i)
-  {
-    if (TESTS_DEFAULT_FEE < blk_0.miner_tx.vout[i].amount)
-    {
-      append_tx_source_entry(sources, blk_0.miner_tx, i);
-      break;
-    }
-  }
-  if (sources.empty())
-  {
-    return false;
-  }
-
-  std::vector<cryptonote::tx_destination_entry> destinations;
-  const account_public_address& bob_addr = bob_account.get_keys().m_account_address;
-  destinations.push_back(tx_destination_entry(MONEY_SUPPLY, bob_addr, false));
-  destinations.push_back(tx_destination_entry(MONEY_SUPPLY - 1, bob_addr, false));
-  // sources.front().amount = destinations[0].amount + destinations[2].amount + destinations[3].amount + TESTS_DEFAULT_FEE
-  destinations.push_back(tx_destination_entry(sources.front().amount - MONEY_SUPPLY - MONEY_SUPPLY + 1 - TESTS_DEFAULT_FEE, bob_addr, false));
-
-  cryptonote::transaction tx_1;
-  if (!construct_tx(miner_account.get_keys(), sources, destinations, std::nullopt, std::vector<uint8_t>(), tx_1))
-    return false;
-  events.push_back(tx_1);
-
-  MAKE_NEXT_BLOCK_TX1(events, blk_1, blk_0r, miner_account, tx_1);
-  REWIND_BLOCKS(events, blk_1r, blk_1, miner_account);
-
-  // Problem 2. Regular tx inputs overflow
-  sources.clear();
-  for (size_t i = 0; i < tx_1.vout.size(); ++i)
-  {
-    auto& tx_1_out = tx_1.vout[i];
-    if (tx_1_out.amount < MONEY_SUPPLY - 1)
-      continue;
-
-    append_tx_source_entry(sources, tx_1, i);
-  }
-
-  destinations.clear();
-  cryptonote::tx_destination_entry de;
-  de.addr = alice_account.get_keys().m_account_address;
-  de.amount = MONEY_SUPPLY - TESTS_DEFAULT_FEE;
-  destinations.push_back(de);
-  destinations.push_back(de);
-
-  cryptonote::transaction tx_2;
-  if (!construct_tx(bob_account.get_keys(), sources, destinations, std::nullopt, std::vector<uint8_t>(), tx_2))
-    return false;
-  events.push_back(tx_2);
-
-  MAKE_NEXT_BLOCK_TX1(events, blk_2, blk_1r, miner_account, tx_2);
-
-  return true;
-}
+// gen_uint_overflow_2 removed: non-RCT amount overflow vulnerability is prevented
+// by BP+ rangeproofs in v3 transactions. The miner tx overflow test remains in
+// gen_uint_overflow_1 above.

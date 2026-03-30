@@ -137,6 +137,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
     rvv.reserve(static_cast<size_t>(std::distance(tx_begin, tx_end)));
 
     const size_t max_tx_version = hf_version < HF_VERSION_DYNAMIC_FEE ? 1 : (hf_version >= HF_VERSION_SHEKYL_NG ? 3 : 2);
+    const size_t min_tx_version = hf_version >= HF_VERSION_SHEKYL_NG ? 3 : (hf_version >= HF_VERSION_DYNAMIC_FEE ? 2 : 1);
 
     const size_t tx_weight_limit = get_transaction_weight_limit(hf_version);
 
@@ -154,7 +155,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
         }
 
         // Rule 2 & 3
-        if (tx.version == 0 || tx.version > max_tx_version)
+        if (tx.version < min_tx_version || tx.version > max_tx_version)
         {
             tvc.m_verifivation_failed = true;
             return false;

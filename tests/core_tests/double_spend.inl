@@ -126,18 +126,25 @@ bool gen_double_spend_in_tx<txs_keeped_by_block>::generate(std::vector<test_even
   INIT_DOUBLE_SPEND_TEST();
   DO_CALLBACK(events, "mark_last_valid_block");
 
+  // Use a coinbase output (known amount, identity mask) for the double-spend source.
+  // blk_0's miner tx output is spendable after REWIND_BLOCKS.
   std::vector<cryptonote::tx_source_entry> sources;
   cryptonote::tx_source_entry se;
-  se.amount = tx_0.vout[0].amount;
+  se.amount = blk_0.miner_tx.vout[0].amount;
   crypto::public_key ds_out_key;
-  cryptonote::get_output_public_key(tx_0.vout[0], ds_out_key);
+  cryptonote::get_output_public_key(blk_0.miner_tx.vout[0], ds_out_key);
   se.push_output(0, ds_out_key, se.amount);
   se.real_output = 0;
-  se.rct = false;
-  se.real_out_tx_key = get_tx_pub_key_from_extra(tx_0);
+  se.rct = true;
+  se.mask = rct::identity();
+  {
+    rct::key comm = rct::zeroCommit(se.amount);
+    for (auto &ot : se.outputs)
+      ot.second.mask = comm;
+  }
+  se.real_out_tx_key = get_tx_pub_key_from_extra(blk_0.miner_tx);
   se.real_output_in_tx_index = 0;
   sources.push_back(se);
-  // Double spend!
   sources.push_back(se);
 
   cryptonote::tx_destination_entry de;
@@ -147,7 +154,7 @@ bool gen_double_spend_in_tx<txs_keeped_by_block>::generate(std::vector<test_even
   destinations.push_back(de);
 
   cryptonote::transaction tx_1;
-  if (!construct_tx(bob_account.get_keys(), sources, destinations, std::nullopt, std::vector<uint8_t>(), tx_1))
+  if (!construct_tx_rct(miner_account.get_keys(), sources, destinations, miner_account.get_keys().m_account_address, std::vector<uint8_t>(), tx_1))
     return false;
 
   SET_EVENT_VISITOR_SETT(events, txs_keeped_by_block ? event_visitor_settings::set_txs_keeped_by_block : 0);

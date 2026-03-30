@@ -453,7 +453,8 @@ bool construct_tx_rct(const cryptonote::account_keys& sender_account_keys,
     const std::vector<cryptonote::tx_destination_entry>& destinations,
     const std::optional<cryptonote::account_public_address>& change_addr,
     std::vector<uint8_t> extra, cryptonote::transaction& tx,
-    bool rct=false, rct::RangeProofType range_proof_type=rct::RangeProofBorromean, int bp_version = 0);
+    bool rct=true, rct::RangeProofType range_proof_type=rct::RangeProofPaddedBulletproof, int bp_version = 4,
+    uint8_t hf_version = 1);
 
 
 uint64_t num_blocks(const std::vector<test_event_entry>& events);
