@@ -30,6 +30,7 @@
 
 #include <unordered_set>
 #include <random>
+#include <iostream>
 #include "include_base_utils.h"
 #include "string_tools.h"
 using namespace epee;
@@ -643,11 +644,17 @@ namespace cryptonote
     }
 
     tx.invalidate_hashes();
+    tx.rct_signatures.type = rct::RCTTypeNull;
 
     blobdata blob;
     if (!tx_to_blob(tx, blob))
     {
       LOG_ERROR("genesis coinbase: tx_to_blob failed");
+      std::cerr << "genesis coinbase: tx_to_blob failed (version=" << tx.version
+                << ", vin=" << tx.vin.size()
+                << ", vout=" << tx.vout.size()
+                << ", rct_type=" << static_cast<unsigned>(tx.rct_signatures.type)
+                << ")\n";
       return false;
     }
 

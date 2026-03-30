@@ -1329,9 +1329,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   LOG_PRINT_L3("Blockchain::" << __func__);
   CHECK_AND_ASSERT_MES(b.miner_tx.vin.size() == 1, false, "coinbase transaction in the block has no inputs");
   CHECK_AND_ASSERT_MES(std::holds_alternative<txin_gen>(b.miner_tx.vin[0]), false, "coinbase transaction in the block has the wrong type");
-  const bool is_genesis_block = (height == 0);
-  const bool is_accepted_genesis_legacy_v1 = is_genesis_block && b.miner_tx.version == 1;
-  CHECK_AND_ASSERT_MES(b.miner_tx.version > 1 || is_accepted_genesis_legacy_v1, false, "Invalid coinbase transaction version");
+  CHECK_AND_ASSERT_MES(b.miner_tx.version > 1, false, "Invalid coinbase transaction version");
 
   // for v2 txes (ringct), we only accept empty rct signatures for miner transactions,
   if (b.miner_tx.version >= 2)
@@ -1354,24 +1352,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
     return false;
   }
 
-  if (is_genesis_block)
-  {
-    // Allow legacy genesis artifacts that still use txout_to_key while keeping
-    // all post-genesis output-type rules unchanged.
-    for (const auto &o: b.miner_tx.vout)
-    {
-      CHECK_AND_ASSERT_MES(
-        std::holds_alternative<txout_to_key>(o.target) ||
-        std::holds_alternative<txout_to_tagged_key>(o.target) ||
-        std::holds_alternative<txout_to_staked_key>(o.target),
-        false,
-        "miner transaction has invalid output type(s) in block " << get_block_hash(b));
-    }
-  }
-  else
-  {
-    CHECK_AND_ASSERT_MES(check_output_types(b.miner_tx, hf_version), false, "miner transaction has invalid output type(s) in block " << get_block_hash(b));
-  }
+  CHECK_AND_ASSERT_MES(check_output_types(b.miner_tx, hf_version), false, "miner transaction has invalid output type(s) in block " << get_block_hash(b));
 
   return true;
 }

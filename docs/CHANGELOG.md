@@ -59,11 +59,12 @@
 
 ### Genesis initialization compatibility
 
-- Fixed daemon initialization on fresh data directories by allowing legacy `tx.version == 1` coinbase only for the genesis block (`height == 0`), while keeping post-genesis v1 rejection in place.
-- Fixed genesis output-type validation to accept legacy `txout_to_key` only at `height == 0`, while preserving strict post-genesis HF1 output-type enforcement.
+- Regenerated testnet `GENESIS_TX` to a modern coinbase format (`tx.version = 2`) with tagged outputs, removing the need for v1/output-type genesis compatibility exceptions on testnet.
+- Removed temporary legacy genesis acceptance paths so miner transaction validation remains v1-free and strict (`tx.version > 1`) at all heights.
 - Fixed genesis reward validation to accept the hardcoded `GENESIS_TX` amount at `height == 0` while leaving post-genesis reward accounting unchanged.
 - Fixed startup edge case where long-term weight median calculations could evaluate with zero historical blocks during genesis initialization (`count == 0`), causing daemon boot failure on empty data dirs.
-- Kept genesis-construction helper (`build_genesis_coinbase_from_destinations`) on coinbase `tx.version = 1` for compatibility with current static genesis tooling; runtime only permits this at `height == 0`.
+- Updated genesis-construction helper (`build_genesis_coinbase_from_destinations`) to emit `tx.version = 2` with view-tagged outputs for current HF1 expectations.
+- Added canonical root build command `make genesis-builder` (using the main release build dir with `GENESIS_TOOL_SRC_DIR`) to avoid split/ambiguous genesis-builder binaries across multiple build trees.
 
 ### Testnet economy readiness checks
 
