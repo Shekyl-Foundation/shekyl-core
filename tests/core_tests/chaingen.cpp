@@ -472,8 +472,6 @@ bool init_output_indices(map_output_idx_t& outs, std::map<uint64_t, std::vector<
                 oi.is_coin_base = is_miner;
 
                 if (std::holds_alternative<txout_to_key>(out.target) || std::holds_alternative<txout_to_tagged_key>(out.target)) {
-                    // Mirror the DB's amount-bucket logic: v2 coinbase outputs
-                    // are stored under amount=0 with a zeroCommit commitment.
                     uint64_t amount_key = (is_miner && tx.version == 2) ? 0 : out.amount;
                     outs[amount_key].push_back(oi);
                     size_t tx_global_idx = outs[amount_key].size() - 1;
@@ -482,6 +480,20 @@ bool init_output_indices(map_output_idx_t& outs, std::map<uint64_t, std::vector<
                     cryptonote::get_output_public_key(out, output_public_key);
                     if (is_out_to_acc(from.get_keys(), output_public_key, get_tx_pub_key_from_extra(tx), get_additional_tx_pub_keys_from_extra(tx), j)) {
                         outs_mine[amount_key].push_back(tx_global_idx);
+                        // Decrypt RCT amount for non-coinbase outputs
+                        if (!is_miner && tx.rct_signatures.type != rct::RCTTypeNull
+                            && j < tx.rct_signatures.ecdhInfo.size()) {
+                            crypto::key_derivation derivation;
+                            crypto::public_key tx_pub = get_tx_pub_key_from_extra(tx);
+                            if (crypto::generate_key_derivation(tx_pub, from.get_keys().m_view_secret_key, derivation)) {
+                                crypto::secret_key scalar;
+                                crypto::derivation_to_scalar(derivation, j, scalar);
+                                rct::ecdhTuple ecdh_info = tx.rct_signatures.ecdhInfo[j];
+                                rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar),
+                                    tx.rct_signatures.type == rct::RCTTypeBulletproofPlus);
+                                outs[amount_key][tx_global_idx].amount = rct::h2d(ecdh_info.amount);
+                            }
+                        }
                     }
                 }
             }

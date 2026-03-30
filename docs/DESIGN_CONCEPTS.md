@@ -1,5 +1,7 @@
 # Shekyl Design Concepts
 
+> **Last updated:** 2026-03-30
+
 ## Monetary Supply and Denomination Policy (Next Generation Shekyl)
 
 This document proposes a concrete monetary design set for next-generation Shekyl, with rationale grounded in:
@@ -246,6 +248,18 @@ the full technical specification including transaction types (`txout_to_staked_k
 `txin_stake_claim`), on-chain LMDB storage schema, consensus validation rules,
 wallet commands, and RPC endpoints.
 
+#### Multisig staking (operational security)
+
+Long-duration staked positions (especially the 150,000-block tier at ~208 days)
+represent significant value locked under a single key for months. Multisig
+authorization (`scheme_id = 2`) is the recommended configuration for staked
+outputs with meaningful value. A 2-of-3 multisig ensures that no single
+compromised key can claim accumulated rewards or control the output at unlock.
+
+Multisig staked outputs and claim transactions use the same `pqc_auth`
+framework as regular transactions, with the extended signature-list format.
+See `docs/PQC_MULTISIG.md` for the full specification.
+
 #### Self-balancing dynamics
 
 - If too many people stake: yields per staker decrease (same pool, more participants). Some unstake, restoring equilibrium.
@@ -461,6 +475,9 @@ If this design is adopted:
    - Property tests for intermediate arithmetic overflow in burn and reward calculations.
    - Integration tests for rebooted-chain transaction validation and node/wallet interoperability.
    - Simulation tests for stuffing profitability under various hash power distributions.
+   - Unit tests for multisig `pqc_auth` (`scheme_id = 2`) serialization, verification, and rejection of malformed inputs.
+   - Integration tests for multisig staking: create multisig staked output, claim rewards with M-of-N authorization, verify lock enforcement.
+   - Size regression tests for multisig transactions across 2-of-3 through 5-of-7 configurations.
 
 ---
 
