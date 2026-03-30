@@ -56,10 +56,12 @@ jobs:
             host: "x86_64-apple-darwin11"
             packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python3-dev python3-setuptools-git libtinfo5"
             rust_target: "x86_64-apple-darwin"
+            osx_sdk: "11.1"
           - name: "Cross-Mac aarch64"
             host: "aarch64-apple-darwin11"
             packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python3-dev python3-setuptools-git libtinfo5"
             rust_target: "aarch64-apple-darwin"
+            osx_sdk: "11.1"
           - name: "x86_64 Freebsd"
             host: "x86_64-unknown-freebsd"
             packages: "clang-14 libc++-14-dev libc++abi-14-dev gperf cmake python3-zmq libdbus-1-dev libharfbuzz-dev"
@@ -94,11 +96,12 @@ jobs:
           depends-${{ matrix.toolchain.host }}-
 # Static cache
     - name: OSX SDK cache
+      if: ${{ matrix.toolchain.osx_sdk }}
       uses: actions/cache@v5
       with:
         path: contrib/depends/sdk-sources
         key: sdk-${{ matrix.toolchain.host }}-${{ matrix.toolchain.osx_sdk }}
-        restore-keys: sdk-${{ matrix.toolchain.host }}-${{ matrix.toolchain.osx_sdk }}
+        restore-keys: sdk-${{ matrix.toolchain.host }}-
     - name: prepare w64-mingw32
       if: ${{ matrix.toolchain.host == 'x86_64-w64-mingw32' }}
       run: |

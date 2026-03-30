@@ -113,9 +113,10 @@ else()
 endif()
 
 # Build the cargo command.
-# Clear CC/CXX/CFLAGS/CXXFLAGS/LDFLAGS to prevent the depends toolchain
-# sysroot from interfering with Rust's own compilation of build scripts and
-# proc-macros (which must target the build host, not the cross target).
+# Clear generic CC/CXX/CFLAGS/CXXFLAGS/LDFLAGS so that Rust's build-script
+# and proc-macro compilation targets the build host, not the cross target.
+# Then set per-target CC_<TRIPLE>/AR_<TRIPLE>/CFLAGS_<TRIPLE> so crates that
+# compile C code for the target (e.g. ring) can locate the cross-compiler.
 set(_rust_env_clear
     "CC=" "CXX=" "CFLAGS=" "CXXFLAGS=" "LDFLAGS="
     "AR=" "RANLIB=" "NM="
@@ -123,6 +124,24 @@ set(_rust_env_clear
 
 if(RUST_CROSS_ENV)
     list(APPEND _rust_env_clear "${RUST_CROSS_ENV}")
+endif()
+
+if(RUST_TARGET_TRIPLE AND CMAKE_C_COMPILER)
+    string(REPLACE "-" "_" _cc_triple "${RUST_TARGET_TRIPLE}")
+    list(APPEND _rust_env_clear "CC_${_cc_triple}=${CMAKE_C_COMPILER}")
+    if(CMAKE_AR)
+        list(APPEND _rust_env_clear "AR_${_cc_triple}=${CMAKE_AR}")
+    endif()
+    string(STRIP "${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_INIT}" _target_cflags)
+    if(CMAKE_C_COMPILER_TARGET)
+        string(STRIP "${_target_cflags} --target=${CMAKE_C_COMPILER_TARGET}" _target_cflags)
+    endif()
+    if(CMAKE_OSX_SYSROOT)
+        string(STRIP "${_target_cflags} --sysroot=${CMAKE_OSX_SYSROOT}" _target_cflags)
+    endif()
+    if(_target_cflags)
+        list(APPEND _rust_env_clear "CFLAGS_${_cc_triple}=${_target_cflags}")
+    endif()
 endif()
 
 add_custom_command(
