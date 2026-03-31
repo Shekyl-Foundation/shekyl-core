@@ -21,6 +21,7 @@ packages:
 - "bsdmainutils"
 - "ca-certificates"
 - "python3"
+- "python-is-python3"
 - "cmake"
 - "unzip"
 remotes:

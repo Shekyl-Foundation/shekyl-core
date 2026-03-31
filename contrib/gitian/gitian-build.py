@@ -54,6 +54,20 @@ def setup():
     elif not args.kvm:
         make_image_prog += ['--lxc']
     subprocess.check_call(make_image_prog)
+    if args.docker:
+        # Ubuntu Jammy Docker image only enables main+restricted by default.
+        # Gitian descriptors need universe packages (faketime, bsdmainutils, etc.).
+        print('Enabling universe repository in base image...')
+        try:
+            subprocess.check_call([
+                'docker', 'run', '--name', 'gitian-universe-fix', 'base-jammy-amd64',
+                'bash', '-c',
+                "sed -i '/^deb.*main restricted$/s/restricted$/restricted universe/' "
+                "/etc/apt/sources.list && apt-get update -qq"
+            ])
+            subprocess.check_call(['docker', 'commit', 'gitian-universe-fix', 'base-jammy-amd64'])
+        finally:
+            subprocess.call(['docker', 'rm', '-f', 'gitian-universe-fix'])
     os.chdir(workdir)
     if args.is_bionic and not args.kvm and not args.docker:
         subprocess.check_call(['sudo', 'sed', '-i', 's/lxcbr0/br0/', '/etc/default/lxc-net'])
