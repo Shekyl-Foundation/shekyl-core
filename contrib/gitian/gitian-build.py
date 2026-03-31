@@ -15,6 +15,8 @@ platforms = {'l': ['Linux', 'linux', 'tar.bz2'],
         'w': ['Windows', 'win', 'zip'],
         'm': ['MacOS', 'osx', 'tar.bz2'] }
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 def setup():
     global args, workdir
     programs = ['apt-cacher-ng', 'ruby', 'git', 'make', 'wget']
@@ -71,7 +73,11 @@ def rebuild():
         suffix = platforms[i][2]
 
         print('\nCompiling ' + args.version + ' ' + os_name)
-        infile = 'inputs/shekyl/contrib/gitian/gitian-' + tag_name + '.yml'
+        descriptor_name = 'gitian-' + tag_name + '.yml'
+        src_descriptor = os.path.join(SCRIPT_DIR, descriptor_name)
+        infile = 'inputs/shekyl/contrib/gitian/' + descriptor_name
+        if os.path.isfile(src_descriptor):
+            shutil.copy2(src_descriptor, infile)
         subprocess.check_call(['bin/gbuild', '-j', args.jobs, '-m', args.memory, '--commit', 'shekyl='+args.commit, '--url', 'shekyl='+args.url, infile])
         subprocess.check_call(['bin/gsign', '-p', args.sign_prog, '--signer', args.signer, '--release', args.version+'-'+tag_name, '--destination', '../sigs/', infile])
         subprocess.check_call('mv build/out/shekyl-*.' + suffix + ' ../out/'+args.version, shell=True)
