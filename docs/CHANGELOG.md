@@ -30,13 +30,17 @@
   packages that moved out of `main`. Uses `docker build` (not run+commit)
   to preserve the image's CMD/USER metadata so `gbuild` containers stay
   running.
-- **Gitian Linux: move `linux-libc-dev:i386` to script section.** The i386
-  architecture must be enabled with `dpkg --add-architecture` before the
-  package can be installed; moved from `packages:` to `script:`.
-- **Gitian macOS: add `libtinfo5` and `python-is-python3`.** The pre-built
-  Clang 9 cross-compiler requires `libtinfo.so.5`, and the `python` faketime
-  wrapper needs a real `/usr/bin/python` target to resolve correctly for
-  CMake's `FindPythonInterp` in the `native_libtapi` build.
+- **Gitian Linux: move i386-dependent packages to script section.** The i386
+  architecture must be enabled with `dpkg --add-architecture` before packages
+  like `linux-libc-dev:i386`, `gcc-multilib`, and `g++-multilib` can be
+  installed; moved from `packages:` to `script:`.
+- **Gitian macOS: add `libtinfo5` and `python-is-python3`, remove `python`
+  from `FAKETIME_PROGS`.** The pre-built Clang 9 cross-compiler requires
+  `libtinfo.so.5`. The `python` faketime wrapper broke CMake's
+  `FindPythonInterp` version detection in the `native_libtapi` build (empty
+  `PYTHON_VERSION_STRING`); removing `python` from the faketime wrappers
+  fixes this while preserving timestamp reproducibility for `ar`, `ranlib`,
+  `date`, `dmg`, and `genisoimage`.
 - **Gitian Android: add `python-is-python3`.** Android NDK r17b scripts use
   `#!/usr/bin/env python` which does not exist on Jammy without this package.
 
