@@ -60,7 +60,7 @@ def setup():
         print('Enabling universe repository in base image...')
         try:
             subprocess.check_call([
-                'docker', 'run', '--name', 'gitian-universe-fix', 'base-jammy-amd64',
+                'docker', 'run', '--user', 'root', '--name', 'gitian-universe-fix', 'base-jammy-amd64',
                 'bash', '-c',
                 "sed -i '/^deb.*main restricted$/s/restricted$/restricted universe/' "
                 "/etc/apt/sources.list && apt-get update -qq"

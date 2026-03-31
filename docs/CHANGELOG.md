@@ -20,7 +20,8 @@
   `ubuntu:jammy` Docker image only enables `main restricted` by default;
   `gitian-build.py` now patches the base image after `make-base-vm` to add
   `universe`, fixing installation of `faketime`, `bsdmainutils`, and other
-  packages that moved out of `main`.
+  packages that moved out of `main`. Runs the patch as `root` inside the
+  container since the base image defaults to the `ubuntu` user.
 - **Gitian Linux: move `linux-libc-dev:i386` to script section.** The i386
   architecture must be enabled with `dpkg --add-architecture` before the
   package can be installed; moved from `packages:` to `script:`.
