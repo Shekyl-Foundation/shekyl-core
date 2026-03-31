@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### ✨ Added
+
+- **Release builds for macOS, Linux aarch64, and FreeBSD.** The
+  `release/tagged` workflow now cross-compiles and publishes `.tar.gz`
+  archives for macOS x86_64, macOS aarch64, Linux aarch64, and FreeBSD
+  x86_64 alongside the existing Linux x86_64 and Windows x64 packages.
+
 ### 🔄 Changed
 
 - **Gitian reproducible builds: migrated from Ubuntu 18.04 (Bionic) to 22.04

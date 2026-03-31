@@ -216,9 +216,116 @@ jobs:
             shekyl-${{ github.ref_name }}-win-x64.zip
             shekyl-${{ github.ref_name }}-win-x64-setup.exe
 
+  build-cross:
+    name: ${{ matrix.platform.name }}
+    runs-on: ubuntu-22.04
+    container:
+      image: ubuntu:22.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+        CCACHE_TEMPDIR: /tmp/.ccache-temp
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: "macOS x86_64"
+            host: "x86_64-apple-darwin11"
+            packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python3-dev python3-setuptools-git libtinfo5 clang"
+            rust_target: "x86_64-apple-darwin"
+            osx_sdk: "11.1"
+            artifact_suffix: "macos-x86_64"
+          - name: "macOS aarch64"
+            host: "aarch64-apple-darwin11"
+            packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python3-dev python3-setuptools-git libtinfo5 clang"
+            rust_target: "aarch64-apple-darwin"
+            osx_sdk: "11.1"
+            artifact_suffix: "macos-aarch64"
+          - name: "Linux aarch64"
+            host: "aarch64-linux-gnu"
+            packages: "python3 gperf g++-aarch64-linux-gnu"
+            rust_target: "aarch64-unknown-linux-gnu"
+            artifact_suffix: "linux-aarch64"
+          - name: "FreeBSD x86_64"
+            host: "x86_64-unknown-freebsd"
+            packages: "clang-14 libc++-14-dev libc++abi-14-dev gperf cmake python3-zmq libdbus-1-dev libharfbuzz-dev"
+            rust_target: "x86_64-unknown-freebsd"
+            artifact_suffix: "freebsd-x86_64"
+    steps:
+      - name: Set apt conf
+        run: ${{ env.APT_SET_CONF }}
+
+      - name: Install dependencies
+        run: |
+          apt update
+          apt -y install build-essential libtool cmake autotools-dev automake \
+            pkg-config python3 gperf bsdmainutils curl git ca-certificates \
+            unzip ccache ${{ matrix.platform.packages }}
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          . "$HOME/.cargo/env"
+          if [ -n "${{ matrix.platform.rust_target }}" ]; then
+            rustup target add ${{ matrix.platform.rust_target }}
+          fi
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Configure git
+        run: git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: ccache
+        uses: actions/cache@v5
+        with:
+          path: ~/.ccache
+          key: ccache-${{ matrix.platform.host }}-release-${{ github.sha }}
+          restore-keys: ccache-${{ matrix.platform.host }}-release-
+
+      - name: depends cache
+        uses: actions/cache@v5
+        with:
+          path: contrib/depends/built
+          key: depends-${{ matrix.platform.host }}-${{ hashFiles('contrib/depends/packages/*') }}
+          restore-keys: depends-${{ matrix.platform.host }}-
+
+      - name: OSX SDK cache
+        if: ${{ matrix.platform.osx_sdk }}
+        uses: actions/cache@v5
+        with:
+          path: contrib/depends/sdk-sources
+          key: sdk-${{ matrix.platform.host }}-${{ matrix.platform.osx_sdk }}
+          restore-keys: sdk-${{ matrix.platform.host }}-
+
+      - name: Build via depends
+        run: |
+          ${{ env.CCACHE_SETTINGS }}
+          make depends target=${{ matrix.platform.host }} -j$(nproc)
+
+      - name: Package tar.gz
+        run: |
+          RELEASE_DIR="shekyl-${GITHUB_REF_NAME}-${{ matrix.platform.artifact_suffix }}"
+          BIN_DIR="build/${{ matrix.platform.host }}/release/bin"
+          mkdir -p "${RELEASE_DIR}"
+          for bin in shekyld shekyl-wallet-cli shekyl-wallet-rpc \
+                     shekyl-gen-trusted-multisig shekyl-blockchain-import \
+                     shekyl-blockchain-export; do
+            cp "${BIN_DIR}/${bin}" "${RELEASE_DIR}/" 2>/dev/null || true
+          done
+          tar -czf "${RELEASE_DIR}.tar.gz" "${RELEASE_DIR}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.platform.artifact_suffix }}
+          path: shekyl-${{ github.ref_name }}-${{ matrix.platform.artifact_suffix }}.tar.gz
+
   publish-release:
     name: Publish GitHub Release
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, build-cross]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
