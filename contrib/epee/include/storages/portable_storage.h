@@ -173,7 +173,6 @@ namespace epee
     template<class entry_type>
     storage_entry* portable_storage::insert_new_entry_get_storage_entry(const std::string& pentry_name, hsection psection, entry_type&& entry)
     {
-      static_assert(std::is_rvalue_reference<entry_type&&>(), "unexpected copy of value");
       TRY_ENTRY();
       CHECK_AND_ASSERT(psection, nullptr);
       CHECK_AND_ASSERT(!pentry_name.empty(), nullptr);
@@ -253,7 +252,6 @@ namespace epee
     harray portable_storage::insert_first_value(const std::string& value_name, t_value&& target, hsection hparent_section)
     {
       using t_real_value = typename std::decay<t_value>::type;
-      static_assert(std::is_rvalue_reference<t_value&&>(), "unexpected copy of value");
       TRY_ENTRY();
       if(!hparent_section) hparent_section = &m_root;
       storage_entry* pentry = find_storage_entry(value_name, hparent_section);
@@ -287,7 +285,6 @@ namespace epee
     bool portable_storage::insert_next_value(harray hval_array, t_value&& target)
     {
       using t_real_value = typename std::decay<t_value>::type;
-      static_assert(std::is_rvalue_reference<t_value&&>(), "unexpected copy of value");
       TRY_ENTRY();
       CHECK_AND_ASSERT(hval_array, false);
 
