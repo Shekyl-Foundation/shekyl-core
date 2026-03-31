@@ -352,19 +352,6 @@ namespace cryptonote
           bool r = rct_signatures.serialize_rctsig_base(ar, vin.size(), vout.size());
           if (!r || !ar.good()) return false;
           ar.end_object();
-
-          if (std::is_same<Archive<W>, binary_archive<W>>())
-            unprunable_size = ar.getpos() - start_pos;
-
-          if (!pruned && rct_signatures.type != rct::RCTTypeNull)
-          {
-            ar.tag("rctsig_prunable");
-            ar.begin_object();
-            r = rct_signatures.p.serialize_rctsig_prunable(ar, rct_signatures.type, vin.size(), vout.size(),
-                vin.size() > 0 && std::holds_alternative<txin_to_key>(vin[0]) ? std::get<txin_to_key>(vin[0]).key_offsets.size() - 1 : 0);
-            if (!r || !ar.good()) return false;
-            ar.end_object();
-          }
         }
         if (version >= 3 && !vin.empty() && !std::holds_alternative<txin_gen>(vin[0]))
         {
@@ -378,8 +365,21 @@ namespace cryptonote
           if (!::do_serialize(ar, auth_val)) return false;
           if (!typename Archive<W>::is_saving())
             pqc_auth = auth_val;
+        }
+        if (!vin.empty())
+        {
           if (std::is_same<Archive<W>, binary_archive<W>>())
             unprunable_size = ar.getpos() - start_pos;
+
+          if (!pruned && rct_signatures.type != rct::RCTTypeNull)
+          {
+            ar.tag("rctsig_prunable");
+            ar.begin_object();
+            bool r = rct_signatures.p.serialize_rctsig_prunable(ar, rct_signatures.type, vin.size(), vout.size(),
+                vin.size() > 0 && std::holds_alternative<txin_to_key>(vin[0]) ? std::get<txin_to_key>(vin[0]).key_offsets.size() - 1 : 0);
+            if (!r || !ar.good()) return false;
+            ar.end_object();
+          }
         }
       }
       if (!typename Archive<W>::is_saving())

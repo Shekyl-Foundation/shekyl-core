@@ -126,14 +126,19 @@ bool gen_double_spend_in_tx<txs_keeped_by_block>::generate(std::vector<test_even
   INIT_DOUBLE_SPEND_TEST();
   DO_CALLBACK(events, "mark_last_valid_block");
 
-  // Use a coinbase output (known amount, identity mask) for the double-spend source.
+  // Use the largest coinbase output (known amount, identity mask) for the double-spend source.
   // blk_0's miner tx output is spendable after REWIND_BLOCKS.
+  size_t best_out_idx = 0;
+  for (size_t i = 1; i < blk_0.miner_tx.vout.size(); ++i)
+    if (blk_0.miner_tx.vout[i].amount > blk_0.miner_tx.vout[best_out_idx].amount)
+      best_out_idx = i;
+
   std::vector<cryptonote::tx_source_entry> sources;
   cryptonote::tx_source_entry se;
-  se.amount = blk_0.miner_tx.vout[0].amount;
+  se.amount = blk_0.miner_tx.vout[best_out_idx].amount;
   crypto::public_key ds_out_key;
-  cryptonote::get_output_public_key(blk_0.miner_tx.vout[0], ds_out_key);
-  se.push_output(0, ds_out_key, se.amount);
+  cryptonote::get_output_public_key(blk_0.miner_tx.vout[best_out_idx], ds_out_key);
+  se.push_output(best_out_idx, ds_out_key, se.amount);
   se.real_output = 0;
   se.rct = true;
   se.mask = rct::identity();
@@ -143,7 +148,7 @@ bool gen_double_spend_in_tx<txs_keeped_by_block>::generate(std::vector<test_even
       ot.second.mask = comm;
   }
   se.real_out_tx_key = get_tx_pub_key_from_extra(blk_0.miner_tx);
-  se.real_output_in_tx_index = 0;
+  se.real_output_in_tx_index = best_out_idx;
   sources.push_back(se);
   sources.push_back(se);
 

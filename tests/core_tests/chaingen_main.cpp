@@ -218,7 +218,9 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_bpp_tx_invalid_empty_proofs);
     GENERATE_AND_PLAY(gen_bpp_tx_invalid_too_many_proofs);
     GENERATE_AND_PLAY(gen_bpp_tx_invalid_wrong_amount);
-    GENERATE_AND_PLAY(gen_bpp_tx_invalid_clsag_type);
+    // Disabled: Shekyl allows both RCTTypeCLSAG and RCTTypeBulletproofPlus;
+    // this test assumes only BP+ is valid, which doesn't apply to Shekyl's consensus.
+    // GENERATE_AND_PLAY(gen_bpp_tx_invalid_clsag_type);
 
     GENERATE_AND_PLAY(gen_block_low_coinbase);
 

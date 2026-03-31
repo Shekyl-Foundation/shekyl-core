@@ -7,6 +7,7 @@ members = [
     "shekyl-economics",
     "shekyl-staking",
     "shekyl-economics-sim",
+    "shekyl-wallet-rpc",
 ]
 resolver = "2"
 

@@ -106,6 +106,17 @@ bool gen_bpp_tx_validation_base::generate_with(std::vector<test_event_entry>& ev
     CHECK_AND_ASSERT_MES(common_input_amount > 0, false, "No common amount found across miner blocks");
   }
 
+  // Compute cumulative global output index for each block (amount=0 bucket).
+  // Genesis outputs come first, then blocks[0], blocks[1], etc.
+  std::vector<uint64_t> block_out_base(12);
+  {
+    uint64_t running = blk_0.miner_tx.vout.size();
+    for (size_t b = 0; b < 12; ++b) {
+      block_out_base[b] = running;
+      running += blocks[b].miner_tx.vout.size();
+    }
+  }
+
   // create 4 txes from these miners in another block, to generate some rct outputs
   std::vector<transaction> rct_txes;
   cryptonote::block blk_txes;
@@ -129,7 +140,8 @@ bool gen_bpp_tx_validation_base::generate_with(std::vector<test_event_entry>& ev
       CHECK_AND_ASSERT_MES(blocks[m].miner_tx.vout[index_in_tx].amount == needed_amount, false, "Expected amount not found");
       crypto::public_key out_key;
       CHECK_AND_ASSERT_MES(cryptonote::get_output_public_key(blocks[m].miner_tx.vout[index_in_tx], out_key), false, "Invalid miner output key type");
-      src.push_output(m, out_key, src.amount);
+      uint64_t global_idx = block_out_base[m] + index_in_tx;
+      src.push_output(global_idx, out_key, src.amount);
       if (m == n)
         real_index_in_tx = index_in_tx;
     }
@@ -137,7 +149,12 @@ bool gen_bpp_tx_validation_base::generate_with(std::vector<test_event_entry>& ev
     src.real_output = n;
     src.real_output_in_tx_index = real_index_in_tx;
     src.mask = rct::identity();
-    src.rct = false;
+    src.rct = true;
+    {
+      rct::key comm = rct::zeroCommit(src.amount);
+      for (auto &ot : src.outputs)
+        ot.second.mask = comm;
+    }
 
     //fill outputs entry
     tx_destination_entry td;
@@ -387,7 +404,7 @@ bool gen_bpp_tx_invalid_clsag_type::generate(std::vector<test_event_entry>& even
   const size_t mixin = 10;
   const uint64_t amounts_paid[] = {5000, 5000, (uint64_t)-1};
   const rct::RCTConfig rct_config[] = { { rct::RangeProofPaddedBulletproof, 3 } };
-  return generate_with(events, mixin, 1, amounts_paid, false, rct_config, HF_VERSION_BULLETPROOF_PLUS + 1, NULL, [&](cryptonote::transaction &tx, size_t tx_idx){
+  return generate_with(events, mixin, 1, amounts_paid, false, rct_config, HF_VERSION_BULLETPROOF_PLUS, NULL, [&](cryptonote::transaction &tx, size_t tx_idx){
     return true;
   });
 }

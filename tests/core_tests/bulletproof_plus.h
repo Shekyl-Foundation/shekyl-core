@@ -203,4 +203,4 @@ struct gen_bpp_tx_invalid_clsag_type : public gen_bpp_tx_validation_base
 {
   bool generate(std::vector<test_event_entry>& events) const;
 };
-template<> struct get_test_options<gen_bpp_tx_invalid_clsag_type>: public get_bpp_versioned_test_options<HF_VERSION_BULLETPROOF_PLUS + 1> {};
+template<> struct get_test_options<gen_bpp_tx_invalid_clsag_type>: public get_bpp_versioned_test_options<HF_VERSION_BULLETPROOF_PLUS> {};

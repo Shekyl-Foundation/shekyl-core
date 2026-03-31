@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### ✨ Added
+
+- **Wallet FFI: transaction construction, signing, and relay dispatch functions**:
+  Implemented 8 new JSON-RPC dispatch methods in `wallet2_ffi.cpp` for
+  transaction operations: `transfer_split`, `sign_transfer`,
+  `describe_transfer`, `submit_transfer`, `sweep_dust`/`sweep_unmixable`,
+  `sweep_all`, `sweep_single`, and `relay_tx`. Added shared helpers
+  (`fill_split_response`, `ptx_to_hex_string`, `parse_destinations`,
+  `parse_subaddr_indices`, `parse_single_address`) that handle the
+  `fill_response`-style pattern for building split/single transfer JSON
+  responses with multisig/watch-only/do_not_relay commit logic, tx key
+  extraction via `wipeable_string`, spent key image collection, and
+  optional tx_blob/tx_metadata serialization. `sweep_dust` returns a
+  structured error (Shekyl has no pre-RCT unmixable outputs). All methods
+  are registered in the `wallet2_ffi_json_rpc` dispatch table.
+
+- **Wallet FFI: proofs, mining, staking, background sync, and multisig dispatch functions**:
+  Implemented 29 new JSON-RPC dispatch methods in `wallet2_ffi.cpp` covering:
+  proofs (`check_tx_key`, `get_tx_proof`, `check_tx_proof`, `get_spend_proof`,
+  `check_spend_proof`, `get_reserve_proof`, `check_reserve_proof`),
+  mining/daemon (`start_mining`, `stop_mining`, `set_daemon`, `set_log_level`,
+  `set_log_categories`, `scan_tx`), staking (`stake`, `unstake`,
+  `get_staked_outputs`, `get_staked_balance`, `claim_rewards`),
+  background sync (`setup_background_sync`, `start_background_sync`,
+  `stop_background_sync`), and multisig (`prepare_multisig`, `make_multisig`,
+  `export_multisig_info`, `import_multisig_info`, `finalize_multisig`,
+  `exchange_multisig_keys`, `sign_multisig`, `submit_multisig`). All are
+  registered in the `wallet2_ffi_json_rpc` dispatch table and mirror the
+  corresponding `wallet_rpc_server` handlers.
+
+- **Wallet FFI: payments, address utils, URI, and address book dispatch functions**:
+  Implemented 11 new JSON-RPC dispatch methods in `wallet2_ffi.cpp`:
+  `get_payments`, `get_bulk_payments`, `import_key_images`,
+  `make_integrated_address`, `split_integrated_address`, `make_uri`,
+  `parse_uri`, `get_address_book`, `add_address_book`, `edit_address_book`,
+  and `delete_address_book`. All are registered in the `wallet2_ffi_json_rpc`
+  dispatch table and faithfully mirror the behavior of the corresponding
+  `wallet_rpc_server` handlers.
+
 ### Test suite cleanup for Shekyl HF1
 
 - **Removed 96 dead Borromean ringct tests**: All tests in
