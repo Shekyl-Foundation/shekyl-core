@@ -57,17 +57,17 @@ def setup():
     if args.docker:
         # Ubuntu Jammy Docker image only enables main+restricted by default.
         # Gitian descriptors need universe packages (faketime, bsdmainutils, etc.).
+        # Use `docker build` (not run+commit) to preserve CMD/USER metadata.
         print('Enabling universe repository in base image...')
-        try:
-            subprocess.check_call([
-                'docker', 'run', '--user', 'root', '--name', 'gitian-universe-fix', 'base-jammy-amd64',
-                'bash', '-c',
-                "sed -i '/^deb.*main restricted$/s/restricted$/restricted universe/' "
-                "/etc/apt/sources.list && apt-get update -qq"
-            ])
-            subprocess.check_call(['docker', 'commit', 'gitian-universe-fix', 'base-jammy-amd64'])
-        finally:
-            subprocess.call(['docker', 'rm', '-f', 'gitian-universe-fix'])
+        subprocess.run([
+            'docker', 'build', '-t', 'base-jammy-amd64', '-'
+        ], input=(
+            "FROM base-jammy-amd64\n"
+            "USER root\n"
+            "RUN sed -i '/^deb.*main restricted$/s/restricted$/restricted universe/' "
+            "/etc/apt/sources.list && apt-get update -qq\n"
+            "USER ubuntu\n"
+        ).encode(), check=True)
     os.chdir(workdir)
     if args.is_bionic and not args.kvm and not args.docker:
         subprocess.check_call(['sudo', 'sed', '-i', 's/lxcbr0/br0/', '/etc/default/lxc-net'])
