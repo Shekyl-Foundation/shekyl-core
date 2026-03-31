@@ -38,7 +38,7 @@ jobs:
             build-essential cmake pkg-config git ccache \
             libboost-all-dev libssl-dev libzmq3-dev libunbound-dev \
             libsodium-dev libreadline-dev libexpat1-dev \
-            libhidapi-dev libusb-1.0-0-dev \
+            libhidapi-dev libusb-1.0-0-dev libudev-dev \
             libprotobuf-dev protobuf-compiler \
             libgtest-dev libnorm-dev libpgm-dev \
             nettle-dev libgmp-dev libevent-dev \
