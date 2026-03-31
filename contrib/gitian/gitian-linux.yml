@@ -37,9 +37,9 @@ remotes:
 files: []
 script: |
 
-  # Enable i386 multiarch for linux-libc-dev headers (needed by i686 cross build)
+  # i386 headers for 32-bit Linux build (needs arch enabled first)
   sudo dpkg --add-architecture i386
-  sudo apt-get update
+  sudo apt-get update -qq
   sudo apt-get --no-install-recommends -y install linux-libc-dev:i386
 
   WRAP_DIR=$HOME/wrapped
@@ -75,12 +75,15 @@ script: |
   function create_per-host_faketime_wrappers {
   for i in $HOSTS; do
     for prog in ${FAKETIME_HOST_PROGS}; do
-        echo '#!/usr/bin/env bash' > ${WRAP_DIR}/${i}-${prog}
-        echo "REAL=\`which -a ${i}-${prog} | grep -v ${WRAP_DIR}/${i}-${prog} | head -1\`" >> ${WRAP_DIR}/${i}-${prog}
-        echo 'export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1' >> ${WRAP_DIR}/${i}-${prog}
-        echo "export FAKETIME=\"$1\"" >> ${WRAP_DIR}/${i}-${prog}
-        echo "\$REAL \$@" >> $WRAP_DIR/${i}-${prog}
-        chmod +x ${WRAP_DIR}/${i}-${prog}
+        REAL_PROG=`which ${i}-${prog} 2>/dev/null || true`
+        if [ -n "$REAL_PROG" ]; then
+            echo '#!/usr/bin/env bash' > ${WRAP_DIR}/${i}-${prog}
+            echo "REAL=\`which -a ${i}-${prog} | grep -v ${WRAP_DIR}/${i}-${prog} | head -1\`" >> ${WRAP_DIR}/${i}-${prog}
+            echo 'export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1' >> ${WRAP_DIR}/${i}-${prog}
+            echo "export FAKETIME=\"$1\"" >> ${WRAP_DIR}/${i}-${prog}
+            echo "\$REAL \$@" >> $WRAP_DIR/${i}-${prog}
+            chmod +x ${WRAP_DIR}/${i}-${prog}
+        fi
     done
   done
   }

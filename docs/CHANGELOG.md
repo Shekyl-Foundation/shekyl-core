@@ -14,6 +14,23 @@
   hack). Adds `linux-libc-dev:i386` for native i686 headers. C++17 is now
   fully supported by the Gitian toolchain.
 
+### 🐛 Fixed
+
+- **Gitian: enable `universe` repository in Docker base image.** The
+  `ubuntu:jammy` Docker image only enables `main restricted` by default;
+  `gitian-build.py` now patches the base image after `make-base-vm` to add
+  `universe`, fixing installation of `faketime`, `bsdmainutils`, and other
+  packages that moved out of `main`.
+- **Gitian Linux: move `linux-libc-dev:i386` to script section.** The i386
+  architecture must be enabled with `dpkg --add-architecture` before the
+  package can be installed; moved from `packages:` to `script:`.
+- **Gitian macOS: add `libtinfo5` and `python-is-python3`.** The pre-built
+  Clang 9 cross-compiler requires `libtinfo.so.5`, and the `python` faketime
+  wrapper needs a real `/usr/bin/python` target to resolve correctly for
+  CMake's `FindPythonInterp` in the `native_libtapi` build.
+- **Gitian Android: add `python-is-python3`.** Android NDK r17b scripts use
+  `#!/usr/bin/env python` which does not exist on Jammy without this package.
+
 ## [3.0.3-RC1] - 2026-03-31
 
 ### Known Limitations
