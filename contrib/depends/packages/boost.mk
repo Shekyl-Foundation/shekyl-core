@@ -20,11 +20,13 @@ $(package)_config_opts_i686_linux=address-model=32 architecture=x86
 $(package)_toolset_$(host_os)=gcc
 $(package)_archiver_$(host_os)=$($(package)_ar)
 $(package)_toolset_darwin=darwin
+$(package)_toolset_freebsd=clang
 $(package)_archiver_darwin=$($(package)_libtool)
 $(package)_config_libraries=chrono,filesystem,program_options,system,thread,test,date_time,regex,serialization,locale
 $(package)_cxxflags=-std=c++17
 $(package)_cxxflags_linux=-fPIC
-$(package)_cxxflags_freebsd=-fPIC
+$(package)_cxxflags_freebsd=-fPIC -stdlib=libc++
+$(package)_config_opts_freebsd=threadapi=pthread runtime-link=shared
 endef
 
 define $(package)_preprocess_cmds
