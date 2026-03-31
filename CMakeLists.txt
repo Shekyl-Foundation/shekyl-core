@@ -346,7 +346,12 @@ endif()
 if(WIN32 OR ARM OR PPC64LE OR PPC64 OR PPC)
   set(OPT_FLAGS_RELEASE "-O2")
 else()
-  set(OPT_FLAGS_RELEASE "-O3 -ffast-math -fno-semantic-interposition") # not present: -fallow-store-data-races
+  set(OPT_FLAGS_RELEASE "-O3 -ffast-math")
+  include(CheckCCompilerFlag)
+  check_c_compiler_flag("-fno-semantic-interposition" HAS_NO_SEMANTIC_INTERPOSITION)
+  if(HAS_NO_SEMANTIC_INTERPOSITION)
+    string(APPEND OPT_FLAGS_RELEASE " -fno-semantic-interposition")
+  endif()
 endif()
 
 # BUILD_TAG is used to select the build type to check for a new version
