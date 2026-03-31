@@ -212,10 +212,20 @@ jobs:
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
+      - name: vcpkg cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            C:\vcpkg\downloads
+            C:\vcpkg\archives
+          key: vcpkg-x64-windows-static-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: vcpkg-x64-windows-static-
       - name: install vcpkg dependencies
         shell: pwsh
+        env:
+          VCPKG_BINARY_SOURCES: clear;files,C:\vcpkg\archives,readwrite
         run: |
-          vcpkg install --triplet x64-windows-static boost-system boost-filesystem boost-thread boost-serialization boost-program-options boost-chrono boost-date-time boost-regex openssl libsodium zeromq protobuf hidapi libusb lmdb
+          vcpkg install --triplet x64-windows-static boost-system boost-filesystem boost-thread boost-serialization boost-program-options boost-chrono boost-date-time boost-regex openssl libsodium zeromq libusb lmdb
       - name: configure
         shell: pwsh
         run: |
@@ -226,6 +236,7 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF `
             -DBUILD_TESTS=OFF `
             -DSTACK_TRACE=OFF `
+            -DUSE_DEVICE_TREZOR=OFF `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static
       - name: build wallet-core libraries
