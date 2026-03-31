@@ -1,3 +1,4 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
 // Copyright (c) 2014-2022, The Monero Project
 // 
 // All rights reserved.
@@ -28,7 +29,9 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #include <cstdio>
 #include <wchar.h>
 

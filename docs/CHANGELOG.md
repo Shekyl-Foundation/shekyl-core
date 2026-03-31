@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### ✨ Added
+
+- **MSVC wallet-core build path**: `BuildRust.cmake` now selects the
+  `x86_64-pc-windows-msvc` Rust target when CMake is driven by MSVC,
+  enabling the Tauri GUI wallet to link against shekyl-core on Windows.
+  The existing MinGW cross-compilation path for headless binaries is
+  unchanged.
+- **CI: Windows MSVC wallet-core job** (`build-windows-msvc`): New CI
+  lane builds the wallet-core static libraries with Visual Studio / MSVC
+  via vcpkg, validating the MSVC portability patches on every push.
+
+### 🐛 Fixed
+
+- **MSVC portability patches**: Guarded unconditional POSIX includes
+  (`unistd.h`, `dlfcn.h`) and GCC-specific attributes (`__attribute__`)
+  behind `_MSC_VER` / `_WIN32` preprocessor checks in 10 source files.
+  Affected: `util.cpp`, `spawn.cpp`, `stack_trace.cpp`, `aligned.c`,
+  `slow-hash.c`, `rx-slow-hash.c`, `keccak.c`, `CryptonightR_JIT.c`,
+  `misc_log_ex.h`.
+
 ## [3.0.3-RC1] - 2026-03-31
 
 ### Known Limitations

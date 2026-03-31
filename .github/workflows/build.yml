@@ -204,6 +204,35 @@ jobs:
           ${{env.BUILD_DEFAULT_LINUX}}
           cmake --build build --target test
 
+  build-windows-msvc:
+    name: 'Windows (MSVC, wallet-core only)'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: install vcpkg dependencies
+        shell: pwsh
+        run: |
+          vcpkg install --triplet x64-windows-static boost-system boost-filesystem boost-thread boost-serialization boost-program-options boost-chrono boost-date-time boost-regex openssl libsodium zeromq protobuf hidapi libusb unbound lmdb
+      - name: configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DSTATIC=ON `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DBUILD_TESTS=OFF `
+            -DSTACK_TRACE=OFF `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static
+      - name: build wallet-core libraries
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --target wallet_api --parallel
+
   source-archive:
     name: "source archive"
     runs-on: ubuntu-latest

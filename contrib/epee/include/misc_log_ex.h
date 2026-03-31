@@ -1,3 +1,4 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
 // Copyright (c) 2006-2013, Andrey N. Sabelnikov, www.sabelnikov.net
 // All rights reserved.
 //
@@ -241,7 +242,7 @@ extern "C"
 
 #endif
 
-#ifdef __GNUC__
+#if defined(__GNUC__) || defined(__clang__)
 #define ATTRIBUTE_PRINTF __attribute__((format(printf, 2, 3)))
 #else
 #define ATTRIBUTE_PRINTF
