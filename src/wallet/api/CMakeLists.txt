@@ -71,8 +71,6 @@ target_link_libraries(wallet_api
     mnemonics
     ${LMDB_LIBRARY}
     ${Boost_CHRONO_LIBRARY}
-    $<$<BOOL:${WIN32}>:${Boost_LOCALE_LIBRARY}>
-    $<$<BOOL:${WIN32}>:${ICU_LIBRARIES}>
     ${Boost_SERIALIZATION_LIBRARY}
     ${Boost_FILESYSTEM_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
@@ -81,6 +79,9 @@ target_link_libraries(wallet_api
     ${Boost_REGEX_LIBRARY}
   PRIVATE
     ${EXTRA_LIBRARIES})
+if(WIN32)
+  target_link_libraries(wallet_api PUBLIC ${Boost_LOCALE_LIBRARY} ${ICU_LIBRARIES})
+endif()
 
 set_property(TARGET wallet_api PROPERTY EXCLUDE_FROM_ALL TRUE)
 set_property(TARGET obj_wallet_api PROPERTY EXCLUDE_FROM_ALL TRUE)
