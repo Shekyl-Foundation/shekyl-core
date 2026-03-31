@@ -53,12 +53,13 @@ target_link_libraries(simplewallet
     ${Boost_CHRONO_LIBRARY}
     ${Boost_PROGRAM_OPTIONS_LIBRARY}
     ${Boost_FILESYSTEM_LIBRARY}
-    $<$<BOOL:${WIN32}>:${Boost_LOCALE_LIBRARY}>
-    $<$<BOOL:${WIN32}>:${ICU_LIBRARIES}>
     ${Boost_THREAD_LIBRARY}
     ${CMAKE_THREAD_LIBS_INIT}
     ${GNU_READLINE_LIBRARY}
     ${EXTRA_LIBRARIES})
+if(WIN32)
+  target_link_libraries(simplewallet PRIVATE ${Boost_LOCALE_LIBRARY} ${ICU_LIBRARIES})
+endif()
 set_property(TARGET simplewallet
   PROPERTY
     OUTPUT_NAME "shekyl-wallet-cli")

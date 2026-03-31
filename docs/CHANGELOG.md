@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### 🐛 Fixed
+
+- **Win64 build failure (ICU generator expression)**: Replaced broken CMake
+  generator expressions `$<$<BOOL:${WIN32}>:${ICU_LIBRARIES}>` with
+  `if(WIN32)` blocks in `simplewallet`, `wallet_api`, and
+  `libwallet_api_tests` CMakeLists. Generator expressions cannot contain
+  semicolon-separated lists; the old pattern passed literal fragments like
+  `$<1:icuio` to the linker on MinGW cross-compilation.
+- **Linux static build (libunbound linking)**: Fixed `FindUnbound.cmake`
+  scoping bug where `list(APPEND UNBOUND_LIBRARIES ...)` created a local
+  variable shadowing the `find_library` cache entry. The transitive static
+  deps (libevent, libnettle, libhogweed, libgmp) were silently dropped,
+  causing undefined reference errors in `release-static-linux-x86_64`
+  builds.
+
 ## [3.0.3-RC1] - 2026-03-31
 
 ### Known Limitations
