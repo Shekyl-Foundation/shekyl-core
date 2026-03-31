@@ -41,7 +41,7 @@ def setup():
         subprocess.check_call(['rm', 'shekyl', '-fR'])
     subprocess.check_call(['git', 'clone', args.url, 'shekyl'])
     os.chdir('..')
-    make_image_prog = ['bin/make-base-vm', '--suite', 'bionic', '--arch', 'amd64']
+    make_image_prog = ['bin/make-base-vm', '--suite', 'jammy', '--arch', 'amd64']
     if args.docker:
         try:
             subprocess.check_output(['docker', '--help'])
@@ -55,7 +55,7 @@ def setup():
     os.chdir(workdir)
     if args.is_bionic and not args.kvm and not args.docker:
         subprocess.check_call(['sudo', 'sed', '-i', 's/lxcbr0/br0/', '/etc/default/lxc-net'])
-        print('Reboot is required')
+        print('Reboot is required (bionic LXC workaround)')
         sys.exit(0)
 
 def rebuild():

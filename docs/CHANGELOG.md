@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### 🔄 Changed
+
+- **Gitian reproducible builds: migrated from Ubuntu 18.04 (Bionic) to 22.04
+  (Jammy).** All five build descriptors (`gitian-linux.yml`, `gitian-win.yml`,
+  `gitian-osx.yml`, `gitian-android.yml`, `gitian-freebsd.yml`),
+  `gitian-build.py`, and `dockrun.sh` now target Jammy. Drops GCC 7 and
+  Python 2 dependencies in favour of the distro-default GCC 11 and Python 3.
+  Upgrades FreeBSD cross-compiler from Clang 8 to Clang 14. Removes
+  Bionic-specific workarounds (i686 asm symlink hack, glibc `math-finite.h`
+  hack). Adds `linux-libc-dev:i386` for native i686 headers. C++17 is now
+  fully supported by the Gitian toolchain.
+
 ## [3.0.3-RC1] - 2026-03-31
 
 ### Known Limitations

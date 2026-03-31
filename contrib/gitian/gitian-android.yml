@@ -2,14 +2,12 @@
 name: "shekyl-android-3"
 enable_cache: true
 suites:
-- "bionic"
+- "jammy"
 architectures:
 - "amd64"
 packages:
 - "curl"
 - "gperf"
-- "gcc-7"
-- "g++-7"
 - "gcc"
 - "g++"
 - "binutils-gold"
@@ -22,7 +20,7 @@ packages:
 - "faketime"
 - "bsdmainutils"
 - "ca-certificates"
-- "python"
+- "python3"
 - "cmake"
 - "unzip"
 remotes:
