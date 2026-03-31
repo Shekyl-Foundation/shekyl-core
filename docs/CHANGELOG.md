@@ -16,6 +16,21 @@
   deps (libevent, libnettle, libhogweed, libgmp) were silently dropped,
   causing undefined reference errors in `release-static-linux-x86_64`
   builds.
+- **JSON serialization of v3 (PQC) transactions**: Added missing
+  `pqc_auth` field to the RapidJSON `toJsonValue`/`fromJsonValue`
+  roundtrip for `cryptonote::transaction`. V3 transactions created
+  under `HF_VERSION_SHEKYL_NG` include a `pqc_authentication`
+  envelope; without JSON support the field was silently dropped,
+  causing `get_transaction_hash` to fail with "Inconsistent
+  transaction prefix, unprunable and blob sizes" after a JSON
+  roundtrip. Fixes the `JsonSerialization.BulletproofPlusTransaction`
+  unit test failure.
+- **MSVC portability patches**: Guarded unconditional POSIX includes
+  (`unistd.h`, `dlfcn.h`) and GCC-specific attributes (`__attribute__`)
+  behind `_MSC_VER` / `_WIN32` preprocessor checks in 10 source files.
+  Affected: `util.cpp`, `spawn.cpp`, `stack_trace.cpp`, `aligned.c`,
+  `slow-hash.c`, `rx-slow-hash.c`, `keccak.c`, `CryptonightR_JIT.c`,
+  `misc_log_ex.h`.
 
 ## [3.0.3-RC1] - 2026-03-31
 
