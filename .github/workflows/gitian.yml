@@ -37,7 +37,7 @@ jobs:
             option: "m"
     name: ${{ matrix.operating-system.name }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         submodules: recursive
     - name: prepare
@@ -57,7 +57,7 @@ jobs:
         echo \`\`\` >> $GITHUB_STEP_SUMMARY
         shasum -a256 * >> $GITHUB_STEP_SUMMARY
         echo \`\`\` >> $GITHUB_STEP_SUMMARY
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v6
       with:
         name: ${{ matrix.operating-system.name }}
         path: |

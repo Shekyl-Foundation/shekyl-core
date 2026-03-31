@@ -27,8 +27,8 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#ifndef MONERO_MESSAGES_MAP_H
-#define MONERO_MESSAGES_MAP_H
+#ifndef SHEKYL_MESSAGES_MAP_H
+#define SHEKYL_MESSAGES_MAP_H
 
 #include <string>
 #include <type_traits>
@@ -72,14 +72,14 @@ namespace trezor {
 
     template<class t_message=google::protobuf::Message>
     static messages::MessageType get_message_wire_number() {
-      BOOST_STATIC_ASSERT(boost::is_base_of<google::protobuf::Message, t_message>::value);
-      return get_message_wire_number(t_message::default_instance().GetDescriptor()->name());
+      static_assert(std::is_base_of<google::protobuf::Message, t_message>::value);
+      return get_message_wire_number(std::string(t_message::default_instance().GetDescriptor()->name()));
     }
   };
 
   template<class t_message=google::protobuf::Message>
   std::shared_ptr<t_message> message_ptr_retype(std::shared_ptr<google::protobuf::Message> & in){
-    BOOST_STATIC_ASSERT(boost::is_base_of<google::protobuf::Message, t_message>::value);
+    static_assert(std::is_base_of<google::protobuf::Message, t_message>::value);
     if (!in){
       return nullptr;
     }
@@ -89,7 +89,7 @@ namespace trezor {
 
   template<class t_message=google::protobuf::Message>
   std::shared_ptr<t_message> message_ptr_retype_static(std::shared_ptr<google::protobuf::Message> & in){
-    BOOST_STATIC_ASSERT(boost::is_base_of<google::protobuf::Message, t_message>::value);
+    static_assert(std::is_base_of<google::protobuf::Message, t_message>::value);
     if (!in){
       return nullptr;
     }
@@ -99,4 +99,4 @@ namespace trezor {
 
 }}
 
-#endif //MONERO_MESSAGES_MAP_H
+#endif //SHEKYL_MESSAGES_MAP_H

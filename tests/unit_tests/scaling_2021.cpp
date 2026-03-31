@@ -26,9 +26,9 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// References:
-// - https://github.com/ArticMine/Monero-Documents/blob/master/MoneroScaling2021.pdf
-// - https://github.com/monero-project/research-lab/issues/70
+// Shekyl fee scaling tests.  All hard-fork features are active from genesis
+// (HF1).  The 2021 scaling formula applies unconditionally:
+//   fee_per_byte = floor(0.95 * reward * 3000 / median^2)
 
 #define IN_UNIT_TESTS
 
@@ -67,121 +67,107 @@ public:
 
 #define PREFIX(hf_version) PREFIX_WINDOW(hf_version, TEST_LONG_TERM_BLOCK_WEIGHT_WINDOW)
 
-TEST(fee_2021_scaling, relay_fee_cases_from_pdf)
+TEST(fee_2021_scaling, relay_fee)
 {
-  PREFIX_WINDOW(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
+  // 10 SKL block reward, various medians
+  ASSERT_EQ(cryptonote::Blockchain::get_dynamic_base_fee(10ull * COIN, 300000, 1), 317u);
+  ASSERT_EQ(cryptonote::Blockchain::get_dynamic_base_fee(10ull * COIN, 600000, 1), 79u);
+  ASSERT_EQ(cryptonote::Blockchain::get_dynamic_base_fee(10ull * COIN, 3000000, 1), 3u);
+  ASSERT_EQ(cryptonote::Blockchain::get_dynamic_base_fee(10ull * COIN, 6000000, 1), 1u);
 
-  ASSERT_EQ(bc->get_dynamic_base_fee(1200000000000, 300000, HF_VERSION_2021_SCALING-1), 8000);
-  ASSERT_EQ(bc->get_dynamic_base_fee(1200000000000, 300000, HF_VERSION_2021_SCALING), 38000);
-  ASSERT_EQ(bc->get_dynamic_base_fee(1200000000000, 1425000, HF_VERSION_2021_SCALING-1), 1684 /*1680*/);
-  ASSERT_EQ(bc->get_dynamic_base_fee(1200000000000, 1425000, HF_VERSION_2021_SCALING), 1684 /*1680*/);
-  ASSERT_EQ(bc->get_dynamic_base_fee(1200000000000, 1500000, HF_VERSION_2021_SCALING-1), 1600);
-  ASSERT_EQ(bc->get_dynamic_base_fee(1200000000000, 1500000, HF_VERSION_2021_SCALING), 1520);
+  // 1 SKL block reward
+  ASSERT_EQ(cryptonote::Blockchain::get_dynamic_base_fee(COIN, 300000, 1), 32u);
+  ASSERT_EQ(cryptonote::Blockchain::get_dynamic_base_fee(COIN, 600000, 1), 8u);
+  ASSERT_EQ(cryptonote::Blockchain::get_dynamic_base_fee(COIN, 3000000, 1), 1u);
 
-  ASSERT_EQ(bc->get_dynamic_base_fee(600000000000, 300000, HF_VERSION_2021_SCALING-1), 4000);
-  ASSERT_EQ(bc->get_dynamic_base_fee(600000000000, 300000, HF_VERSION_2021_SCALING), 19000);
-  ASSERT_EQ(bc->get_dynamic_base_fee(600000000000, 1425000, HF_VERSION_2021_SCALING-1), 842 /*840*/);
-  ASSERT_EQ(bc->get_dynamic_base_fee(600000000000, 1425000, HF_VERSION_2021_SCALING), 842 /*840*/);
-  ASSERT_EQ(bc->get_dynamic_base_fee(600000000000, 1500000, HF_VERSION_2021_SCALING-1), 800);
-  ASSERT_EQ(bc->get_dynamic_base_fee(600000000000, 1500000, HF_VERSION_2021_SCALING), 760);
+  // Small medians are clamped to ZONE_V5 (300000)
+  ASSERT_EQ(cryptonote::Blockchain::get_dynamic_base_fee(10ull * COIN, 1, 1), 317u);
+  ASSERT_EQ(cryptonote::Blockchain::get_dynamic_base_fee(10ull * COIN, 100000, 1), 317u);
 }
 
-TEST(fee_2021_scaling, wallet_fee_cases_from_pdf)
+TEST(fee_2021_scaling, wallet_fee_estimate)
 {
   PREFIX_WINDOW(HF_VERSION_2021_SCALING, CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
   std::vector<uint64_t> fees;
 
+  // 10 SKL reward, Mnw=Mlw=ZONE_V5
   fees.clear();
-  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 600000000000, 300000, 300000, fees);
+  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 300000, 300000, fees);
   ASSERT_EQ(fees.size(), 4);
-  ASSERT_EQ(fees[0], 20000);
-  ASSERT_EQ(fees[1], 80000);
-  ASSERT_EQ(fees[2], 320000);
-  ASSERT_EQ(fees[3], 4000000);
+  ASSERT_EQ(fees[0], 340u);
+  ASSERT_EQ(fees[1], 1400u);
+  ASSERT_EQ(fees[2], 5400u);
+  ASSERT_EQ(fees[3], 67000u);
 
+  // 10 SKL reward, large Mnw
   fees.clear();
-  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 600000000000, 15000000, 300000, fees);
+  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 15000000, 300000, fees);
   ASSERT_EQ(fees.size(), 4);
-  ASSERT_EQ(fees[0], 20000);
-  ASSERT_EQ(fees[1], 80000);
-  ASSERT_EQ(fees[2], 320000);
-  ASSERT_EQ(fees[3], 1300000);
+  ASSERT_EQ(fees[0], 340u);
+  ASSERT_EQ(fees[1], 1400u);
+  ASSERT_EQ(fees[2], 5400u);
+  ASSERT_EQ(fees[3], 22000u);
 
+  // 10 SKL reward, Mnw=Mlw=1500000
   fees.clear();
-  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 600000000000, 1425000, 1425000, fees);
+  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 10ull * COIN, 1500000, 1500000, fees);
   ASSERT_EQ(fees.size(), 4);
-  ASSERT_EQ(fees[0], 890);
-  ASSERT_EQ(fees[1], 3600);
-  ASSERT_EQ(fees[2], 68000);
-  ASSERT_EQ(fees[3], 850000 /* 842000 */);
-
-  fees.clear();
-  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 600000000000, 1500000, 1500000, fees);
-  ASSERT_EQ(fees.size(), 4);
-  ASSERT_EQ(fees[0], 800);
-  ASSERT_EQ(fees[1], 3200);
-  ASSERT_EQ(fees[2], 64000);
-  ASSERT_EQ(fees[3], 800000);
-
-  fees.clear();
-  bc->get_dynamic_base_fee_estimate_2021_scaling(10, 600000000000, 75000000, 1500000, fees);
-  ASSERT_EQ(fees.size(), 4);
-  ASSERT_EQ(fees[0], 800);
-  ASSERT_EQ(fees[1], 3200);
-  ASSERT_EQ(fees[2], 64000);
-  ASSERT_EQ(fees[3], 260000);
+  ASSERT_EQ(fees[0], 13u);
+  ASSERT_EQ(fees[1], 53u);
+  ASSERT_EQ(fees[2], 1100u);
+  ASSERT_EQ(fees[3], 14000u);
 }
 
 TEST(fee_2021_scaling, rounding)
 {
-  ASSERT_EQ(cryptonote::round_money_up("27810", 3), "27900.000000");
-  ASSERT_EQ(cryptonote::round_money_up("37.94", 3), "38.000000");
-  ASSERT_EQ(cryptonote::round_money_up("0.5555", 3), "0.556000");
-  ASSERT_EQ(cryptonote::round_money_up("0.002342", 3), "0.002350");
+  ASSERT_EQ(cryptonote::round_money_up("27810", 3), "27900.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("37.94", 3), "38.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("0.5555", 3), "0.556000000");
+  ASSERT_EQ(cryptonote::round_money_up("0.002342", 3), "0.002350000");
 
-  ASSERT_EQ(cryptonote::round_money_up("27810", 2), "28000.000000");
-  ASSERT_EQ(cryptonote::round_money_up("37.94", 2), "38.000000");
-  ASSERT_EQ(cryptonote::round_money_up("0.5555", 2), "0.560000");
-  ASSERT_EQ(cryptonote::round_money_up("0.002342", 2), "0.002400");
+  ASSERT_EQ(cryptonote::round_money_up("27810", 2), "28000.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("37.94", 2), "38.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("0.5555", 2), "0.560000000");
+  ASSERT_EQ(cryptonote::round_money_up("0.002342", 2), "0.002400000");
 
-  ASSERT_EQ(cryptonote::round_money_up("0", 8), "0.000000");
-  ASSERT_EQ(cryptonote::round_money_up("0.0", 8), "0.000000");
-  ASSERT_EQ(cryptonote::round_money_up("50.0", 8), "50.000000");
-  ASSERT_EQ(cryptonote::round_money_up("0.002342", 8), "0.002342");
-  ASSERT_EQ(cryptonote::round_money_up("0.002342", 1), "0.003000");
-  ASSERT_EQ(cryptonote::round_money_up("12345", 8), "12345.000000");
-  ASSERT_EQ(cryptonote::round_money_up("45678", 1), "50000.000000");
-  ASSERT_EQ(cryptonote::round_money_up("1.234", 1), "2.000000");
-  ASSERT_EQ(cryptonote::round_money_up("1.000001", 4), "1.001000");
-  ASSERT_EQ(cryptonote::round_money_up("1.002001", 4), "1.003000");
+  ASSERT_EQ(cryptonote::round_money_up("0", 8), "0.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("0.0", 8), "0.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("50.0", 8), "50.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("0.002342", 8), "0.002342000");
+  ASSERT_EQ(cryptonote::round_money_up("0.002342", 1), "0.003000000");
+  ASSERT_EQ(cryptonote::round_money_up("12345", 8), "12345.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("45678", 1), "50000.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("1.234", 1), "2.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("1.000001", 4), "1.001000000");
+  ASSERT_EQ(cryptonote::round_money_up("1.002001", 4), "1.003000000");
 
-  ASSERT_EQ(cryptonote::round_money_up("1.999999", 1), "2.000000");
-  ASSERT_EQ(cryptonote::round_money_up("1.999999", 2), "2.000000");
-  ASSERT_EQ(cryptonote::round_money_up("1.999999", 3), "2.000000");
-  ASSERT_EQ(cryptonote::round_money_up("1.999999", 4), "2.000000");
-  ASSERT_EQ(cryptonote::round_money_up("1.999999", 5), "2.000000");
-  ASSERT_EQ(cryptonote::round_money_up("1.999999", 6), "2.000000");
-  ASSERT_EQ(cryptonote::round_money_up("1.999999", 7), "1.999999");
-  ASSERT_EQ(cryptonote::round_money_up("1.999999", 8), "1.999999");
-  ASSERT_EQ(cryptonote::round_money_up("1.999999", 9), "1.999999");
+  ASSERT_EQ(cryptonote::round_money_up("1.999999", 1), "2.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("1.999999", 2), "2.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("1.999999", 3), "2.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("1.999999", 4), "2.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("1.999999", 5), "2.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("1.999999", 6), "2.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("1.999999", 7), "1.999999000");
+  ASSERT_EQ(cryptonote::round_money_up("1.999999", 8), "1.999999000");
+  ASSERT_EQ(cryptonote::round_money_up("1.999999", 9), "1.999999000");
 
-  ASSERT_EQ(cryptonote::round_money_up("2.000001", 1), "3.000000");
-  ASSERT_EQ(cryptonote::round_money_up("2.000001", 2), "2.100000");
-  ASSERT_EQ(cryptonote::round_money_up("2.000001", 3), "2.010000");
-  ASSERT_EQ(cryptonote::round_money_up("2.000001", 4), "2.001000");
-  ASSERT_EQ(cryptonote::round_money_up("2.000001", 5), "2.000100");
-  ASSERT_EQ(cryptonote::round_money_up("2.000001", 6), "2.000010");
-  ASSERT_EQ(cryptonote::round_money_up("2.000001", 7), "2.000001");
-  ASSERT_EQ(cryptonote::round_money_up("2.000001", 8), "2.000001");
-  ASSERT_EQ(cryptonote::round_money_up("2.000001", 9), "2.000001");
-  ASSERT_EQ(cryptonote::round_money_up("2.000001", 4000), "2.000001");
+  ASSERT_EQ(cryptonote::round_money_up("2.000001", 1), "3.000000000");
+  ASSERT_EQ(cryptonote::round_money_up("2.000001", 2), "2.100000000");
+  ASSERT_EQ(cryptonote::round_money_up("2.000001", 3), "2.010000000");
+  ASSERT_EQ(cryptonote::round_money_up("2.000001", 4), "2.001000000");
+  ASSERT_EQ(cryptonote::round_money_up("2.000001", 5), "2.000100000");
+  ASSERT_EQ(cryptonote::round_money_up("2.000001", 6), "2.000010000");
+  ASSERT_EQ(cryptonote::round_money_up("2.000001", 7), "2.000001000");
+  ASSERT_EQ(cryptonote::round_money_up("2.000001", 8), "2.000001000");
+  ASSERT_EQ(cryptonote::round_money_up("2.000001", 9), "2.000001000");
+  ASSERT_EQ(cryptonote::round_money_up("2.000001", 4000), "2.000001000");
 
-  ASSERT_EQ(cryptonote::round_money_up("999", 2), "1000.000000");
+  ASSERT_EQ(cryptonote::round_money_up("999", 2), "1000.000000000");
 
   ASSERT_THROW(cryptonote::round_money_up("1.23", 0), std::runtime_error);
-  ASSERT_THROW(cryptonote::round_money_up("18446744.073709551615", 1), std::runtime_error);
-  ASSERT_THROW(cryptonote::round_money_up("18446744.073709551615", 2), std::runtime_error);
-  ASSERT_THROW(cryptonote::round_money_up("18446744.073709551615", 12), std::runtime_error);
-  ASSERT_THROW(cryptonote::round_money_up("18446744.073709551615", 19), std::runtime_error);
-  ASSERT_THROW(cryptonote::round_money_up("18446744.073709551615", 20), std::runtime_error);
+  // Shekyl 9dp max: UINT64_MAX / 10^9 = 18446744073.709551615
+  ASSERT_THROW(cryptonote::round_money_up("18446744073.709551615", 1), std::runtime_error);
+  ASSERT_THROW(cryptonote::round_money_up("18446744073.709551615", 2), std::runtime_error);
+  ASSERT_THROW(cryptonote::round_money_up("18446744073.709551615", 12), std::runtime_error);
+  ASSERT_THROW(cryptonote::round_money_up("18446744073.709551615", 19), std::runtime_error);
 }

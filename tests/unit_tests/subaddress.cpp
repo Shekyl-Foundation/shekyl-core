@@ -109,10 +109,10 @@ static void check_expected_max(const tools::wallet2 &w1, const cryptonote::subad
   for (uint32_t i = 0; i <= exp_max.minor; ++i)
   {
     auto subaddr = w1.get_subaddress({exp_max.major, i});
-    EXPECT_NE(boost::none, w1.get_subaddress_index(subaddr));
+    EXPECT_NE(std::nullopt, w1.get_subaddress_index(subaddr));
   }
   auto subaddr = w1.get_subaddress({exp_max.major, exp_max.minor + 1});
-  EXPECT_EQ(boost::none, w1.get_subaddress_index(subaddr));
+  EXPECT_EQ(std::nullopt, w1.get_subaddress_index(subaddr));
 };
 
 static void expect_default_wallet_state(const tools::wallet2 &w1)
@@ -127,7 +127,7 @@ static void expect_default_wallet_state(const tools::wallet2 &w1)
   check_expected_max(w1, {1,199});
   check_expected_max(w1, {49,199});
   check_expected_max(w1, {50,199}); // 50 because the test starts with accounts 0 and 1 already allocated
-  EXPECT_EQ(boost::none, w1.get_subaddress_index(w1.get_subaddress({51,0})));
+  EXPECT_EQ(std::nullopt, w1.get_subaddress_index(w1.get_subaddress({51,0})));
 }
 
 TEST_F(WalletSubaddress, SetLookahead)
@@ -136,7 +136,7 @@ TEST_F(WalletSubaddress, SetLookahead)
   // get_subaddress_index looks up keys in the private m_subaddresses dictionary so we will use it to test if a key is properly being scanned for
   cryptonote::subaddress_index test_idx = {50, 199};
   auto subaddr = w1.get_subaddress(test_idx);
-  EXPECT_NE(boost::none, w1.get_subaddress_index(subaddr));
+  EXPECT_NE(std::nullopt, w1.get_subaddress_index(subaddr));
   // fist test expanding the major lookahead
   w1.set_subaddress_lookahead(100, 200);
   EXPECT_EQ(100, w1.get_subaddress_lookahead().first);
@@ -160,7 +160,7 @@ TEST_F(WalletSubaddress, ExpandThenSetMinorIncreaseOnly)
   check_expected_max(w1, {1,199});
   check_expected_max(w1, {49,199});
   check_expected_max(w1, {50,199});
-  EXPECT_EQ(boost::none, w1.get_subaddress_index(w1.get_subaddress({51,0})));
+  EXPECT_EQ(std::nullopt, w1.get_subaddress_index(w1.get_subaddress({51,0})));
 
   // Now set the minor lookahead 100 higher
   w1.set_subaddress_lookahead(50, 200+100);
@@ -169,7 +169,7 @@ TEST_F(WalletSubaddress, ExpandThenSetMinorIncreaseOnly)
   check_expected_max(w1, {1,299});
   check_expected_max(w1, {49,299});
   check_expected_max(w1, {50,299});
-  EXPECT_EQ(boost::none, w1.get_subaddress_index(w1.get_subaddress({51,0})));
+  EXPECT_EQ(std::nullopt, w1.get_subaddress_index(w1.get_subaddress({51,0})));
 }
 
 TEST_F(WalletSubaddress, ExpandThenSetMajorIncreaseOnly)
@@ -182,7 +182,7 @@ TEST_F(WalletSubaddress, ExpandThenSetMajorIncreaseOnly)
   check_expected_max(w1, {1,199});
   check_expected_max(w1, {40,199});
   check_expected_max(w1, {89,199});
-  EXPECT_EQ(boost::none, w1.get_subaddress_index(w1.get_subaddress({90,0})));
+  EXPECT_EQ(std::nullopt, w1.get_subaddress_index(w1.get_subaddress({90,0})));
 
   // Now set the major lookahead 10 higher
   w1.set_subaddress_lookahead(50+10, 200);
@@ -190,7 +190,7 @@ TEST_F(WalletSubaddress, ExpandThenSetMajorIncreaseOnly)
   check_expected_max(w1, {1,199});
   check_expected_max(w1, {40,199});
   check_expected_max(w1, {99,199});
-  EXPECT_EQ(boost::none, w1.get_subaddress_index(w1.get_subaddress({100,0})));
+  EXPECT_EQ(std::nullopt, w1.get_subaddress_index(w1.get_subaddress({100,0})));
 }
 
 TEST_F(WalletSubaddress, ExpandThenSetIncreaseBoth)
@@ -203,7 +203,7 @@ TEST_F(WalletSubaddress, ExpandThenSetIncreaseBoth)
   check_expected_max(w1, {1,199});
   check_expected_max(w1, {40,349});
   check_expected_max(w1, {89,199});
-  EXPECT_EQ(boost::none, w1.get_subaddress_index(w1.get_subaddress({90,0})));
+  EXPECT_EQ(std::nullopt, w1.get_subaddress_index(w1.get_subaddress({90,0})));
 
   // Now set the major lookahead 10 higher and minor 100 higher
   w1.set_subaddress_lookahead(50+10, 200+100);
@@ -211,5 +211,5 @@ TEST_F(WalletSubaddress, ExpandThenSetIncreaseBoth)
   check_expected_max(w1, {1,299});
   check_expected_max(w1, {40,449});
   check_expected_max(w1, {99,299});
-  EXPECT_EQ(boost::none, w1.get_subaddress_index(w1.get_subaddress({100,0})));
+  EXPECT_EQ(std::nullopt, w1.get_subaddress_index(w1.get_subaddress({100,0})));
 }

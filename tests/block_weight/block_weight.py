@@ -64,7 +64,11 @@ def run(t, blocks):
       else:
         sys.exit(1)
       weights.append(max_weight)
-      lt_weights.append(min(max_weight,int(ltembw + int(ltembw * 2 / 5))))
+      # Keep the Python reference model aligned with
+      # Blockchain::get_next_long_term_block_weight bounds:
+      # [median * (10/17), median * (17/10)].
+      bounded_weight = max(max_weight, int(ltembw * 10 / 17))
+      lt_weights.append(min(bounded_weight, int(ltembw + int(ltembw * 7 / 10))))
 
       #print "H %u, r %u, BW %u, EMBW %u, LTBW %u, LTEMBW %u, ltmedian %u" % (block, r, max_weight, embw, lt_weights[-1], ltembw, ltmedian)
       print("H %u, BW %u, EMBW %u, LTBW %u" % (block, max_weight, embw, lt_weights[-1]))

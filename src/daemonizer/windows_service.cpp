@@ -26,8 +26,8 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include <boost/chrono/chrono.hpp>
-#include <boost/thread/thread.hpp>
+#include <chrono>
+#include <thread>
 
 #undef UNICODE
 #undef _UNICODE
@@ -103,8 +103,7 @@ namespace {
   // to allow the user to read any output.
   void pause_to_display_admin_window_messages()
   {
-    boost::chrono::milliseconds how_long{1500};
-    boost::this_thread::sleep_for(how_long);
+    std::this_thread::sleep_for(std::chrono::milliseconds{1500});
   }
 }
 

@@ -169,29 +169,31 @@
 
 #define THREAD_STACK_SIZE                       5 * 1024 * 1024
 
-#define HF_VERSION_DYNAMIC_FEE                  4
-#define HF_VERSION_MIN_MIXIN_4                  6
-#define HF_VERSION_MIN_MIXIN_6                  7
-#define HF_VERSION_CRYPTONIGHT_VARIANT_1        7
-#define HF_VERSION_MIN_MIXIN_10                 8
-#define HF_VERSION_MIN_MIXIN_15                 15
-#define HF_VERSION_ENFORCE_RCT                  6
-#define HF_VERSION_PER_BYTE_FEE                 8
-#define HF_VERSION_SMALLER_BP                   10
-#define HF_VERSION_LONG_TERM_BLOCK_WEIGHT       10
-#define HF_VERSION_MIN_2_OUTPUTS                12
-#define HF_VERSION_MIN_V2_COINBASE_TX           12
-#define HF_VERSION_SAME_MIXIN                   12
-#define HF_VERSION_REJECT_SIGS_IN_COINBASE      12
-#define HF_VERSION_ENFORCE_MIN_AGE              12
-#define HF_VERSION_EFFECTIVE_SHORT_TERM_MEDIAN_IN_PENALTY 12
-#define HF_VERSION_EXACT_COINBASE               13
-#define HF_VERSION_CLSAG                        13
-#define HF_VERSION_DETERMINISTIC_UNLOCK_TIME    13
-#define HF_VERSION_BULLETPROOF_PLUS             15
-#define HF_VERSION_VIEW_TAGS                    15
-#define HF_VERSION_2021_SCALING                 15
-#define HF_VERSION_SHEKYL_NG                    17  // Three-component economics: release rate, burn, staking
+// Rebooted chain: all legacy features active from genesis (HF 1).
+// Constants kept as named symbols for code clarity; all resolve to 1.
+#define HF_VERSION_DYNAMIC_FEE                  1
+#define HF_VERSION_MIN_MIXIN_4                  1
+#define HF_VERSION_MIN_MIXIN_6                  1
+#define HF_VERSION_CRYPTONIGHT_VARIANT_1        1
+#define HF_VERSION_MIN_MIXIN_10                 1
+#define HF_VERSION_MIN_MIXIN_15                 1
+#define HF_VERSION_ENFORCE_RCT                  1
+#define HF_VERSION_PER_BYTE_FEE                 1
+#define HF_VERSION_SMALLER_BP                   1
+#define HF_VERSION_LONG_TERM_BLOCK_WEIGHT       1
+#define HF_VERSION_MIN_2_OUTPUTS                1
+#define HF_VERSION_MIN_V2_COINBASE_TX           1
+#define HF_VERSION_SAME_MIXIN                   1
+#define HF_VERSION_REJECT_SIGS_IN_COINBASE      1
+#define HF_VERSION_ENFORCE_MIN_AGE              1
+#define HF_VERSION_EFFECTIVE_SHORT_TERM_MEDIAN_IN_PENALTY 1
+#define HF_VERSION_EXACT_COINBASE               1
+#define HF_VERSION_CLSAG                        1
+#define HF_VERSION_DETERMINISTIC_UNLOCK_TIME    1
+#define HF_VERSION_BULLETPROOF_PLUS             1
+#define HF_VERSION_VIEW_TAGS                    1
+#define HF_VERSION_2021_SCALING                 1
+#define HF_VERSION_SHEKYL_NG                    1  // Three-component economics: release rate, burn, staking
 
 #define PER_KB_FEE_QUANTIZATION_DECIMALS        6 // Keep fee quantization at 1e-6 SKL while display precision is 1e-9 SKL.
 #define CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES 2
@@ -233,7 +235,7 @@ namespace config
   boost::uuids::uuid const NETWORK_ID = { {
       0x6F, 0x04, 0x08, 0x0F, 0x10, 0x17, 0x2A, 0x6F, 0x6F, 0x04, 0x08, 0x0F, 0x10, 0x17, 0x2A, 0x6F
     } }; // Bender's nightmare
-  std::string const GENESIS_TX = "013c01ff0001ffffffffffff03029b2e4c0281c0b02e7c53291a94d1d0cbff8883f8024f5142ee494ffbbd08807121017767aafcde9be00dcfd098715ebcf7f410daebc582fda69d24a28e9d0bc890c0";
+  std::string const GENESIS_TX = "023c01ff00018080a0d9e61d03bd6e72aaa34956e2cfbcea033e825c8e94078da2469906d3e5d6194f516e723f142101e315dc29e3226b530a219ff70823220600467494af69d63328b14a78d30495e400";
   uint32_t const GENESIS_NONCE = 10000;
 
   // Hash domain separators
@@ -276,7 +278,7 @@ namespace config
     boost::uuids::uuid const NETWORK_ID = { {
         0xDE, 0x04, 0x08, 0x0F, 0x10, 0x17, 0x2A, 0xDE, 0xDE, 0x04, 0x08, 0x0F, 0x10, 0x17, 0x2A, 0xDE
       } }; // Bender's daydream
-      std::string const GENESIS_TX = "013c01ff00058080a0f8fa0502002c98c816898fb5b50e2f442a15394567b22c8dfd56d7320ad77b8cb4324a298080a0f8fa05020f4812c49739a00618dae128555a2471ae3222d16b24668b24193b7ddeacd2f08080a0f8fa050243ea958197067c8d3249049f7859f5529f05ec14a3900b442e482beefd2ea3ce8080a0f8fa050294d9c251554aceca209ca0385a44c6a57ad6a764102acbc3883cfab3311b37298080a0f8fa0502b372f95e480f0c82c44e6e034b1fd9bbe8194127744d4ee1430e47b32b1798372101642df2ad4e5906568b6a6751360b4c9c37d091c0146334c06738575570ad67d3";
+      std::string const GENESIS_TX = "023c01ff00058080a0f8fa0503010169c3add3b0110e1274b56fefe3d18d74da3bc4ac3f93ad1976646709de2c2c8080a0f8fa050395f9d0f831808e3ef711d56cf8a025c823233a47b6e034e107710163308ad9526f8080a0f8fa0503a092b7cb689ffa3fffdc9e73deee160212f316d423ad5df2d2271fd1e5b80cd1d38080a0f8fa0503734156f553123daaec7280640c5a073c197810701374e331e7b0218dc59cf9c03c8080a0f8fa050367a338532f43379358b2dd8fe044ea1a6f529dd9fe766822e9b7dedb5e1f83df13210113ef4a9d419042c4c60d44da8a20ffc70eb5d9421abc8f7dc8bcaac50b13024e00";
     uint32_t const GENESIS_NONCE = 10101;
   }
 
@@ -291,7 +293,7 @@ namespace config
     boost::uuids::uuid const NETWORK_ID = { {
         0x12 ,0x30, 0xF1, 0x71 , 0x61, 0x04 , 0x41, 0x61, 0x17, 0x31, 0x00, 0x82, 0x16, 0xA1, 0xA1, 0x12
       } }; // Bender's daydream
-    std::string const GENESIS_TX = "013c01ff0001ffffffffffff0302df5d56da0c7d643ddd1ce61901c7bdc5fb1738bfe39fbe69c28a3a7032729c0f2101168d0c4ca86fb55a4cf6a36d31431be1c53a3bd7411bb24e8832410289fa6f3b";
+    std::string const GENESIS_TX = "023c01ff00018080a0d9e61d03a91ea46d9778bdf71db67566064b90d5e89083bafbb7893b016200fbc4e77e4dfc2101ee336d3021ffa4463ff8f34ddcb41ee550b42b33f15f3cfc0c20829a4ca406ca00";
     uint32_t const GENESIS_NONCE = 10002;
   }
 }

@@ -29,8 +29,7 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #include "command_line.h"
-#include <boost/algorithm/string/compare.hpp>
-#include <boost/algorithm/string/predicate.hpp>
+#include "common/string_util.h"
 #include "common/i18n.h"
 
 namespace command_line
@@ -48,10 +47,9 @@ namespace command_line
     if (str == "y" || str == "Y")
       return true;
 
-    boost::algorithm::is_iequal ignore_case{};
-    if (boost::algorithm::equals("yes", str, ignore_case))
+    if (tools::string_util::iequals("yes", str))
       return true;
-    if (boost::algorithm::equals(command_line::tr("yes"), str, ignore_case))
+    if (tools::string_util::iequals(command_line::tr("yes"), str))
       return true;
 
     return false;
@@ -62,10 +60,9 @@ namespace command_line
     if (str == "n" || str == "N")
       return true;
 
-    boost::algorithm::is_iequal ignore_case{};
-    if (boost::algorithm::equals("no", str, ignore_case))
+    if (tools::string_util::iequals("no", str))
       return true;
-    if (boost::algorithm::equals(command_line::tr("no"), str, ignore_case))
+    if (tools::string_util::iequals(command_line::tr("no"), str))
       return true;
 
     return false;

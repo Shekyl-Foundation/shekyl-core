@@ -104,4 +104,20 @@ mod tests {
         let m = calc_release_multiplier(0, 100, 800_000, 1_300_000);
         assert_eq!(m, 800_000);
     }
+
+    #[test]
+    fn test_multiplier_monotonic_with_volume() {
+        let baseline = 100u64;
+        let min = 800_000u64;
+        let max = 1_300_000u64;
+
+        let samples = [0u64, 10, 25, 50, 75, 100, 120, 150, 500];
+        let mut prev = 0u64;
+        for s in samples {
+            let m = calc_release_multiplier(s, baseline, min, max);
+            assert!(m >= prev, "multiplier regressed at volume {s}: {m} < {prev}");
+            assert!(m >= min && m <= max, "multiplier out of bounds at volume {s}: {m}");
+            prev = m;
+        }
+    }
 }

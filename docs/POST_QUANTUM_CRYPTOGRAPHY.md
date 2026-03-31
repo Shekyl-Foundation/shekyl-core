@@ -1,5 +1,7 @@
 # Post Quantum Cryptography (PQC)
 
+> **Last updated:** 2026-03-30
+
 ## Purpose
 
 This document is the canonical specification for Shekyl's post-quantum
@@ -237,7 +239,7 @@ PqcAuthentication {
   auth_version
   scheme_id
   flags
-  hybrid_ownership_material
+  hybrid_public_key
   hybrid_signature
 }
 ```
@@ -245,11 +247,25 @@ PqcAuthentication {
 ### Field Semantics
 
 - `auth_version`: version for the PQ authorization container
-- `scheme_id`: identifies the hybrid scheme, initially `ed25519_ml_dsa_65`
+- `scheme_id`: identifies the hybrid scheme (see scheme registry below)
 - `flags`: reserved for future optional features; must be zero in phase 1
-- `hybrid_ownership_material`: public material used to bind the spend/ownership
-  path to hybrid verification
+- `hybrid_public_key`: canonical `HybridPublicKey` (Ed25519 pubkey || ML-DSA-65
+  public key) binding spend/ownership authorization to hybrid verification
 - `hybrid_signature`: dual signature over the canonical signing payload
+
+### Scheme Registry
+
+| `scheme_id` | Name | Status | Description |
+|---|---|---|---|
+| 0 | (reserved) | — | Invalid / unassigned |
+| 1 | `ed25519_ml_dsa_65` | **Active (HF1)** | Single-signer hybrid spend authorization |
+| 2 | `ed25519_ml_dsa_65_multisig` | **Active (HF1)** | M-of-N hybrid signature list; see `docs/PQC_MULTISIG.md` |
+| 3 | `lattice_threshold_composite` | **Reserved (V4)** | Lattice-based composite threshold; see `docs/PQC_MULTISIG.md` |
+
+For `scheme_id = 1`, the `PqcAuthentication` fields are as defined above.
+For `scheme_id = 2`, the container is extended with signer count, threshold,
+and arrays of keys/signatures. The canonical format is specified in
+`docs/PQC_MULTISIG.md`.
 
 ## Canonical Serialization
 
@@ -362,7 +378,7 @@ PqcAuthHeader {
   auth_version
   scheme_id
   flags
-  hybrid_ownership_material
+  hybrid_public_key
 }
 ```
 
@@ -538,6 +554,8 @@ Target: ~6 months post-launch.
 
 - Implement candidate primitives as non-consensus Rust crates under
   `rust/shekyl-crypto-pq-v4/`.
+- Implement lattice-based composite threshold multisig prototype
+  (`scheme_id = 3`) per `docs/PQC_MULTISIG.md` V4 roadmap.
 - Benchmark transaction size, verification time, and memory usage against
   v3 baseline.
 - Size budget target: total v4 transaction should not exceed 2x the v3 size
@@ -559,7 +577,7 @@ Target: ~9-12 months post-launch.
 
 Target: ~12-18 months post-launch (dependent on V4-C results).
 
-- Single hard fork activation height (same pattern as HF17).
+- Single hard fork activation height (same pattern as HF1).
 - Migration notes for wallets, indexers, and operators.
 - v3 transactions remain valid; v4 is opt-in initially, mandatory after a
   grace period.
@@ -588,33 +606,48 @@ protection is stable:
 - PQ replacement of RingCT primitives
 - PQ stealth-address redesign
 - mixed legacy/reboot transaction coexistence logic
-- multisig redesign under the hybrid scheme
+- lattice-based composite threshold multisig (V4; see `docs/PQC_MULTISIG.md`)
 - hardware wallet support details
+
+### No Longer Deferred
+
+- **Multisig under hybrid scheme:** V3 signature-list multisig (`scheme_id = 2`)
+  is specified in `docs/PQC_MULTISIG.md` and ships with HF1. This uses the
+  existing `Ed25519 + ML-DSA-65` primitives with no new cryptographic
+  assumptions.
 
 ## Implementation Mapping
 
-This spec maps directly to the next work items:
+All Phase-1 items are implemented. This table serves as an index into the
+codebase for each layer:
 
-1. `rust/shekyl-crypto-pq`
-   - implement `HybridEd25519MlDsa`
-2. `rust/shekyl-ffi`
-   - export stable sign/verify ABI
-3. `src/cryptonote_basic`
-   - add `TransactionV3` serialization fields
-4. `src/cryptonote_core`
-   - verify `TransactionV3` hybrid spend/ownership authorization using Rust FFI
-5. `src/wallet`
-   - construct and sign `TransactionV3` with hybrid ownership binding
-6. `docs/`
-   - update install, wire, privacy, release, and genesis docs
+| # | Layer | Status | Key files |
+|---|-------|--------|-----------|
+| 1 | Rust hybrid sign/verify | Done | `rust/shekyl-crypto-pq/src/signature.rs` |
+| 2 | FFI ABI (keygen/sign/verify) | Done | `rust/shekyl-ffi/src/lib.rs`, `src/shekyl/shekyl_ffi.h` |
+| 3 | TransactionV3 serialization | Done | `src/cryptonote_basic/cryptonote_basic.h` (`pqc_authentication`), boost serialization |
+| 4 | Core verification | Done | `src/cryptonote_core/tx_pqc_verify.cpp`, `blockchain.cpp` |
+| 5 | Wallet construction | Done | `src/cryptonote_core/cryptonote_tx_utils.cpp` (standard txs), `src/wallet/wallet2.cpp` (claim txs) |
+| 6 | Documentation | Done | `docs/POST_QUANTUM_CRYPTOGRAPHY.md`, `docs/DOCUMENTATION_TODOS_AND_PQC.md`, `docs/CHANGELOG.md` |
+
+Notes:
+- Staking and unstaking use `create_transactions_2` which routes through
+  `construct_tx_with_tx_key` (PQC signing built in).
+- Claim transactions use a dedicated PQC signing block in
+  `create_claim_transaction`.
+- Multisig wallets: V3 signature-list multisig (`scheme_id = 2`) is specified
+  in `docs/PQC_MULTISIG.md`. Each signer produces an independent hybrid
+  signature over the shared canonical payload. No DKG is required.
+  Lattice-based threshold multisig (`scheme_id = 3`) is deferred to V4.
 
 ## Open Items
 
 The following still need final implementation confirmation, but this document
 sets the intended direction:
 
-- exact `scheme_id` registry values if more hybrid schemes are introduced
-  beyond `ed25519_ml_dsa_65` (`scheme_id = 1`)
+- exact `scheme_id` registry values beyond those already assigned
+  (`1 = ed25519_ml_dsa_65`, `2 = ed25519_ml_dsa_65_multisig`,
+  `3 = lattice_threshold_composite` reserved for V4)
 
 ### Resolved Items
 
@@ -627,6 +660,8 @@ sets the intended direction:
 - **Max transaction size:** Measured at 5,385 bytes per user tx for `pqc_auth`
   (see Measured Sizes above). Operator limits documented in
   `docs/V3_ROLLOUT.md` under "Payload Limit Guidance."
+- **Multisig approach:** V3 uses signature-list (`scheme_id = 2`); lattice
+  threshold deferred to V4. Full specification in `docs/PQC_MULTISIG.md`.
 
 ## Acceptance Criteria For This Spec
 

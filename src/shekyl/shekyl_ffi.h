@@ -47,6 +47,17 @@ bool shekyl_pqc_verify(
     const uint8_t* signature_ptr,
     size_t signature_len);
 
+// Crypto: Hash functions
+bool shekyl_cn_fast_hash(
+    const uint8_t* data_ptr,
+    size_t data_len,
+    uint8_t* out_ptr);
+
+bool shekyl_tree_hash(
+    const uint8_t* hashes_ptr,
+    size_t count,
+    uint8_t* out_ptr);
+
 // Release rate
 uint64_t shekyl_calc_release_multiplier(
     uint64_t tx_volume_avg,
@@ -102,4 +113,12 @@ ShekylEmissionSplit shekyl_split_block_emission(
     uint64_t block_emission,
     uint64_t effective_share);
 
+// SSL certificate generation (replaces deprecated OpenSSL RSA/EC_KEY APIs)
+bool shekyl_generate_ssl_certificate(
+    ShekylBuffer* key_pem_out,
+    ShekylBuffer* cert_pem_out);
+
 } // extern "C"
+
+// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h
+// (C-compatible header used by both memwipe.c and mlocker.cpp)

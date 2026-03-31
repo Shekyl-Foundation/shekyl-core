@@ -46,6 +46,14 @@ endif()
 cmake_minimum_required(VERSION 3.5)
 message(STATUS "CMake version ${CMAKE_VERSION}")
 
+# CMake 4.x compatibility
+if(POLICY CMP0148)
+  cmake_policy(SET CMP0148 OLD)  # keep FindPythonInterp until migrated
+endif()
+if(POLICY CMP0167)
+  cmake_policy(SET CMP0167 NEW)  # use Boost's own cmake config instead of deprecated FindBoost
+endif()
+
 project(shekyl)
 
 option (USE_CCACHE "Use ccache if a usable instance is found" ON)
@@ -96,7 +104,7 @@ enable_language(C ASM)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -338,7 +346,12 @@ endif()
 if(WIN32 OR ARM OR PPC64LE OR PPC64 OR PPC)
   set(OPT_FLAGS_RELEASE "-O2")
 else()
-  set(OPT_FLAGS_RELEASE "-O3 -ffast-math -fno-semantic-interposition") # not present: -fallow-store-data-races
+  set(OPT_FLAGS_RELEASE "-O3 -ffast-math")
+  include(CheckCCompilerFlag)
+  check_c_compiler_flag("-fno-semantic-interposition" HAS_NO_SEMANTIC_INTERPOSITION)
+  if(HAS_NO_SEMANTIC_INTERPOSITION)
+    string(APPEND OPT_FLAGS_RELEASE " -fno-semantic-interposition")
+  endif()
 endif()
 
 # BUILD_TAG is used to select the build type to check for a new version
@@ -1058,26 +1071,55 @@ else()
 endif()
 
 set(OLD_LIB_SUFFIXES ${CMAKE_FIND_LIBRARY_SUFFIXES})
-set(Boost_NO_BOOST_CMAKE ON)
 if(STATIC)
   if(MINGW)
     set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
   endif()
 
   set(Boost_USE_STATIC_LIBS ON)
-  set(Boost_USE_STATIC_RUNTIME ON)
+  if(MINGW OR ANDROID)
+    set(Boost_USE_STATIC_RUNTIME ON)
+  endif()
 endif()
 
-# Find Boost headers
-set(BOOST_MIN_VER 1.62)
-find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED)
+# Find Boost headers and libraries.
+# Prefer CONFIG mode (Boost 1.85+ ships CMake config files) to avoid
+# FindBoost SO-version mismatches on rolling-release distros.
+set(BOOST_MIN_VER 1.74)
+set(BOOST_COMPONENTS filesystem thread date_time chrono serialization program_options)
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  list(APPEND BOOST_COMPONENTS locale)
+endif()
+
+set(_BOOST_USE_CONFIG FALSE)
+if(DEPENDS)
+  set(Boost_NO_BOOST_CMAKE ON)
+endif()
+if(NOT DEPENDS)
+  find_package(Boost ${BOOST_MIN_VER} QUIET CONFIG)
+  if(Boost_FOUND)
+    set(_BOOST_USE_CONFIG TRUE)
+    message(STATUS "Found Boost ${Boost_VERSION_STRING} via CMake config mode")
+  endif()
+endif()
+if(NOT Boost_FOUND)
+  find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED)
+  if(Boost_FOUND)
+    message(STATUS "Found Boost ${Boost_VERSION_STRING} via MODULE mode")
+  endif()
+endif()
 
 if(NOT Boost_FOUND)
   die("Could not find Boost libraries, please make sure you have installed Boost or libboost-all-dev (>=${BOOST_MIN_VER}) or the equivalent")
 elseif(Boost_FOUND)
+  if(NOT Boost_VERSION_STRING)
+    if(Boost_VERSION_MAJOR)
+      set(Boost_VERSION_STRING "${Boost_VERSION_MAJOR}.${Boost_VERSION_MINOR}.${Boost_VERSION_PATCH}")
+    else()
+      set(Boost_VERSION_STRING "${Boost_VERSION}")
+    endif()
+  endif()
   message(STATUS "Found Boost Version: ${Boost_VERSION_STRING}")
-
-  set(BOOST_COMPONENTS filesystem thread date_time chrono serialization program_options locale)
 
   # Boost System is header-only since 1.69
   if (Boost_VERSION_STRING VERSION_LESS 1.69.0)
@@ -1089,11 +1131,60 @@ elseif(Boost_FOUND)
     list(APPEND BOOST_COMPONENTS regex)
   endif()
 
+  # Boost Locale depends on container since 1.85
+  if (NOT Boost_VERSION_STRING VERSION_LESS 1.85.0)
+    list(APPEND BOOST_COMPONENTS container)
+  endif()
+
   message(STATUS "Boost components: ${BOOST_COMPONENTS}")
 
-  # Find required Boost libraries
-  find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED COMPONENTS ${BOOST_COMPONENTS})
+  # Find required Boost libraries (preserve CONFIG mode to avoid SO-version mismatches).
+  # When building with depends, force MODULE mode because the depends-built Boost
+  # ships config files whose variant checks reject cross-compiled Darwin libraries.
+  if(_BOOST_USE_CONFIG)
+    find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED CONFIG COMPONENTS ${BOOST_COMPONENTS})
+  elseif(DEPENDS)
+    find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED MODULE COMPONENTS ${BOOST_COMPONENTS})
+  else()
+    find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED COMPONENTS ${BOOST_COMPONENTS})
+  endif()
   set(CMAKE_FIND_LIBRARY_SUFFIXES ${OLD_LIB_SUFFIXES})
+endif()
+
+# When Boost is found via CONFIG mode (1.85+), verify the resolved shared
+# libraries actually exist on disk. On rolling-release distros the boost-libs
+# package (shared .so files) may be missing or version-mismatched against the
+# cmake config shipped by the boost (headers) package.
+if(_BOOST_USE_CONFIG AND TARGET Boost::filesystem)
+  get_target_property(_boost_fs_loc Boost::filesystem IMPORTED_LOCATION_RELEASE)
+  if(NOT _boost_fs_loc)
+    get_target_property(_boost_fs_loc Boost::filesystem IMPORTED_LOCATION)
+  endif()
+  if(_boost_fs_loc AND NOT EXISTS "${_boost_fs_loc}")
+    message(FATAL_ERROR
+      "Boost CONFIG mode resolved Boost::filesystem to '${_boost_fs_loc}' "
+      "which does not exist. On Arch Linux, install the 'boost-libs' package "
+      "alongside 'boost' to provide the shared libraries.")
+  endif()
+endif()
+
+# Remap old-style Boost_XXX_LIBRARY variables to imported targets when CONFIG
+# mode is active. This avoids stale versioned .so paths in downstream
+# target_link_libraries() calls.
+if(_BOOST_USE_CONFIG)
+  foreach(_comp filesystem thread chrono system date_time serialization
+          program_options locale regex container atomic)
+    string(TOUPPER "${_comp}" _COMP_UPPER)
+    if(TARGET Boost::${_comp})
+      set(Boost_${_COMP_UPPER}_LIBRARY Boost::${_comp})
+    endif()
+  endforeach()
+  set(Boost_LIBRARIES "")
+  foreach(_comp IN LISTS BOOST_COMPONENTS)
+    if(TARGET Boost::${_comp})
+      list(APPEND Boost_LIBRARIES Boost::${_comp})
+    endif()
+  endforeach()
 endif()
 
 add_definitions(-DBOOST_ASIO_ENABLE_SEQUENTIAL_STRAND_ALLOCATION)

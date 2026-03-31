@@ -30,9 +30,8 @@
 
 #pragma once 
 
-#include <boost/thread/locks.hpp>
-#include <boost/thread/mutex.hpp>
-#include <boost/optional.hpp>
+#include <mutex>
+#include <optional>
 #include <system_error>
 #include <csignal>
 #include <cstdio>
@@ -217,8 +216,8 @@ namespace tools
     /*! \brief calles m_handler */
     static void handle_signal(int type)
     {
-      static boost::mutex m_mutex;
-      boost::unique_lock<boost::mutex> lock(m_mutex);
+      static std::mutex m_mutex;
+      std::unique_lock<std::mutex> lock(m_mutex);
       m_handler(type);
     }
 
@@ -260,9 +259,9 @@ namespace tools
    */
   bool sha256sum(const std::string &filename, crypto::hash &hash);
 
-  boost::optional<bool> is_hdd(const char *path);
+  std::optional<bool> is_hdd(const char *path);
 
-  boost::optional<std::pair<uint32_t, uint32_t>> parse_subaddress_lookahead(const std::string& str);
+  std::optional<std::pair<uint32_t, uint32_t>> parse_subaddress_lookahead(const std::string& str);
 
   std::string glob_to_regex(const std::string &val);
 #ifdef _WIN32

@@ -27,8 +27,8 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#ifndef MONERO_DEVICE_TREZOR_H
-#define MONERO_DEVICE_TREZOR_H
+#ifndef SHEKYL_DEVICE_TREZOR_H
+#define SHEKYL_DEVICE_TREZOR_H
 
 #include "trezor.hpp"
 #include "device/device.hpp"
@@ -111,7 +111,7 @@ namespace trezor {
       /* ======================================================================= */
       bool  get_public_address(cryptonote::account_public_address &pubkey) override;
       bool  get_secret_keys(crypto::secret_key &viewkey , crypto::secret_key &spendkey) override;
-      void  display_address(const cryptonote::subaddress_index& index, const boost::optional<crypto::hash8> &payment_id) override;
+      void  display_address(const cryptonote::subaddress_index& index, const std::optional<crypto::hash8> &payment_id) override;
 
       /* ======================================================================= */
       /*                              TREZOR PROTOCOL                            */
@@ -121,18 +121,18 @@ namespace trezor {
        * Get address. Throws.
        */
       std::shared_ptr<messages::monero::MoneroAddress> get_address(
-          const boost::optional<cryptonote::subaddress_index> & subaddress = boost::none,
-          const boost::optional<crypto::hash8> & payment_id = boost::none,
+          const std::optional<cryptonote::subaddress_index> & subaddress = std::nullopt,
+          const std::optional<crypto::hash8> & payment_id = std::nullopt,
           bool show_address = false,
-          const boost::optional<std::vector<uint32_t>> & path = boost::none,
-          const boost::optional<cryptonote::network_type> & network_type = boost::none);
+          const std::optional<std::vector<uint32_t>> & path = std::nullopt,
+          const std::optional<cryptonote::network_type> & network_type = std::nullopt);
 
       /**
        * Get watch key from device. Throws.
        */
       std::shared_ptr<messages::monero::MoneroWatchKey> get_view_key(
-          const boost::optional<std::vector<uint32_t>> & path = boost::none,
-          const boost::optional<cryptonote::network_type> & network_type = boost::none);
+          const std::optional<std::vector<uint32_t>> & path = std::nullopt,
+          const std::optional<cryptonote::network_type> & network_type = std::nullopt);
 
       /**
        * Get_tx_key support check
@@ -231,4 +231,4 @@ namespace trezor {
 
 }
 }
-#endif //MONERO_DEVICE_TREZOR_H
+#endif //SHEKYL_DEVICE_TREZOR_H

@@ -84,8 +84,8 @@ bool gen_double_spend_in_different_chains::check_double_spend(cryptonote::core& 
   CHECK_EQ(1, c.get_pool_transactions_count());
   CHECK_EQ(1, c.get_alternative_blocks_count());
 
-  cryptonote::account_base bob_account = boost::get<cryptonote::account_base>(events[1]);
-  cryptonote::account_base alice_account = boost::get<cryptonote::account_base>(events[2]);
+  cryptonote::account_base bob_account = std::get<cryptonote::account_base>(events[1]);
+  cryptonote::account_base alice_account = std::get<cryptonote::account_base>(events[2]);
 
   std::vector<cryptonote::block> chain;
   map_hash2tx_t mtx;

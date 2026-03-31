@@ -240,7 +240,7 @@ namespace
 
     cryptonote::transaction make_transaction(const std::vector<cryptonote::account_public_address>& destinations)
     {
-      return test::make_transaction(acct.get_keys(), {make_miner_transaction()}, destinations, true, true);
+      return test::make_transaction(acct.get_keys(), {make_miner_transaction()}, destinations, true);
     }
 
     cryptonote::transaction make_transaction()

@@ -30,7 +30,7 @@
 #include <vector>
 #include <string>
 #include <functional>
-#include <boost/optional/optional_fwd.hpp>
+#include <optional>
 #include <boost/utility/string_ref_fwd.hpp>
 
 namespace tools
@@ -157,7 +157,7 @@ private:
    * @return A vector of strings containing the requested record; or an empty vector
    */
   // TODO: modify this to accommodate DNSSEC
-  std::vector<std::string> get_record(const std::string& url, int record_type, boost::optional<std::string> (*reader)(const char *,size_t), bool& dnssec_available, bool& dnssec_valid);
+  std::vector<std::string> get_record(const std::string& url, int record_type, std::optional<std::string> (*reader)(const char *,size_t), bool& dnssec_available, bool& dnssec_valid);
 
   DNSResolverData *m_data;
 }; // class DNSResolver

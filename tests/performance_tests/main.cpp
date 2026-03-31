@@ -56,14 +56,10 @@
 #include "sc_reduce32.h"
 #include "sc_check.h"
 #include "cn_fast_hash.h"
-#include "rct_mlsag.h"
 #include "equality.h"
-#include "range_proof.h"
-#include "bulletproof.h"
 #include "bulletproof_plus.h"
 #include "crypto_ops.h"
 #include "multiexp.h"
-#include "sig_mlsag.h"
 #include "sig_clsag.h"
 
 namespace po = boost::program_options;
@@ -111,76 +107,26 @@ int main(int argc, char** argv)
   performance_timer timer;
   timer.start();
 
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 1, 1, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 1, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 1, 10, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 1, 100, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 1, 1000, false);
+  // v3 RCT + BP+ transaction construction benchmarks
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 1, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 2, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 10, true, rct::RangeProofPaddedBulletproof, 4);
 
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 1, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 10, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 100, false);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 1, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 2, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 10, true, rct::RangeProofPaddedBulletproof, 4);
 
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 1, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 10, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 100, false);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 1, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 2, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 10, true, rct::RangeProofPaddedBulletproof, 4);
 
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 1, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 10, false);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 100, false);
+  // v3 RCT + BP+ signature verification benchmarks
+  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 2, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 10, 2, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 100, 2, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 10, true, rct::RangeProofPaddedBulletproof, 4);
 
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 1, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 2, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 10, true);
-
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 1, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 2, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 10, true);
-
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 1, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 2, true);
-  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 10, true);
-
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 1, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 2, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 10, true, rct::RangeProofPaddedBulletproof, 2);
-
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 1, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 2, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 10, true, rct::RangeProofPaddedBulletproof, 2);
-
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 1, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 2, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 10, true, rct::RangeProofPaddedBulletproof, 2);
-
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 1, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 2, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 10, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 100, 2, false);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 2, 10, false);
-
-  TEST_PERFORMANCE4(filter, p, test_check_tx_signature, 2, 2, true, rct::RangeProofBorromean);
-  TEST_PERFORMANCE4(filter, p, test_check_tx_signature, 10, 2, true, rct::RangeProofBorromean);
-  TEST_PERFORMANCE4(filter, p, test_check_tx_signature, 100, 2, true, rct::RangeProofBorromean);
-  TEST_PERFORMANCE4(filter, p, test_check_tx_signature, 2, 10, true, rct::RangeProofBorromean);
-
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 2, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 2, true, rct::RangeProofMultiOutputBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 10, 2, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 10, 2, true, rct::RangeProofMultiOutputBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 100, 2, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 100, 2, true, rct::RangeProofMultiOutputBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 10, true, rct::RangeProofPaddedBulletproof, 2);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 10, true, rct::RangeProofMultiOutputBulletproof, 2);
-
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature_aggregated_bulletproofs, 2, 2, 64);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature_aggregated_bulletproofs, 10, 2, 64);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature_aggregated_bulletproofs, 100, 2, 64);
-  TEST_PERFORMANCE3(filter, p, test_check_tx_signature_aggregated_bulletproofs, 2, 10, 64);
-
+  // Aggregated BP+ verification benchmarks
   TEST_PERFORMANCE4(filter, p, test_check_tx_signature_aggregated_bulletproofs, 2, 2, 62, 4);
   TEST_PERFORMANCE4(filter, p, test_check_tx_signature_aggregated_bulletproofs, 10, 2, 62, 4);
   TEST_PERFORMANCE4(filter, p, test_check_tx_signature_aggregated_bulletproofs, 2, 2, 56, 16);
@@ -222,13 +168,6 @@ int main(int argc, char** argv)
   TEST_PERFORMANCE1(filter, p, test_cn_fast_hash, 32);
   TEST_PERFORMANCE1(filter, p, test_cn_fast_hash, 16384);
 
-  TEST_PERFORMANCE3(filter, p, test_sig_mlsag, 4, 2, 2); // MLSAG verification
-  TEST_PERFORMANCE3(filter, p, test_sig_mlsag, 8, 2, 2);
-  TEST_PERFORMANCE3(filter, p, test_sig_mlsag, 16, 2, 2);
-  TEST_PERFORMANCE3(filter, p, test_sig_mlsag, 32, 2, 2);
-  TEST_PERFORMANCE3(filter, p, test_sig_mlsag, 64, 2, 2);
-  TEST_PERFORMANCE3(filter, p, test_sig_mlsag, 128, 2, 2);
-  TEST_PERFORMANCE3(filter, p, test_sig_mlsag, 256, 2, 2);
   TEST_PERFORMANCE3(filter, p, test_sig_clsag, 4, 2, 2); // CLSAG verification
   TEST_PERFORMANCE3(filter, p, test_sig_clsag, 8, 2, 2);
   TEST_PERFORMANCE3(filter, p, test_sig_clsag, 16, 2, 2);
@@ -237,16 +176,10 @@ int main(int argc, char** argv)
   TEST_PERFORMANCE3(filter, p, test_sig_clsag, 128, 2, 2);
   TEST_PERFORMANCE3(filter, p, test_sig_clsag, 256, 2, 2);
 
-  TEST_PERFORMANCE2(filter, p, test_ringct_mlsag, 11, false);
-  TEST_PERFORMANCE2(filter, p, test_ringct_mlsag, 11, true);
-
   TEST_PERFORMANCE2(filter, p, test_equality, memcmp32, true);
   TEST_PERFORMANCE2(filter, p, test_equality, memcmp32, false);
   TEST_PERFORMANCE2(filter, p, test_equality, verify32, false);
   TEST_PERFORMANCE2(filter, p, test_equality, verify32, false);
-
-  TEST_PERFORMANCE1(filter, p, test_range_proof, true);
-  TEST_PERFORMANCE1(filter, p, test_range_proof, false);
 
   TEST_PERFORMANCE2(filter, p, test_bulletproof_plus, true, 1); // 1 bulletproof_plus with 1 amount
   TEST_PERFORMANCE2(filter, p, test_bulletproof_plus, false, 1);
@@ -267,26 +200,6 @@ int main(int argc, char** argv)
   TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof_plus, true, 1, 8, 1, 1, 4); // 32 proofs, with 1, 2, 3, 4 amounts, 8 of each
   TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof_plus, false, 2, 1, 1, 0, 64);
   TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof_plus, true, 2, 1, 1, 0, 64); // 64 proof, each with 2 amounts
-
-  TEST_PERFORMANCE2(filter, p, test_bulletproof, true, 1); // 1 bulletproof with 1 amount
-  TEST_PERFORMANCE2(filter, p, test_bulletproof, false, 1);
-
-  TEST_PERFORMANCE2(filter, p, test_bulletproof, true, 2); // 1 bulletproof with 2 amounts
-  TEST_PERFORMANCE2(filter, p, test_bulletproof, false, 2);
-
-  TEST_PERFORMANCE2(filter, p, test_bulletproof, true, 15); // 1 bulletproof with 15 amounts
-  TEST_PERFORMANCE2(filter, p, test_bulletproof, false, 15);
-
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, false, 2, 1, 1, 0, 4);
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, true, 2, 1, 1, 0, 4); // 4 proofs, each with 2 amounts
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, false, 8, 1, 1, 0, 4);
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, true, 8, 1, 1, 0, 4); // 4 proofs, each with 8 amounts
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, false, 1, 1, 2, 0, 4);
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, true, 1, 1, 2, 0, 4); // 4 proofs with 1, 2, 4, 8 amounts
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, false, 1, 8, 1, 1, 4);
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, true, 1, 8, 1, 1, 4); // 32 proofs, with 1, 2, 3, 4 amounts, 8 of each
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, false, 2, 1, 1, 0, 64);
-  TEST_PERFORMANCE6(filter, p, test_aggregated_bulletproof, true, 2, 1, 1, 0, 64); // 64 proof, each with 2 amounts
 
   TEST_PERFORMANCE1(filter, p, test_crypto_ops, op_sc_add);
   TEST_PERFORMANCE1(filter, p, test_crypto_ops, op_sc_sub);

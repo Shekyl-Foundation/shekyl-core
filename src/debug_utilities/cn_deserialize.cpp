@@ -26,7 +26,7 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include <boost/filesystem.hpp>
+#include <filesystem>
 #include <boost/algorithm/string/join.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include "cryptonote_basic/cryptonote_basic.h"
@@ -58,12 +58,12 @@ static void print_extra_fields(const std::vector<cryptonote::tx_extra_field> &fi
   for (size_t n = 0; n < fields.size(); ++n)
   {
     std::cout << "field " << n << ": ";
-    if (typeid(cryptonote::tx_extra_padding) == fields[n].type()) std::cout << "extra padding: " << boost::get<cryptonote::tx_extra_padding>(fields[n]).size << " bytes";
-    else if (typeid(cryptonote::tx_extra_pub_key) == fields[n].type()) std::cout << "extra pub key: " << boost::get<cryptonote::tx_extra_pub_key>(fields[n]).pub_key;
-    else if (typeid(cryptonote::tx_extra_nonce) == fields[n].type()) std::cout << "extra nonce: " << extra_nonce_to_string(boost::get<cryptonote::tx_extra_nonce>(fields[n]));
-    else if (typeid(cryptonote::tx_extra_merge_mining_tag) == fields[n].type()) std::cout << "extra merge mining tag: depth " << boost::get<cryptonote::tx_extra_merge_mining_tag>(fields[n]).depth << ", merkle root " << boost::get<cryptonote::tx_extra_merge_mining_tag>(fields[n]).merkle_root;
-    else if (typeid(cryptonote::tx_extra_additional_pub_keys) == fields[n].type()) std::cout << "additional tx pubkeys: " << boost::join(boost::get<cryptonote::tx_extra_additional_pub_keys>(fields[n]).data | boost::adaptors::transformed([](const crypto::public_key &key){ return epee::string_tools::pod_to_hex(key); }), ", " );
-    else if (typeid(cryptonote::tx_extra_mysterious_minergate) == fields[n].type()) std::cout << "extra minergate custom: " << epee::string_tools::buff_to_hex_nodelimer(boost::get<cryptonote::tx_extra_mysterious_minergate>(fields[n]).data);
+    if (std::holds_alternative<cryptonote::tx_extra_padding>(fields[n])) std::cout << "extra padding: " << std::get<cryptonote::tx_extra_padding>(fields[n]).size << " bytes";
+    else if (std::holds_alternative<cryptonote::tx_extra_pub_key>(fields[n])) std::cout << "extra pub key: " << std::get<cryptonote::tx_extra_pub_key>(fields[n]).pub_key;
+    else if (std::holds_alternative<cryptonote::tx_extra_nonce>(fields[n])) std::cout << "extra nonce: " << extra_nonce_to_string(std::get<cryptonote::tx_extra_nonce>(fields[n]));
+    else if (std::holds_alternative<cryptonote::tx_extra_merge_mining_tag>(fields[n])) std::cout << "extra merge mining tag: depth " << std::get<cryptonote::tx_extra_merge_mining_tag>(fields[n]).depth << ", merkle root " << std::get<cryptonote::tx_extra_merge_mining_tag>(fields[n]).merkle_root;
+    else if (std::holds_alternative<cryptonote::tx_extra_additional_pub_keys>(fields[n])) std::cout << "additional tx pubkeys: " << boost::join(std::get<cryptonote::tx_extra_additional_pub_keys>(fields[n]).data | boost::adaptors::transformed([](const crypto::public_key &key){ return epee::string_tools::pod_to_hex(key); }), ", " );
+    else if (std::holds_alternative<cryptonote::tx_extra_mysterious_minergate>(fields[n])) std::cout << "extra minergate custom: " << epee::string_tools::buff_to_hex_nodelimer(std::get<cryptonote::tx_extra_mysterious_minergate>(fields[n]).data);
     else std::cout << "unknown";
     std::cout << std::endl;
   }
@@ -76,7 +76,7 @@ int main(int argc, char* argv[])
 
   tools::on_startup();
 
-  boost::filesystem::path output_file_path;
+  std::filesystem::path output_file_path;
 
   po::options_description desc_cmd_only("Command line options");
   po::options_description desc_cmd_sett("Command line options and settings options");

@@ -188,4 +188,29 @@ mod tests {
             calc_burn_pct(100, 100, circulating, supply, 300_000, 400_000, 900_000);
         assert!(burn_with_stake > burn_no_stake);
     }
+
+    #[test]
+    fn test_burn_pct_always_within_bounds() {
+        let supply = 4_294_967_296_000_000_000u64;
+        let cap = 900_000u64;
+        let cases = [
+            (0u64, 50u64, 0u64),
+            (10, 50, 50_000),
+            (50, 50, 100_000),
+            (200, 50, 200_000),
+            (500, 50, 400_000),
+        ];
+        for (tx_volume, tx_baseline, stake_ratio) in cases {
+            let burn = calc_burn_pct(
+                tx_volume,
+                tx_baseline,
+                supply / 2,
+                supply,
+                stake_ratio,
+                500_000,
+                cap,
+            );
+            assert!(burn <= cap, "burn exceeds cap: {burn}");
+        }
+    }
 }

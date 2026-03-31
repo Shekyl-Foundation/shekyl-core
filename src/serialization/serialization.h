@@ -46,16 +46,14 @@
 #include <set>
 #include <unordered_set>
 #include <string>
-#include <boost/type_traits/is_integral.hpp>
-#include <boost/type_traits/integral_constant.hpp>
-#include <boost/mpl/bool.hpp>
+#include <type_traits>
 
 /*! \struct is_blob_type 
  *
  * \brief a descriptor for dispatching serialize
  */
 template <class T>
-struct is_blob_type { typedef boost::false_type type; };
+struct is_blob_type { typedef std::false_type type; };
 
 /*! \fn do_serialize(Archive &ar, T &v)
  *
@@ -72,7 +70,7 @@ inline std::enable_if_t<is_blob_type<T>::type::value, bool> do_serialize(Archive
   return true;
 }
 template <class Archive, class T>
-inline std::enable_if_t<boost::is_integral<T>::value, bool> do_serialize(Archive &ar, T &v)
+inline std::enable_if_t<std::is_integral_v<T>, bool> do_serialize(Archive &ar, T &v)
 {
   ar.serialize_int(v);
   return true;
@@ -98,7 +96,7 @@ inline bool do_serialize(Archive &ar, bool &v)
 #define BLOB_SERIALIZER(T)						\
   template<>								\
   struct is_blob_type<T> {						\
-    typedef boost::true_type type;					\
+    typedef std::true_type type;					\
   }
 
 /*! \macro VARIANT_TAG
@@ -239,33 +237,24 @@ namespace serialization {
      * prepares the vector /vec for serialization
      */
     template <typename T>
-    void prepare_custom_vector_serialization(size_t size, std::vector<T>& vec, const boost::mpl::bool_<true>& /*is_saving*/)
+    void prepare_custom_vector_serialization(size_t size, std::vector<T>& vec, const std::bool_constant<true>& /*is_saving*/)
     {
     }
 
     template <typename T>
-    void prepare_custom_vector_serialization(size_t size, std::vector<T>& vec, const boost::mpl::bool_<false>& /*is_saving*/)
+    void prepare_custom_vector_serialization(size_t size, std::vector<T>& vec, const std::bool_constant<false>& /*is_saving*/)
     {
       vec.resize(size);
     }
 
-    /*! \fn do_check_stream_state
-     *
-     * \brief self explanatory
-     */
     template<class Archive>
-    bool do_check_stream_state(Archive& ar, boost::mpl::bool_<true>, bool noeof)
+    bool do_check_stream_state(Archive& ar, std::bool_constant<true>, bool noeof)
     {
       return ar.good();
     }
-    /*! \fn do_check_stream_state
-     *
-     * \brief self explanatory
-     *
-     * \detailed Also checks to make sure that the stream is not at EOF
-     */
+
     template<class Archive>
-    bool do_check_stream_state(Archive& ar, boost::mpl::bool_<false>, bool noeof)
+    bool do_check_stream_state(Archive& ar, std::bool_constant<false>, bool noeof)
     {
       bool result = false;
       if (ar.good())

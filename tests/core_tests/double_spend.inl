@@ -1,3 +1,4 @@
+// Copyright (c) 2026, The Shekyl Project
 // Copyright (c) 2014-2022, The Monero Project
 // 
 // All rights reserved.
@@ -103,8 +104,8 @@ bool gen_double_spend_base<concrete_test>::check_double_spend(cryptonote::core& 
 
   CHECK_EQ(concrete_test::expected_pool_txs_count, c.get_pool_transactions_count());
 
-  cryptonote::account_base bob_account = boost::get<cryptonote::account_base>(events[1]);
-  cryptonote::account_base alice_account = boost::get<cryptonote::account_base>(events[2]);
+  cryptonote::account_base bob_account = std::get<cryptonote::account_base>(events[1]);
+  cryptonote::account_base alice_account = std::get<cryptonote::account_base>(events[2]);
 
   std::vector<cryptonote::block> chain;
   map_hash2tx_t mtx;
@@ -125,16 +126,30 @@ bool gen_double_spend_in_tx<txs_keeped_by_block>::generate(std::vector<test_even
   INIT_DOUBLE_SPEND_TEST();
   DO_CALLBACK(events, "mark_last_valid_block");
 
+  // Use the largest coinbase output (known amount, identity mask) for the double-spend source.
+  // blk_0's miner tx output is spendable after REWIND_BLOCKS.
+  size_t best_out_idx = 0;
+  for (size_t i = 1; i < blk_0.miner_tx.vout.size(); ++i)
+    if (blk_0.miner_tx.vout[i].amount > blk_0.miner_tx.vout[best_out_idx].amount)
+      best_out_idx = i;
+
   std::vector<cryptonote::tx_source_entry> sources;
   cryptonote::tx_source_entry se;
-  se.amount = tx_0.vout[0].amount;
-  se.push_output(0, boost::get<cryptonote::txout_to_key>(tx_0.vout[0].target).key, se.amount);
+  se.amount = blk_0.miner_tx.vout[best_out_idx].amount;
+  crypto::public_key ds_out_key;
+  cryptonote::get_output_public_key(blk_0.miner_tx.vout[best_out_idx], ds_out_key);
+  se.push_output(best_out_idx, ds_out_key, se.amount);
   se.real_output = 0;
-  se.rct = false;
-  se.real_out_tx_key = get_tx_pub_key_from_extra(tx_0);
-  se.real_output_in_tx_index = 0;
+  se.rct = true;
+  se.mask = rct::identity();
+  {
+    rct::key comm = rct::zeroCommit(se.amount);
+    for (auto &ot : se.outputs)
+      ot.second.mask = comm;
+  }
+  se.real_out_tx_key = get_tx_pub_key_from_extra(blk_0.miner_tx);
+  se.real_output_in_tx_index = best_out_idx;
   sources.push_back(se);
-  // Double spend!
   sources.push_back(se);
 
   cryptonote::tx_destination_entry de;
@@ -144,7 +159,7 @@ bool gen_double_spend_in_tx<txs_keeped_by_block>::generate(std::vector<test_even
   destinations.push_back(de);
 
   cryptonote::transaction tx_1;
-  if (!construct_tx(bob_account.get_keys(), sources, destinations, boost::none, std::vector<uint8_t>(), tx_1))
+  if (!construct_tx_rct(miner_account.get_keys(), sources, destinations, miner_account.get_keys().m_account_address, std::vector<uint8_t>(), tx_1))
     return false;
 
   SET_EVENT_VISITOR_SETT(events, txs_keeped_by_block ? event_visitor_settings::set_txs_keeped_by_block : 0);

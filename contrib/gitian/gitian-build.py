@@ -25,7 +25,12 @@ def setup():
     if not args.no_apt:
         subprocess.check_call(['sudo', 'apt-get', 'install', '-qq'] + programs)
     if not os.path.isdir('sigs'):
-        subprocess.check_call(['git', 'clone', gsigs, 'sigs'])
+        try:
+            subprocess.check_call(['git', 'clone', gsigs, 'sigs'])
+        except subprocess.CalledProcessError:
+            print(f"Warning: could not clone {gsigs} — gitian signatures will not be available. "
+                  "Create the repo if you need to store/verify build signatures.")
+            os.makedirs('sigs', exist_ok=True)
     if not os.path.isdir('builder'):
         subprocess.check_call(['git', 'clone', gbrepo, 'builder'])
     os.chdir('builder')

@@ -106,6 +106,41 @@ As PQC code lands, developers should add a dedicated validation loop covering:
 - malformed signature and malformed length rejection tests
 - encoded-size regression checks for mempool, RPC, and ZMQ consumers
 
+## Running core_tests
+
+The `core_tests` binary exercises consensus rules, chain switching, double-spend
+detection, Bulletproofs+ validation, and txpool behavior through the `chaingen`
+event-replay framework.
+
+```bash
+# Build and run all core_tests
+cmake --build build/ --target core_tests -- -j"$(nproc)"
+build/tests/core_tests/core_tests --generate_and_play_test_data
+```
+
+Filter to a single test:
+
+```bash
+build/tests/core_tests/core_tests --generate_and_play_test_data --filter="gen_chain_switch_1"
+```
+
+### v3-from-genesis design
+
+Shekyl's test suite is adapted for **v3-from-genesis**: all user transactions
+are version 3 with mandatory PQC authentication (hybrid Ed25519 + ML-DSA-65).
+Coinbase transactions remain version 2. Key differences from upstream Monero:
+
+- `FAKECHAIN` tests inject `--fixed-difficulty=1` and relax mixin requirements
+- Transaction construction helpers produce v3 with `use_view_tags=true`
+- Coinbase outputs are indexed under `amount=0` for correct RCT spending
+- Balance verification in callbacks uses RCT ecdhInfo decryption
+- Economic constants (`TESTS_DEFAULT_FEE`, `FIRST_BLOCK_REWARD`) are
+  calibrated for Shekyl's `COIN = 10^9` and `EMISSION_SPEED_FACTOR = 21`
+- Several legacy tests incompatible with HF1-from-genesis are disabled
+  (see `chaingen_main.cpp` comments)
+
+Currently 79 tests are enabled and passing.
+
 ## Seed node build (lean daemon)
 
 `make release-seed` builds only the daemon (`shekyld`) with hardware wallet

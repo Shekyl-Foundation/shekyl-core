@@ -28,15 +28,94 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+// TODO(shekyl-v4): Replace boost::serialization with a zero-copy binary codec.
+// This header defines on-disk and P2P wire formats; migration requires a
+// versioned format transition and backward-compatibility shim.
 #pragma once
 
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/utility.hpp>
-#include <boost/serialization/variant.hpp>
 #include <boost/serialization/set.hpp>
 #include <boost/serialization/map.hpp>
-#include <boost/serialization/optional.hpp>
 #include <boost/serialization/is_bitwise_serializable.hpp>
+#include <boost/serialization/split_free.hpp>
+#include <boost/version.hpp>
+#include <optional>
+#include <variant>
+
+// Use Boost's own std::variant serialization when available (Boost >= 1.78)
+#if __has_include(<boost/serialization/std_variant.hpp>)
+  #include <boost/serialization/std_variant.hpp>
+#else
+namespace boost { namespace serialization {
+  template<size_t I, class Archive, typename... Ts>
+  void variant_load_impl(Archive &ar, int which, std::variant<Ts...> &v)
+  {
+    if constexpr (I < sizeof...(Ts)) {
+      if (which == static_cast<int>(I)) {
+        std::variant_alternative_t<I, std::variant<Ts...>> val{};
+        ar & val;
+        v = std::move(val);
+      } else {
+        variant_load_impl<I + 1>(ar, which, v);
+      }
+    }
+  }
+  template<class Archive, typename... Ts>
+  void save(Archive &ar, const std::variant<Ts...> &v, const unsigned int /*version*/)
+  {
+    int which = static_cast<int>(v.index());
+    ar & which;
+    std::visit([&ar](const auto &val) { ar & val; }, v);
+  }
+  template<class Archive, typename... Ts>
+  void load(Archive &ar, std::variant<Ts...> &v, const unsigned int /*version*/)
+  {
+    int which;
+    ar & which;
+    variant_load_impl<0>(ar, which, v);
+  }
+  template<class Archive, typename... Ts>
+  void serialize(Archive &ar, std::variant<Ts...> &v, const unsigned int version)
+  {
+    boost::serialization::split_free(ar, v, version);
+  }
+}}
+#endif
+
+// Boost 1.84+ handles std::optional in <boost/serialization/optional.hpp>
+#if BOOST_VERSION >= 108400
+  #include <boost/serialization/optional.hpp>
+#else
+namespace boost { namespace serialization {
+  template<class Archive, class T>
+  void save(Archive &ar, const std::optional<T> &o, const unsigned int /*version*/)
+  {
+    const bool has_value = o.has_value();
+    ar & has_value;
+    if (has_value)
+      ar & *o;
+  }
+  template<class Archive, class T>
+  void load(Archive &ar, std::optional<T> &o, const unsigned int /*version*/)
+  {
+    bool has_value = false;
+    ar & has_value;
+    if (has_value) {
+      T v;
+      ar & v;
+      o = std::move(v);
+    } else {
+      o = std::nullopt;
+    }
+  }
+  template<class Archive, class T>
+  void serialize(Archive &ar, std::optional<T> &o, const unsigned int version)
+  {
+    split_free(ar, o, version);
+  }
+}}
+#endif
 #include <boost/archive/portable_binary_iarchive.hpp>
 #include <boost/archive/portable_binary_oarchive.hpp>
 #include "cryptonote_basic.h"
@@ -215,7 +294,7 @@ namespace boost
       a & (rct::rctSigBase&)x.rct_signatures;
       if (x.rct_signatures.type != rct::RCTTypeNull)
         a & x.rct_signatures.p;
-      if (x.version >= 3 && !x.vin.empty() && x.vin[0].type() != typeid(cryptonote::txin_gen))
+      if (x.version >= 3 && !x.vin.empty() && !std::holds_alternative<cryptonote::txin_gen>(x.vin[0]))
         a & x.pqc_auth;
     }
   }

@@ -69,12 +69,12 @@ bool one_block::verify_1(cryptonote::core& c, size_t ev_index, const std::vector
 {
     DEFINE_TESTS_ERROR_CONTEXT("one_block::verify_1");
 
-    alice = boost::get<cryptonote::account_base>(events[1]);
+    alice = std::get<cryptonote::account_base>(events[1]);
 
     // check balances
     //std::vector<const cryptonote::block*> chain;
     //map_hash2tx_t mtx;
-    //CHECK_TEST_CONDITION(find_block_chain(events, chain, mtx, get_block_hash(boost::get<cryptonote::block>(events[1]))));
+    //CHECK_TEST_CONDITION(find_block_chain(events, chain, mtx, get_block_hash(std::get<cryptonote::block>(events[1]))));
     //CHECK_TEST_CONDITION(get_block_reward(0) == get_balance(alice, events, chain, mtx));
 
     // check height
@@ -86,7 +86,7 @@ bool one_block::verify_1(cryptonote::core& c, size_t ev_index, const std::vector
     CHECK_TEST_CONDITION(blocks.size() == 1);
     //CHECK_TEST_CONDITION(outs.size() == blocks.size());
     CHECK_TEST_CONDITION(c.get_blockchain_total_transactions() == 1);
-    CHECK_TEST_CONDITION(blocks.back() == boost::get<cryptonote::block>(events[0]));
+    CHECK_TEST_CONDITION(blocks.back() == std::get<cryptonote::block>(events[0]));
 
     return true;
 }
@@ -116,7 +116,7 @@ bool gen_simple_chain_001::generate(std::vector<test_event_entry> &events)
 
     std::vector<cryptonote::block> chain;
     map_hash2tx_t mtx;
-    /*bool r = */find_block_chain(events, chain, mtx, get_block_hash(boost::get<cryptonote::block>(events[3])));
+    /*bool r = */find_block_chain(events, chain, mtx, get_block_hash(std::get<cryptonote::block>(events[3])));
     std::cout << "BALANCE = " << get_balance(miner, chain, mtx) << std::endl;
 
     REWIND_BLOCKS(events, blk_2r, blk_2, miner);

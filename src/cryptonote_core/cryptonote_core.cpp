@@ -936,14 +936,7 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   size_t core::get_block_sync_size(uint64_t height) const
   {
-    static const uint64_t quick_height = m_nettype == TESTNET ? 801219 : m_nettype == MAINNET ? 1220516 : 0;
-    size_t res = 0;
-    if (block_sync_size > 0)
-      res = block_sync_size;
-    else if (height >= quick_height)
-      res = BLOCKS_SYNCHRONIZING_DEFAULT_COUNT;
-    else
-      res = BLOCKS_SYNCHRONIZING_DEFAULT_COUNT_PRE_V4;
+    size_t res = block_sync_size > 0 ? block_sync_size : BLOCKS_SYNCHRONIZING_DEFAULT_COUNT;
 
     static size_t max_block_size = 0;
     if (max_block_size == 0)
@@ -1015,14 +1008,14 @@ namespace cryptonote
     std::unordered_set<crypto::key_image> ki;
     for(const auto& in: tx.vin)
     {
-      if (in.type() == typeid(txin_to_key))
+      if (std::holds_alternative<txin_to_key>(in))
       {
-        if(!ki.insert(boost::get<txin_to_key>(in).k_image).second)
+        if(!ki.insert(std::get<txin_to_key>(in).k_image).second)
           return false;
       }
-      else if (in.type() == typeid(txin_stake_claim))
+      else if (std::holds_alternative<txin_stake_claim>(in))
       {
-        if(!ki.insert(boost::get<txin_stake_claim>(in).k_image).second)
+        if(!ki.insert(std::get<txin_stake_claim>(in).k_image).second)
           return false;
       }
       else
@@ -1035,19 +1028,16 @@ namespace cryptonote
     return true;
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::check_tx_inputs_ring_members_diff(const transaction& tx, const uint8_t hf_version)
+  bool core::check_tx_inputs_ring_members_diff(const transaction& tx, const uint8_t /* hf_version */)
   {
-    if (hf_version >= 6)
+    for(const auto& in: tx.vin)
     {
-      for(const auto& in: tx.vin)
-      {
-        if (in.type() == typeid(txin_stake_claim))
-          continue;
-        CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
-        for (size_t n = 1; n < tokey_in.key_offsets.size(); ++n)
-          if (tokey_in.key_offsets[n] == 0)
-            return false;
-      }
+      if (std::holds_alternative<txin_stake_claim>(in))
+        continue;
+      CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
+      for (size_t n = 1; n < tokey_in.key_offsets.size(); ++n)
+        if (tokey_in.key_offsets[n] == 0)
+          return false;
     }
     return true;
   }
@@ -1057,9 +1047,9 @@ namespace cryptonote
     std::unordered_set<crypto::key_image> ki;
     for(const auto& in: tx.vin)
     {
-      if (in.type() == typeid(txin_stake_claim))
+      if (std::holds_alternative<txin_stake_claim>(in))
       {
-        const auto& claim = boost::get<txin_stake_claim>(in);
+        const auto& claim = std::get<txin_stake_claim>(in);
         if (rct::ki2rct(claim.k_image) == rct::identity())
           return false;
         if (!(rct::scalarmultKey(rct::ki2rct(claim.k_image), rct::curveOrder()) == rct::identity()))

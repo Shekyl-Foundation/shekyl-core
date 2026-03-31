@@ -1,3 +1,4 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
 // Copyright (c) 2014-2022, The Monero Project
 // 
 // All rights reserved.
@@ -30,7 +31,7 @@
 
 #include <boost/preprocessor/stringize.hpp>
 #include <boost/uuid/nil_generator.hpp>
-#include <boost/filesystem.hpp>
+#include <filesystem>
 #include "include_base_utils.h"
 #include "string_tools.h"
 using namespace epee;
@@ -187,7 +188,7 @@ namespace cryptonote
     const std::string &username_password,
     const std::string &proxy)
   {
-    boost::optional<epee::net_utils::http::login> credentials;
+    std::optional<epee::net_utils::http::login> credentials;
     const auto loc = username_password.find(':');
     if (loc != std::string::npos)
     {
@@ -232,7 +233,7 @@ namespace cryptonote
   //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::set_bootstrap_daemon(
     const std::string &address,
-    const boost::optional<epee::net_utils::http::login> &credentials,
+    const std::optional<epee::net_utils::http::login> &credentials,
     const std::string &proxy)
   {
     boost::unique_lock<boost::shared_mutex> lock(m_bootstrap_daemon_mutex);
@@ -346,7 +347,7 @@ namespace cryptonote
       return false;
     }
 
-    boost::optional<epee::net_utils::http::login> http_login{};
+    std::optional<epee::net_utils::http::login> http_login{};
 
     if (rpc_config->login)
       http_login.emplace(std::move(rpc_config->login->username), std::move(rpc_config->login->password).password());
@@ -355,9 +356,9 @@ namespace cryptonote
       m_net_server.add_idle_handler([this](){ return m_rpc_payment->on_idle(); }, std::chrono::minutes{1});
 
     bool store_ssl_key = !restricted && rpc_config->ssl_options && rpc_config->ssl_options.auth.certificate_path.empty();
-    const auto ssl_base_path = (boost::filesystem::path{data_dir} / "rpc_ssl").string();
-    const bool ssl_cert_file_exists = boost::filesystem::exists(ssl_base_path + ".crt");
-    const bool ssl_pkey_file_exists = boost::filesystem::exists(ssl_base_path + ".key");
+    const auto ssl_base_path = (std::filesystem::path{data_dir} / "rpc_ssl").string();
+    const bool ssl_cert_file_exists = std::filesystem::exists(ssl_base_path + ".crt");
+    const bool ssl_pkey_file_exists = std::filesystem::exists(ssl_base_path + ".key");
     if (store_ssl_key)
     {
       // .key files are often given different read permissions as their corresponding .crt files.
@@ -1254,7 +1255,6 @@ namespace cryptonote
       return ok;
 
     const bool restricted = m_restricted && ctx;
-    const bool request_has_rpc_origin = ctx != NULL;
 
     if (restricted && req.key_images.size() > RESTRICTED_SPENT_KEY_IMAGES_COUNT)
     {
@@ -1522,7 +1522,7 @@ namespace cryptonote
     res.is_background_mining_enabled = lMiner.get_is_background_mining_enabled();
     store_difficulty(m_core.get_blockchain_storage().get_difficulty_for_next_block(), res.difficulty, res.wide_difficulty, res.difficulty_top64);
     
-    res.block_target = m_core.get_blockchain_storage().get_current_hard_fork_version() < 2 ? DIFFICULTY_TARGET_V1 : DIFFICULTY_TARGET_V2;
+    res.block_target = DIFFICULTY_TARGET_V2;
     if ( lMiner.is_mining() ) {
       res.speed = lMiner.get_speed();
       res.threads_count = lMiner.get_threads_count();
@@ -1791,7 +1791,7 @@ namespace cryptonote
   {
     PERF_TIMER(on_set_bootstrap_daemon);
 
-    boost::optional<epee::net_utils::http::login> credentials;
+    std::optional<epee::net_utils::http::login> credentials;
     if (!req.username.empty() || !req.password.empty())
     {
       credentials = epee::net_utils::http::login(req.username, req.password);
@@ -2439,7 +2439,7 @@ namespace cryptonote
         m_bootstrap_height_check_time = current_time;
       }
 
-      boost::optional<std::pair<uint64_t, uint64_t>> bootstrap_daemon_height_info = m_bootstrap_daemon->get_height();
+      std::optional<std::pair<uint64_t, uint64_t>> bootstrap_daemon_height_info = m_bootstrap_daemon->get_height();
       if (!bootstrap_daemon_height_info)
       {
         MERROR("Failed to fetch bootstrap daemon height");
@@ -2570,13 +2570,13 @@ namespace cryptonote
         error_resp.message = "Internal error: can't get block by hash. Hash = " + hash + '.';
         return false;
       }
-      if (blk.miner_tx.vin.size() != 1 || blk.miner_tx.vin.front().type() != typeid(txin_gen))
+      if (blk.miner_tx.vin.size() != 1 || !std::holds_alternative<txin_gen>(blk.miner_tx.vin.front()))
       {
         error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
         error_resp.message = "Internal error: coinbase transaction in the block has the wrong type";
         return false;
       }
-      uint64_t block_height = boost::get<txin_gen>(blk.miner_tx.vin.front()).height;
+      uint64_t block_height = std::get<txin_gen>(blk.miner_tx.vin.front()).height;
       bool response_filled = fill_block_header_response(blk, orphan, block_height, block_hash, block_header, fill_pow_hash && !restricted);
       if (!response_filled)
       {
@@ -2638,13 +2638,13 @@ namespace cryptonote
         error_resp.message = "Internal error: can't get block by height. Height = " + boost::lexical_cast<std::string>(h) + ". Hash = " + epee::string_tools::pod_to_hex(block_hash) + '.';
         return false;
       }
-      if (blk.miner_tx.vin.size() != 1 || blk.miner_tx.vin.front().type() != typeid(txin_gen))
+      if (blk.miner_tx.vin.size() != 1 || !std::holds_alternative<txin_gen>(blk.miner_tx.vin.front()))
       {
         error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
         error_resp.message = "Internal error: coinbase transaction in the block has the wrong type";
         return false;
       }
-      uint64_t block_height = boost::get<txin_gen>(blk.miner_tx.vin.front()).height;
+      uint64_t block_height = std::get<txin_gen>(blk.miner_tx.vin.front()).height;
       if (block_height != h)
       {
         error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
@@ -2738,13 +2738,13 @@ namespace cryptonote
       error_resp.message = "Internal error: can't get block by hash. Hash = " + req.hash + '.';
       return false;
     }
-    if (blk.miner_tx.vin.size() != 1 || blk.miner_tx.vin.front().type() != typeid(txin_gen))
+    if (blk.miner_tx.vin.size() != 1 || !std::holds_alternative<txin_gen>(blk.miner_tx.vin.front()))
     {
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = "Internal error: coinbase transaction in the block has the wrong type";
       return false;
     }
-    uint64_t block_height = boost::get<txin_gen>(blk.miner_tx.vin.front()).height;
+    uint64_t block_height = std::get<txin_gen>(blk.miner_tx.vin.front()).height;
     const bool restricted = m_restricted && ctx;
     bool response_filled = fill_block_header_response(blk, orphan, block_height, block_hash, res.block_header, req.fill_pow_hash && !restricted);
     if (!response_filled)
@@ -3235,7 +3235,7 @@ namespace cryptonote
       return true;
     }
 
-    boost::filesystem::path path;
+    std::filesystem::path path;
     if (req.path.empty())
     {
       std::string filename;
@@ -3612,6 +3612,73 @@ namespace cryptonote
     res.tier_0_lock_blocks = shekyl_stake_lock_blocks(0);
     res.tier_1_lock_blocks = shekyl_stake_lock_blocks(1);
     res.tier_2_lock_blocks = shekyl_stake_lock_blocks(2);
+    res.status = CORE_RPC_STATUS_OK;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_estimate_claim_reward(const COMMAND_RPC_ESTIMATE_CLAIM_REWARD::request& req, COMMAND_RPC_ESTIMATE_CLAIM_REWARD::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
+  {
+    RPC_TRACKER(estimate_claim_reward);
+
+    const auto& db = m_core.get_blockchain_storage().get_db();
+    const uint64_t current_height = m_core.get_current_blockchain_height();
+
+    if (req.to_height > current_height)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT;
+      error_resp.message = "to_height exceeds current blockchain height";
+      return false;
+    }
+    if (req.from_height >= req.to_height)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "from_height must be less than to_height";
+      return false;
+    }
+
+    tx_out_index oi;
+    try { oi = db.get_output_tx_and_index_from_global(req.staked_output_index); }
+    catch (...)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "Staked output not found";
+      return false;
+    }
+
+    cryptonote::transaction staked_tx;
+    if (!db.get_tx(oi.first, staked_tx) || oi.second >= staked_tx.vout.size())
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "Cannot retrieve staked output transaction";
+      return false;
+    }
+
+    const cryptonote::tx_out& out = staked_tx.vout[oi.second];
+    uint8_t tier = 0;
+    uint64_t lock_until = 0;
+    if (!cryptonote::get_output_staking_info(out, tier, lock_until))
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "Output is not a staked output";
+      return false;
+    }
+
+    uint64_t staked_amount = out.amount;
+    res.tier = tier;
+    res.staked_amount = staked_amount;
+
+    uint64_t reward = 0;
+    for (uint64_t h = req.from_height + 1; h <= req.to_height; ++h)
+    {
+      auto accrual = db.get_staker_accrual(h);
+      uint64_t total_reward_at_h = accrual.staker_emission + accrual.staker_fee_pool;
+      if (total_reward_at_h == 0 || accrual.total_weighted_stake == 0)
+        continue;
+      uint64_t weight = shekyl_stake_weight(staked_amount, tier);
+      reward += (uint64_t)((double)total_reward_at_h * (double)weight / (double)accrual.total_weighted_stake);
+    }
+
+    res.reward = reward;
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }

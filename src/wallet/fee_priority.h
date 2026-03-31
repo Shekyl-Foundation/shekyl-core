@@ -7,7 +7,7 @@
 #include <iterator>
 #include <iosfwd>
 
-#include <boost/optional/optional.hpp>
+#include <optional>
 
 namespace tools
 {
@@ -105,12 +105,12 @@ namespace tools
             return fee_priority_strings().at(integralValue);
         }
 
-        inline boost::optional<fee_priority> from_string(const std::string& str)
+        inline std::optional<fee_priority> from_string(const std::string& str)
         {
             const auto& strings = fee_priority_strings();
             const auto strIterator = std::find(strings.begin(), strings.end(), str);
             if (strIterator == strings.end())
-                return boost::none;
+                return std::nullopt;
 
             const auto distance = std::distance(strings.begin(), strIterator);
             return enums().at(distance);

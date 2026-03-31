@@ -66,7 +66,7 @@ class test_out_can_be_to_acc : public single_tx_test_base
         m_view_tag_opt = vt;
       }
       else
-        m_view_tag_opt = boost::optional<crypto::view_tag>();
+        m_view_tag_opt = std::optional<crypto::view_tag>();
 
       return true;
     }
@@ -99,5 +99,5 @@ class test_out_can_be_to_acc : public single_tx_test_base
       crypto::secret_key m_view_secret_key;
       crypto::public_key m_spend_public_key;
       crypto::public_key m_output_public_key;
-      boost::optional<crypto::view_tag> m_view_tag_opt;
+      std::optional<crypto::view_tag> m_view_tag_opt;
 };

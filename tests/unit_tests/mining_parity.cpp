@@ -39,18 +39,24 @@
 namespace
 {
 
-TEST(mining_parity, reward_overload_matches_legacy_before_shekyl_ng)
+TEST(mining_parity, release_multiplier_scales_reward)
 {
-  const size_t median_weight = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2;
-  const size_t current_block_weight = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2;
+  const size_t median_weight = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
+  const size_t current_block_weight = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   const uint64_t already_generated_coins = 1234567890;
-  const uint8_t version = HF_VERSION_SHEKYL_NG - 1;
+  const uint8_t version = HF_VERSION_SHEKYL_NG;
 
   uint64_t base_reward = 0;
-  uint64_t release_reward = 0;
+  uint64_t high_volume_reward = 0;
+  uint64_t low_volume_reward = 0;
   ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, base_reward, version));
-  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, release_reward, version, 999999));
-  ASSERT_EQ(base_reward, release_reward);
+  ASSERT_GT(base_reward, 0u);
+
+  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, high_volume_reward, version, SHEKYL_TX_VOLUME_BASELINE * 100));
+  ASSERT_TRUE(cryptonote::get_block_reward(median_weight, current_block_weight, already_generated_coins, low_volume_reward, version, 1));
+
+  ASSERT_GT(high_volume_reward, base_reward);
+  ASSERT_LT(low_volume_reward, base_reward);
 }
 
 TEST(mining_parity, reward_multiplier_is_neutral_at_baseline)

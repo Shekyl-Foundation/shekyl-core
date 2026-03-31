@@ -29,10 +29,9 @@
 
 #include "message_store.h"
 #include <boost/archive/portable_binary_iarchive.hpp>
-#include <boost/format.hpp>
-#include <boost/algorithm/string.hpp>
 #include <boost/system/error_code.hpp>
 #include <boost/filesystem.hpp>
+#include "common/string_util.h"
 #include <fstream>
 #include <sstream>
 #include "file_io_utils.h"
@@ -124,24 +123,24 @@ void message_store::set_options(const std::string &bitmessage_address, const epe
 
 void message_store::set_signer(const multisig_wallet_state &state,
                                uint32_t index,
-                               const boost::optional<std::string> &label,
-                               const boost::optional<std::string> &transport_address,
-                               const boost::optional<cryptonote::account_public_address> monero_address)
+                               const std::optional<std::string> &label,
+                               const std::optional<std::string> &transport_address,
+                               const std::optional<cryptonote::account_public_address> monero_address)
 {
   THROW_WALLET_EXCEPTION_IF(index >= m_num_authorized_signers, tools::error::wallet_internal_error, "Invalid signer index " + std::to_string(index));
   authorized_signer &m = m_signers[index];
   if (label)
   {
-    m.label = get_sanitized_text(label.get(), 50);
+    m.label = get_sanitized_text(*label, 50);
   }
   if (transport_address)
   {
-    m.transport_address = get_sanitized_text(transport_address.get(), 200);
+    m.transport_address = get_sanitized_text(*transport_address, 200);
   }
   if (monero_address)
   {
     m.monero_address_known = true;
-    m.monero_address = monero_address.get();
+    m.monero_address = *monero_address;
   }
   // Save to minimize the chance to loose that info
   save(state);
@@ -294,7 +293,7 @@ bool message_store::check_auto_config_token(const std::string &raw_token,
   {
     // Prefix must be there; accept it in any casing
     std::string raw_prefix(raw_token.substr(0, 3));
-    boost::algorithm::to_lower(raw_prefix);
+    tools::string_util::to_lower(raw_prefix);
     if (raw_prefix != prefix)
     {
       return false;
@@ -312,7 +311,7 @@ bool message_store::check_auto_config_token(const std::string &raw_token,
   }
 
   // Convert to strict lowercase and correct any common misspellings
-  boost::algorithm::to_lower(hex_digits);
+  tools::string_util::to_lower(hex_digits);
   std::replace(hex_digits.begin(), hex_digits.end(), 'o', '0');
   std::replace(hex_digits.begin(), hex_digits.end(), 'i', '1');
   std::replace(hex_digits.begin(), hex_digits.end(), 'l', '1');
@@ -585,8 +584,8 @@ size_t message_store::add_message(const multisig_wallet_state &state,
   // Save for every new message right away (at least while in beta)
   save(state);
 
-  MINFO(boost::format("Added %s message %s for signer %s of type %s")
-          % message_direction_to_string(direction) % m.id % signer_index % message_type_to_string(type));
+  MINFO("Added " << message_direction_to_string(direction) << " message " << m.id
+          << " for signer " << signer_index << " of type " << message_type_to_string(type));
   return m_messages.size() - 1;
 }
 
@@ -1105,8 +1104,9 @@ bool message_store::get_processable_messages(const multisig_wallet_state &state,
       else
       {
         // Don't sync, but give a hint how this minimal set COULD be synced if really wanted
-        wait_reason += (boost::format("\nUse \"mms next sync\" if you want to sync with just %s out of %s authorized signers and transact just with them")
-                                     % (m_num_required_signers - 1) % (m_num_authorized_signers - 1)).str();
+        wait_reason += "\nUse \"mms next sync\" if you want to sync with just "
+                       + std::to_string(m_num_required_signers - 1) + " out of "
+                       + std::to_string(m_num_authorized_signers - 1) + " authorized signers and transact just with them";
       }
     }
     if (sync)

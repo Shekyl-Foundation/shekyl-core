@@ -29,12 +29,15 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 // Parts of this file are originally copyright (c) 2006-2013, Andrey N. Sabelnikov, www.sabelnikov.net
 
+// TODO(shekyl-v4): Migrate boost::posix_time::ptime fields to
+// std::chrono::system_clock::time_point. This struct crosses P2P protocol
+// boundaries; change must be coordinated with block_queue and net_node.
 #pragma once
 #include <unordered_set>
 #include <atomic>
 #include <algorithm>
 #include <boost/date_time/posix_time/posix_time.hpp>
-#include <boost/optional/optional_fwd.hpp>
+#include <optional>
 #include "net/net_utils_base.h"
 #include "crypto/hash.h"
 
@@ -95,7 +98,7 @@ namespace cryptonote
     //! Use this instead of `m_state = state_normal`.
     void set_state_normal();
 
-    boost::optional<crypto::hash> get_expected_hash(uint64_t height) const;
+    std::optional<crypto::hash> get_expected_hash(uint64_t height) const;
 
     state m_state;
     std::vector<std::pair<crypto::hash, uint64_t>> m_needed_objects;

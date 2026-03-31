@@ -90,10 +90,10 @@ namespace net
         hostport.assign(authority.data(), authority.size());
     }
 
-    boost::optional<user_and_pass> user_and_pass::get(boost::string_ref userinfo)
+    std::optional<user_and_pass> user_and_pass::get(boost::string_ref userinfo)
     {
         static_assert(std::is_same<std::string::size_type, boost::string_ref::size_type>::value, "");
-        boost::optional<user_and_pass> out{user_and_pass{}};
+        std::optional<user_and_pass> out{user_and_pass{}};
 
         const auto split = userinfo.find(':');
         if (split != boost::string_ref::npos)
@@ -110,18 +110,18 @@ namespace net
         out->pass.assign(userinfo.data(), userinfo.size());
         if (percent_decoding(out->user) && percent_decoding(out->pass))
             return out;
-        return boost::none;
+        return std::nullopt;
     }
 
-    boost::optional<uri_components> uri_components::get(const boost::string_ref uri)
+    std::optional<uri_components> uri_components::get(const boost::string_ref uri)
     {
         scheme_and_authority result1{uri};
         userinfo_and_hostport result2{result1.authority};
         auto result3 = user_and_pass::get(result2.userinfo);
         if (!result3)
-            return boost::none;
+            return std::nullopt;
 
-        boost::optional<uri_components> out{uri_components{}};
+        std::optional<uri_components> out{uri_components{}};
         out->scheme = std::move(result1.scheme);
         out->userinfo = std::move(*result3);
         out->hostport = std::move(result2.hostport);

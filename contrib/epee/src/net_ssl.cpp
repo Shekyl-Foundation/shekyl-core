@@ -41,7 +41,8 @@
 #include "misc_log_ex.h"
 #include "net/net_helper.h"
 #include "net/net_ssl.h"
-#include "file_io_utils.h" // to validate .crt and .key paths
+#include "file_io_utils.h"
+#include "shekyl/shekyl_ffi.h"
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "net.ssl"
@@ -81,45 +82,9 @@ namespace
   };
   using openssl_pkey = std::unique_ptr<EVP_PKEY, openssl_pkey_free>;
 
-  struct openssl_rsa_free
-  {
-    void operator()(RSA* ptr) const noexcept
-    {
-      RSA_free(ptr);
-    }
-  };
-  using openssl_rsa = std::unique_ptr<RSA, openssl_rsa_free>;
-
-  struct openssl_bignum_free
-  {
-    void operator()(BIGNUM* ptr) const noexcept
-    {
-      BN_free(ptr);
-    }
-  };
-  using openssl_bignum = std::unique_ptr<BIGNUM, openssl_bignum_free>;
-
-  struct openssl_ec_key_free
-  {
-    void operator()(EC_KEY* ptr) const noexcept
-    {
-      EC_KEY_free(ptr);
-    }
-  };
-  using openssl_ec_key = std::unique_ptr<EC_KEY, openssl_ec_key_free>;
-
-  struct openssl_group_free
-  {
-    void operator()(EC_GROUP* ptr) const noexcept
-    {
-      EC_GROUP_free(ptr);
-    }
-  };
-  using openssl_group = std::unique_ptr<EC_GROUP, openssl_group_free>;
-
   boost::system::error_code load_ca_file(boost::asio::ssl::context& ctx, const std::string& path)
   {
-    SSL_CTX* const ssl_ctx = ctx.native_handle(); // could be moved from context
+    SSL_CTX* const ssl_ctx = ctx.native_handle();
     if (ssl_ctx == nullptr)
       return {boost::asio::error::invalid_argument};
 
@@ -139,155 +104,61 @@ namespace net_utils
 {
 
 
-// https://stackoverflow.com/questions/256405/programmatically-create-x509-certificate-using-openssl
-bool create_rsa_ssl_certificate(EVP_PKEY *&pkey, X509 *&cert)
+bool create_ssl_certificate(EVP_PKEY *&pkey, X509 *&cert)
 {
-  MINFO("Generating SSL certificate");
-  pkey = EVP_PKEY_new();
+  MINFO("Generating ECDSA P-256 SSL certificate via Rust (rcgen)");
+
+  ShekylBuffer key_pem{nullptr, 0};
+  ShekylBuffer cert_pem{nullptr, 0};
+
+  if (!shekyl_generate_ssl_certificate(&key_pem, &cert_pem))
+  {
+    MERROR("Rust certificate generation failed");
+    return false;
+  }
+
+  openssl_bio bio_key{BIO_new_mem_buf(key_pem.ptr, static_cast<int>(key_pem.len))};
+  if (!bio_key)
+  {
+    MERROR("Failed to create BIO for private key PEM");
+    shekyl_buffer_free(key_pem.ptr, key_pem.len);
+    shekyl_buffer_free(cert_pem.ptr, cert_pem.len);
+    return false;
+  }
+
+  pkey = PEM_read_bio_PrivateKey(bio_key.get(), nullptr, nullptr, nullptr);
   if (!pkey)
   {
-    MERROR("Failed to create new private key");
+    MERROR("Failed to parse PEM private key: " << ERR_reason_error_string(ERR_get_error()));
+    shekyl_buffer_free(key_pem.ptr, key_pem.len);
+    shekyl_buffer_free(cert_pem.ptr, cert_pem.len);
     return false;
   }
 
-  openssl_pkey pkey_deleter{pkey};
-  openssl_rsa rsa{RSA_new()};
-  if (!rsa)
+  openssl_bio bio_cert{BIO_new_mem_buf(cert_pem.ptr, static_cast<int>(cert_pem.len))};
+  if (!bio_cert)
   {
-    MERROR("Error allocating RSA private key");
+    MERROR("Failed to create BIO for certificate PEM");
+    EVP_PKEY_free(pkey);
+    pkey = nullptr;
+    shekyl_buffer_free(key_pem.ptr, key_pem.len);
+    shekyl_buffer_free(cert_pem.ptr, cert_pem.len);
     return false;
   }
 
-  openssl_bignum exponent{BN_new()};
-  if (!exponent)
-  {
-    MERROR("Error allocating exponent");
-    return false;
-  }
-
-  BN_set_word(exponent.get(), RSA_F4);
-
-  if (RSA_generate_key_ex(rsa.get(), 4096, exponent.get(), nullptr) != 1)
-  {
-    MERROR("Error generating RSA private key");
-    return false;
-  }
-
-  if (EVP_PKEY_assign_RSA(pkey, rsa.get()) <= 0)
-  {
-    MERROR("Error assigning RSA private key");
-    return false;
-  }
-
-  // the RSA key is now managed by the EVP_PKEY structure
-  (void)rsa.release();
-
-  cert = X509_new();
+  cert = PEM_read_bio_X509(bio_cert.get(), nullptr, nullptr, nullptr);
   if (!cert)
   {
-    MERROR("Failed to create new X509 certificate");
-    return false;
-  }
-  ASN1_INTEGER_set(X509_get_serialNumber(cert), 1);
-  X509_gmtime_adj(X509_get_notBefore(cert), 0);
-  X509_gmtime_adj(X509_get_notAfter(cert), 3600 * 24 * 182); // half a year
-  if (!X509_set_pubkey(cert, pkey))
-  {
-    MERROR("Error setting pubkey on certificate");
-    X509_free(cert);
-    return false;
-  }
-  X509_NAME *name = X509_get_subject_name(cert);
-  X509_set_issuer_name(cert, name);
-
-  if (X509_sign(cert, pkey, EVP_sha256()) == 0)
-  {
-    MERROR("Error signing certificate");
-    X509_free(cert);
-    return false;
-  }
-  (void)pkey_deleter.release();
-  return true;
-}
-
-bool create_ec_ssl_certificate(EVP_PKEY *&pkey, X509 *&cert, int type)
-{
-  MINFO("Generating SSL certificate");
-  pkey = EVP_PKEY_new();
-  if (!pkey)
-  {
-    MERROR("Failed to create new private key");
+    MERROR("Failed to parse PEM certificate: " << ERR_reason_error_string(ERR_get_error()));
+    EVP_PKEY_free(pkey);
+    pkey = nullptr;
+    shekyl_buffer_free(key_pem.ptr, key_pem.len);
+    shekyl_buffer_free(cert_pem.ptr, cert_pem.len);
     return false;
   }
 
-  openssl_pkey pkey_deleter{pkey};
-  openssl_ec_key ec_key{EC_KEY_new()};
-  if (!ec_key)
-  {
-    MERROR("Error allocating EC private key");
-    return false;
-  }
-
-  EC_GROUP *group = EC_GROUP_new_by_curve_name(type);
-  if (!group)
-  {
-    MERROR("Error getting EC group " << type);
-    return false;
-  }
-  openssl_group group_deleter{group};
-
-  EC_GROUP_set_asn1_flag(group, OPENSSL_EC_NAMED_CURVE); 
-  EC_GROUP_set_point_conversion_form(group, POINT_CONVERSION_UNCOMPRESSED);
-
-  if (!EC_GROUP_check(group, NULL))
-  {
-    MERROR("Group failed check: " << ERR_reason_error_string(ERR_get_error()));
-    return false;
-  }
-  if (EC_KEY_set_group(ec_key.get(), group) != 1)
-  {
-    MERROR("Error setting EC group");
-    return false;
-  }
-  if (EC_KEY_generate_key(ec_key.get()) != 1)
-  {
-    MERROR("Error generating EC private key");
-    return false;
-  }
-  if (EVP_PKEY_assign_EC_KEY(pkey, ec_key.get()) <= 0)
-  {
-    MERROR("Error assigning EC private key");
-    return false;
-  }
-
-  // the key is now managed by the EVP_PKEY structure
-  (void)ec_key.release();
-
-  cert = X509_new();
-  if (!cert)
-  {
-    MERROR("Failed to create new X509 certificate");
-    return false;
-  }
-  ASN1_INTEGER_set(X509_get_serialNumber(cert), 1);
-  X509_gmtime_adj(X509_get_notBefore(cert), 0);
-  X509_gmtime_adj(X509_get_notAfter(cert), 3600 * 24 * 182); // half a year
-  if (!X509_set_pubkey(cert, pkey))
-  {
-    MERROR("Error setting pubkey on certificate");
-    X509_free(cert);
-    return false;
-  }
-  X509_NAME *name = X509_get_subject_name(cert);
-  X509_set_issuer_name(cert, name);
-
-  if (X509_sign(cert, pkey, EVP_sha256()) == 0)
-  {
-    MERROR("Error signing certificate");
-    X509_free(cert);
-    return false;
-  }
-  (void)pkey_deleter.release();
+  shekyl_buffer_free(key_pem.ptr, key_pem.len);
+  shekyl_buffer_free(cert_pem.ptr, cert_pem.len);
   return true;
 }
 
@@ -316,16 +187,46 @@ boost::asio::ssl::context ssl_options_t::create_context() const
   ssl_context.set_options(boost::asio::ssl::context::no_tlsv1);
   ssl_context.set_options(boost::asio::ssl::context::no_tlsv1_1);
 
-  // only allow a select handful of tls v1.3 and v1.2 ciphers to be used
-  SSL_CTX_set_cipher_list(ssl_context.native_handle(), "ECDHE-ECDSA-CHACHA20-POLY1305-SHA256:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256");
-
-  // set options on the SSL context for added security
   SSL_CTX *ctx = ssl_context.native_handle();
   CHECK_AND_ASSERT_THROW_MES(ctx, "Failed to get SSL context");
-  SSL_CTX_clear_options(ctx, SSL_OP_LEGACY_SERVER_CONNECT); // SSL_CTX_SET_OPTIONS(3)
-  SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF); // https://stackoverflow.com/questions/22378442
+
+  // TLS 1.2 cipher suites (AEAD only, ECDHE key exchange)
+  SSL_CTX_set_cipher_list(ctx,
+    "ECDHE-ECDSA-CHACHA20-POLY1305-SHA256:"
+    "ECDHE-ECDSA-CHACHA20-POLY1305:"
+    "ECDHE-ECDSA-AES256-GCM-SHA384:"
+    "ECDHE-ECDSA-AES128-GCM-SHA256:"
+    "ECDHE-RSA-CHACHA20-POLY1305:"
+    "ECDHE-RSA-AES256-GCM-SHA384:"
+    "ECDHE-RSA-AES128-GCM-SHA256");
+
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L
+  // TLS 1.3 cipher suites (all are AEAD; key exchange is via groups below)
+  SSL_CTX_set_ciphersuites(ctx,
+    "TLS_AES_256_GCM_SHA384:"
+    "TLS_CHACHA20_POLY1305_SHA256:"
+    "TLS_AES_128_GCM_SHA256");
+#endif
+
+  // Post-quantum hybrid key exchange: prefer ML-KEM-768 + X25519 (FIPS 203),
+  // falling back to classical curves if the OpenSSL build lacks PQ support.
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L
+  if (!SSL_CTX_set1_groups_list(ctx,
+        "X25519MLKEM768:SecP256r1MLKEM768:X25519:P-256:P-384"))
+  {
+    MINFO("PQ hybrid key exchange groups not available, using classical groups");
+    SSL_CTX_set1_groups_list(ctx, "X25519:P-256:P-384");
+  }
+  else
+  {
+    MINFO("Post-quantum hybrid key exchange enabled (X25519MLKEM768)");
+  }
+#endif
+
+  SSL_CTX_clear_options(ctx, SSL_OP_LEGACY_SERVER_CONNECT);
+  SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
 #ifdef SSL_OP_NO_TICKET
-  SSL_CTX_set_options(ctx, SSL_OP_NO_TICKET); // https://stackoverflow.com/questions/22378442
+  SSL_CTX_set_options(ctx, SSL_OP_NO_TICKET);
 #endif
 #ifdef SSL_OP_NO_RENEGOTIATION
   SSL_CTX_set_options(ctx, SSL_OP_NO_RENEGOTIATION);
@@ -339,7 +240,6 @@ boost::asio::ssl::context ssl_options_t::create_context() const
 #ifdef SSL_OP_CIPHER_SERVER_PREFERENCE
   SSL_CTX_set_options(ctx, SSL_OP_CIPHER_SERVER_PREFERENCE);
 #endif
-  SSL_CTX_set_ecdh_auto(ctx, 1);
 
   switch (verification)
   {
@@ -378,31 +278,14 @@ boost::asio::ssl::context ssl_options_t::create_context() const
 
   if (auth.private_key_path.empty())
   {
-    EVP_PKEY *pkey;
-    X509 *cert;
-    bool ok = false;
+    EVP_PKEY *pkey = nullptr;
+    X509 *cert = nullptr;
 
-#ifdef USE_EXTRA_EC_CERT
-    CHECK_AND_ASSERT_THROW_MES(create_ec_ssl_certificate(pkey, cert, NID_secp256k1), "Failed to create certificate");
+    CHECK_AND_ASSERT_THROW_MES(create_ssl_certificate(pkey, cert), "Failed to create certificate");
     CHECK_AND_ASSERT_THROW_MES(SSL_CTX_use_certificate(ctx, cert), "Failed to use generated certificate");
-    if (!SSL_CTX_use_PrivateKey(ctx, pkey))
-      MERROR("Failed to use generated EC private key for " << NID_secp256k1);
-    else
-      ok = true;
+    CHECK_AND_ASSERT_THROW_MES(SSL_CTX_use_PrivateKey(ctx, pkey), "Failed to use generated private key");
     X509_free(cert);
     EVP_PKEY_free(pkey);
-#endif
-
-    CHECK_AND_ASSERT_THROW_MES(create_rsa_ssl_certificate(pkey, cert), "Failed to create certificate");
-    CHECK_AND_ASSERT_THROW_MES(SSL_CTX_use_certificate(ctx, cert), "Failed to use generated certificate");
-    if (!SSL_CTX_use_PrivateKey(ctx, pkey))
-      MERROR("Failed to use generated RSA private key for RSA");
-    else
-      ok = true;
-    X509_free(cert);
-    EVP_PKEY_free(pkey);
-
-    CHECK_AND_ASSERT_THROW_MES(ok, "Failed to use any generated certificate");
   }
   else
     auth.use_ssl_certificate(ssl_context);

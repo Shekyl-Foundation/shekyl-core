@@ -66,7 +66,7 @@ static bool expand_tx_and_ver_rct_non_sem(transaction& tx, const rct::ctkeyM& mi
     // For each input, check that the key images were copied into the expanded RCT sig correctly
     for (size_t n = 0; n < n_sigs; ++n)
     {
-        const crypto::key_image& nth_vin_image = boost::get<txin_to_key>(tx.vin[n]).k_image;
+        const crypto::key_image& nth_vin_image = std::get<txin_to_key>(tx.vin[n]).k_image;
 
         if (rct::is_rct_clsag(rv.type))
         {
@@ -137,6 +137,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
     rvv.reserve(static_cast<size_t>(std::distance(tx_begin, tx_end)));
 
     const size_t max_tx_version = hf_version < HF_VERSION_DYNAMIC_FEE ? 1 : (hf_version >= HF_VERSION_SHEKYL_NG ? 3 : 2);
+    const size_t min_tx_version = hf_version >= HF_VERSION_SHEKYL_NG ? 3 : (hf_version >= HF_VERSION_DYNAMIC_FEE ? 2 : 1);
 
     const size_t tx_weight_limit = get_transaction_weight_limit(hf_version);
 
@@ -154,7 +155,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
         }
 
         // Rule 2 & 3
-        if (tx.version == 0 || tx.version > max_tx_version)
+        if (tx.version < min_tx_version || tx.version > max_tx_version)
         {
             tvc.m_verifivation_failed = true;
             return false;
@@ -273,26 +274,9 @@ bool ver_mixed_rct_semantics(std::vector<const rct::rctSig*> rvv)
         switch (rv.type)
         {
         case rct::RCTTypeNull:
-            // coinbase should not come here, so we reject for all other types
             MERROR("Unexpected Null rctSig type");
             return false;
             break;
-        case rct::RCTTypeSimple:
-            if (!rct::verRctSemanticsSimple(rv))
-            {
-                MERROR("rct signature semantics check failed: type simple");
-                return false;
-            }
-            break;
-        case rct::RCTTypeFull:
-            if (!rct::verRct(rv, /*semantics=*/true))
-            {
-                MERROR("rct signature semantics check failed: type full");
-                return false;
-            }
-            break;
-        case rct::RCTTypeBulletproof:
-        case rct::RCTTypeBulletproof2:
         case rct::RCTTypeCLSAG:
             if (!is_canonical_bulletproof_layout(rv.p.bulletproofs))
             {

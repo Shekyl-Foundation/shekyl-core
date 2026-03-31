@@ -71,8 +71,8 @@ target_link_libraries(wallet_api
     mnemonics
     ${LMDB_LIBRARY}
     ${Boost_CHRONO_LIBRARY}
-    ${Boost_LOCALE_LIBRARY}
-    ${ICU_LIBRARIES}
+    $<$<BOOL:${WIN32}>:${Boost_LOCALE_LIBRARY}>
+    $<$<BOOL:${WIN32}>:${ICU_LIBRARIES}>
     ${Boost_SERIALIZATION_LIBRARY}
     ${Boost_FILESYSTEM_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}

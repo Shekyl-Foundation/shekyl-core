@@ -1,3 +1,4 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
 // Copyright (c) 2014-2022, The Monero Project
 //
 // All rights reserved.
@@ -89,12 +90,10 @@ namespace cryptonote {
   /* Cryptonote helper functions                                          */
   /************************************************************************/
   //-----------------------------------------------------------------------------------------------
-  size_t get_min_block_weight(uint8_t version)
+  size_t get_min_block_weight(uint8_t /* version */)
   {
-    if (version < 2)
-      return CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V1;
-    if (version < 5)
-      return CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2;
+    // Shekyl activates all hard-fork features from genesis (HF1).
+    // The legacy Monero version ladder (ZONE_V1, ZONE_V2) is unused.
     return CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5;
   }
   //-----------------------------------------------------------------------------------------------
@@ -104,8 +103,8 @@ namespace cryptonote {
   }
   //-----------------------------------------------------------------------------------------------
   bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version) {
-    static_assert(DIFFICULTY_TARGET_V2%60==0&&DIFFICULTY_TARGET_V1%60==0,"difficulty targets must be a multiple of 60");
-    const int target = version < 2 ? DIFFICULTY_TARGET_V1 : DIFFICULTY_TARGET_V2;
+    static_assert(DIFFICULTY_TARGET_V2%60==0,"difficulty target must be a multiple of 60");
+    const int target = DIFFICULTY_TARGET_V2;
     const int target_minutes = target / 60;
     const int emission_speed_factor = EMISSION_SPEED_FACTOR_PER_MINUTE - (target_minutes-1);
 
@@ -155,13 +154,12 @@ namespace cryptonote {
     if (!get_block_reward(median_weight, current_block_weight, already_generated_coins, reward, version))
       return false;
 
-    if (version >= HF_VERSION_SHEKYL_NG && SHEKYL_TX_VOLUME_BASELINE > 0)
+    if (SHEKYL_TX_VOLUME_BASELINE > 0)
     {
       uint64_t multiplier = shekyl_calc_release_multiplier(
           tx_volume_avg, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
       reward = shekyl_apply_release_multiplier(reward, multiplier);
 
-      // Clamp so effective_reward never exceeds remaining supply
       uint64_t remaining = MONEY_SUPPLY - already_generated_coins;
       if (reward > remaining)
         reward = remaining;
@@ -200,7 +198,7 @@ namespace cryptonote {
     if(tx.vin.size() != 1)
       return false;
 
-    if(tx.vin[0].type() != typeid(txin_gen))
+    if(!std::holds_alternative<txin_gen>(tx.vin[0]))
       return false;
 
     return true;

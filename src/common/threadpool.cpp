@@ -47,14 +47,12 @@ threadpool::~threadpool() {
 void threadpool::destroy() {
   try
   {
-    const boost::unique_lock<boost::mutex> lock(mutex);
+    const std::unique_lock<std::mutex> lock(mutex);
     running = false;
     has_work.notify_all();
   }
   catch (...)
   {
-    // if the lock throws, we're just do it without a lock and hope,
-    // since the alternative is terminate
     running = false;
     has_work.notify_all();
   }
@@ -71,20 +69,20 @@ void threadpool::recycle() {
 }
 
 void threadpool::create(unsigned int max_threads) {
-  const boost::unique_lock<boost::mutex> lock(mutex);
+  const std::unique_lock<std::mutex> lock(mutex);
   boost::thread::attributes attrs;
   attrs.set_stack_size(THREAD_STACK_SIZE);
   max = max_threads ? max_threads : tools::get_max_concurrency();
   size_t i = max ? max - 1 : 0;
   running = true;
   while(i--) {
-    threads.push_back(boost::thread(attrs, boost::bind(&threadpool::run, this, false)));
+    threads.push_back(boost::thread(attrs, [this]() { this->run(false); }));
   }
 }
 
 void threadpool::submit(waiter *obj, std::function<void()> f, bool leaf) {
   CHECK_AND_ASSERT_THROW_MES(!is_leaf, "A leaf routine is using a thread pool");
-  boost::unique_lock<boost::mutex> lock(mutex);
+  std::unique_lock<std::mutex> lock(mutex);
   if (!leaf && ((active == max && !queue.empty()) || depth > 0)) {
     // if all available threads are already running
     // and there's work waiting, just run in current thread
@@ -113,7 +111,7 @@ threadpool::waiter::~waiter()
 {
   try
   {
-    boost::unique_lock<boost::mutex> lock(mt);
+    std::unique_lock<std::mutex> lock(mt);
     if (num)
       MERROR("wait should have been called before waiter dtor - waiting now");
   }
@@ -130,26 +128,26 @@ threadpool::waiter::~waiter()
 
 bool threadpool::waiter::wait() {
   pool.run(true);
-  boost::unique_lock<boost::mutex> lock(mt);
+  std::unique_lock<std::mutex> lock(mt);
   while(num)
     cv.wait(lock);
   return !error();
 }
 
 void threadpool::waiter::inc() {
-  const boost::unique_lock<boost::mutex> lock(mt);
+  const std::unique_lock<std::mutex> lock(mt);
   num++;
 }
 
 void threadpool::waiter::dec() {
-  const boost::unique_lock<boost::mutex> lock(mt);
+  const std::unique_lock<std::mutex> lock(mt);
   num--;
   if (!num)
     cv.notify_all();
 }
 
 void threadpool::run(bool flush) {
-  boost::unique_lock<boost::mutex> lock(mutex);
+  std::unique_lock<std::mutex> lock(mutex);
   while (running) {
     entry e;
     while(queue.empty() && running)

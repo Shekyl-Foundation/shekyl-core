@@ -10,7 +10,7 @@ coinbase fan-out).
 - keeps coinbase compact and deterministic
 - avoids variable-size miner tx growth tied to staker-set cardinality
 - decouples staking payout cadence from block template construction
-- simplifies pool/node compatibility during HF17 rollout
+- simplifies pool/node compatibility during HF1 rollout
 
 ## Economic Flow
 
@@ -69,7 +69,7 @@ No minimum stake amount. Any amount can be staked.
 
 ### Accrual computation per block
 
-Each block after HF17 activation:
+Each block after HF1 activation:
 1. Compute `staker_emission` from the block emission via FFI (`shekyl_calc_emission_share`).
 2. Compute `staker_fee_pool` from the block's fee burn via FFI (`shekyl_calc_fee_pool`).
 3. Compute `total_weighted_stake` by scanning all staked outputs and applying tier multipliers.
@@ -127,7 +127,7 @@ implications:
 
 ## Operator Notes
 
-- Staking economics are active from HF17 block height onward.
+- Staking economics are active from HF1 (genesis) onward.
 - The accrual pool accumulates per-block regardless of whether claims are made.
 - Node operators should monitor `staker_pool_balance` via `get_staking_info` RPC.
 - Wallet implementations that support staking must handle `txout_to_staked_key` outputs in transaction scanning.

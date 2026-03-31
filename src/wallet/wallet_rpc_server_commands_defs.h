@@ -2810,11 +2810,13 @@ namespace wallet_rpc
       uint8_t tier;
       uint64_t amount;
       uint32_t priority;
+      uint32_t account_index;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(tier)
         KV_SERIALIZE(amount)
         KV_SERIALIZE_OPT(priority, (uint32_t)0)
+        KV_SERIALIZE_OPT(account_index, (uint32_t)0)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<request_t> request;
@@ -2846,11 +2848,11 @@ namespace wallet_rpc
 
     struct response_t
     {
-      std::string tx_hash;
+      std::vector<std::string> tx_hash_list;
       uint64_t amount;
 
       BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(tx_hash)
+        KV_SERIALIZE(tx_hash_list)
         KV_SERIALIZE(amount)
       END_KV_SERIALIZE_MAP()
     };
@@ -2913,6 +2915,30 @@ namespace wallet_rpc
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(tx_hash)
         KV_SERIALIZE(amount)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
+
+  struct COMMAND_RPC_GET_STAKED_BALANCE
+  {
+    struct request_t
+    {
+      BEGIN_KV_SERIALIZE_MAP()
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    struct response_t
+    {
+      uint64_t staked_balance;
+      uint64_t locked_count;
+      uint64_t matured_count;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(staked_balance)
+        KV_SERIALIZE(locked_count)
+        KV_SERIALIZE(matured_count)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

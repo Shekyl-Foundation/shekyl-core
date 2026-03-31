@@ -39,7 +39,6 @@
 #include <type_traits>
 
 #include <boost/endian/conversion.hpp>
-#include <boost/mpl/bool.hpp>
 
 #include "common/varint.h"
 #include "span.h"
@@ -63,7 +62,7 @@ template <bool IsSaving>
 struct binary_archive_base
 {
   typedef binary_archive_base<IsSaving> base_type;
-  typedef boost::mpl::bool_<IsSaving> is_saving;
+  typedef std::bool_constant<IsSaving> is_saving;
 
   typedef uint8_t variant_tag_type;
 

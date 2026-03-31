@@ -105,7 +105,9 @@ bool gen_rct2_tx_validation_base::generate_with(std::vector<test_event_entry>& e
         if (blocks[m].miner_tx.vout[i].amount == needed_amount)
           index_in_tx = i;
       CHECK_AND_ASSERT_MES(blocks[m].miner_tx.vout[index_in_tx].amount == needed_amount, false, "Expected amount not found");
-      src.push_output(m, boost::get<txout_to_key>(blocks[m].miner_tx.vout[index_in_tx].target).key, src.amount);
+      crypto::public_key out_key;
+      CHECK_AND_ASSERT_MES(cryptonote::get_output_public_key(blocks[m].miner_tx.vout[index_in_tx], out_key), false, "Invalid miner output key type");
+      src.push_output(m, out_key, src.amount);
       if (m == n)
         real_index_in_tx = index_in_tx;
     }
@@ -157,11 +159,7 @@ bool gen_rct2_tx_validation_base::generate_with(std::vector<test_event_entry>& e
       crypto::secret_key amount_key;
       crypto::derivation_to_scalar(derivation, o, amount_key);
       rct::key rct_tx_mask;
-      const uint8_t type = rct_txes.back().rct_signatures.type;
-      if (rct::is_rct_simple(type))
-        rct::decodeRctSimple(rct_txes.back().rct_signatures, rct::sk2rct(amount_key), o, rct_tx_mask, hw::get_device("default"));
-      else
-        rct::decodeRct(rct_txes.back().rct_signatures, rct::sk2rct(amount_key), o, rct_tx_mask, hw::get_device("default"));
+      rct::decodeRctSimple(rct_txes.back().rct_signatures, rct::sk2rct(amount_key), o, rct_tx_mask, hw::get_device("default"));
     }
 
     while (amounts_paid[0] != (size_t)-1)

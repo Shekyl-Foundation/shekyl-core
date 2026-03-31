@@ -27,9 +27,7 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "wallet/wallet_args.h"
 
-#include <boost/filesystem/path.hpp>
-#include <boost/filesystem/operations.hpp>
-#include <boost/format.hpp>
+#include <filesystem>
 #include "common/i18n.h"
 #include "common/util.h"
 #include "misc_log_ex.h"
@@ -90,7 +88,7 @@ namespace wallet_args
     return i18n_translate(str, "wallet_args");
   }
 
-  std::pair<boost::optional<boost::program_options::variables_map>, bool> main(
+  std::pair<std::optional<boost::program_options::variables_map>, bool> main(
     int argc, char** argv,
     const char* const usage,
     const char* const notice,
@@ -101,7 +99,7 @@ namespace wallet_args
     bool log_to_console)
   
   {
-    namespace bf = boost::filesystem;
+    namespace bf = std::filesystem;
     namespace po = boost::program_options;
 #ifdef WIN32
     _CrtSetDbgFlag ( _CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF );
@@ -167,10 +165,10 @@ namespace wallet_args
       {
         std::string config = command_line::get_arg(vm, arg_config_file);
         bf::path config_path(config);
-        boost::system::error_code ec;
+        std::error_code ec;
         if (bf::exists(config_path, ec))
         {
-          po::store(po::parse_config_file<char>(config_path.string<std::string>().c_str(), desc_params), vm);
+          po::store(po::parse_config_file<char>(config_path.string().c_str(), desc_params), vm);
         }
         else
         {
@@ -183,7 +181,7 @@ namespace wallet_args
       return true;
     });
     if (!r)
-      return {boost::none, true};
+      return {std::nullopt, true};
 
     if (should_terminate)
       return {std::move(vm), should_terminate};
@@ -220,7 +218,7 @@ namespace wallet_args
     }
     MINFO(wallet_args::tr("Logging to: ") << log_path);
 
-    Print(print) << boost::format(wallet_args::tr("Logging to %s")) % log_path;
+    Print(print) << wallet_args::tr("Logging to ") << log_path;
 
     const ssize_t lockable_memory = tools::get_lockable_memory();
     if (lockable_memory >= 0 && lockable_memory < 256 * 4096) // 256 pages -> at least 256 secret keys and other such small/medium objects

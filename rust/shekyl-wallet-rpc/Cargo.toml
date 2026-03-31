@@ -1,0 +1,24 @@
+[package]
+name = "shekyl-wallet-rpc"
+description = "Rust wallet RPC server over C++ wallet2 via FFI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "shekyl_wallet_rpc"
+crate-type = ["lib", "staticlib"]
+
+[[bin]]
+name = "shekyl-wallet-rpc-rs"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }

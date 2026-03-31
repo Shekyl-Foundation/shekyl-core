@@ -1,5 +1,7 @@
 # Shekyl Design Concepts
 
+> **Last updated:** 2026-03-30
+
 ## Monetary Supply and Denomination Policy (Next Generation Shekyl)
 
 This document proposes a concrete monetary design set for next-generation Shekyl, with rationale grounded in:
@@ -44,9 +46,9 @@ Shekyl monetary policy should satisfy six constraints at once:
 
 ---
 
-## 2) Current Shekyl Baseline and Problem Statement
+## 2) Historical Shekyl Baseline and Problem Statement
 
-Current constants in `src/cryptonote_config.h`:
+Historical constants from the original chain configuration:
 
 - `MONEY_SUPPLY = 2^32`
 - `COIN = 10^12`
@@ -65,7 +67,9 @@ Reward logic in `src/cryptonote_basic/cryptonote_basic_impl.cpp`:
 - `base_reward = (MONEY_SUPPLY - already_generated_coins) >> emission_speed_factor`
 - `base_reward` is clamped to a minimum via `FINAL_SUBSIDY_PER_MINUTE`
 
-Given the mismatch above, the chain effectively enters minimum-subsidy behavior immediately.
+Given the mismatch above, the original chain effectively entered minimum-subsidy behavior immediately.
+
+For Shekyl NG, constants are generated from `config/economics_params.json` and included via generated headers referenced by `src/cryptonote_config.h`.
 
 ### Technical limit with `uint64_t`
 
@@ -243,6 +247,18 @@ Staking is implemented end-to-end. See `docs/STAKER_REWARD_DISBURSEMENT.md` for
 the full technical specification including transaction types (`txout_to_staked_key`,
 `txin_stake_claim`), on-chain LMDB storage schema, consensus validation rules,
 wallet commands, and RPC endpoints.
+
+#### Multisig staking (operational security)
+
+Long-duration staked positions (especially the 150,000-block tier at ~208 days)
+represent significant value locked under a single key for months. Multisig
+authorization (`scheme_id = 2`) is the recommended configuration for staked
+outputs with meaningful value. A 2-of-3 multisig ensures that no single
+compromised key can claim accumulated rewards or control the output at unlock.
+
+Multisig staked outputs and claim transactions use the same `pqc_auth`
+framework as regular transactions, with the extended signature-list format.
+See `docs/PQC_MULTISIG.md` for the full specification.
 
 #### Self-balancing dynamics
 
@@ -459,6 +475,9 @@ If this design is adopted:
    - Property tests for intermediate arithmetic overflow in burn and reward calculations.
    - Integration tests for rebooted-chain transaction validation and node/wallet interoperability.
    - Simulation tests for stuffing profitability under various hash power distributions.
+   - Unit tests for multisig `pqc_auth` (`scheme_id = 2`) serialization, verification, and rejection of malformed inputs.
+   - Integration tests for multisig staking: create multisig staked output, claim rewards with M-of-N authorization, verify lock enforcement.
+   - Size regression tests for multisig transactions across 2-of-3 through 5-of-7 configurations.
 
 ---
 

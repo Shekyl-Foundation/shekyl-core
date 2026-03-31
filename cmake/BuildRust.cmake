@@ -62,7 +62,9 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CROSSCOMPILING)
         set(RUST_TARGET_TRIPLE "aarch64-unknown-linux-gnu")
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "armv7|arm")
         set(RUST_TARGET_TRIPLE "armv7-unknown-linux-gnueabihf")
-    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "i686|i386|x86")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+        set(RUST_TARGET_TRIPLE "x86_64-unknown-linux-gnu")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "i686|i386")
         set(RUST_TARGET_TRIPLE "i686-unknown-linux-gnu")
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "riscv64")
         set(RUST_TARGET_TRIPLE "riscv64gc-unknown-linux-gnu")
@@ -74,14 +76,21 @@ if(RUST_TARGET_TRIPLE)
     set(RUST_BUILD_DIR "${RUST_SOURCE_DIR}/target/${RUST_TARGET_TRIPLE}/${RUST_PROFILE}")
     message(STATUS "Rust cross-compile target: ${RUST_TARGET_TRIPLE}")
 
-    # When cross-compiling for Windows with mingw, tell cargo which linker to use.
+    # Tell cargo which linker to use for cross-compilation targets.
+    string(TOUPPER "${RUST_TARGET_TRIPLE}" _upper_triple)
+    string(REPLACE "-" "_" _upper_triple "${_upper_triple}")
+
     if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-        find_program(MINGW_LINKER x86_64-w64-mingw32-gcc)
-        if(MINGW_LINKER)
-            string(TOUPPER "${RUST_TARGET_TRIPLE}" _upper_triple)
-            string(REPLACE "-" "_" _upper_triple "${_upper_triple}")
-            set(RUST_CROSS_ENV "CARGO_TARGET_${_upper_triple}_LINKER=${MINGW_LINKER}")
+        if(CMAKE_C_COMPILER)
+            set(RUST_CROSS_ENV "CARGO_TARGET_${_upper_triple}_LINKER=${CMAKE_C_COMPILER}")
+        else()
+            find_program(MINGW_LINKER x86_64-w64-mingw32-gcc)
+            if(MINGW_LINKER)
+                set(RUST_CROSS_ENV "CARGO_TARGET_${_upper_triple}_LINKER=${MINGW_LINKER}")
+            endif()
         endif()
+    elseif(CMAKE_C_COMPILER)
+        set(RUST_CROSS_ENV "CARGO_TARGET_${_upper_triple}_LINKER=${CMAKE_C_COMPILER}")
     endif()
 else()
     set(RUST_BUILD_DIR "${RUST_SOURCE_DIR}/target/${RUST_PROFILE}")
@@ -103,25 +112,56 @@ else()
     set(_rust_comment "Building Shekyl Rust workspace")
 endif()
 
-# Build the cargo command; use cmake -E env only when cross-compiling
+# Build the cargo command.
+# Clear generic CC/CXX/CFLAGS/CXXFLAGS/LDFLAGS so that Rust's build-script
+# and proc-macro compilation targets the build host, not the cross target.
+# Then set per-target CC_<TRIPLE>/AR_<TRIPLE>/CFLAGS_<TRIPLE> so crates that
+# compile C code for the target (e.g. ring) can locate the cross-compiler.
+set(_rust_env_clear
+    "CC=" "CXX=" "CFLAGS=" "CXXFLAGS=" "LDFLAGS="
+    "AR=" "RANLIB=" "NM="
+)
+
 if(RUST_CROSS_ENV)
-    add_custom_command(
-        OUTPUT ${SHEKYL_FFI_LIBRARY}
-        COMMAND ${CMAKE_COMMAND} -E env "${RUST_CROSS_ENV}"
-            ${CARGO_EXECUTABLE} build ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
-        WORKING_DIRECTORY ${RUST_SOURCE_DIR}
-        COMMENT "${_rust_comment}"
-        VERBATIM
-    )
-else()
-    add_custom_command(
-        OUTPUT ${SHEKYL_FFI_LIBRARY}
-        COMMAND ${CARGO_EXECUTABLE} build ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
-        WORKING_DIRECTORY ${RUST_SOURCE_DIR}
-        COMMENT "${_rust_comment}"
-        VERBATIM
-    )
+    list(APPEND _rust_env_clear "${RUST_CROSS_ENV}")
 endif()
+
+if(RUST_TARGET_TRIPLE AND CMAKE_C_COMPILER)
+    string(REPLACE "-" "_" _cc_triple "${RUST_TARGET_TRIPLE}")
+
+    set(_rust_cc "${CMAKE_C_COMPILER}")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        find_program(_system_clang clang)
+        if(_system_clang)
+            set(_rust_cc "${_system_clang}")
+        endif()
+    endif()
+
+    list(APPEND _rust_env_clear "CC_${_cc_triple}=${_rust_cc}")
+    if(CMAKE_AR)
+        list(APPEND _rust_env_clear "AR_${_cc_triple}=${CMAKE_AR}")
+    endif()
+    string(STRIP "${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_INIT}" _target_cflags)
+    if(CMAKE_C_COMPILER_TARGET)
+        string(STRIP "${_target_cflags} --target=${CMAKE_C_COMPILER_TARGET}" _target_cflags)
+    endif()
+    if(CMAKE_OSX_SYSROOT)
+        string(STRIP "${_target_cflags} --sysroot=${CMAKE_OSX_SYSROOT}" _target_cflags)
+    endif()
+    if(_target_cflags)
+        list(APPEND _rust_env_clear "CFLAGS_${_cc_triple}=${_target_cflags}")
+    endif()
+endif()
+
+add_custom_command(
+    OUTPUT ${SHEKYL_FFI_LIBRARY}
+    COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
+        ${CARGO_EXECUTABLE} build ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
+        -p shekyl-ffi
+    WORKING_DIRECTORY ${RUST_SOURCE_DIR}
+    COMMENT "${_rust_comment}"
+    VERBATIM
+)
 
 add_custom_target(shekyl_rust ALL DEPENDS ${SHEKYL_FFI_LIBRARY})
 

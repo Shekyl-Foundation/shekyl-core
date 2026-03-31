@@ -27,8 +27,8 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#ifndef MONERO_DEBUG_LINK_H
-#define MONERO_DEBUG_LINK_H
+#ifndef SHEKYL_DEBUG_LINK_H
+#define SHEKYL_DEBUG_LINK_H
 
 #include "transport.hpp"
 #include "messages/messages-debug.pb.h"
@@ -57,7 +57,7 @@ namespace trezor {
     template<class t_message=messages::debug::DebugLinkState>
     std::shared_ptr<t_message> call(
         const google::protobuf::Message & req,
-        const boost::optional<messages::MessageType> &resp_type = boost::none,
+        const std::optional<messages::MessageType> &resp_type = std::nullopt,
         bool no_wait = false)
     {
       BOOST_STATIC_ASSERT(boost::is_base_of<google::protobuf::Message, t_message>::value);
@@ -90,4 +90,4 @@ namespace trezor {
 }
 }
 
-#endif //MONERO_DEBUG_LINK_H
+#endif //SHEKYL_DEBUG_LINK_H

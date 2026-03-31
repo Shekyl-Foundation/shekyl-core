@@ -1,11 +1,12 @@
-freebsd_CC=clang-8
-freebsd_CXX=clang++-8
+freebsd_CC=clang-14
+freebsd_CXX=clang++-14
 freebsd_AR=ar
 freebsd_RANLIB=ranlib
 freebsd_NM=nm
 
 freebsd_CFLAGS=-pipe
-freebsd_CXXFLAGS=$(freebsd_CFLAGS)
+freebsd_CXXFLAGS=$(freebsd_CFLAGS) -stdlib=libc++
+freebsd_LDFLAGS=-stdlib=libc++
 freebsd_ARFLAGS=cr
 
 freebsd_release_CFLAGS=-O2

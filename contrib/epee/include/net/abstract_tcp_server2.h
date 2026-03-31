@@ -32,6 +32,9 @@
 
 
 
+// TODO(shekyl-v4): Migrate epee TCP server from boost::asio to standalone Asio
+// or std networking TS. This is the core networking layer; changes propagate to
+// every P2P and RPC connection path.
 #ifndef _ABSTRACT_TCP_SERVER2_H_ 
 #define _ABSTRACT_TCP_SERVER2_H_ 
 
@@ -54,7 +57,7 @@
 #include <boost/array.hpp>
 #include <boost/enable_shared_from_this.hpp>
 #include <boost/thread/thread.hpp>
-#include <boost/optional.hpp>
+#include <optional>
 #include "byte_slice.h"
 #include "net_utils_base.h"
 #include "syncobj.h"
@@ -146,7 +149,7 @@ namespace net_utils
     bool start_internal(
       bool is_income,
       bool is_multithreaded,
-      boost::optional<network_address> real_remote
+      std::optional<network_address> real_remote
     );
 
     enum status_t {

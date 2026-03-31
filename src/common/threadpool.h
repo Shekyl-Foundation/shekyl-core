@@ -27,8 +27,8 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #pragma once
 
-#include <boost/thread/condition_variable.hpp>
-#include <boost/thread/mutex.hpp>
+#include <condition_variable>
+#include <mutex>
 #include <boost/thread/thread.hpp>
 #include <cstddef>
 #include <deque>
@@ -58,8 +58,8 @@ public:
   // The waiter lets the caller know when all of its
   // tasks are completed.
   class waiter {
-    boost::mutex mt;
-    boost::condition_variable cv;
+    std::mutex mt;
+    std::condition_variable cv;
     threadpool &pool;
     int num;
     bool error_flag;
@@ -95,8 +95,8 @@ public:
       bool leaf;
     } entry;
     std::deque<entry> queue;
-    boost::condition_variable has_work;
-    boost::mutex mutex;
+    std::condition_variable has_work;
+    std::mutex mutex;
     std::vector<boost::thread> threads;
     unsigned int active;
     unsigned int max;

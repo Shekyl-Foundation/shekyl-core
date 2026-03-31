@@ -71,6 +71,7 @@ target_link_libraries(epee
     ${Boost_REGEX_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
     ${OPENSSL_LIBRARIES}
+    ${SHEKYL_FFI_LINK_LIBS}
   PRIVATE
     ${EXTRA_LIBRARIES})
 
@@ -86,5 +87,6 @@ endif()
 target_include_directories(epee
   PUBLIC
     "${EPEE_INCLUDE_DIR_BASE}"
-    "${OPENSSL_INCLUDE_DIR}")
+    "${OPENSSL_INCLUDE_DIR}"
+    "${CMAKE_SOURCE_DIR}/src")
 

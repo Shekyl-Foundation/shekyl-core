@@ -144,7 +144,14 @@ namespace epee
         for(size_t i = 0; i < count; i++)
         {
           typename stl_container::value_type v;
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wclass-memaccess"
+#endif
           memcpy(std::addressof(v), pelem, sizeof(v));
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
           container.insert(container.end(), v);
           pelem += sizeof(v);
         }

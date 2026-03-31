@@ -289,11 +289,11 @@ namespace tx {
     dst->set_commitment(key_to_string(src->mask));
   }
 
-  std::string hash_addr(const MoneroAccountPublicAddress * addr, boost::optional<uint64_t> amount, boost::optional<bool> is_subaddr){
+  std::string hash_addr(const MoneroAccountPublicAddress * addr, std::optional<uint64_t> amount, std::optional<bool> is_subaddr){
     return hash_addr(addr->spend_public_key(), addr->view_public_key(), amount, is_subaddr);
   }
 
-  std::string hash_addr(const std::string & spend_key, const std::string & view_key, boost::optional<uint64_t> amount, boost::optional<bool> is_subaddr){
+  std::string hash_addr(const std::string & spend_key, const std::string & view_key, std::optional<uint64_t> amount, std::optional<bool> is_subaddr){
     ::crypto::public_key spend{}, view{};
     if (spend_key.size() != 32 || view_key.size() != 32){
       throw std::invalid_argument("Public keys have invalid sizes");
@@ -304,7 +304,7 @@ namespace tx {
     return hash_addr(&spend, &view, amount, is_subaddr);
   }
 
-  std::string hash_addr(const ::crypto::public_key * spend_key, const ::crypto::public_key * view_key, boost::optional<uint64_t> amount, boost::optional<bool> is_subaddr){
+  std::string hash_addr(const ::crypto::public_key * spend_key, const ::crypto::public_key * view_key, std::optional<uint64_t> amount, std::optional<bool> is_subaddr){
     char buff[64+8+1];
     size_t offset = 0;
 
@@ -312,11 +312,11 @@ namespace tx {
     memcpy(buff + offset, view_key->data, 32); offset += 32;
 
     if (amount){
-      memcpy(buff + offset, (uint8_t*) &(amount.get()), sizeof(amount.get())); offset += sizeof(amount.get());
+      memcpy(buff + offset, (uint8_t*) &(*amount), sizeof(*amount)); offset += sizeof(*amount);
     }
 
     if (is_subaddr){
-      buff[offset] = is_subaddr.get();
+      buff[offset] = *is_subaddr;
       offset += 1;
     }
 
@@ -511,7 +511,7 @@ namespace tx {
 
     m_ct.tx.version = 2;
     m_ct.tx.unlock_time = tx.unlock_time;
-    m_client_version = (m_aux_data->client_version ? m_aux_data->client_version.get() : 3);
+    m_client_version = (m_aux_data->client_version ? *m_aux_data->client_version : 3);
 
     tsx_data.set_version(1);
     tsx_data.set_client_version(client_version());
@@ -520,14 +520,14 @@ namespace tx {
     tsx_data.set_mixin(static_cast<google::protobuf::uint32>(tx.sources[0].outputs.size() - 1));
     tsx_data.set_account(tx.subaddr_account);
     tsx_data.set_monero_version(std::string(MONERO_VERSION) + "|" + MONERO_VERSION_TAG);
-    tsx_data.set_hard_fork(m_aux_data->hard_fork ? m_aux_data->hard_fork.get() : 0);
+    tsx_data.set_hard_fork(m_aux_data->hard_fork ? *m_aux_data->hard_fork : 0);
 
     // Rsig decision
     auto rsig_data = tsx_data.mutable_rsig_data();
     m_ct.rsig_type = get_rsig_type(tx.rct_config, tx.splitted_dsts.size());
     rsig_data->set_rsig_type(m_ct.rsig_type);
     CHECK_AND_ASSERT_THROW_MES(tx.rct_config.range_proof_type != rct::RangeProofBorromean, "Borromean rsig not supported");
-    m_ct.bp_version = (m_aux_data->bp_version ? m_aux_data->bp_version.get() : 1);
+    m_ct.bp_version = (m_aux_data->bp_version ? *m_aux_data->bp_version : 1);
     rsig_data->set_bp_version((uint32_t) m_ct.bp_version);
 
     generate_rsig_batch_sizes(m_ct.grouping_vct, m_ct.rsig_type, tx.splitted_dsts.size());
@@ -603,8 +603,8 @@ namespace tx {
 
     CHECK_AND_ASSERT_THROW_MES(m_ct.tx.vin.size() == input_size, "Invalid vector size");
     std::sort(m_ct.source_permutation.begin(), m_ct.source_permutation.end(), [&](const size_t i0, const size_t i1) {
-      const cryptonote::txin_to_key &tk0 = boost::get<cryptonote::txin_to_key>(m_ct.tx.vin[i0]);
-      const cryptonote::txin_to_key &tk1 = boost::get<cryptonote::txin_to_key>(m_ct.tx.vin[i1]);
+      const cryptonote::txin_to_key &tk0 = std::get<cryptonote::txin_to_key>(m_ct.tx.vin[i0]);
+      const cryptonote::txin_to_key &tk1 = std::get<cryptonote::txin_to_key>(m_ct.tx.vin[i1]);
       return memcmp(&tk0.k_image, &tk1.k_image, sizeof(tk0.k_image)) > 0;
     });
 
@@ -785,19 +785,19 @@ namespace tx {
       rct::key commitment = m_ct.tx_out_pk[bidx].mask;
       commitment = rct::scalarmultKey(commitment, rct::INV_EIGHT);
       if (is_req_bulletproof_plus()) {
-        boost::get<rct::BulletproofPlus>(bproof).V.push_back(commitment);
+        std::get<rct::BulletproofPlus>(bproof).V.push_back(commitment);
       } else {
-        boost::get<rct::Bulletproof>(bproof).V.push_back(commitment);
+        std::get<rct::Bulletproof>(bproof).V.push_back(commitment);
       }
     }
 
     m_ct.tx_out_rsigs.emplace_back(bproof);
     if (is_req_bulletproof_plus()) {
-      if (!rct::bulletproof_plus_VERIFY(boost::get<rct::BulletproofPlus>(m_ct.tx_out_rsigs.back()))) {
+      if (!rct::bulletproof_plus_VERIFY(std::get<rct::BulletproofPlus>(m_ct.tx_out_rsigs.back()))) {
         throw exc::ProtocolException("Returned range signature is invalid");
       }
     } else {
-      if (!rct::bulletproof_VERIFY(boost::get<rct::Bulletproof>(m_ct.tx_out_rsigs.back()))) {
+      if (!rct::bulletproof_VERIFY(std::get<rct::Bulletproof>(m_ct.tx_out_rsigs.back()))) {
         throw exc::ProtocolException("Returned range signature is invalid");
       }
     }
@@ -870,9 +870,9 @@ namespace tx {
 
     for(size_t i = 0; i < m_ct.tx_out_rsigs.size(); ++i){
       if (is_req_bulletproof_plus()) {
-        m_ct.rv->p.bulletproofs_plus.push_back(boost::get<rct::BulletproofPlus>(m_ct.tx_out_rsigs[i]));
+        m_ct.rv->p.bulletproofs_plus.push_back(std::get<rct::BulletproofPlus>(m_ct.tx_out_rsigs[i]));
       } else {
-        m_ct.rv->p.bulletproofs.push_back(boost::get<rct::Bulletproof>(m_ct.tx_out_rsigs[i]));
+        m_ct.rv->p.bulletproofs.push_back(std::get<rct::Bulletproof>(m_ct.tx_out_rsigs[i]));
       }
     }
 

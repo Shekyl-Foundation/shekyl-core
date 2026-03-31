@@ -29,7 +29,7 @@
 #include "json_object.h"
 
 #include <boost/range/adaptor/transformed.hpp>
-#include <boost/variant/apply_visitor.hpp>
+#include <variant>
 #include <limits>
 #include <type_traits>
 
@@ -344,8 +344,6 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
   dest.StartObject();
   struct add_input
   {
-    using result_type = void;
-
     rapidjson::Writer<epee::byte_stream>& dest;
 
     void operator()(cryptonote::txin_to_key const& input) const
@@ -369,7 +367,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
       INSERT_INTO_JSON_OBJECT(dest, stake_claim, input);
     }
   };
-  boost::apply_visitor(add_input{dest}, txin);
+  std::visit(add_input{dest}, txin);
   dest.EndObject();
 }
 
@@ -656,8 +654,6 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
 
   struct add_output
   {
-    using result_type = void;
-
     rapidjson::Writer<epee::byte_stream>& dest;
 
     void operator()(cryptonote::txout_to_key const& output) const
@@ -681,7 +677,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
       INSERT_INTO_JSON_OBJECT(dest, to_staked_key, output);
     }
   };
-  boost::apply_visitor(add_output{dest}, txout.target);
+  std::visit(add_output{dest}, txout.target);
    dest.EndObject();
 }
 

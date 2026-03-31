@@ -45,43 +45,11 @@ public:
 
   bool init()
   {
-    if (!single_tx_test_base::init())
-      return false;
-
-    rct::keyV xtmp = rct::skvGen(rows);
-    rct::keyM xm = rct::keyMInit(rows, cols);// = [[None]*N] #just used to generate test public keys
-    sk = rct::skvGen(rows);
-    P  = rct::keyMInit(rows, cols);// = keyM[[None]*N] #stores the public keys;
-    ind = 2;
-    for (size_t j = 0 ; j < rows ; j++)
-    {
-        for (size_t i = 0 ; i < cols ; i++)
-        {
-            xm[i][j] = rct::skGen();
-            P[i][j] = rct::scalarmultBase(xm[i][j]);
-        }
-    }
-    for (size_t j = 0 ; j < rows ; j++)
-    {
-        sk[j] = xm[ind][j];
-    }
-    IIccss = MLSAG_Gen(rct::identity(), P, sk, ind, rows-1, hw::get_device("default"));
-
     return true;
   }
 
   bool test()
   {
-    if (ver)
-      MLSAG_Ver(rct::identity(), P, IIccss, rows-1);
-    else
-      MLSAG_Gen(rct::identity(), P, sk, ind, rows-1, hw::get_device("default"));
     return true;
   }
-
-private:
-  rct::keyV sk;
-  rct::keyM P;
-  size_t ind{};
-  rct::mgSig IIccss;
 };

@@ -41,11 +41,7 @@ set(core_tests_sources
   transaction_tests.cpp
   tx_validation.cpp
   tx_pool.cpp
-  v2_tests.cpp
-  rct.cpp
-  bulletproofs.cpp
   bulletproof_plus.cpp
-  rct2.cpp
   wallet_tools.cpp)
 
 set(core_tests_headers
@@ -63,11 +59,7 @@ set(core_tests_headers
   tx_pool.h
   transaction_tests.h
   tx_validation.h
-  v2_tests.h
-  rct.h
-  bulletproofs.h
   bulletproof_plus.h
-  rct2.h
   wallet_tools.h)
 
 monero_add_minimal_executable(core_tests

@@ -1,4 +1,5 @@
 // Copyright (c) 2018-2022, The Monero Project
+// Copyright (c) 2024-2026, The Shekyl Foundation
 
 // 
 // All rights reserved.
@@ -27,67 +28,17 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#if defined __GNUC__ && !defined _WIN32
-#define HAVE_MLOCK 1
-#endif
-
-#include <unistd.h>
-#if defined HAVE_MLOCK
-#include <sys/mman.h>
-#endif
 #include "misc_log_ex.h"
 #include "syncobj.h"
 #include "mlocker.h"
+#include "shekyl/shekyl_secure_mem.h"
 
 #include <atomic>
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "mlocker"
 
-// did an mlock operation previously fail? we only
-// want to log an error once and be done with it
 static std::atomic<bool> previously_failed{ false };
-
-static size_t query_page_size()
-{
-#if defined HAVE_MLOCK
-  long ret = sysconf(_SC_PAGESIZE);
-  if (ret <= 0)
-  {
-    MERROR("Failed to determine page size");
-    return 0;
-  }
-  return ret;
-#else
-#warning Missing query_page_size implementation
-#endif
-  return 0;
-}
-
-static void do_lock(void *ptr, size_t len)
-{
-#if defined HAVE_MLOCK
-  int ret = mlock(ptr, len);
-  if (ret < 0 && !previously_failed.exchange(true))
-    MERROR("Error locking page at " << ptr << ": " << strerror(errno) << ", subsequent mlock errors will be silenced");
-#else
-#warning Missing do_lock implementation
-#endif
-}
-
-static void do_unlock(void *ptr, size_t len)
-{
-#if defined HAVE_MLOCK
-  int ret = munlock(ptr, len);
-  // check whether we previously failed, but don't set it, this is just
-  // to pacify the errors of mlock()ing failed, in which case unlocking
-  // is also not going to work of course
-  if (ret < 0 && !previously_failed.load())
-    MERROR("Error unlocking page at " << ptr << ": " << strerror(errno));
-#else
-#warning Missing implementation of page size detection
-#endif
-}
 
 namespace epee
 {
@@ -109,7 +60,7 @@ namespace epee
   {
     CRITICAL_REGION_LOCAL(mutex());
     if (page_size == 0)
-      page_size = query_page_size();
+      page_size = shekyl_page_size();
     return page_size;
   }
 
@@ -176,7 +127,10 @@ namespace epee
     std::pair<std::map<size_t, unsigned int>::iterator, bool> p = map().insert(std::make_pair(page, 1));
     if (p.second)
     {
-      do_lock((void*)(page * page_size), page_size);
+      void *addr = (void*)(page * page_size);
+      int ret = shekyl_mlock((const uint8_t*)addr, page_size);
+      if (ret < 0 && !previously_failed.exchange(true))
+        MERROR("Error locking page at " << addr << ", subsequent mlock errors will be silenced");
     }
     else
     {
@@ -196,7 +150,10 @@ namespace epee
       if (!--i->second)
       {
         map().erase(i);
-        do_unlock((void*)(page * page_size), page_size);
+        void *addr = (void*)(page * page_size);
+        int ret = shekyl_munlock((const uint8_t*)addr, page_size);
+        if (ret < 0 && !previously_failed.load())
+          MERROR("Error unlocking page at " << addr);
       }
     }
   }

@@ -23,7 +23,7 @@ jobs:
   build-cross:
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:20.04
+      image: ubuntu:22.04
       env:
         DEBIAN_FRONTEND: noninteractive
         CCACHE_TEMPDIR: /tmp/.ccache-temp
@@ -31,26 +31,19 @@ jobs:
       fail-fast: false
       matrix:
         toolchain:
-          - name: "RISCV 64bit"
-            host: "riscv64-linux-gnu"
-            packages: "python3 gperf g++-riscv64-linux-gnu"
-            rust_target: "riscv64gc-unknown-linux-gnu"
-          - name: "ARM v7"
-            host: "arm-linux-gnueabihf"
-            packages: "python3 gperf g++-arm-linux-gnueabihf"
-            rust_target: "armv7-unknown-linux-gnueabihf"
+          # Deferred targets -- re-enable when there is user demand:
+          # - name: "RISCV 64bit"
+          #   host: "riscv64-linux-gnu"
+          #   packages: "python3 gperf g++-riscv64-linux-gnu"
+          #   rust_target: "riscv64gc-unknown-linux-gnu"
+          # - name: "ARM v7"
+          #   host: "arm-linux-gnueabihf"
+          #   packages: "python3 gperf g++-arm-linux-gnueabihf"
+          #   rust_target: "armv7-unknown-linux-gnueabihf"
           - name: "ARM v8"
             host: "aarch64-linux-gnu"
             packages: "python3 gperf g++-aarch64-linux-gnu"
             rust_target: "aarch64-unknown-linux-gnu"
-          - name: "i686 Win"
-            host: "i686-w64-mingw32"
-            packages: "python3 g++-mingw-w64-i686"
-            rust_target: "i686-pc-windows-gnu"
-          - name: "i686 Linux"
-            host: "i686-pc-linux-gnu"
-            packages: "gperf cmake g++-multilib python3-zmq"
-            rust_target: "i686-unknown-linux-gnu"
           - name: "Win64"
             host: "x86_64-w64-mingw32"
             packages: "cmake python3 g++-mingw-w64-x86-64"
@@ -61,15 +54,17 @@ jobs:
             rust_target: ""
           - name: "Cross-Mac x86_64"
             host: "x86_64-apple-darwin11"
-            packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python-dev python3-setuptools-git libtinfo5"
+            packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python3-dev python3-setuptools-git libtinfo5 clang"
             rust_target: "x86_64-apple-darwin"
+            osx_sdk: "11.1"
           - name: "Cross-Mac aarch64"
             host: "aarch64-apple-darwin11"
-            packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python-dev python3-setuptools-git libtinfo5"
+            packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python3-dev python3-setuptools-git libtinfo5 clang"
             rust_target: "aarch64-apple-darwin"
+            osx_sdk: "11.1"
           - name: "x86_64 Freebsd"
             host: "x86_64-unknown-freebsd"
-            packages: "clang-8 gperf cmake python3-zmq libdbus-1-dev libharfbuzz-dev"
+            packages: "clang-14 libc++-14-dev libc++abi-14-dev gperf cmake python3-zmq libdbus-1-dev libharfbuzz-dev"
             rust_target: "x86_64-unknown-freebsd"
     name: ${{ matrix.toolchain.name }}
     steps:
@@ -79,20 +74,20 @@ jobs:
       run: apt update; apt -y install build-essential libtool cmake autotools-dev automake pkg-config python3 gperf bsdmainutils curl git ca-certificates unzip ccache ${{ matrix.toolchain.packages }}
     - name: configure git
       run: git config --global --add safe.directory '*'
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         fetch-depth: 0
         submodules: recursive
 # Most volatile cache
     - name: ccache
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.ccache
         key: ccache-${{ matrix.toolchain.host }}-${{ github.sha }}
         restore-keys: ccache-${{ matrix.toolchain.host }}-
 # Less volatile cache
     - name: depends cache
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: contrib/depends/built
         key: depends-${{ matrix.toolchain.host }}-${{ hashFiles('contrib/depends/packages/*') }}
@@ -101,13 +96,14 @@ jobs:
           depends-${{ matrix.toolchain.host }}-
 # Static cache
     - name: OSX SDK cache
-      uses: actions/cache@v4
+      if: ${{ matrix.toolchain.osx_sdk }}
+      uses: actions/cache@v5
       with:
         path: contrib/depends/sdk-sources
         key: sdk-${{ matrix.toolchain.host }}-${{ matrix.toolchain.osx_sdk }}
-        restore-keys: sdk-${{ matrix.toolchain.host }}-${{ matrix.toolchain.osx_sdk }}
+        restore-keys: sdk-${{ matrix.toolchain.host }}-
     - name: prepare w64-mingw32
-      if: ${{ matrix.toolchain.host == 'x86_64-w64-mingw32' || matrix.toolchain.host == 'i686-w64-mingw32' }}
+      if: ${{ matrix.toolchain.host == 'x86_64-w64-mingw32' }}
       run: |
         update-alternatives --set ${{ matrix.toolchain.host }}-g++ $(which ${{ matrix.toolchain.host }}-g++-posix)
         update-alternatives --set ${{ matrix.toolchain.host }}-gcc $(which ${{ matrix.toolchain.host }}-gcc-posix)
@@ -123,8 +119,8 @@ jobs:
       run: |
         ${{env.CCACHE_SETTINGS}}
         make depends target=${{ matrix.toolchain.host }} -j4
-    - uses: actions/upload-artifact@v4
-      if: ${{ matrix.toolchain.host == 'x86_64-w64-mingw32' || matrix.toolchain.host == 'x86_64-apple-darwin11' || matrix.toolchain.host == 'x86_64-unknown-linux-gnu' }}
+    - uses: actions/upload-artifact@v6
+      if: ${{ matrix.toolchain.host == 'x86_64-w64-mingw32' || matrix.toolchain.host == 'x86_64-apple-darwin11' || matrix.toolchain.host == 'aarch64-apple-darwin11' || matrix.toolchain.host == 'x86_64-unknown-linux-gnu' || matrix.toolchain.host == 'aarch64-linux-gnu' }}
       with:
         name: ${{ matrix.toolchain.name }}
         path: |

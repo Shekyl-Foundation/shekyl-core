@@ -91,7 +91,9 @@ bool gen_v2_tx_validation_base::generate_with(std::vector<test_event_entry>& eve
         idx = m+1; // one out of that size per miner tx, including genesis
       else
         idx = 0; // dusty, no other output of that size
-      src.push_output(idx, boost::get<txout_to_key>(blocks[m].miner_tx.vout[out_idx[out_idx_idx]].target).key, src.amount);
+      crypto::public_key out_key;
+      CHECK_AND_ASSERT_MES(cryptonote::get_output_public_key(blocks[m].miner_tx.vout[out_idx[out_idx_idx]], out_key), false, "Invalid miner output key type");
+      src.push_output(idx, out_key, src.amount);
     }
     src.real_out_tx_key = cryptonote::get_tx_pub_key_from_extra(blocks[0].miner_tx);
     src.real_output = 0;
@@ -107,7 +109,7 @@ bool gen_v2_tx_validation_base::generate_with(std::vector<test_event_entry>& eve
   destinations.push_back(td);
 
   transaction tx;
-  bool r = construct_tx(miner_accounts[0].get_keys(), sources, destinations, boost::none, std::vector<uint8_t>(), tx);
+  bool r = construct_tx(miner_accounts[0].get_keys(), sources, destinations, std::nullopt, std::vector<uint8_t>(), tx);
   CHECK_AND_ASSERT_MES(r, false, "failed to construct transaction");
   if (!valid)
     DO_CALLBACK(events, "mark_invalid_tx");
