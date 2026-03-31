@@ -115,10 +115,64 @@ The GUI wallet's `build.rs` links against pre-built Shekyl C++ libraries.
 Set `SHEKYL_BUILD_DIR` to the cmake build directory:
 
 ```bash
-export SHEKYL_BUILD_DIR=/path/to/Shekyl/build
+# 1. Clone and build shekyl-core (if not already done)
+git clone --recurse-submodules https://github.com/Shekyl-Foundation/shekyl-core.git ../Shekyl
+cmake -S ../Shekyl -B ../Shekyl/build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DBUILD_TESTS=OFF
+cmake --build ../Shekyl/build -- -j$(nproc)
+
+# 2. Build the GUI wallet
+export SHEKYL_BUILD_DIR=$(pwd)/../Shekyl/build
 cd shekyl-gui-wallet/src-tauri
 cargo build
 ```
+
+#### Platform-specific dependencies
+
+**Linux (Ubuntu/Debian)**:
+```bash
+sudo apt-get install -y \
+  build-essential cmake pkg-config \
+  libboost-all-dev libssl-dev libzmq3-dev libunbound-dev \
+  libsodium-dev libhidapi-dev libusb-1.0-0-dev \
+  libprotobuf-dev protobuf-compiler libudev-dev
+```
+
+**macOS** (Homebrew):
+```bash
+brew install cmake boost hidapi openssl zmq libpgm \
+  miniupnpc expat protobuf abseil libsodium unbound
+```
+
+For macOS cross-architecture builds (e.g., building x86_64 on Apple Silicon):
+```bash
+cmake -S ../Shekyl -B ../Shekyl/build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DBUILD_TESTS=OFF \
+  -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+  -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+```
+
+**Windows**: Not yet supported. The C++ codebase builds with MinGW but the
+Tauri toolchain requires MSVC-compatible `.lib` files. An MSVC compatibility
+investigation is in progress; key blockers include unconditional POSIX
+includes (`unistd.h` in `common/util.cpp`, `easylogging++.cc`), AT&T inline
+assembly in `perf_timer.cpp`, and GCC builtins in the CryptoNight code.
+
+#### How `build.rs` works
+
+The build script links 24 static libraries from the shekyl-core build tree
+plus the `shekyl_ffi` Rust FFI crate. It automatically derives the source
+directory (for the Rust FFI library) from `SHEKYL_BUILD_DIR`'s parent. To
+override, set `SHEKYL_SOURCE_DIR` explicitly.
+
+If `SHEKYL_BUILD_DIR` is not set, the build succeeds but FFI functions are
+not linked — the wallet bridge will be available at the type level but calls
+will fail at link time. This allows CI lint/check passes without a full C++
+build.
 
 ### What was removed
 
