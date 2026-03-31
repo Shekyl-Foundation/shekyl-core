@@ -2,36 +2,6 @@
 
 ## Unreleased
 
-### 🐛 Fixed
-
-- **Win64 build failure (ICU generator expression)**: Replaced broken CMake
-  generator expressions `$<$<BOOL:${WIN32}>:${ICU_LIBRARIES}>` with
-  `if(WIN32)` blocks in `simplewallet`, `wallet_api`, and
-  `libwallet_api_tests` CMakeLists. Generator expressions cannot contain
-  semicolon-separated lists; the old pattern passed literal fragments like
-  `$<1:icuio` to the linker on MinGW cross-compilation.
-- **Linux static build (libunbound linking)**: Fixed `FindUnbound.cmake`
-  scoping bug where `list(APPEND UNBOUND_LIBRARIES ...)` created a local
-  variable shadowing the `find_library` cache entry. The transitive static
-  deps (libevent, libnettle, libhogweed, libgmp) were silently dropped,
-  causing undefined reference errors in `release-static-linux-x86_64`
-  builds.
-- **JSON serialization of v3 (PQC) transactions**: Added missing
-  `pqc_auth` field to the RapidJSON `toJsonValue`/`fromJsonValue`
-  roundtrip for `cryptonote::transaction`. V3 transactions created
-  under `HF_VERSION_SHEKYL_NG` include a `pqc_authentication`
-  envelope; without JSON support the field was silently dropped,
-  causing `get_transaction_hash` to fail with "Inconsistent
-  transaction prefix, unprunable and blob sizes" after a JSON
-  roundtrip. Fixes the `JsonSerialization.BulletproofPlusTransaction`
-  unit test failure.
-- **MSVC portability patches**: Guarded unconditional POSIX includes
-  (`unistd.h`, `dlfcn.h`) and GCC-specific attributes (`__attribute__`)
-  behind `_MSC_VER` / `_WIN32` preprocessor checks in 10 source files.
-  Affected: `util.cpp`, `spawn.cpp`, `stack_trace.cpp`, `aligned.c`,
-  `slow-hash.c`, `rx-slow-hash.c`, `keccak.c`, `CryptonightR_JIT.c`,
-  `misc_log_ex.h`.
-
 ## [3.0.3-RC1] - 2026-03-31
 
 ### Known Limitations
@@ -182,6 +152,34 @@
     configure flags (the devcrypto engine was removed in OpenSSL 3.0).
   - Added `threadapi=pthread runtime-link=shared` to Boost's FreeBSD
     config options for correct threading and linking behavior.
+
+- **Linux static release build (libudev linking)**: Added `libudev-dev` to
+  the `release-tagged.yml` CI package list. Static `libusb-1.0.a` and
+  `libhidapi-libusb.a` depend on `libudev` for USB hotplug support;
+  without the dev package installed, `find_library(udev)` failed and the
+  final link produced undefined `udev_*` references, preventing the
+  "Publish GitHub Release" step from running.
+- **Win64 build failure (ICU generator expression)**: Replaced broken CMake
+  generator expressions `$<$<BOOL:${WIN32}>:${ICU_LIBRARIES}>` with
+  `if(WIN32)` blocks in `simplewallet`, `wallet_api`, and
+  `libwallet_api_tests` CMakeLists. Generator expressions cannot contain
+  semicolon-separated lists; the old pattern passed literal fragments like
+  `$<1:icuio` to the linker on MinGW cross-compilation.
+- **Linux static build (libunbound linking)**: Fixed `FindUnbound.cmake`
+  scoping bug where `list(APPEND UNBOUND_LIBRARIES ...)` created a local
+  variable shadowing the `find_library` cache entry. The transitive static
+  deps (libevent, libnettle, libhogweed, libgmp) were silently dropped,
+  causing undefined reference errors in `release-static-linux-x86_64`
+  builds.
+- **JSON serialization of v3 (PQC) transactions**: Added missing
+  `pqc_auth` field to the RapidJSON `toJsonValue`/`fromJsonValue`
+  roundtrip for `cryptonote::transaction`. V3 transactions created
+  under `HF_VERSION_SHEKYL_NG` include a `pqc_authentication`
+  envelope; without JSON support the field was silently dropped,
+  causing `get_transaction_hash` to fail with "Inconsistent
+  transaction prefix, unprunable and blob sizes" after a JSON
+  roundtrip. Fixes the `JsonSerialization.BulletproofPlusTransaction`
+  unit test failure.
 
 ### GUI Wallet
 
