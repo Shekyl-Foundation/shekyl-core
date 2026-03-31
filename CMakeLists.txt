@@ -1081,7 +1081,10 @@ endif()
 # Prefer CONFIG mode (Boost 1.85+ ships CMake config files) to avoid
 # FindBoost SO-version mismatches on rolling-release distros.
 set(BOOST_MIN_VER 1.74)
-set(BOOST_COMPONENTS filesystem thread date_time chrono serialization program_options locale)
+set(BOOST_COMPONENTS filesystem thread date_time chrono serialization program_options)
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  list(APPEND BOOST_COMPONENTS locale)
+endif()
 
 set(_BOOST_USE_CONFIG FALSE)
 if(DEPENDS)
