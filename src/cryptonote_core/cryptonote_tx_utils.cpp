@@ -505,8 +505,6 @@ namespace cryptonote
       memwipe(inSk.data(), inSk.size() * sizeof(rct::ctkey));
 
       CHECK_AND_ASSERT_MES(tx.vout.size() == outSk.size(), false, "outSk size does not match vout");
-
-      MCINFO("construct_tx", "transaction_created: " << get_transaction_hash(tx) << ENDL << obj_to_json_str(tx) << ENDL);
     }
 
     if (tx.version >= 3)
@@ -549,6 +547,8 @@ namespace cryptonote
       tx.pqc_auth->hybrid_signature.assign(sig_result.signature.ptr, sig_result.signature.ptr + sig_result.signature.len);
       shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
     }
+
+    MCINFO("construct_tx", "transaction_created: " << get_transaction_hash(tx) << ENDL << obj_to_json_str(tx) << ENDL);
 
     tx.invalidate_hashes();
 

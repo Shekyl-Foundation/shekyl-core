@@ -1445,8 +1445,7 @@ namespace cryptonote
     const unsigned int prefix_size = t.prefix_size;
     const bool has_pqc = t.version >= 3 && !t.vin.empty() && !std::holds_alternative<txin_gen>(t.vin[0]);
 
-    CHECK_AND_ASSERT_MES(prefix_size <= unprunable_size && unprunable_size <= blob.size(), false,
-      "Inconsistent transaction prefix (" << prefix_size << "), unprunable (" << unprunable_size << ") and blob (" << blob.size() << ") sizes, tx version " << t.version << " vin.size=" << t.vin.size() << " has_pqc=" << has_pqc);
+    CHECK_AND_ASSERT_MES(prefix_size <= unprunable_size && unprunable_size <= blob.size(), false, "Inconsistent transaction prefix, unprunable and blob sizes");
 
     // base rct (blob from prefix_size to end of rct base; for v3, we must serialize separately since pqc_auth follows)
     crypto::hash base_rct_hash;
