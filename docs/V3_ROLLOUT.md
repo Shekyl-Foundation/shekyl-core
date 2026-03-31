@@ -1,6 +1,6 @@
-# Shekyl v3 Rollout (HF17)
+# Shekyl v3 Rollout (HF1)
 
-> **Last updated:** 2026-03-30
+> **Last updated:** 2026-03-31
 
 ## Scope
 
@@ -9,11 +9,36 @@ on Shekyl NG.
 
 ## Activation
 
-- Consensus gate: `HF_VERSION_SHEKYL_NG = 17`
-- At/after HF17:
-  - user tx max version: `3`
-  - `pqc_auth` verification is required for non-coinbase v3 txs
+- Consensus gate: `HF_VERSION_SHEKYL_NG = 1` (active from genesis)
+- From genesis:
+  - All user (non-coinbase) transactions must be version `3`
+  - Coinbase (miner) transactions remain version `2`
+  - `pqc_auth` (hybrid Ed25519 + ML-DSA-65) verification is mandatory for
+    non-coinbase v3 txs
+  - Minimum transaction version is enforced: `min_tx_version = 3` for
+    non-coinbase transactions
 - Coinbase txs remain outside `pqc_auth` requirements
+
+## v3-First Test Strategy
+
+The `core_tests` suite has been fully adapted for v3-from-genesis:
+
+- All transaction construction helpers (`construct_tx_to_key`,
+  `construct_tx_rct`) produce v3 transactions with PQC authentication
+- Test framework amount checks use RCT-aware decryption (ecdhInfo)
+- Hard fork version is set to 1 for all test block construction
+- Fixed difficulty (`--fixed-difficulty=1`) is injected for FAKECHAIN tests
+- Mixin requirements are relaxed for FAKECHAIN to support test ring sizes
+- Coinbase outputs are correctly indexed under amount=0 for RCT spending
+- The following legacy/incompatible tests were disabled:
+  - `gen_block_invalid_nonce` (incompatible with fixed-difficulty)
+  - `gen_block_invalid_binary_format` (requires hours with unlock window=60)
+  - `gen_block_late_v1_coinbase_tx` (no late-v1 era in Shekyl)
+  - `gen_ring_signature_big` (prohibitively slow)
+  - `gen_uint_overflow_1` (relies on pre-RCT economics)
+  - `gen_block_reward` (hardcoded Monero emission curve)
+  - `gen_bpp_tx_invalid_before_fork` / `gen_bpp_tx_invalid_clsag_type`
+    (test pre-fork rejection which doesn't apply at HF1)
 
 ## Transaction Size Impact
 
@@ -82,7 +107,7 @@ Operators and indexers must accommodate the increased per-transaction size:
 
 ## Node/Infrastructure Checklist
 
-- Ensure all validating nodes run HF17-capable binaries before activation.
+- Ensure all validating nodes run HF1-capable binaries from launch.
 - Verify custom RPC clients/indexers accept larger tx payloads.
 - Update any tx-size assumptions in monitoring/alerting and mempool dashboards.
 - Confirm seed/boot nodes are upgraded first to avoid propagation asymmetry.

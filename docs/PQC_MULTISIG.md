@@ -9,7 +9,7 @@ Shekyl's post-quantum cryptography (`pqc_auth`) framework.
 
 Multisig is implemented in two phases:
 
-- **V3 (HF17):** Hybrid signature list — M individual hybrid signatures from
+- **V3 (HF1):** Hybrid signature list — M individual hybrid signatures from
   the existing `Ed25519 + ML-DSA-65` scheme, carried in an extended
   `pqc_auth` container. Uses only proven, NIST-backed primitives.
 - **V4 (future):** Lattice-based composite threshold signatures — a single
@@ -61,7 +61,7 @@ of the feature means it will never dominate transaction volume.
 
 ---
 
-## V3: Hybrid Signature List (HF17)
+## V3: Hybrid Signature List (HF1)
 
 ### Overview
 

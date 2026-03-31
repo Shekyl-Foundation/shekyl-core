@@ -258,8 +258,8 @@ PqcAuthentication {
 | `scheme_id` | Name | Status | Description |
 |---|---|---|---|
 | 0 | (reserved) | — | Invalid / unassigned |
-| 1 | `ed25519_ml_dsa_65` | **Active (HF17)** | Single-signer hybrid spend authorization |
-| 2 | `ed25519_ml_dsa_65_multisig` | **Active (HF17)** | M-of-N hybrid signature list; see `docs/PQC_MULTISIG.md` |
+| 1 | `ed25519_ml_dsa_65` | **Active (HF1)** | Single-signer hybrid spend authorization |
+| 2 | `ed25519_ml_dsa_65_multisig` | **Active (HF1)** | M-of-N hybrid signature list; see `docs/PQC_MULTISIG.md` |
 | 3 | `lattice_threshold_composite` | **Reserved (V4)** | Lattice-based composite threshold; see `docs/PQC_MULTISIG.md` |
 
 For `scheme_id = 1`, the `PqcAuthentication` fields are as defined above.
@@ -577,7 +577,7 @@ Target: ~9-12 months post-launch.
 
 Target: ~12-18 months post-launch (dependent on V4-C results).
 
-- Single hard fork activation height (same pattern as HF17).
+- Single hard fork activation height (same pattern as HF1).
 - Migration notes for wallets, indexers, and operators.
 - v3 transactions remain valid; v4 is opt-in initially, mandatory after a
   grace period.
@@ -612,7 +612,7 @@ protection is stable:
 ### No Longer Deferred
 
 - **Multisig under hybrid scheme:** V3 signature-list multisig (`scheme_id = 2`)
-  is specified in `docs/PQC_MULTISIG.md` and ships with HF17. This uses the
+  is specified in `docs/PQC_MULTISIG.md` and ships with HF1. This uses the
   existing `Ed25519 + ML-DSA-65` primitives with no new cryptographic
   assumptions.
 

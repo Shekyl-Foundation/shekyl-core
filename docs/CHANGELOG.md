@@ -24,6 +24,40 @@
   communicating via HTTP. Eliminates process management, port allocation,
   and HTTP overhead. Removed `wallet_process.rs` and `wallet_rpc.rs`.
 
+### v3-First Core Test Adaptation
+
+- **Enforced min_tx_version=3 for non-coinbase transactions**: All user
+  transactions in the test suite now construct v3 with PQC authentication
+  (hybrid Ed25519 + ML-DSA-65). Coinbase transactions remain v2.
+- **Adapted chaingen framework for RCT-from-genesis**: Transaction
+  construction helpers (`construct_tx_to_key`, `construct_tx_rct`) thread
+  `hf_version=1` and `use_view_tags=true`. Coinbase outputs are indexed
+  under `amount=0` for correct RCT spending. Fixed difficulty is injected
+  for FAKECHAIN replay. Mixin checks are relaxed for FAKECHAIN.
+- **Added RCT-aware balance verification**: Pool transaction balance checks
+  in `gen_chain_switch_1` now decrypt ecdhInfo amounts using the recipient's
+  view key instead of relying on the plaintext `o.amount` field (always 0
+  for RCT outputs).
+- **Recalibrated economic constants for Shekyl**: Test constants
+  (`TESTS_DEFAULT_FEE`, `FIRST_BLOCK_REWARD`, `MK_COINS`) match Shekyl's
+  `COIN = 10^9`, `EMISSION_SPEED_FACTOR = 21`, and staker/burn splits.
+  `construct_miner_tx_manually` in block validation tests uses Shekyl's
+  reward distribution.
+- **Fixed Bulletproofs+ test suite**: Dynamically discover miner output
+  amounts, set HF to 1 for all block construction, correctly flag coinbase
+  outputs as RCT. All 15 BP+ tests pass.
+- **Fixed txpool tests**: Adjusted key image count assertions for
+  multi-input RCT transactions and corrected unlock_time handling.
+- **Fixed double-spend tests**: Modified output selection to pick the
+  largest decomposed output, avoiding underflow on fee subtraction.
+- **Disabled legacy-incompatible tests**: `gen_block_invalid_binary_format`
+  (hours-long), `gen_block_invalid_nonce`, `gen_block_late_v1_coinbase_tx`,
+  `gen_uint_overflow_1`, `gen_block_reward`,
+  `gen_bpp_tx_invalid_before_fork`, `gen_bpp_tx_invalid_clsag_type`,
+  `gen_ring_signature_big`. These rely on pre-RCT economics, legacy
+  fork transitions, or are prohibitively slow.
+- **All 79 core_tests pass with 0 failures.**
+
 ### Test suite cleanup for Shekyl HF1
 
 - **Removed 96 dead Borromean ringct tests**: All tests in
@@ -111,6 +145,19 @@
 
 - Fixed remaining runtime paths that still derived timing from legacy `DIFFICULTY_TARGET_V1` (`60s`) so active Shekyl HF1 behavior consistently uses `DIFFICULTY_TARGET_V2` (`120s`) for difficulty target selection, block reward minute-scaling, unlock-time leeway checks, sync ETA reporting, and wallet lock-time display.
 - Updated `docs/ECONOMY_TESTNET_READINESS_MATRIX.md` to mark the 120s block-time drift item as resolved (`code_fix_required` completed).
+
+### 📚 Documentation
+
+- Updated `docs/V3_ROLLOUT.md` to reflect HF1 (genesis) activation instead
+  of the stale HF17 references. Added v3-first test strategy section.
+- Updated `docs/POST_QUANTUM_CRYPTOGRAPHY.md` scheme_id status table and
+  deferred-items section from HF17 to HF1.
+- Updated `docs/PQC_MULTISIG.md` V3 signature list heading from HF17 to HF1.
+- Updated `docs/STAKER_REWARD_DISBURSEMENT.md` to reference HF1 activation.
+- Updated `docs/ECONOMY_TESTNET_READINESS_MATRIX.md` HF naming drift label
+  from `doc_correction` to resolved.
+- Added `core_tests` section to `docs/COMPILING_DEBUGGING_TESTING.md`
+  documenting the v3-from-genesis test approach and how to run/filter tests.
 
 ### Genesis initialization compatibility
 
