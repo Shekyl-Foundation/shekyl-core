@@ -215,7 +215,7 @@ jobs:
       - name: install vcpkg dependencies
         shell: pwsh
         run: |
-          vcpkg install --triplet x64-windows-static boost-system boost-filesystem boost-thread boost-serialization boost-program-options boost-chrono boost-date-time boost-regex openssl libsodium zeromq protobuf hidapi libusb unbound lmdb
+          vcpkg install --triplet x64-windows-static boost-system boost-filesystem boost-thread boost-serialization boost-program-options boost-chrono boost-date-time boost-regex openssl libsodium zeromq protobuf hidapi libusb lmdb
       - name: configure
         shell: pwsh
         run: |
