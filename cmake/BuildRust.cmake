@@ -128,7 +128,16 @@ endif()
 
 if(RUST_TARGET_TRIPLE AND CMAKE_C_COMPILER)
     string(REPLACE "-" "_" _cc_triple "${RUST_TARGET_TRIPLE}")
-    list(APPEND _rust_env_clear "CC_${_cc_triple}=${CMAKE_C_COMPILER}")
+
+    set(_rust_cc "${CMAKE_C_COMPILER}")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        find_program(_system_clang clang)
+        if(_system_clang)
+            set(_rust_cc "${_system_clang}")
+        endif()
+    endif()
+
+    list(APPEND _rust_env_clear "CC_${_cc_triple}=${_rust_cc}")
     if(CMAKE_AR)
         list(APPEND _rust_env_clear "AR_${_cc_triple}=${CMAKE_AR}")
     endif()
