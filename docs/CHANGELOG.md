@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## [3.0.3-RC1] - 2026-03-31
+
+### Known Limitations
+
+- **Multisig not yet implemented.** Multisig wallets are restricted to v2
+  transactions (no PQC authentication). PQC-enabled multisig is planned for
+  a future release. See `docs/PQC_MULTISIG.md` for the design.
+
 ### ✨ Added
 
 - **Rust wallet RPC server (`shekyl-wallet-rpc`)**: New Rust crate that
