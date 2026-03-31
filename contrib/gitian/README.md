@@ -27,7 +27,7 @@ Preparing the Gitian builder host
 The first step is to prepare the host environment that will be used to perform the Gitian builds.
 This guide explains how to set up the environment, and how to start the builds.
 
-* Gitian host OS should be Ubuntu 18.04 "Bionic Beaver".  If you are on a mac or windows for example, you can run it in a VM but will be slower.
+* Gitian host OS should be Ubuntu 22.04 "Jammy Jellyfish".  If you are on a mac or windows for example, you can run it in a VM but will be slower.
 
 * Gitian gives you the option of using any of 3 different virtualization tools: `kvm`, `docker` or `lxc`. This documentation will only show how to build with `lxc` and `docker` (documentation for `kvm` is welcome). Building with `lxc` is the default, but is more complicated, so we recommend docker your first time.
 
@@ -46,7 +46,7 @@ sudo usermod -aG sudo gitianuser
 LXC
 ---
 
-LXC builds should be run on Ubuntu 18.04 "Bionic Beaver".
+LXC builds should be run on Ubuntu 22.04 "Jammy Jellyfish".
 
 Note that a version of `lxc-execute` higher or equal to 2.1.1 is required.
 You can check the version with `lxc-execute --version`.
@@ -54,7 +54,7 @@ You can check the version with `lxc-execute --version`.
 First we need to set up dependencies. Type/paste the following in the terminal:
 
 ```bash
-sudo apt-get install git ruby apt-cacher-ng qemu-utils debootstrap lxc python-cheetah parted kpartx bridge-utils make ubuntu-archive-keyring curl firewalld
+sudo apt-get install git ruby apt-cacher-ng qemu-utils debootstrap lxc python3-cheetah parted kpartx bridge-utils make ubuntu-archive-keyring curl firewalld
 ```
 
 Then set up LXC and the rest with the following, which is a complex jumble of settings and workarounds:

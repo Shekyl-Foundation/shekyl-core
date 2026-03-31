@@ -2,15 +2,13 @@
 name: "shekyl-freebsd-3"
 enable_cache: true
 suites:
-- "bionic"
+- "jammy"
 architectures:
 - "amd64"
 packages:
 - "curl"
-- "clang-8"
+- "clang-14"
 - "gperf"
-- "gcc-7"
-- "g++-7"
 - "gcc"
 - "g++"
 - "binutils-gold"
@@ -23,7 +21,7 @@ packages:
 - "faketime"
 - "bsdmainutils"
 - "ca-certificates"
-- "python"
+- "python3"
 - "cmake"
 remotes:
 - "url": "https://github.com/Shekyl-Foundation/shekyl-core.git"
@@ -34,7 +32,7 @@ script: |
   WRAP_DIR=$HOME/wrapped
   HOSTS="x86_64-unknown-freebsd"
   FAKETIME_HOST_PROGS=""
-  FAKETIME_PROGS="clang-8 clang++-8 date"
+  FAKETIME_PROGS="clang-14 clang++-14 date"
   HOST_CFLAGS="-O2 -g"
   HOST_CXXFLAGS="-O2 -g"
   HOST_LDFLAGS=-static-libstdc++
@@ -66,13 +64,12 @@ script: |
   function create_per-host_faketime_wrappers {
   for i in $HOSTS; do
     for prog in ${FAKETIME_HOST_PROGS}; do
-        WRAPPER=${WRAP_DIR}/${i}-${prog}
-        echo '#!/usr/bin/env bash' > ${WRAPPER}
-        echo "REAL=\`which -a ${i}-${prog} | grep -v ${WRAP_DIR}/${i}-${prog} | head -1\`" >> ${WRAPPER}
-        echo 'export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1' >> ${WRAPPER}
-        echo "export FAKETIME=\"$1\"" >> ${WRAPPER}
-        echo "$NDKDIR/${ABI}-$prog \$@" >> ${WRAPPER}
-        chmod +x ${WRAPPER}
+        echo '#!/usr/bin/env bash' > ${WRAP_DIR}/${i}-${prog}
+        echo "REAL=\`which -a ${i}-${prog} | grep -v ${WRAP_DIR}/${i}-${prog} | head -1\`" >> ${WRAP_DIR}/${i}-${prog}
+        echo 'export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1' >> ${WRAP_DIR}/${i}-${prog}
+        echo "export FAKETIME=\"$1\"" >> ${WRAP_DIR}/${i}-${prog}
+        echo "\$REAL \$@" >> $WRAP_DIR/${i}-${prog}
+        chmod +x ${WRAP_DIR}/${i}-${prog}
     done
   done
   }
