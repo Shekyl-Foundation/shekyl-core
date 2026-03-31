@@ -65,6 +65,31 @@
   `apt install python3-*` packages to comply with PEP 668
   (externally-managed-environment).
 
+### 🐛 Fixed
+
+- **macOS cross-compilation (depends CI)**: Fixed multiple build failures
+  for Cross-Mac x86_64 and Cross-Mac aarch64 targets:
+  - Raised macOS minimum deployment target from 10.8 (Mountain Lion, 2012)
+    to 10.15 (Catalina, 2019) to enable `std::filesystem` support in the
+    cross-compiled libc++.
+  - Fixed Boost discovery in depends builds by setting `Boost_NO_BOOST_CMAKE`
+    and forcing MODULE mode, preventing `BoostConfig.cmake` variant-check
+    failures on cross-compiled Darwin libraries.
+  - Made `boost_locale` a conditional dependency (Windows only), since it
+    is only used within `#ifdef WIN32` blocks and was unavailable for
+    Darwin cross-builds.
+  - Added per-target `CC_<triple>/AR_<triple>/CFLAGS_<triple>` environment
+    variables in `BuildRust.cmake` so the `ring` crate can locate the
+    cross-compiler for C/assembly code.
+  - Used system clang (instead of the depends-bundled Clang 9) for Rust
+    crate C compilation on Darwin, since `ring` 0.17 requires clang
+    features unavailable in Clang 9 (macOS 11 version strings,
+    `-fno-semantic-interposition`).
+  - Guarded `-fno-semantic-interposition` behind `check_c_compiler_flag()`
+    so it is only added when the compiler supports it (Clang 9 does not).
+  - Fixed OSX SDK cache key in `depends.yml` to include the SDK version
+    and skip the cache step for non-macOS builds.
+
 ### GUI Wallet
 
 - New project: Shekyl GUI Wallet (`shekyl-gui-wallet`) at
