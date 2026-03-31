@@ -118,7 +118,7 @@ namespace epee
       std::string mb;
       mb.resize(sizeof(typename stl_container::value_type)*container.size());
       char *p_elem = &mb[0];
-      BOOST_FOREACH(const typename stl_container::value_type& v, container)
+      for (const auto& v : container)
       {
         memcpy(p_elem, std::addressof(v), sizeof(typename stl_container::value_type));
         p_elem += sizeof(typename stl_container::value_type);
