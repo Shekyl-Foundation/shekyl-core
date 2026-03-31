@@ -25,7 +25,7 @@ $(package)_archiver_darwin=$($(package)_libtool)
 $(package)_config_libraries=chrono,filesystem,program_options,system,thread,test,date_time,regex,serialization,locale
 $(package)_cxxflags=-std=c++17
 $(package)_cxxflags_linux=-fPIC
-$(package)_cxxflags_freebsd=-fPIC -stdlib=libc++
+$(package)_cxxflags_freebsd=-fPIC -stdlib=libc++ -D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION
 $(package)_config_opts_freebsd=threadapi=pthread runtime-link=shared
 endef
 
