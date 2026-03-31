@@ -13,7 +13,7 @@ endef
 define $(package)_build_cmds
   mkdir bin &&\
   echo "#!/bin/sh\n\nexec /usr/bin/clang-14 -target x86_64-unknown-freebsd$($(package)_version) --sysroot=$(host_prefix)/native $$$$""@" > bin/clang-14 &&\
-  echo "#!/bin/sh\n\nexec /usr/bin/clang++-14 -target x86_64-unknown-freebsd$($(package)_version) --sysroot=$(host_prefix)/native $$$$""@" > bin/clang++-14 &&\
+  echo "#!/bin/sh\n\nexec /usr/bin/clang++-14 -target x86_64-unknown-freebsd$($(package)_version) --sysroot=$(host_prefix)/native -stdlib=libc++ $$$$""@" > bin/clang++-14 &&\
   chmod 755 bin/*
 endef
 
