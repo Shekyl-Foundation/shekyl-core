@@ -124,6 +124,27 @@
   - Fixed OSX SDK cache key in `depends.yml` to include the SDK version
     and skip the cache step for non-macOS builds.
 
+- **FreeBSD cross-compilation (depends CI)**: Fixed multiple build failures
+  for the x86_64 FreeBSD target:
+  - Switched Boost's b2 toolset from `gcc` to `clang` for FreeBSD, fixing
+    C++ standard library header resolution (`<cstddef>` not found).
+  - Embedded `-stdlib=libc++` in the FreeBSD clang++ wrapper script so all
+    depends packages automatically use the correct C++ standard library,
+    regardless of whether their own `$(package)_cxxflags` overrides the
+    host flags (previously broke zeromq, sodium, and other packages).
+  - Fixed compiler wrapper argument quoting: replaced the broken
+    `echo "...$$$$""@"` pattern with `printf '..."$$$$@"'` so `"$@"`
+    passes through correctly to the generated wrapper, preventing argument
+    mangling for flags containing quotes (e.g. `-DPACKAGE_VERSION="1.0.20"`).
+  - Added `-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION` to both
+    Boost's FreeBSD cxxflags and the CMake toolchain, restoring
+    `std::unary_function` compatibility needed by Boost 1.74's
+    `container_hash/hash.hpp` under FreeBSD's strict C++17 libc++.
+  - Removed the unsupported `no-devcrypto` option from OpenSSL's FreeBSD
+    configure flags (the devcrypto engine was removed in OpenSSL 3.0).
+  - Added `threadapi=pthread runtime-link=shared` to Boost's FreeBSD
+    config options for correct threading and linking behavior.
+
 ### GUI Wallet
 
 - New project: Shekyl GUI Wallet (`shekyl-gui-wallet`) at
