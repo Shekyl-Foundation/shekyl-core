@@ -5,54 +5,68 @@ This document describes how to create a new Shekyl release.
 ## Prerequisites
 
 - Push access to [Shekyl-Foundation/shekyl-core](https://github.com/Shekyl-Foundation/shekyl-core)
-- All changes merged to `main`
+- All CI checks passing on `dev`
 
 ### Build Dependencies
 
 The CI workflows install all dependencies automatically. For local builds:
 
-- **C++ toolchain**: GCC or Clang with C++14 support
+- **C++ toolchain**: GCC or Clang with C++17 support
 - **Rust toolchain**: stable Rust via [rustup](https://rustup.rs/) (builds `libshekyl_ffi.a`)
 - **CMake** >= 3.14 (required for `FetchContent`)
 - **Google Test**: system `libgtest-dev` is preferred; if absent, CMake fetches GoogleTest v1.16.0 at configure time
 - **Boost, OpenSSL, ZeroMQ, libunbound, libsodium** and other standard Monero-derived dependencies
 
+## Branch Strategy
+
+- **`dev`** -- continuous development and staging branch. All feature work,
+  bug fixes, and CI improvements land here first.
+- **`main`** -- protected release branch. Only receives merge commits from
+  `dev` at release time. Tags are always created on `main`.
+
 ## Creating a Release
 
-1. **Tag the release** from `main`.  The version is derived automatically from
+1. **Prepare the changelog on `dev`.** In `docs/CHANGELOG.md`, rename the
+   `## Unreleased` section to `## [X.Y.Z] - YYYY-MM-DD` and add a fresh
+   empty `## Unreleased` section above it. Commit on `dev`.
+
+2. **Merge `dev` into `main`** with a merge commit to preserve branch
+   topology and create a clear release boundary:
+
+   ```bash
+   git checkout main
+   git merge --no-ff dev -m "release: merge dev for vX.Y.Z"
+   ```
+
+3. **Tag the release** on `main`. The version is derived automatically from
    the tag name by CMake (see `cmake/GitVersion.cmake`), so there is no need
    to manually edit `src/version.cpp.in`.
 
    > **Version symbols:** The canonical C++ identifiers are `SHEKYL_VERSION`,
    > `SHEKYL_VERSION_TAG`, `SHEKYL_RELEASE_NAME`, `SHEKYL_VERSION_FULL`, and
    > `SHEKYL_VERSION_IS_RELEASE` (declared in `src/version.h`, defined in the
-   > generated `version.cpp`).  Legacy `MONERO_*` macro aliases exist for
+   > generated `version.cpp`). Legacy `MONERO_*` macro aliases exist for
    > backward compatibility with upstream cherry-picks and will be removed
    > after v4 RingPQC stabilisation.
 
    ```bash
-   git tag -a v3.0.2 -m "Shekyl v3.0.2"
+   git tag -a v3.0.3-RC1 -m "Shekyl v3.0.3-RC1"
    ```
 
-   For pre-releases use a suffix: `v3.0.2-RC1`, `v3.0.2-alpha`, etc.
+   For pre-releases use a suffix: `v3.0.3-RC1`, `v3.0.3-alpha`, etc.
 
-2. **Push the tag to all remotes.** CI triggers on tag push, so the tag must
-   reach every remote that runs workflows. Push both the branch and the tag:
+4. **Push the branch and tag.** CI triggers on tag push. Push the branch
+   first so the tag commit is reachable:
 
    ```bash
-   # Push to the foundation repo (triggers release + gitian workflows)
-   git push foundation main
-   git push foundation v3.0.2
-
-   # Mirror to the development origin
-   git push origin ng
-   git push origin v3.0.2
+   git push origin main
+   git push origin v3.0.3-RC1
    ```
 
    > **Important:** The tag must point to a commit that is already on the
-   > remote's default branch. Push the branch first, then the tag.
+   > remote's `main` branch. Push the branch first, then the tag.
 
-3. **(Optional) Bump the dev default** -- after tagging, update
+5. **(Optional) Bump the dev default** -- after tagging, update
    `SHEKYL_VERSION_DEFAULT` in `cmake/Version.cmake` to the next planned
    version so that un-tagged development builds show the correct series.
 
@@ -71,8 +85,8 @@ The CI workflows install all dependencies automatically. For local builds:
 
 ## Tag Naming
 
-- Release tags: `v3.0.2`, `v3.0.3`, `v3.1.0`
-- Pre-release tags: `v3.0.2-RC1`, `v3.1.0-alpha`, `v3.1.0-beta`
+- Release tags: `v3.0.3`, `v3.1.0`, `v4.0.0`
+- Pre-release tags: `v3.0.3-RC1`, `v3.1.0-alpha`, `v3.1.0-beta`
 - Tags containing `RC`, `alpha`, or `beta` are automatically marked as pre-releases
 
 ## Release Artifacts
@@ -121,10 +135,10 @@ MinGW targets for Windows; Darwin targets for macOS).
 If a tag needs to be moved (e.g. to include a last-minute fix):
 
 ```bash
-git tag -d v3.0.2-RC1                              # delete local
-git push foundation :refs/tags/v3.0.2-RC1           # delete remote
-git tag -a v3.0.2-RC1 -m "Shekyl v3.0.2-RC1"       # recreate on HEAD
-git push foundation main && git push foundation v3.0.2-RC1
+git tag -d v3.0.3-RC1                              # delete local
+git push origin :refs/tags/v3.0.3-RC1               # delete remote
+git tag -a v3.0.3-RC1 -m "Shekyl v3.0.3-RC1"       # recreate on HEAD
+git push origin main && git push origin v3.0.3-RC1
 ```
 
 Or trigger manually from the Actions tab without retagging.
@@ -133,7 +147,7 @@ Or trigger manually from the Actions tab without retagging.
 
 ```bash
 # From the Actions tab, use "Run workflow" with:
-#   tag: v3.0.2-RC1
+#   tag: v3.0.3-RC1
 #   repo_url: https://github.com/youruser/shekyl-core
 ```
 
