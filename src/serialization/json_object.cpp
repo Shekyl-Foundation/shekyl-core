@@ -260,6 +260,33 @@ void fromJsonValue(const rapidjson::Value& val, long& i)
   to_int64(val, i);
 }
 
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::pqc_authentication& auth)
+{
+  dest.StartObject();
+
+  INSERT_INTO_JSON_OBJECT(dest, auth_version, auth.auth_version);
+  INSERT_INTO_JSON_OBJECT(dest, scheme_id, auth.scheme_id);
+  INSERT_INTO_JSON_OBJECT(dest, flags, auth.flags);
+  INSERT_INTO_JSON_OBJECT(dest, hybrid_public_key, auth.hybrid_public_key);
+  INSERT_INTO_JSON_OBJECT(dest, hybrid_signature, auth.hybrid_signature);
+
+  dest.EndObject();
+}
+
+void fromJsonValue(const rapidjson::Value& val, cryptonote::pqc_authentication& auth)
+{
+  if (!val.IsObject())
+  {
+    throw WRONG_TYPE("json object");
+  }
+
+  GET_FROM_JSON_OBJECT(val, auth.auth_version, auth_version);
+  GET_FROM_JSON_OBJECT(val, auth.scheme_id, scheme_id);
+  GET_FROM_JSON_OBJECT(val, auth.flags, flags);
+  GET_FROM_JSON_OBJECT(val, auth.hybrid_public_key, hybrid_public_key);
+  GET_FROM_JSON_OBJECT(val, auth.hybrid_signature, hybrid_signature);
+}
+
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::transaction& tx)
 {
   dest.StartObject();
@@ -276,6 +303,10 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
   {
     dest.Key("ringct");
     toJsonValue(dest, tx.rct_signatures, tx.pruned);
+  }
+  if (tx.pqc_auth)
+  {
+    INSERT_INTO_JSON_OBJECT(dest, pqc_auth, *tx.pqc_auth);
   }
 
   dest.EndObject();
@@ -300,6 +331,14 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::transaction& tx)
   if (sigs != val.MemberEnd())
   {
     fromJsonValue(sigs->value, tx.signatures);
+  }
+
+  const auto pqc = val.FindMember("pqc_auth");
+  if (pqc != val.MemberEnd())
+  {
+    cryptonote::pqc_authentication auth;
+    fromJsonValue(pqc->value, auth);
+    tx.pqc_auth = std::move(auth);
   }
 
   const auto& rsig = tx.rct_signatures;

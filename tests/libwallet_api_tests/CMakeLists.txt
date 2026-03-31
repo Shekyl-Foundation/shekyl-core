@@ -50,11 +50,12 @@ target_link_libraries(libwallet_api_tests
     ${Boost_FILESYSTEM_LIBRARY}
     ${Boost_THREAD_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
-    $<$<BOOL:${WIN32}>:${Boost_LOCALE_LIBRARY}>
-    $<$<BOOL:${WIN32}>:${ICU_LIBRARIES}>
     ${GTEST_LIBRARIES}
     ${CMAKE_THREAD_LIBS_INIT}
     ${EXTRA_LIBRARIES})
+if(WIN32)
+  target_link_libraries(libwallet_api_tests PRIVATE ${Boost_LOCALE_LIBRARY} ${ICU_LIBRARIES})
+endif()
 
 set_property(TARGET libwallet_api_tests
   PROPERTY

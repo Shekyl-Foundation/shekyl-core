@@ -200,6 +200,9 @@ void fromJsonValue(const rapidjson::Value& val, long& i);
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::transaction& tx);
 void fromJsonValue(const rapidjson::Value& val, cryptonote::transaction& tx);
 
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::pqc_authentication& auth);
+void fromJsonValue(const rapidjson::Value& val, cryptonote::pqc_authentication& auth);
+
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::block& b);
 void fromJsonValue(const rapidjson::Value& val, cryptonote::block& b);
 
