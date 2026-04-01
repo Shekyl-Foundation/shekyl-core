@@ -27,6 +27,17 @@
 
 ### 🐛 Fixed
 
+- **MSVC: fix rvalue binding in portable_storage serialization.** Changed
+  `array_entry_t::insert_first_val` and `insert_next_value` from strict
+  rvalue-reference parameters (`t_entry_type&&`) to pass-by-value, allowing
+  lvalue forwarding from `portable_storage::insert_first_value` /
+  `insert_next_value` to work correctly under MSVC template deduction.
+- **MSVC: enable conformant preprocessor (`/Zc:preprocessor`).** MSVC's
+  traditional preprocessor breaks nested `__VA_ARGS__` forwarding in the
+  `THROW_ON_RPC_RESPONSE_ERROR` macro chain, causing `throw_wallet_ex`
+  template deduction failures. Added `/Zc:preprocessor` to MSVC compile
+  flags and removed the obsolete Boost.Preprocessor-based `throw_wallet_ex`
+  fallback in favour of the standard variadic template version.
 - **Gitian: enable `universe` repository in Docker base image.** The
   `ubuntu:jammy` Docker image only enables `main restricted` by default;
   `gitian-build.py` now patches the base image after `make-base-vm` to add
