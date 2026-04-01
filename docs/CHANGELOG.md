@@ -36,10 +36,11 @@
   packages that moved out of `main`. Uses `docker build` (not run+commit)
   to preserve the image's CMD/USER metadata so `gbuild` containers stay
   running.
-- **Gitian Linux: move i386-dependent packages to script section.** The i386
-  architecture must be enabled with `dpkg --add-architecture` before packages
-  like `linux-libc-dev:i386`, `gcc-multilib`, and `g++-multilib` can be
-  installed; moved from `packages:` to `script:`.
+- **Gitian Linux: move i386-dependent packages to script section and add
+  `sudo`.** The i386 architecture must be enabled with `dpkg --add-architecture`
+  before packages like `linux-libc-dev:i386`, `gcc-multilib`, and `g++-multilib`
+  can be installed; moved from `packages:` to `script:`. Also adds `sudo` to the
+  descriptor since the `ubuntu:jammy` Docker base image does not include it.
 - **Gitian macOS: add `libtinfo5` and `python-is-python3`, remove `python`
   from `FAKETIME_PROGS`.** The pre-built Clang 9 cross-compiler requires
   `libtinfo.so.5`. The `python` faketime wrapper broke CMake's

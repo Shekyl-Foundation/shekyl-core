@@ -130,7 +130,7 @@ if(RUST_TARGET_TRIPLE AND CMAKE_C_COMPILER)
     string(REPLACE "-" "_" _cc_triple "${RUST_TARGET_TRIPLE}")
 
     set(_rust_cc "${CMAKE_C_COMPILER}")
-    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_CROSSCOMPILING)
         find_program(_system_clang clang)
         if(_system_clang)
             set(_rust_cc "${_system_clang}")
