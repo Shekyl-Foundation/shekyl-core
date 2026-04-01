@@ -29,8 +29,6 @@ jobs:
             option: "l"
           - name: "Windows"
             option: "w"
-          - name: "Android"
-            option: "a"
           - name: "FreeBSD"
             option: "f"
           - name: "macOS"
