@@ -2153,6 +2153,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
 
       // If new incoming tx in alt block passed verification and entered the pool, notify ZMQ
       if (tvc.m_added_to_pool)
+      {
         txpool_event evt{};
         evt.tx = tx;
         evt.hash = txid;
@@ -2160,6 +2161,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
         evt.weight = get_transaction_weight(tx);
         evt.res = true;
         notify_txpool_event({std::move(evt)});
+      }
     }
     extra_block_txs.txs_by_txid.clear();
     extra_block_txs.nic_verified_hf_version = 0;
