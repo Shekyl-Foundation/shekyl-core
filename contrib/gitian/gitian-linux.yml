@@ -16,8 +16,6 @@ packages:
 - "gcc-arm-linux-gnueabihf"
 - "g++-arm-linux-gnueabihf"
 - "g++-riscv64-linux-gnu"
-- "gcc-multilib"
-- "g++-multilib"
 - "binutils-arm-linux-gnueabihf"
 - "binutils-gold"
 - "git"

@@ -774,11 +774,10 @@ namespace levin
 
     auto& zone = zone_;
     boost::asio::dispatch(zone_->strand, [zone, id, is_income] {
-      zone->contexts[id] = {
-        .fluff_txs = {},
-        .flush_time = std::chrono::steady_clock::time_point::max(),
-        .m_is_income = is_income,
-      };
+      auto& ctx = zone->contexts[id];
+      ctx.fluff_txs.clear();
+      ctx.flush_time = std::chrono::steady_clock::time_point::max();
+      ctx.m_is_income = is_income;
     });
   }
 

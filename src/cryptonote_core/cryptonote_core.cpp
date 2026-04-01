@@ -1099,15 +1099,13 @@ namespace cryptonote
     // If new incoming tx passed verification and entered the pool, notify ZMQ
     if (!tvc.m_verifivation_failed && tvc.m_added_to_pool && matches_category(tx_relay, relay_category::legacy))
     {
-      {
-        txpool_event evt{};
-        evt.tx = tx;
-        evt.hash = tx_hash;
-        evt.blob_size = blob.size();
-        evt.weight = tx_weight;
-        evt.res = true;
-        m_blockchain_storage.notify_txpool_event({std::move(evt)});
-      }
+      txpool_event evt{};
+      evt.tx = tx;
+      evt.hash = tx_hash;
+      evt.blob_size = blob.size();
+      evt.weight = tx_weight;
+      evt.res = true;
+      m_blockchain_storage.notify_txpool_event({std::move(evt)});
     }
 
     return res;

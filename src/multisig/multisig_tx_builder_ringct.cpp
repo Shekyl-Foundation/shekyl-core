@@ -471,11 +471,11 @@ static void set_tx_inputs(
     offsets.reserve(sources[i].outputs.size());
     for (const auto& e: sources[i].outputs)
       offsets.emplace_back(e.first);
-    unsigned_tx.vin[i] = cryptonote::txin_to_key{
-      .amount = 0,
-      .key_offsets = cryptonote::absolute_output_offsets_to_relative(offsets),
-      .k_image = rct::rct2ki(sources[i].multisig_kLRki.ki),
-    };
+    cryptonote::txin_to_key in_to_key{};
+    in_to_key.amount = 0;
+    in_to_key.key_offsets = cryptonote::absolute_output_offsets_to_relative(offsets);
+    in_to_key.k_image = rct::rct2ki(sources[i].multisig_kLRki.ki);
+    unsigned_tx.vin[i] = std::move(in_to_key);
   }
 }
 //----------------------------------------------------------------------------------------------------------------------

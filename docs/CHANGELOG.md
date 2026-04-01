@@ -12,6 +12,16 @@
 - **CI: Windows MSVC wallet-core job** (`build-windows-msvc`): New CI
   lane builds the wallet-core static libraries with Visual Studio / MSVC
   via vcpkg, validating the MSVC portability patches on every push.
+- **Release builds for macOS, Linux aarch64, and FreeBSD.** The
+  `release/tagged` workflow now cross-compiles and publishes `.tar.gz`
+  archives for macOS x86_64, macOS aarch64, Linux aarch64, and FreeBSD
+  x86_64 alongside the existing Linux x86_64 and Windows x64 packages.
+- **Linux aarch64 `.deb` and `.rpm` packages.** The cross-compiled ARM64
+  build now produces Debian and RPM packages (with systemd unit) in
+  addition to the portable tarball, matching the x86_64 packaging.
+- **Source archive in GitHub Releases.** A new `source-archive` job
+  produces `shekyl-vX.Y.Z-source.tar.gz` containing the full source tree
+  with all submodules, attached to each release alongside the binaries.
 
 ### 🔄 Changed
 
@@ -30,8 +40,6 @@
 - **MSVC: rename `xor` parameter in `slow-hash.c` to `xor_pad`.** MSVC
   treats `xor` as a reserved keyword in C mode. Both the x86/SSE and
   ARM/NEON variants of `aes_pseudo_round_xor()` were affected.
-- **MSVC: fix `__thread` in easylogging++.** MSVC does not support the
-  GCC `__thread` TLS qualifier. Added `__declspec(thread)` alternative.
 - **MSVC: fix iterator-to-pointer cast in `http_auth.cpp`.** MSVC
   `boost::as_literal()` iterator is a class, not a raw pointer. Used
   `&*data.begin()` to obtain the address.
@@ -41,10 +49,6 @@
 - **MSVC: guard `unistd.h` in easylogging++.** The third-party logging
   library unconditionally included `<unistd.h>` which does not exist on
   MSVC.
-- **MSVC: replace designated initializers with C++17 compatible init.**
-  `txpool_event` construction in `cryptonote_core.cpp` and
-  `blockchain.cpp` used C++20 designated initializers (`{.field = val}`)
-  which MSVC rejects in C++17 mode.
 - **MSVC: add `<io.h>` include for `_isatty` in `mlog.cpp`.** The WIN32
   code path uses `_isatty`/`_fileno` which require `<io.h>` on MSVC.
 - **MSVC: fix `boost::iterator_range` conversion in `http_auth.cpp`.**
@@ -59,10 +63,6 @@
   rvalue-reference parameters (`t_entry_type&&`) to pass-by-value, allowing
   lvalue forwarding from `portable_storage::insert_first_value` /
   `insert_next_value` to work correctly under MSVC template deduction.
-- **MSVC: add `ssize_t` typedef to `download.h`.** The header uses
-  `ssize_t` in callback signatures but did not include the MSVC typedef
-  added in `util.h`, causing parse errors in compilation units that include
-  `download.h` without `util.h`.
 - **MSVC: force-include `<iso646.h>` for C++ alternative tokens.** The
   codebase uses `not`, `and`, `or` extensively (hundreds of sites). MSVC
   does not recognise these as keywords by default. Added `/FIiso646.h` to
@@ -78,16 +78,72 @@
   `ubuntu:jammy` Docker image only enables `main restricted` by default;
   `gitian-build.py` now patches the base image after `make-base-vm` to add
   `universe`, fixing installation of `faketime`, `bsdmainutils`, and other
-  packages that moved out of `main`.
-- **Gitian Linux: move `linux-libc-dev:i386` to script section.** The i386
-  architecture must be enabled with `dpkg --add-architecture` before the
-  package can be installed; moved from `packages:` to `script:`.
-- **Gitian macOS: add `libtinfo5` and `python-is-python3`.** The pre-built
-  Clang 9 cross-compiler requires `libtinfo.so.5`, and the `python` faketime
-  wrapper needs a real `/usr/bin/python` target to resolve correctly for
-  CMake's `FindPythonInterp` in the `native_libtapi` build.
+  packages that moved out of `main`. Uses `docker build` (not run+commit)
+  to preserve the image's CMD/USER metadata so `gbuild` containers stay
+  running.
+- **Gitian Linux: fix i386-dependent package installation.** The i386
+  architecture is now enabled in the Docker base image (via `gitian-build.py`'s
+  `docker build` step) along with passwordless `sudo` for the `ubuntu` user,
+  allowing `linux-libc-dev:i386`, `gcc-multilib`, and `g++-multilib` to be
+  installed normally via the descriptor's `packages:` section.
+- **Gitian macOS: add `libtinfo5` and `python-is-python3`, remove `python`
+  from `FAKETIME_PROGS`.** The pre-built Clang 9 cross-compiler requires
+  `libtinfo.so.5`. The `python` faketime wrapper broke CMake's
+  `FindPythonInterp` version detection in the `native_libtapi` build (empty
+  `PYTHON_VERSION_STRING`); removing `python` from the faketime wrappers
+  fixes this while preserving timestamp reproducibility for `ar`, `ranlib`,
+  `date`, `dmg`, and `genisoimage`.
 - **Gitian Android: add `python-is-python3`.** Android NDK r17b scripts use
   `#!/usr/bin/env python` which does not exist on Jammy without this package.
+- **Gitian macOS: fix Rust `ring` crate cross-compilation.** `BuildRust.cmake`
+  incorrectly overrode the macOS cross-compiler with the Linux system `clang`
+  when cross-compiling for Darwin, causing the `ring` crate to include
+  Linux-only `cet.h`. Now only uses system clang on native macOS builds.
+- **Gitian Windows: drop i686 (32-bit) target.** The i686-pc-windows-gnu Rust
+  target has an unresolved `GetHostNameW@8` symbol against MinGW's `ws2_32`.
+  Since the release workflow only targets x86_64, the 32-bit Gitian build is
+  removed.
+- **macOS cross-build: exclude `-fcf-protection=full`.** Intel CET is x86
+  Linux only; the flag defines `__CET__` which triggers `#include <cet.h>` in
+  the `ring` crate's assembly, but `cet.h` does not exist in the macOS SDK.
+  Now excluded for all Apple targets.
+- **macOS aarch64 cross-build: set `MACOSX_DEPLOYMENT_TARGET=10.16`.**
+  Clang 9 (depends cross-compiler) does not recognise macOS version 11.0+.
+  Apple aliases 10.16 == 11.0; the `cc-rs` crate respects this env var, fixing
+  the `ring` build for `aarch64-apple-darwin`.
+- **Gitian Docker base image: install `sudo` before creating sudoers entry.**
+  The `/etc/sudoers.d/` directory does not exist in the minimal Ubuntu image
+  until the `sudo` package is installed.
+
+### 🔄 Changed
+
+- **Replace C++20 designated initializers with C++17-compatible member
+  assignment.** Rewrote 10 call sites in `cryptonote_core.cpp`,
+  `blockchain.cpp`, `levin_notify.cpp`, `multisig_tx_builder_ringct.cpp`, and
+  `wallet2.cpp`. GCC/Clang accepted these as extensions; MSVC rejects them.
+- **Replace `__thread` with `thread_local` in easylogging++.** The
+  `__thread` qualifier is GCC/Clang-specific; `thread_local` (C++11) is
+  portable across GCC, Clang, and MSVC.
+- **Centralize `ssize_t` typedef in `src/common/compat.h`.** Replaces
+  duplicate `#if defined(_MSC_VER)` guards in `util.h` and `download.h`
+  with a single include.
+
+### 🗑️ Removed
+
+- **Gitian Android build.** Removed from the Gitian matrix since there is no
+  Android wallet. The Android NDK r17b is also incompatible with Ubuntu Jammy.
+- **Gitian Linux: drop i686-linux-gnu (32-bit x86) target.** Eliminates the
+  need for `linux-libc-dev:i386`, `gcc-multilib`, `g++-multilib`, `sudo`,
+  and the `dpkg --add-architecture i386` workaround. Simplifies the Docker
+  base image patching to only enable the `universe` repository.
+
+### 📚 Documentation
+
+- **`docs/RELEASING.md`: document all release artifacts.** Updated the
+  artifact table to list all 13 files produced per release (was 6),
+  including cross-platform tarballs, aarch64 `.deb`/`.rpm`, and source
+  archive. Updated "Future Platforms" to reflect that macOS tarballs are
+  now shipping and `.dmg`/AppImage remain planned.
 
 ## [3.0.3-RC1] - 2026-03-31
 

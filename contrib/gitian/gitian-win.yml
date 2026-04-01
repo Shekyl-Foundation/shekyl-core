@@ -40,7 +40,7 @@ remotes:
 files: []
 script: |
   WRAP_DIR=$HOME/wrapped
-  HOSTS="i686-w64-mingw32 x86_64-w64-mingw32"
+  HOSTS="x86_64-w64-mingw32"
   FAKETIME_HOST_PROGS="windres objcopy"
   FAKETIME_PROGS="date zip"
   HOST_CFLAGS="-O2 -g"
@@ -92,7 +92,7 @@ script: |
 
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
   export PATH="$HOME/.cargo/bin:$PATH"
-  rustup target add i686-pc-windows-gnu x86_64-pc-windows-gnu
+  rustup target add x86_64-pc-windows-gnu
 
   git config --global core.abbrev 9
   cd shekyl

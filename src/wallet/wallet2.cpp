@@ -2473,14 +2473,13 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
         if (m_background_syncing && m_background_sync_data.txs.find(txid) == m_background_sync_data.txs.end())
         {
           size_t bgs_idx = m_background_sync_data.txs.size();
-          background_synced_tx_t bgs_tx = {
-            .index_in_background_sync_data = bgs_idx,
-            .tx                            = tx,
-            .output_indices                = o_indices,
-            .height                        = height,
-            .block_timestamp               = ts,
-            .double_spend_seen             = double_spend_seen
-          };
+          background_synced_tx_t bgs_tx{};
+          bgs_tx.index_in_background_sync_data = bgs_idx;
+          bgs_tx.tx = tx;
+          bgs_tx.output_indices = o_indices;
+          bgs_tx.height = height;
+          bgs_tx.block_timestamp = ts;
+          bgs_tx.double_spend_seen = double_spend_seen;
           LOG_PRINT_L2("Adding received tx " << txid << " to background sync data (idx=" << bgs_idx << ")");
           m_background_sync_data.txs.insert({txid, std::move(bgs_tx)});
         }
@@ -2765,14 +2764,13 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
         if (m_background_syncing && m_background_sync_data.txs.find(txid) == m_background_sync_data.txs.end())
         {
           size_t bgs_idx = m_background_sync_data.txs.size();
-          background_synced_tx_t bgs_tx = {
-            .index_in_background_sync_data = bgs_idx,
-            .tx                            = tx,
-            .output_indices                = o_indices,
-            .height                        = height,
-            .block_timestamp               = ts,
-            .double_spend_seen             = double_spend_seen
-          };
+          background_synced_tx_t bgs_tx{};
+          bgs_tx.index_in_background_sync_data = bgs_idx;
+          bgs_tx.tx = tx;
+          bgs_tx.output_indices = o_indices;
+          bgs_tx.height = height;
+          bgs_tx.block_timestamp = ts;
+          bgs_tx.double_spend_seen = double_spend_seen;
           LOG_PRINT_L2("Adding spent tx " << txid << " to background sync data (idx=" << bgs_idx << ")");
           m_background_sync_data.txs.insert({txid, std::move(bgs_tx)});
         }
@@ -2803,14 +2801,13 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
             if (m_background_syncing && !m_transfers[idx].m_key_image_known && m_background_sync_data.txs.find(txid) == m_background_sync_data.txs.end())
             {
               size_t bgs_idx = m_background_sync_data.txs.size();
-              background_synced_tx_t bgs_tx = {
-                .index_in_background_sync_data = bgs_idx,
-                .tx                            = tx,
-                .output_indices                = o_indices,
-                .height                        = height,
-                .block_timestamp               = ts,
-                .double_spend_seen             = double_spend_seen
-              };
+              background_synced_tx_t bgs_tx{};
+              bgs_tx.index_in_background_sync_data = bgs_idx;
+              bgs_tx.tx = tx;
+              bgs_tx.output_indices = o_indices;
+              bgs_tx.height = height;
+              bgs_tx.block_timestamp = ts;
+              bgs_tx.double_spend_seen = double_spend_seen;
               LOG_PRINT_L2("Adding plausible spent tx " << txid << " to background sync data (idx=" << bgs_idx << ")");
               m_background_sync_data.txs.insert({txid, std::move(bgs_tx)});
             }
@@ -2829,14 +2826,13 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
             if (m_background_syncing && !td.m_key_image_known && m_background_sync_data.txs.find(txid) == m_background_sync_data.txs.end())
             {
               size_t bgs_idx = m_background_sync_data.txs.size();
-              background_synced_tx_t bgs_tx = {
-                .index_in_background_sync_data = bgs_idx,
-                .tx                            = tx,
-                .output_indices                = o_indices,
-                .height                        = height,
-                .block_timestamp               = ts,
-                .double_spend_seen             = double_spend_seen
-              };
+              background_synced_tx_t bgs_tx{};
+              bgs_tx.index_in_background_sync_data = bgs_idx;
+              bgs_tx.tx = tx;
+              bgs_tx.output_indices = o_indices;
+              bgs_tx.height = height;
+              bgs_tx.block_timestamp = ts;
+              bgs_tx.double_spend_seen = double_spend_seen;
               LOG_PRINT_L2("Adding plausible spent tx " << txid << " to background sync data (idx=" << bgs_idx << ")");
               m_background_sync_data.txs.insert({txid, std::move(bgs_tx)});
             }
@@ -10134,7 +10130,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     src.mask = td.m_mask;
     if (m_multisig)
       // note: multisig_kLRki is a legacy struct, currently only used as a key image shuttle into the multisig tx builder
-      src.multisig_kLRki = {.k = {}, .L = {}, .R = {}, .ki = rct::ki2rct(td.m_key_image)};
+      src.multisig_kLRki = rct::multisig_kLRki({rct::zero(), rct::zero(), rct::zero(), rct::ki2rct(td.m_key_image)});
     else
       src.multisig_kLRki = rct::multisig_kLRki({rct::zero(), rct::zero(), rct::zero(), rct::zero()});
     detail::print_source_entry(src);

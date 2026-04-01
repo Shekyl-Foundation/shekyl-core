@@ -2999,11 +2999,7 @@ void Writer::initializeLogger(Logger *logger, bool needLock) {
 }
 
 void Writer::processDispatch() {
-#if defined(_MSC_VER)
-  static __declspec(thread) bool in_dispatch = false;
-#else
-  static __thread bool in_dispatch = false;
-#endif
+  static thread_local bool in_dispatch = false;
   if (in_dispatch)
   {
     if (m_proceed && m_logger != NULL)
