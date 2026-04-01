@@ -18,7 +18,9 @@
 #include "easylogging++.h"
 
 #include <atomic>
+#if !defined(_MSC_VER)
 #include <unistd.h>
+#endif
 
 #if defined(AUTO_INITIALIZE_EASYLOGGINGPP)
 INITIALIZE_EASYLOGGINGPP

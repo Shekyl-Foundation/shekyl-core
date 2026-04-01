@@ -27,6 +27,25 @@
 
 ### 🐛 Fixed
 
+- **MSVC: move `/FIiso646.h` to C++-only flags.** The force-include was
+  applied to C files where `xor` is a parameter name in `slow-hash.c`,
+  causing macro expansion conflicts. Now applied via `CMAKE_CXX_FLAGS`.
+- **MSVC: guard `unistd.h` in easylogging++.** The third-party logging
+  library unconditionally included `<unistd.h>` which does not exist on
+  MSVC.
+- **MSVC: replace designated initializers with C++17 compatible init.**
+  `txpool_event` construction in `cryptonote_core.cpp` and
+  `blockchain.cpp` used C++20 designated initializers (`{.field = val}`)
+  which MSVC rejects in C++17 mode.
+- **MSVC: add `<io.h>` include for `_isatty` in `mlog.cpp`.** The WIN32
+  code path uses `_isatty`/`_fileno` which require `<io.h>` on MSVC.
+- **MSVC: fix `boost::iterator_range` conversion in `http_auth.cpp`.**
+  Boost 1.90 `as_literal()` returns an iterator type that does not
+  implicitly convert to `iterator_range<const char*>` on MSVC. Changed to
+  `auto` deduction.
+- **MSVC: add `<cwctype>` include for `std::towlower` in
+  `language_base.h`.** MSVC does not transitively include wide-character
+  utilities through other Boost headers.
 - **MSVC: fix rvalue binding in portable_storage serialization.** Changed
   `array_entry_t::insert_first_val` and `insert_next_value` from strict
   rvalue-reference parameters (`t_entry_type&&`) to pass-by-value, allowing
