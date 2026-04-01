@@ -27,9 +27,17 @@
 
 ### 🐛 Fixed
 
-- **MSVC: move `/FIiso646.h` to C++-only flags.** The force-include was
-  applied to C files where `xor` is a parameter name in `slow-hash.c`,
-  causing macro expansion conflicts. Now applied via `CMAKE_CXX_FLAGS`.
+- **MSVC: rename `xor` parameter in `slow-hash.c` to `xor_pad`.** MSVC
+  treats `xor` as a reserved keyword in C mode. Both the x86/SSE and
+  ARM/NEON variants of `aes_pseudo_round_xor()` were affected.
+- **MSVC: fix `__thread` in easylogging++.** MSVC does not support the
+  GCC `__thread` TLS qualifier. Added `__declspec(thread)` alternative.
+- **MSVC: fix iterator-to-pointer cast in `http_auth.cpp`.** MSVC
+  `boost::as_literal()` iterator is a class, not a raw pointer. Used
+  `&*data.begin()` to obtain the address.
+- **MSVC: guard `unbound.h` include and usage in `util.cpp`.** The
+  include and `unbound_built_with_threads()` function/call were not
+  wrapped in `HAVE_DNS_UNBOUND`, causing a missing-header error.
 - **MSVC: guard `unistd.h` in easylogging++.** The third-party logging
   library unconditionally included `<unistd.h>` which does not exist on
   MSVC.

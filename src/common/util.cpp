@@ -57,7 +57,9 @@
   #include <fstream>
 #endif
 
+#ifdef HAVE_DNS_UNBOUND
 #include "unbound.h"
+#endif
 
 #include <thread>
 #include "include_base_utils.h"
@@ -701,6 +703,7 @@ std::string get_nix_version_display_string()
     return std::error_code(code, std::system_category());
   }
 
+#ifdef HAVE_DNS_UNBOUND
   static bool unbound_built_with_threads()
   {
     ub_ctx *ctx = ub_ctx_create();
@@ -715,6 +718,7 @@ std::string get_nix_version_display_string()
     MINFO("libunbound was built " << (with_threads ? "with" : "without") << " threads");
     return with_threads;
   }
+#endif
 
   bool sanitize_locale()
   {
@@ -824,8 +828,10 @@ std::string get_nix_version_display_string()
     OPENSSL_init_ssl(0, NULL);
 #endif
 
+#ifdef HAVE_DNS_UNBOUND
     if (!unbound_built_with_threads())
       MCLOG_RED(el::Level::Warning, "global", "libunbound was not built with threads enabled - crashes may occur");
+#endif
 
     return true;
   }

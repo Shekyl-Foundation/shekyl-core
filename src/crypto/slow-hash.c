@@ -679,10 +679,10 @@ STATIC INLINE void aes_pseudo_round(const uint8_t *in, uint8_t *out,
  */
 
 STATIC INLINE void aes_pseudo_round_xor(const uint8_t *in, uint8_t *out,
-                                        const uint8_t *expandedKey, const uint8_t *xor, int nblocks)
+                                        const uint8_t *expandedKey, const uint8_t *xor_pad, int nblocks)
 {
     __m128i *k = R128(expandedKey);
-    __m128i *x = R128(xor);
+    __m128i *x = R128(xor_pad);
     __m128i d;
     int i;
 
@@ -1248,10 +1248,10 @@ STATIC INLINE void aes_pseudo_round(const uint8_t *in, uint8_t *out, const uint8
 	}
 }
 
-STATIC INLINE void aes_pseudo_round_xor(const uint8_t *in, uint8_t *out, const uint8_t *expandedKey, const uint8_t *xor, int nblocks)
+STATIC INLINE void aes_pseudo_round_xor(const uint8_t *in, uint8_t *out, const uint8_t *expandedKey, const uint8_t *xor_pad, int nblocks)
 {
 	const uint8x16_t *k = (const uint8x16_t *)expandedKey;
-	const uint8x16_t *x = (const uint8x16_t *)xor;
+	const uint8x16_t *x = (const uint8x16_t *)xor_pad;
 	int i;
 
 	for (i=0; i<nblocks; i++)
