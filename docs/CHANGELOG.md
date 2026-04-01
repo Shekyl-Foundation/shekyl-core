@@ -4,19 +4,24 @@
 
 ### ✨ Added
 
-- **Release builds for macOS, Linux aarch64, and FreeBSD.** The
-  `release/tagged` workflow now cross-compiles and publishes `.tar.gz`
-  archives for macOS x86_64, macOS aarch64, Linux aarch64, and FreeBSD
-  x86_64 alongside the existing Linux x86_64 and Windows x64 packages.
-- **Linux aarch64 `.deb` and `.rpm` packages.** The cross-compiled ARM64
-  build now produces Debian and RPM packages (with systemd unit) in
-  addition to the portable tarball, matching the x86_64 packaging.
-- **Source archive in GitHub Releases.** A new `source-archive` job
-  produces `shekyl-vX.Y.Z-source.tar.gz` containing the full source tree
-  with all submodules, attached to each release alongside the binaries.
+- **Unified Gitian release pipeline.** The `gitian` workflow is now the sole
+  release pipeline, replacing the separate `release-tagged` workflow. Gitian
+  builds produce reproducible binaries; a new `package-and-publish` job
+  creates `.deb`/`.rpm` packages, a Windows NSIS installer, source archive,
+  and `SHA256SUMS`, then publishes the GitHub Release. Eliminates duplicate
+  cross-compilation and host-toolchain issues.
+- **Source archive in GitHub Releases.** The packaging job produces
+  `shekyl-vX.Y.Z-source.tar.gz` containing the full source tree with all
+  submodules, attached to each release alongside the binaries.
 
 ### 🔄 Changed
 
+- **`depends.yml` demoted to PR-only.** The cross-compilation CI workflow now
+  runs only on pull requests (and manual dispatch), not on every push. Saves
+  significant CI minutes; Gitian catches cross-platform issues at release time.
+- **`release-tagged.yml` disabled.** The Gitian pipeline now handles all
+  release artifacts. The old workflow is preserved as `.disabled` for one
+  release cycle.
 - **Gitian reproducible builds: migrated from Ubuntu 18.04 (Bionic) to 22.04
   (Jammy).** All five build descriptors (`gitian-linux.yml`, `gitian-win.yml`,
   `gitian-osx.yml`, `gitian-android.yml`, `gitian-freebsd.yml`),

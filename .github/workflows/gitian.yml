@@ -13,6 +13,9 @@ on:
         description: 'Repository URL override (leave empty for default)'
         required: false
 
+permissions:
+  contents: write
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   GITIAN_REPO_URL: ${{ inputs.repo_url || format('https://github.com/{0}', github.repository) }}
@@ -69,6 +72,160 @@ jobs:
         echo \`\`\` >> $GITHUB_STEP_SUMMARY
     - uses: actions/upload-artifact@v6
       with:
-        name: ${{ matrix.operating-system.name }}
+        name: gitian-${{ matrix.operating-system.name }}
         path: |
           out/${{ env.GITIAN_TAG }}/*
+
+  package-and-publish:
+    name: Package & Publish Release
+    needs: [build-gitian]
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Download all Gitian artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: gitian-out
+          pattern: gitian-*
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev rubygems rpm nsis
+          sudo gem install --no-document fpm
+          python3 -m pip install git-archive-all
+
+      - name: Package release assets
+        run: |
+          set -euo pipefail
+          TAG="${GITIAN_TAG}"
+          VERSION="${TAG#v}"
+          RELEASE="release-assets"
+          mkdir -p "$RELEASE"
+
+          # Copy all Gitian tarballs/zips into the release directory
+          find gitian-out -type f \( -name '*.tar.bz2' -o -name '*.zip' \) -exec cp {} "$RELEASE/" \;
+
+          echo "=== Gitian artifacts ==="
+          ls -lh "$RELEASE/"
+
+          # --- Linux x86_64: .deb and .rpm ---
+          LINUX_X86=$(find gitian-out -name "shekyl-x86_64-linux-gnu-*.tar.bz2" | head -1)
+          if [ -n "$LINUX_X86" ]; then
+            echo "=== Packaging Linux x86_64 .deb/.rpm from $LINUX_X86 ==="
+            TMPDIR_X86=$(mktemp -d)
+            tar xjf "$LINUX_X86" -C "$TMPDIR_X86"
+            BIN_X86=$(find "$TMPDIR_X86" -name shekyld -printf '%h\n' | head -1)
+
+            STAGE="$(pwd)/stage-deb-amd64"
+            mkdir -p "$STAGE/usr/local/bin"
+            cp "$BIN_X86"/shekyld "$STAGE/usr/local/bin/"
+            cp "$BIN_X86"/shekyl-wallet-cli "$STAGE/usr/local/bin/" 2>/dev/null || true
+            cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE/usr/local/bin/" 2>/dev/null || true
+            fpm -s dir -t deb \
+              -p "$RELEASE/shekyl_${VERSION}_amd64.deb" \
+              --name shekyl --version "$VERSION" \
+              --description "Shekyl cryptocurrency daemon and wallet tools" \
+              --url "https://github.com/Shekyl-Foundation/shekyl-core" \
+              --license "BSD-3-Clause" --architecture amd64 \
+              --maintainer "Shekyl Foundation <info@shekyl.org>" \
+              --deb-systemd contrib/packaging/linux/shekyld.service \
+              --deb-no-default-config-files \
+              -C "$STAGE" .
+
+            STAGE_RPM="$(pwd)/stage-rpm-x86_64"
+            mkdir -p "$STAGE_RPM/usr/local/bin"
+            cp "$BIN_X86"/shekyld "$STAGE_RPM/usr/local/bin/"
+            cp "$BIN_X86"/shekyl-wallet-cli "$STAGE_RPM/usr/local/bin/" 2>/dev/null || true
+            cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/" 2>/dev/null || true
+            fpm -s dir -t rpm \
+              -p "$RELEASE/shekyl-${VERSION}-1.x86_64.rpm" \
+              --name shekyl --version "$VERSION" \
+              --description "Shekyl cryptocurrency daemon and wallet tools" \
+              --url "https://github.com/Shekyl-Foundation/shekyl-core" \
+              --license "BSD-3-Clause" --architecture x86_64 \
+              --maintainer "Shekyl Foundation <info@shekyl.org>" \
+              -C "$STAGE_RPM" .
+
+            rm -rf "$TMPDIR_X86"
+          fi
+
+          # --- Linux aarch64: .deb and .rpm ---
+          LINUX_ARM=$(find gitian-out -name "shekyl-aarch64-linux-gnu-*.tar.bz2" | head -1)
+          if [ -n "$LINUX_ARM" ]; then
+            echo "=== Packaging Linux aarch64 .deb/.rpm from $LINUX_ARM ==="
+            TMPDIR_ARM=$(mktemp -d)
+            tar xjf "$LINUX_ARM" -C "$TMPDIR_ARM"
+            BIN_ARM=$(find "$TMPDIR_ARM" -name shekyld -printf '%h\n' | head -1)
+
+            STAGE="$(pwd)/stage-deb-arm64"
+            mkdir -p "$STAGE/usr/local/bin"
+            cp "$BIN_ARM"/shekyld "$STAGE/usr/local/bin/"
+            cp "$BIN_ARM"/shekyl-wallet-cli "$STAGE/usr/local/bin/" 2>/dev/null || true
+            cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE/usr/local/bin/" 2>/dev/null || true
+            fpm -s dir -t deb \
+              -p "$RELEASE/shekyl_${VERSION}_arm64.deb" \
+              --name shekyl --version "$VERSION" \
+              --description "Shekyl cryptocurrency daemon and wallet tools" \
+              --url "https://github.com/Shekyl-Foundation/shekyl-core" \
+              --license "BSD-3-Clause" --architecture arm64 \
+              --maintainer "Shekyl Foundation <info@shekyl.org>" \
+              --deb-systemd contrib/packaging/linux/shekyld.service \
+              --deb-no-default-config-files \
+              -C "$STAGE" .
+
+            STAGE_RPM="$(pwd)/stage-rpm-aarch64"
+            mkdir -p "$STAGE_RPM/usr/local/bin"
+            cp "$BIN_ARM"/shekyld "$STAGE_RPM/usr/local/bin/"
+            cp "$BIN_ARM"/shekyl-wallet-cli "$STAGE_RPM/usr/local/bin/" 2>/dev/null || true
+            cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/" 2>/dev/null || true
+            fpm -s dir -t rpm \
+              -p "$RELEASE/shekyl-${VERSION}-1.aarch64.rpm" \
+              --name shekyl --version "$VERSION" \
+              --description "Shekyl cryptocurrency daemon and wallet tools" \
+              --url "https://github.com/Shekyl-Foundation/shekyl-core" \
+              --license "BSD-3-Clause" --architecture aarch64 \
+              --maintainer "Shekyl Foundation <info@shekyl.org>" \
+              -C "$STAGE_RPM" .
+
+            rm -rf "$TMPDIR_ARM"
+          fi
+
+          # --- Windows NSIS installer ---
+          WIN_ZIP=$(find gitian-out -name "shekyl-x86_64-w64-mingw32-*.zip" | head -1)
+          if [ -n "$WIN_ZIP" ]; then
+            echo "=== Building NSIS installer from $WIN_ZIP ==="
+            TMPDIR_WIN=$(mktemp -d)
+            unzip -o "$WIN_ZIP" -d "$TMPDIR_WIN"
+            BIN_WIN=$(find "$TMPDIR_WIN" -name "shekyld.exe" -printf '%h\n' | head -1)
+            makensis \
+              -DVERSION="$VERSION" \
+              -DBIN_DIR="$BIN_WIN" \
+              -DLICENSE_FILE="$(pwd)/LICENSE" \
+              -DOUTPUT_FILE="$(pwd)/$RELEASE/shekyl-${TAG}-win-x64-setup.exe" \
+              contrib/packaging/windows/shekyl.nsi
+            rm -rf "$TMPDIR_WIN"
+          fi
+
+          # --- Source archive ---
+          echo "=== Creating source archive ==="
+          git-archive-all --prefix="shekyl-${TAG}/" "$RELEASE/shekyl-${TAG}-source.tar.gz"
+
+          # --- SHA256SUMS ---
+          cd "$RELEASE"
+          sha256sum * > SHA256SUMS
+          echo "=== Release contents ==="
+          cat SHA256SUMS
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'RC') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
