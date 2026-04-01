@@ -32,6 +32,15 @@
   rvalue-reference parameters (`t_entry_type&&`) to pass-by-value, allowing
   lvalue forwarding from `portable_storage::insert_first_value` /
   `insert_next_value` to work correctly under MSVC template deduction.
+- **MSVC: add `ssize_t` typedef to `download.h`.** The header uses
+  `ssize_t` in callback signatures but did not include the MSVC typedef
+  added in `util.h`, causing parse errors in compilation units that include
+  `download.h` without `util.h`.
+- **MSVC: force-include `<iso646.h>` for C++ alternative tokens.** The
+  codebase uses `not`, `and`, `or` extensively (hundreds of sites). MSVC
+  does not recognise these as keywords by default. Added `/FIiso646.h` to
+  the MSVC compile definitions so they are defined in every translation
+  unit.
 - **MSVC: enable conformant preprocessor (`/Zc:preprocessor`).** MSVC's
   traditional preprocessor breaks nested `__VA_ARGS__` forwarding in the
   `THROW_ON_RPC_RESPONSE_ERROR` macro chain, causing `throw_wallet_ex`
