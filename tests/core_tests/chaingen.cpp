@@ -594,8 +594,9 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
 
     uint64_t sources_amount = 0;
     bool sources_found = false;
-    BOOST_REVERSE_FOREACH(const map_output_t::value_type o, outs_mine)
+    for (auto rit = outs_mine.rbegin(); rit != outs_mine.rend(); ++rit)
     {
+        const auto& o = *rit;
         for (size_t i = 0; i < o.second.size() && !sources_found; ++i)
         {
             size_t sender_out = o.second[i];
