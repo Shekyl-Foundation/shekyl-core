@@ -58,13 +58,19 @@ def setup():
         # Ubuntu Jammy Docker image only enables main+restricted by default.
         # Gitian descriptors need universe packages (faketime, bsdmainutils, etc.).
         # Use `docker build` (not run+commit) to preserve CMD/USER metadata.
-        print('Patching base image (enabling universe repository)...')
+        #
+        # Also remove the apt-cacher-ng proxy that make-base-vm injects
+        # (/etc/apt/apt.conf.d/50cacher → http://172.17.0.1:3142).
+        # On ephemeral CI runners apt-cacher-ng is not running, causing
+        # persistent 503 failures during package installation.
+        print('Patching base image (enable universe, remove apt proxy)...')
         subprocess.run([
             'docker', 'build', '-t', 'base-jammy-amd64', '-'
         ], input=(
             "FROM base-jammy-amd64\n"
             "USER root\n"
-            "RUN sed -i '/^deb.*main restricted$/s/restricted$/restricted universe/' "
+            "RUN rm -f /etc/apt/apt.conf.d/50cacher && "
+            "sed -i '/^deb.*main restricted$/s/restricted$/restricted universe/' "
             "/etc/apt/sources.list && apt-get update -qq\n"
             "USER ubuntu\n"
         ).encode(), check=True)

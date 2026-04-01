@@ -29,13 +29,14 @@
 
 ### 🐛 Fixed
 
-- **Gitian: enable `universe` repository in Docker base image.** The
-  `ubuntu:jammy` Docker image only enables `main restricted` by default;
-  `gitian-build.py` now patches the base image after `make-base-vm` to add
-  `universe`, fixing installation of `faketime`, `bsdmainutils`, and other
-  packages that moved out of `main`. Uses `docker build` (not run+commit)
-  to preserve the image's CMD/USER metadata so `gbuild` containers stay
-  running.
+- **Gitian: enable `universe` repository and remove apt proxy in Docker base
+  image.** The `ubuntu:jammy` Docker image only enables `main restricted` by
+  default; `gitian-build.py` now patches the base image after `make-base-vm`
+  to add `universe` and remove the `apt-cacher-ng` proxy configuration
+  (`/etc/apt/apt.conf.d/50cacher`). The proxy routes all apt traffic through
+  `172.17.0.1:3142` which is unreliable on ephemeral CI runners, causing
+  persistent 503 failures during package installation. Uses `docker build`
+  (not run+commit) to preserve the image's CMD/USER metadata.
 - **Gitian Linux: fix i386-dependent package installation.** The i386
   architecture is now enabled in the Docker base image (via `gitian-build.py`'s
   `docker build` step) along with passwordless `sudo` for the `ubuntu` user,
