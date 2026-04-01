@@ -36,11 +36,11 @@
   packages that moved out of `main`. Uses `docker build` (not run+commit)
   to preserve the image's CMD/USER metadata so `gbuild` containers stay
   running.
-- **Gitian Linux: move i386-dependent packages to script section and add
-  `sudo`.** The i386 architecture must be enabled with `dpkg --add-architecture`
-  before packages like `linux-libc-dev:i386`, `gcc-multilib`, and `g++-multilib`
-  can be installed; moved from `packages:` to `script:`. Also adds `sudo` to the
-  descriptor since the `ubuntu:jammy` Docker base image does not include it.
+- **Gitian Linux: fix i386-dependent package installation.** The i386
+  architecture is now enabled in the Docker base image (via `gitian-build.py`'s
+  `docker build` step) along with passwordless `sudo` for the `ubuntu` user,
+  allowing `linux-libc-dev:i386`, `gcc-multilib`, and `g++-multilib` to be
+  installed normally via the descriptor's `packages:` section.
 - **Gitian macOS: add `libtinfo5` and `python-is-python3`, remove `python`
   from `FAKETIME_PROGS`.** The pre-built Clang 9 cross-compiler requires
   `libtinfo.so.5`. The `python` faketime wrapper broke CMake's
@@ -58,6 +58,15 @@
   target has an unresolved `GetHostNameW@8` symbol against MinGW's `ws2_32`.
   Since the release workflow only targets x86_64, the 32-bit Gitian build is
   removed.
+- **macOS cross-build: exclude `-fcf-protection=full`.** Intel CET is x86
+  Linux only; the flag defines `__CET__` which triggers `#include <cet.h>` in
+  the `ring` crate's assembly, but `cet.h` does not exist in the macOS SDK.
+  Now excluded for all Apple targets.
+
+### 🗑️ Removed
+
+- **Gitian Android build.** Removed from the Gitian matrix since there is no
+  Android wallet. The Android NDK r17b is also incompatible with Ubuntu Jammy.
 
 ### 📚 Documentation
 

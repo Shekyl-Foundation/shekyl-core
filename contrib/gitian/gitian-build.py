@@ -58,14 +58,15 @@ def setup():
         # Ubuntu Jammy Docker image only enables main+restricted by default.
         # Gitian descriptors need universe packages (faketime, bsdmainutils, etc.).
         # Use `docker build` (not run+commit) to preserve CMD/USER metadata.
-        print('Enabling universe repository in base image...')
+        print('Patching base image (universe repo, i386 arch, sudoers)...')
         subprocess.run([
             'docker', 'build', '-t', 'base-jammy-amd64', '-'
         ], input=(
             "FROM base-jammy-amd64\n"
             "USER root\n"
             "RUN sed -i '/^deb.*main restricted$/s/restricted$/restricted universe/' "
-            "/etc/apt/sources.list && apt-get update -qq\n"
+            "/etc/apt/sources.list && dpkg --add-architecture i386 && apt-get update -qq "
+            "&& echo 'ubuntu ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/ubuntu\n"
             "USER ubuntu\n"
         ).encode(), check=True)
     os.chdir(workdir)
