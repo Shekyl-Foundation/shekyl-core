@@ -32,6 +32,10 @@
 #ifndef _WIN32
 #include <unistd.h>
 #endif
+#ifdef _MSC_VER
+#include <io.h>
+#include <fcntl.h>
+#endif
 #include <cstdio>
 #include <wchar.h>
 
@@ -731,7 +735,7 @@ std::string get_nix_version_display_string()
     }
     catch (...)
     {
-#if defined(__MINGW32__) || defined(__MINGW__)
+#if defined(__MINGW32__) || defined(__MINGW__) || defined(_MSC_VER)
       putenv("LC_ALL=C");
       putenv("LANG=C");
 #else
@@ -837,8 +841,8 @@ std::string get_nix_version_display_string()
   }
   void set_strict_default_file_permissions(bool strict)
   {
-#if defined(__MINGW32__) || defined(__MINGW__)
-    // no clue about the odd one out
+#if defined(__MINGW32__) || defined(__MINGW__) || defined(_MSC_VER)
+    // Windows does not support umask
 #else
     mode_t mode = strict ? 077 : 0;
     umask(mode);
@@ -1072,7 +1076,9 @@ std::string get_nix_version_display_string()
 
   void closefrom(int fd)
   {
-#if defined __FreeBSD__ || defined __OpenBSD__ || defined __NetBSD__ || defined __DragonFly__
+#if defined(_WIN32)
+    (void)fd;
+#elif defined __FreeBSD__ || defined __OpenBSD__ || defined __NetBSD__ || defined __DragonFly__
     ::closefrom(fd);
 #else
 #if defined __GLIBC__

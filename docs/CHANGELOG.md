@@ -37,6 +37,11 @@
 
 ### 🐛 Fixed
 
+- **MSVC: add `<io.h>` and POSIX guards in `util.cpp`.** Added `<io.h>`
+  for `_open_osfhandle`/`_close`, expanded MinGW conditionals to cover
+  MSVC for `setenv`→`putenv`, `mode_t`/`umask`, and `closefrom`→no-op.
+- **MSVC: replace `__thread` with `thread_local` in `perf_timer.cpp` and
+  `threadpool.cpp`.** GCC's `__thread` is not supported by MSVC.
 - **MSVC: rename `xor` parameter in `slow-hash.c` to `xor_pad`.** MSVC
   treats `xor` as a reserved keyword in C mode. Both the x86/SSE and
   ARM/NEON variants of `aes_pseudo_round_xor()` were affected.
