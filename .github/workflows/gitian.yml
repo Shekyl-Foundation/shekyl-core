@@ -44,7 +44,19 @@ jobs:
         chmod +x contrib/gitian/gitian-build.py
     - name: setup
       run: |
-        ./contrib/gitian/gitian-build.py --setup --docker --url "$GITIAN_REPO_URL" github-actions "$GITIAN_TAG"
+        for attempt in 1 2 3; do
+          echo "=== Setup attempt $attempt ==="
+          if ./contrib/gitian/gitian-build.py --setup --docker --url "$GITIAN_REPO_URL" github-actions "$GITIAN_TAG"; then
+            break
+          fi
+          if [ "$attempt" -eq 3 ]; then
+            echo "Setup failed after 3 attempts"
+            exit 1
+          fi
+          echo "Setup failed (likely apt proxy 503), retrying in 30s..."
+          docker rmi -f base-jammy-amd64 2>/dev/null || true
+          sleep 30
+        done
     - name: build
       run: |
         ./contrib/gitian/gitian-build.py --docker --detach-sign --no-commit --build -j 3 -o ${{ matrix.operating-system.option }} --url "$GITIAN_REPO_URL" github-actions "$GITIAN_TAG"
