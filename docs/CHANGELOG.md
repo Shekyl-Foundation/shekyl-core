@@ -50,6 +50,14 @@
   `date`, `dmg`, and `genisoimage`.
 - **Gitian Android: add `python-is-python3`.** Android NDK r17b scripts use
   `#!/usr/bin/env python` which does not exist on Jammy without this package.
+- **Gitian macOS: fix Rust `ring` crate cross-compilation.** `BuildRust.cmake`
+  incorrectly overrode the macOS cross-compiler with the Linux system `clang`
+  when cross-compiling for Darwin, causing the `ring` crate to include
+  Linux-only `cet.h`. Now only uses system clang on native macOS builds.
+- **Gitian Windows: drop i686 (32-bit) target.** The i686-pc-windows-gnu Rust
+  target has an unresolved `GetHostNameW@8` symbol against MinGW's `ws2_32`.
+  Since the release workflow only targets x86_64, the 32-bit Gitian build is
+  removed.
 
 ### 📚 Documentation
 
