@@ -72,12 +72,14 @@ The CI workflows install all dependencies automatically. For local builds:
 
 4. **GitHub Actions takes over.** The `release/tagged` and `gitian` workflows
    automatically:
-   - Build static Linux x86_64 binaries
-   - Cross-compile Windows x64 binaries via MinGW
+   - Build static Linux x86_64 binaries and package as `.tar.gz`, `.deb`, `.rpm`
+   - Cross-compile Linux aarch64 binaries and package as `.tar.gz`, `.deb`, `.rpm`
+   - Cross-compile Windows x64 binaries via MinGW and package as `.zip` and NSIS `.exe`
+   - Cross-compile macOS binaries for both x86_64 and aarch64 (Apple Silicon)
+   - Cross-compile FreeBSD x86_64 binaries
+   - Create a reproducible source archive with all submodules
    - Build Gitian deterministic binaries for Linux, Windows, macOS, Android,
      and FreeBSD (each including Rust toolchain setup)
-   - Package Linux as `.tar.gz`, `.deb`, and `.rpm`
-   - Package Windows as `.zip` and `.exe` installer (NSIS)
    - Generate `SHA256SUMS` for all artifacts
    - Publish everything as a GitHub Release
 
@@ -95,16 +97,23 @@ Each release produces these files:
 
 | File | Description |
 |------|-------------|
-| `shekyl-vX.Y.Z-linux-x86_64.tar.gz` | Linux binaries (portable static build) |
-| `shekyl_X.Y.Z_amd64.deb` | Debian/Ubuntu package with systemd unit |
-| `shekyl-X.Y.Z.x86_64.rpm` | RPM package for Fedora/RHEL/SUSE |
+| `shekyl-vX.Y.Z-linux-x86_64.tar.gz` | Linux x86_64 binaries (portable static build) |
+| `shekyl-vX.Y.Z-linux-aarch64.tar.gz` | Linux ARM64 binaries (cross-compiled via depends) |
+| `shekyl_X.Y.Z_amd64.deb` | Debian/Ubuntu x86_64 package with systemd unit |
+| `shekyl_X.Y.Z_arm64.deb` | Debian/Ubuntu ARM64 package with systemd unit |
+| `shekyl-X.Y.Z-1.x86_64.rpm` | RPM x86_64 package for Fedora/RHEL/SUSE |
+| `shekyl-X.Y.Z-1.aarch64.rpm` | RPM ARM64 package for Fedora/RHEL/SUSE |
 | `shekyl-vX.Y.Z-win-x64.zip` | Windows binaries (portable zip) |
 | `shekyl-vX.Y.Z-win-x64-setup.exe` | Windows installer (NSIS) |
+| `shekyl-vX.Y.Z-macos-x86_64.tar.gz` | macOS Intel binaries (cross-compiled via depends) |
+| `shekyl-vX.Y.Z-macos-aarch64.tar.gz` | macOS Apple Silicon binaries (cross-compiled via depends) |
+| `shekyl-vX.Y.Z-freebsd-x86_64.tar.gz` | FreeBSD x86_64 binaries (cross-compiled via depends) |
+| `shekyl-vX.Y.Z-source.tar.gz` | Complete source with submodules |
 | `SHA256SUMS` | Checksums for all artifacts |
 
 ## Linux Package Details
 
-The `.deb` and `.rpm` packages:
+The `.deb` and `.rpm` packages are available for both x86_64 and ARM64:
 - Install `shekyld`, `shekyl-wallet-cli`, and `shekyl-wallet-rpc` to `/usr/local/bin/`
 - Include a systemd service unit for `shekyld`
 - After install: `sudo systemctl enable --now shekyld`
@@ -153,4 +162,7 @@ Or trigger manually from the Actions tab without retagging.
 
 ## Future Platforms
 
-macOS builds and native packages (`.dmg`) are planned for a future release.
+- **macOS `.dmg` installer** -- native disk image with drag-to-Applications UX.
+- **Linux AppImage** -- single-file portable binary for desktop distributions.
+- Additional architectures (armhf, RISC-V, i686) are available via Gitian
+  deterministic builds and may be promoted to the main release if demand warrants.

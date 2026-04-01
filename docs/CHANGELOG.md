@@ -8,6 +8,12 @@
   `release/tagged` workflow now cross-compiles and publishes `.tar.gz`
   archives for macOS x86_64, macOS aarch64, Linux aarch64, and FreeBSD
   x86_64 alongside the existing Linux x86_64 and Windows x64 packages.
+- **Linux aarch64 `.deb` and `.rpm` packages.** The cross-compiled ARM64
+  build now produces Debian and RPM packages (with systemd unit) in
+  addition to the portable tarball, matching the x86_64 packaging.
+- **Source archive in GitHub Releases.** A new `source-archive` job
+  produces `shekyl-vX.Y.Z-source.tar.gz` containing the full source tree
+  with all submodules, attached to each release alongside the binaries.
 
 ### 🔄 Changed
 
@@ -43,6 +49,14 @@
   `date`, `dmg`, and `genisoimage`.
 - **Gitian Android: add `python-is-python3`.** Android NDK r17b scripts use
   `#!/usr/bin/env python` which does not exist on Jammy without this package.
+
+### 📚 Documentation
+
+- **`docs/RELEASING.md`: document all release artifacts.** Updated the
+  artifact table to list all 13 files produced per release (was 6),
+  including cross-platform tarballs, aarch64 `.deb`/`.rpm`, and source
+  archive. Updated "Future Platforms" to reflect that macOS tarballs are
+  now shipping and `.dmg`/AppImage remain planned.
 
 ## [3.0.3-RC1] - 2026-03-31
 

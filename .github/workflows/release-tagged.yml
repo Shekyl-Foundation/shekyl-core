@@ -245,6 +245,8 @@ jobs:
             packages: "python3 gperf g++-aarch64-linux-gnu"
             rust_target: "aarch64-unknown-linux-gnu"
             artifact_suffix: "linux-aarch64"
+            deb_arch: "arm64"
+            rpm_arch: "aarch64"
           - name: "FreeBSD x86_64"
             host: "x86_64-unknown-freebsd"
             packages: "clang-14 libc++-14-dev libc++abi-14-dev gperf cmake python3-zmq libdbus-1-dev libharfbuzz-dev"
@@ -317,15 +319,88 @@ jobs:
           done
           tar -czf "${RELEASE_DIR}.tar.gz" "${RELEASE_DIR}"
 
+      - name: Install packaging tools
+        if: ${{ matrix.platform.deb_arch }}
+        run: |
+          apt -y install ruby ruby-dev rubygems rpm
+          gem install --no-document fpm
+
+      - name: Package .deb
+        if: ${{ matrix.platform.deb_arch }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BIN_DIR="build/${{ matrix.platform.host }}/release/bin"
+          STAGE="$(pwd)/staging-deb"
+          mkdir -p "${STAGE}/usr/local/bin"
+          cp "${BIN_DIR}/shekyld" "${STAGE}/usr/local/bin/"
+          cp "${BIN_DIR}/shekyl-wallet-cli" "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          cp "${BIN_DIR}/shekyl-wallet-rpc" "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          fpm -s dir -t deb \
+            --name shekyl \
+            --version "${VERSION}" \
+            --description "Shekyl cryptocurrency daemon and wallet tools" \
+            --url "https://github.com/Shekyl-Foundation/shekyl-core" \
+            --license "BSD-3-Clause" \
+            --architecture ${{ matrix.platform.deb_arch }} \
+            --maintainer "Shekyl Foundation <info@shekyl.org>" \
+            --deb-systemd contrib/packaging/linux/shekyld.service \
+            --deb-no-default-config-files \
+            -C "${STAGE}" \
+            .
+
+      - name: Package .rpm
+        if: ${{ matrix.platform.rpm_arch }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BIN_DIR="build/${{ matrix.platform.host }}/release/bin"
+          STAGE="$(pwd)/staging-rpm"
+          mkdir -p "${STAGE}/usr/local/bin"
+          cp "${BIN_DIR}/shekyld" "${STAGE}/usr/local/bin/"
+          cp "${BIN_DIR}/shekyl-wallet-cli" "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          cp "${BIN_DIR}/shekyl-wallet-rpc" "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          fpm -s dir -t rpm \
+            --name shekyl \
+            --version "${VERSION}" \
+            --description "Shekyl cryptocurrency daemon and wallet tools" \
+            --url "https://github.com/Shekyl-Foundation/shekyl-core" \
+            --license "BSD-3-Clause" \
+            --architecture ${{ matrix.platform.rpm_arch }} \
+            --maintainer "Shekyl Foundation <info@shekyl.org>" \
+            -C "${STAGE}" \
+            .
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.platform.artifact_suffix }}
-          path: shekyl-${{ github.ref_name }}-${{ matrix.platform.artifact_suffix }}.tar.gz
+          path: |
+            shekyl-${{ github.ref_name }}-${{ matrix.platform.artifact_suffix }}.tar.gz
+            shekyl_*.deb
+            shekyl-*.rpm
+
+  source-archive:
+    name: Source archive
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Create source tarball
+        run: |
+          python3 -m pip install git-archive-all
+          git-archive-all --prefix="shekyl-${GITHUB_REF_NAME}/" "shekyl-${GITHUB_REF_NAME}-source.tar.gz"
+
+      - name: Upload source archive
+        uses: actions/upload-artifact@v6
+        with:
+          name: source
+          path: shekyl-${{ github.ref_name }}-source.tar.gz
 
   publish-release:
     name: Publish GitHub Release
-    needs: [build-linux, build-windows, build-cross]
+    needs: [build-linux, build-windows, build-cross, source-archive]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
