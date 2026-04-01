@@ -44,6 +44,7 @@
 #include "misc_log_ex.h"
 #endif
 
+#include "common/compat.h"
 #include "crypto/hash.h"
 #include "cryptonote_config.h"
 

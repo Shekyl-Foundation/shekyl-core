@@ -29,10 +29,6 @@ packages:
 - "ca-certificates"
 - "python3"
 - "cmake"
-- "sudo"
-- "linux-libc-dev:i386"
-- "gcc-multilib"
-- "g++-multilib"
 remotes:
 - "url": "https://github.com/Shekyl-Foundation/shekyl-core.git"
   "dir": "shekyl"

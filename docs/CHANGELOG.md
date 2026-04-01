@@ -70,10 +70,27 @@
   The `/etc/sudoers.d/` directory does not exist in the minimal Ubuntu image
   until the `sudo` package is installed.
 
+### 🔄 Changed
+
+- **Replace C++20 designated initializers with C++17-compatible member
+  assignment.** Rewrote 10 call sites in `cryptonote_core.cpp`,
+  `blockchain.cpp`, `levin_notify.cpp`, `multisig_tx_builder_ringct.cpp`, and
+  `wallet2.cpp`. GCC/Clang accepted these as extensions; MSVC rejects them.
+- **Replace `__thread` with `thread_local` in easylogging++.** The
+  `__thread` qualifier is GCC/Clang-specific; `thread_local` (C++11) is
+  portable across GCC, Clang, and MSVC.
+- **Centralize `ssize_t` typedef in `src/common/compat.h`.** Replaces
+  duplicate `#if defined(_MSC_VER)` guards in `util.h` and `download.h`
+  with a single include.
+
 ### 🗑️ Removed
 
 - **Gitian Android build.** Removed from the Gitian matrix since there is no
   Android wallet. The Android NDK r17b is also incompatible with Ubuntu Jammy.
+- **Gitian Linux: drop i686-linux-gnu (32-bit x86) target.** Eliminates the
+  need for `linux-libc-dev:i386`, `gcc-multilib`, `g++-multilib`, `sudo`,
+  and the `dpkg --add-architecture i386` workaround. Simplifies the Docker
+  base image patching to only enable the `universe` repository.
 
 ### 📚 Documentation
 
