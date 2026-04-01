@@ -65,7 +65,10 @@ def setup():
             "FROM base-jammy-amd64\n"
             "USER root\n"
             "RUN sed -i '/^deb.*main restricted$/s/restricted$/restricted universe/' "
-            "/etc/apt/sources.list && dpkg --add-architecture i386 && apt-get update -qq "
+            "/etc/apt/sources.list "
+            "&& dpkg --add-architecture i386 "
+            "&& apt-get update -qq "
+            "&& apt-get install -y --no-install-recommends sudo "
             "&& echo 'ubuntu ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/ubuntu\n"
             "USER ubuntu\n"
         ).encode(), check=True)

@@ -151,6 +151,11 @@ if(RUST_TARGET_TRIPLE AND CMAKE_C_COMPILER)
     if(_target_cflags)
         list(APPEND _rust_env_clear "CFLAGS_${_cc_triple}=${_target_cflags}")
     endif()
+    # Clang 9 (depends cross-compiler) does not recognise macOS version 11.0+.
+    # Apple aliases 10.16 == 11.0; cc-rs respects MACOSX_DEPLOYMENT_TARGET.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND CMAKE_CROSSCOMPILING)
+        list(APPEND _rust_env_clear "MACOSX_DEPLOYMENT_TARGET=10.16")
+    endif()
 endif()
 
 add_custom_command(

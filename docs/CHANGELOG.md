@@ -62,6 +62,13 @@
   Linux only; the flag defines `__CET__` which triggers `#include <cet.h>` in
   the `ring` crate's assembly, but `cet.h` does not exist in the macOS SDK.
   Now excluded for all Apple targets.
+- **macOS aarch64 cross-build: set `MACOSX_DEPLOYMENT_TARGET=10.16`.**
+  Clang 9 (depends cross-compiler) does not recognise macOS version 11.0+.
+  Apple aliases 10.16 == 11.0; the `cc-rs` crate respects this env var, fixing
+  the `ring` build for `aarch64-apple-darwin`.
+- **Gitian Docker base image: install `sudo` before creating sudoers entry.**
+  The `/etc/sudoers.d/` directory does not exist in the minimal Ubuntu image
+  until the `sudo` package is installed.
 
 ### 🗑️ Removed
 
