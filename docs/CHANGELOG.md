@@ -72,12 +72,23 @@
 
 ### 🔄 Changed
 
+- **Replace all `BOOST_FOREACH` / `BOOST_REVERSE_FOREACH` with range-for
+  loops.** 31+ call sites across test and utility code replaced with standard
+  C++11 range-based for. Adds `/DNOMINMAX` to MSVC definitions to prevent
+  Windows `min`/`max` macro collisions.
+- **Replace hardcoded `-fPIC` with `POSITION_INDEPENDENT_CODE`.** The CMake
+  property works across all compilers (GCC, Clang, MSVC). Applied to
+  `liblmdb` and `easylogging++` CMakeLists.
+- **Guard/remove unguarded `#include <unistd.h>`.** POSIX header guarded
+  behind `#ifndef _WIN32` in `blockchain_import.cpp`; unused include removed
+  from `crypto.cpp`.
 - **Replace C++20 designated initializers with C++17-compatible member
   assignment.** Rewrote 10 call sites in `cryptonote_core.cpp`,
   `blockchain.cpp`, `levin_notify.cpp`, `multisig_tx_builder_ringct.cpp`, and
   `wallet2.cpp`. GCC/Clang accepted these as extensions; MSVC rejects them.
-- **Replace `__thread` with `thread_local` in easylogging++.** The
-  `__thread` qualifier is GCC/Clang-specific; `thread_local` (C++11) is
+- **Replace all `__thread` with `thread_local`.** Covers `easylogging++.cc`,
+  `perf_timer.cpp`, and `threadpool.cpp`. The `__thread` qualifier is
+  GCC/Clang-specific; `thread_local` (C++11) is
   portable across GCC, Clang, and MSVC.
 - **Centralize `ssize_t` typedef in `src/common/compat.h`.** Replaces
   duplicate `#if defined(_MSC_VER)` guards in `util.h` and `download.h`
