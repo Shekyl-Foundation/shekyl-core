@@ -59,5 +59,8 @@ endforeach()
 
 monero_add_library(blocks blocks.cpp ${GENERATED_SOURCES})
 if(MSVC)
-  target_compile_options(obj_blocks PRIVATE /MP1)
+  # /O1: MSVC ICE (C1001) when compiling generated checkpoint arrays with /O2.
+  # Per https://learn.microsoft.com/en-us/cpp/error-messages/compiler-errors-1/fatal-error-c1001
+  # reducing optimization (/O1 removes /Oi and /Ot) avoids the optimizer crash.
+  target_compile_options(obj_blocks PRIVATE /MP1 /O1)
 endif()
