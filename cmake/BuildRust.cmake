@@ -210,7 +210,7 @@ add_custom_command(
     OUTPUT ${SHEKYL_DAEMON_RPC_LIBRARY}
     COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
         ${CARGO_EXECUTABLE} build ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
-        -p shekyl-daemon-rpc
+        -p shekyl-daemon-rpc --lib
     WORKING_DIRECTORY ${RUST_SOURCE_DIR}
     COMMENT "${_rust_comment} (shekyl-daemon-rpc)"
     VERBATIM
