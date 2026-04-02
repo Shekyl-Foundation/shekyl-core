@@ -71,10 +71,11 @@ monero_add_library(cncrypto
   ${crypto_headers}
   ${crypto_private_headers})
 if(MSVC)
-  # /Od: MSVC ICE (C1001) when compiling CryptoNight/RandomX.
-  # The crash persists at /O1 and /O2; disable optimization entirely for this
-  # target until the specific source file is identified via #pragma optimize.
-  target_compile_options(obj_cncrypto PRIVATE /MP1 /Od)
+  # MSVC ICE (C1001) during "Generating Code..." phase for this target.
+  # Crash persists at /Od, /O1, and /O2 -- not an optimizer-level issue.
+  # /d2SSAOptimizer- disables the SSA optimizer pass in the code generator
+  # backend, which is the phase that crashes.
+  target_compile_options(obj_cncrypto PRIVATE /MP1 /d2SSAOptimizer-)
 endif()
 target_link_libraries(cncrypto
   PUBLIC
