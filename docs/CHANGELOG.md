@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 🐛 Fixed
+
+- **CMake Boost detection on CMake 3.30+**: The built-in `FindBoost.cmake`
+  module was removed in CMake 3.30. Restructured Boost detection to try
+  CONFIG mode first (finding `BoostConfig.cmake` installed by b2), falling
+  back to MODULE on older CMake. Fixes `contrib/depends` builds on Ubuntu
+  24.04 runners with CMake ≥ 3.30.
+
 ### 🗑️ Removed
 
 - **Classical multisig wallet RPC commands.** Removed all 9 Monero-inherited
