@@ -1,4 +1,4 @@
-# Shekyl v3 Rollout (HF17)
+# Shekyl v3 Rollout (HF1)
 
 > **Last updated:** 2026-04-01
 
@@ -9,8 +9,8 @@ on Shekyl NG.
 
 ## Activation
 
-- Consensus gate: `HF_VERSION_SHEKYL_NG = 17`
-- At/after HF17:
+- Consensus gate: `HF_VERSION_SHEKYL_NG = 1`
+- At/after HF1:
   - user tx max version: `3`
   - `pqc_auth` verification is required for non-coinbase v3 txs
 - Coinbase txs remain outside `pqc_auth` requirements
@@ -93,7 +93,7 @@ Operators and indexers must accommodate the increased per-transaction size:
 
 ## Node/Infrastructure Checklist
 
-- Ensure all validating nodes run HF17-capable binaries before activation.
+- Ensure all validating nodes run HF1-capable binaries before activation.
 - Verify custom RPC clients/indexers accept larger tx payloads.
 - Update any tx-size assumptions in monitoring/alerting and mempool dashboards.
 - Confirm seed/boot nodes are upgraded first to avoid propagation asymmetry.

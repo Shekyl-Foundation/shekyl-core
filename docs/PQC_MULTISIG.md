@@ -9,7 +9,7 @@ Shekyl's post-quantum cryptography (`pqc_auth`) framework.
 
 Multisig is implemented in two phases:
 
-- **V3 (HF17):** Hybrid signature list — M individual hybrid signatures from
+- **V3 (HF1):** Hybrid signature list — M individual hybrid signatures from
   the existing `Ed25519 + ML-DSA-65` scheme, carried in an extended
   `pqc_auth` container. Uses only proven, NIST-backed primitives.
 - **V4 (future):** Lattice-based composite threshold signatures — a single
@@ -97,7 +97,7 @@ transaction volume.
 
 ---
 
-## V3: Hybrid Signature List (HF17)
+## V3: Hybrid Signature List (HF1)
 
 ### Overview
 
@@ -730,7 +730,7 @@ equation. The remaining (N-M) vectors stay secret.
 
 | `scheme_id` | Name | Target |
 |---|---|---|
-| 3 | `lattice_threshold_composite` | V4 (HF18+) |
+| 3 | `lattice_threshold_composite` | V4 (HF2+) |
 
 The `PqcAuthentication` container carries the composite public key and
 summed signature. Verification is a single lattice relation check.
@@ -742,7 +742,7 @@ summed signature. Verification is a single lattice relation check.
 | V4.0 | Scheme selection and Rust prototype in `rust/shekyl-crypto-pq` | Post V3 stabilization |
 | V4.1 | DKG protocol implementation in Tauri wallet | +3 months |
 | V4.2 | Testnet experiment with `scheme_id = 3` behind feature gate | +6 months |
-| V4.3 | Security audit and mainnet activation (HF18+) | +9-12 months |
+| V4.3 | Security audit and mainnet activation (HF2+) | +9-12 months |
 
 ### Hybrid Fallback
 

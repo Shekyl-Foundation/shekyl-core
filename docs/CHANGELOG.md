@@ -4,6 +4,15 @@
 
 ### 🐛 Fixed
 
+- **Remaining HF17 references corrected to HF1.** Fixed stale Monero-era
+  `HF17` / `HF_VERSION_SHEKYL_NG = 17` references in `POST_QUANTUM_CRYPTOGRAPHY.md`
+  (scheme registry, rollout notes, V4 roadmap), `PQC_MULTISIG.md` (V3 heading,
+  V4 scheme table, activation target), `V3_ROLLOUT.md` (title, consensus gate,
+  node checklist), and `STAKER_REWARD_DISBURSEMENT.md`. Also corrected `HF18`
+  references to `HF2` in multisig V4 rollout tables. The source code constant
+  `HF_VERSION_SHEKYL_NG` was already correctly defined as `1` in
+  `cryptonote_config.h`; only documentation was affected.
+
 - **CMake Boost detection on CMake 3.30+**: The built-in `FindBoost.cmake`
   module was removed in CMake 3.30. Restructured Boost detection to try
   CONFIG mode first (finding `BoostConfig.cmake` installed by b2), falling
