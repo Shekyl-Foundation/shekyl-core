@@ -71,9 +71,10 @@ monero_add_library(cncrypto
   ${crypto_headers}
   ${crypto_private_headers})
 if(MSVC)
-  # /O1: MSVC ICE (C1001) when compiling CryptoNight/RandomX with /O2.
-  # /Oi (intrinsic functions) and /Ot (favor speed) trigger the optimizer crash.
-  target_compile_options(obj_cncrypto PRIVATE /MP1 /O1)
+  # /Od: MSVC ICE (C1001) when compiling CryptoNight/RandomX.
+  # The crash persists at /O1 and /O2; disable optimization entirely for this
+  # target until the specific source file is identified via #pragma optimize.
+  target_compile_options(obj_cncrypto PRIVATE /MP1 /Od)
 endif()
 target_link_libraries(cncrypto
   PUBLIC
