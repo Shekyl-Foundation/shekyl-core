@@ -8241,7 +8241,7 @@ bool simple_wallet::accept_loaded_tx(const std::function<size_t()> get_num_txes,
       {
         if (first_known_non_zero_change_index == -1)
           first_known_non_zero_change_index = n;
-        if (memcmp(&cd.change_dts.addr, &get_tx(first_known_non_zero_change_index).change_dts.addr, sizeof(cd.change_dts.addr)))
+        if (cd.change_dts.addr != get_tx(first_known_non_zero_change_index).change_dts.addr)
         {
           fail_msg_writer() << tr("Change goes to more than one address");
           return false;

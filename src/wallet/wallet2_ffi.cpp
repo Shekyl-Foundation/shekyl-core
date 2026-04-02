@@ -3171,8 +3171,7 @@ static char* dispatch_describe_transfer(wallet2_handle* w, const rj::Value& p) {
                 if (first_known_non_zero_change_index == -1)
                     first_known_non_zero_change_index = static_cast<int>(n);
                 const auto& cdn = tx_constructions[first_known_non_zero_change_index];
-                if (memcmp(&cd.change_dts.addr, &cdn.change_dts.addr,
-                        sizeof(cd.change_dts.addr))) {
+                if (cd.change_dts.addr != cdn.change_dts.addr) {
                     w->set_error(WALLET_RPC_ERROR_CODE_BAD_UNSIGNED_TX_DATA,
                         "Change goes to more than one address");
                     return nullptr;

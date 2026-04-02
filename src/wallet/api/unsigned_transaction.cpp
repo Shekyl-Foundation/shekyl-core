@@ -178,7 +178,7 @@ bool UnsignedTransactionImpl::checkLoadedTx(const std::function<size_t()> get_nu
       {
         if (first_known_non_zero_change_index == -1)
           first_known_non_zero_change_index = n;
-        if (memcmp(&cd.change_dts.addr, &get_tx(first_known_non_zero_change_index).change_dts.addr, sizeof(cd.change_dts.addr)))
+        if (cd.change_dts.addr != get_tx(first_known_non_zero_change_index).change_dts.addr)
         {
           m_status = Status_Error;
           m_errorString = tr("Change goes to more than one address");

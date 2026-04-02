@@ -1587,7 +1587,7 @@ namespace tools
             if (first_known_non_zero_change_index == -1)
               first_known_non_zero_change_index = n;
             const tools::wallet2::tx_construction_data &cdn = tx_constructions[first_known_non_zero_change_index];
-            if (memcmp(&cd.change_dts.addr, &cdn.change_dts.addr, sizeof(cd.change_dts.addr)))
+            if (cd.change_dts.addr != cdn.change_dts.addr)
             {
               er.code = WALLET_RPC_ERROR_CODE_BAD_UNSIGNED_TX_DATA;
               er.message = "Change goes to more than one address";

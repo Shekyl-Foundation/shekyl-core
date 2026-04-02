@@ -34,6 +34,15 @@
 
 ### 🐛 Fixed
 
+- **Wallet: `account_public_address` equality after PQC.** Destination and
+  change-address checks used `memcmp` on the whole struct; `m_pqc_public_key`
+  is a `std::vector`, so equality was wrong when keys matched but allocations
+  differed. All such sites now use `operator==` / `!=`. Added a
+  `static_assert` that the type is not trivially copyable to discourage raw
+  `memcmp` regressions.
+- **Wallet / Ledger: constant-time comparison for 32-byte secrets.**
+  `wallet2::is_deterministic` and Ledger HMAC secret lookup now use
+  `crypto_verify_32` instead of `memcmp`.
 - **Gitian: enable `universe` repository and remove apt proxy in Docker base
   image.** The `ubuntu:jammy` Docker image only enables `main restricted` by
   default; `gitian-build.py` now patches the base image after `make-base-vm`
