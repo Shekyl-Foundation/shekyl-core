@@ -90,19 +90,6 @@ namespace cryptonote
     return &reinterpret_cast<const unsigned char &>(point);
   }
 
-  // a copy of rct::addKeys, since we can't link to libringct to avoid circular dependencies
-  static void add_public_key(crypto::public_key &AB, const crypto::public_key &A, const crypto::public_key &B) {
-      ge_p3 B2, A2;
-      CHECK_AND_ASSERT_THROW_MES_L1(ge_frombytes_vartime(&B2, &B) == 0, "ge_frombytes_vartime failed at "+boost::lexical_cast<std::string>(__LINE__));
-      CHECK_AND_ASSERT_THROW_MES_L1(ge_frombytes_vartime(&A2, &A) == 0, "ge_frombytes_vartime failed at "+boost::lexical_cast<std::string>(__LINE__));
-      ge_cached tmp2;
-      ge_p3_to_cached(&tmp2, &B2);
-      ge_p1p1 tmp3;
-      ge_add(&tmp3, &A2, &tmp2);
-      ge_p1p1_to_p3(&A2, &tmp3);
-      ge_p3_tobytes(&AB, &A2);
-  }
-
   uint64_t get_transaction_weight_clawback(const transaction &tx, size_t n_padded_outputs)
   {
     const rct::rctSig &rv = tx.rct_signatures;

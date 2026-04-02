@@ -140,6 +140,30 @@
 
 ### 🐛 Fixed
 
+- **Comprehensive compiler warning cleanup across all CI platforms.** Eliminated
+  ~30 unique warnings inherited from Monero across Linux, macOS, Windows, and
+  Arch Linux CI builds:
+  - Removed dead code: `add_public_key` (format_utils), `keys_intersect`
+    (wallet2), unused `addressof` template specialization (crypto test),
+    unused `max_block_height` variable (protocol_handler).
+  - Fixed `oaes_lib.c`: replaced deprecated `ftime()` with `gettimeofday()`,
+    corrected transposed `calloc` argument order (5 call sites).
+  - Fixed `rx-slow-hash.c`: added `(void)` to K&R-style function definitions.
+  - Suppressed GCC false positive `-Wstringop-overflow` in `tree-hash.c`.
+  - Replaced deprecated `strand::wrap()` with `boost::asio::bind_executor()`
+    in `levin_notify.cpp`.
+  - Suppressed GCC `-Wuninitialized` for safe circular-reference constructors
+    in `cryptonote_core.cpp` and `long_term_block_weight.cpp`.
+  - Added default member initializers to `BulletproofPlus` (rctTypes.h),
+    `transfer_details` and `payment_details` (wallet2.h) to silence
+    `-Wmaybe-uninitialized`.
+  - Fixed Windows: removed unused variables in `windows_service.cpp`,
+    eliminated `-Wcast-function-type` in `util.cpp` via `void*` intermediate
+    cast, fixed `-Wtype-limits` in `utf8.h` by using `uint32_t` instead of
+    `wint_t` for code points.
+  - Suppressed intentional uninitialized read in `memwipe.cpp` test.
+  - Set `MACOSX_DEPLOYMENT_TARGET` for native Darwin Cargo builds in
+    `BuildRust.cmake` to eliminate 672 linker warnings from `ring` crate.
 - **CI link errors: separated `shekyl-daemon-rpc` from `shekyl-ffi`.** The daemon
   RPC Axum crate was bundled into `libshekyl_ffi.a`, causing `undefined reference
   to core_rpc_ffi_*` on non-daemon targets (gen-ssl-cert, wallet-crypto-bench,

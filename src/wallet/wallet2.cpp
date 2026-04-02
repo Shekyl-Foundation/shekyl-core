@@ -170,20 +170,6 @@ namespace
     return dir.string();
   }
 
-  bool keys_intersect(const std::unordered_set<crypto::public_key>& s1, const std::unordered_set<crypto::public_key>& s2)
-  {
-    if (s1.empty() || s2.empty())
-      return false;
-
-    for (const auto& e: s1)
-    {
-      if (s2.find(e) != s2.end())
-        return true;
-    }
-
-    return false;
-  }
-
   void add_reason(std::string &reasons, const char *reason)
   {
     if (!reasons.empty())

@@ -226,11 +226,11 @@ namespace rct {
     struct BulletproofPlus
     {
       rct::keyV V;
-      rct::key A, A1, B;
-      rct::key r1, s1, d1;
+      rct::key A{}, A1{}, B{};
+      rct::key r1{}, s1{}, d1{};
       rct::keyV L, R;
 
-      BulletproofPlus() {}
+      BulletproofPlus() = default;
       BulletproofPlus(const rct::key &V, const rct::key &A, const rct::key &A1, const rct::key &B, const rct::key &r1, const rct::key &s1, const rct::key &d1, const rct::keyV &L, const rct::keyV &R):
         V({V}), A(A), A1(A1), B(B), r1(r1), s1(s1), d1(d1), L(L), R(R) {}
       BulletproofPlus(const rct::keyV &V, const rct::key &A, const rct::key &A1, const rct::key &B, const rct::key &r1, const rct::key &s1, const rct::key &d1, const rct::keyV &L, const rct::keyV &R):

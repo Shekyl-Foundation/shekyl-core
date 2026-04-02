@@ -323,31 +323,28 @@ private:
 
     struct transfer_details
     {
-      uint64_t m_block_height;
+      uint64_t m_block_height = 0;
       cryptonote::transaction_prefix m_tx;
-      crypto::hash m_txid;
-      uint64_t m_internal_output_index;
-      uint64_t m_global_output_index;
-      bool m_spent;
-      bool m_frozen;
-      uint64_t m_spent_height;
-      crypto::key_image m_key_image; //TODO: key_image stored twice :(
-      rct::key m_mask;
-      uint64_t m_amount;
-      bool m_rct;
-      bool m_key_image_known;
-      bool m_key_image_request; // view wallets: we want to request it; cold wallets: it was requested
-      uint64_t m_pk_index;
-      cryptonote::subaddress_index m_subaddr_index;
+      crypto::hash m_txid{};
+      uint64_t m_internal_output_index = 0;
+      uint64_t m_global_output_index = 0;
+      bool m_spent = false;
+      bool m_frozen = false;
+      uint64_t m_spent_height = 0;
+      crypto::key_image m_key_image{}; //TODO: key_image stored twice :(
+      rct::key m_mask{};
+      uint64_t m_amount = 0;
+      bool m_rct = false;
+      bool m_key_image_known = false;
+      bool m_key_image_request = false; // view wallets: we want to request it; cold wallets: it was requested
+      uint64_t m_pk_index = 0;
+      cryptonote::subaddress_index m_subaddr_index{};
       std::vector<std::pair<uint64_t, crypto::hash>> m_uses;
-      bool m_staked;
-      uint8_t m_stake_tier;
-      uint64_t m_stake_lock_until;
+      bool m_staked = false;
+      uint8_t m_stake_tier = 0;
+      uint64_t m_stake_lock_until = 0;
 
-      transfer_details() : m_block_height(0), m_internal_output_index(0), m_global_output_index(0),
-        m_spent(false), m_frozen(false), m_spent_height(0), m_amount(0), m_rct(false),
-        m_key_image_known(false), m_key_image_request(false), m_pk_index(0),
-        m_staked(false), m_stake_tier(0), m_stake_lock_until(0) {}
+      transfer_details() = default;
 
       bool is_rct() const { return m_rct; }
       uint64_t amount() const { return m_amount; }
@@ -429,15 +426,15 @@ private:
     typedef std::vector<uint64_t> amounts_container;
     struct payment_details
     {
-      crypto::hash m_tx_hash;
-      uint64_t m_amount;
+      crypto::hash m_tx_hash{};
+      uint64_t m_amount = 0;
       amounts_container m_amounts;
-      uint64_t m_fee;
-      uint64_t m_block_height;
-      uint64_t m_unlock_time;
-      uint64_t m_timestamp;
-      bool m_coinbase;
-      cryptonote::subaddress_index m_subaddr_index;
+      uint64_t m_fee = 0;
+      uint64_t m_block_height = 0;
+      uint64_t m_unlock_time = 0;
+      uint64_t m_timestamp = 0;
+      bool m_coinbase = false;
+      cryptonote::subaddress_index m_subaddr_index{};
 
       BEGIN_SERIALIZE_OBJECT()
         VERSION_FIELD(0)

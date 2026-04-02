@@ -160,7 +160,7 @@ namespace tools
     if (!GetTokenInformation(process.get(), TokenOwner, sid.get(), sid_size, std::addressof(sid_size)))
       return {};
 
-    const PSID psid = reinterpret_cast<const PTOKEN_OWNER>(sid.get())->Owner;
+    const PSID psid = reinterpret_cast<PTOKEN_OWNER>(sid.get())->Owner;
     const DWORD daclSize =
       sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(psid) - sizeof(DWORD);
 
@@ -353,8 +353,8 @@ namespace tools
 
     // Call GetNativeSystemInfo if supported or GetSystemInfo otherwise.
 
-    pGNSI = (PGNSI) GetProcAddress(
-      GetModuleHandle(TEXT("kernel32.dll")), 
+    pGNSI = (PGNSI)(void*) GetProcAddress(
+      GetModuleHandle(TEXT("kernel32.dll")),
       "GetNativeSystemInfo");
     if(NULL != pGNSI)
       pGNSI(&si);
@@ -406,8 +406,8 @@ namespace tools
           else StringCchCat(pszOS, BUFSIZE, TEXT("Windows Server 2012 R2 " ));
         }
 
-        pGPI = (PGPI) GetProcAddress(
-          GetModuleHandle(TEXT("kernel32.dll")), 
+        pGPI = (PGPI)(void*) GetProcAddress(
+          GetModuleHandle(TEXT("kernel32.dll")),
           "GetProductInfo");
 
         pGPI( osvi.dwMajorVersion, osvi.dwMinorVersion, 0, 0, &dwType);

@@ -158,6 +158,16 @@ if(RUST_TARGET_TRIPLE AND CMAKE_C_COMPILER)
     endif()
 endif()
 
+# For native Darwin builds, align ring/cc-rs deployment target with CMake's
+# so that object files don't trigger "built for newer macOS" linker warnings.
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_CROSSCOMPILING)
+    if(CMAKE_OSX_DEPLOYMENT_TARGET)
+        list(APPEND _rust_env_clear "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+    else()
+        list(APPEND _rust_env_clear "MACOSX_DEPLOYMENT_TARGET=10.15")
+    endif()
+endif()
+
 # ── shekyl-ffi (crypto, staking, economics — linked by all targets) ──────────
 
 add_custom_command(

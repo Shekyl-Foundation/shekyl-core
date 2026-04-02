@@ -83,10 +83,19 @@ void tree_hash(const char (*hashes)[HASH_SIZE], size_t count, char *root_hash) {
 
     size_t cnt = tree_hash_cnt( count );
 
-    char *ints = calloc(cnt, HASH_SIZE);  // zero out as extra protection for using uninitialized mem
+    char *ints = calloc(cnt, HASH_SIZE);
     assert(ints);
 
+    // tree_hash_cnt guarantees 2*cnt >= count, so (2*cnt - count) <= cnt
+    // and the copy is always within the allocation. Suppress GCC false positive.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
     memcpy(ints, hashes, (2 * cnt - count) * HASH_SIZE);
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
     for (i = 2 * cnt - count, j = 2 * cnt - count; j < cnt; i += 2, ++j) {
       cn_fast_hash(hashes[i], 64, ints + j * HASH_SIZE);
