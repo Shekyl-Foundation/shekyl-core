@@ -1,6 +1,6 @@
 # PQC Multisig for Shekyl
 
-> **Last updated:** 2026-03-30
+> **Last updated:** 2026-04-01
 
 ## Purpose
 
@@ -9,7 +9,7 @@ Shekyl's post-quantum cryptography (`pqc_auth`) framework.
 
 Multisig is implemented in two phases:
 
-- **V3 (HF1):** Hybrid signature list — M individual hybrid signatures from
+- **V3 (HF17):** Hybrid signature list — M individual hybrid signatures from
   the existing `Ed25519 + ML-DSA-65` scheme, carried in an extended
   `pqc_auth` container. Uses only proven, NIST-backed primitives.
 - **V4 (future):** Lattice-based composite threshold signatures — a single
@@ -38,30 +38,61 @@ Multisig is implemented in two phases:
    single point of failure. Multisig staked outputs and claim transactions
    address this directly.
 
-## Monero Multisig Heritage
+## Classical Multisig: Removed
 
-Shekyl inherits Monero's additive N-of-M scheme on Ed25519. Key properties
-of the classical design:
+Shekyl NG does not carry forward Monero's classical multisig implementation.
 
-- No single participant ever knows the full shared private key.
-- The on-chain transaction looks like a normal single-key spend (secret
-  splitting, not on-chain multi-signature).
-- Coordination happens off-chain via the Multisig Messaging System (MMS) or
-  manual data exchange.
-- There is no separate multisig address type — multisig is invisible on-chain.
+Monero's additive N-of-M scheme on Ed25519 uses secret-splitting to
+reconstruct a single spend key from multiple participants. This design had
+known bugs until mid-2022 (PR #8149), remains flagged as experimental, has
+no formal specification, no completed third-party audit, and is CLI-only
+with negligible real-world usage.
 
-Monero's multisig is CLI-only, still flagged as experimental, had known bugs
-until PR #8149 (mid-2022), and has no formal specification or completed
-third-party audit. Usage is negligible — well under 0.1% of daily
-transactions by any informed estimate.
+On the rebooted Shekyl chain, the classical multisig code is removed:
+
+- `account_base::make_multisig` and its secret-splitting machinery are
+  deleted from `account.cpp`.
+- The MMS (Multisig Messaging System) transport layer is not carried forward.
+- No CLSAG multi-round signing coordination exists in the codebase.
+- Wallet file format does not include classical multisig key state.
+
+**All multisig on Shekyl NG is PQC multisig (`scheme_id = 2`).**
+
+### Architecture: Single Classical Key + PQC Multisig
+
+The CLSAG/RingCT layer always uses a single classical key. The M-of-N
+authorization lives entirely in the `pqc_auth` layer:
+
+```text
+Ring/CLSAG layer:   single Ed25519 key → normal CLSAG signing (no multi-round)
+PQC auth layer:     M-of-N hybrid signatures → scheme_id = 2
+
+Transaction building:
+  1. Coordinator builds tx body with single classical key (standard CLSAG)
+  2. Coordinator computes canonical signing payload
+  3. M signers each produce independent hybrid (Ed25519 + ML-DSA-65) signatures
+  4. Coordinator assembles pqc_auth and broadcasts
+```
+
+This eliminates the dual-layer coordination problem entirely. There is no
+sequencing of CLSAG multisig rounds followed by PQC signing rounds — the
+CLSAG layer is always single-key, and the PQC layer handles all multi-party
+authorization.
+
+The classical key used at the CLSAG layer is held by the coordinator (or
+derived from a shared secret agreed during group setup). This key is NOT
+the security boundary for multisig — the `pqc_auth` M-of-N threshold is.
+An attacker who compromises the classical key alone cannot spend: they
+still need M hybrid PQC signatures.
 
 For Shekyl, multisig is being designed with wallet GUI integration from
-launch, which should improve adoption modestly — but the power-user nature
-of the feature means it will never dominate transaction volume.
+launch, which should improve adoption over Monero's CLI-only experience —
+but the power-user nature of the feature means it will never dominate
+transaction volume.
 
 ---
 
-## V3: Hybrid Signature List (HF1)
+## V3: Hybrid Signature List (HF17)
 
 ### Overview
 
@@ -120,12 +151,113 @@ Constraints:
 - `auth_version = 1`
 - `scheme_id = 2`
 - `flags = 0`
-- `1 <= m_required <= n_total <= 16`
+- `1 <= m_required <= n_total <= MAX_MULTISIG_PARTICIPANTS` where
+  `MAX_MULTISIG_PARTICIPANTS = 7`
 - `sig_count == m_required`
 - All `signer_index` values must be unique and in range `[0, n_total)`
 - `signer_index` array must be sorted ascending (canonical ordering)
 - Each `HybridPublicKey` and `HybridSignature` uses the same canonical
   encoding defined in `POST_QUANTUM_CRYPTOGRAPHY.md` for `scheme_id = 1`
+
+#### Consensus participant cap
+
+`MAX_MULTISIG_PARTICIPANTS = 7` is a consensus constant. Transactions with
+`n_total > 7` are invalid and rejected at the structural validation stage.
+
+Rationale: 5-of-7 is the realistic ceiling for treasury management. Going
+above 7 signers pushes coordination complexity into "custom tooling"
+territory with no practical benefit. The cap also bounds the maximum
+`pqc_auth` size to ~37 KB (see Transaction Size Impact below), limiting
+the DoS surface from oversized payloads. If a genuine need for 8+ signers
+emerges, the V4 lattice threshold scheme (`scheme_id = 3`) produces a
+compact fixed-size signature regardless of N.
+
+### Wire Format Mapping (C++ ↔ Rust)
+
+The C++ `pqc_authentication` struct is intentionally unchanged from
+single-signer V3. It carries three fields:
+
+```text
+pqc_authentication {
+  u8                scheme_id          // discriminator: 1 = single, 2 = multisig
+  std::string       hybrid_public_key  // opaque blob
+  std::string       hybrid_signature   // opaque blob
+}
+```
+
+C++ never parses multisig internals. It reads `scheme_id`, passes the two
+blobs to the Rust FFI verifier, and receives a boolean result. All
+deserialization, structural validation, and cryptographic verification
+happens inside `rust/shekyl-crypto-pq`.
+
+For `scheme_id = 2`, the logical structure described above is packed into
+the two blob fields as follows:
+
+**`hybrid_public_key` blob (ownership material):**
+
+```text
+u8   n_total                           // N (total authorized signers)
+u8   m_required                        // M (threshold)
+HybridPublicKey[0]                     // canonical encoding, 1996 bytes each
+HybridPublicKey[1]
+...
+HybridPublicKey[n_total - 1]
+```
+
+Expected blob size: `2 + (n_total × 1996)` bytes.
+
+**`hybrid_signature` blob (authorization material):**
+
+```text
+u8   sig_count                         // must equal m_required from key blob
+HybridSignature[0]                     // canonical encoding, 3385 bytes each
+HybridSignature[1]
+...
+HybridSignature[sig_count - 1]
+u8   signer_indices[0]                 // which key each signature corresponds to
+u8   signer_indices[1]
+...
+u8   signer_indices[sig_count - 1]
+```
+
+Expected blob size: `1 + (sig_count × 3385) + sig_count` bytes.
+
+**Why this mapping:**
+
+- **No C++ struct changes.** The existing boost serialization for
+  `pqc_authentication` handles `scheme_id` + two blob fields. Adding
+  multisig requires zero changes to the C++ serialization layer.
+- **Rust owns all parsing.** The Rust FFI function receives `scheme_id` and
+  both blobs. For `scheme_id = 1`, it parses single key + single signature.
+  For `scheme_id = 2`, it parses the multisig-encoded blobs. The dispatch is
+  a match on `scheme_id` at the top of the verify function.
+- **Cross-blob validation.** The Rust verifier must read `m_required` from
+  the key blob and `sig_count` from the signature blob and confirm they
+  match. This is an atomic check — both blobs are required to validate
+  either.
+
+**FFI function signature (planned extension):**
+
+The existing `shekyl_pqc_verify` function signature already accepts
+`scheme_id`, key blob, signature blob, and message. No new FFI entry points
+are needed — the Rust implementation dispatches internally based on
+`scheme_id`. This minimizes the C++ integration surface.
+
+```rust
+// Existing signature — unchanged
+pub extern "C" fn shekyl_pqc_verify(
+    scheme_id: u8,
+    pubkey_blob: *const u8, pubkey_len: usize,
+    sig_blob: *const u8, sig_len: usize,
+    message: *const u8, message_len: usize,
+) -> bool;
+```
+
+For `scheme_id = 2`, this function internally:
+1. Deserializes the key blob into N `HybridPublicKey` values + threshold params
+2. Deserializes the signature blob into M `HybridSignature` values + signer indices
+3. Performs all structural and cryptographic validation checks
+4. Returns `true` only if every check passes
 
 ### Signed Payload
 
@@ -163,7 +295,7 @@ For `scheme_id = 2`, validation succeeds only if ALL of the following hold:
 1. Standard transaction structural checks pass.
 2. Existing privacy-layer checks pass.
 3. Canonical PQC field decoding succeeds.
-4. `m_required <= n_total <= 16` and `sig_count == m_required`.
+4. `m_required <= n_total <= 7` and `sig_count == m_required`.
 5. `signer_index` array is sorted ascending with no duplicates.
 6. For each of the M signatures at position `i`:
    - Let `key = ownership_keys[signer_indices[i]]`
@@ -171,6 +303,124 @@ For `scheme_id = 2`, validation succeeds only if ALL of the following hold:
    - `ML-DSA.verify(signed_payload, sig.ml_dsa_sig, key.ml_dsa_pub)` succeeds
 7. If any individual signature fails either check, the entire spend
    authorization is invalid.
+
+### Adversarial Analysis
+
+The following attacks were evaluated during the design of `scheme_id = 2`.
+Each maps to a specific validation requirement in the Rust verifier.
+
+**Attack 1: Scheme downgrade.**
+An attacker takes a multisig UTXO (committed with `scheme_id = 2` group
+identity) and submits a spend transaction with `scheme_id = 1`, using one
+of the N individual keypairs to produce a valid single-signer hybrid
+signature.
+
+*Mitigation:* The output's ownership commitment must bind to the
+`multisig_group_id`, which includes `scheme_id`, `n_total`, `m_required`,
+and all N public keys. A `scheme_id = 1` spend produces a different
+ownership derivation and fails to match the output. The consensus layer
+must reject any spend where the spending `scheme_id` does not match the
+output's committed scheme.
+
+*Validation:* Hard reject in `tx_pqc_verify.cpp` before calling the Rust
+FFI. The output's ownership material determines the expected scheme — the
+spender cannot override it.
+
+**Attack 2: Signer index manipulation.**
+An attacker submits M signatures but manipulates `signer_indices` to map
+two signatures to the same key (duplicate index), to an out-of-range
+index, or to an unsorted order that could confuse the verifier.
+
+*Mitigation:* The Rust verifier enforces three hard checks on
+`signer_indices`:
+1. Every index is in range `[0, n_total)`.
+2. The array is sorted in strictly ascending order.
+3. No duplicate values (implied by strict ascending, but checked explicitly).
+
+*Validation:* Hard reject before any signature verification begins. Fail
+fast on structural invalidity.
+
+**Attack 3: Blob truncation or padding.**
+An attacker submits a `hybrid_public_key` blob that claims `n_total = 3`
+but contains fewer than 3 keys' worth of bytes (truncation), or extra
+trailing bytes (padding), hoping the parser reads past the buffer or
+ignores surplus data.
+
+*Mitigation:* The Rust deserializer computes the expected blob size from
+the declared parameters and rejects any mismatch:
+- Key blob: exactly `2 + (n_total × 1996)` bytes.
+- Signature blob: exactly `1 + (sig_count × 3385) + sig_count` bytes.
+
+Any deviation — short, long, or with trailing garbage — is a hard reject.
+No tolerant parsing. No ignoring of extra bytes.
+
+*Validation:* Checked at the top of deserialization, before any key or
+signature bytes are read.
+
+**Attack 4: Key substitution in group.**
+A participant who is one of N signers replaces another participant's
+public key in the `ownership_keys` array with a second copy of their own
+key, giving themselves control of M keys out of N and the ability to spend
+unilaterally.
+
+*Mitigation:* The `multisig_group_id` hash covers all N keys in their
+canonical order. Any key substitution produces a different group ID that
+does not match the output's commitment. The attacker cannot forge a valid
+spend against an output they did not originally participate in creating.
+
+*Validation:* The Rust verifier recomputes the group ID from the supplied
+keys and confirms it matches the output's committed ownership material.
+Additionally, the verifier rejects duplicate public keys in the
+`ownership_keys` array — no two entries may be byte-identical.
+
+**Attack 5: sig_count / m_required mismatch.**
+The `sig_count` field lives in the signature blob; `m_required` lives in
+the key blob. An attacker could set `sig_count > m_required` (submitting
+extra signatures to reach a different threshold interpretation) or
+`sig_count < m_required` (hoping the verifier short-circuits after fewer
+checks).
+
+*Mitigation:* The Rust verifier reads `m_required` from the key blob and
+`sig_count` from the signature blob and enforces exact equality. This is a
+cross-blob validation — the verifier must parse both blobs before
+accepting either.
+
+*Validation:* Hard reject if `sig_count != m_required`. This check
+occurs after blob length validation but before any signature verification.
+
+**Attack 6: Signature replay across groups.**
+M valid signatures produced for multisig group A are submitted against a
+different multisig group B's output, where some participants overlap
+between groups.
+
+*Mitigation:* The signed payload includes the `PqcAuthHeader`, which
+contains all N ownership keys for the specific group. Signatures are
+cryptographically bound to the exact group composition. Signatures
+produced for group A's payload will fail verification against group B's
+payload even if individual keys appear in both groups.
+
+*Validation:* Inherent in the signature scheme — no additional check
+needed beyond correct payload construction.
+
+**Summary of verifier checks (execution order):**
+
+| Order | Check | Reject condition |
+|---|---|---|
+| 1 | Scheme match | Spending `scheme_id` ≠ output's committed scheme |
+| 2 | Parameter bounds | `n_total = 0`, `m_required = 0`, `m_required > n_total`, or `n_total > 7` |
+| 3 | Key blob length | Actual length ≠ `2 + (n_total × 1996)` |
+| 4 | Sig blob length | Actual length ≠ `1 + (sig_count × 3385) + sig_count` |
+| 5 | Threshold match | `sig_count ≠ m_required` |
+| 6 | Index validity | Any `signer_index ∉ [0, n_total)` |
+| 7 | Index ordering | `signer_indices` not strictly ascending |
+| 8 | Key uniqueness | Any two `ownership_keys` are byte-identical |
+| 9 | Group ID match | Recomputed `multisig_group_id` ≠ output commitment |
+| 10 | Signatures (×M) | Any Ed25519 or ML-DSA verification failure |
+
+All checks 1–9 are structural and occur before any expensive cryptographic
+operations. This fail-fast ordering minimizes the cost of rejecting
+malformed transactions and limits denial-of-service exposure from
+oversized multisig payloads.
 
 ### Transaction Size Impact
 
@@ -184,10 +434,12 @@ Measured per-signer contribution (from V3 phase-1 measurements):
 | Single (scheme 1) | 1,996 | 3,385 | ~5,385 | baseline |
 | 2-of-3 | 5,988 | 6,770 | ~12,769 | +7,384 (~2.4x) |
 | 3-of-5 | 9,980 | 10,155 | ~20,153 | +14,768 (~3.7x) |
-| 5-of-7 | 13,972 | 16,925 | ~30,921 | +25,536 (~5.7x) |
+| 5-of-7 (max) | 13,972 | 16,925 | ~30,921 | +25,536 (~5.7x) |
+| **7-of-7 (worst case)** | **13,972** | **23,695** | **~37,680** | **+32,295 (~7.0x)** |
 
-At sub-0.1% of transaction volume, even the 5-of-7 case has negligible
-impact on aggregate chain growth.
+The consensus cap `MAX_MULTISIG_PARTICIPANTS = 7` bounds the worst-case
+`pqc_auth` overhead to ~37 KB. At sub-0.1% of transaction volume, even the
+worst case has negligible impact on aggregate chain growth.
 
 ### Multisig Group Identity
 
@@ -224,17 +476,187 @@ of whether the staked output uses single-signer or multisig authorization.
 
 ### Wallet Implementation Notes
 
-- Key generation: each participant generates their own hybrid keypair
-  independently. The N public keys are exchanged out-of-band and assembled
-  into the multisig group.
-- Signing: the wallet constructs the complete transaction body, computes
-  the canonical signing payload, and distributes it to M signers. Each
-  signer produces their hybrid signature independently. The wallet collects
-  M signatures and assembles the final `pqc_auth`.
-- No DKG protocol is required for V3. This is a significant simplification
-  over the lattice threshold approach.
-- The Tauri wallet should expose multisig group creation and signing
-  coordination in the GUI, especially integrated with the staking flow.
+#### Key generation
+
+Each participant generates their own hybrid keypair independently. The N
+public keys are exchanged out-of-band and assembled into the multisig
+group. No DKG protocol is required — this is a significant simplification
+over the V4 lattice threshold approach.
+
+#### Classical key management
+
+The CLSAG/RingCT layer uses a single classical key held by the coordinator
+(or derived from a shared secret agreed during group setup). This key is
+NOT the multisig security boundary — it only satisfies the ring signature
+layer. The M-of-N PQC threshold is the authorization gate.
+
+#### Signing protocol (file-based)
+
+The V3 signing transport is file-based exchange. No MMS or real-time
+transport is required. The flow:
+
+1. **Coordinator** builds the complete transaction body (prefix + RCT with
+   single classical key).
+2. **Coordinator** computes the canonical signing payload and exports it as
+   a JSON blob file ("signing request").
+3. Each **signer** imports the signing request, reviews the transaction
+   details, signs with their hybrid keypair, and exports their signature
+   blob file ("signature response").
+4. **Coordinator** collects M signature response files, assembles the
+   `pqc_auth` container, and broadcasts the transaction.
+
+The Tauri wallet implements this as "Export signing request" / "Import
+signature" / "Assemble and broadcast" actions. Real-time transport (MMS,
+QR relay, peer-to-peer) is a follow-up UX enhancement, not a prerequisite.
+
+#### ML-DSA signature non-determinism
+
+ML-DSA signatures are non-deterministic (hedged signing per FIPS 204). The
+same signer signing the same payload twice produces different valid
+signatures. Implications:
+
+- Signature blobs must not be compared for equality or cached across
+  signing attempts.
+- If a signer needs to re-sign (network failure, timeout, changed their
+  mind), the coordinator accepts the replacement and discards the old
+  signature.
+- The coordinator uses "replace by signer index" semantics, not
+  deduplication.
+
+#### Transaction hash finality
+
+The transaction hash includes the full serialized `pqc_auth` including
+signatures. Different signing subsets for the same M-of-N group (e.g.,
+signers {0,1} vs {0,2} in a 2-of-3) produce different tx hashes. The tx
+hash is finalized only after the coordinator assembles all M signatures.
+
+Signers operate on the canonical signing payload, which is deterministic
+and independent of the signing subset. The coordinator must not share a
+"final tx hash" with signers before assembly is complete.
+
+#### GUI integration
+
+The Tauri wallet should expose multisig group creation and signing
+coordination in the GUI, especially integrated with the staking flow
+("Create multisig staking position"). See Rollout Dependencies below for
+the staking FFI prerequisite.
+
+### Rollout Dependencies
+
+#### Phase split
+
+The multisig feature ships in two sub-phases to avoid blocking on the
+Tauri↔wallet2 FFI staking bridge (which is currently a stub):
+
+- **Phase A: Multisig spends.** Regular send/transfer transactions with
+  `scheme_id = 2`. Requires only the PQC multisig Rust implementation,
+  FFI dispatch, consensus validation, and wallet CLI/GUI signing flow.
+  No dependency on staking FFI.
+
+- **Phase B: Multisig staking.** Creating multisig staked outputs and
+  claiming rewards with M-of-N authorization. Blocked by: single-signer
+  staking must be wired through the Tauri↔wallet2 FFI bridge first.
+  The GUI `stake` and `get_staking_info` commands in `commands.rs` are
+  currently error stubs.
+
+Phase B must not block Phase A. Multisig spends are useful independently
+of staking integration.
+
+#### Codebase removals (blocking Phase A)
+
+Before PQC multisig implementation begins:
+
+- Remove `account_base::make_multisig` and classical secret-splitting from
+  `account.cpp`.
+- Remove MMS transport code.
+- Remove or gate any wallet paths that produce v2 multisig transactions.
+- Confirm no residual classical multisig state in wallet file serialization.
+
+### Wallet File Format
+
+Adding PQC multisig state to the wallet requires a file format version
+bump:
+
+- New fields: `m_pqc_multisig_keys` (the N hybrid public keys defining the
+  group), `m_pqc_multisig_group_id` (the deterministic group identity
+  hash), `m_pqc_multisig_n` and `m_pqc_multisig_m` (group parameters).
+- Existing single-signer V3 wallets opened with multisig-aware code find
+  these fields absent — default to empty/none. No migration needed.
+- New multisig wallets are created fresh. Converting a funded wallet to
+  multisig is not supported (same constraint as Monero).
+- The wallet file version number is bumped. Older wallet binaries that
+  encounter the new format must refuse to open with a clear error message,
+  not silently corrupt.
+- Classical multisig wallet state (`m_multisig_keys`,
+  `m_multisig_threshold`, etc.) is removed from the serialization format
+  entirely.
+
+### FFI Contract
+
+#### Consensus path
+
+The existing `shekyl_pqc_verify` FFI function handles both `scheme_id = 1`
+and `scheme_id = 2` via internal dispatch. It returns a bare `bool`. This
+is intentional — the consensus path must be minimal with no error-message
+side channels.
+
+#### Debug/logging path
+
+A separate function is provided for wallet-side debugging and operator
+logging:
+
+```rust
+#[repr(u8)]
+pub enum PqcVerifyError {
+    Ok = 0,
+    InvalidSchemeId = 1,
+    BlobLengthMismatch = 2,
+    ParameterBoundsViolation = 3,
+    ThresholdMismatch = 4,
+    SignerIndexOutOfRange = 5,
+    SignerIndexNotSorted = 6,
+    DuplicateOwnershipKey = 7,
+    GroupIdMismatch = 8,
+    Ed25519FailureAtIndex = 9,    // low nibble: signer index
+    MlDsaFailureAtIndex = 10,     // low nibble: signer index
+    DeserializationError = 255,
+}
+
+pub extern "C" fn shekyl_pqc_verify_debug(
+    scheme_id: u8,
+    pubkey_blob: *const u8, pubkey_len: usize,
+    sig_blob: *const u8, sig_len: usize,
+    message: *const u8, message_len: usize,
+) -> u8;  // returns PqcVerifyError discriminant
+```
+
+This function is used only by the wallet and logging paths, never in
+consensus validation. The error enum matches the adversarial analysis check
+ordering so operators can pinpoint exactly where validation failed.
+
+### Fuzz Testing Requirements
+
+The Rust deserializer is the entire security boundary for multisig — C++
+passes opaque blobs and trusts the boolean result. Malformed blobs are the
+primary DoS vector.
+
+Required `cargo-fuzz` targets (hard prerequisite before testnet):
+
+| Target | Input | Coverage |
+|---|---|---|
+| `fuzz_multisig_key_blob` | Random bytes → `MultisigKeyContainer::from_canonical_bytes` | Length checks, parameter bounds, key parsing |
+| `fuzz_multisig_sig_blob` | Random bytes → `MultisigSigContainer::from_canonical_bytes` | Length checks, index validation, signature parsing |
+| `fuzz_multisig_verify` | Random `(scheme_id, key_blob, sig_blob, message)` → `shekyl_pqc_verify` | Full dispatch path including cross-blob validation |
+| `fuzz_group_id` | Random key arrays → `multisig_group_id` computation | Hash stability, no panics on edge-case inputs |
+
+Minimum bar: **10M iterations per target with zero panics, zero OOM, zero
+unbounded allocations.** Any panic is a bug. Any allocation proportional to
+attacker-controlled length fields without bounds checking is a
+vulnerability.
+
+The fuzz harness should include a "valid-then-corrupt" mode: generate a
+structurally valid multisig blob, then flip random bits/truncate/extend to
+exercise the boundary between valid and invalid inputs.
 
 ---
 
@@ -381,11 +803,12 @@ Anonymity set size is unchanged.
 
 | Document | Relevant changes |
 |---|---|
-| `POST_QUANTUM_CRYPTOGRAPHY.md` | `scheme_id` registry extended; deferred scope updated; multisig no longer fully deferred |
-| `V3_ROLLOUT.md` | Multisig tx size guidance added to payload limits |
+| `POST_QUANTUM_CRYPTOGRAPHY.md` | `scheme_id` registry extended; deferred scope updated; classical multisig removed from implementation notes |
+| `V3_ROLLOUT.md` | Multisig tx size guidance with `MAX_MULTISIG_PARTICIPANTS = 7` ceiling; classical multisig removal noted; staking FFI dependency flagged |
 | `DESIGN_CONCEPTS.md` | Staking section references multisig as operational security option |
 | `STAKER_REWARD_DISBURSEMENT.md` | Claim transactions support multisig authorization |
-| `RELEASE_CHECKLIST.md` | Multisig testing items to be added |
+| `RELEASE_CHECKLIST.md` | Multisig testing items and fuzz targets to be added |
+| `account.cpp` | `make_multisig` and classical secret-splitting code to be removed |
 
 ---
 

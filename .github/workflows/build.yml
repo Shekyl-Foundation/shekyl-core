@@ -242,7 +242,7 @@ jobs:
       - name: build wallet-core libraries
         shell: pwsh
         run: |
-          cmake --build build --config Release --target wallet_api --parallel
+          cmake --build build --config Release --target wallet_api --parallel 2
 
   source-archive:
     name: "source archive"
