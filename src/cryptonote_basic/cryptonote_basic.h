@@ -34,7 +34,7 @@
 #include <variant>
 #include <boost/functional/hash/hash.hpp>
 #include <vector>
-#include <cstring>  // memcmp
+#include <type_traits>
 #include <sstream>
 #include <atomic>
 #include "serialization/variant.h"
@@ -625,6 +625,9 @@ namespace cryptonote
       return !(*this == rhs);
     }
   };
+
+  static_assert(!std::is_trivially_copyable_v<account_public_address>,
+    "account_public_address is non-POD (includes m_pqc_public_key); never memcmp the struct");
 
   struct keypair
   {

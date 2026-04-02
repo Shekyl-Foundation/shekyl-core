@@ -58,6 +58,11 @@
   - [ ] RPC testing/update RPC documentation
   - [ ] PQC transaction validation testing
   - [ ] PQC wallet send/receive testing
+  - [ ] PQC multisig group creation (2-of-3, 3-of-5)
+  - [ ] PQC multisig signing flow (export request, partial sign, import, broadcast)
+  - [ ] PQC multisig scheme downgrade rejection verified
+  - [ ] PQC multisig fuzz targets run (4 harnesses, 10M iterations each)
+  - [ ] PQC multisig test vectors validated against docs/PQC_TEST_VECTOR_002_MULTISIG.json
   - [ ] ZMQ/RPC consumer regression testing for larger transactions
 - [ ] CLI reproducible builds validated
 - [ ] Rust/PQC reproducible build inputs documented

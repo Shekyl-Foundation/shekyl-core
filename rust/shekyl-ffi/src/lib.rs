@@ -190,39 +190,138 @@ pub extern "C" fn shekyl_pqc_sign(
     }
 }
 
-/// Verify a message using canonical-encoded hybrid public key and signature.
+/// Verify a PQC-authenticated message.
 ///
-/// Returns false on malformed input or failed verification.
+/// `scheme_id = 1`: single-signer hybrid Ed25519 + ML-DSA-65.
+/// `scheme_id = 2`: M-of-N multisig over hybrid keys.
+///
+/// For scheme_id 1, `pubkey_blob` and `sig_blob` are single canonical encodings.
+/// For scheme_id 2, `pubkey_blob` is a MultisigKeyContainer and `sig_blob` is a
+/// MultisigSigContainer in canonical encoding. Group ID check is skipped (pass
+/// `shekyl_pqc_verify_multisig_with_group_id` for consensus verification).
 #[no_mangle]
 pub extern "C" fn shekyl_pqc_verify(
-    public_key_ptr: *const u8,
-    public_key_len: usize,
-    message_ptr: *const u8,
+    scheme_id: u8,
+    pubkey_blob: *const u8,
+    pubkey_len: usize,
+    sig_blob: *const u8,
+    sig_len: usize,
+    message: *const u8,
     message_len: usize,
-    signature_ptr: *const u8,
-    signature_len: usize,
 ) -> bool {
-    let Some(public_key_bytes) = slice_from_ptr(public_key_ptr, public_key_len) else {
+    let Some(pk_bytes) = slice_from_ptr(pubkey_blob, pubkey_len) else {
         return false;
     };
-    let Some(message) = slice_from_ptr(message_ptr, message_len) else {
+    let Some(msg) = slice_from_ptr(message, message_len) else {
         return false;
     };
-    let Some(signature_bytes) = slice_from_ptr(signature_ptr, signature_len) else {
+    let Some(sig_bytes) = slice_from_ptr(sig_blob, sig_len) else {
         return false;
     };
 
-    let scheme = HybridEd25519MlDsa;
-    let public_key = match HybridPublicKey::from_canonical_bytes(public_key_bytes) {
-        Ok(pk) => pk,
-        Err(_) => return false,
+    match scheme_id {
+        1 => {
+            let scheme = HybridEd25519MlDsa;
+            let pk = match HybridPublicKey::from_canonical_bytes(pk_bytes) {
+                Ok(pk) => pk,
+                Err(_) => return false,
+            };
+            let sig = match HybridSignature::from_canonical_bytes(sig_bytes) {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            scheme.verify(&pk, msg, &sig).unwrap_or(false)
+        }
+        2 => {
+            use shekyl_crypto_pq::multisig::verify_multisig;
+            verify_multisig(scheme_id, pk_bytes, sig_bytes, msg, None).unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+/// Debug variant of verify: returns `PqcVerifyError` discriminant (1-11) on failure, 0 on success.
+#[no_mangle]
+pub extern "C" fn shekyl_pqc_verify_debug(
+    scheme_id: u8,
+    pubkey_blob: *const u8,
+    pubkey_len: usize,
+    sig_blob: *const u8,
+    sig_len: usize,
+    message: *const u8,
+    message_len: usize,
+) -> u8 {
+    let Some(pk_bytes) = slice_from_ptr(pubkey_blob, pubkey_len) else {
+        return 11; // DeserializationFailed
     };
-    let signature = match HybridSignature::from_canonical_bytes(signature_bytes) {
-        Ok(sig) => sig,
+    let Some(msg) = slice_from_ptr(message, message_len) else {
+        return 11;
+    };
+    let Some(sig_bytes) = slice_from_ptr(sig_blob, sig_len) else {
+        return 11;
+    };
+
+    match scheme_id {
+        1 => {
+            let scheme = HybridEd25519MlDsa;
+            let pk = match HybridPublicKey::from_canonical_bytes(pk_bytes) {
+                Ok(pk) => pk,
+                Err(_) => return 11,
+            };
+            let sig = match HybridSignature::from_canonical_bytes(sig_bytes) {
+                Ok(s) => s,
+                Err(_) => return 11,
+            };
+            match scheme.verify(&pk, msg, &sig) {
+                Ok(true) => 0,
+                Ok(false) => 10, // CryptoVerifyFailed
+                Err(_) => 10,
+            }
+        }
+        2 => {
+            use shekyl_crypto_pq::multisig::verify_multisig;
+            match verify_multisig(scheme_id, pk_bytes, sig_bytes, msg, None) {
+                Ok(true) => 0,
+                Ok(false) => 10,
+                Err(e) => e as u8,
+            }
+        }
+        _ => 1, // SchemeMismatch
+    }
+}
+
+/// Compute the deterministic group_id for a MultisigKeyContainer blob.
+///
+/// Writes 32 bytes to `out_ptr`. Returns true on success.
+#[no_mangle]
+pub extern "C" fn shekyl_pqc_multisig_group_id(
+    keys_ptr: *const u8,
+    keys_len: usize,
+    out_ptr: *mut u8,
+) -> bool {
+    if out_ptr.is_null() {
+        return false;
+    }
+    let Some(keys_bytes) = slice_from_ptr(keys_ptr, keys_len) else {
+        return false;
+    };
+
+    use shekyl_crypto_pq::multisig::{MultisigKeyContainer, multisig_group_id};
+
+    let container = match MultisigKeyContainer::from_canonical_bytes(keys_bytes) {
+        Ok(c) => c,
         Err(_) => return false,
     };
 
-    scheme.verify(&public_key, message, &signature).unwrap_or(false)
+    match multisig_group_id(&container) {
+        Ok(id) => {
+            unsafe {
+                std::ptr::copy_nonoverlapping(id.as_ptr(), out_ptr, 32);
+            }
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 // ─── Crypto: Hash Functions ──────────────────────────────────────────────────
@@ -695,12 +794,13 @@ mod tests {
         assert!(!sig.signature.ptr.is_null());
 
         let verified = shekyl_pqc_verify(
+            1, // scheme_id for single-signer
             kp.public_key.ptr,
             kp.public_key.len,
-            msg.as_ptr(),
-            msg.len(),
             sig.signature.ptr,
             sig.signature.len,
+            msg.as_ptr(),
+            msg.len(),
         );
         assert!(verified);
 
@@ -760,12 +860,13 @@ mod tests {
         sig_bytes[last] ^= 0x01;
 
         let verified = shekyl_pqc_verify(
+            1, // scheme_id for single-signer
             kp.public_key.ptr,
             kp.public_key.len,
-            msg.as_ptr(),
-            msg.len(),
             sig_bytes.as_ptr(),
             sig_bytes.len(),
+            msg.as_ptr(),
+            msg.len(),
         );
         assert!(!verified);
 

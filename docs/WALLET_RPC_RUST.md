@@ -112,24 +112,46 @@ library. The integration layer is in `wallet_bridge.rs`:
 ### Build requirements
 
 The GUI wallet's `build.rs` links against pre-built Shekyl C++ libraries.
-Set `SHEKYL_BUILD_DIR` to the cmake build directory:
+
+#### Recommended: Using `contrib/depends` (CI builds, static linking)
+
+This builds all third-party libraries (Boost, OpenSSL, etc.) from source
+with static linking. Produces a portable binary with no distro-versioned
+runtime dependencies.
 
 ```bash
-# 1. Clone and build shekyl-core (if not already done)
+# 1. Clone shekyl-core
 git clone --recurse-submodules https://github.com/Shekyl-Foundation/shekyl-core.git ../Shekyl
+
+# 2. Build everything via depends (downloads + builds all deps from source)
+cd ../Shekyl && make depends target=x86_64-unknown-linux-gnu -j$(nproc)
+
+# 3. Build the GUI wallet
+cd shekyl-gui-wallet
+export SHEKYL_BUILD_DIR=$(pwd)/../Shekyl/build/x86_64-unknown-linux-gnu/release
+export SHEKYL_DEPENDS_PREFIX=$(pwd)/../Shekyl/contrib/depends/x86_64-unknown-linux-gnu
+npx tauri build
+```
+
+#### Quick local development (dynamic linking)
+
+For faster iteration when you already have system libraries installed:
+
+```bash
+# 1. Build shekyl-core with system libraries
 cmake -S ../Shekyl -B ../Shekyl/build \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_SHARED_LIBS=OFF \
   -DBUILD_TESTS=OFF
 cmake --build ../Shekyl/build -- -j$(nproc)
 
-# 2. Build the GUI wallet
+# 2. Build the GUI wallet (dynamic linking, no SHEKYL_DEPENDS_PREFIX)
 export SHEKYL_BUILD_DIR=$(pwd)/../Shekyl/build
 cd shekyl-gui-wallet/src-tauri
 cargo build
 ```
 
-#### Platform-specific dependencies
+#### Platform-specific dependencies (local dev only)
 
 **Linux (Ubuntu/Debian)**:
 ```bash
@@ -146,28 +168,21 @@ brew install cmake boost hidapi openssl zmq libpgm \
   miniupnpc expat protobuf abseil libsodium unbound
 ```
 
-For macOS cross-architecture builds (e.g., building x86_64 on Apple Silicon):
-```bash
-cmake -S ../Shekyl -B ../Shekyl/build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_SHARED_LIBS=OFF \
-  -DBUILD_TESTS=OFF \
-  -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-  -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
-```
-
 **Windows**: Not yet supported. The C++ codebase builds with MinGW but the
 Tauri toolchain requires MSVC-compatible `.lib` files. An MSVC compatibility
-investigation is in progress; key blockers include unconditional POSIX
-includes (`unistd.h` in `common/util.cpp`, `easylogging++.cc`), AT&T inline
-assembly in `perf_timer.cpp`, and GCC builtins in the CryptoNight code.
+investigation is in progress.
 
 #### How `build.rs` works
 
-The build script links 24 static libraries from the shekyl-core build tree
+The build script links 21 static libraries from the shekyl-core build tree
 plus the `shekyl_ffi` Rust FFI crate. It automatically derives the source
 directory (for the Rust FFI library) from `SHEKYL_BUILD_DIR`'s parent. To
 override, set `SHEKYL_SOURCE_DIR` explicitly.
+
+When `SHEKYL_DEPENDS_PREFIX` is set (pointing at the `contrib/depends`
+output), all third-party libraries (Boost, OpenSSL, sodium, etc.) are
+statically linked from that prefix. When unset, they are dynamically linked
+from system paths (suitable for local development).
 
 If `SHEKYL_BUILD_DIR` is not set, the build succeeds but FFI functions are
 not linked — the wallet bridge will be available at the type level but calls

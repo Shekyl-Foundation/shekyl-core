@@ -98,7 +98,6 @@ public:
     std::string publicViewKey() const override;
     std::string secretSpendKey() const override;
     std::string publicSpendKey() const override;
-    std::string publicMultisigSignerKey() const override;
     std::string path() const override;
     void stop() override;
     bool store(const std::string &path) override;
@@ -142,15 +141,6 @@ public:
     void addSubaddress(uint32_t accountIndex, const std::string& label) override;
     std::string getSubaddressLabel(uint32_t accountIndex, uint32_t addressIndex) const override;
     void setSubaddressLabel(uint32_t accountIndex, uint32_t addressIndex, const std::string &label) override;
-
-    MultisigState multisig() const override;
-    std::string getMultisigInfo() const override;
-    std::string makeMultisig(const std::vector<std::string>& info, uint32_t threshold) override;
-    std::string exchangeMultisigKeys(const std::vector<std::string> &info, const bool force_update_use_with_caution = false) override;
-    bool exportMultisigImages(std::string& images) override;
-    size_t importMultisigImages(const std::vector<std::string>& images) override;
-    bool hasMultisigPartialKeyImages() const override;
-    PendingTransaction*  restoreMultisigTransaction(const std::string& signData) override;
 
     PendingTransaction * createTransactionMultDest(const std::vector<std::string> &dst_addr, const std::string &payment_id,
                                         optional<std::vector<uint64_t>> amount, uint32_t mixin_count,
@@ -207,7 +197,6 @@ public:
     virtual bool checkReserveProof(const std::string &address, const std::string &message, const std::string &signature, bool &good, uint64_t &total, uint64_t &spent) const override;
     virtual std::string signMessage(const std::string &message, const std::string &address) override;
     virtual bool verifySignedMessage(const std::string &message, const std::string &address, const std::string &signature) const override;
-    virtual std::string signMultisigParticipant(const std::string &message) const override;
     virtual bool verifyMessageWithPublicKey(const std::string &message, const std::string &publicKey, const std::string &signature) const override;
     virtual void startRefresh() override;
     virtual void pauseRefresh() override;

@@ -33,6 +33,8 @@
 #include <fstream>
 #include <thread>
 
+#include <chrono>
+#include <thread>
 #include <filesystem>
 #include <boost/algorithm/string.hpp>
 #include "misc_log_ex.h"

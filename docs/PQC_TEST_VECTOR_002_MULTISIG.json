@@ -1,0 +1,74 @@
+{
+  "version": 2,
+  "description": "PQC multisig test vectors for scheme_id=2 (Ed25519 + ML-DSA-65 hybrid M-of-N)",
+  "constants": {
+    "scheme_id": 2,
+    "max_participants": 7,
+    "single_key_canonical_len": 1996,
+    "single_sig_canonical_len": 3385,
+    "domain_separator": "shekyl-multisig-group-v1"
+  },
+  "key_container_wire_format": {
+    "description": "n_total(1) || m_required(1) || key[0](1996) || ... || key[N-1](1996)",
+    "header_bytes": 2,
+    "key_size": 1996,
+    "examples": [
+      {"config": "2-of-3", "n": 3, "m": 2, "expected_blob_len": 5990},
+      {"config": "3-of-5", "n": 5, "m": 3, "expected_blob_len": 9982},
+      {"config": "5-of-7", "n": 7, "m": 5, "expected_blob_len": 13974},
+      {"config": "7-of-7", "n": 7, "m": 7, "expected_blob_len": 13974},
+      {"config": "1-of-1", "n": 1, "m": 1, "expected_blob_len": 1998}
+    ]
+  },
+  "sig_container_wire_format": {
+    "description": "sig_count(1) || sig[0](3385) || ... || sig[M-1](3385) || idx[0](1) || ... || idx[M-1](1)",
+    "header_bytes": 1,
+    "sig_size": 3385,
+    "examples": [
+      {"config": "2-of-3", "m": 2, "expected_blob_len": 6773},
+      {"config": "3-of-5", "m": 3, "expected_blob_len": 10159},
+      {"config": "5-of-7", "m": 5, "expected_blob_len": 16931},
+      {"config": "7-of-7", "m": 7, "expected_blob_len": 23703}
+    ]
+  },
+  "group_id_format": {
+    "algorithm": "cn_fast_hash",
+    "preimage": "domain_separator || n_total(1) || m_required(1) || key[0](1996) || ... || key[N-1](1996)",
+    "output_len": 32
+  },
+  "verification_pipeline": {
+    "description": "10-check adversarial validation",
+    "checks": [
+      {"number": 1, "name": "scheme_match", "error": "SchemeMismatch", "description": "scheme_id must equal 2"},
+      {"number": 2, "name": "parameter_bounds", "error": "ParameterBounds", "description": "0 < m <= n <= 7"},
+      {"number": 3, "name": "key_blob_length", "error": "KeyBlobLength", "description": "blob len must equal 2 + n * 1996"},
+      {"number": 4, "name": "sig_blob_length", "error": "SigBlobLength", "description": "blob len must equal 1 + m * 3385 + m"},
+      {"number": 5, "name": "threshold_match", "error": "ThresholdMismatch", "description": "sig_count must equal m_required"},
+      {"number": 6, "name": "index_validity", "error": "IndexOutOfRange", "description": "all signer indices < n_total"},
+      {"number": 7, "name": "index_ordering", "error": "IndicesNotAscending", "description": "signer indices strictly ascending"},
+      {"number": 8, "name": "key_uniqueness", "error": "DuplicateKeys", "description": "no two keys share canonical encoding"},
+      {"number": 9, "name": "group_id_match", "error": "GroupIdMismatch", "description": "cn_fast_hash(preimage) must match committed group_id"},
+      {"number": 10, "name": "crypto_verify", "error": "CryptoVerifyFailed", "description": "each sig[i] must verify under key[idx[i]] for the transaction message"}
+    ]
+  },
+  "size_regression": {
+    "description": "Expected on-chain pqc_auth sizes for common configurations (key_blob + sig_blob)",
+    "configurations": [
+      {"config": "2-of-3", "key_blob_bytes": 5990, "sig_blob_bytes": 6773, "total_pqc_auth_bytes": 12763},
+      {"config": "3-of-5", "key_blob_bytes": 9982, "sig_blob_bytes": 10159, "total_pqc_auth_bytes": 20141},
+      {"config": "5-of-7", "key_blob_bytes": 13974, "sig_blob_bytes": 16931, "total_pqc_auth_bytes": 30905},
+      {"config": "7-of-7", "key_blob_bytes": 13974, "sig_blob_bytes": 23703, "total_pqc_auth_bytes": 37677}
+    ]
+  },
+  "adversarial_test_cases": [
+    {"name": "empty_key_blob", "input": "", "expected_error": "KeyBlobLength"},
+    {"name": "single_byte_key_blob", "input_hex": "03", "expected_error": "KeyBlobLength"},
+    {"name": "n_zero", "input_hex": "0002", "expected_error": "ParameterBounds"},
+    {"name": "m_zero", "input_hex": "0200", "expected_error": "ParameterBounds"},
+    {"name": "m_greater_than_n", "input_hex": "0203", "expected_error": "ParameterBounds"},
+    {"name": "n_exceeds_max", "input_hex": "0802", "expected_error": "ParameterBounds"},
+    {"name": "empty_sig_blob", "input": "", "expected_error": "SigBlobLength"},
+    {"name": "sig_count_zero", "input_hex": "00", "expected_error": "ParameterBounds"},
+    {"name": "sig_count_exceeds_max", "input_hex": "08", "expected_error": "ParameterBounds"}
+  ]
+}

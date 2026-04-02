@@ -18,9 +18,6 @@ void wallet_accessor_test::set_account(tools::wallet2 * wallet, cryptonote::acco
   wallet->m_key_device_type = account.get_device().get_type();
   wallet->m_account_public_address = account.get_keys().m_account_address;
   wallet->m_watch_only = false;
-  wallet->m_multisig = false;
-  wallet->m_multisig_threshold = 0;
-  wallet->m_multisig_signers.clear();
   wallet->m_device_name = account.get_device().get_name();
 
   wallet->m_subaddress_lookahead_major = 5;
@@ -200,7 +197,6 @@ void wallet_tools::gen_tx_src(size_t mixin, uint64_t cur_height, const tools::wa
   src.real_out_tx_key = get_tx_pub_key_from_extra(td.m_tx, td.m_pk_index);
   src.real_out_additional_tx_keys = get_additional_tx_pub_keys_from_extra(td.m_tx);
   src.real_output_in_tx_index = td.m_internal_output_index;
-  src.multisig_kLRki = rct::multisig_kLRki({rct::zero(), rct::zero(), rct::zero(), rct::zero()});
 }
 
 void wallet_tools::gen_block_data(block_tracker &bt, const cryptonote::block *bl, const map_hash2tx_t &mtx, cryptonote::block_complete_entry &bche, tools::wallet2::parsed_block &parsed_block, uint64_t &height)
