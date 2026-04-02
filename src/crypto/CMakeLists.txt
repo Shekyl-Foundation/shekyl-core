@@ -70,6 +70,9 @@ monero_add_library(cncrypto
   ${crypto_sources}
   ${crypto_headers}
   ${crypto_private_headers})
+if(MSVC)
+  target_compile_options(obj_cncrypto PRIVATE /MP1)
+endif()
 target_link_libraries(cncrypto
   PUBLIC
     epee

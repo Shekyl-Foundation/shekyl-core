@@ -58,3 +58,6 @@ foreach(BLOB_NAME checkpoints testnet_blocks stagenet_blocks)
 endforeach()
 
 monero_add_library(blocks blocks.cpp ${GENERATED_SOURCES})
+if(MSVC)
+  target_compile_options(obj_blocks PRIVATE /MP1)
+endif()
