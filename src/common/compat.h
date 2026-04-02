@@ -1,4 +1,4 @@
-// Copyright (c) 2024-2026, The Shekyl Project
+// Copyright (c) 2024-2026, The Shekyl Foundation
 //
 // All rights reserved.
 //

@@ -146,7 +146,6 @@ namespace tx {
   using MoneroTransactionDestinationEntry = messages::monero::MoneroTransactionDestinationEntry;
   using MoneroAccountPublicAddress = messages::monero::MoneroTransactionDestinationEntry_MoneroAccountPublicAddress;
   using MoneroTransactionSourceEntry = messages::monero::MoneroTransactionSourceEntry;
-  using MoneroMultisigKLRki = messages::monero::MoneroTransactionSourceEntry_MoneroMultisigKLRki;
   using MoneroOutputEntry = messages::monero::MoneroTransactionSourceEntry_MoneroOutputEntry;
   using MoneroRctKey = messages::monero::MoneroTransactionSourceEntry_MoneroOutputEntry_MoneroRctKeyPublic;
   using MoneroRsigData = messages::monero::MoneroTransactionRsigData;
@@ -156,7 +155,6 @@ namespace tx {
 
   void translate_address(MoneroAccountPublicAddress * dst, const cryptonote::account_public_address * src);
   void translate_dst_entry(MoneroTransactionDestinationEntry * dst, const cryptonote::tx_destination_entry * src);
-  void translate_klrki(MoneroMultisigKLRki * dst, const rct::multisig_kLRki * src);
   void translate_rct_key(MoneroRctKey * dst, const rct::ctkey * src);
   std::string hash_addr(const MoneroAccountPublicAddress * addr, std::optional<uint64_t> amount = std::nullopt, std::optional<bool> is_subaddr = std::nullopt);
   std::string hash_addr(const std::string & spend_key, const std::string & view_key, std::optional<uint64_t> amount = std::nullopt, std::optional<bool> is_subaddr = std::nullopt);
@@ -218,7 +216,6 @@ namespace tx {
     hw::tx_aux_data * m_aux_data;
 
     unsigned m_client_version;
-    bool m_multisig;
 
     const tx_construction_data & cur_src_tx() const {
       CHECK_AND_ASSERT_THROW_MES(m_tx_idx < m_unsigned_tx->txes.size(), "Invalid transaction index");

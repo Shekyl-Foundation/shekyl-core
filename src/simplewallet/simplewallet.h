@@ -101,8 +101,6 @@ namespace cryptonote
         bool recover, bool two_random, const std::string &old_language);
     std::optional<epee::wipeable_string> new_wallet(const boost::program_options::variables_map& vm, const cryptonote::account_public_address& address,
         const std::optional<crypto::secret_key>& spendkey, const crypto::secret_key& viewkey);
-    std::optional<epee::wipeable_string> new_wallet(const boost::program_options::variables_map& vm,
-        const epee::wipeable_string &multisig_keys, const epee::wipeable_string &seed_pass, const std::string &old_language);
     std::optional<epee::wipeable_string> new_wallet(const boost::program_options::variables_map& vm);
     std::optional<epee::wipeable_string> open_wallet(const boost::program_options::variables_map& vm);
     bool close_wallet();
@@ -155,7 +153,6 @@ namespace cryptonote
     bool set_device_name(const std::vector<std::string> &args = std::vector<std::string>());
     bool set_export_format(const std::vector<std::string> &args = std::vector<std::string>());
     bool set_load_deprecated_formats(const std::vector<std::string> &args = std::vector<std::string>());
-    bool set_enable_multisig(const std::vector<std::string> &args = std::vector<std::string>());
     bool set_persistent_rpc_client_id(const std::vector<std::string> &args = std::vector<std::string>());
     bool set_auto_mine_for_rpc_payment_threshold(const std::vector<std::string> &args = std::vector<std::string>());
     bool set_credits_target(const std::vector<std::string> &args = std::vector<std::string>());
@@ -177,7 +174,6 @@ namespace cryptonote
     bool stake_coins(const std::vector<std::string> &args);
     bool unstake_coins(const std::vector<std::string> &args);
     bool claim_rewards(const std::vector<std::string> &args);
-    bool transfer_main(const std::vector<std::string> &args, bool called_by_mms);
     bool transfer(const std::vector<std::string> &args);
     bool sweep_main(uint32_t account, uint64_t below, const std::vector<std::string> &args);
     bool sweep_all(const std::vector<std::string> &args);
@@ -235,23 +231,6 @@ namespace cryptonote
     bool change_password(const std::vector<std::string>& args);
     bool payment_id(const std::vector<std::string> &args);
     bool print_fee_info(const std::vector<std::string> &args);
-    bool prepare_multisig(const std::vector<std::string>& args);
-    bool prepare_multisig_main(const std::vector<std::string>& args, bool called_by_mms);
-    bool make_multisig(const std::vector<std::string>& args);
-    bool make_multisig_main(const std::vector<std::string>& args, bool called_by_mms);
-    bool exchange_multisig_keys(const std::vector<std::string> &args);
-    bool exchange_multisig_keys_main(const std::vector<std::string> &args, const bool force_update_use_with_caution, const bool called_by_mms);
-    bool export_multisig(const std::vector<std::string>& args);
-    bool export_multisig_main(const std::vector<std::string>& args, bool called_by_mms);
-    bool import_multisig(const std::vector<std::string>& args);
-    bool import_multisig_main(const std::vector<std::string>& args, bool called_by_mms);
-    bool accept_loaded_tx(const tools::wallet2::multisig_tx_set &txs);
-    bool sign_multisig(const std::vector<std::string>& args);
-    bool sign_multisig_main(const std::vector<std::string>& args, bool called_by_mms);
-    bool submit_multisig(const std::vector<std::string>& args);
-    bool submit_multisig_main(const std::vector<std::string>& args, bool called_by_mms);
-    bool export_raw_multisig(const std::vector<std::string>& args);
-    bool mms(const std::vector<std::string>& args);
     bool print_ring(const std::vector<std::string>& args);
     bool set_ring(const std::vector<std::string>& args);
     bool unset_ring(const std::vector<std::string>& args);
@@ -342,7 +321,6 @@ namespace cryptonote
     // idle thread workers
     bool check_inactivity();
     bool check_refresh();
-    bool check_mms();
     bool check_rpc_payment();
 
     void handle_transfer_exception(const std::exception_ptr &e, bool trusted_daemon);
@@ -421,7 +399,6 @@ namespace cryptonote
     std::string m_generate_from_view_key;
     std::string m_generate_from_spend_key;
     std::string m_generate_from_keys;
-    std::string m_generate_from_multisig_keys;
     std::string m_generate_from_json;
     std::string m_mnemonic_language;
     std::string m_import_path;
@@ -432,7 +409,6 @@ namespace cryptonote
 
     crypto::secret_key m_recovery_key;  // recovery key (used as random for wallet gen)
     bool m_restore_deterministic_wallet;  // recover flag
-    bool m_restore_multisig_wallet;  // recover flag
     bool m_non_deterministic;  // old 2-random generation
     bool m_restoring;           // are we restoring, by whatever method?
     uint64_t m_restore_height;  // optional
@@ -462,7 +438,6 @@ namespace cryptonote
 
     epee::math_helper::once_a_time_seconds<1> m_inactivity_checker;
     epee::math_helper::once_a_time_seconds_range<get_random_interval<80 * 1000000, 100 * 1000000>> m_refresh_checker;
-    epee::math_helper::once_a_time_seconds_range<get_random_interval<90 * 1000000, 110 * 1000000>> m_mms_checker;
     epee::math_helper::once_a_time_seconds_range<get_random_interval<90 * 1000000, 115 * 1000000>> m_rpc_payment_checker;
     
     std::atomic<bool> m_need_payment;
@@ -474,42 +449,5 @@ namespace cryptonote
     std::atomic<bool> m_suspend_rpc_payment_mining;
 
     std::unordered_map<std::string, uint32_t> m_claimed_cph;
-
-    // MMS
-    mms::message_store& get_message_store() const { return m_wallet->get_message_store(); };
-    mms::multisig_wallet_state get_multisig_wallet_state() const { return m_wallet->get_multisig_wallet_state(); };
-    bool mms_active() const { return get_message_store().get_active(); };
-    bool choose_mms_processing(const std::vector<mms::processing_data> &data_list, uint32_t &choice);
-    void list_mms_messages(const std::vector<mms::message> &messages);
-    void list_signers(const std::vector<mms::authorized_signer> &signers);
-    void add_signer_config_messages();
-    void show_message(const mms::message &m);
-    void ask_send_all_ready_messages();
-    void check_for_messages();
-    bool user_confirms(const std::string &question);
-    bool user_confirms_auto_config();
-    bool get_message_from_arg(const std::string &arg, mms::message &m);
-    bool get_number_from_arg(const std::string &arg, uint32_t &number, const uint32_t lower_bound, const uint32_t upper_bound); 
-
-    void mms_init(const std::vector<std::string> &args);
-    void mms_info(const std::vector<std::string> &args);
-    void mms_signer(const std::vector<std::string> &args);
-    void mms_list(const std::vector<std::string> &args);
-    void mms_next(const std::vector<std::string> &args);
-    void mms_sync(const std::vector<std::string> &args);
-    void mms_transfer(const std::vector<std::string> &args);
-    void mms_delete(const std::vector<std::string> &args);
-    void mms_send(const std::vector<std::string> &args);
-    void mms_receive(const std::vector<std::string> &args);
-    void mms_export(const std::vector<std::string> &args);
-    void mms_note(const std::vector<std::string> &args);
-    void mms_show(const std::vector<std::string> &args);
-    void mms_set(const std::vector<std::string> &args);
-    void mms_help(const std::vector<std::string> &args);
-    void mms_send_signer_config(const std::vector<std::string> &args);
-    void mms_start_auto_config(const std::vector<std::string> &args);
-    void mms_config_checksum(const std::vector<std::string> &args);
-    void mms_stop_auto_config(const std::vector<std::string> &args);
-    void mms_auto_config(const std::vector<std::string> &args);
   };
 }

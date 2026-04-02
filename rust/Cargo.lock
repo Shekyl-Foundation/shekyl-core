@@ -1095,6 +1095,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
+ "shekyl-crypto-hash",
  "thiserror",
  "zeroize",
 ]

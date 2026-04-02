@@ -103,7 +103,6 @@ namespace wallet_rpc
     {
       uint64_t 	 balance;
       uint64_t 	 unlocked_balance;
-      bool       multisig_import_needed;
       std::vector<per_subaddress_info> per_subaddress;
       uint64_t   blocks_to_unlock;
       uint64_t   time_to_unlock;
@@ -111,7 +110,6 @@ namespace wallet_rpc
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(balance)
         KV_SERIALIZE(unlocked_balance)
-        KV_SERIALIZE(multisig_import_needed)
         KV_SERIALIZE(per_subaddress)
         KV_SERIALIZE(blocks_to_unlock)
         KV_SERIALIZE(time_to_unlock)
@@ -572,7 +570,6 @@ namespace wallet_rpc
     uint64_t weight;
     std::string tx_blob;
     std::string tx_metadata;
-    std::string multisig_txset;
     std::string unsigned_txset;
     key_image_list spent_key_images;
 
@@ -585,7 +582,6 @@ namespace wallet_rpc
       KV_SERIALIZE(weight)
       KV_SERIALIZE(tx_blob)
       KV_SERIALIZE(tx_metadata)
-      KV_SERIALIZE(multisig_txset)
       KV_SERIALIZE(unsigned_txset)
       KV_SERIALIZE(spent_key_images)
     END_KV_SERIALIZE_MAP()
@@ -639,7 +635,6 @@ namespace wallet_rpc
     std::list<uint64_t> weight_list;
     std::list<std::string> tx_blob_list;
     std::list<std::string> tx_metadata_list;
-    std::string multisig_txset;
     std::string unsigned_txset;
     std::list<key_image_list> spent_key_images_list;
 
@@ -652,7 +647,6 @@ namespace wallet_rpc
       KV_SERIALIZE(weight_list)
       KV_SERIALIZE(tx_blob_list)
       KV_SERIALIZE(tx_metadata_list)
-      KV_SERIALIZE(multisig_txset)
       KV_SERIALIZE(unsigned_txset)
       KV_SERIALIZE(spent_key_images_list)
     END_KV_SERIALIZE_MAP()
@@ -758,11 +752,9 @@ namespace wallet_rpc
     struct request_t
     {
       std::string unsigned_txset;
-      std::string multisig_txset;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(unsigned_txset)
-        KV_SERIALIZE(multisig_txset)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<request_t> request;
@@ -2300,7 +2292,6 @@ namespace wallet_rpc
       std::string password;
       std::string language;
       bool autosave_current;
-      bool enable_multisig_experimental;
 
       BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE_OPT(restore_height, (uint64_t)0)
@@ -2310,7 +2301,6 @@ namespace wallet_rpc
       KV_SERIALIZE(password)
       KV_SERIALIZE(language)
       KV_SERIALIZE_OPT(autosave_current, true)
-      KV_SERIALIZE_OPT(enable_multisig_experimental, false)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<request_t> request;
@@ -2332,222 +2322,6 @@ namespace wallet_rpc
     typedef epee::misc_utils::struct_init<response_t> response;
   };
   
-  struct COMMAND_RPC_IS_MULTISIG
-  {
-    struct request_t
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      bool multisig;
-      bool ready;
-      uint32_t threshold;
-      uint32_t total;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(multisig)
-        KV_SERIALIZE(ready)
-        KV_SERIALIZE(threshold)
-        KV_SERIALIZE(total)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_PREPARE_MULTISIG
-  {
-    struct request_t
-    {
-      bool enable_multisig_experimental;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_OPT(enable_multisig_experimental, false)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      std::string multisig_info;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(multisig_info)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_MAKE_MULTISIG
-  {
-    struct request_t
-    {
-      std::vector<std::string> multisig_info;
-      uint32_t threshold;
-      std::string password;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(multisig_info)
-        KV_SERIALIZE(threshold)
-        KV_SERIALIZE(password)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      std::string address;
-      std::string multisig_info;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(address)
-        KV_SERIALIZE(multisig_info)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_EXPORT_MULTISIG
-  {
-    struct request_t
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      std::string info;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(info)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_IMPORT_MULTISIG
-  {
-    struct request_t
-    {
-      std::vector<std::string> info;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(info)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      uint64_t n_outputs;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(n_outputs)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_FINALIZE_MULTISIG
-  {
-    // NOP
-    struct request_t
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_EXCHANGE_MULTISIG_KEYS
-  {
-    struct request_t
-    {
-      std::string password;
-      std::vector<std::string> multisig_info;
-      bool force_update_use_with_caution;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(password)
-        KV_SERIALIZE(multisig_info)
-        KV_SERIALIZE_OPT(force_update_use_with_caution, false)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      std::string address;
-      std::string multisig_info;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(address)
-        KV_SERIALIZE(multisig_info)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_SIGN_MULTISIG
-  {
-    struct request_t
-    {
-      std::string tx_data_hex;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(tx_data_hex)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      std::string tx_data_hex;
-      std::list<std::string> tx_hash_list;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(tx_data_hex)
-        KV_SERIALIZE(tx_hash_list)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_SUBMIT_MULTISIG
-  {
-    struct request_t
-    {
-      std::string tx_data_hex;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(tx_data_hex)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      std::list<std::string> tx_hash_list;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(tx_hash_list)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
   struct COMMAND_RPC_GET_VERSION
   {
     struct request_t

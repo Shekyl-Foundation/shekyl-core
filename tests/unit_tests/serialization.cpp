@@ -1260,3 +1260,81 @@ TEST(Serialization, pqc_authentication_round_trip)
   EXPECT_EQ(auth0.hybrid_public_key, auth1.hybrid_public_key);
   EXPECT_EQ(auth0.hybrid_signature, auth1.hybrid_signature);
 }
+
+TEST(Serialization, pqc_authentication_multisig_round_trip)
+{
+  constexpr size_t key_sz = 5990;
+  constexpr size_t sig_sz = 6773;
+  cryptonote::pqc_authentication auth0, auth1;
+  auth0.auth_version = 1;
+  auth0.scheme_id = 2;
+  auth0.flags = 0;
+  auth0.hybrid_public_key.resize(key_sz);
+  auth0.hybrid_signature.resize(sig_sz);
+  for (size_t i = 0; i < key_sz; ++i)
+    auth0.hybrid_public_key[i] = static_cast<uint8_t>(i % 256);
+  for (size_t i = 0; i < sig_sz; ++i)
+    auth0.hybrid_signature[i] = static_cast<uint8_t>((i + 128) % 256);
+
+  std::string blob;
+  ASSERT_TRUE(serialization::dump_binary(auth0, blob));
+  ASSERT_TRUE(serialization::parse_binary(blob, auth1));
+
+  EXPECT_EQ(auth0.auth_version, auth1.auth_version);
+  EXPECT_EQ(auth0.scheme_id, auth1.scheme_id);
+  EXPECT_EQ(auth0.flags, auth1.flags);
+  EXPECT_EQ(auth0.hybrid_public_key, auth1.hybrid_public_key);
+  EXPECT_EQ(auth0.hybrid_signature, auth1.hybrid_signature);
+}
+
+TEST(Serialization, pqc_authentication_multisig_size_regression)
+{
+  auto varint_encoding_bytes = [](size_t n) -> size_t {
+    size_t b = 0;
+    do {
+      ++b;
+      n >>= 7;
+    } while (n);
+    return b;
+  };
+  auto expected_binary_blob_size = [&varint_encoding_bytes](size_t key_blob, size_t sig_blob) -> size_t {
+    // auth_version (1) + scheme_id (1) + flags (uint16_t LE) + varint(key len) + key bytes + varint(sig len) + sig bytes
+    return 4 + varint_encoding_bytes(key_blob) + key_blob + varint_encoding_bytes(sig_blob) + sig_blob;
+  };
+
+  struct config
+  {
+    unsigned n;
+    unsigned m;
+    size_t total_pqc_auth_payload;
+  };
+  const config configs[] = {
+    {3, 2, 12763},
+    {5, 3, 20141},
+    {7, 5, 30905},
+    {7, 7, 37677},
+  };
+
+  for (const config &cfg : configs)
+  {
+    const size_t key_blob = 2 + static_cast<size_t>(cfg.n) * 1996u;
+    const size_t sig_blob = 1 + static_cast<size_t>(cfg.m) * 3385u + static_cast<size_t>(cfg.m);
+    EXPECT_EQ(key_blob + sig_blob, cfg.total_pqc_auth_payload);
+
+    cryptonote::pqc_authentication auth0, auth1;
+    auth0.auth_version = 1;
+    auth0.scheme_id = 2;
+    auth0.flags = 0;
+    auth0.hybrid_public_key.assign(key_blob, 0xab);
+    auth0.hybrid_signature.assign(sig_blob, 0xcd);
+
+    std::string blob;
+    ASSERT_TRUE(serialization::dump_binary(auth0, blob));
+    EXPECT_FALSE(blob.empty());
+    EXPECT_EQ(blob.size(), expected_binary_blob_size(key_blob, sig_blob));
+
+    ASSERT_TRUE(serialization::parse_binary(blob, auth1));
+    EXPECT_EQ(auth1.hybrid_public_key.size(), key_blob);
+    EXPECT_EQ(auth1.hybrid_signature.size(), sig_blob);
+  }
+}

@@ -2,6 +2,69 @@
 
 ## Unreleased
 
+### 🗑️ Removed
+
+- **Classical multisig wallet RPC commands.** Removed all 9 Monero-inherited
+  multisig RPC endpoints (`is_multisig`, `prepare_multisig`, `make_multisig`,
+  `export_multisig_info`, `import_multisig_info`, `finalize_multisig`,
+  `exchange_multisig_keys`, `sign_multisig`, `submit_multisig`) from the
+  wallet RPC server. Removed `multisig_txset` fields from transfer and sweep
+  response structs. Removed the `CHECK_MULTISIG_ENABLED` macro and
+  `multisig/multisig.h` dependency. Classical secret-splitting multisig is
+  replaced by PQC-only authorization (`scheme_id = 2`); see
+  `docs/PQC_MULTISIG.md`.
+- **Classical multisig simplewallet CLI commands.** Removed all multisig and
+  MMS (Multisig Messaging System) commands from `simplewallet`: `prepare_multisig`,
+  `make_multisig`, `exchange_multisig_keys`, `export_multisig_info`,
+  `import_multisig_info`, `sign_multisig`, `submit_multisig`,
+  `export_raw_multisig_tx`, and all `mms` subcommands. Removed
+  `--generate-from-multisig-keys` and `--restore-multisig-wallet` CLI flags.
+  Removed `enable-multisig-experimental` wallet setting. Removed
+  `wallet/message_store.h` dependency. The `transfer_main`/`called_by_mms`
+  indirection was collapsed into a single `transfer` method.
+- **Classical multisig test and device_trezor remnants.** Removed stale
+  multisig references from test infrastructure: `m_multisig*` wallet resets
+  in `wallet_tools.cpp`, `multisig_sigs.clear()` in Trezor tests,
+  `multisig_txset` assertion in `cold_signing.py`, and deleted
+  `tests/functional_tests/multisig.py`. Removed `multisig` from the
+  functional test default list. Cleaned up device_trezor protocol:
+  removed `translate_klrki`, `MoneroMultisigKLRki` alias, `m_multisig`
+  member, and multisig cout decryption in `Signer::step_final_ack`.
+  Removed `mms_error`, `no_connection_to_bitmessage`, and
+  `bitmessage_api_error` error classes from `wallet_errors.h`.
+- **Classical multisig wallet API layer.** Removed all classical multisig
+  code from the public wallet API: `MultisigState` struct, virtual multisig
+  declarations (`multisig`, `getMultisigInfo`, `makeMultisig`,
+  `exchangeMultisigKeys`, `exportMultisigImages`, `importMultisigImages`,
+  `hasMultisigPartialKeyImages`, `restoreMultisigTransaction`,
+  `publicMultisigSignerKey`, `signMultisigParticipant`,
+  `multisigSignData`, `signMultisigTx`). Removed multisig helper functions
+  and multisig threshold check from PendingTransaction commit path.
+  Removed multisig guard from the background-sync validation macro.
+- **Classical multisig wallet core (`wallet2.cpp`).** Removed all classical
+  multisig code from the wallet core: `#include "multisig/..."` headers,
+  `MULTISIG_UNSIGNED_TX_PREFIX`/`MULTISIG_EXPORT_FILE_MAGIC`/`MULTISIG_SIGNATURE_MAGIC`
+  constants, `m_multisig`/`m_multisig_threshold`/`m_multisig_rounds_passed`/
+  `m_enable_multisig`/`m_message_store`/`m_mms_file` member initializations,
+  `num_priv_multisig_keys_post_setup`, `get_multisig_seed`, multisig restore
+  path in `generate()`, `make_multisig`, `exchange_multisig_keys`,
+  `get_multisig_first_kex_msg`, `multisig()`, `has_multisig_partial_key_images`,
+  `frozen(multisig_tx_set)`, all `save/parse/load/sign_multisig_tx` overloads,
+  the multisig transaction builder path in `transfer_selected_rct`,
+  `export_multisig`, `import_multisig`, `update_multisig_rescan_info`,
+  `get_multisig_signer_public_key`, `get_multisig_signing_public_key`,
+  `get_multisig_k`, `get_multisig_kLRki`, `get_multisig_composite_kLRki`,
+  `get_multisig_composite_key_image`, `get_multisig_wallet_state`,
+  `sign_multisig_participant`, JSON serialization/deserialization of multisig
+  fields, MMS file handling, and all scattered `m_multisig` guard branches.
+- **Classical multisig `m_key_image_partial` remnants.** Removed the
+  `m_key_image_partial` bitfield from `exported_transfer_details` and all
+  code references in `wallet2.cpp` and `simplewallet.cpp`. Since classical
+  multisig was removed, partial key images can never exist; all guard
+  conditions (`!known || partial`, `known && !partial`, standalone partial
+  checks) were simplified to reference only `m_key_image_known`. Removed
+  the dead `old_mms_file` cleanup block from `wallet2::store_to`.
+
 ### ✨ Added
 
 - **Daemon RPC migrated to Rust/Axum (Phase 1).** The daemon HTTP RPC transport
@@ -17,6 +80,34 @@
   (`rpc_connections_count`), 2 binary skips (empty-POST → 400 on both).
   Validation harness at `tests/rpc_comparison/compare_rpc.sh`;
   test data in `shekyl-dev/data/rpc_comparison/`.
+- **PQC multisig core (scheme_id=2).** Implemented M-of-N hybrid Ed25519 +
+  ML-DSA-65 multisig in Rust. Includes `MultisigKeyContainer`,
+  `MultisigSigContainer`, `multisig_group_id`, and a 10-check adversarial
+  verification pipeline. Maximum 7 participants (consensus constant). Domain
+  separator: `shekyl-multisig-group-v1`.
+- **PQC multisig FFI bridge.** Extended `shekyl_pqc_verify` to accept
+  `scheme_id` and dispatch between single-signer (1) and multisig (2) paths.
+  Added `shekyl_pqc_verify_debug` for diagnostic error codes and
+  `shekyl_pqc_multisig_group_id` for group identity computation.
+- **Scheme downgrade protection.** New `tx_extra_pqc_ownership` tag (0x05)
+  records the expected PQC scheme and group ID for each output, preventing
+  attackers from spending multisig-protected outputs with single-signer
+  transactions.
+- **Wallet multisig coordination.** New wallet2 methods for PQC multisig:
+  `create_pqc_multisig_group`, `export_multisig_signing_request`,
+  `sign_multisig_partial`, `import_multisig_signatures`. File-based JSON
+  signing protocol. Wallet serialization version bumped to 32.
+- **Cargo-fuzz harnesses.** 4 fuzz targets for multisig deserialization and
+  verification (`fuzz_multisig_key_blob`, `fuzz_multisig_sig_blob`,
+  `fuzz_multisig_verify`, `fuzz_group_id`), each validated at 10M iterations
+  with zero panics.
+- **PQC multisig subset-signing test.** Added `valid_subset_signing_3_of_5`
+  test to `shekyl-crypto-pq` verifying that any valid 3-of-5 signer subset
+  produces a valid multisig through the full 10-check verification pipeline.
+- **PQC multisig test vectors.** Published
+  `docs/PQC_TEST_VECTOR_002_MULTISIG.json` with canonical encoding sizes,
+  wire-format sizes, verification pipeline checks, the 10-check pipeline,
+  size regression data, and adversarial test cases for `scheme_id = 2`.
 - **Unified Gitian release pipeline.** The `gitian` workflow is now the sole
   release pipeline, replacing the separate `release-tagged` workflow. Gitian
   builds produce reproducible binaries; a new `package-and-publish` job
@@ -29,6 +120,8 @@
 
 ### 🔄 Changed
 
+- **`shekyl_pqc_verify` FFI signature change.** Now requires `scheme_id` as
+  first parameter for scheme dispatch.
 - **`depends.yml` demoted to PR-only.** The cross-compilation CI workflow now
   runs only on pull requests (and manual dispatch), not on every push. Saves
   significant CI minutes; Gitian catches cross-platform issues at release time.
@@ -126,6 +219,14 @@
 
 ### 🗑️ Removed
 
+- **Classical multisig code removed from wallet2.h.** Removed all classical
+  Monero-style multisig types (`multisig_info`, `multisig_sig`,
+  `multisig_kLR_bundle`, `multisig_tx_set`), public/private multisig API
+  methods, multisig private members, MMS (message store) integration, and
+  associated Boost serialization functions. The `src/multisig/` directory and
+  `src/wallet/message_store.h` are deleted; `wallet2.h` no longer depends on
+  those headers. All multisig uses PQC-only authorization (`scheme_id = 2`)
+  via the `pqc_auth` layer.
 - **Gitian Android build.** Removed from the Gitian matrix since there is no
   Android wallet. The Android NDK r17b is also incompatible with Ubuntu Jammy.
 - **Gitian Linux: drop i686-linux-gnu (32-bit x86) target.** Eliminates the

@@ -39,7 +39,6 @@
 #include "integer_overflow.h"
 #include "ring_signature_1.h"
 #include "tx_validation.h"
-#include "multisig.h"
 #include "bulletproof_plus.h"
 /************************************************************************/
 /*                                                                      */
