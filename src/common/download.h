@@ -28,7 +28,10 @@
 
 #pragma once 
 
+#include <functional>
+#include <memory>
 #include <string>
+#include "common/compat.h"
 
 namespace tools
 {

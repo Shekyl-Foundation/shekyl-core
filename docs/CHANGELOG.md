@@ -2,6 +2,295 @@
 
 ## Unreleased
 
+### 🐛 Fixed
+
+- **Remaining HF17 references corrected to HF1.** Fixed stale Monero-era
+  `HF17` / `HF_VERSION_SHEKYL_NG = 17` references in `POST_QUANTUM_CRYPTOGRAPHY.md`
+  (scheme registry, rollout notes, V4 roadmap), `PQC_MULTISIG.md` (V3 heading,
+  V4 scheme table, activation target), `V3_ROLLOUT.md` (title, consensus gate,
+  node checklist), and `STAKER_REWARD_DISBURSEMENT.md`. Also corrected `HF18`
+  references to `HF2` in multisig V4 rollout tables. The source code constant
+  `HF_VERSION_SHEKYL_NG` was already correctly defined as `1` in
+  `cryptonote_config.h`; only documentation was affected.
+
+- **CMake Boost detection on CMake 3.30+**: The built-in `FindBoost.cmake`
+  module was removed in CMake 3.30. Restructured Boost detection to try
+  CONFIG mode first (finding `BoostConfig.cmake` installed by b2), falling
+  back to MODULE on older CMake. Fixes `contrib/depends` builds on Ubuntu
+  24.04 runners with CMake ≥ 3.30.
+
+### 🗑️ Removed
+
+- **Classical multisig wallet RPC commands.** Removed all 9 Monero-inherited
+  multisig RPC endpoints (`is_multisig`, `prepare_multisig`, `make_multisig`,
+  `export_multisig_info`, `import_multisig_info`, `finalize_multisig`,
+  `exchange_multisig_keys`, `sign_multisig`, `submit_multisig`) from the
+  wallet RPC server. Removed `multisig_txset` fields from transfer and sweep
+  response structs. Removed the `CHECK_MULTISIG_ENABLED` macro and
+  `multisig/multisig.h` dependency. Classical secret-splitting multisig is
+  replaced by PQC-only authorization (`scheme_id = 2`); see
+  `docs/PQC_MULTISIG.md`.
+- **Classical multisig simplewallet CLI commands.** Removed all multisig and
+  MMS (Multisig Messaging System) commands from `simplewallet`: `prepare_multisig`,
+  `make_multisig`, `exchange_multisig_keys`, `export_multisig_info`,
+  `import_multisig_info`, `sign_multisig`, `submit_multisig`,
+  `export_raw_multisig_tx`, and all `mms` subcommands. Removed
+  `--generate-from-multisig-keys` and `--restore-multisig-wallet` CLI flags.
+  Removed `enable-multisig-experimental` wallet setting. Removed
+  `wallet/message_store.h` dependency. The `transfer_main`/`called_by_mms`
+  indirection was collapsed into a single `transfer` method.
+- **Classical multisig test and device_trezor remnants.** Removed stale
+  multisig references from test infrastructure: `m_multisig*` wallet resets
+  in `wallet_tools.cpp`, `multisig_sigs.clear()` in Trezor tests,
+  `multisig_txset` assertion in `cold_signing.py`, and deleted
+  `tests/functional_tests/multisig.py`. Removed `multisig` from the
+  functional test default list. Cleaned up device_trezor protocol:
+  removed `translate_klrki`, `MoneroMultisigKLRki` alias, `m_multisig`
+  member, and multisig cout decryption in `Signer::step_final_ack`.
+  Removed `mms_error`, `no_connection_to_bitmessage`, and
+  `bitmessage_api_error` error classes from `wallet_errors.h`.
+- **Classical multisig wallet API layer.** Removed all classical multisig
+  code from the public wallet API: `MultisigState` struct, virtual multisig
+  declarations (`multisig`, `getMultisigInfo`, `makeMultisig`,
+  `exchangeMultisigKeys`, `exportMultisigImages`, `importMultisigImages`,
+  `hasMultisigPartialKeyImages`, `restoreMultisigTransaction`,
+  `publicMultisigSignerKey`, `signMultisigParticipant`,
+  `multisigSignData`, `signMultisigTx`). Removed multisig helper functions
+  and multisig threshold check from PendingTransaction commit path.
+  Removed multisig guard from the background-sync validation macro.
+- **Classical multisig wallet core (`wallet2.cpp`).** Removed all classical
+  multisig code from the wallet core: `#include "multisig/..."` headers,
+  `MULTISIG_UNSIGNED_TX_PREFIX`/`MULTISIG_EXPORT_FILE_MAGIC`/`MULTISIG_SIGNATURE_MAGIC`
+  constants, `m_multisig`/`m_multisig_threshold`/`m_multisig_rounds_passed`/
+  `m_enable_multisig`/`m_message_store`/`m_mms_file` member initializations,
+  `num_priv_multisig_keys_post_setup`, `get_multisig_seed`, multisig restore
+  path in `generate()`, `make_multisig`, `exchange_multisig_keys`,
+  `get_multisig_first_kex_msg`, `multisig()`, `has_multisig_partial_key_images`,
+  `frozen(multisig_tx_set)`, all `save/parse/load/sign_multisig_tx` overloads,
+  the multisig transaction builder path in `transfer_selected_rct`,
+  `export_multisig`, `import_multisig`, `update_multisig_rescan_info`,
+  `get_multisig_signer_public_key`, `get_multisig_signing_public_key`,
+  `get_multisig_k`, `get_multisig_kLRki`, `get_multisig_composite_kLRki`,
+  `get_multisig_composite_key_image`, `get_multisig_wallet_state`,
+  `sign_multisig_participant`, JSON serialization/deserialization of multisig
+  fields, MMS file handling, and all scattered `m_multisig` guard branches.
+- **Classical multisig `m_key_image_partial` remnants.** Removed the
+  `m_key_image_partial` bitfield from `exported_transfer_details` and all
+  code references in `wallet2.cpp` and `simplewallet.cpp`. Since classical
+  multisig was removed, partial key images can never exist; all guard
+  conditions (`!known || partial`, `known && !partial`, standalone partial
+  checks) were simplified to reference only `m_key_image_known`. Removed
+  the dead `old_mms_file` cleanup block from `wallet2::store_to`.
+
+### ✨ Added
+
+- **Daemon RPC migrated to Rust/Axum (Phase 1).** The daemon HTTP RPC transport
+  is now served by the `shekyl-daemon-rpc` Rust crate using Axum, replacing
+  `epee::http_server_impl_base`. All 90 endpoints (33 JSON REST, 9 binary,
+  48 JSON-RPC 2.0) are routed through Axum with PQC-ready 10 MiB body limits,
+  CORS, and restricted-mode enforcement. The C++ `core_rpc_server` handler
+  logic is unchanged and accessed via a `core_rpc_ffi` C ABI facade. Enabled
+  by default; `--no-rust-rpc` falls back to the legacy epee HTTP server.
+  JSON REST endpoints accept both GET and POST (matching epee). Binary
+  endpoints return 400 on parse failure (matching epee's MAP_URI_AUTO_BIN2).
+  Validated on live testnet: 23/25 pass, 2 expected diffs
+  (`rpc_connections_count`), 2 binary skips (empty-POST → 400 on both).
+  Validation harness at `tests/rpc_comparison/compare_rpc.sh`;
+  test data in `shekyl-dev/data/rpc_comparison/`.
+- **PQC multisig core (scheme_id=2).** Implemented M-of-N hybrid Ed25519 +
+  ML-DSA-65 multisig in Rust. Includes `MultisigKeyContainer`,
+  `MultisigSigContainer`, `multisig_group_id`, and a 10-check adversarial
+  verification pipeline. Maximum 7 participants (consensus constant). Domain
+  separator: `shekyl-multisig-group-v1`.
+- **PQC multisig FFI bridge.** Extended `shekyl_pqc_verify` to accept
+  `scheme_id` and dispatch between single-signer (1) and multisig (2) paths.
+  Added `shekyl_pqc_verify_debug` for diagnostic error codes and
+  `shekyl_pqc_multisig_group_id` for group identity computation.
+- **Scheme downgrade protection.** New `tx_extra_pqc_ownership` tag (0x05)
+  records the expected PQC scheme and group ID for each output, preventing
+  attackers from spending multisig-protected outputs with single-signer
+  transactions.
+- **Wallet multisig coordination.** New wallet2 methods for PQC multisig:
+  `create_pqc_multisig_group`, `export_multisig_signing_request`,
+  `sign_multisig_partial`, `import_multisig_signatures`. File-based JSON
+  signing protocol. Wallet serialization version bumped to 32.
+- **Cargo-fuzz harnesses.** 4 fuzz targets for multisig deserialization and
+  verification (`fuzz_multisig_key_blob`, `fuzz_multisig_sig_blob`,
+  `fuzz_multisig_verify`, `fuzz_group_id`), each validated at 10M iterations
+  with zero panics.
+- **PQC multisig subset-signing test.** Added `valid_subset_signing_3_of_5`
+  test to `shekyl-crypto-pq` verifying that any valid 3-of-5 signer subset
+  produces a valid multisig through the full 10-check verification pipeline.
+- **PQC multisig test vectors.** Published
+  `docs/PQC_TEST_VECTOR_002_MULTISIG.json` with canonical encoding sizes,
+  wire-format sizes, verification pipeline checks, the 10-check pipeline,
+  size regression data, and adversarial test cases for `scheme_id = 2`.
+- **Unified Gitian release pipeline.** The `gitian` workflow is now the sole
+  release pipeline, replacing the separate `release-tagged` workflow. Gitian
+  builds produce reproducible binaries; a new `package-and-publish` job
+  creates `.deb`/`.rpm` packages, a Windows NSIS installer, source archive,
+  and `SHA256SUMS`, then publishes the GitHub Release. Eliminates duplicate
+  cross-compilation and host-toolchain issues.
+- **Source archive in GitHub Releases.** The packaging job produces
+  `shekyl-vX.Y.Z-source.tar.gz` containing the full source tree with all
+  submodules, attached to each release alongside the binaries.
+
+### 🔄 Changed
+
+- **`shekyl_pqc_verify` FFI signature change.** Now requires `scheme_id` as
+  first parameter for scheme dispatch.
+- **`depends.yml` demoted to PR-only.** The cross-compilation CI workflow now
+  runs only on pull requests (and manual dispatch), not on every push. Saves
+  significant CI minutes; Gitian catches cross-platform issues at release time.
+- **`release-tagged.yml` disabled.** The Gitian pipeline now handles all
+  release artifacts. The old workflow is preserved as `.disabled` for one
+  release cycle.
+- **Gitian reproducible builds: migrated from Ubuntu 18.04 (Bionic) to 22.04
+  (Jammy).** All five build descriptors (`gitian-linux.yml`, `gitian-win.yml`,
+  `gitian-osx.yml`, `gitian-android.yml`, `gitian-freebsd.yml`),
+  `gitian-build.py`, and `dockrun.sh` now target Jammy. Drops GCC 7 and
+  Python 2 dependencies in favour of the distro-default GCC 11 and Python 3.
+  Upgrades FreeBSD cross-compiler from Clang 8 to Clang 14. Removes
+  Bionic-specific workarounds (i686 asm symlink hack, glibc `math-finite.h`
+  hack). Adds `linux-libc-dev:i386` for native i686 headers. C++17 is now
+  fully supported by the Gitian toolchain.
+
+### 🐛 Fixed
+
+- **Comprehensive compiler warning cleanup across all CI platforms.** Eliminated
+  ~30 unique warnings inherited from Monero across Linux, macOS, Windows, and
+  Arch Linux CI builds:
+  - Removed dead code: `add_public_key` (format_utils), `keys_intersect`
+    (wallet2), unused `addressof` template specialization (crypto test),
+    unused `max_block_height` variable (protocol_handler).
+  - Fixed `oaes_lib.c`: replaced deprecated `ftime()` with `gettimeofday()`,
+    corrected transposed `calloc` argument order (5 call sites).
+  - Fixed `rx-slow-hash.c`: added `(void)` to K&R-style function definitions.
+  - Suppressed GCC false positive `-Wstringop-overflow` in `tree-hash.c`.
+  - Replaced deprecated `strand::wrap()` with `boost::asio::bind_executor()`
+    in `levin_notify.cpp`.
+  - Suppressed GCC `-Wuninitialized` for safe circular-reference constructors
+    in `cryptonote_core.cpp` and `long_term_block_weight.cpp`.
+  - Added default member initializers to `BulletproofPlus` (rctTypes.h),
+    `transfer_details` and `payment_details` (wallet2.h) to silence
+    `-Wmaybe-uninitialized`.
+  - Fixed Windows: removed unused variables in `windows_service.cpp`,
+    eliminated `-Wcast-function-type` in `util.cpp` via `void*` intermediate
+    cast, fixed `-Wtype-limits` in `utf8.h` by using `uint32_t` instead of
+    `wint_t` for code points.
+  - Suppressed intentional uninitialized read in `memwipe.cpp` test.
+  - Set `MACOSX_DEPLOYMENT_TARGET` for native Darwin Cargo builds in
+    `BuildRust.cmake` to eliminate 672 linker warnings from `ring` crate.
+- **CI link errors: separated `shekyl-daemon-rpc` from `shekyl-ffi`.** The daemon
+  RPC Axum crate was bundled into `libshekyl_ffi.a`, causing `undefined reference
+  to core_rpc_ffi_*` on non-daemon targets (gen-ssl-cert, wallet-crypto-bench,
+  etc.) across all 5 CI platforms. Moved FFI exports (`shekyl_daemon_rpc_start`,
+  `shekyl_daemon_rpc_stop`) into a new `ffi_exports.rs` within the daemon-rpc
+  crate, which now produces its own `libshekyl_daemon_rpc.a` staticlib. Only the
+  daemon target links both libraries. `BuildRust.cmake` updated with a second
+  cargo build step and `SHEKYL_DAEMON_RPC_LINK_LIBS`.
+- **Wallet: `--daemon-port` help text referenced Monero port 18081.** Updated to
+  Shekyl's default RPC port 11029.
+- **Wallet: `account_public_address` equality after PQC.** Destination and
+  change-address checks used `memcmp` on the whole struct; `m_pqc_public_key`
+  is a `std::vector`, so equality was wrong when keys matched but allocations
+  differed. All such sites now use `operator==` / `!=`. Added a
+  `static_assert` that the type is not trivially copyable to discourage raw
+  `memcmp` regressions.
+- **Wallet / Ledger: constant-time comparison for 32-byte secrets.**
+  `wallet2::is_deterministic` and Ledger HMAC secret lookup now use
+  `crypto_verify_32` instead of `memcmp`.
+- **Gitian: enable `universe` repository and remove apt proxy in Docker base
+  image.** The `ubuntu:jammy` Docker image only enables `main restricted` by
+  default; `gitian-build.py` now patches the base image after `make-base-vm`
+  to add `universe` and remove the `apt-cacher-ng` proxy configuration
+  (`/etc/apt/apt.conf.d/50cacher`). The proxy routes all apt traffic through
+  `172.17.0.1:3142` which is unreliable on ephemeral CI runners, causing
+  persistent 503 failures during package installation. Uses `docker build`
+  (not run+commit) to preserve the image's CMD/USER metadata.
+- **Gitian Linux: fix i386-dependent package installation.** The i386
+  architecture is now enabled in the Docker base image (via `gitian-build.py`'s
+  `docker build` step) along with passwordless `sudo` for the `ubuntu` user,
+  allowing `linux-libc-dev:i386`, `gcc-multilib`, and `g++-multilib` to be
+  installed normally via the descriptor's `packages:` section.
+- **Gitian macOS: add `libtinfo5` and `python-is-python3`, remove `python`
+  from `FAKETIME_PROGS`.** The pre-built Clang 9 cross-compiler requires
+  `libtinfo.so.5`. The `python` faketime wrapper broke CMake's
+  `FindPythonInterp` version detection in the `native_libtapi` build (empty
+  `PYTHON_VERSION_STRING`); removing `python` from the faketime wrappers
+  fixes this while preserving timestamp reproducibility for `ar`, `ranlib`,
+  `date`, `dmg`, and `genisoimage`.
+- **Gitian Android: add `python-is-python3`.** Android NDK r17b scripts use
+  `#!/usr/bin/env python` which does not exist on Jammy without this package.
+- **Gitian macOS: fix Rust `ring` crate cross-compilation.** `BuildRust.cmake`
+  incorrectly overrode the macOS cross-compiler with the Linux system `clang`
+  when cross-compiling for Darwin, causing the `ring` crate to include
+  Linux-only `cet.h`. Now only uses system clang on native macOS builds.
+- **Gitian Windows: drop i686 (32-bit) target.** The i686-pc-windows-gnu Rust
+  target has an unresolved `GetHostNameW@8` symbol against MinGW's `ws2_32`.
+  Since the release workflow only targets x86_64, the 32-bit Gitian build is
+  removed.
+- **macOS cross-build: exclude `-fcf-protection=full`.** Intel CET is x86
+  Linux only; the flag defines `__CET__` which triggers `#include <cet.h>` in
+  the `ring` crate's assembly, but `cet.h` does not exist in the macOS SDK.
+  Now excluded for all Apple targets.
+- **macOS aarch64 cross-build: set `MACOSX_DEPLOYMENT_TARGET=10.16`.**
+  Clang 9 (depends cross-compiler) does not recognise macOS version 11.0+.
+  Apple aliases 10.16 == 11.0; the `cc-rs` crate respects this env var, fixing
+  the `ring` build for `aarch64-apple-darwin`.
+- **Gitian Docker base image: install `sudo` before creating sudoers entry.**
+  The `/etc/sudoers.d/` directory does not exist in the minimal Ubuntu image
+  until the `sudo` package is installed.
+
+### 🔄 Changed
+
+- **Replace all `BOOST_FOREACH` / `BOOST_REVERSE_FOREACH` with range-for
+  loops.** 31+ call sites across test and utility code replaced with standard
+  C++11 range-based for. Adds `/DNOMINMAX` to MSVC definitions to prevent
+  Windows `min`/`max` macro collisions.
+- **Replace hardcoded `-fPIC` with `POSITION_INDEPENDENT_CODE`.** The CMake
+  property works across all compilers (GCC, Clang, MSVC). Applied to
+  `liblmdb` and `easylogging++` CMakeLists.
+- **Guard/remove unguarded `#include <unistd.h>`.** POSIX header guarded
+  behind `#ifndef _WIN32` in `blockchain_import.cpp`; unused include removed
+  from `crypto.cpp`.
+- **Replace C++20 designated initializers with C++17-compatible member
+  assignment.** Rewrote 10 call sites in `cryptonote_core.cpp`,
+  `blockchain.cpp`, `levin_notify.cpp`, `multisig_tx_builder_ringct.cpp`, and
+  `wallet2.cpp`. GCC/Clang accepted these as extensions; MSVC rejects them.
+- **Replace all `__thread` with `thread_local`.** Covers `easylogging++.cc`,
+  `perf_timer.cpp`, and `threadpool.cpp`. The `__thread` qualifier is
+  GCC/Clang-specific; `thread_local` (C++11) is
+  portable across GCC, Clang, and MSVC.
+- **Centralize `ssize_t` typedef in `src/common/compat.h`.** Replaces
+  duplicate `#if defined(_MSC_VER)` guards in `util.h` and `download.h`
+  with a single include.
+
+### 🗑️ Removed
+
+- **Classical multisig code removed from wallet2.h.** Removed all classical
+  Monero-style multisig types (`multisig_info`, `multisig_sig`,
+  `multisig_kLR_bundle`, `multisig_tx_set`), public/private multisig API
+  methods, multisig private members, MMS (message store) integration, and
+  associated Boost serialization functions. The `src/multisig/` directory and
+  `src/wallet/message_store.h` are deleted; `wallet2.h` no longer depends on
+  those headers. All multisig uses PQC-only authorization (`scheme_id = 2`)
+  via the `pqc_auth` layer.
+- **Gitian Android build.** Removed from the Gitian matrix since there is no
+  Android wallet. The Android NDK r17b is also incompatible with Ubuntu Jammy.
+- **Gitian Linux: drop i686-linux-gnu (32-bit x86) target.** Eliminates the
+  need for `linux-libc-dev:i386`, `gcc-multilib`, `g++-multilib`, `sudo`,
+  and the `dpkg --add-architecture i386` workaround. Simplifies the Docker
+  base image patching to only enable the `universe` repository.
+
+### 📚 Documentation
+
+- **`docs/RELEASING.md`: document all release artifacts.** Updated the
+  artifact table to list all 13 files produced per release (was 6),
+  including cross-platform tarballs, aarch64 `.deb`/`.rpm`, and source
+  archive. Updated "Future Platforms" to reflect that macOS tarballs are
+  now shipping and `.dmg`/AppImage remain planned.
+
 ## [3.0.3-RC1] - 2026-03-31
 
 ### Known Limitations

@@ -71,7 +71,6 @@ set(unit_tests_sources
   mnemonics.cpp
   mul_div.cpp
   multiexp.cpp
-  multisig.cpp
   net.cpp
   node_server.cpp
   notify.cpp

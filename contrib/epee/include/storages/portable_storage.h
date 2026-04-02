@@ -173,7 +173,6 @@ namespace epee
     template<class entry_type>
     storage_entry* portable_storage::insert_new_entry_get_storage_entry(const std::string& pentry_name, hsection psection, entry_type&& entry)
     {
-      static_assert(std::is_rvalue_reference<entry_type&&>(), "unexpected copy of value");
       TRY_ENTRY();
       CHECK_AND_ASSERT(psection, nullptr);
       CHECK_AND_ASSERT(!pentry_name.empty(), nullptr);

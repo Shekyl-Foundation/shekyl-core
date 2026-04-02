@@ -15,6 +15,8 @@ platforms = {'l': ['Linux', 'linux', 'tar.bz2'],
         'w': ['Windows', 'win', 'zip'],
         'm': ['MacOS', 'osx', 'tar.bz2'] }
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 def setup():
     global args, workdir
     programs = ['apt-cacher-ng', 'ruby', 'git', 'make', 'wget']
@@ -41,7 +43,7 @@ def setup():
         subprocess.check_call(['rm', 'shekyl', '-fR'])
     subprocess.check_call(['git', 'clone', args.url, 'shekyl'])
     os.chdir('..')
-    make_image_prog = ['bin/make-base-vm', '--suite', 'bionic', '--arch', 'amd64']
+    make_image_prog = ['bin/make-base-vm', '--suite', 'jammy', '--arch', 'amd64']
     if args.docker:
         try:
             subprocess.check_output(['docker', '--help'])
@@ -52,10 +54,30 @@ def setup():
     elif not args.kvm:
         make_image_prog += ['--lxc']
     subprocess.check_call(make_image_prog)
+    if args.docker:
+        # Ubuntu Jammy Docker image only enables main+restricted by default.
+        # Gitian descriptors need universe packages (faketime, bsdmainutils, etc.).
+        # Use `docker build` (not run+commit) to preserve CMD/USER metadata.
+        #
+        # Also remove the apt-cacher-ng proxy that make-base-vm injects
+        # (/etc/apt/apt.conf.d/50cacher → http://172.17.0.1:3142).
+        # On ephemeral CI runners apt-cacher-ng is not running, causing
+        # persistent 503 failures during package installation.
+        print('Patching base image (enable universe, remove apt proxy)...')
+        subprocess.run([
+            'docker', 'build', '-t', 'base-jammy-amd64', '-'
+        ], input=(
+            "FROM base-jammy-amd64\n"
+            "USER root\n"
+            "RUN rm -f /etc/apt/apt.conf.d/50cacher && "
+            "sed -i '/^deb.*main restricted$/s/restricted$/restricted universe/' "
+            "/etc/apt/sources.list && apt-get update -qq\n"
+            "USER ubuntu\n"
+        ).encode(), check=True)
     os.chdir(workdir)
     if args.is_bionic and not args.kvm and not args.docker:
         subprocess.check_call(['sudo', 'sed', '-i', 's/lxcbr0/br0/', '/etc/default/lxc-net'])
-        print('Reboot is required')
+        print('Reboot is required (bionic LXC workaround)')
         sys.exit(0)
 
 def rebuild():
@@ -71,7 +93,11 @@ def rebuild():
         suffix = platforms[i][2]
 
         print('\nCompiling ' + args.version + ' ' + os_name)
-        infile = 'inputs/shekyl/contrib/gitian/gitian-' + tag_name + '.yml'
+        descriptor_name = 'gitian-' + tag_name + '.yml'
+        src_descriptor = os.path.join(SCRIPT_DIR, descriptor_name)
+        infile = 'inputs/shekyl/contrib/gitian/' + descriptor_name
+        if os.path.isfile(src_descriptor):
+            shutil.copy2(src_descriptor, infile)
         subprocess.check_call(['bin/gbuild', '-j', args.jobs, '-m', args.memory, '--commit', 'shekyl='+args.commit, '--url', 'shekyl='+args.url, infile])
         subprocess.check_call(['bin/gsign', '-p', args.sign_prog, '--signer', args.signer, '--release', args.version+'-'+tag_name, '--destination', '../sigs/', infile])
         subprocess.check_call('mv build/out/shekyl-*.' + suffix + ' ../out/'+args.version, shell=True)

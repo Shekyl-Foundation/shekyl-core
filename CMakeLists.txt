@@ -713,7 +713,7 @@ endif()
 include(CheckTrezor)
 
 if(MSVC)
-  add_definitions("/bigobj /MP /W3 /GS- /D_CRT_SECURE_NO_WARNINGS /wd4996 /wd4345 /D_WIN32_WINNT=0x0600 /DWIN32_LEAN_AND_MEAN /DGTEST_HAS_TR1_TUPLE=0 /FIinline_c.h /D__SSE4_1__")
+  add_definitions("/bigobj /MP /FS /W3 /GS- /D_CRT_SECURE_NO_WARNINGS /wd4996 /wd4345 /D_WIN32_WINNT=0x0600 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DGTEST_HAS_TR1_TUPLE=0 /FIinline_c.h /D__SSE4_1__")
   # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /Dinline=__inline")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:10485760")
   if(STATIC)
@@ -848,8 +848,8 @@ else()
     add_cxx_flag_if_supported(-fstack-protector-strong CXX_SECURITY_FLAGS)
   endif()
 
-  # New in GCC 8.2
-  if (NOT OPENBSD AND NOT (WIN32 AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS 9.1)))
+  # New in GCC 8.2 -- CET is x86 Linux only; macOS lacks cet.h
+  if (NOT APPLE AND NOT OPENBSD AND NOT (WIN32 AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS 9.1)))
     add_c_flag_if_supported(-fcf-protection=full C_SECURITY_FLAGS)
     add_cxx_flag_if_supported(-fcf-protection=full CXX_SECURITY_FLAGS)
   endif()
@@ -1092,20 +1092,19 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 endif()
 
 set(_BOOST_USE_CONFIG FALSE)
-if(DEPENDS)
-  set(Boost_NO_BOOST_CMAKE ON)
+
+# Probe: try CONFIG mode first (preferred -- CMake 3.30 removed FindBoost.cmake).
+find_package(Boost ${BOOST_MIN_VER} QUIET CONFIG)
+if(Boost_FOUND)
+  set(_BOOST_USE_CONFIG TRUE)
+  message(STATUS "Found Boost ${Boost_VERSION_STRING} via CMake config mode")
 endif()
-if(NOT DEPENDS)
-  find_package(Boost ${BOOST_MIN_VER} QUIET CONFIG)
-  if(Boost_FOUND)
-    set(_BOOST_USE_CONFIG TRUE)
-    message(STATUS "Found Boost ${Boost_VERSION_STRING} via CMake config mode")
-  endif()
-endif()
+
+# Fallback: MODULE mode (FindBoost.cmake on CMake < 3.30) or default resolution.
 if(NOT Boost_FOUND)
-  find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED)
+  find_package(Boost ${BOOST_MIN_VER} QUIET)
   if(Boost_FOUND)
-    message(STATUS "Found Boost ${Boost_VERSION_STRING} via MODULE mode")
+    message(STATUS "Found Boost ${Boost_VERSION_STRING} via module/fallback mode")
   endif()
 endif()
 
@@ -1138,13 +1137,10 @@ elseif(Boost_FOUND)
 
   message(STATUS "Boost components: ${BOOST_COMPONENTS}")
 
-  # Find required Boost libraries (preserve CONFIG mode to avoid SO-version mismatches).
-  # When building with depends, force MODULE mode because the depends-built Boost
-  # ships config files whose variant checks reject cross-compiled Darwin libraries.
+  # Find component libraries using the same mode as the initial detection to
+  # avoid duplicate-target SEND_ERRORs from Boost's own config files.
   if(_BOOST_USE_CONFIG)
     find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED CONFIG COMPONENTS ${BOOST_COMPONENTS})
-  elseif(DEPENDS)
-    find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED MODULE COMPONENTS ${BOOST_COMPONENTS})
   else()
     find_package(Boost ${BOOST_MIN_VER} QUIET REQUIRED COMPONENTS ${BOOST_COMPONENTS})
   endif()

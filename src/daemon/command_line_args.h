@@ -141,6 +141,12 @@ namespace daemon_args
   , "Disable ZMQ RPC server"
   };
 
+  const command_line::arg_descriptor<bool> arg_no_rust_rpc = {
+    "no-rust-rpc"
+  , "Disable the Rust/Axum daemon RPC server (enabled by default)"
+  , false
+  };
+
 }  // namespace daemon_args
 
 #endif // DAEMON_COMMAND_LINE_ARGS_H

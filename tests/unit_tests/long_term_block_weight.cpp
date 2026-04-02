@@ -110,7 +110,16 @@ struct BlockchainAndPool
 {
   cryptonote::tx_memory_pool txpool;
   cryptonote::Blockchain bc;
+  // Circular reference: txpool and bc hold references to each other.
+  // bc is not dereferenced during txpool construction.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+#endif
   BlockchainAndPool(): txpool(bc), bc(txpool) {}
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 };
 
 #define PREFIX_WINDOW(hf_version,window) \

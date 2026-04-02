@@ -1,6 +1,6 @@
 # Post Quantum Cryptography (PQC)
 
-> **Last updated:** 2026-03-30
+> **Last updated:** 2026-04-01
 
 ## Purpose
 
@@ -513,7 +513,7 @@ future quantum pressure, but it is not yet a full PQ privacy rewrite.
 
 ### v3 Rollout Notes
 
-- `HF_VERSION_SHEKYL_NG` (`17`) gates `TransactionV3` validation behavior.
+- `HF_VERSION_SHEKYL_NG` (`1`) gates `TransactionV3` validation behavior.
 - Coinbase transactions remain excluded from `pqc_auth`.
 - Nodes, wallets, and indexers should budget for ~5.3KB extra auth material per
   user transaction (before other serialization overhead).
@@ -526,9 +526,15 @@ V3 protects the spend/ownership authorization layer with hybrid PQ
 signatures. The ring anonymity machinery (CLSAG, RingCT, stealth addresses)
 remains classical. V4 addresses this gap with a phased approach.
 
+Shekyl uses a feature-driven upgrade policy: hard forks ship when the
+feature is ready, not on a fixed calendar. V4 depends on research maturity
+of lattice-based privacy primitives that are not yet NIST-standardized, so
+no fixed timeline is committed. See `docs/UPGRADE_POLICY.md`.
+
 ### V4-A: Research and Specification
 
-Target: begin after v3 mainnet stabilization (~3 months post-launch).
+Prerequisite: v3 mainnet stabilized; no critical issues in the hybrid
+spend/ownership layer.
 
 - Survey candidate PQ-anonymous ownership primitives:
   - Lattice-based ring signatures (e.g. extensions of Esgin et al. 2019,
@@ -550,7 +556,7 @@ Target: begin after v3 mainnet stabilization (~3 months post-launch).
 
 ### V4-B: Prototype
 
-Target: ~6 months post-launch.
+Prerequisite: V4-A specification published and reviewed.
 
 - Implement candidate primitives as non-consensus Rust crates under
   `rust/shekyl-crypto-pq-v4/`.
@@ -564,7 +570,7 @@ Target: ~6 months post-launch.
 
 ### V4-C: Testnet Experiment
 
-Target: ~9-12 months post-launch.
+Prerequisite: V4-B benchmarks meet size and performance targets.
 
 - Feature-gate v4 transaction format behind a testnet-only hard fork version.
 - Run privacy regression tests: verify that ring-member ambiguity is not
@@ -575,7 +581,8 @@ Target: ~9-12 months post-launch.
 
 ### V4-D: Activation
 
-Target: ~12-18 months post-launch (dependent on V4-C results).
+Prerequisite: V4-C go report; formal security review of the chosen
+lattice-based scheme.
 
 - Single hard fork activation height (same pattern as HF1).
 - Migration notes for wallets, indexers, and operators.
@@ -618,8 +625,7 @@ protection is stable:
 
 ## Implementation Mapping
 
-All Phase-1 items are implemented. This table serves as an index into the
-codebase for each layer:
+All Phase-1 (single-signer) and Phase-2 (multisig) items are implemented. This table serves as an index into the codebase for each layer:
 
 | # | Layer | Status | Key files |
 |---|-------|--------|-----------|
@@ -629,16 +635,22 @@ codebase for each layer:
 | 4 | Core verification | Done | `src/cryptonote_core/tx_pqc_verify.cpp`, `blockchain.cpp` |
 | 5 | Wallet construction | Done | `src/cryptonote_core/cryptonote_tx_utils.cpp` (standard txs), `src/wallet/wallet2.cpp` (claim txs) |
 | 6 | Documentation | Done | `docs/POST_QUANTUM_CRYPTOGRAPHY.md`, `docs/DOCUMENTATION_TODOS_AND_PQC.md`, `docs/CHANGELOG.md` |
+| 7 | Rust multisig core (scheme_id=2) | Done | `rust/shekyl-crypto-pq/src/multisig.rs` |
+| 8 | FFI scheme dispatch + multisig | Done | `rust/shekyl-ffi/src/lib.rs` (`shekyl_pqc_verify` with scheme_id, `shekyl_pqc_verify_debug`, `shekyl_pqc_multisig_group_id`) |
+| 9 | Consensus verification + scheme downgrade | Done | `src/cryptonote_core/tx_pqc_verify.cpp`, `src/cryptonote_basic/tx_extra.h` (`tx_extra_pqc_ownership`) |
+| 10 | Wallet multisig coordination | Done | `src/wallet/wallet2.cpp` (group creation, file-based signing), `src/wallet/wallet2.h` |
+| 11 | Fuzz testing (4 targets, 10M each) | Done | `rust/shekyl-crypto-pq/fuzz/fuzz_targets/`, `docs/PQC_TEST_VECTOR_002_MULTISIG.json` |
 
 Notes:
 - Staking and unstaking use `create_transactions_2` which routes through
   `construct_tx_with_tx_key` (PQC signing built in).
 - Claim transactions use a dedicated PQC signing block in
   `create_claim_transaction`.
-- Multisig wallets: V3 signature-list multisig (`scheme_id = 2`) is specified
-  in `docs/PQC_MULTISIG.md`. Each signer produces an independent hybrid
-  signature over the shared canonical payload. No DKG is required.
-  Lattice-based threshold multisig (`scheme_id = 3`) is deferred to V4.
+- Classical Monero-style multisig (secret-splitting, `make_multisig`) is
+  removed from the rebooted chain. All multisig is PQC-only via
+  `scheme_id = 2` — see `docs/PQC_MULTISIG.md`.
+- The CLSAG/RingCT layer always uses a single classical key for multisig
+  transactions. M-of-N authorization lives entirely in the `pqc_auth` layer.
 
 ## Open Items
 

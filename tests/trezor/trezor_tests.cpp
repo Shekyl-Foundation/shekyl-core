@@ -223,7 +223,7 @@ int main(int argc, char* argv[])
     if (!failed_tests.empty())
     {
       MLOG(level, "FAILED TESTS:");
-      BOOST_FOREACH(auto test_name, failed_tests)
+      for (auto test_name : failed_tests)
       {
         MLOG(level, "  " << test_name);
       }
@@ -1479,7 +1479,6 @@ tsx_builder * tsx_builder::construct_pending_tx(tools::wallet2::pending_tx &ptx,
   ptx.tx_key = tx_key;
   ptx.additional_tx_keys = additional_tx_keys;
   ptx.dests = m_destinations;
-  ptx.multisig_sigs.clear();
   ptx.construction_data.sources = m_sources;
   ptx.construction_data.change_dts = m_destinations.back();
   ptx.construction_data.splitted_dsts = m_destinations;

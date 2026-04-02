@@ -835,16 +835,6 @@ inline bool do_replay_file(const std::string& filename)
     cryptonote::account_base account; \
     account.generate();
 
-#define GENERATE_MULTISIG_ACCOUNT(account, threshold, total) \
-    CHECK_AND_ASSERT_MES(threshold >= 2 && threshold <= total, false, "Invalid multisig scheme"); \
-    std::vector<cryptonote::account_base> account(total); \
-    do \
-    { \
-      for (size_t msidx = 0; msidx < total; ++msidx) \
-        account[msidx].generate(); \
-      CHECK_AND_ASSERT_MES(make_multisig_accounts(account, threshold), false, "Failed to make multisig accounts."); \
-    } while(0)
-
 #define MAKE_ACCOUNT(VEC_EVENTS, account) \
   cryptonote::account_base account; \
   account.generate(); \

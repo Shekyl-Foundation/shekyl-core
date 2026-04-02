@@ -70,16 +70,15 @@ The CI workflows install all dependencies automatically. For local builds:
    `SHEKYL_VERSION_DEFAULT` in `cmake/Version.cmake` to the next planned
    version so that un-tagged development builds show the correct series.
 
-4. **GitHub Actions takes over.** The `release/tagged` and `gitian` workflows
-   automatically:
-   - Build static Linux x86_64 binaries
-   - Cross-compile Windows x64 binaries via MinGW
-   - Build Gitian deterministic binaries for Linux, Windows, macOS, Android,
-     and FreeBSD (each including Rust toolchain setup)
-   - Package Linux as `.tar.gz`, `.deb`, and `.rpm`
-   - Package Windows as `.zip` and `.exe` installer (NSIS)
-   - Generate `SHA256SUMS` for all artifacts
-   - Publish everything as a GitHub Release
+4. **GitHub Actions takes over.** The `gitian` workflow automatically:
+   - Builds reproducible, deterministic binaries for Linux (x86_64, aarch64,
+     armhf, riscv64), Windows x64, macOS (x86_64, aarch64), and FreeBSD x86_64
+     inside isolated Docker containers
+   - Packages Linux x86_64 and aarch64 binaries as `.deb` and `.rpm`
+   - Builds a Windows NSIS installer (`.exe`)
+   - Creates a source archive with all submodules
+   - Generates `SHA256SUMS` for all artifacts
+   - Publishes everything as a GitHub Release
 
 5. **Verify the release** at https://github.com/Shekyl-Foundation/shekyl-core/releases
 
@@ -91,20 +90,29 @@ The CI workflows install all dependencies automatically. For local builds:
 
 ## Release Artifacts
 
-Each release produces these files:
+Each release produces these files (all binaries are Gitian reproducible builds):
 
 | File | Description |
 |------|-------------|
-| `shekyl-vX.Y.Z-linux-x86_64.tar.gz` | Linux binaries (portable static build) |
-| `shekyl_X.Y.Z_amd64.deb` | Debian/Ubuntu package with systemd unit |
-| `shekyl-X.Y.Z.x86_64.rpm` | RPM package for Fedora/RHEL/SUSE |
-| `shekyl-vX.Y.Z-win-x64.zip` | Windows binaries (portable zip) |
+| `shekyl-x86_64-linux-gnu-vX.Y.Z.tar.bz2` | Linux x86_64 binaries |
+| `shekyl-aarch64-linux-gnu-vX.Y.Z.tar.bz2` | Linux ARM64 binaries |
+| `shekyl-arm-linux-gnueabihf-vX.Y.Z.tar.bz2` | Linux ARMv7 binaries |
+| `shekyl-riscv64-linux-gnu-vX.Y.Z.tar.bz2` | Linux RISC-V 64-bit binaries |
+| `shekyl_X.Y.Z_amd64.deb` | Debian/Ubuntu x86_64 package with systemd unit |
+| `shekyl_X.Y.Z_arm64.deb` | Debian/Ubuntu ARM64 package with systemd unit |
+| `shekyl-X.Y.Z-1.x86_64.rpm` | RPM x86_64 package for Fedora/RHEL/SUSE |
+| `shekyl-X.Y.Z-1.aarch64.rpm` | RPM ARM64 package for Fedora/RHEL/SUSE |
+| `shekyl-x86_64-w64-mingw32-vX.Y.Z.zip` | Windows x64 binaries (portable zip) |
 | `shekyl-vX.Y.Z-win-x64-setup.exe` | Windows installer (NSIS) |
+| `shekyl-x86_64-apple-darwin11-vX.Y.Z.tar.bz2` | macOS Intel binaries |
+| `shekyl-aarch64-apple-darwin11-vX.Y.Z.tar.bz2` | macOS Apple Silicon binaries |
+| `shekyl-x86_64-unknown-freebsd-vX.Y.Z.tar.bz2` | FreeBSD x86_64 binaries |
+| `shekyl-vX.Y.Z-source.tar.gz` | Complete source with submodules |
 | `SHA256SUMS` | Checksums for all artifacts |
 
 ## Linux Package Details
 
-The `.deb` and `.rpm` packages:
+The `.deb` and `.rpm` packages are available for both x86_64 and ARM64:
 - Install `shekyld`, `shekyl-wallet-cli`, and `shekyl-wallet-rpc` to `/usr/local/bin/`
 - Include a systemd service unit for `shekyld`
 - After install: `sudo systemctl enable --now shekyld`
@@ -121,10 +129,19 @@ The NSIS installer:
 
 ## Gitian Deterministic Builds
 
-The `gitian` workflow runs automatically on every tag push and produces
-reproducible builds for all platforms. It can also be triggered manually via
-the GitHub Actions UI (`workflow_dispatch`), which allows overriding the tag
-and repository URL -- useful for testing against a fork.
+The `gitian` workflow is the **sole release pipeline**. It runs automatically
+on every tag push and produces reproducible builds for all platforms, then
+packages and publishes the GitHub Release. It can also be triggered manually
+via the GitHub Actions UI (`workflow_dispatch`), which allows overriding the
+tag and repository URL -- useful for testing against a fork.
+
+The pipeline has two phases:
+1. **Build** -- 4 parallel Gitian jobs (Linux, Windows, macOS, FreeBSD)
+   produce deterministic tarballs inside isolated Docker containers.
+2. **Package & Publish** -- a lightweight job downloads the Gitian artifacts,
+   creates `.deb`/`.rpm` packages and a Windows NSIS installer from the
+   pre-built binaries, generates a source archive and `SHA256SUMS`, then
+   publishes the GitHub Release.
 
 Each Gitian build descriptor installs the Rust toolchain via `rustup` with
 the appropriate cross-compilation targets (ARM, aarch64, RISC-V for Linux;
@@ -153,4 +170,7 @@ Or trigger manually from the Actions tab without retagging.
 
 ## Future Platforms
 
-macOS builds and native packages (`.dmg`) are planned for a future release.
+- **macOS `.dmg` installer** -- native disk image with drag-to-Applications UX.
+- **Linux AppImage** -- single-file portable binary for desktop distributions.
+- Additional architectures (armhf, RISC-V, i686) are available via Gitian
+  deterministic builds and may be promoted to the main release if demand warrants.

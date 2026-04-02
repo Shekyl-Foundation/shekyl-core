@@ -509,43 +509,54 @@ namespace cryptonote
 
     if (tx.version >= 3)
     {
-      if (sender_account_keys.m_pqc_secret_key.empty())
+      const bool multisig_preassembled = tx.pqc_auth
+          && tx.pqc_auth->scheme_id == 2
+          && !tx.pqc_auth->hybrid_signature.empty();
+
+      if (multisig_preassembled)
       {
-        LOG_ERROR("Cannot create v3 transaction: wallet has no PQC secret key (restored from keys without PQ?)");
-        return false;
+        MCINFO("construct_tx", "Pre-assembled multisig pqc_auth detected (scheme_id=2); skipping single-key sign");
       }
-      if (sender_account_keys.m_account_address.m_pqc_public_key.empty())
+      else
       {
-        LOG_ERROR("Cannot create v3 transaction: wallet has no PQC public key");
-        return false;
+        if (sender_account_keys.m_pqc_secret_key.empty())
+        {
+          LOG_ERROR("Cannot create v3 transaction: wallet has no PQC secret key (restored from keys without PQ?)");
+          return false;
+        }
+        if (sender_account_keys.m_account_address.m_pqc_public_key.empty())
+        {
+          LOG_ERROR("Cannot create v3 transaction: wallet has no PQC public key");
+          return false;
+        }
+        pqc_authentication auth;
+        auth.auth_version = 1;
+        auth.scheme_id = 1;
+        auth.flags = 0;
+        auth.hybrid_public_key = sender_account_keys.m_account_address.m_pqc_public_key;
+        auth.hybrid_signature.clear();
+        tx.pqc_auth = auth;
+        std::string payload_blob;
+        if (!get_transaction_signed_payload(tx, payload_blob))
+        {
+          LOG_ERROR("Failed to build PQC signed payload");
+          return false;
+        }
+        crypto::hash payload_hash;
+        cryptonote::get_blob_hash(payload_blob, payload_hash);
+        ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
+            sender_account_keys.m_pqc_secret_key.data(),
+            sender_account_keys.m_pqc_secret_key.size(),
+            reinterpret_cast<const uint8_t*>(payload_hash.data),
+            sizeof(payload_hash.data));
+        if (!sig_result.success)
+        {
+          LOG_ERROR("PQC hybrid signing failed");
+          return false;
+        }
+        tx.pqc_auth->hybrid_signature.assign(sig_result.signature.ptr, sig_result.signature.ptr + sig_result.signature.len);
+        shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
       }
-      pqc_authentication auth;
-      auth.auth_version = 1;
-      auth.scheme_id = 1;
-      auth.flags = 0;
-      auth.hybrid_public_key = sender_account_keys.m_account_address.m_pqc_public_key;
-      auth.hybrid_signature.clear();
-      tx.pqc_auth = auth;
-      std::string payload_blob;
-      if (!get_transaction_signed_payload(tx, payload_blob))
-      {
-        LOG_ERROR("Failed to build PQC signed payload");
-        return false;
-      }
-      crypto::hash payload_hash;
-      cryptonote::get_blob_hash(payload_blob, payload_hash);
-      ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
-          sender_account_keys.m_pqc_secret_key.data(),
-          sender_account_keys.m_pqc_secret_key.size(),
-          reinterpret_cast<const uint8_t*>(payload_hash.data),
-          sizeof(payload_hash.data));
-      if (!sig_result.success)
-      {
-        LOG_ERROR("PQC hybrid signing failed");
-        return false;
-      }
-      tx.pqc_auth->hybrid_signature.assign(sig_result.signature.ptr, sig_result.signature.ptr + sig_result.signature.len);
-      shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
     }
 
     MCINFO("construct_tx", "transaction_created: " << get_transaction_hash(tx) << ENDL << obj_to_json_str(tx) << ENDL);

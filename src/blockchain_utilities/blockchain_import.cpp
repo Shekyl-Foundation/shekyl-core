@@ -31,9 +31,10 @@
 #include <algorithm>
 #include <fstream>
 
+#include <chrono>
+#include <thread>
 #include <filesystem>
 #include <boost/algorithm/string.hpp>
-#include <unistd.h>
 #include "misc_log_ex.h"
 #include "bootstrap_file.h"
 #include "bootstrap_serialization.h"
@@ -727,7 +728,7 @@ int main(int argc, char* argv[])
       "*****************************************************************************************\n"
       "You have 90 seconds to press ^C or terminate this program before unverified import starts\n"
       "*****************************************************************************************");
-    sleep(90);
+    std::this_thread::sleep_for(std::chrono::seconds(90));
   }
 
   cryptonote::cryptonote_protocol_stub pr; //TODO: stub only for this kind of test, make real validation of relayed objects

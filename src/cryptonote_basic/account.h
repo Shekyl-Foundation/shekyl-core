@@ -43,7 +43,6 @@ namespace cryptonote
     crypto::secret_key   m_spend_secret_key;
     crypto::secret_key   m_view_secret_key;
     std::vector<uint8_t> m_pqc_secret_key;
-    std::vector<crypto::secret_key> m_multisig_keys;
     hw::device *m_device = &hw::get_device("default");
     crypto::chacha_iv m_encryption_iv;
 
@@ -52,7 +51,6 @@ namespace cryptonote
       KV_SERIALIZE_VAL_POD_AS_BLOB_FORCE(m_spend_secret_key)
       KV_SERIALIZE_VAL_POD_AS_BLOB_FORCE(m_view_secret_key)
       KV_SERIALIZE_OPT(m_pqc_secret_key, std::vector<uint8_t>())
-      KV_SERIALIZE_CONTAINER_POD_AS_BLOB(m_multisig_keys)
       const crypto::chacha_iv default_iv{{0, 0, 0, 0, 0, 0, 0, 0}};
       KV_SERIALIZE_VAL_POD_AS_BLOB_OPT(m_encryption_iv, default_iv)
     END_KV_SERIALIZE_MAP()
@@ -84,7 +82,6 @@ namespace cryptonote
     /// Returns true if keys were generated; false if address already has PQC keys or generation failed.
     bool generate_pqc_for_restored_address();
     void create_from_viewkey(const cryptonote::account_public_address& address, const crypto::secret_key& viewkey);
-    bool make_multisig(const crypto::secret_key &view_secret_key, const crypto::secret_key &spend_secret_key, const crypto::public_key &spend_public_key, const std::vector<crypto::secret_key> &multisig_keys);
     const account_keys& get_keys() const;
     std::string get_public_address_str(network_type nettype) const;
     std::string get_public_integrated_address_str(const crypto::hash8 &payment_id, network_type nettype) const;
@@ -101,7 +98,6 @@ namespace cryptonote
 
     void forget_spend_key();
     void set_spend_key(const crypto::secret_key& spend_secret_key);
-    const std::vector<crypto::secret_key> &get_multisig_keys() const { return m_keys.m_multisig_keys; }
 
     void encrypt_keys(const crypto::chacha_key &key) { m_keys.encrypt(key); }
     void decrypt_keys(const crypto::chacha_key &key) { m_keys.decrypt(key); }

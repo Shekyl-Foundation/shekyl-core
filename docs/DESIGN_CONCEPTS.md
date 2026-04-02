@@ -1,6 +1,6 @@
 # Shekyl Design Concepts
 
-> **Last updated:** 2026-03-30
+> **Last updated:** 2026-04-01
 
 ## Monetary Supply and Denomination Policy (Next Generation Shekyl)
 

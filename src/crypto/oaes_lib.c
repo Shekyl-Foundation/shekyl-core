@@ -39,9 +39,7 @@
  #include <malloc.h>
 #endif
 
-// ANDROID, FreeBSD, OpenBSD and NetBSD also don't need timeb.h
-#if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__ANDROID__) \
-  && !defined(__NetBSD__)
+#if defined(WIN32) && defined(_MSC_VER)
  #include <sys/timeb.h>
 #else
  #include <sys/time.h>
@@ -474,67 +472,57 @@ OAES_RET oaes_sprintf(
 #ifdef OAES_HAVE_ISAAC
 static void oaes_get_seed( char buf[RANDSIZ + 1] )
 {
-        #if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__NetBSD__)
-	struct timeb timer;
-	struct tm *gmTimer;
-	char * _test = NULL;
-	
-	ftime (&timer);
-	gmTimer = gmtime( &timer.time );
-	_test = (char *) calloc( sizeof( char ), timer.millitm );
-	sprintf( buf, "%04d%02d%02d%02d%02d%02d%03d%p%d",
-		gmTimer->tm_year + 1900, gmTimer->tm_mon + 1, gmTimer->tm_mday,
-		gmTimer->tm_hour, gmTimer->tm_min, gmTimer->tm_sec, timer.millitm,
-		_test + timer.millitm, GETPID() );
-	#else
 	struct timeval timer;
 	struct tm *gmTimer;
 	char * _test = NULL;
-	
+	time_t tv_sec;
+
 	gettimeofday(&timer, NULL);
-	gmTimer = gmtime( &timer.tv_sec );
-	_test = (char *) calloc( sizeof( char ), timer.tv_usec/1000 );
+	tv_sec = (time_t)timer.tv_sec;
+	gmTimer = gmtime( &tv_sec );
+	_test = (char *) calloc( timer.tv_usec/1000, sizeof( char ) );
 	sprintf( buf, "%04d%02d%02d%02d%02d%02d%03d%p%d",
 		gmTimer->tm_year + 1900, gmTimer->tm_mon + 1, gmTimer->tm_mday,
-		gmTimer->tm_hour, gmTimer->tm_min, gmTimer->tm_sec, timer.tv_usec/1000,
+		gmTimer->tm_hour, gmTimer->tm_min, gmTimer->tm_sec, (int)(timer.tv_usec/1000),
 		_test + timer.tv_usec/1000, GETPID() );
-	#endif
-		
+
 	if( _test )
 		free( _test );
 }
 #else
 static uint32_t oaes_get_seed(void)
 {
-        #if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__ANDROID__) && !defined(__NetBSD__)
+#ifdef _MSC_VER
 	struct timeb timer;
 	struct tm *gmTimer;
 	char * _test = NULL;
 	uint32_t _ret = 0;
-	
-	ftime (&timer);
+
+	ftime(&timer);
 	gmTimer = gmtime( &timer.time );
-	_test = (char *) calloc( sizeof( char ), timer.millitm );
+	_test = (char *) calloc( timer.millitm, sizeof( char ) );
 	_ret = gmTimer->tm_year + 1900 + gmTimer->tm_mon + 1 + gmTimer->tm_mday +
 			gmTimer->tm_hour + gmTimer->tm_min + gmTimer->tm_sec + timer.millitm +
 			(uintptr_t) ( _test + timer.millitm ) + GETPID();
-	#else
+#else
 	struct timeval timer;
 	struct tm *gmTimer;
 	char * _test = NULL;
 	uint32_t _ret = 0;
-	
+	time_t tv_sec;
+
 	gettimeofday(&timer, NULL);
-	gmTimer = gmtime( &timer.tv_sec );
-	_test = (char *) calloc( sizeof( char ), timer.tv_usec/1000 );
+	tv_sec = (time_t)timer.tv_sec;
+	gmTimer = gmtime( &tv_sec );
+	_test = (char *) calloc( timer.tv_usec/1000, sizeof( char ) );
 	_ret = gmTimer->tm_year + 1900 + gmTimer->tm_mon + 1 + gmTimer->tm_mday +
 			gmTimer->tm_hour + gmTimer->tm_min + gmTimer->tm_sec + timer.tv_usec/1000 +
 			(uintptr_t) ( _test + timer.tv_usec/1000 ) + GETPID();
-	#endif
+#endif
 
 	if( _test )
 		free( _test );
-	
+
 	return _ret;
 }
 #endif // OAES_HAVE_ISAAC
@@ -635,7 +623,7 @@ static OAES_RET oaes_key_gen( OAES_CTX * ctx, size_t key_size )
 	if( NULL == _ctx )
 		return OAES_RET_ARG1;
 	
-	_key = (oaes_key *) calloc( sizeof( oaes_key ), 1 );
+	_key = (oaes_key *) calloc( 1, sizeof( oaes_key ) );
 	
 	if( NULL == _key )
 		return OAES_RET_MEM;
@@ -812,7 +800,7 @@ OAES_RET oaes_key_import( OAES_CTX * ctx,
 	if( _ctx->key )
 		oaes_key_destroy( &(_ctx->key) );
 	
-	_ctx->key = (oaes_key *) calloc( sizeof( oaes_key ), 1 );
+	_ctx->key = (oaes_key *) calloc( 1, sizeof( oaes_key ) );
 	
 	if( NULL == _ctx->key )
 		return OAES_RET_MEM;
@@ -864,7 +852,7 @@ OAES_RET oaes_key_import_data( OAES_CTX * ctx,
 	if( _ctx->key )
 		oaes_key_destroy( &(_ctx->key) );
 	
-	_ctx->key = (oaes_key *) calloc( sizeof( oaes_key ), 1 );
+	_ctx->key = (oaes_key *) calloc( 1, sizeof( oaes_key ) );
 	
 	if( NULL == _ctx->key )
 		return OAES_RET_MEM;
@@ -893,7 +881,7 @@ OAES_RET oaes_key_import_data( OAES_CTX * ctx,
 
 OAES_CTX * oaes_alloc(void)
 {
-	oaes_ctx * _ctx = (oaes_ctx *) calloc( sizeof( oaes_ctx ), 1 );
+	oaes_ctx * _ctx = (oaes_ctx *) calloc( 1, sizeof( oaes_ctx ) );
 	
 	if( NULL == _ctx )
 		return NULL;

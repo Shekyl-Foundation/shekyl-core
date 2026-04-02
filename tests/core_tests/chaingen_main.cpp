@@ -197,10 +197,6 @@ int main(int argc, char* argv[])
     // Legacy Monero-era v2 mixin/dust, RCT, Borromean, and old BP tests removed.
     // Shekyl enforces v3 (with PQC auth) for all non-coinbase transactions from genesis.
 
-    // Multisig tests disabled: PQC keys are incompatible with multisig (account.cpp
-    // clears m_pqc_secret_key in make_multisig). Since v3 transactions require PQC auth,
-    // multisig spending needs a PQC-multisig protocol before these tests can be re-enabled.
-
     // HF1 policy: only BP+ (Bulletproofs Plus) range proofs are accepted from genesis.
     // Legacy BP/CLSAG/Borromean acceptance-path tests removed.
     // Disabled: no "before BP+" era in Shekyl (HF_VERSION_BULLETPROOF_PLUS = 1 = genesis)
@@ -235,7 +231,7 @@ int main(int argc, char* argv[])
     if (!failed_tests.empty())
     {
       MLOG(level, "FAILED TESTS:");
-      BOOST_FOREACH(auto test_name, failed_tests)
+      for (auto test_name : failed_tests)
       {
         MLOG(level, "  " << test_name);
       }

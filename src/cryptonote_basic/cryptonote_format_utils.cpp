@@ -90,19 +90,6 @@ namespace cryptonote
     return &reinterpret_cast<const unsigned char &>(point);
   }
 
-  // a copy of rct::addKeys, since we can't link to libringct to avoid circular dependencies
-  static void add_public_key(crypto::public_key &AB, const crypto::public_key &A, const crypto::public_key &B) {
-      ge_p3 B2, A2;
-      CHECK_AND_ASSERT_THROW_MES_L1(ge_frombytes_vartime(&B2, &B) == 0, "ge_frombytes_vartime failed at "+boost::lexical_cast<std::string>(__LINE__));
-      CHECK_AND_ASSERT_THROW_MES_L1(ge_frombytes_vartime(&A2, &A) == 0, "ge_frombytes_vartime failed at "+boost::lexical_cast<std::string>(__LINE__));
-      ge_cached tmp2;
-      ge_p3_to_cached(&tmp2, &B2);
-      ge_p1p1 tmp3;
-      ge_add(&tmp3, &A2, &tmp2);
-      ge_p1p1_to_p3(&A2, &tmp3);
-      ge_p3_tobytes(&AB, &A2);
-  }
-
   uint64_t get_transaction_weight_clawback(const transaction &tx, size_t n_padded_outputs)
   {
     const rct::rctSig &rv = tx.rct_signatures;
@@ -335,23 +322,7 @@ namespace cryptonote
     {
       // derive secret key with subaddress - step 1: original CN derivation
       crypto::secret_key scalar_step1;
-      crypto::secret_key spend_skey = crypto::null_skey;
-
-      if (ack.m_multisig_keys.empty())
-      {
-        // if not multisig, use normal spend skey
-        spend_skey = ack.m_spend_secret_key;
-      }
-      else
-      {
-        // if multisig, use sum of multisig privkeys (local account's share of aggregate spend key)
-        for (const auto &multisig_key : ack.m_multisig_keys)
-        {
-          sc_add((unsigned char*)spend_skey.data,
-            (const unsigned char*)multisig_key.data,
-            (const unsigned char*)spend_skey.data);
-        }
-      }
+      crypto::secret_key spend_skey = ack.m_spend_secret_key;
 
       // computes Hs(a*R || idx) + b
       hwdev.derive_secret_key(recv_derivation, real_output_index, spend_skey, scalar_step1);
@@ -371,23 +342,8 @@ namespace cryptonote
 
       in_ephemeral.sec = scalar_step2;
 
-      if (ack.m_multisig_keys.empty())
-      {
-        // when not in multisig, we know the full spend secret key, so the output pubkey can be obtained by scalarmultBase
-        CHECK_AND_ASSERT_MES(hwdev.secret_key_to_public_key(in_ephemeral.sec, in_ephemeral.pub), false, "Failed to derive public key");
-      }
-      else
-      {
-        // when in multisig, we only know the partial spend secret key. but we do know the full spend public key, so the output pubkey can be obtained by using the standard CN key derivation
-        CHECK_AND_ASSERT_MES(hwdev.derive_public_key(recv_derivation, real_output_index, ack.m_account_address.m_spend_public_key, in_ephemeral.pub), false, "Failed to derive public key");
-        // and don't forget to add the contribution from the subaddress part
-        if (!received_index.is_zero())
-        {
-          crypto::public_key subaddr_pk;
-          CHECK_AND_ASSERT_MES(hwdev.secret_key_to_public_key(subaddr_sk, subaddr_pk), false, "Failed to derive public key");
-          add_public_key(in_ephemeral.pub, in_ephemeral.pub, subaddr_pk);
-        }
-      }
+      // full spend secret key: output pubkey via scalarmultBase
+      CHECK_AND_ASSERT_MES(hwdev.secret_key_to_public_key(in_ephemeral.sec, in_ephemeral.pub), false, "Failed to derive public key");
 
       CHECK_AND_ASSERT_MES(in_ephemeral.pub == out_key,
            false, "key image helper precomp: given output pubkey doesn't match the derived one");
@@ -648,6 +604,7 @@ namespace cryptonote
     if (!pick<tx_extra_nonce>(nar, tx_extra_fields, TX_EXTRA_NONCE)) return false;
     if (!pick<tx_extra_merge_mining_tag>(nar, tx_extra_fields, TX_EXTRA_MERGE_MINING_TAG)) return false;
     if (!pick<tx_extra_mysterious_minergate>(nar, tx_extra_fields, TX_EXTRA_MYSTERIOUS_MINERGATE_TAG)) return false;
+    if (!pick<tx_extra_pqc_ownership>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_OWNERSHIP)) return false;
     if (!pick<tx_extra_padding>(nar, tx_extra_fields, TX_EXTRA_TAG_PADDING)) return false;
 
     // if not empty, someone added a new type and did not add a case above

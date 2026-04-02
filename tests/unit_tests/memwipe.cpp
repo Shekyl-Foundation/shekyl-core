@@ -45,12 +45,19 @@ static void test(bool wipe)
   ASSERT_EQ(foo, bar);
   free(foo);
   char *quux = (char*)malloc(4); // same size, just after free, so we're likely to get the same, depending on the allocator
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
   if ((intptr_t)quux == foop)
   {
     MDEBUG(std::hex << std::setw(8) << std::setfill('0') << *(uint32_t*)quux);
     if (wipe) { ASSERT_TRUE(memcmp(quux, "bar", 3)); }
   }
   else MWARNING("We did not get the same location, cannot check");
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
   free(quux);
 }
 

@@ -277,13 +277,6 @@ namespace tx {
     translate_address(dst->mutable_addr(), &(src->addr));
   }
 
-  void translate_klrki(MoneroMultisigKLRki * dst, const rct::multisig_kLRki * src){
-    dst->set_k(key_to_string(src->k));
-    dst->set_l(key_to_string(src->L));
-    dst->set_r(key_to_string(src->R));
-    dst->set_ki(key_to_string(src->ki));
-  }
-
   void translate_rct_key(MoneroRctKey * dst, const rct::ctkey * src){
     dst->set_dest(key_to_string(src->dest));
     dst->set_commitment(key_to_string(src->mask));
@@ -383,7 +376,6 @@ namespace tx {
     m_aux_data = aux_data;
     m_tx_idx = tx_idx;
     m_ct.tx_data = cur_src_tx();
-    m_multisig = false;
     m_client_version = 3;
   }
 
@@ -475,7 +467,6 @@ namespace tx {
     dst->set_amount(src.amount);
     dst->set_rct(src.rct);
     dst->set_mask(key_to_string(src.mask));
-    translate_klrki(dst->mutable_multisig_klrki(), &(src.multisig_kLRki));
     dst->set_subaddr_minor(transfer.m_subaddr_index.minor);
   }
 
@@ -936,21 +927,6 @@ namespace tx {
 
   void Signer::step_final_ack(std::shared_ptr<const messages::monero::MoneroTransactionFinalAck> ack){
     CHECK_AND_ASSERT_THROW_MES(is_clsag(), "Only CLSAGs signatures are supported");
-
-    if (m_multisig){
-      auto & cout_key = ack->cout_key();
-      for(auto & cur : m_ct.couts){
-        if (cur.size() != crypto::chacha::IV_SIZE + 32){
-          throw std::invalid_argument("Encrypted cout has invalid length");
-        }
-
-        char buff[32];
-        auto data = cur.data();
-
-        crypto::chacha::decrypt(data + crypto::chacha::IV_SIZE, 32, reinterpret_cast<const uint8_t *>(cout_key.data()), reinterpret_cast<const uint8_t *>(data), buff);
-        m_ct.couts_dec.emplace_back(buff, 32);
-      }
-    }
 
     m_ct.enc_salt1 = ack->salt();
     m_ct.enc_salt2 = ack->rand_mult();

@@ -30,7 +30,7 @@ coinbase fan-out).
 ## Implementation Status
 
 The full claim-based staking system is implemented and active from
-HF_VERSION_SHEKYL_NG (hardfork 17).
+HF_VERSION_SHEKYL_NG (hardfork 1).
 
 ### Transaction types
 

@@ -140,7 +140,7 @@ namespace hw {
       log_hexbuffer("find_mac: lookup for ", (char*)sec,32);
       for (size_t i=0; i<sz; i++) {
        log_hexbuffer("find_mac:   - try ",(char*)hmacs[i].sec,32);
-        if (memcmp(sec, hmacs[i].sec, 32) == 0) {
+        if (crypto_verify_32(sec, reinterpret_cast<const unsigned char*>(hmacs[i].sec)) == 0) {
           memcpy(hmac, hmacs[i].hmac, 32);
           log_hexbuffer("find_mac:   - found ",(char*)hmacs[i].hmac,32);
           return;

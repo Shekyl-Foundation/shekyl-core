@@ -91,11 +91,22 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 - Upstream Monero PRs #9628 (ASIO `io_service` → `io_context`), #6690 (serialization), #9544 (daemonizer) confirmed already absorbed.
 - Boost minimum version bumped from 1.62 to 1.74 (`BOOST_MIN_VER` in `CMakeLists.txt`). `contrib/depends` Boost upgraded from 1.69.0 to 1.74.0 with C++17 flags. CI containers updated to Ubuntu 22.04 minimum (Debian 11 and Ubuntu 20.04 dropped).
 
+**Phase 1 complete: Daemon RPC migrated to Rust/Axum** (see `docs/DAEMON_RPC_RUST.md`):
+
+- `shekyl-daemon-rpc` Rust crate replaces `epee::http_server_impl_base` for daemon RPC transport.
+- `core_rpc_ffi.h`/`.cpp` provides a C dispatch facade over the existing `core_rpc_server` handlers.
+- All 90 endpoints (33 JSON REST, 9 binary, 48 JSON-RPC) are routed through Axum.
+- JSON REST accepts both GET and POST; binary endpoints return 400 on parse failure (matching epee).
+- Enabled by default; use `--no-rust-rpc` to fall back to legacy epee HTTP.
+- Validated on live testnet: 23 pass, 2 expected diffs, 2 binary skips (see `docs/DAEMON_RPC_RUST.md`).
+- Validation harness at `tests/rpc_comparison/compare_rpc.sh`; test data in `shekyl-dev/data/rpc_comparison/`.
+- **Remaining for cutover**: wallet sync test (binary endpoints with real payloads), standard port binding.
+
 **Deferred hard areas** (tagged `TODO(shekyl-v4)` in source):
 
 | Area | Files | Rationale for deferral |
 |------|-------|----------------------|
-| **ASIO / epee networking** | `abstract_tcp_server2.h`, `levin_protocol_handler_async.h` | Core networking layer; every P2P and RPC path depends on it |
+| **ASIO / epee networking** | `abstract_tcp_server2.h`, `levin_protocol_handler_async.h` | P2P networking layer; RPC already migrated to Axum |
 | **Multi-index containers** | `net_peerlist.h` | Composite indices (by address, time, id) have no direct std equivalent |
 | **Spirit parser** | `http_auth.cpp` | Heavyweight compile dep; small grammar, but needs manual rewrite |
 | **Multiprecision** | `difficulty.h`, `int-util.cpp` | Consensus-critical 128-bit arithmetic; evaluate `__uint128_t` |
@@ -248,7 +259,7 @@ Completed:
 | Release | Full checklist; Shekyl-specific seeds, wallets, exchanges | — |
 | Seeds | Populate DNS/IP seeds; runtime seed add; Shekyl naming | — |
 | Economics / PoW | Finish config-driven proof activation and staker-claim transaction grammar | Stake-ratio chain-state tracking implemented; modular PoW scaffolding implemented |
-| **Boost migration** | C++17 bump complete; `boost::optional` fully migrated (~93 files); `boost::variant` fully migrated (~40 files); `boost::filesystem` migrated in wallet/RPC/utility layers; `boost::format` removed from wallet2/wallet_rpc/wallet_args; Boost minimum bumped to 1.74; CI updated to Ubuntu 22.04+; remaining hard areas deferred with `TODO(shekyl-v4)` (see §1.11) | Majority of codebase now uses `std::optional`, `std::variant`, `std::filesystem` |
+| **Boost migration** | C++17 bump complete; `boost::optional` fully migrated (~93 files); `boost::variant` fully migrated (~40 files); `boost::filesystem` migrated in wallet/RPC/utility layers; `boost::format` removed from wallet2/wallet_rpc/wallet_args; Boost minimum bumped to 1.74; CI updated to Ubuntu 22.04+; **daemon RPC HTTP server migrated from epee to Rust/Axum** (Phase 1); remaining hard areas deferred with `TODO(shekyl-v4)` (see §1.11) | Majority of codebase now uses `std::optional`, `std::variant`, `std::filesystem`; daemon RPC on Axum |
 | **PQC** | **v3 complete; 4 published vectors (1 positive, 3 negative); V4 roadmap published; external audit and KEM implementation remain** | **Core of this document** |
 
 ---

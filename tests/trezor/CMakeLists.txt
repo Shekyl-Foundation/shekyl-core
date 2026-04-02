@@ -46,7 +46,6 @@ monero_add_minimal_executable(trezor_tests
 
 target_link_libraries(trezor_tests
   PRIVATE
-    multisig
     cryptonote_core
     p2p
     version

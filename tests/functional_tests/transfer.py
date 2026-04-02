@@ -170,7 +170,6 @@ class TransferTest():
         assert len(res.tx_blob) > 0
         tx_weight = res.weight
         assert len(res.tx_metadata) == 0
-        assert len(res.multisig_txset) == 0
         assert len(res.unsigned_txset) == 0
         unsigned_txset = res.unsigned_txset
 
@@ -274,7 +273,6 @@ class TransferTest():
         fee = res.fee
         assert len(res.tx_blob) > 0
         assert len(res.tx_metadata) == 0
-        assert len(res.multisig_txset) == 0
         assert len(res.unsigned_txset) == 0
         tx_blob = res.tx_blob
         running_balances[0] -= 1000000000000 + fee
@@ -364,7 +362,6 @@ class TransferTest():
         fee = res.fee
         assert len(res.tx_blob) == 0
         assert len(res.tx_metadata) == 0
-        assert len(res.multisig_txset) == 0
         assert len(res.unsigned_txset) == 0
         unsigned_txset = res.unsigned_txset
 
@@ -479,7 +476,6 @@ class TransferTest():
         fee = res.fee
         assert len(res.tx_blob) == 0
         assert len(res.tx_metadata) == 0
-        assert len(res.multisig_txset) == 0
         assert len(res.unsigned_txset) == 0
 
         running_balances[0] -= 200000000 + fee
@@ -612,7 +608,6 @@ class TransferTest():
             assert len(res.tx_blob_list) > 0
             assert len(res.tx_blob_list[0]) > 0
             assert not 'tx_metadata_list' in res or len(res.tx_metadata_list) == 0
-            assert not 'multisig_txset' in res or len(res.multisig_txset) == 0
             assert not 'unsigned_txset' in res or len(res.unsigned_txset) == 0
             assert len(res.tx_blob_list) == 1
             txes[i][1] = res.tx_blob_list[0]
