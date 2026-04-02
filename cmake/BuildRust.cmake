@@ -158,13 +158,15 @@ if(RUST_TARGET_TRIPLE AND CMAKE_C_COMPILER)
     endif()
 endif()
 
+# ── shekyl-ffi (crypto, staking, economics — linked by all targets) ──────────
+
 add_custom_command(
     OUTPUT ${SHEKYL_FFI_LIBRARY}
     COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
         ${CARGO_EXECUTABLE} build ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
         -p shekyl-ffi
     WORKING_DIRECTORY ${RUST_SOURCE_DIR}
-    COMMENT "${_rust_comment}"
+    COMMENT "${_rust_comment} (shekyl-ffi)"
     VERBATIM
 )
 
@@ -182,4 +184,40 @@ elseif(APPLE)
     set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;-framework Security;-framework CoreFoundation" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
 else()
     set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;ws2_32;userenv;bcrypt;ntdll" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
+endif()
+
+# ── shekyl-daemon-rpc (Axum server — linked only by the daemon target) ──────
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT MSVC)
+    set(SHEKYL_DAEMON_RPC_LIBRARY "${RUST_BUILD_DIR}/libshekyl_daemon_rpc.a")
+elseif(MSVC)
+    set(SHEKYL_DAEMON_RPC_LIBRARY "${RUST_BUILD_DIR}/shekyl_daemon_rpc.lib")
+else()
+    set(SHEKYL_DAEMON_RPC_LIBRARY "${RUST_BUILD_DIR}/libshekyl_daemon_rpc.a")
+endif()
+
+add_custom_command(
+    OUTPUT ${SHEKYL_DAEMON_RPC_LIBRARY}
+    COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
+        ${CARGO_EXECUTABLE} build ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
+        -p shekyl-daemon-rpc
+    WORKING_DIRECTORY ${RUST_SOURCE_DIR}
+    COMMENT "${_rust_comment} (shekyl-daemon-rpc)"
+    VERBATIM
+)
+
+add_custom_target(shekyl_daemon_rpc_rust ALL DEPENDS ${SHEKYL_DAEMON_RPC_LIBRARY})
+
+add_library(shekyl_daemon_rpc STATIC IMPORTED GLOBAL)
+set_target_properties(shekyl_daemon_rpc PROPERTIES
+    IMPORTED_LOCATION ${SHEKYL_DAEMON_RPC_LIBRARY}
+)
+add_dependencies(shekyl_daemon_rpc shekyl_daemon_rpc_rust)
+
+if(UNIX AND NOT APPLE)
+    set(SHEKYL_DAEMON_RPC_LINK_LIBS "shekyl_daemon_rpc;pthread;dl" CACHE INTERNAL "Rust daemon RPC linker flags (daemon only)" FORCE)
+elseif(APPLE)
+    set(SHEKYL_DAEMON_RPC_LINK_LIBS "shekyl_daemon_rpc;-framework Security;-framework CoreFoundation" CACHE INTERNAL "Rust daemon RPC linker flags (daemon only)" FORCE)
+else()
+    set(SHEKYL_DAEMON_RPC_LINK_LIBS "shekyl_daemon_rpc;ws2_32;userenv;bcrypt;ntdll" CACHE INTERNAL "Rust daemon RPC linker flags (daemon only)" FORCE)
 endif()

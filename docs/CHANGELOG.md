@@ -140,6 +140,14 @@
 
 ### 🐛 Fixed
 
+- **CI link errors: separated `shekyl-daemon-rpc` from `shekyl-ffi`.** The daemon
+  RPC Axum crate was bundled into `libshekyl_ffi.a`, causing `undefined reference
+  to core_rpc_ffi_*` on non-daemon targets (gen-ssl-cert, wallet-crypto-bench,
+  etc.) across all 5 CI platforms. Moved FFI exports (`shekyl_daemon_rpc_start`,
+  `shekyl_daemon_rpc_stop`) into a new `ffi_exports.rs` within the daemon-rpc
+  crate, which now produces its own `libshekyl_daemon_rpc.a` staticlib. Only the
+  daemon target links both libraries. `BuildRust.cmake` updated with a second
+  cargo build step and `SHEKYL_DAEMON_RPC_LINK_LIBS`.
 - **Wallet: `--daemon-port` help text referenced Monero port 18081.** Updated to
   Shekyl's default RPC port 11029.
 - **Wallet: `account_public_address` equality after PQC.** Destination and

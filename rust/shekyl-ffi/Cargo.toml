@@ -15,8 +15,6 @@ shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-consensus = { path = "../shekyl-consensus" }
 shekyl-economics = { path = "../shekyl-economics" }
 shekyl-staking = { path = "../shekyl-staking" }
-shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 rcgen = "0.14"
 zeroize = "1"
 libc = "0.2"
-tokio = { version = "1", features = ["rt-multi-thread"] }

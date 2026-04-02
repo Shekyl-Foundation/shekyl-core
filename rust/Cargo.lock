@@ -1140,10 +1140,8 @@ dependencies = [
  "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
- "shekyl-daemon-rpc",
  "shekyl-economics",
  "shekyl-staking",
- "tokio",
  "zeroize",
 ]
 

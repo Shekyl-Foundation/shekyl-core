@@ -35,6 +35,7 @@
 
 pub mod core;
 pub mod ffi;
+pub mod ffi_exports;
 pub mod handlers;
 pub mod middleware;
 pub mod server;

@@ -35,8 +35,8 @@ from the Rust FFI.
 |------|------|
 | `src/rpc/core_rpc_ffi.h` | C API header for the FFI facade |
 | `src/rpc/core_rpc_ffi.cpp` | Dispatch tables mapping URIs/methods to `on_*` handlers |
-| `rust/shekyl-daemon-rpc/` | Axum crate: server, routes, handlers, types |
-| `rust/shekyl-ffi/src/lib.rs` | `shekyl_daemon_rpc_start/stop` exports |
+| `rust/shekyl-daemon-rpc/` | Axum crate: server, routes, handlers, types; produces `libshekyl_daemon_rpc.a` |
+| `rust/shekyl-daemon-rpc/src/ffi_exports.rs` | `shekyl_daemon_rpc_start/stop` FFI exports (daemon-only) |
 | `src/shekyl/shekyl_ffi.h` | C++ declarations for Rust FFI functions |
 | `src/daemon/daemon.cpp` | Daemon lifecycle: start/stop Rust RPC alongside epee |
 | `tests/rpc_comparison/compare_rpc.sh` | Validation harness for dual-server diffing |
