@@ -737,12 +737,16 @@ summed signature. Verification is a single lattice relation check.
 
 ### Rollout Phases
 
-| Phase | Feature | Target |
+Shekyl uses a feature-driven upgrade policy (see `docs/UPGRADE_POLICY.md`).
+Phases advance when their prerequisites are met, not on a fixed calendar.
+Lattice threshold standards are not yet finalized by NIST.
+
+| Phase | Feature | Prerequisite |
 |---|---|---|
-| V4.0 | Scheme selection and Rust prototype in `rust/shekyl-crypto-pq` | Post V3 stabilization |
-| V4.1 | DKG protocol implementation in Tauri wallet | +3 months |
-| V4.2 | Testnet experiment with `scheme_id = 3` behind feature gate | +6 months |
-| V4.3 | Security audit and mainnet activation (HF2+) | +9-12 months |
+| V4.0 | Scheme selection and Rust prototype in `rust/shekyl-crypto-pq` | V3 mainnet stabilized |
+| V4.1 | DKG protocol implementation in Tauri wallet | V4.0 prototype reviewed |
+| V4.2 | Testnet experiment with `scheme_id = 3` behind feature gate | V4.1 complete |
+| V4.3 | Security audit and mainnet activation (HF2+) | V4.2 go report; formal audit |
 
 ### Hybrid Fallback
 

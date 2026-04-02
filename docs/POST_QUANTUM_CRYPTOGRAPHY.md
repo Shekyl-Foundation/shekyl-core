@@ -526,9 +526,15 @@ V3 protects the spend/ownership authorization layer with hybrid PQ
 signatures. The ring anonymity machinery (CLSAG, RingCT, stealth addresses)
 remains classical. V4 addresses this gap with a phased approach.
 
+Shekyl uses a feature-driven upgrade policy: hard forks ship when the
+feature is ready, not on a fixed calendar. V4 depends on research maturity
+of lattice-based privacy primitives that are not yet NIST-standardized, so
+no fixed timeline is committed. See `docs/UPGRADE_POLICY.md`.
+
 ### V4-A: Research and Specification
 
-Target: begin after v3 mainnet stabilization (~3 months post-launch).
+Prerequisite: v3 mainnet stabilized; no critical issues in the hybrid
+spend/ownership layer.
 
 - Survey candidate PQ-anonymous ownership primitives:
   - Lattice-based ring signatures (e.g. extensions of Esgin et al. 2019,
@@ -550,7 +556,7 @@ Target: begin after v3 mainnet stabilization (~3 months post-launch).
 
 ### V4-B: Prototype
 
-Target: ~6 months post-launch.
+Prerequisite: V4-A specification published and reviewed.
 
 - Implement candidate primitives as non-consensus Rust crates under
   `rust/shekyl-crypto-pq-v4/`.
@@ -564,7 +570,7 @@ Target: ~6 months post-launch.
 
 ### V4-C: Testnet Experiment
 
-Target: ~9-12 months post-launch.
+Prerequisite: V4-B benchmarks meet size and performance targets.
 
 - Feature-gate v4 transaction format behind a testnet-only hard fork version.
 - Run privacy regression tests: verify that ring-member ambiguity is not
@@ -575,7 +581,8 @@ Target: ~9-12 months post-launch.
 
 ### V4-D: Activation
 
-Target: ~12-18 months post-launch (dependent on V4-C results).
+Prerequisite: V4-C go report; formal security review of the chosen
+lattice-based scheme.
 
 - Single hard fork activation height (same pattern as HF1).
 - Migration notes for wallets, indexers, and operators.
