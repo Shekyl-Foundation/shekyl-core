@@ -691,4 +691,26 @@ mod tests {
 
         assert!(verify_multisig(2, &key_blob, &sig_blob, msg, None).unwrap());
     }
+
+    #[test]
+    fn valid_subset_signing_3_of_5() {
+        let pairs = gen_keypairs(5);
+        let kc = make_key_container(&pairs, 3);
+        let group_id = multisig_group_id(&kc).unwrap();
+        let key_blob = kc.to_canonical_bytes().unwrap();
+        let msg = b"subset-signing-3of5";
+
+        let subsets: &[&[u8]] = &[&[0, 1, 2], &[0, 2, 4], &[2, 3, 4]];
+
+        for subset in subsets {
+            let sc = sign_multisig(&pairs, subset, msg);
+            let sig_blob = sc.to_canonical_bytes().unwrap();
+            let result = verify_multisig(2, &key_blob, &sig_blob, msg, Some(&group_id));
+            assert!(
+                result.unwrap(),
+                "subset {:?} should verify successfully",
+                subset,
+            );
+        }
+    }
 }

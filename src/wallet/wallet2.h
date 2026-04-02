@@ -402,7 +402,6 @@ private:
           uint8_t m_rct: 1;
           uint8_t m_key_image_known: 1;
           uint8_t m_key_image_request: 1; // view wallets: we want to request it; cold wallets: it was requested
-          uint8_t m_key_image_partial: 1;
         };
         uint8_t flags;
       } m_flags;
@@ -1088,6 +1087,16 @@ private:
     std::vector<wallet2::pending_tx> create_transactions_from(const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, std::vector<size_t> unused_transfers_indices, std::vector<size_t> unused_dust_indices, const size_t fake_outs_count, fee_priority priority, const std::vector<uint8_t>& extra);
     std::vector<wallet2::pending_tx> create_staking_transaction(uint8_t tier, uint64_t amount, fee_priority priority, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices);
     std::vector<wallet2::pending_tx> create_unstake_transaction(const std::vector<size_t>& staked_indices, fee_priority priority);
+
+    // PQC multisig (scheme_id = 2)
+    bool is_pqc_multisig() const { return m_pqc_multisig_n > 0 && m_pqc_multisig_m > 0; }
+    uint8_t pqc_multisig_n() const { return m_pqc_multisig_n; }
+    uint8_t pqc_multisig_m() const { return m_pqc_multisig_m; }
+    crypto::hash pqc_multisig_group_id() const { return m_pqc_multisig_group_id; }
+    bool create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, const std::vector<std::vector<uint8_t>>& participant_public_keys);
+    std::string export_multisig_signing_request(const pending_tx& ptx);
+    bool sign_multisig_partial(const std::string& signing_request_json, std::string& signature_response_json);
+    bool import_multisig_signatures(pending_tx& ptx, const std::vector<std::string>& signature_response_jsons);
     std::vector<wallet2::pending_tx> create_claim_transaction(const std::vector<size_t>& staked_indices);
     std::vector<size_t> get_matured_staked_outputs() const;
     std::vector<size_t> get_locked_staked_outputs() const;
@@ -1252,6 +1261,18 @@ private:
         return;
       }
       a & m_background_sync_data;
+      if(ver < 32)
+      {
+        m_pqc_multisig_keys.clear();
+        m_pqc_multisig_group_id = crypto::null_hash;
+        m_pqc_multisig_n = 0;
+        m_pqc_multisig_m = 0;
+        return;
+      }
+      a & m_pqc_multisig_keys;
+      a & m_pqc_multisig_group_id;
+      a & m_pqc_multisig_n;
+      a & m_pqc_multisig_m;
     }
 
     BEGIN_SERIALIZE_OBJECT()
@@ -1978,9 +1999,15 @@ private:
     bool m_background_syncing;
     bool m_processing_background_cache;
     background_sync_data_t m_background_sync_data;
+
+    // PQC multisig state (scheme_id = 2)
+    std::vector<uint8_t> m_pqc_multisig_keys;
+    crypto::hash m_pqc_multisig_group_id;
+    uint8_t m_pqc_multisig_n = 0;
+    uint8_t m_pqc_multisig_m = 0;
   };
 }
-BOOST_CLASS_VERSION(tools::wallet2, 31)
+BOOST_CLASS_VERSION(tools::wallet2, 32)
 BOOST_CLASS_VERSION(tools::wallet2::transfer_details, 12)
 BOOST_CLASS_VERSION(tools::wallet2::payment_details, 5)
 BOOST_CLASS_VERSION(tools::wallet2::pool_payment_details, 1)

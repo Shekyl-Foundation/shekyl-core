@@ -9,7 +9,7 @@ Shekyl's post-quantum cryptography (`pqc_auth`) framework.
 
 Multisig is implemented in two phases:
 
-- **V3 (HF17):** Hybrid signature list — M individual hybrid signatures from
+- **V3 (HF1):** Hybrid signature list — M individual hybrid signatures from
   the existing `Ed25519 + ML-DSA-65` scheme, carried in an extended
   `pqc_auth` container. Uses only proven, NIST-backed primitives.
 - **V4 (future):** Lattice-based composite threshold signatures — a single
@@ -758,7 +758,9 @@ only after a grace period following activation.
   dishonest-majority).
 - Benchmark signing time, verification time, and tx size for realistic
   M-of-N configurations.
-- Publish test vectors once the Rust prototype is complete.
+- ~~Publish test vectors once the Rust prototype is complete.~~
+  Published as `docs/PQC_TEST_VECTOR_002_MULTISIG.json` (wire-format sizes,
+  verification pipeline, and adversarial inputs for `scheme_id = 2`).
 
 ---
 

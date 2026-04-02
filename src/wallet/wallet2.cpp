@@ -1229,7 +1229,10 @@ wallet2::wallet2(network_type nettype, uint64_t kdf_rounds, bool unattended, std
   m_credits_target(0),
   m_pool_info_query_time(0),
   m_has_ever_refreshed_from_node(false),
-  m_allow_mismatched_daemon_version(false)
+  m_allow_mismatched_daemon_version(false),
+  m_pqc_multisig_group_id(crypto::null_hash),
+  m_pqc_multisig_n(0),
+  m_pqc_multisig_m(0)
 {
   set_rpc_client_secret_key(rct::rct2sk(rct::skGen()));
 }
@@ -2457,7 +2460,6 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
             {
               td.m_key_image_request = false;
             }
-            td.m_key_image_partial = false;
             td.m_amount = amount;
             td.m_pk_index = pk_index - 1;
             td.m_subaddr_index = tx_scan_info[o].received->index;
@@ -4254,7 +4256,7 @@ wallet2::detached_blockchain_data wallet2::detach_blockchain(uint64_t height, st
 
   for(size_t i = i_start; i!= m_transfers.size();i++)
   {
-    if (!m_transfers[i].m_key_image_known || m_transfers[i].m_key_image_partial)
+    if (!m_transfers[i].m_key_image_known)
       continue;
     auto it_ki = m_key_images.find(m_transfers[i].m_key_image);
     THROW_WALLET_EXCEPTION_IF(it_ki == m_key_images.end(), error::wallet_internal_error, "key image not found: index " + std::to_string(i) + ", ki " + epee::string_tools::pod_to_hex(m_transfers[i].m_key_image) + ", " + std::to_string(m_key_images.size()) + " key images known");
@@ -6294,14 +6296,6 @@ void wallet2::store_to(const std::string &path, const epee::wipeable_string &pas
     if (!r) {
       LOG_ERROR("error removing file: " << old_keys_file);
     }
-    // remove old message store file
-    if (boost::filesystem::exists(old_mms_file))
-    {
-      r = boost::filesystem::remove(old_mms_file);
-      if (!r) {
-        LOG_ERROR("error removing file: " << old_mms_file);
-      }
-    }
   }
 
   // Save cache to new file. If storing to the same file, the temp path has the ".new" extension
@@ -6632,7 +6626,7 @@ void wallet2::rescan_spent()
   {
     transfer_details& td = m_transfers[i];
     // a view wallet may not know about key images
-    if (!td.m_key_image_known || td.m_key_image_partial)
+    if (!td.m_key_image_known)
       continue;
     if (td.m_spent != (spent_status[i] != COMMAND_RPC_IS_KEY_IMAGE_SPENT::UNSPENT))
     {
@@ -7287,7 +7281,7 @@ bool wallet2::sign_tx(unsigned_tx_set &exported_txs, std::vector<wallet2::pendin
   signed_txes.key_images.resize(m_transfers.size());
   for (size_t i = 0; i < m_transfers.size(); ++i)
   {
-    if (!m_transfers[i].m_key_image_known || m_transfers[i].m_key_image_partial)
+    if (!m_transfers[i].m_key_image_known)
       LOG_PRINT_L0("WARNING: key image not known in signing wallet at index " << i);
     signed_txes.key_images[i] = m_transfers[i].m_key_image;
   }
@@ -8312,7 +8306,7 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
     for(size_t idx: selected_transfers)
     {
       const transfer_details &td = m_transfers[idx];
-      if (td.m_key_image_known && !td.m_key_image_partial)
+      if (td.m_key_image_known)
         ring_key_images.push_back(td.m_key_image);
     }
     if (!ring_key_images.empty())
@@ -8467,7 +8461,7 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
       uint64_t num_found = 0;
 
       // if we have a known ring, use it
-      if (td.m_key_image_known && !td.m_key_image_partial)
+      if (td.m_key_image_known)
       {
 
         const auto it = existing_rings.find(td.m_key_image);
@@ -8751,7 +8745,7 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
       outs.back().push_back(std::make_tuple(td.m_global_output_index, td.get_public_key(), mask));
 
       // then pick outs from an existing ring, if any
-      if (td.m_key_image_known && !td.m_key_image_partial)
+      if (td.m_key_image_known)
       {
         const auto it = existing_rings.find(td.m_key_image);
         if (it != existing_rings.end())
@@ -9220,7 +9214,7 @@ std::vector<size_t> wallet2::pick_preferred_rct_inputs(uint64_t needed_money, ui
   for (size_t i = 0; i < m_transfers.size(); ++i)
   {
     const transfer_details& td = m_transfers[i];
-    if (!is_spent(td, false) && !td.m_frozen && !td.m_key_image_partial && td.is_rct() && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
+    if (!is_spent(td, false) && !td.m_frozen && td.is_rct() && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
     {
       if (td.amount() > m_ignore_outputs_above || td.amount() < m_ignore_outputs_below)
       {
@@ -9236,7 +9230,7 @@ std::vector<size_t> wallet2::pick_preferred_rct_inputs(uint64_t needed_money, ui
           MDEBUG("Ignoring output " << j << " of amount " << print_money(td2.amount()) << " which is outside prescribed range [" << print_money(m_ignore_outputs_below) << ", " << print_money(m_ignore_outputs_above) << "]");
           continue;
         }
-        if (!is_spent(td2, false) && !td2.m_frozen && !td2.m_key_image_partial && td2.is_rct() && td.amount() + td2.amount() >= needed_money && is_transfer_unlocked(td2) && td2.m_subaddr_index == td.m_subaddr_index)
+        if (!is_spent(td2, false) && !td2.m_frozen && td2.is_rct() && td.amount() + td2.amount() >= needed_money && is_transfer_unlocked(td2) && td2.m_subaddr_index == td.m_subaddr_index)
         {
           // update our picks if those outputs are less related than any we
           // already found. If the same, don't update, and oldest suitable outputs
@@ -9458,7 +9452,6 @@ void wallet2::light_wallet_get_unspent_outs()
     td.m_key_image = unspent_key_image;
     td.m_key_image_known = !m_watch_only;
     td.m_key_image_request = false;
-    td.m_key_image_partial = false;
     td.m_amount = o.amount;
     td.m_pk_index = 0;
     td.m_internal_output_index = o.index;
@@ -10016,7 +10009,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
       MDEBUG("Ignoring output " << i << " of amount " << print_money(td.amount()) << " which is below fractional threshold " << print_money(fractional_threshold));
       continue;
     }
-    if (!is_spent(td, false) && !td.m_frozen && !td.m_key_image_partial && (use_rct ? true : !td.is_rct()) && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
+    if (!is_spent(td, false) && !td.m_frozen && (use_rct ? true : !td.is_rct()) && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
     {
       if (td.amount() > m_ignore_outputs_above || td.amount() < m_ignore_outputs_below)
       {
@@ -10726,6 +10719,226 @@ std::vector<wallet2::pending_tx> wallet2::create_unstake_transaction(const std::
   return create_transactions_from(get_address(), false, 1, unstake_indices, empty_dust, fake_outs_count, priority, extra);
 }
 //----------------------------------------------------------------------------------------------------
+bool wallet2::create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, const std::vector<std::vector<uint8_t>>& participant_public_keys)
+{
+  THROW_WALLET_EXCEPTION_IF(is_pqc_multisig(), error::wallet_internal_error, "PQC multisig group already configured");
+  THROW_WALLET_EXCEPTION_IF(n_total < 1 || n_total > config::MAX_MULTISIG_PARTICIPANTS, error::wallet_internal_error,
+      "n_total out of range [1," + std::to_string(config::MAX_MULTISIG_PARTICIPANTS) + "]");
+  THROW_WALLET_EXCEPTION_IF(m_required < 1 || m_required > n_total, error::wallet_internal_error,
+      "m_required out of range [1," + std::to_string(n_total) + "]");
+  THROW_WALLET_EXCEPTION_IF(participant_public_keys.size() != n_total, error::wallet_internal_error,
+      "Expected " + std::to_string(n_total) + " public keys, got " + std::to_string(participant_public_keys.size()));
+
+  std::vector<uint8_t> keys_blob;
+  keys_blob.push_back(n_total);
+  keys_blob.push_back(m_required);
+  for (const auto& pk : participant_public_keys)
+    keys_blob.insert(keys_blob.end(), pk.begin(), pk.end());
+
+  crypto::hash group_id;
+  bool ok = shekyl_pqc_multisig_group_id(keys_blob.data(), keys_blob.size(),
+      reinterpret_cast<uint8_t*>(group_id.data));
+  THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to compute multisig group ID");
+
+  m_pqc_multisig_keys = std::move(keys_blob);
+  m_pqc_multisig_group_id = group_id;
+  m_pqc_multisig_n = n_total;
+  m_pqc_multisig_m = m_required;
+
+  return true;
+}
+//----------------------------------------------------------------------------------------------------
+std::string wallet2::export_multisig_signing_request(const pending_tx& ptx)
+{
+  THROW_WALLET_EXCEPTION_IF(!is_pqc_multisig(), error::wallet_internal_error, "Not a PQC multisig wallet");
+  THROW_WALLET_EXCEPTION_IF(ptx.tx.version < 3, error::wallet_internal_error, "Multisig signing requires v3 transactions");
+
+  std::string payload_blob;
+  bool ok = cryptonote::get_transaction_signed_payload(ptx.tx, payload_blob);
+  THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to build PQC signed payload");
+
+  crypto::hash payload_hash;
+  cryptonote::get_blob_hash(payload_blob, payload_hash);
+
+  rapidjson::Document doc;
+  doc.SetObject();
+  auto& alloc = doc.GetAllocator();
+
+  doc.AddMember("version", 1, alloc);
+
+  std::string group_id_hex = epee::string_tools::pod_to_hex(m_pqc_multisig_group_id);
+  doc.AddMember("group_id", rapidjson::Value(group_id_hex.c_str(), alloc), alloc);
+  doc.AddMember("n_total", m_pqc_multisig_n, alloc);
+  doc.AddMember("m_required", m_pqc_multisig_m, alloc);
+
+  std::string hash_hex = epee::string_tools::pod_to_hex(payload_hash);
+  doc.AddMember("payload_hash", rapidjson::Value(hash_hex.c_str(), alloc), alloc);
+
+  std::string tx_blob;
+  {
+    std::ostringstream oss;
+    binary_archive<true> ba(oss);
+    ::serialization::serialize(ba, const_cast<cryptonote::transaction&>(ptx.tx));
+    tx_blob = oss.str();
+  }
+  std::string tx_blob_hex = epee::string_tools::buff_to_hex_nodelimer(tx_blob);
+  doc.AddMember("tx_blob", rapidjson::Value(tx_blob_hex.c_str(), alloc), alloc);
+
+  rapidjson::StringBuffer sb;
+  rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
+  doc.Accept(writer);
+
+  return sb.GetString();
+}
+//----------------------------------------------------------------------------------------------------
+bool wallet2::sign_multisig_partial(const std::string& signing_request_json, std::string& signature_response_json)
+{
+  THROW_WALLET_EXCEPTION_IF(!is_pqc_multisig(), error::wallet_internal_error, "Not a PQC multisig wallet");
+
+  rapidjson::Document doc;
+  doc.Parse(signing_request_json.c_str());
+  THROW_WALLET_EXCEPTION_IF(doc.HasParseError() || !doc.IsObject(), error::wallet_internal_error, "Invalid signing request JSON");
+
+  THROW_WALLET_EXCEPTION_IF(!doc.HasMember("group_id") || !doc["group_id"].IsString(), error::wallet_internal_error, "Missing group_id");
+  std::string expected_gid = epee::string_tools::pod_to_hex(m_pqc_multisig_group_id);
+  THROW_WALLET_EXCEPTION_IF(std::string(doc["group_id"].GetString()) != expected_gid, error::wallet_internal_error, "Group ID mismatch");
+
+  THROW_WALLET_EXCEPTION_IF(!doc.HasMember("payload_hash") || !doc["payload_hash"].IsString(), error::wallet_internal_error, "Missing payload_hash");
+  std::string payload_hash_hex = doc["payload_hash"].GetString();
+  crypto::hash payload_hash;
+  THROW_WALLET_EXCEPTION_IF(!epee::string_tools::hex_to_pod(payload_hash_hex, payload_hash), error::wallet_internal_error, "Invalid payload_hash hex");
+
+  const auto& our_pk = m_account.get_keys().m_account_address.m_pqc_public_key;
+  THROW_WALLET_EXCEPTION_IF(our_pk.empty(), error::wallet_internal_error, "No PQC public key in this wallet");
+
+  const auto& keys_blob = m_pqc_multisig_keys;
+  THROW_WALLET_EXCEPTION_IF(keys_blob.size() < 2, error::wallet_internal_error, "Invalid multisig key blob");
+  uint8_t n = keys_blob[0];
+  size_t single_key_len = (keys_blob.size() - 2) / n;
+  int our_index = -1;
+  for (uint8_t i = 0; i < n; ++i)
+  {
+    size_t offset = 2 + i * single_key_len;
+    if (offset + single_key_len > keys_blob.size()) break;
+    if (our_pk.size() == single_key_len &&
+        std::memcmp(our_pk.data(), keys_blob.data() + offset, single_key_len) == 0)
+    {
+      our_index = i;
+      break;
+    }
+  }
+  THROW_WALLET_EXCEPTION_IF(our_index < 0, error::wallet_internal_error, "Our public key not found in the multisig group");
+
+  const auto& sk = m_account.get_keys().m_pqc_secret_key;
+  THROW_WALLET_EXCEPTION_IF(sk.empty(), error::wallet_internal_error, "No PQC secret key");
+
+  ShekylPqcSignatureResult sig = shekyl_pqc_sign(
+      sk.data(), sk.size(),
+      reinterpret_cast<const uint8_t*>(payload_hash.data), sizeof(payload_hash.data));
+  THROW_WALLET_EXCEPTION_IF(!sig.success, error::wallet_internal_error, "PQC signing failed");
+
+  std::vector<uint8_t> sig_bytes(sig.signature.ptr, sig.signature.ptr + sig.signature.len);
+  shekyl_buffer_free(sig.signature.ptr, sig.signature.len);
+
+  rapidjson::Document resp;
+  resp.SetObject();
+  auto& ralloc = resp.GetAllocator();
+
+  resp.AddMember("version", 1, ralloc);
+  resp.AddMember("group_id", rapidjson::Value(expected_gid.c_str(), ralloc), ralloc);
+  resp.AddMember("payload_hash", rapidjson::Value(payload_hash_hex.c_str(), ralloc), ralloc);
+  resp.AddMember("signer_index", our_index, ralloc);
+
+  std::string sig_hex = epee::string_tools::buff_to_hex_nodelimer(
+      std::string(reinterpret_cast<const char*>(sig_bytes.data()), sig_bytes.size()));
+  resp.AddMember("signature", rapidjson::Value(sig_hex.c_str(), ralloc), ralloc);
+
+  rapidjson::StringBuffer sb;
+  rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
+  resp.Accept(writer);
+
+  signature_response_json = sb.GetString();
+  return true;
+}
+//----------------------------------------------------------------------------------------------------
+bool wallet2::import_multisig_signatures(pending_tx& ptx, const std::vector<std::string>& signature_response_jsons)
+{
+  THROW_WALLET_EXCEPTION_IF(!is_pqc_multisig(), error::wallet_internal_error, "Not a PQC multisig wallet");
+  THROW_WALLET_EXCEPTION_IF(signature_response_jsons.size() < m_pqc_multisig_m,
+      error::wallet_internal_error, "Need at least " + std::to_string(m_pqc_multisig_m) + " signatures");
+
+  std::string expected_gid = epee::string_tools::pod_to_hex(m_pqc_multisig_group_id);
+
+  // Verify pqc_auth is present for payload computation
+  THROW_WALLET_EXCEPTION_IF(!ptx.tx.pqc_auth, error::wallet_internal_error, "Transaction missing pqc_auth");
+
+  std::string payload_blob;
+  bool ok = cryptonote::get_transaction_signed_payload(ptx.tx, payload_blob);
+  THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to build PQC signed payload");
+  crypto::hash expected_payload_hash;
+  cryptonote::get_blob_hash(payload_blob, expected_payload_hash);
+  std::string expected_hash_hex = epee::string_tools::pod_to_hex(expected_payload_hash);
+
+  struct partial_sig {
+    uint8_t index;
+    std::vector<uint8_t> sig;
+  };
+  std::vector<partial_sig> partials;
+
+  for (const auto& json_str : signature_response_jsons)
+  {
+    rapidjson::Document doc;
+    doc.Parse(json_str.c_str());
+    THROW_WALLET_EXCEPTION_IF(doc.HasParseError() || !doc.IsObject(), error::wallet_internal_error, "Invalid signature response JSON");
+
+    THROW_WALLET_EXCEPTION_IF(!doc.HasMember("group_id") || !doc["group_id"].IsString() ||
+        std::string(doc["group_id"].GetString()) != expected_gid,
+        error::wallet_internal_error, "Group ID mismatch in signature response");
+    THROW_WALLET_EXCEPTION_IF(!doc.HasMember("payload_hash") || !doc["payload_hash"].IsString() ||
+        std::string(doc["payload_hash"].GetString()) != expected_hash_hex,
+        error::wallet_internal_error, "Payload hash mismatch in signature response");
+    THROW_WALLET_EXCEPTION_IF(!doc.HasMember("signer_index") || !doc["signer_index"].IsUint(),
+        error::wallet_internal_error, "Missing or invalid signer_index");
+    THROW_WALLET_EXCEPTION_IF(!doc.HasMember("signature") || !doc["signature"].IsString(),
+        error::wallet_internal_error, "Missing signature");
+
+    uint8_t idx = static_cast<uint8_t>(doc["signer_index"].GetUint());
+    std::string sig_hex = doc["signature"].GetString();
+    std::string sig_str;
+    THROW_WALLET_EXCEPTION_IF(!epee::string_tools::parse_hexstr_to_binbuff(sig_hex, sig_str),
+        error::wallet_internal_error, "Invalid signature hex");
+
+    partials.push_back({idx, std::vector<uint8_t>(sig_str.begin(), sig_str.end())});
+  }
+
+  std::sort(partials.begin(), partials.end(), [](const partial_sig& a, const partial_sig& b) { return a.index < b.index; });
+
+  for (size_t i = 1; i < partials.size(); ++i)
+    THROW_WALLET_EXCEPTION_IF(partials[i].index == partials[i-1].index, error::wallet_internal_error,
+        "Duplicate signer index " + std::to_string(partials[i].index));
+
+  THROW_WALLET_EXCEPTION_IF(partials.size() < m_pqc_multisig_m, error::wallet_internal_error, "Not enough unique signatures");
+  partials.resize(m_pqc_multisig_m);
+
+  // Build MultisigSigContainer: [sig_count, sig0..sigM-1, idx0..idxM-1]
+  std::vector<uint8_t> sig_blob;
+  sig_blob.push_back(m_pqc_multisig_m);
+  for (const auto& p : partials)
+    sig_blob.insert(sig_blob.end(), p.sig.begin(), p.sig.end());
+  for (const auto& p : partials)
+    sig_blob.push_back(p.index);
+
+  cryptonote::pqc_authentication auth;
+  auth.auth_version = 1;
+  auth.scheme_id = 2;
+  auth.flags = 0;
+  auth.hybrid_public_key = m_pqc_multisig_keys;
+  auth.hybrid_signature = sig_blob;
+  ptx.tx.pqc_auth = auth;
+
+  return true;
+}
+//----------------------------------------------------------------------------------------------------
 bool wallet2::sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, const std::vector<cryptonote::tx_destination_entry>& dsts, const unique_index_container& subtract_fee_from_outputs) const
 {
   MDEBUG("sanity_check: " << ptx_vector.size() << " txes, " << dsts.size() << " destinations, subtract_fee_from_outputs " <<
@@ -10839,7 +11052,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_all(uint64_t below
       MDEBUG("Ignoring output " << i << " of amount " << print_money(td.amount()) << " which is below threshold " << print_money(fractional_threshold));
       continue;
     }
-    if (!is_spent(td, false) && !td.m_frozen && !td.m_key_image_partial && (use_rct ? true : !td.is_rct()) && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && (subaddr_indices.empty() || subaddr_indices.count(td.m_subaddr_index.minor) == 1))
+    if (!is_spent(td, false) && !td.m_frozen && (use_rct ? true : !td.is_rct()) && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && (subaddr_indices.empty() || subaddr_indices.count(td.m_subaddr_index.minor) == 1))
     {
       fund_found = true;
       if (below == 0 || td.amount() < below)
@@ -11234,8 +11447,6 @@ std::vector<size_t> wallet2::select_available_outputs(const std::function<bool(c
     if (is_spent(*i, false))
       continue;
     if (i->m_frozen)
-      continue;
-    if (i->m_key_image_partial)
       continue;
     if (!is_transfer_unlocked(*i))
       continue;
@@ -12918,7 +13129,7 @@ std::pair<uint64_t, std::vector<std::pair<crypto::key_image, crypto::signature>>
     bool r = cryptonote::generate_key_image_helper(m_account.get_keys(), m_subaddresses, pkey, tx_pub_key, additional_tx_pub_keys, td.m_internal_output_index, in_ephemeral, ki, m_account.get_device());
     THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to generate key image");
 
-    THROW_WALLET_EXCEPTION_IF(td.m_key_image_known && !td.m_key_image_partial && ki != td.m_key_image,
+    THROW_WALLET_EXCEPTION_IF(td.m_key_image_known && ki != td.m_key_image,
         error::wallet_internal_error, "key_image generated not matched with cached key image");
     THROW_WALLET_EXCEPTION_IF(in_ephemeral.pub != pkey,
         error::wallet_internal_error, "key_image generated ephemeral public key not matched with output_key");
@@ -13043,7 +13254,6 @@ uint64_t wallet2::import_key_images(const std::vector<std::pair<crypto::key_imag
     m_key_images[m_transfers[n + offset].m_key_image] = n + offset;
     m_transfers[n + offset].m_key_image_known = true;
     m_transfers[n + offset].m_key_image_request = false;
-    m_transfers[n + offset].m_key_image_partial = false;
   }
   PERF_TIMER_STOP(import_key_images_B);
 
@@ -13285,13 +13495,12 @@ bool wallet2::import_key_images(std::vector<crypto::key_image> key_images, size_
       continue;
 
     transfer_details &td = m_transfers[transfer_idx];
-    if (td.m_key_image_known && !td.m_key_image_partial && td.m_key_image != key_images[ki_idx])
+    if (td.m_key_image_known && td.m_key_image != key_images[ki_idx])
       LOG_PRINT_L0("WARNING: imported key image differs from previously known key image at index " << ki_idx << ": trusting imported one");
     td.m_key_image = key_images[ki_idx];
     m_key_images[td.m_key_image] = transfer_idx;
     td.m_key_image_known = true;
     td.m_key_image_request = false;
-    td.m_key_image_partial = false;
     m_pub_keys[td.get_public_key()] = transfer_idx;
   }
 
@@ -13815,7 +14024,6 @@ std::tuple<uint64_t, uint64_t, std::vector<tools::wallet2::exported_transfer_det
     etd.m_flags.m_rct = td.m_rct;
     etd.m_flags.m_key_image_known = td.m_key_image_known;
     etd.m_flags.m_key_image_request = td.m_key_image_request;
-    etd.m_flags.m_key_image_partial = td.m_key_image_partial;
     etd.m_amount = td.m_amount;
     etd.m_additional_tx_keys = get_additional_tx_pub_keys_from_extra(td.m_tx);
     etd.m_subaddr_index_major = td.m_subaddr_index.major;
@@ -13914,7 +14122,6 @@ process:
       expand_subaddresses(td.m_subaddr_index);
     td.m_key_image_known = true;
     td.m_key_image_request = true;
-    td.m_key_image_partial = false;
     THROW_WALLET_EXCEPTION_IF(in_ephemeral.pub != out_key,
         error::wallet_internal_error, "key_image generated ephemeral public key not matched with output_key at index " + std::to_string(i + offset));
 
@@ -13967,7 +14174,6 @@ size_t wallet2::import_outputs(const std::tuple<uint64_t, uint64_t, std::vector<
     td.m_rct = etd.m_flags.m_rct;
     td.m_key_image_known = etd.m_flags.m_key_image_known;
     td.m_key_image_request = etd.m_flags.m_key_image_request;
-    td.m_key_image_partial = false;
     td.m_subaddr_index.major = etd.m_subaddr_index_major;
     td.m_subaddr_index.minor = etd.m_subaddr_index_minor;
 
@@ -14018,7 +14224,6 @@ size_t wallet2::import_outputs(const std::tuple<uint64_t, uint64_t, std::vector<
       expand_subaddresses(td.m_subaddr_index);
     td.m_key_image_known = true;
     td.m_key_image_request = true;
-    td.m_key_image_partial = false;
     THROW_WALLET_EXCEPTION_IF(in_ephemeral.pub != out_key,
         error::wallet_internal_error, "key_image generated ephemeral public key not matched with output_key at index " + std::to_string(i + offset));
 

@@ -57,9 +57,44 @@
   `get_multisig_composite_key_image`, `get_multisig_wallet_state`,
   `sign_multisig_participant`, JSON serialization/deserialization of multisig
   fields, MMS file handling, and all scattered `m_multisig` guard branches.
+- **Classical multisig `m_key_image_partial` remnants.** Removed the
+  `m_key_image_partial` bitfield from `exported_transfer_details` and all
+  code references in `wallet2.cpp` and `simplewallet.cpp`. Since classical
+  multisig was removed, partial key images can never exist; all guard
+  conditions (`!known || partial`, `known && !partial`, standalone partial
+  checks) were simplified to reference only `m_key_image_known`. Removed
+  the dead `old_mms_file` cleanup block from `wallet2::store_to`.
 
 ### ✨ Added
 
+- **PQC multisig core (scheme_id=2).** Implemented M-of-N hybrid Ed25519 +
+  ML-DSA-65 multisig in Rust. Includes `MultisigKeyContainer`,
+  `MultisigSigContainer`, `multisig_group_id`, and a 10-check adversarial
+  verification pipeline. Maximum 7 participants (consensus constant). Domain
+  separator: `shekyl-multisig-group-v1`.
+- **PQC multisig FFI bridge.** Extended `shekyl_pqc_verify` to accept
+  `scheme_id` and dispatch between single-signer (1) and multisig (2) paths.
+  Added `shekyl_pqc_verify_debug` for diagnostic error codes and
+  `shekyl_pqc_multisig_group_id` for group identity computation.
+- **Scheme downgrade protection.** New `tx_extra_pqc_ownership` tag (0x05)
+  records the expected PQC scheme and group ID for each output, preventing
+  attackers from spending multisig-protected outputs with single-signer
+  transactions.
+- **Wallet multisig coordination.** New wallet2 methods for PQC multisig:
+  `create_pqc_multisig_group`, `export_multisig_signing_request`,
+  `sign_multisig_partial`, `import_multisig_signatures`. File-based JSON
+  signing protocol. Wallet serialization version bumped to 32.
+- **Cargo-fuzz harnesses.** 4 fuzz targets for multisig deserialization and
+  verification (`fuzz_multisig_key_blob`, `fuzz_multisig_sig_blob`,
+  `fuzz_multisig_verify`, `fuzz_group_id`), each validated at 10M iterations
+  with zero panics.
+- **PQC multisig subset-signing test.** Added `valid_subset_signing_3_of_5`
+  test to `shekyl-crypto-pq` verifying that any valid 3-of-5 signer subset
+  produces a valid multisig through the full 10-check verification pipeline.
+- **PQC multisig test vectors.** Published
+  `docs/PQC_TEST_VECTOR_002_MULTISIG.json` with canonical encoding sizes,
+  wire-format sizes, verification pipeline checks, the 10-check pipeline,
+  size regression data, and adversarial test cases for `scheme_id = 2`.
 - **Unified Gitian release pipeline.** The `gitian` workflow is now the sole
   release pipeline, replacing the separate `release-tagged` workflow. Gitian
   builds produce reproducible binaries; a new `package-and-publish` job
@@ -72,6 +107,8 @@
 
 ### 🔄 Changed
 
+- **`shekyl_pqc_verify` FFI signature change.** Now requires `scheme_id` as
+  first parameter for scheme dispatch.
 - **`depends.yml` demoted to PR-only.** The cross-compilation CI workflow now
   runs only on pull requests (and manual dispatch), not on every push. Saves
   significant CI minutes; Gitian catches cross-platform issues at release time.

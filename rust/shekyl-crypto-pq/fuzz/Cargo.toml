@@ -1,0 +1,42 @@
+[package]
+name = "shekyl-crypto-pq-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+shekyl-crypto-pq = { path = ".." }
+
+[[bin]]
+name = "fuzz_multisig_key_blob"
+path = "fuzz_targets/fuzz_multisig_key_blob.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_multisig_sig_blob"
+path = "fuzz_targets/fuzz_multisig_sig_blob.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_multisig_verify"
+path = "fuzz_targets/fuzz_multisig_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_group_id"
+path = "fuzz_targets/fuzz_group_id.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
