@@ -36,8 +36,6 @@ set(wallet_sources
   wallet_args.cpp
   ringdb.cpp
   node_rpc_proxy.cpp
-  message_store.cpp
-  message_transporter.cpp
   wallet_rpc_payments.cpp
 )
 
@@ -51,7 +49,6 @@ monero_add_library(wallet
 target_link_libraries(wallet
   PUBLIC
     rpc_base
-    multisig
     common
     cryptonote_core
     mnemonics

@@ -115,7 +115,7 @@ DISABLE_VS_WARNINGS(4244 4345)
   {
     // encrypt a large enough byte stream with chacha20
     const size_t pq_bytes = m_pqc_secret_key.size();
-    epee::wipeable_string key_stream = get_key_stream(key, m_encryption_iv, sizeof(crypto::secret_key) * (2 + m_multisig_keys.size()) + pq_bytes);
+    epee::wipeable_string key_stream = get_key_stream(key, m_encryption_iv, sizeof(crypto::secret_key) * 2 + pq_bytes);
     const char *ptr = key_stream.data();
     for (size_t i = 0; i < sizeof(crypto::secret_key); ++i)
       m_spend_secret_key.data[i] ^= *ptr++;
@@ -123,11 +123,6 @@ DISABLE_VS_WARNINGS(4244 4345)
       m_view_secret_key.data[i] ^= *ptr++;
     for (size_t i = 0; i < m_pqc_secret_key.size(); ++i)
       m_pqc_secret_key[i] ^= static_cast<uint8_t>(*ptr++);
-    for (crypto::secret_key &k: m_multisig_keys)
-    {
-      for (size_t i = 0; i < sizeof(crypto::secret_key); ++i)
-        k.data[i] ^= *ptr++;
-    }
   }
   //-----------------------------------------------------------------
   void account_keys::encrypt(const crypto::chacha_key &key)
@@ -180,7 +175,6 @@ DISABLE_VS_WARNINGS(4244 4345)
   {
     m_keys.m_spend_secret_key = crypto::secret_key();
     m_keys.m_pqc_secret_key.clear();
-    m_keys.m_multisig_keys.clear();
   }
   //-----------------------------------------------------------------
   void account_base::set_spend_key(const crypto::secret_key& spend_secret_key)
@@ -293,16 +287,6 @@ DISABLE_VS_WARNINGS(4244 4345)
   {
     crypto::secret_key fake{};
     create_from_keys(address, fake, viewkey);
-  }
-  //-----------------------------------------------------------------
-  bool account_base::make_multisig(const crypto::secret_key &view_secret_key, const crypto::secret_key &spend_secret_key, const crypto::public_key &spend_public_key, const std::vector<crypto::secret_key> &multisig_keys)
-  {
-    m_keys.m_account_address.m_spend_public_key = spend_public_key;
-    m_keys.m_view_secret_key = view_secret_key;
-    m_keys.m_spend_secret_key = spend_secret_key;
-    m_keys.m_pqc_secret_key.clear(); // PQ keys incompatible with multisig; v2 txs only
-    m_keys.m_multisig_keys = multisig_keys;
-    return crypto::secret_key_to_public_key(view_secret_key, m_keys.m_account_address.m_view_public_key);
   }
   //-----------------------------------------------------------------
   const account_keys& account_base::get_keys() const

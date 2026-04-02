@@ -51,8 +51,6 @@ namespace tools
     //       wallet_internal_error
     //         unexpected_txin_type
     //         wallet_not_initialized
-    //       multisig_export_needed
-    //       multisig_import_needed
     //       password_needed
     //   std::logic_error
     //     wallet_logic_error *
@@ -62,7 +60,6 @@ namespace tools
     //       file_save_error
     //       invalid_password
     //       invalid_priority
-    //       invalid_multisig_seed
     //       invalid_spend_key
     //       refresh_error *
     //         acc_outs_lookup_error
@@ -205,22 +202,6 @@ namespace tools
       }
     };
     //----------------------------------------------------------------------------------------------------
-    struct multisig_export_needed : public wallet_runtime_error
-    {
-      explicit multisig_export_needed(std::string&& loc)
-        : wallet_runtime_error(std::move(loc), "This signature was made with stale data: export fresh multisig data, which other participants must then use")
-      {
-      }
-    };
-    //----------------------------------------------------------------------------------------------------
-    struct multisig_import_needed : public wallet_runtime_error
-    {
-      explicit multisig_import_needed(std::string&& loc)
-        : wallet_runtime_error(std::move(loc), "Not enough multisig data was found to sign: import multisig data from more other participants")
-      {
-      }
-    };
-    //----------------------------------------------------------------------------------------------------
     struct password_needed : public wallet_runtime_error
     {
       explicit password_needed(std::string&& loc, const std::string &msg = "Password needed")
@@ -292,16 +273,6 @@ namespace tools
     {
       explicit invalid_priority(std::string&& loc)
         : wallet_logic_error(std::move(loc), "invalid priority")
-      {
-      }
-
-      std::string to_string() const { return wallet_logic_error::to_string(); }
-    };
-
-    struct invalid_multisig_seed : public wallet_logic_error
-    {
-      explicit invalid_multisig_seed(std::string&& loc)
-        : wallet_logic_error(std::move(loc), "invalid multisig seed")
       {
       }
 
@@ -917,31 +888,6 @@ namespace tools
     private:
       std::string m_keys_file;
       std::string m_wallet_file;
-    };
-    //----------------------------------------------------------------------------------------------------
-    struct mms_error : public wallet_logic_error
-    {
-    protected:
-      explicit mms_error(std::string&& loc, const std::string& message)
-        : wallet_logic_error(std::move(loc), message)
-      {
-      }
-    };
-    //----------------------------------------------------------------------------------------------------
-    struct no_connection_to_bitmessage : public mms_error
-    {
-      explicit no_connection_to_bitmessage(std::string&& loc, const std::string& address)
-        : mms_error(std::move(loc), "no connection to PyBitmessage at address " + address)
-      {
-      }
-    };
-    //----------------------------------------------------------------------------------------------------
-    struct bitmessage_api_error : public mms_error
-    {
-      explicit bitmessage_api_error(std::string&& loc, const std::string& error_string)
-        : mms_error(std::move(loc), "PyBitmessage returned " + error_string)
-      {
-      }
     };
     //----------------------------------------------------------------------------------------------------
     struct scan_tx_error : public wallet_logic_error

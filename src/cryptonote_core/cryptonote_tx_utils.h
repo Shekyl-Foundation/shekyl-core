@@ -52,7 +52,6 @@ namespace cryptonote
     uint64_t amount;                    //money
     bool rct;                           //true if the output is rct
     rct::key mask;                      //ringct amount mask
-    rct::multisig_kLRki multisig_kLRki; //multisig info
 
     void push_output(uint64_t idx, const crypto::public_key &k, uint64_t amount) { outputs.push_back(std::make_pair(idx, rct::ctkey({rct::pk2rct(k), rct::zeroCommit(amount)}))); }
 
@@ -65,7 +64,6 @@ namespace cryptonote
       FIELD(amount)
       FIELD(rct)
       FIELD(mask)
-      FIELD(multisig_kLRki)
 
       if (real_output >= outputs.size())
         return false;
@@ -163,7 +161,7 @@ namespace cryptonote
 
 }
 
-BOOST_CLASS_VERSION(cryptonote::tx_source_entry, 1)
+BOOST_CLASS_VERSION(cryptonote::tx_source_entry, 3)
 BOOST_CLASS_VERSION(cryptonote::tx_destination_entry, 3)
 
 namespace boost
@@ -182,7 +180,6 @@ namespace boost
       a & x.mask;
       if (ver < 1)
         return;
-      a & x.multisig_kLRki;
       a & x.real_out_additional_tx_keys;
     }
 

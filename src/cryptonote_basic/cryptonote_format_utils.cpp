@@ -335,23 +335,7 @@ namespace cryptonote
     {
       // derive secret key with subaddress - step 1: original CN derivation
       crypto::secret_key scalar_step1;
-      crypto::secret_key spend_skey = crypto::null_skey;
-
-      if (ack.m_multisig_keys.empty())
-      {
-        // if not multisig, use normal spend skey
-        spend_skey = ack.m_spend_secret_key;
-      }
-      else
-      {
-        // if multisig, use sum of multisig privkeys (local account's share of aggregate spend key)
-        for (const auto &multisig_key : ack.m_multisig_keys)
-        {
-          sc_add((unsigned char*)spend_skey.data,
-            (const unsigned char*)multisig_key.data,
-            (const unsigned char*)spend_skey.data);
-        }
-      }
+      crypto::secret_key spend_skey = ack.m_spend_secret_key;
 
       // computes Hs(a*R || idx) + b
       hwdev.derive_secret_key(recv_derivation, real_output_index, spend_skey, scalar_step1);
@@ -371,23 +355,8 @@ namespace cryptonote
 
       in_ephemeral.sec = scalar_step2;
 
-      if (ack.m_multisig_keys.empty())
-      {
-        // when not in multisig, we know the full spend secret key, so the output pubkey can be obtained by scalarmultBase
-        CHECK_AND_ASSERT_MES(hwdev.secret_key_to_public_key(in_ephemeral.sec, in_ephemeral.pub), false, "Failed to derive public key");
-      }
-      else
-      {
-        // when in multisig, we only know the partial spend secret key. but we do know the full spend public key, so the output pubkey can be obtained by using the standard CN key derivation
-        CHECK_AND_ASSERT_MES(hwdev.derive_public_key(recv_derivation, real_output_index, ack.m_account_address.m_spend_public_key, in_ephemeral.pub), false, "Failed to derive public key");
-        // and don't forget to add the contribution from the subaddress part
-        if (!received_index.is_zero())
-        {
-          crypto::public_key subaddr_pk;
-          CHECK_AND_ASSERT_MES(hwdev.secret_key_to_public_key(subaddr_sk, subaddr_pk), false, "Failed to derive public key");
-          add_public_key(in_ephemeral.pub, in_ephemeral.pub, subaddr_pk);
-        }
-      }
+      // full spend secret key: output pubkey via scalarmultBase
+      CHECK_AND_ASSERT_MES(hwdev.secret_key_to_public_key(in_ephemeral.sec, in_ephemeral.pub), false, "Failed to derive public key");
 
       CHECK_AND_ASSERT_MES(in_ephemeral.pub == out_key,
            false, "key image helper precomp: given output pubkey doesn't match the derived one");

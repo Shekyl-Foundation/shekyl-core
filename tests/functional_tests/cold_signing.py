@@ -175,7 +175,6 @@ class ColdSigningTest():
         fee = res.fee
         assert len(res.tx_blob) == 0
         assert len(res.tx_metadata) == 0
-        assert len(res.multisig_txset) == 0
         assert len(res.unsigned_txset) > 0
         unsigned_txset = res.unsigned_txset
 

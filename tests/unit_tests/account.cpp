@@ -40,7 +40,6 @@ TEST(account, encrypt_keys)
   ASSERT_EQ(account.get_keys().m_account_address, keys.m_account_address);
   ASSERT_EQ(account.get_keys().m_spend_secret_key, keys.m_spend_secret_key);
   ASSERT_EQ(account.get_keys().m_view_secret_key, keys.m_view_secret_key);
-  ASSERT_EQ(account.get_keys().m_multisig_keys, keys.m_multisig_keys);
 
   crypto::chacha_key chacha_key;
   crypto::generate_chacha_key(&recovery_key, sizeof(recovery_key), chacha_key, 1);

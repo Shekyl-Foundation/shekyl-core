@@ -1,6 +1,6 @@
 # PQC Multisig for Shekyl
 
-> **Last updated:** 2026-04-01
+> **Last updated:** 2026-04-02
 
 ## Purpose
 
@@ -55,6 +55,11 @@ On the rebooted Shekyl chain, the classical multisig code is removed:
 - The MMS (Multisig Messaging System) transport layer is not carried forward.
 - No CLSAG multi-round signing coordination exists in the codebase.
 - Wallet file format does not include classical multisig key state.
+- `wallet2.cpp` contains zero classical multisig code: all multisig
+  functions (`make_multisig`, `exchange_multisig_keys`, `export_multisig`,
+  `import_multisig`, `sign_multisig_tx`, etc.), member variables, JSON
+  serialization fields, MMS file handling, and scattered `m_multisig`
+  guard branches have been removed.
 
 **All multisig on Shekyl NG is PQC multisig (`scheme_id = 2`).**
 
@@ -92,7 +97,7 @@ transaction volume.
 
 ---
 
-## V3: Hybrid Signature List (HF17)
+## V3: Hybrid Signature List (HF1)
 
 ### Overview
 
@@ -562,15 +567,27 @@ Tauri↔wallet2 FFI staking bridge (which is currently a stub):
 Phase B must not block Phase A. Multisig spends are useful independently
 of staking integration.
 
-#### Codebase removals (blocking Phase A)
+#### Codebase removals (blocking Phase A) — DONE
 
-Before PQC multisig implementation begins:
+Classical multisig code has been removed:
 
-- Remove `account_base::make_multisig` and classical secret-splitting from
-  `account.cpp`.
-- Remove MMS transport code.
-- Remove or gate any wallet paths that produce v2 multisig transactions.
-- Confirm no residual classical multisig state in wallet file serialization.
+- ~~Remove `account_base::make_multisig` and classical secret-splitting from
+  `account.cpp`.~~ Done.
+- ~~Remove MMS transport code.~~ Done (`message_store.h/cpp`,
+  `message_transporter.h/cpp` deleted; `wallet2.h` no longer includes them).
+- ~~Remove or gate any wallet paths that produce v2 multisig transactions.~~ Done.
+  All classical multisig types (`multisig_info`, `multisig_sig`,
+  `multisig_kLR_bundle`, `multisig_tx_set`), public/private multisig API
+  methods, and multisig wallet state fields have been removed from `wallet2.h`.
+- ~~Confirm no residual classical multisig state in wallet file serialization.~~
+  Done. Boost serialization functions and FIELD() entries for multisig types
+  have been removed.
+- ~~Remove classical multisig from wallet API layer
+  (`wallet2_api.h`, `wallet.h`, `wallet.cpp`, `pending_transaction.cpp`).~~
+  Done. Removed `MultisigState` struct, all virtual multisig declarations,
+  `publicMultisigSignerKey`, `signMultisigParticipant`, multisig helper
+  functions, multisig transaction creation/restore, and multisig threshold
+  checks from PendingTransaction commit path.
 
 ### Wallet File Format
 
@@ -808,7 +825,18 @@ Anonymity set size is unchanged.
 | `DESIGN_CONCEPTS.md` | Staking section references multisig as operational security option |
 | `STAKER_REWARD_DISBURSEMENT.md` | Claim transactions support multisig authorization |
 | `RELEASE_CHECKLIST.md` | Multisig testing items and fuzz targets to be added |
-| `account.cpp` | `make_multisig` and classical secret-splitting code to be removed |
+| `account.cpp` | `make_multisig` and classical secret-splitting code removed |
+| `wallet2.h` | All classical multisig types, methods, fields, and MMS integration removed |
+| `wallet_errors.h` | `mms_error`, `no_connection_to_bitmessage`, `bitmessage_api_error` removed |
+| `wallet/api/wallet2_api.h` | `MultisigState` struct, all virtual multisig API declarations removed |
+| `wallet/api/wallet.h` | Multisig method override declarations removed |
+| `wallet/api/wallet.cpp` | Multisig helpers, implementations, `PRE_VALIDATE_BACKGROUND_SYNC` multisig guard, `signMultisigParticipant` removed |
+| `wallet/api/pending_transaction.cpp` | `multisigSignData`, `signMultisigTx`, multisig threshold check removed |
+| `device_trezor/protocol.*` | `translate_klrki`, `MoneroMultisigKLRki`, `m_multisig`, and cout decryption removed |
+| `wallet_tools.cpp` | `m_multisig*` wallet resets removed |
+| `trezor_tests.cpp` | `multisig_sigs.clear()` removed |
+| `functional_tests/multisig.py` | Deleted (classical multisig functional test) |
+| `cold_signing.py` | `multisig_txset` assertion removed |
 
 ---
 

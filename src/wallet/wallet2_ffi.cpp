@@ -2412,327 +2412,7 @@ static char* dispatch_stop_background_sync(wallet2_handle* w, const rj::Value& p
     return json_to_string(doc);
 }
 
-// ── Multisig ─────────────────────────────────────────────────────────────────
 
-static char* dispatch_prepare_multisig(wallet2_handle* w, const rj::Value& p) {
-    if (w->wallet->multisig()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_ALREADY_MULTISIG, "This wallet is already multisig");
-        return nullptr;
-    }
-    bool enable = json_bool(p, "enable_multisig_experimental");
-    if (enable)
-        w->wallet->enable_multisig(true);
-    if (w->wallet->multisig() && !w->wallet->is_multisig_enabled()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_DISABLED, "Multisig is disabled. Enable with enable_multisig_experimental");
-        return nullptr;
-    }
-    if (w->wallet->watch_only()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_WATCH_ONLY, "wallet is watch-only and cannot be made multisig");
-        return nullptr;
-    }
-
-    rj::Document doc;
-    doc.SetObject();
-    auto& a = doc.GetAllocator();
-    doc.AddMember("multisig_info", json_val_str(w->wallet->get_multisig_first_kex_msg(), a), a);
-    return json_to_string(doc);
-}
-
-static char* dispatch_make_multisig(wallet2_handle* w, const rj::Value& p) {
-    if (w->wallet->multisig()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_ALREADY_MULTISIG, "This wallet is already multisig");
-        return nullptr;
-    }
-    if (w->wallet->multisig() && !w->wallet->is_multisig_enabled()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_DISABLED, "Multisig is disabled");
-        return nullptr;
-    }
-    if (w->wallet->watch_only()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_WATCH_ONLY, "wallet is watch-only and cannot be made multisig");
-        return nullptr;
-    }
-
-    std::vector<std::string> multisig_info;
-    if (p.HasMember("multisig_info") && p["multisig_info"].IsArray()) {
-        for (auto& v : p["multisig_info"].GetArray()) {
-            if (v.IsString()) multisig_info.push_back(v.GetString());
-        }
-    }
-    uint32_t threshold = json_u32(p, "threshold");
-    std::string password = json_str(p, "password");
-
-    try {
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        std::string extra_info = w->wallet->make_multisig(password, multisig_info, threshold);
-        std::string address = w->wallet->get_account().get_public_address_str(w->wallet->nettype());
-        doc.AddMember("address", json_val_str(address, a), a);
-        doc.AddMember("multisig_info", json_val_str(extra_info, a), a);
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, e.what());
-        return nullptr;
-    }
-}
-
-static char* dispatch_export_multisig_info(wallet2_handle* w, const rj::Value&) {
-    bool ready;
-    if (!w->wallet->multisig(&ready)) {
-        w->set_error(WALLET_RPC_ERROR_CODE_NOT_MULTISIG, "This wallet is not multisig");
-        return nullptr;
-    }
-    if (!ready) {
-        w->set_error(WALLET_RPC_ERROR_CODE_NOT_MULTISIG, "This wallet is multisig, but not yet finalized");
-        return nullptr;
-    }
-    if (w->wallet->multisig() && !w->wallet->is_multisig_enabled()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_DISABLED, "Multisig is disabled");
-        return nullptr;
-    }
-
-    try {
-        cryptonote::blobdata info = w->wallet->export_multisig();
-        std::string hex = epee::string_tools::buff_to_hex_nodelimer(info);
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        doc.AddMember("info", json_val_str(hex, a), a);
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, e.what());
-        return nullptr;
-    }
-}
-
-static char* dispatch_import_multisig_info(wallet2_handle* w, const rj::Value& p) {
-    bool ready;
-    uint32_t threshold, total;
-    if (!w->wallet->multisig(&ready, &threshold, &total)) {
-        w->set_error(WALLET_RPC_ERROR_CODE_NOT_MULTISIG, "This wallet is not multisig");
-        return nullptr;
-    }
-    if (!ready) {
-        w->set_error(WALLET_RPC_ERROR_CODE_NOT_MULTISIG, "This wallet is multisig, but not yet finalized");
-        return nullptr;
-    }
-    if (w->wallet->multisig() && !w->wallet->is_multisig_enabled()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_DISABLED, "Multisig is disabled");
-        return nullptr;
-    }
-
-    if (!p.HasMember("info") || !p["info"].IsArray()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "info array required");
-        return nullptr;
-    }
-    const auto info_arr = p["info"].GetArray();
-    if (info_arr.Size() < threshold - 1) {
-        w->set_error(WALLET_RPC_ERROR_CODE_THRESHOLD_NOT_REACHED, "Needs multisig export info from more participants");
-        return nullptr;
-    }
-
-    std::vector<cryptonote::blobdata> info;
-    info.resize(info_arr.Size());
-    for (rj::SizeType n = 0; n < info_arr.Size(); ++n) {
-        if (!epee::string_tools::parse_hexstr_to_binbuff(info_arr[n].GetString(), info[n])) {
-            w->set_error(WALLET_RPC_ERROR_CODE_BAD_HEX, "Failed to parse hex.");
-            return nullptr;
-        }
-    }
-
-    try {
-        size_t n_outputs = w->wallet->import_multisig(info);
-        if (w->wallet->is_trusted_daemon()) {
-            try { w->wallet->rescan_spent(); } catch (...) {}
-        }
-
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        doc.AddMember("n_outputs", (uint64_t)n_outputs, a);
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, std::string("Error calling import_multisig: ") + e.what());
-        return nullptr;
-    }
-}
-
-static char* dispatch_finalize_multisig(wallet2_handle* w, const rj::Value& p) {
-    if (w->wallet->multisig() && !w->wallet->is_multisig_enabled()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_DISABLED, "Multisig is disabled");
-        return nullptr;
-    }
-    std::vector<std::string> multisig_info;
-    if (p.HasMember("multisig_info") && p["multisig_info"].IsArray()) {
-        for (auto& v : p["multisig_info"].GetArray()) {
-            if (v.IsString()) multisig_info.push_back(v.GetString());
-        }
-    }
-    std::string password = json_str(p, "password");
-
-    try {
-        w->wallet->exchange_multisig_keys(password, multisig_info, false);
-        std::string address = w->wallet->get_account().get_public_address_str(w->wallet->nettype());
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        doc.AddMember("address", json_val_str(address, a), a);
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, e.what());
-        return nullptr;
-    }
-}
-
-static char* dispatch_exchange_multisig_keys(wallet2_handle* w, const rj::Value& p) {
-    bool ready;
-    uint32_t threshold, total;
-    if (!w->wallet->multisig(&ready, &threshold, &total)) {
-        w->set_error(WALLET_RPC_ERROR_CODE_NOT_MULTISIG, "This wallet is not multisig");
-        return nullptr;
-    }
-    if (w->wallet->multisig() && !w->wallet->is_multisig_enabled()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_DISABLED, "Multisig is disabled");
-        return nullptr;
-    }
-
-    std::vector<std::string> multisig_info;
-    if (p.HasMember("multisig_info") && p["multisig_info"].IsArray()) {
-        for (auto& v : p["multisig_info"].GetArray()) {
-            if (v.IsString()) multisig_info.push_back(v.GetString());
-        }
-    }
-    if (multisig_info.size() + 1 < total) {
-        w->set_error(WALLET_RPC_ERROR_CODE_THRESHOLD_NOT_REACHED, "Needs multisig info from more participants");
-        return nullptr;
-    }
-
-    std::string password = json_str(p, "password");
-    bool force_update = json_bool(p, "force_update_use_with_caution");
-
-    try {
-        std::string extra_info = w->wallet->exchange_multisig_keys(password, multisig_info, force_update);
-        w->wallet->multisig(&ready);
-
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        doc.AddMember("multisig_info", json_val_str(extra_info, a), a);
-        if (ready) {
-            std::string address = w->wallet->get_account().get_public_address_str(w->wallet->nettype());
-            doc.AddMember("address", json_val_str(address, a), a);
-        }
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
-            std::string("Error calling exchange_multisig_info: ") + e.what());
-        return nullptr;
-    }
-}
-
-static char* dispatch_sign_multisig(wallet2_handle* w, const rj::Value& p) {
-    bool ready;
-    uint32_t threshold, total;
-    if (!w->wallet->multisig(&ready, &threshold, &total)) {
-        w->set_error(WALLET_RPC_ERROR_CODE_NOT_MULTISIG, "This wallet is not multisig");
-        return nullptr;
-    }
-    if (!ready) {
-        w->set_error(WALLET_RPC_ERROR_CODE_NOT_MULTISIG, "This wallet is multisig, but not yet finalized");
-        return nullptr;
-    }
-    if (w->wallet->multisig() && !w->wallet->is_multisig_enabled()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_DISABLED, "Multisig is disabled");
-        return nullptr;
-    }
-
-    cryptonote::blobdata blob;
-    if (!epee::string_tools::parse_hexstr_to_binbuff(json_str(p, "tx_data_hex"), blob)) {
-        w->set_error(WALLET_RPC_ERROR_CODE_BAD_HEX, "Failed to parse hex.");
-        return nullptr;
-    }
-
-    tools::wallet2::multisig_tx_set txs;
-    if (!w->wallet->load_multisig_tx(blob, txs, NULL)) {
-        w->set_error(WALLET_RPC_ERROR_CODE_BAD_MULTISIG_TX_DATA, "Failed to parse multisig tx data.");
-        return nullptr;
-    }
-
-    try {
-        std::vector<crypto::hash> txids;
-        if (!w->wallet->sign_multisig_tx(txs, txids)) {
-            w->set_error(WALLET_RPC_ERROR_CODE_MULTISIG_SIGNATURE, "Failed to sign multisig tx");
-            return nullptr;
-        }
-
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        doc.AddMember("tx_data_hex", json_val_str(
-            epee::string_tools::buff_to_hex_nodelimer(w->wallet->save_multisig_tx(txs)), a), a);
-        rj::Value hash_list(rj::kArrayType);
-        for (const auto& txid : txids)
-            hash_list.PushBack(json_val_str(epee::string_tools::pod_to_hex(txid), a), a);
-        doc.AddMember("tx_hash_list", hash_list, a);
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error(WALLET_RPC_ERROR_CODE_MULTISIG_SIGNATURE,
-            std::string("Failed to sign multisig tx: ") + e.what());
-        return nullptr;
-    }
-}
-
-static char* dispatch_submit_multisig(wallet2_handle* w, const rj::Value& p) {
-    bool ready;
-    uint32_t threshold, total;
-    if (!w->wallet->multisig(&ready, &threshold, &total)) {
-        w->set_error(WALLET_RPC_ERROR_CODE_NOT_MULTISIG, "This wallet is not multisig");
-        return nullptr;
-    }
-    if (!ready) {
-        w->set_error(WALLET_RPC_ERROR_CODE_NOT_MULTISIG, "This wallet is multisig, but not yet finalized");
-        return nullptr;
-    }
-    if (w->wallet->multisig() && !w->wallet->is_multisig_enabled()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_DISABLED, "Multisig is disabled");
-        return nullptr;
-    }
-
-    cryptonote::blobdata blob;
-    if (!epee::string_tools::parse_hexstr_to_binbuff(json_str(p, "tx_data_hex"), blob)) {
-        w->set_error(WALLET_RPC_ERROR_CODE_BAD_HEX, "Failed to parse hex.");
-        return nullptr;
-    }
-
-    tools::wallet2::multisig_tx_set txs;
-    if (!w->wallet->load_multisig_tx(blob, txs, NULL)) {
-        w->set_error(WALLET_RPC_ERROR_CODE_BAD_MULTISIG_TX_DATA, "Failed to parse multisig tx data.");
-        return nullptr;
-    }
-
-    if (txs.m_signers.size() < threshold) {
-        w->set_error(WALLET_RPC_ERROR_CODE_THRESHOLD_NOT_REACHED, "Not enough signers signed this transaction.");
-        return nullptr;
-    }
-
-    try {
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        rj::Value hash_list(rj::kArrayType);
-        for (auto& ptx : txs.m_ptx) {
-            w->wallet->commit_tx(ptx);
-            hash_list.PushBack(json_val_str(
-                epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx)), a), a);
-        }
-        doc.AddMember("tx_hash_list", hash_list, a);
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error(WALLET_RPC_ERROR_CODE_MULTISIG_SUBMISSION,
-            std::string("Failed to submit multisig tx: ") + e.what());
-        return nullptr;
-    }
-}
 
 // ── Transfer dispatch helpers ────────────────────────────────────────────────
 
@@ -2757,32 +2437,19 @@ static bool fill_split_response(
 {
     auto& a = doc.GetAllocator();
 
-    if (w->wallet->multisig()) {
-        std::string ms_set = epee::string_tools::buff_to_hex_nodelimer(
-            w->wallet->save_multisig_tx(ptx_vector));
-        if (ms_set.empty()) {
+    if (w->wallet->watch_only()) {
+        std::string us_set = epee::string_tools::buff_to_hex_nodelimer(
+            w->wallet->dump_tx_to_str(ptx_vector));
+        if (us_set.empty()) {
             w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
-                "Failed to save multisig tx set after creation");
+                "Failed to save unsigned tx set after creation");
             return false;
         }
-        doc.AddMember("multisig_txset", json_val_str(ms_set, a), a);
-        doc.AddMember("unsigned_txset", "", a);
+        doc.AddMember("unsigned_txset", json_val_str(us_set, a), a);
     } else {
-        doc.AddMember("multisig_txset", "", a);
-        if (w->wallet->watch_only()) {
-            std::string us_set = epee::string_tools::buff_to_hex_nodelimer(
-                w->wallet->dump_tx_to_str(ptx_vector));
-            if (us_set.empty()) {
-                w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
-                    "Failed to save unsigned tx set after creation");
-                return false;
-            }
-            doc.AddMember("unsigned_txset", json_val_str(us_set, a), a);
-        } else {
-            doc.AddMember("unsigned_txset", "", a);
-            if (!do_not_relay)
-                w->wallet->commit_tx(ptx_vector);
-        }
+        doc.AddMember("unsigned_txset", "", a);
+        if (!do_not_relay)
+            w->wallet->commit_tx(ptx_vector);
     }
 
     rj::Value tx_hash_list(rj::kArrayType);
@@ -2960,11 +2627,6 @@ static char* dispatch_sign_transfer(wallet2_handle* w, const rj::Value& p) {
             "command not supported by watch-only wallet");
         return nullptr;
     }
-    if (w->wallet->multisig() && !w->wallet->is_multisig_enabled()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_DISABLED, "Multisig is disabled");
-        return nullptr;
-    }
-
     std::string hex_str = json_str(p, "unsigned_txset");
     cryptonote::blobdata blob;
     if (!epee::string_tools::parse_hexstr_to_binbuff(hex_str, blob)) {
@@ -3038,54 +2700,31 @@ static char* dispatch_describe_transfer(wallet2_handle* w, const rj::Value& p) {
     }
 
     std::string unsigned_hex = json_str(p, "unsigned_txset");
-    std::string multisig_hex = json_str(p, "multisig_txset");
 
-    if (unsigned_hex.empty() && multisig_hex.empty()) {
+    if (unsigned_hex.empty()) {
         w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "no txset provided");
         return nullptr;
     }
 
     std::vector<tools::wallet2::tx_construction_data> tx_constructions;
 
-    if (!unsigned_hex.empty()) {
-        try {
-            cryptonote::blobdata blob;
-            if (!epee::string_tools::parse_hexstr_to_binbuff(unsigned_hex, blob)) {
-                w->set_error(WALLET_RPC_ERROR_CODE_BAD_HEX, "Failed to parse hex.");
-                return nullptr;
-            }
-            tools::wallet2::unsigned_tx_set exported_txs;
-            if (!w->wallet->parse_unsigned_tx_from_str(blob, exported_txs)) {
-                w->set_error(WALLET_RPC_ERROR_CODE_BAD_UNSIGNED_TX_DATA,
-                    "cannot load unsigned_txset");
-                return nullptr;
-            }
-            tx_constructions = exported_txs.txes;
-        } catch (const std::exception& e) {
+    try {
+        cryptonote::blobdata blob;
+        if (!epee::string_tools::parse_hexstr_to_binbuff(unsigned_hex, blob)) {
+            w->set_error(WALLET_RPC_ERROR_CODE_BAD_HEX, "Failed to parse hex.");
+            return nullptr;
+        }
+        tools::wallet2::unsigned_tx_set exported_txs;
+        if (!w->wallet->parse_unsigned_tx_from_str(blob, exported_txs)) {
             w->set_error(WALLET_RPC_ERROR_CODE_BAD_UNSIGNED_TX_DATA,
-                std::string("failed to parse unsigned transfers: ") + e.what());
+                "cannot load unsigned_txset");
             return nullptr;
         }
-    } else {
-        try {
-            cryptonote::blobdata blob;
-            if (!epee::string_tools::parse_hexstr_to_binbuff(multisig_hex, blob)) {
-                w->set_error(WALLET_RPC_ERROR_CODE_BAD_HEX, "Failed to parse hex.");
-                return nullptr;
-            }
-            tools::wallet2::multisig_tx_set exported_txs;
-            if (!w->wallet->parse_multisig_tx_from_str(blob, exported_txs)) {
-                w->set_error(WALLET_RPC_ERROR_CODE_BAD_MULTISIG_TX_DATA,
-                    "cannot load multisig_txset");
-                return nullptr;
-            }
-            for (size_t n = 0; n < exported_txs.m_ptx.size(); ++n)
-                tx_constructions.push_back(exported_txs.m_ptx[n].construction_data);
-        } catch (const std::exception& e) {
-            w->set_error(WALLET_RPC_ERROR_CODE_BAD_MULTISIG_TX_DATA,
-                std::string("failed to parse multisig transfers: ") + e.what());
-            return nullptr;
-        }
+        tx_constructions = exported_txs.txes;
+    } catch (const std::exception& e) {
+        w->set_error(WALLET_RPC_ERROR_CODE_BAD_UNSIGNED_TX_DATA,
+            std::string("failed to parse unsigned transfers: ") + e.what());
+        return nullptr;
     }
 
     try {
@@ -3437,32 +3076,19 @@ static char* dispatch_sweep_single(wallet2_handle* w, const rj::Value& p) {
         doc.SetObject();
         auto& a = doc.GetAllocator();
 
-        if (w->wallet->multisig()) {
-            std::string ms_set = epee::string_tools::buff_to_hex_nodelimer(
-                w->wallet->save_multisig_tx(ptx_vector));
-            if (ms_set.empty()) {
+        if (w->wallet->watch_only()) {
+            std::string us_set = epee::string_tools::buff_to_hex_nodelimer(
+                w->wallet->dump_tx_to_str(ptx_vector));
+            if (us_set.empty()) {
                 w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
-                    "Failed to save multisig tx set after creation");
+                    "Failed to save unsigned tx set after creation");
                 return nullptr;
             }
-            doc.AddMember("multisig_txset", json_val_str(ms_set, a), a);
-            doc.AddMember("unsigned_txset", "", a);
+            doc.AddMember("unsigned_txset", json_val_str(us_set, a), a);
         } else {
-            doc.AddMember("multisig_txset", "", a);
-            if (w->wallet->watch_only()) {
-                std::string us_set = epee::string_tools::buff_to_hex_nodelimer(
-                    w->wallet->dump_tx_to_str(ptx_vector));
-                if (us_set.empty()) {
-                    w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
-                        "Failed to save unsigned tx set after creation");
-                    return nullptr;
-                }
-                doc.AddMember("unsigned_txset", json_val_str(us_set, a), a);
-            } else {
-                doc.AddMember("unsigned_txset", "", a);
-                if (!do_not_relay)
-                    w->wallet->commit_tx(ptx_vector);
-            }
+            doc.AddMember("unsigned_txset", "", a);
+            if (!do_not_relay)
+                w->wallet->commit_tx(ptx_vector);
         }
 
         doc.AddMember("tx_hash", json_val_str(
@@ -3552,22 +3178,6 @@ static char* dispatch_relay_tx(wallet2_handle* w, const rj::Value& p) {
     doc.AddMember("tx_hash", json_val_str(
         epee::string_tools::pod_to_hex(
             cryptonote::get_transaction_hash(ptx.tx)), a), a);
-    return json_to_string(doc);
-}
-
-// ── Multisig dispatch functions ─────────────────────────────────────────────
-
-static char* dispatch_is_multisig(wallet2_handle* w, const rj::Value&) {
-    bool ready = false;
-    uint32_t threshold = 0, total = 0;
-    bool ms = w->wallet->multisig(&ready, &threshold, &total);
-    rj::Document doc;
-    doc.SetObject();
-    auto& a = doc.GetAllocator();
-    doc.AddMember("multisig", ms, a);
-    doc.AddMember("ready", ready, a);
-    doc.AddMember("threshold", threshold, a);
-    doc.AddMember("total", total, a);
     return json_to_string(doc);
 }
 
@@ -3928,17 +3538,6 @@ char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* pa
         if (m == "setup_background_sync") return dispatch_setup_background_sync(w, params);
         if (m == "start_background_sync") return dispatch_start_background_sync(w, params);
         if (m == "stop_background_sync") return dispatch_stop_background_sync(w, params);
-
-        // Multisig
-        if (m == "is_multisig") return dispatch_is_multisig(w, params);
-        if (m == "prepare_multisig") return dispatch_prepare_multisig(w, params);
-        if (m == "make_multisig") return dispatch_make_multisig(w, params);
-        if (m == "export_multisig_info") return dispatch_export_multisig_info(w, params);
-        if (m == "import_multisig_info") return dispatch_import_multisig_info(w, params);
-        if (m == "finalize_multisig") return dispatch_finalize_multisig(w, params);
-        if (m == "exchange_multisig_keys") return dispatch_exchange_multisig_keys(w, params);
-        if (m == "sign_multisig") return dispatch_sign_multisig(w, params);
-        if (m == "submit_multisig") return dispatch_submit_multisig(w, params);
 
         // Not yet implemented methods return a structured error
         w->set_error(-32601, "Method not implemented: " + m);

@@ -83,11 +83,6 @@ using namespace cryptonote;
         setStatusError(tr("View only wallet cannot use background sync")); \
         return false; \
     } \
-    if (m_wallet->multisig()) \
-    { \
-        setStatusError(tr("Multisig wallet cannot use background sync")); \
-        return false; \
-    } \
   } while (0)
 
 namespace Monero {
@@ -115,41 +110,6 @@ namespace {
       return dir.string();
     }
 
-    void checkMultisigWalletReady(const tools::wallet2* wallet) {
-        if (!wallet) {
-            throw runtime_error("Wallet is not initialized yet");
-        }
-
-        bool ready;
-        if (!wallet->multisig(&ready)) {
-            throw runtime_error("Wallet is not multisig");
-        }
-
-        if (!ready) {
-            throw runtime_error("Multisig wallet is not finalized yet");
-        }
-    }
-    void checkMultisigWalletReady(const std::unique_ptr<tools::wallet2> &wallet) {
-        return checkMultisigWalletReady(wallet.get());
-    }
-
-    void checkMultisigWalletNotReady(const tools::wallet2* wallet) {
-        if (!wallet) {
-            throw runtime_error("Wallet is not initialized yet");
-        }
-
-        bool ready;
-        if (!wallet->multisig(&ready)) {
-            throw runtime_error("Wallet is not multisig");
-        }
-
-        if (ready) {
-            throw runtime_error("Multisig wallet is already finalized");
-        }
-    }
-    void checkMultisigWalletNotReady(const std::unique_ptr<tools::wallet2> &wallet) {
-        return checkMultisigWalletNotReady(wallet.get());
-    }
 }
 
 struct Wallet2CallbackImpl : public tools::i_wallet2_callback
@@ -944,16 +904,6 @@ std::string WalletImpl::publicSpendKey() const
     return epee::string_tools::pod_to_hex(m_wallet->get_account().get_keys().m_account_address.m_spend_public_key);
 }
 
-std::string WalletImpl::publicMultisigSignerKey() const
-{
-    try {
-        crypto::public_key signer = m_wallet->get_multisig_signer_public_key();
-        return epee::string_tools::pod_to_hex(signer);
-    } catch (const std::exception&) {
-        return "";
-    }
-}
-
 std::string WalletImpl::path() const
 {
     return m_wallet->path();
@@ -1511,148 +1461,6 @@ void WalletImpl::setSubaddressLabel(uint32_t accountIndex, uint32_t addressIndex
     }
 }
 
-MultisigState WalletImpl::multisig() const {
-    MultisigState state;
-    if (checkBackgroundSync("cannot use multisig"))
-        return state;
-    state.isMultisig = m_wallet->multisig(&state.isReady, &state.threshold, &state.total);
-
-    return state;
-}
-
-string WalletImpl::getMultisigInfo() const {
-    if (checkBackgroundSync("cannot use multisig"))
-        return string();
-    try {
-        clearStatus();
-        return m_wallet->get_multisig_first_kex_msg();
-    } catch (const exception& e) {
-        LOG_ERROR("Error on generating multisig info: " << e.what());
-        setStatusError(string(tr("Failed to get multisig info: ")) + e.what());
-    }
-
-    return string();
-}
-
-string WalletImpl::makeMultisig(const vector<string>& info, const uint32_t threshold) {
-    if (checkBackgroundSync("cannot make multisig"))
-        return string();
-    try {
-        clearStatus();
-
-        if (m_wallet->multisig()) {
-            throw runtime_error("Wallet is already multisig");
-        }
-
-        return m_wallet->make_multisig(epee::wipeable_string(m_password), info, threshold);
-    } catch (const exception& e) {
-        LOG_ERROR("Error on making multisig wallet: " << e.what());
-        setStatusError(string(tr("Failed to make multisig: ")) + e.what());
-    }
-
-    return string();
-}
-
-std::string WalletImpl::exchangeMultisigKeys(const std::vector<std::string> &info, const bool force_update_use_with_caution /*= false*/) {
-    try {
-        clearStatus();
-        checkMultisigWalletNotReady(m_wallet);
-
-        return m_wallet->exchange_multisig_keys(epee::wipeable_string(m_password), info, force_update_use_with_caution);
-    } catch (const exception& e) {
-        LOG_ERROR("Error on exchanging multisig keys: " << e.what());
-        setStatusError(string(tr("Failed to exchange multisig keys: ")) + e.what());
-    }
-
-    return string();
-}
-
-bool WalletImpl::exportMultisigImages(string& images) {
-    try {
-        clearStatus();
-        checkMultisigWalletReady(m_wallet);
-
-        auto blob = m_wallet->export_multisig();
-        images = epee::string_tools::buff_to_hex_nodelimer(blob);
-        return true;
-    } catch (const exception& e) {
-        LOG_ERROR("Error on exporting multisig images: " << e.what());
-        setStatusError(string(tr("Failed to export multisig images: ")) + e.what());
-    }
-
-    return false;
-}
-
-size_t WalletImpl::importMultisigImages(const vector<string>& images) {
-    try {
-        clearStatus();
-        checkMultisigWalletReady(m_wallet);
-
-        std::vector<std::string> blobs;
-        blobs.reserve(images.size());
-
-        for (const auto& image: images) {
-            std::string blob;
-            if (!epee::string_tools::parse_hexstr_to_binbuff(image, blob)) {
-                LOG_ERROR("Failed to parse imported multisig images");
-                setStatusError(tr("Failed to parse imported multisig images"));
-                return 0;
-            }
-
-            blobs.emplace_back(std::move(blob));
-        }
-
-        return m_wallet->import_multisig(blobs);
-    } catch (const exception& e) {
-        LOG_ERROR("Error on importing multisig images: " << e.what());
-        setStatusError(string(tr("Failed to import multisig images: ")) + e.what());
-    }
-
-    return 0;
-}
-
-bool WalletImpl::hasMultisigPartialKeyImages() const {
-    try {
-        clearStatus();
-        checkMultisigWalletReady(m_wallet);
-
-        return m_wallet->has_multisig_partial_key_images();
-    } catch (const exception& e) {
-        LOG_ERROR("Error on checking for partial multisig key images: " << e.what());
-        setStatusError(string(tr("Failed to check for partial multisig key images: ")) + e.what());
-    }
-
-    return false;
-}
-
-PendingTransaction* WalletImpl::restoreMultisigTransaction(const string& signData) {
-    try {
-        clearStatus();
-        checkMultisigWalletReady(m_wallet);
-
-        string binary;
-        if (!epee::string_tools::parse_hexstr_to_binbuff(signData, binary)) {
-            throw runtime_error("Failed to deserialize multisig transaction");
-        }
-
-        tools::wallet2::multisig_tx_set txSet;
-        if (!m_wallet->load_multisig_tx(binary, txSet, {})) {
-          throw runtime_error("couldn't parse multisig transaction data");
-        }
-
-        auto ptx = new PendingTransactionImpl(*this);
-        ptx->m_pending_tx = txSet.m_ptx;
-        ptx->m_signers = txSet.m_signers;
-
-        return ptx;
-    } catch (exception& e) {
-        LOG_ERROR("Error on restoring multisig transaction: " << e.what());
-        setStatusError(string(tr("Failed to restore multisig transaction: ")) + e.what());
-    }
-
-    return nullptr;
-}
-
 // TODO:
 // 1 - properly handle payment id (add another menthod with explicit 'payment_id' param)
 // 2 - check / design how "Transaction" can be single interface
@@ -1754,11 +1562,6 @@ PendingTransaction *WalletImpl::createTransactionMultDest(const std::vector<stri
             }
             pendingTxPostProcess(transaction);
 
-            if (multisig().isMultisig) {
-                auto tx_set = m_wallet->make_multisig_tx_set(transaction->m_pending_tx);
-                transaction->m_pending_tx = tx_set.m_ptx;
-                transaction->m_signers = tx_set.m_signers;
-            }
         } catch (const tools::error::daemon_busy&) {
             // TODO: make it translatable with "tr"?
             setStatusError(tr("daemon is busy. Please try again later."));
@@ -2222,27 +2025,6 @@ bool WalletImpl::verifySignedMessage(const std::string &message, const std::stri
     return false;
 
   return m_wallet->verify(message, info.address, signature).valid;
-}
-
-std::string WalletImpl::signMultisigParticipant(const std::string &message) const
-{
-    clearStatus();
-
-    bool ready = false;
-    if (!m_wallet->multisig(&ready) || !ready) {
-        m_status = Status_Error;
-        m_errorString = tr("The wallet must be in multisig ready state");
-        return {};
-    }
-
-    try {
-        return m_wallet->sign_multisig_participant(message);
-    } catch (const std::exception& e) {
-        m_status = Status_Error;
-        m_errorString = e.what();
-    }
-
-    return {};
 }
 
 bool WalletImpl::verifyMessageWithPublicKey(const std::string &message, const std::string &publicKey, const std::string &signature) const
