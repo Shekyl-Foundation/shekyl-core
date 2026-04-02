@@ -39,7 +39,9 @@
  #include <malloc.h>
 #endif
 
-#ifndef WIN32
+#if defined(WIN32) && defined(_MSC_VER)
+ #include <sys/timeb.h>
+#else
  #include <sys/time.h>
 #endif
 
@@ -473,9 +475,11 @@ static void oaes_get_seed( char buf[RANDSIZ + 1] )
 	struct timeval timer;
 	struct tm *gmTimer;
 	char * _test = NULL;
+	time_t tv_sec;
 
 	gettimeofday(&timer, NULL);
-	gmTimer = gmtime( &timer.tv_sec );
+	tv_sec = (time_t)timer.tv_sec;
+	gmTimer = gmtime( &tv_sec );
 	_test = (char *) calloc( timer.tv_usec/1000, sizeof( char ) );
 	sprintf( buf, "%04d%02d%02d%02d%02d%02d%03d%p%d",
 		gmTimer->tm_year + 1900, gmTimer->tm_mon + 1, gmTimer->tm_mday,
@@ -488,17 +492,33 @@ static void oaes_get_seed( char buf[RANDSIZ + 1] )
 #else
 static uint32_t oaes_get_seed(void)
 {
-	struct timeval timer;
+#ifdef _MSC_VER
+	struct timeb timer;
 	struct tm *gmTimer;
 	char * _test = NULL;
 	uint32_t _ret = 0;
 
+	ftime(&timer);
+	gmTimer = gmtime( &timer.time );
+	_test = (char *) calloc( timer.millitm, sizeof( char ) );
+	_ret = gmTimer->tm_year + 1900 + gmTimer->tm_mon + 1 + gmTimer->tm_mday +
+			gmTimer->tm_hour + gmTimer->tm_min + gmTimer->tm_sec + timer.millitm +
+			(uintptr_t) ( _test + timer.millitm ) + GETPID();
+#else
+	struct timeval timer;
+	struct tm *gmTimer;
+	char * _test = NULL;
+	uint32_t _ret = 0;
+	time_t tv_sec;
+
 	gettimeofday(&timer, NULL);
-	gmTimer = gmtime( &timer.tv_sec );
+	tv_sec = (time_t)timer.tv_sec;
+	gmTimer = gmtime( &tv_sec );
 	_test = (char *) calloc( timer.tv_usec/1000, sizeof( char ) );
 	_ret = gmTimer->tm_year + 1900 + gmTimer->tm_mon + 1 + gmTimer->tm_mday +
 			gmTimer->tm_hour + gmTimer->tm_min + gmTimer->tm_sec + timer.tv_usec/1000 +
 			(uintptr_t) ( _test + timer.tv_usec/1000 ) + GETPID();
+#endif
 
 	if( _test )
 		free( _test );
