@@ -40,12 +40,27 @@ ShekylPqcSignatureResult shekyl_pqc_sign(
     const uint8_t* message_ptr,
     size_t message_len);
 bool shekyl_pqc_verify(
-    const uint8_t* public_key_ptr,
-    size_t public_key_len,
-    const uint8_t* message_ptr,
-    size_t message_len,
-    const uint8_t* signature_ptr,
-    size_t signature_len);
+    uint8_t scheme_id,
+    const uint8_t* pubkey_blob,
+    size_t pubkey_len,
+    const uint8_t* sig_blob,
+    size_t sig_len,
+    const uint8_t* message,
+    size_t message_len);
+
+uint8_t shekyl_pqc_verify_debug(
+    uint8_t scheme_id,
+    const uint8_t* pubkey_blob,
+    size_t pubkey_len,
+    const uint8_t* sig_blob,
+    size_t sig_len,
+    const uint8_t* message,
+    size_t message_len);
+
+bool shekyl_pqc_multisig_group_id(
+    const uint8_t* keys_ptr,
+    size_t keys_len,
+    uint8_t* out_ptr);
 
 // Crypto: Hash functions
 bool shekyl_cn_fast_hash(

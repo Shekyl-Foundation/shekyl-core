@@ -4,6 +4,7 @@
 //! using NIST PQC standardized algorithms (ML-DSA, ML-KEM, SLH-DSA).
 
 pub mod signature;
+pub mod multisig;
 pub mod kem;
 pub mod error;
 
