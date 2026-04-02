@@ -47,6 +47,8 @@
 #include "daemon/command_server.h"
 #include "daemon/command_line_args.h"
 #include "net/net_ssl.h"
+#include "shekyl/shekyl_ffi.h"
+#include "rpc/core_rpc_ffi.h"
 #include "version.h"
 
 using namespace epee;
@@ -77,6 +79,8 @@ public:
   t_p2p p2p;
   std::vector<std::unique_ptr<t_rpc>> rpcs;
   std::unique_ptr<zmq_internals> zmq;
+  bool rust_rpc_enabled;
+  std::vector<ShekylDaemonRpcHandle*> rust_rpc_handles;
 
   t_internals(
       boost::program_options::variables_map const & vm
@@ -85,6 +89,7 @@ public:
     , protocol{vm, core, command_line::get_arg(vm, cryptonote::arg_offline)}
     , p2p{vm, protocol}
     , zmq{nullptr}
+    , rust_rpc_enabled{!command_line::get_arg(vm, daemon_args::arg_no_rust_rpc)}
   {
     // Handle circular dependencies
     protocol.set_p2p_endpoint(p2p.get());
@@ -196,6 +201,27 @@ bool t_daemon::run(bool interactive)
     for(auto& rpc: mp_internals->rpcs)
       rpc->run();
 
+    // Start Rust/Axum daemon RPC if --rust-rpc is set
+    if (mp_internals->rust_rpc_enabled)
+    {
+      for (auto& rpc : mp_internals->rpcs)
+      {
+        auto* server = rpc->get_server();
+        std::string bind_addr = "127.0.0.1:" + std::to_string(server->get_binded_port() + 10000);
+        auto* rust_handle = shekyl_daemon_rpc_start(
+            static_cast<void*>(server), bind_addr.c_str(), false);
+        if (rust_handle)
+        {
+          MGINFO("Rust daemon RPC started on " << bind_addr);
+          mp_internals->rust_rpc_handles.push_back(rust_handle);
+        }
+        else
+        {
+          MWARNING("Failed to start Rust daemon RPC on " << bind_addr);
+        }
+      }
+    }
+
     std::unique_ptr<daemonize::t_command_server> rpc_commands;
     if (interactive && mp_internals->rpcs.size())
     {
@@ -223,6 +249,10 @@ bool t_daemon::run(bool interactive)
     if (mp_internals->zmq)
       mp_internals->zmq->server.stop();
 
+    for (auto* rust_handle : mp_internals->rust_rpc_handles)
+      shekyl_daemon_rpc_stop(rust_handle);
+    mp_internals->rust_rpc_handles.clear();
+
     for(auto& rpc : mp_internals->rpcs)
       rpc->stop();
     MGINFO("Node stopped.");
@@ -246,6 +276,10 @@ void t_daemon::stop()
   {
     throw std::runtime_error{"Can't stop stopped daemon"};
   }
+  for (auto* rust_handle : mp_internals->rust_rpc_handles)
+    shekyl_daemon_rpc_stop(rust_handle);
+  mp_internals->rust_rpc_handles.clear();
+
   mp_internals->p2p.stop();
   for(auto& rpc : mp_internals->rpcs)
     rpc->stop();

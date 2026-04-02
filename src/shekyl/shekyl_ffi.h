@@ -118,6 +118,22 @@ bool shekyl_generate_ssl_certificate(
     ShekylBuffer* key_pem_out,
     ShekylBuffer* cert_pem_out);
 
+// Daemon RPC (Axum)
+typedef struct ShekylDaemonRpcHandle ShekylDaemonRpcHandle;
+
+// Start the Axum daemon RPC server on a dedicated Tokio runtime.
+// rpc_server_ptr: pointer to an initialized core_rpc_server.
+// bind_addr: "ip:port" C string.
+// restricted: true to block admin-only endpoints.
+// Returns an opaque handle, or NULL on failure.
+ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
+    void* rpc_server_ptr,
+    const char* bind_addr,
+    bool restricted);
+
+// Gracefully stop the Axum daemon RPC server and free the handle.
+void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
+
 } // extern "C"
 
 // Secure memory primitives are declared in shekyl/shekyl_secure_mem.h

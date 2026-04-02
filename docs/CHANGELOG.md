@@ -4,6 +4,19 @@
 
 ### ✨ Added
 
+- **Daemon RPC migrated to Rust/Axum (Phase 1).** The daemon HTTP RPC transport
+  is now served by the `shekyl-daemon-rpc` Rust crate using Axum, replacing
+  `epee::http_server_impl_base`. All 90 endpoints (33 JSON REST, 9 binary,
+  48 JSON-RPC 2.0) are routed through Axum with PQC-ready 10 MiB body limits,
+  CORS, and restricted-mode enforcement. The C++ `core_rpc_server` handler
+  logic is unchanged and accessed via a `core_rpc_ffi` C ABI facade. Enabled
+  by default; `--no-rust-rpc` falls back to the legacy epee HTTP server.
+  JSON REST endpoints accept both GET and POST (matching epee). Binary
+  endpoints return 400 on parse failure (matching epee's MAP_URI_AUTO_BIN2).
+  Validated on live testnet: 23/25 pass, 2 expected diffs
+  (`rpc_connections_count`), 2 binary skips (empty-POST → 400 on both).
+  Validation harness at `tests/rpc_comparison/compare_rpc.sh`;
+  test data in `shekyl-dev/data/rpc_comparison/`.
 - **Unified Gitian release pipeline.** The `gitian` workflow is now the sole
   release pipeline, replacing the separate `release-tagged` workflow. Gitian
   builds produce reproducible binaries; a new `package-and-publish` job
@@ -34,6 +47,8 @@
 
 ### 🐛 Fixed
 
+- **Wallet: `--daemon-port` help text referenced Monero port 18081.** Updated to
+  Shekyl's default RPC port 11029.
 - **Wallet: `account_public_address` equality after PQC.** Destination and
   change-address checks used `memcmp` on the whole struct; `m_pqc_public_key`
   is a `std::vector`, so equality was wrong when keys matched but allocations
