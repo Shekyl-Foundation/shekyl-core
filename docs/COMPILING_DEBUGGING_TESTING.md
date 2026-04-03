@@ -79,6 +79,103 @@ If everything looks fine, then after setting some breakpoints of your choice, th
 
 `Debug -> Start/Continue`
 
+## Windows (MSVC) wallet-core build
+
+The project supports building wallet-core libraries with MSVC on Windows.
+This is primarily used for the GUI wallet (Tauri/Rust) which links the C++
+static libraries.
+
+### Prerequisites
+
+- Visual Studio 2022 (17.x) with the C++ Desktop workload
+- vcpkg (for Boost, libsodium, OpenSSL, ZeroMQ, libunbound, LMDB)
+- Rust toolchain (`stable-x86_64-pc-windows-msvc`)
+- CMake 3.25+
+
+### Build command
+
+```powershell
+cmake -S . -B build\msvc-release -G "Visual Studio 17 2022" -A x64 ^
+  -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake ^
+  -DVCPKG_TARGET_TRIPLET=x64-windows-static ^
+  -DCMAKE_BUILD_TYPE=Release ^
+  -DUSE_DEVICE_TREZOR=OFF
+cmake --build build\msvc-release --config Release --parallel
+```
+
+### Known MSVC Internal Compiler Error (ICE) and workarounds
+
+MSVC 14.44 (VS 2022 17.14) has two known ICE triggers in this codebase.
+Both were diagnosed through CI iteration and are documented here for
+future reference.
+
+#### ICE 1: Empty checkpoint array initializers (`obj_blocks`)
+
+**Symptom:** `CL.exe exited with code -529706956` on `obj_blocks.vcxproj`.
+
+**Root cause:** The files `src/blocks/*.dat` are 0 bytes before genesis
+data is populated. The CMake generator (`blocks_generator.cmake`) produced
+`const unsigned char name[]={};` -- an empty array initializer that is
+valid C99/C11 but triggers an MSVC parser crash.
+
+**Fix:** Modified `blocks_generator.cmake` to emit a 1-byte placeholder
+(`{0x00}`) with a separate `_len = 0` sentinel for empty `.dat` files:
+
+```c
+const unsigned char checkpoints[]={ 0x00 };
+const size_t checkpoints_len = 0;
+```
+
+Consumers check `_len` rather than `sizeof()` to detect empty data.
+
+#### ICE 2: PDB type server crash (`obj_cncrypto`)
+
+**Symptom:** All individual `.c`/`.cpp` files in `src/crypto/` compile
+successfully, then the compiler crashes during the `Generating Code...`
+phase with:
+
+```text
+INTERNAL COMPILER ERROR in 'CL.exe'
+CL!CloseTypeServerPDB()+0x16ef23
+CL!CloseTypeServerPDB()+0x1b7502
+```
+
+**Diagnosis sequence** (what was tried and what it revealed):
+
+| Attempt | Flag | Result |
+| --- | --- | --- |
+| Limit parallelism | `/MP1 /FS` | Still crashed |
+| Reduce optimization | `/MP1 /O1` | Still crashed |
+| Disable optimization | `/MP1 /Od` | Still crashed -- ruled out optimizer |
+| Disable SSA optimizer | `/MP1 /d2SSAOptimizer-` | Still crashed, but stack trace revealed `CloseTypeServerPDB` |
+| Embed debug info | `/MP1 /Z7` | **Bypasses PDB type server entirely** |
+
+The crash is not in the optimizer or code generator proper -- it is in
+MSVC's shared PDB (Program Database) type server, which fails when
+finalizing debug/type information for the crypto library's many
+translation units.
+
+**Fix:** `src/crypto/CMakeLists.txt` applies `/Z7` for the `obj_cncrypto`
+target on MSVC, which embeds debug info directly into `.obj` files
+instead of routing through the shared PDB type server:
+
+```cmake
+if(MSVC)
+  target_compile_options(obj_cncrypto PRIVATE /MP1 /Z7)
+endif()
+```
+
+`/Z7` produces slightly larger `.obj` files but has no effect on the
+final linked binary size or runtime behavior. The workaround is
+target-scoped and does not affect other compilation units.
+
+**If the ICE resurfaces** on a future MSVC version, the fallback strategy
+is to split `obj_cncrypto` into two smaller CMake targets (hash
+primitives vs. PoW functions) to reduce the per-project type record
+count.
+
+---
+
 ## To be done (and merged):
 
 Upstream Monero PRs that may be adopted or reimplemented for Shekyl:
