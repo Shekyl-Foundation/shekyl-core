@@ -1,6 +1,6 @@
 # PQC Multisig for Shekyl
 
-> **Last updated:** 2026-04-02
+> **Last updated:** 2026-04-03
 
 ## Purpose
 
@@ -28,10 +28,10 @@ Multisig is implemented in two phases:
    data confirms multisig usage is negligible — and on-chain
    indistinguishable from single-key spends due to secret-splitting). The
    aggregate chain growth impact is noise.
-3. **Preserve ring privacy.** All multisig coordination happens off-chain.
-   On-chain transactions must remain indistinguishable from single-key spends
-   at the ring/CLSAG layer. The `pqc_auth` field carries authorization
-   material, not privacy-layer data.
+3. **Preserve full-chain anonymity.** All multisig coordination happens
+   off-chain. On-chain transactions must remain indistinguishable from
+   single-key spends at the FCMP++ membership proof layer. The `pqc_auth`
+   field carries authorization material, not membership proof data.
 4. **Protect long-duration staked outputs.** The primary use case driving V3
    multisig is securing staked positions locked for 25,000–150,000 blocks
    (35–208 days). A single key controlling a locked position for months is a
@@ -53,7 +53,7 @@ On the rebooted Shekyl chain, the classical multisig code is removed:
 - `account_base::make_multisig` and its secret-splitting machinery are
   deleted from `account.cpp`.
 - The MMS (Multisig Messaging System) transport layer is not carried forward.
-- No CLSAG multi-round signing coordination exists in the codebase.
+- No multi-round signing coordination exists in the codebase.
 - Wallet file format does not include classical multisig key state.
 - `wallet2.cpp` contains zero classical multisig code: all multisig
   functions (`make_multisig`, `exchange_multisig_keys`, `export_multisig`,
@@ -65,26 +65,26 @@ On the rebooted Shekyl chain, the classical multisig code is removed:
 
 ### Architecture: Single Classical Key + PQC Multisig
 
-The CLSAG/RingCT layer always uses a single classical key. The M-of-N
-authorization lives entirely in the `pqc_auth` layer:
+The FCMP++ layer uses a single classical key. The M-of-N authorization
+lives entirely in the `pqc_auth` layer:
 
 ```text
-Ring/CLSAG layer:   single Ed25519 key → normal CLSAG signing (no multi-round)
+FCMP++ layer:       coordinator constructs membership proof → single proof covers all inputs
 PQC auth layer:     M-of-N hybrid signatures → scheme_id = 2
 
 Transaction building:
-  1. Coordinator builds tx body with single classical key (standard CLSAG)
+  1. Coordinator builds tx body with single classical key (standard FCMP++ proof construction)
   2. Coordinator computes canonical signing payload
   3. M signers each produce independent hybrid (Ed25519 + ML-DSA-65) signatures
-  4. Coordinator assembles pqc_auth and broadcasts
+  4. Coordinator assembles pqc_auths and broadcasts
 ```
 
 This eliminates the dual-layer coordination problem entirely. There is no
-sequencing of CLSAG multisig rounds followed by PQC signing rounds — the
-CLSAG layer is always single-key, and the PQC layer handles all multi-party
-authorization.
+sequencing of membership proof multisig rounds followed by PQC signing
+rounds — the FCMP++ layer is always single-key, and the PQC layer handles
+all multi-party authorization.
 
-The classical key used at the CLSAG layer is held by the coordinator (or
+The classical key used at the FCMP++ layer is held by the coordinator (or
 derived from a shared secret agreed during group setup). This key is NOT
 the security boundary for multisig — the `pqc_auth` M-of-N threshold is.
 An attacker who compromises the classical key alone cannot spend: they
@@ -429,6 +429,10 @@ oversized multisig payloads.
 
 ### Transaction Size Impact
 
+With per-input `pqc_auths`, the authorization overhead is now per-input.
+A typical 2-in/2-out multisig transaction is larger than a single-input
+equivalent because each input carries its own `PqcAuthentication` entry.
+
 Measured per-signer contribution (from V3 phase-1 measurements):
 
 - `HybridPublicKey`: 1,996 bytes
@@ -490,10 +494,18 @@ over the V4 lattice threshold approach.
 
 #### Classical key management
 
-The CLSAG/RingCT layer uses a single classical key held by the coordinator
+The FCMP++ layer uses a single classical key held by the coordinator
 (or derived from a shared secret agreed during group setup). This key is
-NOT the multisig security boundary — it only satisfies the ring signature
+NOT the multisig security boundary — it only satisfies the membership proof
 layer. The M-of-N PQC threshold is the authorization gate.
+
+#### Per-output PQC key coordination
+
+Each signer must derive the per-output PQC keypair for the output being
+spent from their copy of the KEM shared secret. The coordinator distributes
+the ML-KEM ciphertexts during the signing request phase so each signer can
+independently compute the combined shared secret and derive the correct
+per-output PQC keypair for authorization.
 
 #### Signing protocol (file-based)
 
@@ -710,7 +722,7 @@ equation. The remaining (N-M) vectors stay secret.
   scaling).
 - True threshold security (no single party can spend).
 - Single-equation verification (constant time, independent of N).
-- Preserves ring privacy (threshold math happens off-chain).
+- Preserves full-chain anonymity (threshold math happens off-chain).
 
 ### Barriers (Realistic)
 
@@ -814,11 +826,11 @@ True indistinguishability would require all transactions to use the same
 scheme — this is a V5+ consideration if multisig adoption grows
 significantly.
 
-### Ring Privacy
+### FCMP++ Anonymity
 
-Neither V3 nor V4 multisig affects the ring/CLSAG layer. The
-`pqc_auth` field is authorization material, not ring-member selection data.
-Anonymity set size is unchanged.
+Neither V3 nor V4 multisig affects the FCMP++ membership proof layer. The
+`pqc_auths` field carries authorization material, not membership proof data.
+The anonymity set (full UTXO set) is unchanged.
 
 ---
 

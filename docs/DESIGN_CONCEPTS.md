@@ -1,6 +1,6 @@
 # Shekyl Design Concepts
 
-> **Last updated:** 2026-04-01
+> **Last updated:** 2026-04-03
 
 ## Monetary Supply and Denomination Policy (Next Generation Shekyl)
 
@@ -730,12 +730,12 @@ will drift.
 
 Instead of a single coinbase output per miner, the miner transaction could
 split the reward into K outputs of randomized denomination (summing to the
-correct total). These outputs enter the UTXO set as potential decoy ring
-members for future transactions.
+correct total). These outputs enter the UTXO set and are part of the full-chain
+anonymity set used by FCMP++ membership proofs.
 
 **Privacy gain:** More coinbase-shaped outputs in the UTXO set increase the
-ring decoy pool quality. Transactions spending miner rewards become harder
-to distinguish from non-miner transactions.
+overall UTXO set diversity. With FCMP++, the full UTXO set is the anonymity
+set, so additional outputs improve privacy indirectly by increasing set size.
 
 **Risk:** Increases coinbase transaction size and adds consensus complexity.
 Anti-sybil enforcement is needed to prevent miners from creating outputs
@@ -746,7 +746,7 @@ that only they can distinguish.
 Any reward-privacy mechanism must satisfy all of the following:
 
 1. **No anonymity-set regression.** The change must not reduce the effective
-   ring size or stealth-address unlinkability for any participant.
+   FCMP++ anonymity set or stealth-address unlinkability for any participant.
 2. **No stuffing vector reintroduction.** The mechanism must not create a new
    profitable strategy for inflating transaction volume or manipulating reward
    timing.
@@ -772,8 +772,8 @@ Any reward-privacy mechanism must satisfy all of the following:
 v4. **Claim batching** is a natural fit for the staker reward redesign
 already planned in the v4 privacy phase. **Reward output shaping** requires
 significantly more research and should only be considered after lattice-based
-ring signatures are available (V4-B or later), as the privacy benefit depends
-on ring decoy quality.
+further FCMP++ optimizations are available, as the privacy benefit depends
+on UTXO set composition.
 
 **Gate:** Promote to protocol proposal only if simulation confirms a
 measurable privacy gain (e.g., >20% increase in effective anonymity set size

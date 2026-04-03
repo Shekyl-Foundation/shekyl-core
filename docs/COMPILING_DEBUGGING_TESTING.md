@@ -5,12 +5,14 @@ The intended audience are developers, who want to leverage build and test tricks
 Before reading this document, please consult section "Build instructions" in the main README.md. 
 Some information from README.md will be repeated here, but the aim is to go beyond it.
 
-PQC note:
+PQC and FCMP++ note:
 
-- Shekyl's rebooted chain design depends on Rust-based PQC components
-- once PQC transaction authentication is enabled for the rebooted chain, Rust
-  should be treated as required for consensus-valid builds
-- the canonical PQC format/spec is documented in
+- Shekyl's rebooted chain design depends on Rust-based PQC and FCMP++ components
+- Rust should be treated as required for consensus-valid builds
+- The FCMP++ Rust crates (`shekyl-fcmp`, `shekyl-address`) are required for
+  consensus-valid builds alongside the existing `shekyl-crypto-pq` and
+  `shekyl-ffi` crates
+- The canonical PQC format/spec is documented in
   `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
 ## Basic compilation
@@ -134,7 +136,7 @@ Shekyl's test suite is adapted for **v3-from-genesis**: all user transactions
 are version 3 with mandatory PQC authentication (hybrid Ed25519 + ML-DSA-65).
 Coinbase transactions remain version 2. Key differences from upstream Monero:
 
-- `FAKECHAIN` tests inject `--fixed-difficulty=1` and relax mixin requirements
+- `FAKECHAIN` tests inject `--fixed-difficulty=1`
 - Transaction construction helpers produce v3 with `use_view_tags=true`
 - Coinbase outputs are indexed under `amount=0` for correct RCT spending
 - Balance verification in callbacks uses RCT ecdhInfo decryption

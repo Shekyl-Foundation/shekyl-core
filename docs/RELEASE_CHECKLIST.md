@@ -14,14 +14,17 @@
   - [x] malformed hybrid signature rejection tested (3 negative vector integration tests)
   - [x] encoded transaction size impact measured (~5,385 bytes per user tx)
   - [x] payload limit guidance documented in V3_ROLLOUT.md
-- [ ] Ledger integration
+- [ ] Ledger integration (deferred to v1.1)
   - [ ] Implemented in Shekyl codebase (if needed)
   - [ ] Ledger app integration coded by Ledger
   - [ ] Ledger Shekyl app (or Monero-compatible app) update available
-- [ ] Trezor integration
+- [ ] Trezor integration (deferred to v1.1)
   - [ ] Implemented in Shekyl codebase (if needed)
   - [ ] Trezor app integration coded by Trezor
   - [ ] Trezor firmware update available (if needed)
+Software wallets only for v1.0 launch. Hardware wallet support (Ledger/Trezor)
+targeted for v1.1.
+
 - [x] Fork height set (rebooted chain: all features at HF 1 from genesis)
   - [ ] Shekyl announcement mailer / notice
   - [ ] Twitter announcement
@@ -63,6 +66,13 @@
   - [ ] PQC multisig scheme downgrade rejection verified
   - [ ] PQC multisig fuzz targets run (4 harnesses, 10M iterations each)
   - [ ] PQC multisig test vectors validated against docs/PQC_TEST_VECTOR_002_MULTISIG.json
+  - [ ] FCMP++ proof verification tested (prove/verify round-trip)
+  - [ ] Curve tree operations tested (grow/trim/root/path)
+  - [ ] FCMP++ fuzz targets run (6 harnesses, 10M iterations each)
+  - [ ] Per-output PQC key derivation tested
+  - [ ] Bech32m address encoding/decoding tested
+  - [ ] Transaction pruning mode tested (`--prune-blockchain`)
+  - [ ] Block header `curve_tree_root` commitment validated
   - [ ] ZMQ/RPC consumer regression testing for larger transactions
 - [ ] CLI reproducible builds validated
 - [ ] Rust/PQC reproducible build inputs documented

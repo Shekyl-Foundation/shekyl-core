@@ -33,6 +33,13 @@
   section in `COMPILING_DEBUGGING_TESTING.md` with a structured triage table
   covering applied PRs (#6937, #9762, #9795, #9858, #9898) and tracked-for-
   future-work PRs (#10157, #10084, #9801) with STRUCTURAL_TODO.md cross-refs.
+- **FCMP++ documentation rework (Phase 0.5a).** Reworked all core documentation
+  to reflect FCMP++ as the membership proof system from genesis. Replaced CLSAG
+  and ring signature references with FCMP++ full-chain membership proof language.
+  Updated PQC spec for per-input pqc_auths, per-output KEM derivation, Bech32m
+  addresses, and curve tower architecture. Retired V4 lattice ring signature
+  roadmap. Updated V3_ROLLOUT.md size estimates for ~23 KB typical transactions.
+  Added FCMP++ items to RELEASE_CHECKLIST.md.
 
 ### 🐛 Fixed
 

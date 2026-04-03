@@ -64,10 +64,17 @@ In restricted mode (`--restricted-rpc`):
 
 ## PQC Readiness
 
-- Default body limit: 10 MiB (configurable). ML-DSA-65 signatures are ~3.3 KB
-  each; a transaction with many inputs can approach megabyte sizes.
+- Default body limit: 10 MiB (configurable). With FCMP++ and per-input
+  pqc_auths, a typical 2-in/2-out transaction is ~23 KB. The 10 MiB limit
+  is sufficient for all realistic transaction sizes including multisig.
 - No changes needed to the wire format; the FFI boundary passes raw JSON
   strings and binary blobs without interpretation.
+- `get_outs` / `get_outs.bin` endpoints are not defined — FCMP++ uses
+  full-chain membership proofs, so there is no ring member fetching.
+- New endpoints planned for curve tree operations:
+  - `get_curve_tree_path` — retrieve a Merkle path for a given leaf
+  - `get_curve_tree_root` — retrieve the current curve tree root hash
+  - `get_curve_tree_checkpoint` — retrieve a curve tree snapshot at a given height
 
 ## Running
 
