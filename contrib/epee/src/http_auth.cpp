@@ -116,10 +116,10 @@ namespace
       template<typename T>
       void operator()(const T& arg) const
       {
-        const boost::iterator_range<const char*> data(boost::as_literal(arg));
+        const auto data = boost::as_literal(arg);
         EVP_DigestUpdate(
           ctx,
-          reinterpret_cast<const std::uint8_t*>(data.begin()),
+          reinterpret_cast<const std::uint8_t*>(&*data.begin()),
           data.size()
         );
       }

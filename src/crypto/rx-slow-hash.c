@@ -1,3 +1,4 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
 // Copyright (c) 2019-2022, The Monero Project
 //
 // All rights reserved.
@@ -33,7 +34,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#if !defined(_MSC_VER)
 #include <unistd.h>
+#endif
 #include <limits.h>
 
 #include "randomx.h"

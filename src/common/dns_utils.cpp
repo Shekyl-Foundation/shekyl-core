@@ -27,8 +27,9 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "common/dns_utils.h"
-// check local first (in the event of static or in-source compilation of libunbound)
+#ifdef HAVE_DNS_UNBOUND
 #include "unbound.h"
+#endif
 
 #include <deque>
 #include <set>
@@ -197,8 +198,8 @@ std::optional<std::string> tlsa_to_string(const char* src, size_t len)
   return std::string(src, len);
 }
 
-// custom smart pointer.
-// TODO: see if std::auto_ptr and the like support custom destructors
+#ifdef HAVE_DNS_UNBOUND
+
 template<typename type, void (*freefunc)(type*)>
 class scoped_ptr
 {
@@ -231,7 +232,6 @@ struct DNSResolverData
   ub_ctx* m_ub_context;
 };
 
-// work around for bug https://www.nlnetlabs.nl/bugs-script/show_bug.cgi?id=515 needed for it to compile on e.g. Debian 7
 class string_copy {
 public:
     string_copy(const char *s): str(strdup(s)) {}
@@ -271,7 +271,6 @@ DNSResolver::DNSResolver() : m_data(new DNSResolverData())
     }
   }
 
-  // init libunbound context
   m_data->m_ub_context = ub_ctx_create();
 
   if (use_dns_public)
@@ -282,7 +281,6 @@ DNSResolver::DNSResolver() : m_data(new DNSResolverData())
     ub_ctx_set_option(m_data->m_ub_context, string_copy("do-tcp:"), string_copy("yes"));
   }
   else {
-    // look for "/etc/resolv.conf" and "/etc/hosts" or platform equivalent
     ub_ctx_resolvconf(m_data->m_ub_context, NULL);
     ub_ctx_hosts(m_data->m_ub_context, NULL);
   }
@@ -291,9 +289,6 @@ DNSResolver::DNSResolver() : m_data(new DNSResolverData())
 
   if (!DNS_PUBLIC)
   {
-    // if no DNS_PUBLIC specified, we try a lookup to what we know
-    // should be a valid DNSSEC record, and switch to known good
-    // DNSSEC resolvers if verification fails
     bool available, valid;
     static const char *probe_hostname = "updates.shekyl.org";
     auto records = get_txt_record(probe_hostname, available, valid);
@@ -329,12 +324,10 @@ std::vector<std::string> DNSResolver::get_record(const std::string& url, int rec
   dnssec_available = false;
   dnssec_valid = false;
 
-  // destructor takes care of cleanup
   ub_result_ptr result;
 
   MDEBUG("Performing DNSSEC " << get_record_name(record_type) << " record query for " << url);
 
-  // call DNS resolver, blocking.  if return value not zero, something went wrong
   if (!ub_resolve(m_data->m_ub_context, string_copy(url.c_str()), record_type, DNS_CLASS_IN, &result))
   {
     dnssec_available = (result->secure || result->bogus);
@@ -348,7 +341,6 @@ std::vector<std::string> DNSResolver::get_record(const std::string& url, int rec
         std::optional<std::string> res = (*reader)(result->data[i], result->len[i]);
         if (res)
         {
-          // do not dump dns record directly from dns into log
           MINFO("Found " << get_record_name(record_type) << " record for " << url);
           addresses.push_back(std::move(*res));
         }
@@ -358,6 +350,23 @@ std::vector<std::string> DNSResolver::get_record(const std::string& url, int rec
 
   return addresses;
 }
+
+#else // !HAVE_DNS_UNBOUND -- stub implementations for builds without libunbound
+
+struct DNSResolverData {};
+
+DNSResolver::DNSResolver() : m_data(new DNSResolverData()) {}
+DNSResolver::~DNSResolver() { delete m_data; }
+
+std::vector<std::string> DNSResolver::get_record(const std::string& url, int record_type, std::optional<std::string> (*reader)(const char *,size_t), bool& dnssec_available, bool& dnssec_valid)
+{
+  dnssec_available = false;
+  dnssec_valid = false;
+  MWARNING("DNS resolution unavailable (built without libunbound): " << url);
+  return {};
+}
+
+#endif // HAVE_DNS_UNBOUND
 
 std::vector<std::string> DNSResolver::get_ipv4(const std::string& url, bool& dnssec_available, bool& dnssec_valid)
 {

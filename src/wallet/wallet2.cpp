@@ -4471,7 +4471,7 @@ std::optional<wallet2::keys_file_data> wallet2::get_keys_file_data(const crypto:
 
   bool r = epee::serialization::store_t_to_binary(account, account_data);
   CHECK_AND_ASSERT_MES(r, std::nullopt, "failed to serialize wallet keys");
-  std::optional<wallet2::keys_file_data> keys_file_data = (wallet2::keys_file_data) {};
+  std::optional<wallet2::keys_file_data> keys_file_data = wallet2::keys_file_data{};
 
   // Create a JSON object with "key_data" and "seed_language" as keys.
   rapidjson::Document json;
@@ -6349,7 +6349,7 @@ std::optional<wallet2::cache_file_data> wallet2::get_cache_file_data()
     if (!::serialization::serialize(ar, *this))
       return std::nullopt;
 
-    std::optional<wallet2::cache_file_data> cache_file_data = (wallet2::cache_file_data) {};
+    std::optional<wallet2::cache_file_data> cache_file_data = wallet2::cache_file_data{};
     cache_file_data->cache_data = oss.str();
     std::string cipher;
     cipher.resize(cache_file_data->cache_data.size());

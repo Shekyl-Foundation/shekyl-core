@@ -79,6 +79,112 @@ If everything looks fine, then after setting some breakpoints of your choice, th
 
 `Debug -> Start/Continue`
 
+## Windows (MSVC) wallet-core build
+
+The project supports building wallet-core libraries with MSVC on Windows.
+This is primarily used for the GUI wallet (Tauri/Rust) which links the C++
+static libraries.
+
+### Prerequisites
+
+- **Visual Studio 2022 (17.x)** or **Visual Studio 2026 (18.x)** with the
+  C++ Desktop workload.  The CI uses VS 2026 for forward compatibility,
+  but the build works on VS 2022 as well thanks to the
+  `CryptonightR_JIT_stub.c` workaround for the PDB ICE (see below).
+- vcpkg (for Boost, libsodium, OpenSSL, ZeroMQ, libunbound, LMDB)
+- Rust toolchain (`stable-x86_64-pc-windows-msvc`)
+- CMake 3.25+ (or CMake 4.0+ if using VS 2026)
+
+### Build command
+
+```powershell
+cmake -S . -B build\msvc-release -G "Visual Studio 18 2026" -A x64 ^
+  -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake ^
+  -DVCPKG_TARGET_TRIPLET=x64-windows-static ^
+  -DCMAKE_BUILD_TYPE=Release ^
+  -DUSE_DEVICE_TREZOR=OFF
+cmake --build build\msvc-release --config Release --parallel
+```
+
+### Known MSVC Internal Compiler Error (ICE) history
+
+MSVC has two known ICE triggers in this codebase.  Both have been
+worked around.  The diagnosis is recorded here for future reference.
+
+#### ICE 1: Empty checkpoint array initializers (`obj_blocks`)
+
+**Symptom:** `CL.exe exited with code -529706956` on `obj_blocks.vcxproj`.
+
+**Root cause:** The files `src/blocks/*.dat` are 0 bytes before genesis
+data is populated. The CMake generator (`blocks_generator.cmake`) produced
+`const unsigned char name[]={};` -- an empty array initializer that is
+valid C99/C11 but triggers an MSVC 14.44 parser crash.
+
+**Fix (permanent):** Modified `blocks_generator.cmake` to emit a 1-byte
+placeholder (`{0x00}`) with a separate `_len = 0` sentinel for empty
+`.dat` files.  This is correct on all compilers, not just a workaround:
+
+```c
+const unsigned char checkpoints[]={ 0x00 };
+const size_t checkpoints_len = 0;
+```
+
+Consumers check `_len` rather than `sizeof()` to detect empty data.
+
+#### ICE 2: PDB type server crash (`obj_cncrypto`)
+
+**Symptom:** All individual `.c`/`.cpp` files in `src/crypto/` compile
+successfully, then the compiler crashes during the `Generating Code...`
+phase with:
+
+```text
+INTERNAL COMPILER ERROR in 'CL.exe'
+CL!CloseTypeServerPDB()+0x16ef23
+CL!CloseTypeServerPDB()+0x1b7502
+```
+
+**Diagnosis sequence** (tested on MSVC 14.44 and 14.50):
+
+| Attempt | Flag / Change | Result |
+| --- | --- | --- |
+| Limit parallelism | `/MP1 /FS` | Still crashed |
+| Reduce optimization | `/MP1 /O1` | Still crashed |
+| Disable optimization | `/MP1 /Od` | Still crashed -- ruled out optimizer |
+| Disable SSA optimizer | `/MP1 /d2SSAOptimizer-` | Still crashed, stack trace revealed `CloseTypeServerPDB` |
+| Embed debug info | `/MP1 /Z7` | Still crashed -- PDB type server invoked even with `/Z7` |
+| Split OBJECT library | 5 targets | Reduced blast radius but `obj_cncrypto_rx` still crashed |
+| Guard `CryptonightR_template.h` | exclude from MSVC | Reduced dead symbols; ICE persisted |
+| Upgrade to MSVC 14.50 (VS 2026) | | Still crashed -- same `CloseTypeServerPDB` stack |
+| **Replace `CryptonightR_JIT.c` with stub** | | **Resolved** |
+
+The crash is in MSVC's shared PDB (Program Database) type server.  It
+reproduces on both MSVC 14.44 (VS 2022) and 14.50 (VS 2026).  The root
+cause is `CryptonightR_JIT.c` -- on MSVC, the function body is dead code
+(the entire JIT path is `#ifdef __i386 || __x86_64__`), but its
+heavyweight includes (`variant4_random_math.h` with 70 unrolled switch
+cases, `CryptonightR_template.h` with 514 assembly symbol declarations)
+overwhelm the PDB type server during the "Generating Code..." phase.
+
+**Fix:** `src/crypto/CryptonightR_JIT_stub.c` provides the same
+`v4_generate_JIT_code() { return -1; }` stub without the problematic
+includes.  On MSVC, the CMake build uses the stub; on GCC/Clang, the
+full implementation with assembly template is used as before.
+
+**Additional hardening kept in the codebase** (harmless, good hygiene):
+
+- `src/crypto/CMakeLists.txt` splits `cncrypto` into six OBJECT library
+  groups (`hash`, `ops`, `slowhash`, `rx`, `jit`, `cpp`).  This reduces
+  per-target TU count and is harmless on all compilers.
+- `src/crypto/CryptonightR_JIT.c` guards `#include "CryptonightR_template.h"`
+  behind `__i386 || __x86_64__` (GCC/Clang only) since the 514 assembly
+  symbol declarations it contains are dead on MSVC.
+- `src/crypto/c_threads.h` includes `<process.h>` on Windows for correct
+  `_beginthreadex` prototype (prevents handle truncation on 64-bit).
+- `src/crypto/slow-hash.c` extends the `force_software_aes()` guard to
+  include `_M_X64`.
+
+---
+
 ## Upstream Monero PRs — triage (April 2026)
 
 ### Applied

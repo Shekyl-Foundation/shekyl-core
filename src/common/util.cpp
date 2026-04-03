@@ -1,3 +1,4 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
 // Copyright (c) 2014-2022, The Monero Project
 // 
 // All rights reserved.
@@ -28,7 +29,13 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+#ifndef _WIN32
 #include <unistd.h>
+#endif
+#ifdef _MSC_VER
+#include <io.h>
+#include <fcntl.h>
+#endif
 #include <cstdio>
 #include <wchar.h>
 
@@ -54,7 +61,9 @@
   #include <fstream>
 #endif
 
+#ifdef HAVE_DNS_UNBOUND
 #include "unbound.h"
+#endif
 
 #include <thread>
 #include "include_base_utils.h"
@@ -698,6 +707,7 @@ std::string get_nix_version_display_string()
     return std::error_code(code, std::system_category());
   }
 
+#ifdef HAVE_DNS_UNBOUND
   static bool unbound_built_with_threads()
   {
     ub_ctx *ctx = ub_ctx_create();
@@ -712,6 +722,7 @@ std::string get_nix_version_display_string()
     MINFO("libunbound was built " << (with_threads ? "with" : "without") << " threads");
     return with_threads;
   }
+#endif
 
   bool sanitize_locale()
   {
@@ -724,7 +735,7 @@ std::string get_nix_version_display_string()
     }
     catch (...)
     {
-#if defined(__MINGW32__) || defined(__MINGW__)
+#if defined(__MINGW32__) || defined(__MINGW__) || defined(_MSC_VER)
       putenv("LC_ALL=C");
       putenv("LANG=C");
 #else
@@ -821,15 +832,17 @@ std::string get_nix_version_display_string()
     OPENSSL_init_ssl(0, NULL);
 #endif
 
+#ifdef HAVE_DNS_UNBOUND
     if (!unbound_built_with_threads())
       MCLOG_RED(el::Level::Warning, "global", "libunbound was not built with threads enabled - crashes may occur");
+#endif
 
     return true;
   }
   void set_strict_default_file_permissions(bool strict)
   {
-#if defined(__MINGW32__) || defined(__MINGW__)
-    // no clue about the odd one out
+#if defined(__MINGW32__) || defined(__MINGW__) || defined(_MSC_VER)
+    // Windows does not support umask
 #else
     mode_t mode = strict ? 077 : 0;
     umask(mode);
@@ -1063,7 +1076,9 @@ std::string get_nix_version_display_string()
 
   void closefrom(int fd)
   {
-#if defined __FreeBSD__ || defined __OpenBSD__ || defined __NetBSD__ || defined __DragonFly__
+#if defined(_WIN32)
+    (void)fd;
+#elif defined __FreeBSD__ || defined __OpenBSD__ || defined __NetBSD__ || defined __DragonFly__
     ::closefrom(fd);
 #else
 #if defined __GLIBC__

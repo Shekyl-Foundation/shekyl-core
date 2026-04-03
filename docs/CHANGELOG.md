@@ -157,6 +157,14 @@
   `docs/PQC_TEST_VECTOR_002_MULTISIG.json` with canonical encoding sizes,
   wire-format sizes, verification pipeline checks, the 10-check pipeline,
   size regression data, and adversarial test cases for `scheme_id = 2`.
+- **MSVC wallet-core build path**: `BuildRust.cmake` now selects the
+  `x86_64-pc-windows-msvc` Rust target when CMake is driven by MSVC,
+  enabling the Tauri GUI wallet to link against shekyl-core on Windows.
+  The existing MinGW cross-compilation path for headless binaries is
+  unchanged.
+- **CI: Windows MSVC wallet-core job** (`build-windows-msvc`): New CI
+  lane builds the wallet-core static libraries with Visual Studio / MSVC
+  via vcpkg, validating the MSVC portability patches on every push.
 - **Unified Gitian release pipeline.** The `gitian` workflow is now the sole
   release pipeline, replacing the separate `release-tagged` workflow. Gitian
   builds produce reproducible binaries; a new `package-and-publish` job
@@ -232,6 +240,48 @@
 - **Wallet / Ledger: constant-time comparison for 32-byte secrets.**
   `wallet2::is_deterministic` and Ledger HMAC secret lookup now use
   `crypto_verify_32` instead of `memcmp`.
+- **MSVC: add `<io.h>` and POSIX guards in `util.cpp`.** Added `<io.h>`
+  for `_open_osfhandle`/`_close`, expanded MinGW conditionals to cover
+  MSVC for `setenv`→`putenv`, `mode_t`/`umask`, and `closefrom`→no-op.
+- **MSVC: replace `__thread` with `thread_local` in `perf_timer.cpp` and
+  `threadpool.cpp`.** GCC's `__thread` is not supported by MSVC.
+- **MSVC: rename `xor` parameter in `slow-hash.c` to `xor_pad`.** MSVC
+  treats `xor` as a reserved keyword in C mode. Both the x86/SSE and
+  ARM/NEON variants of `aes_pseudo_round_xor()` were affected.
+- **MSVC: fix iterator-to-pointer cast in `http_auth.cpp`.** MSVC
+  `boost::as_literal()` iterator is a class, not a raw pointer. Used
+  `&*data.begin()` to obtain the address.
+- **MSVC: guard `unbound.h` include and usage in `util.cpp`.** The
+  include and `unbound_built_with_threads()` function/call were not
+  wrapped in `HAVE_DNS_UNBOUND`, causing a missing-header error.
+- **MSVC: guard `unistd.h` in easylogging++.** The third-party logging
+  library unconditionally included `<unistd.h>` which does not exist on
+  MSVC.
+- **MSVC: add `<io.h>` include for `_isatty` in `mlog.cpp`.** The WIN32
+  code path uses `_isatty`/`_fileno` which require `<io.h>` on MSVC.
+- **MSVC: fix `boost::iterator_range` conversion in `http_auth.cpp`.**
+  Boost 1.90 `as_literal()` returns an iterator type that does not
+  implicitly convert to `iterator_range<const char*>` on MSVC. Changed to
+  `auto` deduction.
+- **MSVC: add `<cwctype>` include for `std::towlower` in
+  `language_base.h`.** MSVC does not transitively include wide-character
+  utilities through other Boost headers.
+- **MSVC: fix rvalue binding in portable_storage serialization.** Changed
+  `array_entry_t::insert_first_val` and `insert_next_value` from strict
+  rvalue-reference parameters (`t_entry_type&&`) to pass-by-value, allowing
+  lvalue forwarding from `portable_storage::insert_first_value` /
+  `insert_next_value` to work correctly under MSVC template deduction.
+- **MSVC: force-include `<iso646.h>` for C++ alternative tokens.** The
+  codebase uses `not`, `and`, `or` extensively (hundreds of sites). MSVC
+  does not recognise these as keywords by default. Added `/FIiso646.h` to
+  the MSVC compile definitions so they are defined in every translation
+  unit.
+- **MSVC: enable conformant preprocessor (`/Zc:preprocessor`).** MSVC's
+  traditional preprocessor breaks nested `__VA_ARGS__` forwarding in the
+  `THROW_ON_RPC_RESPONSE_ERROR` macro chain, causing `throw_wallet_ex`
+  template deduction failures. Added `/Zc:preprocessor` to MSVC compile
+  flags and removed the obsolete Boost.Preprocessor-based `throw_wallet_ex`
+  fallback in favour of the standard variadic template version.
 - **Gitian: enable `universe` repository and remove apt proxy in Docker base
   image.** The `ubuntu:jammy` Docker image only enables `main restricted` by
   default; `gitian-build.py` now patches the base image after `make-base-vm`

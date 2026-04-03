@@ -1,3 +1,4 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
 # BuildRust.cmake -- Integrate Cargo workspace into CMake build
 #
 # Adds a custom target that builds the Rust workspace under rust/ and
@@ -35,11 +36,23 @@ set(RUST_CROSS_ENV "")
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
-        set(RUST_TARGET_TRIPLE "x86_64-pc-windows-gnu")
+        if(MSVC)
+            set(RUST_TARGET_TRIPLE "x86_64-pc-windows-msvc")
+        else()
+            set(RUST_TARGET_TRIPLE "x86_64-pc-windows-gnu")
+        endif()
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "i686|x86")
-        set(RUST_TARGET_TRIPLE "i686-pc-windows-gnu")
+        if(MSVC)
+            set(RUST_TARGET_TRIPLE "i686-pc-windows-msvc")
+        else()
+            set(RUST_TARGET_TRIPLE "i686-pc-windows-gnu")
+        endif()
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
-        set(RUST_TARGET_TRIPLE "aarch64-pc-windows-gnullvm")
+        if(MSVC)
+            set(RUST_TARGET_TRIPLE "aarch64-pc-windows-msvc")
+        else()
+            set(RUST_TARGET_TRIPLE "aarch64-pc-windows-gnullvm")
+        endif()
     endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
@@ -81,7 +94,11 @@ if(RUST_TARGET_TRIPLE)
     string(REPLACE "-" "_" _upper_triple "${_upper_triple}")
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-        if(CMAKE_C_COMPILER)
+        if(MSVC)
+            # Let rustc select the MSVC linker toolchain. This keeps the GNU
+            # linker override path isolated to MinGW builds.
+            set(RUST_CROSS_ENV "")
+        elseif(CMAKE_C_COMPILER)
             set(RUST_CROSS_ENV "CARGO_TARGET_${_upper_triple}_LINKER=${CMAKE_C_COMPILER}")
         else()
             find_program(MINGW_LINKER x86_64-w64-mingw32-gcc)
@@ -126,7 +143,7 @@ if(RUST_CROSS_ENV)
     list(APPEND _rust_env_clear "${RUST_CROSS_ENV}")
 endif()
 
-if(RUST_TARGET_TRIPLE AND CMAKE_C_COMPILER)
+if(RUST_TARGET_TRIPLE AND CMAKE_C_COMPILER AND NOT MSVC)
     string(REPLACE "-" "_" _cc_triple "${RUST_TARGET_TRIPLE}")
 
     set(_rust_cc "${CMAKE_C_COMPILER}")

@@ -204,6 +204,57 @@ jobs:
           ${{env.BUILD_DEFAULT_LINUX}}
           cmake --build build --target test
 
+  build-windows-msvc:
+    name: 'Windows (MSVC, wallet-core only)'
+    runs-on: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: restore vcpkg cache
+        uses: actions/cache/restore@v5
+        id: vcpkg-cache
+        with:
+          path: |
+            C:\vcpkg\downloads
+            C:\vcpkg\installed
+            C:\vcpkg\archives
+          key: vcpkg-x64-windows-static-${{ hashFiles('.github/workflows/build.yml', 'vcpkg-overlay/**') }}
+          restore-keys: vcpkg-x64-windows-static-
+      - name: install vcpkg dependencies
+        shell: pwsh
+        env:
+          VCPKG_BINARY_SOURCES: clear;files,C:\vcpkg\archives,readwrite
+        run: |
+          vcpkg install --triplet x64-windows-static --overlay-ports="${{ github.workspace }}/vcpkg-overlay/ports" boost openssl libsodium zeromq libusb lmdb
+      - name: save vcpkg cache
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            C:\vcpkg\downloads
+            C:\vcpkg\installed
+            C:\vcpkg\archives
+          key: vcpkg-x64-windows-static-${{ hashFiles('.github/workflows/build.yml', 'vcpkg-overlay/**') }}
+      - name: configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build `
+            -G "Visual Studio 18 2026" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DSTATIC=ON `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DBUILD_TESTS=OFF `
+            -DSTACK_TRACE=OFF `
+            -DUSE_DEVICE_TREZOR=OFF `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static
+      - name: build wallet-core libraries
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --target wallet_api --parallel 2
+
   source-archive:
     name: "source archive"
     runs-on: ubuntu-latest

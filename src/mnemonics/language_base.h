@@ -38,6 +38,7 @@
 #include <vector>
 #include <unordered_map>
 #include <string>
+#include <cwctype>
 #include <boost/algorithm/string.hpp>
 #include "misc_log_ex.h"
 #include "fnv1.h"

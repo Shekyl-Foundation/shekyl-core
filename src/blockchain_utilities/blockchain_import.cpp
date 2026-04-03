@@ -29,7 +29,9 @@
 #include <atomic>
 #include <cstdio>
 #include <algorithm>
+#include <chrono>
 #include <fstream>
+#include <thread>
 
 #include <chrono>
 #include <thread>

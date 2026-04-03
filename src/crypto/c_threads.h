@@ -32,6 +32,7 @@
 #ifdef _WIN32
 
 #include <windows.h>
+#include <process.h>
 
 #define CTHR_RWLOCK_TYPE	SRWLOCK
 #define CTHR_RWLOCK_INIT	SRWLOCK_INIT
