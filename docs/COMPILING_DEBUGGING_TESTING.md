@@ -79,21 +79,25 @@ If everything looks fine, then after setting some breakpoints of your choice, th
 
 `Debug -> Start/Continue`
 
-## To be done (and merged):
+## Upstream Monero PRs — triage (April 2026)
 
-Upstream Monero PRs that may be adopted or reimplemented for Shekyl:
+### Applied
 
-### Multihost parallel compilation
-https://github.com/monero-project/monero/pull/7160
+| PR | Status | Notes |
+| --- | --- | --- |
+| [#6937](https://github.com/monero-project/monero/pull/6937) | Already present | `monero_set_target_no_relink` + `RELINK_TARGETS` option in root `CMakeLists.txt` |
+| [#9762](https://github.com/monero-project/monero/pull/9762) | Already present | `test_p2p_tx_propagation()` uses deadline-based polling with Dandelion++ timeout |
+| [#9795](https://github.com/monero-project/monero/pull/9795) | Applied | `test_p2p_reorg()` rewritten to deadline-based polling (was fixed `sleep(10)` loops) |
+| [#9858](https://github.com/monero-project/monero/pull/9858) | Applied | Extra warnings (`-Wsuggest-override`, `-Wthread-safety`, etc.) and ARM64 branch protection |
+| [#9898](https://github.com/monero-project/monero/pull/9898) | Technique adopted | PR was closed upstream; adopted the author's recommended approach: `-ffunction-sections -fdata-sections` + linker dead-code stripping |
 
-### Faster core_tests with caching
-https://github.com/monero-project/monero/pull/5821
+### Track for future work
 
-### Precompiled headers
-https://github.com/monero-project/monero/pull/7216
-
-### Unity builds
-https://github.com/monero-project/monero/pull/7217
+| PR | Area | Why it matters for Shekyl |
+| --- | --- | --- |
+| [#10157](https://github.com/monero-project/monero/pull/10157) | Perf | Cache mempool input verification results. PQC hybrid verification (ML-DSA-65) is more expensive than classical Ed25519, making the caching benefit proportionally larger. Depends on #10156 and #10172; needs PQC-aware verification IDs. See `STRUCTURAL_TODO.md` re: `txpool_tx_meta_t` padding layout. |
+| [#10084](https://github.com/monero-project/monero/pull/10084) | Arch | `wallet2_basic` library extraction. Shekyl already has `wallet2_ffi.cpp` on a parallel modularization path. Use the upstream type list as a roadmap for wallet Rust migration. |
+| [#9801](https://github.com/monero-project/monero/pull/9801) | Repro | Rust in Guix reproducible builds. Shekyl uses Gitian and lacks `contrib/guix/`. Key constraint: Rust cross-arch builds are NOT bit-identical (x86_64 hosts required). Track for when Rust crate surface area warrants reproducible builds. |
 
 ## PQC-focused testing guidance
 

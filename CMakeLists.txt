@@ -786,13 +786,14 @@ else()
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${ARCH_FLAG}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ARCH_FLAG}")
 
-  set(WARNINGS "-Wall -Wextra -Wpointer-arith -Wundef -Wvla -Wwrite-strings -Wno-error=extra -Wno-error=deprecated-declarations -Wno-unused-parameter -Wno-error=unused-variable -Wno-error=undef -Wno-error=uninitialized")
+  set(WARNINGS "-Wall -Wextra -Wpointer-arith -Wundef -Wvla -Wwrite-strings -Wformat -Wformat-security -Wredundant-decls -Wdate-time -Wimplicit-fallthrough -Wunreachable-code -Wno-unused-parameter -Wno-error=deprecated-declarations -Wno-error=unused-variable -Wno-error=undef -Wno-error=uninitialized")
   if(CMAKE_C_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(WARNINGS "${WARNINGS} -Wgnu -Wshadow-field -Wthread-safety -Wloop-analysis -Wunused-member-function -Wconditional-uninitialized -Wdocumentation -Wself-assign -Wno-error=extra")
     if(ARM)
       set(WARNINGS "${WARNINGS} -Wno-error=inline-asm")
     endif()
   else()
-    set(WARNINGS "${WARNINGS} -Wlogical-op -Wno-error=maybe-uninitialized -Wno-error=cpp")
+    set(WARNINGS "${WARNINGS} -Wlogical-op -Wno-error=maybe-uninitialized -Wno-error=cpp -Wduplicated-branches")
   endif()
   if(MINGW)
     set(WARNINGS "${WARNINGS} -Wno-error=unused-value -Wno-error=unused-but-set-variable")
@@ -807,7 +808,7 @@ else()
     endif()
   endif()
   set(C_WARNINGS "-Waggregate-return -Wnested-externs -Wold-style-definition -Wstrict-prototypes")
-  set(CXX_WARNINGS "-Wno-reorder -Wno-missing-field-initializers")
+  set(CXX_WARNINGS "-Wno-reorder -Wno-missing-field-initializers -Woverloaded-virtual -Wsuggest-override")
   try_compile(STATIC_ASSERT_RES "${CMAKE_CURRENT_BINARY_DIR}/static-assert" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test-static-assert.c" CMAKE_FLAGS -DCMAKE_C_STANDARD=11)
   if(STATIC_ASSERT_RES)
     set(STATIC_ASSERT_FLAG "")
@@ -834,11 +835,28 @@ else()
     set(CXX_SECURITY_FLAGS "${CXX_SECURITY_FLAGS} -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1")
   endif()
 
-  # warnings
+  # warnings (duplicated in WARNINGS for non-MSVC; kept here for SECURITY_FLAGS aggregation)
   add_c_flag_if_supported(-Wformat C_SECURITY_FLAGS)
   add_cxx_flag_if_supported(-Wformat CXX_SECURITY_FLAGS)
   add_c_flag_if_supported(-Wformat-security C_SECURITY_FLAGS)
   add_cxx_flag_if_supported(-Wformat-security CXX_SECURITY_FLAGS)
+
+  # protection against identifier-based attacks and stack reuse
+  add_c_flag_if_supported(-fno-extended-identifiers C_SECURITY_FLAGS)
+  add_cxx_flag_if_supported(-fno-extended-identifiers CXX_SECURITY_FLAGS)
+  add_c_flag_if_supported(-fstack-reuse=none C_SECURITY_FLAGS)
+  add_cxx_flag_if_supported(-fstack-reuse=none CXX_SECURITY_FLAGS)
+
+  # ARM64 branch protection (BTI / pointer authentication)
+  if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+      add_c_flag_if_supported("-mbranch-protection=bti" C_SECURITY_FLAGS)
+      add_cxx_flag_if_supported("-mbranch-protection=bti" CXX_SECURITY_FLAGS)
+    else()
+      add_c_flag_if_supported("-mbranch-protection=standard" C_SECURITY_FLAGS)
+      add_cxx_flag_if_supported("-mbranch-protection=standard" CXX_SECURITY_FLAGS)
+    endif()
+  endif()
 
   # -fstack-protector
   if (NOT OPENBSD AND NOT (WIN32 AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS 9.1)))
@@ -864,6 +882,16 @@ else()
     add_cxx_flag_if_supported(-mmitigate-rop CXX_SECURITY_FLAGS)
   endif()
 
+  # Per-function/data sections allow the linker to strip unreferenced code,
+  # reducing binary size (inspired by Monero #9898 author's findings:
+  # -ffunction-sections + --gc-sections shrank Docker images by ~14 MiB).
+  if(NOT MINGW)
+    add_c_flag_if_supported(-ffunction-sections C_SECURITY_FLAGS)
+    add_cxx_flag_if_supported(-ffunction-sections CXX_SECURITY_FLAGS)
+    add_c_flag_if_supported(-fdata-sections C_SECURITY_FLAGS)
+    add_cxx_flag_if_supported(-fdata-sections CXX_SECURITY_FLAGS)
+  endif()
+
   # linker
   if (NOT SANITIZE AND NOT OSSFUZZ AND NOT (WIN32 AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND (CMAKE_C_COMPILER_VERSION VERSION_LESS 9.1 OR NOT STATIC))))
     # PIE executables randomly crash at startup with ASAN
@@ -885,6 +913,13 @@ else()
   add_linker_flag_if_supported(-Wl,-z,noexecheap noexecheap_SUPPORTED)
   if (noexecheap_SUPPORTED)
     set(LD_SECURITY_FLAGS "${LD_SECURITY_FLAGS} -Wl,-z,noexecheap")
+  endif()
+
+  # Strip unreferenced sections (pairs with -ffunction-sections/-fdata-sections above)
+  if(APPLE)
+    add_linker_flag_if_supported("-Wl,-dead_strip" LD_SECURITY_FLAGS)
+  elseif(NOT MINGW)
+    add_linker_flag_if_supported("-Wl,--gc-sections" LD_SECURITY_FLAGS)
   endif()
 
   if(BACKCOMPAT)

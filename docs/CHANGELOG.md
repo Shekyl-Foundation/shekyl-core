@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### 🔄 Changed
+
+- **P2P reorg functional test uses deadline-based polling.** Replaced three
+  fixed-sleep polling sites in `test_p2p_reorg()` (`time.sleep(10)` x2,
+  `loops = 100` counter) with 240 s deadline + 0.25 s interval polling,
+  matching the pattern already used in `test_p2p_tx_propagation()`.
+  Adapted from upstream Monero #9795.
+
+### ✨ Added
+
+- **Extra compiler warnings and hardening flags.** Added `-Wredundant-decls`,
+  `-Wdate-time`, `-Wimplicit-fallthrough`, `-Wunreachable-code` (common);
+  `-Woverloaded-virtual`, `-Wsuggest-override` (C++ only); `-Wgnu`,
+  `-Wshadow-field`, `-Wthread-safety`, `-Wloop-analysis`,
+  `-Wconditional-uninitialized`, `-Wdocumentation`, `-Wself-assign` (Clang);
+  `-Wduplicated-branches` (GCC). Added security protections:
+  `-fno-extended-identifiers`, `-fstack-reuse=none`, and ARM64 branch
+  protection (`-mbranch-protection=bti` on macOS, `standard` elsewhere).
+  Adapted from upstream Monero #9858.
+- **Linker dead-code stripping.** Added `-ffunction-sections -fdata-sections`
+  to compile flags and `-Wl,--gc-sections` (Linux) / `-Wl,-dead_strip`
+  (macOS) to linker flags, enabling the linker to strip unreferenced
+  functions and data. Inspired by upstream Monero #9898 author's findings
+  (~14 MiB reduction in Docker images).
+
+### 📚 Documentation
+
+- **Upstream Monero PR triage.** Replaced the stale "To be done (and merged)"
+  section in `COMPILING_DEBUGGING_TESTING.md` with a structured triage table
+  covering applied PRs (#6937, #9762, #9795, #9858, #9898) and tracked-for-
+  future-work PRs (#10157, #10084, #9801) with STRUCTURAL_TODO.md cross-refs.
+
 ### 🐛 Fixed
 
 - **Remaining HF17 references corrected to HF1.** Fixed stale Monero-era
