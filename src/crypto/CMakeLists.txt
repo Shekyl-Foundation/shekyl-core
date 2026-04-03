@@ -48,13 +48,15 @@ set(crypto_ops_sources
   oaes_lib.c
   random.c)
 
-set(crypto_pow_sources
-  slow-hash.c
+set(crypto_slowhash_sources
+  slow-hash.c)
+
+set(crypto_rx_sources
   rx-slow-hash.c
   CryptonightR_JIT.c)
 
 if(ARCH_ID STREQUAL "i386" OR ARCH_ID STREQUAL "x86_64" OR ARCH_ID STREQUAL "x86-64" OR ARCH_ID STREQUAL "amd64")
-list(APPEND crypto_pow_sources CryptonightR_template.S)
+list(APPEND crypto_rx_sources CryptonightR_template.S)
 endif()
 
 set(crypto_cpp_sources
@@ -78,7 +80,7 @@ monero_private_headers(cncrypto
   ${crypto_private_headers})
 
 set(_cncrypto_obj_targets)
-foreach(_group hash ops pow cpp)
+foreach(_group hash ops slowhash rx cpp)
   set(_target obj_cncrypto_${_group})
   add_library(${_target} OBJECT
     ${crypto_${_group}_sources} ${crypto_headers} ${crypto_private_headers})
