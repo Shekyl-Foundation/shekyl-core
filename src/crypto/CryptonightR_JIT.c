@@ -17,7 +17,9 @@
 #include "hash-ops.h"
 #include "variant4_random_math.h"
 #include "CryptonightR_JIT.h"
+#if defined(__i386) || defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
 #include "CryptonightR_template.h"
+#endif
 
 static const uint8_t prologue[] = {
 #if defined __i386 || defined __x86_64__

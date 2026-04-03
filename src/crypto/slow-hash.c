@@ -98,7 +98,7 @@ static inline int use_v4_jit(void)
 #endif
 }
 
-#if defined(__x86_64__) || defined(__aarch64__)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__)
 static inline int force_software_aes(void)
 {
   static int use = -1;
