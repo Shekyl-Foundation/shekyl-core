@@ -11,6 +11,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-consensus = { path = "../shekyl-consensus" }
 shekyl-economics = { path = "../shekyl-economics" }

@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### ✨ Added
+
+- **FCMP++ Phase 1: Rust foundation crates.**
+  - New `rust/shekyl-fcmp/` crate wrapping upstream `monero-fcmp-plus-plus`
+    (from `Shekyl-Foundation/monero-oxide` fork, `fcmp++` branch) with
+    4-scalar curve tree leaf type `{O.x, I.x, C.x, H(pqc_pk)}`.
+  - Implemented `HybridX25519MlKem` (X25519 + ML-KEM-768 FIPS 203) in
+    `shekyl-crypto-pq/src/kem.rs` with HKDF-SHA-512 shared-secret
+    combination and master-seed key derivation.
+  - Implemented Bech32m segmented address encoding
+    (`shekyl1<classical>/skpq1<pqc_a>/skpq21<pqc_b>`) in
+    `shekyl-crypto-pq/src/address.rs`, keeping each segment within
+    Bech32m's proven checksum range.
+  - Implemented per-output PQC keypair derivation (HKDF-Expand → ML-DSA-65
+    deterministic keygen) in `shekyl-crypto-pq/src/derivation.rs`.
+  - Added 15 new FFI exports to `shekyl-ffi` for FCMP++ proofs, KEM
+    operations, address encoding, and seed derivation.
+  - Added FCMP++ consensus constants to `cryptonote_config.h`:
+    `HF_VERSION_FCMP_PLUS_PLUS_PQC`, `FCMP_REFERENCE_BLOCK_MAX_AGE` (100),
+    `FCMP_REFERENCE_BLOCK_MIN_AGE` (2), `FCMP_MAX_INPUTS_PER_TX` (8).
+  - Updated `BuildRust.cmake` with `--locked` flag for reproducible builds.
+
 ### 🔄 Changed
 
 - **P2P reorg functional test uses deadline-based polling.** Replaced three

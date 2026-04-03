@@ -1,3 +1,8 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
 //! Post-quantum cryptographic primitives for Shekyl.
 //!
 //! This crate provides hybrid classical + post-quantum cryptographic operations
@@ -6,6 +11,8 @@
 pub mod signature;
 pub mod multisig;
 pub mod kem;
+pub mod address;
+pub mod derivation;
 pub mod error;
 
 pub use error::CryptoError;

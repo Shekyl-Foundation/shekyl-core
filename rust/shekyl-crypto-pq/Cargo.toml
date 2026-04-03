@@ -11,8 +11,15 @@ serde.workspace = true
 zeroize = { version = "1", features = ["derive"] }
 rand = "0.8"
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 fips204 = "0.4.6"
+fips203 = "0.4"
+hkdf = "0.12"
+sha2 = "0.10"
+blake2 = "0.10"
+bech32 = "0.11"
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 
 [dev-dependencies]
 serde_json = "1"
+hex = "0.4"

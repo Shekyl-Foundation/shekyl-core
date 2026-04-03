@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "shekyl-ffi",
+    "shekyl-fcmp",
     "shekyl-crypto-pq",
     "shekyl-crypto-hash",
     "shekyl-consensus",

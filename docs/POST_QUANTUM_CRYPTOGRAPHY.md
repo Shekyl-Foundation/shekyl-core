@@ -19,8 +19,9 @@ It defines:
 
 This document is source-of-truth for PQC-related implementation work in:
 
-- `rust/shekyl-crypto-pq`
-- `rust/shekyl-ffi`
+- `rust/shekyl-crypto-pq` — hybrid signatures, KEM, address encoding, per-output derivation
+- `rust/shekyl-fcmp` — FCMP++ wrapper with 4-scalar PQC leaf
+- `rust/shekyl-ffi` — C++ FFI bridge for all PQC and FCMP++ operations
 - `src/cryptonote_basic`
 - `src/cryptonote_core`
 - `src/wallet`
@@ -166,33 +167,44 @@ ML-KEM-768 key, ensuring per-output PQC uniqueness even for miner rewards.
 
 ## Address Format
 
-Shekyl uses Bech32m encoding with a structured payload:
+Shekyl uses a three-segment Bech32m encoding, where each segment stays
+within Bech32m's proven checksum detection range (<1023 characters):
 
 ```
-shekyl1:<version 0x01><classical 64B><pqc ML-KEM-768 encap key>
+<classical_bech32m> / <pqc_a_bech32m> / <pqc_b_bech32m>
 ```
 
-| Segment | Raw bytes | Bech32m chars (approx) |
-|---|---|---|
-| HRP + separator | — | `shekyl1:` (8 chars) |
-| Version byte | 1 | ~2 |
-| Classical (32B spend + 32B view) | 64 | ~103 |
-| PQC (ML-KEM-768 encapsulation key) | 1184 | ~1750 |
-| Bech32m checksum | — | 6 |
-| **Total** | **1249** | **~1870** |
+Example structure:
+```
+shekyl1<version 0x01><spend_key 32B><view_key 32B><checksum>
+/skpq1<ml_kem_first_592B><checksum>
+/skpq21<ml_kem_last_592B><checksum>
+```
+
+| Segment | HRP | Raw bytes | Bech32m chars (approx) |
+|---|---|---|---|
+| Classical | `shekyl` | 1 + 64 = 65 | ~113 |
+| PQC-A | `skpq` | 592 | ~956 |
+| PQC-B | `skpq2` | 592 | ~957 |
+| **Total** | — | **1249** | **~2030** |
 
 Design notes:
 
 - The version byte (`0x01`) enables future address format upgrades (e.g.,
   compact addresses via on-chain KEM registration).
-- The classical segment is sufficient for view-only wallets and backwards
-  compatibility with scanning infrastructure.
-- The PQC segment carries the ML-KEM-768 encapsulation key needed for
-  per-output PQC key derivation.
+- The classical segment alone (`shekyl1...`) is sufficient for view-only
+  wallets, human identification, and scanning infrastructure.
+- The `/`-separated PQC segments carry the ML-KEM-768 encapsulation key
+  needed for per-output PQC key derivation.
+- The three-segment design ensures each individual Bech32m string stays
+  within the proven error-detection range of the Bech32m checksum polynomial.
 - Addresses are too long for QR codes at standard error correction levels.
   Wallets should support URI-based sharing and clipboard operations. A future
   compact address format (via on-chain KEM key registration) is planned to
   reduce the address to ~120 characters.
+- Implementation: `rust/shekyl-crypto-pq/src/address.rs` (`ShekylAddress`
+  type with `encode()`, `decode()`, `encode_classical_display()` methods).
+  FFI: `shekyl_address_encode()`, `shekyl_address_decode()`.
 
 ## Why `tx_extra` Is Not Used
 

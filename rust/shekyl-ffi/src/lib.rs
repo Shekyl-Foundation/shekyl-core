@@ -688,6 +688,508 @@ pub extern "C" fn shekyl_page_size() -> usize {
     }
 }
 
+// ─── FCMP++: Proof and Tree Operations ──────────────────────────────────────
+
+/// Compute H(pqc_pk) leaf scalar for a PQC public key.
+///
+/// Writes 32 bytes to `out_ptr`. Returns true on success.
+#[no_mangle]
+pub extern "C" fn shekyl_fcmp_pqc_leaf_hash(
+    pqc_pk_ptr: *const u8,
+    pqc_pk_len: usize,
+    out_ptr: *mut u8,
+) -> bool {
+    let Some(pk_bytes) = slice_from_ptr(pqc_pk_ptr, pqc_pk_len) else {
+        return false;
+    };
+    if out_ptr.is_null() {
+        return false;
+    }
+    let hash = shekyl_crypto_pq::derivation::hash_pqc_public_key(pk_bytes);
+    unsafe { std::ptr::copy_nonoverlapping(hash.as_ptr(), out_ptr, 32) };
+    true
+}
+
+/// Derive a per-output PQC keypair from combined KEM shared secret + output index.
+///
+/// Returns a ShekylPqcKeypair with the ML-DSA-65 public and secret keys.
+#[no_mangle]
+pub extern "C" fn shekyl_fcmp_derive_pqc_keypair(
+    combined_ss_ptr: *const u8,
+    output_index: u64,
+) -> ShekylPqcKeypair {
+    let fail = ShekylPqcKeypair {
+        public_key: ShekylBuffer::null(),
+        secret_key: ShekylBuffer::null(),
+        success: false,
+    };
+
+    if combined_ss_ptr.is_null() {
+        return fail;
+    }
+    let ss: [u8; 64] = unsafe {
+        let mut buf = [0u8; 64];
+        std::ptr::copy_nonoverlapping(combined_ss_ptr, buf.as_mut_ptr(), 64);
+        buf
+    };
+
+    match shekyl_crypto_pq::derivation::derive_pqc_keypair(&ss, output_index) {
+        Ok(mut kp) => {
+            let pk = std::mem::take(&mut kp.public_key);
+            let sk = std::mem::take(&mut kp.secret_key);
+            ShekylPqcKeypair {
+                public_key: ShekylBuffer::from_vec(pk),
+                secret_key: ShekylBuffer::from_vec(sk),
+                success: true,
+            }
+        }
+        Err(_) => fail,
+    }
+}
+
+/// Compute the expected FCMP++ proof size given input count and tree depth.
+#[no_mangle]
+pub extern "C" fn shekyl_fcmp_proof_len(num_inputs: u32, tree_depth: u8) -> usize {
+    shekyl_fcmp::tree::proof_size(num_inputs as usize, tree_depth as usize)
+}
+
+/// Construct an FCMP++ proof (scaffold -- upstream integration pending).
+///
+/// `leaves_ptr`: packed 128-byte ShekylLeaf structs, `num_inputs` count.
+/// `tree_paths_ptr`: concatenated per-input tree paths, each `tree_path_len` bytes.
+/// `key_images_ptr`: packed 32-byte key images, `num_inputs` count.
+/// `pseudo_outs_ptr`: packed 32-byte pseudo-outs, `num_inputs` count.
+/// `pqc_hashes_ptr`: packed 32-byte H(pqc_pk) values, `num_inputs` count.
+/// `tree_root_ptr`: 32-byte tree root.
+///
+/// Returns a ShekylBuffer containing the serialized proof, or null on error.
+#[no_mangle]
+pub extern "C" fn shekyl_fcmp_prove(
+    leaves_ptr: *const u8,
+    num_inputs: u32,
+    tree_paths_ptr: *const u8,
+    tree_path_len: u32,
+    key_images_ptr: *const u8,
+    pseudo_outs_ptr: *const u8,
+    pqc_hashes_ptr: *const u8,
+    tree_root_ptr: *const u8,
+    tree_depth: u8,
+) -> ShekylBuffer {
+    let n = num_inputs as usize;
+    let leaf_total = n * 128;
+    let ki_total = n * 32;
+    let po_total = n * 32;
+    let ph_total = n * 32;
+    let tp_total = n * tree_path_len as usize;
+
+    let Some(leaf_bytes) = slice_from_ptr(leaves_ptr, leaf_total) else {
+        return ShekylBuffer::null();
+    };
+    let Some(tp_bytes) = slice_from_ptr(tree_paths_ptr, tp_total) else {
+        return ShekylBuffer::null();
+    };
+    let Some(ki_bytes) = slice_from_ptr(key_images_ptr, ki_total) else {
+        return ShekylBuffer::null();
+    };
+    let Some(po_bytes) = slice_from_ptr(pseudo_outs_ptr, po_total) else {
+        return ShekylBuffer::null();
+    };
+    let Some(ph_bytes) = slice_from_ptr(pqc_hashes_ptr, ph_total) else {
+        return ShekylBuffer::null();
+    };
+    if tree_root_ptr.is_null() {
+        return ShekylBuffer::null();
+    }
+    let tree_root: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(tree_root_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    let mut inputs = Vec::with_capacity(n);
+    for i in 0..n {
+        let leaf_slice: &[u8; 128] = leaf_bytes[i * 128..(i + 1) * 128]
+            .try_into()
+            .unwrap();
+        let leaf = shekyl_fcmp::leaf::ShekylLeaf::from_bytes(leaf_slice);
+
+        let tp_start = i * tree_path_len as usize;
+        let tp_end = tp_start + tree_path_len as usize;
+        let tree_path = tp_bytes[tp_start..tp_end].to_vec();
+
+        let mut ki = [0u8; 32];
+        ki.copy_from_slice(&ki_bytes[i * 32..(i + 1) * 32]);
+
+        let mut po = [0u8; 32];
+        po.copy_from_slice(&po_bytes[i * 32..(i + 1) * 32]);
+
+        let mut ph = [0u8; 32];
+        ph.copy_from_slice(&ph_bytes[i * 32..(i + 1) * 32]);
+
+        inputs.push(shekyl_fcmp::proof::ProveInput {
+            leaf,
+            tree_path,
+            key_image: ki,
+            pseudo_out: po,
+            pqc_hash: shekyl_fcmp::leaf::PqcLeafScalar(ph),
+        });
+    }
+
+    match shekyl_fcmp::proof::prove(&inputs, &tree_root, tree_depth) {
+        Ok(proof) => ShekylBuffer::from_vec(proof.data),
+        Err(_) => ShekylBuffer::null(),
+    }
+}
+
+/// Verify an FCMP++ proof.
+///
+/// Returns true if the proof is valid.
+#[no_mangle]
+pub extern "C" fn shekyl_fcmp_verify(
+    proof_ptr: *const u8,
+    proof_len: usize,
+    key_images_ptr: *const u8,
+    ki_count: usize,
+    pseudo_outs_ptr: *const u8,
+    po_count: usize,
+    pqc_pk_hashes_ptr: *const u8,
+    pqc_hash_count: usize,
+    tree_root_ptr: *const u8,
+    tree_depth: u8,
+) -> bool {
+    let Some(proof_bytes) = slice_from_ptr(proof_ptr, proof_len) else {
+        return false;
+    };
+    let Some(ki_bytes) = slice_from_ptr(key_images_ptr, ki_count * 32) else {
+        return false;
+    };
+    let Some(po_bytes) = slice_from_ptr(pseudo_outs_ptr, po_count * 32) else {
+        return false;
+    };
+    let Some(ph_bytes) = slice_from_ptr(pqc_pk_hashes_ptr, pqc_hash_count * 32) else {
+        return false;
+    };
+    if tree_root_ptr.is_null() || ki_count != po_count || ki_count != pqc_hash_count {
+        return false;
+    }
+    let tree_root: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(tree_root_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    let proof = shekyl_fcmp::proof::ShekylFcmpProof {
+        data: proof_bytes.to_vec(),
+        num_inputs: ki_count as u32,
+        tree_depth,
+    };
+
+    let mut key_images = Vec::with_capacity(ki_count);
+    let mut pseudo_outs = Vec::with_capacity(po_count);
+    let mut pqc_hashes = Vec::with_capacity(pqc_hash_count);
+
+    for i in 0..ki_count {
+        let mut ki = [0u8; 32];
+        ki.copy_from_slice(&ki_bytes[i * 32..(i + 1) * 32]);
+        key_images.push(ki);
+
+        let mut po = [0u8; 32];
+        po.copy_from_slice(&po_bytes[i * 32..(i + 1) * 32]);
+        pseudo_outs.push(po);
+
+        let mut ph = [0u8; 32];
+        ph.copy_from_slice(&ph_bytes[i * 32..(i + 1) * 32]);
+        pqc_hashes.push(shekyl_fcmp::leaf::PqcLeafScalar(ph));
+    }
+
+    shekyl_fcmp::proof::verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth)
+        .unwrap_or(false)
+}
+
+/// Convert raw output data into serialized 4-scalar leaves.
+///
+/// `outputs_ptr`: packed tuples of `{O.x[32], I.x[32], C.x[32], pqc_pk_hash[32]}`,
+/// each 128 bytes. `count` = number of outputs.
+///
+/// Returns a ShekylBuffer containing the serialized leaves (same format, but validated).
+#[no_mangle]
+pub extern "C" fn shekyl_fcmp_outputs_to_leaves(
+    outputs_ptr: *const u8,
+    count: usize,
+) -> ShekylBuffer {
+    let total = count * 128;
+    let Some(bytes) = slice_from_ptr(outputs_ptr, total) else {
+        return ShekylBuffer::null();
+    };
+
+    let mut leaves = Vec::with_capacity(count);
+    for i in 0..count {
+        let chunk: &[u8; 128] = bytes[i * 128..(i + 1) * 128].try_into().unwrap();
+        leaves.push(shekyl_fcmp::leaf::ShekylLeaf::from_bytes(chunk));
+    }
+
+    let serialized = shekyl_fcmp::tree::leaves_to_bytes(&leaves);
+    ShekylBuffer::from_vec(serialized)
+}
+
+// ─── FCMP++: KEM Operations ─────────────────────────────────────────────────
+
+/// Generate a hybrid X25519 + ML-KEM-768 keypair.
+#[no_mangle]
+pub extern "C" fn shekyl_kem_keypair_generate() -> ShekylPqcKeypair {
+    use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
+
+    let fail = ShekylPqcKeypair {
+        public_key: ShekylBuffer::null(),
+        secret_key: ShekylBuffer::null(),
+        success: false,
+    };
+
+    let kem = HybridX25519MlKem;
+    match kem.keypair_generate() {
+        Ok((pk, sk)) => {
+            let mut pk_bytes = Vec::new();
+            pk_bytes.extend_from_slice(&pk.x25519);
+            pk_bytes.extend_from_slice(&pk.ml_kem);
+
+            let mut sk_bytes = Vec::new();
+            sk_bytes.extend_from_slice(&sk.x25519);
+            sk_bytes.extend_from_slice(&sk.ml_kem);
+
+            ShekylPqcKeypair {
+                public_key: ShekylBuffer::from_vec(pk_bytes),
+                secret_key: ShekylBuffer::from_vec(sk_bytes),
+                success: true,
+            }
+        }
+        Err(_) => fail,
+    }
+}
+
+/// Encapsulate to a hybrid public key. Returns ciphertext in the buffer.
+/// Combined shared secret is written to `ss_out_ptr` (64 bytes).
+#[no_mangle]
+pub extern "C" fn shekyl_kem_encapsulate(
+    pk_x25519_ptr: *const u8,
+    pk_ml_kem_ptr: *const u8,
+    pk_ml_kem_len: usize,
+    ct_out: *mut ShekylBuffer,
+    ss_out_ptr: *mut u8,
+) -> bool {
+    use shekyl_crypto_pq::kem::{HybridKemPublicKey, HybridX25519MlKem, KeyEncapsulation};
+
+    if pk_x25519_ptr.is_null() || pk_ml_kem_ptr.is_null() || ct_out.is_null() || ss_out_ptr.is_null() {
+        return false;
+    }
+
+    let x25519: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(pk_x25519_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let Some(ml_kem) = slice_from_ptr(pk_ml_kem_ptr, pk_ml_kem_len) else {
+        return false;
+    };
+
+    let pk = HybridKemPublicKey { x25519, ml_kem: ml_kem.to_vec() };
+    let kem = HybridX25519MlKem;
+
+    match kem.encapsulate(&pk) {
+        Ok((ss, ct)) => {
+            let mut ct_bytes = Vec::new();
+            ct_bytes.extend_from_slice(&ct.x25519);
+            ct_bytes.extend_from_slice(&ct.ml_kem);
+
+            unsafe {
+                *ct_out = ShekylBuffer::from_vec(ct_bytes);
+                std::ptr::copy_nonoverlapping(ss.0.as_ptr(), ss_out_ptr, 64);
+            }
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Decapsulate a hybrid ciphertext. Writes combined shared secret to `ss_out_ptr` (64 bytes).
+#[no_mangle]
+pub extern "C" fn shekyl_kem_decapsulate(
+    sk_x25519_ptr: *const u8,
+    sk_ml_kem_ptr: *const u8,
+    sk_ml_kem_len: usize,
+    ct_x25519_ptr: *const u8,
+    ct_ml_kem_ptr: *const u8,
+    ct_ml_kem_len: usize,
+    ss_out_ptr: *mut u8,
+) -> bool {
+    use shekyl_crypto_pq::kem::{HybridCiphertext, HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation};
+
+    if sk_x25519_ptr.is_null() || sk_ml_kem_ptr.is_null() || ct_x25519_ptr.is_null()
+        || ct_ml_kem_ptr.is_null() || ss_out_ptr.is_null()
+    {
+        return false;
+    }
+
+    let sk_x25519: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(sk_x25519_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let Some(sk_ml_kem) = slice_from_ptr(sk_ml_kem_ptr, sk_ml_kem_len) else {
+        return false;
+    };
+    let ct_x25519: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(ct_x25519_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let Some(ct_ml_kem) = slice_from_ptr(ct_ml_kem_ptr, ct_ml_kem_len) else {
+        return false;
+    };
+
+    let sk = HybridKemSecretKey { x25519: sk_x25519, ml_kem: sk_ml_kem.to_vec() };
+    let ct = HybridCiphertext { x25519: ct_x25519, ml_kem: ct_ml_kem.to_vec() };
+    let kem = HybridX25519MlKem;
+
+    match kem.decapsulate(&sk, &ct) {
+        Ok(ss) => {
+            unsafe { std::ptr::copy_nonoverlapping(ss.0.as_ptr(), ss_out_ptr, 64) };
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+// ─── FCMP++: Bech32m Address Encoding ───────────────────────────────────────
+
+/// Encode a Shekyl Bech32m address from raw key material.
+///
+/// `spend_key_ptr`: 32 bytes. `view_key_ptr`: 32 bytes.
+/// `ml_kem_ek_ptr`: 1184 bytes (ML-KEM-768 encapsulation key).
+///
+/// Returns a ShekylBuffer containing the UTF-8 encoded address string.
+#[no_mangle]
+pub extern "C" fn shekyl_address_encode(
+    spend_key_ptr: *const u8,
+    view_key_ptr: *const u8,
+    ml_kem_ek_ptr: *const u8,
+    ml_kem_ek_len: usize,
+) -> ShekylBuffer {
+    if spend_key_ptr.is_null() || view_key_ptr.is_null() || ml_kem_ek_ptr.is_null() {
+        return ShekylBuffer::null();
+    }
+
+    let spend_key: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(spend_key_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let view_key: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(view_key_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let Some(ml_kem_ek) = slice_from_ptr(ml_kem_ek_ptr, ml_kem_ek_len) else {
+        return ShekylBuffer::null();
+    };
+
+    let addr = shekyl_crypto_pq::address::ShekylAddress {
+        version: shekyl_crypto_pq::address::ADDRESS_VERSION_V1,
+        spend_key,
+        view_key,
+        ml_kem_encap_key: ml_kem_ek.to_vec(),
+    };
+
+    match addr.encode() {
+        Ok(s) => ShekylBuffer::from_vec(s.into_bytes()),
+        Err(_) => ShekylBuffer::null(),
+    }
+}
+
+/// Decode a Bech32m-encoded Shekyl address.
+///
+/// `encoded_ptr`: null-terminated UTF-8 string.
+/// Writes: 32 bytes to `spend_key_out`, 32 bytes to `view_key_out`.
+/// Returns ML-KEM encapsulation key in a ShekylBuffer (1184 bytes).
+#[no_mangle]
+pub extern "C" fn shekyl_address_decode(
+    encoded_ptr: *const c_char,
+    spend_key_out: *mut u8,
+    view_key_out: *mut u8,
+) -> ShekylBuffer {
+    if encoded_ptr.is_null() || spend_key_out.is_null() || view_key_out.is_null() {
+        return ShekylBuffer::null();
+    }
+
+    let c_str = unsafe { std::ffi::CStr::from_ptr(encoded_ptr) };
+    let encoded = match c_str.to_str() {
+        Ok(s) => s,
+        Err(_) => return ShekylBuffer::null(),
+    };
+
+    match shekyl_crypto_pq::address::ShekylAddress::decode(encoded) {
+        Ok(addr) => {
+            unsafe {
+                std::ptr::copy_nonoverlapping(addr.spend_key.as_ptr(), spend_key_out, 32);
+                std::ptr::copy_nonoverlapping(addr.view_key.as_ptr(), view_key_out, 32);
+            }
+            ShekylBuffer::from_vec(addr.ml_kem_encap_key)
+        }
+        Err(_) => ShekylBuffer::null(),
+    }
+}
+
+// ─── FCMP++: Seed Derivation ────────────────────────────────────────────────
+
+/// Derive Ed25519 spend secret key from master seed.
+/// `seed_ptr`: 32 bytes. Writes 32 bytes to `out_ptr`.
+#[no_mangle]
+pub extern "C" fn shekyl_seed_derive_spend(seed_ptr: *const u8, out_ptr: *mut u8) -> bool {
+    if seed_ptr.is_null() || out_ptr.is_null() {
+        return false;
+    }
+    let seed: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(seed_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let key = shekyl_crypto_pq::kem::SeedDerivation::derive_ed25519_spend(&seed);
+    unsafe { std::ptr::copy_nonoverlapping(key.as_ptr(), out_ptr, 32) };
+    true
+}
+
+/// Derive Ed25519 view secret key from master seed.
+#[no_mangle]
+pub extern "C" fn shekyl_seed_derive_view(seed_ptr: *const u8, out_ptr: *mut u8) -> bool {
+    if seed_ptr.is_null() || out_ptr.is_null() {
+        return false;
+    }
+    let seed: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(seed_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let key = shekyl_crypto_pq::kem::SeedDerivation::derive_ed25519_view(&seed);
+    unsafe { std::ptr::copy_nonoverlapping(key.as_ptr(), out_ptr, 32) };
+    true
+}
+
+/// Derive ML-KEM-768 seed material from master seed.
+/// Writes 64 bytes to `out_ptr`.
+#[no_mangle]
+pub extern "C" fn shekyl_seed_derive_ml_kem(seed_ptr: *const u8, out_ptr: *mut u8) -> bool {
+    if seed_ptr.is_null() || out_ptr.is_null() {
+        return false;
+    }
+    let seed: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(seed_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let material = shekyl_crypto_pq::kem::SeedDerivation::derive_ml_kem_seed(&seed);
+    unsafe { std::ptr::copy_nonoverlapping(material.as_ptr(), out_ptr, 64) };
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
