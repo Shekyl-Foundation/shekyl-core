@@ -148,31 +148,41 @@ CL!CloseTypeServerPDB()+0x1b7502
 | Reduce optimization | `/MP1 /O1` | Still crashed |
 | Disable optimization | `/MP1 /Od` | Still crashed -- ruled out optimizer |
 | Disable SSA optimizer | `/MP1 /d2SSAOptimizer-` | Still crashed, but stack trace revealed `CloseTypeServerPDB` |
-| Embed debug info | `/MP1 /Z7` | **Bypasses PDB type server entirely** |
+| Embed debug info | `/MP1 /Z7` | Still crashed -- PDB type server invoked during "Generating Code..." even with `/Z7` |
+| **Split OBJECT library** | two targets | **Resolved** |
 
 The crash is not in the optimizer or code generator proper -- it is in
 MSVC's shared PDB (Program Database) type server, which fails when
 finalizing debug/type information for the crypto library's many
-translation units.
+translation units.  `/Z7` avoids PDB writes for individual `.obj` files
+but the type server is still invoked during the aggregate "Generating
+Code..." phase, so the ICE persisted.
 
-**Fix:** `src/crypto/CMakeLists.txt` applies `/Z7` for the `obj_cncrypto`
-target on MSVC, which embeds debug info directly into `.obj` files
-instead of routing through the shared PDB type server:
+**Fix:** `src/crypto/CMakeLists.txt` splits the single `obj_cncrypto`
+OBJECT library into two smaller targets (`obj_cncrypto_hash` and
+`obj_cncrypto_core`), each with fewer translation units.  Both feed
+into the same `cncrypto` static library, so downstream targets are
+unaffected:
 
 ```cmake
+add_library(obj_cncrypto_hash OBJECT ${crypto_hash_sources} ...)
+add_library(obj_cncrypto_core OBJECT ${crypto_core_sources} ...)
+
 if(MSVC)
-  target_compile_options(obj_cncrypto PRIVATE /MP1 /Z7)
+  target_compile_options(obj_cncrypto_hash PRIVATE /MP1)
+  target_compile_options(obj_cncrypto_core PRIVATE /MP1)
 endif()
+
+add_library(cncrypto
+  $<TARGET_OBJECTS:obj_cncrypto_hash>
+  $<TARGET_OBJECTS:obj_cncrypto_core>)
 ```
 
-`/Z7` produces slightly larger `.obj` files but has no effect on the
-final linked binary size or runtime behavior. The workaround is
-target-scoped and does not affect other compilation units.
-
-**If the ICE resurfaces** on a future MSVC version, the fallback strategy
-is to split `obj_cncrypto` into two smaller CMake targets (hash
-primitives vs. PoW functions) to reduce the per-project type record
-count.
+The split is harmless on non-MSVC compilers and has no effect on the
+final linked binary or runtime behavior.  `crypto_hash_sources` contains
+pure hash primitives (blake256, groestl, jh, keccak, skein, tree-hash,
+etc.) while `crypto_core_sources` contains AES, ChaCha, crypto-ops, PoW,
+and RandomX glue.
 
 ---
 
