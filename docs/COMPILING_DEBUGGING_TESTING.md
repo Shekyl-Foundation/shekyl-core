@@ -2,7 +2,7 @@
 
 This document describes ways of compiling, debugging and testing efficiently for various use cases.
 The intended audience are developers, who want to leverage build and test tricks in Shekyl via `CMake`. The document will lower the entry point for these developers.
-Before reading this document, please consult section "Build instructions" in the main README.md. 
+Before reading this document, please consult section "Build instructions" in the main README.md.
 Some information from README.md will be repeated here, but the aim is to go beyond it.
 
 PQC and FCMP++ note:
@@ -14,6 +14,32 @@ PQC and FCMP++ note:
   `shekyl-ffi` crates
 - The canonical PQC format/spec is documented in
   `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
+
+## Rust Reproducible Builds
+
+Shekyl includes three Rust crates in the consensus-critical build path: `shekyl-crypto-pq`, `shekyl-fcmp`, and `shekyl-ffi`. Reproducibility of the Rust static library is essential for release verification.
+
+### Requirements
+
+- **x86_64 host only.** Rust does not produce bit-identical output across CPU architectures (see Monero #9801). Release artifacts must be built on x86_64 Linux. ARM64, RISC-V, and other architectures may produce functionally correct binaries but they will not match the deterministic reference hash.
+- **Pinned toolchain.** The workspace uses `Cargo.lock` to pin all dependency versions, including git dependencies (monero-oxide fork at commit `92af05e0`). All `cargo build` invocations in CI and CMake pass `--locked` to enforce this.
+- **Stable Rust.** The workspace targets stable Rust (currently 1.94.0+). Nightly features are not used.
+
+### Verifying determinism locally
+
+```bash
+cd rust
+cargo build --locked --release -p shekyl-ffi
+sha256sum target/release/libshekyl_ffi.a
+cargo clean -p shekyl-ffi --release
+cargo build --locked --release -p shekyl-ffi
+sha256sum target/release/libshekyl_ffi.a
+# Both hashes must match
+```
+
+### Guix integration
+
+Guix gained improved Rust packaging support in 2025 with Cargo.lock lockfile importing. The `guix-rustup` third-party channel provides access to pinned stable Rust toolchains. Full Guix reproducible release integration is tracked as a Phase 1a.2 deliverable. Until Guix integration is validated, release builds use the CI determinism check (build twice, diff hashes) as the reproducibility gate.
 
 ## Basic compilation
 
@@ -69,7 +95,7 @@ This parameter is what we need to transfer to CB, in order to reflect the same b
 
 `Project -> Set program's arguments...`
 
-Then in the `Program's arguments` textbox you'd write in this case: 
+Then in the `Program's arguments` textbox you'd write in this case:
 
 `--gtest_filter="logging.*"`
 

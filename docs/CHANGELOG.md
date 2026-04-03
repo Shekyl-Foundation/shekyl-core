@@ -23,6 +23,27 @@
     `HF_VERSION_FCMP_PLUS_PLUS_PQC`, `FCMP_REFERENCE_BLOCK_MAX_AGE` (100),
     `FCMP_REFERENCE_BLOCK_MIN_AGE` (2), `FCMP_MAX_INPUTS_PER_TX` (8).
   - Updated `BuildRust.cmake` with `--locked` flag for reproducible builds.
+- **FCMP++ Phase 1a.1: Security review of forked monero-oxide crates.**
+  - `cargo audit`: 226 crate dependencies scanned, zero vulnerabilities found.
+  - `unsafe` block audit: zero `unsafe` in first-party monero-oxide workspace
+    code (helioselene, ec-divisors, generalized-bulletproofs, fcmps,
+    monero-oxide). Only 4 `unsafe` blocks exist in helioselene benchmarks
+    (`_rdtsc()` for cycle counting, not in library code). `dalek-ff-group`
+    (crates.io dependency) also has zero `unsafe` blocks.
+  - Veridise audit status: FCMPs circuit audited by Veridise (June 2025);
+    Generalized Bulletproofs security proofs by Cypher Stack; Divisor proofs
+    reviewed by both Veridise and Cypher Stack. Pinned commit `92af05e0` is
+    post-audit. Helioselene and ec-divisors are not yet independently audited.
+    Multi-phase integration audit (seraphis-migration/monero#294) is in
+    planning.
+- **FCMP++ Phase 1a.2: Rust reproducible builds.**
+  - `Cargo.lock` pins all git dependencies to exact commit hash `92af05e0`.
+  - Double-build determinism verified: `libshekyl_ffi.a` hash identical across
+    consecutive builds on x86_64.
+  - Added CI job `rust-audit-and-test` to `.github/workflows/build.yml` with
+    cargo audit, workspace tests, and determinism check (build twice, diff).
+  - Documented x86_64-only build requirement and Guix integration status in
+    `docs/COMPILING_DEBUGGING_TESTING.md`.
 
 ### 🔄 Changed
 

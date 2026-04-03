@@ -235,3 +235,53 @@ jobs:
         with:
           name: ${{ env.OUTPUT }}
           path: ${{ env.OUTPUT }}
+
+  rust-audit-and-test:
+    name: "Rust: audit, test, determinism"
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: set apt conf
+        run: ${{env.APT_SET_CONF}}
+      - name: update apt
+        run: apt update
+      - name: install dependencies
+        run: apt -y install build-essential git curl pkg-config libssl-dev
+      - name: install Rust
+        run: ${{env.INSTALL_RUST}}
+      - name: install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: configure git
+        run: git config --global --add safe.directory '*'
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: rust-
+      - name: cargo audit
+        working-directory: rust
+        run: cargo audit
+      - name: cargo test (all workspace crates)
+        working-directory: rust
+        run: cargo test --locked --workspace
+      - name: determinism check (build twice, compare hashes)
+        working-directory: rust
+        run: |
+          cargo build --locked --release -p shekyl-ffi
+          sha256sum target/release/libshekyl_ffi.a > /tmp/build1.sha256
+          cargo clean -p shekyl-ffi --release
+          cargo build --locked --release -p shekyl-ffi
+          sha256sum target/release/libshekyl_ffi.a > /tmp/build2.sha256
+          echo "=== Build 1 ===" && cat /tmp/build1.sha256
+          echo "=== Build 2 ===" && cat /tmp/build2.sha256
+          diff /tmp/build1.sha256 /tmp/build2.sha256 || (echo "FATAL: non-deterministic Rust build" && exit 1)
+          echo "Determinism check PASSED"
