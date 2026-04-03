@@ -87,15 +87,19 @@ static libraries.
 
 ### Prerequisites
 
-- Visual Studio 2022 (17.x) with the C++ Desktop workload
+- **Visual Studio 2026 (18.x)** with the C++ Desktop workload
+  (MSVC toolset v145 / 14.50+).  VS 2022 (17.x, toolset 14.44) has a
+  confirmed Internal Compiler Error in `CloseTypeServerPDB` that crashes
+  on the crypto library -- see "Known MSVC ICE" below.
 - vcpkg (for Boost, libsodium, OpenSSL, ZeroMQ, libunbound, LMDB)
 - Rust toolchain (`stable-x86_64-pc-windows-msvc`)
-- CMake 3.25+
+- CMake 4.0+ (ships with VS 2026; needed for the `Visual Studio 18 2026`
+  generator)
 
 ### Build command
 
 ```powershell
-cmake -S . -B build\msvc-release -G "Visual Studio 17 2022" -A x64 ^
+cmake -S . -B build\msvc-release -G "Visual Studio 18 2026" -A x64 ^
   -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake ^
   -DVCPKG_TARGET_TRIPLET=x64-windows-static ^
   -DCMAKE_BUILD_TYPE=Release ^
@@ -103,11 +107,11 @@ cmake -S . -B build\msvc-release -G "Visual Studio 17 2022" -A x64 ^
 cmake --build build\msvc-release --config Release --parallel
 ```
 
-### Known MSVC Internal Compiler Error (ICE) and workarounds
+### Known MSVC Internal Compiler Error (ICE) history
 
-MSVC 14.44 (VS 2022 17.14) has two known ICE triggers in this codebase.
-Both were diagnosed through CI iteration and are documented here for
-future reference.
+MSVC 14.44 (VS 2022 17.14) had two ICE triggers in this codebase.  Both
+are **fixed in MSVC 14.50 (VS 2026)**, which is now the required toolset.
+The diagnosis is recorded here for future reference.
 
 #### ICE 1: Empty checkpoint array initializers (`obj_blocks`)
 
@@ -116,10 +120,11 @@ future reference.
 **Root cause:** The files `src/blocks/*.dat` are 0 bytes before genesis
 data is populated. The CMake generator (`blocks_generator.cmake`) produced
 `const unsigned char name[]={};` -- an empty array initializer that is
-valid C99/C11 but triggers an MSVC parser crash.
+valid C99/C11 but triggers an MSVC 14.44 parser crash.
 
-**Fix:** Modified `blocks_generator.cmake` to emit a 1-byte placeholder
-(`{0x00}`) with a separate `_len = 0` sentinel for empty `.dat` files:
+**Fix (permanent):** Modified `blocks_generator.cmake` to emit a 1-byte
+placeholder (`{0x00}`) with a separate `_len = 0` sentinel for empty
+`.dat` files.  This is correct on all compilers, not just a workaround:
 
 ```c
 const unsigned char checkpoints[]={ 0x00 };
@@ -140,49 +145,39 @@ CL!CloseTypeServerPDB()+0x16ef23
 CL!CloseTypeServerPDB()+0x1b7502
 ```
 
-**Diagnosis sequence** (what was tried and what it revealed):
+**Diagnosis sequence** (what was tried on MSVC 14.44):
 
-| Attempt | Flag | Result |
+| Attempt | Flag / Change | Result |
 | --- | --- | --- |
 | Limit parallelism | `/MP1 /FS` | Still crashed |
 | Reduce optimization | `/MP1 /O1` | Still crashed |
 | Disable optimization | `/MP1 /Od` | Still crashed -- ruled out optimizer |
-| Disable SSA optimizer | `/MP1 /d2SSAOptimizer-` | Still crashed, but stack trace revealed `CloseTypeServerPDB` |
-| Embed debug info | `/MP1 /Z7` | Still crashed -- PDB type server invoked during "Generating Code..." even with `/Z7` |
-| **Split OBJECT library** | two targets | **Resolved** |
+| Disable SSA optimizer | `/MP1 /d2SSAOptimizer-` | Still crashed, stack trace revealed `CloseTypeServerPDB` |
+| Embed debug info | `/MP1 /Z7` | Still crashed -- PDB type server invoked even with `/Z7` |
+| Split OBJECT library | 5 targets | Reduced blast radius but `obj_cncrypto_rx` still crashed |
+| Guard `CryptonightR_template.h` | exclude from MSVC | Reduced dead symbols; ICE persisted |
+| **Upgrade to MSVC 14.50 (VS 2026)** | | **Resolved** |
 
-The crash is not in the optimizer or code generator proper -- it is in
-MSVC's shared PDB (Program Database) type server, which fails when
-finalizing debug/type information for the crypto library's many
-translation units.  `/Z7` avoids PDB writes for individual `.obj` files
-but the type server is still invoked during the aggregate "Generating
-Code..." phase, so the ICE persisted.
+The crash is a confirmed MSVC 14.44 bug in the shared PDB (Program
+Database) type server.  Microsoft fixed it in MSVC 14.50 (shipped with
+Visual Studio 2026, November 2025).
 
-**Fix:** `src/crypto/CMakeLists.txt` splits the single `obj_cncrypto`
-OBJECT library into two smaller targets (`obj_cncrypto_hash` and
-`obj_cncrypto_core`), each with fewer translation units.  Both feed
-into the same `cncrypto` static library, so downstream targets are
-unaffected:
+**Fix:** The CI uses `windows-2025-vs2026` runners with the
+`"Visual Studio 18 2026"` CMake generator.  Local developers must use
+VS 2026 (or the standalone Build Tools for VS 2026) with toolset v145.
 
-```cmake
-add_library(obj_cncrypto_hash OBJECT ${crypto_hash_sources} ...)
-add_library(obj_cncrypto_core OBJECT ${crypto_core_sources} ...)
+**Residual workarounds kept in the codebase** (harmless, good hygiene):
 
-if(MSVC)
-  target_compile_options(obj_cncrypto_hash PRIVATE /MP1)
-  target_compile_options(obj_cncrypto_core PRIVATE /MP1)
-endif()
-
-add_library(cncrypto
-  $<TARGET_OBJECTS:obj_cncrypto_hash>
-  $<TARGET_OBJECTS:obj_cncrypto_core>)
-```
-
-The split is harmless on non-MSVC compilers and has no effect on the
-final linked binary or runtime behavior.  `crypto_hash_sources` contains
-pure hash primitives (blake256, groestl, jh, keccak, skein, tree-hash,
-etc.) while `crypto_core_sources` contains AES, ChaCha, crypto-ops, PoW,
-and RandomX glue.
+- `src/crypto/CMakeLists.txt` splits `cncrypto` into five OBJECT library
+  groups (`hash`, `ops`, `slowhash`, `rx`, `cpp`).  This reduces per-target
+  TU count and is harmless on all compilers.
+- `src/crypto/CryptonightR_JIT.c` guards `#include "CryptonightR_template.h"`
+  behind `__i386 || __x86_64__` (GCC/Clang only) since the 514 assembly
+  symbol declarations it contains are dead on MSVC.
+- `src/crypto/c_threads.h` includes `<process.h>` on Windows for correct
+  `_beginthreadex` prototype (prevents handle truncation on 64-bit).
+- `src/crypto/slow-hash.c` extends the `force_software_aes()` guard to
+  include `_M_X64`.
 
 ---
 
