@@ -52,11 +52,20 @@ set(crypto_slowhash_sources
   slow-hash.c)
 
 set(crypto_rx_sources
-  rx-slow-hash.c
-  CryptonightR_JIT.c)
+  rx-slow-hash.c)
 
-if(ARCH_ID STREQUAL "i386" OR ARCH_ID STREQUAL "x86_64" OR ARCH_ID STREQUAL "x86-64" OR ARCH_ID STREQUAL "amd64")
-list(APPEND crypto_rx_sources CryptonightR_template.S)
+# CryptonightR_JIT.c contains x86 JIT code that is entirely dead on MSVC
+# (returns -1).  Its heavyweight includes trigger an MSVC ICE in the PDB
+# type server (CloseTypeServerPDB, confirmed on 14.44 and 14.50).  Use a
+# minimal stub on MSVC that provides the same -1 return path.
+set(crypto_jit_sources)
+if(MSVC)
+  list(APPEND crypto_jit_sources CryptonightR_JIT_stub.c)
+else()
+  list(APPEND crypto_jit_sources CryptonightR_JIT.c)
+  if(ARCH_ID STREQUAL "i386" OR ARCH_ID STREQUAL "x86_64" OR ARCH_ID STREQUAL "x86-64" OR ARCH_ID STREQUAL "amd64")
+    list(APPEND crypto_jit_sources CryptonightR_template.S)
+  endif()
 endif()
 
 set(crypto_cpp_sources
@@ -72,15 +81,13 @@ set(crypto_headers)
 
 monero_find_all_headers(crypto_private_headers "${CMAKE_CURRENT_SOURCE_DIR}")
 
-# MSVC 14.44 ICE (C1001) during "Generating Code..." -- the PDB type server
-# crashes (CloseTypeServerPDB) when too many translation units are in one
-# OBJECT library.  A two-way split was not enough; four groups keep each
-# target well below the threshold.  Harmless on other compilers.
+# Split into small OBJECT libraries.  On MSVC this avoids an ICE in the PDB
+# type server (CloseTypeServerPDB); on other compilers it's harmless.
 monero_private_headers(cncrypto
   ${crypto_private_headers})
 
 set(_cncrypto_obj_targets)
-foreach(_group hash ops slowhash rx cpp)
+foreach(_group hash ops slowhash rx jit cpp)
   set(_target obj_cncrypto_${_group})
   add_library(${_target} OBJECT
     ${crypto_${_group}_sources} ${crypto_headers} ${crypto_private_headers})
