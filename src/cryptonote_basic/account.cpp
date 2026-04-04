@@ -61,7 +61,12 @@ DISABLE_VS_WARNINGS(4244 4345)
 
     bool generate_pqc_key_material(account_keys &keys)
     {
-      ShekylPqcKeypair keypair = shekyl_pqc_keypair_generate();
+      // Generate hybrid X25519 + ML-KEM-768 KEM keypair. The public key
+      // (x25519_pk[32] || ml_kem_ek[1184]) goes into the address; the secret
+      // key (x25519_sk[32] || ml_kem_dk[2400]) stays in the wallet.
+      // Per-output ML-DSA-65 signing keys are derived from the KEM shared
+      // secret at spend time — the wallet never stores wallet-level signing keys.
+      ShekylPqcKeypair keypair = shekyl_kem_keypair_generate();
       if (!keypair.success || keypair.public_key.ptr == nullptr || keypair.secret_key.ptr == nullptr)
       {
         if (keypair.public_key.ptr != nullptr)

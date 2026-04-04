@@ -4,6 +4,85 @@
 
 ### 🔒 Security
 
+- **Wallet KEM key management fix.** `generate_pqc_key_material()` now
+  generates `HybridX25519MlKem` KEM keypairs via `shekyl_kem_keypair_generate()`
+  instead of `HybridEd25519MlDsa` signing keypairs. The wallet-level PQC
+  keys (`m_pqc_public_key` / `m_pqc_secret_key`) are encapsulation/decapsulation
+  keys; per-output ML-DSA-65 signing keys are always derived from the KEM
+  shared secret at spend time.
+
+- **Full hybrid ciphertext storage in tx_extra tag 0x06.** All KEM
+  encapsulation sites (coinbase, claim, regular transfers) now store the
+  complete 1120-byte hybrid ciphertext (`x25519_ephemeral_pk[32] || ml_kem_ct[1088]`)
+  instead of only the ML-KEM portion. This enables correct hybrid
+  decapsulation during wallet scanning and seed restore.
+
+### ✨ Added
+
+- **FCMP++ wallet transaction construction (Phase 5).** `transfer_selected_rct`
+  now builds transactions using full-chain membership proofs instead of ring
+  signatures:
+  - Inputs contain only the real output (no decoy selection).
+  - `genRctFcmpPlusPlus` generates the combined Bulletproofs+ and FCMP++
+    membership proof.
+  - Per-input PQC auth signatures use ML-DSA-65 keypairs derived from the
+    KEM shared secret and output index.
+  - `construct_tx_with_tx_key` adds KEM encapsulation (tag 0x06) and
+    `H(pqc_pk)` leaf hashes (tag 0x07) for each output, and skips
+    wallet-level PQC signing.
+
+- **KEM decapsulation during wallet scanning.** `process_new_transaction`
+  now extracts hybrid KEM ciphertexts from `tx_extra` tag 0x06, calls
+  `shekyl_kem_decapsulate` with the wallet's KEM secret keys, and stores
+  the resulting 64-byte combined shared secret in `transfer_details::m_combined_shared_secret`.
+  This enables per-output PQC key derivation at spend time.
+
+- **FCMP++ fee estimation.** `estimate_rct_tx_size` now accounts for the
+  FCMP++ membership proof size (`shekyl_fcmp_proof_len`), per-input PQC
+  auth envelopes (~5400 bytes each), and per-output KEM ciphertexts and
+  leaf hashes.
+
+- **GUI wallet QR code.** Receive page now renders a real QR code encoding
+  the full FCMP++ Bech32m address via `qrcode.react`.
+
+- **GUI wallet fee preview.** Send page shows an estimated transaction fee
+  before submission, debounced as the user types.
+
+### 🐛 Fixed
+
+- **`rct::key` missing `operator!=`.** Added `operator!=` to the `key`
+  struct in `rctTypes.h`. The operator was present for cross-type
+  comparisons (`rct::key` vs `crypto::public_key`) but not for
+  `rct::key` vs `rct::key`, causing compilation failures on all
+  platforms when comparing pseudo-outs to expected zero-commitments in
+  the stake claim verification path.
+
+- **MSVC `binary_archive` constructor mismatch.** Fixed `wallet2.cpp`
+  to use `epee::strspan<std::uint8_t>` instead of `std::istringstream`
+  for constructing `binary_archive<false>`, which MSVC could not resolve.
+
+- **Memory leak on exception in PQC auth signing.** Added RAII scope
+  guard for `ShekylPqcKeypair` buffers in `transfer_selected_rct`
+  Phase C, ensuring Rust-allocated key material is freed even if
+  `THROW_WALLET_EXCEPTION_IF` throws mid-loop.
+
+- **Secret key material not wiped on KEM decapsulation failure.** The
+  stack buffer in `process_new_transaction` KEM decapsulation is now
+  wiped unconditionally (success or failure), preventing partial key
+  material from lingering on the stack.
+
+- **Shadowed `tx_extra_fields` variable in KEM decapsulation.** Removed
+  redundant inner `tx_extra_fields` reference that shadowed the outer
+  one in `process_new_transaction`, using the already-resolved outer
+  reference instead.
+
+### 🔄 Changed
+
+- **Decoy selection functions are dead code.** `get_outs`,
+  `tx_add_fake_output`, and `light_wallet_get_outs` in `wallet2.cpp` are
+  no longer called from the active transfer path. They remain in the
+  codebase for reference and will be removed in a follow-up cleanup.
+
 - **Claim transaction indistinguishability (Phase 4 — CRITICAL).** Rewrote
   `wallet2::create_claim_transaction()` to produce privacy-preserving claim
   transactions that blend into the anonymity set:

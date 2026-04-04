@@ -166,16 +166,16 @@ namespace cryptonote
     if (hard_fork_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC && !miner_address.m_pqc_public_key.empty())
     {
       static constexpr size_t X25519_PK_BYTES = 32;
-      static constexpr size_t HYBRID_CT_HEADER = 32;
       CHECK_AND_ASSERT_MES(miner_address.m_pqc_public_key.size() > X25519_PK_BYTES,
-        false, "miner PQC public key too short");
+        false, "miner PQC public key too short (need x25519[32] || ml_kem_ek[1184])");
 
-      const uint8_t* pk_x25519 = reinterpret_cast<const uint8_t*>(&miner_address.m_view_public_key);
-      const uint8_t* pk_ml_kem = miner_address.m_pqc_public_key.data();
-      const size_t pk_ml_kem_len = miner_address.m_pqc_public_key.size();
+      // m_pqc_public_key layout: x25519_pk[32] || ml_kem_ek[1184]
+      const uint8_t* pk_x25519 = miner_address.m_pqc_public_key.data();
+      const uint8_t* pk_ml_kem = miner_address.m_pqc_public_key.data() + X25519_PK_BYTES;
+      const size_t pk_ml_kem_len = miner_address.m_pqc_public_key.size() - X25519_PK_BYTES;
 
       tx_extra_pqc_kem_ciphertext kem_field;
-      kem_field.blob.reserve(out_amounts.size() * ML_KEM_768_CT_BYTES);
+      kem_field.blob.reserve(out_amounts.size() * HYBRID_KEM_CT_BYTES);
 
       tx_extra_pqc_leaf_hashes leaf_hash_field;
       leaf_hash_field.blob.reserve(out_amounts.size() * PQC_LEAF_HASH_BYTES);
@@ -185,14 +185,12 @@ namespace cryptonote
         ShekylBuffer ct_buf = {};
         uint8_t ss[64];
         bool ok = shekyl_kem_encapsulate(pk_x25519, pk_ml_kem, pk_ml_kem_len, &ct_buf, ss);
-        CHECK_AND_ASSERT_MES(ok && ct_buf.ptr && ct_buf.len > HYBRID_CT_HEADER,
+        CHECK_AND_ASSERT_MES(ok && ct_buf.ptr && ct_buf.len == HYBRID_KEM_CT_BYTES,
           false, "KEM self-encapsulation failed for coinbase output " << i);
-        CHECK_AND_ASSERT_MES(ct_buf.len - HYBRID_CT_HEADER == ML_KEM_768_CT_BYTES,
-          false, "Unexpected ML-KEM ciphertext size: " << (ct_buf.len - HYBRID_CT_HEADER));
 
+        // Store full hybrid ciphertext: x25519_ct[32] || ml_kem_ct[1088]
         kem_field.blob.append(
-          reinterpret_cast<const char*>(ct_buf.ptr + HYBRID_CT_HEADER),
-          ML_KEM_768_CT_BYTES);
+          reinterpret_cast<const char*>(ct_buf.ptr), HYBRID_KEM_CT_BYTES);
         shekyl_buffer_free(ct_buf.ptr, ct_buf.len);
 
         ShekylPqcKeypair derived = shekyl_fcmp_derive_pqc_keypair(ss, static_cast<uint64_t>(i));
@@ -408,11 +406,13 @@ namespace cryptonote
       input_to_key.amount = src_entr.amount;
       input_to_key.k_image = img;
 
-      //fill outputs array and use relative offsets
-      for(const tx_source_entry::output_entry& out_entry: src_entr.outputs)
-        input_to_key.key_offsets.push_back(out_entry.first);
-
-      input_to_key.key_offsets = absolute_output_offsets_to_relative(input_to_key.key_offsets);
+      // FCMP++ replaces ring members — key_offsets must be empty
+      if (hf_version < HF_VERSION_FCMP_PLUS_PLUS_PQC)
+      {
+        for(const tx_source_entry::output_entry& out_entry: src_entr.outputs)
+          input_to_key.key_offsets.push_back(out_entry.first);
+        input_to_key.key_offsets = absolute_output_offsets_to_relative(input_to_key.key_offsets);
+      }
       tx.vin.push_back(input_to_key);
     }
 
@@ -500,6 +500,71 @@ namespace cryptonote
       add_additional_tx_pub_keys_to_extra(tx.extra, additional_tx_public_keys);
     }
 
+    // ── KEM encapsulation for each output (FCMP++ per-output PQC keys) ────
+    if (hf_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
+    {
+      static constexpr size_t X25519_PK_BYTES = 32;
+      tx_extra_pqc_kem_ciphertext kem_field;
+      kem_field.blob.reserve(destinations.size() * HYBRID_KEM_CT_BYTES);
+      tx_extra_pqc_leaf_hashes leaf_hash_field;
+      leaf_hash_field.blob.reserve(destinations.size() * PQC_LEAF_HASH_BYTES);
+
+      for (size_t i = 0; i < destinations.size(); ++i)
+      {
+        const auto& dst = destinations[i];
+        if (dst.addr.m_pqc_public_key.size() <= X25519_PK_BYTES)
+        {
+          LOG_ERROR("Destination " << i << " lacks PQC KEM public key");
+          return false;
+        }
+
+        const uint8_t* pk_x25519 = dst.addr.m_pqc_public_key.data();
+        const uint8_t* pk_ml_kem = dst.addr.m_pqc_public_key.data() + X25519_PK_BYTES;
+        const size_t pk_ml_kem_len = dst.addr.m_pqc_public_key.size() - X25519_PK_BYTES;
+
+        ShekylBuffer ct_buf = {};
+        uint8_t ss[64];
+        bool ok = shekyl_kem_encapsulate(pk_x25519, pk_ml_kem, pk_ml_kem_len, &ct_buf, ss);
+        CHECK_AND_ASSERT_MES(ok && ct_buf.ptr && ct_buf.len == HYBRID_KEM_CT_BYTES,
+          false, "KEM encapsulation failed for output " << i);
+
+        kem_field.blob.append(reinterpret_cast<const char*>(ct_buf.ptr), HYBRID_KEM_CT_BYTES);
+        shekyl_buffer_free(ct_buf.ptr, ct_buf.len);
+
+        ShekylPqcKeypair derived = shekyl_fcmp_derive_pqc_keypair(ss, static_cast<uint64_t>(i));
+        memwipe(ss, sizeof(ss));
+        CHECK_AND_ASSERT_MES(derived.success && derived.public_key.ptr && derived.public_key.len > 0,
+          false, "Per-output PQC keypair derivation failed for output " << i);
+
+        uint8_t h_pqc[32];
+        ok = shekyl_fcmp_pqc_leaf_hash(derived.public_key.ptr, derived.public_key.len, h_pqc);
+        shekyl_buffer_free(derived.public_key.ptr, derived.public_key.len);
+        shekyl_buffer_free(derived.secret_key.ptr, derived.secret_key.len);
+        CHECK_AND_ASSERT_MES(ok, false, "PQC leaf hash failed for output " << i);
+
+        leaf_hash_field.blob.append(reinterpret_cast<const char*>(h_pqc), PQC_LEAF_HASH_BYTES);
+      }
+
+      {
+        std::ostringstream oss;
+        binary_archive<true> oar(oss);
+        tx_extra_field variant_field = kem_field;
+        CHECK_AND_ASSERT_MES(::do_serialize(oar, variant_field), false,
+          "Failed to serialize KEM ciphertexts for tx_extra");
+        std::string blob = oss.str();
+        tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+      }
+      {
+        std::ostringstream oss;
+        binary_archive<true> oar(oss);
+        tx_extra_field variant_field = leaf_hash_field;
+        CHECK_AND_ASSERT_MES(::do_serialize(oar, variant_field), false,
+          "Failed to serialize PQC leaf hashes for tx_extra");
+        std::string blob = oss.str();
+        tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+      }
+    }
+
     if (!sort_tx_extra(tx.extra, tx.extra))
       return false;
 
@@ -565,8 +630,8 @@ namespace cryptonote
       crypto::hash tx_prefix_hash;
       get_transaction_prefix_hash(tx, tx_prefix_hash, hwdev);
       rct::ctkeyV outSk;
-      // TODO: replace with FCMP++ proof generation (genRctFcmpPlusPlus)
-      // genRctSimple was removed as part of legacy RCT stripping
+      // Stub rctSig: the wallet overwrites this with genRctFcmpPlusPlus()
+      // after constructing tree paths and per-output PQC material.
       tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
       tx.rct_signatures.message = rct::hash2rct(tx_prefix_hash);
       tx.rct_signatures.txnFee = amount_in - amount_out;
@@ -575,6 +640,9 @@ namespace cryptonote
       CHECK_AND_ASSERT_MES(tx.vout.size() == outSk.size() || outSk.empty(), false, "outSk size does not match vout");
     }
 
+    // PQC auth signing: for FCMP++ (HF1+), per-output derived keys are used.
+    // The wallet handles PQC signing after genRctFcmpPlusPlus. Multisig
+    // pre-assembled signatures are preserved as-is.
     if (tx.version >= 3)
     {
       const bool multisig_preassembled = !tx.pqc_auths.empty()
@@ -583,53 +651,13 @@ namespace cryptonote
 
       if (multisig_preassembled)
       {
-        MCINFO("construct_tx", "Pre-assembled multisig pqc_auths detected (scheme_id=2); skipping single-key sign");
+        MCINFO("construct_tx", "Pre-assembled multisig pqc_auths detected (scheme_id=2); skipping");
       }
       else
       {
-        if (sender_account_keys.m_pqc_secret_key.empty())
-        {
-          LOG_ERROR("Cannot create v3 transaction: wallet has no PQC secret key (restored from keys without PQ?)");
-          return false;
-        }
-        if (sender_account_keys.m_account_address.m_pqc_public_key.empty())
-        {
-          LOG_ERROR("Cannot create v3 transaction: wallet has no PQC public key");
-          return false;
-        }
+        // Leave pqc_auths empty — the wallet populates them with per-output
+        // derived ML-DSA-65 keys after the FCMP++ proof is attached.
         tx.pqc_auths.clear();
-        tx.pqc_auths.resize(tx.vin.size());
-        for (size_t i = 0; i < tx.vin.size(); ++i)
-        {
-          tx.pqc_auths[i].auth_version = 1;
-          tx.pqc_auths[i].scheme_id = 1;
-          tx.pqc_auths[i].flags = 0;
-          tx.pqc_auths[i].hybrid_public_key = sender_account_keys.m_account_address.m_pqc_public_key;
-          tx.pqc_auths[i].hybrid_signature.clear();
-        }
-        for (size_t i = 0; i < tx.vin.size(); ++i)
-        {
-          std::string payload_blob;
-          if (!get_transaction_signed_payload(tx, i, payload_blob))
-          {
-            LOG_ERROR("Failed to build PQC signed payload");
-            return false;
-          }
-          crypto::hash payload_hash;
-          cryptonote::get_blob_hash(payload_blob, payload_hash);
-          ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
-              sender_account_keys.m_pqc_secret_key.data(),
-              sender_account_keys.m_pqc_secret_key.size(),
-              reinterpret_cast<const uint8_t*>(payload_hash.data),
-              sizeof(payload_hash.data));
-          if (!sig_result.success)
-          {
-            LOG_ERROR("PQC hybrid signing failed");
-            return false;
-          }
-          tx.pqc_auths[i].hybrid_signature.assign(sig_result.signature.ptr, sig_result.signature.ptr + sig_result.signature.len);
-          shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
-        }
       }
     }
 

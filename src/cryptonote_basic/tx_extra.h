@@ -201,6 +201,8 @@ namespace cryptonote
   };
 
   static constexpr size_t ML_KEM_768_CT_BYTES = 1088;
+  static constexpr size_t X25519_CT_BYTES = 32;
+  static constexpr size_t HYBRID_KEM_CT_BYTES = X25519_CT_BYTES + ML_KEM_768_CT_BYTES; // 1120
 
   struct tx_extra_pqc_kem_ciphertext
   {

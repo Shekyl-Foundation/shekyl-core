@@ -1,6 +1,6 @@
 # FCMP++ Full-Chain Membership Proofs — Specification
 
-> **Last updated:** 2026-04-05
+> **Last updated:** 2026-04-04
 >
 > **Parent document:** `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
@@ -190,15 +190,16 @@ The `rctSigBase` struct has no `mixRing` member. `rctSigPrunable` holds only
 `fcmp_pp_proof`. The `serialize_rctsig_prunable` API has no `mixin`
 parameter.
 
-### `tx_extra`: ML-KEM ciphertext tag (`0x06`)
+### `tx_extra`: Hybrid KEM ciphertext tag (`0x06`)
 
 Outputs carry hybrid KEM material for per-output PQC key derivation. The field
 `tx_extra_pqc_kem_ciphertext` is tagged `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`
 (`0x06` in `tx_extra.h`). The payload is a single `blob` whose length is
-**N × 1088** bytes: **N** concatenated ML-KEM-768 ciphertexts (FIPS 203),
-one per transaction output in **vout order** (same order as outputs are
-listed in the prefix). Implementation may strip an X25519-specific header
-from the FFI-produced buffer before appending the 1088-byte ML-KEM component.
+**N × 1120** bytes: **N** concatenated hybrid ciphertexts, one per transaction
+output in **vout order**. Each 1120-byte entry is
+`x25519_ephemeral_pk[32] || ml_kem_768_ct[1088]` — the X25519 ephemeral
+public key followed by the ML-KEM-768 ciphertext (FIPS 203). Both components
+are required for correct hybrid KEM decapsulation.
 
 ### `tx_extra`: PQC leaf hash tag (`0x07`)
 
@@ -224,7 +225,7 @@ Coinbase outputs still need a distinct per-output `H(pqc_pk)` in the curve
 tree. When `hard_fork_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC` and the miner
 address includes a PQC encapsulation key, `construct_miner_tx` performs the same
 hybrid KEM encapsulation **to the miner’s own address** for each coinbase
-output as a transfer would: one 1088-byte ML-KEM ciphertext per output in the
+output as a transfer would: one 1120-byte hybrid ciphertext per output in the
 `0x06` blob, standard HKDF per-output derivation, shared secret wiped after
 use. This prevents all coinbase outputs to the same miner from sharing an
 identical `H(pqc_pk)` pattern (which would link rewards). Spending a matured
@@ -618,10 +619,11 @@ The sender performs a hybrid key encapsulation:
                    )
 ```
 
-The ML-KEM-768 ciphertexts are stored in `tx_extra` as
+The hybrid KEM ciphertexts are stored in `tx_extra` as
 `tx_extra_pqc_kem_ciphertext`: tag `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` (`0x06`),
-field `blob` = concatenation of **N** raw 1088-byte ML-KEM-768 ciphertexts
-(N = number of outputs), in vout order.
+field `blob` = concatenation of **N** 1120-byte hybrid ciphertexts
+(`x25519_ephemeral_pk[32] || ml_kem_768_ct[1088]`, N = number of outputs),
+in vout order.
 
 ### Per-Output Keypair Derivation
 
@@ -931,6 +933,10 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | `RCTTypeFcmpPlusPlusPqc` | 7 | `rctTypes.h` |
 | `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` | 0x06 | `tx_extra.h` |
 | `TX_EXTRA_TAG_PQC_LEAF_HASHES` | 0x07 | `tx_extra.h` |
+| `ML_KEM_768_CT_BYTES` | 1088 | `tx_extra.h` |
+| `X25519_CT_BYTES` | 32 | `tx_extra.h` |
+| `HYBRID_KEM_CT_BYTES` | 1120 (32 + 1088) | `tx_extra.h` |
+| `PQC_LEAF_HASH_BYTES` | 32 | `tx_extra.h` |
 | `HF_VERSION_FCMP_PLUS_PLUS_PQC` | 1 | `cryptonote_config.h` |
 
 ---
@@ -985,7 +991,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | `pseudoOuts` gated in generic `rctSigBase` serializer | **Done** | `rctTypes.h` |
 | `pop_block()` height symmetry fix | **Done** | `blockchain_db.cpp` |
 | Ring-based validation path removed (genesis-native) | **Done** | `blockchain.cpp` |
-| `tx_extra` KEM blob tag `0x06` (N × 1088 bytes) | **Done** | `tx_extra.h`, `cryptonote_format_utils.cpp` |
+| `tx_extra` KEM blob tag `0x06` (N × 1120 bytes hybrid ct) | **Done** | `tx_extra.h`, `cryptonote_format_utils.cpp` |
 | `tx_extra` leaf hash tag `0x07` (N × 32 bytes) | **Done** | `tx_extra.h`, `cryptonote_format_utils.cpp` |
 | Curve tree leaves use actual `H(pqc_pk)` from `tx_extra` | **Done** | `blockchain_db.cpp` (`collect_outputs`, `make_leaf`) |
 | Coinbase KEM self-encapsulation + `H(pqc_pk)` emission | **Done** | `cryptonote_tx_utils.cpp` (`construct_miner_tx`) |
@@ -995,8 +1001,18 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Claim tx: hybrid KEM derivation for per-output PQC keys | **Done** | `wallet2.cpp` (`create_claim_transaction`) |
 | Claim tx: per-output PQC signing (not wallet master key) | **Done** | `wallet2.cpp` (`create_claim_transaction`) |
 | Claim tx: pseudo-outs as `zeroCommit(claim_amount)` | **Done** | `wallet2.cpp` (`create_claim_transaction`) |
-| Wallet transfer flow FCMP++ integration | **Done** | `wallet2.cpp` |
-| Fee estimation for FCMP++ proof size | **Done** | `wallet2.cpp` |
+| Wallet KEM key generation (`kem_keypair_generate`) | **Done** | `account.cpp` |
+| Full hybrid ciphertext in tag 0x06 (1120 bytes/output) | **Done** | `cryptonote_tx_utils.cpp`, `wallet2.cpp` |
+| KEM decapsulation during wallet scanning | **Done** | `wallet2.cpp` (`process_new_transaction`) |
+| `transfer_selected_rct` FCMP++ (no decoys, genRctFcmpPlusPlus) | **Done** | `wallet2.cpp` |
+| `construct_tx_with_tx_key` KEM encap + 0x06/0x07 for outputs | **Done** | `cryptonote_tx_utils.cpp` |
+| Per-input PQC auth with derived ML-DSA-65 keys | **Done** | `wallet2.cpp` (`transfer_selected_rct`) |
+| Fee estimation for FCMP++ proof size | **Done** | `wallet2.cpp` (`estimate_rct_tx_size`) |
+| GUI wallet QR code (full Bech32m address) | **Done** | `shekyl-gui-wallet` |
+| GUI wallet fee preview on Send page | **Done** | `shekyl-gui-wallet` |
+| `rct::key::operator!=` for key-vs-key comparison | **Done** | `rctTypes.h` |
+| RAII scope guard for PQC signing keypair buffers | **Done** | `wallet2.cpp` (`transfer_selected_rct`) |
+| MSVC-compatible `binary_archive` construction | **Done** | `wallet2.cpp` |
 | Stressnet tooling (load gen, monitor, config) | **Done** | `tests/stressnet/` |
 | 4-scalar leaf circuit audit scope | **Done** | `docs/AUDIT_SCOPE.md` |
 | Cargo-fuzz targets (6 targets) | **Done** | `rust/shekyl-fcmp/fuzz/`, `rust/shekyl-crypto-pq/fuzz/` |
