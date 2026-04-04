@@ -3695,26 +3695,102 @@ namespace cryptonote
       return false;
     }
 
-    // TODO(fcmp++): Retrieve the current curve tree root and depth from the
-    // blockchain DB, look up each output's Merkle path in the curve tree, and
-    // populate res.paths with the serialized sibling hashes.
-    //
-    // For now, return a stub indicating the endpoint exists but the tree
-    // lookup is not yet implemented.
+    const auto &db = m_core.get_blockchain_storage().get_db();
+    const uint8_t depth = db.get_curve_tree_depth();
+    const uint64_t leaf_count = db.get_curve_tree_leaf_count();
+
+    if (leaf_count == 0)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "Curve tree is empty";
+      return false;
+    }
 
     const uint64_t height = m_core.get_current_blockchain_height();
     crypto::hash top_hash = m_core.get_blockchain_storage().get_tail_id();
-
     res.reference_block = epee::string_tools::pod_to_hex(top_hash);
-    res.tree_depth = 0;
+    res.tree_depth = depth;
     res.paths.clear();
 
-    for (const uint64_t idx : req.output_indices)
+    static constexpr uint32_t SELENE_CHUNK_WIDTH = 38;
+    static constexpr uint32_t HELIOS_CHUNK_WIDTH = 18;
+    static constexpr uint32_t SCALARS_PER_LEAF   = 4;
+
+    auto chunk_width = [](uint8_t layer) -> uint32_t {
+      if (layer == 0) return SELENE_CHUNK_WIDTH;
+      return (layer % 2 == 0) ? SELENE_CHUNK_WIDTH : HELIOS_CHUNK_WIDTH;
+    };
+
+    for (const uint64_t output_idx : req.output_indices)
     {
       COMMAND_RPC_GET_CURVE_TREE_PATH::path_entry entry{};
-      entry.output_index = idx;
-      entry.tree_depth = 0;
-      entry.path_blob = "";
+      entry.output_index = output_idx;
+      entry.tree_depth = depth;
+
+      if (output_idx >= leaf_count)
+      {
+        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+        error_resp.message = "output_index " + std::to_string(output_idx) + " >= leaf_count " + std::to_string(leaf_count);
+        return false;
+      }
+
+      // path_blob format per layer:
+      //   layer 0 (leaf layer): all leaf scalars in the chunk (4*32 bytes each)
+      //   layer 1+: all sibling hashes in the chunk (32 bytes each)
+      // The verifier uses the output's position within each chunk to locate
+      // the proven element; everything else in the chunk is the "path."
+      std::string path_hex;
+
+      // Layer 0: collect all leaf scalars in the chunk
+      uint64_t chunk_idx = output_idx / SELENE_CHUNK_WIDTH;
+      uint64_t chunk_start = chunk_idx * SELENE_CHUNK_WIDTH;
+      uint64_t chunk_end = std::min(chunk_start + SELENE_CHUNK_WIDTH, leaf_count);
+
+      std::vector<uint8_t> path_bytes;
+      // Encode position of the proven leaf within the chunk (2 bytes LE)
+      uint16_t leaf_pos = static_cast<uint16_t>(output_idx - chunk_start);
+      path_bytes.push_back(static_cast<uint8_t>(leaf_pos & 0xFF));
+      path_bytes.push_back(static_cast<uint8_t>((leaf_pos >> 8) & 0xFF));
+
+      for (uint64_t i = chunk_start; i < chunk_end; ++i)
+      {
+        uint8_t leaf[128];
+        if (!db.get_curve_tree_leaf(i, leaf))
+        {
+          error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+          error_resp.message = "Failed to read leaf at index " + std::to_string(i);
+          return false;
+        }
+        path_bytes.insert(path_bytes.end(), leaf, leaf + 128);
+      }
+
+      // Layers 1..depth-1: collect sibling hashes in each parent chunk
+      uint64_t child_chunk = chunk_idx;
+      for (uint8_t layer = 1; layer < depth; ++layer)
+      {
+        uint32_t width = chunk_width(layer);
+        uint64_t parent_chunk = child_chunk / width;
+        uint64_t pos_in_parent = child_chunk % width;
+
+        // Encode position (2 bytes LE)
+        uint16_t pos16 = static_cast<uint16_t>(pos_in_parent);
+        path_bytes.push_back(static_cast<uint8_t>(pos16 & 0xFF));
+        path_bytes.push_back(static_cast<uint8_t>((pos16 >> 8) & 0xFF));
+
+        // Collect all children in this parent chunk
+        for (uint32_t c = 0; c < width; ++c)
+        {
+          uint64_t sibling_chunk = parent_chunk * width + c;
+          uint8_t hash[32] = {};
+          db.get_curve_tree_layer_hash(layer - 1, sibling_chunk, hash);
+          path_bytes.insert(path_bytes.end(), hash, hash + 32);
+        }
+
+        child_chunk = parent_chunk;
+      }
+
+      entry.path_blob = epee::string_tools::buff_to_hex_nodelimer(
+        std::string(reinterpret_cast<const char*>(path_bytes.data()), path_bytes.size()));
       res.paths.push_back(std::move(entry));
     }
 

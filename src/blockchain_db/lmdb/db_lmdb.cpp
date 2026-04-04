@@ -5297,8 +5297,12 @@ void BlockchainLMDB::prune_curve_tree_intermediate_layers(uint64_t checkpoint_he
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  // Find the previous checkpoint height to determine pruning range
+  // Find the previous checkpoint to determine which leaf range was already
+  // covered.  We only prune layer entries for chunks that are fully below
+  // the previous checkpoint (those hashes are redundant -- they can be
+  // recomputed from leaves if ever needed again).
   uint64_t prev_checkpoint_height = 0;
+  uint64_t prev_leaf_count = 0;
   {
     MDB_cursor *cur;
     int result = mdb_cursor_open(*m_write_txn, m_curve_tree_checkpoints, &cur);
@@ -5312,12 +5316,19 @@ void BlockchainLMDB::prune_curve_tree_intermediate_layers(uint64_t checkpoint_he
     {
       result = mdb_cursor_get(cur, &k, &v, MDB_PREV);
       if (result == 0 && k.mv_size == sizeof(uint64_t))
+      {
         memcpy(&prev_checkpoint_height, k.mv_data, sizeof(uint64_t));
+        // Checkpoint format: root[32] || depth[1] || leaf_count[8]
+        if (v.mv_size >= 41)
+          memcpy(&prev_leaf_count, static_cast<const uint8_t*>(v.mv_data) + 33, sizeof(uint64_t));
+      }
     }
     mdb_cursor_close(cur);
   }
 
-  // Get the current depth to know which layers are intermediate
+  if (prev_checkpoint_height == 0 || prev_leaf_count == 0)
+    return;
+
   uint8_t depth = 0;
   {
     const std::string depth_key = "depth";
@@ -5328,23 +5339,31 @@ void BlockchainLMDB::prune_curve_tree_intermediate_layers(uint64_t checkpoint_he
       depth = *static_cast<const uint8_t*>(v.mv_data);
   }
 
-  if (depth < 2)
+  if (depth < 3)
     return;
 
-  // Prune intermediate layers (1 through depth-2) -- keep layer 0 (leaf hashes)
-  // and the top layer (root). We remove entries whose chunk indices fall within
-  // the range affected by leaves between prev_checkpoint and checkpoint.
+  // Prune intermediate layers (1 through depth-2).  For each layer, only
+  // delete chunk entries whose index is strictly below the chunk boundary
+  // implied by prev_leaf_count.  These chunks are fully "sealed" by the
+  // previous checkpoint and can be recomputed from leaves.
   uint64_t pruned_count = 0;
-  for (uint8_t layer = 1; layer < depth - 1; ++layer)
+  uint64_t child_boundary = prev_leaf_count / CT_SELENE_CHUNK_WIDTH;
+
+  for (uint8_t layer = 1; layer <= depth - 2; ++layer)
   {
+    uint32_t parent_width = ct_chunk_width(layer);
+    uint64_t parent_boundary = child_boundary / parent_width;
+    if (parent_boundary == 0)
+      break;
+
+    uint64_t layer_prefix = static_cast<uint64_t>(layer) << 56;
+    uint64_t start_key = layer_prefix;
+    uint64_t prune_up_to = layer_prefix | (parent_boundary - 1);
+
     MDB_cursor *cur;
     int result = mdb_cursor_open(*m_write_txn, m_curve_tree_layers, &cur);
     if (result)
       throw0(DB_ERROR(lmdb_error("Failed to open layers cursor for pruning: ", result).c_str()));
-
-    uint64_t layer_prefix = static_cast<uint64_t>(layer) << 56;
-    uint64_t start_key = layer_prefix;
-    uint64_t end_key = layer_prefix | 0x00FFFFFFFFFFFFFFULL;
 
     MDB_val k = {sizeof(start_key), (void *)&start_key};
     MDB_val v;
@@ -5353,7 +5372,7 @@ void BlockchainLMDB::prune_curve_tree_intermediate_layers(uint64_t checkpoint_he
     {
       uint64_t current_key;
       memcpy(&current_key, k.mv_data, sizeof(uint64_t));
-      if (current_key > end_key)
+      if (current_key > prune_up_to)
         break;
       result = mdb_cursor_del(cur, 0);
       if (result)
@@ -5364,9 +5383,36 @@ void BlockchainLMDB::prune_curve_tree_intermediate_layers(uint64_t checkpoint_he
         break;
     }
     mdb_cursor_close(cur);
+
+    child_boundary = parent_boundary;
   }
 
-  LOG_PRINT_L2("Pruned " << pruned_count << " intermediate layer entries up to checkpoint height " << checkpoint_height);
+  // Garbage-collect checkpoints older than the previous one -- only the two
+  // most recent checkpoints are needed (current + previous for pruning range).
+  if (prev_checkpoint_height > 0)
+  {
+    MDB_cursor *cur;
+    int result = mdb_cursor_open(*m_write_txn, m_curve_tree_checkpoints, &cur);
+    if (result == 0)
+    {
+      MDB_val k, v;
+      result = mdb_cursor_get(cur, &k, &v, MDB_FIRST);
+      while (result == 0)
+      {
+        uint64_t h = 0;
+        memcpy(&h, k.mv_data, sizeof(uint64_t));
+        if (h >= prev_checkpoint_height)
+          break;
+        result = mdb_cursor_del(cur, 0);
+        if (result) break;
+        result = mdb_cursor_get(cur, &k, &v, MDB_GET_CURRENT);
+        if (result == MDB_NOTFOUND) break;
+      }
+      mdb_cursor_close(cur);
+    }
+  }
+
+  LOG_PRINT_L2("Pruned " << pruned_count << " intermediate layer entries below prev checkpoint " << prev_checkpoint_height);
 }
 
 // ─── Output Metadata Pruning ──────────────────────────────────────────────────

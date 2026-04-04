@@ -225,6 +225,33 @@ A mismatch rejects the block.
 The `block_header_response` RPC response includes `curve_tree_root` as a
 hex string.
 
+### `get_curve_tree_path` JSON-RPC
+
+The `get_curve_tree_path` endpoint returns Merkle authentication paths
+for one or more outputs. The wallet uses these paths to construct FCMP++
+proofs.
+
+**Request:** `{ "output_indices": [uint64, ...] }`
+
+**Response:** `{ "reference_block": hex, "tree_depth": uint8, "paths": [...] }`
+
+Each `path_entry` contains a hex-encoded `path_blob` with the following
+binary layout:
+
+```text
+Layer 0 (leaf layer):
+  position[2]           -- LE uint16, leaf index within the chunk
+  leaf_scalars[N*128]   -- all leaves in the chunk (N <= 38), 128 bytes each
+
+Layer 1..depth-1 (internal layers):
+  position[2]           -- LE uint16, child index within the parent chunk
+  sibling_hashes[M*32]  -- all children in the parent chunk (M <= chunk_width)
+```
+
+Chunk widths: 38 for Selene layers (even), 18 for Helios layers (odd).
+The verifier identifies the proven element by its position; all other
+entries in the chunk are authentication siblings.
+
 ---
 
 ## 6. Per-Input Signed Payload Layout
@@ -578,10 +605,15 @@ than replaying the entire chain.
 
 ### Intermediate Layer Pruning
 
-`prune_curve_tree_intermediate_layers(checkpoint_height)` removes
-recomputable internal hash layers between checkpoints. Only leaves and the
-root layer are preserved, reducing storage overhead. The pruned layers can
-be recomputed on demand from the leaf data.
+`prune_curve_tree_intermediate_layers(checkpoint_height)` selectively
+removes intermediate layer entries (layers 1 through depth-2) whose chunk
+indices fall below the boundary implied by the previous checkpoint's
+`leaf_count`. Only chunks that are fully "sealed" by the previous
+checkpoint are deleted -- the current live layers, the leaf layer (layer
+0), and the root layer are always preserved. Old checkpoint records
+(except the two most recent) are garbage-collected. Pruning is
+automatically triggered after each `save_curve_tree_checkpoint` call in
+`add_block`. Pruned layers can be recomputed on demand from the leaf data.
 
 ### Transaction Data Pruning
 
@@ -745,7 +777,7 @@ after their lock period expires.
 | PQC key rederivation from stored secret | **Done** | `wallet2.cpp` |
 | Restore-from-seed PQC rederivation | **Done** | `wallet2.cpp` |
 | `prune_tx_data` skeleton | **Skeleton** | `db_lmdb.cpp` |
-| `get_curve_tree_path` RPC | **Stub** | `core_rpc_server.cpp` |
+| `get_curve_tree_path` RPC | **Done** | `core_rpc_server.cpp` |
 | CI: Rust workspace + FCMP crate build | **Done** | `.github/workflows/build.yml` |
 | CI: Determinism check + Bech32m tests | **Done** | `.github/workflows/build.yml` |
 | Hardware device FCMP++ stubs | **Done** | `device.hpp`, `device_default.cpp`, `device_ledger.cpp` |

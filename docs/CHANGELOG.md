@@ -28,8 +28,13 @@
     y-normalization, FCMP++ proof via Rust FFI, PQC signature verification,
     BP+ range proofs. Mempool verification caching (`fcmp_verification_hash`
     in `txpool_tx_meta_t`). Staked output curve-tree leaves.
+  - **Curve tree database (Phase 2):** Full `get_curve_tree_path` RPC
+    implementation assembling real Merkle paths (leaf scalars + per-layer
+    sibling hashes with position encoding). Selective pruning of
+    intermediate tree layers between checkpoints, wired into `add_block`
+    after `save_curve_tree_checkpoint`. Old checkpoint garbage collection.
   - **Wallet integration (Phase 5):** `genRctFcmpPlusPlus()` proof
-    construction. `get_curve_tree_path` RPC stub. Tree-path precomputation
+    construction. `get_curve_tree_path` RPC. Tree-path precomputation
     and incremental update in wallet refresh loop. PQC key rederivation from
     stored shared secret. Restore-from-seed PQC rederivation.
   - **Infrastructure (Phase 6):** Hardware device FCMP++ stubs. CI pipeline
@@ -66,6 +71,18 @@
 
 ### 🐛 Fixed
 
+- **Curve tree pop_block over-trim:** `pop_block` previously counted all
+  `tx.vout` entries when computing how many leaves to trim, but `add_block`
+  skips outputs that fail type checks (unknown target types), locked staked
+  outputs, and outputs whose FFI leaf construction fails. The trim count now
+  mirrors the same filtering logic used in the grow path, preventing tree
+  desynchronization during reorgs.
+- **Curve tree pruning correctness:** `prune_curve_tree_intermediate_layers`
+  was deleting all intermediate layer entries instead of selectively pruning
+  only chunks fully below the previous checkpoint boundary. Fixed to compute
+  the chunk boundary from the previous checkpoint's `leaf_count` and only
+  remove sealed entries. Also added garbage collection of stale checkpoint
+  records (only the two most recent are kept).
 - **LMDB output metadata: removed undefined behavior in cursor macros.**
   - `store_output_metadata` now uses `mdb_put` directly with `m_write_txn`
     instead of the `CURSOR()` macro which required `m_cursors` to be in

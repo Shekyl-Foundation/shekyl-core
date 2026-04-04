@@ -367,6 +367,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     if (prev_height > 0 && (prev_height % FCMP_CURVE_TREE_CHECKPOINT_INTERVAL == 0))
     {
       save_curve_tree_checkpoint(prev_height);
+      prune_curve_tree_intermediate_layers(prev_height);
     }
   }
 
@@ -395,18 +396,47 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   remove_block();
 
   uint64_t curve_tree_outputs_to_remove = 0;
+  const uint64_t block_height = height();
+  auto count_tree_outputs = [&](const transaction& tx, bool is_miner) {
+    for (uint64_t i = 0; i < tx.vout.size(); ++i)
+    {
+      const auto& vout = tx.vout[i];
+      if (std::holds_alternative<txout_to_tagged_key>(vout.target))
+        { /* eligible */ }
+      else if (std::holds_alternative<txout_to_key>(vout.target))
+        { /* eligible */ }
+      else if (std::holds_alternative<txout_to_staked_key>(vout.target))
+      {
+        const auto& staked = std::get<txout_to_staked_key>(vout.target);
+        if (staked.lock_until > block_height)
+          continue;
+      }
+      else
+        continue;
+
+      if (is_miner && tx.version == 2)
+        { /* miner coinbase -- always has valid commitment */ }
+      else if (tx.version > 1 && i < tx.rct_signatures.outPk.size())
+        { /* regular tx -- has outPk commitment */ }
+      else
+        continue;
+
+      ++curve_tree_outputs_to_remove;
+    }
+  };
+
   for (const auto& h : boost::adaptors::reverse(blk.tx_hashes))
   {
     cryptonote::transaction tx;
     if (!get_tx(h, tx) && !get_pruned_tx(h, tx))
       throw DB_ERROR("Failed to get pruned or unpruned transaction from the db");
     if (blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
-      curve_tree_outputs_to_remove += tx.vout.size();
+      count_tree_outputs(tx, false);
     txs.push_back(std::move(tx));
     remove_transaction(h);
   }
   if (blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
-    curve_tree_outputs_to_remove += blk.miner_tx.vout.size();
+    count_tree_outputs(blk.miner_tx, true);
   remove_transaction(get_transaction_hash(blk.miner_tx));
 
   if (curve_tree_outputs_to_remove > 0)
