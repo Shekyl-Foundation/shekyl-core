@@ -65,16 +65,6 @@ namespace hw {
 
 namespace rct {
 
-    clsag CLSAG_Gen(const key &message, const keyV & P, const key & p, const keyV & C, const key & z, const keyV & C_nonzero, const key & C_offset, const unsigned int l, hw::device &hwdev);
-    clsag CLSAG_Gen(const key &message, const keyV & P, const key & p, const keyV & C, const key & z, const keyV & C_nonzero, const key & C_offset, const unsigned int l);
-    clsag proveRctCLSAGSimple(const key &, const ctkeyV &, const ctkey &, const key &, const key &, unsigned int, hw::device &);
-    bool verRctCLSAGSimple(const key &, const clsag &, const ctkeyV &, const key &);
-
-    void getKeyFromBlockchain(ctkey & a, size_t reference_index);
-
-    rctSig genRctSimple(const key & message, const ctkeyV & inSk, const ctkeyV & inPk, const keyV & destinations, const std::vector<xmr_amount> & inamounts, const std::vector<xmr_amount> & outamounts, const keyV &amount_keys, xmr_amount txnFee, unsigned int mixin, const RCTConfig &rct_config, hw::device &hwdev);
-    rctSig genRctSimple(const key & message, const ctkeyV & inSk, const keyV & destinations, const std::vector<xmr_amount> & inamounts, const std::vector<xmr_amount> & outamounts, xmr_amount txnFee, const ctkeyM & mixRing, const keyV &amount_keys, const std::vector<unsigned int> & index, ctkeyV &outSk, const RCTConfig &rct_config, hw::device &hwdev);
-
     // FCMP++ transaction construction (replaces ring signatures with full-chain membership proof)
     rctSig genRctFcmpPlusPlus(const key &message, const ctkeyV &inSk, const ctkeyV &inPk,
                                const keyV &destinations, const std::vector<xmr_amount> &inamounts,

@@ -1392,8 +1392,6 @@ namespace cryptonote
       {
         res.status = "Failed";
         std::string reason = "";
-        if ((res.low_mixin = tvc.m_low_mixin))
-          add_reason(reason, "bad ring size");
         if ((res.double_spend = tvc.m_double_spend))
           add_reason(reason, "double spend");
         if ((res.invalid_input = tvc.m_invalid_input))

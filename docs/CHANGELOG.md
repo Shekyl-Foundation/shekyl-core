@@ -2,6 +2,106 @@
 
 ## Unreleased
 
+### 🗑️ Removed
+
+- **Legacy RCT and mixin references stripped from wallet layer.** Completed
+  the wallet-side refactor removing all references to legacy ring sizes,
+  `adjust_mixin`, `default_mixin`, `m_default_mixin`, `RCTConfig`, and
+  mixin-count parameters:
+  - `wallet2.h`: Removed `estimate_fee` mixin/bulletproof/clsag params,
+    `adjust_mixin()`, `default_mixin()` getter/setter, `m_default_mixin`
+    member, `rct_config` from `pending_tx` and `transfer_selected_rct`.
+  - `wallet2.cpp`: Removed mixin from `estimate_rct_tx_size`,
+    `estimate_tx_size`, `estimate_tx_weight`, `estimate_fee` signatures
+    and all call sites. Removed `adjust_mixin()` definition, JSON
+    serialization of `default_mixin`, constructor initialization. Removed
+    `const bool clsag/bulletproof/bulletproof_plus = true` patterns.
+  - `wallet_errors.h`: Removed `mixin_count` field from
+    `not_enough_outs_to_mix` error struct.
+  - `wallet2_ffi.cpp`: Replaced `adjust_mixin` calls with constant `0`.
+  - `wallet_rpc_server.cpp`: Replaced `adjust_mixin` calls with constant `0`.
+  - `wallet2_api.h`, `wallet.h`, `wallet.cpp`: Removed `mixin_count`
+    parameter from `createTransaction` and `createTransactionMultDest`.
+  - `unsigned_transaction.cpp`: Simplified `mixin()` and `minMixinCount()`
+    to always return 0 (FCMP++ has no explicit mixin).
+  - `simplewallet.cpp`: Removed ring-size parsing, `adjust_mixin` calls,
+    and `default_mixin` display. All fake_outs_count set to 0.
+- **Legacy RCT references stripped from all src/ files.** Removed all
+  remaining references to CLSAG, legacy RCT types, `RCTConfig`, `mixRing`,
+  and `low_mixin` from device drivers, Trezor protocol, RPC handlers,
+  blockchain verification, transaction utilities, wallet, and serialization:
+  - `device_ledger.cpp`: Removed `INS_CLSAG` define, legacy type branches
+    in `mlsag_prehash`, replaced `clsag_prepare`/`clsag_hash`/`clsag_sign`
+    with FCMP++ TODO stubs.
+  - `protocol.cpp`/`protocol.hpp` (Trezor): Removed `rct::Bulletproof`
+    variant, `is_simple()`/`is_req_bulletproof()`/`is_bulletproof()`/
+    `is_clsag()` helpers, `mixRing` resize, CLSAG deserialization in
+    `step_final_ack`. Added `is_fcmp_pp()` helper.
+  - `core_rpc_server.cpp`/`core_rpc_server_commands_defs.h`: Removed
+    `low_mixin` field and its assignment from send_raw_tx response.
+  - `daemon_handler.cpp`: Removed `m_low_mixin` error branch.
+  - `verification_context.h`: Removed `m_low_mixin` from
+    `tx_verification_context`.
+  - `blockchain.cpp`: Replaced legacy mixin-checking branch with a reject
+    gate for non-FCMP++ transactions (Shekyl only supports FCMP++).
+  - `cryptonote_tx_utils.h`/`.cpp`: Removed `rct::RCTConfig` parameter
+    from `construct_tx_with_tx_key` and `construct_tx_and_get_tx_key`.
+    Replaced `genRctSimple` call with FCMP++ proof generation stub.
+    Removed `mixRing` construction.
+  - `cryptonote_format_utils.cpp`: Removed `is_rct_bulletproof`/
+    `is_rct_clsag` calls, simplified BP+ weight calculations.
+  - `cryptonote_boost_serialization.h`: Removed serialization functions
+    for `rct::rangeSig`, `rct::Bulletproof`, `rct::mgSig`, `rct::clsag`,
+    `rct::RCTConfig`, `rct::boroSig`. Simplified `rctSigBase` and
+    `rctSigPrunable` serialization to only handle FCMP++.
+  - `tx_verification_utils.h`/`.cpp`: Removed `mix_ring` parameter from
+    `ver_rct_non_semantics_simple_cached`. Removed `expand_tx_and_ver_rct_non_sem`,
+    `calc_tx_mixring_hash`, and `is_canonical_bulletproof_layout`.
+  - `json_object.h`/`.cpp`: Removed JSON serialization for `rct::rangeSig`,
+    `rct::Bulletproof`, `rct::boroSig`, `rct::mgSig`, `rct::clsag`.
+    Removed legacy prunable fields from `rctSig` JSON output.
+  - `wallet2.h`: Removed `rct_config` field from `tx_construction_data`
+    serialization and the version-gated `RangeProofPaddedBulletproof`
+    defaults in Boost serialization.
+  - `wallet2.cpp`: Fixed `construct_tx_and_get_tx_key` call site that
+    still passed `{}` where the removed `rct_config` parameter was.
+  - `bulletproofs.h`/`.cc`: Gutted non-plus Bulletproof PROVE/VERIFY
+    functions — the `rct::Bulletproof` struct was already removed from
+    `rctTypes.h`, making these 1000+ lines of dead code.
+- **Legacy RCT types stripped from core.** Removed `RCTTypeFull` (1),
+  `RCTTypeSimple` (2), `RCTTypeBulletproof` (3), `RCTTypeBulletproof2` (4),
+  `RCTTypeCLSAG` (5), and `RCTTypeBulletproofPlus` (6) from the enum.
+  Only `RCTTypeNull` (0) and `RCTTypeFcmpPlusPlusPqc` (7) remain.
+- Deleted structs: `mgSig`, `clsag`, `rangeSig`, `Bulletproof` (non-plus),
+  `RangeProofType` enum, and `RCTConfig`.
+- Removed `mixRing` member from `rctSigBase` and `mixin` parameter from
+  `serialize_rctsig_prunable`.
+- Removed from `rctSigPrunable`: `rangeSigs`, `bulletproofs` (non-plus),
+  `MGs`, `CLSAGs` vectors and their serialization blocks.
+- Removed functions: `CLSAG_Gen`, `proveRctCLSAGSimple`,
+  `verRctCLSAGSimple`, `genRctSimple` (both overloads),
+  `populateFromBlockchainSimple`, `getKeyFromBlockchain`,
+  `is_rct_simple`, `is_rct_bulletproof`, `is_rct_borromean`, `is_rct_clsag`,
+  `proveRangeBulletproof`, `verBulletproof`, `make_dummy_bulletproof`,
+  `make_dummy_clsag`.
+- Removed `HASH_KEY_CLSAG_ROUND`, `HASH_KEY_CLSAG_AGG_0`,
+  `HASH_KEY_CLSAG_AGG_1`, and `HASH_KEY_TXHASH_AND_MIXRING` from
+  `cryptonote_config.h`.
+- Removed VARIANT_TAG entries for `mgSig`, `rangeSig`, `Bulletproof`,
+  and `clsag`.
+- Simplified `get_pre_mlsag_hash` to only handle `RCTTypeFcmpPlusPlusPqc`.
+- Simplified `verRctSemanticsSimple` and `verRctNonSemanticsSimple` to
+  only accept FCMP++ transactions (no CLSAG/ring verification path).
+
+### 🔄 Changed
+
+- **FCMP++ Phase 3: Per-input PQC authorization vector.** Replaced
+  `std::optional<pqc_authentication> pqc_auth` with
+  `std::vector<pqc_authentication> pqc_auths` on `cryptonote::transaction`
+  (one `pqc_authentication` per input). Updated binary, Boost, and JSON
+  serialization, transaction hash (`cn_fast_hash` of serialized
+  `pqc_auths`), per-input PQC verification, and wallet/RPC signing paths.
+
 ### ✨ Added
 
 - **FCMP++ (Full-Chain Membership Proofs): complete implementation across
@@ -44,6 +144,16 @@
     checkpoints). Checkpoint every 10,000 blocks for fast-sync resumption.
 
   See `docs/FCMP_PLUS_PLUS.md` for the full specification.
+
+- **FCMP++ Phase 3: KEM ciphertext `tx_extra` and coinbase self-encapsulation.**
+  - `tx_extra_pqc_kem_ciphertext` with tag `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`
+    (`0x06`): payload `blob` is the concatenation of N ML-KEM-768 ciphertexts
+    (1088 bytes each), one per output in order.
+  - **Coinbase:** When the miner address has a PQC key and the hard-fork
+    version is at least `HF_VERSION_FCMP_PLUS_PLUS_PQC`, `construct_miner_tx`
+    performs KEM self-encapsulation to the miner’s own address per coinbase
+    output (same tag and derivation semantics as normal transfers), then
+    wipes the shared secret after use.
 
 - **FCMP++ Phase 5e: Wallet precomputation of curve tree paths.**
   - Added `fcmp_precomputed_path` struct to `wallet2.h` caching per-output

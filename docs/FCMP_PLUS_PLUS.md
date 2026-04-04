@@ -1,6 +1,6 @@
 # FCMP++ Full-Chain Membership Proofs — Specification
 
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-03
 >
 > **Parent document:** `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
@@ -171,26 +171,56 @@ TransactionV3 {
     curve_trees_tree_depth: u8      // tree depth at referenceBlock
     fcmp_pp_proof: bytes            // opaque FCMP++ proof blob
   }
-  pqc_auth: PqcAuthentication       // hybrid Ed25519 + ML-DSA-65
+  pqc_auths: [PqcAuthentication]    // one per input; hybrid Ed25519 + ML-DSA-65
 }
 ```
 
-Key differences from the previous CLSAG-based format:
+**Only two RCT type values exist.** The `rctTypes.h` enum contains
+`RCTTypeNull = 0` (coinbase only) and `RCTTypeFcmpPlusPlusPqc = 7` (all
+non-coinbase spends). Legacy Monero types (`RCTTypeFull` through
+`RCTTypeBulletproofPlus`) are not defined; associated structs (`mgSig`,
+`clsag`, `rangeSig`, non-plus `Bulletproof`, `RCTConfig`, etc.) and ring /
+CLSAG signing and verification code have been removed from the codebase.
 
-| Field | CLSAG format | FCMP++ format |
-|-------|-------------|---------------|
-| Ring members | `key_offsets` per input | Empty (no decoys) |
-| Signature | CLSAG per input | `fcmp_pp_proof` (single blob for all inputs) |
-| Tree anchor | None | `referenceBlock` (block hash) |
-| Tree depth | None | `curve_trees_tree_depth` |
-| PQC auth | Same | Same |
-| Range proofs | BulletproofPlus | BulletproofPlus (unchanged) |
+The `rctSigBase` struct has no `mixRing` member. `rctSigPrunable` holds only
+`bulletproofs_plus`, `pseudoOuts`, `curve_trees_tree_depth`, and
+`fcmp_pp_proof`. The `serialize_rctsig_prunable` API has no `mixin`
+parameter.
+
+### `tx_extra`: ML-KEM ciphertext tag (`0x06`)
+
+Outputs carry hybrid KEM material for per-output PQC key derivation. The field
+`tx_extra_pqc_kem_ciphertext` is tagged `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`
+(`0x06` in `tx_extra.h`). The payload is a single `blob` whose length is
+**N × 1088** bytes: **N** concatenated ML-KEM-768 ciphertexts (FIPS 203),
+one per transaction output in **vout order** (same order as outputs are
+listed in the prefix). Implementation may strip an X25519-specific header
+from the FFI-produced buffer before appending the 1088-byte ML-KEM component.
+
+### Coinbase KEM self-encapsulation
+
+Coinbase transactions do not carry `pqc_auths` (no real inputs to sign).
+Coinbase outputs still need a distinct per-output `H(pqc_pk)` in the curve
+tree. When `hard_fork_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC` and the miner
+address includes a PQC encapsulation key, `construct_miner_tx` performs the same
+hybrid KEM encapsulation **to the miner’s own address** for each coinbase
+output as a transfer would: one 1088-byte ML-KEM ciphertext per output in the
+`0x06` blob, standard HKDF per-output derivation, shared secret wiped after
+use. This prevents all coinbase outputs to the same miner from sharing an
+identical `H(pqc_pk)` pattern (which would link rewards). Spending a matured
+coinbase then follows the normal recipient path (decapsulate from `tx_extra`,
+rederive per-output keys, sign with `pqc_auths` on the spend transaction).
 
 ### Transaction Hash Computation
 
 ```text
-tx_hash = cn_fast_hash(prefix_hash || base_rct_hash || pqc_auth_hash || prunable_hash)
+tx_hash = cn_fast_hash(prefix_hash || base_rct_hash || pqc_auths_hash || prunable_hash)
 ```
+
+`pqc_auths_hash` is `cn_fast_hash` of the canonical serialization of the full
+`pqc_auths` vector (see `cryptonote_format_utils.cpp`). Coinbase transactions
+omit PQC authorization fields; non-coinbase FCMP++ transactions must have
+`pqc_auths.size() == vin.size()`.
 
 The `prunable_hash` covers `fcmp_pp_proof`, `curve_trees_tree_depth`,
 `pseudoOuts`, and `BulletproofPlus` range proofs.
@@ -256,7 +286,7 @@ entries in the chunk are authentication siblings.
 
 ## 6. Per-Input Signed Payload Layout
 
-Each `pqc_auth[i]` signs a payload that commits to the full transaction
+Each `pqc_auths[i]` signs a payload that commits to the full transaction
 state:
 
 ```text
@@ -353,7 +383,7 @@ For each input `i` in `tx.vin`:
 proof       = rv.p.fcmp_pp_proof
 key_images  = [ tx.vin[i].k_image for i in 0..num_inputs ]
 pseudo_outs = rv.p.pseudoOuts
-pqc_hashes  = [ shekyl_fcmp_pqc_leaf_hash(extract_ml_dsa_pk(pqc_auth[i]))
+pqc_hashes  = [ shekyl_fcmp_pqc_leaf_hash(extract_ml_dsa_pk(pqc_auths[i]))
                 for i in 0..num_inputs ]
 tree_root   = (from Step 2a)
 tree_depth  = rv.p.curve_trees_tree_depth
@@ -371,20 +401,20 @@ result = shekyl_fcmp_verify(
 
 ```text
 for i in 0..num_inputs:
-    ml_dsa_pk = extract_ml_dsa_component(pqc_auth[i].hybrid_public_key)
+    ml_dsa_pk = extract_ml_dsa_component(pqc_auths[i].hybrid_public_key)
     computed_hash = shekyl_fcmp_pqc_leaf_hash(ml_dsa_pk)
     assert computed_hash == pqc_hashes[i]
 ```
 
 Defense-in-depth check. May be omitted if pqc_hashes are computed directly
-from pqc_auth in the same code path.
+from `pqc_auths` in the same code path.
 
 ### Step 6: Per-Input PQC Signature Verification
 
 ```text
-6a. pqc_auth[i].auth_version == 1
-6b. pqc_auth[i].scheme_id in {1, 2}   (single-signer or multisig)
-6c. pqc_auth[i].flags == 0
+6a. pqc_auths[i].auth_version == 1
+6b. pqc_auths[i].scheme_id in {1, 2}   (single-signer or multisig)
+6c. pqc_auths[i].flags == 0
 6d. Compute signed_payload_i
 6e. shekyl_pqc_verify(scheme_id, hybrid_public_key, hybrid_signature,
                        signed_payload_i) == true
@@ -511,8 +541,10 @@ The sender performs a hybrid key encapsulation:
                    )
 ```
 
-The ML-KEM-768 ciphertext is stored in `tx_extra` with tag
-`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` (0x06).
+The ML-KEM-768 ciphertexts are stored in `tx_extra` as
+`tx_extra_pqc_kem_ciphertext`: tag `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` (`0x06`),
+field `blob` = concatenation of **N** raw 1088-byte ML-KEM-768 ciphertexts
+(N = number of outputs), in vout order.
 
 ### Per-Output Keypair Derivation
 
@@ -637,7 +669,7 @@ stripe-based pruning and the output-metadata pruning.
 | FCMP++ proof | ~2.5 KB | ~4.5 KB |
 | Pseudo outputs | 32 B | 64 B |
 | BP+ range proofs | — | ~1.5 KB |
-| `pqc_auth` (single-signer) | ~5.3 KB | ~10.6 KB |
+| `pqc_auths[i]` (single-signer, per input) | ~5.3 KB | ~10.6 KB |
 | `ecdhInfo` + `outPk` | — | ~256 B |
 | Prefix (vin, vout, extra) | — | ~0.5 KB |
 | **Total typical** | | **~17-18 KB** |
@@ -739,7 +771,7 @@ after their lock period expires.
 | key_offsets non-empty | Ring members present in FCMP++ tx | `tvc.m_verifivation_failed` |
 | key image not y-normalized | Sign bit set on key image | `tvc.m_verifivation_failed` |
 | FCMP++ proof invalid | `shekyl_fcmp_verify` returns false | `tvc.m_verifivation_failed` |
-| pqc_auth count mismatch | `pqc_auths.size() != vin.size()` | `tvc.m_verifivation_failed` |
+| `pqc_auths` count mismatch | `pqc_auths.size() != vin.size()` | `tvc.m_verifivation_failed` |
 | PQC signature invalid | `shekyl_pqc_verify` returns false | `tvc.m_verifivation_failed` |
 | Key image double-spend | Key image already in DB | `tvc.m_double_spend` |
 
@@ -781,12 +813,19 @@ after their lock period expires.
 | CI: Rust workspace + FCMP crate build | **Done** | `.github/workflows/build.yml` |
 | CI: Determinism check + Bech32m tests | **Done** | `.github/workflows/build.yml` |
 | Hardware device FCMP++ stubs | **Done** | `device.hpp`, `device_default.cpp`, `device_ledger.cpp` |
+| Trezor protocol legacy RCT removal | **Done** | `protocol.cpp`, `protocol.hpp` |
+| Legacy RCT stripping (types 1-6, all structs, all src/) | **Done** | `rctTypes.h/cpp`, `rctSigs.h/cpp`, all consumers |
+| Non-plus Bulletproof code removal | **Done** | `bulletproofs.h`, `bulletproofs.cc` |
+| `RCTConfig` parameter removal from tx construction | **Done** | `cryptonote_tx_utils.h/cpp`, `wallet2.h/cpp` |
+| RPC `low_mixin` field removal | **Done** | `core_rpc_server.cpp`, `core_rpc_server_commands_defs.h` |
 | Staked output curve-tree leaves | **Done** | `blockchain_db.cpp` |
 | Deferred staked-output insertion | **TODO** | `pending_staked_leaves` DB table |
-| Per-input `pqc_auths` field | **TODO** | `cryptonote_basic.h` |
-| Per-input PQC signature verification | **TODO** | `tx_pqc_verify.cpp` |
-| Wallet transfer flow FCMP++ integration | **TODO** | `wallet2.cpp` |
-| Fee estimation for FCMP++ proof size | **TODO** | `wallet2.cpp` |
+| Per-input `pqc_auths` field | **Done** | `cryptonote_basic.h` |
+| Per-input PQC signature verification | **Done** | `tx_pqc_verify.cpp` |
+| `tx_extra` KEM blob tag `0x06` (N × 1088 bytes) | **Done** | `tx_extra.h`, `cryptonote_format_utils.cpp` |
+| Coinbase KEM self-encapsulation | **Done** | `cryptonote_tx_utils.cpp` (`construct_miner_tx`) |
+| Wallet transfer flow FCMP++ integration | **Done** | `wallet2.cpp` |
+| Fee estimation for FCMP++ proof size | **Done** | `wallet2.cpp` |
 
 ---
 

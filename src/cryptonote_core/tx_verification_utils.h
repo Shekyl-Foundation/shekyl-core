@@ -65,21 +65,15 @@ using rct_ver_cache_t = ::tools::data_cache<::crypto::hash, RCT_VER_CACHE_SIZE>;
  * modifications to it since the last time its hash was fetched without properly invalidating the
  * hashes.
  *
- * rct_type_to_cache can be any RCT version value as long as rct::verRctNonSemanticsSimple works for
- * this RCT version, but for most applications, it doesn't make sense to not make this version
- * the "current" RCT version (i.e. the version that transactions in the mempool are).
- *
  * @param tx transaction which contains RCT signature to verify
- * @param mix_ring mixring referenced by this tx. THIS DATA MUST BE PREVIOUSLY VALIDATED
- * @param cache saves tx+mixring hashes used to cache calls
- * @param rct_type_to_cache Only RCT sigs with version (e.g. RCTTypeBulletproofPlus) will be cached
+ * @param cache saves tx hashes used to cache calls
+ * @param rct_type_to_cache Only RCT sigs with this version will be cached
  * @return true when verRctNonSemanticsSimple() w/ expanded tx.rct_signatures would return true
  * @return false when verRctNonSemanticsSimple() w/ expanded tx.rct_signatures would return false
  */
 bool ver_rct_non_semantics_simple_cached
 (
     transaction& tx,
-    const rct::ctkeyM& mix_ring,
     rct_ver_cache_t& cache,
     std::uint8_t rct_type_to_cache
 );

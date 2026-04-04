@@ -3153,10 +3153,8 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     }
   }
 
-  // Only RCTTypeNull (coinbase/stake-claim), RCTTypeCLSAG, and RCTTypeBulletproofPlus are allowed
   if (tx.rct_signatures.type != rct::RCTTypeNull &&
-      tx.rct_signatures.type != rct::RCTTypeCLSAG &&
-      tx.rct_signatures.type != rct::RCTTypeBulletproofPlus)
+      tx.rct_signatures.type != rct::RCTTypeFcmpPlusPlusPqc)
   {
     MERROR_VER("Disallowed rct type " << (unsigned)tx.rct_signatures.type);
     tvc.m_invalid_output = true;
@@ -3236,33 +3234,12 @@ bool Blockchain::expand_transaction_2(transaction &tx, const crypto::hash &tx_pr
 
   rct::rctSig &rv = tx.rct_signatures;
 
-  // message - hash of the transaction prefix
   rv.message = rct::hash2rct(tx_prefix_hash);
 
-  // mixRing expansion
-  CHECK_AND_ASSERT_MES(rv.type == rct::RCTTypeCLSAG || rv.type == rct::RCTTypeBulletproofPlus,
+  CHECK_AND_ASSERT_MES(rv.type == rct::RCTTypeFcmpPlusPlusPqc,
     false, "Unsupported rct tx type: " + boost::lexical_cast<std::string>(rv.type));
-  CHECK_AND_ASSERT_MES(!pubkeys.empty() && !pubkeys[0].empty(), false, "empty pubkeys");
-  rv.mixRing.resize(pubkeys.size());
-  for (size_t n = 0; n < pubkeys.size(); ++n)
-  {
-    rv.mixRing[n].clear();
-    for (size_t m = 0; m < pubkeys[n].size(); ++m)
-    {
-      rv.mixRing[n].push_back(pubkeys[n][m]);
-    }
-  }
 
-  // II - key image expansion
-  if (!tx.pruned)
-  {
-    CHECK_AND_ASSERT_MES(rv.p.CLSAGs.size() == tx.vin.size(), false, "Bad CLSAGs size");
-    for (size_t n = 0; n < tx.vin.size(); ++n)
-    {
-      rv.p.CLSAGs[n].I = rct::ki2rct(std::get<txin_to_key>(tx.vin[n]).k_image);
-    }
-  }
-
+  // FCMP++ uses full-chain membership proofs: no mixRing expansion, no CLSAG key images
   // outPk was already done by handle_incoming_tx
 
   return true;
@@ -3300,46 +3277,17 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   {
     if (!is_fcmp_pp)
     {
-      size_t min_actual_mixin = std::numeric_limits<size_t>::max();
-      size_t max_actual_mixin = 0;
-      const size_t min_mixin = 15;
-      for (const auto& txin : tx.vin)
-      {
-        if (std::holds_alternative<txin_to_key>(txin))
-        {
-          const txin_to_key& in_to_key = std::get<txin_to_key>(txin);
-          size_t ring_mixin = in_to_key.key_offsets.size() - 1;
-          if (ring_mixin < min_actual_mixin)
-            min_actual_mixin = ring_mixin;
-          if (ring_mixin > max_actual_mixin)
-            max_actual_mixin = ring_mixin;
-        }
-      }
-      MDEBUG("Mixin: " << min_actual_mixin << "-" << max_actual_mixin);
-
-      if (min_actual_mixin != max_actual_mixin)
-      {
-        MERROR_VER("Tx " << get_transaction_hash(tx) << " has varying ring size (" << (min_actual_mixin + 1) << "-" << (max_actual_mixin + 1) << "), it should be constant");
-        tvc.m_low_mixin = true;
-        return false;
-      }
-
-      if (min_actual_mixin != min_mixin && min_actual_mixin != 10)
-      {
-        MERROR_VER("Tx " << get_transaction_hash(tx) << " has invalid ring size (" << (min_actual_mixin + 1) << "), it should be " << (min_mixin + 1));
-        tvc.m_low_mixin = true;
-        return false;
-      }
+      MERROR_VER("Tx " << get_transaction_hash(tx) << " is not FCMP++; only FCMP++ transactions are supported");
+      tvc.m_verifivation_failed = true;
+      return false;
     }
-    else
+
+    if (tx.vin.size() > FCMP_MAX_INPUTS_PER_TX)
     {
-      if (tx.vin.size() > FCMP_MAX_INPUTS_PER_TX)
-      {
-        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " has " << tx.vin.size()
-          << " inputs, max is " << FCMP_MAX_INPUTS_PER_TX);
-        tvc.m_verifivation_failed = true;
-        return false;
-      }
+      MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " has " << tx.vin.size()
+        << " inputs, max is " << FCMP_MAX_INPUTS_PER_TX);
+      tvc.m_verifivation_failed = true;
+      return false;
     }
 
     const size_t max_tx_version = 3;
@@ -3475,12 +3423,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         false, "Transaction spends at least one output which is too young");
   }
 
-  // Warn that new RCT types are present, and thus the cache is not being used effectively
-  static constexpr const std::uint8_t RCT_CACHE_TYPE = rct::RCTTypeBulletproofPlus;
-  if (tx.rct_signatures.type > RCT_CACHE_TYPE && !is_fcmp_pp)
-  {
-    MWARNING("RCT cache is not caching new verification results. Please update RCT_CACHE_TYPE!");
-  }
+  static constexpr const std::uint8_t RCT_CACHE_TYPE = rct::RCTTypeFcmpPlusPlusPqc;
 
   {
     const rct::rctSig &rv = tx.rct_signatures;
@@ -3500,16 +3443,6 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         break;
       MERROR_VER("Null rct signature on non-coinbase tx");
       return false;
-    }
-    case rct::RCTTypeCLSAG:
-    case rct::RCTTypeBulletproofPlus:
-    {
-      if (!ver_rct_non_semantics_simple_cached(tx, pubkeys, m_rct_ver_cache, RCT_CACHE_TYPE))
-      {
-        MERROR_VER("Failed to check ringct signatures!");
-        return false;
-      }
-      break;
     }
     case rct::RCTTypeFcmpPlusPlusPqc:
     {
@@ -3598,13 +3531,26 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       for (size_t i = 0; i < num_inputs; ++i)
         memcpy(pseudo_outs_flat.data() + i * 32, rv.p.pseudoOuts[i].bytes, 32);
 
-      // TODO(Phase 4b): Extract H(pqc_pk) from per-input pqc_auths.
-      // Once pqc_auths (per-input) is implemented, compute:
-      //   for each i: shekyl_fcmp_pqc_leaf_hash(ml_dsa_pk_i) → pqc_hashes[i]
-      // For now, allocate zero-filled placeholder. The FFI call will verify
-      // against whatever the prover committed; a mismatch will cause the
-      // proof to fail, which is the correct behavior for incomplete txs.
-      std::vector<uint8_t> pqc_hashes_flat(num_inputs * 32, 0);
+      if (tx.pqc_auths.size() != num_inputs)
+      {
+        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
+          << " pqc_auths count " << tx.pqc_auths.size()
+          << " does not match input count " << num_inputs);
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
+
+      std::vector<uint8_t> pqc_hashes_flat(num_inputs * 32);
+      for (size_t i = 0; i < num_inputs; ++i)
+      {
+        const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
+        if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), pqc_hashes_flat.data() + i * 32))
+        {
+          MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " pqc leaf hash failed for input " << i);
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+      }
 
       const bool proof_ok = shekyl_fcmp_verify(
         rv.p.fcmp_pp_proof.data(),
@@ -3625,11 +3571,6 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         tvc.m_verifivation_failed = true;
         return false;
       }
-
-      // TODO(Phase 4b): Verify pqc_auths.size() == vin.size() and run
-      // per-input PQC signature verification once the per-input pqc_auths
-      // field replaces the single pqc_auth. See docs/FCMP_PLUS_PLUS.md
-      // Steps 5-6 for the full verification sequence.
 
       break;
     }

@@ -383,10 +383,6 @@ namespace rpc
       res.status = Message::STATUS_FAILED;
       res.error_details = "";
 
-      if (tvc.m_low_mixin)
-      {
-        res.error_details = "mixin too low";
-      }
       if (tvc.m_double_spend)
       {
         if (!res.error_details.empty()) res.error_details += " and ";

@@ -266,7 +266,7 @@ namespace cryptonote
   public:
     std::vector<std::vector<crypto::signature> > signatures; //count signatures  always the same as inputs count
     rct::rctSig rct_signatures;
-    std::optional<pqc_authentication> pqc_auth;
+    std::vector<pqc_authentication> pqc_auths; // one per input for FCMP++ txs
 
     // hash cash
     mutable crypto::hash hash;
@@ -355,16 +355,18 @@ namespace cryptonote
         }
         if (version >= 3 && !vin.empty() && !std::holds_alternative<txin_gen>(vin[0]))
         {
-          ar.tag("pqc_auth");
-          pqc_authentication auth_val;
-          if (typename Archive<W>::is_saving())
+          ar.tag("pqc_auths");
+          ar.begin_array();
+          PREPARE_CUSTOM_VECTOR_SERIALIZATION(vin.size(), pqc_auths);
+          if (pqc_auths.size() != vin.size())
+            return false;
+          for (size_t i = 0; i < vin.size(); ++i)
           {
-            if (!pqc_auth) return false;
-            auth_val = *pqc_auth;
+            FIELDS(pqc_auths[i])
+            if (vin.size() - i > 1)
+              ar.delimit_array();
           }
-          if (!::do_serialize(ar, auth_val)) return false;
-          if (!typename Archive<W>::is_saving())
-            pqc_auth = auth_val;
+          ar.end_array();
         }
         if (!vin.empty())
         {
@@ -375,8 +377,7 @@ namespace cryptonote
           {
             ar.tag("rctsig_prunable");
             ar.begin_object();
-            bool r = rct_signatures.p.serialize_rctsig_prunable(ar, rct_signatures.type, vin.size(), vout.size(),
-                vin.size() > 0 && std::holds_alternative<txin_to_key>(vin[0]) ? std::get<txin_to_key>(vin[0]).key_offsets.size() - 1 : 0);
+            bool r = rct_signatures.p.serialize_rctsig_prunable(ar, rct_signatures.type, vin.size(), vout.size());
             if (!r || !ar.good()) return false;
             ar.end_object();
           }
@@ -406,16 +407,18 @@ namespace cryptonote
         }
         if (version >= 3 && !vin.empty() && !std::holds_alternative<txin_gen>(vin[0]))
         {
-          ar.tag("pqc_auth");
-          pqc_authentication auth_val;
-          if (typename Archive<W>::is_saving())
+          ar.tag("pqc_auths");
+          ar.begin_array();
+          PREPARE_CUSTOM_VECTOR_SERIALIZATION(vin.size(), pqc_auths);
+          if (pqc_auths.size() != vin.size())
+            return false;
+          for (size_t i = 0; i < vin.size(); ++i)
           {
-            if (!pqc_auth) return false;
-            auth_val = *pqc_auth;
+            FIELDS(pqc_auths[i])
+            if (vin.size() - i > 1)
+              ar.delimit_array();
           }
-          if (!::do_serialize(ar, auth_val)) return false;
-          if (!typename Archive<W>::is_saving())
-            pqc_auth = auth_val;
+          ar.end_array();
         }
       }
       if (!typename Archive<W>::is_saving())
@@ -434,7 +437,7 @@ namespace cryptonote
     blob_size_valid(false),
     signatures(t.signatures),
     rct_signatures(t.rct_signatures),
-    pqc_auth(t.pqc_auth),
+    pqc_auths(t.pqc_auths),
     pruned(t.pruned),
     unprunable_size(t.unprunable_size.load()),
     prefix_size(t.prefix_size.load())
@@ -465,7 +468,7 @@ namespace cryptonote
     set_blob_size_valid(false);
     signatures = t.signatures;
     rct_signatures = t.rct_signatures;
-    pqc_auth = t.pqc_auth;
+    pqc_auths = t.pqc_auths;
     if (t.is_hash_valid())
     {
       hash = t.hash;
@@ -504,7 +507,7 @@ namespace cryptonote
     transaction_prefix::set_null();
     signatures.clear();
     rct_signatures.type = rct::RCTTypeNull;
-    pqc_auth = std::nullopt;
+    pqc_auths.clear();
     set_hash_valid(false);
     set_prunable_hash_valid(false);
     set_blob_size_valid(false);

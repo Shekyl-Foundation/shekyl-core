@@ -12,14 +12,14 @@
 namespace cryptonote
 {
 
-/// Build the signed payload for v3 PQC verification.
-/// Payload = serialize(prefix) || serialize(rct_signing_body) || serialize(pqc_auth_header).
-/// Returns false if tx is not v3 or missing pqc_auth.
-bool get_transaction_signed_payload(const transaction& tx, std::string& payload_out);
+/// Build the signed payload for v3 PQC verification for input \p input_index.
+/// Payload = serialize(prefix) || serialize(rct_signing_body) || serialize(pqc_auth_header for that input).
+/// Returns false if tx is not v3, index out of range, or missing pqc_auths entry.
+bool get_transaction_signed_payload(const transaction& tx, size_t input_index, std::string& payload_out);
 
 /// Verify the PQC hybrid signature on a v3 transaction.
 /// Returns true if tx is not v3 (skip) or if verification succeeds.
-/// Returns false if v3 tx has invalid or missing pqc_auth, or verification fails.
+/// Returns false if v3 tx has invalid or missing pqc_auths, or verification fails.
 bool verify_transaction_pqc_auth(const transaction& tx);
 
 /// Verify with scheme downgrade protection.

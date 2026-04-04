@@ -25,27 +25,13 @@
 // INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
-// Adapted from Java code by Sarang Noether
 
 #pragma once
 
 #ifndef BULLETPROOFS_H
 #define BULLETPROOFS_H
 
-#include "rctTypes.h"
-
-namespace rct
-{
-
-Bulletproof bulletproof_PROVE(const rct::key &v, const rct::key &gamma);
-Bulletproof bulletproof_PROVE(uint64_t v, const rct::key &gamma);
-Bulletproof bulletproof_PROVE(const rct::keyV &v, const rct::keyV &gamma);
-Bulletproof bulletproof_PROVE(const std::vector<uint64_t> &v, const rct::keyV &gamma);
-bool bulletproof_VERIFY(const Bulletproof &proof);
-bool bulletproof_VERIFY(const std::vector<const Bulletproof*> &proofs);
-bool bulletproof_VERIFY(const std::vector<Bulletproof> &proofs);
-
-}
+// Legacy (non-plus) Bulletproof functions removed.
+// Use bulletproofs_plus.h for BulletproofPlus.
 
 #endif

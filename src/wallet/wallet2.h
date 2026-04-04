@@ -560,7 +560,6 @@ private:
       std::vector<uint8_t> extra;
       uint64_t unlock_time;
       bool use_rct;
-      rct::RCTConfig rct_config;
       bool use_view_tags;
       std::vector<cryptonote::tx_destination_entry> dests; // original setup, does not include change
       uint32_t subaddr_account;   // subaddress account of your wallet to be used in this transfer
@@ -603,7 +602,6 @@ private:
           FIELD_N("use_rct", construction_flags)
         }
 
-        FIELD(rct_config)
         FIELD(dests)
         FIELD(subaddr_account)
         FIELD(subaddr_indices)
@@ -1083,7 +1081,7 @@ private:
       uint64_t fee, const std::vector<uint8_t>& extra, T destination_split_strategy, const tx_dust_policy& dust_policy, cryptonote::transaction& tx, pending_tx &ptx, const bool use_view_tags);
     void transfer_selected_rct(std::vector<cryptonote::tx_destination_entry> dsts, const std::vector<size_t>& selected_transfers, size_t fake_outputs_count,
       std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs, std::unordered_set<crypto::public_key> &valid_public_keys_cache,
-      uint64_t fee, const std::vector<uint8_t>& extra, cryptonote::transaction& tx, pending_tx &ptx, const rct::RCTConfig &rct_config, const bool use_view_tags);
+      uint64_t fee, const std::vector<uint8_t>& extra, cryptonote::transaction& tx, pending_tx &ptx, const bool use_view_tags);
 
     void commit_tx(pending_tx& ptx_vector);
     void commit_tx(std::vector<pending_tx>& ptx_vector);
@@ -1361,8 +1359,6 @@ private:
     void print_ring_members(bool value) { m_print_ring_members = value; }
     bool store_tx_info() const { return m_store_tx_info; }
     void store_tx_info(bool store) { m_store_tx_info = store; }
-    uint32_t default_mixin() const { return m_default_mixin; }
-    void default_mixin(uint32_t m) { m_default_mixin = m; }
     fee_priority get_default_priority() const { return m_default_priority; }
     void set_default_priority(fee_priority p) { m_default_priority = p; }
     bool auto_refresh() const { return m_auto_refresh; }
@@ -1583,15 +1579,13 @@ private:
     std::vector<std::pair<uint64_t, uint64_t>> estimate_backlog(const std::vector<std::pair<double, double>> &fee_levels);
     std::vector<std::pair<uint64_t, uint64_t>> estimate_backlog(uint64_t min_tx_weight, uint64_t max_tx_weight, const std::vector<uint64_t> &fees);
 
-    static uint64_t estimate_fee(bool use_per_byte_fee, bool use_rct, int n_inputs, int mixin, int n_outputs, size_t extra_size, bool bulletproof, bool clsag, bool bulletproof_plus, bool use_view_tags, uint64_t base_fee, uint64_t fee_quantization_mask);
+    static uint64_t estimate_fee(bool use_per_byte_fee, bool use_rct, int n_inputs, int n_outputs, size_t extra_size, bool use_view_tags, uint64_t base_fee, uint64_t fee_quantization_mask);
     uint64_t get_fee_multiplier(fee_priority priority, fee_algorithm fee_algorithm = fee_algorithm::Unset);
     uint64_t get_base_fee(fee_priority priority);
     uint64_t get_base_fee();
     uint64_t get_fee_quantization_mask();
     uint64_t get_min_ring_size();
     uint64_t get_max_ring_size();
-    uint64_t adjust_mixin(uint64_t mixin);
-
     fee_priority adjust_priority(fee_priority priority);
 
     /*
@@ -1914,7 +1908,6 @@ private:
     bool m_always_confirm_transfers;
     bool m_print_ring_members;
     bool m_store_tx_info; /*!< request txkey to be returned in RPC, and store in the wallet cache file */
-    uint32_t m_default_mixin;
     fee_priority m_default_priority;
     RefreshType m_refresh_type;
     bool m_auto_refresh;
@@ -2445,27 +2438,8 @@ namespace boost
       a & x.subaddr_account;
       a & x.subaddr_indices;
       if (ver < 2)
-      {
-        if (!typename Archive::is_saving())
-          x.rct_config = { rct::RangeProofPaddedBulletproof, 0 };
         return;
-      }
       a & x.selected_transfers;
-      if (ver < 3)
-      {
-        if (!typename Archive::is_saving())
-          x.rct_config = { rct::RangeProofPaddedBulletproof, 0 };
-        return;
-      }
-      if (ver < 4)
-      {
-        bool use_bulletproofs = true;
-        a & use_bulletproofs;
-        if (!typename Archive::is_saving())
-          x.rct_config = { rct::RangeProofPaddedBulletproof, 0 };
-        return;
-      }
-      a & x.rct_config;
     }
 
     template <class Archive>

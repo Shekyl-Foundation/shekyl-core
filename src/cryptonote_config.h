@@ -259,13 +259,8 @@ namespace config
   const unsigned char HASH_KEY_RPC_PAYMENT_NONCE = 0x58;
   const unsigned char HASH_KEY_MEMORY = 'k';
   const unsigned char HASH_KEY_TXPROOF_V2[] = "TXPROOF_V2";
-  const unsigned char HASH_KEY_CLSAG_ROUND[] = "CLSAG_round";
-  const unsigned char HASH_KEY_CLSAG_AGG_0[] = "CLSAG_agg_0";
-  const unsigned char HASH_KEY_CLSAG_AGG_1[] = "CLSAG_agg_1";
   const char HASH_KEY_MESSAGE_SIGNING[] = "ShekylMessageSignature";
   const unsigned char HASH_KEY_MM_SLOT = 'm';
-  const constexpr char HASH_KEY_TXHASH_AND_MIXRING[] = "txhash_and_mixring";
-
   // PQC Multisig (scheme_id = 2)
   const uint32_t MAX_MULTISIG_PARTICIPANTS{7};
 

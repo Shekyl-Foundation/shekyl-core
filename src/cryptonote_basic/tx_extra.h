@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "serialization/string.h"
 
 #define TX_EXTRA_PADDING_MAX_COUNT          255
 #define TX_EXTRA_NONCE_MAX_COUNT            255
@@ -198,7 +199,18 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  typedef std::variant<tx_extra_padding, tx_extra_pub_key, tx_extra_nonce, tx_extra_merge_mining_tag, tx_extra_additional_pub_keys, tx_extra_mysterious_minergate, tx_extra_pqc_ownership> tx_extra_field;
+  static constexpr size_t ML_KEM_768_CT_BYTES = 1088;
+
+  struct tx_extra_pqc_kem_ciphertext
+  {
+    std::string blob;
+
+    BEGIN_SERIALIZE()
+      FIELD(blob)
+    END_SERIALIZE()
+  };
+
+  typedef std::variant<tx_extra_padding, tx_extra_pub_key, tx_extra_nonce, tx_extra_merge_mining_tag, tx_extra_additional_pub_keys, tx_extra_mysterious_minergate, tx_extra_pqc_ownership, tx_extra_pqc_kem_ciphertext> tx_extra_field;
 }
 
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_padding, TX_EXTRA_TAG_PADDING);
@@ -208,3 +220,4 @@ VARIANT_TAG(binary_archive, cryptonote::tx_extra_merge_mining_tag, TX_EXTRA_MERG
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_additional_pub_keys, TX_EXTRA_TAG_ADDITIONAL_PUBKEYS);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_mysterious_minergate, TX_EXTRA_MYSTERIOUS_MINERGATE_TAG);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_ownership, TX_EXTRA_TAG_PQC_OWNERSHIP);
+VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_kem_ciphertext, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT);

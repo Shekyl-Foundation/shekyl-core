@@ -92,9 +92,7 @@ namespace cryptonote
 
   uint64_t get_transaction_weight_clawback(const transaction &tx, size_t n_padded_outputs)
   {
-    const rct::rctSig &rv = tx.rct_signatures;
-    const bool plus = rv.type == rct::RCTTypeBulletproofPlus;
-    const uint64_t bp_base = (32 * ((plus ? 6 : 9) + 7 * 2)) / 2; // notional size of a 2 output proof, normalized to 1 proof (ie, divided by 2)
+    const uint64_t bp_base = (32 * (6 + 7 * 2)) / 2;
     const size_t n_outputs = tx.vout.size();
     if (n_padded_outputs <= 2)
       return 0;
@@ -102,7 +100,7 @@ namespace cryptonote
     while ((1u << nlr) < n_padded_outputs)
       ++nlr;
     nlr += 6;
-    const size_t bp_size = 32 * ((plus ? 6 : 9) + 2 * nlr);
+    const size_t bp_size = 32 * (6 + 2 * nlr);
     CHECK_AND_ASSERT_THROW_MES_L1(n_outputs <= BULLETPROOF_MAX_OUTPUTS, "maximum number of outputs is " + std::to_string(BULLETPROOF_MAX_OUTPUTS) + " per transaction");
     CHECK_AND_ASSERT_THROW_MES_L1(bp_base * n_padded_outputs >= bp_size, "Invalid bulletproof clawback: bp_base " + std::to_string(bp_base) + ", n_padded_outputs "
         + std::to_string(n_padded_outputs) + ", bp_size " + std::to_string(bp_size));
@@ -153,9 +151,7 @@ namespace cryptonote
 
       if (!base_only)
       {
-        const bool bulletproof = rct::is_rct_bulletproof(rv.type);
-        const bool bulletproof_plus = rct::is_rct_bulletproof_plus(rv.type);
-        if (bulletproof_plus)
+        if (rct::is_rct_bulletproof_plus(rv.type))
         {
           if (rv.p.bulletproofs_plus.size() != 1)
           {
@@ -178,30 +174,6 @@ namespace cryptonote
           rv.p.bulletproofs_plus[0].V.resize(n_amounts);
           for (size_t i = 0; i < n_amounts; ++i)
             rv.p.bulletproofs_plus[0].V[i] = rct::scalarmultKey(rv.outPk[i].mask, rct::INV_EIGHT);
-        }
-        else if (bulletproof)
-        {
-          if (rv.p.bulletproofs.size() != 1)
-          {
-            LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs size in tx " << get_transaction_hash(tx));
-            return false;
-          }
-          if (rv.p.bulletproofs[0].L.size() < 6)
-          {
-            LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs L size in tx " << get_transaction_hash(tx));
-            return false;
-          }
-          const size_t max_outputs = 1 << (rv.p.bulletproofs[0].L.size() - 6);
-          if (max_outputs < tx.vout.size())
-          {
-            LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs max outputs in tx " << get_transaction_hash(tx));
-            return false;
-          }
-          const size_t n_amounts = tx.vout.size();
-          CHECK_AND_ASSERT_MES(n_amounts == rv.outPk.size(), false, "Internal error filling out V");
-          rv.p.bulletproofs[0].V.resize(n_amounts);
-          for (size_t i = 0; i < n_amounts; ++i)
-            rv.p.bulletproofs[0].V[i] = rct::scalarmultKey(rv.outPk[i].mask, rct::INV_EIGHT);
         }
       }
     }
@@ -404,11 +376,9 @@ namespace cryptonote
     if (tx.version < 2)
       return blob_size;
     const rct::rctSig &rv = tx.rct_signatures;
-    const bool bulletproof = rct::is_rct_bulletproof(rv.type);
-    const bool bulletproof_plus = rct::is_rct_bulletproof_plus(rv.type);
-    if (!bulletproof && !bulletproof_plus)
+    if (!rct::is_rct_bulletproof_plus(rv.type))
       return blob_size;
-    const size_t n_padded_outputs = bulletproof_plus ? rct::n_bulletproof_plus_max_amounts(rv.p.bulletproofs_plus) : rct::n_bulletproof_max_amounts(rv.p.bulletproofs);
+    const size_t n_padded_outputs = rct::n_bulletproof_plus_max_amounts(rv.p.bulletproofs_plus);
     uint64_t bp_clawback = get_transaction_weight_clawback(tx, n_padded_outputs);
     CHECK_AND_ASSERT_THROW_MES_L1(bp_clawback <= std::numeric_limits<uint64_t>::max() - blob_size, "Weight overflow");
     return blob_size + bp_clawback;
@@ -418,10 +388,9 @@ namespace cryptonote
   {
     CHECK_AND_ASSERT_MES(tx.pruned, std::numeric_limits<uint64_t>::max(), "get_pruned_transaction_weight does not support non pruned txes");
     CHECK_AND_ASSERT_MES(tx.version >= 2, std::numeric_limits<uint64_t>::max(), "get_pruned_transaction_weight does not support v1 txes");
-    CHECK_AND_ASSERT_MES(tx.rct_signatures.type == rct::RCTTypeBulletproof2 || tx.rct_signatures.type == rct::RCTTypeCLSAG || tx.rct_signatures.type == rct::RCTTypeBulletproofPlus,
+    CHECK_AND_ASSERT_MES(tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc,
         std::numeric_limits<uint64_t>::max(), "Unsupported rct_signatures type in get_pruned_transaction_weight");
     CHECK_AND_ASSERT_MES(!tx.vin.empty(), std::numeric_limits<uint64_t>::max(), "empty vin");
-    CHECK_AND_ASSERT_MES(std::holds_alternative<cryptonote::txin_to_key>(tx.vin[0]), std::numeric_limits<uint64_t>::max(), "empty vin");
 
     // get pruned data size
     std::ostringstream s;
@@ -432,24 +401,19 @@ namespace cryptonote
     // nbps (technically varint)
     weight += 1;
 
-    // calculate deterministic bulletproofs size (assumes canonical BP format)
+    // calculate deterministic BP+ size (assumes canonical format)
     size_t nrl = 0, n_padded_outputs;
     while ((n_padded_outputs = (1u << nrl)) < tx.vout.size())
       ++nrl;
     nrl += 6;
-    extra = 32 * ((rct::is_rct_bulletproof_plus(tx.rct_signatures.type) ? 6 : 9) + 2 * nrl) + 2;
+    extra = 32 * (6 + 2 * nrl) + 2;
     weight += extra;
 
-    // calculate deterministic CLSAG/MLSAG data size
-    const size_t ring_size = std::get<cryptonote::txin_to_key>(tx.vin[0]).key_offsets.size();
-    if (rct::is_rct_clsag(tx.rct_signatures.type))
-      extra = tx.vin.size() * (ring_size + 2) * 32;
-    else
-      extra = tx.vin.size() * (ring_size * (1 + 1) * 32 + 32 /* cc */);
-    weight += extra;
+    // FCMP++ proof size (serialized as varint length + bytes) -- already in pruned blob
+    // No CLSAG/MLSAG data in FCMP++
 
     // calculate deterministic pseudoOuts size
-    extra =  32 * (tx.vin.size());
+    extra = 32 * (tx.vin.size());
     weight += extra;
 
     // clawback
@@ -605,6 +569,7 @@ namespace cryptonote
     if (!pick<tx_extra_merge_mining_tag>(nar, tx_extra_fields, TX_EXTRA_MERGE_MINING_TAG)) return false;
     if (!pick<tx_extra_mysterious_minergate>(nar, tx_extra_fields, TX_EXTRA_MYSTERIOUS_MINERGATE_TAG)) return false;
     if (!pick<tx_extra_pqc_ownership>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_OWNERSHIP)) return false;
+    if (!pick<tx_extra_pqc_kem_ciphertext>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT)) return false;
     if (!pick<tx_extra_padding>(nar, tx_extra_fields, TX_EXTRA_TAG_PADDING)) return false;
 
     // if not empty, someone added a new type and did not add a case above
@@ -1298,8 +1263,7 @@ namespace cryptonote
       binary_archive<true> ba(ss);
       const size_t inputs = t.vin.size();
       const size_t outputs = t.vout.size();
-      const size_t mixin = t.vin.empty() ? 0 : std::holds_alternative<txin_to_key>(t.vin[0]) ? std::get<txin_to_key>(t.vin[0]).key_offsets.size() - 1 : 0;
-      bool r = tt.rct_signatures.p.serialize_rctsig_prunable(ba, t.rct_signatures.type, inputs, outputs, mixin);
+      bool r = tt.rct_signatures.p.serialize_rctsig_prunable(ba, t.rct_signatures.type, inputs, outputs);
       CHECK_AND_ASSERT_MES(r, false, "Failed to serialize rct signatures prunable");
       cryptonote::get_blob_hash(ss.str(), res);
     }
@@ -1357,15 +1321,15 @@ namespace cryptonote
       prunable_hash = pruned_data_hash;
 
     crypto::hash res;
-    if (has_pqc && t.pqc_auth)
+    if (has_pqc && !t.pqc_auths.empty())
     {
-      // v3: hash(prefix, base_rct, pqc_auth, prunable)
+      // v3: hash(prefix, base_rct, pqc_auths, prunable)
       crypto::hash pqc_auth_hash;
       std::stringstream ss;
       binary_archive<true> ba(ss);
-      pqc_authentication auth_tmp = *t.pqc_auth;
-      bool r = ::do_serialize(ba, auth_tmp);
-      CHECK_AND_ASSERT_THROW_MES(r, "Failed to serialize pqc_auth");
+      std::vector<pqc_authentication> pqc_tmp = t.pqc_auths;
+      bool r = ::do_serialize(ba, pqc_tmp);
+      CHECK_AND_ASSERT_THROW_MES(r, "Failed to serialize pqc_auths");
       cryptonote::get_blob_hash(ss.str(), pqc_auth_hash);
 
       crypto::hash hashes[4] = { prefix_hash, base_rct_hash, pqc_auth_hash, prunable_hash };
@@ -1404,7 +1368,7 @@ namespace cryptonote
 
     CHECK_AND_ASSERT_MES(prefix_size <= unprunable_size && unprunable_size <= blob.size(), false, "Inconsistent transaction prefix, unprunable and blob sizes");
 
-    // base rct (blob from prefix_size to end of rct base; for v3, we must serialize separately since pqc_auth follows)
+    // base rct (blob from prefix_size to end of rct base; for v3, we must serialize separately since pqc_auths follows)
     crypto::hash base_rct_hash;
     {
       transaction &tt = const_cast<transaction&>(t);
@@ -1427,15 +1391,15 @@ namespace cryptonote
       CHECK_AND_ASSERT_MES(calculate_transaction_prunable_hash(t, &blobref, prunable_hash), false, "Failed to get tx prunable hash");
     }
 
-    if (has_pqc && t.pqc_auth)
+    if (has_pqc && !t.pqc_auths.empty())
     {
-      // v3: hash(prefix, base_rct, pqc_auth, prunable)
+      // v3: hash(prefix, base_rct, pqc_auths, prunable)
       crypto::hash pqc_auth_hash;
       std::stringstream ss;
       binary_archive<true> ba(ss);
-      pqc_authentication auth_tmp = *t.pqc_auth;
-      bool r = ::do_serialize(ba, auth_tmp);
-      CHECK_AND_ASSERT_MES(r, false, "Failed to serialize pqc_auth");
+      std::vector<pqc_authentication> pqc_tmp = t.pqc_auths;
+      bool r = ::do_serialize(ba, pqc_tmp);
+      CHECK_AND_ASSERT_MES(r, false, "Failed to serialize pqc_auths");
       cryptonote::get_blob_hash(ss.str(), pqc_auth_hash);
 
       crypto::hash hashes[4] = { prefix_hash, base_rct_hash, pqc_auth_hash, prunable_hash };

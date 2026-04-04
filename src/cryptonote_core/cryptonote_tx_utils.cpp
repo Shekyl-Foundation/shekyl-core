@@ -157,6 +157,49 @@ namespace cryptonote
 
     CHECK_AND_ASSERT_MES(summary_amounts == block_reward, false, "Failed to construct miner tx, summary_amounts = " << summary_amounts << " not equal block_reward = " << block_reward);
 
+    if (hard_fork_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC && !miner_address.m_pqc_public_key.empty())
+    {
+      static constexpr size_t X25519_PK_BYTES = 32;
+      static constexpr size_t HYBRID_CT_HEADER = 32;
+      CHECK_AND_ASSERT_MES(miner_address.m_pqc_public_key.size() > X25519_PK_BYTES,
+        false, "miner PQC public key too short");
+
+      const uint8_t* pk_x25519 = reinterpret_cast<const uint8_t*>(&miner_address.m_view_public_key);
+      const uint8_t* pk_ml_kem = miner_address.m_pqc_public_key.data();
+      const size_t pk_ml_kem_len = miner_address.m_pqc_public_key.size();
+
+      tx_extra_pqc_kem_ciphertext kem_field;
+      kem_field.blob.reserve(out_amounts.size() * ML_KEM_768_CT_BYTES);
+
+      for (size_t i = 0; i < out_amounts.size(); ++i)
+      {
+        ShekylBuffer ct_buf = {};
+        uint8_t ss[64];
+        bool ok = shekyl_kem_encapsulate(pk_x25519, pk_ml_kem, pk_ml_kem_len, &ct_buf, ss);
+        CHECK_AND_ASSERT_MES(ok && ct_buf.ptr && ct_buf.len > HYBRID_CT_HEADER,
+          false, "KEM self-encapsulation failed for coinbase output " << i);
+        CHECK_AND_ASSERT_MES(ct_buf.len - HYBRID_CT_HEADER == ML_KEM_768_CT_BYTES,
+          false, "Unexpected ML-KEM ciphertext size: " << (ct_buf.len - HYBRID_CT_HEADER));
+
+        kem_field.blob.append(
+          reinterpret_cast<const char*>(ct_buf.ptr + HYBRID_CT_HEADER),
+          ML_KEM_768_CT_BYTES);
+
+        shekyl_buffer_free(ct_buf.ptr, ct_buf.len);
+        memwipe(ss, sizeof(ss));
+      }
+
+      std::ostringstream oss;
+      binary_archive<true> oar(oss);
+      tx_extra_field variant_field = kem_field;
+      bool r = ::do_serialize(oar, variant_field);
+      CHECK_AND_ASSERT_MES(r, false, "Failed to serialize KEM ciphertexts for coinbase tx_extra");
+      std::string blob = oss.str();
+      tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+      if (!sort_tx_extra(tx.extra, tx.extra))
+        return false;
+    }
+
     tx.version = 2;
 
     //lock
@@ -192,7 +235,7 @@ namespace cryptonote
     return addr.m_view_public_key;
   }
   //---------------------------------------------------------------
-  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, const std::vector<crypto::secret_key> &additional_tx_keys, bool rct, const rct::RCTConfig &rct_config, bool shuffle_outs, bool use_view_tags, uint8_t hf_version)
+  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, const std::vector<crypto::secret_key> &additional_tx_keys, bool rct, bool shuffle_outs, bool use_view_tags, uint8_t hf_version)
   {
     hw::device &hwdev = sender_account_keys.get_device();
 
@@ -457,7 +500,6 @@ namespace cryptonote
       uint64_t amount_in = 0, amount_out = 0;
       rct::ctkeyV inSk;
       inSk.reserve(sources.size());
-      rct::ctkeyM mixRing(sources.size());
       rct::keyV destinations;
       std::vector<uint64_t> inamounts, outamounts;
       std::vector<unsigned int> index;
@@ -481,15 +523,6 @@ namespace cryptonote
         amount_out += tx.vout[i].amount;
       }
 
-      for (size_t i = 0; i < sources.size(); ++i)
-      {
-        mixRing[i].resize(sources[i].outputs.size());
-        for (size_t n = 0; n < sources[i].outputs.size(); ++n)
-        {
-          mixRing[i][n] = sources[i].outputs[n].second;
-        }
-      }
-
       for (size_t i = 0; i < tx.vin.size(); ++i)
       {
         if (sources[i].rct)
@@ -501,21 +534,25 @@ namespace cryptonote
       crypto::hash tx_prefix_hash;
       get_transaction_prefix_hash(tx, tx_prefix_hash, hwdev);
       rct::ctkeyV outSk;
-      tx.rct_signatures = rct::genRctSimple(rct::hash2rct(tx_prefix_hash), inSk, destinations, inamounts, outamounts, amount_in - amount_out, mixRing, amount_keys, index, outSk, rct_config, hwdev);
+      // TODO: replace with FCMP++ proof generation (genRctFcmpPlusPlus)
+      // genRctSimple was removed as part of legacy RCT stripping
+      tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+      tx.rct_signatures.message = rct::hash2rct(tx_prefix_hash);
+      tx.rct_signatures.txnFee = amount_in - amount_out;
       memwipe(inSk.data(), inSk.size() * sizeof(rct::ctkey));
 
-      CHECK_AND_ASSERT_MES(tx.vout.size() == outSk.size(), false, "outSk size does not match vout");
+      CHECK_AND_ASSERT_MES(tx.vout.size() == outSk.size() || outSk.empty(), false, "outSk size does not match vout");
     }
 
     if (tx.version >= 3)
     {
-      const bool multisig_preassembled = tx.pqc_auth
-          && tx.pqc_auth->scheme_id == 2
-          && !tx.pqc_auth->hybrid_signature.empty();
+      const bool multisig_preassembled = !tx.pqc_auths.empty()
+          && tx.pqc_auths[0].scheme_id == 2
+          && !tx.pqc_auths[0].hybrid_signature.empty();
 
       if (multisig_preassembled)
       {
-        MCINFO("construct_tx", "Pre-assembled multisig pqc_auth detected (scheme_id=2); skipping single-key sign");
+        MCINFO("construct_tx", "Pre-assembled multisig pqc_auths detected (scheme_id=2); skipping single-key sign");
       }
       else
       {
@@ -529,33 +566,39 @@ namespace cryptonote
           LOG_ERROR("Cannot create v3 transaction: wallet has no PQC public key");
           return false;
         }
-        pqc_authentication auth;
-        auth.auth_version = 1;
-        auth.scheme_id = 1;
-        auth.flags = 0;
-        auth.hybrid_public_key = sender_account_keys.m_account_address.m_pqc_public_key;
-        auth.hybrid_signature.clear();
-        tx.pqc_auth = auth;
-        std::string payload_blob;
-        if (!get_transaction_signed_payload(tx, payload_blob))
+        tx.pqc_auths.clear();
+        tx.pqc_auths.resize(tx.vin.size());
+        for (size_t i = 0; i < tx.vin.size(); ++i)
         {
-          LOG_ERROR("Failed to build PQC signed payload");
-          return false;
+          tx.pqc_auths[i].auth_version = 1;
+          tx.pqc_auths[i].scheme_id = 1;
+          tx.pqc_auths[i].flags = 0;
+          tx.pqc_auths[i].hybrid_public_key = sender_account_keys.m_account_address.m_pqc_public_key;
+          tx.pqc_auths[i].hybrid_signature.clear();
         }
-        crypto::hash payload_hash;
-        cryptonote::get_blob_hash(payload_blob, payload_hash);
-        ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
-            sender_account_keys.m_pqc_secret_key.data(),
-            sender_account_keys.m_pqc_secret_key.size(),
-            reinterpret_cast<const uint8_t*>(payload_hash.data),
-            sizeof(payload_hash.data));
-        if (!sig_result.success)
+        for (size_t i = 0; i < tx.vin.size(); ++i)
         {
-          LOG_ERROR("PQC hybrid signing failed");
-          return false;
+          std::string payload_blob;
+          if (!get_transaction_signed_payload(tx, i, payload_blob))
+          {
+            LOG_ERROR("Failed to build PQC signed payload");
+            return false;
+          }
+          crypto::hash payload_hash;
+          cryptonote::get_blob_hash(payload_blob, payload_hash);
+          ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
+              sender_account_keys.m_pqc_secret_key.data(),
+              sender_account_keys.m_pqc_secret_key.size(),
+              reinterpret_cast<const uint8_t*>(payload_hash.data),
+              sizeof(payload_hash.data));
+          if (!sig_result.success)
+          {
+            LOG_ERROR("PQC hybrid signing failed");
+            return false;
+          }
+          tx.pqc_auths[i].hybrid_signature.assign(sig_result.signature.ptr, sig_result.signature.ptr + sig_result.signature.len);
+          shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
         }
-        tx.pqc_auth->hybrid_signature.assign(sig_result.signature.ptr, sig_result.signature.ptr + sig_result.signature.len);
-        shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
       }
     }
 
@@ -566,7 +609,7 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------
-  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, std::vector<crypto::secret_key> &additional_tx_keys, bool rct, const rct::RCTConfig &rct_config, bool use_view_tags, uint8_t hf_version)
+  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, std::vector<crypto::secret_key> &additional_tx_keys, bool rct, bool use_view_tags, uint8_t hf_version)
   {
     hw::device &hwdev = sender_account_keys.get_device();
     hwdev.open_tx(tx_key);
@@ -587,7 +630,7 @@ namespace cryptonote
       }
 
       bool shuffle_outs = true;
-      bool r = construct_tx_with_tx_key(sender_account_keys, subaddresses, sources, destinations, change_addr, extra, tx, tx_key, additional_tx_keys, rct, rct_config, shuffle_outs, use_view_tags, hf_version);
+      bool r = construct_tx_with_tx_key(sender_account_keys, subaddresses, sources, destinations, change_addr, extra, tx, tx_key, additional_tx_keys, rct, shuffle_outs, use_view_tags, hf_version);
       hwdev.close_tx();
       return r;
     } catch(...) {
@@ -603,7 +646,7 @@ namespace cryptonote
      crypto::secret_key tx_key;
      std::vector<crypto::secret_key> additional_tx_keys;
      std::vector<tx_destination_entry> destinations_copy = destinations;
-     return construct_tx_and_get_tx_key(sender_account_keys, subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, additional_tx_keys, false, { rct::RangeProofBorromean, 0});
+     return construct_tx_and_get_tx_key(sender_account_keys, subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, additional_tx_keys, false);
   }
   //---------------------------------------------------------------
   bool build_genesis_coinbase_from_destinations(

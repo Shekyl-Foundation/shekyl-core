@@ -41,82 +41,16 @@
 
 using namespace cryptonote;
 
-// Do RCT expansion, then do post-expansion sanity checks, then do full non-semantics verification.
-static bool expand_tx_and_ver_rct_non_sem(transaction& tx, const rct::ctkeyM& mix_ring)
+// Verify RCT non-semantics for FCMP++ transactions (no mix ring expansion needed)
+static bool ver_rct_non_sem(transaction& tx)
 {
-    // Pruned transactions can not be expanded and verified because they are missing RCT data
     VER_ASSERT(!tx.pruned, "Pruned transaction will not pass verRctNonSemanticsSimple");
 
-    // Calculate prefix hash
     const crypto::hash tx_prefix_hash = get_transaction_prefix_hash(tx);
-
-    // Expand mixring, tx inputs, tx key images, prefix hash message, etc into the RCT sig
-    const bool exp_res = Blockchain::expand_transaction_2(tx, tx_prefix_hash, mix_ring);
-    VER_ASSERT(exp_res, "Failed to expand rct signatures!");
+    Blockchain::expand_transaction_2(tx, tx_prefix_hash, {});
 
     const rct::rctSig& rv = tx.rct_signatures;
-
-    // Check that expanded RCT mixring == input mixring
-    VER_ASSERT(rv.mixRing == mix_ring, "Failed to check ringct signatures: mismatched pubkeys/mixRing");
-
-    // Check CLSAG/MLSAG size against transaction input
-    const size_t n_sigs = rct::is_rct_clsag(rv.type) ? rv.p.CLSAGs.size() : rv.p.MGs.size();
-    VER_ASSERT(n_sigs == tx.vin.size(), "Failed to check ringct signatures: mismatched input sigs/vin sizes");
-
-    // For each input, check that the key images were copied into the expanded RCT sig correctly
-    for (size_t n = 0; n < n_sigs; ++n)
-    {
-        const crypto::key_image& nth_vin_image = std::get<txin_to_key>(tx.vin[n]).k_image;
-
-        if (rct::is_rct_clsag(rv.type))
-        {
-            const bool ki_match = 0 == memcmp(&nth_vin_image, &rv.p.CLSAGs[n].I, 32);
-            VER_ASSERT(ki_match, "Failed to check ringct signatures: mismatched CLSAG key image");
-        }
-        else
-        {
-            const bool mg_nonempty = !rv.p.MGs[n].II.empty();
-            VER_ASSERT(mg_nonempty, "Failed to check ringct signatures: missing MLSAG key image");
-            const bool ki_match = 0 == memcmp(&nth_vin_image, &rv.p.MGs[n].II[0], 32);
-            VER_ASSERT(ki_match, "Failed to check ringct signatures: mismatched MLSAG key image");
-        }
-    }
-
-    // Mix ring data is now known to be correctly incorporated into the RCT sig inside tx.
     return rct::verRctNonSemanticsSimple(rv);
-}
-
-// Create a unique identifier for pair of tx blob + mix ring
-static crypto::hash calc_tx_mixring_hash(const transaction& tx, const rct::ctkeyM& mix_ring)
-{
-    std::stringstream ss;
-
-    // Start with domain seperation
-    ss << config::HASH_KEY_TXHASH_AND_MIXRING;
-
-    // Then add TX hash
-    const crypto::hash tx_hash = get_transaction_hash(tx);
-    ss.write(tx_hash.data, sizeof(crypto::hash));
-
-    // Then serialize mix ring
-    binary_archive<true> ar(ss);
-    ::do_serialize(ar, const_cast<rct::ctkeyM&>(mix_ring));
-
-    // Calculate hash of TX hash and mix ring blob
-    crypto::hash tx_and_mixring_hash;
-    get_blob_hash(ss.str(), tx_and_mixring_hash);
-
-    return tx_and_mixring_hash;
-}
-
-static bool is_canonical_bulletproof_layout(const std::vector<rct::Bulletproof> &proofs)
-{
-    if (proofs.size() != 1)
-        return false;
-    const size_t sz = proofs[0].V.size();
-    if (sz == 0 || sz > BULLETPROOF_MAX_OUTPUTS)
-        return false;
-    return true;
 }
 
 static bool is_canonical_bulletproof_plus_layout(const std::vector<rct::BulletproofPlus> &proofs)
@@ -211,54 +145,34 @@ uint64_t get_transaction_weight_limit(const uint8_t hf_version)
 bool ver_rct_non_semantics_simple_cached
 (
     transaction& tx,
-    const rct::ctkeyM& mix_ring,
     rct_ver_cache_t& cache,
-    const std::uint8_t rct_type_to_cache
+    std::uint8_t rct_type_to_cache
 )
 {
-    // Hello future Monero dev! If you got this assert, read the following carefully:
-    //
-    // For this version of RCT, the way we guaranteed that verification caches do not generate false
-    // positives (and thus possibly enabling double spends) is we take a hash of two things. One,
-    // we use get_transaction_hash() which gives us a (cryptographically secure) unique
-    // representation of all "knobs" controlled by the possibly malicious constructor of the
-    // transaction. Two, we take a hash of all *previously validated* blockchain data referenced by
-    // this transaction which is required to validate the ring signature. In our case, this is the
-    // mixring. Future versions of the protocol may differ in this regard, but if this assumptions
-    // holds true in the future, enable the verification hash by modifying the `untested_tx`
-    // condition below.
-    const bool untested_tx = tx.version > 3 || tx.rct_signatures.type > rct::RCTTypeBulletproofPlus;
+    const bool untested_tx = tx.version > 3 || tx.rct_signatures.type > rct::RCTTypeFcmpPlusPlusPqc;
     VER_ASSERT(!untested_tx, "Unknown TX type. Make sure RCT cache works correctly with this type and then enable it in the code here.");
 
-    // Don't cache older (or newer) rctSig types
-    // This cache only makes sense when it caches data from mempool first,
-    // so only "current fork version-enabled" RCT types need to be cached
     if (tx.rct_signatures.type != rct_type_to_cache)
     {
         MDEBUG("RCT cache: tx " << get_transaction_hash(tx) << " skipped");
-        return expand_tx_and_ver_rct_non_sem(tx, mix_ring);
+        return ver_rct_non_sem(tx);
     }
 
-    // Generate unique hash for tx+mix_ring pair
-    const crypto::hash tx_mixring_hash = calc_tx_mixring_hash(tx, mix_ring);
+    const crypto::hash tx_hash = get_transaction_hash(tx);
 
-    // Search cache for successful verification of same TX + mix ring combination
-    if (cache.has(tx_mixring_hash))
+    if (cache.has(tx_hash))
     {
-        MDEBUG("RCT cache: tx " << get_transaction_hash(tx) << " hit");
+        MDEBUG("RCT cache: tx " << tx_hash << " hit");
         return true;
     }
 
-    // We had a cache miss, so now we must expand the mix ring and do full verification
-    MDEBUG("RCT cache: tx " << get_transaction_hash(tx) << " missed");
-    if (!expand_tx_and_ver_rct_non_sem(tx, mix_ring))
+    MDEBUG("RCT cache: tx " << tx_hash << " missed");
+    if (!ver_rct_non_sem(tx))
     {
         return false;
     }
 
-    // At this point, the TX RCT verified successfully, so add it to the cache and return true
-    cache.add(tx_mixring_hash);
-
+    cache.add(tx_hash);
     return true;
 }
 
@@ -277,15 +191,7 @@ bool ver_mixed_rct_semantics(std::vector<const rct::rctSig*> rvv)
             MERROR("Unexpected Null rctSig type");
             return false;
             break;
-        case rct::RCTTypeCLSAG:
-            if (!is_canonical_bulletproof_layout(rv.p.bulletproofs))
-            {
-                MERROR("Bulletproof does not have canonical form");
-                return false;
-            }
-            is_batchable_rv = true;
-            break;
-        case rct::RCTTypeBulletproofPlus:
+        case rct::RCTTypeFcmpPlusPlusPqc:
             if (!is_canonical_bulletproof_plus_layout(rv.p.bulletproofs_plus))
             {
                 MERROR("Bulletproof_plus does not have canonical form");

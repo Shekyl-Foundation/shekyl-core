@@ -97,9 +97,6 @@ struct wallet2_handle {
         catch (const tools::error::tx_not_possible& ex) {
             set_error(WALLET_RPC_ERROR_CODE_TX_NOT_POSSIBLE, ex.what());
         }
-        catch (const tools::error::not_enough_outs_to_mix& ex) {
-            set_error(WALLET_RPC_ERROR_CODE_NOT_ENOUGH_OUTS_TO_MIX, ex.what());
-        }
         catch (const tools::error::file_exists& ex) {
             set_error(WALLET_RPC_ERROR_CODE_WALLET_ALREADY_EXISTS, ex.what());
         }
@@ -715,11 +712,10 @@ char* wallet2_ffi_transfer(wallet2_handle* w,
     }
 
     try {
-        uint64_t mixin = w->wallet->adjust_mixin(ring_size > 0 ? ring_size - 1 : 0);
         const tools::fee_priority fp = w->wallet->adjust_priority(tools::fee_priority_utilities::from_integral(priority));
         std::set<uint32_t> subaddr_indices;
         std::vector<tools::wallet2::pending_tx> ptx_vector =
-            w->wallet->create_transactions_2(dsts, mixin, fp, extra, account_index, subaddr_indices);
+            w->wallet->create_transactions_2(dsts, 0, fp, extra, account_index, subaddr_indices);
 
         if (ptx_vector.empty()) {
             w->set_error(WALLET_RPC_ERROR_CODE_TX_NOT_POSSIBLE, "No transaction created");
@@ -2589,14 +2585,13 @@ static char* dispatch_transfer_split(wallet2_handle* w, const rj::Value& p) {
 
     try {
         uint64_t ring_size = json_u64(p, "ring_size");
-        uint64_t mixin = w->wallet->adjust_mixin(ring_size > 0 ? ring_size - 1 : 0);
         const tools::fee_priority fp = w->wallet->adjust_priority(
             tools::fee_priority_utilities::from_integral(priority));
         uint32_t account_index = json_u32(p, "account_index");
         std::set<uint32_t> subaddr_indices = parse_subaddr_indices(p);
 
         std::vector<tools::wallet2::pending_tx> ptx_vector =
-            w->wallet->create_transactions_2(dsts, mixin, fp, extra,
+            w->wallet->create_transactions_2(dsts, 0, fp, extra,
                 account_index, subaddr_indices);
 
         if (ptx_vector.empty()) {
@@ -2978,8 +2973,6 @@ static char* dispatch_sweep_all(wallet2_handle* w, const rj::Value& p) {
     }
 
     try {
-        uint64_t ring_size = json_u64(p, "ring_size");
-        uint64_t mixin = w->wallet->adjust_mixin(ring_size > 0 ? ring_size - 1 : 0);
         const tools::fee_priority fp = w->wallet->adjust_priority(
             tools::fee_priority_utilities::from_integral(priority));
         uint64_t below_amount = json_u64(p, "below_amount");
@@ -2987,7 +2980,7 @@ static char* dispatch_sweep_all(wallet2_handle* w, const rj::Value& p) {
 
         std::vector<tools::wallet2::pending_tx> ptx_vector =
             w->wallet->create_transactions_all(below_amount, info.address,
-                info.is_subaddress, outputs, mixin, fp, extra,
+                info.is_subaddress, outputs, 0, fp, extra,
                 account_index, subaddr_indices);
 
         bool get_tx_keys = json_bool(p, "get_tx_keys");
@@ -3039,15 +3032,13 @@ static char* dispatch_sweep_single(wallet2_handle* w, const rj::Value& p) {
     }
 
     try {
-        uint64_t ring_size = json_u64(p, "ring_size");
-        uint64_t mixin = w->wallet->adjust_mixin(ring_size > 0 ? ring_size - 1 : 0);
         const tools::fee_priority fp = w->wallet->adjust_priority(
             tools::fee_priority_utilities::from_integral(priority));
         std::vector<uint8_t> extra;
 
         std::vector<tools::wallet2::pending_tx> ptx_vector =
             w->wallet->create_transactions_single(ki, info.address,
-                info.is_subaddress, outputs, mixin, fp, extra);
+                info.is_subaddress, outputs, 0, fp, extra);
 
         if (ptx_vector.empty()) {
             w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "No outputs found");

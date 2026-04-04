@@ -188,65 +188,11 @@ namespace rct {
         return vali;
     }
 
-    bool is_rct_simple(int type)
-    {
-        switch (type)
-        {
-            case RCTTypeSimple:
-            case RCTTypeBulletproof:
-            case RCTTypeBulletproof2:
-            case RCTTypeCLSAG:
-            case RCTTypeBulletproofPlus:
-            case RCTTypeFcmpPlusPlusPqc:
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    bool is_rct_bulletproof(int type)
-    {
-        switch (type)
-        {
-            case RCTTypeBulletproof:
-            case RCTTypeBulletproof2:
-            case RCTTypeCLSAG:
-                return true;
-            default:
-                return false;
-        }
-    }
-
     bool is_rct_bulletproof_plus(int type)
     {
         switch (type)
         {
-            case RCTTypeBulletproofPlus:
             case RCTTypeFcmpPlusPlusPqc:
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    bool is_rct_borromean(int type)
-    {
-        switch (type)
-        {
-            case RCTTypeSimple:
-            case RCTTypeFull:
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    bool is_rct_clsag(int type)
-    {
-        switch (type)
-        {
-            case RCTTypeCLSAG:
-            case RCTTypeBulletproofPlus:
                 return true;
             default:
                 return false;
@@ -277,22 +223,7 @@ namespace rct {
         return V_size;
     }
 
-    size_t n_bulletproof_amounts(const Bulletproof &proof) { return n_bulletproof_amounts_base(proof.L.size(), proof.R.size(), proof.V.size(), BULLETPROOF_MAX_OUTPUTS); }
     size_t n_bulletproof_plus_amounts(const BulletproofPlus &proof) { return n_bulletproof_amounts_base(proof.L.size(), proof.R.size(), proof.V.size(), BULLETPROOF_PLUS_MAX_OUTPUTS); }
-
-    size_t n_bulletproof_amounts(const std::vector<Bulletproof> &proofs)
-    {
-        size_t n = 0;
-        for (const Bulletproof &proof: proofs)
-        {
-            size_t n2 = n_bulletproof_amounts(proof);
-            CHECK_AND_ASSERT_MES(n2 < std::numeric_limits<uint32_t>::max() - n, 0, "Invalid number of bulletproofs");
-            if (n2 == 0)
-                return 0;
-            n += n2;
-        }
-        return n;
-    }
 
     size_t n_bulletproof_plus_amounts(const std::vector<BulletproofPlus> &proofs)
     {
@@ -317,22 +248,7 @@ namespace rct {
         CHECK_AND_ASSERT_MES(L_size <= 6 + extra_bits, 0, "Invalid bulletproof L size");
         return 1 << (L_size - 6);
     }
-    size_t n_bulletproof_max_amounts(const Bulletproof &proof) { return n_bulletproof_max_amounts_base(proof.L.size(), proof.R.size(), BULLETPROOF_MAX_OUTPUTS); }
     size_t n_bulletproof_plus_max_amounts(const BulletproofPlus &proof) { return n_bulletproof_max_amounts_base(proof.L.size(), proof.R.size(), BULLETPROOF_PLUS_MAX_OUTPUTS); }
-
-    size_t n_bulletproof_max_amounts(const std::vector<Bulletproof> &proofs)
-    {
-        size_t n = 0;
-        for (const Bulletproof &proof: proofs)
-        {
-            size_t n2 = n_bulletproof_max_amounts(proof);
-            CHECK_AND_ASSERT_MES(n2 < std::numeric_limits<uint32_t>::max() - n, 0, "Invalid number of bulletproofs");
-            if (n2 == 0)
-                return 0;
-            n += n2;
-        }
-        return n;
-    }
 
     size_t n_bulletproof_plus_max_amounts(const std::vector<BulletproofPlus> &proofs)
     {

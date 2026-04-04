@@ -76,7 +76,6 @@ namespace tools
     //         not_enough_unlocked_money
     //         not_enough_money
     //         tx_not_possible
-    //         not_enough_outs_to_mix
     //         tx_not_constructed
     //         tx_rejected
     //         tx_sum_overflow
@@ -537,36 +536,6 @@ namespace tools
       uint64_t m_available;
       uint64_t m_tx_amount;
       uint64_t m_fee;
-    };
-    //----------------------------------------------------------------------------------------------------
-    struct not_enough_outs_to_mix : public transfer_error
-    {
-      typedef std::unordered_map<uint64_t, uint64_t> scanty_outs_t;
-
-      explicit not_enough_outs_to_mix(std::string&& loc, const scanty_outs_t& scanty_outs, size_t mixin_count)
-        : transfer_error(std::move(loc), "not enough outputs to use")
-        , m_scanty_outs(scanty_outs)
-        , m_mixin_count(mixin_count)
-      {
-      }
-
-      const scanty_outs_t& scanty_outs() const { return m_scanty_outs; }
-      size_t mixin_count() const { return m_mixin_count; }
-
-      std::string to_string() const
-      {
-        std::ostringstream ss;
-        ss << transfer_error::to_string() << ", ring size = " << (m_mixin_count + 1) << ", scanty_outs:";
-        for (const auto& out: m_scanty_outs)
-        {
-          ss << '\n' << cryptonote::print_money(out.first) << " - " << out.second;
-        }
-        return ss.str();
-      }
-
-    private:
-      scanty_outs_t m_scanty_outs;
-      size_t m_mixin_count;
     };
     //----------------------------------------------------------------------------------------------------
     struct tx_not_constructed : public transfer_error

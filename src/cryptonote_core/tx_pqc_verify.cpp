@@ -54,11 +54,11 @@ namespace {
 namespace cryptonote
 {
 
-bool get_transaction_signed_payload(const transaction& tx, std::string& payload_out)
+bool get_transaction_signed_payload(const transaction& tx, size_t input_index, std::string& payload_out)
 {
   if (tx.version < 3 || tx.vin.empty() || std::holds_alternative<txin_gen>(tx.vin[0]))
     return false;
-  if (!tx.pqc_auth)
+  if (input_index >= tx.pqc_auths.size() || input_index >= tx.vin.size())
     return false;
 
   std::string prefix_blob;
@@ -85,7 +85,7 @@ bool get_transaction_signed_payload(const transaction& tx, std::string& payload_
   {
     std::ostringstream ss;
     binary_archive<true> ba(ss);
-    const pqc_authentication& auth = *tx.pqc_auth;
+    const pqc_authentication& auth = tx.pqc_auths[input_index];
     if (!::do_serialize(ba, const_cast<uint8_t&>(auth.auth_version)))
       return false;
     if (!::do_serialize(ba, const_cast<uint8_t&>(auth.scheme_id)))
@@ -111,60 +111,52 @@ bool verify_transaction_pqc_auth(const transaction& tx,
 {
   if (tx.version < 3 || tx.vin.empty() || std::holds_alternative<txin_gen>(tx.vin[0]))
     return true;
-  if (!tx.pqc_auth)
-    return false;
-
-  const pqc_authentication& auth = *tx.pqc_auth;
-
-  if (auth.scheme_id != PQC_SCHEME_SINGLE && auth.scheme_id != PQC_SCHEME_MULTISIG)
+  if (tx.pqc_auths.size() != tx.vin.size() || tx.pqc_auths.empty())
   {
-    MERROR("PQC verify: unknown scheme_id " << (int)auth.scheme_id);
+    MERROR("PQC verify: pqc_auths size " << tx.pqc_auths.size() << " does not match vin size " << tx.vin.size());
     return false;
   }
 
-  // Scheme downgrade check: if the output committed to a specific scheme, enforce it
-  if (expected_scheme_id && auth.scheme_id != *expected_scheme_id)
+  for (size_t idx = 0; idx < tx.pqc_auths.size(); ++idx)
   {
-    MERROR("PQC verify: scheme_id mismatch (spend=" << (int)auth.scheme_id
-           << ", output committed=" << (int)*expected_scheme_id << ")");
-    return false;
-  }
+    const pqc_authentication& auth = tx.pqc_auths[idx];
 
-  // Structural size checks before calling into Rust
-  if (auth.scheme_id == PQC_SCHEME_MULTISIG)
-  {
-    if (auth.hybrid_public_key.size() < MULTISIG_KEY_HEADER_LEN)
+    if (auth.scheme_id != PQC_SCHEME_SINGLE && auth.scheme_id != PQC_SCHEME_MULTISIG)
     {
-      MERROR("PQC verify: multisig key blob too short (" << auth.hybrid_public_key.size() << " bytes)");
+      MERROR("PQC verify: unknown scheme_id " << (int)auth.scheme_id << " (input " << idx << ")");
       return false;
     }
-    if (auth.hybrid_public_key.size() > MULTISIG_MAX_KEY_BLOB)
+
+    if (expected_scheme_id && auth.scheme_id != *expected_scheme_id)
     {
-      MERROR("PQC verify: multisig key blob exceeds maximum (" << auth.hybrid_public_key.size()
-             << " > " << MULTISIG_MAX_KEY_BLOB << ")");
+      MERROR("PQC verify: scheme_id mismatch (spend=" << (int)auth.scheme_id
+             << ", output committed=" << (int)*expected_scheme_id << ", input " << idx << ")");
       return false;
     }
-  }
 
-  std::string payload_blob;
-  if (!get_transaction_signed_payload(tx, payload_blob))
-    return false;
+    if (auth.scheme_id == PQC_SCHEME_MULTISIG)
+    {
+      if (auth.hybrid_public_key.size() < MULTISIG_KEY_HEADER_LEN)
+      {
+        MERROR("PQC verify: multisig key blob too short (" << auth.hybrid_public_key.size() << " bytes, input " << idx << ")");
+        return false;
+      }
+      if (auth.hybrid_public_key.size() > MULTISIG_MAX_KEY_BLOB)
+      {
+        MERROR("PQC verify: multisig key blob exceeds maximum (" << auth.hybrid_public_key.size()
+               << " > " << MULTISIG_MAX_KEY_BLOB << ", input " << idx << ")");
+        return false;
+      }
+    }
 
-  crypto::hash payload_hash;
-  cryptonote::get_blob_hash(payload_blob, payload_hash);
+    std::string payload_blob;
+    if (!get_transaction_signed_payload(tx, idx, payload_blob))
+      return false;
 
-  bool ok = shekyl_pqc_verify(
-      auth.scheme_id,
-      auth.hybrid_public_key.data(),
-      auth.hybrid_public_key.size(),
-      auth.hybrid_signature.data(),
-      auth.hybrid_signature.size(),
-      reinterpret_cast<const uint8_t*>(payload_hash.data),
-      sizeof(payload_hash.data));
+    crypto::hash payload_hash;
+    cryptonote::get_blob_hash(payload_blob, payload_hash);
 
-  if (!ok)
-  {
-    uint8_t err = shekyl_pqc_verify_debug(
+    bool ok = shekyl_pqc_verify(
         auth.scheme_id,
         auth.hybrid_public_key.data(),
         auth.hybrid_public_key.size(),
@@ -172,10 +164,23 @@ bool verify_transaction_pqc_auth(const transaction& tx,
         auth.hybrid_signature.size(),
         reinterpret_cast<const uint8_t*>(payload_hash.data),
         sizeof(payload_hash.data));
-    MERROR("PQC verify failed: error code " << (int)err);
+
+    if (!ok)
+    {
+      uint8_t err = shekyl_pqc_verify_debug(
+          auth.scheme_id,
+          auth.hybrid_public_key.data(),
+          auth.hybrid_public_key.size(),
+          auth.hybrid_signature.data(),
+          auth.hybrid_signature.size(),
+          reinterpret_cast<const uint8_t*>(payload_hash.data),
+          sizeof(payload_hash.data));
+      MERROR("PQC verify failed: error code " << (int)err << " (input " << idx << ")");
+      return false;
+    }
   }
 
-  return ok;
+  return true;
 }
 
 } // namespace cryptonote

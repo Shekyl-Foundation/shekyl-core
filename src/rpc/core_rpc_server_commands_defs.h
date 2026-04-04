@@ -603,7 +603,6 @@ namespace cryptonote
     {
       std::string reason;
       bool not_relayed;
-      bool low_mixin;
       bool double_spend;
       bool invalid_input;
       bool invalid_output;
@@ -619,7 +618,6 @@ namespace cryptonote
         KV_SERIALIZE_PARENT(rpc_access_response_base)
         KV_SERIALIZE(reason)
         KV_SERIALIZE(not_relayed)
-        KV_SERIALIZE(low_mixin)
         KV_SERIALIZE(double_spend)
         KV_SERIALIZE(invalid_input)
         KV_SERIALIZE(invalid_output)
