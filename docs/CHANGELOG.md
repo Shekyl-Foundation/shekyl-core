@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### ✨ Added
+
+- **Comprehensive FCMP++ test suite and fuzz targets (Phase 7).**
+  Added 6 `cargo-fuzz` targets across `rust/shekyl-fcmp/fuzz/` (proof
+  deserialization, curve tree leaf hashing, block header tree root mismatch)
+  and `rust/shekyl-crypto-pq/fuzz/` (Bech32m address decoding, KEM
+  decapsulation with corrupted ciphertexts). Extended Rust unit tests in
+  `proof.rs`, `tree.rs`, `leaf.rs`, `kem.rs`, `address.rs`, and
+  `derivation.rs` covering prove/verify round-trips, hash grow/trim inverse
+  properties, boundary values, and cross-crate consistency. Extended C++ unit
+  tests in `tests/unit_tests/fcmp.cpp` with RCTTypeFcmpPlusPlusPqc
+  serialization round-trip, key image y-normalization, referenceBlock
+  staleness constants, and empty proof rejection. Added PQC rederivation
+  criterion benchmark (`rust/shekyl-crypto-pq/benches/pqc_rederivation.rs`)
+  targeting < 100ms per output for the full ML-KEM-768 decapsulation +
+  HKDF-SHA-512 + ML-DSA-65 keygen pipeline.
+
+- **Stressnet tooling for FCMP++ pre-audit gate (Phase 7.7).**
+  Added `tests/stressnet/` with configuration, load generator, and monitoring
+  scripts for a 4-week sustained-load testnet. The stressnet exercises curve
+  tree growth, verification caching, wallet restore correctness, pruned vs.
+  full node storage, staking lifecycle, and block validation latency under
+  near-block-weight-limit load. Includes `config.yaml` with load profiles,
+  `load_generator.py` for synthetic transaction submission, and `monitor.py`
+  for real-time metric collection, consensus checking, and daily report
+  generation.
+
+- **Security audit scope document (Phase 9).**
+  Added `docs/AUDIT_SCOPE.md` defining the scope for a third-party security
+  review of the 4-scalar leaf circuit modification. Covers soundness,
+  zero-knowledge, and completeness verification for the `H(pqc_pk)` extension,
+  Shekyl fork modifications to monero-fcmp-plus-plus, PQC commitment binding,
+  and the FFI verification boundary. Includes materials list, auditor guidance
+  questions, success criteria, and timeline.
+
+- **Mainnet gate: stressnet and audit prerequisites in release checklist.**
+  Updated `docs/RELEASE_CHECKLIST.md` with "Stressnet stable for 4 consecutive
+  weeks" and "4-scalar leaf circuit audit completed" as hard prerequisites
+  for mainnet launch.
+
 ### 🔄 Changed
 
 - **Renamed `src/ringct/` to `src/fcmp/` for naming consistency.**
@@ -41,12 +81,56 @@
   headers.  Removed legacy-only test cases; updated shared test helpers to drop
   `RangeProofType`/`bp_version` parameters.
 
+### 🗑️ Removed
+
+- **Dead verification cache code (`verRctNonSemanticsSimple`, `ver_rct_non_semantics_simple_cached`).**
+  Removed the stub `verRctNonSemanticsSimple` from `rctSigs.cpp/.h` (returned `true`
+  unconditionally), the `ver_rct_non_semantics_simple_cached` wrapper and its
+  `ver_rct_non_sem` helper from `tx_verification_utils.cpp/.h`, the unused
+  `rct_ver_cache_t` type alias and `m_rct_ver_cache` member from `Blockchain`,
+  and the dead `RCT_CACHE_TYPE` constant from `check_tx_inputs`.  Real FCMP++
+  verification lives in `check_tx_inputs` (blockchain.cpp) and the mempool
+  uses `compute_fcmp_verification_hash` for caching.
+
 ### 🔒 Security
+
+- **CRITICAL: PQC signed payload now binds to prunable FCMP++ data (Phase 4c).**
+  `get_transaction_signed_payload` now includes `H(serialize(RctSigPrunable))`
+  in the signed payload, binding PQC signatures to the FCMP++ proof, pseudoOuts,
+  curve_trees_tree_depth, and Bulletproofs+.  Without this, an attacker could
+  substitute different prunable data without invalidating PQC signatures,
+  breaking the dual-layer security model.
+
+- **CRITICAL: Wired stake claim validation in `check_tx_inputs` (Phase 4e audit fix).**
+  The non-FAKECHAIN gate in `check_tx_inputs` rejected all `RCTTypeNull`
+  transactions, which includes pure stake-claim txs.  The gate now allows
+  `RCTTypeNull` transactions through when all inputs are `txin_stake_claim`.
+  Additionally, the `RCTTypeNull` switch case now calls `check_stake_claim_input`
+  for each claim input and checks key image double-spend — previously it
+  `break`ed without any validation.
 
 - **HIGH: Bound all inputs' H(pqc_pk) hashes into PQC signed payload.**
   `get_transaction_signed_payload` now appends `H(pqc_pk_0) || ... || H(pqc_pk_{N-1})`
   after the per-input header blob, preventing key-substitution attacks where an
   attacker replaces one input's PQC key without invalidating other signatures.
+
+- **MEDIUM: Stake claim curve tree leaf verification (Phase 4e).**
+  `check_stake_claim_input` now verifies the staked output's leaf is present
+  in the curve tree by checking `staked_output_index < get_curve_tree_leaf_count()`
+  and reading the leaf with `get_curve_tree_leaf()`.  Previously, only the
+  `lock_until` check was performed, which didn't guarantee the leaf had been
+  inserted into the tree.
+
+- **MEDIUM: PQC `auth_version` and `flags` consensus enforcement.**
+  `verify_transaction_pqc_auth` now rejects `auth_version != 1` and
+  `flags != 0`, enforcing spec steps 6a/6c. Previously these fields were
+  serialized and signed over but never validated.
+
+- **LOW: Single-signer `hybrid_public_key` size enforcement.**
+  `verify_transaction_pqc_auth` now verifies single-signer key blobs are
+  exactly `HYBRID_SINGLE_KEY_LEN` (1996 bytes). Previously only multisig
+  keys had size bounds checks; single-signer keys relied solely on the FFI
+  call to reject malformed keys.
 
 - **LOW: Added deserialization size bounds for `pqc_authentication` blobs.**
   `hybrid_public_key` and `hybrid_signature` vectors are now rejected during

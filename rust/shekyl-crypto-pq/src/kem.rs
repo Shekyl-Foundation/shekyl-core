@@ -308,6 +308,53 @@ mod tests {
     }
 
     #[test]
+    fn kem_decapsulate_rejects_wrong_ct_length() {
+        let kem = HybridX25519MlKem;
+        let (_pk, sk) = kem.keypair_generate().unwrap();
+
+        let bad_ct = HybridCiphertext {
+            x25519: [0u8; 32],
+            ml_kem: vec![0u8; 100],
+        };
+        assert!(kem.decapsulate(&sk, &bad_ct).is_err());
+    }
+
+    #[test]
+    fn kem_decapsulate_rejects_wrong_sk_length() {
+        let kem = HybridX25519MlKem;
+        let bad_sk = HybridKemSecretKey {
+            x25519: [0u8; 32],
+            ml_kem: vec![0u8; 100],
+        };
+        let ct = HybridCiphertext {
+            x25519: [0u8; 32],
+            ml_kem: vec![0u8; ML_KEM_768_CT_LEN],
+        };
+        assert!(kem.decapsulate(&bad_sk, &ct).is_err());
+    }
+
+    #[test]
+    fn kem_shared_secret_is_64_bytes() {
+        let kem = HybridX25519MlKem;
+        let (pk, sk) = kem.keypair_generate().unwrap();
+        let (ss, ct) = kem.encapsulate(&pk).unwrap();
+        assert_eq!(ss.0.len(), 64);
+
+        let ss2 = kem.decapsulate(&sk, &ct).unwrap();
+        assert_eq!(ss2.0.len(), 64);
+    }
+
+    #[test]
+    fn kem_keypair_sizes_correct() {
+        let kem = HybridX25519MlKem;
+        let (pk, sk) = kem.keypair_generate().unwrap();
+        assert_eq!(pk.x25519.len(), 32);
+        assert_eq!(pk.ml_kem.len(), ML_KEM_768_EK_LEN);
+        assert_eq!(sk.x25519.len(), 32);
+        assert_eq!(sk.ml_kem.len(), ML_KEM_768_DK_LEN);
+    }
+
+    #[test]
     fn seed_derivation_deterministic() {
         let seed = [0xab; 32];
         let spend1 = SeedDerivation::derive_ed25519_spend(&seed);

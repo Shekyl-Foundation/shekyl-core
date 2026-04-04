@@ -216,39 +216,6 @@ namespace rct {
       return verRctSemanticsSimple(std::vector<const rctSig*>(1, &rv));
     }
 
-    //ver FCMP++ non-semantics: verifies the FCMP++ membership proof
-    bool verRctNonSemanticsSimple(const rctSig & rv) {
-      try
-      {
-        PERF_TIMER(verRctNonSemanticsSimple);
-
-        CHECK_AND_ASSERT_MES(rv.type == RCTTypeFcmpPlusPlusPqc,
-            false, "verRctNonSemanticsSimple called on unsupported rctSig type");
-
-        CHECK_AND_ASSERT_MES(!rv.p.fcmp_pp_proof.empty(), false, "Empty FCMP++ proof");
-
-        // STUB: The full shekyl_fcmp_verify FFI call is wired in
-        // check_tx_inputs (blockchain.cpp), which directly calls the
-        // Rust verifier with all necessary context (key images, pseudo-outs,
-        // tree root, H(pqc_pk) hashes).  This function is retained for
-        // the verification-caching path; the actual FCMP++ membership proof
-        // is verified in the main consensus path, not here.
-        // TODO(Phase 5): Wire shekyl_fcmp_verify here too for the cached path,
-        // or remove this function entirely once caching is unified.
-        return true;
-      }
-      catch (const std::exception &e)
-      {
-        LOG_PRINT_L1("Error in verRctNonSemanticsSimple: " << e.what());
-        return false;
-      }
-      catch (...)
-      {
-        LOG_PRINT_L1("Error in verRctNonSemanticsSimple, but not an actual exception");
-        return false;
-      }
-    }
-
     //------------------------------------------------------------------------------------------------------------------------------
     // FCMP++ transaction construction: replaces ring signatures with a single
     // full-chain membership proof plus Bulletproofs+ range proofs.

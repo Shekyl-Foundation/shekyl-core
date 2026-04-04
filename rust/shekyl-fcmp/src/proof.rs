@@ -264,6 +264,36 @@ mod tests {
     }
 
     #[test]
+    fn prove_rejects_empty_inputs() {
+        let result = prove(&[], &[0; 32], 20);
+        assert!(matches!(result, Err(ProveError::TooManyInputs(0))));
+    }
+
+    #[test]
+    fn prove_rejects_empty_tree_path() {
+        let mut input = make_test_input(1);
+        input.tree_path = vec![];
+        let result = prove(&[input], &[0; 32], 20);
+        assert!(matches!(result, Err(ProveError::TreePathUnavailable(0))));
+    }
+
+    #[test]
+    fn prove_rejects_pqc_hash_mismatch() {
+        let mut input = make_test_input(1);
+        input.pqc_hash = PqcLeafScalar([0xff; 32]);
+        let result = prove(&[input], &[0; 32], 20);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn prove_max_inputs_accepted() {
+        let inputs: Vec<_> = (0..crate::MAX_INPUTS as u8).map(|i| make_test_input(i)).collect();
+        let result = prove(&inputs, &[0xaa; 32], 20);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().num_inputs, crate::MAX_INPUTS as u32);
+    }
+
+    #[test]
     fn verify_rejects_wrong_tree_root() {
         let inputs = vec![make_test_input(1)];
         let proof = prove(&inputs, &[0xaa; 32], 20).unwrap();
@@ -274,5 +304,68 @@ mod tests {
 
         let result = verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &[0xbb; 32], 20);
         assert!(matches!(result, Err(VerifyError::InvalidTreeRoot)));
+    }
+
+    #[test]
+    fn verify_rejects_wrong_tree_depth() {
+        let inputs = vec![make_test_input(1)];
+        let proof = prove(&inputs, &[0xaa; 32], 20).unwrap();
+
+        let key_images = vec![inputs[0].key_image];
+        let pseudo_outs = vec![inputs[0].pseudo_out];
+        let pqc_hashes = vec![inputs[0].pqc_hash];
+
+        let result = verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &[0xaa; 32], 15);
+        assert!(matches!(result, Err(VerifyError::InvalidTreeRoot)));
+    }
+
+    #[test]
+    fn verify_rejects_key_image_count_mismatch() {
+        let inputs = vec![make_test_input(1), make_test_input(2)];
+        let proof = prove(&inputs, &[0xaa; 32], 20).unwrap();
+
+        let result = verify(&proof, &[inputs[0].key_image], &[inputs[0].pseudo_out],
+            &[inputs[0].pqc_hash], &[0xaa; 32], 20);
+        assert!(matches!(result, Err(VerifyError::KeyImageCountMismatch)));
+    }
+
+    #[test]
+    fn verify_rejects_tampered_key_image() {
+        let inputs = vec![make_test_input(1)];
+        let proof = prove(&inputs, &[0xaa; 32], 20).unwrap();
+        let mut bad_ki = inputs[0].key_image;
+        bad_ki[0] ^= 0xff;
+
+        let result = verify(&proof, &[bad_ki], &[inputs[0].pseudo_out],
+            &[inputs[0].pqc_hash], &[0xaa; 32], 20);
+        assert!(matches!(result, Err(VerifyError::PqcCommitmentMismatch(_))));
+    }
+
+    #[test]
+    fn verify_rejects_truncated_proof() {
+        let proof = ShekylFcmpProof {
+            data: vec![0x01, 0x01, 20],
+            num_inputs: 1,
+            tree_depth: 20,
+        };
+        let result = verify(&proof, &[[0u8; 32]], &[[0u8; 32]],
+            &[PqcLeafScalar([0u8; 32])], &[0u8; 32], 20);
+        assert!(matches!(result, Err(VerifyError::DeserializationFailed)));
+    }
+
+    #[test]
+    fn prove_verify_single_input() {
+        let inputs = vec![make_test_input(42)];
+        let tree_root = [0x55; 32];
+        let proof = prove(&inputs, &tree_root, 10).unwrap();
+        assert_eq!(proof.num_inputs, 1);
+        assert_eq!(proof.tree_depth, 10);
+
+        let result = verify(&proof,
+            &[inputs[0].key_image],
+            &[inputs[0].pseudo_out],
+            &[inputs[0].pqc_hash],
+            &tree_root, 10);
+        assert!(result.unwrap());
     }
 }

@@ -41,18 +41,6 @@
 
 using namespace cryptonote;
 
-// Verify RCT non-semantics for FCMP++ transactions (no mix ring expansion needed)
-static bool ver_rct_non_sem(transaction& tx)
-{
-    VER_ASSERT(!tx.pruned, "Pruned transaction will not pass verRctNonSemanticsSimple");
-
-    const crypto::hash tx_prefix_hash = get_transaction_prefix_hash(tx);
-    Blockchain::expand_transaction_2(tx, tx_prefix_hash, {});
-
-    const rct::rctSig& rv = tx.rct_signatures;
-    return rct::verRctNonSemanticsSimple(rv);
-}
-
 static bool is_canonical_bulletproof_plus_layout(const std::vector<rct::BulletproofPlus> &proofs)
 {
     if (proofs.size() != 1)
@@ -140,40 +128,6 @@ uint64_t get_transaction_weight_limit(const uint8_t hf_version)
         return get_min_block_weight(hf_version) / 2 - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
     else
         return get_min_block_weight(hf_version) - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
-}
-
-bool ver_rct_non_semantics_simple_cached
-(
-    transaction& tx,
-    rct_ver_cache_t& cache,
-    std::uint8_t rct_type_to_cache
-)
-{
-    const bool untested_tx = tx.version > 3 || tx.rct_signatures.type > rct::RCTTypeFcmpPlusPlusPqc;
-    VER_ASSERT(!untested_tx, "Unknown TX type. Make sure RCT cache works correctly with this type and then enable it in the code here.");
-
-    if (tx.rct_signatures.type != rct_type_to_cache)
-    {
-        MDEBUG("RCT cache: tx " << get_transaction_hash(tx) << " skipped");
-        return ver_rct_non_sem(tx);
-    }
-
-    const crypto::hash tx_hash = get_transaction_hash(tx);
-
-    if (cache.has(tx_hash))
-    {
-        MDEBUG("RCT cache: tx " << tx_hash << " hit");
-        return true;
-    }
-
-    MDEBUG("RCT cache: tx " << tx_hash << " missed");
-    if (!ver_rct_non_sem(tx))
-    {
-        return false;
-    }
-
-    cache.add(tx_hash);
-    return true;
 }
 
 bool ver_mixed_rct_semantics(std::vector<const rct::rctSig*> rvv)

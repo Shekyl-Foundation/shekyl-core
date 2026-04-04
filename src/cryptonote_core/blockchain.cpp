@@ -64,7 +64,6 @@
 #include "common/notify.h"
 #include "common/varint.h"
 #include "common/pruning.h"
-#include "common/data_cache.h"
 #include "time_helper.h"
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
@@ -111,8 +110,7 @@ Blockchain::Blockchain(tx_memory_pool& tx_pool) :
   m_difficulty_for_next_block(1),
   m_btc_valid(false),
   m_batch_success(true),
-  m_prepare_height(0),
-  m_rct_ver_cache()
+  m_prepare_height(0)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 }
@@ -3258,6 +3256,23 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   const uint8_t hf_version = m_hardfork->get_current_version();
   const bool is_fcmp_pp = rct::is_rct_fcmp_pp_pqc(tx.rct_signatures.type);
 
+  // Detect pure stake-claim transactions (RCTTypeNull, all txin_stake_claim).
+  // These bypass the FCMP++ gate but still go through version, size, and
+  // claim-specific validation.
+  bool is_stake_claim_only = false;
+  if (tx.rct_signatures.type == rct::RCTTypeNull && !tx.vin.empty())
+  {
+    is_stake_claim_only = true;
+    for (const auto& vin : tx.vin)
+    {
+      if (!std::holds_alternative<txin_stake_claim>(vin))
+      {
+        is_stake_claim_only = false;
+        break;
+      }
+    }
+  }
+
   if (tx.version >= 2)
   {
     if (tx.vout.size() < 2)
@@ -3270,9 +3285,9 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 
   if (m_nettype != network_type::FAKECHAIN)
   {
-    if (!is_fcmp_pp)
+    if (!is_fcmp_pp && !is_stake_claim_only)
     {
-      MERROR_VER("Tx " << get_transaction_hash(tx) << " is not FCMP++; only FCMP++ transactions are supported");
+      MERROR_VER("Tx " << get_transaction_hash(tx) << " is not FCMP++ or stake claim; unsupported transaction type");
       tvc.m_verifivation_failed = true;
       return false;
     }
@@ -3363,7 +3378,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       }
     }
   }
-  else
+  else if (!is_stake_claim_only)
   {
     // Shekyl starts at genesis with FCMP++; ring-based transactions are
     // never valid.  Reject anything that reaches this branch.
@@ -3372,26 +3387,37 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     return false;
   }
 
-  static constexpr const std::uint8_t RCT_CACHE_TYPE = rct::RCTTypeFcmpPlusPlusPqc;
-
   {
     const rct::rctSig &rv = tx.rct_signatures;
     switch (rv.type)
     {
     case rct::RCTTypeNull: {
-      bool all_claim_inputs = !tx.vin.empty();
+      if (!is_stake_claim_only)
+      {
+        MERROR_VER("Null rct signature on non-coinbase, non-stake-claim tx");
+        return false;
+      }
+
+      const uint64_t chain_height = m_db->height();
       for (const auto& vin : tx.vin)
       {
-        if (!std::holds_alternative<txin_stake_claim>(vin))
+        const txin_stake_claim& claim = std::get<txin_stake_claim>(vin);
+
+        if (have_tx_keyimg_as_spent(claim.k_image))
         {
-          all_claim_inputs = false;
-          break;
+          MERROR_VER("Stake claim key image already spent: " << epee::string_tools::pod_to_hex(claim.k_image));
+          tvc.m_double_spend = true;
+          return false;
+        }
+
+        if (!check_stake_claim_input(claim, chain_height))
+        {
+          MERROR_VER("Stake claim validation failed for staked output " << claim.staked_output_index);
+          tvc.m_verifivation_failed = true;
+          return false;
         }
       }
-      if (all_claim_inputs)
-        break;
-      MERROR_VER("Null rct signature on non-coinbase tx");
-      return false;
+      break;
     }
     case rct::RCTTypeFcmpPlusPlusPqc:
     {
@@ -3867,10 +3893,6 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
     return false;
   }
 
-  // The staked output must have reached its lock_until height to be
-  // claimable.  Once deferred curve-tree insertion is implemented
-  // (Phase 4e pending_staked_leaves), this also guarantees the output
-  // is present in the curve tree.
   if (staked_lock_until > current_height)
   {
     MERROR_VER("Staked output " << claim.staked_output_index
@@ -3879,11 +3901,24 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
     return false;
   }
 
-  // TODO(Phase 4e): Once staked outputs use the 4-scalar leaf format
-  // {O.x, I.x, C.x, H(pqc_pk)} and deferred insertion is complete,
-  // verify that the staked output's leaf is present in the curve tree
-  // at the current height.  This requires an inclusion proof or a DB
-  // lookup of the leaf index in the Selene layer.
+  // Verify the staked output's leaf is present in the curve tree.
+  // The leaf count is the number of outputs that have been inserted;
+  // if staked_output_index >= leaf_count, the output hasn't entered the
+  // tree yet (e.g., deferred insertion not yet executed).
+  const uint64_t leaf_count = m_db->get_curve_tree_leaf_count();
+  if (claim.staked_output_index >= leaf_count)
+  {
+    MERROR_VER("Staked output " << claim.staked_output_index
+      << " is not in the curve tree (leaf_count " << leaf_count << ")");
+    return false;
+  }
+
+  uint8_t leaf_data[128];
+  if (!m_db->get_curve_tree_leaf(claim.staked_output_index, leaf_data))
+  {
+    MERROR_VER("Failed to read curve tree leaf for staked output " << claim.staked_output_index);
+    return false;
+  }
 
   uint64_t staked_amount = staked_out.amount;
   if (staked_amount == 0 && staked_tx.version >= 2)

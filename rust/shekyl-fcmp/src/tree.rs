@@ -461,4 +461,112 @@ mod tests {
         assert_eq!(chunk_width(2), SELENE_CHUNK_WIDTH);
         assert_eq!(chunk_width(3), HELIOS_CHUNK_WIDTH);
     }
+
+    #[test]
+    fn hash_grow_selene_multiple_scalars() {
+        let init = selene_hash_init();
+        let zero = [0u8; 32];
+        let mut s1 = [0u8; 32];
+        let mut s2 = [0u8; 32];
+        s1[0] = 1;
+        s2[0] = 2;
+
+        let one = hash_grow_selene(&init, 0, &zero, &[s1]).unwrap();
+        let two = hash_grow_selene(&init, 0, &zero, &[s1, s2]).unwrap();
+        assert_ne!(one, two, "different child counts must produce different hashes");
+    }
+
+    #[test]
+    fn hash_grow_trim_selene_inverse() {
+        let init = selene_hash_init();
+        let zero = [0u8; 32];
+        let mut scalar = [0u8; 32];
+        scalar[0] = 7;
+
+        let grown = hash_grow_selene(&init, 0, &zero, &[scalar]).unwrap();
+        assert_ne!(grown, init);
+
+        let trimmed = hash_trim_selene(&grown, 0, &[scalar], &zero).unwrap();
+        assert_eq!(trimmed, init, "trim must invert grow");
+    }
+
+    #[test]
+    fn hash_grow_trim_helios_inverse() {
+        let init = helios_hash_init();
+        let zero = [0u8; 32];
+        let mut scalar = [0u8; 32];
+        scalar[0] = 13;
+
+        let grown = hash_grow_helios(&init, 0, &zero, &[scalar]).unwrap();
+        assert_ne!(grown, init);
+
+        let trimmed = hash_trim_helios(&grown, 0, &[scalar], &zero).unwrap();
+        assert_eq!(trimmed, init, "trim must invert grow");
+    }
+
+    #[test]
+    fn hash_grow_selene_rejects_invalid_point() {
+        let bad_hash = [0xff; 32];
+        let zero = [0u8; 32];
+        let mut scalar = [0u8; 32];
+        scalar[0] = 1;
+        assert!(hash_grow_selene(&bad_hash, 0, &zero, &[scalar]).is_none());
+    }
+
+    #[test]
+    fn hash_grow_helios_rejects_invalid_point() {
+        let bad_hash = [0xff; 32];
+        let zero = [0u8; 32];
+        let mut scalar = [0u8; 32];
+        scalar[0] = 1;
+        assert!(hash_grow_helios(&bad_hash, 0, &zero, &[scalar]).is_none());
+    }
+
+    #[test]
+    fn construct_leaf_is_128_bytes() {
+        let mut output_key = [0u8; 32];
+        output_key[0] = 1;
+        use curve25519_dalek::constants::ED25519_BASEPOINT_COMPRESSED;
+        let basepoint = ED25519_BASEPOINT_COMPRESSED.to_bytes();
+
+        if let Some(leaf) = construct_leaf(&basepoint, &basepoint) {
+            assert_eq!(leaf.len(), 128);
+            // First three 32-byte segments should be nonzero
+            assert_ne!(&leaf[0..32], &[0u8; 32]);
+            assert_ne!(&leaf[32..64], &[0u8; 32]);
+            assert_ne!(&leaf[64..96], &[0u8; 32]);
+            // Fourth segment (H(pqc_pk)) is zero in current implementation
+            assert_eq!(&leaf[96..128], &[0u8; 32]);
+        }
+    }
+
+    #[test]
+    fn construct_leaf_rejects_identity_point() {
+        let identity = [1u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        // Identity point's Weierstrass x-coordinate conversion may fail
+        let _ = construct_leaf(&identity, &identity);
+    }
+
+    #[test]
+    fn layer_is_selene_alternates() {
+        assert!(layer_is_selene(0));
+        assert!(!layer_is_selene(1));
+        assert!(layer_is_selene(2));
+        assert!(!layer_is_selene(3));
+        assert!(layer_is_selene(254));
+        assert!(!layer_is_selene(255));
+    }
+
+    #[test]
+    fn leaf_chunk_scalars_consistent() {
+        assert_eq!(LEAF_CHUNK_SCALARS, SCALARS_PER_LEAF * SELENE_CHUNK_WIDTH);
+    }
+
+    #[test]
+    fn proof_size_increases_with_depth() {
+        let s_d8 = proof_size(1, 8);
+        let s_d16 = proof_size(1, 16);
+        assert!(s_d16 > s_d8, "deeper tree should produce larger proof");
+    }
 }

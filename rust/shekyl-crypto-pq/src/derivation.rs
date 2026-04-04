@@ -192,4 +192,67 @@ mod tests {
         let h = hash_pqc_public_key(&pk);
         assert_eq!(h[31] & 0x80, 0);
     }
+
+    #[test]
+    fn derivation_sequential_indices_all_unique() {
+        let ss = [0xab; 64];
+        let mut seen_pks = std::collections::HashSet::new();
+        for i in 0..10u64 {
+            let kp = derive_pqc_keypair(&ss, i).unwrap();
+            assert!(seen_pks.insert(kp.public_key), "index {i} produced duplicate key");
+        }
+    }
+
+    #[test]
+    fn derivation_large_index() {
+        let ss = [0xab; 64];
+        let kp = derive_pqc_keypair(&ss, u64::MAX).unwrap();
+        assert_eq!(kp.public_key.len(), ML_DSA_65_PK_LEN);
+    }
+
+    #[test]
+    fn hash_pqc_pk_different_lengths() {
+        let short = hash_pqc_public_key(&[0xab; 32]);
+        let long = hash_pqc_public_key(&[0xab; ML_DSA_65_PK_LEN]);
+        assert_ne!(short, long);
+    }
+
+    #[test]
+    fn hash_pqc_pk_empty_input() {
+        let h = hash_pqc_public_key(&[]);
+        assert_eq!(h[31] & 0x80, 0);
+        assert_ne!(h, [0u8; 32]);
+    }
+
+    #[test]
+    fn derived_keypair_sign_verify_consistency() {
+        use fips204::traits::{Signer as _, Verifier as _};
+
+        let ss = [0xcd; 64];
+        for idx in [0u64, 1, 100, u64::MAX - 1] {
+            let kp = derive_pqc_keypair(&ss, idx).unwrap();
+
+            let sk_bytes: [u8; ML_DSA_65_SK_LEN] = kp.secret_key.as_slice().try_into().unwrap();
+            let pk_bytes: [u8; ML_DSA_65_PK_LEN] = kp.public_key.as_slice().try_into().unwrap();
+            let sk = ml_dsa_65::PrivateKey::try_from_bytes(sk_bytes).unwrap();
+            let pk = ml_dsa_65::PublicKey::try_from_bytes(pk_bytes).unwrap();
+
+            let msg = format!("test message for output index {idx}");
+            let sig = sk.try_sign(msg.as_bytes(), &[]).unwrap();
+            assert!(pk.verify(msg.as_bytes(), &sig, &[]),
+                "sign/verify failed for index {idx}");
+        }
+    }
+
+    #[test]
+    fn hash_matches_leaf_scalar() {
+        use shekyl_fcmp::leaf::PqcLeafScalar;
+
+        let ss = [0xab; 64];
+        let kp = derive_pqc_keypair(&ss, 0).unwrap();
+        let h = hash_pqc_public_key(&kp.public_key);
+        let leaf_scalar = PqcLeafScalar::from_pqc_public_key(&kp.public_key);
+        assert_eq!(h, leaf_scalar.0,
+            "hash_pqc_public_key and PqcLeafScalar::from_pqc_public_key must agree");
+    }
 }

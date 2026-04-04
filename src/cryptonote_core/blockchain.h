@@ -1288,9 +1288,6 @@ namespace cryptonote
     uint64_t m_prepare_nblocks;
     std::vector<block> *m_prepare_blocks;
 
-    // cache for verifying transaction RCT non semantics
-    mutable rct_ver_cache_t m_rct_ver_cache;
-
     /**
      * @brief collects the keys for all outputs being "spent" as an input
      *

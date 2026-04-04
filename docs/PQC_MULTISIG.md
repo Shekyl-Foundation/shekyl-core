@@ -273,7 +273,9 @@ signed_payload =
   cn_fast_hash(
     serialize(TransactionPrefixV3)
     || serialize(RctSigningBody)
+    || H(serialize(RctSigPrunable))
     || serialize(PqcAuthHeader)
+    || H(pqc_pk_0) || ... || H(pqc_pk_{N-1})
   )
 ```
 

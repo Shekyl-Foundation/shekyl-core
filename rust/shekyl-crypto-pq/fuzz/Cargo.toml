@@ -39,4 +39,18 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_bech32m_address_decode"
+path = "fuzz_targets/fuzz_bech32m_address_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_kem_decapsulate"
+path = "fuzz_targets/fuzz_kem_decapsulate.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

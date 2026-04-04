@@ -478,7 +478,9 @@ signed_payload =
   cn_fast_hash(
     serialize(TransactionPrefixV3)
     || serialize(RctSigningBody)
+    || H(serialize(RctSigPrunable))
     || serialize(PqcAuthHeader)
+    || H(pqc_pk_0) || H(pqc_pk_1) || ... || H(pqc_pk_{N-1})
   )
 ```
 
@@ -488,6 +490,11 @@ Where:
   `extra`
 - `RctSigningBody` is the non-PQC FCMP++ body data required to bind the actual
   transaction economics, outputs, and spend semantics (see layout below)
+- `H(serialize(RctSigPrunable))` is `cn_fast_hash` of the serialized prunable
+  data (`fcmp_pp_proof`, `pseudoOuts`, `curve_trees_tree_depth`,
+  `BulletproofPlus`), binding the signature to the FCMP++ proof
+- `H(pqc_pk_i)` is `cn_fast_hash` of the `hybrid_public_key` blob for each
+  input, binding each signature to all inputs' authorized PQC keys
 - `PqcAuthHeader` is:
 
 ```text

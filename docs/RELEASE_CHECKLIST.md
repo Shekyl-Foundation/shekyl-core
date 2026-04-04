@@ -1,3 +1,14 @@
+- [ ] **Stressnet stable for 4 consecutive weeks** (Phase 7.7)
+  - [ ] All stressnet acceptance criteria met (see `tests/stressnet/README.md`)
+  - [ ] Zero tree root divergences for full 4-week run
+  - [ ] Block validation p95 < 500ms sustained
+  - [ ] Verification cache hit rate > 95% sustained
+  - [ ] Stressnet summary report archived
+- [ ] **4-scalar leaf circuit audit completed** (Phase 9)
+  - [ ] Audit engagement initiated after stressnet gate
+  - [ ] No critical or high findings in final report
+  - [ ] All findings remediated and re-verified
+  - [ ] Written security assessment report archived (see `docs/AUDIT_SCOPE.md`)
 - [ ] Security audit
 - [ ] Code audit
 - [ ] PQC specification frozen

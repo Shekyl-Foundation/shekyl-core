@@ -323,10 +323,17 @@ state:
 signed_payload_i = cn_fast_hash(
     serialize(TransactionPrefixV3)
     || serialize(RctSigningBody)
+    || H(serialize(RctSigPrunable))
     || serialize(PqcAuthHeader_i)
     || H(pqc_pk_0) || H(pqc_pk_1) || ... || H(pqc_pk_{N-1})
 )
 ```
+
+`H(serialize(RctSigPrunable))` is `cn_fast_hash` of the serialized prunable
+data (`fcmp_pp_proof`, `pseudoOuts`, `curve_trees_tree_depth`,
+`BulletproofPlus`). This 32-byte digest directly binds the PQC signature
+to the FCMP++ proof, preventing an attacker from substituting different
+prunable data without invalidating PQC signatures.
 
 The final concatenation of **all** inputs' PQC public-key hashes binds each
 signature to the complete set of authorized keys, preventing key-substitution
@@ -339,7 +346,10 @@ other inputs' signatures.
 |-------|-----------|---------|
 | `referenceBlock` | `RctSigningBody` (in `rctSigBase`) | Anchors the tree snapshot |
 | All key images | `TransactionPrefixV3` (in `vin`) | Prevents key image substitution |
-| `fcmp_pp_proof` | `prunable_hash` → `tx_hash` → miner commitment | Proof immutability |
+| `fcmp_pp_proof` | `H(RctSigPrunable)` in signed payload | Direct proof binding |
+| `pseudoOuts` | `H(RctSigPrunable)` in signed payload | Pseudo-output binding |
+| `curve_trees_tree_depth` | `H(RctSigPrunable)` in signed payload | Tree depth binding |
+| `BulletproofPlus` | `H(RctSigPrunable)` in signed payload | Range proof binding |
 | `H(pqc_pk)` values | `PqcAuthHeader_i` + all-inputs hash tail | Full PQC key binding |
 
 ### PqcAuthHeader Layout (Per-Input)
@@ -466,7 +476,8 @@ from `pqc_auths` in the same code path.
 ### Step 7: Bulletproof+ Range Proof Verification
 
 Standard BulletproofPlus verification for output range proofs, handled by
-the existing `ver_rct_non_semantics_simple_cached` infrastructure.
+`verRctSemanticsSimple` (batch verification of BP+ and pseudo-output sum
+checks) called from `ver_mixed_rct_semantics` in `tx_verification_utils.cpp`.
 
 ---
 
@@ -799,7 +810,11 @@ the anonymity set. This requires a `pending_staked_leaves` DB table
 **Claim validation:** `txin_stake_claim` inputs are validated against
 the staked output's `lock_until`, watermark, and computed reward. The
 `lock_until > current_height` check ensures outputs are only claimable
-after their lock period expires.
+after their lock period expires. Additionally, `check_stake_claim_input`
+verifies the staked output's leaf is present in the curve tree by checking
+`staked_output_index < get_curve_tree_leaf_count()` and reading the leaf
+data with `get_curve_tree_leaf()`. If the output hasn't been inserted
+into the tree (e.g., deferred insertion pending), the claim is rejected.
 
 ---
 
@@ -846,7 +861,7 @@ after their lock period expires.
 | key_offsets empty check | **Done** | `blockchain.cpp` |
 | Key image y-normalization check | **Done** | `blockchain.cpp` |
 | FCMP++ proof FFI call | **Done** | `blockchain.cpp` → `shekyl_fcmp_verify()` |
-| Verification caching | **Done** | `blockchain_db.h`, `tx_pool.cpp`, `blockchain.cpp` |
+| Verification caching (mempool FCMP++ hash) | **Done** | `tx_pool.cpp`, `blockchain.cpp` |
 | `genRctFcmpPlusPlus` (wallet-side proof) | **Done** | `rctSigs.cpp` |
 | Wallet tree-path precomputation | **Done** | `wallet2.cpp` |
 | PQC key rederivation from stored secret | **Done** | `wallet2.cpp` |
@@ -864,10 +879,15 @@ after their lock period expires.
 | `RCTConfig` parameter removal from tx construction | **Done** | `cryptonote_tx_utils.h/cpp`, `wallet2.h/cpp` |
 | RPC `low_mixin` field removal | **Done** | `core_rpc_server.cpp`, `core_rpc_server_commands_defs.h` |
 | Staked output curve-tree leaves | **Done** | `blockchain_db.cpp` |
+| Stake claim curve-tree leaf presence check | **Done** | `blockchain.cpp` (`check_stake_claim_input`) |
+| Stake claim wired in `check_tx_inputs` | **Done** | `blockchain.cpp` (RCTTypeNull case + non-FAKECHAIN gate) |
+| PQC `auth_version`/`flags` consensus checks | **Done** | `tx_pqc_verify.cpp` |
+| Single-signer key size validation | **Done** | `tx_pqc_verify.cpp` |
+| Dead `verRctNonSemanticsSimple` / cache removal | **Done** | `rctSigs.h/cpp`, `tx_verification_utils.h/cpp` |
 | Deferred staked-output insertion | **TODO** | `pending_staked_leaves` DB table |
 | Per-input `pqc_auths` field | **Done** | `cryptonote_basic.h` |
 | Per-input PQC signature verification | **Done** | `tx_pqc_verify.cpp` |
-| PQC signed payload binds all inputs' H(pqc_pk) | **Done** | `tx_pqc_verify.cpp` |
+| PQC signed payload binds prunable data + all H(pqc_pk) | **Done** | `tx_pqc_verify.cpp` |
 | `pqc_authentication` deserialization size bounds | **Done** | `cryptonote_basic.h` |
 | `pseudoOuts` gated in generic `rctSigBase` serializer | **Done** | `rctTypes.h` |
 | `pop_block()` height symmetry fix | **Done** | `blockchain_db.cpp` |
@@ -876,6 +896,75 @@ after their lock period expires.
 | Coinbase KEM self-encapsulation | **Done** | `cryptonote_tx_utils.cpp` (`construct_miner_tx`) |
 | Wallet transfer flow FCMP++ integration | **Done** | `wallet2.cpp` |
 | Fee estimation for FCMP++ proof size | **Done** | `wallet2.cpp` |
+| Stressnet tooling (load gen, monitor, config) | **Done** | `tests/stressnet/` |
+| 4-scalar leaf circuit audit scope | **Done** | `docs/AUDIT_SCOPE.md` |
+| Cargo-fuzz targets (6 targets) | **Done** | `rust/shekyl-fcmp/fuzz/`, `rust/shekyl-crypto-pq/fuzz/` |
+| Rust unit test suite (proof, tree, leaf, kem, address, derivation) | **Done** | `rust/shekyl-fcmp/src/`, `rust/shekyl-crypto-pq/src/` |
+| C++ unit tests (FCMP++ specific) | **Done** | `tests/unit_tests/fcmp.cpp` |
+| PQC rederivation benchmark (criterion) | **Done** | `rust/shekyl-crypto-pq/benches/pqc_rederivation.rs` |
+
+---
+
+## 19. Testing & Fuzzing
+
+### Fuzz Targets
+
+Six `cargo-fuzz` targets exercise the critical parsing and crypto boundaries:
+
+| Target | Crate | What it tests |
+|--------|-------|---------------|
+| `fuzz_fcmp_proof_deserialize` | `shekyl-fcmp` | Malformed, truncated, and oversized proof blobs |
+| `fuzz_curve_tree_leaf_hash` | `shekyl-fcmp` | Arbitrary 4×32-byte leaf inputs, PQC scalar boundary values |
+| `fuzz_block_header_tree_root` | `shekyl-fcmp` | Mismatched `curve_tree_root` between prove and verify |
+| `fuzz_bech32m_address_decode` | `shekyl-crypto-pq` | Random strings through Bech32m decoder, wrong HRPs, bad checksums |
+| `fuzz_kem_decapsulate` | `shekyl-crypto-pq` | Corrupted ML-KEM ciphertexts, wrong-length keys and ciphertexts |
+| `fuzz_tx_deserialize_fcmp_type7` | C++ unit tests | RCTTypeFcmpPlusPlusPqc serialization boundary testing |
+
+Run any target:
+
+```bash
+cd rust/shekyl-fcmp/fuzz && cargo +nightly fuzz run fuzz_fcmp_proof_deserialize -- -runs=10000000
+cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_bech32m_address_decode -- -runs=10000000
+```
+
+### Rust Unit Tests
+
+Comprehensive tests cover prove/verify round-trips, edge cases (empty inputs,
+max inputs, truncated proofs, tampered key images), hash grow/trim
+inverse properties, leaf serialization layout, PQC keypair derivation
+determinism, Bech32m address encoding/decoding, and cross-crate consistency
+between `hash_pqc_public_key` and `PqcLeafScalar::from_pqc_public_key`.
+
+```bash
+cd rust && cargo test --workspace
+```
+
+### C++ Unit Tests
+
+`tests/unit_tests/fcmp.cpp` covers:
+
+- `RCTTypeFcmpPlusPlusPqc` serialization round-trip
+- `key_image_y_normalize` correctness and idempotency
+- `referenceBlock` staleness constant validation
+- `key_offsets` empty enforcement for FCMP++ type
+- `get_pseudo_outs` routing (prunable vs base for FCMP++ type)
+- `curve_tree_root` block header serialization round-trip
+- Empty FCMP++ proof rejection by `shekyl_fcmp_verify` (in `check_tx_inputs`)
+
+### PQC Rederivation Benchmark
+
+`rust/shekyl-crypto-pq/benches/pqc_rederivation.rs` uses Criterion to
+benchmark the full per-output key rederivation pipeline:
+
+1. ML-KEM-768 decapsulation
+2. HKDF-SHA-512 seed derivation + ML-DSA-65 keygen
+3. Blake2b-512 public key hash
+
+Target: **< 100ms per output** on x86_64.
+
+```bash
+cd rust/shekyl-crypto-pq && cargo bench --bench pqc_rederivation
+```
 
 ---
 
@@ -883,6 +972,8 @@ after their lock period expires.
 
 - `docs/POST_QUANTUM_CRYPTOGRAPHY.md` — full PQC specification
 - `docs/PQC_MULTISIG.md` — multisig scheme (`scheme_id = 2`)
+- `docs/AUDIT_SCOPE.md` — 4-scalar leaf circuit security audit scope
+- `tests/stressnet/README.md` — stressnet operational guide (pre-audit gate)
 - `src/shekyl/shekyl_ffi.h` — FFI declarations
 - `src/fcmp/rctSigs.h` — `genRctFcmpPlusPlus` declaration
 - `rust/shekyl-fcmp/` — Rust FCMP++ proof implementation

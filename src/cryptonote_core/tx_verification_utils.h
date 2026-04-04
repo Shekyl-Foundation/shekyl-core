@@ -28,7 +28,6 @@
 
 #pragma once
 
-#include "common/data_cache.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/verification_context.h"
 
@@ -42,41 +41,6 @@ namespace cryptonote
  * @return the maximum unconditional transaction weight
  */
 uint64_t get_transaction_weight_limit(uint8_t hf_version);
-
-// Modifying this value should not affect consensus. You can adjust it for performance needs
-static constexpr const size_t RCT_VER_CACHE_SIZE = 8192;
-
-using rct_ver_cache_t = ::tools::data_cache<::crypto::hash, RCT_VER_CACHE_SIZE>;
-
-/**
- * @brief Cached version of rct::verRctNonSemanticsSimple
- *
- * This function will not affect how the transaction is serialized and it will never modify the
- * transaction prefix.
- *
- * The reference to tx is mutable since the transaction's ring signatures may be expanded by
- * Blockchain::expand_transaction_2. However, on cache hits, the transaction will not be
- * expanded. This means that the caller does not need to call expand_transaction_2 on this
- * transaction before passing it; the transaction will not successfully verify with "old" RCT data
- * if the transaction has been otherwise modified since the last verification.
- *
- * But, if cryptonote::get_transaction_hash(tx) returns a "stale" hash, this function is not
- * guaranteed to work. So make sure that the cryptonote::transaction passed has not had
- * modifications to it since the last time its hash was fetched without properly invalidating the
- * hashes.
- *
- * @param tx transaction which contains RCT signature to verify
- * @param cache saves tx hashes used to cache calls
- * @param rct_type_to_cache Only RCT sigs with this version will be cached
- * @return true when verRctNonSemanticsSimple() w/ expanded tx.rct_signatures would return true
- * @return false when verRctNonSemanticsSimple() w/ expanded tx.rct_signatures would return false
- */
-bool ver_rct_non_semantics_simple_cached
-(
-    transaction& tx,
-    rct_ver_cache_t& cache,
-    std::uint8_t rct_type_to_cache
-);
 
 /**
  * @brief Verify the semantics of a group of FCMP++ signatures as a batch (if applicable)

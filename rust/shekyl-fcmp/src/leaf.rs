@@ -130,4 +130,58 @@ mod tests {
         let restored = ShekylLeaf::from_bytes(&bytes);
         assert_eq!(leaf, restored);
     }
+
+    #[test]
+    fn pqc_leaf_scalar_empty_key() {
+        let s = PqcLeafScalar::from_pqc_public_key(&[]);
+        assert_eq!(s.0[31] & 0x80, 0);
+    }
+
+    #[test]
+    fn pqc_leaf_scalar_single_byte_keys() {
+        for b in 0..=255u8 {
+            let s = PqcLeafScalar::from_pqc_public_key(&[b]);
+            assert_eq!(s.0[31] & 0x80, 0);
+        }
+    }
+
+    #[test]
+    fn leaf_size_constant_is_128() {
+        assert_eq!(ShekylLeaf::SIZE, 128);
+    }
+
+    #[test]
+    fn leaf_serialization_layout() {
+        let leaf = ShekylLeaf {
+            o_x: [0xAA; 32],
+            i_x: [0xBB; 32],
+            c_x: [0xCC; 32],
+            h_pqc: PqcLeafScalar([0xDD; 32]),
+        };
+        let bytes = leaf.to_bytes();
+        assert!(bytes[..32].iter().all(|&b| b == 0xAA));
+        assert!(bytes[32..64].iter().all(|&b| b == 0xBB));
+        assert!(bytes[64..96].iter().all(|&b| b == 0xCC));
+        assert!(bytes[96..128].iter().all(|&b| b == 0xDD));
+    }
+
+    #[test]
+    fn leaf_zero_roundtrip() {
+        let leaf = ShekylLeaf {
+            o_x: [0u8; 32],
+            i_x: [0u8; 32],
+            c_x: [0u8; 32],
+            h_pqc: PqcLeafScalar([0u8; 32]),
+        };
+        let restored = ShekylLeaf::from_bytes(&leaf.to_bytes());
+        assert_eq!(leaf, restored);
+    }
+
+    #[test]
+    fn pqc_leaf_scalar_serde_roundtrip() {
+        let original = PqcLeafScalar([0xab; 32]);
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: PqcLeafScalar = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, deserialized);
+    }
 }

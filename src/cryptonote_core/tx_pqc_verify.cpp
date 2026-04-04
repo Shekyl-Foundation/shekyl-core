@@ -77,8 +77,32 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
     const size_t inputs = tx.vin.size();
     const size_t outputs = tx.vout.size();
     if (!tt.rct_signatures.serialize_rctsig_base(ba, inputs, outputs))
+    {
+      MERROR("PQC payload: failed to serialize rctSigBase (input " << input_index << ")");
       return false;
+    }
     rct_blob = ss.str();
+  }
+
+  // Hash the prunable RCT data (fcmp_pp_proof, pseudoOuts, curve_trees_tree_depth,
+  // Bulletproofs+) and include the 32-byte digest in the signed payload. Without
+  // this binding, an attacker could substitute a different FCMP++ proof without
+  // invalidating PQC signatures, breaking the dual-layer security model.
+  std::string prunable_hash_blob;
+  {
+    const rct::rctSig& rv = tx.rct_signatures;
+    const size_t inputs = tx.vin.size();
+    const size_t outputs = tx.vout.size();
+    std::ostringstream ss;
+    binary_archive<true> ba(ss);
+    if (!const_cast<rct::rctSigPrunable&>(rv.p).serialize_rctsig_prunable(ba, rv.type, inputs, outputs))
+    {
+      MERROR("PQC payload: failed to serialize rctSigPrunable (input " << input_index << ")");
+      return false;
+    }
+    crypto::hash prunable_h;
+    cryptonote::get_blob_hash(ss.str(), prunable_h);
+    prunable_hash_blob.assign(reinterpret_cast<const char*>(prunable_h.data), sizeof(prunable_h.data));
   }
 
   // Serialize the current input's PQC header (auth_version, scheme_id, flags, key)
@@ -101,6 +125,14 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
   // Bind ALL inputs' PQC public key hashes into the signed payload.
   // Without this, an attacker could substitute one input's PQC key without
   // invalidating other inputs' signatures.
+  //
+  // NOTE: this uses cn_fast_hash (Keccak-256) via get_blob_hash, which is
+  // intentionally different from shekyl_fcmp_pqc_leaf_hash (Blake2b-512
+  // with domain separator "shekyl-pqc-leaf") used for the in-circuit 4th
+  // leaf scalar.  The two serve different purposes: the leaf hash is the
+  // curve tree commitment verified inside the FCMP++ proof; the Keccak
+  // hash here is a signature-domain binding preventing key substitution
+  // across inputs.  Neither depends on the other's collision resistance.
   std::string all_pqc_key_hashes;
   {
     for (size_t i = 0; i < tx.pqc_auths.size(); ++i)
@@ -114,7 +146,7 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
     }
   }
 
-  payload_out = prefix_blob + rct_blob + pqc_header_blob + all_pqc_key_hashes;
+  payload_out = prefix_blob + rct_blob + prunable_hash_blob + pqc_header_blob + all_pqc_key_hashes;
   return true;
 }
 
@@ -138,6 +170,18 @@ bool verify_transaction_pqc_auth(const transaction& tx,
   {
     const pqc_authentication& auth = tx.pqc_auths[idx];
 
+    if (auth.auth_version != 1)
+    {
+      MERROR("PQC verify: unsupported auth_version " << (int)auth.auth_version << " (expected 1, input " << idx << ")");
+      return false;
+    }
+
+    if (auth.flags != 0)
+    {
+      MERROR("PQC verify: non-zero flags 0x" << std::hex << auth.flags << std::dec << " (input " << idx << ")");
+      return false;
+    }
+
     if (auth.scheme_id != PQC_SCHEME_SINGLE && auth.scheme_id != PQC_SCHEME_MULTISIG)
     {
       MERROR("PQC verify: unknown scheme_id " << (int)auth.scheme_id << " (input " << idx << ")");
@@ -151,7 +195,22 @@ bool verify_transaction_pqc_auth(const transaction& tx,
       return false;
     }
 
-    if (auth.scheme_id == PQC_SCHEME_MULTISIG)
+    if (auth.hybrid_public_key.empty())
+    {
+      MERROR("PQC verify: empty hybrid_public_key (input " << idx << ")");
+      return false;
+    }
+
+    if (auth.scheme_id == PQC_SCHEME_SINGLE)
+    {
+      if (auth.hybrid_public_key.size() != HYBRID_SINGLE_KEY_LEN)
+      {
+        MERROR("PQC verify: single-signer key blob size " << auth.hybrid_public_key.size()
+               << " != expected " << HYBRID_SINGLE_KEY_LEN << " (input " << idx << ")");
+        return false;
+      }
+    }
+    else if (auth.scheme_id == PQC_SCHEME_MULTISIG)
     {
       if (auth.hybrid_public_key.size() < MULTISIG_KEY_HEADER_LEN)
       {

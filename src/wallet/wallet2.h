@@ -1111,9 +1111,10 @@ private:
     uint8_t pqc_multisig_m() const { return m_pqc_multisig_m; }
     crypto::hash pqc_multisig_group_id() const { return m_pqc_multisig_group_id; }
     bool create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, const std::vector<std::vector<uint8_t>>& participant_public_keys);
-    std::string export_multisig_signing_request(const pending_tx& ptx);
+    std::string export_multisig_signing_request(pending_tx& ptx);
     bool sign_multisig_partial(const std::string& signing_request_json, std::string& signature_response_json);
     bool import_multisig_signatures(pending_tx& ptx, const std::vector<std::string>& signature_response_jsons);
+    bool prepare_multisig_fcmp_proof(pending_tx& ptx);
     std::vector<wallet2::pending_tx> create_claim_transaction(const std::vector<size_t>& staked_indices);
     std::vector<size_t> get_matured_staked_outputs() const;
     std::vector<size_t> get_locked_staked_outputs() const;

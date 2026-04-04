@@ -322,4 +322,76 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn decode_rejects_wrong_segment_count() {
+        let result = ShekylAddress::decode("shekyl1abc/skpq1def");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_rejects_empty_string() {
+        assert!(ShekylAddress::decode("").is_err());
+    }
+
+    #[test]
+    fn decode_rejects_garbage() {
+        assert!(ShekylAddress::decode("not_a_valid_address").is_err());
+        assert!(ShekylAddress::decode("shekyl1invalidchecksum").is_err());
+    }
+
+    #[test]
+    fn version_byte_v1_accepted() {
+        let addr = make_test_address();
+        assert_eq!(addr.version, ADDRESS_VERSION_V1);
+        let encoded = addr.encode().unwrap();
+        let decoded = ShekylAddress::decode(&encoded).unwrap();
+        assert_eq!(decoded.version, ADDRESS_VERSION_V1);
+    }
+
+    #[test]
+    fn version_byte_v0_rejected() {
+        let mut addr = make_test_address();
+        addr.version = 0x00;
+        if let Ok(encoded) = addr.encode() {
+            assert!(ShekylAddress::decode(&encoded).is_err());
+        }
+    }
+
+    #[test]
+    fn version_byte_v255_rejected() {
+        let mut addr = make_test_address();
+        addr.version = 0xFF;
+        if let Ok(encoded) = addr.encode() {
+            assert!(ShekylAddress::decode(&encoded).is_err());
+        }
+    }
+
+    #[test]
+    fn classical_segment_starts_with_hrp() {
+        let addr = make_test_address();
+        let classical = addr.encode_classical_display().unwrap();
+        assert!(classical.starts_with(HRP_CLASSICAL));
+    }
+
+    #[test]
+    fn full_address_has_three_segments() {
+        let addr = make_test_address();
+        let encoded = addr.encode().unwrap();
+        let parts: Vec<&str> = encoded.split(SEGMENT_SEPARATOR).collect();
+        assert_eq!(parts.len(), 3);
+        assert!(parts[0].starts_with(HRP_CLASSICAL));
+        assert!(parts[1].starts_with(HRP_PQC_A));
+        assert!(parts[2].starts_with(HRP_PQC_B));
+    }
+
+    #[test]
+    fn different_keys_produce_different_addresses() {
+        let addr1 = make_test_address();
+        let mut addr2 = make_test_address();
+        addr2.spend_key = [0xdd; 32];
+        let enc1 = addr1.encode().unwrap();
+        let enc2 = addr2.encode().unwrap();
+        assert_ne!(enc1, enc2);
+    }
 }
