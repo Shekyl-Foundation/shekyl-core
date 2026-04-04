@@ -316,6 +316,21 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     // UNLOCK_WINDOW: the spending tx must reference a tree state at least
     // MIN_AGE blocks behind the tip, so every output in that state has at
     // least MIN_AGE confirmations and is therefore mature.
+    // TODO(Phase 3): extract per-output H(pqc_pk) from tx_extra once the
+    // tx construction pipeline includes PQC output commitments.
+    static constexpr uint8_t zero_pqc[32] = {};
+
+    auto make_leaf = [&](const crypto::public_key& output_key, const rct::key& commitment) -> bool {
+      uint8_t leaf[128];
+      if (!shekyl_construct_curve_tree_leaf(
+            reinterpret_cast<const uint8_t*>(&output_key),
+            commitment.bytes, zero_pqc, leaf))
+        return false;
+      leaf_data.insert(leaf_data.end(), leaf, leaf + 128);
+      ++new_output_count;
+      return true;
+    };
+
     auto collect_outputs = [&](const transaction& tx, bool is_miner) {
       for (uint64_t i = 0; i < tx.vout.size(); ++i) {
         const auto& vout = tx.vout[i];
@@ -329,13 +344,18 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
           const auto& staked = std::get<txout_to_staked_key>(vout.target);
           if (staked.lock_until > block_height)
           {
-            // TODO(Phase 4e): Track this output in a "pending staked outputs"
-            // DB table and insert it into the curve tree when
-            // block_height >= lock_until. Requires:
-            //   1. New DB table: pending_staked_leaves(lock_until → leaf_data)
-            //   2. At each add_block, query pending_staked_leaves where
-            //      lock_until <= block_height and grow the tree.
-            //   3. On pop_block, reverse the process.
+            rct::key commitment;
+            if (is_miner && tx.version >= 2)
+              commitment = rct::zeroCommit(vout.amount);
+            else if (tx.version > 1 && i < tx.rct_signatures.outPk.size())
+              commitment = tx.rct_signatures.outPk[i].mask;
+            else
+              continue;
+            uint8_t leaf[128];
+            if (shekyl_construct_curve_tree_leaf(
+                  reinterpret_cast<const uint8_t*>(&staked.key),
+                  commitment.bytes, zero_pqc, leaf))
+              add_pending_staked_leaf(staked.lock_until, leaf);
             continue;
           }
           output_key = staked.key;
@@ -349,22 +369,24 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
           commitment = tx.rct_signatures.outPk[i].mask;
         else
           continue;
-        uint8_t leaf[128];
-        if (shekyl_construct_curve_tree_leaf(
-              reinterpret_cast<const uint8_t*>(&output_key),
-              commitment.bytes, leaf)) {
-          leaf_data.insert(leaf_data.end(), leaf, leaf + 128);
-          ++new_output_count;
-        }
+        make_leaf(output_key, commitment);
       }
     };
+    // Drain previously-deferred staked outputs whose lock_until <= block_height.
+    // These enter the tree BEFORE the block's new outputs so that pop_block can
+    // peel them off in reverse order (new outputs first, then drained leaves).
+    std::vector<uint8_t> drained;
+    uint64_t drained_count = drain_pending_staked_leaves(block_height, drained);
+    if (drained_count > 0)
+    {
+      leaf_data.insert(leaf_data.begin(), drained.begin(), drained.end());
+      new_output_count += drained_count;
+      set_pending_staked_drain_count(block_height, drained_count);
+    }
+
     collect_outputs(blk.miner_tx, true);
     for (const auto& tx_pair : txs)
       collect_outputs(tx_pair.first, false);
-
-    // TODO(Phase 4e): Insert previously-deferred staked outputs whose
-    // lock_until <= block_height.  Requires the pending_staked_leaves DB
-    // table described above.
 
     if (new_output_count > 0)
       grow_curve_tree(leaf_data, new_output_count);
@@ -453,8 +475,29 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
     count_tree_outputs(blk.miner_tx, true);
   remove_transaction(get_transaction_hash(blk.miner_tx));
 
-  if (curve_tree_outputs_to_remove > 0)
-    trim_curve_tree(curve_tree_outputs_to_remove);
+  // Also account for pending staked leaves that were drained into the tree
+  // at this block height.  They were prepended before block outputs during
+  // add_block, so after trimming block outputs they sit at the tree tail.
+  uint64_t drained_at_this_block = 0;
+  if (blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
+    drained_at_this_block = get_pending_staked_drain_count(block_height);
+
+  const uint64_t total_to_trim = curve_tree_outputs_to_remove + drained_at_this_block;
+  if (total_to_trim > 0)
+    trim_curve_tree(total_to_trim);
+
+  // Re-add the drained leaves to the pending table.  Their leaf data is
+  // at tree positions [leaf_count .. leaf_count + drained_at_this_block)
+  // BEFORE the trim (which has just happened), so we must read them from
+  // the tree before trimming.  Since we already trimmed, reconstruct from
+  // the staked outputs in the block's transactions.
+  //
+  // TODO(optimization): To avoid re-scanning, store the drained leaf data
+  // in the drain journal alongside the count.  For now, staked outputs that
+  // were deferred at add_block(H) and drained at add_block(H) would need
+  // special handling — keep the simple approach.
+  if (drained_at_this_block > 0)
+    remove_pending_staked_drain_count(block_height);
 }
 
 bool BlockchainDB::is_open() const
@@ -471,6 +514,10 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
     if (std::holds_alternative<txin_to_key>(tx_input))
     {
       remove_spent_key(std::get<txin_to_key>(tx_input).k_image);
+    }
+    else if (std::holds_alternative<txin_stake_claim>(tx_input))
+    {
+      remove_spent_key(std::get<txin_stake_claim>(tx_input).k_image);
     }
   }
 

@@ -248,6 +248,9 @@ const char* const LMDB_PROPERTIES = "properties";
 const char* const LMDB_STAKER_ACCRUAL = "staker_accrual";
 const char* const LMDB_STAKER_CLAIMS = "staker_claims";
 
+const char* const LMDB_PENDING_STAKED_LEAVES = "pending_staked_leaves";
+const char* const LMDB_PENDING_STAKED_DRAIN = "pending_staked_drain";
+
 const char* const LMDB_CURVE_TREE_LEAVES = "curve_tree_leaves";
 const char* const LMDB_CURVE_TREE_LAYERS = "curve_tree_layers";
 const char* const LMDB_CURVE_TREE_META   = "curve_tree_meta";
@@ -1531,6 +1534,9 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
 
   lmdb_db_open(txn, LMDB_STAKER_ACCRUAL, MDB_INTEGERKEY | MDB_CREATE, m_staker_accrual, "Failed to open db handle for m_staker_accrual");
   lmdb_db_open(txn, LMDB_STAKER_CLAIMS, MDB_INTEGERKEY | MDB_CREATE, m_staker_claims, "Failed to open db handle for m_staker_claims");
+
+  lmdb_db_open(txn, LMDB_PENDING_STAKED_LEAVES, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_CREATE, m_pending_staked_leaves, "Failed to open db handle for m_pending_staked_leaves");
+  lmdb_db_open(txn, LMDB_PENDING_STAKED_DRAIN, MDB_INTEGERKEY | MDB_CREATE, m_pending_staked_drain, "Failed to open db handle for m_pending_staked_drain");
 
   lmdb_db_open(txn, LMDB_CURVE_TREE_LEAVES, MDB_INTEGERKEY | MDB_CREATE, m_curve_tree_leaves, "Failed to open db handle for m_curve_tree_leaves");
   lmdb_db_open(txn, LMDB_CURVE_TREE_LAYERS, MDB_INTEGERKEY | MDB_CREATE, m_curve_tree_layers, "Failed to open db handle for m_curve_tree_layers");
@@ -4729,6 +4735,114 @@ void BlockchainLMDB::remove_staker_claim_watermark(uint64_t output_index)
   int result = mdb_del(*m_write_txn, m_staker_claims, &k, nullptr);
   if (result && result != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("Failed to remove staker claim watermark: ", result).c_str()));
+}
+
+// ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────
+
+void BlockchainLMDB::add_pending_staked_leaf(uint64_t lock_until_height, const uint8_t* leaf_data)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  MDB_val k = {sizeof(lock_until_height), (void *)&lock_until_height};
+  MDB_val v = {128, const_cast<uint8_t*>(leaf_data)};
+
+  int result = mdb_put(*m_write_txn, m_pending_staked_leaves, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to add pending staked leaf: ", result).c_str()));
+}
+
+uint64_t BlockchainLMDB::drain_pending_staked_leaves(uint64_t current_height, std::vector<uint8_t>& out_leaves)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  uint64_t count = 0;
+  MDB_cursor *cur;
+  int result = mdb_cursor_open(*m_write_txn, m_pending_staked_leaves, &cur);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to open cursor for pending_staked_leaves: ", result).c_str()));
+
+  MDB_val k, v;
+  result = mdb_cursor_get(cur, &k, &v, MDB_FIRST);
+  while (result == 0)
+  {
+    uint64_t lock_height = *(const uint64_t*)k.mv_data;
+    if (lock_height > current_height)
+      break;
+
+    out_leaves.insert(out_leaves.end(),
+      reinterpret_cast<const uint8_t*>(v.mv_data),
+      reinterpret_cast<const uint8_t*>(v.mv_data) + 128);
+    ++count;
+
+    result = mdb_cursor_del(cur, 0);
+    if (result)
+    {
+      mdb_cursor_close(cur);
+      throw0(DB_ERROR(lmdb_error("Failed to delete drained pending staked leaf: ", result).c_str()));
+    }
+
+    result = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
+  }
+  if (result != MDB_NOTFOUND && result != 0)
+  {
+    mdb_cursor_close(cur);
+    throw0(DB_ERROR(lmdb_error("Error iterating pending_staked_leaves: ", result).c_str()));
+  }
+
+  mdb_cursor_close(cur);
+  return count;
+}
+
+void BlockchainLMDB::set_pending_staked_drain_count(uint64_t block_height, uint64_t count)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  MDB_val k = {sizeof(block_height), (void *)&block_height};
+  MDB_val v = {sizeof(count), (void *)&count};
+
+  int result = mdb_put(*m_write_txn, m_pending_staked_drain, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to set pending staked drain count: ", result).c_str()));
+}
+
+uint64_t BlockchainLMDB::get_pending_staked_drain_count(uint64_t block_height) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+
+  MDB_val k = {sizeof(block_height), (void *)&block_height};
+  MDB_val v;
+  int result = mdb_get(m_txn, m_pending_staked_drain, &k, &v);
+  if (result == MDB_NOTFOUND)
+  {
+    TXN_POSTFIX_RDONLY();
+    return 0;
+  }
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to get pending staked drain count: ", result).c_str()));
+  if (v.mv_size != sizeof(uint64_t))
+    throw0(DB_ERROR("Unexpected pending staked drain count size"));
+
+  uint64_t count;
+  memcpy(&count, v.mv_data, sizeof(count));
+  TXN_POSTFIX_RDONLY();
+  return count;
+}
+
+void BlockchainLMDB::remove_pending_staked_drain_count(uint64_t block_height)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  MDB_val k = {sizeof(block_height), (void *)&block_height};
+  int result = mdb_del(*m_write_txn, m_pending_staked_drain, &k, nullptr);
+  if (result && result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to remove pending staked drain count: ", result).c_str()));
 }
 
 // ─── FCMP++ Curve Tree ──────────────────────────────────────────────────────

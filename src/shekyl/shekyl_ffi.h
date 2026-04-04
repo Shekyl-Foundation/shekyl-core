@@ -307,14 +307,16 @@ bool shekyl_ed25519_to_selene_scalar(
     const uint8_t* compressed_ptr,
     uint8_t* out_scalar_ptr);
 
-// Construct a 128-byte curve tree leaf from output pubkey and commitment.
+// Construct a 128-byte curve tree leaf from output pubkey, commitment, and PQC hash.
 // output_key_ptr: 32 bytes compressed Ed25519 output public key (O).
 // commitment_ptr: 32 bytes compressed Ed25519 amount commitment (C).
+// h_pqc_ptr: 32 bytes H(pqc_pk) scalar (or 32 zero bytes if unavailable).
 // leaf_out_ptr: 128 bytes output for {O.x, I.x, C.x, H(pqc_pk)}.
 // Returns true on success.
 bool shekyl_construct_curve_tree_leaf(
     const uint8_t* output_key_ptr,
     const uint8_t* commitment_ptr,
+    const uint8_t* h_pqc_ptr,
     uint8_t* leaf_out_ptr);
 
 // Daemon RPC (Axum)

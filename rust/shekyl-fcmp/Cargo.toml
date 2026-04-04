@@ -12,8 +12,8 @@ license.workspace = true
 
 [dependencies]
 # Upstream FCMP++ crates from Shekyl-Foundation fork.
-# IMPORTANT: The fcmp++ branch must be fetched from upstream monero-oxide/monero-oxide
-# into the Shekyl-Foundation fork before this dependency resolves.
+# The authoritative pin is `rust/Cargo.lock` (currently monero-oxide @ 92af05e0d44bd1ec1fed6028a8d2aade615f805a).
+# Use `branch = "fcmp++"` here; bump the lock when advancing the fork.
 monero-fcmp-plus-plus = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
 monero-generators = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++" }
 helioselene = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++" }
@@ -36,7 +36,6 @@ serde.workspace = true
 
 [dev-dependencies]
 rand = "0.8"
-serde_json = "1"
 
 [features]
 default = ["std"]

@@ -2,7 +2,95 @@
 
 ## Unreleased
 
+### 🔒 Security
+
+- **Integer-only stake reward computation.** Replaced floating-point
+  arithmetic (`(double)total_reward * weight / total_weighted_stake`) with
+  128-bit integer math (`mul128`/`div128_64`) in `check_stake_claim_input`
+  to eliminate rounding errors that could cause determinism mismatches
+  across platforms.
+
+- **Batch pool balance validation for stake claims.** Moved the staker
+  pool balance check from per-claim (`check_stake_claim_input`) to a
+  batch check in `check_tx_inputs` that sums all claim amounts first.
+  Prevents multiple claims in the same block from independently passing
+  the balance check and overdrawing the pool.
+
+- **PQC ownership cross-check on stake claims.** Each `txin_stake_claim`
+  now verifies that the `H(pqc_pk)` stored in the curve tree leaf (bytes
+  96–128) matches `shekyl_fcmp_pqc_leaf_hash(pqc_auths[i].hybrid_public_key)`,
+  preventing reward claims for outputs the claimer does not own the PQC
+  key for.
+
+### 🐛 Fixed
+
+- **Stake claim key image cleanup on reorg.** `remove_transaction` in
+  `blockchain_db.cpp` now handles `txin_stake_claim` key images in
+  addition to `txin_to_key`, preventing stale key images from persisting
+  after block pops.
+
+### 🔄 Changed
+
+- **Sorted input enforcement extended to stake claims.** The
+  sorted-inputs check in `check_tx_inputs` now covers both `txin_to_key`
+  and `txin_stake_claim` key images, ensuring consistent ordering rules
+  across all input types.
+
+- **Third-party headers treated as SYSTEM includes.** `external/`, `external/rapidjson`,
+  `external/easylogging++`, and `external/supercop` are now `-isystem` in CMake,
+  suppressing `-Wsuggest-override` and other warnings from third-party code while
+  keeping strict warnings for first-party code.
+
+### 🗑️ Removed
+
+- **Dead `check_ring_signature` function.** Removed unused ring signature
+  verification from `blockchain.cpp` and its declaration from
+  `blockchain.h`. Shekyl uses FCMP++ from genesis; ring signatures are
+  never validated.
+
+- **Dead `expand_transaction_2` function.** Removed the no-op transaction
+  expansion function from `blockchain.cpp` and its declaration from
+  `blockchain.h`. FCMP++ does not use mixRing expansion.
+
+- **Dropped `serde_json` dev-dependency from `shekyl-fcmp`.** Replaced the JSON
+  round-trip test with a byte-level serialization check, reducing the dev-dep
+  surface.
+
+### 📚 Documentation
+
+- Synced `docs/FCMP_PLUS_PLUS.md` curve-tree text with consensus: outputs are
+  indexed at creation; maturity is enforced via `referenceBlock` and other
+  rules, not by delaying leaf insertion.
+- Clarified `docs/POST_QUANTUM_CRYPTOGRAPHY.md` to use `pqc_auths` (per-input)
+  terminology consistently.
+- Documented mempool FCMP verification-cache id: `compute_fcmp_verification_hash`
+  binds proof + `referenceBlock` + key images (comment in `blockchain.cpp`).
+- Noted the monero-oxide commit pin in `rust/shekyl-fcmp/Cargo.toml` comments
+  (lockfile remains authoritative).
+- Updated `docs/STAKER_REWARD_DISBURSEMENT.md` with integer arithmetic, batch
+  pool check, PQC cross-check, and sorted input consensus rules.
+
 ### ✨ Added
+
+- **Block-inclusion FCMP++ cache fast path.** When a transaction was previously
+  verified in the mempool and arrives in a block, `check_tx_inputs` skips the
+  expensive `shekyl_fcmp_verify` FFI call (~35ms/input) while still running all
+  structural checks (referenceBlock, depth, key images, PQC auth).
+
+- **`construct_leaf` now accepts PQC key hash parameter.** The Rust FFI
+  function `shekyl_construct_curve_tree_leaf` takes a 4th `h_pqc_ptr` argument
+  (32 bytes) to set the 4th leaf scalar.  Callers pass zero bytes until
+  per-output PQC commitments are wired in Phase 3.
+
+- **Deferred staked leaf insertion infrastructure.**
+  Added `pending_staked_leaves` (LMDB DUPSORT/DUPFIXED table keyed by
+  `lock_until_height` with 128-byte leaf values) and `pending_staked_drain`
+  (block_height → drain count) tables to the blockchain database layer.
+  Five new methods on `BlockchainDB`: `add_pending_staked_leaf`,
+  `drain_pending_staked_leaves`, `set_pending_staked_drain_count`,
+  `get_pending_staked_drain_count`, and `remove_pending_staked_drain_count`.
+  This enables staked outputs whose `lock_until > block_height` to be parked
+  in a pending table and batch-inserted into the curve tree when they mature.
 
 - **Comprehensive FCMP++ test suite and fuzz targets (Phase 7).**
   Added 6 `cargo-fuzz` targets across `rust/shekyl-fcmp/fuzz/` (proof
@@ -500,14 +588,12 @@
     `{O.x, I.x, C.x, H(pqc_pk)}`.
   - Deferred insertion: staked outputs only enter the curve tree when
     `block_height >= lock_until`.  Outputs still within their lock
-    period are skipped with a TODO for the `pending_staked_leaves` DB
-    table to handle retroactive insertion.
+    period are stored in the `pending_staked_leaves` DB table and
+    inserted into the curve tree when they mature (see deferred
+    staked leaf insertion entry below).
   - `check_stake_claim_input` now rejects claims on outputs whose
     `lock_until > current_height`, ensuring claimability only after
     the lock period expires.
-  - TODO markers document the remaining work: pending-staked-leaves DB
-    table, retroactive insertion on `add_block`, and curve-tree
-    inclusion proof for stake claims.
 - **FCMP++ Phase 5: Wallet transaction construction skeleton.**
   - Added `rct::genRctFcmpPlusPlus()` in `src/fcmp/rctSigs.cpp` — builds
     an FCMP++ `rctSig` with `RCTTypeFcmpPlusPlusPqc`, Bulletproofs+ range

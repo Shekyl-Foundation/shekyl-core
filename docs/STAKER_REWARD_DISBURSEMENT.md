@@ -62,10 +62,12 @@ No minimum stake amount. Any amount can be staked.
 1. `from_height` must equal the claim watermark + 1 for the staked output (or the output's creation height for the first claim).
 2. `to_height` must not exceed the current chain height.
 3. `to_height - from_height` must not exceed `MAX_CLAIM_RANGE` (10,000 blocks).
-4. The claimed `amount` must match the deterministic per-block reward computation summed over `[from_height, to_height]`.
+4. The claimed `amount` must match the deterministic per-block reward computation summed over `[from_height, to_height]`. Reward computation uses 128-bit integer arithmetic (`mul128`/`div128_64`) to avoid floating-point rounding errors.
 5. The `k_image` must not already be spent (anti-double-claim).
 6. Pure claim transactions (all inputs are `txin_stake_claim`) use `RCTTypeNull` signatures.
-7. The pool balance must be sufficient to cover the claim amount.
+7. The **total** of all claim amounts in a transaction must not exceed the pool balance. This is enforced as a batch check in `check_tx_inputs` (not per-claim) to prevent multiple claims in the same block from overdrawing the pool.
+8. Each claim's `H(pqc_pk)` from the curve tree leaf must match `shekyl_fcmp_pqc_leaf_hash(pqc_auths[i].hybrid_public_key)` (PQC ownership cross-check).
+9. Stake claim inputs must be sorted by key image (same rule as `txin_to_key` inputs).
 
 ### Accrual computation per block
 

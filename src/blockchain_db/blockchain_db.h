@@ -1950,6 +1950,49 @@ public:
   virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const = 0;
   virtual void remove_staker_claim_watermark(uint64_t output_index) = 0;
 
+  // ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────
+
+  /**
+   * @brief store a pre-computed curve tree leaf for deferred insertion.
+   *
+   * Staked outputs whose lock_until > current block_height are stored here.
+   * They will be inserted into the curve tree when a future add_block sees
+   * block_height >= lock_until.
+   *
+   * @param lock_until_height  the height at which this leaf becomes eligible
+   * @param leaf_data          128 bytes of pre-computed leaf data
+   */
+  virtual void add_pending_staked_leaf(uint64_t lock_until_height, const uint8_t* leaf_data) = 0;
+
+  /**
+   * @brief drain all pending staked leaves whose lock_until <= current_height.
+   *
+   * Removes matching entries from the pending table and appends their
+   * 128-byte leaf data to @p out_leaves.
+   *
+   * @param current_height  the height of the block being added
+   * @param out_leaves      output buffer; 128 bytes appended per drained leaf
+   * @return number of leaves drained
+   */
+  virtual uint64_t drain_pending_staked_leaves(uint64_t current_height, std::vector<uint8_t>& out_leaves) = 0;
+
+  /**
+   * @brief record how many pending leaves were drained at a given block height.
+   *
+   * Used by pop_block to reverse the drain.
+   */
+  virtual void set_pending_staked_drain_count(uint64_t block_height, uint64_t count) = 0;
+
+  /**
+   * @brief get the number of pending leaves drained at a given block height.
+   */
+  virtual uint64_t get_pending_staked_drain_count(uint64_t block_height) const = 0;
+
+  /**
+   * @brief remove the drain count record for a given block height.
+   */
+  virtual void remove_pending_staked_drain_count(uint64_t block_height) = 0;
+
   // ─── FCMP++ Curve Tree ─────────────────────────────────────────────────────
 
   /**

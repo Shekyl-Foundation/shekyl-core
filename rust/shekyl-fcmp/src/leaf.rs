@@ -178,10 +178,16 @@ mod tests {
     }
 
     #[test]
-    fn pqc_leaf_scalar_serde_roundtrip() {
+    fn pqc_leaf_scalar_byte_roundtrip() {
         let original = PqcLeafScalar([0xab; 32]);
-        let json = serde_json::to_string(&original).unwrap();
-        let deserialized: PqcLeafScalar = serde_json::from_str(&json).unwrap();
-        assert_eq!(original, deserialized);
+        let leaf = ShekylLeaf {
+            o_x: [1u8; 32],
+            i_x: [2u8; 32],
+            c_x: [3u8; 32],
+            h_pqc: original,
+        };
+        let bytes = leaf.to_bytes();
+        let restored = ShekylLeaf::from_bytes(&bytes);
+        assert_eq!(restored.h_pqc, original);
     }
 }

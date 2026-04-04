@@ -463,7 +463,8 @@ endif()
 # elseif(CMAKE_SYSTEM_NAME MATCHES ".*BSDI.*")
 #   set(BSDI TRUE)
 
-include_directories(external/rapidjson/include external/easylogging++ src contrib/epee/include external external/supercop/include)
+include_directories(src contrib/epee/include)
+include_directories(SYSTEM external/rapidjson/include external/easylogging++ external external/supercop/include)
 
 if(MSVC OR MINGW)
   set(DEFAULT_STATIC true)

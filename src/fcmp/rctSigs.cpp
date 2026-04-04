@@ -331,13 +331,17 @@ namespace rct {
         for (size_t i = 0; i < pqc_pk_hashes.size(); ++i)
             memcpy(pqc_hashes_buf.data() + i * 32, pqc_pk_hashes[i].bytes, 32);
 
-        // Construct leaf scalars from input public keys for the prover.
+        // Construct leaf scalars from input public keys + PQC hashes for the prover.
+        static constexpr uint8_t zero_pqc[32] = {};
         std::vector<uint8_t> leaves_buf(inPk.size() * 128);
         for (size_t i = 0; i < inPk.size(); ++i)
         {
+            const uint8_t* h_pqc = (i < pqc_pk_hashes.size())
+                ? pqc_pk_hashes[i].bytes : zero_pqc;
             bool ok = shekyl_construct_curve_tree_leaf(
                 inPk[i].dest.bytes,
                 inPk[i].mask.bytes,
+                h_pqc,
                 leaves_buf.data() + i * 128);
             CHECK_AND_ASSERT_THROW_MES(ok, "shekyl_construct_curve_tree_leaf failed for input " << i);
         }

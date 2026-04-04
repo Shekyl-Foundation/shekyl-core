@@ -1518,20 +1518,24 @@ pub extern "C" fn shekyl_ed25519_to_selene_scalar(
 ///
 /// - `output_key_ptr`: 32 bytes, compressed Ed25519 output public key (O)
 /// - `commitment_ptr`: 32 bytes, compressed Ed25519 amount commitment (C)
+/// - `h_pqc_ptr`: 32 bytes, H(pqc_pk) scalar (or 32 zero bytes if unavailable)
 /// - `leaf_out_ptr`: 128 bytes output buffer for {O.x, I.x, C.x, H(pqc_pk)}
 ///
 /// Internally computes I = Hp(O) via Monero's biased hash-to-point, then
-/// extracts Wei25519 x-coordinates for O, Hp(O), C. The 4th scalar is
-/// zero (PQC placeholder).
+/// extracts Wei25519 x-coordinates for O, Hp(O), C. The 4th scalar comes
+/// from `h_pqc_ptr`.
 ///
 /// Returns true on success, false on decompression failure.
 #[no_mangle]
 pub extern "C" fn shekyl_construct_curve_tree_leaf(
     output_key_ptr: *const u8,
     commitment_ptr: *const u8,
+    h_pqc_ptr: *const u8,
     leaf_out_ptr: *mut u8,
 ) -> bool {
-    if output_key_ptr.is_null() || commitment_ptr.is_null() || leaf_out_ptr.is_null() {
+    if output_key_ptr.is_null() || commitment_ptr.is_null()
+        || h_pqc_ptr.is_null() || leaf_out_ptr.is_null()
+    {
         return false;
     }
 
@@ -1545,8 +1549,13 @@ pub extern "C" fn shekyl_construct_curve_tree_leaf(
         std::ptr::copy_nonoverlapping(commitment_ptr, buf.as_mut_ptr(), 32);
         buf
     };
+    let h_pqc: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(h_pqc_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
 
-    match shekyl_fcmp::tree::construct_leaf(&output_key, &commitment) {
+    match shekyl_fcmp::tree::construct_leaf(&output_key, &commitment, &h_pqc) {
         Some(leaf) => {
             unsafe { std::ptr::copy_nonoverlapping(leaf.as_ptr(), leaf_out_ptr, 128) };
             true

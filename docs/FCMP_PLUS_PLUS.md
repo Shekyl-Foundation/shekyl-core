@@ -46,8 +46,11 @@ scalar field is the other's base field), enabling efficient recursive hash
 computations. The alternating structure allows the zero-knowledge proof to
 "step through" the tree without revealing which path was taken.
 
-The tree is **append-only**: outputs enter the tree when they become
-spendable (after the unlock period), and spent outputs remain in the tree
+The tree is **append-only**: each new output is **indexed into the tree when
+it is created** (in the block that contains the transaction). **Spend
+maturity** (coinbase unlock, regular spendable age, and FCMP++
+`referenceBlock` depth rules) is enforced by consensus separately — outputs
+are not withheld from the tree until unlock. Spent outputs remain in the tree
 permanently. Removing spent outputs would reveal which output was spent,
 breaking the anonymity guarantee.
 
@@ -315,6 +318,9 @@ Returns an error if no checkpoint exists at the requested height.
 ---
 
 ## 6. Per-Input Signed Payload Layout
+
+Implementation entry point: `cryptonote::get_transaction_signed_payload()` in
+`src/cryptonote_core/tx_pqc_verify.cpp` (declared in `tx_pqc_verify.h`).
 
 Each `pqc_auths[i]` signs a payload that commits to the full transaction
 state:
@@ -804,17 +810,38 @@ Leaf = { O.x, I.x, C.x, H(pqc_pk) }
 
 **Deferred curve-tree insertion:** Staked outputs only enter the curve tree
 after `block_height >= lock_until`. Until then, they are invisible to
-the anonymity set. This requires a `pending_staked_leaves` DB table
-(not yet implemented) to track deferred insertions.
+the anonymity set. The `pending_staked_leaves` LMDB table (keyed by
+`lock_until_height`, DUPSORT/DUPFIXED with 128-byte leaf values) stores
+pre-computed leaves until they mature. On each `add_block`,
+`drain_pending_staked_leaves` collects all entries with
+`lock_until <= block_height`, deletes them from the pending table, and
+appends them to the curve tree growth batch. A companion
+`pending_staked_drain` table records the drain count per block height so
+`pop_block` can reverse the operation.
 
 **Claim validation:** `txin_stake_claim` inputs are validated against
-the staked output's `lock_until`, watermark, and computed reward. The
-`lock_until > current_height` check ensures outputs are only claimable
-after their lock period expires. Additionally, `check_stake_claim_input`
-verifies the staked output's leaf is present in the curve tree by checking
+the staked output's `lock_until`, watermark, and computed reward (using
+128-bit integer arithmetic for precision). The `lock_until > current_height`
+check ensures outputs are only claimable after their lock period expires.
+Additionally, `check_stake_claim_input` verifies the staked output's leaf
+is present in the curve tree by checking
 `staked_output_index < get_curve_tree_leaf_count()` and reading the leaf
 data with `get_curve_tree_leaf()`. If the output hasn't been inserted
 into the tree (e.g., deferred insertion pending), the claim is rejected.
+
+**PQC ownership cross-check:** For each stake claim input `i`, the
+`H(pqc_pk)` stored at bytes 96–128 of the curve tree leaf must match
+`shekyl_fcmp_pqc_leaf_hash(pqc_auths[i].hybrid_public_key)`. This
+prevents an attacker from claiming rewards for an output they do not
+control the PQC key for.
+
+**Batch pool balance check:** The total of all claim amounts in a
+transaction is summed and checked against `staker_pool_balance` once (in
+`check_tx_inputs`), rather than checking each claim individually. This
+prevents multiple claims in the same block from overdrawing the pool.
+
+**Sorted inputs:** Stake claim key images must be sorted in ascending
+order, enforced alongside the existing `txin_to_key` sort check.
 
 ---
 
@@ -832,6 +859,9 @@ into the tree (e.g., deferred insertion pending), the claim is rejected.
 | `pqc_auths` count mismatch | `pqc_auths.size() != vin.size()` | `tvc.m_verifivation_failed` |
 | PQC signature invalid | `shekyl_pqc_verify` returns false | `tvc.m_verifivation_failed` |
 | Key image double-spend | Key image already in DB | `tvc.m_double_spend` |
+| Stake claim PQC mismatch | Leaf `H(pqc_pk)` ≠ `pqc_auths[i]` hash | `tvc.m_verifivation_failed` |
+| Stake claim pool overdraw | Sum of all claim amounts > pool balance | `tvc.m_verifivation_failed` |
+| Stake claim amount overflow | `total_claimed` wraps `uint64_t` | `tvc.m_verifivation_failed` |
 
 ---
 
@@ -881,10 +911,17 @@ into the tree (e.g., deferred insertion pending), the claim is rejected.
 | Staked output curve-tree leaves | **Done** | `blockchain_db.cpp` |
 | Stake claim curve-tree leaf presence check | **Done** | `blockchain.cpp` (`check_stake_claim_input`) |
 | Stake claim wired in `check_tx_inputs` | **Done** | `blockchain.cpp` (RCTTypeNull case + non-FAKECHAIN gate) |
+| Stake claim PQC ownership cross-check | **Done** | `blockchain.cpp` (RCTTypeNull case, `H(pqc_pk)` leaf vs `pqc_auths`) |
+| Stake claim batch pool balance check | **Done** | `blockchain.cpp` (RCTTypeNull case, sum-then-check) |
+| Stake claim sorted input enforcement | **Done** | `blockchain.cpp` (sorted-ins block handles `txin_stake_claim`) |
+| Stake claim key images in `remove_transaction` | **Done** | `blockchain_db.cpp` |
+| Integer-only reward computation | **Done** | `blockchain.cpp` (`check_stake_claim_input`, `mul128`/`div128_64`) |
+| Dead `check_ring_signature` removal | **Done** | `blockchain.cpp`, `blockchain.h` |
+| Dead `expand_transaction_2` removal | **Done** | `blockchain.cpp`, `blockchain.h` |
 | PQC `auth_version`/`flags` consensus checks | **Done** | `tx_pqc_verify.cpp` |
 | Single-signer key size validation | **Done** | `tx_pqc_verify.cpp` |
 | Dead `verRctNonSemanticsSimple` / cache removal | **Done** | `rctSigs.h/cpp`, `tx_verification_utils.h/cpp` |
-| Deferred staked-output insertion | **TODO** | `pending_staked_leaves` DB table |
+| Deferred staked-output insertion | **Done** | `pending_staked_leaves` / `pending_staked_drain` DB tables |
 | Per-input `pqc_auths` field | **Done** | `cryptonote_basic.h` |
 | Per-input PQC signature verification | **Done** | `tx_pqc_verify.cpp` |
 | PQC signed payload binds prunable data + all H(pqc_pk) | **Done** | `tx_pqc_verify.cpp` |

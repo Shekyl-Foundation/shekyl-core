@@ -277,12 +277,19 @@ pub fn ed25519_point_to_selene_scalar(compressed: &[u8; 32]) -> Option<[u8; 32]>
     Some(x.to_repr().into())
 }
 
-/// Construct a 128-byte curve tree leaf from an output's public key and commitment.
+/// Construct a 128-byte curve tree leaf from an output's public key, commitment,
+/// and PQC key hash.
 ///
 /// Computes Hp(O) (Monero's hash-to-curve), then extracts the Wei25519
-/// x-coordinates of O, Hp(O), and C. The 4th scalar (H(pqc_pk)) is set to
-/// zero until PQC keys are included in the output format (Phase 3+).
-pub fn construct_leaf(output_key: &[u8; 32], commitment: &[u8; 32]) -> Option<[u8; 128]> {
+/// x-coordinates of O, Hp(O), and C.  The 4th scalar is `h_pqc` (the
+/// domain-separated Blake2b-512 hash of the hybrid PQC public key, reduced
+/// to a Selene scalar).  Pass `&[0u8; 32]` for outputs that have no PQC
+/// key commitment (e.g. coinbase before self-encapsulation is wired).
+pub fn construct_leaf(
+    output_key: &[u8; 32],
+    commitment: &[u8; 32],
+    h_pqc: &[u8; 32],
+) -> Option<[u8; 128]> {
     let hp_point = monero_generators::biased_hash_to_point(*output_key);
     let hp_bytes: [u8; 32] = hp_point.compress().to_bytes();
 
@@ -294,12 +301,7 @@ pub fn construct_leaf(output_key: &[u8; 32], commitment: &[u8; 32]) -> Option<[u
     leaf[0..32].copy_from_slice(&o_x);
     leaf[32..64].copy_from_slice(&i_x);
     leaf[64..96].copy_from_slice(&c_x);
-    // leaf[96..128] = H(pqc_pk).  Currently zero because PQC public keys are
-    // not yet committed per-output.  When Phase 3 adds per-output PQC keys,
-    // this scalar will hold the hash of the PQC public key.  NOTE: all leaves
-    // stored before that activation will have H(pqc_pk)=0.  A full tree
-    // rebuild (or migration) will be required at activation to replace zeros
-    // with actual PQC key hashes for historical outputs.
+    leaf[96..128].copy_from_slice(h_pqc);
     Some(leaf)
 }
 
@@ -524,18 +526,26 @@ mod tests {
 
     #[test]
     fn construct_leaf_is_128_bytes() {
-        let mut output_key = [0u8; 32];
-        output_key[0] = 1;
         use curve25519_dalek::constants::ED25519_BASEPOINT_COMPRESSED;
         let basepoint = ED25519_BASEPOINT_COMPRESSED.to_bytes();
+        let pqc_hash = [0x42u8; 32];
 
-        if let Some(leaf) = construct_leaf(&basepoint, &basepoint) {
+        if let Some(leaf) = construct_leaf(&basepoint, &basepoint, &pqc_hash) {
             assert_eq!(leaf.len(), 128);
-            // First three 32-byte segments should be nonzero
             assert_ne!(&leaf[0..32], &[0u8; 32]);
             assert_ne!(&leaf[32..64], &[0u8; 32]);
             assert_ne!(&leaf[64..96], &[0u8; 32]);
-            // Fourth segment (H(pqc_pk)) is zero in current implementation
+            assert_eq!(&leaf[96..128], &pqc_hash);
+        }
+    }
+
+    #[test]
+    fn construct_leaf_zero_pqc_hash() {
+        use curve25519_dalek::constants::ED25519_BASEPOINT_COMPRESSED;
+        let basepoint = ED25519_BASEPOINT_COMPRESSED.to_bytes();
+        let zero_pqc = [0u8; 32];
+
+        if let Some(leaf) = construct_leaf(&basepoint, &basepoint, &zero_pqc) {
             assert_eq!(&leaf[96..128], &[0u8; 32]);
         }
     }
@@ -544,8 +554,7 @@ mod tests {
     fn construct_leaf_rejects_identity_point() {
         let identity = [1u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        // Identity point's Weierstrass x-coordinate conversion may fail
-        let _ = construct_leaf(&identity, &identity);
+        let _ = construct_leaf(&identity, &identity, &[0u8; 32]);
     }
 
     #[test]

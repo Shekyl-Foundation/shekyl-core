@@ -3220,30 +3220,12 @@ std::vector<bool> Blockchain::have_tx_keyimges_as_spent(const epee::span<const c
   return m_db->has_key_images(key_imgs);
 }
 //------------------------------------------------------------------
-bool Blockchain::expand_transaction_2(transaction &tx, const crypto::hash &tx_prefix_hash, const std::vector<std::vector<rct::ctkey>> &pubkeys)
-{
-  PERF_TIMER(expand_transaction_2);
-  CHECK_AND_ASSERT_MES(tx.version >= 2, false, "Transaction version is not 2 or 3");
-
-  rct::rctSig &rv = tx.rct_signatures;
-
-  rv.message = rct::hash2rct(tx_prefix_hash);
-
-  CHECK_AND_ASSERT_MES(rv.type == rct::RCTTypeFcmpPlusPlusPqc,
-    false, "Unsupported rct tx type: " + boost::lexical_cast<std::string>(rv.type));
-
-  // FCMP++ uses full-chain membership proofs: no mixRing expansion, no CLSAG key images
-  // outPk was already done by handle_incoming_tx
-
-  return true;
-}
-//------------------------------------------------------------------
 // This function validates transaction inputs and their keys.
 // FIXME: consider moving functionality specific to one input into
 //        check_tx_input() rather than here, and use this function simply
 //        to iterate the inputs as necessary (splitting the task
 //        using threads, etc.)
-bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, uint64_t* pmax_used_block_height) const
+bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, uint64_t* pmax_used_block_height, bool skip_fcmp_verify) const
 {
   PERF_TIMER(check_tx_inputs);
   LOG_PRINT_L3("Blockchain::" << __func__);
@@ -3322,16 +3304,21 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     for (size_t n = 0; n < tx.vin.size(); ++n)
     {
       const txin_v &txin = tx.vin[n];
+      const crypto::key_image* ki = nullptr;
       if (std::holds_alternative<txin_to_key>(txin))
+        ki = &std::get<txin_to_key>(txin).k_image;
+      else if (std::holds_alternative<txin_stake_claim>(txin))
+        ki = &std::get<txin_stake_claim>(txin).k_image;
+
+      if (ki)
       {
-        const txin_to_key& in_to_key = std::get<txin_to_key>(txin);
-        if (last_key_image && memcmp(&in_to_key.k_image, last_key_image, sizeof(*last_key_image)) >= 0)
+        if (last_key_image && memcmp(ki, last_key_image, sizeof(*last_key_image)) >= 0)
         {
           MERROR_VER("transaction has unsorted inputs");
           tvc.m_verifivation_failed = true;
           return false;
         }
-        last_key_image = &in_to_key.k_image;
+        last_key_image = ki;
       }
     }
   }
@@ -3398,10 +3385,11 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         return false;
       }
 
+      // Validate each claim and cross-check PQC ownership
       const uint64_t chain_height = m_db->height();
-      for (const auto& vin : tx.vin)
+      for (size_t i = 0; i < tx.vin.size(); ++i)
       {
-        const txin_stake_claim& claim = std::get<txin_stake_claim>(vin);
+        const txin_stake_claim& claim = std::get<txin_stake_claim>(tx.vin[i]);
 
         if (have_tx_keyimg_as_spent(claim.k_image))
         {
@@ -3410,9 +3398,54 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           return false;
         }
 
-        if (!check_stake_claim_input(claim, chain_height))
+        uint8_t leaf_h_pqc[32];
+        if (!check_stake_claim_input(claim, chain_height, leaf_h_pqc))
         {
           MERROR_VER("Stake claim validation failed for staked output " << claim.staked_output_index);
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+
+        // PQC ownership: the H(pqc_pk) in the tree leaf must match the
+        // hash of the PQC public key presented in pqc_auths[i].
+        if (i < tx.pqc_auths.size())
+        {
+          uint8_t expected_h_pqc[32];
+          const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
+          if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), expected_h_pqc))
+          {
+            MERROR_VER("Failed to compute PQC leaf hash for stake claim input " << i);
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
+          if (memcmp(leaf_h_pqc, expected_h_pqc, 32) != 0)
+          {
+            MERROR_VER("PQC ownership mismatch for stake claim at output " << claim.staked_output_index
+              << ": leaf H(pqc_pk) does not match pqc_auths[" << i << "]");
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
+        }
+      }
+
+      // Batch pool balance check: sum all claim amounts and verify against pool
+      uint64_t total_claimed = 0;
+      for (const auto& vin : tx.vin)
+      {
+        const txin_stake_claim& claim = std::get<txin_stake_claim>(vin);
+        if (total_claimed + claim.amount < total_claimed) // overflow
+        {
+          MERROR_VER("Stake claim total amount overflow");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+        total_claimed += claim.amount;
+      }
+      {
+        const uint64_t pool_balance = m_db->get_staker_pool_balance();
+        if (total_claimed > pool_balance)
+        {
+          MERROR_VER("Total stake claims " << total_claimed << " exceed pool balance " << pool_balance);
           tvc.m_verifivation_failed = true;
           return false;
         }
@@ -3533,24 +3566,31 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         }
       }
 
-      const bool proof_ok = shekyl_fcmp_verify(
-        rv.p.fcmp_pp_proof.data(),
-        rv.p.fcmp_pp_proof.size(),
-        key_images_flat.data(),
-        num_inputs,
-        pseudo_outs_flat.data(),
-        num_inputs,
-        pqc_hashes_flat.data(),
-        num_inputs,
-        tree_root.data(),
-        rv.p.curve_trees_tree_depth
-      );
-
-      if (!proof_ok)
+      if (skip_fcmp_verify)
       {
-        MERROR_VER("FCMP++ proof verification failed for tx " << get_transaction_hash(tx));
-        tvc.m_verifivation_failed = true;
-        return false;
+        MDEBUG("FCMP++ proof verification skipped (cache hit) for tx " << get_transaction_hash(tx));
+      }
+      else
+      {
+        const bool proof_ok = shekyl_fcmp_verify(
+          rv.p.fcmp_pp_proof.data(),
+          rv.p.fcmp_pp_proof.size(),
+          key_images_flat.data(),
+          num_inputs,
+          pseudo_outs_flat.data(),
+          num_inputs,
+          pqc_hashes_flat.data(),
+          num_inputs,
+          tree_root.data(),
+          rv.p.curve_trees_tree_depth
+        );
+
+        if (!proof_ok)
+        {
+          MERROR_VER("FCMP++ proof verification failed for tx " << get_transaction_hash(tx));
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
       }
 
       break;
@@ -3573,20 +3613,6 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   }
 
   return true;
-}
-
-//------------------------------------------------------------------
-void Blockchain::check_ring_signature(const crypto::hash &tx_prefix_hash, const crypto::key_image &key_image, const std::vector<rct::ctkey> &pubkeys, const std::vector<crypto::signature>& sig, uint64_t &result) const
-{
-  std::vector<const crypto::public_key *> p_output_keys;
-  p_output_keys.reserve(pubkeys.size());
-  for (auto &key : pubkeys)
-  {
-    // rct::key and crypto::public_key have the same structure, avoid object ctor/memcpy
-    p_output_keys.push_back(&(const crypto::public_key&)key.dest);
-  }
-
-  result = crypto::check_ring_signature(tx_prefix_hash, key_image, p_output_keys, sig.data()) ? 1 : 0;
 }
 
 //------------------------------------------------------------------
@@ -3816,6 +3842,9 @@ crypto::hash Blockchain::compute_fcmp_verification_hash(const transaction& tx)
   if (rv.type != rct::RCTTypeFcmpPlusPlusPqc)
     return crypto::null_hash;
 
+  // Mempool verification-cache id: binds proof bytes to the anchored snapshot
+  // (via referenceBlock hash, which determines curve_tree_root in consensus)
+  // and to all input key images. Same logical intent as H(proof || tree_root || KIs).
   std::vector<uint8_t> buf;
   buf.reserve(rv.p.fcmp_pp_proof.size() + 32 + tx.vin.size() * 32);
 
@@ -3841,7 +3870,7 @@ crypto::hash Blockchain::compute_fcmp_verification_hash(const transaction& tx)
   return result;
 }
 //------------------------------------------------------------------
-bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t current_height) const
+bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t current_height, uint8_t* out_leaf_h_pqc) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
@@ -3920,6 +3949,9 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
     return false;
   }
 
+  if (out_leaf_h_pqc)
+    memcpy(out_leaf_h_pqc, leaf_data + 96, 32);
+
   uint64_t staked_amount = staked_out.amount;
   if (staked_amount == 0 && staked_tx.version >= 2)
   {
@@ -3936,19 +3968,17 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
       continue;
 
     uint64_t weight = shekyl_stake_weight(staked_amount, staked_tier);
-    computed_reward += (uint64_t)((double)total_reward_at_h * (double)weight / (double)accrual.total_weighted_stake);
+    {
+      uint64_t hi, lo;
+      lo = mul128(total_reward_at_h, weight, &hi);
+      div128_64(hi, lo, accrual.total_weighted_stake, &hi, &lo, NULL, NULL);
+      computed_reward += lo;
+    }
   }
 
   if (claim.amount != computed_reward)
   {
     MERROR_VER("Claim amount " << claim.amount << " does not match computed reward " << computed_reward);
-    return false;
-  }
-
-  uint64_t pool_balance = m_db->get_staker_pool_balance();
-  if (claim.amount > pool_balance)
-  {
-    MERROR_VER("Claim amount " << claim.amount << " exceeds pool balance " << pool_balance);
     return false;
   }
 
@@ -4406,13 +4436,18 @@ leave:
     if (!fast_check)
 #endif
     {
-      // validate that transaction inputs and the keys spending them are correct.
+      // If this tx came from the mempool and is FCMP++, the proof was already
+      // verified during pool admission.  Skip the expensive shekyl_fcmp_verify
+      // FFI call but still run all structural checks (referenceBlock, depth,
+      // key images, PQC auth).
+      const bool can_skip_fcmp = found_tx_in_pool
+          && rct::is_rct_fcmp_pp_pqc(tx.rct_signatures.type);
+
       tx_verification_context tvc;
-      if(!check_tx_inputs(tx, tvc))
+      if(!check_tx_inputs(tx, tvc, nullptr, can_skip_fcmp))
       {
         MERROR_VER("Block with id: " << id  << " has at least one transaction (id: " << tx_id << ") with wrong inputs.");
 
-        //TODO: why is this done?  make sure that keeping invalid blocks makes sense.
         add_block_as_invalid(bl, id);
         MERROR_VER("Block with id " << id << " added as invalid because of wrong inputs in transactions");
         bvc.m_verifivation_failed = true;

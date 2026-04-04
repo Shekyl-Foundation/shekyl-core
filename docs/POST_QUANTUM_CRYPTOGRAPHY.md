@@ -57,7 +57,7 @@ Achieved at genesis:
 
 - FCMP++ replaces CLSAG for membership proofs; per-output PQC keys via
   hybrid KEM prevent transaction linkability
-- pqc_auth provides quantum-resistant spend authorization per input
+- `pqc_auths` (one entry per input) provides quantum-resistant spend authorization
 
 The chain must remain secure if either:
 
@@ -128,9 +128,9 @@ The curve tree is a Merkle-like structure where:
 The membership proof is classical (it operates over elliptic curves, not
 lattice structures), but the overall scheme achieves quantum resistance through
 the `H(pqc_pk)` leaf binding: even if an attacker could break the EC discrete
-log problem, they cannot forge a valid `pqc_auth` signature without the
+log problem, they cannot forge a valid per-input `pqc_auths[i]` signature without the
 ML-DSA-65 secret key bound to the leaf. The FCMP++ proof demonstrates
-membership; the `pqc_auth` proves authorization.
+membership; each `pqc_auths[i]` proves authorization for that input.
 
 ## Per-Output PQC Key Derivation
 
@@ -238,7 +238,7 @@ In plain terms:
 
 - FCMP++ replaces CLSAG entirely from genesis, providing full-chain
   membership proofs with complete UTXO-set anonymity
-- pqc_auth remains the hybrid spend authorization layer, ensuring quantum
+- `pqc_auths` remains the hybrid spend authorization layer, ensuring quantum
   resistance for ownership verification
 
 ## Ownership and Spend Authorization
@@ -288,8 +288,8 @@ The binding works as follows:
 - When spending, the FCMP++ proof demonstrates that the referenced leaf
   (including its `H(pqc_pk)`) exists in the curve tree, without revealing
   which leaf.
-- The `pqc_auth` field then provides the actual hybrid Ed25519 + ML-DSA-65
-  signature, proving knowledge of the corresponding PQC secret key.
+- Each `pqc_auths[i]` entry then provides the hybrid Ed25519 + ML-DSA-65
+  signature for that input, proving knowledge of the corresponding PQC secret key.
 - An attacker cannot substitute a different PQC key because the in-circuit
   proof binds the leaf's `H(pqc_pk)` to the membership proof.
 
@@ -578,16 +578,16 @@ The wallet must keep two ideas separate:
 Rules:
 
 - stealth-address and tx pubkey scanning metadata can remain in `extra`
-- hybrid authorization data lives in `pqc_auth`
+- hybrid authorization data lives in `pqc_auths`
 - wallet construction must build the transaction body first, then compute the
-  signed payload, then attach `pqc_auth.signature`
+  signed payload, then attach each input's hybrid signature in `pqc_auths[i]`
 - wallet restore and scanning logic must not assume PQ keys replace one-time
   address derivation keys
 - the wallet must not treat a detached hybrid signature as sufficient proof of
   spend authority on its own
 
 PQC spend/ownership authorization works alongside the FCMP++ membership proof
-layer. FCMP++ provides full-chain anonymity; pqc_auth provides quantum-resistant
+layer. FCMP++ provides full-chain anonymity; `pqc_auths` provides quantum-resistant
 spend authorization. Stealth addresses and one-time output derivation remain
 part of the privacy stack.
 
@@ -642,13 +642,13 @@ Operational consequences:
     unauthorized spending
 
 Operationally: the FCMP++ EC membership proof provides full-chain anonymity
-while pqc_auth provides quantum-resistant authorization. The combination
+while `pqc_auths` provides quantum-resistant authorization. The combination
 achieves both privacy and quantum resistance.
 
 ### v3 Rollout Notes
 
 - `HF_VERSION_SHEKYL_NG` (`1`) gates `TransactionV3` validation behavior.
-- Coinbase transactions remain excluded from `pqc_auth`.
+- Coinbase transactions have no `pqc_auths` entries (coinbase is not a v3 spend).
 - Nodes, wallets, and indexers should budget for ~5.3KB extra auth material per
   user transaction (before other serialization overhead).
 - RPC/ZMQ consumers should avoid rigid tx-size assumptions and update parser
@@ -781,7 +781,7 @@ sets the intended direction:
 - **Ownership binding:** `PqcAuthentication` is attached to `TransactionV3`;
   the signed payload covers prefix + RCT base + auth header (excluding the
   signature itself). Implemented in `tx_pqc_verify.cpp`.
-- **Max transaction size:** Measured at 5,385 bytes per user tx for `pqc_auth`
+- **Max transaction size:** Measured at 5,385 bytes per user tx for `pqc_auths`
   (see Measured Sizes above). Operator limits documented in
   `docs/V3_ROLLOUT.md` under "Payload Limit Guidance."
 - **Multisig approach:** V3 uses signature-list (`scheme_id = 2`); lattice
