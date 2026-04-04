@@ -199,7 +199,7 @@ mod tests {
         let mut seen_pks = std::collections::HashSet::new();
         for i in 0..10u64 {
             let kp = derive_pqc_keypair(&ss, i).unwrap();
-            assert!(seen_pks.insert(kp.public_key), "index {i} produced duplicate key");
+            assert!(seen_pks.insert(kp.public_key.clone()), "index {i} produced duplicate key");
         }
     }
 
