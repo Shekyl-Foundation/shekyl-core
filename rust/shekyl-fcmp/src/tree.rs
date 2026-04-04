@@ -294,7 +294,12 @@ pub fn construct_leaf(output_key: &[u8; 32], commitment: &[u8; 32]) -> Option<[u
     leaf[0..32].copy_from_slice(&o_x);
     leaf[32..64].copy_from_slice(&i_x);
     leaf[64..96].copy_from_slice(&c_x);
-    // leaf[96..128] = H(pqc_pk), zero until PQC integration (Phase 3)
+    // leaf[96..128] = H(pqc_pk).  Currently zero because PQC public keys are
+    // not yet committed per-output.  When Phase 3 adds per-output PQC keys,
+    // this scalar will hold the hash of the PQC public key.  NOTE: all leaves
+    // stored before that activation will have H(pqc_pk)=0.  A full tree
+    // rebuild (or migration) will be required at activation to replace zeros
+    // with actual PQC key hashes for historical outputs.
     Some(leaf)
 }
 

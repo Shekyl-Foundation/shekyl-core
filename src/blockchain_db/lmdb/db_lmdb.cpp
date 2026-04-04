@@ -4739,6 +4739,13 @@ namespace {
   static constexpr uint32_t CT_HELIOS_CHUNK_WIDTH = 18;  // LAYER_TWO_LEN
   static constexpr size_t CT_LEAF_SIZE = 128;             // 4 * 32 bytes
 
+  // LMDB key for m_curve_tree_layers (MDB_INTEGERKEY, native uint64_t order).
+  // High 8 bits: layer index (0 = leaf/Selene, 1 = Helios, 2 = Selene, ...;
+  //   max 255 layers).
+  // Low 56 bits: chunk index within the layer (~7.2e16 chunks per layer).
+  // This layout ensures keys within the same layer are contiguous and
+  // monotonically increasing, and all keys for layer N sort before layer N+1,
+  // which enables efficient MDB_SET_RANGE cursor scans in pruning.
   uint64_t ct_layer_chunk_key(uint8_t layer, uint64_t chunk) {
     return (static_cast<uint64_t>(layer) << 56) | chunk;
   }
@@ -4801,8 +4808,16 @@ void BlockchainLMDB::grow_curve_tree(const std::vector<uint8_t>& leaf_data, uint
   uint64_t first_affected_leaf_chunk = old_leaf_count / CT_SELENE_CHUNK_WIDTH;
   uint64_t last_affected_leaf_chunk  = (new_leaf_count > 0) ? (new_leaf_count - 1) / CT_SELENE_CHUNK_WIDTH : 0;
 
-  // Collect updated chunk hashes for propagation to next layer
-  std::vector<std::pair<uint64_t, std::array<uint8_t, 32>>> updated_chunks;
+  // Collect updated chunk hashes for propagation to next layer.
+  // Each entry: {chunk_index, old_hash, new_hash}.  The old hash is needed so
+  // that the parent layer can compute the correct existing_child_at_offset
+  // when updating its Pedersen commitment (hash_grow replaces old→new).
+  struct updated_chunk_t {
+    uint64_t chunk;
+    std::array<uint8_t, 32> old_hash;
+    std::array<uint8_t, 32> new_hash;
+  };
+  std::vector<updated_chunk_t> updated_chunks;
 
   // Process leaf-layer chunks
   for (uint64_t chunk = first_affected_leaf_chunk; chunk <= last_affected_leaf_chunk; ++chunk)
@@ -4845,7 +4860,11 @@ void BlockchainLMDB::grow_curve_tree(const std::vector<uint8_t>& leaf_data, uint
       new_scalars.insert(new_scalars.end(), (const uint8_t*)v.mv_data, (const uint8_t*)v.mv_data + CT_LEAF_SIZE);
     }
 
-    // The existing child at offset: zero for a fresh position
+    // The scalar at position scalar_offset was never written to the Pedersen
+    // commitment (it's a new leaf position being appended), so its implicit
+    // prior value is zero.  This is correct even for partial-chunk extension:
+    // scalars 0..scalar_offset-1 are already baked into existing_hash, and
+    // everything from scalar_offset onward is fresh.
     std::array<uint8_t, 32> existing_child_at_offset = {};
 
     // Hash grow with all new scalars at once
@@ -4871,7 +4890,7 @@ void BlockchainLMDB::grow_curve_tree(const std::vector<uint8_t>& leaf_data, uint
         throw0(DB_ERROR(lmdb_error("Failed to store curve tree layer hash: ", result).c_str()));
     }
 
-    updated_chunks.push_back({chunk, new_hash});
+    updated_chunks.push_back({chunk, existing_hash, new_hash});
   }
 
   // Propagate up through internal layers
@@ -4880,84 +4899,102 @@ void BlockchainLMDB::grow_curve_tree(const std::vector<uint8_t>& leaf_data, uint
   {
     bool is_selene = ct_layer_is_selene(layer);
     uint32_t parent_width = ct_chunk_width(layer);
-    std::vector<std::pair<uint64_t, std::array<uint8_t, 32>>> next_updated;
+    std::vector<updated_chunk_t> next_updated;
 
-    // Group updated children by parent chunk
-    std::map<uint64_t, std::vector<std::pair<uint64_t, std::array<uint8_t, 32>>>> parent_groups;
-    for (auto& [child_chunk, child_hash] : updated_chunks)
+    // Group updated children by parent chunk.  Each entry carries the
+    // position within the parent, the OLD cycle scalar (for existing_child),
+    // and the NEW cycle scalar.
+    struct child_update_t {
+      uint64_t pos;
+      std::array<uint8_t, 32> old_scalar;
+      std::array<uint8_t, 32> new_scalar;
+    };
+    std::map<uint64_t, std::vector<child_update_t>> parent_groups;
+    for (auto& uc : updated_chunks)
     {
-      // Convert child point to cycle scalar for the parent layer
-      std::array<uint8_t, 32> child_scalar;
+      // Convert both old and new child hashes to cycle scalars
+      std::array<uint8_t, 32> old_scalar = {};
+      std::array<uint8_t, 32> new_scalar;
+      // Child layer curve is the opposite of the parent: when parent is
+      // Selene (even layer), children are Helios, and vice versa.
       bool ok;
       if (is_selene) {
-        ok = shekyl_curve_tree_helios_to_selene_scalar(child_hash.data(), child_scalar.data());
+        // Parent=Selene, child=Helios → convert Helios points to Selene scalars
+        ok = shekyl_curve_tree_helios_to_selene_scalar(uc.new_hash.data(), new_scalar.data());
+        std::array<uint8_t, 32> init_hash;
+        shekyl_curve_tree_helios_hash_init(init_hash.data());
+        if (uc.old_hash != init_hash)
+          shekyl_curve_tree_helios_to_selene_scalar(uc.old_hash.data(), old_scalar.data());
       } else {
-        ok = shekyl_curve_tree_selene_to_helios_scalar(child_hash.data(), child_scalar.data());
+        // Parent=Helios, child=Selene → convert Selene points to Helios scalars
+        ok = shekyl_curve_tree_selene_to_helios_scalar(uc.new_hash.data(), new_scalar.data());
+        std::array<uint8_t, 32> init_hash;
+        shekyl_curve_tree_selene_hash_init(init_hash.data());
+        if (uc.old_hash != init_hash)
+          shekyl_curve_tree_selene_to_helios_scalar(uc.old_hash.data(), old_scalar.data());
       }
       if (!ok)
         throw0(DB_ERROR("Rust FFI: point_to_cycle_scalar failed in curve tree propagation"));
 
-      uint64_t parent_chunk = child_chunk / parent_width;
-      parent_groups[parent_chunk].push_back({child_chunk % parent_width, child_scalar});
+      uint64_t parent_chunk = uc.chunk / parent_width;
+      parent_groups[parent_chunk].push_back({uc.chunk % parent_width, old_scalar, new_scalar});
     }
 
     for (auto& [parent_chunk, children] : parent_groups)
     {
-      // Sort children by position in chunk
-      std::sort(children.begin(), children.end());
+      std::sort(children.begin(), children.end(), [](const child_update_t& a, const child_update_t& b) {
+        return a.pos < b.pos;
+      });
 
       // Load existing parent hash
-      std::array<uint8_t, 32> existing_hash;
+      std::array<uint8_t, 32> parent_hash;
       uint64_t layer_key = ct_layer_chunk_key(layer, parent_chunk);
       {
         MDB_val k = {sizeof(layer_key), (void *)&layer_key};
         MDB_val v;
         int result = mdb_get(*m_write_txn, m_curve_tree_layers, &k, &v);
         if (result == 0 && v.mv_size == 32) {
-          memcpy(existing_hash.data(), v.mv_data, 32);
+          memcpy(parent_hash.data(), v.mv_data, 32);
         } else if (result == MDB_NOTFOUND) {
           if (is_selene)
-            shekyl_curve_tree_selene_hash_init(existing_hash.data());
+            shekyl_curve_tree_selene_hash_init(parent_hash.data());
           else
-            shekyl_curve_tree_helios_hash_init(existing_hash.data());
+            shekyl_curve_tree_helios_hash_init(parent_hash.data());
         } else {
           throw0(DB_ERROR(lmdb_error("Failed to get curve tree internal layer hash: ", result).c_str()));
         }
       }
+      std::array<uint8_t, 32> parent_hash_before = parent_hash;
 
-      // For simplicity, grow each child position individually
-      // (could batch contiguous children for better performance)
-      for (auto& [pos, scalar] : children)
+      for (auto& cu : children)
       {
-        std::array<uint8_t, 32> existing_child = {};
         std::array<uint8_t, 32> new_hash;
-
         bool ok;
         if (is_selene) {
           ok = shekyl_curve_tree_hash_grow_selene(
-            existing_hash.data(), pos, existing_child.data(),
-            scalar.data(), 1, new_hash.data());
+            parent_hash.data(), cu.pos, cu.old_scalar.data(),
+            cu.new_scalar.data(), 1, new_hash.data());
         } else {
           ok = shekyl_curve_tree_hash_grow_helios(
-            existing_hash.data(), pos, existing_child.data(),
-            scalar.data(), 1, new_hash.data());
+            parent_hash.data(), cu.pos, cu.old_scalar.data(),
+            cu.new_scalar.data(), 1, new_hash.data());
         }
         if (!ok)
           throw0(DB_ERROR("Rust FFI: hash_grow failed in curve tree propagation"));
 
-        existing_hash = new_hash;
+        parent_hash = new_hash;
       }
 
       // Store updated parent hash
       {
         MDB_val k = {sizeof(layer_key), (void *)&layer_key};
-        MDB_val v = {32, existing_hash.data()};
+        MDB_val v = {32, parent_hash.data()};
         int result = mdb_put(*m_write_txn, m_curve_tree_layers, &k, &v, 0);
         if (result)
           throw0(DB_ERROR(lmdb_error("Failed to store curve tree internal layer hash: ", result).c_str()));
       }
 
-      next_updated.push_back({parent_chunk, existing_hash});
+      next_updated.push_back({parent_chunk, parent_hash_before, parent_hash});
     }
 
     updated_chunks = std::move(next_updated);
@@ -4965,14 +5002,18 @@ void BlockchainLMDB::grow_curve_tree(const std::vector<uint8_t>& leaf_data, uint
     // If only one chunk updated and it's the root, we're done
     if (updated_chunks.size() <= 1)
     {
-      // Check if this is the single root
+      // Root detection: if the sole updated parent is at chunk 0 and all
+      // children at this layer fit in one chunk, then this chunk IS the
+      // root.  For layers > 1, we approximate total_children from the
+      // chunk index + 1.  This is safe because grow/trim only affect
+      // trailing chunks; chunk 0 being the sole update implies it's the
+      // only chunk at this layer.
       uint64_t total_children_at_layer = (layer == 1)
         ? ((new_leaf_count + CT_SELENE_CHUNK_WIDTH - 1) / CT_SELENE_CHUNK_WIDTH)
-        : updated_chunks[0].first + 1; // approximate
+        : updated_chunks[0].chunk + 1;
 
-      if (updated_chunks.size() == 1 && updated_chunks[0].first == 0 && total_children_at_layer <= parent_width)
+      if (updated_chunks.size() == 1 && updated_chunks[0].chunk == 0 && total_children_at_layer <= parent_width)
       {
-        // This is the root
         break;
       }
     }
@@ -4984,7 +5025,7 @@ void BlockchainLMDB::grow_curve_tree(const std::vector<uint8_t>& leaf_data, uint
   {
     const std::string root_key = "root";
     MDB_val k = {root_key.size(), (void *)root_key.data()};
-    MDB_val v = {32, updated_chunks.back().second.data()};
+    MDB_val v = {32, updated_chunks.back().new_hash.data()};
     int result = mdb_put(*m_write_txn, m_curve_tree_meta, &k, &v, 0);
     if (result)
       throw0(DB_ERROR(lmdb_error("Failed to store curve tree root: ", result).c_str()));
@@ -5016,98 +5057,314 @@ void BlockchainLMDB::trim_curve_tree(uint64_t num_outputs_to_remove)
 
   if (num_outputs_to_remove == 0) return;
 
-  uint64_t old_leaf_count = get_curve_tree_leaf_count();
+  // Read current leaf count from within the write transaction
+  uint64_t old_leaf_count = 0;
+  {
+    const std::string meta_key = "leaf_count";
+    MDB_val k = {meta_key.size(), (void *)meta_key.data()};
+    MDB_val v;
+    int result = mdb_get(*m_write_txn, m_curve_tree_meta, &k, &v);
+    if (result == 0 && v.mv_size == sizeof(uint64_t))
+      memcpy(&old_leaf_count, v.mv_data, sizeof(uint64_t));
+    else if (result != MDB_NOTFOUND)
+      throw0(DB_ERROR(lmdb_error("Failed to get curve tree leaf count in trim: ", result).c_str()));
+  }
+
   if (num_outputs_to_remove > old_leaf_count)
     throw0(DB_ERROR("Cannot trim more leaves than exist in curve tree"));
 
   uint64_t new_leaf_count = old_leaf_count - num_outputs_to_remove;
 
-  // Remove leaf entries
+  // Read current depth
+  uint8_t old_depth = 0;
+  {
+    const std::string depth_key = "depth";
+    MDB_val k = {depth_key.size(), (void *)depth_key.data()};
+    MDB_val v;
+    int result = mdb_get(*m_write_txn, m_curve_tree_meta, &k, &v);
+    if (result == 0 && v.mv_size >= 1)
+      old_depth = *static_cast<const uint8_t*>(v.mv_data);
+  }
+
+  if (new_leaf_count == 0)
+  {
+    // Trim to empty: delete all leaves, clear all layers, reset meta
+    for (uint64_t i = 0; i < old_leaf_count; ++i)
+    {
+      MDB_val k = {sizeof(i), (void *)&i};
+      mdb_del(*m_write_txn, m_curve_tree_leaves, &k, nullptr);
+    }
+    {
+      MDB_cursor *cur;
+      int result = mdb_cursor_open(*m_write_txn, m_curve_tree_layers, &cur);
+      if (result == 0) {
+        MDB_val k, v;
+        while (mdb_cursor_get(cur, &k, &v, MDB_NEXT) == 0)
+          mdb_cursor_del(cur, 0);
+        mdb_cursor_close(cur);
+      }
+    }
+    std::array<uint8_t, 32> init_root = {};
+    shekyl_curve_tree_selene_hash_init(init_root.data());
+    {
+      const std::string root_key = "root";
+      MDB_val k = {root_key.size(), (void *)root_key.data()};
+      MDB_val v = {32, init_root.data()};
+      mdb_put(*m_write_txn, m_curve_tree_meta, &k, &v, 0);
+    }
+    {
+      uint64_t zero = 0;
+      const std::string lc_key = "leaf_count";
+      MDB_val k = {lc_key.size(), (void *)lc_key.data()};
+      MDB_val v = {sizeof(zero), (void *)&zero};
+      mdb_put(*m_write_txn, m_curve_tree_meta, &k, &v, 0);
+    }
+    {
+      uint8_t depth = 0;
+      const std::string depth_key = "depth";
+      MDB_val k = {depth_key.size(), (void *)depth_key.data()};
+      MDB_val v = {sizeof(depth), (void *)&depth};
+      mdb_put(*m_write_txn, m_curve_tree_meta, &k, &v, 0);
+    }
+    return;
+  }
+
+  // --- Incremental trim: O(removed * log(N)) ---
+  // Determine which leaf-layer chunks are affected
+  uint64_t first_affected_chunk = new_leaf_count / CT_SELENE_CHUNK_WIDTH;
+  uint64_t last_affected_chunk = (old_leaf_count - 1) / CT_SELENE_CHUNK_WIDTH;
+
+  struct updated_chunk_t {
+    uint64_t chunk;
+    std::array<uint8_t, 32> old_hash;
+    std::array<uint8_t, 32> new_hash;
+  };
+  std::vector<updated_chunk_t> updated_chunks;
+
+  // Process affected leaf-layer chunks using hash_trim
+  for (uint64_t chunk = first_affected_chunk; chunk <= last_affected_chunk; ++chunk)
+  {
+    uint64_t chunk_start = chunk * CT_SELENE_CHUNK_WIDTH;
+    uint64_t remaining_in_chunk = (new_leaf_count > chunk_start)
+      ? (new_leaf_count - chunk_start) : 0;
+    uint64_t old_chunk_end = std::min((chunk + 1) * static_cast<uint64_t>(CT_SELENE_CHUNK_WIDTH), old_leaf_count);
+
+    // Load existing chunk hash
+    std::array<uint8_t, 32> old_hash;
+    uint64_t layer_key = ct_layer_chunk_key(0, chunk);
+    {
+      MDB_val k = {sizeof(layer_key), (void *)&layer_key};
+      MDB_val v;
+      int result = mdb_get(*m_write_txn, m_curve_tree_layers, &k, &v);
+      if (result == 0 && v.mv_size == 32)
+        memcpy(old_hash.data(), v.mv_data, 32);
+      else
+        throw0(DB_ERROR(lmdb_error("Failed to read leaf chunk hash for trim: ", result).c_str()));
+    }
+
+    if (remaining_in_chunk == 0)
+    {
+      // Entire chunk removed — delete from layers and record as init hash
+      mdb_del(*m_write_txn, m_curve_tree_layers, nullptr, nullptr);
+      MDB_val k = {sizeof(layer_key), (void *)&layer_key};
+      mdb_del(*m_write_txn, m_curve_tree_layers, &k, nullptr);
+
+      std::array<uint8_t, 32> init_hash;
+      shekyl_curve_tree_selene_hash_init(init_hash.data());
+      updated_chunks.push_back({chunk, old_hash, init_hash});
+    }
+    else
+    {
+      // Partial trim: use hash_trim to remove trailing scalars
+      uint64_t trim_offset = remaining_in_chunk * CT_SCALARS_PER_LEAF;
+      uint64_t num_removed_leaves = old_chunk_end - chunk_start - remaining_in_chunk;
+      uint64_t num_removed_scalars = num_removed_leaves * CT_SCALARS_PER_LEAF;
+
+      // Read the scalar values being removed
+      std::vector<uint8_t> removed_scalars;
+      removed_scalars.reserve(num_removed_scalars * 32);
+      for (uint64_t out_idx = chunk_start + remaining_in_chunk; out_idx < old_chunk_end; ++out_idx)
+      {
+        MDB_val k = {sizeof(out_idx), (void *)&out_idx};
+        MDB_val v;
+        int result = mdb_get(*m_write_txn, m_curve_tree_leaves, &k, &v);
+        if (result)
+          throw0(DB_ERROR(lmdb_error("Failed to read leaf for trim: ", result).c_str()));
+        removed_scalars.insert(removed_scalars.end(),
+          (const uint8_t*)v.mv_data, (const uint8_t*)v.mv_data + CT_LEAF_SIZE);
+      }
+
+      std::array<uint8_t, 32> grow_back = {};
+      std::array<uint8_t, 32> new_hash;
+      bool ok = shekyl_curve_tree_hash_trim_selene(
+        old_hash.data(), trim_offset,
+        removed_scalars.data(), num_removed_scalars,
+        grow_back.data(), new_hash.data());
+      if (!ok)
+        throw0(DB_ERROR("Rust FFI: shekyl_curve_tree_hash_trim_selene failed in trim"));
+
+      // Store the updated chunk hash
+      {
+        MDB_val k = {sizeof(layer_key), (void *)&layer_key};
+        MDB_val v = {32, new_hash.data()};
+        int result = mdb_put(*m_write_txn, m_curve_tree_layers, &k, &v, 0);
+        if (result)
+          throw0(DB_ERROR(lmdb_error("Failed to store trimmed leaf chunk hash: ", result).c_str()));
+      }
+      updated_chunks.push_back({chunk, old_hash, new_hash});
+    }
+  }
+
+  // Delete removed leaf entries
   for (uint64_t i = new_leaf_count; i < old_leaf_count; ++i)
   {
     MDB_val k = {sizeof(i), (void *)&i};
-    int result = mdb_del(*m_write_txn, m_curve_tree_leaves, &k, nullptr);
-    if (result && result != MDB_NOTFOUND)
-      throw0(DB_ERROR(lmdb_error("Failed to remove curve tree leaf: ", result).c_str()));
+    mdb_del(*m_write_txn, m_curve_tree_leaves, &k, nullptr);
   }
 
-  // For a full rebuild of affected layers, clear and re-grow from new_leaf_count.
-  // This is simpler than the incremental trim approach and correct for reorgs
-  // which are typically small (a few blocks).
-  // TODO: optimize with incremental hash_trim for single-block pops.
-
-  // Clear all layer hashes and meta, then re-grow from scratch
-  // This is O(N) but ensures correctness during reorgs.
+  // Propagate through internal layers using old→new hash differences
+  uint8_t layer = 1;
+  while (!updated_chunks.empty())
   {
-    MDB_cursor *cur;
-    int result = mdb_cursor_open(*m_write_txn, m_curve_tree_layers, &cur);
-    if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to open cursor for curve tree layers: ", result).c_str()));
+    bool is_selene = ct_layer_is_selene(layer);
+    uint32_t parent_width = ct_chunk_width(layer);
 
-    MDB_val k, v;
-    while (mdb_cursor_get(cur, &k, &v, MDB_NEXT) == 0)
-      mdb_cursor_del(cur, 0);
-    mdb_cursor_close(cur);
+    struct child_update_t {
+      uint64_t pos;
+      std::array<uint8_t, 32> old_scalar;
+      std::array<uint8_t, 32> new_scalar;
+    };
+    std::map<uint64_t, std::vector<child_update_t>> parent_groups;
+
+    for (auto& uc : updated_chunks)
+    {
+      std::array<uint8_t, 32> old_scalar = {};
+      std::array<uint8_t, 32> new_scalar = {};
+      bool ok;
+
+      if (is_selene) {
+        std::array<uint8_t, 32> init_hash;
+        shekyl_curve_tree_helios_hash_init(init_hash.data());
+        if (uc.old_hash != init_hash)
+          shekyl_curve_tree_helios_to_selene_scalar(uc.old_hash.data(), old_scalar.data());
+        if (uc.new_hash != init_hash) {
+          ok = shekyl_curve_tree_helios_to_selene_scalar(uc.new_hash.data(), new_scalar.data());
+          if (!ok) throw0(DB_ERROR("Rust FFI: point_to_cycle_scalar failed in trim propagation"));
+        }
+      } else {
+        std::array<uint8_t, 32> init_hash;
+        shekyl_curve_tree_selene_hash_init(init_hash.data());
+        if (uc.old_hash != init_hash)
+          shekyl_curve_tree_selene_to_helios_scalar(uc.old_hash.data(), old_scalar.data());
+        if (uc.new_hash != init_hash) {
+          ok = shekyl_curve_tree_selene_to_helios_scalar(uc.new_hash.data(), new_scalar.data());
+          if (!ok) throw0(DB_ERROR("Rust FFI: point_to_cycle_scalar failed in trim propagation"));
+        }
+      }
+
+      uint64_t parent_chunk = uc.chunk / parent_width;
+      parent_groups[parent_chunk].push_back({uc.chunk % parent_width, old_scalar, new_scalar});
+    }
+
+    std::vector<updated_chunk_t> next_updated;
+    for (auto& [parent_chunk, children] : parent_groups)
+    {
+      std::sort(children.begin(), children.end(), [](const child_update_t& a, const child_update_t& b) {
+        return a.pos < b.pos;
+      });
+
+      std::array<uint8_t, 32> parent_hash;
+      uint64_t layer_key = ct_layer_chunk_key(layer, parent_chunk);
+      {
+        MDB_val k = {sizeof(layer_key), (void *)&layer_key};
+        MDB_val v;
+        int result = mdb_get(*m_write_txn, m_curve_tree_layers, &k, &v);
+        if (result == 0 && v.mv_size == 32)
+          memcpy(parent_hash.data(), v.mv_data, 32);
+        else if (result == MDB_NOTFOUND) {
+          if (is_selene)
+            shekyl_curve_tree_selene_hash_init(parent_hash.data());
+          else
+            shekyl_curve_tree_helios_hash_init(parent_hash.data());
+        } else {
+          throw0(DB_ERROR(lmdb_error("Failed to read internal layer for trim: ", result).c_str()));
+        }
+      }
+      std::array<uint8_t, 32> parent_hash_before = parent_hash;
+
+      for (auto& cu : children)
+      {
+        std::array<uint8_t, 32> new_hash;
+        bool ok;
+        if (is_selene) {
+          ok = shekyl_curve_tree_hash_grow_selene(
+            parent_hash.data(), cu.pos, cu.old_scalar.data(),
+            cu.new_scalar.data(), 1, new_hash.data());
+        } else {
+          ok = shekyl_curve_tree_hash_grow_helios(
+            parent_hash.data(), cu.pos, cu.old_scalar.data(),
+            cu.new_scalar.data(), 1, new_hash.data());
+        }
+        if (!ok)
+          throw0(DB_ERROR("Rust FFI: hash_grow failed in trim propagation"));
+        parent_hash = new_hash;
+      }
+
+      {
+        MDB_val k = {sizeof(layer_key), (void *)&layer_key};
+        MDB_val v = {32, parent_hash.data()};
+        int result = mdb_put(*m_write_txn, m_curve_tree_layers, &k, &v, 0);
+        if (result)
+          throw0(DB_ERROR(lmdb_error("Failed to store trimmed internal layer hash: ", result).c_str()));
+      }
+      next_updated.push_back({parent_chunk, parent_hash_before, parent_hash});
+    }
+
+    updated_chunks = std::move(next_updated);
+
+    if (updated_chunks.size() <= 1)
+    {
+      uint64_t total_children_at_layer;
+      if (layer == 1)
+        total_children_at_layer = (new_leaf_count + CT_SELENE_CHUNK_WIDTH - 1) / CT_SELENE_CHUNK_WIDTH;
+      else
+        total_children_at_layer = updated_chunks.empty() ? 0 : updated_chunks[0].chunk + 1;
+
+      if (updated_chunks.size() == 1 && updated_chunks[0].chunk == 0 && total_children_at_layer <= parent_width)
+        break;
+    }
+    ++layer;
   }
 
-  // Update leaf count
+  // Update meta: root, leaf_count, depth
+  if (!updated_chunks.empty())
+  {
+    const std::string root_key = "root";
+    MDB_val k = {root_key.size(), (void *)root_key.data()};
+    MDB_val v = {32, updated_chunks.back().new_hash.data()};
+    int result = mdb_put(*m_write_txn, m_curve_tree_meta, &k, &v, 0);
+    if (result)
+      throw0(DB_ERROR(lmdb_error("Failed to store curve tree root after trim: ", result).c_str()));
+  }
   {
     const std::string lc_key = "leaf_count";
     MDB_val k = {lc_key.size(), (void *)lc_key.data()};
     MDB_val v = {sizeof(new_leaf_count), (void *)&new_leaf_count};
     int result = mdb_put(*m_write_txn, m_curve_tree_meta, &k, &v, 0);
     if (result)
-      throw0(DB_ERROR(lmdb_error("Failed to update curve tree leaf count: ", result).c_str()));
+      throw0(DB_ERROR(lmdb_error("Failed to store leaf count after trim: ", result).c_str()));
   }
-
-  // Re-grow from all remaining leaves
-  if (new_leaf_count > 0)
   {
-    std::vector<uint8_t> all_leaves(new_leaf_count * CT_LEAF_SIZE);
-    for (uint64_t i = 0; i < new_leaf_count; ++i)
-    {
-      MDB_val k = {sizeof(i), (void *)&i};
-      MDB_val v;
-      int result = mdb_get(*m_write_txn, m_curve_tree_leaves, &k, &v);
-      if (result)
-        throw0(DB_ERROR(lmdb_error("Failed to read curve tree leaf during trim: ", result).c_str()));
-      memcpy(all_leaves.data() + i * CT_LEAF_SIZE, v.mv_data, CT_LEAF_SIZE);
-    }
-
-    // Reset leaf count to 0 so grow_curve_tree re-processes all leaves
-    uint64_t zero = 0;
-    {
-      const std::string lc_key = "leaf_count";
-      MDB_val k = {lc_key.size(), (void *)lc_key.data()};
-      MDB_val v = {sizeof(zero), (void *)&zero};
-      mdb_put(*m_write_txn, m_curve_tree_meta, &k, &v, 0);
-    }
-
-    // Delete existing leaves (grow_curve_tree will re-store them)
-    for (uint64_t i = 0; i < new_leaf_count; ++i)
-    {
-      MDB_val k = {sizeof(i), (void *)&i};
-      mdb_del(*m_write_txn, m_curve_tree_leaves, &k, nullptr);
-    }
-
-    grow_curve_tree(all_leaves, new_leaf_count);
-  }
-  else
-  {
-    // Empty tree: reset root and depth
-    std::array<uint8_t, 32> zero_root = {};
-    shekyl_curve_tree_selene_hash_init(zero_root.data());
-    const std::string root_key = "root";
-    MDB_val k = {root_key.size(), (void *)root_key.data()};
-    MDB_val v = {32, zero_root.data()};
-    mdb_put(*m_write_txn, m_curve_tree_meta, &k, &v, 0);
-
-    uint8_t depth = 0;
     const std::string depth_key = "depth";
-    MDB_val dk = {depth_key.size(), (void *)depth_key.data()};
-    MDB_val dv = {sizeof(depth), (void *)&depth};
-    mdb_put(*m_write_txn, m_curve_tree_meta, &dk, &dv, 0);
+    MDB_val k = {depth_key.size(), (void *)depth_key.data()};
+    MDB_val v = {sizeof(layer), (void *)&layer};
+    int result = mdb_put(*m_write_txn, m_curve_tree_meta, &k, &v, 0);
+    if (result)
+      throw0(DB_ERROR(lmdb_error("Failed to store depth after trim: ", result).c_str()));
   }
+
+  LOG_PRINT_L2("Incremental curve tree trim: removed " << num_outputs_to_remove
+    << " outputs (" << old_leaf_count << " → " << new_leaf_count << ")");
 }
 
 std::array<uint8_t, 32> BlockchainLMDB::get_curve_tree_root() const
@@ -5115,6 +5372,9 @@ std::array<uint8_t, 32> BlockchainLMDB::get_curve_tree_root() const
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
+  // Returns the Selene hash_init value if the tree is empty (no leaves stored).
+  // Callers should compare against hash_init or check get_curve_tree_leaf_count()
+  // to distinguish an empty tree from a root that happens to be the identity.
   TXN_PREFIX_RDONLY();
   const std::string root_key = "root";
   MDB_val k = {root_key.size(), (void *)root_key.data()};
@@ -5123,7 +5383,9 @@ std::array<uint8_t, 32> BlockchainLMDB::get_curve_tree_root() const
   int result = mdb_get(m_txn, m_curve_tree_meta, &k, &v);
   if (result == 0 && v.mv_size == 32)
     memcpy(root.data(), v.mv_data, 32);
-  else if (result != MDB_NOTFOUND)
+  else if (result == MDB_NOTFOUND)
+    shekyl_curve_tree_selene_hash_init(root.data());
+  else
     throw0(DB_ERROR(lmdb_error("Failed to get curve tree root: ", result).c_str()));
   TXN_POSTFIX_RDONLY();
   return root;
@@ -5206,30 +5468,45 @@ void BlockchainLMDB::save_curve_tree_checkpoint(uint64_t block_height)
   std::array<uint8_t, 32> root = {};
   uint8_t depth = 0;
   uint64_t leaf_count = 0;
+  bool root_ok = false, depth_ok = false, lc_ok = false;
 
   {
     const std::string root_key = "root";
     MDB_val k = {root_key.size(), (void *)root_key.data()};
     MDB_val v;
     int result = mdb_get(*m_write_txn, m_curve_tree_meta, &k, &v);
-    if (result == 0 && v.mv_size == 32)
+    if (result == 0 && v.mv_size == 32) {
       memcpy(root.data(), v.mv_data, 32);
+      root_ok = true;
+    }
   }
   {
     const std::string depth_key = "depth";
     MDB_val k = {depth_key.size(), (void *)depth_key.data()};
     MDB_val v;
     int result = mdb_get(*m_write_txn, m_curve_tree_meta, &k, &v);
-    if (result == 0 && v.mv_size >= 1)
+    if (result == 0 && v.mv_size >= 1) {
       depth = *static_cast<const uint8_t*>(v.mv_data);
+      depth_ok = true;
+    }
   }
   {
     const std::string lc_key = "leaf_count";
     MDB_val k = {lc_key.size(), (void *)lc_key.data()};
     MDB_val v;
     int result = mdb_get(*m_write_txn, m_curve_tree_meta, &k, &v);
-    if (result == 0 && v.mv_size == sizeof(uint64_t))
+    if (result == 0 && v.mv_size == sizeof(uint64_t)) {
       memcpy(&leaf_count, v.mv_data, sizeof(uint64_t));
+      lc_ok = true;
+    }
+  }
+
+  if (!root_ok || !depth_ok || !lc_ok || leaf_count == 0)
+  {
+    LOG_PRINT_L1("Skipping curve tree checkpoint at height " << block_height
+      << ": incomplete meta (root_ok=" << root_ok << " depth_ok=" << depth_ok
+      << " lc_ok=" << lc_ok << " leaf_count=" << leaf_count << ")");
+    return;
   }
 
   // Checkpoint format: root[32] || depth[1] || leaf_count[8] = 41 bytes
@@ -5378,6 +5655,10 @@ void BlockchainLMDB::prune_curve_tree_intermediate_layers(uint64_t checkpoint_he
       if (result)
         break;
       ++pruned_count;
+      // LMDB contract: after mdb_cursor_del, the cursor is positioned on the
+      // *next* item (or invalidated if there is none).  MDB_GET_CURRENT
+      // retrieves that next item without advancing further.  MDB_NEXT would
+      // skip one entry because the cursor already advanced.
       result = mdb_cursor_get(cur, &k, &v, MDB_GET_CURRENT);
       if (result == MDB_NOTFOUND)
         break;
@@ -5405,6 +5686,7 @@ void BlockchainLMDB::prune_curve_tree_intermediate_layers(uint64_t checkpoint_he
           break;
         result = mdb_cursor_del(cur, 0);
         if (result) break;
+        // Same LMDB post-delete contract: cursor already on next item.
         result = mdb_cursor_get(cur, &k, &v, MDB_GET_CURRENT);
         if (result == MDB_NOTFOUND) break;
       }

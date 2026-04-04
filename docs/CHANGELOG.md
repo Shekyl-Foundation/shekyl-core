@@ -2,6 +2,70 @@
 
 ## Unreleased
 
+### 🐛 Fixed
+
+- **CRITICAL: Fixed incorrect existing_child in internal layer hash propagation**
+  (`grow_curve_tree`).  When updating an existing child chunk's hash, the
+  parent's Pedersen commitment was computed with `existing_child = 0` instead of
+  the previous cycle-scalar.  This produced wrong chunk hashes for any block
+  that updated (rather than created) a child chunk.  The fix tracks both old and
+  new hashes through `updated_chunk_t` and passes the previous cycle-scalar to
+  `hash_grow`.
+
+- **CRITICAL: Replaced O(N) `trim_curve_tree` with incremental `hash_trim`.**
+  Reorgs previously read all remaining leaves, cleared the tree, and rebuilt
+  from scratch — a liveness risk at scale.  The new implementation uses
+  `hash_trim_selene`/`hash_trim_helios` FFI to surgically update only the
+  affected chunks, then propagates the old→new deltas up through internal layers.
+  Complexity is now O(removed × log N).
+
+- **CRITICAL: Enforced output maturity via `FCMP_REFERENCE_BLOCK_MIN_AGE`.**
+  Outputs enter the curve tree at creation time (maximising the anonymity set).
+  Maturity is enforced at spending time by requiring the reference block to be
+  at least `CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW` (60) blocks behind the tip.
+  Added `static_assert`s in `cryptonote_config.h` to prevent regression.
+
+- **HIGH: Validated meta reads in `save_curve_tree_checkpoint`.**  The function
+  now checks that root, depth, and leaf_count were all successfully read from
+  meta before storing a checkpoint.  If any value is missing or leaf_count is 0,
+  the checkpoint is skipped with a log warning instead of storing a corrupt
+  zero-valued checkpoint.
+
+### 🔄 Changed
+
+- **RPC: Replaced hardcoded chunk widths with FFI calls.**
+  `get_curve_tree_path` now calls `shekyl_curve_tree_selene_chunk_width()` and
+  `shekyl_curve_tree_helios_chunk_width()` instead of using static constants.
+
+- **RPC: Added `reference_height` and `leaf_count` to `get_curve_tree_path`
+  response.**  Wallets can now verify response freshness and detect stale paths
+  without parsing the reference block hash.
+
+- **RPC: Added `MAX_OUTPUTS_PER_RPC_REQUEST` (64) rate limit** to
+  `get_curve_tree_path` to prevent abuse from unbounded requests.
+
+### ✨ Added
+
+- **RPC: `get_curve_tree_info` endpoint** returns root hash, depth, leaf count,
+  and chain height for the current curve tree state.
+
+- **RPC: `get_curve_tree_checkpoint` endpoint** retrieves a stored checkpoint
+  (root, depth, leaf_count) at a given block height, needed for fast-sync.
+
+### 📚 Documentation
+
+- Documented LMDB post-delete cursor contract (`MDB_GET_CURRENT` after
+  `mdb_cursor_del` returns the next item) in pruning and GC loops.
+- Added `ct_layer_chunk_key` bit-layout comment explaining the 8-bit layer /
+  56-bit chunk index encoding for LMDB integer keys.
+- Documented `construct_leaf` zero 4th scalar (H(pqc_pk)) and the tree rebuild
+  requirement when PQC per-output keys are activated.
+- Documented depth tracking semantics (root layer index, not layer count) and
+  root detection invariant in `grow_curve_tree`.
+- Added TODO for async/batched checkpoint+pruning in `add_block`.
+- Documented `get_curve_tree_root` empty-tree return semantics (returns
+  `hash_init`, callers should check `leaf_count`).
+
 ### 🗑️ Removed
 
 - **Legacy RCT and mixin references stripped from wallet layer.** Completed

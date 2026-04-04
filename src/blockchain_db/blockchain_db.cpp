@@ -311,6 +311,11 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     const uint64_t block_height = prev_height + 1;
     std::vector<uint8_t> leaf_data;
     uint64_t new_output_count = 0;
+    // Outputs enter the tree at creation time, not maturity.  Maturity is
+    // enforced by FCMP_REFERENCE_BLOCK_MIN_AGE >= CRYPTONOTE_MINED_MONEY_
+    // UNLOCK_WINDOW: the spending tx must reference a tree state at least
+    // MIN_AGE blocks behind the tip, so every output in that state has at
+    // least MIN_AGE confirmations and is therefore mature.
     auto collect_outputs = [&](const transaction& tx, bool is_miner) {
       for (uint64_t i = 0; i < tx.vout.size(); ++i) {
         const auto& vout = tx.vout[i];
@@ -364,6 +369,11 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     if (new_output_count > 0)
       grow_curve_tree(leaf_data, new_output_count);
 
+    // TODO(optimization): checkpoint save + intermediate layer pruning run
+    // synchronously here.  For trees with millions of outputs this could add
+    // noticeable latency every FCMP_CURVE_TREE_CHECKPOINT_INTERVAL blocks.
+    // Consider deferring to a background task or batching across multiple
+    // blocks once profiling shows this is a bottleneck.
     if (prev_height > 0 && (prev_height % FCMP_CURVE_TREE_CHECKPOINT_INTERVAL == 0))
     {
       save_curve_tree_checkpoint(prev_height);

@@ -197,10 +197,22 @@
 #define HF_VERSION_FCMP_PLUS_PLUS_PQC           1  // FCMP++ full-chain membership proofs + per-output PQC keys
 
 // FCMP++ consensus parameters
+//
+// MIN_AGE must be >= CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW so that every
+// output in the referenced tree state has matured by the time the spending
+// transaction is included.  Outputs enter the tree at creation time (not
+// maturity), so the reference block anchor enforces maturity implicitly:
+// any output at referenceBlock has at least MIN_AGE confirmations.
 #define FCMP_REFERENCE_BLOCK_MAX_AGE            100  // ~3.3 hours at 2-min blocks; max referenceBlock staleness
-#define FCMP_REFERENCE_BLOCK_MIN_AGE            2    // min depth to avoid tip reorg races
+#define FCMP_REFERENCE_BLOCK_MIN_AGE            CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW  // == 60; ensures all outputs are mature
 #define FCMP_MAX_INPUTS_PER_TX                  8    // bounds proof generation time and tx size
 constexpr uint64_t FCMP_CURVE_TREE_CHECKPOINT_INTERVAL = 10000;
+static_assert(FCMP_REFERENCE_BLOCK_MIN_AGE >= CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW,
+  "FCMP_REFERENCE_BLOCK_MIN_AGE must be >= the coinbase unlock window to enforce output maturity");
+static_assert(FCMP_REFERENCE_BLOCK_MIN_AGE >= CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE,
+  "FCMP_REFERENCE_BLOCK_MIN_AGE must be >= the regular tx spendable age to enforce output maturity");
+static_assert(FCMP_REFERENCE_BLOCK_MAX_AGE > FCMP_REFERENCE_BLOCK_MIN_AGE,
+  "FCMP_REFERENCE_BLOCK_MAX_AGE must be > MIN_AGE to give wallets a valid reference block window");
 
 #define PER_KB_FEE_QUANTIZATION_DECIMALS        6 // Keep fee quantization at 1e-6 SKL while display precision is 1e-9 SKL.
 #define CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES 2

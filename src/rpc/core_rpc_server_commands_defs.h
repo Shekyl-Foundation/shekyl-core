@@ -2847,14 +2847,77 @@ namespace cryptonote
     struct response_t: public rpc_access_response_base
     {
       std::string reference_block;
+      uint64_t    reference_height;
       uint8_t     tree_depth;
+      uint64_t    leaf_count;
       std::vector<path_entry> paths;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_access_response_base)
         KV_SERIALIZE(reference_block)
+        KV_SERIALIZE(reference_height)
         KV_SERIALIZE(tree_depth)
+        KV_SERIALIZE(leaf_count)
         KV_SERIALIZE(paths)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
+
+  struct COMMAND_RPC_GET_CURVE_TREE_INFO
+  {
+    struct request_t: public rpc_access_request_base
+    {
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_access_request_base)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    struct response_t: public rpc_access_response_base
+    {
+      std::string root;
+      uint8_t     depth;
+      uint64_t    leaf_count;
+      uint64_t    height;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_access_response_base)
+        KV_SERIALIZE(root)
+        KV_SERIALIZE(depth)
+        KV_SERIALIZE(leaf_count)
+        KV_SERIALIZE(height)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
+
+  struct COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT
+  {
+    struct request_t: public rpc_access_request_base
+    {
+      uint64_t block_height;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_access_request_base)
+        KV_SERIALIZE(block_height)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    struct response_t: public rpc_access_response_base
+    {
+      std::string root;
+      uint8_t     depth;
+      uint64_t    leaf_count;
+      uint64_t    block_height;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_access_response_base)
+        KV_SERIALIZE(root)
+        KV_SERIALIZE(depth)
+        KV_SERIALIZE(leaf_count)
+        KV_SERIALIZE(block_height)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

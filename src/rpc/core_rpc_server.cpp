@@ -3686,10 +3686,19 @@ namespace cryptonote
   {
     RPC_TRACKER(get_curve_tree_path);
 
+    static constexpr size_t MAX_OUTPUTS_PER_RPC_REQUEST = 64;
+
     if (req.output_indices.empty())
     {
       error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
       error_resp.message = "output_indices must not be empty";
+      return false;
+    }
+
+    if (req.output_indices.size() > MAX_OUTPUTS_PER_RPC_REQUEST)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "Too many output_indices (max " + std::to_string(MAX_OUTPUTS_PER_RPC_REQUEST) + ")";
       return false;
     }
 
@@ -3707,14 +3716,15 @@ namespace cryptonote
     const uint64_t height = m_core.get_current_blockchain_height();
     crypto::hash top_hash = m_core.get_blockchain_storage().get_tail_id();
     res.reference_block = epee::string_tools::pod_to_hex(top_hash);
+    res.reference_height = height - 1;
     res.tree_depth = depth;
+    res.leaf_count = leaf_count;
     res.paths.clear();
 
-    static constexpr uint32_t SELENE_CHUNK_WIDTH = 38;
-    static constexpr uint32_t HELIOS_CHUNK_WIDTH = 18;
-    static constexpr uint32_t SCALARS_PER_LEAF   = 4;
+    const uint32_t SELENE_CHUNK_WIDTH = shekyl_curve_tree_selene_chunk_width();
+    const uint32_t HELIOS_CHUNK_WIDTH = shekyl_curve_tree_helios_chunk_width();
 
-    auto chunk_width = [](uint8_t layer) -> uint32_t {
+    auto chunk_width = [&](uint8_t layer) -> uint32_t {
       if (layer == 0) return SELENE_CHUNK_WIDTH;
       return (layer % 2 == 0) ? SELENE_CHUNK_WIDTH : HELIOS_CHUNK_WIDTH;
     };
@@ -3792,6 +3802,50 @@ namespace cryptonote
       res.paths.push_back(std::move(entry));
     }
 
+    res.status = CORE_RPC_STATUS_OK;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_get_curve_tree_info(const COMMAND_RPC_GET_CURVE_TREE_INFO::request& req, COMMAND_RPC_GET_CURVE_TREE_INFO::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
+  {
+    RPC_TRACKER(get_curve_tree_info);
+
+    const auto &db = m_core.get_blockchain_storage().get_db();
+    const auto root = db.get_curve_tree_root();
+    res.root = epee::string_tools::buff_to_hex_nodelimer(
+      std::string(reinterpret_cast<const char*>(root.data()), root.size()));
+    res.depth = db.get_curve_tree_depth();
+    res.leaf_count = db.get_curve_tree_leaf_count();
+    res.height = m_core.get_current_blockchain_height() - 1;
+    res.status = CORE_RPC_STATUS_OK;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_get_curve_tree_checkpoint(const COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::request& req, COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
+  {
+    RPC_TRACKER(get_curve_tree_checkpoint);
+
+    const auto &db = m_core.get_blockchain_storage().get_db();
+    std::vector<uint8_t> checkpoint_data;
+    if (!db.get_curve_tree_checkpoint(req.block_height, checkpoint_data))
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "No checkpoint at height " + std::to_string(req.block_height);
+      return false;
+    }
+
+    if (checkpoint_data.size() < 41)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "Corrupt checkpoint data";
+      return false;
+    }
+
+    res.root = epee::string_tools::buff_to_hex_nodelimer(
+      std::string(reinterpret_cast<const char*>(checkpoint_data.data()), 32));
+    res.depth = checkpoint_data[32];
+    memcpy(&res.leaf_count, checkpoint_data.data() + 33, sizeof(uint64_t));
+    res.block_height = req.block_height;
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }

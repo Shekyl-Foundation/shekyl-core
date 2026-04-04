@@ -1,6 +1,6 @@
 # FCMP++ Full-Chain Membership Proofs — Specification
 
-> **Last updated:** 2026-04-03
+> **Last updated:** 2026-04-04
 >
 > **Parent document:** `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
@@ -263,7 +263,18 @@ proofs.
 
 **Request:** `{ "output_indices": [uint64, ...] }`
 
-**Response:** `{ "reference_block": hex, "tree_depth": uint8, "paths": [...] }`
+**Response:**
+```json
+{
+  "reference_block": "hex hash",
+  "reference_height": 12345,
+  "tree_depth": 3,
+  "leaf_count": 4200,
+  "paths": [...]
+}
+```
+
+Request is limited to 64 output indices per call (`MAX_OUTPUTS_PER_RPC_REQUEST`).
 
 Each `path_entry` contains a hex-encoded `path_blob` with the following
 binary layout:
@@ -281,6 +292,25 @@ Layer 1..depth-1 (internal layers):
 Chunk widths: 38 for Selene layers (even), 18 for Helios layers (odd).
 The verifier identifies the proven element by its position; all other
 entries in the chunk are authentication siblings.
+
+### `get_curve_tree_info` JSON-RPC
+
+Returns the current curve tree state summary.
+
+**Request:** `{}`
+
+**Response:** `{ "root": hex, "depth": uint8, "leaf_count": uint64, "height": uint64 }`
+
+### `get_curve_tree_checkpoint` JSON-RPC
+
+Retrieves a stored checkpoint at a specific block height (for fast-sync).
+Checkpoints are stored every `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` blocks.
+
+**Request:** `{ "block_height": uint64 }`
+
+**Response:** `{ "root": hex, "depth": uint8, "leaf_count": uint64, "block_height": uint64 }`
+
+Returns an error if no checkpoint exists at the requested height.
 
 ---
 
@@ -349,7 +379,14 @@ verification.
 
 Constants from `cryptonote_config.h`:
 - `FCMP_REFERENCE_BLOCK_MAX_AGE = 100` (~3.3 hours at 2-minute blocks)
-- `FCMP_REFERENCE_BLOCK_MIN_AGE = 2` (avoids tip reorg races)
+- `FCMP_REFERENCE_BLOCK_MIN_AGE = CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW` (60)
+
+> **Design rationale (MIN_AGE = 60):** Outputs enter the curve tree at creation
+> time (not maturity), which maximises the anonymity set.  Maturity is enforced
+> implicitly: since the reference block is at least 60 blocks behind the tip,
+> every output in the referenced tree state has at least 60 confirmations,
+> satisfying both the coinbase unlock window (60) and regular spendable age (10).
+> `static_assert`s in `cryptonote_config.h` guard this invariant.
 
 ### Step 2: Curve Tree State Lookup
 
@@ -782,7 +819,7 @@ after their lock period expires.
 | Constant | Value | Location |
 |----------|-------|----------|
 | `FCMP_REFERENCE_BLOCK_MAX_AGE` | 100 | `cryptonote_config.h` |
-| `FCMP_REFERENCE_BLOCK_MIN_AGE` | 2 | `cryptonote_config.h` |
+| `FCMP_REFERENCE_BLOCK_MIN_AGE` | 60 (= `CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW`) | `cryptonote_config.h` |
 | `FCMP_MAX_INPUTS_PER_TX` | 8 | `cryptonote_config.h` |
 | `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` | 10,000 | `cryptonote_config.h` |
 | `RCTTypeFcmpPlusPlusPqc` | 7 | `rctTypes.h` |
@@ -810,6 +847,8 @@ after their lock period expires.
 | Restore-from-seed PQC rederivation | **Done** | `wallet2.cpp` |
 | `prune_tx_data` skeleton | **Skeleton** | `db_lmdb.cpp` |
 | `get_curve_tree_path` RPC | **Done** | `core_rpc_server.cpp` |
+| `get_curve_tree_info` RPC | **Done** | `core_rpc_server.cpp` |
+| `get_curve_tree_checkpoint` RPC | **Done** | `core_rpc_server.cpp` |
 | CI: Rust workspace + FCMP crate build | **Done** | `.github/workflows/build.yml` |
 | CI: Determinism check + Bech32m tests | **Done** | `.github/workflows/build.yml` |
 | Hardware device FCMP++ stubs | **Done** | `device.hpp`, `device_default.cpp`, `device_ledger.cpp` |
