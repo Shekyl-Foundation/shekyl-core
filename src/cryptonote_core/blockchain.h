@@ -583,7 +583,7 @@ namespace cryptonote
      *
      * @param amount in - the output amount
      * @param index in - the output global amount index
-     * @param mask out - the output's RingCT mask
+     * @param mask out - the output's commitment mask
      * @param key out - the output's key
      * @param unlocked out - the output's unlocked state
      */
@@ -629,7 +629,7 @@ namespace cryptonote
     /**
      * @brief expands v2 transaction data from blockchain
      *
-     * RingCT transactions do not transmit some of their data if it
+     * Confidential transactions do not transmit some of their data if it
      * can be reconstituted by the receiver. This function expands
      * that implicit data.
      */
@@ -1328,7 +1328,7 @@ namespace cryptonote
      * @param tx_prefix_hash the transaction prefix hash, for caching organization
      * @param sig the input signature
      * @param output_keys return-by-reference the public keys of the outputs in the input set
-     * @param rct_signatures the ringCT signatures, which are only valid if tx version > 1
+     * @param rct_signatures the FCMP++ signatures, which are only valid if tx version > 1
      * @param pmax_related_block_height return-by-pointer the height of the most recent block in the input set
      * @param hf_version the consensus rules version to use
      *

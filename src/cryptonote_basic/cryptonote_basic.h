@@ -48,7 +48,7 @@
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
 #include "misc_language.h"
-#include "ringct/rctTypes.h"
+#include "fcmp/rctTypes.h"
 #include "device/device.hpp"
 #include "cryptonote_basic/fwd.h"
 

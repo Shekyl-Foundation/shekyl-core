@@ -67,7 +67,7 @@ extern "C" {
 
 //for printing large ints
 
-//Namespace specifically for ring ct code
+//Namespace for confidential transaction types (FCMP++, Bulletproofs+, Pedersen commitments)
 namespace rct {
     //basic ops containers
     typedef unsigned char * Bytes;

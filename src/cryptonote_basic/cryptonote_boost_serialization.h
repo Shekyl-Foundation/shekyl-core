@@ -122,8 +122,8 @@ namespace boost { namespace serialization {
 #include "difficulty.h"
 #include "common/unordered_containers_boost_serialization.h"
 #include "crypto/crypto.h"
-#include "ringct/rctTypes.h"
-#include "ringct/rctOps.h"
+#include "fcmp/rctTypes.h"
+#include "fcmp/rctOps.h"
 
 namespace boost
 {

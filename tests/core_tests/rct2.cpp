@@ -28,8 +28,8 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
-#include "ringct/rctSigs.h"
-#include "ringct/bulletproofs.h"
+#include "fcmp/rctSigs.h"
+#include "fcmp/bulletproofs.h"
 #include "chaingen.h"
 #include "rct2.h"
 #include "device/device.hpp"

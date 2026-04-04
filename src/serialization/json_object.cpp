@@ -301,7 +301,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
     INSERT_INTO_JSON_OBJECT(dest, signatures, tx.signatures);
   }
   {
-    dest.Key("ringct");
+    dest.Key("fcmp");
     toJsonValue(dest, tx.rct_signatures, tx.pruned);
   }
   if (!tx.pqc_auths.empty())
@@ -325,7 +325,7 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::transaction& tx)
   GET_FROM_JSON_OBJECT(val, tx.vin, inputs);
   GET_FROM_JSON_OBJECT(val, tx.vout, outputs);
   GET_FROM_JSON_OBJECT(val, tx.extra, extra);
-  GET_FROM_JSON_OBJECT(val, tx.rct_signatures, ringct);
+  GET_FROM_JSON_OBJECT(val, tx.rct_signatures, fcmp);
 
   const auto& sigs = val.FindMember("signatures");
   if (sigs != val.MemberEnd())

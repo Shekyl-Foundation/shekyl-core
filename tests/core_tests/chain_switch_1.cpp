@@ -30,7 +30,7 @@
 
 #include "chaingen.h"
 #include "chain_switch_1.h"
-#include "ringct/rctOps.h"
+#include "fcmp/rctOps.h"
 
 using namespace epee;
 using namespace cryptonote;

@@ -1173,7 +1173,7 @@ int main(int argc, char* argv[])
       get_default_db_path(),
   };
   const command_line::arg_descriptor<std::string> arg_log_level  = {"log-level",  "0-4 or categories", ""};
-  const command_line::arg_descriptor<bool> arg_rct_only  = {"rct-only", "Only work on ringCT outputs", false};
+  const command_line::arg_descriptor<bool> arg_rct_only  = {"rct-only", "Only work on confidential outputs", false};
   const command_line::arg_descriptor<bool> arg_check_subsets  = {"check-subsets", "Check ring subsets (very expensive)", false};
   const command_line::arg_descriptor<bool> arg_verbose  = {"verbose", "Verbose output)", false};
   const command_line::arg_descriptor<std::vector<std::string> > arg_inputs = {"inputs", "Path to Shekyl DB, and path to any fork DBs"};

@@ -36,7 +36,7 @@
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/subaddress_index.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
-#include "ringct/rctOps.h"
+#include "fcmp/rctOps.h"
 #include "cryptonote_config.h"
 
 namespace hw {

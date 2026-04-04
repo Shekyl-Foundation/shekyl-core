@@ -33,7 +33,7 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/utility.hpp>
-#include "ringct/rctOps.h"
+#include "fcmp/rctOps.h"
 
 namespace cryptonote
 {
@@ -44,14 +44,14 @@ namespace cryptonote
   {
     typedef std::pair<uint64_t, rct::ctkey> output_entry;
 
-    std::vector<output_entry> outputs;  //index + key + optional ringct commitment
+    std::vector<output_entry> outputs;  //index + key + optional commitment
     uint64_t real_output;               //index in outputs vector of real output_entry
     crypto::public_key real_out_tx_key; //incoming real tx public key
     std::vector<crypto::public_key> real_out_additional_tx_keys; //incoming real tx additional public keys
     uint64_t real_output_in_tx_index;   //index in transaction outputs vector
     uint64_t amount;                    //money
     bool rct;                           //true if the output is rct
-    rct::key mask;                      //ringct amount mask
+    rct::key mask;                      //amount mask
 
     void push_output(uint64_t idx, const crypto::public_key &k, uint64_t amount) { outputs.push_back(std::make_pair(idx, rct::ctkey({rct::pk2rct(k), rct::zeroCommit(amount)}))); }
 

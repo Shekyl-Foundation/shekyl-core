@@ -308,10 +308,10 @@ High-level rule:
 
 ### Structure
 
-`TransactionV3` keeps the existing CryptoNote-style prefix and RingCT body, but
+`TransactionV3` keeps the existing CryptoNote-style prefix and FCMP++ body, but
 adds a dedicated hybrid authorization structure outside `tx_extra`.
 
-The RingCT type for user transactions is `RCTTypeFcmpPlusPlusPqc = 7`. This is
+The FCMP++ type for user transactions is `RCTTypeFcmpPlusPlusPqc = 7`. This is
 Shekyl's only non-coinbase RCT type. It replaces CLSAG ring signatures with
 FCMP++ membership proofs, uses Bulletproof+ range proofs, and adds a
 `referenceBlock` field to `rctSigBase` anchoring the proof to a specific curve
@@ -486,7 +486,7 @@ Where:
 
 - `TransactionPrefixV3` is the full serialized transaction prefix, including
   `extra`
-- `RctSigningBody` is the non-PQC RingCT body data required to bind the actual
+- `RctSigningBody` is the non-PQC FCMP++ body data required to bind the actual
   transaction economics, outputs, and spend semantics (see layout below)
 - `PqcAuthHeader` is:
 
@@ -502,7 +502,7 @@ PqcAuthHeader {
 ### RctSigningBody Layout
 
 `RctSigningBody` is the output of `rctSig.serialize_rctsig_base(ar, num_inputs, num_outputs)`.
-It comprises the base (non-prunable) RingCT structure: type, message,
+It comprises the base (non-prunable) FCMP++ structure: type, message,
 pseudoOuts/ecdhInfo as applicable, and `referenceBlock` (the block height
 anchoring the FCMP++ curve tree snapshot, validated within `[tip - 100, tip - 2]`).
 This is the same byte sequence used as the base RCT component in the v3
@@ -621,7 +621,7 @@ Operational consequences:
 
 - **Protected by hybrid PQ auth**
   - per-input authorization metadata in `pqc_auths`
-  - canonical payload hash over prefix + RingCT base + PQ auth header
+  - canonical payload hash over prefix + FCMP++ base + PQ auth header
   - dual verification requirement (`Ed25519 && ML-DSA-65`)
   - per-output PQC keys via hybrid KEM prevent transaction linkability
 - **Classical (but full-chain anonymous)**

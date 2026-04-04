@@ -1,4 +1,5 @@
 # Copyright (c) 2016-2022, The Monero Project
+# Copyright (c) 2024-2026, The Shekyl Foundation
 #
 # All rights reserved.
 #
@@ -26,7 +27,7 @@
 # STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-set(ringct_basic_sources
+set(fcmp_basic_sources
   rctOps.cpp
   rctTypes.cpp
   rctCryptoOps.c
@@ -34,14 +35,14 @@ set(ringct_basic_sources
   bulletproofs.cc
   bulletproofs_plus.cc)
 
-monero_find_all_headers(ringct_basic_private_headers "${CMAKE_CURRENT_SOURCE_DIR}")
+monero_find_all_headers(fcmp_basic_private_headers "${CMAKE_CURRENT_SOURCE_DIR}")
 
-monero_private_headers(ringct_basic
+monero_private_headers(fcmp_basic
   ${crypto_private_headers})
-monero_add_library(ringct_basic
-  ${ringct_basic_sources}
-  ${ringct_basic_private_headers})
-target_link_libraries(ringct_basic
+monero_add_library(fcmp_basic
+  ${fcmp_basic_sources}
+  ${fcmp_basic_private_headers})
+target_link_libraries(fcmp_basic
   PUBLIC
     common
     cncrypto
@@ -49,23 +50,23 @@ target_link_libraries(ringct_basic
     ${OPENSSL_LIBRARIES}
     ${EXTRA_LIBRARIES})
 
-set(ringct_sources
+set(fcmp_sources
   rctSigs.cpp
 )
 
-set(ringct_headers)
+set(fcmp_headers)
 
-set(ringct_private_headers
+set(fcmp_private_headers
   rctSigs.h
 )
 
-monero_private_headers(ringct
+monero_private_headers(fcmp
   ${crypto_private_headers})
-monero_add_library(ringct
-  ${ringct_sources}
-  ${ringct_headers}
-  ${ringct_private_headers})
-target_link_libraries(ringct
+monero_add_library(fcmp
+  ${fcmp_sources}
+  ${fcmp_headers}
+  ${fcmp_private_headers})
+target_link_libraries(fcmp
   PUBLIC
     common
     cncrypto

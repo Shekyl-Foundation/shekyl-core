@@ -33,15 +33,15 @@
 #include <cstdint>
 #include <sstream>
 
-#include "ringct/rctTypes.h"
-#include "ringct/rctSigs.h"
-#include "ringct/rctOps.h"
+#include "fcmp/rctTypes.h"
+#include "fcmp/rctSigs.h"
+#include "fcmp/rctOps.h"
 
 using namespace std;
 using namespace crypto;
 using namespace rct;
 
-TEST(ringct, HPow2)
+TEST(fcmp, HPow2)
 {
   key G = scalarmultBase(d2h(1));
 
@@ -67,7 +67,7 @@ TEST(ringct, HPow2)
 
 static const xmr_amount test_amounts[]={0, 1, 2, 3, 4, 5, 10000, 10000000000000000000ull, 10203040506070809000ull, 123456789123456789};
 
-TEST(ringct, d2h)
+TEST(fcmp, d2h)
 {
   key k, P1;
   skpkGen(k, P1);
@@ -77,7 +77,7 @@ TEST(ringct, d2h)
   }
 }
 
-TEST(ringct, d2b)
+TEST(fcmp, d2b)
 {
   for (auto amount: test_amounts) {
     bits b;
@@ -86,7 +86,7 @@ TEST(ringct, d2b)
   }
 }
 
-TEST(ringct, key_ostream)
+TEST(fcmp, key_ostream)
 {
   std::stringstream out;
   out << "BEGIN" << rct::H << "END";
@@ -96,7 +96,7 @@ TEST(ringct, key_ostream)
   );
 }
 
-TEST(ringct, zeroCommmit)
+TEST(fcmp, zeroCommmit)
 {
   static const uint64_t amount = crypto::rand<uint64_t>();
   const rct::key z = rct::zeroCommit(amount);
@@ -113,7 +113,7 @@ static rct::key uncachedZeroCommit(uint64_t amount)
   return rct::addKeys(rct::G, bH);
 }
 
-TEST(ringct, zeroCommitCache)
+TEST(fcmp, zeroCommitCache)
 {
   ASSERT_EQ(rct::zeroCommit(0), uncachedZeroCommit(0));
   ASSERT_EQ(rct::zeroCommit(1), uncachedZeroCommit(1));
@@ -125,14 +125,14 @@ TEST(ringct, zeroCommitCache)
   ASSERT_EQ(rct::zeroCommit(900000000000000), uncachedZeroCommit(900000000000000));
 }
 
-TEST(ringct, H)
+TEST(fcmp, H)
 {
   ge_p3 p3;
   ASSERT_EQ(ge_frombytes_vartime(&p3, rct::H.bytes), 0);
   ASSERT_EQ(memcmp(&p3, &ge_p3_H, sizeof(ge_p3)), 0);
 }
 
-TEST(ringct, mul8)
+TEST(fcmp, mul8)
 {
   ge_p3 p3;
   rct::key key;

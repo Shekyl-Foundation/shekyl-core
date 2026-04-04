@@ -36,7 +36,7 @@
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "crypto/crypto.h"
-#include "ringct/rctSigs.h"
+#include "fcmp/rctSigs.h"
 
 #include "multi_tx_test_base.h"
 

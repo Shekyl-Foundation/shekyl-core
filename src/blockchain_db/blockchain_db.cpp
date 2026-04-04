@@ -33,7 +33,7 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
 #include "profile_tools.h"
-#include "ringct/rctOps.h"
+#include "fcmp/rctOps.h"
 #include "shekyl/shekyl_ffi.h"
 
 #include "lmdb/db_lmdb.h"

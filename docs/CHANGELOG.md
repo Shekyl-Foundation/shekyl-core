@@ -4,6 +4,14 @@
 
 ### 🔄 Changed
 
+- **Renamed `src/ringct/` to `src/fcmp/` for naming consistency.**
+  Shekyl does not use ring signatures; the directory now reflects the actual
+  FCMP++ confidential transaction system.  CMake targets renamed from
+  `ringct`/`ringct_basic` to `fcmp`/`fcmp_basic`.  All `#include "ringct/..."`
+  paths updated across 44 source and test files.  Log categories, user-facing
+  strings ("RingCT" → "FCMP"), JSON keys, and documentation updated.
+  The `rct::` namespace is preserved for now as a separate future rename.
+
 - **Unified coinbase transaction version to v3.**
   `construct_miner_tx` and `build_genesis_coinbase_from_destinations` now emit
   `tx.version = 3`, matching regular FCMP++ transactions.  All `miner_tx &&
@@ -417,11 +425,11 @@
     table, retroactive insertion on `add_block`, and curve-tree
     inclusion proof for stake claims.
 - **FCMP++ Phase 5: Wallet transaction construction skeleton.**
-  - Added `rct::genRctFcmpPlusPlus()` in `src/ringct/rctSigs.cpp` — builds
+  - Added `rct::genRctFcmpPlusPlus()` in `src/fcmp/rctSigs.cpp` — builds
     an FCMP++ `rctSig` with `RCTTypeFcmpPlusPlusPqc`, Bulletproofs+ range
     proofs, balanced pseudo-outputs, and invokes `shekyl_fcmp_prove()` via
     FFI to generate the membership proof.
-  - Declared the new function in `src/ringct/rctSigs.h`.
+  - Declared the new function in `src/fcmp/rctSigs.h`.
   - Added `COMMAND_RPC_GET_CURVE_TREE_PATH` RPC command in
     `src/rpc/core_rpc_server_commands_defs.h` — accepts output indices and
     returns Merkle paths from the curve tree (stub handler for now).
@@ -475,7 +483,7 @@
     in `construct_block` and `construct_block_manually`.
 - **FCMP++ Phase 3: Transaction format for FCMP++ PQC.**
   - Added `RCTTypeFcmpPlusPlusPqc = 7` to the RCT type enum in
-    `src/ringct/rctTypes.h` — Shekyl's only non-coinbase transaction type.
+    `src/fcmp/rctTypes.h` — Shekyl's only non-coinbase transaction type.
   - Added `referenceBlock` (block hash anchoring the curve tree snapshot)
     to `rctSigBase`, serialized only for the new type.
   - Added `curve_trees_tree_depth` and `fcmp_pp_proof` (opaque FCMP++ proof

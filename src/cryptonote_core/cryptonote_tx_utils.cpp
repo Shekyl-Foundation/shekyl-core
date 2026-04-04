@@ -47,7 +47,7 @@ using namespace epee;
 #include "shekyl/economics.h"
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
-#include "ringct/rctSigs.h"
+#include "fcmp/rctSigs.h"
 
 using namespace crypto;
 

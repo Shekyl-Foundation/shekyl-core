@@ -31,7 +31,7 @@
 #pragma once
 
 #include "crypto/crypto.h"
-#include "ringct/rctOps.h"
+#include "fcmp/rctOps.h"
 
 enum test_op
 {

@@ -31,7 +31,7 @@
 
 #include "crypto/crypto.h"
 #include "crypto/chacha.h"
-#include "ringct/rctTypes.h"
+#include "fcmp/rctTypes.h"
 #include "cryptonote_config.h"
 
 
@@ -179,7 +179,7 @@ namespace hw {
         virtual bool  generate_key_image(const crypto::public_key &pub, const crypto::secret_key &sec, crypto::key_image &image) = 0;
         virtual bool  derive_view_tag(const crypto::key_derivation &derivation, const std::size_t output_index, crypto::view_tag &view_tag) = 0;
 
-        // alternative prototypes available in libringct
+        // alternative prototypes available in libfcmp
         rct::key scalarmultKey(const rct::key &P, const rct::key &a)
         {
             rct::key aP;

@@ -49,9 +49,9 @@ using namespace epee;
 #include "file_io_utils.h"
 #include <csignal>
 #include "checkpoints/checkpoints.h"
-#include "ringct/rctTypes.h"
+#include "fcmp/rctTypes.h"
 #include "blockchain_db/blockchain_db.h"
-#include "ringct/rctSigs.h"
+#include "fcmp/rctSigs.h"
 #include "rpc/zmq_pub.h"
 #include "common/notify.h"
 #include "hardforks/hardforks.h"
@@ -899,7 +899,7 @@ namespace cryptonote
         return false;
       }
     }
-    // for version > 1, ringct signatures check verifies amounts match
+    // for version > 1, FCMP++ signatures check verifies amounts match
 
     //check if tx use different key images
     if(!check_tx_inputs_keyimages_diff(tx))

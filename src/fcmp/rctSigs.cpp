@@ -43,7 +43,7 @@ using namespace crypto;
 using namespace std;
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "ringct"
+#define MONERO_DEFAULT_LOG_CATEGORY "fcmp"
 
 #define CHECK_AND_ASSERT_MES_L1(expr, ret, message) {if(!(expr)) {MCERROR("verify", message); return ret;}}
 
@@ -146,7 +146,7 @@ namespace rct {
       return  prehash;
     }
 
-    //ver RingCT simple
+    //ver FCMP++ simple
     //assumes only post-rct style inputs (at least for max anonymity)
     bool verRctSemanticsSimple(const std::vector<const rctSig*> & rvv) {
       try
@@ -216,7 +216,7 @@ namespace rct {
       return verRctSemanticsSimple(std::vector<const rctSig*>(1, &rv));
     }
 
-    //ver RingCT non-semantics: verifies the FCMP++ membership proof
+    //ver FCMP++ non-semantics: verifies the FCMP++ membership proof
     bool verRctNonSemanticsSimple(const rctSig & rv) {
       try
       {

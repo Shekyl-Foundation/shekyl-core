@@ -95,7 +95,7 @@ set(unit_tests_sources
   util.cpp
   varint.cpp
   ver_rct_non_semantics_simple_cached.cpp
-  ringct.cpp
+  fcmp.cpp
   output_selection.cpp
   vercmp.cpp
   ringdb.cpp
@@ -114,7 +114,7 @@ monero_add_minimal_executable(unit_tests
   ${unit_tests_headers})
 target_link_libraries(unit_tests
   PRIVATE
-    ringct
+    fcmp
     cryptonote_protocol
     cryptonote_core
     daemon_messages

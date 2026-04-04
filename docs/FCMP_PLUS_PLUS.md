@@ -884,6 +884,6 @@ after their lock period expires.
 - `docs/POST_QUANTUM_CRYPTOGRAPHY.md` — full PQC specification
 - `docs/PQC_MULTISIG.md` — multisig scheme (`scheme_id = 2`)
 - `src/shekyl/shekyl_ffi.h` — FFI declarations
-- `src/ringct/rctSigs.h` — `genRctFcmpPlusPlus` declaration
+- `src/fcmp/rctSigs.h` — `genRctFcmpPlusPlus` declaration
 - `rust/shekyl-fcmp/` — Rust FCMP++ proof implementation
 - `rust/shekyl-crypto-pq/` — PQC primitives, KEM, address encoding

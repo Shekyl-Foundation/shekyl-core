@@ -32,7 +32,7 @@
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/tx_verification_utils.h"
 #include "hardforks/hardforks.h"
-#include "ringct/rctSigs.h"
+#include "fcmp/rctSigs.h"
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "blockchain"
@@ -112,7 +112,7 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
         if (!Blockchain::check_tx_outputs(tx, tvc, hf_version) || tvc.m_verifivation_failed)
             return false;
 
-        // We only want to check RingCT semantics if this is actually a RingCT transaction
+        // We only want to check FCMP++ semantics if this is actually an FCMP++ transaction
         if (tx.version >= 2)
             rvv.push_back(&tx.rct_signatures);
     }

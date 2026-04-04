@@ -31,7 +31,7 @@
 #include "crypto/hash.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/difficulty.h"
-#include "ringct/rctSigs.h"
+#include "fcmp/rctSigs.h"
 #include "rpc/rpc_handler.h"
 
 #include <unordered_map>

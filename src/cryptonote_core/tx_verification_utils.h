@@ -79,9 +79,9 @@ bool ver_rct_non_semantics_simple_cached
 );
 
 /**
- * @brief Verify the semantics of a group of RingCT signatures as a batch (if applicable)
+ * @brief Verify the semantics of a group of FCMP++ signatures as a batch (if applicable)
  *
- * Coinbase txs or other transaction with a RingCT type of RCTTypeNull will fail to verify.
+ * Coinbase txs or other transaction with an RCT type of RCTTypeNull will fail to verify.
  *
  * @param rvv list of signatures to verify
  * @return true if all signatures verified semantics successfully, false otherwise
@@ -111,7 +111,7 @@ struct pool_supplement
  *     4. Check tx weight < get_transaction_weight_limit()
  *     5. Passes core::check_tx_semantic()
  *     6. Passes Blockchain::check_tx_outputs()
- *     7. Passes ver_mixed_rct_semantics() [Uses batch RingCT verification when applicable]
+ *     7. Passes ver_mixed_rct_semantics() [Uses batch FCMP++ verification when applicable]
  *
  * For pool_supplement input:
  * We assume the structure of the pool supplement is already correct: for each value entry, the

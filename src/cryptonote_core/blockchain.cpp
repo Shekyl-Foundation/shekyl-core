@@ -58,7 +58,7 @@
 #include "warnings.h"
 #include "crypto/hash.h"
 #include "cryptonote_core.h"
-#include "ringct/rctSigs.h"
+#include "fcmp/rctSigs.h"
 #include "shekyl/shekyl_ffi.h"
 #include "common/perf_timer.h"
 #include "common/notify.h"
@@ -1331,7 +1331,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   CHECK_AND_ASSERT_MES(b.miner_tx.vin.size() == 1, false, "coinbase transaction in the block has no inputs");
   CHECK_AND_ASSERT_MES(std::holds_alternative<txin_gen>(b.miner_tx.vin[0]), false, "coinbase transaction in the block has the wrong type");
   CHECK_AND_ASSERT_MES(b.miner_tx.version >= 2, false, "Invalid coinbase transaction version: " << b.miner_tx.version);
-  CHECK_AND_ASSERT_MES(b.miner_tx.rct_signatures.type == rct::RCTTypeNull, false, "RingCT signatures not allowed in coinbase transactions");
+  CHECK_AND_ASSERT_MES(b.miner_tx.rct_signatures.type == rct::RCTTypeNull, false, "FCMP++ signatures not allowed in coinbase transactions");
 
   if(std::get<txin_gen>(b.miner_tx.vin[0]).height != height)
   {

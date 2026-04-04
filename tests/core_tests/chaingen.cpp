@@ -56,7 +56,7 @@
 
 #include "chaingen.h"
 #include "device/device.hpp"
-#include "ringct/rctOps.h"
+#include "fcmp/rctOps.h"
 #include "shekyl/economics.h"
 using namespace std;
 

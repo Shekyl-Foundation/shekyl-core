@@ -1364,7 +1364,7 @@ std::string get_nix_version_display_string()
     // Without time-consuming tests it's hard to say how much the estimates would
     // improve if one would not only take block sizes into account, but also varying
     // verification times i.e. the different CPU effort needed for the different
-    // transaction types (pre / post RingCT, pre / post Bulletproofs).
+    // transaction types (FCMP++ with Bulletproofs+).
     // Testnet and Stagenet are neglected here because of their much smaller
     // importance.
     static const uint32_t average_block_sizes[] =
