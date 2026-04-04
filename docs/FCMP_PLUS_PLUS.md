@@ -857,10 +857,16 @@ any other output. Specifically:
   output* that results from it must blend into the anonymity set once
   it enters the curve tree.
 
-**Current implementation gap:** `wallet2::create_claim_transaction()`
-(wallet2.cpp:10736) currently uses `RCTTypeNull`, plaintext amounts,
-no KEM derivation, and the wallet-level PQC master key for all inputs.
-This must be reworked to match the above requirements before mainnet.
+**Phase 4 implementation items:**
+
+1. Consensus: `check_tx_inputs` must reject `RCTTypeNull` for non-coinbase
+   v3 transactions — this enforces confidential amounts on claim outputs.
+2. Wallet: `wallet2::create_claim_transaction()` (wallet2.cpp:10736) must
+   be reworked to use `RCTTypeFcmpPlusPlusPqc` with BP+ range proofs,
+   hybrid KEM derivation for per-output PQC keys, ML-KEM ciphertext in
+   `tx_extra`, and a 2-output structure (reward + dummy change).
+3. Consensus: BP+ range proofs on claim tx outputs must go through the
+   same verification path as regular transaction outputs.
 
 **Batch pool balance check:** The total of all claim amounts in a
 transaction is summed and checked against `staker_pool_balance` once (in

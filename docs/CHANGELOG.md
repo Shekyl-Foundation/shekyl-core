@@ -4,14 +4,14 @@
 
 ### 📚 Documentation
 
-- **Specified claim reward output indistinguishability requirement.**
-  Documented in `FCMP_PLUS_PLUS.md` § 15 and `DESIGN_CONCEPTS.md` that
-  claim reward outputs must use `RCTTypeFcmpPlusPlusPqc` with BP+ range
+- **Specified claim reward output indistinguishability requirement (Phase 4).**
+  Claim reward outputs must use `RCTTypeFcmpPlusPlusPqc` with BP+ range
   proofs, standard KEM derivation for per-output PQC keys, and include a
   dummy change output. The current `create_claim_transaction()` uses
   `RCTTypeNull` with plaintext amounts and no KEM derivation, which makes
-  reward outputs trivially distinguishable from regular outputs. Flagged
-  as a pre-mainnet implementation gap.
+  reward outputs trivially distinguishable. Consensus must reject
+  `RCTTypeNull` for non-coinbase v3 txs, and wallet construction must be
+  reworked. Tracked as Phase 4 implementation items.
 
 ### 🔒 Security
 
