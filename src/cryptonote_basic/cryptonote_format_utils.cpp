@@ -99,7 +99,7 @@ namespace cryptonote
     if (n_padded_outputs <= 2)
       return 0;
     size_t nlr = 0;
-    while ((1u << nlr) < n_padded_outputs)
+    while ((1ULL << nlr) < n_padded_outputs)
       ++nlr;
     nlr += 6;
     const size_t bp_size = 32 * ((plus ? 6 : 9) + 2 * nlr);
@@ -191,7 +191,7 @@ namespace cryptonote
             LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs L size in tx " << get_transaction_hash(tx));
             return false;
           }
-          const size_t max_outputs = 1 << (rv.p.bulletproofs[0].L.size() - 6);
+          const size_t max_outputs = 1ULL << (rv.p.bulletproofs[0].L.size() - 6);
           if (max_outputs < tx.vout.size())
           {
             LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs max outputs in tx " << get_transaction_hash(tx));
@@ -434,7 +434,7 @@ namespace cryptonote
 
     // calculate deterministic bulletproofs size (assumes canonical BP format)
     size_t nrl = 0, n_padded_outputs;
-    while ((n_padded_outputs = (1u << nrl)) < tx.vout.size())
+    while ((n_padded_outputs = (1ULL << nrl)) < tx.vout.size())
       ++nrl;
     nrl += 6;
     extra = 32 * ((rct::is_rct_bulletproof_plus(tx.rct_signatures.type) ? 6 : 9) + 2 * nrl) + 2;

@@ -36,6 +36,7 @@
 #include <io.h>
 #include <fcntl.h>
 #endif
+#include <cstdint>
 #include <cstdio>
 #include <wchar.h>
 
@@ -1205,7 +1206,7 @@ std::string get_nix_version_display_string()
     std::string sc = "";
     size_t avail = s.size();
     const char *ptr = s.data();
-    wint_t cp = 0;
+    uint32_t cp = 0;
     int bytes = 1;
     size_t sw = 0;
     char wbuf[8], *wptr;

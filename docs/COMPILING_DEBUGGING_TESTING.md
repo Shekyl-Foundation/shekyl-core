@@ -249,7 +249,9 @@ Coinbase transactions remain version 2. Key differences from upstream Monero:
 - Several legacy tests incompatible with HF1-from-genesis are disabled
   (see `chaingen_main.cpp` comments)
 
-Currently 79 tests are enabled and passing.
+Currently 80 tests are enabled and passing (including the re-enabled
+`gen_block_reward` test whose reward verification was rewritten to use
+Shekyl's four-component economics formula).
 
 ## Seed node build (lean daemon)
 

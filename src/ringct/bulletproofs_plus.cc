@@ -531,7 +531,7 @@ namespace rct
         constexpr size_t logN = 6; // log2(64)
         constexpr size_t N = 1<<logN;
         size_t M, logM;
-        for (logM = 0; (M = 1<<logM) <= maxM && M < sv.size(); ++logM);
+        for (logM = 0; (M = 1ULL<<logM) <= maxM && M < sv.size(); ++logM);
         CHECK_AND_ASSERT_THROW_MES(M <= maxM, "sv/gamma are too large");
         const size_t logMN = logM + logN;
         const size_t MN = M * N;
@@ -846,7 +846,7 @@ try_again:
 
             // Determine the number of inner-product rounds based on proof size
             size_t M;
-            for (pd.logM = 0; (M = 1<<pd.logM) <= maxM && M < proof.V.size(); ++pd.logM);
+            for (pd.logM = 0; (M = 1ULL<<pd.logM) <= maxM && M < proof.V.size(); ++pd.logM);
             CHECK_AND_ASSERT_MES(proof.L.size() == 6+pd.logM, false, "Proof is not the expected size");
             max_logM = std::max(pd.logM, max_logM);
 
@@ -873,7 +873,7 @@ try_again:
             inv_offset += rounds + 1;
         }
         CHECK_AND_ASSERT_MES(max_length < 32, false, "At least one proof is too large");
-        size_t maxMN = 1u << max_length;
+        size_t maxMN = 1ULL << max_length;
 
         rct::key temp;
         rct::key temp2;
@@ -915,7 +915,7 @@ try_again:
             const bp_plus_proof_data_t &pd = proof_data[proof_data_index++];
 
             CHECK_AND_ASSERT_MES(proof.L.size() == 6+pd.logM, false, "Proof is not the expected size");
-            const size_t M = 1 << pd.logM;
+            const size_t M = 1ULL << pd.logM;
             const size_t MN = M*N;
 
             // Random weighting factor must be nonzero, which is exceptionally unlikely!
@@ -1024,12 +1024,12 @@ try_again:
             const rct::key yinv = inverses[pd.inv_offset + rounds];
 
             // Compute challenge products
-            challenges_cache.resize(1<<rounds);
+            challenges_cache.resize(1ULL<<rounds);
             challenges_cache[0] = challenges_inv[0];
             challenges_cache[1] = pd.challenges[0];
             for (size_t j = 1; j < rounds; ++j)
             {
-                const size_t slots = 1<<(j+1);
+                const size_t slots = 1ULL<<(j+1);
                 for (size_t s = slots; s-- > 0; --s)
                 {
                     sc_mul(challenges_cache[s].bytes, challenges_cache[s/2].bytes, pd.challenges[j].bytes);

@@ -36,6 +36,29 @@
 
 ### 🐛 Fixed
 
+- **Re-enabled `gen_block_reward` core test with Shekyl economics.**
+  Rewrote `check_block_rewards()` in `block_reward.cpp` to verify miner
+  outputs against Shekyl's four-component economics formula (release
+  multiplier + emission split + fee burn) instead of legacy Monero fixed
+  expectations. Updated `construct_miner_tx_by_weight` to pass explicit
+  economics parameters. Fixed `construct_block` and
+  `construct_block_manually` in `chaingen.cpp` to pass
+  `circulating_supply=already_generated_coins` to `construct_miner_tx`,
+  preventing parameter mismatch between test generator and validator.
+  80 core_tests now pass (was 79).
+
+- **MSVC C4334: 23 `1 << n` sites widened to `1ULL << n` in consensus
+  code.** Fixed potential undefined behavior (signed 32-bit overflow if
+  shift amount ever reaches 32) in `cryptonote_format_utils.cpp` (3),
+  `bulletproofs.cc` (6), `bulletproofs_plus.cc` (6), `rctTypes.cpp` (5),
+  `rctSigs.cpp` (2), and `multiexp.cc` (2).
+
+- **MSVC C4333 right-shift warning in UTF-8 helpers.** Changed `wint_t cp` to
+  `uint32_t cp` in `src/common/util.cpp` `get_string_prefix_by_width()`, and
+  added an explicit `static_cast<uint32_t>` on the transform result in
+  `src/common/utf8.h` `utf8canonical()`. On MSVC, `wint_t` is 16-bit
+  `unsigned short`, so `cp >> 18` shifted by more than the type's width.
+
 - **Remaining HF17 references corrected to HF1.** Fixed stale Monero-era
   `HF17` / `HF_VERSION_SHEKYL_NG = 17` references in `POST_QUANTUM_CRYPTOGRAPHY.md`
   (scheme registry, rollout notes, V4 roadmap), `PQC_MULTISIG.md` (V3 heading,

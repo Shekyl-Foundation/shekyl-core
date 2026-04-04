@@ -499,7 +499,7 @@ Bulletproof bulletproof_PROVE(const rct::keyV &sv, const rct::keyV &gamma)
   constexpr size_t logN = 6; // log2(64)
   constexpr size_t N = 1<<logN;
   size_t M, logM;
-  for (logM = 0; (M = 1<<logM) <= maxM && M < sv.size(); ++logM);
+  for (logM = 0; (M = 1ULL<<logM) <= maxM && M < sv.size(); ++logM);
   CHECK_AND_ASSERT_THROW_MES(M <= maxM, "sv/gamma are too large");
   const size_t logMN = logM + logN;
   const size_t MN = M * N;
@@ -859,7 +859,7 @@ bool bulletproof_VERIFY(const std::vector<const Bulletproof*> &proofs)
     PERF_TIMER_STOP_BP(VERIFY_start);
 
     size_t M;
-    for (pd.logM = 0; (M = 1<<pd.logM) <= maxM && M < proof.V.size(); ++pd.logM);
+    for (pd.logM = 0; (M = 1ULL<<pd.logM) <= maxM && M < proof.V.size(); ++pd.logM);
     CHECK_AND_ASSERT_MES(proof.L.size() == 6+pd.logM, false, "Proof is not the expected size");
     max_logM = std::max(pd.logM, max_logM);
 
@@ -883,7 +883,7 @@ bool bulletproof_VERIFY(const std::vector<const Bulletproof*> &proofs)
     inv_offset += rounds + 1;
   }
   CHECK_AND_ASSERT_MES(max_length < 32, false, "At least one proof is too large");
-  size_t maxMN = 1u << max_length;
+  size_t maxMN = 1ULL << max_length;
 
   rct::key tmp;
 
@@ -910,7 +910,7 @@ bool bulletproof_VERIFY(const std::vector<const Bulletproof*> &proofs)
     const proof_data_t &pd = proof_data[proof_data_index++];
 
     CHECK_AND_ASSERT_MES(proof.L.size() == 6+pd.logM, false, "Proof is not the expected size");
-    const size_t M = 1 << pd.logM;
+    const size_t M = 1ULL << pd.logM;
     const size_t MN = M*N;
     const rct::key weight_y = rct::skGen();
     const rct::key weight_z = rct::skGen();
@@ -980,12 +980,12 @@ bool bulletproof_VERIFY(const std::vector<const Bulletproof*> &proofs)
 
     // precalc
     PERF_TIMER_START_BP(VERIFY_line_24_25_precalc);
-    w_cache.resize(1<<rounds);
+    w_cache.resize(1ULL<<rounds);
     w_cache[0] = winv[0];
     w_cache[1] = pd.w[0];
     for (size_t j = 1; j < rounds; ++j)
     {
-      const size_t slots = 1<<(j+1);
+      const size_t slots = 1ULL<<(j+1);
       for (size_t s = slots; s-- > 0; --s)
       {
         sc_mul(w_cache[s].bytes, w_cache[s/2].bytes, pd.w[j].bytes);

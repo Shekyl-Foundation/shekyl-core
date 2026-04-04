@@ -54,7 +54,7 @@ namespace
         const size_t n_outs = outamounts.size();
         const rct::key I = rct::identity();
         size_t nrl = 0;
-        while ((1u << nrl) < n_outs)
+        while ((1ULL << nrl) < n_outs)
           ++nrl;
         nrl += 6;
 
@@ -85,7 +85,7 @@ namespace
         const size_t n_outs = outamounts.size();
         const rct::key I = rct::identity();
         size_t nrl = 0;
-        while ((1u << nrl) < n_outs)
+        while ((1ULL << nrl) < n_outs)
           ++nrl;
         nrl += 6;
 

@@ -256,10 +256,10 @@ namespace rct {
         CHECK_AND_ASSERT_MES(L_size >= 6, 0, "Invalid bulletproof L size");
         CHECK_AND_ASSERT_MES(L_size == R_size, 0, "Mismatched bulletproof L/R size");
         static const size_t extra_bits = 4;
-        CHECK_AND_ASSERT_MES((1 << extra_bits) == max_outputs, 0, "log2(max_outputs) is out of date");
+        CHECK_AND_ASSERT_MES((1ULL << extra_bits) == max_outputs, 0, "log2(max_outputs) is out of date");
         CHECK_AND_ASSERT_MES(L_size <= 6 + extra_bits, 0, "Invalid bulletproof L size");
-        CHECK_AND_ASSERT_MES(V_size <= (1u<<(L_size-6)), 0, "Invalid bulletproof V/L");
-        CHECK_AND_ASSERT_MES(V_size * 2 > (1u<<(L_size-6)), 0, "Invalid bulletproof V/L");
+        CHECK_AND_ASSERT_MES(V_size <= (1ULL<<(L_size-6)), 0, "Invalid bulletproof V/L");
+        CHECK_AND_ASSERT_MES(V_size * 2 > (1ULL<<(L_size-6)), 0, "Invalid bulletproof V/L");
         CHECK_AND_ASSERT_MES(V_size > 0, 0, "Empty bulletproof");
         return V_size;
     }
@@ -300,9 +300,9 @@ namespace rct {
         CHECK_AND_ASSERT_MES(L_size >= 6, 0, "Invalid bulletproof L size");
         CHECK_AND_ASSERT_MES(L_size == R_size, 0, "Mismatched bulletproof L/R size");
         static const size_t extra_bits = 4;
-        CHECK_AND_ASSERT_MES((1 << extra_bits) == max_outputs, 0, "log2(max_outputs) is out of date");
+        CHECK_AND_ASSERT_MES((1ULL << extra_bits) == max_outputs, 0, "log2(max_outputs) is out of date");
         CHECK_AND_ASSERT_MES(L_size <= 6 + extra_bits, 0, "Invalid bulletproof L size");
-        return 1 << (L_size - 6);
+        return 1ULL << (L_size - 6);
     }
     size_t n_bulletproof_max_amounts(const Bulletproof &proof) { return n_bulletproof_max_amounts_base(proof.L.size(), proof.R.size(), BULLETPROOF_MAX_OUTPUTS); }
     size_t n_bulletproof_plus_max_amounts(const BulletproofPlus &proof) { return n_bulletproof_max_amounts_base(proof.L.size(), proof.R.size(), BULLETPROOF_PLUS_MAX_OUTPUTS); }
