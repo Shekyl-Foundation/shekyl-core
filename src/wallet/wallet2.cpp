@@ -2947,10 +2947,13 @@ void wallet2::process_new_blockchain_entry(const cryptonote::block& b, const cry
 void wallet2::precompute_fcmp_paths()
 {
   std::vector<uint64_t> output_indices;
+  const uint64_t current_height = get_blockchain_current_height();
   for (size_t i = 0; i < m_transfers.size(); ++i)
   {
     const auto& td = m_transfers[i];
     if (td.m_spent || td.m_frozen)
+      continue;
+    if (td.m_staked && td.m_stake_lock_until > current_height)
       continue;
     output_indices.push_back(td.m_global_output_index);
   }
@@ -2978,7 +2981,8 @@ void wallet2::precompute_fcmp_paths()
   {
     fcmp_precomputed_path pp;
     pp.global_output_index = pe.output_index;
-    pp.tree_root_at_precompute = ref_block;
+    pp.reference_block_at_precompute = ref_block;
+    pp.tree_depth_at_precompute = pe.tree_depth ? pe.tree_depth : res.tree_depth;
     pp.precompute_height = m_blockchain.size() - 1;
     if (!pe.path_blob.empty())
     {
@@ -3007,6 +3011,7 @@ void wallet2::update_fcmp_paths_incremental(uint64_t new_height)
     return;
   }
 
+  const uint64_t current_height = get_blockchain_current_height();
   std::vector<uint64_t> stale_indices;
   for (const auto& [idx, pp] : m_fcmp_precomputed_paths)
     stale_indices.push_back(idx);
@@ -3016,6 +3021,8 @@ void wallet2::update_fcmp_paths_incremental(uint64_t new_height)
   {
     const auto& td = m_transfers[i];
     if (td.m_spent || td.m_frozen)
+      continue;
+    if (td.m_staked && td.m_stake_lock_until > current_height)
       continue;
     if (m_fcmp_precomputed_paths.find(td.m_global_output_index) == m_fcmp_precomputed_paths.end())
       stale_indices.push_back(td.m_global_output_index);
@@ -3062,7 +3069,8 @@ void wallet2::update_fcmp_paths_incremental(uint64_t new_height)
   {
     fcmp_precomputed_path pp;
     pp.global_output_index = pe.output_index;
-    pp.tree_root_at_precompute = ref_block;
+    pp.reference_block_at_precompute = ref_block;
+    pp.tree_depth_at_precompute = pe.tree_depth ? pe.tree_depth : res.tree_depth;
     pp.precompute_height = new_height;
     if (!pe.path_blob.empty())
     {
@@ -3077,7 +3085,7 @@ void wallet2::update_fcmp_paths_incremental(uint64_t new_height)
   LOG_PRINT_L1("FCMP++ tree paths incrementally updated to height " << new_height);
 }
 //----------------------------------------------------------------------------------------------------
-void wallet2::rederive_pqc_keys_for_output(const transfer_details& td)
+void wallet2::validate_pqc_key_derivation_for_output(const transfer_details& td)
 {
   THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.size() != 64,
     error::wallet_internal_error,
@@ -3086,16 +3094,36 @@ void wallet2::rederive_pqc_keys_for_output(const transfer_details& td)
 
   ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
     td.m_combined_shared_secret.data(),
-    td.m_global_output_index);
+    static_cast<uint64_t>(td.m_internal_output_index));
 
-  THROW_WALLET_EXCEPTION_IF(!kp.success,
+  THROW_WALLET_EXCEPTION_IF(!kp.success || !kp.public_key.ptr || !kp.secret_key.ptr,
     error::wallet_internal_error,
     "PQC keypair derivation failed for output " + std::to_string(td.m_global_output_index));
 
-  if (kp.public_key.ptr && kp.public_key.len > 0)
-    shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
-  if (kp.secret_key.ptr && kp.secret_key.len > 0)
-    shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
+  // Validation pass: if tx_extra has per-output PQC leaf hashes (tag 0x07),
+  // ensure the rederived key matches the committed H(pqc_pk) for this output.
+  std::vector<tx_extra_field> tx_extra_fields;
+  if (parse_tx_extra(td.m_tx.extra, tx_extra_fields))
+  {
+    tx_extra_pqc_leaf_hashes leaf_hashes;
+    if (find_tx_extra_field_by_type(tx_extra_fields, leaf_hashes))
+    {
+      const size_t off = static_cast<size_t>(td.m_internal_output_index) * cryptonote::PQC_LEAF_HASH_BYTES;
+      if (leaf_hashes.blob.size() >= off + cryptonote::PQC_LEAF_HASH_BYTES)
+      {
+        uint8_t h_pqc[32];
+        const bool ok = shekyl_fcmp_pqc_leaf_hash(kp.public_key.ptr, kp.public_key.len, h_pqc);
+        THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error,
+          "PQC leaf hash derivation failed for output " + std::to_string(td.m_global_output_index));
+        THROW_WALLET_EXCEPTION_IF(memcmp(h_pqc, leaf_hashes.blob.data() + off, 32) != 0,
+          error::wallet_internal_error,
+          "Derived PQC key mismatch for output " + std::to_string(td.m_global_output_index));
+      }
+    }
+  }
+
+  shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
+  shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
 }
 //----------------------------------------------------------------------------------------------------
 void wallet2::rederive_all_pqc_keys()
@@ -3109,18 +3137,18 @@ void wallet2::rederive_all_pqc_keys()
   if (total == 0)
     return;
 
-  LOG_PRINT_L1("Rederiving PQC keys for " << total << " outputs with stored shared secrets");
+  LOG_PRINT_L1("Validating PQC key derivation for " << total << " outputs with stored shared secrets");
   uint64_t done = 0;
   for (const auto& td : m_transfers)
   {
     if (td.m_combined_shared_secret.empty())
       continue;
-    rederive_pqc_keys_for_output(td);
+    validate_pqc_key_derivation_for_output(td);
     ++done;
     if (m_callback)
       m_callback->on_pqc_rederivation_progress(done, total);
   }
-  LOG_PRINT_L1("PQC key rederivation complete for " << done << " outputs");
+  LOG_PRINT_L1("PQC key derivation validation complete for " << done << " outputs");
 }
 //----------------------------------------------------------------------------------------------------
 void wallet2::get_short_chain_history(std::list<crypto::hash>& ids, uint64_t granularity) const
@@ -9309,17 +9337,29 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     THROW_WALLET_EXCEPTION_IF(!r, error::tx_not_constructed, sources, dsts, m_nettype);
   }
 
+  std::vector<size_t> ins_order;
+
   // Phase B: generate FCMP++ proof via genRctFcmpPlusPlus.
   {
     const size_t num_inputs = selected_transfers.size();
     rct::ctkeyV inSk(num_inputs), inPk(num_inputs);
     std::vector<std::vector<uint8_t>> tree_paths(num_inputs);
     rct::keyV pqc_pk_hashes(num_inputs);
+    std::vector<std::vector<uint8_t>> derived_pqc_public_keys(num_inputs);
+    std::vector<std::vector<uint8_t>> derived_pqc_secret_keys(num_inputs);
+    auto wipe_derived_pqc_secret_keys = epee::misc_utils::create_scope_leave_handler([&derived_pqc_secret_keys]() {
+      for (auto& sk : derived_pqc_secret_keys)
+      {
+        if (!sk.empty())
+          memwipe(sk.data(), sk.size());
+        sk.clear();
+      }
+    });
     crypto::hash reference_block{};
     uint8_t tree_depth = 0;
 
     // Work out the permutation construct_tx_with_tx_key applied to vin
-    std::vector<size_t> ins_order;
+    ins_order.clear();
     for (size_t n = 0; n < sources.size(); ++n)
     {
       for (size_t idx = 0; idx < sources_copy.size(); ++idx)
@@ -9361,11 +9401,21 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
           "No precomputed FCMP++ tree path for output index " + std::to_string(td.m_global_output_index) +
           ". Call precompute_fcmp_paths() first.");
       tree_paths[i] = path_it->second.tree_path;
+      THROW_WALLET_EXCEPTION_IF(tree_paths[i].empty(), error::wallet_internal_error,
+          "Empty FCMP++ tree path for output index " + std::to_string(td.m_global_output_index));
       if (i == 0)
       {
-        reference_block = path_it->second.tree_root_at_precompute;
-        tree_depth = static_cast<uint8_t>(path_it->second.tree_path.size() > 0
-            ? path_it->second.tree_path[0] : 0);
+        reference_block = path_it->second.reference_block_at_precompute;
+        tree_depth = path_it->second.tree_depth_at_precompute;
+      }
+      else
+      {
+        THROW_WALLET_EXCEPTION_IF(path_it->second.reference_block_at_precompute != reference_block,
+          error::wallet_internal_error,
+          "Input reference_block mismatch across selected inputs; rerun precompute_fcmp_paths()");
+        THROW_WALLET_EXCEPTION_IF(path_it->second.tree_depth_at_precompute != tree_depth,
+          error::wallet_internal_error,
+          "Input tree_depth mismatch across selected inputs; rerun precompute_fcmp_paths()");
       }
 
       // Per-input H(pqc_pk) from the combined shared secret
@@ -9373,11 +9423,16 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
         error::wallet_internal_error,
         "Missing combined shared secret for output " + std::to_string(td.m_global_output_index));
       ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
-          td.m_combined_shared_secret.data(), td.m_global_output_index);
-      THROW_WALLET_EXCEPTION_IF(!kp.success || !kp.public_key.ptr, error::wallet_internal_error,
+          td.m_combined_shared_secret.data(), static_cast<uint64_t>(td.m_internal_output_index));
+      THROW_WALLET_EXCEPTION_IF(!kp.success || !kp.public_key.ptr || !kp.secret_key.ptr, error::wallet_internal_error,
           "PQC keypair derivation failed for input " + std::to_string(i));
+      derived_pqc_public_keys[i].assign(kp.public_key.ptr, kp.public_key.ptr + kp.public_key.len);
+      derived_pqc_secret_keys[i].assign(kp.secret_key.ptr, kp.secret_key.ptr + kp.secret_key.len);
       uint8_t h_pqc[32];
-      bool ok = shekyl_fcmp_pqc_leaf_hash(kp.public_key.ptr, kp.public_key.len, h_pqc);
+      bool ok = shekyl_fcmp_pqc_leaf_hash(
+          reinterpret_cast<const uint8_t*>(derived_pqc_public_keys[i].data()),
+          derived_pqc_public_keys[i].size(),
+          h_pqc);
       shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
       shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
       THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error,
@@ -9427,23 +9482,10 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     tx.pqc_auths.resize(num_inputs);
     for (size_t i = 0; i < num_inputs; ++i)
     {
-      const transfer_details& td = m_transfers[permuted_transfers[i]];
-      ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
-          td.m_combined_shared_secret.data(), td.m_global_output_index);
-      auto kp_guard = epee::misc_utils::create_scope_leave_handler([&kp]() {
-        if (kp.public_key.ptr) shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
-        if (kp.secret_key.ptr) shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
-        kp.public_key.ptr = nullptr;
-        kp.secret_key.ptr = nullptr;
-      });
-      THROW_WALLET_EXCEPTION_IF(!kp.success || !kp.secret_key.ptr || !kp.public_key.ptr,
-          error::wallet_internal_error,
-          "PQC keypair derivation failed for PQC auth on input " + std::to_string(i));
-
       tx.pqc_auths[i].auth_version = 1;
       tx.pqc_auths[i].scheme_id = 1;
       tx.pqc_auths[i].flags = 0;
-      tx.pqc_auths[i].hybrid_public_key.assign(kp.public_key.ptr, kp.public_key.ptr + kp.public_key.len);
+      tx.pqc_auths[i].hybrid_public_key = derived_pqc_public_keys[i];
 
       std::string payload_blob;
       THROW_WALLET_EXCEPTION_IF(!cryptonote::get_transaction_signed_payload(tx, i, payload_blob),
@@ -9452,7 +9494,8 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       cryptonote::get_blob_hash(payload_blob, payload_hash);
 
       ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
-          kp.secret_key.ptr, kp.secret_key.len,
+          reinterpret_cast<const uint8_t*>(derived_pqc_secret_keys[i].data()),
+          derived_pqc_secret_keys[i].size(),
           reinterpret_cast<const uint8_t*>(payload_hash.data), sizeof(payload_hash.data));
       THROW_WALLET_EXCEPTION_IF(!sig_result.success, error::wallet_internal_error,
           "PQC signing failed for input " + std::to_string(i));
@@ -9477,17 +9520,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
   THROW_WALLET_EXCEPTION_IF(!all_are_txin_to_key, error::unexpected_txin_type, tx);
   LOG_PRINT_L2("gathered key images");
 
-  // Work out ins_order for ptx
-  std::vector<size_t> ins_order;
-  for (size_t n = 0; n < sources.size(); ++n)
-  {
-    for (size_t idx = 0; idx < sources_copy.size(); ++idx)
-    {
-      if (sources_copy[idx].outputs[sources_copy[idx].real_output].second.dest ==
-          sources[n].outputs[sources[n].real_output].second.dest)
-        ins_order.push_back(idx);
-    }
-  }
+  // Reuse the same vin permutation computed above.
   THROW_WALLET_EXCEPTION_IF(ins_order.size() != sources.size(), error::wallet_internal_error,
       "Failed to work out sources permutation");
 
@@ -11336,11 +11369,21 @@ bool wallet2::prepare_multisig_fcmp_proof(pending_tx& ptx)
         "No precomputed FCMP++ tree path for output index " + std::to_string(td.m_global_output_index) +
         ". Call precompute_fcmp_paths() first.");
     tree_paths[i] = path_it->second.tree_path;
+    THROW_WALLET_EXCEPTION_IF(tree_paths[i].empty(), error::wallet_internal_error,
+        "Empty FCMP++ tree path for output index " + std::to_string(td.m_global_output_index));
     if (i == 0)
     {
-      reference_block = path_it->second.tree_root_at_precompute;
-      tree_depth = static_cast<uint8_t>(path_it->second.tree_path.size() > 0 ?
-          path_it->second.tree_path[0] : 0);
+      reference_block = path_it->second.reference_block_at_precompute;
+      tree_depth = path_it->second.tree_depth_at_precompute;
+    }
+    else
+    {
+      THROW_WALLET_EXCEPTION_IF(path_it->second.reference_block_at_precompute != reference_block,
+        error::wallet_internal_error,
+        "Input reference_block mismatch across selected inputs; rerun precompute_fcmp_paths()");
+      THROW_WALLET_EXCEPTION_IF(path_it->second.tree_depth_at_precompute != tree_depth,
+        error::wallet_internal_error,
+        "Input tree_depth mismatch across selected inputs; rerun precompute_fcmp_paths()");
     }
   }
 
@@ -11383,13 +11426,6 @@ bool wallet2::prepare_multisig_fcmp_proof(pending_tx& ptx)
   // Build FCMP++ rctSig via genRctFcmpPlusPlus
   crypto::hash tx_prefix_hash;
   cryptonote::get_transaction_prefix_hash(ptx.tx, tx_prefix_hash);
-
-  // Fetch tree_depth from the daemon response stored in precomputed paths
-  {
-    auto path_it = m_fcmp_precomputed_paths.find(m_transfers[ptx.selected_transfers[0]].m_global_output_index);
-    if (path_it != m_fcmp_precomputed_paths.end())
-      tree_depth = path_it->second.tree_path.size() > 0 ? path_it->second.tree_path[0] : 0;
-  }
 
   rct::rctSig rv = rct::genRctFcmpPlusPlus(
       rct::hash2rct(tx_prefix_hash),
@@ -11479,7 +11515,7 @@ std::string wallet2::export_multisig_signing_request(pending_tx& ptx)
     if (!td.m_combined_shared_secret.empty() && td.m_combined_shared_secret.size() == 64)
     {
       ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
-          td.m_combined_shared_secret.data(), td.m_global_output_index);
+          td.m_combined_shared_secret.data(), static_cast<uint64_t>(td.m_internal_output_index));
       if (kp.success && kp.public_key.ptr && kp.public_key.len > 0)
       {
         std::string pk_hex = epee::string_tools::buff_to_hex_nodelimer(
@@ -11619,7 +11655,7 @@ bool wallet2::sign_multisig_partial(const std::string& signing_request_json, std
             continue;
 
           ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
-              td.m_combined_shared_secret.data(), td.m_global_output_index);
+              td.m_combined_shared_secret.data(), static_cast<uint64_t>(td.m_internal_output_index));
           if (kp.success && kp.public_key.ptr && kp.public_key.len > 0)
           {
             std::string our_pk_hex = epee::string_tools::buff_to_hex_nodelimer(

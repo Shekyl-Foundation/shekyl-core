@@ -78,6 +78,9 @@ impl ShekylBuffer {
 pub extern "C" fn shekyl_buffer_free(ptr: *mut u8, len: usize) {
     if !ptr.is_null() && len > 0 {
         unsafe {
+            // Zeroize before releasing to avoid leaving secret material
+            // in allocator-managed memory.
+            std::ptr::write_bytes(ptr, 0, len);
             drop(Vec::from_raw_parts(ptr, len, len));
         }
     }

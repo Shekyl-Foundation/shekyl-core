@@ -393,7 +393,10 @@ private:
     {
       uint64_t global_output_index = 0;
       std::vector<uint8_t> tree_path;
-      crypto::hash tree_root_at_precompute{};
+      // This is the daemon-provided reference block hash used in
+      // rct_signatures.referenceBlock, not the curve tree root bytes.
+      crypto::hash reference_block_at_precompute{};
+      uint8_t tree_depth_at_precompute = 0;
       uint64_t precompute_height = 0;
     };
 
@@ -1055,7 +1058,7 @@ private:
     const std::unordered_map<uint64_t, fcmp_precomputed_path>& get_fcmp_precomputed_paths() const { return m_fcmp_precomputed_paths; }
 
     // FCMP++ PQC key rederivation (Phase 5.5)
-    void rederive_pqc_keys_for_output(const transfer_details& td);
+    void validate_pqc_key_derivation_for_output(const transfer_details& td);
     void rederive_all_pqc_keys();
 
     cryptonote::network_type nettype() const { return m_nettype; }

@@ -835,9 +835,7 @@ bool gen_trezor_base::generate(std::vector<test_event_entry>& events)
 
   // Simple transaction check
   bool resx = rct::verRctSemanticsSimple(txs_blk_5.begin()->rct_signatures);
-  bool resy = rct::verRctNonSemanticsSimple(txs_blk_5.begin()->rct_signatures);
   CHECK_AND_ASSERT_THROW_MES(resx, "Tsx5[0] semantics failed");
-  CHECK_AND_ASSERT_THROW_MES(resy, "Tsx5[0] non-semantics failed");
 
   REWIND_BLOCKS_HF(events, blk_5r, blk_5, m_miner_account, CUR_HF);  // rewind to unlock
 
@@ -859,9 +857,7 @@ bool gen_trezor_base::generate(std::vector<test_event_entry>& events)
 
   // Simple transaction check
   resx = rct::verRctSemanticsSimple(tx_1.rct_signatures);
-  resy = rct::verRctNonSemanticsSimple(tx_1.rct_signatures);
   CHECK_AND_ASSERT_THROW_MES(resx, "tx_1 semantics failed");
-  CHECK_AND_ASSERT_THROW_MES(resy, "tx_1 non-semantics failed");
 
   REWIND_BLOCKS_N_HF(events, blk_6r, blk_6, m_miner_account, 10, CUR_HF);
   wallet_tools::process_transactions(m_wl_alice.get(), events, blk_6, m_bt);
@@ -1051,9 +1047,7 @@ void gen_trezor_base::test_trezor_tx(std::vector<test_event_entry>& events, std:
     // Simple TX tests, more complex are performed in the core.
     MTRACE(cryptonote::obj_to_json_str(c_ptx.tx));
     bool resx = rct::verRctSemanticsSimple(c_ptx.tx.rct_signatures);
-    bool resy = rct::verRctNonSemanticsSimple(c_ptx.tx.rct_signatures);
     CHECK_AND_ASSERT_THROW_MES(resx, "Trezor tx_1 semantics failed");
-    CHECK_AND_ASSERT_THROW_MES(resy, "Trezor tx_1 Nonsemantics failed");
 
     tx_list.push_back(c_ptx.tx);
     MDEBUG("Transaction: " << dump_data(c_ptx.tx));

@@ -3330,7 +3330,25 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   if (!pmax_used_block_height)
     pmax_used_block_height = &max_used_block_height;
 
-  if (is_fcmp_pp)
+  if (is_stake_claim_only)
+  {
+    // Claim transactions: inputs are txin_stake_claim, skip FCMP++ input
+    // validation but still require y-normalized key images.
+    for (const auto& txin : tx.vin)
+    {
+      const txin_stake_claim& claim = std::get<txin_stake_claim>(txin);
+      crypto::key_image ki_copy = claim.k_image;
+      crypto::key_image_y_normalize(ki_copy);
+      if (ki_copy != claim.k_image)
+      {
+        MERROR_VER("Claim tx " << get_transaction_hash(tx)
+          << " has non-y-normalized key image " << claim.k_image);
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
+    }
+  }
+  else if (is_fcmp_pp)
   {
     // ─── FCMP++ per-input validation ────────────────────────────────────
     for (const auto& txin : tx.vin)
@@ -3361,24 +3379,6 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       {
         MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
           << " has non-y-normalized key image " << in_to_key.k_image);
-        tvc.m_verifivation_failed = true;
-        return false;
-      }
-    }
-  }
-  else if (is_stake_claim_only)
-  {
-    // Claim transactions: inputs are txin_stake_claim, skip FCMP++ input
-    // validation but still require y-normalized key images.
-    for (const auto& txin : tx.vin)
-    {
-      const txin_stake_claim& claim = std::get<txin_stake_claim>(txin);
-      crypto::key_image ki_copy = claim.k_image;
-      crypto::key_image_y_normalize(ki_copy);
-      if (ki_copy != claim.k_image)
-      {
-        MERROR_VER("Claim tx " << get_transaction_hash(tx)
-          << " has non-y-normalized key image " << claim.k_image);
         tvc.m_verifivation_failed = true;
         return false;
       }

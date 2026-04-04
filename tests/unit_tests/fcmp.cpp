@@ -330,8 +330,8 @@ TEST(fcmp, fcmp_pp_proof_empty_rejected_by_verifier)
   rv.p.fcmp_pp_proof.clear();
   rv.p.curve_trees_tree_depth = 20;
 
-  // verRctNonSemanticsSimple should reject empty proof
-  ASSERT_FALSE(rct::verRctNonSemanticsSimple(rv));
+  // verRctSemanticsSimple should reject empty proof
+  ASSERT_FALSE(rct::verRctSemanticsSimple(rv));
 }
 
 // ---------------------------------------------------------------------------

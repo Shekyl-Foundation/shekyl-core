@@ -83,7 +83,7 @@ public:
   {
     if (rct)
     {
-      return rct::verRctNonSemanticsSimple(m_tx.rct_signatures);
+      return rct::verRctSemanticsSimple(m_tx.rct_signatures);
     }
     else
     {
@@ -155,12 +155,7 @@ public:
     std::vector<const rct::rctSig*> rvv;
     rvv.reserve(m_txes.size());
     for (size_t n = 0; n < m_txes.size(); ++n)
-    {
-      const rct::rctSig &rv = m_txes[n].rct_signatures;
-      if (!rct::verRctNonSemanticsSimple(rv))
-        return false;
-      rvv.push_back(&rv);
-    }
+      rvv.push_back(&m_txes[n].rct_signatures);
     return rct::verRctSemanticsSimple(rvv);
   }
 

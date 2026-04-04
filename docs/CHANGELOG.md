@@ -4,6 +4,28 @@
 
 ### 🐛 Fixed
 
+- **FCMP++ wallet precompute metadata and input consistency checks.**
+  `transfer_selected_rct` and multisig proof prep now read tree depth from
+  RPC metadata (`tree_depth`) instead of `path_blob[0]`, enforce that all
+  selected inputs share the same reference block/depth snapshot, and reject
+  empty precomputed paths. This fixes silent spend-construction failures.
+
+- **Stake-claim input routing in consensus verification.**
+  `Blockchain::check_tx_inputs` now routes pure `txin_stake_claim`
+  transactions through the claim-specific input checks before generic FCMP++
+  `txin_to_key` validation, preventing incorrect rejection of valid
+  stake-claim transactions that use `RCTTypeFcmpPlusPlusPqc`.
+
+- **PQC derivation index correctness and duplicate derivation overhead.**
+  Spend-path and multisig PQC key derivation now use
+  `m_internal_output_index` (matching KEM encapsulation/decapsulation) and
+  derive each per-input keypair once per transaction, reusing it for both
+  `H(pqc_pk)` and signing.
+
+- **Staked-output FCMP++ path precompute filtering.**
+  Wallet precompute/incremental updates now skip still-locked staked outputs
+  (`m_stake_lock_until > current_height`) to avoid daemon path lookup errors.
+
 - **Stake-claim rollback completeness.** `BlockchainDB::remove_transaction`
   now fully reverses `txin_stake_claim` state on reorg: watermark is restored
   to its pre-claim value (or removed for first-time claims) and the claimed
@@ -33,6 +55,10 @@
   containing a stake claim.
 
 ### 🔒 Security
+
+- **FFI buffer zeroization before free.** `shekyl_buffer_free` now wipes
+  buffer contents prior to deallocation, reducing secret-key residue risk in
+  allocator-managed memory.
 
 - **Wallet KEM key management fix.** `generate_pqc_key_material()` now
   generates `HybridX25519MlKem` KEM keypairs via `shekyl_kem_keypair_generate()`
