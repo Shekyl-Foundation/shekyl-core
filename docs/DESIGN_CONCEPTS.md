@@ -260,6 +260,17 @@ Multisig staked outputs and claim transactions use the same `pqc_auth`
 framework as regular transactions, with the extended signature-list format.
 See `docs/PQC_MULTISIG.md` for the full specification.
 
+#### Claim reward output indistinguishability
+
+Claim reward outputs MUST be regular `txout_to_tagged_key` outputs with
+confidential amounts (Bulletproofs+ range proofs), standard KEM derivation
+for per-output PQC keys, and a dummy change output to match the 2-output
+structure of regular transactions. Once a reward output matures into the
+curve tree, spending it must be indistinguishable from spending any other
+output. The claim *action* (`txin_stake_claim`) is visible, but the
+resulting reward output must blend into the anonymity set. See
+`docs/FCMP_PLUS_PLUS.md` § 15 for the full specification.
+
 #### Self-balancing dynamics
 
 - If too many people stake: yields per staker decrease (same pool, more participants). Some unstake, restoring equilibrium.

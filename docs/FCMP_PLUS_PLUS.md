@@ -835,6 +835,33 @@ into the tree (e.g., deferred insertion pending), the claim is rejected.
 prevents an attacker from claiming rewards for an output they do not
 control the PQC key for.
 
+**Claim reward outputs must be indistinguishable from regular outputs.**
+Claim reward outputs MUST be regular `txout_to_tagged_key` outputs (not
+staked), use `RCTTypeFcmpPlusPlusPqc` with Bulletproofs+ range proofs to
+hide the reward amount, and go through the standard KEM derivation so
+their PQC keys are unique and unlinkable. Once a reward output matures
+into the curve tree, spending it must be indistinguishable from spending
+any other output. Specifically:
+
+- Reward outputs use confidential amounts (Pedersen commitment + BP+
+  range proof), not plaintext amounts with `RCTTypeNull`.
+- Per-output PQC keys are derived via the standard hybrid KEM path
+  (X25519 + ML-KEM-768 → HKDF → ML-DSA-65 keypair), with the ML-KEM
+  ciphertext embedded in `tx_extra` under tag `0x06`.
+- Claim transactions include a dummy change output (amount = 0) to
+  match the 2-output structure of regular transactions, preventing
+  structural fingerprinting.
+- The `txin_stake_claim` input type is inherently distinguishable on
+  the input side (it references a global output index). This is an
+  accepted trade-off: the *claim action* is visible, but the *reward
+  output* that results from it must blend into the anonymity set once
+  it enters the curve tree.
+
+**Current implementation gap:** `wallet2::create_claim_transaction()`
+(wallet2.cpp:10736) currently uses `RCTTypeNull`, plaintext amounts,
+no KEM derivation, and the wallet-level PQC master key for all inputs.
+This must be reworked to match the above requirements before mainnet.
+
 **Batch pool balance check:** The total of all claim amounts in a
 transaction is summed and checked against `staker_pool_balance` once (in
 `check_tx_inputs`), rather than checking each claim individually. This

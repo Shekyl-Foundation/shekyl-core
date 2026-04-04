@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### 📚 Documentation
+
+- **Specified claim reward output indistinguishability requirement.**
+  Documented in `FCMP_PLUS_PLUS.md` § 15 and `DESIGN_CONCEPTS.md` that
+  claim reward outputs must use `RCTTypeFcmpPlusPlusPqc` with BP+ range
+  proofs, standard KEM derivation for per-output PQC keys, and include a
+  dummy change output. The current `create_claim_transaction()` uses
+  `RCTTypeNull` with plaintext amounts and no KEM derivation, which makes
+  reward outputs trivially distinguishable from regular outputs. Flagged
+  as a pre-mainnet implementation gap.
+
 ### 🔒 Security
 
 - **Integer-only stake reward computation.** Replaced floating-point
