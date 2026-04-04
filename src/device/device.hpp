@@ -236,6 +236,13 @@ namespace hw {
         virtual bool clsag_hash(const rct::keyV &data, rct::key &hash) = 0;
         virtual bool clsag_sign(const rct::key &c, const rct::key &a, const rct::key &p, const rct::key &z, const rct::key &mu_P, const rct::key &mu_C, rct::key &s) = 0;
 
+        /* ======================================================================= */
+        /*                                 FCMP++                                  */
+        /* ======================================================================= */
+        virtual bool fcmp_prepare(const rct::key &tree_root, uint8_t tree_depth) { return false; }
+        virtual bool fcmp_proof_start(size_t num_inputs) { return false; }
+        virtual bool fcmp_proof_add_input(const rct::key &key_image, const std::vector<uint8_t> &tree_path) { return false; }
+
         virtual bool  close_tx(void) = 0;
 
         virtual bool  has_ki_cold_sync(void) const { return false; }

@@ -244,7 +244,9 @@ namespace cryptonote
         meta.set_relay_method(tx_relay);
         meta.double_spend_seen = have_tx_keyimges_as_spent(tx, id);
         meta.pruned = tx.pruned;
+        meta.fcmp_verified = 0;
         meta.bf_padding = 0;
+        meta.fcmp_verification_hash = null_hash;
         memset(meta.padding, 0, sizeof(meta.padding));
         try
         {
@@ -321,6 +323,17 @@ namespace cryptonote
           meta.pruned = tx.pruned;
           meta.bf_padding = 0;
           memset(meta.padding, 0, sizeof(meta.padding));
+
+          if (tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc)
+          {
+            meta.fcmp_verification_hash = Blockchain::compute_fcmp_verification_hash(tx);
+            meta.fcmp_verified = (meta.fcmp_verification_hash != null_hash) ? 1 : 0;
+          }
+          else
+          {
+            meta.fcmp_verification_hash = null_hash;
+            meta.fcmp_verified = 0;
+          }
 
           if (!insert_key_images(tx, id, tx_relay))
             return false;
@@ -1398,6 +1411,16 @@ namespace cryptonote
     return ret;
   }
   //---------------------------------------------------------------------------------
+  bool tx_memory_pool::is_fcmp_verification_cached(const txpool_tx_meta_t& meta, const transaction& tx) const
+  {
+    if (!meta.fcmp_verified)
+      return false;
+    if (tx.rct_signatures.type != rct::RCTTypeFcmpPlusPlusPqc)
+      return false;
+    const crypto::hash expected = Blockchain::compute_fcmp_verification_hash(tx);
+    return expected != crypto::null_hash && expected == meta.fcmp_verification_hash;
+  }
+  //---------------------------------------------------------------------------------
   bool tx_memory_pool::is_transaction_ready_to_go(txpool_tx_meta_t& txd, const crypto::hash &txid, const cryptonote::blobdata_ref& txblob, transaction &tx) const
   {
     struct transaction_parser
@@ -1425,6 +1448,24 @@ namespace cryptonote
 
     if (txd.last_failed_id == top_block_hash)
       return false; // we are already sure that this tx isn't passing for this exact chain
+
+    // FCMP++ verification cache: if the proof was already verified and the
+    // verification hash still matches, seed the m_input_cache so
+    // check_tx_inputs returns immediately without calling shekyl_fcmp_verify.
+    if (txd.fcmp_verified)
+    {
+      const auto cache_it = m_input_cache.find(txid);
+      if (cache_it == m_input_cache.end())
+      {
+        cryptonote::transaction& parsed_tx = lazy_tx();
+        if (is_fcmp_verification_cached(txd, parsed_tx))
+        {
+          tx_verification_context cached_tvc{};
+          m_input_cache.insert(std::make_pair(txid,
+            std::make_tuple(true, cached_tvc, txd.max_used_block_height, txd.max_used_block_id)));
+        }
+      }
+    }
 
     tx_verification_context tvc{};
     if (!check_tx_inputs([&lazy_tx]()->cryptonote::transaction&{ return lazy_tx(); },
@@ -1653,6 +1694,10 @@ namespace cryptonote
         MERROR("Failed to check transaction readiness: " << e.what());
         // continue, not fatal
       }
+      static_assert(std::is_trivially_copyable_v<txpool_tx_meta_t>,
+        "txpool_tx_meta_t must be trivially copyable for memcmp comparison");
+      static_assert(sizeof(txpool_tx_meta_t) == 192,
+        "txpool_tx_meta_t size changed; update padding and zero-init sites");
       if (memcmp(&original_meta, &meta, sizeof(meta)))
       {
         try

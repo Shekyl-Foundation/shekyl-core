@@ -311,12 +311,21 @@ High-level rule:
 `TransactionV3` keeps the existing CryptoNote-style prefix and RingCT body, but
 adds a dedicated hybrid authorization structure outside `tx_extra`.
 
+The RingCT type for user transactions is `RCTTypeFcmpPlusPlusPqc = 7`. This is
+Shekyl's only non-coinbase RCT type. It replaces CLSAG ring signatures with
+FCMP++ membership proofs, uses Bulletproof+ range proofs, and adds a
+`referenceBlock` field to `rctSigBase` anchoring the proof to a specific curve
+tree snapshot. The prunable section carries `curve_trees_tree_depth` and an
+opaque `fcmp_pp_proof` blob instead of CLSAGs.
+
+Coinbase transactions continue to use `RCTTypeNull = 0`.
+
 Conceptually:
 
 ```text
 TransactionV3 {
   prefix: TransactionPrefixV3
-  rct_signatures: rctSig
+  rct_signatures: rctSig          // type = RCTTypeFcmpPlusPlusPqc (7)
   pqc_auths: std::vector<PqcAuthentication>   // one per input (pqc_auths.size() == vin.size())
 }
 ```
@@ -731,9 +740,11 @@ All Phase-1 (single-signer) and Phase-2 (multisig) items are implemented. This t
 | 9 | Consensus verification + scheme downgrade | Done | `src/cryptonote_core/tx_pqc_verify.cpp`, `src/cryptonote_basic/tx_extra.h` (`tx_extra_pqc_ownership`) |
 | 10 | Wallet multisig coordination | Done | `src/wallet/wallet2.cpp` (group creation, file-based signing), `src/wallet/wallet2.h` |
 | 11 | Fuzz testing (4 targets, 10M each) | Done | `rust/shekyl-crypto-pq/fuzz/fuzz_targets/`, `docs/PQC_TEST_VECTOR_002_MULTISIG.json` |
-| 12 | FCMP++ FFI (prove/verify) | Planned | `rust/shekyl-fcmp/`, `rust/shekyl-ffi/src/lib.rs` |
-| 13 | Curve tree DB (grow/trim/root/path) | Planned | `src/blockchain_db/`, `rust/shekyl-fcmp/` |
+| 12 | FCMP++ FFI (prove/verify) | Done | `rust/shekyl-fcmp/`, `rust/shekyl-ffi/src/lib.rs` |
+| 13 | Curve tree DB (grow/trim/root/path) | Done | `src/blockchain_db/`, `rust/shekyl-fcmp/` |
 | 14 | Per-output KEM derivation | Planned | `rust/shekyl-crypto-pq/src/kem.rs`, `src/cryptonote_core/cryptonote_tx_utils.cpp` |
+| 15 | FCMP++ `check_tx_inputs` verification | Done (skeleton) | `src/cryptonote_core/blockchain.cpp`; see `docs/FCMP_PLUS_PLUS.md` |
+| 16 | Per-input `pqc_auths` migration | Planned | `src/cryptonote_basic/cryptonote_basic.h`, `src/cryptonote_core/tx_pqc_verify.cpp` |
 
 Notes:
 - Staking and unstaking use `create_transactions_2` which routes through

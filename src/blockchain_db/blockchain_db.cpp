@@ -31,8 +31,10 @@
 #include "string_tools.h"
 #include "blockchain_db.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
+#include "cryptonote_config.h"
 #include "profile_tools.h"
 #include "ringct/rctOps.h"
+#include "shekyl/shekyl_ffi.h"
 
 #include "lmdb/db_lmdb.h"
 
@@ -303,6 +305,71 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   TIME_MEASURE_FINISH(time1);
   time_add_transaction += time1;
 
+  // FCMP++ curve tree: append new output leaves
+  if (blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
+  {
+    const uint64_t block_height = prev_height + 1;
+    std::vector<uint8_t> leaf_data;
+    uint64_t new_output_count = 0;
+    auto collect_outputs = [&](const transaction& tx, bool is_miner) {
+      for (uint64_t i = 0; i < tx.vout.size(); ++i) {
+        const auto& vout = tx.vout[i];
+        crypto::public_key output_key;
+        if (std::holds_alternative<txout_to_tagged_key>(vout.target))
+          output_key = std::get<txout_to_tagged_key>(vout.target).key;
+        else if (std::holds_alternative<txout_to_key>(vout.target))
+          output_key = std::get<txout_to_key>(vout.target).key;
+        else if (std::holds_alternative<txout_to_staked_key>(vout.target))
+        {
+          const auto& staked = std::get<txout_to_staked_key>(vout.target);
+          if (staked.lock_until > block_height)
+          {
+            // TODO(Phase 4e): Track this output in a "pending staked outputs"
+            // DB table and insert it into the curve tree when
+            // block_height >= lock_until. Requires:
+            //   1. New DB table: pending_staked_leaves(lock_until → leaf_data)
+            //   2. At each add_block, query pending_staked_leaves where
+            //      lock_until <= block_height and grow the tree.
+            //   3. On pop_block, reverse the process.
+            continue;
+          }
+          output_key = staked.key;
+        }
+        else
+          continue;
+        rct::key commitment;
+        if (is_miner && tx.version == 2)
+          commitment = rct::zeroCommit(vout.amount);
+        else if (tx.version > 1 && i < tx.rct_signatures.outPk.size())
+          commitment = tx.rct_signatures.outPk[i].mask;
+        else
+          continue;
+        uint8_t leaf[128];
+        if (shekyl_construct_curve_tree_leaf(
+              reinterpret_cast<const uint8_t*>(&output_key),
+              commitment.bytes, leaf)) {
+          leaf_data.insert(leaf_data.end(), leaf, leaf + 128);
+          ++new_output_count;
+        }
+      }
+    };
+    collect_outputs(blk.miner_tx, true);
+    for (const auto& tx_pair : txs)
+      collect_outputs(tx_pair.first, false);
+
+    // TODO(Phase 4e): Insert previously-deferred staked outputs whose
+    // lock_until <= block_height.  Requires the pending_staked_leaves DB
+    // table described above.
+
+    if (new_output_count > 0)
+      grow_curve_tree(leaf_data, new_output_count);
+
+    if (prev_height > 0 && (prev_height % FCMP_CURVE_TREE_CHECKPOINT_INTERVAL == 0))
+    {
+      save_curve_tree_checkpoint(prev_height);
+    }
+  }
+
   // call out to subclass implementation to add the block & metadata
   time1 = epee::misc_utils::get_tick_count();
   add_block(blk, block_weight, long_term_block_weight, cumulative_difficulty, coins_generated, num_rct_outs, blk_hash);
@@ -327,15 +394,23 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
 
   remove_block();
 
+  uint64_t curve_tree_outputs_to_remove = 0;
   for (const auto& h : boost::adaptors::reverse(blk.tx_hashes))
   {
     cryptonote::transaction tx;
     if (!get_tx(h, tx) && !get_pruned_tx(h, tx))
       throw DB_ERROR("Failed to get pruned or unpruned transaction from the db");
+    if (blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
+      curve_tree_outputs_to_remove += tx.vout.size();
     txs.push_back(std::move(tx));
     remove_transaction(h);
   }
+  if (blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
+    curve_tree_outputs_to_remove += blk.miner_tx.vout.size();
   remove_transaction(get_transaction_hash(blk.miner_tx));
+
+  if (curve_tree_outputs_to_remove > 0)
+    trim_curve_tree(curve_tree_outputs_to_remove);
 }
 
 bool BlockchainDB::is_open() const

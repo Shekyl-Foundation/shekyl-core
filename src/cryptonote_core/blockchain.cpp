@@ -59,6 +59,7 @@
 #include "crypto/hash.h"
 #include "cryptonote_core.h"
 #include "ringct/rctSigs.h"
+#include "shekyl/shekyl_ffi.h"
 #include "common/perf_timer.h"
 #include "common/notify.h"
 #include "common/varint.h"
@@ -1760,6 +1761,12 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
         ", cumulative weight " << cumulative_weight << " is now good");
 #endif
 
+    {
+      const auto root_bytes = m_db->get_curve_tree_root();
+      static_assert(sizeof(b.curve_tree_root) == root_bytes.size());
+      std::memcpy(&b.curve_tree_root, root_bytes.data(), root_bytes.size());
+    }
+
     if (!from_block)
       cache_block_template(b, miner_address, ex_nonce, diffic, height, expected_reward, seed_height, seed_hash, pool_cookie);
     return true;
@@ -3277,6 +3284,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   crypto::hash tx_prefix_hash = get_transaction_prefix_hash(tx);
 
   const uint8_t hf_version = m_hardfork->get_current_version();
+  const bool is_fcmp_pp = rct::is_rct_fcmp_pp_pqc(tx.rct_signatures.type);
 
   if (tx.version >= 2)
   {
@@ -3290,35 +3298,48 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 
   if (m_nettype != network_type::FAKECHAIN)
   {
-    size_t min_actual_mixin = std::numeric_limits<size_t>::max();
-    size_t max_actual_mixin = 0;
-    const size_t min_mixin = 15;
-    for (const auto& txin : tx.vin)
+    if (!is_fcmp_pp)
     {
-      if (std::holds_alternative<txin_to_key>(txin))
+      size_t min_actual_mixin = std::numeric_limits<size_t>::max();
+      size_t max_actual_mixin = 0;
+      const size_t min_mixin = 15;
+      for (const auto& txin : tx.vin)
       {
-        const txin_to_key& in_to_key = std::get<txin_to_key>(txin);
-        size_t ring_mixin = in_to_key.key_offsets.size() - 1;
-        if (ring_mixin < min_actual_mixin)
-          min_actual_mixin = ring_mixin;
-        if (ring_mixin > max_actual_mixin)
-          max_actual_mixin = ring_mixin;
+        if (std::holds_alternative<txin_to_key>(txin))
+        {
+          const txin_to_key& in_to_key = std::get<txin_to_key>(txin);
+          size_t ring_mixin = in_to_key.key_offsets.size() - 1;
+          if (ring_mixin < min_actual_mixin)
+            min_actual_mixin = ring_mixin;
+          if (ring_mixin > max_actual_mixin)
+            max_actual_mixin = ring_mixin;
+        }
+      }
+      MDEBUG("Mixin: " << min_actual_mixin << "-" << max_actual_mixin);
+
+      if (min_actual_mixin != max_actual_mixin)
+      {
+        MERROR_VER("Tx " << get_transaction_hash(tx) << " has varying ring size (" << (min_actual_mixin + 1) << "-" << (max_actual_mixin + 1) << "), it should be constant");
+        tvc.m_low_mixin = true;
+        return false;
+      }
+
+      if (min_actual_mixin != min_mixin && min_actual_mixin != 10)
+      {
+        MERROR_VER("Tx " << get_transaction_hash(tx) << " has invalid ring size (" << (min_actual_mixin + 1) << "), it should be " << (min_mixin + 1));
+        tvc.m_low_mixin = true;
+        return false;
       }
     }
-    MDEBUG("Mixin: " << min_actual_mixin << "-" << max_actual_mixin);
-
-    if (min_actual_mixin != max_actual_mixin)
+    else
     {
-      MERROR_VER("Tx " << get_transaction_hash(tx) << " has varying ring size (" << (min_actual_mixin + 1) << "-" << (max_actual_mixin + 1) << "), it should be constant");
-      tvc.m_low_mixin = true;
-      return false;
-    }
-
-    if (min_actual_mixin != min_mixin && min_actual_mixin != 10)
-    {
-      MERROR_VER("Tx " << get_transaction_hash(tx) << " has invalid ring size (" << (min_actual_mixin + 1) << "), it should be " << (min_mixin + 1));
-      tvc.m_low_mixin = true;
-      return false;
+      if (tx.vin.size() > FCMP_MAX_INPUTS_PER_TX)
+      {
+        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " has " << tx.vin.size()
+          << " inputs, max is " << FCMP_MAX_INPUTS_PER_TX);
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
     }
 
     const size_t max_tx_version = 3;
@@ -3362,66 +3383,101 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   uint64_t max_used_block_height = 0;
   if (!pmax_used_block_height)
     pmax_used_block_height = &max_used_block_height;
-  for (const auto& txin : tx.vin)
-  {
-    if (std::holds_alternative<txin_stake_claim>(txin))
-    {
-      const txin_stake_claim& claim = std::get<txin_stake_claim>(txin);
-      if (have_tx_keyimg_as_spent(claim.k_image))
-      {
-        MERROR_VER("Claim key image already spent: " << epee::string_tools::pod_to_hex(claim.k_image));
-        tvc.m_double_spend = true;
-        return false;
-      }
 
-      if (!check_stake_claim_input(claim, m_db->height()))
+  if (is_fcmp_pp)
+  {
+    // ─── FCMP++ per-input validation ────────────────────────────────────
+    for (const auto& txin : tx.vin)
+    {
+      CHECK_AND_ASSERT_MES(std::holds_alternative<txin_to_key>(txin), false,
+        "FCMP++ tx inputs must be txin_to_key at Blockchain::check_tx_inputs");
+      const txin_to_key& in_to_key = std::get<txin_to_key>(txin);
+
+      if (!in_to_key.key_offsets.empty())
       {
-        MERROR_VER("Invalid stake claim input");
+        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
+          << " has non-empty key_offsets on input with k_image " << in_to_key.k_image);
         tvc.m_verifivation_failed = true;
         return false;
       }
 
-      ++sig_index;
-      continue;
-    }
-
-    // make sure output being spent is of type txin_to_key, rather than
-    // e.g. txin_gen, which is only used for miner transactions
-    CHECK_AND_ASSERT_MES(std::holds_alternative<txin_to_key>(txin), false, "wrong type id in tx input at Blockchain::check_tx_inputs");
-    const txin_to_key& in_to_key = std::get<txin_to_key>(txin);
-
-    // make sure tx output has key offset(s) (is signed to be used)
-    CHECK_AND_ASSERT_MES(in_to_key.key_offsets.size(), false, "empty in_to_key.key_offsets in transaction with id " << get_transaction_hash(tx));
-
-    if(have_tx_keyimg_as_spent(in_to_key.k_image))
-    {
-      MERROR_VER("Key image already spent in blockchain: " << epee::string_tools::pod_to_hex(in_to_key.k_image));
-      tvc.m_double_spend = true;
-      return false;
-    }
-
-    // make sure that output being spent matches up correctly with the
-    // signature spending it.
-    if (!check_tx_input(tx.version, in_to_key, tx_prefix_hash, std::vector<crypto::signature>(), tx.rct_signatures, pubkeys[sig_index], pmax_used_block_height, hf_version))
-    {
-      MERROR_VER("Failed to check ring signature for tx " << get_transaction_hash(tx) << "  vin key with k_image: " << in_to_key.k_image << "  sig_index: " << sig_index);
-      if (pmax_used_block_height) // a default value of NULL is used when called from Blockchain::handle_block_to_main_chain()
+      if (have_tx_keyimg_as_spent(in_to_key.k_image))
       {
-        MERROR_VER("  *pmax_used_block_height: " << *pmax_used_block_height);
+        MERROR_VER("Key image already spent in blockchain: " << epee::string_tools::pod_to_hex(in_to_key.k_image));
+        tvc.m_double_spend = true;
+        return false;
       }
 
-      return false;
+      // FCMP++ requires y-normalized key images (sign bit of byte 31 cleared)
+      crypto::key_image ki_copy = in_to_key.k_image;
+      crypto::key_image_y_normalize(ki_copy);
+      if (ki_copy != in_to_key.k_image)
+      {
+        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
+          << " has non-y-normalized key image " << in_to_key.k_image);
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
     }
-
-    sig_index++;
   }
-  // enforce min output age
-  CHECK_AND_ASSERT_MES(*pmax_used_block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE <= m_db->height(),
-      false, "Transaction spends at least one output which is too young");
+  else
+  {
+    // ─── Ring-based per-input validation ─────────────────────────────────
+    for (const auto& txin : tx.vin)
+    {
+      if (std::holds_alternative<txin_stake_claim>(txin))
+      {
+        const txin_stake_claim& claim = std::get<txin_stake_claim>(txin);
+        if (have_tx_keyimg_as_spent(claim.k_image))
+        {
+          MERROR_VER("Claim key image already spent: " << epee::string_tools::pod_to_hex(claim.k_image));
+          tvc.m_double_spend = true;
+          return false;
+        }
+
+        if (!check_stake_claim_input(claim, m_db->height()))
+        {
+          MERROR_VER("Invalid stake claim input");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+
+        ++sig_index;
+        continue;
+      }
+
+      CHECK_AND_ASSERT_MES(std::holds_alternative<txin_to_key>(txin), false, "wrong type id in tx input at Blockchain::check_tx_inputs");
+      const txin_to_key& in_to_key = std::get<txin_to_key>(txin);
+
+      CHECK_AND_ASSERT_MES(in_to_key.key_offsets.size(), false, "empty in_to_key.key_offsets in transaction with id " << get_transaction_hash(tx));
+
+      if(have_tx_keyimg_as_spent(in_to_key.k_image))
+      {
+        MERROR_VER("Key image already spent in blockchain: " << epee::string_tools::pod_to_hex(in_to_key.k_image));
+        tvc.m_double_spend = true;
+        return false;
+      }
+
+      if (!check_tx_input(tx.version, in_to_key, tx_prefix_hash, std::vector<crypto::signature>(), tx.rct_signatures, pubkeys[sig_index], pmax_used_block_height, hf_version))
+      {
+        MERROR_VER("Failed to check ring signature for tx " << get_transaction_hash(tx) << "  vin key with k_image: " << in_to_key.k_image << "  sig_index: " << sig_index);
+        if (pmax_used_block_height)
+        {
+          MERROR_VER("  *pmax_used_block_height: " << *pmax_used_block_height);
+        }
+
+        return false;
+      }
+
+      sig_index++;
+    }
+    CHECK_AND_ASSERT_MES(*pmax_used_block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE <= m_db->height(),
+        false, "Transaction spends at least one output which is too young");
+  }
 
   // Warn that new RCT types are present, and thus the cache is not being used effectively
   static constexpr const std::uint8_t RCT_CACHE_TYPE = rct::RCTTypeBulletproofPlus;
-  if (tx.rct_signatures.type > RCT_CACHE_TYPE)
+  if (tx.rct_signatures.type > RCT_CACHE_TYPE && !is_fcmp_pp)
   {
     MWARNING("RCT cache is not caching new verification results. Please update RCT_CACHE_TYPE!");
   }
@@ -3453,6 +3509,128 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         MERROR_VER("Failed to check ringct signatures!");
         return false;
       }
+      break;
+    }
+    case rct::RCTTypeFcmpPlusPlusPqc:
+    {
+      const uint64_t chain_height = m_db->height();
+
+      // ── Step 1: referenceBlock age validation ─────────────────────────
+      uint64_t ref_height = 0;
+      if (!m_db->block_exists(rv.referenceBlock, &ref_height))
+      {
+        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
+          << " referenceBlock " << rv.referenceBlock << " not found in chain");
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
+
+      if (chain_height < FCMP_REFERENCE_BLOCK_MIN_AGE ||
+          ref_height > chain_height - FCMP_REFERENCE_BLOCK_MIN_AGE)
+      {
+        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
+          << " referenceBlock at height " << ref_height
+          << " is too recent (min age " << FCMP_REFERENCE_BLOCK_MIN_AGE
+          << ", chain height " << chain_height << ")");
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
+
+      if (chain_height > FCMP_REFERENCE_BLOCK_MAX_AGE &&
+          ref_height < chain_height - FCMP_REFERENCE_BLOCK_MAX_AGE)
+      {
+        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
+          << " referenceBlock at height " << ref_height
+          << " is too old (max age " << FCMP_REFERENCE_BLOCK_MAX_AGE
+          << ", chain height " << chain_height << ")");
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
+
+      // Set max_used_block_height to referenceBlock height for the caller
+      *pmax_used_block_height = ref_height;
+
+      // ── Step 2: Curve tree root lookup from referenceBlock header ─────
+      const block_header ref_hdr = m_db->get_block_header(rv.referenceBlock);
+      std::array<uint8_t, 32> tree_root{};
+      static_assert(sizeof(ref_hdr.curve_tree_root) == 32, "curve_tree_root must be 32 bytes");
+      memcpy(tree_root.data(), &ref_hdr.curve_tree_root, 32);
+
+      // ── Step 3: Validate curve_trees_tree_depth ───────────────────────
+      const uint8_t expected_depth = m_db->get_curve_tree_depth();
+      if (rv.p.curve_trees_tree_depth != expected_depth)
+      {
+        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
+          << " curve_trees_tree_depth " << (int)rv.p.curve_trees_tree_depth
+          << " does not match expected " << (int)expected_depth);
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
+
+      // ── Step 4: FCMP++ proof verification via FFI ─────────────────────
+      const size_t num_inputs = tx.vin.size();
+
+      if (rv.p.fcmp_pp_proof.empty())
+      {
+        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " has empty proof");
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
+
+      // Collect key images (32 bytes each, contiguous)
+      std::vector<uint8_t> key_images_flat(num_inputs * 32);
+      for (size_t i = 0; i < num_inputs; ++i)
+      {
+        const txin_to_key& in_to_key = std::get<txin_to_key>(tx.vin[i]);
+        memcpy(key_images_flat.data() + i * 32, &in_to_key.k_image, 32);
+      }
+
+      // Collect pseudo outputs (32 bytes each)
+      if (rv.p.pseudoOuts.size() != num_inputs)
+      {
+        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
+          << " pseudoOuts count " << rv.p.pseudoOuts.size()
+          << " does not match input count " << num_inputs);
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
+      std::vector<uint8_t> pseudo_outs_flat(num_inputs * 32);
+      for (size_t i = 0; i < num_inputs; ++i)
+        memcpy(pseudo_outs_flat.data() + i * 32, rv.p.pseudoOuts[i].bytes, 32);
+
+      // TODO(Phase 4b): Extract H(pqc_pk) from per-input pqc_auths.
+      // Once pqc_auths (per-input) is implemented, compute:
+      //   for each i: shekyl_fcmp_pqc_leaf_hash(ml_dsa_pk_i) → pqc_hashes[i]
+      // For now, allocate zero-filled placeholder. The FFI call will verify
+      // against whatever the prover committed; a mismatch will cause the
+      // proof to fail, which is the correct behavior for incomplete txs.
+      std::vector<uint8_t> pqc_hashes_flat(num_inputs * 32, 0);
+
+      const bool proof_ok = shekyl_fcmp_verify(
+        rv.p.fcmp_pp_proof.data(),
+        rv.p.fcmp_pp_proof.size(),
+        key_images_flat.data(),
+        num_inputs,
+        pseudo_outs_flat.data(),
+        num_inputs,
+        pqc_hashes_flat.data(),
+        num_inputs,
+        tree_root.data(),
+        rv.p.curve_trees_tree_depth
+      );
+
+      if (!proof_ok)
+      {
+        MERROR_VER("FCMP++ proof verification failed for tx " << get_transaction_hash(tx));
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
+
+      // TODO(Phase 4b): Verify pqc_auths.size() == vin.size() and run
+      // per-input PQC signature verification once the per-input pqc_auths
+      // field replaces the single pqc_auth. See docs/FCMP_PLUS_PLUS.md
+      // Steps 5-6 for the full verification sequence.
+
       break;
     }
     default:
@@ -3710,6 +3888,37 @@ bool Blockchain::check_tx_input(size_t tx_version, const txin_to_key& txin, cons
   return true;
 }
 //------------------------------------------------------------------
+crypto::hash Blockchain::compute_fcmp_verification_hash(const transaction& tx)
+{
+  const rct::rctSig &rv = tx.rct_signatures;
+  if (rv.type != rct::RCTTypeFcmpPlusPlusPqc)
+    return crypto::null_hash;
+
+  std::vector<uint8_t> buf;
+  buf.reserve(rv.p.fcmp_pp_proof.size() + 32 + tx.vin.size() * 32);
+
+  buf.insert(buf.end(), rv.p.fcmp_pp_proof.begin(), rv.p.fcmp_pp_proof.end());
+
+  static_assert(sizeof(rv.referenceBlock) == 32);
+  buf.insert(buf.end(),
+    reinterpret_cast<const uint8_t*>(&rv.referenceBlock),
+    reinterpret_cast<const uint8_t*>(&rv.referenceBlock) + 32);
+
+  for (const auto& txin : tx.vin)
+  {
+    if (!std::holds_alternative<txin_to_key>(txin))
+      return crypto::null_hash;
+    const auto& ki = std::get<txin_to_key>(txin).k_image;
+    buf.insert(buf.end(),
+      reinterpret_cast<const uint8_t*>(&ki),
+      reinterpret_cast<const uint8_t*>(&ki) + 32);
+  }
+
+  crypto::hash result;
+  crypto::cn_fast_hash(buf.data(), buf.size(), result);
+  return result;
+}
+//------------------------------------------------------------------
 bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t current_height) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
@@ -3761,6 +3970,24 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
     MERROR_VER("Claimed output " << claim.staked_output_index << " is not a staked output");
     return false;
   }
+
+  // The staked output must have reached its lock_until height to be
+  // claimable.  Once deferred curve-tree insertion is implemented
+  // (Phase 4e pending_staked_leaves), this also guarantees the output
+  // is present in the curve tree.
+  if (staked_lock_until > current_height)
+  {
+    MERROR_VER("Staked output " << claim.staked_output_index
+      << " is still locked until height " << staked_lock_until
+      << " (current " << current_height << ")");
+    return false;
+  }
+
+  // TODO(Phase 4e): Once staked outputs use the 4-scalar leaf format
+  // {O.x, I.x, C.x, H(pqc_pk)} and deferred insertion is complete,
+  // verify that the staked output's leaf is present in the curve tree
+  // at the current height.  This requires an inclusion proof or a DB
+  // lookup of the leaf index in the Selene layer.
 
   uint64_t staked_amount = staked_out.amount;
   if (staked_amount == 0 && staked_tx.version >= 2)
@@ -4379,6 +4606,23 @@ leave:
   }
 
   TIME_MEASURE_FINISH(addblock);
+
+  if (new_height > 0)
+  {
+    const auto computed_root = m_db->get_curve_tree_root();
+    crypto::hash expected_root;
+    static_assert(sizeof(expected_root) == computed_root.size());
+    std::memcpy(&expected_root, computed_root.data(), computed_root.size());
+    if (bl.curve_tree_root != expected_root)
+    {
+      MERROR_VER("Block " << id << " curve_tree_root mismatch: header "
+        << bl.curve_tree_root << ", computed " << expected_root);
+      bvc.m_verifivation_failed = true;
+      pop_block_from_blockchain();
+      return_txs_to_pool();
+      return false;
+    }
+  }
 
   // do this after updating the hard fork state since the weight limit may change due to fork
   if (!update_next_cumulative_weight_limit())

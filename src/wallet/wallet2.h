@@ -159,6 +159,9 @@ private:
     virtual void on_device_progress(const hw::device_progress& event) {};
     // Common callbacks
     virtual void on_pool_tx_removed(const crypto::hash &txid) {}
+    // FCMP++ callbacks
+    virtual void on_pqc_rederivation_progress(uint64_t outputs_done, uint64_t outputs_total) {}
+    virtual void on_fcmp_path_precompute_progress(uint64_t outputs_done, uint64_t outputs_total) {}
     virtual ~i_wallet2_callback() {}
   };
 
@@ -343,6 +346,7 @@ private:
       bool m_staked = false;
       uint8_t m_stake_tier = 0;
       uint64_t m_stake_lock_until = 0;
+      std::vector<uint8_t> m_combined_shared_secret; // 64 bytes when present; empty otherwise
 
       transfer_details() = default;
 
@@ -381,7 +385,16 @@ private:
         FIELD(m_staked)
         FIELD(m_stake_tier)
         VARINT_FIELD(m_stake_lock_until)
+        FIELD(m_combined_shared_secret)
       END_SERIALIZE()
+    };
+
+    struct fcmp_precomputed_path
+    {
+      uint64_t global_output_index = 0;
+      std::vector<uint8_t> tree_path;
+      crypto::hash tree_root_at_precompute{};
+      uint64_t precompute_height = 0;
     };
 
     struct exported_transfer_details
@@ -1037,6 +1050,15 @@ private:
 
     void set_refresh_type(RefreshType refresh_type) { m_refresh_type = refresh_type; }
     RefreshType get_refresh_type() const { return m_refresh_type; }
+
+    // FCMP++ wallet precomputation (Phase 5e)
+    void precompute_fcmp_paths();
+    void update_fcmp_paths_incremental(uint64_t new_height);
+    const std::unordered_map<uint64_t, fcmp_precomputed_path>& get_fcmp_precomputed_paths() const { return m_fcmp_precomputed_paths; }
+
+    // FCMP++ PQC key rederivation (Phase 5.5)
+    void rederive_pqc_keys_for_output(const transfer_details& td);
+    void rederive_all_pqc_keys();
 
     cryptonote::network_type nettype() const { return m_nettype; }
     bool watch_only() const { return m_watch_only; }
@@ -1997,6 +2019,10 @@ private:
     bool m_processing_background_cache;
     background_sync_data_t m_background_sync_data;
 
+    // FCMP++ precomputed tree paths (Phase 5e, runtime cache -- not serialized)
+    std::unordered_map<uint64_t, fcmp_precomputed_path> m_fcmp_precomputed_paths;
+    uint64_t m_fcmp_last_precompute_height = 0;
+
     // PQC multisig state (scheme_id = 2)
     std::vector<uint8_t> m_pqc_multisig_keys;
     crypto::hash m_pqc_multisig_group_id;
@@ -2005,7 +2031,7 @@ private:
   };
 }
 BOOST_CLASS_VERSION(tools::wallet2, 32)
-BOOST_CLASS_VERSION(tools::wallet2::transfer_details, 12)
+BOOST_CLASS_VERSION(tools::wallet2::transfer_details, 13)
 BOOST_CLASS_VERSION(tools::wallet2::payment_details, 5)
 BOOST_CLASS_VERSION(tools::wallet2::pool_payment_details, 1)
 BOOST_CLASS_VERSION(tools::wallet2::unconfirmed_transfer_details, 8)
@@ -2073,6 +2099,10 @@ namespace boost
         if (ver < 12)
         {
           x.m_frozen = false;
+        }
+        if (ver < 13)
+        {
+          x.m_combined_shared_secret.clear();
         }
     }
 
@@ -2165,6 +2195,12 @@ namespace boost
         return;
       }
       a & x.m_frozen;
+      if (ver < 13)
+      {
+        initialize_transfer_details(a, x, ver);
+        return;
+      }
+      a & x.m_combined_shared_secret;
     }
 
     template <class Archive>

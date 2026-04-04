@@ -26,6 +26,7 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "db_lmdb.h"
+#include "shekyl/shekyl_ffi.h"
 
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -33,6 +34,8 @@
 #include <boost/circular_buffer.hpp>
 #include <memory>  // std::unique_ptr
 #include <cstring>  // memcpy
+#include <map>
+#include <array>
 
 #ifdef WIN32
 #include <winioctl.h>
@@ -244,6 +247,13 @@ const char* const LMDB_PROPERTIES = "properties";
 
 const char* const LMDB_STAKER_ACCRUAL = "staker_accrual";
 const char* const LMDB_STAKER_CLAIMS = "staker_claims";
+
+const char* const LMDB_CURVE_TREE_LEAVES = "curve_tree_leaves";
+const char* const LMDB_CURVE_TREE_LAYERS = "curve_tree_layers";
+const char* const LMDB_CURVE_TREE_META   = "curve_tree_meta";
+const char* const LMDB_CURVE_TREE_CHECKPOINTS = "curve_tree_checkpoints";
+
+const char* const LMDB_OUTPUT_METADATA = "output_metadata";
 
 const char zerokey[8] = {0};
 const MDB_val zerokval = { sizeof(zerokey), (void *)zerokey };
@@ -1522,6 +1532,13 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   lmdb_db_open(txn, LMDB_STAKER_ACCRUAL, MDB_INTEGERKEY | MDB_CREATE, m_staker_accrual, "Failed to open db handle for m_staker_accrual");
   lmdb_db_open(txn, LMDB_STAKER_CLAIMS, MDB_INTEGERKEY | MDB_CREATE, m_staker_claims, "Failed to open db handle for m_staker_claims");
 
+  lmdb_db_open(txn, LMDB_CURVE_TREE_LEAVES, MDB_INTEGERKEY | MDB_CREATE, m_curve_tree_leaves, "Failed to open db handle for m_curve_tree_leaves");
+  lmdb_db_open(txn, LMDB_CURVE_TREE_LAYERS, MDB_INTEGERKEY | MDB_CREATE, m_curve_tree_layers, "Failed to open db handle for m_curve_tree_layers");
+  lmdb_db_open(txn, LMDB_CURVE_TREE_META,   MDB_CREATE, m_curve_tree_meta, "Failed to open db handle for m_curve_tree_meta");
+  lmdb_db_open(txn, LMDB_CURVE_TREE_CHECKPOINTS, MDB_INTEGERKEY | MDB_CREATE, m_curve_tree_checkpoints, "Failed to open db handle for m_curve_tree_checkpoints");
+
+  lmdb_db_open(txn, LMDB_OUTPUT_METADATA, MDB_INTEGERKEY | MDB_CREATE, m_output_metadata, "Failed to open db handle for m_output_metadata");
+
   mdb_set_dupsort(txn, m_spent_keys, compare_hash32);
   mdb_set_dupsort(txn, m_block_heights, compare_hash32);
   mdb_set_dupsort(txn, m_tx_indices, compare_hash32);
@@ -1708,6 +1725,8 @@ void BlockchainLMDB::reset()
     throw0(DB_ERROR(lmdb_error("Failed to drop m_hf_versions: ", result).c_str()));
   if (auto result = mdb_drop(txn, m_properties, 0))
     throw0(DB_ERROR(lmdb_error("Failed to drop m_properties: ", result).c_str()));
+  if (auto result = mdb_drop(txn, m_output_metadata, 0))
+    throw0(DB_ERROR(lmdb_error("Failed to drop m_output_metadata: ", result).c_str()));
 
   // init with current version
   MDB_val_str(k, "version");
@@ -4710,6 +4729,768 @@ void BlockchainLMDB::remove_staker_claim_watermark(uint64_t output_index)
   int result = mdb_del(*m_write_txn, m_staker_claims, &k, nullptr);
   if (result && result != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("Failed to remove staker claim watermark: ", result).c_str()));
+}
+
+// ─── FCMP++ Curve Tree ──────────────────────────────────────────────────────
+
+namespace {
+  static constexpr uint32_t CT_SCALARS_PER_LEAF = 4;
+  static constexpr uint32_t CT_SELENE_CHUNK_WIDTH = 38;  // LAYER_ONE_LEN
+  static constexpr uint32_t CT_HELIOS_CHUNK_WIDTH = 18;  // LAYER_TWO_LEN
+  static constexpr size_t CT_LEAF_SIZE = 128;             // 4 * 32 bytes
+
+  uint64_t ct_layer_chunk_key(uint8_t layer, uint64_t chunk) {
+    return (static_cast<uint64_t>(layer) << 56) | chunk;
+  }
+
+  uint32_t ct_chunk_width(uint8_t layer) {
+    if (layer == 0)
+      return CT_SELENE_CHUNK_WIDTH;
+    return (layer % 2 == 0) ? CT_SELENE_CHUNK_WIDTH : CT_HELIOS_CHUNK_WIDTH;
+  }
+
+  bool ct_layer_is_selene(uint8_t layer) {
+    return (layer % 2) == 0;
+  }
+
+  uint32_t ct_leaf_scalars_per_chunk() {
+    return CT_SCALARS_PER_LEAF * CT_SELENE_CHUNK_WIDTH;
+  }
+}
+
+void BlockchainLMDB::grow_curve_tree(const std::vector<uint8_t>& leaf_data, uint64_t num_new_outputs)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  if (num_new_outputs == 0 || leaf_data.size() != num_new_outputs * CT_LEAF_SIZE)
+    throw0(DB_ERROR("Invalid leaf_data size for grow_curve_tree"));
+
+  // Read current leaf count from meta
+  uint64_t old_leaf_count = 0;
+  {
+    const std::string meta_key = "leaf_count";
+    MDB_val k = {meta_key.size(), (void *)meta_key.data()};
+    MDB_val v;
+    int result = mdb_get(*m_write_txn, m_curve_tree_meta, &k, &v);
+    if (result == 0 && v.mv_size == sizeof(uint64_t))
+      memcpy(&old_leaf_count, v.mv_data, sizeof(uint64_t));
+    else if (result != MDB_NOTFOUND)
+      throw0(DB_ERROR(lmdb_error("Failed to get curve tree leaf count: ", result).c_str()));
+  }
+
+  uint64_t new_leaf_count = old_leaf_count + num_new_outputs;
+
+  // Store each leaf
+  for (uint64_t i = 0; i < num_new_outputs; ++i)
+  {
+    uint64_t global_idx = old_leaf_count + i;
+    MDB_val k = {sizeof(global_idx), (void *)&global_idx};
+    MDB_val v = {CT_LEAF_SIZE, (void *)(leaf_data.data() + i * CT_LEAF_SIZE)};
+    int result = mdb_put(*m_write_txn, m_curve_tree_leaves, &k, &v, 0);
+    if (result)
+      throw0(DB_ERROR(lmdb_error("Failed to store curve tree leaf: ", result).c_str()));
+  }
+
+  // Propagate hash updates through the tree layers.
+  // Layer 0 (leaf layer, Selene): each chunk holds CT_SELENE_CHUNK_WIDTH outputs,
+  // each contributing CT_SCALARS_PER_LEAF scalars.
+  // Higher layers: each chunk holds ct_chunk_width(layer) children.
+
+  // Determine which leaf-layer chunks are affected
+  uint64_t first_affected_leaf_chunk = old_leaf_count / CT_SELENE_CHUNK_WIDTH;
+  uint64_t last_affected_leaf_chunk  = (new_leaf_count > 0) ? (new_leaf_count - 1) / CT_SELENE_CHUNK_WIDTH : 0;
+
+  // Collect updated chunk hashes for propagation to next layer
+  std::vector<std::pair<uint64_t, std::array<uint8_t, 32>>> updated_chunks;
+
+  // Process leaf-layer chunks
+  for (uint64_t chunk = first_affected_leaf_chunk; chunk <= last_affected_leaf_chunk; ++chunk)
+  {
+    uint64_t chunk_start_output = chunk * CT_SELENE_CHUNK_WIDTH;
+
+    // Determine which outputs in this chunk are new
+    uint64_t first_new_in_chunk = (old_leaf_count > chunk_start_output) ? (old_leaf_count - chunk_start_output) : 0;
+    uint64_t chunk_end_output = std::min((chunk + 1) * static_cast<uint64_t>(CT_SELENE_CHUNK_WIDTH), new_leaf_count);
+    uint64_t num_new_in_chunk = chunk_end_output - chunk_start_output - first_new_in_chunk;
+    if (num_new_in_chunk == 0) continue;
+
+    // Load the existing chunk hash (or use hash_init for a new chunk)
+    std::array<uint8_t, 32> existing_hash;
+    uint64_t layer_key = ct_layer_chunk_key(0, chunk);
+    {
+      MDB_val k = {sizeof(layer_key), (void *)&layer_key};
+      MDB_val v;
+      int result = mdb_get(*m_write_txn, m_curve_tree_layers, &k, &v);
+      if (result == 0 && v.mv_size == 32) {
+        memcpy(existing_hash.data(), v.mv_data, 32);
+      } else if (result == MDB_NOTFOUND) {
+        shekyl_curve_tree_selene_hash_init(existing_hash.data());
+      } else {
+        throw0(DB_ERROR(lmdb_error("Failed to get curve tree layer hash: ", result).c_str()));
+      }
+    }
+
+    // Collect new scalars (4 per output)
+    uint64_t scalar_offset = first_new_in_chunk * CT_SCALARS_PER_LEAF;
+    std::vector<uint8_t> new_scalars;
+    for (uint64_t out_idx = chunk_start_output + first_new_in_chunk; out_idx < chunk_end_output; ++out_idx)
+    {
+      // Read leaf from DB (we just stored it above)
+      MDB_val k = {sizeof(out_idx), (void *)&out_idx};
+      MDB_val v;
+      int result = mdb_get(*m_write_txn, m_curve_tree_leaves, &k, &v);
+      if (result)
+        throw0(DB_ERROR(lmdb_error("Failed to read curve tree leaf: ", result).c_str()));
+      new_scalars.insert(new_scalars.end(), (const uint8_t*)v.mv_data, (const uint8_t*)v.mv_data + CT_LEAF_SIZE);
+    }
+
+    // The existing child at offset: zero for a fresh position
+    std::array<uint8_t, 32> existing_child_at_offset = {};
+
+    // Hash grow with all new scalars at once
+    std::array<uint8_t, 32> new_hash;
+    uint64_t num_scalars = num_new_in_chunk * CT_SCALARS_PER_LEAF;
+    bool ok = shekyl_curve_tree_hash_grow_selene(
+      existing_hash.data(),
+      scalar_offset,
+      existing_child_at_offset.data(),
+      new_scalars.data(),
+      num_scalars,
+      new_hash.data()
+    );
+    if (!ok)
+      throw0(DB_ERROR("Rust FFI: shekyl_curve_tree_hash_grow_selene failed"));
+
+    // Store updated chunk hash
+    {
+      MDB_val k = {sizeof(layer_key), (void *)&layer_key};
+      MDB_val v = {32, new_hash.data()};
+      int result = mdb_put(*m_write_txn, m_curve_tree_layers, &k, &v, 0);
+      if (result)
+        throw0(DB_ERROR(lmdb_error("Failed to store curve tree layer hash: ", result).c_str()));
+    }
+
+    updated_chunks.push_back({chunk, new_hash});
+  }
+
+  // Propagate up through internal layers
+  uint8_t layer = 1;
+  while (updated_chunks.size() > 0)
+  {
+    bool is_selene = ct_layer_is_selene(layer);
+    uint32_t parent_width = ct_chunk_width(layer);
+    std::vector<std::pair<uint64_t, std::array<uint8_t, 32>>> next_updated;
+
+    // Group updated children by parent chunk
+    std::map<uint64_t, std::vector<std::pair<uint64_t, std::array<uint8_t, 32>>>> parent_groups;
+    for (auto& [child_chunk, child_hash] : updated_chunks)
+    {
+      // Convert child point to cycle scalar for the parent layer
+      std::array<uint8_t, 32> child_scalar;
+      bool ok;
+      if (is_selene) {
+        ok = shekyl_curve_tree_helios_to_selene_scalar(child_hash.data(), child_scalar.data());
+      } else {
+        ok = shekyl_curve_tree_selene_to_helios_scalar(child_hash.data(), child_scalar.data());
+      }
+      if (!ok)
+        throw0(DB_ERROR("Rust FFI: point_to_cycle_scalar failed in curve tree propagation"));
+
+      uint64_t parent_chunk = child_chunk / parent_width;
+      parent_groups[parent_chunk].push_back({child_chunk % parent_width, child_scalar});
+    }
+
+    for (auto& [parent_chunk, children] : parent_groups)
+    {
+      // Sort children by position in chunk
+      std::sort(children.begin(), children.end());
+
+      // Load existing parent hash
+      std::array<uint8_t, 32> existing_hash;
+      uint64_t layer_key = ct_layer_chunk_key(layer, parent_chunk);
+      {
+        MDB_val k = {sizeof(layer_key), (void *)&layer_key};
+        MDB_val v;
+        int result = mdb_get(*m_write_txn, m_curve_tree_layers, &k, &v);
+        if (result == 0 && v.mv_size == 32) {
+          memcpy(existing_hash.data(), v.mv_data, 32);
+        } else if (result == MDB_NOTFOUND) {
+          if (is_selene)
+            shekyl_curve_tree_selene_hash_init(existing_hash.data());
+          else
+            shekyl_curve_tree_helios_hash_init(existing_hash.data());
+        } else {
+          throw0(DB_ERROR(lmdb_error("Failed to get curve tree internal layer hash: ", result).c_str()));
+        }
+      }
+
+      // For simplicity, grow each child position individually
+      // (could batch contiguous children for better performance)
+      for (auto& [pos, scalar] : children)
+      {
+        std::array<uint8_t, 32> existing_child = {};
+        std::array<uint8_t, 32> new_hash;
+
+        bool ok;
+        if (is_selene) {
+          ok = shekyl_curve_tree_hash_grow_selene(
+            existing_hash.data(), pos, existing_child.data(),
+            scalar.data(), 1, new_hash.data());
+        } else {
+          ok = shekyl_curve_tree_hash_grow_helios(
+            existing_hash.data(), pos, existing_child.data(),
+            scalar.data(), 1, new_hash.data());
+        }
+        if (!ok)
+          throw0(DB_ERROR("Rust FFI: hash_grow failed in curve tree propagation"));
+
+        existing_hash = new_hash;
+      }
+
+      // Store updated parent hash
+      {
+        MDB_val k = {sizeof(layer_key), (void *)&layer_key};
+        MDB_val v = {32, existing_hash.data()};
+        int result = mdb_put(*m_write_txn, m_curve_tree_layers, &k, &v, 0);
+        if (result)
+          throw0(DB_ERROR(lmdb_error("Failed to store curve tree internal layer hash: ", result).c_str()));
+      }
+
+      next_updated.push_back({parent_chunk, existing_hash});
+    }
+
+    updated_chunks = std::move(next_updated);
+
+    // If only one chunk updated and it's the root, we're done
+    if (updated_chunks.size() <= 1)
+    {
+      // Check if this is the single root
+      uint64_t total_children_at_layer = (layer == 1)
+        ? ((new_leaf_count + CT_SELENE_CHUNK_WIDTH - 1) / CT_SELENE_CHUNK_WIDTH)
+        : updated_chunks[0].first + 1; // approximate
+
+      if (updated_chunks.size() == 1 && updated_chunks[0].first == 0 && total_children_at_layer <= parent_width)
+      {
+        // This is the root
+        break;
+      }
+    }
+    ++layer;
+  }
+
+  // Update meta: root, leaf_count, depth
+  if (!updated_chunks.empty())
+  {
+    const std::string root_key = "root";
+    MDB_val k = {root_key.size(), (void *)root_key.data()};
+    MDB_val v = {32, updated_chunks.back().second.data()};
+    int result = mdb_put(*m_write_txn, m_curve_tree_meta, &k, &v, 0);
+    if (result)
+      throw0(DB_ERROR(lmdb_error("Failed to store curve tree root: ", result).c_str()));
+  }
+
+  {
+    const std::string lc_key = "leaf_count";
+    MDB_val k = {lc_key.size(), (void *)lc_key.data()};
+    MDB_val v = {sizeof(new_leaf_count), (void *)&new_leaf_count};
+    int result = mdb_put(*m_write_txn, m_curve_tree_meta, &k, &v, 0);
+    if (result)
+      throw0(DB_ERROR(lmdb_error("Failed to store curve tree leaf count: ", result).c_str()));
+  }
+
+  {
+    const std::string depth_key = "depth";
+    MDB_val k = {depth_key.size(), (void *)depth_key.data()};
+    MDB_val v = {sizeof(layer), (void *)&layer};
+    int result = mdb_put(*m_write_txn, m_curve_tree_meta, &k, &v, 0);
+    if (result)
+      throw0(DB_ERROR(lmdb_error("Failed to store curve tree depth: ", result).c_str()));
+  }
+}
+
+void BlockchainLMDB::trim_curve_tree(uint64_t num_outputs_to_remove)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  if (num_outputs_to_remove == 0) return;
+
+  uint64_t old_leaf_count = get_curve_tree_leaf_count();
+  if (num_outputs_to_remove > old_leaf_count)
+    throw0(DB_ERROR("Cannot trim more leaves than exist in curve tree"));
+
+  uint64_t new_leaf_count = old_leaf_count - num_outputs_to_remove;
+
+  // Remove leaf entries
+  for (uint64_t i = new_leaf_count; i < old_leaf_count; ++i)
+  {
+    MDB_val k = {sizeof(i), (void *)&i};
+    int result = mdb_del(*m_write_txn, m_curve_tree_leaves, &k, nullptr);
+    if (result && result != MDB_NOTFOUND)
+      throw0(DB_ERROR(lmdb_error("Failed to remove curve tree leaf: ", result).c_str()));
+  }
+
+  // For a full rebuild of affected layers, clear and re-grow from new_leaf_count.
+  // This is simpler than the incremental trim approach and correct for reorgs
+  // which are typically small (a few blocks).
+  // TODO: optimize with incremental hash_trim for single-block pops.
+
+  // Clear all layer hashes and meta, then re-grow from scratch
+  // This is O(N) but ensures correctness during reorgs.
+  {
+    MDB_cursor *cur;
+    int result = mdb_cursor_open(*m_write_txn, m_curve_tree_layers, &cur);
+    if (result)
+      throw0(DB_ERROR(lmdb_error("Failed to open cursor for curve tree layers: ", result).c_str()));
+
+    MDB_val k, v;
+    while (mdb_cursor_get(cur, &k, &v, MDB_NEXT) == 0)
+      mdb_cursor_del(cur, 0);
+    mdb_cursor_close(cur);
+  }
+
+  // Update leaf count
+  {
+    const std::string lc_key = "leaf_count";
+    MDB_val k = {lc_key.size(), (void *)lc_key.data()};
+    MDB_val v = {sizeof(new_leaf_count), (void *)&new_leaf_count};
+    int result = mdb_put(*m_write_txn, m_curve_tree_meta, &k, &v, 0);
+    if (result)
+      throw0(DB_ERROR(lmdb_error("Failed to update curve tree leaf count: ", result).c_str()));
+  }
+
+  // Re-grow from all remaining leaves
+  if (new_leaf_count > 0)
+  {
+    std::vector<uint8_t> all_leaves(new_leaf_count * CT_LEAF_SIZE);
+    for (uint64_t i = 0; i < new_leaf_count; ++i)
+    {
+      MDB_val k = {sizeof(i), (void *)&i};
+      MDB_val v;
+      int result = mdb_get(*m_write_txn, m_curve_tree_leaves, &k, &v);
+      if (result)
+        throw0(DB_ERROR(lmdb_error("Failed to read curve tree leaf during trim: ", result).c_str()));
+      memcpy(all_leaves.data() + i * CT_LEAF_SIZE, v.mv_data, CT_LEAF_SIZE);
+    }
+
+    // Reset leaf count to 0 so grow_curve_tree re-processes all leaves
+    uint64_t zero = 0;
+    {
+      const std::string lc_key = "leaf_count";
+      MDB_val k = {lc_key.size(), (void *)lc_key.data()};
+      MDB_val v = {sizeof(zero), (void *)&zero};
+      mdb_put(*m_write_txn, m_curve_tree_meta, &k, &v, 0);
+    }
+
+    // Delete existing leaves (grow_curve_tree will re-store them)
+    for (uint64_t i = 0; i < new_leaf_count; ++i)
+    {
+      MDB_val k = {sizeof(i), (void *)&i};
+      mdb_del(*m_write_txn, m_curve_tree_leaves, &k, nullptr);
+    }
+
+    grow_curve_tree(all_leaves, new_leaf_count);
+  }
+  else
+  {
+    // Empty tree: reset root and depth
+    std::array<uint8_t, 32> zero_root = {};
+    shekyl_curve_tree_selene_hash_init(zero_root.data());
+    const std::string root_key = "root";
+    MDB_val k = {root_key.size(), (void *)root_key.data()};
+    MDB_val v = {32, zero_root.data()};
+    mdb_put(*m_write_txn, m_curve_tree_meta, &k, &v, 0);
+
+    uint8_t depth = 0;
+    const std::string depth_key = "depth";
+    MDB_val dk = {depth_key.size(), (void *)depth_key.data()};
+    MDB_val dv = {sizeof(depth), (void *)&depth};
+    mdb_put(*m_write_txn, m_curve_tree_meta, &dk, &dv, 0);
+  }
+}
+
+std::array<uint8_t, 32> BlockchainLMDB::get_curve_tree_root() const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  const std::string root_key = "root";
+  MDB_val k = {root_key.size(), (void *)root_key.data()};
+  MDB_val v;
+  std::array<uint8_t, 32> root = {};
+  int result = mdb_get(m_txn, m_curve_tree_meta, &k, &v);
+  if (result == 0 && v.mv_size == 32)
+    memcpy(root.data(), v.mv_data, 32);
+  else if (result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to get curve tree root: ", result).c_str()));
+  TXN_POSTFIX_RDONLY();
+  return root;
+}
+
+uint8_t BlockchainLMDB::get_curve_tree_depth() const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  const std::string depth_key = "depth";
+  MDB_val k = {depth_key.size(), (void *)depth_key.data()};
+  MDB_val v;
+  uint8_t depth = 0;
+  int result = mdb_get(m_txn, m_curve_tree_meta, &k, &v);
+  if (result == 0 && v.mv_size >= 1)
+    depth = *static_cast<const uint8_t*>(v.mv_data);
+  TXN_POSTFIX_RDONLY();
+  return depth;
+}
+
+uint64_t BlockchainLMDB::get_curve_tree_leaf_count() const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  const std::string lc_key = "leaf_count";
+  MDB_val k = {lc_key.size(), (void *)lc_key.data()};
+  MDB_val v;
+  uint64_t count = 0;
+  int result = mdb_get(m_txn, m_curve_tree_meta, &k, &v);
+  if (result == 0 && v.mv_size == sizeof(uint64_t))
+    memcpy(&count, v.mv_data, sizeof(uint64_t));
+  TXN_POSTFIX_RDONLY();
+  return count;
+}
+
+bool BlockchainLMDB::get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (!hash_out) return false;
+
+  TXN_PREFIX_RDONLY();
+  uint64_t key = ct_layer_chunk_key(layer, chunk);
+  MDB_val k = {sizeof(key), (void *)&key};
+  MDB_val v;
+  int result = mdb_get(m_txn, m_curve_tree_layers, &k, &v);
+  bool found = (result == 0 && v.mv_size == 32);
+  if (found)
+    memcpy(hash_out, v.mv_data, 32);
+  TXN_POSTFIX_RDONLY();
+  return found;
+}
+
+bool BlockchainLMDB::get_curve_tree_leaf(uint64_t global_output_index, uint8_t* leaf_out) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (!leaf_out) return false;
+
+  TXN_PREFIX_RDONLY();
+  MDB_val k = {sizeof(global_output_index), (void *)&global_output_index};
+  MDB_val v;
+  int result = mdb_get(m_txn, m_curve_tree_leaves, &k, &v);
+  bool found = (result == 0 && v.mv_size == CT_LEAF_SIZE);
+  if (found)
+    memcpy(leaf_out, v.mv_data, CT_LEAF_SIZE);
+  TXN_POSTFIX_RDONLY();
+  return found;
+}
+
+void BlockchainLMDB::save_curve_tree_checkpoint(uint64_t block_height)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  std::array<uint8_t, 32> root = {};
+  uint8_t depth = 0;
+  uint64_t leaf_count = 0;
+
+  {
+    const std::string root_key = "root";
+    MDB_val k = {root_key.size(), (void *)root_key.data()};
+    MDB_val v;
+    int result = mdb_get(*m_write_txn, m_curve_tree_meta, &k, &v);
+    if (result == 0 && v.mv_size == 32)
+      memcpy(root.data(), v.mv_data, 32);
+  }
+  {
+    const std::string depth_key = "depth";
+    MDB_val k = {depth_key.size(), (void *)depth_key.data()};
+    MDB_val v;
+    int result = mdb_get(*m_write_txn, m_curve_tree_meta, &k, &v);
+    if (result == 0 && v.mv_size >= 1)
+      depth = *static_cast<const uint8_t*>(v.mv_data);
+  }
+  {
+    const std::string lc_key = "leaf_count";
+    MDB_val k = {lc_key.size(), (void *)lc_key.data()};
+    MDB_val v;
+    int result = mdb_get(*m_write_txn, m_curve_tree_meta, &k, &v);
+    if (result == 0 && v.mv_size == sizeof(uint64_t))
+      memcpy(&leaf_count, v.mv_data, sizeof(uint64_t));
+  }
+
+  // Checkpoint format: root[32] || depth[1] || leaf_count[8] = 41 bytes
+  std::vector<uint8_t> checkpoint_data(32 + 1 + sizeof(uint64_t));
+  memcpy(checkpoint_data.data(), root.data(), 32);
+  checkpoint_data[32] = depth;
+  memcpy(checkpoint_data.data() + 33, &leaf_count, sizeof(uint64_t));
+
+  MDB_val k = {sizeof(block_height), (void *)&block_height};
+  MDB_val v = {checkpoint_data.size(), (void *)checkpoint_data.data()};
+  int result = mdb_put(*m_write_txn, m_curve_tree_checkpoints, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to save curve tree checkpoint: ", result).c_str()));
+
+  LOG_PRINT_L2("Saved curve tree checkpoint at height " << block_height
+    << " (leaf_count=" << leaf_count << ", depth=" << (int)depth << ")");
+}
+
+bool BlockchainLMDB::get_curve_tree_checkpoint(uint64_t block_height, std::vector<uint8_t>& checkpoint_data) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  MDB_val k = {sizeof(block_height), (void *)&block_height};
+  MDB_val v;
+  int result = mdb_get(m_txn, m_curve_tree_checkpoints, &k, &v);
+  if (result == MDB_NOTFOUND)
+  {
+    TXN_POSTFIX_RDONLY();
+    return false;
+  }
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to get curve tree checkpoint: ", result).c_str()));
+  checkpoint_data.assign(static_cast<const uint8_t*>(v.mv_data),
+                         static_cast<const uint8_t*>(v.mv_data) + v.mv_size);
+  TXN_POSTFIX_RDONLY();
+  return true;
+}
+
+uint64_t BlockchainLMDB::get_latest_curve_tree_checkpoint_height() const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  MDB_cursor *cur;
+  int result = mdb_cursor_open(m_txn, m_curve_tree_checkpoints, &cur);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to open cursor for curve tree checkpoints: ", result).c_str()));
+
+  uint64_t latest_height = 0;
+  MDB_val k, v;
+  result = mdb_cursor_get(cur, &k, &v, MDB_LAST);
+  if (result == 0 && k.mv_size == sizeof(uint64_t))
+    memcpy(&latest_height, k.mv_data, sizeof(uint64_t));
+
+  mdb_cursor_close(cur);
+  TXN_POSTFIX_RDONLY();
+  return latest_height;
+}
+
+void BlockchainLMDB::prune_curve_tree_intermediate_layers(uint64_t checkpoint_height)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  // Find the previous checkpoint height to determine pruning range
+  uint64_t prev_checkpoint_height = 0;
+  {
+    MDB_cursor *cur;
+    int result = mdb_cursor_open(*m_write_txn, m_curve_tree_checkpoints, &cur);
+    if (result)
+      throw0(DB_ERROR(lmdb_error("Failed to open cursor for checkpoint scan: ", result).c_str()));
+
+    MDB_val k = {sizeof(checkpoint_height), (void *)&checkpoint_height};
+    MDB_val v;
+    result = mdb_cursor_get(cur, &k, &v, MDB_SET);
+    if (result == 0)
+    {
+      result = mdb_cursor_get(cur, &k, &v, MDB_PREV);
+      if (result == 0 && k.mv_size == sizeof(uint64_t))
+        memcpy(&prev_checkpoint_height, k.mv_data, sizeof(uint64_t));
+    }
+    mdb_cursor_close(cur);
+  }
+
+  // Get the current depth to know which layers are intermediate
+  uint8_t depth = 0;
+  {
+    const std::string depth_key = "depth";
+    MDB_val k = {depth_key.size(), (void *)depth_key.data()};
+    MDB_val v;
+    int result = mdb_get(*m_write_txn, m_curve_tree_meta, &k, &v);
+    if (result == 0 && v.mv_size >= 1)
+      depth = *static_cast<const uint8_t*>(v.mv_data);
+  }
+
+  if (depth < 2)
+    return;
+
+  // Prune intermediate layers (1 through depth-2) -- keep layer 0 (leaf hashes)
+  // and the top layer (root). We remove entries whose chunk indices fall within
+  // the range affected by leaves between prev_checkpoint and checkpoint.
+  uint64_t pruned_count = 0;
+  for (uint8_t layer = 1; layer < depth - 1; ++layer)
+  {
+    MDB_cursor *cur;
+    int result = mdb_cursor_open(*m_write_txn, m_curve_tree_layers, &cur);
+    if (result)
+      throw0(DB_ERROR(lmdb_error("Failed to open layers cursor for pruning: ", result).c_str()));
+
+    uint64_t layer_prefix = static_cast<uint64_t>(layer) << 56;
+    uint64_t start_key = layer_prefix;
+    uint64_t end_key = layer_prefix | 0x00FFFFFFFFFFFFFFULL;
+
+    MDB_val k = {sizeof(start_key), (void *)&start_key};
+    MDB_val v;
+    result = mdb_cursor_get(cur, &k, &v, MDB_SET_RANGE);
+    while (result == 0)
+    {
+      uint64_t current_key;
+      memcpy(&current_key, k.mv_data, sizeof(uint64_t));
+      if (current_key > end_key)
+        break;
+      result = mdb_cursor_del(cur, 0);
+      if (result)
+        break;
+      ++pruned_count;
+      result = mdb_cursor_get(cur, &k, &v, MDB_GET_CURRENT);
+      if (result == MDB_NOTFOUND)
+        break;
+    }
+    mdb_cursor_close(cur);
+  }
+
+  LOG_PRINT_L2("Pruned " << pruned_count << " intermediate layer entries up to checkpoint height " << checkpoint_height);
+}
+
+// ─── Output Metadata Pruning ──────────────────────────────────────────────────
+
+void BlockchainLMDB::store_output_metadata(uint64_t global_output_index, const output_pruning_metadata_t& meta)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  MDB_val k = {sizeof(global_output_index), (void *)&global_output_index};
+  MDB_val v = {sizeof(output_pruning_metadata_t), (void *)&meta};
+
+  int result = mdb_put(*m_write_txn, m_output_metadata, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to store output metadata: ", result).c_str()));
+}
+
+bool BlockchainLMDB::get_output_metadata(uint64_t global_output_index, output_pruning_metadata_t& meta) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+
+  MDB_val k = {sizeof(global_output_index), (void *)&global_output_index};
+  MDB_val v;
+
+  int result = mdb_get(m_txn, m_output_metadata, &k, &v);
+  if (result == MDB_NOTFOUND)
+    return false;
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to get output metadata: ", result).c_str()));
+  if (v.mv_size != sizeof(output_pruning_metadata_t))
+    throw0(DB_ERROR("Unexpected output metadata size"));
+
+  memcpy(&meta, v.mv_data, sizeof(output_pruning_metadata_t));
+  TXN_POSTFIX_RDONLY();
+  return true;
+}
+
+bool BlockchainLMDB::is_output_pruned(uint64_t global_output_index) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  output_pruning_metadata_t meta;
+  if (!get_output_metadata(global_output_index, meta))
+    return false;
+  return meta.pruned != 0;
+}
+
+bool BlockchainLMDB::prune_tx_data(uint64_t depth)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  if (depth == 0)
+    depth = CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+
+  const uint64_t blockchain_height = height();
+  if (blockchain_height <= depth)
+    return true;
+
+  const uint64_t prune_below_height = blockchain_height - depth;
+
+  uint64_t last_pruned_height = 0;
+  {
+    TXN_PREFIX_RDONLY();
+    MDB_val_str(k, "last_pruned_tx_data_height");
+    MDB_val v;
+    int result = mdb_get(m_txn, m_properties, &k, &v);
+    if (result == 0 && v.mv_size == sizeof(uint64_t))
+      memcpy(&last_pruned_height, v.mv_data, sizeof(uint64_t));
+    TXN_POSTFIX_RDONLY();
+  }
+
+  if (last_pruned_height >= prune_below_height)
+  {
+    LOG_PRINT_L2("prune_tx_data: already pruned up to height " << last_pruned_height
+                 << ", target " << prune_below_height << " -- nothing to do");
+    return true;
+  }
+
+  const uint64_t start_height = last_pruned_height > 0 ? last_pruned_height + 1 : 0;
+  LOG_PRINT_L1("prune_tx_data: pruning transactions in blocks " << start_height
+               << " .. " << prune_below_height
+               << " (reorg depth " << depth << ")");
+
+  // TODO(phase6f): Implement the full pruning loop.
+  //
+  // The loop below should:
+  //   for (uint64_t h = start_height; h < prune_below_height; ++h)
+  //   {
+  //     1. Fetch the block at height h.
+  //     2. For each non-coinbase transaction in the block:
+  //        a. Look up the tx by hash via m_tx_indices.
+  //        b. Get the tx's amount output indices via get_tx_amount_output_indices().
+  //        c. For each output, build an output_pruning_metadata_t:
+  //             meta.pubkey     = output_data.pubkey;
+  //             meta.commitment = output_data.commitment;
+  //             meta.unlock_time = output_data.unlock_time;
+  //             meta.height     = output_data.height;
+  //             meta.pruned     = 1;
+  //        d. Call store_output_metadata(global_output_index, meta).
+  //     3. Delete the rctSigPrunable blob:
+  //           MDB_val_set(k_tx, tx_id);
+  //           mdb_del(*txn_ptr, m_txs_prunable, &k_tx, NULL);
+  //     4. Optionally delete the prunable hash from m_txs_prunable_hash
+  //        if the node will never serve prunable data again.
+  //   }
+  //
+  // After the loop, write the watermark:
+  //   MDB_val_str(wk, "last_pruned_tx_data_height");
+  //   MDB_val_set(wv, prune_below_height);
+  //   mdb_put(*txn_ptr, m_properties, &wk, &wv, 0);
+  //
+  // Batch in groups (e.g. 256 blocks per LMDB write txn) to avoid
+  // excessive memory usage on large chains.
+  //
+  // This skeleton is intentionally not yet executing the pruning loop
+  // because wallet scanning must first be validated against the
+  // output_metadata table. The store/get/is_pruned plumbing is live.
+
+  return true;
 }
 
 #define RENAME_DB(name) do { \

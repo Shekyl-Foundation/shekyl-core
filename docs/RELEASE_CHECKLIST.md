@@ -15,15 +15,18 @@
   - [x] encoded transaction size impact measured (~5,385 bytes per user tx)
   - [x] payload limit guidance documented in V3_ROLLOUT.md
 - [ ] Ledger integration (deferred to v1.1)
-  - [ ] Implemented in Shekyl codebase (if needed)
-  - [ ] Ledger app integration coded by Ledger
+  - [x] FCMP++ device abstraction stubs in place (`device_ledger.cpp`)
+  - [ ] Ledger app updated with FCMP++ proof generation support
   - [ ] Ledger Shekyl app (or Monero-compatible app) update available
 - [ ] Trezor integration (deferred to v1.1)
-  - [ ] Implemented in Shekyl codebase (if needed)
-  - [ ] Trezor app integration coded by Trezor
+  - [x] FCMP++ device abstraction defaults inherited (unsupported, returns false)
+  - [ ] Trezor cold-signing protocol updated for FCMP++ transactions
   - [ ] Trezor firmware update available (if needed)
-Software wallets only for v1.0 launch. Hardware wallet support (Ledger/Trezor)
-targeted for v1.1.
+
+**Software wallets only for v1.0 launch. Hardware support (Ledger/Trezor) targeted for v1.1.**
+The device abstraction layer (`device.hpp`) exposes `fcmp_prepare`, `fcmp_proof_start`,
+and `fcmp_proof_add_input` so that hardware wallet implementations can be added without
+further changes to the interface.
 
 - [x] Fork height set (rebooted chain: all features at HF 1 from genesis)
   - [ ] Shekyl announcement mailer / notice

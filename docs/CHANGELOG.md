@@ -4,6 +4,227 @@
 
 ### ✨ Added
 
+- **FCMP++ (Full-Chain Membership Proofs): complete implementation across
+  Phases 1–6.**
+  Shekyl replaces ring signatures (CLSAG) with FCMP++ from genesis. Every
+  spend proves membership in the entire UTXO set via a Helios/Selene curve
+  tree, giving every transaction full-chain anonymity instead of 16-decoy
+  ring ambiguity. Combined with hybrid post-quantum spend authorization
+  (Ed25519 + ML-DSA-65), this makes Shekyl the first cryptocurrency to offer
+  full-UTXO-set anonymity with quantum-resistant ownership.
+
+  Key components delivered:
+  - **Rust foundation (Phase 1):** `shekyl-fcmp` crate wrapping upstream
+    `monero-fcmp-plus-plus` with 4-scalar leaf type `{O.x, I.x, C.x,
+    H(pqc_pk)}`. Hybrid X25519 + ML-KEM-768 KEM with HKDF-SHA-512.
+    Bech32m segmented address encoding. Per-output PQC key derivation.
+    15 FFI exports. Security audit (zero vulnerabilities, zero unsafe in
+    first-party code). Reproducible builds with pinned Cargo.lock.
+  - **Transaction format (Phase 3):** `RCTTypeFcmpPlusPlusPqc = 7` with
+    `referenceBlock`, `curve_trees_tree_depth`, and `fcmp_pp_proof` fields.
+    `curve_tree_root` commitment in every block header.
+  - **Consensus verification (Phase 4):** 7-step verification order in
+    `check_tx_inputs` — referenceBlock age, tree depth, key image
+    y-normalization, FCMP++ proof via Rust FFI, PQC signature verification,
+    BP+ range proofs. Mempool verification caching (`fcmp_verification_hash`
+    in `txpool_tx_meta_t`). Staked output curve-tree leaves.
+  - **Wallet integration (Phase 5):** `genRctFcmpPlusPlus()` proof
+    construction. `get_curve_tree_path` RPC stub. Tree-path precomputation
+    and incremental update in wallet refresh loop. PQC key rederivation from
+    stored shared secret. Restore-from-seed PQC rederivation.
+  - **Infrastructure (Phase 6):** Hardware device FCMP++ stubs. CI pipeline
+    for Rust workspace build, FCMP crate, determinism check, Bech32m tests.
+    `output_pruning_metadata_t` and `m_output_metadata` LMDB table for
+    transaction pruning. LMDB curve tree schema (leaves, layers, meta,
+    checkpoints). Checkpoint every 10,000 blocks for fast-sync resumption.
+
+  See `docs/FCMP_PLUS_PLUS.md` for the full specification.
+
+- **FCMP++ Phase 5e: Wallet precomputation of curve tree paths.**
+  - Added `fcmp_precomputed_path` struct to `wallet2.h` caching per-output
+    tree path, root hash at precompute time, and precompute height.
+  - Added `m_fcmp_precomputed_paths` runtime cache (not serialized) and
+    `m_fcmp_last_precompute_height` watermark to `wallet2`.
+  - `precompute_fcmp_paths()` fetches tree paths for all unspent outputs
+    via the `get_curve_tree_path` daemon RPC endpoint.
+  - `update_fcmp_paths_incremental(new_height)` extends existing paths
+    and adds newly discovered outputs, pruning paths for spent outputs.
+  - Incremental path update is hooked into the wallet refresh loop,
+    triggering after sync catches up if blocks were fetched.
+  - Progress callbacks (`on_fcmp_path_precompute_progress`) fire during
+    both initial and incremental precomputation.
+- **FCMP++ Phase 5.5: Wallet sync and restore-from-seed PQC support.**
+  - `transfer_details::m_combined_shared_secret` (64 bytes) stores the
+    hybrid KEM shared secret needed to rederive per-output PQC keys.
+  - `rederive_pqc_keys_for_output(td)` calls `shekyl_fcmp_derive_pqc_keypair`
+    via FFI to validate keypair derivation from stored shared secret.
+  - `rederive_all_pqc_keys()` iterates all transfers with stored shared
+    secrets and rederives PQC keys, with progress callback
+    `on_pqc_rederivation_progress`.
+  - Restore-from-seed triggers full PQC key rederivation on first refresh
+    after sync completes.
+
+### 🐛 Fixed
+
+- **LMDB output metadata: removed undefined behavior in cursor macros.**
+  - `store_output_metadata` now uses `mdb_put` directly with `m_write_txn`
+    instead of the `CURSOR()` macro which required `m_cursors` to be in
+    scope.
+  - `get_output_metadata` and `prune_tx_data` now use `m_txn` (from
+    `TXN_PREFIX_RDONLY`) instead of `txn_ptr` (from `TXN_PREFIX`).
+  - Removed unused `m_txc_output_metadata` cursor field and
+    `m_cur_output_metadata` macro from `db_lmdb.h`.
+- **Wallet FCMP++ path precomputation: fixed undefined behavior.**
+  - Replaced `reinterpret_cast<std::string&>` on `std::vector<uint8_t>` with
+    a proper intermediate `std::string` copy in both `precompute_fcmp_paths`
+    and `update_fcmp_paths_incremental`.
+
+- **FCMP++ Phase 6c: CI pipeline updates.**
+  - Added x86_64 architecture verification step to the `rust-audit-and-test`
+    CI job in `.github/workflows/build.yml`.
+  - Added explicit `cargo build --locked -p shekyl-fcmp` step to verify the
+    FCMP++ crate builds as part of the Rust workspace.
+  - Added dedicated Bech32m address encoding test step that runs
+    `shekyl-crypto-pq` address tests with visible CI output.
+  - The monero-oxide git dependency is cached via `~/.cargo/git` in the
+    existing Cargo cache key (`rust-${{ hashFiles('rust/Cargo.lock') }}`).
+  - Determinism check (build twice, diff `libshekyl_ffi.a` hashes) and
+    `cargo audit` remain in place.
+- **FCMP++ Phase 6f: Transaction pruning mode (skeleton).**
+  - Added `output_pruning_metadata_t` packed struct to `blockchain_db.h`
+    storing per-output scan data (pubkey, commitment, unlock_time, height,
+    pruned flag) for wallet scanning after transaction pruning.
+  - Added abstract interface in `BlockchainDB`: `store_output_metadata()`,
+    `get_output_metadata()`, `is_output_pruned()`, `prune_tx_data()`.
+  - Added `m_output_metadata` LMDB table (keyed by `global_output_index`)
+    in `db_lmdb.h` and `db_lmdb.cpp` with cursor, rflag, and DBI member.
+  - LMDB implementation: `store_output_metadata` and `get_output_metadata`
+    are fully wired; `is_output_pruned` delegates to `get_output_metadata`;
+    `prune_tx_data` validates depth against `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE`
+    and reads/writes a `last_pruned_tx_data_height` watermark in the
+    properties table to skip already-processed blocks on subsequent runs.
+    The block-iteration pruning loop is documented as a TODO skeleton.
+  - `--prune-blockchain` CLI flag now also triggers `prune_tx_data()` in
+    `cryptonote_core.cpp`, running output-metadata pruning alongside
+    Monero's existing stripe-based pruning.
+  - Test DB (`testdb.h`) updated with no-op stubs for all four new methods.
+- **FCMP++ Phase 4b: Mempool verification caching.**
+  - Added `fcmp_verification_hash` (32-byte `crypto::hash`) and
+    `fcmp_verified` (1-bit flag) to `txpool_tx_meta_t` in
+    `src/blockchain_db/blockchain_db.h`, carved from the existing
+    76-byte padding (now 44 bytes).  Struct stays 192 bytes.
+  - New `Blockchain::compute_fcmp_verification_hash()` computes a
+    deterministic cache key from `hash(proof || referenceBlock || key_images)`.
+  - `tx_memory_pool::add_tx` stores the cache hash on successful FCMP++
+    verification.
+  - `tx_memory_pool::is_transaction_ready_to_go` checks the cached hash
+    via `is_fcmp_verification_cached()` and seeds `m_input_cache` to
+    skip re-running `shekyl_fcmp_verify()` for previously-verified
+    mempool transactions.
+  - Added `static_assert` guards at the `memcmp` site on
+    `txpool_tx_meta_t` (tx_pool.cpp line 1656) enforcing
+    trivially-copyable layout and 192-byte struct size.
+  - All padding and new fields are zero-initialized at every meta
+    construction site.
+- **FCMP++ Phase 4e: Staking consensus rules for FCMP++.**
+  - `collect_outputs` in `blockchain_db.cpp::add_block` now handles
+    `txout_to_staked_key` outputs using the same 4-scalar leaf format
+    `{O.x, I.x, C.x, H(pqc_pk)}`.
+  - Deferred insertion: staked outputs only enter the curve tree when
+    `block_height >= lock_until`.  Outputs still within their lock
+    period are skipped with a TODO for the `pending_staked_leaves` DB
+    table to handle retroactive insertion.
+  - `check_stake_claim_input` now rejects claims on outputs whose
+    `lock_until > current_height`, ensuring claimability only after
+    the lock period expires.
+  - TODO markers document the remaining work: pending-staked-leaves DB
+    table, retroactive insertion on `add_block`, and curve-tree
+    inclusion proof for stake claims.
+- **FCMP++ Phase 5: Wallet transaction construction skeleton.**
+  - Added `rct::genRctFcmpPlusPlus()` in `src/ringct/rctSigs.cpp` — builds
+    an FCMP++ `rctSig` with `RCTTypeFcmpPlusPlusPqc`, Bulletproofs+ range
+    proofs, balanced pseudo-outputs, and invokes `shekyl_fcmp_prove()` via
+    FFI to generate the membership proof.
+  - Declared the new function in `src/ringct/rctSigs.h`.
+  - Added `COMMAND_RPC_GET_CURVE_TREE_PATH` RPC command in
+    `src/rpc/core_rpc_server_commands_defs.h` — accepts output indices and
+    returns Merkle paths from the curve tree (stub handler for now).
+  - Wired `get_curve_tree_path` JSON-RPC endpoint in
+    `src/rpc/core_rpc_server.h` and `src/rpc/core_rpc_server.cpp`.
+  - Added TODO scaffolding in `src/wallet/wallet2.cpp` at the decoy
+    selection (`get_outs`), transaction construction
+    (`construct_tx_and_get_tx_key`), and fee estimation
+    (`estimate_tx_weight`) sites, documenting how FCMP++ replaces ring
+    signatures in the wallet transfer flow.
+- **FCMP++ Phase 6a: Hardware device stubs.**
+  - Added `fcmp_prepare`, `fcmp_proof_start`, and `fcmp_proof_add_input`
+    virtual methods to `hw::device` (base class) with default `return false`
+    implementations for unsupported devices.
+  - Software device (`device_default`) returns `true` (scaffolding for Rust
+    FFI delegation).
+  - Ledger device (`device_ledger`) logs an informative error and returns
+    `false`, guiding users to software wallets until Ledger firmware gains
+    FCMP++ support.
+  - Trezor inherits the base-class defaults (unsupported) without code changes.
+  - Updated `RELEASE_CHECKLIST.md` to document hardware wallet readiness status.
+- **FCMP++ Phase 4a: Verification in `check_tx_inputs`.**
+  - Added `RCTTypeFcmpPlusPlusPqc` verification path in
+    `Blockchain::check_tx_inputs` (`src/cryptonote_core/blockchain.cpp`).
+  - `referenceBlock` age validation: confirmed within
+    `[tip - MAX_AGE, tip - MIN_AGE]` using DB block lookup.
+  - `curve_trees_tree_depth` validated against the current tree state.
+  - Key offsets verified empty for all FCMP++ inputs.
+  - Key image y-normalization enforced (sign bit of byte 31 cleared).
+  - Input count bounded by `FCMP_MAX_INPUTS_PER_TX`.
+  - `shekyl_fcmp_verify()` FFI call wired up with key images, pseudo
+    outputs, and proof blob.
+  - Per-input `pqc_auths` verification left as documented TODO pending
+    the per-input auth field migration.
+- **FCMP++ Phase 4a-pre: PQC auth binding specification.**
+  - New `docs/FCMP_PLUS_PLUS.md` formally documents the dual-layer
+    binding model, per-input signed payload layout, and 7-step consensus
+    verification order for `RCTTypeFcmpPlusPlusPqc` transactions.
+- **FCMP++ Phase 3.5: Curve tree root in block header (consensus-critical).**
+  - Added `curve_tree_root` (`crypto::hash`) field to `block_header` in
+    `src/cryptonote_basic/cryptonote_basic.h`, initialized to `null_hash`.
+  - Field is always serialized (genesis-native, no version gating) in both
+    the binary archive (`BEGIN_SERIALIZE`) and Boost serialization.
+  - Block template creation (`Blockchain::create_block_template`) snapshots
+    the current DB curve tree root into the header.
+  - Block validation (`Blockchain::handle_block_to_main_chain`) verifies
+    `curve_tree_root` matches the locally-computed tree root after
+    `add_block` grows the tree; rejects the block on mismatch.
+  - RPC `block_header_response` now includes `curve_tree_root` hex string.
+  - Test generator (`chaingen.cpp`) sets `curve_tree_root` to `null_hash`
+    in `construct_block` and `construct_block_manually`.
+- **FCMP++ Phase 3: Transaction format for FCMP++ PQC.**
+  - Added `RCTTypeFcmpPlusPlusPqc = 7` to the RCT type enum in
+    `src/ringct/rctTypes.h` — Shekyl's only non-coinbase transaction type.
+  - Added `referenceBlock` (block hash anchoring the curve tree snapshot)
+    to `rctSigBase`, serialized only for the new type.
+  - Added `curve_trees_tree_depth` and `fcmp_pp_proof` (opaque FCMP++ proof
+    blob) to `rctSigPrunable`, replacing CLSAG ring signatures for the new type.
+  - Added `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` (0x06) to `tx_extra.h` for
+    per-output ML-KEM-768 ciphertexts.
+  - Added `key_image_y_normalize()` to `crypto.h`/`crypto.cpp` — clears the
+    sign bit of a key image's y-coordinate as required by FCMP++.
+  - Added `is_rct_fcmp_pp_pqc()` helper to `rctTypes.h`/`rctTypes.cpp`.
+  - Updated serialization helpers (`serialize_rctsig_base`,
+    `serialize_rctsig_prunable`) and type classifier functions
+    (`is_rct_simple`, `is_rct_bulletproof_plus`) to handle the new type.
+- **FCMP++ Phase 2e: Curve tree checkpoint strategy.**
+  - New `BlockchainDB` virtual methods: `save_curve_tree_checkpoint`,
+    `get_curve_tree_checkpoint`, `get_latest_curve_tree_checkpoint_height`,
+    `prune_curve_tree_intermediate_layers`.
+  - LMDB implementation with `curve_tree_checkpoints` table (MDB_INTEGERKEY),
+    storing root[32] + depth[1] + leaf_count[8] per checkpoint.
+  - Automatic checkpoint every `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` (10 000)
+    blocks during `add_block`, enabling fast-sync resumption.
+  - Configurable interval via `cryptonote_config.h` constant.
+- **FCMP++ Phase 2f: Curve tree pruning strategy.**
+  - `prune_curve_tree_intermediate_layers` removes recomputable internal hash
+    layers between checkpoints, preserving leaves and the root layer to reduce
+    storage overhead.
 - **FCMP++ Phase 1: Rust foundation crates.**
   - New `rust/shekyl-fcmp/` crate wrapping upstream `monero-fcmp-plus-plus`
     (from `Shekyl-Foundation/monero-oxide` fork, `fcmp++` branch) with

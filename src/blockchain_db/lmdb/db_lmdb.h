@@ -72,6 +72,10 @@ typedef struct mdb_txn_cursors
   MDB_cursor *m_txc_hf_versions;
 
   MDB_cursor *m_txc_properties;
+
+  MDB_cursor *m_txc_curve_tree_leaves;
+  MDB_cursor *m_txc_curve_tree_layers;
+  MDB_cursor *m_txc_curve_tree_checkpoints;
 } mdb_txn_cursors;
 
 #define m_cur_blocks	m_cursors->m_txc_blocks
@@ -92,6 +96,9 @@ typedef struct mdb_txn_cursors
 #define m_cur_alt_blocks	m_cursors->m_txc_alt_blocks
 #define m_cur_hf_versions	m_cursors->m_txc_hf_versions
 #define m_cur_properties	m_cursors->m_txc_properties
+#define m_cur_curve_tree_leaves	m_cursors->m_txc_curve_tree_leaves
+#define m_cur_curve_tree_layers	m_cursors->m_txc_curve_tree_layers
+#define m_cur_curve_tree_checkpoints	m_cursors->m_txc_curve_tree_checkpoints
 
 typedef struct mdb_rflags
 {
@@ -114,6 +121,10 @@ typedef struct mdb_rflags
   bool m_rf_alt_blocks;
   bool m_rf_hf_versions;
   bool m_rf_properties;
+  bool m_rf_curve_tree_leaves;
+  bool m_rf_curve_tree_layers;
+  bool m_rf_curve_tree_checkpoints;
+  bool m_rf_output_metadata;
 } mdb_rflags;
 
 typedef struct mdb_threadinfo
@@ -435,6 +446,26 @@ private:
   virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const override;
   virtual void remove_staker_claim_watermark(uint64_t output_index) override;
 
+  // FCMP++ Curve tree
+  virtual void grow_curve_tree(const std::vector<uint8_t>& leaf_data, uint64_t num_new_outputs) override;
+  virtual void trim_curve_tree(uint64_t num_outputs_to_remove) override;
+  virtual std::array<uint8_t, 32> get_curve_tree_root() const override;
+  virtual uint8_t get_curve_tree_depth() const override;
+  virtual uint64_t get_curve_tree_leaf_count() const override;
+  virtual bool get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const override;
+  virtual bool get_curve_tree_leaf(uint64_t global_output_index, uint8_t* leaf_out) const override;
+
+  virtual void save_curve_tree_checkpoint(uint64_t block_height) override;
+  virtual bool get_curve_tree_checkpoint(uint64_t block_height, std::vector<uint8_t>& checkpoint_data) const override;
+  virtual uint64_t get_latest_curve_tree_checkpoint_height() const override;
+  virtual void prune_curve_tree_intermediate_layers(uint64_t checkpoint_height) override;
+
+  // Output metadata pruning
+  virtual void store_output_metadata(uint64_t global_output_index, const output_pruning_metadata_t& meta) override;
+  virtual bool get_output_metadata(uint64_t global_output_index, output_pruning_metadata_t& meta) const override;
+  virtual bool is_output_pruned(uint64_t global_output_index) const override;
+  virtual bool prune_tx_data(uint64_t depth = 0) override;
+
   // migrate from older DB version to current
   void migrate(const uint32_t oldversion);
 
@@ -487,6 +518,13 @@ private:
 
   MDB_dbi m_staker_accrual;
   MDB_dbi m_staker_claims;
+
+  MDB_dbi m_curve_tree_leaves;    // global_output_index -> 128 bytes leaf data
+  MDB_dbi m_curve_tree_layers;    // (layer_idx << 56 | chunk_idx) -> 32 bytes hash
+  MDB_dbi m_curve_tree_meta;      // key string -> value (root, leaf_count, depth)
+  MDB_dbi m_curve_tree_checkpoints; // block_height -> serialized checkpoint (root + depth + leaf_count)
+
+  MDB_dbi m_output_metadata;      // global_output_index -> output_pruning_metadata_t
 
   mutable uint64_t m_cum_size;	// used in batch size estimation
   mutable unsigned int m_cum_count;

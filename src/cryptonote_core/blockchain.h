@@ -1167,6 +1167,17 @@ namespace cryptonote
      */
     uint64_t get_adjusted_time(uint64_t height) const;
 
+    /**
+     * @brief Compute FCMP++ verification cache key.
+     *
+     * Returns hash(fcmp_pp_proof || tree_root || key_images) for an FCMP++ tx.
+     * The result is deterministic: the same tx verified against the same
+     * referenceBlock always produces the same hash.  This lets the mempool
+     * skip re-running shekyl_fcmp_verify() when the proof has already been
+     * checked.
+     */
+    static crypto::hash compute_fcmp_verification_hash(const transaction& tx);
+
 #ifndef IN_UNIT_TESTS
   private:
 #endif

@@ -16,7 +16,11 @@ pub mod tree;
 pub mod proof;
 
 pub use leaf::{PqcLeafScalar, ShekylLeaf};
-pub use tree::{TreeOp, HashGrowResult, HashTrimResult};
+pub use tree::{
+    TreeOp, HashGrowResult, HashTrimResult, LayerUpdate,
+    SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH, HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS,
+    ed25519_point_to_selene_scalar, construct_leaf,
+};
 pub use proof::{ShekylFcmpProof, ProveError, VerifyError};
 
 /// Domain separator for Shekyl's PQC leaf hash: H(pqc_pk) -> 4th scalar.

@@ -548,6 +548,11 @@ namespace cryptonote
     uint64_t timestamp;
     crypto::hash  prev_id;
     uint32_t nonce;
+    crypto::hash  curve_tree_root; // FCMP++ curve tree root after this block's outputs
+
+    block_header()
+      : major_version(0), minor_version(0), timestamp(0), prev_id(crypto::null_hash),
+        nonce(0), curve_tree_root(crypto::null_hash) {}
 
     BEGIN_SERIALIZE()
       VARINT_FIELD(major_version)
@@ -555,6 +560,7 @@ namespace cryptonote
       VARINT_FIELD(timestamp)
       FIELD(prev_id)
       FIELD(nonce)
+      FIELD(curve_tree_root)
     END_SERIALIZE()
   };
 

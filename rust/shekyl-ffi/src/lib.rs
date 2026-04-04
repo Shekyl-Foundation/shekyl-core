@@ -1190,6 +1190,371 @@ pub extern "C" fn shekyl_seed_derive_ml_kem(seed_ptr: *const u8, out_ptr: *mut u
     true
 }
 
+// ─── FCMP++: Curve Tree Hash Operations ─────────────────────────────────────
+
+/// Incrementally grow a Selene-layer chunk hash with new children.
+///
+/// Used for the leaf layer (layer 0) and even-numbered internal layers.
+///
+/// - `existing_hash_ptr`: 32 bytes, current Selene point (use hash_init for new chunk)
+/// - `offset`: position in chunk where new children start
+/// - `existing_child_at_offset_ptr`: 32 bytes, old Selene scalar at offset (zero for fresh)
+/// - `new_children_ptr`: `num_children * 32` bytes, new Selene scalars
+/// - `out_hash_ptr`: 32 bytes output buffer for the new Selene point
+#[no_mangle]
+pub extern "C" fn shekyl_curve_tree_hash_grow_selene(
+    existing_hash_ptr: *const u8,
+    offset: u64,
+    existing_child_at_offset_ptr: *const u8,
+    new_children_ptr: *const u8,
+    num_children: u64,
+    out_hash_ptr: *mut u8,
+) -> bool {
+    if existing_hash_ptr.is_null()
+        || existing_child_at_offset_ptr.is_null()
+        || out_hash_ptr.is_null()
+        || (num_children > 0 && new_children_ptr.is_null())
+    {
+        return false;
+    }
+
+    let existing_hash: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(existing_hash_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let existing_child: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(existing_child_at_offset_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    let n = num_children as usize;
+    let children: Vec<[u8; 32]> = (0..n)
+        .map(|i| unsafe {
+            let mut buf = [0u8; 32];
+            std::ptr::copy_nonoverlapping(new_children_ptr.add(i * 32), buf.as_mut_ptr(), 32);
+            buf
+        })
+        .collect();
+
+    match shekyl_fcmp::tree::hash_grow_selene(&existing_hash, offset as usize, &existing_child, &children)
+    {
+        Some(result) => {
+            unsafe { std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32) };
+            true
+        }
+        None => false,
+    }
+}
+
+/// Incrementally grow a Helios-layer chunk hash with new children.
+#[no_mangle]
+pub extern "C" fn shekyl_curve_tree_hash_grow_helios(
+    existing_hash_ptr: *const u8,
+    offset: u64,
+    existing_child_at_offset_ptr: *const u8,
+    new_children_ptr: *const u8,
+    num_children: u64,
+    out_hash_ptr: *mut u8,
+) -> bool {
+    if existing_hash_ptr.is_null()
+        || existing_child_at_offset_ptr.is_null()
+        || out_hash_ptr.is_null()
+        || (num_children > 0 && new_children_ptr.is_null())
+    {
+        return false;
+    }
+
+    let existing_hash: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(existing_hash_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let existing_child: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(existing_child_at_offset_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    let n = num_children as usize;
+    let children: Vec<[u8; 32]> = (0..n)
+        .map(|i| unsafe {
+            let mut buf = [0u8; 32];
+            std::ptr::copy_nonoverlapping(new_children_ptr.add(i * 32), buf.as_mut_ptr(), 32);
+            buf
+        })
+        .collect();
+
+    match shekyl_fcmp::tree::hash_grow_helios(&existing_hash, offset as usize, &existing_child, &children)
+    {
+        Some(result) => {
+            unsafe { std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32) };
+            true
+        }
+        None => false,
+    }
+}
+
+/// Trim children from a Selene-layer chunk hash.
+#[no_mangle]
+pub extern "C" fn shekyl_curve_tree_hash_trim_selene(
+    existing_hash_ptr: *const u8,
+    offset: u64,
+    children_ptr: *const u8,
+    num_children: u64,
+    child_to_grow_back_ptr: *const u8,
+    out_hash_ptr: *mut u8,
+) -> bool {
+    if existing_hash_ptr.is_null()
+        || child_to_grow_back_ptr.is_null()
+        || out_hash_ptr.is_null()
+        || (num_children > 0 && children_ptr.is_null())
+    {
+        return false;
+    }
+
+    let existing_hash: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(existing_hash_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let grow_back: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(child_to_grow_back_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    let n = num_children as usize;
+    let children: Vec<[u8; 32]> = (0..n)
+        .map(|i| unsafe {
+            let mut buf = [0u8; 32];
+            std::ptr::copy_nonoverlapping(children_ptr.add(i * 32), buf.as_mut_ptr(), 32);
+            buf
+        })
+        .collect();
+
+    match shekyl_fcmp::tree::hash_trim_selene(&existing_hash, offset as usize, &children, &grow_back)
+    {
+        Some(result) => {
+            unsafe { std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32) };
+            true
+        }
+        None => false,
+    }
+}
+
+/// Trim children from a Helios-layer chunk hash.
+#[no_mangle]
+pub extern "C" fn shekyl_curve_tree_hash_trim_helios(
+    existing_hash_ptr: *const u8,
+    offset: u64,
+    children_ptr: *const u8,
+    num_children: u64,
+    child_to_grow_back_ptr: *const u8,
+    out_hash_ptr: *mut u8,
+) -> bool {
+    if existing_hash_ptr.is_null()
+        || child_to_grow_back_ptr.is_null()
+        || out_hash_ptr.is_null()
+        || (num_children > 0 && children_ptr.is_null())
+    {
+        return false;
+    }
+
+    let existing_hash: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(existing_hash_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let grow_back: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(child_to_grow_back_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    let n = num_children as usize;
+    let children: Vec<[u8; 32]> = (0..n)
+        .map(|i| unsafe {
+            let mut buf = [0u8; 32];
+            std::ptr::copy_nonoverlapping(children_ptr.add(i * 32), buf.as_mut_ptr(), 32);
+            buf
+        })
+        .collect();
+
+    match shekyl_fcmp::tree::hash_trim_helios(&existing_hash, offset as usize, &children, &grow_back)
+    {
+        Some(result) => {
+            unsafe { std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32) };
+            true
+        }
+        None => false,
+    }
+}
+
+/// Convert a Selene point to a Helios scalar (x-coordinate extraction).
+///
+/// Used when propagating Selene layer hashes up to the next Helios layer.
+/// Writes 32 bytes to `out_scalar_ptr`.
+#[no_mangle]
+pub extern "C" fn shekyl_curve_tree_selene_to_helios_scalar(
+    selene_point_ptr: *const u8,
+    out_scalar_ptr: *mut u8,
+) -> bool {
+    if selene_point_ptr.is_null() || out_scalar_ptr.is_null() {
+        return false;
+    }
+    let point: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(selene_point_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    match shekyl_fcmp::tree::selene_point_to_helios_scalar(&point) {
+        Some(scalar) => {
+            unsafe { std::ptr::copy_nonoverlapping(scalar.as_ptr(), out_scalar_ptr, 32) };
+            true
+        }
+        None => false,
+    }
+}
+
+/// Convert a Helios point to a Selene scalar (x-coordinate extraction).
+#[no_mangle]
+pub extern "C" fn shekyl_curve_tree_helios_to_selene_scalar(
+    helios_point_ptr: *const u8,
+    out_scalar_ptr: *mut u8,
+) -> bool {
+    if helios_point_ptr.is_null() || out_scalar_ptr.is_null() {
+        return false;
+    }
+    let point: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(helios_point_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    match shekyl_fcmp::tree::helios_point_to_selene_scalar(&point) {
+        Some(scalar) => {
+            unsafe { std::ptr::copy_nonoverlapping(scalar.as_ptr(), out_scalar_ptr, 32) };
+            true
+        }
+        None => false,
+    }
+}
+
+/// Get the Selene hash initialization point (32 bytes).
+#[no_mangle]
+pub extern "C" fn shekyl_curve_tree_selene_hash_init(out_ptr: *mut u8) -> bool {
+    if out_ptr.is_null() {
+        return false;
+    }
+    let init = shekyl_fcmp::tree::selene_hash_init();
+    unsafe { std::ptr::copy_nonoverlapping(init.as_ptr(), out_ptr, 32) };
+    true
+}
+
+/// Get the Helios hash initialization point (32 bytes).
+#[no_mangle]
+pub extern "C" fn shekyl_curve_tree_helios_hash_init(out_ptr: *mut u8) -> bool {
+    if out_ptr.is_null() {
+        return false;
+    }
+    let init = shekyl_fcmp::tree::helios_hash_init();
+    unsafe { std::ptr::copy_nonoverlapping(init.as_ptr(), out_ptr, 32) };
+    true
+}
+
+/// Return the number of scalars per leaf (4 for Shekyl: O.x, I.x, C.x, H(pqc_pk)).
+#[no_mangle]
+pub extern "C" fn shekyl_curve_tree_scalars_per_leaf() -> u32 {
+    shekyl_fcmp::SCALARS_PER_LEAF as u32
+}
+
+/// Return the Selene-layer chunk width (branching factor = LAYER_ONE_LEN = 38).
+#[no_mangle]
+pub extern "C" fn shekyl_curve_tree_selene_chunk_width() -> u32 {
+    shekyl_fcmp::SELENE_CHUNK_WIDTH as u32
+}
+
+/// Return the Helios-layer chunk width (branching factor = LAYER_TWO_LEN = 18).
+#[no_mangle]
+pub extern "C" fn shekyl_curve_tree_helios_chunk_width() -> u32 {
+    shekyl_fcmp::HELIOS_CHUNK_WIDTH as u32
+}
+
+// ─── FCMP++: Ed25519 → Selene scalar conversion ────────────────────────────
+
+/// Convert a compressed Ed25519 point (32 bytes) to a Selene scalar
+/// (Wei25519 x-coordinate, 32 bytes).
+///
+/// Returns true on success (writes 32 bytes to `out_scalar_ptr`).
+/// Returns false if the point cannot be decompressed or is the identity.
+#[no_mangle]
+pub extern "C" fn shekyl_ed25519_to_selene_scalar(
+    compressed_ptr: *const u8,
+    out_scalar_ptr: *mut u8,
+) -> bool {
+    if compressed_ptr.is_null() || out_scalar_ptr.is_null() {
+        return false;
+    }
+
+    let compressed: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(compressed_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    match shekyl_fcmp::tree::ed25519_point_to_selene_scalar(&compressed) {
+        Some(scalar) => {
+            unsafe { std::ptr::copy_nonoverlapping(scalar.as_ptr(), out_scalar_ptr, 32) };
+            true
+        }
+        None => false,
+    }
+}
+
+// ─── FCMP++: Leaf construction ──────────────────────────────────────────────
+
+/// Construct a 128-byte curve tree leaf from an output public key and commitment.
+///
+/// - `output_key_ptr`: 32 bytes, compressed Ed25519 output public key (O)
+/// - `commitment_ptr`: 32 bytes, compressed Ed25519 amount commitment (C)
+/// - `leaf_out_ptr`: 128 bytes output buffer for {O.x, I.x, C.x, H(pqc_pk)}
+///
+/// Internally computes I = Hp(O) via Monero's biased hash-to-point, then
+/// extracts Wei25519 x-coordinates for O, Hp(O), C. The 4th scalar is
+/// zero (PQC placeholder).
+///
+/// Returns true on success, false on decompression failure.
+#[no_mangle]
+pub extern "C" fn shekyl_construct_curve_tree_leaf(
+    output_key_ptr: *const u8,
+    commitment_ptr: *const u8,
+    leaf_out_ptr: *mut u8,
+) -> bool {
+    if output_key_ptr.is_null() || commitment_ptr.is_null() || leaf_out_ptr.is_null() {
+        return false;
+    }
+
+    let output_key: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(output_key_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let commitment: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(commitment_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    match shekyl_fcmp::tree::construct_leaf(&output_key, &commitment) {
+        Some(leaf) => {
+            unsafe { std::ptr::copy_nonoverlapping(leaf.as_ptr(), leaf_out_ptr, 128) };
+            true
+        }
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

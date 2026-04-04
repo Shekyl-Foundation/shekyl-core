@@ -2350,6 +2350,21 @@ namespace hw {
     }
 
 
+    bool device_ledger::fcmp_prepare(const rct::key &tree_root, uint8_t tree_depth) {
+        MERROR("FCMP++ hardware wallet support is not yet available. Use a software wallet.");
+        return false;
+    }
+
+    bool device_ledger::fcmp_proof_start(size_t num_inputs) {
+        MERROR("FCMP++ hardware wallet support is not yet available. Use a software wallet.");
+        return false;
+    }
+
+    bool device_ledger::fcmp_proof_add_input(const rct::key &key_image, const std::vector<uint8_t> &tree_path) {
+        MERROR("FCMP++ hardware wallet support is not yet available. Use a software wallet.");
+        return false;
+    }
+
     bool device_ledger::close_tx() {
         AUTO_LOCK_CMD();
         send_simple(INS_CLOSE_TX);

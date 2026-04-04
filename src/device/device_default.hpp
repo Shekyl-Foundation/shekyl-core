@@ -140,6 +140,10 @@ namespace hw {
             bool clsag_hash(const rct::keyV &data, rct::key &hash) override;
             bool clsag_sign(const rct::key &c, const rct::key &a, const rct::key &p, const rct::key &z, const rct::key &mu_P, const rct::key &mu_C, rct::key &s) override;
 
+            bool fcmp_prepare(const rct::key &tree_root, uint8_t tree_depth) override;
+            bool fcmp_proof_start(size_t num_inputs) override;
+            bool fcmp_proof_add_input(const rct::key &key_image, const std::vector<uint8_t> &tree_path) override;
+
             bool  close_tx(void) override;
         };
 

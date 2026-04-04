@@ -1646,9 +1646,13 @@ name = "shekyl-fcmp"
 version = "2.0.0"
 dependencies = [
  "blake2",
+ "ciphersuite",
+ "curve25519-dalek",
  "dalek-ff-group 0.5.0",
+ "ec-divisors",
  "helioselene",
  "monero-fcmp-plus-plus",
+ "monero-generators",
  "rand",
  "rand_core",
  "serde",

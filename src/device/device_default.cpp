@@ -439,6 +439,18 @@ namespace hw {
             return true;
         }
 
+        bool device_default::fcmp_prepare(const rct::key &tree_root, uint8_t tree_depth) {
+            return true;
+        }
+
+        bool device_default::fcmp_proof_start(size_t num_inputs) {
+            return true;
+        }
+
+        bool device_default::fcmp_proof_add_input(const rct::key &key_image, const std::vector<uint8_t> &tree_path) {
+            return true;
+        }
+
         bool device_default::close_tx() {
             return true;
         }

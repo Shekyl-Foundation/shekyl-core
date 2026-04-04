@@ -2410,6 +2410,7 @@ namespace cryptonote
     response.pow_hash = fill_pow_hash ? string_tools::pod_to_hex(get_block_longhash(&(m_core.get_blockchain_storage()), blk, height, 0)) : "";
     response.long_term_weight = m_core.get_blockchain_storage().get_db().get_block_long_term_weight(height);
     response.miner_tx_hash = string_tools::pod_to_hex(cryptonote::get_transaction_hash(blk.miner_tx));
+    response.curve_tree_root = string_tools::pod_to_hex(blk.curve_tree_root);
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
@@ -3679,6 +3680,44 @@ namespace cryptonote
     }
 
     res.reward = reward;
+    res.status = CORE_RPC_STATUS_OK;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_get_curve_tree_path(const COMMAND_RPC_GET_CURVE_TREE_PATH::request& req, COMMAND_RPC_GET_CURVE_TREE_PATH::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
+  {
+    RPC_TRACKER(get_curve_tree_path);
+
+    if (req.output_indices.empty())
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "output_indices must not be empty";
+      return false;
+    }
+
+    // TODO(fcmp++): Retrieve the current curve tree root and depth from the
+    // blockchain DB, look up each output's Merkle path in the curve tree, and
+    // populate res.paths with the serialized sibling hashes.
+    //
+    // For now, return a stub indicating the endpoint exists but the tree
+    // lookup is not yet implemented.
+
+    const uint64_t height = m_core.get_current_blockchain_height();
+    crypto::hash top_hash = m_core.get_blockchain_storage().get_tail_id();
+
+    res.reference_block = epee::string_tools::pod_to_hex(top_hash);
+    res.tree_depth = 0;
+    res.paths.clear();
+
+    for (const uint64_t idx : req.output_indices)
+    {
+      COMMAND_RPC_GET_CURVE_TREE_PATH::path_entry entry{};
+      entry.output_index = idx;
+      entry.tree_depth = 0;
+      entry.path_blob = "";
+      res.paths.push_back(std::move(entry));
+    }
+
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }

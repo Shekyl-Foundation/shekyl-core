@@ -197,6 +197,7 @@ namespace rct {
             case RCTTypeBulletproof2:
             case RCTTypeCLSAG:
             case RCTTypeBulletproofPlus:
+            case RCTTypeFcmpPlusPlusPqc:
                 return true;
             default:
                 return false;
@@ -221,6 +222,7 @@ namespace rct {
         switch (type)
         {
             case RCTTypeBulletproofPlus:
+            case RCTTypeFcmpPlusPlusPqc:
                 return true;
             default:
                 return false;
@@ -245,6 +247,17 @@ namespace rct {
         {
             case RCTTypeCLSAG:
             case RCTTypeBulletproofPlus:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool is_rct_fcmp_pp_pqc(int type)
+    {
+        switch (type)
+        {
+            case RCTTypeFcmpPlusPlusPqc:
                 return true;
             default:
                 return false;

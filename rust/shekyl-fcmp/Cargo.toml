@@ -15,8 +15,12 @@ license.workspace = true
 # IMPORTANT: The fcmp++ branch must be fetched from upstream monero-oxide/monero-oxide
 # into the Shekyl-Foundation fork before this dependency resolves.
 monero-fcmp-plus-plus = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
+monero-generators = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++" }
 helioselene = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++" }
 dalek-ff-group = "0.5"
+ciphersuite = "0.4"
+ec-divisors = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++", features = ["ed25519"] }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 
 # Crypto primitives
 blake2 = "0.10"

@@ -200,6 +200,7 @@
 #define FCMP_REFERENCE_BLOCK_MAX_AGE            100  // ~3.3 hours at 2-min blocks; max referenceBlock staleness
 #define FCMP_REFERENCE_BLOCK_MIN_AGE            2    // min depth to avoid tip reorg races
 #define FCMP_MAX_INPUTS_PER_TX                  8    // bounds proof generation time and tx size
+constexpr uint64_t FCMP_CURVE_TREE_CHECKPOINT_INTERVAL = 10000;
 
 #define PER_KB_FEE_QUANTIZATION_DECIMALS        6 // Keep fee quantization at 1e-6 SKL while display precision is 1e-9 SKL.
 #define CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES 2

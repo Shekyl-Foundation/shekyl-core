@@ -38,6 +38,7 @@
 #include "bulletproofs_plus.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
+#include "shekyl/shekyl_ffi.h"
 
 using namespace crypto;
 using namespace std;
@@ -848,6 +849,163 @@ namespace rct {
         LOG_PRINT_L1("Error in verRctNonSemanticsSimple, but not an actual exception");
         return false;
       }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------------------
+    // FCMP++ transaction construction: replaces ring signatures with a single
+    // full-chain membership proof plus Bulletproofs+ range proofs.
+    //------------------------------------------------------------------------------------------------------------------------------
+    rctSig genRctFcmpPlusPlus(
+        const key &message,
+        const ctkeyV &inSk,
+        const ctkeyV &inPk,
+        const keyV &destinations,
+        const std::vector<xmr_amount> &inamounts,
+        const std::vector<xmr_amount> &outamounts,
+        const keyV &amount_keys,
+        xmr_amount txnFee,
+        const crypto::hash &referenceBlock,
+        uint8_t tree_depth,
+        const std::vector<std::vector<uint8_t>> &tree_paths,
+        const std::vector<key> &pqc_pk_hashes,
+        hw::device &hwdev)
+    {
+        CHECK_AND_ASSERT_THROW_MES(inamounts.size() > 0, "Empty inamounts");
+        CHECK_AND_ASSERT_THROW_MES(inamounts.size() == inSk.size(), "Different number of inamounts/inSk");
+        CHECK_AND_ASSERT_THROW_MES(inamounts.size() == inPk.size(), "Different number of inamounts/inPk");
+        CHECK_AND_ASSERT_THROW_MES(outamounts.size() == destinations.size(), "Different number of amounts/destinations");
+        CHECK_AND_ASSERT_THROW_MES(amount_keys.size() == destinations.size(), "Different number of amount_keys/destinations");
+        CHECK_AND_ASSERT_THROW_MES(pqc_pk_hashes.size() == inamounts.size(), "Different number of pqc_pk_hashes/inputs");
+
+        rctSig rv;
+        rv.type = RCTTypeFcmpPlusPlusPqc;
+        rv.message = message;
+        rv.txnFee = txnFee;
+        rv.referenceBlock = referenceBlock;
+        rv.p.curve_trees_tree_depth = tree_depth;
+
+        // --- Outputs: destinations + ECDH info ---
+        rv.outPk.resize(destinations.size());
+        rv.ecdhInfo.resize(destinations.size());
+        for (size_t i = 0; i < destinations.size(); i++)
+            rv.outPk[i].dest = copy(destinations[i]);
+
+        // --- Range proofs (Bulletproofs+) ---
+        rv.p.bulletproofs_plus.clear();
+        {
+            keyV C, masks;
+            if (hwdev.get_mode() == hw::device::TRANSACTION_CREATE_FAKE)
+            {
+                rv.p.bulletproofs_plus.push_back(make_dummy_bulletproof_plus(outamounts, C, masks));
+            }
+            else
+            {
+                const epee::span<const key> keys{&amount_keys[0], amount_keys.size()};
+                rv.p.bulletproofs_plus.push_back(proveRangeBulletproofPlus(C, masks, outamounts, keys, hwdev));
+            }
+            ctkeyV outSk(destinations.size());
+            for (size_t i = 0; i < outamounts.size(); ++i)
+            {
+                rv.outPk[i].mask = rct::scalarmult8(C[i]);
+                outSk[i].mask = masks[i];
+            }
+
+            // Encode ECDH info
+            key sumout = zero();
+            for (size_t i = 0; i < outSk.size(); ++i)
+            {
+                sc_add(sumout.bytes, outSk[i].mask.bytes, sumout.bytes);
+                rv.ecdhInfo[i].mask = copy(outSk[i].mask);
+                rv.ecdhInfo[i].amount = d2h(outamounts[i]);
+                hwdev.ecdhEncode(rv.ecdhInfo[i], amount_keys[i], true);
+            }
+
+            // --- Pseudo outputs (balance proof) ---
+            rv.p.pseudoOuts.resize(inamounts.size());
+            keyV a(inamounts.size());
+            key sumpouts = zero();
+            for (size_t i = 0; i < inamounts.size() - 1; i++)
+            {
+                skGen(a[i]);
+                sc_add(sumpouts.bytes, a[i].bytes, sumpouts.bytes);
+                genC(rv.p.pseudoOuts[i], a[i], inamounts[i]);
+            }
+            size_t last = inamounts.size() - 1;
+            sc_sub(a[last].bytes, sumout.bytes, sumpouts.bytes);
+            genC(rv.p.pseudoOuts[last], a[last], inamounts[last]);
+        }
+
+        // --- FCMP++ membership proof via Rust FFI ---
+        // Flatten tree paths into a single buffer for the C API.
+        std::vector<uint8_t> flat_paths;
+        for (const auto &p : tree_paths)
+            flat_paths.insert(flat_paths.end(), p.begin(), p.end());
+
+        // Collect key images from input secret keys (O * Hp(O) = key image).
+        // In a real flow key images come from the transaction inputs; here we
+        // serialize them as 32-byte concatenated scalars.
+        std::vector<uint8_t> key_images_buf(inPk.size() * 32);
+        for (size_t i = 0; i < inPk.size(); ++i)
+        {
+            ge_p3 hp;
+            hash_to_p3(hp, inPk[i].dest);
+            key ki;
+            crypto::secret_key sk = rct2sk(inSk[i].dest);
+            ge_p2 ki_p2;
+            ge_scalarmult(&ki_p2, (const unsigned char*)&sk, &hp);
+            ge_tobytes(ki.bytes, &ki_p2);
+            memcpy(key_images_buf.data() + i * 32, ki.bytes, 32);
+        }
+
+        // Serialize pseudo-outs and PQC hashes for FFI.
+        std::vector<uint8_t> pseudo_outs_buf(rv.p.pseudoOuts.size() * 32);
+        for (size_t i = 0; i < rv.p.pseudoOuts.size(); ++i)
+            memcpy(pseudo_outs_buf.data() + i * 32, rv.p.pseudoOuts[i].bytes, 32);
+
+        std::vector<uint8_t> pqc_hashes_buf(pqc_pk_hashes.size() * 32);
+        for (size_t i = 0; i < pqc_pk_hashes.size(); ++i)
+            memcpy(pqc_hashes_buf.data() + i * 32, pqc_pk_hashes[i].bytes, 32);
+
+        // Construct leaf scalars from input public keys for the prover.
+        std::vector<uint8_t> leaves_buf(inPk.size() * 128);
+        for (size_t i = 0; i < inPk.size(); ++i)
+        {
+            bool ok = shekyl_construct_curve_tree_leaf(
+                inPk[i].dest.bytes,
+                inPk[i].mask.bytes,
+                leaves_buf.data() + i * 128);
+            CHECK_AND_ASSERT_THROW_MES(ok, "shekyl_construct_curve_tree_leaf failed for input " << i);
+        }
+
+        const uint32_t num_inputs = static_cast<uint32_t>(inPk.size());
+
+        // Tree root from the reference block (the verifier re-derives it; the
+        // prover needs the snapshot root to anchor the path).
+        key tree_root;
+        memcpy(tree_root.bytes, referenceBlock.data, 32);
+
+        ShekylBuffer proof_buf = shekyl_fcmp_prove(
+            leaves_buf.data(),
+            num_inputs,
+            flat_paths.data(),
+            static_cast<uint32_t>(flat_paths.size()),
+            key_images_buf.data(),
+            pseudo_outs_buf.data(),
+            pqc_hashes_buf.data(),
+            tree_root.bytes,
+            tree_depth);
+
+        if (proof_buf.ptr != nullptr && proof_buf.len > 0)
+        {
+            rv.p.fcmp_pp_proof.assign(proof_buf.ptr, proof_buf.ptr + proof_buf.len);
+            shekyl_buffer_free(proof_buf.ptr, proof_buf.len);
+        }
+        else
+        {
+            LOG_PRINT_L0("WARNING: shekyl_fcmp_prove returned empty proof (stub/placeholder)");
+        }
+
+        return rv;
     }
 
     xmr_amount decodeRctSimple(const rctSig & rv, const key & sk, unsigned int i, key &mask, hw::device &hwdev) {

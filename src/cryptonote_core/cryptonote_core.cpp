@@ -735,6 +735,10 @@ namespace cryptonote
       {
         CHECK_AND_ASSERT_MES(m_blockchain_storage.update_blockchain_pruning(), false, "Failed to update blockchain pruning");
       }
+
+      MGINFO("Running output-metadata transaction pruning...");
+      if (!m_blockchain_storage.get_db().prune_tx_data())
+        MWARNING("Output-metadata transaction pruning returned false (may be a no-op on short chains)");
     }
 
     return load_state_data();

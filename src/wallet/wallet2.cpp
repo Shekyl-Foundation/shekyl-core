@@ -837,6 +837,14 @@ size_t estimate_tx_size(bool use_rct, int n_inputs, int mixin, int n_outputs, si
     return n_inputs * (mixin+1) * APPROXIMATE_INPUT_BYTES + extra_size + (use_view_tags ? (n_outputs * sizeof(crypto::view_tag)) : 0);
 }
 
+// TODO(fcmp++): For FCMP++ transactions, proof size is deterministic and can
+// be computed without constructing the proof itself. Use:
+//   size_t proof_weight = shekyl_fcmp_proof_len(num_inputs, tree_depth);
+// The FCMP++ proof replaces all per-input CLSAG signatures, so the weight
+// model simplifies to: base_tx_weight + bp_plus_weight + proof_weight.
+// The `mixin` parameter is unused for FCMP++ (no ring), and the CLSAG
+// component drops out entirely. Add an `estimate_tx_weight_fcmp` variant
+// once the proof-size function is stable.
 uint64_t estimate_tx_weight(bool use_rct, int n_inputs, int mixin, int n_outputs, size_t extra_size, bool bulletproof, bool clsag, bool bulletproof_plus, bool use_view_tags)
 {
   size_t size = estimate_tx_size(use_rct, n_inputs, mixin, n_outputs, extra_size, bulletproof, clsag, bulletproof_plus, use_view_tags);
@@ -2905,6 +2913,185 @@ void wallet2::process_new_blockchain_entry(const cryptonote::block& b, const cry
     m_callback->on_new_block(height, b);
 }
 //----------------------------------------------------------------------------------------------------
+void wallet2::precompute_fcmp_paths()
+{
+  std::vector<uint64_t> output_indices;
+  for (size_t i = 0; i < m_transfers.size(); ++i)
+  {
+    const auto& td = m_transfers[i];
+    if (td.m_spent || td.m_frozen)
+      continue;
+    output_indices.push_back(td.m_global_output_index);
+  }
+  if (output_indices.empty())
+    return;
+
+  LOG_PRINT_L1("Precomputing FCMP++ tree paths for " << output_indices.size() << " unspent outputs");
+
+  cryptonote::COMMAND_RPC_GET_CURVE_TREE_PATH::request req{};
+  cryptonote::COMMAND_RPC_GET_CURVE_TREE_PATH::response res{};
+  req.output_indices = std::move(output_indices);
+
+  bool r = invoke_http_json("/get_curve_tree_path", req, res, rpc_timeout);
+  THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to connect to daemon for FCMP++ tree path");
+  THROW_WALLET_EXCEPTION_IF(res.status == CORE_RPC_STATUS_BUSY, error::daemon_busy, "get_curve_tree_path");
+  THROW_WALLET_EXCEPTION_IF(res.status != CORE_RPC_STATUS_OK, error::wallet_internal_error, "get_curve_tree_path failed: " + res.status);
+
+  crypto::hash ref_block{};
+  if (!res.reference_block.empty())
+    epee::string_tools::hex_to_pod(res.reference_block, ref_block);
+
+  m_fcmp_precomputed_paths.clear();
+  uint64_t done = 0;
+  for (const auto& pe : res.paths)
+  {
+    fcmp_precomputed_path pp;
+    pp.global_output_index = pe.output_index;
+    pp.tree_root_at_precompute = ref_block;
+    pp.precompute_height = m_blockchain.size() - 1;
+    if (!pe.path_blob.empty())
+    {
+      std::string tmp;
+      epee::string_tools::parse_hexstr_to_binbuff(pe.path_blob, tmp);
+      pp.tree_path.assign(tmp.begin(), tmp.end());
+    }
+    m_fcmp_precomputed_paths[pe.output_index] = std::move(pp);
+    ++done;
+    if (m_callback)
+      m_callback->on_fcmp_path_precompute_progress(done, res.paths.size());
+  }
+  m_fcmp_last_precompute_height = m_blockchain.size() - 1;
+
+  LOG_PRINT_L1("FCMP++ tree paths precomputed for " << m_fcmp_precomputed_paths.size() << " outputs at height " << m_fcmp_last_precompute_height);
+}
+//----------------------------------------------------------------------------------------------------
+void wallet2::update_fcmp_paths_incremental(uint64_t new_height)
+{
+  if (new_height <= m_fcmp_last_precompute_height)
+    return;
+
+  if (m_fcmp_precomputed_paths.empty())
+  {
+    precompute_fcmp_paths();
+    return;
+  }
+
+  std::vector<uint64_t> stale_indices;
+  for (const auto& [idx, pp] : m_fcmp_precomputed_paths)
+    stale_indices.push_back(idx);
+
+  // Also include any new unspent outputs gained since last precompute
+  for (size_t i = 0; i < m_transfers.size(); ++i)
+  {
+    const auto& td = m_transfers[i];
+    if (td.m_spent || td.m_frozen)
+      continue;
+    if (m_fcmp_precomputed_paths.find(td.m_global_output_index) == m_fcmp_precomputed_paths.end())
+      stale_indices.push_back(td.m_global_output_index);
+  }
+
+  if (stale_indices.empty())
+    return;
+
+  LOG_PRINT_L1("Incrementally updating FCMP++ tree paths for " << stale_indices.size()
+               << " outputs (height " << m_fcmp_last_precompute_height << " -> " << new_height << ")");
+
+  cryptonote::COMMAND_RPC_GET_CURVE_TREE_PATH::request req{};
+  cryptonote::COMMAND_RPC_GET_CURVE_TREE_PATH::response res{};
+  req.output_indices = std::move(stale_indices);
+
+  bool r = invoke_http_json("/get_curve_tree_path", req, res, rpc_timeout);
+  THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to connect to daemon for incremental FCMP++ path update");
+  THROW_WALLET_EXCEPTION_IF(res.status == CORE_RPC_STATUS_BUSY, error::daemon_busy, "get_curve_tree_path");
+  THROW_WALLET_EXCEPTION_IF(res.status != CORE_RPC_STATUS_OK, error::wallet_internal_error, "get_curve_tree_path failed: " + res.status);
+
+  crypto::hash ref_block{};
+  if (!res.reference_block.empty())
+    epee::string_tools::hex_to_pod(res.reference_block, ref_block);
+
+  // Remove paths for outputs that are now spent
+  for (auto it = m_fcmp_precomputed_paths.begin(); it != m_fcmp_precomputed_paths.end();)
+  {
+    bool still_unspent = false;
+    for (size_t i = 0; i < m_transfers.size(); ++i)
+    {
+      if (m_transfers[i].m_global_output_index == it->first && !m_transfers[i].m_spent && !m_transfers[i].m_frozen)
+      {
+        still_unspent = true;
+        break;
+      }
+    }
+    if (!still_unspent)
+      it = m_fcmp_precomputed_paths.erase(it);
+    else
+      ++it;
+  }
+
+  for (const auto& pe : res.paths)
+  {
+    fcmp_precomputed_path pp;
+    pp.global_output_index = pe.output_index;
+    pp.tree_root_at_precompute = ref_block;
+    pp.precompute_height = new_height;
+    if (!pe.path_blob.empty())
+    {
+      std::string tmp;
+      epee::string_tools::parse_hexstr_to_binbuff(pe.path_blob, tmp);
+      pp.tree_path.assign(tmp.begin(), tmp.end());
+    }
+    m_fcmp_precomputed_paths[pe.output_index] = std::move(pp);
+  }
+  m_fcmp_last_precompute_height = new_height;
+
+  LOG_PRINT_L1("FCMP++ tree paths incrementally updated to height " << new_height);
+}
+//----------------------------------------------------------------------------------------------------
+void wallet2::rederive_pqc_keys_for_output(const transfer_details& td)
+{
+  THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.size() != 64,
+    error::wallet_internal_error,
+    "Cannot rederive PQC keys: combined shared secret missing or wrong size for output " +
+    std::to_string(td.m_global_output_index));
+
+  ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
+    td.m_combined_shared_secret.data(),
+    td.m_global_output_index);
+
+  THROW_WALLET_EXCEPTION_IF(!kp.success,
+    error::wallet_internal_error,
+    "PQC keypair derivation failed for output " + std::to_string(td.m_global_output_index));
+
+  if (kp.public_key.ptr && kp.public_key.len > 0)
+    shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
+  if (kp.secret_key.ptr && kp.secret_key.len > 0)
+    shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
+}
+//----------------------------------------------------------------------------------------------------
+void wallet2::rederive_all_pqc_keys()
+{
+  uint64_t total = 0;
+  for (const auto& td : m_transfers)
+  {
+    if (!td.m_combined_shared_secret.empty())
+      ++total;
+  }
+  if (total == 0)
+    return;
+
+  LOG_PRINT_L1("Rederiving PQC keys for " << total << " outputs with stored shared secrets");
+  uint64_t done = 0;
+  for (const auto& td : m_transfers)
+  {
+    if (td.m_combined_shared_secret.empty())
+      continue;
+    rederive_pqc_keys_for_output(td);
+    ++done;
+    if (m_callback)
+      m_callback->on_pqc_rederivation_progress(done, total);
+  }
+  LOG_PRINT_L1("PQC key rederivation complete for " << done << " outputs");
+}
+//----------------------------------------------------------------------------------------------------
 void wallet2::get_short_chain_history(std::list<crypto::hash>& ids, uint64_t granularity) const
 {
   size_t i = 0;
@@ -4144,6 +4331,33 @@ void wallet2::refresh(bool trusted_daemon, uint64_t start_height, uint64_t & blo
   m_first_refresh_done = true;
   if (m_background_syncing || m_is_background_wallet)
     m_background_sync_data.first_refresh_done = true;
+
+  // FCMP++ Phase 5e: update precomputed tree paths after sync catches up
+  if (blocks_fetched > 0 && m_run.load(std::memory_order_relaxed) && !m_watch_only)
+  {
+    try
+    {
+      const uint64_t cur_height = get_blockchain_current_height();
+      update_fcmp_paths_incremental(cur_height > 0 ? cur_height - 1 : 0);
+    }
+    catch (const std::exception& e)
+    {
+      LOG_PRINT_L1("FCMP++ path precomputation deferred: " << e.what());
+    }
+  }
+
+  // FCMP++ Phase 5.5: rederive PQC keys on first refresh (restore-from-seed)
+  if (m_first_refresh_done && blocks_fetched > 0 && !m_watch_only)
+  {
+    try
+    {
+      rederive_all_pqc_keys();
+    }
+    catch (const std::exception& e)
+    {
+      LOG_PRINT_L1("PQC key rederivation deferred: " << e.what());
+    }
+  }
 
   LOG_PRINT_L1("Refresh done, blocks received: " << blocks_fetched << ", balance (all accounts): " << print_money(balance_all(false)) << ", unlocked: " << print_money(unlocked_balance_all(false)));
 }
@@ -9024,6 +9238,16 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
   for (auto i = ++selected_transfers.begin(); i != selected_transfers.end(); ++i)
     THROW_WALLET_EXCEPTION_IF(subaddr_account != m_transfers[*i].m_subaddr_index.major, error::wallet_internal_error, "the tx uses funds from multiple accounts");
 
+  // TODO(fcmp++): When the hard fork activates FCMP++, this decoy selection
+  // path (get_outs + ring construction) is replaced entirely:
+  //   1. Call the daemon RPC `get_curve_tree_path` with the real output
+  //      indices from selected_transfers to obtain Merkle paths.
+  //   2. Build the FCMP++ proof via rct::genRctFcmpPlusPlus() instead of
+  //      constructing ring signatures via genRctSimple().
+  //   3. The `fake_outputs_count` parameter becomes unused for FCMP++ txs
+  //      since there is no ring -- every output in the tree is an implicit
+  //      decoy.
+  // Until then, fall through to the legacy ring-signature path below.
   if (outs.empty())
     get_outs(outs, selected_transfers, fake_outputs_count, all_rct, valid_public_keys_cache); // may throw
 
@@ -9108,6 +9332,15 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
   std::vector<crypto::secret_key> additional_tx_keys;
   LOG_PRINT_L2("constructing tx");
   auto sources_copy = sources;
+  // TODO(fcmp++): When constructing an FCMP++ transaction, the call below is
+  // replaced with a two-phase flow:
+  //   Phase A: construct_tx_and_get_tx_key() builds the transaction skeleton
+  //            (outputs, extra, ECDH info) but omits ring signatures.
+  //   Phase B: rct::genRctFcmpPlusPlus() is called with the curve tree paths
+  //            obtained from get_curve_tree_path RPC to produce the FCMP++
+  //            membership proof and attach it to rv.p.fcmp_pp_proof.
+  // The `sources` entries will have empty ring members (outputs vector) in
+  // FCMP++ mode since decoys are implicit in the tree.
   {
     bool r = cryptonote::construct_tx_and_get_tx_key(m_account.get_keys(), m_subaddresses, sources, splitted_dsts, change_dts.addr, extra, tx, tx_key, additional_tx_keys, true, rct_config, use_view_tags, get_current_hard_fork());
     LOG_PRINT_L2("constructed tx, r="<<r);

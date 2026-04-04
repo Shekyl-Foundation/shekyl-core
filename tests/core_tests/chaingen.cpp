@@ -150,6 +150,19 @@ namespace
     virtual void set_hard_fork_version(uint64_t height, uint8_t version) override { if (height >= hf.size()) hf.resize(height + 1); hf[height] = version; }
     virtual uint8_t get_hard_fork_version(uint64_t height) const override { if (height >= hf.size()) return 255; return hf[height]; }
 
+    virtual void grow_curve_tree(const std::vector<uint8_t>&, uint64_t) override {}
+    virtual void trim_curve_tree(uint64_t) override {}
+    virtual std::array<uint8_t, 32> get_curve_tree_root() const override { return {}; }
+    virtual uint8_t get_curve_tree_depth() const override { return 0; }
+    virtual uint64_t get_curve_tree_leaf_count() const override { return 0; }
+    virtual bool get_curve_tree_layer_hash(uint8_t, uint64_t, uint8_t*) const override { return false; }
+    virtual bool get_curve_tree_leaf(uint64_t, uint8_t*) const override { return false; }
+
+    virtual void save_curve_tree_checkpoint(uint64_t) override {}
+    virtual bool get_curve_tree_checkpoint(uint64_t, std::vector<uint8_t>&) const override { return false; }
+    virtual uint64_t get_latest_curve_tree_checkpoint_height() const override { return 0; }
+    virtual void prune_curve_tree_intermediate_layers(uint64_t) override {}
+
   private:
     std::vector<block_t> blocks;
     std::vector<uint8_t> hf;
@@ -255,6 +268,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
   blk.minor_version = hf_ver ? *hf_ver : CURRENT_BLOCK_MINOR_VERSION;
   blk.timestamp = timestamp;
   blk.prev_id = prev_id;
+  blk.curve_tree_root = crypto::null_hash;
 
   blk.tx_hashes.reserve(tx_list.size());
   for (const transaction &tx : tx_list)
@@ -365,6 +379,7 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
   blk.minor_version = actual_params & bf_minor_ver ? minor_ver : CURRENT_BLOCK_MINOR_VERSION;
   blk.timestamp     = actual_params & bf_timestamp ? timestamp : prev_block.timestamp + DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN; // Keep difficulty unchanged
   blk.prev_id       = actual_params & bf_prev_id   ? prev_id   : get_block_hash(prev_block);
+  blk.curve_tree_root = crypto::null_hash;
   blk.tx_hashes     = actual_params & bf_tx_hashes ? tx_hashes : std::vector<crypto::hash>();
   max_outs          = actual_params & bf_max_outs ? max_outs : 9999;
   hf_version        = actual_params & bf_hf_version ? hf_version : 1;

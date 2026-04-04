@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include <array>
 #include <string>
 #include <exception>
 #include <boost/program_options.hpp>
@@ -148,6 +149,26 @@ struct alt_block_data_t
   uint64_t already_generated_coins;
 };
 
+#pragma pack(push, 1)
+/**
+ * @brief per-output metadata retained after transaction pruning.
+ *
+ * When a block is confirmed beyond CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE,
+ * the full rctSigPrunable can be discarded. This struct preserves the
+ * data wallets need for scanning: public key, commitment, unlock time,
+ * and the block height that confirmed the output.
+ */
+struct output_pruning_metadata_t
+{
+  crypto::public_key pubkey;       //!< output one-time public key
+  rct::key           commitment;   //!< Pedersen commitment (amount commitment)
+  uint64_t           unlock_time;  //!< unlock time or height
+  uint64_t           height;       //!< block height containing this output
+  uint8_t            pruned;       //!< 1 if the parent tx's prunable data was removed
+  uint8_t            padding[7];   //!< alignment to 8-byte boundary
+};
+#pragma pack(pop)
+
 /**
  * @brief a struct containing txpool per transaction metadata
  */
@@ -170,9 +191,16 @@ struct txpool_tx_meta_t
   uint8_t is_local: 1;
   uint8_t dandelionpp_stem : 1;
   uint8_t is_forwarding: 1;
-  uint8_t bf_padding: 3;
+  uint8_t fcmp_verified: 1;  // set when fcmp_verification_hash is valid
+  uint8_t bf_padding: 2;
 
-  uint8_t padding[76]; // till 192 bytes
+  // FCMP++ verification cache: hash(proof || tree_root || key_images).
+  // When fcmp_verified == 1, the proof was previously verified against
+  // the parameters encoded in this hash.  Re-verification can be skipped
+  // if the recomputed hash matches.
+  crypto::hash fcmp_verification_hash;
+
+  uint8_t padding[44]; // till 192 bytes
 
   void set_relay_method(relay_method method) noexcept;
   relay_method get_relay_method() const noexcept;
@@ -1635,6 +1663,50 @@ public:
    */
   virtual bool check_pruning() = 0;
 
+  // ─── Output Metadata Pruning ──────────────────────────────────────────────
+
+  /**
+   * @brief store per-output metadata for post-pruning wallet scanning.
+   *
+   * Called before discarding a transaction's prunable data. The metadata
+   * preserves what wallets need (pubkey, commitment, height, unlock_time).
+   *
+   * @param global_output_index  the output's global index
+   * @param meta                 the metadata to persist
+   */
+  virtual void store_output_metadata(uint64_t global_output_index,
+                                     const output_pruning_metadata_t& meta) = 0;
+
+  /**
+   * @brief retrieve stored output metadata.
+   *
+   * @param global_output_index  the output's global index
+   * @param meta                 return-by-reference metadata
+   * @return true if metadata exists for this output
+   */
+  virtual bool get_output_metadata(uint64_t global_output_index,
+                                   output_pruning_metadata_t& meta) const = 0;
+
+  /**
+   * @brief check whether an output's parent transaction has been pruned.
+   *
+   * @param global_output_index  the output's global index
+   * @return true if prunable data has been removed for this output's tx
+   */
+  virtual bool is_output_pruned(uint64_t global_output_index) const = 0;
+
+  /**
+   * @brief prune confirmed transaction data beyond the reorg safety depth.
+   *
+   * For each transaction in blocks older than (tip - depth), stores output
+   * metadata in the output_metadata table and removes rctSigPrunable blobs.
+   *
+   * @param depth  the confirmation depth beyond which pruning is safe
+   *               (defaults to CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE)
+   * @return true on success
+   */
+  virtual bool prune_tx_data(uint64_t depth = 0) = 0;
+
   /**
    * @brief add a new alternative block
    *
@@ -1877,6 +1949,99 @@ public:
   virtual void set_staker_claim_watermark(uint64_t output_index, uint64_t last_claimed_height) = 0;
   virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const = 0;
   virtual void remove_staker_claim_watermark(uint64_t output_index) = 0;
+
+  // ─── FCMP++ Curve Tree ─────────────────────────────────────────────────────
+
+  /**
+   * @brief grow the curve tree by appending new leaf data for outputs added in a block.
+   *
+   * Each leaf is 128 bytes: {O.x[32], I.x[32], C.x[32], H(pqc_pk)[32]}.
+   * The implementation stores the leaves, recomputes affected chunk hashes
+   * via Rust FFI (Helios/Selene Pedersen commitments), and updates all
+   * internal layers up to the root.
+   *
+   * @param leaf_data  serialized 4-scalar leaves, 128 bytes per output
+   * @param num_new_outputs  number of outputs (leaf_data.size() / 128)
+   */
+  virtual void grow_curve_tree(const std::vector<uint8_t>& leaf_data, uint64_t num_new_outputs) = 0;
+
+  /**
+   * @brief trim the curve tree, removing outputs during a block pop/reorg.
+   *
+   * @param num_outputs_to_remove  number of most-recent outputs to remove
+   */
+  virtual void trim_curve_tree(uint64_t num_outputs_to_remove) = 0;
+
+  /**
+   * @brief return the current curve tree root (32-byte serialized point).
+   */
+  virtual std::array<uint8_t, 32> get_curve_tree_root() const = 0;
+
+  /**
+   * @brief return the current tree depth (number of layers).
+   */
+  virtual uint8_t get_curve_tree_depth() const = 0;
+
+  /**
+   * @brief return the total number of leaves (outputs) in the curve tree.
+   */
+  virtual uint64_t get_curve_tree_leaf_count() const = 0;
+
+  /**
+   * @brief get the hash for a specific layer/chunk in the tree.
+   *
+   * @param layer  layer index (0 = leaf layer)
+   * @param chunk  chunk index within the layer
+   * @param hash_out  32-byte output buffer
+   * @return true if the entry exists
+   */
+  virtual bool get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const = 0;
+
+  /**
+   * @brief get the leaf data for a specific global output index.
+   *
+   * @param global_output_index  the output's global index
+   * @param leaf_out  128-byte output buffer
+   * @return true if the leaf exists
+   */
+  virtual bool get_curve_tree_leaf(uint64_t global_output_index, uint8_t* leaf_out) const = 0;
+
+  // ─── FCMP++ Curve Tree Checkpoints & Pruning ─────────────────────────────
+
+  /**
+   * @brief save a curve tree checkpoint at the given block height.
+   *
+   * Serializes current tree metadata (root, depth, leaf_count) and stores it
+   * keyed by block_height for fast-sync resumption.
+   */
+  virtual void save_curve_tree_checkpoint(uint64_t block_height) = 0;
+
+  /**
+   * @brief retrieve checkpoint data for a specific block height.
+   *
+   * @param block_height  the height to look up
+   * @param checkpoint_data  output buffer for the serialized checkpoint
+   * @return true if a checkpoint exists at the given height
+   */
+  virtual bool get_curve_tree_checkpoint(uint64_t block_height, std::vector<uint8_t>& checkpoint_data) const = 0;
+
+  /**
+   * @brief return the height of the most recent curve tree checkpoint.
+   *
+   * @return the checkpoint height, or 0 if no checkpoints exist
+   */
+  virtual uint64_t get_latest_curve_tree_checkpoint_height() const = 0;
+
+  /**
+   * @brief remove intermediate layer hashes between checkpoints.
+   *
+   * Given a checkpoint height, removes internal hash layers that can be
+   * recomputed from leaves between the previous checkpoint and this one.
+   * Leaves and the latest live layer state are preserved.
+   *
+   * @param checkpoint_height  the checkpoint up to which to prune
+   */
+  virtual void prune_curve_tree_intermediate_layers(uint64_t checkpoint_height) = 0;
 
   bool m_open;  //!< Whether or not the BlockchainDB is open/ready for use
   mutable epee::critical_section m_synchronization_lock;  //!< A lock, currently for when BlockchainLMDB needs to resize the backing db file

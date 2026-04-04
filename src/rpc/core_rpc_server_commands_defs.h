@@ -1173,6 +1173,7 @@ namespace cryptonote
       std::string pow_hash;
       uint64_t long_term_weight;
       std::string miner_tx_hash;
+      std::string curve_tree_root;
       
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(major_version)
@@ -1197,6 +1198,7 @@ namespace cryptonote
         KV_SERIALIZE(pow_hash)
         KV_SERIALIZE_OPT(long_term_weight, (uint64_t)0)
         KV_SERIALIZE(miner_tx_hash)
+        KV_SERIALIZE(curve_tree_root)
       END_KV_SERIALIZE_MAP()
   };
 
@@ -2813,6 +2815,48 @@ namespace cryptonote
         KV_SERIALIZE(tier_0_lock_blocks)
         KV_SERIALIZE(tier_1_lock_blocks)
         KV_SERIALIZE(tier_2_lock_blocks)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
+
+  struct COMMAND_RPC_GET_CURVE_TREE_PATH
+  {
+    struct request_t: public rpc_access_request_base
+    {
+      std::vector<uint64_t> output_indices;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_access_request_base)
+        KV_SERIALIZE(output_indices)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    struct path_entry
+    {
+      uint64_t output_index;
+      uint8_t  tree_depth;
+      std::string path_blob;  // hex-encoded Merkle path
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(output_index)
+        KV_SERIALIZE(tree_depth)
+        KV_SERIALIZE(path_blob)
+      END_KV_SERIALIZE_MAP()
+    };
+
+    struct response_t: public rpc_access_response_base
+    {
+      std::string reference_block;
+      uint8_t     tree_depth;
+      std::vector<path_entry> paths;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_access_response_base)
+        KV_SERIALIZE(reference_block)
+        KV_SERIALIZE(tree_depth)
+        KV_SERIALIZE(paths)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

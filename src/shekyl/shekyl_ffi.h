@@ -236,6 +236,87 @@ bool shekyl_seed_derive_view(const uint8_t* seed_ptr, uint8_t* out_ptr);
 // Derive ML-KEM-768 seed material from 32-byte master seed. Writes 64 bytes.
 bool shekyl_seed_derive_ml_kem(const uint8_t* seed_ptr, uint8_t* out_ptr);
 
+// ─── FCMP++: Curve tree hash operations ─────────────────────────────────────
+
+// Incrementally grow a Selene-layer chunk hash (leaf layer + even internal layers).
+// existing_hash_ptr: 32 bytes (Selene point, use hash_init for new chunk).
+// existing_child_at_offset_ptr: 32 bytes (old Selene scalar at offset, zero for fresh).
+// new_children_ptr: num_children * 32 bytes (Selene scalars).
+// out_hash_ptr: 32 bytes output (new Selene point).
+bool shekyl_curve_tree_hash_grow_selene(
+    const uint8_t* existing_hash_ptr,
+    uint64_t offset,
+    const uint8_t* existing_child_at_offset_ptr,
+    const uint8_t* new_children_ptr,
+    uint64_t num_children,
+    uint8_t* out_hash_ptr);
+
+// Incrementally grow a Helios-layer chunk hash (odd internal layers).
+bool shekyl_curve_tree_hash_grow_helios(
+    const uint8_t* existing_hash_ptr,
+    uint64_t offset,
+    const uint8_t* existing_child_at_offset_ptr,
+    const uint8_t* new_children_ptr,
+    uint64_t num_children,
+    uint8_t* out_hash_ptr);
+
+// Trim children from a Selene-layer chunk hash.
+bool shekyl_curve_tree_hash_trim_selene(
+    const uint8_t* existing_hash_ptr,
+    uint64_t offset,
+    const uint8_t* children_ptr,
+    uint64_t num_children,
+    const uint8_t* child_to_grow_back_ptr,
+    uint8_t* out_hash_ptr);
+
+// Trim children from a Helios-layer chunk hash.
+bool shekyl_curve_tree_hash_trim_helios(
+    const uint8_t* existing_hash_ptr,
+    uint64_t offset,
+    const uint8_t* children_ptr,
+    uint64_t num_children,
+    const uint8_t* child_to_grow_back_ptr,
+    uint8_t* out_hash_ptr);
+
+// Convert Selene point to Helios scalar (x-coordinate extraction).
+bool shekyl_curve_tree_selene_to_helios_scalar(
+    const uint8_t* selene_point_ptr,
+    uint8_t* out_scalar_ptr);
+
+// Convert Helios point to Selene scalar (x-coordinate extraction).
+bool shekyl_curve_tree_helios_to_selene_scalar(
+    const uint8_t* helios_point_ptr,
+    uint8_t* out_scalar_ptr);
+
+// Get the Selene hash initialization point (32 bytes).
+bool shekyl_curve_tree_selene_hash_init(uint8_t* out_ptr);
+
+// Get the Helios hash initialization point (32 bytes).
+bool shekyl_curve_tree_helios_hash_init(uint8_t* out_ptr);
+
+// Tree structure constants.
+uint32_t shekyl_curve_tree_scalars_per_leaf();    // 4
+uint32_t shekyl_curve_tree_selene_chunk_width();  // 38 (LAYER_ONE_LEN)
+uint32_t shekyl_curve_tree_helios_chunk_width();  // 18 (LAYER_TWO_LEN)
+
+// Ed25519 → Selene scalar conversion (Wei25519 x-coordinate).
+// compressed_ptr: 32 bytes compressed Ed25519 point.
+// out_scalar_ptr: 32 bytes output Selene scalar.
+// Returns true on success.
+bool shekyl_ed25519_to_selene_scalar(
+    const uint8_t* compressed_ptr,
+    uint8_t* out_scalar_ptr);
+
+// Construct a 128-byte curve tree leaf from output pubkey and commitment.
+// output_key_ptr: 32 bytes compressed Ed25519 output public key (O).
+// commitment_ptr: 32 bytes compressed Ed25519 amount commitment (C).
+// leaf_out_ptr: 128 bytes output for {O.x, I.x, C.x, H(pqc_pk)}.
+// Returns true on success.
+bool shekyl_construct_curve_tree_leaf(
+    const uint8_t* output_key_ptr,
+    const uint8_t* commitment_ptr,
+    uint8_t* leaf_out_ptr);
+
 // Daemon RPC (Axum)
 typedef struct ShekylDaemonRpcHandle ShekylDaemonRpcHandle;
 
