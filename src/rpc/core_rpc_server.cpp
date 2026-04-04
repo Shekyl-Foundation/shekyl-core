@@ -3597,7 +3597,12 @@ namespace cryptonote
       if (total_reward_at_h == 0 || accrual.total_weighted_stake == 0)
         continue;
       uint64_t weight = shekyl_stake_weight(staked_amount, tier);
-      reward += (uint64_t)((double)total_reward_at_h * (double)weight / (double)accrual.total_weighted_stake);
+      {
+        uint64_t hi, lo;
+        lo = mul128(total_reward_at_h, weight, &hi);
+        div128_64(hi, lo, accrual.total_weighted_stake, &hi, &lo, NULL, NULL);
+        reward += lo;
+      }
     }
 
     res.reward = reward;
