@@ -1,3 +1,4 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
 // Copyright (c) 2016-2022, The Monero Project
 //
 // All rights reserved.
@@ -26,7 +27,9 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#if !defined __GNUC__ || defined __MINGW32__ || defined __MINGW64__ || defined __ANDROID__
+#if defined(_MSC_VER)
+#define ELPP_FEATURE_CRASH_LOG 1
+#elif !defined __GNUC__ || defined __MINGW32__ || defined __MINGW64__ || defined __ANDROID__
 #define USE_UNWIND
 #else
 #define ELPP_FEATURE_CRASH_LOG 1
@@ -42,7 +45,9 @@
 #include <cxxabi.h>
 #endif
 #ifndef STATICLIB
+#ifndef _WIN32
 #include <dlfcn.h>
+#endif
 #endif
 #include <boost/algorithm/string.hpp>
 #include "common/stack_trace.h"
@@ -74,23 +79,29 @@
 #define CXA_THROW_INFO_T void
 #endif // !__clang__
 
+#if defined(_MSC_VER)
+#define NORETURN_ATTR __declspec(noreturn)
+#else
+#define NORETURN_ATTR __attribute__((noreturn))
+#endif
+
 #ifdef STATICLIB
 #define CXA_THROW __wrap___cxa_throw
 extern "C"
-__attribute__((noreturn))
+NORETURN_ATTR
 void __real___cxa_throw(void *ex, CXA_THROW_INFO_T *info, void (*dest)(void*));
 #else // !STATICLIB
 #define CXA_THROW __cxa_throw
 extern "C"
 typedef
 #ifdef __clang__ // only clang, not GCC, lets apply the attr in typedef
-__attribute__((noreturn))
+NORETURN_ATTR
 #endif // __clang__
 void (cxa_throw_t)(void *ex, CXA_THROW_INFO_T *info, void (*dest)(void*));
 #endif // !STATICLIB
 
 extern "C"
-__attribute__((noreturn))
+NORETURN_ATTR
 void CXA_THROW(void *ex, CXA_THROW_INFO_T *info, void (*dest)(void*))
 {
 
@@ -101,7 +112,9 @@ void CXA_THROW(void *ex, CXA_THROW_INFO_T *info, void (*dest)(void*))
 
 #ifndef STATICLIB
 #ifndef __clang__ // for GCC the attr can't be applied in typedef like for clang
+#ifndef _MSC_VER
   __attribute__((noreturn))
+#endif
 #endif // !__clang__
    cxa_throw_t *__real___cxa_throw = (cxa_throw_t*)dlsym(RTLD_NEXT, "__cxa_throw");
 #endif // !STATICLIB

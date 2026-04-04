@@ -191,8 +191,7 @@ int main(int argc, char* argv[])
     // Disabled: uses MONEY_SUPPLY-scale amounts that don't exist under Shekyl emission
     // GENERATE_AND_PLAY(gen_uint_overflow_1);
 
-    // Disabled: hardcoded emission formula doesn't match Shekyl's compute_emission_split
-    // GENERATE_AND_PLAY(gen_block_reward);
+    GENERATE_AND_PLAY(gen_block_reward);
 
     // Legacy Monero-era v2 mixin/dust, RCT, Borromean, and old BP tests removed.
     // Shekyl enforces v3 (with PQC auth) for all non-coinbase transactions from genesis.

@@ -26,37 +26,54 @@
 # STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-set(crypto_sources
-  aesb.c
+set(crypto_hash_sources
   blake256.c
-  chacha.c
-  crypto-ops-data.c
-  crypto-ops.c
-  crypto.cpp
-  generators.cpp
   groestl.c
+  hash.c
   hash-extra-blake.c
   hash-extra-groestl.c
   hash-extra-jh.c
   hash-extra-skein.c
-  hash.c
   hmac-keccak.c
   jh.c
   keccak.c
-  oaes_lib.c
-  random.c
-  pow_cryptonight.cpp
-  pow_randomx.cpp
-  pow_registry.cpp
   skein.c
-  slow-hash.c
-  rx-slow-hash.c
-  CryptonightR_JIT.c
   tree-hash.c)
 
-if(ARCH_ID STREQUAL "i386" OR ARCH_ID STREQUAL "x86_64" OR ARCH_ID STREQUAL "x86-64" OR ARCH_ID STREQUAL "amd64")
-list(APPEND crypto_sources CryptonightR_template.S)
+set(crypto_ops_sources
+  aesb.c
+  chacha.c
+  crypto-ops-data.c
+  crypto-ops.c
+  oaes_lib.c
+  random.c)
+
+set(crypto_slowhash_sources
+  slow-hash.c)
+
+set(crypto_rx_sources
+  rx-slow-hash.c)
+
+# CryptonightR_JIT.c contains x86 JIT code that is entirely dead on MSVC
+# (returns -1).  Its heavyweight includes trigger an MSVC ICE in the PDB
+# type server (CloseTypeServerPDB, confirmed on 14.44 and 14.50).  Use a
+# minimal stub on MSVC that provides the same -1 return path.
+set(crypto_jit_sources)
+if(MSVC)
+  list(APPEND crypto_jit_sources CryptonightR_JIT_stub.c)
+else()
+  list(APPEND crypto_jit_sources CryptonightR_JIT.c)
+  if(ARCH_ID STREQUAL "i386" OR ARCH_ID STREQUAL "x86_64" OR ARCH_ID STREQUAL "x86-64" OR ARCH_ID STREQUAL "amd64")
+    list(APPEND crypto_jit_sources CryptonightR_template.S)
+  endif()
 endif()
+
+set(crypto_cpp_sources
+  crypto.cpp
+  generators.cpp
+  pow_cryptonight.cpp
+  pow_randomx.cpp
+  pow_registry.cpp)
 
 include_directories(${RANDOMX_INCLUDE})
 
@@ -64,12 +81,27 @@ set(crypto_headers)
 
 monero_find_all_headers(crypto_private_headers "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# Split into small OBJECT libraries.  On MSVC this avoids an ICE in the PDB
+# type server (CloseTypeServerPDB); on other compilers it's harmless.
 monero_private_headers(cncrypto
   ${crypto_private_headers})
-monero_add_library(cncrypto
-  ${crypto_sources}
-  ${crypto_headers}
-  ${crypto_private_headers})
+
+set(_cncrypto_obj_targets)
+foreach(_group hash ops slowhash rx jit cpp)
+  set(_target obj_cncrypto_${_group})
+  add_library(${_target} OBJECT
+    ${crypto_${_group}_sources} ${crypto_headers} ${crypto_private_headers})
+  target_compile_definitions(${_target}
+    PRIVATE $<TARGET_PROPERTY:cncrypto,INTERFACE_COMPILE_DEFINITIONS>)
+  if(MSVC)
+    target_compile_options(${_target} PRIVATE /MP1)
+  endif()
+  list(APPEND _cncrypto_obj_targets $<TARGET_OBJECTS:${_target}>)
+endforeach()
+
+add_library(cncrypto ${_cncrypto_obj_targets})
+set_property(TARGET cncrypto PROPERTY FOLDER "libs")
+
 target_link_libraries(cncrypto
   PUBLIC
     epee

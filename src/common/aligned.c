@@ -1,3 +1,4 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
 // Copyright (c) 2017-2022, The Monero Project
 // 
 // All rights reserved.
@@ -28,7 +29,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#if !defined(_MSC_VER)
 #include <unistd.h>
+#endif
 #include <stdint.h>
 #include <string.h>
 #include "aligned.h"

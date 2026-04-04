@@ -85,7 +85,7 @@ namespace tools
       else
         throw std::runtime_error("Invalid UTF-8");
 
-      cp = t(cp);
+      cp = static_cast<uint32_t>(t(cp));
       if (cp <= 0x7f)
         bytes = 1;
       else if (cp <= 0x7ff)

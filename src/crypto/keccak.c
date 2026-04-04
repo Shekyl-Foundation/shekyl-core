@@ -4,7 +4,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#if !defined(_MSC_VER)
 #include <unistd.h>
+#endif
 #include "int-util.h"
 #include "hash-ops.h"
 #include "keccak.h"

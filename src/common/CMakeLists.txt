@@ -67,6 +67,10 @@ monero_add_library(common
   ${common_headers}
   ${common_private_headers}
   DEPENDS generate_translations_header)
+if(UNBOUND_AVAILABLE)
+  target_compile_definitions(obj_common PRIVATE HAVE_DNS_UNBOUND=1)
+endif()
+
 target_link_libraries(common
   PUBLIC
     cncrypto

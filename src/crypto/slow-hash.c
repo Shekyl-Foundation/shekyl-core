@@ -1,3 +1,4 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
 // Copyright (c) 2014-2022, The Monero Project
 //
 // All rights reserved.
@@ -33,7 +34,9 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#if !defined(_MSC_VER)
 #include <unistd.h>
+#endif
 
 #include "int-util.h"
 #include "hash-ops.h"
@@ -95,7 +98,7 @@ static inline int use_v4_jit(void)
 #endif
 }
 
-#if defined(__x86_64__) || defined(__aarch64__)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__)
 static inline int force_software_aes(void)
 {
   static int use = -1;
@@ -676,10 +679,10 @@ STATIC INLINE void aes_pseudo_round(const uint8_t *in, uint8_t *out,
  */
 
 STATIC INLINE void aes_pseudo_round_xor(const uint8_t *in, uint8_t *out,
-                                        const uint8_t *expandedKey, const uint8_t *xor, int nblocks)
+                                        const uint8_t *expandedKey, const uint8_t *xor_pad, int nblocks)
 {
     __m128i *k = R128(expandedKey);
-    __m128i *x = R128(xor);
+    __m128i *x = R128(xor_pad);
     __m128i d;
     int i;
 
@@ -1245,10 +1248,10 @@ STATIC INLINE void aes_pseudo_round(const uint8_t *in, uint8_t *out, const uint8
 	}
 }
 
-STATIC INLINE void aes_pseudo_round_xor(const uint8_t *in, uint8_t *out, const uint8_t *expandedKey, const uint8_t *xor, int nblocks)
+STATIC INLINE void aes_pseudo_round_xor(const uint8_t *in, uint8_t *out, const uint8_t *expandedKey, const uint8_t *xor_pad, int nblocks)
 {
 	const uint8x16_t *k = (const uint8x16_t *)expandedKey;
-	const uint8x16_t *x = (const uint8x16_t *)xor;
+	const uint8x16_t *x = (const uint8x16_t *)xor_pad;
 	int i;
 
 	for (i=0; i<nblocks; i++)

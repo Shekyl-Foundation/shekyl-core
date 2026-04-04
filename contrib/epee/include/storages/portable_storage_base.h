@@ -118,14 +118,14 @@ namespace epee
         return (t_entry_type*)&(*(m_it++));//fuckoff
       }
 
-      t_entry_type& insert_first_val(t_entry_type&& v)
+      t_entry_type& insert_first_val(t_entry_type v)
       {
         m_array.clear();
         m_it = m_array.end();
         return insert_next_value(std::move(v));
       }
 
-      t_entry_type& insert_next_value(t_entry_type&& v)
+      t_entry_type& insert_next_value(t_entry_type v)
       {
         m_array.push_back(std::move(v));
         return m_array.back();
