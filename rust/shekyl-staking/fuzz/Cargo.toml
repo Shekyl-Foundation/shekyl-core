@@ -1,0 +1,22 @@
+[package]
+name = "shekyl-staking-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+shekyl-staking = { path = ".." }
+shekyl-economics = { path = "../../shekyl-economics" }
+
+[[bin]]
+name = "fuzz_claim_reward"
+path = "fuzz_targets/fuzz_claim_reward.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

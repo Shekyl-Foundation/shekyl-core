@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### ✨ Added
+
+- **Comprehensive staking test suite.** New test coverage across C++ and Rust:
+  - `tests/unit_tests/staking.cpp`: 20+ GTest unit tests covering
+    `txin_stake_claim` and `txout_to_staked_key` serialization round-trips,
+    reward integer math (including `mul128`/`div128_64` vs `double` divergence
+    at large values), helper function coverage (`get_inputs_money_amount`,
+    `check_inputs_overflow`, `check_inputs_types_supported`,
+    `get_output_staking_info`, `set_staked_tx_out`), stake weight/tier FFI
+    validation, and variant type handling.
+  - `tests/core_tests/staking.cpp` + `staking.h`: 18 chaingen core tests
+    covering staking lifecycle (stake output creation), invalid claim
+    rejection (inverted range, oversized range, future height, wrong
+    watermark, wrong amount, non-staked output, output not in tree), lock
+    period enforcement (invalid tier, wrong lock_until, zero lock), rollback
+    correctness (pool balance, watermark), txpool handling, sorted-input
+    enforcement, and multi-tier staking.
+  - `rust/shekyl-staking/src/tiers.rs`: 10 edge-case tests including
+    exhaustive invalid tier ID rejection, ordering invariants for yield
+    multiplier and lock blocks, contiguous ID verification, and positive
+    parameter assertions.
+  - `rust/shekyl-staking/fuzz/fuzz_targets/fuzz_claim_reward.rs`: cargo-fuzz
+    target that generates random accrual records and verifies reward
+    computation invariants (no overflow, reward <= pool, weight monotonicity,
+    cumulative bounds).
+
+### 🐛 Fixed
+
+- **RPC estimate_claim_reward floating-point precision bug.** The
+  `on_estimate_claim_reward` RPC handler used `double`-precision arithmetic
+  for reward estimation, which diverges from the consensus `mul128`/`div128_64`
+  path when `total_weighted_stake > 2^53`. Fixed to use identical 128-bit
+  integer math, ensuring wallet reward estimates always match consensus.
+
 ### 🐛 Fixed
 
 - **FCMP++ wallet precompute metadata and input consistency checks.**

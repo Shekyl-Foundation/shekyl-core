@@ -33,6 +33,7 @@
 #include "common/util.h"
 #include "common/command_line.h"
 #include "tx_pool.h"
+#include "staking.h"
 #include "transaction_tests.h"
 
 #include <boost/regex.hpp>
@@ -219,6 +220,26 @@ int main(int argc, char* argv[])
     // GENERATE_AND_PLAY(gen_bpp_tx_invalid_clsag_type);
 
     GENERATE_AND_PLAY(gen_block_low_coinbase);
+
+    // Staking tests
+    GENERATE_AND_PLAY(gen_staking_lifecycle);
+    GENERATE_AND_PLAY(gen_claim_bad_range_inverted);
+    GENERATE_AND_PLAY(gen_claim_bad_range_too_large);
+    GENERATE_AND_PLAY(gen_claim_future_height);
+    GENERATE_AND_PLAY(gen_claim_wrong_watermark);
+    GENERATE_AND_PLAY(gen_claim_wrong_amount);
+    GENERATE_AND_PLAY(gen_claim_on_non_staked_output);
+    GENERATE_AND_PLAY(gen_claim_output_not_in_tree);
+    GENERATE_AND_PLAY(gen_claim_exceeds_pool);
+    GENERATE_AND_PLAY(gen_claim_spent_key_image);
+    GENERATE_AND_PLAY(gen_staked_output_invalid_tier);
+    GENERATE_AND_PLAY(gen_staked_output_invalid_lock_until);
+    GENERATE_AND_PLAY(gen_staked_output_zero_lock);
+    GENERATE_AND_PLAY(gen_claim_rollback_restores_pool);
+    GENERATE_AND_PLAY(gen_claim_rollback_restores_watermark);
+    GENERATE_AND_PLAY(gen_claim_mempool_key_image);
+    GENERATE_AND_PLAY(gen_claim_sorted_inputs);
+    GENERATE_AND_PLAY(gen_stake_all_tiers);
 
     el::Level level = (failed_tests.empty() ? el::Level::Info : el::Level::Error);
     if (!list_tests)

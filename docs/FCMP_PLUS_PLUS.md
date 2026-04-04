@@ -1028,6 +1028,11 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Txpool `txin_stake_claim` key-image handling (6 functions) | **Done** | `tx_pool.cpp` |
 | `get_inputs_money_amount` / `check_inputs_overflow` stake-claim support | **Done** | `cryptonote_format_utils.cpp` |
 | `remove_transaction_keyimages` no-early-return fix | **Done** | `tx_pool.cpp` |
+| RPC `estimate_claim_reward` integer math fix | **Done** | `core_rpc_server.cpp` |
+| Staking unit tests (GTest) | **Done** | `tests/unit_tests/staking.cpp` |
+| Staking core tests (chaingen) | **Done** | `tests/core_tests/staking.cpp` + `staking.h` |
+| Staking tier edge-case tests (Rust) | **Done** | `rust/shekyl-staking/src/tiers.rs` |
+| Staking reward fuzz target | **Done** | `rust/shekyl-staking/fuzz/fuzz_targets/fuzz_claim_reward.rs` |
 
 ---
 
@@ -1035,7 +1040,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 
 ### Fuzz Targets
 
-Six `cargo-fuzz` targets exercise the critical parsing and crypto boundaries:
+Seven `cargo-fuzz` targets exercise the critical parsing, crypto, and staking boundaries:
 
 | Target | Crate | What it tests |
 |--------|-------|---------------|
@@ -1044,6 +1049,7 @@ Six `cargo-fuzz` targets exercise the critical parsing and crypto boundaries:
 | `fuzz_block_header_tree_root` | `shekyl-fcmp` | Mismatched `curve_tree_root` between prove and verify |
 | `fuzz_bech32m_address_decode` | `shekyl-crypto-pq` | Random strings through Bech32m decoder, wrong HRPs, bad checksums |
 | `fuzz_kem_decapsulate` | `shekyl-crypto-pq` | Corrupted ML-KEM ciphertexts, wrong-length keys and ciphertexts |
+| `fuzz_claim_reward` | `shekyl-staking` | Random accrual records; reward overflow, monotonicity, and bound invariants |
 | `fuzz_tx_deserialize_fcmp_type7` | C++ unit tests | RCTTypeFcmpPlusPlusPqc serialization boundary testing |
 
 Run any target:
@@ -1051,6 +1057,7 @@ Run any target:
 ```bash
 cd rust/shekyl-fcmp/fuzz && cargo +nightly fuzz run fuzz_fcmp_proof_deserialize -- -runs=10000000
 cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_bech32m_address_decode -- -runs=10000000
+cd rust/shekyl-staking/fuzz && cargo +nightly fuzz run fuzz_claim_reward -- -runs=10000000
 ```
 
 ### Rust Unit Tests
@@ -1064,6 +1071,40 @@ between `hash_pqc_public_key` and `PqcLeafScalar::from_pqc_public_key`.
 ```bash
 cd rust && cargo test --workspace
 ```
+
+### Staking Tests
+
+#### C++ Unit Tests (`tests/unit_tests/staking.cpp`)
+
+- `txin_stake_claim` and `txout_to_staked_key` binary serialization round-trips (boundary values, all tiers)
+- Reward integer math: `mul128`/`div128_64` vs `double`-precision divergence at large `total_weighted_stake`
+- Cumulative reward over a multi-block accrual range
+- Dust floor-division edge cases (reward < 1 atomic unit)
+- `get_output_staking_info` for staked and non-staked outputs
+- `get_inputs_money_amount` with mixed `txin_to_key` + `txin_stake_claim`
+- `check_inputs_overflow` with large claim amounts
+- `check_inputs_types_supported` acceptance and rejection
+- Stake weight/yield multiplier tier ordering via FFI
+- `set_staked_tx_out` construction and variant type checks
+
+#### C++ Core Tests (`tests/core_tests/staking.cpp`)
+
+18 chaingen replay tests covering:
+
+- **Lifecycle**: staked output creation with `construct_staked_tx` helper
+- **Invalid claims**: inverted range, oversized range (>10000), future height, wrong watermark, wrong amount, non-staked output, output not in tree
+- **Lock enforcement**: invalid tier (3), wrong `lock_until`, zero `lock_until`
+- **Rollback**: pool balance and watermark restoration via callbacks
+- **Txpool**: mempool key-image tracking
+- **Adversarial**: sorted-input enforcement, all-tiers staking
+
+#### Rust Tests (`rust/shekyl-staking/src/tiers.rs`)
+
+10 edge-case tests: exhaustive invalid tier ID rejection (3..255), ordering invariants, positive parameter assertions, contiguous ID verification.
+
+#### Rust Fuzz (`rust/shekyl-staking/fuzz/`)
+
+`fuzz_claim_reward`: generates random accrual records and stake parameters, verifies no overflow, reward ≤ pool, weight monotonicity, and cumulative bounds.
 
 ### C++ Unit Tests
 
