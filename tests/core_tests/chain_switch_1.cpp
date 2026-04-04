@@ -56,7 +56,7 @@ static uint64_t lookup_acc_outs_rct(const account_keys& acc, const transaction& 
         crypto::derivation_to_scalar(derivation, i, scalar);
         rct::ecdhTuple ecdh_info = tx.rct_signatures.ecdhInfo[i];
         rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar),
-          tx.rct_signatures.type == rct::RCTTypeBulletproofPlus);
+          tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc);
         money += rct::h2d(ecdh_info.amount);
       }
     } else {

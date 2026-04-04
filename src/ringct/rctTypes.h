@@ -248,7 +248,10 @@ namespace rct {
         BEGIN_SERIALIZE_OBJECT()
           FIELD(type)
           FIELD(message)
-          FIELD(pseudoOuts)
+          if (type != RCTTypeFcmpPlusPlusPqc)
+          {
+            FIELD(pseudoOuts)
+          }
           FIELD(ecdhInfo)
           FIELD(outPk)
           VARINT_FIELD(txnFee)

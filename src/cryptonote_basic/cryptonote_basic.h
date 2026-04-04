@@ -217,7 +217,11 @@ namespace cryptonote
       FIELD(scheme_id)
       FIELD(flags)
       FIELD(hybrid_public_key)
+      if (hybrid_public_key.size() > config::PQC_MAX_PUBLIC_KEY_BLOB)
+        return false;
       FIELD(hybrid_signature)
+      if (hybrid_signature.size() > config::PQC_MAX_SIGNATURE_BLOB)
+        return false;
     END_SERIALIZE()
   };
 

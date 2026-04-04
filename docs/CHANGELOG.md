@@ -2,7 +2,63 @@
 
 ## Unreleased
 
+### 🔄 Changed
+
+- **Unified coinbase transaction version to v3.**
+  `construct_miner_tx` and `build_genesis_coinbase_from_destinations` now emit
+  `tx.version = 3`, matching regular FCMP++ transactions.  All `miner_tx &&
+  tx.version == 2` checks have been widened to `>= 2` across `blockchain_db`,
+  `blockchain`, `wallet2`, and test infrastructure.  The `pqc_auths`
+  serialization gate (`!txin_gen`) already excluded coinbase, so v3 coinbase
+  serializes identically to v2 minus the version byte.
+
 ### 🐛 Fixed
+
+- **Fixed CI build failure from removed legacy RCT types in test files.**
+  Stripped all references to removed `rct::Bulletproof`, `rct::RCTConfig`,
+  `rct::RangeProofType`, `rct::RCTTypeBulletproofPlus`, `rct::clsag`,
+  `rct::proveRctCLSAGSimple`/`verRctCLSAGSimple`, and `rct::genRctSimple`
+  from: `chaingen.h`/`.cpp`, `bulletproof_plus.cpp`/`.h`, `chain_switch_1.cpp`,
+  `wallet_tools.h`/`.cpp`, `bulletproofs.cpp` (unit), `ringct.cpp` (unit),
+  `serialization.cpp` (unit), `ver_rct_non_semantics_simple_cached.cpp`,
+  `json_serialization.cpp`, `fuzz/bulletproof.cpp`, and all performance test
+  headers.  Removed legacy-only test cases; updated shared test helpers to drop
+  `RangeProofType`/`bp_version` parameters.
+
+### 🔒 Security
+
+- **HIGH: Bound all inputs' H(pqc_pk) hashes into PQC signed payload.**
+  `get_transaction_signed_payload` now appends `H(pqc_pk_0) || ... || H(pqc_pk_{N-1})`
+  after the per-input header blob, preventing key-substitution attacks where an
+  attacker replaces one input's PQC key without invalidating other signatures.
+
+- **LOW: Added deserialization size bounds for `pqc_authentication` blobs.**
+  `hybrid_public_key` and `hybrid_signature` vectors are now rejected during
+  deserialization if they exceed `PQC_MAX_PUBLIC_KEY_BLOB` or
+  `PQC_MAX_SIGNATURE_BLOB`, preventing memory-exhaustion attacks via
+  oversized PQC fields.
+
+### 🐛 Fixed
+
+- **HIGH: Fixed `pop_block()` off-by-one for staked-output curve tree removal.**
+  The height used for staked-output eligibility checking was captured *after*
+  `remove_block()`, using the post-pop height instead of the removed block's
+  height.  This caused a mismatch with `add_block()`'s logic: outputs added at
+  the exact lock boundary were inserted during add but not removed during pop,
+  leaving orphaned leaves in the curve tree.
+
+- **HIGH: Fixed `pseudoOuts` serialization mismatch in generic `rctSigBase`.**
+  The generic `BEGIN_SERIALIZE_OBJECT()` path in `rctSigBase` unconditionally
+  included `pseudoOuts`, even for `RCTTypeFcmpPlusPlusPqc` where pseudo-outs
+  live in the prunable section.  Now gated with
+  `if (type != RCTTypeFcmpPlusPlusPqc)` to match the custom serializer.
+
+- **MEDIUM: `get_curve_tree_path` RPC now fails on missing layer hashes.**
+  Previously, a failed `get_curve_tree_layer_hash()` silently inserted zeros
+  into the proof path, potentially generating invalid proofs from inconsistent
+  DB state.  Now returns `CORE_RPC_ERROR_CODE_INTERNAL_ERROR`.
+
+
 
 - **CRITICAL: Fixed incorrect existing_child in internal layer hash propagation**
   (`grow_curve_tree`).  When updating an existing child chunk's hash, the
@@ -33,6 +89,22 @@
 
 ### 🔄 Changed
 
+- **Consensus: `curve_trees_tree_depth` validation now accepts `<= current`.**
+  The referenceBlock's tree may have fewer layers than the current tip (depth
+  is monotonically non-decreasing).  The strict `!=` check was replaced with a
+  range check `(0, current_depth]`, and the FCMP++ proof verifier provides the
+  authoritative depth validation.
+
+- **Consensus: Removed ring-based validation path from `check_tx_inputs`.**
+  Shekyl starts at genesis with FCMP++; the legacy ring-signature per-input
+  validation is unreachable dead code.  The `else` branch now immediately
+  rejects non-FCMP++ transactions with a clear error message.
+
+- **Coinbase KEM: Added warning when miner address lacks PQC public key.**
+  If a miner's address has no PQC key at the FCMP++ hard fork, a warning is
+  logged noting that the output will have `H(pqc_pk) = 0` in the curve tree —
+  a distinguishable pattern.
+
 - **RPC: Replaced hardcoded chunk widths with FFI calls.**
   `get_curve_tree_path` now calls `shekyl_curve_tree_selene_chunk_width()` and
   `shekyl_curve_tree_helios_chunk_width()` instead of using static constants.
@@ -54,6 +126,11 @@
 
 ### 📚 Documentation
 
+- Documented `verRctNonSemanticsSimple` stub status: the FCMP++ membership
+  proof is verified in the main consensus path (`check_tx_inputs`), not in the
+  verification-caching path.  Added TODO for Phase 5 unification.
+- ~~Documented coinbase `tx.version = 2` rationale~~ — superseded: coinbase
+  is now version 3, unified with regular transactions.
 - Documented LMDB post-delete cursor contract (`MDB_GET_CURRENT` after
   `mdb_cursor_del` returns the next item) in pruning and GC loops.
 - Added `ct_layer_chunk_key` bit-layout comment explaining the 8-bit layer /

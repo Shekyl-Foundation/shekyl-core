@@ -240,9 +240,9 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
   // we need the index
   for (uint64_t i = 0; i < tx.vout.size(); ++i)
   {
-    // miner v2 txes have their coinbase output in one single out to save space,
-    // and we store them as rct outputs with an identity mask
-    if (miner_tx && tx.version == 2)
+    // Miner coinbase txes have their output stored as rct (amount=0) with an
+    // identity-mask commitment so they share the same output index space.
+    if (miner_tx && tx.version >= 2)
     {
       cryptonote::tx_out vout = tx.vout[i];
       rct::key commitment = rct::zeroCommit(vout.amount);
@@ -287,7 +287,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   uint64_t num_rct_outs = 0;
   blobdata miner_bd = tx_to_blob(blk.miner_tx);
   add_transaction(blk_hash, std::make_pair(blk.miner_tx, blobdata_ref(miner_bd)));
-  if (blk.miner_tx.version == 2)
+  if (blk.miner_tx.version >= 2)
     num_rct_outs += blk.miner_tx.vout.size();
   int tx_i = 0;
   crypto::hash tx_hash = crypto::null_hash;
@@ -343,7 +343,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
         else
           continue;
         rct::key commitment;
-        if (is_miner && tx.version == 2)
+        if (is_miner && tx.version >= 2)
           commitment = rct::zeroCommit(vout.amount);
         else if (tx.version > 1 && i < tx.rct_signatures.outPk.size())
           commitment = tx.rct_signatures.outPk[i].mask;
@@ -403,10 +403,14 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
 {
   blk = get_top_block();
 
+  // Capture the height of the block being removed BEFORE remove_block()
+  // decrements the chain height, so staked-output eligibility checks use the
+  // same height that add_block() used when the outputs were inserted.
+  const uint64_t removed_block_height = height();
   remove_block();
 
   uint64_t curve_tree_outputs_to_remove = 0;
-  const uint64_t block_height = height();
+  const uint64_t block_height = removed_block_height;
   auto count_tree_outputs = [&](const transaction& tx, bool is_miner) {
     for (uint64_t i = 0; i < tx.vout.size(); ++i)
     {
@@ -424,7 +428,7 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
       else
         continue;
 
-      if (is_miner && tx.version == 2)
+      if (is_miner && tx.version >= 2)
         { /* miner coinbase -- always has valid commitment */ }
       else if (tx.version > 1 && i < tx.rct_signatures.outPk.size())
         { /* regular tx -- has outPk commitment */ }

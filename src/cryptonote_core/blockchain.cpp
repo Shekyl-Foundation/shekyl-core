@@ -1330,13 +1330,8 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   LOG_PRINT_L3("Blockchain::" << __func__);
   CHECK_AND_ASSERT_MES(b.miner_tx.vin.size() == 1, false, "coinbase transaction in the block has no inputs");
   CHECK_AND_ASSERT_MES(std::holds_alternative<txin_gen>(b.miner_tx.vin[0]), false, "coinbase transaction in the block has the wrong type");
-  CHECK_AND_ASSERT_MES(b.miner_tx.version > 1, false, "Invalid coinbase transaction version");
-
-  // for v2 txes (ringct), we only accept empty rct signatures for miner transactions,
-  if (b.miner_tx.version >= 2)
-  {
-    CHECK_AND_ASSERT_MES(b.miner_tx.rct_signatures.type == rct::RCTTypeNull, false, "RingCT signatures not allowed in coinbase transactions");
-  }
+  CHECK_AND_ASSERT_MES(b.miner_tx.version >= 2, false, "Invalid coinbase transaction version: " << b.miner_tx.version);
+  CHECK_AND_ASSERT_MES(b.miner_tx.rct_signatures.type == rct::RCTTypeNull, false, "RingCT signatures not allowed in coinbase transactions");
 
   if(std::get<txin_gen>(b.miner_tx.vin[0]).height != height)
   {
@@ -3370,57 +3365,11 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   }
   else
   {
-    // ─── Ring-based per-input validation ─────────────────────────────────
-    for (const auto& txin : tx.vin)
-    {
-      if (std::holds_alternative<txin_stake_claim>(txin))
-      {
-        const txin_stake_claim& claim = std::get<txin_stake_claim>(txin);
-        if (have_tx_keyimg_as_spent(claim.k_image))
-        {
-          MERROR_VER("Claim key image already spent: " << epee::string_tools::pod_to_hex(claim.k_image));
-          tvc.m_double_spend = true;
-          return false;
-        }
-
-        if (!check_stake_claim_input(claim, m_db->height()))
-        {
-          MERROR_VER("Invalid stake claim input");
-          tvc.m_verifivation_failed = true;
-          return false;
-        }
-
-        ++sig_index;
-        continue;
-      }
-
-      CHECK_AND_ASSERT_MES(std::holds_alternative<txin_to_key>(txin), false, "wrong type id in tx input at Blockchain::check_tx_inputs");
-      const txin_to_key& in_to_key = std::get<txin_to_key>(txin);
-
-      CHECK_AND_ASSERT_MES(in_to_key.key_offsets.size(), false, "empty in_to_key.key_offsets in transaction with id " << get_transaction_hash(tx));
-
-      if(have_tx_keyimg_as_spent(in_to_key.k_image))
-      {
-        MERROR_VER("Key image already spent in blockchain: " << epee::string_tools::pod_to_hex(in_to_key.k_image));
-        tvc.m_double_spend = true;
-        return false;
-      }
-
-      if (!check_tx_input(tx.version, in_to_key, tx_prefix_hash, std::vector<crypto::signature>(), tx.rct_signatures, pubkeys[sig_index], pmax_used_block_height, hf_version))
-      {
-        MERROR_VER("Failed to check ring signature for tx " << get_transaction_hash(tx) << "  vin key with k_image: " << in_to_key.k_image << "  sig_index: " << sig_index);
-        if (pmax_used_block_height)
-        {
-          MERROR_VER("  *pmax_used_block_height: " << *pmax_used_block_height);
-        }
-
-        return false;
-      }
-
-      sig_index++;
-    }
-    CHECK_AND_ASSERT_MES(*pmax_used_block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE <= m_db->height(),
-        false, "Transaction spends at least one output which is too young");
+    // Shekyl starts at genesis with FCMP++; ring-based transactions are
+    // never valid.  Reject anything that reaches this branch.
+    MERROR_VER("Non-FCMP++ transaction rejected: ring-based inputs are not supported from genesis");
+    tvc.m_verifivation_failed = true;
+    return false;
   }
 
   static constexpr const std::uint8_t RCT_CACHE_TYPE = rct::RCTTypeFcmpPlusPlusPqc;
@@ -3490,12 +3439,18 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       memcpy(tree_root.data(), &ref_hdr.curve_tree_root, 32);
 
       // ── Step 3: Validate curve_trees_tree_depth ───────────────────────
-      const uint8_t expected_depth = m_db->get_curve_tree_depth();
-      if (rv.p.curve_trees_tree_depth != expected_depth)
+      // The tx was constructed against the tree at referenceBlock, which
+      // may have fewer layers than the current tip (the tree is append-only
+      // and depth is monotonically non-decreasing).  Accept any depth up
+      // to the current depth.  A wrong depth will still cause the FCMP++
+      // proof verification to fail (the proof encodes the depth), so this
+      // is a quick-reject pre-screen, not the sole guard.
+      const uint8_t current_depth = m_db->get_curve_tree_depth();
+      if (rv.p.curve_trees_tree_depth == 0 || rv.p.curve_trees_tree_depth > current_depth)
       {
         MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
           << " curve_trees_tree_depth " << (int)rv.p.curve_trees_tree_depth
-          << " does not match expected " << (int)expected_depth);
+          << " out of range (current depth " << (int)current_depth << ")");
         tvc.m_verifivation_failed = true;
         return false;
       }

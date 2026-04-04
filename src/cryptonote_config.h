@@ -275,6 +275,13 @@ namespace config
   const unsigned char HASH_KEY_MM_SLOT = 'm';
   // PQC Multisig (scheme_id = 2)
   const uint32_t MAX_MULTISIG_PARTICIPANTS{7};
+  // Max serialized PQC blob sizes for deserialization bounds checking.
+  // Ed25519(32) + ML-DSA-65(1952) + 12 header = 1996 per participant.
+  constexpr size_t PQC_HYBRID_SINGLE_KEY_LEN = 1996;
+  constexpr size_t PQC_MAX_PUBLIC_KEY_BLOB = 2 + MAX_MULTISIG_PARTICIPANTS * PQC_HYBRID_SINGLE_KEY_LEN;
+  // Ed25519(64) + ML-DSA-65(3309) + 12 header = 3385 per participant.
+  constexpr size_t PQC_HYBRID_SINGLE_SIG_LEN = 3385;
+  constexpr size_t PQC_MAX_SIGNATURE_BLOB = 2 + MAX_MULTISIG_PARTICIPANTS * PQC_HYBRID_SINGLE_SIG_LEN;
 
   namespace testnet
   {

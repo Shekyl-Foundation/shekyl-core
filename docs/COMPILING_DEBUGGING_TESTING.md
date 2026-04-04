@@ -160,7 +160,7 @@ build/tests/core_tests/core_tests --generate_and_play_test_data --filter="gen_ch
 
 Shekyl's test suite is adapted for **v3-from-genesis**: all user transactions
 are version 3 with mandatory PQC authentication (hybrid Ed25519 + ML-DSA-65).
-Coinbase transactions remain version 2. Key differences from upstream Monero:
+Coinbase transactions also use version 3 (unified with regular txs). Key differences from upstream Monero:
 
 - `FAKECHAIN` tests inject `--fixed-difficulty=1`
 - Transaction construction helpers produce v3 with `use_view_tags=true`

@@ -488,7 +488,7 @@ bool init_output_indices(map_output_idx_t& outs, std::map<uint64_t, std::vector<
                 oi.is_coin_base = is_miner;
 
                 if (std::holds_alternative<txout_to_key>(out.target) || std::holds_alternative<txout_to_tagged_key>(out.target)) {
-                    uint64_t amount_key = (is_miner && tx.version == 2) ? 0 : out.amount;
+                    uint64_t amount_key = (is_miner && tx.version >= 2) ? 0 : out.amount;
                     outs[amount_key].push_back(oi);
                     size_t tx_global_idx = outs[amount_key].size() - 1;
                     outs[amount_key][tx_global_idx].idx = tx_global_idx;
@@ -505,8 +505,7 @@ bool init_output_indices(map_output_idx_t& outs, std::map<uint64_t, std::vector<
                                 crypto::secret_key scalar;
                                 crypto::derivation_to_scalar(derivation, j, scalar);
                                 rct::ecdhTuple ecdh_info = tx.rct_signatures.ecdhInfo[j];
-                                rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar),
-                                    tx.rct_signatures.type == rct::RCTTypeBulletproofPlus);
+                                rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar), true);
                                 outs[amount_key][tx_global_idx].amount = rct::h2d(ecdh_info.amount);
                             }
                         }
@@ -639,8 +638,7 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
                     continue;
 
                 rct::ecdhTuple ecdh_info = src_tx.rct_signatures.ecdhInfo[oi.out_no];
-                rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar),
-                    src_tx.rct_signatures.type == rct::RCTTypeBulletproofPlus);
+                rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar), true);
 
                 ts.amount = rct::h2d(ecdh_info.amount);
                 ts.mask = ecdh_info.mask;
@@ -732,7 +730,7 @@ void block_tracker::process(const block* blk, const transaction * tx, size_t i)
       continue;
     }
 
-    const uint64_t rct_amount = tx->version == 2 ? 0 : out.amount;
+    const uint64_t rct_amount = tx->version >= 2 ? 0 : out.amount;
     const output_hasher hid = std::make_pair(tx->hash, j);
     auto it = find_out(hid);
     if (it != m_map_outs.end()){
@@ -740,7 +738,7 @@ void block_tracker::process(const block* blk, const transaction * tx, size_t i)
     }
 
     output_index oi(out.target, out.amount, std::get<txin_gen>(blk->miner_tx.vin.front()).height, i, j, blk, tx);
-    oi.set_rct(tx->version == 2);
+    oi.set_rct(tx->version >= 2);
     oi.idx = m_outs[rct_amount].size();
     oi.unlock_time = tx->unlock_time;
     oi.is_coin_base = tx->vin.size() == 1 && std::holds_alternative<cryptonote::txin_gen>(tx->vin.back());
@@ -869,14 +867,6 @@ std::string dump_data(const cryptonote::transaction &tx)
     } else {
       ss << " ?, ";
     }
-  }
-
-  ss << ", mixring: \n";
-  for (const auto & row : tx.rct_signatures.mixRing){
-    for(auto cur : row){
-      ss << "    (" << dump_keys(cur.dest.bytes) << ", " << dump_keys(cur.mask.bytes) << ")\n ";
-    }
-    ss << "; ";
   }
 
   return ss.str();
@@ -1083,10 +1073,7 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
 
   tx.vout.push_back(out);
 
-  if (hf_version >= HF_VERSION_DYNAMIC_FEE)
-    tx.version = 2;
-  else
-    tx.version = 1;
+  tx.version = 2;
   tx.unlock_time = height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
 
   return true;
@@ -1094,18 +1081,18 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
 
 bool construct_tx_to_key(const std::vector<test_event_entry>& events, cryptonote::transaction& tx, const cryptonote::block& blk_head,
                          const cryptonote::account_base& from, const var_addr_t& to, uint64_t amount,
-                         uint64_t fee, size_t nmix, bool rct, rct::RangeProofType range_proof_type, int bp_version)
+                         uint64_t fee, size_t nmix, bool rct)
 {
   vector<tx_source_entry> sources;
   vector<tx_destination_entry> destinations;
   fill_tx_sources_and_destinations(events, blk_head, from, get_address(to), amount, fee, nmix, sources, destinations);
 
-  return construct_tx_rct(from.get_keys(), sources, destinations, from.get_keys().m_account_address, std::vector<uint8_t>(), tx, rct, range_proof_type, bp_version);
+  return construct_tx_rct(from.get_keys(), sources, destinations, from.get_keys().m_account_address, std::vector<uint8_t>(), tx, rct);
 }
 
 bool construct_tx_to_key(const std::vector<test_event_entry>& events, cryptonote::transaction& tx, const cryptonote::block& blk_head,
                          const cryptonote::account_base& from, std::vector<cryptonote::tx_destination_entry> destinations,
-                         uint64_t fee, size_t nmix, bool rct, rct::RangeProofType range_proof_type, int bp_version)
+                         uint64_t fee, size_t nmix, bool rct)
 {
   vector<tx_source_entry> sources;
   vector<tx_destination_entry> destinations_all;
@@ -1116,39 +1103,38 @@ bool construct_tx_to_key(const std::vector<test_event_entry>& events, cryptonote
 
   fill_tx_destinations(from, destinations, fee, sources, destinations_all, false);
 
-  return construct_tx_rct(from.get_keys(), sources, destinations_all, get_address(from), std::vector<uint8_t>(), tx, rct, range_proof_type, bp_version);
+  return construct_tx_rct(from.get_keys(), sources, destinations_all, get_address(from), std::vector<uint8_t>(), tx, rct);
 }
 
 bool construct_tx_to_key(cryptonote::transaction& tx,
                          const cryptonote::account_base& from, const var_addr_t& to, uint64_t amount,
                          std::vector<cryptonote::tx_source_entry> &sources,
-                         uint64_t fee, bool rct, rct::RangeProofType range_proof_type, int bp_version)
+                         uint64_t fee, bool rct)
 {
   vector<tx_destination_entry> destinations;
   fill_tx_destinations(from, get_address(to), amount, fee, sources, destinations, rct);
-  return construct_tx_rct(from.get_keys(), sources, destinations, get_address(from), std::vector<uint8_t>(), tx, rct, range_proof_type, bp_version);
+  return construct_tx_rct(from.get_keys(), sources, destinations, get_address(from), std::vector<uint8_t>(), tx, rct);
 }
 
 bool construct_tx_to_key(cryptonote::transaction& tx,
                          const cryptonote::account_base& from,
                          const std::vector<cryptonote::tx_destination_entry>& destinations,
                          std::vector<cryptonote::tx_source_entry> &sources,
-                         uint64_t fee, bool rct, rct::RangeProofType range_proof_type, int bp_version)
+                         uint64_t fee, bool rct)
 {
   vector<tx_destination_entry> all_destinations;
   fill_tx_destinations(from, destinations, fee, sources, all_destinations, rct);
-  return construct_tx_rct(from.get_keys(), sources, all_destinations, get_address(from), std::vector<uint8_t>(), tx, rct, range_proof_type, bp_version);
+  return construct_tx_rct(from.get_keys(), sources, all_destinations, get_address(from), std::vector<uint8_t>(), tx, rct);
 }
 
-bool construct_tx_rct(const cryptonote::account_keys& sender_account_keys, std::vector<cryptonote::tx_source_entry>& sources, const std::vector<cryptonote::tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, std::vector<uint8_t> extra, cryptonote::transaction& tx, bool rct, rct::RangeProofType range_proof_type, int bp_version, uint8_t hf_version)
+bool construct_tx_rct(const cryptonote::account_keys& sender_account_keys, std::vector<cryptonote::tx_source_entry>& sources, const std::vector<cryptonote::tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, std::vector<uint8_t> extra, cryptonote::transaction& tx, bool rct, uint8_t hf_version)
 {
   std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
   subaddresses[sender_account_keys.m_account_address.m_spend_public_key] = {0, 0};
   crypto::secret_key tx_key;
   std::vector<crypto::secret_key> additional_tx_keys;
   std::vector<tx_destination_entry> destinations_copy = destinations;
-  rct::RCTConfig rct_config = {range_proof_type, bp_version};
-  return construct_tx_and_get_tx_key(sender_account_keys, subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, additional_tx_keys, rct, rct_config, true, hf_version);
+  return construct_tx_and_get_tx_key(sender_account_keys, subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, additional_tx_keys, rct, true, hf_version);
 }
 
 transaction construct_tx_with_fee(std::vector<test_event_entry>& events, const block& blk_head,

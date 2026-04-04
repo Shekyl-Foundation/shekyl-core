@@ -81,6 +81,7 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
     rct_blob = ss.str();
   }
 
+  // Serialize the current input's PQC header (auth_version, scheme_id, flags, key)
   std::string pqc_header_blob;
   {
     std::ostringstream ss;
@@ -97,7 +98,23 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
     pqc_header_blob = ss.str();
   }
 
-  payload_out = prefix_blob + rct_blob + pqc_header_blob;
+  // Bind ALL inputs' PQC public key hashes into the signed payload.
+  // Without this, an attacker could substitute one input's PQC key without
+  // invalidating other inputs' signatures.
+  std::string all_pqc_key_hashes;
+  {
+    for (size_t i = 0; i < tx.pqc_auths.size(); ++i)
+    {
+      const auto& a = tx.pqc_auths[i];
+      crypto::hash h;
+      cryptonote::get_blob_hash(
+        std::string(reinterpret_cast<const char*>(a.hybrid_public_key.data()),
+                    a.hybrid_public_key.size()), h);
+      all_pqc_key_hashes.append(reinterpret_cast<const char*>(h.data), sizeof(h.data));
+    }
+  }
+
+  payload_out = prefix_blob + rct_blob + pqc_header_blob + all_pqc_key_hashes;
   return true;
 }
 

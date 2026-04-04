@@ -13,7 +13,10 @@ namespace cryptonote
 {
 
 /// Build the signed payload for v3 PQC verification for input \p input_index.
-/// Payload = serialize(prefix) || serialize(rct_signing_body) || serialize(pqc_auth_header for that input).
+/// Payload = serialize(prefix) || serialize(rct_signing_body)
+///         || serialize(pqc_auth_header_i) || H(pqc_pk_0) || ... || H(pqc_pk_{N-1})
+/// The concatenation of all inputs' PQC public-key hashes binds each signature
+/// to the complete set of authorized keys, preventing key-substitution attacks.
 /// Returns false if tx is not v3, index out of range, or missing pqc_auths entry.
 bool get_transaction_signed_payload(const transaction& tx, size_t input_index, std::string& payload_out);
 

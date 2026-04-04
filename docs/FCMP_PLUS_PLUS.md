@@ -324,8 +324,14 @@ signed_payload_i = cn_fast_hash(
     serialize(TransactionPrefixV3)
     || serialize(RctSigningBody)
     || serialize(PqcAuthHeader_i)
+    || H(pqc_pk_0) || H(pqc_pk_1) || ... || H(pqc_pk_{N-1})
 )
 ```
+
+The final concatenation of **all** inputs' PQC public-key hashes binds each
+signature to the complete set of authorized keys, preventing key-substitution
+attacks where an attacker replaces one input's PQC key without invalidating
+other inputs' signatures.
 
 ### Coverage Analysis
 
@@ -334,7 +340,7 @@ signed_payload_i = cn_fast_hash(
 | `referenceBlock` | `RctSigningBody` (in `rctSigBase`) | Anchors the tree snapshot |
 | All key images | `TransactionPrefixV3` (in `vin`) | Prevents key image substitution |
 | `fcmp_pp_proof` | `prunable_hash` → `tx_hash` → miner commitment | Proof immutability |
-| `H(pqc_pk)` values | `PqcAuthHeader_i` (contains `hybrid_public_key`) | PQC key binding |
+| `H(pqc_pk)` values | `PqcAuthHeader_i` + all-inputs hash tail | Full PQC key binding |
 
 ### PqcAuthHeader Layout (Per-Input)
 
@@ -804,7 +810,7 @@ after their lock period expires.
 | referenceBlock unknown | Block hash not in DB | `tvc.m_verifivation_failed` |
 | referenceBlock too old | `ref_height < tip - MAX_AGE` | `tvc.m_verifivation_failed` |
 | referenceBlock too recent | `ref_height > tip - MIN_AGE` | `tvc.m_verifivation_failed` |
-| tree depth mismatch | `curve_trees_tree_depth` wrong | `tvc.m_verifivation_failed` |
+| tree depth out of range | `curve_trees_tree_depth` 0 or > current | `tvc.m_verifivation_failed` |
 | key_offsets non-empty | Ring members present in FCMP++ tx | `tvc.m_verifivation_failed` |
 | key image not y-normalized | Sign bit set on key image | `tvc.m_verifivation_failed` |
 | FCMP++ proof invalid | `shekyl_fcmp_verify` returns false | `tvc.m_verifivation_failed` |
@@ -861,6 +867,11 @@ after their lock period expires.
 | Deferred staked-output insertion | **TODO** | `pending_staked_leaves` DB table |
 | Per-input `pqc_auths` field | **Done** | `cryptonote_basic.h` |
 | Per-input PQC signature verification | **Done** | `tx_pqc_verify.cpp` |
+| PQC signed payload binds all inputs' H(pqc_pk) | **Done** | `tx_pqc_verify.cpp` |
+| `pqc_authentication` deserialization size bounds | **Done** | `cryptonote_basic.h` |
+| `pseudoOuts` gated in generic `rctSigBase` serializer | **Done** | `rctTypes.h` |
+| `pop_block()` height symmetry fix | **Done** | `blockchain_db.cpp` |
+| Ring-based validation path removed (genesis-native) | **Done** | `blockchain.cpp` |
 | `tx_extra` KEM blob tag `0x06` (N × 1088 bytes) | **Done** | `tx_extra.h`, `cryptonote_format_utils.cpp` |
 | Coinbase KEM self-encapsulation | **Done** | `cryptonote_tx_utils.cpp` (`construct_miner_tx`) |
 | Wallet transfer flow FCMP++ integration | **Done** | `wallet2.cpp` |

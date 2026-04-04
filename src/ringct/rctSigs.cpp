@@ -227,7 +227,14 @@ namespace rct {
 
         CHECK_AND_ASSERT_MES(!rv.p.fcmp_pp_proof.empty(), false, "Empty FCMP++ proof");
 
-        // TODO: call shekyl_fcmp_verify via FFI once the verifier is wired up
+        // STUB: The full shekyl_fcmp_verify FFI call is wired in
+        // check_tx_inputs (blockchain.cpp), which directly calls the
+        // Rust verifier with all necessary context (key images, pseudo-outs,
+        // tree root, H(pqc_pk) hashes).  This function is retained for
+        // the verification-caching path; the actual FCMP++ membership proof
+        // is verified in the main consensus path, not here.
+        // TODO(Phase 5): Wire shekyl_fcmp_verify here too for the cached path,
+        // or remove this function entirely once caching is unified.
         return true;
       }
       catch (const std::exception &e)

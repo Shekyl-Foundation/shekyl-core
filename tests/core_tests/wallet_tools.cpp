@@ -253,30 +253,29 @@ cryptonote::account_public_address get_address(const tools::wallet2* inp)
 bool construct_tx_to_key(cryptonote::transaction& tx,
                          tools::wallet2 * sender_wallet, const var_addr_t& to, uint64_t amount,
                          std::vector<cryptonote::tx_source_entry> &sources,
-                         uint64_t fee, bool rct, rct::RangeProofType range_proof_type, int bp_version)
+                         uint64_t fee, bool rct)
 {
   vector<tx_destination_entry> destinations;
   fill_tx_destinations(sender_wallet->get_account(), get_address(to), amount, fee, sources, destinations, rct);
-  return construct_tx_rct(sender_wallet, sources, destinations, get_address(sender_wallet), std::vector<uint8_t>(), tx, rct, range_proof_type, bp_version);
+  return construct_tx_rct(sender_wallet, sources, destinations, get_address(sender_wallet), std::vector<uint8_t>(), tx, rct);
 }
 
 bool construct_tx_to_key(cryptonote::transaction& tx,
                          tools::wallet2 * sender_wallet,
                          const std::vector<cryptonote::tx_destination_entry>& destinations,
                          std::vector<cryptonote::tx_source_entry> &sources,
-                         uint64_t fee, bool rct, rct::RangeProofType range_proof_type, int bp_version)
+                         uint64_t fee, bool rct)
 {
   vector<tx_destination_entry> all_destinations;
   fill_tx_destinations(sender_wallet->get_account(), destinations, fee, sources, all_destinations, rct);
-  return construct_tx_rct(sender_wallet, sources, all_destinations, get_address(sender_wallet), std::vector<uint8_t>(), tx, rct, range_proof_type, bp_version);
+  return construct_tx_rct(sender_wallet, sources, all_destinations, get_address(sender_wallet), std::vector<uint8_t>(), tx, rct);
 }
 
-bool construct_tx_rct(tools::wallet2 * sender_wallet, std::vector<cryptonote::tx_source_entry>& sources, const std::vector<cryptonote::tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, std::vector<uint8_t> extra, cryptonote::transaction& tx, bool rct, rct::RangeProofType range_proof_type, int bp_version, uint8_t hf_version)
+bool construct_tx_rct(tools::wallet2 * sender_wallet, std::vector<cryptonote::tx_source_entry>& sources, const std::vector<cryptonote::tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, std::vector<uint8_t> extra, cryptonote::transaction& tx, bool rct, uint8_t hf_version)
 {
   subaddresses_t & subaddresses = wallet_accessor_test::get_subaddresses(sender_wallet);
   crypto::secret_key tx_key;
   std::vector<crypto::secret_key> additional_tx_keys;
   std::vector<tx_destination_entry> destinations_copy = destinations;
-  rct::RCTConfig rct_config = {range_proof_type, bp_version};
-  return construct_tx_and_get_tx_key(sender_wallet->get_account().get_keys(), subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, additional_tx_keys, rct, rct_config, true, hf_version);
+  return construct_tx_and_get_tx_key(sender_wallet->get_account().get_keys(), subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, additional_tx_keys, rct, true, hf_version);
 }

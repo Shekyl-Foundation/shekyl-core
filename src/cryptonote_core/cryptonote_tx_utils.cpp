@@ -157,6 +157,12 @@ namespace cryptonote
 
     CHECK_AND_ASSERT_MES(summary_amounts == block_reward, false, "Failed to construct miner tx, summary_amounts = " << summary_amounts << " not equal block_reward = " << block_reward);
 
+    if (hard_fork_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC && miner_address.m_pqc_public_key.empty())
+    {
+      MWARNING("Miner address lacks PQC public key at HF " << (int)hard_fork_version
+        << "; coinbase outputs will have H(pqc_pk) = 0 in the curve tree leaf, "
+        "creating a distinguishable pattern. All genesis addresses must include PQC keys.");
+    }
     if (hard_fork_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC && !miner_address.m_pqc_public_key.empty())
     {
       static constexpr size_t X25519_PK_BYTES = 32;
@@ -200,7 +206,7 @@ namespace cryptonote
         return false;
     }
 
-    tx.version = 2;
+    tx.version = 3;
 
     //lock
     tx.unlock_time = height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
@@ -658,7 +664,7 @@ namespace cryptonote
         "build_genesis_coinbase_from_destinations: destinations list is empty");
 
     transaction tx{};
-    tx.version = 2;
+    tx.version = 3;
     tx.unlock_time = CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
 
     txin_gen in;

@@ -3790,7 +3790,13 @@ namespace cryptonote
         {
           uint64_t sibling_chunk = parent_chunk * width + c;
           uint8_t hash[32] = {};
-          db.get_curve_tree_layer_hash(layer - 1, sibling_chunk, hash);
+          if (!db.get_curve_tree_layer_hash(layer - 1, sibling_chunk, hash))
+          {
+            error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+            error_resp.message = "Internal error: missing layer hash at layer "
+              + std::to_string(layer - 1) + " chunk " + std::to_string(sibling_chunk);
+            return false;
+          }
           path_bytes.insert(path_bytes.end(), hash, hash + 32);
         }
 
