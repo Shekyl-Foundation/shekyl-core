@@ -1,5 +1,4 @@
 // Copyright (c) 2025-2026, The Shekyl Foundation
-//
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without modification, are
@@ -26,50 +25,25 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//! Handlers for binary endpoints (MAP_URI_AUTO_BIN2 family).
+#pragma once
 
-use crate::server::AppState;
-use axum::body::Bytes;
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use std::sync::Arc;
+#include <cstdint>
+#include <string>
+#include <vector>
 
-async fn dispatch_bin(
-    state: Arc<AppState>,
-    uri: &'static str,
-    body: Bytes,
-) -> impl IntoResponse {
-    let core = state.core.clone();
-    let body_vec = body.to_vec();
-    let result =
-        tokio::task::spawn_blocking(move || core.bin_endpoint(uri, &body_vec)).await;
+#include "span.h"
 
-    match result {
-        Ok(Ok(data)) => (
-            StatusCode::OK,
-            [("content-type", "application/octet-stream")],
-            data,
-        )
-            .into_response(),
-        Ok(Err(-1)) => (StatusCode::BAD_REQUEST, "Bad request").into_response(),
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, "FFI dispatch failed").into_response(),
-    }
-}
+namespace epee
+{
+namespace levin
+{
+  constexpr std::size_t COMPRESSION_MIN_PAYLOAD = 256;
+  constexpr std::size_t DECOMPRESSED_MAX_SIZE = 128 * 1024 * 1024; // 128 MiB safety cap
+  constexpr int ZSTD_COMPRESSION_LEVEL = 1; // fast mode: best speed, still ~2:1 on structured data
 
-macro_rules! bin_handler {
-    ($fn_name:ident, $uri:expr) => {
-        pub async fn $fn_name(
-            State(state): State<Arc<AppState>>,
-            body: Bytes,
-        ) -> impl IntoResponse {
-            dispatch_bin(state, $uri, body).await
-        }
-    };
-}
+  bool compress_payload(epee::span<const uint8_t> input, std::string& output);
+  bool decompress_payload(epee::span<const uint8_t> input, std::string& output);
+  bool is_compression_available() noexcept;
 
-bin_handler!(get_blocks, "/get_blocks.bin");
-bin_handler!(get_blocks_by_height, "/get_blocks_by_height.bin");
-bin_handler!(get_hashes, "/get_hashes.bin");
-bin_handler!(get_o_indexes, "/get_o_indexes.bin");
-bin_handler!(get_output_distribution_bin, "/get_output_distribution.bin");
+} // levin
+} // epee

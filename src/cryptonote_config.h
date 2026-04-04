@@ -156,7 +156,8 @@
 #define P2P_IDLE_CONNECTION_KILL_INTERVAL               (5*60) //5 minutes
 
 #define P2P_SUPPORT_FLAG_FLUFFY_BLOCKS                  0x01
-#define P2P_SUPPORT_FLAGS                               P2P_SUPPORT_FLAG_FLUFFY_BLOCKS
+#define P2P_SUPPORT_FLAG_ZSTD_COMPRESSION               0x02
+#define P2P_SUPPORT_FLAGS                               (P2P_SUPPORT_FLAG_FLUFFY_BLOCKS | P2P_SUPPORT_FLAG_ZSTD_COMPRESSION)
 
 #define RPC_IP_FAILS_BEFORE_BLOCK                       3
 
@@ -169,32 +170,24 @@
 
 #define THREAD_STACK_SIZE                       5 * 1024 * 1024
 
-// Rebooted chain: all legacy features active from genesis (HF 1).
-// Constants kept as named symbols for code clarity; all resolve to 1.
+// Rebooted chain: all features active from genesis (HF 1).
+// Only constants still referenced in production code are kept.
 #define HF_VERSION_DYNAMIC_FEE                  1
-#define HF_VERSION_MIN_MIXIN_4                  1
-#define HF_VERSION_MIN_MIXIN_6                  1
 #define HF_VERSION_CRYPTONIGHT_VARIANT_1        1
-#define HF_VERSION_MIN_MIXIN_10                 1
-#define HF_VERSION_MIN_MIXIN_15                 1
-#define HF_VERSION_ENFORCE_RCT                  1
 #define HF_VERSION_PER_BYTE_FEE                 1
 #define HF_VERSION_SMALLER_BP                   1
 #define HF_VERSION_LONG_TERM_BLOCK_WEIGHT       1
-#define HF_VERSION_MIN_2_OUTPUTS                1
-#define HF_VERSION_MIN_V2_COINBASE_TX           1
-#define HF_VERSION_SAME_MIXIN                   1
-#define HF_VERSION_REJECT_SIGS_IN_COINBASE      1
-#define HF_VERSION_ENFORCE_MIN_AGE              1
-#define HF_VERSION_EFFECTIVE_SHORT_TERM_MEDIAN_IN_PENALTY 1
 #define HF_VERSION_EXACT_COINBASE               1
-#define HF_VERSION_CLSAG                        1
-#define HF_VERSION_DETERMINISTIC_UNLOCK_TIME    1
 #define HF_VERSION_BULLETPROOF_PLUS             1
 #define HF_VERSION_VIEW_TAGS                    1
 #define HF_VERSION_2021_SCALING                 1
 #define HF_VERSION_SHEKYL_NG                    1  // Three-component economics: release rate, burn, staking
 #define HF_VERSION_FCMP_PLUS_PLUS_PQC           1  // FCMP++ full-chain membership proofs + per-output PQC keys
+
+// Legacy constants retained for test compilation (Phase 7 will remove the tests).
+// Not referenced in production code.
+#define HF_VERSION_CLSAG                        1
+#define HF_VERSION_MIN_V2_COINBASE_TX           1
 
 // FCMP++ consensus parameters
 //

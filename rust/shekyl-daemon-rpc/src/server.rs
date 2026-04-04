@@ -94,7 +94,6 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/get_info", get(json::get_info).post(json::get_info))
         .route("/getinfo", get(json::get_info).post(json::get_info))
         .route("/get_limit", get(json::get_limit).post(json::get_limit))
-        .route("/get_outs", get(json::get_outs).post(json::get_outs))
         // Binary endpoints (always available)
         .route("/get_blocks.bin", post(binary::get_blocks))
         .route("/getblocks.bin", post(binary::get_blocks))
@@ -106,7 +105,6 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/get_hashes.bin", post(binary::get_hashes))
         .route("/gethashes.bin", post(binary::get_hashes))
         .route("/get_o_indexes.bin", post(binary::get_o_indexes))
-        .route("/get_outs.bin", post(binary::get_outs_bin))
         .route(
             "/get_output_distribution.bin",
             post(binary::get_output_distribution_bin),

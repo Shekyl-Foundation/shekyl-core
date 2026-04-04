@@ -769,8 +769,14 @@ namespace cryptonote
     money = 0;
     for(const auto& in: tx.vin)
     {
-      CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
-      money += tokey_in.amount;
+      if (std::holds_alternative<txin_to_key>(in))
+        money += std::get<txin_to_key>(in).amount;
+      else if (std::holds_alternative<txin_stake_claim>(in))
+        money += std::get<txin_stake_claim>(in).amount;
+      else if (std::holds_alternative<txin_gen>(in))
+        continue;
+      else
+        return false;
     }
     return true;
   }
@@ -823,10 +829,18 @@ namespace cryptonote
     uint64_t money = 0;
     for(const auto& in: tx.vin)
     {
-      CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
-      if(money > tokey_in.amount + money)
+      uint64_t amount = 0;
+      if (std::holds_alternative<txin_to_key>(in))
+        amount = std::get<txin_to_key>(in).amount;
+      else if (std::holds_alternative<txin_stake_claim>(in))
+        amount = std::get<txin_stake_claim>(in).amount;
+      else if (std::holds_alternative<txin_gen>(in))
+        continue;
+      else
         return false;
-      money += tokey_in.amount;
+      if(money > amount + money)
+        return false;
+      money += amount;
     }
     return true;
   }

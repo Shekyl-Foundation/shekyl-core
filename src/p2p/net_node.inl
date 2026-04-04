@@ -57,6 +57,8 @@
 #include "p2p_protocol_defs.h"
 #include "crypto/crypto.h"
 #include "storages/levin_abstract_invoke2.h"
+#include "net/levin_base.h"
+#include "cryptonote_config.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "net/parse.h"
 
@@ -2330,6 +2332,9 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::relay_notify_to_list(int command, epee::levin::message_writer data_buff, std::vector<std::pair<epee::net_utils::zone, boost::uuids::uuid>> connections)
   {
     epee::byte_slice message = data_buff.finalize_notify(command);
+    epee::byte_slice compressed = epee::levin::try_compress_message(message.clone());
+    const bool use_compressed = (compressed.size() < message.size());
+
     std::sort(connections.begin(), connections.end());
     auto zone = m_network_zones.begin();
     for(const auto& c_id: connections)
@@ -2347,7 +2352,10 @@ namespace nodetool
         ++zone;
       }
       if (zone->first == c_id.first)
-        zone->second.m_net_server.get_config_object().send(message.clone(), c_id.second);
+      {
+        const auto& msg = use_compressed ? compressed : message;
+        zone->second.m_net_server.get_config_object().send(msg.clone(), c_id.second);
+      }
     }
     return true;
   }
@@ -2421,7 +2429,9 @@ namespace nodetool
       return false;
 
     network_zone& zone = m_network_zones.at(context.m_remote_address.get_zone());
-    int res = zone.m_net_server.get_config_object().send(message.finalize_notify(command), context.m_connection_id);
+    epee::byte_slice msg = message.finalize_notify(command);
+    msg = epee::levin::try_compress_message(std::move(msg));
+    int res = zone.m_net_server.get_config_object().send(std::move(msg), context.m_connection_id);
     return res > 0;
   }
   //-----------------------------------------------------------------------------------

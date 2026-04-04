@@ -2161,22 +2161,6 @@ namespace hw {
         return true;
     }
 
-    // TODO: CLSAG device commands removed -- FCMP++ hardware wallet signing will replace them
-    bool device_ledger::clsag_prepare(const rct::key &p, const rct::key &z, rct::key &I, rct::key &D, const rct::key &H, rct::key &a, rct::key &aG, rct::key &aH) {
-        MERROR("CLSAG has been removed. FCMP++ hardware wallet support is not yet available.");
-        return false;
-    }
-
-    bool device_ledger::clsag_hash(const rct::keyV &data, rct::key &hash) {
-        MERROR("CLSAG has been removed. FCMP++ hardware wallet support is not yet available.");
-        return false;
-    }
-
-    bool device_ledger::clsag_sign(const rct::key &c, const rct::key &a, const rct::key &p, const rct::key &z, const rct::key &mu_P, const rct::key &mu_C, rct::key &s) {
-        MERROR("CLSAG has been removed. FCMP++ hardware wallet support is not yet available.");
-        return false;
-    }
-
     bool device_ledger::fcmp_prepare(const rct::key &tree_root, uint8_t tree_depth) {
         MERROR("FCMP++ hardware wallet support is not yet available. Use a software wallet.");
         return false;

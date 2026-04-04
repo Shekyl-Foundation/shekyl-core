@@ -209,7 +209,6 @@ const std::unordered_map<std::string, json_fn>& get_json_table() {
         DJSON("/get_info",                          on_get_info,                     COMMAND_RPC_GET_INFO),
         DJSON("/getinfo",                           on_get_info,                     COMMAND_RPC_GET_INFO),
         DJSON("/get_limit",                         on_get_limit,                    COMMAND_RPC_GET_LIMIT),
-        DJSON("/get_outs",                          on_get_outs,                     COMMAND_RPC_GET_OUTPUTS),
         // Restricted-only endpoints (Rust checks restriction before calling)
         DJSON("/start_mining",                      on_start_mining,                 COMMAND_RPC_START_MINING),
         DJSON("/stop_mining",                       on_stop_mining,                  COMMAND_RPC_STOP_MINING),
@@ -240,7 +239,6 @@ const std::unordered_map<std::string, bin_fn>& get_bin_table() {
         DBIN("/get_hashes.bin",            on_get_hashes,                  COMMAND_RPC_GET_HASHES_FAST),
         DBIN("/gethashes.bin",             on_get_hashes,                  COMMAND_RPC_GET_HASHES_FAST),
         DBIN("/get_o_indexes.bin",         on_get_indexes,                 COMMAND_RPC_GET_TX_GLOBAL_OUTPUTS_INDEXES),
-        DBIN("/get_outs.bin",              on_get_outs_bin,                COMMAND_RPC_GET_OUTPUTS_BIN),
         DBIN("/get_output_distribution.bin", on_get_output_distribution_bin, COMMAND_RPC_GET_OUTPUT_DISTRIBUTION),
     };
     return t;

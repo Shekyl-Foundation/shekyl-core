@@ -530,7 +530,20 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
     }
     else if (std::holds_alternative<txin_stake_claim>(tx_input))
     {
-      remove_spent_key(std::get<txin_stake_claim>(tx_input).k_image);
+      const auto& claim = std::get<txin_stake_claim>(tx_input);
+      remove_spent_key(claim.k_image);
+
+      // Restore the watermark to its pre-claim value.  claim.from_height
+      // is the old watermark (0 means this was the first claim for this
+      // staked output, so remove the watermark entirely).
+      if (claim.from_height == 0)
+        remove_staker_claim_watermark(claim.staked_output_index);
+      else
+        set_staker_claim_watermark(claim.staked_output_index, claim.from_height);
+
+      // Credit the claimed amount back into the staker reward pool.
+      uint64_t pool_balance = get_staker_pool_balance();
+      set_staker_pool_balance(pool_balance + claim.amount);
     }
   }
 

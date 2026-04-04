@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### 🐛 Fixed
+
+- **Stake-claim rollback completeness.** `BlockchainDB::remove_transaction`
+  now fully reverses `txin_stake_claim` state on reorg: watermark is restored
+  to its pre-claim value (or removed for first-time claims) and the claimed
+  amount is credited back into the staker reward pool. Previously only the
+  spent key was removed, leaving claim-progress accounting permanently
+  advanced after a reorg.
+
+- **Txpool key-image handling for stake claims.** All six txpool functions
+  that walk transaction inputs (`insert_key_images`,
+  `remove_transaction_keyimages`, `have_tx_keyimges_as_spent`,
+  `have_key_images`, `append_key_images`, `mark_double_spend`) now handle
+  `txin_stake_claim` inputs alongside `txin_to_key`. Previously they used
+  `CHECKED_GET_SPECIFIC_VARIANT(..., txin_to_key, ...)` which caused
+  immediate false-return on any stake-claim input, breaking mempool
+  bookkeeping for claim transactions.
+
+- **`remove_transaction_keyimages` no longer returns early on error.**
+  The function now continues removing remaining key images instead of
+  aborting at the first mismatch, eliminating the partial-cleanup semantics
+  noted by the long-standing FIXME.
+
+- **Core helper support for `txin_stake_claim`.** `get_inputs_money_amount`
+  and `check_inputs_overflow` now handle both `txin_to_key` and
+  `txin_stake_claim` input variants instead of failing on the latter. These
+  are called unconditionally for all transactions (via `check_money_overflow`),
+  so the old hard-cast to `txin_to_key` would reject any transaction
+  containing a stake claim.
+
 ### 🔒 Security
 
 - **Wallet KEM key management fix.** `generate_pqc_key_material()` now
@@ -47,6 +77,43 @@
 
 - **GUI wallet fee preview.** Send page shows an estimated transaction fee
   before submission, debounced as the user types.
+
+### 🗑️ Removed
+
+- **CLSAG device interface methods.** Removed `clsag_prepare`, `clsag_hash`,
+  and `clsag_sign` virtual methods from `device.hpp` and all implementations
+  (`device_default.cpp`, `device_ledger.cpp`). Shekyl never supported CLSAG;
+  the device interface now only exposes FCMP++ methods.
+
+- **`get_outs` / `get_outs.bin` RPC endpoints.** Removed the ring member
+  fetching endpoints from the C++ daemon (`core_rpc_server`), the FFI dispatch
+  tables (`core_rpc_ffi.cpp`), and the Rust daemon RPC (`shekyl-daemon-rpc`).
+  FCMP++ uses full-chain membership proofs; there is no decoy selection.
+
+- **Dead hard fork constants.** Removed `HF_VERSION_MIN_MIXIN_4/6/10/15`,
+  `HF_VERSION_SAME_MIXIN`, `HF_VERSION_ENFORCE_MIN_AGE`,
+  `HF_VERSION_EFFECTIVE_SHORT_TERM_MEDIAN_IN_PENALTY`,
+  `HF_VERSION_REJECT_SIGS_IN_COINBASE`, `HF_VERSION_ENFORCE_RCT`,
+  `HF_VERSION_DETERMINISTIC_UNLOCK_TIME` from `cryptonote_config.h`. These
+  were defined but never referenced in production code. `HF_VERSION_CLSAG`
+  and `HF_VERSION_MIN_V2_COINBASE_TX` are retained for test compilation
+  until Phase 7 rewrites the legacy tests.
+
+### ✨ Added
+
+- **Zstd compression for Levin P2P relay (Phase 6e).** P2P payloads above
+  256 bytes are transparently compressed with zstd (level 1) before relay.
+  A new `LEVIN_PACKET_COMPRESSED` flag (0x10) in the Levin header marks
+  compressed frames. Peers negotiate compression via
+  `P2P_SUPPORT_FLAG_ZSTD_COMPRESSION` (0x02) in the handshake support flags.
+  Reduces relay bandwidth by ~10-20% for FCMP++ transactions, especially
+  important for Tor/I2P connections. Compression is optional at compile time
+  (requires libzstd); decompression always succeeds if the flag is set.
+
+### 📚 Documentation
+
+- **Updated `DAEMON_RPC_RUST.md`.** Fixed stale references to `get_outs.bin`
+  and `get_curve_tree_root`; corrected endpoint counts and cutover test steps.
 
 ### 🐛 Fixed
 

@@ -83,7 +83,6 @@ json_handler!(get_transaction_pool_hashes, "/get_transaction_pool_hashes");
 json_handler!(get_transaction_pool_stats, "/get_transaction_pool_stats");
 json_handler!(get_info, "/get_info");
 json_handler!(get_limit, "/get_limit");
-json_handler!(get_outs, "/get_outs");
 
 // Restricted-only endpoints (restriction enforced at route registration)
 json_handler!(start_mining, "/start_mining");

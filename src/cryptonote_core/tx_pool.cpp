@@ -119,6 +119,17 @@ namespace cryptonote
       if (candidate < next_check.load(std::memory_order_relaxed))
         next_check = candidate;
     }
+
+    // Extract the key_image from a txin_v that is either txin_to_key or
+    // txin_stake_claim.  Returns nullptr for any other variant (txin_gen).
+    const crypto::key_image* get_key_image(const txin_v& in)
+    {
+      if (std::holds_alternative<txin_to_key>(in))
+        return &std::get<txin_to_key>(in).k_image;
+      if (std::holds_alternative<txin_stake_claim>(in))
+        return &std::get<txin_stake_claim>(in).k_image;
+      return nullptr;
+    }
   }
   //---------------------------------------------------------------------------------
   //---------------------------------------------------------------------------------
@@ -487,18 +498,17 @@ namespace cryptonote
   {
     for(const auto& in: tx.vin)
     {
-      CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, txin, false);
-      std::unordered_set<crypto::hash>& kei_image_set = m_spent_key_images[txin.k_image];
-
-      // Only allow multiple txes per key-image if kept-by-block. Only allow
-      // the same txid if going from local/stem->fluff.
+      const crypto::key_image* ki = get_key_image(in);
+      if (!ki)
+        continue;
+      std::unordered_set<crypto::hash>& kei_image_set = m_spent_key_images[*ki];
 
       if (tx_relay != relay_method::block)
       {
         const bool one_txid =
           (kei_image_set.empty() || (kei_image_set.size() == 1 && *(kei_image_set.cbegin()) == id));
         CHECK_AND_ASSERT_MES(one_txid, false, "internal error: tx_relay=" << unsigned(tx_relay)
-                                           << ", kei_image_set.size()=" << kei_image_set.size() << ENDL << "txin.k_image=" << txin.k_image << ENDL
+                                           << ", kei_image_set.size()=" << kei_image_set.size() << ENDL << "txin.k_image=" << *ki << ENDL
                                            << "tx_id=" << id);
       }
 
@@ -511,37 +521,48 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------------------------
-  //FIXME: Can return early before removal of all of the key images.
-  //       At the least, need to make sure that a false return here
-  //       is treated properly.  Should probably not return early, however.
   bool tx_memory_pool::remove_transaction_keyimages(const transaction_prefix& tx, const crypto::hash &actual_hash)
   {
     CRITICAL_REGION_LOCAL(m_transactions_lock);
     CRITICAL_REGION_LOCAL1(m_blockchain);
-    // ND: Speedup
+    bool ok = true;
     for(const txin_v& vi: tx.vin)
     {
-      CHECKED_GET_SPECIFIC_VARIANT(vi, const txin_to_key, txin, false);
-      auto it = m_spent_key_images.find(txin.k_image);
-      CHECK_AND_ASSERT_MES(it != m_spent_key_images.end(), false, "failed to find transaction input in key images. img=" << txin.k_image << ENDL
-                                    << "transaction id = " << actual_hash);
-      std::unordered_set<crypto::hash>& key_image_set =  it->second;
-      CHECK_AND_ASSERT_MES(key_image_set.size(), false, "empty key_image set, img=" << txin.k_image << ENDL
-        << "transaction id = " << actual_hash);
-
-      auto it_in_set = key_image_set.find(actual_hash);
-      CHECK_AND_ASSERT_MES(it_in_set != key_image_set.end(), false, "transaction id not found in key_image set, img=" << txin.k_image << ENDL
-        << "transaction id = " << actual_hash);
-      key_image_set.erase(it_in_set);
-      if(!key_image_set.size())
+      const crypto::key_image* ki = get_key_image(vi);
+      if (!ki)
+        continue;
+      auto it = m_spent_key_images.find(*ki);
+      if (it == m_spent_key_images.end())
       {
-        //it is now empty hash container for this key_image
+        MERROR("failed to find transaction input in key images. img=" << *ki << ENDL
+               << "transaction id = " << actual_hash);
+        ok = false;
+        continue;  // remove remaining key images instead of returning early
+      }
+      std::unordered_set<crypto::hash>& key_image_set = it->second;
+      if (key_image_set.empty())
+      {
+        MERROR("empty key_image set, img=" << *ki << ENDL
+               << "transaction id = " << actual_hash);
         m_spent_key_images.erase(it);
+        ok = false;
+        continue;
       }
 
+      auto it_in_set = key_image_set.find(actual_hash);
+      if (it_in_set == key_image_set.end())
+      {
+        MERROR("transaction id not found in key_image set, img=" << *ki << ENDL
+               << "transaction id = " << actual_hash);
+        ok = false;
+        continue;
+      }
+      key_image_set.erase(it_in_set);
+      if (key_image_set.empty())
+        m_spent_key_images.erase(it);
     }
     ++m_cookie;
-    return true;
+    return ok;
   }
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::take_tx(const crypto::hash &id, transaction &tx, cryptonote::blobdata &txblob, size_t& tx_weight, uint64_t& fee, bool &relayed, bool &do_not_relay, bool &double_spend_seen, bool &pruned, const bool suppress_missing_msgs)
@@ -1360,8 +1381,10 @@ namespace cryptonote
     CRITICAL_REGION_LOCAL1(m_blockchain);
     for(const auto& in: tx.vin)
     {
-      CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, true);//should never fail
-      if(have_tx_keyimg_as_spent(tokey_in.k_image, txid))
+      const crypto::key_image* ki = get_key_image(in);
+      if (!ki)
+        continue;
+      if(have_tx_keyimg_as_spent(*ki, txid))
          return true;
     }
     return false;
@@ -1490,10 +1513,12 @@ namespace cryptonote
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::have_key_images(const std::unordered_set<crypto::key_image>& k_images, const transaction_prefix& tx)
   {
-    for(size_t i = 0; i!= tx.vin.size(); i++)
+    for(size_t i = 0; i != tx.vin.size(); i++)
     {
-      CHECKED_GET_SPECIFIC_VARIANT(tx.vin[i], const txin_to_key, itk, false);
-      if(k_images.count(itk.k_image))
+      const crypto::key_image* ki = get_key_image(tx.vin[i]);
+      if (!ki)
+        continue;
+      if(k_images.count(*ki))
         return true;
     }
     return false;
@@ -1501,11 +1526,13 @@ namespace cryptonote
   //---------------------------------------------------------------------------------
   bool tx_memory_pool::append_key_images(std::unordered_set<crypto::key_image>& k_images, const transaction_prefix& tx)
   {
-    for(size_t i = 0; i!= tx.vin.size(); i++)
+    for(size_t i = 0; i != tx.vin.size(); i++)
     {
-      CHECKED_GET_SPECIFIC_VARIANT(tx.vin[i], const txin_to_key, itk, false);
-      auto i_res = k_images.insert(itk.k_image);
-      CHECK_AND_ASSERT_MES(i_res.second, false, "internal error: key images pool cache - inserted duplicate image in set: " << itk.k_image);
+      const crypto::key_image* ki = get_key_image(tx.vin[i]);
+      if (!ki)
+        continue;
+      auto i_res = k_images.insert(*ki);
+      CHECK_AND_ASSERT_MES(i_res.second, false, "internal error: key images pool cache - inserted duplicate image in set: " << *ki);
     }
     return true;
   }
@@ -1516,10 +1543,12 @@ namespace cryptonote
     CRITICAL_REGION_LOCAL1(m_blockchain);
     bool changed = false;
     LockedTXN lock(m_blockchain.get_db());
-    for(size_t i = 0; i!= tx.vin.size(); i++)
+    for(size_t i = 0; i != tx.vin.size(); i++)
     {
-      CHECKED_GET_SPECIFIC_VARIANT(tx.vin[i], const txin_to_key, itk, void());
-      const key_images_container::const_iterator it = m_spent_key_images.find(itk.k_image);
+      const crypto::key_image* ki = get_key_image(tx.vin[i]);
+      if (!ki)
+        continue;
+      const key_images_container::const_iterator it = m_spent_key_images.find(*ki);
       if (it != m_spent_key_images.end())
       {
         for (const crypto::hash &txid: it->second)
@@ -1528,12 +1557,11 @@ namespace cryptonote
           if (!m_blockchain.get_txpool_tx_meta(txid, meta))
           {
             MERROR("Failed to find tx meta in txpool");
-            // continue, not fatal
             continue;
           }
           if (!meta.double_spend_seen)
           {
-            MDEBUG("Marking " << txid << " as double spending " << itk.k_image);
+            MDEBUG("Marking " << txid << " as double spending " << *ki);
             meta.double_spend_seen = true;
             changed = true;
             try
@@ -1543,7 +1571,7 @@ namespace cryptonote
             catch (const std::exception &e)
             {
               MERROR("Failed to update tx meta: " << e.what());
-              // continue, not fatal
+              continue;
             }
           }
         }
