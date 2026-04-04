@@ -42,6 +42,7 @@
 #define TX_EXTRA_TAG_ADDITIONAL_PUBKEYS     0x04
 #define TX_EXTRA_TAG_PQC_OWNERSHIP          0x05
 #define TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT     0x06
+#define TX_EXTRA_TAG_PQC_LEAF_HASHES        0x07
 #define TX_EXTRA_MYSTERIOUS_MINERGATE_TAG   0xDE
 
 #define TX_EXTRA_NONCE_PAYMENT_ID           0x00
@@ -210,7 +211,18 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  typedef std::variant<tx_extra_padding, tx_extra_pub_key, tx_extra_nonce, tx_extra_merge_mining_tag, tx_extra_additional_pub_keys, tx_extra_mysterious_minergate, tx_extra_pqc_ownership, tx_extra_pqc_kem_ciphertext> tx_extra_field;
+  static constexpr size_t PQC_LEAF_HASH_BYTES = 32;
+
+  struct tx_extra_pqc_leaf_hashes
+  {
+    std::string blob;
+
+    BEGIN_SERIALIZE()
+      FIELD(blob)
+    END_SERIALIZE()
+  };
+
+  typedef std::variant<tx_extra_padding, tx_extra_pub_key, tx_extra_nonce, tx_extra_merge_mining_tag, tx_extra_additional_pub_keys, tx_extra_mysterious_minergate, tx_extra_pqc_ownership, tx_extra_pqc_kem_ciphertext, tx_extra_pqc_leaf_hashes> tx_extra_field;
 }
 
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_padding, TX_EXTRA_TAG_PADDING);
@@ -221,3 +233,4 @@ VARIANT_TAG(binary_archive, cryptonote::tx_extra_additional_pub_keys, TX_EXTRA_T
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_mysterious_minergate, TX_EXTRA_MYSTERIOUS_MINERGATE_TAG);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_ownership, TX_EXTRA_TAG_PQC_OWNERSHIP);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_kem_ciphertext, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT);
+VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_leaf_hashes, TX_EXTRA_TAG_PQC_LEAF_HASHES);

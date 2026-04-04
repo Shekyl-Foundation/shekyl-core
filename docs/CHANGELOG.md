@@ -2,16 +2,51 @@
 
 ## Unreleased
 
-### 📚 Documentation
+### 🔒 Security
 
-- **Specified claim reward output indistinguishability requirement (Phase 4).**
-  Claim reward outputs must use `RCTTypeFcmpPlusPlusPqc` with BP+ range
-  proofs, standard KEM derivation for per-output PQC keys, and include a
-  dummy change output. The current `create_claim_transaction()` uses
-  `RCTTypeNull` with plaintext amounts and no KEM derivation, which makes
-  reward outputs trivially distinguishable. Consensus must reject
-  `RCTTypeNull` for non-coinbase v3 txs, and wallet construction must be
-  reworked. Tracked as Phase 4 implementation items.
+- **Claim transaction indistinguishability (Phase 4 — CRITICAL).** Rewrote
+  `wallet2::create_claim_transaction()` to produce privacy-preserving claim
+  transactions that blend into the anonymity set:
+  - Uses `RCTTypeFcmpPlusPlusPqc` with Bulletproofs+ range proofs instead
+    of `RCTTypeNull` with plaintext amounts.
+  - Adds a dummy change output (amount = 0) to match the standard 2-output
+    transaction structure, preventing structural fingerprinting.
+  - Performs hybrid KEM derivation (X25519 + ML-KEM-768) via
+    `shekyl_fcmp_derive_pqc_keypair()` for per-output PQC keys instead of
+    reusing the wallet master PQC key.
+  - Embeds ML-KEM ciphertexts in `tx_extra` under tag `0x06` and
+    `H(pqc_pk)` leaf hashes under new tag `0x07`.
+  - Signs with per-output KEM-derived PQC keys, not the wallet-level key.
+  - Sets deterministic pseudo-outs (`zeroCommit(claim_amount)`) for each
+    stake claim input to satisfy the Bulletproofs+ balance check.
+
+- **Consensus rejects `RCTTypeNull` for non-coinbase v3 transactions.**
+  `check_tx_inputs` now enforces that only coinbase (`txin_gen`) may use
+  `RCTTypeNull`. All other v3 transactions (including stake claims) must
+  use `RCTTypeFcmpPlusPlusPqc` with confidential amounts. Claim
+  transactions are validated within the FCMP++ handler with their own
+  sub-path that verifies pseudo-out determinism, PQC ownership, and pool
+  balance while skipping the membership proof (which is not applicable to
+  `txin_stake_claim` inputs).
+
+### ✨ Added
+
+- **`TX_EXTRA_TAG_PQC_LEAF_HASHES` (`0x07`).** New `tx_extra` field
+  (`tx_extra_pqc_leaf_hashes`) stores per-output `H(pqc_pk)` values —
+  the 32-byte Blake2b-512 hashes of each output's derived ML-DSA-65
+  public key. Used by curve tree insertion to commit the correct PQC
+  ownership hash to each leaf instead of a zero placeholder.
+
+- **Curve tree leaves use actual `H(pqc_pk)` from `tx_extra`.** The
+  `collect_outputs` / `make_leaf` path in `blockchain_db.cpp` now extracts
+  `H(pqc_pk)` values from the `0x07` tag, replacing the zero placeholder
+  that was previously committed to the 4th leaf scalar. This enables the
+  PQC ownership cross-check for stake claim verification.
+
+- **Coinbase transactions emit `H(pqc_pk)` leaf hashes.** `construct_miner_tx`
+  now derives per-output PQC keypairs via KEM shared secrets and includes
+  their `H(pqc_pk)` values in the `0x07` `tx_extra` field alongside the
+  existing KEM ciphertexts in `0x06`.
 
 ### 🔒 Security
 

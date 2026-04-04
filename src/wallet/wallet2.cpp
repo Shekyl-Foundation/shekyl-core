@@ -91,6 +91,7 @@ using namespace epee;
 #include "common/notify.h"
 #include "common/perf_timer.h"
 #include "fcmp/rctSigs.h"
+#include "fcmp/bulletproofs_plus.h"
 #include "ringdb.h"
 #include "device/device_cold.hpp"
 #include "device_trezor/device_trezor.hpp"
@@ -10740,14 +10741,18 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
     "Claiming requires hardfork version " + std::to_string(HF_VERSION_SHEKYL_NG));
 
   const uint64_t current_height = get_blockchain_current_height();
+  const auto& keys = m_account.get_keys();
+  THROW_WALLET_EXCEPTION_IF(keys.m_account_address.m_pqc_public_key.empty(), error::wallet_internal_error,
+    "Cannot create v3 claim transaction: wallet has no PQC public key");
 
   cryptonote::transaction tx;
   tx.version = 3;
   tx.unlock_time = 0;
 
   uint64_t total_claimed = 0;
+  std::vector<size_t> ordered_indices(staked_indices);
 
-  for (size_t idx : staked_indices)
+  for (size_t idx : ordered_indices)
   {
     THROW_WALLET_EXCEPTION_IF(idx >= m_transfers.size(), error::wallet_internal_error, "Invalid transfer index");
     const auto& td = m_transfers[idx];
@@ -10770,83 +10775,284 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
     claim.from_height = from_h;
     claim.to_height = to_h;
 
-    crypto::generate_key_image(td.get_public_key(), m_account.get_keys().m_spend_secret_key, claim.k_image);
+    crypto::generate_key_image(td.get_public_key(), keys.m_spend_secret_key, claim.k_image);
 
     tx.vin.push_back(claim);
     total_claimed += reward;
   }
 
-  if (total_claimed > 0)
+  THROW_WALLET_EXCEPTION_IF(total_claimed == 0, error::wallet_internal_error, "Total claimable reward is zero");
+
+  // Sort inputs by key image (descending) for canonical ordering
   {
-    crypto::secret_key tx_key;
-    crypto::generate_random_bytes_thread_safe(sizeof(tx_key), (uint8_t*)&tx_key);
-    crypto::public_key txkey_pub;
-    crypto::secret_key_to_public_key(tx_key, txkey_pub);
-    cryptonote::add_tx_pub_key_to_extra(tx, txkey_pub);
+    std::vector<size_t> sort_order(tx.vin.size());
+    std::iota(sort_order.begin(), sort_order.end(), 0);
+    std::sort(sort_order.begin(), sort_order.end(), [&](size_t a, size_t b) {
+      const auto& ka = std::get<cryptonote::txin_stake_claim>(tx.vin[a]).k_image;
+      const auto& kb = std::get<cryptonote::txin_stake_claim>(tx.vin[b]).k_image;
+      return memcmp(&ka, &kb, sizeof(ka)) > 0;
+    });
+    std::vector<cryptonote::txin_v> sorted_vin(tx.vin.size());
+    std::vector<size_t> sorted_indices(ordered_indices.size());
+    for (size_t i = 0; i < sort_order.size(); ++i) {
+      sorted_vin[i] = tx.vin[sort_order[i]];
+      sorted_indices[i] = ordered_indices[sort_order[i]];
+    }
+    tx.vin = std::move(sorted_vin);
+    ordered_indices = std::move(sorted_indices);
+  }
 
-    cryptonote::tx_destination_entry de;
-    de.amount = total_claimed;
-    de.addr = get_address();
-    de.is_subaddress = false;
-    de.is_staking = false;
+  // ── Generate ephemeral tx key ──────────────────────────────────────
+  crypto::secret_key tx_key;
+  crypto::generate_random_bytes_thread_safe(sizeof(tx_key), (uint8_t*)&tx_key);
+  crypto::public_key txkey_pub;
+  crypto::secret_key_to_public_key(tx_key, txkey_pub);
+  cryptonote::add_tx_pub_key_to_extra(tx, txkey_pub);
 
+  // ── Two outputs: reward to self + dummy change (amount 0) ──────────
+  const auto& my_addr = keys.m_account_address;
+  const uint64_t outamounts[2] = {total_claimed, 0};
+
+  for (size_t oi = 0; oi < 2; ++oi)
+  {
     crypto::public_key out_eph_public_key;
     crypto::view_tag view_tag;
     crypto::key_derivation derivation;
-    crypto::generate_key_derivation(de.addr.m_view_public_key, tx_key, derivation);
-    crypto::derive_public_key(derivation, 0, de.addr.m_spend_public_key, out_eph_public_key);
-    crypto::derive_view_tag(derivation, 0, view_tag);
+    crypto::generate_key_derivation(my_addr.m_view_public_key, tx_key, derivation);
+    crypto::derive_public_key(derivation, oi, my_addr.m_spend_public_key, out_eph_public_key);
+    crypto::derive_view_tag(derivation, oi, view_tag);
 
     cryptonote::tx_out out;
-    cryptonote::set_tx_out(total_claimed, out_eph_public_key, true, view_tag, out);
+    cryptonote::set_tx_out(outamounts[oi], out_eph_public_key, true, view_tag, out);
     tx.vout.push_back(out);
   }
 
-  tx.rct_signatures.type = rct::RCTTypeNull;
-  tx.rct_signatures.txnFee = 0;
-  tx.rct_signatures.outPk.resize(tx.vout.size());
-  for (size_t i = 0; i < tx.vout.size(); ++i)
-    tx.rct_signatures.outPk[i].mask = rct::identity();
+  // ── KEM encapsulation for per-output PQC keys ─────────────────────
+  static constexpr size_t X25519_PK_BYTES = 32;
+  static constexpr size_t HYBRID_CT_HEADER = 32;
+  THROW_WALLET_EXCEPTION_IF(my_addr.m_pqc_public_key.size() <= X25519_PK_BYTES,
+    error::wallet_internal_error, "PQC public key too short for KEM encapsulation");
 
+  const uint8_t* pk_x25519 = reinterpret_cast<const uint8_t*>(&my_addr.m_view_public_key);
+  const uint8_t* pk_ml_kem = my_addr.m_pqc_public_key.data();
+  const size_t pk_ml_kem_len = my_addr.m_pqc_public_key.size();
+
+  cryptonote::tx_extra_pqc_kem_ciphertext kem_field;
+  kem_field.blob.reserve(2 * cryptonote::ML_KEM_768_CT_BYTES);
+
+  cryptonote::tx_extra_pqc_leaf_hashes leaf_hash_field;
+  leaf_hash_field.blob.reserve(2 * cryptonote::PQC_LEAF_HASH_BYTES);
+
+  rct::keyV amount_keys(2);
+
+  for (size_t oi = 0; oi < 2; ++oi)
   {
-    const auto& keys = m_account.get_keys();
-    THROW_WALLET_EXCEPTION_IF(keys.m_pqc_secret_key.empty(), error::wallet_internal_error,
-      "Cannot create v3 claim transaction: wallet has no PQC secret key");
-    THROW_WALLET_EXCEPTION_IF(keys.m_account_address.m_pqc_public_key.empty(), error::wallet_internal_error,
-      "Cannot create v3 claim transaction: wallet has no PQC public key");
+    ShekylBuffer ct_buf = {};
+    uint8_t combined_ss[64];
+    bool ok = shekyl_kem_encapsulate(pk_x25519, pk_ml_kem, pk_ml_kem_len, &ct_buf, combined_ss);
+    THROW_WALLET_EXCEPTION_IF(!ok || !ct_buf.ptr || ct_buf.len <= HYBRID_CT_HEADER,
+      error::wallet_internal_error, "KEM encapsulation failed for claim output " + std::to_string(oi));
+    THROW_WALLET_EXCEPTION_IF(ct_buf.len - HYBRID_CT_HEADER != cryptonote::ML_KEM_768_CT_BYTES,
+      error::wallet_internal_error, "Unexpected ML-KEM ciphertext size");
 
-    tx.pqc_auths.clear();
-    tx.pqc_auths.resize(tx.vin.size());
-    for (size_t i = 0; i < tx.vin.size(); ++i)
+    kem_field.blob.append(reinterpret_cast<const char*>(ct_buf.ptr + HYBRID_CT_HEADER),
+                          cryptonote::ML_KEM_768_CT_BYTES);
+    shekyl_buffer_free(ct_buf.ptr, ct_buf.len);
+
+    ShekylPqcKeypair derived = shekyl_fcmp_derive_pqc_keypair(combined_ss, static_cast<uint64_t>(oi));
+    memwipe(combined_ss, sizeof(combined_ss));
+    THROW_WALLET_EXCEPTION_IF(!derived.success || !derived.public_key.ptr,
+      error::wallet_internal_error, "Per-output PQC keypair derivation failed for claim output " + std::to_string(oi));
+
+    uint8_t h_pqc[32];
+    ok = shekyl_fcmp_pqc_leaf_hash(derived.public_key.ptr, derived.public_key.len, h_pqc);
+    shekyl_buffer_free(derived.public_key.ptr, derived.public_key.len);
+    shekyl_buffer_free(derived.secret_key.ptr, derived.secret_key.len);
+    THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error,
+      "PQC leaf hash failed for claim output " + std::to_string(oi));
+
+    leaf_hash_field.blob.append(reinterpret_cast<const char*>(h_pqc), cryptonote::PQC_LEAF_HASH_BYTES);
+
+    crypto::key_derivation ecdh_derivation;
+    crypto::generate_key_derivation(my_addr.m_view_public_key, tx_key, ecdh_derivation);
+    crypto::secret_key scalar;
+    crypto::derivation_to_scalar(ecdh_derivation, oi, scalar);
+    amount_keys[oi] = rct::sk2rct(scalar);
+  }
+
+  // Embed KEM ciphertext and leaf hashes in tx_extra
+  {
+    std::ostringstream oss;
+    binary_archive<true> oar(oss);
+    cryptonote::tx_extra_field variant_field = kem_field;
+    THROW_WALLET_EXCEPTION_IF(!::do_serialize(oar, variant_field),
+      error::wallet_internal_error, "Failed to serialize KEM ciphertexts for claim tx_extra");
+    std::string blob = oss.str();
+    tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+  }
+  {
+    std::ostringstream oss;
+    binary_archive<true> oar(oss);
+    cryptonote::tx_extra_field variant_field = leaf_hash_field;
+    THROW_WALLET_EXCEPTION_IF(!::do_serialize(oar, variant_field),
+      error::wallet_internal_error, "Failed to serialize PQC leaf hashes for claim tx_extra");
+    std::string blob = oss.str();
+    tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+  }
+  THROW_WALLET_EXCEPTION_IF(!cryptonote::sort_tx_extra(tx.extra, tx.extra),
+    error::wallet_internal_error, "Failed to sort claim tx_extra");
+
+  // Zero output amounts for RCT (amounts are hidden in commitments)
+  for (auto& out : tx.vout)
+    out.amount = 0;
+
+  // ── Build rctSig: BP+ range proofs + pseudo-outs ──────────────────
+  const size_t num_inputs = tx.vin.size();
+  rct::rctSig& rv = tx.rct_signatures;
+  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.txnFee = 0;
+  rv.outPk.resize(2);
+  rv.ecdhInfo.resize(2);
+  rv.p.pseudoOuts.resize(num_inputs);
+
+  // Output masks must sum to N (number of inputs) because each
+  // pseudo-out uses zeroCommit (mask = scalar 1).
+  rct::key mask0, mask1;
+  rct::skGen(mask0);
+  {
+    rct::key n_scalar = rct::d2h(static_cast<rct::xmr_amount>(num_inputs));
+    sc_sub(mask1.bytes, n_scalar.bytes, mask0.bytes);
+  }
+  rct::keyV out_masks = {mask0, mask1};
+
+  std::vector<uint64_t> out_amounts_vec = {total_claimed, 0};
+  rct::BulletproofPlus bp_proof = rct::bulletproof_plus_PROVE(out_amounts_vec, out_masks);
+  THROW_WALLET_EXCEPTION_IF(bp_proof.V.size() != 2, error::wallet_internal_error,
+    "BP+ proof V size mismatch");
+
+  rv.p.bulletproofs_plus.clear();
+  rv.p.bulletproofs_plus.push_back(bp_proof);
+
+  for (size_t i = 0; i < 2; ++i)
+  {
+    rv.outPk[i].mask = rct::scalarmult8(bp_proof.V[i]);
+
+    crypto::public_key out_pk;
+    THROW_WALLET_EXCEPTION_IF(!cryptonote::get_output_public_key(tx.vout[i], out_pk),
+      error::wallet_internal_error, "Cannot extract claim output public key");
+    rv.outPk[i].dest = rct::pk2rct(out_pk);
+  }
+
+  // ECDH-encode amounts for recipient recovery
+  for (size_t i = 0; i < 2; ++i)
+  {
+    rv.ecdhInfo[i].mask = rct::copy(out_masks[i]);
+    rv.ecdhInfo[i].amount = rct::d2h(out_amounts_vec[i]);
+    m_account.get_device().ecdhEncode(rv.ecdhInfo[i], amount_keys[i], true);
+  }
+
+  // Pseudo-outs: zeroCommit(claim_amount) binds each to its public amount
+  for (size_t i = 0; i < num_inputs; ++i)
+  {
+    const auto& claim = std::get<cryptonote::txin_stake_claim>(tx.vin[i]);
+    rv.p.pseudoOuts[i] = rct::zeroCommit(claim.amount);
+  }
+
+  // No FCMP++ membership proof for claims (inputs are by global index)
+  rv.p.fcmp_pp_proof.clear();
+  rv.p.curve_trees_tree_depth = 0;
+  rv.referenceBlock = crypto::hash{};
+
+  // ── PQC auth: sign with per-output KEM-derived keys ───────────────
+  tx.pqc_auths.clear();
+  tx.pqc_auths.resize(num_inputs);
+
+  for (size_t i = 0; i < num_inputs; ++i)
+  {
+    const size_t td_idx = ordered_indices[i];
+    const auto& td = m_transfers[td_idx];
+
+    std::vector<uint8_t> signing_sk;
+    std::vector<uint8_t> signing_pk;
+
+    if (!td.m_combined_shared_secret.empty() && td.m_combined_shared_secret.size() == 64)
     {
-      tx.pqc_auths[i].auth_version = 1;
-      tx.pqc_auths[i].scheme_id = 1;
-      tx.pqc_auths[i].flags = 0;
-      tx.pqc_auths[i].hybrid_public_key = keys.m_account_address.m_pqc_public_key;
-      tx.pqc_auths[i].hybrid_signature.clear();
+      ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
+          td.m_combined_shared_secret.data(),
+          static_cast<uint64_t>(td.m_internal_output_index));
+      THROW_WALLET_EXCEPTION_IF(!kp.success || !kp.public_key.ptr || !kp.secret_key.ptr,
+        error::wallet_internal_error, "Per-output PQC keypair rederivation failed for claim input " + std::to_string(i));
+
+      signing_pk.assign(kp.public_key.ptr, kp.public_key.ptr + kp.public_key.len);
+      signing_sk.assign(kp.secret_key.ptr, kp.secret_key.ptr + kp.secret_key.len);
+      shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
+      shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
+    }
+    else
+    {
+      THROW_WALLET_EXCEPTION_IF(keys.m_pqc_secret_key.empty(), error::wallet_internal_error,
+        "No combined shared secret and no wallet PQC secret key for claim input " + std::to_string(i));
+      signing_pk = keys.m_account_address.m_pqc_public_key;
+      signing_sk = keys.m_pqc_secret_key;
     }
 
-    for (size_t i = 0; i < tx.vin.size(); ++i)
+    tx.pqc_auths[i].auth_version = 1;
+    tx.pqc_auths[i].scheme_id = 1;
+    tx.pqc_auths[i].flags = 0;
+    tx.pqc_auths[i].hybrid_public_key = signing_pk;
+    tx.pqc_auths[i].hybrid_signature.clear();
+  }
+
+  // Sign all inputs after public keys are populated (payload includes all H(pqc_pk))
+  for (size_t i = 0; i < num_inputs; ++i)
+  {
+    const size_t td_idx = ordered_indices[i];
+    const auto& td = m_transfers[td_idx];
+
+    const uint8_t* sk_ptr;
+    size_t sk_len;
+    std::vector<uint8_t> rederived_sk;
+
+    if (!td.m_combined_shared_secret.empty() && td.m_combined_shared_secret.size() == 64)
     {
-      std::string payload_blob;
-      THROW_WALLET_EXCEPTION_IF(!cryptonote::get_transaction_signed_payload(tx, i, payload_blob),
-        error::wallet_internal_error, "Failed to build PQC signed payload for claim transaction");
-
-      crypto::hash payload_hash;
-      cryptonote::get_blob_hash(payload_blob, payload_hash);
-
-      ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
-          keys.m_pqc_secret_key.data(),
-          keys.m_pqc_secret_key.size(),
-          reinterpret_cast<const uint8_t*>(payload_hash.data),
-          sizeof(payload_hash.data));
-      THROW_WALLET_EXCEPTION_IF(!sig_result.success, error::wallet_internal_error,
-        "PQC hybrid signing failed for claim transaction");
-
-      tx.pqc_auths[i].hybrid_signature.assign(
-          sig_result.signature.ptr, sig_result.signature.ptr + sig_result.signature.len);
-      shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
+      ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
+          td.m_combined_shared_secret.data(),
+          static_cast<uint64_t>(td.m_internal_output_index));
+      THROW_WALLET_EXCEPTION_IF(!kp.success, error::wallet_internal_error,
+        "PQC keypair rederivation failed for signing claim input " + std::to_string(i));
+      rederived_sk.assign(kp.secret_key.ptr, kp.secret_key.ptr + kp.secret_key.len);
+      shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
+      shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
+      sk_ptr = rederived_sk.data();
+      sk_len = rederived_sk.size();
     }
+    else
+    {
+      sk_ptr = keys.m_pqc_secret_key.data();
+      sk_len = keys.m_pqc_secret_key.size();
+    }
+
+    std::string payload_blob;
+    THROW_WALLET_EXCEPTION_IF(!cryptonote::get_transaction_signed_payload(tx, i, payload_blob),
+      error::wallet_internal_error, "Failed to build PQC signed payload for claim input " + std::to_string(i));
+
+    crypto::hash payload_hash;
+    cryptonote::get_blob_hash(payload_blob, payload_hash);
+
+    ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
+        sk_ptr, sk_len,
+        reinterpret_cast<const uint8_t*>(payload_hash.data),
+        sizeof(payload_hash.data));
+
+    if (!rederived_sk.empty())
+      memwipe(rederived_sk.data(), rederived_sk.size());
+
+    THROW_WALLET_EXCEPTION_IF(!sig_result.success, error::wallet_internal_error,
+      "PQC signing failed for claim input " + std::to_string(i));
+
+    tx.pqc_auths[i].hybrid_signature.assign(
+        sig_result.signature.ptr, sig_result.signature.ptr + sig_result.signature.len);
+    shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
   }
 
   tx.invalidate_hashes();
@@ -10857,7 +11063,7 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
   ptx.change_dts = {};
   ptx.selected_transfers = {};
   ptx.key_images = "";
-  ptx.tx_key = crypto::secret_key{};
+  ptx.tx_key = tx_key;
   ptx.additional_tx_keys = {};
   ptx.dests = {};
   ptx.construction_data = {};

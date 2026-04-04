@@ -1,6 +1,6 @@
 # FCMP++ Full-Chain Membership Proofs — Specification
 
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-05
 >
 > **Parent document:** `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
@@ -199,6 +199,23 @@ Outputs carry hybrid KEM material for per-output PQC key derivation. The field
 one per transaction output in **vout order** (same order as outputs are
 listed in the prefix). Implementation may strip an X25519-specific header
 from the FFI-produced buffer before appending the 1088-byte ML-KEM component.
+
+### `tx_extra`: PQC leaf hash tag (`0x07`)
+
+Each output's derived ML-DSA-65 public key is hashed to produce a 32-byte
+`H(pqc_pk)` value (Blake2b-512 with domain separator `shekyl-pqc-leaf`,
+via `shekyl_fcmp_pqc_leaf_hash()`). These hashes are stored in the field
+`tx_extra_pqc_leaf_hashes`, tagged `TX_EXTRA_TAG_PQC_LEAF_HASHES` (`0x07`
+in `tx_extra.h`). The payload is a single `blob` of **N × 32** bytes:
+**N** concatenated 32-byte hashes, one per transaction output in **vout
+order**.
+
+The curve tree insertion code (`collect_outputs` in `blockchain_db.cpp`)
+extracts these hashes and commits them as the 4th leaf scalar. If the tag
+is absent (pre-existing outputs before this feature), a 32-byte zero
+placeholder is used. This field is emitted by both `construct_miner_tx`
+(coinbase) and `create_claim_transaction` (claim), and by the regular
+wallet transfer path.
 
 ### Coinbase KEM self-encapsulation
 
@@ -857,16 +874,21 @@ any other output. Specifically:
   output* that results from it must blend into the anonymity set once
   it enters the curve tree.
 
-**Phase 4 implementation items:**
+**Phase 4 implementation (completed):**
 
-1. Consensus: `check_tx_inputs` must reject `RCTTypeNull` for non-coinbase
-   v3 transactions — this enforces confidential amounts on claim outputs.
-2. Wallet: `wallet2::create_claim_transaction()` (wallet2.cpp:10736) must
-   be reworked to use `RCTTypeFcmpPlusPlusPqc` with BP+ range proofs,
-   hybrid KEM derivation for per-output PQC keys, ML-KEM ciphertext in
-   `tx_extra`, and a 2-output structure (reward + dummy change).
-3. Consensus: BP+ range proofs on claim tx outputs must go through the
-   same verification path as regular transaction outputs.
+1. Consensus: `check_tx_inputs` rejects `RCTTypeNull` for all non-coinbase
+   v3 transactions. Claim transactions must use `RCTTypeFcmpPlusPlusPqc`.
+   Within the FCMP++ handler, a dedicated claim sub-path verifies
+   pseudo-out determinism (`zeroCommit(claim_amount)`), PQC ownership
+   cross-check, and batch pool balance — while skipping membership proof
+   verification (not applicable to `txin_stake_claim` inputs).
+2. Wallet: `wallet2::create_claim_transaction()` uses `RCTTypeFcmpPlusPlusPqc`
+   with BP+ range proofs, hybrid KEM derivation for per-output PQC keys,
+   ML-KEM ciphertext in `tx_extra` (`0x06`), `H(pqc_pk)` leaf hashes in
+   `tx_extra` (`0x07`), and a 2-output structure (reward + dummy change).
+3. Consensus: BP+ range proofs on claim tx outputs go through the standard
+   `verRctSemanticsSimple` batch verification path alongside regular
+   transaction outputs.
 
 **Batch pool balance check:** The total of all claim amounts in a
 transaction is summed and checked against `staker_pool_balance` once (in
@@ -908,6 +930,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` | 10,000 | `cryptonote_config.h` |
 | `RCTTypeFcmpPlusPlusPqc` | 7 | `rctTypes.h` |
 | `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` | 0x06 | `tx_extra.h` |
+| `TX_EXTRA_TAG_PQC_LEAF_HASHES` | 0x07 | `tx_extra.h` |
 | `HF_VERSION_FCMP_PLUS_PLUS_PQC` | 1 | `cryptonote_config.h` |
 
 ---
@@ -943,9 +966,9 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | RPC `low_mixin` field removal | **Done** | `core_rpc_server.cpp`, `core_rpc_server_commands_defs.h` |
 | Staked output curve-tree leaves | **Done** | `blockchain_db.cpp` |
 | Stake claim curve-tree leaf presence check | **Done** | `blockchain.cpp` (`check_stake_claim_input`) |
-| Stake claim wired in `check_tx_inputs` | **Done** | `blockchain.cpp` (RCTTypeNull case + non-FAKECHAIN gate) |
-| Stake claim PQC ownership cross-check | **Done** | `blockchain.cpp` (RCTTypeNull case, `H(pqc_pk)` leaf vs `pqc_auths`) |
-| Stake claim batch pool balance check | **Done** | `blockchain.cpp` (RCTTypeNull case, sum-then-check) |
+| Stake claim wired in `check_tx_inputs` | **Done** | `blockchain.cpp` (FCMP++ handler, claim sub-path) |
+| Stake claim PQC ownership cross-check | **Done** | `blockchain.cpp` (FCMP++ handler, `H(pqc_pk)` leaf vs `pqc_auths`) |
+| Stake claim batch pool balance check | **Done** | `blockchain.cpp` (FCMP++ handler, sum-then-check) |
 | Stake claim sorted input enforcement | **Done** | `blockchain.cpp` (sorted-ins block handles `txin_stake_claim`) |
 | Stake claim key images in `remove_transaction` | **Done** | `blockchain_db.cpp` |
 | Integer-only reward computation | **Done** | `blockchain.cpp` (`check_stake_claim_input`, `mul128`/`div128_64`) |
@@ -963,7 +986,15 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | `pop_block()` height symmetry fix | **Done** | `blockchain_db.cpp` |
 | Ring-based validation path removed (genesis-native) | **Done** | `blockchain.cpp` |
 | `tx_extra` KEM blob tag `0x06` (N × 1088 bytes) | **Done** | `tx_extra.h`, `cryptonote_format_utils.cpp` |
-| Coinbase KEM self-encapsulation | **Done** | `cryptonote_tx_utils.cpp` (`construct_miner_tx`) |
+| `tx_extra` leaf hash tag `0x07` (N × 32 bytes) | **Done** | `tx_extra.h`, `cryptonote_format_utils.cpp` |
+| Curve tree leaves use actual `H(pqc_pk)` from `tx_extra` | **Done** | `blockchain_db.cpp` (`collect_outputs`, `make_leaf`) |
+| Coinbase KEM self-encapsulation + `H(pqc_pk)` emission | **Done** | `cryptonote_tx_utils.cpp` (`construct_miner_tx`) |
+| Consensus rejects `RCTTypeNull` for non-coinbase v3 txs | **Done** | `blockchain.cpp` (`check_tx_inputs`) |
+| Claim tx: `RCTTypeFcmpPlusPlusPqc` with BP+ range proofs | **Done** | `wallet2.cpp` (`create_claim_transaction`) |
+| Claim tx: 2-output structure (reward + dummy change) | **Done** | `wallet2.cpp` (`create_claim_transaction`) |
+| Claim tx: hybrid KEM derivation for per-output PQC keys | **Done** | `wallet2.cpp` (`create_claim_transaction`) |
+| Claim tx: per-output PQC signing (not wallet master key) | **Done** | `wallet2.cpp` (`create_claim_transaction`) |
+| Claim tx: pseudo-outs as `zeroCommit(claim_amount)` | **Done** | `wallet2.cpp` (`create_claim_transaction`) |
 | Wallet transfer flow FCMP++ integration | **Done** | `wallet2.cpp` |
 | Fee estimation for FCMP++ proof size | **Done** | `wallet2.cpp` |
 | Stressnet tooling (load gen, monitor, config) | **Done** | `tests/stressnet/` |

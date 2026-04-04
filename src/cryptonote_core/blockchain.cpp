@@ -3238,11 +3238,12 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   const uint8_t hf_version = m_hardfork->get_current_version();
   const bool is_fcmp_pp = rct::is_rct_fcmp_pp_pqc(tx.rct_signatures.type);
 
-  // Detect pure stake-claim transactions (RCTTypeNull, all txin_stake_claim).
-  // These bypass the FCMP++ gate but still go through version, size, and
-  // claim-specific validation.
+  // Detect pure stake-claim transactions: all inputs are txin_stake_claim.
+  // These use RCTTypeFcmpPlusPlusPqc for confidential outputs but bypass
+  // the FCMP++ membership proof (claims reference staked outputs by global
+  // index, not by tree path).
   bool is_stake_claim_only = false;
-  if (tx.rct_signatures.type == rct::RCTTypeNull && !tx.vin.empty())
+  if (!tx.vin.empty())
   {
     is_stake_claim_only = true;
     for (const auto& vin : tx.vin)
@@ -3267,9 +3268,9 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 
   if (m_nettype != network_type::FAKECHAIN)
   {
-    if (!is_fcmp_pp && !is_stake_claim_only)
+    if (!is_fcmp_pp)
     {
-      MERROR_VER("Tx " << get_transaction_hash(tx) << " is not FCMP++ or stake claim; unsupported transaction type");
+      MERROR_VER("Tx " << get_transaction_hash(tx) << " must use RCTTypeFcmpPlusPlusPqc; RCTTypeNull is only allowed for coinbase");
       tvc.m_verifivation_failed = true;
       return false;
     }
@@ -3365,10 +3366,26 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       }
     }
   }
-  else if (!is_stake_claim_only)
+  else if (is_stake_claim_only)
   {
-    // Shekyl starts at genesis with FCMP++; ring-based transactions are
-    // never valid.  Reject anything that reaches this branch.
+    // Claim transactions: inputs are txin_stake_claim, skip FCMP++ input
+    // validation but still require y-normalized key images.
+    for (const auto& txin : tx.vin)
+    {
+      const txin_stake_claim& claim = std::get<txin_stake_claim>(txin);
+      crypto::key_image ki_copy = claim.k_image;
+      crypto::key_image_y_normalize(ki_copy);
+      if (ki_copy != claim.k_image)
+      {
+        MERROR_VER("Claim tx " << get_transaction_hash(tx)
+          << " has non-y-normalized key image " << claim.k_image);
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
+    }
+  }
+  else
+  {
     MERROR_VER("Non-FCMP++ transaction rejected: ring-based inputs are not supported from genesis");
     tvc.m_verifivation_failed = true;
     return false;
@@ -3379,37 +3396,75 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
     switch (rv.type)
     {
     case rct::RCTTypeNull: {
-      if (!is_stake_claim_only)
+      MERROR_VER("RCTTypeNull is not allowed for non-coinbase transactions");
+      tvc.m_verifivation_failed = true;
+      return false;
+    }
+    case rct::RCTTypeFcmpPlusPlusPqc:
+    {
+      const uint64_t chain_height = m_db->height();
+      const size_t num_inputs = tx.vin.size();
+
+      if (tx.pqc_auths.size() != num_inputs)
       {
-        MERROR_VER("Null rct signature on non-coinbase, non-stake-claim tx");
+        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
+          << " pqc_auths count " << tx.pqc_auths.size()
+          << " does not match input count " << num_inputs);
+        tvc.m_verifivation_failed = true;
         return false;
       }
 
-      // Validate each claim and cross-check PQC ownership
-      const uint64_t chain_height = m_db->height();
-      for (size_t i = 0; i < tx.vin.size(); ++i)
+      if (rv.p.pseudoOuts.size() != num_inputs)
       {
-        const txin_stake_claim& claim = std::get<txin_stake_claim>(tx.vin[i]);
+        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
+          << " pseudoOuts count " << rv.p.pseudoOuts.size()
+          << " does not match input count " << num_inputs);
+        tvc.m_verifivation_failed = true;
+        return false;
+      }
 
-        if (have_tx_keyimg_as_spent(claim.k_image))
+      if (is_stake_claim_only)
+      {
+        // ── Stake claim path: bypass FCMP++ proof, validate claims ────
+        // Claim txs use RCTTypeFcmpPlusPlusPqc for confidential outputs
+        // but have no membership proof (inputs reference staked outputs
+        // by global index). BP+ and balance are checked by
+        // verRctSemanticsSimple in the batch verification path.
+
+        // Verify pseudo-outs are deterministic zero-commitments to claim amounts
+        for (size_t i = 0; i < num_inputs; ++i)
         {
-          MERROR_VER("Stake claim key image already spent: " << epee::string_tools::pod_to_hex(claim.k_image));
-          tvc.m_double_spend = true;
-          return false;
+          const txin_stake_claim& claim = std::get<txin_stake_claim>(tx.vin[i]);
+          const rct::key expected = rct::zeroCommit(claim.amount);
+          if (rv.p.pseudoOuts[i] != expected)
+          {
+            MERROR_VER("Claim tx " << get_transaction_hash(tx)
+              << " pseudoOut[" << i << "] does not match zeroCommit(claim_amount)");
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
         }
 
-        uint8_t leaf_h_pqc[32];
-        if (!check_stake_claim_input(claim, chain_height, leaf_h_pqc))
+        // Validate each claim and cross-check PQC ownership
+        for (size_t i = 0; i < num_inputs; ++i)
         {
-          MERROR_VER("Stake claim validation failed for staked output " << claim.staked_output_index);
-          tvc.m_verifivation_failed = true;
-          return false;
-        }
+          const txin_stake_claim& claim = std::get<txin_stake_claim>(tx.vin[i]);
 
-        // PQC ownership: the H(pqc_pk) in the tree leaf must match the
-        // hash of the PQC public key presented in pqc_auths[i].
-        if (i < tx.pqc_auths.size())
-        {
+          if (have_tx_keyimg_as_spent(claim.k_image))
+          {
+            MERROR_VER("Stake claim key image already spent: " << epee::string_tools::pod_to_hex(claim.k_image));
+            tvc.m_double_spend = true;
+            return false;
+          }
+
+          uint8_t leaf_h_pqc[32];
+          if (!check_stake_claim_input(claim, chain_height, leaf_h_pqc))
+          {
+            MERROR_VER("Stake claim validation failed for staked output " << claim.staked_output_index);
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
+
           uint8_t expected_h_pqc[32];
           const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
           if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), expected_h_pqc))
@@ -3426,170 +3481,141 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             return false;
           }
         }
-      }
 
-      // Batch pool balance check: sum all claim amounts and verify against pool
-      uint64_t total_claimed = 0;
-      for (const auto& vin : tx.vin)
-      {
-        const txin_stake_claim& claim = std::get<txin_stake_claim>(vin);
-        if (total_claimed + claim.amount < total_claimed) // overflow
+        // Batch pool balance check
+        uint64_t total_claimed = 0;
+        for (const auto& vin : tx.vin)
         {
-          MERROR_VER("Stake claim total amount overflow");
-          tvc.m_verifivation_failed = true;
-          return false;
+          const txin_stake_claim& claim = std::get<txin_stake_claim>(vin);
+          if (total_claimed + claim.amount < total_claimed)
+          {
+            MERROR_VER("Stake claim total amount overflow");
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
+          total_claimed += claim.amount;
         }
-        total_claimed += claim.amount;
-      }
-      {
-        const uint64_t pool_balance = m_db->get_staker_pool_balance();
-        if (total_claimed > pool_balance)
         {
-          MERROR_VER("Total stake claims " << total_claimed << " exceed pool balance " << pool_balance);
-          tvc.m_verifivation_failed = true;
-          return false;
+          const uint64_t pool_balance = m_db->get_staker_pool_balance();
+          if (total_claimed > pool_balance)
+          {
+            MERROR_VER("Total stake claims " << total_claimed << " exceed pool balance " << pool_balance);
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
         }
-      }
-      break;
-    }
-    case rct::RCTTypeFcmpPlusPlusPqc:
-    {
-      const uint64_t chain_height = m_db->height();
-
-      // ── Step 1: referenceBlock age validation ─────────────────────────
-      uint64_t ref_height = 0;
-      if (!m_db->block_exists(rv.referenceBlock, &ref_height))
-      {
-        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
-          << " referenceBlock " << rv.referenceBlock << " not found in chain");
-        tvc.m_verifivation_failed = true;
-        return false;
-      }
-
-      if (chain_height < FCMP_REFERENCE_BLOCK_MIN_AGE ||
-          ref_height > chain_height - FCMP_REFERENCE_BLOCK_MIN_AGE)
-      {
-        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
-          << " referenceBlock at height " << ref_height
-          << " is too recent (min age " << FCMP_REFERENCE_BLOCK_MIN_AGE
-          << ", chain height " << chain_height << ")");
-        tvc.m_verifivation_failed = true;
-        return false;
-      }
-
-      if (chain_height > FCMP_REFERENCE_BLOCK_MAX_AGE &&
-          ref_height < chain_height - FCMP_REFERENCE_BLOCK_MAX_AGE)
-      {
-        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
-          << " referenceBlock at height " << ref_height
-          << " is too old (max age " << FCMP_REFERENCE_BLOCK_MAX_AGE
-          << ", chain height " << chain_height << ")");
-        tvc.m_verifivation_failed = true;
-        return false;
-      }
-
-      // Set max_used_block_height to referenceBlock height for the caller
-      *pmax_used_block_height = ref_height;
-
-      // ── Step 2: Curve tree root lookup from referenceBlock header ─────
-      const block_header ref_hdr = m_db->get_block_header(rv.referenceBlock);
-      std::array<uint8_t, 32> tree_root{};
-      static_assert(sizeof(ref_hdr.curve_tree_root) == 32, "curve_tree_root must be 32 bytes");
-      memcpy(tree_root.data(), &ref_hdr.curve_tree_root, 32);
-
-      // ── Step 3: Validate curve_trees_tree_depth ───────────────────────
-      // The tx was constructed against the tree at referenceBlock, which
-      // may have fewer layers than the current tip (the tree is append-only
-      // and depth is monotonically non-decreasing).  Accept any depth up
-      // to the current depth.  A wrong depth will still cause the FCMP++
-      // proof verification to fail (the proof encodes the depth), so this
-      // is a quick-reject pre-screen, not the sole guard.
-      const uint8_t current_depth = m_db->get_curve_tree_depth();
-      if (rv.p.curve_trees_tree_depth == 0 || rv.p.curve_trees_tree_depth > current_depth)
-      {
-        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
-          << " curve_trees_tree_depth " << (int)rv.p.curve_trees_tree_depth
-          << " out of range (current depth " << (int)current_depth << ")");
-        tvc.m_verifivation_failed = true;
-        return false;
-      }
-
-      // ── Step 4: FCMP++ proof verification via FFI ─────────────────────
-      const size_t num_inputs = tx.vin.size();
-
-      if (rv.p.fcmp_pp_proof.empty())
-      {
-        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " has empty proof");
-        tvc.m_verifivation_failed = true;
-        return false;
-      }
-
-      // Collect key images (32 bytes each, contiguous)
-      std::vector<uint8_t> key_images_flat(num_inputs * 32);
-      for (size_t i = 0; i < num_inputs; ++i)
-      {
-        const txin_to_key& in_to_key = std::get<txin_to_key>(tx.vin[i]);
-        memcpy(key_images_flat.data() + i * 32, &in_to_key.k_image, 32);
-      }
-
-      // Collect pseudo outputs (32 bytes each)
-      if (rv.p.pseudoOuts.size() != num_inputs)
-      {
-        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
-          << " pseudoOuts count " << rv.p.pseudoOuts.size()
-          << " does not match input count " << num_inputs);
-        tvc.m_verifivation_failed = true;
-        return false;
-      }
-      std::vector<uint8_t> pseudo_outs_flat(num_inputs * 32);
-      for (size_t i = 0; i < num_inputs; ++i)
-        memcpy(pseudo_outs_flat.data() + i * 32, rv.p.pseudoOuts[i].bytes, 32);
-
-      if (tx.pqc_auths.size() != num_inputs)
-      {
-        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
-          << " pqc_auths count " << tx.pqc_auths.size()
-          << " does not match input count " << num_inputs);
-        tvc.m_verifivation_failed = true;
-        return false;
-      }
-
-      std::vector<uint8_t> pqc_hashes_flat(num_inputs * 32);
-      for (size_t i = 0; i < num_inputs; ++i)
-      {
-        const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
-        if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), pqc_hashes_flat.data() + i * 32))
-        {
-          MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " pqc leaf hash failed for input " << i);
-          tvc.m_verifivation_failed = true;
-          return false;
-        }
-      }
-
-      if (skip_fcmp_verify)
-      {
-        MDEBUG("FCMP++ proof verification skipped (cache hit) for tx " << get_transaction_hash(tx));
       }
       else
       {
-        const bool proof_ok = shekyl_fcmp_verify(
-          rv.p.fcmp_pp_proof.data(),
-          rv.p.fcmp_pp_proof.size(),
-          key_images_flat.data(),
-          num_inputs,
-          pseudo_outs_flat.data(),
-          num_inputs,
-          pqc_hashes_flat.data(),
-          num_inputs,
-          tree_root.data(),
-          rv.p.curve_trees_tree_depth
-        );
+        // ── Regular FCMP++ spend path ─────────────────────────────────
 
-        if (!proof_ok)
+        // Step 1: referenceBlock age validation
+        uint64_t ref_height = 0;
+        if (!m_db->block_exists(rv.referenceBlock, &ref_height))
         {
-          MERROR_VER("FCMP++ proof verification failed for tx " << get_transaction_hash(tx));
+          MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
+            << " referenceBlock " << rv.referenceBlock << " not found in chain");
           tvc.m_verifivation_failed = true;
           return false;
+        }
+
+        if (chain_height < FCMP_REFERENCE_BLOCK_MIN_AGE ||
+            ref_height > chain_height - FCMP_REFERENCE_BLOCK_MIN_AGE)
+        {
+          MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
+            << " referenceBlock at height " << ref_height
+            << " is too recent (min age " << FCMP_REFERENCE_BLOCK_MIN_AGE
+            << ", chain height " << chain_height << ")");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+
+        if (chain_height > FCMP_REFERENCE_BLOCK_MAX_AGE &&
+            ref_height < chain_height - FCMP_REFERENCE_BLOCK_MAX_AGE)
+        {
+          MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
+            << " referenceBlock at height " << ref_height
+            << " is too old (max age " << FCMP_REFERENCE_BLOCK_MAX_AGE
+            << ", chain height " << chain_height << ")");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+
+        *pmax_used_block_height = ref_height;
+
+        // Step 2: Curve tree root lookup
+        const block_header ref_hdr = m_db->get_block_header(rv.referenceBlock);
+        std::array<uint8_t, 32> tree_root{};
+        static_assert(sizeof(ref_hdr.curve_tree_root) == 32, "curve_tree_root must be 32 bytes");
+        memcpy(tree_root.data(), &ref_hdr.curve_tree_root, 32);
+
+        // Step 3: Validate curve_trees_tree_depth
+        const uint8_t current_depth = m_db->get_curve_tree_depth();
+        if (rv.p.curve_trees_tree_depth == 0 || rv.p.curve_trees_tree_depth > current_depth)
+        {
+          MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
+            << " curve_trees_tree_depth " << (int)rv.p.curve_trees_tree_depth
+            << " out of range (current depth " << (int)current_depth << ")");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+
+        // Step 4: FCMP++ proof verification
+        if (rv.p.fcmp_pp_proof.empty())
+        {
+          MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " has empty proof");
+          tvc.m_verifivation_failed = true;
+          return false;
+        }
+
+        std::vector<uint8_t> key_images_flat(num_inputs * 32);
+        for (size_t i = 0; i < num_inputs; ++i)
+        {
+          const txin_to_key& in_to_key = std::get<txin_to_key>(tx.vin[i]);
+          memcpy(key_images_flat.data() + i * 32, &in_to_key.k_image, 32);
+        }
+
+        std::vector<uint8_t> pseudo_outs_flat(num_inputs * 32);
+        for (size_t i = 0; i < num_inputs; ++i)
+          memcpy(pseudo_outs_flat.data() + i * 32, rv.p.pseudoOuts[i].bytes, 32);
+
+        std::vector<uint8_t> pqc_hashes_flat(num_inputs * 32);
+        for (size_t i = 0; i < num_inputs; ++i)
+        {
+          const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
+          if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), pqc_hashes_flat.data() + i * 32))
+          {
+            MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " pqc leaf hash failed for input " << i);
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
+        }
+
+        if (skip_fcmp_verify)
+        {
+          MDEBUG("FCMP++ proof verification skipped (cache hit) for tx " << get_transaction_hash(tx));
+        }
+        else
+        {
+          const bool proof_ok = shekyl_fcmp_verify(
+            rv.p.fcmp_pp_proof.data(),
+            rv.p.fcmp_pp_proof.size(),
+            key_images_flat.data(),
+            num_inputs,
+            pseudo_outs_flat.data(),
+            num_inputs,
+            pqc_hashes_flat.data(),
+            num_inputs,
+            tree_root.data(),
+            rv.p.curve_trees_tree_depth
+          );
+
+          if (!proof_ok)
+          {
+            MERROR_VER("FCMP++ proof verification failed for tx " << get_transaction_hash(tx));
+            tvc.m_verifivation_failed = true;
+            return false;
+          }
         }
       }
 

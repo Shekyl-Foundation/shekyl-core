@@ -177,6 +177,9 @@ namespace cryptonote
       tx_extra_pqc_kem_ciphertext kem_field;
       kem_field.blob.reserve(out_amounts.size() * ML_KEM_768_CT_BYTES);
 
+      tx_extra_pqc_leaf_hashes leaf_hash_field;
+      leaf_hash_field.blob.reserve(out_amounts.size() * PQC_LEAF_HASH_BYTES);
+
       for (size_t i = 0; i < out_amounts.size(); ++i)
       {
         ShekylBuffer ct_buf = {};
@@ -190,18 +193,40 @@ namespace cryptonote
         kem_field.blob.append(
           reinterpret_cast<const char*>(ct_buf.ptr + HYBRID_CT_HEADER),
           ML_KEM_768_CT_BYTES);
-
         shekyl_buffer_free(ct_buf.ptr, ct_buf.len);
+
+        ShekylPqcKeypair derived = shekyl_fcmp_derive_pqc_keypair(ss, static_cast<uint64_t>(i));
         memwipe(ss, sizeof(ss));
+        CHECK_AND_ASSERT_MES(derived.success && derived.public_key.ptr && derived.public_key.len > 0,
+          false, "Per-output PQC keypair derivation failed for coinbase output " << i);
+
+        uint8_t h_pqc[32];
+        ok = shekyl_fcmp_pqc_leaf_hash(derived.public_key.ptr, derived.public_key.len, h_pqc);
+        shekyl_buffer_free(derived.public_key.ptr, derived.public_key.len);
+        shekyl_buffer_free(derived.secret_key.ptr, derived.secret_key.len);
+        CHECK_AND_ASSERT_MES(ok, false, "PQC leaf hash failed for coinbase output " << i);
+
+        leaf_hash_field.blob.append(reinterpret_cast<const char*>(h_pqc), PQC_LEAF_HASH_BYTES);
       }
 
-      std::ostringstream oss;
-      binary_archive<true> oar(oss);
-      tx_extra_field variant_field = kem_field;
-      bool r = ::do_serialize(oar, variant_field);
-      CHECK_AND_ASSERT_MES(r, false, "Failed to serialize KEM ciphertexts for coinbase tx_extra");
-      std::string blob = oss.str();
-      tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+      {
+        std::ostringstream oss;
+        binary_archive<true> oar(oss);
+        tx_extra_field variant_field = kem_field;
+        bool r = ::do_serialize(oar, variant_field);
+        CHECK_AND_ASSERT_MES(r, false, "Failed to serialize KEM ciphertexts for coinbase tx_extra");
+        std::string blob = oss.str();
+        tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+      }
+      {
+        std::ostringstream oss;
+        binary_archive<true> oar(oss);
+        tx_extra_field variant_field = leaf_hash_field;
+        bool r = ::do_serialize(oar, variant_field);
+        CHECK_AND_ASSERT_MES(r, false, "Failed to serialize PQC leaf hashes for coinbase tx_extra");
+        std::string blob = oss.str();
+        tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+      }
       if (!sort_tx_extra(tx.extra, tx.extra))
         return false;
     }

@@ -311,20 +311,26 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     const uint64_t block_height = prev_height + 1;
     std::vector<uint8_t> leaf_data;
     uint64_t new_output_count = 0;
-    // Outputs enter the tree at creation time, not maturity.  Maturity is
-    // enforced by FCMP_REFERENCE_BLOCK_MIN_AGE >= CRYPTONOTE_MINED_MONEY_
-    // UNLOCK_WINDOW: the spending tx must reference a tree state at least
-    // MIN_AGE blocks behind the tip, so every output in that state has at
-    // least MIN_AGE confirmations and is therefore mature.
-    // TODO(Phase 3): extract per-output H(pqc_pk) from tx_extra once the
-    // tx construction pipeline includes PQC output commitments.
     static constexpr uint8_t zero_pqc[32] = {};
 
-    auto make_leaf = [&](const crypto::public_key& output_key, const rct::key& commitment) -> bool {
+    auto extract_leaf_hashes = [](const transaction& tx) -> std::vector<uint8_t> {
+      std::vector<tx_extra_field> fields;
+      if (!parse_tx_extra(tx.extra, fields))
+        return {};
+      tx_extra_pqc_leaf_hashes lh;
+      if (!find_tx_extra_field_by_type(fields, lh))
+        return {};
+      if (lh.blob.size() % PQC_LEAF_HASH_BYTES != 0)
+        return {};
+      return std::vector<uint8_t>(lh.blob.begin(), lh.blob.end());
+    };
+
+    auto make_leaf = [&](const crypto::public_key& output_key, const rct::key& commitment,
+                         const uint8_t* h_pqc) -> bool {
       uint8_t leaf[128];
       if (!shekyl_construct_curve_tree_leaf(
             reinterpret_cast<const uint8_t*>(&output_key),
-            commitment.bytes, zero_pqc, leaf))
+            commitment.bytes, h_pqc, leaf))
         return false;
       leaf_data.insert(leaf_data.end(), leaf, leaf + 128);
       ++new_output_count;
@@ -332,8 +338,15 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     };
 
     auto collect_outputs = [&](const transaction& tx, bool is_miner) {
+      const auto leaf_hash_blob = extract_leaf_hashes(tx);
+      const size_t num_leaf_hashes = leaf_hash_blob.size() / PQC_LEAF_HASH_BYTES;
+
       for (uint64_t i = 0; i < tx.vout.size(); ++i) {
         const auto& vout = tx.vout[i];
+        const uint8_t* h_pqc = (i < num_leaf_hashes)
+            ? (leaf_hash_blob.data() + i * PQC_LEAF_HASH_BYTES)
+            : zero_pqc;
+
         crypto::public_key output_key;
         if (std::holds_alternative<txout_to_tagged_key>(vout.target))
           output_key = std::get<txout_to_tagged_key>(vout.target).key;
@@ -354,7 +367,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
             uint8_t leaf[128];
             if (shekyl_construct_curve_tree_leaf(
                   reinterpret_cast<const uint8_t*>(&staked.key),
-                  commitment.bytes, zero_pqc, leaf))
+                  commitment.bytes, h_pqc, leaf))
               add_pending_staked_leaf(staked.lock_until, leaf);
             continue;
           }
@@ -369,7 +382,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
           commitment = tx.rct_signatures.outPk[i].mask;
         else
           continue;
-        make_leaf(output_key, commitment);
+        make_leaf(output_key, commitment, h_pqc);
       }
     };
     // Drain previously-deferred staked outputs whose lock_until <= block_height.

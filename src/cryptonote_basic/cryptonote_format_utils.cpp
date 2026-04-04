@@ -570,6 +570,7 @@ namespace cryptonote
     if (!pick<tx_extra_mysterious_minergate>(nar, tx_extra_fields, TX_EXTRA_MYSTERIOUS_MINERGATE_TAG)) return false;
     if (!pick<tx_extra_pqc_ownership>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_OWNERSHIP)) return false;
     if (!pick<tx_extra_pqc_kem_ciphertext>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT)) return false;
+    if (!pick<tx_extra_pqc_leaf_hashes>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_LEAF_HASHES)) return false;
     if (!pick<tx_extra_padding>(nar, tx_extra_fields, TX_EXTRA_TAG_PADDING)) return false;
 
     // if not empty, someone added a new type and did not add a case above
