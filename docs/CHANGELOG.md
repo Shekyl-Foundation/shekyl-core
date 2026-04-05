@@ -116,6 +116,13 @@
 
 ### 🔄 Changed
 
+- **Upstream monero-oxide dependencies renamed to shekyl-oxide.** Updated
+  `shekyl-fcmp/Cargo.toml` and all Rust source files to use the renamed
+  packages from the monero-oxide fork (`monero-fcmp-plus-plus` →
+  `shekyl-fcmp-plus-plus`, `monero-generators` → `shekyl-generators`).
+  `Cargo.lock` advanced from pin `92af05e` to `416d8d1` which includes the
+  complete `monero-oxide/` → `shekyl-oxide/` directory and package rename.
+
 - **`shekyl-fcmp` crate cleanup.** Removed unused `sha2` and `shekyl-crypto-pq`
   dependencies from `rust/shekyl-fcmp/Cargo.toml`. Renamed the misleading
   `ProveError::InputCountMismatch` variant to `ProveError::PqcHashMismatch`

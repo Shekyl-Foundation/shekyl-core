@@ -82,7 +82,7 @@ pub struct ProveInput {
 /// 2. The 4th scalar matches the PQC key hash provided as public input
 /// 3. Standard FCMP++ linkability/spend-auth properties
 ///
-/// The actual upstream proof call is gated behind the `monero-fcmp-plus-plus`
+/// The actual upstream proof call is gated behind the `shekyl-fcmp-plus-plus`
 /// crate integration. This scaffolding validates inputs and prepares the
 /// data structures.
 pub fn prove(
@@ -111,7 +111,7 @@ pub fn prove(
         }
     }
 
-    // TODO(phase-1h): Invoke upstream monero-fcmp-plus-plus prove() with
+    // TODO(phase-1h): Invoke upstream shekyl-fcmp-plus-plus prove() with
     // 4-scalar leaf inputs once the circuit modification is complete.
     // For now, produce a placeholder proof structure that passes through
     // the FFI layer for integration testing.
@@ -179,7 +179,7 @@ pub fn verify(
         return Err(VerifyError::InvalidTreeRoot);
     }
 
-    // TODO(phase-1h): Invoke upstream monero-fcmp-plus-plus verify() with
+    // TODO(phase-1h): Invoke upstream shekyl-fcmp-plus-plus verify() with
     // batch verifiers once the 4-scalar circuit is integrated.
     // For scaffolding, verify the proof structure is well-formed.
     let expected_per_input = 32 + 32 + 32; // key_image + pseudo_out + pqc_hash

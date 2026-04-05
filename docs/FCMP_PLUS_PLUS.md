@@ -1,6 +1,6 @@
 # FCMP++ Full-Chain Membership Proofs — Specification
 
-> **Last updated:** 2026-04-04
+> **Last updated:** 2026-04-05
 >
 > **Parent document:** `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
@@ -1182,16 +1182,16 @@ cd rust/shekyl-crypto-pq && cargo bench --bench pqc_rederivation
 The FCMP++ Rust crypto stack depends on the
 [Shekyl Foundation monero-oxide fork](https://github.com/Shekyl-Foundation/monero-oxide)
 (`fcmp++` branch). The `shekyl-fcmp` crate pulls 4 git dependencies from this
-fork: `monero-fcmp-plus-plus`, `monero-generators`, `helioselene`, `ec-divisors`
+fork: `shekyl-fcmp-plus-plus`, `shekyl-generators`, `helioselene`, `ec-divisors`
 (9 total packages in the lockfile, including transitive deps).
 
 ### Current Pin
 
-The lockfile (`rust/Cargo.lock`) pins `92af05e`. The fork HEAD is `1194d9c`
-("Refactor and update for Shekyl fork"), which removes legacy ring signature
-crates, renames `ringct/` to `fcmp/`, and applies Shekyl branding. A directory
-rename from `monero-oxide/` to `shekyl-oxide/` with corresponding package name
-changes (`monero-*` to `shekyl-*`) is in progress but not yet committed.
+The lockfile (`rust/Cargo.lock`) pins `416d8d1` ("Transition project from
+Monero-oxide to Shekyl-oxide"). This commit renames the `monero-oxide/`
+directory to `shekyl-oxide/` and all packages from `monero-*` to `shekyl-*`
+(e.g., `monero-fcmp-plus-plus` → `shekyl-fcmp-plus-plus`,
+`monero-generators` → `shekyl-generators`, `monero-io` → `shekyl-io`).
 
 ### Proof Scaffold Status
 

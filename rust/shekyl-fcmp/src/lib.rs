@@ -5,7 +5,7 @@
 
 //! Shekyl FCMP++ wrapper crate.
 //!
-//! Wraps the upstream `monero-fcmp-plus-plus` crate with Shekyl-specific
+//! Wraps the upstream `shekyl-fcmp-plus-plus` crate with Shekyl-specific
 //! extensions: 4-scalar curve tree leaves `{O.x, I.x, C.x, H(pqc_pk)}`,
 //! Shekyl domain separators, and per-output PQC commitment integration.
 

@@ -11,11 +11,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-# Upstream FCMP++ crates from Shekyl-Foundation fork.
-# The authoritative pin is `rust/Cargo.lock` (currently monero-oxide @ 92af05e0d44bd1ec1fed6028a8d2aade615f805a).
+# Upstream FCMP++ crates from Shekyl-Foundation fork (shekyl-oxide).
+# The authoritative pin is `rust/Cargo.lock`.
 # Use `branch = "fcmp++"` here; bump the lock when advancing the fork.
-monero-fcmp-plus-plus = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
-monero-generators = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++" }
+shekyl-fcmp-plus-plus = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
+shekyl-generators = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++" }
 helioselene = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++" }
 dalek-ff-group = "0.5"
 ciphersuite = "0.4"

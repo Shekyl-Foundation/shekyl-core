@@ -25,8 +25,8 @@ use ciphersuite::{
 };
 use ec_divisors::DivisorCurve;
 use helioselene::{Helios, Selene};
-use monero_fcmp_plus_plus::fcmps;
-use monero_generators::{HELIOS_HASH_INIT, SELENE_HASH_INIT};
+use shekyl_fcmp_plus_plus::fcmps;
+use shekyl_generators::{HELIOS_HASH_INIT, SELENE_HASH_INIT};
 
 /// Number of scalars per output in the leaf layer.
 /// Shekyl uses 4-scalar leaves: {O.x, I.x, C.x, H(pqc_pk)}.
@@ -93,7 +93,7 @@ pub fn hash_grow_selene(
     existing_child_at_offset: &[u8; 32],
     new_children: &[[u8; 32]],
 ) -> Option<[u8; 32]> {
-    let generators = &monero_fcmp_plus_plus::SELENE_FCMP_GENERATORS.generators;
+    let generators = &shekyl_fcmp_plus_plus::SELENE_FCMP_GENERATORS.generators;
     let existing = <Selene as Ciphersuite>::G::from_bytes(existing_hash.into());
     if bool::from(existing.is_none()) {
         return None;
@@ -124,7 +124,7 @@ pub fn hash_trim_selene(
     children_to_remove: &[[u8; 32]],
     child_to_grow_back: &[u8; 32],
 ) -> Option<[u8; 32]> {
-    let generators = &monero_fcmp_plus_plus::SELENE_FCMP_GENERATORS.generators;
+    let generators = &shekyl_fcmp_plus_plus::SELENE_FCMP_GENERATORS.generators;
     let existing = <Selene as Ciphersuite>::G::from_bytes(existing_hash.into());
     if bool::from(existing.is_none()) {
         return None;
@@ -159,7 +159,7 @@ pub fn hash_grow_helios(
     existing_child_at_offset: &[u8; 32],
     new_children: &[[u8; 32]],
 ) -> Option<[u8; 32]> {
-    let generators = &monero_fcmp_plus_plus::HELIOS_FCMP_GENERATORS.generators;
+    let generators = &shekyl_fcmp_plus_plus::HELIOS_FCMP_GENERATORS.generators;
     let existing = <Helios as Ciphersuite>::G::from_bytes(existing_hash.into());
     if bool::from(existing.is_none()) {
         return None;
@@ -190,7 +190,7 @@ pub fn hash_trim_helios(
     children_to_remove: &[[u8; 32]],
     child_to_grow_back: &[u8; 32],
 ) -> Option<[u8; 32]> {
-    let generators = &monero_fcmp_plus_plus::HELIOS_FCMP_GENERATORS.generators;
+    let generators = &shekyl_fcmp_plus_plus::HELIOS_FCMP_GENERATORS.generators;
     let existing = <Helios as Ciphersuite>::G::from_bytes(existing_hash.into());
     if bool::from(existing.is_none()) {
         return None;
@@ -290,7 +290,7 @@ pub fn construct_leaf(
     commitment: &[u8; 32],
     h_pqc: &[u8; 32],
 ) -> Option<[u8; 128]> {
-    let hp_point = monero_generators::biased_hash_to_point(*output_key);
+    let hp_point = shekyl_generators::biased_hash_to_point(*output_key);
     let hp_bytes: [u8; 32] = hp_point.compress().to_bytes();
 
     let o_x = ed25519_point_to_selene_scalar(output_key)?;
@@ -320,8 +320,8 @@ pub fn leaves_to_bytes(leaves: &[ShekylLeaf]) -> Vec<u8> {
 
 /// Compute the expected proof size for a given number of inputs and tree depth.
 pub fn proof_size(num_inputs: usize, tree_depth: usize) -> usize {
-    use monero_fcmp_plus_plus::fcmps::Fcmp;
-    type ShekylFcmp = Fcmp<monero_fcmp_plus_plus::Curves>;
+    use shekyl_fcmp_plus_plus::fcmps::Fcmp;
+    type ShekylFcmp = Fcmp<shekyl_fcmp_plus_plus::Curves>;
     ShekylFcmp::proof_size(num_inputs, tree_depth)
 }
 
