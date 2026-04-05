@@ -93,6 +93,9 @@
     `binary_archive<false>(span<const uint8_t>)` constructor; fixed
     `shekyl_pqc_verify` call to include the required `scheme_id` first
     argument and corrected parameter order.
+  - `tests/unit_tests/staking.cpp`: Same `binary_archive<false>` constructor
+    fix — replaced `istringstream` with `epee::span<const uint8_t>` in all
+    four serialization round-trip tests.
   - macOS CI: Added `zstd` to Homebrew dependencies to fix `ld: library
     'zstd' not found` linker error.
 

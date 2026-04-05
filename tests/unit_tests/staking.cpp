@@ -61,8 +61,7 @@ TEST(staking, txin_stake_claim_serialization_roundtrip)
 
   txin_stake_claim deserialized;
   std::string data = oss.str();
-  std::istringstream iss(data);
-  binary_archive<false> iar(iss);
+  binary_archive<false> iar({reinterpret_cast<const uint8_t*>(data.data()), data.size()});
   ASSERT_TRUE(::do_serialize(iar, deserialized));
 
   EXPECT_EQ(deserialized.amount, original.amount);
@@ -86,8 +85,7 @@ TEST(staking, txout_to_staked_key_serialization_roundtrip)
 
   txout_to_staked_key deserialized;
   std::string data = oss.str();
-  std::istringstream iss(data);
-  binary_archive<false> iar(iss);
+  binary_archive<false> iar({reinterpret_cast<const uint8_t*>(data.data()), data.size()});
   ASSERT_TRUE(::do_serialize(iar, deserialized));
 
   EXPECT_EQ(deserialized.key, original.key);
@@ -111,8 +109,7 @@ TEST(staking, txin_stake_claim_boundary_values)
 
   txin_stake_claim rt;
   std::string data = oss.str();
-  std::istringstream iss(data);
-  binary_archive<false> iar(iss);
+  binary_archive<false> iar({reinterpret_cast<const uint8_t*>(data.data()), data.size()});
   ASSERT_TRUE(::do_serialize(iar, rt));
 
   EXPECT_EQ(rt.amount, 0u);
@@ -137,8 +134,7 @@ TEST(staking, txout_to_staked_key_all_tiers)
 
     txout_to_staked_key rt;
     std::string data = oss.str();
-    std::istringstream iss(data);
-    binary_archive<false> iar(iss);
+    binary_archive<false> iar({reinterpret_cast<const uint8_t*>(data.data()), data.size()});
     ASSERT_TRUE(::do_serialize(iar, rt));
 
     EXPECT_EQ(rt.lock_tier, tier);
