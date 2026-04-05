@@ -43,6 +43,7 @@
 #include "cryptonote_config.h"
 #include "serialization/binary_archive.h"
 #include "cryptonote_basic/cryptonote_basic.h"
+#include "cryptonote_core/blockchain.h"
 
 using namespace std;
 using namespace crypto;
@@ -553,4 +554,152 @@ TEST(fcmp, multisig_2of3_sig_container_assembly)
     shekyl_buffer_free(kps[i].public_key.ptr, kps[i].public_key.len);
     shekyl_buffer_free(kps[i].secret_key.ptr, kps[i].secret_key.len);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 7: Verification caching tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST(fcmp, verification_cache_hash_deterministic)
+{
+  // Same transaction produces the same verification hash twice
+  cryptonote::transaction tx{};
+  tx.version = 3;
+  tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04, 0x05};
+  memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
+
+  cryptonote::txin_to_key in1;
+  memset(&in1.k_image, 0xBB, 32);
+  in1.amount = 0;
+  tx.vin.push_back(in1);
+
+  crypto::hash h1 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  crypto::hash h2 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  ASSERT_EQ(h1, h2);
+  ASSERT_NE(h1, crypto::null_hash);
+}
+
+TEST(fcmp, verification_cache_hash_differs_on_proof_change)
+{
+  cryptonote::transaction tx{};
+  tx.version = 3;
+  tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03};
+  memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
+
+  cryptonote::txin_to_key in1;
+  memset(&in1.k_image, 0xBB, 32);
+  in1.amount = 0;
+  tx.vin.push_back(in1);
+
+  crypto::hash h1 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+
+  tx.rct_signatures.p.fcmp_pp_proof[0] = 0xFF;
+  crypto::hash h2 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+
+  ASSERT_NE(h1, h2);
+}
+
+TEST(fcmp, verification_cache_hash_differs_on_reference_block_change)
+{
+  cryptonote::transaction tx{};
+  tx.version = 3;
+  tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03};
+  memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
+
+  cryptonote::txin_to_key in1;
+  memset(&in1.k_image, 0xBB, 32);
+  in1.amount = 0;
+  tx.vin.push_back(in1);
+
+  crypto::hash h1 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+
+  memset(&tx.rct_signatures.referenceBlock, 0xCC, 32);
+  crypto::hash h2 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+
+  ASSERT_NE(h1, h2);
+}
+
+TEST(fcmp, verification_cache_hash_differs_on_key_image_change)
+{
+  cryptonote::transaction tx{};
+  tx.version = 3;
+  tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03};
+  memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
+
+  cryptonote::txin_to_key in1;
+  memset(&in1.k_image, 0xBB, 32);
+  in1.amount = 0;
+  tx.vin.push_back(in1);
+
+  crypto::hash h1 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+
+  std::get<cryptonote::txin_to_key>(tx.vin[0]).k_image.data[0] = 0xFF;
+  crypto::hash h2 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+
+  ASSERT_NE(h1, h2);
+}
+
+TEST(fcmp, verification_cache_hash_null_for_non_fcmp_type)
+{
+  cryptonote::transaction tx{};
+  tx.version = 2;
+  tx.rct_signatures.type = rct::RCTTypeNull;
+
+  crypto::hash h = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  ASSERT_EQ(h, crypto::null_hash);
+}
+
+TEST(fcmp, verification_cache_hash_multiple_inputs)
+{
+  cryptonote::transaction tx{};
+  tx.version = 3;
+  tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+  tx.rct_signatures.p.fcmp_pp_proof = {0x01, 0x02, 0x03, 0x04};
+  memset(&tx.rct_signatures.referenceBlock, 0xAA, 32);
+
+  for (int i = 0; i < 4; ++i)
+  {
+    cryptonote::txin_to_key in;
+    memset(&in.k_image, i + 1, 32);
+    in.amount = 0;
+    tx.vin.push_back(in);
+  }
+
+  crypto::hash h1 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  ASSERT_NE(h1, crypto::null_hash);
+
+  // Same tx must give same hash
+  crypto::hash h2 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  ASSERT_EQ(h1, h2);
+
+  // Adding one more input changes the hash
+  cryptonote::txin_to_key extra_in;
+  memset(&extra_in.k_image, 0x05, 32);
+  extra_in.amount = 0;
+  tx.vin.push_back(extra_in);
+
+  crypto::hash h3 = cryptonote::Blockchain::compute_fcmp_verification_hash(tx);
+  ASSERT_NE(h1, h3);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 7: Timestamp unlock_time rejection (D13) - unit level
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST(fcmp, timestamp_unlock_time_sentinel_constant)
+{
+  // CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL must equal CRYPTONOTE_MAX_BLOCK_NUMBER
+  ASSERT_EQ(CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL, CRYPTONOTE_MAX_BLOCK_NUMBER);
+  // Must be large enough that no reasonable block height ever reaches it
+  ASSERT_GT(CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL, 500000000ULL);
+}
+
+TEST(fcmp, fcmp_reference_block_min_age_value)
+{
+  ASSERT_EQ(FCMP_REFERENCE_BLOCK_MIN_AGE, 5u);
+  ASSERT_LT(FCMP_REFERENCE_BLOCK_MIN_AGE, FCMP_REFERENCE_BLOCK_MAX_AGE);
 }

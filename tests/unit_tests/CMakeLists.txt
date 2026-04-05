@@ -105,6 +105,8 @@ set(unit_tests_sources
   aligned.cpp
   rpc_version_str.cpp
   staking.cpp
+  deferred_insertion.cpp
+  pending_tree_fuzz.cpp
   zmq_rpc.cpp)
 
 set(unit_tests_headers

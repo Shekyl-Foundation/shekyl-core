@@ -4,6 +4,41 @@
 
 ### ✨ Added
 
+- **FCMP++ transaction construction helper (`construct_fcmp_tx`).** New chaingen
+  helper in `tests/core_tests/chaingen.cpp` that builds fully valid FCMP++
+  transactions during core test replay: tree path assembly from the live LMDB
+  curve tree, `genRctFcmpPlusPlus` proof generation, KEM decapsulation for
+  per-input PQC keypair derivation, and PQC auth signing. This unblocks 30+
+  disabled core tests that relied on the old `construct_tx_rct` stub.
+
+- **FCMP++ core test generators (Phase 7).** Five new tests in
+  `tests/core_tests/fcmp_tests.cpp`:
+  - `gen_fcmp_tx_valid`: end-to-end FCMP++ transaction construction and pool
+    acceptance during replay
+  - `gen_fcmp_tx_double_spend`: second FCMP++ spend of the same output rejected
+  - `gen_fcmp_tx_reference_block_too_old`: stale referenceBlock rejected
+  - `gen_fcmp_tx_reference_block_too_recent`: too-recent referenceBlock rejected
+  - `gen_fcmp_tx_timestamp_unlock_rejected`: timestamp-based `unlock_time` rejected
+
+- **Verification caching unit tests.** Six new GTest cases in
+  `tests/unit_tests/fcmp.cpp` validating `compute_fcmp_verification_hash`
+  determinism, sensitivity to proof/referenceBlock/key-image changes, null return
+  for non-FCMP++ types, and multi-input handling.
+
+- **Deferred insertion boundary tests.** New `tests/unit_tests/deferred_insertion.cpp`
+  with tests for: outputs not drainable before maturity, coinbase maturity window
+  (60 blocks), regular tx maturity window (10 blocks), drain journal atomicity
+  round-trip, and insertion ordering determinism across two DB instances.
+
+- **Pending tree add/pop stress test.** New `tests/unit_tests/pending_tree_fuzz.cpp`
+  with randomized stress test (100 random leaves, multi-height draining),
+  add/remove round-trip, drain journal CRUD, and leaf removal correctness.
+
+- **`fuzz_tx_deserialize_fcmp_type7` Rust fuzz target.** New cargo-fuzz target in
+  `rust/shekyl-fcmp/fuzz/` that exercises FCMP++ proof verification with
+  transaction-structured random inputs: pseudoOuts, proof blobs, PQC hashes,
+  corrupted type bytes, empty proofs, and mismatched input counts.
+
 - **Comprehensive staking test suite.** New test coverage across C++ and Rust:
   - `tests/unit_tests/staking.cpp`: 20+ GTest unit tests covering
     `txin_stake_claim` and `txout_to_staked_key` serialization round-trips,

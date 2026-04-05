@@ -1061,7 +1061,7 @@ Seven `cargo-fuzz` targets exercise the critical parsing, crypto, and staking bo
 | `fuzz_bech32m_address_decode` | `shekyl-crypto-pq` | Random strings through Bech32m decoder, wrong HRPs, bad checksums |
 | `fuzz_kem_decapsulate` | `shekyl-crypto-pq` | Corrupted ML-KEM ciphertexts, wrong-length keys and ciphertexts |
 | `fuzz_claim_reward` | `shekyl-staking` | Random accrual records; reward overflow, monotonicity, and bound invariants |
-| `fuzz_tx_deserialize_fcmp_type7` | C++ unit tests | RCTTypeFcmpPlusPlusPqc serialization boundary testing |
+| `fuzz_tx_deserialize_fcmp_type7` | `shekyl-fcmp` | Transaction-structured FCMP++ deserialization: pseudoOuts, proof blobs, PQC hashes, corrupted types |
 
 Run any target:
 
@@ -1128,6 +1128,35 @@ cd rust && cargo test --workspace
 - `get_pseudo_outs` routing (prunable vs base for FCMP++ type)
 - `curve_tree_root` block header serialization round-trip
 - Empty FCMP++ proof rejection by `shekyl_fcmp_verify` (in `check_tx_inputs`)
+- `compute_fcmp_verification_hash` determinism and cache-key sensitivity (6 tests)
+- `CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL` constant validation
+- `FCMP_REFERENCE_BLOCK_MIN_AGE` value and ordering assertions
+
+`tests/unit_tests/deferred_insertion.cpp` covers (Decision 14):
+
+- Outputs not drainable before their maturity height
+- Coinbase maturity window (60 blocks) boundary
+- Regular tx maturity window (10 blocks) boundary
+- Drain journal add/retrieve/remove atomicity round-trip
+- Insertion ordering determinism across two LMDB instances
+
+`tests/unit_tests/pending_tree_fuzz.cpp` covers:
+
+- Add/remove round-trip for pending tree leaves
+- Multi-height drain correctness
+- Drain journal entry CRUD operations
+- Randomized stress test (100 leaves, random maturity heights)
+- Single-leaf removal from multi-leaf pending set
+
+### C++ Core Tests (chaingen)
+
+`tests/core_tests/fcmp_tests.cpp` covers:
+
+- `gen_fcmp_tx_valid`: full FCMP++ transaction construction (proof + PQC auth) and pool acceptance
+- `gen_fcmp_tx_double_spend`: double-spend rejection for FCMP++ transactions
+- `gen_fcmp_tx_reference_block_too_old`: stale referenceBlock rejection
+- `gen_fcmp_tx_reference_block_too_recent`: too-recent referenceBlock rejection
+- `gen_fcmp_tx_timestamp_unlock_rejected`: timestamp-based unlock_time rejection (Decision 13)
 
 ### PQC Rederivation Benchmark
 

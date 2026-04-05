@@ -32,4 +32,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_tx_deserialize_fcmp_type7"
+path = "fuzz_targets/fuzz_tx_deserialize_fcmp_type7.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

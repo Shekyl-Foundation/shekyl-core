@@ -34,6 +34,7 @@
 #include "common/command_line.h"
 #include "tx_pool.h"
 #include "staking.h"
+#include "fcmp_tests.h"
 #include "transaction_tests.h"
 
 #include <boost/regex.hpp>
@@ -227,6 +228,13 @@ int main(int argc, char* argv[])
     // GENERATE_AND_PLAY(gen_bpp_tx_invalid_clsag_type);
 
     GENERATE_AND_PLAY(gen_block_low_coinbase);
+
+    // FCMP++ transaction tests (Phase 7)
+    GENERATE_AND_PLAY(gen_fcmp_tx_valid);
+    GENERATE_AND_PLAY(gen_fcmp_tx_double_spend);
+    GENERATE_AND_PLAY(gen_fcmp_tx_reference_block_too_old);
+    GENERATE_AND_PLAY(gen_fcmp_tx_reference_block_too_recent);
+    GENERATE_AND_PLAY(gen_fcmp_tx_timestamp_unlock_rejected);
 
     // Staking tests
     GENERATE_AND_PLAY(gen_staking_lifecycle);

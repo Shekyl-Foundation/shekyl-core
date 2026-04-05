@@ -57,7 +57,11 @@
 #include "chaingen.h"
 #include "device/device.hpp"
 #include "fcmp/rctOps.h"
+#include "fcmp/rctSigs.h"
+#include "memwipe.h"
 #include "shekyl/economics.h"
+#include "shekyl/shekyl_ffi.h"
+#include "cryptonote_core/tx_pqc_verify.h"
 using namespace std;
 
 using namespace epee;
@@ -1146,6 +1150,347 @@ transaction construct_tx_with_fee(std::vector<test_event_entry>& events, const b
   construct_tx_to_key(events, tx, blk_head, acc_from, to, amount, fee, 0);
   events.push_back(tx);
   return tx;
+}
+
+static bool assemble_tree_path_for_output(
+    const BlockchainDB& db,
+    uint64_t output_idx,
+    std::vector<uint8_t>& path_out)
+{
+  const uint8_t depth = db.get_curve_tree_depth();
+  const uint64_t leaf_count = db.get_curve_tree_leaf_count();
+  if (leaf_count == 0 || output_idx >= leaf_count || depth == 0)
+    return false;
+
+  const uint32_t SELENE_CHUNK = shekyl_curve_tree_selene_chunk_width();
+  const uint32_t HELIOS_CHUNK = shekyl_curve_tree_helios_chunk_width();
+
+  auto chunk_width = [&](uint8_t layer) -> uint32_t {
+    if (layer == 0) return SELENE_CHUNK;
+    return (layer % 2 == 0) ? SELENE_CHUNK : HELIOS_CHUNK;
+  };
+
+  path_out.clear();
+
+  // Layer 0: leaf scalars in the chunk
+  uint64_t chunk_idx = output_idx / SELENE_CHUNK;
+  uint64_t chunk_start = chunk_idx * SELENE_CHUNK;
+  uint64_t chunk_end = std::min(chunk_start + SELENE_CHUNK, leaf_count);
+
+  uint16_t leaf_pos = static_cast<uint16_t>(output_idx - chunk_start);
+  path_out.push_back(static_cast<uint8_t>(leaf_pos & 0xFF));
+  path_out.push_back(static_cast<uint8_t>((leaf_pos >> 8) & 0xFF));
+
+  static constexpr size_t LEAF_BYTES = 128; // 4 scalars * 32 bytes
+  for (uint64_t i = chunk_start; i < chunk_end; ++i)
+  {
+    uint8_t leaf[LEAF_BYTES];
+    if (!db.get_curve_tree_leaf(i, leaf))
+      return false;
+    path_out.insert(path_out.end(), leaf, leaf + LEAF_BYTES);
+  }
+
+  // Upper layers: sibling hashes
+  uint64_t parent_idx = chunk_idx;
+  for (uint8_t layer = 1; layer < depth; ++layer)
+  {
+    uint32_t cw = chunk_width(layer);
+    uint64_t layer_chunks = (parent_idx / cw) * cw;
+    // Get total nodes at this layer for bounds
+    uint64_t prev_count = (layer == 1) ? leaf_count : 0;
+    // Simplified: we just read the chunk of siblings
+    uint64_t my_chunk_idx = parent_idx / cw;
+    uint64_t sib_start = my_chunk_idx * cw;
+    uint16_t pos_in_chunk = static_cast<uint16_t>(parent_idx - sib_start);
+    path_out.push_back(static_cast<uint8_t>(pos_in_chunk & 0xFF));
+    path_out.push_back(static_cast<uint8_t>((pos_in_chunk >> 8) & 0xFF));
+
+    // Read sibling hashes at this layer
+    for (uint64_t j = sib_start; ; ++j)
+    {
+      uint8_t hash[32];
+      if (!db.get_curve_tree_layer_hash(layer, j, hash))
+        break;
+      path_out.insert(path_out.end(), hash, hash + 32);
+      if (j - sib_start + 1 >= cw)
+        break;
+    }
+    parent_idx = my_chunk_idx;
+  }
+
+  return !path_out.empty();
+}
+
+bool construct_fcmp_tx(
+    cryptonote::core& c,
+    const cryptonote::account_base& from,
+    const cryptonote::account_public_address& to,
+    uint64_t amount,
+    uint64_t fee,
+    const std::vector<test_event_entry>& events,
+    const cryptonote::block& blk_head,
+    cryptonote::transaction& tx)
+{
+  // Phase A: fill sources and destinations, build tx prefix
+  vector<tx_source_entry> sources;
+  vector<tx_destination_entry> destinations;
+  fill_tx_sources_and_destinations(events, blk_head, from, to, amount, fee, 0, sources, destinations);
+
+  if (sources.empty())
+  {
+    LOG_ERROR("construct_fcmp_tx: no sources found");
+    return false;
+  }
+
+  crypto::secret_key tx_key;
+  std::vector<crypto::secret_key> additional_tx_keys;
+  std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
+  subaddresses[from.get_keys().m_account_address.m_spend_public_key] = {0, 0};
+  std::vector<tx_destination_entry> dests_copy = destinations;
+
+  bool r = construct_tx_and_get_tx_key(
+    from.get_keys(), subaddresses, sources, dests_copy,
+    from.get_keys().m_account_address, std::vector<uint8_t>(),
+    tx, tx_key, additional_tx_keys, true, true, 1);
+  CHECK_AND_ASSERT_MES(r, false, "construct_fcmp_tx: construct_tx_and_get_tx_key failed");
+
+  // Phase B: build FCMP++ proof
+  const auto& bs = c.get_blockchain_storage();
+  const auto& db = bs.get_db();
+  const size_t num_inputs = tx.vin.size();
+
+  rct::ctkeyV inSk(num_inputs), inPk(num_inputs);
+  std::vector<std::vector<uint8_t>> tree_paths(num_inputs);
+  rct::keyV pqc_pk_hashes(num_inputs);
+  std::vector<std::vector<uint8_t>> derived_pqc_public_keys(num_inputs);
+  std::vector<std::vector<uint8_t>> derived_pqc_secret_keys(num_inputs);
+
+  auto wipe_keys = epee::misc_utils::create_scope_leave_handler([&derived_pqc_secret_keys]() {
+    for (auto& sk : derived_pqc_secret_keys) {
+      if (!sk.empty()) memwipe(sk.data(), sk.size());
+      sk.clear();
+    }
+  });
+
+  crypto::hash reference_block{};
+  uint8_t tree_depth = db.get_curve_tree_depth();
+  CHECK_AND_ASSERT_MES(tree_depth > 0, false, "construct_fcmp_tx: curve tree depth is 0");
+
+  uint64_t chain_height = c.get_current_blockchain_height();
+  CHECK_AND_ASSERT_MES(chain_height > FCMP_REFERENCE_BLOCK_MIN_AGE, false,
+    "construct_fcmp_tx: chain not tall enough for FCMP_REFERENCE_BLOCK_MIN_AGE");
+
+  uint64_t ref_height = chain_height - 1 - FCMP_REFERENCE_BLOCK_MIN_AGE;
+  reference_block = bs.get_block_id_by_height(ref_height);
+
+  // Build inSk/inPk and tree paths per input
+  // We need the original source order to match vin after construct_tx sorted them
+  for (size_t i = 0; i < num_inputs; ++i)
+  {
+    CHECK_AND_ASSERT_MES(std::holds_alternative<txin_to_key>(tx.vin[i]), false,
+      "construct_fcmp_tx: unexpected input type");
+    const txin_to_key& in = std::get<txin_to_key>(tx.vin[i]);
+
+    // Find the source entry matching this vin by key image
+    const tx_source_entry* matched_src = nullptr;
+    for (const auto& src : sources)
+    {
+      crypto::public_key out_key = rct::rct2pk(src.outputs[src.real_output].second.dest);
+      keypair in_eph;
+      crypto::key_image ki;
+      generate_key_image_helper(from.get_keys(), subaddresses, out_key,
+        src.real_out_tx_key, src.real_out_additional_tx_keys,
+        src.real_output_in_tx_index, in_eph, ki, hw::get_device("default"));
+      crypto::key_image_y_normalize(ki);
+      if (ki == in.k_image)
+      {
+        matched_src = &src;
+        inSk[i].dest = rct::sk2rct(in_eph.sec);
+        inSk[i].mask = src.mask;
+        inPk[i].dest = rct::pk2rct(out_key);
+        inPk[i].mask = src.rct ? src.outputs[src.real_output].second.mask : rct::zeroCommit(src.amount);
+        break;
+      }
+    }
+    CHECK_AND_ASSERT_MES(matched_src, false, "construct_fcmp_tx: could not match source for vin " << i);
+
+    // Assemble tree path for this output's global index
+    uint64_t global_idx = matched_src->outputs[matched_src->real_output].first;
+    CHECK_AND_ASSERT_MES(assemble_tree_path_for_output(db, global_idx, tree_paths[i]), false,
+      "construct_fcmp_tx: tree path assembly failed for global_idx " << global_idx);
+
+    // Derive per-input PQC keypair
+    // For test coinbase outputs, we need the KEM shared secret. We can derive it
+    // from the miner's PQC secret key and the KEM ciphertext in tx_extra.
+    const transaction* src_tx = nullptr;
+    // Find source transaction from events
+    crypto::hash src_tx_hash = matched_src->real_out_tx_key == crypto::null_pkey
+      ? crypto::null_hash : crypto::null_hash;
+    // We need to find the source tx. Look it up from the blockchain.
+    transaction src_tx_data;
+    crypto::hash src_tx_id;
+    {
+      // The source tx_key lets us find it. For coinbase, the output's tx is the miner tx.
+      // We need the KEM ciphertext to derive the shared secret.
+      // Use the events to find the source tx.
+      std::vector<block> blockchain;
+      map_hash2tx_t mtx;
+      find_block_chain(events, blockchain, mtx, get_block_hash(blk_head));
+
+      bool found = false;
+      for (const auto& blk : blockchain)
+      {
+        crypto::public_key blk_tx_key = get_tx_pub_key_from_extra(blk.miner_tx);
+        if (blk_tx_key == matched_src->real_out_tx_key)
+        {
+          src_tx_data = blk.miner_tx;
+          found = true;
+          break;
+        }
+        for (const auto& [hash, ptx] : mtx)
+        {
+          crypto::public_key tx_pk = get_tx_pub_key_from_extra(*ptx);
+          if (tx_pk == matched_src->real_out_tx_key)
+          {
+            src_tx_data = *ptx;
+            found = true;
+            break;
+          }
+        }
+        if (found) break;
+      }
+      CHECK_AND_ASSERT_MES(found, false, "construct_fcmp_tx: source tx not found in events");
+    }
+
+    // Extract KEM ciphertext from source tx
+    std::vector<tx_extra_field> extra_fields;
+    parse_tx_extra(src_tx_data.extra, extra_fields);
+    tx_extra_pqc_kem_ciphertext kem_ct_field;
+    bool has_kem = find_tx_extra_field_by_type(extra_fields, kem_ct_field);
+    CHECK_AND_ASSERT_MES(has_kem, false, "construct_fcmp_tx: source tx missing KEM ciphertext in tx_extra");
+
+    static constexpr size_t HYBRID_KEM_CT_BYTES = 1120;
+    size_t output_in_tx = matched_src->real_output_in_tx_index;
+    CHECK_AND_ASSERT_MES(kem_ct_field.blob.size() >= (output_in_tx + 1) * HYBRID_KEM_CT_BYTES, false,
+      "construct_fcmp_tx: KEM ciphertext blob too short");
+
+    const uint8_t* ct_ptr = reinterpret_cast<const uint8_t*>(kem_ct_field.blob.data()) + output_in_tx * HYBRID_KEM_CT_BYTES;
+    static constexpr size_t X25519_CT_BYTES = 32;
+    static constexpr size_t ML_KEM_CT_BYTES = 1088;
+
+    const uint8_t* ct_x25519 = ct_ptr;
+    const uint8_t* ct_ml_kem = ct_ptr + X25519_CT_BYTES;
+
+    // Decapsulate using the sender's PQC secret key
+    const auto& sender_keys = from.get_keys();
+    static constexpr size_t X25519_SK_BYTES = 32;
+    CHECK_AND_ASSERT_MES(sender_keys.m_pqc_secret_key.size() > X25519_SK_BYTES, false,
+      "construct_fcmp_tx: sender PQC secret key too short");
+
+    const uint8_t* sk_x25519 = sender_keys.m_pqc_secret_key.data();
+    const uint8_t* sk_ml_kem = sender_keys.m_pqc_secret_key.data() + X25519_SK_BYTES;
+    size_t sk_ml_kem_len = sender_keys.m_pqc_secret_key.size() - X25519_SK_BYTES;
+
+    uint8_t combined_ss[64];
+    bool decap_ok = shekyl_kem_decapsulate(
+      sk_x25519, sk_ml_kem, sk_ml_kem_len,
+      ct_x25519, ct_ml_kem, ML_KEM_CT_BYTES,
+      combined_ss);
+    CHECK_AND_ASSERT_MES(decap_ok, false, "construct_fcmp_tx: KEM decapsulation failed for input " << i);
+
+    ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(combined_ss, static_cast<uint64_t>(output_in_tx));
+    memwipe(combined_ss, sizeof(combined_ss));
+    CHECK_AND_ASSERT_MES(kp.success && kp.public_key.ptr && kp.secret_key.ptr, false,
+      "construct_fcmp_tx: PQC keypair derivation failed for input " << i);
+
+    derived_pqc_public_keys[i].assign(kp.public_key.ptr, kp.public_key.ptr + kp.public_key.len);
+    derived_pqc_secret_keys[i].assign(kp.secret_key.ptr, kp.secret_key.ptr + kp.secret_key.len);
+
+    uint8_t h_pqc[32];
+    bool hash_ok = shekyl_fcmp_pqc_leaf_hash(kp.public_key.ptr, kp.public_key.len, h_pqc);
+    shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
+    shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
+    CHECK_AND_ASSERT_MES(hash_ok, false, "construct_fcmp_tx: PQC leaf hash failed for input " << i);
+    memcpy(pqc_pk_hashes[i].bytes, h_pqc, 32);
+  }
+
+  // Gather output data for genRctFcmpPlusPlus
+  std::vector<rct::xmr_amount> inamounts, outamounts;
+  rct::keyV destinations_rct;
+  for (size_t i = 0; i < num_inputs; ++i)
+  {
+    const tx_source_entry* src = nullptr;
+    const txin_to_key& in = std::get<txin_to_key>(tx.vin[i]);
+    for (const auto& s : sources)
+    {
+      crypto::public_key ok = rct::rct2pk(s.outputs[s.real_output].second.dest);
+      keypair ep; crypto::key_image ki;
+      generate_key_image_helper(from.get_keys(), subaddresses, ok,
+        s.real_out_tx_key, s.real_out_additional_tx_keys,
+        s.real_output_in_tx_index, ep, ki, hw::get_device("default"));
+      crypto::key_image_y_normalize(ki);
+      if (ki == in.k_image) { src = &s; break; }
+    }
+    inamounts.push_back(src->amount);
+  }
+  for (const auto& out : tx.vout)
+  {
+    crypto::public_key out_pk;
+    CHECK_AND_ASSERT_MES(get_output_public_key(out, out_pk), false, "Cannot extract output public key");
+    destinations_rct.push_back(rct::pk2rct(out_pk));
+    outamounts.push_back(out.amount);
+  }
+
+  rct::keyV amount_keys(destinations_rct.size());
+  for (size_t i = 0; i < destinations_rct.size(); ++i)
+  {
+    crypto::key_derivation derivation;
+    crypto::generate_key_derivation(rct::rct2pk(destinations_rct[i]), tx_key, derivation);
+    crypto::secret_key scalar;
+    crypto::derivation_to_scalar(derivation, i, scalar);
+    amount_keys[i] = rct::sk2rct(scalar);
+  }
+
+  crypto::hash tx_prefix_hash;
+  get_transaction_prefix_hash(tx, tx_prefix_hash);
+
+  rct::rctSig rv = rct::genRctFcmpPlusPlus(
+    rct::hash2rct(tx_prefix_hash),
+    inSk, inPk,
+    destinations_rct, inamounts, outamounts, amount_keys,
+    fee, reference_block, tree_depth,
+    tree_paths, pqc_pk_hashes,
+    hw::get_device("default"));
+  tx.rct_signatures = rv;
+
+  // Phase C: PQC auth signing
+  tx.pqc_auths.resize(num_inputs);
+  for (size_t i = 0; i < num_inputs; ++i)
+  {
+    tx.pqc_auths[i].auth_version = 1;
+    tx.pqc_auths[i].scheme_id = 1;
+    tx.pqc_auths[i].flags = 0;
+    tx.pqc_auths[i].hybrid_public_key = derived_pqc_public_keys[i];
+
+    std::string payload_blob;
+    CHECK_AND_ASSERT_MES(get_transaction_signed_payload(tx, i, payload_blob), false,
+      "construct_fcmp_tx: get_transaction_signed_payload failed for input " << i);
+    crypto::hash payload_hash;
+    get_blob_hash(payload_blob, payload_hash);
+
+    ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
+      reinterpret_cast<const uint8_t*>(derived_pqc_secret_keys[i].data()),
+      derived_pqc_secret_keys[i].size(),
+      reinterpret_cast<const uint8_t*>(payload_hash.data), sizeof(payload_hash.data));
+    CHECK_AND_ASSERT_MES(sig_result.success, false,
+      "construct_fcmp_tx: PQC signing failed for input " << i);
+    tx.pqc_auths[i].hybrid_signature.assign(sig_result.signature.ptr,
+      sig_result.signature.ptr + sig_result.signature.len);
+    shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
+  }
+
+  tx.invalidate_hashes();
+  return true;
 }
 
 uint64_t get_balance(const cryptonote::account_base& addr, const std::vector<cryptonote::block>& blockchain, const map_hash2tx_t& mtx) {
