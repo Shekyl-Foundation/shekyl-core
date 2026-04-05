@@ -24,12 +24,8 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 
 # Crypto primitives
 blake2 = "0.10"
-sha2 = "0.10"
 zeroize = { version = "1", features = ["derive"] }
 rand_core = { version = "0.6", features = ["std"] }
-
-# Local crates
-shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 
 thiserror.workspace = true
 serde.workspace = true

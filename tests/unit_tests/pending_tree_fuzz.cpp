@@ -75,7 +75,7 @@ void make_leaf(uint8_t seed, uint8_t leaf[LEAF_BYTES])
 TEST(pending_tree_fuzz, add_remove_roundtrip)
 {
   TempLMDB env;
-  auto& db = env.db;
+  BlockchainDB& db = env.db;
 
   db.batch_start();
 
@@ -102,7 +102,7 @@ TEST(pending_tree_fuzz, add_remove_roundtrip)
 TEST(pending_tree_fuzz, add_remove_multiple_heights)
 {
   TempLMDB env;
-  auto& db = env.db;
+  BlockchainDB& db = env.db;
 
   db.batch_start();
 
@@ -136,7 +136,7 @@ TEST(pending_tree_fuzz, add_remove_multiple_heights)
 TEST(pending_tree_fuzz, drain_journal_entries)
 {
   TempLMDB env;
-  auto& db = env.db;
+  BlockchainDB& db = env.db;
 
   db.batch_start();
 
@@ -164,7 +164,7 @@ TEST(pending_tree_fuzz, drain_journal_entries)
 TEST(pending_tree_fuzz, randomized_add_pop_cycles)
 {
   TempLMDB env;
-  auto& db = env.db;
+  BlockchainDB& db = env.db;
 
   std::mt19937 rng(12345);
   std::uniform_int_distribution<uint64_t> height_dist(1, 200);
@@ -210,7 +210,7 @@ TEST(pending_tree_fuzz, randomized_add_pop_cycles)
 TEST(pending_tree_fuzz, remove_pending_leaf)
 {
   TempLMDB env;
-  auto& db = env.db;
+  BlockchainDB& db = env.db;
 
   db.batch_start();
 

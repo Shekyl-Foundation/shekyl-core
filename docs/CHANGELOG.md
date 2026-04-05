@@ -114,7 +114,23 @@
   - Re-enabling requires a chaingen FCMP++ transaction generator that
     produces valid PQC auth signatures and curve-tree membership proofs.
 
+### 🔄 Changed
+
+- **`shekyl-fcmp` crate cleanup.** Removed unused `sha2` and `shekyl-crypto-pq`
+  dependencies from `rust/shekyl-fcmp/Cargo.toml`. Renamed the misleading
+  `ProveError::InputCountMismatch` variant to `ProveError::PqcHashMismatch`
+  with a clear `input_index` field indicating which input has a mismatched
+  leaf `h_pqc` vs `pqc_auth` commitment.
+
 ### 🐛 Fixed
+
+- **Private member access in pending tree unit tests.** Fixed 18 compile
+  errors in `pending_tree_fuzz.cpp` and 4 in `deferred_insertion.cpp` on
+  macOS CI where calls to `add_pending_tree_leaf`, `drain_pending_tree_leaves`,
+  `add_pending_tree_drain_entry`, `get_pending_tree_drain_entries`,
+  `remove_pending_tree_drain_entries`, and `remove_pending_tree_leaf` were
+  calling private overrides on `BlockchainLMDB`. Changed all test methods
+  to use `BlockchainDB&` references, accessing the public base class interface.
 
 - **CI compile errors across all platforms.** Fixed compilation failures in
   the new staking and FCMP++ test suites:

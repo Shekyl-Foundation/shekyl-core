@@ -19,8 +19,8 @@ pub enum ProveError {
     #[error("too many inputs: {0} exceeds maximum {MAX_INPUTS}")]
     TooManyInputs(usize),
 
-    #[error("input count mismatch: {inputs} inputs but {pqc_hashes} PQC hashes")]
-    InputCountMismatch { inputs: usize, pqc_hashes: usize },
+    #[error("PQC hash mismatch at input {input_index}: leaf h_pqc differs from pqc_auth commitment")]
+    PqcHashMismatch { input_index: usize },
 
     #[error("tree path unavailable for input {0}")]
     TreePathUnavailable(usize),
@@ -107,10 +107,7 @@ pub fn prove(
     // the separately-provided pqc_hash (which comes from pqc_auth).
     for (i, input) in inputs.iter().enumerate() {
         if input.leaf.h_pqc != input.pqc_hash {
-            return Err(ProveError::InputCountMismatch {
-                inputs: inputs.len(),
-                pqc_hashes: i,
-            });
+            return Err(ProveError::PqcHashMismatch { input_index: i });
         }
     }
 

@@ -1177,6 +1177,71 @@ cd rust/shekyl-crypto-pq && cargo bench --bench pqc_rederivation
 
 ---
 
+## monero-oxide Fork Integration Status
+
+The FCMP++ Rust crypto stack depends on the
+[Shekyl Foundation monero-oxide fork](https://github.com/Shekyl-Foundation/monero-oxide)
+(`fcmp++` branch). The `shekyl-fcmp` crate pulls 4 git dependencies from this
+fork: `monero-fcmp-plus-plus`, `monero-generators`, `helioselene`, `ec-divisors`
+(9 total packages in the lockfile, including transitive deps).
+
+### Current Pin
+
+The lockfile (`rust/Cargo.lock`) pins `92af05e`. The fork HEAD is `1194d9c`
+("Refactor and update for Shekyl fork"), which removes legacy ring signature
+crates, renames `ringct/` to `fcmp/`, and applies Shekyl branding. A directory
+rename from `monero-oxide/` to `shekyl-oxide/` with corresponding package name
+changes (`monero-*` to `shekyl-*`) is in progress but not yet committed.
+
+### Proof Scaffold Status
+
+`rust/shekyl-fcmp/src/proof.rs` contains placeholder `prove()` and `verify()`
+functions (tagged `TODO(phase-1h)`) that produce/consume a scaffold proof blob
+with magic `SHEKYL_FCMP_SCAFFOLD`. These do **not** perform real cryptographic
+proof generation or verification.
+
+**Blocker**: The upstream `full-chain-membership-proofs` circuit uses 6-scalar
+leaves (x,y coordinates for 3 points: O, I, C), while Shekyl's curve tree uses
+a 4-scalar leaf format (x-only for O, I, C plus H(pqc\_pk)). Wiring the Shekyl
+`prove()`/`verify()` to the upstream circuit requires either:
+
+1. Modifying the upstream circuit to accept 4-scalar (or 8-scalar) leaves, or
+2. Adapting the Shekyl leaf encoding to match the upstream 6-scalar format
+
+This is a cryptographic design decision that blocks scaffold replacement.
+
+### Upstream Security Fixes Pending
+
+19 commits on upstream `main` are not yet merged into `fcmp++`. The most
+critical are:
+
+| Commit | Issue |
+|--------|-------|
+| `b6d3e44` | Base58 overflow fix, identity/torsion point rejection |
+| `a941dff` | Varint length fix for zero |
+| `c8be5d3` | Gate debug `Extra::write` assertions |
+
+### RELEASE-BLOCKER Items (monero-oxide)
+
+7 items tagged `RELEASE-BLOCKER(shekyl)` in the fork must be resolved before
+audit signoff:
+
+| Item | File | Impact |
+|------|------|--------|
+| FCMP\_PARAMS safe API | `fcmp/fcmp++/src/lib.rs` | API quality |
+| Generated constant visibility | `fcmp/fcmp++/build.rs` | Encapsulation |
+| DKG offset introspection | `fcmp/fcmp++/src/sal/legacy_multisig.rs` | Upstream coupling |
+| On-curve constraint for `c` | `crypto/fcmps/src/gadgets/mod.rs` | Correctness |
+| Bulk block fetch | `rpc/src/lib.rs` | Sync performance |
+| Bulk height-based fetch | `rpc/src/lib.rs` | Sync performance |
+| Decoy validation | `rpc/src/lib.rs` | Consensus safety |
+
+The 3 RPC items only matter if Shekyl adopts `monero-rpc`/`monero-wallet` for
+wallet functionality. The on-curve constraint and DKG coupling are the items
+most likely to affect proof correctness.
+
+---
+
 ## Related Documents
 
 - `docs/POST_QUANTUM_CRYPTOGRAPHY.md` — full PQC specification

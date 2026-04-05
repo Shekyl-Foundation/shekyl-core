@@ -79,7 +79,7 @@ void make_leaf(uint8_t seed, uint8_t leaf[LEAF_BYTES])
 TEST(deferred_insertion, outputs_not_drainable_before_maturity)
 {
   TempLMDB env;
-  auto& db = env.db;
+  BlockchainDB& db = env.db;
 
   db.batch_start();
 
@@ -109,7 +109,7 @@ TEST(deferred_insertion, outputs_not_drainable_before_maturity)
 TEST(deferred_insertion, coinbase_maturity_window)
 {
   TempLMDB env;
-  auto& db = env.db;
+  BlockchainDB& db = env.db;
 
   db.batch_start();
 
@@ -137,7 +137,7 @@ TEST(deferred_insertion, coinbase_maturity_window)
 TEST(deferred_insertion, regular_tx_maturity_window)
 {
   TempLMDB env;
-  auto& db = env.db;
+  BlockchainDB& db = env.db;
 
   db.batch_start();
 
@@ -169,7 +169,7 @@ TEST(deferred_insertion, regular_tx_maturity_window)
 TEST(deferred_insertion, drain_journal_atomicity)
 {
   TempLMDB env;
-  auto& db = env.db;
+  BlockchainDB& db = env.db;
 
   db.batch_start();
 
@@ -221,7 +221,7 @@ TEST(deferred_insertion, drain_journal_atomicity)
 
 TEST(deferred_insertion, ordering_determinism)
 {
-  auto run_sequence = [](BlockchainLMDB& db) {
+  auto run_sequence = [](BlockchainDB& db) {
     db.batch_start();
 
     // Add multiple leaves at the same maturity height
