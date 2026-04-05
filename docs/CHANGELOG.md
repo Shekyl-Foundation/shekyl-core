@@ -96,8 +96,10 @@
   - `tests/unit_tests/staking.cpp`: Same `binary_archive<false>` constructor
     fix — replaced `istringstream` with `epee::span<const uint8_t>` in all
     four serialization round-trip tests.
-  - macOS CI: Added `zstd` to Homebrew dependencies to fix `ld: library
-    'zstd' not found` linker error.
+  - macOS CI: Added `zstd` to Homebrew dependencies and fixed CMake to use
+    `PkgConfig::ZSTD` imported target instead of bare library name, resolving
+    `ld: library 'zstd' not found` on macOS Homebrew where the library lives
+    in a non-standard path (`/opt/homebrew/lib`).
 
 - **RPC estimate_claim_reward floating-point precision bug.** The
   `on_estimate_claim_reward` RPC handler used `double`-precision arithmetic
