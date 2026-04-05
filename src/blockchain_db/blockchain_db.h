@@ -1955,43 +1955,62 @@ public:
   /**
    * @brief store a pre-computed curve tree leaf for deferred insertion.
    *
-   * Staked outputs whose lock_until > current block_height are stored here.
-   * They will be inserted into the curve tree when a future add_block sees
-   * block_height >= lock_until.
+   * All outputs are deferred: they enter the pending table at creation and
+   * drain into the curve tree when their maturity height is reached.
    *
-   * @param lock_until_height  the height at which this leaf becomes eligible
-   * @param leaf_data          128 bytes of pre-computed leaf data
+   * @param maturity_height  the height at which this leaf becomes eligible
+   * @param leaf_data        128 bytes of pre-computed leaf data
    */
-  virtual void add_pending_staked_leaf(uint64_t lock_until_height, const uint8_t* leaf_data) = 0;
+  virtual void add_pending_tree_leaf(uint64_t maturity_height, const uint8_t* leaf_data) = 0;
 
   /**
-   * @brief drain all pending staked leaves whose lock_until <= current_height.
+   * @brief remove a specific pending tree leaf (exact key + value match).
    *
-   * Removes matching entries from the pending table and appends their
-   * 128-byte leaf data to @p out_leaves.
+   * Used by pop_block to remove outputs that were added to pending at the
+   * popped block height.
    *
-   * @param current_height  the height of the block being added
+   * @param maturity_height  the maturity key of the leaf to remove
+   * @param leaf_data        128 bytes identifying the exact leaf to remove
+   */
+  virtual void remove_pending_tree_leaf(uint64_t maturity_height, const uint8_t* leaf_data) = 0;
+
+  /**
+   * @brief drain all pending leaves whose maturity_height <= current_height.
+   *
+   * Removes matching entries from the pending table, appends their 128-byte
+   * leaf data to @p out_leaves, and journals each drained leaf via
+   * add_pending_tree_drain_entry for pop_block reversibility.
+   *
+   * @param current_height  the height of the block being added (also the journal key)
    * @param out_leaves      output buffer; 128 bytes appended per drained leaf
    * @return number of leaves drained
    */
-  virtual uint64_t drain_pending_staked_leaves(uint64_t current_height, std::vector<uint8_t>& out_leaves) = 0;
+  virtual uint64_t drain_pending_tree_leaves(uint64_t current_height, std::vector<uint8_t>& out_leaves) = 0;
 
   /**
-   * @brief record how many pending leaves were drained at a given block height.
+   * @brief journal a drained leaf for pop_block reversibility.
    *
-   * Used by pop_block to reverse the drain.
+   * Each drained leaf is recorded with its original maturity_height so that
+   * pop_block can re-insert it into the pending table.
+   *
+   * @param block_height     the block at which the drain occurred
+   * @param maturity_height  the leaf's original pending table key
+   * @param leaf_data        128 bytes of leaf data
    */
-  virtual void set_pending_staked_drain_count(uint64_t block_height, uint64_t count) = 0;
+  virtual void add_pending_tree_drain_entry(uint64_t block_height, uint64_t maturity_height, const uint8_t* leaf_data) = 0;
 
   /**
-   * @brief get the number of pending leaves drained at a given block height.
+   * @brief read all drain journal entries for a given block height.
+   *
+   * @param block_height  the block to query
+   * @return vector of (maturity_height, leaf_data[128]) pairs
    */
-  virtual uint64_t get_pending_staked_drain_count(uint64_t block_height) const = 0;
+  virtual std::vector<std::pair<uint64_t, std::array<uint8_t, 128>>> get_pending_tree_drain_entries(uint64_t block_height) const = 0;
 
   /**
-   * @brief remove the drain count record for a given block height.
+   * @brief remove all drain journal entries for a given block height.
    */
-  virtual void remove_pending_staked_drain_count(uint64_t block_height) = 0;
+  virtual void remove_pending_tree_drain_entries(uint64_t block_height) = 0;
 
   // ─── FCMP++ Curve Tree ─────────────────────────────────────────────────────
 

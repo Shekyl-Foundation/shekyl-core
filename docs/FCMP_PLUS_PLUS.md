@@ -419,14 +419,14 @@ verification.
 
 Constants from `cryptonote_config.h`:
 - `FCMP_REFERENCE_BLOCK_MAX_AGE = 100` (~3.3 hours at 2-minute blocks)
-- `FCMP_REFERENCE_BLOCK_MIN_AGE = CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW` (60)
+- `FCMP_REFERENCE_BLOCK_MIN_AGE = 5` (reorg safety margin)
 
-> **Design rationale (MIN_AGE = 60):** Outputs enter the curve tree at creation
-> time (not maturity), which maximises the anonymity set.  Maturity is enforced
-> implicitly: since the reference block is at least 60 blocks behind the tip,
-> every output in the referenced tree state has at least 60 confirmations,
-> satisfying both the coinbase unlock window (60) and regular spendable age (10).
-> `static_assert`s in `cryptonote_config.h` guard this invariant.
+> **Design rationale (MIN_AGE = 5):** Maturity is enforced by universal
+> deferred tree insertion: outputs only enter the curve tree after their
+> type-specific maturity period (coinbase: 60 blocks, regular: 10 blocks,
+> staked: max(lock_until, 10 blocks)).  MIN_AGE therefore only needs to
+> provide a reorg safety margin — 5 blocks (~10 minutes) is sufficient
+> to ensure the referenced tree state is stable.
 
 ### Step 2: Curve Tree State Lookup
 
@@ -827,16 +827,27 @@ Staked outputs (`txout_to_staked_key`) use the same 4-scalar leaf format:
 Leaf = { O.x, I.x, C.x, H(pqc_pk) }
 ```
 
-**Deferred curve-tree insertion:** Staked outputs only enter the curve tree
-after `block_height >= lock_until`. Until then, they are invisible to
-the anonymity set. The `pending_staked_leaves` LMDB table (keyed by
-`lock_until_height`, DUPSORT/DUPFIXED with 128-byte leaf values) stores
-pre-computed leaves until they mature. On each `add_block`,
-`drain_pending_staked_leaves` collects all entries with
-`lock_until <= block_height`, deletes them from the pending table, and
-appends them to the curve tree growth batch. A companion
-`pending_staked_drain` table records the drain count per block height so
-`pop_block` can reverse the operation.
+**Universal deferred curve-tree insertion:** All outputs (coinbase, regular,
+and staked) are deferred: they enter a pending table at creation time and
+only drain into the curve tree once their type-specific maturity height is
+reached.  Maturity heights are:
+- **Coinbase:** `block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW` (60)
+- **Regular:**  `block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE` (10)
+- **Staked:**   `max(lock_until, block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE)`
+
+The `pending_tree_leaves` LMDB table (keyed by `maturity_height`,
+DUPSORT/DUPFIXED with 128-byte leaf values) stores pre-computed leaves.
+On each `add_block`, `drain_pending_tree_leaves` collects all entries with
+`maturity_height <= block_height`, deletes them from the pending table,
+journals each entry in the `pending_tree_drain` table (keyed by block height,
+136-byte values: 8-byte maturity + 128-byte leaf), and appends the leaf data
+to the curve tree growth batch. `pop_block` reads the drain journal to
+restore drained leaves to pending and recomputes each block output's leaf
+to remove it from pending.
+
+Because `FCMP_REFERENCE_BLOCK_MIN_AGE` (5) is now a reorg safety margin
+only (not a maturity enforcement mechanism), the tree is guaranteed to
+contain only matured outputs.
 
 **Claim validation:** `txin_stake_claim` inputs are validated against
 the staked output's `lock_until`, watermark, and computed reward (using
@@ -927,7 +938,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Constant | Value | Location |
 |----------|-------|----------|
 | `FCMP_REFERENCE_BLOCK_MAX_AGE` | 100 | `cryptonote_config.h` |
-| `FCMP_REFERENCE_BLOCK_MIN_AGE` | 60 (= `CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW`) | `cryptonote_config.h` |
+| `FCMP_REFERENCE_BLOCK_MIN_AGE` | 5 (reorg safety margin) | `cryptonote_config.h` |
 | `FCMP_MAX_INPUTS_PER_TX` | 8 | `cryptonote_config.h` |
 | `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` | 10,000 | `cryptonote_config.h` |
 | `RCTTypeFcmpPlusPlusPqc` | 7 | `rctTypes.h` |
@@ -983,7 +994,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | PQC `auth_version`/`flags` consensus checks | **Done** | `tx_pqc_verify.cpp` |
 | Single-signer key size validation | **Done** | `tx_pqc_verify.cpp` |
 | Dead `verRctNonSemanticsSimple` / cache removal | **Done** | `rctSigs.h/cpp`, `tx_verification_utils.h/cpp` |
-| Deferred staked-output insertion | **Done** | `pending_staked_leaves` / `pending_staked_drain` DB tables |
+| Universal deferred tree insertion | **Done** | `pending_tree_leaves` / `pending_tree_drain` DB tables, `blockchain_db.cpp` |
 | Per-input `pqc_auths` field | **Done** | `cryptonote_basic.h` |
 | Per-input PQC signature verification | **Done** | `tx_pqc_verify.cpp` |
 | PQC signed payload binds prunable data + all H(pqc_pk) | **Done** | `tx_pqc_verify.cpp` |

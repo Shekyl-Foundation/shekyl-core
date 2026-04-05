@@ -665,7 +665,7 @@ bool gen_block_late_v1_coinbase_tx::generate(std::vector<test_event_entry>& even
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0, miner_account,
       test_generator::bf_major_ver | test_generator::bf_minor_ver,
-      HF_VERSION_MIN_V2_COINBASE_TX, HF_VERSION_MIN_V2_COINBASE_TX);
+      1, 1);
   events.push_back(blk_1);
 
   DO_CALLBACK(events, "check_block_purged");

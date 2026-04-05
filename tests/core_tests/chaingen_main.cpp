@@ -148,7 +148,7 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_block_is_too_big);
     // Disabled: extremely slow with CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW=60, can take hours
     // GENERATE_AND_PLAY(gen_block_invalid_binary_format);
-    // Disabled: no "late v1 coinbase" era in Shekyl (HF_VERSION_MIN_V2_COINBASE_TX = 1 = genesis)
+    // Disabled: no "late v1 coinbase" era in Shekyl (1 = 1 = genesis)
     // GENERATE_AND_PLAY(gen_block_late_v1_coinbase_tx);
 
     // Transaction verification tests

@@ -3154,6 +3154,14 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     return false;
   }
 
+  if (tx.unlock_time >= CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL)
+  {
+    MERROR_VER("Transaction uses timestamp-based unlock_time (" << tx.unlock_time
+               << " >= sentinel " << CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL << ")");
+    tvc.m_invalid_output = true;
+    return false;
+  }
+
   // require view tags on outputs
   if (!check_output_types(tx, hf_version))
   {

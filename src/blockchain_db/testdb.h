@@ -178,11 +178,12 @@ public:
   virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const override { return 0; }
   virtual void remove_staker_claim_watermark(uint64_t output_index) override {}
 
-  virtual void add_pending_staked_leaf(uint64_t, const uint8_t*) override {}
-  virtual uint64_t drain_pending_staked_leaves(uint64_t, std::vector<uint8_t>&) override { return 0; }
-  virtual void set_pending_staked_drain_count(uint64_t, uint64_t) override {}
-  virtual uint64_t get_pending_staked_drain_count(uint64_t) const override { return 0; }
-  virtual void remove_pending_staked_drain_count(uint64_t) override {}
+  virtual void add_pending_tree_leaf(uint64_t, const uint8_t*) override {}
+  virtual void remove_pending_tree_leaf(uint64_t, const uint8_t*) override {}
+  virtual uint64_t drain_pending_tree_leaves(uint64_t, std::vector<uint8_t>&) override { return 0; }
+  virtual void add_pending_tree_drain_entry(uint64_t, uint64_t, const uint8_t*) override {}
+  virtual std::vector<std::pair<uint64_t, std::array<uint8_t, 128>>> get_pending_tree_drain_entries(uint64_t) const override { return {}; }
+  virtual void remove_pending_tree_drain_entries(uint64_t) override {}
 
   virtual void store_output_metadata(uint64_t, const output_pruning_metadata_t&) override {}
   virtual bool get_output_metadata(uint64_t, output_pruning_metadata_t&) const override { return false; }

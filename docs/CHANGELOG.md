@@ -28,7 +28,37 @@
     computation invariants (no overflow, reward <= pool, weight monotonicity,
     cumulative bounds).
 
+### 🔄 Changed
+
+- **Universal deferred curve-tree insertion (Decision 15).** All outputs
+  (coinbase, regular, staked) now enter the `pending_tree_leaves` table at
+  creation and drain into the curve tree only after their type-specific
+  maturity height (coinbase: +60, regular: +10, staked: max(lock_until, +10)).
+  The `pending_staked_*` identifiers were renamed to `pending_tree_*` across
+  all database interfaces. The drain journal (`pending_tree_drain`) now stores
+  full 136-byte entries (maturity_height + leaf_data) for exact `pop_block`
+  reversal instead of just a drain count. `pop_block` restores drained leaves
+  to pending and removes the popped block's own pending entries.
+
+- **FCMP_REFERENCE_BLOCK_MIN_AGE reduced to 5 (Decision 14).** With maturity
+  enforced by deferred tree insertion, MIN_AGE now serves only as a reorg
+  safety margin (5 blocks ≈ 10 minutes). The old static_asserts tying
+  MIN_AGE to unlock windows have been removed.
+
+- **Timestamp-based `unlock_time` rejected (Decision 13).** Transactions
+  with `unlock_time >= CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL` (500M) are now
+  rejected in `check_tx_outputs`. Only height-based lock times are accepted.
+
+- **`prune_tx_data` status clarification.** The output-metadata pruning loop
+  in `db_lmdb.cpp` is a plumbing-only stub (`TODO(phase6f)`). The
+  `store_output_metadata`, `get_output_metadata`, and `is_output_pruned`
+  interfaces are live, but the block-iteration pruning loop does not execute.
+
 ### 🗑️ Removed
+
+- **Vestigial hard fork constants.** Removed `HF_VERSION_CLSAG` and
+  `HF_VERSION_MIN_V2_COINBASE_TX` from `cryptonote_config.h`. All test
+  references replaced with literal `1`.
 
 - **Legacy tests incompatible with FCMP++ consensus.** Disabled 30+ core
   and unit tests that relied on Monero-era transaction construction

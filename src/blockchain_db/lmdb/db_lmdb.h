@@ -446,12 +446,13 @@ private:
   virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const override;
   virtual void remove_staker_claim_watermark(uint64_t output_index) override;
 
-  // Deferred staked leaf insertion
-  virtual void add_pending_staked_leaf(uint64_t lock_until_height, const uint8_t* leaf_data) override;
-  virtual uint64_t drain_pending_staked_leaves(uint64_t current_height, std::vector<uint8_t>& out_leaves) override;
-  virtual void set_pending_staked_drain_count(uint64_t block_height, uint64_t count) override;
-  virtual uint64_t get_pending_staked_drain_count(uint64_t block_height) const override;
-  virtual void remove_pending_staked_drain_count(uint64_t block_height) override;
+  // Deferred tree leaf insertion (universal: all outputs go through pending)
+  virtual void add_pending_tree_leaf(uint64_t maturity_height, const uint8_t* leaf_data) override;
+  virtual void remove_pending_tree_leaf(uint64_t maturity_height, const uint8_t* leaf_data) override;
+  virtual uint64_t drain_pending_tree_leaves(uint64_t current_height, std::vector<uint8_t>& out_leaves) override;
+  virtual void add_pending_tree_drain_entry(uint64_t block_height, uint64_t maturity_height, const uint8_t* leaf_data) override;
+  virtual std::vector<std::pair<uint64_t, std::array<uint8_t, 128>>> get_pending_tree_drain_entries(uint64_t block_height) const override;
+  virtual void remove_pending_tree_drain_entries(uint64_t block_height) override;
 
   // FCMP++ Curve tree
   virtual void grow_curve_tree(const std::vector<uint8_t>& leaf_data, uint64_t num_new_outputs) override;
@@ -526,8 +527,8 @@ private:
   MDB_dbi m_staker_accrual;
   MDB_dbi m_staker_claims;
 
-  MDB_dbi m_pending_staked_leaves;  // lock_until_height -> 128 bytes leaf data (DUPSORT)
-  MDB_dbi m_pending_staked_drain;   // block_height -> uint64_t drain count
+  MDB_dbi m_pending_tree_leaves;  // maturity_height -> 128 bytes leaf data (DUPSORT, DUPFIXED)
+  MDB_dbi m_pending_tree_drain;   // block_height -> (uint64_t maturity_height + uint8_t leaf[128]) = 136 bytes (DUPSORT, DUPFIXED)
 
   MDB_dbi m_curve_tree_leaves;    // global_output_index -> 128 bytes leaf data
   MDB_dbi m_curve_tree_layers;    // (layer_idx << 56 | chunk_idx) -> 32 bytes hash

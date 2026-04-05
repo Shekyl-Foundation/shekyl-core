@@ -39,6 +39,7 @@
 #define CRYPTONOTE_DNS_TIMEOUT_MS                       20000
 
 #define CRYPTONOTE_MAX_BLOCK_NUMBER                     500000000
+#define CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL            CRYPTONOTE_MAX_BLOCK_NUMBER
 #define CRYPTONOTE_MAX_TX_SIZE                          1000000
 #define CRYPTONOTE_MAX_TX_PER_BLOCK                     0x10000000
 #define CRYPTONOTE_PUBLIC_ADDRESS_TEXTBLOB_VER          0
@@ -184,26 +185,17 @@
 #define HF_VERSION_SHEKYL_NG                    1  // Three-component economics: release rate, burn, staking
 #define HF_VERSION_FCMP_PLUS_PLUS_PQC           1  // FCMP++ full-chain membership proofs + per-output PQC keys
 
-// Legacy constants retained for test compilation (Phase 7 will remove the tests).
-// Not referenced in production code.
-#define HF_VERSION_CLSAG                        1
-#define HF_VERSION_MIN_V2_COINBASE_TX           1
-
 // FCMP++ consensus parameters
 //
-// MIN_AGE must be >= CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW so that every
-// output in the referenced tree state has matured by the time the spending
-// transaction is included.  Outputs enter the tree at creation time (not
-// maturity), so the reference block anchor enforces maturity implicitly:
-// any output at referenceBlock has at least MIN_AGE confirmations.
+// Output maturity is enforced by universal deferred tree insertion: outputs
+// only enter the curve tree after their type-specific maturity period
+// (coinbase: MINED_MONEY_UNLOCK_WINDOW, regular: DEFAULT_TX_SPENDABLE_AGE,
+// staked: max(lock_until, DEFAULT_TX_SPENDABLE_AGE)).  MIN_AGE is a reorg
+// safety margin ensuring the referenced tree state is stable.
 #define FCMP_REFERENCE_BLOCK_MAX_AGE            100  // ~3.3 hours at 2-min blocks; max referenceBlock staleness
-#define FCMP_REFERENCE_BLOCK_MIN_AGE            CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW  // == 60; ensures all outputs are mature
+#define FCMP_REFERENCE_BLOCK_MIN_AGE            5    // reorg safety margin; maturity enforced by deferred tree insertion
 #define FCMP_MAX_INPUTS_PER_TX                  8    // bounds proof generation time and tx size
 constexpr uint64_t FCMP_CURVE_TREE_CHECKPOINT_INTERVAL = 10000;
-static_assert(FCMP_REFERENCE_BLOCK_MIN_AGE >= CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW,
-  "FCMP_REFERENCE_BLOCK_MIN_AGE must be >= the coinbase unlock window to enforce output maturity");
-static_assert(FCMP_REFERENCE_BLOCK_MIN_AGE >= CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE,
-  "FCMP_REFERENCE_BLOCK_MIN_AGE must be >= the regular tx spendable age to enforce output maturity");
 static_assert(FCMP_REFERENCE_BLOCK_MAX_AGE > FCMP_REFERENCE_BLOCK_MIN_AGE,
   "FCMP_REFERENCE_BLOCK_MAX_AGE must be > MIN_AGE to give wallets a valid reference block window");
 

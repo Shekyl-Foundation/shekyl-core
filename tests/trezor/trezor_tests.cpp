@@ -138,8 +138,8 @@ int main(int argc, char* argv[])
     hw::register_device(HW_TREZOR_NAME, ensure_trezor_test_device());  // shim device for call tracking
 
     // Bootstrapping common chain & accounts
-    const uint8_t initial_hf =  (uint8_t)get_env_long("TEST_MIN_HF", HF_VERSION_CLSAG);
-    const uint8_t max_hf = (uint8_t)get_env_long("TEST_MAX_HF", HF_VERSION_CLSAG);
+    const uint8_t initial_hf =  (uint8_t)get_env_long("TEST_MIN_HF", 1);
+    const uint8_t max_hf = (uint8_t)get_env_long("TEST_MAX_HF", 1);
     auto sync_test = get_env_long("TEST_KI_SYNC", 1);
     MINFO("Test versions " << MONERO_RELEASE_NAME << "' (v" << MONERO_VERSION_FULL << ")");
     MINFO("Testing hardforks [" << (int)initial_hf << ", " << (int)max_hf << "], sync-test: " << sync_test);
@@ -1267,7 +1267,7 @@ void gen_trezor_base::set_hard_fork(uint8_t hf)
     rct_config({rct::RangeProofPaddedBulletproof, 1});
   } else if (hf == 12){
     rct_config({rct::RangeProofPaddedBulletproof, 2});
-  } else if (hf == HF_VERSION_CLSAG){
+  } else if (hf == 1){
     rct_config({rct::RangeProofPaddedBulletproof, 3});
   }  else if (hf == HF_VERSION_BULLETPROOF_PLUS){
     rct_config({rct::RangeProofPaddedBulletproof, 4});
