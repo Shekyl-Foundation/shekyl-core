@@ -49,7 +49,7 @@ jobs:
         run: |
           brew uninstall cmake
           brew update
-          brew install --quiet cmake boost hidapi openssl zmq libpgm miniupnpc expat libunwind-headers protobuf abseil ccache
+          brew install --quiet cmake boost hidapi openssl zmq libpgm miniupnpc expat libunwind-headers protobuf abseil ccache zstd
       - uses: dtolnay/rust-toolchain@stable
       - name: build
         run: |

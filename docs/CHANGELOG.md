@@ -28,7 +28,43 @@
     computation invariants (no overflow, reward <= pool, weight monotonicity,
     cumulative bounds).
 
+### 🗑️ Removed
+
+- **Legacy tests incompatible with FCMP++ consensus.** Disabled 30+ core
+  and unit tests that relied on Monero-era transaction construction
+  (`RCTTypeBulletproofPlus`, CLSAG ring signatures, v1/v2 transactions):
+  - `tests/core_tests/chaingen_main.cpp`: Disabled `gen_simple_chain_001`,
+    `gen_simple_chain_split_1`, `gen_chain_switch_1`, `gen_ring_signature_1`,
+    `gen_ring_signature_2`, all `txpool_*` tests, all `gen_double_spend_*`
+    tests, `gen_block_reward`, all `gen_bpp_*` Bulletproofs+ tests, and
+    several `gen_tx_*` tests whose setup required valid user transactions.
+    These tests construct transactions via `MAKE_TX`/`construct_tx_rct`
+    which produce `RCTTypeFcmpPlusPlusPqc` stubs with empty `pqc_auths`,
+    rejected by `check_tx_inputs` even in FAKECHAIN mode.
+  - `tests/unit_tests/bulletproofs.cpp`: All three weight tests
+    (`weight_equal`, `weight_more`, `weight_pruned`) prefixed with
+    `DISABLED_` and hex blobs removed. Shekyl's `rctSigBase` serialization
+    rejects any type other than `RCTTypeFcmpPlusPlusPqc` (type 7), so old
+    `RCTTypeBulletproofPlus` (type 6) blobs fail to deserialize.
+  - Re-enabling requires a chaingen FCMP++ transaction generator that
+    produces valid PQC auth signatures and curve-tree membership proofs.
+
 ### 🐛 Fixed
+
+- **CI compile errors across all platforms.** Fixed compilation failures in
+  the new staking and FCMP++ test suites:
+  - `tests/core_tests/staking.cpp`: Added missing `fill_tx_sources`
+    declaration to `chaingen.h` and moved `Blockchain::check_stake_claim_input`
+    from the private section to the public API so core tests can call it
+    without `IN_UNIT_TESTS`.
+  - `tests/unit_tests/fcmp.cpp`: Fixed serialization calls to use
+    `do_serialize(ar, v)` instead of non-existent `v.serialize(ar)` member;
+    replaced `binary_archive<false>(istringstream&)` with the correct
+    `binary_archive<false>(span<const uint8_t>)` constructor; fixed
+    `shekyl_pqc_verify` call to include the required `scheme_id` first
+    argument and corrected parameter order.
+  - macOS CI: Added `zstd` to Homebrew dependencies to fix `ld: library
+    'zstd' not found` linker error.
 
 - **RPC estimate_claim_reward floating-point precision bug.** The
   `on_estimate_claim_reward` RPC handler used `double`-precision arithmetic

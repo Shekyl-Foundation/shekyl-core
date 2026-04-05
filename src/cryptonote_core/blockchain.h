@@ -1169,6 +1169,17 @@ namespace cryptonote
      */
     static crypto::hash compute_fcmp_verification_hash(const transaction& tx);
 
+    /**
+     * @brief validate a staking claim input
+     *
+     * @param claim the stake claim input to validate
+     * @param current_height the current blockchain height
+     * @param out_leaf_h_pqc optional output for the PQC leaf hash
+     *
+     * @return true if the claim is valid
+     */
+    bool check_stake_claim_input(const txin_stake_claim& claim, uint64_t current_height, uint8_t* out_leaf_h_pqc = nullptr) const;
+
 #ifndef IN_UNIT_TESTS
   private:
 #endif
@@ -1323,7 +1334,6 @@ namespace cryptonote
      * @return false if any output is not yet unlocked, or is missing, otherwise true
      */
     bool check_tx_input(size_t tx_version,const txin_to_key& txin, const crypto::hash& tx_prefix_hash, const std::vector<crypto::signature>& sig, const rct::rctSig &rct_signatures, std::vector<rct::ctkey> &output_keys, uint64_t* pmax_related_block_height, uint8_t hf_version) const;
-    bool check_stake_claim_input(const txin_stake_claim& claim, uint64_t current_height, uint8_t* out_leaf_h_pqc = nullptr) const;
 
     /**
      * @brief validate a transaction's inputs and their keys

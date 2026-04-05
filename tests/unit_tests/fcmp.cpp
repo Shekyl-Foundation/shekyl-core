@@ -187,16 +187,15 @@ TEST(fcmp, RCTTypeFcmpPlusPlusPqc_serialization_roundtrip)
   {
     std::ostringstream oss;
     binary_archive<true> ar(oss);
-    ASSERT_TRUE(rv.serialize(ar));
+    ASSERT_TRUE(do_serialize(ar, rv));
     blob = oss.str();
   }
 
   // Deserialize
   rct::rctSig rv2;
   {
-    std::istringstream iss(blob);
-    binary_archive<false> ar(iss);
-    ASSERT_TRUE(rv2.serialize(ar));
+    binary_archive<false> ar({reinterpret_cast<const uint8_t*>(blob.data()), blob.size()});
+    ASSERT_TRUE(do_serialize(ar, rv2));
   }
 
   ASSERT_EQ(rv2.type, rct::RCTTypeFcmpPlusPlusPqc);
@@ -216,15 +215,14 @@ TEST(fcmp, RCTTypeNull_serialization)
   {
     std::ostringstream oss;
     binary_archive<true> ar(oss);
-    ASSERT_TRUE(rv.serialize(ar));
+    ASSERT_TRUE(do_serialize(ar, rv));
     blob = oss.str();
   }
 
   rct::rctSig rv2;
   {
-    std::istringstream iss(blob);
-    binary_archive<false> ar(iss);
-    ASSERT_TRUE(rv2.serialize(ar));
+    binary_archive<false> ar({reinterpret_cast<const uint8_t*>(blob.data()), blob.size()});
+    ASSERT_TRUE(do_serialize(ar, rv2));
   }
 
   ASSERT_EQ(rv2.type, rct::RCTTypeNull);
@@ -309,15 +307,14 @@ TEST(fcmp, curve_tree_root_in_block_header)
   {
     std::ostringstream oss;
     binary_archive<true> ar(oss);
-    ASSERT_TRUE(hdr.serialize(ar));
+    ASSERT_TRUE(do_serialize(ar, hdr));
     blob = oss.str();
   }
 
   cryptonote::block_header hdr2;
   {
-    std::istringstream iss(blob);
-    binary_archive<false> ar(iss);
-    ASSERT_TRUE(hdr2.serialize(ar));
+    binary_archive<false> ar({reinterpret_cast<const uint8_t*>(blob.data()), blob.size()});
+    ASSERT_TRUE(do_serialize(ar, hdr2));
   }
 
   ASSERT_EQ(hdr2.curve_tree_root, test_root);
@@ -449,11 +446,12 @@ TEST(fcmp, multisig_partial_sig_roundtrip)
   ASSERT_EQ(recovered.size(), sig_bytes.size());
   ASSERT_EQ(memcmp(recovered.data(), sig_bytes.data(), sig_bytes.size()), 0);
 
-  // Verify the roundtripped signature
+  // Verify the roundtripped signature (scheme_id 1 = PQC_SCHEME_SINGLE)
   bool valid = shekyl_pqc_verify(
+      1,
       kp.public_key.ptr, kp.public_key.len,
-      msg, 32,
-      reinterpret_cast<const uint8_t*>(recovered.data()), recovered.size());
+      reinterpret_cast<const uint8_t*>(recovered.data()), recovered.size(),
+      msg, 32);
   ASSERT_TRUE(valid);
 
   shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
