@@ -405,6 +405,8 @@ verification.
 - `tx.version == 3`
 - `tx.vout.size() >= 2`
 - `tx.vin.size() <= FCMP_MAX_INPUTS_PER_TX`
+- `tx.unlock_time < CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL`
+  (Decision 13: timestamp-based unlock times are rejected in consensus)
 - All inputs are `txin_to_key` (no `txin_gen` except coinbase)
 - Key images are sorted and unique
 - No key image is already spent (double-spend check)

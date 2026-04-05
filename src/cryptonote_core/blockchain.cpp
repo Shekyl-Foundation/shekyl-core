@@ -4003,10 +4003,15 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
 
     uint64_t weight = shekyl_stake_weight(staked_amount, staked_tier);
     {
-      uint64_t hi, lo;
+      uint64_t hi, lo, q_hi = 0, q_lo = 0;
       lo = mul128(total_reward_at_h, weight, &hi);
-      div128_64(hi, lo, accrual.total_weighted_stake, &hi, &lo, NULL, NULL);
-      computed_reward += lo;
+      div128_64(hi, lo, accrual.total_weighted_stake, &q_hi, &q_lo, NULL, NULL);
+      if (q_hi != 0)
+      {
+        MERROR_VER("Stake claim reward overflow for staked output " << claim.staked_output_index << " at height " << h);
+        return false;
+      }
+      computed_reward += q_lo;
     }
   }
 

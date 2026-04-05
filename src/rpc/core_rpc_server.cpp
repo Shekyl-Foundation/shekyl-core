@@ -3642,9 +3642,14 @@ namespace cryptonote
     }
 
     const uint64_t height = m_core.get_current_blockchain_height();
-    crypto::hash top_hash = m_core.get_blockchain_storage().get_tail_id();
-    res.reference_block = epee::string_tools::pod_to_hex(top_hash);
-    res.reference_height = height - 1;
+    const uint64_t top_height = height - 1;
+    // Return a reference block old enough to satisfy mempool min-age checks.
+    // Use one extra block of margin to avoid edge races near tip updates.
+    const uint64_t min_anchor_age = FCMP_REFERENCE_BLOCK_MIN_AGE + 1;
+    const uint64_t reference_height = top_height > min_anchor_age ? (top_height - min_anchor_age) : 0;
+    const crypto::hash reference_hash = m_core.get_block_id_by_height(reference_height);
+    res.reference_block = epee::string_tools::pod_to_hex(reference_hash);
+    res.reference_height = reference_height;
     res.tree_depth = depth;
     res.leaf_count = leaf_count;
     res.paths.clear();

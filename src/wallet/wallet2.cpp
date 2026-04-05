@@ -11159,72 +11159,43 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
   // ── PQC auth: sign with per-output KEM-derived keys ───────────────
   tx.pqc_auths.clear();
   tx.pqc_auths.resize(num_inputs);
+  std::vector<std::vector<uint8_t>> claim_signing_sks(num_inputs);
+  auto wipe_claim_signing_sks = epee::misc_utils::create_scope_leave_handler([&claim_signing_sks]() {
+    for (auto& sk : claim_signing_sks)
+    {
+      if (!sk.empty())
+        memwipe(sk.data(), sk.size());
+      sk.clear();
+    }
+  });
 
   for (size_t i = 0; i < num_inputs; ++i)
   {
     const size_t td_idx = ordered_indices[i];
     const auto& td = m_transfers[td_idx];
 
-    std::vector<uint8_t> signing_sk;
-    std::vector<uint8_t> signing_pk;
+    THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.size() != 64, error::wallet_internal_error,
+      "Missing per-output combined shared secret for claim input " + std::to_string(i));
+    ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
+        td.m_combined_shared_secret.data(),
+        static_cast<uint64_t>(td.m_internal_output_index));
+    THROW_WALLET_EXCEPTION_IF(!kp.success || !kp.public_key.ptr || !kp.secret_key.ptr,
+      error::wallet_internal_error, "Per-output PQC keypair rederivation failed for claim input " + std::to_string(i));
 
-    if (!td.m_combined_shared_secret.empty() && td.m_combined_shared_secret.size() == 64)
-    {
-      ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
-          td.m_combined_shared_secret.data(),
-          static_cast<uint64_t>(td.m_internal_output_index));
-      THROW_WALLET_EXCEPTION_IF(!kp.success || !kp.public_key.ptr || !kp.secret_key.ptr,
-        error::wallet_internal_error, "Per-output PQC keypair rederivation failed for claim input " + std::to_string(i));
-
-      signing_pk.assign(kp.public_key.ptr, kp.public_key.ptr + kp.public_key.len);
-      signing_sk.assign(kp.secret_key.ptr, kp.secret_key.ptr + kp.secret_key.len);
-      shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
-      shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
-    }
-    else
-    {
-      THROW_WALLET_EXCEPTION_IF(keys.m_pqc_secret_key.empty(), error::wallet_internal_error,
-        "No combined shared secret and no wallet PQC secret key for claim input " + std::to_string(i));
-      signing_pk = keys.m_account_address.m_pqc_public_key;
-      signing_sk = keys.m_pqc_secret_key;
-    }
+    tx.pqc_auths[i].hybrid_public_key.assign(kp.public_key.ptr, kp.public_key.ptr + kp.public_key.len);
+    claim_signing_sks[i].assign(kp.secret_key.ptr, kp.secret_key.ptr + kp.secret_key.len);
+    shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
+    shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
 
     tx.pqc_auths[i].auth_version = 1;
     tx.pqc_auths[i].scheme_id = 1;
     tx.pqc_auths[i].flags = 0;
-    tx.pqc_auths[i].hybrid_public_key = signing_pk;
     tx.pqc_auths[i].hybrid_signature.clear();
   }
 
   // Sign all inputs after public keys are populated (payload includes all H(pqc_pk))
   for (size_t i = 0; i < num_inputs; ++i)
   {
-    const size_t td_idx = ordered_indices[i];
-    const auto& td = m_transfers[td_idx];
-
-    const uint8_t* sk_ptr;
-    size_t sk_len;
-    std::vector<uint8_t> rederived_sk;
-
-    if (!td.m_combined_shared_secret.empty() && td.m_combined_shared_secret.size() == 64)
-    {
-      ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
-          td.m_combined_shared_secret.data(),
-          static_cast<uint64_t>(td.m_internal_output_index));
-      THROW_WALLET_EXCEPTION_IF(!kp.success, error::wallet_internal_error,
-        "PQC keypair rederivation failed for signing claim input " + std::to_string(i));
-      rederived_sk.assign(kp.secret_key.ptr, kp.secret_key.ptr + kp.secret_key.len);
-      shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
-      shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
-      sk_ptr = rederived_sk.data();
-      sk_len = rederived_sk.size();
-    }
-    else
-    {
-      sk_ptr = keys.m_pqc_secret_key.data();
-      sk_len = keys.m_pqc_secret_key.size();
-    }
-
     std::string payload_blob;
     THROW_WALLET_EXCEPTION_IF(!cryptonote::get_transaction_signed_payload(tx, i, payload_blob),
       error::wallet_internal_error, "Failed to build PQC signed payload for claim input " + std::to_string(i));
@@ -11233,12 +11204,9 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
     cryptonote::get_blob_hash(payload_blob, payload_hash);
 
     ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
-        sk_ptr, sk_len,
+        reinterpret_cast<const uint8_t*>(claim_signing_sks[i].data()), claim_signing_sks[i].size(),
         reinterpret_cast<const uint8_t*>(payload_hash.data),
         sizeof(payload_hash.data));
-
-    if (!rederived_sk.empty())
-      memwipe(rederived_sk.data(), rederived_sk.size());
 
     THROW_WALLET_EXCEPTION_IF(!sig_result.success, error::wallet_internal_error,
       "PQC signing failed for claim input " + std::to_string(i));

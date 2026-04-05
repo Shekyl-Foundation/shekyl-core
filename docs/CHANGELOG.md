@@ -156,6 +156,21 @@
   `txin_to_key` validation, preventing incorrect rejection of valid
   stake-claim transactions that use `RCTTypeFcmpPlusPlusPqc`.
 
+- **Stake-claim reward math overflow defense.** Added a defensive `q_hi != 0`
+  check after `div128_64` in claim reward computation, rejecting impossible
+  overflow states instead of silently truncating.
+
+- **Claim transaction PQC signing correctness/performance.** Removed wallet
+  master-key fallback for claim input signing and now require per-output
+  shared-secret rederivation for all claim inputs. Claim signing keypairs are
+  derived once per input and reused for both `pqc_auths` public key and
+  signature generation.
+
+- **Curve-tree path RPC returns spendable reference block.**
+  `get_curve_tree_path` now returns a `reference_block` at least
+  `FCMP_REFERENCE_BLOCK_MIN_AGE + 1` behind tip, avoiding immediate mempool
+  rejection of freshly built transactions that used a too-recent tip anchor.
+
 - **PQC derivation index correctness and duplicate derivation overhead.**
   Spend-path and multisig PQC key derivation now use
   `m_internal_output_index` (matching KEM encapsulation/decapsulation) and
