@@ -801,6 +801,9 @@ amount `0` in the amount index (matching `add_transaction`), not the
 plaintext `vout.amount`. A `tx_prune_next_block` watermark in `m_properties`
 stores the first block height not yet processed (with one-time read of legacy
 `last_pruned_tx_data_height` as last-inclusive + 1) so runs are idempotent.
+If any expected transaction row is missing (`TX_DNE`) during a pruning batch,
+the batch now fails immediately and does not advance the watermark, preventing
+partial-prune state from being recorded as completed.
 `Blockchain::update_blockchain_pruning()`
 calls `prune_tx_data` when the node is in stripe-pruning mode so the
 chain prunes incrementally.

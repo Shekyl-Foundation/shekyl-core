@@ -85,6 +85,20 @@
 
 ### 🐛 Fixed
 
+- **Pruning watermark hardening.** `BlockchainLMDB::prune_tx_data()` now
+  fails the current batch on missing transaction rows (`TX_DNE`) instead of
+  logging and continuing, so `tx_prune_next_block` cannot advance on partial
+  pruning.
+
+- **FCMP++ compile-path compatibility fixes.** Updated wallet/core-test FCMP++
+  construction callsites for the current `genRctFcmpPlusPlus` leaf-chunk API,
+  and added explicit cached-chunk to `rct::fcmp_chunk_entry` conversion in
+  wallet construction to keep GCC 14 builds green.
+
+- **CI portability and fuzz gate hardening.** Replaced GNU-only `xargs -r`
+  usage in Cargo absolute-path guard with a portable shell loop, and added a
+  required fuzz-harness inventory smoke gate in Rust CI.
+
 - **Stale fuzz targets updated.** `fuzz_fcmp_proof_deserialize` and
   `fuzz_tx_deserialize_fcmp_type7` now pass the required `signable_tx_hash`
   7th argument to `verify()`. `fuzz_block_header_tree_root` rewritten for the
