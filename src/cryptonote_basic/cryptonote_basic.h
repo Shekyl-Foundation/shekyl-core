@@ -280,6 +280,8 @@ namespace cryptonote
     bool pruned;
 
     std::atomic<unsigned int> unprunable_size;
+    /** Byte offset from tx blob start where pqc_auths begin (binary only); equals unprunable_size if absent. */
+    std::atomic<unsigned int> pqc_auths_offset;
     std::atomic<unsigned int> prefix_size;
 
     transaction();
@@ -357,20 +359,34 @@ namespace cryptonote
           if (!r || !ar.good()) return false;
           ar.end_object();
         }
+        if (std::is_same<Archive<W>, binary_archive<W>>())
+          pqc_auths_offset = ar.getpos() - start_pos;
         if (version >= 3 && !vin.empty() && !std::holds_alternative<txin_gen>(vin[0]))
         {
-          ar.tag("pqc_auths");
-          ar.begin_array();
-          PREPARE_CUSTOM_VECTOR_SERIALIZATION(vin.size(), pqc_auths);
-          if (pqc_auths.size() != vin.size())
-            return false;
-          for (size_t i = 0; i < vin.size(); ++i)
+          bool read_pqc = true;
+          if constexpr (std::is_same_v<Archive<W>, binary_archive<false>>)
           {
-            FIELDS(pqc_auths[i])
-            if (vin.size() - i > 1)
-              ar.delimit_array();
+            if (ar.eof() || ar.remaining_bytes() == 0)
+            {
+              read_pqc = false;
+              pqc_auths.clear();
+            }
           }
-          ar.end_array();
+          if (read_pqc)
+          {
+            ar.tag("pqc_auths");
+            ar.begin_array();
+            PREPARE_CUSTOM_VECTOR_SERIALIZATION(vin.size(), pqc_auths);
+            if (pqc_auths.size() != vin.size())
+              return false;
+            for (size_t i = 0; i < vin.size(); ++i)
+            {
+              FIELDS(pqc_auths[i])
+              if (vin.size() - i > 1)
+                ar.delimit_array();
+            }
+            ar.end_array();
+          }
         }
         if (!vin.empty())
         {
@@ -394,6 +410,7 @@ namespace cryptonote
     template<bool W, template <bool> class Archive>
     bool serialize_base(Archive<W> &ar)
     {
+      const auto start_pos = ar.getpos();
       FIELDS(*static_cast<transaction_prefix *>(this))
 
       if (version == 1)
@@ -409,24 +426,40 @@ namespace cryptonote
           if (!r || !ar.good()) return false;
           ar.end_object();
         }
+        if (std::is_same<Archive<W>, binary_archive<W>>())
+          pqc_auths_offset = ar.getpos() - start_pos;
         if (version >= 3 && !vin.empty() && !std::holds_alternative<txin_gen>(vin[0]))
         {
-          ar.tag("pqc_auths");
-          ar.begin_array();
-          PREPARE_CUSTOM_VECTOR_SERIALIZATION(vin.size(), pqc_auths);
-          if (pqc_auths.size() != vin.size())
-            return false;
-          for (size_t i = 0; i < vin.size(); ++i)
+          bool read_pqc = true;
+          if constexpr (std::is_same_v<Archive<W>, binary_archive<false>>)
           {
-            FIELDS(pqc_auths[i])
-            if (vin.size() - i > 1)
-              ar.delimit_array();
+            if (ar.eof() || ar.remaining_bytes() == 0)
+            {
+              read_pqc = false;
+              pqc_auths.clear();
+            }
           }
-          ar.end_array();
+          if (read_pqc)
+          {
+            ar.tag("pqc_auths");
+            ar.begin_array();
+            PREPARE_CUSTOM_VECTOR_SERIALIZATION(vin.size(), pqc_auths);
+            if (pqc_auths.size() != vin.size())
+              return false;
+            for (size_t i = 0; i < vin.size(); ++i)
+            {
+              FIELDS(pqc_auths[i])
+              if (vin.size() - i > 1)
+                ar.delimit_array();
+            }
+            ar.end_array();
+          }
         }
       }
       if (!typename Archive<W>::is_saving())
         pruned = true;
+      if (std::is_same<Archive<W>, binary_archive<W>>())
+        unprunable_size = ar.getpos() - start_pos;
       return ar.good();
     }
 
@@ -444,6 +477,7 @@ namespace cryptonote
     pqc_auths(t.pqc_auths),
     pruned(t.pruned),
     unprunable_size(t.unprunable_size.load()),
+    pqc_auths_offset(t.pqc_auths_offset.load()),
     prefix_size(t.prefix_size.load())
   {
     if (t.is_hash_valid())
@@ -490,6 +524,7 @@ namespace cryptonote
     }
     pruned = t.pruned;
     unprunable_size = t.unprunable_size.load();
+    pqc_auths_offset = t.pqc_auths_offset.load();
     prefix_size = t.prefix_size.load();
     return *this;
   }
@@ -517,6 +552,7 @@ namespace cryptonote
     set_blob_size_valid(false);
     pruned = false;
     unprunable_size = 0;
+    pqc_auths_offset = 0;
     prefix_size = 0;
   }
 

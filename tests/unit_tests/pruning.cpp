@@ -239,3 +239,8 @@ TEST(pruning, next_pruned)
   ASSERT_EQ(tools::get_next_pruned_block_height(SS,   10000000, seedNS), SS);
   ASSERT_EQ(tools::get_next_pruned_block_height(TB-1, 10000000, seedNS), TB);
 }
+
+TEST(tx_data_pruning, tx_prune_depth_constant)
+{
+  ASSERT_EQ(CRYPTONOTE_TX_PRUNE_DEPTH, 5000u);
+}

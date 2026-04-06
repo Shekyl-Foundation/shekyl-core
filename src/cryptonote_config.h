@@ -49,6 +49,8 @@
 #define CURRENT_BLOCK_MINOR_VERSION                     0
 #define CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT              60*60*2
 #define CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE             10
+/** Depth (in blocks) below the chain tip before tx verification data may be pruned (~7d at 120s/block). */
+#define CRYPTONOTE_TX_PRUNE_DEPTH                       5000
 
 #define BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW               60
 

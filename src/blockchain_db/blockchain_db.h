@@ -153,8 +153,8 @@ struct alt_block_data_t
 /**
  * @brief per-output metadata retained after transaction pruning.
  *
- * When a block is confirmed beyond CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE,
- * the full rctSigPrunable can be discarded. This struct preserves the
+ * When a block is confirmed beyond CRYPTONOTE_TX_PRUNE_DEPTH (see prune_tx_data),
+ * verification blobs can be discarded. This struct preserves the
  * data wallets need for scanning: public key, commitment, unlock time,
  * and the block height that confirmed the output.
  */
@@ -1699,13 +1699,23 @@ public:
    * @brief prune confirmed transaction data beyond the reorg safety depth.
    *
    * For each transaction in blocks older than (tip - depth), stores output
-   * metadata in the output_metadata table and removes rctSigPrunable blobs.
+   * metadata in the output_metadata table and removes prunable verification
+   * data (and the optional `txs_pqc_auths` slice).
    *
-   * @param depth  the confirmation depth beyond which pruning is safe
-   *               (defaults to CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE)
+   * @param depth  confirmation depth; use 0 for CRYPTONOTE_TX_PRUNE_DEPTH
    * @return true on success
    */
   virtual bool prune_tx_data(uint64_t depth = 0) = 0;
+
+  /**
+   * @brief last block height for which post-confirmation tx verification data was pruned (0 if none).
+   */
+  virtual uint64_t get_last_pruned_tx_data_height() const = 0;
+
+  /**
+   * @brief true if the tx still has prunable verification data in the db (Bulletproofs+/FCMP++/pseudoOuts).
+   */
+  virtual bool tx_has_verification_data(const crypto::hash& tx_hash) const = 0;
 
   /**
    * @brief add a new alternative block

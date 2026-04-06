@@ -4,6 +4,13 @@
 
 ### ✨ Added
 
+- **`--prune-blockchain` transaction-data pruning.** LMDB v6 adds `txs_pqc_auths`
+  (split from `txs_pruned` at `pqc_auths_offset`), implements `prune_tx_data`
+  (batch 256 blocks, output metadata, watermark, TOCTOU height check), default
+  depth `CRYPTONOTE_TX_PRUNE_DEPTH` (5000), `pop_block` guard when verification
+  data is gone, continuous pruning via `update_blockchain_pruning`, RPC
+  `get_transactions.pruned` and `get_info.tx_prune_height`.
+
 - **Staking FFI and config-driven tier parameters.** `shekyl-staking` now
   generates tier lock durations, yield multipliers, and max stake-claim range
   from `config/economics_params.json` at build time (aligned with

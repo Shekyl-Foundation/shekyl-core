@@ -2750,13 +2750,22 @@ bool Blockchain::get_split_transactions_blobs(const t_ids_container& txs_ids, t_
       if (m_db->get_pruned_tx_blob(tx_hash, tx))
       {
         txs.push_back(std::make_tuple(tx_hash, std::move(tx), crypto::null_hash, cryptonote::blobdata()));
-        if (!is_v1_tx(std::get<1>(txs.back())) && !m_db->get_prunable_tx_hash(tx_hash, std::get<2>(txs.back())))
-        {
-          MERROR("Prunable data hash not found for " << tx_hash);
-          return false;
-        }
-        if (!m_db->get_prunable_tx_blob(tx_hash, std::get<3>(txs.back())))
+        const bool has_prunable = m_db->get_prunable_tx_blob(tx_hash, std::get<3>(txs.back()));
+        if (!has_prunable)
           std::get<3>(txs.back()).clear();
+        if (!is_v1_tx(std::get<1>(txs.back())))
+        {
+          if (has_prunable)
+          {
+            if (!m_db->get_prunable_tx_hash(tx_hash, std::get<2>(txs.back())))
+            {
+              MERROR("Prunable data hash not found for " << tx_hash);
+              return false;
+            }
+          }
+          else
+            std::get<2>(txs.back()) = crypto::null_hash;
+        }
       }
       else
         missed_txs.push_back(tx_hash);
@@ -4736,7 +4745,11 @@ bool Blockchain::update_blockchain_pruning()
   epee::misc_utils::auto_scope_leave_caller unlocker = epee::misc_utils::create_scope_leave_handler([&](){m_tx_pool.unlock();});
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
 
-  return m_db->update_pruning();
+  if (!m_db->update_pruning())
+    return false;
+  if (m_db->get_blockchain_pruning_seed() && !m_db->prune_tx_data(CRYPTONOTE_TX_PRUNE_DEPTH))
+    return false;
+  return true;
 }
 //------------------------------------------------------------------
 bool Blockchain::check_blockchain_pruning()

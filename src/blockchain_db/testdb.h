@@ -189,6 +189,8 @@ public:
   virtual bool get_output_metadata(uint64_t, output_pruning_metadata_t&) const override { return false; }
   virtual bool is_output_pruned(uint64_t) const override { return false; }
   virtual bool prune_tx_data(uint64_t) override { return true; }
+  virtual uint64_t get_last_pruned_tx_data_height() const override { return 0; }
+  virtual bool tx_has_verification_data(const crypto::hash&) const override { return true; }
 
   virtual void grow_curve_tree(const std::vector<uint8_t>&, uint64_t) override {}
   virtual void trim_curve_tree(uint64_t) override {}

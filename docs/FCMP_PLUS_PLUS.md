@@ -572,6 +572,16 @@ The curve tree and related metadata are stored in five LMDB tables.
 | `curve_tree_meta` | key string (`"root"`, `"leaf_count"`, `"depth"`) | variable | Current tree state |
 | `curve_tree_checkpoints` | `block_height` (u64, MDB_INTEGERKEY) | `root[32] + depth[1] + leaf_count[8]` (41 bytes) | Periodic snapshots for fast sync |
 
+### Transaction tables (pruned blob split)
+
+| Table | Key | Value | Purpose |
+|-------|-----|-------|---------|
+| `txs_pruned` | `tx_id` (u64) | prefix + `rctSigBase` only | Canonical pruned prefix |
+| `txs_pqc_auths` | `tx_id` (u64) | `pqc_auths` bytes (optional) | Split from `txs_pruned` so pruning can delete PQC auth data |
+| `txs_prunable` | `tx_id` (u64) | Bulletproofs+, FCMP++, pseudoOuts | Deleted after tx-data pruning |
+
+`get_pruned_tx_blob` / `get_tx_blob` concatenate `txs_pruned` + `txs_pqc_auths` (if present) + `txs_prunable` (if present). The in-memory `transaction::pqc_auths_offset` records the split point when serializing.
+
 ### Output Metadata Table
 
 | Table | Key | Value | Purpose |
@@ -603,7 +613,9 @@ void prune_curve_tree_intermediate_layers(uint64_t checkpoint_height);
 void store_output_metadata(uint64_t global_output_index, const output_pruning_metadata_t& meta);
 output_pruning_metadata_t get_output_metadata(uint64_t global_output_index) const;
 bool is_output_pruned(uint64_t global_output_index) const;
-void prune_tx_data(uint64_t below_height);
+bool prune_tx_data(uint64_t depth = 0);  // depth 0 → CRYPTONOTE_TX_PRUNE_DEPTH
+uint64_t get_last_pruned_tx_data_height() const;
+bool tx_has_verification_data(const crypto::hash& tx_hash) const;
 ```
 
 ---
@@ -736,14 +748,17 @@ automatically triggered after each `save_curve_tree_checkpoint` call in
 
 ### Transaction Data Pruning
 
-`prune_tx_data(below_height)` removes full transaction blobs for blocks
-older than `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE`, retaining only the
-`output_pruning_metadata_t` entries needed for wallet scanning. A
-`last_pruned_tx_data_height` watermark in the LMDB properties table
-ensures already-processed blocks are skipped on subsequent runs.
+`prune_tx_data(depth)` removes `txs_prunable`, `txs_prunable_hash`, and
+`txs_pqc_auths` for transactions in blocks below `height - depth`
+(default `depth`: `CRYPTONOTE_TX_PRUNE_DEPTH` = 5000 when `depth == 0`).
+It stores `output_pruning_metadata_t` for each affected output, then
+deletes verification data. A `last_pruned_tx_data_height` watermark in
+`m_properties` makes runs idempotent. `Blockchain::update_blockchain_pruning()`
+calls `prune_tx_data` when the node is in stripe-pruning mode so the
+chain prunes incrementally.
 
-The `--prune-blockchain` CLI flag triggers both Monero's existing
-stripe-based pruning and the output-metadata pruning.
+The `--prune-blockchain` CLI flag triggers both stripe-based pruning and
+this tx-data pass at startup.
 
 ---
 
@@ -977,7 +992,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Wallet tree-path precomputation | **Done** | `wallet2.cpp` |
 | PQC key rederivation from stored secret | **Done** | `wallet2.cpp` |
 | Restore-from-seed PQC rederivation | **Done** | `wallet2.cpp` |
-| `prune_tx_data` skeleton | **Skeleton** | `db_lmdb.cpp` |
+| `prune_tx_data` + `txs_pqc_auths` split | **Done** | `db_lmdb.cpp`, `cryptonote_basic.h` |
 | `get_curve_tree_path` RPC | **Done** | `core_rpc_server.cpp` |
 | `get_curve_tree_info` RPC | **Done** | `core_rpc_server.cpp` |
 | `get_curve_tree_checkpoint` RPC | **Done** | `core_rpc_server.cpp` |

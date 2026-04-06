@@ -367,6 +367,7 @@ namespace cryptonote
       std::string prunable_as_hex;
       std::string prunable_hash;
       std::string as_json;
+      bool pruned;
       bool in_pool;
       bool double_spend_seen;
       uint64_t block_height;
@@ -383,6 +384,7 @@ namespace cryptonote
         KV_SERIALIZE(prunable_as_hex)
         KV_SERIALIZE(prunable_hash)
         KV_SERIALIZE(as_json)
+        KV_SERIALIZE_OPT(pruned, false)
         KV_SERIALIZE(in_pool)
         KV_SERIALIZE(double_spend_seen)
         if (!this_ref.in_pool)
@@ -721,6 +723,7 @@ namespace cryptonote
       uint64_t staker_pool_balance;
       uint64_t staker_emission_share_effective;
       std::string emission_era;
+      uint64_t tx_prune_height;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_access_response_base)
@@ -770,6 +773,7 @@ namespace cryptonote
         KV_SERIALIZE(staker_pool_balance)
         KV_SERIALIZE(staker_emission_share_effective)
         KV_SERIALIZE(emission_era)
+        KV_SERIALIZE_OPT(tx_prune_height, (uint64_t)0)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

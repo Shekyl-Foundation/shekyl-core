@@ -438,11 +438,25 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
 
   for (const auto& h : boost::adaptors::reverse(blk.tx_hashes))
   {
+    if (!tx_has_verification_data(h))
+    {
+      MFATAL("Cannot pop block " << block_height << " -- transaction verification data was pruned for tx "
+             << h);
+      throw DB_ERROR("Attempted to pop a block with pruned transaction data");
+    }
     cryptonote::transaction tx;
     if (!get_tx(h, tx) && !get_pruned_tx(h, tx))
       throw DB_ERROR("Failed to get pruned or unpruned transaction from the db");
     txs.push_back(std::move(tx));
     remove_transaction(h);
+  }
+  {
+    const crypto::hash miner_h = get_transaction_hash(blk.miner_tx);
+    if (!tx_has_verification_data(miner_h))
+    {
+      MFATAL("Cannot pop block " << block_height << " -- miner transaction verification data was pruned");
+      throw DB_ERROR("Attempted to pop a block with pruned transaction data");
+    }
   }
   remove_transaction(get_transaction_hash(blk.miner_tx));
 

@@ -56,6 +56,7 @@ typedef struct mdb_txn_cursors
 
   MDB_cursor *m_txc_txs;
   MDB_cursor *m_txc_txs_pruned;
+  MDB_cursor *m_txc_txs_pqc_auths;
   MDB_cursor *m_txc_txs_prunable;
   MDB_cursor *m_txc_txs_prunable_hash;
   MDB_cursor *m_txc_txs_prunable_tip;
@@ -85,6 +86,7 @@ typedef struct mdb_txn_cursors
 #define m_cur_output_amounts	m_cursors->m_txc_output_amounts
 #define m_cur_txs	m_cursors->m_txc_txs
 #define m_cur_txs_pruned	m_cursors->m_txc_txs_pruned
+#define m_cur_txs_pqc_auths	m_cursors->m_txc_txs_pqc_auths
 #define m_cur_txs_prunable	m_cursors->m_txc_txs_prunable
 #define m_cur_txs_prunable_hash	m_cursors->m_txc_txs_prunable_hash
 #define m_cur_txs_prunable_tip	m_cursors->m_txc_txs_prunable_tip
@@ -110,6 +112,7 @@ typedef struct mdb_rflags
   bool m_rf_output_amounts;
   bool m_rf_txs;
   bool m_rf_txs_pruned;
+  bool m_rf_txs_pqc_auths;
   bool m_rf_txs_prunable;
   bool m_rf_txs_prunable_hash;
   bool m_rf_txs_prunable_tip;
@@ -473,6 +476,8 @@ private:
   virtual bool get_output_metadata(uint64_t global_output_index, output_pruning_metadata_t& meta) const override;
   virtual bool is_output_pruned(uint64_t global_output_index) const override;
   virtual bool prune_tx_data(uint64_t depth = 0) override;
+  virtual uint64_t get_last_pruned_tx_data_height() const override;
+  virtual bool tx_has_verification_data(const crypto::hash& tx_hash) const override;
 
   // migrate from older DB version to current
   void migrate(const uint32_t oldversion);
@@ -492,7 +497,13 @@ private:
   // migrate from DB version 4 to 5
   void migrate_4_5();
 
+  // migrate from DB version 5 to 6 (split pqc_auths from txs_pruned)
+  void migrate_5_6();
+
   void cleanup_batch();
+
+  /** LMDB tx_id for a canonical tx hash (throws TX_DNE if missing). */
+  uint64_t get_tx_id(const crypto::hash& h) const;
 
 private:
   MDB_env* m_env;
@@ -503,6 +514,7 @@ private:
 
   MDB_dbi m_txs;
   MDB_dbi m_txs_pruned;
+  MDB_dbi m_txs_pqc_auths;
   MDB_dbi m_txs_prunable;
   MDB_dbi m_txs_prunable_hash;
   MDB_dbi m_txs_prunable_tip;

@@ -606,6 +606,8 @@ namespace cryptonote
     else
       res.emission_era = "Tail";
 
+    res.tx_prune_height = m_core.get_blockchain_storage().get_db().get_last_pruned_tx_data_height();
+
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -1142,6 +1144,8 @@ namespace cryptonote
         e.double_spend_seen = false;
         e.relayed = false;
       }
+      e.pruned = e.in_pool ? false
+          : !m_core.get_blockchain_storage().get_db().tx_has_verification_data(tx_hash);
 
       // fill up old style responses too, in case an old wallet asks
       res.txs_as_hex.push_back(e.as_hex);
