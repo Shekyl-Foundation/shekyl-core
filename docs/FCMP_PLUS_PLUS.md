@@ -752,7 +752,9 @@ automatically triggered after each `save_curve_tree_checkpoint` call in
 `txs_pqc_auths` for transactions in blocks below `height - depth`
 (default `depth`: `CRYPTONOTE_TX_PRUNE_DEPTH` = 5000 when `depth == 0`).
 It stores `output_pruning_metadata_t` for each affected output, then
-deletes verification data. A `tx_prune_next_block` watermark in `m_properties`
+deletes verification data. For RCT coinbase outputs, output lookups use
+amount `0` in the amount index (matching `add_transaction`), not the
+plaintext `vout.amount`. A `tx_prune_next_block` watermark in `m_properties`
 stores the first block height not yet processed (with one-time read of legacy
 `last_pruned_tx_data_height` as last-inclusive + 1) so runs are idempotent.
 `Blockchain::update_blockchain_pruning()`

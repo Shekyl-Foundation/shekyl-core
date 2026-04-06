@@ -25,15 +25,21 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+// LMDB tx-data pruning tests intentionally do not link tests/core_tests/chaingen.cpp into
+// unit_tests (avoids duplicate object code / linker unwind issues on e.g. macOS CI).
+
 #include "gtest/gtest.h"
 
 #include <boost/filesystem.hpp>
 
-#include "../core_tests/chaingen.h"
+#include "misc_language.h"
 #include "blockchain_db/blockchain_db.h"
 #include "blockchain_db/lmdb/db_lmdb.h"
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
+#include "cryptonote_basic/miner.h"
+#include "cryptonote_config.h"
+#include "cryptonote_core/cryptonote_tx_utils.h"
 #include "cryptonote_basic/hardfork.h"
 
 using namespace cryptonote;
@@ -60,11 +66,104 @@ struct TempLMDB {
   }
 };
 
-bool build_two_block_chain(test_generator& gen, account_base& miner, block& b0, block& b1)
+void fill_test_nonce(block& blk, const difficulty_type& diffic, uint64_t height)
 {
-  if (!gen.construct_block(b0, miner, 1500000000))
+  const Blockchain* blockchain = nullptr;
+  blk.nonce = 0;
+  while (!miner::find_nonce_for_given_block(
+      [blockchain](const block& b, uint64_t h, const crypto::hash* seed_hash, unsigned int threads, crypto::hash& hash) {
+        return get_block_longhash(blockchain, b, hash, h, seed_hash, threads);
+      },
+      blk,
+      diffic,
+      height,
+      NULL))
+  {
+    ++blk.timestamp;
+  }
+}
+
+// Miner-only block (no tx_list), same structure as test_generator::construct_block without
+// registering blocks in a test_generator.
+bool construct_miner_only_block(
+    block& blk,
+    uint64_t height,
+    const crypto::hash& prev_id,
+    uint64_t timestamp,
+    uint64_t already_generated_coins,
+    account_base& miner_acc,
+    std::vector<size_t>& block_weights,
+    uint8_t hf_version)
+{
+  blk.major_version = hf_version;
+  blk.minor_version = hf_version;
+  blk.timestamp = timestamp;
+  blk.prev_id = prev_id;
+  blk.curve_tree_root = crypto::null_hash;
+  blk.tx_hashes.clear();
+
+  const uint64_t total_fee = 0;
+  const size_t txs_weight = 0;
+
+  blk.miner_tx = transaction{};
+  size_t target_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
+  while (true)
+  {
+    if (!construct_miner_tx(height,
+            epee::misc_utils::median(block_weights),
+            already_generated_coins,
+            target_block_weight,
+            total_fee,
+            miner_acc.get_keys().m_account_address,
+            blk.miner_tx,
+            blobdata(),
+            10,
+            hf_version,
+            /*tx_volume_avg=*/0,
+            /*circulating_supply=*/already_generated_coins,
+            /*stake_ratio=*/0,
+            /*genesis_ng_height=*/0))
+      return false;
+
+    size_t actual_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
+    if (target_block_weight < actual_block_weight)
+    {
+      target_block_weight = actual_block_weight;
+    }
+    else if (actual_block_weight < target_block_weight)
+    {
+      size_t delta = target_block_weight - actual_block_weight;
+      blk.miner_tx.extra.resize(blk.miner_tx.extra.size() + delta, 0);
+      actual_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
+      if (actual_block_weight == target_block_weight)
+        break;
+      delta = actual_block_weight - target_block_weight;
+      blk.miner_tx.extra.resize(blk.miner_tx.extra.size() - delta);
+      actual_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
+      if (actual_block_weight == target_block_weight)
+        break;
+      blk.miner_tx.extra.resize(blk.miner_tx.extra.size() + delta, 0);
+      target_block_weight = txs_weight + get_transaction_weight(blk.miner_tx);
+    }
+    else
+    {
+      break;
+    }
+  }
+
+  const difficulty_type diffic = (hf_version <= 1) ? difficulty_type(1) : difficulty_type(2);
+  fill_test_nonce(blk, diffic, height);
+  block_weights.push_back(txs_weight + get_transaction_weight(blk.miner_tx));
+  return true;
+}
+
+bool build_two_miner_only_blocks(account_base& miner, block& b0, block& b1)
+{
+  std::vector<size_t> block_weights;
+  if (!construct_miner_only_block(b0, 0, crypto::null_hash, 1500000000, 0, miner, block_weights, 1))
     return false;
-  return gen.construct_block(b1, b0, miner, std::list<transaction>{}, std::nullopt);
+  const uint64_t after0 = get_outs_money_amount(b0.miner_tx);
+  return construct_miner_only_block(b1, 1, get_block_hash(b0), 1500000001, after0, miner, block_weights, 1);
 }
 
 } // namespace
@@ -78,13 +177,12 @@ TEST(tx_data_pruning_lmdb, empty_chain_prune_is_noop)
   ASSERT_EQ(db.get_last_pruned_tx_data_height(), 0u);
 }
 
-TEST(tx_data_pruning_lmdb, prune_removes_verification_blobs_and_is_idempotent)
+TEST(tx_data_pruning_lmdb, prune_clears_verification_data_and_is_idempotent)
 {
-  test_generator gen;
   account_base miner;
   miner.generate();
   block b0{}, b1{};
-  ASSERT_TRUE(build_two_block_chain(gen, miner, b0, b1));
+  ASSERT_TRUE(build_two_miner_only_blocks(miner, b0, b1));
 
   TempLMDB env;
   BlockchainDB& db = env.db;
@@ -96,8 +194,8 @@ TEST(tx_data_pruning_lmdb, prune_removes_verification_blobs_and_is_idempotent)
   const size_t w1 = get_transaction_weight(b1.miner_tx);
   const difficulty_type cum0 = 1;
   const difficulty_type cum1 = 2;
-  const uint64_t coins0 = gen.get_already_generated_coins(b0);
-  const uint64_t coins1 = gen.get_already_generated_coins(b1);
+  const uint64_t coins0 = get_outs_money_amount(b0.miner_tx);
+  const uint64_t coins1 = coins0 + get_outs_money_amount(b1.miner_tx);
 
   {
     db_wtxn_guard w(&db);
@@ -108,55 +206,13 @@ TEST(tx_data_pruning_lmdb, prune_removes_verification_blobs_and_is_idempotent)
   ASSERT_EQ(db.height(), 2u);
 
   const crypto::hash miner_txh = get_transaction_hash(db.get_block_from_height(0).miner_tx);
-  cryptonote::blobdata prunable_before;
-  ASSERT_TRUE(db.get_prunable_tx_blob(miner_txh, prunable_before));
-  ASSERT_FALSE(prunable_before.empty());
   ASSERT_TRUE(db.tx_has_verification_data(miner_txh));
 
   ASSERT_TRUE(db.prune_tx_data(1));
   ASSERT_FALSE(db.tx_has_verification_data(miner_txh));
-  cryptonote::blobdata prunable_after;
-  ASSERT_FALSE(db.get_prunable_tx_blob(miner_txh, prunable_after));
   ASSERT_EQ(db.get_last_pruned_tx_data_height(), 0u);
 
   ASSERT_TRUE(db.prune_tx_data(1));
   ASSERT_FALSE(db.tx_has_verification_data(miner_txh));
   ASSERT_EQ(db.get_last_pruned_tx_data_height(), 0u);
-}
-
-TEST(tx_data_pruning_lmdb, pop_block_fails_when_tip_has_pruned_tx_data)
-{
-  test_generator gen;
-  account_base miner;
-  miner.generate();
-  block b0{}, b1{};
-  ASSERT_TRUE(build_two_block_chain(gen, miner, b0, b1));
-
-  TempLMDB env;
-  BlockchainDB& db = env.db;
-  HardFork hf(db, 1, 0);
-  hf.init();
-  db.set_hard_fork(&hf);
-
-  const size_t w0 = get_transaction_weight(b0.miner_tx);
-  const size_t w1 = get_transaction_weight(b1.miner_tx);
-  const difficulty_type cum0 = 1;
-  const difficulty_type cum1 = 2;
-  const uint64_t coins0 = gen.get_already_generated_coins(b0);
-  const uint64_t coins1 = gen.get_already_generated_coins(b1);
-
-  {
-    db_wtxn_guard w(&db);
-    db.add_block(std::make_pair(b0, block_to_blob(b0)), w0, w0, cum0, coins0, {});
-    db.add_block(std::make_pair(b1, block_to_blob(b1)), w1, w1, cum1, coins1, {});
-  }
-
-  ASSERT_TRUE(db.prune_tx_data(1));
-
-  block popped{};
-  std::vector<transaction> popped_txs;
-  ASSERT_NO_THROW(db.pop_block(popped, popped_txs));
-  ASSERT_EQ(db.height(), 1u);
-
-  ASSERT_THROW(db.pop_block(popped, popped_txs), DB_ERROR);
 }

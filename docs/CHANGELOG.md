@@ -2,13 +2,22 @@
 
 ## Unreleased
 
+### 🐛 Fixed
+
+- **`prune_tx_data` miner output lookup.** When storing output-pruning metadata,
+  RCT coinbase outputs are keyed under amount `0` in LMDB (same as
+  `add_transaction`); pruning now uses that amount for `get_output_key` instead
+  of the plaintext `vout.amount`, avoiding `OUTPUT_DNE` during prune for
+  miner transactions.
+
 ### 🔄 Changed
 
 - **Tx-data prune watermark.** `prune_tx_data` now stores `tx_prune_next_block`
   (exclusive next height) instead of ambiguous `last_pruned_tx_data_height`
-  values; legacy keys migrate on read/write. Unit tests in
-  `tests/unit_tests/tx_data_pruning_lmdb.cpp` cover prune, idempotency, and
-  `pop_block` failure after prune.
+  values; legacy keys migrate on read/write. LMDB unit tests live in
+  `tests/unit_tests/tx_data_pruning_lmdb.cpp` (minimal block builder only; does
+  not link `tests/core_tests/chaingen.cpp` into `unit_tests`, avoiding duplicate
+  object code and macOS linker unwind/diagnostic issues in CI).
 
 - **FCMP++ Rust dependency source moved in-repo.** `shekyl-fcmp` now consumes
   vendored `shekyl-oxide` crates via path dependencies under

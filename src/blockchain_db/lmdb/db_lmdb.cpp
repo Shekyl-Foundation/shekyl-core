@@ -6159,7 +6159,10 @@ bool BlockchainLMDB::prune_tx_data(uint64_t depth)
       const size_t n = std::min(outs.size(), tx.vout.size());
       for (size_t i = 0; i < n; ++i)
       {
-        const uint64_t amount = tx.vout[i].amount;
+        // Match BlockchainDB::add_transaction: RCT coinbase outputs are indexed under amount 0.
+        uint64_t amount = tx.vout[i].amount;
+        if (!tx.vin.empty() && std::holds_alternative<cryptonote::txin_gen>(tx.vin[0]) && tx.version >= 2)
+          amount = 0;
         const uint64_t gidx = outs[i];
         output_data_t od = get_output_key(amount, gidx, true);
         output_pruning_metadata_t meta{};

@@ -106,8 +106,6 @@ set(unit_tests_sources
   rpc_version_str.cpp
   staking.cpp
   deferred_insertion.cpp
-  ../core_tests/chaingen.cpp
-  ../core_tests/wallet_tools.cpp
   tx_data_pruning_lmdb.cpp
   pending_tree_fuzz.cpp
   zmq_rpc.cpp)
