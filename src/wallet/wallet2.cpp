@@ -9540,9 +9540,15 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       const transfer_details& td = m_transfers[permuted_transfers[i]];
       auto path_it = m_fcmp_precomputed_paths.find(td.m_global_output_index);
       if (path_it != m_fcmp_precomputed_paths.end())
-        leaf_chunk_entries[i].assign(
-            path_it->second.leaf_chunk_entries.begin(),
-            path_it->second.leaf_chunk_entries.end());
+      {
+        const auto& cached_entries = path_it->second.leaf_chunk_entries;
+        leaf_chunk_entries[i].reserve(cached_entries.size());
+        for (const auto& cached : cached_entries)
+        {
+          leaf_chunk_entries[i].push_back(
+              rct::fcmp_chunk_entry{cached.output_key, cached.key_image_gen, cached.commitment, cached.h_pqc});
+        }
+      }
     }
 
     LOG_PRINT_L2("calling genRctFcmpPlusPlus with " << num_inputs << " inputs, "

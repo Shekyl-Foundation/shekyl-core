@@ -6196,7 +6196,8 @@ bool BlockchainLMDB::prune_tx_data(uint64_t depth)
       }
       catch (const TX_DNE&)
       {
-        MERROR("prune_tx_data: miner tx missing at height " << h);
+        throw0(DB_ERROR(("prune_tx_data: miner tx missing at height " + std::to_string(h) +
+                         "; refusing to advance prune watermark on partial batch").c_str()));
       }
 
       for (const crypto::hash& txh : blk.tx_hashes)
@@ -6211,7 +6212,9 @@ bool BlockchainLMDB::prune_tx_data(uint64_t depth)
         }
         catch (const TX_DNE&)
         {
-          MERROR("prune_tx_data: tx " << txh << " not found at height " << h);
+          throw0(DB_ERROR(("prune_tx_data: tx " + epee::string_tools::pod_to_hex(txh) +
+                           " not found at height " + std::to_string(h) +
+                           "; refusing to advance prune watermark on partial batch").c_str()));
         }
       }
     }

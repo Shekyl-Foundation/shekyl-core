@@ -2584,7 +2584,6 @@ static char* dispatch_transfer_split(wallet2_handle* w, const rj::Value& p) {
         return nullptr;
 
     try {
-        uint64_t ring_size = json_u64(p, "ring_size");
         const tools::fee_priority fp = w->wallet->adjust_priority(
             tools::fee_priority_utilities::from_integral(priority));
         uint32_t account_index = json_u32(p, "account_index");

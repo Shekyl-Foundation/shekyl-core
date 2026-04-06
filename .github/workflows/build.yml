@@ -41,13 +41,16 @@ jobs:
           submodules: recursive
       - name: guard against absolute local Cargo paths
         run: |
-          MATCHES="$(
-            find rust -type f \( -name Cargo.toml -o -path '*/.cargo/config' -o -path '*/.cargo/config.toml' \) -print0 \
-              | xargs -0 -r grep -nE '/home/|/Users/|[A-Za-z]:\\\\Users\\\\' || true
-          )"
+          MATCHES=""
+          while IFS= read -r file; do
+            HITS="$(grep -nE '/home/|/Users/|[A-Za-z]:\\\\Users\\\\' "$file" || true)"
+            if [ -n "$HITS" ]; then
+              MATCHES="${MATCHES}${file}\n${HITS}\n"
+            fi
+          done < <(find rust -type f \( -name Cargo.toml -o -path '*/.cargo/config' -o -path '*/.cargo/config.toml' \))
           if [ -n "$MATCHES" ]; then
             echo "FATAL: detected absolute local paths in Cargo manifests/config:"
-            echo "$MATCHES"
+            printf "%b" "$MATCHES"
             exit 1
           fi
           echo "Cargo path portability guard passed."
@@ -324,13 +327,16 @@ jobs:
           submodules: recursive
       - name: guard against absolute local Cargo paths
         run: |
-          MATCHES="$(
-            find rust -type f \( -name Cargo.toml -o -path '*/.cargo/config' -o -path '*/.cargo/config.toml' \) -print0 \
-              | xargs -0 -r grep -nE '/home/|/Users/|[A-Za-z]:\\\\Users\\\\' || true
-          )"
+          MATCHES=""
+          while IFS= read -r file; do
+            HITS="$(grep -nE '/home/|/Users/|[A-Za-z]:\\\\Users\\\\' "$file" || true)"
+            if [ -n "$HITS" ]; then
+              MATCHES="${MATCHES}${file}\n${HITS}\n"
+            fi
+          done < <(find rust -type f \( -name Cargo.toml -o -path '*/.cargo/config' -o -path '*/.cargo/config.toml' \))
           if [ -n "$MATCHES" ]; then
             echo "FATAL: detected absolute local paths in Cargo manifests/config:"
-            echo "$MATCHES"
+            printf "%b" "$MATCHES"
             exit 1
           fi
           echo "Cargo path portability guard passed."
@@ -342,6 +348,32 @@ jobs:
             echo "FATAL: expected x86_64 runner, got $ARCH"
             exit 1
           fi
+      - name: verify fuzz harness inventory (smoke gate)
+        run: |
+          REQUIRED_TARGETS=(
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_fcmp_proof_deserialize.rs
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_curve_tree_leaf_hash.rs
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_block_header_tree_root.rs
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_tx_deserialize_fcmp_type7.rs
+            rust/shekyl-staking/fuzz/fuzz_targets/fuzz_claim_reward.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_kem_decapsulate.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_bech32m_address_decode.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_verify.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_key_blob.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_sig_blob.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_group_id.rs
+          )
+          MISSING=0
+          for target in "${REQUIRED_TARGETS[@]}"; do
+            if [ ! -f "$target" ]; then
+              echo "FATAL: missing required fuzz harness: $target"
+              MISSING=1
+            fi
+          done
+          if [ "$MISSING" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Fuzz harness inventory smoke gate passed (${#REQUIRED_TARGETS[@]} targets present)."
       - uses: actions/cache@v5
         with:
           path: |

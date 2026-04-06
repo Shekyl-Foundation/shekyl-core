@@ -1145,7 +1145,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 
 ### Fuzz Targets
 
-Seven `cargo-fuzz` targets exercise the critical parsing, crypto, and staking boundaries:
+Eleven `cargo-fuzz` targets exercise the critical parsing, crypto, multisig, and staking boundaries:
 
 | Target | Crate | What it tests |
 |--------|-------|---------------|
@@ -1154,14 +1154,28 @@ Seven `cargo-fuzz` targets exercise the critical parsing, crypto, and staking bo
 | `fuzz_block_header_tree_root` | `shekyl-fcmp` | Mismatched `curve_tree_root` between prove and verify |
 | `fuzz_bech32m_address_decode` | `shekyl-crypto-pq` | Random strings through Bech32m decoder, wrong HRPs, bad checksums |
 | `fuzz_kem_decapsulate` | `shekyl-crypto-pq` | Corrupted ML-KEM ciphertexts, wrong-length keys and ciphertexts |
+| `fuzz_multisig_verify` | `shekyl-crypto-pq` | Multisig verify path with malformed group IDs, signatures, and payloads |
+| `fuzz_multisig_key_blob` | `shekyl-crypto-pq` | Randomized multisig key-blob decode and bounds checks |
+| `fuzz_multisig_sig_blob` | `shekyl-crypto-pq` | Randomized multisig signature-blob decode and validation |
+| `fuzz_group_id` | `shekyl-crypto-pq` | Group-id parser and canonicalization edge cases |
 | `fuzz_claim_reward` | `shekyl-staking` | Random accrual records; reward overflow, monotonicity, and bound invariants |
 | `fuzz_tx_deserialize_fcmp_type7` | `shekyl-fcmp` | Transaction-structured FCMP++ deserialization: pseudoOuts, proof blobs, PQC hashes, corrupted types |
 
-Run any target:
+CI runs a smoke gate that ensures this required fuzz harness inventory exists (`.github/workflows/build.yml`, `verify fuzz harness inventory (smoke gate)`).
+
+For the full pre-release fuzz campaign (10M runs per harness), run:
 
 ```bash
 cd rust/shekyl-fcmp/fuzz && cargo +nightly fuzz run fuzz_fcmp_proof_deserialize -- -runs=10000000
+cd rust/shekyl-fcmp/fuzz && cargo +nightly fuzz run fuzz_curve_tree_leaf_hash -- -runs=10000000
+cd rust/shekyl-fcmp/fuzz && cargo +nightly fuzz run fuzz_block_header_tree_root -- -runs=10000000
+cd rust/shekyl-fcmp/fuzz && cargo +nightly fuzz run fuzz_tx_deserialize_fcmp_type7 -- -runs=10000000
 cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_bech32m_address_decode -- -runs=10000000
+cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_kem_decapsulate -- -runs=10000000
+cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_multisig_verify -- -runs=10000000
+cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_multisig_key_blob -- -runs=10000000
+cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_multisig_sig_blob -- -runs=10000000
+cd rust/shekyl-crypto-pq/fuzz && cargo +nightly fuzz run fuzz_group_id -- -runs=10000000
 cd rust/shekyl-staking/fuzz && cargo +nightly fuzz run fuzz_claim_reward -- -runs=10000000
 ```
 

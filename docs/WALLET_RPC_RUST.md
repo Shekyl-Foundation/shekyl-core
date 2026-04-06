@@ -6,8 +6,8 @@ The Rust wallet RPC layer replaces the C++ `wallet_rpc_server` with a Rust
 implementation that calls the existing C++ `wallet2` library through a C FFI
 facade. This provides:
 
-- **Standalone binary**: `shekyl-wallet-rpc-rs`, a drop-in replacement for the
-  C++ `shekyl-wallet-rpc`
+- **Standalone binary**: `shekyl-wallet-rpc`, a drop-in replacement for the
+  legacy C++ wallet RPC server
 - **Embedded library**: Linked directly into the Tauri GUI wallet for
   zero-overhead wallet operations without HTTP or process spawning
 

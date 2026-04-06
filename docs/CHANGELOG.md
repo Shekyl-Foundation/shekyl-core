@@ -112,6 +112,13 @@
 
 ### 🔄 Changed
 
+- **Rust naming convention cleanup.** Fixed phantom FFI function reference in
+  `shekyl_pqc_verify` doc comment (referenced non-existent
+  `shekyl_pqc_verify_multisig_with_group_id`, now points to
+  `shekyl_pqc_multisig_group_id`). Renamed Windows `SystemInfo.dw_page_size`
+  to `page_size` (drop Hungarian notation). Renamed `shekyl-wallet-rpc-rs`
+  binary to `shekyl-wallet-rpc` (drop `-rs` suffix per Rust API Guidelines).
+
 - **Address encoding migrated to Bech32m.** `get_account_address_as_str()` and
   `get_account_address_from_str()` now call Rust FFI (`shekyl_address_encode`,
   `shekyl_address_decode`) for network-aware Bech32m encoding. The `subaddress`
@@ -1691,7 +1698,7 @@
   replaces the C++ `wallet_rpc_server` with an axum-based JSON-RPC server.
   Calls the existing C++ `wallet2` library through a new C FFI facade
   (`wallet2_ffi.cpp/.h`). Supports all 98 RPC methods with full parity.
-  Can run as a standalone binary (`shekyl-wallet-rpc-rs`) or be embedded
+  Can run as a standalone binary (`shekyl-wallet-rpc`) or be embedded
   as a library in the Tauri GUI wallet. See `docs/WALLET_RPC_RUST.md`.
 
 - **C++ wallet2 FFI facade (`wallet2_ffi.cpp/.h`)**: Opaque-handle C API

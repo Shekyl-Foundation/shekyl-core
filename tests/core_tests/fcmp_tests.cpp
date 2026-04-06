@@ -29,6 +29,10 @@
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 
+#ifndef CHECK_TEST_CONDITION_MSG
+#define CHECK_TEST_CONDITION_MSG(expr, msg) CHECK_TEST_CONDITION(expr)
+#endif
+
 using namespace cryptonote;
 
 // ═══════════════════════════════════════════════════════════════════════

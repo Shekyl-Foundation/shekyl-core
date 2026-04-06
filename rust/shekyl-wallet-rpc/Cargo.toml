@@ -10,7 +10,7 @@ name = "shekyl_wallet_rpc"
 crate-type = ["lib", "staticlib"]
 
 [[bin]]
-name = "shekyl-wallet-rpc-rs"
+name = "shekyl-wallet-rpc"
 path = "src/main.rs"
 
 [dependencies]

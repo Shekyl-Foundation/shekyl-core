@@ -4,11 +4,13 @@
   - [ ] Block validation p95 < 500ms sustained
   - [ ] Verification cache hit rate > 95% sustained
   - [ ] Stressnet summary report archived
+  - [ ] Stressnet artifact links recorded in release notes (metrics dashboards, logs, and report commit hash)
 - [ ] **4-scalar leaf circuit audit completed** (Phase 9)
   - [ ] Audit engagement initiated after stressnet gate
   - [ ] No critical or high findings in final report
   - [ ] All findings remediated and re-verified
   - [ ] Written security assessment report archived (see `docs/AUDIT_SCOPE.md`)
+  - [ ] Audit artifact links recorded in release notes (report URL or digest, remediation PRs)
 - [ ] Security audit
 - [ ] Code audit
 - [ ] PQC specification frozen
@@ -78,11 +80,12 @@ further changes to the interface.
   - [ ] PQC multisig group creation (2-of-3, 3-of-5)
   - [ ] PQC multisig signing flow (export request, partial sign, import, broadcast)
   - [ ] PQC multisig scheme downgrade rejection verified
-  - [ ] PQC multisig fuzz targets run (4 harnesses, 10M iterations each)
+  - [ ] PQC multisig fuzz targets run (5 harnesses, 10M iterations each)
   - [ ] PQC multisig test vectors validated against docs/PQC_TEST_VECTOR_002_MULTISIG.json
   - [ ] FCMP++ proof verification tested (prove/verify round-trip)
   - [ ] Curve tree operations tested (grow/trim/root/path)
-  - [ ] FCMP++ fuzz targets run (6 harnesses, 10M iterations each)
+  - [ ] FCMP++/staking/PQC fuzz targets run (11 harnesses total, 10M iterations each)
+  - [ ] CI fuzz smoke gate passed (required harness inventory check in `.github/workflows/build.yml`)
   - [ ] Per-output PQC key derivation tested
   - [ ] Bech32m address encoding/decoding tested
   - [ ] Transaction pruning mode tested (`--prune-blockchain`)

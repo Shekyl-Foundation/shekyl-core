@@ -200,8 +200,9 @@ pub extern "C" fn shekyl_pqc_sign(
 ///
 /// For scheme_id 1, `pubkey_blob` and `sig_blob` are single canonical encodings.
 /// For scheme_id 2, `pubkey_blob` is a MultisigKeyContainer and `sig_blob` is a
-/// MultisigSigContainer in canonical encoding. Group ID check is skipped (pass
-/// `shekyl_pqc_verify_multisig_with_group_id` for consensus verification).
+/// MultisigSigContainer in canonical encoding. Group ID is not checked here;
+/// callers performing consensus verification should compute it separately via
+/// `shekyl_pqc_multisig_group_id` and compare against the expected value.
 #[no_mangle]
 pub extern "C" fn shekyl_pqc_verify(
     scheme_id: u8,
@@ -734,13 +735,13 @@ pub extern "C" fn shekyl_page_size() -> usize {
     #[cfg(windows)]
     {
         #[repr(C)]
-        struct SystemInfo { _pad: [u8; 4], dw_page_size: u32, _rest: [u8; 52] }
+        struct SystemInfo { _pad: [u8; 4], page_size: u32, _rest: [u8; 52] }
         extern "system" {
             fn GetSystemInfo(info: *mut SystemInfo);
         }
-        let mut info = SystemInfo { _pad: [0; 4], dw_page_size: 0, _rest: [0; 52] };
+        let mut info = SystemInfo { _pad: [0; 4], page_size: 0, _rest: [0; 52] };
         unsafe { GetSystemInfo(&mut info); }
-        info.dw_page_size as usize
+        info.page_size as usize
     }
     #[cfg(not(any(unix, windows)))]
     {

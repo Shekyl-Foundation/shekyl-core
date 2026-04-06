@@ -1261,6 +1261,7 @@ bool construct_fcmp_tx(
 
   rct::ctkeyV inSk(num_inputs), inPk(num_inputs);
   std::vector<std::vector<uint8_t>> tree_paths(num_inputs);
+  std::vector<std::vector<rct::fcmp_chunk_entry>> leaf_chunk_entries(num_inputs);
   rct::keyV pqc_pk_hashes(num_inputs);
   std::vector<std::vector<uint8_t>> derived_pqc_public_keys(num_inputs);
   std::vector<std::vector<uint8_t>> derived_pqc_secret_keys(num_inputs);
@@ -1459,7 +1460,7 @@ bool construct_fcmp_tx(
     inSk, inPk,
     destinations_rct, inamounts, outamounts, amount_keys,
     fee, reference_block, tree_depth,
-    tree_paths, pqc_pk_hashes,
+    tree_paths, leaf_chunk_entries, pqc_pk_hashes,
     hw::get_device("default"));
   tx.rct_signatures = rv;
 
