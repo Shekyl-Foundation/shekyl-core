@@ -265,8 +265,10 @@ TEST(fcmp, key_image_y_normalize_idempotent)
 TEST(fcmp, referenceBlock_staleness_constants)
 {
   ASSERT_GT(FCMP_REFERENCE_BLOCK_MAX_AGE, FCMP_REFERENCE_BLOCK_MIN_AGE);
-  ASSERT_GE((uint64_t)FCMP_REFERENCE_BLOCK_MIN_AGE, (uint64_t)CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW);
-  ASSERT_GE((uint64_t)FCMP_REFERENCE_BLOCK_MIN_AGE, (uint64_t)CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE);
+  ASSERT_GE((uint64_t)CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW, (uint64_t)FCMP_REFERENCE_BLOCK_MIN_AGE);
+  ASSERT_GE((uint64_t)CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE, (uint64_t)FCMP_REFERENCE_BLOCK_MIN_AGE);
+  // FCMP_REFERENCE_BLOCK_MIN_AGE is a reorg margin only; spend maturity uses
+  // CRYPTONOTE_*_AGE and deferred curve-tree insertion — it is intentionally below those windows.
 }
 
 TEST(fcmp, key_offsets_empty_for_fcmp_type)
@@ -694,8 +696,8 @@ TEST(fcmp, timestamp_unlock_time_sentinel_constant)
 {
   // CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL must equal CRYPTONOTE_MAX_BLOCK_NUMBER
   ASSERT_EQ(CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL, CRYPTONOTE_MAX_BLOCK_NUMBER);
-  // Must be large enough that no reasonable block height ever reaches it
-  ASSERT_GT(CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL, 500000000ULL);
+  // Sentinel marks "timestamp unlock" in unlock_time; must not collide with a real height.
+  ASSERT_GE(CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL, 500000000ULL);
 }
 
 TEST(fcmp, fcmp_reference_block_min_age_value)

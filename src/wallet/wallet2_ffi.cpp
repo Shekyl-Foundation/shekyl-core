@@ -136,6 +136,42 @@ static cryptonote::network_type nettype_from_u8(uint8_t n)
     }
 }
 
+// ── Progress callback bridge ─────────────────────────────────────────────────
+
+class ffi_callback_bridge : public tools::i_wallet2_callback {
+    wallet2_ffi_progress_callback m_fn;
+    void* m_user_data;
+public:
+    ffi_callback_bridge(wallet2_ffi_progress_callback fn, void* ud)
+        : m_fn(fn), m_user_data(ud) {}
+
+    void on_transfer_stage(const char* stage, uint8_t idx, uint8_t total) override {
+        if (m_fn) m_fn("transfer_stage", idx, total, stage, m_user_data);
+    }
+    void on_fcmp_path_precompute_progress(uint64_t done, uint64_t total) override {
+        if (m_fn) m_fn("fcmp_precompute", done, total, nullptr, m_user_data);
+    }
+    void on_pqc_rederivation_progress(uint64_t done, uint64_t total) override {
+        if (m_fn) m_fn("pqc_rederivation", done, total, nullptr, m_user_data);
+    }
+};
+
+static std::unique_ptr<ffi_callback_bridge> g_callback_bridge;
+
+void wallet2_ffi_set_progress_callback(wallet2_handle* w,
+                                       wallet2_ffi_progress_callback cb,
+                                       void* user_data)
+{
+    if (!w || !w->wallet) return;
+    if (cb) {
+        g_callback_bridge = std::make_unique<ffi_callback_bridge>(cb, user_data);
+        w->wallet->callback(g_callback_bridge.get());
+    } else {
+        w->wallet->callback(nullptr);
+        g_callback_bridge.reset();
+    }
+}
+
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
 wallet2_handle* wallet2_ffi_create(uint8_t nettype)

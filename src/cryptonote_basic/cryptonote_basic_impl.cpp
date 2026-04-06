@@ -147,12 +147,29 @@ namespace cryptonote {
     )
   {
     uint8_t net = nettype_to_ffi_network(nettype);
+    // Wallet stores hybrid KEM pubkey as x25519_pk[32] || ml_kem_ek[1184] (see shekyl_kem_keypair_generate).
+    // Bech32m address body carries only the ML-KEM-768 encapsulation key (1184 bytes).
+    static constexpr size_t X25519_PK_BYTES = 32;
+    static constexpr size_t ML_KEM768_EK_BYTES = 1184;
+    const std::vector<uint8_t>& pq = adr.m_pqc_public_key;
+    const uint8_t* ml_ptr = nullptr;
+    size_t ml_len = 0;
+    if (pq.size() >= X25519_PK_BYTES + ML_KEM768_EK_BYTES)
+    {
+      ml_ptr = pq.data() + X25519_PK_BYTES;
+      ml_len = ML_KEM768_EK_BYTES;
+    }
+    else if (pq.size() == ML_KEM768_EK_BYTES)
+    {
+      ml_ptr = pq.data();
+      ml_len = ML_KEM768_EK_BYTES;
+    }
     ShekylBuffer buf = shekyl_address_encode(
         net,
         reinterpret_cast<const uint8_t*>(adr.m_spend_public_key.data),
         reinterpret_cast<const uint8_t*>(adr.m_view_public_key.data),
-        adr.m_pqc_public_key.data(),
-        adr.m_pqc_public_key.size());
+        ml_ptr,
+        ml_len);
     if (!buf.ptr || buf.len == 0)
       return {};
     std::string result(reinterpret_cast<const char*>(buf.ptr), buf.len);
@@ -160,6 +177,8 @@ namespace cryptonote {
     return result;
   }
   //-----------------------------------------------------------------------
+  // Shekyl has no integrated (payment-id) addresses; this is a compatibility
+  // alias — prefer get_account_address_as_str for new code.
   std::string get_account_integrated_address_as_str(
       network_type nettype
     , account_public_address const & adr

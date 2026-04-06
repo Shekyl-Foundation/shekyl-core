@@ -598,6 +598,17 @@ namespace tools
       cryptonote::network_type m_nettype;
     };
     //----------------------------------------------------------------------------------------------------
+    struct destination_missing_pqc_kem_key : public transfer_error
+    {
+      explicit destination_missing_pqc_kem_key(std::string&& loc)
+        : transfer_error(std::move(loc),
+            "Cannot send to this address — it does not contain a quantum-resistant key. Ask the recipient for their full address.")
+      {
+      }
+
+      std::string to_string() const { return transfer_error::to_string(); }
+    };
+    //----------------------------------------------------------------------------------------------------
     struct tx_rejected : public transfer_error
     {
       explicit tx_rejected(std::string&& loc, const cryptonote::transaction& tx, const std::string& status, const std::string& reason)

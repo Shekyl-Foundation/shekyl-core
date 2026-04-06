@@ -155,6 +155,27 @@ bool wallet2_ffi_is_open(const wallet2_handle* w);
 // Get the height the wallet has synced to.
 uint64_t wallet2_ffi_get_height(const wallet2_handle* w);
 
+// ── Progress callback ────────────────────────────────────────────────────────
+
+// Callback type for wallet progress events (transfer stages, FCMP precomputation,
+// PQC rederivation). The callback is invoked from the wallet2 thread.
+// - event_type: "transfer_stage", "fcmp_precompute", or "pqc_rederivation"
+// - current: stage index or outputs completed
+// - total: total stages or total outputs
+// - detail: stage name (e.g. "generating_proof") or NULL
+// - user_data: opaque pointer passed at registration time
+typedef void (*wallet2_ffi_progress_callback)(
+    const char* event_type,
+    uint64_t current,
+    uint64_t total,
+    const char* detail,
+    void* user_data);
+
+// Register a progress callback. Pass NULL to unregister.
+void wallet2_ffi_set_progress_callback(wallet2_handle* w,
+                                       wallet2_ffi_progress_callback cb,
+                                       void* user_data);
+
 // ── Generic JSON-RPC dispatcher ──────────────────────────────────────────────
 
 // Dispatch any wallet RPC method by name with JSON params.

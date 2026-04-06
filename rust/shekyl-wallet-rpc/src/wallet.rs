@@ -32,6 +32,7 @@
 
 use crate::ffi;
 use std::ffi::{CStr, CString};
+use std::sync::mpsc;
 
 #[derive(Debug)]
 pub struct WalletError {
@@ -49,9 +50,18 @@ impl std::error::Error for WalletError {}
 
 pub type WalletResult<T> = Result<T, WalletError>;
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProgressEvent {
+    pub event_type: String,
+    pub current: u64,
+    pub total: u64,
+    pub detail: Option<String>,
+}
+
 /// Safe handle to a C++ wallet2 instance. Not Send/Sync because wallet2 is single-threaded.
 pub struct Wallet2 {
     handle: *mut ffi::Wallet2Handle,
+    _progress_sender: Option<Box<mpsc::Sender<ProgressEvent>>>,
 }
 
 impl Wallet2 {
@@ -64,7 +74,7 @@ impl Wallet2 {
                 message: "Failed to create wallet handle".into(),
             });
         }
-        Ok(Self { handle })
+        Ok(Self { handle, _progress_sender: None })
     }
 
     fn last_error(&self) -> WalletError {
@@ -273,6 +283,51 @@ impl Wallet2 {
         let ptr = unsafe { ffi::wallet2_ffi_json_rpc(self.handle, m.as_ptr(), p.as_ptr()) };
         self.consume_json_ptr(ptr)
     }
+
+    /// Register a progress channel. The C++ callback bridge will send
+    /// `ProgressEvent` messages through this channel whenever wallet2
+    /// reports transfer stage, FCMP precompute, or PQC rederivation progress.
+    pub fn set_progress_sender(&mut self, tx: mpsc::Sender<ProgressEvent>) {
+        let mut boxed = Box::new(tx);
+        let user_data = &mut *boxed as *mut mpsc::Sender<ProgressEvent> as *mut std::ffi::c_void;
+        unsafe {
+            ffi::wallet2_ffi_set_progress_callback(
+                self.handle,
+                Some(progress_trampoline),
+                user_data,
+            );
+        }
+        self._progress_sender = Some(boxed);
+    }
+}
+
+extern "C" fn progress_trampoline(
+    event_type: *const std::ffi::c_char,
+    current: u64,
+    total: u64,
+    detail: *const std::ffi::c_char,
+    user_data: *mut std::ffi::c_void,
+) {
+    if user_data.is_null() {
+        return;
+    }
+    let tx = unsafe { &*(user_data as *const mpsc::Sender<ProgressEvent>) };
+    let event_type_str = if event_type.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(event_type) }.to_string_lossy().into_owned()
+    };
+    let detail_str = if detail.is_null() {
+        None
+    } else {
+        Some(unsafe { CStr::from_ptr(detail) }.to_string_lossy().into_owned())
+    };
+    let _ = tx.send(ProgressEvent {
+        event_type: event_type_str,
+        current,
+        total,
+        detail: detail_str,
+    });
 }
 
 impl Drop for Wallet2 {

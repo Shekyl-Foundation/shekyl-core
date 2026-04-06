@@ -132,7 +132,7 @@ Shekyl funding and sponsorship details are published at `shekyl.org`. Until then
 
 ## License
 
-See [LICENSE](LICENSE).
+This project is licensed under the [BSD 3-Clause License](LICENSE).
 
 ## Contributing
 

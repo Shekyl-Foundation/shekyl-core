@@ -7252,7 +7252,7 @@ crypto::hash wallet2::get_payment_id(const pending_tx &ptx) const
 void wallet2::commit_tx(pending_tx& ptx)
 {
   using namespace cryptonote;
-  
+  if (m_callback) m_callback->on_transfer_stage("broadcasting", 3, 4);
   {
     COMMAND_RPC_SEND_RAW_TX::request req;
     req.tx_as_hex = epee::string_tools::buff_to_hex_nodelimer(tx_to_blob(ptx.tx));
@@ -9391,8 +9391,16 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     splitted_dsts.push_back(change_dts);
   }
 
+  static constexpr size_t X25519_PK_BYTES = 32;
+  for (const auto& dt : splitted_dsts)
+  {
+    THROW_WALLET_EXCEPTION_IF(dt.addr.m_pqc_public_key.size() <= X25519_PK_BYTES,
+      error::destination_missing_pqc_kem_key);
+  }
+
   crypto::secret_key tx_key;
   std::vector<crypto::secret_key> additional_tx_keys;
+  if (m_callback) m_callback->on_transfer_stage("constructing", 0, 4);
   LOG_PRINT_L2("constructing tx skeleton");
   auto sources_copy = sources;
   // Phase A: build the transaction skeleton (prefix + outputs + KEM tx_extra).
@@ -9405,6 +9413,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
 
   std::vector<size_t> ins_order;
 
+  if (m_callback) m_callback->on_transfer_stage("generating_proof", 1, 4);
   // Phase B: generate FCMP++ proof via genRctFcmpPlusPlus.
   {
     const size_t num_inputs = selected_transfers.size();
@@ -9562,6 +9571,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
         m_account.get_device());
     tx.rct_signatures = rv;
 
+    if (m_callback) m_callback->on_transfer_stage("signing_pqc", 2, 4);
     // Phase C: PQC auth signing with per-input derived ML-DSA-65 keys
     tx.pqc_auths.resize(num_inputs);
     for (size_t i = 0; i < num_inputs; ++i)

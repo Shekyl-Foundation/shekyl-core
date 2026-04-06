@@ -606,6 +606,14 @@ output public key, Pedersen commitment, unlock_time, block height, and a
 pruned flag. This allows wallets to scan for owned outputs even after the
 full transaction data has been pruned.
 
+**Invariant (PQC restore):** `output_metadata` does **not** duplicate the
+`tx_extra` hybrid KEM ciphertexts (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`, `0x06`).
+Wallet restore and PQC key re-derivation still read those ciphertexts from the
+**transaction prefix** stored in `m_txs_pruned`. Any future “deep prune” mode
+must **not** delete or truncate `m_txs_pruned` in a way that removes `tx_extra`
+while leaving outputs discoverable, or ML-KEM ciphertexts needed for PQC
+material would be lost.
+
 ### Database API
 
 ```cpp

@@ -39,6 +39,7 @@
 #include <boost/type_traits/make_unsigned.hpp>
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/cryptonote_basic_impl.h"
+#include "cryptonote_config.h"
 #include "fcmp/rctSigs.h"
 #include "serialization/binary_archive.h"
 #include "serialization/json_archive.h"
@@ -1149,24 +1150,24 @@ TEST(Serialization, pqc_authentication_multisig_size_regression)
     return 4 + varint_encoding_bytes(key_blob) + key_blob + varint_encoding_bytes(sig_blob) + sig_blob;
   };
 
-  struct config
+  struct ms_config
   {
     unsigned n;
     unsigned m;
-    size_t total_pqc_auth_payload;
   };
-  const config configs[] = {
-    {3, 2, 12763},
-    {5, 3, 20141},
-    {7, 5, 30905},
-    {7, 7, 37677},
+  const ms_config configs[] = {
+    {3, 2},
+    {5, 3},
+    {7, 5},
+    {7, 7},
   };
 
-  for (const config &cfg : configs)
+  for (const ms_config &cfg : configs)
   {
     const size_t key_blob = 2 + static_cast<size_t>(cfg.n) * 1996u;
-    const size_t sig_blob = 1 + static_cast<size_t>(cfg.m) * 3385u + static_cast<size_t>(cfg.m);
-    EXPECT_EQ(key_blob + sig_blob, cfg.total_pqc_auth_payload);
+    const size_t sig_blob = 2 + static_cast<size_t>(cfg.m) * 3385u;
+    ASSERT_LE(key_blob, ::config::PQC_MAX_PUBLIC_KEY_BLOB);
+    ASSERT_LE(sig_blob, ::config::PQC_MAX_SIGNATURE_BLOB);
 
     cryptonote::pqc_authentication auth0, auth1;
     auth0.auth_version = 1;

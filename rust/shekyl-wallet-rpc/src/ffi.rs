@@ -127,4 +127,18 @@ extern "C" {
         method: *const c_char,
         params_json: *const c_char,
     ) -> *mut c_char;
+
+    pub fn wallet2_ffi_set_progress_callback(
+        w: *mut Wallet2Handle,
+        cb: Option<ProgressCallback>,
+        user_data: *mut std::ffi::c_void,
+    );
 }
+
+pub type ProgressCallback = extern "C" fn(
+    event_type: *const c_char,
+    current: u64,
+    total: u64,
+    detail: *const c_char,
+    user_data: *mut std::ffi::c_void,
+);

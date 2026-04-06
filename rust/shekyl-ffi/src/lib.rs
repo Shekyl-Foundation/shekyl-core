@@ -1593,7 +1593,10 @@ pub extern "C" fn shekyl_address_encode(
     ml_kem_ek_ptr: *const u8,
     ml_kem_ek_len: usize,
 ) -> ShekylBuffer {
-    if spend_key_ptr.is_null() || view_key_ptr.is_null() || ml_kem_ek_ptr.is_null() {
+    if spend_key_ptr.is_null() || view_key_ptr.is_null() {
+        return ShekylBuffer::null();
+    }
+    if ml_kem_ek_len > 0 && ml_kem_ek_ptr.is_null() {
         return ShekylBuffer::null();
     }
 
@@ -1611,15 +1614,20 @@ pub extern "C" fn shekyl_address_encode(
         std::ptr::copy_nonoverlapping(view_key_ptr, buf.as_mut_ptr(), 32);
         buf
     };
-    let Some(ml_kem_ek) = slice_from_ptr(ml_kem_ek_ptr, ml_kem_ek_len) else {
-        return ShekylBuffer::null();
+    let ml_kem_ek = if ml_kem_ek_len == 0 {
+        Vec::new()
+    } else {
+        let Some(slice) = slice_from_ptr(ml_kem_ek_ptr, ml_kem_ek_len) else {
+            return ShekylBuffer::null();
+        };
+        slice.to_vec()
     };
 
     let addr = shekyl_address::ShekylAddress::new(
         net,
         spend_key,
         view_key,
-        ml_kem_ek.to_vec(),
+        ml_kem_ek,
     );
 
     match addr.encode() {

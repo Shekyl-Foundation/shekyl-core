@@ -161,6 +161,8 @@ namespace rct {
           const rctSig &rv = *rvp;
           CHECK_AND_ASSERT_MES(rv.type == RCTTypeFcmpPlusPlusPqc,
               false, "verRctSemanticsSimple called on unsupported rctSig type");
+          CHECK_AND_ASSERT_MES(!rv.p.fcmp_pp_proof.empty(),
+              false, "FCMP++ proof is empty");
           CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus), false, "Mismatched sizes of outPk and bulletproofs_plus");
           CHECK_AND_ASSERT_MES(rv.pseudoOuts.empty(), false, "rv.pseudoOuts is not empty");
           CHECK_AND_ASSERT_MES(rv.outPk.size() == rv.ecdhInfo.size(), false, "Mismatched sizes of outPk and rv.ecdhInfo");

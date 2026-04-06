@@ -17,6 +17,41 @@
 
 ### ✨ Added
 
+- **Vendored monero-oxide protocol crates.** Completed the vendored crate set
+  in `rust/shekyl-oxide/`: added `shekyl-primitives` (Keccak-256, Pedersen
+  commitments), `shekyl-bulletproofs` (BP+ range proofs), the root `shekyl-oxide`
+  crate (transaction/block types, FCMP module), `shekyl-rpc` (daemon RPC trait,
+  `ScannableBlock`), and `shekyl-simple-request-rpc` (HTTP transport). Resolved
+  the `shekyl-address` naming collision by removing the oxide base58 address
+  dependency from the vendored RPC crate (Shekyl uses Bech32m exclusively).
+  Added crypto-heavy crate optimizations to `[profile.dev.package]` and
+  workspace-level clippy lints for the oxide crates.
+
+- **`shekyl-scanner` crate.** New Rust crate (`rust/shekyl-scanner/`) providing
+  a native transaction scanner with Shekyl-specific extensions. Ported the core
+  scanning pipeline from monero-oxide (SharedKeyDerivations, Extra parsing,
+  ViewPair, per-block/per-tx/per-output ECDH scan loop) and extended it with:
+  - PQC KEM ciphertext parsing (tx_extra tag 0x06) and leaf hash parsing (0x07)
+  - Staking output detection and balance categorization (matured/locked tiers)
+  - `TransferDetails` struct with FCMP++ path precompute, combined PQC shared
+    secret, and spend tracking fields
+  - `WalletState` for in-memory transfer management with key image dedup, spend
+    detection, and reorg handling
+  - `BalanceSummary` with staking-aware breakdown (total, unlocked, timelocked,
+    staked matured/locked, frozen)
+
+- **Split RPC routing (`rust-scanner` feature).** `shekyl-wallet-rpc` now
+  supports a `rust-scanner` feature flag that routes scanner-backed read-only
+  methods (get_balance, get_transfers, incoming_transfers, get_height,
+  get_staked_outputs, get_staked_balance) to native Rust handlers via
+  `shekyl-scanner`, while all mutation methods continue through the C++ FFI.
+  Added `ScannerState`, `dispatch_with_scanner()`, and typed scanner handlers.
+
+- **GUI wallet scanner integration.** Updated `wallet_bridge.rs` in
+  `shekyl-gui-wallet` to include a `ScannerState` alongside the FFI `Wallet2`
+  handle. Added `get_scanner_balance()`, `get_scanner_staked_outputs()`, and
+  `get_scanner_height()` bridge methods for future scanner-backed queries.
+
 - **`shekyl-encoding` crate.** New standalone Rust crate (`rust/shekyl-encoding/`)
   for general-purpose Bech32m blob encoding and decoding with arbitrary HRPs.
   Defines HRP constants for wallet proofs (`shekylspendproof`, `shekyltxproof`,

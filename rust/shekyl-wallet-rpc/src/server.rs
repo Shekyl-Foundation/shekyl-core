@@ -1,40 +1,23 @@
 // Copyright (c) 2025-2026, The Shekyl Foundation
 //
 // All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without modification, are
-// permitted provided that the following conditions are met:
-//
-// 1. Redistributions of source code must retain the above copyright notice, this list of
-//    conditions and the following disclaimer.
-//
-// 2. Redistributions in binary form must reproduce the above copyright notice, this list
-//    of conditions and the following disclaimer in the documentation and/or other
-//    materials provided with the distribution.
-//
-// 3. Neither the name of the copyright holder nor the names of its contributors may be
-//    used to endorse or promote products derived from this software without specific
-//    prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
-// EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
-// MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
-// THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-// PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
-// STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// BSD-3-Clause
 
 //! HTTP JSON-RPC server using axum.
 //!
 //! Listens on a configurable address and routes `/json_rpc` POST requests
 //! to the handler dispatcher. All wallet operations are serialized through
 //! a `Mutex<Wallet2>` since wallet2 is single-threaded.
+//!
+//! When the `rust-scanner` feature is enabled, scanner-backed read methods
+//! are routed to the native Rust scanner instead of the C++ FFI.
 
 use crate::handlers;
 use crate::types::{JsonRpcRequest, JsonRpcResponse};
 use crate::wallet::Wallet2;
+
+#[cfg(feature = "rust-scanner")]
+use crate::scanner_state::ScannerState;
 
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use std::sync::Mutex;
@@ -54,6 +37,8 @@ pub struct ServerConfig {
 pub struct AppState {
     pub wallet: Mutex<Wallet2>,
     pub shutdown_requested: Mutex<bool>,
+    #[cfg(feature = "rust-scanner")]
+    pub scanner: ScannerState,
 }
 
 pub async fn run_server(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
@@ -72,6 +57,8 @@ pub async fn run_server(config: ServerConfig) -> Result<(), Box<dyn std::error::
     let state = std::sync::Arc::new(AppState {
         wallet: Mutex::new(wallet),
         shutdown_requested: Mutex::new(false),
+        #[cfg(feature = "rust-scanner")]
+        scanner: ScannerState::new(),
     });
 
     let app = Router::new()
@@ -98,7 +85,16 @@ async fn json_rpc_handler(
 
     let result = {
         let wallet = state.wallet.lock().unwrap();
-        handlers::dispatch(&wallet, &method, request.params)
+
+        #[cfg(feature = "rust-scanner")]
+        {
+            handlers::dispatch_with_scanner(&wallet, &state.scanner, &method, request.params)
+        }
+
+        #[cfg(not(feature = "rust-scanner"))]
+        {
+            handlers::dispatch(&wallet, &method, request.params)
+        }
     };
 
     let response = match result {

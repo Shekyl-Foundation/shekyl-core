@@ -165,6 +165,7 @@ private:
     // FCMP++ callbacks
     virtual void on_pqc_rederivation_progress(uint64_t outputs_done, uint64_t outputs_total) {}
     virtual void on_fcmp_path_precompute_progress(uint64_t outputs_done, uint64_t outputs_total) {}
+    virtual void on_transfer_stage(const char* stage, uint8_t stage_index, uint8_t total_stages) {}
     virtual ~i_wallet2_callback() {}
   };
 

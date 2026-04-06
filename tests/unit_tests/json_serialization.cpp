@@ -1,4 +1,5 @@
 
+#include <iostream>
 #include <optional>
 #include <boost/range/adaptor/indexed.hpp>
 #include <gtest/gtest.h>
@@ -69,6 +70,8 @@ namespace test
 
                 for (unsigned ring = 0; ring < 10; ++ring)
                     actual_sources.back().push_output(input.index(), out_key, input.value().amount);
+                actual_sources.back().mask =
+                    actual_sources.back().outputs[actual_sources.back().real_output].second.mask;
             }
         }
 
@@ -84,8 +87,12 @@ namespace test
         std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
         subaddresses[from.m_account_address.m_spend_public_key] = {0,0};
 
-        if (!cryptonote::construct_tx_and_get_tx_key(from, subaddresses, actual_sources, to, std::nullopt, {}, tx, tx_key, extra_keys, rct, true, 1))
+        if (!cryptonote::construct_tx_and_get_tx_key(from, subaddresses, actual_sources, to, std::nullopt, {}, tx, tx_key, extra_keys, rct, false, 1))
+        {
+            std::cerr << "construct_tx failed: dest PQC bytes=" << to[0].addr.m_pqc_public_key.size()
+                      << " ring outs=" << actual_sources[0].outputs.size() << " real_out=" << actual_sources[0].real_output << std::endl;
             throw std::runtime_error{"transaction construction error"};
+        }
 
         return tx;
     }
