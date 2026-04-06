@@ -5330,8 +5330,9 @@ bool simple_wallet::staking_info(const std::vector<std::string>& args)
   {
     const auto& td = m_wallet->get_transfer_details(idx);
     uint64_t remaining = td.m_stake_lock_until > height ? td.m_stake_lock_until - height : 0;
-    const char* tier_names[] = {"Short", "Medium", "Long"};
-    const char* tname = td.m_stake_tier <= 2 ? tier_names[td.m_stake_tier] : "???";
+    const char* tname = shekyl_stake_tier_name(td.m_stake_tier);
+    if (!tname)
+      tname = "???";
     success_msg_writer() << "  [" << idx << "] " << print_money(td.m_amount)
       << " SHEKYL  tier " << (int)td.m_stake_tier << " (" << tname << ")"
       << "  " << status
@@ -5358,9 +5359,16 @@ bool simple_wallet::stake_coins(const std::vector<std::string>& args)
   if (args.size() < 2)
   {
     fail_msg_writer() << tr("usage: stake <tier> <amount>");
-    fail_msg_writer() << tr("  tier 0 = Short  (1,000 blocks lock, 1.0x yield)");
-    fail_msg_writer() << tr("  tier 1 = Medium (25,000 blocks lock, 1.5x yield)");
-    fail_msg_writer() << tr("  tier 2 = Long   (150,000 blocks lock, 2.0x yield)");
+    for (uint32_t t = 0; t < shekyl_stake_tier_count(); ++t)
+    {
+      const char *nm = shekyl_stake_tier_name(static_cast<uint8_t>(t));
+      const uint64_t lb = shekyl_stake_lock_blocks(static_cast<uint8_t>(t));
+      const uint64_t y = shekyl_stake_yield_multiplier(static_cast<uint8_t>(t));
+      const uint64_t whole = y / 1000000;
+      const uint64_t frac1 = (y % 1000000) / 100000;
+      fail_msg_writer() << tr("  tier ") << t << " = " << (nm ? nm : "?") << " (" << lb
+        << tr(" blocks lock, ") << whole << "." << frac1 << tr("x yield)");
+    }
     return true;
   }
 
@@ -5368,9 +5376,9 @@ bool simple_wallet::stake_coins(const std::vector<std::string>& args)
   try { tier = std::stoi(args[0]); }
   catch (...) { fail_msg_writer() << tr("invalid tier"); return true; }
 
-  if (tier > 2)
+  if (tier >= shekyl_stake_tier_count())
   {
-    fail_msg_writer() << tr("tier must be 0, 1, or 2");
+    fail_msg_writer() << tr("invalid tier (must be 0 .. ") << (shekyl_stake_tier_count() - 1) << ")";
     return true;
   }
 
@@ -5388,13 +5396,16 @@ bool simple_wallet::stake_coins(const std::vector<std::string>& args)
   }
 
   const uint64_t lock_blocks = shekyl_stake_lock_blocks(tier);
-  const char* tier_names[] = {"Short", "Medium", "Long"};
+  const char *tier_nm = shekyl_stake_tier_name(tier);
+  const uint64_t ymult = shekyl_stake_yield_multiplier(tier);
+  const uint64_t ywhole = ymult / 1000000;
+  const uint64_t yfrac1 = (ymult % 1000000) / 100000;
   double hours = lock_blocks * 2.0 / 60.0;
 
   success_msg_writer() << "\n  Staking " << print_money(amount) << " SHEKYL";
-  success_msg_writer() << "  Tier:     " << (int)tier << " (" << tier_names[tier] << ")";
+  success_msg_writer() << "  Tier:     " << (int)tier << " (" << (tier_nm ? tier_nm : "?") << ")";
   success_msg_writer() << "  Lock:     " << lock_blocks << " blocks (~" << std::fixed << std::setprecision(1) << hours << " hours)";
-  success_msg_writer() << "  Yield:    " << (tier == 0 ? "1.0x" : tier == 1 ? "1.5x" : "2.0x");
+  success_msg_writer() << "  Yield:    " << ywhole << "." << yfrac1 << "x";
 
   if (!command_line::is_yes(input_line("Confirm staking? (Y/Yes/N/No): ", true)))
   {

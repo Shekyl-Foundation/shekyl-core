@@ -3598,10 +3598,16 @@ namespace cryptonote
         continue;
       uint64_t weight = shekyl_stake_weight(staked_amount, tier);
       {
-        uint64_t hi, lo;
-        lo = mul128(total_reward_at_h, weight, &hi);
-        div128_64(hi, lo, accrual.total_weighted_stake, &hi, &lo, NULL, NULL);
-        reward += lo;
+        uint8_t reward_overflow = 0;
+        uint64_t q_lo = shekyl_calc_per_block_staker_reward(
+          total_reward_at_h, weight, accrual.total_weighted_stake, &reward_overflow);
+        if (reward_overflow != 0)
+        {
+          error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+          error_resp.message = "Stake reward calculation overflow";
+          return false;
+        }
+        reward += q_lo;
       }
     }
 

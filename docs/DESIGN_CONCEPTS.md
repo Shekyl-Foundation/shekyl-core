@@ -71,6 +71,8 @@ Given the mismatch above, the original chain effectively entered minimum-subsidy
 
 For Shekyl NG, constants are generated from `config/economics_params.json` and included via generated headers referenced by `src/cryptonote_config.h`.
 
+Staking tier lock durations, yield multipliers, and `shekyl_stake_max_claim_range` are read from the same JSON by `rust/shekyl-staking/build.rs` into generated Rust constants (`TIERS`, `MAX_CLAIM_RANGE`), keeping wallet and node FFI (`shekyl_stake_*`) aligned with the economics file.
+
 ### Technical limit with `uint64_t`
 
 If the target is `2^32` **whole coins**, then with atomic accounting:

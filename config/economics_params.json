@@ -18,6 +18,7 @@
   "shekyl_stake_yield_mult_short": 1000000,
   "shekyl_stake_yield_mult_medium": 1500000,
   "shekyl_stake_yield_mult_long": 2000000,
+  "shekyl_stake_max_claim_range": 10000,
   "shekyl_stake_num_tiers": 3,
   "shekyl_staker_emission_share": 150000,
   "shekyl_staker_emission_decay": 900000,

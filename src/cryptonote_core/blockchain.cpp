@@ -3909,7 +3909,7 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
-  static const uint64_t MAX_CLAIM_RANGE = 10000;
+  const uint64_t max_claim_range = shekyl_stake_max_claim_range();
 
   if (claim.to_height > current_height)
   {
@@ -3923,9 +3923,9 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
     return false;
   }
 
-  if (claim.to_height - claim.from_height > MAX_CLAIM_RANGE)
+  if (claim.to_height - claim.from_height > max_claim_range)
   {
-    MERROR_VER("Claim range " << (claim.to_height - claim.from_height) << " exceeds maximum " << MAX_CLAIM_RANGE);
+    MERROR_VER("Claim range " << (claim.to_height - claim.from_height) << " exceeds maximum " << max_claim_range);
     return false;
   }
 
@@ -4004,10 +4004,10 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
 
     uint64_t weight = shekyl_stake_weight(staked_amount, staked_tier);
     {
-      uint64_t hi, lo, q_hi = 0, q_lo = 0;
-      lo = mul128(total_reward_at_h, weight, &hi);
-      div128_64(hi, lo, accrual.total_weighted_stake, &q_hi, &q_lo, NULL, NULL);
-      if (q_hi != 0)
+      uint8_t reward_overflow = 0;
+      uint64_t q_lo = shekyl_calc_per_block_staker_reward(
+        total_reward_at_h, weight, accrual.total_weighted_stake, &reward_overflow);
+      if (reward_overflow != 0)
       {
         MERROR_VER("Stake claim reward overflow for staked output " << claim.staked_output_index << " at height " << h);
         return false;

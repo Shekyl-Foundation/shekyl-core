@@ -4,6 +4,15 @@
 
 ### ✨ Added
 
+- **Staking FFI and config-driven tier parameters.** `shekyl-staking` now
+  generates tier lock durations, yield multipliers, and max stake-claim range
+  from `config/economics_params.json` at build time (aligned with
+  `shekyl-economics`). New FFI: `shekyl_calc_per_block_staker_reward` (128-bit
+  division with optional overflow flag), `shekyl_stake_tier_count`,
+  `shekyl_stake_tier_name`, `shekyl_stake_max_claim_range`. C++ uses these in
+  `blockchain.cpp`, `core_rpc_server.cpp`, and `simplewallet` instead of
+  duplicating tier strings or inline `mul128`/`div128_64` reward math.
+
 - **FCMP++ transaction construction helper (`construct_fcmp_tx`).** New chaingen
   helper in `tests/core_tests/chaingen.cpp` that builds fully valid FCMP++
   transactions during core test replay: tree path assembly from the live LMDB

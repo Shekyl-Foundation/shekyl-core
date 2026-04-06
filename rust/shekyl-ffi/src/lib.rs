@@ -505,6 +505,63 @@ pub extern "C" fn shekyl_stake_yield_multiplier(tier_id: u8) -> u64 {
     }
 }
 
+/// Per-block share of the staker pool for one weighted stake entry:
+/// `(total_reward_at_height * stake_weight) / total_weighted_stake` using `u128` math.
+///
+/// If `total_weighted_stake == 0`, returns `0`.
+/// If the quotient does not fit in `u64`, returns `0` and sets `*overflow_out` to `1` when
+/// `overflow_out` is non-null.
+#[no_mangle]
+pub extern "C" fn shekyl_calc_per_block_staker_reward(
+    total_reward_at_height: u64,
+    stake_weight: u64,
+    total_weighted_stake: u64,
+    overflow_out: *mut u8,
+) -> u64 {
+    unsafe {
+        if !overflow_out.is_null() {
+            *overflow_out = 0;
+        }
+    }
+    if total_weighted_stake == 0 {
+        return 0;
+    }
+    let num = (total_reward_at_height as u128) * (stake_weight as u128);
+    let q = num / (total_weighted_stake as u128);
+    if q > u64::MAX as u128 {
+        unsafe {
+            if !overflow_out.is_null() {
+                *overflow_out = 1;
+            }
+        }
+        return 0;
+    }
+    q as u64
+}
+
+/// Number of staking lock tiers (length of `TIERS`).
+#[no_mangle]
+pub extern "C" fn shekyl_stake_tier_count() -> u32 {
+    shekyl_staking::tiers::TIERS.len() as u32
+}
+
+/// UTF-8 tier display name, null-terminated. Returns null for invalid `tier_id`.
+#[no_mangle]
+pub extern "C" fn shekyl_stake_tier_name(tier_id: u8) -> *const c_char {
+    match tier_id {
+        0 => b"Short\0".as_ptr() as *const c_char,
+        1 => b"Medium\0".as_ptr() as *const c_char,
+        2 => b"Long\0".as_ptr() as *const c_char,
+        _ => std::ptr::null(),
+    }
+}
+
+/// Maximum `to_height - from_height` allowed for a stake claim (from economics config).
+#[no_mangle]
+pub extern "C" fn shekyl_stake_max_claim_range() -> u64 {
+    shekyl_staking::MAX_CLAIM_RANGE
+}
+
 /// Compute stake_ratio = total_staked / circulating_supply (fixed-point SCALE).
 #[no_mangle]
 pub extern "C" fn shekyl_calc_stake_ratio(total_staked: u64, circulating_supply: u64) -> u64 {
@@ -1640,6 +1697,39 @@ mod tests {
         assert_eq!(shekyl_stake_weight(1_000_000_000, 0), 1_000_000_000); // 1.0x
         assert_eq!(shekyl_stake_weight(1_000_000_000, 2), 2_000_000_000); // 2.0x
         assert_eq!(shekyl_stake_weight(1_000_000_000, 99), 0); // invalid tier
+    }
+
+    #[test]
+    fn test_per_block_staker_reward_ffi() {
+        let mut overflow = 0u8;
+        let q = shekyl_calc_per_block_staker_reward(1_000_000, 500_000, 2_000_000, &mut overflow);
+        assert_eq!(overflow, 0);
+        assert_eq!(q, 250_000);
+        assert_eq!(shekyl_calc_per_block_staker_reward(100, 0, 50, std::ptr::null_mut()), 0);
+        let q2 = shekyl_calc_per_block_staker_reward(10, 10, 1, std::ptr::null_mut());
+        assert_eq!(q2, 100);
+    }
+
+    #[test]
+    fn test_per_block_staker_reward_overflow_flag() {
+        let mut overflow = 0u8;
+        let q = shekyl_calc_per_block_staker_reward(u64::MAX, u64::MAX, 1, &mut overflow);
+        assert_eq!(q, 0);
+        assert_eq!(overflow, 1);
+    }
+
+    #[test]
+    fn test_stake_tier_enum_ffi() {
+        assert_eq!(shekyl_stake_tier_count(), 3);
+        assert!(shekyl_stake_max_claim_range() > 0);
+        use std::ffi::CStr;
+        unsafe {
+            assert_eq!(
+                CStr::from_ptr(shekyl_stake_tier_name(0)).to_str().unwrap(),
+                shekyl_staking::tiers::TIERS[0].name
+            );
+            assert!(shekyl_stake_tier_name(99).is_null());
+        }
     }
 
     #[test]

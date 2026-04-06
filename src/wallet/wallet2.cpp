@@ -10911,9 +10911,9 @@ uint64_t wallet2::estimate_claimable_reward(size_t transfer_index)
   uint64_t to_h = std::min(current_height, td.m_stake_lock_until);
   if (from_h >= to_h)
     return 0;
-  static const uint64_t MAX_CLAIM_RANGE = 10000;
-  if (to_h - from_h > MAX_CLAIM_RANGE)
-    to_h = from_h + MAX_CLAIM_RANGE;
+  const uint64_t max_claim_range = shekyl_stake_max_claim_range();
+  if (to_h - from_h > max_claim_range)
+    to_h = from_h + max_claim_range;
 
   cryptonote::COMMAND_RPC_ESTIMATE_CLAIM_REWARD::request req{};
   cryptonote::COMMAND_RPC_ESTIMATE_CLAIM_REWARD::response res{};
@@ -10957,9 +10957,9 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
 
     uint64_t from_h = td.m_block_height;
     uint64_t to_h = std::min(current_height, td.m_stake_lock_until);
-    static const uint64_t MAX_CLAIM_RANGE = 10000;
-    if (to_h - from_h > MAX_CLAIM_RANGE)
-      to_h = from_h + MAX_CLAIM_RANGE;
+    const uint64_t max_claim_range = shekyl_stake_max_claim_range();
+    if (to_h - from_h > max_claim_range)
+      to_h = from_h + max_claim_range;
 
     uint64_t reward = estimate_claimable_reward(idx);
 

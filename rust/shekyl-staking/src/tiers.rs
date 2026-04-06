@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+include!(concat!(env!("OUT_DIR"), "/tier_params_generated.rs"));
+
+/// Maximum allowed `to_height - from_height` for a stake claim (consensus).
+pub const MAX_CLAIM_RANGE: u64 = GENERATED_STAKE_MAX_CLAIM_RANGE;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StakeTier {
     pub id: u8,
@@ -11,20 +16,20 @@ pub struct StakeTier {
 pub const TIERS: [StakeTier; 3] = [
     StakeTier {
         id: 0,
-        lock_blocks: 1_000,
-        yield_multiplier: 1_000_000,
+        lock_blocks: GENERATED_STAKE_TIER_SHORT_BLOCKS,
+        yield_multiplier: GENERATED_STAKE_YIELD_MULT_SHORT,
         name: "Short",
     },
     StakeTier {
         id: 1,
-        lock_blocks: 25_000,
-        yield_multiplier: 1_500_000,
+        lock_blocks: GENERATED_STAKE_TIER_MEDIUM_BLOCKS,
+        yield_multiplier: GENERATED_STAKE_YIELD_MULT_MEDIUM,
         name: "Medium",
     },
     StakeTier {
         id: 2,
-        lock_blocks: 150_000,
-        yield_multiplier: 2_000_000,
+        lock_blocks: GENERATED_STAKE_TIER_LONG_BLOCKS,
+        yield_multiplier: GENERATED_STAKE_YIELD_MULT_LONG,
         name: "Long",
     },
 ];
@@ -108,5 +113,11 @@ mod tests {
                 "tier_by_id({id}) should return None"
             );
         }
+    }
+
+    #[test]
+    fn max_claim_range_matches_config() {
+        assert_eq!(MAX_CLAIM_RANGE, GENERATED_STAKE_MAX_CLAIM_RANGE);
+        assert!(MAX_CLAIM_RANGE > 0);
     }
 }
