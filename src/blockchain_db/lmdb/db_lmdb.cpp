@@ -6036,19 +6036,48 @@ bool BlockchainLMDB::is_output_pruned(uint64_t global_output_index) const
   return meta.pruned != 0;
 }
 
-uint64_t BlockchainLMDB::get_last_pruned_tx_data_height() const
+uint64_t BlockchainLMDB::read_tx_prune_next_block_height() const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  uint64_t last = 0;
+  uint64_t next = 0;
   TXN_PREFIX_RDONLY();
-  MDB_val_str(k, "last_pruned_tx_data_height");
   MDB_val v;
-  if (mdb_get(m_txn, m_properties, &k, &v) == 0 && v.mv_size == sizeof(uint64_t))
-    memcpy(&last, v.mv_data, sizeof(uint64_t));
+  MDB_val_str(k_new, "tx_prune_next_block");
+  int r = mdb_get(m_txn, m_properties, &k_new, &v);
+  if (r == 0 && v.mv_size == sizeof(uint64_t))
+    memcpy(&next, v.mv_data, sizeof(uint64_t));
+  else
+  {
+    MDB_val_str(k_old, "last_pruned_tx_data_height");
+    r = mdb_get(m_txn, m_properties, &k_old, &v);
+    if (r == 0 && v.mv_size == sizeof(uint64_t))
+    {
+      uint64_t legacy_last_inclusive = 0;
+      memcpy(&legacy_last_inclusive, v.mv_data, sizeof(uint64_t));
+      next = legacy_last_inclusive + 1;
+    }
+  }
   TXN_POSTFIX_RDONLY();
-  return last;
+  return next;
+}
+
+void BlockchainLMDB::write_tx_prune_next_block_height(MDB_txn* wtxn, uint64_t next_block)
+{
+  MDB_val_str(wk, "tx_prune_next_block");
+  MDB_val wv = {sizeof(next_block), (void *)&next_block};
+  if (int err = mdb_put(wtxn, m_properties, &wk, &wv, 0))
+    throw0(DB_ERROR(lmdb_error("tx_prune_next_block watermark: ", err).c_str()));
+  MDB_val_str(wk_old, "last_pruned_tx_data_height");
+  (void)mdb_del(wtxn, m_properties, &wk_old, NULL);
+}
+
+uint64_t BlockchainLMDB::get_last_pruned_tx_data_height() const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  const uint64_t next = read_tx_prune_next_block_height();
+  return next > 0 ? next - 1 : 0;
 }
 
 bool BlockchainLMDB::tx_has_verification_data(const crypto::hash& tx_hash) const
@@ -6071,25 +6100,16 @@ bool BlockchainLMDB::prune_tx_data(uint64_t depth)
 
   const uint64_t prune_below_height = blockchain_height - depth;
 
-  uint64_t last_pruned_height = 0;
+  const uint64_t next_block = read_tx_prune_next_block_height();
+  if (next_block >= prune_below_height)
   {
-    TXN_PREFIX_RDONLY();
-    MDB_val_str(k, "last_pruned_tx_data_height");
-    MDB_val v;
-    int result = mdb_get(m_txn, m_properties, &k, &v);
-    if (result == 0 && v.mv_size == sizeof(uint64_t))
-      memcpy(&last_pruned_height, v.mv_data, sizeof(uint64_t));
-    TXN_POSTFIX_RDONLY();
-  }
-
-  if (last_pruned_height >= prune_below_height)
-  {
-    LOG_PRINT_L2("prune_tx_data: already pruned up to height " << last_pruned_height
-                 << ", target " << prune_below_height << " -- nothing to do");
+    LOG_PRINT_L2("prune_tx_data: already pruned through block " << (next_block > 0 ? next_block - 1 : 0)
+                 << ", next block " << next_block << ", target exclusive " << prune_below_height
+                 << " -- nothing to do");
     return true;
   }
 
-  uint64_t h = last_pruned_height > 0 ? last_pruned_height + 1 : 0;
+  uint64_t h = next_block;
   LOG_PRINT_L1("prune_tx_data: pruning transactions in blocks " << h
                << " .. " << prune_below_height
                << " (reorg depth " << depth << ")");
@@ -6194,14 +6214,7 @@ bool BlockchainLMDB::prune_tx_data(uint64_t depth)
     }
 
     {
-      const uint64_t wm = h > 0 ? h - 1 : 0;
-      MDB_val_str(wk, "last_pruned_tx_data_height");
-      MDB_val wv = {sizeof(wm), (void *)&wm};
-      if (int err = mdb_put(wtxn, m_properties, &wk, &wv, 0))
-      {
-        m_write_txn = saved_write;
-        throw0(DB_ERROR(lmdb_error("prune_tx_data: watermark: ", err).c_str()));
-      }
+      write_tx_prune_next_block_height(wtxn, h);
     }
 
     wtxn.commit();

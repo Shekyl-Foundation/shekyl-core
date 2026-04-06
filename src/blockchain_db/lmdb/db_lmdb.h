@@ -505,6 +505,10 @@ private:
   /** LMDB tx_id for a canonical tx hash (throws TX_DNE if missing). */
   uint64_t get_tx_id(const crypto::hash& h) const;
 
+  /** First block height not yet processed for tx-data pruning (legacy key migrates to +1). */
+  uint64_t read_tx_prune_next_block_height() const;
+  void write_tx_prune_next_block_height(MDB_txn* wtxn, uint64_t next_block);
+
 private:
   MDB_env* m_env;
 

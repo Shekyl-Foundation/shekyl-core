@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 🔄 Changed
+
+- **Tx-data prune watermark.** `prune_tx_data` now stores `tx_prune_next_block`
+  (exclusive next height) instead of ambiguous `last_pruned_tx_data_height`
+  values; legacy keys migrate on read/write. Unit tests in
+  `tests/unit_tests/tx_data_pruning_lmdb.cpp` cover prune, idempotency, and
+  `pop_block` failure after prune.
+
 ### ✨ Added
 
 - **`--prune-blockchain` transaction-data pruning.** LMDB v6 adds `txs_pqc_auths`

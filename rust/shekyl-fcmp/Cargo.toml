@@ -11,17 +11,15 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-# Upstream FCMP++ crates from Shekyl-Foundation fork (shekyl-oxide).
-# The authoritative pin is `rust/Cargo.lock`.
-# Use `branch = "fcmp++"` here; bump the lock when advancing the fork.
-shekyl-fcmp-plus-plus = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
-shekyl-generators = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++" }
-helioselene = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++" }
-generalized-bulletproofs = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++" }
+# Vendored shekyl-oxide crates (tracked upstream in Shekyl-Foundation/monero-oxide).
+shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
+shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
+generalized-bulletproofs = { path = "../shekyl-oxide/crypto/generalized-bulletproofs" }
 dalek-ff-group = "0.5"
 ciphersuite = "0.4"
 multiexp = "0.4"
-ec-divisors = { git = "https://github.com/Shekyl-Foundation/monero-oxide", branch = "fcmp++", features = ["ed25519"] }
+ec-divisors = { path = "../shekyl-oxide/crypto/divisors", features = ["ed25519"] }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 
 # Crypto primitives
