@@ -311,6 +311,188 @@ pub fn prove(
     })
 }
 
+/// Construct an FCMP++ proof using pre-aggregated SAL proofs (multisig flow).
+///
+/// Unlike `prove()`, this function accepts already-computed
+/// `(Input, SpendAuthAndLinkability)` pairs from the FROST threshold signing
+/// protocol. It skips the single-signer `OpenedInputTuple::open()` and
+/// `SpendAuthAndLinkability::prove()` steps.
+///
+/// `original_outputs`: the non-rerandomized `Output` for each input (needed
+/// for the `Path.output` field).
+/// `rerands`: the `RerandomizedOutput` per input for blind derivation.
+/// `leaf_chunks`: per-input leaf chunk and branch data.
+#[cfg(feature = "multisig")]
+#[allow(non_snake_case)]
+pub fn prove_with_sal(
+    sal_pairs: Vec<(shekyl_fcmp_plus_plus::Input, SpendAuthAndLinkability)>,
+    original_outputs: &[Output],
+    rerands: &[shekyl_fcmp_plus_plus::sal::RerandomizedOutput],
+    leaf_chunks: &[ProveInputLeafChunk],
+    tree_depth: u8,
+) -> Result<ProveResult, ProveError> {
+    if sal_pairs.is_empty() {
+        return Err(ProveError::EmptyInputs);
+    }
+    if sal_pairs.len() > MAX_INPUTS {
+        return Err(ProveError::TooManyInputs(sal_pairs.len()));
+    }
+    if sal_pairs.len() != original_outputs.len()
+        || sal_pairs.len() != rerands.len()
+        || sal_pairs.len() != leaf_chunks.len()
+    {
+        return Err(ProveError::UpstreamError(
+            "sal_pairs/original_outputs/rerands/leaf_chunks length mismatch".into(),
+        ));
+    }
+
+    let mut paired = Vec::with_capacity(sal_pairs.len());
+    let mut output_blinds_list = Vec::with_capacity(sal_pairs.len());
+    let mut paths = Vec::with_capacity(sal_pairs.len());
+    let mut pseudo_outs = Vec::with_capacity(sal_pairs.len());
+
+    for (idx, (((input, sal), orig_output), rerand)) in sal_pairs
+        .into_iter()
+        .zip(original_outputs.iter())
+        .zip(rerands.iter())
+        .enumerate()
+    {
+        pseudo_outs.push(input.C_tilde().to_bytes());
+        paired.push((input, sal));
+
+        // Build OutputBlinds from rerandomization
+        let output_blind = OutputBlinds::new(
+            OBlind::new(
+                EdwardsPoint(*T),
+                ScalarDecomposition::new(rerand.o_blind()).unwrap(),
+            ),
+            IBlind::new(
+                EdwardsPoint(*FCMP_PLUS_PLUS_U),
+                EdwardsPoint(*FCMP_PLUS_PLUS_V),
+                ScalarDecomposition::new(rerand.i_blind()).unwrap(),
+            ),
+            IBlindBlind::new(
+                EdwardsPoint(*T),
+                ScalarDecomposition::new(rerand.i_blind_blind()).unwrap(),
+            ),
+            CBlind::new(
+                EdwardsPoint::generator(),
+                ScalarDecomposition::new(rerand.c_blind()).unwrap(),
+            ),
+        );
+        output_blinds_list.push(output_blind);
+
+        // Build the leaf chunk and branch layers
+        let chunk = &leaf_chunks[idx];
+        if chunk.leaf_outputs.is_empty() {
+            return Err(ProveError::TreePathUnavailable(idx));
+        }
+
+        let mut chunk_outputs = Vec::with_capacity(chunk.leaf_outputs.len());
+        let mut chunk_extra = Vec::with_capacity(chunk.leaf_outputs.len());
+        for (j, (o, i, c)) in chunk.leaf_outputs.iter().enumerate() {
+            let lo = decompress_ed25519(o)
+                .ok_or(ProveError::InvalidPoint { input_index: idx, field: "leaf_O" })?;
+            let li = decompress_ed25519(i)
+                .ok_or(ProveError::InvalidPoint { input_index: idx, field: "leaf_I" })?;
+            let lc = decompress_ed25519(c)
+                .ok_or(ProveError::InvalidPoint { input_index: idx, field: "leaf_C" })?;
+            chunk_outputs.push(
+                Output::new(lo, li, lc)
+                    .map_err(|e| ProveError::UpstreamError(
+                        format!("leaf Output::new at input {idx}, leaf {j}: {e:?}"),
+                    ))?,
+            );
+            let h = deserialize_selene_scalar(&chunk.leaf_h_pqc[j])
+                .ok_or(ProveError::InvalidScalar { input_index: idx, field: "leaf_h_pqc" })?;
+            chunk_extra.push(vec![h]);
+        }
+
+        let output_h_pqc = deserialize_selene_scalar(&chunk.output_h_pqc.0)
+            .ok_or(ProveError::InvalidScalar { input_index: idx, field: "h_pqc" })?;
+
+        let mut c1_layers = Vec::new();
+        for layer in &chunk.c1_branch_layers {
+            let scalars: Vec<<Selene as Ciphersuite>::F> = layer.siblings.iter()
+                .map(|b| deserialize_selene_scalar(b))
+                .collect::<Option<Vec<_>>>()
+                .ok_or(ProveError::InvalidScalar { input_index: idx, field: "c1_branch" })?;
+            c1_layers.push(scalars);
+        }
+        let mut c2_layers = Vec::new();
+        for layer in &chunk.c2_branch_layers {
+            let scalars: Vec<<Helios as Ciphersuite>::F> = layer.siblings.iter()
+                .map(|b| deserialize_helios_scalar(b))
+                .collect::<Option<Vec<_>>>()
+                .ok_or(ProveError::InvalidScalar { input_index: idx, field: "c2_branch" })?;
+            c2_layers.push(scalars);
+        }
+
+        paths.push(Path::<Curves> {
+            output: *orig_output,
+            output_extra_scalars: vec![output_h_pqc],
+            leaves: chunk_outputs,
+            leaves_extra_scalars: chunk_extra,
+            curve_2_layers: c2_layers,
+            curve_1_layers: c1_layers,
+        });
+    }
+
+    let branches = Branches::new(paths)
+        .ok_or(ProveError::UpstreamError("Branches::new failed".into()))?;
+
+    let c1_blind_count = branches.necessary_c1_blinds();
+    let c2_blind_count = branches.necessary_c2_blinds();
+
+    let c1_h = SELENE_FCMP_GENERATORS.generators.h();
+    let c2_h = HELIOS_FCMP_GENERATORS.generators.h();
+
+    let c1_blinds: Vec<_> = (0..c1_blind_count)
+        .map(|_| BranchBlind::<<Selene as Ciphersuite>::G>::new(
+            c1_h,
+            ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
+        ))
+        .collect();
+    let c2_blinds: Vec<_> = (0..c2_blind_count)
+        .map(|_| BranchBlind::<<Helios as Ciphersuite>::G>::new(
+            c2_h,
+            ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
+        ))
+        .collect();
+
+    let blinded = branches.blind(output_blinds_list, c1_blinds, c2_blinds)
+        .map_err(|e| ProveError::UpstreamError(format!("blind: {e:?}")))?;
+
+    let fcmp = Fcmp::prove(&mut OsRng, &*FCMP_PARAMS, blinded)
+        .map_err(|e| ProveError::UpstreamError(format!("Fcmp::prove: {e:?}")))?;
+
+    let fcmp_pp = FcmpPlusPlus::new(paired, fcmp);
+
+    let mut data = Vec::new();
+    fcmp_pp.write(&mut data)
+        .map_err(|e| ProveError::UpstreamError(format!("write: {e}")))?;
+
+    Ok(ProveResult {
+        proof: ShekylFcmpProof {
+            data,
+            num_inputs: pseudo_outs.len() as u32,
+            tree_depth,
+        },
+        pseudo_outs,
+    })
+}
+
+/// Leaf chunk and branch data for `prove_with_sal()`.
+#[cfg(feature = "multisig")]
+#[derive(Clone, Debug)]
+pub struct ProveInputLeafChunk {
+    pub output_h_pqc: PqcLeafScalar,
+    pub leaf_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])>,
+    pub leaf_h_pqc: Vec<[u8; 32]>,
+    pub c1_branch_layers: Vec<BranchLayer>,
+    pub c2_branch_layers: Vec<BranchLayer>,
+}
+
 /// Verify an FCMP++ proof against public inputs.
 ///
 /// Uses batch verification for efficiency. Checks:
@@ -493,5 +675,106 @@ mod tests {
             c1_branch_layers: vec![],
             c2_branch_layers: vec![],
         }
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn prove_verify_roundtrip() {
+        use ec_divisors::DivisorCurve;
+        use multiexp::multiexp_vartime;
+        use shekyl_generators::SELENE_HASH_INIT;
+
+        let tree_depth: u8 = 1;
+        let signable_tx_hash = [0xABu8; 32];
+
+        // Generate spend keys and derive output point O = xG + yT
+        let x = Scalar::random(&mut OsRng);
+        let y = Scalar::random(&mut OsRng);
+        let O = (EdwardsPoint::generator() * x) + (EdwardsPoint(*T) * y);
+        let I = EdwardsPoint::random(&mut OsRng);
+        let C = EdwardsPoint::random(&mut OsRng);
+
+        // Key image: L = I * x
+        let L = I * x;
+
+        // Random PQC leaf scalar
+        let h_pqc_field = <Selene as Ciphersuite>::F::random(&mut OsRng);
+        let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr().into();
+
+        // Compute tree root: single-leaf Selene Pedersen commitment
+        let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
+        let tree_root_point: <Selene as Ciphersuite>::G = *SELENE_HASH_INIT + multiexp_vartime(
+            &[
+                (<EdwardsPoint as DivisorCurve>::to_xy(O).unwrap().0, generators[0]),
+                (<EdwardsPoint as DivisorCurve>::to_xy(I).unwrap().0, generators[1]),
+                (<EdwardsPoint as DivisorCurve>::to_xy(C).unwrap().0, generators[2]),
+                (h_pqc_field, generators[3]),
+            ],
+        );
+        let tree_root: [u8; 32] = tree_root_point.to_bytes().into();
+
+        // Compressed points for ProveInput
+        let o_bytes = O.to_bytes();
+        let i_bytes = I.to_bytes();
+        let c_bytes = C.to_bytes();
+
+        let input = ProveInput {
+            output_key: o_bytes.into(),
+            key_image_gen: i_bytes.into(),
+            commitment: c_bytes.into(),
+            h_pqc: PqcLeafScalar(h_pqc_bytes),
+            spend_key_x: x.to_repr().into(),
+            spend_key_y: y.to_repr().into(),
+            leaf_chunk_outputs: vec![(o_bytes.into(), i_bytes.into(), c_bytes.into())],
+            leaf_chunk_h_pqc: vec![h_pqc_bytes],
+            c1_branch_layers: vec![],
+            c2_branch_layers: vec![],
+        };
+
+        let result = prove(&[input], &tree_root, tree_depth, signable_tx_hash)
+            .expect("prove should succeed");
+
+        let key_images = [L.to_bytes().into()];
+
+        let ok = verify(
+            &result.proof,
+            &key_images,
+            &result.pseudo_outs,
+            &[PqcLeafScalar(h_pqc_bytes)],
+            &tree_root,
+            tree_depth,
+            signable_tx_hash,
+        ).expect("verify should succeed");
+        assert!(ok, "valid proof must verify");
+
+        // Tampered key image must fail
+        let mut bad_ki = key_images[0];
+        bad_ki[0] ^= 0xFF;
+        let tampered = verify(
+            &result.proof,
+            &[bad_ki],
+            &result.pseudo_outs,
+            &[PqcLeafScalar(h_pqc_bytes)],
+            &tree_root,
+            tree_depth,
+            signable_tx_hash,
+        );
+        assert!(tampered.is_err() || matches!(tampered, Ok(false)),
+            "tampered key image must not verify");
+
+        // Wrong tree root must fail
+        let mut bad_root = tree_root;
+        bad_root[0] ^= 0xFF;
+        let wrong_root = verify(
+            &result.proof,
+            &key_images,
+            &result.pseudo_outs,
+            &[PqcLeafScalar(h_pqc_bytes)],
+            &bad_root,
+            tree_depth,
+            signable_tx_hash,
+        );
+        assert!(wrong_root.is_err() || matches!(wrong_root, Ok(false)),
+            "wrong tree root must not verify");
     }
 }

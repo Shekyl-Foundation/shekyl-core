@@ -14,6 +14,10 @@
 pub mod leaf;
 pub mod tree;
 pub mod proof;
+#[cfg(feature = "multisig")]
+pub mod frost_sal;
+#[cfg(feature = "multisig")]
+pub mod frost_dkg;
 
 pub use leaf::{PqcLeafScalar, ShekylLeaf};
 pub use tree::{
@@ -22,6 +26,8 @@ pub use tree::{
     ed25519_point_to_selene_scalar, construct_leaf,
 };
 pub use proof::{ShekylFcmpProof, ProveError, VerifyError, ProveResult, ProveInput, BranchLayer};
+#[cfg(feature = "multisig")]
+pub use proof::ProveInputLeafChunk;
 
 /// Domain separator for Shekyl's PQC leaf hash: H(pqc_pk) -> 4th scalar.
 pub const DOMAIN_PQC_LEAF: &[u8] = b"shekyl-pqc-leaf";

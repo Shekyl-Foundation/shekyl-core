@@ -2,7 +2,69 @@
 
 ## Unreleased
 
+### 🔒 Security
+
+- **Base58 overflow and non-canonical encoding fix (monero-oxide fork).**
+  `shekyl-base58::decode()` now uses `checked_add` to prevent integer overflow
+  during character accumulation, and rejects non-canonical encodings where
+  unused high bytes of the decoded sum are non-zero. Defense-in-depth measure;
+  Shekyl production addresses use Bech32m.
+
+- **Cargo profile hardening (both Rust workspaces).** All profiles (dev,
+  release, test, bench) now enforce `overflow-checks = true` in both the
+  monero-oxide fork `Cargo.toml` and the Shekyl `rust/Cargo.toml`. Dev and
+  release profiles additionally set `panic = "abort"`.
+
+### ✨ Added
+
+- **FROST SAL threshold signing for FCMP++ multisig.** New `frost_sal`
+  module in `shekyl-fcmp` wraps upstream `SalAlgorithm<Ed25519T>` for
+  threshold Spend-Auth-and-Linkability proofs. `FrostSalSession` manages
+  per-input FROST state; `prove_with_sal()` constructs FCMP++ proofs from
+  pre-aggregated SAL pairs. FFI functions (`shekyl_frost_sal_session_new`,
+  `_get_rerand`, `_aggregate_and_prove`, `_session_free`) expose the session
+  lifecycle to C++. The `multisig` feature flag enables FROST dependencies
+  (`modular-frost`, `transcript`, `rand_chacha`).
+
+- **FROST DKG key management.** New `frost_dkg` module in `shekyl-fcmp`
+  provides `SerializedThresholdKeys` for `ThresholdKeys<Ed25519T>`
+  serialization/deserialization, group key extraction, and parameter
+  validation. FFI functions (`shekyl_frost_keys_import`, `_export`,
+  `_group_key`, `_validate`, `_free`) manage threshold keys from C++.
+
+- **Variable-length FCMP++ witness wire format.** `shekyl_fcmp_prove` FFI
+  now accepts a single `witness_ptr`/`witness_len` blob containing per-input
+  fixed headers, leaf chunk Ed25519 output data, and Helios/Selene branch
+  layers. `genRctFcmpPlusPlus` in `rctSigs.cpp` serializes the full witness.
+
+- **Daemon RPC `chunk_outputs_blob`.** `get_curve_tree_path` response now
+  includes per-chunk compressed Ed25519 output data (O, I=Hp(O), C,
+  H(pqc_pk)) enabling the wallet to pass full output points to the prover.
+
+- **C++ wallet FROST multisig integration.** `prepare_multisig_fcmp_proof`
+  creates FROST SAL sessions when threshold keys are present (defers proof).
+  `export_multisig_signing_request` emits v3 format with FROST round data.
+  `import_multisig_signatures` aggregates FROST shares via FFI and produces
+  the final FCMP++ proof. New methods: `import_frost_threshold_keys`,
+  `export_frost_threshold_keys`, `clear_frost_sessions`.
+
+- **16 new Rust tests for FROST.** 4 `frost_sal` unit tests (session
+  creation, pseudo-out distinctness, identity rejection, field roundtrip),
+  4 `frost_dkg` unit tests (serialization roundtrip, group key extraction,
+  parameter validation, byte-level roundtrip), 8 FFI lifecycle tests (null
+  safety, invalid data rejection, session handle management).
+
+- **FCMP++ prove/verify round-trip test.** `prove_verify_roundtrip()` in
+  `rust/shekyl-fcmp/src/proof.rs` exercises the full stack: random key
+  generation, single-leaf tree root computation, `prove()`, `verify()`, and
+  negative tests (tampered key image, wrong tree root).
+
 ### 🐛 Fixed
+
+- **Stale fuzz targets updated.** `fuzz_fcmp_proof_deserialize` and
+  `fuzz_tx_deserialize_fcmp_type7` now pass the required `signable_tx_hash`
+  7th argument to `verify()`. `fuzz_block_header_tree_root` rewritten for the
+  current `ProveInput` struct and 4-arg `prove()` signature.
 
 - **`prune_tx_data` miner output lookup.** When storing output-pruning metadata,
   RCT coinbase outputs are keyed under amount `0` in LMDB (same as

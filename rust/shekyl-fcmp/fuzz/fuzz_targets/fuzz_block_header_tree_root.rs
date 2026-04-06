@@ -5,57 +5,60 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use shekyl_fcmp::proof::{prove, verify, ProveInput, ShekylFcmpProof};
-use shekyl_fcmp::leaf::{PqcLeafScalar, ShekylLeaf};
+use shekyl_fcmp::proof::{prove, verify, ProveInput, BranchLayer};
+use shekyl_fcmp::leaf::PqcLeafScalar;
 
 fuzz_target!(|data: &[u8]| {
-    // Feed block headers with mismatched curve_tree_root values to validation.
-    // We construct a proof against one tree root, then verify against a
-    // fuzz-supplied root — mismatches must be rejected.
-    if data.len() < 64 {
+    // Feed block headers with fuzz-supplied tree roots and signable hashes to
+    // prove/verify. Mismatches between the prove-time and verify-time roots or
+    // hashes must be rejected.
+    if data.len() < 96 {
         return;
     }
 
     let mut prove_root = [0u8; 32];
     let mut verify_root = [0u8; 32];
+    let mut signable_tx_hash = [0u8; 32];
     prove_root.copy_from_slice(&data[..32]);
     verify_root.copy_from_slice(&data[32..64]);
+    signable_tx_hash.copy_from_slice(&data[64..96]);
 
-    let tree_depth = if data.len() > 64 { data[64] } else { 20 };
+    let tree_depth = if data.len() > 96 { data[96].max(1) } else { 1 };
 
-    let pqc_hash = PqcLeafScalar([0x42; 32]);
     let input = ProveInput {
-        leaf: ShekylLeaf {
-            o_x: [1u8; 32],
-            i_x: [2u8; 32],
-            c_x: [3u8; 32],
-            h_pqc: pqc_hash,
-        },
-        tree_path: vec![0u8; 64],
-        key_image: [4u8; 32],
-        pseudo_out: [5u8; 32],
-        pqc_hash,
+        output_key: [1u8; 32],
+        key_image_gen: [2u8; 32],
+        commitment: [3u8; 32],
+        h_pqc: PqcLeafScalar([0x42; 32]),
+        spend_key_x: [4u8; 32],
+        spend_key_y: [5u8; 32],
+        leaf_chunk_outputs: vec![],
+        leaf_chunk_h_pqc: vec![],
+        c1_branch_layers: vec![],
+        c2_branch_layers: vec![],
     };
 
-    let proof = match prove(&[input.clone()], &prove_root, tree_depth) {
+    let proof_result = match prove(&[input], &prove_root, tree_depth, signable_tx_hash) {
         Ok(p) => p,
         Err(_) => return,
     };
 
+    let key_images = vec![[0u8; 32]];
+
     let result = verify(
-        &proof,
-        &[input.key_image],
-        &[input.pseudo_out],
-        &[input.pqc_hash],
+        &proof_result.proof,
+        &key_images,
+        &proof_result.pseudo_outs,
+        &[PqcLeafScalar([0x42; 32])],
         &verify_root,
         tree_depth,
+        signable_tx_hash,
     );
 
     if prove_root != verify_root {
-        // Mismatched roots must be rejected
         match result {
             Ok(true) => panic!("verification passed with mismatched tree roots"),
-            _ => {} // Rejection is correct
+            _ => {}
         }
     }
 });

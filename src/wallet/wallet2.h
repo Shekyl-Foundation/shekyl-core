@@ -74,6 +74,9 @@
 #include "fee_priority.h"
 #include "fee_algorithm.h"
 
+// Forward declaration for FROST SAL session handle (defined in shekyl_ffi.h)
+struct ShekylFrostSalSession;
+
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "wallet.wallet2"
 
@@ -393,6 +396,16 @@ private:
     {
       uint64_t global_output_index = 0;
       std::vector<uint8_t> tree_path;
+      // Compressed Ed25519 output keys for each leaf in the chunk.
+      // Each entry: { output_key (O), key_image_gen (I=Hp(O)), commitment (C) }.
+      // Parallel to the 128-byte leaf scalars in tree_path layer 0.
+      struct chunk_output_entry {
+        rct::key output_key;    // O: compressed Ed25519
+        rct::key key_image_gen; // I = Hp(O): compressed Ed25519
+        rct::key commitment;    // C: compressed Ed25519
+        rct::key h_pqc;         // H(pqc_pk): 32-byte scalar
+      };
+      std::vector<chunk_output_entry> leaf_chunk_entries;
       // This is the daemon-provided reference block hash used in
       // rct_signatures.referenceBlock, not the curve tree root bytes.
       crypto::hash reference_block_at_precompute{};
@@ -2025,6 +2038,26 @@ private:
     crypto::hash m_pqc_multisig_group_id;
     uint8_t m_pqc_multisig_n = 0;
     uint8_t m_pqc_multisig_m = 0;
+
+    // FROST SAL session state for in-progress multisig FCMP++ proof construction.
+    // Active during the signing round: created in prepare_multisig_fcmp_proof,
+    // consumed in import_multisig_signatures.
+    std::vector<ShekylFrostSalSession*> m_frost_sal_sessions;
+
+    // FROST threshold keys (DKG output, serialized). Empty until DKG is complete.
+    std::vector<uint8_t> m_frost_threshold_keys;
+    // FROST group public key (Ed25519T, 32 bytes).
+    std::array<uint8_t, 32> m_frost_group_key{};
+
+    bool has_frost_keys() const { return !m_frost_threshold_keys.empty(); }
+    void clear_frost_sessions();
+
+    // Import serialized FROST threshold keys (DKG output) into this wallet.
+    // Validates M-of-N params against the existing PQC multisig group.
+    bool import_frost_threshold_keys(const std::vector<uint8_t>& serialized_keys);
+
+    // Export serialized FROST threshold keys.
+    std::vector<uint8_t> export_frost_threshold_keys() const;
   };
 }
 BOOST_CLASS_VERSION(tools::wallet2, 32)

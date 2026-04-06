@@ -17,7 +17,7 @@ fuzz_target!(|data: &[u8]| {
             num_inputs: 1,
             tree_depth: 8,
         };
-        let _ = verify(&proof, &[[0u8; 32]], &[[0u8; 32]], &[PqcLeafScalar([0u8; 32])], &[0u8; 32], 8);
+        let _ = verify(&proof, &[[0u8; 32]], &[[0u8; 32]], &[PqcLeafScalar([0u8; 32])], &[0u8; 32], 8, [0u8; 32]);
         return;
     }
 
@@ -33,10 +33,16 @@ fuzz_target!(|data: &[u8]| {
     let mut tree_root = [0u8; 32];
     tree_root.copy_from_slice(&data[3..35]);
 
+    let mut signable_tx_hash = [0u8; 32];
+    if data.len() >= 67 {
+        signable_tx_hash.copy_from_slice(&data[35..67]);
+    }
+
     let key_images: Vec<[u8; 32]> = (0..num_inputs as usize)
         .map(|i| {
             let mut ki = [0u8; 32];
-            if let Some(chunk) = data.get(35 + i * 32..35 + (i + 1) * 32) {
+            let offset = 67 + i * 32;
+            if let Some(chunk) = data.get(offset..offset + 32) {
                 ki[..chunk.len()].copy_from_slice(chunk);
             }
             ki
@@ -46,7 +52,7 @@ fuzz_target!(|data: &[u8]| {
     let pseudo_outs: Vec<[u8; 32]> = vec![[0u8; 32]; num_inputs as usize];
     let pqc_hashes: Vec<PqcLeafScalar> = vec![PqcLeafScalar([0u8; 32]); num_inputs as usize];
 
-    let _ = verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth);
+    let _ = verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth, signable_tx_hash);
 
     // Also test with truncated data
     for cut in [1, 2, 4, 8, 16, 32] {
@@ -56,7 +62,7 @@ fuzz_target!(|data: &[u8]| {
                 num_inputs: num_inputs as u32,
                 tree_depth,
             };
-            let _ = verify(&truncated, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth);
+            let _ = verify(&truncated, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth, signable_tx_hash);
         }
     }
 
@@ -68,5 +74,5 @@ fuzz_target!(|data: &[u8]| {
         num_inputs: num_inputs as u32,
         tree_depth,
     };
-    let _ = verify(&big_proof, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth);
+    let _ = verify(&big_proof, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth, signable_tx_hash);
 });

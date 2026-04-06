@@ -11,7 +11,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-shekyl-fcmp = { path = "../shekyl-fcmp" }
+shekyl-fcmp = { path = "../shekyl-fcmp", features = ["multisig"] }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-consensus = { path = "../shekyl-consensus" }
 shekyl-economics = { path = "../shekyl-economics" }
@@ -19,3 +19,5 @@ shekyl-staking = { path = "../shekyl-staking" }
 rcgen = "0.14"
 zeroize = "1"
 libc = "0.2"
+dalek-ff-group = "0.5"
+ciphersuite = "0.4"

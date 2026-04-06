@@ -1,6 +1,6 @@
 # PQC Multisig for Shekyl
 
-> **Last updated:** 2026-04-03
+> **Last updated:** 2026-04-06
 
 ## Purpose
 
@@ -688,6 +688,89 @@ vulnerability.
 The fuzz harness should include a "valid-then-corrupt" mode: generate a
 structurally valid multisig blob, then flip random bits/truncate/extend to
 exercise the boundary between valid and invalid inputs.
+
+---
+
+## FROST Threshold SAL for FCMP++ Classical Keys
+
+### Overview
+
+While the V3 PQC multisig layer (`scheme_id = 2`) handles M-of-N hybrid
+signature authorization, the FCMP++ classical layer (the membership proof)
+is constructed by a single coordinator holding the spend key `x`. This
+creates a single-point-of-failure at the classical key layer.
+
+**FROST SAL** (Flexible Round-Optimized Schnorr Threshold — Spend
+Authorization and Linkability) addresses this by threshold-sharing the
+classical spend key `y` across N participants using `modular-frost`'s
+`Ed25519T` ciphersuite. The coordinator retains `x` (not shared) and the
+FROST group key `Y = y * T` replaces the single-signer `y` in the FCMP++
+proof construction.
+
+### Architecture
+
+```text
+Classical key decomposition:  O = x*G + y*T
+  x: held by coordinator (not threshold-shared)
+  y: FROST threshold-shared across N participants via DKG
+
+FCMP++ proof flow (multisig):
+  1. Coordinator creates FrostSalSession per input (rerandomizes output)
+  2. Coordinator exports signing request with FROST round-1 data
+  3. M participants produce FROST signing shares
+  4. Coordinator aggregates shares → SpendAuthAndLinkability
+  5. Coordinator calls prove_with_sal() → complete FCMP++ proof
+```
+
+### Key Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| `FrostSalSession` | `rust/shekyl-fcmp/src/frost_sal.rs` | Per-input FROST SAL state machine |
+| `prove_with_sal()` | `rust/shekyl-fcmp/src/proof.rs` | Proof construction from pre-aggregated SAL |
+| `FrostDkg` / `SerializedThresholdKeys` | `rust/shekyl-fcmp/src/frost_dkg.rs` | DKG output management and serialization |
+| FROST SAL FFI | `rust/shekyl-ffi/src/lib.rs` | C ABI for session lifecycle |
+| FROST DKG FFI | `rust/shekyl-ffi/src/lib.rs` | C ABI for key import/export/validation |
+| Wallet integration | `src/wallet/wallet2.cpp` | FROST session management in multisig flow |
+
+### DKG Setup
+
+Before FROST signing, participants must complete a Distributed Key
+Generation (DKG) ceremony to produce `ThresholdKeys<Ed25519T>`. The DKG
+output is serialized and stored in the wallet file (`m_frost_threshold_keys`)
+alongside the group public key (`m_frost_group_key`).
+
+The wallet exposes `import_frost_threshold_keys()` and
+`export_frost_threshold_keys()` for managing the DKG output. Key validation
+checks that the threshold parameters match the existing PQC multisig group
+(`m_pqc_multisig_m` / `m_pqc_multisig_n`).
+
+### Signing Protocol (v3 format)
+
+The FROST-enabled signing protocol uses a v3 signing request format:
+
+1. **`prepare_multisig_fcmp_proof`**: When FROST keys are present, creates
+   `FrostSalSession` per input instead of generating the full proof.
+   Sessions store rerandomized outputs and pseudo-outs.
+
+2. **`export_multisig_signing_request`**: Emits version 3 request with
+   `frost_sessions` array containing per-input `rerand` (hex) and
+   `pseudo_out` (hex), plus the `frost_group_key`.
+
+3. **`sign_multisig_partial`**: Participants verify the FROST group key,
+   acknowledge the signing round, and produce their FROST share alongside
+   the PQC hybrid signature.
+
+4. **`import_multisig_signatures`**: Coordinator aggregates FROST shares
+   via `shekyl_frost_sal_aggregate_and_prove()`, producing the final
+   FCMP++ proof. PQC signatures are assembled as in non-FROST mode.
+
+### Transition to Lattice Threshold
+
+FROST SAL provides classical threshold signing as a bridge. When lattice
+threshold research matures sufficiently for a NIST-backed standard, the
+FROST SAL layer will be replaced by a lattice threshold scheme that
+provides quantum resistance for both the classical and PQC layers.
 
 ---
 

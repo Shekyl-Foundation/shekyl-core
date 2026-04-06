@@ -23,4 +23,15 @@ repository = "https://github.com/radawson/Shekyl"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 
+[profile.dev]
+panic = "abort"
+overflow-checks = true
+[profile.release]
+panic = "abort"
+overflow-checks = true
+[profile.test]
+overflow-checks = true
+[profile.bench]
+overflow-checks = true
+
 [workspace.lints.clippy]

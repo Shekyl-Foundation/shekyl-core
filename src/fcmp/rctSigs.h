@@ -65,12 +65,21 @@ namespace hw {
 
 namespace rct {
 
+    // Per-output data in a leaf chunk (compressed Ed25519 points + PQC hash).
+    struct fcmp_chunk_entry {
+        key output_key;    // O
+        key key_image_gen; // I = Hp(O)
+        key commitment;    // C
+        key h_pqc;         // H(pqc_pk)
+    };
+
     // FCMP++ transaction construction (replaces ring signatures with full-chain membership proof)
     rctSig genRctFcmpPlusPlus(const key &message, const ctkeyV &inSk, const ctkeyV &inPk,
                                const keyV &destinations, const std::vector<xmr_amount> &inamounts,
                                const std::vector<xmr_amount> &outamounts, const keyV &amount_keys,
                                xmr_amount txnFee, const crypto::hash &referenceBlock, uint8_t tree_depth,
                                const std::vector<std::vector<uint8_t>> &tree_paths,
+                               const std::vector<std::vector<fcmp_chunk_entry>> &leaf_chunk_entries,
                                const std::vector<key> &pqc_pk_hashes, hw::device &hwdev);
     bool verRctSemanticsSimple(const rctSig & rv);
     bool verRctSemanticsSimple(const std::vector<const rctSig*> & rv);

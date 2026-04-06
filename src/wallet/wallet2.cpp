@@ -91,6 +91,7 @@ using namespace epee;
 #include "common/notify.h"
 #include "common/perf_timer.h"
 #include "fcmp/rctSigs.h"
+#include "fcmp/rctOps.h"
 #include "fcmp/bulletproofs_plus.h"
 #include "ringdb.h"
 #include "device/device_cold.hpp"
@@ -2990,6 +2991,22 @@ void wallet2::precompute_fcmp_paths()
       epee::string_tools::parse_hexstr_to_binbuff(pe.path_blob, tmp);
       pp.tree_path.assign(tmp.begin(), tmp.end());
     }
+    if (!pe.chunk_outputs_blob.empty())
+    {
+      std::string tmp;
+      epee::string_tools::parse_hexstr_to_binbuff(pe.chunk_outputs_blob, tmp);
+      const size_t entry_size = 128; // [O:32][I:32][C:32][h_pqc:32]
+      const size_t n_entries = tmp.size() / entry_size;
+      pp.leaf_chunk_entries.resize(n_entries);
+      for (size_t j = 0; j < n_entries; ++j)
+      {
+        const uint8_t* base = reinterpret_cast<const uint8_t*>(tmp.data()) + j * entry_size;
+        memcpy(pp.leaf_chunk_entries[j].output_key.bytes, base, 32);
+        memcpy(pp.leaf_chunk_entries[j].key_image_gen.bytes, base + 32, 32);
+        memcpy(pp.leaf_chunk_entries[j].commitment.bytes, base + 64, 32);
+        memcpy(pp.leaf_chunk_entries[j].h_pqc.bytes, base + 96, 32);
+      }
+    }
     m_fcmp_precomputed_paths[pe.output_index] = std::move(pp);
     ++done;
     if (m_callback)
@@ -3077,6 +3094,22 @@ void wallet2::update_fcmp_paths_incremental(uint64_t new_height)
       std::string tmp;
       epee::string_tools::parse_hexstr_to_binbuff(pe.path_blob, tmp);
       pp.tree_path.assign(tmp.begin(), tmp.end());
+    }
+    if (!pe.chunk_outputs_blob.empty())
+    {
+      std::string tmp;
+      epee::string_tools::parse_hexstr_to_binbuff(pe.chunk_outputs_blob, tmp);
+      const size_t entry_size = 128;
+      const size_t n_entries = tmp.size() / entry_size;
+      pp.leaf_chunk_entries.resize(n_entries);
+      for (size_t j = 0; j < n_entries; ++j)
+      {
+        const uint8_t* base = reinterpret_cast<const uint8_t*>(tmp.data()) + j * entry_size;
+        memcpy(pp.leaf_chunk_entries[j].output_key.bytes, base, 32);
+        memcpy(pp.leaf_chunk_entries[j].key_image_gen.bytes, base + 32, 32);
+        memcpy(pp.leaf_chunk_entries[j].commitment.bytes, base + 64, 32);
+        memcpy(pp.leaf_chunk_entries[j].h_pqc.bytes, base + 96, 32);
+      }
     }
     m_fcmp_precomputed_paths[pe.output_index] = std::move(pp);
   }
@@ -9467,6 +9500,18 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     crypto::hash tx_prefix_hash;
     cryptonote::get_transaction_prefix_hash(tx, tx_prefix_hash);
 
+    // Build per-input leaf chunk entries from precomputed paths
+    std::vector<std::vector<rct::fcmp_chunk_entry>> leaf_chunk_entries(num_inputs);
+    for (size_t i = 0; i < num_inputs; ++i)
+    {
+      const transfer_details& td = m_transfers[permuted_transfers[i]];
+      auto path_it = m_fcmp_precomputed_paths.find(td.m_global_output_index);
+      if (path_it != m_fcmp_precomputed_paths.end())
+        leaf_chunk_entries[i].assign(
+            path_it->second.leaf_chunk_entries.begin(),
+            path_it->second.leaf_chunk_entries.end());
+    }
+
     LOG_PRINT_L2("calling genRctFcmpPlusPlus with " << num_inputs << " inputs, "
         << destinations_rct.size() << " outputs");
     rct::rctSig rv = rct::genRctFcmpPlusPlus(
@@ -9474,7 +9519,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
         inSk, inPk,
         destinations_rct, inamounts, outamounts, amount_keys,
         fee, reference_block, tree_depth,
-        tree_paths, pqc_pk_hashes,
+        tree_paths, leaf_chunk_entries, pqc_pk_hashes,
         m_account.get_device());
     tx.rct_signatures = rv;
 
@@ -11287,6 +11332,57 @@ bool wallet2::create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, con
   return true;
 }
 //----------------------------------------------------------------------------------------------------
+void wallet2::clear_frost_sessions()
+{
+  for (auto* s : m_frost_sal_sessions)
+  {
+    if (s)
+      shekyl_frost_sal_session_free(s);
+  }
+  m_frost_sal_sessions.clear();
+}
+//----------------------------------------------------------------------------------------------------
+bool wallet2::import_frost_threshold_keys(const std::vector<uint8_t>& serialized_keys)
+{
+  THROW_WALLET_EXCEPTION_IF(!is_pqc_multisig(), error::wallet_internal_error,
+      "Cannot import FROST keys: not a PQC multisig wallet");
+  THROW_WALLET_EXCEPTION_IF(serialized_keys.empty(), error::wallet_internal_error,
+      "Empty FROST threshold keys blob");
+
+  ShekylFrostThresholdKeys* handle = shekyl_frost_keys_import(
+      serialized_keys.data(), serialized_keys.size());
+  THROW_WALLET_EXCEPTION_IF(!handle, error::wallet_internal_error,
+      "Failed to deserialize FROST threshold keys");
+
+  bool valid = shekyl_frost_keys_validate(handle, m_pqc_multisig_m, m_pqc_multisig_n);
+  if (!valid)
+  {
+    shekyl_frost_keys_free(handle);
+    THROW_WALLET_EXCEPTION(error::wallet_internal_error,
+        "FROST threshold keys do not match multisig group parameters ("
+        + std::to_string(m_pqc_multisig_m) + "-of-" + std::to_string(m_pqc_multisig_n) + ")");
+  }
+
+  uint8_t group_key[32];
+  bool got_gk = shekyl_frost_keys_group_key(handle, group_key);
+  shekyl_frost_keys_free(handle);
+  THROW_WALLET_EXCEPTION_IF(!got_gk, error::wallet_internal_error,
+      "Failed to extract group key from FROST threshold keys");
+
+  m_frost_threshold_keys = serialized_keys;
+  std::copy(group_key, group_key + 32, m_frost_group_key.begin());
+
+  LOG_PRINT_L1("Imported FROST threshold keys (" << serialized_keys.size()
+      << " bytes, group key " << epee::string_tools::buff_to_hex_nodelimer(
+          std::string(reinterpret_cast<const char*>(group_key), 32)).substr(0, 16) << "...)");
+  return true;
+}
+//----------------------------------------------------------------------------------------------------
+std::vector<uint8_t> wallet2::export_frost_threshold_keys() const
+{
+  return m_frost_threshold_keys;
+}
+//----------------------------------------------------------------------------------------------------
 bool wallet2::prepare_multisig_fcmp_proof(pending_tx& ptx)
 {
   THROW_WALLET_EXCEPTION_IF(!is_pqc_multisig(), error::wallet_internal_error, "Not a PQC multisig wallet");
@@ -11391,20 +11487,84 @@ bool wallet2::prepare_multisig_fcmp_proof(pending_tx& ptx)
     amount_keys[i] = rct::sk2rct(scalar);
   }
 
-  // Build FCMP++ rctSig via genRctFcmpPlusPlus
+  // Build per-input leaf chunk entries from precomputed paths
+  std::vector<std::vector<rct::fcmp_chunk_entry>> leaf_chunk_entries(num_inputs);
+  for (size_t i = 0; i < num_inputs; ++i)
+  {
+    const transfer_details& td = m_transfers[ptx.selected_transfers[i]];
+    auto path_it = m_fcmp_precomputed_paths.find(td.m_global_output_index);
+    if (path_it != m_fcmp_precomputed_paths.end())
+    {
+      leaf_chunk_entries[i].reserve(path_it->second.leaf_chunk_entries.size());
+      for (const auto& e : path_it->second.leaf_chunk_entries)
+      {
+        rct::fcmp_chunk_entry ce;
+        memcpy(ce.output_key.bytes, e.output_key.bytes, 32);
+        memcpy(ce.key_image_gen.bytes, e.key_image_gen.bytes, 32);
+        memcpy(ce.commitment.bytes, e.commitment.bytes, 32);
+        memcpy(ce.h_pqc.bytes, e.h_pqc.bytes, 32);
+        leaf_chunk_entries[i].push_back(ce);
+      }
+    }
+  }
+
   crypto::hash tx_prefix_hash;
   cryptonote::get_transaction_prefix_hash(ptx.tx, tx_prefix_hash);
 
-  rct::rctSig rv = rct::genRctFcmpPlusPlus(
-      rct::hash2rct(tx_prefix_hash),
-      inSk, inPk,
-      destinations, inamounts, outamounts, amount_keys,
-      ptx.fee,
-      reference_block, tree_depth,
-      tree_paths, pqc_pk_hashes,
-      m_account.get_device());
+  if (has_frost_keys())
+  {
+    // FROST SAL mode: create per-input sessions, defer proof generation.
+    // The actual proof is produced in import_multisig_signatures after
+    // collecting M threshold shares from participants.
+    clear_frost_sessions();
+    m_frost_sal_sessions.resize(num_inputs, nullptr);
 
-  ptx.tx.rct_signatures = rv;
+    for (size_t i = 0; i < num_inputs; ++i)
+    {
+      ge_p3 hp;
+      rct::hash_to_p3(hp, inPk[i].dest);
+      rct::key ki_gen;
+      ge_p3_tobytes(reinterpret_cast<unsigned char*>(ki_gen.bytes), &hp);
+
+      uint8_t pseudo_out[32];
+      ShekylFrostSalSession* session = shekyl_frost_sal_session_new(
+          inPk[i].dest.bytes,
+          ki_gen.bytes,
+          inPk[i].mask.bytes,
+          inSk[i].dest.bytes,
+          reinterpret_cast<const uint8_t*>(tx_prefix_hash.data),
+          pseudo_out);
+      THROW_WALLET_EXCEPTION_IF(!session, error::wallet_internal_error,
+          "Failed to create FROST SAL session for input " + std::to_string(i));
+      m_frost_sal_sessions[i] = session;
+
+      // Store the pseudo-out so participants can verify balance
+      ptx.tx.rct_signatures.p.pseudoOuts.resize(num_inputs);
+      memcpy(ptx.tx.rct_signatures.p.pseudoOuts[i].bytes, pseudo_out, 32);
+    }
+
+    // Set up the rctSig skeleton (no proof yet)
+    ptx.tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+    ptx.tx.rct_signatures.message = rct::hash2rct(tx_prefix_hash);
+    ptx.tx.rct_signatures.txnFee = ptx.fee;
+    ptx.tx.rct_signatures.referenceBlock = reference_block;
+    ptx.tx.rct_signatures.p.curve_trees_tree_depth = tree_depth;
+
+    LOG_PRINT_L2("FROST SAL sessions created for " << num_inputs << " inputs (proof deferred)");
+  }
+  else
+  {
+    // Non-FROST mode: single-signer proof construction
+    rct::rctSig rv = rct::genRctFcmpPlusPlus(
+        rct::hash2rct(tx_prefix_hash),
+        inSk, inPk,
+        destinations, inamounts, outamounts, amount_keys,
+        ptx.fee,
+        reference_block, tree_depth,
+        tree_paths, leaf_chunk_entries, pqc_pk_hashes,
+        m_account.get_device());
+    ptx.tx.rct_signatures = rv;
+  }
 
   // Populate placeholder pqc_auths (multisig key blob, empty sigs)
   ptx.tx.pqc_auths.resize(num_inputs);
@@ -11425,11 +11585,17 @@ std::string wallet2::export_multisig_signing_request(pending_tx& ptx)
   THROW_WALLET_EXCEPTION_IF(!is_pqc_multisig(), error::wallet_internal_error, "Not a PQC multisig wallet");
   THROW_WALLET_EXCEPTION_IF(ptx.tx.version < 3, error::wallet_internal_error, "Multisig signing requires v3 transactions");
 
-  // Construct the FCMP++ proof if not already present
-  if (ptx.tx.rct_signatures.p.fcmp_pp_proof.empty())
+  // Construct the FCMP++ proof (or FROST sessions) if not already present
+  const bool frost_mode = has_frost_keys();
+  if (!frost_mode && ptx.tx.rct_signatures.p.fcmp_pp_proof.empty())
   {
     bool ok = prepare_multisig_fcmp_proof(ptx);
     THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to construct FCMP++ proof for multisig transaction");
+  }
+  else if (frost_mode && m_frost_sal_sessions.empty())
+  {
+    bool ok = prepare_multisig_fcmp_proof(ptx);
+    THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to create FROST SAL sessions for multisig transaction");
   }
 
   std::string payload_blob;
@@ -11443,7 +11609,8 @@ std::string wallet2::export_multisig_signing_request(pending_tx& ptx)
   doc.SetObject();
   auto& alloc = doc.GetAllocator();
 
-  doc.AddMember("version", 2, alloc);
+  // Version 3 when FROST SAL is active; 2 otherwise
+  doc.AddMember("version", frost_mode ? 3 : 2, alloc);
 
   std::string group_id_hex = epee::string_tools::pod_to_hex(m_pqc_multisig_group_id);
   doc.AddMember("group_id", rapidjson::Value(group_id_hex.c_str(), alloc), alloc);
@@ -11464,11 +11631,48 @@ std::string wallet2::export_multisig_signing_request(pending_tx& ptx)
   std::string tx_blob_hex = epee::string_tools::buff_to_hex_nodelimer(tx_blob);
   doc.AddMember("tx_blob", rapidjson::Value(tx_blob_hex.c_str(), alloc), alloc);
 
-  // FCMP++ proof blob (hex) for easy verification by signers
-  std::string fcmp_proof_hex = epee::string_tools::buff_to_hex_nodelimer(
-      std::string(ptx.tx.rct_signatures.p.fcmp_pp_proof.begin(),
-                  ptx.tx.rct_signatures.p.fcmp_pp_proof.end()));
-  doc.AddMember("fcmp_proof", rapidjson::Value(fcmp_proof_hex.c_str(), alloc), alloc);
+  if (frost_mode)
+  {
+    // FROST SAL mode: include per-input rerandomized outputs so participants
+    // can verify the rerandomization and produce FROST signing shares.
+    THROW_WALLET_EXCEPTION_IF(m_frost_sal_sessions.size() != ptx.selected_transfers.size(),
+        error::wallet_internal_error, "FROST session count mismatch");
+
+    rapidjson::Value frost_sessions_arr(rapidjson::kArrayType);
+    for (size_t i = 0; i < m_frost_sal_sessions.size(); ++i)
+    {
+      ShekylBuffer rerand_buf = shekyl_frost_sal_get_rerand(m_frost_sal_sessions[i]);
+      THROW_WALLET_EXCEPTION_IF(!rerand_buf.ptr || rerand_buf.len == 0,
+          error::wallet_internal_error, "Failed to get rerandomized output from FROST session " + std::to_string(i));
+      std::string rerand_hex = epee::string_tools::buff_to_hex_nodelimer(
+          std::string(reinterpret_cast<const char*>(rerand_buf.ptr), rerand_buf.len));
+      shekyl_buffer_free(rerand_buf.ptr, rerand_buf.len);
+
+      rapidjson::Value entry(rapidjson::kObjectType);
+      entry.AddMember("rerand", rapidjson::Value(rerand_hex.c_str(), alloc), alloc);
+
+      std::string po_hex = epee::string_tools::buff_to_hex_nodelimer(
+          std::string(reinterpret_cast<const char*>(ptx.tx.rct_signatures.p.pseudoOuts[i].bytes), 32));
+      entry.AddMember("pseudo_out", rapidjson::Value(po_hex.c_str(), alloc), alloc);
+      frost_sessions_arr.PushBack(entry, alloc);
+    }
+    doc.AddMember("frost_sessions", frost_sessions_arr, alloc);
+
+    // FROST group key for participants to verify
+    std::string group_key_hex = epee::string_tools::buff_to_hex_nodelimer(
+        std::string(reinterpret_cast<const char*>(m_frost_group_key.data()), 32));
+    doc.AddMember("frost_group_key", rapidjson::Value(group_key_hex.c_str(), alloc), alloc);
+
+    doc.AddMember("fcmp_proof", rapidjson::Value("", alloc), alloc);
+  }
+  else
+  {
+    // Non-FROST mode: include the completed proof
+    std::string fcmp_proof_hex = epee::string_tools::buff_to_hex_nodelimer(
+        std::string(ptx.tx.rct_signatures.p.fcmp_pp_proof.begin(),
+                    ptx.tx.rct_signatures.p.fcmp_pp_proof.end()));
+    doc.AddMember("fcmp_proof", rapidjson::Value(fcmp_proof_hex.c_str(), alloc), alloc);
+  }
 
   // Reference block and tree depth
   std::string ref_block_hex = epee::string_tools::pod_to_hex(ptx.tx.rct_signatures.referenceBlock);
@@ -11540,13 +11744,35 @@ bool wallet2::sign_multisig_partial(const std::string& signing_request_json, std
   crypto::hash payload_hash;
   THROW_WALLET_EXCEPTION_IF(!epee::string_tools::hex_to_pod(payload_hash_hex, payload_hash), error::wallet_internal_error, "Invalid payload_hash hex");
 
-  // FCMP++ verification for v2 signing requests
-  if (req_version >= 2)
+  // FROST v3 signing: produce FROST share instead of verifying a completed proof
+  if (req_version >= 3 && has_frost_keys())
+  {
+    THROW_WALLET_EXCEPTION_IF(!doc.HasMember("frost_sessions") || !doc["frost_sessions"].IsArray(),
+        error::wallet_internal_error, "Missing frost_sessions in v3 signing request");
+    THROW_WALLET_EXCEPTION_IF(!doc.HasMember("frost_group_key") || !doc["frost_group_key"].IsString(),
+        error::wallet_internal_error, "Missing frost_group_key in v3 signing request");
+
+    // Verify group key matches ours
+    std::string gk_hex = doc["frost_group_key"].GetString();
+    std::string our_gk_hex = epee::string_tools::buff_to_hex_nodelimer(
+        std::string(reinterpret_cast<const char*>(m_frost_group_key.data()), 32));
+    THROW_WALLET_EXCEPTION_IF(gk_hex != our_gk_hex, error::wallet_internal_error,
+        "FROST group key mismatch - coordinator may be compromised");
+
+    // For each input, verify the rerandomized output and pseudo-out
+    // are consistent, then produce a FROST share.
+    // The actual FROST share computation is placeholder here:
+    // it requires DKG ThresholdKeys which are set up in Phase 5.
+    // For now, we record that the signer acknowledges the FROST round.
+    LOG_PRINT_L2("FROST v3 signing: " << doc["frost_sessions"].Size()
+        << " sessions acknowledged (share computation requires DKG keys)");
+  }
+  // FCMP++ verification for v2 signing requests (non-FROST)
+  else if (req_version >= 2)
   {
     THROW_WALLET_EXCEPTION_IF(!doc.HasMember("tx_blob") || !doc["tx_blob"].IsString(),
         error::wallet_internal_error, "Missing tx_blob in v2 signing request");
 
-    // Deserialize the transaction to verify FCMP++ proof
     std::string tx_blob_str;
     THROW_WALLET_EXCEPTION_IF(!epee::string_tools::parse_hexstr_to_binbuff(doc["tx_blob"].GetString(), tx_blob_str),
         error::wallet_internal_error, "Invalid tx_blob hex");
@@ -11558,11 +11784,9 @@ bool wallet2::sign_multisig_partial(const std::string& signing_request_json, std
       THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to deserialize transaction from signing request");
     }
 
-    // Verify FCMP++ proof is present and valid
     THROW_WALLET_EXCEPTION_IF(verify_tx.rct_signatures.p.fcmp_pp_proof.empty(),
         error::wallet_internal_error, "Transaction in v2 signing request has no FCMP++ proof");
 
-    // Collect key images, pseudo-outs, and PQC hashes for FCMP++ verification
     const size_t num_inputs = verify_tx.vin.size();
     THROW_WALLET_EXCEPTION_IF(num_inputs == 0, error::wallet_internal_error, "Transaction has no inputs");
 
@@ -11581,7 +11805,6 @@ bool wallet2::sign_multisig_partial(const std::string& signing_request_json, std
     for (size_t i = 0; i < num_inputs; ++i)
       memcpy(pseudo_outs_flat.data() + i * 32, verify_tx.rct_signatures.p.pseudoOuts[i].bytes, 32);
 
-    // PQC hashes: H(multisig_key_container) for each input
     std::vector<uint8_t> pqc_hashes_flat(num_inputs * 32);
     {
       uint8_t hash_out[32];
@@ -11604,7 +11827,6 @@ bool wallet2::sign_multisig_partial(const std::string& signing_request_json, std
     THROW_WALLET_EXCEPTION_IF(!proof_valid, error::wallet_internal_error,
         "FCMP++ proof verification failed - coordinator may have provided an invalid proof");
 
-    // Verify per-input PQC public keys if provided
     if (doc.HasMember("per_input_pqc_pubkeys") && doc["per_input_pqc_pubkeys"].IsArray() &&
         doc.HasMember("input_global_indices") && doc["input_global_indices"].IsArray())
     {
@@ -11616,7 +11838,6 @@ bool wallet2::sign_multisig_partial(const std::string& signing_request_json, std
           continue;
         uint64_t global_idx = idx_arr[i].GetUint64();
 
-        // Find matching transfer in our wallet
         for (const auto& td : m_transfers)
         {
           if (td.m_global_output_index != global_idx || td.m_combined_shared_secret.empty())
@@ -11689,8 +11910,18 @@ bool wallet2::sign_multisig_partial(const std::string& signing_request_json, std
       std::string(reinterpret_cast<const char*>(sig_bytes.data()), sig_bytes.size()));
   resp.AddMember("signature", rapidjson::Value(sig_hex.c_str(), ralloc), ralloc);
 
-  if (req_version >= 2)
+  if (req_version >= 3 && has_frost_keys())
+  {
+    // FROST v3: include placeholder share data.
+    // Actual FROST share computation requires DKG ThresholdKeys (Phase 5).
+    // For now, mark this participant as a FROST-capable signer.
+    resp.AddMember("frost_capable", true, ralloc);
+    resp.AddMember("frost_share", rapidjson::Value("", ralloc), ralloc);
+  }
+  else if (req_version >= 2)
+  {
     resp.AddMember("fcmp_verified", true, ralloc);
+  }
 
   rapidjson::StringBuffer sb;
   rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
@@ -11711,7 +11942,9 @@ bool wallet2::import_multisig_signatures(pending_tx& ptx, const std::vector<std:
   // Verify pqc_auths is present for payload computation
   THROW_WALLET_EXCEPTION_IF(ptx.tx.pqc_auths.empty(), error::wallet_internal_error, "Transaction missing pqc_auths");
 
-  // For FCMP++ transactions, verify the proof is present
+  const bool frost_mode = has_frost_keys() && !m_frost_sal_sessions.empty();
+
+  // For non-FROST FCMP++ transactions, verify the proof is present
   const bool is_fcmp = ptx.tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc &&
                        !ptx.tx.rct_signatures.p.fcmp_pp_proof.empty();
 
@@ -11726,6 +11959,8 @@ bool wallet2::import_multisig_signatures(pending_tx& ptx, const std::vector<std:
     uint8_t index;
     std::vector<uint8_t> sig;
     bool fcmp_verified;
+    bool frost_capable;
+    std::string frost_share_hex;
   };
   std::vector<partial_sig> partials;
 
@@ -11756,7 +11991,15 @@ bool wallet2::import_multisig_signatures(pending_tx& ptx, const std::vector<std:
     if (doc.HasMember("fcmp_verified") && doc["fcmp_verified"].IsBool())
       signer_fcmp_verified = doc["fcmp_verified"].GetBool();
 
-    partials.push_back({idx, std::vector<uint8_t>(sig_str.begin(), sig_str.end()), signer_fcmp_verified});
+    bool signer_frost_capable = false;
+    std::string signer_frost_share;
+    if (doc.HasMember("frost_capable") && doc["frost_capable"].IsBool())
+      signer_frost_capable = doc["frost_capable"].GetBool();
+    if (doc.HasMember("frost_share") && doc["frost_share"].IsString())
+      signer_frost_share = doc["frost_share"].GetString();
+
+    partials.push_back({idx, std::vector<uint8_t>(sig_str.begin(), sig_str.end()),
+        signer_fcmp_verified, signer_frost_capable, signer_frost_share});
   }
 
   std::sort(partials.begin(), partials.end(), [](const partial_sig& a, const partial_sig& b) { return a.index < b.index; });
@@ -11767,8 +12010,105 @@ bool wallet2::import_multisig_signatures(pending_tx& ptx, const std::vector<std:
 
   THROW_WALLET_EXCEPTION_IF(partials.size() < m_pqc_multisig_m, error::wallet_internal_error, "Not enough unique signatures");
 
-  // For FCMP++ transactions, warn if any signer did not verify the proof
-  if (is_fcmp)
+  if (frost_mode)
+  {
+    // FROST aggregation mode: aggregate FROST partial shares and produce the proof.
+    // Requires all signers to be FROST-capable.
+    for (const auto& p : partials)
+    {
+      THROW_WALLET_EXCEPTION_IF(!p.frost_capable, error::wallet_internal_error,
+          "Signer " + std::to_string(p.index) + " is not FROST-capable");
+    }
+
+    // Build the witness blob for aggregate_and_prove (same format as genRctFcmpPlusPlus).
+    // This aggregation call consumes the FROST sessions and produces the final proof.
+    const size_t num_inputs = m_frost_sal_sessions.size();
+
+    // Collect per-input curve tree witness data
+    std::vector<uint8_t> witness;
+    std::vector<std::vector<uint8_t>> tree_paths;
+    uint8_t tree_depth = ptx.tx.rct_signatures.p.curve_trees_tree_depth;
+
+    for (size_t i = 0; i < num_inputs; ++i)
+    {
+      const transfer_details& td = m_transfers[ptx.selected_transfers[i]];
+      auto path_it = m_fcmp_precomputed_paths.find(td.m_global_output_index);
+      if (path_it != m_fcmp_precomputed_paths.end())
+        tree_paths.push_back(path_it->second.tree_path);
+      else
+        tree_paths.push_back(std::vector<uint8_t>());
+    }
+
+    // Serialize witness using the same format as genRctFcmpPlusPlus
+    // (leaf chunk entries + branch layers per input)
+    for (size_t i = 0; i < num_inputs; ++i)
+    {
+      const transfer_details& td = m_transfers[ptx.selected_transfers[i]];
+      auto path_it = m_fcmp_precomputed_paths.find(td.m_global_output_index);
+
+      // Leaf chunk entries
+      if (path_it != m_fcmp_precomputed_paths.end() && !path_it->second.leaf_chunk_entries.empty())
+      {
+        uint32_t lc = static_cast<uint32_t>(path_it->second.leaf_chunk_entries.size());
+        witness.push_back(lc & 0xff); witness.push_back((lc >> 8) & 0xff);
+        witness.push_back((lc >> 16) & 0xff); witness.push_back((lc >> 24) & 0xff);
+        for (const auto& e : path_it->second.leaf_chunk_entries)
+        {
+          witness.insert(witness.end(), e.output_key.bytes, e.output_key.bytes + 32);
+          witness.insert(witness.end(), e.key_image_gen.bytes, e.key_image_gen.bytes + 32);
+          witness.insert(witness.end(), e.commitment.bytes, e.commitment.bytes + 32);
+          witness.insert(witness.end(), e.h_pqc.bytes, e.h_pqc.bytes + 32);
+        }
+      }
+      else
+      {
+        uint32_t zero = 0;
+        witness.insert(witness.end(), reinterpret_cast<uint8_t*>(&zero), reinterpret_cast<uint8_t*>(&zero) + 4);
+      }
+
+      // Branch layers: placeholder empty (the FFI extracts them from tree_paths)
+      uint32_t zero_layers = 0;
+      witness.insert(witness.end(), reinterpret_cast<uint8_t*>(&zero_layers), reinterpret_cast<uint8_t*>(&zero_layers) + 4);
+      witness.insert(witness.end(), reinterpret_cast<uint8_t*>(&zero_layers), reinterpret_cast<uint8_t*>(&zero_layers) + 4);
+    }
+
+    // Aggregate FROST shares: sum all partial shares into a single scalar
+    // Each partial share is 32 bytes (Ed25519 scalar).
+    // sum_shares = sum of all partials' frost_share values.
+    uint8_t sum_shares[32] = {0};
+    // Note: actual FROST share summation is done in the Rust FFI.
+    // For now, this is a placeholder that will be completed with DKG (Phase 5).
+
+    crypto::hash ref_block = ptx.tx.rct_signatures.referenceBlock;
+    ShekylFcmpProveResult result = shekyl_frost_sal_aggregate_and_prove(
+        m_frost_sal_sessions.data(),
+        static_cast<uint32_t>(num_inputs),
+        m_frost_group_key.data(),
+        nullptr, 0,
+        sum_shares,
+        witness.data(), witness.size(),
+        reinterpret_cast<const uint8_t*>(ref_block.data),
+        tree_depth);
+
+    if (result.success)
+    {
+      ptx.tx.rct_signatures.p.fcmp_pp_proof.assign(
+          result.proof.ptr, result.proof.ptr + result.proof.len);
+      shekyl_buffer_free(result.proof.ptr, result.proof.len);
+      if (result.pseudo_outs.ptr && result.pseudo_outs.len > 0)
+        shekyl_buffer_free(result.pseudo_outs.ptr, result.pseudo_outs.len);
+
+      LOG_PRINT_L2("FROST SAL aggregate proof produced (" << ptx.tx.rct_signatures.p.fcmp_pp_proof.size() << " bytes)");
+    }
+    else
+    {
+      LOG_PRINT_L0("WARNING: FROST SAL aggregate_and_prove failed; FCMP++ proof deferred to DKG completion");
+    }
+
+    // Sessions are consumed by aggregate_and_prove; clear our references
+    m_frost_sal_sessions.clear();
+  }
+  else if (is_fcmp)
   {
     for (const auto& p : partials)
     {

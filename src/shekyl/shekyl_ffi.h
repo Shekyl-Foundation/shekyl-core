@@ -168,12 +168,13 @@ struct ShekylFcmpProveResult {
     bool success;
 };
 
-// Construct FCMP++ proof.
-// inputs_ptr: packed per-input fixed data, 192 bytes each:
-//   [O:32][I:32][C:32][h_pqc:32][spend_x:32][spend_y:32]
-// signable_tx_hash_ptr: 32-byte transaction binding hash.
+// Construct FCMP++ proof from variable-length witness blob.
+// witness_ptr / witness_len: serialized witness for all inputs.
+// Per input: fixed header (192 bytes) + leaf chunk + C1/C2 branch layers.
+// See shekyl-ffi crate docs for the full wire format specification.
 ShekylFcmpProveResult shekyl_fcmp_prove(
-    const uint8_t* inputs_ptr,
+    const uint8_t* witness_ptr,
+    size_t witness_len,
     uint32_t num_inputs,
     const uint8_t* tree_root_ptr,
     uint8_t tree_depth,
@@ -194,6 +195,70 @@ bool shekyl_fcmp_verify(
     const uint8_t* tree_root_ptr,
     uint8_t tree_depth,
     const uint8_t* signable_tx_hash_ptr);
+
+// ─── FCMP++: FROST SAL Multisig ──────────────────────────────────────────────
+
+struct ShekylFrostSalSession;
+
+// Create a new FROST SAL session for one input.
+// Writes 32-byte pseudo-out to pseudo_out_ptr.
+// Returns opaque session handle, or NULL on failure.
+ShekylFrostSalSession* shekyl_frost_sal_session_new(
+    const uint8_t* output_key_ptr,
+    const uint8_t* key_image_gen_ptr,
+    const uint8_t* commitment_ptr,
+    const uint8_t* spend_key_x_ptr,
+    const uint8_t* signable_tx_hash_ptr,
+    uint8_t* pseudo_out_ptr);
+
+// Get serialized RerandomizedOutput from a session.
+ShekylBuffer shekyl_frost_sal_get_rerand(
+    const ShekylFrostSalSession* session);
+
+// Aggregate FROST shares and produce the FCMP++ proof.
+// Consumes and frees all sessions on success.
+ShekylFcmpProveResult shekyl_frost_sal_aggregate_and_prove(
+    ShekylFrostSalSession** session_ptrs,
+    uint32_t num_inputs,
+    const uint8_t* group_key_ptr,
+    const uint8_t* nonce_sums_ptr,
+    size_t nonce_sums_len,
+    const uint8_t* sum_shares_ptr,
+    const uint8_t* witness_ptr,
+    size_t witness_len,
+    const uint8_t* tree_root_ptr,
+    uint8_t tree_depth);
+
+// Free a FROST SAL session handle.
+void shekyl_frost_sal_session_free(ShekylFrostSalSession* session);
+
+// ─── FCMP++: FROST DKG Key Management ──────────────────────────────────────
+
+struct ShekylFrostThresholdKeys;
+
+// Import FROST threshold keys from a serialized blob.
+// Returns opaque handle, or NULL on failure. Free with shekyl_frost_keys_free.
+ShekylFrostThresholdKeys* shekyl_frost_keys_import(
+    const uint8_t* data_ptr,
+    size_t data_len);
+
+// Export FROST threshold keys as a serialized blob.
+ShekylBuffer shekyl_frost_keys_export(const ShekylFrostThresholdKeys* handle);
+
+// Get 32-byte group public key from threshold keys.
+// Writes 32 bytes to out_ptr. Returns true on success.
+bool shekyl_frost_keys_group_key(
+    const ShekylFrostThresholdKeys* handle,
+    uint8_t* out_ptr);
+
+// Validate that threshold keys match expected M-of-N parameters.
+bool shekyl_frost_keys_validate(
+    const ShekylFrostThresholdKeys* handle,
+    uint16_t expected_m,
+    uint16_t expected_n);
+
+// Free a FROST threshold keys handle.
+void shekyl_frost_keys_free(ShekylFrostThresholdKeys* handle);
 
 // Convert raw output tuples into serialized 4-scalar leaves.
 ShekylBuffer shekyl_fcmp_outputs_to_leaves(

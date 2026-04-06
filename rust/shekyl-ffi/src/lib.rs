@@ -813,28 +813,7 @@ pub extern "C" fn shekyl_fcmp_proof_len(num_inputs: u32, tree_depth: u8) -> usiz
     shekyl_fcmp::tree::proof_size(num_inputs as usize, tree_depth as usize)
 }
 
-/// Construct an FCMP++ proof.
-///
-/// The prove function requires full witness data per input:
-/// - Output key O, key image generator I, commitment C (Ed25519 points)
-/// - Spend key scalars (x, y)
-/// - Leaf chunk siblings and branch layers for the Merkle path
-/// - H(pqc_pk) values
-///
-/// Each input is serialized as a flat `ShekylFcmpProveInput` blob.
-///
-/// `inputs_ptr`: packed `ShekylFcmpProveInput` structs.
-/// `num_inputs`: number of inputs.
-/// `input_stride`: byte size of each `ShekylFcmpProveInput`.
-/// `leaf_chunks_ptr`: per-input leaf chunk data (variable-length, prefixed by u32 count).
-/// `branch_layers_ptr`: per-input branch layer data.
-/// `tree_root_ptr`: 32-byte tree root.
-/// `signable_tx_hash_ptr`: 32-byte transaction binding hash.
-///
-/// Returns a `ShekylFcmpProveResult` with the proof buffer and pseudo-outs.
-///
-/// TODO: Wire this to the C++ wallet once `genRctFcmpPlusPlus` is updated
-/// to pass the full witness data through this FFI boundary.
+/// FCMP++ proof construction result.
 #[repr(C)]
 pub struct ShekylFcmpProveResult {
     pub proof: ShekylBuffer,
@@ -842,9 +821,39 @@ pub struct ShekylFcmpProveResult {
     pub success: bool,
 }
 
+/// Construct an FCMP++ proof from a variable-length witness blob.
+///
+/// `witness_ptr` / `witness_len`: the complete serialized witness for all inputs.
+///
+/// Wire format (all multi-byte integers are little-endian):
+///
+/// ```text
+/// For each of `num_inputs` inputs, sequentially:
+///   Fixed header (192 bytes):
+///     [O:32][I:32][C:32][h_pqc:32][spend_x:32][spend_y:32]
+///     O, I, C are compressed Ed25519 output points.
+///   Leaf chunk (variable):
+///     leaf_chunk_count: u32
+///     For each entry (128 bytes):
+///       [O:32][I:32][C:32][h_pqc:32]  (compressed Ed25519 points + PQC hash)
+///   C1 (Selene) branch layers (variable):
+///     c1_layer_count: u32
+///     For each layer:
+///       sibling_count: u32
+///       siblings: sibling_count * 32 bytes (Selene scalars)
+///   C2 (Helios) branch layers (variable):
+///     c2_layer_count: u32
+///     For each layer:
+///       sibling_count: u32
+///       siblings: sibling_count * 32 bytes (Helios scalars)
+/// ```
+///
+/// `tree_root_ptr`: 32-byte curve tree root.
+/// `signable_tx_hash_ptr`: 32-byte transaction binding hash.
 #[no_mangle]
 pub extern "C" fn shekyl_fcmp_prove(
-    inputs_ptr: *const u8,
+    witness_ptr: *const u8,
+    witness_len: usize,
     num_inputs: u32,
     tree_root_ptr: *const u8,
     tree_depth: u8,
@@ -856,7 +865,7 @@ pub extern "C" fn shekyl_fcmp_prove(
         success: false,
     };
 
-    if inputs_ptr.is_null() || tree_root_ptr.is_null() || signable_tx_hash_ptr.is_null() {
+    if witness_ptr.is_null() || tree_root_ptr.is_null() || signable_tx_hash_ptr.is_null() {
         return fail;
     }
 
@@ -865,6 +874,9 @@ pub extern "C" fn shekyl_fcmp_prove(
         return fail;
     }
 
+    let Some(witness) = slice_from_ptr(witness_ptr, witness_len) else {
+        return fail;
+    };
     let tree_root: [u8; 32] = unsafe {
         let mut buf = [0u8; 32];
         std::ptr::copy_nonoverlapping(tree_root_ptr, buf.as_mut_ptr(), 32);
@@ -876,46 +888,9 @@ pub extern "C" fn shekyl_fcmp_prove(
         buf
     };
 
-    // The C++ caller must serialize ProveInput data into a flat layout.
-    // For now, deserialize from packed fixed-size fields per input:
-    //   [O:32][I:32][C:32][h_pqc:32][spend_x:32][spend_y:32] = 192 bytes fixed
-    //   followed by variable-length chunk/branch data
-    // TODO: Define and document the complete wire format for C++ callers.
-    let per_input_fixed = 192usize;
-    let Some(input_bytes) = slice_from_ptr(inputs_ptr, n * per_input_fixed) else {
+    let Some(inputs) = parse_prove_witness(witness, n) else {
         return fail;
     };
-
-    let mut inputs = Vec::with_capacity(n);
-    for i in 0..n {
-        let base = i * per_input_fixed;
-        let mut output_key = [0u8; 32];
-        let mut key_image_gen = [0u8; 32];
-        let mut commitment = [0u8; 32];
-        let mut h_pqc = [0u8; 32];
-        let mut spend_key_x = [0u8; 32];
-        let mut spend_key_y = [0u8; 32];
-
-        output_key.copy_from_slice(&input_bytes[base..base + 32]);
-        key_image_gen.copy_from_slice(&input_bytes[base + 32..base + 64]);
-        commitment.copy_from_slice(&input_bytes[base + 64..base + 96]);
-        h_pqc.copy_from_slice(&input_bytes[base + 96..base + 128]);
-        spend_key_x.copy_from_slice(&input_bytes[base + 128..base + 160]);
-        spend_key_y.copy_from_slice(&input_bytes[base + 160..base + 192]);
-
-        inputs.push(shekyl_fcmp::proof::ProveInput {
-            output_key,
-            key_image_gen,
-            commitment,
-            h_pqc: shekyl_fcmp::leaf::PqcLeafScalar(h_pqc),
-            spend_key_x,
-            spend_key_y,
-            leaf_chunk_outputs: vec![(output_key, key_image_gen, commitment)],
-            leaf_chunk_h_pqc: vec![h_pqc],
-            c1_branch_layers: vec![],
-            c2_branch_layers: vec![],
-        });
-    }
 
     match shekyl_fcmp::proof::prove(&inputs, &tree_root, tree_depth, signable_tx_hash) {
         Ok(result) => {
@@ -931,6 +906,129 @@ pub extern "C" fn shekyl_fcmp_prove(
         }
         Err(_) => fail,
     }
+}
+
+fn parse_prove_witness(data: &[u8], num_inputs: usize) -> Option<Vec<shekyl_fcmp::proof::ProveInput>> {
+    let mut offset = 0usize;
+    let mut inputs = Vec::with_capacity(num_inputs);
+
+    for _ in 0..num_inputs {
+        if offset + 192 > data.len() {
+            return None;
+        }
+
+        let mut output_key = [0u8; 32];
+        let mut key_image_gen = [0u8; 32];
+        let mut commitment = [0u8; 32];
+        let mut h_pqc = [0u8; 32];
+        let mut spend_key_x = [0u8; 32];
+        let mut spend_key_y = [0u8; 32];
+
+        output_key.copy_from_slice(&data[offset..offset + 32]);
+        key_image_gen.copy_from_slice(&data[offset + 32..offset + 64]);
+        commitment.copy_from_slice(&data[offset + 64..offset + 96]);
+        h_pqc.copy_from_slice(&data[offset + 96..offset + 128]);
+        spend_key_x.copy_from_slice(&data[offset + 128..offset + 160]);
+        spend_key_y.copy_from_slice(&data[offset + 160..offset + 192]);
+        offset += 192;
+
+        // Leaf chunk
+        if offset + 4 > data.len() {
+            return None;
+        }
+        let chunk_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
+        offset += 4;
+
+        let mut leaf_chunk_outputs = Vec::with_capacity(chunk_count);
+        let mut leaf_chunk_h_pqc = Vec::with_capacity(chunk_count);
+        for _ in 0..chunk_count {
+            if offset + 128 > data.len() {
+                return None;
+            }
+            let mut lo = [0u8; 32];
+            let mut li = [0u8; 32];
+            let mut lc = [0u8; 32];
+            let mut lh = [0u8; 32];
+            lo.copy_from_slice(&data[offset..offset + 32]);
+            li.copy_from_slice(&data[offset + 32..offset + 64]);
+            lc.copy_from_slice(&data[offset + 64..offset + 96]);
+            lh.copy_from_slice(&data[offset + 96..offset + 128]);
+            leaf_chunk_outputs.push((lo, li, lc));
+            leaf_chunk_h_pqc.push(lh);
+            offset += 128;
+        }
+
+        // C1 (Selene) branch layers
+        if offset + 4 > data.len() {
+            return None;
+        }
+        let c1_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
+        offset += 4;
+
+        let mut c1_branch_layers = Vec::with_capacity(c1_count);
+        for _ in 0..c1_count {
+            if offset + 4 > data.len() {
+                return None;
+            }
+            let sib_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
+            offset += 4;
+            let needed = sib_count * 32;
+            if offset + needed > data.len() {
+                return None;
+            }
+            let mut siblings = Vec::with_capacity(sib_count);
+            for s in 0..sib_count {
+                let mut scalar = [0u8; 32];
+                scalar.copy_from_slice(&data[offset + s * 32..offset + (s + 1) * 32]);
+                siblings.push(scalar);
+            }
+            offset += needed;
+            c1_branch_layers.push(shekyl_fcmp::proof::BranchLayer { siblings });
+        }
+
+        // C2 (Helios) branch layers
+        if offset + 4 > data.len() {
+            return None;
+        }
+        let c2_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
+        offset += 4;
+
+        let mut c2_branch_layers = Vec::with_capacity(c2_count);
+        for _ in 0..c2_count {
+            if offset + 4 > data.len() {
+                return None;
+            }
+            let sib_count = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
+            offset += 4;
+            let needed = sib_count * 32;
+            if offset + needed > data.len() {
+                return None;
+            }
+            let mut siblings = Vec::with_capacity(sib_count);
+            for s in 0..sib_count {
+                let mut scalar = [0u8; 32];
+                scalar.copy_from_slice(&data[offset + s * 32..offset + (s + 1) * 32]);
+                siblings.push(scalar);
+            }
+            offset += needed;
+            c2_branch_layers.push(shekyl_fcmp::proof::BranchLayer { siblings });
+        }
+
+        inputs.push(shekyl_fcmp::proof::ProveInput {
+            output_key,
+            key_image_gen,
+            commitment,
+            h_pqc: shekyl_fcmp::leaf::PqcLeafScalar(h_pqc),
+            spend_key_x,
+            spend_key_y,
+            leaf_chunk_outputs,
+            leaf_chunk_h_pqc,
+            c1_branch_layers,
+            c2_branch_layers,
+        });
+    }
+
+    Some(inputs)
 }
 
 /// Verify an FCMP++ proof with batch verification.
@@ -1033,6 +1131,321 @@ pub extern "C" fn shekyl_fcmp_outputs_to_leaves(
 
     let serialized = shekyl_fcmp::tree::leaves_to_bytes(&leaves);
     ShekylBuffer::from_vec(serialized)
+}
+
+// ─── FCMP++: FROST SAL Multisig ─────────────────────────────────────────────
+
+/// Opaque handle for a FROST SAL session (one per input).
+/// Created by `shekyl_frost_sal_session_new`, freed by `_session_free`.
+pub struct ShekylFrostSalSession(shekyl_fcmp::frost_sal::FrostSalSession);
+
+/// Create a new FROST SAL session for one input.
+///
+/// `output_key_ptr`, `key_image_gen_ptr`, `commitment_ptr`: 32-byte compressed
+/// Ed25519 points. `spend_key_x_ptr`, `signable_tx_hash_ptr`: 32 bytes each.
+///
+/// Returns an opaque session handle, or null on failure.
+/// The returned pseudo-out (32 bytes) is written to `pseudo_out_ptr`.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_sal_session_new(
+    output_key_ptr: *const u8,
+    key_image_gen_ptr: *const u8,
+    commitment_ptr: *const u8,
+    spend_key_x_ptr: *const u8,
+    signable_tx_hash_ptr: *const u8,
+    pseudo_out_ptr: *mut u8,
+) -> *mut ShekylFrostSalSession {
+    if output_key_ptr.is_null()
+        || key_image_gen_ptr.is_null()
+        || commitment_ptr.is_null()
+        || spend_key_x_ptr.is_null()
+        || signable_tx_hash_ptr.is_null()
+        || pseudo_out_ptr.is_null()
+    {
+        return std::ptr::null_mut();
+    }
+
+    let read32 = |ptr: *const u8| -> [u8; 32] {
+        let mut buf = [0u8; 32];
+        unsafe { std::ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 32) };
+        buf
+    };
+
+    let input_data = shekyl_fcmp::frost_sal::FrostSalInput {
+        output_key: read32(output_key_ptr),
+        key_image_gen: read32(key_image_gen_ptr),
+        commitment: read32(commitment_ptr),
+        spend_key_x: read32(spend_key_x_ptr),
+        signable_tx_hash: read32(signable_tx_hash_ptr),
+    };
+
+    match shekyl_fcmp::frost_sal::FrostSalSession::new(&input_data) {
+        Ok(session) => {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    session.pseudo_out().as_ptr(),
+                    pseudo_out_ptr,
+                    32,
+                );
+            }
+            Box::into_raw(Box::new(ShekylFrostSalSession(session)))
+        }
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Get the serialized `RerandomizedOutput` from a FROST SAL session.
+///
+/// Returns a buffer that can be deserialized by peers to reconstruct
+/// the rerandomized tuple for signing. The caller must free the buffer.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_sal_get_rerand(
+    session: *const ShekylFrostSalSession,
+) -> ShekylBuffer {
+    if session.is_null() {
+        return ShekylBuffer::null();
+    }
+    let session = unsafe { &*session };
+    let mut data = Vec::new();
+    if session.0.rerandomized_output().write(&mut data).is_err() {
+        return ShekylBuffer::null();
+    }
+    ShekylBuffer::from_vec(data)
+}
+
+/// Aggregate FROST partial shares and produce the full FCMP++ proof.
+///
+/// `session_ptrs`: array of `num_inputs` session handles (one per input).
+/// `group_key_ptr`: 32-byte Ed25519T group public key.
+/// `nonce_sums_ptr` / `nonce_sums_len`: serialized aggregated nonce data.
+/// `sum_shares_ptr`: `num_inputs * 32` bytes, aggregated FROST share per input.
+/// `witness_ptr` / `witness_len`: full witness blob (same format as `shekyl_fcmp_prove`).
+///
+/// Consumes and frees all sessions on success.
+/// Returns the proof result.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_sal_aggregate_and_prove(
+    session_ptrs: *const *mut ShekylFrostSalSession,
+    num_inputs: u32,
+    group_key_ptr: *const u8,
+    _nonce_sums_ptr: *const u8,
+    _nonce_sums_len: usize,
+    sum_shares_ptr: *const u8,
+    witness_ptr: *const u8,
+    witness_len: usize,
+    tree_root_ptr: *const u8,
+    tree_depth: u8,
+) -> ShekylFcmpProveResult {
+    let fail = ShekylFcmpProveResult {
+        proof: ShekylBuffer::null(),
+        pseudo_outs: ShekylBuffer::null(),
+        success: false,
+    };
+
+    if session_ptrs.is_null() || group_key_ptr.is_null() || sum_shares_ptr.is_null()
+        || witness_ptr.is_null() || tree_root_ptr.is_null()
+    {
+        return fail;
+    }
+
+    let n = num_inputs as usize;
+    if n == 0 || n > shekyl_fcmp::MAX_INPUTS {
+        return fail;
+    }
+
+    let read32 = |ptr: *const u8| -> [u8; 32] {
+        let mut buf = [0u8; 32];
+        unsafe { std::ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 32) };
+        buf
+    };
+
+    let group_key_bytes = read32(group_key_ptr);
+    let Some(sum_bytes) = slice_from_ptr(sum_shares_ptr, n * 32) else {
+        return fail;
+    };
+    let Some(witness) = slice_from_ptr(witness_ptr, witness_len) else {
+        return fail;
+    };
+
+    // Deserialize group key
+    use ciphersuite::group::GroupEncoding;
+    let gk_ct = <dalek_ff_group::EdwardsPoint as GroupEncoding>::from_bytes(&group_key_bytes.into());
+    if bool::from(gk_ct.is_none()) {
+        return fail;
+    }
+    let group_key: dalek_ff_group::EdwardsPoint = gk_ct.unwrap();
+
+    // Parse the witness to extract leaf chunks for prove_with_sal
+    let Some(prove_inputs) = parse_prove_witness(witness, n) else {
+        return fail;
+    };
+
+    // Take ownership of sessions
+    let mut sessions: Vec<Box<ShekylFrostSalSession>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let ptr = unsafe { *session_ptrs.add(i) };
+        if ptr.is_null() {
+            return fail;
+        }
+        sessions.push(unsafe { Box::from_raw(ptr) });
+    }
+
+    // Aggregate each session's FROST shares into SAL proofs
+    let mut sal_pairs = Vec::with_capacity(n);
+    let mut original_outputs = Vec::with_capacity(n);
+    let mut rerands = Vec::with_capacity(n);
+    let mut pseudo_outs_flat = Vec::with_capacity(n * 32);
+    let mut leaf_chunks = Vec::with_capacity(n);
+
+    for (i, session_box) in sessions.into_iter().enumerate() {
+        let session = session_box.0;
+        pseudo_outs_flat.extend_from_slice(session.pseudo_out());
+
+        // Deserialize the aggregated share for this input
+        let mut share_bytes = [0u8; 32];
+        share_bytes.copy_from_slice(&sum_bytes[i * 32..(i + 1) * 32]);
+        let sum_ct = <dalek_ff_group::Scalar as ciphersuite::group::ff::PrimeField>::from_repr(share_bytes.into());
+        if bool::from(sum_ct.is_none()) {
+            return fail;
+        }
+        let sum_scalar: dalek_ff_group::Scalar = sum_ct.unwrap();
+
+        // Build nonce sums (single nonce per input for SalAlgorithm)
+        let nonce_sums = vec![vec![group_key]]; // placeholder -- needs proper nonce aggregation
+
+        original_outputs.push(*session.original_output());
+        rerands.push(session.rerandomized_output().clone());
+
+        match session.aggregate(group_key, &nonce_sums, sum_scalar) {
+            Ok((input, sal)) => sal_pairs.push((input, sal)),
+            Err(_) => return fail,
+        }
+
+        // Build leaf chunk from parsed witness
+        let pi = &prove_inputs[i];
+        leaf_chunks.push(shekyl_fcmp::proof::ProveInputLeafChunk {
+            output_h_pqc: pi.h_pqc.clone(),
+            leaf_outputs: pi.leaf_chunk_outputs.clone(),
+            leaf_h_pqc: pi.leaf_chunk_h_pqc.clone(),
+            c1_branch_layers: pi.c1_branch_layers.clone(),
+            c2_branch_layers: pi.c2_branch_layers.clone(),
+        });
+    }
+
+    match shekyl_fcmp::proof::prove_with_sal(
+        sal_pairs,
+        &original_outputs,
+        &rerands,
+        &leaf_chunks,
+        tree_depth,
+    ) {
+        Ok(result) => ShekylFcmpProveResult {
+            proof: ShekylBuffer::from_vec(result.proof.data),
+            pseudo_outs: ShekylBuffer::from_vec(pseudo_outs_flat),
+            success: true,
+        },
+        Err(_) => fail,
+    }
+}
+
+/// Free a FROST SAL session handle.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_sal_session_free(session: *mut ShekylFrostSalSession) {
+    if !session.is_null() {
+        unsafe {
+            drop(Box::from_raw(session));
+        }
+    }
+}
+
+// ─── FCMP++: FROST DKG Key Management ───────────────────────────────────────
+
+/// Opaque handle for stored FROST threshold keys.
+pub struct ShekylFrostThresholdKeys(shekyl_fcmp::frost_dkg::SerializedThresholdKeys);
+
+/// Import FROST threshold keys from a serialized blob.
+/// Returns an opaque handle, or NULL if deserialization fails.
+/// The caller must later free the handle with `shekyl_frost_keys_free`.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_keys_import(
+    data_ptr: *const u8,
+    data_len: usize,
+) -> *mut ShekylFrostThresholdKeys {
+    if data_ptr.is_null() || data_len == 0 {
+        return std::ptr::null_mut();
+    }
+    let data = unsafe { std::slice::from_raw_parts(data_ptr, data_len) };
+    let serialized = shekyl_fcmp::frost_dkg::SerializedThresholdKeys::from_bytes(data);
+    if serialized.deserialize().is_err() {
+        return std::ptr::null_mut();
+    }
+    Box::into_raw(Box::new(ShekylFrostThresholdKeys(serialized)))
+}
+
+/// Export FROST threshold keys as a serialized blob.
+/// Returns a ShekylBuffer with the serialized data, or empty on failure.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_keys_export(
+    handle: *const ShekylFrostThresholdKeys,
+) -> ShekylBuffer {
+    let fail = ShekylBuffer { ptr: std::ptr::null_mut(), len: 0 };
+    if handle.is_null() {
+        return fail;
+    }
+    let keys = unsafe { &*handle };
+    let bytes = keys.0.as_bytes().to_vec();
+    let len = bytes.len();
+    let ptr = Box::into_raw(bytes.into_boxed_slice()) as *mut u8;
+    ShekylBuffer { ptr, len }
+}
+
+/// Get the 32-byte group public key from threshold keys.
+/// Writes 32 bytes to `out_ptr`. Returns true on success.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_keys_group_key(
+    handle: *const ShekylFrostThresholdKeys,
+    out_ptr: *mut u8,
+) -> bool {
+    if handle.is_null() || out_ptr.is_null() {
+        return false;
+    }
+    let keys_handle = unsafe { &*handle };
+    match keys_handle.0.deserialize() {
+        Ok(keys) => {
+            let gk = shekyl_fcmp::frost_dkg::group_key_bytes(&keys);
+            unsafe { std::ptr::copy_nonoverlapping(gk.as_ptr(), out_ptr, 32) };
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Validate that threshold keys match expected M-of-N parameters.
+/// Returns true if valid.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_keys_validate(
+    handle: *const ShekylFrostThresholdKeys,
+    expected_m: u16,
+    expected_n: u16,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+    let keys_handle = unsafe { &*handle };
+    match keys_handle.0.deserialize() {
+        Ok(keys) => shekyl_fcmp::frost_dkg::validate_keys(&keys, expected_m, expected_n).is_ok(),
+        Err(_) => false,
+    }
+}
+
+/// Free a FROST threshold keys handle.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_keys_free(handle: *mut ShekylFrostThresholdKeys) {
+    if !handle.is_null() {
+        unsafe {
+            drop(Box::from_raw(handle));
+        }
+    }
 }
 
 // ─── FCMP++: KEM Operations ─────────────────────────────────────────────────
@@ -1885,5 +2298,57 @@ mod tests {
         shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
         shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
         shekyl_buffer_free(sig.signature.ptr, sig.signature.len);
+    }
+
+    #[test]
+    fn test_frost_keys_import_null_returns_null() {
+        let handle = shekyl_frost_keys_import(std::ptr::null(), 0);
+        assert!(handle.is_null());
+    }
+
+    #[test]
+    fn test_frost_keys_import_invalid_data_returns_null() {
+        let garbage = [0xDE, 0xAD, 0xBE, 0xEF];
+        let handle = shekyl_frost_keys_import(garbage.as_ptr(), garbage.len());
+        assert!(handle.is_null());
+    }
+
+    #[test]
+    fn test_frost_keys_validate_null_returns_false() {
+        let valid = shekyl_frost_keys_validate(std::ptr::null(), 2, 3);
+        assert!(!valid);
+    }
+
+    #[test]
+    fn test_frost_keys_group_key_null_returns_false() {
+        let mut out = [0u8; 32];
+        let ok = shekyl_frost_keys_group_key(std::ptr::null(), out.as_mut_ptr());
+        assert!(!ok);
+    }
+
+    #[test]
+    fn test_frost_keys_free_null_is_safe() {
+        shekyl_frost_keys_free(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn test_frost_sal_session_new_null_returns_null() {
+        let session = shekyl_frost_sal_session_new(
+            std::ptr::null(), std::ptr::null(), std::ptr::null(),
+            std::ptr::null(), std::ptr::null(), std::ptr::null_mut(),
+        );
+        assert!(session.is_null());
+    }
+
+    #[test]
+    fn test_frost_sal_session_free_null_is_safe() {
+        shekyl_frost_sal_session_free(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn test_frost_sal_get_rerand_null_returns_empty() {
+        let buf = shekyl_frost_sal_get_rerand(std::ptr::null());
+        assert!(buf.ptr.is_null());
+        assert_eq!(buf.len, 0);
     }
 }

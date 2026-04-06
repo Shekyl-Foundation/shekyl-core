@@ -74,6 +74,11 @@ fuzz_target!(|data: &[u8]| {
 
     let key_images: Vec<[u8; 32]> = vec![[0u8; 32]; num_inputs];
 
+    let mut signable_tx_hash = [0u8; 32];
+    if data.len() >= 66 {
+        signable_tx_hash.copy_from_slice(&data[34..66]);
+    }
+
     // Main proof verification attempt
     if !proof_data.is_empty() {
         let proof = ShekylFcmpProof {
@@ -81,7 +86,7 @@ fuzz_target!(|data: &[u8]| {
             num_inputs: num_inputs as u32,
             tree_depth,
         };
-        let _ = verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth);
+        let _ = verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth, signable_tx_hash);
     }
 
     // Empty proof
@@ -91,7 +96,7 @@ fuzz_target!(|data: &[u8]| {
             num_inputs: num_inputs as u32,
             tree_depth,
         };
-        let _ = verify(&empty, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth);
+        let _ = verify(&empty, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth, signable_tx_hash);
     }
 
     // Wrong number of inputs (mismatched arrays)
@@ -103,7 +108,7 @@ fuzz_target!(|data: &[u8]| {
                 num_inputs: (num_inputs - 1) as u32,
                 tree_depth,
             };
-            let _ = verify(&proof, &fewer_ki, &pseudo_outs[..num_inputs - 1], &pqc_hashes[..num_inputs - 1], &tree_root, tree_depth);
+            let _ = verify(&proof, &fewer_ki, &pseudo_outs[..num_inputs - 1], &pqc_hashes[..num_inputs - 1], &tree_root, tree_depth, signable_tx_hash);
         }
     }
 
@@ -116,6 +121,6 @@ fuzz_target!(|data: &[u8]| {
             num_inputs: num_inputs as u32,
             tree_depth,
         };
-        let _ = verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth);
+        let _ = verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth, signable_tx_hash);
     }
 });

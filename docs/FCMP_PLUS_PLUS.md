@@ -532,12 +532,21 @@ rust/
 
 | C function | Rust source | Purpose |
 |-----------|-------------|---------|
-| `shekyl_fcmp_prove()` | `shekyl-ffi/src/lib.rs` | Generate FCMP++ proof |
+| `shekyl_fcmp_prove()` | `shekyl-ffi/src/lib.rs` | Generate FCMP++ proof (variable-length witness) |
 | `shekyl_fcmp_verify()` | `shekyl-ffi/src/lib.rs` | Verify FCMP++ proof |
 | `shekyl_fcmp_proof_len()` | `shekyl-ffi/src/lib.rs` | Estimate proof byte length |
 | `shekyl_fcmp_pqc_leaf_hash()` | `shekyl-ffi/src/lib.rs` | Hash ML-DSA-65 pubkey for leaf |
 | `shekyl_fcmp_derive_pqc_keypair()` | `shekyl-ffi/src/lib.rs` | Derive per-output PQC keypair |
 | `shekyl_fcmp_outputs_to_leaves()` | `shekyl-ffi/src/lib.rs` | Convert outputs to 4-scalar leaves |
+| `shekyl_frost_sal_session_new()` | `shekyl-ffi/src/lib.rs` | Create FROST SAL session per input |
+| `shekyl_frost_sal_get_rerand()` | `shekyl-ffi/src/lib.rs` | Get rerandomized output from session |
+| `shekyl_frost_sal_aggregate_and_prove()` | `shekyl-ffi/src/lib.rs` | Aggregate FROST shares and produce FCMP++ proof |
+| `shekyl_frost_sal_session_free()` | `shekyl-ffi/src/lib.rs` | Free FROST SAL session handle |
+| `shekyl_frost_keys_import()` | `shekyl-ffi/src/lib.rs` | Import serialized FROST threshold keys |
+| `shekyl_frost_keys_export()` | `shekyl-ffi/src/lib.rs` | Export serialized FROST threshold keys |
+| `shekyl_frost_keys_group_key()` | `shekyl-ffi/src/lib.rs` | Extract 32-byte Ed25519T group key |
+| `shekyl_frost_keys_validate()` | `shekyl-ffi/src/lib.rs` | Validate M-of-N params against threshold keys |
+| `shekyl_frost_keys_free()` | `shekyl-ffi/src/lib.rs` | Free FROST threshold keys handle |
 | `shekyl_pqc_verify()` | `shekyl-ffi/src/lib.rs` | Verify hybrid PQC signature |
 | `shekyl_kem_encapsulate()` | `shekyl-ffi/src/lib.rs` | Hybrid KEM encapsulation |
 | `shekyl_kem_decapsulate()` | `shekyl-ffi/src/lib.rs` | Hybrid KEM decapsulation |
@@ -1078,6 +1087,22 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | FFI `shekyl_fcmp_verify` accepts `signable_tx_hash` parameter | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
 | C++ callers updated for new FFI signatures | **Done** | `rctSigs.cpp`, `blockchain.cpp`, `wallet2.cpp` |
 | Staking reward fuzz target | **Done** | `rust/shekyl-staking/fuzz/fuzz_targets/fuzz_claim_reward.rs` |
+| FROST SAL module (`frost_sal.rs`) | **Done** | `rust/shekyl-fcmp/src/frost_sal.rs` |
+| `prove_with_sal()` for multisig proof construction | **Done** | `rust/shekyl-fcmp/src/proof.rs` |
+| FROST DKG key management (`frost_dkg.rs`) | **Done** | `rust/shekyl-fcmp/src/frost_dkg.rs` |
+| FROST SAL FFI (session new/get_rerand/aggregate_and_prove/free) | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
+| FROST DKG FFI (keys import/export/validate/group_key/free) | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
+| FFI `shekyl_fcmp_prove` variable-length witness format | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
+| `genRctFcmpPlusPlus` accepts leaf chunk entries | **Done** | `rctSigs.h/cpp` |
+| Daemon RPC `chunk_outputs_blob` in `get_curve_tree_path` | **Done** | `core_rpc_server.cpp`, `core_rpc_server_commands_defs.h` |
+| Wallet `fcmp_precomputed_path` stores `leaf_chunk_entries` | **Done** | `wallet2.h/cpp` |
+| C++ wallet FROST session lifecycle (`prepare_multisig_fcmp_proof`) | **Done** | `wallet2.cpp` |
+| C++ wallet FROST signing request (v3 format) | **Done** | `wallet2.cpp` |
+| C++ wallet FROST aggregation in `import_multisig_signatures` | **Done** | `wallet2.cpp` |
+| C++ wallet FROST threshold key import/export | **Done** | `wallet2.h/cpp` |
+| FROST SAL unit tests (4 tests) | **Done** | `rust/shekyl-fcmp/src/frost_sal.rs` |
+| FROST DKG unit tests (4 tests) | **Done** | `rust/shekyl-fcmp/src/frost_dkg.rs` |
+| FROST FFI lifecycle tests (8 tests) | **Done** | `rust/shekyl-ffi/src/lib.rs` |
 
 ---
 
@@ -1107,11 +1132,15 @@ cd rust/shekyl-staking/fuzz && cargo +nightly fuzz run fuzz_claim_reward -- -run
 
 ### Rust Unit Tests
 
-Comprehensive tests cover prove/verify round-trips, edge cases (empty inputs,
-max inputs, truncated proofs, tampered key images), hash grow/trim
-inverse properties, leaf serialization layout, PQC keypair derivation
-determinism, Bech32m address encoding/decoding, and cross-crate consistency
-between `hash_pqc_public_key` and `PqcLeafScalar::from_pqc_public_key`.
+Comprehensive tests cover prove/verify round-trips (including a full
+end-to-end `prove_verify_roundtrip` test that generates random Ed25519 keys,
+constructs a single-leaf tree, proves membership, verifies the proof, and
+checks that tampered key images and wrong tree roots are rejected), edge
+cases (empty inputs, max inputs, truncated proofs, tampered key images),
+hash grow/trim inverse properties, leaf serialization layout, PQC keypair
+derivation determinism, Bech32m address encoding/decoding, and cross-crate
+consistency between `hash_pqc_public_key` and
+`PqcLeafScalar::from_pqc_public_key`.
 
 ```bash
 cd rust && cargo test --workspace
@@ -1284,16 +1313,26 @@ through the full FCMP++ stack:
 - The FFI boundary (`shekyl-ffi`) passes `signable_tx_hash` for transaction
   binding and returns `ShekylFcmpProveResult` with proof + pseudo-outs.
 
-### Upstream Security Fixes Pending
+### Upstream Security Fixes Status
 
-19 commits on upstream `main` are not yet merged into `fcmp++`. The most
-critical are:
+19 commits on upstream `main` are not yet merged into `fcmp++`. The three
+security-critical commits have been audited against the Shekyl fork:
 
-| Commit | Issue |
-|--------|-------|
-| `b6d3e44` | Base58 overflow fix, identity/torsion point rejection |
-| `a941dff` | Varint length fix for zero |
-| `c8be5d3` | Gate debug `Extra::write` assertions |
+| Commit | Issue | Status |
+|--------|-------|--------|
+| `b6d3e44` | Base58 overflow fix, identity/torsion point rejection | **Base58 fixed** (`checked_add` + non-canonical rejection). Identity/torsion checks already present in fork. |
+| `a941dff` | Varint length fix for zero | **Not applicable** — fork uses different formula that correctly returns 1 for zero. |
+| `c8be5d3` | Gate debug `Extra::write` assertions | **Not applicable** — fork's `Extra::write` was refactored without debug assertions. |
+
+**Base58 defense-in-depth note:** Shekyl's production address encoding uses
+Bech32m (`shekyl-crypto-pq::address`). The monero-oxide fork's wallet still
+uses base58 via `shekyl-base58`. The base58 vulnerabilities were fixed as
+defense-in-depth. A follow-up migration of `shekyl-oxide/wallet/address`
+and `shekyl-base58` to Bech32m is planned.
+
+**Cargo hardening:** Both the monero-oxide fork and the Shekyl Rust workspace
+(`rust/Cargo.toml`) now enforce `overflow-checks = true` across all profiles
+(dev, release, test, bench) and `panic = "abort"` for dev and release.
 
 ### RELEASE-BLOCKER Items (monero-oxide)
 

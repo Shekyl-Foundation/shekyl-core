@@ -220,6 +220,15 @@ namespace rct {
     // FCMP++ transaction construction: replaces ring signatures with a single
     // full-chain membership proof plus Bulletproofs+ range proofs.
     //------------------------------------------------------------------------------------------------------------------------------
+    // Append a little-endian u32 to a byte vector.
+    static void push_le_u32(std::vector<uint8_t> &buf, uint32_t val)
+    {
+        buf.push_back(static_cast<uint8_t>(val));
+        buf.push_back(static_cast<uint8_t>(val >> 8));
+        buf.push_back(static_cast<uint8_t>(val >> 16));
+        buf.push_back(static_cast<uint8_t>(val >> 24));
+    }
+
     rctSig genRctFcmpPlusPlus(
         const key &message,
         const ctkeyV &inSk,
@@ -232,6 +241,7 @@ namespace rct {
         const crypto::hash &referenceBlock,
         uint8_t tree_depth,
         const std::vector<std::vector<uint8_t>> &tree_paths,
+        const std::vector<std::vector<fcmp_chunk_entry>> &leaf_chunk_entries,
         const std::vector<key> &pqc_pk_hashes,
         hw::device &hwdev)
     {
@@ -241,6 +251,8 @@ namespace rct {
         CHECK_AND_ASSERT_THROW_MES(outamounts.size() == destinations.size(), "Different number of amounts/destinations");
         CHECK_AND_ASSERT_THROW_MES(amount_keys.size() == destinations.size(), "Different number of amount_keys/destinations");
         CHECK_AND_ASSERT_THROW_MES(pqc_pk_hashes.size() == inamounts.size(), "Different number of pqc_pk_hashes/inputs");
+        CHECK_AND_ASSERT_THROW_MES(tree_paths.size() == inamounts.size(), "Different number of tree_paths/inputs");
+        CHECK_AND_ASSERT_THROW_MES(leaf_chunk_entries.size() == inamounts.size(), "Different number of leaf_chunk_entries/inputs");
 
         rctSig rv;
         rv.type = RCTTypeFcmpPlusPlusPqc;
@@ -303,12 +315,18 @@ namespace rct {
         // --- FCMP++ membership proof via Rust FFI ---
         const uint32_t num_inputs = static_cast<uint32_t>(inPk.size());
 
-        // Pack per-input fixed-size witness data: 192 bytes each.
-        // [O:32][I (Hp(O)):32][C:32][h_pqc:32][spend_x:32][spend_y:32]
-        std::vector<uint8_t> inputs_buf(num_inputs * 192);
+        // Serialize per-input witness into the variable-length wire format.
+        std::vector<uint8_t> witness;
+        const uint32_t SELENE_CHUNK_WIDTH = shekyl_curve_tree_selene_chunk_width();
+        const uint32_t HELIOS_CHUNK_WIDTH = shekyl_curve_tree_helios_chunk_width();
+
         for (size_t i = 0; i < num_inputs; ++i)
         {
-            uint8_t* base = inputs_buf.data() + i * 192;
+            // Fixed header: [O:32][I:32][C:32][h_pqc:32][x:32][y:32] = 192 bytes
+            const size_t hdr_start = witness.size();
+            witness.resize(hdr_start + 192);
+            uint8_t* base = witness.data() + hdr_start;
+
             memcpy(base, inPk[i].dest.bytes, 32);       // O
 
             ge_p3 hp;
@@ -318,12 +336,78 @@ namespace rct {
             memcpy(base + 32, ki_gen.bytes, 32);         // I = Hp(O)
 
             memcpy(base + 64, inPk[i].mask.bytes, 32);   // C
-
-            const uint8_t* h_pqc = pqc_pk_hashes[i].bytes;
-            memcpy(base + 96, h_pqc, 32);                // h_pqc
-
+            memcpy(base + 96, pqc_pk_hashes[i].bytes, 32); // h_pqc
             memcpy(base + 128, inSk[i].dest.bytes, 32);  // spend_key_x
             memcpy(base + 160, inSk[i].mask.bytes, 32);  // spend_key_y
+
+            // Leaf chunk: Ed25519 output entries
+            const auto& entries = leaf_chunk_entries[i];
+            push_le_u32(witness, static_cast<uint32_t>(entries.size()));
+            for (const auto& e : entries)
+            {
+                witness.insert(witness.end(), e.output_key.bytes, e.output_key.bytes + 32);
+                witness.insert(witness.end(), e.key_image_gen.bytes, e.key_image_gen.bytes + 32);
+                witness.insert(witness.end(), e.commitment.bytes, e.commitment.bytes + 32);
+                witness.insert(witness.end(), e.h_pqc.bytes, e.h_pqc.bytes + 32);
+            }
+
+            // Parse daemon tree_path blob to extract branch layers.
+            // Layer 0 (leaf scalars) is skipped here since we use Ed25519
+            // points from leaf_chunk_entries instead. Branch layers start
+            // after the layer-0 data in the blob.
+            const auto& tp = tree_paths[i];
+
+            // Skip layer 0: 2-byte position + chunk_count * 128 bytes
+            size_t tp_off = 0;
+            if (tp_off + 2 > tp.size())
+            {
+                LOG_PRINT_L0("Malformed tree path for input " << i << ": missing layer 0 position");
+                push_le_u32(witness, 0); // c1_layer_count
+                push_le_u32(witness, 0); // c2_layer_count
+                continue;
+            }
+            tp_off += 2; // skip leaf_pos u16
+            // Count leaf entries in layer 0
+            const size_t leaf_entries_in_chunk = entries.size();
+            tp_off += leaf_entries_in_chunk * 128; // skip leaf scalar data
+
+            // Extract branch layers: alternating Selene (even) / Helios (odd)
+            std::vector<std::vector<uint8_t>> c1_layers, c2_layers;
+            for (uint8_t layer = 1; layer < tree_depth && tp_off + 2 <= tp.size(); ++layer)
+            {
+                tp_off += 2; // skip pos_in_parent u16
+                uint32_t width = (layer % 2 == 0) ? SELENE_CHUNK_WIDTH : HELIOS_CHUNK_WIDTH;
+                size_t layer_bytes = width * 32;
+                if (tp_off + layer_bytes > tp.size())
+                    layer_bytes = tp.size() - tp_off;
+
+                std::vector<uint8_t> siblings(tp.begin() + tp_off, tp.begin() + tp_off + layer_bytes);
+                tp_off += layer_bytes;
+
+                // Layer 1 is Helios (odd), layer 2 is Selene (even), ...
+                if (layer % 2 == 0)
+                    c1_layers.push_back(std::move(siblings));
+                else
+                    c2_layers.push_back(std::move(siblings));
+            }
+
+            // Serialize C1 (Selene) branch layers
+            push_le_u32(witness, static_cast<uint32_t>(c1_layers.size()));
+            for (const auto& layer : c1_layers)
+            {
+                uint32_t sib_count = static_cast<uint32_t>(layer.size() / 32);
+                push_le_u32(witness, sib_count);
+                witness.insert(witness.end(), layer.begin(), layer.end());
+            }
+
+            // Serialize C2 (Helios) branch layers
+            push_le_u32(witness, static_cast<uint32_t>(c2_layers.size()));
+            for (const auto& layer : c2_layers)
+            {
+                uint32_t sib_count = static_cast<uint32_t>(layer.size() / 32);
+                push_le_u32(witness, sib_count);
+                witness.insert(witness.end(), layer.begin(), layer.end());
+            }
         }
 
         // Tree root from the reference block.
@@ -331,7 +415,8 @@ namespace rct {
         memcpy(tree_root.bytes, referenceBlock.data, 32);
 
         ShekylFcmpProveResult result = shekyl_fcmp_prove(
-            inputs_buf.data(),
+            witness.data(),
+            witness.size(),
             num_inputs,
             tree_root.bytes,
             tree_depth,

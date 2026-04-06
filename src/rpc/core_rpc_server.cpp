@@ -48,6 +48,7 @@ using namespace epee;
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
+#include "fcmp/rctOps.h"
 #include "cryptonote_basic/merge_mining.h"
 #include "cryptonote_core/tx_sanity_check.h"
 #include "misc_language.h"
@@ -3703,6 +3704,10 @@ namespace cryptonote
       path_bytes.push_back(static_cast<uint8_t>(leaf_pos & 0xFF));
       path_bytes.push_back(static_cast<uint8_t>((leaf_pos >> 8) & 0xFF));
 
+      // Also collect compressed Ed25519 output data for the FCMP++ prover.
+      // Per entry: [O:32][I:32][C:32][h_pqc:32] = 128 bytes.
+      std::vector<uint8_t> chunk_output_bytes;
+
       for (uint64_t i = chunk_start; i < chunk_end; ++i)
       {
         uint8_t leaf[128];
@@ -3713,7 +3718,32 @@ namespace cryptonote
           return false;
         }
         path_bytes.insert(path_bytes.end(), leaf, leaf + 128);
+
+        // Fetch the compressed Ed25519 output key and commitment
+        output_data_t od = db.get_output_key(0, i);
+        chunk_output_bytes.insert(chunk_output_bytes.end(),
+            reinterpret_cast<const uint8_t*>(od.pubkey.data),
+            reinterpret_cast<const uint8_t*>(od.pubkey.data) + 32);
+
+        // I = Hp(O): hash-to-point of the output key
+        ge_p3 hp;
+        rct::key od_rct;
+        memcpy(od_rct.bytes, od.pubkey.data, 32);
+        rct::hash_to_p3(hp, od_rct);
+        uint8_t ki_gen[32];
+        ge_p3_tobytes(ki_gen, &hp);
+        chunk_output_bytes.insert(chunk_output_bytes.end(), ki_gen, ki_gen + 32);
+
+        chunk_output_bytes.insert(chunk_output_bytes.end(),
+            reinterpret_cast<const uint8_t*>(od.commitment.bytes),
+            reinterpret_cast<const uint8_t*>(od.commitment.bytes) + 32);
+
+        // h_pqc is the 4th scalar in the leaf data (bytes 96..128)
+        chunk_output_bytes.insert(chunk_output_bytes.end(), leaf + 96, leaf + 128);
       }
+
+      entry.chunk_outputs_blob = epee::string_tools::buff_to_hex_nodelimer(
+        std::string(reinterpret_cast<const char*>(chunk_output_bytes.data()), chunk_output_bytes.size()));
 
       // Layers 1..depth-1: collect sibling hashes in each parent chunk
       uint64_t child_chunk = chunk_idx;

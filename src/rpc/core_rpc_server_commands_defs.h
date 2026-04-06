@@ -2839,12 +2839,15 @@ namespace cryptonote
     {
       uint64_t output_index;
       uint8_t  tree_depth;
-      std::string path_blob;  // hex-encoded Merkle path
+      std::string path_blob;          // hex-encoded Merkle path (leaf scalars + branch hashes)
+      std::string chunk_outputs_blob; // hex-encoded Ed25519 output data for each leaf in the chunk:
+                                      // per entry: [O:32][I:32][C:32][h_pqc:32] = 128 bytes
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(output_index)
         KV_SERIALIZE(tree_depth)
         KV_SERIALIZE(path_blob)
+        KV_SERIALIZE(chunk_outputs_blob)
       END_KV_SERIALIZE_MAP()
     };
 
