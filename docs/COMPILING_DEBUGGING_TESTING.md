@@ -22,7 +22,11 @@ Shekyl includes three Rust crates in the consensus-critical build path: `shekyl-
 ### Requirements
 
 - **x86_64 host only.** Rust does not produce bit-identical output across CPU architectures (see Monero #9801). Release artifacts must be built on x86_64 Linux. ARM64, RISC-V, and other architectures may produce functionally correct binaries but they will not match the deterministic reference hash.
-- **Pinned toolchain.** The workspace uses `Cargo.lock` to pin all dependency versions, including git dependencies (monero-oxide fork at commit `92af05e0`). All `cargo build` invocations in CI and CMake pass `--locked` to enforce this.
+- **Pinned toolchain and vendored snapshot.** The workspace uses `Cargo.lock`
+  to pin dependency versions, and vendored `shekyl-oxide` crates under
+  `rust/shekyl-oxide/` are tracked via
+  `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT`. All `cargo build`
+  invocations in CI and CMake pass `--locked` to enforce reproducibility.
 - **Stable Rust.** The workspace targets stable Rust (currently 1.94.0+). Nightly features are not used.
 
 ### Verifying determinism locally

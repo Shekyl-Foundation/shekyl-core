@@ -1211,17 +1211,23 @@ cd rust/shekyl-crypto-pq && cargo bench --bench pqc_rederivation
 
 The FCMP++ Rust crypto stack depends on the
 [Shekyl Foundation monero-oxide fork](https://github.com/Shekyl-Foundation/monero-oxide)
-(`fcmp++` branch). The `shekyl-fcmp` crate pulls 4 git dependencies from this
-fork: `shekyl-fcmp-plus-plus`, `shekyl-generators`, `helioselene`, `ec-divisors`
-(9 total packages in the lockfile, including transitive deps).
+(`fcmp++` branch). In `shekyl-core`, these crates are now vendored under
+`rust/shekyl-oxide/` and consumed through path dependencies from
+`rust/shekyl-fcmp/Cargo.toml`:
+
+- `shekyl-fcmp-plus-plus`
+- `shekyl-generators`
+- `helioselene`
+- `ec-divisors`
 
 ### Current Pin
 
-The lockfile (`rust/Cargo.lock`) pins `416d8d1` ("Transition project from
-Monero-oxide to Shekyl-oxide"). This commit renames the `monero-oxide/`
-directory to `shekyl-oxide/` and all packages from `monero-*` to `shekyl-*`
-(e.g., `monero-fcmp-plus-plus` → `shekyl-fcmp-plus-plus`,
-`monero-generators` → `shekyl-generators`, `monero-io` → `shekyl-io`).
+The vendored snapshot source of truth is:
+
+- `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT`
+
+This metadata records the upstream repo/branch/commit used for the current
+vendored crate copy.
 
 ### Circuit Integration Status
 
@@ -1305,6 +1311,17 @@ audit signoff:
 The 3 RPC items only matter if Shekyl adopts `monero-rpc`/`monero-wallet` for
 wallet functionality. The on-curve constraint and DKG coupling are the items
 most likely to affect proof correctness.
+
+### Upstream Sync Workflow
+
+Use the required workflow in `docs/SHEKYL_OXIDE_VENDORING.md`:
+
+1. Upstream fix lands
+2. Cherry-pick/merge into `Shekyl-Foundation/monero-oxide`
+3. Test fork in isolation
+4. Sync subtree into `rust/shekyl-oxide/`
+5. Run full `shekyl-core` test/build gates
+6. Commit with upstream reference
 
 ---
 

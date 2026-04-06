@@ -64,3 +64,22 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## 3) Vendored shekyl-oxide third-party crates
+
+Consensus-critical FCMP++ dependencies are vendored under `rust/shekyl-oxide/`.
+Their upstream project and snapshot metadata are tracked in:
+
+- `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT`
+
+Per-crate upstream license files are preserved in the vendored tree, including:
+
+- `rust/shekyl-oxide/crypto/divisors/LICENSE`
+- `rust/shekyl-oxide/crypto/helioselene/LICENSE`
+- `rust/shekyl-oxide/crypto/generalized-bulletproofs/LICENSE`
+- `rust/shekyl-oxide/crypto/fcmps/LICENSE`
+- `rust/shekyl-oxide/crypto/fcmps/circuit-abstraction/LICENSE`
+- `rust/shekyl-oxide/crypto/fcmps/ec-gadgets/LICENSE`
+- `rust/shekyl-oxide/shekyl-oxide/io/LICENSE`
+- `rust/shekyl-oxide/shekyl-oxide/generators/LICENSE`
+- `rust/shekyl-oxide/shekyl-oxide/fcmp/fcmp++/LICENSE`

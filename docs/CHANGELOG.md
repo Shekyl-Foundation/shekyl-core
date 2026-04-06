@@ -10,6 +10,17 @@
   `tests/unit_tests/tx_data_pruning_lmdb.cpp` cover prune, idempotency, and
   `pop_block` failure after prune.
 
+- **FCMP++ Rust dependency source moved in-repo.** `shekyl-fcmp` now consumes
+  vendored `shekyl-oxide` crates via path dependencies under
+  `rust/shekyl-oxide/` instead of git dependencies plus local absolute-path
+  `[patch]` overrides. This removes host-specific Cargo path failures in CI and
+  keeps builds fully repo-local.
+
+- **Upstream sync and portability guardrails.** Added vendored snapshot metadata
+  at `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT`, a divergence workflow
+  (`.github/workflows/shekyl-oxide-divergence.yml`), and build workflow checks
+  that fail on absolute local paths in Cargo manifests/config.
+
 ### ✨ Added
 
 - **`--prune-blockchain` transaction-data pruning.** LMDB v6 adds `txs_pqc_auths`
