@@ -34,7 +34,7 @@
 
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_basic/cryptonote_basic_impl.h"
-#include "common/base58.h"
+#include "shekyl/shekyl_ffi.h"
 
 #include <memory>
 #include <vector>
@@ -212,7 +212,14 @@ std::vector<std::string> PendingTransactionImpl::signersKeys() const {
     keys.reserve(m_signers.size());
 
     for (const auto& signer: m_signers) {
-        keys.emplace_back(tools::base58::encode(cryptonote::t_serializable_object_to_blob(signer)));
+        std::string blob = cryptonote::t_serializable_object_to_blob(signer);
+        ShekylBuffer buf = shekyl_encode_blob(
+            reinterpret_cast<const uint8_t*>("shekylsigner"), 12,
+            reinterpret_cast<const uint8_t*>(blob.data()), blob.size());
+        if (buf.ptr && buf.len > 0) {
+            keys.emplace_back(reinterpret_cast<const char*>(buf.ptr), buf.len);
+            shekyl_buffer_free(buf.ptr, buf.len);
+        }
     }
 
     return keys;

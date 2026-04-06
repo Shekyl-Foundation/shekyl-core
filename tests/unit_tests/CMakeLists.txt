@@ -30,7 +30,6 @@ set(unit_tests_sources
   account.cpp
   apply_permutation.cpp
   address_from_url.cpp
-  base58.cpp
   blockchain_db.cpp
   block_queue.cpp
   block_reward.cpp

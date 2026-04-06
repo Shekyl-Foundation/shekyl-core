@@ -293,22 +293,51 @@ bool shekyl_kem_decapsulate(
     size_t ct_ml_kem_len,
     uint8_t* ss_out_ptr);
 
-// ─── FCMP++: Bech32m address encoding ───────────────────────────────────────
+// ─── Bech32m address encoding ────────────────────────────────────────────────
 
 // Encode Shekyl Bech32m address. Returns UTF-8 string in ShekylBuffer.
+// network: 0=mainnet, 1=testnet, 2=stagenet.
 ShekylBuffer shekyl_address_encode(
+    uint8_t network,
     const uint8_t* spend_key_ptr,
     const uint8_t* view_key_ptr,
     const uint8_t* ml_kem_ek_ptr,
     size_t ml_kem_ek_len);
 
 // Decode Shekyl Bech32m address.
+// network_out: receives network discriminant (0=mainnet, 1=testnet, 2=stagenet).
 // Writes 32 bytes each to spend_key_out and view_key_out.
-// Returns ML-KEM encap key (1184 bytes) in ShekylBuffer.
+// Returns ML-KEM encap key in ShekylBuffer (1184 bytes, or 0 if classical-only).
 ShekylBuffer shekyl_address_decode(
     const char* encoded_ptr,
+    uint8_t* network_out,
     uint8_t* spend_key_out,
     uint8_t* view_key_out);
+
+// ─── Bech32m blob encoding ──────────────────────────────────────────────────
+
+// Encode arbitrary binary data as Bech32m with the given HRP.
+// Returns UTF-8 encoded Bech32m string in ShekylBuffer, or null on failure.
+ShekylBuffer shekyl_encode_blob(
+    const uint8_t* hrp_ptr,
+    size_t hrp_len,
+    const uint8_t* data_ptr,
+    size_t data_len);
+
+// Decode a Bech32m string into HRP + payload.
+// hrp_out/hrp_out_cap: buffer for decoded HRP (UTF-8, not null-terminated).
+// hrp_len_out: receives actual HRP byte length.
+// data_out/data_out_cap: buffer for decoded payload.
+// data_len_out: receives actual payload byte length.
+// Returns true on success, false if decoding fails or buffers are too small.
+bool shekyl_decode_blob(
+    const char* encoded_ptr,
+    uint8_t* hrp_out,
+    size_t hrp_out_cap,
+    size_t* hrp_len_out,
+    uint8_t* data_out,
+    size_t data_out_cap,
+    size_t* data_len_out);
 
 // ─── FCMP++: Seed derivation ────────────────────────────────────────────────
 

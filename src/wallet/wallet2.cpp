@@ -85,7 +85,6 @@ using namespace epee;
 #include "rapidjson/stringbuffer.h"
 #include "common/json_util.h"
 #include "memwipe.h"
-#include "common/base58.h"
 #include "common/combinator.h"
 #include "common/dns_utils.h"
 #include "common/notify.h"
@@ -109,6 +108,40 @@ using namespace cryptonote;
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "wallet.wallet2"
+
+namespace {
+  std::string bech32m_encode_blob(const char* hrp, const void* data, size_t len)
+  {
+    ShekylBuffer buf = shekyl_encode_blob(
+        reinterpret_cast<const uint8_t*>(hrp), strlen(hrp),
+        reinterpret_cast<const uint8_t*>(data), len);
+    if (!buf.ptr || buf.len == 0) return {};
+    std::string result(reinterpret_cast<const char*>(buf.ptr), buf.len);
+    shekyl_buffer_free(buf.ptr, buf.len);
+    return result;
+  }
+
+  bool bech32m_decode_blob(const std::string &encoded, const char* expected_hrp,
+                           std::string &out_data)
+  {
+    uint8_t hrp_buf[128] = {};
+    size_t hrp_len = 0;
+    uint8_t data_buf[65536] = {};
+    size_t data_len = 0;
+
+    if (!shekyl_decode_blob(encoded.c_str(),
+        hrp_buf, sizeof(hrp_buf), &hrp_len,
+        data_buf, sizeof(data_buf), &data_len))
+      return false;
+
+    std::string hrp(reinterpret_cast<const char*>(hrp_buf), hrp_len);
+    if (hrp != expected_hrp)
+      return false;
+
+    out_data.assign(reinterpret_cast<const char*>(data_buf), data_len);
+    return true;
+  }
+} // anonymous namespace
 
 // used to choose when to stop adding outputs to a tx
 #define APPROXIMATE_INPUT_BYTES 80
@@ -13018,19 +13051,18 @@ std::string wallet2::get_spend_proof(const crypto::hash &txid, const std::string
     crypto::generate_ring_signature(sig_prefix_hash, in_key->k_image, p_output_keys, in_ephemeral.sec, sec_index, sigs.data());
   }
 
-  std::string sig_str = "SpendProofV1";
+  std::string blob;
   for (const std::vector<crypto::signature>& ring_sig : signatures)
     for (const crypto::signature& sig : ring_sig)
-       sig_str += tools::base58::encode(std::string((const char *)&sig, sizeof(crypto::signature)));
-  return sig_str;
+      blob.append(reinterpret_cast<const char*>(&sig), sizeof(crypto::signature));
+  return bech32m_encode_blob("shekylspendproof", blob.data(), blob.size());
 }
 //----------------------------------------------------------------------------------------------------
 bool wallet2::check_spend_proof(const crypto::hash &txid, const std::string &message, const std::string &sig_str)
 {
-  const std::string header = "SpendProofV1";
-  const size_t header_len = header.size();
-  THROW_WALLET_EXCEPTION_IF(sig_str.size() < header_len || sig_str.substr(0, header_len) != header, error::wallet_internal_error,
-    "Signature header check error");
+  std::string decoded_blob;
+  THROW_WALLET_EXCEPTION_IF(!bech32m_decode_blob(sig_str, "shekylspendproof", decoded_blob),
+    error::wallet_internal_error, "Spend proof decoding error -- expected Bech32m with HRP 'shekylspendproof'");
 
   // fetch tx from daemon
   COMMAND_RPC_GET_TRANSACTIONS::request req = AUTO_VAL_INIT(req);
@@ -13056,7 +13088,6 @@ bool wallet2::check_spend_proof(const crypto::hash &txid, const std::string &mes
   crypto::hash tx_hash;
   THROW_WALLET_EXCEPTION_IF(!get_pruned_tx(res.txs[0], tx, tx_hash), error::wallet_internal_error, "failed to get tx from daemon");
 
-  // check signature size
   size_t num_sigs = 0;
   for(size_t i = 0; i < tx.vin.size(); ++i)
   {
@@ -13064,15 +13095,11 @@ bool wallet2::check_spend_proof(const crypto::hash &txid, const std::string &mes
     if (in_key != nullptr)
       num_sigs += in_key->key_offsets.size();
   }
-  std::vector<std::vector<crypto::signature>> signatures = { std::vector<crypto::signature>(1) };
-  const size_t sig_len = tools::base58::encode(std::string((const char *)&signatures[0][0], sizeof(crypto::signature))).size();
-  if( sig_str.size() != header_len + num_sigs * sig_len ) {
-    return false;
-  }
+  THROW_WALLET_EXCEPTION_IF(decoded_blob.size() != num_sigs * sizeof(crypto::signature),
+    error::wallet_internal_error, "Spend proof signature count mismatch");
 
-  // decode base58
-  signatures.clear();
-  size_t offset = header_len;
+  std::vector<std::vector<crypto::signature>> signatures;
+  size_t offset = 0;
   for(size_t i = 0; i < tx.vin.size(); ++i)
   {
     const txin_to_key* const in_key = std::get_if<txin_to_key>(&tx.vin[i]);
@@ -13082,11 +13109,8 @@ bool wallet2::check_spend_proof(const crypto::hash &txid, const std::string &mes
     signatures.back().resize(in_key->key_offsets.size());
     for (size_t j = 0; j < in_key->key_offsets.size(); ++j)
     {
-      std::string sig_decoded;
-      THROW_WALLET_EXCEPTION_IF(!tools::base58::decode(sig_str.substr(offset, sig_len), sig_decoded), error::wallet_internal_error, "Signature decoding error");
-      THROW_WALLET_EXCEPTION_IF(sizeof(crypto::signature) != sig_decoded.size(), error::wallet_internal_error, "Signature decoding error");
-      memcpy(&signatures.back()[j], sig_decoded.data(), sizeof(crypto::signature));
-      offset += sig_len;
+      memcpy(&signatures.back()[j], decoded_blob.data() + offset, sizeof(crypto::signature));
+      offset += sizeof(crypto::signature);
     }
   }
 
@@ -13449,12 +13473,14 @@ std::string wallet2::get_tx_proof(const cryptonote::transaction &tx, const crypt
   check_tx_key_helper(tx, derivation, additional_derivations, address, received);
   THROW_WALLET_EXCEPTION_IF(!received, error::wallet_internal_error, tr("No funds received in this tx."));
 
-  // concatenate all signature strings
+  std::string blob;
   for (size_t i = 0; i < num_sigs; ++i)
-    sig_str +=
-      tools::base58::encode(std::string((const char *)&shared_secret[i], sizeof(crypto::public_key))) +
-      tools::base58::encode(std::string((const char *)&sig[i], sizeof(crypto::signature)));
-  return sig_str;
+  {
+    blob.append(reinterpret_cast<const char*>(&shared_secret[i]), sizeof(crypto::public_key));
+    blob.append(reinterpret_cast<const char*>(&sig[i]), sizeof(crypto::signature));
+  }
+  const char* hrp = sig_str.substr(0, 3) == "Out" ? "shekylouttxproof" : "shekylintxproof";
+  return bech32m_encode_blob(hrp, blob.data(), blob.size());
 }
 
 bool wallet2::check_tx_proof(const crypto::hash &txid, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message, const std::string &sig_str, uint64_t &received, bool &in_pool, uint64_t &confirmations)
@@ -13514,42 +13540,30 @@ bool wallet2::check_tx_proof(const crypto::hash &txid, const cryptonote::account
 
 bool wallet2::check_tx_proof(const cryptonote::transaction &tx, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message, const std::string &sig_str, uint64_t &received) const
 {
-  // InProofV1, InProofV2, OutProofV1, OutProofV2
-  const bool is_out = sig_str.substr(0, 3) == "Out";
-  const std::string header = is_out ? sig_str.substr(0,10) : sig_str.substr(0,9);
-  int version = 2; // InProofV2
-  if (is_out && sig_str.substr(8,2) == "V1") version = 1; // OutProofV1
-  else if (is_out) version = 2; // OutProofV2
-  else if (sig_str.substr(7,2) == "V1") version = 1; // InProofV1
+  std::string decoded_blob;
+  bool is_out = false;
+  if (bech32m_decode_blob(sig_str, "shekylouttxproof", decoded_blob))
+    is_out = true;
+  else if (bech32m_decode_blob(sig_str, "shekylintxproof", decoded_blob))
+    is_out = false;
+  else
+    THROW_WALLET_EXCEPTION(error::wallet_internal_error,
+      "Tx proof decoding error -- expected Bech32m with HRP 'shekylouttxproof' or 'shekylintxproof'");
 
-  const size_t header_len = header.size();
-  THROW_WALLET_EXCEPTION_IF(sig_str.size() < header_len || sig_str.substr(0, header_len) != header, error::wallet_internal_error,
-    "Signature header check error");
+  const size_t entry_size = sizeof(crypto::public_key) + sizeof(crypto::signature);
+  THROW_WALLET_EXCEPTION_IF(decoded_blob.size() == 0 || decoded_blob.size() % entry_size != 0,
+    error::wallet_internal_error, "Tx proof blob size mismatch");
+  const size_t num_sigs = decoded_blob.size() / entry_size;
 
-  // decode base58
-  std::vector<crypto::public_key> shared_secret(1);
-  std::vector<crypto::signature> sig(1);
-  const size_t pk_len = tools::base58::encode(std::string((const char *)&shared_secret[0], sizeof(crypto::public_key))).size();
-  const size_t sig_len = tools::base58::encode(std::string((const char *)&sig[0], sizeof(crypto::signature))).size();
-  const size_t num_sigs = (sig_str.size() - header_len) / (pk_len + sig_len);
-  THROW_WALLET_EXCEPTION_IF(sig_str.size() != header_len + num_sigs * (pk_len + sig_len), error::wallet_internal_error,
-    "Wrong signature size");
-  shared_secret.resize(num_sigs);
-  sig.resize(num_sigs);
+  std::vector<crypto::public_key> shared_secret(num_sigs);
+  std::vector<crypto::signature> sig(num_sigs);
   for (size_t i = 0; i < num_sigs; ++i)
   {
-    std::string pk_decoded;
-    std::string sig_decoded;
-    const size_t offset = header_len + i * (pk_len + sig_len);
-    THROW_WALLET_EXCEPTION_IF(!tools::base58::decode(sig_str.substr(offset, pk_len), pk_decoded), error::wallet_internal_error,
-      "Signature decoding error");
-    THROW_WALLET_EXCEPTION_IF(!tools::base58::decode(sig_str.substr(offset + pk_len, sig_len), sig_decoded), error::wallet_internal_error,
-      "Signature decoding error");
-    THROW_WALLET_EXCEPTION_IF(sizeof(crypto::public_key) != pk_decoded.size() || sizeof(crypto::signature) != sig_decoded.size(), error::wallet_internal_error,
-      "Signature decoding error");
-    memcpy(&shared_secret[i], pk_decoded.data(), sizeof(crypto::public_key));
-    memcpy(&sig[i], sig_decoded.data(), sizeof(crypto::signature));
+    const size_t offset = i * entry_size;
+    memcpy(&shared_secret[i], decoded_blob.data() + offset, sizeof(crypto::public_key));
+    memcpy(&sig[i], decoded_blob.data() + offset + sizeof(crypto::public_key), sizeof(crypto::signature));
   }
+  int version = 2;
 
   crypto::public_key tx_pub_key = get_tx_pub_key_from_extra(tx);
   THROW_WALLET_EXCEPTION_IF(tx_pub_key == null_pkey, error::wallet_internal_error, "Tx pubkey was not found");
@@ -13728,7 +13742,8 @@ std::string wallet2::get_reserve_proof(const std::optional<std::pair<uint32_t, u
   binary_archive<true> ar(oss);
   THROW_WALLET_EXCEPTION_IF(!::serialization::serialize(ar, proofs), error::wallet_internal_error, "Failed to serialize proof");
   THROW_WALLET_EXCEPTION_IF(!::serialization::serialize(ar, subaddr_spendkeys), error::wallet_internal_error, "Failed to serialize proof");
-  return "ReserveProofV2" + tools::base58::encode(oss.str());
+  const std::string serialized = oss.str();
+  return bech32m_encode_blob("shekylreserveproof", serialized.data(), serialized.size());
 }
 
 bool wallet2::check_reserve_proof(const cryptonote::account_public_address &address, const std::string &message, const std::string &sig_str, uint64_t &total, uint64_t &spent)
@@ -13737,19 +13752,10 @@ bool wallet2::check_reserve_proof(const cryptonote::account_public_address &addr
   THROW_WALLET_EXCEPTION_IF(!check_connection(&rpc_version), error::wallet_internal_error, "Failed to connect to daemon: " + get_daemon_address());
   THROW_WALLET_EXCEPTION_IF(rpc_version < MAKE_CORE_RPC_VERSION(1, 0), error::wallet_internal_error, "Daemon RPC version is too old");
 
-  static constexpr char header_v1[] = "ReserveProofV1";
-  static constexpr char header_v2[] = "ReserveProofV2"; // assumes same length as header_v1
-  THROW_WALLET_EXCEPTION_IF(!boost::string_ref{sig_str}.starts_with(header_v1) && !boost::string_ref{sig_str}.starts_with(header_v2), error::wallet_internal_error,
-    "Signature header check error");
-  int version = 2; // assume newest version
-  if (boost::string_ref{sig_str}.starts_with(header_v1))
-      version = 1;
-  else if (boost::string_ref{sig_str}.starts_with(header_v2))
-      version = 2;
-
   std::string sig_decoded;
-  THROW_WALLET_EXCEPTION_IF(!tools::base58::decode(sig_str.substr(std::strlen(header_v1)), sig_decoded), error::wallet_internal_error,
-    "Signature decoding error");
+  THROW_WALLET_EXCEPTION_IF(!bech32m_decode_blob(sig_str, "shekylreserveproof", sig_decoded),
+    error::wallet_internal_error, "Reserve proof decoding error -- expected Bech32m with HRP 'shekylreserveproof'");
+  int version = 2;
 
   bool loaded = false;
   std::vector<reserve_proof_entry> proofs;
@@ -14138,30 +14144,19 @@ std::string wallet2::sign(const std::string &data, message_signature_type_t sign
     hash = get_message_hash(data,pkey_spend,pkey_view,mode);
   }
   crypto::generate_signature(hash, pkey, skey, signature);
-  return std::string("SigV2") + tools::base58::encode(std::string((const char *)&signature, sizeof(signature)));
+  return bech32m_encode_blob("shekylsig", reinterpret_cast<const char*>(&signature), sizeof(signature));
 }
 
 tools::wallet2::message_signature_result_t wallet2::verify(const std::string &data, const cryptonote::account_public_address &address, const std::string &signature) const
 {
-  static const size_t v1_header_len = strlen("SigV1");
-  static const size_t v2_header_len = strlen("SigV2");
-  const bool v1 = signature.size() >= v1_header_len && signature.substr(0, v1_header_len) == "SigV1";
-  const bool v2 = signature.size() >= v2_header_len && signature.substr(0, v2_header_len) == "SigV2";
-  if (!v1 && !v2)
-  {
-    LOG_PRINT_L0("Signature header check error");
-    return {};
-  }
-  crypto::hash hash;
-  if (v1)
-  {
-    crypto::cn_fast_hash(data.data(), data.size(), hash);
-  }
   std::string decoded;
-  if (!tools::base58::decode(signature.substr(v1 ? v1_header_len : v2_header_len), decoded)) {
-    LOG_PRINT_L0("Signature decoding error");
+  if (!bech32m_decode_blob(signature, "shekylsig", decoded))
+  {
+    LOG_PRINT_L0("Message signature decoding error -- expected Bech32m with HRP 'shekylsig'");
     return {};
   }
+  const bool v2 = true;
+  crypto::hash hash;
   crypto::signature s;
   if (sizeof(s) != decoded.size()) {
     LOG_PRINT_L0("Signature decoding error");
@@ -14173,12 +14168,11 @@ tools::wallet2::message_signature_result_t wallet2::verify(const std::string &da
   if (v2)
       hash = get_message_hash(data,address.m_spend_public_key,address.m_view_public_key,(uint8_t) 0);
   if (crypto::check_signature(hash, address.m_spend_public_key, s))
-    return {true, v1 ? 1u : 2u, !v2, sign_with_spend_key };
+    return {true, 2u, false, sign_with_spend_key };
 
-  if (v2)
-      hash = get_message_hash(data,address.m_spend_public_key,address.m_view_public_key,(uint8_t) 1);
+  hash = get_message_hash(data,address.m_spend_public_key,address.m_view_public_key,(uint8_t) 1);
   if (crypto::check_signature(hash, address.m_view_public_key, s))
-    return {true, v1 ? 1u : 2u, !v2, sign_with_view_key };
+    return {true, 2u, false, sign_with_view_key };
 
   // Both modes failed
   return {};
@@ -14186,18 +14180,13 @@ tools::wallet2::message_signature_result_t wallet2::verify(const std::string &da
 
 bool wallet2::verify_with_public_key(const std::string &data, const crypto::public_key &public_key, const std::string &signature) const
 {
-  static const std::string SIG_PK_MAGIC = "SigMultisigPkV1";
-  if (signature.size() < SIG_PK_MAGIC.size() || signature.substr(0, SIG_PK_MAGIC.size()) != SIG_PK_MAGIC) {
-    MERROR("Signature header check error");
+  std::string decoded;
+  if (!bech32m_decode_blob(signature, "shekylmultisig", decoded)) {
+    MERROR("Multisig signature decoding error -- expected Bech32m with HRP 'shekylmultisig'");
     return false;
   }
   crypto::hash hash;
   crypto::cn_fast_hash(data.data(), data.size(), hash);
-  std::string decoded;
-  if (!tools::base58::decode(signature.substr(SIG_PK_MAGIC.size()), decoded)) {
-    MERROR("Signature decoding error");
-    return false;
-  }
   crypto::signature s;
   if (sizeof(s) != decoded.size()) {
     MERROR("Signature decoding error");

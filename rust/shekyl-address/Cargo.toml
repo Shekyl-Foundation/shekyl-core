@@ -1,0 +1,21 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-address"
+description = "Network-aware Bech32m address encoding for Shekyl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+shekyl-encoding = { path = "../shekyl-encoding" }
+bech32 = "0.11"
+thiserror.workspace = true
+serde = { workspace = true, optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]

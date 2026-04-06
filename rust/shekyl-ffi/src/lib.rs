@@ -1575,16 +1575,18 @@ pub extern "C" fn shekyl_kem_decapsulate(
     }
 }
 
-// ─── FCMP++: Bech32m Address Encoding ───────────────────────────────────────
+// ─── Bech32m Address Encoding ────────────────────────────────────────────────
 
 /// Encode a Shekyl Bech32m address from raw key material.
 ///
+/// `network`: 0=mainnet, 1=testnet, 2=stagenet.
 /// `spend_key_ptr`: 32 bytes. `view_key_ptr`: 32 bytes.
 /// `ml_kem_ek_ptr`: 1184 bytes (ML-KEM-768 encapsulation key).
 ///
 /// Returns a ShekylBuffer containing the UTF-8 encoded address string.
 #[no_mangle]
 pub extern "C" fn shekyl_address_encode(
+    network: u8,
     spend_key_ptr: *const u8,
     view_key_ptr: *const u8,
     ml_kem_ek_ptr: *const u8,
@@ -1593,6 +1595,10 @@ pub extern "C" fn shekyl_address_encode(
     if spend_key_ptr.is_null() || view_key_ptr.is_null() || ml_kem_ek_ptr.is_null() {
         return ShekylBuffer::null();
     }
+
+    let Some(net) = shekyl_address::Network::from_u8(network) else {
+        return ShekylBuffer::null();
+    };
 
     let spend_key: [u8; 32] = unsafe {
         let mut buf = [0u8; 32];
@@ -1608,12 +1614,12 @@ pub extern "C" fn shekyl_address_encode(
         return ShekylBuffer::null();
     };
 
-    let addr = shekyl_crypto_pq::address::ShekylAddress {
-        version: shekyl_crypto_pq::address::ADDRESS_VERSION_V1,
+    let addr = shekyl_address::ShekylAddress::new(
+        net,
         spend_key,
         view_key,
-        ml_kem_encap_key: ml_kem_ek.to_vec(),
-    };
+        ml_kem_ek.to_vec(),
+    );
 
     match addr.encode() {
         Ok(s) => ShekylBuffer::from_vec(s.into_bytes()),
@@ -1624,15 +1630,19 @@ pub extern "C" fn shekyl_address_encode(
 /// Decode a Bech32m-encoded Shekyl address.
 ///
 /// `encoded_ptr`: null-terminated UTF-8 string.
+/// `network_out`: receives network discriminant (0=mainnet, 1=testnet, 2=stagenet).
 /// Writes: 32 bytes to `spend_key_out`, 32 bytes to `view_key_out`.
-/// Returns ML-KEM encapsulation key in a ShekylBuffer (1184 bytes).
+/// Returns ML-KEM encapsulation key in a ShekylBuffer (1184 bytes, or 0 if classical-only).
 #[no_mangle]
 pub extern "C" fn shekyl_address_decode(
     encoded_ptr: *const c_char,
+    network_out: *mut u8,
     spend_key_out: *mut u8,
     view_key_out: *mut u8,
 ) -> ShekylBuffer {
-    if encoded_ptr.is_null() || spend_key_out.is_null() || view_key_out.is_null() {
+    if encoded_ptr.is_null() || network_out.is_null()
+        || spend_key_out.is_null() || view_key_out.is_null()
+    {
         return ShekylBuffer::null();
     }
 
@@ -1642,9 +1652,10 @@ pub extern "C" fn shekyl_address_decode(
         Err(_) => return ShekylBuffer::null(),
     };
 
-    match shekyl_crypto_pq::address::ShekylAddress::decode(encoded) {
+    match shekyl_address::ShekylAddress::decode(encoded) {
         Ok(addr) => {
             unsafe {
+                *network_out = addr.network.as_u8();
                 std::ptr::copy_nonoverlapping(addr.spend_key.as_ptr(), spend_key_out, 32);
                 std::ptr::copy_nonoverlapping(addr.view_key.as_ptr(), view_key_out, 32);
             }
@@ -1652,6 +1663,89 @@ pub extern "C" fn shekyl_address_decode(
         }
         Err(_) => ShekylBuffer::null(),
     }
+}
+
+// ─── Bech32m Blob Encoding ──────────────────────────────────────────────────
+
+/// Encode arbitrary binary data as a Bech32m string with the given HRP.
+///
+/// `hrp_ptr` / `hrp_len`: UTF-8 HRP string (not null-terminated).
+/// `data_ptr` / `data_len`: raw binary payload.
+///
+/// Returns a ShekylBuffer containing the UTF-8 encoded Bech32m string,
+/// or a null buffer on failure.
+#[no_mangle]
+pub extern "C" fn shekyl_encode_blob(
+    hrp_ptr: *const u8,
+    hrp_len: usize,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> ShekylBuffer {
+    let Some(hrp_bytes) = slice_from_ptr(hrp_ptr, hrp_len) else {
+        return ShekylBuffer::null();
+    };
+    let hrp = match std::str::from_utf8(hrp_bytes) {
+        Ok(s) => s,
+        Err(_) => return ShekylBuffer::null(),
+    };
+    let Some(data) = slice_from_ptr(data_ptr, data_len) else {
+        return ShekylBuffer::null();
+    };
+
+    match shekyl_encoding::encode_blob(hrp, data) {
+        Ok(s) => ShekylBuffer::from_vec(s.into_bytes()),
+        Err(_) => ShekylBuffer::null(),
+    }
+}
+
+/// Decode a Bech32m string, writing the HRP and payload to caller-owned buffers.
+///
+/// `encoded_ptr`: null-terminated UTF-8 Bech32m string.
+/// `hrp_out` / `hrp_out_cap`: buffer for the decoded HRP (UTF-8, not null-terminated).
+/// `hrp_len_out`: receives the actual HRP byte length.
+/// `data_out` / `data_out_cap`: buffer for the decoded payload.
+/// `data_len_out`: receives the actual payload byte length.
+///
+/// Returns true on success. If a buffer is too small, writes nothing and returns false.
+#[no_mangle]
+pub extern "C" fn shekyl_decode_blob(
+    encoded_ptr: *const c_char,
+    hrp_out: *mut u8,
+    hrp_out_cap: usize,
+    hrp_len_out: *mut usize,
+    data_out: *mut u8,
+    data_out_cap: usize,
+    data_len_out: *mut usize,
+) -> bool {
+    if encoded_ptr.is_null() || hrp_out.is_null() || hrp_len_out.is_null()
+        || data_out.is_null() || data_len_out.is_null()
+    {
+        return false;
+    }
+
+    let c_str = unsafe { std::ffi::CStr::from_ptr(encoded_ptr) };
+    let encoded = match c_str.to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    let (hrp, data) = match shekyl_encoding::decode_blob(encoded) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let hrp_bytes = hrp.as_bytes();
+    if hrp_bytes.len() > hrp_out_cap || data.len() > data_out_cap {
+        return false;
+    }
+
+    unsafe {
+        std::ptr::copy_nonoverlapping(hrp_bytes.as_ptr(), hrp_out, hrp_bytes.len());
+        *hrp_len_out = hrp_bytes.len();
+        std::ptr::copy_nonoverlapping(data.as_ptr(), data_out, data.len());
+        *data_len_out = data.len();
+    }
+    true
 }
 
 // ─── FCMP++: Seed Derivation ────────────────────────────────────────────────

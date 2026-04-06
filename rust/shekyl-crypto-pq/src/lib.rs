@@ -11,8 +11,8 @@
 pub mod signature;
 pub mod multisig;
 pub mod kem;
-pub mod address;
 pub mod derivation;
 pub mod error;
 
+pub use shekyl_address as address;
 pub use error::CryptoError;

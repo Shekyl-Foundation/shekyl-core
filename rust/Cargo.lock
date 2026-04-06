@@ -1889,6 +1889,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-address"
+version = "2.0.0"
+dependencies = [
+ "bech32",
+ "serde",
+ "shekyl-encoding",
+ "thiserror",
+]
+
+[[package]]
 name = "shekyl-consensus"
 version = "2.0.0"
 dependencies = [
@@ -1907,7 +1917,6 @@ dependencies = [
 name = "shekyl-crypto-pq"
 version = "2.0.0"
 dependencies = [
- "bech32",
  "blake2",
  "criterion",
  "ed25519-dalek",
@@ -1919,6 +1928,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "shekyl-address",
  "shekyl-crypto-hash",
  "shekyl-fcmp",
  "thiserror",
@@ -1955,6 +1965,14 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-economics",
+]
+
+[[package]]
+name = "shekyl-encoding"
+version = "2.0.0"
+dependencies = [
+ "bech32",
+ "thiserror",
 ]
 
 [[package]]
@@ -2012,10 +2030,12 @@ dependencies = [
  "dalek-ff-group 0.5.0",
  "libc",
  "rcgen",
+ "shekyl-address",
  "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-economics",
+ "shekyl-encoding",
  "shekyl-fcmp",
  "shekyl-staking",
  "zeroize",

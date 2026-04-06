@@ -10,6 +10,8 @@ members = [
     "shekyl-economics-sim",
     "shekyl-wallet-rpc",
     "shekyl-daemon-rpc",
+    "shekyl-encoding",
+    "shekyl-address",
 ]
 resolver = "2"
 
