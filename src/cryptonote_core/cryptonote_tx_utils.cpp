@@ -386,7 +386,6 @@ namespace cryptonote
       const auto& out_key = reinterpret_cast<const crypto::public_key&>(src_entr.outputs[src_entr.real_output].second.dest);
       if(!generate_key_image_helper(sender_account_keys, subaddresses, out_key, src_entr.real_out_tx_key, src_entr.real_out_additional_tx_keys, src_entr.real_output_in_tx_index, in_ephemeral,img, hwdev))
       {
-        std::cerr << "[construct_tx_with_tx_key] generate_key_image_helper failed idx=" << idx << std::endl;
         LOG_ERROR("Key image generation failed!");
         return false;
       }
@@ -394,7 +393,6 @@ namespace cryptonote
       //check that derivated key is equal with real output key
       if(!(in_ephemeral.pub == src_entr.outputs[src_entr.real_output].second.dest) )
       {
-        std::cerr << "[construct_tx_with_tx_key] derived pubkey mismatch idx=" << idx << std::endl;
         LOG_ERROR("derived public key mismatch with output public key at index " << idx << ", real out " << src_entr.real_output << "! "<< ENDL << "derived_key:"
           << string_tools::pod_to_hex(in_ephemeral.pub) << ENDL << "real output_public_key:"
           << string_tools::pod_to_hex(src_entr.outputs[src_entr.real_output].second.dest) );
@@ -527,11 +525,6 @@ namespace cryptonote
         ShekylBuffer ct_buf = {};
         uint8_t ss[64];
         bool ok = shekyl_kem_encapsulate(pk_x25519, pk_ml_kem, pk_ml_kem_len, &ct_buf, ss);
-        if (!(ok && ct_buf.ptr && ct_buf.len == HYBRID_KEM_CT_BYTES))
-        {
-          std::cerr << "[construct_tx_with_tx_key] KEM encaps failed out=" << i << " ok=" << ok
-                    << " ct_len=" << (ct_buf.ptr ? ct_buf.len : 0) << std::endl;
-        }
         CHECK_AND_ASSERT_MES(ok && ct_buf.ptr && ct_buf.len == HYBRID_KEM_CT_BYTES,
           false, "KEM encapsulation failed for output " << i);
 
@@ -573,21 +566,13 @@ namespace cryptonote
     }
 
     if (!sort_tx_extra(tx.extra, tx.extra))
-    {
-      std::cerr << "[construct_tx_with_tx_key] sort_tx_extra failed, extra bytes=" << tx.extra.size() << std::endl;
       return false;
-    }
 
-    if (!(tx.extra.size() <= MAX_TX_EXTRA_SIZE))
-    {
-      std::cerr << "[construct_tx_with_tx_key] TX extra too large: " << tx.extra.size() << " max=" << MAX_TX_EXTRA_SIZE << std::endl;
-    }
     CHECK_AND_ASSERT_MES(tx.extra.size() <= MAX_TX_EXTRA_SIZE, false, "TX extra size (" << tx.extra.size() << ") is greater than max allowed (" << MAX_TX_EXTRA_SIZE << ")");
 
     //check money
     if(summary_outs_money > summary_inputs_money )
     {
-      std::cerr << "[construct_tx_with_tx_key] money: in=" << summary_inputs_money << " out=" << summary_outs_money << std::endl;
       LOG_ERROR("Transaction inputs money ("<< summary_inputs_money << ") less than outputs money (" << summary_outs_money << ")");
       return false;
     }
@@ -645,11 +630,10 @@ namespace cryptonote
       crypto::hash tx_prefix_hash;
       get_transaction_prefix_hash(tx, tx_prefix_hash, hwdev);
       rct::ctkeyV outSk;
-      // Stub rctSig: the wallet overwrites this with genRctFcmpPlusPlus()
+      // Serializable rctSig stub (dummy BP+); the wallet overwrites via genRctFcmpPlusPlus()
       // after constructing tree paths and per-output PQC material.
-      tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
-      tx.rct_signatures.message = rct::hash2rct(tx_prefix_hash);
-      tx.rct_signatures.txnFee = amount_in - amount_out;
+      rct::fill_construct_tx_rct_stub(tx.rct_signatures, rct::hash2rct(tx_prefix_hash), amount_in - amount_out,
+          crypto::null_hash, inamounts, outamounts, destinations, hwdev);
       memwipe(inSk.data(), inSk.size() * sizeof(rct::ctkey));
 
       CHECK_AND_ASSERT_MES(tx.vout.size() == outSk.size() || outSk.empty(), false, "outSk size does not match vout");
@@ -670,9 +654,9 @@ namespace cryptonote
       }
       else
       {
-        // Leave pqc_auths empty — the wallet populates them with per-output
-        // derived ML-DSA-65 keys after the FCMP++ proof is attached.
-        tx.pqc_auths.clear();
+        // Binary serialization requires |pqc_auths| == |vin| for v3 spends. The wallet
+        // replaces these stubs with per-input ML-DSA-65 material after genRctFcmpPlusPlus().
+        tx.pqc_auths.assign(tx.vin.size(), pqc_authentication{});
       }
     }
 

@@ -47,12 +47,13 @@ using namespace std;
 
 #define CHECK_AND_ASSERT_MES_L1(expr, ret, message) {if(!(expr)) {MCERROR("verify", message); return ret;}}
 
+namespace rct {
 namespace
 {
-    rct::BulletproofPlus make_dummy_bulletproof_plus(const std::vector<uint64_t> &outamounts, rct::keyV &C, rct::keyV &masks)
+    BulletproofPlus make_dummy_bulletproof_plus(const std::vector<uint64_t> &outamounts, keyV &C, keyV &masks)
     {
         const size_t n_outs = outamounts.size();
-        const rct::key I = rct::identity();
+        const key I = identity();
         size_t nrl = 0;
         while ((1u << nrl) < n_outs)
           ++nrl;
@@ -63,8 +64,8 @@ namespace
         for (size_t i = 0; i < n_outs; ++i)
         {
             masks[i] = I;
-            rct::key sv8, sv;
-            sv = rct::zero();
+            key sv8, sv;
+            sv = zero();
             sv.bytes[0] = outamounts[i] & 255;
             sv.bytes[1] = (outamounts[i] >> 8) & 255;
             sv.bytes[2] = (outamounts[i] >> 16) & 255;
@@ -73,15 +74,68 @@ namespace
             sv.bytes[5] = (outamounts[i] >> 40) & 255;
             sv.bytes[6] = (outamounts[i] >> 48) & 255;
             sv.bytes[7] = (outamounts[i] >> 56) & 255;
-            sc_mul(sv8.bytes, sv.bytes, rct::INV_EIGHT.bytes);
-            rct::addKeys2(C[i], rct::INV_EIGHT, sv8, rct::H);
+            sc_mul(sv8.bytes, sv.bytes, INV_EIGHT.bytes);
+            addKeys2(C[i], INV_EIGHT, sv8, H);
         }
 
-        return rct::BulletproofPlus{rct::keyV(n_outs, I), I, I, I, I, I, I, rct::keyV(nrl, I), rct::keyV(nrl, I)};
+        return BulletproofPlus{keyV(n_outs, I), I, I, I, I, I, I, keyV(nrl, I), keyV(nrl, I)};
     }
 }
 
-namespace rct {
+    void fill_construct_tx_rct_stub(rctSig &rv, const key &message, xmr_amount txnFee,
+        const crypto::hash &referenceBlock, const std::vector<xmr_amount> &inamounts,
+        const std::vector<xmr_amount> &outamounts, const keyV &destinations, hw::device &hwdev)
+    {
+        CHECK_AND_ASSERT_THROW_MES(!inamounts.empty(), "fill_construct_tx_rct_stub: no inputs");
+        const size_t n_out = outamounts.size();
+        const size_t n_in = inamounts.size();
+        CHECK_AND_ASSERT_THROW_MES(destinations.size() == n_out, "fill_construct_tx_rct_stub: destinations/outamounts mismatch");
+
+        rv.type = RCTTypeFcmpPlusPlusPqc;
+        rv.message = message;
+        rv.txnFee = txnFee;
+        rv.referenceBlock = referenceBlock;
+        rv.p.curve_trees_tree_depth = 0;
+        rv.p.fcmp_pp_proof.clear();
+
+        rv.outPk.resize(n_out);
+        rv.ecdhInfo.resize(n_out);
+        for (size_t i = 0; i < n_out; ++i)
+            rv.outPk[i].dest = copy(destinations[i]);
+
+        keyV C, masks;
+        rv.p.bulletproofs_plus.clear();
+        rv.p.bulletproofs_plus.push_back(make_dummy_bulletproof_plus(outamounts, C, masks));
+        for (size_t i = 0; i < n_out; ++i)
+            rv.outPk[i].mask = scalarmult8(C[i]);
+
+        keyV amount_keys(n_out);
+        for (size_t i = 0; i < n_out; ++i)
+            amount_keys[i] = skGen();
+
+        key sumout = zero();
+        for (size_t i = 0; i < n_out; ++i)
+        {
+            sc_add(sumout.bytes, masks[i].bytes, sumout.bytes);
+            rv.ecdhInfo[i].mask = copy(masks[i]);
+            rv.ecdhInfo[i].amount = d2h(outamounts[i]);
+            hwdev.ecdhEncode(rv.ecdhInfo[i], amount_keys[i], true);
+        }
+
+        rv.p.pseudoOuts.resize(n_in);
+        keyV a(n_in);
+        key sumpouts = zero();
+        for (size_t i = 0; i < n_in - 1; i++)
+        {
+            skGen(a[i]);
+            sc_add(sumpouts.bytes, a[i].bytes, sumpouts.bytes);
+            genC(rv.p.pseudoOuts[i], a[i], inamounts[i]);
+        }
+        const size_t last = n_in - 1;
+        sc_sub(a[last].bytes, sumout.bytes, sumpouts.bytes);
+        genC(rv.p.pseudoOuts[last], a[last], inamounts[last]);
+    }
+
     BulletproofPlus proveRangeBulletproofPlus(keyV &C, keyV &masks, const std::vector<uint64_t> &amounts, epee::span<const key> sk, hw::device &hwdev)
     {
         CHECK_AND_ASSERT_THROW_MES(amounts.size() == sk.size(), "Invalid amounts/sk sizes");

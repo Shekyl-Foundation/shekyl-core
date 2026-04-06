@@ -219,10 +219,10 @@ static_assert(FCMP_REFERENCE_BLOCK_MAX_AGE > FCMP_REFERENCE_BLOCK_MIN_AGE,
 
 #define DNS_BLOCKLIST_LIFETIME (86400 * 8)
 
-//The limit is enough for the mandatory transaction content with 16 outputs (547 bytes),
-//a custom tag (1 byte) and up to 32 bytes of custom data for each recipient.
-// (1+32) + (1+1+16*32) + (1+16*32) = 1060
-#define MAX_TX_EXTRA_SIZE                       1060
+// Legacy Monero-era cap was 1060 bytes. FCMP++ adds per-output tx_extra (tags 0x06/0x07):
+// hybrid KEM ciphertext (~1120 B) + PQC leaf hash (32 B) each, plus pubkey/nonce/padding.
+// Worst case BULLETPROOF_PLUS_MAX_OUTPUTS (16) needs on the order of 20 KiB; 24 KiB leaves headroom.
+#define MAX_TX_EXTRA_SIZE                       24576
 
 // New constants are intended to go here
 namespace config

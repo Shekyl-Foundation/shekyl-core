@@ -81,6 +81,11 @@ namespace rct {
                                const std::vector<std::vector<uint8_t>> &tree_paths,
                                const std::vector<std::vector<fcmp_chunk_entry>> &leaf_chunk_entries,
                                const std::vector<key> &pqc_pk_hashes, hw::device &hwdev);
+
+    /** Dummy BP+, pseudo-outs, and ECDH so construct_tx can serialize/hash; wallet replaces via genRctFcmpPlusPlus. */
+    void fill_construct_tx_rct_stub(rctSig &rv, const key &message, xmr_amount txnFee,
+        const crypto::hash &referenceBlock, const std::vector<xmr_amount> &inamounts,
+        const std::vector<xmr_amount> &outamounts, const keyV &destinations, hw::device &hwdev);
     bool verRctSemanticsSimple(const rctSig & rv);
     bool verRctSemanticsSimple(const std::vector<const rctSig*> & rv);
     xmr_amount decodeRctSimple(const rctSig & rv, const key & sk, unsigned int i, key & mask, hw::device &hwdev);
