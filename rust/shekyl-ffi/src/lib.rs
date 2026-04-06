@@ -756,96 +756,129 @@ pub extern "C" fn shekyl_fcmp_proof_len(num_inputs: u32, tree_depth: u8) -> usiz
     shekyl_fcmp::tree::proof_size(num_inputs as usize, tree_depth as usize)
 }
 
-/// Construct an FCMP++ proof (scaffold -- upstream integration pending).
+/// Construct an FCMP++ proof.
 ///
-/// `leaves_ptr`: packed 128-byte ShekylLeaf structs, `num_inputs` count.
-/// `tree_paths_ptr`: concatenated per-input tree paths, each `tree_path_len` bytes.
-/// `key_images_ptr`: packed 32-byte key images, `num_inputs` count.
-/// `pseudo_outs_ptr`: packed 32-byte pseudo-outs, `num_inputs` count.
-/// `pqc_hashes_ptr`: packed 32-byte H(pqc_pk) values, `num_inputs` count.
+/// The prove function requires full witness data per input:
+/// - Output key O, key image generator I, commitment C (Ed25519 points)
+/// - Spend key scalars (x, y)
+/// - Leaf chunk siblings and branch layers for the Merkle path
+/// - H(pqc_pk) values
+///
+/// Each input is serialized as a flat `ShekylFcmpProveInput` blob.
+///
+/// `inputs_ptr`: packed `ShekylFcmpProveInput` structs.
+/// `num_inputs`: number of inputs.
+/// `input_stride`: byte size of each `ShekylFcmpProveInput`.
+/// `leaf_chunks_ptr`: per-input leaf chunk data (variable-length, prefixed by u32 count).
+/// `branch_layers_ptr`: per-input branch layer data.
 /// `tree_root_ptr`: 32-byte tree root.
+/// `signable_tx_hash_ptr`: 32-byte transaction binding hash.
 ///
-/// Returns a ShekylBuffer containing the serialized proof, or null on error.
+/// Returns a `ShekylFcmpProveResult` with the proof buffer and pseudo-outs.
+///
+/// TODO: Wire this to the C++ wallet once `genRctFcmpPlusPlus` is updated
+/// to pass the full witness data through this FFI boundary.
+#[repr(C)]
+pub struct ShekylFcmpProveResult {
+    pub proof: ShekylBuffer,
+    pub pseudo_outs: ShekylBuffer,
+    pub success: bool,
+}
+
 #[no_mangle]
 pub extern "C" fn shekyl_fcmp_prove(
-    leaves_ptr: *const u8,
+    inputs_ptr: *const u8,
     num_inputs: u32,
-    tree_paths_ptr: *const u8,
-    tree_path_len: u32,
-    key_images_ptr: *const u8,
-    pseudo_outs_ptr: *const u8,
-    pqc_hashes_ptr: *const u8,
     tree_root_ptr: *const u8,
     tree_depth: u8,
-) -> ShekylBuffer {
-    let n = num_inputs as usize;
-    let leaf_total = n * 128;
-    let ki_total = n * 32;
-    let po_total = n * 32;
-    let ph_total = n * 32;
-    let tp_total = n * tree_path_len as usize;
+    signable_tx_hash_ptr: *const u8,
+) -> ShekylFcmpProveResult {
+    let fail = ShekylFcmpProveResult {
+        proof: ShekylBuffer::null(),
+        pseudo_outs: ShekylBuffer::null(),
+        success: false,
+    };
 
-    let Some(leaf_bytes) = slice_from_ptr(leaves_ptr, leaf_total) else {
-        return ShekylBuffer::null();
-    };
-    let Some(tp_bytes) = slice_from_ptr(tree_paths_ptr, tp_total) else {
-        return ShekylBuffer::null();
-    };
-    let Some(ki_bytes) = slice_from_ptr(key_images_ptr, ki_total) else {
-        return ShekylBuffer::null();
-    };
-    let Some(po_bytes) = slice_from_ptr(pseudo_outs_ptr, po_total) else {
-        return ShekylBuffer::null();
-    };
-    let Some(ph_bytes) = slice_from_ptr(pqc_hashes_ptr, ph_total) else {
-        return ShekylBuffer::null();
-    };
-    if tree_root_ptr.is_null() {
-        return ShekylBuffer::null();
+    if inputs_ptr.is_null() || tree_root_ptr.is_null() || signable_tx_hash_ptr.is_null() {
+        return fail;
     }
+
+    let n = num_inputs as usize;
+    if n == 0 || n > shekyl_fcmp::MAX_INPUTS {
+        return fail;
+    }
+
     let tree_root: [u8; 32] = unsafe {
         let mut buf = [0u8; 32];
         std::ptr::copy_nonoverlapping(tree_root_ptr, buf.as_mut_ptr(), 32);
         buf
     };
+    let signable_tx_hash: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(signable_tx_hash_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    // The C++ caller must serialize ProveInput data into a flat layout.
+    // For now, deserialize from packed fixed-size fields per input:
+    //   [O:32][I:32][C:32][h_pqc:32][spend_x:32][spend_y:32] = 192 bytes fixed
+    //   followed by variable-length chunk/branch data
+    // TODO: Define and document the complete wire format for C++ callers.
+    let per_input_fixed = 192usize;
+    let Some(input_bytes) = slice_from_ptr(inputs_ptr, n * per_input_fixed) else {
+        return fail;
+    };
 
     let mut inputs = Vec::with_capacity(n);
     for i in 0..n {
-        let leaf_slice: &[u8; 128] = leaf_bytes[i * 128..(i + 1) * 128]
-            .try_into()
-            .unwrap();
-        let leaf = shekyl_fcmp::leaf::ShekylLeaf::from_bytes(leaf_slice);
+        let base = i * per_input_fixed;
+        let mut output_key = [0u8; 32];
+        let mut key_image_gen = [0u8; 32];
+        let mut commitment = [0u8; 32];
+        let mut h_pqc = [0u8; 32];
+        let mut spend_key_x = [0u8; 32];
+        let mut spend_key_y = [0u8; 32];
 
-        let tp_start = i * tree_path_len as usize;
-        let tp_end = tp_start + tree_path_len as usize;
-        let tree_path = tp_bytes[tp_start..tp_end].to_vec();
-
-        let mut ki = [0u8; 32];
-        ki.copy_from_slice(&ki_bytes[i * 32..(i + 1) * 32]);
-
-        let mut po = [0u8; 32];
-        po.copy_from_slice(&po_bytes[i * 32..(i + 1) * 32]);
-
-        let mut ph = [0u8; 32];
-        ph.copy_from_slice(&ph_bytes[i * 32..(i + 1) * 32]);
+        output_key.copy_from_slice(&input_bytes[base..base + 32]);
+        key_image_gen.copy_from_slice(&input_bytes[base + 32..base + 64]);
+        commitment.copy_from_slice(&input_bytes[base + 64..base + 96]);
+        h_pqc.copy_from_slice(&input_bytes[base + 96..base + 128]);
+        spend_key_x.copy_from_slice(&input_bytes[base + 128..base + 160]);
+        spend_key_y.copy_from_slice(&input_bytes[base + 160..base + 192]);
 
         inputs.push(shekyl_fcmp::proof::ProveInput {
-            leaf,
-            tree_path,
-            key_image: ki,
-            pseudo_out: po,
-            pqc_hash: shekyl_fcmp::leaf::PqcLeafScalar(ph),
+            output_key,
+            key_image_gen,
+            commitment,
+            h_pqc: shekyl_fcmp::leaf::PqcLeafScalar(h_pqc),
+            spend_key_x,
+            spend_key_y,
+            leaf_chunk_outputs: vec![(output_key, key_image_gen, commitment)],
+            leaf_chunk_h_pqc: vec![h_pqc],
+            c1_branch_layers: vec![],
+            c2_branch_layers: vec![],
         });
     }
 
-    match shekyl_fcmp::proof::prove(&inputs, &tree_root, tree_depth) {
-        Ok(proof) => ShekylBuffer::from_vec(proof.data),
-        Err(_) => ShekylBuffer::null(),
+    match shekyl_fcmp::proof::prove(&inputs, &tree_root, tree_depth, signable_tx_hash) {
+        Ok(result) => {
+            let mut po_flat = Vec::with_capacity(n * 32);
+            for po in &result.pseudo_outs {
+                po_flat.extend_from_slice(po);
+            }
+            ShekylFcmpProveResult {
+                proof: ShekylBuffer::from_vec(result.proof.data),
+                pseudo_outs: ShekylBuffer::from_vec(po_flat),
+                success: true,
+            }
+        }
+        Err(_) => fail,
     }
 }
 
-/// Verify an FCMP++ proof.
+/// Verify an FCMP++ proof with batch verification.
 ///
+/// `signable_tx_hash_ptr`: 32-byte hash that binds the proof to the transaction.
 /// Returns true if the proof is valid.
 #[no_mangle]
 pub extern "C" fn shekyl_fcmp_verify(
@@ -859,6 +892,7 @@ pub extern "C" fn shekyl_fcmp_verify(
     pqc_hash_count: usize,
     tree_root_ptr: *const u8,
     tree_depth: u8,
+    signable_tx_hash_ptr: *const u8,
 ) -> bool {
     let Some(proof_bytes) = slice_from_ptr(proof_ptr, proof_len) else {
         return false;
@@ -872,12 +906,19 @@ pub extern "C" fn shekyl_fcmp_verify(
     let Some(ph_bytes) = slice_from_ptr(pqc_pk_hashes_ptr, pqc_hash_count * 32) else {
         return false;
     };
-    if tree_root_ptr.is_null() || ki_count != po_count || ki_count != pqc_hash_count {
+    if tree_root_ptr.is_null() || signable_tx_hash_ptr.is_null()
+        || ki_count != po_count || ki_count != pqc_hash_count
+    {
         return false;
     }
     let tree_root: [u8; 32] = unsafe {
         let mut buf = [0u8; 32];
         std::ptr::copy_nonoverlapping(tree_root_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let signable_tx_hash: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(signable_tx_hash_ptr, buf.as_mut_ptr(), 32);
         buf
     };
 
@@ -905,8 +946,10 @@ pub extern "C" fn shekyl_fcmp_verify(
         pqc_hashes.push(shekyl_fcmp::leaf::PqcLeafScalar(ph));
     }
 
-    shekyl_fcmp::proof::verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth)
-        .unwrap_or(false)
+    shekyl_fcmp::proof::verify(
+        &proof, &key_images, &pseudo_outs, &pqc_hashes,
+        &tree_root, tree_depth, signable_tx_hash,
+    ).unwrap_or(false)
 }
 
 /// Convert raw output data into serialized 4-scalar leaves.

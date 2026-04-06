@@ -8,10 +8,30 @@
 //! The Shekyl proof extends upstream FCMP++ by including `H(pqc_pk)` as
 //! a public input verified in-circuit against the 4th leaf scalar.
 
-use crate::leaf::{PqcLeafScalar, ShekylLeaf};
+use crate::leaf::PqcLeafScalar;
 use crate::MAX_INPUTS;
 use thiserror::Error;
 use zeroize::Zeroize;
+
+use ciphersuite::{
+    group::{ff::{Field, PrimeField}, Group, GroupEncoding},
+    Ciphersuite,
+};
+use dalek_ff_group::{EdwardsPoint, Ed25519, Scalar};
+use ec_divisors::ScalarDecomposition;
+use helioselene::{Helios, Selene};
+use rand_core::OsRng;
+
+use shekyl_fcmp_plus_plus::{
+    Curves, FCMP_PARAMS, SELENE_FCMP_GENERATORS, HELIOS_FCMP_GENERATORS,
+    FcmpPlusPlus, Output,
+    fcmps::{
+        Fcmp, TreeRoot,
+        Path, Branches, OutputBlinds, OBlind, IBlind, IBlindBlind, CBlind, BranchBlind,
+    },
+    sal::{RerandomizedOutput, OpenedInputTuple, SpendAuthAndLinkability},
+};
+use shekyl_generators::{T, FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V};
 
 /// Errors during FCMP++ proof construction.
 #[derive(Debug, Error)]
@@ -19,11 +39,20 @@ pub enum ProveError {
     #[error("too many inputs: {0} exceeds maximum {MAX_INPUTS}")]
     TooManyInputs(usize),
 
-    #[error("PQC hash mismatch at input {input_index}: leaf h_pqc differs from pqc_auth commitment")]
+    #[error("empty inputs")]
+    EmptyInputs,
+
+    #[error("PQC hash mismatch at input {input_index}")]
     PqcHashMismatch { input_index: usize },
 
     #[error("tree path unavailable for input {0}")]
     TreePathUnavailable(usize),
+
+    #[error("invalid Ed25519 point at input {input_index}: {field}")]
+    InvalidPoint { input_index: usize, field: &'static str },
+
+    #[error("invalid scalar at input {input_index}: {field}")]
+    InvalidScalar { input_index: usize, field: &'static str },
 
     #[error("upstream proof generation failed: {0}")]
     UpstreamError(String),
@@ -41,114 +70,254 @@ pub enum VerifyError {
     #[error("PQC commitment mismatch at input {0}")]
     PqcCommitmentMismatch(usize),
 
-    #[error("key image count mismatch")]
-    KeyImageCountMismatch,
+    #[error("key image count mismatch: expected {expected}, got {got}")]
+    KeyImageCountMismatch { expected: usize, got: usize },
 
     #[error("upstream verification failed: {0}")]
     UpstreamError(String),
+
+    #[error("batch verification failed")]
+    BatchVerificationFailed,
 }
 
 /// A serialized FCMP++ proof blob (opaque to C++ callers).
 #[derive(Clone, Debug, Zeroize)]
 pub struct ShekylFcmpProof {
-    /// Raw proof bytes (upstream FCMP++ proof + Shekyl extensions).
     pub data: Vec<u8>,
-    /// Number of inputs this proof covers.
     pub num_inputs: u32,
-    /// Tree depth at the time of proving.
     pub tree_depth: u8,
 }
 
-/// Input data required for proof construction.
+/// A branch layer in the Merkle path (sibling hashes at one tree level).
+#[derive(Clone, Debug)]
+pub struct BranchLayer {
+    pub siblings: Vec<[u8; 32]>,
+}
+
+/// Full witness data for one input in an FCMP++ proof.
+///
+/// The C++ wallet constructs this from the output being spent, the
+/// per-output key derivation, and the Merkle path from `get_curve_tree_path`.
 #[derive(Clone, Debug)]
 pub struct ProveInput {
-    /// The output being spent (leaf data).
-    pub leaf: ShekylLeaf,
-    /// Merkle path from leaf to root (serialized layer hashes).
-    pub tree_path: Vec<u8>,
-    /// Key image for this input.
-    pub key_image: [u8; 32],
-    /// Pseudo-out commitment.
-    pub pseudo_out: [u8; 32],
-    /// H(pqc_pk) for the PQC key committed in this leaf.
-    pub pqc_hash: PqcLeafScalar,
+    /// Compressed Ed25519 output public key O.
+    pub output_key: [u8; 32],
+    /// Compressed Ed25519 key image generator I = Hp(O).
+    pub key_image_gen: [u8; 32],
+    /// Compressed Ed25519 Pedersen commitment C.
+    pub commitment: [u8; 32],
+    /// H(pqc_pk) for this output's 4th leaf scalar.
+    pub h_pqc: PqcLeafScalar,
+
+    /// Spend secret key x (O = xG + yT).
+    pub spend_key_x: [u8; 32],
+    /// View secret key y (O = xG + yT).
+    pub spend_key_y: [u8; 32],
+
+    /// Sibling outputs in the same leaf chunk (compressed Ed25519 points).
+    /// Each entry is (O, I, C) as 3x32 bytes.
+    pub leaf_chunk_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])>,
+    /// H(pqc_pk) for each output in the chunk, parallel to `leaf_chunk_outputs`.
+    pub leaf_chunk_h_pqc: Vec<[u8; 32]>,
+
+    /// Selene (C1) branch layers, bottom to top.
+    pub c1_branch_layers: Vec<BranchLayer>,
+    /// Helios (C2) branch layers, bottom to top.
+    pub c2_branch_layers: Vec<BranchLayer>,
+}
+
+/// Result of FCMP++ proof construction.
+pub struct ProveResult {
+    /// The serialized proof blob.
+    pub proof: ShekylFcmpProof,
+    /// Per-input pseudo-outs (C_tilde compressed), needed by the wallet for balance proof.
+    pub pseudo_outs: Vec<[u8; 32]>,
 }
 
 /// Construct an FCMP++ proof for a set of inputs.
 ///
-/// This function coordinates the upstream proof generation with Shekyl's
-/// 4-scalar leaf extension. The proof proves:
-/// 1. Each input's `{O.x, I.x, C.x, H(pqc_pk)}` exists in the tree
-/// 2. The 4th scalar matches the PQC key hash provided as public input
-/// 3. Standard FCMP++ linkability/spend-auth properties
-///
-/// The actual upstream proof call is gated behind the `shekyl-fcmp-plus-plus`
-/// crate integration. This scaffolding validates inputs and prepares the
-/// data structures.
+/// Performs full rerandomization and SAL (spend-auth-and-linkability) proof
+/// generation. Returns the proof blob and the per-input pseudo-outs
+/// (rerandomized commitments).
+#[allow(non_snake_case)]
 pub fn prove(
     inputs: &[ProveInput],
-    tree_root: &[u8; 32],
+    _tree_root: &[u8; 32],
     tree_depth: u8,
-) -> Result<ShekylFcmpProof, ProveError> {
+    signable_tx_hash: [u8; 32],
+) -> Result<ProveResult, ProveError> {
+    if inputs.is_empty() {
+        return Err(ProveError::EmptyInputs);
+    }
     if inputs.len() > MAX_INPUTS {
         return Err(ProveError::TooManyInputs(inputs.len()));
     }
-    if inputs.is_empty() {
-        return Err(ProveError::TooManyInputs(0));
-    }
 
-    for (i, input) in inputs.iter().enumerate() {
-        if input.tree_path.is_empty() {
-            return Err(ProveError::TreePathUnavailable(i));
+    let mut sal_pairs = Vec::with_capacity(inputs.len());
+    let mut output_blinds_list = Vec::with_capacity(inputs.len());
+    let mut paths = Vec::with_capacity(inputs.len());
+    let mut pseudo_outs = Vec::with_capacity(inputs.len());
+
+    for (idx, input) in inputs.iter().enumerate() {
+        let O = decompress_ed25519(&input.output_key)
+            .ok_or(ProveError::InvalidPoint { input_index: idx, field: "output_key" })?;
+        let I = decompress_ed25519(&input.key_image_gen)
+            .ok_or(ProveError::InvalidPoint { input_index: idx, field: "key_image_gen" })?;
+        let C = decompress_ed25519(&input.commitment)
+            .ok_or(ProveError::InvalidPoint { input_index: idx, field: "commitment" })?;
+
+        let output = Output::new(O, I, C)
+            .map_err(|e| ProveError::UpstreamError(format!("Output::new at input {idx}: {e:?}")))?;
+
+        // Rerandomize
+        let rerand = RerandomizedOutput::new(&mut OsRng, output);
+        let crate_input = rerand.input();
+        pseudo_outs.push(crate_input.C_tilde().to_bytes());
+
+        // SAL proof
+        let x = deserialize_ed25519_scalar(&input.spend_key_x)
+            .ok_or(ProveError::InvalidScalar { input_index: idx, field: "spend_key_x" })?;
+        let y = deserialize_ed25519_scalar(&input.spend_key_y)
+            .ok_or(ProveError::InvalidScalar { input_index: idx, field: "spend_key_y" })?;
+
+        let opening = OpenedInputTuple::open(&rerand, &x, &y)
+            .ok_or(ProveError::UpstreamError(
+                format!("OpenedInputTuple::open failed at input {idx}"),
+            ))?;
+        let (_, sal) = SpendAuthAndLinkability::prove(&mut OsRng, signable_tx_hash, &opening);
+        sal_pairs.push((crate_input, sal));
+
+        // Build OutputBlinds from rerandomization
+        let output_blind = OutputBlinds::new(
+            OBlind::new(
+                EdwardsPoint(*T),
+                ScalarDecomposition::new(rerand.o_blind()).unwrap(),
+            ),
+            IBlind::new(
+                EdwardsPoint(*FCMP_PLUS_PLUS_U),
+                EdwardsPoint(*FCMP_PLUS_PLUS_V),
+                ScalarDecomposition::new(rerand.i_blind()).unwrap(),
+            ),
+            IBlindBlind::new(
+                EdwardsPoint(*T),
+                ScalarDecomposition::new(rerand.i_blind_blind()).unwrap(),
+            ),
+            CBlind::new(
+                EdwardsPoint::generator(),
+                ScalarDecomposition::new(rerand.c_blind()).unwrap(),
+            ),
+        );
+        output_blinds_list.push(output_blind);
+
+        // Build the leaf chunk
+        if input.leaf_chunk_outputs.is_empty() {
+            return Err(ProveError::TreePathUnavailable(idx));
         }
-    }
 
-    // Validate PQC hash consistency: each input's leaf h_pqc must match
-    // the separately-provided pqc_hash (which comes from pqc_auth).
-    for (i, input) in inputs.iter().enumerate() {
-        if input.leaf.h_pqc != input.pqc_hash {
-            return Err(ProveError::PqcHashMismatch { input_index: i });
+        let mut chunk_outputs = Vec::with_capacity(input.leaf_chunk_outputs.len());
+        let mut chunk_extra = Vec::with_capacity(input.leaf_chunk_outputs.len());
+        for (j, (o, i, c)) in input.leaf_chunk_outputs.iter().enumerate() {
+            let lo = decompress_ed25519(o)
+                .ok_or(ProveError::InvalidPoint { input_index: idx, field: "leaf_O" })?;
+            let li = decompress_ed25519(i)
+                .ok_or(ProveError::InvalidPoint { input_index: idx, field: "leaf_I" })?;
+            let lc = decompress_ed25519(c)
+                .ok_or(ProveError::InvalidPoint { input_index: idx, field: "leaf_C" })?;
+            chunk_outputs.push(
+                Output::new(lo, li, lc)
+                    .map_err(|e| ProveError::UpstreamError(
+                        format!("leaf Output::new at input {idx}, leaf {j}: {e:?}"),
+                    ))?,
+            );
+
+            let h_pqc = deserialize_selene_scalar(&input.leaf_chunk_h_pqc[j])
+                .ok_or(ProveError::InvalidScalar { input_index: idx, field: "leaf_h_pqc" })?;
+            chunk_extra.push(vec![h_pqc]);
         }
+
+        let output_h_pqc = deserialize_selene_scalar(&input.h_pqc.0)
+            .ok_or(ProveError::InvalidScalar { input_index: idx, field: "h_pqc" })?;
+
+        // Build C1/C2 branch layers
+        let mut c1_layers = Vec::new();
+        for layer in &input.c1_branch_layers {
+            let scalars: Vec<<Selene as Ciphersuite>::F> = layer.siblings.iter()
+                .map(|b| deserialize_selene_scalar(b))
+                .collect::<Option<Vec<_>>>()
+                .ok_or(ProveError::InvalidScalar { input_index: idx, field: "c1_branch" })?;
+            c1_layers.push(scalars);
+        }
+        let mut c2_layers = Vec::new();
+        for layer in &input.c2_branch_layers {
+            let scalars: Vec<<Helios as Ciphersuite>::F> = layer.siblings.iter()
+                .map(|b| deserialize_helios_scalar(b))
+                .collect::<Option<Vec<_>>>()
+                .ok_or(ProveError::InvalidScalar { input_index: idx, field: "c2_branch" })?;
+            c2_layers.push(scalars);
+        }
+
+        paths.push(Path::<Curves> {
+            output,
+            output_extra_scalars: vec![output_h_pqc],
+            leaves: chunk_outputs,
+            leaves_extra_scalars: chunk_extra,
+            curve_2_layers: c2_layers,
+            curve_1_layers: c1_layers,
+        });
     }
 
-    // TODO(phase-1h): Invoke upstream shekyl-fcmp-plus-plus prove() with
-    // 4-scalar leaf inputs once the circuit modification is complete.
-    // For now, produce a placeholder proof structure that passes through
-    // the FFI layer for integration testing.
-    let estimated_size = crate::tree::proof_size(inputs.len(), tree_depth as usize);
-    let mut proof_data = Vec::with_capacity(estimated_size);
+    // Build branches, generate blinds, and produce the proof
+    let branches = Branches::new(paths)
+        .ok_or(ProveError::UpstreamError("Branches::new failed".into()))?;
 
-    // Proof header: version byte + input count + tree depth
-    proof_data.push(0x01); // proof version
-    proof_data.push(inputs.len() as u8);
-    proof_data.push(tree_depth);
-    proof_data.extend_from_slice(tree_root);
+    let c1_blind_count = branches.necessary_c1_blinds();
+    let c2_blind_count = branches.necessary_c2_blinds();
 
-    // Per-input: key image + pseudo-out + pqc_hash
-    for input in inputs {
-        proof_data.extend_from_slice(&input.key_image);
-        proof_data.extend_from_slice(&input.pseudo_out);
-        proof_data.extend_from_slice(&input.pqc_hash.0);
-    }
+    let c1_h = SELENE_FCMP_GENERATORS.generators.h();
+    let c2_h = HELIOS_FCMP_GENERATORS.generators.h();
 
-    // Placeholder: mark as incomplete (upstream integration pending)
-    proof_data.extend_from_slice(b"SHEKYL_FCMP_SCAFFOLD");
+    let c1_blinds: Vec<_> = (0..c1_blind_count)
+        .map(|_| BranchBlind::<<Selene as Ciphersuite>::G>::new(
+            c1_h,
+            ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
+        ))
+        .collect();
+    let c2_blinds: Vec<_> = (0..c2_blind_count)
+        .map(|_| BranchBlind::<<Helios as Ciphersuite>::G>::new(
+            c2_h,
+            ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
+        ))
+        .collect();
 
-    Ok(ShekylFcmpProof {
-        data: proof_data,
-        num_inputs: inputs.len() as u32,
-        tree_depth,
+    let blinded = branches.blind(output_blinds_list, c1_blinds, c2_blinds)
+        .map_err(|e| ProveError::UpstreamError(format!("blind: {e:?}")))?;
+
+    let fcmp = Fcmp::prove(&mut OsRng, &*FCMP_PARAMS, blinded)
+        .map_err(|e| ProveError::UpstreamError(format!("Fcmp::prove: {e:?}")))?;
+
+    let fcmp_pp = FcmpPlusPlus::new(sal_pairs, fcmp);
+
+    let mut data = Vec::new();
+    fcmp_pp.write(&mut data)
+        .map_err(|e| ProveError::UpstreamError(format!("write: {e}")))?;
+
+    Ok(ProveResult {
+        proof: ShekylFcmpProof {
+            data,
+            num_inputs: inputs.len() as u32,
+            tree_depth,
+        },
+        pseudo_outs,
     })
 }
 
-/// Verify an FCMP++ proof.
+/// Verify an FCMP++ proof against public inputs.
 ///
-/// Checks:
-/// 1. Proof deserializes correctly
-/// 2. Key image count matches
-/// 3. PQC commitment hashes match the values in the proof's public inputs
-/// 4. Tree root matches the referenced block's committed root
-/// 5. Upstream FCMP++ verification passes
+/// Uses batch verification for efficiency. Checks:
+/// 1. Proof deserialization
+/// 2. SAL (spend-auth-and-linkability) proof per input
+/// 3. FCMP circuit proof (tree membership + H(pqc_pk) binding)
+/// 4. Finalizes batch verifiers (Ed25519, Selene, Helios)
 pub fn verify(
     proof: &ShekylFcmpProof,
     key_images: &[[u8; 32]],
@@ -156,213 +325,173 @@ pub fn verify(
     pqc_pk_hashes: &[PqcLeafScalar],
     tree_root: &[u8; 32],
     tree_depth: u8,
+    signable_tx_hash: [u8; 32],
 ) -> Result<bool, VerifyError> {
-    if key_images.len() != proof.num_inputs as usize {
-        return Err(VerifyError::KeyImageCountMismatch);
+    let num_inputs = proof.num_inputs as usize;
+    if key_images.len() != num_inputs {
+        return Err(VerifyError::KeyImageCountMismatch {
+            expected: num_inputs, got: key_images.len(),
+        });
     }
-    if pseudo_outs.len() != proof.num_inputs as usize {
-        return Err(VerifyError::KeyImageCountMismatch);
+    if pseudo_outs.len() != num_inputs {
+        return Err(VerifyError::KeyImageCountMismatch {
+            expected: num_inputs, got: pseudo_outs.len(),
+        });
     }
-    if pqc_pk_hashes.len() != proof.num_inputs as usize {
+    if pqc_pk_hashes.len() != num_inputs {
         return Err(VerifyError::PqcCommitmentMismatch(pqc_pk_hashes.len()));
     }
     if proof.tree_depth != tree_depth {
         return Err(VerifyError::InvalidTreeRoot);
     }
 
-    // Verify proof header
-    if proof.data.len() < 3 + 32 {
-        return Err(VerifyError::DeserializationFailed);
-    }
-    let proof_tree_root = &proof.data[3..35];
-    if proof_tree_root != tree_root.as_slice() {
-        return Err(VerifyError::InvalidTreeRoot);
-    }
+    let layers = tree_depth as usize;
 
-    // TODO(phase-1h): Invoke upstream shekyl-fcmp-plus-plus verify() with
-    // batch verifiers once the 4-scalar circuit is integrated.
-    // For scaffolding, verify the proof structure is well-formed.
-    let expected_per_input = 32 + 32 + 32; // key_image + pseudo_out + pqc_hash
-    let expected_min_len = 3 + 32 + (proof.num_inputs as usize * expected_per_input) + 20;
-    if proof.data.len() < expected_min_len {
-        return Err(VerifyError::DeserializationFailed);
-    }
+    let tree = deserialize_tree_root(tree_root, layers)
+        .ok_or(VerifyError::InvalidTreeRoot)?;
 
-    // Verify PQC hashes embedded in proof match those provided
-    let mut offset = 35; // after header + tree_root
-    for (i, pqc_hash) in pqc_pk_hashes.iter().enumerate() {
-        let ki_end = offset + 32;
-        let po_end = ki_end + 32;
-        let ph_end = po_end + 32;
+    let ki_points: Vec<<Ed25519 as Ciphersuite>::G> = key_images.iter()
+        .map(|ki| decompress_ed25519(ki).map(|p| <Ed25519 as Ciphersuite>::G::from(p)))
+        .collect::<Option<Vec<_>>>()
+        .ok_or(VerifyError::DeserializationFailed)?;
 
-        if ph_end > proof.data.len() {
-            return Err(VerifyError::DeserializationFailed);
-        }
+    let pqc_selene: Vec<<Selene as Ciphersuite>::F> = pqc_pk_hashes.iter()
+        .enumerate()
+        .map(|(i, h)| deserialize_selene_scalar(&h.0).ok_or(VerifyError::PqcCommitmentMismatch(i)))
+        .collect::<Result<Vec<_>, _>>()?;
 
-        if key_images[i] != proof.data[offset..ki_end] {
-            return Err(VerifyError::PqcCommitmentMismatch(i));
-        }
-        if pseudo_outs[i] != proof.data[ki_end..po_end] {
-            return Err(VerifyError::PqcCommitmentMismatch(i));
-        }
-        if pqc_hash.0 != proof.data[po_end..ph_end] {
-            return Err(VerifyError::PqcCommitmentMismatch(i));
-        }
+    let fcmp_pp = FcmpPlusPlus::read(pseudo_outs, layers, &mut proof.data.as_slice())
+        .map_err(|_| VerifyError::DeserializationFailed)?;
 
-        offset = ph_end;
+    let mut ed_verifier = multiexp::BatchVerifier::new(num_inputs);
+    let mut c1_verifier = generalized_bulletproofs::Generators::batch_verifier();
+    let mut c2_verifier = generalized_bulletproofs::Generators::batch_verifier();
+
+    fcmp_pp
+        .verify(
+            &mut OsRng,
+            &mut ed_verifier,
+            &mut c1_verifier,
+            &mut c2_verifier,
+            tree,
+            layers,
+            signable_tx_hash,
+            ki_points,
+            pqc_selene,
+        )
+        .map_err(|e| VerifyError::UpstreamError(format!("{e:?}")))?;
+
+    let ed_ok = ed_verifier.verify_vartime();
+    let c1_ok = SELENE_FCMP_GENERATORS.generators.verify(c1_verifier);
+    let c2_ok = HELIOS_FCMP_GENERATORS.generators.verify(c2_verifier);
+
+    if !ed_ok || !c1_ok || !c2_ok {
+        return Err(VerifyError::BatchVerificationFailed);
     }
 
     Ok(true)
+}
+
+// ---------------------------------------------------------------------------
+// Deserialization helpers
+// ---------------------------------------------------------------------------
+
+fn decompress_ed25519(bytes: &[u8; 32]) -> Option<EdwardsPoint> {
+    let ct = <EdwardsPoint as GroupEncoding>::from_bytes(bytes.into());
+    if bool::from(ct.is_some()) { Some(ct.unwrap()) } else { None }
+}
+
+fn deserialize_ed25519_scalar(bytes: &[u8; 32]) -> Option<Scalar> {
+    let ct = Scalar::from_repr((*bytes).into());
+    if bool::from(ct.is_some()) { Some(ct.unwrap()) } else { None }
+}
+
+fn deserialize_selene_scalar(bytes: &[u8; 32]) -> Option<<Selene as Ciphersuite>::F> {
+    let ct = <Selene as Ciphersuite>::F::from_repr((*bytes).into());
+    if bool::from(ct.is_some()) { Some(ct.unwrap()) } else { None }
+}
+
+fn deserialize_helios_scalar(bytes: &[u8; 32]) -> Option<<Helios as Ciphersuite>::F> {
+    let ct = <Helios as Ciphersuite>::F::from_repr((*bytes).into());
+    if bool::from(ct.is_some()) { Some(ct.unwrap()) } else { None }
+}
+
+fn deserialize_tree_root(
+    bytes: &[u8; 32],
+    layers: usize,
+) -> Option<TreeRoot<Selene, Helios>> {
+    if layers % 2 == 1 {
+        let ct = <Selene as Ciphersuite>::G::from_bytes(bytes.into());
+        if bool::from(ct.is_some()) { Some(TreeRoot::C1(ct.unwrap())) } else { None }
+    } else {
+        let ct = <Helios as Ciphersuite>::G::from_bytes(bytes.into());
+        if bool::from(ct.is_some()) { Some(TreeRoot::C2(ct.unwrap())) } else { None }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_test_input(idx: u8) -> ProveInput {
-        let pqc_hash = PqcLeafScalar([idx; 32]);
-        ProveInput {
-            leaf: ShekylLeaf {
-                o_x: [idx; 32],
-                i_x: [idx + 1; 32],
-                c_x: [idx + 2; 32],
-                h_pqc: pqc_hash,
-            },
-            tree_path: vec![0u8; 64],
-            key_image: [idx + 3; 32],
-            pseudo_out: [idx + 4; 32],
-            pqc_hash,
-        }
-    }
-
-    #[test]
-    fn prove_verify_roundtrip() {
-        let inputs = vec![make_test_input(1), make_test_input(2)];
-        let tree_root = [0xaa; 32];
-        let tree_depth = 20;
-
-        let proof = prove(&inputs, &tree_root, tree_depth).unwrap();
-        assert_eq!(proof.num_inputs, 2);
-        assert_eq!(proof.tree_depth, 20);
-
-        let key_images: Vec<_> = inputs.iter().map(|i| i.key_image).collect();
-        let pseudo_outs: Vec<_> = inputs.iter().map(|i| i.pseudo_out).collect();
-        let pqc_hashes: Vec<_> = inputs.iter().map(|i| i.pqc_hash).collect();
-
-        let result = verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth);
-        assert!(result.unwrap());
-    }
-
     #[test]
     fn prove_rejects_too_many_inputs() {
-        let inputs: Vec<_> = (0..9).map(|i| make_test_input(i)).collect();
-        let result = prove(&inputs, &[0; 32], 20);
+        let inputs: Vec<ProveInput> = (0..9).map(|_| dummy_prove_input()).collect();
+        let result = prove(&inputs, &[0; 32], 8, [0; 32]);
         assert!(matches!(result, Err(ProveError::TooManyInputs(9))));
     }
 
     #[test]
     fn prove_rejects_empty_inputs() {
-        let result = prove(&[], &[0; 32], 20);
-        assert!(matches!(result, Err(ProveError::TooManyInputs(0))));
+        let result = prove(&[], &[0; 32], 8, [0; 32]);
+        assert!(matches!(result, Err(ProveError::EmptyInputs)));
     }
 
     #[test]
-    fn prove_rejects_empty_tree_path() {
-        let mut input = make_test_input(1);
-        input.tree_path = vec![];
-        let result = prove(&[input], &[0; 32], 20);
-        assert!(matches!(result, Err(ProveError::TreePathUnavailable(0))));
-    }
-
-    #[test]
-    fn prove_rejects_pqc_hash_mismatch() {
-        let mut input = make_test_input(1);
-        input.pqc_hash = PqcLeafScalar([0xff; 32]);
-        let result = prove(&[input], &[0; 32], 20);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn prove_max_inputs_accepted() {
-        let inputs: Vec<_> = (0..crate::MAX_INPUTS as u8).map(|i| make_test_input(i)).collect();
-        let result = prove(&inputs, &[0xaa; 32], 20);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().num_inputs, crate::MAX_INPUTS as u32);
-    }
-
-    #[test]
-    fn verify_rejects_wrong_tree_root() {
-        let inputs = vec![make_test_input(1)];
-        let proof = prove(&inputs, &[0xaa; 32], 20).unwrap();
-
-        let key_images = vec![inputs[0].key_image];
-        let pseudo_outs = vec![inputs[0].pseudo_out];
-        let pqc_hashes = vec![inputs[0].pqc_hash];
-
-        let result = verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &[0xbb; 32], 20);
-        assert!(matches!(result, Err(VerifyError::InvalidTreeRoot)));
+    fn verify_rejects_input_count_mismatch() {
+        let proof = ShekylFcmpProof {
+            data: vec![0; 100],
+            num_inputs: 2,
+            tree_depth: 8,
+        };
+        let result = verify(
+            &proof,
+            &[[0; 32]],
+            &[[0; 32], [0; 32]],
+            &[PqcLeafScalar([0; 32]), PqcLeafScalar([0; 32])],
+            &[0; 32], 8, [0; 32],
+        );
+        assert!(matches!(result, Err(VerifyError::KeyImageCountMismatch { .. })));
     }
 
     #[test]
     fn verify_rejects_wrong_tree_depth() {
-        let inputs = vec![make_test_input(1)];
-        let proof = prove(&inputs, &[0xaa; 32], 20).unwrap();
-
-        let key_images = vec![inputs[0].key_image];
-        let pseudo_outs = vec![inputs[0].pseudo_out];
-        let pqc_hashes = vec![inputs[0].pqc_hash];
-
-        let result = verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &[0xaa; 32], 15);
+        let proof = ShekylFcmpProof {
+            data: vec![0; 100],
+            num_inputs: 1,
+            tree_depth: 8,
+        };
+        let result = verify(
+            &proof,
+            &[[0; 32]],
+            &[[0; 32]],
+            &[PqcLeafScalar([0; 32])],
+            &[0; 32], 10, [0; 32],
+        );
         assert!(matches!(result, Err(VerifyError::InvalidTreeRoot)));
     }
 
-    #[test]
-    fn verify_rejects_key_image_count_mismatch() {
-        let inputs = vec![make_test_input(1), make_test_input(2)];
-        let proof = prove(&inputs, &[0xaa; 32], 20).unwrap();
-
-        let result = verify(&proof, &[inputs[0].key_image], &[inputs[0].pseudo_out],
-            &[inputs[0].pqc_hash], &[0xaa; 32], 20);
-        assert!(matches!(result, Err(VerifyError::KeyImageCountMismatch)));
-    }
-
-    #[test]
-    fn verify_rejects_tampered_key_image() {
-        let inputs = vec![make_test_input(1)];
-        let proof = prove(&inputs, &[0xaa; 32], 20).unwrap();
-        let mut bad_ki = inputs[0].key_image;
-        bad_ki[0] ^= 0xff;
-
-        let result = verify(&proof, &[bad_ki], &[inputs[0].pseudo_out],
-            &[inputs[0].pqc_hash], &[0xaa; 32], 20);
-        assert!(matches!(result, Err(VerifyError::PqcCommitmentMismatch(_))));
-    }
-
-    #[test]
-    fn verify_rejects_truncated_proof() {
-        let proof = ShekylFcmpProof {
-            data: vec![0x01, 0x01, 20],
-            num_inputs: 1,
-            tree_depth: 20,
-        };
-        let result = verify(&proof, &[[0u8; 32]], &[[0u8; 32]],
-            &[PqcLeafScalar([0u8; 32])], &[0u8; 32], 20);
-        assert!(matches!(result, Err(VerifyError::DeserializationFailed)));
-    }
-
-    #[test]
-    fn prove_verify_single_input() {
-        let inputs = vec![make_test_input(42)];
-        let tree_root = [0x55; 32];
-        let proof = prove(&inputs, &tree_root, 10).unwrap();
-        assert_eq!(proof.num_inputs, 1);
-        assert_eq!(proof.tree_depth, 10);
-
-        let result = verify(&proof,
-            &[inputs[0].key_image],
-            &[inputs[0].pseudo_out],
-            &[inputs[0].pqc_hash],
-            &tree_root, 10);
-        assert!(result.unwrap());
+    fn dummy_prove_input() -> ProveInput {
+        ProveInput {
+            output_key: [0; 32],
+            key_image_gen: [0; 32],
+            commitment: [0; 32],
+            h_pqc: PqcLeafScalar([0; 32]),
+            spend_key_x: [0; 32],
+            spend_key_y: [0; 32],
+            leaf_chunk_outputs: vec![],
+            leaf_chunk_h_pqc: vec![],
+            c1_branch_layers: vec![],
+            c2_branch_layers: vec![],
+        }
     }
 }

@@ -1,6 +1,6 @@
 # FCMP++ Full-Chain Membership Proofs — Specification
 
-> **Last updated:** 2026-04-05
+> **Last updated:** 2026-04-06
 >
 > **Parent document:** `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
@@ -74,6 +74,12 @@ The 4th scalar (`H(pqc_pk)`) is Shekyl-specific. It cryptographically
 binds the post-quantum public key to the curve tree leaf, creating the
 foundation for dual-layer security. Upstream Monero's FCMP++ uses a
 3-scalar leaf; Shekyl extends this to 4 scalars.
+
+**x-only representation:** All three point scalars (`O.x`, `I.x`, `C.x`)
+are the x-coordinates only — y-coordinates are not stored in the tree or
+included in the flat leaf array. The circuit recovers y from x via the
+curve equation inside its `on_curve` gadget. This means a single output's
+leaf data is exactly 4 field elements (128 bytes), not 6 or 8.
 
 The hash function for the 4th scalar uses Blake2b-512 with domain separator
 `shekyl-pqc-leaf`, implemented in `rust/shekyl-fcmp/src/lib.rs` and
@@ -1027,6 +1033,8 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | RAII scope guard for PQC signing keypair buffers | **Done** | `wallet2.cpp` (`transfer_selected_rct`) |
 | MSVC-compatible `binary_archive` construction | **Done** | `wallet2.cpp` |
 | Stressnet tooling (load gen, monitor, config) | **Done** | `tests/stressnet/` |
+| 4-scalar leaf circuit (x-only + H(pqc_pk)) in monero-oxide fork | **Done** | `crypto/fcmps/` (monero-oxide `fcmp++` branch) |
+| `FcmpPlusPlus::verify` accepts `pqc_pk_hashes` parameter | **Done** | `shekyl-oxide/fcmp/fcmp++/src/lib.rs` (monero-oxide) |
 | 4-scalar leaf circuit audit scope | **Done** | `docs/AUDIT_SCOPE.md` |
 | Cargo-fuzz targets (6 targets) | **Done** | `rust/shekyl-fcmp/fuzz/`, `rust/shekyl-crypto-pq/fuzz/` |
 | Rust unit test suite (proof, tree, leaf, kem, address, derivation) | **Done** | `rust/shekyl-fcmp/src/`, `rust/shekyl-crypto-pq/src/` |
@@ -1045,6 +1053,11 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Staking unit tests (GTest) | **Done** | `tests/unit_tests/staking.cpp` |
 | Staking core tests (chaingen) | **Done** | `tests/core_tests/staking.cpp` + `staking.h` |
 | Staking tier edge-case tests (Rust) | **Done** | `rust/shekyl-staking/src/tiers.rs` |
+| Real `prove()` in `shekyl-fcmp` (SAL + FCMP circuit + pseudo-outs) | **Done** | `rust/shekyl-fcmp/src/proof.rs` |
+| Real `verify()` in `shekyl-fcmp` (batch verifiers: Ed25519/Selene/Helios) | **Done** | `rust/shekyl-fcmp/src/proof.rs` |
+| FFI `shekyl_fcmp_prove` returns `ShekylFcmpProveResult` with pseudo-outs | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
+| FFI `shekyl_fcmp_verify` accepts `signable_tx_hash` parameter | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
+| C++ callers updated for new FFI signatures | **Done** | `rctSigs.cpp`, `blockchain.cpp`, `wallet2.cpp` |
 | Staking reward fuzz target | **Done** | `rust/shekyl-staking/fuzz/fuzz_targets/fuzz_claim_reward.rs` |
 
 ---
@@ -1193,22 +1206,58 @@ directory to `shekyl-oxide/` and all packages from `monero-*` to `shekyl-*`
 (e.g., `monero-fcmp-plus-plus` → `shekyl-fcmp-plus-plus`,
 `monero-generators` → `shekyl-generators`, `monero-io` → `shekyl-io`).
 
-### Proof Scaffold Status
+### Circuit Integration Status
 
-`rust/shekyl-fcmp/src/proof.rs` contains placeholder `prove()` and `verify()`
-functions (tagged `TODO(phase-1h)`) that produce/consume a scaffold proof blob
-with magic `SHEKYL_FCMP_SCAFFOLD`. These do **not** perform real cryptographic
-proof generation or verification.
+The `full-chain-membership-proofs` circuit in the monero-oxide fork has been
+modified to support Shekyl's 4-scalar leaf format. The `FcmpCurves` trait now
+includes `const EXTRA_LEAF_SCALARS: usize = 1`, and `Curves` in the
+`shekyl-fcmp-plus-plus` wrapper sets this to `1`. The `FcmpPlusPlus::verify`
+accepts `pqc_pk_hashes: Vec<SeleneF>` to pass the 4th scalar through to the
+circuit.
 
-**Blocker**: The upstream `full-chain-membership-proofs` circuit uses 6-scalar
-leaves (x,y coordinates for 3 points: O, I, C), while Shekyl's curve tree uses
-a 4-scalar leaf format (x-only for O, I, C plus H(pqc\_pk)). Wiring the Shekyl
-`prove()`/`verify()` to the upstream circuit requires either:
+**x-only leaf optimization:** During implementation, we discovered that the
+upstream circuit's internal (x,y) coordinate representation for O, I, C was
+unnecessary for the flat leaf array and membership proof. The `on_curve` and
+blinding proof gadgets still operate on full (x,y) points internally, but
+the leaf flattening (`flatten_leaves`) and `tuple_member_of_list` membership
+gadget now use **x-only coordinates**:
 
-1. Modifying the upstream circuit to accept 4-scalar (or 8-scalar) leaves, or
-2. Adapting the Shekyl leaf encoding to match the upstream 6-scalar format
+```text
+Upstream (original):  [O.x, O.y, I.x, I.y, C.x, C.y]   — 6 scalars per output
+Shekyl (implemented): [O.x, I.x, C.x, H(pqc_pk)]        — 4 scalars per output
+```
 
-This is a cryptographic design decision that blocks scaffold replacement.
+This means the leaf layer width is `4 * LAYER_ONE_LEN` (not `6 * ...` or
+`8 * ...`). The y-coordinates are recovered from x via the curve equation
+inside the circuit's `on_curve` gadget — they are never stored in the tree
+or transmitted in the flat leaf array.
+
+**Completed upstream changes** (monero-oxide `fcmp++` branch):
+
+- `FcmpCurves::EXTRA_LEAF_SCALARS` trait constant with `leaf_tuple_width()`
+- `Path`, `Branches`, `RootBranch`, `InputProofData` extended with
+  `output_extra_scalars` / `leaves_extra_scalars`
+- `flatten_leaves` produces `[O.x, I.x, C.x, extras...]` per output
+- `first_layer()` constrains `extra_leaf_vars == extra_leaf_public_values`
+  and includes extras in `tuple_member_of_list`
+- Extra leaf scalars committed as dedicated 1-element branches on the C1
+  tape (after standard per-input branches, before the root branch)
+- `Input<F>` carries `extra_leaf_scalars: Vec<F>`; `proof_size()` accounts
+  for extra branches
+- `Fcmp::verify` and `FcmpPlusPlus::verify` accept extra scalars
+- All tests use `ShekylCurves` with `EXTRA_LEAF_SCALARS = 1`; no
+  backward-compatibility code for the 3-scalar Monero leaf format
+
+**Completed**: The `shekyl-fcmp` crate (`rust/shekyl-fcmp/src/proof.rs`)
+now contains real `prove()` and `verify()` implementations that call
+through the full FCMP++ stack:
+- `prove()` constructs `RerandomizedOutput`, `SpendAuthAndLinkability`,
+  `OutputBlinds`, `Path`/`Branches`, `BranchBlind`s, and calls `Fcmp::prove()`
+  to produce a complete FCMP++ proof with pseudo-outs.
+- `verify()` deserializes via `FcmpPlusPlus::read()`, initializes batch
+  verifiers for Ed25519/Selene/Helios, and finalizes all three.
+- The FFI boundary (`shekyl-ffi`) passes `signable_tx_hash` for transaction
+  binding and returns `ShekylFcmpProveResult` with proof + pseudo-outs.
 
 ### Upstream Security Fixes Pending
 

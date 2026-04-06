@@ -3615,7 +3615,8 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             pqc_hashes_flat.data(),
             num_inputs,
             tree_root.data(),
-            rv.p.curve_trees_tree_depth
+            rv.p.curve_trees_tree_depth,
+            reinterpret_cast<const uint8_t*>(tx_prefix_hash.data)
           );
 
           if (!proof_ok)

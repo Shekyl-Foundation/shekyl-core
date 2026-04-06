@@ -150,19 +150,27 @@ ShekylPqcKeypair shekyl_fcmp_derive_pqc_keypair(
 // Expected proof size for given inputs and tree depth.
 size_t shekyl_fcmp_proof_len(uint32_t num_inputs, uint8_t tree_depth);
 
-// Construct FCMP++ proof.
-ShekylBuffer shekyl_fcmp_prove(
-    const uint8_t* leaves_ptr,
-    uint32_t num_inputs,
-    const uint8_t* tree_paths_ptr,
-    uint32_t tree_path_len,
-    const uint8_t* key_images_ptr,
-    const uint8_t* pseudo_outs_ptr,
-    const uint8_t* pqc_hashes_ptr,
-    const uint8_t* tree_root_ptr,
-    uint8_t tree_depth);
+// FCMP++ prove result (proof blob + pseudo-outs).
+struct ShekylFcmpProveResult {
+    ShekylBuffer proof;
+    ShekylBuffer pseudo_outs;    // num_inputs * 32 bytes (C_tilde compressed)
+    bool success;
+};
 
-// Verify FCMP++ proof. pqc_hash_count must equal ki_count.
+// Construct FCMP++ proof.
+// inputs_ptr: packed per-input fixed data, 192 bytes each:
+//   [O:32][I:32][C:32][h_pqc:32][spend_x:32][spend_y:32]
+// signable_tx_hash_ptr: 32-byte transaction binding hash.
+ShekylFcmpProveResult shekyl_fcmp_prove(
+    const uint8_t* inputs_ptr,
+    uint32_t num_inputs,
+    const uint8_t* tree_root_ptr,
+    uint8_t tree_depth,
+    const uint8_t* signable_tx_hash_ptr);
+
+// Verify FCMP++ proof with batch verification.
+// signable_tx_hash_ptr: 32-byte transaction binding hash.
+// pqc_hash_count must equal ki_count.
 bool shekyl_fcmp_verify(
     const uint8_t* proof_ptr,
     size_t proof_len,
@@ -173,7 +181,8 @@ bool shekyl_fcmp_verify(
     const uint8_t* pqc_pk_hashes_ptr,
     size_t pqc_hash_count,
     const uint8_t* tree_root_ptr,
-    uint8_t tree_depth);
+    uint8_t tree_depth,
+    const uint8_t* signable_tx_hash_ptr);
 
 // Convert raw output tuples into serialized 4-scalar leaves.
 ShekylBuffer shekyl_fcmp_outputs_to_leaves(

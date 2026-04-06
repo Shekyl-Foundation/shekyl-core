@@ -301,77 +301,58 @@ namespace rct {
         }
 
         // --- FCMP++ membership proof via Rust FFI ---
-        // Flatten tree paths into a single buffer for the C API.
-        std::vector<uint8_t> flat_paths;
-        for (const auto &p : tree_paths)
-            flat_paths.insert(flat_paths.end(), p.begin(), p.end());
-
-        // Collect key images from input secret keys (O * Hp(O) = key image).
-        // In a real flow key images come from the transaction inputs; here we
-        // serialize them as 32-byte concatenated scalars.
-        std::vector<uint8_t> key_images_buf(inPk.size() * 32);
-        for (size_t i = 0; i < inPk.size(); ++i)
-        {
-            ge_p3 hp;
-            hash_to_p3(hp, inPk[i].dest);
-            key ki;
-            crypto::secret_key sk = rct2sk(inSk[i].dest);
-            ge_p2 ki_p2;
-            ge_scalarmult(&ki_p2, (const unsigned char*)&sk, &hp);
-            ge_tobytes(ki.bytes, &ki_p2);
-            memcpy(key_images_buf.data() + i * 32, ki.bytes, 32);
-        }
-
-        // Serialize pseudo-outs and PQC hashes for FFI.
-        std::vector<uint8_t> pseudo_outs_buf(rv.p.pseudoOuts.size() * 32);
-        for (size_t i = 0; i < rv.p.pseudoOuts.size(); ++i)
-            memcpy(pseudo_outs_buf.data() + i * 32, rv.p.pseudoOuts[i].bytes, 32);
-
-        std::vector<uint8_t> pqc_hashes_buf(pqc_pk_hashes.size() * 32);
-        for (size_t i = 0; i < pqc_pk_hashes.size(); ++i)
-            memcpy(pqc_hashes_buf.data() + i * 32, pqc_pk_hashes[i].bytes, 32);
-
-        // Construct leaf scalars from input public keys + PQC hashes for the prover.
-        static constexpr uint8_t zero_pqc[32] = {};
-        std::vector<uint8_t> leaves_buf(inPk.size() * 128);
-        for (size_t i = 0; i < inPk.size(); ++i)
-        {
-            const uint8_t* h_pqc = (i < pqc_pk_hashes.size())
-                ? pqc_pk_hashes[i].bytes : zero_pqc;
-            bool ok = shekyl_construct_curve_tree_leaf(
-                inPk[i].dest.bytes,
-                inPk[i].mask.bytes,
-                h_pqc,
-                leaves_buf.data() + i * 128);
-            CHECK_AND_ASSERT_THROW_MES(ok, "shekyl_construct_curve_tree_leaf failed for input " << i);
-        }
-
         const uint32_t num_inputs = static_cast<uint32_t>(inPk.size());
 
-        // Tree root from the reference block (the verifier re-derives it; the
-        // prover needs the snapshot root to anchor the path).
+        // Pack per-input fixed-size witness data: 192 bytes each.
+        // [O:32][I (Hp(O)):32][C:32][h_pqc:32][spend_x:32][spend_y:32]
+        std::vector<uint8_t> inputs_buf(num_inputs * 192);
+        for (size_t i = 0; i < num_inputs; ++i)
+        {
+            uint8_t* base = inputs_buf.data() + i * 192;
+            memcpy(base, inPk[i].dest.bytes, 32);       // O
+
+            ge_p3 hp;
+            hash_to_p3(hp, inPk[i].dest);
+            key ki_gen;
+            ge_p3_tobytes(reinterpret_cast<unsigned char*>(ki_gen.bytes), &hp);
+            memcpy(base + 32, ki_gen.bytes, 32);         // I = Hp(O)
+
+            memcpy(base + 64, inPk[i].mask.bytes, 32);   // C
+
+            const uint8_t* h_pqc = pqc_pk_hashes[i].bytes;
+            memcpy(base + 96, h_pqc, 32);                // h_pqc
+
+            memcpy(base + 128, inSk[i].dest.bytes, 32);  // spend_key_x
+            memcpy(base + 160, inSk[i].mask.bytes, 32);  // spend_key_y
+        }
+
+        // Tree root from the reference block.
         key tree_root;
         memcpy(tree_root.bytes, referenceBlock.data, 32);
 
-        ShekylBuffer proof_buf = shekyl_fcmp_prove(
-            leaves_buf.data(),
+        ShekylFcmpProveResult result = shekyl_fcmp_prove(
+            inputs_buf.data(),
             num_inputs,
-            flat_paths.data(),
-            static_cast<uint32_t>(flat_paths.size()),
-            key_images_buf.data(),
-            pseudo_outs_buf.data(),
-            pqc_hashes_buf.data(),
             tree_root.bytes,
-            tree_depth);
+            tree_depth,
+            message.bytes);
 
-        if (proof_buf.ptr != nullptr && proof_buf.len > 0)
+        if (result.success && result.proof.ptr != nullptr && result.proof.len > 0)
         {
-            rv.p.fcmp_pp_proof.assign(proof_buf.ptr, proof_buf.ptr + proof_buf.len);
-            shekyl_buffer_free(proof_buf.ptr, proof_buf.len);
+            rv.p.fcmp_pp_proof.assign(result.proof.ptr, result.proof.ptr + result.proof.len);
+            shekyl_buffer_free(result.proof.ptr, result.proof.len);
+
+            if (result.pseudo_outs.ptr != nullptr && result.pseudo_outs.len == num_inputs * 32)
+            {
+                rv.p.pseudoOuts.resize(num_inputs);
+                for (size_t i = 0; i < num_inputs; ++i)
+                    memcpy(rv.p.pseudoOuts[i].bytes, result.pseudo_outs.ptr + i * 32, 32);
+                shekyl_buffer_free(result.pseudo_outs.ptr, result.pseudo_outs.len);
+            }
         }
         else
         {
-            LOG_PRINT_L0("WARNING: shekyl_fcmp_prove returned empty proof (stub/placeholder)");
+            LOG_PRINT_L0("shekyl_fcmp_prove failed for " << num_inputs << " inputs, depth " << (int)tree_depth);
         }
 
         return rv;

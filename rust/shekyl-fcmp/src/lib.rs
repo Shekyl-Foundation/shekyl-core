@@ -21,7 +21,7 @@ pub use tree::{
     SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH, HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS,
     ed25519_point_to_selene_scalar, construct_leaf,
 };
-pub use proof::{ShekylFcmpProof, ProveError, VerifyError};
+pub use proof::{ShekylFcmpProof, ProveError, VerifyError, ProveResult, ProveInput, BranchLayer};
 
 /// Domain separator for Shekyl's PQC leaf hash: H(pqc_pk) -> 4th scalar.
 pub const DOMAIN_PQC_LEAF: &[u8] = b"shekyl-pqc-leaf";

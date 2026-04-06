@@ -22,3 +22,12 @@ repository = "https://github.com/radawson/Shekyl"
 [workspace.dependencies]
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
+
+# Development override: point git deps to local monero-oxide fork with 4-scalar circuit changes.
+# Remove this section and bump Cargo.lock once the fork is pushed.
+[patch."https://github.com/Shekyl-Foundation/monero-oxide"]
+shekyl-fcmp-plus-plus = { path = "/home/torvaldsl/shekyl/monero-oxide/shekyl-oxide/fcmp/fcmp++" }
+shekyl-generators = { path = "/home/torvaldsl/shekyl/monero-oxide/shekyl-oxide/generators" }
+helioselene = { path = "/home/torvaldsl/shekyl/monero-oxide/crypto/helioselene" }
+ec-divisors = { path = "/home/torvaldsl/shekyl/monero-oxide/crypto/divisors" }
+generalized-bulletproofs = { path = "/home/torvaldsl/shekyl/monero-oxide/crypto/generalized-bulletproofs" }

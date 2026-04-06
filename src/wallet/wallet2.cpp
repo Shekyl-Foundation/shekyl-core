@@ -11591,6 +11591,7 @@ bool wallet2::sign_multisig_partial(const std::string& signing_request_json, std
         memcpy(pqc_hashes_flat.data() + i * 32, hash_out, 32);
     }
 
+    crypto::hash verify_tx_prefix_hash = cryptonote::get_transaction_prefix_hash(verify_tx);
     bool proof_valid = shekyl_fcmp_verify(
         verify_tx.rct_signatures.p.fcmp_pp_proof.data(),
         verify_tx.rct_signatures.p.fcmp_pp_proof.size(),
@@ -11598,7 +11599,8 @@ bool wallet2::sign_multisig_partial(const std::string& signing_request_json, std
         pseudo_outs_flat.data(), num_inputs,
         pqc_hashes_flat.data(), num_inputs,
         reinterpret_cast<const uint8_t*>(verify_tx.rct_signatures.referenceBlock.data),
-        verify_tx.rct_signatures.p.curve_trees_tree_depth);
+        verify_tx.rct_signatures.p.curve_trees_tree_depth,
+        reinterpret_cast<const uint8_t*>(verify_tx_prefix_hash.data));
     THROW_WALLET_EXCEPTION_IF(!proof_valid, error::wallet_internal_error,
         "FCMP++ proof verification failed - coordinator may have provided an invalid proof");
 
