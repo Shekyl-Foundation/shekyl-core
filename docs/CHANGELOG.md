@@ -17,6 +17,30 @@
 
 ### ✨ Added
 
+- **`shekyl-encoding` crate.** New standalone Rust crate (`rust/shekyl-encoding/`)
+  for general-purpose Bech32m blob encoding and decoding with arbitrary HRPs.
+  Defines HRP constants for wallet proofs (`shekylspendproof`, `shekyltxproof`,
+  `shekylreserveproof`, `shekylsig`, `shekylmultisig`, `shekylsigner`).
+
+- **`shekyl-address` crate.** New standalone Rust crate (`rust/shekyl-address/`)
+  for network-aware segmented Bech32m address encoding. Defines `Network` enum
+  (Mainnet, Testnet, Stagenet) with HRP lookup tables for classical (`shekyl`,
+  `tshekyl`, `sshekyl`) and PQC (`skpq`/`skpq2`, `tskpq`/`tskpq2`,
+  `sskpq`/`sskpq2`) segments. `ShekylAddress` supports `encode()`, `decode()`,
+  and `decode_for_network()`.
+
+- **Generic Bech32m blob FFI.** `shekyl_encode_blob()` and `shekyl_decode_blob()`
+  FFI functions allow C++ to encode/decode arbitrary binary data with
+  purpose-specific HRPs, replacing all direct Base58 calls in wallet proofs.
+
+- **Network-aware address FFI.** `shekyl_address_encode()` and
+  `shekyl_address_decode()` now accept/return a `network` parameter (0=mainnet,
+  1=testnet, 2=stagenet) for HRP-based network discrimination.
+
+- **Shekyl-first development rule.** Added `.cursor/rules/shekyl-first-development.mdc`
+  codifying that Shekyl core is the authoritative codebase and the monero-oxide
+  fork is a disposable downstream consumer.
+
 - **FROST SAL threshold signing for FCMP++ multisig.** New `frost_sal`
   module in `shekyl-fcmp` wraps upstream `SalAlgorithm<Ed25519T>` for
   threshold Spend-Auth-and-Linkability proofs. `FrostSalSession` manages
@@ -72,7 +96,37 @@
   of the plaintext `vout.amount`, avoiding `OUTPUT_DNE` during prune for
   miner transactions.
 
+### 🗑️ Removed
+
+- **Base58 encoding removed entirely.** Deleted `src/common/base58.{h,cpp}`,
+  `tests/unit_tests/base58.cpp`, `tests/fuzz/base58.cpp`, and all CMake
+  references. Removed `CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX`,
+  `CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX`, and
+  `CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX` constants from all network
+  namespaces and `config_t`. No code path accepts or produces Base58 strings.
+
+- **Legacy address structs removed.** `integrated_address`,
+  `legacy_account_public_address`, and `legacy_integrated_address` structs
+  removed from `cryptonote_basic_impl.cpp`. Subaddress and integrated address
+  logic removed from address encoding/decoding chokepoints.
+
 ### 🔄 Changed
+
+- **Address encoding migrated to Bech32m.** `get_account_address_as_str()` and
+  `get_account_address_from_str()` now call Rust FFI (`shekyl_address_encode`,
+  `shekyl_address_decode`) for network-aware Bech32m encoding. The `subaddress`
+  parameter is retained for API compatibility but ignored. `address_parse_info`
+  fields `is_subaddress` and `has_payment_id` are always false.
+
+- **Wallet proofs use Bech32m blob encoding.** Spend proofs, tx proofs (in/out),
+  reserve proofs, message signatures, multisig signatures, and signer keys are
+  now encoded with purpose-specific HRPs via `shekyl_encode_blob` /
+  `shekyl_decode_blob` FFI. Version headers (`SpendProofV1`, `InProofV2`, etc.)
+  removed; the HRP now serves as the type discriminator.
+
+- **`shekyl-crypto-pq` re-exports `shekyl-address`.** The `address` module in
+  `shekyl-crypto-pq` is now a re-export of the standalone `shekyl-address` crate.
+  The old `shekyl-crypto-pq/src/address.rs` has been deleted.
 
 - **Tx-data prune watermark.** `prune_tx_data` now stores `tx_prune_next_block`
   (exclusive next height) instead of ambiguous `last_pruned_tx_data_height`

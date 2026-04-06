@@ -522,8 +522,10 @@ from C++ through the `shekyl-ffi` crate.
 
 ```text
 rust/
+├── shekyl-encoding/        # Generic Bech32m blob encode/decode, proof HRP constants
+├── shekyl-address/         # Network-aware segmented Bech32m address encoding
 ├── shekyl-fcmp/            # FCMP++ proof ops, curve tree, leaf hashing
-├── shekyl-crypto-pq/       # PQC signing, KEM, address encoding, derivation
+├── shekyl-crypto-pq/       # PQC signing, KEM, derivation (re-exports shekyl-address)
 ├── shekyl-ffi/             # C ABI exports (libshekyl_ffi.a)
 └── Cargo.toml              # Workspace root
 ```
@@ -550,8 +552,10 @@ rust/
 | `shekyl_pqc_verify()` | `shekyl-ffi/src/lib.rs` | Verify hybrid PQC signature |
 | `shekyl_kem_encapsulate()` | `shekyl-ffi/src/lib.rs` | Hybrid KEM encapsulation |
 | `shekyl_kem_decapsulate()` | `shekyl-ffi/src/lib.rs` | Hybrid KEM decapsulation |
-| `shekyl_address_encode()` | `shekyl-ffi/src/lib.rs` | Bech32m address encoding |
-| `shekyl_address_decode()` | `shekyl-ffi/src/lib.rs` | Bech32m address decoding |
+| `shekyl_address_encode()` | `shekyl-ffi/src/lib.rs` | Bech32m address encoding (network-aware) |
+| `shekyl_address_decode()` | `shekyl-ffi/src/lib.rs` | Bech32m address decoding (network-aware) |
+| `shekyl_encode_blob()` | `shekyl-ffi/src/lib.rs` | Generic Bech32m blob encoding with arbitrary HRP |
+| `shekyl_decode_blob()` | `shekyl-ffi/src/lib.rs` | Generic Bech32m blob decoding |
 
 ### C++ Header
 
@@ -718,10 +722,41 @@ used for machine-to-machine communication and is required for sending
 funds (the PQC segments carry the ML-KEM public key needed for hybrid
 KEM encapsulation).
 
+### Network HRPs
+
+Network discrimination is handled via the Human-Readable Part (HRP):
+
+| Network | Classical HRP | PQC part A HRP | PQC part B HRP |
+|---------|---------------|----------------|----------------|
+| Mainnet | `shekyl` | `skpq` | `skpq2` |
+| Testnet | `tshekyl` | `tskpq` | `tskpq2` |
+| Stagenet | `sshekyl` | `sskpq` | `sskpq2` |
+
 ### Implementation
 
-Encoding and decoding are in `rust/shekyl-crypto-pq/src/address.rs`,
-exposed via `shekyl_address_encode()` and `shekyl_address_decode()`.
+Address encoding lives in two standalone crates:
+
+- `rust/shekyl-encoding/` — generic Bech32m blob encode/decode with
+  arbitrary HRPs. Also defines HRP constants for wallet proofs
+  (`shekylspendproof`, `shekyltxproof`, `shekylreserveproof`, `shekylsig`,
+  `shekylmultisig`, `shekylsigner`).
+- `rust/shekyl-address/` — network-aware segmented Bech32m address
+  encoding. Depends on `shekyl-encoding`. Defines the `Network` enum,
+  HRP lookup tables, and the `ShekylAddress` struct with `encode()` /
+  `decode()` / `decode_for_network()`.
+
+`shekyl-crypto-pq` re-exports `shekyl-address` as its `address` module
+for backward compatibility.
+
+FFI exports: `shekyl_address_encode()`, `shekyl_address_decode()`,
+`shekyl_encode_blob()`, `shekyl_decode_blob()` — all in
+`rust/shekyl-ffi/src/lib.rs`, declared in `src/shekyl/shekyl_ffi.h`.
+
+Base58 has been fully removed from the C++ codebase. The address
+chokepoints (`get_account_address_as_str`, `get_account_address_from_str`)
+call the Rust FFI. Wallet proofs, message signatures, and signer keys
+use `shekyl_encode_blob` / `shekyl_decode_blob` with purpose-specific
+HRPs. There are no remaining Base58 code paths.
 
 ---
 
@@ -1324,11 +1359,15 @@ security-critical commits have been audited against the Shekyl fork:
 | `a941dff` | Varint length fix for zero | **Not applicable** — fork uses different formula that correctly returns 1 for zero. |
 | `c8be5d3` | Gate debug `Extra::write` assertions | **Not applicable** — fork's `Extra::write` was refactored without debug assertions. |
 
-**Base58 defense-in-depth note:** Shekyl's production address encoding uses
-Bech32m (`shekyl-crypto-pq::address`). The monero-oxide fork's wallet still
-uses base58 via `shekyl-base58`. The base58 vulnerabilities were fixed as
-defense-in-depth. A follow-up migration of `shekyl-oxide/wallet/address`
-and `shekyl-base58` to Bech32m is planned.
+**Base58 defense-in-depth note:** Shekyl core has fully migrated to Bech32m.
+All C++ Base58 code (`base58.{h,cpp}`, unit tests, fuzz targets, config
+prefixes) has been deleted. Address encoding uses `shekyl-address` via FFI;
+wallet proofs use `shekyl-encoding` via FFI. The monero-oxide fork's wallet
+still uses base58 via `shekyl-base58` (defense-in-depth fixes applied).
+Migration of the fork's address crate is deferred — the fork's deep
+Monero-style address type assumptions (Legacy, Subaddress, Integrated,
+Featured) make the migration disproportionately expensive relative to the
+fork's disposable nature.
 
 **Cargo hardening:** Both the monero-oxide fork and the Shekyl Rust workspace
 (`rust/Cargo.toml`) now enforce `overflow-checks = true` across all profiles

@@ -105,7 +105,7 @@ struct PendingTransaction
 
     /**
      * @brief signersKeys
-     * @return vector of base58-encoded signers' public keys
+     * @return vector of Bech32m-encoded signers' public keys (HRP: "shekylsigner")
      */
     virtual std::vector<std::string> signersKeys() const = 0;
 };
