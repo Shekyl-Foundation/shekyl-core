@@ -326,6 +326,7 @@ jobs:
         with:
           submodules: recursive
       - name: guard against absolute local Cargo paths
+        shell: bash
         run: |
           MATCHES=""
           while IFS= read -r file; do
@@ -349,6 +350,7 @@ jobs:
             exit 1
           fi
       - name: verify fuzz harness inventory (smoke gate)
+        shell: bash
         run: |
           REQUIRED_TARGETS=(
             rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_fcmp_proof_deserialize.rs
