@@ -2035,6 +2035,48 @@ private:
     std::unordered_map<uint64_t, fcmp_precomputed_path> m_fcmp_precomputed_paths;
     uint64_t m_fcmp_last_precompute_height = 0;
 
+  public:
+    // Native-sign mode: when true, transfer_selected_rct skips C++ proof generation
+    // and stores signing data for the Rust shekyl-tx-builder path. Public because
+    // wallet2_ffi accesses these directly for the split prepare/finalize pipeline.
+    bool m_native_sign_mode = false;
+    struct native_sign_state {
+      pending_tx ptx;
+      std::vector<std::vector<uint8_t>> pqc_public_keys;
+      std::vector<std::vector<uint8_t>> pqc_secret_keys;
+      std::vector<size_t> permuted_transfers;
+      // Per-input signing data extracted from transfer_selected_rct
+      struct input_signing_data {
+        rct::key output_key;
+        rct::key commitment;
+        uint64_t amount;
+        rct::key spend_key_x;
+        rct::key spend_key_y;
+        rct::key h_pqc;
+        std::vector<fcmp_precomputed_path::chunk_output_entry> leaf_chunk;
+        std::vector<std::vector<rct::key>> c1_layers;
+        std::vector<std::vector<rct::key>> c2_layers;
+      };
+      std::vector<input_signing_data> inputs;
+      // Per-output data
+      struct output_signing_data {
+        rct::key dest_key;
+        uint64_t amount;
+        rct::key amount_key;
+      };
+      std::vector<output_signing_data> outputs;
+      crypto::hash tx_prefix_hash{};
+      uint64_t fee = 0;
+      crypto::hash reference_block{};
+      crypto::hash curve_tree_root{};
+      uint8_t tree_depth = 0;
+      std::string tx_blob_hex;
+      bool valid = false;
+      void clear() { valid = false; pqc_secret_keys.clear(); inputs.clear(); outputs.clear(); }
+    };
+    native_sign_state m_native_sign_state;
+
+  private:
     // PQC multisig state (scheme_id = 2)
     std::vector<uint8_t> m_pqc_multisig_keys;
     crypto::hash m_pqc_multisig_group_id;

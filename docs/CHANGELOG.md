@@ -53,10 +53,33 @@
   JSON) → `shekyl-tx-builder::sign_transaction` (pure Rust) →
   `wallet2_ffi_finalize_transfer` (JSON → C++).
 
-- **`wallet2_ffi_prepare_transfer` / `wallet2_ffi_finalize_transfer` stubs.**
-  New C++ FFI entry points in `wallet2_ffi.cpp` that split the transfer
-  pipeline for native Rust signing. Currently return "not yet implemented"
-  pending full C++ integration.
+- **`wallet2_ffi_prepare_transfer` / `wallet2_ffi_finalize_transfer` implemented.**
+  Full C++ implementation of the split transfer pipeline. `prepare_transfer`
+  activates native-sign mode in `transfer_selected_rct` (skipping C++ proof
+  generation), gathers per-input signing data (secret keys, tree paths parsed
+  into c1/c2 branch layers, leaf chunks, PQC key material), per-output data
+  (dest keys, amount keys), tree context (reference block, curve tree root,
+  depth), and serializes everything as hex-encoded JSON matching the Rust
+  `SpendInput`/`OutputInfo`/`TreeContext` types. `finalize_transfer` receives
+  the Rust-generated `SignedProofs` JSON, manually reconstructs the BP+ struct
+  from the Rust blob (handling the V-field format difference), inserts all
+  proofs into `tx.rct_signatures`, performs PQC signing using stored secret
+  keys, and commits/broadcasts the transaction. Fee estimation uses
+  `shekyl_fcmp_proof_len()` to pad the stub FCMP++ proof to the correct
+  estimated size.
+
+- **Native-sign mode in `wallet2::transfer_selected_rct`.** New
+  `m_native_sign_mode` flag and `native_sign_state` struct on `wallet2`.
+  When enabled, `transfer_selected_rct` skips `genRctFcmpPlusPlus` and PQC
+  signing, instead storing all signing data for the Rust path. Tree path
+  blobs are parsed into structured c1/c2 branch layers. Padded stub proofs
+  provide accurate fee estimation.
+
+- **Hex serde for `shekyl-tx-builder` types.** All `[u8; 32]`, `Vec<u8>`,
+  and `Vec<[u8; 32]>` fields on `SpendInput`, `OutputInfo`, `TreeContext`,
+  `SignedProofs`, `LeafEntry`, and `PqcAuth` now serialize/deserialize as hex
+  strings via custom serde modules. This enables clean JSON interop with the
+  C++ FFI layer which produces hex-encoded cryptographic keys and blobs.
 
 - **Secure memory Cursor rule.** Added `.cursor/rules/secure-memory.mdc`
   codifying project-wide conventions for cryptographic secret zeroization in

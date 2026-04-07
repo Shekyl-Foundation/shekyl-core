@@ -9573,51 +9573,141 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       }
     }
 
-    // Proof generation: C++ path (genRctFcmpPlusPlus) remains the default for
-    // hardware wallet support. The Rust-native path (shekyl_sign_transaction)
-    // is available for software-only wallets and is used by shekyl-wallet-rpc.
-    // To switch: serialize SpendInput/OutputInfo to JSON and call the FFI.
-    LOG_PRINT_L2("calling genRctFcmpPlusPlus with " << num_inputs << " inputs, "
-        << destinations_rct.size() << " outputs");
-    rct::key rct_tree_root;
-    memcpy(rct_tree_root.bytes, &curve_tree_root, 32);
-    rct::rctSig rv = rct::genRctFcmpPlusPlus(
-        rct::hash2rct(tx_prefix_hash),
-        inSk, inPk,
-        destinations_rct, inamounts, outamounts, amount_keys,
-        fee, reference_block, rct_tree_root, tree_depth,
-        tree_paths, leaf_chunk_entries, pqc_pk_hashes,
-        m_account.get_device());
-    tx.rct_signatures = rv;
-
-    if (m_callback) m_callback->on_transfer_stage("signing_pqc", 2, 4);
-    // Phase C: PQC auth signing with per-input derived ML-DSA-65 keys
-    tx.pqc_auths.resize(num_inputs);
-    for (size_t i = 0; i < num_inputs; ++i)
+    if (m_native_sign_mode)
     {
-      tx.pqc_auths[i].auth_version = 1;
-      tx.pqc_auths[i].scheme_id = 1;
-      tx.pqc_auths[i].flags = 0;
-      tx.pqc_auths[i].hybrid_public_key = derived_pqc_public_keys[i];
+      // Native-sign mode: skip C++ proof generation. Pad stub for fee estimation.
+      tx.rct_signatures.p.curve_trees_tree_depth = tree_depth;
+      tx.rct_signatures.referenceBlock = reference_block;
+      size_t estimated_proof_len = shekyl_fcmp_proof_len(num_inputs, tree_depth);
+      tx.rct_signatures.p.fcmp_pp_proof.resize(estimated_proof_len, 0);
 
-      std::string payload_blob;
-      THROW_WALLET_EXCEPTION_IF(!cryptonote::get_transaction_signed_payload(tx, i, payload_blob),
-          error::wallet_internal_error, "Failed to build PQC signed payload for input " + std::to_string(i));
-      crypto::hash payload_hash;
-      cryptonote::get_blob_hash(payload_blob, payload_hash);
+      tx.pqc_auths.resize(num_inputs);
+      for (size_t i = 0; i < num_inputs; ++i)
+      {
+        tx.pqc_auths[i].auth_version = 1;
+        tx.pqc_auths[i].scheme_id = 1;
+        tx.pqc_auths[i].flags = 0;
+        tx.pqc_auths[i].hybrid_public_key = derived_pqc_public_keys[i];
+        tx.pqc_auths[i].hybrid_signature.resize(3385, 0);
+      }
 
-      ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
-          reinterpret_cast<const uint8_t*>(derived_pqc_secret_keys[i].data()),
-          derived_pqc_secret_keys[i].size(),
-          reinterpret_cast<const uint8_t*>(payload_hash.data), sizeof(payload_hash.data));
-      THROW_WALLET_EXCEPTION_IF(!sig_result.success, error::wallet_internal_error,
-          "PQC signing failed for input " + std::to_string(i));
-      tx.pqc_auths[i].hybrid_signature.assign(sig_result.signature.ptr,
-          sig_result.signature.ptr + sig_result.signature.len);
-      shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
+      // Parse tree paths into branch layers and store signing state.
+      const uint32_t SELENE_CW = shekyl_curve_tree_selene_chunk_width();
+      const uint32_t HELIOS_CW = shekyl_curve_tree_helios_chunk_width();
+
+      m_native_sign_state.clear();
+      m_native_sign_state.inputs.resize(num_inputs);
+      for (size_t i = 0; i < num_inputs; ++i)
+      {
+        auto& isd = m_native_sign_state.inputs[i];
+        isd.output_key = inPk[i].dest;
+        isd.commitment = inPk[i].mask;
+        isd.amount = inamounts[i];
+        isd.spend_key_x = inSk[i].dest;
+        isd.spend_key_y = inSk[i].mask;
+        isd.h_pqc = pqc_pk_hashes[i];
+
+        // Copy leaf chunk entries
+        const auto& entries = leaf_chunk_entries[i];
+        isd.leaf_chunk.resize(entries.size());
+        for (size_t j = 0; j < entries.size(); ++j)
+        {
+          isd.leaf_chunk[j].output_key = entries[j].output_key;
+          isd.leaf_chunk[j].key_image_gen = entries[j].key_image_gen;
+          isd.leaf_chunk[j].commitment = entries[j].commitment;
+          isd.leaf_chunk[j].h_pqc = entries[j].h_pqc;
+        }
+
+        // Parse tree_path blob into c1 (Selene) and c2 (Helios) branch layers
+        const auto& tp = tree_paths[i];
+        size_t tp_off = 0;
+        if (tp_off + 2 <= tp.size())
+        {
+          tp_off += 2; // skip leaf_pos u16
+          tp_off += entries.size() * 128; // skip leaf scalar data
+          for (uint8_t layer = 1; layer < tree_depth && tp_off + 2 <= tp.size(); ++layer)
+          {
+            tp_off += 2; // skip pos_in_parent u16
+            uint32_t width = (layer % 2 == 0) ? SELENE_CW : HELIOS_CW;
+            size_t layer_bytes = width * 32;
+            if (tp_off + layer_bytes > tp.size())
+              layer_bytes = tp.size() - tp_off;
+            size_t n_siblings = layer_bytes / 32;
+            std::vector<rct::key> siblings(n_siblings);
+            for (size_t s = 0; s < n_siblings; ++s)
+              memcpy(siblings[s].bytes, tp.data() + tp_off + s * 32, 32);
+            tp_off += layer_bytes;
+            if (layer % 2 == 0)
+              isd.c1_layers.push_back(std::move(siblings));
+            else
+              isd.c2_layers.push_back(std::move(siblings));
+          }
+        }
+      }
+
+      m_native_sign_state.outputs.resize(destinations_rct.size());
+      for (size_t i = 0; i < destinations_rct.size(); ++i)
+      {
+        m_native_sign_state.outputs[i].dest_key = destinations_rct[i];
+        m_native_sign_state.outputs[i].amount = outamounts[i];
+        m_native_sign_state.outputs[i].amount_key = amount_keys[i];
+      }
+
+      m_native_sign_state.pqc_public_keys = derived_pqc_public_keys;
+      m_native_sign_state.pqc_secret_keys = std::move(derived_pqc_secret_keys);
+      m_native_sign_state.permuted_transfers.assign(permuted_transfers.begin(), permuted_transfers.end());
+      m_native_sign_state.tx_prefix_hash = tx_prefix_hash;
+      m_native_sign_state.fee = fee;
+      m_native_sign_state.reference_block = reference_block;
+      m_native_sign_state.curve_tree_root = curve_tree_root;
+      m_native_sign_state.tree_depth = tree_depth;
+      m_native_sign_state.valid = true;
+
+      tx.invalidate_hashes();
     }
+    else
+    {
+      LOG_PRINT_L2("calling genRctFcmpPlusPlus with " << num_inputs << " inputs, "
+          << destinations_rct.size() << " outputs");
+      rct::key rct_tree_root;
+      memcpy(rct_tree_root.bytes, &curve_tree_root, 32);
+      rct::rctSig rv = rct::genRctFcmpPlusPlus(
+          rct::hash2rct(tx_prefix_hash),
+          inSk, inPk,
+          destinations_rct, inamounts, outamounts, amount_keys,
+          fee, reference_block, rct_tree_root, tree_depth,
+          tree_paths, leaf_chunk_entries, pqc_pk_hashes,
+          m_account.get_device());
+      tx.rct_signatures = rv;
 
-    tx.invalidate_hashes();
+      if (m_callback) m_callback->on_transfer_stage("signing_pqc", 2, 4);
+      tx.pqc_auths.resize(num_inputs);
+      for (size_t i = 0; i < num_inputs; ++i)
+      {
+        tx.pqc_auths[i].auth_version = 1;
+        tx.pqc_auths[i].scheme_id = 1;
+        tx.pqc_auths[i].flags = 0;
+        tx.pqc_auths[i].hybrid_public_key = derived_pqc_public_keys[i];
+
+        std::string payload_blob;
+        THROW_WALLET_EXCEPTION_IF(!cryptonote::get_transaction_signed_payload(tx, i, payload_blob),
+            error::wallet_internal_error, "Failed to build PQC signed payload for input " + std::to_string(i));
+        crypto::hash payload_hash;
+        cryptonote::get_blob_hash(payload_blob, payload_hash);
+
+        ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
+            reinterpret_cast<const uint8_t*>(derived_pqc_secret_keys[i].data()),
+            derived_pqc_secret_keys[i].size(),
+            reinterpret_cast<const uint8_t*>(payload_hash.data), sizeof(payload_hash.data));
+        THROW_WALLET_EXCEPTION_IF(!sig_result.success, error::wallet_internal_error,
+            "PQC signing failed for input " + std::to_string(i));
+        tx.pqc_auths[i].hybrid_signature.assign(sig_result.signature.ptr,
+            sig_result.signature.ptr + sig_result.signature.len);
+        shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
+      }
+
+      tx.invalidate_hashes();
+    }
   }
 
   THROW_WALLET_EXCEPTION_IF(upper_transaction_weight_limit <= get_transaction_weight(tx), error::tx_too_big, tx, upper_transaction_weight_limit);
