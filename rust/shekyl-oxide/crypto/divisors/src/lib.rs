@@ -45,7 +45,6 @@ pub trait DivisorCurve: Group + ConstantTimeEq + ConditionallySelectable + Zeroi
   fn b() -> Self::FieldElement;
 
   /// The type representing an interpolator which has been borrowed.
-  // TODO: Remove with Rust 1.75
   type BorrowedInterpolator: Borrow<Interpolator<Self::FieldElement>>;
   /// Precomputed interpolator required for interpolating a divisor representing a scalar
   /// multiplication.

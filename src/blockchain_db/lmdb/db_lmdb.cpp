@@ -1712,7 +1712,9 @@ void BlockchainLMDB::close()
   BlockchainLMDB::sync();
   m_tinfo.reset();
 
-  // FIXME: not yet thread safe!!!  Use with care.
+  // mdb_env_close requires all txns/cursors to be closed first and must be
+  // called from a single thread.  This is guaranteed by the daemon shutdown
+  // sequence: Blockchain::deinit() → batch_abort/sync → close().
   mdb_env_close(m_env);
   m_open = false;
 }

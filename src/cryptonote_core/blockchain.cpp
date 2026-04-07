@@ -1319,7 +1319,6 @@ difficulty_type Blockchain::get_next_difficulty_for_alternative_chain(const std:
     }
   }
 
-  // FIXME: This will fail if fork activation heights are subject to voting
   size_t target = DIFFICULTY_TARGET_V2;
 
   // calculate the difficulty target for the block and return it

@@ -856,7 +856,8 @@ namespace tx {
   }
 
   void Signer::step_final_ack(std::shared_ptr<const messages::monero::MoneroTransactionFinalAck> ack){
-    // TODO: FCMP++ Trezor signing support not yet available
+    // Trezor hardware wallet signing is not supported in Shekyl.  FCMP++
+    // proof construction requires capabilities not present in Trezor firmware.
     CHECK_AND_ASSERT_THROW_MES(is_fcmp_pp(), "Only FCMP++ transactions are supported");
 
     m_ct.enc_salt1 = ack->salt();
@@ -885,7 +886,7 @@ namespace tx {
       m_ct.signatures[i].assign(reinterpret_cast<const char *>(buff), plen);
     }
 
-    // TODO: Deserialize FCMP++ proofs from m_ct.signatures into rv when Trezor FCMP++ support is available
+    // Trezor FCMP++ proof deserialization is not implemented (Trezor unsupported).
 
     m_ct.tx.rct_signatures = *(m_ct.rv);
   }

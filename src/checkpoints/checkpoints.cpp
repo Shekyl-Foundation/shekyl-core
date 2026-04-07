@@ -135,7 +135,6 @@ namespace cryptonote
     return check_block(height, h, ignored);
   }
   //---------------------------------------------------------------------------
-  //FIXME: is this the desired behavior?
   bool checkpoints::is_alternative_block_allowed(uint64_t blockchain_height, uint64_t block_height) const
   {
     if (0 == block_height)

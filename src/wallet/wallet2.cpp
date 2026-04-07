@@ -3853,8 +3853,7 @@ void wallet2::process_unconfirmed_transfer(bool incremental, const crypto::hash 
     }
   };
 
-  // TODO: set tx_propagation_timeout to CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE * 3 / 2 after v15 hardfork
-  constexpr const std::chrono::seconds tx_propagation_timeout{500};
+  constexpr const std::chrono::seconds tx_propagation_timeout{CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE * 3 / 2};
   if (seen_in_pool)
   {
     if (tx_details.m_state != wallet2::unconfirmed_transfer_details::pending_in_pool)

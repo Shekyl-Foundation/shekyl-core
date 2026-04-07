@@ -276,7 +276,8 @@ private:
     bool check_core_busy();
     bool check_core_ready();
     bool add_host_fail(const connection_context *ctx, unsigned int score = 1);
-    
+    bool is_restricted() const { return m_restricted; }
+
     //utils
     uint64_t get_block_reward(const block& blk);
     bool fill_block_header_response(const block& blk, bool orphan_status, uint64_t height, const crypto::hash& hash, block_header_response& response, bool fill_pow_hash);

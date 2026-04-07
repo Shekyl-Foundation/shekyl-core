@@ -747,28 +747,10 @@ public:
   virtual std::string get_db_name() const = 0;
 
 
-  // FIXME: these are just for functionality mocking, need to implement
-  // RAII-friendly and multi-read one-write friendly locking mechanism
-  //
-  // acquire db lock
-  /**
-   * @brief acquires the BlockchainDB lock
-   *
-   * This function is a stub until such a time as locking is implemented at
-   * this level.
-   *
-   * The subclass implementation should return true unless implementing a
-   * locking scheme of some sort, in which case it should return true upon
-   * acquisition of the lock and block until then.
-   *
-   * If any of this cannot be done, the subclass should throw the corresponding
-   * subclass of DB_EXCEPTION
-   *
-   * @return true, unless at a future time false makes sense (timeout, etc)
-   */
+  // Unused stubs — all synchronization is done at the Blockchain level via
+  // m_blockchain_lock.  Retained for interface compatibility; no callers exist.
   virtual bool lock() = 0;
 
-  // release db lock
   /**
    * @brief This function releases the BlockchainDB lock
    *

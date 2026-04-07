@@ -442,13 +442,7 @@ void core_rpc_ffi_destroy(core_rpc_handle* h)
 bool core_rpc_ffi_is_restricted(const core_rpc_handle* h)
 {
     if (!h || !h->rpc) return true;
-    // The m_restricted member is private; access it via the same pattern
-    // the daemon uses (set at init time). We expose it via the handle.
-    // For now, we check by trying a restricted-only endpoint and seeing
-    // if the URI map would accept it. A cleaner solution would be to add
-    // a public accessor to core_rpc_server, but that's a minimal change.
-    // TODO: Add bool core_rpc_server::is_restricted() const { return m_restricted; }
-    return false; // Caller tracks restriction separately in Rust AppState
+    return h->rpc->is_restricted();
 }
 
 char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,

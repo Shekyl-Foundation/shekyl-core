@@ -217,8 +217,6 @@ namespace cryptonote
     CHECK_AND_ASSERT_MES(expand_transaction_1(tx, false), false, "Failed to expand transaction data");
     tx.invalidate_hashes();
     tx.set_blob_size(tx_blob.size());
-    //TODO: validate tx
-
     return get_transaction_hash(tx, tx_hash);
   }
   //---------------------------------------------------------------

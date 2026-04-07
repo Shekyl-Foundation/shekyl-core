@@ -1279,8 +1279,13 @@ impl<R: Rpc> DecoyRpc for R {
         vec![]
       };
 
-      // TODO(shekyl): Validate decoy selection against Shekyl-specific rules (ring size,
-      // distribution). Basic key validity and fingerprinting checks are in place below.
+      // Audit 2026-04-07: This entire decoy/ring-signature code path is unused by
+      // Shekyl.  FCMP++ replaces rings with full-chain membership proofs — no decoys
+      // are selected during Shekyl transaction construction.  The validation below
+      // (key decompression, timelock checks, torsion filtering) is correct for the
+      // monero-oxide CLSAG path it was inherited from, but is dead code in Shekyl.
+      // If CLSAG support is ever removed from shekyl-oxide, this function and the
+      // DecoyRpc trait methods can be deleted entirely.
       outs
         .iter()
         .enumerate()

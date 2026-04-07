@@ -144,11 +144,6 @@ namespace crypto {
     sc_reduce32(&res);
   }
 
-  /* 
-   * generate public and secret keys from a random 256-bit integer
-   * TODO: allow specifying random value (for wallet recovery)
-   * 
-   */
   secret_key crypto_ops::generate_keys(public_key &pub, secret_key &sec, const secret_key& recovery_key, bool recover) {
     ge_p3 point;
 
