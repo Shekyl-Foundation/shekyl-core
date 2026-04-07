@@ -11097,10 +11097,36 @@ std::vector<size_t> wallet2::get_claimable_staked_outputs() const
   for (size_t i = 0; i < m_transfers.size(); ++i)
   {
     const auto& td = m_transfers[i];
-    if (td.m_staked && !td.m_spent && !td.m_frozen && td.m_stake_lock_until > height)
+    if (!td.m_staked || td.m_spent || td.m_frozen)
+      continue;
+    // Accrual cap: the output earns rewards up to lock_until.
+    // A claim is possible if the local watermark hasn't reached that cap.
+    const uint64_t accrual_cap = std::min(height, td.m_stake_lock_until);
+    const uint64_t watermark = (td.m_last_claimed_height > 0)
+      ? td.m_last_claimed_height : td.m_block_height;
+    if (watermark < accrual_cap)
       result.push_back(i);
   }
   return result;
+}
+//----------------------------------------------------------------------------------------------------
+void wallet2::update_claim_watermarks(const pending_tx& ptx)
+{
+  for (const auto& inp : ptx.tx.vin)
+  {
+    if (!std::holds_alternative<cryptonote::txin_stake_claim>(inp))
+      continue;
+    const auto& claim = std::get<cryptonote::txin_stake_claim>(inp);
+    for (size_t i = 0; i < m_transfers.size(); ++i)
+    {
+      auto& td = m_transfers[i];
+      if (td.m_staked && td.m_global_output_index == claim.staked_output_index)
+      {
+        td.m_last_claimed_height = claim.to_height;
+        break;
+      }
+    }
+  }
 }
 //----------------------------------------------------------------------------------------------------
 uint64_t wallet2::estimate_claimable_reward(size_t transfer_index)
@@ -11110,7 +11136,9 @@ uint64_t wallet2::estimate_claimable_reward(size_t transfer_index)
   THROW_WALLET_EXCEPTION_IF(!td.m_staked, error::wallet_internal_error, "Output is not staked");
 
   const uint64_t current_height = get_blockchain_current_height();
-  uint64_t from_h = td.m_block_height;
+  // Use the local watermark if we've claimed before, otherwise the creation height
+  uint64_t from_h = (td.m_last_claimed_height > 0) ? td.m_last_claimed_height : td.m_block_height;
+  // Accrual cap: rewards accrue only up to lock_until
   uint64_t to_h = std::min(current_height, td.m_stake_lock_until);
   if (from_h >= to_h)
     return 0;
@@ -11155,11 +11183,13 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
     const auto& td = m_transfers[idx];
     THROW_WALLET_EXCEPTION_IF(!td.m_staked, error::wallet_internal_error, "Output is not staked");
     THROW_WALLET_EXCEPTION_IF(td.m_spent, error::wallet_internal_error, "Output is already spent");
-    THROW_WALLET_EXCEPTION_IF(td.m_stake_lock_until <= current_height, error::wallet_internal_error,
-      "Staked output already matured; claim before unstaking");
 
-    uint64_t from_h = td.m_block_height;
+    // Use the local watermark if we've claimed before, otherwise the creation height
+    uint64_t from_h = (td.m_last_claimed_height > 0) ? td.m_last_claimed_height : td.m_block_height;
+    // Accrual cap: rewards accrue only up to lock_until
     uint64_t to_h = std::min(current_height, td.m_stake_lock_until);
+    THROW_WALLET_EXCEPTION_IF(from_h >= to_h, error::wallet_internal_error,
+      "No unclaimed reward backlog for staked output " + std::to_string(idx));
     const uint64_t max_claim_range = shekyl_stake_max_claim_range();
     if (to_h - from_h > max_claim_range)
       to_h = from_h + max_claim_range;

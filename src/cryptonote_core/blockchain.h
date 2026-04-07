@@ -1232,9 +1232,11 @@ namespace cryptonote
     // Cached state for incremental stake-ratio computation (component 3 inputs).
     mutable bool m_stake_ratio_cache_initialized;
     mutable uint64_t m_stake_ratio_cache_height;
-    mutable uint64_t m_stake_ratio_cache_total_staked;
+    mutable uint64_t m_stake_ratio_cache_total_staked;    // raw amounts (for stake_ratio)
+    mutable uint64_t m_stake_ratio_cache_total_weighted;  // tier-weighted amounts (for accrual)
     mutable crypto::hash m_stake_ratio_cache_last_block_hash;
-    mutable std::unordered_map<uint64_t, uint64_t> m_stake_unlock_schedule;
+    mutable std::unordered_map<uint64_t, uint64_t> m_stake_unlock_schedule;          // raw per unlock height
+    mutable std::unordered_map<uint64_t, uint64_t> m_stake_unlock_schedule_weighted; // weighted per unlock height
 
     epee::critical_section m_difficulty_lock;
     crypto::hash m_difficulty_for_next_block_top_hash;

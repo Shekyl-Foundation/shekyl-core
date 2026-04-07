@@ -480,3 +480,112 @@ TEST(staking, txout_target_variant_holds_staked_key)
   EXPECT_EQ(extracted.lock_tier, 2);
   EXPECT_EQ(extracted.lock_until, 99999u);
 }
+
+// ===================================================================
+// 7. Conservation invariant: per-block reward distribution sums to pool
+// ===================================================================
+
+TEST(staking, conservation_invariant_single_block)
+{
+  // Simulate a single block with multiple stakers across all tiers.
+  // The sum of per-staker rewards must equal the pool inflow
+  // (modulo integer dust from floor division).
+  struct stake_position {
+    uint64_t amount;
+    uint8_t tier;
+  };
+
+  const stake_position positions[] = {
+    {1000000000, 0}, // 1 SKL, tier 0 (1.0x)
+    {2000000000, 1}, // 2 SKL, tier 1 (1.5x)
+    {500000000,  2}, // 0.5 SKL, tier 2 (2.0x)
+    {3000000000, 0}, // 3 SKL, tier 0
+    {1500000000, 2}, // 1.5 SKL, tier 2
+  };
+
+  // Compute total_weighted_stake using the SAME function the accrual scan uses
+  uint64_t total_weighted = 0;
+  for (const auto& pos : positions)
+    total_weighted += shekyl_stake_weight(pos.amount, pos.tier);
+
+  ASSERT_GT(total_weighted, 0u);
+
+  const uint64_t pool_inflow = 5000000; // 0.005 SKL per block
+
+  uint64_t total_distributed = 0;
+  for (const auto& pos : positions)
+  {
+    uint64_t weight = shekyl_stake_weight(pos.amount, pos.tier);
+    uint8_t overflow = 0;
+    uint64_t reward = shekyl_calc_per_block_staker_reward(
+      pool_inflow, weight, total_weighted, &overflow);
+    EXPECT_EQ(overflow, 0);
+    total_distributed += reward;
+  }
+
+  // Conservation: distributed <= pool_inflow (dust from floor division)
+  EXPECT_LE(total_distributed, pool_inflow);
+  // The dust should be small (at most num_stakers - 1 atomic units)
+  uint64_t dust = pool_inflow - total_distributed;
+  EXPECT_LT(dust, 5u); // < number of stakers
+}
+
+TEST(staking, conservation_invariant_all_same_tier)
+{
+  // When all stakers are at the same tier, the bugged formula would have
+  // distributed exactly 100% (multiplier cancels). With the fix, it should
+  // also distribute 100% minus dust.
+  const uint64_t amount = 1000000000;
+  const uint8_t tier = 2; // 2.0x
+  const int num_stakers = 10;
+
+  uint64_t total_weighted = 0;
+  for (int i = 0; i < num_stakers; ++i)
+    total_weighted += shekyl_stake_weight(amount, tier);
+
+  const uint64_t pool_inflow = 10000000;
+  uint64_t total_distributed = 0;
+  for (int i = 0; i < num_stakers; ++i)
+  {
+    uint64_t weight = shekyl_stake_weight(amount, tier);
+    uint8_t overflow = 0;
+    total_distributed += shekyl_calc_per_block_staker_reward(
+      pool_inflow, weight, total_weighted, &overflow);
+    EXPECT_EQ(overflow, 0);
+  }
+
+  EXPECT_LE(total_distributed, pool_inflow);
+  EXPECT_GE(total_distributed, pool_inflow - (uint64_t)num_stakers);
+}
+
+TEST(staking, conservation_invariant_mixed_tiers_stress)
+{
+  // 100 stakers with varying amounts and tiers -- verify conservation holds
+  const uint64_t base_amount = 100000000; // 0.1 SKL
+  const int num_stakers = 100;
+
+  uint64_t total_weighted = 0;
+  std::vector<std::pair<uint64_t, uint8_t>> stakers;
+  for (int i = 0; i < num_stakers; ++i)
+  {
+    uint64_t amt = base_amount * (1 + (i % 20));
+    uint8_t tier = i % 3;
+    stakers.push_back({amt, tier});
+    total_weighted += shekyl_stake_weight(amt, tier);
+  }
+
+  const uint64_t pool_inflow = 50000000; // 0.05 SKL
+  uint64_t total_distributed = 0;
+  for (const auto& [amt, tier] : stakers)
+  {
+    uint64_t weight = shekyl_stake_weight(amt, tier);
+    uint8_t overflow = 0;
+    total_distributed += shekyl_calc_per_block_staker_reward(
+      pool_inflow, weight, total_weighted, &overflow);
+    EXPECT_EQ(overflow, 0);
+  }
+
+  EXPECT_LE(total_distributed, pool_inflow);
+  uint64_t dust = pool_inflow - total_distributed;
+  EXPECT_LT(dust, (uint64_t)num_stakers);
+}
