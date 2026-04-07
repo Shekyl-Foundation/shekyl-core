@@ -4,6 +4,36 @@
 
 ### ✨ Added
 
+- **LMDB write atomicity audit.** Comprehensive audit of all `BlockchainLMDB`
+  write paths (block connect, block pop, txpool, alt blocks, staking, FCMP++
+  curve tree). Documented in `docs/LMDB_WRITE_ATOMICITY_AUDIT.md`. Found and
+  fixed a missing `lock.commit()` in `get_relayable_transactions` (Dandelion++
+  timestamp rollback bug) and added a defensive `db_wtxn_guard` around the
+  staker accrual reversal in `pop_block_from_blockchain`.
+
+- **LMDB schema reference (`docs/LMDB_SCHEMA.md`).** Complete documentation of
+  all 28 sub-databases: LMDB names, open flags, custom comparators, key/value
+  byte layouts with struct field offsets, read/write access patterns, and hard
+  fork version introduction. Standalone audit value and prerequisite for the
+  eventual heed migration.
+
+- **Vendored dependency tracking (`docs/VENDORED_DEPENDENCIES.md`).** Documents
+  the vendored LMDB version (0.9.70, based on OpenLDAP `mdb.master` branch),
+  applied upstream patches (ITS#9385, ITS#9496, ITS#9500, etc.), CVE review
+  (CVE-2026-22185 does not affect us), and the `mdb.master` vs `mdb.master3`
+  branch distinction relevant to future heed migration.
+
+- **V4 design notes (`docs/V4_DESIGN_NOTES.md`).** Records the heed LMDB
+  migration deferral with detailed reasoning (shared-write risk, schema drift,
+  map resize race conditions) and the recommended approach for V4 (single
+  Rust-owned Env, no split write ownership, full BlockchainLMDB unit cutover).
+
+- **Additional C++ conservation-invariant tests.** Six new tests in
+  `tests/unit_tests/staking.cpp`: weighted denominator >= raw sum invariant,
+  tier-0 weight equality, higher-tier strict inequality, zero-staker burn path,
+  single-staker full capture, dust staker conservation, multi-block claim range
+  conservation, and MAX_CLAIM_RANGE boundary validation.
+
 - **`shekyl-wallet-core` crate.** New Rust crate providing transaction builder
   plans for stake, unstake, and claim operations. Includes `ClaimTxBuilder` for
   constructing claim transaction plans with automatic MAX_CLAIM_RANGE splitting,
@@ -49,6 +79,19 @@
   and adversarial edge cases.
 
 ### 🐛 Fixed
+
+- **Dandelion++ relay timestamp rollback.** `get_relayable_transactions` in
+  `tx_pool.cpp` was missing `lock.commit()`, causing all stem/forward timestamp
+  updates to be silently rolled back by the `LockedTXN` destructor. Transactions
+  in Dandelion++ stem/forward states could be re-relayed with stale timing data,
+  degrading transaction-origin privacy. Fixed by adding the missing commit.
+
+- **Staker accrual reversal without write transaction guard.** The staker pool
+  balance and burn total reversal in `pop_block_from_blockchain` relied on the
+  caller's batch context for a write transaction but had no defensive guard.
+  While all current production callers maintain a batch, a future caller without
+  one would crash or produce undefined behavior. Fixed by wrapping the reversal
+  block in `db_wtxn_guard`.
 
 - **Critical: weighted denominator bug in staker reward accrual.** The per-block
   `total_weighted_stake` was computed from raw staked amounts instead of

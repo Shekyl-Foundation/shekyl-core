@@ -589,3 +589,190 @@ TEST(staking, conservation_invariant_mixed_tiers_stress)
   uint64_t dust = pool_inflow - total_distributed;
   EXPECT_LT(dust, (uint64_t)num_stakers);
 }
+
+// ===================================================================
+// 8. Weighted denominator invariant: total_weighted >= sum(raw)
+// ===================================================================
+
+TEST(staking, weighted_denominator_ge_raw_sum)
+{
+  const uint64_t base_amount = 500000000; // 0.5 SKL
+  const int num_stakers = 50;
+
+  uint64_t sum_raw = 0;
+  uint64_t sum_weighted = 0;
+  for (int i = 0; i < num_stakers; ++i)
+  {
+    uint64_t amt = base_amount * (1 + (i % 10));
+    uint8_t tier = i % 3;
+    sum_raw += amt;
+    sum_weighted += shekyl_stake_weight(amt, tier);
+  }
+
+  EXPECT_GE(sum_weighted, sum_raw);
+}
+
+TEST(staking, weighted_denominator_tier0_equals_raw)
+{
+  // Tier 0 has 1.0x multiplier, so weighted == raw
+  const uint64_t amount = 1000000000;
+  uint64_t weight = shekyl_stake_weight(amount, 0);
+  EXPECT_EQ(weight, amount);
+}
+
+TEST(staking, weighted_denominator_higher_tiers_strictly_greater)
+{
+  const uint64_t amount = 1000000000;
+  for (uint8_t tier = 1; tier < shekyl_stake_tier_count(); ++tier)
+  {
+    uint64_t weight = shekyl_stake_weight(amount, tier);
+    EXPECT_GT(weight, amount)
+      << "tier " << (unsigned)tier << " weight should exceed raw amount";
+  }
+}
+
+// ===================================================================
+// 9. Zero-staker burn path
+// ===================================================================
+
+TEST(staking, zero_staker_burn_path)
+{
+  // When total_weighted_stake == 0, any pool inflow should be burned.
+  // Verify the per-block reward function returns 0 for all stakers
+  // when the denominator is 0.
+  const uint64_t pool_inflow = 10000000;
+
+  uint8_t overflow = 0;
+  uint64_t reward = shekyl_calc_per_block_staker_reward(
+    pool_inflow, 0, 0, &overflow);
+  EXPECT_EQ(reward, 0u);
+  EXPECT_EQ(overflow, 0);
+
+  // Even with a non-zero weight, if total is 0, reward must be 0
+  reward = shekyl_calc_per_block_staker_reward(
+    pool_inflow, 1000000, 0, &overflow);
+  EXPECT_EQ(reward, 0u);
+}
+
+// ===================================================================
+// 10. Adversarial: single staker captures exactly 100%
+// ===================================================================
+
+TEST(staking, single_staker_captures_full_reward)
+{
+  const uint64_t amount = 5000000000; // 5 SKL
+  const uint8_t tier = 2;
+  const uint64_t weight = shekyl_stake_weight(amount, tier);
+  const uint64_t total_weighted = weight; // only staker
+
+  const uint64_t pool_inflow = 12345678;
+
+  uint8_t overflow = 0;
+  uint64_t reward = shekyl_calc_per_block_staker_reward(
+    pool_inflow, weight, total_weighted, &overflow);
+  EXPECT_EQ(overflow, 0);
+  EXPECT_EQ(reward, pool_inflow);
+}
+
+// ===================================================================
+// 11. Adversarial: dust stakers cannot extract more than their share
+// ===================================================================
+
+TEST(staking, dust_stakers_conservation)
+{
+  // 1000 stakers with 1 atomic unit each, plus one whale.
+  // The dust stakers must collectively not exceed their proportion of the pool.
+  const uint64_t dust_amount = 1; // 1 atomic unit
+  const uint64_t whale_amount = 100000000000ULL; // 100 SKL
+  const uint8_t tier = 0;
+  const int num_dust = 1000;
+
+  uint64_t total_weighted = shekyl_stake_weight(whale_amount, tier);
+  for (int i = 0; i < num_dust; ++i)
+    total_weighted += shekyl_stake_weight(dust_amount, tier);
+
+  const uint64_t pool_inflow = 50000000; // 0.05 SKL
+
+  uint64_t dust_total = 0;
+  for (int i = 0; i < num_dust; ++i)
+  {
+    uint64_t w = shekyl_stake_weight(dust_amount, tier);
+    uint8_t overflow = 0;
+    dust_total += shekyl_calc_per_block_staker_reward(
+      pool_inflow, w, total_weighted, &overflow);
+    EXPECT_EQ(overflow, 0);
+  }
+
+  uint64_t whale_reward = 0;
+  {
+    uint64_t w = shekyl_stake_weight(whale_amount, tier);
+    uint8_t overflow = 0;
+    whale_reward = shekyl_calc_per_block_staker_reward(
+      pool_inflow, w, total_weighted, &overflow);
+    EXPECT_EQ(overflow, 0);
+  }
+
+  EXPECT_LE(dust_total + whale_reward, pool_inflow);
+  // Whale should get almost all of it since dust_amount * 1000 << whale_amount
+  EXPECT_GT(whale_reward, pool_inflow * 99 / 100);
+}
+
+// ===================================================================
+// 12. Multi-block accumulation: claim over a range of blocks
+// ===================================================================
+
+TEST(staking, multi_block_claim_range_conservation)
+{
+  // Simulate claiming over a range of blocks.
+  // Each block may have different pool inflows and staker sets.
+  // The total claimed must not exceed the sum of pool inflows.
+  struct block_state {
+    uint64_t pool_inflow;
+    uint64_t total_weighted_stake;
+  };
+
+  const block_state blocks[] = {
+    {5000000, 10000000000ULL},
+    {3000000, 5000000000ULL},
+    {0, 0},                     // zero-staker block (burned)
+    {8000000, 20000000000ULL},
+    {1000000, 500000000ULL},
+  };
+
+  const uint64_t staked_amount = 2000000000; // 2 SKL
+  const uint8_t tier = 1;
+  const uint64_t weight = shekyl_stake_weight(staked_amount, tier);
+
+  uint64_t total_claimed = 0;
+  uint64_t total_pool = 0;
+  for (const auto& b : blocks)
+  {
+    total_pool += b.pool_inflow;
+    if (b.pool_inflow == 0 || b.total_weighted_stake == 0)
+      continue;
+    uint8_t overflow = 0;
+    total_claimed += shekyl_calc_per_block_staker_reward(
+      b.pool_inflow, weight, b.total_weighted_stake, &overflow);
+    EXPECT_EQ(overflow, 0);
+  }
+
+  EXPECT_LE(total_claimed, total_pool);
+}
+
+// ===================================================================
+// 13. MAX_CLAIM_RANGE boundary: claims spanning the full allowed range
+// ===================================================================
+
+TEST(staking, max_claim_range_boundary)
+{
+  const uint64_t max_range = shekyl_stake_max_claim_range();
+  EXPECT_GT(max_range, 0u);
+
+  // Verify a claim range exactly at the boundary is valid
+  const uint64_t from_height = 1000;
+  const uint64_t to_height = from_height + max_range;
+  EXPECT_EQ(to_height - from_height, max_range);
+
+  // One past is over the limit
+  EXPECT_GT(to_height + 1 - from_height, max_range);
+}

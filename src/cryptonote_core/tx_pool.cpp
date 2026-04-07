@@ -879,6 +879,7 @@ namespace cryptonote
       m_blockchain.update_txpool_tx(elem.first, elem.second);
     }
 
+    lock.commit();
     m_next_check = time_t(next_check);
     return true;
   }

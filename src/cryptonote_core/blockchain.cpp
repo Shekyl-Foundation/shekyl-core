@@ -688,6 +688,7 @@ block Blockchain::pop_block_from_blockchain()
   }
 
   {
+    db_wtxn_guard wtxn_guard(m_db);
     const uint64_t popped_height = m_db->height();
     auto accrual = m_db->get_staker_accrual(popped_height);
     uint64_t accrued = accrual.staker_emission + accrual.staker_fee_pool;
