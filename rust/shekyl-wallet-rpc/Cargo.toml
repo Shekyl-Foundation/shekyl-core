@@ -10,7 +10,7 @@ name = "shekyl_wallet_rpc"
 crate-type = ["lib", "staticlib"]
 
 [[bin]]
-name = "shekyl-wallet-rpc-rs"
+name = "shekyl-wallet-rpc"
 path = "src/main.rs"
 
 [dependencies]
@@ -22,3 +22,11 @@ tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
+shekyl-scanner = { path = "../shekyl-scanner", optional = true }
+shekyl-tx-builder = { path = "../shekyl-tx-builder", optional = true }
+hex = { version = "0.4", optional = true }
+
+[features]
+default = []
+rust-scanner = ["shekyl-scanner", "hex"]
+native-sign = ["shekyl-tx-builder"]

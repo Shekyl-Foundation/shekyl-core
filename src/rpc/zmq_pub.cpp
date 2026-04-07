@@ -49,7 +49,7 @@
 #include "cryptonote_basic/events.h"
 #include "misc_log_ex.h"
 #include "serialization/json_object.h"
-#include "ringct/rctTypes.h"
+#include "fcmp/rctTypes.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 
 #undef MONERO_DEFAULT_LOG_CATEGORY

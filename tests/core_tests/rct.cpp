@@ -28,7 +28,7 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
-#include "ringct/rctSigs.h"
+#include "fcmp/rctSigs.h"
 #include "chaingen.h"
 #include "rct.h"
 #include "device/device.hpp"

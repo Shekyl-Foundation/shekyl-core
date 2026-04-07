@@ -91,7 +91,7 @@ int main(int argc, char* argv[])
   po::options_description desc_cmd_only("Command line options");
   po::options_description desc_cmd_sett("Command line options and settings options");
   const command_line::arg_descriptor<std::string> arg_log_level  = {"log-level",  "0-4 or categories", ""};
-  const command_line::arg_descriptor<bool> arg_rct_only  = {"rct-only", "Only work on ringCT outputs", false};
+  const command_line::arg_descriptor<bool> arg_rct_only  = {"rct-only", "Only work on confidential outputs", false};
   const command_line::arg_descriptor<std::string> arg_input = {"input", ""};
 
   command_line::add_arg(desc_cmd_sett, cryptonote::arg_testnet_on);

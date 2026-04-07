@@ -85,12 +85,13 @@ using namespace epee;
 #include "rapidjson/stringbuffer.h"
 #include "common/json_util.h"
 #include "memwipe.h"
-#include "common/base58.h"
 #include "common/combinator.h"
 #include "common/dns_utils.h"
 #include "common/notify.h"
 #include "common/perf_timer.h"
-#include "ringct/rctSigs.h"
+#include "fcmp/rctSigs.h"
+#include "fcmp/rctOps.h"
+#include "fcmp/bulletproofs_plus.h"
 #include "ringdb.h"
 #include "device/device_cold.hpp"
 #include "device_trezor/device_trezor.hpp"
@@ -107,6 +108,40 @@ using namespace cryptonote;
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "wallet.wallet2"
+
+namespace {
+  std::string bech32m_encode_blob(const char* hrp, const void* data, size_t len)
+  {
+    ShekylBuffer buf = shekyl_encode_blob(
+        reinterpret_cast<const uint8_t*>(hrp), strlen(hrp),
+        reinterpret_cast<const uint8_t*>(data), len);
+    if (!buf.ptr || buf.len == 0) return {};
+    std::string result(reinterpret_cast<const char*>(buf.ptr), buf.len);
+    shekyl_buffer_free(buf.ptr, buf.len);
+    return result;
+  }
+
+  bool bech32m_decode_blob(const std::string &encoded, const char* expected_hrp,
+                           std::string &out_data)
+  {
+    uint8_t hrp_buf[128] = {};
+    size_t hrp_len = 0;
+    uint8_t data_buf[65536] = {};
+    size_t data_len = 0;
+
+    if (!shekyl_decode_blob(encoded.c_str(),
+        hrp_buf, sizeof(hrp_buf), &hrp_len,
+        data_buf, sizeof(data_buf), &data_len))
+      return false;
+
+    std::string hrp(reinterpret_cast<const char*>(hrp_buf), hrp_len);
+    if (hrp != expected_hrp)
+      return false;
+
+    out_data.assign(reinterpret_cast<const char*>(data_buf), data_len);
+    return true;
+  }
+} // anonymous namespace
 
 // used to choose when to stop adding outputs to a tx
 #define APPROXIMATE_INPUT_BYTES 80
@@ -180,8 +215,6 @@ namespace
   std::string get_text_reason(const cryptonote::COMMAND_RPC_SEND_RAW_TX::response &res)
   {
       std::string reason;
-      if (res.low_mixin)
-        add_reason(reason, "bad ring size");
       if (res.double_spend)
         add_reason(reason, "double spend");
       if (res.invalid_input)
@@ -770,17 +803,15 @@ void drop_from_short_history(std::list<crypto::hash> &short_chain_history, size_
   }
 }
 
-size_t estimate_rct_tx_size(int n_inputs, int mixin, int n_outputs, size_t extra_size, bool bulletproof, bool clsag, bool bulletproof_plus, bool use_view_tags)
+size_t estimate_rct_tx_size(int n_inputs, int n_outputs, size_t extra_size, bool use_view_tags)
 {
   size_t size = 0;
 
   // tx prefix
-
-  // first few bytes
   size += 1 + 6;
 
-  // vin
-  size += n_inputs * (1+6+(mixin+1)*2+32);
+  // vin (FCMP++ inputs have no ring/mixin)
+  size += n_inputs * (1+6+2+32);
 
   // vout
   size += n_outputs * (6+32);
@@ -793,28 +824,16 @@ size_t estimate_rct_tx_size(int n_inputs, int mixin, int n_outputs, size_t extra
   // type
   size += 1;
 
-  // rangeSigs
-  if (bulletproof || bulletproof_plus)
+  // Bulletproofs+ range proofs
   {
     size_t log_padded_outputs = 0;
     while ((1<<log_padded_outputs) < n_outputs)
       ++log_padded_outputs;
-    size += (2 * (6 + log_padded_outputs) + (bulletproof_plus ? 6 : (4 + 5))) * 32 + 3;
+    size += (2 * (6 + log_padded_outputs) + 6) * 32 + 3;
   }
-  else
-    size += (2*64*32+32+64*32) * n_outputs;
-
-  // MGs/CLSAGs
-  if (clsag)
-    size += n_inputs * (32 * (mixin+1) + 64);
-  else
-    size += n_inputs * (64 * (mixin+1) + 32);
 
   if (use_view_tags)
     size += n_outputs * sizeof(crypto::view_tag);
-
-  // mixRing - not serialized, can be reconstructed
-  /* size += 2 * 32 * (mixin+1) * n_inputs; */
 
   // pseudoOuts
   size += 32 * n_inputs;
@@ -825,29 +844,46 @@ size_t estimate_rct_tx_size(int n_inputs, int mixin, int n_outputs, size_t extra
   // txnFee
   size += 4;
 
-  LOG_PRINT_L2("estimated " << (bulletproof_plus ? "bulletproof plus" : bulletproof ? "bulletproof" : "borromean") << " rct tx size for " << n_inputs << " inputs with ring size " << (mixin+1) << " and " << n_outputs << " outputs: " << size << " (" << ((32 * n_inputs/*+1*/) + 2 * 32 * (mixin+1) * n_inputs + 32 * n_outputs) << " saved)");
+  // FCMP++ membership proof (deterministic from num_inputs × tree_depth)
+  {
+    static constexpr uint8_t ESTIMATED_TREE_DEPTH = 30;
+    size_t proof_len = shekyl_fcmp_proof_len(
+        static_cast<uint32_t>(n_inputs), ESTIMATED_TREE_DEPTH);
+    if (proof_len > 0)
+      size += proof_len;
+    else
+      size += n_inputs * 2000;
+  }
+
+  // Per-input pqc_auths (~5400 bytes each: ML-DSA-65 pub + sig + envelope)
+  size += n_inputs * 5400;
+
+  // Per-output KEM ciphertexts (tag 0x06) + PQC leaf hashes (tag 0x07)
+  size += n_outputs * (cryptonote::HYBRID_KEM_CT_BYTES + cryptonote::PQC_LEAF_HASH_BYTES);
+
+  LOG_PRINT_L2("estimated FCMP++ rct tx size for " << n_inputs << " inputs and " << n_outputs << " outputs: " << size);
   return size;
 }
 
-size_t estimate_tx_size(bool use_rct, int n_inputs, int mixin, int n_outputs, size_t extra_size, bool bulletproof, bool clsag, bool bulletproof_plus, bool use_view_tags)
+size_t estimate_tx_size(bool use_rct, int n_inputs, int n_outputs, size_t extra_size, bool use_view_tags)
 {
   if (use_rct)
-    return estimate_rct_tx_size(n_inputs, mixin, n_outputs, extra_size, bulletproof, clsag, bulletproof_plus, use_view_tags);
+    return estimate_rct_tx_size(n_inputs, n_outputs, extra_size, use_view_tags);
   else
-    return n_inputs * (mixin+1) * APPROXIMATE_INPUT_BYTES + extra_size + (use_view_tags ? (n_outputs * sizeof(crypto::view_tag)) : 0);
+    return n_inputs * APPROXIMATE_INPUT_BYTES + extra_size + (use_view_tags ? (n_outputs * sizeof(crypto::view_tag)) : 0);
 }
 
-uint64_t estimate_tx_weight(bool use_rct, int n_inputs, int mixin, int n_outputs, size_t extra_size, bool bulletproof, bool clsag, bool bulletproof_plus, bool use_view_tags)
+uint64_t estimate_tx_weight(bool use_rct, int n_inputs, int n_outputs, size_t extra_size, bool use_view_tags)
 {
-  size_t size = estimate_tx_size(use_rct, n_inputs, mixin, n_outputs, extra_size, bulletproof, clsag, bulletproof_plus, use_view_tags);
-  if (use_rct && (bulletproof || bulletproof_plus) && n_outputs > 2)
+  size_t size = estimate_tx_size(use_rct, n_inputs, n_outputs, extra_size, use_view_tags);
+  if (use_rct && n_outputs > 2)
   {
-    const uint64_t bp_base = (32 * ((bulletproof_plus ? 6 : 9) + 7 * 2)) / 2; // notional size of a 2 output proof, normalized to 1 proof (ie, divided by 2)
+    const uint64_t bp_base = (32 * (6 + 7 * 2)) / 2;
     size_t log_padded_outputs = 2;
     while ((1<<log_padded_outputs) < n_outputs)
       ++log_padded_outputs;
     uint64_t nlr = 2 * (6 + log_padded_outputs);
-    const uint64_t bp_size = 32 * ((bulletproof_plus ? 6 : 9) + nlr);
+    const uint64_t bp_size = 32 * (6 + nlr);
     const uint64_t bp_clawback = (bp_base * (1<<log_padded_outputs) - bp_size) * 4 / 5;
     MDEBUG("clawback on size " << size << ": " << bp_clawback);
     size += bp_clawback;
@@ -1151,7 +1187,6 @@ wallet2::wallet2(network_type nettype, uint64_t kdf_rounds, bool unattended, std
   m_always_confirm_transfers(true),
   m_print_ring_members(false),
   m_store_tx_info(true),
-  m_default_mixin(0),
   m_default_priority(fee_priority::Default),
   m_refresh_type(RefreshOptimizeCoinbase),
   m_auto_refresh(true),
@@ -2038,7 +2073,7 @@ void wallet2::check_acc_out_precomp(const tx_out &o, const crypto::key_derivatio
   tx_scan_info.received = is_out_to_acc_precomp(m_subaddresses, output_public_key, derivation, additional_derivations, i, hwdev, get_output_view_tag(o));
   if(tx_scan_info.received)
   {
-    tx_scan_info.money_transfered = o.amount; // may be 0 for ringct outputs
+    tx_scan_info.money_transfered = o.amount; // may be 0 for confidential outputs
   }
   else
   {
@@ -2055,7 +2090,7 @@ void wallet2::check_acc_out_precomp(const tx_out &o, const crypto::key_derivatio
   tx_scan_info.received = is_out_data->received[i];
   if(tx_scan_info.received)
   {
-    tx_scan_info.money_transfered = o.amount; // may be 0 for ringct outputs
+    tx_scan_info.money_transfered = o.amount; // may be 0 for confidential outputs
   }
   else
   {
@@ -2082,8 +2117,7 @@ static uint64_t decodeRct(const rct::rctSig & rv, const crypto::key_derivation &
   {
     switch (rv.type)
     {
-    case rct::RCTTypeCLSAG:
-    case rct::RCTTypeBulletproofPlus:
+    case rct::RCTTypeFcmpPlusPlusPqc:
       return rct::decodeRctSimple(rv, rct::sk2rct(scalar1), i, mask, hwdev);
     default:
       LOG_ERROR("Unsupported rct type: " << rv.type);
@@ -2459,7 +2493,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
               td.m_mask = tx_scan_info[o].mask;
               td.m_rct = true;
             }
-            else if (miner_tx && tx.version == 2)
+            else if (miner_tx && tx.version >= 2)
             {
               td.m_mask = rct::identity();
               td.m_rct = true;
@@ -2484,6 +2518,45 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
                 td.m_staked = false;
                 td.m_stake_tier = 0;
                 td.m_stake_lock_until = 0;
+              }
+            }
+            // ── KEM decapsulation: recover combined shared secret ────────
+            td.m_combined_shared_secret.clear();
+            if (!m_account.get_keys().m_pqc_secret_key.empty())
+            {
+              cryptonote::tx_extra_pqc_kem_ciphertext kem_ct_field;
+              if (find_tx_extra_field_by_type(tx_extra_fields, kem_ct_field)
+                  && kem_ct_field.blob.size() >= (o + 1) * cryptonote::HYBRID_KEM_CT_BYTES)
+              {
+                static constexpr size_t X25519_SK_BYTES = 32;
+                const auto& pqc_sk = m_account.get_keys().m_pqc_secret_key;
+                if (pqc_sk.size() > X25519_SK_BYTES)
+                {
+                  const uint8_t* ct_ptr = reinterpret_cast<const uint8_t*>(
+                      kem_ct_field.blob.data()) + o * cryptonote::HYBRID_KEM_CT_BYTES;
+                  const uint8_t* ct_x25519 = ct_ptr;
+                  const uint8_t* ct_ml_kem = ct_ptr + cryptonote::X25519_CT_BYTES;
+
+                  // m_pqc_secret_key layout: x25519_sk[32] || ml_kem_dk[2400]
+                  const uint8_t* sk_x25519 = pqc_sk.data();
+                  const uint8_t* sk_ml_kem = pqc_sk.data() + X25519_SK_BYTES;
+                  const size_t sk_ml_kem_len = pqc_sk.size() - X25519_SK_BYTES;
+
+                  uint8_t ss[64];
+                  bool kem_ok = shekyl_kem_decapsulate(
+                      sk_x25519, sk_ml_kem, sk_ml_kem_len,
+                      ct_x25519, ct_ml_kem, cryptonote::ML_KEM_768_CT_BYTES,
+                      ss);
+                  if (kem_ok)
+                  {
+                    td.m_combined_shared_secret.assign(ss, ss + 64);
+                  }
+                  else
+                  {
+                    MWARNING("KEM decapsulation failed for output " << o << " in tx " << txid);
+                  }
+                  memwipe(ss, sizeof(ss));
+                }
               }
             }
 	    set_unspent(m_transfers.size()-1);
@@ -2548,7 +2621,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
               td.m_mask = tx_scan_info[o].mask;
               td.m_rct = true;
             }
-            else if (miner_tx && tx.version == 2)
+            else if (miner_tx && tx.version >= 2)
             {
               td.m_mask = rct::identity();
               td.m_rct = true;
@@ -2903,6 +2976,253 @@ void wallet2::process_new_blockchain_entry(const cryptonote::block& b, const cry
 
   if (0 != m_callback)
     m_callback->on_new_block(height, b);
+}
+//----------------------------------------------------------------------------------------------------
+void wallet2::precompute_fcmp_paths()
+{
+  std::vector<uint64_t> output_indices;
+  const uint64_t current_height = get_blockchain_current_height();
+  for (size_t i = 0; i < m_transfers.size(); ++i)
+  {
+    const auto& td = m_transfers[i];
+    if (td.m_spent || td.m_frozen)
+      continue;
+    if (td.m_staked && td.m_stake_lock_until > current_height)
+      continue;
+    output_indices.push_back(td.m_global_output_index);
+  }
+  if (output_indices.empty())
+    return;
+
+  LOG_PRINT_L1("Precomputing FCMP++ tree paths for " << output_indices.size() << " unspent outputs");
+
+  cryptonote::COMMAND_RPC_GET_CURVE_TREE_PATH::request req{};
+  cryptonote::COMMAND_RPC_GET_CURVE_TREE_PATH::response res{};
+  req.output_indices = std::move(output_indices);
+
+  bool r = invoke_http_json("/get_curve_tree_path", req, res, rpc_timeout);
+  THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to connect to daemon for FCMP++ tree path");
+  THROW_WALLET_EXCEPTION_IF(res.status == CORE_RPC_STATUS_BUSY, error::daemon_busy, "get_curve_tree_path");
+  THROW_WALLET_EXCEPTION_IF(res.status != CORE_RPC_STATUS_OK, error::wallet_internal_error, "get_curve_tree_path failed: " + res.status);
+
+  crypto::hash ref_block{};
+  if (!res.reference_block.empty())
+    epee::string_tools::hex_to_pod(res.reference_block, ref_block);
+  crypto::hash tree_root{};
+  if (!res.curve_tree_root.empty())
+    epee::string_tools::hex_to_pod(res.curve_tree_root, tree_root);
+
+  m_fcmp_precomputed_paths.clear();
+  uint64_t done = 0;
+  for (const auto& pe : res.paths)
+  {
+    fcmp_precomputed_path pp;
+    pp.global_output_index = pe.output_index;
+    pp.reference_block_at_precompute = ref_block;
+    pp.curve_tree_root_at_precompute = tree_root;
+    pp.tree_depth_at_precompute = pe.tree_depth ? pe.tree_depth : res.tree_depth;
+    pp.precompute_height = m_blockchain.size() - 1;
+    if (!pe.path_blob.empty())
+    {
+      std::string tmp;
+      epee::string_tools::parse_hexstr_to_binbuff(pe.path_blob, tmp);
+      pp.tree_path.assign(tmp.begin(), tmp.end());
+    }
+    if (!pe.chunk_outputs_blob.empty())
+    {
+      std::string tmp;
+      epee::string_tools::parse_hexstr_to_binbuff(pe.chunk_outputs_blob, tmp);
+      const size_t entry_size = 128; // [O:32][I:32][C:32][h_pqc:32]
+      const size_t n_entries = tmp.size() / entry_size;
+      pp.leaf_chunk_entries.resize(n_entries);
+      for (size_t j = 0; j < n_entries; ++j)
+      {
+        const uint8_t* base = reinterpret_cast<const uint8_t*>(tmp.data()) + j * entry_size;
+        memcpy(pp.leaf_chunk_entries[j].output_key.bytes, base, 32);
+        memcpy(pp.leaf_chunk_entries[j].key_image_gen.bytes, base + 32, 32);
+        memcpy(pp.leaf_chunk_entries[j].commitment.bytes, base + 64, 32);
+        memcpy(pp.leaf_chunk_entries[j].h_pqc.bytes, base + 96, 32);
+      }
+    }
+    m_fcmp_precomputed_paths[pe.output_index] = std::move(pp);
+    ++done;
+    if (m_callback)
+      m_callback->on_fcmp_path_precompute_progress(done, res.paths.size());
+  }
+  m_fcmp_last_precompute_height = m_blockchain.size() - 1;
+
+  LOG_PRINT_L1("FCMP++ tree paths precomputed for " << m_fcmp_precomputed_paths.size() << " outputs at height " << m_fcmp_last_precompute_height);
+}
+//----------------------------------------------------------------------------------------------------
+void wallet2::update_fcmp_paths_incremental(uint64_t new_height)
+{
+  if (new_height <= m_fcmp_last_precompute_height)
+    return;
+
+  if (m_fcmp_precomputed_paths.empty())
+  {
+    precompute_fcmp_paths();
+    return;
+  }
+
+  const uint64_t current_height = get_blockchain_current_height();
+  std::vector<uint64_t> stale_indices;
+  for (const auto& [idx, pp] : m_fcmp_precomputed_paths)
+    stale_indices.push_back(idx);
+
+  // Also include any new unspent outputs gained since last precompute
+  for (size_t i = 0; i < m_transfers.size(); ++i)
+  {
+    const auto& td = m_transfers[i];
+    if (td.m_spent || td.m_frozen)
+      continue;
+    if (td.m_staked && td.m_stake_lock_until > current_height)
+      continue;
+    if (m_fcmp_precomputed_paths.find(td.m_global_output_index) == m_fcmp_precomputed_paths.end())
+      stale_indices.push_back(td.m_global_output_index);
+  }
+
+  if (stale_indices.empty())
+    return;
+
+  LOG_PRINT_L1("Incrementally updating FCMP++ tree paths for " << stale_indices.size()
+               << " outputs (height " << m_fcmp_last_precompute_height << " -> " << new_height << ")");
+
+  cryptonote::COMMAND_RPC_GET_CURVE_TREE_PATH::request req{};
+  cryptonote::COMMAND_RPC_GET_CURVE_TREE_PATH::response res{};
+  req.output_indices = std::move(stale_indices);
+
+  bool r = invoke_http_json("/get_curve_tree_path", req, res, rpc_timeout);
+  THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to connect to daemon for incremental FCMP++ path update");
+  THROW_WALLET_EXCEPTION_IF(res.status == CORE_RPC_STATUS_BUSY, error::daemon_busy, "get_curve_tree_path");
+  THROW_WALLET_EXCEPTION_IF(res.status != CORE_RPC_STATUS_OK, error::wallet_internal_error, "get_curve_tree_path failed: " + res.status);
+
+  crypto::hash ref_block{};
+  if (!res.reference_block.empty())
+    epee::string_tools::hex_to_pod(res.reference_block, ref_block);
+  crypto::hash tree_root{};
+  if (!res.curve_tree_root.empty())
+    epee::string_tools::hex_to_pod(res.curve_tree_root, tree_root);
+
+  // Remove paths for outputs that are now spent
+  for (auto it = m_fcmp_precomputed_paths.begin(); it != m_fcmp_precomputed_paths.end();)
+  {
+    bool still_unspent = false;
+    for (size_t i = 0; i < m_transfers.size(); ++i)
+    {
+      if (m_transfers[i].m_global_output_index == it->first && !m_transfers[i].m_spent && !m_transfers[i].m_frozen)
+      {
+        still_unspent = true;
+        break;
+      }
+    }
+    if (!still_unspent)
+      it = m_fcmp_precomputed_paths.erase(it);
+    else
+      ++it;
+  }
+
+  for (const auto& pe : res.paths)
+  {
+    fcmp_precomputed_path pp;
+    pp.global_output_index = pe.output_index;
+    pp.reference_block_at_precompute = ref_block;
+    pp.curve_tree_root_at_precompute = tree_root;
+    pp.tree_depth_at_precompute = pe.tree_depth ? pe.tree_depth : res.tree_depth;
+    pp.precompute_height = new_height;
+    if (!pe.path_blob.empty())
+    {
+      std::string tmp;
+      epee::string_tools::parse_hexstr_to_binbuff(pe.path_blob, tmp);
+      pp.tree_path.assign(tmp.begin(), tmp.end());
+    }
+    if (!pe.chunk_outputs_blob.empty())
+    {
+      std::string tmp;
+      epee::string_tools::parse_hexstr_to_binbuff(pe.chunk_outputs_blob, tmp);
+      const size_t entry_size = 128;
+      const size_t n_entries = tmp.size() / entry_size;
+      pp.leaf_chunk_entries.resize(n_entries);
+      for (size_t j = 0; j < n_entries; ++j)
+      {
+        const uint8_t* base = reinterpret_cast<const uint8_t*>(tmp.data()) + j * entry_size;
+        memcpy(pp.leaf_chunk_entries[j].output_key.bytes, base, 32);
+        memcpy(pp.leaf_chunk_entries[j].key_image_gen.bytes, base + 32, 32);
+        memcpy(pp.leaf_chunk_entries[j].commitment.bytes, base + 64, 32);
+        memcpy(pp.leaf_chunk_entries[j].h_pqc.bytes, base + 96, 32);
+      }
+    }
+    m_fcmp_precomputed_paths[pe.output_index] = std::move(pp);
+  }
+  m_fcmp_last_precompute_height = new_height;
+
+  LOG_PRINT_L1("FCMP++ tree paths incrementally updated to height " << new_height);
+}
+//----------------------------------------------------------------------------------------------------
+void wallet2::validate_pqc_key_derivation_for_output(const transfer_details& td)
+{
+  THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.size() != 64,
+    error::wallet_internal_error,
+    "Cannot rederive PQC keys: combined shared secret missing or wrong size for output " +
+    std::to_string(td.m_global_output_index));
+
+  ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
+    td.m_combined_shared_secret.data(),
+    static_cast<uint64_t>(td.m_internal_output_index));
+
+  THROW_WALLET_EXCEPTION_IF(!kp.success || !kp.public_key.ptr || !kp.secret_key.ptr,
+    error::wallet_internal_error,
+    "PQC keypair derivation failed for output " + std::to_string(td.m_global_output_index));
+
+  // Validation pass: if tx_extra has per-output PQC leaf hashes (tag 0x07),
+  // ensure the rederived key matches the committed H(pqc_pk) for this output.
+  std::vector<tx_extra_field> tx_extra_fields;
+  if (parse_tx_extra(td.m_tx.extra, tx_extra_fields))
+  {
+    tx_extra_pqc_leaf_hashes leaf_hashes;
+    if (find_tx_extra_field_by_type(tx_extra_fields, leaf_hashes))
+    {
+      const size_t off = static_cast<size_t>(td.m_internal_output_index) * cryptonote::PQC_LEAF_HASH_BYTES;
+      if (leaf_hashes.blob.size() >= off + cryptonote::PQC_LEAF_HASH_BYTES)
+      {
+        uint8_t h_pqc[32];
+        const bool ok = shekyl_fcmp_pqc_leaf_hash(kp.public_key.ptr, kp.public_key.len, h_pqc);
+        THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error,
+          "PQC leaf hash derivation failed for output " + std::to_string(td.m_global_output_index));
+        THROW_WALLET_EXCEPTION_IF(memcmp(h_pqc, leaf_hashes.blob.data() + off, 32) != 0,
+          error::wallet_internal_error,
+          "Derived PQC key mismatch for output " + std::to_string(td.m_global_output_index));
+      }
+    }
+  }
+
+  shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
+  shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
+}
+//----------------------------------------------------------------------------------------------------
+void wallet2::rederive_all_pqc_keys()
+{
+  uint64_t total = 0;
+  for (const auto& td : m_transfers)
+  {
+    if (!td.m_combined_shared_secret.empty())
+      ++total;
+  }
+  if (total == 0)
+    return;
+
+  LOG_PRINT_L1("Validating PQC key derivation for " << total << " outputs with stored shared secrets");
+  uint64_t done = 0;
+  for (const auto& td : m_transfers)
+  {
+    if (td.m_combined_shared_secret.empty())
+      continue;
+    validate_pqc_key_derivation_for_output(td);
+    ++done;
+    if (m_callback)
+      m_callback->on_pqc_rederivation_progress(done, total);
+  }
+  LOG_PRINT_L1("PQC key derivation validation complete for " << done << " outputs");
 }
 //----------------------------------------------------------------------------------------------------
 void wallet2::get_short_chain_history(std::list<crypto::hash>& ids, uint64_t granularity) const
@@ -4145,6 +4465,33 @@ void wallet2::refresh(bool trusted_daemon, uint64_t start_height, uint64_t & blo
   if (m_background_syncing || m_is_background_wallet)
     m_background_sync_data.first_refresh_done = true;
 
+  // FCMP++ Phase 5e: update precomputed tree paths after sync catches up
+  if (blocks_fetched > 0 && m_run.load(std::memory_order_relaxed) && !m_watch_only)
+  {
+    try
+    {
+      const uint64_t cur_height = get_blockchain_current_height();
+      update_fcmp_paths_incremental(cur_height > 0 ? cur_height - 1 : 0);
+    }
+    catch (const std::exception& e)
+    {
+      LOG_PRINT_L1("FCMP++ path precomputation deferred: " << e.what());
+    }
+  }
+
+  // FCMP++ Phase 5.5: rederive PQC keys on first refresh (restore-from-seed)
+  if (m_first_refresh_done && blocks_fetched > 0 && !m_watch_only)
+  {
+    try
+    {
+      rederive_all_pqc_keys();
+    }
+    catch (const std::exception& e)
+    {
+      LOG_PRINT_L1("PQC key rederivation deferred: " << e.what());
+    }
+  }
+
   LOG_PRINT_L1("Refresh done, blocks received: " << blocks_fetched << ", balance (all accounts): " << print_money(balance_all(false)) << ", unlocked: " << print_money(unlocked_balance_all(false)));
 }
 //----------------------------------------------------------------------------------------------------
@@ -4502,9 +4849,6 @@ std::optional<wallet2::keys_file_data> wallet2::get_keys_file_data(const crypto:
   value2.SetInt(m_store_tx_info ? 1 :0);
   json.AddMember("store_tx_info", value2, json.GetAllocator());
 
-  value2.SetUint(m_default_mixin);
-  json.AddMember("default_mixin", value2, json.GetAllocator());
-
   value2.SetUint(boost::numeric_cast<unsigned>(fee_priority_utilities::as_integral(m_default_priority)));
   json.AddMember("default_priority", value2, json.GetAllocator());
 
@@ -4824,7 +5168,6 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
     m_always_confirm_transfers = false;
     m_print_ring_members = false;
     m_store_tx_info = true;
-    m_default_mixin = 0;
     m_default_priority = fee_priority::Default;
     m_auto_refresh = true;
     m_refresh_type = RefreshType::RefreshDefault;
@@ -4911,8 +5254,6 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
     }
     else
       m_store_tx_info = true;
-    GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, default_mixin, unsigned int, Uint, false, 0);
-    m_default_mixin = field_default_mixin;
     GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, default_priority, unsigned int, Uint, false, 0);
     if (field_default_priority_found)
     {
@@ -6919,7 +7260,7 @@ crypto::hash wallet2::get_payment_id(const pending_tx &ptx) const
 void wallet2::commit_tx(pending_tx& ptx)
 {
   using namespace cryptonote;
-  
+  if (m_callback) m_callback->on_transfer_stage("broadcasting", 3, 4);
   {
     COMMAND_RPC_SEND_RAW_TX::request req;
     req.tx_as_hex = epee::string_tools::buff_to_hex_nodelimer(tx_to_blob(ptx.tx));
@@ -7162,10 +7503,9 @@ bool wallet2::sign_tx(unsigned_tx_set &exported_txs, std::vector<wallet2::pendin
     LOG_PRINT_L1(" " << (n+1) << ": " << sd.sources.size() << " inputs, ring size " << sd.sources[0].outputs.size());
     signed_txes.ptx.push_back(pending_tx());
     tools::wallet2::pending_tx &ptx = signed_txes.ptx.back();
-    rct::RCTConfig rct_config = sd.rct_config;
     crypto::secret_key tx_key;
     std::vector<crypto::secret_key> additional_tx_keys;
-    bool r = cryptonote::construct_tx_and_get_tx_key(m_account.get_keys(), m_subaddresses, sd.sources, sd.splitted_dsts, sd.change_dts.addr, sd.extra, ptx.tx, tx_key, additional_tx_keys, sd.use_rct, rct_config, sd.use_view_tags, get_current_hard_fork());
+    bool r = cryptonote::construct_tx_and_get_tx_key(m_account.get_keys(), m_subaddresses, sd.sources, sd.splitted_dsts, sd.change_dts.addr, sd.extra, ptx.tx, tx_key, additional_tx_keys, sd.use_rct, sd.use_view_tags, get_current_hard_fork());
     THROW_WALLET_EXCEPTION_IF(!r, error::tx_not_constructed, sd.sources, sd.splitted_dsts, m_nettype);
     // we don't test tx size, because we don't know the current limit, due to not having a blockchain,
     // and it's a bit pointless to fail there anyway, since it'd be a (good) guess only. We sign anyway,
@@ -7467,16 +7807,16 @@ bool wallet2::parse_tx_from_str(const std::string &signed_tx_st, std::vector<too
 }
 //----------------------------------------------------------------------------------------------------
 //----------------------------------------------------------------------------------------------------
-uint64_t wallet2::estimate_fee(bool use_per_byte_fee, bool use_rct, int n_inputs, int mixin, int n_outputs, size_t extra_size, bool bulletproof, bool clsag, bool bulletproof_plus, bool use_view_tags, uint64_t base_fee, uint64_t fee_quantization_mask)
+uint64_t wallet2::estimate_fee(bool use_per_byte_fee, bool use_rct, int n_inputs, int n_outputs, size_t extra_size, bool use_view_tags, uint64_t base_fee, uint64_t fee_quantization_mask)
 {
   if (use_per_byte_fee)
   {
-    const size_t estimated_tx_weight = estimate_tx_weight(use_rct, n_inputs, mixin, n_outputs, extra_size, bulletproof, clsag, bulletproof_plus, use_view_tags);
+    const size_t estimated_tx_weight = estimate_tx_weight(use_rct, n_inputs, n_outputs, extra_size, use_view_tags);
     return calculate_fee_from_weight(base_fee, estimated_tx_weight, fee_quantization_mask);
   }
   else
   {
-    const size_t estimated_tx_size = estimate_tx_size(use_rct, n_inputs, mixin, n_outputs, extra_size, bulletproof, clsag, bulletproof_plus, use_view_tags);
+    const size_t estimated_tx_size = estimate_tx_size(use_rct, n_inputs, n_outputs, extra_size, use_view_tags);
     return calculate_fee(base_fee, estimated_tx_size);
   }
 }
@@ -7600,23 +7940,6 @@ uint64_t wallet2::get_min_ring_size()
 uint64_t wallet2::get_max_ring_size()
 {
   return 16;
-}
-//------------------------------------------------------------------------------------------------------------------------------
-uint64_t wallet2::adjust_mixin(uint64_t mixin)
-{
-  const uint64_t min_ring_size = get_min_ring_size();
-  if (mixin + 1 < min_ring_size)
-  {
-    MWARNING("Requested ring size " << (mixin + 1) << " too low, using " << min_ring_size);
-    mixin = min_ring_size-1;
-  }
-  const uint64_t max_ring_size = get_max_ring_size();
-  if (max_ring_size && mixin + 1 > max_ring_size)
-  {
-    MWARNING("Requested ring size " << (mixin + 1) << " too high, using " << max_ring_size);
-    mixin = max_ring_size-1;
-  }
-  return mixin;
 }
 //----------------------------------------------------------------------------------------------------
 fee_priority wallet2::adjust_priority(uint32_t priority)
@@ -8794,7 +9117,7 @@ void wallet2::get_outs(std::vector<std::vector<tools::wallet2::get_outs_entry>> 
       }
       base += requested_outputs_count;
     }
-    THROW_WALLET_EXCEPTION_IF(!scanty_outs.empty(), error::not_enough_outs_to_mix, scanty_outs, fake_outputs_count);
+    THROW_WALLET_EXCEPTION_IF(!scanty_outs.empty(), error::wallet_internal_error, "Not enough outputs available for ring construction");
   }
   else
   {
@@ -8938,7 +9261,7 @@ void wallet2::transfer_selected(const std::vector<cryptonote::tx_destination_ent
   crypto::secret_key tx_key;
   std::vector<crypto::secret_key> additional_tx_keys;
   LOG_PRINT_L2("constructing tx");
-  bool r = cryptonote::construct_tx_and_get_tx_key(m_account.get_keys(), m_subaddresses, sources, splitted_dsts, change_dts.addr, extra, tx, tx_key, additional_tx_keys, false, {}, use_view_tags);
+  bool r = cryptonote::construct_tx_and_get_tx_key(m_account.get_keys(), m_subaddresses, sources, splitted_dsts, change_dts.addr, extra, tx, tx_key, additional_tx_keys, false, use_view_tags);
   LOG_PRINT_L2("constructed tx, r="<<r);
   THROW_WALLET_EXCEPTION_IF(!r, error::tx_not_constructed, sources, splitted_dsts, m_nettype);
   THROW_WALLET_EXCEPTION_IF(upper_transaction_weight_limit <= get_transaction_weight(tx), error::tx_too_big, tx, upper_transaction_weight_limit);
@@ -8975,7 +9298,6 @@ void wallet2::transfer_selected(const std::vector<cryptonote::tx_destination_ent
   ptx.construction_data.extra = tx.extra;
   ptx.construction_data.unlock_time = 0;
   ptx.construction_data.use_rct = true;
-  ptx.construction_data.rct_config = { rct::RangeProofPaddedBulletproof, 4 };
   ptx.construction_data.use_view_tags = use_view_tags;
   ptx.construction_data.dests = dsts;
   // record which subaddress indices are being used as inputs
@@ -8988,7 +9310,7 @@ void wallet2::transfer_selected(const std::vector<cryptonote::tx_destination_ent
 
 void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry> dsts, const std::vector<size_t>& selected_transfers, size_t fake_outputs_count,
   std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs, std::unordered_set<crypto::public_key> &valid_public_keys_cache,
-  uint64_t fee, const std::vector<uint8_t>& extra, cryptonote::transaction& tx, pending_tx &ptx, const rct::RCTConfig &rct_config, bool use_view_tags)
+  uint64_t fee, const std::vector<uint8_t>& extra, cryptonote::transaction& tx, pending_tx &ptx, bool use_view_tags)
 {
   using namespace cryptonote;
   // throw if attempting a transaction with no destinations
@@ -9024,12 +9346,8 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
   for (auto i = ++selected_transfers.begin(); i != selected_transfers.end(); ++i)
     THROW_WALLET_EXCEPTION_IF(subaddr_account != m_transfers[*i].m_subaddr_index.major, error::wallet_internal_error, "the tx uses funds from multiple accounts");
 
-  if (outs.empty())
-    get_outs(outs, selected_transfers, fake_outputs_count, all_rct, valid_public_keys_cache); // may throw
-
-  //prepare inputs
-  LOG_PRINT_L2("preparing outputs");
-  size_t i = 0, out_index = 0;
+  // FCMP++ mode: no decoy/ring selection. Each input has only the real output.
+  LOG_PRINT_L2("preparing FCMP++ inputs (no decoy selection)");
   std::vector<cryptonote::tx_source_entry> sources;
   for(size_t idx: selected_transfers)
   {
@@ -9038,44 +9356,21 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     const transfer_details& td = m_transfers[idx];
     src.amount = td.amount();
     src.rct = td.is_rct();
-    //paste mixin transaction
 
-    THROW_WALLET_EXCEPTION_IF(outs.size() < out_index + 1 ,  error::wallet_internal_error, "outs.size() < out_index + 1"); 
-    THROW_WALLET_EXCEPTION_IF(outs[out_index].size() < fake_outputs_count ,  error::wallet_internal_error, "fake_outputs_count > random outputs found");
-      
     typedef cryptonote::tx_source_entry::output_entry tx_output_entry;
-    for (size_t n = 0; n < fake_outputs_count + 1; ++n)
-    {
-      tx_output_entry oe;
-      oe.first = std::get<0>(outs[out_index][n]);
-      oe.second.dest = rct::pk2rct(std::get<1>(outs[out_index][n]));
-      oe.second.mask = std::get<2>(outs[out_index][n]);
-      src.outputs.push_back(oe);
-    }
-    ++i;
-
-    //paste real transaction to the random index
-    auto it_to_replace = std::find_if(src.outputs.begin(), src.outputs.end(), [&](const tx_output_entry& a)
-    {
-      return a.first == td.m_global_output_index;
-    });
-    THROW_WALLET_EXCEPTION_IF(it_to_replace == src.outputs.end(), error::wallet_internal_error,
-        "real output not found");
-
     tx_output_entry real_oe;
     real_oe.first = td.m_global_output_index;
     real_oe.second.dest = rct::pk2rct(td.get_public_key());
     real_oe.second.mask = rct::commit(td.amount(), td.m_mask);
-    *it_to_replace = real_oe;
+    src.outputs.push_back(real_oe);
+    src.real_output = 0;
     src.real_out_tx_key = get_tx_pub_key_from_extra(td.m_tx, td.m_pk_index);
     src.real_out_additional_tx_keys = get_additional_tx_pub_keys_from_extra(td.m_tx);
-    src.real_output = it_to_replace - src.outputs.begin();
     src.real_output_in_tx_index = td.m_internal_output_index;
     src.mask = td.m_mask;
     detail::print_source_entry(src);
-    ++out_index;
   }
-  LOG_PRINT_L2("outputs prepared");
+  LOG_PRINT_L2("FCMP++ inputs prepared");
 
   // we still keep a copy, since we want to keep dsts free of change for user feedback purposes
   std::vector<cryptonote::tx_destination_entry> splitted_dsts = dsts;
@@ -9104,30 +9399,318 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     splitted_dsts.push_back(change_dts);
   }
 
+  static constexpr size_t X25519_PK_BYTES = 32;
+  for (const auto& dt : splitted_dsts)
+  {
+    THROW_WALLET_EXCEPTION_IF(dt.addr.m_pqc_public_key.size() <= X25519_PK_BYTES,
+      error::destination_missing_pqc_kem_key);
+  }
+
   crypto::secret_key tx_key;
   std::vector<crypto::secret_key> additional_tx_keys;
-  LOG_PRINT_L2("constructing tx");
+  if (m_callback) m_callback->on_transfer_stage("constructing", 0, 4);
+  LOG_PRINT_L2("constructing tx skeleton");
   auto sources_copy = sources;
+  // Phase A: build the transaction skeleton (prefix + outputs + KEM tx_extra).
+  // rctSig is a stub at this point — overwritten by genRctFcmpPlusPlus below.
   {
-    bool r = cryptonote::construct_tx_and_get_tx_key(m_account.get_keys(), m_subaddresses, sources, splitted_dsts, change_dts.addr, extra, tx, tx_key, additional_tx_keys, true, rct_config, use_view_tags, get_current_hard_fork());
-    LOG_PRINT_L2("constructed tx, r="<<r);
+    bool r = cryptonote::construct_tx_and_get_tx_key(m_account.get_keys(), m_subaddresses, sources, splitted_dsts, change_dts.addr, extra, tx, tx_key, additional_tx_keys, true, use_view_tags, get_current_hard_fork());
+    LOG_PRINT_L2("constructed tx skeleton, r="<<r);
     THROW_WALLET_EXCEPTION_IF(!r, error::tx_not_constructed, sources, dsts, m_nettype);
   }
-  THROW_WALLET_EXCEPTION_IF(upper_transaction_weight_limit <= get_transaction_weight(tx), error::tx_too_big, tx, upper_transaction_weight_limit);
 
-  // work out the permutation done on sources
   std::vector<size_t> ins_order;
-  for (size_t n = 0; n < sources.size(); ++n)
+
+  if (m_callback) m_callback->on_transfer_stage("generating_proof", 1, 4);
+  // Phase B: generate FCMP++ proof via genRctFcmpPlusPlus.
   {
-    for (size_t idx = 0; idx < sources_copy.size(); ++idx)
+    const size_t num_inputs = selected_transfers.size();
+    rct::ctkeyV inSk(num_inputs), inPk(num_inputs);
+    std::vector<std::vector<uint8_t>> tree_paths(num_inputs);
+    rct::keyV pqc_pk_hashes(num_inputs);
+    std::vector<std::vector<uint8_t>> derived_pqc_public_keys(num_inputs);
+    std::vector<std::vector<uint8_t>> derived_pqc_secret_keys(num_inputs);
+    auto wipe_derived_pqc_secret_keys = epee::misc_utils::create_scope_leave_handler([&derived_pqc_secret_keys]() {
+      for (auto& sk : derived_pqc_secret_keys)
+      {
+        if (!sk.empty())
+          memwipe(sk.data(), sk.size());
+        sk.clear();
+      }
+    });
+    crypto::hash reference_block{};
+    crypto::hash curve_tree_root{};
+    uint8_t tree_depth = 0;
+
+    // Work out the permutation construct_tx_with_tx_key applied to vin
+    ins_order.clear();
+    for (size_t n = 0; n < sources.size(); ++n)
     {
-      THROW_WALLET_EXCEPTION_IF((size_t)sources_copy[idx].real_output >= sources_copy[idx].outputs.size(),
-          error::wallet_internal_error, "Invalid real_output");
-      if (sources_copy[idx].outputs[sources_copy[idx].real_output].second.dest == sources[n].outputs[sources[n].real_output].second.dest)
-        ins_order.push_back(idx);
+      for (size_t idx = 0; idx < sources_copy.size(); ++idx)
+      {
+        if (sources_copy[idx].outputs[sources_copy[idx].real_output].second.dest ==
+            sources[n].outputs[sources[n].real_output].second.dest)
+          ins_order.push_back(idx);
+      }
+    }
+    THROW_WALLET_EXCEPTION_IF(ins_order.size() != sources.size(), error::wallet_internal_error,
+        "Failed to work out sources permutation");
+
+    // Apply the same permutation to selected_transfers so indices match vin order
+    std::vector<size_t> permuted_transfers(selected_transfers.begin(), selected_transfers.end());
+    tools::apply_permutation(ins_order, permuted_transfers);
+
+    for (size_t i = 0; i < num_inputs; ++i)
+    {
+      const transfer_details& td = m_transfers[permuted_transfers[i]];
+      crypto::public_key out_key = td.get_public_key();
+
+      inSk[i].dest = rct::sk2rct(crypto::null_skey);
+      {
+        keypair in_eph;
+        crypto::key_image tmp_ki;
+        const auto& src = sources[i];
+        generate_key_image_helper(m_account.get_keys(), m_subaddresses, out_key,
+          src.real_out_tx_key, src.real_out_additional_tx_keys,
+          src.real_output_in_tx_index, in_eph, tmp_ki, m_account.get_device());
+        inSk[i].dest = rct::sk2rct(in_eph.sec);
+      }
+      inSk[i].mask = td.m_mask;
+
+      inPk[i].dest = rct::pk2rct(out_key);
+      inPk[i].mask = td.m_rct ? rct::commit(td.m_amount, td.m_mask) : rct::zeroCommit(td.m_amount);
+
+      auto path_it = m_fcmp_precomputed_paths.find(td.m_global_output_index);
+      THROW_WALLET_EXCEPTION_IF(path_it == m_fcmp_precomputed_paths.end(), error::wallet_internal_error,
+          "No precomputed FCMP++ tree path for output index " + std::to_string(td.m_global_output_index) +
+          ". Call precompute_fcmp_paths() first.");
+      tree_paths[i] = path_it->second.tree_path;
+      THROW_WALLET_EXCEPTION_IF(tree_paths[i].empty(), error::wallet_internal_error,
+          "Empty FCMP++ tree path for output index " + std::to_string(td.m_global_output_index));
+      if (i == 0)
+      {
+        reference_block = path_it->second.reference_block_at_precompute;
+        curve_tree_root = path_it->second.curve_tree_root_at_precompute;
+        tree_depth = path_it->second.tree_depth_at_precompute;
+      }
+      else
+      {
+        THROW_WALLET_EXCEPTION_IF(path_it->second.reference_block_at_precompute != reference_block,
+          error::wallet_internal_error,
+          "Input reference_block mismatch across selected inputs; rerun precompute_fcmp_paths()");
+        THROW_WALLET_EXCEPTION_IF(path_it->second.curve_tree_root_at_precompute != curve_tree_root,
+          error::wallet_internal_error,
+          "Input curve_tree_root mismatch across selected inputs; rerun precompute_fcmp_paths()");
+        THROW_WALLET_EXCEPTION_IF(path_it->second.tree_depth_at_precompute != tree_depth,
+          error::wallet_internal_error,
+          "Input tree_depth mismatch across selected inputs; rerun precompute_fcmp_paths()");
+      }
+
+      // Per-input H(pqc_pk) from the combined shared secret
+      THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.size() != 64,
+        error::wallet_internal_error,
+        "Missing combined shared secret for output " + std::to_string(td.m_global_output_index));
+      ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
+          td.m_combined_shared_secret.data(), static_cast<uint64_t>(td.m_internal_output_index));
+      THROW_WALLET_EXCEPTION_IF(!kp.success || !kp.public_key.ptr || !kp.secret_key.ptr, error::wallet_internal_error,
+          "PQC keypair derivation failed for input " + std::to_string(i));
+      derived_pqc_public_keys[i].assign(kp.public_key.ptr, kp.public_key.ptr + kp.public_key.len);
+      derived_pqc_secret_keys[i].assign(kp.secret_key.ptr, kp.secret_key.ptr + kp.secret_key.len);
+      uint8_t h_pqc[32];
+      bool ok = shekyl_fcmp_pqc_leaf_hash(
+          reinterpret_cast<const uint8_t*>(derived_pqc_public_keys[i].data()),
+          derived_pqc_public_keys[i].size(),
+          h_pqc);
+      shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
+      shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
+      THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error,
+          "PQC leaf hash failed for input " + std::to_string(i));
+      memcpy(pqc_pk_hashes[i].bytes, h_pqc, 32);
+    }
+
+    // Gather output amounts, destinations, and amount_keys
+    std::vector<rct::xmr_amount> inamounts, outamounts;
+    rct::keyV destinations_rct;
+    for (size_t i = 0; i < num_inputs; ++i)
+      inamounts.push_back(sources[i].amount);
+    for (const auto& out : tx.vout)
+    {
+      crypto::public_key out_pk;
+      THROW_WALLET_EXCEPTION_IF(!cryptonote::get_output_public_key(out, out_pk), error::wallet_internal_error,
+          "Cannot extract output public key");
+      destinations_rct.push_back(rct::pk2rct(out_pk));
+      outamounts.push_back(out.amount);
+    }
+
+    rct::keyV amount_keys(destinations_rct.size());
+    for (size_t i = 0; i < destinations_rct.size(); ++i)
+    {
+      crypto::key_derivation derivation;
+      crypto::generate_key_derivation(rct::rct2pk(destinations_rct[i]), tx_key, derivation);
+      crypto::secret_key scalar;
+      crypto::derivation_to_scalar(derivation, i, scalar);
+      amount_keys[i] = rct::sk2rct(scalar);
+    }
+
+    crypto::hash tx_prefix_hash;
+    cryptonote::get_transaction_prefix_hash(tx, tx_prefix_hash);
+
+    // Build per-input leaf chunk entries from precomputed paths
+    std::vector<std::vector<rct::fcmp_chunk_entry>> leaf_chunk_entries(num_inputs);
+    for (size_t i = 0; i < num_inputs; ++i)
+    {
+      const transfer_details& td = m_transfers[permuted_transfers[i]];
+      auto path_it = m_fcmp_precomputed_paths.find(td.m_global_output_index);
+      if (path_it != m_fcmp_precomputed_paths.end())
+      {
+        const auto& cached_entries = path_it->second.leaf_chunk_entries;
+        leaf_chunk_entries[i].reserve(cached_entries.size());
+        for (const auto& cached : cached_entries)
+        {
+          leaf_chunk_entries[i].push_back(
+              rct::fcmp_chunk_entry{cached.output_key, cached.key_image_gen, cached.commitment, cached.h_pqc});
+        }
+      }
+    }
+
+    if (m_native_sign_mode)
+    {
+      // Native-sign mode: skip C++ proof generation. Pad stub for fee estimation.
+      tx.rct_signatures.p.curve_trees_tree_depth = tree_depth;
+      tx.rct_signatures.referenceBlock = reference_block;
+      size_t estimated_proof_len = shekyl_fcmp_proof_len(num_inputs, tree_depth);
+      tx.rct_signatures.p.fcmp_pp_proof.resize(estimated_proof_len, 0);
+
+      tx.pqc_auths.resize(num_inputs);
+      for (size_t i = 0; i < num_inputs; ++i)
+      {
+        tx.pqc_auths[i].auth_version = 1;
+        tx.pqc_auths[i].scheme_id = 1;
+        tx.pqc_auths[i].flags = 0;
+        tx.pqc_auths[i].hybrid_public_key = derived_pqc_public_keys[i];
+        tx.pqc_auths[i].hybrid_signature.resize(3385, 0);
+      }
+
+      // Parse tree paths into branch layers and store signing state.
+      const uint32_t SELENE_CW = shekyl_curve_tree_selene_chunk_width();
+      const uint32_t HELIOS_CW = shekyl_curve_tree_helios_chunk_width();
+
+      m_native_sign_state.clear();
+      m_native_sign_state.inputs.resize(num_inputs);
+      for (size_t i = 0; i < num_inputs; ++i)
+      {
+        auto& isd = m_native_sign_state.inputs[i];
+        isd.output_key = inPk[i].dest;
+        isd.commitment = inPk[i].mask;
+        isd.amount = inamounts[i];
+        isd.spend_key_x = inSk[i].dest;
+        isd.spend_key_y = inSk[i].mask;
+        isd.h_pqc = pqc_pk_hashes[i];
+
+        // Copy leaf chunk entries
+        const auto& entries = leaf_chunk_entries[i];
+        isd.leaf_chunk.resize(entries.size());
+        for (size_t j = 0; j < entries.size(); ++j)
+        {
+          isd.leaf_chunk[j].output_key = entries[j].output_key;
+          isd.leaf_chunk[j].key_image_gen = entries[j].key_image_gen;
+          isd.leaf_chunk[j].commitment = entries[j].commitment;
+          isd.leaf_chunk[j].h_pqc = entries[j].h_pqc;
+        }
+
+        // Parse tree_path blob into c1 (Selene) and c2 (Helios) branch layers
+        const auto& tp = tree_paths[i];
+        size_t tp_off = 0;
+        if (tp_off + 2 <= tp.size())
+        {
+          tp_off += 2; // skip leaf_pos u16
+          tp_off += entries.size() * 128; // skip leaf scalar data
+          for (uint8_t layer = 1; layer < tree_depth && tp_off + 2 <= tp.size(); ++layer)
+          {
+            tp_off += 2; // skip pos_in_parent u16
+            uint32_t width = (layer % 2 == 0) ? SELENE_CW : HELIOS_CW;
+            size_t layer_bytes = width * 32;
+            if (tp_off + layer_bytes > tp.size())
+              layer_bytes = tp.size() - tp_off;
+            size_t n_siblings = layer_bytes / 32;
+            std::vector<rct::key> siblings(n_siblings);
+            for (size_t s = 0; s < n_siblings; ++s)
+              memcpy(siblings[s].bytes, tp.data() + tp_off + s * 32, 32);
+            tp_off += layer_bytes;
+            if (layer % 2 == 0)
+              isd.c1_layers.push_back(std::move(siblings));
+            else
+              isd.c2_layers.push_back(std::move(siblings));
+          }
+        }
+      }
+
+      m_native_sign_state.outputs.resize(destinations_rct.size());
+      for (size_t i = 0; i < destinations_rct.size(); ++i)
+      {
+        m_native_sign_state.outputs[i].dest_key = destinations_rct[i];
+        m_native_sign_state.outputs[i].amount = outamounts[i];
+        m_native_sign_state.outputs[i].amount_key = amount_keys[i];
+      }
+
+      m_native_sign_state.pqc_public_keys = derived_pqc_public_keys;
+      m_native_sign_state.pqc_secret_keys = std::move(derived_pqc_secret_keys);
+      m_native_sign_state.permuted_transfers.assign(permuted_transfers.begin(), permuted_transfers.end());
+      m_native_sign_state.tx_prefix_hash = tx_prefix_hash;
+      m_native_sign_state.fee = fee;
+      m_native_sign_state.reference_block = reference_block;
+      m_native_sign_state.curve_tree_root = curve_tree_root;
+      m_native_sign_state.tree_depth = tree_depth;
+      m_native_sign_state.valid = true;
+
+      tx.invalidate_hashes();
+    }
+    else
+    {
+      LOG_PRINT_L2("calling genRctFcmpPlusPlus with " << num_inputs << " inputs, "
+          << destinations_rct.size() << " outputs");
+      rct::key rct_tree_root;
+      memcpy(rct_tree_root.bytes, &curve_tree_root, 32);
+      rct::rctSig rv = rct::genRctFcmpPlusPlus(
+          rct::hash2rct(tx_prefix_hash),
+          inSk, inPk,
+          destinations_rct, inamounts, outamounts, amount_keys,
+          fee, reference_block, rct_tree_root, tree_depth,
+          tree_paths, leaf_chunk_entries, pqc_pk_hashes,
+          m_account.get_device());
+      tx.rct_signatures = rv;
+
+      if (m_callback) m_callback->on_transfer_stage("signing_pqc", 2, 4);
+      tx.pqc_auths.resize(num_inputs);
+      for (size_t i = 0; i < num_inputs; ++i)
+      {
+        tx.pqc_auths[i].auth_version = 1;
+        tx.pqc_auths[i].scheme_id = 1;
+        tx.pqc_auths[i].flags = 0;
+        tx.pqc_auths[i].hybrid_public_key = derived_pqc_public_keys[i];
+
+        std::string payload_blob;
+        THROW_WALLET_EXCEPTION_IF(!cryptonote::get_transaction_signed_payload(tx, i, payload_blob),
+            error::wallet_internal_error, "Failed to build PQC signed payload for input " + std::to_string(i));
+        crypto::hash payload_hash;
+        cryptonote::get_blob_hash(payload_blob, payload_hash);
+
+        ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
+            reinterpret_cast<const uint8_t*>(derived_pqc_secret_keys[i].data()),
+            derived_pqc_secret_keys[i].size(),
+            reinterpret_cast<const uint8_t*>(payload_hash.data), sizeof(payload_hash.data));
+        THROW_WALLET_EXCEPTION_IF(!sig_result.success, error::wallet_internal_error,
+            "PQC signing failed for input " + std::to_string(i));
+        tx.pqc_auths[i].hybrid_signature.assign(sig_result.signature.ptr,
+            sig_result.signature.ptr + sig_result.signature.len);
+        shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
+      }
+
+      tx.invalidate_hashes();
     }
   }
-  THROW_WALLET_EXCEPTION_IF(ins_order.size() != sources.size(), error::wallet_internal_error, "Failed to work out sources permutation");
+
+  THROW_WALLET_EXCEPTION_IF(upper_transaction_weight_limit <= get_transaction_weight(tx), error::tx_too_big, tx, upper_transaction_weight_limit);
 
   LOG_PRINT_L2("gathering key images");
   std::string key_images;
@@ -9139,6 +9722,10 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
   });
   THROW_WALLET_EXCEPTION_IF(!all_are_txin_to_key, error::unexpected_txin_type, tx);
   LOG_PRINT_L2("gathered key images");
+
+  // Reuse the same vin permutation computed above.
+  THROW_WALLET_EXCEPTION_IF(ins_order.size() != sources.size(), error::wallet_internal_error,
+      "Failed to work out sources permutation");
 
   ptx.key_images = key_images;
   ptx.fee = fee;
@@ -9158,13 +9745,8 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
   ptx.construction_data.extra = tx.extra;
   ptx.construction_data.unlock_time = 0;
   ptx.construction_data.use_rct = true;
-  ptx.construction_data.rct_config = {
-    rct::RangeProofPaddedBulletproof,
-    4
-  };
   ptx.construction_data.use_view_tags = true;
   ptx.construction_data.dests = dsts;
-  // record which subaddress indices are being used as inputs
   ptx.construction_data.subaddr_account = subaddr_account;
   ptx.construction_data.subaddr_indices.clear();
   for (size_t idx: selected_transfers)
@@ -9912,13 +10494,6 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
   uint64_t upper_transaction_weight_limit = get_upper_transaction_weight_limit();
   const bool use_per_byte_fee = true;
   const bool use_rct = true;
-  const bool bulletproof = true;
-  const bool bulletproof_plus = true;
-  const bool clsag = true;
-  const rct::RCTConfig rct_config {
-    rct::RangeProofPaddedBulletproof,
-    4
-  };
   const bool use_view_tags = true;
   std::unordered_set<crypto::public_key> valid_public_keys_cache;
 
@@ -9962,7 +10537,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
   // early out if we know we can't make it anyway
   // we could also check for being within FEE_PER_KB, but if the fee calculation
   // ever changes, this might be missed, so let this go through
-  const uint64_t min_fee = (base_fee * estimate_tx_size(use_rct, 1, fake_outs_count, 2, extra.size(), bulletproof, clsag, bulletproof_plus, use_view_tags));
+  const uint64_t min_fee = (base_fee * estimate_tx_size(use_rct, 1, 2, extra.size(), use_view_tags));
   total_needed_money = needed_money + (subtract_fee_from_outputs.size() ? 0 : min_fee);
   uint64_t balance_subtotal = 0;
   uint64_t unlocked_balance_subtotal = 0;
@@ -9981,8 +10556,8 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
     LOG_PRINT_L2("Candidate subaddress index for spending: " << i);
 
   // determine threshold for fractional amount
-  const size_t tx_weight_one_ring = estimate_tx_weight(use_rct, 1, fake_outs_count, 2, 0, bulletproof, clsag, bulletproof_plus, use_view_tags);
-  const size_t tx_weight_two_rings = estimate_tx_weight(use_rct, 2, fake_outs_count, 2, 0, bulletproof, clsag, bulletproof_plus, use_view_tags);
+  const size_t tx_weight_one_ring = estimate_tx_weight(use_rct, 1, 2, 0, use_view_tags);
+  const size_t tx_weight_two_rings = estimate_tx_weight(use_rct, 2, 2, 0, use_view_tags);
   THROW_WALLET_EXCEPTION_IF(tx_weight_one_ring > tx_weight_two_rings, error::wallet_internal_error, "Estimated tx weight with 1 input is larger than with 2 inputs!");
   const size_t tx_weight_per_ring = tx_weight_two_rings - tx_weight_one_ring;
   const uint64_t fractional_threshold = (base_fee * tx_weight_per_ring) / (use_per_byte_fee ? 1 : 1024);
@@ -10076,7 +10651,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
   {
     // this is used to build a tx that's 1 or 2 inputs, and 2 outputs, which
     // will get us a known fee.
-    uint64_t estimated_fee = estimate_fee(use_per_byte_fee, use_rct, 2, fake_outs_count, 2, extra.size(), bulletproof, clsag, bulletproof_plus, use_view_tags, base_fee, fee_quantization_mask);
+    uint64_t estimated_fee = estimate_fee(use_per_byte_fee, use_rct, 2, 2, extra.size(), use_view_tags, base_fee, fee_quantization_mask);
     total_needed_money = needed_money + (subtract_fee_from_outputs.size() ? 0 : estimated_fee);
     preferred_inputs = pick_preferred_rct_inputs(total_needed_money, subaddr_account, subaddr_indices);
     if (!preferred_inputs.empty())
@@ -10189,7 +10764,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
     }
     else
     {
-      while (!dsts.empty() && dsts[0].amount <= available_amount && estimate_tx_weight(use_rct, tx.selected_transfers.size(), fake_outs_count, tx.dsts.size()+1, extra.size(), bulletproof, clsag, bulletproof_plus, use_view_tags) < TX_WEIGHT_TARGET(upper_transaction_weight_limit))
+      while (!dsts.empty() && dsts[0].amount <= available_amount && estimate_tx_weight(use_rct, tx.selected_transfers.size(), tx.dsts.size()+1, extra.size(), use_view_tags) < TX_WEIGHT_TARGET(upper_transaction_weight_limit))
       {
         // we can fully pay that destination
         LOG_PRINT_L2("We can fully pay " << get_account_address_as_str(m_nettype, dsts[0].is_subaddress, dsts[0].addr) <<
@@ -10209,7 +10784,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
       }
 
       if (!out_slots_exhausted && available_amount > 0 && !dsts.empty() &&
-                                                   estimate_tx_weight(use_rct, tx.selected_transfers.size(), fake_outs_count, tx.dsts.size()+1, extra.size(), bulletproof, clsag, bulletproof_plus, use_view_tags) < TX_WEIGHT_TARGET(upper_transaction_weight_limit)) {
+                                                   estimate_tx_weight(use_rct, tx.selected_transfers.size(), tx.dsts.size()+1, extra.size(), use_view_tags) < TX_WEIGHT_TARGET(upper_transaction_weight_limit)) {
         // we can partially fill that destination
         LOG_PRINT_L2("We can partially pay " << get_account_address_as_str(m_nettype, dsts[0].is_subaddress, dsts[0].addr) <<
           " for " << print_money(available_amount) << "/" << print_money(dsts[0].amount));
@@ -10248,7 +10823,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
       }
       else
       {
-        const size_t estimated_rct_tx_weight = estimate_tx_weight(use_rct, tx.selected_transfers.size(), fake_outs_count, tx.dsts.size()+1, extra.size(), bulletproof, clsag, bulletproof_plus, use_view_tags);
+        const size_t estimated_rct_tx_weight = estimate_tx_weight(use_rct, tx.selected_transfers.size(), tx.dsts.size()+1, extra.size(), use_view_tags);
         try_tx = dsts.empty() || (estimated_rct_tx_weight >= TX_WEIGHT_TARGET(upper_transaction_weight_limit));
         THROW_WALLET_EXCEPTION_IF(try_tx && tx.dsts.empty(), error::tx_too_big, estimated_rct_tx_weight, upper_transaction_weight_limit);
       }
@@ -10259,7 +10834,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
       pending_tx test_ptx;
 
       const size_t num_outputs = get_num_outputs(tx.dsts, m_transfers, tx.selected_transfers);
-      needed_fee = estimate_fee(use_per_byte_fee, use_rct ,tx.selected_transfers.size(), fake_outs_count, num_outputs, extra.size(), bulletproof, clsag, bulletproof_plus, use_view_tags, base_fee, fee_quantization_mask);
+      needed_fee = estimate_fee(use_per_byte_fee, use_rct, tx.selected_transfers.size(), num_outputs, extra.size(), use_view_tags, base_fee, fee_quantization_mask);
 
       auto try_carving_from_partial_payment = [&](uint64_t needed_fee, uint64_t available_for_fee)
       {
@@ -10312,7 +10887,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
         tx.selected_transfers.size() << " inputs");
       auto tx_dsts = tx.get_adjusted_dsts(needed_fee);
       transfer_selected_rct(tx_dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra,
-        test_tx, test_ptx, rct_config, use_view_tags);
+        test_tx, test_ptx, use_view_tags);
       auto txBlob = t_serializable_object_to_blob(test_ptx.tx);
       needed_fee = calculate_fee(use_per_byte_fee, test_ptx.tx, txBlob.size(), base_fee, fee_quantization_mask);
 
@@ -10352,7 +10927,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
           tx_dsts = tx.get_adjusted_dsts(needed_fee);
 
           transfer_selected_rct(tx_dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra,
-            test_tx, test_ptx, rct_config, use_view_tags);
+            test_tx, test_ptx, use_view_tags);
           txBlob = t_serializable_object_to_blob(test_ptx.tx);
           needed_fee = calculate_fee(use_per_byte_fee, test_ptx.tx, txBlob.size(), base_fee, fee_quantization_mask);
           LOG_PRINT_L2("Made an attempt at a  final " << get_weight_string(test_ptx.tx, txBlob.size()) << " tx, with " << print_money(test_ptx.fee) <<
@@ -10419,7 +10994,7 @@ skip_tx:
     cryptonote::transaction test_tx;
     pending_tx test_ptx;
     transfer_selected_rct(tx_dsts, tx.selected_transfers, fake_outs_count, tx.outs, valid_public_keys_cache,
-                          tx.needed_fee, extra, test_tx, test_ptx, rct_config, use_view_tags);
+                          tx.needed_fee, extra, test_tx, test_ptx, use_view_tags);
     auto txBlob = t_serializable_object_to_blob(test_ptx.tx);
     tx.tx = test_tx;
     tx.ptx = test_ptx;
@@ -10539,9 +11114,9 @@ uint64_t wallet2::estimate_claimable_reward(size_t transfer_index)
   uint64_t to_h = std::min(current_height, td.m_stake_lock_until);
   if (from_h >= to_h)
     return 0;
-  static const uint64_t MAX_CLAIM_RANGE = 10000;
-  if (to_h - from_h > MAX_CLAIM_RANGE)
-    to_h = from_h + MAX_CLAIM_RANGE;
+  const uint64_t max_claim_range = shekyl_stake_max_claim_range();
+  if (to_h - from_h > max_claim_range)
+    to_h = from_h + max_claim_range;
 
   cryptonote::COMMAND_RPC_ESTIMATE_CLAIM_REWARD::request req{};
   cryptonote::COMMAND_RPC_ESTIMATE_CLAIM_REWARD::response res{};
@@ -10563,14 +11138,18 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
     "Claiming requires hardfork version " + std::to_string(HF_VERSION_SHEKYL_NG));
 
   const uint64_t current_height = get_blockchain_current_height();
+  const auto& keys = m_account.get_keys();
+  THROW_WALLET_EXCEPTION_IF(keys.m_account_address.m_pqc_public_key.empty(), error::wallet_internal_error,
+    "Cannot create v3 claim transaction: wallet has no PQC public key");
 
   cryptonote::transaction tx;
   tx.version = 3;
   tx.unlock_time = 0;
 
   uint64_t total_claimed = 0;
+  std::vector<size_t> ordered_indices(staked_indices);
 
-  for (size_t idx : staked_indices)
+  for (size_t idx : ordered_indices)
   {
     THROW_WALLET_EXCEPTION_IF(idx >= m_transfers.size(), error::wallet_internal_error, "Invalid transfer index");
     const auto& td = m_transfers[idx];
@@ -10581,9 +11160,9 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
 
     uint64_t from_h = td.m_block_height;
     uint64_t to_h = std::min(current_height, td.m_stake_lock_until);
-    static const uint64_t MAX_CLAIM_RANGE = 10000;
-    if (to_h - from_h > MAX_CLAIM_RANGE)
-      to_h = from_h + MAX_CLAIM_RANGE;
+    const uint64_t max_claim_range = shekyl_stake_max_claim_range();
+    if (to_h - from_h > max_claim_range)
+      to_h = from_h + max_claim_range;
 
     uint64_t reward = estimate_claimable_reward(idx);
 
@@ -10593,75 +11172,249 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
     claim.from_height = from_h;
     claim.to_height = to_h;
 
-    crypto::generate_key_image(td.get_public_key(), m_account.get_keys().m_spend_secret_key, claim.k_image);
+    crypto::generate_key_image(td.get_public_key(), keys.m_spend_secret_key, claim.k_image);
 
     tx.vin.push_back(claim);
     total_claimed += reward;
   }
 
-  if (total_claimed > 0)
+  THROW_WALLET_EXCEPTION_IF(total_claimed == 0, error::wallet_internal_error, "Total claimable reward is zero");
+
+  // Sort inputs by key image (descending) for canonical ordering
   {
-    crypto::secret_key tx_key;
-    crypto::generate_random_bytes_thread_safe(sizeof(tx_key), (uint8_t*)&tx_key);
-    crypto::public_key txkey_pub;
-    crypto::secret_key_to_public_key(tx_key, txkey_pub);
-    cryptonote::add_tx_pub_key_to_extra(tx, txkey_pub);
+    std::vector<size_t> sort_order(tx.vin.size());
+    std::iota(sort_order.begin(), sort_order.end(), 0);
+    std::sort(sort_order.begin(), sort_order.end(), [&](size_t a, size_t b) {
+      const auto& ka = std::get<cryptonote::txin_stake_claim>(tx.vin[a]).k_image;
+      const auto& kb = std::get<cryptonote::txin_stake_claim>(tx.vin[b]).k_image;
+      return memcmp(&ka, &kb, sizeof(ka)) > 0;
+    });
+    std::vector<cryptonote::txin_v> sorted_vin(tx.vin.size());
+    std::vector<size_t> sorted_indices(ordered_indices.size());
+    for (size_t i = 0; i < sort_order.size(); ++i) {
+      sorted_vin[i] = tx.vin[sort_order[i]];
+      sorted_indices[i] = ordered_indices[sort_order[i]];
+    }
+    tx.vin = std::move(sorted_vin);
+    ordered_indices = std::move(sorted_indices);
+  }
 
-    cryptonote::tx_destination_entry de;
-    de.amount = total_claimed;
-    de.addr = get_address();
-    de.is_subaddress = false;
-    de.is_staking = false;
+  // ── Generate ephemeral tx key ──────────────────────────────────────
+  crypto::secret_key tx_key;
+  crypto::generate_random_bytes_thread_safe(sizeof(tx_key), (uint8_t*)&tx_key);
+  crypto::public_key txkey_pub;
+  crypto::secret_key_to_public_key(tx_key, txkey_pub);
+  cryptonote::add_tx_pub_key_to_extra(tx, txkey_pub);
 
+  // ── Two outputs: reward to self + dummy change (amount 0) ──────────
+  const auto& my_addr = keys.m_account_address;
+  const uint64_t outamounts[2] = {total_claimed, 0};
+
+  for (size_t oi = 0; oi < 2; ++oi)
+  {
     crypto::public_key out_eph_public_key;
     crypto::view_tag view_tag;
     crypto::key_derivation derivation;
-    crypto::generate_key_derivation(de.addr.m_view_public_key, tx_key, derivation);
-    crypto::derive_public_key(derivation, 0, de.addr.m_spend_public_key, out_eph_public_key);
-    crypto::derive_view_tag(derivation, 0, view_tag);
+    crypto::generate_key_derivation(my_addr.m_view_public_key, tx_key, derivation);
+    crypto::derive_public_key(derivation, oi, my_addr.m_spend_public_key, out_eph_public_key);
+    crypto::derive_view_tag(derivation, oi, view_tag);
 
     cryptonote::tx_out out;
-    cryptonote::set_tx_out(total_claimed, out_eph_public_key, true, view_tag, out);
+    cryptonote::set_tx_out(outamounts[oi], out_eph_public_key, true, view_tag, out);
     tx.vout.push_back(out);
   }
 
-  tx.rct_signatures.type = rct::RCTTypeNull;
-  tx.rct_signatures.txnFee = 0;
-  tx.rct_signatures.outPk.resize(tx.vout.size());
-  for (size_t i = 0; i < tx.vout.size(); ++i)
-    tx.rct_signatures.outPk[i].mask = rct::identity();
+  // ── KEM encapsulation for per-output PQC keys ─────────────────────
+  static constexpr size_t X25519_PK_BYTES = 32;
+  THROW_WALLET_EXCEPTION_IF(my_addr.m_pqc_public_key.size() <= X25519_PK_BYTES,
+    error::wallet_internal_error, "PQC public key too short (need x25519[32] || ml_kem_ek[1184])");
 
+  // m_pqc_public_key layout: x25519_pk[32] || ml_kem_ek[1184]
+  const uint8_t* pk_x25519 = my_addr.m_pqc_public_key.data();
+  const uint8_t* pk_ml_kem = my_addr.m_pqc_public_key.data() + X25519_PK_BYTES;
+  const size_t pk_ml_kem_len = my_addr.m_pqc_public_key.size() - X25519_PK_BYTES;
+
+  cryptonote::tx_extra_pqc_kem_ciphertext kem_field;
+  kem_field.blob.reserve(2 * cryptonote::HYBRID_KEM_CT_BYTES);
+
+  cryptonote::tx_extra_pqc_leaf_hashes leaf_hash_field;
+  leaf_hash_field.blob.reserve(2 * cryptonote::PQC_LEAF_HASH_BYTES);
+
+  rct::keyV amount_keys(2);
+
+  for (size_t oi = 0; oi < 2; ++oi)
   {
-    const auto& keys = m_account.get_keys();
-    THROW_WALLET_EXCEPTION_IF(keys.m_pqc_secret_key.empty(), error::wallet_internal_error,
-      "Cannot create v3 claim transaction: wallet has no PQC secret key");
-    THROW_WALLET_EXCEPTION_IF(keys.m_account_address.m_pqc_public_key.empty(), error::wallet_internal_error,
-      "Cannot create v3 claim transaction: wallet has no PQC public key");
+    ShekylBuffer ct_buf = {};
+    uint8_t combined_ss[64];
+    bool ok = shekyl_kem_encapsulate(pk_x25519, pk_ml_kem, pk_ml_kem_len, &ct_buf, combined_ss);
+    THROW_WALLET_EXCEPTION_IF(!ok || !ct_buf.ptr || ct_buf.len != cryptonote::HYBRID_KEM_CT_BYTES,
+      error::wallet_internal_error, "KEM encapsulation failed for claim output " + std::to_string(oi));
 
-    cryptonote::pqc_authentication auth;
-    auth.auth_version = 1;
-    auth.scheme_id = 1;
-    auth.flags = 0;
-    auth.hybrid_public_key = keys.m_account_address.m_pqc_public_key;
-    auth.hybrid_signature.clear();
-    tx.pqc_auth = auth;
+    // Store full hybrid ciphertext: x25519_ct[32] || ml_kem_ct[1088]
+    kem_field.blob.append(reinterpret_cast<const char*>(ct_buf.ptr),
+                          cryptonote::HYBRID_KEM_CT_BYTES);
+    shekyl_buffer_free(ct_buf.ptr, ct_buf.len);
 
+    ShekylPqcKeypair derived = shekyl_fcmp_derive_pqc_keypair(combined_ss, static_cast<uint64_t>(oi));
+    memwipe(combined_ss, sizeof(combined_ss));
+    THROW_WALLET_EXCEPTION_IF(!derived.success || !derived.public_key.ptr,
+      error::wallet_internal_error, "Per-output PQC keypair derivation failed for claim output " + std::to_string(oi));
+
+    uint8_t h_pqc[32];
+    ok = shekyl_fcmp_pqc_leaf_hash(derived.public_key.ptr, derived.public_key.len, h_pqc);
+    shekyl_buffer_free(derived.public_key.ptr, derived.public_key.len);
+    shekyl_buffer_free(derived.secret_key.ptr, derived.secret_key.len);
+    THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error,
+      "PQC leaf hash failed for claim output " + std::to_string(oi));
+
+    leaf_hash_field.blob.append(reinterpret_cast<const char*>(h_pqc), cryptonote::PQC_LEAF_HASH_BYTES);
+
+    crypto::key_derivation ecdh_derivation;
+    crypto::generate_key_derivation(my_addr.m_view_public_key, tx_key, ecdh_derivation);
+    crypto::secret_key scalar;
+    crypto::derivation_to_scalar(ecdh_derivation, oi, scalar);
+    amount_keys[oi] = rct::sk2rct(scalar);
+  }
+
+  // Embed KEM ciphertext and leaf hashes in tx_extra
+  {
+    std::ostringstream oss;
+    binary_archive<true> oar(oss);
+    cryptonote::tx_extra_field variant_field = kem_field;
+    THROW_WALLET_EXCEPTION_IF(!::do_serialize(oar, variant_field),
+      error::wallet_internal_error, "Failed to serialize KEM ciphertexts for claim tx_extra");
+    std::string blob = oss.str();
+    tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+  }
+  {
+    std::ostringstream oss;
+    binary_archive<true> oar(oss);
+    cryptonote::tx_extra_field variant_field = leaf_hash_field;
+    THROW_WALLET_EXCEPTION_IF(!::do_serialize(oar, variant_field),
+      error::wallet_internal_error, "Failed to serialize PQC leaf hashes for claim tx_extra");
+    std::string blob = oss.str();
+    tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+  }
+  THROW_WALLET_EXCEPTION_IF(!cryptonote::sort_tx_extra(tx.extra, tx.extra),
+    error::wallet_internal_error, "Failed to sort claim tx_extra");
+
+  // Zero output amounts for RCT (amounts are hidden in commitments)
+  for (auto& out : tx.vout)
+    out.amount = 0;
+
+  // ── Build rctSig: BP+ range proofs + pseudo-outs ──────────────────
+  const size_t num_inputs = tx.vin.size();
+  rct::rctSig& rv = tx.rct_signatures;
+  rv.type = rct::RCTTypeFcmpPlusPlusPqc;
+  rv.txnFee = 0;
+  rv.outPk.resize(2);
+  rv.ecdhInfo.resize(2);
+  rv.p.pseudoOuts.resize(num_inputs);
+
+  // Output masks must sum to N (number of inputs) because each
+  // pseudo-out uses zeroCommit (mask = scalar 1).
+  rct::key mask0, mask1;
+  rct::skGen(mask0);
+  {
+    rct::key n_scalar = rct::d2h(static_cast<rct::xmr_amount>(num_inputs));
+    sc_sub(mask1.bytes, n_scalar.bytes, mask0.bytes);
+  }
+  rct::keyV out_masks = {mask0, mask1};
+
+  std::vector<uint64_t> out_amounts_vec = {total_claimed, 0};
+  rct::BulletproofPlus bp_proof = rct::bulletproof_plus_PROVE(out_amounts_vec, out_masks);
+  THROW_WALLET_EXCEPTION_IF(bp_proof.V.size() != 2, error::wallet_internal_error,
+    "BP+ proof V size mismatch");
+
+  rv.p.bulletproofs_plus.clear();
+  rv.p.bulletproofs_plus.push_back(bp_proof);
+
+  for (size_t i = 0; i < 2; ++i)
+  {
+    rv.outPk[i].mask = rct::scalarmult8(bp_proof.V[i]);
+
+    crypto::public_key out_pk;
+    THROW_WALLET_EXCEPTION_IF(!cryptonote::get_output_public_key(tx.vout[i], out_pk),
+      error::wallet_internal_error, "Cannot extract claim output public key");
+    rv.outPk[i].dest = rct::pk2rct(out_pk);
+  }
+
+  // ECDH-encode amounts for recipient recovery
+  for (size_t i = 0; i < 2; ++i)
+  {
+    rv.ecdhInfo[i].mask = rct::copy(out_masks[i]);
+    rv.ecdhInfo[i].amount = rct::d2h(out_amounts_vec[i]);
+    m_account.get_device().ecdhEncode(rv.ecdhInfo[i], amount_keys[i], true);
+  }
+
+  // Pseudo-outs: zeroCommit(claim_amount) binds each to its public amount
+  for (size_t i = 0; i < num_inputs; ++i)
+  {
+    const auto& claim = std::get<cryptonote::txin_stake_claim>(tx.vin[i]);
+    rv.p.pseudoOuts[i] = rct::zeroCommit(claim.amount);
+  }
+
+  // No FCMP++ membership proof for claims (inputs are by global index)
+  rv.p.fcmp_pp_proof.clear();
+  rv.p.curve_trees_tree_depth = 0;
+  rv.referenceBlock = crypto::hash{};
+
+  // ── PQC auth: sign with per-output KEM-derived keys ───────────────
+  tx.pqc_auths.clear();
+  tx.pqc_auths.resize(num_inputs);
+  std::vector<std::vector<uint8_t>> claim_signing_sks(num_inputs);
+  auto wipe_claim_signing_sks = epee::misc_utils::create_scope_leave_handler([&claim_signing_sks]() {
+    for (auto& sk : claim_signing_sks)
+    {
+      if (!sk.empty())
+        memwipe(sk.data(), sk.size());
+      sk.clear();
+    }
+  });
+
+  for (size_t i = 0; i < num_inputs; ++i)
+  {
+    const size_t td_idx = ordered_indices[i];
+    const auto& td = m_transfers[td_idx];
+
+    THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.size() != 64, error::wallet_internal_error,
+      "Missing per-output combined shared secret for claim input " + std::to_string(i));
+    ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
+        td.m_combined_shared_secret.data(),
+        static_cast<uint64_t>(td.m_internal_output_index));
+    THROW_WALLET_EXCEPTION_IF(!kp.success || !kp.public_key.ptr || !kp.secret_key.ptr,
+      error::wallet_internal_error, "Per-output PQC keypair rederivation failed for claim input " + std::to_string(i));
+
+    tx.pqc_auths[i].hybrid_public_key.assign(kp.public_key.ptr, kp.public_key.ptr + kp.public_key.len);
+    claim_signing_sks[i].assign(kp.secret_key.ptr, kp.secret_key.ptr + kp.secret_key.len);
+    shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
+    shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
+
+    tx.pqc_auths[i].auth_version = 1;
+    tx.pqc_auths[i].scheme_id = 1;
+    tx.pqc_auths[i].flags = 0;
+    tx.pqc_auths[i].hybrid_signature.clear();
+  }
+
+  // Sign all inputs after public keys are populated (payload includes all H(pqc_pk))
+  for (size_t i = 0; i < num_inputs; ++i)
+  {
     std::string payload_blob;
-    THROW_WALLET_EXCEPTION_IF(!cryptonote::get_transaction_signed_payload(tx, payload_blob),
-      error::wallet_internal_error, "Failed to build PQC signed payload for claim transaction");
+    THROW_WALLET_EXCEPTION_IF(!cryptonote::get_transaction_signed_payload(tx, i, payload_blob),
+      error::wallet_internal_error, "Failed to build PQC signed payload for claim input " + std::to_string(i));
 
     crypto::hash payload_hash;
     cryptonote::get_blob_hash(payload_blob, payload_hash);
 
     ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
-        keys.m_pqc_secret_key.data(),
-        keys.m_pqc_secret_key.size(),
+        reinterpret_cast<const uint8_t*>(claim_signing_sks[i].data()), claim_signing_sks[i].size(),
         reinterpret_cast<const uint8_t*>(payload_hash.data),
         sizeof(payload_hash.data));
-    THROW_WALLET_EXCEPTION_IF(!sig_result.success, error::wallet_internal_error,
-      "PQC hybrid signing failed for claim transaction");
 
-    tx.pqc_auth->hybrid_signature.assign(
+    THROW_WALLET_EXCEPTION_IF(!sig_result.success, error::wallet_internal_error,
+      "PQC signing failed for claim input " + std::to_string(i));
+
+    tx.pqc_auths[i].hybrid_signature.assign(
         sig_result.signature.ptr, sig_result.signature.ptr + sig_result.signature.len);
     shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
   }
@@ -10674,7 +11427,7 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
   ptx.change_dts = {};
   ptx.selected_transfers = {};
   ptx.key_images = "";
-  ptx.tx_key = crypto::secret_key{};
+  ptx.tx_key = tx_key;
   ptx.additional_tx_keys = {};
   ptx.dests = {};
   ptx.construction_data = {};
@@ -10737,13 +11490,281 @@ bool wallet2::create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, con
   return true;
 }
 //----------------------------------------------------------------------------------------------------
-std::string wallet2::export_multisig_signing_request(const pending_tx& ptx)
+void wallet2::clear_frost_sessions()
+{
+  for (auto* s : m_frost_sal_sessions)
+  {
+    if (s)
+      shekyl_frost_sal_session_free(s);
+  }
+  m_frost_sal_sessions.clear();
+}
+//----------------------------------------------------------------------------------------------------
+bool wallet2::import_frost_threshold_keys(const std::vector<uint8_t>& serialized_keys)
+{
+  THROW_WALLET_EXCEPTION_IF(!is_pqc_multisig(), error::wallet_internal_error,
+      "Cannot import FROST keys: not a PQC multisig wallet");
+  THROW_WALLET_EXCEPTION_IF(serialized_keys.empty(), error::wallet_internal_error,
+      "Empty FROST threshold keys blob");
+
+  ShekylFrostThresholdKeys* handle = shekyl_frost_keys_import(
+      serialized_keys.data(), serialized_keys.size());
+  THROW_WALLET_EXCEPTION_IF(!handle, error::wallet_internal_error,
+      "Failed to deserialize FROST threshold keys");
+
+  bool valid = shekyl_frost_keys_validate(handle, m_pqc_multisig_m, m_pqc_multisig_n);
+  if (!valid)
+  {
+    shekyl_frost_keys_free(handle);
+    THROW_WALLET_EXCEPTION(error::wallet_internal_error,
+        "FROST threshold keys do not match multisig group parameters ("
+        + std::to_string(m_pqc_multisig_m) + "-of-" + std::to_string(m_pqc_multisig_n) + ")");
+  }
+
+  uint8_t group_key[32];
+  bool got_gk = shekyl_frost_keys_group_key(handle, group_key);
+  shekyl_frost_keys_free(handle);
+  THROW_WALLET_EXCEPTION_IF(!got_gk, error::wallet_internal_error,
+      "Failed to extract group key from FROST threshold keys");
+
+  m_frost_threshold_keys = serialized_keys;
+  std::copy(group_key, group_key + 32, m_frost_group_key.begin());
+
+  LOG_PRINT_L1("Imported FROST threshold keys (" << serialized_keys.size()
+      << " bytes, group key " << epee::string_tools::buff_to_hex_nodelimer(
+          std::string(reinterpret_cast<const char*>(group_key), 32)).substr(0, 16) << "...)");
+  return true;
+}
+//----------------------------------------------------------------------------------------------------
+std::vector<uint8_t> wallet2::export_frost_threshold_keys() const
+{
+  return m_frost_threshold_keys;
+}
+//----------------------------------------------------------------------------------------------------
+bool wallet2::prepare_multisig_fcmp_proof(pending_tx& ptx)
+{
+  THROW_WALLET_EXCEPTION_IF(!is_pqc_multisig(), error::wallet_internal_error, "Not a PQC multisig wallet");
+  THROW_WALLET_EXCEPTION_IF(ptx.selected_transfers.empty(), error::wallet_internal_error, "No inputs selected");
+
+  const size_t num_inputs = ptx.selected_transfers.size();
+
+  // Gather input secret/public keys and amounts
+  rct::ctkeyV inSk(num_inputs), inPk(num_inputs);
+  std::vector<rct::xmr_amount> inamounts(num_inputs);
+  std::vector<std::vector<uint8_t>> tree_paths(num_inputs);
+  crypto::hash reference_block{};
+  crypto::hash curve_tree_root{};
+  uint8_t tree_depth = 0;
+
+  for (size_t i = 0; i < num_inputs; ++i)
+  {
+    const transfer_details& td = m_transfers[ptx.selected_transfers[i]];
+    inamounts[i] = td.m_amount;
+
+    // Derive one-time spend key for this output
+    crypto::public_key out_key = td.get_public_key();
+    crypto::public_key tx_pub_key = get_tx_pub_key_from_extra(td.m_tx, td.m_pk_index);
+    std::vector<crypto::public_key> additional_tx_pub_keys = get_additional_tx_pub_keys_from_extra(td.m_tx);
+    cryptonote::keypair in_eph;
+    crypto::key_image ki;
+    THROW_WALLET_EXCEPTION_IF(!cryptonote::generate_key_image_helper(m_account.get_keys(), m_subaddresses,
+        out_key, tx_pub_key, additional_tx_pub_keys, td.m_internal_output_index,
+        in_eph, ki, m_account.get_device()),
+        error::wallet_internal_error, "Failed to generate key image for input " + std::to_string(i));
+
+    inSk[i].dest = rct::sk2rct(in_eph.sec);
+    inSk[i].mask = td.m_mask;
+    inPk[i].dest = rct::pk2rct(out_key);
+
+    // Commitment from the output
+    if (td.m_rct)
+    {
+      inPk[i].mask = rct::commit(td.m_amount, td.m_mask);
+    }
+    else
+    {
+      inPk[i].mask = rct::zeroCommit(td.m_amount);
+    }
+
+    // Fetch precomputed tree path
+    auto path_it = m_fcmp_precomputed_paths.find(td.m_global_output_index);
+    THROW_WALLET_EXCEPTION_IF(path_it == m_fcmp_precomputed_paths.end(), error::wallet_internal_error,
+        "No precomputed FCMP++ tree path for output index " + std::to_string(td.m_global_output_index) +
+        ". Call precompute_fcmp_paths() first.");
+    tree_paths[i] = path_it->second.tree_path;
+    THROW_WALLET_EXCEPTION_IF(tree_paths[i].empty(), error::wallet_internal_error,
+        "Empty FCMP++ tree path for output index " + std::to_string(td.m_global_output_index));
+    if (i == 0)
+    {
+      reference_block = path_it->second.reference_block_at_precompute;
+      curve_tree_root = path_it->second.curve_tree_root_at_precompute;
+      tree_depth = path_it->second.tree_depth_at_precompute;
+    }
+    else
+    {
+      THROW_WALLET_EXCEPTION_IF(path_it->second.reference_block_at_precompute != reference_block,
+        error::wallet_internal_error,
+        "Input reference_block mismatch across selected inputs; rerun precompute_fcmp_paths()");
+      THROW_WALLET_EXCEPTION_IF(path_it->second.curve_tree_root_at_precompute != curve_tree_root,
+        error::wallet_internal_error,
+        "Input curve_tree_root mismatch across selected inputs; rerun precompute_fcmp_paths()");
+      THROW_WALLET_EXCEPTION_IF(path_it->second.tree_depth_at_precompute != tree_depth,
+        error::wallet_internal_error,
+        "Input tree_depth mismatch across selected inputs; rerun precompute_fcmp_paths()");
+    }
+  }
+
+  // Compute PQC public key hashes for the FCMP++ proof.
+  // For multisig outputs, the leaf H(pqc_pk) = H(multisig_key_container_blob).
+  rct::keyV pqc_pk_hashes(num_inputs);
+  {
+    uint8_t hash_out[32];
+    bool ok = shekyl_fcmp_pqc_leaf_hash(m_pqc_multisig_keys.data(), m_pqc_multisig_keys.size(), hash_out);
+    THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to compute PQC leaf hash for multisig key container");
+    rct::key h;
+    memcpy(h.bytes, hash_out, 32);
+    for (size_t i = 0; i < num_inputs; ++i)
+      pqc_pk_hashes[i] = h;
+  }
+
+  // Gather output amounts and keys for range proofs
+  std::vector<rct::xmr_amount> outamounts;
+  rct::keyV destinations;
+  for (const auto& out : ptx.tx.vout)
+  {
+    crypto::public_key out_pk;
+    THROW_WALLET_EXCEPTION_IF(!cryptonote::get_output_public_key(out, out_pk), error::wallet_internal_error,
+        "Cannot extract output public key");
+    destinations.push_back(rct::pk2rct(out_pk));
+    outamounts.push_back(out.amount);
+  }
+
+  // Amount keys for ECDH encoding (from tx key + destinations)
+  rct::keyV amount_keys(destinations.size());
+  for (size_t i = 0; i < destinations.size(); ++i)
+  {
+    crypto::key_derivation derivation;
+    crypto::generate_key_derivation(rct::rct2pk(destinations[i]), ptx.tx_key, derivation);
+    crypto::secret_key scalar;
+    crypto::derivation_to_scalar(derivation, i, scalar);
+    amount_keys[i] = rct::sk2rct(scalar);
+  }
+
+  // Build per-input leaf chunk entries from precomputed paths
+  std::vector<std::vector<rct::fcmp_chunk_entry>> leaf_chunk_entries(num_inputs);
+  for (size_t i = 0; i < num_inputs; ++i)
+  {
+    const transfer_details& td = m_transfers[ptx.selected_transfers[i]];
+    auto path_it = m_fcmp_precomputed_paths.find(td.m_global_output_index);
+    if (path_it != m_fcmp_precomputed_paths.end())
+    {
+      leaf_chunk_entries[i].reserve(path_it->second.leaf_chunk_entries.size());
+      for (const auto& e : path_it->second.leaf_chunk_entries)
+      {
+        rct::fcmp_chunk_entry ce;
+        memcpy(ce.output_key.bytes, e.output_key.bytes, 32);
+        memcpy(ce.key_image_gen.bytes, e.key_image_gen.bytes, 32);
+        memcpy(ce.commitment.bytes, e.commitment.bytes, 32);
+        memcpy(ce.h_pqc.bytes, e.h_pqc.bytes, 32);
+        leaf_chunk_entries[i].push_back(ce);
+      }
+    }
+  }
+
+  crypto::hash tx_prefix_hash;
+  cryptonote::get_transaction_prefix_hash(ptx.tx, tx_prefix_hash);
+
+  if (has_frost_keys())
+  {
+    // FROST SAL mode: create per-input sessions, defer proof generation.
+    // The actual proof is produced in import_multisig_signatures after
+    // collecting M threshold shares from participants.
+    clear_frost_sessions();
+    m_frost_sal_sessions.resize(num_inputs, nullptr);
+
+    for (size_t i = 0; i < num_inputs; ++i)
+    {
+      ge_p3 hp;
+      rct::hash_to_p3(hp, inPk[i].dest);
+      rct::key ki_gen;
+      ge_p3_tobytes(reinterpret_cast<unsigned char*>(ki_gen.bytes), &hp);
+
+      uint8_t pseudo_out[32];
+      ShekylFrostSalSession* session = shekyl_frost_sal_session_new(
+          inPk[i].dest.bytes,
+          ki_gen.bytes,
+          inPk[i].mask.bytes,
+          inSk[i].dest.bytes,
+          reinterpret_cast<const uint8_t*>(tx_prefix_hash.data),
+          pseudo_out);
+      THROW_WALLET_EXCEPTION_IF(!session, error::wallet_internal_error,
+          "Failed to create FROST SAL session for input " + std::to_string(i));
+      m_frost_sal_sessions[i] = session;
+
+      // Store the pseudo-out so participants can verify balance
+      ptx.tx.rct_signatures.p.pseudoOuts.resize(num_inputs);
+      memcpy(ptx.tx.rct_signatures.p.pseudoOuts[i].bytes, pseudo_out, 32);
+    }
+
+    // Set up the rctSig skeleton (no proof yet)
+    ptx.tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+    ptx.tx.rct_signatures.message = rct::hash2rct(tx_prefix_hash);
+    ptx.tx.rct_signatures.txnFee = ptx.fee;
+    ptx.tx.rct_signatures.referenceBlock = reference_block;
+    ptx.tx.rct_signatures.p.curve_trees_tree_depth = tree_depth;
+
+    LOG_PRINT_L2("FROST SAL sessions created for " << num_inputs << " inputs (proof deferred)");
+  }
+  else
+  {
+    // Non-FROST mode: single-signer proof construction
+    rct::key rct_tree_root;
+    memcpy(rct_tree_root.bytes, &curve_tree_root, 32);
+    rct::rctSig rv = rct::genRctFcmpPlusPlus(
+        rct::hash2rct(tx_prefix_hash),
+        inSk, inPk,
+        destinations, inamounts, outamounts, amount_keys,
+        ptx.fee,
+        reference_block, rct_tree_root, tree_depth,
+        tree_paths, leaf_chunk_entries, pqc_pk_hashes,
+        m_account.get_device());
+    ptx.tx.rct_signatures = rv;
+  }
+
+  // Populate placeholder pqc_auths (multisig key blob, empty sigs)
+  ptx.tx.pqc_auths.resize(num_inputs);
+  for (size_t i = 0; i < num_inputs; ++i)
+  {
+    ptx.tx.pqc_auths[i].auth_version = 1;
+    ptx.tx.pqc_auths[i].scheme_id = 2;
+    ptx.tx.pqc_auths[i].flags = 0;
+    ptx.tx.pqc_auths[i].hybrid_public_key = m_pqc_multisig_keys;
+    ptx.tx.pqc_auths[i].hybrid_signature.clear();
+  }
+
+  return true;
+}
+//----------------------------------------------------------------------------------------------------
+std::string wallet2::export_multisig_signing_request(pending_tx& ptx)
 {
   THROW_WALLET_EXCEPTION_IF(!is_pqc_multisig(), error::wallet_internal_error, "Not a PQC multisig wallet");
   THROW_WALLET_EXCEPTION_IF(ptx.tx.version < 3, error::wallet_internal_error, "Multisig signing requires v3 transactions");
 
+  // Construct the FCMP++ proof (or FROST sessions) if not already present
+  const bool frost_mode = has_frost_keys();
+  if (!frost_mode && ptx.tx.rct_signatures.p.fcmp_pp_proof.empty())
+  {
+    bool ok = prepare_multisig_fcmp_proof(ptx);
+    THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to construct FCMP++ proof for multisig transaction");
+  }
+  else if (frost_mode && m_frost_sal_sessions.empty())
+  {
+    bool ok = prepare_multisig_fcmp_proof(ptx);
+    THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to create FROST SAL sessions for multisig transaction");
+  }
+
   std::string payload_blob;
-  bool ok = cryptonote::get_transaction_signed_payload(ptx.tx, payload_blob);
+  bool ok = cryptonote::get_transaction_signed_payload(ptx.tx, 0, payload_blob);
   THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to build PQC signed payload");
 
   crypto::hash payload_hash;
@@ -10753,7 +11774,8 @@ std::string wallet2::export_multisig_signing_request(const pending_tx& ptx)
   doc.SetObject();
   auto& alloc = doc.GetAllocator();
 
-  doc.AddMember("version", 1, alloc);
+  // Version 3 when FROST SAL is active; 2 otherwise
+  doc.AddMember("version", frost_mode ? 3 : 2, alloc);
 
   std::string group_id_hex = epee::string_tools::pod_to_hex(m_pqc_multisig_group_id);
   doc.AddMember("group_id", rapidjson::Value(group_id_hex.c_str(), alloc), alloc);
@@ -10763,6 +11785,7 @@ std::string wallet2::export_multisig_signing_request(const pending_tx& ptx)
   std::string hash_hex = epee::string_tools::pod_to_hex(payload_hash);
   doc.AddMember("payload_hash", rapidjson::Value(hash_hex.c_str(), alloc), alloc);
 
+  // Serialize full tx (now includes FCMP++ proof and placeholder pqc_auths)
   std::string tx_blob;
   {
     std::ostringstream oss;
@@ -10772,6 +11795,93 @@ std::string wallet2::export_multisig_signing_request(const pending_tx& ptx)
   }
   std::string tx_blob_hex = epee::string_tools::buff_to_hex_nodelimer(tx_blob);
   doc.AddMember("tx_blob", rapidjson::Value(tx_blob_hex.c_str(), alloc), alloc);
+
+  if (frost_mode)
+  {
+    // FROST SAL mode: include per-input rerandomized outputs so participants
+    // can verify the rerandomization and produce FROST signing shares.
+    THROW_WALLET_EXCEPTION_IF(m_frost_sal_sessions.size() != ptx.selected_transfers.size(),
+        error::wallet_internal_error, "FROST session count mismatch");
+
+    rapidjson::Value frost_sessions_arr(rapidjson::kArrayType);
+    for (size_t i = 0; i < m_frost_sal_sessions.size(); ++i)
+    {
+      ShekylBuffer rerand_buf = shekyl_frost_sal_get_rerand(m_frost_sal_sessions[i]);
+      THROW_WALLET_EXCEPTION_IF(!rerand_buf.ptr || rerand_buf.len == 0,
+          error::wallet_internal_error, "Failed to get rerandomized output from FROST session " + std::to_string(i));
+      std::string rerand_hex = epee::string_tools::buff_to_hex_nodelimer(
+          std::string(reinterpret_cast<const char*>(rerand_buf.ptr), rerand_buf.len));
+      shekyl_buffer_free(rerand_buf.ptr, rerand_buf.len);
+
+      rapidjson::Value entry(rapidjson::kObjectType);
+      entry.AddMember("rerand", rapidjson::Value(rerand_hex.c_str(), alloc), alloc);
+
+      std::string po_hex = epee::string_tools::buff_to_hex_nodelimer(
+          std::string(reinterpret_cast<const char*>(ptx.tx.rct_signatures.p.pseudoOuts[i].bytes), 32));
+      entry.AddMember("pseudo_out", rapidjson::Value(po_hex.c_str(), alloc), alloc);
+      frost_sessions_arr.PushBack(entry, alloc);
+    }
+    doc.AddMember("frost_sessions", frost_sessions_arr, alloc);
+
+    // FROST group key for participants to verify
+    std::string group_key_hex = epee::string_tools::buff_to_hex_nodelimer(
+        std::string(reinterpret_cast<const char*>(m_frost_group_key.data()), 32));
+    doc.AddMember("frost_group_key", rapidjson::Value(group_key_hex.c_str(), alloc), alloc);
+
+    doc.AddMember("fcmp_proof", rapidjson::Value("", alloc), alloc);
+  }
+  else
+  {
+    // Non-FROST mode: include the completed proof
+    std::string fcmp_proof_hex = epee::string_tools::buff_to_hex_nodelimer(
+        std::string(ptx.tx.rct_signatures.p.fcmp_pp_proof.begin(),
+                    ptx.tx.rct_signatures.p.fcmp_pp_proof.end()));
+    doc.AddMember("fcmp_proof", rapidjson::Value(fcmp_proof_hex.c_str(), alloc), alloc);
+  }
+
+  // Reference block and tree depth
+  std::string ref_block_hex = epee::string_tools::pod_to_hex(ptx.tx.rct_signatures.referenceBlock);
+  doc.AddMember("reference_block", rapidjson::Value(ref_block_hex.c_str(), alloc), alloc);
+  doc.AddMember("tree_depth", ptx.tx.rct_signatures.p.curve_trees_tree_depth, alloc);
+
+  // Per-input PQC public keys derived from combined_ss (for signer verification)
+  rapidjson::Value pqc_pubkeys_arr(rapidjson::kArrayType);
+  for (size_t i = 0; i < ptx.selected_transfers.size(); ++i)
+  {
+    const transfer_details& td = m_transfers[ptx.selected_transfers[i]];
+    if (!td.m_combined_shared_secret.empty() && td.m_combined_shared_secret.size() == 64)
+    {
+      ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
+          td.m_combined_shared_secret.data(), static_cast<uint64_t>(td.m_internal_output_index));
+      if (kp.success && kp.public_key.ptr && kp.public_key.len > 0)
+      {
+        std::string pk_hex = epee::string_tools::buff_to_hex_nodelimer(
+            std::string(reinterpret_cast<const char*>(kp.public_key.ptr), kp.public_key.len));
+        pqc_pubkeys_arr.PushBack(rapidjson::Value(pk_hex.c_str(), alloc), alloc);
+        shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
+        if (kp.secret_key.ptr && kp.secret_key.len > 0)
+          shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
+      }
+      else
+      {
+        pqc_pubkeys_arr.PushBack(rapidjson::Value("", alloc), alloc);
+      }
+    }
+    else
+    {
+      pqc_pubkeys_arr.PushBack(rapidjson::Value("", alloc), alloc);
+    }
+  }
+  doc.AddMember("per_input_pqc_pubkeys", pqc_pubkeys_arr, alloc);
+
+  // Selected transfer indices (so signers can locate their combined_ss)
+  rapidjson::Value transfers_arr(rapidjson::kArrayType);
+  for (size_t idx : ptx.selected_transfers)
+  {
+    const transfer_details& td = m_transfers[idx];
+    transfers_arr.PushBack(rapidjson::Value(td.m_global_output_index), alloc);
+  }
+  doc.AddMember("input_global_indices", transfers_arr, alloc);
 
   rapidjson::StringBuffer sb;
   rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
@@ -10788,6 +11898,8 @@ bool wallet2::sign_multisig_partial(const std::string& signing_request_json, std
   doc.Parse(signing_request_json.c_str());
   THROW_WALLET_EXCEPTION_IF(doc.HasParseError() || !doc.IsObject(), error::wallet_internal_error, "Invalid signing request JSON");
 
+  const int req_version = doc.HasMember("version") && doc["version"].IsInt() ? doc["version"].GetInt() : 1;
+
   THROW_WALLET_EXCEPTION_IF(!doc.HasMember("group_id") || !doc["group_id"].IsString(), error::wallet_internal_error, "Missing group_id");
   std::string expected_gid = epee::string_tools::pod_to_hex(m_pqc_multisig_group_id);
   THROW_WALLET_EXCEPTION_IF(std::string(doc["group_id"].GetString()) != expected_gid, error::wallet_internal_error, "Group ID mismatch");
@@ -10797,6 +11909,127 @@ bool wallet2::sign_multisig_partial(const std::string& signing_request_json, std
   crypto::hash payload_hash;
   THROW_WALLET_EXCEPTION_IF(!epee::string_tools::hex_to_pod(payload_hash_hex, payload_hash), error::wallet_internal_error, "Invalid payload_hash hex");
 
+  // FROST v3 signing: produce FROST share instead of verifying a completed proof
+  if (req_version >= 3 && has_frost_keys())
+  {
+    THROW_WALLET_EXCEPTION_IF(!doc.HasMember("frost_sessions") || !doc["frost_sessions"].IsArray(),
+        error::wallet_internal_error, "Missing frost_sessions in v3 signing request");
+    THROW_WALLET_EXCEPTION_IF(!doc.HasMember("frost_group_key") || !doc["frost_group_key"].IsString(),
+        error::wallet_internal_error, "Missing frost_group_key in v3 signing request");
+
+    // Verify group key matches ours
+    std::string gk_hex = doc["frost_group_key"].GetString();
+    std::string our_gk_hex = epee::string_tools::buff_to_hex_nodelimer(
+        std::string(reinterpret_cast<const char*>(m_frost_group_key.data()), 32));
+    THROW_WALLET_EXCEPTION_IF(gk_hex != our_gk_hex, error::wallet_internal_error,
+        "FROST group key mismatch - coordinator may be compromised");
+
+    // For each input, verify the rerandomized output and pseudo-out
+    // are consistent, then produce a FROST share.
+    // The actual FROST share computation is placeholder here:
+    // it requires DKG ThresholdKeys which are set up in Phase 5.
+    // For now, we record that the signer acknowledges the FROST round.
+    LOG_PRINT_L2("FROST v3 signing: " << doc["frost_sessions"].Size()
+        << " sessions acknowledged (share computation requires DKG keys)");
+  }
+  // FCMP++ verification for v2 signing requests (non-FROST)
+  else if (req_version >= 2)
+  {
+    THROW_WALLET_EXCEPTION_IF(!doc.HasMember("tx_blob") || !doc["tx_blob"].IsString(),
+        error::wallet_internal_error, "Missing tx_blob in v2 signing request");
+
+    std::string tx_blob_str;
+    THROW_WALLET_EXCEPTION_IF(!epee::string_tools::parse_hexstr_to_binbuff(doc["tx_blob"].GetString(), tx_blob_str),
+        error::wallet_internal_error, "Invalid tx_blob hex");
+
+    cryptonote::transaction verify_tx;
+    {
+      binary_archive<false> ba{epee::strspan<std::uint8_t>(tx_blob_str)};
+      bool r = ::serialization::serialize(ba, verify_tx);
+      THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to deserialize transaction from signing request");
+    }
+
+    THROW_WALLET_EXCEPTION_IF(verify_tx.rct_signatures.p.fcmp_pp_proof.empty(),
+        error::wallet_internal_error, "Transaction in v2 signing request has no FCMP++ proof");
+
+    const size_t num_inputs = verify_tx.vin.size();
+    THROW_WALLET_EXCEPTION_IF(num_inputs == 0, error::wallet_internal_error, "Transaction has no inputs");
+
+    std::vector<uint8_t> key_images_flat(num_inputs * 32);
+    for (size_t i = 0; i < num_inputs; ++i)
+    {
+      THROW_WALLET_EXCEPTION_IF(!std::holds_alternative<cryptonote::txin_to_key>(verify_tx.vin[i]),
+          error::wallet_internal_error, "Non-key input in FCMP++ transaction");
+      const auto& txin = std::get<cryptonote::txin_to_key>(verify_tx.vin[i]);
+      memcpy(key_images_flat.data() + i * 32, &txin.k_image, 32);
+    }
+
+    THROW_WALLET_EXCEPTION_IF(verify_tx.rct_signatures.p.pseudoOuts.size() != num_inputs,
+        error::wallet_internal_error, "Pseudo-outs count mismatch");
+    std::vector<uint8_t> pseudo_outs_flat(num_inputs * 32);
+    for (size_t i = 0; i < num_inputs; ++i)
+      memcpy(pseudo_outs_flat.data() + i * 32, verify_tx.rct_signatures.p.pseudoOuts[i].bytes, 32);
+
+    std::vector<uint8_t> pqc_hashes_flat(num_inputs * 32);
+    {
+      uint8_t hash_out[32];
+      bool ok = shekyl_fcmp_pqc_leaf_hash(m_pqc_multisig_keys.data(), m_pqc_multisig_keys.size(), hash_out);
+      THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to compute PQC leaf hash for verification");
+      for (size_t i = 0; i < num_inputs; ++i)
+        memcpy(pqc_hashes_flat.data() + i * 32, hash_out, 32);
+    }
+
+    crypto::hash verify_tx_prefix_hash = cryptonote::get_transaction_prefix_hash(verify_tx);
+    bool proof_valid = shekyl_fcmp_verify(
+        verify_tx.rct_signatures.p.fcmp_pp_proof.data(),
+        verify_tx.rct_signatures.p.fcmp_pp_proof.size(),
+        key_images_flat.data(), num_inputs,
+        pseudo_outs_flat.data(), num_inputs,
+        pqc_hashes_flat.data(), num_inputs,
+        reinterpret_cast<const uint8_t*>(verify_tx.rct_signatures.referenceBlock.data),
+        verify_tx.rct_signatures.p.curve_trees_tree_depth,
+        reinterpret_cast<const uint8_t*>(verify_tx_prefix_hash.data));
+    THROW_WALLET_EXCEPTION_IF(!proof_valid, error::wallet_internal_error,
+        "FCMP++ proof verification failed - coordinator may have provided an invalid proof");
+
+    if (doc.HasMember("per_input_pqc_pubkeys") && doc["per_input_pqc_pubkeys"].IsArray() &&
+        doc.HasMember("input_global_indices") && doc["input_global_indices"].IsArray())
+    {
+      const auto& pk_arr = doc["per_input_pqc_pubkeys"];
+      const auto& idx_arr = doc["input_global_indices"];
+      for (rapidjson::SizeType i = 0; i < pk_arr.Size() && i < idx_arr.Size(); ++i)
+      {
+        if (!pk_arr[i].IsString() || strlen(pk_arr[i].GetString()) == 0)
+          continue;
+        uint64_t global_idx = idx_arr[i].GetUint64();
+
+        for (const auto& td : m_transfers)
+        {
+          if (td.m_global_output_index != global_idx || td.m_combined_shared_secret.empty())
+            continue;
+          if (td.m_combined_shared_secret.size() != 64)
+            continue;
+
+          ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
+              td.m_combined_shared_secret.data(), static_cast<uint64_t>(td.m_internal_output_index));
+          if (kp.success && kp.public_key.ptr && kp.public_key.len > 0)
+          {
+            std::string our_pk_hex = epee::string_tools::buff_to_hex_nodelimer(
+                std::string(reinterpret_cast<const char*>(kp.public_key.ptr), kp.public_key.len));
+            THROW_WALLET_EXCEPTION_IF(our_pk_hex != pk_arr[i].GetString(), error::wallet_internal_error,
+                "Per-output PQC public key mismatch for output " + std::to_string(global_idx) +
+                " - coordinator may be compromised");
+            shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
+            if (kp.secret_key.ptr && kp.secret_key.len > 0)
+              shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  // Find our signer index in the multisig group
   const auto& our_pk = m_account.get_keys().m_account_address.m_pqc_public_key;
   THROW_WALLET_EXCEPTION_IF(our_pk.empty(), error::wallet_internal_error, "No PQC public key in this wallet");
 
@@ -10833,7 +12066,7 @@ bool wallet2::sign_multisig_partial(const std::string& signing_request_json, std
   resp.SetObject();
   auto& ralloc = resp.GetAllocator();
 
-  resp.AddMember("version", 1, ralloc);
+  resp.AddMember("version", req_version, ralloc);
   resp.AddMember("group_id", rapidjson::Value(expected_gid.c_str(), ralloc), ralloc);
   resp.AddMember("payload_hash", rapidjson::Value(payload_hash_hex.c_str(), ralloc), ralloc);
   resp.AddMember("signer_index", our_index, ralloc);
@@ -10841,6 +12074,19 @@ bool wallet2::sign_multisig_partial(const std::string& signing_request_json, std
   std::string sig_hex = epee::string_tools::buff_to_hex_nodelimer(
       std::string(reinterpret_cast<const char*>(sig_bytes.data()), sig_bytes.size()));
   resp.AddMember("signature", rapidjson::Value(sig_hex.c_str(), ralloc), ralloc);
+
+  if (req_version >= 3 && has_frost_keys())
+  {
+    // FROST v3: include placeholder share data.
+    // Actual FROST share computation requires DKG ThresholdKeys (Phase 5).
+    // For now, mark this participant as a FROST-capable signer.
+    resp.AddMember("frost_capable", true, ralloc);
+    resp.AddMember("frost_share", rapidjson::Value("", ralloc), ralloc);
+  }
+  else if (req_version >= 2)
+  {
+    resp.AddMember("fcmp_verified", true, ralloc);
+  }
 
   rapidjson::StringBuffer sb;
   rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
@@ -10858,11 +12104,17 @@ bool wallet2::import_multisig_signatures(pending_tx& ptx, const std::vector<std:
 
   std::string expected_gid = epee::string_tools::pod_to_hex(m_pqc_multisig_group_id);
 
-  // Verify pqc_auth is present for payload computation
-  THROW_WALLET_EXCEPTION_IF(!ptx.tx.pqc_auth, error::wallet_internal_error, "Transaction missing pqc_auth");
+  // Verify pqc_auths is present for payload computation
+  THROW_WALLET_EXCEPTION_IF(ptx.tx.pqc_auths.empty(), error::wallet_internal_error, "Transaction missing pqc_auths");
+
+  const bool frost_mode = has_frost_keys() && !m_frost_sal_sessions.empty();
+
+  // For non-FROST FCMP++ transactions, verify the proof is present
+  const bool is_fcmp = ptx.tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc &&
+                       !ptx.tx.rct_signatures.p.fcmp_pp_proof.empty();
 
   std::string payload_blob;
-  bool ok = cryptonote::get_transaction_signed_payload(ptx.tx, payload_blob);
+  bool ok = cryptonote::get_transaction_signed_payload(ptx.tx, 0, payload_blob);
   THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to build PQC signed payload");
   crypto::hash expected_payload_hash;
   cryptonote::get_blob_hash(payload_blob, expected_payload_hash);
@@ -10871,6 +12123,9 @@ bool wallet2::import_multisig_signatures(pending_tx& ptx, const std::vector<std:
   struct partial_sig {
     uint8_t index;
     std::vector<uint8_t> sig;
+    bool fcmp_verified;
+    bool frost_capable;
+    std::string frost_share_hex;
   };
   std::vector<partial_sig> partials;
 
@@ -10897,7 +12152,19 @@ bool wallet2::import_multisig_signatures(pending_tx& ptx, const std::vector<std:
     THROW_WALLET_EXCEPTION_IF(!epee::string_tools::parse_hexstr_to_binbuff(sig_hex, sig_str),
         error::wallet_internal_error, "Invalid signature hex");
 
-    partials.push_back({idx, std::vector<uint8_t>(sig_str.begin(), sig_str.end())});
+    bool signer_fcmp_verified = false;
+    if (doc.HasMember("fcmp_verified") && doc["fcmp_verified"].IsBool())
+      signer_fcmp_verified = doc["fcmp_verified"].GetBool();
+
+    bool signer_frost_capable = false;
+    std::string signer_frost_share;
+    if (doc.HasMember("frost_capable") && doc["frost_capable"].IsBool())
+      signer_frost_capable = doc["frost_capable"].GetBool();
+    if (doc.HasMember("frost_share") && doc["frost_share"].IsString())
+      signer_frost_share = doc["frost_share"].GetString();
+
+    partials.push_back({idx, std::vector<uint8_t>(sig_str.begin(), sig_str.end()),
+        signer_fcmp_verified, signer_frost_capable, signer_frost_share});
   }
 
   std::sort(partials.begin(), partials.end(), [](const partial_sig& a, const partial_sig& b) { return a.index < b.index; });
@@ -10907,6 +12174,114 @@ bool wallet2::import_multisig_signatures(pending_tx& ptx, const std::vector<std:
         "Duplicate signer index " + std::to_string(partials[i].index));
 
   THROW_WALLET_EXCEPTION_IF(partials.size() < m_pqc_multisig_m, error::wallet_internal_error, "Not enough unique signatures");
+
+  if (frost_mode)
+  {
+    // FROST aggregation mode: aggregate FROST partial shares and produce the proof.
+    // Requires all signers to be FROST-capable.
+    for (const auto& p : partials)
+    {
+      THROW_WALLET_EXCEPTION_IF(!p.frost_capable, error::wallet_internal_error,
+          "Signer " + std::to_string(p.index) + " is not FROST-capable");
+    }
+
+    // Build the witness blob for aggregate_and_prove (same format as genRctFcmpPlusPlus).
+    // This aggregation call consumes the FROST sessions and produces the final proof.
+    const size_t num_inputs = m_frost_sal_sessions.size();
+
+    // Collect per-input curve tree witness data
+    std::vector<uint8_t> witness;
+    std::vector<std::vector<uint8_t>> tree_paths;
+    uint8_t tree_depth = ptx.tx.rct_signatures.p.curve_trees_tree_depth;
+
+    for (size_t i = 0; i < num_inputs; ++i)
+    {
+      const transfer_details& td = m_transfers[ptx.selected_transfers[i]];
+      auto path_it = m_fcmp_precomputed_paths.find(td.m_global_output_index);
+      if (path_it != m_fcmp_precomputed_paths.end())
+        tree_paths.push_back(path_it->second.tree_path);
+      else
+        tree_paths.push_back(std::vector<uint8_t>());
+    }
+
+    // Serialize witness using the same format as genRctFcmpPlusPlus
+    // (leaf chunk entries + branch layers per input)
+    for (size_t i = 0; i < num_inputs; ++i)
+    {
+      const transfer_details& td = m_transfers[ptx.selected_transfers[i]];
+      auto path_it = m_fcmp_precomputed_paths.find(td.m_global_output_index);
+
+      // Leaf chunk entries
+      if (path_it != m_fcmp_precomputed_paths.end() && !path_it->second.leaf_chunk_entries.empty())
+      {
+        uint32_t lc = static_cast<uint32_t>(path_it->second.leaf_chunk_entries.size());
+        witness.push_back(lc & 0xff); witness.push_back((lc >> 8) & 0xff);
+        witness.push_back((lc >> 16) & 0xff); witness.push_back((lc >> 24) & 0xff);
+        for (const auto& e : path_it->second.leaf_chunk_entries)
+        {
+          witness.insert(witness.end(), e.output_key.bytes, e.output_key.bytes + 32);
+          witness.insert(witness.end(), e.key_image_gen.bytes, e.key_image_gen.bytes + 32);
+          witness.insert(witness.end(), e.commitment.bytes, e.commitment.bytes + 32);
+          witness.insert(witness.end(), e.h_pqc.bytes, e.h_pqc.bytes + 32);
+        }
+      }
+      else
+      {
+        uint32_t zero = 0;
+        witness.insert(witness.end(), reinterpret_cast<uint8_t*>(&zero), reinterpret_cast<uint8_t*>(&zero) + 4);
+      }
+
+      // Branch layers: placeholder empty (the FFI extracts them from tree_paths)
+      uint32_t zero_layers = 0;
+      witness.insert(witness.end(), reinterpret_cast<uint8_t*>(&zero_layers), reinterpret_cast<uint8_t*>(&zero_layers) + 4);
+      witness.insert(witness.end(), reinterpret_cast<uint8_t*>(&zero_layers), reinterpret_cast<uint8_t*>(&zero_layers) + 4);
+    }
+
+    // Aggregate FROST shares: sum all partial shares into a single scalar
+    // Each partial share is 32 bytes (Ed25519 scalar).
+    // sum_shares = sum of all partials' frost_share values.
+    uint8_t sum_shares[32] = {0};
+    // Note: actual FROST share summation is done in the Rust FFI.
+    // For now, this is a placeholder that will be completed with DKG (Phase 5).
+
+    crypto::hash ref_block = ptx.tx.rct_signatures.referenceBlock;
+    ShekylFcmpProveResult result = shekyl_frost_sal_aggregate_and_prove(
+        m_frost_sal_sessions.data(),
+        static_cast<uint32_t>(num_inputs),
+        m_frost_group_key.data(),
+        nullptr, 0,
+        sum_shares,
+        witness.data(), witness.size(),
+        reinterpret_cast<const uint8_t*>(ref_block.data),
+        tree_depth);
+
+    if (result.success)
+    {
+      ptx.tx.rct_signatures.p.fcmp_pp_proof.assign(
+          result.proof.ptr, result.proof.ptr + result.proof.len);
+      shekyl_buffer_free(result.proof.ptr, result.proof.len);
+      if (result.pseudo_outs.ptr && result.pseudo_outs.len > 0)
+        shekyl_buffer_free(result.pseudo_outs.ptr, result.pseudo_outs.len);
+
+      LOG_PRINT_L2("FROST SAL aggregate proof produced (" << ptx.tx.rct_signatures.p.fcmp_pp_proof.size() << " bytes)");
+    }
+    else
+    {
+      LOG_PRINT_L0("WARNING: FROST SAL aggregate_and_prove failed; FCMP++ proof deferred to DKG completion");
+    }
+
+    // Sessions are consumed by aggregate_and_prove; clear our references
+    m_frost_sal_sessions.clear();
+  }
+  else if (is_fcmp)
+  {
+    for (const auto& p : partials)
+    {
+      if (!p.fcmp_verified)
+        LOG_PRINT_L0("WARNING: Signer " << (int)p.index << " did not confirm FCMP++ proof verification");
+    }
+  }
+
   partials.resize(m_pqc_multisig_m);
 
   // Build MultisigSigContainer: [sig_count, sig0..sigM-1, idx0..idxM-1]
@@ -10923,7 +12298,10 @@ bool wallet2::import_multisig_signatures(pending_tx& ptx, const std::vector<std:
   auth.flags = 0;
   auth.hybrid_public_key = m_pqc_multisig_keys;
   auth.hybrid_signature = sig_blob;
-  ptx.tx.pqc_auth = auth;
+  ptx.tx.pqc_auths.assign(ptx.tx.vin.size(), auth);
+
+  // Invalidate cached tx hash since pqc_auths changed
+  ptx.tx.invalidate_hashes();
 
   return true;
 }
@@ -11015,13 +12393,10 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_all(uint64_t below
 
   // determine threshold for fractional amount
   const bool use_per_byte_fee = true;
-  const bool bulletproof = true;
-  const bool bulletproof_plus = true;
-  const bool clsag = true;
   const bool use_view_tags = true;
   const uint64_t base_fee  = get_base_fee(priority);
-  const size_t tx_weight_one_ring = estimate_tx_weight(use_rct, 1, fake_outs_count, 2, 0, bulletproof, clsag, bulletproof_plus, use_view_tags);
-  const size_t tx_weight_two_rings = estimate_tx_weight(use_rct, 2, fake_outs_count, 2, 0, bulletproof, clsag, bulletproof_plus, use_view_tags);
+  const size_t tx_weight_one_ring = estimate_tx_weight(use_rct, 1, 2, 0, use_view_tags);
+  const size_t tx_weight_two_rings = estimate_tx_weight(use_rct, 2, 2, 0, use_view_tags);
   THROW_WALLET_EXCEPTION_IF(tx_weight_one_ring > tx_weight_two_rings, error::wallet_internal_error, "Estimated tx weight with 1 input is larger than with 2 inputs!");
   const size_t tx_weight_per_ring = tx_weight_two_rings - tx_weight_one_ring;
   const uint64_t fractional_threshold = (base_fee * tx_weight_per_ring) / (use_per_byte_fee ? 1 : 1024);
@@ -11128,13 +12503,6 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const crypton
 
   const bool use_per_byte_fee = true;
   const bool use_rct = true;
-  const bool bulletproof = true;
-  const bool bulletproof_plus = true;
-  const bool clsag = true;
-  const rct::RCTConfig rct_config {
-    rct::RangeProofPaddedBulletproof,
-    4
-  };
   const bool use_view_tags = true;
   const uint64_t base_fee  = get_base_fee(priority);
   const uint64_t fee_quantization_mask = get_fee_quantization_mask();
@@ -11159,7 +12527,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const crypton
     // get a random unspent output and use it to pay next chunk. We try to alternate
     // dust and non dust to ensure we never get with only dust, from which we might
     // get a tx that can't pay for itself
-    const uint64_t estimated_tx_weight_with_one_extra_output = estimate_tx_weight(use_rct, tx.selected_transfers.size() + 1, fake_outs_count, tx.dsts.size()+1, extra.size(), bulletproof, clsag, bulletproof_plus, use_view_tags);
+    const uint64_t estimated_tx_weight_with_one_extra_output = estimate_tx_weight(use_rct, tx.selected_transfers.size() + 1, tx.dsts.size()+1, extra.size(), use_view_tags);
     const uint64_t fee_dust_threshold = calculate_fee_from_weight(base_fee, estimated_tx_weight_with_one_extra_output, fee_quantization_mask);
 
     size_t idx =
@@ -11185,7 +12553,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const crypton
     // here, check if we need to sent tx and start a new one
     LOG_PRINT_L2("Considering whether to create a tx now, " << tx.selected_transfers.size() << " inputs, tx limit "
       << upper_transaction_weight_limit);
-    const size_t estimated_rct_tx_weight = estimate_tx_weight(use_rct, tx.selected_transfers.size(), fake_outs_count, tx.dsts.size() + 2, extra.size(), bulletproof, clsag, bulletproof_plus, use_view_tags);
+    const size_t estimated_rct_tx_weight = estimate_tx_weight(use_rct, tx.selected_transfers.size(), tx.dsts.size() + 2, extra.size(), use_view_tags);
     bool try_tx = (unused_dust_indices.empty() && unused_transfers_indices.empty()) || ( estimated_rct_tx_weight >= TX_WEIGHT_TARGET(upper_transaction_weight_limit));
 
     if (try_tx) {
@@ -11193,7 +12561,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const crypton
       pending_tx test_ptx;
 
       const size_t num_outputs = get_num_outputs(tx.dsts, m_transfers, tx.selected_transfers);
-      needed_fee = estimate_fee(use_per_byte_fee, use_rct, tx.selected_transfers.size(), fake_outs_count, num_outputs, extra.size(), bulletproof, clsag, bulletproof_plus, use_view_tags, base_fee, fee_quantization_mask);
+      needed_fee = estimate_fee(use_per_byte_fee, use_rct, tx.selected_transfers.size(), num_outputs, extra.size(), use_view_tags, base_fee, fee_quantization_mask);
 
       // add N - 1 outputs for correct initial fee estimation
       for (size_t i = 0; i < ((outputs > 1) ? outputs - 1 : outputs); ++i)
@@ -11202,7 +12570,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const crypton
       LOG_PRINT_L2("Trying to create a tx now, with " << tx.dsts.size() << " destinations and " <<
         tx.selected_transfers.size() << " outputs");
       transfer_selected_rct(tx.dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra,
-        test_tx, test_ptx, rct_config, use_view_tags);
+        test_tx, test_ptx, use_view_tags);
       auto txBlob = t_serializable_object_to_blob(test_ptx.tx);
       needed_fee = calculate_fee(use_per_byte_fee, test_ptx.tx, txBlob.size(), base_fee, fee_quantization_mask);
       available_for_fee = test_ptx.fee + test_ptx.change_dts.amount;
@@ -11235,7 +12603,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const crypton
           dt.amount = dt_amount + dt_residue;
         }
         transfer_selected_rct(tx.dsts, tx.selected_transfers, fake_outs_count, outs, valid_public_keys_cache, needed_fee, extra,
-          test_tx, test_ptx, rct_config, use_view_tags);
+          test_tx, test_ptx, use_view_tags);
         txBlob = t_serializable_object_to_blob(test_ptx.tx);
         needed_fee = calculate_fee(use_per_byte_fee, test_ptx.tx, txBlob.size(), base_fee, fee_quantization_mask);
         LOG_PRINT_L2("Made an attempt at a final " << get_weight_string(test_ptx.tx, txBlob.size()) << " tx, with " << print_money(test_ptx.fee) <<
@@ -11270,7 +12638,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_from(const crypton
     cryptonote::transaction test_tx;
     pending_tx test_ptx;
     transfer_selected_rct(tx.dsts, tx.selected_transfers, fake_outs_count, tx.outs, valid_public_keys_cache, tx.needed_fee, extra,
-      test_tx, test_ptx, rct_config, use_view_tags);
+      test_tx, test_ptx, use_view_tags);
     auto txBlob = t_serializable_object_to_blob(test_ptx.tx);
     tx.tx = test_tx;
     tx.ptx = test_ptx;
@@ -11815,19 +13183,18 @@ std::string wallet2::get_spend_proof(const crypto::hash &txid, const std::string
     crypto::generate_ring_signature(sig_prefix_hash, in_key->k_image, p_output_keys, in_ephemeral.sec, sec_index, sigs.data());
   }
 
-  std::string sig_str = "SpendProofV1";
+  std::string blob;
   for (const std::vector<crypto::signature>& ring_sig : signatures)
     for (const crypto::signature& sig : ring_sig)
-       sig_str += tools::base58::encode(std::string((const char *)&sig, sizeof(crypto::signature)));
-  return sig_str;
+      blob.append(reinterpret_cast<const char*>(&sig), sizeof(crypto::signature));
+  return bech32m_encode_blob("shekylspendproof", blob.data(), blob.size());
 }
 //----------------------------------------------------------------------------------------------------
 bool wallet2::check_spend_proof(const crypto::hash &txid, const std::string &message, const std::string &sig_str)
 {
-  const std::string header = "SpendProofV1";
-  const size_t header_len = header.size();
-  THROW_WALLET_EXCEPTION_IF(sig_str.size() < header_len || sig_str.substr(0, header_len) != header, error::wallet_internal_error,
-    "Signature header check error");
+  std::string decoded_blob;
+  THROW_WALLET_EXCEPTION_IF(!bech32m_decode_blob(sig_str, "shekylspendproof", decoded_blob),
+    error::wallet_internal_error, "Spend proof decoding error -- expected Bech32m with HRP 'shekylspendproof'");
 
   // fetch tx from daemon
   COMMAND_RPC_GET_TRANSACTIONS::request req = AUTO_VAL_INIT(req);
@@ -11853,7 +13220,6 @@ bool wallet2::check_spend_proof(const crypto::hash &txid, const std::string &mes
   crypto::hash tx_hash;
   THROW_WALLET_EXCEPTION_IF(!get_pruned_tx(res.txs[0], tx, tx_hash), error::wallet_internal_error, "failed to get tx from daemon");
 
-  // check signature size
   size_t num_sigs = 0;
   for(size_t i = 0; i < tx.vin.size(); ++i)
   {
@@ -11861,15 +13227,11 @@ bool wallet2::check_spend_proof(const crypto::hash &txid, const std::string &mes
     if (in_key != nullptr)
       num_sigs += in_key->key_offsets.size();
   }
-  std::vector<std::vector<crypto::signature>> signatures = { std::vector<crypto::signature>(1) };
-  const size_t sig_len = tools::base58::encode(std::string((const char *)&signatures[0][0], sizeof(crypto::signature))).size();
-  if( sig_str.size() != header_len + num_sigs * sig_len ) {
-    return false;
-  }
+  THROW_WALLET_EXCEPTION_IF(decoded_blob.size() != num_sigs * sizeof(crypto::signature),
+    error::wallet_internal_error, "Spend proof signature count mismatch");
 
-  // decode base58
-  signatures.clear();
-  size_t offset = header_len;
+  std::vector<std::vector<crypto::signature>> signatures;
+  size_t offset = 0;
   for(size_t i = 0; i < tx.vin.size(); ++i)
   {
     const txin_to_key* const in_key = std::get_if<txin_to_key>(&tx.vin[i]);
@@ -11879,11 +13241,8 @@ bool wallet2::check_spend_proof(const crypto::hash &txid, const std::string &mes
     signatures.back().resize(in_key->key_offsets.size());
     for (size_t j = 0; j < in_key->key_offsets.size(); ++j)
     {
-      std::string sig_decoded;
-      THROW_WALLET_EXCEPTION_IF(!tools::base58::decode(sig_str.substr(offset, sig_len), sig_decoded), error::wallet_internal_error, "Signature decoding error");
-      THROW_WALLET_EXCEPTION_IF(sizeof(crypto::signature) != sig_decoded.size(), error::wallet_internal_error, "Signature decoding error");
-      memcpy(&signatures.back()[j], sig_decoded.data(), sizeof(crypto::signature));
-      offset += sig_len;
+      memcpy(&signatures.back()[j], decoded_blob.data() + offset, sizeof(crypto::signature));
+      offset += sizeof(crypto::signature);
     }
   }
 
@@ -11977,7 +13336,7 @@ void wallet2::check_tx_key_helper(const cryptonote::transaction &tx, const crypt
         crypto::secret_key scalar1;
         crypto::derivation_to_scalar(found_derivation, n, scalar1);
         rct::ecdhTuple ecdh_info = tx.rct_signatures.ecdhInfo[n];
-        rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar1), tx.rct_signatures.type == rct::RCTTypeBulletproof2 || tx.rct_signatures.type == rct::RCTTypeCLSAG || tx.rct_signatures.type == rct::RCTTypeBulletproofPlus);
+        rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar1), tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc);
         const rct::key C = tx.rct_signatures.outPk[n].mask;
         rct::key Ctmp;
         THROW_WALLET_EXCEPTION_IF(sc_check(ecdh_info.mask.bytes) != 0, error::wallet_internal_error, "Bad ECDH input mask");
@@ -12246,12 +13605,14 @@ std::string wallet2::get_tx_proof(const cryptonote::transaction &tx, const crypt
   check_tx_key_helper(tx, derivation, additional_derivations, address, received);
   THROW_WALLET_EXCEPTION_IF(!received, error::wallet_internal_error, tr("No funds received in this tx."));
 
-  // concatenate all signature strings
+  std::string blob;
   for (size_t i = 0; i < num_sigs; ++i)
-    sig_str +=
-      tools::base58::encode(std::string((const char *)&shared_secret[i], sizeof(crypto::public_key))) +
-      tools::base58::encode(std::string((const char *)&sig[i], sizeof(crypto::signature)));
-  return sig_str;
+  {
+    blob.append(reinterpret_cast<const char*>(&shared_secret[i]), sizeof(crypto::public_key));
+    blob.append(reinterpret_cast<const char*>(&sig[i]), sizeof(crypto::signature));
+  }
+  const char* hrp = sig_str.substr(0, 3) == "Out" ? "shekylouttxproof" : "shekylintxproof";
+  return bech32m_encode_blob(hrp, blob.data(), blob.size());
 }
 
 bool wallet2::check_tx_proof(const crypto::hash &txid, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message, const std::string &sig_str, uint64_t &received, bool &in_pool, uint64_t &confirmations)
@@ -12311,42 +13672,30 @@ bool wallet2::check_tx_proof(const crypto::hash &txid, const cryptonote::account
 
 bool wallet2::check_tx_proof(const cryptonote::transaction &tx, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message, const std::string &sig_str, uint64_t &received) const
 {
-  // InProofV1, InProofV2, OutProofV1, OutProofV2
-  const bool is_out = sig_str.substr(0, 3) == "Out";
-  const std::string header = is_out ? sig_str.substr(0,10) : sig_str.substr(0,9);
-  int version = 2; // InProofV2
-  if (is_out && sig_str.substr(8,2) == "V1") version = 1; // OutProofV1
-  else if (is_out) version = 2; // OutProofV2
-  else if (sig_str.substr(7,2) == "V1") version = 1; // InProofV1
+  std::string decoded_blob;
+  bool is_out = false;
+  if (bech32m_decode_blob(sig_str, "shekylouttxproof", decoded_blob))
+    is_out = true;
+  else if (bech32m_decode_blob(sig_str, "shekylintxproof", decoded_blob))
+    is_out = false;
+  else
+    THROW_WALLET_EXCEPTION(error::wallet_internal_error,
+      "Tx proof decoding error -- expected Bech32m with HRP 'shekylouttxproof' or 'shekylintxproof'");
 
-  const size_t header_len = header.size();
-  THROW_WALLET_EXCEPTION_IF(sig_str.size() < header_len || sig_str.substr(0, header_len) != header, error::wallet_internal_error,
-    "Signature header check error");
+  const size_t entry_size = sizeof(crypto::public_key) + sizeof(crypto::signature);
+  THROW_WALLET_EXCEPTION_IF(decoded_blob.size() == 0 || decoded_blob.size() % entry_size != 0,
+    error::wallet_internal_error, "Tx proof blob size mismatch");
+  const size_t num_sigs = decoded_blob.size() / entry_size;
 
-  // decode base58
-  std::vector<crypto::public_key> shared_secret(1);
-  std::vector<crypto::signature> sig(1);
-  const size_t pk_len = tools::base58::encode(std::string((const char *)&shared_secret[0], sizeof(crypto::public_key))).size();
-  const size_t sig_len = tools::base58::encode(std::string((const char *)&sig[0], sizeof(crypto::signature))).size();
-  const size_t num_sigs = (sig_str.size() - header_len) / (pk_len + sig_len);
-  THROW_WALLET_EXCEPTION_IF(sig_str.size() != header_len + num_sigs * (pk_len + sig_len), error::wallet_internal_error,
-    "Wrong signature size");
-  shared_secret.resize(num_sigs);
-  sig.resize(num_sigs);
+  std::vector<crypto::public_key> shared_secret(num_sigs);
+  std::vector<crypto::signature> sig(num_sigs);
   for (size_t i = 0; i < num_sigs; ++i)
   {
-    std::string pk_decoded;
-    std::string sig_decoded;
-    const size_t offset = header_len + i * (pk_len + sig_len);
-    THROW_WALLET_EXCEPTION_IF(!tools::base58::decode(sig_str.substr(offset, pk_len), pk_decoded), error::wallet_internal_error,
-      "Signature decoding error");
-    THROW_WALLET_EXCEPTION_IF(!tools::base58::decode(sig_str.substr(offset + pk_len, sig_len), sig_decoded), error::wallet_internal_error,
-      "Signature decoding error");
-    THROW_WALLET_EXCEPTION_IF(sizeof(crypto::public_key) != pk_decoded.size() || sizeof(crypto::signature) != sig_decoded.size(), error::wallet_internal_error,
-      "Signature decoding error");
-    memcpy(&shared_secret[i], pk_decoded.data(), sizeof(crypto::public_key));
-    memcpy(&sig[i], sig_decoded.data(), sizeof(crypto::signature));
+    const size_t offset = i * entry_size;
+    memcpy(&shared_secret[i], decoded_blob.data() + offset, sizeof(crypto::public_key));
+    memcpy(&sig[i], decoded_blob.data() + offset + sizeof(crypto::public_key), sizeof(crypto::signature));
   }
+  int version = 2;
 
   crypto::public_key tx_pub_key = get_tx_pub_key_from_extra(tx);
   THROW_WALLET_EXCEPTION_IF(tx_pub_key == null_pkey, error::wallet_internal_error, "Tx pubkey was not found");
@@ -12525,7 +13874,8 @@ std::string wallet2::get_reserve_proof(const std::optional<std::pair<uint32_t, u
   binary_archive<true> ar(oss);
   THROW_WALLET_EXCEPTION_IF(!::serialization::serialize(ar, proofs), error::wallet_internal_error, "Failed to serialize proof");
   THROW_WALLET_EXCEPTION_IF(!::serialization::serialize(ar, subaddr_spendkeys), error::wallet_internal_error, "Failed to serialize proof");
-  return "ReserveProofV2" + tools::base58::encode(oss.str());
+  const std::string serialized = oss.str();
+  return bech32m_encode_blob("shekylreserveproof", serialized.data(), serialized.size());
 }
 
 bool wallet2::check_reserve_proof(const cryptonote::account_public_address &address, const std::string &message, const std::string &sig_str, uint64_t &total, uint64_t &spent)
@@ -12534,19 +13884,10 @@ bool wallet2::check_reserve_proof(const cryptonote::account_public_address &addr
   THROW_WALLET_EXCEPTION_IF(!check_connection(&rpc_version), error::wallet_internal_error, "Failed to connect to daemon: " + get_daemon_address());
   THROW_WALLET_EXCEPTION_IF(rpc_version < MAKE_CORE_RPC_VERSION(1, 0), error::wallet_internal_error, "Daemon RPC version is too old");
 
-  static constexpr char header_v1[] = "ReserveProofV1";
-  static constexpr char header_v2[] = "ReserveProofV2"; // assumes same length as header_v1
-  THROW_WALLET_EXCEPTION_IF(!boost::string_ref{sig_str}.starts_with(header_v1) && !boost::string_ref{sig_str}.starts_with(header_v2), error::wallet_internal_error,
-    "Signature header check error");
-  int version = 2; // assume newest version
-  if (boost::string_ref{sig_str}.starts_with(header_v1))
-      version = 1;
-  else if (boost::string_ref{sig_str}.starts_with(header_v2))
-      version = 2;
-
   std::string sig_decoded;
-  THROW_WALLET_EXCEPTION_IF(!tools::base58::decode(sig_str.substr(std::strlen(header_v1)), sig_decoded), error::wallet_internal_error,
-    "Signature decoding error");
+  THROW_WALLET_EXCEPTION_IF(!bech32m_decode_blob(sig_str, "shekylreserveproof", sig_decoded),
+    error::wallet_internal_error, "Reserve proof decoding error -- expected Bech32m with HRP 'shekylreserveproof'");
+  int version = 2;
 
   bool loaded = false;
   std::vector<reserve_proof_entry> proofs;
@@ -12669,7 +14010,7 @@ bool wallet2::check_reserve_proof(const cryptonote::account_public_address &addr
       crypto::secret_key shared_secret;
       crypto::derivation_to_scalar(derivation, proof.index_in_tx, shared_secret);
       rct::ecdhTuple ecdh_info = tx.rct_signatures.ecdhInfo[proof.index_in_tx];
-      rct::ecdhDecode(ecdh_info, rct::sk2rct(shared_secret), tx.rct_signatures.type == rct::RCTTypeBulletproof2 || tx.rct_signatures.type == rct::RCTTypeCLSAG || tx.rct_signatures.type == rct::RCTTypeBulletproofPlus);
+      rct::ecdhDecode(ecdh_info, rct::sk2rct(shared_secret), tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc);
       amount = rct::h2d(ecdh_info.amount);
     }
     total += amount;
@@ -12935,30 +14276,19 @@ std::string wallet2::sign(const std::string &data, message_signature_type_t sign
     hash = get_message_hash(data,pkey_spend,pkey_view,mode);
   }
   crypto::generate_signature(hash, pkey, skey, signature);
-  return std::string("SigV2") + tools::base58::encode(std::string((const char *)&signature, sizeof(signature)));
+  return bech32m_encode_blob("shekylsig", reinterpret_cast<const char*>(&signature), sizeof(signature));
 }
 
 tools::wallet2::message_signature_result_t wallet2::verify(const std::string &data, const cryptonote::account_public_address &address, const std::string &signature) const
 {
-  static const size_t v1_header_len = strlen("SigV1");
-  static const size_t v2_header_len = strlen("SigV2");
-  const bool v1 = signature.size() >= v1_header_len && signature.substr(0, v1_header_len) == "SigV1";
-  const bool v2 = signature.size() >= v2_header_len && signature.substr(0, v2_header_len) == "SigV2";
-  if (!v1 && !v2)
-  {
-    LOG_PRINT_L0("Signature header check error");
-    return {};
-  }
-  crypto::hash hash;
-  if (v1)
-  {
-    crypto::cn_fast_hash(data.data(), data.size(), hash);
-  }
   std::string decoded;
-  if (!tools::base58::decode(signature.substr(v1 ? v1_header_len : v2_header_len), decoded)) {
-    LOG_PRINT_L0("Signature decoding error");
+  if (!bech32m_decode_blob(signature, "shekylsig", decoded))
+  {
+    LOG_PRINT_L0("Message signature decoding error -- expected Bech32m with HRP 'shekylsig'");
     return {};
   }
+  const bool v2 = true;
+  crypto::hash hash;
   crypto::signature s;
   if (sizeof(s) != decoded.size()) {
     LOG_PRINT_L0("Signature decoding error");
@@ -12970,12 +14300,11 @@ tools::wallet2::message_signature_result_t wallet2::verify(const std::string &da
   if (v2)
       hash = get_message_hash(data,address.m_spend_public_key,address.m_view_public_key,(uint8_t) 0);
   if (crypto::check_signature(hash, address.m_spend_public_key, s))
-    return {true, v1 ? 1u : 2u, !v2, sign_with_spend_key };
+    return {true, 2u, false, sign_with_spend_key };
 
-  if (v2)
-      hash = get_message_hash(data,address.m_spend_public_key,address.m_view_public_key,(uint8_t) 1);
+  hash = get_message_hash(data,address.m_spend_public_key,address.m_view_public_key,(uint8_t) 1);
   if (crypto::check_signature(hash, address.m_view_public_key, s))
-    return {true, v1 ? 1u : 2u, !v2, sign_with_view_key };
+    return {true, 2u, false, sign_with_view_key };
 
   // Both modes failed
   return {};
@@ -12983,18 +14312,13 @@ tools::wallet2::message_signature_result_t wallet2::verify(const std::string &da
 
 bool wallet2::verify_with_public_key(const std::string &data, const crypto::public_key &public_key, const std::string &signature) const
 {
-  static const std::string SIG_PK_MAGIC = "SigMultisigPkV1";
-  if (signature.size() < SIG_PK_MAGIC.size() || signature.substr(0, SIG_PK_MAGIC.size()) != SIG_PK_MAGIC) {
-    MERROR("Signature header check error");
+  std::string decoded;
+  if (!bech32m_decode_blob(signature, "shekylmultisig", decoded)) {
+    MERROR("Multisig signature decoding error -- expected Bech32m with HRP 'shekylmultisig'");
     return false;
   }
   crypto::hash hash;
   crypto::cn_fast_hash(data.data(), data.size(), hash);
-  std::string decoded;
-  if (!tools::base58::decode(signature.substr(SIG_PK_MAGIC.size()), decoded)) {
-    MERROR("Signature decoding error");
-    return false;
-  }
   crypto::signature s;
   if (sizeof(s) != decoded.size()) {
     MERROR("Signature decoding error");
@@ -14969,12 +16293,9 @@ std::pair<size_t, uint64_t> wallet2::estimate_tx_size_and_weight(bool use_rct, i
   if (n_outputs == 1)
     n_outputs = 2; // extra dummy output
 
-  const bool bulletproof = true;
-  const bool bulletproof_plus = true;
-  const bool clsag = true;
   const bool use_view_tags = true;
-  size_t size = estimate_tx_size(use_rct, n_inputs, ring_size - 1, n_outputs, extra_size, bulletproof, clsag, bulletproof_plus, use_view_tags);
-  uint64_t weight = estimate_tx_weight(use_rct, n_inputs, ring_size - 1, n_outputs, extra_size, bulletproof, clsag, bulletproof_plus, use_view_tags);
+  size_t size = estimate_tx_size(use_rct, n_inputs, n_outputs, extra_size, use_view_tags);
+  uint64_t weight = estimate_tx_weight(use_rct, n_inputs, n_outputs, extra_size, use_view_tags);
   return std::make_pair(size, weight);
 }
 //----------------------------------------------------------------------------------------------------

@@ -60,14 +60,16 @@ curl https://sh.rustup.rs -sSf | sh
 source "$HOME/.cargo/env"
 ```
 
-### PQC build note
+### PQC and FCMP++ build note
 
-Shekyl's rebooted chain design depends on Rust-based PQC components.
+Shekyl's rebooted chain design depends on Rust-based PQC and FCMP++ components.
 
 Today:
 
 - some Rust modules are optional at build time
 - PQC implementation is still being completed
+- FCMP++ Rust crates (`shekyl-fcmp`, `shekyl-address`) are required for
+  consensus-valid builds
 
 Target state for the rebooted mainnet:
 
@@ -76,6 +78,7 @@ Target state for the rebooted mainnet:
   Rust-enabled build is mandatory
 - the canonical PQC design and transaction format are documented in
   `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
+- the FCMP++ design document will be published as `docs/FCMP_PLUS_PLUS.md`
 
 ---
 
@@ -269,3 +272,4 @@ Rebuild with `-DBACKCOMPAT=ON`.
 - `shekyl-dev/docs/SEEDS_SETUP.md` (seed bootstrap model and runtime seed/peer controls)
 - `shekyl-dev/docs/SEED_NODE_DEPLOYMENT.md` (step-by-step seed node and shekyl.org caching deployment)
 - `docs/POST_QUANTUM_CRYPTOGRAPHY.md` (canonical PQC spec and reboot-only transaction format)
+- `docs/FCMP_PLUS_PLUS.md` (FCMP++ design document — planned, Phase 8)

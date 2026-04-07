@@ -8,6 +8,6 @@ pub mod rewards;
 pub mod error;
 
 pub use error::StakingError;
-pub use tiers::{StakeTier, TIERS};
+pub use tiers::{StakeTier, TIERS, MAX_CLAIM_RANGE};
 pub use registry::{StakeEntry, StakeRegistry};
 pub use rewards::distribute_staker_rewards;

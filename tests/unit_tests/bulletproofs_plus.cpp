@@ -31,9 +31,9 @@
 #include "gtest/gtest.h"
 
 #include "string_tools.h"
-#include "ringct/rctOps.h"
-#include "ringct/rctSigs.h"
-#include "ringct/bulletproofs_plus.h"
+#include "fcmp/rctOps.h"
+#include "fcmp/rctSigs.h"
+#include "fcmp/bulletproofs_plus.h"
 #include "cryptonote_basic/blobdatatype.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "device/device.hpp"

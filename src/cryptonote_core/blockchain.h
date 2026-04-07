@@ -583,7 +583,7 @@ namespace cryptonote
      *
      * @param amount in - the output amount
      * @param index in - the output global amount index
-     * @param mask out - the output's RingCT mask
+     * @param mask out - the output's commitment mask
      * @param key out - the output's key
      * @param unlocked out - the output's unlocked state
      */
@@ -625,15 +625,6 @@ namespace cryptonote
      * @return true unless saving the blockchain fails
      */
     bool store_blockchain();
-
-    /**
-     * @brief expands v2 transaction data from blockchain
-     *
-     * RingCT transactions do not transmit some of their data if it
-     * can be reconstituted by the receiver. This function expands
-     * that implicit data.
-     */
-    static bool expand_transaction_2(transaction &tx, const crypto::hash &tx_prefix_hash, const std::vector<std::vector<rct::ctkey>> &pubkeys);
 
     /**
      * @brief validates a transaction's inputs
@@ -1167,6 +1158,28 @@ namespace cryptonote
      */
     uint64_t get_adjusted_time(uint64_t height) const;
 
+    /**
+     * @brief Compute FCMP++ verification cache key.
+     *
+     * Returns hash(fcmp_pp_proof || tree_root || key_images) for an FCMP++ tx.
+     * The result is deterministic: the same tx verified against the same
+     * referenceBlock always produces the same hash.  This lets the mempool
+     * skip re-running shekyl_fcmp_verify() when the proof has already been
+     * checked.
+     */
+    static crypto::hash compute_fcmp_verification_hash(const transaction& tx);
+
+    /**
+     * @brief validate a staking claim input
+     *
+     * @param claim the stake claim input to validate
+     * @param current_height the current blockchain height
+     * @param out_leaf_h_pqc optional output for the PQC leaf hash
+     *
+     * @return true if the claim is valid
+     */
+    bool check_stake_claim_input(const txin_stake_claim& claim, uint64_t current_height, uint8_t* out_leaf_h_pqc = nullptr) const;
+
 #ifndef IN_UNIT_TESTS
   private:
 #endif
@@ -1277,9 +1290,6 @@ namespace cryptonote
     uint64_t m_prepare_nblocks;
     std::vector<block> *m_prepare_blocks;
 
-    // cache for verifying transaction RCT non semantics
-    mutable rct_ver_cache_t m_rct_ver_cache;
-
     /**
      * @brief collects the keys for all outputs being "spent" as an input
      *
@@ -1317,14 +1327,13 @@ namespace cryptonote
      * @param tx_prefix_hash the transaction prefix hash, for caching organization
      * @param sig the input signature
      * @param output_keys return-by-reference the public keys of the outputs in the input set
-     * @param rct_signatures the ringCT signatures, which are only valid if tx version > 1
+     * @param rct_signatures the FCMP++ signatures, which are only valid if tx version > 1
      * @param pmax_related_block_height return-by-pointer the height of the most recent block in the input set
      * @param hf_version the consensus rules version to use
      *
      * @return false if any output is not yet unlocked, or is missing, otherwise true
      */
     bool check_tx_input(size_t tx_version,const txin_to_key& txin, const crypto::hash& tx_prefix_hash, const std::vector<crypto::signature>& sig, const rct::rctSig &rct_signatures, std::vector<rct::ctkey> &output_keys, uint64_t* pmax_related_block_height, uint8_t hf_version) const;
-    bool check_stake_claim_input(const txin_stake_claim& claim, uint64_t current_height) const;
 
     /**
      * @brief validate a transaction's inputs and their keys
@@ -1346,7 +1355,7 @@ namespace cryptonote
      *
      * @return false if any validation step fails, otherwise true
      */
-    bool check_tx_inputs(transaction& tx, tx_verification_context &tvc, uint64_t* pmax_used_block_height = NULL) const;
+    bool check_tx_inputs(transaction& tx, tx_verification_context &tvc, uint64_t* pmax_used_block_height = NULL, bool skip_fcmp_verify = false) const;
 
     /**
      * @brief performs a blockchain reorganization according to the longest chain rule
@@ -1609,18 +1618,6 @@ namespace cryptonote
      * @return false if a double spend was detected, otherwise true
      */
     bool check_for_double_spend(const transaction& tx, key_images_container& keys_this_block) const;
-
-    /**
-     * @brief validates a transaction input's ring signature
-     *
-     * @param tx_prefix_hash the transaction prefix' hash
-     * @param key_image the key image generated from the true input
-     * @param pubkeys the public keys for each input in the ring signature
-     * @param sig the signature generated for each input in the ring signature
-     * @param result false if the ring signature is invalid, otherwise true
-     */
-    void check_ring_signature(const crypto::hash &tx_prefix_hash, const crypto::key_image &key_image,
-        const std::vector<rct::ctkey> &pubkeys, const std::vector<crypto::signature> &sig, uint64_t &result) const;
 
     /**
      * @brief loads block hashes from compiled-in data set

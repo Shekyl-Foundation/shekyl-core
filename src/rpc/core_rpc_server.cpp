@@ -48,6 +48,7 @@ using namespace epee;
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
+#include "fcmp/rctOps.h"
 #include "cryptonote_basic/merge_mining.h"
 #include "cryptonote_core/tx_sanity_check.h"
 #include "misc_language.h"
@@ -606,6 +607,8 @@ namespace cryptonote
     else
       res.emission_era = "Tail";
 
+    res.tx_prune_height = m_core.get_blockchain_storage().get_db().get_last_pruned_tx_data_height();
+
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
@@ -910,83 +913,6 @@ namespace cryptonote
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_outs_bin(const COMMAND_RPC_GET_OUTPUTS_BIN::request& req, COMMAND_RPC_GET_OUTPUTS_BIN::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_outs_bin);
-    bool r;
-    if (use_bootstrap_daemon_if_necessary<COMMAND_RPC_GET_OUTPUTS_BIN>(invoke_http_mode::BIN, "/get_outs.bin", req, res, r))
-      return r;
-
-    CHECK_PAYMENT_MIN1(req, res, req.outputs.size() * COST_PER_OUT, false);
-
-    res.status = "Failed";
-
-    const bool restricted = m_restricted && ctx;
-    if (restricted)
-    {
-      if (req.outputs.size() > MAX_RESTRICTED_GLOBAL_FAKE_OUTS_COUNT)
-      {
-        res.status = "Too many outs requested";
-        return true;
-      }
-    }
-
-    if(!m_core.get_outs(req, res))
-    {
-      return true;
-    }
-
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_outs(const COMMAND_RPC_GET_OUTPUTS::request& req, COMMAND_RPC_GET_OUTPUTS::response& res, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_outs);
-    bool r;
-    if (use_bootstrap_daemon_if_necessary<COMMAND_RPC_GET_OUTPUTS>(invoke_http_mode::JON, "/get_outs", req, res, r))
-      return r;
-
-    CHECK_PAYMENT_MIN1(req, res, req.outputs.size() * COST_PER_OUT, false);
-
-    res.status = "Failed";
-
-    const bool restricted = m_restricted && ctx;
-    if (restricted)
-    {
-      if (req.outputs.size() > MAX_RESTRICTED_GLOBAL_FAKE_OUTS_COUNT)
-      {
-        res.status = "Too many outs requested";
-        return true;
-      }
-    }
-
-    cryptonote::COMMAND_RPC_GET_OUTPUTS_BIN::request req_bin;
-    req_bin.outputs = req.outputs;
-    req_bin.get_txid = req.get_txid;
-    cryptonote::COMMAND_RPC_GET_OUTPUTS_BIN::response res_bin;
-    if(!m_core.get_outs(req_bin, res_bin))
-    {
-      return true;
-    }
-
-    // convert to text
-    for (const auto &i: res_bin.outs)
-    {
-      res.outs.push_back(cryptonote::COMMAND_RPC_GET_OUTPUTS::outkey());
-      cryptonote::COMMAND_RPC_GET_OUTPUTS::outkey &outkey = res.outs.back();
-      outkey.key = epee::string_tools::pod_to_hex(i.key);
-      outkey.mask = epee::string_tools::pod_to_hex(i.mask);
-      outkey.unlocked = i.unlocked;
-      outkey.height = i.height;
-      if (req.get_txid)
-        outkey.txid = epee::string_tools::pod_to_hex(i.txid);
-    }
-
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
   bool core_rpc_server::on_get_indexes(const COMMAND_RPC_GET_TX_GLOBAL_OUTPUTS_INDEXES::request& req, COMMAND_RPC_GET_TX_GLOBAL_OUTPUTS_INDEXES::response& res, const connection_context *ctx)
   {
     RPC_TRACKER(get_indexes);
@@ -1219,6 +1145,8 @@ namespace cryptonote
         e.double_spend_seen = false;
         e.relayed = false;
       }
+      e.pruned = e.in_pool ? false
+          : !m_core.get_blockchain_storage().get_db().tx_has_verification_data(tx_hash);
 
       // fill up old style responses too, in case an old wallet asks
       res.txs_as_hex.push_back(e.as_hex);
@@ -1392,8 +1320,6 @@ namespace cryptonote
       {
         res.status = "Failed";
         std::string reason = "";
-        if ((res.low_mixin = tvc.m_low_mixin))
-          add_reason(reason, "bad ring size");
         if ((res.double_spend = tvc.m_double_spend))
           add_reason(reason, "double spend");
         if ((res.invalid_input = tvc.m_invalid_input))
@@ -2410,6 +2336,7 @@ namespace cryptonote
     response.pow_hash = fill_pow_hash ? string_tools::pod_to_hex(get_block_longhash(&(m_core.get_blockchain_storage()), blk, height, 0)) : "";
     response.long_term_weight = m_core.get_blockchain_storage().get_db().get_block_long_term_weight(height);
     response.miner_tx_hash = string_tools::pod_to_hex(cryptonote::get_transaction_hash(blk.miner_tx));
+    response.curve_tree_root = string_tools::pod_to_hex(blk.curve_tree_root);
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
@@ -3675,10 +3602,232 @@ namespace cryptonote
       if (total_reward_at_h == 0 || accrual.total_weighted_stake == 0)
         continue;
       uint64_t weight = shekyl_stake_weight(staked_amount, tier);
-      reward += (uint64_t)((double)total_reward_at_h * (double)weight / (double)accrual.total_weighted_stake);
+      {
+        uint8_t reward_overflow = 0;
+        uint64_t q_lo = shekyl_calc_per_block_staker_reward(
+          total_reward_at_h, weight, accrual.total_weighted_stake, &reward_overflow);
+        if (reward_overflow != 0)
+        {
+          error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+          error_resp.message = "Stake reward calculation overflow";
+          return false;
+        }
+        reward += q_lo;
+      }
     }
 
     res.reward = reward;
+    res.status = CORE_RPC_STATUS_OK;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_get_curve_tree_path(const COMMAND_RPC_GET_CURVE_TREE_PATH::request& req, COMMAND_RPC_GET_CURVE_TREE_PATH::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
+  {
+    RPC_TRACKER(get_curve_tree_path);
+
+    static constexpr size_t MAX_OUTPUTS_PER_RPC_REQUEST = 64;
+
+    if (req.output_indices.empty())
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "output_indices must not be empty";
+      return false;
+    }
+
+    if (req.output_indices.size() > MAX_OUTPUTS_PER_RPC_REQUEST)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "Too many output_indices (max " + std::to_string(MAX_OUTPUTS_PER_RPC_REQUEST) + ")";
+      return false;
+    }
+
+    const auto &db = m_core.get_blockchain_storage().get_db();
+    const uint8_t depth = db.get_curve_tree_depth();
+    const uint64_t leaf_count = db.get_curve_tree_leaf_count();
+
+    if (leaf_count == 0)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "Curve tree is empty";
+      return false;
+    }
+
+    const uint64_t height = m_core.get_current_blockchain_height();
+    const uint64_t top_height = height - 1;
+    // Return a reference block old enough to satisfy mempool min-age checks.
+    // Use one extra block of margin to avoid edge races near tip updates.
+    const uint64_t min_anchor_age = FCMP_REFERENCE_BLOCK_MIN_AGE + 1;
+    const uint64_t reference_height = top_height > min_anchor_age ? (top_height - min_anchor_age) : 0;
+    const crypto::hash reference_hash = m_core.get_block_id_by_height(reference_height);
+    res.reference_block = epee::string_tools::pod_to_hex(reference_hash);
+    cryptonote::block ref_blk;
+    m_core.get_blockchain_storage().get_block_by_hash(reference_hash, ref_blk);
+    res.curve_tree_root = epee::string_tools::pod_to_hex(ref_blk.curve_tree_root);
+    res.reference_height = reference_height;
+    res.tree_depth = depth;
+    res.leaf_count = leaf_count;
+    res.paths.clear();
+
+    const uint32_t SELENE_CHUNK_WIDTH = shekyl_curve_tree_selene_chunk_width();
+    const uint32_t HELIOS_CHUNK_WIDTH = shekyl_curve_tree_helios_chunk_width();
+
+    auto chunk_width = [&](uint8_t layer) -> uint32_t {
+      if (layer == 0) return SELENE_CHUNK_WIDTH;
+      return (layer % 2 == 0) ? SELENE_CHUNK_WIDTH : HELIOS_CHUNK_WIDTH;
+    };
+
+    for (const uint64_t output_idx : req.output_indices)
+    {
+      COMMAND_RPC_GET_CURVE_TREE_PATH::path_entry entry{};
+      entry.output_index = output_idx;
+      entry.tree_depth = depth;
+
+      if (output_idx >= leaf_count)
+      {
+        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+        error_resp.message = "output_index " + std::to_string(output_idx) + " >= leaf_count " + std::to_string(leaf_count);
+        return false;
+      }
+
+      // path_blob format per layer:
+      //   layer 0 (leaf layer): all leaf scalars in the chunk (4*32 bytes each)
+      //   layer 1+: all sibling hashes in the chunk (32 bytes each)
+      // The verifier uses the output's position within each chunk to locate
+      // the proven element; everything else in the chunk is the "path."
+      std::string path_hex;
+
+      // Layer 0: collect all leaf scalars in the chunk
+      uint64_t chunk_idx = output_idx / SELENE_CHUNK_WIDTH;
+      uint64_t chunk_start = chunk_idx * SELENE_CHUNK_WIDTH;
+      uint64_t chunk_end = std::min(chunk_start + SELENE_CHUNK_WIDTH, leaf_count);
+
+      std::vector<uint8_t> path_bytes;
+      // Encode position of the proven leaf within the chunk (2 bytes LE)
+      uint16_t leaf_pos = static_cast<uint16_t>(output_idx - chunk_start);
+      path_bytes.push_back(static_cast<uint8_t>(leaf_pos & 0xFF));
+      path_bytes.push_back(static_cast<uint8_t>((leaf_pos >> 8) & 0xFF));
+
+      // Also collect compressed Ed25519 output data for the FCMP++ prover.
+      // Per entry: [O:32][I:32][C:32][h_pqc:32] = 128 bytes.
+      std::vector<uint8_t> chunk_output_bytes;
+
+      for (uint64_t i = chunk_start; i < chunk_end; ++i)
+      {
+        uint8_t leaf[128];
+        if (!db.get_curve_tree_leaf(i, leaf))
+        {
+          error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+          error_resp.message = "Failed to read leaf at index " + std::to_string(i);
+          return false;
+        }
+        path_bytes.insert(path_bytes.end(), leaf, leaf + 128);
+
+        // Fetch the compressed Ed25519 output key and commitment
+        output_data_t od = db.get_output_key(0, i);
+        chunk_output_bytes.insert(chunk_output_bytes.end(),
+            reinterpret_cast<const uint8_t*>(od.pubkey.data),
+            reinterpret_cast<const uint8_t*>(od.pubkey.data) + 32);
+
+        // I = Hp(O): hash-to-point of the output key
+        ge_p3 hp;
+        rct::key od_rct;
+        memcpy(od_rct.bytes, od.pubkey.data, 32);
+        rct::hash_to_p3(hp, od_rct);
+        uint8_t ki_gen[32];
+        ge_p3_tobytes(ki_gen, &hp);
+        chunk_output_bytes.insert(chunk_output_bytes.end(), ki_gen, ki_gen + 32);
+
+        chunk_output_bytes.insert(chunk_output_bytes.end(),
+            reinterpret_cast<const uint8_t*>(od.commitment.bytes),
+            reinterpret_cast<const uint8_t*>(od.commitment.bytes) + 32);
+
+        // h_pqc is the 4th scalar in the leaf data (bytes 96..128)
+        chunk_output_bytes.insert(chunk_output_bytes.end(), leaf + 96, leaf + 128);
+      }
+
+      entry.chunk_outputs_blob = epee::string_tools::buff_to_hex_nodelimer(
+        std::string(reinterpret_cast<const char*>(chunk_output_bytes.data()), chunk_output_bytes.size()));
+
+      // Layers 1..depth-1: collect sibling hashes in each parent chunk
+      uint64_t child_chunk = chunk_idx;
+      for (uint8_t layer = 1; layer < depth; ++layer)
+      {
+        uint32_t width = chunk_width(layer);
+        uint64_t parent_chunk = child_chunk / width;
+        uint64_t pos_in_parent = child_chunk % width;
+
+        // Encode position (2 bytes LE)
+        uint16_t pos16 = static_cast<uint16_t>(pos_in_parent);
+        path_bytes.push_back(static_cast<uint8_t>(pos16 & 0xFF));
+        path_bytes.push_back(static_cast<uint8_t>((pos16 >> 8) & 0xFF));
+
+        // Collect all children in this parent chunk
+        for (uint32_t c = 0; c < width; ++c)
+        {
+          uint64_t sibling_chunk = parent_chunk * width + c;
+          uint8_t hash[32] = {};
+          if (!db.get_curve_tree_layer_hash(layer - 1, sibling_chunk, hash))
+          {
+            error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+            error_resp.message = "Internal error: missing layer hash at layer "
+              + std::to_string(layer - 1) + " chunk " + std::to_string(sibling_chunk);
+            return false;
+          }
+          path_bytes.insert(path_bytes.end(), hash, hash + 32);
+        }
+
+        child_chunk = parent_chunk;
+      }
+
+      entry.path_blob = epee::string_tools::buff_to_hex_nodelimer(
+        std::string(reinterpret_cast<const char*>(path_bytes.data()), path_bytes.size()));
+      res.paths.push_back(std::move(entry));
+    }
+
+    res.status = CORE_RPC_STATUS_OK;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_get_curve_tree_info(const COMMAND_RPC_GET_CURVE_TREE_INFO::request& req, COMMAND_RPC_GET_CURVE_TREE_INFO::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
+  {
+    RPC_TRACKER(get_curve_tree_info);
+
+    const auto &db = m_core.get_blockchain_storage().get_db();
+    const auto root = db.get_curve_tree_root();
+    res.root = epee::string_tools::buff_to_hex_nodelimer(
+      std::string(reinterpret_cast<const char*>(root.data()), root.size()));
+    res.depth = db.get_curve_tree_depth();
+    res.leaf_count = db.get_curve_tree_leaf_count();
+    res.height = m_core.get_current_blockchain_height() - 1;
+    res.status = CORE_RPC_STATUS_OK;
+    return true;
+  }
+  //------------------------------------------------------------------------------------------------------------------------------
+  bool core_rpc_server::on_get_curve_tree_checkpoint(const COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::request& req, COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
+  {
+    RPC_TRACKER(get_curve_tree_checkpoint);
+
+    const auto &db = m_core.get_blockchain_storage().get_db();
+    std::vector<uint8_t> checkpoint_data;
+    if (!db.get_curve_tree_checkpoint(req.block_height, checkpoint_data))
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+      error_resp.message = "No checkpoint at height " + std::to_string(req.block_height);
+      return false;
+    }
+
+    if (checkpoint_data.size() < 41)
+    {
+      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+      error_resp.message = "Corrupt checkpoint data";
+      return false;
+    }
+
+    res.root = epee::string_tools::buff_to_hex_nodelimer(
+      std::string(reinterpret_cast<const char*>(checkpoint_data.data()), 32));
+    res.depth = checkpoint_data[32];
+    memcpy(&res.leaf_count, checkpoint_data.data() + 33, sizeof(uint64_t));
+    res.block_height = req.block_height;
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }

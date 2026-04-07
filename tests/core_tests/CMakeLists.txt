@@ -40,6 +40,8 @@ set(core_tests_sources
   transaction_tests.cpp
   tx_validation.cpp
   tx_pool.cpp
+  staking.cpp
+  fcmp_tests.cpp
   bulletproof_plus.cpp
   wallet_tools.cpp)
 
@@ -55,6 +57,8 @@ set(core_tests_headers
   integer_overflow.h
   ring_signature_1.h
   tx_pool.h
+  staking.h
+  fcmp_tests.h
   transaction_tests.h
   tx_validation.h
   bulletproof_plus.h

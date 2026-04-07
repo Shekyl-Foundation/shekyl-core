@@ -240,16 +240,10 @@ std::vector<uint64_t> UnsignedTransactionImpl::fee() const
 
 std::vector<uint64_t> UnsignedTransactionImpl::mixin() const
 {
-    std::vector<uint64_t> result;    
+    std::vector<uint64_t> result;
     for (const auto &utx: m_unsigned_tx_set.txes) {
-        size_t min_mixin = ~0;
-        // TODO: Is this loop needed or is sources[0] ?
-        for (size_t s = 0; s < utx.sources.size(); ++s) {
-            size_t mixin = utx.sources[s].outputs.size() - 1;
-                if (mixin < min_mixin)
-                    min_mixin = mixin;
-        }
-        result.push_back(min_mixin);
+        (void)utx;
+        result.push_back(0);
     }
     return result;
 }    
@@ -303,16 +297,8 @@ std::vector<std::string> UnsignedTransactionImpl::recipientAddress() const
 }
 
 uint64_t UnsignedTransactionImpl::minMixinCount() const
-{    
-    uint64_t min_mixin = ~0;  
-    for (const auto &utx: m_unsigned_tx_set.txes) {
-        for (size_t s = 0; s < utx.sources.size(); ++s) {
-            size_t mixin = utx.sources[s].outputs.size() - 1;
-                if (mixin < min_mixin)
-                    min_mixin = mixin;
-        }
-    }
-    return min_mixin;
+{
+    return 0;
 }
 
 } // namespace

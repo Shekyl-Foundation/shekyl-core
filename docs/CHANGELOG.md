@@ -4,6 +4,1497 @@
 
 ### 🔄 Changed
 
+- **`MAX_TX_EXTRA_SIZE` (24576 bytes).** The previous Monero-era cap (1060) was
+  too small for FCMP++ `tx_extra` payloads (hybrid KEM ciphertexts ~1120 B per
+  output, PQC leaf hashes, pubkey/nonce). Construction of v3 spends failed once
+  PQC fields were appended; the pool and `construct_tx` checks now allow the
+  larger bound.
+- **`construct_tx` RCT/PQC stubs.** v3 spends require `|pqc_auths| == |vin|`
+  for binary serialization, and `RCTTypeFcmpPlusPlusPqc` needs BP+, ECDH, and
+  pseudo-out vectors sized to inputs/outputs. `construct_tx` now assigns stub
+  `pqc_authentication` entries and calls `rct::fill_construct_tx_rct_stub()`
+  (dummy Bulletproofs+, ECDH encoding, Pedersen pseudo-outs) so
+  `get_transaction_hash` and JSON/blob round-trips succeed before the wallet
+  replaces the RCT payload with `genRctFcmpPlusPlus()`.
+
+### 🔒 Security
+
+- **Secure memory hardening (project-wide).** Systematic implementation of the
+  `secure-memory.mdc` rule across Rust and C++ codebases:
+  - `shekyl_buffer_free` now uses `zeroize` crate instead of `std::ptr::write_bytes`,
+    preventing the compiler from optimizing away the secret-wiping write.
+  - `native_sign_state::clear()` in `wallet2.h` now `memwipe`s all secret fields
+    (`spend_key_x`, `spend_key_y`, `h_pqc`, `amount_key`, `pqc_secret_keys`) before
+    clearing vectors.
+  - Added `prctl(PR_SET_DUMPABLE, 0)` to daemon (`main.cpp`), simplewallet, and
+    `wallet2_ffi_create()` to prevent core dumps containing key material on Linux.
+  - Passwords, seeds, spend keys, and view keys in `wallet2_ffi.cpp` JSON-RPC dispatch
+    now use `memwipe` scope guards to wipe temporary `std::string` buffers after use.
+  - New `shekyl_madvise_dontdump` FFI function (`MADV_DONTDUMP` on Linux, no-op elsewhere)
+    declared in `shekyl_secure_mem.h`.
+  - PQC long-lived secret keys (`m_pqc_secret_key`) are now `mlock`ed and
+    `madvise(MADV_DONTDUMP)`ed after generation and decryption, and `memwipe`d +
+    `munlock`ed on `forget_spend_key()`.
+
+- **Base58 overflow and non-canonical encoding fix (monero-oxide fork).**
+  `shekyl-base58::decode()` now uses `checked_add` to prevent integer overflow
+  during character accumulation, and rejects non-canonical encodings where
+  unused high bytes of the decoded sum are non-zero. Defense-in-depth measure;
+  Shekyl production addresses use Bech32m.
+
+- **Cargo profile hardening (both Rust workspaces).** All profiles (dev,
+  release, test, bench) now enforce `overflow-checks = true` in both the
+  monero-oxide fork `Cargo.toml` and the Shekyl `rust/Cargo.toml`. Dev and
+  release profiles additionally set `panic = "abort"`.
+
+- **HKDF domain-separated salts for PQC key derivation.** All HKDF-SHA-512
+  calls in `shekyl-crypto-pq` now use explicit fixed salts (`shekyl-pqc-derive-v1`,
+  `shekyl-master-derive-v1`) instead of `None`. Strengthens domain separation
+  and prevents cross-protocol seed reuse if the same combined shared secret
+  appears in other contexts.
+
+- **`FrostSalSession` secret deduplication.** Removed the redundant `x`
+  (spend secret scalar) from `FrostSalSession` struct fields. Previously the
+  secret was stored both in the struct and inside `SalAlgorithm`, with only
+  the struct copy explicitly zeroized on drop. Now the secret lives solely
+  inside the algorithm, eliminating the unprotected duplicate.
+
+- **Levin double-compression guard.** `try_compress_message` now checks
+  `LEVIN_PACKET_COMPRESSED` in the input header before compressing. Prevents
+  double-compression of already-compressed messages in future refactors.
+
+- **Divisor degree underflow assertions.** `Divisor::div` now asserts that
+  `self.a.degree >= rhs.degree` and `self.b.degree >= rhs.degree` before
+  `usize` subtraction, converting silent wraparound into a clear panic with
+  diagnostic context.
+
+- **Interpolator allocation bounds fix.** `Interpolator::interpolate` now
+  allocates the output coefficient vector using the domain size
+  (`self.lagrange_polys.len()`) instead of `evals.len()`, preventing trailing
+  zeros from inflating the vector when callers provide excess evaluations.
+
+- **`member_of_list` witness construction hardened.** Replaced
+  `next_eval.unwrap()` with `carry_eval.zip(next_eval)` in the FCMP++ circuit
+  gadget, eliminating a potential panic if evaluation invariants change.
+
+### ✨ Added
+
+- **`shekyl-tx-builder` crate.** New Rust crate (`rust/shekyl-tx-builder/`)
+  consolidating Bulletproofs+ range proofs, FCMP++ full-chain membership proof
+  construction, ECDH amount encoding, and PQC (ML-DSA-65) signing into a single
+  native Rust call path. Replaces the prior C++ → Rust → C++ → Rust FFI
+  round-trip for proof generation. Includes 19 unit tests covering validation
+  edge cases (0 inputs, overflow amounts, empty trees, wrong-length PQC keys)
+  and ECDH encoding round-trips. All secret key material is wrapped in
+  `zeroize::Zeroizing` and wiped on drop.
+
+- **`shekyl_sign_transaction` FFI export.** New C ABI function in `shekyl-ffi`
+  wrapping `shekyl-tx-builder::sign_transaction()`. Accepts JSON-serialized
+  inputs/outputs, returns a `ShekylSignResult` with either JSON proofs or a
+  structured error code and message. Declared in `shekyl_ffi.h`.
+
+- **Wallet RPC `native-sign` feature.** `shekyl-wallet-rpc` gains an optional
+  `native-sign` Cargo feature that enables `transfer_native()` — a pure-Rust
+  transfer path using `shekyl-tx-builder` directly, eliminating C++ proof FFI
+  round-trips. The split pipeline uses `wallet2_ffi_prepare_transfer` (C++ →
+  JSON) → `shekyl-tx-builder::sign_transaction` (pure Rust) →
+  `wallet2_ffi_finalize_transfer` (JSON → C++).
+
+- **`wallet2_ffi_prepare_transfer` / `wallet2_ffi_finalize_transfer` implemented.**
+  Full C++ implementation of the split transfer pipeline. `prepare_transfer`
+  activates native-sign mode in `transfer_selected_rct` (skipping C++ proof
+  generation), gathers per-input signing data (secret keys, tree paths parsed
+  into c1/c2 branch layers, leaf chunks, PQC key material), per-output data
+  (dest keys, amount keys), tree context (reference block, curve tree root,
+  depth), and serializes everything as hex-encoded JSON matching the Rust
+  `SpendInput`/`OutputInfo`/`TreeContext` types. `finalize_transfer` receives
+  the Rust-generated `SignedProofs` JSON, manually reconstructs the BP+ struct
+  from the Rust blob (handling the V-field format difference), inserts all
+  proofs into `tx.rct_signatures`, performs PQC signing using stored secret
+  keys, and commits/broadcasts the transaction. Fee estimation uses
+  `shekyl_fcmp_proof_len()` to pad the stub FCMP++ proof to the correct
+  estimated size.
+
+- **Native-sign mode in `wallet2::transfer_selected_rct`.** New
+  `m_native_sign_mode` flag and `native_sign_state` struct on `wallet2`.
+  When enabled, `transfer_selected_rct` skips `genRctFcmpPlusPlus` and PQC
+  signing, instead storing all signing data for the Rust path. Tree path
+  blobs are parsed into structured c1/c2 branch layers. Padded stub proofs
+  provide accurate fee estimation.
+
+- **Hex serde for `shekyl-tx-builder` types.** All `[u8; 32]`, `Vec<u8>`,
+  and `Vec<[u8; 32]>` fields on `SpendInput`, `OutputInfo`, `TreeContext`,
+  `SignedProofs`, `LeafEntry`, and `PqcAuth` now serialize/deserialize as hex
+  strings via custom serde modules. This enables clean JSON interop with the
+  C++ FFI layer which produces hex-encoded cryptographic keys and blobs.
+
+- **Secure memory Cursor rule.** Added `.cursor/rules/secure-memory.mdc`
+  codifying project-wide conventions for cryptographic secret zeroization in
+  both Rust (`Zeroizing<T>`, `ZeroizeOnDrop`) and C++ (`memwipe`, scope guards,
+  `wipeable_string`), FFI boundary ownership, and OS-level protections (`mlock`,
+  `prctl(PR_SET_DUMPABLE, 0)`, `MADV_DONTDUMP`).
+
+- **Vendored monero-oxide protocol crates.** Completed the vendored crate set
+  in `rust/shekyl-oxide/`: added `shekyl-primitives` (Keccak-256, Pedersen
+  commitments), `shekyl-bulletproofs` (BP+ range proofs), the root `shekyl-oxide`
+  crate (transaction/block types, FCMP module), `shekyl-rpc` (daemon RPC trait,
+  `ScannableBlock`), and `shekyl-simple-request-rpc` (HTTP transport). Resolved
+  the `shekyl-address` naming collision by removing the oxide base58 address
+  dependency from the vendored RPC crate (Shekyl uses Bech32m exclusively).
+  Added crypto-heavy crate optimizations to `[profile.dev.package]` and
+  workspace-level clippy lints for the oxide crates.
+
+- **`shekyl-scanner` crate.** New Rust crate (`rust/shekyl-scanner/`) providing
+  a native transaction scanner with Shekyl-specific extensions. Ported the core
+  scanning pipeline from monero-oxide (SharedKeyDerivations, Extra parsing,
+  ViewPair, per-block/per-tx/per-output ECDH scan loop) and extended it with:
+  - PQC KEM ciphertext parsing (tx_extra tag 0x06) and leaf hash parsing (0x07)
+  - Staking output detection and balance categorization (matured/locked tiers)
+  - `TransferDetails` struct with FCMP++ path precompute, combined PQC shared
+    secret, and spend tracking fields
+  - `WalletState` for in-memory transfer management with key image dedup, spend
+    detection, and reorg handling
+  - `BalanceSummary` with staking-aware breakdown (total, unlocked, timelocked,
+    staked matured/locked, frozen)
+
+- **Split RPC routing (`rust-scanner` feature).** `shekyl-wallet-rpc` now
+  supports a `rust-scanner` feature flag that routes scanner-backed read-only
+  methods (get_balance, get_transfers, incoming_transfers, get_height,
+  get_staked_outputs, get_staked_balance) to native Rust handlers via
+  `shekyl-scanner`, while all mutation methods continue through the C++ FFI.
+  Added `ScannerState`, `dispatch_with_scanner()`, and typed scanner handlers.
+
+- **GUI wallet scanner integration.** Updated `wallet_bridge.rs` in
+  `shekyl-gui-wallet` to include a `ScannerState` alongside the FFI `Wallet2`
+  handle. Added `get_scanner_balance()`, `get_scanner_staked_outputs()`, and
+  `get_scanner_height()` bridge methods for future scanner-backed queries.
+
+- **`shekyl-encoding` crate.** New standalone Rust crate (`rust/shekyl-encoding/`)
+  for general-purpose Bech32m blob encoding and decoding with arbitrary HRPs.
+  Defines HRP constants for wallet proofs (`shekylspendproof`, `shekyltxproof`,
+  `shekylreserveproof`, `shekylsig`, `shekylmultisig`, `shekylsigner`).
+
+- **`shekyl-address` crate.** New standalone Rust crate (`rust/shekyl-address/`)
+  for network-aware segmented Bech32m address encoding. Defines `Network` enum
+  (Mainnet, Testnet, Stagenet) with HRP lookup tables for classical (`shekyl`,
+  `tshekyl`, `sshekyl`) and PQC (`skpq`/`skpq2`, `tskpq`/`tskpq2`,
+  `sskpq`/`sskpq2`) segments. `ShekylAddress` supports `encode()`, `decode()`,
+  and `decode_for_network()`.
+
+- **Generic Bech32m blob FFI.** `shekyl_encode_blob()` and `shekyl_decode_blob()`
+  FFI functions allow C++ to encode/decode arbitrary binary data with
+  purpose-specific HRPs, replacing all direct Base58 calls in wallet proofs.
+
+- **Network-aware address FFI.** `shekyl_address_encode()` and
+  `shekyl_address_decode()` now accept/return a `network` parameter (0=mainnet,
+  1=testnet, 2=stagenet) for HRP-based network discrimination.
+
+- **Shekyl-first development rule.** Added `.cursor/rules/shekyl-first-development.mdc`
+  codifying that Shekyl core is the authoritative codebase and the monero-oxide
+  fork is a disposable downstream consumer.
+
+- **FROST SAL threshold signing for FCMP++ multisig.** New `frost_sal`
+  module in `shekyl-fcmp` wraps upstream `SalAlgorithm<Ed25519T>` for
+  threshold Spend-Auth-and-Linkability proofs. `FrostSalSession` manages
+  per-input FROST state; `prove_with_sal()` constructs FCMP++ proofs from
+  pre-aggregated SAL pairs. FFI functions (`shekyl_frost_sal_session_new`,
+  `_get_rerand`, `_aggregate_and_prove`, `_session_free`) expose the session
+  lifecycle to C++. The `multisig` feature flag enables FROST dependencies
+  (`modular-frost`, `transcript`, `rand_chacha`).
+
+- **FROST DKG key management.** New `frost_dkg` module in `shekyl-fcmp`
+  provides `SerializedThresholdKeys` for `ThresholdKeys<Ed25519T>`
+  serialization/deserialization, group key extraction, and parameter
+  validation. FFI functions (`shekyl_frost_keys_import`, `_export`,
+  `_group_key`, `_validate`, `_free`) manage threshold keys from C++.
+
+- **Variable-length FCMP++ witness wire format.** `shekyl_fcmp_prove` FFI
+  now accepts a single `witness_ptr`/`witness_len` blob containing per-input
+  fixed headers, leaf chunk Ed25519 output data, and Helios/Selene branch
+  layers. `genRctFcmpPlusPlus` in `rctSigs.cpp` serializes the full witness.
+
+- **Daemon RPC `chunk_outputs_blob`.** `get_curve_tree_path` response now
+  includes per-chunk compressed Ed25519 output data (O, I=Hp(O), C,
+  H(pqc_pk)) enabling the wallet to pass full output points to the prover.
+
+- **C++ wallet FROST multisig integration.** `prepare_multisig_fcmp_proof`
+  creates FROST SAL sessions when threshold keys are present (defers proof).
+  `export_multisig_signing_request` emits v3 format with FROST round data.
+  `import_multisig_signatures` aggregates FROST shares via FFI and produces
+  the final FCMP++ proof. New methods: `import_frost_threshold_keys`,
+  `export_frost_threshold_keys`, `clear_frost_sessions`.
+
+- **16 new Rust tests for FROST.** 4 `frost_sal` unit tests (session
+  creation, pseudo-out distinctness, identity rejection, field roundtrip),
+  4 `frost_dkg` unit tests (serialization roundtrip, group key extraction,
+  parameter validation, byte-level roundtrip), 8 FFI lifecycle tests (null
+  safety, invalid data rejection, session handle management).
+
+- **FCMP++ prove/verify round-trip test.** `prove_verify_roundtrip()` in
+  `rust/shekyl-fcmp/src/proof.rs` exercises the full stack: random key
+  generation, single-leaf tree root computation, `prove()`, `verify()`, and
+  negative tests (tampered key image, wrong tree root).
+
+### 🐛 Fixed
+
+- **Suppressed vendored crate warnings.** Fixed `dead_code` warning for
+  `InconsistentWitness` variant in `generalized-bulletproofs` (only constructed
+  under `debug_assertions`) with `#[cfg_attr(not(debug_assertions), allow(dead_code))]`.
+  Fixed deprecated `GenericArray::as_slice()` in `helioselene` ciphersuite by
+  replacing with `as_ref()`.
+
+- **Stake-claim vs `verRctSemanticsSimple` conflict.** Stake-claim transactions
+  use `RCTTypeFcmpPlusPlusPqc` but have no FCMP++ membership proof (they prove
+  ownership via PQC auth on public amounts). `ver_non_input_consensus` now
+  excludes stake-claim-only transactions from the RCT semantics batch that
+  rejects empty `fcmp_pp_proof`.
+
+- **`genRctFcmpPlusPlus` hard-fail on proof failure.** Previously logged and
+  returned an `rctSig` with an empty proof when `shekyl_fcmp_prove` failed; now
+  throws `CHECK_AND_ASSERT_THROW_MES` so the wallet catches the error
+  immediately rather than producing an invalid transaction.
+
+- **PQC leaf scalar now uses proper Selene field reduction.** `PqcLeafScalar::from_pqc_public_key`
+  and `hash_pqc_public_key` previously truncated Blake2b-512 to 32 bytes and
+  cleared bit 255, which could produce non-canonical values exceeding the
+  Selene base field modulus. Now uses `HelioseleneField::wide_reduce` on the
+  full 64-byte hash for unbiased, canonical field elements.
+
+- **Deterministic PQC keygen stability.** Replaced `rand::rngs::StdRng` with
+  `rand_chacha::ChaCha20Rng` for ML-DSA-65 keypair derivation. `StdRng`'s
+  underlying algorithm is not a stability guarantee across `rand` versions,
+  which could break wallet-restore-from-seed.
+
+- **Bech32m variant enforcement.** `decode_blob` now strictly enforces the
+  Bech32m checksum variant instead of accepting both Bech32 and Bech32m.
+  Removed unused `EncodingError::EmptyData` variant.
+
+### 🔒 Security
+
+- **FrostSalSession spend secret zeroized on drop.** The FROST SAL session's
+  `x` (spend secret scalar) is now explicitly zeroized when the session is
+  dropped, per the project-wide secure memory rule.
+
+- **RELEASE-BLOCKER resolved in circuit gadgets.** The `incomplete_add_pub`
+  function in the FCMP++ circuit already receives parameters typed as `OnCurve`,
+  which guarantees the on-curve constraint. Replaced the
+  `RELEASE-BLOCKER(shekyl)` comment with documentation explaining why no
+  additional constraint is needed.
+
+- **Pruning watermark hardening.** `BlockchainLMDB::prune_tx_data()` now
+  fails the current batch on missing transaction rows (`TX_DNE`) instead of
+  logging and continuing, so `tx_prune_next_block` cannot advance on partial
+  pruning.
+
+- **FCMP++ compile-path compatibility fixes.** Updated wallet/core-test FCMP++
+  construction callsites for the current `genRctFcmpPlusPlus` leaf-chunk API,
+  and added explicit cached-chunk to `rct::fcmp_chunk_entry` conversion in
+  wallet construction to keep GCC 14 builds green.
+
+- **CI portability and fuzz gate hardening.** Replaced GNU-only `xargs -r`
+  usage in Cargo absolute-path guard with a portable shell loop, and added a
+  required fuzz-harness inventory smoke gate in Rust CI.
+
+- **Stale fuzz targets updated.** `fuzz_fcmp_proof_deserialize` and
+  `fuzz_tx_deserialize_fcmp_type7` now pass the required `signable_tx_hash`
+  7th argument to `verify()`. `fuzz_block_header_tree_root` rewritten for the
+  current `ProveInput` struct and 4-arg `prove()` signature.
+
+- **`prune_tx_data` miner output lookup.** When storing output-pruning metadata,
+  RCT coinbase outputs are keyed under amount `0` in LMDB (same as
+  `add_transaction`); pruning now uses that amount for `get_output_key` instead
+  of the plaintext `vout.amount`, avoiding `OUTPUT_DNE` during prune for
+  miner transactions.
+
+### 🗑️ Removed
+
+- **Base58 encoding removed entirely.** Deleted `src/common/base58.{h,cpp}`,
+  `tests/unit_tests/base58.cpp`, `tests/fuzz/base58.cpp`, and all CMake
+  references. Removed `CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX`,
+  `CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX`, and
+  `CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX` constants from all network
+  namespaces and `config_t`. No code path accepts or produces Base58 strings.
+
+- **Legacy address structs removed.** `integrated_address`,
+  `legacy_account_public_address`, and `legacy_integrated_address` structs
+  removed from `cryptonote_basic_impl.cpp`. Subaddress and integrated address
+  logic removed from address encoding/decoding chokepoints.
+
+### 🔄 Changed
+
+- **Rust naming convention cleanup.** Fixed phantom FFI function reference in
+  `shekyl_pqc_verify` doc comment (referenced non-existent
+  `shekyl_pqc_verify_multisig_with_group_id`, now points to
+  `shekyl_pqc_multisig_group_id`). Renamed Windows `SystemInfo.dw_page_size`
+  to `page_size` (drop Hungarian notation). Renamed `shekyl-wallet-rpc-rs`
+  binary to `shekyl-wallet-rpc` (drop `-rs` suffix per Rust API Guidelines).
+
+- **Address encoding migrated to Bech32m.** `get_account_address_as_str()` and
+  `get_account_address_from_str()` now call Rust FFI (`shekyl_address_encode`,
+  `shekyl_address_decode`) for network-aware Bech32m encoding. The `subaddress`
+  parameter is retained for API compatibility but ignored. `address_parse_info`
+  fields `is_subaddress` and `has_payment_id` are always false.
+
+- **Wallet proofs use Bech32m blob encoding.** Spend proofs, tx proofs (in/out),
+  reserve proofs, message signatures, multisig signatures, and signer keys are
+  now encoded with purpose-specific HRPs via `shekyl_encode_blob` /
+  `shekyl_decode_blob` FFI. Version headers (`SpendProofV1`, `InProofV2`, etc.)
+  removed; the HRP now serves as the type discriminator.
+
+- **`shekyl-crypto-pq` re-exports `shekyl-address`.** The `address` module in
+  `shekyl-crypto-pq` is now a re-export of the standalone `shekyl-address` crate.
+  The old `shekyl-crypto-pq/src/address.rs` has been deleted.
+
+- **Tx-data prune watermark.** `prune_tx_data` now stores `tx_prune_next_block`
+  (exclusive next height) instead of ambiguous `last_pruned_tx_data_height`
+  values; legacy keys migrate on read/write. LMDB unit tests live in
+  `tests/unit_tests/tx_data_pruning_lmdb.cpp` (minimal block builder only; does
+  not link `tests/core_tests/chaingen.cpp` into `unit_tests`, avoiding duplicate
+  object code and macOS linker unwind/diagnostic issues in CI).
+
+- **FCMP++ Rust dependency source moved in-repo.** `shekyl-fcmp` now consumes
+  vendored `shekyl-oxide` crates via path dependencies under
+  `rust/shekyl-oxide/` instead of git dependencies plus local absolute-path
+  `[patch]` overrides. This removes host-specific Cargo path failures in CI and
+  keeps builds fully repo-local.
+
+- **Upstream sync and portability guardrails.** Added vendored snapshot metadata
+  at `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT`, a divergence workflow
+  (`.github/workflows/shekyl-oxide-divergence.yml`), and build workflow checks
+  that fail on absolute local paths in Cargo manifests/config.
+
+### ✨ Added
+
+- **`--prune-blockchain` transaction-data pruning.** LMDB v6 adds `txs_pqc_auths`
+  (split from `txs_pruned` at `pqc_auths_offset`), implements `prune_tx_data`
+  (batch 256 blocks, output metadata, watermark, TOCTOU height check), default
+  depth `CRYPTONOTE_TX_PRUNE_DEPTH` (5000), `pop_block` guard when verification
+  data is gone, continuous pruning via `update_blockchain_pruning`, RPC
+  `get_transactions.pruned` and `get_info.tx_prune_height`.
+
+- **Staking FFI and config-driven tier parameters.** `shekyl-staking` now
+  generates tier lock durations, yield multipliers, and max stake-claim range
+  from `config/economics_params.json` at build time (aligned with
+  `shekyl-economics`). New FFI: `shekyl_calc_per_block_staker_reward` (128-bit
+  division with optional overflow flag), `shekyl_stake_tier_count`,
+  `shekyl_stake_tier_name`, `shekyl_stake_max_claim_range`. C++ uses these in
+  `blockchain.cpp`, `core_rpc_server.cpp`, and `simplewallet` instead of
+  duplicating tier strings or inline `mul128`/`div128_64` reward math.
+
+- **FCMP++ transaction construction helper (`construct_fcmp_tx`).** New chaingen
+  helper in `tests/core_tests/chaingen.cpp` that builds fully valid FCMP++
+  transactions during core test replay: tree path assembly from the live LMDB
+  curve tree, `genRctFcmpPlusPlus` proof generation, KEM decapsulation for
+  per-input PQC keypair derivation, and PQC auth signing. This unblocks 30+
+  disabled core tests that relied on the old `construct_tx_rct` stub.
+
+- **FCMP++ core test generators (Phase 7).** Five new tests in
+  `tests/core_tests/fcmp_tests.cpp`:
+  - `gen_fcmp_tx_valid`: end-to-end FCMP++ transaction construction and pool
+    acceptance during replay
+  - `gen_fcmp_tx_double_spend`: second FCMP++ spend of the same output rejected
+  - `gen_fcmp_tx_reference_block_too_old`: stale referenceBlock rejected
+  - `gen_fcmp_tx_reference_block_too_recent`: too-recent referenceBlock rejected
+  - `gen_fcmp_tx_timestamp_unlock_rejected`: timestamp-based `unlock_time` rejected
+
+- **Verification caching unit tests.** Six new GTest cases in
+  `tests/unit_tests/fcmp.cpp` validating `compute_fcmp_verification_hash`
+  determinism, sensitivity to proof/referenceBlock/key-image changes, null return
+  for non-FCMP++ types, and multi-input handling.
+
+- **Deferred insertion boundary tests.** New `tests/unit_tests/deferred_insertion.cpp`
+  with tests for: outputs not drainable before maturity, coinbase maturity window
+  (60 blocks), regular tx maturity window (10 blocks), drain journal atomicity
+  round-trip, and insertion ordering determinism across two DB instances.
+
+- **Pending tree add/pop stress test.** New `tests/unit_tests/pending_tree_fuzz.cpp`
+  with randomized stress test (100 random leaves, multi-height draining),
+  add/remove round-trip, drain journal CRUD, and leaf removal correctness.
+
+- **`fuzz_tx_deserialize_fcmp_type7` Rust fuzz target.** New cargo-fuzz target in
+  `rust/shekyl-fcmp/fuzz/` that exercises FCMP++ proof verification with
+  transaction-structured random inputs: pseudoOuts, proof blobs, PQC hashes,
+  corrupted type bytes, empty proofs, and mismatched input counts.
+
+- **Comprehensive staking test suite.** New test coverage across C++ and Rust:
+  - `tests/unit_tests/staking.cpp`: 20+ GTest unit tests covering
+    `txin_stake_claim` and `txout_to_staked_key` serialization round-trips,
+    reward integer math (including `mul128`/`div128_64` vs `double` divergence
+    at large values), helper function coverage (`get_inputs_money_amount`,
+    `check_inputs_overflow`, `check_inputs_types_supported`,
+    `get_output_staking_info`, `set_staked_tx_out`), stake weight/tier FFI
+    validation, and variant type handling.
+  - `tests/core_tests/staking.cpp` + `staking.h`: 18 chaingen core tests
+    covering staking lifecycle (stake output creation), invalid claim
+    rejection (inverted range, oversized range, future height, wrong
+    watermark, wrong amount, non-staked output, output not in tree), lock
+    period enforcement (invalid tier, wrong lock_until, zero lock), rollback
+    correctness (pool balance, watermark), txpool handling, sorted-input
+    enforcement, and multi-tier staking.
+  - `rust/shekyl-staking/src/tiers.rs`: 10 edge-case tests including
+    exhaustive invalid tier ID rejection, ordering invariants for yield
+    multiplier and lock blocks, contiguous ID verification, and positive
+    parameter assertions.
+  - `rust/shekyl-staking/fuzz/fuzz_targets/fuzz_claim_reward.rs`: cargo-fuzz
+    target that generates random accrual records and verifies reward
+    computation invariants (no overflow, reward <= pool, weight monotonicity,
+    cumulative bounds).
+
+### 🔄 Changed
+
+- **Universal deferred curve-tree insertion (Decision 15).** All outputs
+  (coinbase, regular, staked) now enter the `pending_tree_leaves` table at
+  creation and drain into the curve tree only after their type-specific
+  maturity height (coinbase: +60, regular: +10, staked: max(lock_until, +10)).
+  The `pending_staked_*` identifiers were renamed to `pending_tree_*` across
+  all database interfaces. The drain journal (`pending_tree_drain`) now stores
+  full 136-byte entries (maturity_height + leaf_data) for exact `pop_block`
+  reversal instead of just a drain count. `pop_block` restores drained leaves
+  to pending and removes the popped block's own pending entries.
+
+- **FCMP_REFERENCE_BLOCK_MIN_AGE reduced to 5 (Decision 14).** With maturity
+  enforced by deferred tree insertion, MIN_AGE now serves only as a reorg
+  safety margin (5 blocks ≈ 10 minutes). The old static_asserts tying
+  MIN_AGE to unlock windows have been removed.
+
+- **Timestamp-based `unlock_time` rejected (Decision 13).** Transactions
+  with `unlock_time >= CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL` (500M) are now
+  rejected in `check_tx_outputs`. Only height-based lock times are accepted.
+
+- **`prune_tx_data` status clarification.** The output-metadata pruning loop
+  in `db_lmdb.cpp` is a plumbing-only stub (`TODO(phase6f)`). The
+  `store_output_metadata`, `get_output_metadata`, and `is_output_pruned`
+  interfaces are live, but the block-iteration pruning loop does not execute.
+
+### 🗑️ Removed
+
+- **Vestigial hard fork constants.** Removed `HF_VERSION_CLSAG` and
+  `HF_VERSION_MIN_V2_COINBASE_TX` from `cryptonote_config.h`. All test
+  references replaced with literal `1`.
+
+- **Legacy tests incompatible with FCMP++ consensus.** Disabled 30+ core
+  and unit tests that relied on Monero-era transaction construction
+  (`RCTTypeBulletproofPlus`, CLSAG ring signatures, v1/v2 transactions):
+  - `tests/core_tests/chaingen_main.cpp`: Disabled `gen_simple_chain_001`,
+    `gen_simple_chain_split_1`, `gen_chain_switch_1`, `gen_ring_signature_1`,
+    `gen_ring_signature_2`, all `txpool_*` tests, all `gen_double_spend_*`
+    tests, `gen_block_reward`, all `gen_bpp_*` Bulletproofs+ tests, and
+    several `gen_tx_*` tests whose setup required valid user transactions.
+    These tests construct transactions via `MAKE_TX`/`construct_tx_rct`
+    which produce `RCTTypeFcmpPlusPlusPqc` stubs with empty `pqc_auths`,
+    rejected by `check_tx_inputs` even in FAKECHAIN mode.
+  - `tests/unit_tests/bulletproofs.cpp`: All three weight tests
+    (`weight_equal`, `weight_more`, `weight_pruned`) prefixed with
+    `DISABLED_` and hex blobs removed. Shekyl's `rctSigBase` serialization
+    rejects any type other than `RCTTypeFcmpPlusPlusPqc` (type 7), so old
+    `RCTTypeBulletproofPlus` (type 6) blobs fail to deserialize.
+  - Re-enabling requires a chaingen FCMP++ transaction generator that
+    produces valid PQC auth signatures and curve-tree membership proofs.
+
+### 🔄 Changed
+
+- **Upstream monero-oxide dependencies renamed to shekyl-oxide.** Updated
+  `shekyl-fcmp/Cargo.toml` and all Rust source files to use the renamed
+  packages from the monero-oxide fork (`monero-fcmp-plus-plus` →
+  `shekyl-fcmp-plus-plus`, `monero-generators` → `shekyl-generators`).
+  `Cargo.lock` advanced from pin `92af05e` to `416d8d1` which includes the
+  complete `monero-oxide/` → `shekyl-oxide/` directory and package rename.
+
+- **`shekyl-fcmp` crate cleanup.** Removed unused `sha2` and `shekyl-crypto-pq`
+  dependencies from `rust/shekyl-fcmp/Cargo.toml`. Renamed the misleading
+  `ProveError::InputCountMismatch` variant to `ProveError::PqcHashMismatch`
+  with a clear `input_index` field indicating which input has a mismatched
+  leaf `h_pqc` vs `pqc_auth` commitment.
+
+### 🐛 Fixed
+
+- **Private member access in pending tree unit tests.** Fixed 18 compile
+  errors in `pending_tree_fuzz.cpp` and 4 in `deferred_insertion.cpp` on
+  macOS CI where calls to `add_pending_tree_leaf`, `drain_pending_tree_leaves`,
+  `add_pending_tree_drain_entry`, `get_pending_tree_drain_entries`,
+  `remove_pending_tree_drain_entries`, and `remove_pending_tree_leaf` were
+  calling private overrides on `BlockchainLMDB`. Changed all test methods
+  to use `BlockchainDB&` references, accessing the public base class interface.
+
+- **CI compile errors across all platforms.** Fixed compilation failures in
+  the new staking and FCMP++ test suites:
+  - `tests/core_tests/staking.cpp`: Added missing `fill_tx_sources`
+    declaration to `chaingen.h` and moved `Blockchain::check_stake_claim_input`
+    from the private section to the public API so core tests can call it
+    without `IN_UNIT_TESTS`.
+  - `tests/unit_tests/fcmp.cpp`: Fixed serialization calls to use
+    `do_serialize(ar, v)` instead of non-existent `v.serialize(ar)` member;
+    replaced `binary_archive<false>(istringstream&)` with the correct
+    `binary_archive<false>(span<const uint8_t>)` constructor; fixed
+    `shekyl_pqc_verify` call to include the required `scheme_id` first
+    argument and corrected parameter order.
+  - `tests/unit_tests/staking.cpp`: Same `binary_archive<false>` constructor
+    fix — replaced `istringstream` with `epee::span<const uint8_t>` in all
+    four serialization round-trip tests.
+  - macOS CI: Added `zstd` to Homebrew dependencies and fixed CMake to use
+    `PkgConfig::ZSTD` imported target instead of bare library name, resolving
+    `ld: library 'zstd' not found` on macOS Homebrew where the library lives
+    in a non-standard path (`/opt/homebrew/lib`).
+
+- **RPC estimate_claim_reward floating-point precision bug.** The
+  `on_estimate_claim_reward` RPC handler used `double`-precision arithmetic
+  for reward estimation, which diverges from the consensus `mul128`/`div128_64`
+  path when `total_weighted_stake > 2^53`. Fixed to use identical 128-bit
+  integer math, ensuring wallet reward estimates always match consensus.
+
+### 🐛 Fixed
+
+- **FCMP++ wallet precompute metadata and input consistency checks.**
+  `transfer_selected_rct` and multisig proof prep now read tree depth from
+  RPC metadata (`tree_depth`) instead of `path_blob[0]`, enforce that all
+  selected inputs share the same reference block/depth snapshot, and reject
+  empty precomputed paths. This fixes silent spend-construction failures.
+
+- **Stake-claim input routing in consensus verification.**
+  `Blockchain::check_tx_inputs` now routes pure `txin_stake_claim`
+  transactions through the claim-specific input checks before generic FCMP++
+  `txin_to_key` validation, preventing incorrect rejection of valid
+  stake-claim transactions that use `RCTTypeFcmpPlusPlusPqc`.
+
+- **Stake-claim reward math overflow defense.** Added a defensive `q_hi != 0`
+  check after `div128_64` in claim reward computation, rejecting impossible
+  overflow states instead of silently truncating.
+
+- **Claim transaction PQC signing correctness/performance.** Removed wallet
+  master-key fallback for claim input signing and now require per-output
+  shared-secret rederivation for all claim inputs. Claim signing keypairs are
+  derived once per input and reused for both `pqc_auths` public key and
+  signature generation.
+
+- **Curve-tree path RPC returns spendable reference block.**
+  `get_curve_tree_path` now returns a `reference_block` at least
+  `FCMP_REFERENCE_BLOCK_MIN_AGE + 1` behind tip, avoiding immediate mempool
+  rejection of freshly built transactions that used a too-recent tip anchor.
+
+- **PQC derivation index correctness and duplicate derivation overhead.**
+  Spend-path and multisig PQC key derivation now use
+  `m_internal_output_index` (matching KEM encapsulation/decapsulation) and
+  derive each per-input keypair once per transaction, reusing it for both
+  `H(pqc_pk)` and signing.
+
+- **Staked-output FCMP++ path precompute filtering.**
+  Wallet precompute/incremental updates now skip still-locked staked outputs
+  (`m_stake_lock_until > current_height`) to avoid daemon path lookup errors.
+
+- **Stake-claim rollback completeness.** `BlockchainDB::remove_transaction`
+  now fully reverses `txin_stake_claim` state on reorg: watermark is restored
+  to its pre-claim value (or removed for first-time claims) and the claimed
+  amount is credited back into the staker reward pool. Previously only the
+  spent key was removed, leaving claim-progress accounting permanently
+  advanced after a reorg.
+
+- **Txpool key-image handling for stake claims.** All six txpool functions
+  that walk transaction inputs (`insert_key_images`,
+  `remove_transaction_keyimages`, `have_tx_keyimges_as_spent`,
+  `have_key_images`, `append_key_images`, `mark_double_spend`) now handle
+  `txin_stake_claim` inputs alongside `txin_to_key`. Previously they used
+  `CHECKED_GET_SPECIFIC_VARIANT(..., txin_to_key, ...)` which caused
+  immediate false-return on any stake-claim input, breaking mempool
+  bookkeeping for claim transactions.
+
+- **`remove_transaction_keyimages` no longer returns early on error.**
+  The function now continues removing remaining key images instead of
+  aborting at the first mismatch, eliminating the partial-cleanup semantics
+  noted by the long-standing FIXME.
+
+- **Core helper support for `txin_stake_claim`.** `get_inputs_money_amount`
+  and `check_inputs_overflow` now handle both `txin_to_key` and
+  `txin_stake_claim` input variants instead of failing on the latter. These
+  are called unconditionally for all transactions (via `check_money_overflow`),
+  so the old hard-cast to `txin_to_key` would reject any transaction
+  containing a stake claim.
+
+### 🔒 Security
+
+- **FFI buffer zeroization before free.** `shekyl_buffer_free` now wipes
+  buffer contents prior to deallocation, reducing secret-key residue risk in
+  allocator-managed memory.
+
+- **Wallet KEM key management fix.** `generate_pqc_key_material()` now
+  generates `HybridX25519MlKem` KEM keypairs via `shekyl_kem_keypair_generate()`
+  instead of `HybridEd25519MlDsa` signing keypairs. The wallet-level PQC
+  keys (`m_pqc_public_key` / `m_pqc_secret_key`) are encapsulation/decapsulation
+  keys; per-output ML-DSA-65 signing keys are always derived from the KEM
+  shared secret at spend time.
+
+- **Full hybrid ciphertext storage in tx_extra tag 0x06.** All KEM
+  encapsulation sites (coinbase, claim, regular transfers) now store the
+  complete 1120-byte hybrid ciphertext (`x25519_ephemeral_pk[32] || ml_kem_ct[1088]`)
+  instead of only the ML-KEM portion. This enables correct hybrid
+  decapsulation during wallet scanning and seed restore.
+
+### ✨ Added
+
+- **FCMP++ wallet transaction construction (Phase 5).** `transfer_selected_rct`
+  now builds transactions using full-chain membership proofs instead of ring
+  signatures:
+  - Inputs contain only the real output (no decoy selection).
+  - `genRctFcmpPlusPlus` generates the combined Bulletproofs+ and FCMP++
+    membership proof.
+  - Per-input PQC auth signatures use ML-DSA-65 keypairs derived from the
+    KEM shared secret and output index.
+  - `construct_tx_with_tx_key` adds KEM encapsulation (tag 0x06) and
+    `H(pqc_pk)` leaf hashes (tag 0x07) for each output, and skips
+    wallet-level PQC signing.
+
+- **KEM decapsulation during wallet scanning.** `process_new_transaction`
+  now extracts hybrid KEM ciphertexts from `tx_extra` tag 0x06, calls
+  `shekyl_kem_decapsulate` with the wallet's KEM secret keys, and stores
+  the resulting 64-byte combined shared secret in `transfer_details::m_combined_shared_secret`.
+  This enables per-output PQC key derivation at spend time.
+
+- **FCMP++ fee estimation.** `estimate_rct_tx_size` now accounts for the
+  FCMP++ membership proof size (`shekyl_fcmp_proof_len`), per-input PQC
+  auth envelopes (~5400 bytes each), and per-output KEM ciphertexts and
+  leaf hashes.
+
+- **GUI wallet QR code.** Receive page now renders a real QR code encoding
+  the full FCMP++ Bech32m address via `qrcode.react`.
+
+- **GUI wallet fee preview.** Send page shows an estimated transaction fee
+  before submission, debounced as the user types.
+
+### 🗑️ Removed
+
+- **CLSAG device interface methods.** Removed `clsag_prepare`, `clsag_hash`,
+  and `clsag_sign` virtual methods from `device.hpp` and all implementations
+  (`device_default.cpp`, `device_ledger.cpp`). Shekyl never supported CLSAG;
+  the device interface now only exposes FCMP++ methods.
+
+- **`get_outs` / `get_outs.bin` RPC endpoints.** Removed the ring member
+  fetching endpoints from the C++ daemon (`core_rpc_server`), the FFI dispatch
+  tables (`core_rpc_ffi.cpp`), and the Rust daemon RPC (`shekyl-daemon-rpc`).
+  FCMP++ uses full-chain membership proofs; there is no decoy selection.
+
+- **Dead hard fork constants.** Removed `HF_VERSION_MIN_MIXIN_4/6/10/15`,
+  `HF_VERSION_SAME_MIXIN`, `HF_VERSION_ENFORCE_MIN_AGE`,
+  `HF_VERSION_EFFECTIVE_SHORT_TERM_MEDIAN_IN_PENALTY`,
+  `HF_VERSION_REJECT_SIGS_IN_COINBASE`, `HF_VERSION_ENFORCE_RCT`,
+  `HF_VERSION_DETERMINISTIC_UNLOCK_TIME` from `cryptonote_config.h`. These
+  were defined but never referenced in production code. `HF_VERSION_CLSAG`
+  and `HF_VERSION_MIN_V2_COINBASE_TX` are retained for test compilation
+  until Phase 7 rewrites the legacy tests.
+
+### ✨ Added
+
+- **Zstd compression for Levin P2P relay (Phase 6e).** P2P payloads above
+  256 bytes are transparently compressed with zstd (level 1) before relay.
+  A new `LEVIN_PACKET_COMPRESSED` flag (0x10) in the Levin header marks
+  compressed frames. Peers negotiate compression via
+  `P2P_SUPPORT_FLAG_ZSTD_COMPRESSION` (0x02) in the handshake support flags.
+  Reduces relay bandwidth by ~10-20% for FCMP++ transactions, especially
+  important for Tor/I2P connections. Compression is optional at compile time
+  (requires libzstd); decompression always succeeds if the flag is set.
+
+### 📚 Documentation
+
+- **Updated `DAEMON_RPC_RUST.md`.** Fixed stale references to `get_outs.bin`
+  and `get_curve_tree_root`; corrected endpoint counts and cutover test steps.
+
+### 🐛 Fixed
+
+- **`rct::key` missing `operator!=`.** Added `operator!=` to the `key`
+  struct in `rctTypes.h`. The operator was present for cross-type
+  comparisons (`rct::key` vs `crypto::public_key`) but not for
+  `rct::key` vs `rct::key`, causing compilation failures on all
+  platforms when comparing pseudo-outs to expected zero-commitments in
+  the stake claim verification path.
+
+- **MSVC `binary_archive` constructor mismatch.** Fixed `wallet2.cpp`
+  to use `epee::strspan<std::uint8_t>` instead of `std::istringstream`
+  for constructing `binary_archive<false>`, which MSVC could not resolve.
+
+- **Memory leak on exception in PQC auth signing.** Added RAII scope
+  guard for `ShekylPqcKeypair` buffers in `transfer_selected_rct`
+  Phase C, ensuring Rust-allocated key material is freed even if
+  `THROW_WALLET_EXCEPTION_IF` throws mid-loop.
+
+- **Secret key material not wiped on KEM decapsulation failure.** The
+  stack buffer in `process_new_transaction` KEM decapsulation is now
+  wiped unconditionally (success or failure), preventing partial key
+  material from lingering on the stack.
+
+- **Shadowed `tx_extra_fields` variable in KEM decapsulation.** Removed
+  redundant inner `tx_extra_fields` reference that shadowed the outer
+  one in `process_new_transaction`, using the already-resolved outer
+  reference instead.
+
+### 🔄 Changed
+
+- **Decoy selection functions are dead code.** `get_outs`,
+  `tx_add_fake_output`, and `light_wallet_get_outs` in `wallet2.cpp` are
+  no longer called from the active transfer path. They remain in the
+  codebase for reference and will be removed in a follow-up cleanup.
+
+- **Claim transaction indistinguishability (Phase 4 — CRITICAL).** Rewrote
+  `wallet2::create_claim_transaction()` to produce privacy-preserving claim
+  transactions that blend into the anonymity set:
+  - Uses `RCTTypeFcmpPlusPlusPqc` with Bulletproofs+ range proofs instead
+    of `RCTTypeNull` with plaintext amounts.
+  - Adds a dummy change output (amount = 0) to match the standard 2-output
+    transaction structure, preventing structural fingerprinting.
+  - Performs hybrid KEM derivation (X25519 + ML-KEM-768) via
+    `shekyl_fcmp_derive_pqc_keypair()` for per-output PQC keys instead of
+    reusing the wallet master PQC key.
+  - Embeds ML-KEM ciphertexts in `tx_extra` under tag `0x06` and
+    `H(pqc_pk)` leaf hashes under new tag `0x07`.
+  - Signs with per-output KEM-derived PQC keys, not the wallet-level key.
+  - Sets deterministic pseudo-outs (`zeroCommit(claim_amount)`) for each
+    stake claim input to satisfy the Bulletproofs+ balance check.
+
+- **Consensus rejects `RCTTypeNull` for non-coinbase v3 transactions.**
+  `check_tx_inputs` now enforces that only coinbase (`txin_gen`) may use
+  `RCTTypeNull`. All other v3 transactions (including stake claims) must
+  use `RCTTypeFcmpPlusPlusPqc` with confidential amounts. Claim
+  transactions are validated within the FCMP++ handler with their own
+  sub-path that verifies pseudo-out determinism, PQC ownership, and pool
+  balance while skipping the membership proof (which is not applicable to
+  `txin_stake_claim` inputs).
+
+### ✨ Added
+
+- **`TX_EXTRA_TAG_PQC_LEAF_HASHES` (`0x07`).** New `tx_extra` field
+  (`tx_extra_pqc_leaf_hashes`) stores per-output `H(pqc_pk)` values —
+  the 32-byte Blake2b-512 hashes of each output's derived ML-DSA-65
+  public key. Used by curve tree insertion to commit the correct PQC
+  ownership hash to each leaf instead of a zero placeholder.
+
+- **Curve tree leaves use actual `H(pqc_pk)` from `tx_extra`.** The
+  `collect_outputs` / `make_leaf` path in `blockchain_db.cpp` now extracts
+  `H(pqc_pk)` values from the `0x07` tag, replacing the zero placeholder
+  that was previously committed to the 4th leaf scalar. This enables the
+  PQC ownership cross-check for stake claim verification.
+
+- **Coinbase transactions emit `H(pqc_pk)` leaf hashes.** `construct_miner_tx`
+  now derives per-output PQC keypairs via KEM shared secrets and includes
+  their `H(pqc_pk)` values in the `0x07` `tx_extra` field alongside the
+  existing KEM ciphertexts in `0x06`.
+
+### 🔒 Security
+
+- **Integer-only stake reward computation.** Replaced floating-point
+  arithmetic (`(double)total_reward * weight / total_weighted_stake`) with
+  128-bit integer math (`mul128`/`div128_64`) in `check_stake_claim_input`
+  to eliminate rounding errors that could cause determinism mismatches
+  across platforms.
+
+- **Batch pool balance validation for stake claims.** Moved the staker
+  pool balance check from per-claim (`check_stake_claim_input`) to a
+  batch check in `check_tx_inputs` that sums all claim amounts first.
+  Prevents multiple claims in the same block from independently passing
+  the balance check and overdrawing the pool.
+
+- **PQC ownership cross-check on stake claims.** Each `txin_stake_claim`
+  now verifies that the `H(pqc_pk)` stored in the curve tree leaf (bytes
+  96–128) matches `shekyl_fcmp_pqc_leaf_hash(pqc_auths[i].hybrid_public_key)`,
+  preventing reward claims for outputs the claimer does not own the PQC
+  key for.
+
+### 🐛 Fixed
+
+- **Stake claim key image cleanup on reorg.** `remove_transaction` in
+  `blockchain_db.cpp` now handles `txin_stake_claim` key images in
+  addition to `txin_to_key`, preventing stale key images from persisting
+  after block pops.
+
+### 🔄 Changed
+
+- **Sorted input enforcement extended to stake claims.** The
+  sorted-inputs check in `check_tx_inputs` now covers both `txin_to_key`
+  and `txin_stake_claim` key images, ensuring consistent ordering rules
+  across all input types.
+
+- **Third-party headers treated as SYSTEM includes.** `external/`, `external/rapidjson`,
+  `external/easylogging++`, and `external/supercop` are now `-isystem` in CMake,
+  suppressing `-Wsuggest-override` and other warnings from third-party code while
+  keeping strict warnings for first-party code.
+
+### 🗑️ Removed
+
+- **Dead `check_ring_signature` function.** Removed unused ring signature
+  verification from `blockchain.cpp` and its declaration from
+  `blockchain.h`. Shekyl uses FCMP++ from genesis; ring signatures are
+  never validated.
+
+- **Dead `expand_transaction_2` function.** Removed the no-op transaction
+  expansion function from `blockchain.cpp` and its declaration from
+  `blockchain.h`. FCMP++ does not use mixRing expansion.
+
+- **Dropped `serde_json` dev-dependency from `shekyl-fcmp`.** Replaced the JSON
+  round-trip test with a byte-level serialization check, reducing the dev-dep
+  surface.
+
+### 📚 Documentation
+
+- Synced `docs/FCMP_PLUS_PLUS.md` curve-tree text with consensus: outputs are
+  indexed at creation; maturity is enforced via `referenceBlock` and other
+  rules, not by delaying leaf insertion.
+- Clarified `docs/POST_QUANTUM_CRYPTOGRAPHY.md` to use `pqc_auths` (per-input)
+  terminology consistently.
+- Documented mempool FCMP verification-cache id: `compute_fcmp_verification_hash`
+  binds proof + `referenceBlock` + key images (comment in `blockchain.cpp`).
+- Noted the monero-oxide commit pin in `rust/shekyl-fcmp/Cargo.toml` comments
+  (lockfile remains authoritative).
+- Updated `docs/STAKER_REWARD_DISBURSEMENT.md` with integer arithmetic, batch
+  pool check, PQC cross-check, and sorted input consensus rules.
+
+### ✨ Added
+
+- **Block-inclusion FCMP++ cache fast path.** When a transaction was previously
+  verified in the mempool and arrives in a block, `check_tx_inputs` skips the
+  expensive `shekyl_fcmp_verify` FFI call (~35ms/input) while still running all
+  structural checks (referenceBlock, depth, key images, PQC auth).
+
+- **`construct_leaf` now accepts PQC key hash parameter.** The Rust FFI
+  function `shekyl_construct_curve_tree_leaf` takes a 4th `h_pqc_ptr` argument
+  (32 bytes) to set the 4th leaf scalar.  Callers pass zero bytes until
+  per-output PQC commitments are wired in Phase 3.
+
+- **Deferred staked leaf insertion infrastructure.**
+  Added `pending_staked_leaves` (LMDB DUPSORT/DUPFIXED table keyed by
+  `lock_until_height` with 128-byte leaf values) and `pending_staked_drain`
+  (block_height → drain count) tables to the blockchain database layer.
+  Five new methods on `BlockchainDB`: `add_pending_staked_leaf`,
+  `drain_pending_staked_leaves`, `set_pending_staked_drain_count`,
+  `get_pending_staked_drain_count`, and `remove_pending_staked_drain_count`.
+  This enables staked outputs whose `lock_until > block_height` to be parked
+  in a pending table and batch-inserted into the curve tree when they mature.
+
+- **Comprehensive FCMP++ test suite and fuzz targets (Phase 7).**
+  Added 6 `cargo-fuzz` targets across `rust/shekyl-fcmp/fuzz/` (proof
+  deserialization, curve tree leaf hashing, block header tree root mismatch)
+  and `rust/shekyl-crypto-pq/fuzz/` (Bech32m address decoding, KEM
+  decapsulation with corrupted ciphertexts). Extended Rust unit tests in
+  `proof.rs`, `tree.rs`, `leaf.rs`, `kem.rs`, `address.rs`, and
+  `derivation.rs` covering prove/verify round-trips, hash grow/trim inverse
+  properties, boundary values, and cross-crate consistency. Extended C++ unit
+  tests in `tests/unit_tests/fcmp.cpp` with RCTTypeFcmpPlusPlusPqc
+  serialization round-trip, key image y-normalization, referenceBlock
+  staleness constants, and empty proof rejection. Added PQC rederivation
+  criterion benchmark (`rust/shekyl-crypto-pq/benches/pqc_rederivation.rs`)
+  targeting < 100ms per output for the full ML-KEM-768 decapsulation +
+  HKDF-SHA-512 + ML-DSA-65 keygen pipeline.
+
+- **Stressnet tooling for FCMP++ pre-audit gate (Phase 7.7).**
+  Added `tests/stressnet/` with configuration, load generator, and monitoring
+  scripts for a 4-week sustained-load testnet. The stressnet exercises curve
+  tree growth, verification caching, wallet restore correctness, pruned vs.
+  full node storage, staking lifecycle, and block validation latency under
+  near-block-weight-limit load. Includes `config.yaml` with load profiles,
+  `load_generator.py` for synthetic transaction submission, and `monitor.py`
+  for real-time metric collection, consensus checking, and daily report
+  generation.
+
+- **Security audit scope document (Phase 9).**
+  Added `docs/AUDIT_SCOPE.md` defining the scope for a third-party security
+  review of the 4-scalar leaf circuit modification. Covers soundness,
+  zero-knowledge, and completeness verification for the `H(pqc_pk)` extension,
+  Shekyl fork modifications to monero-fcmp-plus-plus, PQC commitment binding,
+  and the FFI verification boundary. Includes materials list, auditor guidance
+  questions, success criteria, and timeline.
+
+- **Mainnet gate: stressnet and audit prerequisites in release checklist.**
+  Updated `docs/RELEASE_CHECKLIST.md` with "Stressnet stable for 4 consecutive
+  weeks" and "4-scalar leaf circuit audit completed" as hard prerequisites
+  for mainnet launch.
+
+### 🔄 Changed
+
+- **Renamed `src/ringct/` to `src/fcmp/` for naming consistency.**
+  Shekyl does not use ring signatures; the directory now reflects the actual
+  FCMP++ confidential transaction system.  CMake targets renamed from
+  `ringct`/`ringct_basic` to `fcmp`/`fcmp_basic`.  All `#include "ringct/..."`
+  paths updated across 44 source and test files.  Log categories, user-facing
+  strings ("RingCT" → "FCMP"), JSON keys, and documentation updated.
+  The `rct::` namespace is preserved for now as a separate future rename.
+
+- **Unified coinbase transaction version to v3.**
+  `construct_miner_tx` and `build_genesis_coinbase_from_destinations` now emit
+  `tx.version = 3`, matching regular FCMP++ transactions.  All `miner_tx &&
+  tx.version == 2` checks have been widened to `>= 2` across `blockchain_db`,
+  `blockchain`, `wallet2`, and test infrastructure.  The `pqc_auths`
+  serialization gate (`!txin_gen`) already excluded coinbase, so v3 coinbase
+  serializes identically to v2 minus the version byte.
+
+### 🐛 Fixed
+
+- **Fixed wallet API compilation errors after ring-signature removal.**
+  `wallet/api/wallet.cpp` still referenced the undefined `fake_outs_count`
+  variable and called `estimate_fee` with the old 12-argument signature.
+  Replaced `fake_outs_count` with `0` (FCMP++ has no decoys) and updated
+  `estimateTransactionFee` to use the simplified 8-argument `estimate_fee`
+  signature with hardcoded `use_per_byte_fee=true`, `use_rct=true`,
+  `use_view_tags=true`.
+
+- **Fixed CI build failure from removed legacy RCT types in test files.**
+  Stripped all references to removed `rct::Bulletproof`, `rct::RCTConfig`,
+  `rct::RangeProofType`, `rct::RCTTypeBulletproofPlus`, `rct::clsag`,
+  `rct::proveRctCLSAGSimple`/`verRctCLSAGSimple`, and `rct::genRctSimple`
+  from: `chaingen.h`/`.cpp`, `bulletproof_plus.cpp`/`.h`, `chain_switch_1.cpp`,
+  `wallet_tools.h`/`.cpp`, `bulletproofs.cpp` (unit), `ringct.cpp` (unit),
+  `serialization.cpp` (unit), `ver_rct_non_semantics_simple_cached.cpp`,
+  `json_serialization.cpp`, `fuzz/bulletproof.cpp`, and all performance test
+  headers.  Removed legacy-only test cases; updated shared test helpers to drop
+  `RangeProofType`/`bp_version` parameters.
+
+### 🗑️ Removed
+
+- **Dead verification cache code (`verRctNonSemanticsSimple`, `ver_rct_non_semantics_simple_cached`).**
+  Removed the stub `verRctNonSemanticsSimple` from `rctSigs.cpp/.h` (returned `true`
+  unconditionally), the `ver_rct_non_semantics_simple_cached` wrapper and its
+  `ver_rct_non_sem` helper from `tx_verification_utils.cpp/.h`, the unused
+  `rct_ver_cache_t` type alias and `m_rct_ver_cache` member from `Blockchain`,
+  and the dead `RCT_CACHE_TYPE` constant from `check_tx_inputs`.  Real FCMP++
+  verification lives in `check_tx_inputs` (blockchain.cpp) and the mempool
+  uses `compute_fcmp_verification_hash` for caching.
+
+### 🔒 Security
+
+- **CRITICAL: PQC signed payload now binds to prunable FCMP++ data (Phase 4c).**
+  `get_transaction_signed_payload` now includes `H(serialize(RctSigPrunable))`
+  in the signed payload, binding PQC signatures to the FCMP++ proof, pseudoOuts,
+  curve_trees_tree_depth, and Bulletproofs+.  Without this, an attacker could
+  substitute different prunable data without invalidating PQC signatures,
+  breaking the dual-layer security model.
+
+- **CRITICAL: Wired stake claim validation in `check_tx_inputs` (Phase 4e audit fix).**
+  The non-FAKECHAIN gate in `check_tx_inputs` rejected all `RCTTypeNull`
+  transactions, which includes pure stake-claim txs.  The gate now allows
+  `RCTTypeNull` transactions through when all inputs are `txin_stake_claim`.
+  Additionally, the `RCTTypeNull` switch case now calls `check_stake_claim_input`
+  for each claim input and checks key image double-spend — previously it
+  `break`ed without any validation.
+
+- **HIGH: Bound all inputs' H(pqc_pk) hashes into PQC signed payload.**
+  `get_transaction_signed_payload` now appends `H(pqc_pk_0) || ... || H(pqc_pk_{N-1})`
+  after the per-input header blob, preventing key-substitution attacks where an
+  attacker replaces one input's PQC key without invalidating other signatures.
+
+- **MEDIUM: Stake claim curve tree leaf verification (Phase 4e).**
+  `check_stake_claim_input` now verifies the staked output's leaf is present
+  in the curve tree by checking `staked_output_index < get_curve_tree_leaf_count()`
+  and reading the leaf with `get_curve_tree_leaf()`.  Previously, only the
+  `lock_until` check was performed, which didn't guarantee the leaf had been
+  inserted into the tree.
+
+- **MEDIUM: PQC `auth_version` and `flags` consensus enforcement.**
+  `verify_transaction_pqc_auth` now rejects `auth_version != 1` and
+  `flags != 0`, enforcing spec steps 6a/6c. Previously these fields were
+  serialized and signed over but never validated.
+
+- **LOW: Single-signer `hybrid_public_key` size enforcement.**
+  `verify_transaction_pqc_auth` now verifies single-signer key blobs are
+  exactly `HYBRID_SINGLE_KEY_LEN` (1996 bytes). Previously only multisig
+  keys had size bounds checks; single-signer keys relied solely on the FFI
+  call to reject malformed keys.
+
+- **LOW: Added deserialization size bounds for `pqc_authentication` blobs.**
+  `hybrid_public_key` and `hybrid_signature` vectors are now rejected during
+  deserialization if they exceed `PQC_MAX_PUBLIC_KEY_BLOB` or
+  `PQC_MAX_SIGNATURE_BLOB`, preventing memory-exhaustion attacks via
+  oversized PQC fields.
+
+### 🐛 Fixed
+
+- **HIGH: Fixed `pop_block()` off-by-one for staked-output curve tree removal.**
+  The height used for staked-output eligibility checking was captured *after*
+  `remove_block()`, using the post-pop height instead of the removed block's
+  height.  This caused a mismatch with `add_block()`'s logic: outputs added at
+  the exact lock boundary were inserted during add but not removed during pop,
+  leaving orphaned leaves in the curve tree.
+
+- **HIGH: Fixed `pseudoOuts` serialization mismatch in generic `rctSigBase`.**
+  The generic `BEGIN_SERIALIZE_OBJECT()` path in `rctSigBase` unconditionally
+  included `pseudoOuts`, even for `RCTTypeFcmpPlusPlusPqc` where pseudo-outs
+  live in the prunable section.  Now gated with
+  `if (type != RCTTypeFcmpPlusPlusPqc)` to match the custom serializer.
+
+- **MEDIUM: `get_curve_tree_path` RPC now fails on missing layer hashes.**
+  Previously, a failed `get_curve_tree_layer_hash()` silently inserted zeros
+  into the proof path, potentially generating invalid proofs from inconsistent
+  DB state.  Now returns `CORE_RPC_ERROR_CODE_INTERNAL_ERROR`.
+
+
+
+- **CRITICAL: Fixed incorrect existing_child in internal layer hash propagation**
+  (`grow_curve_tree`).  When updating an existing child chunk's hash, the
+  parent's Pedersen commitment was computed with `existing_child = 0` instead of
+  the previous cycle-scalar.  This produced wrong chunk hashes for any block
+  that updated (rather than created) a child chunk.  The fix tracks both old and
+  new hashes through `updated_chunk_t` and passes the previous cycle-scalar to
+  `hash_grow`.
+
+- **CRITICAL: Replaced O(N) `trim_curve_tree` with incremental `hash_trim`.**
+  Reorgs previously read all remaining leaves, cleared the tree, and rebuilt
+  from scratch — a liveness risk at scale.  The new implementation uses
+  `hash_trim_selene`/`hash_trim_helios` FFI to surgically update only the
+  affected chunks, then propagates the old→new deltas up through internal layers.
+  Complexity is now O(removed × log N).
+
+- **CRITICAL: Enforced output maturity via `FCMP_REFERENCE_BLOCK_MIN_AGE`.**
+  Outputs enter the curve tree at creation time (maximising the anonymity set).
+  Maturity is enforced at spending time by requiring the reference block to be
+  at least `CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW` (60) blocks behind the tip.
+  Added `static_assert`s in `cryptonote_config.h` to prevent regression.
+
+- **HIGH: Validated meta reads in `save_curve_tree_checkpoint`.**  The function
+  now checks that root, depth, and leaf_count were all successfully read from
+  meta before storing a checkpoint.  If any value is missing or leaf_count is 0,
+  the checkpoint is skipped with a log warning instead of storing a corrupt
+  zero-valued checkpoint.
+
+### 🔄 Changed
+
+- **Consensus: `curve_trees_tree_depth` validation now accepts `<= current`.**
+  The referenceBlock's tree may have fewer layers than the current tip (depth
+  is monotonically non-decreasing).  The strict `!=` check was replaced with a
+  range check `(0, current_depth]`, and the FCMP++ proof verifier provides the
+  authoritative depth validation.
+
+- **Consensus: Removed ring-based validation path from `check_tx_inputs`.**
+  Shekyl starts at genesis with FCMP++; the legacy ring-signature per-input
+  validation is unreachable dead code.  The `else` branch now immediately
+  rejects non-FCMP++ transactions with a clear error message.
+
+- **Coinbase KEM: Added warning when miner address lacks PQC public key.**
+  If a miner's address has no PQC key at the FCMP++ hard fork, a warning is
+  logged noting that the output will have `H(pqc_pk) = 0` in the curve tree —
+  a distinguishable pattern.
+
+- **RPC: Replaced hardcoded chunk widths with FFI calls.**
+  `get_curve_tree_path` now calls `shekyl_curve_tree_selene_chunk_width()` and
+  `shekyl_curve_tree_helios_chunk_width()` instead of using static constants.
+
+- **RPC: Added `reference_height` and `leaf_count` to `get_curve_tree_path`
+  response.**  Wallets can now verify response freshness and detect stale paths
+  without parsing the reference block hash.
+
+- **RPC: Added `MAX_OUTPUTS_PER_RPC_REQUEST` (64) rate limit** to
+  `get_curve_tree_path` to prevent abuse from unbounded requests.
+
+### ✨ Added
+
+- **RPC: `get_curve_tree_info` endpoint** returns root hash, depth, leaf count,
+  and chain height for the current curve tree state.
+
+- **RPC: `get_curve_tree_checkpoint` endpoint** retrieves a stored checkpoint
+  (root, depth, leaf_count) at a given block height, needed for fast-sync.
+
+### 📚 Documentation
+
+- Documented `verRctNonSemanticsSimple` stub status: the FCMP++ membership
+  proof is verified in the main consensus path (`check_tx_inputs`), not in the
+  verification-caching path.  Added TODO for Phase 5 unification.
+- ~~Documented coinbase `tx.version = 2` rationale~~ — superseded: coinbase
+  is now version 3, unified with regular transactions.
+- Documented LMDB post-delete cursor contract (`MDB_GET_CURRENT` after
+  `mdb_cursor_del` returns the next item) in pruning and GC loops.
+- Added `ct_layer_chunk_key` bit-layout comment explaining the 8-bit layer /
+  56-bit chunk index encoding for LMDB integer keys.
+- Documented `construct_leaf` zero 4th scalar (H(pqc_pk)) and the tree rebuild
+  requirement when PQC per-output keys are activated.
+- Documented depth tracking semantics (root layer index, not layer count) and
+  root detection invariant in `grow_curve_tree`.
+- Added TODO for async/batched checkpoint+pruning in `add_block`.
+- Documented `get_curve_tree_root` empty-tree return semantics (returns
+  `hash_init`, callers should check `leaf_count`).
+
+### 🗑️ Removed
+
+- **Legacy RCT and mixin references stripped from wallet layer.** Completed
+  the wallet-side refactor removing all references to legacy ring sizes,
+  `adjust_mixin`, `default_mixin`, `m_default_mixin`, `RCTConfig`, and
+  mixin-count parameters:
+  - `wallet2.h`: Removed `estimate_fee` mixin/bulletproof/clsag params,
+    `adjust_mixin()`, `default_mixin()` getter/setter, `m_default_mixin`
+    member, `rct_config` from `pending_tx` and `transfer_selected_rct`.
+  - `wallet2.cpp`: Removed mixin from `estimate_rct_tx_size`,
+    `estimate_tx_size`, `estimate_tx_weight`, `estimate_fee` signatures
+    and all call sites. Removed `adjust_mixin()` definition, JSON
+    serialization of `default_mixin`, constructor initialization. Removed
+    `const bool clsag/bulletproof/bulletproof_plus = true` patterns.
+  - `wallet_errors.h`: Removed `mixin_count` field from
+    `not_enough_outs_to_mix` error struct.
+  - `wallet2_ffi.cpp`: Replaced `adjust_mixin` calls with constant `0`.
+  - `wallet_rpc_server.cpp`: Replaced `adjust_mixin` calls with constant `0`.
+  - `wallet2_api.h`, `wallet.h`, `wallet.cpp`: Removed `mixin_count`
+    parameter from `createTransaction` and `createTransactionMultDest`.
+  - `unsigned_transaction.cpp`: Simplified `mixin()` and `minMixinCount()`
+    to always return 0 (FCMP++ has no explicit mixin).
+  - `simplewallet.cpp`: Removed ring-size parsing, `adjust_mixin` calls,
+    and `default_mixin` display. All fake_outs_count set to 0.
+- **Legacy RCT references stripped from all src/ files.** Removed all
+  remaining references to CLSAG, legacy RCT types, `RCTConfig`, `mixRing`,
+  and `low_mixin` from device drivers, Trezor protocol, RPC handlers,
+  blockchain verification, transaction utilities, wallet, and serialization:
+  - `device_ledger.cpp`: Removed `INS_CLSAG` define, legacy type branches
+    in `mlsag_prehash`, replaced `clsag_prepare`/`clsag_hash`/`clsag_sign`
+    with FCMP++ TODO stubs.
+  - `protocol.cpp`/`protocol.hpp` (Trezor): Removed `rct::Bulletproof`
+    variant, `is_simple()`/`is_req_bulletproof()`/`is_bulletproof()`/
+    `is_clsag()` helpers, `mixRing` resize, CLSAG deserialization in
+    `step_final_ack`. Added `is_fcmp_pp()` helper.
+  - `core_rpc_server.cpp`/`core_rpc_server_commands_defs.h`: Removed
+    `low_mixin` field and its assignment from send_raw_tx response.
+  - `daemon_handler.cpp`: Removed `m_low_mixin` error branch.
+  - `verification_context.h`: Removed `m_low_mixin` from
+    `tx_verification_context`.
+  - `blockchain.cpp`: Replaced legacy mixin-checking branch with a reject
+    gate for non-FCMP++ transactions (Shekyl only supports FCMP++).
+  - `cryptonote_tx_utils.h`/`.cpp`: Removed `rct::RCTConfig` parameter
+    from `construct_tx_with_tx_key` and `construct_tx_and_get_tx_key`.
+    Replaced `genRctSimple` call with FCMP++ proof generation stub.
+    Removed `mixRing` construction.
+  - `cryptonote_format_utils.cpp`: Removed `is_rct_bulletproof`/
+    `is_rct_clsag` calls, simplified BP+ weight calculations.
+  - `cryptonote_boost_serialization.h`: Removed serialization functions
+    for `rct::rangeSig`, `rct::Bulletproof`, `rct::mgSig`, `rct::clsag`,
+    `rct::RCTConfig`, `rct::boroSig`. Simplified `rctSigBase` and
+    `rctSigPrunable` serialization to only handle FCMP++.
+  - `tx_verification_utils.h`/`.cpp`: Removed `mix_ring` parameter from
+    `ver_rct_non_semantics_simple_cached`. Removed `expand_tx_and_ver_rct_non_sem`,
+    `calc_tx_mixring_hash`, and `is_canonical_bulletproof_layout`.
+  - `json_object.h`/`.cpp`: Removed JSON serialization for `rct::rangeSig`,
+    `rct::Bulletproof`, `rct::boroSig`, `rct::mgSig`, `rct::clsag`.
+    Removed legacy prunable fields from `rctSig` JSON output.
+  - `wallet2.h`: Removed `rct_config` field from `tx_construction_data`
+    serialization and the version-gated `RangeProofPaddedBulletproof`
+    defaults in Boost serialization.
+  - `wallet2.cpp`: Fixed `construct_tx_and_get_tx_key` call site that
+    still passed `{}` where the removed `rct_config` parameter was.
+  - `bulletproofs.h`/`.cc`: Gutted non-plus Bulletproof PROVE/VERIFY
+    functions — the `rct::Bulletproof` struct was already removed from
+    `rctTypes.h`, making these 1000+ lines of dead code.
+- **Legacy RCT types stripped from core.** Removed `RCTTypeFull` (1),
+  `RCTTypeSimple` (2), `RCTTypeBulletproof` (3), `RCTTypeBulletproof2` (4),
+  `RCTTypeCLSAG` (5), and `RCTTypeBulletproofPlus` (6) from the enum.
+  Only `RCTTypeNull` (0) and `RCTTypeFcmpPlusPlusPqc` (7) remain.
+- Deleted structs: `mgSig`, `clsag`, `rangeSig`, `Bulletproof` (non-plus),
+  `RangeProofType` enum, and `RCTConfig`.
+- Removed `mixRing` member from `rctSigBase` and `mixin` parameter from
+  `serialize_rctsig_prunable`.
+- Removed from `rctSigPrunable`: `rangeSigs`, `bulletproofs` (non-plus),
+  `MGs`, `CLSAGs` vectors and their serialization blocks.
+- Removed functions: `CLSAG_Gen`, `proveRctCLSAGSimple`,
+  `verRctCLSAGSimple`, `genRctSimple` (both overloads),
+  `populateFromBlockchainSimple`, `getKeyFromBlockchain`,
+  `is_rct_simple`, `is_rct_bulletproof`, `is_rct_borromean`, `is_rct_clsag`,
+  `proveRangeBulletproof`, `verBulletproof`, `make_dummy_bulletproof`,
+  `make_dummy_clsag`.
+- Removed `HASH_KEY_CLSAG_ROUND`, `HASH_KEY_CLSAG_AGG_0`,
+  `HASH_KEY_CLSAG_AGG_1`, and `HASH_KEY_TXHASH_AND_MIXRING` from
+  `cryptonote_config.h`.
+- Removed VARIANT_TAG entries for `mgSig`, `rangeSig`, `Bulletproof`,
+  and `clsag`.
+- Simplified `get_pre_mlsag_hash` to only handle `RCTTypeFcmpPlusPlusPqc`.
+- Simplified `verRctSemanticsSimple` and `verRctNonSemanticsSimple` to
+  only accept FCMP++ transactions (no CLSAG/ring verification path).
+
+### 🔄 Changed
+
+- **FCMP++ Phase 3: Per-input PQC authorization vector.** Replaced
+  `std::optional<pqc_authentication> pqc_auth` with
+  `std::vector<pqc_authentication> pqc_auths` on `cryptonote::transaction`
+  (one `pqc_authentication` per input). Updated binary, Boost, and JSON
+  serialization, transaction hash (`cn_fast_hash` of serialized
+  `pqc_auths`), per-input PQC verification, and wallet/RPC signing paths.
+
+### ✨ Added
+
+- **FCMP++ (Full-Chain Membership Proofs): complete implementation across
+  Phases 1–6.**
+  Shekyl replaces ring signatures (CLSAG) with FCMP++ from genesis. Every
+  spend proves membership in the entire UTXO set via a Helios/Selene curve
+  tree, giving every transaction full-chain anonymity instead of 16-decoy
+  ring ambiguity. Combined with hybrid post-quantum spend authorization
+  (Ed25519 + ML-DSA-65), this makes Shekyl the first cryptocurrency to offer
+  full-UTXO-set anonymity with quantum-resistant ownership.
+
+  Key components delivered:
+  - **Rust foundation (Phase 1):** `shekyl-fcmp` crate wrapping upstream
+    `monero-fcmp-plus-plus` with 4-scalar leaf type `{O.x, I.x, C.x,
+    H(pqc_pk)}`. Hybrid X25519 + ML-KEM-768 KEM with HKDF-SHA-512.
+    Bech32m segmented address encoding. Per-output PQC key derivation.
+    15 FFI exports. Security audit (zero vulnerabilities, zero unsafe in
+    first-party code). Reproducible builds with pinned Cargo.lock.
+  - **Transaction format (Phase 3):** `RCTTypeFcmpPlusPlusPqc = 7` with
+    `referenceBlock`, `curve_trees_tree_depth`, and `fcmp_pp_proof` fields.
+    `curve_tree_root` commitment in every block header.
+  - **Consensus verification (Phase 4):** 7-step verification order in
+    `check_tx_inputs` — referenceBlock age, tree depth, key image
+    y-normalization, FCMP++ proof via Rust FFI, PQC signature verification,
+    BP+ range proofs. Mempool verification caching (`fcmp_verification_hash`
+    in `txpool_tx_meta_t`). Staked output curve-tree leaves.
+  - **Curve tree database (Phase 2):** Full `get_curve_tree_path` RPC
+    implementation assembling real Merkle paths (leaf scalars + per-layer
+    sibling hashes with position encoding). Selective pruning of
+    intermediate tree layers between checkpoints, wired into `add_block`
+    after `save_curve_tree_checkpoint`. Old checkpoint garbage collection.
+  - **Wallet integration (Phase 5):** `genRctFcmpPlusPlus()` proof
+    construction. `get_curve_tree_path` RPC. Tree-path precomputation
+    and incremental update in wallet refresh loop. PQC key rederivation from
+    stored shared secret. Restore-from-seed PQC rederivation.
+  - **Infrastructure (Phase 6):** Hardware device FCMP++ stubs. CI pipeline
+    for Rust workspace build, FCMP crate, determinism check, Bech32m tests.
+    `output_pruning_metadata_t` and `m_output_metadata` LMDB table for
+    transaction pruning. LMDB curve tree schema (leaves, layers, meta,
+    checkpoints). Checkpoint every 10,000 blocks for fast-sync resumption.
+
+  See `docs/FCMP_PLUS_PLUS.md` for the full specification.
+
+- **FCMP++ Phase 3: KEM ciphertext `tx_extra` and coinbase self-encapsulation.**
+  - `tx_extra_pqc_kem_ciphertext` with tag `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`
+    (`0x06`): payload `blob` is the concatenation of N ML-KEM-768 ciphertexts
+    (1088 bytes each), one per output in order.
+  - **Coinbase:** When the miner address has a PQC key and the hard-fork
+    version is at least `HF_VERSION_FCMP_PLUS_PLUS_PQC`, `construct_miner_tx`
+    performs KEM self-encapsulation to the miner’s own address per coinbase
+    output (same tag and derivation semantics as normal transfers), then
+    wipes the shared secret after use.
+
+- **FCMP++ Phase 5e: Wallet precomputation of curve tree paths.**
+  - Added `fcmp_precomputed_path` struct to `wallet2.h` caching per-output
+    tree path, root hash at precompute time, and precompute height.
+  - Added `m_fcmp_precomputed_paths` runtime cache (not serialized) and
+    `m_fcmp_last_precompute_height` watermark to `wallet2`.
+  - `precompute_fcmp_paths()` fetches tree paths for all unspent outputs
+    via the `get_curve_tree_path` daemon RPC endpoint.
+  - `update_fcmp_paths_incremental(new_height)` extends existing paths
+    and adds newly discovered outputs, pruning paths for spent outputs.
+  - Incremental path update is hooked into the wallet refresh loop,
+    triggering after sync catches up if blocks were fetched.
+  - Progress callbacks (`on_fcmp_path_precompute_progress`) fire during
+    both initial and incremental precomputation.
+- **FCMP++ Phase 5.5: Wallet sync and restore-from-seed PQC support.**
+  - `transfer_details::m_combined_shared_secret` (64 bytes) stores the
+    hybrid KEM shared secret needed to rederive per-output PQC keys.
+  - `rederive_pqc_keys_for_output(td)` calls `shekyl_fcmp_derive_pqc_keypair`
+    via FFI to validate keypair derivation from stored shared secret.
+  - `rederive_all_pqc_keys()` iterates all transfers with stored shared
+    secrets and rederives PQC keys, with progress callback
+    `on_pqc_rederivation_progress`.
+  - Restore-from-seed triggers full PQC key rederivation on first refresh
+    after sync completes.
+
+### 🐛 Fixed
+
+- **Curve tree pop_block over-trim:** `pop_block` previously counted all
+  `tx.vout` entries when computing how many leaves to trim, but `add_block`
+  skips outputs that fail type checks (unknown target types), locked staked
+  outputs, and outputs whose FFI leaf construction fails. The trim count now
+  mirrors the same filtering logic used in the grow path, preventing tree
+  desynchronization during reorgs.
+- **Curve tree pruning correctness:** `prune_curve_tree_intermediate_layers`
+  was deleting all intermediate layer entries instead of selectively pruning
+  only chunks fully below the previous checkpoint boundary. Fixed to compute
+  the chunk boundary from the previous checkpoint's `leaf_count` and only
+  remove sealed entries. Also added garbage collection of stale checkpoint
+  records (only the two most recent are kept).
+- **LMDB output metadata: removed undefined behavior in cursor macros.**
+  - `store_output_metadata` now uses `mdb_put` directly with `m_write_txn`
+    instead of the `CURSOR()` macro which required `m_cursors` to be in
+    scope.
+  - `get_output_metadata` and `prune_tx_data` now use `m_txn` (from
+    `TXN_PREFIX_RDONLY`) instead of `txn_ptr` (from `TXN_PREFIX`).
+  - Removed unused `m_txc_output_metadata` cursor field and
+    `m_cur_output_metadata` macro from `db_lmdb.h`.
+- **Wallet FCMP++ path precomputation: fixed undefined behavior.**
+  - Replaced `reinterpret_cast<std::string&>` on `std::vector<uint8_t>` with
+    a proper intermediate `std::string` copy in both `precompute_fcmp_paths`
+    and `update_fcmp_paths_incremental`.
+
+- **FCMP++ Phase 6c: CI pipeline updates.**
+  - Added x86_64 architecture verification step to the `rust-audit-and-test`
+    CI job in `.github/workflows/build.yml`.
+  - Added explicit `cargo build --locked -p shekyl-fcmp` step to verify the
+    FCMP++ crate builds as part of the Rust workspace.
+  - Added dedicated Bech32m address encoding test step that runs
+    `shekyl-crypto-pq` address tests with visible CI output.
+  - The monero-oxide git dependency is cached via `~/.cargo/git` in the
+    existing Cargo cache key (`rust-${{ hashFiles('rust/Cargo.lock') }}`).
+  - Determinism check (build twice, diff `libshekyl_ffi.a` hashes) and
+    `cargo audit` remain in place.
+- **FCMP++ Phase 6f: Transaction pruning mode (skeleton).**
+  - Added `output_pruning_metadata_t` packed struct to `blockchain_db.h`
+    storing per-output scan data (pubkey, commitment, unlock_time, height,
+    pruned flag) for wallet scanning after transaction pruning.
+  - Added abstract interface in `BlockchainDB`: `store_output_metadata()`,
+    `get_output_metadata()`, `is_output_pruned()`, `prune_tx_data()`.
+  - Added `m_output_metadata` LMDB table (keyed by `global_output_index`)
+    in `db_lmdb.h` and `db_lmdb.cpp` with cursor, rflag, and DBI member.
+  - LMDB implementation: `store_output_metadata` and `get_output_metadata`
+    are fully wired; `is_output_pruned` delegates to `get_output_metadata`;
+    `prune_tx_data` validates depth against `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE`
+    and reads/writes a `last_pruned_tx_data_height` watermark in the
+    properties table to skip already-processed blocks on subsequent runs.
+    The block-iteration pruning loop is documented as a TODO skeleton.
+  - `--prune-blockchain` CLI flag now also triggers `prune_tx_data()` in
+    `cryptonote_core.cpp`, running output-metadata pruning alongside
+    Monero's existing stripe-based pruning.
+  - Test DB (`testdb.h`) updated with no-op stubs for all four new methods.
+- **FCMP++ Phase 4b: Mempool verification caching.**
+  - Added `fcmp_verification_hash` (32-byte `crypto::hash`) and
+    `fcmp_verified` (1-bit flag) to `txpool_tx_meta_t` in
+    `src/blockchain_db/blockchain_db.h`, carved from the existing
+    76-byte padding (now 44 bytes).  Struct stays 192 bytes.
+  - New `Blockchain::compute_fcmp_verification_hash()` computes a
+    deterministic cache key from `hash(proof || referenceBlock || key_images)`.
+  - `tx_memory_pool::add_tx` stores the cache hash on successful FCMP++
+    verification.
+  - `tx_memory_pool::is_transaction_ready_to_go` checks the cached hash
+    via `is_fcmp_verification_cached()` and seeds `m_input_cache` to
+    skip re-running `shekyl_fcmp_verify()` for previously-verified
+    mempool transactions.
+  - Added `static_assert` guards at the `memcmp` site on
+    `txpool_tx_meta_t` (tx_pool.cpp line 1656) enforcing
+    trivially-copyable layout and 192-byte struct size.
+  - All padding and new fields are zero-initialized at every meta
+    construction site.
+- **FCMP++ Phase 4e: Staking consensus rules for FCMP++.**
+  - `collect_outputs` in `blockchain_db.cpp::add_block` now handles
+    `txout_to_staked_key` outputs using the same 4-scalar leaf format
+    `{O.x, I.x, C.x, H(pqc_pk)}`.
+  - Deferred insertion: staked outputs only enter the curve tree when
+    `block_height >= lock_until`.  Outputs still within their lock
+    period are stored in the `pending_staked_leaves` DB table and
+    inserted into the curve tree when they mature (see deferred
+    staked leaf insertion entry below).
+  - `check_stake_claim_input` now rejects claims on outputs whose
+    `lock_until > current_height`, ensuring claimability only after
+    the lock period expires.
+- **FCMP++ Phase 5: Wallet transaction construction skeleton.**
+  - Added `rct::genRctFcmpPlusPlus()` in `src/fcmp/rctSigs.cpp` — builds
+    an FCMP++ `rctSig` with `RCTTypeFcmpPlusPlusPqc`, Bulletproofs+ range
+    proofs, balanced pseudo-outputs, and invokes `shekyl_fcmp_prove()` via
+    FFI to generate the membership proof.
+  - Declared the new function in `src/fcmp/rctSigs.h`.
+  - Added `COMMAND_RPC_GET_CURVE_TREE_PATH` RPC command in
+    `src/rpc/core_rpc_server_commands_defs.h` — accepts output indices and
+    returns Merkle paths from the curve tree (stub handler for now).
+  - Wired `get_curve_tree_path` JSON-RPC endpoint in
+    `src/rpc/core_rpc_server.h` and `src/rpc/core_rpc_server.cpp`.
+  - Added TODO scaffolding in `src/wallet/wallet2.cpp` at the decoy
+    selection (`get_outs`), transaction construction
+    (`construct_tx_and_get_tx_key`), and fee estimation
+    (`estimate_tx_weight`) sites, documenting how FCMP++ replaces ring
+    signatures in the wallet transfer flow.
+- **FCMP++ Phase 6a: Hardware device stubs.**
+  - Added `fcmp_prepare`, `fcmp_proof_start`, and `fcmp_proof_add_input`
+    virtual methods to `hw::device` (base class) with default `return false`
+    implementations for unsupported devices.
+  - Software device (`device_default`) returns `true` (scaffolding for Rust
+    FFI delegation).
+  - Ledger device (`device_ledger`) logs an informative error and returns
+    `false`, guiding users to software wallets until Ledger firmware gains
+    FCMP++ support.
+  - Trezor inherits the base-class defaults (unsupported) without code changes.
+  - Updated `RELEASE_CHECKLIST.md` to document hardware wallet readiness status.
+- **FCMP++ Phase 4a: Verification in `check_tx_inputs`.**
+  - Added `RCTTypeFcmpPlusPlusPqc` verification path in
+    `Blockchain::check_tx_inputs` (`src/cryptonote_core/blockchain.cpp`).
+  - `referenceBlock` age validation: confirmed within
+    `[tip - MAX_AGE, tip - MIN_AGE]` using DB block lookup.
+  - `curve_trees_tree_depth` validated against the current tree state.
+  - Key offsets verified empty for all FCMP++ inputs.
+  - Key image y-normalization enforced (sign bit of byte 31 cleared).
+  - Input count bounded by `FCMP_MAX_INPUTS_PER_TX`.
+  - `shekyl_fcmp_verify()` FFI call wired up with key images, pseudo
+    outputs, and proof blob.
+  - Per-input `pqc_auths` verification left as documented TODO pending
+    the per-input auth field migration.
+- **FCMP++ Phase 4a-pre: PQC auth binding specification.**
+  - New `docs/FCMP_PLUS_PLUS.md` formally documents the dual-layer
+    binding model, per-input signed payload layout, and 7-step consensus
+    verification order for `RCTTypeFcmpPlusPlusPqc` transactions.
+- **FCMP++ Phase 3.5: Curve tree root in block header (consensus-critical).**
+  - Added `curve_tree_root` (`crypto::hash`) field to `block_header` in
+    `src/cryptonote_basic/cryptonote_basic.h`, initialized to `null_hash`.
+  - Field is always serialized (genesis-native, no version gating) in both
+    the binary archive (`BEGIN_SERIALIZE`) and Boost serialization.
+  - Block template creation (`Blockchain::create_block_template`) snapshots
+    the current DB curve tree root into the header.
+  - Block validation (`Blockchain::handle_block_to_main_chain`) verifies
+    `curve_tree_root` matches the locally-computed tree root after
+    `add_block` grows the tree; rejects the block on mismatch.
+  - RPC `block_header_response` now includes `curve_tree_root` hex string.
+  - Test generator (`chaingen.cpp`) sets `curve_tree_root` to `null_hash`
+    in `construct_block` and `construct_block_manually`.
+- **FCMP++ Phase 3: Transaction format for FCMP++ PQC.**
+  - Added `RCTTypeFcmpPlusPlusPqc = 7` to the RCT type enum in
+    `src/fcmp/rctTypes.h` — Shekyl's only non-coinbase transaction type.
+  - Added `referenceBlock` (block hash anchoring the curve tree snapshot)
+    to `rctSigBase`, serialized only for the new type.
+  - Added `curve_trees_tree_depth` and `fcmp_pp_proof` (opaque FCMP++ proof
+    blob) to `rctSigPrunable`, replacing CLSAG ring signatures for the new type.
+  - Added `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` (0x06) to `tx_extra.h` for
+    per-output ML-KEM-768 ciphertexts.
+  - Added `key_image_y_normalize()` to `crypto.h`/`crypto.cpp` — clears the
+    sign bit of a key image's y-coordinate as required by FCMP++.
+  - Added `is_rct_fcmp_pp_pqc()` helper to `rctTypes.h`/`rctTypes.cpp`.
+  - Updated serialization helpers (`serialize_rctsig_base`,
+    `serialize_rctsig_prunable`) and type classifier functions
+    (`is_rct_simple`, `is_rct_bulletproof_plus`) to handle the new type.
+- **FCMP++ Phase 2e: Curve tree checkpoint strategy.**
+  - New `BlockchainDB` virtual methods: `save_curve_tree_checkpoint`,
+    `get_curve_tree_checkpoint`, `get_latest_curve_tree_checkpoint_height`,
+    `prune_curve_tree_intermediate_layers`.
+  - LMDB implementation with `curve_tree_checkpoints` table (MDB_INTEGERKEY),
+    storing root[32] + depth[1] + leaf_count[8] per checkpoint.
+  - Automatic checkpoint every `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` (10 000)
+    blocks during `add_block`, enabling fast-sync resumption.
+  - Configurable interval via `cryptonote_config.h` constant.
+- **FCMP++ Phase 2f: Curve tree pruning strategy.**
+  - `prune_curve_tree_intermediate_layers` removes recomputable internal hash
+    layers between checkpoints, preserving leaves and the root layer to reduce
+    storage overhead.
+- **FCMP++ Phase 1: Rust foundation crates.**
+  - New `rust/shekyl-fcmp/` crate wrapping upstream `monero-fcmp-plus-plus`
+    (from `Shekyl-Foundation/monero-oxide` fork, `fcmp++` branch) with
+    4-scalar curve tree leaf type `{O.x, I.x, C.x, H(pqc_pk)}`.
+  - Implemented `HybridX25519MlKem` (X25519 + ML-KEM-768 FIPS 203) in
+    `shekyl-crypto-pq/src/kem.rs` with HKDF-SHA-512 shared-secret
+    combination and master-seed key derivation.
+  - Implemented Bech32m segmented address encoding
+    (`shekyl1<classical>/skpq1<pqc_a>/skpq21<pqc_b>`) in
+    `shekyl-crypto-pq/src/address.rs`, keeping each segment within
+    Bech32m's proven checksum range.
+  - Implemented per-output PQC keypair derivation (HKDF-Expand → ML-DSA-65
+    deterministic keygen) in `shekyl-crypto-pq/src/derivation.rs`.
+  - Added 15 new FFI exports to `shekyl-ffi` for FCMP++ proofs, KEM
+    operations, address encoding, and seed derivation.
+  - Added FCMP++ consensus constants to `cryptonote_config.h`:
+    `HF_VERSION_FCMP_PLUS_PLUS_PQC`, `FCMP_REFERENCE_BLOCK_MAX_AGE` (100),
+    `FCMP_REFERENCE_BLOCK_MIN_AGE` (2), `FCMP_MAX_INPUTS_PER_TX` (8).
+  - Updated `BuildRust.cmake` with `--locked` flag for reproducible builds.
+- **FCMP++ Phase 1a.1: Security review of forked monero-oxide crates.**
+  - `cargo audit`: 226 crate dependencies scanned, zero vulnerabilities found.
+  - `unsafe` block audit: zero `unsafe` in first-party monero-oxide workspace
+    code (helioselene, ec-divisors, generalized-bulletproofs, fcmps,
+    monero-oxide). Only 4 `unsafe` blocks exist in helioselene benchmarks
+    (`_rdtsc()` for cycle counting, not in library code). `dalek-ff-group`
+    (crates.io dependency) also has zero `unsafe` blocks.
+  - Veridise audit status: FCMPs circuit audited by Veridise (June 2025);
+    Generalized Bulletproofs security proofs by Cypher Stack; Divisor proofs
+    reviewed by both Veridise and Cypher Stack. Pinned commit `92af05e0` is
+    post-audit. Helioselene and ec-divisors are not yet independently audited.
+    Multi-phase integration audit (seraphis-migration/monero#294) is in
+    planning.
+- **FCMP++ Phase 1a.2: Rust reproducible builds.**
+  - `Cargo.lock` pins all git dependencies to exact commit hash `92af05e0`.
+  - Double-build determinism verified: `libshekyl_ffi.a` hash identical across
+    consecutive builds on x86_64.
+  - Added CI job `rust-audit-and-test` to `.github/workflows/build.yml` with
+    cargo audit, workspace tests, and determinism check (build twice, diff).
+  - Documented x86_64-only build requirement and Guix integration status in
+    `docs/COMPILING_DEBUGGING_TESTING.md`.
+
+### 🔄 Changed
+
 - **P2P reorg functional test uses deadline-based polling.** Replaced three
   fixed-sleep polling sites in `test_p2p_reorg()` (`time.sleep(10)` x2,
   `loops = 100` counter) with 240 s deadline + 0.25 s interval polling,
@@ -33,6 +1524,13 @@
   section in `COMPILING_DEBUGGING_TESTING.md` with a structured triage table
   covering applied PRs (#6937, #9762, #9795, #9858, #9898) and tracked-for-
   future-work PRs (#10157, #10084, #9801) with STRUCTURAL_TODO.md cross-refs.
+- **FCMP++ documentation rework (Phase 0.5a).** Reworked all core documentation
+  to reflect FCMP++ as the membership proof system from genesis. Replaced CLSAG
+  and ring signature references with FCMP++ full-chain membership proof language.
+  Updated PQC spec for per-input pqc_auths, per-output KEM derivation, Bech32m
+  addresses, and curve tower architecture. Retired V4 lattice ring signature
+  roadmap. Updated V3_ROLLOUT.md size estimates for ~23 KB typical transactions.
+  Added FCMP++ items to RELEASE_CHECKLIST.md.
 
 ### 🐛 Fixed
 
@@ -410,7 +1908,7 @@
   replaces the C++ `wallet_rpc_server` with an axum-based JSON-RPC server.
   Calls the existing C++ `wallet2` library through a new C FFI facade
   (`wallet2_ffi.cpp/.h`). Supports all 98 RPC methods with full parity.
-  Can run as a standalone binary (`shekyl-wallet-rpc-rs`) or be embedded
+  Can run as a standalone binary (`shekyl-wallet-rpc`) or be embedded
   as a library in the Tauri GUI wallet. See `docs/WALLET_RPC_RUST.md`.
 
 - **C++ wallet2 FFI facade (`wallet2_ffi.cpp/.h`)**: Opaque-handle C API

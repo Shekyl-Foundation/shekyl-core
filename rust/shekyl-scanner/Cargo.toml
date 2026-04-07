@@ -1,0 +1,35 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-scanner"
+description = "Transaction scanner for the Shekyl protocol with FCMP++, PQC, and staking support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zeroize = { version = "^1.5", features = ["zeroize_derive"] }
+curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
+hex = { version = "0.4", features = ["alloc"] }
+thiserror.workspace = true
+serde.workspace = true
+serde_json = "1"
+tracing = "0.1"
+
+shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+shekyl-staking = { path = "../shekyl-staking" }
+shekyl-address = { path = "../shekyl-address" }
+
+[features]
+default = ["std"]
+std = ["shekyl-oxide/std", "shekyl-rpc/std"]
+rust-scanner = []
+
+[dev-dependencies]
+tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }

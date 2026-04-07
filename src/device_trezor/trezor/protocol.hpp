@@ -162,7 +162,7 @@ namespace tx {
   ::crypto::secret_key compute_enc_key(const ::crypto::secret_key & private_view_key, const std::string & aux, const std::string & salt);
   std::string compute_sealing_key(const std::string & master_key, size_t idx, bool is_iv=false);
 
-  typedef std::variant<rct::Bulletproof, rct::BulletproofPlus> rsig_v;
+  typedef rct::BulletproofPlus rsig_v;
 
   /**
    * Transaction signer state holder.
@@ -290,36 +290,18 @@ namespace tx {
       return m_ct.rv->type;
     }
 
-    bool is_simple() const {
-      auto tp = get_rv_type();
-      return tp == rct::RCTTypeSimple;
-    }
-
-    bool is_req_bulletproof() const {
-      return m_ct.tx_data.rct_config.range_proof_type != rct::RangeProofBorromean;
-    }
-
-    bool is_req_clsag() const {
-      return is_req_bulletproof() && m_ct.tx_data.rct_config.bp_version >= 3;
-    }
-
     bool is_req_bulletproof_plus() const {
-      return is_req_bulletproof() && m_ct.tx_data.rct_config.bp_version == 4;  // rct::genRctSimple
-    }
-
-    bool is_bulletproof() const {
-      auto tp = get_rv_type();
-      return rct::is_rct_bulletproof(tp) || rct::is_rct_bulletproof_plus(tp);
+      return true;
     }
 
     bool is_bulletproof_plus() const {
       auto tp = get_rv_type();
-      return rct::is_rct_bulletproof_plus(tp);
+      return rct::is_rct_bulletproof_plus(tp) || rct::is_rct_fcmp_pp_pqc(tp);
     }
 
-    bool is_clsag() const {
+    bool is_fcmp_pp() const {
       auto tp = get_rv_type();
-      return rct::is_rct_clsag(tp);
+      return rct::is_rct_fcmp_pp_pqc(tp);
     }
 
     bool is_offloading() const {

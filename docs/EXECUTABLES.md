@@ -14,10 +14,10 @@ All binaries are placed in `build/release/bin/` (or `build/debug/bin/`).
 | `shekyl-gen-ssl-cert` | TLS certificate / key generator for RPC |
 | `shekyl-blockchain-import` | Import a bootstrap file into the chain DB |
 | `shekyl-blockchain-export` | Export chain DB to a bootstrap file |
-| `shekyl-blockchain-mark-spent-outputs` | Build a spent-output ring database |
+| `shekyl-blockchain-mark-spent-outputs` | Build a spent-output database (historical/analytical) |
 | `shekyl-blockchain-usage` | Output-reuse histogram |
 | `shekyl-blockchain-ancestry` | Trace output ancestry graphs |
-| `shekyl-blockchain-depth` | Measure ring depth to coinbase |
+| `shekyl-blockchain-depth` | Measure transaction depth to coinbase (historical/analytical) |
 | `shekyl-blockchain-stats` | Time-series chain statistics |
 | `shekyl-blockchain-prune` | Prune blockchain LMDB in place |
 | `shekyl-blockchain-prune-known-spent-data` | Prune known-spent output buckets |
@@ -265,17 +265,13 @@ prompt:
 | `help [command]` | Show help for a command |
 | `exit` | Close the wallet |
 
-**Multisig**
+**Multisig (PQC-only via `scheme_id = 2`)**
 
-| Command | Description |
-|---------|-------------|
-| `prepare_multisig` | Start multisig wallet setup |
-| `make_multisig <threshold> <key> [key...]` | Create a multisig wallet |
-| `exchange_multisig_keys <key> [key...]` | Exchange keys for extra rounds |
-| `export_multisig_info` | Export multisig info for co-signers |
-| `import_multisig_info <file> [file...]` | Import co-signer multisig info |
-| `sign_multisig <file>` | Sign a multisig transaction |
-| `submit_multisig <file>` | Submit a signed multisig transaction |
+Classical Monero-style multisig commands (`prepare_multisig`, `make_multisig`,
+`exchange_multisig_keys`, `export_multisig_info`, `import_multisig_info`,
+`sign_multisig`, `submit_multisig`) have been removed. All multisig on Shekyl
+NG uses PQC-only authorization via `scheme_id = 2` in the `pqc_auth` layer.
+See `docs/PQC_MULTISIG.md` for the file-based signing protocol.
 
 ### Examples
 
@@ -482,8 +478,10 @@ Key options: `--output-file`, `--data-dir`, `--block-start`, `--block-stop`,
 
 ### `shekyl-blockchain-mark-spent-outputs`
 
-Builds a shared ring database of known-spent outputs, used by wallets for
-improved ring member selection.
+Builds a database of known-spent outputs. This tool is retained for
+historical and analytical purposes. Ring-based output selection analysis is
+not applicable to FCMP++ transactions, which use full UTXO set membership
+proofs.
 
 ```bash
 # Scan the default chain database
@@ -498,8 +496,9 @@ Key options: positional `<input path(s)>`, `--spent-output-db-dir`,
 
 ### `shekyl-blockchain-usage`
 
-Prints a histogram of how many times each output amount has been referenced as
-a ring member.
+Prints a histogram of output amount references. This tool is retained for
+historical and analytical purposes. Ring-based analysis is not applicable to
+FCMP++ transactions.
 
 ```bash
 shekyl-blockchain-usage ~/.shekyl/lmdb
@@ -510,8 +509,9 @@ Key options: positional `<input path>`, `--rct-only`.
 
 ### `shekyl-blockchain-ancestry`
 
-Traces the ancestry graph of transaction outputs to understand mixing depth and
-output provenance.
+Traces the ancestry graph of transaction outputs to understand output
+provenance. This tool is retained for historical and analytical purposes.
+Ring-based ancestry analysis is not applicable to FCMP++ transactions.
 
 ```bash
 # Refresh the ancestry cache, then query by txid
@@ -526,8 +526,9 @@ Key options: `--data-dir`, `--txid`, `--output <amount/offset>`, `--height`,
 
 ### `shekyl-blockchain-depth`
 
-For a given transaction or block, walks inputs back through the ring to
-coinbase and reports the minimum depth.
+For a given transaction or block, walks inputs back to coinbase and reports
+the minimum depth. This tool is retained for historical and analytical
+purposes. Ring-based depth analysis is not applicable to FCMP++ transactions.
 
 ```bash
 # Depth of a specific transaction
@@ -555,8 +556,9 @@ shekyl-blockchain-stats --with-hours --with-inputs --with-outputs
 ```
 
 Key options: `--data-dir`, `--block-start`, `--block-stop`, `--with-inputs`,
-`--with-outputs`, `--with-ringsize`, `--with-hours`, `--with-emission`,
-`--with-fees`, `--with-diff`.
+`--with-outputs`, `--with-hours`, `--with-emission`, `--with-fees`,
+`--with-diff`. Note: `--with-ringsize` has been removed (not applicable to
+FCMP++ transactions).
 
 ### `shekyl-blockchain-prune`
 
@@ -575,8 +577,7 @@ Key options: `--data-dir`, `--db-sync-mode`, `--copy-pruned-database`.
 
 ### `shekyl-blockchain-prune-known-spent-data`
 
-Removes output data for pre-RingCT amounts where all outputs are provably
-spent.
+Removes output data for amounts where all outputs are provably spent.
 
 ```bash
 # Dry run to see what would be pruned

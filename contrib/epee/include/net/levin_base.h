@@ -81,6 +81,7 @@ constexpr const std::chrono::milliseconds LEVIN_DEFAULT_TIMEOUT_PRECONFIGURED{0}
 #define LEVIN_PACKET_RESPONSE		0x00000002
 #define LEVIN_PACKET_BEGIN		0x00000004
 #define LEVIN_PACKET_END		0x00000008
+#define LEVIN_PACKET_COMPRESSED		0x00000010
   
 
 #define LEVIN_PROTOCOL_VER_0         0
@@ -169,6 +170,11 @@ constexpr const std::chrono::milliseconds LEVIN_DEFAULT_TIMEOUT_PRECONFIGURED{0}
       \return `nullptr` if `noise_size` is smaller than the levin header.
         Otherwise, a dummy levin message. */
   byte_slice make_noise_notify(std::size_t noise_bytes);
+
+  /*! Compress a finalized Levin message. Returns a new byte_slice with
+      the LEVIN_PACKET_COMPRESSED flag set and the payload zstd-compressed.
+      Returns the input unchanged if compression isn't beneficial or available. */
+  byte_slice try_compress_message(byte_slice input);
 
   /*! Generate 1+ levin messages that are identical to the noise message size.
 

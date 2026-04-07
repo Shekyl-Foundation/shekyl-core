@@ -430,19 +430,19 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
 
 bool construct_tx_to_key(const std::vector<test_event_entry>& events, cryptonote::transaction& tx,
                          const cryptonote::block& blk_head, const cryptonote::account_base& from, const var_addr_t& to, uint64_t amount,
-                         uint64_t fee, size_t nmix, bool rct=true, rct::RangeProofType range_proof_type=rct::RangeProofPaddedBulletproof, int bp_version = 4);
+                         uint64_t fee, size_t nmix, bool rct=true);
 
 bool construct_tx_to_key(const std::vector<test_event_entry>& events, cryptonote::transaction& tx, const cryptonote::block& blk_head,
                          const cryptonote::account_base& from, std::vector<cryptonote::tx_destination_entry> destinations,
-                         uint64_t fee, size_t nmix, bool rct=true, rct::RangeProofType range_proof_type=rct::RangeProofPaddedBulletproof, int bp_version = 4);
+                         uint64_t fee, size_t nmix, bool rct=true);
 
 bool construct_tx_to_key(cryptonote::transaction& tx, const cryptonote::account_base& from, const var_addr_t& to, uint64_t amount,
                          std::vector<cryptonote::tx_source_entry> &sources,
-                         uint64_t fee, bool rct=true, rct::RangeProofType range_proof_type=rct::RangeProofPaddedBulletproof, int bp_version = 4);
+                         uint64_t fee, bool rct=true);
 
 bool construct_tx_to_key(cryptonote::transaction& tx, const cryptonote::account_base& from, const std::vector<cryptonote::tx_destination_entry>& destinations,
                          std::vector<cryptonote::tx_source_entry> &sources,
-                         uint64_t fee, bool rct=true, rct::RangeProofType range_proof_type=rct::RangeProofPaddedBulletproof, int bp_version = 4);
+                         uint64_t fee, bool rct=true);
 
 cryptonote::transaction construct_tx_with_fee(std::vector<test_event_entry>& events, const cryptonote::block& blk_head,
                                             const cryptonote::account_base& acc_from, const var_addr_t& to,
@@ -453,8 +453,7 @@ bool construct_tx_rct(const cryptonote::account_keys& sender_account_keys,
     const std::vector<cryptonote::tx_destination_entry>& destinations,
     const std::optional<cryptonote::account_public_address>& change_addr,
     std::vector<uint8_t> extra, cryptonote::transaction& tx,
-    bool rct=true, rct::RangeProofType range_proof_type=rct::RangeProofPaddedBulletproof, int bp_version = 4,
-    uint8_t hf_version = 1);
+    bool rct=true, uint8_t hf_version = 1);
 
 
 uint64_t num_blocks(const std::vector<test_event_entry>& events);
@@ -484,6 +483,19 @@ void fill_tx_destinations(const var_addr_t& from, const cryptonote::account_publ
                           std::vector<cryptonote::tx_destination_entry>& destinations_pure,
                           bool always_change=false);
 
+
+bool fill_tx_sources(std::vector<cryptonote::tx_source_entry>& sources, const std::vector<test_event_entry>& events,
+                     const cryptonote::block& blk_head, const cryptonote::account_base& from, uint64_t amount, size_t nmix);
+
+bool construct_fcmp_tx(
+    cryptonote::core& c,
+    const cryptonote::account_base& from,
+    const cryptonote::account_public_address& to,
+    uint64_t amount,
+    uint64_t fee,
+    const std::vector<test_event_entry>& events,
+    const cryptonote::block& blk_head,
+    cryptonote::transaction& tx);
 
 void fill_tx_sources_and_destinations(const std::vector<test_event_entry>& events, const cryptonote::block& blk_head,
                                       const cryptonote::account_base& from, const cryptonote::account_public_address& to,

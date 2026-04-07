@@ -6,8 +6,8 @@ The Rust wallet RPC layer replaces the C++ `wallet_rpc_server` with a Rust
 implementation that calls the existing C++ `wallet2` library through a C FFI
 facade. This provides:
 
-- **Standalone binary**: `shekyl-wallet-rpc-rs`, a drop-in replacement for the
-  C++ `shekyl-wallet-rpc`
+- **Standalone binary**: `shekyl-wallet-rpc`, a drop-in replacement for the
+  legacy C++ wallet RPC server
 - **Embedded library**: Linked directly into the Tauri GUI wallet for
   zero-overhead wallet operations without HTTP or process spawning
 
@@ -230,12 +230,56 @@ All 98 RPC methods from `wallet_rpc_server.h` are implemented in the
 | Fees | `estimate_tx_size_and_weight`, `get_default_fee_priority` |
 | Meta | `get_version`, `get_languages` |
 
+## Scanner Integration (`rust-scanner` feature)
+
+When `shekyl-wallet-rpc` is compiled with `--features rust-scanner`, the RPC
+server uses split routing:
+
+- **Scanner-backed methods** are handled natively in Rust via `shekyl-scanner`:
+  `get_balance`, `get_transfers`, `incoming_transfers`, `get_transfer_by_txid`,
+  `get_payments`, `get_bulk_payments`, `get_height`, `get_staked_outputs`,
+  `get_staked_balance`
+- **All other methods** continue routing through the C++ FFI
+
+### Architecture with Scanner
+
+```
+HTTP POST /json_rpc → handlers::dispatch_with_scanner(method)
+  │
+  ├── scanner-backed methods → shekyl-scanner (native Rust)
+  │     WalletState, BalanceSummary, TransferDetails
+  │
+  └── remaining methods → C++ FFI (unchanged)
+        transfer, sweep_*, sign_transfer, multisig, ...
+```
+
+### Key Types
+
+| Module | Type | Purpose |
+|--------|------|---------|
+| `shekyl-scanner` | `Scanner` | Block/tx/output scan pipeline |
+| `shekyl-scanner` | `TransferDetails` | Extended output with staking + PQC fields |
+| `shekyl-scanner` | `WalletState` | In-memory transfer tracking, key image dedup |
+| `shekyl-scanner` | `BalanceSummary` | Staking-aware balance breakdown |
+| `shekyl-wallet-rpc` | `ScannerState` | Thread-safe wrapper around `WalletState` |
+
+### GUI Integration
+
+The Tauri GUI wallet's `wallet_bridge.rs` now includes a `ScannerState`
+alongside the `Wallet2` handle. Query methods (`get_scanner_balance`,
+`get_scanner_staked_outputs`, `get_scanner_height`) read from the Rust scanner
+state. Mutation methods continue to use the C++ FFI.
+
 ## Future Work
 
+- **Scanner sync loop**: Implement the background refresh loop that drives the
+  Rust scanner (fetch blocks via daemon RPC, feed to `Scanner::scan`, update
+  `WalletState`). Currently the scanner state must be populated externally.
+- **FCMP++ signing in Rust**: Transaction construction (FCMP++ proofs, PQC
+  key signing) is the remaining major C++ dependency. Once implemented, the
+  FFI layer can be removed entirely.
 - **PQC multisig migration**: The multisig dispatch functions use the current
   wallet2 API. When the PQC multisig redesign (see `docs/PQC_MULTISIG.md`) is
   implemented, these dispatchers will need updating to match the new API.
-- **Callback support**: Wallet2 callbacks (refresh progress, device prompts)
-  are not yet bridged. A poll-based or function-pointer approach could be added.
 - **Remove C++ `wallet_rpc_server`**: Once the Rust RPC is proven in production,
   the C++ `wallet_rpc_server.cpp` and its epee HTTP infrastructure can be removed.

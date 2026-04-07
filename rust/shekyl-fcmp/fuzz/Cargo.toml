@@ -1,0 +1,42 @@
+[package]
+name = "shekyl-fcmp-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+shekyl-fcmp = { path = ".." }
+
+[[bin]]
+name = "fuzz_fcmp_proof_deserialize"
+path = "fuzz_targets/fuzz_fcmp_proof_deserialize.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_curve_tree_leaf_hash"
+path = "fuzz_targets/fuzz_curve_tree_leaf_hash.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_block_header_tree_root"
+path = "fuzz_targets/fuzz_block_header_tree_root.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_tx_deserialize_fcmp_type7"
+path = "fuzz_targets/fuzz_tx_deserialize_fcmp_type7.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

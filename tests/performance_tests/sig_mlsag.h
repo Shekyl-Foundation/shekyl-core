@@ -30,8 +30,8 @@
 
 #pragma once
 
-#include "ringct/rctSigs.h"
-#include "ringct/rctTypes.h"
+#include "fcmp/rctSigs.h"
+#include "fcmp/rctTypes.h"
 #include "device/device.hpp"
 
 using namespace rct;

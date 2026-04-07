@@ -109,6 +109,17 @@ ShekylBurnSplit shekyl_compute_burn_split(
 uint64_t shekyl_stake_weight(uint64_t amount, uint8_t tier_id);
 uint64_t shekyl_stake_lock_blocks(uint8_t tier_id);
 uint64_t shekyl_stake_yield_multiplier(uint8_t tier_id);
+/// Per-block staker reward share: (total_reward_at_height * stake_weight) / total_weighted_stake.
+/// If overflow_out is non-null, *overflow_out is set to 1 when the quotient does not fit in u64.
+uint64_t shekyl_calc_per_block_staker_reward(
+    uint64_t total_reward_at_height,
+    uint64_t stake_weight,
+    uint64_t total_weighted_stake,
+    uint8_t *overflow_out);
+uint32_t shekyl_stake_tier_count(void);
+/// Null-terminated UTF-8 tier name, or null if tier_id is invalid.
+const char *shekyl_stake_tier_name(uint8_t tier_id);
+uint64_t shekyl_stake_max_claim_range(void);
 uint64_t shekyl_calc_stake_ratio(uint64_t total_staked, uint64_t circulating_supply);
 
 // Emission share (Component 4)
@@ -132,6 +143,335 @@ ShekylEmissionSplit shekyl_split_block_emission(
 bool shekyl_generate_ssl_certificate(
     ShekylBuffer* key_pem_out,
     ShekylBuffer* cert_pem_out);
+
+// ─── FCMP++: Proof and tree operations ──────────────────────────────────────
+
+// Compute H(pqc_pk) leaf scalar. Writes 32 bytes to out_ptr.
+bool shekyl_fcmp_pqc_leaf_hash(
+    const uint8_t* pqc_pk_ptr,
+    size_t pqc_pk_len,
+    uint8_t* out_ptr);
+
+// Derive per-output ML-DSA-65 keypair from combined KEM shared secret.
+// combined_ss_ptr: 64 bytes.
+ShekylPqcKeypair shekyl_fcmp_derive_pqc_keypair(
+    const uint8_t* combined_ss_ptr,
+    uint64_t output_index);
+
+// Expected proof size for given inputs and tree depth.
+size_t shekyl_fcmp_proof_len(uint32_t num_inputs, uint8_t tree_depth);
+
+// FCMP++ prove result (proof blob + pseudo-outs).
+struct ShekylFcmpProveResult {
+    ShekylBuffer proof;
+    ShekylBuffer pseudo_outs;    // num_inputs * 32 bytes (C_tilde compressed)
+    bool success;
+};
+
+// Construct FCMP++ proof from variable-length witness blob.
+// witness_ptr / witness_len: serialized witness for all inputs.
+// Per input: fixed header (192 bytes) + leaf chunk + C1/C2 branch layers.
+// See shekyl-ffi crate docs for the full wire format specification.
+ShekylFcmpProveResult shekyl_fcmp_prove(
+    const uint8_t* witness_ptr,
+    size_t witness_len,
+    uint32_t num_inputs,
+    const uint8_t* tree_root_ptr,
+    uint8_t tree_depth,
+    const uint8_t* signable_tx_hash_ptr);
+
+// Verify FCMP++ proof with batch verification.
+// signable_tx_hash_ptr: 32-byte transaction binding hash.
+// pqc_hash_count must equal ki_count.
+bool shekyl_fcmp_verify(
+    const uint8_t* proof_ptr,
+    size_t proof_len,
+    const uint8_t* key_images_ptr,
+    size_t ki_count,
+    const uint8_t* pseudo_outs_ptr,
+    size_t po_count,
+    const uint8_t* pqc_pk_hashes_ptr,
+    size_t pqc_hash_count,
+    const uint8_t* tree_root_ptr,
+    uint8_t tree_depth,
+    const uint8_t* signable_tx_hash_ptr);
+
+// ─── FCMP++: FROST SAL Multisig ──────────────────────────────────────────────
+
+struct ShekylFrostSalSession;
+
+// Create a new FROST SAL session for one input.
+// Writes 32-byte pseudo-out to pseudo_out_ptr.
+// Returns opaque session handle, or NULL on failure.
+ShekylFrostSalSession* shekyl_frost_sal_session_new(
+    const uint8_t* output_key_ptr,
+    const uint8_t* key_image_gen_ptr,
+    const uint8_t* commitment_ptr,
+    const uint8_t* spend_key_x_ptr,
+    const uint8_t* signable_tx_hash_ptr,
+    uint8_t* pseudo_out_ptr);
+
+// Get serialized RerandomizedOutput from a session.
+ShekylBuffer shekyl_frost_sal_get_rerand(
+    const ShekylFrostSalSession* session);
+
+// Aggregate FROST shares and produce the FCMP++ proof.
+// Consumes and frees all sessions on success.
+ShekylFcmpProveResult shekyl_frost_sal_aggregate_and_prove(
+    ShekylFrostSalSession** session_ptrs,
+    uint32_t num_inputs,
+    const uint8_t* group_key_ptr,
+    const uint8_t* nonce_sums_ptr,
+    size_t nonce_sums_len,
+    const uint8_t* sum_shares_ptr,
+    const uint8_t* witness_ptr,
+    size_t witness_len,
+    const uint8_t* tree_root_ptr,
+    uint8_t tree_depth);
+
+// Free a FROST SAL session handle.
+void shekyl_frost_sal_session_free(ShekylFrostSalSession* session);
+
+// ─── FCMP++: FROST DKG Key Management ──────────────────────────────────────
+
+struct ShekylFrostThresholdKeys;
+
+// Import FROST threshold keys from a serialized blob.
+// Returns opaque handle, or NULL on failure. Free with shekyl_frost_keys_free.
+ShekylFrostThresholdKeys* shekyl_frost_keys_import(
+    const uint8_t* data_ptr,
+    size_t data_len);
+
+// Export FROST threshold keys as a serialized blob.
+ShekylBuffer shekyl_frost_keys_export(const ShekylFrostThresholdKeys* handle);
+
+// Get 32-byte group public key from threshold keys.
+// Writes 32 bytes to out_ptr. Returns true on success.
+bool shekyl_frost_keys_group_key(
+    const ShekylFrostThresholdKeys* handle,
+    uint8_t* out_ptr);
+
+// Validate that threshold keys match expected M-of-N parameters.
+bool shekyl_frost_keys_validate(
+    const ShekylFrostThresholdKeys* handle,
+    uint16_t expected_m,
+    uint16_t expected_n);
+
+// Free a FROST threshold keys handle.
+void shekyl_frost_keys_free(ShekylFrostThresholdKeys* handle);
+
+// Convert raw output tuples into serialized 4-scalar leaves.
+ShekylBuffer shekyl_fcmp_outputs_to_leaves(
+    const uint8_t* outputs_ptr,
+    size_t count);
+
+// ─── FCMP++: KEM operations ─────────────────────────────────────────────────
+
+// Generate hybrid X25519 + ML-KEM-768 keypair.
+ShekylPqcKeypair shekyl_kem_keypair_generate();
+
+// Encapsulate to hybrid public key.
+// pk_ml_kem_ptr: 1184 bytes (ML-KEM-768 encap key).
+// ct_out: receives ciphertext buffer (32 + 1088 bytes).
+// ss_out_ptr: receives 64-byte combined shared secret.
+bool shekyl_kem_encapsulate(
+    const uint8_t* pk_x25519_ptr,
+    const uint8_t* pk_ml_kem_ptr,
+    size_t pk_ml_kem_len,
+    ShekylBuffer* ct_out,
+    uint8_t* ss_out_ptr);
+
+// Decapsulate hybrid ciphertext.
+// ct_ml_kem_ptr: 1088 bytes (ML-KEM-768 ciphertext).
+// ss_out_ptr: receives 64-byte combined shared secret.
+bool shekyl_kem_decapsulate(
+    const uint8_t* sk_x25519_ptr,
+    const uint8_t* sk_ml_kem_ptr,
+    size_t sk_ml_kem_len,
+    const uint8_t* ct_x25519_ptr,
+    const uint8_t* ct_ml_kem_ptr,
+    size_t ct_ml_kem_len,
+    uint8_t* ss_out_ptr);
+
+// ─── Bech32m address encoding ────────────────────────────────────────────────
+
+// Encode Shekyl Bech32m address. Returns UTF-8 string in ShekylBuffer.
+// network: 0=mainnet, 1=testnet, 2=stagenet.
+ShekylBuffer shekyl_address_encode(
+    uint8_t network,
+    const uint8_t* spend_key_ptr,
+    const uint8_t* view_key_ptr,
+    const uint8_t* ml_kem_ek_ptr,
+    size_t ml_kem_ek_len);
+
+// Decode Shekyl Bech32m address.
+// network_out: receives network discriminant (0=mainnet, 1=testnet, 2=stagenet).
+// Writes 32 bytes each to spend_key_out and view_key_out.
+// Returns ML-KEM encap key in ShekylBuffer (1184 bytes, or 0 if classical-only).
+ShekylBuffer shekyl_address_decode(
+    const char* encoded_ptr,
+    uint8_t* network_out,
+    uint8_t* spend_key_out,
+    uint8_t* view_key_out);
+
+// ─── Bech32m blob encoding ──────────────────────────────────────────────────
+
+// Encode arbitrary binary data as Bech32m with the given HRP.
+// Returns UTF-8 encoded Bech32m string in ShekylBuffer, or null on failure.
+ShekylBuffer shekyl_encode_blob(
+    const uint8_t* hrp_ptr,
+    size_t hrp_len,
+    const uint8_t* data_ptr,
+    size_t data_len);
+
+// Decode a Bech32m string into HRP + payload.
+// hrp_out/hrp_out_cap: buffer for decoded HRP (UTF-8, not null-terminated).
+// hrp_len_out: receives actual HRP byte length.
+// data_out/data_out_cap: buffer for decoded payload.
+// data_len_out: receives actual payload byte length.
+// Returns true on success, false if decoding fails or buffers are too small.
+bool shekyl_decode_blob(
+    const char* encoded_ptr,
+    uint8_t* hrp_out,
+    size_t hrp_out_cap,
+    size_t* hrp_len_out,
+    uint8_t* data_out,
+    size_t data_out_cap,
+    size_t* data_len_out);
+
+// ─── FCMP++: Seed derivation ────────────────────────────────────────────────
+
+// Derive Ed25519 spend key from 32-byte master seed. Writes 32 bytes.
+bool shekyl_seed_derive_spend(const uint8_t* seed_ptr, uint8_t* out_ptr);
+
+// Derive Ed25519 view key from 32-byte master seed. Writes 32 bytes.
+bool shekyl_seed_derive_view(const uint8_t* seed_ptr, uint8_t* out_ptr);
+
+// Derive ML-KEM-768 seed material from 32-byte master seed. Writes 64 bytes.
+bool shekyl_seed_derive_ml_kem(const uint8_t* seed_ptr, uint8_t* out_ptr);
+
+// ─── FCMP++: Curve tree hash operations ─────────────────────────────────────
+
+// Incrementally grow a Selene-layer chunk hash (leaf layer + even internal layers).
+// existing_hash_ptr: 32 bytes (Selene point, use hash_init for new chunk).
+// existing_child_at_offset_ptr: 32 bytes (old Selene scalar at offset, zero for fresh).
+// new_children_ptr: num_children * 32 bytes (Selene scalars).
+// out_hash_ptr: 32 bytes output (new Selene point).
+bool shekyl_curve_tree_hash_grow_selene(
+    const uint8_t* existing_hash_ptr,
+    uint64_t offset,
+    const uint8_t* existing_child_at_offset_ptr,
+    const uint8_t* new_children_ptr,
+    uint64_t num_children,
+    uint8_t* out_hash_ptr);
+
+// Incrementally grow a Helios-layer chunk hash (odd internal layers).
+bool shekyl_curve_tree_hash_grow_helios(
+    const uint8_t* existing_hash_ptr,
+    uint64_t offset,
+    const uint8_t* existing_child_at_offset_ptr,
+    const uint8_t* new_children_ptr,
+    uint64_t num_children,
+    uint8_t* out_hash_ptr);
+
+// Trim children from a Selene-layer chunk hash.
+bool shekyl_curve_tree_hash_trim_selene(
+    const uint8_t* existing_hash_ptr,
+    uint64_t offset,
+    const uint8_t* children_ptr,
+    uint64_t num_children,
+    const uint8_t* child_to_grow_back_ptr,
+    uint8_t* out_hash_ptr);
+
+// Trim children from a Helios-layer chunk hash.
+bool shekyl_curve_tree_hash_trim_helios(
+    const uint8_t* existing_hash_ptr,
+    uint64_t offset,
+    const uint8_t* children_ptr,
+    uint64_t num_children,
+    const uint8_t* child_to_grow_back_ptr,
+    uint8_t* out_hash_ptr);
+
+// Convert Selene point to Helios scalar (x-coordinate extraction).
+bool shekyl_curve_tree_selene_to_helios_scalar(
+    const uint8_t* selene_point_ptr,
+    uint8_t* out_scalar_ptr);
+
+// Convert Helios point to Selene scalar (x-coordinate extraction).
+bool shekyl_curve_tree_helios_to_selene_scalar(
+    const uint8_t* helios_point_ptr,
+    uint8_t* out_scalar_ptr);
+
+// Get the Selene hash initialization point (32 bytes).
+bool shekyl_curve_tree_selene_hash_init(uint8_t* out_ptr);
+
+// Get the Helios hash initialization point (32 bytes).
+bool shekyl_curve_tree_helios_hash_init(uint8_t* out_ptr);
+
+// Tree structure constants.
+uint32_t shekyl_curve_tree_scalars_per_leaf();    // 4
+uint32_t shekyl_curve_tree_selene_chunk_width();  // 38 (LAYER_ONE_LEN)
+uint32_t shekyl_curve_tree_helios_chunk_width();  // 18 (LAYER_TWO_LEN)
+
+// Ed25519 → Selene scalar conversion (Wei25519 x-coordinate).
+// compressed_ptr: 32 bytes compressed Ed25519 point.
+// out_scalar_ptr: 32 bytes output Selene scalar.
+// Returns true on success.
+bool shekyl_ed25519_to_selene_scalar(
+    const uint8_t* compressed_ptr,
+    uint8_t* out_scalar_ptr);
+
+// Construct a 128-byte curve tree leaf from output pubkey, commitment, and PQC hash.
+// output_key_ptr: 32 bytes compressed Ed25519 output public key (O).
+// commitment_ptr: 32 bytes compressed Ed25519 amount commitment (C).
+// h_pqc_ptr: 32 bytes H(pqc_pk) scalar (or 32 zero bytes if unavailable).
+// leaf_out_ptr: 128 bytes output for {O.x, I.x, C.x, H(pqc_pk)}.
+// Returns true on success.
+bool shekyl_construct_curve_tree_leaf(
+    const uint8_t* output_key_ptr,
+    const uint8_t* commitment_ptr,
+    const uint8_t* h_pqc_ptr,
+    uint8_t* leaf_out_ptr);
+
+// ─── Transaction Builder ─────────────────────────────────────────────────────
+// Single-call FCMP++ proof generation: BP+, membership proof, ECDH, pseudo-outs.
+// Replaces the old genRctFcmpPlusPlus + shekyl_fcmp_prove + shekyl_pqc_sign
+// multi-FFI round-trip.
+
+/// Result of shekyl_sign_transaction.
+/// On success: proofs_json contains JSON-encoded SignedProofs; error_code == 0.
+/// On failure: proofs_json is null; error_code < 0; error_message describes the failure.
+/// The caller must free proofs_json and error_message via shekyl_buffer_free.
+struct ShekylSignResult {
+    ShekylBuffer proofs_json;
+    bool success;
+    int32_t error_code;
+    ShekylBuffer error_message;
+};
+
+/// Generate FCMP++ transaction proofs (BP+, membership proof, ECDH, pseudo-outs).
+///
+/// @param tx_prefix_hash_ptr  32-byte Keccak-256 hash of the serialized tx prefix.
+/// @param inputs_json_ptr     JSON array of SpendInput objects (see shekyl-tx-builder docs).
+/// @param inputs_json_len     Length of inputs JSON.
+/// @param outputs_json_ptr    JSON array of OutputInfo objects.
+/// @param outputs_json_len    Length of outputs JSON.
+/// @param fee                 Transaction fee in atomic units.
+/// @param reference_block_ptr 32-byte block hash of the reference block.
+/// @param tree_root_ptr       32-byte Selene curve tree root from the block header.
+///                            This is NOT the block hash — passing the wrong value
+///                            produces an invalid proof.
+/// @param tree_depth          Number of curve tree layers (>= 1).
+///
+/// Error codes: -1 null pointer, -2 JSON parse, -10..-29 TxBuilderError variants.
+ShekylSignResult shekyl_sign_transaction(
+    const uint8_t* tx_prefix_hash_ptr,
+    const uint8_t* inputs_json_ptr, size_t inputs_json_len,
+    const uint8_t* outputs_json_ptr, size_t outputs_json_len,
+    uint64_t fee,
+    const uint8_t* reference_block_ptr,
+    const uint8_t* tree_root_ptr,
+    uint8_t tree_depth);
 
 // Daemon RPC (Axum)
 typedef struct ShekylDaemonRpcHandle ShekylDaemonRpcHandle;

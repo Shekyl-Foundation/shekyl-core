@@ -26,13 +26,16 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <algorithm>
 #include <boost/range/adaptor/reversed.hpp>
 
 #include "string_tools.h"
 #include "blockchain_db.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
+#include "cryptonote_config.h"
 #include "profile_tools.h"
-#include "ringct/rctOps.h"
+#include "fcmp/rctOps.h"
+#include "shekyl/shekyl_ffi.h"
 
 #include "lmdb/db_lmdb.h"
 
@@ -238,9 +241,9 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
   // we need the index
   for (uint64_t i = 0; i < tx.vout.size(); ++i)
   {
-    // miner v2 txes have their coinbase output in one single out to save space,
-    // and we store them as rct outputs with an identity mask
-    if (miner_tx && tx.version == 2)
+    // Miner coinbase txes have their output stored as rct (amount=0) with an
+    // identity-mask commitment so they share the same output index space.
+    if (miner_tx && tx.version >= 2)
     {
       cryptonote::tx_out vout = tx.vout[i];
       rct::key commitment = rct::zeroCommit(vout.amount);
@@ -285,7 +288,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   uint64_t num_rct_outs = 0;
   blobdata miner_bd = tx_to_blob(blk.miner_tx);
   add_transaction(blk_hash, std::make_pair(blk.miner_tx, blobdata_ref(miner_bd)));
-  if (blk.miner_tx.version == 2)
+  if (blk.miner_tx.version >= 2)
     num_rct_outs += blk.miner_tx.vout.size();
   int tx_i = 0;
   crypto::hash tx_hash = crypto::null_hash;
@@ -302,6 +305,106 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   }
   TIME_MEASURE_FINISH(time1);
   time_add_transaction += time1;
+
+  // FCMP++ curve tree: append new output leaves
+  if (blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
+  {
+    const uint64_t block_height = prev_height + 1;
+    std::vector<uint8_t> leaf_data;
+    uint64_t new_output_count = 0;
+    static constexpr uint8_t zero_pqc[32] = {};
+
+    auto extract_leaf_hashes = [](const transaction& tx) -> std::vector<uint8_t> {
+      std::vector<tx_extra_field> fields;
+      if (!parse_tx_extra(tx.extra, fields))
+        return {};
+      tx_extra_pqc_leaf_hashes lh;
+      if (!find_tx_extra_field_by_type(fields, lh))
+        return {};
+      if (lh.blob.size() % PQC_LEAF_HASH_BYTES != 0)
+        return {};
+      return std::vector<uint8_t>(lh.blob.begin(), lh.blob.end());
+    };
+
+    // All outputs are deferred: compute leaf, determine maturity, add to pending.
+    auto collect_outputs = [&](const transaction& tx, bool is_miner) {
+      const auto leaf_hash_blob = extract_leaf_hashes(tx);
+      const size_t num_leaf_hashes = leaf_hash_blob.size() / PQC_LEAF_HASH_BYTES;
+
+      for (uint64_t i = 0; i < tx.vout.size(); ++i) {
+        const auto& vout = tx.vout[i];
+        const uint8_t* h_pqc = (i < num_leaf_hashes)
+            ? (leaf_hash_blob.data() + i * PQC_LEAF_HASH_BYTES)
+            : zero_pqc;
+
+        crypto::public_key output_key;
+        uint64_t maturity_height;
+
+        if (std::holds_alternative<txout_to_tagged_key>(vout.target))
+        {
+          output_key = std::get<txout_to_tagged_key>(vout.target).key;
+          maturity_height = is_miner
+              ? block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
+              : block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+        }
+        else if (std::holds_alternative<txout_to_key>(vout.target))
+        {
+          output_key = std::get<txout_to_key>(vout.target).key;
+          maturity_height = is_miner
+              ? block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
+              : block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+        }
+        else if (std::holds_alternative<txout_to_staked_key>(vout.target))
+        {
+          const auto& staked = std::get<txout_to_staked_key>(vout.target);
+          output_key = staked.key;
+          maturity_height = std::max(
+              static_cast<uint64_t>(staked.lock_until),
+              block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE);
+        }
+        else
+          continue;
+
+        rct::key commitment;
+        if (is_miner && tx.version >= 2)
+          commitment = rct::zeroCommit(vout.amount);
+        else if (tx.version > 1 && i < tx.rct_signatures.outPk.size())
+          commitment = tx.rct_signatures.outPk[i].mask;
+        else
+          continue;
+
+        uint8_t leaf[128];
+        if (shekyl_construct_curve_tree_leaf(
+              reinterpret_cast<const uint8_t*>(&output_key),
+              commitment.bytes, h_pqc, leaf))
+          add_pending_tree_leaf(maturity_height, leaf);
+      }
+    };
+
+    // Drain matured pending leaves: only drained leaves enter the tree.
+    // drain_pending_tree_leaves auto-journals each entry for pop_block.
+    uint64_t drained_count = drain_pending_tree_leaves(block_height, leaf_data);
+    new_output_count += drained_count;
+
+    // Insert this block's outputs into the pending table (deferred).
+    collect_outputs(blk.miner_tx, true);
+    for (const auto& tx_pair : txs)
+      collect_outputs(tx_pair.first, false);
+
+    if (new_output_count > 0)
+      grow_curve_tree(leaf_data, new_output_count);
+
+    // TODO(optimization): checkpoint save + intermediate layer pruning run
+    // synchronously here.  For trees with millions of outputs this could add
+    // noticeable latency every FCMP_CURVE_TREE_CHECKPOINT_INTERVAL blocks.
+    // Consider deferring to a background task or batching across multiple
+    // blocks once profiling shows this is a bottleneck.
+    if (prev_height > 0 && (prev_height % FCMP_CURVE_TREE_CHECKPOINT_INTERVAL == 0))
+    {
+      save_curve_tree_checkpoint(prev_height);
+      prune_curve_tree_intermediate_layers(prev_height);
+    }
+  }
 
   // call out to subclass implementation to add the block & metadata
   time1 = epee::misc_utils::get_tick_count();
@@ -325,17 +428,128 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
 {
   blk = get_top_block();
 
+  // Capture the height of the block being removed BEFORE remove_block()
+  // decrements the chain height, so staked-output eligibility checks use the
+  // same height that add_block() used when the outputs were inserted.
+  const uint64_t removed_block_height = height();
   remove_block();
+
+  const uint64_t block_height = removed_block_height;
 
   for (const auto& h : boost::adaptors::reverse(blk.tx_hashes))
   {
+    if (!tx_has_verification_data(h))
+    {
+      MFATAL("Cannot pop block " << block_height << " -- transaction verification data was pruned for tx "
+             << h);
+      throw DB_ERROR("Attempted to pop a block with pruned transaction data");
+    }
     cryptonote::transaction tx;
     if (!get_tx(h, tx) && !get_pruned_tx(h, tx))
       throw DB_ERROR("Failed to get pruned or unpruned transaction from the db");
     txs.push_back(std::move(tx));
     remove_transaction(h);
   }
+  {
+    const crypto::hash miner_h = get_transaction_hash(blk.miner_tx);
+    if (!tx_has_verification_data(miner_h))
+    {
+      MFATAL("Cannot pop block " << block_height << " -- miner transaction verification data was pruned");
+      throw DB_ERROR("Attempted to pop a block with pruned transaction data");
+    }
+  }
   remove_transaction(get_transaction_hash(blk.miner_tx));
+
+  if (blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
+  {
+    // With universal deferred insertion, only drained leaves are in the tree.
+    // Read the drain journal to know how many to trim and what to restore.
+    auto drain_entries = get_pending_tree_drain_entries(block_height);
+    const uint64_t drained_count = drain_entries.size();
+
+    if (drained_count > 0)
+      trim_curve_tree(drained_count);
+
+    // Restore drained leaves back to the pending table
+    for (const auto& [maturity, leaf] : drain_entries)
+      add_pending_tree_leaf(maturity, leaf.data());
+
+    remove_pending_tree_drain_entries(block_height);
+
+    // Remove this block's own pending entries by recomputing each output's
+    // maturity_height and leaf_data, then deleting the exact match.
+    static constexpr uint8_t zero_pqc[32] = {};
+
+    auto extract_leaf_hashes = [](const transaction& tx) -> std::vector<uint8_t> {
+      std::vector<tx_extra_field> fields;
+      if (!parse_tx_extra(tx.extra, fields))
+        return {};
+      tx_extra_pqc_leaf_hashes lh;
+      if (!find_tx_extra_field_by_type(fields, lh))
+        return {};
+      if (lh.blob.size() % PQC_LEAF_HASH_BYTES != 0)
+        return {};
+      return std::vector<uint8_t>(lh.blob.begin(), lh.blob.end());
+    };
+
+    auto remove_block_pending = [&](const transaction& tx, bool is_miner) {
+      const auto leaf_hash_blob = extract_leaf_hashes(tx);
+      const size_t num_leaf_hashes = leaf_hash_blob.size() / PQC_LEAF_HASH_BYTES;
+
+      for (uint64_t i = 0; i < tx.vout.size(); ++i) {
+        const auto& vout = tx.vout[i];
+        const uint8_t* h_pqc = (i < num_leaf_hashes)
+            ? (leaf_hash_blob.data() + i * PQC_LEAF_HASH_BYTES)
+            : zero_pqc;
+
+        crypto::public_key output_key;
+        uint64_t maturity_height;
+
+        if (std::holds_alternative<txout_to_tagged_key>(vout.target))
+        {
+          output_key = std::get<txout_to_tagged_key>(vout.target).key;
+          maturity_height = is_miner
+              ? block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
+              : block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+        }
+        else if (std::holds_alternative<txout_to_key>(vout.target))
+        {
+          output_key = std::get<txout_to_key>(vout.target).key;
+          maturity_height = is_miner
+              ? block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
+              : block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+        }
+        else if (std::holds_alternative<txout_to_staked_key>(vout.target))
+        {
+          const auto& staked = std::get<txout_to_staked_key>(vout.target);
+          output_key = staked.key;
+          maturity_height = std::max(
+              static_cast<uint64_t>(staked.lock_until),
+              block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE);
+        }
+        else
+          continue;
+
+        rct::key commitment;
+        if (is_miner && tx.version >= 2)
+          commitment = rct::zeroCommit(vout.amount);
+        else if (tx.version > 1 && i < tx.rct_signatures.outPk.size())
+          commitment = tx.rct_signatures.outPk[i].mask;
+        else
+          continue;
+
+        uint8_t leaf[128];
+        if (shekyl_construct_curve_tree_leaf(
+              reinterpret_cast<const uint8_t*>(&output_key),
+              commitment.bytes, h_pqc, leaf))
+          remove_pending_tree_leaf(maturity_height, leaf);
+      }
+    };
+
+    remove_block_pending(blk.miner_tx, true);
+    for (const auto& tx : txs)
+      remove_block_pending(tx, false);
+  }
 }
 
 bool BlockchainDB::is_open() const
@@ -352,6 +566,23 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
     if (std::holds_alternative<txin_to_key>(tx_input))
     {
       remove_spent_key(std::get<txin_to_key>(tx_input).k_image);
+    }
+    else if (std::holds_alternative<txin_stake_claim>(tx_input))
+    {
+      const auto& claim = std::get<txin_stake_claim>(tx_input);
+      remove_spent_key(claim.k_image);
+
+      // Restore the watermark to its pre-claim value.  claim.from_height
+      // is the old watermark (0 means this was the first claim for this
+      // staked output, so remove the watermark entirely).
+      if (claim.from_height == 0)
+        remove_staker_claim_watermark(claim.staked_output_index);
+      else
+        set_staker_claim_watermark(claim.staked_output_index, claim.from_height);
+
+      // Credit the claimed amount back into the staker reward pool.
+      uint64_t pool_balance = get_staker_pool_balance();
+      set_staker_pool_balance(pool_balance + claim.amount);
     }
   }
 

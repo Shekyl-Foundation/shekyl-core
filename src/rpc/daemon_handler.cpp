@@ -39,7 +39,7 @@
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_basic/blobdatatype.h"
-#include "ringct/rctSigs.h"
+#include "fcmp/rctSigs.h"
 #include "version.h"
 
 namespace cryptonote
@@ -383,10 +383,6 @@ namespace rpc
       res.status = Message::STATUS_FAILED;
       res.error_details = "";
 
-      if (tvc.m_low_mixin)
-      {
-        res.error_details = "mixin too low";
-      }
       if (tvc.m_double_spend)
       {
         if (!res.error_details.empty()) res.error_details += " and ";

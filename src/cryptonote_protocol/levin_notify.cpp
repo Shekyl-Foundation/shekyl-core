@@ -40,6 +40,7 @@
 #include <utility>
 
 #include "byte_slice.h"
+#include "net/levin_base.h"
 #include "common/expect.h"
 #include "common/varint.h"
 #include "cryptonote_config.h"
@@ -206,6 +207,7 @@ namespace levin
     bool make_payload_send_txs(connections& p2p, std::vector<blobdata>&& txs, const boost::uuids::uuid& destination, const bool pad, const bool fluff)
     {
       epee::byte_slice blob = make_tx_message(std::move(txs), pad, fluff).finalize_notify(NOTIFY_NEW_TRANSACTIONS::ID);
+      blob = epee::levin::try_compress_message(std::move(blob));
       return p2p.send(std::move(blob), destination);
     }
 

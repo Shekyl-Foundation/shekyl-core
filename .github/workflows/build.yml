@@ -39,6 +39,21 @@ jobs:
       - uses: actions/checkout@v5
         with:
           submodules: recursive
+      - name: guard against absolute local Cargo paths
+        run: |
+          MATCHES=""
+          while IFS= read -r file; do
+            HITS="$(grep -nE '/home/|/Users/|[A-Za-z]:\\\\Users\\\\' "$file" || true)"
+            if [ -n "$HITS" ]; then
+              MATCHES="${MATCHES}${file}\n${HITS}\n"
+            fi
+          done < <(find rust -type f \( -name Cargo.toml -o -path '*/.cargo/config' -o -path '*/.cargo/config.toml' \))
+          if [ -n "$MATCHES" ]; then
+            echo "FATAL: detected absolute local paths in Cargo manifests/config:"
+            printf "%b" "$MATCHES"
+            exit 1
+          fi
+          echo "Cargo path portability guard passed."
       - uses: actions/cache@v5
         with:
           path: /Users/runner/Library/Caches/ccache
@@ -49,7 +64,7 @@ jobs:
         run: |
           brew uninstall cmake
           brew update
-          brew install --quiet cmake boost hidapi openssl zmq libpgm miniupnpc expat libunwind-headers protobuf abseil ccache
+          brew install --quiet cmake boost hidapi openssl zmq libpgm miniupnpc expat libunwind-headers protobuf abseil ccache zstd
       - uses: dtolnay/rust-toolchain@stable
       - name: build
         run: |
@@ -286,3 +301,110 @@ jobs:
         with:
           name: ${{ env.OUTPUT }}
           path: ${{ env.OUTPUT }}
+
+  rust-audit-and-test:
+    name: "Rust: audit, test, determinism"
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: set apt conf
+        run: ${{env.APT_SET_CONF}}
+      - name: update apt
+        run: apt update
+      - name: install dependencies
+        run: apt -y install build-essential git curl pkg-config libssl-dev
+      - name: install Rust
+        run: ${{env.INSTALL_RUST}}
+      - name: install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: configure git
+        run: git config --global --add safe.directory '*'
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: guard against absolute local Cargo paths
+        shell: bash
+        run: |
+          MATCHES=""
+          while IFS= read -r file; do
+            HITS="$(grep -nE '/home/|/Users/|[A-Za-z]:\\\\Users\\\\' "$file" || true)"
+            if [ -n "$HITS" ]; then
+              MATCHES="${MATCHES}${file}\n${HITS}\n"
+            fi
+          done < <(find rust -type f \( -name Cargo.toml -o -path '*/.cargo/config' -o -path '*/.cargo/config.toml' \))
+          if [ -n "$MATCHES" ]; then
+            echo "FATAL: detected absolute local paths in Cargo manifests/config:"
+            printf "%b" "$MATCHES"
+            exit 1
+          fi
+          echo "Cargo path portability guard passed."
+      - name: verify x86_64 architecture
+        run: |
+          ARCH=$(uname -m)
+          echo "Runner architecture: $ARCH"
+          if [ "$ARCH" != "x86_64" ]; then
+            echo "FATAL: expected x86_64 runner, got $ARCH"
+            exit 1
+          fi
+      - name: verify fuzz harness inventory (smoke gate)
+        shell: bash
+        run: |
+          REQUIRED_TARGETS=(
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_fcmp_proof_deserialize.rs
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_curve_tree_leaf_hash.rs
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_block_header_tree_root.rs
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_tx_deserialize_fcmp_type7.rs
+            rust/shekyl-staking/fuzz/fuzz_targets/fuzz_claim_reward.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_kem_decapsulate.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_bech32m_address_decode.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_verify.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_key_blob.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_sig_blob.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_group_id.rs
+          )
+          MISSING=0
+          for target in "${REQUIRED_TARGETS[@]}"; do
+            if [ ! -f "$target" ]; then
+              echo "FATAL: missing required fuzz harness: $target"
+              MISSING=1
+            fi
+          done
+          if [ "$MISSING" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Fuzz harness inventory smoke gate passed (${#REQUIRED_TARGETS[@]} targets present)."
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: rust-
+      - name: cargo audit
+        working-directory: rust
+        run: cargo audit
+      - name: build shekyl-fcmp crate
+        working-directory: rust
+        run: cargo build --locked -p shekyl-fcmp
+      - name: cargo test (all workspace crates)
+        working-directory: rust
+        run: cargo test --locked --workspace
+      - name: Bech32m address encoding tests
+        working-directory: rust
+        run: cargo test --locked -p shekyl-crypto-pq -- address
+      - name: determinism check (build twice, compare hashes)
+        working-directory: rust
+        run: |
+          cargo build --locked --release -p shekyl-ffi
+          sha256sum target/release/libshekyl_ffi.a > /tmp/build1.sha256
+          cargo clean -p shekyl-ffi --release
+          cargo build --locked --release -p shekyl-ffi
+          sha256sum target/release/libshekyl_ffi.a > /tmp/build2.sha256
+          echo "=== Build 1 ===" && cat /tmp/build1.sha256
+          echo "=== Build 2 ===" && cat /tmp/build2.sha256
+          diff /tmp/build1.sha256 /tmp/build2.sha256 || (echo "FATAL: non-deterministic Rust build" && exit 1)
+          echo "Determinism check PASSED"

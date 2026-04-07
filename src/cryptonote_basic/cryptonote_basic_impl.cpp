@@ -34,12 +34,10 @@ using namespace epee;
 
 #include "cryptonote_basic_impl.h"
 #include "string_tools.h"
-#include "serialization/binary_utils.h"
 #include "cryptonote_format_utils.h"
 #include "cryptonote_config.h"
 #include "misc_language.h"
 #include "shekyl/shekyl_ffi.h"
-#include "common/base58.h"
 #include "crypto/hash.h"
 #include "int-util.h"
 #include "common/dns_utils.h"
@@ -49,42 +47,16 @@ using namespace epee;
 
 namespace cryptonote {
 
-  struct integrated_address {
-    account_public_address adr;
-    crypto::hash8 payment_id;
-
-    BEGIN_SERIALIZE_OBJECT()
-      FIELD(adr)
-      FIELD(payment_id)
-    END_SERIALIZE()
-
-    BEGIN_KV_SERIALIZE_MAP()
-      KV_SERIALIZE(adr)
-      KV_SERIALIZE(payment_id)
-    END_KV_SERIALIZE_MAP()
-  };
-
-  struct legacy_account_public_address
+  static uint8_t nettype_to_ffi_network(network_type nettype)
   {
-    crypto::public_key m_spend_public_key;
-    crypto::public_key m_view_public_key;
-
-    BEGIN_SERIALIZE_OBJECT()
-      FIELD(m_spend_public_key)
-      FIELD(m_view_public_key)
-    END_SERIALIZE()
-  };
-
-  struct legacy_integrated_address
-  {
-    legacy_account_public_address adr;
-    crypto::hash8 payment_id;
-
-    BEGIN_SERIALIZE_OBJECT()
-      FIELD(adr)
-      FIELD(payment_id)
-    END_SERIALIZE()
-  };
+    switch (nettype)
+    {
+      case MAINNET: case FAKECHAIN: return 0;
+      case TESTNET:  return 1;
+      case STAGENET: return 2;
+      default:       return 0;
+    }
+  }
 
   /************************************************************************/
   /* Cryptonote helper functions                                          */
@@ -170,27 +142,50 @@ namespace cryptonote {
   //------------------------------------------------------------------------------------
   std::string get_account_address_as_str(
       network_type nettype
-    , bool subaddress
+    , bool /* subaddress -- ignored, Shekyl uses standard addresses only */
     , account_public_address const & adr
     )
   {
-    uint64_t address_prefix = subaddress ? get_config(nettype).CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX : get_config(nettype).CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX;
-
-    return tools::base58::encode_addr(address_prefix, t_serializable_object_to_blob(adr));
+    uint8_t net = nettype_to_ffi_network(nettype);
+    // Wallet stores hybrid KEM pubkey as x25519_pk[32] || ml_kem_ek[1184] (see shekyl_kem_keypair_generate).
+    // Bech32m address body carries only the ML-KEM-768 encapsulation key (1184 bytes).
+    static constexpr size_t X25519_PK_BYTES = 32;
+    static constexpr size_t ML_KEM768_EK_BYTES = 1184;
+    const std::vector<uint8_t>& pq = adr.m_pqc_public_key;
+    const uint8_t* ml_ptr = nullptr;
+    size_t ml_len = 0;
+    if (pq.size() >= X25519_PK_BYTES + ML_KEM768_EK_BYTES)
+    {
+      ml_ptr = pq.data() + X25519_PK_BYTES;
+      ml_len = ML_KEM768_EK_BYTES;
+    }
+    else if (pq.size() == ML_KEM768_EK_BYTES)
+    {
+      ml_ptr = pq.data();
+      ml_len = ML_KEM768_EK_BYTES;
+    }
+    ShekylBuffer buf = shekyl_address_encode(
+        net,
+        reinterpret_cast<const uint8_t*>(adr.m_spend_public_key.data),
+        reinterpret_cast<const uint8_t*>(adr.m_view_public_key.data),
+        ml_ptr,
+        ml_len);
+    if (!buf.ptr || buf.len == 0)
+      return {};
+    std::string result(reinterpret_cast<const char*>(buf.ptr), buf.len);
+    shekyl_buffer_free(buf.ptr, buf.len);
+    return result;
   }
   //-----------------------------------------------------------------------
+  // Shekyl has no integrated (payment-id) addresses; this is a compatibility
+  // alias — prefer get_account_address_as_str for new code.
   std::string get_account_integrated_address_as_str(
       network_type nettype
     , account_public_address const & adr
-    , crypto::hash8 const & payment_id
+    , crypto::hash8 const & /* payment_id -- ignored, Shekyl has no integrated addresses */
     )
   {
-    uint64_t integrated_address_prefix = get_config(nettype).CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX;
-
-    integrated_address iadr = {
-      adr, payment_id
-    };
-    return tools::base58::encode_addr(integrated_address_prefix, t_serializable_object_to_blob(iadr));
+    return get_account_address_as_str(nettype, false, adr);
   }
   //-----------------------------------------------------------------------
   bool is_coinbase(const transaction& tx)
@@ -210,79 +205,49 @@ namespace cryptonote {
     , std::string const & str
     )
   {
-    uint64_t address_prefix = get_config(nettype).CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX;
-    uint64_t integrated_address_prefix = get_config(nettype).CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX;
-    uint64_t subaddress_prefix = get_config(nettype).CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX;
+    uint8_t network_out = 0;
+    uint8_t spend_key[32] = {};
+    uint8_t view_key[32] = {};
 
-    blobdata data;
-    uint64_t prefix;
-    if (!tools::base58::decode_addr(str, prefix, data))
+    ShekylBuffer ml_kem_buf = shekyl_address_decode(
+        str.c_str(), &network_out, spend_key, view_key);
+
+    if (ml_kem_buf.ptr == nullptr)
     {
-      LOG_PRINT_L2("Invalid address format");
+      LOG_PRINT_L2("Invalid Bech32m address format");
       return false;
     }
 
-    if (integrated_address_prefix == prefix)
+    uint8_t expected_net = nettype_to_ffi_network(nettype);
+    if (network_out != expected_net)
     {
-      info.is_subaddress = false;
-    }
-    else if (address_prefix == prefix)
-    {
-      info.is_subaddress = false;
-      info.has_payment_id = false;
-    }
-    else if (subaddress_prefix == prefix)
-    {
-      info.is_subaddress = true;
-      info.has_payment_id = false;
-    }
-    else {
-      LOG_PRINT_L1("Wrong address prefix: " << prefix << ", expected " << address_prefix
-        << " or " << integrated_address_prefix
-        << " or " << subaddress_prefix);
+      LOG_PRINT_L1("Address network mismatch: address belongs to network "
+          << (int)network_out << ", expected " << (int)expected_net);
+      if (ml_kem_buf.len > 0)
+        shekyl_buffer_free(ml_kem_buf.ptr, ml_kem_buf.len);
       return false;
     }
 
-    info.has_payment_id = (integrated_address_prefix == prefix);
-    if (info.has_payment_id)
+    memcpy(&info.address.m_spend_public_key, spend_key, 32);
+    memcpy(&info.address.m_view_public_key, view_key, 32);
+
+    if (ml_kem_buf.len > 0)
     {
-      integrated_address iadr;
-      if (::serialization::parse_binary(data, iadr))
-      {
-        info.address = iadr.adr;
-        info.payment_id = iadr.payment_id;
-      }
-      else
-      {
-        legacy_integrated_address legacy_iadr;
-        if (!::serialization::parse_binary(data, legacy_iadr))
-        {
-          LOG_PRINT_L1("Account public address keys can't be parsed");
-          return false;
-        }
-        info.address.m_spend_public_key = legacy_iadr.adr.m_spend_public_key;
-        info.address.m_view_public_key = legacy_iadr.adr.m_view_public_key;
-        info.address.m_pqc_public_key.clear();
-        info.payment_id = legacy_iadr.payment_id;
-      }
+      info.address.m_pqc_public_key.assign(
+          ml_kem_buf.ptr, ml_kem_buf.ptr + ml_kem_buf.len);
+      shekyl_buffer_free(ml_kem_buf.ptr, ml_kem_buf.len);
     }
     else
     {
-      if (!::serialization::parse_binary(data, info.address))
-      {
-        legacy_account_public_address legacy_address;
-        if (!::serialization::parse_binary(data, legacy_address))
-        {
-          LOG_PRINT_L1("Account public address keys can't be parsed");
-          return false;
-        }
-        info.address.m_spend_public_key = legacy_address.m_spend_public_key;
-        info.address.m_view_public_key = legacy_address.m_view_public_key;
-        info.address.m_pqc_public_key.clear();
-      }
+      info.address.m_pqc_public_key.clear();
     }
 
-    if (!crypto::check_key(info.address.m_spend_public_key) || !crypto::check_key(info.address.m_view_public_key))
+    info.is_subaddress = false;
+    info.has_payment_id = false;
+    memset(&info.payment_id, 0, sizeof(info.payment_id));
+
+    if (!crypto::check_key(info.address.m_spend_public_key) ||
+        !crypto::check_key(info.address.m_view_public_key))
     {
       LOG_PRINT_L1("Failed to validate address keys");
       return false;

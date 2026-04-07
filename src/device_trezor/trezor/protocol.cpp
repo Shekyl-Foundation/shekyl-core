@@ -36,9 +36,9 @@
 #include <common/apply_permutation.h>
 #include <common/json_util.h>
 #include <crypto/hmac-keccak.h>
-#include <ringct/rctSigs.h>
-#include <ringct/bulletproofs.h>
-#include <ringct/bulletproofs_plus.h>
+#include <fcmp/rctSigs.h>
+#include <fcmp/bulletproofs.h>
+#include <fcmp/bulletproofs_plus.h>
 #include "cryptonote_config.h"
 #include <sodium.h>
 #include <sodium/crypto_verify_32.h>
@@ -402,44 +402,13 @@ namespace tx {
     }
   }
 
-  static unsigned get_rsig_type(const rct::RCTConfig &rct_config, size_t num_outputs){
-    if (rct_config.range_proof_type == rct::RangeProofBorromean){
-      return rct::RangeProofBorromean;
-    } else if (num_outputs > BULLETPROOF_MAX_OUTPUTS){
-      return rct::RangeProofMultiOutputBulletproof;
-    } else {
-      return rct::RangeProofPaddedBulletproof;
-    }
-  }
-
-  static void generate_rsig_batch_sizes(std::vector<uint64_t> &batches, unsigned rsig_type, size_t num_outputs){
-    size_t amount_batched = 0;
-
-    while(amount_batched < num_outputs){
-      if (rsig_type == rct::RangeProofBorromean || rsig_type == rct::RangeProofBulletproof) {
-        batches.push_back(1);
-        amount_batched += 1;
-
-      } else if (rsig_type == rct::RangeProofPaddedBulletproof){
-        if (num_outputs > BULLETPROOF_MAX_OUTPUTS){
-          throw std::invalid_argument("BP padded can support only BULLETPROOF_MAX_OUTPUTS statements");
-        }
-        batches.push_back(num_outputs);
-        amount_batched += num_outputs;
-
-      } else if (rsig_type == rct::RangeProofMultiOutputBulletproof){
-        size_t batch_size = 1;
-        while (batch_size * 2 + amount_batched <= num_outputs && batch_size * 2 <= BULLETPROOF_MAX_OUTPUTS){
-          batch_size *= 2;
-        }
-        batch_size = std::min(batch_size, num_outputs - amount_batched);
-        batches.push_back(batch_size);
-        amount_batched += batch_size;
-
-      } else {
-        throw std::invalid_argument("Unknown rsig type");
-      }
-    }
+  // FCMP++ uses BP+ range proofs with padded batching
+  static void generate_rsig_batch_sizes(std::vector<uint64_t> &batches, size_t num_outputs){
+    if (num_outputs == 0)
+      return;
+    if (num_outputs > BULLETPROOF_PLUS_MAX_OUTPUTS)
+      throw std::invalid_argument("BP+ padded can support only BULLETPROOF_PLUS_MAX_OUTPUTS statements");
+    batches.push_back(num_outputs);
   }
 
   void Signer::set_tx_input(MoneroTransactionSourceEntry * dst, size_t idx, bool need_ring_keys, bool need_ring_indices){
@@ -515,13 +484,12 @@ namespace tx {
 
     // Rsig decision
     auto rsig_data = tsx_data.mutable_rsig_data();
-    m_ct.rsig_type = get_rsig_type(tx.rct_config, tx.splitted_dsts.size());
+    m_ct.rsig_type = 0; // FCMP++ always uses BP+ padded
     rsig_data->set_rsig_type(m_ct.rsig_type);
-    CHECK_AND_ASSERT_THROW_MES(tx.rct_config.range_proof_type != rct::RangeProofBorromean, "Borromean rsig not supported");
-    m_ct.bp_version = (m_aux_data->bp_version ? *m_aux_data->bp_version : 1);
+    m_ct.bp_version = 4;
     rsig_data->set_bp_version((uint32_t) m_ct.bp_version);
 
-    generate_rsig_batch_sizes(m_ct.grouping_vct, m_ct.rsig_type, tx.splitted_dsts.size());
+    generate_rsig_batch_sizes(m_ct.grouping_vct, tx.splitted_dsts.size());
     assign_to_repeatable(rsig_data->mutable_grouping(), m_ct.grouping_vct.begin(), m_ct.grouping_vct.end());
 
     translate_dst_entry(tsx_data.mutable_change_dts(), &(tx.change_dts));
@@ -647,7 +615,6 @@ namespace tx {
   std::shared_ptr<messages::monero::MoneroTransactionSetOutputRequest> Signer::step_set_output(size_t idx){
     CHECK_AND_ASSERT_THROW_MES(idx < m_ct.tx_data.splitted_dsts.size(), "Invalid transaction index");
     CHECK_AND_ASSERT_THROW_MES(idx < m_ct.tx_out_entr_hmacs.size(), "Invalid transaction index");
-    CHECK_AND_ASSERT_THROW_MES(is_req_bulletproof(), "Borromean rsig not supported");
 
     m_ct.cur_output_idx = idx;
     m_ct.cur_output_in_batch_idx += 1;   // assumes sequential call to step_set_output()
@@ -660,9 +627,7 @@ namespace tx {
   }
 
   void Signer::step_set_output_ack(std::shared_ptr<const messages::monero::MoneroTransactionSetOutputAck> ack){
-    CHECK_AND_ASSERT_THROW_MES(is_req_bulletproof(), "Borromean rsig not supported");
     cryptonote::tx_out tx_out;
-    rct::Bulletproof bproof{};
     rct::BulletproofPlus bproof_plus{};
     rct::ctkey out_pk{};
     rct::ecdhTuple ecdh{};
@@ -709,17 +674,10 @@ namespace tx {
 
     rsig_v bp_obj{};
     if (has_rsig) {
-      bool deserialize_success;
-      if (is_req_bulletproof_plus()) {
-        deserialize_success = cn_deserialize(rsig_buff, bproof_plus);
-        bp_obj = bproof_plus;
-      } else {
-        deserialize_success = cn_deserialize(rsig_buff, bproof);
-        bp_obj = bproof;
-      }
-      if (!deserialize_success) {
+      if (!cn_deserialize(rsig_buff, bproof_plus)) {
         throw exc::ProtocolException("Cannot deserialize bulletproof rangesig");
       }
+      bp_obj = bproof_plus;
     }
 
     // Generates BP after all masks in the current batch are generated
@@ -753,15 +711,9 @@ namespace tx {
     }
 
     std::string serRsig;
-    if (is_req_bulletproof_plus()) {
-      auto bp = bulletproof_plus_PROVE(amounts, masks);
-      serRsig = cn_serialize(bp);
-      m_ct.tx_out_rsigs.emplace_back(bp);
-    } else {
-      auto bp = bulletproof_PROVE(amounts, masks);
-      serRsig = cn_serialize(bp);
-      m_ct.tx_out_rsigs.emplace_back(bp);
-    }
+    auto bp = bulletproof_plus_PROVE(amounts, masks);
+    serRsig = cn_serialize(bp);
+    m_ct.tx_out_rsigs.emplace_back(bp);
 
     rsig_data.set_rsig(serRsig);
   }
@@ -775,22 +727,12 @@ namespace tx {
 
       rct::key commitment = m_ct.tx_out_pk[bidx].mask;
       commitment = rct::scalarmultKey(commitment, rct::INV_EIGHT);
-      if (is_req_bulletproof_plus()) {
-        std::get<rct::BulletproofPlus>(bproof).V.push_back(commitment);
-      } else {
-        std::get<rct::Bulletproof>(bproof).V.push_back(commitment);
-      }
+      bproof.V.push_back(commitment);
     }
 
     m_ct.tx_out_rsigs.emplace_back(bproof);
-    if (is_req_bulletproof_plus()) {
-      if (!rct::bulletproof_plus_VERIFY(std::get<rct::BulletproofPlus>(m_ct.tx_out_rsigs.back()))) {
-        throw exc::ProtocolException("Returned range signature is invalid");
-      }
-    } else {
-      if (!rct::bulletproof_VERIFY(std::get<rct::Bulletproof>(m_ct.tx_out_rsigs.back()))) {
-        throw exc::ProtocolException("Returned range signature is invalid");
-      }
+    if (!rct::bulletproof_plus_VERIFY(m_ct.tx_out_rsigs.back())) {
+      throw exc::ProtocolException("Returned range signature is invalid");
     }
   }
 
@@ -819,7 +761,6 @@ namespace tx {
   }
 
   void Signer::step_all_outs_set_ack(std::shared_ptr<const messages::monero::MoneroTransactionAllOutSetAck> ack, hw::device &hwdev){
-    CHECK_AND_ASSERT_THROW_MES(is_req_bulletproof(), "Borromean rsig not supported");
     m_ct.rv = std::make_shared<rct::rctSig>();
     m_ct.rv->txnFee = ack->rv().txn_fee();
     m_ct.rv->type = static_cast<uint8_t>(ack->rv().rv_type());
@@ -851,8 +792,6 @@ namespace tx {
       string_to_key(dst->back(), pseudo_out);
     }
 
-    m_ct.rv->mixRing.resize(num_sources);
-
     CHECK_AND_ASSERT_THROW_MES(m_ct.tx_out_pk.size() == m_ct.tx_out_ecdh.size(), "Invalid vector sizes");
     for(size_t i = 0; i < m_ct.tx_out_ecdh.size(); ++i){
       m_ct.rv->outPk.push_back(m_ct.tx_out_pk[i]);
@@ -860,11 +799,7 @@ namespace tx {
     }
 
     for(size_t i = 0; i < m_ct.tx_out_rsigs.size(); ++i){
-      if (is_req_bulletproof_plus()) {
-        m_ct.rv->p.bulletproofs_plus.push_back(std::get<rct::BulletproofPlus>(m_ct.tx_out_rsigs[i]));
-      } else {
-        m_ct.rv->p.bulletproofs.push_back(std::get<rct::Bulletproof>(m_ct.tx_out_rsigs[i]));
-      }
+      m_ct.rv->p.bulletproofs_plus.push_back(m_ct.tx_out_rsigs[i]);
     }
 
     rct::key hash_computed = rct::get_pre_mlsag_hash(*(m_ct.rv), hwdev);
@@ -911,13 +846,8 @@ namespace tx {
     if (ack->has_pseudo_out()){
       CHECK_AND_ASSERT_THROW_MES(m_ct.cur_input_idx < m_ct.pseudo_outs.size(), "Invalid pseudo-out index");
       m_ct.pseudo_outs[m_ct.cur_input_idx] = ack->pseudo_out();
-      if (is_bulletproof()){
-        CHECK_AND_ASSERT_THROW_MES(m_ct.cur_input_idx < m_ct.rv->p.pseudoOuts.size(), "Invalid pseudo-out index");
-        string_to_key(m_ct.rv->p.pseudoOuts[m_ct.cur_input_idx], ack->pseudo_out());
-      } else {
-        CHECK_AND_ASSERT_THROW_MES(m_ct.cur_input_idx < m_ct.rv->pseudoOuts.size(), "Invalid pseudo-out index");
-        string_to_key(m_ct.rv->pseudoOuts[m_ct.cur_input_idx], ack->pseudo_out());
-      }
+      CHECK_AND_ASSERT_THROW_MES(m_ct.cur_input_idx < m_ct.rv->p.pseudoOuts.size(), "Invalid pseudo-out index");
+      string_to_key(m_ct.rv->p.pseudoOuts[m_ct.cur_input_idx], ack->pseudo_out());
     }
   }
 
@@ -926,7 +856,8 @@ namespace tx {
   }
 
   void Signer::step_final_ack(std::shared_ptr<const messages::monero::MoneroTransactionFinalAck> ack){
-    CHECK_AND_ASSERT_THROW_MES(is_clsag(), "Only CLSAGs signatures are supported");
+    // TODO: FCMP++ Trezor signing support not yet available
+    CHECK_AND_ASSERT_THROW_MES(is_fcmp_pp(), "Only FCMP++ transactions are supported");
 
     m_ct.enc_salt1 = ack->salt();
     m_ct.enc_salt2 = ack->rand_mult();
@@ -954,14 +885,7 @@ namespace tx {
       m_ct.signatures[i].assign(reinterpret_cast<const char *>(buff), plen);
     }
 
-    m_ct.rv->p.CLSAGs.reserve(m_ct.signatures.size());
-    for (size_t i = 0; i < m_ct.signatures.size(); ++i) {
-      rct::clsag clsag;
-      if (!cn_deserialize(m_ct.signatures[i], clsag)) {
-        throw exc::ProtocolException("Cannot deserialize clsag[i]");
-      }
-      m_ct.rv->p.CLSAGs.push_back(clsag);
-    }
+    // TODO: Deserialize FCMP++ proofs from m_ct.signatures into rv when Trezor FCMP++ support is available
 
     m_ct.tx.rct_signatures = *(m_ct.rv);
   }

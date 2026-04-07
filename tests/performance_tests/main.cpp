@@ -60,7 +60,6 @@
 #include "bulletproof_plus.h"
 #include "crypto_ops.h"
 #include "multiexp.h"
-#include "sig_clsag.h"
 
 namespace po = boost::program_options;
 
@@ -107,24 +106,24 @@ int main(int argc, char** argv)
   performance_timer timer;
   timer.start();
 
-  // v3 RCT + BP+ transaction construction benchmarks
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 1, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 2, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 10, true, rct::RangeProofPaddedBulletproof, 4);
+  // RCT + BP+ transaction construction benchmarks
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 1, true);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 2, true);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 10, true);
 
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 1, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 2, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 10, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 1, true);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 2, true);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 10, true);
 
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 1, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 2, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 10, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 1, true);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 2, true);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 10, true);
 
-  // v3 RCT + BP+ signature verification benchmarks
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 2, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 10, 2, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 100, 2, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 10, true, rct::RangeProofPaddedBulletproof, 4);
+  // RCT + BP+ signature verification benchmarks
+  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 2, 2, true);
+  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 10, 2, true);
+  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 100, 2, true);
+  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 2, 10, true);
 
   // Aggregated BP+ verification benchmarks
   TEST_PERFORMANCE4(filter, p, test_check_tx_signature_aggregated_bulletproofs, 2, 2, 62, 4);
@@ -167,14 +166,6 @@ int main(int argc, char** argv)
   TEST_PERFORMANCE1(filter, p, test_cn_slow_hash, 4);
   TEST_PERFORMANCE1(filter, p, test_cn_fast_hash, 32);
   TEST_PERFORMANCE1(filter, p, test_cn_fast_hash, 16384);
-
-  TEST_PERFORMANCE3(filter, p, test_sig_clsag, 4, 2, 2); // CLSAG verification
-  TEST_PERFORMANCE3(filter, p, test_sig_clsag, 8, 2, 2);
-  TEST_PERFORMANCE3(filter, p, test_sig_clsag, 16, 2, 2);
-  TEST_PERFORMANCE3(filter, p, test_sig_clsag, 32, 2, 2);
-  TEST_PERFORMANCE3(filter, p, test_sig_clsag, 64, 2, 2);
-  TEST_PERFORMANCE3(filter, p, test_sig_clsag, 128, 2, 2);
-  TEST_PERFORMANCE3(filter, p, test_sig_clsag, 256, 2, 2);
 
   TEST_PERFORMANCE2(filter, p, test_equality, memcmp32, true);
   TEST_PERFORMANCE2(filter, p, test_equality, memcmp32, false);

@@ -1,6 +1,6 @@
 # Shekyl Design Concepts
 
-> **Last updated:** 2026-04-01
+> **Last updated:** 2026-04-03
 
 ## Monetary Supply and Denomination Policy (Next Generation Shekyl)
 
@@ -70,6 +70,8 @@ Reward logic in `src/cryptonote_basic/cryptonote_basic_impl.cpp`:
 Given the mismatch above, the original chain effectively entered minimum-subsidy behavior immediately.
 
 For Shekyl NG, constants are generated from `config/economics_params.json` and included via generated headers referenced by `src/cryptonote_config.h`.
+
+Staking tier lock durations, yield multipliers, and `shekyl_stake_max_claim_range` are read from the same JSON by `rust/shekyl-staking/build.rs` into generated Rust constants (`TIERS`, `MAX_CLAIM_RANGE`), keeping wallet and node FFI (`shekyl_stake_*`) aligned with the economics file.
 
 ### Technical limit with `uint64_t`
 
@@ -259,6 +261,17 @@ compromised key can claim accumulated rewards or control the output at unlock.
 Multisig staked outputs and claim transactions use the same `pqc_auth`
 framework as regular transactions, with the extended signature-list format.
 See `docs/PQC_MULTISIG.md` for the full specification.
+
+#### Claim reward output indistinguishability
+
+Claim reward outputs MUST be regular `txout_to_tagged_key` outputs with
+confidential amounts (Bulletproofs+ range proofs), standard KEM derivation
+for per-output PQC keys, and a dummy change output to match the 2-output
+structure of regular transactions. Once a reward output matures into the
+curve tree, spending it must be indistinguishable from spending any other
+output. The claim *action* (`txin_stake_claim`) is visible, but the
+resulting reward output must blend into the anonymity set. See
+`docs/FCMP_PLUS_PLUS.md` § 15 for the full specification.
 
 #### Self-balancing dynamics
 
@@ -730,12 +743,12 @@ will drift.
 
 Instead of a single coinbase output per miner, the miner transaction could
 split the reward into K outputs of randomized denomination (summing to the
-correct total). These outputs enter the UTXO set as potential decoy ring
-members for future transactions.
+correct total). These outputs enter the UTXO set and are part of the full-chain
+anonymity set used by FCMP++ membership proofs.
 
 **Privacy gain:** More coinbase-shaped outputs in the UTXO set increase the
-ring decoy pool quality. Transactions spending miner rewards become harder
-to distinguish from non-miner transactions.
+overall UTXO set diversity. With FCMP++, the full UTXO set is the anonymity
+set, so additional outputs improve privacy indirectly by increasing set size.
 
 **Risk:** Increases coinbase transaction size and adds consensus complexity.
 Anti-sybil enforcement is needed to prevent miners from creating outputs
@@ -746,7 +759,7 @@ that only they can distinguish.
 Any reward-privacy mechanism must satisfy all of the following:
 
 1. **No anonymity-set regression.** The change must not reduce the effective
-   ring size or stealth-address unlinkability for any participant.
+   FCMP++ anonymity set or stealth-address unlinkability for any participant.
 2. **No stuffing vector reintroduction.** The mechanism must not create a new
    profitable strategy for inflating transaction volume or manipulating reward
    timing.
@@ -772,8 +785,8 @@ Any reward-privacy mechanism must satisfy all of the following:
 v4. **Claim batching** is a natural fit for the staker reward redesign
 already planned in the v4 privacy phase. **Reward output shaping** requires
 significantly more research and should only be considered after lattice-based
-ring signatures are available (V4-B or later), as the privacy benefit depends
-on ring decoy quality.
+further FCMP++ optimizations are available, as the privacy benefit depends
+on UTXO set composition.
 
 **Gate:** Promote to protocol proposal only if simulation confirms a
 measurable privacy gain (e.g., >20% increase in effective anonymity set size

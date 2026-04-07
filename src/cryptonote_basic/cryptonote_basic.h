@@ -48,7 +48,7 @@
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
 #include "misc_language.h"
-#include "ringct/rctTypes.h"
+#include "fcmp/rctTypes.h"
 #include "device/device.hpp"
 #include "cryptonote_basic/fwd.h"
 
@@ -217,7 +217,11 @@ namespace cryptonote
       FIELD(scheme_id)
       FIELD(flags)
       FIELD(hybrid_public_key)
+      if (hybrid_public_key.size() > config::PQC_MAX_PUBLIC_KEY_BLOB)
+        return false;
       FIELD(hybrid_signature)
+      if (hybrid_signature.size() > config::PQC_MAX_SIGNATURE_BLOB)
+        return false;
     END_SERIALIZE()
   };
 
@@ -266,7 +270,7 @@ namespace cryptonote
   public:
     std::vector<std::vector<crypto::signature> > signatures; //count signatures  always the same as inputs count
     rct::rctSig rct_signatures;
-    std::optional<pqc_authentication> pqc_auth;
+    std::vector<pqc_authentication> pqc_auths; // one per input for FCMP++ txs
 
     // hash cash
     mutable crypto::hash hash;
@@ -276,6 +280,8 @@ namespace cryptonote
     bool pruned;
 
     std::atomic<unsigned int> unprunable_size;
+    /** Byte offset from tx blob start where pqc_auths begin (binary only); equals unprunable_size if absent. */
+    std::atomic<unsigned int> pqc_auths_offset;
     std::atomic<unsigned int> prefix_size;
 
     transaction();
@@ -353,18 +359,34 @@ namespace cryptonote
           if (!r || !ar.good()) return false;
           ar.end_object();
         }
+        if (std::is_same<Archive<W>, binary_archive<W>>())
+          pqc_auths_offset = ar.getpos() - start_pos;
         if (version >= 3 && !vin.empty() && !std::holds_alternative<txin_gen>(vin[0]))
         {
-          ar.tag("pqc_auth");
-          pqc_authentication auth_val;
-          if (typename Archive<W>::is_saving())
+          bool read_pqc = true;
+          if constexpr (std::is_same_v<Archive<W>, binary_archive<false>>)
           {
-            if (!pqc_auth) return false;
-            auth_val = *pqc_auth;
+            if (ar.eof() || ar.remaining_bytes() == 0)
+            {
+              read_pqc = false;
+              pqc_auths.clear();
+            }
           }
-          if (!::do_serialize(ar, auth_val)) return false;
-          if (!typename Archive<W>::is_saving())
-            pqc_auth = auth_val;
+          if (read_pqc)
+          {
+            ar.tag("pqc_auths");
+            ar.begin_array();
+            PREPARE_CUSTOM_VECTOR_SERIALIZATION(vin.size(), pqc_auths);
+            if (pqc_auths.size() != vin.size())
+              return false;
+            for (size_t i = 0; i < vin.size(); ++i)
+            {
+              FIELDS(pqc_auths[i])
+              if (vin.size() - i > 1)
+                ar.delimit_array();
+            }
+            ar.end_array();
+          }
         }
         if (!vin.empty())
         {
@@ -375,8 +397,7 @@ namespace cryptonote
           {
             ar.tag("rctsig_prunable");
             ar.begin_object();
-            bool r = rct_signatures.p.serialize_rctsig_prunable(ar, rct_signatures.type, vin.size(), vout.size(),
-                vin.size() > 0 && std::holds_alternative<txin_to_key>(vin[0]) ? std::get<txin_to_key>(vin[0]).key_offsets.size() - 1 : 0);
+            bool r = rct_signatures.p.serialize_rctsig_prunable(ar, rct_signatures.type, vin.size(), vout.size());
             if (!r || !ar.good()) return false;
             ar.end_object();
           }
@@ -389,6 +410,7 @@ namespace cryptonote
     template<bool W, template <bool> class Archive>
     bool serialize_base(Archive<W> &ar)
     {
+      const auto start_pos = ar.getpos();
       FIELDS(*static_cast<transaction_prefix *>(this))
 
       if (version == 1)
@@ -404,22 +426,40 @@ namespace cryptonote
           if (!r || !ar.good()) return false;
           ar.end_object();
         }
+        if (std::is_same<Archive<W>, binary_archive<W>>())
+          pqc_auths_offset = ar.getpos() - start_pos;
         if (version >= 3 && !vin.empty() && !std::holds_alternative<txin_gen>(vin[0]))
         {
-          ar.tag("pqc_auth");
-          pqc_authentication auth_val;
-          if (typename Archive<W>::is_saving())
+          bool read_pqc = true;
+          if constexpr (std::is_same_v<Archive<W>, binary_archive<false>>)
           {
-            if (!pqc_auth) return false;
-            auth_val = *pqc_auth;
+            if (ar.eof() || ar.remaining_bytes() == 0)
+            {
+              read_pqc = false;
+              pqc_auths.clear();
+            }
           }
-          if (!::do_serialize(ar, auth_val)) return false;
-          if (!typename Archive<W>::is_saving())
-            pqc_auth = auth_val;
+          if (read_pqc)
+          {
+            ar.tag("pqc_auths");
+            ar.begin_array();
+            PREPARE_CUSTOM_VECTOR_SERIALIZATION(vin.size(), pqc_auths);
+            if (pqc_auths.size() != vin.size())
+              return false;
+            for (size_t i = 0; i < vin.size(); ++i)
+            {
+              FIELDS(pqc_auths[i])
+              if (vin.size() - i > 1)
+                ar.delimit_array();
+            }
+            ar.end_array();
+          }
         }
       }
       if (!typename Archive<W>::is_saving())
         pruned = true;
+      if (std::is_same<Archive<W>, binary_archive<W>>())
+        unprunable_size = ar.getpos() - start_pos;
       return ar.good();
     }
 
@@ -434,9 +474,10 @@ namespace cryptonote
     blob_size_valid(false),
     signatures(t.signatures),
     rct_signatures(t.rct_signatures),
-    pqc_auth(t.pqc_auth),
+    pqc_auths(t.pqc_auths),
     pruned(t.pruned),
     unprunable_size(t.unprunable_size.load()),
+    pqc_auths_offset(t.pqc_auths_offset.load()),
     prefix_size(t.prefix_size.load())
   {
     if (t.is_hash_valid())
@@ -465,7 +506,7 @@ namespace cryptonote
     set_blob_size_valid(false);
     signatures = t.signatures;
     rct_signatures = t.rct_signatures;
-    pqc_auth = t.pqc_auth;
+    pqc_auths = t.pqc_auths;
     if (t.is_hash_valid())
     {
       hash = t.hash;
@@ -483,6 +524,7 @@ namespace cryptonote
     }
     pruned = t.pruned;
     unprunable_size = t.unprunable_size.load();
+    pqc_auths_offset = t.pqc_auths_offset.load();
     prefix_size = t.prefix_size.load();
     return *this;
   }
@@ -504,12 +546,13 @@ namespace cryptonote
     transaction_prefix::set_null();
     signatures.clear();
     rct_signatures.type = rct::RCTTypeNull;
-    pqc_auth = std::nullopt;
+    pqc_auths.clear();
     set_hash_valid(false);
     set_prunable_hash_valid(false);
     set_blob_size_valid(false);
     pruned = false;
     unprunable_size = 0;
+    pqc_auths_offset = 0;
     prefix_size = 0;
   }
 
@@ -548,6 +591,11 @@ namespace cryptonote
     uint64_t timestamp;
     crypto::hash  prev_id;
     uint32_t nonce;
+    crypto::hash  curve_tree_root; // FCMP++ curve tree root after this block's outputs
+
+    block_header()
+      : major_version(0), minor_version(0), timestamp(0), prev_id(crypto::null_hash),
+        nonce(0), curve_tree_root(crypto::null_hash) {}
 
     BEGIN_SERIALIZE()
       VARINT_FIELD(major_version)
@@ -555,6 +603,7 @@ namespace cryptonote
       VARINT_FIELD(timestamp)
       FIELD(prev_id)
       FIELD(nonce)
+      FIELD(curve_tree_root)
     END_SERIALIZE()
   };
 

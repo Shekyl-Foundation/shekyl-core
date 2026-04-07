@@ -1,6 +1,6 @@
 # PQC Multisig for Shekyl
 
-> **Last updated:** 2026-04-02
+> **Last updated:** 2026-04-06
 
 ## Purpose
 
@@ -28,10 +28,10 @@ Multisig is implemented in two phases:
    data confirms multisig usage is negligible — and on-chain
    indistinguishable from single-key spends due to secret-splitting). The
    aggregate chain growth impact is noise.
-3. **Preserve ring privacy.** All multisig coordination happens off-chain.
-   On-chain transactions must remain indistinguishable from single-key spends
-   at the ring/CLSAG layer. The `pqc_auth` field carries authorization
-   material, not privacy-layer data.
+3. **Preserve full-chain anonymity.** All multisig coordination happens
+   off-chain. On-chain transactions must remain indistinguishable from
+   single-key spends at the FCMP++ membership proof layer. The `pqc_auth`
+   field carries authorization material, not membership proof data.
 4. **Protect long-duration staked outputs.** The primary use case driving V3
    multisig is securing staked positions locked for 25,000–150,000 blocks
    (35–208 days). A single key controlling a locked position for months is a
@@ -53,7 +53,7 @@ On the rebooted Shekyl chain, the classical multisig code is removed:
 - `account_base::make_multisig` and its secret-splitting machinery are
   deleted from `account.cpp`.
 - The MMS (Multisig Messaging System) transport layer is not carried forward.
-- No CLSAG multi-round signing coordination exists in the codebase.
+- No multi-round signing coordination exists in the codebase.
 - Wallet file format does not include classical multisig key state.
 - `wallet2.cpp` contains zero classical multisig code: all multisig
   functions (`make_multisig`, `exchange_multisig_keys`, `export_multisig`,
@@ -65,26 +65,26 @@ On the rebooted Shekyl chain, the classical multisig code is removed:
 
 ### Architecture: Single Classical Key + PQC Multisig
 
-The CLSAG/RingCT layer always uses a single classical key. The M-of-N
-authorization lives entirely in the `pqc_auth` layer:
+The FCMP++ layer uses a single classical key. The M-of-N authorization
+lives entirely in the `pqc_auth` layer:
 
 ```text
-Ring/CLSAG layer:   single Ed25519 key → normal CLSAG signing (no multi-round)
+FCMP++ layer:       coordinator constructs membership proof → single proof covers all inputs
 PQC auth layer:     M-of-N hybrid signatures → scheme_id = 2
 
 Transaction building:
-  1. Coordinator builds tx body with single classical key (standard CLSAG)
+  1. Coordinator builds tx body with single classical key (standard FCMP++ proof construction)
   2. Coordinator computes canonical signing payload
   3. M signers each produce independent hybrid (Ed25519 + ML-DSA-65) signatures
-  4. Coordinator assembles pqc_auth and broadcasts
+  4. Coordinator assembles pqc_auths and broadcasts
 ```
 
 This eliminates the dual-layer coordination problem entirely. There is no
-sequencing of CLSAG multisig rounds followed by PQC signing rounds — the
-CLSAG layer is always single-key, and the PQC layer handles all multi-party
-authorization.
+sequencing of membership proof multisig rounds followed by PQC signing
+rounds — the FCMP++ layer is always single-key, and the PQC layer handles
+all multi-party authorization.
 
-The classical key used at the CLSAG layer is held by the coordinator (or
+The classical key used at the FCMP++ layer is held by the coordinator (or
 derived from a shared secret agreed during group setup). This key is NOT
 the security boundary for multisig — the `pqc_auth` M-of-N threshold is.
 An attacker who compromises the classical key alone cannot spend: they
@@ -273,7 +273,9 @@ signed_payload =
   cn_fast_hash(
     serialize(TransactionPrefixV3)
     || serialize(RctSigningBody)
+    || H(serialize(RctSigPrunable))
     || serialize(PqcAuthHeader)
+    || H(pqc_pk_0) || ... || H(pqc_pk_{N-1})
   )
 ```
 
@@ -429,6 +431,10 @@ oversized multisig payloads.
 
 ### Transaction Size Impact
 
+With per-input `pqc_auths`, the authorization overhead is now per-input.
+A typical 2-in/2-out multisig transaction is larger than a single-input
+equivalent because each input carries its own `PqcAuthentication` entry.
+
 Measured per-signer contribution (from V3 phase-1 measurements):
 
 - `HybridPublicKey`: 1,996 bytes
@@ -490,10 +496,18 @@ over the V4 lattice threshold approach.
 
 #### Classical key management
 
-The CLSAG/RingCT layer uses a single classical key held by the coordinator
+The FCMP++ layer uses a single classical key held by the coordinator
 (or derived from a shared secret agreed during group setup). This key is
-NOT the multisig security boundary — it only satisfies the ring signature
+NOT the multisig security boundary — it only satisfies the membership proof
 layer. The M-of-N PQC threshold is the authorization gate.
+
+#### Per-output PQC key coordination
+
+Each signer must derive the per-output PQC keypair for the output being
+spent from their copy of the KEM shared secret. The coordinator distributes
+the ML-KEM ciphertexts during the signing request phase so each signer can
+independently compute the combined shared secret and derive the correct
+per-output PQC keypair for authorization.
 
 #### Signing protocol (file-based)
 
@@ -677,6 +691,89 @@ exercise the boundary between valid and invalid inputs.
 
 ---
 
+## FROST Threshold SAL for FCMP++ Classical Keys
+
+### Overview
+
+While the V3 PQC multisig layer (`scheme_id = 2`) handles M-of-N hybrid
+signature authorization, the FCMP++ classical layer (the membership proof)
+is constructed by a single coordinator holding the spend key `x`. This
+creates a single-point-of-failure at the classical key layer.
+
+**FROST SAL** (Flexible Round-Optimized Schnorr Threshold — Spend
+Authorization and Linkability) addresses this by threshold-sharing the
+classical spend key `y` across N participants using `modular-frost`'s
+`Ed25519T` ciphersuite. The coordinator retains `x` (not shared) and the
+FROST group key `Y = y * T` replaces the single-signer `y` in the FCMP++
+proof construction.
+
+### Architecture
+
+```text
+Classical key decomposition:  O = x*G + y*T
+  x: held by coordinator (not threshold-shared)
+  y: FROST threshold-shared across N participants via DKG
+
+FCMP++ proof flow (multisig):
+  1. Coordinator creates FrostSalSession per input (rerandomizes output)
+  2. Coordinator exports signing request with FROST round-1 data
+  3. M participants produce FROST signing shares
+  4. Coordinator aggregates shares → SpendAuthAndLinkability
+  5. Coordinator calls prove_with_sal() → complete FCMP++ proof
+```
+
+### Key Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| `FrostSalSession` | `rust/shekyl-fcmp/src/frost_sal.rs` | Per-input FROST SAL state machine |
+| `prove_with_sal()` | `rust/shekyl-fcmp/src/proof.rs` | Proof construction from pre-aggregated SAL |
+| `FrostDkg` / `SerializedThresholdKeys` | `rust/shekyl-fcmp/src/frost_dkg.rs` | DKG output management and serialization |
+| FROST SAL FFI | `rust/shekyl-ffi/src/lib.rs` | C ABI for session lifecycle |
+| FROST DKG FFI | `rust/shekyl-ffi/src/lib.rs` | C ABI for key import/export/validation |
+| Wallet integration | `src/wallet/wallet2.cpp` | FROST session management in multisig flow |
+
+### DKG Setup
+
+Before FROST signing, participants must complete a Distributed Key
+Generation (DKG) ceremony to produce `ThresholdKeys<Ed25519T>`. The DKG
+output is serialized and stored in the wallet file (`m_frost_threshold_keys`)
+alongside the group public key (`m_frost_group_key`).
+
+The wallet exposes `import_frost_threshold_keys()` and
+`export_frost_threshold_keys()` for managing the DKG output. Key validation
+checks that the threshold parameters match the existing PQC multisig group
+(`m_pqc_multisig_m` / `m_pqc_multisig_n`).
+
+### Signing Protocol (v3 format)
+
+The FROST-enabled signing protocol uses a v3 signing request format:
+
+1. **`prepare_multisig_fcmp_proof`**: When FROST keys are present, creates
+   `FrostSalSession` per input instead of generating the full proof.
+   Sessions store rerandomized outputs and pseudo-outs.
+
+2. **`export_multisig_signing_request`**: Emits version 3 request with
+   `frost_sessions` array containing per-input `rerand` (hex) and
+   `pseudo_out` (hex), plus the `frost_group_key`.
+
+3. **`sign_multisig_partial`**: Participants verify the FROST group key,
+   acknowledge the signing round, and produce their FROST share alongside
+   the PQC hybrid signature.
+
+4. **`import_multisig_signatures`**: Coordinator aggregates FROST shares
+   via `shekyl_frost_sal_aggregate_and_prove()`, producing the final
+   FCMP++ proof. PQC signatures are assembled as in non-FROST mode.
+
+### Transition to Lattice Threshold
+
+FROST SAL provides classical threshold signing as a bridge. When lattice
+threshold research matures sufficiently for a NIST-backed standard, the
+FROST SAL layer will be replaced by a lattice threshold scheme that
+provides quantum resistance for both the classical and PQC layers.
+
+---
+
 ## V4: Lattice-Based Composite Threshold (Future)
 
 ### Motivation
@@ -710,7 +807,7 @@ equation. The remaining (N-M) vectors stay secret.
   scaling).
 - True threshold security (no single party can spend).
 - Single-equation verification (constant time, independent of N).
-- Preserves ring privacy (threshold math happens off-chain).
+- Preserves full-chain anonymity (threshold math happens off-chain).
 
 ### Barriers (Realistic)
 
@@ -814,11 +911,11 @@ True indistinguishability would require all transactions to use the same
 scheme — this is a V5+ consideration if multisig adoption grows
 significantly.
 
-### Ring Privacy
+### FCMP++ Anonymity
 
-Neither V3 nor V4 multisig affects the ring/CLSAG layer. The
-`pqc_auth` field is authorization material, not ring-member selection data.
-Anonymity set size is unchanged.
+Neither V3 nor V4 multisig affects the FCMP++ membership proof layer. The
+`pqc_auths` field carries authorization material, not membership proof data.
+The anonymity set (full UTXO set) is unchanged.
 
 ---
 

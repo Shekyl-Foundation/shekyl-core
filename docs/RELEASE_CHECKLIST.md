@@ -1,3 +1,16 @@
+- [ ] **Stressnet stable for 4 consecutive weeks** (Phase 7.7)
+  - [ ] All stressnet acceptance criteria met (see `tests/stressnet/README.md`)
+  - [ ] Zero tree root divergences for full 4-week run
+  - [ ] Block validation p95 < 500ms sustained
+  - [ ] Verification cache hit rate > 95% sustained
+  - [ ] Stressnet summary report archived
+  - [ ] Stressnet artifact links recorded in release notes (metrics dashboards, logs, and report commit hash)
+- [ ] **4-scalar leaf circuit audit completed** (Phase 9)
+  - [ ] Audit engagement initiated after stressnet gate
+  - [ ] No critical or high findings in final report
+  - [ ] All findings remediated and re-verified
+  - [ ] Written security assessment report archived (see `docs/AUDIT_SCOPE.md`)
+  - [ ] Audit artifact links recorded in release notes (report URL or digest, remediation PRs)
 - [ ] Security audit
 - [ ] Code audit
 - [ ] PQC specification frozen
@@ -14,14 +27,20 @@
   - [x] malformed hybrid signature rejection tested (3 negative vector integration tests)
   - [x] encoded transaction size impact measured (~5,385 bytes per user tx)
   - [x] payload limit guidance documented in V3_ROLLOUT.md
-- [ ] Ledger integration
-  - [ ] Implemented in Shekyl codebase (if needed)
-  - [ ] Ledger app integration coded by Ledger
+- [ ] Ledger integration (deferred to v1.1)
+  - [x] FCMP++ device abstraction stubs in place (`device_ledger.cpp`)
+  - [ ] Ledger app updated with FCMP++ proof generation support
   - [ ] Ledger Shekyl app (or Monero-compatible app) update available
-- [ ] Trezor integration
-  - [ ] Implemented in Shekyl codebase (if needed)
-  - [ ] Trezor app integration coded by Trezor
+- [ ] Trezor integration (deferred to v1.1)
+  - [x] FCMP++ device abstraction defaults inherited (unsupported, returns false)
+  - [ ] Trezor cold-signing protocol updated for FCMP++ transactions
   - [ ] Trezor firmware update available (if needed)
+
+**Software wallets only for v1.0 launch. Hardware support (Ledger/Trezor) targeted for v1.1.**
+The device abstraction layer (`device.hpp`) exposes `fcmp_prepare`, `fcmp_proof_start`,
+and `fcmp_proof_add_input` so that hardware wallet implementations can be added without
+further changes to the interface.
+
 - [x] Fork height set (rebooted chain: all features at HF 1 from genesis)
   - [ ] Shekyl announcement mailer / notice
   - [ ] Twitter announcement
@@ -61,8 +80,16 @@
   - [ ] PQC multisig group creation (2-of-3, 3-of-5)
   - [ ] PQC multisig signing flow (export request, partial sign, import, broadcast)
   - [ ] PQC multisig scheme downgrade rejection verified
-  - [ ] PQC multisig fuzz targets run (4 harnesses, 10M iterations each)
+  - [ ] PQC multisig fuzz targets run (5 harnesses, 10M iterations each)
   - [ ] PQC multisig test vectors validated against docs/PQC_TEST_VECTOR_002_MULTISIG.json
+  - [ ] FCMP++ proof verification tested (prove/verify round-trip)
+  - [ ] Curve tree operations tested (grow/trim/root/path)
+  - [ ] FCMP++/staking/PQC fuzz targets run (11 harnesses total, 10M iterations each)
+  - [ ] CI fuzz smoke gate passed (required harness inventory check in `.github/workflows/build.yml`)
+  - [ ] Per-output PQC key derivation tested
+  - [ ] Bech32m address encoding/decoding tested
+  - [ ] Transaction pruning mode tested (`--prune-blockchain`)
+  - [ ] Block header `curve_tree_root` commitment validated
   - [ ] ZMQ/RPC consumer regression testing for larger transactions
 - [ ] CLI reproducible builds validated
 - [ ] Rust/PQC reproducible build inputs documented

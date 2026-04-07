@@ -30,7 +30,6 @@ set(unit_tests_sources
   account.cpp
   apply_permutation.cpp
   address_from_url.cpp
-  base58.cpp
   blockchain_db.cpp
   block_queue.cpp
   block_reward.cpp
@@ -95,7 +94,7 @@ set(unit_tests_sources
   util.cpp
   varint.cpp
   ver_rct_non_semantics_simple_cached.cpp
-  ringct.cpp
+  fcmp.cpp
   output_selection.cpp
   vercmp.cpp
   ringdb.cpp
@@ -104,6 +103,10 @@ set(unit_tests_sources
   is_hdd.cpp
   aligned.cpp
   rpc_version_str.cpp
+  staking.cpp
+  deferred_insertion.cpp
+  tx_data_pruning_lmdb.cpp
+  pending_tree_fuzz.cpp
   zmq_rpc.cpp)
 
 set(unit_tests_headers
@@ -114,7 +117,7 @@ monero_add_minimal_executable(unit_tests
   ${unit_tests_headers})
 target_link_libraries(unit_tests
   PRIVATE
-    ringct
+    fcmp
     cryptonote_protocol
     cryptonote_core
     daemon_messages

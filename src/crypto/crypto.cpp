@@ -749,6 +749,10 @@ POP_WARNINGS
     return sc_isnonzero(&h) == 0;
   }
 
+  void key_image_y_normalize(key_image& ki) {
+    reinterpret_cast<unsigned char*>(ki.data)[31] &= 0x7f;
+  }
+
   void crypto_ops::derive_view_tag(const key_derivation &derivation, size_t output_index, view_tag &view_tag) {
     #pragma pack(push, 1)
     struct {

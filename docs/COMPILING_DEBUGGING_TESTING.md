@@ -2,16 +2,48 @@
 
 This document describes ways of compiling, debugging and testing efficiently for various use cases.
 The intended audience are developers, who want to leverage build and test tricks in Shekyl via `CMake`. The document will lower the entry point for these developers.
-Before reading this document, please consult section "Build instructions" in the main README.md. 
+Before reading this document, please consult section "Build instructions" in the main README.md.
 Some information from README.md will be repeated here, but the aim is to go beyond it.
 
-PQC note:
+PQC and FCMP++ note:
 
-- Shekyl's rebooted chain design depends on Rust-based PQC components
-- once PQC transaction authentication is enabled for the rebooted chain, Rust
-  should be treated as required for consensus-valid builds
-- the canonical PQC format/spec is documented in
+- Shekyl's rebooted chain design depends on Rust-based PQC and FCMP++ components
+- Rust should be treated as required for consensus-valid builds
+- The FCMP++ Rust crates (`shekyl-fcmp`, `shekyl-address`) are required for
+  consensus-valid builds alongside the existing `shekyl-crypto-pq` and
+  `shekyl-ffi` crates
+- The canonical PQC format/spec is documented in
   `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
+
+## Rust Reproducible Builds
+
+Shekyl includes three Rust crates in the consensus-critical build path: `shekyl-crypto-pq`, `shekyl-fcmp`, and `shekyl-ffi`. Reproducibility of the Rust static library is essential for release verification.
+
+### Requirements
+
+- **x86_64 host only.** Rust does not produce bit-identical output across CPU architectures (see Monero #9801). Release artifacts must be built on x86_64 Linux. ARM64, RISC-V, and other architectures may produce functionally correct binaries but they will not match the deterministic reference hash.
+- **Pinned toolchain and vendored snapshot.** The workspace uses `Cargo.lock`
+  to pin dependency versions, and vendored `shekyl-oxide` crates under
+  `rust/shekyl-oxide/` are tracked via
+  `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT`. All `cargo build`
+  invocations in CI and CMake pass `--locked` to enforce reproducibility.
+- **Stable Rust.** The workspace targets stable Rust (currently 1.94.0+). Nightly features are not used.
+
+### Verifying determinism locally
+
+```bash
+cd rust
+cargo build --locked --release -p shekyl-ffi
+sha256sum target/release/libshekyl_ffi.a
+cargo clean -p shekyl-ffi --release
+cargo build --locked --release -p shekyl-ffi
+sha256sum target/release/libshekyl_ffi.a
+# Both hashes must match
+```
+
+### Guix integration
+
+Guix gained improved Rust packaging support in 2025 with Cargo.lock lockfile importing. The `guix-rustup` third-party channel provides access to pinned stable Rust toolchains. Full Guix reproducible release integration is tracked as a Phase 1a.2 deliverable. Until Guix integration is validated, release builds use the CI determinism check (build twice, diff hashes) as the reproducibility gate.
 
 ## Basic compilation
 
@@ -67,7 +99,7 @@ This parameter is what we need to transfer to CB, in order to reflect the same b
 
 `Project -> Set program's arguments...`
 
-Then in the `Program's arguments` textbox you'd write in this case: 
+Then in the `Program's arguments` textbox you'd write in this case:
 
 `--gtest_filter="logging.*"`
 
@@ -238,9 +270,9 @@ build/tests/core_tests/core_tests --generate_and_play_test_data --filter="gen_ch
 
 Shekyl's test suite is adapted for **v3-from-genesis**: all user transactions
 are version 3 with mandatory PQC authentication (hybrid Ed25519 + ML-DSA-65).
-Coinbase transactions remain version 2. Key differences from upstream Monero:
+Coinbase transactions also use version 3 (unified with regular txs). Key differences from upstream Monero:
 
-- `FAKECHAIN` tests inject `--fixed-difficulty=1` and relax mixin requirements
+- `FAKECHAIN` tests inject `--fixed-difficulty=1`
 - Transaction construction helpers produce v3 with `use_view_tags=true`
 - Coinbase outputs are indexed under `amount=0` for correct RCT spending
 - Balance verification in callbacks uses RCT ecdhInfo decryption

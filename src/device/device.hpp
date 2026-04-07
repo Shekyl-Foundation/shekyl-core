@@ -31,7 +31,7 @@
 
 #include "crypto/crypto.h"
 #include "crypto/chacha.h"
-#include "ringct/rctTypes.h"
+#include "fcmp/rctTypes.h"
 #include "cryptonote_config.h"
 
 
@@ -179,7 +179,7 @@ namespace hw {
         virtual bool  generate_key_image(const crypto::public_key &pub, const crypto::secret_key &sec, crypto::key_image &image) = 0;
         virtual bool  derive_view_tag(const crypto::key_derivation &derivation, const std::size_t output_index, crypto::view_tag &view_tag) = 0;
 
-        // alternative prototypes available in libringct
+        // alternative prototypes available in libfcmp
         rct::key scalarmultKey(const rct::key &P, const rct::key &a)
         {
             rct::key aP;
@@ -232,9 +232,12 @@ namespace hw {
         virtual bool  mlsag_hash(const rct::keyV &long_message, rct::key &c) = 0;
         virtual bool  mlsag_sign(const rct::key &c, const rct::keyV &xx, const rct::keyV &alpha, const size_t rows, const size_t dsRows, rct::keyV &ss) = 0;
 
-        virtual bool clsag_prepare(const rct::key &p, const rct::key &z, rct::key &I, rct::key &D, const rct::key &H, rct::key &a, rct::key &aG, rct::key &aH) = 0;
-        virtual bool clsag_hash(const rct::keyV &data, rct::key &hash) = 0;
-        virtual bool clsag_sign(const rct::key &c, const rct::key &a, const rct::key &p, const rct::key &z, const rct::key &mu_P, const rct::key &mu_C, rct::key &s) = 0;
+        /* ======================================================================= */
+        /*                                 FCMP++                                  */
+        /* ======================================================================= */
+        virtual bool fcmp_prepare(const rct::key &tree_root, uint8_t tree_depth) { return false; }
+        virtual bool fcmp_proof_start(size_t num_inputs) { return false; }
+        virtual bool fcmp_proof_add_input(const rct::key &key_image, const std::vector<uint8_t> &tree_path) { return false; }
 
         virtual bool  close_tx(void) = 0;
 

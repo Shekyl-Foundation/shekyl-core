@@ -30,13 +30,13 @@
 
 #pragma once
 
-#include "ringct/rctSigs.h"
+#include "fcmp/rctSigs.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 
 #include "single_tx_test_base.h"
 
 template<size_t ring_size, bool ver>
-class test_ringct_mlsag : public single_tx_test_base
+class test_fcmp_mlsag : public single_tx_test_base
 {
 public:
   static const size_t cols = ring_size;

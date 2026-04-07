@@ -1,0 +1,75 @@
+# Stressnet Configuration
+# 4-week sustained-load testnet for FCMP++ pre-audit gate
+
+duration_weeks: 4
+
+nodes:
+  full_archival: 3
+  pruned: 2
+  rpc_endpoints:
+    - http://node-1:12029
+    - http://node-2:12029
+    - http://node-3:12029
+    - http://node-4:12029
+    - http://node-5:12029
+  archival_endpoints:
+    - http://node-1:12029
+    - http://node-2:12029
+    - http://node-3:12029
+  pruned_endpoints:
+    - http://node-4:12029
+    - http://node-5:12029
+
+load_profile:
+  sustained_tx_rate: 25  # txs per block (near block-weight limit)
+  block_time_seconds: 120
+  input_distribution:
+    1_input: 0.30
+    2_input: 0.50
+    4_input: 0.15
+    8_input: 0.05
+  staking:
+    new_stakes_per_day: 50
+    claims_per_day: 20
+    tier_distribution:
+      short: 0.50   # 1,000 blocks
+      medium: 0.35   # 25,000 blocks
+      long: 0.15    # 150,000 blocks
+  multisig:
+    2_of_3_txs_per_day: 10
+
+wallet:
+  seed_wallets: 20
+  initial_fund_amount: 10000  # SHEKYL per wallet
+  restore_test_interval_hours: 24
+
+monitoring:
+  poll_interval_seconds: 30
+  report_interval_seconds: 300
+  report_dir: stressnet_reports
+
+  metrics:
+    - tree_growth_rate_outputs_per_day
+    - tree_growth_rate_storage_per_day
+    - pruned_vs_full_storage_delta
+    - verification_cache_hit_rate       # target: >95%
+    - proof_generation_latency_p95
+    - block_validation_time_p95
+    - wallet_precomputation_freshness
+    - tree_root_consensus_divergences   # must be 0
+    - reference_block_rejection_rate
+    - restore_from_seed_correctness
+    - checkpoint_pruning_integrity
+
+  thresholds:
+    cache_hit_rate_warn: 0.90
+    cache_hit_rate_target: 0.95
+    block_validation_p95_max_ms: 500
+    storage_delta_warn_pct: 50
+    precomputation_stale_blocks_warn: 20
+
+  failure_criteria:
+    - tree_root_divergence_between_nodes
+    - block_validation_p95_exceeds_500ms
+    - verification_cache_corruption
+    - wallet_restore_key_mismatch

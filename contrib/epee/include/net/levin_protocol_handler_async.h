@@ -36,6 +36,7 @@
 #include <deque>
 
 #include "levin_base.h"
+#include "levin_compression.h"
 #include "buffer.h"
 #include "misc_language.h"
 #include "syncobj.h"
@@ -493,6 +494,18 @@ public:
               return false;
             }
             buff_to_invoke = {reinterpret_cast<const uint8_t*>(temp.data()) + sizeof(bucket_head2), temp.size() - sizeof(bucket_head2)};
+          }
+
+          std::string decompressed_buf;
+          if (m_current_head.m_flags & LEVIN_PACKET_COMPRESSED)
+          {
+            if (!levin::decompress_payload(buff_to_invoke, decompressed_buf))
+            {
+              MERROR(m_connection_context << "Failed to decompress Levin payload, cmd=" << m_current_head.m_command);
+              return false;
+            }
+            buff_to_invoke = {reinterpret_cast<const uint8_t*>(decompressed_buf.data()), decompressed_buf.size()};
+            m_current_head.m_flags &= ~LEVIN_PACKET_COMPRESSED;
           }
 
           bool is_response = (m_oponent_protocol_ver == LEVIN_PROTOCOL_VER_1 && m_current_head.m_flags&LEVIN_PACKET_RESPONSE);

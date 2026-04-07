@@ -39,7 +39,8 @@
 #include <boost/type_traits/make_unsigned.hpp>
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/cryptonote_basic_impl.h"
-#include "ringct/rctSigs.h"
+#include "cryptonote_config.h"
+#include "fcmp/rctSigs.h"
 #include "serialization/binary_archive.h"
 #include "serialization/json_archive.h"
 #include "serialization/debug_archive.h"
@@ -525,159 +526,6 @@ TEST(Serialization, serializes_transacion_signatures_correctly)
   // Blob contains one excess signature
   blob.resize(blob.size() + sizeof(crypto::signature) / 2);
   ASSERT_FALSE(serialization::parse_binary(blob, tx1));
-}
-
-TEST(Serialization, serializes_ringct_types)
-{
-  string blob;
-  rct::key key0, key1;
-  rct::keyV keyv0, keyv1;
-  rct::keyM keym0, keym1;
-  rct::ctkey ctkey0, ctkey1;
-  rct::ctkeyV ctkeyv0, ctkeyv1;
-  rct::ctkeyM ctkeym0, ctkeym1;
-  rct::ecdhTuple ecdh0, ecdh1;
-  rct::boroSig boro0, boro1;
-  rct::clsag clsag0, clsag1;
-  rct::rctSig s0, s1;
-  cryptonote::transaction tx0, tx1;
-
-  key0 = rct::skGen();
-  ASSERT_TRUE(serialization::dump_binary(key0, blob));
-  ASSERT_TRUE(serialization::parse_binary(blob, key1));
-  ASSERT_TRUE(key0 == key1);
-
-  keyv0 = rct::skvGen(30);
-  for (size_t n = 0; n < keyv0.size(); ++n)
-    keyv0[n] = rct::skGen();
-  ASSERT_TRUE(serialization::dump_binary(keyv0, blob));
-  ASSERT_TRUE(serialization::parse_binary(blob, keyv1));
-  ASSERT_TRUE(keyv0.size() == keyv1.size());
-  for (size_t n = 0; n < keyv0.size(); ++n)
-  {
-    ASSERT_TRUE(keyv0[n] == keyv1[n]);
-  }
-
-  keym0 = rct::keyMInit(9, 12);
-  for (size_t n = 0; n < keym0.size(); ++n)
-    for (size_t i = 0; i < keym0[n].size(); ++i)
-      keym0[n][i] = rct::skGen();
-  ASSERT_TRUE(serialization::dump_binary(keym0, blob));
-  ASSERT_TRUE(serialization::parse_binary(blob, keym1));
-  ASSERT_TRUE(keym0.size() == keym1.size());
-  for (size_t n = 0; n < keym0.size(); ++n)
-  {
-    ASSERT_TRUE(keym0[n].size() == keym1[n].size());
-    for (size_t i = 0; i < keym0[n].size(); ++i)
-    {
-      ASSERT_TRUE(keym0[n][i] == keym1[n][i]);
-    }
-  }
-
-  rct::skpkGen(ctkey0.dest, ctkey0.mask);
-  ASSERT_TRUE(serialization::dump_binary(ctkey0, blob));
-  ASSERT_TRUE(serialization::parse_binary(blob, ctkey1));
-  ASSERT_TRUE(!memcmp(&ctkey0, &ctkey1, sizeof(ctkey0)));
-
-  ctkeyv0 = std::vector<rct::ctkey>(14);
-  for (size_t n = 0; n < ctkeyv0.size(); ++n)
-    rct::skpkGen(ctkeyv0[n].dest, ctkeyv0[n].mask);
-  ASSERT_TRUE(serialization::dump_binary(ctkeyv0, blob));
-  ASSERT_TRUE(serialization::parse_binary(blob, ctkeyv1));
-  ASSERT_TRUE(ctkeyv0.size() == ctkeyv1.size());
-  for (size_t n = 0; n < ctkeyv0.size(); ++n)
-  {
-    ASSERT_TRUE(!memcmp(&ctkeyv0[n], &ctkeyv1[n], sizeof(ctkeyv0[n])));
-  }
-
-  ctkeym0 = std::vector<rct::ctkeyV>(9);
-  for (size_t n = 0; n < ctkeym0.size(); ++n)
-  {
-    ctkeym0[n] = std::vector<rct::ctkey>(11);
-    for (size_t i = 0; i < ctkeym0[n].size(); ++i)
-      rct::skpkGen(ctkeym0[n][i].dest, ctkeym0[n][i].mask);
-  }
-  ASSERT_TRUE(serialization::dump_binary(ctkeym0, blob));
-  ASSERT_TRUE(serialization::parse_binary(blob, ctkeym1));
-  ASSERT_TRUE(ctkeym0.size() == ctkeym1.size());
-  for (size_t n = 0; n < ctkeym0.size(); ++n)
-  {
-    ASSERT_TRUE(ctkeym0[n].size() == ctkeym1[n].size());
-    for (size_t i = 0; i < ctkeym0.size(); ++i)
-    {
-      ASSERT_TRUE(!memcmp(&ctkeym0[n][i], &ctkeym1[n][i], sizeof(ctkeym0[n][i])));
-    }
-  }
-
-  ecdh0.mask = rct::skGen();
-  ecdh0.amount = rct::skGen();
-  ASSERT_TRUE(serialization::dump_binary(ecdh0, blob));
-  ASSERT_TRUE(serialization::parse_binary(blob, ecdh1));
-  ASSERT_TRUE(!memcmp(&ecdh0.mask, &ecdh1.mask, sizeof(ecdh0.mask)));
-  ASSERT_TRUE(!memcmp(&ecdh0.amount, &ecdh1.amount, sizeof(ecdh0.amount)));
-
-  for (size_t n = 0; n < 64; ++n)
-  {
-    boro0.s0[n] = rct::skGen();
-    boro0.s1[n] = rct::skGen();
-  }
-  boro0.ee = rct::skGen();
-  ASSERT_TRUE(serialization::dump_binary(boro0, blob));
-  ASSERT_TRUE(serialization::parse_binary(blob, boro1));
-  ASSERT_TRUE(!memcmp(&boro0, &boro1, sizeof(boro0)));
-
-  // create a full rct signature to use its innards
-  vector<uint64_t> inamounts;
-  rct::ctkeyV sc, pc;
-  rct::ctkey sctmp, pctmp;
-  inamounts.push_back(6000);
-  tie(sctmp, pctmp) = rct::ctskpkGen(inamounts.back());
-  sc.push_back(sctmp);
-  pc.push_back(pctmp);
-  inamounts.push_back(7000);
-  tie(sctmp, pctmp) = rct::ctskpkGen(inamounts.back());
-  sc.push_back(sctmp);
-  pc.push_back(pctmp);
-  vector<uint64_t> amounts;
-  rct::keyV amount_keys;
-  //add output 500
-  amounts.push_back(500);
-  amount_keys.push_back(rct::hash_to_scalar(rct::zero()));
-  rct::keyV destinations;
-  rct::key Sk, Pk;
-  rct::skpkGen(Sk, Pk);
-  destinations.push_back(Pk);
-  //add output for 12500
-  amounts.push_back(12500);
-  amount_keys.push_back(rct::hash_to_scalar(rct::zero()));
-  rct::skpkGen(Sk, Pk);
-  destinations.push_back(Pk);
-  //compute rct data with mixin 3 -- Bulletproofs+ (bp_version 4)
-  const rct::RCTConfig rct_config{ rct::RangeProofPaddedBulletproof, 4 };
-  s0 = rct::genRctSimple(rct::zero(), sc, pc, destinations, inamounts, amounts, amount_keys, 0, 3, rct_config, hw::get_device("default"));
-
-  ASSERT_TRUE(s0.type == rct::RCTTypeBulletproofPlus);
-  ASSERT_FALSE(s0.p.CLSAGs.empty());
-  ASSERT_TRUE(s0.p.MGs.empty());
-  clsag0 = s0.p.CLSAGs[0];
-  ASSERT_TRUE(serialization::dump_binary(clsag0, blob));
-  ASSERT_TRUE(serialization::parse_binary(blob, clsag1));
-  ASSERT_TRUE(clsag0.s.size() == clsag1.s.size());
-  for (size_t n = 0; n < clsag0.s.size(); ++n)
-  {
-    ASSERT_TRUE(clsag0.s[n] == clsag1.s[n]);
-  }
-  ASSERT_TRUE(clsag0.c1 == clsag1.c1);
-  ASSERT_TRUE(clsag0.D == clsag1.D);
-
-  ASSERT_TRUE(s0.p.bulletproofs.empty());
-  ASSERT_FALSE(s0.p.bulletproofs_plus.empty());
-  rct::BulletproofPlus bpp0 = s0.p.bulletproofs_plus.front();
-  rct::BulletproofPlus bpp1;
-  ASSERT_TRUE(serialization::dump_binary(bpp0, blob));
-  ASSERT_TRUE(serialization::parse_binary(blob, bpp1));
-  bpp1.V = bpp0.V; // this is not saved, as it is reconstructed from other tx data
-  ASSERT_EQ(bpp0, bpp1);
 }
 
 TEST(Serialization, portability_wallet)
@@ -1302,24 +1150,24 @@ TEST(Serialization, pqc_authentication_multisig_size_regression)
     return 4 + varint_encoding_bytes(key_blob) + key_blob + varint_encoding_bytes(sig_blob) + sig_blob;
   };
 
-  struct config
+  struct ms_config
   {
     unsigned n;
     unsigned m;
-    size_t total_pqc_auth_payload;
   };
-  const config configs[] = {
-    {3, 2, 12763},
-    {5, 3, 20141},
-    {7, 5, 30905},
-    {7, 7, 37677},
+  const ms_config configs[] = {
+    {3, 2},
+    {5, 3},
+    {7, 5},
+    {7, 7},
   };
 
-  for (const config &cfg : configs)
+  for (const ms_config &cfg : configs)
   {
     const size_t key_blob = 2 + static_cast<size_t>(cfg.n) * 1996u;
-    const size_t sig_blob = 1 + static_cast<size_t>(cfg.m) * 3385u + static_cast<size_t>(cfg.m);
-    EXPECT_EQ(key_blob + sig_blob, cfg.total_pqc_auth_payload);
+    const size_t sig_blob = 2 + static_cast<size_t>(cfg.m) * 3385u;
+    ASSERT_LE(key_blob, ::config::PQC_MAX_PUBLIC_KEY_BLOB);
+    ASSERT_LE(sig_blob, ::config::PQC_MAX_SIGNATURE_BLOB);
 
     cryptonote::pqc_authentication auth0, auth1;
     auth0.auth_version = 1;

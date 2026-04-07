@@ -57,8 +57,8 @@
 #include "common/util.h"
 #include "crypto/chacha.h"
 #include "crypto/hash.h"
-#include "ringct/rctTypes.h"
-#include "ringct/rctOps.h"
+#include "fcmp/rctTypes.h"
+#include "fcmp/rctOps.h"
 #include "checkpoints/checkpoints.h"
 #include "serialization/crypto.h"
 #include "serialization/string.h"
@@ -66,6 +66,7 @@
 #include "serialization/tuple.h"
 #include "serialization/containers.h"
 
+#include "memwipe.h"
 #include "wallet_errors.h"
 #include "common/password.h"
 #include "node_rpc_proxy.h"
@@ -73,6 +74,9 @@
 #include "wallet_rpc_helpers.h"
 #include "fee_priority.h"
 #include "fee_algorithm.h"
+
+// Forward declaration for FROST SAL session handle (defined in shekyl_ffi.h)
+struct ShekylFrostSalSession;
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "wallet.wallet2"
@@ -159,6 +163,10 @@ private:
     virtual void on_device_progress(const hw::device_progress& event) {};
     // Common callbacks
     virtual void on_pool_tx_removed(const crypto::hash &txid) {}
+    // FCMP++ callbacks
+    virtual void on_pqc_rederivation_progress(uint64_t outputs_done, uint64_t outputs_total) {}
+    virtual void on_fcmp_path_precompute_progress(uint64_t outputs_done, uint64_t outputs_total) {}
+    virtual void on_transfer_stage(const char* stage, uint8_t stage_index, uint8_t total_stages) {}
     virtual ~i_wallet2_callback() {}
   };
 
@@ -343,6 +351,7 @@ private:
       bool m_staked = false;
       uint8_t m_stake_tier = 0;
       uint64_t m_stake_lock_until = 0;
+      std::vector<uint8_t> m_combined_shared_secret; // 64 bytes when present; empty otherwise
 
       transfer_details() = default;
 
@@ -381,7 +390,30 @@ private:
         FIELD(m_staked)
         FIELD(m_stake_tier)
         VARINT_FIELD(m_stake_lock_until)
+        FIELD(m_combined_shared_secret)
       END_SERIALIZE()
+    };
+
+    struct fcmp_precomputed_path
+    {
+      uint64_t global_output_index = 0;
+      std::vector<uint8_t> tree_path;
+      // Compressed Ed25519 output keys for each leaf in the chunk.
+      // Each entry: { output_key (O), key_image_gen (I=Hp(O)), commitment (C) }.
+      // Parallel to the 128-byte leaf scalars in tree_path layer 0.
+      struct chunk_output_entry {
+        rct::key output_key;    // O: compressed Ed25519
+        rct::key key_image_gen; // I = Hp(O): compressed Ed25519
+        rct::key commitment;    // C: compressed Ed25519
+        rct::key h_pqc;         // H(pqc_pk): 32-byte scalar
+      };
+      std::vector<chunk_output_entry> leaf_chunk_entries;
+      // The daemon-provided reference block hash used in rct_signatures.referenceBlock.
+      crypto::hash reference_block_at_precompute{};
+      // The curve tree root at the reference block height.
+      crypto::hash curve_tree_root_at_precompute{};
+      uint8_t tree_depth_at_precompute = 0;
+      uint64_t precompute_height = 0;
     };
 
     struct exported_transfer_details
@@ -547,7 +579,6 @@ private:
       std::vector<uint8_t> extra;
       uint64_t unlock_time;
       bool use_rct;
-      rct::RCTConfig rct_config;
       bool use_view_tags;
       std::vector<cryptonote::tx_destination_entry> dests; // original setup, does not include change
       uint32_t subaddr_account;   // subaddress account of your wallet to be used in this transfer
@@ -590,7 +621,6 @@ private:
           FIELD_N("use_rct", construction_flags)
         }
 
-        FIELD(rct_config)
         FIELD(dests)
         FIELD(subaddr_account)
         FIELD(subaddr_indices)
@@ -1038,6 +1068,15 @@ private:
     void set_refresh_type(RefreshType refresh_type) { m_refresh_type = refresh_type; }
     RefreshType get_refresh_type() const { return m_refresh_type; }
 
+    // FCMP++ wallet precomputation (Phase 5e)
+    void precompute_fcmp_paths();
+    void update_fcmp_paths_incremental(uint64_t new_height);
+    const std::unordered_map<uint64_t, fcmp_precomputed_path>& get_fcmp_precomputed_paths() const { return m_fcmp_precomputed_paths; }
+
+    // FCMP++ PQC key rederivation (Phase 5.5)
+    void validate_pqc_key_derivation_for_output(const transfer_details& td);
+    void rederive_all_pqc_keys();
+
     cryptonote::network_type nettype() const { return m_nettype; }
     bool watch_only() const { return m_watch_only; }
     bool is_background_wallet() const { return m_is_background_wallet; }
@@ -1061,7 +1100,7 @@ private:
       uint64_t fee, const std::vector<uint8_t>& extra, T destination_split_strategy, const tx_dust_policy& dust_policy, cryptonote::transaction& tx, pending_tx &ptx, const bool use_view_tags);
     void transfer_selected_rct(std::vector<cryptonote::tx_destination_entry> dsts, const std::vector<size_t>& selected_transfers, size_t fake_outputs_count,
       std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs, std::unordered_set<crypto::public_key> &valid_public_keys_cache,
-      uint64_t fee, const std::vector<uint8_t>& extra, cryptonote::transaction& tx, pending_tx &ptx, const rct::RCTConfig &rct_config, const bool use_view_tags);
+      uint64_t fee, const std::vector<uint8_t>& extra, cryptonote::transaction& tx, pending_tx &ptx, const bool use_view_tags);
 
     void commit_tx(pending_tx& ptx_vector);
     void commit_tx(std::vector<pending_tx>& ptx_vector);
@@ -1091,9 +1130,10 @@ private:
     uint8_t pqc_multisig_m() const { return m_pqc_multisig_m; }
     crypto::hash pqc_multisig_group_id() const { return m_pqc_multisig_group_id; }
     bool create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, const std::vector<std::vector<uint8_t>>& participant_public_keys);
-    std::string export_multisig_signing_request(const pending_tx& ptx);
+    std::string export_multisig_signing_request(pending_tx& ptx);
     bool sign_multisig_partial(const std::string& signing_request_json, std::string& signature_response_json);
     bool import_multisig_signatures(pending_tx& ptx, const std::vector<std::string>& signature_response_jsons);
+    bool prepare_multisig_fcmp_proof(pending_tx& ptx);
     std::vector<wallet2::pending_tx> create_claim_transaction(const std::vector<size_t>& staked_indices);
     std::vector<size_t> get_matured_staked_outputs() const;
     std::vector<size_t> get_locked_staked_outputs() const;
@@ -1339,8 +1379,6 @@ private:
     void print_ring_members(bool value) { m_print_ring_members = value; }
     bool store_tx_info() const { return m_store_tx_info; }
     void store_tx_info(bool store) { m_store_tx_info = store; }
-    uint32_t default_mixin() const { return m_default_mixin; }
-    void default_mixin(uint32_t m) { m_default_mixin = m; }
     fee_priority get_default_priority() const { return m_default_priority; }
     void set_default_priority(fee_priority p) { m_default_priority = p; }
     bool auto_refresh() const { return m_auto_refresh; }
@@ -1561,15 +1599,13 @@ private:
     std::vector<std::pair<uint64_t, uint64_t>> estimate_backlog(const std::vector<std::pair<double, double>> &fee_levels);
     std::vector<std::pair<uint64_t, uint64_t>> estimate_backlog(uint64_t min_tx_weight, uint64_t max_tx_weight, const std::vector<uint64_t> &fees);
 
-    static uint64_t estimate_fee(bool use_per_byte_fee, bool use_rct, int n_inputs, int mixin, int n_outputs, size_t extra_size, bool bulletproof, bool clsag, bool bulletproof_plus, bool use_view_tags, uint64_t base_fee, uint64_t fee_quantization_mask);
+    static uint64_t estimate_fee(bool use_per_byte_fee, bool use_rct, int n_inputs, int n_outputs, size_t extra_size, bool use_view_tags, uint64_t base_fee, uint64_t fee_quantization_mask);
     uint64_t get_fee_multiplier(fee_priority priority, fee_algorithm fee_algorithm = fee_algorithm::Unset);
     uint64_t get_base_fee(fee_priority priority);
     uint64_t get_base_fee();
     uint64_t get_fee_quantization_mask();
     uint64_t get_min_ring_size();
     uint64_t get_max_ring_size();
-    uint64_t adjust_mixin(uint64_t mixin);
-
     fee_priority adjust_priority(fee_priority priority);
 
     /*
@@ -1892,7 +1928,6 @@ private:
     bool m_always_confirm_transfers;
     bool m_print_ring_members;
     bool m_store_tx_info; /*!< request txkey to be returned in RPC, and store in the wallet cache file */
-    uint32_t m_default_mixin;
     fee_priority m_default_priority;
     RefreshType m_refresh_type;
     bool m_auto_refresh;
@@ -1997,15 +2032,99 @@ private:
     bool m_processing_background_cache;
     background_sync_data_t m_background_sync_data;
 
+    // FCMP++ precomputed tree paths (Phase 5e, runtime cache -- not serialized)
+    std::unordered_map<uint64_t, fcmp_precomputed_path> m_fcmp_precomputed_paths;
+    uint64_t m_fcmp_last_precompute_height = 0;
+
+  public:
+    // Native-sign mode: when true, transfer_selected_rct skips C++ proof generation
+    // and stores signing data for the Rust shekyl-tx-builder path. Public because
+    // wallet2_ffi accesses these directly for the split prepare/finalize pipeline.
+    bool m_native_sign_mode = false;
+    struct native_sign_state {
+      pending_tx ptx;
+      std::vector<std::vector<uint8_t>> pqc_public_keys;
+      std::vector<std::vector<uint8_t>> pqc_secret_keys;
+      std::vector<size_t> permuted_transfers;
+      // Per-input signing data extracted from transfer_selected_rct
+      struct input_signing_data {
+        rct::key output_key;
+        rct::key commitment;
+        uint64_t amount;
+        rct::key spend_key_x;
+        rct::key spend_key_y;
+        rct::key h_pqc;
+        std::vector<fcmp_precomputed_path::chunk_output_entry> leaf_chunk;
+        std::vector<std::vector<rct::key>> c1_layers;
+        std::vector<std::vector<rct::key>> c2_layers;
+      };
+      std::vector<input_signing_data> inputs;
+      // Per-output data
+      struct output_signing_data {
+        rct::key dest_key;
+        uint64_t amount;
+        rct::key amount_key;
+      };
+      std::vector<output_signing_data> outputs;
+      crypto::hash tx_prefix_hash{};
+      uint64_t fee = 0;
+      crypto::hash reference_block{};
+      crypto::hash curve_tree_root{};
+      uint8_t tree_depth = 0;
+      std::string tx_blob_hex;
+      bool valid = false;
+      void clear() {
+        for (auto &sk : pqc_secret_keys) {
+          if (!sk.empty()) memwipe(sk.data(), sk.size());
+          sk.clear();
+        }
+        pqc_secret_keys.clear();
+        for (auto &in : inputs) {
+          memwipe(in.spend_key_x.bytes, sizeof(in.spend_key_x));
+          memwipe(in.spend_key_y.bytes, sizeof(in.spend_key_y));
+          memwipe(in.h_pqc.bytes, sizeof(in.h_pqc));
+        }
+        inputs.clear();
+        for (auto &out : outputs) {
+          memwipe(out.amount_key.bytes, sizeof(out.amount_key));
+        }
+        outputs.clear();
+        memwipe(&tx_prefix_hash, sizeof(tx_prefix_hash));
+        valid = false;
+      }
+    };
+    native_sign_state m_native_sign_state;
+
+  private:
     // PQC multisig state (scheme_id = 2)
     std::vector<uint8_t> m_pqc_multisig_keys;
     crypto::hash m_pqc_multisig_group_id;
     uint8_t m_pqc_multisig_n = 0;
     uint8_t m_pqc_multisig_m = 0;
+
+    // FROST SAL session state for in-progress multisig FCMP++ proof construction.
+    // Active during the signing round: created in prepare_multisig_fcmp_proof,
+    // consumed in import_multisig_signatures.
+    std::vector<ShekylFrostSalSession*> m_frost_sal_sessions;
+
+    // FROST threshold keys (DKG output, serialized). Empty until DKG is complete.
+    std::vector<uint8_t> m_frost_threshold_keys;
+    // FROST group public key (Ed25519T, 32 bytes).
+    std::array<uint8_t, 32> m_frost_group_key{};
+
+    bool has_frost_keys() const { return !m_frost_threshold_keys.empty(); }
+    void clear_frost_sessions();
+
+    // Import serialized FROST threshold keys (DKG output) into this wallet.
+    // Validates M-of-N params against the existing PQC multisig group.
+    bool import_frost_threshold_keys(const std::vector<uint8_t>& serialized_keys);
+
+    // Export serialized FROST threshold keys.
+    std::vector<uint8_t> export_frost_threshold_keys() const;
   };
 }
 BOOST_CLASS_VERSION(tools::wallet2, 32)
-BOOST_CLASS_VERSION(tools::wallet2::transfer_details, 12)
+BOOST_CLASS_VERSION(tools::wallet2::transfer_details, 13)
 BOOST_CLASS_VERSION(tools::wallet2::payment_details, 5)
 BOOST_CLASS_VERSION(tools::wallet2::pool_payment_details, 1)
 BOOST_CLASS_VERSION(tools::wallet2::unconfirmed_transfer_details, 8)
@@ -2073,6 +2192,10 @@ namespace boost
         if (ver < 12)
         {
           x.m_frozen = false;
+        }
+        if (ver < 13)
+        {
+          x.m_combined_shared_secret.clear();
         }
     }
 
@@ -2165,6 +2288,12 @@ namespace boost
         return;
       }
       a & x.m_frozen;
+      if (ver < 13)
+      {
+        initialize_transfer_details(a, x, ver);
+        return;
+      }
+      a & x.m_combined_shared_secret;
     }
 
     template <class Archive>
@@ -2409,27 +2538,8 @@ namespace boost
       a & x.subaddr_account;
       a & x.subaddr_indices;
       if (ver < 2)
-      {
-        if (!typename Archive::is_saving())
-          x.rct_config = { rct::RangeProofPaddedBulletproof, 0 };
         return;
-      }
       a & x.selected_transfers;
-      if (ver < 3)
-      {
-        if (!typename Archive::is_saving())
-          x.rct_config = { rct::RangeProofPaddedBulletproof, 0 };
-        return;
-      }
-      if (ver < 4)
-      {
-        bool use_bulletproofs = true;
-        a & use_bulletproofs;
-        if (!typename Archive::is_saving())
-          x.rct_config = { rct::RangeProofPaddedBulletproof, 0 };
-        return;
-      }
-      a & x.rct_config;
     }
 
     template <class Archive>

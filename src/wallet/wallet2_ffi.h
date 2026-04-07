@@ -155,6 +155,65 @@ bool wallet2_ffi_is_open(const wallet2_handle* w);
 // Get the height the wallet has synced to.
 uint64_t wallet2_ffi_get_height(const wallet2_handle* w);
 
+// ── Progress callback ────────────────────────────────────────────────────────
+
+// Callback type for wallet progress events (transfer stages, FCMP precomputation,
+// PQC rederivation). The callback is invoked from the wallet2 thread.
+// - event_type: "transfer_stage", "fcmp_precompute", or "pqc_rederivation"
+// - current: stage index or outputs completed
+// - total: total stages or total outputs
+// - detail: stage name (e.g. "generating_proof") or NULL
+// - user_data: opaque pointer passed at registration time
+typedef void (*wallet2_ffi_progress_callback)(
+    const char* event_type,
+    uint64_t current,
+    uint64_t total,
+    const char* detail,
+    void* user_data);
+
+// Register a progress callback. Pass NULL to unregister.
+void wallet2_ffi_set_progress_callback(wallet2_handle* w,
+                                       wallet2_ffi_progress_callback cb,
+                                       void* user_data);
+
+// ── Split transfer pipeline ──────────────────────────────────────────────────
+// These two functions split the existing wallet2_ffi_transfer into a
+// prepare → sign → finalize flow, enabling the Rust wallet-rpc to call
+// shekyl-tx-builder::sign_transaction directly for proof generation.
+
+/// Phase A: Build the transaction prefix (inputs selected, outputs constructed,
+/// tx_extra populated) without generating cryptographic proofs.
+///
+/// Returns JSON with the unsigned transaction data needed for signing:
+/// - tx_prefix_hash (32-byte hex)
+/// - inputs: array of SpendInput-compatible objects (output_key, commitment,
+///   amount, spend_key_x, spend_key_y, h_pqc, pqc_secret_key, leaf_chunk,
+///   c1_layers, c2_layers)
+/// - outputs: array of OutputInfo-compatible objects (dest_key, amount, amount_key)
+/// - fee: u64
+/// - tree: TreeContext object (reference_block, tree_root, tree_depth)
+/// - tx_blob: hex-encoded serialized transaction prefix (for finalization)
+///
+/// Returns NULL on error (check wallet2_ffi_last_error_msg).
+/// The caller must free the returned string with wallet2_ffi_free_string().
+char* wallet2_ffi_prepare_transfer(wallet2_handle* w,
+                                   const char* destinations_json,
+                                   uint32_t priority,
+                                   uint32_t account_index);
+
+/// Phase C: Insert signed proofs into the transaction and broadcast.
+///
+/// `signed_proofs_json`: JSON-encoded SignedProofs from shekyl-tx-builder
+///   (bulletproof_plus, commitments, ecdh_amounts, pseudo_outs, fcmp_proof,
+///    pqc_auths, reference_block, tree_depth).
+/// `tx_blob_hex`: the tx_blob returned by wallet2_ffi_prepare_transfer.
+///
+/// Returns JSON: {"tx_hash":"...","fee":N} or NULL on error.
+/// The caller must free the returned string with wallet2_ffi_free_string().
+char* wallet2_ffi_finalize_transfer(wallet2_handle* w,
+                                    const char* signed_proofs_json,
+                                    const char* tx_blob_hex);
+
 // ── Generic JSON-RPC dispatcher ──────────────────────────────────────────────
 
 // Dispatch any wallet RPC method by name with JSON params.

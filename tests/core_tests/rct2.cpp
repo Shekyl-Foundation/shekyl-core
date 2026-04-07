@@ -28,8 +28,8 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
-#include "ringct/rctSigs.h"
-#include "ringct/bulletproofs.h"
+#include "fcmp/rctSigs.h"
+#include "fcmp/bulletproofs.h"
 #include "chaingen.h"
 #include "rct2.h"
 #include "device/device.hpp"
@@ -210,7 +210,7 @@ bool gen_rct2_tx_clsag_malleability::generate(std::vector<test_event_entry>& eve
   const int mixin = 10;
   const uint64_t amounts_paid[] = {5000, 5000, (uint64_t)-1};
   const rct::RCTConfig rct_config[] = { { rct::RangeProofPaddedBulletproof, 3 } };
-  return generate_with(events, mixin, 1, amounts_paid, false, rct_config, HF_VERSION_CLSAG + 1, NULL, [&](cryptonote::transaction &tx, size_t tx_idx) {
+  return generate_with(events, mixin, 1, amounts_paid, false, rct_config, 1 + 1, NULL, [&](cryptonote::transaction &tx, size_t tx_idx) {
     CHECK_TEST_CONDITION(tx.version == 2);
     CHECK_TEST_CONDITION(tx.rct_signatures.type == rct::RCTTypeCLSAG);
     CHECK_TEST_CONDITION(!tx.rct_signatures.p.CLSAGs.empty());

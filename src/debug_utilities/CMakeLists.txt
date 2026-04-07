@@ -39,7 +39,7 @@ target_link_libraries(cn_deserialize
     cryptonote_core
     blockchain_db
     device
-    ringct
+    fcmp
     p2p
     epee
     ${CMAKE_THREAD_LIBS_INIT})
