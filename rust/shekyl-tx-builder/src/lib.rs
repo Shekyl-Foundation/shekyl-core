@@ -31,13 +31,12 @@
 //!
 //! ## Relationship to other crates
 //!
-//! - [`shekyl-fcmp`]: Provides [`proof::prove()`] for FCMP++ membership proofs
-//!   and the [`ProveInput`] / [`BranchLayer`] types.
-//! - [`shekyl-bulletproofs`]: Provides [`Bulletproof::prove_plus()`] for range
-//!   proofs over Pedersen commitments.
-//! - [`shekyl-crypto-pq`]: Provides hybrid signature construction via
-//!   [`SignatureScheme::sign()`].
-//! - [`shekyl-primitives`]: Provides [`Commitment`] and scalar arithmetic.
+//! - **shekyl-fcmp**: FCMP++ membership proofs (`proof::prove()`) and the
+//!   `ProveInput` / `BranchLayer` types.
+//! - **shekyl-bulletproofs**: Bulletproofs+ range proofs (`Bulletproof::prove_plus()`)
+//!   over Pedersen commitments.
+//! - **shekyl-crypto-pq**: Hybrid signature construction (`SignatureScheme::sign()`).
+//! - **shekyl-primitives**: `Commitment` and scalar arithmetic.
 
 #![deny(unsafe_code)]
 
