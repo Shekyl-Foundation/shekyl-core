@@ -9,6 +9,7 @@ members = [
     "shekyl-staking",
     "shekyl-economics-sim",
     "shekyl-wallet-rpc",
+    "shekyl-tx-builder",
     "shekyl-daemon-rpc",
     "shekyl-encoding",
     "shekyl-address",

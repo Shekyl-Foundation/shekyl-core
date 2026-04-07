@@ -433,6 +433,46 @@ bool shekyl_construct_curve_tree_leaf(
     const uint8_t* h_pqc_ptr,
     uint8_t* leaf_out_ptr);
 
+// ─── Transaction Builder ─────────────────────────────────────────────────────
+// Single-call FCMP++ proof generation: BP+, membership proof, ECDH, pseudo-outs.
+// Replaces the old genRctFcmpPlusPlus + shekyl_fcmp_prove + shekyl_pqc_sign
+// multi-FFI round-trip.
+
+/// Result of shekyl_sign_transaction.
+/// On success: proofs_json contains JSON-encoded SignedProofs; error_code == 0.
+/// On failure: proofs_json is null; error_code < 0; error_message describes the failure.
+/// The caller must free proofs_json and error_message via shekyl_buffer_free.
+struct ShekylSignResult {
+    ShekylBuffer proofs_json;
+    bool success;
+    int32_t error_code;
+    ShekylBuffer error_message;
+};
+
+/// Generate FCMP++ transaction proofs (BP+, membership proof, ECDH, pseudo-outs).
+///
+/// @param tx_prefix_hash_ptr  32-byte Keccak-256 hash of the serialized tx prefix.
+/// @param inputs_json_ptr     JSON array of SpendInput objects (see shekyl-tx-builder docs).
+/// @param inputs_json_len     Length of inputs JSON.
+/// @param outputs_json_ptr    JSON array of OutputInfo objects.
+/// @param outputs_json_len    Length of outputs JSON.
+/// @param fee                 Transaction fee in atomic units.
+/// @param reference_block_ptr 32-byte block hash of the reference block.
+/// @param tree_root_ptr       32-byte Selene curve tree root from the block header.
+///                            This is NOT the block hash — passing the wrong value
+///                            produces an invalid proof.
+/// @param tree_depth          Number of curve tree layers (>= 1).
+///
+/// Error codes: -1 null pointer, -2 JSON parse, -10..-29 TxBuilderError variants.
+ShekylSignResult shekyl_sign_transaction(
+    const uint8_t* tx_prefix_hash_ptr,
+    const uint8_t* inputs_json_ptr, size_t inputs_json_len,
+    const uint8_t* outputs_json_ptr, size_t outputs_json_len,
+    uint64_t fee,
+    const uint8_t* reference_block_ptr,
+    const uint8_t* tree_root_ptr,
+    uint8_t tree_depth);
+
 // Daemon RPC (Axum)
 typedef struct ShekylDaemonRpcHandle ShekylDaemonRpcHandle;
 

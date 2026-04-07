@@ -1284,6 +1284,12 @@ bool construct_fcmp_tx(
   uint64_t ref_height = chain_height - 1 - FCMP_REFERENCE_BLOCK_MIN_AGE;
   reference_block = bs.get_block_id_by_height(ref_height);
 
+  block ref_blk;
+  CHECK_AND_ASSERT_MES(bs.get_block_by_hash(reference_block, ref_blk), false,
+    "construct_fcmp_tx: cannot fetch reference block");
+  rct::key curve_tree_root;
+  memcpy(curve_tree_root.bytes, &ref_blk.curve_tree_root, 32);
+
   // Build inSk/inPk and tree paths per input
   // We need the original source order to match vin after construct_tx sorted them
   for (size_t i = 0; i < num_inputs; ++i)
@@ -1496,7 +1502,7 @@ bool construct_fcmp_tx(
     rct::hash2rct(tx_prefix_hash),
     inSk, inPk,
     destinations_rct, inamounts, outamounts, amount_keys,
-    fee, reference_block, tree_depth,
+    fee, reference_block, curve_tree_root, tree_depth,
     tree_paths, leaf_chunk_entries, pqc_pk_hashes,
     hw::get_device("default"));
   tx.rct_signatures = rv;

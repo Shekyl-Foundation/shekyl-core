@@ -526,6 +526,7 @@ rust/
 ├── shekyl-address/         # Network-aware segmented Bech32m address encoding
 ├── shekyl-fcmp/            # FCMP++ proof ops, curve tree, leaf hashing
 ├── shekyl-crypto-pq/       # PQC signing, KEM, derivation (re-exports shekyl-address)
+├── shekyl-tx-builder/      # Native Rust tx signing: BP+, FCMP++, ECDH, PQC (replaces C++ FFI round-trips)
 ├── shekyl-ffi/             # C ABI exports (libshekyl_ffi.a)
 └── Cargo.toml              # Workspace root
 ```
@@ -534,6 +535,7 @@ rust/
 
 | C function | Rust source | Purpose |
 |-----------|-------------|---------|
+| `shekyl_sign_transaction()` | `shekyl-ffi/src/lib.rs` | Native Rust tx signing (BP+, FCMP++, ECDH, pseudo-outs) via `shekyl-tx-builder` |
 | `shekyl_fcmp_prove()` | `shekyl-ffi/src/lib.rs` | Generate FCMP++ proof (variable-length witness) |
 | `shekyl_fcmp_verify()` | `shekyl-ffi/src/lib.rs` | Verify FCMP++ proof |
 | `shekyl_fcmp_proof_len()` | `shekyl-ffi/src/lib.rs` | Estimate proof byte length |
@@ -1149,6 +1151,11 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | FROST SAL unit tests (4 tests) | **Done** | `rust/shekyl-fcmp/src/frost_sal.rs` |
 | FROST DKG unit tests (4 tests) | **Done** | `rust/shekyl-fcmp/src/frost_dkg.rs` |
 | FROST FFI lifecycle tests (8 tests) | **Done** | `rust/shekyl-ffi/src/lib.rs` |
+| `shekyl-tx-builder` crate (native Rust signing) | **Done** | `rust/shekyl-tx-builder/` |
+| `shekyl_sign_transaction` FFI export | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
+| Wallet RPC `native-sign` feature (`transfer_native`) | **Done** | `rust/shekyl-wallet-rpc/src/wallet.rs` |
+| `wallet2_ffi_prepare_transfer` / `_finalize_transfer` stubs | **Done** (stubs) | `src/wallet/wallet2_ffi.cpp`, `wallet2_ffi.h` |
+| `shekyl-tx-builder` unit tests (19 tests) | **Done** | `rust/shekyl-tx-builder/src/tests.rs` |
 
 ---
 

@@ -3008,6 +3008,9 @@ void wallet2::precompute_fcmp_paths()
   crypto::hash ref_block{};
   if (!res.reference_block.empty())
     epee::string_tools::hex_to_pod(res.reference_block, ref_block);
+  crypto::hash tree_root{};
+  if (!res.curve_tree_root.empty())
+    epee::string_tools::hex_to_pod(res.curve_tree_root, tree_root);
 
   m_fcmp_precomputed_paths.clear();
   uint64_t done = 0;
@@ -3016,6 +3019,7 @@ void wallet2::precompute_fcmp_paths()
     fcmp_precomputed_path pp;
     pp.global_output_index = pe.output_index;
     pp.reference_block_at_precompute = ref_block;
+    pp.curve_tree_root_at_precompute = tree_root;
     pp.tree_depth_at_precompute = pe.tree_depth ? pe.tree_depth : res.tree_depth;
     pp.precompute_height = m_blockchain.size() - 1;
     if (!pe.path_blob.empty())
@@ -3096,6 +3100,9 @@ void wallet2::update_fcmp_paths_incremental(uint64_t new_height)
   crypto::hash ref_block{};
   if (!res.reference_block.empty())
     epee::string_tools::hex_to_pod(res.reference_block, ref_block);
+  crypto::hash tree_root{};
+  if (!res.curve_tree_root.empty())
+    epee::string_tools::hex_to_pod(res.curve_tree_root, tree_root);
 
   // Remove paths for outputs that are now spent
   for (auto it = m_fcmp_precomputed_paths.begin(); it != m_fcmp_precomputed_paths.end();)
@@ -3120,6 +3127,7 @@ void wallet2::update_fcmp_paths_incremental(uint64_t new_height)
     fcmp_precomputed_path pp;
     pp.global_output_index = pe.output_index;
     pp.reference_block_at_precompute = ref_block;
+    pp.curve_tree_root_at_precompute = tree_root;
     pp.tree_depth_at_precompute = pe.tree_depth ? pe.tree_depth : res.tree_depth;
     pp.precompute_height = new_height;
     if (!pe.path_blob.empty())
@@ -9431,6 +9439,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       }
     });
     crypto::hash reference_block{};
+    crypto::hash curve_tree_root{};
     uint8_t tree_depth = 0;
 
     // Work out the permutation construct_tx_with_tx_key applied to vin
@@ -9481,6 +9490,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       if (i == 0)
       {
         reference_block = path_it->second.reference_block_at_precompute;
+        curve_tree_root = path_it->second.curve_tree_root_at_precompute;
         tree_depth = path_it->second.tree_depth_at_precompute;
       }
       else
@@ -9488,6 +9498,9 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
         THROW_WALLET_EXCEPTION_IF(path_it->second.reference_block_at_precompute != reference_block,
           error::wallet_internal_error,
           "Input reference_block mismatch across selected inputs; rerun precompute_fcmp_paths()");
+        THROW_WALLET_EXCEPTION_IF(path_it->second.curve_tree_root_at_precompute != curve_tree_root,
+          error::wallet_internal_error,
+          "Input curve_tree_root mismatch across selected inputs; rerun precompute_fcmp_paths()");
         THROW_WALLET_EXCEPTION_IF(path_it->second.tree_depth_at_precompute != tree_depth,
           error::wallet_internal_error,
           "Input tree_depth mismatch across selected inputs; rerun precompute_fcmp_paths()");
@@ -9560,13 +9573,19 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       }
     }
 
+    // Proof generation: C++ path (genRctFcmpPlusPlus) remains the default for
+    // hardware wallet support. The Rust-native path (shekyl_sign_transaction)
+    // is available for software-only wallets and is used by shekyl-wallet-rpc.
+    // To switch: serialize SpendInput/OutputInfo to JSON and call the FFI.
     LOG_PRINT_L2("calling genRctFcmpPlusPlus with " << num_inputs << " inputs, "
         << destinations_rct.size() << " outputs");
+    rct::key rct_tree_root;
+    memcpy(rct_tree_root.bytes, &curve_tree_root, 32);
     rct::rctSig rv = rct::genRctFcmpPlusPlus(
         rct::hash2rct(tx_prefix_hash),
         inSk, inPk,
         destinations_rct, inamounts, outamounts, amount_keys,
-        fee, reference_block, tree_depth,
+        fee, reference_block, rct_tree_root, tree_depth,
         tree_paths, leaf_chunk_entries, pqc_pk_hashes,
         m_account.get_device());
     tx.rct_signatures = rv;
@@ -11444,6 +11463,7 @@ bool wallet2::prepare_multisig_fcmp_proof(pending_tx& ptx)
   std::vector<rct::xmr_amount> inamounts(num_inputs);
   std::vector<std::vector<uint8_t>> tree_paths(num_inputs);
   crypto::hash reference_block{};
+  crypto::hash curve_tree_root{};
   uint8_t tree_depth = 0;
 
   for (size_t i = 0; i < num_inputs; ++i)
@@ -11487,6 +11507,7 @@ bool wallet2::prepare_multisig_fcmp_proof(pending_tx& ptx)
     if (i == 0)
     {
       reference_block = path_it->second.reference_block_at_precompute;
+      curve_tree_root = path_it->second.curve_tree_root_at_precompute;
       tree_depth = path_it->second.tree_depth_at_precompute;
     }
     else
@@ -11494,6 +11515,9 @@ bool wallet2::prepare_multisig_fcmp_proof(pending_tx& ptx)
       THROW_WALLET_EXCEPTION_IF(path_it->second.reference_block_at_precompute != reference_block,
         error::wallet_internal_error,
         "Input reference_block mismatch across selected inputs; rerun precompute_fcmp_paths()");
+      THROW_WALLET_EXCEPTION_IF(path_it->second.curve_tree_root_at_precompute != curve_tree_root,
+        error::wallet_internal_error,
+        "Input curve_tree_root mismatch across selected inputs; rerun precompute_fcmp_paths()");
       THROW_WALLET_EXCEPTION_IF(path_it->second.tree_depth_at_precompute != tree_depth,
         error::wallet_internal_error,
         "Input tree_depth mismatch across selected inputs; rerun precompute_fcmp_paths()");
@@ -11604,12 +11628,14 @@ bool wallet2::prepare_multisig_fcmp_proof(pending_tx& ptx)
   else
   {
     // Non-FROST mode: single-signer proof construction
+    rct::key rct_tree_root;
+    memcpy(rct_tree_root.bytes, &curve_tree_root, 32);
     rct::rctSig rv = rct::genRctFcmpPlusPlus(
         rct::hash2rct(tx_prefix_hash),
         inSk, inPk,
         destinations, inamounts, outamounts, amount_keys,
         ptx.fee,
-        reference_block, tree_depth,
+        reference_block, rct_tree_root, tree_depth,
         tree_paths, leaf_chunk_entries, pqc_pk_hashes,
         m_account.get_device());
     ptx.tx.rct_signatures = rv;

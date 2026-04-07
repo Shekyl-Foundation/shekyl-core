@@ -23,8 +23,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 shekyl-scanner = { path = "../shekyl-scanner", optional = true }
+shekyl-tx-builder = { path = "../shekyl-tx-builder", optional = true }
 hex = { version = "0.4", optional = true }
 
 [features]
 default = []
 rust-scanner = ["shekyl-scanner", "hex"]
+native-sign = ["shekyl-tx-builder"]

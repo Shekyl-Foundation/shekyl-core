@@ -407,9 +407,10 @@ private:
         rct::key h_pqc;         // H(pqc_pk): 32-byte scalar
       };
       std::vector<chunk_output_entry> leaf_chunk_entries;
-      // This is the daemon-provided reference block hash used in
-      // rct_signatures.referenceBlock, not the curve tree root bytes.
+      // The daemon-provided reference block hash used in rct_signatures.referenceBlock.
       crypto::hash reference_block_at_precompute{};
+      // The curve tree root at the reference block height.
+      crypto::hash curve_tree_root_at_precompute{};
       uint8_t tree_depth_at_precompute = 0;
       uint64_t precompute_height = 0;
     };

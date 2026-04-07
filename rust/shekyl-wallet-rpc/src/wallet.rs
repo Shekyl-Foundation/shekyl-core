@@ -48,6 +48,16 @@ impl std::fmt::Display for WalletError {
 
 impl std::error::Error for WalletError {}
 
+#[cfg(feature = "native-sign")]
+impl From<shekyl_tx_builder::TxBuilderError> for WalletError {
+    fn from(e: shekyl_tx_builder::TxBuilderError) -> Self {
+        WalletError {
+            code: -100,
+            message: e.to_string(),
+        }
+    }
+}
+
 pub type WalletResult<T> = Result<T, WalletError>;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -299,6 +309,110 @@ impl Wallet2 {
         }
         self._progress_sender = Some(boxed);
     }
+
+    /// Native Rust transfer path (requires `native-sign` feature).
+    ///
+    /// Flow:
+    /// 1. Call C++ `wallet2_ffi_prepare_transfer()` to get: tx prefix, selected
+    ///    UTXOs with keys, tree paths, amounts — all as JSON.
+    /// 2. Call `shekyl_tx_builder::sign_transaction()` directly in Rust.
+    /// 3. Call C++ `wallet2_ffi_finalize_transfer()` to submit the signed tx.
+    ///
+    /// This eliminates the C++ → Rust → C++ → Rust FFI round-trips for proof
+    /// generation. Currently returns an error until `wallet2_ffi_prepare_transfer`
+    /// is fully implemented on the C++ side.
+    #[cfg(feature = "native-sign")]
+    pub fn transfer_native(
+        &self,
+        destinations_json: &str,
+        priority: u32,
+        account_index: u32,
+    ) -> WalletResult<serde_json::Value> {
+        let dests = CString::new(destinations_json).map_err(|_| WalletError {
+            code: -1,
+            message: "invalid destinations JSON (contains null byte)".into(),
+        })?;
+
+        // Phase A: prepare (builds tx prefix, returns structured signing inputs)
+        let prep_ptr = unsafe {
+            ffi::wallet2_ffi_prepare_transfer(
+                self.handle,
+                dests.as_ptr(),
+                priority,
+                account_index,
+            )
+        };
+        let prep_json = self.consume_json_ptr(prep_ptr)?;
+
+        // Extract signing inputs from the prepared data
+        let tx_prefix_hash_hex = prep_json["tx_prefix_hash"]
+            .as_str()
+            .ok_or_else(|| WalletError {
+                code: -1,
+                message: "missing tx_prefix_hash in prepare response".into(),
+            })?;
+
+        let inputs: Vec<shekyl_tx_builder::SpendInput> =
+            serde_json::from_value(prep_json["inputs"].clone()).map_err(|e| WalletError {
+                code: -1,
+                message: format!("failed to parse inputs: {e}"),
+            })?;
+
+        let outputs: Vec<shekyl_tx_builder::OutputInfo> =
+            serde_json::from_value(prep_json["outputs"].clone()).map_err(|e| WalletError {
+                code: -1,
+                message: format!("failed to parse outputs: {e}"),
+            })?;
+
+        let fee = prep_json["fee"].as_u64().ok_or_else(|| WalletError {
+            code: -1,
+            message: "missing fee in prepare response".into(),
+        })?;
+
+        let tree: shekyl_tx_builder::TreeContext =
+            serde_json::from_value(prep_json["tree"].clone()).map_err(|e| WalletError {
+                code: -1,
+                message: format!("failed to parse tree context: {e}"),
+            })?;
+
+        let mut tx_prefix_hash = [0u8; 32];
+        hex_decode(tx_prefix_hash_hex, &mut tx_prefix_hash)?;
+
+        // Phase B: sign (pure Rust, no FFI crossing)
+        let proofs = shekyl_tx_builder::sign_transaction(
+            tx_prefix_hash,
+            &inputs,
+            &outputs,
+            fee,
+            &tree,
+        )
+        .map_err(WalletError::from)?;
+
+        let proofs_json_str =
+            serde_json::to_string(&proofs).map_err(|e| WalletError {
+                code: -1,
+                message: format!("failed to serialize proofs: {e}"),
+            })?;
+
+        let tx_blob_hex = prep_json["tx_blob"]
+            .as_str()
+            .ok_or_else(|| WalletError {
+                code: -1,
+                message: "missing tx_blob in prepare response".into(),
+            })?;
+
+        // Phase C: finalize (inserts proofs, PQC signs, broadcasts)
+        let proofs_cstr = CString::new(proofs_json_str).unwrap();
+        let tx_blob_cstr = CString::new(tx_blob_hex).unwrap();
+        let fin_ptr = unsafe {
+            ffi::wallet2_ffi_finalize_transfer(
+                self.handle,
+                proofs_cstr.as_ptr(),
+                tx_blob_cstr.as_ptr(),
+            )
+        };
+        self.consume_json_ptr(fin_ptr)
+    }
 }
 
 extern "C" fn progress_trampoline(
@@ -342,3 +456,35 @@ impl Drop for Wallet2 {
 // enforced at a higher level by the Mutex<Wallet2> in AppState. All access to
 // the underlying wallet2 is serialized through that mutex.
 unsafe impl Send for Wallet2 {}
+
+#[cfg(feature = "native-sign")]
+fn hex_decode(hex_str: &str, out: &mut [u8; 32]) -> Result<(), WalletError> {
+    if hex_str.len() != 64 {
+        return Err(WalletError {
+            code: -1,
+            message: format!("expected 64-char hex string, got {}", hex_str.len()),
+        });
+    }
+    for (i, chunk) in hex_str.as_bytes().chunks(2).enumerate() {
+        let hi = hex_nibble(chunk[0]).ok_or_else(|| WalletError {
+            code: -1,
+            message: format!("invalid hex char at position {}", i * 2),
+        })?;
+        let lo = hex_nibble(chunk[1]).ok_or_else(|| WalletError {
+            code: -1,
+            message: format!("invalid hex char at position {}", i * 2 + 1),
+        })?;
+        out[i] = (hi << 4) | lo;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "native-sign")]
+fn hex_nibble(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    }
+}

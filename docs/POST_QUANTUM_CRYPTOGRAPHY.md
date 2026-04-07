@@ -752,6 +752,7 @@ All Phase-1 (single-signer) and Phase-2 (multisig) items are implemented. This t
 | 14 | Per-output KEM derivation | Planned | `rust/shekyl-crypto-pq/src/kem.rs`, `src/cryptonote_core/cryptonote_tx_utils.cpp` |
 | 15 | FCMP++ `check_tx_inputs` verification | Done (skeleton) | `src/cryptonote_core/blockchain.cpp`; see `docs/FCMP_PLUS_PLUS.md` |
 | 16 | Per-input `pqc_auths` migration | Planned | `src/cryptonote_basic/cryptonote_basic.h`, `src/cryptonote_core/tx_pqc_verify.cpp` |
+| 17 | Native Rust tx signing (`shekyl-tx-builder`) | Done | `rust/shekyl-tx-builder/` — BP+, FCMP++, ECDH, PQC signing in pure Rust; exposed via `shekyl_sign_transaction` FFI and `shekyl-wallet-rpc` `native-sign` feature |
 
 Notes:
 - Staking and unstaking use `create_transactions_2` which routes through

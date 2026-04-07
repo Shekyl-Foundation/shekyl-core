@@ -3761,3 +3761,42 @@ char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* pa
         return nullptr;
     }
 }
+
+// ── Split transfer pipeline ──────────────────────────────────────────────────
+
+char* wallet2_ffi_prepare_transfer(wallet2_handle* w,
+                                   const char* destinations_json,
+                                   uint32_t priority,
+                                   uint32_t account_index)
+{
+    if (!w || !destinations_json) return nullptr;
+    try {
+        WALLET_GUARD(w);
+        // Phase A: build tx prefix, select UTXOs, precompute FCMP paths,
+        // derive PQC keys, and serialize SpendInput / OutputInfo to JSON.
+        // The actual proof generation (BP+, FCMP++, PQC signing) is deferred
+        // to the Rust shekyl-tx-builder called by the wallet-rpc.
+        w->set_error(-32601, "wallet2_ffi_prepare_transfer not yet implemented");
+        return nullptr;
+    } catch (const std::exception& e) {
+        w->set_error_from_exception(e, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
+        return nullptr;
+    }
+}
+
+char* wallet2_ffi_finalize_transfer(wallet2_handle* w,
+                                    const char* signed_proofs_json,
+                                    const char* tx_blob_hex)
+{
+    if (!w || !signed_proofs_json || !tx_blob_hex) return nullptr;
+    try {
+        WALLET_GUARD(w);
+        // Phase C: deserialize SignedProofs, insert into the transaction,
+        // compute PQC payload hashes, sign PQC, commit, and broadcast.
+        w->set_error(-32601, "wallet2_ffi_finalize_transfer not yet implemented");
+        return nullptr;
+    } catch (const std::exception& e) {
+        w->set_error_from_exception(e, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
+        return nullptr;
+    }
+}

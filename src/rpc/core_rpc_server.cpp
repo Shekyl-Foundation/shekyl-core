@@ -3660,6 +3660,9 @@ namespace cryptonote
     const uint64_t reference_height = top_height > min_anchor_age ? (top_height - min_anchor_age) : 0;
     const crypto::hash reference_hash = m_core.get_block_id_by_height(reference_height);
     res.reference_block = epee::string_tools::pod_to_hex(reference_hash);
+    cryptonote::block ref_blk;
+    m_core.get_blockchain_storage().get_block_by_hash(reference_hash, ref_blk);
+    res.curve_tree_root = epee::string_tools::pod_to_hex(ref_blk.curve_tree_root);
     res.reference_height = reference_height;
     res.tree_depth = depth;
     res.leaf_count = leaf_count;

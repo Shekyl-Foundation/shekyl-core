@@ -128,6 +128,19 @@ extern "C" {
         params_json: *const c_char,
     ) -> *mut c_char;
 
+    pub fn wallet2_ffi_prepare_transfer(
+        w: *mut Wallet2Handle,
+        destinations_json: *const c_char,
+        priority: u32,
+        account_index: u32,
+    ) -> *mut c_char;
+
+    pub fn wallet2_ffi_finalize_transfer(
+        w: *mut Wallet2Handle,
+        signed_proofs_json: *const c_char,
+        tx_blob_hex: *const c_char,
+    ) -> *mut c_char;
+
     pub fn wallet2_ffi_set_progress_callback(
         w: *mut Wallet2Handle,
         cb: Option<ProgressCallback>,

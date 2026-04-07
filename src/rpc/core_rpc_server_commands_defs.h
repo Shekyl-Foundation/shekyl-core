@@ -2854,6 +2854,7 @@ namespace cryptonote
     struct response_t: public rpc_access_response_base
     {
       std::string reference_block;
+      std::string curve_tree_root;
       uint64_t    reference_height;
       uint8_t     tree_depth;
       uint64_t    leaf_count;
@@ -2862,6 +2863,7 @@ namespace cryptonote
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_access_response_base)
         KV_SERIALIZE(reference_block)
+        KV_SERIALIZE(curve_tree_root)
         KV_SERIALIZE(reference_height)
         KV_SERIALIZE(tree_depth)
         KV_SERIALIZE(leaf_count)

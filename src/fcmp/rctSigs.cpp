@@ -295,6 +295,7 @@ namespace
         const keyV &amount_keys,
         xmr_amount txnFee,
         const crypto::hash &referenceBlock,
+        const key &tree_root,
         uint8_t tree_depth,
         const std::vector<std::vector<uint8_t>> &tree_paths,
         const std::vector<std::vector<fcmp_chunk_entry>> &leaf_chunk_entries,
@@ -465,10 +466,6 @@ namespace
                 witness.insert(witness.end(), layer.begin(), layer.end());
             }
         }
-
-        // Tree root from the reference block.
-        key tree_root;
-        memcpy(tree_root.bytes, referenceBlock.data, 32);
 
         ShekylFcmpProveResult result = shekyl_fcmp_prove(
             witness.data(),

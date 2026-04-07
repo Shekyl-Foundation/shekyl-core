@@ -2183,6 +2183,175 @@ pub extern "C" fn shekyl_construct_curve_tree_leaf(
     }
 }
 
+// ─── Transaction Builder (shekyl-tx-builder) ────────────────────────────────
+
+/// Result of `shekyl_sign_transaction`.
+///
+/// On success, `success` is true and `proofs_json` contains a JSON-encoded
+/// `SignedProofs` (BP+, FCMP++, ECDH, pseudo-outs, tree metadata).
+/// On failure, `success` is false, `error_code` classifies the error, and
+/// `error_message` contains a human-readable description.
+///
+/// The caller must free `proofs_json` and `error_message` via `shekyl_buffer_free`.
+#[repr(C)]
+pub struct ShekylSignResult {
+    pub proofs_json: ShekylBuffer,
+    pub success: bool,
+    pub error_code: i32,
+    pub error_message: ShekylBuffer,
+}
+
+impl ShekylSignResult {
+    fn ok(json: Vec<u8>) -> Self {
+        ShekylSignResult {
+            proofs_json: ShekylBuffer::from_vec(json),
+            success: true,
+            error_code: 0,
+            error_message: ShekylBuffer::null(),
+        }
+    }
+
+    fn err(code: i32, message: String) -> Self {
+        ShekylSignResult {
+            proofs_json: ShekylBuffer::null(),
+            success: false,
+            error_code: code,
+            error_message: ShekylBuffer::from_vec(message.into_bytes()),
+        }
+    }
+}
+
+/// Generate FCMP++ transaction proofs in a single call (BP+, FCMP++, ECDH,
+/// pseudo-outs).
+///
+/// This replaces the old C++ → Rust → C++ → Rust round-trip through
+/// `genRctFcmpPlusPlus` + `shekyl_fcmp_prove` + `shekyl_pqc_sign` with a
+/// single FFI entry point.
+///
+/// # Parameters
+///
+/// - `tx_prefix_hash_ptr`: Pointer to exactly 32 bytes — the Keccak-256 hash
+///   of the serialized transaction prefix.
+/// - `inputs_json_ptr` / `inputs_json_len`: JSON-encoded array of `SpendInput`.
+/// - `outputs_json_ptr` / `outputs_json_len`: JSON-encoded array of `OutputInfo`.
+/// - `fee`: Transaction fee in atomic units.
+/// - `reference_block_ptr`: Pointer to exactly 32 bytes — block hash.
+/// - `tree_root_ptr`: Pointer to exactly 32 bytes — Selene curve tree root.
+///   **This is NOT the block hash.** Passing the block hash produces invalid proofs.
+/// - `tree_depth`: Number of tree layers (must be >= 1).
+///
+/// # Return value
+///
+/// [`ShekylSignResult`] with JSON-encoded `SignedProofs` on success, or a
+/// structured error code and message on failure.
+///
+/// # Error codes
+///
+/// - `-1`: Null pointer argument
+/// - `-2`: JSON parse error
+/// - `-10` through `-29`: `TxBuilderError` variant (message has details)
+///
+/// # Memory
+///
+/// The caller owns both `proofs_json` and `error_message` buffers and must
+/// free them via `shekyl_buffer_free`.
+#[no_mangle]
+pub extern "C" fn shekyl_sign_transaction(
+    tx_prefix_hash_ptr: *const u8,
+    inputs_json_ptr: *const u8,
+    inputs_json_len: usize,
+    outputs_json_ptr: *const u8,
+    outputs_json_len: usize,
+    fee: u64,
+    reference_block_ptr: *const u8,
+    tree_root_ptr: *const u8,
+    tree_depth: u8,
+) -> ShekylSignResult {
+    // Null checks
+    if tx_prefix_hash_ptr.is_null()
+        || inputs_json_ptr.is_null()
+        || outputs_json_ptr.is_null()
+        || reference_block_ptr.is_null()
+        || tree_root_ptr.is_null()
+    {
+        return ShekylSignResult::err(-1, "null pointer argument".into());
+    }
+
+    let tx_prefix_hash: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(tx_prefix_hash_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let reference_block: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(reference_block_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let tree_root: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(tree_root_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    let Some(inputs_json) = slice_from_ptr(inputs_json_ptr, inputs_json_len) else {
+        return ShekylSignResult::err(-1, "invalid inputs_json pointer".into());
+    };
+    let Some(outputs_json) = slice_from_ptr(outputs_json_ptr, outputs_json_len) else {
+        return ShekylSignResult::err(-1, "invalid outputs_json pointer".into());
+    };
+
+    let inputs: Vec<shekyl_tx_builder::SpendInput> = match serde_json::from_slice(inputs_json) {
+        Ok(v) => v,
+        Err(e) => return ShekylSignResult::err(-2, format!("inputs JSON parse error: {e}")),
+    };
+    let outputs: Vec<shekyl_tx_builder::OutputInfo> = match serde_json::from_slice(outputs_json) {
+        Ok(v) => v,
+        Err(e) => return ShekylSignResult::err(-2, format!("outputs JSON parse error: {e}")),
+    };
+
+    let tree = shekyl_tx_builder::TreeContext {
+        reference_block,
+        tree_root,
+        tree_depth,
+    };
+
+    match shekyl_tx_builder::sign_transaction(tx_prefix_hash, &inputs, &outputs, fee, &tree) {
+        Ok(proofs) => {
+            match serde_json::to_vec(&proofs) {
+                Ok(json) => ShekylSignResult::ok(json),
+                Err(e) => ShekylSignResult::err(-3, format!("result serialization error: {e}")),
+            }
+        }
+        Err(e) => {
+            let code = tx_builder_error_code(&e);
+            ShekylSignResult::err(code, e.to_string())
+        }
+    }
+}
+
+fn tx_builder_error_code(e: &shekyl_tx_builder::TxBuilderError) -> i32 {
+    use shekyl_tx_builder::TxBuilderError::*;
+    match e {
+        NoInputs => -10,
+        TooManyInputs(_) => -11,
+        NoOutputs => -12,
+        TooManyOutputs(_) => -13,
+        ZeroInputAmount { .. } => -14,
+        ZeroOutputAmount { .. } => -15,
+        InputAmountOverflow => -16,
+        OutputAmountOverflow => -17,
+        InsufficientFunds { .. } => -18,
+        EmptyLeafChunk { .. } => -19,
+        LeafChunkTooLarge { .. } => -20,
+        ZeroTreeDepth => -21,
+        BranchLayerMismatch { .. } => -22,
+        InvalidPqcKeyLength { .. } => -23,
+        BulletproofError(_) => -24,
+        FcmpProveError(_) => -25,
+        PqcSignError { .. } => -26,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
