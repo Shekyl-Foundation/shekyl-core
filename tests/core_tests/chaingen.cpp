@@ -272,7 +272,7 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
   blk.minor_version = hf_ver ? *hf_ver : CURRENT_BLOCK_MINOR_VERSION;
   blk.timestamp = timestamp;
   blk.prev_id = prev_id;
-  blk.curve_tree_root = crypto::null_hash;
+  shekyl_curve_tree_selene_hash_init(reinterpret_cast<uint8_t*>(&blk.curve_tree_root));
 
   blk.tx_hashes.reserve(tx_list.size());
   for (const transaction &tx : tx_list)
@@ -384,7 +384,7 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
   blk.minor_version = actual_params & bf_minor_ver ? minor_ver : CURRENT_BLOCK_MINOR_VERSION;
   blk.timestamp     = actual_params & bf_timestamp ? timestamp : prev_block.timestamp + DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN; // Keep difficulty unchanged
   blk.prev_id       = actual_params & bf_prev_id   ? prev_id   : get_block_hash(prev_block);
-  blk.curve_tree_root = crypto::null_hash;
+  shekyl_curve_tree_selene_hash_init(reinterpret_cast<uint8_t*>(&blk.curve_tree_root));
   blk.tx_hashes     = actual_params & bf_tx_hashes ? tx_hashes : std::vector<crypto::hash>();
   max_outs          = actual_params & bf_max_outs ? max_outs : 9999;
   hf_version        = actual_params & bf_hf_version ? hf_version : 1;
@@ -1319,6 +1319,43 @@ bool construct_fcmp_tx(
     uint64_t global_idx = matched_src->outputs[matched_src->real_output].first;
     CHECK_AND_ASSERT_MES(assemble_tree_path_for_output(db, global_idx, tree_paths[i]), false,
       "construct_fcmp_tx: tree path assembly failed for global_idx " << global_idx);
+
+    // Populate leaf chunk entries (Ed25519 points for every output in the same chunk)
+    {
+      const uint32_t SELENE_CHUNK = shekyl_curve_tree_selene_chunk_width();
+      const uint64_t leaf_count = db.get_curve_tree_leaf_count();
+      uint64_t chunk_start = (global_idx / SELENE_CHUNK) * SELENE_CHUNK;
+      uint64_t chunk_end = std::min(chunk_start + SELENE_CHUNK, leaf_count);
+
+      for (uint64_t oi = chunk_start; oi < chunk_end; ++oi)
+      {
+        output_data_t od = db.get_output_key(0, oi, true);
+        tx_out_index txi = db.get_output_tx_and_index(0, oi);
+        transaction src_tx_for_chunk;
+        CHECK_AND_ASSERT_MES(db.get_tx(txi.first, src_tx_for_chunk), false,
+          "construct_fcmp_tx: cannot fetch tx for output " << oi);
+
+        rct::fcmp_chunk_entry entry{};
+        memcpy(entry.output_key.bytes, &od.pubkey, 32);
+
+        ge_p3 hp;
+        rct::hash_to_p3(hp, entry.output_key);
+        ge_p3_tobytes(reinterpret_cast<unsigned char*>(entry.key_image_gen.bytes), &hp);
+
+        entry.commitment = od.commitment;
+
+        std::vector<tx_extra_field> chunk_extra_fields;
+        parse_tx_extra(src_tx_for_chunk.extra, chunk_extra_fields);
+        tx_extra_pqc_leaf_hashes chunk_lh;
+        if (find_tx_extra_field_by_type(chunk_extra_fields, chunk_lh) &&
+            chunk_lh.blob.size() >= (txi.second + 1) * PQC_LEAF_HASH_BYTES)
+        {
+          memcpy(entry.h_pqc.bytes, chunk_lh.blob.data() + txi.second * PQC_LEAF_HASH_BYTES, 32);
+        }
+
+        leaf_chunk_entries[i].push_back(entry);
+      }
+    }
 
     // Derive per-input PQC keypair
     // For test coinbase outputs, we need the KEM shared secret. We can derive it

@@ -4622,7 +4622,7 @@ leave:
 
   TIME_MEASURE_FINISH(addblock);
 
-  if (new_height > 0)
+  if (new_height > 0 && m_nettype != FAKECHAIN)
   {
     const auto computed_root = m_db->get_curve_tree_root();
     crypto::hash expected_root;

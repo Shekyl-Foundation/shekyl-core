@@ -1,25 +1,39 @@
 use std::sync::LazyLock;
 use tokio::sync::Mutex;
 
-use shekyl_address::{Network, ShekylAddress};
+use shekyl_address::{Network, PQC_PAYLOAD_LEN, ShekylAddress};
 
 // shekyl-rpc doesn't include a transport
 // We can't include the simple-request crate there as then we'd have a cyclical dependency
 // Accordingly, we test shekyl-rpc here (implicitly testing the simple-request transport)
 use shekyl_simple_request_rpc::*;
 
+/// Mainnet default HTTP RPC port (`config::RPC_DEFAULT_PORT` / 11029 in shekyl-core). Use `--rpc-login`
+/// when testing against a daemon that requires auth.
+const DAEMON_RPC_URL: &str = "http://127.0.0.1:11029";
+
 static SEQUENTIAL: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-const ADDRESS: &str =
-  "4B33mFPMq6mKi7Eiyd5XuyKRVMGVZz1Rqb9ZTyGApXW5d1aT7UBDZ89ewmnWFkzJ5wPd2SFbn313vCT8a4E2Qf4KQH4pNey";
+/// Encoded mainnet address for `generate_blocks` (`Rpc` takes the wire string).
+static SAMPLE_MAINNET_ADDR: LazyLock<String> = LazyLock::new(|| {
+    ShekylAddress::new(
+        Network::Mainnet,
+        [0xaa; 32],
+        [0xbb; 32],
+        vec![0xcc; PQC_PAYLOAD_LEN],
+    )
+    .encode()
+    .expect("encode sample mainnet address")
+});
 
 #[tokio::test]
+#[ignore = "requires a shekyld HTTP RPC at 127.0.0.1:11029 (default mainnet); run with: cargo test -p shekyl-simple-request-rpc --test tests -- --ignored"]
 async fn test_rpc() {
   use shekyl_rpc::Rpc;
 
   let guard = SEQUENTIAL.lock().await;
 
-  let rpc = SimpleRequestRpc::new("http://monero:oxide@127.0.0.1:18081".to_string()).await.unwrap();
+  let rpc = SimpleRequestRpc::new(DAEMON_RPC_URL.to_string()).await.unwrap();
 
   {
     // Test get_height
@@ -45,7 +59,7 @@ async fn test_rpc() {
   for amount_of_blocks in [1, 5] {
     let (blocks, number) = rpc
       .generate_blocks(
-        &ShekylAddress::from_str(Network::Mainnet, ADDRESS).unwrap(),
+        SAMPLE_MAINNET_ADDR.as_str(),
         amount_of_blocks,
       )
       .await
@@ -64,16 +78,17 @@ async fn test_rpc() {
 }
 
 #[tokio::test]
+#[ignore = "requires a shekyld HTTP RPC at 127.0.0.1:11029; run with: cargo test -p shekyl-simple-request-rpc --test tests -- --ignored"]
 async fn test_decoy_rpc() {
   use shekyl_rpc::{Rpc, DecoyRpc};
 
   let guard = SEQUENTIAL.lock().await;
 
-  let rpc = SimpleRequestRpc::new("http://monero:oxide@127.0.0.1:18081".to_string()).await.unwrap();
+  let rpc = SimpleRequestRpc::new(DAEMON_RPC_URL.to_string()).await.unwrap();
 
   // Ensure there's blocks on-chain
   rpc
-    .generate_blocks(&ShekylAddress::from_str(Network::Mainnet, ADDRESS).unwrap(), 100)
+    .generate_blocks(SAMPLE_MAINNET_ADDR.as_str(), 100)
     .await
     .unwrap();
 

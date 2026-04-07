@@ -26,3 +26,5 @@ shekyl-rpc = { path = "..", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["macros"] }
+# Integration tests decode Bech32m addresses for generate_blocks (see tests/tests.rs).
+shekyl-address = { path = "../../../../shekyl-address" }
