@@ -28,6 +28,7 @@
 
 #include "wallet2_ffi.h"
 #include "wallet2.h"
+#include "memwipe.h"
 #include "wallet_rpc_server_error_codes.h"
 #include "wallet_rpc_server_commands_defs.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
@@ -50,10 +51,15 @@
 #include <rapidjson/stringbuffer.h>
 
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <filesystem>
 #include <sstream>
+
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "wallet.ffi"
@@ -178,6 +184,11 @@ void wallet2_ffi_set_progress_callback(wallet2_handle* w,
 
 wallet2_handle* wallet2_ffi_create(uint8_t nettype)
 {
+#ifdef __linux__
+    static std::once_flag prctl_flag;
+    std::call_once(prctl_flag, []{ prctl(PR_SET_DUMPABLE, 0); });
+#endif
+
     auto* h = new(std::nothrow) wallet2_handle();
     if (!h) return nullptr;
     h->wallet = std::make_unique<tools::wallet2>(nettype_from_u8(nettype), 1, true);
@@ -957,6 +968,11 @@ static std::string json_str(const rj::Value& v, const char* key, const char* def
     if (v.HasMember(key) && v[key].IsString()) return v[key].GetString();
     return def;
 }
+static epee::wipeable_string json_wipeable_str(const rj::Value& v, const char* key, const char* def = "") {
+    if (v.HasMember(key) && v[key].IsString())
+        return epee::wipeable_string(v[key].GetString(), v[key].GetStringLength());
+    return epee::wipeable_string(def);
+}
 
 static char* dispatch_get_height(wallet2_handle* w, const rj::Value&) {
     rj::Document doc;
@@ -1151,13 +1167,19 @@ static char* dispatch_get_languages(wallet2_handle*, const rj::Value&) {
 }
 
 static char* dispatch_change_wallet_password(wallet2_handle* w, const rj::Value& p) {
-    std::string old_pw = json_str(p, "old_password");
-    std::string new_pw = json_str(p, "new_password");
-    if (!w->wallet->verify_password(old_pw)) {
+    epee::wipeable_string old_pw = json_wipeable_str(p, "old_password");
+    epee::wipeable_string new_pw = json_wipeable_str(p, "new_password");
+    std::string old_pw_s(old_pw.data(), old_pw.size());
+    std::string new_pw_s(new_pw.data(), new_pw.size());
+    if (!w->wallet->verify_password(old_pw_s)) {
+        memwipe(old_pw_s.data(), old_pw_s.size());
+        memwipe(new_pw_s.data(), new_pw_s.size());
         w->set_error(WALLET_RPC_ERROR_CODE_INVALID_PASSWORD, "Invalid original password");
         return nullptr;
     }
-    w->wallet->change_password(w->wallet->get_wallet_file(), old_pw, new_pw);
+    w->wallet->change_password(w->wallet->get_wallet_file(), old_pw_s, new_pw_s);
+    memwipe(old_pw_s.data(), old_pw_s.size());
+    memwipe(new_pw_s.data(), new_pw_s.size());
     rj::Document doc;
     doc.SetObject();
     return json_to_string(doc);
@@ -3570,17 +3592,21 @@ char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* pa
     try {
         // Wallet file operations (use existing individual functions internally)
         if (m == "create_wallet") {
+            std::string pw = json_str(params, "password");
+            auto pw_wipe = epee::misc_utils::create_scope_leave_handler([&]{ memwipe(pw.data(), pw.size()); });
             int rc = wallet2_ffi_create_wallet(w,
                 json_str(params, "filename").c_str(),
-                json_str(params, "password").c_str(),
+                pw.c_str(),
                 json_str(params, "language", "English").c_str());
             if (rc != 0) return nullptr;
             rj::Document doc; doc.SetObject(); return json_to_string(doc);
         }
         if (m == "open_wallet") {
+            std::string pw = json_str(params, "password");
+            auto pw_wipe = epee::misc_utils::create_scope_leave_handler([&]{ memwipe(pw.data(), pw.size()); });
             int rc = wallet2_ffi_open_wallet(w,
                 json_str(params, "filename").c_str(),
-                json_str(params, "password").c_str());
+                pw.c_str());
             if (rc != 0) return nullptr;
             rj::Document doc; doc.SetObject(); return json_to_string(doc);
         }
@@ -3590,21 +3616,37 @@ char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* pa
             rj::Document doc; doc.SetObject(); return json_to_string(doc);
         }
         if (m == "restore_deterministic_wallet") {
+            std::string seed = json_str(params, "seed");
+            std::string pw = json_str(params, "password");
+            std::string seed_offset = json_str(params, "seed_offset");
+            auto wipe_guard = epee::misc_utils::create_scope_leave_handler([&]{
+                memwipe(seed.data(), seed.size());
+                memwipe(pw.data(), pw.size());
+                memwipe(seed_offset.data(), seed_offset.size());
+            });
             return wallet2_ffi_restore_deterministic_wallet(w,
                 json_str(params, "filename").c_str(),
-                json_str(params, "seed").c_str(),
-                json_str(params, "password").c_str(),
+                seed.c_str(),
+                pw.c_str(),
                 json_str(params, "language", "English").c_str(),
                 json_u64(params, "restore_height"),
-                json_str(params, "seed_offset").c_str());
+                seed_offset.c_str());
         }
         if (m == "generate_from_keys") {
+            std::string spendkey = json_str(params, "spendkey");
+            std::string viewkey = json_str(params, "viewkey");
+            std::string pw = json_str(params, "password");
+            auto wipe_guard = epee::misc_utils::create_scope_leave_handler([&]{
+                memwipe(spendkey.data(), spendkey.size());
+                memwipe(viewkey.data(), viewkey.size());
+                memwipe(pw.data(), pw.size());
+            });
             return wallet2_ffi_generate_from_keys(w,
                 json_str(params, "filename").c_str(),
                 json_str(params, "address").c_str(),
-                json_str(params, "spendkey").c_str(),
-                json_str(params, "viewkey").c_str(),
-                json_str(params, "password").c_str(),
+                spendkey.c_str(),
+                viewkey.c_str(),
+                pw.c_str(),
                 json_str(params, "language").c_str(),
                 json_u64(params, "restore_height"));
         }

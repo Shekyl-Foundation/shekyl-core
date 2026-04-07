@@ -50,6 +50,10 @@
 #include "common/stack_trace.h"
 #endif // STACK_TRACE
 
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
+
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "daemon"
 
@@ -129,6 +133,10 @@ int main(int argc, char const * argv[])
     // TODO parse the debug options like set log level right here at start
 
     tools::on_startup();
+
+#ifdef __linux__
+    prctl(PR_SET_DUMPABLE, 0);
+#endif
 
     epee::string_tools::set_module_name_and_folder(argv[0]);
 

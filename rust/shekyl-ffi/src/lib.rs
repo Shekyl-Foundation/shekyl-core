@@ -78,9 +78,8 @@ impl ShekylBuffer {
 pub extern "C" fn shekyl_buffer_free(ptr: *mut u8, len: usize) {
     if !ptr.is_null() && len > 0 {
         unsafe {
-            // Zeroize before releasing to avoid leaving secret material
-            // in allocator-managed memory.
-            std::ptr::write_bytes(ptr, 0, len);
+            use zeroize::Zeroize;
+            std::slice::from_raw_parts_mut(ptr, len).zeroize();
             drop(Vec::from_raw_parts(ptr, len, len));
         }
     }
@@ -719,6 +718,27 @@ pub extern "C" fn shekyl_munlock(ptr: *const libc::c_void, len: usize) -> i32 {
     #[cfg(not(any(unix, windows)))]
     {
         -1
+    }
+}
+
+/// Advise the kernel to exclude `[ptr, ptr+len)` from core dumps.
+///
+/// Uses `madvise(MADV_DONTDUMP)` on Linux. No-op on other platforms.
+/// Returns 0 on success, -1 on failure.
+/// C signature: `int shekyl_madvise_dontdump(const void *ptr, size_t len)`
+#[no_mangle]
+pub extern "C" fn shekyl_madvise_dontdump(ptr: *const libc::c_void, len: usize) -> i32 {
+    if ptr.is_null() || len == 0 {
+        return -1;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        unsafe { libc::madvise(ptr as *mut libc::c_void, len, libc::MADV_DONTDUMP) }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (ptr, len);
+        0
     }
 }
 

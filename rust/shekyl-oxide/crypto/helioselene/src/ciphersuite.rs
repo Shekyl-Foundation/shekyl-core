@@ -31,7 +31,7 @@ impl Ciphersuite for Helios {
   fn hash_to_F(dst: &[u8], msg: &[u8]) -> Self::F {
     let mut uniform = [0; 64];
     let mut hash = Blake2b512::digest([dst, msg].concat());
-    uniform.copy_from_slice(hash.as_slice());
+    uniform.copy_from_slice(hash.as_ref());
     let hash_as_mut: &mut [u8] = hash.as_mut();
     hash_as_mut.zeroize();
     let res = HelioseleneField::wide_reduce(uniform);
@@ -69,7 +69,7 @@ impl Ciphersuite for Selene {
   fn hash_to_F(dst: &[u8], msg: &[u8]) -> Self::F {
     let mut uniform = [0; 64];
     let mut hash = Blake2b512::digest([dst, msg].concat());
-    uniform.copy_from_slice(hash.as_slice());
+    uniform.copy_from_slice(hash.as_ref());
     let hash_as_mut: &mut [u8] = hash.as_mut();
     hash_as_mut.zeroize();
     let res = Field25519::wide_reduce(uniform);

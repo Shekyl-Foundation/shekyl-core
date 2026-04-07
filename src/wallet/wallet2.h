@@ -66,6 +66,7 @@
 #include "serialization/tuple.h"
 #include "serialization/containers.h"
 
+#include "memwipe.h"
 #include "wallet_errors.h"
 #include "common/password.h"
 #include "node_rpc_proxy.h"
@@ -2072,7 +2073,25 @@ private:
       uint8_t tree_depth = 0;
       std::string tx_blob_hex;
       bool valid = false;
-      void clear() { valid = false; pqc_secret_keys.clear(); inputs.clear(); outputs.clear(); }
+      void clear() {
+        for (auto &sk : pqc_secret_keys) {
+          if (!sk.empty()) memwipe(sk.data(), sk.size());
+          sk.clear();
+        }
+        pqc_secret_keys.clear();
+        for (auto &in : inputs) {
+          memwipe(in.spend_key_x.bytes, sizeof(in.spend_key_x));
+          memwipe(in.spend_key_y.bytes, sizeof(in.spend_key_y));
+          memwipe(in.h_pqc.bytes, sizeof(in.h_pqc));
+        }
+        inputs.clear();
+        for (auto &out : outputs) {
+          memwipe(out.amount_key.bytes, sizeof(out.amount_key));
+        }
+        outputs.clear();
+        memwipe(&tx_prefix_hash, sizeof(tx_prefix_hash));
+        valid = false;
+      }
     };
     native_sign_state m_native_sign_state;
 

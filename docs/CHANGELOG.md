@@ -19,6 +19,23 @@
 
 ### 🔒 Security
 
+- **Secure memory hardening (project-wide).** Systematic implementation of the
+  `secure-memory.mdc` rule across Rust and C++ codebases:
+  - `shekyl_buffer_free` now uses `zeroize` crate instead of `std::ptr::write_bytes`,
+    preventing the compiler from optimizing away the secret-wiping write.
+  - `native_sign_state::clear()` in `wallet2.h` now `memwipe`s all secret fields
+    (`spend_key_x`, `spend_key_y`, `h_pqc`, `amount_key`, `pqc_secret_keys`) before
+    clearing vectors.
+  - Added `prctl(PR_SET_DUMPABLE, 0)` to daemon (`main.cpp`), simplewallet, and
+    `wallet2_ffi_create()` to prevent core dumps containing key material on Linux.
+  - Passwords, seeds, spend keys, and view keys in `wallet2_ffi.cpp` JSON-RPC dispatch
+    now use `memwipe` scope guards to wipe temporary `std::string` buffers after use.
+  - New `shekyl_madvise_dontdump` FFI function (`MADV_DONTDUMP` on Linux, no-op elsewhere)
+    declared in `shekyl_secure_mem.h`.
+  - PQC long-lived secret keys (`m_pqc_secret_key`) are now `mlock`ed and
+    `madvise(MADV_DONTDUMP)`ed after generation and decryption, and `memwipe`d +
+    `munlock`ed on `forget_spend_key()`.
+
 - **Base58 overflow and non-canonical encoding fix (monero-oxide fork).**
   `shekyl-base58::decode()` now uses `checked_add` to prevent integer overflow
   during character accumulation, and rejects non-canonical encodings where
@@ -189,6 +206,12 @@
   negative tests (tampered key image, wrong tree root).
 
 ### 🐛 Fixed
+
+- **Suppressed vendored crate warnings.** Fixed `dead_code` warning for
+  `InconsistentWitness` variant in `generalized-bulletproofs` (only constructed
+  under `debug_assertions`) with `#[cfg_attr(not(debug_assertions), allow(dead_code))]`.
+  Fixed deprecated `GenericArray::as_slice()` in `helioselene` ciphersuite by
+  replacing with `as_ref()`.
 
 - **Pruning watermark hardening.** `BlockchainLMDB::prune_tx_data()` now
   fails the current batch on missing transaction rows (`TX_DNE`) instead of

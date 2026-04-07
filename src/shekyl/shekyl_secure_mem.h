@@ -12,6 +12,7 @@ extern "C" {
 void shekyl_memwipe(void *ptr, size_t len);
 int  shekyl_mlock(const void *ptr, size_t len);
 int  shekyl_munlock(const void *ptr, size_t len);
+int  shekyl_madvise_dontdump(const void *ptr, size_t len);
 size_t shekyl_page_size(void);
 
 #ifdef __cplusplus

@@ -87,6 +87,7 @@ pub(crate) enum IpProveError {
   /// Sanity checks on the witness are always performed. This library may also check whether or not
   /// the witness actually opens the statement (such as if `debug_assertions = on`), and if so, may
   /// return this error if the witness is perceived as inconsistent with the statement.
+  #[cfg_attr(not(debug_assertions), allow(dead_code))]
   InconsistentWitness,
 }
 

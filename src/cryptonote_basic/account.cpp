@@ -42,6 +42,7 @@ extern "C"
 #include "cryptonote_format_utils.h"
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
+#include "shekyl/shekyl_secure_mem.h"
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "account"
@@ -80,6 +81,11 @@ DISABLE_VS_WARNINGS(4244 4345)
       copy_rust_buffer(keys.m_pqc_secret_key, keypair.secret_key);
       shekyl_buffer_free(keypair.public_key.ptr, keypair.public_key.len);
       shekyl_buffer_free(keypair.secret_key.ptr, keypair.secret_key.len);
+
+      if (!keys.m_pqc_secret_key.empty()) {
+        shekyl_mlock(keys.m_pqc_secret_key.data(), keys.m_pqc_secret_key.size());
+        shekyl_madvise_dontdump(keys.m_pqc_secret_key.data(), keys.m_pqc_secret_key.size());
+      }
       return true;
     }
   }
@@ -139,6 +145,10 @@ DISABLE_VS_WARNINGS(4244 4345)
   void account_keys::decrypt(const crypto::chacha_key &key)
   {
     xor_with_key_stream(key);
+    if (!m_pqc_secret_key.empty()) {
+      shekyl_mlock(m_pqc_secret_key.data(), m_pqc_secret_key.size());
+      shekyl_madvise_dontdump(m_pqc_secret_key.data(), m_pqc_secret_key.size());
+    }
   }
   //-----------------------------------------------------------------
   void account_keys::encrypt_viewkey(const crypto::chacha_key &key)
@@ -179,6 +189,10 @@ DISABLE_VS_WARNINGS(4244 4345)
   void account_base::forget_spend_key()
   {
     m_keys.m_spend_secret_key = crypto::secret_key();
+    if (!m_keys.m_pqc_secret_key.empty()) {
+      shekyl_memwipe(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
+      shekyl_munlock(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
+    }
     m_keys.m_pqc_secret_key.clear();
   }
   //-----------------------------------------------------------------
