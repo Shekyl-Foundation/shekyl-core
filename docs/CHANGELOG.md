@@ -88,7 +88,7 @@
 - **Staking transaction types in `shekyl-oxide`.** `Input::StakeClaim` variant
   (binary tag 0x03) and `Output::staking: Option<StakingMeta>` (binary tag 0x04)
   added with full binary serialization/deserialization. `StakingMeta` carries
-  `lock_tier` and `lock_until` fields.
+  the `lock_tier` field (`lock_until` is computed dynamically).
 
 - **Property-based staking tests.** 11 new property tests in `shekyl-staking`:
   conservation across uniform/mixed/stress scenarios, proportionality, floor
@@ -181,8 +181,51 @@
 
 - **Claim watermark not persisted.** Added `m_last_claimed_height` to
   `transfer_details` (C++ wallet) and `TransferDetails` (Rust scanner) with
-  serialization. FFI layer now calls `update_claim_watermarks()` after
-  committing claim transactions.
+  serialization. FFI layer now calls `stage_claim_watermarks()` after
+  broadcasting claim transactions.
+
+- **Critical: stake tx only mineable in exact creation block (Bug 13).**
+  `handle_block_to_main_chain` validated staked outputs with strict equality
+  `staked.lock_until == blockchain_height + lock_blocks`. Since the wallet
+  signed `lock_until = current_height + lock_blocks`, any mempool latency made
+  every honest stake tx permanently unminable. Fixed by removing `lock_until`
+  from the on-chain `txout_to_staked_key` struct entirely. The effective lock
+  expiry is now computed dynamically as `creation_height + tier_lock_blocks` at
+  every check site. Removes ~8 bytes per staked output and eliminates the
+  signing-time/mining-time mismatch bug class.
+
+- **High: mempool admits unminable stake txs (Bug 12).** Pool admission
+  checked tier validity and non-zero `lock_until` but not the strict equality
+  that block validation enforced. Honest and malicious stake txs passed
+  admission but were rejected at block-add time, causing miners to waste work
+  on blocks that would be rejected. Resolved by the Bug 13 fix: with no
+  on-chain `lock_until`, the entire validation path is removed.
+
+- **Medium: off-by-one at upper lock boundary (Bug 11).** The accrual scan
+  excluded an output at block `lock_until` (`<= eval_height`), but claim
+  validation accepted `to_height <= lock_until`. A staker could claim a
+  one-block reward at `lock_until` against a denominator that didn't include
+  their weight. Fixed by changing the accrual scan to `effective_lock_until <
+  eval_height` (inclusive upper bound) and scheduling unlock subtraction at
+  `effective_lock_until + 1`. `lock_blocks = N` now means exactly N blocks of
+  accrual.
+
+- **Medium: unstake forfeits unclaimed rewards (Bug 8).**
+  `create_unstake_transaction` jumped straight to `create_transactions_from`
+  without checking for unclaimed reward backlog. A user who staked for the
+  long tier and never claimed would silently forfeit all accrued rewards.
+  Fixed: the wallet now refuses to unstake if any target output has
+  `m_last_claimed_height < min(current_height, effective_lock_until)` and
+  instructs the user to claim first.
+
+- **Minor: local claim watermark advanced on broadcast, not confirmation.**
+  `update_claim_watermarks` (now `stage_claim_watermarks`) committed the
+  watermark immediately after broadcast. If the tx was dropped or never
+  confirmed, the local watermark diverged from consensus. Fixed with an
+  in-flight tracking system: claims are staged in `m_pending_claim_watermarks`
+  at broadcast, committed by `confirm_claim_watermarks` when the tx appears in
+  a confirmed block during scan, and expired by
+  `expire_pending_claim_watermarks` after 100 unconfirmed blocks.
 
 ### 🔄 Changed
 
@@ -610,7 +653,7 @@
     covering staking lifecycle (stake output creation), invalid claim
     rejection (inverted range, oversized range, future height, wrong
     watermark, wrong amount, non-staked output, output not in tree), lock
-    period enforcement (invalid tier, wrong lock_until, zero lock), rollback
+    period enforcement (invalid tier), rollback
     correctness (pool balance, watermark), txpool handling, sorted-input
     enforcement, and multi-tier staking.
   - `rust/shekyl-staking/src/tiers.rs`: 10 edge-case tests including
@@ -627,7 +670,7 @@
 - **Universal deferred curve-tree insertion (Decision 15).** All outputs
   (coinbase, regular, staked) now enter the `pending_tree_leaves` table at
   creation and drain into the curve tree only after their type-specific
-  maturity height (coinbase: +60, regular: +10, staked: max(lock_until, +10)).
+  maturity height (coinbase: +60, regular: +10, staked: max(effective_lock_until, +10)).
   The `pending_staked_*` identifiers were renamed to `pending_tree_*` across
   all database interfaces. The drain journal (`pending_tree_drain`) now stores
   full 136-byte entries (maturity_height + leaf_data) for exact `pop_block`
@@ -1044,7 +1087,7 @@
   Five new methods on `BlockchainDB`: `add_pending_staked_leaf`,
   `drain_pending_staked_leaves`, `set_pending_staked_drain_count`,
   `get_pending_staked_drain_count`, and `remove_pending_staked_drain_count`.
-  This enables staked outputs whose `lock_until > block_height` to be parked
+  This enables staked outputs whose `effective_lock_until > block_height` to be parked
   in a pending table and batch-inserted into the curve tree when they mature.
 
 - **Comprehensive FCMP++ test suite and fuzz targets (Phase 7).**
@@ -1161,7 +1204,7 @@
   `check_stake_claim_input` now verifies the staked output's leaf is present
   in the curve tree by checking `staked_output_index < get_curve_tree_leaf_count()`
   and reading the leaf with `get_curve_tree_leaf()`.  Previously, only the
-  `lock_until` check was performed, which didn't guarantee the leaf had been
+  lock period check was performed, which didn't guarantee the leaf had been
   inserted into the tree.
 
 - **MEDIUM: PQC `auth_version` and `flags` consensus enforcement.**
@@ -1542,13 +1585,13 @@
     `txout_to_staked_key` outputs using the same 4-scalar leaf format
     `{O.x, I.x, C.x, H(pqc_pk)}`.
   - Deferred insertion: staked outputs only enter the curve tree when
-    `block_height >= lock_until`.  Outputs still within their lock
+    `block_height >= effective_lock_until`.  Outputs still within their lock
     period are stored in the `pending_staked_leaves` DB table and
     inserted into the curve tree when they mature (see deferred
     staked leaf insertion entry below).
-  - `check_stake_claim_input` now rejects claims on outputs whose
-    `lock_until > current_height`, ensuring claimability only after
-    the lock period expires.
+  - `check_stake_claim_input` validates claims against the staked output's
+    `effective_lock_until` (`creation_height + tier_lock_blocks`) and enforces
+    `to_height <= min(current_height, effective_lock_until)`.
 - **FCMP++ Phase 5: Wallet transaction construction skeleton.**
   - Added `rct::genRctFcmpPlusPlus()` in `src/fcmp/rctSigs.cpp` — builds
     an FCMP++ `rctSig` with `RCTTypeFcmpPlusPlusPqc`, Bulletproofs+ range
@@ -2865,8 +2908,9 @@ and can use native `std::optional`, `std::string_view`, etc.
 ### Staking (end-to-end claim-based system)
 
 - Added `txout_to_staked_key` output target type for locking coins at a chosen
-  tier (short/medium/long). Outputs carry `lock_tier` and `lock_until` fields
-  enforced at the consensus layer.
+  tier (short/medium/long). Outputs carry `lock_tier` field enforced at the
+  consensus layer. (Note: `lock_until` was originally stored on-chain but was
+  removed in a subsequent fix — see Bug 13 under Unreleased.)
 - Added `txin_stake_claim` input type for claiming accrued staking rewards.
   Claims specify a height range and are validated against deterministic per-block
   accrual records.
@@ -2874,16 +2918,17 @@ and can use native `std::optional`, `std::string_view`, etc.
   `staker_pool_balance` property for on-chain reward pool accounting.
 - Per-block accrual logic computes staker emission share and fee pool allocation
   at block insertion time, with full reversal on reorg (block pop).
-- Consensus validation: `lock_until` enforcement on staked outputs, claim amount
+- Consensus validation: lock period enforcement on staked outputs, claim amount
   verification against accrual records, watermark-based anti-double-claim,
   maximum claim range (10,000 blocks), pool balance sufficiency checks.
 - Pure claim transactions (`txin_stake_claim`-only inputs) use `RCTTypeNull`
   signatures, cleanly separated from ring-signature transaction validation.
-- Extended `tx_destination_entry` with `is_staking`, `stake_tier`, and
-  `stake_lock_until` fields. `construct_tx_with_tx_key` emits
-  `txout_to_staked_key` outputs when `is_staking` is set.
+- Extended `tx_destination_entry` with `is_staking` and `stake_tier`
+  fields. `construct_tx_with_tx_key` emits `txout_to_staked_key` outputs
+  when `is_staking` is set.
 - Extended `transfer_details` with `m_staked`, `m_stake_tier`, and
   `m_stake_lock_until` for wallet-side staking metadata tracking.
+  (`m_stake_lock_until` is computed locally from `creation_height + tier_lock_blocks`.)
 - Implemented wallet2 methods: `create_staking_transaction`,
   `create_unstake_transaction`, `create_claim_transaction`,
   `get_matured_staked_outputs`, `get_locked_staked_outputs`,

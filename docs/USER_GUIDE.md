@@ -521,16 +521,18 @@ backlog.
 [wallet]: unstake
 ```
 
-Unlocks your principal after `lock_until` has been reached. If the lock has
-not expired, the transaction will be rejected.
+Unlocks your principal after the lock period has elapsed (i.e., the chain
+height exceeds `creation_height + tier_lock_blocks`). If the lock has not
+expired, the transaction will be rejected.
 
 ### Accrual rules
 
-- Rewards accrue for blocks in the range `(creation_height, lock_until]`.
-- After `lock_until`, the output **stops accruing** new rewards but you can
-  still claim the backlog that accumulated during the lock window.
+- Rewards accrue for blocks in the range `(creation_height, effective_lock_until]`,
+  where `effective_lock_until = creation_height + tier_lock_blocks`.
+- After `effective_lock_until`, the output **stops accruing** new rewards but
+  you can still claim the backlog that accumulated during the lock window.
 - A staked output that is never unstaked does **not** earn indefinitely. The
-  accrual cap at `lock_until` keeps the commitment symmetric.
+  accrual cap at `effective_lock_until` keeps the commitment symmetric.
 
 ### Privacy considerations
 

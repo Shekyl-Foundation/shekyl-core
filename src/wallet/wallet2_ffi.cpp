@@ -2408,7 +2408,7 @@ static char* dispatch_claim_rewards(wallet2_handle* w, const rj::Value&) {
         std::string last_hash;
         for (auto& ptx : ptx_vector) {
             w->wallet->commit_tx(ptx);
-            w->wallet->update_claim_watermarks(ptx);
+            w->wallet->stage_claim_watermarks(ptx);
             last_hash = epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx));
             for (const auto& o : ptx.tx.vout)
                 total += o.amount;

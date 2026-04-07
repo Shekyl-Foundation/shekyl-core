@@ -372,7 +372,7 @@ Offset  Size  Field
 |---|---|
 | Writers | `add_staker_accrual` (block connect, AFTER pool routing decision), `remove_staker_accrual` (block pop) |
 | Readers | `get_staker_accrual` (claim validation, reward estimation, reorg reversal) |
-| Notes | `total_weighted_stake` is the sum of `shekyl_stake_weight(amount, tier)` for all active staked outputs at that height, excluding outputs past `lock_until`. Stored as u128 (lo/hi u64 halves) to avoid saturation at moderate adoption with tier multipliers > 1.0. When `total_weighted_stake == 0`, `actually_destroyed` includes the staker inflow that was burned. The record is written after the no-staker burn decision, so `actually_destroyed` reflects the full burned amount. |
+| Notes | `total_weighted_stake` is the sum of `shekyl_stake_weight(amount, tier)` for all active staked outputs at that height, excluding outputs past `effective_lock_until` (`creation_height + tier_lock_blocks`). Stored as u128 (lo/hi u64 halves) to avoid saturation at moderate adoption with tier multipliers > 1.0. When `total_weighted_stake == 0`, `actually_destroyed` includes the staker inflow that was burned. The record is written after the no-staker burn decision, so `actually_destroyed` reflects the full burned amount. |
 | Introduced | HF1 (Shekyl genesis) |
 
 ### `staker_claims`

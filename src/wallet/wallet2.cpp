@@ -2241,7 +2241,11 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
   // In this function, tx (probably) only contains the base information
   // (that is, the prunable stuff may or may not be included)
   if (!miner_tx && !pool)
+  {
     process_unconfirmed(txid, tx, height);
+    confirm_claim_watermarks(txid);
+    expire_pending_claim_watermarks(height);
+  }
 
   // per receiving subaddress index
   std::unordered_map<cryptonote::subaddress_index, uint64_t> tx_money_got_in_outs;
@@ -11104,23 +11108,51 @@ std::vector<size_t> wallet2::get_claimable_staked_outputs() const
   return result;
 }
 //----------------------------------------------------------------------------------------------------
-void wallet2::update_claim_watermarks(const pending_tx& ptx)
+void wallet2::stage_claim_watermarks(const pending_tx& ptx)
 {
+  const crypto::hash tx_hash = cryptonote::get_transaction_hash(ptx.tx);
+  const uint64_t broadcast_h = get_blockchain_current_height();
   for (const auto& inp : ptx.tx.vin)
   {
     if (!std::holds_alternative<cryptonote::txin_stake_claim>(inp))
       continue;
     const auto& claim = std::get<cryptonote::txin_stake_claim>(inp);
-    for (size_t i = 0; i < m_transfers.size(); ++i)
+    m_pending_claim_watermarks.push_back({
+      claim.staked_output_index, claim.to_height, broadcast_h, tx_hash
+    });
+  }
+}
+//----------------------------------------------------------------------------------------------------
+void wallet2::confirm_claim_watermarks(const crypto::hash& tx_hash)
+{
+  auto it = std::remove_if(m_pending_claim_watermarks.begin(),
+                           m_pending_claim_watermarks.end(),
+                           [&](const pending_claim_watermark& pcw) {
+    if (pcw.tx_hash != tx_hash)
+      return false;
+    for (auto& td : m_transfers)
     {
-      auto& td = m_transfers[i];
-      if (td.m_staked && td.m_global_output_index == claim.staked_output_index)
+      if (td.m_staked && td.m_global_output_index == pcw.global_output_index)
       {
-        td.m_last_claimed_height = claim.to_height;
+        td.m_last_claimed_height = pcw.to_height;
         break;
       }
     }
-  }
+    return true;
+  });
+  m_pending_claim_watermarks.erase(it, m_pending_claim_watermarks.end());
+}
+//----------------------------------------------------------------------------------------------------
+void wallet2::expire_pending_claim_watermarks(uint64_t current_height, uint64_t max_age)
+{
+  m_pending_claim_watermarks.erase(
+    std::remove_if(m_pending_claim_watermarks.begin(),
+                   m_pending_claim_watermarks.end(),
+                   [&](const pending_claim_watermark& pcw) {
+      return current_height > pcw.broadcast_height + max_age;
+    }),
+    m_pending_claim_watermarks.end()
+  );
 }
 //----------------------------------------------------------------------------------------------------
 uint64_t wallet2::estimate_claimable_reward(size_t transfer_index)
@@ -11468,6 +11500,7 @@ std::vector<wallet2::pending_tx> wallet2::create_unstake_transaction(const std::
   const uint64_t current_height = get_blockchain_current_height();
 
   std::vector<size_t> unstake_indices;
+  std::vector<size_t> needs_claim;
   for (size_t idx : staked_indices)
   {
     THROW_WALLET_EXCEPTION_IF(idx >= m_transfers.size(), error::wallet_internal_error, "Invalid transfer index");
@@ -11476,8 +11509,19 @@ std::vector<wallet2::pending_tx> wallet2::create_unstake_transaction(const std::
     THROW_WALLET_EXCEPTION_IF(td.m_spent, error::wallet_internal_error, "Output is already spent");
     THROW_WALLET_EXCEPTION_IF(td.m_stake_lock_until > current_height, error::wallet_internal_error,
       "Staked output not yet matured (unlocks at height " + std::to_string(td.m_stake_lock_until) + ", current: " + std::to_string(current_height) + ")");
+
+    const uint64_t accrual_cap = std::min(current_height, td.m_stake_lock_until);
+    const uint64_t watermark = (td.m_last_claimed_height > 0)
+      ? td.m_last_claimed_height : td.m_block_height;
+    if (watermark < accrual_cap)
+      needs_claim.push_back(idx);
+
     unstake_indices.push_back(idx);
   }
+
+  THROW_WALLET_EXCEPTION_IF(!needs_claim.empty(), error::wallet_internal_error,
+    "Cannot unstake: " + std::to_string(needs_claim.size()) + " output(s) have unclaimed reward backlog. "
+    "Claim rewards first to avoid forfeiting accrued rewards, then retry the unstake.");
 
   const size_t fake_outs_count = 15;
   std::vector<size_t> empty_dust;

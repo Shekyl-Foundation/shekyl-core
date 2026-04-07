@@ -432,7 +432,7 @@ Constants from `cryptonote_config.h`:
 > **Design rationale (MIN_AGE = 5):** Maturity is enforced by universal
 > deferred tree insertion: outputs only enter the curve tree after their
 > type-specific maturity period (coinbase: 60 blocks, regular: 10 blocks,
-> staked: max(lock_until, 10 blocks)).  MIN_AGE therefore only needs to
+> staked: max(effective_lock_until, 10 blocks)).  MIN_AGE therefore only needs to
 > provide a reorg safety margin — 5 blocks (~10 minutes) is sufficient
 > to ensure the referenced tree state is stable.
 
@@ -917,7 +917,7 @@ only drain into the curve tree once their type-specific maturity height is
 reached.  Maturity heights are:
 - **Coinbase:** `block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW` (60)
 - **Regular:**  `block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE` (10)
-- **Staked:**   `max(lock_until, block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE)`
+- **Staked:**   `max(effective_lock_until, block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE)`
 
 The `pending_tree_leaves` LMDB table (keyed by `maturity_height`,
 DUPSORT/DUPFIXED with 128-byte leaf values) stores pre-computed leaves.
@@ -934,9 +934,11 @@ only (not a maturity enforcement mechanism), the tree is guaranteed to
 contain only matured outputs.
 
 **Claim validation:** `txin_stake_claim` inputs are validated against
-the staked output's `lock_until`, watermark, and computed reward (using
-128-bit integer arithmetic for precision). The `lock_until > current_height`
-check ensures outputs are only claimable after their lock period expires.
+the staked output's `effective_lock_until` (computed as
+`creation_height + tier_lock_blocks`), watermark, and computed reward (using
+128-bit integer arithmetic for precision). Claims are valid both during the
+lock period and after maturity; the constraint is
+`to_height <= min(current_height, effective_lock_until)`.
 Additionally, `check_stake_claim_input` verifies the staked output's leaf
 is present in the curve tree by checking
 `staked_output_index < get_curve_tree_leaf_count()` and reading the leaf
@@ -1234,7 +1236,7 @@ cd rust && cargo test --workspace
 
 - **Lifecycle**: staked output creation with `construct_staked_tx` helper
 - **Invalid claims**: inverted range, oversized range (>10000), future height, wrong watermark, wrong amount, non-staked output, output not in tree
-- **Lock enforcement**: invalid tier (3), wrong `lock_until`, zero `lock_until`
+- **Lock enforcement**: invalid tier (3)
 - **Rollback**: pool balance and watermark restoration via callbacks
 - **Txpool**: mempool key-image tracking
 - **Adversarial**: sorted-input enforcement, all-tiers staking

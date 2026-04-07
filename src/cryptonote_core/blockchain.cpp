@@ -1865,7 +1865,9 @@ uint64_t Blockchain::get_stake_ratio(uint64_t height) const
       if (!staked)
         continue;
       const uint64_t effective_lock_until = creation_height + shekyl_stake_lock_blocks(staked->lock_tier);
-      if (effective_lock_until <= eval_height)
+      // Inclusive upper bound: output accrues through block lock_until,
+      // matching the claim validation which accepts to_height <= lock_until.
+      if (effective_lock_until < eval_height)
         continue;
 
       const uint64_t raw = out.amount;
@@ -1885,11 +1887,14 @@ uint64_t Blockchain::get_stake_ratio(uint64_t height) const
           m_stake_ratio_cache_total_weighted_hi += 1; // carry
       }
 
-      uint64_t &sched_raw = m_stake_unlock_schedule[effective_lock_until];
+      // Schedule subtraction at lock_until + 1 so the output accrues through
+      // block lock_until (inclusive), matching claim's to_height <= lock_until.
+      const uint64_t unlock_height = effective_lock_until + 1;
+      uint64_t &sched_raw = m_stake_unlock_schedule[unlock_height];
       if (raw > UINT64_MAX - sched_raw) sched_raw = UINT64_MAX;
       else sched_raw += raw;
 
-      auto &sched_w = m_stake_unlock_schedule_weighted[effective_lock_until];
+      auto &sched_w = m_stake_unlock_schedule_weighted[unlock_height];
       {
         uint64_t old_lo = sched_w.first;
         sched_w.first += weighted;

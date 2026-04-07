@@ -33,13 +33,15 @@ Shekyl draws a hard distinction between two concepts that other staking designs
 often conflate:
 
 1. **The principal lock.** The staked output itself is unspendable until
-   `lock_until` is reached. This is enforced when the output is consumed by an
-   unstake transaction (i.e. spent as a normal input). It is the user's
-   commitment to the network.
+   `effective_lock_until` (`creation_height + tier_lock_blocks`) is reached.
+   This is enforced when the output is consumed by an unstake transaction.
+   `lock_until` is **not** stored on-chain; it is computed dynamically from
+   the output's creation height and tier so the lock period always starts
+   from when the output enters the chain (not when the wallet signed the tx).
 2. **Reward claimability.** Accrued rewards belong to the staker as soon as
    they accrue. They can be claimed at any time after the staked output is
    created and before that output is consumed by an unstake transaction,
-   regardless of whether `lock_until` has passed.
+   regardless of whether `effective_lock_until` has passed.
 
 A claim transaction never touches the principal. It draws from the global pool
 and is gated only by the watermark, not by the lock state of the staked
@@ -49,17 +51,19 @@ This asymmetry is what makes the long-tier multipliers economically meaningful:
 a 208-day commitment can yield throughout those 208 days rather than only at
 the end.
 
-## Accrual Lifecycle and the `lock_until` Cap
+## Accrual Lifecycle and the `effective_lock_until` Cap
 
 Although a staked output remains *claimable* for the entire window between
 creation and the unstake spend, it only **accrues** rewards while it is within
 its committed lock period. Specifically:
 
-- An output accrues for blocks in the range `(creation_height, lock_until]`.
-- For blocks where `block_height > lock_until`, the output is excluded from
-  the per-block `total_weighted_stake` computation. It contributes nothing to
-  the denominator and earns nothing from the numerator.
-- A claim transaction may still be submitted after `lock_until` to drain the
+- An output accrues for blocks in the range `(creation_height, effective_lock_until]`,
+  where `effective_lock_until = creation_height + tier_lock_blocks`. The upper
+  bound is **inclusive**: the output contributes to `total_weighted_stake` at
+  block `effective_lock_until` itself (Bug 11 fix).
+- For blocks where `block_height > effective_lock_until`, the output is
+  excluded from the per-block `total_weighted_stake` computation.
+- A claim transaction may still be submitted after `effective_lock_until` to drain the
   backlog accumulated during the lock window. The cap on `to_height` (see
   validation rules below) bounds how far that drain can reach.
 
@@ -74,23 +78,23 @@ indefinitely with no further commitment. This would:
 - distort the `stake_ratio` signal that Component 3 governance reads
 - create a strict incentive to never unstake, hollowing out the unstake path
 
-Capping accrual at `lock_until` keeps the contract symmetric: the staker earns
+Capping accrual at `effective_lock_until` keeps the contract symmetric: the staker earns
 exactly what they committed to and nothing more, but they can claim that
 backlog on their own schedule.
 
 ### Wallet UX implication
 
 `estimate_claimable_reward` and `get_staked_outputs` MUST surface "frozen at
-`lock_until`" as a distinct state from "still accruing." Otherwise users will
+`effective_lock_until`" as a distinct state from "still accruing." Otherwise users will
 observe their claimable amount stop growing and assume the daemon is broken.
 
 ## Consensus Requirements
 
 - deterministic accrual accounting keyed by staked output identity
 - per-block `total_weighted_stake` excludes outputs where
-  `block_height > lock_until`
-- claim validation must NOT reject on `lock_until > current_height`
-- claim validation MUST enforce `to_height ≤ min(current_height, lock_until)`
+  `block_height > effective_lock_until`
+- claim validation must NOT reject on `effective_lock_until > current_height`
+- claim validation MUST enforce `to_height ≤ min(current_height, effective_lock_until)`
 - anti-double-claim protections via a monotonic per-output watermark
 - bounded per-claim work to preserve block validation performance
 
@@ -103,7 +107,7 @@ The full claim-based staking system is implemented and active from
 
 | Type | Description |
 |---|---|
-| `txout_to_staked_key` | Output target for locked staking outputs. Contains `key`, `view_tag`, `lock_tier`, `lock_until`. |
+| `txout_to_staked_key` | Output target for locked staking outputs. Contains `key`, `view_tag`, `lock_tier`. `lock_until` is **not** stored on-chain; it is computed as `creation_height + tier_lock_blocks` at every check site. |
 | `txin_stake_claim` | Input type for claiming accrued rewards. Contains `amount`, `staked_output_index`, `from_height`, `to_height`, `k_image`. The `k_image` is a synthetic identifier used solely for double-claim prevention against the watermark; it is unrelated to the staked output's spend image. |
 
 ### On-chain storage (LMDB)
@@ -133,7 +137,7 @@ A claim input is valid if and only if all of the following hold:
    MUST be ≥ the staked output's creation height. This prevents a
    back-dating attack where a newly staked output claims rewards against
    historical blocks whose `total_weighted_stake` did not include it.
-2. `to_height ≤ min(current_chain_height, lock_until)`. This is the
+2. `to_height ≤ min(current_chain_height, effective_lock_until)`. This is the
    asymmetric cap: the claim window may extend up to either the present or
    the end of the lock period, whichever is earlier.
 3. `to_height - from_height` does not exceed `MAX_CLAIM_RANGE` (10,000
@@ -152,7 +156,7 @@ A claim input is valid if and only if all of the following hold:
    txs in that block have been applied. This prevents two individually
    valid claim txs from collectively overdrawing the pool.
 
-There is **no** check on `lock_until > current_height`. Claims are valid both
+There is **no** check on `effective_lock_until > current_height`. Claims are valid both
 during the lock period and after maturity, up until the staked output is
 consumed by an unstake transaction.
 
@@ -183,7 +187,8 @@ block_pool      = staker_emission + staker_fee_pool
 # 2. Weighted stake denominator (tier multipliers applied INLINE)
 total_weighted_stake = 0  # u128 (two u64 halves in LMDB record)
 for staked in active_staked_outputs:
-    if staked.lock_until < block_height:
+    effective_lock_until = staked.creation_height + tier_lock_blocks(staked.tier)
+    if effective_lock_until < block_height:
         continue  # frozen outputs do not accrue (see Accrual Lifecycle)
     # mul_num / mul_den is the tier multiplier as an exact rational
     # sourced from rust/shekyl-staking/src/tiers.rs via FFI
@@ -301,7 +306,7 @@ When blocks are popped (reorg), the pop path mirrors the add path:
 | `stake <tier> <amount>` | Create a staking transaction locking coins for the specified tier |
 | `unstake` | Spend all matured staked outputs back to the wallet. Drains any unclaimed backlog first. |
 | `claim_rewards` | Claim accrued rewards from all claimable staked outputs (locked or matured) |
-| `staking_info` | Display current staking status, including any outputs frozen at `lock_until` |
+| `staking_info` | Display current staking status, including any outputs frozen at `effective_lock_until` |
 
 ### Wallet RPC
 
@@ -309,22 +314,25 @@ When blocks are popped (reorg), the pop path mirrors the add path:
 |---|---|
 | `stake` | Create a staking transaction (params: `tier`, `amount`, `priority`, `account_index`) |
 | `unstake` | Unstake all matured outputs (params: `priority`). Drains backlog first. |
-| `get_staked_outputs` | List all staked outputs with tier, lock state, accrual state (active / frozen-at-`lock_until`), and last-claimed watermark |
+| `get_staked_outputs` | List all staked outputs with tier, lock state, accrual state (active / frozen-at-`effective_lock_until`), and last-claimed watermark |
 | `get_staked_balance` | Total staked principal |
 | `claim_rewards` | Claim all available staking rewards |
 
 ### Wallet behavior
 
 - `get_claimable_staked_outputs` returns any staked output that is
-  `not_yet_unstaked` AND `last_claimed_height < min(current_height, lock_until)`.
+  `not_yet_unstaked` AND `last_claimed_height < min(current_height, effective_lock_until)`.
   It does **not** filter by lock state.
 - `create_claim_transaction` accepts both locked and matured-but-unspent
-  outputs. The historical "claim before unstaking" guard is preserved as a
-  workflow nudge in `unstake` (it drains the backlog first), not as a state
-  check inside `create_claim_transaction`.
+  outputs.
+- `create_unstake_transaction` **refuses** to proceed if any of the
+  specified outputs have an unclaimed reward backlog. This prevents silent
+  forfeiture of accrued rewards when the staked output is destroyed.
+  Users must claim first, then unstake. The Rust `plan_claim_and_unstake`
+  workflow automates this by computing a two-step plan.
 - `estimate_claimable_reward` calls the daemon RPC
   `estimate_claim_reward`, which uses the accrual database to compute the
-  reward server-side and respects the `min(current_height, lock_until)` cap.
+  reward server-side and respects the `min(current_height, effective_lock_until)` cap.
 
 ### Daemon RPC
 
@@ -352,30 +360,44 @@ correlated with specific accrual periods and staking outputs:
   Appendix).
 - **Staked output visibility — amounts are public.** `txout_to_staked_key`
   outputs are distinguishable from regular outputs on-chain. Unlike regular
-  RCT outputs, staked output amounts are stored in the clear (not
+  RCT outputs,   staked output amounts are stored in the clear (not
   Pedersen-committed). This is a deliberate design choice: the per-block
   accrual computation requires the actual staked amount to compute
   `total_weighted_stake`, and the claim validation path at
   `check_stake_claim_input` reads `staked_out.amount` directly. An RCT
   output with `amount == 0` is explicitly rejected by consensus for claim
-  validation (line 4029 of `blockchain.cpp`). The `lock_tier` and
-  `lock_until` fields are also public. This is an inherent trade-off of
+  validation (line 4029 of `blockchain.cpp`). The `lock_tier` field is also
+  public. This is an inherent trade-off of
   transparent staking and cannot be mitigated without a full confidential
   staking redesign. Future research directions include homomorphic
   weighted-stake proofs (see `DESIGN_CONCEPTS.md` Section 14).
-- **Frozen-at-`lock_until` outputs.** A matured-but-unspent output that is
+- **Frozen-at-`effective_lock_until` outputs.** A matured-but-unspent output that is
   still draining its backlog produces claims that are on-chain
   indistinguishable from any other claim. The frozen state introduces no new
   observable.
+
+### Claim watermark safety
+
+The wallet's local claim watermark (`m_last_claimed_height`) is advanced
+only when the claim transaction is **confirmed** in a block, not when it is
+broadcast. This prevents a race condition where a dropped or replaced
+claim tx would leave the local watermark ahead of the consensus watermark,
+causing subsequent claims to fail.
+
+In-flight claims are tracked in `m_pending_claim_watermarks`. When the
+wallet scans a block containing the claim tx, `confirm_claim_watermarks`
+commits the watermark. Entries that are not confirmed within 100 blocks
+are expired by `expire_pending_claim_watermarks`.
 
 ## Operator Notes
 
 - Staking economics are active from HF17 block height onward.
 - The accrual pool accumulates per-block regardless of whether claims are made.
-- Outputs past their `lock_until` neither contribute to nor draw from new
-  per-block accrual; they may still claim previously accumulated backlog.
+- Outputs past their `effective_lock_until` neither contribute to nor draw
+  from new per-block accrual; they may still claim previously accumulated
+  backlog.
 - Node operators should monitor `staker_pool_balance` via `get_staking_info`
   RPC.
 - Wallet implementations that support staking must handle
   `txout_to_staked_key` outputs in transaction scanning, and must surface the
-  "frozen at `lock_until`" state distinctly from "actively accruing."
+  "frozen at `effective_lock_until`" state distinctly from "actively accruing."

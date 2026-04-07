@@ -1140,7 +1140,9 @@ private:
     std::vector<size_t> get_matured_staked_outputs() const;
     std::vector<size_t> get_locked_staked_outputs() const;
     std::vector<size_t> get_claimable_staked_outputs() const;
-    void update_claim_watermarks(const pending_tx& ptx);
+    void stage_claim_watermarks(const pending_tx& ptx);
+    void confirm_claim_watermarks(const crypto::hash& tx_hash);
+    void expire_pending_claim_watermarks(uint64_t current_height, uint64_t max_age = 100);
     uint64_t get_staked_balance(uint64_t current_height) const;
     uint64_t estimate_claimable_reward(size_t transfer_index);
     bool sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, const std::vector<cryptonote::tx_destination_entry>& dsts, const unique_index_container& subtract_fee_from_outputs = {}) const;
@@ -1162,6 +1164,9 @@ private:
     uint64_t get_blockchain_current_height() const { return m_light_wallet_blockchain_height ? m_light_wallet_blockchain_height : m_blockchain.size(); }
     void rescan_spent();
     void rescan_blockchain(bool hard, bool refresh = true, bool keep_key_images = false);
+    // Staked outputs always return false here: they are not part of the
+    // regular spendable balance and can only be consumed via the unstake
+    // transaction path after their lock period expires.
     bool is_transfer_unlocked(const transfer_details& td);
     bool is_transfer_unlocked(uint64_t unlock_time, uint64_t block_height);
 
@@ -1905,6 +1910,14 @@ private:
     transfer_container m_transfers;
     payment_container m_payments;
     serializable_unordered_map<crypto::key_image, size_t> m_key_images;
+
+    struct pending_claim_watermark {
+      uint64_t global_output_index;
+      uint64_t to_height;
+      uint64_t broadcast_height;
+      crypto::hash tx_hash;
+    };
+    std::vector<pending_claim_watermark> m_pending_claim_watermarks;
     serializable_unordered_map<crypto::public_key, size_t> m_pub_keys;
     cryptonote::account_public_address m_account_public_address;
     serializable_unordered_map<crypto::public_key, cryptonote::subaddress_index> m_subaddresses;

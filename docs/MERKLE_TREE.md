@@ -190,7 +190,7 @@ Not every output enters the tree immediately. Shekyl uses **deferred insertion**
 |---|---|
 | Regular transaction output | 10 blocks after creation (~20 minutes) |
 | Coinbase (mining reward) | 60 blocks after creation (~2 hours) |
-| Staked output | At `lock_until` (when the stake lock expires) |
+| Staked output | At `effective_lock_until` (= `creation_height + tier_lock_blocks`, when the stake lock expires) |
 
 Outputs waiting to mature sit in a "pending" table. When the blockchain reaches their eligible height, they are drained from pending into the tree in a deterministic order (sorted by eligible height, then by global output index). This guarantees all nodes build identical trees.
 
