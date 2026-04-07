@@ -784,4 +784,184 @@ mod tests {
         assert!(wrong_root.is_err() || matches!(wrong_root, Ok(false)),
             "wrong tree root must not verify");
     }
+
+    #[test]
+    fn prove_rejects_max_plus_one_inputs() {
+        let inputs: Vec<ProveInput> = (0..=MAX_INPUTS).map(|_| dummy_prove_input()).collect();
+        let result = prove(&inputs, &[0; 32], 8, [0; 32]);
+        assert!(matches!(result, Err(ProveError::TooManyInputs(_))));
+    }
+
+    #[test]
+    fn prove_at_max_inputs_count() {
+        let inputs: Vec<ProveInput> = (0..MAX_INPUTS).map(|_| dummy_prove_input()).collect();
+        let result = prove(&inputs, &[0; 32], 8, [0; 32]);
+        assert!(
+            !matches!(result, Err(ProveError::TooManyInputs(_))),
+            "MAX_INPUTS should be accepted (may fail for other reasons)"
+        );
+    }
+
+    #[test]
+    fn prove_rejects_missing_tree_path() {
+        let mut input = dummy_prove_input();
+        input.spend_key_x = Scalar::random(&mut OsRng).to_repr().into();
+        input.spend_key_y = Scalar::random(&mut OsRng).to_repr().into();
+        let result = prove(&[input], &[0; 32], 8, [0; 32]);
+        assert!(
+            result.is_err(),
+            "input with empty leaf_chunk_outputs should fail"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_empty_proof_data() {
+        let proof = ShekylFcmpProof {
+            data: vec![],
+            num_inputs: 1,
+            tree_depth: 8,
+        };
+        let result = verify(
+            &proof,
+            &[[0; 32]],
+            &[[0; 32]],
+            &[PqcLeafScalar([0; 32])],
+            &[0; 32], 8, [0; 32],
+        );
+        assert!(result.is_err(), "empty proof data should be rejected");
+    }
+
+    #[test]
+    fn verify_rejects_pseudo_out_count_mismatch() {
+        let proof = ShekylFcmpProof {
+            data: vec![0; 100],
+            num_inputs: 1,
+            tree_depth: 8,
+        };
+        let result = verify(
+            &proof,
+            &[[0; 32]],
+            &[[0; 32], [0; 32]],
+            &[PqcLeafScalar([0; 32])],
+            &[0; 32], 8, [0; 32],
+        );
+        assert!(result.is_err(), "mismatched pseudo_outs count should be rejected");
+    }
+
+    #[test]
+    fn verify_rejects_pqc_leaf_count_mismatch() {
+        let proof = ShekylFcmpProof {
+            data: vec![0; 100],
+            num_inputs: 1,
+            tree_depth: 8,
+        };
+        let result = verify(
+            &proof,
+            &[[0; 32]],
+            &[[0; 32]],
+            &[PqcLeafScalar([0; 32]), PqcLeafScalar([0; 32])],
+            &[0; 32], 8, [0; 32],
+        );
+        assert!(result.is_err(), "mismatched PQC leaf count should be rejected");
+    }
+
+    #[test]
+    fn verify_rejects_zero_tree_depth() {
+        let proof = ShekylFcmpProof {
+            data: vec![0; 100],
+            num_inputs: 1,
+            tree_depth: 0,
+        };
+        let result = verify(
+            &proof,
+            &[[0; 32]],
+            &[[0; 32]],
+            &[PqcLeafScalar([0; 32])],
+            &[0; 32], 0, [0; 32],
+        );
+        assert!(result.is_err(), "tree depth 0 should be rejected");
+    }
+
+    #[test]
+    fn verify_rejects_all_zero_key_images() {
+        let proof = ShekylFcmpProof {
+            data: vec![0; 100],
+            num_inputs: 1,
+            tree_depth: 8,
+        };
+        let result = verify(
+            &proof,
+            &[[0; 32]],
+            &[[0; 32]],
+            &[PqcLeafScalar([0; 32])],
+            &[0; 32], 8, [0; 32],
+        );
+        assert!(result.is_err() || matches!(result, Ok(false)),
+            "all-zero key images should not verify");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn prove_verify_wrong_signable_tx_hash_fails() {
+        use ec_divisors::DivisorCurve;
+        use multiexp::multiexp_vartime;
+        use shekyl_generators::SELENE_HASH_INIT;
+
+        let tree_depth: u8 = 1;
+        let signable_tx_hash = [0xABu8; 32];
+
+        let x = Scalar::random(&mut OsRng);
+        let y = Scalar::random(&mut OsRng);
+        let O = (EdwardsPoint::generator() * x) + (EdwardsPoint(*T) * y);
+        let I = EdwardsPoint::random(&mut OsRng);
+        let C = EdwardsPoint::random(&mut OsRng);
+        let L = I * x;
+
+        let h_pqc_field = <Selene as Ciphersuite>::F::random(&mut OsRng);
+        let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr().into();
+
+        let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
+        let tree_root_point: <Selene as Ciphersuite>::G = *SELENE_HASH_INIT + multiexp_vartime(
+            &[
+                (<EdwardsPoint as DivisorCurve>::to_xy(O).unwrap().0, generators[0]),
+                (<EdwardsPoint as DivisorCurve>::to_xy(I).unwrap().0, generators[1]),
+                (<EdwardsPoint as DivisorCurve>::to_xy(C).unwrap().0, generators[2]),
+                (h_pqc_field, generators[3]),
+            ],
+        );
+        let tree_root: [u8; 32] = tree_root_point.to_bytes().into();
+
+        let o_bytes = O.to_bytes();
+        let i_bytes = I.to_bytes();
+        let c_bytes = C.to_bytes();
+
+        let input = ProveInput {
+            output_key: o_bytes.into(),
+            key_image_gen: i_bytes.into(),
+            commitment: c_bytes.into(),
+            h_pqc: PqcLeafScalar(h_pqc_bytes),
+            spend_key_x: x.to_repr().into(),
+            spend_key_y: y.to_repr().into(),
+            leaf_chunk_outputs: vec![(o_bytes.into(), i_bytes.into(), c_bytes.into())],
+            leaf_chunk_h_pqc: vec![h_pqc_bytes],
+            c1_branch_layers: vec![],
+            c2_branch_layers: vec![],
+        };
+
+        let result = prove(&[input], &tree_root, tree_depth, signable_tx_hash)
+            .expect("prove should succeed");
+
+        let different_hash = [0xCDu8; 32];
+        let wrong_hash = verify(
+            &result.proof,
+            &[L.to_bytes().into()],
+            &result.pseudo_outs,
+            &[PqcLeafScalar(h_pqc_bytes)],
+            &tree_root,
+            tree_depth,
+            different_hash,
+        );
+        assert!(wrong_hash.is_err() || matches!(wrong_hash, Ok(false)),
+            "wrong signable_tx_hash must not verify");
+    }
 }

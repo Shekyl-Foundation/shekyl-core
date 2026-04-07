@@ -34,8 +34,8 @@
 #include "spawn.h"
 #include "notify.h"
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "notify"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "notify"
 
 namespace tools
 {

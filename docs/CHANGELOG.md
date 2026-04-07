@@ -261,6 +261,57 @@
     `madvise(MADV_DONTDUMP)`ed after generation and decryption, and `memwipe`d +
     `munlock`ed on `forget_spend_key()`.
 
+- **Dev branch audit: Tier 1-6 security and code hardening.** Comprehensive
+  re-audit of the dev branch with 22 findings addressed:
+  - **PQC secret key lifecycle (Tier 1).** Added `~account_keys()` destructor
+    that wipes all secret keys (classical + PQC) and munlocks PQC material.
+    Fixed `create_from_keys` and `set_null` to wipe+unlock PQC secrets before
+    clearing. Prevents secrets from lingering in freed heap memory.
+  - **Debug trait on secret key types (Tier 1).** Removed `#[derive(Debug)]`
+    from `HybridSecretKey`, `HybridKemSecretKey`, and `SharedSecret`. All now
+    implement manual `Debug` printing `[REDACTED]` to prevent log leakage.
+  - **Proof generation panic removal (Tier 1).** Replaced 12
+    `ScalarDecomposition::new(...).unwrap()` calls in `proof.rs` with
+    `?`-propagated `ProveError::ScalarDecompositionFailed`. Zero-scalar blinding
+    factors now return a clean error instead of panicking the wallet.
+  - **RELEASE-BLOCKER resolution (Tier 1).** Evaluated and downgraded all 6
+    RELEASE-BLOCKER comments in shekyl-oxide to TODO with documented
+    justifications. None were correctness or security blockers.
+  - **FROST multisig feature-gated (Tier 1).** All FROST SAL and DKG FFI
+    functions gated behind `#[cfg(feature = "multisig")]`. Production builds
+    exclude incomplete nonce aggregation code. C++ header declarations guarded
+    by `#ifdef SHEKYL_MULTISIG`.
+  - **CString unwrap removal (Tier 2).** Replaced all `CString::new().unwrap()`
+    in `shekyl-wallet-rpc` with `to_cstring()` helper returning `WalletError`.
+    Fixed `Mutex::lock().unwrap()` in server.rs to return JSON-RPC error on
+    lock poisoning.
+  - **Sign function zeroization (Tier 2).** `HybridEd25519MlDsa::sign()` now
+    wraps temporary secret arrays in `Zeroizing<[u8; N]>` for automatic cleanup.
+  - **hex_to_key temp buffer wiped (Tier 2).** Added `memwipe` scope guard
+    to `hex_to_key` in `wallet2_ffi.cpp`.
+  - **PQC verify debug gated (Tier 2).** `shekyl_pqc_verify_debug` now only
+    compiled with `debug_assertions` or `debug-verify` feature to prevent use
+    as a signature oracle in production.
+  - **Free-string wipe (Tier 2).** `wallet2_ffi_free_string` now wipes the
+    buffer before freeing, protecting against secret-bearing JSON residue.
+  - **Buffer free contract documented (Tier 2).** `shekyl_buffer_free` len
+    safety contract documented in both Rust doc-comment and C header.
+  - **Claim builder silent wrong index (Tier 2).** `position(...).unwrap_or(0)`
+    replaced with explicit `TransferNotFound` error in `claim_builder.rs`.
+  - **deny(unsafe_code) added (Tier 3).** Added to 5 pure-Rust crates:
+    `shekyl-consensus`, `shekyl-economics`, `shekyl-staking`,
+    `shekyl-crypto-hash`, `shekyl-crypto-pq`.
+  - **Workspace lints inherited (Tier 3).** `[lints] workspace = true` added
+    to 11 Shekyl-first crates for consistent Clippy enforcement.
+  - **Legacy naming cleanup (Tier 4).** Renamed `MONERO_DEFAULT_LOG_CATEGORY`
+    to `SHEKYL_DEFAULT_LOG_CATEGORY` across 128 files.
+  - **FCMP++ edge-case tests (Tier 5).** Added 9 parametrized tests covering
+    boundary input counts, missing tree paths, empty proof data, count
+    mismatches, zero tree depth, and wrong signable_tx_hash.
+  - **CI improvements (Tier 6).** Added `.env` to `.gitignore`, created
+    explicit CodeQL workflow targeting both `dev` and `main` branches,
+    added `permissions: contents: read` to `build.yml`.
+
 - **Base58 overflow and non-canonical encoding fix (monero-oxide fork).**
   `shekyl-base58::decode()` now uses `checked_add` to prevent integer overflow
   during character accumulation, and rejects non-canonical encodings where

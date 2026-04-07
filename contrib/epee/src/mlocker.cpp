@@ -35,8 +35,8 @@
 
 #include <atomic>
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "mlocker"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "mlocker"
 
 static std::atomic<bool> previously_failed{ false };
 

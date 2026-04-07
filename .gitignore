@@ -146,6 +146,10 @@ release/
 *.tar.gz
 *.sha256
 
+# Environment files (may contain secrets)
+.env
+.env.*
+
 # Nested build trees (eg tools/genesis_builder/build)
 **/build/
 build-sync/

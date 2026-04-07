@@ -45,8 +45,8 @@ extern "C"
 #include "shekyl/shekyl_secure_mem.h"
 #include "memwipe.h"
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "account"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "account"
 
 using namespace std;
 

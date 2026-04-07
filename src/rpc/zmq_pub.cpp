@@ -52,8 +52,8 @@
 #include "fcmp/rctTypes.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "net.zmq"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "net.zmq"
 
 namespace
 {

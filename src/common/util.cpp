@@ -97,8 +97,8 @@ using namespace epee;
 #include <boost/asio.hpp>
 #include <openssl/evp.h>
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "util"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "util"
 
 namespace
 {

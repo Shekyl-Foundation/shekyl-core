@@ -39,8 +39,8 @@
 
 #include <sstream>
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "blockchain"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "blockchain"
 
 namespace {
   constexpr uint8_t PQC_SCHEME_SINGLE = 1;

@@ -9,8 +9,8 @@
 #include "misc_log_ex.h"
 #include "net/parse.h"
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "daemon.rpc.bootstrap_daemon"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "daemon.rpc.bootstrap_daemon"
 
 namespace cryptonote
 {
