@@ -319,8 +319,9 @@ impl Wallet2 {
     /// 3. Call C++ `wallet2_ffi_finalize_transfer()` to submit the signed tx.
     ///
     /// This eliminates the C++ → Rust → C++ → Rust FFI round-trips for proof
-    /// generation. Currently returns an error until `wallet2_ffi_prepare_transfer`
-    /// is fully implemented on the C++ side.
+    /// generation. Uses `wallet2_ffi_prepare_transfer` (C++ data gathering) →
+    /// `shekyl_tx_builder::sign_transaction` (Rust proofs) →
+    /// `wallet2_ffi_finalize_transfer` (C++ insertion + broadcast).
     #[cfg(feature = "native-sign")]
     pub fn transfer_native(
         &self,

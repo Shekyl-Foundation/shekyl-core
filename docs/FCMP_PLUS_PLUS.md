@@ -1154,7 +1154,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | `shekyl-tx-builder` crate (native Rust signing) | **Done** | `rust/shekyl-tx-builder/` |
 | `shekyl_sign_transaction` FFI export | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
 | Wallet RPC `native-sign` feature (`transfer_native`) | **Done** | `rust/shekyl-wallet-rpc/src/wallet.rs` |
-| `wallet2_ffi_prepare_transfer` / `_finalize_transfer` stubs | **Done** (stubs) | `src/wallet/wallet2_ffi.cpp`, `wallet2_ffi.h` |
+| `wallet2_ffi_prepare_transfer` / `_finalize_transfer` | **Done** | `src/wallet/wallet2_ffi.cpp`, `wallet2_ffi.h` |
 | `shekyl-tx-builder` unit tests (19 tests) | **Done** | `rust/shekyl-tx-builder/src/tests.rs` |
 
 ---

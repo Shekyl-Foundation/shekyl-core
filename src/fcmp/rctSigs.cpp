@@ -491,6 +491,7 @@ namespace
         else
         {
             LOG_PRINT_L0("shekyl_fcmp_prove failed for " << num_inputs << " inputs, depth " << (int)tree_depth);
+            CHECK_AND_ASSERT_THROW_MES(false, "FCMP++ proof generation failed");
         }
 
         return rv;

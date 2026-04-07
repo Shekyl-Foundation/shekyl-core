@@ -100,9 +100,21 @@ static bool ver_non_input_consensus_templated(TxForwardIt tx_begin, TxForwardIt 
         if (!Blockchain::check_tx_outputs(tx, tvc, hf_version) || tvc.m_verifivation_failed)
             return false;
 
-        // We only want to check FCMP++ semantics if this is actually an FCMP++ transaction
+        // Stake-claim transactions use RCTTypeFcmpPlusPlusPqc but have an empty
+        // FCMP++ proof (ownership is proven via PQC auth on public amounts, not
+        // membership proofs). Exclude them from the RCT semantics batch which
+        // rejects empty fcmp_pp_proof.
         if (tx.version >= 2)
-            rvv.push_back(&tx.rct_signatures);
+        {
+            bool is_stake_claim_only = !tx.vin.empty();
+            for (const auto& in : tx.vin)
+            {
+                if (!std::holds_alternative<txin_stake_claim>(in))
+                { is_stake_claim_only = false; break; }
+            }
+            if (!is_stake_claim_only)
+                rvv.push_back(&tx.rct_signatures);
+        }
     }
 
     // Rule 7

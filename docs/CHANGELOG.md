@@ -213,6 +213,17 @@
   Fixed deprecated `GenericArray::as_slice()` in `helioselene` ciphersuite by
   replacing with `as_ref()`.
 
+- **Stake-claim vs `verRctSemanticsSimple` conflict.** Stake-claim transactions
+  use `RCTTypeFcmpPlusPlusPqc` but have no FCMP++ membership proof (they prove
+  ownership via PQC auth on public amounts). `ver_non_input_consensus` now
+  excludes stake-claim-only transactions from the RCT semantics batch that
+  rejects empty `fcmp_pp_proof`.
+
+- **`genRctFcmpPlusPlus` hard-fail on proof failure.** Previously logged and
+  returned an `rctSig` with an empty proof when `shekyl_fcmp_prove` failed; now
+  throws `CHECK_AND_ASSERT_THROW_MES` so the wallet catches the error
+  immediately rather than producing an invalid transaction.
+
 - **Pruning watermark hardening.** `BlockchainLMDB::prune_tx_data()` now
   fails the current batch on missing transaction rows (`TX_DNE`) instead of
   logging and continuing, so `tx_prune_next_block` cannot advance on partial
