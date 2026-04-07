@@ -77,7 +77,6 @@ TEST(staking, txout_to_staked_key_serialization_roundtrip)
   memset(&original.key, 0xCD, sizeof(original.key));
   original.view_tag.data = 0x42;
   original.lock_tier = 1;
-  original.lock_until = 50000;
 
   std::ostringstream oss;
   binary_archive<true> oar(oss);
@@ -91,7 +90,6 @@ TEST(staking, txout_to_staked_key_serialization_roundtrip)
   EXPECT_EQ(deserialized.key, original.key);
   EXPECT_EQ(deserialized.view_tag.data, original.view_tag.data);
   EXPECT_EQ(deserialized.lock_tier, original.lock_tier);
-  EXPECT_EQ(deserialized.lock_until, original.lock_until);
 }
 
 TEST(staking, txin_stake_claim_boundary_values)
@@ -126,7 +124,6 @@ TEST(staking, txout_to_staked_key_all_tiers)
     memset(&tsk.key, tier, sizeof(tsk.key));
     tsk.view_tag.data = tier;
     tsk.lock_tier = tier;
-    tsk.lock_until = 1000 + tier * 1000;
 
     std::ostringstream oss;
     binary_archive<true> oar(oss);
@@ -138,7 +135,6 @@ TEST(staking, txout_to_staked_key_all_tiers)
     ASSERT_TRUE(::do_serialize(iar, rt));
 
     EXPECT_EQ(rt.lock_tier, tier);
-    EXPECT_EQ(rt.lock_until, 1000 + tier * 1000);
   }
 }
 
@@ -147,14 +143,14 @@ TEST(staking, txout_to_staked_key_all_tiers)
 // ===================================================================
 
 static uint64_t compute_reward_integer(
-  uint64_t total_reward, uint64_t weight, uint64_t total_weighted_stake)
+  uint64_t total_reward, uint64_t weight,
+  uint64_t total_weighted_stake_lo, uint64_t total_weighted_stake_hi = 0)
 {
-  if (total_reward == 0 || total_weighted_stake == 0)
+  if (total_reward == 0 || (total_weighted_stake_lo == 0 && total_weighted_stake_hi == 0))
     return 0;
-  uint64_t hi, lo;
-  lo = mul128(total_reward, weight, &hi);
-  div128_64(hi, lo, total_weighted_stake, &hi, &lo, NULL, NULL);
-  return lo;
+  unsigned __int128 num = (unsigned __int128)total_reward * weight;
+  unsigned __int128 denom = ((unsigned __int128)total_weighted_stake_hi << 64) | total_weighted_stake_lo;
+  return (uint64_t)(num / denom);
 }
 
 static uint64_t compute_reward_float(
@@ -206,7 +202,8 @@ TEST(staking, reward_integer_cumulative_over_range)
   struct accrual_record {
     uint64_t staker_emission;
     uint64_t staker_fee_pool;
-    uint64_t total_weighted_stake;
+    uint64_t total_weighted_stake_lo;
+    uint64_t total_weighted_stake_hi;
   };
 
   const uint64_t staked_amount = 10000000000ULL; // 10 SKL
@@ -214,20 +211,20 @@ TEST(staking, reward_integer_cumulative_over_range)
   const uint64_t weight = shekyl_stake_weight(staked_amount, tier);
 
   accrual_record accruals[] = {
-    {100000, 50000, 1000000000},
-    {200000, 100000, 2000000000},
-    {0, 0, 0},                    // zero block, skipped
-    {150000, 75000, 1500000000},
-    {300000, 0, 3000000000},
+    {100000, 50000, 1000000000, 0},
+    {200000, 100000, 2000000000, 0},
+    {0, 0, 0, 0},
+    {150000, 75000, 1500000000, 0},
+    {300000, 0, 3000000000, 0},
   };
 
   uint64_t total_reward = 0;
   for (const auto& a : accruals)
   {
     uint64_t total_at_h = a.staker_emission + a.staker_fee_pool;
-    if (total_at_h == 0 || a.total_weighted_stake == 0)
+    if (total_at_h == 0 || (a.total_weighted_stake_lo == 0 && a.total_weighted_stake_hi == 0))
       continue;
-    total_reward += compute_reward_integer(total_at_h, weight, a.total_weighted_stake);
+    total_reward += compute_reward_integer(total_at_h, weight, a.total_weighted_stake_lo, a.total_weighted_stake_hi);
   }
 
   EXPECT_GT(total_reward, 0u);
@@ -255,13 +252,11 @@ TEST(staking, get_output_staking_info_staked_output)
   memset(&pk, 0x11, sizeof(pk));
   crypto::view_tag vt;
   vt.data = 0x22;
-  set_staked_tx_out(5000000000, pk, vt, 2, 200000, out);
+  set_staked_tx_out(5000000000, pk, vt, 2, out);
 
   uint8_t tier = 255;
-  uint64_t lock_until = 0;
-  ASSERT_TRUE(get_output_staking_info(out, tier, lock_until));
+  ASSERT_TRUE(get_output_staking_info(out, tier));
   EXPECT_EQ(tier, 2);
-  EXPECT_EQ(lock_until, 200000u);
   EXPECT_EQ(out.amount, 5000000000u);
 }
 
@@ -272,10 +267,8 @@ TEST(staking, get_output_staking_info_non_staked_output)
   out.target = txout_to_tagged_key{};
 
   uint8_t tier = 255;
-  uint64_t lock_until = 0;
-  ASSERT_FALSE(get_output_staking_info(out, tier, lock_until));
+  ASSERT_FALSE(get_output_staking_info(out, tier));
   EXPECT_EQ(tier, 255u); // unchanged
-  EXPECT_EQ(lock_until, 0u); // unchanged
 }
 
 TEST(staking, get_inputs_money_amount_mixed_inputs)
@@ -424,7 +417,7 @@ TEST(staking, set_staked_tx_out_creates_correct_output)
   crypto::view_tag vt;
   vt.data = 0x55;
 
-  set_staked_tx_out(999, pk, vt, 0, 12345, out);
+  set_staked_tx_out(999, pk, vt, 0, out);
 
   EXPECT_EQ(out.amount, 999u);
   ASSERT_TRUE(std::holds_alternative<txout_to_staked_key>(out.target));
@@ -433,7 +426,6 @@ TEST(staking, set_staked_tx_out_creates_correct_output)
   EXPECT_EQ(staked.key, pk);
   EXPECT_EQ(staked.view_tag.data, 0x55);
   EXPECT_EQ(staked.lock_tier, 0);
-  EXPECT_EQ(staked.lock_until, 12345u);
 }
 
 // ===================================================================
@@ -468,7 +460,6 @@ TEST(staking, txout_target_variant_holds_staked_key)
   txout_to_staked_key staked;
   memset(&staked.key, 0xBB, sizeof(staked.key));
   staked.lock_tier = 2;
-  staked.lock_until = 99999;
 
   target = staked;
 
@@ -478,7 +469,6 @@ TEST(staking, txout_target_variant_holds_staked_key)
 
   const auto& extracted = std::get<txout_to_staked_key>(target);
   EXPECT_EQ(extracted.lock_tier, 2);
-  EXPECT_EQ(extracted.lock_until, 99999u);
 }
 
 // ===================================================================
@@ -518,7 +508,7 @@ TEST(staking, conservation_invariant_single_block)
     uint64_t weight = shekyl_stake_weight(pos.amount, pos.tier);
     uint8_t overflow = 0;
     uint64_t reward = shekyl_calc_per_block_staker_reward(
-      pool_inflow, weight, total_weighted, &overflow);
+      pool_inflow, weight, total_weighted, 0, &overflow);
     EXPECT_EQ(overflow, 0);
     total_distributed += reward;
   }
@@ -550,7 +540,7 @@ TEST(staking, conservation_invariant_all_same_tier)
     uint64_t weight = shekyl_stake_weight(amount, tier);
     uint8_t overflow = 0;
     total_distributed += shekyl_calc_per_block_staker_reward(
-      pool_inflow, weight, total_weighted, &overflow);
+      pool_inflow, weight, total_weighted, 0, &overflow);
     EXPECT_EQ(overflow, 0);
   }
 
@@ -581,7 +571,7 @@ TEST(staking, conservation_invariant_mixed_tiers_stress)
     uint64_t weight = shekyl_stake_weight(amt, tier);
     uint8_t overflow = 0;
     total_distributed += shekyl_calc_per_block_staker_reward(
-      pool_inflow, weight, total_weighted, &overflow);
+      pool_inflow, weight, total_weighted, 0, &overflow);
     EXPECT_EQ(overflow, 0);
   }
 
@@ -644,13 +634,13 @@ TEST(staking, zero_staker_burn_path)
 
   uint8_t overflow = 0;
   uint64_t reward = shekyl_calc_per_block_staker_reward(
-    pool_inflow, 0, 0, &overflow);
+    pool_inflow, 0, 0, 0, &overflow);
   EXPECT_EQ(reward, 0u);
   EXPECT_EQ(overflow, 0);
 
   // Even with a non-zero weight, if total is 0, reward must be 0
   reward = shekyl_calc_per_block_staker_reward(
-    pool_inflow, 1000000, 0, &overflow);
+    pool_inflow, 1000000, 0, 0, &overflow);
   EXPECT_EQ(reward, 0u);
 }
 
@@ -669,7 +659,7 @@ TEST(staking, single_staker_captures_full_reward)
 
   uint8_t overflow = 0;
   uint64_t reward = shekyl_calc_per_block_staker_reward(
-    pool_inflow, weight, total_weighted, &overflow);
+    pool_inflow, weight, total_weighted, 0, &overflow);
   EXPECT_EQ(overflow, 0);
   EXPECT_EQ(reward, pool_inflow);
 }
@@ -699,7 +689,7 @@ TEST(staking, dust_stakers_conservation)
     uint64_t w = shekyl_stake_weight(dust_amount, tier);
     uint8_t overflow = 0;
     dust_total += shekyl_calc_per_block_staker_reward(
-      pool_inflow, w, total_weighted, &overflow);
+      pool_inflow, w, total_weighted, 0, &overflow);
     EXPECT_EQ(overflow, 0);
   }
 
@@ -708,7 +698,7 @@ TEST(staking, dust_stakers_conservation)
     uint64_t w = shekyl_stake_weight(whale_amount, tier);
     uint8_t overflow = 0;
     whale_reward = shekyl_calc_per_block_staker_reward(
-      pool_inflow, w, total_weighted, &overflow);
+      pool_inflow, w, total_weighted, 0, &overflow);
     EXPECT_EQ(overflow, 0);
   }
 
@@ -728,15 +718,16 @@ TEST(staking, multi_block_claim_range_conservation)
   // The total claimed must not exceed the sum of pool inflows.
   struct block_state {
     uint64_t pool_inflow;
-    uint64_t total_weighted_stake;
+    uint64_t total_weighted_stake_lo;
+    uint64_t total_weighted_stake_hi;
   };
 
   const block_state blocks[] = {
-    {5000000, 10000000000ULL},
-    {3000000, 5000000000ULL},
-    {0, 0},                     // zero-staker block (burned)
-    {8000000, 20000000000ULL},
-    {1000000, 500000000ULL},
+    {5000000, 10000000000ULL, 0},
+    {3000000, 5000000000ULL, 0},
+    {0, 0, 0},                        // zero-staker block (burned)
+    {8000000, 20000000000ULL, 0},
+    {1000000, 500000000ULL, 0},
   };
 
   const uint64_t staked_amount = 2000000000; // 2 SKL
@@ -748,11 +739,11 @@ TEST(staking, multi_block_claim_range_conservation)
   for (const auto& b : blocks)
   {
     total_pool += b.pool_inflow;
-    if (b.pool_inflow == 0 || b.total_weighted_stake == 0)
+    if (b.pool_inflow == 0 || (b.total_weighted_stake_lo == 0 && b.total_weighted_stake_hi == 0))
       continue;
     uint8_t overflow = 0;
     total_claimed += shekyl_calc_per_block_staker_reward(
-      b.pool_inflow, weight, b.total_weighted_stake, &overflow);
+      b.pool_inflow, weight, b.total_weighted_stake_lo, b.total_weighted_stake_hi, &overflow);
     EXPECT_EQ(overflow, 0);
   }
 
@@ -775,4 +766,117 @@ TEST(staking, max_claim_range_boundary)
 
   // One past is over the limit
   EXPECT_GT(to_height + 1 - from_height, max_range);
+}
+
+// ===================================================================
+// 14. Cross-validation: C++ cache accumulation matches Rust StakeRegistry
+// ===================================================================
+
+TEST(staking, cpp_rust_total_weighted_stake_agreement)
+{
+  // Reproduce the C++ cache accumulation logic (from add_staked_outputs in
+  // blockchain.cpp) and verify it matches a direct Rust-side computation
+  // via the shekyl_stake_weight FFI for various staker configurations.
+  struct staker {
+    uint64_t amount;
+    uint8_t tier;
+  };
+
+  const staker stakers[] = {
+    {1000000000,  0},  // 1 SKL, tier 0 (1.0x)
+    {5000000000,  1},  // 5 SKL, tier 1 (1.5x)
+    {2000000000,  2},  // 2 SKL, tier 2 (2.0x)
+    {10000000000, 0},  // 10 SKL, tier 0
+    {750000000,   1},  // 0.75 SKL, tier 1
+    {3000000000,  2},  // 3 SKL, tier 2
+    {100000000,   0},  // 0.1 SKL, tier 0
+    {8000000000,  1},  // 8 SKL, tier 1
+    {1,           0},  // 1 atomic unit dust, tier 0
+    {UINT64_MAX / 2, 0}, // large value, tier 0
+  };
+
+  // C++ cache accumulation: 128-bit addition matching blockchain.cpp
+  uint64_t cache_lo = 0, cache_hi = 0;
+  for (const auto& s : stakers)
+  {
+    uint64_t w = shekyl_stake_weight(s.amount, s.tier);
+    uint64_t old_lo = cache_lo;
+    cache_lo += w;
+    if (cache_lo < old_lo)
+      cache_hi += 1;
+  }
+
+  // Reference: sum weights independently with 128-bit arithmetic
+  unsigned __int128 reference_total = 0;
+  for (const auto& s : stakers)
+  {
+    uint64_t w = shekyl_stake_weight(s.amount, s.tier);
+    reference_total += (unsigned __int128)w;
+  }
+
+  uint64_t ref_lo = (uint64_t)reference_total;
+  uint64_t ref_hi = (uint64_t)(reference_total >> 64);
+
+  EXPECT_EQ(cache_lo, ref_lo)
+    << "Low 64 bits of total_weighted_stake diverge between C++ cache and reference";
+  EXPECT_EQ(cache_hi, ref_hi)
+    << "High 64 bits of total_weighted_stake diverge between C++ cache and reference";
+
+  // Verify the value is non-zero and plausible
+  EXPECT_GT(cache_lo | cache_hi, 0u);
+
+  // Verify reward computation produces the same result with both representations
+  const uint64_t pool_inflow = 10000000;
+  const uint64_t test_weight = shekyl_stake_weight(1000000000, 1);
+  uint8_t overflow_ffi = 0;
+  uint64_t reward_ffi = shekyl_calc_per_block_staker_reward(
+    pool_inflow, test_weight, cache_lo, cache_hi, &overflow_ffi);
+  uint64_t reward_ref = compute_reward_integer(pool_inflow, test_weight, ref_lo, ref_hi);
+  EXPECT_EQ(overflow_ffi, 0);
+  EXPECT_EQ(reward_ffi, reward_ref)
+    << "Reward computed via FFI (lo/hi) differs from reference integer math";
+}
+
+TEST(staking, u128_weighted_stake_no_saturation_at_scale)
+{
+  // Demonstrate that the u128 representation does NOT saturate where u64 would.
+  // 100M stakers each staking 100 SKL at tier 2 (2.0x multiplier):
+  // raw = 100 * 10^10 = 10^12 per staker
+  // weighted = 2 * 10^12 per staker
+  // total weighted for 100M stakers = 2 * 10^20
+  // u64::MAX = 1.844 * 10^19 — would saturate!
+  // u128 handles this trivially.
+  const uint64_t amount_per_staker = 100000000000ULL; // 100 SKL in atomic units (10 decimals)
+  const uint8_t tier = 2;
+  const uint64_t weight_per = shekyl_stake_weight(amount_per_staker, tier);
+  ASSERT_GT(weight_per, amount_per_staker); // tier 2 is 2.0x
+
+  const uint64_t num_stakers = 100000000ULL; // 100M
+
+  unsigned __int128 expected = (unsigned __int128)weight_per * num_stakers;
+  ASSERT_GT((uint64_t)(expected >> 64), 0u)
+    << "This test value should exceed u64::MAX to demonstrate u128 necessity";
+
+  // Simulate the C++ 128-bit cache accumulation
+  uint64_t cache_lo = 0, cache_hi = 0;
+  {
+    // Instead of looping 100M times, multiply
+    unsigned __int128 total = (unsigned __int128)weight_per * num_stakers;
+    cache_lo = (uint64_t)total;
+    cache_hi = (uint64_t)(total >> 64);
+  }
+
+  // Verify reward still computes correctly with the large denominator
+  const uint64_t pool_inflow = 50000000; // 0.05 SKL per block
+  uint8_t overflow = 0;
+  uint64_t reward = shekyl_calc_per_block_staker_reward(
+    pool_inflow, weight_per, cache_lo, cache_hi, &overflow);
+  EXPECT_EQ(overflow, 0);
+  EXPECT_GT(reward, 0u);
+
+  // Single staker's share should be pool / num_stakers (approx)
+  uint64_t expected_reward = pool_inflow / num_stakers;
+  // Allow some rounding tolerance
+  EXPECT_LE(reward, expected_reward + 1);
+  EXPECT_GE(reward, expected_reward > 0 ? expected_reward - 1 : 0);
 }

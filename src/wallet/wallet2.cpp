@@ -2506,12 +2506,11 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
             td.m_frozen = false;
             {
               uint8_t stk_tier = 0;
-              uint64_t stk_lock = 0;
-              if (cryptonote::get_output_staking_info(tx.vout[o], stk_tier, stk_lock))
+              if (cryptonote::get_output_staking_info(tx.vout[o], stk_tier))
               {
                 td.m_staked = true;
                 td.m_stake_tier = stk_tier;
-                td.m_stake_lock_until = stk_lock;
+                td.m_stake_lock_until = td.m_block_height + shekyl_stake_lock_blocks(stk_tier);
               }
               else
               {
@@ -11065,10 +11064,6 @@ std::vector<wallet2::pending_tx> wallet2::create_staking_transaction(uint8_t tie
   THROW_WALLET_EXCEPTION_IF(!use_fork_rules(HF_VERSION_SHEKYL_NG, 10), error::wallet_internal_error,
     "Staking requires hardfork version " + std::to_string(HF_VERSION_SHEKYL_NG));
 
-  const uint64_t lock_blocks = shekyl_stake_lock_blocks(tier);
-  const uint64_t current_height = get_blockchain_current_height();
-  const uint64_t lock_until = current_height + lock_blocks;
-
   cryptonote::address_parse_info self_address_info;
   self_address_info.address = get_address();
   self_address_info.is_subaddress = false;
@@ -11080,7 +11075,6 @@ std::vector<wallet2::pending_tx> wallet2::create_staking_transaction(uint8_t tie
   de.is_integrated = false;
   de.is_staking = true;
   de.stake_tier = tier;
-  de.stake_lock_until = lock_until;
 
   std::vector<cryptonote::tx_destination_entry> dsts;
   dsts.push_back(de);

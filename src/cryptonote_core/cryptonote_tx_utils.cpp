@@ -480,7 +480,7 @@ namespace cryptonote
 
       tx_out out;
       if (dst_entr.is_staking)
-        cryptonote::set_staked_tx_out(dst_entr.amount, out_eph_public_key, view_tag, dst_entr.stake_tier, dst_entr.stake_lock_until, out);
+        cryptonote::set_staked_tx_out(dst_entr.amount, out_eph_public_key, view_tag, dst_entr.stake_tier, out);
       else
         cryptonote::set_tx_out(dst_entr.amount, out_eph_public_key, use_view_tags, view_tag, out);
       tx.vout.push_back(out);

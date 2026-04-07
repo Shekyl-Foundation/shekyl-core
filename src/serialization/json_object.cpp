@@ -666,7 +666,6 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
   INSERT_INTO_JSON_OBJECT(dest, key, txout.key);
   INSERT_INTO_JSON_OBJECT(dest, view_tag, txout.view_tag);
   INSERT_INTO_JSON_OBJECT(dest, lock_tier, txout.lock_tier);
-  INSERT_INTO_JSON_OBJECT(dest, lock_until, txout.lock_until);
 
   dest.EndObject();
 }
@@ -681,7 +680,6 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txout_to_staked_key&
   GET_FROM_JSON_OBJECT(val, txout.key, key);
   GET_FROM_JSON_OBJECT(val, txout.view_tag, view_tag);
   GET_FROM_JSON_OBJECT(val, txout.lock_tier, lock_tier);
-  GET_FROM_JSON_OBJECT(val, txout.lock_until, lock_until);
 }
 
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::tx_out& txout)

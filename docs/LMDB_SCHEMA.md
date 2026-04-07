@@ -357,21 +357,22 @@ Per-block staking emission and fee pool records.
 | LMDB name | `"staker_accrual"` |
 | Flags | `MDB_INTEGERKEY` |
 | Key | `uint64_t` block height (8 bytes) |
-| Value | `staker_accrual_record`, 32 bytes: |
+| Value | `staker_accrual_record`, 40 bytes: |
 
 ```
 Offset  Size  Field
 0        8    uint64_t staker_emission
 8        8    uint64_t staker_fee_pool
-16       8    uint64_t total_weighted_stake
-24       8    uint64_t actually_destroyed
+16       8    uint64_t total_weighted_stake_lo   (low 64 bits of u128)
+24       8    uint64_t total_weighted_stake_hi   (high 64 bits of u128)
+32       8    uint64_t actually_destroyed
 ```
 
 | Property | Value |
 |---|---|
-| Writers | `add_staker_accrual` (block connect), `remove_staker_accrual` (block pop) |
-| Readers | `get_staker_accrual` (claim validation, reward estimation) |
-| Notes | `total_weighted_stake` is the sum of `shekyl_stake_weight(amount, tier)` for all active staked outputs at that height, excluding outputs past `lock_until`. When `total_weighted_stake == 0`, `actually_destroyed` records the staker inflow that was burned. |
+| Writers | `add_staker_accrual` (block connect, AFTER pool routing decision), `remove_staker_accrual` (block pop) |
+| Readers | `get_staker_accrual` (claim validation, reward estimation, reorg reversal) |
+| Notes | `total_weighted_stake` is the sum of `shekyl_stake_weight(amount, tier)` for all active staked outputs at that height, excluding outputs past `lock_until`. Stored as u128 (lo/hi u64 halves) to avoid saturation at moderate adoption with tier multipliers > 1.0. When `total_weighted_stake == 0`, `actually_destroyed` includes the staker inflow that was burned. The record is written after the no-staker burn decision, so `actually_destroyed` reflects the full burned amount. |
 | Introduced | HF1 (Shekyl genesis) |
 
 ### `staker_claims`
@@ -683,7 +684,7 @@ General key-value store for database-level metadata.
 | 12 | `output_amounts` | `uint64_t` amount | `outkey`/`pre_rct_outkey` | 96/64 | `INTEGERKEY\|DUPSORT\|DUPFIXED` |
 | 13 | `output_metadata` | `uint64_t` global_idx | `output_pruning_metadata_t` | 88 | `INTEGERKEY` |
 | 14 | `spent_keys` | zerokval | `crypto::key_image` | 32 | `INTEGERKEY\|DUPSORT\|DUPFIXED` |
-| 15 | `staker_accrual` | `uint64_t` height | `staker_accrual_record` | 32 | `INTEGERKEY` |
+| 15 | `staker_accrual` | `uint64_t` height | `staker_accrual_record` | 40 | `INTEGERKEY` |
 | 16 | `staker_claims` | `uint64_t` output_idx | `uint64_t` height | 8 | `INTEGERKEY` |
 | 17 | `curve_tree_leaves` | `uint64_t` output_idx | leaf tuple | 128 | `INTEGERKEY` |
 | 18 | `curve_tree_layers` | `uint64_t` composite | chunk hash | 32 | `INTEGERKEY` |

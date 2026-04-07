@@ -4,6 +4,23 @@
 
 ### ✨ Added
 
+- **Comprehensive CLI User Guide (`docs/USER_GUIDE.md`).** Covers all shipped
+  executables, daemon operation (flags, config file, console commands), wallet
+  CLI (create, restore, send, receive, proofs), staking (tiers, unstake,
+  claim, accrual rules), mining, PQC multisig (file-based workflow, size
+  table), anonymity networks (Tor/I2P), wallet RPC, blockchain utilities,
+  security/backup, and troubleshooting. Mirrors the GUI wallet guide structure
+  for easy cross-referencing.
+
+- **C++/Rust cross-validation test for `total_weighted_stake`.** New test in
+  `staking.cpp` constructs the same staker set via both the C++ 128-bit cache
+  accumulation and the Rust FFI, then asserts byte-equality of the results.
+  Prevents spec/impl drift regression.
+
+- **`u128` saturation test.** Demonstrates that the u128 weighted stake does NOT
+  saturate where u64 would (100M stakers at 100 SKL, tier 2), and verifies
+  reward computation remains correct with the large denominator.
+
 - **LMDB write atomicity audit.** Comprehensive audit of all `BlockchainLMDB`
   write paths (block connect, block pop, txpool, alt blocks, staking, FCMP++
   curve tree). Documented in `docs/LMDB_WRITE_ATOMICITY_AUDIT.md`. Found and
@@ -79,6 +96,55 @@
   and adversarial edge cases.
 
 ### 🐛 Fixed
+
+- **Critical: u64 saturation in `total_weighted_stake` (Bug 7).** The in-memory
+  cache and LMDB `staker_accrual_record` used `uint64_t` for the tier-weighted
+  stake denominator. With 12-decimal atomic units and tier multipliers > 1.0,
+  this saturates at ~18.4M SHEKYL of weighted stake — well below moderate
+  adoption. Reward computation collapses to a meaningless ceiling once saturated.
+  Fixed by widening to u128 end-to-end: in-memory cache uses lo/hi u64 pairs
+  with proper carry arithmetic, LMDB record gains `total_weighted_stake_hi`
+  field (32→40 bytes), FFI `shekyl_calc_per_block_staker_reward` accepts lo/hi
+  parameters, and Rust `AccrualRecord`/`StakeRegistry::total_weighted_stake()`
+  return u128.
+
+- **Critical: back-dating exploit on first claim (Bug 3).** `check_stake_claim_input`
+  only enforced `from_height == watermark` when watermark > 0. For the first
+  claim (no watermark), `from_height` was unconstrained. An attacker could stake
+  at block N, then submit a claim with `from_height = 0`, walking 10,000
+  historical blocks and collecting rewards against denominators that never
+  included the attacker's output. Fixed by looking up the staked output's
+  creation height and requiring `from_height >= creation_height` when no
+  watermark exists.
+
+- **Critical: inter-tx pool sufficiency race within a block (Bug 4).** The per-tx
+  pool balance check in `check_tx_inputs` reads the pre-block pool balance, so
+  five claim txs each claiming 1000 against a pool of 3000 all individually pass.
+  The silent-skip path in `add_transaction_data` then lets over-claimed txs
+  through without decrementing the pool. Fixed with two changes: a block-level
+  aggregate pool check in `handle_block_to_main_chain` that sums all claim
+  amounts across ALL txs and rejects the block if the total exceeds the pool,
+  plus converting the silent-skip path in `add_transaction_data` to a hard throw
+  (dead code if validation is correct, fatal if not).
+
+- **Reorg watermark restoration loses data (Bug 5).** `remove_transaction` used
+  `from_height == 0` as the signal for "first claim, remove watermark." But
+  `from_height` for a first claim is typically the creation height (non-zero).
+  Fixed by looking up the staked output's creation height to distinguish first
+  claims from subsequent claims.
+
+- **Reorg pool reversal direction wrong for no-staker blocks (Bug 6).**
+  `pop_block_from_blockchain` unconditionally subtracted accrued inflow from
+  `pool_balance`, but for no-staker blocks the inflow was burned (not added to
+  pool). Popping such a block caused a spurious pool underflow. Fixed by reading
+  the accrual record's `total_weighted_stake`: if zero, subtract from
+  `total_burned` instead of `pool_balance`.
+
+- **Empty-staker-set accrual audit trail.** The `actually_destroyed` field in
+  the persisted accrual record did not reflect the no-staker burn because the
+  record was written before the burn decision. Fixed by moving `add_staker_accrual`
+  to after the no-staker burn path, so the record captures the full
+  `actually_destroyed` value.
 
 - **Dandelion++ relay timestamp rollback.** `get_relayable_transactions` in
   `tx_pool.cpp` was missing `lock.commit()`, causing all stem/forward timestamp

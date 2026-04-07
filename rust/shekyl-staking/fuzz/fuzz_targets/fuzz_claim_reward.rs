@@ -9,12 +9,12 @@ use shekyl_staking::tiers::{tier_by_id, TIERS};
 
 /// Simulates the per-block reward computation using 128-bit integer arithmetic,
 /// matching the consensus path in blockchain.cpp::check_stake_claim_input.
-fn compute_reward_integer(total_reward: u64, weight: u64, total_weighted_stake: u64) -> u64 {
+fn compute_reward_integer(total_reward: u64, weight: u64, total_weighted_stake: u128) -> u64 {
     if total_reward == 0 || total_weighted_stake == 0 {
         return 0;
     }
     let product = total_reward as u128 * weight as u128;
-    (product / total_weighted_stake as u128) as u64
+    (product / total_weighted_stake) as u64
 }
 
 /// Compute stake weight matching the C FFI: amount * yield_multiplier / SCALE.
@@ -44,10 +44,10 @@ fuzz_target!(|data: &[u8]| {
     let weight = stake_weight(stake_amount, tier_id);
 
     // Ensure total_weighted_stake >= weight (staker is part of total)
-    let total_weighted_stake = if total_weighted_raw == 0 {
-        weight
+    let total_weighted_stake: u128 = if total_weighted_raw == 0 {
+        weight as u128
     } else {
-        weight.saturating_add(total_weighted_raw.saturating_mul(1_000_000))
+        (weight as u128).saturating_add((total_weighted_raw as u128).saturating_mul(1_000_000))
     };
 
     if total_weighted_stake == 0 {

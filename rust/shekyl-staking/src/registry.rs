@@ -56,8 +56,8 @@ impl StakeRegistry {
         self.entries.iter().map(|e| e.amount).sum()
     }
 
-    pub fn total_weighted_stake(&self) -> u64 {
-        self.entries.iter().map(|e| e.weight()).sum()
+    pub fn total_weighted_stake(&self) -> u128 {
+        self.entries.iter().map(|e| e.weight() as u128).sum()
     }
 
     /// Compute stake_ratio = total_staked / circulating_supply (fixed-point SCALE).
@@ -110,7 +110,7 @@ mod tests {
         let mut reg = StakeRegistry::new();
         reg.add_stake(1_000_000_000, 0, 100).unwrap(); // 1.0x
         reg.add_stake(1_000_000_000, 2, 100).unwrap(); // 2.0x
-        assert_eq!(reg.total_weighted_stake(), 3_000_000_000);
+        assert_eq!(reg.total_weighted_stake(), 3_000_000_000u128);
     }
 
     #[test]

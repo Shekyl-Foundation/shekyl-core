@@ -18,6 +18,10 @@ pub(crate) mod staking {
         claim::ClaimableInfo,
     };
 
+    fn tier_lock(tier: u8) -> u64 {
+        shekyl_staking::tiers::tier_by_id(tier).unwrap().lock_blocks
+    }
+
     /// Generate a unique EdwardsPoint from a u64 seed (deterministic, distinct per seed).
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
         let mut bytes = [0u8; 32];
@@ -61,12 +65,12 @@ pub(crate) mod staking {
     fn from_wallet_output_detects_staked() {
         let output = make_wallet_output(
             [1; 32], 0, 100, 5_000_000_000,
-            Some(StakingMeta { lock_tier: 2, lock_until: 50000 }),
+            Some(StakingMeta { lock_tier: 2 }),
         );
         let td = TransferDetails::from_wallet_output(&output, 1000);
         assert!(td.staked);
         assert_eq!(td.stake_tier, 2);
-        assert_eq!(td.stake_lock_until, 50000);
+        assert_eq!(td.stake_lock_until, 1000 + tier_lock(2));
         assert_eq!(td.last_claimed_height, 0);
     }
 
@@ -85,13 +89,11 @@ pub(crate) mod staking {
     fn staked_output_never_spendable() {
         let output = make_wallet_output(
             [3; 32], 0, 102, 2_000_000_000,
-            Some(StakingMeta { lock_tier: 1, lock_until: 10000 }),
+            Some(StakingMeta { lock_tier: 1 }),
         );
         let td = TransferDetails::from_wallet_output(&output, 5000);
 
-        // Even if matured (height 20000 > lock_until 10000), staked outputs are not spendable
-        assert!(!td.is_spendable(20000));
-        // Still not spendable while locked
+        assert!(!td.is_spendable(5000 + tier_lock(1) + 1000));
         assert!(!td.is_spendable(5000));
     }
 
@@ -106,24 +108,24 @@ pub(crate) mod staking {
     fn staked_unstakeable_after_maturity() {
         let output = make_wallet_output(
             [5; 32], 0, 104, 3_000_000_000,
-            Some(StakingMeta { lock_tier: 0, lock_until: 10000 }),
+            Some(StakingMeta { lock_tier: 0 }),
         );
         let td = TransferDetails::from_wallet_output(&output, 5000);
 
-        assert!(!td.is_unstakeable(9999));  // still locked
-        assert!(td.is_unstakeable(10000));   // exactly at lock_until
-        assert!(td.is_unstakeable(15000));   // well past lock_until
+        assert!(!td.is_unstakeable(5000 + tier_lock(0) - 1));
+        assert!(td.is_unstakeable(5000 + tier_lock(0)));
+        assert!(td.is_unstakeable(5000 + tier_lock(0) + 5000));
     }
 
     #[test]
     fn spent_staked_not_unstakeable() {
         let output = make_wallet_output(
             [6; 32], 0, 105, 1_000_000_000,
-            Some(StakingMeta { lock_tier: 0, lock_until: 10000 }),
+            Some(StakingMeta { lock_tier: 0 }),
         );
         let mut td = TransferDetails::from_wallet_output(&output, 5000);
         td.spent = true;
-        assert!(!td.is_unstakeable(15000));
+        assert!(!td.is_unstakeable(5000 + tier_lock(0) + 1000));
     }
 
     // ── has_claimable_rewards ──
@@ -132,11 +134,11 @@ pub(crate) mod staking {
     fn claimable_during_lock_period() {
         let output = make_wallet_output(
             [7; 32], 0, 106, 5_000_000_000,
-            Some(StakingMeta { lock_tier: 2, lock_until: 50000 }),
+            Some(StakingMeta { lock_tier: 2 }),
         );
         let td = TransferDetails::from_wallet_output(&output, 1000);
 
-        // At height 5000, accrual_cap = min(5000, 50000) = 5000, watermark = 1000
+        // At height 5000, accrual_cap = min(5000, lock_until) = 5000, watermark = 1000
         assert!(td.has_claimable_rewards(5000));
     }
 
@@ -144,31 +146,31 @@ pub(crate) mod staking {
     fn claimable_after_maturity_with_backlog() {
         let output = make_wallet_output(
             [8; 32], 0, 107, 5_000_000_000,
-            Some(StakingMeta { lock_tier: 1, lock_until: 10000 }),
+            Some(StakingMeta { lock_tier: 1 }),
         );
         let td = TransferDetails::from_wallet_output(&output, 1000);
 
-        // At height 20000, accrual_cap = min(20000, 10000) = 10000, watermark = 1000
-        assert!(td.has_claimable_rewards(20000));
+        let past_maturity = 1000 + tier_lock(1) + 1000;
+        assert!(td.has_claimable_rewards(past_maturity));
     }
 
     #[test]
     fn not_claimable_after_full_drain() {
         let output = make_wallet_output(
             [9; 32], 0, 108, 5_000_000_000,
-            Some(StakingMeta { lock_tier: 0, lock_until: 10000 }),
+            Some(StakingMeta { lock_tier: 0 }),
         );
         let mut td = TransferDetails::from_wallet_output(&output, 1000);
-        td.last_claimed_height = 10000; // fully drained
+        td.last_claimed_height = 1000 + tier_lock(0);
 
-        assert!(!td.has_claimable_rewards(15000));
+        assert!(!td.has_claimable_rewards(1000 + tier_lock(0) + 1000));
     }
 
     #[test]
     fn not_claimable_when_spent() {
         let output = make_wallet_output(
             [10; 32], 0, 109, 5_000_000_000,
-            Some(StakingMeta { lock_tier: 1, lock_until: 50000 }),
+            Some(StakingMeta { lock_tier: 1 }),
         );
         let mut td = TransferDetails::from_wallet_output(&output, 1000);
         td.spent = true;
@@ -181,7 +183,7 @@ pub(crate) mod staking {
     fn claimable_info_from_transfer() {
         let output = make_wallet_output(
             [11; 32], 0, 110, 2_000_000_000,
-            Some(StakingMeta { lock_tier: 2, lock_until: 50000 }),
+            Some(StakingMeta { lock_tier: 2 }),
         );
         let td = TransferDetails::from_wallet_output(&output, 1000);
 
@@ -197,7 +199,7 @@ pub(crate) mod staking {
     fn claimable_info_with_watermark() {
         let output = make_wallet_output(
             [12; 32], 0, 111, 2_000_000_000,
-            Some(StakingMeta { lock_tier: 1, lock_until: 50000 }),
+            Some(StakingMeta { lock_tier: 1 }),
         );
         let mut td = TransferDetails::from_wallet_output(&output, 1000);
         td.last_claimed_height = 3000;
@@ -211,12 +213,13 @@ pub(crate) mod staking {
     fn claimable_info_accrual_frozen() {
         let output = make_wallet_output(
             [13; 32], 0, 112, 2_000_000_000,
-            Some(StakingMeta { lock_tier: 0, lock_until: 10000 }),
+            Some(StakingMeta { lock_tier: 0 }),
         );
         let td = TransferDetails::from_wallet_output(&output, 1000);
 
-        let info = ClaimableInfo::from_transfer(&td, 0, 20000).unwrap();
-        assert_eq!(info.to_height, 10000); // capped at lock_until
+        let past_maturity = 1000 + tier_lock(0) + 1000;
+        let info = ClaimableInfo::from_transfer(&td, 0, past_maturity).unwrap();
+        assert_eq!(info.to_height, 1000 + tier_lock(0));
         assert!(info.accrual_frozen);
     }
 
@@ -224,12 +227,12 @@ pub(crate) mod staking {
     fn claimable_info_none_when_fully_claimed() {
         let output = make_wallet_output(
             [14; 32], 0, 113, 2_000_000_000,
-            Some(StakingMeta { lock_tier: 0, lock_until: 10000 }),
+            Some(StakingMeta { lock_tier: 0 }),
         );
         let mut td = TransferDetails::from_wallet_output(&output, 1000);
-        td.last_claimed_height = 10000;
+        td.last_claimed_height = 1000 + tier_lock(0);
 
-        assert!(ClaimableInfo::from_transfer(&td, 0, 20000).is_none());
+        assert!(ClaimableInfo::from_transfer(&td, 0, 1000 + tier_lock(0) + 1000).is_none());
     }
 
     // ── WalletState integration ──
@@ -241,7 +244,7 @@ pub(crate) mod staking {
             make_wallet_output([20; 32], 0, 200, 1_000_000_000, None),
             make_wallet_output(
                 [20; 32], 1, 201, 5_000_000_000,
-                Some(StakingMeta { lock_tier: 2, lock_until: 50000 }),
+                Some(StakingMeta { lock_tier: 2 }),
             ),
         ];
 
@@ -252,7 +255,7 @@ pub(crate) mod staking {
         assert!(!transfers[0].staked);
         assert!(transfers[1].staked);
         assert_eq!(transfers[1].stake_tier, 2);
-        assert_eq!(transfers[1].stake_lock_until, 50000);
+        assert_eq!(transfers[1].stake_lock_until, 1000 + tier_lock(2));
     }
 
     #[test]
@@ -261,11 +264,11 @@ pub(crate) mod staking {
         let outputs = vec![
             make_wallet_output(
                 [21; 32], 0, 300, 2_000_000_000,
-                Some(StakingMeta { lock_tier: 1, lock_until: 50000 }),
+                Some(StakingMeta { lock_tier: 1 }),
             ),
             make_wallet_output(
                 [21; 32], 1, 301, 3_000_000_000,
-                Some(StakingMeta { lock_tier: 0, lock_until: 10000 }),
+                Some(StakingMeta { lock_tier: 0 }),
             ),
         ];
 
@@ -274,10 +277,9 @@ pub(crate) mod staking {
         let claimable = ws.claimable_outputs(5000);
         assert_eq!(claimable.len(), 2);
 
-        // After claiming all backlog for output 301
-        ws.update_claim_watermark(301, 10000);
-        let claimable = ws.claimable_outputs(15000);
-        assert_eq!(claimable.len(), 1); // only 300 still has backlog
+        ws.update_claim_watermark(301, 1000 + tier_lock(0));
+        let claimable = ws.claimable_outputs(1000 + tier_lock(0) + 1000);
+        assert_eq!(claimable.len(), 1);
     }
 
     #[test]
@@ -286,19 +288,19 @@ pub(crate) mod staking {
         let outputs = vec![
             make_wallet_output(
                 [22; 32], 0, 400, 2_000_000_000,
-                Some(StakingMeta { lock_tier: 0, lock_until: 10000 }),
+                Some(StakingMeta { lock_tier: 0 }),
             ),
             make_wallet_output(
                 [22; 32], 1, 401, 3_000_000_000,
-                Some(StakingMeta { lock_tier: 2, lock_until: 50000 }),
+                Some(StakingMeta { lock_tier: 2 }),
             ),
         ];
 
         ws.process_scanned_outputs(1000, [0xCC; 32], make_timelocked(outputs));
 
-        assert_eq!(ws.unstakeable_outputs(9999).len(), 0);
-        assert_eq!(ws.unstakeable_outputs(10000).len(), 1);
-        assert_eq!(ws.unstakeable_outputs(50000).len(), 2);
+        assert_eq!(ws.unstakeable_outputs(1000 + tier_lock(0) - 1).len(), 0);
+        assert_eq!(ws.unstakeable_outputs(1000 + tier_lock(0)).len(), 1);
+        assert_eq!(ws.unstakeable_outputs(1000 + tier_lock(2)).len(), 2);
     }
 
     // ── Reorg handling ──
@@ -313,7 +315,7 @@ pub(crate) mod staking {
             make_timelocked(vec![
                 make_wallet_output(
                     [30; 32], 0, 500, 5_000_000_000,
-                    Some(StakingMeta { lock_tier: 1, lock_until: 20000 }),
+                    Some(StakingMeta { lock_tier: 1 }),
                 ),
             ]),
         );
@@ -324,7 +326,7 @@ pub(crate) mod staking {
             make_timelocked(vec![
                 make_wallet_output(
                     [31; 32], 0, 501, 1_000_000_000,
-                    Some(StakingMeta { lock_tier: 0, lock_until: 15000 }),
+                    Some(StakingMeta { lock_tier: 0 }),
                 ),
             ]),
         );
@@ -345,20 +347,21 @@ pub(crate) mod staking {
         let mut ws = WalletState::new();
         let outputs = vec![make_wallet_output(
             [40; 32], 0, 600, 2_000_000_000,
-            Some(StakingMeta { lock_tier: 0, lock_until: 10000 }),
+            Some(StakingMeta { lock_tier: 0 }),
         )];
 
         ws.process_scanned_outputs(1000, [0xE0; 32], make_timelocked(outputs));
         ws.set_key_image(0, [0xFF; 32]);
 
+        let past_maturity = 1000 + tier_lock(0) + 1000;
         assert!(ws.transfers()[0].staked);
         assert!(!ws.transfers()[0].spent);
-        assert!(ws.transfers()[0].is_unstakeable(15000));
+        assert!(ws.transfers()[0].is_unstakeable(past_maturity));
 
-        ws.detect_spends(15000, &[[0xFF; 32]]);
+        ws.detect_spends(past_maturity, &[[0xFF; 32]]);
         assert!(ws.transfers()[0].spent);
-        assert!(!ws.transfers()[0].is_unstakeable(15000));
-        assert!(!ws.transfers()[0].has_claimable_rewards(15000));
+        assert!(!ws.transfers()[0].is_unstakeable(past_maturity));
+        assert!(!ws.transfers()[0].has_claimable_rewards(past_maturity));
     }
 
     // ── Watermark update ──
@@ -368,7 +371,7 @@ pub(crate) mod staking {
         let mut ws = WalletState::new();
         let outputs = vec![make_wallet_output(
             [50; 32], 0, 700, 5_000_000_000,
-            Some(StakingMeta { lock_tier: 2, lock_until: 100000 }),
+            Some(StakingMeta { lock_tier: 2 }),
         )];
 
         ws.process_scanned_outputs(1000, [0xF0; 32], make_timelocked(outputs));

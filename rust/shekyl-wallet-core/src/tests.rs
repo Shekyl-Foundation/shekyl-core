@@ -53,13 +53,12 @@ mod lifecycle {
     fn setup_wallet_with_staked_output(
         amount: u64,
         tier: u8,
-        lock_until: u64,
         creation_height: u64,
     ) -> WalletState {
         let mut ws = WalletState::new();
         let output = make_wallet_output(
             [1; 32], 0, 100, amount,
-            Some(StakingMeta { lock_tier: tier, lock_until }),
+            Some(StakingMeta { lock_tier: tier }),
         );
         ws.process_scanned_outputs(
             creation_height,
@@ -69,7 +68,7 @@ mod lifecycle {
         ws
     }
 
-    fn populate_accrual(ws: &mut WalletState, from: u64, to: u64, emission: u64, total_weighted: u64) {
+    fn populate_accrual(ws: &mut WalletState, from: u64, to: u64, emission: u64, total_weighted: u128) {
         for h in from..=to {
             ws.insert_accrual(h, AccrualRecord {
                 staker_emission: emission,
@@ -84,7 +83,7 @@ mod lifecycle {
     #[test]
     fn plan_all_claims_basic() {
         let mut ws = setup_wallet_with_staked_output(
-            5_000_000_000, 1, 50000, 1000,
+            5_000_000_000, 1, 1000,
         );
         populate_accrual(&mut ws, 1001, 5000, 100_000, 10_000_000_000);
 
@@ -100,7 +99,7 @@ mod lifecycle {
     #[test]
     fn plan_claim_splits_large_ranges() {
         let mut ws = setup_wallet_with_staked_output(
-            5_000_000_000, 2, 100000, 1000,
+            5_000_000_000, 2, 1000,
         );
         populate_accrual(&mut ws, 1001, 12000, 100_000, 10_000_000_000);
 
@@ -113,25 +112,28 @@ mod lifecycle {
 
     #[test]
     fn plan_claim_respects_watermark() {
+        let lock_blocks = shekyl_staking::tiers::tier_by_id(0).unwrap().lock_blocks;
+        let creation = 1000u64;
+        let lock_until = creation + lock_blocks;
+        let watermark = creation + lock_blocks / 2;
+
         let mut ws = setup_wallet_with_staked_output(
-            5_000_000_000, 0, 50000, 1000,
+            5_000_000_000, 0, creation,
         );
-        populate_accrual(&mut ws, 1001, 10000, 100_000, 10_000_000_000);
+        populate_accrual(&mut ws, creation + 1, lock_until, 100_000, 10_000_000_000);
 
-        // Advance watermark to 5000
-        ws.update_claim_watermark(100, 5000);
+        ws.update_claim_watermark(100, watermark);
 
-        let builder = ClaimTxBuilder::new(10000);
-        let plan = builder.plan_all(&ws, 10000, simple_weight_fn).unwrap();
+        let builder = ClaimTxBuilder::new(lock_blocks);
+        let plan = builder.plan_all(&ws, lock_until, simple_weight_fn).unwrap();
 
-        // Claim should start from watermark 5000, not creation height 1000
-        assert_eq!(plan.claims[0].from_height, 5000);
+        assert_eq!(plan.claims[0].from_height, watermark);
     }
 
     #[test]
     fn plan_claim_errors_on_no_claimable() {
         let mut ws = setup_wallet_with_staked_output(
-            5_000_000_000, 0, 10000, 1000,
+            5_000_000_000, 0, 1000,
         );
         // Drain the watermark fully
         ws.update_claim_watermark(100, 10000);
@@ -161,7 +163,7 @@ mod lifecycle {
     #[test]
     fn claim_and_unstake_with_backlog() {
         let mut ws = setup_wallet_with_staked_output(
-            5_000_000_000, 0, 10000, 1000,
+            5_000_000_000, 0, 1000,
         );
         populate_accrual(&mut ws, 1001, 10000, 100_000, 10_000_000_000);
 
@@ -177,7 +179,7 @@ mod lifecycle {
     #[test]
     fn claim_and_unstake_no_backlog() {
         let mut ws = setup_wallet_with_staked_output(
-            5_000_000_000, 0, 10000, 1000,
+            5_000_000_000, 0, 1000,
         );
         // Fully drained
         ws.update_claim_watermark(100, 10000);
@@ -193,7 +195,7 @@ mod lifecycle {
     #[test]
     fn claim_and_unstake_rejects_locked() {
         let ws = setup_wallet_with_staked_output(
-            5_000_000_000, 2, 50000, 1000,
+            5_000_000_000, 2, 1000,
         );
 
         let result = plan_claim_and_unstake(
@@ -205,7 +207,7 @@ mod lifecycle {
     #[test]
     fn claim_and_unstake_rejects_spent() {
         let mut ws = setup_wallet_with_staked_output(
-            5_000_000_000, 0, 10000, 1000,
+            5_000_000_000, 0, 1000,
         );
         ws.set_key_image(0, [0xFF; 32]);
         ws.detect_spends(15000, &[[0xFF; 32]]);
@@ -225,14 +227,14 @@ mod lifecycle {
         let weight = simple_weight_fn(amount, tier); // 15_000_000_000
 
         let emission = 1_000_000u64;
-        let total_weighted = 100_000_000_000u64;
+        let total_weighted: u128 = 100_000_000_000;
 
         // Manual per-block: (1_000_000 * 15_000_000_000) / 100_000_000_000 = 150_000
         let expected_per_block = ((emission as u128 * weight as u128)
-            / total_weighted as u128) as u64;
+            / total_weighted) as u64;
         assert_eq!(expected_per_block, 150_000);
 
-        let mut ws = setup_wallet_with_staked_output(amount, tier, 50000, 1000);
+        let mut ws = setup_wallet_with_staked_output(amount, tier, 1000);
         populate_accrual(&mut ws, 1001, 1010, emission, total_weighted);
 
         let builder = ClaimTxBuilder::new(10000);

@@ -311,7 +311,6 @@ impl WalletOutput {
             Some(s) => {
                 w.write_all(&[1])?;
                 w.write_all(&[s.lock_tier])?;
-                write_varint(&s.lock_until, w)?;
             }
             None => w.write_all(&[0])?,
         }
@@ -336,8 +335,7 @@ impl WalletOutput {
             0 => None,
             1 => {
                 let lock_tier = read_byte(r)?;
-                let lock_until: u64 = read_varint(r)?;
-                Some(StakingMeta { lock_tier, lock_until })
+                Some(StakingMeta { lock_tier })
             }
             _ => Err(io::Error::other("invalid staking flag in WalletOutput"))?,
         };

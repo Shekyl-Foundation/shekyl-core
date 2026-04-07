@@ -192,7 +192,7 @@
 // Output maturity is enforced by universal deferred tree insertion: outputs
 // only enter the curve tree after their type-specific maturity period
 // (coinbase: MINED_MONEY_UNLOCK_WINDOW, regular: DEFAULT_TX_SPENDABLE_AGE,
-// staked: max(lock_until, DEFAULT_TX_SPENDABLE_AGE)).  MIN_AGE is a reorg
+// staked: max(effective_lock_until, DEFAULT_TX_SPENDABLE_AGE)).  MIN_AGE is a reorg
 // safety margin ensuring the referenced tree state is stable.
 #define FCMP_REFERENCE_BLOCK_MAX_AGE            100  // ~3.3 hours at 2-min blocks; max referenceBlock staleness
 #define FCMP_REFERENCE_BLOCK_MIN_AGE            5    // reorg safety margin; maturity enforced by deferred tree insertion

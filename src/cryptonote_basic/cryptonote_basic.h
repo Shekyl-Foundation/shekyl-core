@@ -100,19 +100,19 @@ namespace cryptonote
   // outputs >= HF_VERSION_SHEKYL_NG — staked outputs with enforced lock period
   struct txout_to_staked_key
   {
-    txout_to_staked_key() : lock_tier(0), lock_until(0) { }
-    txout_to_staked_key(const crypto::public_key &_key, const crypto::view_tag &_view_tag, uint8_t _tier, uint64_t _lock_until)
-      : key(_key), view_tag(_view_tag), lock_tier(_tier), lock_until(_lock_until) { }
+    txout_to_staked_key() : lock_tier(0) { }
+    txout_to_staked_key(const crypto::public_key &_key, const crypto::view_tag &_view_tag, uint8_t _tier)
+      : key(_key), view_tag(_view_tag), lock_tier(_tier) { }
     crypto::public_key key;
     crypto::view_tag view_tag;
     uint8_t lock_tier;       // 0=short, 1=medium, 2=long
-    uint64_t lock_until;     // block height when unlockable
+    // effective_lock_until is computed dynamically as creation_height + tier_lock_blocks.
+    // Not stored on-chain — eliminates the signing-time/mining-time mismatch.
 
     BEGIN_SERIALIZE_OBJECT()
       FIELD(key)
       FIELD(view_tag)
       FIELD(lock_tier)
-      VARINT_FIELD(lock_until)
     END_SERIALIZE()
   };
 

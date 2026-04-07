@@ -199,7 +199,6 @@ namespace boost
     a & x.key;
     a & x.view_tag;
     a & x.lock_tier;
-    a & x.lock_until;
   }
 
   template <class Archive>

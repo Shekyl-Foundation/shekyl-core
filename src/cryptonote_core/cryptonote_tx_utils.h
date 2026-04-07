@@ -79,11 +79,10 @@ namespace cryptonote
     bool is_integrated;
     bool is_staking;
     uint8_t stake_tier;
-    uint64_t stake_lock_until;
 
-    tx_destination_entry() : amount(0), addr(AUTO_VAL_INIT(addr)), is_subaddress(false), is_integrated(false), is_staking(false), stake_tier(0), stake_lock_until(0) { }
-    tx_destination_entry(uint64_t a, const account_public_address &ad, bool is_subaddress) : amount(a), addr(ad), is_subaddress(is_subaddress), is_integrated(false), is_staking(false), stake_tier(0), stake_lock_until(0) { }
-    tx_destination_entry(const std::string &o, uint64_t a, const account_public_address &ad, bool is_subaddress) : original(o), amount(a), addr(ad), is_subaddress(is_subaddress), is_integrated(false), is_staking(false), stake_tier(0), stake_lock_until(0) { }
+    tx_destination_entry() : amount(0), addr(AUTO_VAL_INIT(addr)), is_subaddress(false), is_integrated(false), is_staking(false), stake_tier(0) { }
+    tx_destination_entry(uint64_t a, const account_public_address &ad, bool is_subaddress) : amount(a), addr(ad), is_subaddress(is_subaddress), is_integrated(false), is_staking(false), stake_tier(0) { }
+    tx_destination_entry(const std::string &o, uint64_t a, const account_public_address &ad, bool is_subaddress) : original(o), amount(a), addr(ad), is_subaddress(is_subaddress), is_integrated(false), is_staking(false), stake_tier(0) { }
 
     std::string address(network_type nettype, const crypto::hash &payment_id) const
     {
@@ -108,7 +107,6 @@ namespace cryptonote
       FIELD(is_integrated)
       FIELD(is_staking)
       FIELD(stake_tier)
-      VARINT_FIELD(stake_lock_until)
     END_SERIALIZE()
   };
 
@@ -194,12 +192,10 @@ namespace boost
       {
         x.is_staking = false;
         x.stake_tier = 0;
-        x.stake_lock_until = 0;
         return;
       }
       a & x.is_staking;
       a & x.stake_tier;
-      a & x.stake_lock_until;
     }
   }
 }

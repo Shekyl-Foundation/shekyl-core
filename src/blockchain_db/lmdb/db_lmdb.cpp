@@ -4705,10 +4705,10 @@ BlockchainDB::staker_accrual_record BlockchainLMDB::get_staker_accrual(uint64_t 
   MDB_val v;
   auto get_result = mdb_get(m_txn, m_staker_accrual, &k, &v);
   if (get_result == MDB_NOTFOUND)
-    return {0, 0, 0, 0};
+    return {0, 0, 0, 0, 0};
   if (get_result)
     throw0(DB_ERROR(lmdb_error("Failed to get staker accrual: ", get_result).c_str()));
-  staker_accrual_record record = {0, 0, 0, 0};
+  staker_accrual_record record = {0, 0, 0, 0, 0};
   memcpy(&record, v.mv_data, std::min(v.mv_size, sizeof(record)));
   TXN_POSTFIX_RDONLY();
   return record;

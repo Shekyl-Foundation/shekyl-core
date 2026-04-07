@@ -248,8 +248,6 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_claim_exceeds_pool);
     GENERATE_AND_PLAY(gen_claim_spent_key_image);
     GENERATE_AND_PLAY(gen_staked_output_invalid_tier);
-    GENERATE_AND_PLAY(gen_staked_output_invalid_lock_until);
-    GENERATE_AND_PLAY(gen_staked_output_zero_lock);
     GENERATE_AND_PLAY(gen_claim_rollback_restores_pool);
     GENERATE_AND_PLAY(gen_claim_rollback_restores_watermark);
     GENERATE_AND_PLAY(gen_claim_mempool_key_image);

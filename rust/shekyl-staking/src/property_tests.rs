@@ -136,7 +136,7 @@ mod tests {
                 .active_entries()
                 .iter()
                 .map(|e| {
-                    ((pool as u128 * e.weight() as u128) / total_weight as u128) as u64
+                    ((pool as u128 * e.weight() as u128) / total_weight) as u64
                 })
                 .sum();
 

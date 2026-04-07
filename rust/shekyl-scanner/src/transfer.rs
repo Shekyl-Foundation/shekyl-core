@@ -68,9 +68,15 @@ impl TransferDetails {
     /// Create a TransferDetails from a scanned WalletOutput at a given block height.
     ///
     /// Automatically populates staking fields if the output carries `StakingMeta`.
+    /// `stake_lock_until` is computed as `block_height + tier_lock_blocks`.
     pub fn from_wallet_output(output: &WalletOutput, block_height: u64) -> Self {
         let (staked, stake_tier, stake_lock_until) = match output.staking() {
-            Some(meta) => (true, meta.lock_tier, meta.lock_until),
+            Some(meta) => {
+                let lock_blocks = shekyl_staking::tiers::tier_by_id(meta.lock_tier)
+                    .map(|t| t.lock_blocks)
+                    .unwrap_or(0);
+                (true, meta.lock_tier, block_height + lock_blocks)
+            }
             None => (false, 0, 0),
         };
         TransferDetails {

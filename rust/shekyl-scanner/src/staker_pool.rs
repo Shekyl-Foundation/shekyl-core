@@ -17,8 +17,9 @@ pub struct AccrualRecord {
     pub staker_emission: u64,
     /// Fee pool contribution for this block (atomic units).
     pub staker_fee_pool: u64,
-    /// Correctly tier-weighted total stake at this block height.
-    pub total_weighted_stake: u64,
+    /// Correctly tier-weighted total stake at this block height (u128 to avoid
+    /// saturation at moderate adoption levels with tier multipliers > 1.0).
+    pub total_weighted_stake: u128,
 }
 
 impl AccrualRecord {
@@ -100,10 +101,8 @@ impl StakerPoolState {
             if block_total == 0 || record.total_weighted_stake == 0 {
                 continue;
             }
-            // Integer math: (block_total * weight) / total_weighted_stake
-            // Uses u128 to avoid overflow on the multiplication
             let reward = ((block_total as u128) * (weight as u128)
-                / (record.total_weighted_stake as u128)) as u64;
+                / record.total_weighted_stake) as u64;
             total = total.saturating_add(reward);
         }
 
@@ -178,7 +177,7 @@ impl StakerPoolState {
             .iter()
             .map(|&w| {
                 ((block_total as u128) * (w as u128)
-                    / (record.total_weighted_stake as u128)) as u64
+                    / record.total_weighted_stake) as u64
             })
             .sum();
 
@@ -212,7 +211,7 @@ pub struct ConservationCheck {
 mod tests {
     use super::*;
 
-    fn make_record(emission: u64, fee_pool: u64, total_weighted: u64) -> AccrualRecord {
+    fn make_record(emission: u64, fee_pool: u64, total_weighted: u128) -> AccrualRecord {
         AccrualRecord {
             staker_emission: emission,
             staker_fee_pool: fee_pool,

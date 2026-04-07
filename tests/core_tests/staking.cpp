@@ -53,8 +53,7 @@ bool construct_staked_tx(const std::vector<test_event_entry>& events,
                          const account_base& from,
                          const account_base& to,
                          uint64_t amount,
-                         uint8_t tier,
-                         uint64_t lock_until)
+                         uint8_t tier)
 {
   std::vector<tx_source_entry> sources;
   uint64_t fee = TESTS_DEFAULT_FEE;
@@ -70,7 +69,6 @@ bool construct_staked_tx(const std::vector<test_event_entry>& events,
   staking_dest.is_subaddress = false;
   staking_dest.is_staking = true;
   staking_dest.stake_tier = tier;
-  staking_dest.stake_lock_until = lock_until;
   destinations.push_back(staking_dest);
 
   uint64_t sources_amount = 0;
@@ -320,20 +318,15 @@ bool gen_staking_lifecycle::generate(std::vector<test_event_entry>& events) cons
   // Build a chain with enough blocks so the staker has spendable coinbase
   REWIND_BLOCKS(events, blk_1, blk_0r, miner_account);
 
-  // Create a transaction with a staked output (tier 0)
+  // Create a transaction with a staked output (tier 0).
+  // lock_until is no longer on-chain; effective_lock_until is computed
+  // as creation_height + tier_lock_blocks at all consensus check sites.
   const uint64_t stake_amount = 1000000000; // 1 SKL
   const uint8_t tier = 0;
-  const uint64_t lock_blocks = shekyl_stake_lock_blocks(tier);
-
-  // The staked output's lock_until must match blockchain_height + lock_blocks.
-  // At this point, the chain height is:
-  //   genesis(1) + MINED_MONEY_UNLOCK_WINDOW + MINED_MONEY_UNLOCK_WINDOW blocks
-  const uint64_t chain_height_at_inclusion = 1 + 2 * CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW + 1;
-  const uint64_t lock_until = chain_height_at_inclusion + lock_blocks;
 
   transaction tx_stake;
   if (!construct_staked_tx(events, tx_stake, blk_1, miner_account, staker_account,
-                           stake_amount, tier, lock_until))
+                           stake_amount, tier))
     return false;
   events.push_back(tx_stake);
 
@@ -432,13 +425,10 @@ bool gen_staked_output_invalid_tier::generate(std::vector<test_event_entry>& eve
   // The construct_staked_tx will succeed in building the tx, but
   // the block containing it should be rejected by consensus.
   const uint64_t stake_amount = 1000000000;
-  const uint64_t chain_height_at_inclusion = 1 + 2 * CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW + 1;
-  // Use a plausible lock_until even though the tier is invalid
-  const uint64_t lock_until = chain_height_at_inclusion + 1000;
 
   transaction tx_bad;
   if (!construct_staked_tx(events, tx_bad, blk_1, miner_account, miner_account,
-                           stake_amount, 3 /* invalid tier */, lock_until))
+                           stake_amount, 3 /* invalid tier */))
     return false;
 
   DO_CALLBACK(events, "mark_invalid_block");
@@ -447,46 +437,10 @@ bool gen_staked_output_invalid_tier::generate(std::vector<test_event_entry>& eve
   return true;
 }
 
-bool gen_staked_output_invalid_lock_until::generate(std::vector<test_event_entry>& events) const
-{
-  STAKING_INIT();
-  REWIND_BLOCKS(events, blk_1, blk_0r, miner_account);
-
-  const uint64_t stake_amount = 1000000000;
-  const uint8_t tier = 0;
-  const uint64_t chain_height_at_inclusion = 1 + 2 * CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW + 1;
-  const uint64_t correct_lock_until = chain_height_at_inclusion + shekyl_stake_lock_blocks(tier);
-
-  // Use a deliberately wrong lock_until (too short)
-  transaction tx_bad;
-  if (!construct_staked_tx(events, tx_bad, blk_1, miner_account, miner_account,
-                           stake_amount, tier, correct_lock_until - 100))
-    return false;
-
-  DO_CALLBACK(events, "mark_invalid_block");
-  MAKE_NEXT_BLOCK_TX1(events, blk_bad, blk_1, miner_account, tx_bad);
-
-  return true;
-}
-
-bool gen_staked_output_zero_lock::generate(std::vector<test_event_entry>& events) const
-{
-  STAKING_INIT();
-  REWIND_BLOCKS(events, blk_1, blk_0r, miner_account);
-
-  const uint64_t stake_amount = 1000000000;
-
-  // lock_until=0 should be rejected by check_tx_outputs
-  transaction tx_bad;
-  if (!construct_staked_tx(events, tx_bad, blk_1, miner_account, miner_account,
-                           stake_amount, 0, 0 /* zero lock */))
-    return false;
-
-  DO_CALLBACK(events, "mark_invalid_block");
-  MAKE_NEXT_BLOCK_TX1(events, blk_bad, blk_1, miner_account, tx_bad);
-
-  return true;
-}
+// gen_staked_output_invalid_lock_until and gen_staked_output_zero_lock
+// have been removed: lock_until is no longer stored on-chain, so there
+// is nothing to validate/reject. effective_lock_until is computed
+// deterministically from creation_height + tier_lock_blocks.
 
 // ====================================================================
 // 2f. Reorg/Rollback
@@ -546,13 +500,10 @@ bool gen_stake_all_tiers::generate(std::vector<test_event_entry>& events) const
     const uint64_t lock_blocks = shekyl_stake_lock_blocks(tier);
     if (lock_blocks == 0) return false;
 
-    const uint64_t chain_height_at_inclusion = 1 + 2 * CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW + 1;
-    const uint64_t lock_until = chain_height_at_inclusion + lock_blocks;
-
     GENERATE_ACCOUNT(tier0_account);
     transaction tx_stake0;
     if (!construct_staked_tx(events, tx_stake0, blk_1, miner_account, tier0_account,
-                             stake_amount, tier, lock_until))
+                             stake_amount, tier))
       return false;
     events.push_back(tx_stake0);
     MAKE_NEXT_BLOCK_TX1(events, blk_2, blk_1, miner_account, tx_stake0);

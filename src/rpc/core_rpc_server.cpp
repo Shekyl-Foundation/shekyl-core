@@ -3582,8 +3582,7 @@ namespace cryptonote
 
     const cryptonote::tx_out& out = staked_tx.vout[oi.second];
     uint8_t tier = 0;
-    uint64_t lock_until = 0;
-    if (!cryptonote::get_output_staking_info(out, tier, lock_until))
+    if (!cryptonote::get_output_staking_info(out, tier))
     {
       error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
       error_resp.message = "Output is not a staked output";
@@ -3599,13 +3598,15 @@ namespace cryptonote
     {
       auto accrual = db.get_staker_accrual(h);
       uint64_t total_reward_at_h = accrual.staker_emission + accrual.staker_fee_pool;
-      if (total_reward_at_h == 0 || accrual.total_weighted_stake == 0)
+      if (total_reward_at_h == 0 || (accrual.total_weighted_stake_lo | accrual.total_weighted_stake_hi) == 0)
         continue;
       uint64_t weight = shekyl_stake_weight(staked_amount, tier);
       {
         uint8_t reward_overflow = 0;
         uint64_t q_lo = shekyl_calc_per_block_staker_reward(
-          total_reward_at_h, weight, accrual.total_weighted_stake, &reward_overflow);
+          total_reward_at_h, weight,
+          accrual.total_weighted_stake_lo, accrual.total_weighted_stake_hi,
+          &reward_overflow);
         if (reward_overflow != 0)
         {
           error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;

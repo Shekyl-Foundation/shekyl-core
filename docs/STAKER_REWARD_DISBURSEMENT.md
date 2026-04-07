@@ -110,7 +110,7 @@ The full claim-based staking system is implemented and active from
 
 | Table | Key | Value | Purpose |
 |---|---|---|---|
-| `staker_accrual` | block height (uint64) | `staker_accrual_record` (emission, fee pool, total weighted stake) | Per-block accrual accounting |
+| `staker_accrual` | block height (uint64) | `staker_accrual_record` (emission, fee pool, total\_weighted\_stake\_lo, total\_weighted\_stake\_hi, actually\_destroyed) — 40 bytes | Per-block accrual accounting |
 | `staker_claims` | staked output index (uint64) | last claimed height (uint64) | Watermark for anti-double-claim |
 | (property) `staker_pool_balance` | — | uint64 | Running total of unclaimed pool balance |
 
@@ -128,8 +128,11 @@ No minimum stake amount. Any amount can be staked.
 
 A claim input is valid if and only if all of the following hold:
 
-1. `from_height` equals the claim watermark + 1 for the staked output, or the
-   output's creation height + 1 for the first claim.
+1. `from_height` equals the claim watermark for the staked output (if a
+   watermark exists). For the first claim (no watermark), `from_height`
+   MUST be ≥ the staked output's creation height. This prevents a
+   back-dating attack where a newly staked output claims rewards against
+   historical blocks whose `total_weighted_stake` did not include it.
 2. `to_height ≤ min(current_chain_height, lock_until)`. This is the
    asymmetric cap: the claim window may extend up to either the present or
    the end of the lock period, whichever is earlier.
@@ -153,10 +156,16 @@ There is **no** check on `lock_until > current_height`. Claims are valid both
 during the lock period and after maturity, up until the staked output is
 consumed by an unstake transaction.
 
-Reward computation uses 128-bit integer arithmetic (`mul128` / `div128_64`)
-throughout. Floating-point is forbidden in this path because tiny rounding
-divergences would cause consensus failures across nodes built with different
-compilers or standard libraries.
+Reward computation uses 128-bit integer arithmetic throughout. The
+`total_weighted_stake` denominator is stored as a u128 (split into lo/hi u64
+halves in the LMDB record and FFI boundary) to prevent saturation at moderate
+adoption levels. With tier multipliers > 1.0, a u64 denominator saturates at
+approximately 18.4M SHEKYL of weighted stake — well below typical staking
+participation. The per-block reward FFI (`shekyl_calc_per_block_staker_reward`)
+accepts the denominator as two u64 halves and reconstructs u128 internally.
+Floating-point is forbidden in this path because tiny rounding divergences
+would cause consensus failures across nodes built with different compilers or
+standard libraries.
 
 ### Accrual computation per block
 
@@ -172,7 +181,7 @@ staker_fee_pool = shekyl_calc_fee_pool(block_fee_burn)
 block_pool      = staker_emission + staker_fee_pool
 
 # 2. Weighted stake denominator (tier multipliers applied INLINE)
-total_weighted_stake = 0  # 128-bit accumulator
+total_weighted_stake = 0  # u128 (two u64 halves in LMDB record)
 for staked in active_staked_outputs:
     if staked.lock_until < block_height:
         continue  # frozen outputs do not accrue (see Accrual Lifecycle)
@@ -181,19 +190,22 @@ for staked in active_staked_outputs:
     mul_num, mul_den = shekyl_stake_tier_multiplier(staked.tier)
     total_weighted_stake += mul_div_128(staked.amount, mul_num, mul_den)
 
-# 3. Record and accumulate
+# 3. Pool routing and record persistence
+if total_weighted_stake == 0:
+    # No active stakers — pool contribution is BURNED, not carried.
+    actually_destroyed += block_pool  # See "Empty-staker-set behavior"
+else:
+    staker_pool_balance += block_pool
+
+# Accrual record is written AFTER the pool routing decision so that
+# actually_destroyed reflects the full amount (including any no-staker burn).
 staker_accrual[block_height] = {
     staker_emission,
     staker_fee_pool,
-    total_weighted_stake,
+    total_weighted_stake_lo,   # low 64 bits
+    total_weighted_stake_hi,   # high 64 bits
+    actually_destroyed,
 }
-
-if total_weighted_stake == 0:
-    # No active stakers — pool contribution is BURNED, not carried.
-    # See "Empty-staker-set behavior" below.
-    pass
-else:
-    staker_pool_balance += block_pool
 ```
 
 The per-claim reward computation MUST use the same multiplier source. The
@@ -267,10 +279,18 @@ contributes (correctly) to the deflationary objective.
 
 ### Reorg handling
 
-When blocks are popped (reorg), the corresponding accrual records are removed
-and the pool balance is decremented by the reversed accrual amount. Watermark
-entries that referenced reverted blocks are rolled back atomically within the
-same LMDB transaction as the block pop.
+When blocks are popped (reorg), the pop path mirrors the add path:
+
+- If the accrual record's `total_weighted_stake` was non-zero (stakers existed),
+  the pool balance is decremented by the reversed staker inflow.
+- If `total_weighted_stake` was zero (no-staker block), the pool balance is NOT
+  decremented (nothing was added); instead, `total_burned` is decremented by
+  `actually_destroyed`.
+- Watermark entries are restored using the staked output's creation height to
+  distinguish first claims (remove watermark) from subsequent claims (restore
+  to `from_height`).
+- All reversal writes execute atomically within the block-pop LMDB transaction
+  under a `db_wtxn_guard`.
 
 ## Wallet and RPC Support
 
@@ -330,10 +350,19 @@ correlated with specific accrual periods and staking outputs:
   possible stakers. Future protocol versions may introduce claim batching
   at the consensus level (see `DESIGN_CONCEPTS.md` Section 14, Research
   Appendix).
-- **Staked output visibility.** `txout_to_staked_key` outputs are
-  distinguishable from regular outputs on-chain. The lock duration is
-  publicly visible. This is an inherent trade-off of transparent staking and
-  cannot be mitigated without a full PQ privacy redesign (V4).
+- **Staked output visibility — amounts are public.** `txout_to_staked_key`
+  outputs are distinguishable from regular outputs on-chain. Unlike regular
+  RCT outputs, staked output amounts are stored in the clear (not
+  Pedersen-committed). This is a deliberate design choice: the per-block
+  accrual computation requires the actual staked amount to compute
+  `total_weighted_stake`, and the claim validation path at
+  `check_stake_claim_input` reads `staked_out.amount` directly. An RCT
+  output with `amount == 0` is explicitly rejected by consensus for claim
+  validation (line 4029 of `blockchain.cpp`). The `lock_tier` and
+  `lock_until` fields are also public. This is an inherent trade-off of
+  transparent staking and cannot be mitigated without a full confidential
+  staking redesign. Future research directions include homomorphic
+  weighted-stake proofs (see `DESIGN_CONCEPTS.md` Section 14).
 - **Frozen-at-`lock_until` outputs.** A matured-but-unspent output that is
   still draining its backlog produces claims that are on-chain
   indistinguishable from any other claim. The frozen state introduces no new

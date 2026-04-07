@@ -135,11 +135,14 @@ impl WalletState {
     }
 
     /// Set staking info for a transfer at the given index.
-    pub fn set_staking_info(&mut self, transfer_idx: usize, tier: u8, lock_until: u64) {
+    pub fn set_staking_info(&mut self, transfer_idx: usize, tier: u8) {
         if let Some(td) = self.transfers.get_mut(transfer_idx) {
             td.staked = true;
             td.stake_tier = tier;
-            td.stake_lock_until = lock_until;
+            let lock_blocks = shekyl_staking::tiers::tier_by_id(tier)
+                .map(|t| t.lock_blocks)
+                .unwrap_or(0);
+            td.stake_lock_until = td.block_height + lock_blocks;
         }
     }
 

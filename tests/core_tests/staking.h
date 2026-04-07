@@ -116,8 +116,7 @@ bool construct_staked_tx(const std::vector<test_event_entry>& events,
                          const cryptonote::account_base& from,
                          const cryptonote::account_base& to,
                          uint64_t amount,
-                         uint8_t tier,
-                         uint64_t lock_until);
+                         uint8_t tier);
 
 // ====================================================================
 // 2b. Happy path: full staking lifecycle
@@ -186,15 +185,8 @@ struct gen_staked_output_invalid_tier : public staking_test_base
   bool generate(std::vector<test_event_entry>& events) const;
 };
 
-struct gen_staked_output_invalid_lock_until : public staking_test_base
-{
-  bool generate(std::vector<test_event_entry>& events) const;
-};
-
-struct gen_staked_output_zero_lock : public staking_test_base
-{
-  bool generate(std::vector<test_event_entry>& events) const;
-};
+// gen_staked_output_invalid_lock_until and gen_staked_output_zero_lock removed:
+// lock_until is no longer stored on-chain.
 
 // ====================================================================
 // 2f. Reorg / Rollback correctness (callback-based)

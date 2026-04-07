@@ -1942,7 +1942,8 @@ public:
   {
     uint64_t staker_emission;
     uint64_t staker_fee_pool;
-    uint64_t total_weighted_stake;
+    uint64_t total_weighted_stake_lo;
+    uint64_t total_weighted_stake_hi;
     uint64_t actually_destroyed;
   };
 

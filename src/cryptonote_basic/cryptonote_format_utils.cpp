@@ -920,24 +920,22 @@ namespace cryptonote
     }
   }
   //---------------------------------------------------------------
-  void set_staked_tx_out(const uint64_t amount, const crypto::public_key& output_public_key, const crypto::view_tag& view_tag, uint8_t lock_tier, uint64_t lock_until, tx_out& out)
+  void set_staked_tx_out(const uint64_t amount, const crypto::public_key& output_public_key, const crypto::view_tag& view_tag, uint8_t lock_tier, tx_out& out)
   {
     out.amount = amount;
     txout_to_staked_key tsk;
     tsk.key = output_public_key;
     tsk.view_tag = view_tag;
     tsk.lock_tier = lock_tier;
-    tsk.lock_until = lock_until;
     out.target = tsk;
   }
   //---------------------------------------------------------------
-  bool get_output_staking_info(const tx_out& out, uint8_t& lock_tier, uint64_t& lock_until)
+  bool get_output_staking_info(const tx_out& out, uint8_t& lock_tier)
   {
     if (std::holds_alternative<txout_to_staked_key>(out.target))
     {
       const auto& staked = std::get<txout_to_staked_key>(out.target);
       lock_tier = staked.lock_tier;
-      lock_until = staked.lock_until;
       return true;
     }
     return false;

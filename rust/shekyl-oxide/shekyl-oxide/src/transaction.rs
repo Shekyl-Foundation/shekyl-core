@@ -136,12 +136,13 @@ pub struct Output {
 }
 
 /// Metadata attached to a staked output (serialized as tag 0x04).
+///
+/// `lock_until` is not stored on-chain. The effective lock expiry is computed
+/// dynamically as `creation_height + tier_lock_blocks` wherever needed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize)]
 pub struct StakingMeta {
   /// Tier index: 0=short, 1=medium, 2=long.
   pub lock_tier: u8,
-  /// Block height at which the principal becomes unstakeable.
-  pub lock_until: u64,
 }
 
 impl Output {
@@ -157,7 +158,6 @@ impl Output {
         w.write_all(&[0])?;
       }
       w.write_all(&[staking.lock_tier])?;
-      write_varint(&staking.lock_until, w)?;
     } else {
       w.write_all(&[2 + u8::from(self.view_tag.is_some())])?;
       w.write_all(&self.key.to_bytes())?;
@@ -195,18 +195,17 @@ impl Output {
         Ok(Output { amount, key, view_tag, staking: None })
       }
       4 => {
-        // txout_to_staked_key: key(32) view_tag(1) lock_tier(1) lock_until(varint)
+        // txout_to_staked_key: key(32) view_tag(1) lock_tier(1)
         // Staked outputs have explicit (non-zero) amounts regardless of RCT flag
         let amount = Some(raw_amount);
         let key = CompressedPoint::read(r)?;
         let view_tag = Some(read_byte(r)?);
         let lock_tier = read_byte(r)?;
-        let lock_until: u64 = read_varint(r)?;
         Ok(Output {
           amount,
           key,
           view_tag,
-          staking: Some(StakingMeta { lock_tier, lock_until }),
+          staking: Some(StakingMeta { lock_tier }),
         })
       }
       _ => Err(io::Error::other("Tried to deserialize unknown/unused output type")),

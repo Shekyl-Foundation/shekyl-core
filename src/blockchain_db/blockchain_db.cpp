@@ -218,17 +218,12 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
       add_spent_key(claim.k_image);
       set_staker_claim_watermark(claim.staked_output_index, claim.to_height);
       uint64_t pool_balance = get_staker_pool_balance();
-      if (claim.amount <= pool_balance)
-      {
-        set_staker_pool_balance(pool_balance - claim.amount);
-      }
-      else
-      {
-        LOG_PRINT_L0("WARNING: claim amount " << claim.amount
-          << " exceeds staker pool balance " << pool_balance
-          << " for staked output " << claim.staked_output_index
-          << "; skipping pool decrement");
-      }
+      if (claim.amount > pool_balance)
+        throw std::runtime_error("FATAL: claim amount " + std::to_string(claim.amount)
+          + " exceeds staker pool balance " + std::to_string(pool_balance)
+          + " for staked output " + std::to_string(claim.staked_output_index)
+          + " — validation should have rejected this transaction");
+      set_staker_pool_balance(pool_balance - claim.amount);
     }
     else if (std::holds_alternative<txin_gen>(tx_input))
     {
@@ -367,8 +362,9 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
         {
           const auto& staked = std::get<txout_to_staked_key>(vout.target);
           output_key = staked.key;
+          const uint64_t effective_lock_until = block_height + shekyl_stake_lock_blocks(staked.lock_tier);
           maturity_height = std::max(
-              static_cast<uint64_t>(staked.lock_until),
+              effective_lock_until,
               block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE);
         }
         else
@@ -532,8 +528,9 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
         {
           const auto& staked = std::get<txout_to_staked_key>(vout.target);
           output_key = staked.key;
+          const uint64_t effective_lock_until = block_height + shekyl_stake_lock_blocks(staked.lock_tier);
           maturity_height = std::max(
-              static_cast<uint64_t>(staked.lock_until),
+              effective_lock_until,
               block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE);
         }
         else
@@ -581,15 +578,32 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash)
       const auto& claim = std::get<txin_stake_claim>(tx_input);
       remove_spent_key(claim.k_image);
 
-      // Restore the watermark to its pre-claim value.  claim.from_height
-      // is the old watermark (0 means this was the first claim for this
-      // staked output, so remove the watermark entirely).
-      if (claim.from_height == 0)
-        remove_staker_claim_watermark(claim.staked_output_index);
-      else
-        set_staker_claim_watermark(claim.staked_output_index, claim.from_height);
+      // Restore the watermark to its pre-claim state.
+      // The current watermark is claim.to_height (set by add_transaction).
+      // The pre-claim watermark was claim.from_height IF a watermark existed,
+      // or absent if this was the first claim.
+      // We detect "first claim" by checking if from_height matches the
+      // staked output's creation height — if so, no watermark existed before.
+      uint64_t current_wm = get_staker_claim_watermark(claim.staked_output_index);
+      if (current_wm == claim.to_height)
+      {
+        // This claim set the watermark. Restore to pre-claim state.
+        // If from_height equals the watermark the previous claim set,
+        // restore it; otherwise this was the first claim, remove entirely.
+        uint64_t staked_creation_height = 0;
+        try {
+          tx_out_index oi = get_output_tx_and_index_from_global(claim.staked_output_index);
+          staked_creation_height = get_tx_block_height(oi.first);
+        } catch (...) {
+          staked_creation_height = 0;
+        }
 
-      // Credit the claimed amount back into the staker reward pool.
+        if (claim.from_height <= staked_creation_height)
+          remove_staker_claim_watermark(claim.staked_output_index);
+        else
+          set_staker_claim_watermark(claim.staked_output_index, claim.from_height);
+      }
+
       uint64_t pool_balance = get_staker_pool_balance();
       set_staker_pool_balance(pool_balance + claim.amount);
     }

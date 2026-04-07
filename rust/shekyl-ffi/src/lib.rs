@@ -508,6 +508,7 @@ pub extern "C" fn shekyl_stake_yield_multiplier(tier_id: u8) -> u64 {
 /// Per-block share of the staker pool for one weighted stake entry:
 /// `(total_reward_at_height * stake_weight) / total_weighted_stake` using `u128` math.
 ///
+/// `total_weighted_stake` is passed as a 128-bit value split into lo/hi u64 halves.
 /// If `total_weighted_stake == 0`, returns `0`.
 /// If the quotient does not fit in `u64`, returns `0` and sets `*overflow_out` to `1` when
 /// `overflow_out` is non-null.
@@ -515,7 +516,8 @@ pub extern "C" fn shekyl_stake_yield_multiplier(tier_id: u8) -> u64 {
 pub extern "C" fn shekyl_calc_per_block_staker_reward(
     total_reward_at_height: u64,
     stake_weight: u64,
-    total_weighted_stake: u64,
+    total_weighted_stake_lo: u64,
+    total_weighted_stake_hi: u64,
     overflow_out: *mut u8,
 ) -> u64 {
     unsafe {
@@ -523,11 +525,12 @@ pub extern "C" fn shekyl_calc_per_block_staker_reward(
             *overflow_out = 0;
         }
     }
+    let total_weighted_stake = (total_weighted_stake_hi as u128) << 64 | (total_weighted_stake_lo as u128);
     if total_weighted_stake == 0 {
         return 0;
     }
     let num = (total_reward_at_height as u128) * (stake_weight as u128);
-    let q = num / (total_weighted_stake as u128);
+    let q = num / total_weighted_stake;
     if q > u64::MAX as u128 {
         unsafe {
             if !overflow_out.is_null() {
@@ -2407,20 +2410,38 @@ mod tests {
     #[test]
     fn test_per_block_staker_reward_ffi() {
         let mut overflow = 0u8;
-        let q = shekyl_calc_per_block_staker_reward(1_000_000, 500_000, 2_000_000, &mut overflow);
+        let q = shekyl_calc_per_block_staker_reward(1_000_000, 500_000, 2_000_000, 0, &mut overflow);
         assert_eq!(overflow, 0);
         assert_eq!(q, 250_000);
-        assert_eq!(shekyl_calc_per_block_staker_reward(100, 0, 50, std::ptr::null_mut()), 0);
-        let q2 = shekyl_calc_per_block_staker_reward(10, 10, 1, std::ptr::null_mut());
+        assert_eq!(shekyl_calc_per_block_staker_reward(100, 0, 50, 0, std::ptr::null_mut()), 0);
+        let q2 = shekyl_calc_per_block_staker_reward(10, 10, 1, 0, std::ptr::null_mut());
         assert_eq!(q2, 100);
     }
 
     #[test]
     fn test_per_block_staker_reward_overflow_flag() {
         let mut overflow = 0u8;
-        let q = shekyl_calc_per_block_staker_reward(u64::MAX, u64::MAX, 1, &mut overflow);
+        let q = shekyl_calc_per_block_staker_reward(u64::MAX, u64::MAX, 1, 0, &mut overflow);
         assert_eq!(q, 0);
         assert_eq!(overflow, 1);
+    }
+
+    #[test]
+    fn test_per_block_staker_reward_u128_denominator() {
+        let mut overflow = 0u8;
+        // Denominator = 1 << 64 = u64::MAX + 1 (hi=1, lo=0)
+        let q = shekyl_calc_per_block_staker_reward(1_000_000, 1_000_000, 0, 1, &mut overflow);
+        assert_eq!(overflow, 0);
+        // numerator = 10^12, denominator = 2^64 ≈ 1.844 * 10^19
+        // result = 10^12 / 1.844*10^19 ≈ 0 (floor)
+        assert_eq!(q, 0);
+
+        // Smaller hi value: denominator = (1 << 64) + 100
+        let q2 = shekyl_calc_per_block_staker_reward(u64::MAX, 2, 100, 1, &mut overflow);
+        assert_eq!(overflow, 0);
+        // numerator = 2 * u64::MAX ≈ 3.69 * 10^19, denom ≈ 1.844 * 10^19 + 100
+        // result ≈ 1 (floor division)
+        assert_eq!(q2, 1);
     }
 
     #[test]
