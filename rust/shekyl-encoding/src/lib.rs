@@ -56,10 +56,7 @@ pub enum EncodingError {
     Encode(#[from] std::fmt::Error),
 
     #[error("bech32m decode failed: {0}")]
-    Decode(bech32::DecodeError),
-
-    #[error("empty input data")]
-    EmptyData,
+    Decode(String),
 }
 
 /// Encode arbitrary bytes as a Bech32m string with the given HRP.
@@ -87,13 +84,20 @@ pub fn encode_blob(hrp: &str, data: &[u8]) -> Result<String, EncodingError> {
 
 /// Decode a Bech32m string, returning the HRP and payload bytes.
 ///
+/// Strictly enforces the Bech32m checksum variant; plain Bech32
+/// encodings are rejected.
+///
 /// # Errors
 ///
 /// Returns [`EncodingError::Decode`] if the string is not valid Bech32m.
 pub fn decode_blob(encoded: &str) -> Result<(String, Vec<u8>), EncodingError> {
-    let (hrp, data) =
-        bech32::decode(encoded).map_err(EncodingError::Decode)?;
-    Ok((hrp.to_string(), data))
+    use bech32::primitives::decode::CheckedHrpstring;
+
+    let checked = CheckedHrpstring::new::<Bech32m>(encoded)
+        .map_err(|e| EncodingError::Decode(e.to_string()))?;
+    let hrp = checked.hrp().to_string();
+    let data: Vec<u8> = checked.byte_iter().collect();
+    Ok((hrp, data))
 }
 
 #[cfg(test)]

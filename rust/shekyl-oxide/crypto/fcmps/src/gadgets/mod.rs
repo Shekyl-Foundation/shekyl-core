@@ -43,7 +43,9 @@ impl<C: Ciphersuite> Circuit<C> {
   }
 
   /// Perform checked incomplete addition for a public point and an on-curve point.
-  // RELEASE-BLOCKER(shekyl): Verify if constraining c on-curve is redundant; if not, add constraint
+  /// Both `b` and `c` are accepted as `OnCurve`, so callers must supply points
+  /// that have already been constrained on-curve (e.g. via `on_curve`). No
+  /// additional on-curve constraint is needed here.
   pub(crate) fn incomplete_add_pub(&mut self, a: (C::F, C::F), b: OnCurve, c: OnCurve) -> OnCurve {
     self.0.incomplete_add_fixed(a, b, c)
   }

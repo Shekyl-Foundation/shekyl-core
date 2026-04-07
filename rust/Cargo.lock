@@ -2079,13 +2079,16 @@ name = "shekyl-crypto-pq"
 version = "2.0.0"
 dependencies = [
  "blake2",
+ "ciphersuite",
  "criterion",
  "ed25519-dalek",
  "fips203",
  "fips204",
+ "helioselene",
  "hex",
  "hkdf",
  "rand",
+ "rand_chacha",
  "serde",
  "serde_json",
  "sha2",

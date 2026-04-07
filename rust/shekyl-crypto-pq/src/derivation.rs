@@ -97,29 +97,34 @@ fn keygen_from_seed(
     seed: &[u8; 32],
 ) -> Result<(ml_dsa_65::PublicKey, ml_dsa_65::PrivateKey), CryptoError> {
     // fips204's try_keygen_with_rng expects a CryptoRng + RngCore.
-    // We create a deterministic RNG seeded from our derived seed material.
-    use rand::rngs::StdRng;
+    // Use ChaCha20Rng (explicit algorithm) so deterministic derivation remains
+    // stable across rand crate upgrades. StdRng's algorithm is not guaranteed.
     use rand::SeedableRng;
 
-    let mut rng = StdRng::from_seed(*seed);
+    let mut rng = rand_chacha::ChaCha20Rng::from_seed(*seed);
     ml_dsa_65::try_keygen_with_rng(&mut rng)
         .map_err(|e| CryptoError::KeyGenerationFailed(format!("ML-DSA-65 keygen: {e}")))
 }
 
 /// Compute `H(pqc_pk)` — the PQC leaf scalar for the curve tree.
 ///
-/// Uses domain-separated Blake2b-512, reduced to a 32-byte scalar:
-/// `Blake2b-512(DOMAIN_PQC_LEAF || pqc_pk_bytes)[..32]` with high bit cleared.
+/// Uses domain-separated Blake2b-512, reduced to a canonical Selene base
+/// field element via `HelioseleneField::wide_reduce` on the full 512-bit
+/// hash output. This matches `PqcLeafScalar::from_pqc_public_key` exactly.
 pub fn hash_pqc_public_key(pqc_pk_bytes: &[u8]) -> [u8; 32] {
+    use ciphersuite::group::ff::PrimeField;
+    use helioselene::HelioseleneField;
+
     let mut hasher = Blake2b512::new();
     hasher.update(DOMAIN_PQC_LEAF);
     hasher.update(pqc_pk_bytes);
     let hash_512 = hasher.finalize();
 
-    let mut scalar = [0u8; 32];
-    scalar.copy_from_slice(&hash_512[..32]);
-    scalar[31] &= 0x7f;
-    scalar
+    let mut uniform = [0u8; 64];
+    uniform.copy_from_slice(hash_512.as_ref());
+    let field_elem = HelioseleneField::wide_reduce(uniform);
+    uniform.zeroize();
+    field_elem.to_repr()
 }
 
 #[cfg(test)]
@@ -187,10 +192,14 @@ mod tests {
     }
 
     #[test]
-    fn hash_pqc_pk_high_bit_cleared() {
+    fn hash_pqc_pk_canonical_field_element() {
+        use ciphersuite::group::ff::PrimeField;
+        use helioselene::HelioseleneField;
+
         let pk = vec![0xff; ML_DSA_65_PK_LEN];
         let h = hash_pqc_public_key(&pk);
-        assert_eq!(h[31] & 0x80, 0);
+        assert!(bool::from(HelioseleneField::from_repr(h).is_some()),
+            "hash must produce a canonical Selene base field element");
     }
 
     #[test]
@@ -219,8 +228,11 @@ mod tests {
 
     #[test]
     fn hash_pqc_pk_empty_input() {
+        use ciphersuite::group::ff::PrimeField;
+        use helioselene::HelioseleneField;
+
         let h = hash_pqc_public_key(&[]);
-        assert_eq!(h[31] & 0x80, 0);
+        assert!(bool::from(HelioseleneField::from_repr(h).is_some()));
         assert_ne!(h, [0u8; 32]);
     }
 

@@ -11,6 +11,8 @@
 //! authorization to the UTXO set without revealing which output is spent.
 
 use blake2::{Blake2b512, Digest};
+use ciphersuite::group::ff::PrimeField;
+use helioselene::HelioseleneField;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
@@ -30,18 +32,16 @@ impl PqcLeafScalar {
         hasher.update(pqc_pk_bytes);
         let hash_512 = hasher.finalize();
 
-        // Reduce the 512-bit hash to a 256-bit scalar.
-        // For Selene (prime-order subgroup of a ~255-bit prime field),
-        // taking the low 256 bits of a 512-bit hash gives negligible bias.
-        let mut scalar = [0u8; 32];
-        scalar.copy_from_slice(&hash_512[..32]);
+        // Proper modular reduction: use the full 512-bit hash to produce
+        // an unbiased, canonical Selene base field element (HelioseleneField).
+        // The leaf layer of the curve tree is a Selene hash, so all 4 scalars
+        // must be valid HelioseleneField elements.
+        let mut uniform = [0u8; 64];
+        uniform.copy_from_slice(hash_512.as_ref());
+        let field_elem = HelioseleneField::wide_reduce(uniform);
+        uniform.zeroize();
 
-        // Clear the high bit to ensure the value is in the valid scalar range.
-        // Selene's scalar field is close to 2^255, so clearing bit 255 guarantees
-        // the value is < 2^255 < field order.
-        scalar[31] &= 0x7f;
-
-        PqcLeafScalar(scalar)
+        PqcLeafScalar(field_elem.to_repr())
     }
 }
 
@@ -111,10 +111,13 @@ mod tests {
     }
 
     #[test]
-    fn pqc_leaf_scalar_high_bit_cleared() {
+    fn pqc_leaf_scalar_canonical() {
         let pk = vec![0xff; 1952];
         let s = PqcLeafScalar::from_pqc_public_key(&pk);
-        assert_eq!(s.0[31] & 0x80, 0, "high bit must be cleared for scalar range");
+        // Verify the result is a canonical HelioseleneField element by round-tripping
+        use ciphersuite::group::ff::PrimeField;
+        assert!(bool::from(HelioseleneField::from_repr(s.0).is_some()),
+            "leaf scalar must be a canonical Selene base field element");
     }
 
     #[test]
@@ -134,14 +137,14 @@ mod tests {
     #[test]
     fn pqc_leaf_scalar_empty_key() {
         let s = PqcLeafScalar::from_pqc_public_key(&[]);
-        assert_eq!(s.0[31] & 0x80, 0);
+        assert!(bool::from(HelioseleneField::from_repr(s.0).is_some()));
     }
 
     #[test]
     fn pqc_leaf_scalar_single_byte_keys() {
         for b in 0..=255u8 {
             let s = PqcLeafScalar::from_pqc_public_key(&[b]);
-            assert_eq!(s.0[31] & 0x80, 0);
+            assert!(bool::from(HelioseleneField::from_repr(s.0).is_some()));
         }
     }
 

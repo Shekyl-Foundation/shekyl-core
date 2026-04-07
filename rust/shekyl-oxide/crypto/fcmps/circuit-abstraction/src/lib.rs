@@ -27,18 +27,18 @@ mod gadgets;
 /// A trait for the transcript, whether proving for verifying, as necessary for sampling
 /// challenges.
 pub trait Transcript {
-  /// Sample a challenge from the transacript.
+  /// Sample a challenge from the transcript.
   ///
-  /// It is the caller's responsibility to have properly transcripted all variables prior to
-  /// sampling this challenge.
+  /// It is the caller's responsibility to have properly added all variables to the transcript
+  /// prior to sampling this challenge.
   fn challenge<C: Ciphersuite>(&mut self) -> C::F
   where
     C::F: FromUniformBytes<64>;
 
   /// Sample a challenge as a byte array.
   ///
-  /// It is the caller's responsibility to have properly transcripted all variables prior to
-  /// sampling this challenge.
+  /// It is the caller's responsibility to have properly added all variables to the transcript
+  /// prior to sampling this challenge.
   fn challenge_bytes(&mut self) -> [u8; 64];
 }
 impl Transcript for ProverTranscript {

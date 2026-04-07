@@ -20,7 +20,7 @@
 use std::fmt;
 
 use rand_core::{OsRng, RngCore, SeedableRng};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use ciphersuite::group::{ff::PrimeField, GroupEncoding};
 use dalek_ff_group::{EdwardsPoint, Scalar};
@@ -47,6 +47,12 @@ pub struct FrostSalSession {
 impl fmt::Debug for FrostSalSession {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FrostSalSession").finish_non_exhaustive()
+    }
+}
+
+impl Drop for FrostSalSession {
+    fn drop(&mut self) {
+        self.x.zeroize();
     }
 }
 

@@ -224,6 +224,33 @@
   throws `CHECK_AND_ASSERT_THROW_MES` so the wallet catches the error
   immediately rather than producing an invalid transaction.
 
+- **PQC leaf scalar now uses proper Selene field reduction.** `PqcLeafScalar::from_pqc_public_key`
+  and `hash_pqc_public_key` previously truncated Blake2b-512 to 32 bytes and
+  cleared bit 255, which could produce non-canonical values exceeding the
+  Selene base field modulus. Now uses `HelioseleneField::wide_reduce` on the
+  full 64-byte hash for unbiased, canonical field elements.
+
+- **Deterministic PQC keygen stability.** Replaced `rand::rngs::StdRng` with
+  `rand_chacha::ChaCha20Rng` for ML-DSA-65 keypair derivation. `StdRng`'s
+  underlying algorithm is not a stability guarantee across `rand` versions,
+  which could break wallet-restore-from-seed.
+
+- **Bech32m variant enforcement.** `decode_blob` now strictly enforces the
+  Bech32m checksum variant instead of accepting both Bech32 and Bech32m.
+  Removed unused `EncodingError::EmptyData` variant.
+
+### 🔒 Security
+
+- **FrostSalSession spend secret zeroized on drop.** The FROST SAL session's
+  `x` (spend secret scalar) is now explicitly zeroized when the session is
+  dropped, per the project-wide secure memory rule.
+
+- **RELEASE-BLOCKER resolved in circuit gadgets.** The `incomplete_add_pub`
+  function in the FCMP++ circuit already receives parameters typed as `OnCurve`,
+  which guarantees the on-curve constraint. Replaced the
+  `RELEASE-BLOCKER(shekyl)` comment with documentation explaining why no
+  additional constraint is needed.
+
 - **Pruning watermark hardening.** `BlockchainLMDB::prune_tx_data()` now
   fails the current batch on missing transaction rows (`TX_DNE`) instead of
   logging and continuing, so `tx_prune_next_block` cannot advance on partial
