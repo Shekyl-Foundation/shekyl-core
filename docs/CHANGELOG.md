@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### 🔄 Changed
+
+- **`MAX_TX_EXTRA_SIZE` (24576 bytes).** The previous Monero-era cap (1060) was
+  too small for FCMP++ `tx_extra` payloads (hybrid KEM ciphertexts ~1120 B per
+  output, PQC leaf hashes, pubkey/nonce). Construction of v3 spends failed once
+  PQC fields were appended; the pool and `construct_tx` checks now allow the
+  larger bound.
+- **`construct_tx` RCT/PQC stubs.** v3 spends require `|pqc_auths| == |vin|`
+  for binary serialization, and `RCTTypeFcmpPlusPlusPqc` needs BP+, ECDH, and
+  pseudo-out vectors sized to inputs/outputs. `construct_tx` now assigns stub
+  `pqc_authentication` entries and calls `rct::fill_construct_tx_rct_stub()`
+  (dummy Bulletproofs+, ECDH encoding, Pedersen pseudo-outs) so
+  `get_transaction_hash` and JSON/blob round-trips succeed before the wallet
+  replaces the RCT payload with `genRctFcmpPlusPlus()`.
+
 ### 🔒 Security
 
 - **Base58 overflow and non-canonical encoding fix (monero-oxide fork).**
