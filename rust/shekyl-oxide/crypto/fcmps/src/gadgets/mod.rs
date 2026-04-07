@@ -23,7 +23,7 @@ impl<C: Ciphersuite> Circuit<C> {
 
       let carry_eval = self.eval(&carry);
       let next_eval = self.eval(&next);
-      let witness = carry_eval.map(|carry_eval| (carry_eval, next_eval.unwrap()));
+      let witness = carry_eval.zip(next_eval);
 
       let (_l, _r, constrainable_carry) = self.mul(Some(carry), Some(next), witness);
       carry = constrainable_carry.into();

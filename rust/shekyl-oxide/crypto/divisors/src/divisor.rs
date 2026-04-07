@@ -88,6 +88,18 @@ impl<F: PrimeField> Div<Evals<F>> for Divisor<F> {
       *a *= denom;
       *b *= denom;
     }
+    assert!(
+      self.a.degree >= rhs.degree,
+      "Divisor::div underflow: self.a.degree ({}) < rhs.degree ({})",
+      self.a.degree,
+      rhs.degree
+    );
+    assert!(
+      self.b.degree >= rhs.degree,
+      "Divisor::div underflow: self.b.degree ({}) < rhs.degree ({})",
+      self.b.degree,
+      rhs.degree
+    );
     self.a.degree -= rhs.degree;
     self.b.degree -= rhs.degree;
     self

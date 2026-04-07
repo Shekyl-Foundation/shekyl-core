@@ -81,6 +81,11 @@ namespace levin
     if (data.size() <= sizeof(bucket_head2))
       return input;
 
+    bucket_head2 existing_head;
+    std::memcpy(&existing_head, data.data(), sizeof(existing_head));
+    if (SWAP32LE(existing_head.m_flags) & LEVIN_PACKET_COMPRESSED)
+      return input;
+
     const span<const uint8_t> payload{data.data() + sizeof(bucket_head2), data.size() - sizeof(bucket_head2)};
     if (payload.size() < COMPRESSION_MIN_PAYLOAD)
       return input;

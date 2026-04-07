@@ -47,6 +47,36 @@
   monero-oxide fork `Cargo.toml` and the Shekyl `rust/Cargo.toml`. Dev and
   release profiles additionally set `panic = "abort"`.
 
+- **HKDF domain-separated salts for PQC key derivation.** All HKDF-SHA-512
+  calls in `shekyl-crypto-pq` now use explicit fixed salts (`shekyl-pqc-derive-v1`,
+  `shekyl-master-derive-v1`) instead of `None`. Strengthens domain separation
+  and prevents cross-protocol seed reuse if the same combined shared secret
+  appears in other contexts.
+
+- **`FrostSalSession` secret deduplication.** Removed the redundant `x`
+  (spend secret scalar) from `FrostSalSession` struct fields. Previously the
+  secret was stored both in the struct and inside `SalAlgorithm`, with only
+  the struct copy explicitly zeroized on drop. Now the secret lives solely
+  inside the algorithm, eliminating the unprotected duplicate.
+
+- **Levin double-compression guard.** `try_compress_message` now checks
+  `LEVIN_PACKET_COMPRESSED` in the input header before compressing. Prevents
+  double-compression of already-compressed messages in future refactors.
+
+- **Divisor degree underflow assertions.** `Divisor::div` now asserts that
+  `self.a.degree >= rhs.degree` and `self.b.degree >= rhs.degree` before
+  `usize` subtraction, converting silent wraparound into a clear panic with
+  diagnostic context.
+
+- **Interpolator allocation bounds fix.** `Interpolator::interpolate` now
+  allocates the output coefficient vector using the domain size
+  (`self.lagrange_polys.len()`) instead of `evals.len()`, preventing trailing
+  zeros from inflating the vector when callers provide excess evaluations.
+
+- **`member_of_list` witness construction hardened.** Replaced
+  `next_eval.unwrap()` with `carry_eval.zip(next_eval)` in the FCMP++ circuit
+  gadget, eliminating a potential panic if evaluation invariants change.
+
 ### ✨ Added
 
 - **`shekyl-tx-builder` crate.** New Rust crate (`rust/shekyl-tx-builder/`)

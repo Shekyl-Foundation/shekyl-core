@@ -20,7 +20,7 @@
 use std::fmt;
 
 use rand_core::{OsRng, RngCore, SeedableRng};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use ciphersuite::group::{ff::PrimeField, GroupEncoding};
 use dalek_ff_group::{EdwardsPoint, Scalar};
@@ -35,24 +35,21 @@ use shekyl_fcmp_plus_plus::sal::{RerandomizedOutput, SpendAuthAndLinkability};
 use crate::proof::ProveError;
 
 /// Opaque session state for one input's FROST SAL signing.
+///
+/// The spend secret `x` is passed into `SalAlgorithm` at construction and
+/// is not retained as a separate field. When the session is dropped, the
+/// algorithm (and its internal copy of `x`) is dropped with it.
 pub struct FrostSalSession {
     original_output: Output,
     rerand: RerandomizedOutput,
     input: Input,
     algorithm: Option<SalAlgorithm<rand_chacha::ChaCha20Rng, RecommendedTranscript>>,
-    x: Scalar,
     pseudo_out: [u8; 32],
 }
 
 impl fmt::Debug for FrostSalSession {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FrostSalSession").finish_non_exhaustive()
-    }
-}
-
-impl Drop for FrostSalSession {
-    fn drop(&mut self) {
-        self.x.zeroize();
     }
 }
 
@@ -102,7 +99,6 @@ impl FrostSalSession {
             input: crate_input,
             rerand,
             algorithm: Some(algorithm),
-            x,
             pseudo_out,
         })
     }

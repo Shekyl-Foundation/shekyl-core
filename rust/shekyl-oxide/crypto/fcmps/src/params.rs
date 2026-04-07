@@ -20,7 +20,7 @@ where
 
   /// Initialization point for the hash function over the first curve.
   pub(crate) curve_1_hash_init: <C::C1 as Ciphersuite>::G,
-  /// Initialization point for the hash function over the first curve.
+  /// Initialization point for the hash function over the second curve.
   pub(crate) curve_2_hash_init: <C::C2 as Ciphersuite>::G,
 
   pub(crate) G_table: GeneratorTable<<C::C1 as Ciphersuite>::F, C::OcParameters>,

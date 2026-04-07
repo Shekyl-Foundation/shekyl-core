@@ -170,7 +170,8 @@ impl<F: PrimeField> Interpolator<F> {
       None?;
     }
 
-    let mut poly = vec![F::ZERO; evals.len()];
+    let domain_size = self.lagrange_polys.len();
+    let mut poly = vec![F::ZERO; domain_size];
     for (eval, li) in evals.iter().zip(&self.lagrange_polys) {
       for (res, li) in poly.iter_mut().zip(li.0.iter().rev()) {
         *res += *li * *eval;

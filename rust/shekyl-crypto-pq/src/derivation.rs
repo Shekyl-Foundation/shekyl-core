@@ -30,6 +30,11 @@ pub const DOMAIN_PQC_LEAF: &[u8] = b"shekyl-pqc-leaf";
 /// Domain separator for per-output PQC keypair derivation.
 pub const DOMAIN_PQC_OUTPUT: &[u8] = b"shekyl-pqc-output";
 
+/// Fixed HKDF salt for PQC key derivation, providing explicit domain separation
+/// to prevent cross-protocol seed reuse if the same combined shared secret
+/// appears in other contexts.
+const HKDF_SALT_PQC_DERIVE: &[u8] = b"shekyl-pqc-derive-v1";
+
 /// Size of the derivation seed extracted from HKDF for ML-DSA keygen.
 const DERIVATION_SEED_LEN: usize = 32;
 
@@ -70,7 +75,7 @@ pub fn derive_pqc_keypair(
     info.extend_from_slice(DOMAIN_PQC_OUTPUT);
     info.extend_from_slice(&output_index.to_le_bytes());
 
-    let hk = Hkdf::<Sha512>::new(None, combined_ss);
+    let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_PQC_DERIVE), combined_ss);
     let mut seed = [0u8; DERIVATION_SEED_LEN];
     hk.expand(&info, &mut seed)
         .map_err(|_| CryptoError::KeyGenerationFailed("HKDF expand for PQC seed".into()))?;

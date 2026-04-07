@@ -237,15 +237,18 @@ impl SeedDerivation {
         Self::hkdf_expand_64(seed, b"shekyl-ml-kem-768")
     }
 
+    /// Fixed HKDF salt for master-seed child-key derivation.
+    const HKDF_SALT_MASTER_DERIVE: &'static [u8] = b"shekyl-master-derive-v1";
+
     fn hkdf_expand_32(seed: &[u8; 32], info: &[u8]) -> [u8; 32] {
-        let hk = Hkdf::<Sha512>::new(None, seed);
+        let hk = Hkdf::<Sha512>::new(Some(Self::HKDF_SALT_MASTER_DERIVE), seed);
         let mut okm = [0u8; 32];
         hk.expand(info, &mut okm).expect("32 bytes < max HKDF output");
         okm
     }
 
     fn hkdf_expand_64(seed: &[u8; 32], info: &[u8]) -> [u8; 64] {
-        let hk = Hkdf::<Sha512>::new(None, seed);
+        let hk = Hkdf::<Sha512>::new(Some(Self::HKDF_SALT_MASTER_DERIVE), seed);
         let mut okm = [0u8; 64];
         hk.expand(info, &mut okm).expect("64 bytes < max HKDF output");
         okm
