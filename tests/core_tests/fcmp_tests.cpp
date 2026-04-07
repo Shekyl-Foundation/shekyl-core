@@ -50,9 +50,11 @@ bool gen_fcmp_tx_valid::generate(std::vector<test_event_entry>& events) const
 {
   uint64_t ts_start = 1338224400;
 
-  MAKE_ACCOUNT(events, miner_account);
-  MAKE_ACCOUNT(events, alice);
+  GENERATE_ACCOUNT(miner_account);
+  GENERATE_ACCOUNT(alice);
   MAKE_GENESIS_BLOCK(events, blk_0, miner_account, ts_start);
+  events.push_back(miner_account);
+  events.push_back(alice);
 
   REWIND_BLOCKS_N(events, blk_mature, blk_0, miner_account, 70);
 
@@ -65,8 +67,8 @@ bool gen_fcmp_tx_valid::check_fcmp_tx_accepted(cryptonote::core& c, size_t ev_in
 {
   DEFINE_TESTS_ERROR_CONTEXT("gen_fcmp_tx_valid::check_fcmp_tx_accepted");
 
-  const account_base& miner_account = std::get<account_base>(events[0]);
-  const account_base& alice = std::get<account_base>(events[1]);
+  const account_base& miner_account = std::get<account_base>(events[1]);
+  const account_base& alice = std::get<account_base>(events[2]);
 
   // Find the head block
   block blk_head = get_head_block(events);
@@ -114,10 +116,13 @@ bool gen_fcmp_tx_double_spend::generate(std::vector<test_event_entry>& events) c
 {
   uint64_t ts_start = 1338224400;
 
-  MAKE_ACCOUNT(events, miner_account);
-  MAKE_ACCOUNT(events, alice);
-  MAKE_ACCOUNT(events, bob);
+  GENERATE_ACCOUNT(miner_account);
+  GENERATE_ACCOUNT(alice);
+  GENERATE_ACCOUNT(bob);
   MAKE_GENESIS_BLOCK(events, blk_0, miner_account, ts_start);
+  events.push_back(miner_account);
+  events.push_back(alice);
+  events.push_back(bob);
   REWIND_BLOCKS_N(events, blk_mature, blk_0, miner_account, 70);
 
   DO_CALLBACK(events, "check_double_spend_rejected");
@@ -128,9 +133,9 @@ bool gen_fcmp_tx_double_spend::check_double_spend_rejected(cryptonote::core& c, 
 {
   DEFINE_TESTS_ERROR_CONTEXT("gen_fcmp_tx_double_spend::check_double_spend_rejected");
 
-  const account_base& miner_account = std::get<account_base>(events[0]);
-  const account_base& alice = std::get<account_base>(events[1]);
-  const account_base& bob = std::get<account_base>(events[2]);
+  const account_base& miner_account = std::get<account_base>(events[1]);
+  const account_base& alice = std::get<account_base>(events[2]);
+  const account_base& bob = std::get<account_base>(events[3]);
   block blk_head = get_head_block(events);
 
   uint64_t amount = TESTS_DEFAULT_FEE * 5;
@@ -176,9 +181,11 @@ bool gen_fcmp_tx_reference_block_too_old::generate(std::vector<test_event_entry>
 {
   uint64_t ts_start = 1338224400;
 
-  MAKE_ACCOUNT(events, miner_account);
-  MAKE_ACCOUNT(events, alice);
+  GENERATE_ACCOUNT(miner_account);
+  GENERATE_ACCOUNT(alice);
   MAKE_GENESIS_BLOCK(events, blk_0, miner_account, ts_start);
+  events.push_back(miner_account);
+  events.push_back(alice);
   REWIND_BLOCKS_N(events, blk_mature, blk_0, miner_account, FCMP_REFERENCE_BLOCK_MAX_AGE + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW + 10);
 
   DO_CALLBACK(events, "check_stale_reference_rejected");
@@ -189,8 +196,8 @@ bool gen_fcmp_tx_reference_block_too_old::check_stale_reference_rejected(crypton
 {
   DEFINE_TESTS_ERROR_CONTEXT("gen_fcmp_tx_reference_block_too_old::check_stale_reference_rejected");
 
-  const account_base& miner_account = std::get<account_base>(events[0]);
-  const account_base& alice = std::get<account_base>(events[1]);
+  const account_base& miner_account = std::get<account_base>(events[1]);
+  const account_base& alice = std::get<account_base>(events[2]);
   block blk_head = get_head_block(events);
 
   // Build a valid FCMP++ tx first
@@ -228,9 +235,11 @@ bool gen_fcmp_tx_reference_block_too_recent::generate(std::vector<test_event_ent
 {
   uint64_t ts_start = 1338224400;
 
-  MAKE_ACCOUNT(events, miner_account);
-  MAKE_ACCOUNT(events, alice);
+  GENERATE_ACCOUNT(miner_account);
+  GENERATE_ACCOUNT(alice);
   MAKE_GENESIS_BLOCK(events, blk_0, miner_account, ts_start);
+  events.push_back(miner_account);
+  events.push_back(alice);
   REWIND_BLOCKS_N(events, blk_mature, blk_0, miner_account, 70);
 
   DO_CALLBACK(events, "check_recent_reference_rejected");
@@ -241,8 +250,8 @@ bool gen_fcmp_tx_reference_block_too_recent::check_recent_reference_rejected(cry
 {
   DEFINE_TESTS_ERROR_CONTEXT("gen_fcmp_tx_reference_block_too_recent::check_recent_reference_rejected");
 
-  const account_base& miner_account = std::get<account_base>(events[0]);
-  const account_base& alice = std::get<account_base>(events[1]);
+  const account_base& miner_account = std::get<account_base>(events[1]);
+  const account_base& alice = std::get<account_base>(events[2]);
   block blk_head = get_head_block(events);
 
   transaction tx;
@@ -282,9 +291,11 @@ bool gen_fcmp_tx_timestamp_unlock_rejected::generate(std::vector<test_event_entr
 {
   uint64_t ts_start = 1338224400;
 
-  MAKE_ACCOUNT(events, miner_account);
-  MAKE_ACCOUNT(events, alice);
+  GENERATE_ACCOUNT(miner_account);
+  GENERATE_ACCOUNT(alice);
   MAKE_GENESIS_BLOCK(events, blk_0, miner_account, ts_start);
+  events.push_back(miner_account);
+  events.push_back(alice);
   REWIND_BLOCKS_N(events, blk_mature, blk_0, miner_account, 70);
 
   DO_CALLBACK(events, "check_timestamp_unlock_rejected");
@@ -295,8 +306,8 @@ bool gen_fcmp_tx_timestamp_unlock_rejected::check_timestamp_unlock_rejected(cryp
 {
   DEFINE_TESTS_ERROR_CONTEXT("gen_fcmp_tx_timestamp_unlock_rejected::check_timestamp_unlock_rejected");
 
-  const account_base& miner_account = std::get<account_base>(events[0]);
-  const account_base& alice = std::get<account_base>(events[1]);
+  const account_base& miner_account = std::get<account_base>(events[1]);
+  const account_base& alice = std::get<account_base>(events[2]);
   block blk_head = get_head_block(events);
 
   transaction tx;
