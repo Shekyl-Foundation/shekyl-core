@@ -219,7 +219,16 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
       set_staker_claim_watermark(claim.staked_output_index, claim.to_height);
       uint64_t pool_balance = get_staker_pool_balance();
       if (claim.amount <= pool_balance)
+      {
         set_staker_pool_balance(pool_balance - claim.amount);
+      }
+      else
+      {
+        LOG_PRINT_L0("WARNING: claim amount " << claim.amount
+          << " exceeds staker pool balance " << pool_balance
+          << " for staked output " << claim.staked_output_index
+          << "; skipping pool decrement");
+      }
     }
     else if (std::holds_alternative<txin_gen>(tx_input))
     {

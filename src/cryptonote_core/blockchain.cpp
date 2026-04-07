@@ -104,8 +104,10 @@ Blockchain::Blockchain(tx_memory_pool& tx_pool) :
   m_stake_ratio_cache_initialized(false),
   m_stake_ratio_cache_height(0),
   m_stake_ratio_cache_total_staked(0),
+  m_stake_ratio_cache_total_weighted(0),
   m_stake_ratio_cache_last_block_hash(crypto::null_hash),
   m_stake_unlock_schedule(),
+  m_stake_unlock_schedule_weighted(),
   m_difficulty_for_next_block_top_hash(crypto::null_hash),
   m_difficulty_for_next_block(1),
   m_btc_valid(false),
@@ -1831,8 +1833,10 @@ uint64_t Blockchain::get_stake_ratio(uint64_t height) const
     m_stake_ratio_cache_initialized = true;
     m_stake_ratio_cache_height = 0;
     m_stake_ratio_cache_total_staked = 0;
+    m_stake_ratio_cache_total_weighted = 0;
     m_stake_ratio_cache_last_block_hash = crypto::null_hash;
     m_stake_unlock_schedule.clear();
+    m_stake_unlock_schedule_weighted.clear();
   };
 
   if (!m_stake_ratio_cache_initialized || height < m_stake_ratio_cache_height)
@@ -1853,16 +1857,26 @@ uint64_t Blockchain::get_stake_ratio(uint64_t height) const
       if (!staked || staked->lock_until <= eval_height)
         continue;
 
-      if (out.amount > UINT64_MAX - m_stake_ratio_cache_total_staked)
+      const uint64_t raw = out.amount;
+      const uint64_t weighted = shekyl_stake_weight(raw, staked->lock_tier);
+
+      if (raw > UINT64_MAX - m_stake_ratio_cache_total_staked)
         m_stake_ratio_cache_total_staked = UINT64_MAX;
       else
-        m_stake_ratio_cache_total_staked += out.amount;
+        m_stake_ratio_cache_total_staked += raw;
 
-      uint64_t &scheduled_unlock = m_stake_unlock_schedule[staked->lock_until];
-      if (out.amount > UINT64_MAX - scheduled_unlock)
-        scheduled_unlock = UINT64_MAX;
+      if (weighted > UINT64_MAX - m_stake_ratio_cache_total_weighted)
+        m_stake_ratio_cache_total_weighted = UINT64_MAX;
       else
-        scheduled_unlock += out.amount;
+        m_stake_ratio_cache_total_weighted += weighted;
+
+      uint64_t &sched_raw = m_stake_unlock_schedule[staked->lock_until];
+      if (raw > UINT64_MAX - sched_raw) sched_raw = UINT64_MAX;
+      else sched_raw += raw;
+
+      uint64_t &sched_w = m_stake_unlock_schedule_weighted[staked->lock_until];
+      if (weighted > UINT64_MAX - sched_w) sched_w = UINT64_MAX;
+      else sched_w += weighted;
     }
   };
 
@@ -1877,6 +1891,16 @@ uint64_t Blockchain::get_stake_ratio(uint64_t height) const
       else
         m_stake_ratio_cache_total_staked -= unlock_it->second;
       m_stake_unlock_schedule.erase(unlock_it);
+    }
+
+    auto unlock_w_it = m_stake_unlock_schedule_weighted.find(next_eval_height);
+    if (unlock_w_it != m_stake_unlock_schedule_weighted.end())
+    {
+      if (unlock_w_it->second >= m_stake_ratio_cache_total_weighted)
+        m_stake_ratio_cache_total_weighted = 0;
+      else
+        m_stake_ratio_cache_total_weighted -= unlock_w_it->second;
+      m_stake_unlock_schedule_weighted.erase(unlock_w_it);
     }
 
     const block blk = m_db->get_block_from_height(m_stake_ratio_cache_height);
@@ -3966,11 +3990,16 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
     return false;
   }
 
-  if (staked_lock_until > current_height)
+  // Accrual cap: rewards accrue only during the committed lock period.
+  // Combined with the to_height <= current_height check above, this
+  // enforces to_height <= min(current_height, lock_until).
+  // NOTE: there is intentionally no rejection for lock_until > current_height.
+  // The principal lock gates spendability (unstake), not reward claimability.
+  if (claim.to_height > staked_lock_until)
   {
-    MERROR_VER("Staked output " << claim.staked_output_index
-      << " is still locked until height " << staked_lock_until
-      << " (current " << current_height << ")");
+    MERROR_VER("Claim to_height " << claim.to_height
+      << " exceeds staked output lock_until " << staked_lock_until
+      << " for output " << claim.staked_output_index);
     return false;
   }
 
@@ -4665,13 +4694,25 @@ leave:
     BlockchainDB::staker_accrual_record accrual_record;
     accrual_record.staker_emission = em_split.staker_emission;
     accrual_record.staker_fee_pool = burn.staker_pool_amount;
-    accrual_record.total_weighted_stake = m_stake_ratio_cache_total_staked;
+    accrual_record.total_weighted_stake = m_stake_ratio_cache_total_weighted;
     accrual_record.actually_destroyed = burn.actually_destroyed;
     m_db->add_staker_accrual(blockchain_height, accrual_record);
 
-    uint64_t pool_balance = m_db->get_staker_pool_balance();
-    pool_balance += em_split.staker_emission + burn.staker_pool_amount;
-    m_db->set_staker_pool_balance(pool_balance);
+    const uint64_t staker_inflow = em_split.staker_emission + burn.staker_pool_amount;
+
+    if (m_stake_ratio_cache_total_weighted > 0)
+    {
+      // Active stakers exist: add inflow to the claimable pool
+      uint64_t pool_balance = m_db->get_staker_pool_balance();
+      pool_balance += staker_inflow;
+      m_db->set_staker_pool_balance(pool_balance);
+    }
+    else if (staker_inflow > 0)
+    {
+      // No stakers: burn the would-be staker inflow to avoid
+      // accumulating unclaimed funds that distort pool_balance.
+      burn.actually_destroyed += staker_inflow;
+    }
 
     if (burn.actually_destroyed > 0)
     {

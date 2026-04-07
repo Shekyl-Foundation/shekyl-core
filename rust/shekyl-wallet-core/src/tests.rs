@@ -1,0 +1,244 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+#[cfg(test)]
+mod lifecycle {
+    use shekyl_scanner::{
+        WalletState,
+        staker_pool::AccrualRecord,
+    };
+    use shekyl_oxide::transaction::StakingMeta;
+
+    use crate::{
+        claim_builder::ClaimTxBuilder,
+        workflow::plan_claim_and_unstake,
+        error::WalletCoreError,
+    };
+
+    fn make_wallet_output(
+        tx_hash: [u8; 32],
+        _index: u64,
+        global_index: u64,
+        amount: u64,
+        staking: Option<StakingMeta>,
+    ) -> shekyl_scanner::WalletOutput {
+        use curve25519_dalek::{Scalar, constants::ED25519_BASEPOINT_TABLE};
+        use shekyl_oxide::primitives::Commitment;
+
+        let mut bytes = [0u8; 32];
+        bytes[..8].copy_from_slice(&global_index.to_le_bytes());
+        let scalar = Scalar::from_bytes_mod_order(bytes);
+        let key = &scalar * ED25519_BASEPOINT_TABLE;
+
+        shekyl_scanner::WalletOutput::new_for_test(
+            tx_hash, 0, global_index,
+            key, Scalar::ZERO,
+            Commitment { mask: Scalar::ONE, amount },
+            staking,
+        )
+    }
+
+    fn simple_weight_fn(amount: u64, tier: u8) -> u64 {
+        let multiplier = match tier {
+            0 => 100,
+            1 => 150,
+            2 => 200,
+            _ => 100,
+        };
+        amount * multiplier / 100
+    }
+
+    fn setup_wallet_with_staked_output(
+        amount: u64,
+        tier: u8,
+        lock_until: u64,
+        creation_height: u64,
+    ) -> WalletState {
+        let mut ws = WalletState::new();
+        let output = make_wallet_output(
+            [1; 32], 0, 100, amount,
+            Some(StakingMeta { lock_tier: tier, lock_until }),
+        );
+        ws.process_scanned_outputs(
+            creation_height,
+            [0xAA; 32],
+            shekyl_scanner::scan::Timelocked::from_vec(vec![output]),
+        );
+        ws
+    }
+
+    fn populate_accrual(ws: &mut WalletState, from: u64, to: u64, emission: u64, total_weighted: u64) {
+        for h in from..=to {
+            ws.insert_accrual(h, AccrualRecord {
+                staker_emission: emission,
+                staker_fee_pool: 0,
+                total_weighted_stake: total_weighted,
+            });
+        }
+    }
+
+    // ── Claim builder tests ──
+
+    #[test]
+    fn plan_all_claims_basic() {
+        let mut ws = setup_wallet_with_staked_output(
+            5_000_000_000, 1, 50000, 1000,
+        );
+        populate_accrual(&mut ws, 1001, 5000, 100_000, 10_000_000_000);
+
+        let builder = ClaimTxBuilder::new(10000);
+        let plan = builder.plan_all(&ws, 5000, simple_weight_fn).unwrap();
+
+        assert_eq!(plan.claims.len(), 1);
+        assert_eq!(plan.claims[0].from_height, 1000);
+        assert_eq!(plan.claims[0].to_height, 5000);
+        assert!(plan.total_reward > 0);
+    }
+
+    #[test]
+    fn plan_claim_splits_large_ranges() {
+        let mut ws = setup_wallet_with_staked_output(
+            5_000_000_000, 2, 100000, 1000,
+        );
+        populate_accrual(&mut ws, 1001, 12000, 100_000, 10_000_000_000);
+
+        let builder = ClaimTxBuilder::new(5000);
+        let plan = builder.plan_all(&ws, 12000, simple_weight_fn).unwrap();
+
+        // Range is 11000 blocks, max_claim_range is 5000, so 3 chunks
+        assert!(plan.claims.len() >= 3);
+    }
+
+    #[test]
+    fn plan_claim_respects_watermark() {
+        let mut ws = setup_wallet_with_staked_output(
+            5_000_000_000, 0, 50000, 1000,
+        );
+        populate_accrual(&mut ws, 1001, 10000, 100_000, 10_000_000_000);
+
+        // Advance watermark to 5000
+        ws.update_claim_watermark(100, 5000);
+
+        let builder = ClaimTxBuilder::new(10000);
+        let plan = builder.plan_all(&ws, 10000, simple_weight_fn).unwrap();
+
+        // Claim should start from watermark 5000, not creation height 1000
+        assert_eq!(plan.claims[0].from_height, 5000);
+    }
+
+    #[test]
+    fn plan_claim_errors_on_no_claimable() {
+        let mut ws = setup_wallet_with_staked_output(
+            5_000_000_000, 0, 10000, 1000,
+        );
+        // Drain the watermark fully
+        ws.update_claim_watermark(100, 10000);
+
+        let builder = ClaimTxBuilder::new(10000);
+        let result = builder.plan_all(&ws, 15000, simple_weight_fn);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn plan_specific_rejects_non_staked() {
+        let mut ws = WalletState::new();
+        let output = make_wallet_output([2; 32], 0, 200, 1_000_000_000, None);
+        ws.process_scanned_outputs(
+            1000,
+            [0xBB; 32],
+            shekyl_scanner::scan::Timelocked::from_vec(vec![output]),
+        );
+
+        let builder = ClaimTxBuilder::new(10000);
+        let result = builder.plan_specific(&ws, &[0], 5000, simple_weight_fn);
+        assert!(matches!(result, Err(WalletCoreError::NotStaked { .. })));
+    }
+
+    // ── Claim-and-unstake workflow ──
+
+    #[test]
+    fn claim_and_unstake_with_backlog() {
+        let mut ws = setup_wallet_with_staked_output(
+            5_000_000_000, 0, 10000, 1000,
+        );
+        populate_accrual(&mut ws, 1001, 10000, 100_000, 10_000_000_000);
+
+        let plan = plan_claim_and_unstake(
+            &ws, &[0], 15000, 10000, simple_weight_fn,
+        ).unwrap();
+
+        assert!(plan.claim_plan.is_some());
+        assert_eq!(plan.unstake_indices, vec![0]);
+        assert_eq!(plan.total_unstake_amount, 5_000_000_000);
+    }
+
+    #[test]
+    fn claim_and_unstake_no_backlog() {
+        let mut ws = setup_wallet_with_staked_output(
+            5_000_000_000, 0, 10000, 1000,
+        );
+        // Fully drained
+        ws.update_claim_watermark(100, 10000);
+
+        let plan = plan_claim_and_unstake(
+            &ws, &[0], 15000, 10000, simple_weight_fn,
+        ).unwrap();
+
+        assert!(plan.claim_plan.is_none());
+        assert_eq!(plan.unstake_indices, vec![0]);
+    }
+
+    #[test]
+    fn claim_and_unstake_rejects_locked() {
+        let ws = setup_wallet_with_staked_output(
+            5_000_000_000, 2, 50000, 1000,
+        );
+
+        let result = plan_claim_and_unstake(
+            &ws, &[0], 5000, 10000, simple_weight_fn,
+        );
+        assert!(matches!(result, Err(WalletCoreError::NotMatured { .. })));
+    }
+
+    #[test]
+    fn claim_and_unstake_rejects_spent() {
+        let mut ws = setup_wallet_with_staked_output(
+            5_000_000_000, 0, 10000, 1000,
+        );
+        ws.set_key_image(0, [0xFF; 32]);
+        ws.detect_spends(15000, &[[0xFF; 32]]);
+
+        let result = plan_claim_and_unstake(
+            &ws, &[0], 15000, 10000, simple_weight_fn,
+        );
+        assert!(matches!(result, Err(WalletCoreError::AlreadySpent { .. })));
+    }
+
+    // ── Reward computation parity ──
+
+    #[test]
+    fn reward_matches_manual_calculation() {
+        let amount = 10_000_000_000u64; // 10 SKL
+        let tier = 1u8;
+        let weight = simple_weight_fn(amount, tier); // 15_000_000_000
+
+        let emission = 1_000_000u64;
+        let total_weighted = 100_000_000_000u64;
+
+        // Manual per-block: (1_000_000 * 15_000_000_000) / 100_000_000_000 = 150_000
+        let expected_per_block = ((emission as u128 * weight as u128)
+            / total_weighted as u128) as u64;
+        assert_eq!(expected_per_block, 150_000);
+
+        let mut ws = setup_wallet_with_staked_output(amount, tier, 50000, 1000);
+        populate_accrual(&mut ws, 1001, 1010, emission, total_weighted);
+
+        let builder = ClaimTxBuilder::new(10000);
+        let plan = builder.plan_all(&ws, 1010, simple_weight_fn).unwrap();
+
+        // 10 blocks * 150_000 = 1_500_000
+        assert_eq!(plan.total_reward, 1_500_000);
+    }
+}

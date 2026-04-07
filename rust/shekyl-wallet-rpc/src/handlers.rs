@@ -29,6 +29,10 @@ const SCANNER_METHODS: &[&str] = &[
     "get_height",
     "get_staked_outputs",
     "get_staked_balance",
+    "get_claimable_stakes",
+    "get_unstakeable_outputs",
+    "freeze",
+    "thaw",
 ];
 
 /// Dispatch a JSON-RPC method call.
@@ -71,6 +75,10 @@ fn dispatch_scanner_method(
         "incoming_transfers" => scanner_incoming_transfers(scanner, params),
         "get_staked_outputs" => scanner_get_staked_outputs(scanner),
         "get_staked_balance" => scanner_get_staked_balance(scanner),
+        "get_claimable_stakes" => scanner_get_claimable_stakes(scanner),
+        "get_unstakeable_outputs" => scanner_get_unstakeable_outputs(scanner),
+        "freeze" => scanner_freeze(scanner, params),
+        "thaw" => scanner_thaw(scanner, params),
         "get_transfer_by_txid" | "get_payments" | "get_bulk_payments" => {
             Err(WalletError {
                 code: -1,
@@ -218,6 +226,138 @@ fn scanner_get_staked_balance(
         "staked_matured": summary.staked_matured,
         "staked_locked": summary.staked_locked,
     }))
+}
+
+#[cfg(feature = "rust-scanner")]
+fn scanner_get_claimable_stakes(
+    scanner: &ScannerState,
+) -> Result<Value, WalletError> {
+    let state = scanner.state.lock().map_err(|e| WalletError {
+        code: -1,
+        message: format!("scanner lock poisoned: {e}"),
+    })?;
+    let height = state.height();
+
+    let claimable: Vec<Value> = state
+        .claimable_outputs(height)
+        .iter()
+        .map(|td| {
+            let accrual_cap = std::cmp::min(height, td.stake_lock_until);
+            let watermark = if td.last_claimed_height > 0 {
+                td.last_claimed_height
+            } else {
+                td.block_height
+            };
+            serde_json::json!({
+                "tx_hash": hex::encode(td.tx_hash),
+                "global_output_index": td.global_output_index,
+                "amount": td.amount(),
+                "tier": td.stake_tier,
+                "lock_until": td.stake_lock_until,
+                "from_height": watermark,
+                "to_height": accrual_cap,
+                "accrual_frozen": height >= td.stake_lock_until,
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({ "claimable_stakes": claimable }))
+}
+
+#[cfg(feature = "rust-scanner")]
+fn scanner_get_unstakeable_outputs(
+    scanner: &ScannerState,
+) -> Result<Value, WalletError> {
+    let state = scanner.state.lock().map_err(|e| WalletError {
+        code: -1,
+        message: format!("scanner lock poisoned: {e}"),
+    })?;
+    let height = state.height();
+
+    let unstakeable: Vec<Value> = state
+        .unstakeable_outputs(height)
+        .iter()
+        .map(|td| {
+            serde_json::json!({
+                "tx_hash": hex::encode(td.tx_hash),
+                "global_output_index": td.global_output_index,
+                "amount": td.amount(),
+                "tier": td.stake_tier,
+                "lock_until": td.stake_lock_until,
+                "has_unclaimed_backlog": td.has_claimable_rewards(height),
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({ "unstakeable_outputs": unstakeable }))
+}
+
+#[cfg(feature = "rust-scanner")]
+fn scanner_freeze(
+    scanner: &ScannerState,
+    params: Value,
+) -> Result<Value, WalletError> {
+    let key_image = params
+        .get("key_image")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| WalletError {
+            code: -1,
+            message: "missing key_image parameter".to_string(),
+        })?;
+    let ki_bytes = hex::decode(key_image).map_err(|e| WalletError {
+        code: -1,
+        message: format!("invalid key_image hex: {e}"),
+    })?;
+    if ki_bytes.len() != 32 {
+        return Err(WalletError {
+            code: -1,
+            message: "key_image must be 32 bytes".to_string(),
+        });
+    }
+    let mut ki = [0u8; 32];
+    ki.copy_from_slice(&ki_bytes);
+
+    let mut state = scanner.state.lock().map_err(|e| WalletError {
+        code: -1,
+        message: format!("scanner lock poisoned: {e}"),
+    })?;
+
+    let frozen = state.freeze_by_key_image(&ki);
+    Ok(serde_json::json!({ "frozen": frozen }))
+}
+
+#[cfg(feature = "rust-scanner")]
+fn scanner_thaw(
+    scanner: &ScannerState,
+    params: Value,
+) -> Result<Value, WalletError> {
+    let key_image = params
+        .get("key_image")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| WalletError {
+            code: -1,
+            message: "missing key_image parameter".to_string(),
+        })?;
+    let ki_bytes = hex::decode(key_image).map_err(|e| WalletError {
+        code: -1,
+        message: format!("invalid key_image hex: {e}"),
+    })?;
+    if ki_bytes.len() != 32 {
+        return Err(WalletError {
+            code: -1,
+            message: "key_image must be 32 bytes".to_string(),
+        });
+    }
+    let mut ki = [0u8; 32];
+    ki.copy_from_slice(&ki_bytes);
+
+    let mut state = scanner.state.lock().map_err(|e| WalletError {
+        code: -1,
+        message: format!("scanner lock poisoned: {e}"),
+    })?;
+
+    let thawed = state.thaw_by_key_image(&ki);
+    Ok(serde_json::json!({ "thawed": thawed }))
 }
 
 #[cfg(feature = "rust-scanner")]

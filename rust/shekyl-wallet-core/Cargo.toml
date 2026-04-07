@@ -1,0 +1,17 @@
+[package]
+name = "shekyl-wallet-core"
+version = "2.0.0"
+edition = "2021"
+license = "BSD-3-Clause"
+description = "Shekyl wallet core: transaction builders for stake, unstake, and claim operations"
+
+[dependencies]
+shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-scanner = { path = "../shekyl-scanner" }
+shekyl-staking = { path = "../shekyl-staking" }
+thiserror = "2"
+
+[dev-dependencies]
+curve25519-dalek = { version = "4", features = ["alloc"] }
+shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }

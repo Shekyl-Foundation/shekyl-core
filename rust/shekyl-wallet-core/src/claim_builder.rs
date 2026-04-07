@@ -1,0 +1,180 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! Claim transaction builder.
+//!
+//! Constructs a plan for claiming staked rewards. The actual transaction
+//! assembly (PQC signing, RCT proofs) is deferred to the FFI layer or
+//! the tx-builder crate, but this module computes the correct claim
+//! parameters: from_height, to_height, estimated reward, and splitting.
+
+use shekyl_scanner::{
+    WalletState,
+    ClaimableInfo,
+};
+
+use crate::error::WalletCoreError;
+
+/// A plan for a single claim input within a claim transaction.
+#[derive(Clone, Debug)]
+pub struct ClaimInputPlan {
+    /// Index into the wallet's transfer list.
+    pub transfer_index: usize,
+    /// Global output index of the staked output.
+    pub global_output_index: u64,
+    /// Claim range start (exclusive).
+    pub from_height: u64,
+    /// Claim range end (inclusive).
+    pub to_height: u64,
+    /// Estimated reward for this claim.
+    pub estimated_reward: u64,
+    /// Staking tier.
+    pub tier: u8,
+    /// Whether accrual has frozen (past lock_until).
+    pub accrual_frozen: bool,
+}
+
+/// A complete plan for a claim transaction (potentially multiple inputs).
+#[derive(Clone, Debug)]
+pub struct ClaimTxPlan {
+    /// Individual claim inputs.
+    pub claims: Vec<ClaimInputPlan>,
+    /// Total estimated reward across all claims.
+    pub total_reward: u64,
+}
+
+/// Builder for constructing claim transaction plans.
+pub struct ClaimTxBuilder {
+    max_claim_range: u64,
+}
+
+impl ClaimTxBuilder {
+    pub fn new(max_claim_range: u64) -> Self {
+        ClaimTxBuilder { max_claim_range }
+    }
+
+    /// Build a claim plan for all claimable outputs in the wallet.
+    pub fn plan_all<F>(
+        &self,
+        wallet: &WalletState,
+        current_height: u64,
+        weight_fn: F,
+    ) -> Result<ClaimTxPlan, WalletCoreError>
+    where
+        F: Fn(u64, u8) -> u64,
+    {
+        let claimable = wallet.claimable_outputs(current_height);
+        if claimable.is_empty() {
+            return Err(WalletCoreError::NoClaimableOutputs);
+        }
+
+        let pool = wallet.staker_pool();
+        let mut claims = Vec::new();
+        let mut total_reward = 0u64;
+
+        for td in &claimable {
+            let idx = wallet.transfers().iter().position(|t| {
+                t.global_output_index == td.global_output_index
+            }).unwrap_or(0);
+
+            if let Some(info) = ClaimableInfo::from_transfer(td, idx, current_height) {
+                let weight = weight_fn(td.amount(), td.stake_tier);
+
+                // Split if range exceeds max
+                let mut cursor = info.from_height;
+                while cursor < info.to_height {
+                    let chunk_end = std::cmp::min(
+                        cursor + self.max_claim_range,
+                        info.to_height,
+                    );
+                    let reward = pool.estimate_reward(cursor, chunk_end, weight);
+                    claims.push(ClaimInputPlan {
+                        transfer_index: idx,
+                        global_output_index: td.global_output_index,
+                        from_height: cursor,
+                        to_height: chunk_end,
+                        estimated_reward: reward,
+                        tier: td.stake_tier,
+                        accrual_frozen: info.accrual_frozen,
+                    });
+                    total_reward = total_reward.saturating_add(reward);
+                    cursor = chunk_end;
+                }
+            }
+        }
+
+        if total_reward == 0 {
+            return Err(WalletCoreError::ZeroReward);
+        }
+
+        Ok(ClaimTxPlan {
+            claims,
+            total_reward,
+        })
+    }
+
+    /// Build a claim plan for a specific set of transfer indices.
+    pub fn plan_specific<F>(
+        &self,
+        wallet: &WalletState,
+        indices: &[usize],
+        current_height: u64,
+        weight_fn: F,
+    ) -> Result<ClaimTxPlan, WalletCoreError>
+    where
+        F: Fn(u64, u8) -> u64,
+    {
+        let transfers = wallet.transfers();
+        let pool = wallet.staker_pool();
+        let mut claims = Vec::new();
+        let mut total_reward = 0u64;
+
+        for &idx in indices {
+            let td = transfers.get(idx)
+                .ok_or(WalletCoreError::NotStaked { index: idx })?;
+
+            if !td.staked {
+                return Err(WalletCoreError::NotStaked { index: idx });
+            }
+            if td.spent {
+                return Err(WalletCoreError::AlreadySpent { index: idx });
+            }
+
+            let info = ClaimableInfo::from_transfer(td, idx, current_height)
+                .ok_or(WalletCoreError::NoBacklog { index: idx })?;
+
+            let weight = weight_fn(td.amount(), td.stake_tier);
+
+            let mut cursor = info.from_height;
+            while cursor < info.to_height {
+                let chunk_end = std::cmp::min(
+                    cursor + self.max_claim_range,
+                    info.to_height,
+                );
+                let reward = pool.estimate_reward(cursor, chunk_end, weight);
+                claims.push(ClaimInputPlan {
+                    transfer_index: idx,
+                    global_output_index: td.global_output_index,
+                    from_height: cursor,
+                    to_height: chunk_end,
+                    estimated_reward: reward,
+                    tier: td.stake_tier,
+                    accrual_frozen: info.accrual_frozen,
+                });
+                total_reward = total_reward.saturating_add(reward);
+                cursor = chunk_end;
+            }
+        }
+
+        if total_reward == 0 {
+            return Err(WalletCoreError::ZeroReward);
+        }
+
+        Ok(ClaimTxPlan {
+            claims,
+            total_reward,
+        })
+    }
+}

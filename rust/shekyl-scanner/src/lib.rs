@@ -26,6 +26,12 @@ pub mod scan;
 pub mod transfer;
 pub mod wallet_state;
 pub mod balance;
+pub mod claim;
+pub mod coin_select;
+pub mod staker_pool;
+
+#[cfg(test)]
+pub(crate) mod tests;
 
 pub use subaddress::SubaddressIndex;
 pub use extra::{PaymentId, Extra, ExtraField};
@@ -36,3 +42,5 @@ pub use scan::{Timelocked, ScanError, Scanner, GuaranteedScanner};
 pub use transfer::TransferDetails;
 pub use wallet_state::WalletState;
 pub use balance::BalanceSummary;
+pub use claim::ClaimableInfo;
+pub use staker_pool::{StakerPoolState, AccrualRecord, ConservationCheck};

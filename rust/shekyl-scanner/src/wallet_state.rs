@@ -13,6 +13,8 @@ use crate::{
     scan::Timelocked,
     transfer::TransferDetails,
     balance::BalanceSummary,
+    staker_pool::{StakerPoolState, AccrualRecord},
+    claim::ClaimableInfo,
 };
 
 /// The wallet's in-memory state, tracking all known transfers and their statuses.
@@ -27,6 +29,8 @@ pub struct WalletState {
     synced_height: u64,
     /// Chain of block hashes for reorg detection.
     blockchain: Vec<[u8; 32]>,
+    /// Staker pool accrual data for local reward estimation.
+    staker_pool: StakerPoolState,
 }
 
 impl WalletState {
@@ -38,6 +42,7 @@ impl WalletState {
             pub_keys: HashMap::new(),
             synced_height: 0,
             blockchain: Vec::new(),
+            staker_pool: StakerPoolState::new(),
         }
     }
 
@@ -138,6 +143,32 @@ impl WalletState {
         }
     }
 
+    /// Update the claim watermark for a staked output identified by global output index.
+    pub fn update_claim_watermark(&mut self, global_output_index: u64, to_height: u64) {
+        for td in &mut self.transfers {
+            if td.staked && td.global_output_index == global_output_index {
+                td.last_claimed_height = to_height;
+                return;
+            }
+        }
+    }
+
+    /// Get staked outputs that have unclaimed reward backlog.
+    pub fn claimable_outputs(&self, current_height: u64) -> Vec<&TransferDetails> {
+        self.transfers
+            .iter()
+            .filter(|td| td.has_claimable_rewards(current_height))
+            .collect()
+    }
+
+    /// Get staked outputs that are eligible for unstaking (matured, unspent).
+    pub fn unstakeable_outputs(&self, current_height: u64) -> Vec<&TransferDetails> {
+        self.transfers
+            .iter()
+            .filter(|td| td.is_unstakeable(current_height))
+            .collect()
+    }
+
     /// Compute balance summary at the given height.
     pub fn balance(&self, current_height: u64) -> BalanceSummary {
         BalanceSummary::compute(&self.transfers, current_height)
@@ -209,6 +240,123 @@ impl WalletState {
                 self.key_images.insert(*ki, idx);
             }
         }
+
+        self.staker_pool.handle_reorg(fork_height);
+    }
+
+    /// Get spendable outputs with optional account/subaddress/amount filters.
+    pub fn spendable_outputs(
+        &self,
+        current_height: u64,
+        account: Option<u32>,
+        subaddress: Option<crate::SubaddressIndex>,
+        min_amount: Option<u64>,
+    ) -> Vec<(usize, &TransferDetails)> {
+        self.transfers
+            .iter()
+            .enumerate()
+            .filter(|(_, td)| {
+                if !td.is_spendable(current_height) {
+                    return false;
+                }
+                if let Some(acct) = account {
+                    match td.subaddress {
+                        Some(sa) if sa.account() == acct => {}
+                        None if acct == 0 => {} // primary account
+                        _ => return false,
+                    }
+                }
+                if let Some(sub) = subaddress {
+                    if td.subaddress != Some(sub) {
+                        return false;
+                    }
+                }
+                if let Some(min) = min_amount {
+                    if td.amount() < min {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect()
+    }
+
+    /// Freeze an output, preventing it from being selected for spending.
+    pub fn freeze(&mut self, transfer_idx: usize) -> bool {
+        if let Some(td) = self.transfers.get_mut(transfer_idx) {
+            td.frozen = true;
+            return true;
+        }
+        false
+    }
+
+    /// Thaw a frozen output, making it available for spending again.
+    pub fn thaw(&mut self, transfer_idx: usize) -> bool {
+        if let Some(td) = self.transfers.get_mut(transfer_idx) {
+            td.frozen = false;
+            return true;
+        }
+        false
+    }
+
+    /// Freeze an output by its key image.
+    pub fn freeze_by_key_image(&mut self, key_image: &[u8; 32]) -> bool {
+        if let Some(&idx) = self.key_images.get(key_image) {
+            return self.freeze(idx);
+        }
+        false
+    }
+
+    /// Thaw an output by its key image.
+    pub fn thaw_by_key_image(&mut self, key_image: &[u8; 32]) -> bool {
+        if let Some(&idx) = self.key_images.get(key_image) {
+            return self.thaw(idx);
+        }
+        false
+    }
+
+    /// Get a mutable reference to a transfer by index.
+    pub fn transfer_mut(&mut self, idx: usize) -> Option<&mut TransferDetails> {
+        self.transfers.get_mut(idx)
+    }
+
+    /// Insert a staker pool accrual record.
+    pub fn insert_accrual(&mut self, height: u64, record: AccrualRecord) {
+        self.staker_pool.insert(height, record);
+    }
+
+    /// Access the staker pool state.
+    pub fn staker_pool(&self) -> &StakerPoolState {
+        &self.staker_pool
+    }
+
+    /// Compute a summary of claimable rewards for all staked outputs.
+    ///
+    /// `weight_fn` computes the tier-weighted stake for each output.
+    /// `max_claim_range` is the protocol's MAX_CLAIM_RANGE constant.
+    pub fn claimable_rewards_summary<F>(
+        &self,
+        current_height: u64,
+        weight_fn: F,
+        max_claim_range: u64,
+    ) -> Vec<(ClaimableInfo, u64)>
+    where
+        F: Fn(u64, u8) -> u64,
+    {
+        let mut results = Vec::new();
+        for (idx, td) in self.transfers.iter().enumerate() {
+            if let Some(info) = ClaimableInfo::from_transfer(td, idx, current_height) {
+                let weight = weight_fn(td.amount(), td.stake_tier);
+                let (reward, _chunks) = self.staker_pool.estimate_reward_with_splitting(
+                    info.from_height,
+                    info.to_height,
+                    weight,
+                    max_claim_range,
+                );
+                results.push((info, reward));
+            }
+        }
+        results
     }
 
     /// The number of tracked transfers.

@@ -2,6 +2,79 @@
 
 ## Unreleased
 
+### ✨ Added
+
+- **`shekyl-wallet-core` crate.** New Rust crate providing transaction builder
+  plans for stake, unstake, and claim operations. Includes `ClaimTxBuilder` for
+  constructing claim transaction plans with automatic MAX_CLAIM_RANGE splitting,
+  and `ClaimAndUnstakePlan` for the two-step drain-then-unstake workflow.
+
+- **Coin selection module (`shekyl-scanner/coin_select.rs`).** Min-relatedness
+  output selection algorithm that prefers combining outputs with fewer shared
+  metadata fingerprints (tx hash, block height, subaddress, tier) for improved
+  on-chain privacy. Supports dust separation and configurable selection criteria.
+
+- **Output freezing and coin control.** `WalletState` now supports freeze/thaw
+  of individual outputs by index or key image, with frozen outputs excluded from
+  spendable candidate lists. New `spendable_outputs()` method with optional
+  account, subaddress, and minimum amount filters.
+
+- **Staker pool tracking in Rust (`shekyl-scanner/staker_pool.rs`).** Wallet-side
+  `StakerPoolState` mirrors per-block accrual records from the daemon, enabling
+  local reward estimation without RPC round-trips. Supports reorg handling and
+  conservation invariant checking.
+
+- **Claim watermark tracking.** `TransferDetails` now carries `last_claimed_height`
+  for monotonic claim watermark management. `WalletState` exposes
+  `update_claim_watermark()`, `claimable_outputs()`, and
+  `claimable_rewards_summary()` methods. New `ClaimableInfo` struct provides
+  per-output claim state including accrual frozen status.
+
+- **New RPC methods.** `get_claimable_stakes`, `get_unstakeable_outputs`,
+  `freeze`, and `thaw` added to the Rust scanner-backed RPC handler. All four
+  are routed through the Rust scanner when `rust-scanner` feature is active.
+
+- **GUI wallet staking bridge.** `wallet_bridge.rs` extended with
+  `get_scanner_claimable_stakes`, `get_scanner_unstakeable_outputs`,
+  `scanner_freeze`, and `scanner_thaw` for Tauri frontend integration.
+
+- **Staking transaction types in `shekyl-oxide`.** `Input::StakeClaim` variant
+  (binary tag 0x03) and `Output::staking: Option<StakingMeta>` (binary tag 0x04)
+  added with full binary serialization/deserialization. `StakingMeta` carries
+  `lock_tier` and `lock_until` fields.
+
+- **Property-based staking tests.** 11 new property tests in `shekyl-staking`:
+  conservation across uniform/mixed/stress scenarios, proportionality, floor
+  division safety, weight function validation, multi-block accumulation bounds,
+  and adversarial edge cases.
+
+### 🐛 Fixed
+
+- **Critical: weighted denominator bug in staker reward accrual.** The per-block
+  `total_weighted_stake` was computed from raw staked amounts instead of
+  tier-weighted amounts, causing proportional over-distribution (up to +100% when
+  all stakers use the Long tier). Fixed by introducing separate caches for raw
+  and tier-weighted stake amounts in `blockchain.h`/`blockchain.cpp`.
+
+- **Claim timing: lock conflated with claimability.** `check_stake_claim_input`
+  incorrectly rejected claims when `lock_until > current_height`, making rewards
+  unclaimable during the lock period. Fixed by removing the lock-based rejection
+  and adding `to_height <= min(current_height, lock_until)` enforcement. Wallet
+  filters updated to include both locked and matured-but-unspent outputs.
+
+- **Zero-staker blocks: unclaimed pool accumulation.** When no stakers existed,
+  staker emission and fee pool amounts accumulated in `staker_pool_balance`
+  indefinitely. Fixed to burn these amounts when `total_weighted_stake == 0`.
+
+- **Staked outputs incorrectly spendable.** `is_spendable()` allowed spending
+  staked outputs after maturity. Fixed: staked outputs are never directly
+  spendable -- they must go through the unstake path.
+
+- **Claim watermark not persisted.** Added `m_last_claimed_height` to
+  `transfer_details` (C++ wallet) and `TransferDetails` (Rust scanner) with
+  serialization. FFI layer now calls `update_claim_watermarks()` after
+  committing claim transactions.
+
 ### 🔄 Changed
 
 - **`MAX_TX_EXTRA_SIZE` (24576 bytes).** The previous Monero-era cap (1060) was

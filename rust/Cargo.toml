@@ -32,6 +32,9 @@ members = [
 
     # Shekyl-native scanner crate
     "shekyl-scanner",
+
+    # Shekyl wallet core: transaction builders
+    "shekyl-wallet-core",
 ]
 resolver = "2"
 

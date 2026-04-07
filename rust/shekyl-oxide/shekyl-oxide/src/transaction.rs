@@ -50,6 +50,19 @@ pub enum Input {
     /// The key image (linking tag, nullifier) for the spent output.
     key_image: CompressedPoint,
   },
+  /// A stake reward claim input (tag 0x03 in binary serialization).
+  StakeClaim {
+    /// Claimed reward amount.
+    amount: u64,
+    /// Global output index of the staked output being claimed against.
+    staked_output_index: u64,
+    /// Claim range start (exclusive: last_claimed_height or creation height).
+    from_height: u64,
+    /// Claim range end (inclusive); capped at min(current_height, lock_until).
+    to_height: u64,
+    /// Prevents double-claim for this range.
+    key_image: CompressedPoint,
+  },
 }
 
 impl Input {
@@ -64,6 +77,14 @@ impl Input {
         w.write_all(&[2])?;
         write_varint(&amount.unwrap_or(0), w)?;
         write_vec(write_varint, key_offsets, w)?;
+        key_image.write(w)
+      }
+      Input::StakeClaim { amount, staked_output_index, from_height, to_height, key_image } => {
+        w.write_all(&[3])?;
+        write_varint(amount, w)?;
+        write_varint(staked_output_index, w)?;
+        write_varint(from_height, w)?;
+        write_varint(to_height, w)?;
         key_image.write(w)
       }
     }
@@ -89,6 +110,13 @@ impl Input {
           key_image: CompressedPoint::read(r)?,
         }
       }
+      3 => Input::StakeClaim {
+        amount: read_varint(r)?,
+        staked_output_index: read_varint(r)?,
+        from_height: read_varint(r)?,
+        to_height: read_varint(r)?,
+        key_image: CompressedPoint::read(r)?,
+      },
       _ => Err(io::Error::other("Tried to deserialize unknown/unused input type"))?,
     })
   }
@@ -103,16 +131,39 @@ pub struct Output {
   pub key: CompressedPoint,
   /// The view tag for this output, as used to accelerate scanning.
   pub view_tag: Option<u8>,
+  /// If this output is a staked output, the staking metadata.
+  pub staking: Option<StakingMeta>,
+}
+
+/// Metadata attached to a staked output (serialized as tag 0x04).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize)]
+pub struct StakingMeta {
+  /// Tier index: 0=short, 1=medium, 2=long.
+  pub lock_tier: u8,
+  /// Block height at which the principal becomes unstakeable.
+  pub lock_until: u64,
 }
 
 impl Output {
   /// Write the Output.
   pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
     write_varint(&self.amount.unwrap_or(0), w)?;
-    w.write_all(&[2 + u8::from(self.view_tag.is_some())])?;
-    w.write_all(&self.key.to_bytes())?;
-    if let Some(view_tag) = self.view_tag {
-      w.write_all(&[view_tag])?;
+    if let Some(staking) = &self.staking {
+      w.write_all(&[4])?; // txout_to_staked_key tag
+      w.write_all(&self.key.to_bytes())?;
+      if let Some(view_tag) = self.view_tag {
+        w.write_all(&[view_tag])?;
+      } else {
+        w.write_all(&[0])?;
+      }
+      w.write_all(&[staking.lock_tier])?;
+      write_varint(&staking.lock_until, w)?;
+    } else {
+      w.write_all(&[2 + u8::from(self.view_tag.is_some())])?;
+      w.write_all(&self.key.to_bytes())?;
+      if let Some(view_tag) = self.view_tag {
+        w.write_all(&[view_tag])?;
+      }
     }
     Ok(())
   }
@@ -126,27 +177,40 @@ impl Output {
 
   /// Read an Output.
   pub fn read<R: Read>(rct: bool, r: &mut R) -> io::Result<Output> {
-    let amount = read_varint(r)?;
-    let amount = if rct {
-      if amount != 0 {
-        Err(io::Error::other("confidential TX output amount wasn't 0"))?;
+    let raw_amount: u64 = read_varint(r)?;
+
+    let tag = read_byte(r)?;
+    match tag {
+      2 | 3 => {
+        let amount = if rct {
+          if raw_amount != 0 {
+            Err(io::Error::other("confidential TX output amount wasn't 0"))?;
+          }
+          None
+        } else {
+          Some(raw_amount)
+        };
+        let key = CompressedPoint::read(r)?;
+        let view_tag = if tag == 3 { Some(read_byte(r)?) } else { None };
+        Ok(Output { amount, key, view_tag, staking: None })
       }
-      None
-    } else {
-      Some(amount)
-    };
-
-    let view_tag = match read_byte(r)? {
-      2 => false,
-      3 => true,
-      _ => Err(io::Error::other("Tried to deserialize unknown/unused output type"))?,
-    };
-
-    Ok(Output {
-      amount,
-      key: CompressedPoint::read(r)?,
-      view_tag: if view_tag { Some(read_byte(r)?) } else { None },
-    })
+      4 => {
+        // txout_to_staked_key: key(32) view_tag(1) lock_tier(1) lock_until(varint)
+        // Staked outputs have explicit (non-zero) amounts regardless of RCT flag
+        let amount = Some(raw_amount);
+        let key = CompressedPoint::read(r)?;
+        let view_tag = Some(read_byte(r)?);
+        let lock_tier = read_byte(r)?;
+        let lock_until: u64 = read_varint(r)?;
+        Ok(Output {
+          amount,
+          key,
+          view_tag,
+          staking: Some(StakingMeta { lock_tier, lock_until }),
+        })
+      }
+      _ => Err(io::Error::other("Tried to deserialize unknown/unused output type")),
+    }
   }
 }
 

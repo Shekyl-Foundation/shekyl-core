@@ -15,7 +15,7 @@ use curve25519_dalek::{Scalar, edwards::EdwardsPoint};
 use shekyl_oxide::{
     io::*,
     primitives::Commitment,
-    transaction::Timelock,
+    transaction::{Timelock, StakingMeta},
 };
 
 use crate::{
@@ -217,6 +217,7 @@ pub struct WalletOutput {
     pub(crate) relative_id: RelativeId,
     pub(crate) data: OutputData,
     pub(crate) metadata: Metadata,
+    pub(crate) staking: Option<StakingMeta>,
 }
 
 impl WalletOutput {
@@ -270,12 +271,51 @@ impl WalletOutput {
         &self.metadata.arbitrary_data
     }
 
+    /// Staking metadata, if this output is a staked output.
+    pub fn staking(&self) -> Option<StakingMeta> {
+        self.staking
+    }
+
+    /// Construct a WalletOutput for testing or programmatic use.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn new_for_test(
+        tx_hash: [u8; 32],
+        index_in_transaction: u64,
+        index_on_blockchain: u64,
+        key: curve25519_dalek::edwards::EdwardsPoint,
+        key_offset: curve25519_dalek::Scalar,
+        commitment: shekyl_oxide::primitives::Commitment,
+        staking: Option<StakingMeta>,
+    ) -> Self {
+        WalletOutput {
+            absolute_id: AbsoluteId { transaction: tx_hash, index_in_transaction },
+            relative_id: RelativeId { index_on_blockchain },
+            data: OutputData { key, key_offset, commitment },
+            metadata: Metadata {
+                additional_timelock: shekyl_oxide::transaction::Timelock::None,
+                subaddress: None,
+                payment_id: None,
+                arbitrary_data: vec![],
+            },
+            staking,
+        }
+    }
+
     /// Write the WalletOutput.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         self.absolute_id.write(w)?;
         self.relative_id.write(w)?;
         self.data.write(w)?;
-        self.metadata.write(w)
+        self.metadata.write(w)?;
+        match &self.staking {
+            Some(s) => {
+                w.write_all(&[1])?;
+                w.write_all(&[s.lock_tier])?;
+                write_varint(&s.lock_until, w)?;
+            }
+            None => w.write_all(&[0])?,
+        }
+        Ok(())
     }
 
     /// Serialize the WalletOutput to a `Vec<u8>`.
@@ -288,11 +328,19 @@ impl WalletOutput {
 
     /// Read a WalletOutput.
     pub fn read<R: Read>(r: &mut R) -> io::Result<WalletOutput> {
-        Ok(WalletOutput {
-            absolute_id: AbsoluteId::read(r)?,
-            relative_id: RelativeId::read(r)?,
-            data: OutputData::read(r)?,
-            metadata: Metadata::read(r)?,
-        })
+        let absolute_id = AbsoluteId::read(r)?;
+        let relative_id = RelativeId::read(r)?;
+        let data = OutputData::read(r)?;
+        let metadata = Metadata::read(r)?;
+        let staking = match read_byte(r)? {
+            0 => None,
+            1 => {
+                let lock_tier = read_byte(r)?;
+                let lock_until: u64 = read_varint(r)?;
+                Some(StakingMeta { lock_tier, lock_until })
+            }
+            _ => Err(io::Error::other("invalid staking flag in WalletOutput"))?,
+        };
+        Ok(WalletOutput { absolute_id, relative_id, data, metadata, staking })
     }
 }

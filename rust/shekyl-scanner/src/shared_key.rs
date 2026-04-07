@@ -37,6 +37,7 @@ impl SharedKeyDerivations {
                         .expect("write failed but <Vec as io::Write> doesn't fail");
                 }
                 Input::ToKey { key_image, .. } => u.extend(key_image.to_bytes()),
+                Input::StakeClaim { key_image, .. } => u.extend(key_image.to_bytes()),
             }
         }
         keccak256(u)

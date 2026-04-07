@@ -42,6 +42,7 @@ fn v2_coinbase_round_trip() {
         amount: Some(1_000_000_000),
         key: CompressedPoint([1; 32]),
         view_tag: None,
+        staking: None,
       }],
       extra: vec![1, 2, 3],
     },

@@ -351,6 +351,7 @@ private:
       bool m_staked = false;
       uint8_t m_stake_tier = 0;
       uint64_t m_stake_lock_until = 0;
+      uint64_t m_last_claimed_height = 0; // claim watermark: last to_height of a successful claim
       std::vector<uint8_t> m_combined_shared_secret; // 64 bytes when present; empty otherwise
 
       transfer_details() = default;
@@ -390,6 +391,7 @@ private:
         FIELD(m_staked)
         FIELD(m_stake_tier)
         VARINT_FIELD(m_stake_lock_until)
+        VARINT_FIELD(m_last_claimed_height)
         FIELD(m_combined_shared_secret)
       END_SERIALIZE()
     };
@@ -1138,6 +1140,7 @@ private:
     std::vector<size_t> get_matured_staked_outputs() const;
     std::vector<size_t> get_locked_staked_outputs() const;
     std::vector<size_t> get_claimable_staked_outputs() const;
+    void update_claim_watermarks(const pending_tx& ptx);
     uint64_t get_staked_balance(uint64_t current_height) const;
     uint64_t estimate_claimable_reward(size_t transfer_index);
     bool sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, const std::vector<cryptonote::tx_destination_entry>& dsts, const unique_index_container& subtract_fee_from_outputs = {}) const;

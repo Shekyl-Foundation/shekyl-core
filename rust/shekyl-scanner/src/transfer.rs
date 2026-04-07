@@ -52,6 +52,8 @@ pub struct TransferDetails {
     pub staked: bool,
     pub stake_tier: u8,
     pub stake_lock_until: u64,
+    /// Local claim watermark: the `to_height` of the last successful claim.
+    pub last_claimed_height: u64,
 
     // PQC fields
     /// 64-byte combined shared secret from KEM decapsulation (X25519 || ML-KEM).
@@ -64,7 +66,13 @@ pub struct TransferDetails {
 
 impl TransferDetails {
     /// Create a TransferDetails from a scanned WalletOutput at a given block height.
+    ///
+    /// Automatically populates staking fields if the output carries `StakingMeta`.
     pub fn from_wallet_output(output: &WalletOutput, block_height: u64) -> Self {
+        let (staked, stake_tier, stake_lock_until) = match output.staking() {
+            Some(meta) => (true, meta.lock_tier, meta.lock_until),
+            None => (false, 0, 0),
+        };
         TransferDetails {
             tx_hash: output.transaction(),
             internal_output_index: output.index_in_transaction(),
@@ -78,20 +86,41 @@ impl TransferDetails {
             spent: false,
             spent_height: None,
             key_image: None,
-            staked: false,
-            stake_tier: 0,
-            stake_lock_until: 0,
+            staked,
+            stake_tier,
+            stake_lock_until,
+            last_claimed_height: 0,
             combined_shared_secret: None,
             frozen: false,
             fcmp_precomputed_path: None,
         }
     }
 
-    /// Whether this output is available to spend (not spent, not frozen, not locked).
-    pub fn is_spendable(&self, current_height: u64) -> bool {
-        !self.spent
-            && !self.frozen
-            && !(self.staked && self.stake_lock_until > current_height)
+    /// Whether this output is available for regular spending.
+    ///
+    /// Staked outputs are NEVER directly spendable -- they must go through
+    /// the unstake transaction path once matured.
+    pub fn is_spendable(&self, _current_height: u64) -> bool {
+        !self.spent && !self.frozen && !self.staked
+    }
+
+    /// Whether this staked output can be unstaked (lock period expired, not yet spent).
+    pub fn is_unstakeable(&self, current_height: u64) -> bool {
+        self.staked && !self.spent && !self.frozen && self.stake_lock_until <= current_height
+    }
+
+    /// Whether this staked output has unclaimed reward backlog.
+    pub fn has_claimable_rewards(&self, current_height: u64) -> bool {
+        if !self.staked || self.spent {
+            return false;
+        }
+        let accrual_cap = std::cmp::min(current_height, self.stake_lock_until);
+        let watermark = if self.last_claimed_height > 0 {
+            self.last_claimed_height
+        } else {
+            self.block_height
+        };
+        watermark < accrual_cap
     }
 
     /// The amount (in atomic units) held in this output.
@@ -123,6 +152,7 @@ impl Zeroize for TransferDetails {
         self.staked.zeroize();
         self.stake_tier.zeroize();
         self.stake_lock_until.zeroize();
+        self.last_claimed_height.zeroize();
         self.combined_shared_secret.zeroize();
         self.frozen.zeroize();
     }

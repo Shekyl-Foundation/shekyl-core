@@ -2347,6 +2347,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-wallet-core"
+version = "2.0.0"
+dependencies = [
+ "curve25519-dalek",
+ "shekyl-oxide",
+ "shekyl-scanner",
+ "shekyl-staking",
+ "thiserror",
+]
+
+[[package]]
 name = "shekyl-wallet-rpc"
 version = "2.0.0"
 dependencies = [

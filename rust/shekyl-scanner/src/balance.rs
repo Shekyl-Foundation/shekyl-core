@@ -97,6 +97,7 @@ mod tests {
             staked: false,
             stake_tier: 0,
             stake_lock_until: 0,
+            last_claimed_height: 0,
             combined_shared_secret: None,
             frozen: false,
             fcmp_precomputed_path: None,

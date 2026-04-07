@@ -30,6 +30,7 @@ shekyl-address = { path = "../shekyl-address" }
 default = ["std"]
 std = ["shekyl-oxide/std", "shekyl-rpc/std"]
 rust-scanner = []
+test-utils = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }

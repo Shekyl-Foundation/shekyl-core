@@ -37,6 +37,11 @@ use crate::{
 pub struct Timelocked(pub(crate) Vec<WalletOutput>);
 
 impl Timelocked {
+    /// Create a Timelocked collection from a vector of outputs.
+    pub fn from_vec(outputs: Vec<WalletOutput>) -> Self {
+        Self(outputs)
+    }
+
     /// Return only the outputs without additional timelocks.
     #[must_use]
     pub fn not_additionally_locked(self) -> Vec<WalletOutput> {
@@ -258,6 +263,7 @@ impl InternalScanner {
                         payment_id,
                         arbitrary_data: extra.arbitrary_data(),
                     },
+                    staking: output.staking,
                 });
 
                 break;
