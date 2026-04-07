@@ -38,6 +38,9 @@ where
   <C::C2 as Ciphersuite>::G: DivisorCurve<FieldElement = <C::C1 as Ciphersuite>::F>,
 {
   /// Create a new set of parameters.
+  ///
+  /// Returns `None` if any generator point is the identity (and therefore has no affine
+  /// coordinates).
   #[allow(clippy::too_many_arguments)]
   pub fn new(
     curve_1_generators: Generators<C::C1>,
@@ -48,31 +51,31 @@ where
     T: <<C as FcmpCurves>::OC as Ciphersuite>::G,
     U: <<C as FcmpCurves>::OC as Ciphersuite>::G,
     V: <<C as FcmpCurves>::OC as Ciphersuite>::G,
-  ) -> Self {
+  ) -> Option<Self> {
     let oc_curve_spec =
       CurveSpec { a: <<C::OC as Ciphersuite>::G>::a(), b: <<C::OC as Ciphersuite>::G>::b() };
-    let (g_x, g_y) = <<C as FcmpCurves>::OC as Ciphersuite>::G::to_xy(G).unwrap();
+    let (g_x, g_y) = <<C as FcmpCurves>::OC as Ciphersuite>::G::to_xy(G)?;
     let G_table = GeneratorTable::new(&oc_curve_spec, g_x, g_y);
-    let (t_x, t_y) = <<C as FcmpCurves>::OC as Ciphersuite>::G::to_xy(T).unwrap();
+    let (t_x, t_y) = <<C as FcmpCurves>::OC as Ciphersuite>::G::to_xy(T)?;
     let T_table = GeneratorTable::new(&oc_curve_spec, t_x, t_y);
-    let (u_x, u_y) = <<C as FcmpCurves>::OC as Ciphersuite>::G::to_xy(U).unwrap();
+    let (u_x, u_y) = <<C as FcmpCurves>::OC as Ciphersuite>::G::to_xy(U)?;
     let U_table = GeneratorTable::new(&oc_curve_spec, u_x, u_y);
-    let (v_x, v_y) = <<C as FcmpCurves>::OC as Ciphersuite>::G::to_xy(V).unwrap();
+    let (v_x, v_y) = <<C as FcmpCurves>::OC as Ciphersuite>::G::to_xy(V)?;
     let V_table = GeneratorTable::new(&oc_curve_spec, v_x, v_y);
 
     let c1_curve_spec =
       CurveSpec { a: <<C::C1 as Ciphersuite>::G>::a(), b: <<C::C1 as Ciphersuite>::G>::b() };
     let (h_1_x, h_1_y) =
-      <<C as FcmpCurves>::C1 as Ciphersuite>::G::to_xy(curve_1_generators.h()).unwrap();
+      <<C as FcmpCurves>::C1 as Ciphersuite>::G::to_xy(curve_1_generators.h())?;
     let H_1_table = GeneratorTable::new(&c1_curve_spec, h_1_x, h_1_y);
 
     let c2_curve_spec =
       CurveSpec { a: <<C::C2 as Ciphersuite>::G>::a(), b: <<C::C2 as Ciphersuite>::G>::b() };
     let (h_2_x, h_2_y) =
-      <<C as FcmpCurves>::C2 as Ciphersuite>::G::to_xy(curve_2_generators.h()).unwrap();
+      <<C as FcmpCurves>::C2 as Ciphersuite>::G::to_xy(curve_2_generators.h())?;
     let H_2_table = GeneratorTable::new(&c2_curve_spec, h_2_x, h_2_y);
 
-    Self {
+    Some(Self {
       curve_1_generators,
       curve_2_generators,
       curve_1_hash_init,
@@ -83,6 +86,6 @@ where
       V_table,
       H_1_table,
       H_2_table,
-    }
+    })
   }
 }

@@ -69,7 +69,8 @@ fn random_params(
     T,
     U,
     V,
-  );
+  )
+  .expect("random test generators must not be the identity");
 
   (G, T, U, V, params)
 }

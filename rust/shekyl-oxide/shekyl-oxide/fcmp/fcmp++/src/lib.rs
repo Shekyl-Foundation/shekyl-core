@@ -85,6 +85,7 @@ pub static FCMP_PARAMS: LazyLock<FcmpParams<Curves>> = LazyLock::new(|| {
     EdwardsPoint(*FCMP_PLUS_PLUS_U),
     EdwardsPoint(*FCMP_PLUS_PLUS_V),
   )
+  .expect("FCMP generator points must not be the identity")
 });
 
 /// An input tuple.
