@@ -8,6 +8,8 @@
 //! This crate provides hybrid classical + post-quantum cryptographic operations
 //! using NIST PQC standardized algorithms (ML-DSA, ML-KEM, SLH-DSA).
 
+#![deny(unsafe_code)]
+
 pub mod signature;
 pub mod multisig;
 pub mod kem;

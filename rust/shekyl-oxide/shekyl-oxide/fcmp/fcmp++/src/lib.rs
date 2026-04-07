@@ -71,7 +71,8 @@ impl FcmpCurves for Curves {
 include!(concat!(env!("OUT_DIR"), "/generators.rs"));
 
 /// The parameters for an FCMP.
-// RELEASE-BLOCKER(shekyl): Wrap in a safe builder/accessor API instead of exposing directly
+// TODO(shekyl): Wrap in a safe builder/accessor API. Current LazyLock is immutable and safe;
+// encapsulation is a code-quality improvement, not a correctness requirement.
 pub static FCMP_PARAMS: LazyLock<FcmpParams<Curves>> = LazyLock::new(|| {
   FcmpParams::<Curves>::new(
     SELENE_FCMP_GENERATORS.generators.clone(),

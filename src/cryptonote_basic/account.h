@@ -46,6 +46,13 @@ namespace cryptonote
     hw::device *m_device = &hw::get_device("default");
     crypto::chacha_iv m_encryption_iv;
 
+    account_keys() = default;
+    ~account_keys();
+    account_keys(const account_keys&) = default;
+    account_keys& operator=(const account_keys&) = default;
+    account_keys(account_keys&&) = default;
+    account_keys& operator=(account_keys&&) = default;
+
     BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE(m_account_address)
       KV_SERIALIZE_VAL_POD_AS_BLOB_FORCE(m_spend_secret_key)

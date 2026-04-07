@@ -13,7 +13,7 @@ use ed25519_dalek::{
 use fips204::ml_dsa_65;
 use fips204::traits::{SerDes as _, Signer as _, Verifier as _};
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 pub const HYBRID_KEY_VERSION: u8 = 1;
 pub const HYBRID_SIG_VERSION: u8 = 1;
@@ -28,11 +28,20 @@ pub struct HybridPublicKey {
     pub ml_dsa: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Zeroize)]
+#[derive(Clone, Zeroize)]
 #[zeroize(drop)]
 pub struct HybridSecretKey {
     pub ed25519: Vec<u8>,
     pub ml_dsa: Vec<u8>,
+}
+
+impl std::fmt::Debug for HybridSecretKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HybridSecretKey")
+            .field("ed25519", &"[REDACTED]")
+            .field("ml_dsa", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,19 +241,23 @@ impl SignatureScheme for HybridEd25519MlDsa {
     fn sign(&self, secret_key: &HybridSecretKey, message: &[u8]) -> Result<HybridSignature, CryptoError> {
         secret_key.validate()?;
 
-        let ed25519_secret: [u8; ED25519_SECRET_KEY_LENGTH] = secret_key
-            .ed25519
-            .clone()
-            .try_into()
-            .map_err(|_| CryptoError::InvalidKeyMaterial)?;
-        let ml_dsa_secret: [u8; ML_DSA_65_SECRET_KEY_LENGTH] = secret_key
-            .ml_dsa
-            .clone()
-            .try_into()
-            .map_err(|_| CryptoError::InvalidKeyMaterial)?;
+        let ed25519_secret: Zeroizing<[u8; ED25519_SECRET_KEY_LENGTH]> = Zeroizing::new(
+            secret_key
+                .ed25519
+                .clone()
+                .try_into()
+                .map_err(|_| CryptoError::InvalidKeyMaterial)?,
+        );
+        let ml_dsa_secret: Zeroizing<[u8; ML_DSA_65_SECRET_KEY_LENGTH]> = Zeroizing::new(
+            secret_key
+                .ml_dsa
+                .clone()
+                .try_into()
+                .map_err(|_| CryptoError::InvalidKeyMaterial)?,
+        );
 
         let signing_key = SigningKey::from_bytes(&ed25519_secret);
-        let ml_dsa_private = ml_dsa_65::PrivateKey::try_from_bytes(ml_dsa_secret)
+        let ml_dsa_private = ml_dsa_65::PrivateKey::try_from_bytes(*ml_dsa_secret)
             .map_err(|e| CryptoError::SerializationError(e.into()))?;
 
         let ed25519_signature = signing_key.sign(message);

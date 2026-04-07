@@ -41,11 +41,20 @@ pub struct HybridKemPublicKey {
     pub ml_kem: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Zeroize)]
+#[derive(Clone, Zeroize)]
 #[zeroize(drop)]
 pub struct HybridKemSecretKey {
     pub x25519: [u8; 32],
     pub ml_kem: Vec<u8>,
+}
+
+impl std::fmt::Debug for HybridKemSecretKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HybridKemSecretKey")
+            .field("x25519", &"[REDACTED]")
+            .field("ml_kem", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,9 +65,15 @@ pub struct HybridCiphertext {
 
 /// Combined shared secret after HKDF combination of X25519 and ML-KEM.
 /// 64 bytes: sufficient for HKDF-Expand derivation of per-output keys.
-#[derive(Debug, Clone, Zeroize)]
+#[derive(Clone, Zeroize)]
 #[zeroize(drop)]
 pub struct SharedSecret(pub [u8; 64]);
+
+impl std::fmt::Debug for SharedSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SharedSecret").field(&"[REDACTED]").finish()
+    }
+}
 
 pub trait KeyEncapsulation {
     fn keypair_generate(&self) -> Result<(HybridKemPublicKey, HybridKemSecretKey), CryptoError>;

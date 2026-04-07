@@ -13,3 +13,6 @@ serde.workspace = true
 
 [build-dependencies]
 serde_json = "1"
+
+[lints]
+workspace = true

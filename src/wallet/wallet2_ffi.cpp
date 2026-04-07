@@ -274,7 +274,10 @@ const char* wallet2_ffi_last_error_msg(const wallet2_handle* w)
 
 void wallet2_ffi_free_string(char* str)
 {
-    free(str);
+    if (str) {
+        memwipe(str, strlen(str));
+        free(str);
+    }
 }
 
 // ── Wallet file operations ───────────────────────────────────────────────────
@@ -4028,6 +4031,7 @@ static bool hex_to_key(const char* hex, size_t hex_len, rct::key& out)
 {
     if (hex_len != 64) return false;
     std::string bin;
+    auto wiper = epee::misc_utils::create_scope_leave_handler([&]{ memwipe(bin.data(), bin.size()); });
     if (!epee::string_tools::parse_hexstr_to_binbuff(std::string(hex, hex_len), bin) || bin.size() != 32)
         return false;
     memcpy(out.bytes, bin.data(), 32);

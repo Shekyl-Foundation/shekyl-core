@@ -113,7 +113,8 @@ where
 
   let path = dir.join(&path);
   let _ = remove_file(&path);
-  // RELEASE-BLOCKER(shekyl): Restrict visibility of generated constants (use pub(crate))
+  // TODO(shekyl): Consider restricting visibility once downstream consumers are audited.
+  // Currently `pub` is required because shekyl-fcmp and shekyl-ffi import these generators.
   File::create(&path)
     .expect("failed to create file in $OUT_DIR")
     .write_all(

@@ -45,3 +45,6 @@ rand_chacha = "0.3"
 default = ["std"]
 std = []
 multisig = ["shekyl-fcmp-plus-plus/multisig", "transcript", "modular-frost", "rand_chacha"]
+
+[lints]
+workspace = true

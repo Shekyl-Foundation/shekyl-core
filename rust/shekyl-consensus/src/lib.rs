@@ -4,6 +4,8 @@
 //! consensus modes. New proof types can be added by implementing the
 //! `ConsensusProof` trait and registering with the `ConsensusRegistry`.
 
+#![deny(unsafe_code)]
+
 pub mod proof;
 pub mod error;
 pub mod types;

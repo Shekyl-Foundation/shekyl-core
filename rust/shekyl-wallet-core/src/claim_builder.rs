@@ -75,9 +75,12 @@ impl ClaimTxBuilder {
         let mut total_reward = 0u64;
 
         for td in &claimable {
-            let idx = wallet.transfers().iter().position(|t| {
+            let idx = match wallet.transfers().iter().position(|t| {
                 t.global_output_index == td.global_output_index
-            }).unwrap_or(0);
+            }) {
+                Some(i) => i,
+                None => return Err(WalletCoreError::TransferNotFound),
+            };
 
             if let Some(info) = ClaimableInfo::from_transfer(td, idx, current_height) {
                 let weight = weight_fn(td.amount(), td.stake_tier);

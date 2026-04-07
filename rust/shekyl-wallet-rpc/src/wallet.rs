@@ -68,7 +68,13 @@ pub struct ProgressEvent {
     pub detail: Option<String>,
 }
 
-/// Safe handle to a C++ wallet2 instance. Not Send/Sync because wallet2 is single-threaded.
+/// FFI handle to a C++ wallet2 instance.
+///
+/// # Safety
+/// This type wraps a raw C++ pointer and implements `Send` + `Sync` so it can
+/// be shared across async Tokio tasks (the RPC server dispatches on a single-threaded
+/// executor behind a `Mutex`). The `Mutex` in `AppState` serializes all access;
+/// callers must never use this handle without holding the lock.
 pub struct Wallet2 {
     handle: *mut ffi::Wallet2Handle,
     _progress_sender: Option<Box<mpsc::Sender<ProgressEvent>>>,
@@ -108,6 +114,13 @@ impl Wallet2 {
         }
     }
 
+    fn to_cstring(s: &str) -> WalletResult<CString> {
+        CString::new(s).map_err(|_| WalletError {
+            code: -1,
+            message: format!("string contains interior NUL byte: {:?}", &s[..s.len().min(32)]),
+        })
+    }
+
     fn consume_json_ptr(&self, ptr: *mut std::ffi::c_char) -> WalletResult<serde_json::Value> {
         if ptr.is_null() {
             return Err(self.last_error());
@@ -130,9 +143,9 @@ impl Wallet2 {
         daemon_password: &str,
         trusted_daemon: bool,
     ) -> WalletResult<()> {
-        let addr = CString::new(daemon_address).unwrap();
-        let user = CString::new(daemon_username).unwrap();
-        let pass = CString::new(daemon_password).unwrap();
+        let addr = Self::to_cstring(daemon_address)?;
+        let user = Self::to_cstring(daemon_username)?;
+        let pass = Self::to_cstring(daemon_password)?;
         let rc = unsafe {
             ffi::wallet2_ffi_init(self.handle, addr.as_ptr(), user.as_ptr(), pass.as_ptr(), trusted_daemon)
         };
@@ -140,7 +153,7 @@ impl Wallet2 {
     }
 
     pub fn set_wallet_dir(&self, dir: &str) {
-        let d = CString::new(dir).unwrap();
+        let d = CString::new(dir).unwrap_or_default();
         unsafe { ffi::wallet2_ffi_set_wallet_dir(self.handle, d.as_ptr()) };
     }
 
@@ -155,9 +168,9 @@ impl Wallet2 {
     }
 
     pub fn create_wallet(&self, filename: &str, password: &str, language: &str) -> WalletResult<()> {
-        let f = CString::new(filename).unwrap();
-        let p = CString::new(password).unwrap();
-        let l = CString::new(language).unwrap();
+        let f = Self::to_cstring(filename)?;
+        let p = Self::to_cstring(password)?;
+        let l = Self::to_cstring(language)?;
         let rc = unsafe {
             ffi::wallet2_ffi_create_wallet(self.handle, f.as_ptr(), p.as_ptr(), l.as_ptr())
         };
@@ -165,8 +178,8 @@ impl Wallet2 {
     }
 
     pub fn open_wallet(&self, filename: &str, password: &str) -> WalletResult<()> {
-        let f = CString::new(filename).unwrap();
-        let p = CString::new(password).unwrap();
+        let f = Self::to_cstring(filename)?;
+        let p = Self::to_cstring(password)?;
         let rc = unsafe { ffi::wallet2_ffi_open_wallet(self.handle, f.as_ptr(), p.as_ptr()) };
         self.check_rc(rc)
     }
@@ -185,11 +198,11 @@ impl Wallet2 {
         restore_height: u64,
         seed_offset: &str,
     ) -> WalletResult<serde_json::Value> {
-        let f = CString::new(filename).unwrap();
-        let s = CString::new(seed).unwrap();
-        let p = CString::new(password).unwrap();
-        let l = CString::new(language).unwrap();
-        let o = CString::new(seed_offset).unwrap();
+        let f = Self::to_cstring(filename)?;
+        let s = Self::to_cstring(seed)?;
+        let p = Self::to_cstring(password)?;
+        let l = Self::to_cstring(language)?;
+        let o = Self::to_cstring(seed_offset)?;
         let ptr = unsafe {
             ffi::wallet2_ffi_restore_deterministic_wallet(
                 self.handle, f.as_ptr(), s.as_ptr(), p.as_ptr(), l.as_ptr(), restore_height, o.as_ptr(),
@@ -208,12 +221,12 @@ impl Wallet2 {
         language: &str,
         restore_height: u64,
     ) -> WalletResult<serde_json::Value> {
-        let f = CString::new(filename).unwrap();
-        let a = CString::new(address).unwrap();
-        let sk = CString::new(spendkey).unwrap();
-        let vk = CString::new(viewkey).unwrap();
-        let p = CString::new(password).unwrap();
-        let l = CString::new(language).unwrap();
+        let f = Self::to_cstring(filename)?;
+        let a = Self::to_cstring(address)?;
+        let sk = Self::to_cstring(spendkey)?;
+        let vk = Self::to_cstring(viewkey)?;
+        let p = Self::to_cstring(password)?;
+        let l = Self::to_cstring(language)?;
         let ptr = unsafe {
             ffi::wallet2_ffi_generate_from_keys(
                 self.handle, f.as_ptr(), a.as_ptr(), sk.as_ptr(), vk.as_ptr(), p.as_ptr(), l.as_ptr(),
@@ -234,7 +247,7 @@ impl Wallet2 {
     }
 
     pub fn query_key(&self, key_type: &str) -> WalletResult<serde_json::Value> {
-        let kt = CString::new(key_type).unwrap();
+        let kt = Self::to_cstring(key_type)?;
         let ptr = unsafe { ffi::wallet2_ffi_query_key(self.handle, kt.as_ptr()) };
         self.consume_json_ptr(ptr)
     }
@@ -250,7 +263,7 @@ impl Wallet2 {
         account_index: u32,
         ring_size: u32,
     ) -> WalletResult<serde_json::Value> {
-        let d = CString::new(destinations_json).unwrap();
+        let d = Self::to_cstring(destinations_json)?;
         let ptr = unsafe {
             ffi::wallet2_ffi_transfer(self.handle, d.as_ptr(), priority, account_index, ring_size)
         };
@@ -288,8 +301,8 @@ impl Wallet2 {
     /// Generic JSON-RPC dispatch for all methods (Phase 2 expansion).
     /// Routes to the C++ dispatcher which handles the full method surface.
     pub fn json_rpc_call(&self, method: &str, params_json: &str) -> WalletResult<serde_json::Value> {
-        let m = CString::new(method).unwrap();
-        let p = CString::new(params_json).unwrap();
+        let m = Self::to_cstring(method)?;
+        let p = Self::to_cstring(params_json)?;
         let ptr = unsafe { ffi::wallet2_ffi_json_rpc(self.handle, m.as_ptr(), p.as_ptr()) };
         self.consume_json_ptr(ptr)
     }
@@ -403,8 +416,8 @@ impl Wallet2 {
             })?;
 
         // Phase C: finalize (inserts proofs, PQC signs, broadcasts)
-        let proofs_cstr = CString::new(proofs_json_str).unwrap();
-        let tx_blob_cstr = CString::new(tx_blob_hex).unwrap();
+        let proofs_cstr = Self::to_cstring(&proofs_json_str)?;
+        let tx_blob_cstr = Self::to_cstring(&tx_blob_hex)?;
         let fin_ptr = unsafe {
             ffi::wallet2_ffi_finalize_transfer(
                 self.handle,

@@ -2,6 +2,8 @@
 //!
 //! Tracks active stakes, computes weighted rewards, and manages lock tiers.
 
+#![deny(unsafe_code)]
+
 pub mod tiers;
 pub mod registry;
 pub mod rewards;

@@ -19,6 +19,8 @@ struct ShekylBuffer {
     size_t len;
 };
 
+// Free a buffer allocated by a Rust FFI export. `len` MUST equal the original
+// ShekylBuffer::len returned by the paired Rust call. Mismatched lengths cause UB.
 void shekyl_buffer_free(uint8_t* ptr, size_t len);
 
 // PQC: Hybrid signatures
@@ -48,6 +50,7 @@ bool shekyl_pqc_verify(
     const uint8_t* message,
     size_t message_len);
 
+#ifndef NDEBUG
 uint8_t shekyl_pqc_verify_debug(
     uint8_t scheme_id,
     const uint8_t* pubkey_blob,
@@ -56,6 +59,7 @@ uint8_t shekyl_pqc_verify_debug(
     size_t sig_len,
     const uint8_t* message,
     size_t message_len);
+#endif
 
 bool shekyl_pqc_multisig_group_id(
     const uint8_t* keys_ptr,
@@ -199,12 +203,12 @@ bool shekyl_fcmp_verify(
     const uint8_t* signable_tx_hash_ptr);
 
 // ─── FCMP++: FROST SAL Multisig ──────────────────────────────────────────────
+// Gated behind Rust `multisig` feature. Not compiled into production builds
+// until nonce aggregation is fully implemented.
+#ifdef SHEKYL_MULTISIG
 
 struct ShekylFrostSalSession;
 
-// Create a new FROST SAL session for one input.
-// Writes 32-byte pseudo-out to pseudo_out_ptr.
-// Returns opaque session handle, or NULL on failure.
 ShekylFrostSalSession* shekyl_frost_sal_session_new(
     const uint8_t* output_key_ptr,
     const uint8_t* key_image_gen_ptr,
@@ -213,12 +217,9 @@ ShekylFrostSalSession* shekyl_frost_sal_session_new(
     const uint8_t* signable_tx_hash_ptr,
     uint8_t* pseudo_out_ptr);
 
-// Get serialized RerandomizedOutput from a session.
 ShekylBuffer shekyl_frost_sal_get_rerand(
     const ShekylFrostSalSession* session);
 
-// Aggregate FROST shares and produce the FCMP++ proof.
-// Consumes and frees all sessions on success.
 ShekylFcmpProveResult shekyl_frost_sal_aggregate_and_prove(
     ShekylFrostSalSession** session_ptrs,
     uint32_t num_inputs,
@@ -231,36 +232,30 @@ ShekylFcmpProveResult shekyl_frost_sal_aggregate_and_prove(
     const uint8_t* tree_root_ptr,
     uint8_t tree_depth);
 
-// Free a FROST SAL session handle.
 void shekyl_frost_sal_session_free(ShekylFrostSalSession* session);
 
 // ─── FCMP++: FROST DKG Key Management ──────────────────────────────────────
 
 struct ShekylFrostThresholdKeys;
 
-// Import FROST threshold keys from a serialized blob.
-// Returns opaque handle, or NULL on failure. Free with shekyl_frost_keys_free.
 ShekylFrostThresholdKeys* shekyl_frost_keys_import(
     const uint8_t* data_ptr,
     size_t data_len);
 
-// Export FROST threshold keys as a serialized blob.
 ShekylBuffer shekyl_frost_keys_export(const ShekylFrostThresholdKeys* handle);
 
-// Get 32-byte group public key from threshold keys.
-// Writes 32 bytes to out_ptr. Returns true on success.
 bool shekyl_frost_keys_group_key(
     const ShekylFrostThresholdKeys* handle,
     uint8_t* out_ptr);
 
-// Validate that threshold keys match expected M-of-N parameters.
 bool shekyl_frost_keys_validate(
     const ShekylFrostThresholdKeys* handle,
     uint16_t expected_m,
     uint16_t expected_n);
 
-// Free a FROST threshold keys handle.
 void shekyl_frost_keys_free(ShekylFrostThresholdKeys* handle);
+
+#endif // SHEKYL_MULTISIG
 
 // Convert raw output tuples into serialized 4-scalar leaves.
 ShekylBuffer shekyl_fcmp_outputs_to_leaves(

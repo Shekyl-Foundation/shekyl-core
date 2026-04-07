@@ -37,4 +37,7 @@ pub enum WalletCoreError {
 
     #[error("invalid tier {tier}")]
     InvalidTier { tier: u8 },
+
+    #[error("claimable output not found in wallet transfers list")]
+    TransferNotFound,
 }

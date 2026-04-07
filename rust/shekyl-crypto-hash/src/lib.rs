@@ -4,6 +4,8 @@
 //! This is consensus-critical: the output must be byte-identical to the
 //! C implementation in `src/crypto/keccak.c`.
 
+#![deny(unsafe_code)]
+
 use tiny_keccak::{Hasher, Keccak};
 
 pub const HASH_SIZE: usize = 32;

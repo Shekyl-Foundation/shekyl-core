@@ -54,6 +54,9 @@ pub enum ProveError {
     #[error("invalid scalar at input {input_index}: {field}")]
     InvalidScalar { input_index: usize, field: &'static str },
 
+    #[error("scalar decomposition failed (zero blinding factor)")]
+    ScalarDecompositionFailed,
+
     #[error("upstream proof generation failed: {0}")]
     UpstreamError(String),
 }
@@ -191,20 +194,20 @@ pub fn prove(
         let output_blind = OutputBlinds::new(
             OBlind::new(
                 EdwardsPoint(*T),
-                ScalarDecomposition::new(rerand.o_blind()).unwrap(),
+                ScalarDecomposition::new(rerand.o_blind()).ok_or(ProveError::ScalarDecompositionFailed)?,
             ),
             IBlind::new(
                 EdwardsPoint(*FCMP_PLUS_PLUS_U),
                 EdwardsPoint(*FCMP_PLUS_PLUS_V),
-                ScalarDecomposition::new(rerand.i_blind()).unwrap(),
+                ScalarDecomposition::new(rerand.i_blind()).ok_or(ProveError::ScalarDecompositionFailed)?,
             ),
             IBlindBlind::new(
                 EdwardsPoint(*T),
-                ScalarDecomposition::new(rerand.i_blind_blind()).unwrap(),
+                ScalarDecomposition::new(rerand.i_blind_blind()).ok_or(ProveError::ScalarDecompositionFailed)?,
             ),
             CBlind::new(
                 EdwardsPoint::generator(),
-                ScalarDecomposition::new(rerand.c_blind()).unwrap(),
+                ScalarDecomposition::new(rerand.c_blind()).ok_or(ProveError::ScalarDecompositionFailed)?,
             ),
         );
         output_blinds_list.push(output_blind);
@@ -277,17 +280,19 @@ pub fn prove(
     let c2_h = HELIOS_FCMP_GENERATORS.generators.h();
 
     let c1_blinds: Vec<_> = (0..c1_blind_count)
-        .map(|_| BranchBlind::<<Selene as Ciphersuite>::G>::new(
+        .map(|_| Ok(BranchBlind::<<Selene as Ciphersuite>::G>::new(
             c1_h,
-            ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
-        ))
-        .collect();
+            ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut OsRng))
+                .ok_or(ProveError::ScalarDecompositionFailed)?,
+        )))
+        .collect::<Result<_, ProveError>>()?;
     let c2_blinds: Vec<_> = (0..c2_blind_count)
-        .map(|_| BranchBlind::<<Helios as Ciphersuite>::G>::new(
+        .map(|_| Ok(BranchBlind::<<Helios as Ciphersuite>::G>::new(
             c2_h,
-            ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
-        ))
-        .collect();
+            ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut OsRng))
+                .ok_or(ProveError::ScalarDecompositionFailed)?,
+        )))
+        .collect::<Result<_, ProveError>>()?;
 
     let blinded = branches.blind(output_blinds_list, c1_blinds, c2_blinds)
         .map_err(|e| ProveError::UpstreamError(format!("blind: {e:?}")))?;
@@ -364,20 +369,20 @@ pub fn prove_with_sal(
         let output_blind = OutputBlinds::new(
             OBlind::new(
                 EdwardsPoint(*T),
-                ScalarDecomposition::new(rerand.o_blind()).unwrap(),
+                ScalarDecomposition::new(rerand.o_blind()).ok_or(ProveError::ScalarDecompositionFailed)?,
             ),
             IBlind::new(
                 EdwardsPoint(*FCMP_PLUS_PLUS_U),
                 EdwardsPoint(*FCMP_PLUS_PLUS_V),
-                ScalarDecomposition::new(rerand.i_blind()).unwrap(),
+                ScalarDecomposition::new(rerand.i_blind()).ok_or(ProveError::ScalarDecompositionFailed)?,
             ),
             IBlindBlind::new(
                 EdwardsPoint(*T),
-                ScalarDecomposition::new(rerand.i_blind_blind()).unwrap(),
+                ScalarDecomposition::new(rerand.i_blind_blind()).ok_or(ProveError::ScalarDecompositionFailed)?,
             ),
             CBlind::new(
                 EdwardsPoint::generator(),
-                ScalarDecomposition::new(rerand.c_blind()).unwrap(),
+                ScalarDecomposition::new(rerand.c_blind()).ok_or(ProveError::ScalarDecompositionFailed)?,
             ),
         );
         output_blinds_list.push(output_blind);
@@ -448,17 +453,19 @@ pub fn prove_with_sal(
     let c2_h = HELIOS_FCMP_GENERATORS.generators.h();
 
     let c1_blinds: Vec<_> = (0..c1_blind_count)
-        .map(|_| BranchBlind::<<Selene as Ciphersuite>::G>::new(
+        .map(|_| Ok(BranchBlind::<<Selene as Ciphersuite>::G>::new(
             c1_h,
-            ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
-        ))
-        .collect();
+            ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut OsRng))
+                .ok_or(ProveError::ScalarDecompositionFailed)?,
+        )))
+        .collect::<Result<_, ProveError>>()?;
     let c2_blinds: Vec<_> = (0..c2_blind_count)
-        .map(|_| BranchBlind::<<Helios as Ciphersuite>::G>::new(
+        .map(|_| Ok(BranchBlind::<<Helios as Ciphersuite>::G>::new(
             c2_h,
-            ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut OsRng)).unwrap(),
-        ))
-        .collect();
+            ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut OsRng))
+                .ok_or(ProveError::ScalarDecompositionFailed)?,
+        )))
+        .collect::<Result<_, ProveError>>()?;
 
     let blinded = branches.blind(output_blinds_list, c1_blinds, c2_blinds)
         .map_err(|e| ProveError::UpstreamError(format!("blind: {e:?}")))?;

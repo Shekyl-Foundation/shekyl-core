@@ -7,3 +7,6 @@ license.workspace = true
 
 [dependencies]
 tiny-keccak = { version = "2", features = ["keccak"] }
+
+[lints]
+workspace = true

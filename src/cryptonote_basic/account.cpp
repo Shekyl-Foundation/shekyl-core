@@ -43,6 +43,7 @@ extern "C"
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
 #include "shekyl/shekyl_secure_mem.h"
+#include "memwipe.h"
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "account"
@@ -90,6 +91,16 @@ DISABLE_VS_WARNINGS(4244 4345)
     }
   }
 
+  //-----------------------------------------------------------------
+  account_keys::~account_keys()
+  {
+    memwipe(&m_spend_secret_key, sizeof(m_spend_secret_key));
+    memwipe(&m_view_secret_key, sizeof(m_view_secret_key));
+    if (!m_pqc_secret_key.empty()) {
+      shekyl_memwipe(m_pqc_secret_key.data(), m_pqc_secret_key.size());
+      shekyl_munlock(m_pqc_secret_key.data(), m_pqc_secret_key.size());
+    }
+  }
   //-----------------------------------------------------------------
   hw::device& account_keys::get_device() const  {
     return *m_device;
@@ -173,6 +184,12 @@ DISABLE_VS_WARNINGS(4244 4345)
   //-----------------------------------------------------------------
   void account_base::set_null()
   {
+    memwipe(&m_keys.m_spend_secret_key, sizeof(m_keys.m_spend_secret_key));
+    memwipe(&m_keys.m_view_secret_key, sizeof(m_keys.m_view_secret_key));
+    if (!m_keys.m_pqc_secret_key.empty()) {
+      shekyl_memwipe(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
+      shekyl_munlock(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
+    }
     m_keys = account_keys();
     m_creation_timestamp = 0;
   }
@@ -244,6 +261,10 @@ DISABLE_VS_WARNINGS(4244 4345)
     m_keys.m_account_address = address;
     m_keys.m_spend_secret_key = spendkey;
     m_keys.m_view_secret_key = viewkey;
+    if (!m_keys.m_pqc_secret_key.empty()) {
+      shekyl_memwipe(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
+      shekyl_munlock(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
+    }
     m_keys.m_pqc_secret_key.clear();
 
     struct tm timestamp = {0};

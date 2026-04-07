@@ -83,24 +83,34 @@ async fn json_rpc_handler(
     let id = request.id.clone();
     let method = request.method.clone();
 
-    let result = {
-        let wallet = state.wallet.lock().unwrap();
+    let wallet_guard = match state.wallet.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(
+                JsonRpcResponse::error(id, -32603, "wallet lock poisoned".into()),
+            ));
+        }
+    };
 
+    let result = {
         #[cfg(feature = "rust-scanner")]
         {
-            handlers::dispatch_with_scanner(&wallet, &state.scanner, &method, request.params)
+            handlers::dispatch_with_scanner(&wallet_guard, &state.scanner, &method, request.params)
         }
 
         #[cfg(not(feature = "rust-scanner"))]
         {
-            handlers::dispatch(&wallet, &method, request.params)
+            handlers::dispatch(&wallet_guard, &method, request.params)
         }
     };
+    drop(wallet_guard);
 
     let response = match result {
         Ok(value) => {
             if method == "stop_wallet" {
-                *state.shutdown_requested.lock().unwrap() = true;
+                if let Ok(mut flag) = state.shutdown_requested.lock() {
+                    *flag = true;
+                }
             }
             JsonRpcResponse::success(id, value)
         }
@@ -113,7 +123,7 @@ async fn json_rpc_handler(
 async fn shutdown_signal(state: std::sync::Arc<AppState>) {
     loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        if *state.shutdown_requested.lock().unwrap() {
+        if state.shutdown_requested.lock().map(|f| *f).unwrap_or(false) {
             info!("Shutdown requested via stop_wallet RPC");
             break;
         }

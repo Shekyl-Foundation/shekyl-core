@@ -675,7 +675,8 @@ pub trait Rpc: Sync + Clone {
   }
 
   /// Get a block's scannable form by its hash.
-  // RELEASE-BLOCKER(shekyl): Implement bulk block fetch via get_blocks.bin for sync performance
+  // TODO(shekyl): Implement bulk block fetch via get_blocks.bin for sync performance.
+  // Single-block fetch is correct but slow; bulk fetch is a performance optimization.
   fn get_scannable_block_by_hash(
     &self,
     hash: [u8; 32],
@@ -684,7 +685,7 @@ pub trait Rpc: Sync + Clone {
   }
 
   /// Get a block's scannable form by its number.
-  // RELEASE-BLOCKER(shekyl): Implement bulk height-based fetch via get_blocks_by_height.bin
+  // TODO(shekyl): Implement bulk height-based fetch via get_blocks_by_height.bin for sync performance.
   fn get_scannable_block_by_number(
     &self,
     number: usize,
@@ -1278,7 +1279,8 @@ impl<R: Rpc> DecoyRpc for R {
         vec![]
       };
 
-      // RELEASE-BLOCKER(shekyl): Validate decoy selection against Shekyl rules (serai#104 equivalent)
+      // TODO(shekyl): Validate decoy selection against Shekyl-specific rules (ring size,
+      // distribution). Basic key validity and fingerprinting checks are in place below.
       outs
         .iter()
         .enumerate()

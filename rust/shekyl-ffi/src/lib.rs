@@ -74,6 +74,13 @@ impl ShekylBuffer {
     }
 }
 
+/// Free a buffer originally allocated by a Rust FFI export.
+///
+/// # Safety
+/// `len` **must** equal the buffer length from the paired Rust export (i.e.,
+/// the `len` field of the `ShekylBuffer` that was returned). Passing a
+/// different `len` is undefined behavior — it reconstructs a `Vec` with
+/// mismatched capacity.
 #[no_mangle]
 pub extern "C" fn shekyl_buffer_free(ptr: *mut u8, len: usize) {
     if !ptr.is_null() && len > 0 {
@@ -244,6 +251,8 @@ pub extern "C" fn shekyl_pqc_verify(
 }
 
 /// Debug variant of verify: returns `PqcVerifyError` discriminant (1-11) on failure, 0 on success.
+/// Only compiled in debug/test builds to prevent use as a signature oracle.
+#[cfg(any(debug_assertions, test, feature = "debug-verify"))]
 #[no_mangle]
 pub extern "C" fn shekyl_pqc_verify_debug(
     scheme_id: u8,
@@ -1158,11 +1167,15 @@ pub extern "C" fn shekyl_fcmp_outputs_to_leaves(
 }
 
 // ─── FCMP++: FROST SAL Multisig ─────────────────────────────────────────────
+// Gated behind `multisig` feature: nonce aggregation is incomplete (placeholder).
+// Do not enable in production builds until proper nonce aggregation is implemented.
 
+#[cfg(feature = "multisig")]
 /// Opaque handle for a FROST SAL session (one per input).
 /// Created by `shekyl_frost_sal_session_new`, freed by `_session_free`.
 pub struct ShekylFrostSalSession(shekyl_fcmp::frost_sal::FrostSalSession);
 
+#[cfg(feature = "multisig")]
 /// Create a new FROST SAL session for one input.
 ///
 /// `output_key_ptr`, `key_image_gen_ptr`, `commitment_ptr`: 32-byte compressed
@@ -1218,6 +1231,7 @@ pub extern "C" fn shekyl_frost_sal_session_new(
     }
 }
 
+#[cfg(feature = "multisig")]
 /// Get the serialized `RerandomizedOutput` from a FROST SAL session.
 ///
 /// Returns a buffer that can be deserialized by peers to reconstruct
@@ -1239,6 +1253,7 @@ pub extern "C" fn shekyl_frost_sal_get_rerand(
 
 /// Aggregate FROST partial shares and produce the full FCMP++ proof.
 ///
+#[cfg(feature = "multisig")]
 /// `session_ptrs`: array of `num_inputs` session handles (one per input).
 /// `group_key_ptr`: 32-byte Ed25519T group public key.
 /// `nonce_sums_ptr` / `nonce_sums_len`: serialized aggregated nonce data.
@@ -1372,6 +1387,7 @@ pub extern "C" fn shekyl_frost_sal_aggregate_and_prove(
     }
 }
 
+#[cfg(feature = "multisig")]
 /// Free a FROST SAL session handle.
 #[no_mangle]
 pub extern "C" fn shekyl_frost_sal_session_free(session: *mut ShekylFrostSalSession) {
@@ -1384,9 +1400,11 @@ pub extern "C" fn shekyl_frost_sal_session_free(session: *mut ShekylFrostSalSess
 
 // ─── FCMP++: FROST DKG Key Management ───────────────────────────────────────
 
+#[cfg(feature = "multisig")]
 /// Opaque handle for stored FROST threshold keys.
 pub struct ShekylFrostThresholdKeys(shekyl_fcmp::frost_dkg::SerializedThresholdKeys);
 
+#[cfg(feature = "multisig")]
 /// Import FROST threshold keys from a serialized blob.
 /// Returns an opaque handle, or NULL if deserialization fails.
 /// The caller must later free the handle with `shekyl_frost_keys_free`.
@@ -1406,6 +1424,7 @@ pub extern "C" fn shekyl_frost_keys_import(
     Box::into_raw(Box::new(ShekylFrostThresholdKeys(serialized)))
 }
 
+#[cfg(feature = "multisig")]
 /// Export FROST threshold keys as a serialized blob.
 /// Returns a ShekylBuffer with the serialized data, or empty on failure.
 #[no_mangle]
@@ -1423,6 +1442,7 @@ pub extern "C" fn shekyl_frost_keys_export(
     ShekylBuffer { ptr, len }
 }
 
+#[cfg(feature = "multisig")]
 /// Get the 32-byte group public key from threshold keys.
 /// Writes 32 bytes to `out_ptr`. Returns true on success.
 #[no_mangle]
@@ -1444,6 +1464,7 @@ pub extern "C" fn shekyl_frost_keys_group_key(
     }
 }
 
+#[cfg(feature = "multisig")]
 /// Validate that threshold keys match expected M-of-N parameters.
 /// Returns true if valid.
 #[no_mangle]
@@ -1462,6 +1483,7 @@ pub extern "C" fn shekyl_frost_keys_validate(
     }
 }
 
+#[cfg(feature = "multisig")]
 /// Free a FROST threshold keys handle.
 #[no_mangle]
 pub extern "C" fn shekyl_frost_keys_free(handle: *mut ShekylFrostThresholdKeys) {
@@ -2613,12 +2635,14 @@ mod tests {
         shekyl_buffer_free(sig.signature.ptr, sig.signature.len);
     }
 
+    #[cfg(feature = "multisig")]
     #[test]
     fn test_frost_keys_import_null_returns_null() {
         let handle = shekyl_frost_keys_import(std::ptr::null(), 0);
         assert!(handle.is_null());
     }
 
+    #[cfg(feature = "multisig")]
     #[test]
     fn test_frost_keys_import_invalid_data_returns_null() {
         let garbage = [0xDE, 0xAD, 0xBE, 0xEF];
@@ -2626,12 +2650,14 @@ mod tests {
         assert!(handle.is_null());
     }
 
+    #[cfg(feature = "multisig")]
     #[test]
     fn test_frost_keys_validate_null_returns_false() {
         let valid = shekyl_frost_keys_validate(std::ptr::null(), 2, 3);
         assert!(!valid);
     }
 
+    #[cfg(feature = "multisig")]
     #[test]
     fn test_frost_keys_group_key_null_returns_false() {
         let mut out = [0u8; 32];
@@ -2639,11 +2665,13 @@ mod tests {
         assert!(!ok);
     }
 
+    #[cfg(feature = "multisig")]
     #[test]
     fn test_frost_keys_free_null_is_safe() {
         shekyl_frost_keys_free(std::ptr::null_mut());
     }
 
+    #[cfg(feature = "multisig")]
     #[test]
     fn test_frost_sal_session_new_null_returns_null() {
         let session = shekyl_frost_sal_session_new(
@@ -2653,11 +2681,13 @@ mod tests {
         assert!(session.is_null());
     }
 
+    #[cfg(feature = "multisig")]
     #[test]
     fn test_frost_sal_session_free_null_is_safe() {
         shekyl_frost_sal_session_free(std::ptr::null_mut());
     }
 
+    #[cfg(feature = "multisig")]
     #[test]
     fn test_frost_sal_get_rerand_null_returns_empty() {
         let buf = shekyl_frost_sal_get_rerand(std::ptr::null());

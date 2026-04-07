@@ -161,7 +161,8 @@ impl<R: Send + Sync + Clone + RngCore + CryptoRng, T: Sync + Clone + Debug + Tra
     let mut interpolated_key_image_share = addendum.key_image_share * interpolation_factor;
     let mut interpolated_x_U_share = addendum.x_U_share * interpolation_factor;
 
-    // RELEASE-BLOCKER(shekyl): Upstream DKG offset introspection to `dkg` crate to avoid fragile coupling
+    // TODO(shekyl): Upstream DKG offset introspection to `dkg` crate. FROST multisig is gated
+    // behind a feature flag and non-functional in production builds; this coupling is deferred.
     if *view
       .included()
       .first()
