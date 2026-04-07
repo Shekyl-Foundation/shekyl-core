@@ -32,6 +32,38 @@
 
 ### ✨ Added
 
+- **`shekyl-tx-builder` crate.** New Rust crate (`rust/shekyl-tx-builder/`)
+  consolidating Bulletproofs+ range proofs, FCMP++ full-chain membership proof
+  construction, ECDH amount encoding, and PQC (ML-DSA-65) signing into a single
+  native Rust call path. Replaces the prior C++ → Rust → C++ → Rust FFI
+  round-trip for proof generation. Includes 19 unit tests covering validation
+  edge cases (0 inputs, overflow amounts, empty trees, wrong-length PQC keys)
+  and ECDH encoding round-trips. All secret key material is wrapped in
+  `zeroize::Zeroizing` and wiped on drop.
+
+- **`shekyl_sign_transaction` FFI export.** New C ABI function in `shekyl-ffi`
+  wrapping `shekyl-tx-builder::sign_transaction()`. Accepts JSON-serialized
+  inputs/outputs, returns a `ShekylSignResult` with either JSON proofs or a
+  structured error code and message. Declared in `shekyl_ffi.h`.
+
+- **Wallet RPC `native-sign` feature.** `shekyl-wallet-rpc` gains an optional
+  `native-sign` Cargo feature that enables `transfer_native()` — a pure-Rust
+  transfer path using `shekyl-tx-builder` directly, eliminating C++ proof FFI
+  round-trips. The split pipeline uses `wallet2_ffi_prepare_transfer` (C++ →
+  JSON) → `shekyl-tx-builder::sign_transaction` (pure Rust) →
+  `wallet2_ffi_finalize_transfer` (JSON → C++).
+
+- **`wallet2_ffi_prepare_transfer` / `wallet2_ffi_finalize_transfer` stubs.**
+  New C++ FFI entry points in `wallet2_ffi.cpp` that split the transfer
+  pipeline for native Rust signing. Currently return "not yet implemented"
+  pending full C++ integration.
+
+- **Secure memory Cursor rule.** Added `.cursor/rules/secure-memory.mdc`
+  codifying project-wide conventions for cryptographic secret zeroization in
+  both Rust (`Zeroizing<T>`, `ZeroizeOnDrop`) and C++ (`memwipe`, scope guards,
+  `wipeable_string`), FFI boundary ownership, and OS-level protections (`mlock`,
+  `prctl(PR_SET_DUMPABLE, 0)`, `MADV_DONTDUMP`).
+
 - **Vendored monero-oxide protocol crates.** Completed the vendored crate set
   in `rust/shekyl-oxide/`: added `shekyl-primitives` (Keccak-256, Pedersen
   commitments), `shekyl-bulletproofs` (BP+ range proofs), the root `shekyl-oxide`

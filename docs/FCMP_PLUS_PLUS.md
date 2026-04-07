@@ -1,6 +1,6 @@
 # FCMP++ Full-Chain Membership Proofs — Specification
 
-> **Last updated:** 2026-04-06
+> **Last updated:** 2026-04-07
 >
 > **Parent document:** `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
