@@ -243,6 +243,7 @@ bool verify_transaction_pqc_auth(const transaction& tx,
 
     if (!ok)
     {
+#ifndef NDEBUG
       uint8_t err = shekyl_pqc_verify_debug(
           auth.scheme_id,
           auth.hybrid_public_key.data(),
@@ -252,6 +253,9 @@ bool verify_transaction_pqc_auth(const transaction& tx,
           reinterpret_cast<const uint8_t*>(payload_hash.data),
           sizeof(payload_hash.data));
       MERROR("PQC verify failed: error code " << (int)err << " (input " << idx << ")");
+#else
+      MERROR("PQC verify failed (input " << idx << ")");
+#endif
       return false;
     }
   }
