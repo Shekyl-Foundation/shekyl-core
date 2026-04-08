@@ -631,7 +631,7 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
 
             if (oi.is_coin_base) {
                 ts.amount = oi.amount;
-                ts.mask = rct::identity();
+                ts.mask = rct::zero();
             } else {
                 const transaction &src_tx = *oi.p_tx;
                 crypto::key_derivation derivation;
@@ -1253,6 +1253,14 @@ bool construct_fcmp_tx(
     from.get_keys().m_account_address, std::vector<uint8_t>(),
     tx, tx_key, additional_tx_keys, true, true, 1);
   CHECK_AND_ASSERT_MES(r, false, "construct_fcmp_tx: construct_tx_and_get_tx_key failed");
+
+  // FCMP++ consensus requires y-normalized key images (sign bit of byte 31 cleared).
+  // construct_tx_and_get_tx_key stores raw key images; normalize them here.
+  for (auto& vin : tx.vin)
+  {
+    if (std::holds_alternative<txin_to_key>(vin))
+      crypto::key_image_y_normalize(std::get<txin_to_key>(vin).k_image);
+  }
 
   // Phase B: build FCMP++ proof
   const auto& bs = c.get_blockchain_storage();

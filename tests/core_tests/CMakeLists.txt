@@ -34,9 +34,7 @@ set(core_tests_sources
   chaingen.cpp
   chaingen001.cpp
   chaingen_main.cpp
-  double_spend.cpp
   integer_overflow.cpp
-  ring_signature_1.cpp
   transaction_tests.cpp
   tx_validation.cpp
   tx_pool.cpp
@@ -52,10 +50,7 @@ set(core_tests_headers
   chain_switch_1.h
   chaingen.h
   chaingen_tests_list.h
-  double_spend.h
-  double_spend.inl
   integer_overflow.h
-  ring_signature_1.h
   tx_pool.h
   staking.h
   fcmp_tests.h

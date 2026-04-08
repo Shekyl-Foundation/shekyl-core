@@ -325,7 +325,7 @@ struct output_index {
     if (rct &&  p_tx->rct_signatures.outPk.size() > out_no)
       comm = p_tx->rct_signatures.outPk[out_no].mask;
     else
-      comm = rct::commit(amount, rct::identity());
+      comm = rct::zeroCommit(amount);
   }
 
   rct::key commitment() const {

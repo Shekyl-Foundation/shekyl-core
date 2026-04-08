@@ -114,10 +114,6 @@ int main(int argc, char* argv[])
     // GENERATE_AND_PLAY(gen_simple_chain_split_1);
     GENERATE_AND_PLAY(one_block);
     // GENERATE_AND_PLAY(gen_chain_switch_1);
-    // GENERATE_AND_PLAY(gen_ring_signature_1);
-    // GENERATE_AND_PLAY(gen_ring_signature_2);
-    //GENERATE_AND_PLAY(gen_ring_signature_big); // Takes up to XXX hours (if CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW == 10)
-
     // Block verification tests
     GENERATE_AND_PLAY(gen_block_big_major_version);
     GENERATE_AND_PLAY(gen_block_big_minor_version);
@@ -184,19 +180,6 @@ int main(int argc, char* argv[])
     // GENERATE_AND_PLAY(txpool_double_spend_local);
     // GENERATE_AND_PLAY(txpool_double_spend_keyimage);
     // GENERATE_AND_PLAY(txpool_stem_loop);
-
-    // Disabled: construct_tx_rct produces FCMP++ stubs without pqc_auths.
-    // GENERATE_AND_PLAY(gen_double_spend_in_tx<false>);
-    // GENERATE_AND_PLAY(gen_double_spend_in_tx<true>);
-    // GENERATE_AND_PLAY(gen_double_spend_in_the_same_block<false>);
-    // GENERATE_AND_PLAY(gen_double_spend_in_the_same_block<true>);
-    // GENERATE_AND_PLAY(gen_double_spend_in_different_blocks<false>);
-    // GENERATE_AND_PLAY(gen_double_spend_in_different_blocks<true>);
-    // GENERATE_AND_PLAY(gen_double_spend_in_different_chains);
-    // GENERATE_AND_PLAY(gen_double_spend_in_alt_chain_in_the_same_block<false>);
-    // GENERATE_AND_PLAY(gen_double_spend_in_alt_chain_in_the_same_block<true>);
-    // GENERATE_AND_PLAY(gen_double_spend_in_alt_chain_in_different_blocks<false>);
-    // GENERATE_AND_PLAY(gen_double_spend_in_alt_chain_in_different_blocks<true>);
 
     // Disabled: uses MONEY_SUPPLY-scale amounts that don't exist under Shekyl emission
     // GENERATE_AND_PLAY(gen_uint_overflow_1);
