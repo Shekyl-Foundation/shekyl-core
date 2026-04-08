@@ -29,6 +29,9 @@ pub use proof::{ShekylFcmpProof, ProveError, VerifyError, ProveResult, ProveInpu
 #[cfg(feature = "multisig")]
 pub use proof::ProveInputLeafChunk;
 
+pub use shekyl_fcmp_plus_plus::{Input, Output};
+pub use shekyl_fcmp_plus_plus::sal::SpendAuthAndLinkability;
+
 /// Domain separator for Shekyl's PQC leaf hash: H(pqc_pk) -> 4th scalar.
 pub const DOMAIN_PQC_LEAF: &[u8] = b"shekyl-pqc-leaf";
 

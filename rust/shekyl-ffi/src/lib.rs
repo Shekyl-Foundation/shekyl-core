@@ -1167,8 +1167,6 @@ pub extern "C" fn shekyl_fcmp_outputs_to_leaves(
 }
 
 // ─── FCMP++: FROST SAL Multisig ─────────────────────────────────────────────
-// Gated behind `multisig` feature: nonce aggregation is incomplete (placeholder).
-// Do not enable in production builds until proper nonce aggregation is implemented.
 
 #[cfg(feature = "multisig")]
 /// Opaque handle for a FROST SAL session (one per input).
@@ -1251,25 +1249,167 @@ pub extern "C" fn shekyl_frost_sal_get_rerand(
     ShekylBuffer::from_vec(data)
 }
 
-/// Aggregate FROST partial shares and produce the full FCMP++ proof.
-///
+// ─── FROST Signing Coordinator FFI ───────────────────────────────────────────
+
 #[cfg(feature = "multisig")]
-/// `session_ptrs`: array of `num_inputs` session handles (one per input).
-/// `group_key_ptr`: 32-byte Ed25519T group public key.
-/// `nonce_sums_ptr` / `nonce_sums_len`: serialized aggregated nonce data.
-/// `sum_shares_ptr`: `num_inputs * 32` bytes, aggregated FROST share per input.
-/// `witness_ptr` / `witness_len`: full witness blob (same format as `shekyl_fcmp_prove`).
+/// Opaque handle for the FROST signing coordinator.
+pub struct ShekylFrostCoordinator(shekyl_fcmp::frost_sal::FrostSigningCoordinator);
+
+#[cfg(feature = "multisig")]
+/// Create a FROST signing coordinator for `num_inputs` inputs.
 ///
-/// Consumes and frees all sessions on success.
-/// Returns the proof result.
+/// `included_ptr`: array of `num_included` u16 participant indices.
+/// Returns an opaque handle, or null on failure.
+///
+/// # Safety
+/// `included_ptr` must point to `num_included` valid u16 values.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_sal_aggregate_and_prove(
+pub extern "C" fn shekyl_frost_coordinator_new(
+    num_inputs: u32,
+    included_ptr: *const u16,
+    num_included: u32,
+) -> *mut ShekylFrostCoordinator {
+    if included_ptr.is_null() || num_included == 0 || num_inputs == 0 {
+        return std::ptr::null_mut();
+    }
+
+    let included: Vec<modular_frost::Participant> = (0..num_included as usize)
+        .filter_map(|i| {
+            let idx = unsafe { *included_ptr.add(i) };
+            modular_frost::Participant::new(idx)
+        })
+        .collect();
+
+    if included.len() != num_included as usize {
+        return std::ptr::null_mut();
+    }
+
+    match shekyl_fcmp::frost_sal::FrostSigningCoordinator::new_for_sal(
+        num_inputs as usize,
+        included,
+    ) {
+        Ok(c) => Box::into_raw(Box::new(ShekylFrostCoordinator(c))),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[cfg(feature = "multisig")]
+/// Feed one participant's nonce commitments to the coordinator.
+///
+/// `participant`: 1-based participant index.
+/// `data_ptr`: `num_inputs` contiguous 32-byte compressed point commitments.
+/// Returns true on success.
+///
+/// # Safety
+/// `coord` must be a valid handle. `data_ptr` must point to `num_inputs * 32` bytes.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_coordinator_add_preprocesses(
+    coord: *mut ShekylFrostCoordinator,
+    participant: u16,
+    data_ptr: *const u8,
+    num_inputs: u32,
+) -> bool {
+    if coord.is_null() || data_ptr.is_null() {
+        return false;
+    }
+    let Some(p) = modular_frost::Participant::new(participant) else {
+        return false;
+    };
+    let coord = unsafe { &mut *coord };
+    let n = num_inputs as usize;
+
+    let mut preprocesses = Vec::with_capacity(n);
+    for i in 0..n {
+        let offset = i * 32;
+        let slice = unsafe { std::slice::from_raw_parts(data_ptr.add(offset), 32) };
+        preprocesses.push(shekyl_fcmp::frost_sal::FrostPreprocessResult {
+            nonce_commitments: slice.to_vec(),
+            addendum: Vec::new(),
+        });
+    }
+
+    coord.0.collect_preprocesses(p, preprocesses).is_ok()
+}
+
+#[cfg(feature = "multisig")]
+/// Get aggregated nonce sums from the coordinator.
+///
+/// Returns a `ShekylBuffer` with `num_inputs * 32` bytes (one 32-byte nonce sum per input).
+/// Caller must free via `shekyl_buffer_free`.
+///
+/// # Safety
+/// `coord` must be a valid handle with all preprocesses collected.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_coordinator_nonce_sums(
+    coord: *mut ShekylFrostCoordinator,
+) -> ShekylBuffer {
+    if coord.is_null() {
+        return ShekylBuffer::null();
+    }
+    let coord = unsafe { &mut *coord };
+    match coord.0.nonce_sums_bytes() {
+        Ok(per_input) => {
+            let mut flat = Vec::new();
+            for bytes in per_input {
+                flat.extend_from_slice(&bytes);
+            }
+            ShekylBuffer::from_vec(flat)
+        }
+        Err(_) => ShekylBuffer::null(),
+    }
+}
+
+#[cfg(feature = "multisig")]
+/// Feed one participant's partial shares to the coordinator.
+///
+/// `data_ptr`: `num_inputs` contiguous 32-byte scalar shares.
+///
+/// # Safety
+/// `coord` must be a valid handle. `data_ptr` must point to `num_inputs * 32` bytes.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_coordinator_add_shares(
+    coord: *mut ShekylFrostCoordinator,
+    participant: u16,
+    data_ptr: *const u8,
+    num_inputs: u32,
+) -> bool {
+    if coord.is_null() || data_ptr.is_null() {
+        return false;
+    }
+    let Some(p) = modular_frost::Participant::new(participant) else {
+        return false;
+    };
+    let coord = unsafe { &mut *coord };
+    let n = num_inputs as usize;
+
+    let mut shares = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut buf = [0u8; 32];
+        unsafe {
+            std::ptr::copy_nonoverlapping(data_ptr.add(i * 32), buf.as_mut_ptr(), 32);
+        }
+        shares.push(shekyl_fcmp::frost_sal::FrostSignShareResult { share: buf });
+    }
+
+    coord.0.collect_shares(p, shares).is_ok()
+}
+
+#[cfg(feature = "multisig")]
+/// Aggregate all inputs: consume sessions + coordinator, produce FCMP++ proof.
+///
+/// `session_ptrs`: `num_inputs` session handles. Consumed on success.
+/// `group_key_ptr`: 32-byte Ed25519T group public key.
+/// `witness_ptr/witness_len`: full witness blob for `prove_with_sal`.
+/// `tree_depth`: curve tree depth.
+///
+/// # Safety
+/// All sessions and the coordinator are consumed on success and must not be used after.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_coordinator_aggregate_and_prove(
+    coord: *mut ShekylFrostCoordinator,
     session_ptrs: *const *mut ShekylFrostSalSession,
     num_inputs: u32,
     group_key_ptr: *const u8,
-    _nonce_sums_ptr: *const u8,
-    _nonce_sums_len: usize,
-    sum_shares_ptr: *const u8,
     witness_ptr: *const u8,
     witness_len: usize,
     tree_root_ptr: *const u8,
@@ -1281,7 +1421,7 @@ pub extern "C" fn shekyl_frost_sal_aggregate_and_prove(
         success: false,
     };
 
-    if session_ptrs.is_null() || group_key_ptr.is_null() || sum_shares_ptr.is_null()
+    if coord.is_null() || session_ptrs.is_null() || group_key_ptr.is_null()
         || witness_ptr.is_null() || tree_root_ptr.is_null()
     {
         return fail;
@@ -1299,14 +1439,10 @@ pub extern "C" fn shekyl_frost_sal_aggregate_and_prove(
     };
 
     let group_key_bytes = read32(group_key_ptr);
-    let Some(sum_bytes) = slice_from_ptr(sum_shares_ptr, n * 32) else {
-        return fail;
-    };
     let Some(witness) = slice_from_ptr(witness_ptr, witness_len) else {
         return fail;
     };
 
-    // Deserialize group key
     use ciphersuite::group::GroupEncoding;
     let gk_ct = <dalek_ff_group::EdwardsPoint as GroupEncoding>::from_bytes(&group_key_bytes.into());
     if bool::from(gk_ct.is_none()) {
@@ -1314,62 +1450,40 @@ pub extern "C" fn shekyl_frost_sal_aggregate_and_prove(
     }
     let group_key: dalek_ff_group::EdwardsPoint = gk_ct.unwrap();
 
-    // Parse the witness to extract leaf chunks for prove_with_sal
     let Some(prove_inputs) = parse_prove_witness(witness, n) else {
         return fail;
     };
 
-    // Take ownership of sessions
-    let mut sessions: Vec<Box<ShekylFrostSalSession>> = Vec::with_capacity(n);
+    let mut coord_box = unsafe { Box::from_raw(coord) };
+
+    let mut sessions: Vec<shekyl_fcmp::frost_sal::FrostSalSession> = Vec::with_capacity(n);
     for i in 0..n {
         let ptr = unsafe { *session_ptrs.add(i) };
         if ptr.is_null() {
             return fail;
         }
-        sessions.push(unsafe { Box::from_raw(ptr) });
+        sessions.push(unsafe { Box::from_raw(ptr) }.0);
     }
 
-    // Aggregate each session's FROST shares into SAL proofs
-    let mut sal_pairs = Vec::with_capacity(n);
-    let mut original_outputs = Vec::with_capacity(n);
-    let mut rerands = Vec::with_capacity(n);
-    let mut pseudo_outs_flat = Vec::with_capacity(n * 32);
-    let mut leaf_chunks = Vec::with_capacity(n);
+    let original_outputs: Vec<_> = sessions.iter().map(|s| *s.original_output()).collect();
+    let rerands: Vec<_> = sessions.iter().map(|s| s.rerandomized_output().clone()).collect();
+    let pseudo_outs_flat: Vec<u8> = sessions.iter().flat_map(|s| s.pseudo_out().iter().copied()).collect();
 
-    for (i, session_box) in sessions.into_iter().enumerate() {
-        let session = session_box.0;
-        pseudo_outs_flat.extend_from_slice(session.pseudo_out());
-
-        // Deserialize the aggregated share for this input
-        let mut share_bytes = [0u8; 32];
-        share_bytes.copy_from_slice(&sum_bytes[i * 32..(i + 1) * 32]);
-        let sum_ct = <dalek_ff_group::Scalar as ciphersuite::group::ff::PrimeField>::from_repr(share_bytes.into());
-        if bool::from(sum_ct.is_none()) {
-            return fail;
-        }
-        let sum_scalar: dalek_ff_group::Scalar = sum_ct.unwrap();
-
-        // Build nonce sums (single nonce per input for SalAlgorithm)
-        let nonce_sums = vec![vec![group_key]]; // placeholder -- needs proper nonce aggregation
-
-        original_outputs.push(*session.original_output());
-        rerands.push(session.rerandomized_output().clone());
-
-        match session.aggregate(group_key, &nonce_sums, sum_scalar) {
-            Ok((input, sal)) => sal_pairs.push((input, sal)),
-            Err(_) => return fail,
-        }
-
-        // Build leaf chunk from parsed witness
-        let pi = &prove_inputs[i];
-        leaf_chunks.push(shekyl_fcmp::proof::ProveInputLeafChunk {
+    let leaf_chunks: Vec<_> = prove_inputs
+        .iter()
+        .map(|pi| shekyl_fcmp::proof::ProveInputLeafChunk {
             output_h_pqc: pi.h_pqc.clone(),
             leaf_outputs: pi.leaf_chunk_outputs.clone(),
             leaf_h_pqc: pi.leaf_chunk_h_pqc.clone(),
             c1_branch_layers: pi.c1_branch_layers.clone(),
             c2_branch_layers: pi.c2_branch_layers.clone(),
-        });
-    }
+        })
+        .collect();
+
+    let sal_pairs = match coord_box.0.aggregate_all(sessions, group_key) {
+        Ok(pairs) => pairs,
+        Err(_) => return fail,
+    };
 
     match shekyl_fcmp::proof::prove_with_sal(
         sal_pairs,
@@ -1384,6 +1498,110 @@ pub extern "C" fn shekyl_frost_sal_aggregate_and_prove(
             success: true,
         },
         Err(_) => fail,
+    }
+}
+
+#[cfg(feature = "multisig")]
+/// Free a FROST signing coordinator handle.
+///
+/// # Safety
+/// `coord` must be a valid handle or null.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_coordinator_free(coord: *mut ShekylFrostCoordinator) {
+    if !coord.is_null() {
+        unsafe { drop(Box::from_raw(coord)); }
+    }
+}
+
+// ─── FROST Signer FFI ───────────────────────────────────────────────────────
+
+#[cfg(feature = "multisig")]
+/// Signer-side: preprocess a session to generate nonce commitments.
+///
+/// `session`: a FROST SAL session handle.
+/// `keys_handle`: threshold keys handle.
+///
+/// Returns nonce commitments (32 bytes for SalAlgorithm) as a `ShekylBuffer`.
+///
+/// # Safety
+/// Both handles must be valid.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_signer_preprocess(
+    session: *mut ShekylFrostSalSession,
+    keys_handle: *const ShekylFrostThresholdKeys,
+) -> ShekylBuffer {
+    if session.is_null() || keys_handle.is_null() {
+        return ShekylBuffer::null();
+    }
+    let session = unsafe { &mut *session };
+    let keys_handle = unsafe { &*keys_handle };
+
+    let keys = match keys_handle.0.deserialize() {
+        Ok(k) => k,
+        Err(_) => return ShekylBuffer::null(),
+    };
+
+    match session.0.preprocess(&keys) {
+        Ok(result) => ShekylBuffer::from_vec(result.nonce_commitments),
+        Err(_) => ShekylBuffer::null(),
+    }
+}
+
+#[cfg(feature = "multisig")]
+/// Signer-side: produce a partial signature share for one input.
+///
+/// `session`: FROST SAL session (must have been preprocessed).
+/// `keys_handle`: threshold keys.
+/// `included_ptr`: array of participant indices in the signing set.
+/// `num_included`: number of participants.
+/// `nonce_sums_ptr`: 32 bytes of aggregated nonce sums for this input.
+///
+/// Returns 32-byte partial share as a `ShekylBuffer`.
+///
+/// # Safety
+/// All pointers must be valid. `included_ptr` must have `num_included` u16 values.
+#[no_mangle]
+pub extern "C" fn shekyl_frost_signer_sign(
+    session: *mut ShekylFrostSalSession,
+    keys_handle: *const ShekylFrostThresholdKeys,
+    included_ptr: *const u16,
+    num_included: u32,
+    nonce_sums_ptr: *const u8,
+) -> ShekylBuffer {
+    if session.is_null() || keys_handle.is_null() || included_ptr.is_null() || nonce_sums_ptr.is_null() {
+        return ShekylBuffer::null();
+    }
+
+    let session = unsafe { &mut *session };
+    let keys_handle = unsafe { &*keys_handle };
+
+    let keys = match keys_handle.0.deserialize() {
+        Ok(k) => k,
+        Err(_) => return ShekylBuffer::null(),
+    };
+
+    let included: Vec<modular_frost::Participant> = (0..num_included as usize)
+        .filter_map(|i| {
+            let idx = unsafe { *included_ptr.add(i) };
+            modular_frost::Participant::new(idx)
+        })
+        .collect();
+
+    let view = keys.view(included).unwrap();
+
+    let mut nonce_sum_bytes = [0u8; 32];
+    unsafe { std::ptr::copy_nonoverlapping(nonce_sums_ptr, nonce_sum_bytes.as_mut_ptr(), 32) };
+
+    use ciphersuite::group::GroupEncoding;
+    let nonce_sum_ct = <dalek_ff_group::EdwardsPoint as GroupEncoding>::from_bytes(&nonce_sum_bytes.into());
+    if bool::from(nonce_sum_ct.is_none()) {
+        return ShekylBuffer::null();
+    }
+    let nonce_sums = vec![vec![nonce_sum_ct.unwrap()]];
+
+    match session.0.sign_share(&view, &nonce_sums) {
+        Ok(result) => ShekylBuffer::from_vec(result.share.to_vec()),
+        Err(_) => ShekylBuffer::null(),
     }
 }
 

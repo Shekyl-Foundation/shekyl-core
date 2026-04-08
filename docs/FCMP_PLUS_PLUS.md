@@ -542,15 +542,17 @@ rust/
 | `shekyl_fcmp_pqc_leaf_hash()` | `shekyl-ffi/src/lib.rs` | Hash ML-DSA-65 pubkey for leaf |
 | `shekyl_fcmp_derive_pqc_keypair()` | `shekyl-ffi/src/lib.rs` | Derive per-output PQC keypair |
 | `shekyl_fcmp_outputs_to_leaves()` | `shekyl-ffi/src/lib.rs` | Convert outputs to 4-scalar leaves |
-| `shekyl_frost_sal_session_new()` | `shekyl-ffi/src/lib.rs` | Create FROST SAL session per input |
-| `shekyl_frost_sal_get_rerand()` | `shekyl-ffi/src/lib.rs` | Get rerandomized output from session |
-| `shekyl_frost_sal_aggregate_and_prove()` | `shekyl-ffi/src/lib.rs` | Aggregate FROST shares and produce FCMP++ proof |
-| `shekyl_frost_sal_session_free()` | `shekyl-ffi/src/lib.rs` | Free FROST SAL session handle |
-| `shekyl_frost_keys_import()` | `shekyl-ffi/src/lib.rs` | Import serialized FROST threshold keys |
-| `shekyl_frost_keys_export()` | `shekyl-ffi/src/lib.rs` | Export serialized FROST threshold keys |
-| `shekyl_frost_keys_group_key()` | `shekyl-ffi/src/lib.rs` | Extract 32-byte Ed25519T group key |
-| `shekyl_frost_keys_validate()` | `shekyl-ffi/src/lib.rs` | Validate M-of-N params against threshold keys |
-| `shekyl_frost_keys_free()` | `shekyl-ffi/src/lib.rs` | Free FROST threshold keys handle |
+| `shekyl_frost_sal_session_new()` | `shekyl-ffi/src/lib.rs` | Create FROST SAL session per input (Rust-only, `multisig` feature) |
+| `shekyl_frost_sal_get_rerand()` | `shekyl-ffi/src/lib.rs` | Get rerandomized output from session (Rust-only, `multisig` feature) |
+| `shekyl_frost_sal_aggregate_and_prove()` | `shekyl-ffi/src/lib.rs` | Aggregate FROST shares and produce FCMP++ proof (Rust-only, `multisig` feature) |
+| `shekyl_frost_coordinator_*()` | `shekyl-ffi/src/lib.rs` | Coordinator lifecycle: new, add_preprocess, nonce_sums, add_shares, aggregate (Rust-only, `multisig` feature) |
+| `shekyl_frost_signer_*()` | `shekyl-ffi/src/lib.rs` | Signer lifecycle: preprocess, sign (Rust-only, `multisig` feature) |
+| `shekyl_frost_sal_session_free()` | `shekyl-ffi/src/lib.rs` | Free FROST SAL session handle (Rust-only, `multisig` feature) |
+| `shekyl_frost_keys_import()` | `shekyl-ffi/src/lib.rs` | Import serialized FROST threshold keys (Rust-only, `multisig` feature) |
+| `shekyl_frost_keys_export()` | `shekyl-ffi/src/lib.rs` | Export serialized FROST threshold keys (Rust-only, `multisig` feature) |
+| `shekyl_frost_keys_group_key()` | `shekyl-ffi/src/lib.rs` | Extract 32-byte Ed25519T group key (Rust-only, `multisig` feature) |
+| `shekyl_frost_keys_validate()` | `shekyl-ffi/src/lib.rs` | Validate M-of-N params against threshold keys (Rust-only, `multisig` feature) |
+| `shekyl_frost_keys_free()` | `shekyl-ffi/src/lib.rs` | Free FROST threshold keys handle (Rust-only, `multisig` feature) |
 | `shekyl_pqc_verify()` | `shekyl-ffi/src/lib.rs` | Verify hybrid PQC signature |
 | `shekyl_kem_encapsulate()` | `shekyl-ffi/src/lib.rs` | Hybrid KEM encapsulation |
 | `shekyl_kem_decapsulate()` | `shekyl-ffi/src/lib.rs` | Hybrid KEM decapsulation |
@@ -561,9 +563,16 @@ rust/
 
 ### C++ Header
 
-All FFI declarations are in `src/shekyl/shekyl_ffi.h`. Functions use
-`#[no_mangle] pub extern "C" fn` in Rust and are declared with
-`extern "C"` linkage in the header.
+All non-multisig FFI declarations are in `src/shekyl/shekyl_ffi.h`.
+Functions use `#[no_mangle] pub extern "C" fn` in Rust and are declared
+with `extern "C"` linkage in the header.
+
+**Note:** FROST multisig FFI functions (marked "Rust-only" in the table
+above) exist in the Rust `shekyl-ffi` crate behind
+`#[cfg(feature = "multisig")]` but their C header declarations in
+`shekyl_ffi.h` have been removed. FROST multisig is consumed exclusively
+through the Rust wallet crates (`shekyl-wallet-core`, `shekyl-wallet-rpc`),
+not through C++ code.
 
 ### Build Integration
 
@@ -1146,10 +1155,12 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | `genRctFcmpPlusPlus` accepts leaf chunk entries | **Done** | `rctSigs.h/cpp` |
 | Daemon RPC `chunk_outputs_blob` in `get_curve_tree_path` | **Done** | `core_rpc_server.cpp`, `core_rpc_server_commands_defs.h` |
 | Wallet `fcmp_precomputed_path` stores `leaf_chunk_entries` | **Done** | `wallet2.h/cpp` |
-| C++ wallet FROST session lifecycle (`prepare_multisig_fcmp_proof`) | **Done** | `wallet2.cpp` |
-| C++ wallet FROST signing request (v3 format) | **Done** | `wallet2.cpp` |
-| C++ wallet FROST aggregation in `import_multisig_signatures` | **Done** | `wallet2.cpp` |
-| C++ wallet FROST threshold key import/export | **Done** | `wallet2.h/cpp` |
+| C++ wallet FROST code removed | **Done** | `wallet2.h/cpp`, `wallet2_ffi.cpp`, `shekyl_ffi.h` (SHEKYL_MULTISIG blocks deleted) |
+| Rust FROST DKG ceremony (`MultisigDkgSession`) | **Done** | `rust/shekyl-wallet-core/src/multisig/dkg.rs` |
+| Rust FROST signing orchestration (`MultisigSigningSession`) | **Done** | `rust/shekyl-wallet-core/src/multisig/signing.rs` |
+| `FrostSigningCoordinator` (nonce aggregation + share collection) | **Done** | `rust/shekyl-fcmp/src/frost_sal.rs` |
+| Rust multisig group management (`MultisigGroup`) | **Done** | `rust/shekyl-wallet-core/src/multisig/group.rs` |
+| FROST multisig RPC endpoints (signing only) | **Done** | `rust/shekyl-wallet-rpc/src/multisig_handlers.rs` |
 | FROST SAL unit tests (4 tests) | **Done** | `rust/shekyl-fcmp/src/frost_sal.rs` |
 | FROST DKG unit tests (4 tests) | **Done** | `rust/shekyl-fcmp/src/frost_dkg.rs` |
 | FROST FFI lifecycle tests (8 tests) | **Done** | `rust/shekyl-ffi/src/lib.rs` |
@@ -1416,7 +1427,7 @@ audit signoff:
 |------|------|--------|
 | FCMP\_PARAMS safe API | `fcmp/fcmp++/src/lib.rs` | API quality |
 | Generated constant visibility | `fcmp/fcmp++/build.rs` | Encapsulation |
-| DKG offset introspection | `fcmp/fcmp++/src/sal/legacy_multisig.rs` | Upstream coupling |
+| DKG offset introspection | Removed (`legacy_multisig.rs` deleted) | Resolved — legacy multisig removed; modern SAL in `sal/multisig.rs` |
 | On-curve constraint for `c` | `crypto/fcmps/src/gadgets/mod.rs` | Correctness |
 | Bulk block fetch | `rpc/src/lib.rs` | Sync performance |
 | Bulk height-based fetch | `rpc/src/lib.rs` | Sync performance |

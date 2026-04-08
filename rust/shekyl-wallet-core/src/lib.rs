@@ -16,6 +16,8 @@
 pub mod error;
 pub mod claim_builder;
 pub mod workflow;
+#[cfg(feature = "multisig")]
+pub mod multisig;
 
 pub use error::WalletCoreError;
 pub use claim_builder::{ClaimTxBuilder, ClaimTxPlan};

@@ -1,6 +1,6 @@
 # PQC Multisig for Shekyl
 
-> **Last updated:** 2026-04-06
+> **Last updated:** 2026-04-07
 
 ## Purpose
 
@@ -53,7 +53,9 @@ On the rebooted Shekyl chain, the classical multisig code is removed:
 - `account_base::make_multisig` and its secret-splitting machinery are
   deleted from `account.cpp`.
 - The MMS (Multisig Messaging System) transport layer is not carried forward.
-- No multi-round signing coordination exists in the codebase.
+- No classical multi-round signing coordination (MMS-style) exists in the
+  codebase. PQC multisig uses file-based signing rounds; optional FROST
+  SAL uses structured round coordination via Rust wallet crates.
 - Wallet file format does not include classical multisig key state.
 - `wallet2.cpp` contains zero classical multisig code: all multisig
   functions (`make_multisig`, `exchange_multisig_keys`, `export_multisig`,
@@ -727,43 +729,70 @@ FCMP++ proof flow (multisig):
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | `FrostSalSession` | `rust/shekyl-fcmp/src/frost_sal.rs` | Per-input FROST SAL state machine |
+| `FrostSigningCoordinator` | `rust/shekyl-fcmp/src/frost_sal.rs` | Nonce aggregation, share collection, multi-input orchestration |
 | `prove_with_sal()` | `rust/shekyl-fcmp/src/proof.rs` | Proof construction from pre-aggregated SAL |
-| `FrostDkg` / `SerializedThresholdKeys` | `rust/shekyl-fcmp/src/frost_dkg.rs` | DKG output management and serialization |
-| FROST SAL FFI | `rust/shekyl-ffi/src/lib.rs` | C ABI for session lifecycle |
+| `DkgSession` | `rust/shekyl-fcmp/src/frost_dkg.rs` | State-machine DKG ceremony (3-round PedPoP) |
+| `SerializedThresholdKeys` | `rust/shekyl-fcmp/src/frost_dkg.rs` | Threshold key serialization/deserialization |
+| `MultisigDkgSession` | `rust/shekyl-wallet-core/src/multisig/dkg.rs` | Wallet-level DKG orchestration wrapper |
+| `MultisigGroup` | `rust/shekyl-wallet-core/src/multisig/group.rs` | Group metadata, PQC keypairs, threshold keys |
+| `MultisigSigningSession` | `rust/shekyl-wallet-core/src/multisig/signing.rs` | Wallet-level multi-input signing orchestration |
+| FROST SAL FFI | `rust/shekyl-ffi/src/lib.rs` | C ABI for session/coordinator/signer lifecycle |
 | FROST DKG FFI | `rust/shekyl-ffi/src/lib.rs` | C ABI for key import/export/validation |
-| Wallet integration | `src/wallet/wallet2.cpp` | FROST session management in multisig flow |
+| Multisig RPC handlers | `rust/shekyl-wallet-rpc/src/multisig_handlers.rs` | JSON-RPC endpoints for signing coordination |
+
+**Note:** C++ wallet FROST integration (`wallet2.cpp`/`wallet2_ffi.cpp`)
+has been removed. All FROST multisig logic now lives in the Rust wallet
+crates (`shekyl-wallet-core`, `shekyl-wallet-rpc`). The Rust FFI functions
+remain behind `#[cfg(feature = "multisig")]` for any future C++ consumers.
 
 ### DKG Setup
 
 Before FROST signing, participants must complete a Distributed Key
 Generation (DKG) ceremony to produce `ThresholdKeys<Ed25519T>`. The DKG
-output is serialized and stored in the wallet file (`m_frost_threshold_keys`)
-alongside the group public key (`m_frost_group_key`).
+uses the `dkg-pedpop` crate's `KeyGenMachine` state machine:
 
-The wallet exposes `import_frost_threshold_keys()` and
-`export_frost_threshold_keys()` for managing the DKG output. Key validation
-checks that the threshold parameters match the existing PQC multisig group
-(`m_pqc_multisig_m` / `m_pqc_multisig_n`).
+1. `KeyGenMachine::new(params, context)` → round-1 coefficients
+2. `SecretShareMachine::generate_secret_shares(rng, commitments)` → encrypted shares
+3. `KeyMachine::calculate_share(rng, shares)` → `BlameMachine`
+4. `BlameMachine::complete()` → `ThresholdKeys<Ed25519T>`
 
-### Signing Protocol (v3 format)
+`MultisigDkgSession` in `shekyl-wallet-core` wraps this state machine
+with type-safe round transitions and error handling. DKG messages are
+exchanged as files (air-gap compatible); they are **not** exposed over
+RPC due to the `dkg-pedpop` types lacking `serde` serialization support.
 
-The FROST-enabled signing protocol uses a v3 signing request format:
+The resulting `ThresholdKeys` are serialized and stored in `MultisigGroup`
+alongside the PQC keypair material and group metadata.
 
-1. **`prepare_multisig_fcmp_proof`**: When FROST keys are present, creates
-   `FrostSalSession` per input instead of generating the full proof.
-   Sessions store rerandomized outputs and pseudo-outs.
+### Signing Protocol (Rust-native)
 
-2. **`export_multisig_signing_request`**: Emits version 3 request with
-   `frost_sessions` array containing per-input `rerand` (hex) and
-   `pseudo_out` (hex), plus the `frost_group_key`.
+The FROST signing protocol is orchestrated through `MultisigSigningSession`
+in `shekyl-wallet-core` and exposed via JSON-RPC in `shekyl-wallet-rpc`:
 
-3. **`sign_multisig_partial`**: Participants verify the FROST group key,
-   acknowledge the signing round, and produce their FROST share alongside
-   the PQC hybrid signature.
+1. **`multisig_create_signing`**: Creates a `MultisigSigningSession` with
+   `FrostSalSession` per input and a `FrostSigningCoordinator`.
 
-4. **`import_multisig_signatures`**: Coordinator aggregates FROST shares
-   via `shekyl_frost_sal_aggregate_and_prove()`, producing the final
-   FCMP++ proof. PQC signatures are assembled as in non-FROST mode.
+2. **`multisig_sign_preprocess`**: The local participant generates FROST
+   commitments (nonces) for all inputs.
+
+3. **`multisig_sign_add_preprocess`**: Commitments from remote participants
+   are added to the coordinator.
+
+4. **`multisig_sign_nonce_sums`**: Once all preprocesses are collected, the
+   coordinator computes aggregated nonce sums per input.
+
+5. **`multisig_sign_own`**: The local participant produces FROST signing
+   shares using the aggregated nonces.
+
+6. **`multisig_sign_add_shares`**: Shares from remote participants are
+   added to the coordinator.
+
+7. **`multisig_sign_aggregate`**: The coordinator aggregates all shares
+   into `SpendAuthAndLinkability` pairs and calls `prove_with_sal()` to
+   produce the final FCMP++ proof.
+
+All byte fields in RPC are hex-encoded for transport. PQC hybrid
+signatures are assembled alongside the FROST proof as in non-FROST mode.
 
 ### Transition to Lattice Threshold
 

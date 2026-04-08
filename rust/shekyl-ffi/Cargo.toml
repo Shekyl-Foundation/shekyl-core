@@ -11,7 +11,7 @@ crate-type = ["staticlib"]
 
 [features]
 default = []
-multisig = ["shekyl-fcmp/multisig"]
+multisig = ["shekyl-fcmp/multisig", "modular-frost"]
 debug-verify = []
 
 [dependencies]
@@ -30,6 +30,7 @@ zeroize = "1"
 libc = "0.2"
 dalek-ff-group = "0.5"
 ciphersuite = "0.4"
+modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
 
 [lints]
 workspace = true

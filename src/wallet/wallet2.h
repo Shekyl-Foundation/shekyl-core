@@ -73,11 +73,6 @@
 #include "fee_priority.h"
 #include "fee_algorithm.h"
 
-#ifdef SHEKYL_MULTISIG
-// Forward declaration for FROST SAL session handle (defined in shekyl_ffi.h)
-struct ShekylFrostSalSession;
-#endif
-
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "wallet.wallet2"
 
@@ -1088,12 +1083,6 @@ namespace tools
     uint8_t pqc_multisig_m() const { return m_pqc_multisig_m; }
     crypto::hash pqc_multisig_group_id() const { return m_pqc_multisig_group_id; }
     bool create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, const std::vector<std::vector<uint8_t>>& participant_public_keys);
-#ifdef SHEKYL_MULTISIG
-    std::string export_multisig_signing_request(pending_tx& ptx);
-    bool sign_multisig_partial(const std::string& signing_request_json, std::string& signature_response_json);
-    bool import_multisig_signatures(pending_tx& ptx, const std::vector<std::string>& signature_response_jsons);
-    bool prepare_multisig_fcmp_proof(pending_tx& ptx);
-#endif
     std::vector<wallet2::pending_tx> create_claim_transaction(const std::vector<size_t>& staked_indices);
     std::vector<size_t> get_matured_staked_outputs() const;
     std::vector<size_t> get_locked_staked_outputs() const;
@@ -2009,30 +1998,6 @@ namespace tools
     crypto::hash m_pqc_multisig_group_id;
     uint8_t m_pqc_multisig_n = 0;
     uint8_t m_pqc_multisig_m = 0;
-
-#ifdef SHEKYL_MULTISIG
-    // FROST SAL session state for in-progress multisig FCMP++ proof construction.
-    // Active during the signing round: created in prepare_multisig_fcmp_proof,
-    // consumed in import_multisig_signatures.
-    std::vector<ShekylFrostSalSession*> m_frost_sal_sessions;
-#endif
-
-    // FROST threshold keys (DKG output, serialized). Empty until DKG is complete.
-    std::vector<uint8_t> m_frost_threshold_keys;
-    // FROST group public key (Ed25519T, 32 bytes).
-    std::array<uint8_t, 32> m_frost_group_key{};
-
-    bool has_frost_keys() const { return !m_frost_threshold_keys.empty(); }
-#ifdef SHEKYL_MULTISIG
-    void clear_frost_sessions();
-
-    // Import serialized FROST threshold keys (DKG output) into this wallet.
-    // Validates M-of-N params against the existing PQC multisig group.
-    bool import_frost_threshold_keys(const std::vector<uint8_t>& serialized_keys);
-
-    // Export serialized FROST threshold keys.
-    std::vector<uint8_t> export_frost_threshold_keys() const;
-#endif
   };
 }
 BOOST_CLASS_VERSION(tools::wallet2, 32)

@@ -22,6 +22,9 @@ pub mod wallet;
 #[cfg(feature = "rust-scanner")]
 pub mod scanner_state;
 
+#[cfg(feature = "multisig")]
+pub mod multisig_handlers;
+
 pub use server::{run_server, ServerConfig};
 pub use wallet::{ProgressEvent, Wallet2, WalletError, WalletResult};
 

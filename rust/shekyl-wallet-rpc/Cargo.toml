@@ -24,9 +24,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 shekyl-scanner = { path = "../shekyl-scanner", optional = true }
 shekyl-tx-builder = { path = "../shekyl-tx-builder", optional = true }
+shekyl-wallet-core = { path = "../shekyl-wallet-core", optional = true }
+shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
 hex = { version = "0.4", optional = true }
 
 [features]
 default = []
 rust-scanner = ["shekyl-scanner", "hex"]
 native-sign = ["shekyl-tx-builder"]
+multisig = ["shekyl-wallet-core/multisig", "shekyl-fcmp/multisig", "hex"]

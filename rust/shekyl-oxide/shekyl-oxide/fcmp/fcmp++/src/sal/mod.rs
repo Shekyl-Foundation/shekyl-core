@@ -18,10 +18,6 @@ use shekyl_generators::{T, FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V};
 
 use crate::{Input, Output};
 
-/// A multisignature algorithm for a secret-shared `x`, not supporting outgoing view keys and as
-/// historically generated.
-#[cfg(all(feature = "std", feature = "multisig"))]
-pub mod legacy_multisig;
 /// A multisignature algorithm for a secret-shared `y`, supporting outgoing view keys.
 #[cfg(all(feature = "std", feature = "multisig"))]
 pub mod multisig;

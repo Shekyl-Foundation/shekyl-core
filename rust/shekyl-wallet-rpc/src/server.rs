@@ -19,6 +19,9 @@ use crate::wallet::Wallet2;
 #[cfg(feature = "rust-scanner")]
 use crate::scanner_state::ScannerState;
 
+#[cfg(feature = "multisig")]
+use crate::multisig_handlers::MultisigState;
+
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use std::sync::Mutex;
 use tower_http::cors::CorsLayer;
@@ -39,6 +42,8 @@ pub struct AppState {
     pub shutdown_requested: Mutex<bool>,
     #[cfg(feature = "rust-scanner")]
     pub scanner: ScannerState,
+    #[cfg(feature = "multisig")]
+    pub multisig: Mutex<MultisigState>,
 }
 
 pub async fn run_server(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
@@ -59,6 +64,8 @@ pub async fn run_server(config: ServerConfig) -> Result<(), Box<dyn std::error::
         shutdown_requested: Mutex::new(false),
         #[cfg(feature = "rust-scanner")]
         scanner: ScannerState::new(),
+        #[cfg(feature = "multisig")]
+        multisig: Mutex::new(MultisigState::new()),
     });
 
     let app = Router::new()
@@ -82,6 +89,20 @@ async fn json_rpc_handler(
 ) -> (StatusCode, Json<JsonRpcResponse>) {
     let id = request.id.clone();
     let method = request.method.clone();
+
+    #[cfg(feature = "multisig")]
+    if crate::multisig_handlers::MULTISIG_METHODS.contains(&method.as_str()) {
+        let result = crate::multisig_handlers::dispatch_multisig(
+            &state.multisig,
+            &method,
+            request.params,
+        );
+        let response = match result {
+            Ok(value) => JsonRpcResponse::success(id, value),
+            Err(e) => JsonRpcResponse::error(id, e.code, e.message),
+        };
+        return (StatusCode::OK, Json(response));
+    }
 
     let wallet_guard = match state.wallet.lock() {
         Ok(g) => g,

@@ -202,61 +202,6 @@ bool shekyl_fcmp_verify(
     uint8_t tree_depth,
     const uint8_t* signable_tx_hash_ptr);
 
-// ─── FCMP++: FROST SAL Multisig ──────────────────────────────────────────────
-// Gated behind Rust `multisig` feature. Not compiled into production builds
-// until nonce aggregation is fully implemented.
-#ifdef SHEKYL_MULTISIG
-
-struct ShekylFrostSalSession;
-
-ShekylFrostSalSession* shekyl_frost_sal_session_new(
-    const uint8_t* output_key_ptr,
-    const uint8_t* key_image_gen_ptr,
-    const uint8_t* commitment_ptr,
-    const uint8_t* spend_key_x_ptr,
-    const uint8_t* signable_tx_hash_ptr,
-    uint8_t* pseudo_out_ptr);
-
-ShekylBuffer shekyl_frost_sal_get_rerand(
-    const ShekylFrostSalSession* session);
-
-ShekylFcmpProveResult shekyl_frost_sal_aggregate_and_prove(
-    ShekylFrostSalSession** session_ptrs,
-    uint32_t num_inputs,
-    const uint8_t* group_key_ptr,
-    const uint8_t* nonce_sums_ptr,
-    size_t nonce_sums_len,
-    const uint8_t* sum_shares_ptr,
-    const uint8_t* witness_ptr,
-    size_t witness_len,
-    const uint8_t* tree_root_ptr,
-    uint8_t tree_depth);
-
-void shekyl_frost_sal_session_free(ShekylFrostSalSession* session);
-
-// ─── FCMP++: FROST DKG Key Management ──────────────────────────────────────
-
-struct ShekylFrostThresholdKeys;
-
-ShekylFrostThresholdKeys* shekyl_frost_keys_import(
-    const uint8_t* data_ptr,
-    size_t data_len);
-
-ShekylBuffer shekyl_frost_keys_export(const ShekylFrostThresholdKeys* handle);
-
-bool shekyl_frost_keys_group_key(
-    const ShekylFrostThresholdKeys* handle,
-    uint8_t* out_ptr);
-
-bool shekyl_frost_keys_validate(
-    const ShekylFrostThresholdKeys* handle,
-    uint16_t expected_m,
-    uint16_t expected_n);
-
-void shekyl_frost_keys_free(ShekylFrostThresholdKeys* handle);
-
-#endif // SHEKYL_MULTISIG
-
 // Convert raw output tuples into serialized 4-scalar leaves.
 ShekylBuffer shekyl_fcmp_outputs_to_leaves(
     const uint8_t* outputs_ptr,

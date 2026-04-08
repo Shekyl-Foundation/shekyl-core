@@ -30,6 +30,7 @@ rand_core = { version = "0.6", features = ["std"] }
 # FROST multisig (optional)
 transcript = { package = "flexible-transcript", version = "0.3", features = ["recommended"], optional = true }
 modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
+dkg-pedpop = { version = "0.6", optional = true }
 rand_chacha = { version = "0.3", optional = true }
 
 thiserror.workspace = true
@@ -38,13 +39,14 @@ serde.workspace = true
 [dev-dependencies]
 rand = "0.8"
 modular-frost = { version = "0.11", features = ["ed25519", "tests"] }
+dkg-pedpop = "0.6"
 transcript = { package = "flexible-transcript", version = "0.3", features = ["recommended"] }
 rand_chacha = "0.3"
 
 [features]
 default = ["std"]
 std = []
-multisig = ["shekyl-fcmp-plus-plus/multisig", "transcript", "modular-frost", "rand_chacha"]
+multisig = ["shekyl-fcmp-plus-plus/multisig", "transcript", "modular-frost", "dkg-pedpop", "rand_chacha"]
 
 [lints]
 workspace = true

@@ -88,13 +88,15 @@ application state (both the axum server's `AppState` and the Tauri `AppState`).
 rust/shekyl-wallet-rpc/
 ├── Cargo.toml
 └── src/
-    ├── lib.rs        # Library entry point, re-exports
-    ├── main.rs       # Standalone binary (clap CLI)
-    ├── ffi.rs        # Raw C FFI bindings to wallet2_ffi.h
-    ├── wallet.rs     # Safe Wallet2 wrapper
-    ├── handlers.rs   # RPC dispatch (routes to wallet.json_rpc_call)
-    ├── server.rs     # axum HTTP server + JSON-RPC routing
-    └── types.rs      # Request/response serde types
+    ├── lib.rs               # Library entry point, re-exports
+    ├── main.rs              # Standalone binary (clap CLI)
+    ├── ffi.rs               # Raw C FFI bindings to wallet2_ffi.h
+    ├── wallet.rs            # Safe Wallet2 wrapper
+    ├── handlers.rs          # RPC dispatch (routes to wallet.json_rpc_call)
+    ├── server.rs            # axum HTTP server + JSON-RPC routing
+    ├── types.rs             # Request/response serde types
+    ├── multisig_handlers.rs # FROST multisig RPC (feature = "multisig")
+    └── scanner_state.rs     # Rust scanner state (feature = "rust-scanner")
 ```
 
 ## GUI Wallet Integration
@@ -198,8 +200,9 @@ build.
 
 ## RPC Method Coverage
 
-All 98 RPC methods from `wallet_rpc_server.h` are implemented in the
-`wallet2_ffi_json_rpc` dispatcher:
+89 RPC methods from `wallet_rpc_server.h` are implemented in the
+`wallet2_ffi_json_rpc` dispatcher (9 classical multisig methods were removed;
+FROST multisig is handled by native Rust handlers, see below):
 
 | Category | Methods |
 |----------|---------|
@@ -224,7 +227,7 @@ All 98 RPC methods from `wallet_rpc_server.h` are implemented in the
 | Refresh | `refresh`, `auto_refresh`, `rescan_blockchain`, `rescan_spent`, `scan_tx` |
 | Mining | `start_mining`, `stop_mining` |
 | Daemon | `set_daemon`, `set_log_level`, `set_log_categories` |
-| Multisig | `is_multisig`, `prepare_multisig`, `make_multisig`, `finalize_multisig`, `exchange_multisig_keys`, `export_multisig_info`, `import_multisig_info`, `sign_multisig`, `submit_multisig` |
+| FROST Multisig (`multisig` feature) | `multisig_register_group`, `multisig_list_groups`, `multisig_create_signing`, `multisig_sign_preprocess`, `multisig_sign_add_preprocess`, `multisig_sign_nonce_sums`, `multisig_sign_own`, `multisig_sign_add_shares`, `multisig_sign_aggregate` |
 | Background sync | `setup_background_sync`, `start_background_sync`, `stop_background_sync` |
 | Staking | `stake`, `unstake`, `get_staked_outputs`, `get_staked_balance`, `claim_rewards` |
 | Fees | `estimate_tx_size_and_weight`, `get_default_fee_priority` |
@@ -249,8 +252,11 @@ HTTP POST /json_rpc → handlers::dispatch_with_scanner(method)
   ├── scanner-backed methods → shekyl-scanner (native Rust)
   │     WalletState, BalanceSummary, TransferDetails
   │
+  ├── multisig_* methods → multisig_handlers (native Rust, "multisig" feature)
+  │     MultisigState, MultisigSigningSession, MultisigGroup
+  │
   └── remaining methods → C++ FFI (unchanged)
-        transfer, sweep_*, sign_transfer, multisig, ...
+        transfer, sweep_*, sign_transfer, ...
 ```
 
 ### Key Types
@@ -270,6 +276,38 @@ alongside the `Wallet2` handle. Query methods (`get_scanner_balance`,
 `get_scanner_staked_outputs`, `get_scanner_height`) read from the Rust scanner
 state. Mutation methods continue to use the C++ FFI.
 
+## FROST Multisig RPC (`multisig` feature)
+
+When compiled with `--features multisig`, the RPC server provides native Rust
+FROST multisig endpoints. These bypass the C++ FFI entirely and are routed
+directly to `multisig_handlers.rs` in the `json_rpc_handler`.
+
+Multisig state (`MultisigState`) is held in `AppState` under its own `Mutex`,
+separate from the `wallet` lock. This allows multisig operations to proceed
+without blocking wallet queries.
+
+**DKG is not exposed over RPC.** The `dkg-pedpop` crate's round message types
+do not implement `serde::Serialize`/`Deserialize`, making direct RPC transport
+impractical. DKG is handled through the `shekyl-wallet-core` API with
+file-based message exchange (air-gap compatible). See `docs/PQC_MULTISIG.md`
+for the DKG ceremony flow.
+
+**Signing RPC methods:**
+
+| Method | Purpose |
+|--------|---------|
+| `multisig_register_group` | Register a `MultisigGroup` (threshold keys + PQC material) |
+| `multisig_list_groups` | List registered group IDs |
+| `multisig_create_signing` | Create a `MultisigSigningSession` for a set of inputs |
+| `multisig_sign_preprocess` | Generate FROST commitments for the local participant |
+| `multisig_sign_add_preprocess` | Add a remote participant's commitments |
+| `multisig_sign_nonce_sums` | Retrieve aggregated nonce sums (hex bytes) |
+| `multisig_sign_own` | Produce signing shares for the local participant |
+| `multisig_sign_add_shares` | Add a remote participant's signing shares |
+| `multisig_sign_aggregate` | Aggregate all shares and produce the FCMP++ proof |
+
+All byte fields are hex-encoded in request/response JSON.
+
 ## Future Work
 
 - **Scanner sync loop**: Implement the background refresh loop that drives the
@@ -278,8 +316,10 @@ state. Mutation methods continue to use the C++ FFI.
 - **FCMP++ signing in Rust**: Transaction construction (FCMP++ proofs, PQC
   key signing) is the remaining major C++ dependency. Once implemented, the
   FFI layer can be removed entirely.
-- **PQC multisig migration**: The multisig dispatch functions use the current
-  wallet2 API. When the PQC multisig redesign (see `docs/PQC_MULTISIG.md`) is
-  implemented, these dispatchers will need updating to match the new API.
+- **DKG RPC transport**: If `dkg-pedpop` gains `serde` support (or a custom
+  serialization layer is written), DKG round messages could be exposed over
+  RPC for non-airgapped workflows.
+- **GUI multisig integration**: Wire the FROST multisig RPC endpoints into the
+  Tauri wallet's `wallet_bridge.rs` for GUI-driven multisig signing.
 - **Remove C++ `wallet_rpc_server`**: Once the Rust RPC is proven in production,
   the C++ `wallet_rpc_server.cpp` and its epee HTTP infrastructure can be removed.

@@ -231,6 +231,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "block-padding"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8894febbff9f758034a5b8e12d87918f56dfc64a8e1fe757d65e29041538d93"
+dependencies = [
+ "generic-array 0.14.9",
+]
+
+[[package]]
 name = "borsh"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -301,6 +310,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
+name = "chacha20"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3613f74bd2eac03dad61bd53dbe620703d4371614fe0bc3b9f04dd36fe4e818"
+dependencies = [
+ "cfg-if",
+ "cipher",
+ "cpufeatures",
+]
+
+[[package]]
 name = "ciborium"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -325,6 +345,17 @@ checksum = "57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9"
 dependencies = [
  "ciborium-io",
  "half",
+]
+
+[[package]]
+name = "cipher"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
+dependencies = [
+ "crypto-common",
+ "inout",
+ "zeroize",
 ]
 
 [[package]]
@@ -685,6 +716,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "dkg-pedpop"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e30819c61e4650ef7b06aef4a20d3537101cba424f06b04e582b41f06833479"
+dependencies = [
+ "chacha20",
+ "ciphersuite",
+ "dkg",
+ "dleq",
+ "flexible-transcript",
+ "multiexp",
+ "rand_core",
+ "schnorr-signatures",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "dkg-recovery"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -693,6 +742,21 @@ dependencies = [
  "ciphersuite",
  "dkg",
  "thiserror",
+ "zeroize",
+]
+
+[[package]]
+name = "dleq"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8d3af08cb0a3253930b6b9629fd61202ea34da117940b59ab58f3e6f5e1ba6c"
+dependencies = [
+ "digest",
+ "ff",
+ "flexible-transcript",
+ "group",
+ "rand_core",
+ "rustversion",
  "zeroize",
 ]
 
@@ -1207,6 +1271,16 @@ checksum = "45a8a2b9cb3e0b0c1803dbb0758ffac5de2f425b23c28f518faabd9d805342ff"
 dependencies = [
  "equivalent",
  "hashbrown",
+]
+
+[[package]]
+name = "inout"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
+dependencies = [
+ "block-padding",
+ "generic-array 0.14.9",
 ]
 
 [[package]]
@@ -2147,6 +2221,7 @@ dependencies = [
  "ciphersuite",
  "curve25519-dalek",
  "dalek-ff-group 0.5.0",
+ "dkg-pedpop",
  "ec-divisors",
  "flexible-transcript",
  "generalized-bulletproofs",
@@ -2193,6 +2268,7 @@ dependencies = [
  "ciphersuite",
  "dalek-ff-group 0.5.0",
  "libc",
+ "modular-frost",
  "rcgen",
  "serde_json",
  "shekyl-address",
@@ -2351,10 +2427,17 @@ name = "shekyl-wallet-core"
 version = "2.0.0"
 dependencies = [
  "curve25519-dalek",
+ "hex",
+ "modular-frost",
+ "serde",
+ "serde_json",
+ "shekyl-crypto-pq",
+ "shekyl-fcmp",
  "shekyl-oxide",
  "shekyl-scanner",
  "shekyl-staking",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]
@@ -2366,8 +2449,10 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
+ "shekyl-fcmp",
  "shekyl-scanner",
  "shekyl-tx-builder",
+ "shekyl-wallet-core",
  "tokio",
  "tower-http",
  "tracing",

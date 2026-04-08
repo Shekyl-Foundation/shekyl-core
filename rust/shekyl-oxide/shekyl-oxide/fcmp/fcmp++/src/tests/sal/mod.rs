@@ -9,8 +9,6 @@ use shekyl_generators::T;
 use crate::{Output, sal::*};
 
 #[cfg(feature = "multisig")]
-mod legacy_multisig;
-#[cfg(feature = "multisig")]
 mod multisig;
 
 #[test]

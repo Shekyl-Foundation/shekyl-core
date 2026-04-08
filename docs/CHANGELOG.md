@@ -279,8 +279,10 @@
     justifications. None were correctness or security blockers.
   - **FROST multisig feature-gated (Tier 1).** All FROST SAL and DKG FFI
     functions gated behind `#[cfg(feature = "multisig")]`. Production builds
-    exclude incomplete nonce aggregation code. C++ header declarations guarded
-    by `#ifdef SHEKYL_MULTISIG`.
+    exclude multisig code unless the feature is enabled. C++ `#ifdef
+    SHEKYL_MULTISIG` blocks have been removed from `shekyl_ffi.h`,
+    `wallet2.h/cpp`, and `wallet2_ffi.cpp` — FROST multisig is now
+    consumed exclusively through the Rust wallet crates.
   - **CString unwrap removal (Tier 2).** Replaced all `CString::new().unwrap()`
     in `shekyl-wallet-rpc` with `to_cstring()` helper returning `WalletError`.
     Fixed `Mutex::lock().unwrap()` in server.rs to return JSON-RPC error on
@@ -493,18 +495,59 @@
   includes per-chunk compressed Ed25519 output data (O, I=Hp(O), C,
   H(pqc_pk)) enabling the wallet to pass full output points to the prover.
 
-- **C++ wallet FROST multisig integration.** `prepare_multisig_fcmp_proof`
-  creates FROST SAL sessions when threshold keys are present (defers proof).
-  `export_multisig_signing_request` emits v3 format with FROST round data.
-  `import_multisig_signatures` aggregates FROST shares via FFI and produces
-  the final FCMP++ proof. New methods: `import_frost_threshold_keys`,
-  `export_frost_threshold_keys`, `clear_frost_sessions`.
+- **C++ wallet FROST multisig integration (removed).** Previously added
+  C++ FROST integration in `wallet2.cpp` (`prepare_multisig_fcmp_proof`,
+  `export_multisig_signing_request`, `import_multisig_signatures`, threshold
+  key import/export). This C++ code has been replaced by the Rust-native
+  wallet crates and all `#ifdef SHEKYL_MULTISIG` blocks have been removed
+  from `wallet2.h/cpp`, `wallet2_ffi.cpp`, and `shekyl_ffi.h`.
 
-- **16 new Rust tests for FROST.** 4 `frost_sal` unit tests (session
+- **`FrostSigningCoordinator` for multi-input nonce aggregation.** New
+  coordinator in `shekyl-fcmp/src/frost_sal.rs` manages per-input preprocess
+  collection, nonce sum computation, share collection, and final aggregation
+  into `SpendAuthAndLinkability` pairs for `prove_with_sal()`.
+
+- **Full FROST DKG ceremony via `MultisigDkgSession`.** New wallet-level
+  wrapper in `shekyl-wallet-core/src/multisig/dkg.rs` drives the `dkg-pedpop`
+  `KeyGenMachine` state machine through all three rounds with type-safe
+  transitions: `generate_coefficients` → `generate_secret_shares` →
+  `calculate_share` → `complete`. DKG messages are exchanged as byte buffers
+  (file-based, air-gap compatible).
+
+- **`MultisigSigningSession` for wallet-level FROST orchestration.** New
+  session in `shekyl-wallet-core/src/multisig/signing.rs` wraps per-input
+  `FrostSalSession` instances and a `FrostSigningCoordinator`, providing
+  hex-encoded preprocess/share exchange for transport-agnostic signing.
+
+- **`MultisigGroup` with PQC keypair management.** New type in
+  `shekyl-wallet-core/src/multisig/group.rs` stores threshold keys,
+  group metadata, and PQC hybrid keypairs with automatic zeroization
+  on drop. Supports serialization/deserialization for wallet storage.
+
+- **FROST multisig RPC endpoints.** 9 new JSON-RPC methods in
+  `shekyl-wallet-rpc/src/multisig_handlers.rs` for FROST signing
+  coordination: `multisig_register_group`, `multisig_list_groups`,
+  `multisig_create_signing`, `multisig_sign_preprocess`,
+  `multisig_sign_add_preprocess`, `multisig_sign_nonce_sums`,
+  `multisig_sign_own`, `multisig_sign_add_shares`,
+  `multisig_sign_aggregate`. All byte fields hex-encoded. DKG is
+  intentionally excluded from RPC (file-based only).
+
+- **`SalLegacyAlgorithm` and `legacy_multisig` removed from shekyl-oxide.**
+  Deleted the legacy Monero multisig SAL algorithm and test module from the
+  vendored `shekyl-oxide/fcmp/fcmp++` crate. Only the modern `SalAlgorithm`
+  (used by `FrostSalSession`) is retained.
+
+- **16+ new Rust tests for FROST.** 4 `frost_sal` unit tests (session
   creation, pseudo-out distinctness, identity rejection, field roundtrip),
-  4 `frost_dkg` unit tests (serialization roundtrip, group key extraction,
-  parameter validation, byte-level roundtrip), 8 FFI lifecycle tests (null
-  safety, invalid data rejection, session handle management).
+  6 `FrostSigningCoordinator` tests (wrong preprocess count, shares before
+  nonces, duplicate shares, nonce sums timing, point addition, bytes
+  roundtrip), 2 `FrostSalSession` negative tests, 4 `frost_dkg` unit tests
+  (serialization roundtrip, group key extraction, parameter validation,
+  byte-level roundtrip), 8 FFI lifecycle tests (null safety, invalid data
+  rejection, session handle management), 5 `shekyl-wallet-core` multisig
+  tests (DKG 2-of-3 and 3-of-5 roundtrips, DKG state machine errors,
+  group serialization, threshold keys roundtrip).
 
 - **FCMP++ prove/verify round-trip test.** `prove_verify_roundtrip()` in
   `rust/shekyl-fcmp/src/proof.rs` exercises the full stack: random key
@@ -548,8 +591,10 @@
 ### 🔒 Security
 
 - **FrostSalSession spend secret zeroized on drop.** The FROST SAL session's
-  `x` (spend secret scalar) is now explicitly zeroized when the session is
-  dropped, per the project-wide secure memory rule.
+  spend secret scalar is zeroized when the session is dropped, per the
+  project-wide secure memory rule. After the `FrostSalSession` secret
+  deduplication (see Changed), the secret lives solely inside the
+  `SalAlgorithm` and is zeroized through its `Drop` impl.
 
 - **RELEASE-BLOCKER resolved in circuit gadgets.** The `incomplete_add_pub`
   function in the FCMP++ circuit already receives parameters typed as `OnCurve`,
