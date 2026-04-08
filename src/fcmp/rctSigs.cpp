@@ -324,7 +324,8 @@ namespace
         for (size_t i = 0; i < destinations.size(); i++)
             rv.outPk[i].dest = copy(destinations[i]);
 
-        // --- Range proofs (Bulletproofs+) ---
+        // --- Range proofs (Bulletproofs+) and pseudo-out blinding factors ---
+        keyV pseudo_out_blinds(inamounts.size());
         rv.p.bulletproofs_plus.clear();
         {
             keyV C, masks;
@@ -354,19 +355,20 @@ namespace
                 hwdev.ecdhEncode(rv.ecdhInfo[i], amount_keys[i], true);
             }
 
-            // --- Pseudo outputs (balance proof) ---
+            // --- Pseudo-out blinding factors (balance proof) ---
+            // These are passed to the Rust FCMP++ prover so it can generate
+            // pseudo-outs that satisfy Σ pseudoOuts = Σ outPk + fee*H.
             rv.p.pseudoOuts.resize(inamounts.size());
-            keyV a(inamounts.size());
             key sumpouts = zero();
             for (size_t i = 0; i < inamounts.size() - 1; i++)
             {
-                skGen(a[i]);
-                sc_add(sumpouts.bytes, a[i].bytes, sumpouts.bytes);
-                genC(rv.p.pseudoOuts[i], a[i], inamounts[i]);
+                skGen(pseudo_out_blinds[i]);
+                sc_add(sumpouts.bytes, pseudo_out_blinds[i].bytes, sumpouts.bytes);
+                genC(rv.p.pseudoOuts[i], pseudo_out_blinds[i], inamounts[i]);
             }
             size_t last = inamounts.size() - 1;
-            sc_sub(a[last].bytes, sumout.bytes, sumpouts.bytes);
-            genC(rv.p.pseudoOuts[last], a[last], inamounts[last]);
+            sc_sub(pseudo_out_blinds[last].bytes, sumout.bytes, sumpouts.bytes);
+            genC(rv.p.pseudoOuts[last], pseudo_out_blinds[last], inamounts[last]);
         }
 
         // --- FCMP++ membership proof via Rust FFI ---
@@ -379,9 +381,9 @@ namespace
 
         for (size_t i = 0; i < num_inputs; ++i)
         {
-            // Fixed header: [O:32][I:32][C:32][h_pqc:32][x:32][y:32] = 192 bytes
+            // Fixed header: [O:32][I:32][C:32][h_pqc:32][x:32][y:32][a:32] = 224 bytes
             const size_t hdr_start = witness.size();
-            witness.resize(hdr_start + 192);
+            witness.resize(hdr_start + 224);
             uint8_t* base = witness.data() + hdr_start;
 
             memcpy(base, inPk[i].dest.bytes, 32);       // O
@@ -396,6 +398,7 @@ namespace
             memcpy(base + 96, pqc_pk_hashes[i].bytes, 32); // h_pqc
             memcpy(base + 128, inSk[i].dest.bytes, 32);  // spend_key_x
             memcpy(base + 160, inSk[i].mask.bytes, 32);  // spend_key_y
+            memcpy(base + 192, pseudo_out_blinds[i].bytes, 32); // pseudo-out blind a_i
 
             // Leaf chunk: Ed25519 output entries
             const auto& entries = leaf_chunk_entries[i];

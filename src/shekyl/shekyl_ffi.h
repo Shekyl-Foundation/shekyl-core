@@ -158,8 +158,9 @@ bool shekyl_fcmp_pqc_leaf_hash(
     size_t pqc_pk_len,
     uint8_t* out_ptr);
 
-// Derive per-output ML-DSA-65 keypair from combined KEM shared secret.
-// combined_ss_ptr: 64 bytes.
+// Derive per-output hybrid (Ed25519 + ML-DSA-65) keypair from combined KEM
+// shared secret. combined_ss_ptr: 64 bytes. Returns canonical-encoded
+// hybrid keys suitable for leaf hash, signing, and verification.
 ShekylPqcKeypair shekyl_fcmp_derive_pqc_keypair(
     const uint8_t* combined_ss_ptr,
     uint64_t output_index);
@@ -176,7 +177,8 @@ struct ShekylFcmpProveResult {
 
 // Construct FCMP++ proof from variable-length witness blob.
 // witness_ptr / witness_len: serialized witness for all inputs.
-// Per input: fixed header (192 bytes) + leaf chunk + C1/C2 branch layers.
+// Per input: fixed header (224 bytes) + leaf chunk + C1/C2 branch layers.
+// Header: [O:32][I:32][C:32][h_pqc:32][x:32][y:32][pseudo_out_blind:32]
 // See shekyl-ffi crate docs for the full wire format specification.
 ShekylFcmpProveResult shekyl_fcmp_prove(
     const uint8_t* witness_ptr,

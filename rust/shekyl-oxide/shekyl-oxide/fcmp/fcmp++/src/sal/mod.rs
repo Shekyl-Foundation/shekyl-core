@@ -39,12 +39,25 @@ impl core::fmt::Debug for RerandomizedOutput {
 }
 
 impl RerandomizedOutput {
-  /// Re-randomize an output.
+  /// Re-randomize an output with fully random blinds.
   pub fn new(rng: &mut (impl RngCore + CryptoRng), output: Output) -> RerandomizedOutput {
+    let r_c = <Ed25519 as Ciphersuite>::F::random(&mut *rng);
+    Self::with_commitment_blind(rng, output, r_c)
+  }
+
+  /// Re-randomize an output using a caller-specified commitment blind `r_c`.
+  ///
+  /// The resulting pseudo-out is `C_tilde = C + r_c * G`, so the pseudo-out
+  /// blinding factor equals the original commitment mask plus `r_c`.
+  /// All other rerandomization scalars (`r_o`, `r_i`, `r_r_i`) remain random.
+  pub fn with_commitment_blind(
+    rng: &mut (impl RngCore + CryptoRng),
+    output: Output,
+    r_c: <Ed25519 as Ciphersuite>::F,
+  ) -> RerandomizedOutput {
     let r_o = <Ed25519 as Ciphersuite>::F::random(&mut *rng);
     let r_i = <Ed25519 as Ciphersuite>::F::random(&mut *rng);
     let r_r_i = <Ed25519 as Ciphersuite>::F::random(&mut *rng);
-    let r_c = <Ed25519 as Ciphersuite>::F::random(&mut *rng);
 
     let O_tilde = output.O() + (EdwardsPoint(*T) * r_o);
     let I_tilde = output.I() + (EdwardsPoint(*FCMP_PLUS_PLUS_U) * r_i);

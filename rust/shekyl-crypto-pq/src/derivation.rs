@@ -80,9 +80,6 @@ pub fn derive_pqc_keypair(
     hk.expand(&info, &mut seed)
         .map_err(|_| CryptoError::KeyGenerationFailed("HKDF expand for PQC seed".into()))?;
 
-    // ML-DSA-65 deterministic keygen from seed.
-    // fips204 uses try_keygen() which reads from OsRng. For deterministic
-    // derivation, we use try_keygen_with_rng() with a seeded CSPRNG.
     let (pk, sk) = keygen_from_seed(&seed)?;
 
     seed.zeroize();
@@ -90,6 +87,65 @@ pub fn derive_pqc_keypair(
     Ok(DerivedPqcKeypair {
         public_key: pk.into_bytes().to_vec(),
         secret_key: sk.into_bytes().to_vec(),
+    })
+}
+
+/// Domain separator for Ed25519 component of per-output hybrid key.
+const DOMAIN_PQC_ED25519: &[u8] = b"shekyl-pqc-ed25519";
+
+/// Derive a per-output HYBRID (Ed25519 + ML-DSA-65) keypair in canonical
+/// encoding, suitable for use with `shekyl_pqc_sign` / `HybridSecretKey`.
+///
+/// Internally derives both components from the same shared secret using
+/// distinct HKDF info domains: `DOMAIN_PQC_OUTPUT` for ML-DSA-65 and
+/// `DOMAIN_PQC_ED25519` for Ed25519.
+pub fn derive_hybrid_pqc_keypair(
+    combined_ss: &[u8; 64],
+    output_index: u64,
+) -> Result<DerivedPqcKeypair, CryptoError> {
+    use crate::signature::{HybridPublicKey, HybridSecretKey};
+    use ed25519_dalek::SigningKey;
+
+    let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_PQC_DERIVE), combined_ss);
+
+    // ML-DSA-65 derivation (same path as derive_pqc_keypair for leaf-hash compatibility)
+    let mut ml_info = Vec::with_capacity(DOMAIN_PQC_OUTPUT.len() + 8);
+    ml_info.extend_from_slice(DOMAIN_PQC_OUTPUT);
+    ml_info.extend_from_slice(&output_index.to_le_bytes());
+    let mut ml_seed = [0u8; DERIVATION_SEED_LEN];
+    hk.expand(&ml_info, &mut ml_seed)
+        .map_err(|_| CryptoError::KeyGenerationFailed("HKDF expand for ML-DSA seed".into()))?;
+    let (ml_pk, ml_sk) = keygen_from_seed(&ml_seed)?;
+    ml_seed.zeroize();
+
+    // Ed25519 derivation (separate domain)
+    let mut ed_info = Vec::with_capacity(DOMAIN_PQC_ED25519.len() + 8);
+    ed_info.extend_from_slice(DOMAIN_PQC_ED25519);
+    ed_info.extend_from_slice(&output_index.to_le_bytes());
+    let mut ed_seed = [0u8; 32];
+    hk.expand(&ed_info, &mut ed_seed)
+        .map_err(|_| CryptoError::KeyGenerationFailed("HKDF expand for Ed25519 seed".into()))?;
+    let ed_signing = SigningKey::from_bytes(&ed_seed);
+    ed_seed.zeroize();
+    let ed_verifying = ed_signing.verifying_key();
+
+    let hybrid_pk = HybridPublicKey {
+        ed25519: ed_verifying.to_bytes(),
+        ml_dsa: ml_pk.into_bytes().to_vec(),
+    };
+    let hybrid_sk = HybridSecretKey {
+        ed25519: ed_signing.to_bytes().to_vec(),
+        ml_dsa: ml_sk.into_bytes().to_vec(),
+    };
+
+    let pk_bytes = hybrid_pk.to_canonical_bytes()
+        .map_err(|e| CryptoError::KeyGenerationFailed(format!("hybrid PK encoding: {e}")))?;
+    let sk_bytes = hybrid_sk.to_canonical_bytes()
+        .map_err(|e| CryptoError::KeyGenerationFailed(format!("hybrid SK encoding: {e}")))?;
+
+    Ok(DerivedPqcKeypair {
+        public_key: pk_bytes,
+        secret_key: sk_bytes,
     })
 }
 
@@ -271,5 +327,62 @@ mod tests {
         let leaf_scalar = PqcLeafScalar::from_pqc_public_key(&kp.public_key);
         assert_eq!(h, leaf_scalar.0,
             "hash_pqc_public_key and PqcLeafScalar::from_pqc_public_key must agree");
+    }
+
+    #[test]
+    fn hybrid_derivation_deterministic() {
+        let ss = [0xab; 64];
+        let kp1 = derive_hybrid_pqc_keypair(&ss, 0).unwrap();
+        let kp2 = derive_hybrid_pqc_keypair(&ss, 0).unwrap();
+        assert_eq!(kp1.public_key, kp2.public_key);
+        assert_eq!(kp1.secret_key, kp2.secret_key);
+    }
+
+    #[test]
+    fn hybrid_derivation_different_indices() {
+        let ss = [0xab; 64];
+        let kp0 = derive_hybrid_pqc_keypair(&ss, 0).unwrap();
+        let kp1 = derive_hybrid_pqc_keypair(&ss, 1).unwrap();
+        assert_ne!(kp0.public_key, kp1.public_key);
+    }
+
+    #[test]
+    fn hybrid_keys_are_canonical() {
+        use crate::signature::{HybridPublicKey, HybridSecretKey};
+
+        let ss = [0xab; 64];
+        let kp = derive_hybrid_pqc_keypair(&ss, 0).unwrap();
+        HybridPublicKey::from_canonical_bytes(&kp.public_key)
+            .expect("hybrid pk must be canonical");
+        HybridSecretKey::from_canonical_bytes(&kp.secret_key)
+            .expect("hybrid sk must be canonical");
+    }
+
+    #[test]
+    fn hybrid_sign_and_verify() {
+        use crate::signature::{HybridEd25519MlDsa, HybridSecretKey, HybridPublicKey, SignatureScheme};
+
+        let ss = [0xab; 64];
+        let kp = derive_hybrid_pqc_keypair(&ss, 42).unwrap();
+
+        let sk = HybridSecretKey::from_canonical_bytes(&kp.secret_key).unwrap();
+        let pk = HybridPublicKey::from_canonical_bytes(&kp.public_key).unwrap();
+        let scheme = HybridEd25519MlDsa;
+
+        let msg = b"hybrid pqc signing test";
+        let sig = scheme.sign(&sk, msg).unwrap();
+        assert!(scheme.verify(&pk, msg, &sig).unwrap());
+    }
+
+    #[test]
+    fn hybrid_leaf_hash_consistent_with_ffi() {
+        use shekyl_fcmp::leaf::PqcLeafScalar;
+
+        let ss = [0xab; 64];
+        let kp = derive_hybrid_pqc_keypair(&ss, 0).unwrap();
+        let h = hash_pqc_public_key(&kp.public_key);
+        let leaf_scalar = PqcLeafScalar::from_pqc_public_key(&kp.public_key);
+        assert_eq!(h, leaf_scalar.0,
+            "leaf hash must agree for canonical hybrid pk");
     }
 }

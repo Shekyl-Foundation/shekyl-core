@@ -803,9 +803,14 @@ pub extern "C" fn shekyl_fcmp_pqc_leaf_hash(
     true
 }
 
-/// Derive a per-output PQC keypair from combined KEM shared secret + output index.
+/// Derive a per-output hybrid (Ed25519 + ML-DSA-65) PQC keypair from combined
+/// KEM shared secret + output index.
 ///
-/// Returns a ShekylPqcKeypair with the ML-DSA-65 public and secret keys.
+/// Returns a ShekylPqcKeypair with canonical-encoded hybrid public and secret
+/// keys. The public key bytes are used for leaf-hash computation via
+/// `shekyl_fcmp_pqc_leaf_hash`, stored in `tx.pqc_auths[i].hybrid_public_key`,
+/// and verified by `shekyl_pqc_verify`. The secret key is used for signing
+/// via `shekyl_pqc_sign`.
 #[no_mangle]
 pub extern "C" fn shekyl_fcmp_derive_pqc_keypair(
     combined_ss_ptr: *const u8,
@@ -826,7 +831,7 @@ pub extern "C" fn shekyl_fcmp_derive_pqc_keypair(
         buf
     };
 
-    match shekyl_crypto_pq::derivation::derive_pqc_keypair(&ss, output_index) {
+    match shekyl_crypto_pq::derivation::derive_hybrid_pqc_keypair(&ss, output_index) {
         Ok(mut kp) => {
             let pk = std::mem::take(&mut kp.public_key);
             let sk = std::mem::take(&mut kp.secret_key);
@@ -862,9 +867,11 @@ pub struct ShekylFcmpProveResult {
 ///
 /// ```text
 /// For each of `num_inputs` inputs, sequentially:
-///   Fixed header (192 bytes):
-///     [O:32][I:32][C:32][h_pqc:32][spend_x:32][spend_y:32]
+///   Fixed header (224 bytes):
+///     [O:32][I:32][C:32][h_pqc:32][spend_x:32][spend_y:32][pseudo_out_blind:32]
 ///     O, I, C are compressed Ed25519 output points.
+///     pseudo_out_blind is the desired blinding factor a_i for this input's
+///     pseudo-out commitment (r_c = a_i - spend_y).
 ///   Leaf chunk (variable):
 ///     leaf_chunk_count: u32
 ///     For each entry (128 bytes):
@@ -937,7 +944,10 @@ pub extern "C" fn shekyl_fcmp_prove(
                 success: true,
             }
         }
-        Err(_) => fail,
+        Err(e) => {
+            eprintln!("[shekyl_fcmp_prove] prove failed: {e:?}");
+            fail
+        }
     }
 }
 
@@ -946,7 +956,7 @@ fn parse_prove_witness(data: &[u8], num_inputs: usize) -> Option<Vec<shekyl_fcmp
     let mut inputs = Vec::with_capacity(num_inputs);
 
     for _ in 0..num_inputs {
-        if offset + 192 > data.len() {
+        if offset + 224 > data.len() {
             return None;
         }
 
@@ -956,6 +966,7 @@ fn parse_prove_witness(data: &[u8], num_inputs: usize) -> Option<Vec<shekyl_fcmp
         let mut h_pqc = [0u8; 32];
         let mut spend_key_x = [0u8; 32];
         let mut spend_key_y = [0u8; 32];
+        let mut pseudo_out_blind = [0u8; 32];
 
         output_key.copy_from_slice(&data[offset..offset + 32]);
         key_image_gen.copy_from_slice(&data[offset + 32..offset + 64]);
@@ -963,7 +974,8 @@ fn parse_prove_witness(data: &[u8], num_inputs: usize) -> Option<Vec<shekyl_fcmp
         h_pqc.copy_from_slice(&data[offset + 96..offset + 128]);
         spend_key_x.copy_from_slice(&data[offset + 128..offset + 160]);
         spend_key_y.copy_from_slice(&data[offset + 160..offset + 192]);
-        offset += 192;
+        pseudo_out_blind.copy_from_slice(&data[offset + 192..offset + 224]);
+        offset += 224;
 
         // Leaf chunk
         if offset + 4 > data.len() {
@@ -1054,6 +1066,7 @@ fn parse_prove_witness(data: &[u8], num_inputs: usize) -> Option<Vec<shekyl_fcmp
             h_pqc: shekyl_fcmp::leaf::PqcLeafScalar(h_pqc),
             spend_key_x,
             spend_key_y,
+            pseudo_out_blind,
             leaf_chunk_outputs,
             leaf_chunk_h_pqc,
             c1_branch_layers,

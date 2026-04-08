@@ -114,8 +114,16 @@ pub struct ProveInput {
 
     /// Spend secret key x (O = xG + yT).
     pub spend_key_x: [u8; 32],
-    /// View secret key y (O = xG + yT).
+    /// View secret key y (O = xG + yT), also the commitment blinding factor.
     pub spend_key_y: [u8; 32],
+
+    /// Desired pseudo-out blinding factor `a_i`.
+    ///
+    /// The commitment rerandomization scalar is computed as `r_c = a_i - y`
+    /// so that `C_tilde = (y + r_c)*G + amount*H = a_i*G + amount*H`,
+    /// ensuring the sum of pseudo-out blinding factors matches the sum of
+    /// output masks for the balance equation.
+    pub pseudo_out_blind: [u8; 32],
 
     /// Sibling outputs in the same leaf chunk (compressed Ed25519 points).
     /// Each entry is (O, I, C) as 3x32 bytes.
@@ -172,16 +180,18 @@ pub fn prove(
         let output = Output::new(O, I, C)
             .map_err(|e| ProveError::UpstreamError(format!("Output::new at input {idx}: {e:?}")))?;
 
-        // Rerandomize
-        let rerand = RerandomizedOutput::new(&mut OsRng, output);
-        let crate_input = rerand.input();
-        pseudo_outs.push(crate_input.C_tilde().to_bytes());
-
-        // SAL proof
         let x = deserialize_ed25519_scalar(&input.spend_key_x)
             .ok_or(ProveError::InvalidScalar { input_index: idx, field: "spend_key_x" })?;
         let y = deserialize_ed25519_scalar(&input.spend_key_y)
             .ok_or(ProveError::InvalidScalar { input_index: idx, field: "spend_key_y" })?;
+        let a = deserialize_ed25519_scalar(&input.pseudo_out_blind)
+            .ok_or(ProveError::InvalidScalar { input_index: idx, field: "pseudo_out_blind" })?;
+
+        // r_c = a - y so that C_tilde blinding factor = y + r_c = a
+        let r_c = a - y;
+        let rerand = RerandomizedOutput::with_commitment_blind(&mut OsRng, output, r_c);
+        let crate_input = rerand.input();
+        pseudo_outs.push(crate_input.C_tilde().to_bytes());
 
         let opening = OpenedInputTuple::open(&rerand, &x, &y)
             .ok_or(ProveError::UpstreamError(
@@ -677,6 +687,7 @@ mod tests {
             h_pqc: PqcLeafScalar([0; 32]),
             spend_key_x: [0; 32],
             spend_key_y: [0; 32],
+            pseudo_out_blind: [0; 32],
             leaf_chunk_outputs: vec![],
             leaf_chunk_h_pqc: vec![],
             c1_branch_layers: vec![],
@@ -725,6 +736,7 @@ mod tests {
         let i_bytes = I.to_bytes();
         let c_bytes = C.to_bytes();
 
+        let a = Scalar::random(&mut OsRng);
         let input = ProveInput {
             output_key: o_bytes.into(),
             key_image_gen: i_bytes.into(),
@@ -732,6 +744,7 @@ mod tests {
             h_pqc: PqcLeafScalar(h_pqc_bytes),
             spend_key_x: x.to_repr().into(),
             spend_key_y: y.to_repr().into(),
+            pseudo_out_blind: a.to_repr().into(),
             leaf_chunk_outputs: vec![(o_bytes.into(), i_bytes.into(), c_bytes.into())],
             leaf_chunk_h_pqc: vec![h_pqc_bytes],
             c1_branch_layers: vec![],
@@ -935,6 +948,7 @@ mod tests {
         let i_bytes = I.to_bytes();
         let c_bytes = C.to_bytes();
 
+        let a2 = Scalar::random(&mut OsRng);
         let input = ProveInput {
             output_key: o_bytes.into(),
             key_image_gen: i_bytes.into(),
@@ -942,6 +956,7 @@ mod tests {
             h_pqc: PqcLeafScalar(h_pqc_bytes),
             spend_key_x: x.to_repr().into(),
             spend_key_y: y.to_repr().into(),
+            pseudo_out_blind: a2.to_repr().into(),
             leaf_chunk_outputs: vec![(o_bytes.into(), i_bytes.into(), c_bytes.into())],
             leaf_chunk_h_pqc: vec![h_pqc_bytes],
             c1_branch_layers: vec![],

@@ -1490,17 +1490,36 @@ bool construct_fcmp_tx(
     crypto::public_key out_pk;
     CHECK_AND_ASSERT_MES(get_output_public_key(out, out_pk), false, "Cannot extract output public key");
     destinations_rct.push_back(rct::pk2rct(out_pk));
-    outamounts.push_back(out.amount);
   }
+
+  // dests_copy reflects the shuffled order matching tx.vout after
+  // construct_tx_and_get_tx_key. Use it for real output amounts (tx.vout
+  // amounts are zeroed by RCT encoding) and for correct amount_key derivation.
+  CHECK_AND_ASSERT_MES(dests_copy.size() == tx.vout.size(), false,
+    "construct_fcmp_tx: dests_copy size mismatch with tx.vout");
+  for (size_t i = 0; i < dests_copy.size(); ++i)
+    outamounts.push_back(dests_copy[i].amount);
 
   rct::keyV amount_keys(destinations_rct.size());
   for (size_t i = 0; i < destinations_rct.size(); ++i)
   {
     crypto::key_derivation derivation;
-    crypto::generate_key_derivation(rct::rct2pk(destinations_rct[i]), tx_key, derivation);
+    crypto::generate_key_derivation(dests_copy[i].addr.m_view_public_key, tx_key, derivation);
     crypto::secret_key scalar;
     crypto::derivation_to_scalar(derivation, i, scalar);
     amount_keys[i] = rct::sk2rct(scalar);
+  }
+
+  {
+    uint64_t sum_in = 0, sum_out = 0;
+    for (auto a : inamounts) sum_in += a;
+    for (auto a : outamounts) sum_out += a;
+    LOG_PRINT_L0("construct_fcmp_tx: sum_in=" << sum_in << " sum_out=" << sum_out
+      << " fee=" << fee << " balance=" << (sum_in == sum_out + fee ? "OK" : "MISMATCH"));
+    for (size_t i = 0; i < inamounts.size(); ++i)
+      LOG_PRINT_L0("  in[" << i << "]=" << inamounts[i]);
+    for (size_t i = 0; i < outamounts.size(); ++i)
+      LOG_PRINT_L0("  out[" << i << "]=" << outamounts[i]);
   }
 
   crypto::hash tx_prefix_hash;
