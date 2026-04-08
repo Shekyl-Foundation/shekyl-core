@@ -3318,7 +3318,7 @@ static char* dispatch_estimate_tx_size_and_weight(wallet2_handle* w, const rj::V
     uint32_t n_inputs = json_u32(p, "n_inputs");
     uint32_t n_outputs = json_u32(p, "n_outputs");
     bool rct = json_bool(p, "rct", true);
-    auto sw = w->wallet->estimate_tx_size_and_weight(rct, n_inputs, 0, n_outputs, 0);
+    auto sw = w->wallet->estimate_tx_size_and_weight(rct, n_inputs, n_outputs, 0);
     rj::Document doc;
     doc.SetObject();
     auto& a = doc.GetAllocator();
@@ -3376,6 +3376,7 @@ static char* dispatch_get_pqc_multisig_info(wallet2_handle* w, const rj::Value&)
     return json_to_string(doc);
 }
 
+#ifdef SHEKYL_MULTISIG
 static char* dispatch_export_multisig_signing_request(wallet2_handle* w, const rj::Value& p) {
     std::string ptx_hex = json_str(p, "pending_tx_hex");
     if (ptx_hex.empty()) {
@@ -3508,6 +3509,7 @@ static char* dispatch_import_multisig_signatures(wallet2_handle* w, const rj::Va
         epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx)), a), a);
     return json_to_string(doc);
 }
+#endif // SHEKYL_MULTISIG
 
 char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* params_json)
 {
@@ -3748,9 +3750,11 @@ char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* pa
         // PQC Multisig
         if (m == "create_pqc_multisig_group") return dispatch_create_pqc_multisig_group(w, params);
         if (m == "get_pqc_multisig_info") return dispatch_get_pqc_multisig_info(w, params);
+#ifdef SHEKYL_MULTISIG
         if (m == "export_multisig_signing_request") return dispatch_export_multisig_signing_request(w, params);
         if (m == "sign_multisig_partial") return dispatch_sign_multisig_partial(w, params);
         if (m == "import_multisig_signatures") return dispatch_import_multisig_signatures(w, params);
+#endif
 
         // Not yet implemented methods return a structured error
         w->set_error(-32601, "Method not implemented: " + m);

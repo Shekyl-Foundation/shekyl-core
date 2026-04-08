@@ -73,8 +73,10 @@
 #include "fee_priority.h"
 #include "fee_algorithm.h"
 
+#ifdef SHEKYL_MULTISIG
 // Forward declaration for FROST SAL session handle (defined in shekyl_ffi.h)
 struct ShekylFrostSalSession;
+#endif
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "wallet.wallet2"
@@ -1086,10 +1088,12 @@ namespace tools
     uint8_t pqc_multisig_m() const { return m_pqc_multisig_m; }
     crypto::hash pqc_multisig_group_id() const { return m_pqc_multisig_group_id; }
     bool create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, const std::vector<std::vector<uint8_t>>& participant_public_keys);
+#ifdef SHEKYL_MULTISIG
     std::string export_multisig_signing_request(pending_tx& ptx);
     bool sign_multisig_partial(const std::string& signing_request_json, std::string& signature_response_json);
     bool import_multisig_signatures(pending_tx& ptx, const std::vector<std::string>& signature_response_jsons);
     bool prepare_multisig_fcmp_proof(pending_tx& ptx);
+#endif
     std::vector<wallet2::pending_tx> create_claim_transaction(const std::vector<size_t>& staked_indices);
     std::vector<size_t> get_matured_staked_outputs() const;
     std::vector<size_t> get_locked_staked_outputs() const;
@@ -1570,7 +1574,7 @@ namespace tools
 
     bool is_unattended() const { return m_unattended; }
 
-    std::pair<size_t, uint64_t> estimate_tx_size_and_weight(bool use_rct, int n_inputs, int ring_size, int n_outputs, size_t extra_size);
+    std::pair<size_t, uint64_t> estimate_tx_size_and_weight(bool use_rct, int n_inputs, int n_outputs, size_t extra_size);
 
     bool get_rpc_payment_info(bool mining, bool &payment_required, uint64_t &credits, uint64_t &diff, uint64_t &credits_per_hash_found, cryptonote::blobdata &hashing_blob, uint64_t &height, uint64_t &seed_height, crypto::hash &seed_hash, crypto::hash &next_seed_hash, uint32_t &cookie);
     bool daemon_requires_payment();
@@ -2006,10 +2010,12 @@ namespace tools
     uint8_t m_pqc_multisig_n = 0;
     uint8_t m_pqc_multisig_m = 0;
 
+#ifdef SHEKYL_MULTISIG
     // FROST SAL session state for in-progress multisig FCMP++ proof construction.
     // Active during the signing round: created in prepare_multisig_fcmp_proof,
     // consumed in import_multisig_signatures.
     std::vector<ShekylFrostSalSession*> m_frost_sal_sessions;
+#endif
 
     // FROST threshold keys (DKG output, serialized). Empty until DKG is complete.
     std::vector<uint8_t> m_frost_threshold_keys;
@@ -2017,6 +2023,7 @@ namespace tools
     std::array<uint8_t, 32> m_frost_group_key{};
 
     bool has_frost_keys() const { return !m_frost_threshold_keys.empty(); }
+#ifdef SHEKYL_MULTISIG
     void clear_frost_sessions();
 
     // Import serialized FROST threshold keys (DKG output) into this wallet.
@@ -2025,6 +2032,7 @@ namespace tools
 
     // Export serialized FROST threshold keys.
     std::vector<uint8_t> export_frost_threshold_keys() const;
+#endif
   };
 }
 BOOST_CLASS_VERSION(tools::wallet2, 32)

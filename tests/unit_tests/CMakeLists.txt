@@ -94,7 +94,6 @@ set(unit_tests_sources
   varint.cpp
   ver_rct_non_semantics_simple_cached.cpp
   fcmp.cpp
-  output_selection.cpp
   vercmp.cpp
   wallet_storage.cpp
   wipeable_string.cpp

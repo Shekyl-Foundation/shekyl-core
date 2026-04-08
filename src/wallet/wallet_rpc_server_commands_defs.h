@@ -2417,13 +2417,11 @@ namespace wallet_rpc
     {
       uint32_t n_inputs;
       uint32_t n_outputs;
-      uint32_t ring_size;
       bool rct;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(n_inputs)
         KV_SERIALIZE(n_outputs)
-        KV_SERIALIZE_OPT(ring_size, 0u)
         KV_SERIALIZE_OPT(rct, true)
       END_KV_SERIALIZE_MAP()
     };

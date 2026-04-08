@@ -9750,6 +9750,7 @@ bool wallet2::create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, con
   return true;
 }
 //----------------------------------------------------------------------------------------------------
+#ifdef SHEKYL_MULTISIG
 void wallet2::clear_frost_sessions()
 {
   for (auto* s : m_frost_sal_sessions)
@@ -10565,6 +10566,7 @@ bool wallet2::import_multisig_signatures(pending_tx& ptx, const std::vector<std:
 
   return true;
 }
+#endif // SHEKYL_MULTISIG
 //----------------------------------------------------------------------------------------------------
 bool wallet2::sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, const std::vector<cryptonote::tx_destination_entry>& dsts, const unique_index_container& subtract_fee_from_outputs) const
 {
@@ -14264,11 +14266,10 @@ std::vector<cryptonote::public_node> wallet2::get_public_nodes(bool white_only)
   return nodes;
 }
 //----------------------------------------------------------------------------------------------------
-std::pair<size_t, uint64_t> wallet2::estimate_tx_size_and_weight(bool use_rct, int n_inputs, int ring_size, int n_outputs, size_t extra_size)
+std::pair<size_t, uint64_t> wallet2::estimate_tx_size_and_weight(bool use_rct, int n_inputs, int n_outputs, size_t extra_size)
 {
   THROW_WALLET_EXCEPTION_IF(n_inputs <= 0, tools::error::wallet_internal_error, "Invalid n_inputs");
   THROW_WALLET_EXCEPTION_IF(n_outputs < 0, tools::error::wallet_internal_error, "Invalid n_outputs");
-  THROW_WALLET_EXCEPTION_IF(ring_size < 0, tools::error::wallet_internal_error, "Invalid ring size");
 
   if (n_outputs == 1)
     n_outputs = 2; // extra dummy output

@@ -271,12 +271,12 @@ namespace cryptonote
     bool on_rpc_access_data(const COMMAND_RPC_ACCESS_DATA::request& req, COMMAND_RPC_ACCESS_DATA::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     bool on_rpc_access_account(const COMMAND_RPC_ACCESS_ACCOUNT::request& req, COMMAND_RPC_ACCESS_ACCOUNT::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx = NULL);
     //-----------------------
+    bool is_restricted() const { return m_restricted; }
 
 private:
     bool check_core_busy();
     bool check_core_ready();
     bool add_host_fail(const connection_context *ctx, unsigned int score = 1);
-    bool is_restricted() const { return m_restricted; }
 
     //utils
     uint64_t get_block_reward(const block& blk);

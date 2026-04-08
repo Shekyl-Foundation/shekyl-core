@@ -121,10 +121,6 @@ impl ScalarVector {
     self.0.drain(..).sum()
   }
 
-  pub(crate) fn inner_product(self, vector: &Self) -> Scalar {
-    (self * vector).sum()
-  }
-
   pub(crate) fn weighted_inner_product(self, vector: &Self, y: &Self) -> Scalar {
     (self * vector * y).sum()
   }
