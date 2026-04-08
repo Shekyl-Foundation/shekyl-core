@@ -584,6 +584,56 @@
 
 ### 🗑️ Removed
 
+- **RingCT-era dead code excision (C++ wallet).** Comprehensive removal of
+  ring-signature infrastructure that is structurally unreachable on an FCMP++
+  chain. Deleted: `gamma_picker` class and `GAMMA_SHAPE`/`GAMMA_SCALE`
+  constants, `transfer_selected` (non-RCT overload), `wallet2::get_outs`
+  decoy-fetching overloads (~700 lines), `tx_add_fake_output`,
+  `select_available_mixable_outputs`, `select_available_outputs_from_histogram`,
+  `get_spend_proof`/`check_spend_proof` (ring-sig-dependent proofs),
+  `get_min_ring_size`/`get_max_ring_size`, `m_confirm_non_default_ring_size`
+  preference, the entire `ringdb.h`/`ringdb.cpp` subsystem (LMDB ring
+  database), ring commands in simplewallet, spend proof RPC endpoints and FFI
+  dispatch, `boroSig` struct from `rctTypes.h`, unreachable
+  `hf_version < HF_VERSION_FCMP_PLUS_PLUS_PQC` branch in
+  `cryptonote_tx_utils.cpp`, `blockchain_blackball` utility, and
+  `output_selection.cpp` unit test. Removed LMDB link dependency from wallet
+  CMake target.
+
+- **Decoy and ring_size removal from Rust RPC.** Removed `ring_size: u32`
+  parameter from `shekyl-wallet-rpc` transfer API (`types.rs`, `wallet.rs`,
+  `ffi.rs`), from the C++ FFI boundary (`wallet2_ffi.h`/`.cpp`), and from the
+  C++ wallet RPC `estimate_tx_size_and_weight` command definition. Deleted
+  `Decoys` struct, `MAX_RING_SIZE` constant, `DecoyRpc` trait and blanket
+  implementation, `OutputInformation` struct, `rpc_point` helper, and
+  `test_decoy_rpc` test from `shekyl-oxide`. Removed
+  `/get_output_distribution.bin` route from `shekyl-daemon-rpc`.
+
+- **Bulletproof v1 ("Original") deletion.** Deleted the entire `original/`
+  module tree and its tests from `shekyl-bulletproofs`. Removed
+  `Bulletproof::Original` enum variant, v1 `prove()`/`read()` functions,
+  v1 match arms in `verify`/`batch_verify`/`write_core`, and the standalone
+  `BulletproofsBatchVerifier` struct. Cleaned up dead `inner_product` and
+  `mul_vec` methods that were only used by v1 code.
+
+- **Light wallet support removed.** Deleted all `m_light_wallet` state,
+  `set_light_wallet`, `light_wallet_login`, `light_wallet_get_outs`,
+  `import_outputs`, `get_unspent_outs`, `submit_raw_tx`, and all
+  `if (m_light_wallet)` branches from `wallet2.cpp`/`.h`. Deleted
+  `wallet_light_rpc.h` entirely. Removed light wallet API from
+  `wallet2_api.h`/`wallet.h`/`wallet.cpp`. Fundamentally incompatible with
+  FCMP++ privacy model (sends view keys to remote server).
+
+### 🔄 Changed
+
+- **MLSAG naming debt resolved.** Renamed `get_pre_mlsag_hash` to
+  `get_tx_prehash`, `mlsag_prehash`/`mlsag_prepare`/`mlsag_hash`/`mlsag_sign`
+  to `tx_prehash`/`tx_prepare`/`tx_hash`/`tx_sign` across the device interface
+  hierarchy (`device.hpp`, `device_default.hpp`/`.cpp`, `device_ledger.hpp`/`.cpp`),
+  `rctSigs.cpp`/`.h`, and `protocol.cpp`. Renamed Ledger `INS_MLSAG` constant
+  to `INS_TX_SIGN`. These functions are live code repurposed for FCMP++
+  transaction hashing; the names now reflect their actual role.
+
 - **Base58 encoding removed entirely.** Deleted `src/common/base58.{h,cpp}`,
   `tests/unit_tests/base58.cpp`, `tests/fuzz/base58.cpp`, and all CMake
   references. Removed `CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX`,

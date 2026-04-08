@@ -408,7 +408,7 @@ namespace cryptonote
     weight += extra;
 
     // FCMP++ proof size (serialized as varint length + bytes) -- already in pruned blob
-    // No CLSAG/MLSAG data in FCMP++
+    // No CLSAG data in FCMP++
 
     // calculate deterministic pseudoOuts size
     extra = 32 * (tx.vin.size());

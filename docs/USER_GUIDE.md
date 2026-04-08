@@ -442,8 +442,6 @@ Prove to a third party that a payment was made:
 | `check_tx_key <txid> <txkey> <address>` | Verify a payment using the tx key |
 | `get_tx_proof <txid> <address>` | Generate a cryptographic proof of payment |
 | `check_tx_proof <txid> <address> <signature>` | Verify a payment proof |
-| `get_spend_proof <txid>` | Prove you authored a transaction |
-| `check_spend_proof <txid> <signature>` | Verify a spend proof |
 | `get_reserve_proof [all\|<amount>]` | Prove you hold at least a certain balance |
 | `check_reserve_proof <address> <signature>` | Verify a reserve proof |
 

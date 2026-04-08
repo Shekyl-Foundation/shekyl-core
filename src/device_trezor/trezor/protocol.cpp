@@ -802,16 +802,16 @@ namespace tx {
       m_ct.rv->p.bulletproofs_plus.push_back(m_ct.tx_out_rsigs[i]);
     }
 
-    rct::key hash_computed = rct::get_pre_mlsag_hash(*(m_ct.rv), hwdev);
+    rct::key hash_computed = rct::get_tx_prehash(*(m_ct.rv), hwdev);
     auto & hash = ack->full_message_hash();
 
     if (hash.size() != 32){
-      throw exc::ProtocolException("Returned mlsag hash has invalid size");
+      throw exc::ProtocolException("Returned tx prehash has invalid size");
     }
 
     if (crypto_verify_32(reinterpret_cast<const unsigned char *>(hash_computed.bytes),
                          reinterpret_cast<const unsigned char *>(hash.data()))){
-      throw exc::proto::SecurityException("Computed MLSAG does not match");
+      throw exc::proto::SecurityException("Computed tx prehash does not match");
     }
   }
 

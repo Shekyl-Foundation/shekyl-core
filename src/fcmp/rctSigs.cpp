@@ -162,7 +162,7 @@ namespace
       catch (...) { return false; }
     }
 
-    key get_pre_mlsag_hash(const rctSig &rv, hw::device &hwdev)
+    key get_tx_prehash(const rctSig &rv, hw::device &hwdev)
     {
       keyV hashes;
       hashes.reserve(3);
@@ -180,7 +180,7 @@ namespace
       hashes.push_back(hash2rct(h));
 
       keyV kv;
-      CHECK_AND_ASSERT_THROW_MES(rv.type == RCTTypeFcmpPlusPlusPqc, "Unsupported RCT type in get_pre_mlsag_hash: " << rv.type);
+      CHECK_AND_ASSERT_THROW_MES(rv.type == RCTTypeFcmpPlusPlusPqc, "Unsupported RCT type in get_tx_prehash: " << rv.type);
       kv.reserve((6*2+6) * rv.p.bulletproofs_plus.size());
       for (const auto &p: rv.p.bulletproofs_plus)
       {
@@ -196,7 +196,7 @@ namespace
           kv.push_back(p.R[n]);
       }
       hashes.push_back(cn_fast_hash(kv));
-      hwdev.mlsag_prehash(ss.str(), inputs, outputs, hashes, rv.outPk, prehash);
+      hwdev.tx_prehash(ss.str(), inputs, outputs, hashes, rv.outPk, prehash);
       return  prehash;
     }
 

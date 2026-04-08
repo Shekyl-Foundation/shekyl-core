@@ -213,7 +213,7 @@ All 98 RPC methods from `wallet_rpc_server.h` are implemented in the
 | Sweeps | `sweep_all`, `sweep_single`, `sweep_dust`/`sweep_unmixable` |
 | Offline TX | `sign_transfer`, `describe_transfer`, `submit_transfer`, `relay_tx` |
 | Keys/Queries | `query_key`, `get_tx_key`, `sign`, `verify` |
-| Proofs | `check_tx_key`, `get_tx_proof`, `check_tx_proof`, `get_spend_proof`, `check_spend_proof`, `get_reserve_proof`, `check_reserve_proof` |
+| Proofs | `check_tx_key`, `get_tx_proof`, `check_tx_proof`, `get_reserve_proof`, `check_reserve_proof` |
 | Payments | `get_payments`, `get_bulk_payments` |
 | Address utils | `make_integrated_address`, `split_integrated_address`, `validate_address` |
 | URI | `make_uri`, `parse_uri` |

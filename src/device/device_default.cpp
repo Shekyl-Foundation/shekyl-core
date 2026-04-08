@@ -383,29 +383,29 @@ namespace hw {
             return true;
         }
 
-        bool device_default::mlsag_prepare(const rct::key &H, const rct::key &xx,
+        bool device_default::tx_prepare(const rct::key &H, const rct::key &xx,
                                          rct::key &a, rct::key &aG, rct::key &aHP, rct::key &II) {
             rct::skpkGen(a, aG);
             rct::scalarmultKey(aHP, H, a);
             rct::scalarmultKey(II, H, xx);
             return true;
         }
-        bool  device_default::mlsag_prepare(rct::key &a, rct::key &aG) {
+        bool  device_default::tx_prepare(rct::key &a, rct::key &aG) {
             rct::skpkGen(a, aG);
             return true;
         }
-        bool  device_default::mlsag_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size, const rct::keyV &hashes, const rct::ctkeyV &outPk, rct::key &prehash) {
+        bool  device_default::tx_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size, const rct::keyV &hashes, const rct::ctkeyV &outPk, rct::key &prehash) {
             prehash = rct::cn_fast_hash(hashes);
             return true;
         }
 
 
-        bool device_default::mlsag_hash(const rct::keyV &toHash, rct::key &c_old) {
+        bool device_default::tx_hash(const rct::keyV &toHash, rct::key &c_old) {
             c_old = rct::hash_to_scalar(toHash);
             return true;
         }
 
-        bool device_default::mlsag_sign(const rct::key &c,  const rct::keyV &xx, const rct::keyV &alpha, const size_t rows, const size_t dsRows, rct::keyV &ss ) {
+        bool device_default::tx_sign(const rct::key &c,  const rct::keyV &xx, const rct::keyV &alpha, const size_t rows, const size_t dsRows, rct::keyV &ss ) {
             CHECK_AND_ASSERT_THROW_MES(dsRows<=rows, "dsRows greater than rows");
             CHECK_AND_ASSERT_THROW_MES(xx.size() == rows, "xx size does not match rows");
             CHECK_AND_ASSERT_THROW_MES(alpha.size() == rows, "alpha size does not match rows");

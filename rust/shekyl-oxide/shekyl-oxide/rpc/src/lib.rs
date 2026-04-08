@@ -586,9 +586,8 @@ pub trait Rpc: Sync + Clone {
         should be within the miner transaction. Then, as we scan transactions, we update the output
         index ourselves.
 
-        Please note we only will scan RingCT outputs so we only need to track the RingCT output
-        index. This decision was made due to spending CN outputs potentially having burdensome
-        requirements (the need to make a v1 TX due to insufficient decoys).
+        We only scan v2+ transaction outputs (RCT commitment-based), tracking the global
+        RCT output index. Pre-RCT (v1) outputs are not relevant for Shekyl.
 
         We bound ourselves to only scanning RingCT outputs by only scanning v2 transactions. This is
         safe and correct since:
