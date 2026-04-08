@@ -340,7 +340,7 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::transaction& tx)
   }
 
   const auto& rsig = tx.rct_signatures;
-  if (!cryptonote::is_coinbase(tx) && rsig.p.bulletproofs_plus.empty() && rsig.get_pseudo_outs().empty() && sigs == val.MemberEnd())
+  if (!cryptonote::is_coinbase(tx) && rsig.p.bulletproofs_plus.empty() && rsig.get_pseudo_outs().empty() && rsig.p.fcmp_pp_proof.empty() && sigs == val.MemberEnd())
     tx.pruned = true;
 }
 
@@ -1237,13 +1237,16 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::rctSig& 
   }
 
   // prunable
-  if (!prune && (!sig.p.bulletproofs_plus.empty() || !sig.get_pseudo_outs().empty()))
+  if (!prune && (!sig.p.bulletproofs_plus.empty() || !sig.get_pseudo_outs().empty()
+      || !sig.p.fcmp_pp_proof.empty()))
   {
     dest.Key("prunable");
     dest.StartObject();
 
     INSERT_INTO_JSON_OBJECT(dest, bulletproofs_plus, sig.p.bulletproofs_plus);
     INSERT_INTO_JSON_OBJECT(dest, pseudo_outs, sig.get_pseudo_outs());
+    INSERT_INTO_JSON_OBJECT(dest, curve_trees_tree_depth, sig.p.curve_trees_tree_depth);
+    INSERT_INTO_JSON_OBJECT(dest, fcmp_pp_proof, sig.p.fcmp_pp_proof);
 
     dest.EndObject();
   }
@@ -1276,6 +1279,8 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
 
     GET_FROM_JSON_OBJECT(prunable->value, sig.p.bulletproofs_plus, bulletproofs_plus);
     GET_FROM_JSON_OBJECT(prunable->value, pseudo_outs, pseudo_outs);
+    GET_FROM_JSON_OBJECT(prunable->value, sig.p.curve_trees_tree_depth, curve_trees_tree_depth);
+    GET_FROM_JSON_OBJECT(prunable->value, sig.p.fcmp_pp_proof, fcmp_pp_proof);
 
     sig.get_pseudo_outs() = std::move(pseudo_outs);
   }
@@ -1283,6 +1288,7 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
   {
     sig.p.bulletproofs_plus.clear();
     sig.get_pseudo_outs().clear();
+    sig.p.fcmp_pp_proof.clear();
   }
 }
 

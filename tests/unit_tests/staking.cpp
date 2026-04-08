@@ -866,17 +866,19 @@ TEST(staking, u128_weighted_stake_no_saturation_at_scale)
     cache_hi = (uint64_t)(total >> 64);
   }
 
-  // Verify reward still computes correctly with the large denominator
-  const uint64_t pool_inflow = 50000000; // 0.05 SKL per block
+  // Verify reward still computes correctly with the large denominator.
+  // Per-block staker pool inflow must exceed num_stakers for a non-zero
+  // per-staker share after integer division: 10 SKL = 10^11 atomic units.
+  const uint64_t pool_inflow = 100000000000ULL; // 10 SKL per block
   uint8_t overflow = 0;
   uint64_t reward = shekyl_calc_per_block_staker_reward(
     pool_inflow, weight_per, cache_lo, cache_hi, &overflow);
   EXPECT_EQ(overflow, 0);
   EXPECT_GT(reward, 0u);
 
-  // Single staker's share should be pool / num_stakers (approx)
+  // Single staker's share ≈ pool_inflow * weight_per / total_weighted
+  // = 10 SKL * (1 / 100M) = 10^3 atomic units
   uint64_t expected_reward = pool_inflow / num_stakers;
-  // Allow some rounding tolerance
   EXPECT_LE(reward, expected_reward + 1);
   EXPECT_GE(reward, expected_reward > 0 ? expected_reward - 1 : 0);
 }
