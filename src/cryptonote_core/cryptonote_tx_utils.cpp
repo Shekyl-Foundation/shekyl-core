@@ -406,13 +406,6 @@ namespace cryptonote
       input_to_key.amount = src_entr.amount;
       input_to_key.k_image = img;
 
-      // FCMP++ replaces ring members — key_offsets must be empty
-      if (hf_version < HF_VERSION_FCMP_PLUS_PLUS_PQC)
-      {
-        for(const tx_source_entry::output_entry& out_entry: src_entr.outputs)
-          input_to_key.key_offsets.push_back(out_entry.first);
-        input_to_key.key_offsets = absolute_output_offsets_to_relative(input_to_key.key_offsets);
-      }
       tx.vin.push_back(input_to_key);
     }
 

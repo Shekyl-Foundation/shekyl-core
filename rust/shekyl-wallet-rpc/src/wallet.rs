@@ -261,11 +261,10 @@ impl Wallet2 {
         destinations_json: &str,
         priority: u32,
         account_index: u32,
-        ring_size: u32,
     ) -> WalletResult<serde_json::Value> {
         let d = Self::to_cstring(destinations_json)?;
         let ptr = unsafe {
-            ffi::wallet2_ffi_transfer(self.handle, d.as_ptr(), priority, account_index, ring_size)
+            ffi::wallet2_ffi_transfer(self.handle, d.as_ptr(), priority, account_index)
         };
         self.consume_json_ptr(ptr)
     }

@@ -720,8 +720,7 @@ uint32_t wallet2_ffi_get_version(void)
 char* wallet2_ffi_transfer(wallet2_handle* w,
                            const char* destinations_json,
                            uint32_t priority,
-                           uint32_t account_index,
-                           uint32_t ring_size)
+                           uint32_t account_index)
 {
     if (!w || !w->wallet) {
         if (w) w->set_error(WALLET_RPC_ERROR_CODE_NOT_OPEN, "No wallet file");
@@ -2012,47 +2011,6 @@ static char* dispatch_check_tx_proof(wallet2_handle* w, const rj::Value& p) {
     }
 }
 
-static char* dispatch_get_spend_proof(wallet2_handle* w, const rj::Value& p) {
-    std::string txid_str = json_str(p, "txid");
-    crypto::hash txid;
-    if (!epee::string_tools::hex_to_pod(txid_str, txid)) {
-        w->set_error(WALLET_RPC_ERROR_CODE_WRONG_TXID, "TX ID has invalid format");
-        return nullptr;
-    }
-
-    try {
-        std::string signature = w->wallet->get_spend_proof(txid, json_str(p, "message"));
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        doc.AddMember("signature", json_val_str(signature, a), a);
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, e.what());
-        return nullptr;
-    }
-}
-
-static char* dispatch_check_spend_proof(wallet2_handle* w, const rj::Value& p) {
-    std::string txid_str = json_str(p, "txid");
-    crypto::hash txid;
-    if (!epee::string_tools::hex_to_pod(txid_str, txid)) {
-        w->set_error(WALLET_RPC_ERROR_CODE_WRONG_TXID, "TX ID has invalid format");
-        return nullptr;
-    }
-
-    try {
-        bool good = w->wallet->check_spend_proof(txid, json_str(p, "message"), json_str(p, "signature"));
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        doc.AddMember("good", good, a);
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, e.what());
-        return nullptr;
-    }
-}
 
 static char* dispatch_get_reserve_proof(wallet2_handle* w, const rj::Value& p) {
     bool all = json_bool(p, "all");
@@ -2807,7 +2765,6 @@ static char* dispatch_describe_transfer(wallet2_handle* w, const rj::Value& p) {
                 std::pair<std::string, uint64_t>> tx_dests;
 
             uint64_t amount_in = 0, amount_out = 0, change_amount = 0;
-            uint32_t ring_size = std::numeric_limits<uint32_t>::max();
 
             std::vector<cryptonote::tx_extra_field> tx_extra_fields;
             std::string payment_id_str;
@@ -2832,8 +2789,6 @@ static char* dispatch_describe_transfer(wallet2_handle* w, const rj::Value& p) {
 
             for (size_t s = 0; s < cd.sources.size(); ++s) {
                 amount_in += cd.sources[s].amount;
-                size_t rs = cd.sources[s].outputs.size();
-                if (rs < ring_size) ring_size = static_cast<uint32_t>(rs);
             }
 
             for (size_t d = 0; d < cd.splitted_dsts.size(); ++d) {
@@ -2909,7 +2864,6 @@ static char* dispatch_describe_transfer(wallet2_handle* w, const rj::Value& p) {
 
             desc.AddMember("amount_in", amount_in, a);
             desc.AddMember("amount_out", amount_out, a);
-            desc.AddMember("ring_size", ring_size, a);
             desc.AddMember("unlock_time", cd.unlock_time, a);
             desc.AddMember("recipients", recipients, a);
             desc.AddMember("payment_id", json_val_str(payment_id_str, a), a);
@@ -3363,9 +3317,8 @@ static char* dispatch_verify(wallet2_handle* w, const rj::Value& p) {
 static char* dispatch_estimate_tx_size_and_weight(wallet2_handle* w, const rj::Value& p) {
     uint32_t n_inputs = json_u32(p, "n_inputs");
     uint32_t n_outputs = json_u32(p, "n_outputs");
-    uint32_t ring_size = json_u32(p, "ring_size");
     bool rct = json_bool(p, "rct", true);
-    auto sw = w->wallet->estimate_tx_size_and_weight(rct, n_inputs, ring_size, n_outputs, 0);
+    auto sw = w->wallet->estimate_tx_size_and_weight(rct, n_inputs, 0, n_outputs, 0);
     rj::Document doc;
     doc.SetObject();
     auto& a = doc.GetAllocator();
@@ -3677,8 +3630,7 @@ char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* pa
             }
             return wallet2_ffi_transfer(w, buf.GetString(),
                 json_u32(params, "priority"),
-                json_u32(params, "account_index"),
-                json_u32(params, "ring_size"));
+                json_u32(params, "account_index"));
         }
         if (m == "transfer_split") return dispatch_transfer_split(w, params);
         if (m == "sign_transfer") return dispatch_sign_transfer(w, params);
@@ -3737,8 +3689,7 @@ char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* pa
         if (m == "check_tx_key") return dispatch_check_tx_key(w, params);
         if (m == "get_tx_proof") return dispatch_get_tx_proof(w, params);
         if (m == "check_tx_proof") return dispatch_check_tx_proof(w, params);
-        if (m == "get_spend_proof") return dispatch_get_spend_proof(w, params);
-        if (m == "check_spend_proof") return dispatch_check_spend_proof(w, params);
+
         if (m == "get_reserve_proof") return dispatch_get_reserve_proof(w, params);
         if (m == "check_reserve_proof") return dispatch_check_reserve_proof(w, params);
 

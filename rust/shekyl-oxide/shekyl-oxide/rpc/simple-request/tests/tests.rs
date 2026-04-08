@@ -77,58 +77,6 @@ async fn test_rpc() {
   drop(guard);
 }
 
-#[tokio::test]
-#[ignore = "requires a shekyld HTTP RPC at 127.0.0.1:11029; run with: cargo test -p shekyl-simple-request-rpc --test tests -- --ignored"]
-async fn test_decoy_rpc() {
-  use shekyl_rpc::{Rpc, DecoyRpc};
-
-  let guard = SEQUENTIAL.lock().await;
-
-  let rpc = SimpleRequestRpc::new(DAEMON_RPC_URL.to_string()).await.unwrap();
-
-  // Ensure there's blocks on-chain
-  rpc
-    .generate_blocks(SAMPLE_MAINNET_ADDR.as_str(), 100)
-    .await
-    .unwrap();
-
-  // Test get_output_distribution
-  // Our documentation for our Rust fn defines it as taking two block numbers
-  {
-    let distribution_len = rpc.get_output_distribution_end_height().await.unwrap();
-    assert_eq!(distribution_len, rpc.get_height().await.unwrap());
-
-    rpc.get_output_distribution(0 ..= distribution_len).await.unwrap_err();
-    assert_eq!(
-      rpc.get_output_distribution(0 .. distribution_len).await.unwrap().len(),
-      distribution_len
-    );
-    assert_eq!(
-      rpc.get_output_distribution(.. distribution_len).await.unwrap().len(),
-      distribution_len
-    );
-
-    assert_eq!(
-      rpc.get_output_distribution(.. (distribution_len - 1)).await.unwrap().len(),
-      distribution_len - 1
-    );
-    assert_eq!(
-      rpc.get_output_distribution(1 .. distribution_len).await.unwrap().len(),
-      distribution_len - 1
-    );
-
-    assert_eq!(rpc.get_output_distribution(0 ..= 0).await.unwrap().len(), 1);
-    assert_eq!(rpc.get_output_distribution(0 ..= 1).await.unwrap().len(), 2);
-    assert_eq!(rpc.get_output_distribution(1 ..= 1).await.unwrap().len(), 1);
-
-    rpc.get_output_distribution(0 .. 0).await.unwrap_err();
-    #[allow(clippy::reversed_empty_ranges)]
-    rpc.get_output_distribution(1 .. 0).await.unwrap_err();
-  }
-
-  drop(guard);
-}
-
 // This test passes yet requires a mainnet node, which we don't have reliable access to in CI.
 /*
 #[tokio::test]

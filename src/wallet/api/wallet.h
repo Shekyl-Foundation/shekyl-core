@@ -191,8 +191,7 @@ public:
     virtual bool checkTxKey(const std::string &txid, std::string tx_key, const std::string &address, uint64_t &received, bool &in_pool, uint64_t &confirmations) override;
     virtual std::string getTxProof(const std::string &txid, const std::string &address, const std::string &message) const override;
     virtual bool checkTxProof(const std::string &txid, const std::string &address, const std::string &message, const std::string &signature, bool &good, uint64_t &received, bool &in_pool, uint64_t &confirmations) override;
-    virtual std::string getSpendProof(const std::string &txid, const std::string &message) const override;
-    virtual bool checkSpendProof(const std::string &txid, const std::string &message, const std::string &signature, bool &good) const override;
+
     virtual std::string getReserveProof(bool all, uint32_t account_index, uint64_t amount, const std::string &message) const override;
     virtual bool checkReserveProof(const std::string &address, const std::string &message, const std::string &signature, bool &good, uint64_t &total, uint64_t &spent) const override;
     virtual std::string signMessage(const std::string &message, const std::string &address) override;
@@ -203,12 +202,6 @@ public:
     virtual bool parse_uri(const std::string &uri, std::string &address, std::string &payment_id, uint64_t &amount, std::string &tx_description, std::string &recipient_name, std::vector<std::string> &unknown_parameters, std::string &error) override;
     virtual std::string make_uri(const std::string &address, const std::string &payment_id, uint64_t amount, const std::string &tx_description, const std::string &recipient_name, std::string &error) const override;
     virtual std::string getDefaultDataDir() const override;
-    virtual bool blackballOutputs(const std::vector<std::string> &outputs, bool add) override;
-    virtual bool blackballOutput(const std::string &amount, const std::string &offset) override;
-    virtual bool unblackballOutput(const std::string &amount, const std::string &offset) override;
-    virtual bool getRing(const std::string &key_image, std::vector<uint64_t> &ring) const override;
-    virtual bool getRings(const std::string &txid, std::vector<std::pair<std::string, std::vector<uint64_t>>> &rings) const override;
-    virtual bool setRing(const std::string &key_image, const std::vector<uint64_t> &ring, bool relative) override;
     virtual void segregatePreForkOutputs(bool segregate) override;
     virtual void segregationHeight(uint64_t height) override;
     virtual void keyReuseMitigation2(bool mitigation) override;

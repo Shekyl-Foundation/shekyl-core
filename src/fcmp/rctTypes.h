@@ -130,12 +130,6 @@ namespace rct {
     typedef unsigned int bits[ATOMS];
     typedef key key64[64];
 
-    struct boroSig {
-        key64 s0;
-        key64 s1;
-        key ee;
-    };
-  
     //Container for precomp
     struct geDsmp {
         ge_dsmp k;
@@ -500,7 +494,6 @@ namespace std
 BLOB_SERIALIZER(rct::key);
 BLOB_SERIALIZER(rct::key64);
 BLOB_SERIALIZER(rct::ctkey);
-BLOB_SERIALIZER(rct::boroSig);
 
 VARIANT_TAG(debug_archive, rct::key, "rct::key");
 VARIANT_TAG(debug_archive, rct::key64, "rct::key64");
@@ -510,7 +503,6 @@ VARIANT_TAG(debug_archive, rct::ctkey, "rct::ctkey");
 VARIANT_TAG(debug_archive, rct::ctkeyV, "rct::ctkeyV");
 VARIANT_TAG(debug_archive, rct::ctkeyM, "rct::ctkeyM");
 VARIANT_TAG(debug_archive, rct::ecdhTuple, "rct::ecdhTuple");
-VARIANT_TAG(debug_archive, rct::boroSig, "rct::boroSig");
 VARIANT_TAG(debug_archive, rct::rctSig, "rct::rctSig");
 VARIANT_TAG(debug_archive, rct::BulletproofPlus, "rct::bulletproof_plus");
 
@@ -522,7 +514,6 @@ VARIANT_TAG(binary_archive, rct::ctkey, 0x94);
 VARIANT_TAG(binary_archive, rct::ctkeyV, 0x95);
 VARIANT_TAG(binary_archive, rct::ctkeyM, 0x96);
 VARIANT_TAG(binary_archive, rct::ecdhTuple, 0x97);
-VARIANT_TAG(binary_archive, rct::boroSig, 0x9a);
 VARIANT_TAG(binary_archive, rct::rctSig, 0x9b);
 VARIANT_TAG(binary_archive, rct::BulletproofPlus, 0xa0);
 
@@ -534,7 +525,6 @@ VARIANT_TAG(json_archive, rct::ctkey, "rct_ctkey");
 VARIANT_TAG(json_archive, rct::ctkeyV, "rct_ctkeyV");
 VARIANT_TAG(json_archive, rct::ctkeyM, "rct_ctkeyM");
 VARIANT_TAG(json_archive, rct::ecdhTuple, "rct_ecdhTuple");
-VARIANT_TAG(json_archive, rct::boroSig, "rct_boroSig");
 VARIANT_TAG(json_archive, rct::rctSig, "rct_rctSig");
 VARIANT_TAG(json_archive, rct::BulletproofPlus, "rct_bulletproof_plus");
 

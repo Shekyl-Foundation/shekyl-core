@@ -97,19 +97,6 @@ namespace {
     // Connection timeout 20 sec
     static const int    DEFAULT_CONNECTION_TIMEOUT_MILLIS = 1000 * 20;
 
-    std::string get_default_ringdb_path(cryptonote::network_type nettype)
-    {
-      boost::filesystem::path dir = tools::get_default_data_dir();
-      // remove .shekyl, replace with .shared-ringdb
-      dir = dir.remove_filename();
-      dir /= ".shared-ringdb";
-      if (nettype == cryptonote::TESTNET)
-        dir /= "testnet";
-      else if (nettype == cryptonote::STAGENET)
-        dir /= "stagenet";
-      return dir.string();
-    }
-
 }
 
 struct Wallet2CallbackImpl : public tools::i_wallet2_callback
@@ -709,7 +696,6 @@ bool WalletImpl::open(const std::string &path, const std::string &password)
             // Rebuilding wallet cache, using refresh height from .keys file
             m_rebuildWalletCache = true;
         }
-        m_wallet->set_ring_database(get_default_ringdb_path(m_wallet->nettype()));
         m_wallet->load(path, password);
 
         m_password = password;
@@ -1844,50 +1830,6 @@ bool WalletImpl::checkTxProof(const std::string &txid_str, const std::string &ad
     }
 }
 
-std::string WalletImpl::getSpendProof(const std::string &txid_str, const std::string &message) const {
-    if (checkBackgroundSync("cannot get spend proof"))
-        return "";
-
-    crypto::hash txid;
-    if(!epee::string_tools::hex_to_pod(txid_str, txid))
-    {
-        setStatusError(tr("Failed to parse txid"));
-        return "";
-    }
-
-    try
-    {
-        clearStatus();
-        return m_wallet->get_spend_proof(txid, message);
-    }
-    catch (const std::exception &e)
-    {
-        setStatusError(e.what());
-        return "";
-    }
-}
-
-bool WalletImpl::checkSpendProof(const std::string &txid_str, const std::string &message, const std::string &signature, bool &good) const {
-    good = false;
-    crypto::hash txid;
-    if(!epee::string_tools::hex_to_pod(txid_str, txid))
-    {
-        setStatusError(tr("Failed to parse txid"));
-        return false;
-    }
-
-    try
-    {
-        clearStatus();
-        good = m_wallet->check_spend_proof(txid, message, signature);
-        return true;
-    }
-    catch (const std::exception &e)
-    {
-        setStatusError(e.what());
-        return false;
-    }
-}
 
 std::string WalletImpl::getReserveProof(bool all, uint32_t account_index, uint64_t amount, const std::string &message) const {
     if (checkBackgroundSync("cannot get reserve proof"))
@@ -2298,144 +2240,6 @@ void WalletImpl::hardForkInfo(uint8_t &version, uint64_t &earliest_height) const
 bool WalletImpl::useForkRules(uint8_t version, int64_t early_blocks) const 
 {
     return m_wallet->use_fork_rules(version,early_blocks);
-}
-
-bool WalletImpl::blackballOutputs(const std::vector<std::string> &outputs, bool add)
-{
-    std::vector<std::pair<uint64_t, uint64_t>> raw_outputs;
-    raw_outputs.reserve(outputs.size());
-    uint64_t amount = std::numeric_limits<uint64_t>::max(), offset, num_offsets;
-    for (const std::string &str: outputs)
-    {
-        if (sscanf(str.c_str(), "@%" PRIu64, &amount) == 1)
-          continue;
-        if (amount == std::numeric_limits<uint64_t>::max())
-        {
-          setStatusError("First line is not an amount");
-          return true;
-        }
-        if (sscanf(str.c_str(), "%" PRIu64 "*%" PRIu64, &offset, &num_offsets) == 2 && num_offsets <= std::numeric_limits<uint64_t>::max() - offset)
-        {
-          while (num_offsets--)
-            raw_outputs.push_back(std::make_pair(amount, offset++));
-        }
-        else if (sscanf(str.c_str(), "%" PRIu64, &offset) == 1)
-        {
-          raw_outputs.push_back(std::make_pair(amount, offset));
-        }
-        else
-        {
-          setStatusError(tr("Invalid output: ") + str);
-          return false;
-        }
-    }
-    bool ret = m_wallet->set_blackballed_outputs(raw_outputs, add);
-    if (!ret)
-    {
-        setStatusError(tr("Failed to mark outputs as spent"));
-        return false;
-    }
-    return true;
-}
-
-bool WalletImpl::blackballOutput(const std::string &amount, const std::string &offset)
-{
-    uint64_t raw_amount, raw_offset;
-    if (!epee::string_tools::get_xtype_from_string(raw_amount, amount))
-    {
-        setStatusError(tr("Failed to parse output amount"));
-        return false;
-    }
-    if (!epee::string_tools::get_xtype_from_string(raw_offset, offset))
-    {
-        setStatusError(tr("Failed to parse output offset"));
-        return false;
-    }
-    bool ret = m_wallet->blackball_output(std::make_pair(raw_amount, raw_offset));
-    if (!ret)
-    {
-        setStatusError(tr("Failed to mark output as spent"));
-        return false;
-    }
-    return true;
-}
-
-bool WalletImpl::unblackballOutput(const std::string &amount, const std::string &offset)
-{
-    uint64_t raw_amount, raw_offset;
-    if (!epee::string_tools::get_xtype_from_string(raw_amount, amount))
-    {
-        setStatusError(tr("Failed to parse output amount"));
-        return false;
-    }
-    if (!epee::string_tools::get_xtype_from_string(raw_offset, offset))
-    {
-        setStatusError(tr("Failed to parse output offset"));
-        return false;
-    }
-    bool ret = m_wallet->unblackball_output(std::make_pair(raw_amount, raw_offset));
-    if (!ret)
-    {
-        setStatusError(tr("Failed to mark output as unspent"));
-        return false;
-    }
-    return true;
-}
-
-bool WalletImpl::getRing(const std::string &key_image, std::vector<uint64_t> &ring) const
-{
-    crypto::key_image raw_key_image;
-    if (!epee::string_tools::hex_to_pod(key_image, raw_key_image))
-    {
-        setStatusError(tr("Failed to parse key image"));
-        return false;
-    }
-    bool ret = m_wallet->get_ring(raw_key_image, ring);
-    if (!ret)
-    {
-        setStatusError(tr("Failed to get ring"));
-        return false;
-    }
-    return true;
-}
-
-bool WalletImpl::getRings(const std::string &txid, std::vector<std::pair<std::string, std::vector<uint64_t>>> &rings) const
-{
-    crypto::hash raw_txid;
-    if (!epee::string_tools::hex_to_pod(txid, raw_txid))
-    {
-        setStatusError(tr("Failed to parse txid"));
-        return false;
-    }
-    std::vector<std::pair<crypto::key_image, std::vector<uint64_t>>> raw_rings;
-    bool ret = m_wallet->get_rings(raw_txid, raw_rings);
-    if (!ret)
-    {
-        setStatusError(tr("Failed to get rings"));
-        return false;
-    }
-    for (const auto &r: raw_rings)
-    {
-      rings.push_back(std::make_pair(epee::string_tools::pod_to_hex(r.first), r.second));
-    }
-    return true;
-}
-
-bool WalletImpl::setRing(const std::string &key_image, const std::vector<uint64_t> &ring, bool relative)
-{
-    crypto::key_image raw_key_image;
-    if (!epee::string_tools::hex_to_pod(key_image, raw_key_image))
-    {
-        setStatusError(tr("Failed to parse key image"));
-        return false;
-    }
-    bool ret = m_wallet->set_ring(raw_key_image, ring, relative);
-    if (!ret)
-    {
-        setStatusError(tr("Failed to set ring"));
-        return false;
-    }
-    return true;
 }
 
 void WalletImpl::segregatePreForkOutputs(bool segregate)

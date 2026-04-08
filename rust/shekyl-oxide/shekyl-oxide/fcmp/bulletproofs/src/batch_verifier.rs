@@ -9,7 +9,7 @@ use curve25519_dalek::{
 
 use shekyl_generators::{H as MONERO_H, BulletproofGenerators};
 
-use crate::{original, plus};
+use crate::plus;
 
 #[derive(Default)]
 pub(crate) struct InternalBatchVerifier {
@@ -58,15 +58,6 @@ impl InternalBatchVerifier {
 }
 
 #[derive(Default)]
-pub(crate) struct BulletproofsBatchVerifier(pub(crate) InternalBatchVerifier);
-impl BulletproofsBatchVerifier {
-  #[must_use]
-  pub(crate) fn verify(self) -> bool {
-    self.0.verify(ED25519_BASEPOINT_POINT, *MONERO_H, &original::GENERATORS)
-  }
-}
-
-#[derive(Default)]
 pub(crate) struct BulletproofsPlusBatchVerifier(pub(crate) InternalBatchVerifier);
 impl BulletproofsPlusBatchVerifier {
   #[must_use]
@@ -84,14 +75,12 @@ impl BulletproofsPlusBatchVerifier {
 /// accumulated with the fixed points into a single multiscalar multiplication.
 #[derive(Default)]
 pub struct BatchVerifier {
-  pub(crate) original: BulletproofsBatchVerifier,
   pub(crate) plus: BulletproofsPlusBatchVerifier,
 }
 impl BatchVerifier {
   /// Create a new batch verifier.
   pub fn new() -> Self {
     Self {
-      original: BulletproofsBatchVerifier(InternalBatchVerifier::default()),
       plus: BulletproofsPlusBatchVerifier(InternalBatchVerifier::default()),
     }
   }
@@ -101,6 +90,6 @@ impl BatchVerifier {
   /// This uses a variable-time multiscalar multiplication internally.
   #[must_use]
   pub fn verify(self) -> bool {
-    self.original.verify() && self.plus.verify()
+    self.plus.verify()
   }
 }

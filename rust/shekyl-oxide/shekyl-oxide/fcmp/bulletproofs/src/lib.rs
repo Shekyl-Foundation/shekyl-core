@@ -23,14 +23,8 @@ pub(crate) mod point_vector;
 pub(crate) mod core;
 
 pub(crate) mod batch_verifier;
-use batch_verifier::{BulletproofsBatchVerifier, BulletproofsPlusBatchVerifier};
+use batch_verifier::BulletproofsPlusBatchVerifier;
 pub use batch_verifier::BatchVerifier;
-
-pub(crate) mod original;
-use crate::original::{
-  IpProof, AggregateRangeStatement as OriginalStatement, AggregateRangeWitness as OriginalWitness,
-  AggregateRangeProof as OriginalProof,
-};
 
 pub(crate) mod plus;
 use crate::plus::{
@@ -57,14 +51,9 @@ pub enum BulletproofError {
   TooManyCommitments,
 }
 
-/// A Bulletproof(+).
-///
-/// This encapsulates either a Bulletproof or a Bulletproof+.
-#[allow(clippy::large_enum_variant)]
+/// A Bulletproof+.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Bulletproof {
-  /// A Bulletproof.
-  Original(OriginalProof),
   /// A Bulletproof+.
   Plus(PlusProof),
 }
@@ -109,32 +98,6 @@ impl Bulletproof {
     (clawback, LR_len)
   }
 
-  /// Prove the list of commitments are within [0 .. 2^64) with an aggregate Bulletproof.
-  pub fn prove<R: RngCore + CryptoRng>(
-    rng: &mut R,
-    outputs: Vec<Commitment>,
-  ) -> Result<Bulletproof, BulletproofError> {
-    if outputs.is_empty() {
-      Err(BulletproofError::NoCommitments)?;
-    }
-    if outputs.len() > MAX_COMMITMENTS {
-      Err(BulletproofError::TooManyCommitments)?;
-    }
-    let commitments = outputs.iter().map(Commitment::calculate).collect::<Vec<_>>();
-    Ok(Bulletproof::Original(
-      OriginalStatement::new(&commitments)
-        .expect("failed to create statement despite checking amount of commitments")
-        .prove(
-          rng,
-          OriginalWitness::new(outputs)
-            .expect("failed to create witness despite checking amount of commitments"),
-        )
-        .expect(
-          "failed to prove Bulletproof::Original despite ensuring statement/witness consistency",
-        ),
-    ))
-  }
-
   /// Prove the list of commitments are within [0 .. 2^64) with an aggregate Bulletproof+.
   pub fn prove_plus<R: RngCore + CryptoRng>(
     rng: &mut R,
@@ -175,16 +138,6 @@ impl Bulletproof {
     };
 
     match self {
-      Bulletproof::Original(bp) => {
-        let mut verifier = BulletproofsBatchVerifier::default();
-        let Some(statement) = OriginalStatement::new(&commitments) else {
-          return false;
-        };
-        if !statement.verify(rng, &mut verifier, bp.clone()) {
-          return false;
-        }
-        verifier.verify()
-      }
       Bulletproof::Plus(bp) => {
         let mut verifier = BulletproofsPlusBatchVerifier::default();
         let Some(statement) = PlusStatement::new(&commitments) else {
@@ -220,12 +173,6 @@ impl Bulletproof {
     };
 
     match self {
-      Bulletproof::Original(bp) => {
-        let Some(statement) = OriginalStatement::new(&commitments) else {
-          return false;
-        };
-        statement.verify(rng, &mut verifier.original, bp.clone())
-      }
       Bulletproof::Plus(bp) => {
         let Some(statement) = PlusStatement::new(&commitments) else {
           return false;
@@ -241,20 +188,6 @@ impl Bulletproof {
     specific_write_vec: F,
   ) -> io::Result<()> {
     match self {
-      Bulletproof::Original(bp) => {
-        CompressedPoint::write(&bp.A, w)?;
-        CompressedPoint::write(&bp.S, w)?;
-        CompressedPoint::write(&bp.T1, w)?;
-        CompressedPoint::write(&bp.T2, w)?;
-        write_scalar(&bp.tau_x, w)?;
-        write_scalar(&bp.mu, w)?;
-        specific_write_vec(&bp.ip.L, w)?;
-        specific_write_vec(&bp.ip.R, w)?;
-        write_scalar(&bp.ip.a, w)?;
-        write_scalar(&bp.ip.b, w)?;
-        write_scalar(&bp.t_hat, w)
-      }
-
       Bulletproof::Plus(bp) => {
         CompressedPoint::write(&bp.A, w)?;
         CompressedPoint::write(&bp.wip.A, w)?;
@@ -285,25 +218,6 @@ impl Bulletproof {
     let mut serialized = Vec::with_capacity(512);
     self.write(&mut serialized).expect("write failed but <Vec as io::Write> doesn't fail");
     serialized
-  }
-
-  /// Read a Bulletproof.
-  pub fn read<R: Read>(r: &mut R) -> io::Result<Bulletproof> {
-    Ok(Bulletproof::Original(OriginalProof {
-      A: CompressedPoint::read(r)?,
-      S: CompressedPoint::read(r)?,
-      T1: CompressedPoint::read(r)?,
-      T2: CompressedPoint::read(r)?,
-      tau_x: read_scalar(r)?,
-      mu: read_scalar(r)?,
-      ip: IpProof {
-        L: read_vec(CompressedPoint::read, Some(MAX_LR), r)?,
-        R: read_vec(CompressedPoint::read, Some(MAX_LR), r)?,
-        a: read_scalar(r)?,
-        b: read_scalar(r)?,
-      },
-      t_hat: read_scalar(r)?,
-    }))
   }
 
   /// Read a Bulletproof+.

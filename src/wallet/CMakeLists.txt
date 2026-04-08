@@ -34,7 +34,6 @@ set(wallet_sources
   wallet2.cpp
   wallet2_ffi.cpp
   wallet_args.cpp
-  ringdb.cpp
   node_rpc_proxy.cpp
   wallet_rpc_payments.cpp
 )
@@ -54,7 +53,6 @@ target_link_libraries(wallet
     mnemonics
     device_trezor
     net
-    ${LMDB_LIBRARY}
     ${Boost_CHRONO_LIBRARY}
     ${Boost_SERIALIZATION_LIBRARY}
     ${Boost_FILESYSTEM_LIBRARY}

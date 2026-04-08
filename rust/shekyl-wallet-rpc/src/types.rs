@@ -182,8 +182,6 @@ pub struct TransferParams {
     #[serde(default)]
     pub account_index: u32,
     #[serde(default)]
-    pub ring_size: u32,
-    #[serde(default)]
     pub payment_id: String,
     #[serde(default)]
     pub do_not_relay: bool,

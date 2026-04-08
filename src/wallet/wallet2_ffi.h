@@ -132,8 +132,7 @@ uint32_t wallet2_ffi_get_version(void);
 char* wallet2_ffi_transfer(wallet2_handle* w,
                            const char* destinations_json,
                            uint32_t priority,
-                           uint32_t account_index,
-                           uint32_t ring_size);
+                           uint32_t account_index);
 
 // Get transfer history. Returns JSON: {"in":[...],"out":[...],"pending":[...],"pool":[...]} or NULL.
 char* wallet2_ffi_get_transfers(wallet2_handle* w,

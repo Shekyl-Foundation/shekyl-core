@@ -1459,57 +1459,6 @@ namespace wallet_rpc
     END_KV_SERIALIZE_MAP()
   };
 
-  struct COMMAND_RPC_GET_SPEND_PROOF
-  {
-    struct request_t
-    {
-      std::string txid;
-      std::string message;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(txid)
-        KV_SERIALIZE(message)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      std::string signature;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(signature)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_CHECK_SPEND_PROOF
-  {
-    struct request_t
-    {
-      std::string txid;
-      std::string message;
-      std::string signature;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(txid)
-        KV_SERIALIZE(message)
-        KV_SERIALIZE(signature)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      bool good;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(good)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
 
   struct COMMAND_RPC_GET_RESERVE_PROOF
   {

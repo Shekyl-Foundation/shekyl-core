@@ -104,11 +104,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/get_hashes.bin", post(binary::get_hashes))
         .route("/gethashes.bin", post(binary::get_hashes))
-        .route("/get_o_indexes.bin", post(binary::get_o_indexes))
-        .route(
-            "/get_output_distribution.bin",
-            post(binary::get_output_distribution_bin),
-        );
+        .route("/get_o_indexes.bin", post(binary::get_o_indexes));
 
     if !restricted {
         router = router

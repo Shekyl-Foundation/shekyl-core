@@ -34,7 +34,6 @@ set(unit_tests_sources
   block_queue.cpp
   block_reward.cpp
   bootstrap_node_selector.cpp
-  bulletproofs.cpp
   bulletproofs_plus.cpp
   canonical_amounts.cpp
   chacha.cpp
@@ -97,7 +96,6 @@ set(unit_tests_sources
   fcmp.cpp
   output_selection.cpp
   vercmp.cpp
-  ringdb.cpp
   wallet_storage.cpp
   wipeable_string.cpp
   is_hdd.cpp

@@ -42,7 +42,6 @@
 #include <boost/serialization/deque.hpp>
 #include <boost/thread/lock_guard.hpp>
 #include <atomic>
-#include <random>
 
 #include "include_base_utils.h"
 #include "cryptonote_basic/account.h"
@@ -95,34 +94,8 @@ class wallet_accessor_test;
 
 namespace tools
 {
-  class ringdb;
   class wallet2;
   class Notify;
-
-  class gamma_picker
-  {
-  public:
-    uint64_t pick();
-    gamma_picker(const std::vector<uint64_t> &rct_offsets);
-    gamma_picker(const std::vector<uint64_t> &rct_offsets, double shape, double scale);
-    uint64_t get_num_rct_outs() const { return num_rct_outputs; }
-
-  private:
-    struct gamma_engine
-    {
-      typedef uint64_t result_type;
-      static constexpr result_type min() { return 0; }
-      static constexpr result_type max() { return std::numeric_limits<result_type>::max(); }
-      result_type operator()() { return crypto::rand<result_type>(); }
-    } engine;
-
-private:
-    std::gamma_distribution<double> gamma;
-    const std::vector<uint64_t> &rct_offsets;
-    const uint64_t *begin, *end;
-    uint64_t num_rct_outputs;
-    double average_output_time;
-  };
 
   class wallet_keys_unlocker
   {
@@ -1081,10 +1054,6 @@ private:
     // all locked & unlocked balances of all subaddress accounts
     uint64_t balance_all(bool strict) const;
     uint64_t unlocked_balance_all(bool strict, uint64_t *blocks_to_unlock = NULL, uint64_t *time_to_unlock = NULL);
-    template<typename T>
-    void transfer_selected(const std::vector<cryptonote::tx_destination_entry>& dsts, const std::vector<size_t>& selected_transfers, size_t fake_outputs_count,
-      std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs, std::unordered_set<crypto::public_key> &valid_public_keys_cache,
-      uint64_t fee, const std::vector<uint8_t>& extra, T destination_split_strategy, const tx_dust_policy& dust_policy, cryptonote::transaction& tx, pending_tx &ptx, const bool use_view_tags);
     void transfer_selected_rct(std::vector<cryptonote::tx_destination_entry> dsts, const std::vector<size_t>& selected_transfers, size_t fake_outputs_count,
       std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs, std::unordered_set<crypto::public_key> &valid_public_keys_cache,
       uint64_t fee, const std::vector<uint8_t>& extra, cryptonote::transaction& tx, pending_tx &ptx, const bool use_view_tags);
@@ -1400,8 +1369,6 @@ private:
     void segregation_height(uint64_t height) { m_segregation_height = height; }
     bool ignore_fractional_outputs() const { return m_ignore_fractional_outputs; }
     void ignore_fractional_outputs(bool value) { m_ignore_fractional_outputs = value; }
-    bool confirm_non_default_ring_size() const { return m_confirm_non_default_ring_size; }
-    void confirm_non_default_ring_size(bool always) { m_confirm_non_default_ring_size = always; }
     uint64_t ignore_outputs_above() const { return m_ignore_outputs_above; }
     void ignore_outputs_above(uint64_t value) { m_ignore_outputs_above = value; }
     uint64_t ignore_outputs_below() const { return m_ignore_outputs_below; }
@@ -1447,9 +1414,6 @@ private:
     std::string get_tx_proof(const cryptonote::transaction &tx, const crypto::secret_key &tx_key, const std::vector<crypto::secret_key> &additional_tx_keys, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message) const;
     bool check_tx_proof(const crypto::hash &txid, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message, const std::string &sig_str, uint64_t &received, bool &in_pool, uint64_t &confirmations);
     bool check_tx_proof(const cryptonote::transaction &tx, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message, const std::string &sig_str, uint64_t &received) const;
-
-    std::string get_spend_proof(const crypto::hash &txid, const std::string &message);
-    bool check_spend_proof(const crypto::hash &txid, const std::string &message, const std::string &sig_str);
 
     void scan_tx(const std::unordered_set<crypto::hash> &txids);
 
@@ -1503,9 +1467,7 @@ private:
     */
     uint64_t get_approximate_blockchain_height() const;
     uint64_t estimate_blockchain_height();
-    std::vector<size_t> select_available_outputs_from_histogram(uint64_t count, bool atleast, bool unlocked, bool allow_rct);
     std::vector<size_t> select_available_outputs(const std::function<bool(const transfer_details &td)> &f);
-    std::vector<size_t> select_available_mixable_outputs();
 
     size_t pop_best_value_from(const transfer_container &transfers, std::vector<size_t> &unused_dust_indices, const std::vector<size_t>& selected_transfers, bool smallest = false) const;
     size_t pop_best_value(std::vector<size_t> &unused_dust_indices, const std::vector<size_t>& selected_transfers, bool smallest = false) const;
@@ -1597,8 +1559,6 @@ private:
     uint64_t get_base_fee(fee_priority priority);
     uint64_t get_base_fee();
     uint64_t get_fee_quantization_mask();
-    uint64_t get_min_ring_size();
-    uint64_t get_max_ring_size();
     fee_priority adjust_priority(fee_priority priority);
 
     /*
@@ -1667,22 +1627,6 @@ private:
       boost::lock_guard<boost::recursive_mutex> lock(m_daemon_rpc_mutex);
       return epee::net_utils::invoke_http_json_rpc(uri, method_name, req, res, *m_http_client, timeout, http_method, req_id);
     }
-
-    bool set_ring_database(const std::string &filename);
-    const std::string get_ring_database() const { return m_ring_database; }
-    bool get_ring(const crypto::key_image &key_image, std::vector<uint64_t> &outs);
-    bool get_rings(const crypto::hash &txid, std::vector<std::pair<crypto::key_image, std::vector<uint64_t>>> &outs);
-    bool get_rings(const crypto::chacha_key &key, const std::vector<crypto::key_image> &key_images, std::vector<std::vector<uint64_t>> &outs);
-    bool set_ring(const crypto::key_image &key_image, const std::vector<uint64_t> &outs, bool relative);
-    bool set_rings(const std::vector<std::pair<crypto::key_image, std::vector<uint64_t>>> &rings, bool relative);
-    bool unset_ring(const std::vector<crypto::key_image> &key_images);
-    bool unset_ring(const crypto::hash &txid);
-    [[deprecated]] bool find_and_save_rings(bool force = true);
-
-    bool blackball_output(const std::pair<uint64_t, uint64_t> &output);
-    bool set_blackballed_outputs(const std::vector<std::pair<uint64_t, uint64_t>> &outputs, bool add = false);
-    bool unblackball_output(const std::pair<uint64_t, uint64_t> &output);
-    bool is_output_blackballed(const std::pair<uint64_t, uint64_t> &output) const;
 
     void freeze(size_t idx);
     void thaw(size_t idx);
@@ -1798,18 +1742,10 @@ private:
     void set_unspent(size_t idx);
     bool is_spent(const transfer_details &td, bool strict = true) const;
     bool is_spent(size_t idx, bool strict = true) const;
-    void get_outs(std::vector<std::vector<get_outs_entry>> &outs, const std::vector<size_t> &selected_transfers, size_t fake_outputs_count, bool rct, std::unordered_set<crypto::public_key> &valid_public_keys_cache);
-    void get_outs(std::vector<std::vector<get_outs_entry>> &outs, const std::vector<size_t> &selected_transfers, size_t fake_outputs_count, std::vector<uint64_t> &rct_offsets, std::unordered_set<crypto::public_key> &valid_public_keys_cache);
-    bool tx_add_fake_output(std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs, uint64_t global_index, const crypto::public_key& tx_public_key, const rct::key& mask, uint64_t real_index, bool unlocked, std::unordered_set<crypto::public_key> &valid_public_keys_cache) const;
     bool should_pick_a_second_output(bool use_rct, size_t n_transfers, const std::vector<size_t> &unused_transfers_indices, const std::vector<size_t> &unused_dust_indices) const;
     std::vector<size_t> get_only_rct(const std::vector<size_t> &unused_dust_indices, const std::vector<size_t> &unused_transfers_indices) const;
     void scan_output(const cryptonote::transaction &tx, bool miner_tx, const crypto::public_key &tx_pub_key, size_t i, tx_scan_info_t &tx_scan_info, int &num_vouts_received, std::unordered_map<cryptonote::subaddress_index, uint64_t> &tx_money_got_in_outs, std::vector<size_t> &outs, bool pool);
     void trim_hashchain();
-    bool add_rings(const crypto::chacha_key &key, const cryptonote::transaction_prefix &tx);
-    bool add_rings(const cryptonote::transaction_prefix &tx);
-    bool remove_rings(const cryptonote::transaction_prefix &tx);
-    bool get_ring(const crypto::chacha_key &key, const crypto::key_image &key_image, std::vector<uint64_t> &outs);
-    crypto::chacha_key get_ringdb_key();
     void setup_keys(const epee::wipeable_string &password);
     const crypto::chacha_key get_cache_key();
     void verify_password_with_cached_key(const epee::wipeable_string &password);
@@ -1924,7 +1860,6 @@ private:
     uint64_t m_skip_to_height;
     // m_skip_to_height is useful when we don't want to modify the wallet's restore height.
     // m_refresh_from_block_height is also a wallet's restore height which should remain constant unless explicitly modified by the user.
-    bool m_confirm_non_default_ring_size;
     AskPasswordType m_ask_password;
     uint64_t m_max_reorg_depth;
     uint32_t m_min_output_count;
@@ -1969,10 +1904,7 @@ private:
     // store calculated key image for faster lookup
     serializable_unordered_map<crypto::public_key, serializable_map<uint64_t, crypto::key_image> > m_key_image_cache;
 
-    std::string m_ring_database;
     bool m_ring_history_saved;
-    std::unique_ptr<ringdb> m_ringdb;
-    std::optional<crypto::chacha_key> m_ringdb_key;
 
     uint64_t m_last_block_reward;
     std::unique_ptr<tools::file_locker> m_keys_file_locker;

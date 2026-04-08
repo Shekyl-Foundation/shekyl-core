@@ -938,8 +938,7 @@ struct Wallet
     virtual bool checkTxKey(const std::string &txid, std::string tx_key, const std::string &address, uint64_t &received, bool &in_pool, uint64_t &confirmations) = 0;
     virtual std::string getTxProof(const std::string &txid, const std::string &address, const std::string &message) const = 0;
     virtual bool checkTxProof(const std::string &txid, const std::string &address, const std::string &message, const std::string &signature, bool &good, uint64_t &received, bool &in_pool, uint64_t &confirmations) = 0;
-    virtual std::string getSpendProof(const std::string &txid, const std::string &message) const = 0;
-    virtual bool checkSpendProof(const std::string &txid, const std::string &message, const std::string &signature, bool &good) const = 0;
+
     /*!
      * \brief getReserveProof - Generates a proof that proves the reserve of unspent funds
      *                          Parameters `account_index` and `amount` are ignored when `all` is true
@@ -989,23 +988,7 @@ struct Wallet
     virtual void setOffline(bool offline) = 0;
     virtual bool isOffline() const = 0;
     
-    //! blackballs a set of outputs
-    virtual bool blackballOutputs(const std::vector<std::string> &outputs, bool add) = 0;
 
-    //! blackballs an output
-    virtual bool blackballOutput(const std::string &amount, const std::string &offset) = 0;
-
-    //! unblackballs an output
-    virtual bool unblackballOutput(const std::string &amount, const std::string &offset) = 0;
-
-    //! gets the ring used for a key image, if any
-    virtual bool getRing(const std::string &key_image, std::vector<uint64_t> &ring) const = 0;
-
-    //! gets the rings used for a txid, if any
-    virtual bool getRings(const std::string &txid, std::vector<std::pair<std::string, std::vector<uint64_t>>> &rings) const = 0;
-
-    //! sets the ring used for a key image
-    virtual bool setRing(const std::string &key_image, const std::vector<uint64_t> &ring, bool relative) = 0;
 
     //! sets whether pre-fork outs are to be segregated
     virtual void segregatePreForkOutputs(bool segregate) = 0;

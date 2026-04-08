@@ -105,7 +105,6 @@ extern "C" {
         destinations_json: *const c_char,
         priority: u32,
         account_index: u32,
-        ring_size: u32,
     ) -> *mut c_char;
 
     pub fn wallet2_ffi_get_transfers(
