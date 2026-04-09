@@ -29,6 +29,7 @@ fn dummy_spend_input(amount: u64) -> SpendInput {
         amount,
         spend_key_x: [5u8; 32],
         spend_key_y: [6u8; 32],
+        commitment_mask: [7u8; 32],
         h_pqc: [4u8; 32],
         pqc_secret_key: vec![0u8; crate::validate::EXPECTED_HYBRID_SK_LEN],
         leaf_chunk: vec![dummy_leaf_entry()],
