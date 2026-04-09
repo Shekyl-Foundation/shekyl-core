@@ -245,8 +245,8 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
   // we need the index
   for (uint64_t i = 0; i < tx.vout.size(); ++i)
   {
-    // Miner coinbase txes have their output stored as rct (amount=0) with an
-    // identity-mask commitment so they share the same output index space.
+    // Miner coinbase txes have their output stored as rct (amount=0) with a
+    // zero-mask commitment (amount*H) for FCMP++ compatibility.
     if (miner_tx && tx.version >= 2)
     {
       cryptonote::tx_out vout = tx.vout[i];

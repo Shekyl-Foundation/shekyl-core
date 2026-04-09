@@ -781,6 +781,19 @@ pub extern "C" fn shekyl_page_size() -> usize {
     }
 }
 
+// ─── FCMP++: Generators ─────────────────────────────────────────────────────
+
+/// Write the compressed Ed25519 bytes of generator T to `out_ptr` (32 bytes).
+///
+/// T = hash_to_point(keccak256("Monero Generator T")) — the generator used
+/// to blind the key-image commitment in two-component output keys: O = xG + yT.
+#[no_mangle]
+pub extern "C" fn shekyl_generator_T(out_ptr: *mut u8) {
+    if out_ptr.is_null() { return; }
+    let t_bytes: [u8; 32] = shekyl_generators::T.to_bytes().into();
+    unsafe { std::ptr::copy_nonoverlapping(t_bytes.as_ptr(), out_ptr, 32) };
+}
+
 // ─── FCMP++: Proof and Tree Operations ──────────────────────────────────────
 
 /// Compute H(pqc_pk) leaf scalar for a PQC public key.
@@ -944,10 +957,7 @@ pub extern "C" fn shekyl_fcmp_prove(
                 success: true,
             }
         }
-        Err(e) => {
-            eprintln!("[shekyl_fcmp_prove] prove failed: {e:?}");
-            fail
-        }
+        Err(_) => fail,
     }
 }
 
@@ -956,7 +966,7 @@ fn parse_prove_witness(data: &[u8], num_inputs: usize) -> Option<Vec<shekyl_fcmp
     let mut inputs = Vec::with_capacity(num_inputs);
 
     for _ in 0..num_inputs {
-        if offset + 224 > data.len() {
+        if offset + 256 > data.len() {
             return None;
         }
 
@@ -966,6 +976,7 @@ fn parse_prove_witness(data: &[u8], num_inputs: usize) -> Option<Vec<shekyl_fcmp
         let mut h_pqc = [0u8; 32];
         let mut spend_key_x = [0u8; 32];
         let mut spend_key_y = [0u8; 32];
+        let mut commitment_mask = [0u8; 32];
         let mut pseudo_out_blind = [0u8; 32];
 
         output_key.copy_from_slice(&data[offset..offset + 32]);
@@ -974,8 +985,9 @@ fn parse_prove_witness(data: &[u8], num_inputs: usize) -> Option<Vec<shekyl_fcmp
         h_pqc.copy_from_slice(&data[offset + 96..offset + 128]);
         spend_key_x.copy_from_slice(&data[offset + 128..offset + 160]);
         spend_key_y.copy_from_slice(&data[offset + 160..offset + 192]);
-        pseudo_out_blind.copy_from_slice(&data[offset + 192..offset + 224]);
-        offset += 224;
+        commitment_mask.copy_from_slice(&data[offset + 192..offset + 224]);
+        pseudo_out_blind.copy_from_slice(&data[offset + 224..offset + 256]);
+        offset += 256;
 
         // Leaf chunk
         if offset + 4 > data.len() {
@@ -1066,6 +1078,7 @@ fn parse_prove_witness(data: &[u8], num_inputs: usize) -> Option<Vec<shekyl_fcmp
             h_pqc: shekyl_fcmp::leaf::PqcLeafScalar(h_pqc),
             spend_key_x,
             spend_key_y,
+            commitment_mask,
             pseudo_out_blind,
             leaf_chunk_outputs,
             leaf_chunk_h_pqc,
@@ -1147,10 +1160,13 @@ pub extern "C" fn shekyl_fcmp_verify(
         pqc_hashes.push(shekyl_fcmp::leaf::PqcLeafScalar(ph));
     }
 
-    shekyl_fcmp::proof::verify(
+    match shekyl_fcmp::proof::verify(
         &proof, &key_images, &pseudo_outs, &pqc_hashes,
         &tree_root, tree_depth, signable_tx_hash,
-    ).unwrap_or(false)
+    ) {
+        Ok(ok) => ok,
+        Err(_) => false,
+    }
 }
 
 /// Convert raw output data into serialized 4-scalar leaves.

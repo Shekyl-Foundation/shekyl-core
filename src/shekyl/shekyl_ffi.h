@@ -150,6 +150,13 @@ bool shekyl_generate_ssl_certificate(
     ShekylBuffer* key_pem_out,
     ShekylBuffer* cert_pem_out);
 
+// ─── FCMP++: Generators ─────────────────────────────────────────────────────
+
+// Write the compressed Ed25519 bytes of generator T (32 bytes) to out_ptr.
+// T = hash_to_point(keccak256("Monero Generator T")) — used in two-component
+// output keys: O = xG + yT.
+void shekyl_generator_T(uint8_t* out_ptr);
+
 // ─── FCMP++: Proof and tree operations ──────────────────────────────────────
 
 // Compute H(pqc_pk) leaf scalar. Writes 32 bytes to out_ptr.
@@ -177,8 +184,11 @@ struct ShekylFcmpProveResult {
 
 // Construct FCMP++ proof from variable-length witness blob.
 // witness_ptr / witness_len: serialized witness for all inputs.
-// Per input: fixed header (224 bytes) + leaf chunk + C1/C2 branch layers.
-// Header: [O:32][I:32][C:32][h_pqc:32][x:32][y:32][pseudo_out_blind:32]
+// Per input: fixed header (256 bytes) + leaf chunk + C1/C2 branch layers.
+// Header: [O:32][I:32][C:32][h_pqc:32][x:32][y:32][z:32][a:32]
+//   y = SAL output-key secret (0 for legacy one-time addresses)
+//   z = Pedersen commitment mask
+//   a = desired pseudo-out blinding factor
 // See shekyl-ffi crate docs for the full wire format specification.
 ShekylFcmpProveResult shekyl_fcmp_prove(
     const uint8_t* witness_ptr,

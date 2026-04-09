@@ -325,7 +325,7 @@ struct output_index {
     if (rct && p_tx->rct_signatures.outPk.size() > out_no)
       comm = p_tx->rct_signatures.outPk[out_no].mask;
     else
-      comm = rct::scalarmultH(rct::d2h(amount));
+      comm = rct::zeroCommit(amount);
   }
 
   rct::key commitment() const {
@@ -1095,4 +1095,4 @@ inline bool do_replay_file(const std::string& filename)
 #define CHECK_EQ(v1, v2) CHECK_AND_ASSERT_MES(v1 == v2, false, "[" << perr_context << "] failed: \"" << QUOTEME(v1) << " == " << QUOTEME(v2) << "\", " << v1 << " != " << v2)
 #define CHECK_NOT_EQ(v1, v2) CHECK_AND_ASSERT_MES(!(v1 == v2), false, "[" << perr_context << "] failed: \"" << QUOTEME(v1) << " != " << QUOTEME(v2) << "\", " << v1 << " == " << v2)
 #define MK_COINS(amount) (UINT64_C(amount) * COIN)
-#define TESTS_DEFAULT_FEE ((uint64_t)1000000000) // 1.0 COIN — covers dynamic fee for v3 PQC txs (~10 KB at ~65K/byte)
+#define TESTS_DEFAULT_FEE ((uint64_t)3000000000) // 3.0 COIN — covers dynamic fee for FCMP++ PQC txs (~30 KB at ~65K/byte)

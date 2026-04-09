@@ -154,6 +154,7 @@ pub fn sign_transaction(
                 h_pqc: PqcLeafScalar(inp.h_pqc),
                 spend_key_x: inp.spend_key_x,
                 spend_key_y: inp.spend_key_y,
+                commitment_mask: inp.commitment_mask,
                 pseudo_out_blind: pseudo_masks[i].to_bytes(),
                 leaf_chunk_outputs: leaf_outputs,
                 leaf_chunk_h_pqc: leaf_h_pqc,

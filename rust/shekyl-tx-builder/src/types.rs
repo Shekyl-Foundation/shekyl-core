@@ -180,9 +180,12 @@ pub struct SpendInput {
     /// Ephemeral spend secret key x where O = x*G + y*T.
     #[serde(with = "hex_bytes32")]
     pub spend_key_x: [u8; 32],
-    /// Blinding factor / mask y.
+    /// SAL output-key secret y where O = xG + yT.
     #[serde(with = "hex_bytes32")]
     pub spend_key_y: [u8; 32],
+    /// Pedersen commitment mask z where C = zG + amount*H.
+    #[serde(with = "hex_bytes32")]
+    pub commitment_mask: [u8; 32],
     /// Hash of the PQC public key for this output: H(pqc_pk).
     #[serde(with = "hex_bytes32")]
     pub h_pqc: [u8; 32],
@@ -209,6 +212,7 @@ impl Drop for SpendInput {
     fn drop(&mut self) {
         self.spend_key_x.zeroize();
         self.spend_key_y.zeroize();
+        self.commitment_mask.zeroize();
         self.pqc_secret_key.zeroize();
     }
 }

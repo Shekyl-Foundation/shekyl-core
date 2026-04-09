@@ -383,24 +383,26 @@ namespace
 
         for (size_t i = 0; i < num_inputs; ++i)
         {
-            // Fixed header: [O:32][I:32][C:32][h_pqc:32][x:32][y:32][a:32] = 224 bytes
+            // Fixed header: [O:32][I:32][C:32][h_pqc:32][x:32][y:32][z:32][a:32] = 256 bytes
+            // y = SAL output-key secret (0 for legacy one-time addresses)
+            // z = Pedersen commitment mask (inSk.mask)
+            // a = desired pseudo-out blinding factor
             const size_t hdr_start = witness.size();
-            witness.resize(hdr_start + 224);
+            witness.resize(hdr_start + 256);
             uint8_t* base = witness.data() + hdr_start;
 
             memcpy(base, inPk[i].dest.bytes, 32);       // O
-
             ge_p3 hp;
             hash_to_p3(hp, inPk[i].dest);
             key ki_gen;
             ge_p3_tobytes(reinterpret_cast<unsigned char*>(ki_gen.bytes), &hp);
             memcpy(base + 32, ki_gen.bytes, 32);         // I = Hp(O)
-
             memcpy(base + 64, inPk[i].mask.bytes, 32);   // C
             memcpy(base + 96, pqc_pk_hashes[i].bytes, 32); // h_pqc
             memcpy(base + 128, inSk[i].dest.bytes, 32);  // spend_key_x
-            memcpy(base + 160, inSk[i].mask.bytes, 32);  // spend_key_y
-            memcpy(base + 192, pseudo_out_blinds[i].bytes, 32); // pseudo-out blind a_i
+            memset(base + 160, 0, 32);                   // spend_key_y = 0 (legacy output keys)
+            memcpy(base + 192, inSk[i].mask.bytes, 32);  // commitment_mask z
+            memcpy(base + 224, pseudo_out_blinds[i].bytes, 32); // pseudo-out blind a_i
 
             // Leaf chunk: Ed25519 output entries
             const auto& entries = leaf_chunk_entries[i];
