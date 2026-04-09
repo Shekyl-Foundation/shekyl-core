@@ -631,7 +631,7 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
 
             if (oi.is_coin_base) {
                 ts.amount = oi.amount;
-                ts.mask = rct::identity();
+                ts.mask = rct::zero();
             } else {
                 const transaction &src_tx = *oi.p_tx;
                 crypto::key_derivation derivation;

@@ -322,10 +322,10 @@ struct output_index {
 
   void set_rct(bool arct) {
     rct = arct;
-    if (rct &&  p_tx->rct_signatures.outPk.size() > out_no)
+    if (rct && p_tx->rct_signatures.outPk.size() > out_no)
       comm = p_tx->rct_signatures.outPk[out_no].mask;
     else
-      comm = rct::zeroCommit(amount);
+      comm = rct::scalarmultH(rct::d2h(amount));
   }
 
   rct::key commitment() const {
