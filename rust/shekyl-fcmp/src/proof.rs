@@ -187,11 +187,13 @@ pub fn prove(
         let a = deserialize_ed25519_scalar(&input.pseudo_out_blind)
             .ok_or(ProveError::InvalidScalar { input_index: idx, field: "pseudo_out_blind" })?;
 
-        // r_c = a - y so that C_tilde blinding factor = y + r_c = a
         let r_c = a - y;
+
         let rerand = RerandomizedOutput::with_commitment_blind(&mut OsRng, output, r_c);
         let crate_input = rerand.input();
-        pseudo_outs.push(crate_input.C_tilde().to_bytes());
+        let c_tilde_bytes: [u8; 32] = crate_input.C_tilde().to_bytes().into();
+
+        pseudo_outs.push(c_tilde_bytes);
 
         let opening = OpenedInputTuple::open(&rerand, &x, &y)
             .ok_or(ProveError::UpstreamError(

@@ -369,6 +369,8 @@ namespace
             size_t last = inamounts.size() - 1;
             sc_sub(pseudo_out_blinds[last].bytes, sumout.bytes, sumpouts.bytes);
             genC(rv.p.pseudoOuts[last], pseudo_out_blinds[last], inamounts[last]);
+
+        
         }
 
         // --- FCMP++ membership proof via Rust FFI ---
