@@ -95,7 +95,27 @@
   division safety, weight function validation, multi-block accumulation bounds,
   and adversarial edge cases.
 
+- **`shekyl-chacha` crate.** New Rust crate providing XChaCha20 (192-bit nonce)
+  stream cipher for wallet and cache file encryption. Wraps the NCC-audited
+  RustCrypto `chacha20` crate. Exported via FFI as `xchacha20()`, replacing
+  the C implementation in `chacha.c`.
+
 ### 🐛 Fixed
+
+- **`sc_check()` signed left-shift undefined behavior.** `signum(...) << k` on
+  `int64_t` in `crypto-ops.c` is UB when the result is negative. Introduced
+  `signed_lshift()` helper that uses multiplication on non-GCC compilers.
+  Ported from monero@c5be4dd.
+
+- **`wallet2::verify_password()` logic inversion.** Background wallet detection
+  used `HasParseError() && IsObject()` instead of `!HasParseError() && IsObject()`,
+  causing background wallets to fail password verification. Added the missing `!`.
+  Ported from monero@b19cd82.
+
+- **HTTP digest auth missing client nonce (`cnonce`).** The epee HTTP client sent
+  an empty `cnonce` with `qop=auth`, weakening the digest exchange against replay
+  attacks. Now generates a random 16-byte cnonce via `RAND_bytes` and includes it
+  in the response hash and Authorization header. Ported from monero@3d6b9fb.
 
 - **Critical: SAL `y` / commitment mask `z` conflation in FCMP++ prover.**
   `wallet2.cpp` passed `td.m_mask` (Pedersen commitment mask) as `spend_key_y`
@@ -243,6 +263,13 @@
 
 ### 🔄 Changed
 
+- **Wallet encryption upgraded from ChaCha20 (64-bit nonce) to XChaCha20 (192-bit
+  nonce).** The 24-byte nonce eliminates collision risk for randomly-generated
+  nonces. Implementation moved from C (`chacha.c`) to Rust (`shekyl-chacha`
+  crate) using the NCC-audited RustCrypto `chacha20` crate. `CHACHA_IV_SIZE`
+  increased from 8 to 24 bytes. Wallet keys files and cache files now use
+  XChaCha20 exclusively.
+
 - **Two-component output keys (`O = xG + yT`).** All output public keys now
   include a domain-separated `y` component along generator `T`, satisfying the
   FCMP++ SAL proof's `OpenedInputTuple::open` constraint. Previously, outputs
@@ -267,7 +294,22 @@
   `get_transaction_hash` and JSON/blob round-trips succeed before the wallet
   replaces the RCT payload with `genRctFcmpPlusPlus()`.
 
+### 🗑️ Removed
+
+- **`chacha.c` (C ChaCha implementation).** Replaced by the Rust `shekyl-chacha`
+  crate via FFI. The C implementation had a strict aliasing violation in its
+  `U8TO32_LITTLE`/`U32TO8_LITTLE` macros (pointer cast to `uint32_t*`).
+
+- **ChaCha8 dead code.** All `crypto::chacha8()` call sites in `wallet2.cpp`
+  were Monero backward-compatibility fallbacks for reading pre-2018 wallet
+  files. Shekyl has no legacy wallets; these paths were unreachable.
+
 ### 🔒 Security
+
+- **XChaCha20 192-bit nonces for wallet encryption.** Upgraded from the DJB
+  ChaCha20 64-bit nonce to XChaCha20 192-bit nonce, eliminating nonce collision
+  risk for randomly-generated nonces. The previous 64-bit nonce was safe for
+  Shekyl's usage pattern but the larger nonce provides a wider safety margin.
 
 - **Secure memory hardening (project-wide).** Systematic implementation of the
   `secure-memory.mdc` rule across Rust and C++ codebases:

@@ -2134,6 +2134,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-chacha"
+version = "2.0.0"
+dependencies = [
+ "chacha20",
+ "cipher",
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-consensus"
 version = "2.0.0"
 dependencies = [
@@ -2272,6 +2281,7 @@ dependencies = [
  "rcgen",
  "serde_json",
  "shekyl-address",
+ "shekyl-chacha",
  "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",

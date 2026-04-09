@@ -2,6 +2,7 @@
 members = [
     "shekyl-ffi",
     "shekyl-fcmp",
+    "shekyl-chacha",
     "shekyl-crypto-pq",
     "shekyl-crypto-hash",
     "shekyl-consensus",

@@ -102,6 +102,41 @@ fn slice_from_ptr<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
     Some(unsafe { std::slice::from_raw_parts(ptr, len) })
 }
 
+// ─── XChaCha20 Stream Cipher ─────────────────────────────────────────────────
+
+/// Apply XChaCha20 keystream: reads `length` bytes from `data`, XORs with
+/// the keystream derived from `key` (32 bytes) and `nonce` (24 bytes), and
+/// writes the result to `cipher`.  `data` and `cipher` may alias (in-place).
+///
+/// # Safety
+/// - `data` must point to at least `length` readable bytes.
+/// - `key` must point to 32 bytes.
+/// - `nonce` must point to 24 bytes.
+/// - `cipher` must point to at least `length` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn xchacha20(
+    data: *const u8,
+    length: usize,
+    key: *const u8,
+    nonce: *const u8,
+    cipher: *mut u8,
+) {
+    if length == 0 {
+        return;
+    }
+    debug_assert!(!data.is_null());
+    debug_assert!(!key.is_null());
+    debug_assert!(!nonce.is_null());
+    debug_assert!(!cipher.is_null());
+
+    let key_arr: &[u8; 32] = &*(key as *const [u8; 32]);
+    let nonce_arr: &[u8; 24] = &*(nonce as *const [u8; 24]);
+    let src = std::slice::from_raw_parts(data, length);
+    let dst = std::slice::from_raw_parts_mut(cipher, length);
+
+    shekyl_chacha::xchacha20_apply_copy(key_arr, nonce_arr, src, dst);
+}
+
 // ─── PQC: Hybrid Signatures ─────────────────────────────────────────────────
 
 #[repr(C)]

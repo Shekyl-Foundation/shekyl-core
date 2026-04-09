@@ -42,7 +42,6 @@ set(crypto_hash_sources
 
 set(crypto_ops_sources
   aesb.c
-  chacha.c
   crypto-ops-data.c
   crypto-ops.c
   oaes_lib.c

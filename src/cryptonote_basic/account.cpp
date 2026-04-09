@@ -129,13 +129,12 @@ DISABLE_VS_WARNINGS(4244 4345)
     // chacha
     epee::wipeable_string buffer0(std::string(bytes, '\0'));
     epee::wipeable_string buffer1 = buffer0;
-    crypto::chacha20(buffer0.data(), buffer0.size(), key, iv, buffer1.data());
+    crypto::xchacha20(buffer0.data(), buffer0.size(), key, iv, buffer1.data());
     return buffer1;
   }
   //-----------------------------------------------------------------
   void account_keys::xor_with_key_stream(const crypto::chacha_key &key)
   {
-    // encrypt a large enough byte stream with chacha20
     const size_t pq_bytes = m_pqc_secret_key.size();
     epee::wipeable_string key_stream = get_key_stream(key, m_encryption_iv, sizeof(crypto::secret_key) * 2 + pq_bytes);
     const char *ptr = key_stream.data();
@@ -164,7 +163,6 @@ DISABLE_VS_WARNINGS(4244 4345)
   //-----------------------------------------------------------------
   void account_keys::encrypt_viewkey(const crypto::chacha_key &key)
   {
-    // encrypt a large enough byte stream with chacha20
     epee::wipeable_string key_stream = get_key_stream(key, m_encryption_iv, sizeof(crypto::secret_key) * 2);
     const char *ptr = key_stream.data();
     ptr += sizeof(crypto::secret_key);

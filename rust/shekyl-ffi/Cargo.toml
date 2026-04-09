@@ -15,6 +15,7 @@ multisig = ["shekyl-fcmp/multisig", "modular-frost"]
 debug-verify = []
 
 [dependencies]
+shekyl-chacha = { path = "../shekyl-chacha" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-address = { path = "../shekyl-address" }
 shekyl-encoding = { path = "../shekyl-encoding" }

@@ -4898,7 +4898,7 @@ std::optional<wallet2::keys_file_data> wallet2::get_keys_file_data(const crypto:
   std::string cipher;
   cipher.resize(buffer.GetSize());
   keys_file_data->iv = crypto::rand<crypto::chacha_iv>();
-  crypto::chacha20(buffer.GetString(), buffer.GetSize(), key, keys_file_data->iv, &cipher[0]);
+  crypto::xchacha20(buffer.GetString(), buffer.GetSize(), key, keys_file_data->iv, &cipher[0]);
   keys_file_data->account_data = cipher;
   return keys_file_data;
 }
@@ -5044,22 +5044,18 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
   crypto::generate_chacha_key(password.data(), password.size(), key, m_kdf_rounds);
   std::string account_data;
   account_data.resize(keys_file_data.account_data.size());
-  crypto::chacha20(keys_file_data.account_data.data(), keys_file_data.account_data.size(), key, keys_file_data.iv, &account_data[0]);
-  const bool try_v0_format = json.Parse(account_data.c_str()).HasParseError() || !json.IsObject();
-  if (try_v0_format)
-    crypto::chacha8(keys_file_data.account_data.data(), keys_file_data.account_data.size(), key, keys_file_data.iv, &account_data[0]);
+  crypto::xchacha20(keys_file_data.account_data.data(), keys_file_data.account_data.size(), key, keys_file_data.iv, &account_data[0]);
 
-  // Check if it's a background keys file if both of the above formats fail
+  // Check if it's a background keys file
   {
     m_is_background_wallet = false;
     m_background_syncing = false;
-    cryptonote::account_base account_data_check;
-    if (try_v0_format && !epee::serialization::load_t_from_binary(account_data_check, account_data))
+    if (json.Parse(account_data.c_str()).HasParseError() || !json.IsObject())
     {
       get_custom_background_key(password, key, m_kdf_rounds);
-      crypto::chacha20(keys_file_data.account_data.data(), keys_file_data.account_data.size(), key, keys_file_data.iv, &account_data[0]);
+      crypto::xchacha20(keys_file_data.account_data.data(), keys_file_data.account_data.size(), key, keys_file_data.iv, &account_data[0]);
       m_is_background_wallet = !json.Parse(account_data.c_str()).HasParseError() && json.IsObject();
-      m_background_syncing = m_is_background_wallet; // start a background wallet background syncing
+      m_background_syncing = m_is_background_wallet;
     }
   }
 
@@ -5455,19 +5451,16 @@ bool wallet2::verify_password(const std::string& keys_file_name, const epee::wip
   crypto::generate_chacha_key(password.data(), password.size(), key, kdf_rounds);
   std::string account_data;
   account_data.resize(keys_file_data.account_data.size());
-  crypto::chacha20(keys_file_data.account_data.data(), keys_file_data.account_data.size(), key, keys_file_data.iv, &account_data[0]);
-  const bool try_v0_format = json.Parse(account_data.c_str()).HasParseError() || !json.IsObject();
-  if (try_v0_format)
-    crypto::chacha8(keys_file_data.account_data.data(), keys_file_data.account_data.size(), key, keys_file_data.iv, &account_data[0]);
+  crypto::xchacha20(keys_file_data.account_data.data(), keys_file_data.account_data.size(), key, keys_file_data.iv, &account_data[0]);
 
-  // Check if it's a background keys file if both of the above formats fail
+  // Check if it's a background keys file
   {
     cryptonote::account_base account_data_check;
-    if (try_v0_format && !epee::serialization::load_t_from_binary(account_data_check, account_data))
+    if (json.Parse(account_data.c_str()).HasParseError() || !json.IsObject())
     {
       get_custom_background_key(password, key, kdf_rounds);
-      crypto::chacha20(keys_file_data.account_data.data(), keys_file_data.account_data.size(), key, keys_file_data.iv, &account_data[0]);
-      const bool is_background_wallet = json.Parse(account_data.c_str()).HasParseError() && json.IsObject();
+      crypto::xchacha20(keys_file_data.account_data.data(), keys_file_data.account_data.size(), key, keys_file_data.iv, &account_data[0]);
+      const bool is_background_wallet = !json.Parse(account_data.c_str()).HasParseError() && json.IsObject();
       no_spend_key = no_spend_key || is_background_wallet;
     }
   }
@@ -5578,9 +5571,7 @@ bool wallet2::query_device(hw::device::device_type& device_type, const std::stri
   crypto::generate_chacha_key(password.data(), password.size(), key, kdf_rounds);
   std::string account_data;
   account_data.resize(keys_file_data.account_data.size());
-  crypto::chacha20(keys_file_data.account_data.data(), keys_file_data.account_data.size(), key, keys_file_data.iv, &account_data[0]);
-  if (json.Parse(account_data.c_str()).HasParseError() || !json.IsObject())
-    crypto::chacha8(keys_file_data.account_data.data(), keys_file_data.account_data.size(), key, keys_file_data.iv, &account_data[0]);
+  crypto::xchacha20(keys_file_data.account_data.data(), keys_file_data.account_data.size(), key, keys_file_data.iv, &account_data[0]);
 
   device_type = hw::device::device_type::SOFTWARE;
   // The contents should be JSON if the wallet follows the new format.
@@ -6200,7 +6191,7 @@ void wallet2::load_wallet_cache(const bool use_fs, const std::string& cache_buf)
       THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "internal error: failed to deserialize \"" + m_wallet_file + '\"');
       std::string cache_data;
       cache_data.resize(cache_file_data.cache_data.size());
-      crypto::chacha20(cache_file_data.cache_data.data(), cache_file_data.cache_data.size(), get_cache_key(), cache_file_data.iv, &cache_data[0]);
+      crypto::xchacha20(cache_file_data.cache_data.data(), cache_file_data.cache_data.size(), get_cache_key(), cache_file_data.iv, &cache_data[0]);
 
       try {
         bool loaded = false;
@@ -6235,7 +6226,7 @@ void wallet2::load_wallet_cache(const bool use_fs, const std::string& cache_buf)
         // try with previous scheme: direct from keys
         crypto::chacha_key key;
         generate_chacha_key_from_secret_keys(key);
-        crypto::chacha20(cache_file_data.cache_data.data(), cache_file_data.cache_data.size(), key, cache_file_data.iv, &cache_data[0]);
+        crypto::xchacha20(cache_file_data.cache_data.data(), cache_file_data.cache_data.size(), key, cache_file_data.iv, &cache_data[0]);
         try {
           std::stringstream iss;
           iss << cache_data;
@@ -6244,24 +6235,13 @@ void wallet2::load_wallet_cache(const bool use_fs, const std::string& cache_buf)
         }
         catch (...)
         {
-          crypto::chacha8(cache_file_data.cache_data.data(), cache_file_data.cache_data.size(), key, cache_file_data.iv, &cache_data[0]);
-          try
-          {
-            std::stringstream iss;
-            iss << cache_data;
-            boost::archive::portable_binary_iarchive ar(iss);
-            ar >> *this;
-          }
-          catch (...)
-          {
-            LOG_PRINT_L0("Failed to open portable binary, trying unportable");
-            if (use_fs) tools::copy_file(m_wallet_file, m_wallet_file + ".unportable");
-            std::stringstream iss;
-            iss.str("");
-            iss << cache_data;
-            boost::archive::binary_iarchive ar(iss);
-            ar >> *this;
-          }
+          LOG_PRINT_L0("Failed to open portable binary, trying unportable");
+          if (use_fs) tools::copy_file(m_wallet_file, m_wallet_file + ".unportable");
+          std::stringstream iss;
+          iss.str("");
+          iss << cache_data;
+          boost::archive::binary_iarchive ar(iss);
+          ar >> *this;
         }
       }
     }
@@ -6585,7 +6565,7 @@ std::optional<wallet2::cache_file_data> wallet2::get_cache_file_data()
     std::string cipher;
     cipher.resize(cache_file_data->cache_data.size());
     cache_file_data->iv = crypto::rand<crypto::chacha_iv>();
-    crypto::chacha20(cache_file_data->cache_data.data(), cache_file_data->cache_data.size(), get_cache_key(), cache_file_data->iv, &cipher[0]);
+    crypto::xchacha20(cache_file_data->cache_data.data(), cache_file_data->cache_data.size(), get_cache_key(), cache_file_data->iv, &cipher[0]);
     cache_file_data->cache_data = cipher;
     return cache_file_data;
   }
@@ -12827,7 +12807,7 @@ std::string wallet2::encrypt(const char *plaintext, size_t len, const crypto::se
   std::string ciphertext;
   crypto::chacha_iv iv = crypto::rand<crypto::chacha_iv>();
   ciphertext.resize(len + sizeof(iv) + (authenticated ? sizeof(crypto::signature) : 0));
-  crypto::chacha20(plaintext, len, key, iv, &ciphertext[sizeof(iv)]);
+  crypto::xchacha20(plaintext, len, key, iv, &ciphertext[sizeof(iv)]);
   memcpy(&ciphertext[0], &iv, sizeof(iv));
   if (authenticated)
   {
@@ -12883,7 +12863,7 @@ T wallet2::decrypt(const std::string &ciphertext, const crypto::secret_key &skey
   }
   std::unique_ptr<char[]> buffer{new char[ciphertext.size() - prefix_size]};
   auto wiper = epee::misc_utils::create_scope_leave_handler([&]() { memwipe(buffer.get(), ciphertext.size() - prefix_size); });
-  crypto::chacha20(ciphertext.data() + sizeof(iv), ciphertext.size() - prefix_size, key, iv, buffer.get());
+  crypto::xchacha20(ciphertext.data() + sizeof(iv), ciphertext.size() - prefix_size, key, iv, buffer.get());
   return T(buffer.get(), ciphertext.size() - prefix_size);
 }
 //----------------------------------------------------------------------------------------------------
