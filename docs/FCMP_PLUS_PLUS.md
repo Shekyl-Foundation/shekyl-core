@@ -1482,12 +1482,46 @@ Where:
 - The full spend key is `x = Hs(derivation || i) + b`
 - The SAL secret is `y = Hs_y(derivation || i)`
 
-### Domain Separation
+### Domain Separation and y-Derivation Migration
 
-The y-scalar uses an 8-byte `"shekyl_y"` salt prefix followed by the
-derivation and varint output index, then `hash_to_scalar`. This is
-collision-free with the existing x-derivation (no prefix) and view_tag
-derivation (`"view_tag"` prefix).
+**Canonical (PR-construct and beyond):** All per-output secrets (`ho`, `y`,
+`z`, `k_amount`, `view_tag_combined`, `amount_tag`, `ml_dsa_seed`) are derived
+from the unified HKDF-SHA-512 stream using the combined KEM shared secret
+(`X25519_ss || ML-KEM_ss`). Each uses a distinct HKDF info string:
+
+| Secret | HKDF Salt | HKDF Info |
+|--------|-----------|-----------|
+| `ho` (x-derivation) | `shekyl-output-derive-v1` | `shekyl-output-x \|\| output_index_le64` |
+| `y` (T-component) | `shekyl-output-derive-v1` | `shekyl-output-y \|\| output_index_le64` |
+| `z` (commitment mask) | `shekyl-output-derive-v1` | `shekyl-output-mask \|\| output_index_le64` |
+| `k_amount` | `shekyl-output-derive-v1` | `shekyl-output-amount-key \|\| output_index_le64` |
+| `view_tag_combined` | `shekyl-output-derive-v1` | `shekyl-output-view-tag \|\| output_index_le64` |
+| `amount_tag` | `shekyl-output-derive-v1` | `shekyl-output-amount-tag \|\| output_index_le64` |
+| `ml_dsa_seed` | `shekyl-output-derive-v1` | `shekyl-pqc-output \|\| output_index_le64` |
+
+For `ho`, `y`, `z`: 64 bytes are expanded and reduced mod Ed25519 scalar
+order `l` (wide reduce). For `k_amount`, `ml_dsa_seed`: 32 bytes expanded.
+For `view_tag_combined`, `amount_tag`: first byte of expanded output.
+
+Test vectors: `docs/test_vectors/PQC_OUTPUT_SECRETS.json`
+Reference implementation: `tools/reference/derive_output_secrets.py`
+
+**X25519-only view tag (fast scan):** A separate view tag is derived from
+the X25519 shared secret alone (no ML-KEM decapsulation needed), enabling
+fast pre-filtering during wallet sync:
+
+| Secret | HKDF Salt | HKDF Info |
+|--------|-----------|-----------|
+| `view_tag_x25519` | `shekyl-view-tag-x25519-v1` | `shekyl-view-tag \|\| output_index_le64` |
+
+The scanner checks `view_tag_x25519` first (cheap: one X25519 + one HKDF).
+On match, it performs full ML-KEM decap and verifies `view_tag_combined` as
+a cross-check (DoS hardening).
+
+**Interim (PR-foundation):** The current C++ code uses
+`derivation_to_y_scalar` with Keccak domain separator `"shekyl_y"`. This is
+marked `TODO(PR-construct)` and will be deleted when the wallet migrates to
+`derive_output_secrets`. The canonical HKDF derivation is the source of truth.
 
 ### Commitment Mask Independence
 
@@ -1497,6 +1531,21 @@ The Pedersen commitment `C = z*G + amount*H` uses a mask `z` that has
 - `y` is passed to `OpenedInputTuple::open` (SAL verification of O)
 - `z` is used to compute `r_c = a - z` for pseudo-out rerandomization
 - `a` is the desired pseudo-out blinding factor
+
+### Encrypted Amounts Wire Format
+
+Per-output encrypted amounts use `enc_amounts` (9 bytes each) instead of
+the legacy `ecdhInfo` (`ecdhTuple`):
+
+```
+[8 bytes: amount XOR ecdhHash(k_amount)] [1 byte: amount_tag]
+```
+
+- `ecdhHash(k)` is `cn_fast_hash("amount" || k)`, truncated to 8 bytes
+- `amount_tag` is `0x00` (placeholder) until PR-construct derives it from HKDF
+- `ecdhTuple` is retained only as a local struct for the scanner shim
+  (`ecdhDecode` + `genCommitmentMask`), marked `TODO(PR-construct)`
+- `ecdhEncode` has been removed from the codebase
 
 ### Witness Header (256 bytes)
 

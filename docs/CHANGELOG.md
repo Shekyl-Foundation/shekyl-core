@@ -100,6 +100,50 @@
   RustCrypto `chacha20` crate. Exported via FFI as `xchacha20()`, replacing
   the C implementation in `chacha.c`.
 
+- **KEM-derived output secrets (`OutputSecrets`).** New Rust infrastructure in
+  `shekyl-crypto-pq/src/derivation.rs` derives per-output secrets (`ho`, `y`,
+  `z`, `k_amount`, `view_tag_combined`, `amount_tag`, `ml_dsa_seed`) from the
+  combined X25519 + ML-KEM shared secret via HKDF-SHA-512 with distinct info
+  labels. Includes `derive_view_tag_x25519` for fast wallet scan pre-filtering
+  without ML-KEM decapsulation. FFI exports: `shekyl_derive_output_secrets`,
+  `shekyl_derive_view_tag_x25519`.
+
+- **Cross-language HKDF test vectors.** Python reference implementation
+  (`tools/reference/derive_output_secrets.py`) generates locked JSON test
+  vectors (`docs/test_vectors/PQC_OUTPUT_SECRETS.json`). Rust unit tests
+  validate byte-for-byte against these vectors.
+
+- **Witness header constant.** `SHEKYL_PROVE_WITNESS_HEADER_BYTES = 256`
+  defined in both `shekyl_ffi.h` and `shekyl-ffi/src/lib.rs`, replacing all
+  magic literal 256 values.
+
+- **Consensus `mask=1` placeholder.** `check_commitment_mask_valid()` wired
+  into `check_tx_outputs` for all v3 transactions. Returns accept-all now;
+  PR-construct will flip to reject `zeroCommit` form for non-coinbase.
+
+- **HKDF label registry.** `docs/POST_QUANTUM_CRYPTOGRAPHY.md` now documents
+  all HKDF salt/info pairs for the per-output derivation stream and the
+  separate X25519-only view tag derivation.
+
+### 🔄 Changed
+
+- **`ecdhInfo` replaced by `enc_amounts`.** The per-output encrypted amount
+  format changes from `ecdhTuple` (64 bytes: 32 mask + 32 amount) to
+  `std::array<uint8_t, 9>` (8 bytes XOR-encrypted amount + 1 byte amount
+  tag). Affects `rctSigBase`, all serialization paths (binary, boost, JSON),
+  and transaction construction (`genRctFcmpPlusPlus`, `fill_construct_tx_rct_stub`,
+  wallet claim construction).
+
+- **`ecdhEncode` removed.** The ECDH encoding function is deleted from
+  `rctOps`, `device.hpp`, and `device_default`. Transaction construction now
+  writes `enc_amounts` directly using `ecdhHash` for XOR encryption.
+  `ecdhDecode` and `genCommitmentMask` are retained as a scanner shim until
+  the wallet migrates to Rust `scan_output`.
+
+- **FROST SAL deferred to V4.** Per-output HKDF-derived `y` is incompatible
+  with DKG group-shared `y`. FROST SAL section in `docs/PQC_MULTISIG.md`
+  marked as deferred with V4 resolution path (Carrot-style address scheme).
+
 ### 🐛 Fixed
 
 - **`sc_check()` signed left-shift undefined behavior.** `signum(...) << k` on

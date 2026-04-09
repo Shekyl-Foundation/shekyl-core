@@ -182,10 +182,12 @@ namespace rct {
     //sums a vector of curve points (for scalars use sc_add)
     void sumKeys(key & Csum, const key &Cis);
 
-    //Elliptic Curve Diffie Helman: encodes and decodes the amount b and mask a
-    // where C= aG + bH
+    // Amount encryption helpers
     key genCommitmentMask(const key &sk);
-    void ecdhEncode(ecdhTuple & unmasked, const key & sharedSec, bool v2);
+    // TODO(PR-construct): ecdhDecode is kept alive for the wallet scanner shim.
+    // It will be deleted when the scanner migrates to Rust scan_output.
     void ecdhDecode(ecdhTuple & masked, const key & sharedSec, bool v2);
+    // Hash used for 8-byte amount XOR encryption: cn_fast_hash("amount" || key)
+    key ecdhHash(const key &k);
 }
 #endif  /* RCTOPS_H */

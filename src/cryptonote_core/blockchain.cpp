@@ -3191,6 +3191,17 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
   return true;
 }
 //------------------------------------------------------------------
+// TODO(PR-construct): Replace this accept-all stub with actual mask=1 rejection.
+// After coinbase is rewritten to emit z*G + amount*H commitments, flip the body
+// to: for each output commitment C, compute C - amount*H and reject if the result
+// equals G (i.e., mask == 1, the zeroCommit form). Coinbase exemption goes away
+// because coinbase will have a real mask. This function is unconditional: it
+// checks ALL v3 outputs regardless of coinbase/non-coinbase status.
+static bool check_commitment_mask_valid(const transaction& /*tx*/)
+{
+  return true;
+}
+//------------------------------------------------------------------
 bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context &tvc, std::uint8_t hf_version)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
@@ -3254,6 +3265,19 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
         return false;
       }
     }
+  }
+
+  // Commitment mask validation for all v3 outputs (coinbase and non-coinbase).
+  // Currently a no-op (accepts all); PR-construct flips the body to reject
+  // mask=1 (zeroCommit) for non-coinbase once coinbase emits real commitments.
+  // Note: this call site only runs for non-coinbase via ver_non_input_consensus.
+  // TODO(PR-construct): Also wire coinbase validation through this path after
+  // coinbase is rewritten to emit z*G + amount*H commitments.
+  if (tx.version >= 3 && !check_commitment_mask_valid(tx))
+  {
+    MERROR_VER("Output commitment mask validation failed");
+    tvc.m_invalid_output = true;
+    return false;
   }
 
   return true;

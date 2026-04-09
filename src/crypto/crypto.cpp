@@ -809,6 +809,9 @@ POP_WARNINGS
     reinterpret_cast<unsigned char*>(ki.data)[31] &= 0x7f;
   }
 
+  // TODO(PR-construct): delete derivation_to_y_scalar. This interim Keccak-domain
+  // derivation ("shekyl_y") is replaced by OutputSecrets.y from the unified HKDF
+  // derivation in shekyl-crypto-pq. See PQC_OUTPUT_SECRETS.json for canonical vectors.
   void crypto_ops::derivation_to_y_scalar(const key_derivation &derivation, size_t output_index, ec_scalar &res) {
     #pragma pack(push, 1)
     struct {

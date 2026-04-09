@@ -6,6 +6,13 @@
 #include <cstddef>
 #include <cstdint>
 
+// Fixed-size witness header per input in the FCMP++ prove/verify FFI.
+// Layout: [O:32][I:32][C:32][h_pqc:32][x:32][y:32][z:32][a:32]
+//   x, y = SAL spend secrets (O = xG + yT)
+//   z    = Pedersen commitment mask (C = zG + amount*H)
+//   a    = pseudo-out blinding factor (r_c = a - z)
+#define SHEKYL_PROVE_WITNESS_HEADER_BYTES 256
+
 extern "C" {
 
 // Version / init
@@ -170,6 +177,27 @@ bool shekyl_fcmp_pqc_leaf_hash(
 // hybrid keys suitable for leaf hash, signing, and verification.
 ShekylPqcKeypair shekyl_fcmp_derive_pqc_keypair(
     const uint8_t* combined_ss_ptr,
+    uint64_t output_index);
+
+// Derive all per-output secrets from the combined KEM shared secret.
+// Writes: ho(32), y(32), z(32), k_amount(32), view_tag_combined(1),
+// amount_tag(1), ml_dsa_seed(32). Returns true on success.
+bool shekyl_derive_output_secrets(
+    const uint8_t* combined_ss_ptr,
+    uint32_t combined_ss_len,
+    uint64_t output_index,
+    uint8_t* out_ho,
+    uint8_t* out_y,
+    uint8_t* out_z,
+    uint8_t* out_k_amount,
+    uint8_t* out_view_tag_combined,
+    uint8_t* out_amount_tag,
+    uint8_t* out_ml_dsa_seed);
+
+// Derive X25519-only view tag for scanner pre-filtering.
+// x25519_ss_ptr: exactly 32 bytes. Returns 1-byte tag.
+uint8_t shekyl_derive_view_tag_x25519(
+    const uint8_t* x25519_ss_ptr,
     uint64_t output_index);
 
 // Expected proof size for given inputs and tree depth.

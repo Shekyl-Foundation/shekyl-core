@@ -171,9 +171,9 @@ TEST(fcmp, RCTTypeFcmpPlusPlusPqc_serialization_roundtrip)
   rct::skpkGen(pseudo_out, pseudo_out);
   rv.p.pseudoOuts.push_back(pseudo_out);
 
-  rct::ecdhTuple ecdh;
-  memset(&ecdh.amount, 0x42, sizeof(ecdh.amount));
-  rv.ecdhInfo.push_back(ecdh);
+  std::array<uint8_t, 9> enc_amt;
+  enc_amt.fill(0x42);
+  rv.enc_amounts.push_back(enc_amt);
 
   rct::ctkey outpk;
   outpk.dest = rct::pkGen();

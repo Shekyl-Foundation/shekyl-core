@@ -32,6 +32,7 @@
 #ifndef RCT_TYPES_H
 #define RCT_TYPES_H
 
+#include <array>
 #include <cstddef>
 #include <vector>
 #include <iostream>
@@ -112,17 +113,12 @@ namespace rct {
 
     //data for passing the amount to the receiver secretly
     // If the pedersen commitment to an amount is C = aG + bH,
-    // "mask" contains a 32 byte key a
-    // "amount" contains a hex representation (in 32 bytes) of a 64 bit number
-    // the purpose of the ECDH exchange
+    // ecdhTuple removed in V3: replaced by enc_amounts on rctSigBase.
+    // Kept as a local struct only for the scanner compatibility shim in wallet2.cpp.
+    // TODO(PR-construct): delete once wallet scanner is migrated to Rust.
     struct ecdhTuple {
         key mask;
         key amount;
-
-        BEGIN_SERIALIZE_OBJECT()
-          FIELD(mask) // not saved from v2 BPs
-          FIELD(amount)
-        END_SERIALIZE()
     };
 
     //containers for representing amounts
@@ -183,13 +179,16 @@ namespace rct {
         uint8_t type;
         key message;
         keyV pseudoOuts;
-        std::vector<ecdhTuple> ecdhInfo;
+        // Per-output encrypted amount: 8 bytes XOR-encrypted amount + 1 byte amount tag.
+        // Replaces the old ecdhInfo vector. The amount tag is RESERVED_AMOUNT_TAG_PLACEHOLDER
+        // (0x00) until PR-construct derives it from HKDF.
+        std::vector<std::array<uint8_t, 9>> enc_amounts;
         ctkeyV outPk;
         xmr_amount txnFee; // contains b
         crypto::hash referenceBlock; // FCMP++: block hash anchoring the tree root for proof
 
         rctSigBase() :
-          type(RCTTypeNull), message{}, pseudoOuts{}, ecdhInfo{}, outPk{}, txnFee(0), referenceBlock{}
+          type(RCTTypeNull), message{}, pseudoOuts{}, enc_amounts{}, outPk{}, txnFee(0), referenceBlock{}
         {}
 
         template<bool W, template <bool> class Archive>
@@ -203,22 +202,29 @@ namespace rct {
           VARINT_FIELD(txnFee)
           FIELD(referenceBlock)
 
-          ar.tag("ecdhInfo");
+          ar.tag("enc_amounts");
           ar.begin_array();
-          PREPARE_CUSTOM_VECTOR_SERIALIZATION(outputs, ecdhInfo);
-          if (ecdhInfo.size() != outputs)
+          PREPARE_CUSTOM_VECTOR_SERIALIZATION(outputs, enc_amounts);
+          if (enc_amounts.size() != outputs)
             return false;
           for (size_t i = 0; i < outputs; ++i)
           {
             ar.begin_object();
+            // Wire format: 8 bytes encrypted amount + 1 byte amount tag = 9 bytes
             crypto::hash8 trunc_amount;
-            if (!typename Archive<W>::is_saving())
-              memset(ecdhInfo[i].amount.bytes, 0, sizeof(ecdhInfo[i].amount.bytes));
-            else
-              memcpy(trunc_amount.data, ecdhInfo[i].amount.bytes, sizeof(trunc_amount));
+            uint8_t amount_tag;
+            if (typename Archive<W>::is_saving())
+            {
+              memcpy(trunc_amount.data, enc_amounts[i].data(), 8);
+              amount_tag = enc_amounts[i][8];
+            }
             FIELD_N("amount", trunc_amount);
+            FIELD_N("amount_tag", amount_tag);
             if (!typename Archive<W>::is_saving())
-              memcpy(ecdhInfo[i].amount.bytes, trunc_amount.data, sizeof(trunc_amount));
+            {
+              memcpy(enc_amounts[i].data(), trunc_amount.data, 8);
+              enc_amounts[i][8] = amount_tag;
+            }
             ar.end_object();
             if (outputs - i > 1)
               ar.delimit_array();
@@ -247,7 +253,7 @@ namespace rct {
           {
             FIELD(pseudoOuts)
           }
-          FIELD(ecdhInfo)
+          FIELD(enc_amounts)
           FIELD(outPk)
           VARINT_FIELD(txnFee)
           if (type == RCTTypeFcmpPlusPlusPqc)
@@ -502,7 +508,6 @@ VARIANT_TAG(debug_archive, rct::keyM, "rct::keyM");
 VARIANT_TAG(debug_archive, rct::ctkey, "rct::ctkey");
 VARIANT_TAG(debug_archive, rct::ctkeyV, "rct::ctkeyV");
 VARIANT_TAG(debug_archive, rct::ctkeyM, "rct::ctkeyM");
-VARIANT_TAG(debug_archive, rct::ecdhTuple, "rct::ecdhTuple");
 VARIANT_TAG(debug_archive, rct::rctSig, "rct::rctSig");
 VARIANT_TAG(debug_archive, rct::BulletproofPlus, "rct::bulletproof_plus");
 
@@ -513,7 +518,6 @@ VARIANT_TAG(binary_archive, rct::keyM, 0x93);
 VARIANT_TAG(binary_archive, rct::ctkey, 0x94);
 VARIANT_TAG(binary_archive, rct::ctkeyV, 0x95);
 VARIANT_TAG(binary_archive, rct::ctkeyM, 0x96);
-VARIANT_TAG(binary_archive, rct::ecdhTuple, 0x97);
 VARIANT_TAG(binary_archive, rct::rctSig, 0x9b);
 VARIANT_TAG(binary_archive, rct::BulletproofPlus, 0xa0);
 
@@ -524,7 +528,6 @@ VARIANT_TAG(json_archive, rct::keyM, "rct_keyM");
 VARIANT_TAG(json_archive, rct::ctkey, "rct_ctkey");
 VARIANT_TAG(json_archive, rct::ctkeyV, "rct_ctkeyV");
 VARIANT_TAG(json_archive, rct::ctkeyM, "rct_ctkeyM");
-VARIANT_TAG(json_archive, rct::ecdhTuple, "rct_ecdhTuple");
 VARIANT_TAG(json_archive, rct::rctSig, "rct_rctSig");
 VARIANT_TAG(json_archive, rct::BulletproofPlus, "rct_bulletproof_plus");
 

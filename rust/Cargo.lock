@@ -2164,6 +2164,7 @@ dependencies = [
  "blake2",
  "ciphersuite",
  "criterion",
+ "curve25519-dalek",
  "ed25519-dalek",
  "fips203",
  "fips204",

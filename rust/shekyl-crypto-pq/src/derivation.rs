@@ -188,6 +188,134 @@ pub fn hash_pqc_public_key(pqc_pk_bytes: &[u8]) -> [u8; 32] {
     field_elem.to_repr()
 }
 
+// ── OutputSecrets: Unified HKDF derivation for two-component output keys ─────
+//
+// Canonical derivation for Shekyl V3. HKDF labels defined here are the single
+// source of truth; they must match:
+//   - tools/reference/derive_output_secrets.py (Python reference impl)
+//   - docs/test_vectors/PQC_OUTPUT_SECRETS.json (locked vectors)
+//   - docs/POST_QUANTUM_CRYPTOGRAPHY.md (label registry)
+
+use curve25519_dalek::scalar::Scalar;
+
+/// HKDF salt for the combined shared secret derivation (Instance 1).
+const HKDF_SALT_OUTPUT_DERIVE: &[u8] = b"shekyl-output-derive-v1";
+
+/// HKDF salt for X25519-only view tag derivation (Instance 2).
+const HKDF_SALT_VIEW_TAG_X25519: &[u8] = b"shekyl-view-tag-x25519-v1";
+
+const LABEL_OUTPUT_X: &[u8] = b"shekyl-output-x";
+const LABEL_OUTPUT_Y: &[u8] = b"shekyl-output-y";
+const LABEL_OUTPUT_MASK: &[u8] = b"shekyl-output-mask";
+const LABEL_OUTPUT_AMOUNT_KEY: &[u8] = b"shekyl-output-amount-key";
+const LABEL_OUTPUT_VIEW_TAG_COMBINED: &[u8] = b"shekyl-output-view-tag-combined";
+const LABEL_OUTPUT_AMOUNT_TAG: &[u8] = b"shekyl-output-amount-tag";
+const LABEL_OUTPUT_PQC: &[u8] = b"shekyl-pqc-output";
+const LABEL_VIEW_TAG_X25519: &[u8] = b"shekyl-view-tag-x25519";
+
+/// All per-output secrets derived from a combined KEM shared secret.
+///
+/// Derivation:
+/// ```text
+/// combined_ss = X25519(eph_sk, view_pk) || ML-KEM-768.Decap(kem_sk, ct)
+/// prk = HKDF-Extract(salt="shekyl-output-derive-v1", ikm=combined_ss)
+///
+/// ho           = wide_reduce(HKDF-Expand(prk, "shekyl-output-x"              || idx_le64, 64))
+/// y            = wide_reduce(HKDF-Expand(prk, "shekyl-output-y"              || idx_le64, 64))
+/// z            = wide_reduce(HKDF-Expand(prk, "shekyl-output-mask"           || idx_le64, 64))
+/// k_amount     =             HKDF-Expand(prk, "shekyl-output-amount-key"     || idx_le64, 32)
+/// view_tag_combined = first_byte(HKDF-Expand(prk, "shekyl-output-view-tag-combined" || idx_le64, 32))
+/// amount_tag   = first_byte(HKDF-Expand(prk, "shekyl-output-amount-tag"     || idx_le64, 32))
+/// ml_dsa_seed  =             HKDF-Expand(prk, "shekyl-pqc-output"           || idx_le64, 32)
+/// ```
+#[derive(zeroize::Zeroize, zeroize::ZeroizeOnDrop)]
+pub struct OutputSecrets {
+    /// DL of O w.r.t. G minus spend key b: `O = (ho+b)*G + y*T`
+    pub ho: [u8; 32],
+    /// DL of O w.r.t. T: SAL spend secret
+    pub y: [u8; 32],
+    /// Pedersen commitment mask: `C = z*G + amount*H`
+    pub z: [u8; 32],
+    /// Amount encryption key (XOR with 8-byte amount)
+    pub k_amount: [u8; 32],
+    /// View tag from combined SS -- post-decap cross-check (not the wire tag)
+    pub view_tag_combined: u8,
+    /// 1-byte AAD checked at decode to detect KEM corruption
+    pub amount_tag: u8,
+    /// ML-DSA-65 deterministic keygen seed
+    pub ml_dsa_seed: [u8; 32],
+}
+
+/// Derive all per-output secrets from the combined KEM shared secret.
+///
+/// `combined_ss` is the concatenation of X25519 and ML-KEM-768 shared secrets.
+/// Any length is accepted (HKDF-Extract handles variable-length IKM), but the
+/// expected production length is 64 bytes (32 X25519 + 32 ML-KEM).
+pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSecrets {
+    let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_OUTPUT_DERIVE), combined_ss);
+
+    let ho = expand_to_scalar(&hk, LABEL_OUTPUT_X, output_index);
+    let y = expand_to_scalar(&hk, LABEL_OUTPUT_Y, output_index);
+    let z = expand_to_scalar(&hk, LABEL_OUTPUT_MASK, output_index);
+    let k_amount = expand_32(&hk, LABEL_OUTPUT_AMOUNT_KEY, output_index);
+    let view_tag_combined = expand_first_byte(&hk, LABEL_OUTPUT_VIEW_TAG_COMBINED, output_index);
+    let amount_tag = expand_first_byte(&hk, LABEL_OUTPUT_AMOUNT_TAG, output_index);
+    let ml_dsa_seed = expand_32(&hk, LABEL_OUTPUT_PQC, output_index);
+
+    assert!(ho != [0u8; 32], "HKDF produced zero ho scalar -- implementation bug");
+    assert!(y != [0u8; 32], "HKDF produced zero y scalar -- implementation bug");
+
+    OutputSecrets {
+        ho,
+        y,
+        z,
+        k_amount,
+        view_tag_combined,
+        amount_tag,
+        ml_dsa_seed,
+    }
+}
+
+/// Derive the X25519-only view tag for scanner pre-filtering.
+///
+/// This tag goes on the wire and lets the scanner reject non-matching outputs
+/// without performing ML-KEM decapsulation. Uses a separate HKDF instance
+/// with its own salt.
+pub fn derive_view_tag_x25519(x25519_ss: &[u8; 32], output_index: u64) -> u8 {
+    let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_VIEW_TAG_X25519), x25519_ss);
+    expand_first_byte(&hk, LABEL_VIEW_TAG_X25519, output_index)
+}
+
+fn make_info(label: &[u8], output_index: u64) -> Vec<u8> {
+    let mut info = Vec::with_capacity(label.len() + 8);
+    info.extend_from_slice(label);
+    info.extend_from_slice(&output_index.to_le_bytes());
+    info
+}
+
+fn expand_to_scalar(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> [u8; 32] {
+    let info = make_info(label, output_index);
+    let mut wide = [0u8; 64];
+    hk.expand(&info, &mut wide)
+        .expect("HKDF-Expand failed for 64-byte output");
+    let scalar = Scalar::from_bytes_mod_order_wide(&wide);
+    wide.zeroize();
+    scalar.to_bytes()
+}
+
+fn expand_32(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> [u8; 32] {
+    let info = make_info(label, output_index);
+    let mut out = [0u8; 32];
+    hk.expand(&info, &mut out)
+        .expect("HKDF-Expand failed for 32-byte output");
+    out
+}
+
+fn expand_first_byte(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> u8 {
+    let buf = expand_32(hk, label, output_index);
+    buf[0]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,5 +512,140 @@ mod tests {
         let leaf_scalar = PqcLeafScalar::from_pqc_public_key(&kp.public_key);
         assert_eq!(h, leaf_scalar.0,
             "leaf hash must agree for canonical hybrid pk");
+    }
+
+    // ── OutputSecrets known-answer tests against locked vectors ──────────
+
+    #[derive(serde::Deserialize)]
+    struct TestVector {
+        combined_ss: String,
+        output_index: u64,
+        ho: String,
+        y: String,
+        z: String,
+        k_amount: String,
+        view_tag_combined: u8,
+        amount_tag: u8,
+        ml_dsa_seed: String,
+        x25519_ss: String,
+        view_tag_x25519: u8,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct TestVectorFile {
+        vectors: Vec<TestVector>,
+    }
+
+    fn load_test_vectors() -> Vec<TestVector> {
+        let json = include_str!("../../../docs/test_vectors/PQC_OUTPUT_SECRETS.json");
+        let file: TestVectorFile = serde_json::from_str(json)
+            .expect("failed to parse PQC_OUTPUT_SECRETS.json");
+        file.vectors
+    }
+
+    #[test]
+    fn output_secrets_known_answer_vectors() {
+        let vectors = load_test_vectors();
+        assert!(vectors.len() >= 16, "expected at least 16 test vectors");
+
+        for (i, v) in vectors.iter().enumerate() {
+            let css = hex::decode(&v.combined_ss).unwrap();
+            let secrets = derive_output_secrets(&css, v.output_index);
+
+            let expected_ho = hex::decode(&v.ho).unwrap();
+            let expected_y = hex::decode(&v.y).unwrap();
+            let expected_z = hex::decode(&v.z).unwrap();
+            let expected_k = hex::decode(&v.k_amount).unwrap();
+            let expected_seed = hex::decode(&v.ml_dsa_seed).unwrap();
+
+            assert_eq!(secrets.ho.as_slice(), expected_ho.as_slice(),
+                "vector {i}: ho mismatch");
+            assert_eq!(secrets.y.as_slice(), expected_y.as_slice(),
+                "vector {i}: y mismatch");
+            assert_eq!(secrets.z.as_slice(), expected_z.as_slice(),
+                "vector {i}: z mismatch");
+            assert_eq!(secrets.k_amount.as_slice(), expected_k.as_slice(),
+                "vector {i}: k_amount mismatch");
+            assert_eq!(secrets.view_tag_combined, v.view_tag_combined,
+                "vector {i}: view_tag_combined mismatch");
+            assert_eq!(secrets.amount_tag, v.amount_tag,
+                "vector {i}: amount_tag mismatch");
+            assert_eq!(secrets.ml_dsa_seed.as_slice(), expected_seed.as_slice(),
+                "vector {i}: ml_dsa_seed mismatch");
+        }
+    }
+
+    #[test]
+    fn view_tag_x25519_known_answer_vectors() {
+        let vectors = load_test_vectors();
+        for (i, v) in vectors.iter().enumerate() {
+            let x_ss_bytes = hex::decode(&v.x25519_ss).unwrap();
+            let x_ss: [u8; 32] = x_ss_bytes.as_slice().try_into().unwrap();
+            let tag = derive_view_tag_x25519(&x_ss, v.output_index);
+            assert_eq!(tag, v.view_tag_x25519,
+                "vector {i}: view_tag_x25519 mismatch");
+        }
+    }
+
+    #[test]
+    fn output_secrets_deterministic() {
+        let css = [0xab; 64];
+        let s1 = derive_output_secrets(&css, 0);
+        let s2 = derive_output_secrets(&css, 0);
+        assert_eq!(s1.ho, s2.ho);
+        assert_eq!(s1.y, s2.y);
+        assert_eq!(s1.z, s2.z);
+        assert_eq!(s1.k_amount, s2.k_amount);
+        assert_eq!(s1.view_tag_combined, s2.view_tag_combined);
+        assert_eq!(s1.amount_tag, s2.amount_tag);
+        assert_eq!(s1.ml_dsa_seed, s2.ml_dsa_seed);
+    }
+
+    #[test]
+    fn output_secrets_index_uniqueness() {
+        let css = [0xab; 64];
+        let s0 = derive_output_secrets(&css, 0);
+        let s1 = derive_output_secrets(&css, 1);
+        assert_ne!(s0.ho, s1.ho);
+        assert_ne!(s0.y, s1.y);
+        assert_ne!(s0.z, s1.z);
+        assert_ne!(s0.k_amount, s1.k_amount);
+        assert_ne!(s0.ml_dsa_seed, s1.ml_dsa_seed);
+    }
+
+    #[test]
+    fn output_secrets_scalars_valid() {
+        let css = [0xcd; 64];
+        let l_bytes_le: [u8; 32] = [
+            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
+            0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+        ];
+        for idx in [0u64, 1, 42, u64::MAX] {
+            let s = derive_output_secrets(&css, idx);
+            for (name, scalar_bytes) in [("ho", s.ho), ("y", s.y), ("z", s.z)] {
+                assert!(le_bytes_lt(&scalar_bytes, &l_bytes_le),
+                    "index {idx}: {name} is not < l");
+            }
+        }
+    }
+
+    #[test]
+    fn output_secrets_label_independence() {
+        let css = [0xef; 64];
+        let s = derive_output_secrets(&css, 0);
+        assert_ne!(s.ho, s.y, "ho and y should differ (different labels)");
+        assert_ne!(s.y, s.z, "y and z should differ (different labels)");
+        assert_ne!(s.ho, s.z, "ho and z should differ (different labels)");
+        assert_ne!(s.k_amount, s.ml_dsa_seed, "k_amount and ml_dsa_seed differ");
+    }
+
+    fn le_bytes_lt(a: &[u8; 32], b: &[u8; 32]) -> bool {
+        for i in (0..32).rev() {
+            if a[i] < b[i] { return true; }
+            if a[i] > b[i] { return false; }
+        }
+        false // equal
     }
 }

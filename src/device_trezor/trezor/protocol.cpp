@@ -27,6 +27,14 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
+// Trezor not supported in V3: two-component output keys + KEM derivation
+// require firmware changes that don't exist yet. See docs/HARDWARE_WALLETS.md.
+// This #error fires if someone re-enables USE_HW_DEVICE without implementing
+// the required Trezor firmware support.
+#if defined(DEVICE_TREZOR_READY) && DEVICE_TREZOR_READY
+#error "Trezor not supported in V3 -- see docs/HARDWARE_WALLETS.md"
+#endif
+
 #include "version.h"
 #include "protocol.hpp"
 #include <unordered_map>

@@ -13,6 +13,7 @@ rand = "0.8"
 rand_chacha = "0.3"
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 ciphersuite = "0.4"
+curve25519-dalek = "4"
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 fips204 = "0.4.6"

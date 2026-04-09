@@ -3958,16 +3958,16 @@ char* wallet2_ffi_finalize_transfer(wallet2_handle* w,
             tx.rct_signatures.p.bulletproofs_plus.push_back(std::move(bpp));
         }
 
-        // Insert ECDH amounts
+        // Insert encrypted amounts (9 bytes each: 8 amount + 1 tag)
         if (proofs_doc.HasMember("ecdh_amounts") && proofs_doc["ecdh_amounts"].IsArray()) {
             const auto& ecdh = proofs_doc["ecdh_amounts"];
-            tx.rct_signatures.ecdhInfo.resize(ecdh.Size());
+            tx.rct_signatures.enc_amounts.resize(ecdh.Size());
             for (rj::SizeType i = 0; i < ecdh.Size(); ++i) {
                 std::string bin;
                 epee::string_tools::parse_hexstr_to_binbuff(ecdh[i].GetString(), bin);
-                memset(&tx.rct_signatures.ecdhInfo[i], 0, sizeof(rct::ecdhTuple));
+                tx.rct_signatures.enc_amounts[i].fill(0);
                 if (bin.size() >= 8)
-                    memcpy(tx.rct_signatures.ecdhInfo[i].amount.bytes, bin.data(), 8);
+                    memcpy(tx.rct_signatures.enc_amounts[i].data(), bin.data(), std::min<size_t>(bin.size(), 9));
             }
         }
 

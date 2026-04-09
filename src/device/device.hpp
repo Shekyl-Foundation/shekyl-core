@@ -35,8 +35,10 @@
 #include "cryptonote_config.h"
 
 
+// Ledger disabled in V3: two-component output keys + KEM derivation require
+// firmware changes that don't exist yet. See docs/HARDWARE_WALLETS.md.
 #ifndef USE_DEVICE_LEDGER
-#define USE_DEVICE_LEDGER 1
+#define USE_DEVICE_LEDGER 0
 #endif
 
 #if !defined(HAVE_HIDAPI) 
@@ -215,7 +217,7 @@ namespace hw {
 
         virtual rct::key genCommitmentMask(const rct::key &amount_key) = 0;
 
-        virtual bool  ecdhEncode(rct::ecdhTuple & unmasked, const rct::key & sharedSec, bool short_amount) = 0;
+        // TODO(PR-construct): ecdhDecode kept for scanner shim, delete when scanner moves to Rust.
         virtual bool  ecdhDecode(rct::ecdhTuple & masked, const rct::key & sharedSec, bool short_amount) = 0;
 
         virtual bool  generate_output_ephemeral_keys(const size_t tx_version, const cryptonote::account_keys &sender_account_keys, const crypto::public_key &txkey_pub,  const crypto::secret_key &tx_key,

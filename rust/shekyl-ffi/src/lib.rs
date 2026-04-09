@@ -11,6 +11,13 @@ use shekyl_crypto_pq::signature::{
 
 static CONSENSUS_REGISTRY: Mutex<Option<shekyl_consensus::ConsensusRegistry>> = Mutex::new(None);
 
+/// Fixed-size witness header per input in the FCMP++ prove/verify FFI.
+/// Layout: [O:32][I:32][C:32][h_pqc:32][x:32][y:32][z:32][a:32]
+///   x, y = SAL spend secrets (O = xG + yT)
+///   z    = Pedersen commitment mask (C = zG + amount*H)
+///   a    = pseudo-out blinding factor (r_c = a - z)
+pub const SHEKYL_PROVE_WITNESS_HEADER_BYTES: usize = 256;
+
 // ─── Version / Init ─────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -894,6 +901,77 @@ pub extern "C" fn shekyl_fcmp_derive_pqc_keypair(
     }
 }
 
+/// Derive all per-output secrets from the combined KEM shared secret.
+///
+/// Writes to 7 output pointers: ho(32), y(32), z(32), k_amount(32),
+/// view_tag_combined(1), amount_tag(1), ml_dsa_seed(32). All pointers must be
+/// non-null and point to writable memory of the stated size.
+///
+/// Returns true on success, false if any pointer is null.
+#[no_mangle]
+pub extern "C" fn shekyl_derive_output_secrets(
+    combined_ss_ptr: *const u8,
+    combined_ss_len: u32,
+    output_index: u64,
+    out_ho: *mut u8,
+    out_y: *mut u8,
+    out_z: *mut u8,
+    out_k_amount: *mut u8,
+    out_view_tag_combined: *mut u8,
+    out_amount_tag: *mut u8,
+    out_ml_dsa_seed: *mut u8,
+) -> bool {
+    if combined_ss_ptr.is_null()
+        || out_ho.is_null()
+        || out_y.is_null()
+        || out_z.is_null()
+        || out_k_amount.is_null()
+        || out_view_tag_combined.is_null()
+        || out_amount_tag.is_null()
+        || out_ml_dsa_seed.is_null()
+    {
+        return false;
+    }
+
+    let ss = unsafe {
+        std::slice::from_raw_parts(combined_ss_ptr, combined_ss_len as usize)
+    };
+
+    let secrets = shekyl_crypto_pq::derivation::derive_output_secrets(ss, output_index);
+
+    unsafe {
+        std::ptr::copy_nonoverlapping(secrets.ho.as_ptr(), out_ho, 32);
+        std::ptr::copy_nonoverlapping(secrets.y.as_ptr(), out_y, 32);
+        std::ptr::copy_nonoverlapping(secrets.z.as_ptr(), out_z, 32);
+        std::ptr::copy_nonoverlapping(secrets.k_amount.as_ptr(), out_k_amount, 32);
+        *out_view_tag_combined = secrets.view_tag_combined;
+        *out_amount_tag = secrets.amount_tag;
+        std::ptr::copy_nonoverlapping(secrets.ml_dsa_seed.as_ptr(), out_ml_dsa_seed, 32);
+    }
+
+    true
+}
+
+/// Derive the X25519-only view tag for scanner pre-filtering.
+///
+/// `x25519_ss_ptr` must point to exactly 32 bytes. Returns the 1-byte tag.
+/// Returns 0 if the pointer is null (callers should check for null separately).
+#[no_mangle]
+pub extern "C" fn shekyl_derive_view_tag_x25519(
+    x25519_ss_ptr: *const u8,
+    output_index: u64,
+) -> u8 {
+    if x25519_ss_ptr.is_null() {
+        return 0;
+    }
+    let ss: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(x25519_ss_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    shekyl_crypto_pq::derivation::derive_view_tag_x25519(&ss, output_index)
+}
+
 /// Compute the expected FCMP++ proof size given input count and tree depth.
 #[no_mangle]
 pub extern "C" fn shekyl_fcmp_proof_len(num_inputs: u32, tree_depth: u8) -> usize {
@@ -1002,7 +1080,7 @@ fn parse_prove_witness(data: &[u8], num_inputs: usize) -> Option<Vec<shekyl_fcmp
     let mut inputs = Vec::with_capacity(num_inputs);
 
     for _ in 0..num_inputs {
-        if offset + 256 > data.len() {
+        if offset + SHEKYL_PROVE_WITNESS_HEADER_BYTES > data.len() {
             return None;
         }
 
@@ -1022,8 +1100,8 @@ fn parse_prove_witness(data: &[u8], num_inputs: usize) -> Option<Vec<shekyl_fcmp
         spend_key_x.copy_from_slice(&data[offset + 128..offset + 160]);
         spend_key_y.copy_from_slice(&data[offset + 160..offset + 192]);
         commitment_mask.copy_from_slice(&data[offset + 192..offset + 224]);
-        pseudo_out_blind.copy_from_slice(&data[offset + 224..offset + 256]);
-        offset += 256;
+        pseudo_out_blind.copy_from_slice(&data[offset + 224..offset + SHEKYL_PROVE_WITNESS_HEADER_BYTES]);
+        offset += SHEKYL_PROVE_WITNESS_HEADER_BYTES;
 
         // Leaf chunk
         if offset + 4 > data.len() {

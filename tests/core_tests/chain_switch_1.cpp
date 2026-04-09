@@ -49,14 +49,15 @@ static uint64_t lookup_acc_outs_rct(const account_keys& acc, const transaction& 
       continue;
     outs.push_back(i);
 
-    if (tx.rct_signatures.type != rct::RCTTypeNull && i < tx.rct_signatures.ecdhInfo.size()) {
+    if (tx.rct_signatures.type != rct::RCTTypeNull && i < tx.rct_signatures.enc_amounts.size()) {
       crypto::key_derivation derivation;
       if (crypto::generate_key_derivation(tx_pub_key, acc.m_view_secret_key, derivation)) {
         crypto::secret_key scalar;
         crypto::derivation_to_scalar(derivation, i, scalar);
-        rct::ecdhTuple ecdh_info = tx.rct_signatures.ecdhInfo[i];
-        rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar),
-          tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc);
+        rct::ecdhTuple ecdh_info;
+        memset(&ecdh_info, 0, sizeof(ecdh_info));
+        memcpy(ecdh_info.amount.bytes, tx.rct_signatures.enc_amounts[i].data(), 8);
+        rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar), true);
         money += rct::h2d(ecdh_info.amount);
       }
     } else {

@@ -115,17 +115,26 @@ TEST(device, ops)
   ASSERT_EQ(ki0, ki1);
 }
 
-TEST(device, ecdh32)
+TEST(device, ecdhDecode)
 {
   hw::core::device_default dev;
   rct::ecdhTuple tuple, tuple2;
   rct::key key = rct::skGen();
-  tuple.mask = rct::skGen();
+  // Manually encode: XOR first 8 bytes of amount with ecdhHash(key)
   tuple.amount = rct::skGen();
+  memset(&tuple.mask, 0, sizeof(tuple.mask));
+  rct::key ecdh_hash = rct::ecdhHash(key);
+  for (int b = 0; b < 8; ++b)
+    tuple.amount.bytes[b] ^= ecdh_hash.bytes[b];
   tuple2 = tuple;
-  dev.ecdhEncode(tuple, key, false);
-  dev.ecdhDecode(tuple, key, false);
-  ASSERT_EQ(tuple2.mask, tuple.mask);
-  ASSERT_EQ(tuple2.amount, tuple.amount);
+  dev.ecdhDecode(tuple, key, true);
+  // Re-encode and verify round-trip
+  rct::ecdhTuple tuple3;
+  memset(&tuple3, 0, sizeof(tuple3));
+  tuple3.amount = tuple.amount;
+  rct::key ecdh_hash2 = rct::ecdhHash(key);
+  for (int b = 0; b < 8; ++b)
+    tuple3.amount.bytes[b] ^= ecdh_hash2.bytes[b];
+  ASSERT_EQ(tuple2.amount, tuple3.amount);
 }
 

@@ -695,6 +695,15 @@ exercise the boundary between valid and invalid inputs.
 
 ## FROST Threshold SAL for FCMP++ Classical Keys
 
+> **Status: DEFERRED to V4.** FROST SAL is architecturally incompatible with
+> HKDF-derived per-output `y`. In V3, `y` is deterministically derived from
+> the KEM shared secret via `derive_output_secrets`, making it per-output and
+> not FROST-shareable. FROST SAL requires `y` to be a DKG group key (constant
+> per wallet, not per output). The V4 resolution is a Carrot-style address
+> scheme where multisig wallets use DKG-shared `y` and single-sig wallets use
+> HKDF-derived per-output `y`, gated by address type. The code below remains
+> for reference and V4 implementation.
+
 ### Overview
 
 While the V3 PQC multisig layer (`scheme_id = 2`) handles M-of-N hybrid

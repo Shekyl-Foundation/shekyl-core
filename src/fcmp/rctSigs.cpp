@@ -99,7 +99,7 @@ namespace
         rv.p.fcmp_pp_proof.clear();
 
         rv.outPk.resize(n_out);
-        rv.ecdhInfo.resize(n_out);
+        rv.enc_amounts.resize(n_out);
         for (size_t i = 0; i < n_out; ++i)
             rv.outPk[i].dest = copy(destinations[i]);
 
@@ -117,9 +117,13 @@ namespace
         for (size_t i = 0; i < n_out; ++i)
         {
             sc_add(sumout.bytes, masks[i].bytes, sumout.bytes);
-            rv.ecdhInfo[i].mask = copy(masks[i]);
-            rv.ecdhInfo[i].amount = d2h(outamounts[i]);
-            hwdev.ecdhEncode(rv.ecdhInfo[i], amount_keys[i], true);
+            // XOR 8-byte amount with ecdhHash(amount_key), set tag to placeholder
+            key amount_scalar = d2h(outamounts[i]);
+            key ecdh_hash = ecdhHash(amount_keys[i]);
+            for (int b = 0; b < 8; ++b)
+                rv.enc_amounts[i][b] = amount_scalar.bytes[b] ^ ecdh_hash.bytes[b];
+            // TODO(PR-construct): derive amount_tag from HKDF OutputSecrets.amount_tag
+            rv.enc_amounts[i][8] = 0x00; // RESERVED_AMOUNT_TAG_PLACEHOLDER
         }
 
         rv.p.pseudoOuts.resize(n_in);
@@ -172,7 +176,7 @@ namespace
       std::stringstream ss;
       binary_archive<true> ba(ss);
       const size_t inputs = rv.p.pseudoOuts.size();
-      const size_t outputs = rv.ecdhInfo.size();
+      const size_t outputs = rv.enc_amounts.size();
       key prehash;
       CHECK_AND_ASSERT_THROW_MES(const_cast<rctSig&>(rv).serialize_rctsig_base(ba, inputs, outputs),
           "Failed to serialize rctSigBase");
@@ -219,7 +223,7 @@ namespace
               false, "FCMP++ proof is empty");
           CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus), false, "Mismatched sizes of outPk and bulletproofs_plus");
           CHECK_AND_ASSERT_MES(rv.pseudoOuts.empty(), false, "rv.pseudoOuts is not empty");
-          CHECK_AND_ASSERT_MES(rv.outPk.size() == rv.ecdhInfo.size(), false, "Mismatched sizes of outPk and rv.ecdhInfo");
+          CHECK_AND_ASSERT_MES(rv.outPk.size() == rv.enc_amounts.size(), false, "Mismatched sizes of outPk and rv.enc_amounts");
         }
 
         for (const rctSig *rvp: rvv)
@@ -320,9 +324,9 @@ namespace
         rv.referenceBlock = referenceBlock;
         rv.p.curve_trees_tree_depth = tree_depth;
 
-        // --- Outputs: destinations + ECDH info ---
+        // --- Outputs: destinations + enc_amounts ---
         rv.outPk.resize(destinations.size());
-        rv.ecdhInfo.resize(destinations.size());
+        rv.enc_amounts.resize(destinations.size());
         for (size_t i = 0; i < destinations.size(); i++)
             rv.outPk[i].dest = copy(destinations[i]);
 
@@ -347,14 +351,17 @@ namespace
                 outSk[i].mask = masks[i];
             }
 
-            // Encode ECDH info
+            // Encode encrypted amounts (XOR with ecdhHash of amount key)
             key sumout = zero();
             for (size_t i = 0; i < outSk.size(); ++i)
             {
                 sc_add(sumout.bytes, outSk[i].mask.bytes, sumout.bytes);
-                rv.ecdhInfo[i].mask = copy(outSk[i].mask);
-                rv.ecdhInfo[i].amount = d2h(outamounts[i]);
-                hwdev.ecdhEncode(rv.ecdhInfo[i], amount_keys[i], true);
+                key amount_scalar = d2h(outamounts[i]);
+                key ecdh_hash = ecdhHash(amount_keys[i]);
+                for (int b = 0; b < 8; ++b)
+                    rv.enc_amounts[i][b] = amount_scalar.bytes[b] ^ ecdh_hash.bytes[b];
+                // TODO(PR-construct): derive amount_tag from HKDF OutputSecrets.amount_tag
+                rv.enc_amounts[i][8] = 0x00; // RESERVED_AMOUNT_TAG_PLACEHOLDER
             }
 
             // --- Pseudo-out blinding factors (balance proof) ---
@@ -385,12 +392,8 @@ namespace
 
         for (size_t i = 0; i < num_inputs; ++i)
         {
-            // Fixed header: [O:32][I:32][C:32][h_pqc:32][x:32][y:32][z:32][a:32] = 256 bytes
-            // y = SAL output-key secret (0 for legacy one-time addresses)
-            // z = Pedersen commitment mask (inSk.mask)
-            // a = desired pseudo-out blinding factor
             const size_t hdr_start = witness.size();
-            witness.resize(hdr_start + 256);
+            witness.resize(hdr_start + SHEKYL_PROVE_WITNESS_HEADER_BYTES);
             uint8_t* base = witness.data() + hdr_start;
 
             memcpy(base, inPk[i].dest.bytes, 32);       // O
@@ -506,13 +509,25 @@ namespace
         return rv;
     }
 
+    // TODO(PR-construct): decodeRctSimple and this shim will be deleted when
+    // the scanner migrates to Rust scan_output. The shim translates enc_amounts
+    // back into the ecdhTuple format that ecdhDecode expects.
+    static ecdhTuple enc_amount_to_ecdh_compat(const std::array<uint8_t, 9>& enc, unsigned int /*index*/)
+    {
+        ecdhTuple tuple;
+        memset(&tuple, 0, sizeof(tuple));
+        memcpy(tuple.amount.bytes, enc.data(), 8);
+        // tuple.mask left zero; ecdhDecode v2 overwrites it with genCommitmentMask(sk)
+        return tuple;
+    }
+
     xmr_amount decodeRctSimple(const rctSig & rv, const key & sk, unsigned int i, key &mask, hw::device &hwdev) {
         CHECK_AND_ASSERT_MES(rv.type == RCTTypeFcmpPlusPlusPqc,
             false, "decodeRctSimple called on unsupported rctSig type");
-        CHECK_AND_ASSERT_THROW_MES(i < rv.ecdhInfo.size(), "Bad index");
-        CHECK_AND_ASSERT_THROW_MES(rv.outPk.size() == rv.ecdhInfo.size(), "Mismatched sizes of rv.outPk and rv.ecdhInfo");
+        CHECK_AND_ASSERT_THROW_MES(i < rv.enc_amounts.size(), "Bad index");
+        CHECK_AND_ASSERT_THROW_MES(rv.outPk.size() == rv.enc_amounts.size(), "Mismatched sizes of rv.outPk and rv.enc_amounts");
 
-        ecdhTuple ecdh_info = rv.ecdhInfo[i];
+        ecdhTuple ecdh_info = enc_amount_to_ecdh_compat(rv.enc_amounts[i], i);
         hwdev.ecdhDecode(ecdh_info, sk, true);
         mask = ecdh_info.mask;
         key amount = ecdh_info.amount;

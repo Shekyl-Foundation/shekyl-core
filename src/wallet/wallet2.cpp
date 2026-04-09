@@ -810,8 +810,8 @@ size_t estimate_rct_tx_size(int n_inputs, int n_outputs, size_t extra_size, bool
 
   // pseudoOuts
   size += 32 * n_inputs;
-  // ecdhInfo
-  size += 8 * n_outputs;
+  // enc_amounts (9 bytes per output: 8 amount + 1 tag)
+  size += 9 * n_outputs;
   // outPk - only commitment is saved
   size += 32 * n_outputs;
   // txnFee
@@ -8136,6 +8136,8 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       inSk[i].mask = td.m_mask;
 
       inPk[i].dest = rct::pk2rct(out_key);
+      // TODO(PR-construct): kill m_rct ternary — all v3 outputs have real commitments.
+      // Coinbase uses KEM self-encap to derive (ho, y, z), C = z*G + amount*H.
       inPk[i].mask = td.m_rct ? rct::commit(td.m_amount, td.m_mask) : rct::zeroCommit(td.m_amount);
 
       auto path_it = m_fcmp_precomputed_paths.find(td.m_global_output_index);
@@ -9551,7 +9553,7 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
   rv.type = rct::RCTTypeFcmpPlusPlusPqc;
   rv.txnFee = 0;
   rv.outPk.resize(2);
-  rv.ecdhInfo.resize(2);
+  rv.enc_amounts.resize(2);
   rv.p.pseudoOuts.resize(num_inputs);
 
   // Output masks must sum to N (number of inputs) because each
@@ -9582,12 +9584,15 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
     rv.outPk[i].dest = rct::pk2rct(out_pk);
   }
 
-  // ECDH-encode amounts for recipient recovery
+  // Encode encrypted amounts (XOR with ecdhHash of amount key)
   for (size_t i = 0; i < 2; ++i)
   {
-    rv.ecdhInfo[i].mask = rct::copy(out_masks[i]);
-    rv.ecdhInfo[i].amount = rct::d2h(out_amounts_vec[i]);
-    m_account.get_device().ecdhEncode(rv.ecdhInfo[i], amount_keys[i], true);
+    rct::key amount_scalar = rct::d2h(out_amounts_vec[i]);
+    rct::key ecdh_hash = rct::ecdhHash(amount_keys[i]);
+    for (int b = 0; b < 8; ++b)
+      rv.enc_amounts[i][b] = amount_scalar.bytes[b] ^ ecdh_hash.bytes[b];
+    // TODO(PR-construct): derive amount_tag from HKDF OutputSecrets.amount_tag
+    rv.enc_amounts[i][8] = 0x00;
   }
 
   // Pseudo-outs: zeroCommit(claim_amount) binds each to its public amount
@@ -10496,8 +10501,11 @@ void wallet2::check_tx_key_helper(const cryptonote::transaction &tx, const crypt
       {
         crypto::secret_key scalar1;
         crypto::derivation_to_scalar(found_derivation, n, scalar1);
-        rct::ecdhTuple ecdh_info = tx.rct_signatures.ecdhInfo[n];
-        rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar1), tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc);
+        // Shim: convert enc_amounts to ecdhTuple for existing ecdhDecode path
+        rct::ecdhTuple ecdh_info;
+        memset(&ecdh_info, 0, sizeof(ecdh_info));
+        memcpy(ecdh_info.amount.bytes, tx.rct_signatures.enc_amounts[n].data(), 8);
+        rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar1), true);
         const rct::key C = tx.rct_signatures.outPk[n].mask;
         rct::key Ctmp;
         THROW_WALLET_EXCEPTION_IF(sc_check(ecdh_info.mask.bytes) != 0, error::wallet_internal_error, "Bad ECDH input mask");
@@ -11167,11 +11175,13 @@ bool wallet2::check_reserve_proof(const cryptonote::account_public_address &addr
     uint64_t amount = tx.vout[proof.index_in_tx].amount;
     if (amount == 0)
     {
-      // decode rct
+      // Shim: convert enc_amounts to ecdhTuple for existing ecdhDecode path
       crypto::secret_key shared_secret;
       crypto::derivation_to_scalar(derivation, proof.index_in_tx, shared_secret);
-      rct::ecdhTuple ecdh_info = tx.rct_signatures.ecdhInfo[proof.index_in_tx];
-      rct::ecdhDecode(ecdh_info, rct::sk2rct(shared_secret), tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc);
+      rct::ecdhTuple ecdh_info;
+      memset(&ecdh_info, 0, sizeof(ecdh_info));
+      memcpy(ecdh_info.amount.bytes, tx.rct_signatures.enc_amounts[proof.index_in_tx].data(), 8);
+      rct::ecdhDecode(ecdh_info, rct::sk2rct(shared_secret), true);
       amount = rct::h2d(ecdh_info.amount);
     }
     total += amount;

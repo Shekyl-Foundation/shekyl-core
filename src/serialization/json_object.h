@@ -28,6 +28,7 @@
 
 #pragma once
 
+#include <array>
 #include <boost/utility/string_ref.hpp>
 #include <cstring>
 #include <rapidjson/document.h>
@@ -295,8 +296,8 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig);
 
 void fromJsonValue(const rapidjson::Value& val, rct::ctkey& key);
 
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::ecdhTuple& tuple);
-void fromJsonValue(const rapidjson::Value& val, rct::ecdhTuple& tuple);
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const std::array<uint8_t, 9>& enc_amount);
+void fromJsonValue(const rapidjson::Value& val, std::array<uint8_t, 9>& enc_amount);
 
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::BulletproofPlus& p);
 void fromJsonValue(const rapidjson::Value& val, rct::BulletproofPlus& p);

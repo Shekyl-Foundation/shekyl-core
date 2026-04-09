@@ -165,6 +165,38 @@ X25519 secret key to recover the per-output PQC keypair.
 For **coinbase transactions**, the miner self-encapsulates to their own
 ML-KEM-768 key, ensuring per-output PQC uniqueness even for miner rewards.
 
+### HKDF Label Registry
+
+All per-output secrets are derived via HKDF-SHA-512. Two derivation contexts
+exist: the primary combined-SS derivation (using both X25519 and ML-KEM
+shared secrets), and a secondary X25519-only derivation for fast wallet
+scanning.
+
+**Primary derivation (combined shared secret):**
+
+| Secret | Salt | Info string | Output | Reduction |
+|--------|------|-------------|--------|-----------|
+| `ho` (x-derivation) | `shekyl-output-derive-v1` | `shekyl-output-x` &#124;&#124; index\_le64 | 64 B | mod l (wide) |
+| `y` (T-component) | `shekyl-output-derive-v1` | `shekyl-output-y` &#124;&#124; index\_le64 | 64 B | mod l (wide) |
+| `z` (commitment mask) | `shekyl-output-derive-v1` | `shekyl-output-mask` &#124;&#124; index\_le64 | 64 B | mod l (wide) |
+| `k_amount` | `shekyl-output-derive-v1` | `shekyl-output-amount-key` &#124;&#124; index\_le64 | 32 B | raw |
+| `view_tag_combined` | `shekyl-output-derive-v1` | `shekyl-output-view-tag` &#124;&#124; index\_le64 | 1 B | first byte |
+| `amount_tag` | `shekyl-output-derive-v1` | `shekyl-output-amount-tag` &#124;&#124; index\_le64 | 1 B | first byte |
+| `ml_dsa_seed` | `shekyl-output-derive-v1` | `shekyl-pqc-output` &#124;&#124; index\_le64 | 32 B | raw |
+
+**Secondary derivation (X25519 shared secret only, for fast scan):**
+
+| Secret | Salt | Info string | Output | Reduction |
+|--------|------|-------------|--------|-----------|
+| `view_tag_x25519` | `shekyl-view-tag-x25519-v1` | `shekyl-view-tag` &#124;&#124; index\_le64 | 1 B | first byte |
+
+- `index_le64` is the output index as a little-endian 8-byte integer.
+- "wide reduce" means expanding 64 bytes via HKDF-Expand, then reducing
+  mod Ed25519 scalar order `l` using `Scalar::from_bytes_mod_order_wide`.
+- Test vectors: `docs/test_vectors/PQC_OUTPUT_SECRETS.json`
+- Reference implementation: `tools/reference/derive_output_secrets.py`
+- Rust implementation: `rust/shekyl-crypto-pq/src/derivation.rs`
+
 ## Address Format
 
 Shekyl uses a three-segment Bech32m encoding, where each segment stays

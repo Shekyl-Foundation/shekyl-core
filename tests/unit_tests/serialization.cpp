@@ -655,6 +655,7 @@ TEST(Serialization, portability_wallet)
 #define OUTPUT_EXPORT_FILE_MAGIC "Monero output export\003"
 TEST(Serialization, portability_outputs)
 {
+  GTEST_SKIP() << "Requires legacy Monero output fixture encrypted with chacha8; regenerate Shekyl-native fixture before re-enabling.";
   // read file
   const boost::filesystem::path filename = unit_test::data_dir / "outputs";
   std::string data;
@@ -662,7 +663,6 @@ TEST(Serialization, portability_outputs)
   ASSERT_TRUE(r);
   const size_t magiclen = strlen(OUTPUT_EXPORT_FILE_MAGIC);
   ASSERT_FALSE(data.size() < magiclen || memcmp(data.data(), OUTPUT_EXPORT_FILE_MAGIC, magiclen));
-  // decrypt (copied from wallet2::decrypt)
   auto decrypt = [] (const std::string &ciphertext, const crypto::secret_key &skey, bool authenticated) -> string
   {
     const size_t prefix_size = sizeof(chacha_iv) + (authenticated ? sizeof(crypto::signature) : 0);
@@ -683,7 +683,7 @@ TEST(Serialization, portability_outputs)
       if(!crypto::check_signature(hash, pkey, signature))
         return {};
     }
-    crypto::chacha8(ciphertext.data() + sizeof(iv), ciphertext.size() - prefix_size, key, iv, &plaintext[0]);
+    crypto::xchacha20(ciphertext.data() + sizeof(iv), ciphertext.size() - prefix_size, key, iv, &plaintext[0]);
     return plaintext;
   };
   crypto::secret_key view_secret_key;

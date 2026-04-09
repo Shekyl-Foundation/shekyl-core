@@ -33,6 +33,7 @@
 // versioned format transition and backward-compatibility shim.
 #pragma once
 
+#include <boost/serialization/binary_object.hpp>
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/utility.hpp>
 #include <boost/serialization/set.hpp>
@@ -340,10 +341,9 @@ namespace boost
   }
 
   template <class Archive>
-  inline void serialize(Archive &a, rct::ecdhTuple &x, const boost::serialization::version_type ver)
+  inline void serialize(Archive &a, std::array<uint8_t, 9> &x, const boost::serialization::version_type /*ver*/)
   {
-    a & x.mask;
-    a & x.amount;
+    a & boost::serialization::make_binary_object(x.data(), x.size());
   }
 
   template <class Archive>
@@ -376,7 +376,7 @@ namespace boost
       return;
     if (x.type != rct::RCTTypeFcmpPlusPlusPqc)
       throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
-    a & x.ecdhInfo;
+    a & x.enc_amounts;
     serializeOutPk(a, x.outPk, ver);
     a & x.txnFee;
   }
@@ -396,7 +396,7 @@ namespace boost
       return;
     if (x.type != rct::RCTTypeFcmpPlusPlusPqc)
       throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
-    a & x.ecdhInfo;
+    a & x.enc_amounts;
     serializeOutPk(a, x.outPk, ver);
     a & x.txnFee;
     //--------------

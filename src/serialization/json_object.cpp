@@ -1231,7 +1231,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::rctSig& 
   INSERT_INTO_JSON_OBJECT(dest, type, sig.type);
   if (sig.type != rct::RCTTypeNull)
   {
-    INSERT_INTO_JSON_OBJECT(dest, encrypted, sig.ecdhInfo);
+    INSERT_INTO_JSON_OBJECT(dest, enc_amounts, sig.enc_amounts);
     INSERT_INTO_JSON_OBJECT(dest, commitments, transform(sig.outPk, just_mask));
     INSERT_INTO_JSON_OBJECT(dest, fee, sig.txnFee);
   }
@@ -1266,7 +1266,7 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
   GET_FROM_JSON_OBJECT(val, sig.type, type);
   if (sig.type != rct::RCTTypeNull)
   {
-    GET_FROM_JSON_OBJECT(val, sig.ecdhInfo, encrypted);
+    GET_FROM_JSON_OBJECT(val, sig.enc_amounts, enc_amounts);
     GET_FROM_JSON_OBJECT(val, sig.outPk, commitments);
     GET_FROM_JSON_OBJECT(val, sig.txnFee, fee);
   }
@@ -1298,23 +1298,21 @@ void fromJsonValue(const rapidjson::Value& val, rct::ctkey& key)
   fromJsonValue(val, key.mask);
 }
 
-void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::ecdhTuple& tuple)
+void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const std::array<uint8_t, 9>& enc_amount)
 {
-  dest.StartObject();
-  INSERT_INTO_JSON_OBJECT(dest, mask, tuple.mask);
-  INSERT_INTO_JSON_OBJECT(dest, amount, tuple.amount);
-  dest.EndObject();
+  const std::string hex = epee::to_hex::string({enc_amount.data(), enc_amount.size()});
+  dest.String(hex.data(), hex.size());
 }
 
-void fromJsonValue(const rapidjson::Value& val, rct::ecdhTuple& tuple)
+void fromJsonValue(const rapidjson::Value& val, std::array<uint8_t, 9>& enc_amount)
 {
-  if (!val.IsObject())
-  {
-    throw WRONG_TYPE("json object");
-  }
-
-  GET_FROM_JSON_OBJECT(val, tuple.mask, mask);
-  GET_FROM_JSON_OBJECT(val, tuple.amount, amount);
+  if (!val.IsString())
+    throw WRONG_TYPE("string");
+  if (val.GetStringLength() != 18)
+    throw WRONG_TYPE("18-char hex string for enc_amount");
+  if (!epee::from_hex::to_buffer({enc_amount.data(), enc_amount.size()},
+      {val.GetString(), val.GetStringLength()}))
+    throw WRONG_TYPE("valid hex for enc_amount");
 }
 
 void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::BulletproofPlus& p)
