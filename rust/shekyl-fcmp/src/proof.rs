@@ -993,4 +993,132 @@ mod tests {
         assert!(wrong_hash.is_err() || matches!(wrong_hash, Ok(false)),
             "wrong signable_tx_hash must not verify");
     }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn legacy_single_component_key_with_mask_as_y_must_fail() {
+        use ec_divisors::DivisorCurve;
+        use multiexp::multiexp_vartime;
+        use shekyl_generators::SELENE_HASH_INIT;
+
+        let tree_depth: u8 = 1;
+        let signable_tx_hash = [0xBBu8; 32];
+
+        let x = Scalar::random(&mut OsRng);
+        let mask = Scalar::random(&mut OsRng);
+
+        // Legacy output: O = x*G (no T component)
+        let O = EdwardsPoint::generator() * x;
+        let I = EdwardsPoint::random(&mut OsRng);
+        let C = EdwardsPoint::random(&mut OsRng);
+
+        let h_pqc_field = <Selene as Ciphersuite>::F::random(&mut OsRng);
+        let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr().into();
+
+        let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
+        let tree_root_point: <Selene as Ciphersuite>::G = *SELENE_HASH_INIT + multiexp_vartime(
+            &[
+                (<EdwardsPoint as DivisorCurve>::to_xy(O).unwrap().0, generators[0]),
+                (<EdwardsPoint as DivisorCurve>::to_xy(I).unwrap().0, generators[1]),
+                (<EdwardsPoint as DivisorCurve>::to_xy(C).unwrap().0, generators[2]),
+                (h_pqc_field, generators[3]),
+            ],
+        );
+        let tree_root: [u8; 32] = tree_root_point.to_bytes().into();
+
+        let o_bytes = O.to_bytes();
+        let i_bytes = I.to_bytes();
+        let c_bytes = C.to_bytes();
+
+        let a = Scalar::random(&mut OsRng);
+        let input = ProveInput {
+            output_key: o_bytes.into(),
+            key_image_gen: i_bytes.into(),
+            commitment: c_bytes.into(),
+            h_pqc: PqcLeafScalar(h_pqc_bytes),
+            spend_key_x: x.to_repr().into(),
+            // BUG: passing commitment mask as y (the old wallet2.cpp bug)
+            spend_key_y: mask.to_repr().into(),
+            commitment_mask: mask.to_repr().into(),
+            pseudo_out_blind: a.to_repr().into(),
+            leaf_chunk_outputs: vec![(o_bytes.into(), i_bytes.into(), c_bytes.into())],
+            leaf_chunk_h_pqc: vec![h_pqc_bytes],
+            c1_branch_layers: vec![],
+            c2_branch_layers: vec![],
+        };
+
+        let result = prove(&[input], &tree_root, tree_depth, signable_tx_hash);
+        assert!(result.is_err(),
+            "O=xG with y=mask (nonzero) must fail at OpenedInputTuple::open");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn two_component_key_with_real_y_must_succeed() {
+        use ec_divisors::DivisorCurve;
+        use multiexp::multiexp_vartime;
+        use shekyl_generators::SELENE_HASH_INIT;
+
+        let tree_depth: u8 = 1;
+        let signable_tx_hash = [0xCCu8; 32];
+
+        let x = Scalar::random(&mut OsRng);
+        let y = Scalar::random(&mut OsRng);
+        let z = Scalar::random(&mut OsRng);
+
+        // Two-component output: O = x*G + y*T
+        let O = (EdwardsPoint::generator() * x) + (EdwardsPoint(*T) * y);
+        let I = EdwardsPoint::random(&mut OsRng);
+        let C = EdwardsPoint::random(&mut OsRng);
+        let L = I * x;
+
+        let h_pqc_field = <Selene as Ciphersuite>::F::random(&mut OsRng);
+        let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr().into();
+
+        let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
+        let tree_root_point: <Selene as Ciphersuite>::G = *SELENE_HASH_INIT + multiexp_vartime(
+            &[
+                (<EdwardsPoint as DivisorCurve>::to_xy(O).unwrap().0, generators[0]),
+                (<EdwardsPoint as DivisorCurve>::to_xy(I).unwrap().0, generators[1]),
+                (<EdwardsPoint as DivisorCurve>::to_xy(C).unwrap().0, generators[2]),
+                (h_pqc_field, generators[3]),
+            ],
+        );
+        let tree_root: [u8; 32] = tree_root_point.to_bytes().into();
+
+        let o_bytes = O.to_bytes();
+        let i_bytes = I.to_bytes();
+        let c_bytes = C.to_bytes();
+
+        let a = Scalar::random(&mut OsRng);
+        let input = ProveInput {
+            output_key: o_bytes.into(),
+            key_image_gen: i_bytes.into(),
+            commitment: c_bytes.into(),
+            h_pqc: PqcLeafScalar(h_pqc_bytes),
+            spend_key_x: x.to_repr().into(),
+            spend_key_y: y.to_repr().into(),
+            commitment_mask: z.to_repr().into(),
+            pseudo_out_blind: a.to_repr().into(),
+            leaf_chunk_outputs: vec![(o_bytes.into(), i_bytes.into(), c_bytes.into())],
+            leaf_chunk_h_pqc: vec![h_pqc_bytes],
+            c1_branch_layers: vec![],
+            c2_branch_layers: vec![],
+        };
+
+        let result = prove(&[input], &tree_root, tree_depth, signable_tx_hash)
+            .expect("prove with O=xG+yT and real y must succeed");
+
+        let key_images = [L.to_bytes().into()];
+        let ok = verify(
+            &result.proof,
+            &key_images,
+            &result.pseudo_outs,
+            &[PqcLeafScalar(h_pqc_bytes)],
+            &tree_root,
+            tree_depth,
+            signable_tx_hash,
+        ).expect("verify must not error");
+        assert!(ok, "valid two-component proof must verify");
+    }
 }

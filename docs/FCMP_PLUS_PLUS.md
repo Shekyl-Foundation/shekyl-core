@@ -1,6 +1,6 @@
 # FCMP++ Full-Chain Membership Proofs — Specification
 
-> **Last updated:** 2026-04-07
+> **Last updated:** 2026-04-09
 >
 > **Parent document:** `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
@@ -1447,6 +1447,86 @@ Use the required workflow in `docs/SHEKYL_OXIDE_VENDORING.md`:
 4. Sync subtree into `rust/shekyl-oxide/`
 5. Run full `shekyl-core` test/build gates
 6. Commit with upstream reference
+
+---
+
+## 20. Two-Component Output Keys (O = xG + yT)
+
+### Problem
+
+FCMP++ SAL (Spend-Authorization and Linkability) proves knowledge of `(x, y)`
+such that `O = xG + yT`. The `OpenedInputTuple::open` function enforces:
+
+```
+x*G + (y + r_o)*T == O~    =>    x*G + y*T == O
+```
+
+Legacy Monero-style outputs use single-component keys `O = xG` (equivalently
+`O = xG + 0*T`), so the SAL `y` for these outputs is zero. Previously, the
+wallet incorrectly passed the Pedersen commitment mask `z` as `y`, causing
+`open()` to check `x*G + z*T == O` which fails for all non-zero `z`.
+
+### Design
+
+Every output public key is now:
+
+```
+O = Hs(derivation || i) * G + B + Hs_y(derivation || i) * T
+```
+
+Where:
+- `Hs(derivation || i)` is the existing x-derivation scalar (unchanged)
+- `Hs_y(derivation || i)` is a domain-separated y-derivation scalar using
+  the `"shekyl_y"` salt prefix
+- `B` is the recipient's spend public key
+- The full spend key is `x = Hs(derivation || i) + b`
+- The SAL secret is `y = Hs_y(derivation || i)`
+
+### Domain Separation
+
+The y-scalar uses an 8-byte `"shekyl_y"` salt prefix followed by the
+derivation and varint output index, then `hash_to_scalar`. This is
+collision-free with the existing x-derivation (no prefix) and view_tag
+derivation (`"view_tag"` prefix).
+
+### Commitment Mask Independence
+
+The Pedersen commitment `C = z*G + amount*H` uses a mask `z` that has
+**nothing to do with `y`**. In the proof pipeline:
+
+- `y` is passed to `OpenedInputTuple::open` (SAL verification of O)
+- `z` is used to compute `r_c = a - z` for pseudo-out rerandomization
+- `a` is the desired pseudo-out blinding factor
+
+### Witness Header (256 bytes)
+
+```
+[O:32][I:32][C:32][h_pqc:32][x:32][y:32][z:32][a:32]
+```
+
+| Field | Purpose |
+|-------|---------|
+| O | Output public key (curve tree leaf) |
+| I | Key image generator Hp(O) |
+| C | Pedersen commitment (curve tree leaf) |
+| h_pqc | H(ml_dsa_pk) PQC leaf binding |
+| x | SAL spend secret key |
+| y | SAL output-key secret (`Hs_y(derivation, i)`) |
+| z | Pedersen commitment mask |
+| a | Pseudo-out blinding factor |
+
+### Security Properties
+
+- **Spend-auth vs discovery**: A view-key holder can compute `y` (derived
+  from the shared secret), so `y` alone does not provide spend/view
+  separation. Full separation requires a Carrot-style address scheme
+  (V4 consideration). The y-component binds the key image to a
+  recipient-controlled blinder, which is the SAL design requirement.
+- **FROST SAL multisig**: With `y` derived from the shared secret (not a
+  FROST group key), the FROST SAL path operates with a per-output T-component.
+  Gate behind "requires two-component address scheme" until V4.
+- **Coinbase commitment mask**: `zeroCommit(amount) = G + amount*H`, so the
+  mask scalar is 1 (`rct::identity()`), not 0.
 
 ---
 

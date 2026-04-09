@@ -2405,6 +2405,11 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
               td.m_mask = rct::identity();
               td.m_rct = false;
             }
+            {
+              crypto::ec_scalar y_sc;
+              crypto::derivation_to_y_scalar(tx_scan_info[o].received->derivation, o, y_sc);
+              memcpy(&td.m_y, &y_sc, sizeof(td.m_y));
+            }
             td.m_frozen = false;
             {
               uint8_t stk_tier = 0;
@@ -2531,6 +2536,11 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
             {
               td.m_mask = rct::identity();
               td.m_rct = false;
+            }
+            {
+              crypto::ec_scalar y_sc;
+              crypto::derivation_to_y_scalar(tx_scan_info[o].received->derivation, o, y_sc);
+              memcpy(&td.m_y, &y_sc, sizeof(td.m_y));
             }
             if (output_tracker_cache)
               (*output_tracker_cache)[std::make_pair(tx.vout[o].amount, td.m_global_output_index)] = kit->second;
@@ -8268,11 +8278,12 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       for (size_t i = 0; i < num_inputs; ++i)
       {
         auto& isd = m_native_sign_state.inputs[i];
+        const transfer_details& td_sign = m_transfers[permuted_transfers[i]];
         isd.output_key = inPk[i].dest;
         isd.commitment = inPk[i].mask;
         isd.amount = inamounts[i];
         isd.spend_key_x = inSk[i].dest;
-        isd.spend_key_y = inSk[i].mask;
+        isd.spend_key_y = rct::sk2rct(td_sign.m_y);
         isd.h_pqc = pqc_pk_hashes[i];
 
         // Copy leaf chunk entries
@@ -8337,12 +8348,16 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     {
       LOG_PRINT_L2("calling genRctFcmpPlusPlus with " << num_inputs << " inputs, "
           << destinations_rct.size() << " outputs");
+      rct::keyV y_keys(num_inputs);
+      for (size_t i = 0; i < num_inputs; ++i)
+        y_keys[i] = rct::sk2rct(m_transfers[permuted_transfers[i]].m_y);
       rct::key rct_tree_root;
       memcpy(rct_tree_root.bytes, &curve_tree_root, 32);
       rct::rctSig rv = rct::genRctFcmpPlusPlus(
           rct::hash2rct(tx_prefix_hash),
           inSk, inPk,
           destinations_rct, inamounts, outamounts, amount_keys,
+          y_keys,
           fee, reference_block, rct_tree_root, tree_depth,
           tree_paths, leaf_chunk_entries, pqc_pk_hashes,
           m_account.get_device());

@@ -33,6 +33,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <boost/thread/mutex.hpp>
 #include <boost/thread/lock_guard.hpp>
 #include <boost/shared_ptr.hpp>
@@ -72,6 +73,29 @@ namespace crypto {
 
   const crypto::public_key null_pkey = crypto::public_key{};
   const crypto::secret_key null_skey = crypto::secret_key{};
+
+  // T = hash_to_point(keccak256("Monero Generator T"))
+  // Compressed Ed25519 bytes, computed deterministically from the Rust
+  // shekyl-generators crate. Hardcoded to avoid FFI at runtime and
+  // static-initialization-order hazards.
+  static constexpr unsigned char SHEKYL_GENERATOR_T_BYTES[32] = {
+    0x61, 0xb7, 0x36, 0xce, 0x93, 0xb6, 0x2a, 0x3d,
+    0x37, 0x78, 0xab, 0x20, 0x4d, 0xa8, 0x5d, 0x3b,
+    0x4c, 0xdc, 0x07, 0x25, 0x0f, 0x5d, 0xa7, 0xe3,
+    0xdf, 0x26, 0x29, 0x92, 0x81, 0x34, 0xd5, 0x26
+  };
+
+  static ge_p3 generator_T_p3;
+  static std::once_flag generator_T_init_flag;
+
+  static const ge_p3& get_generator_T()
+  {
+    std::call_once(generator_T_init_flag, []() {
+      if (ge_frombytes_vartime(&generator_T_p3, SHEKYL_GENERATOR_T_BYTES) != 0)
+        local_abort("SHEKYL_GENERATOR_T_BYTES is not a valid Ed25519 point");
+    });
+    return generator_T_p3;
+  }
 
   static inline unsigned char *operator &(ec_point &point) {
     return &reinterpret_cast<unsigned char &>(point);
@@ -210,21 +234,41 @@ namespace crypto {
 
   bool crypto_ops::derive_public_key(const key_derivation &derivation, size_t output_index,
     const public_key &base, public_key &derived_key) {
-    ec_scalar scalar;
-    ge_p3 point1;
-    ge_p3 point2;
-    ge_cached point3;
-    ge_p1p1 point4;
-    ge_p2 point5;
-    if (ge_frombytes_vartime(&point1, &base) != 0) {
+    // O = Hs(d||i)*G + B + Hs_y(d||i)*T
+    ge_p3 B_p3;
+    if (ge_frombytes_vartime(&B_p3, &base) != 0) {
       return false;
     }
-    derivation_to_scalar(derivation, output_index, scalar);
-    ge_scalarmult_base(&point2, &scalar);
-    ge_p3_to_cached(&point3, &point2);
-    ge_add(&point4, &point1, &point3);
-    ge_p1p1_to_p2(&point5, &point4);
-    ge_tobytes(&derived_key, &point5);
+
+    // x_scalar*G
+    ec_scalar x_scalar;
+    derivation_to_scalar(derivation, output_index, x_scalar);
+    ge_p3 xG_p3;
+    ge_scalarmult_base(&xG_p3, &x_scalar);
+
+    // B + x_scalar*G
+    ge_cached xG_cached;
+    ge_p3_to_cached(&xG_cached, &xG_p3);
+    ge_p1p1 sum1_p1p1;
+    ge_add(&sum1_p1p1, &B_p3, &xG_cached);
+
+    // y_scalar*T
+    ec_scalar y_scalar;
+    derivation_to_y_scalar(derivation, output_index, y_scalar);
+    const ge_p3 &T = get_generator_T();
+    ge_p3 yT_p3;
+    ge_scalarmult_p3(&yT_p3, &y_scalar, &T);
+
+    // (B + x_scalar*G) + y_scalar*T
+    ge_p3 sum1_p3;
+    ge_p1p1_to_p3(&sum1_p3, &sum1_p1p1);
+    ge_cached yT_cached;
+    ge_p3_to_cached(&yT_cached, &yT_p3);
+    ge_p1p1 result_p1p1;
+    ge_add(&result_p1p1, &sum1_p3, &yT_cached);
+    ge_p2 result_p2;
+    ge_p1p1_to_p2(&result_p2, &result_p1p1);
+    ge_tobytes(&derived_key, &result_p2);
     return true;
   }
 
@@ -237,21 +281,38 @@ namespace crypto {
   }
 
   bool crypto_ops::derive_subaddress_public_key(const public_key &out_key, const key_derivation &derivation, std::size_t output_index, public_key &derived_key) {
-    ec_scalar scalar;
-    ge_p3 point1;
-    ge_p3 point2;
-    ge_cached point3;
-    ge_p1p1 point4;
-    ge_p2 point5;
-    if (ge_frombytes_vartime(&point1, &out_key) != 0) {
+    // B' = O - Hs(d||i)*G - Hs_y(d||i)*T
+    ge_p3 O_p3;
+    if (ge_frombytes_vartime(&O_p3, &out_key) != 0) {
       return false;
     }
-    derivation_to_scalar(derivation, output_index, scalar);
-    ge_scalarmult_base(&point2, &scalar);
-    ge_p3_to_cached(&point3, &point2);
-    ge_sub(&point4, &point1, &point3);
-    ge_p1p1_to_p2(&point5, &point4);
-    ge_tobytes(&derived_key, &point5);
+
+    // O - x_scalar*G
+    ec_scalar x_scalar;
+    derivation_to_scalar(derivation, output_index, x_scalar);
+    ge_p3 xG_p3;
+    ge_scalarmult_base(&xG_p3, &x_scalar);
+    ge_cached xG_cached;
+    ge_p3_to_cached(&xG_cached, &xG_p3);
+    ge_p1p1 sub1_p1p1;
+    ge_sub(&sub1_p1p1, &O_p3, &xG_cached);
+
+    // (O - x_scalar*G) - y_scalar*T
+    ec_scalar y_scalar;
+    derivation_to_y_scalar(derivation, output_index, y_scalar);
+    const ge_p3 &T = get_generator_T();
+    ge_p3 yT_p3;
+    ge_scalarmult_p3(&yT_p3, &y_scalar, &T);
+
+    ge_p3 sub1_p3;
+    ge_p1p1_to_p3(&sub1_p3, &sub1_p1p1);
+    ge_cached yT_cached;
+    ge_p3_to_cached(&yT_cached, &yT_p3);
+    ge_p1p1 result_p1p1;
+    ge_sub(&result_p1p1, &sub1_p3, &yT_cached);
+    ge_p2 result_p2;
+    ge_p1p1_to_p2(&result_p2, &result_p1p1);
+    ge_tobytes(&derived_key, &result_p2);
     return true;
   }
 
@@ -746,6 +807,23 @@ POP_WARNINGS
 
   void key_image_y_normalize(key_image& ki) {
     reinterpret_cast<unsigned char*>(ki.data)[31] &= 0x7f;
+  }
+
+  void crypto_ops::derivation_to_y_scalar(const key_derivation &derivation, size_t output_index, ec_scalar &res) {
+    #pragma pack(push, 1)
+    struct {
+      char salt[8];
+      key_derivation derivation;
+      char output_index[(sizeof(size_t) * 8 + 6) / 7];
+    } buf;
+    #pragma pack(pop)
+
+    char *end = buf.output_index;
+    memcpy(buf.salt, "shekyl_y", 8);
+    buf.derivation = derivation;
+    tools::write_varint(end, output_index);
+    assert(end <= buf.output_index + sizeof buf.output_index);
+    hash_to_scalar(&buf, end - reinterpret_cast<char *>(&buf), res);
   }
 
   void crypto_ops::derive_view_tag(const key_derivation &derivation, size_t output_index, view_tag &view_tag) {

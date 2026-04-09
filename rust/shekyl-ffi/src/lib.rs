@@ -789,6 +789,7 @@ pub extern "C" fn shekyl_page_size() -> usize {
 /// to blind the key-image commitment in two-component output keys: O = xG + yT.
 #[no_mangle]
 pub extern "C" fn shekyl_generator_T(out_ptr: *mut u8) {
+    use ciphersuite::group::GroupEncoding;
     if out_ptr.is_null() { return; }
     let t_bytes: [u8; 32] = shekyl_generators::T.to_bytes().into();
     unsafe { std::ptr::copy_nonoverlapping(t_bytes.as_ptr(), out_ptr, 32) };

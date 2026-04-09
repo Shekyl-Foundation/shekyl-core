@@ -19,6 +19,7 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-address = { path = "../shekyl-address" }
 shekyl-encoding = { path = "../shekyl-encoding" }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
+shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-consensus = { path = "../shekyl-consensus" }
 shekyl-economics = { path = "../shekyl-economics" }

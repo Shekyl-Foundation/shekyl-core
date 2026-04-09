@@ -310,6 +310,7 @@ namespace tools
       uint64_t m_spent_height = 0;
       crypto::key_image m_key_image{}; //TODO: key_image stored twice :(
       rct::key m_mask{};
+      crypto::secret_key m_y{};
       uint64_t m_amount = 0;
       bool m_rct = false;
       bool m_key_image_known = false;
@@ -350,6 +351,7 @@ namespace tools
         FIELD(m_spent_height)
         FIELD(m_key_image)
         FIELD(m_mask)
+        FIELD(m_y)
         FIELD(m_amount)
         FIELD(m_rct)
         FIELD(m_key_image_known)
@@ -2001,7 +2003,7 @@ namespace tools
   };
 }
 BOOST_CLASS_VERSION(tools::wallet2, 32)
-BOOST_CLASS_VERSION(tools::wallet2::transfer_details, 13)
+BOOST_CLASS_VERSION(tools::wallet2::transfer_details, 14)
 BOOST_CLASS_VERSION(tools::wallet2::payment_details, 5)
 BOOST_CLASS_VERSION(tools::wallet2::pool_payment_details, 1)
 BOOST_CLASS_VERSION(tools::wallet2::unconfirmed_transfer_details, 8)
@@ -2073,6 +2075,10 @@ namespace boost
         if (ver < 13)
         {
           x.m_combined_shared_secret.clear();
+        }
+        if (ver < 14)
+        {
+          x.m_y = crypto::secret_key{};
         }
     }
 
@@ -2171,6 +2177,12 @@ namespace boost
         return;
       }
       a & x.m_combined_shared_secret;
+      if (ver < 14)
+      {
+        initialize_transfer_details(a, x, ver);
+        return;
+      }
+      a & x.m_y;
     }
 
     template <class Archive>

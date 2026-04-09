@@ -2278,6 +2278,7 @@ dependencies = [
  "shekyl-economics",
  "shekyl-encoding",
  "shekyl-fcmp",
+ "shekyl-generators",
  "shekyl-staking",
  "shekyl-tx-builder",
  "zeroize",

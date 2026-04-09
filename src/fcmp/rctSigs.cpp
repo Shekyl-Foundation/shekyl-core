@@ -293,6 +293,7 @@ namespace
         const std::vector<xmr_amount> &inamounts,
         const std::vector<xmr_amount> &outamounts,
         const keyV &amount_keys,
+        const keyV &spend_key_y,
         xmr_amount txnFee,
         const crypto::hash &referenceBlock,
         const key &tree_root,
@@ -308,6 +309,7 @@ namespace
         CHECK_AND_ASSERT_THROW_MES(outamounts.size() == destinations.size(), "Different number of amounts/destinations");
         CHECK_AND_ASSERT_THROW_MES(amount_keys.size() == destinations.size(), "Different number of amount_keys/destinations");
         CHECK_AND_ASSERT_THROW_MES(pqc_pk_hashes.size() == inamounts.size(), "Different number of pqc_pk_hashes/inputs");
+        CHECK_AND_ASSERT_THROW_MES(spend_key_y.size() == inamounts.size(), "Different number of spend_key_y/inputs");
         CHECK_AND_ASSERT_THROW_MES(tree_paths.size() == inamounts.size(), "Different number of tree_paths/inputs");
         CHECK_AND_ASSERT_THROW_MES(leaf_chunk_entries.size() == inamounts.size(), "Different number of leaf_chunk_entries/inputs");
 
@@ -400,7 +402,7 @@ namespace
             memcpy(base + 64, inPk[i].mask.bytes, 32);   // C
             memcpy(base + 96, pqc_pk_hashes[i].bytes, 32); // h_pqc
             memcpy(base + 128, inSk[i].dest.bytes, 32);  // spend_key_x
-            memset(base + 160, 0, 32);                   // spend_key_y = 0 (legacy output keys)
+            memcpy(base + 160, spend_key_y[i].bytes, 32); // spend_key_y
             memcpy(base + 192, inSk[i].mask.bytes, 32);  // commitment_mask z
             memcpy(base + 224, pseudo_out_blinds[i].bytes, 32); // pseudo-out blind a_i
 

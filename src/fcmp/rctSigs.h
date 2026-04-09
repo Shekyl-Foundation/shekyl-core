@@ -77,6 +77,7 @@ namespace rct {
     rctSig genRctFcmpPlusPlus(const key &message, const ctkeyV &inSk, const ctkeyV &inPk,
                                const keyV &destinations, const std::vector<xmr_amount> &inamounts,
                                const std::vector<xmr_amount> &outamounts, const keyV &amount_keys,
+                               const keyV &spend_key_y,
                                xmr_amount txnFee, const crypto::hash &referenceBlock,
                                const key &tree_root, uint8_t tree_depth,
                                const std::vector<std::vector<uint8_t>> &tree_paths,

@@ -631,7 +631,10 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
 
             if (oi.is_coin_base) {
                 ts.amount = oi.amount;
-                ts.mask = rct::zero();
+                // zeroCommit(amount) = G + amount*H, so the Pedersen mask
+                // scalar is exactly 1. rct::identity() returns the 32-byte
+                // encoding [01 00 ...] which decodes as scalar 1.
+                ts.mask = rct::identity();
             } else {
                 const transaction &src_tx = *oi.p_tx;
                 crypto::key_derivation derivation;
@@ -1268,6 +1271,7 @@ bool construct_fcmp_tx(
   const size_t num_inputs = tx.vin.size();
 
   rct::ctkeyV inSk(num_inputs), inPk(num_inputs);
+  rct::keyV y_keys(num_inputs);
   std::vector<std::vector<uint8_t>> tree_paths(num_inputs);
   std::vector<std::vector<rct::fcmp_chunk_entry>> leaf_chunk_entries(num_inputs);
   rct::keyV pqc_pk_hashes(num_inputs);
@@ -1324,6 +1328,14 @@ bool construct_fcmp_tx(
         inSk[i].mask = src.mask;
         inPk[i].dest = rct::pk2rct(out_key);
         inPk[i].mask = src.rct ? src.outputs[src.real_output].second.mask : rct::zeroCommit(src.amount);
+        {
+          crypto::key_derivation y_derivation;
+          crypto::generate_key_derivation(src.real_out_tx_key,
+            from.get_keys().m_view_secret_key, y_derivation);
+          crypto::ec_scalar y_sc;
+          crypto::derivation_to_y_scalar(y_derivation, src.real_output_in_tx_index, y_sc);
+          memcpy(y_keys[i].bytes, &y_sc, 32);
+        }
         break;
       }
     }
@@ -1529,6 +1541,7 @@ bool construct_fcmp_tx(
     rct::hash2rct(tx_prefix_hash),
     inSk, inPk,
     destinations_rct, inamounts, outamounts, amount_keys,
+    y_keys,
     fee, reference_block, curve_tree_root, tree_depth,
     tree_paths, leaf_chunk_entries, pqc_pk_hashes,
     hw::get_device("default"));

@@ -97,6 +97,20 @@
 
 ### 🐛 Fixed
 
+- **Critical: SAL `y` / commitment mask `z` conflation in FCMP++ prover.**
+  `wallet2.cpp` passed `td.m_mask` (Pedersen commitment mask) as `spend_key_y`
+  to the FCMP++ prover, but SAL requires `y` such that `O = xG + yT`. Since
+  legacy outputs had `y = 0` and `z != 0`, `OpenedInputTuple::open` always
+  failed. Fixed by migrating to two-component output keys (`O = xG + yT`)
+  where `y = Hs_y(derivation || i)`, and passing `z` as a separate
+  `commitment_mask` field. Affects every spend on the chain — this was the
+  root cause of all FCMP++ proof generation failures.
+
+- **Coinbase commitment mask in test harness.** `fill_tx_sources` in
+  `chaingen.cpp` set `ts.mask = rct::zero()` for coinbase, but
+  `zeroCommit(amount) = G + amount*H` has mask = scalar 1. Fixed to
+  `rct::identity()`.
+
 - **Critical: u64 saturation in `total_weighted_stake` (Bug 7).** The in-memory
   cache and LMDB `staker_accrual_record` used `uint64_t` for the tier-weighted
   stake denominator. With 12-decimal atomic units and tier multipliers > 1.0,
@@ -228,6 +242,17 @@
   `expire_pending_claim_watermarks` after 100 unconfirmed blocks.
 
 ### 🔄 Changed
+
+- **Two-component output keys (`O = xG + yT`).** All output public keys now
+  include a domain-separated `y` component along generator `T`, satisfying the
+  FCMP++ SAL proof's `OpenedInputTuple::open` constraint. Previously, outputs
+  were single-component (`O = xG + 0·T`) and the wallet incorrectly passed
+  the Pedersen commitment mask `z` as the SAL `y`, causing proof generation to
+  fail. The y-scalar uses the `"shekyl_y"` domain separator in `crypto.cpp`.
+  The commitment mask `z` is now passed separately in the 256-byte witness
+  header at offset 192. `transfer_details` stores `m_y` (boost serial v14).
+  Two regression tests in `proof.rs` verify that the old bug (y=mask) fails
+  and the correct path (y=real) succeeds.
 
 - **`MAX_TX_EXTRA_SIZE` (24576 bytes).** The previous Monero-era cap (1060) was
   too small for FCMP++ `tx_extra` payloads (hybrid KEM ciphertexts ~1120 B per
