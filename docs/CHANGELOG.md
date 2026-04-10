@@ -42,6 +42,45 @@
   proof DLEQ requirement, HKDF binding argument for z-omission in reserve
   proofs, and the `enc_amount`-from-chain invariant.
 
+- **Phase 1b FFI exports (PR-wallet).** New exports in `shekyl_ffi.h`:
+  - `shekyl_scan_and_recover`: Merged scan + key image in one call. All
+    secret outputs write directly into `transfer_details` fields (no
+    intermediate scratch buffers). `persist_combined_ss` flag controls
+    whether `combined_ss` is returned or wiped internally (hot vs cold).
+  - `shekyl_compute_output_key_image` / `_from_ho`: Key image computation
+    for the 2 remaining sites (stake claim, tx_source_entry).
+  - `shekyl_sign_fcmp_transaction`: Collapsed signing. C++ passes wallet
+    master spend key `b` + per-input `{combined_ss, output_index, ...}`.
+    Rust derives `x = ho + b` and `y` internally via HKDF. C++ never
+    touches `x`.
+  - `shekyl_derive_proof_secrets`: Helper writing `ho`, `y`, `z`,
+    `k_amount` directly to caller-provided destination addresses.
+  - `shekyl_encrypt_wallet_cache` / `shekyl_decrypt_wallet_cache`: AEAD
+    encryption with AAD binding on `cache_format_version`. Distinct error
+    codes for version mismatch (-1), auth failure (-2), and format error (-3).
+  - 6 proof FFI exports: `shekyl_generate_tx_proof_outbound`,
+    `shekyl_verify_tx_proof_outbound`, `shekyl_generate_tx_proof_inbound`,
+    `shekyl_verify_tx_proof_inbound`, `shekyl_generate_reserve_proof`,
+    `shekyl_verify_reserve_proof`. Signatures stabilized; wiring to
+    `shekyl-proofs` internals deferred to Phase 2e.
+
+- **`shekyl-chacha` AEAD extension.** Added `chacha20poly1305` (v0.10)
+  support: `encrypt_with_aad` and `decrypt_with_aad` wrapping
+  XChaCha20-Poly1305. No hand-rolled AEAD — nonce handling, constant-time
+  tag comparison, and AD framing delegated to audited crate. 6 new tests.
+
+- **`RecoveredOutput` now includes `combined_ss`.** The scan result carries
+  the 64-byte combined shared secret so the merged scan FFI can optionally
+  persist it without re-doing KEM decapsulation. Wiped by `ZeroizeOnDrop`.
+
+- **ML-KEM shared secret `Zeroizing` wrap (W5 fix).** All 4 production
+  sites where `ml_ss.into_bytes()` produces a bare stack-local now wrap
+  the result in `Zeroizing<[u8; 32]>`, ensuring the ML-KEM shared secret
+  bytes are zeroed on scope exit. Closes the W5 correlation leak.
+
+- **Fixed stale `shekyl_construct_output` C header.** Added missing
+  `tx_key_secret` parameter to match the Rust implementation.
+
 - **KEM derivation KAT vectors.** `docs/test_vectors/KEM_DERIVE_V1_KAT.json`
   with 8 pinned vectors for `derive_kem_seed`. Serves as tripwire against
   silent behavior changes from `fips203` or `curve25519-dalek` upgrades.
