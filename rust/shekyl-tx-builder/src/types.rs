@@ -11,7 +11,7 @@ use serde::{Serialize, Deserialize};
 use zeroize::Zeroize;
 
 /// Serde helper: hex-encode/decode `[u8; 32]`.
-mod hex_bytes32 {
+pub mod hex_bytes32 {
     use serde::{self, Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(bytes: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
@@ -95,7 +95,7 @@ mod hex_vec8 {
 
 /// Serde helper: hex-encode/decode `Vec<Vec<[u8; 32]>>` (branch layers).
 #[allow(dead_code)]
-mod hex_layers {
+pub mod hex_layers {
     use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn serialize<S>(layers: &Vec<Vec<[u8; 32]>>, serializer: S) -> Result<S::Ok, S::Error>
@@ -122,7 +122,7 @@ mod hex_layers {
 }
 
 /// Serde helper: hex-encode/decode `Vec<u8>`.
-mod hex_blob {
+pub mod hex_blob {
     use serde::{self, Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(bytes: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>

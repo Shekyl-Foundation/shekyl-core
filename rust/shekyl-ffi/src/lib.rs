@@ -2821,6 +2821,188 @@ fn tx_builder_error_code(e: &shekyl_tx_builder::TxBuilderError) -> i32 {
     }
 }
 
+// ─── Collapsed FCMP++ Signing (PR-wallet Phase 1b) ───────────────────────────
+
+/// Input struct for collapsed signing. C++ passes `combined_ss` + `output_index`
+/// instead of `spend_key_x` / `spend_key_y`. Rust derives those internally.
+#[derive(serde::Deserialize)]
+struct FcmpSignInput {
+    #[serde(with = "shekyl_tx_builder::types::hex_bytes32")]
+    ki: [u8; 32],
+    #[serde(with = "shekyl_tx_builder::types::hex_blob")]
+    combined_ss: Vec<u8>,
+    output_index: u64,
+    #[serde(with = "shekyl_tx_builder::types::hex_bytes32")]
+    hp_of_O: [u8; 32],
+    amount: u64,
+    #[serde(with = "shekyl_tx_builder::types::hex_bytes32")]
+    commitment_mask: [u8; 32],
+    #[serde(with = "shekyl_tx_builder::types::hex_bytes32")]
+    commitment: [u8; 32],
+    #[serde(with = "shekyl_tx_builder::types::hex_bytes32")]
+    output_key: [u8; 32],
+    #[serde(with = "shekyl_tx_builder::types::hex_bytes32")]
+    h_pqc: [u8; 32],
+    leaf_chunk: Vec<shekyl_tx_builder::LeafEntry>,
+    #[serde(with = "shekyl_tx_builder::types::hex_layers")]
+    c1_layers: Vec<Vec<[u8; 32]>>,
+    #[serde(with = "shekyl_tx_builder::types::hex_layers")]
+    c2_layers: Vec<Vec<[u8; 32]>>,
+}
+
+impl Drop for FcmpSignInput {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.combined_ss.zeroize();
+        self.commitment_mask.zeroize();
+    }
+}
+
+/// Collapsed FCMP++ signing: Rust owns all witness assembly.
+///
+/// C++ passes the wallet master spend key `b` (one value) plus per-input data
+/// that includes `combined_ss` + `output_index`. Rust derives `ho` from HKDF,
+/// computes `x = ho + b` and `y` internally, then builds `SpendInput` and
+/// calls `sign_transaction`. C++ never touches `x`.
+///
+/// # Safety
+/// - `spend_secret_ptr`, `tx_prefix_hash_ptr`: 32 bytes each.
+/// - `reference_block_ptr`, `tree_root_ptr`: 32 bytes each.
+/// - JSON pointers: valid for their documented lengths.
+#[no_mangle]
+pub extern "C" fn shekyl_sign_fcmp_transaction(
+    spend_secret_ptr: *const u8,
+    tx_prefix_hash_ptr: *const u8,
+    inputs_json_ptr: *const u8,
+    inputs_json_len: usize,
+    outputs_json_ptr: *const u8,
+    outputs_json_len: usize,
+    fee: u64,
+    reference_block_ptr: *const u8,
+    tree_root_ptr: *const u8,
+    tree_depth: u8,
+) -> ShekylSignResult {
+    if spend_secret_ptr.is_null() || tx_prefix_hash_ptr.is_null()
+        || inputs_json_ptr.is_null() || outputs_json_ptr.is_null()
+        || reference_block_ptr.is_null() || tree_root_ptr.is_null()
+    {
+        return ShekylSignResult::err(-1, "null pointer argument".into());
+    }
+
+    let spend_secret: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(spend_secret_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let tx_prefix_hash: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(tx_prefix_hash_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let reference_block: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(reference_block_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+    let tree_root: [u8; 32] = unsafe {
+        let mut buf = [0u8; 32];
+        std::ptr::copy_nonoverlapping(tree_root_ptr, buf.as_mut_ptr(), 32);
+        buf
+    };
+
+    let Some(inputs_json) = slice_from_ptr(inputs_json_ptr, inputs_json_len) else {
+        return ShekylSignResult::err(-1, "invalid inputs_json pointer".into());
+    };
+    let Some(outputs_json) = slice_from_ptr(outputs_json_ptr, outputs_json_len) else {
+        return ShekylSignResult::err(-1, "invalid outputs_json pointer".into());
+    };
+
+    let collapsed_inputs: Vec<FcmpSignInput> = match serde_json::from_slice(inputs_json) {
+        Ok(v) => v,
+        Err(e) => return ShekylSignResult::err(-2, format!("inputs JSON parse error: {e}")),
+    };
+    let outputs: Vec<shekyl_tx_builder::OutputInfo> = match serde_json::from_slice(outputs_json) {
+        Ok(v) => v,
+        Err(e) => return ShekylSignResult::err(-2, format!("outputs JSON parse error: {e}")),
+    };
+
+    use shekyl_crypto_pq::derivation::derive_output_secrets;
+    use zeroize::Zeroize;
+
+    let b_scalar = match curve25519_scalar_from_bytes(&spend_secret) {
+        Some(s) => s,
+        None => return ShekylSignResult::err(-5, "invalid spend secret key".into()),
+    };
+
+    let mut spend_inputs: Vec<shekyl_tx_builder::SpendInput> = Vec::with_capacity(collapsed_inputs.len());
+    for inp in &collapsed_inputs {
+        if inp.combined_ss.len() != 64 {
+            drop(spend_inputs);
+            return ShekylSignResult::err(-5, format!(
+                "combined_ss must be 64 bytes, got {}",
+                inp.combined_ss.len()
+            ));
+        }
+        let mut ss = [0u8; 64];
+        ss.copy_from_slice(&inp.combined_ss);
+        let secrets = derive_output_secrets(&ss, inp.output_index);
+        ss.zeroize();
+
+        let ho_scalar = match curve25519_scalar_from_bytes(&secrets.ho) {
+            Some(s) => s,
+            None => {
+                drop(spend_inputs);
+                return ShekylSignResult::err(-5, "invalid ho scalar".into());
+            }
+        };
+        let x = ho_scalar + b_scalar;
+        let mut x_bytes = x.to_bytes();
+
+        spend_inputs.push(shekyl_tx_builder::SpendInput {
+            output_key: inp.output_key,
+            commitment: inp.commitment,
+            amount: inp.amount,
+            spend_key_x: x_bytes,
+            spend_key_y: secrets.y,
+            commitment_mask: inp.commitment_mask,
+            h_pqc: inp.hp_of_O,
+            combined_ss: inp.combined_ss.clone(),
+            output_index: inp.output_index,
+            leaf_chunk: inp.leaf_chunk.clone(),
+            c1_layers: inp.c1_layers.clone(),
+            c2_layers: inp.c2_layers.clone(),
+        });
+
+        x_bytes.zeroize();
+    }
+
+    let tree = shekyl_tx_builder::TreeContext {
+        reference_block,
+        tree_root,
+        tree_depth,
+    };
+
+    let result = match shekyl_tx_builder::sign_transaction(tx_prefix_hash, &spend_inputs, &outputs, fee, &tree) {
+        Ok(proofs) => {
+            match serde_json::to_vec(&proofs) {
+                Ok(json) => ShekylSignResult::ok(json),
+                Err(e) => ShekylSignResult::err(-3, format!("result serialization error: {e}")),
+            }
+        }
+        Err(e) => {
+            let code = tx_builder_error_code(&e);
+            ShekylSignResult::err(code, e.to_string())
+        }
+    };
+
+    drop(spend_inputs);
+    result
+}
+
+fn curve25519_scalar_from_bytes(bytes: &[u8; 32]) -> Option<curve25519_dalek::Scalar> {
+    Option::from(curve25519_dalek::Scalar::from_canonical_bytes(*bytes))
+}
+
 // ─── Output Construction / Scanning / PQC Signing ────────────────────────────
 
 /// Build the 256-byte witness header from a typed struct.
@@ -3193,6 +3375,519 @@ pub unsafe extern "C" fn shekyl_pqc_auth_result_free(result: *mut ShekylPqcAuthR
         shekyl_buffer_free(r.signature.ptr, r.signature.len);
         r.signature = ShekylBuffer::null();
     }
+}
+
+// ─── PR-wallet Phase 1b: Merged scan, key image, proofs, cache crypto ────────
+
+/// Merged scan + key image computation.
+///
+/// Scans an output (KEM decap, HKDF derivation, amount decryption) and computes
+/// the key image in a single call. All secret outputs are written directly into
+/// caller-provided destination addresses (transfer_details fields). No
+/// intermediate scratch buffers are created on the C++ stack.
+///
+/// # Safety
+/// - All pointer parameters must be valid for reads/writes of their documented sizes.
+/// - `ho_out`, `y_out`, `z_out`, `k_amount_out`: 32 writable bytes each.
+/// - `key_image_out`: 32 writable bytes.
+/// - `recovered_spend_key_out`: 32 writable bytes.
+/// - `combined_ss_out`: 64 writable bytes if `persist_combined_ss` is true, or nullptr.
+/// - `spend_secret_key`: 32 bytes (wallet master spend key `b`).
+/// - `hp_of_O`: 32 bytes (hash_to_ec of the output key, precomputed by C++).
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_scan_and_recover(
+    x25519_sk: *const u8,
+    ml_kem_dk: *const u8,
+    ml_kem_dk_len: usize,
+    kem_ct_x25519: *const u8,
+    kem_ct_ml_kem: *const u8,
+    kem_ct_ml_kem_len: usize,
+    output_key: *const u8,
+    commitment: *const u8,
+    enc_amount: *const u8,
+    amount_tag_on_chain: u8,
+    view_tag_on_chain: u8,
+    output_index: u64,
+    spend_secret_key: *const u8,
+    hp_of_O: *const u8,
+    persist_combined_ss: bool,
+    ho_out: *mut u8,
+    y_out: *mut u8,
+    z_out: *mut u8,
+    k_amount_out: *mut u8,
+    amount_out: *mut u64,
+    recovered_spend_key_out: *mut u8,
+    key_image_out: *mut u8,
+    combined_ss_out: *mut u8,
+    pqc_pk_out: *mut ShekylBuffer,
+    pqc_sk_out: *mut ShekylBuffer,
+    h_pqc_out: *mut [u8; 32],
+) -> bool {
+    let x_sk = match arr32_from_ptr(x25519_sk) { Some(v) => v, None => return false };
+    let dk = match slice_from_ptr(ml_kem_dk, ml_kem_dk_len) { Some(v) => v, None => return false };
+    let ct_x = match arr32_from_ptr(kem_ct_x25519) { Some(v) => v, None => return false };
+    let ct_ml = match slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) { Some(v) => v, None => return false };
+    let o = match arr32_from_ptr(output_key) { Some(v) => v, None => return false };
+    let c = match arr32_from_ptr(commitment) { Some(v) => v, None => return false };
+    let ea = match slice_from_ptr(enc_amount, 8) {
+        Some(v) => { let mut arr = [0u8; 8]; arr.copy_from_slice(v); arr },
+        None => return false,
+    };
+    let b_key = match arr32_from_ptr(spend_secret_key) { Some(v) => v, None => return false };
+    let hp = match arr32_from_ptr(hp_of_O) { Some(v) => v, None => return false };
+
+    if ho_out.is_null() || y_out.is_null() || z_out.is_null() || k_amount_out.is_null()
+        || amount_out.is_null() || recovered_spend_key_out.is_null()
+        || key_image_out.is_null() || pqc_pk_out.is_null() || pqc_sk_out.is_null()
+        || h_pqc_out.is_null()
+    {
+        return false;
+    }
+    if persist_combined_ss && combined_ss_out.is_null() {
+        return false;
+    }
+
+    use shekyl_crypto_pq::output::{scan_output_recover, compute_output_key_image_from_ho};
+
+    let recovered = match scan_output_recover(
+        &x_sk, dk, &ct_x, ct_ml, &o, &c, &ea,
+        amount_tag_on_chain, view_tag_on_chain, output_index,
+    ) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+
+    std::ptr::copy_nonoverlapping(recovered.ho.as_ptr(), ho_out, 32);
+    std::ptr::copy_nonoverlapping(recovered.y.as_ptr(), y_out, 32);
+    std::ptr::copy_nonoverlapping(recovered.z.as_ptr(), z_out, 32);
+    std::ptr::copy_nonoverlapping(recovered.k_amount.as_ptr(), k_amount_out, 32);
+    *amount_out = recovered.amount;
+    std::ptr::copy_nonoverlapping(recovered.recovered_spend_key.as_ptr(), recovered_spend_key_out, 32);
+    *pqc_pk_out = ShekylBuffer::from_vec(recovered.pqc_public_key.clone());
+    *pqc_sk_out = ShekylBuffer::from_vec(recovered.pqc_secret_key.clone());
+    *h_pqc_out = recovered.h_pqc;
+
+    let ki_result = match compute_output_key_image_from_ho(&recovered.ho, &b_key, &hp) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    std::ptr::copy_nonoverlapping(ki_result.key_image.as_ptr(), key_image_out, 32);
+
+    if persist_combined_ss {
+        std::ptr::copy_nonoverlapping(recovered.combined_ss.as_ptr(), combined_ss_out, 64);
+    }
+    // recovered drops here — ZeroizeOnDrop wipes all secrets including combined_ss
+
+    true
+}
+
+/// Compute key image from persisted `combined_ss` + `output_index`.
+///
+/// Derives `ho` from HKDF, computes `KI = (ho + b) * Hp(O)`.
+/// Used at stake claim (1 site).
+///
+/// # Safety
+/// - `combined_ss`: 64 bytes. `spend_secret_key`, `hp_of_O`, `out_ki`: 32 bytes each.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_compute_output_key_image(
+    combined_ss: *const u8,
+    output_index: u64,
+    spend_secret_key: *const u8,
+    hp_of_O: *const u8,
+    out_ki: *mut u8,
+) -> bool {
+    let ss = match slice_from_ptr(combined_ss, 64) {
+        Some(v) => { let mut arr = [0u8; 64]; arr.copy_from_slice(v); arr },
+        None => return false,
+    };
+    let b = match arr32_from_ptr(spend_secret_key) { Some(v) => v, None => return false };
+    let hp = match arr32_from_ptr(hp_of_O) { Some(v) => v, None => return false };
+    if out_ki.is_null() { return false; }
+
+    match shekyl_crypto_pq::output::compute_output_key_image(&ss, output_index, &b, &hp) {
+        Ok(result) => {
+            std::ptr::copy_nonoverlapping(result.key_image.as_ptr(), out_ki, 32);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Compute key image from pre-derived `ho` scalar.
+///
+/// Computes `KI = (ho + b) * Hp(O)`.
+/// Used at `tx_source_entry` boundary (1 site).
+///
+/// # Safety
+/// - `ho`, `spend_secret_key`, `hp_of_O`, `out_ki`: 32 bytes each.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_compute_output_key_image_from_ho(
+    ho: *const u8,
+    spend_secret_key: *const u8,
+    hp_of_O: *const u8,
+    out_ki: *mut u8,
+) -> bool {
+    let ho_arr = match arr32_from_ptr(ho) { Some(v) => v, None => return false };
+    let b = match arr32_from_ptr(spend_secret_key) { Some(v) => v, None => return false };
+    let hp = match arr32_from_ptr(hp_of_O) { Some(v) => v, None => return false };
+    if out_ki.is_null() { return false; }
+
+    match shekyl_crypto_pq::output::compute_output_key_image_from_ho(&ho_arr, &b, &hp) {
+        Ok(result) => {
+            std::ptr::copy_nonoverlapping(result.key_image.as_ptr(), out_ki, 32);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Derive the ProofSecrets projection from `combined_ss`.
+///
+/// Writes `ho`, `y`, `z`, `k_amount` directly to caller-provided destination
+/// addresses (no scratch buffers).
+///
+/// # Safety
+/// - `combined_ss`: 64 bytes.
+/// - `out_ho`, `out_y`, `out_z`, `out_k_amount`: 32 writable bytes each.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_derive_proof_secrets(
+    combined_ss: *const u8,
+    output_index: u64,
+    out_ho: *mut u8,
+    out_y: *mut u8,
+    out_z: *mut u8,
+    out_k_amount: *mut u8,
+) -> bool {
+    let ss = match slice_from_ptr(combined_ss, 64) {
+        Some(v) => { let mut arr = [0u8; 64]; arr.copy_from_slice(v); arr },
+        None => return false,
+    };
+    if out_ho.is_null() || out_y.is_null() || out_z.is_null() || out_k_amount.is_null() {
+        return false;
+    }
+
+    let secrets = shekyl_crypto_pq::output::derive_proof_secrets(&ss, output_index);
+    std::ptr::copy_nonoverlapping(secrets.ho.as_ptr(), out_ho, 32);
+    std::ptr::copy_nonoverlapping(secrets.y.as_ptr(), out_y, 32);
+    std::ptr::copy_nonoverlapping(secrets.z.as_ptr(), out_z, 32);
+    std::ptr::copy_nonoverlapping(secrets.k_amount.as_ptr(), out_k_amount, 32);
+    true
+}
+
+// ─── Wallet cache AEAD encryption ────────────────────────────────────────────
+
+/// Encrypt wallet cache plaintext with XChaCha20-Poly1305 AEAD.
+///
+/// `cache_format_version` is bound into the Poly1305 AAD. Version changes
+/// invalidate existing ciphertext. The output format is:
+/// `[version_byte][nonce(24)][ciphertext][tag(16)]`.
+///
+/// # Safety
+/// - `plaintext`: `plaintext_len` readable bytes.
+/// - `password_derived_key`: 32 bytes.
+/// - `out_buf`: pointer to writable `ShekylBuffer`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_encrypt_wallet_cache(
+    plaintext: *const u8,
+    plaintext_len: usize,
+    cache_format_version: u8,
+    password_derived_key: *const u8,
+    out_buf: *mut ShekylBuffer,
+) -> bool {
+    let pt = match slice_from_ptr(plaintext, plaintext_len) { Some(v) => v, None => return false };
+    let key = match arr32_from_ptr(password_derived_key) { Some(v) => v, None => return false };
+    if out_buf.is_null() { return false; }
+
+    let aad = [cache_format_version];
+    let encrypted = shekyl_chacha::encrypt_with_aad(&key, &aad, pt);
+
+    let mut output = Vec::with_capacity(1 + encrypted.len());
+    output.push(cache_format_version);
+    output.extend_from_slice(&encrypted);
+
+    *out_buf = ShekylBuffer::from_vec(output);
+    true
+}
+
+/// Decrypt wallet cache ciphertext with XChaCha20-Poly1305 AEAD.
+///
+/// Returns 0 on success, negative on error:
+///   -1: version mismatch (first byte != expected_version)
+///   -2: authentication failure (AAD/tag mismatch)
+///   -3: invalid format (too short)
+///   -4: null pointer argument
+///
+/// # Safety
+/// - `ciphertext`: `ciphertext_len` readable bytes.
+/// - `password_derived_key`: 32 bytes.
+/// - `out_buf`: pointer to writable `ShekylBuffer`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_decrypt_wallet_cache(
+    ciphertext: *const u8,
+    ciphertext_len: usize,
+    expected_version: u8,
+    password_derived_key: *const u8,
+    out_buf: *mut ShekylBuffer,
+) -> i32 {
+    if ciphertext.is_null() || password_derived_key.is_null() || out_buf.is_null() {
+        return -4;
+    }
+    let ct = match slice_from_ptr(ciphertext, ciphertext_len) { Some(v) => v, None => return -4 };
+    let key = match arr32_from_ptr(password_derived_key) { Some(v) => v, None => return -4 };
+
+    if ct.is_empty() {
+        return -3;
+    }
+
+    let on_disk_version = ct[0];
+    if on_disk_version != expected_version {
+        return -1;
+    }
+
+    let aead_data = &ct[1..];
+    let aad = [on_disk_version];
+
+    match shekyl_chacha::decrypt_with_aad(&key, &aad, aead_data) {
+        Ok(plaintext) => {
+            *out_buf = ShekylBuffer::from_vec(plaintext);
+            0
+        }
+        Err(_) => -2,
+    }
+}
+
+// ─── Wallet proof FFI exports ────────────────────────────────────────────────
+
+// NOTE: The proof generate/verify functions below are stubs that delegate to
+// the shekyl-proofs crate. The actual cryptographic logic lives in
+// shekyl-proofs::{tx_proof, reserve_proof, dleq}. These FFI wrappers handle
+// pointer validation, buffer marshalling, and ShekylBuffer lifecycle.
+//
+// Full implementations require wiring up the on-chain data structures
+// (KEM ciphertexts, output keys, commitments, etc.) which depend on the
+// C++ wallet2 types. The FFI signatures are stabilized here so the C++
+// header is complete and Phase 2 can wire callers immediately.
+
+/// Generate outbound transaction proof.
+///
+/// # Safety
+/// - All pointer parameters must be valid for reads of their documented sizes.
+/// - `proof_out`: writable `ShekylBuffer` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_generate_tx_proof_outbound(
+    tx_key_secret: *const u8,
+    txid: *const u8,
+    recipient_address: *const u8,
+    recipient_address_len: usize,
+    message: *const u8,
+    message_len: usize,
+    kem_cts_x25519: *const u8,
+    kem_cts_ml_kem: *const u8,
+    kem_cts_ml_kem_len: usize,
+    output_keys: *const u8,
+    commitments: *const u8,
+    enc_amounts: *const u8,
+    amount_tags: *const u8,
+    output_count: u32,
+    proof_out: *mut ShekylBuffer,
+) -> bool {
+    let _tx_key = match arr32_from_ptr(tx_key_secret) { Some(v) => v, None => return false };
+    let _txid = match arr32_from_ptr(txid) { Some(v) => v, None => return false };
+    let _addr = match slice_from_ptr(recipient_address, recipient_address_len) { Some(v) => v, None => return false };
+    let _msg = match slice_from_ptr(message, message_len) { Some(v) => v, None => return false };
+    let _cts_x = match slice_from_ptr(kem_cts_x25519, output_count as usize * 32) { Some(v) => v, None => return false };
+    let _cts_ml = match slice_from_ptr(kem_cts_ml_kem, kem_cts_ml_kem_len) { Some(v) => v, None => return false };
+    let _okeys = match slice_from_ptr(output_keys, output_count as usize * 32) { Some(v) => v, None => return false };
+    let _comms = match slice_from_ptr(commitments, output_count as usize * 32) { Some(v) => v, None => return false };
+    let _eamts = match slice_from_ptr(enc_amounts, output_count as usize * 8) { Some(v) => v, None => return false };
+    let _tags = match slice_from_ptr(amount_tags, output_count as usize) { Some(v) => v, None => return false };
+    if proof_out.is_null() || output_count == 0 { return false; }
+
+    // TODO(Phase 2e): Wire to shekyl_proofs::tx_proof::generate_outbound_proof
+    // once the on-chain data adapter is implemented. The proof generation
+    // requires re-encapsulating the KEM with tx_key_secret, which needs the
+    // recipient's ML-KEM EK (not available in this parameter set — needs
+    // extraction from tx_extra or separate parameter). This will be finalized
+    // when the C++ proof shims are collapsed in Phase 2e.
+    false
+}
+
+/// Verify outbound transaction proof.
+///
+/// On success, writes the verified per-output amounts to `amounts_out`
+/// (output_count * u64).
+///
+/// # Safety
+/// - All pointer parameters must be valid for reads of their documented sizes.
+/// - `amounts_out`: writable buffer of `output_count` u64 values.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_verify_tx_proof_outbound(
+    proof_bytes: *const u8,
+    proof_len: usize,
+    txid: *const u8,
+    recipient_address: *const u8,
+    recipient_address_len: usize,
+    message: *const u8,
+    message_len: usize,
+    kem_cts_x25519: *const u8,
+    kem_cts_ml_kem: *const u8,
+    kem_cts_ml_kem_len: usize,
+    output_keys: *const u8,
+    commitments: *const u8,
+    enc_amounts: *const u8,
+    amount_tags: *const u8,
+    output_count: u32,
+    amounts_out: *mut u64,
+) -> bool {
+    let _proof = match slice_from_ptr(proof_bytes, proof_len) { Some(v) => v, None => return false };
+    let _txid = match arr32_from_ptr(txid) { Some(v) => v, None => return false };
+    let _addr = match slice_from_ptr(recipient_address, recipient_address_len) { Some(v) => v, None => return false };
+    let _msg = match slice_from_ptr(message, message_len) { Some(v) => v, None => return false };
+    if amounts_out.is_null() || output_count == 0 { return false; }
+
+    // TODO(Phase 2e): Wire to shekyl_proofs::tx_proof::verify_outbound_proof
+    false
+}
+
+/// Generate inbound transaction proof.
+///
+/// # Safety
+/// - All pointer parameters must be valid for reads of their documented sizes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_generate_tx_proof_inbound(
+    view_secret_key: *const u8,
+    ml_kem_dk: *const u8,
+    ml_kem_dk_len: usize,
+    txid: *const u8,
+    sender_address: *const u8,
+    sender_address_len: usize,
+    message: *const u8,
+    message_len: usize,
+    kem_cts_x25519: *const u8,
+    kem_cts_ml_kem: *const u8,
+    kem_cts_ml_kem_len: usize,
+    output_keys: *const u8,
+    commitments: *const u8,
+    enc_amounts: *const u8,
+    amount_tags: *const u8,
+    output_count: u32,
+    proof_out: *mut ShekylBuffer,
+) -> bool {
+    let _vsk = match arr32_from_ptr(view_secret_key) { Some(v) => v, None => return false };
+    let _dk = match slice_from_ptr(ml_kem_dk, ml_kem_dk_len) { Some(v) => v, None => return false };
+    let _txid = match arr32_from_ptr(txid) { Some(v) => v, None => return false };
+    let _addr = match slice_from_ptr(sender_address, sender_address_len) { Some(v) => v, None => return false };
+    let _msg = match slice_from_ptr(message, message_len) { Some(v) => v, None => return false };
+    if proof_out.is_null() || output_count == 0 { return false; }
+
+    // TODO(Phase 2e): Wire to shekyl_proofs::tx_proof::generate_inbound_proof
+    false
+}
+
+/// Verify inbound transaction proof.
+///
+/// # Safety
+/// - All pointer parameters must be valid for reads of their documented sizes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_verify_tx_proof_inbound(
+    proof_bytes: *const u8,
+    proof_len: usize,
+    view_public_key: *const u8,
+    txid: *const u8,
+    sender_address: *const u8,
+    sender_address_len: usize,
+    message: *const u8,
+    message_len: usize,
+    kem_cts_x25519: *const u8,
+    kem_cts_ml_kem: *const u8,
+    kem_cts_ml_kem_len: usize,
+    output_keys: *const u8,
+    commitments: *const u8,
+    enc_amounts: *const u8,
+    amount_tags: *const u8,
+    output_count: u32,
+    amounts_out: *mut u64,
+) -> bool {
+    let _proof = match slice_from_ptr(proof_bytes, proof_len) { Some(v) => v, None => return false };
+    let _vpk = match arr32_from_ptr(view_public_key) { Some(v) => v, None => return false };
+    let _txid = match arr32_from_ptr(txid) { Some(v) => v, None => return false };
+    let _addr = match slice_from_ptr(sender_address, sender_address_len) { Some(v) => v, None => return false };
+    let _msg = match slice_from_ptr(message, message_len) { Some(v) => v, None => return false };
+    if amounts_out.is_null() || output_count == 0 { return false; }
+
+    // TODO(Phase 2e): Wire to shekyl_proofs::tx_proof::verify_inbound_proof
+    false
+}
+
+/// Generate reserve proof.
+///
+/// # Safety
+/// - `spend_secret_key`: 32 bytes.
+/// - `combined_ss_array`: `output_count * 64` bytes.
+/// - `output_indices`: `output_count` u64 values.
+/// - `output_keys`: `output_count * 32` bytes.
+/// - `hp_of_O_array`: `output_count * 32` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_generate_reserve_proof(
+    spend_secret_key: *const u8,
+    message: *const u8,
+    message_len: usize,
+    combined_ss_array: *const u8,
+    output_indices: *const u64,
+    output_keys: *const u8,
+    hp_of_O_array: *const u8,
+    output_count: u32,
+    proof_out: *mut ShekylBuffer,
+) -> bool {
+    let _bsk = match arr32_from_ptr(spend_secret_key) { Some(v) => v, None => return false };
+    let _msg = match slice_from_ptr(message, message_len) { Some(v) => v, None => return false };
+    let _css = match slice_from_ptr(combined_ss_array, output_count as usize * 64) { Some(v) => v, None => return false };
+    let _okeys = match slice_from_ptr(output_keys, output_count as usize * 32) { Some(v) => v, None => return false };
+    let _hps = match slice_from_ptr(hp_of_O_array, output_count as usize * 32) { Some(v) => v, None => return false };
+    if proof_out.is_null() || output_count == 0 || output_indices.is_null() { return false; }
+
+    // TODO(Phase 2e): Wire to shekyl_proofs::reserve_proof::generate_reserve_proof
+    false
+}
+
+/// Verify reserve proof.
+///
+/// `enc_amounts` MUST be fetched from the blockchain, NOT from the proof.
+/// The verifier reads per-output encrypted amounts from on-chain data to
+/// prevent amount inflation attacks (see FCMP_PLUS_PLUS.md §21).
+///
+/// On success, writes total verified amount to `total_amount_out`.
+///
+/// # Safety
+/// - `spend_public_key`: 32 bytes.
+/// - `output_keys`, `commitments`: `output_count * 32` bytes each.
+/// - `enc_amounts`: `output_count * 8` bytes (from blockchain).
+/// - `hp_of_O_array`: `output_count * 32` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_verify_reserve_proof(
+    proof_bytes: *const u8,
+    proof_len: usize,
+    spend_public_key: *const u8,
+    message: *const u8,
+    message_len: usize,
+    output_keys: *const u8,
+    commitments: *const u8,
+    enc_amounts: *const u8,
+    hp_of_O_array: *const u8,
+    output_count: u32,
+    total_amount_out: *mut u64,
+) -> bool {
+    let _proof = match slice_from_ptr(proof_bytes, proof_len) { Some(v) => v, None => return false };
+    let _spk = match arr32_from_ptr(spend_public_key) { Some(v) => v, None => return false };
+    let _msg = match slice_from_ptr(message, message_len) { Some(v) => v, None => return false };
+    let _okeys = match slice_from_ptr(output_keys, output_count as usize * 32) { Some(v) => v, None => return false };
+    let _comms = match slice_from_ptr(commitments, output_count as usize * 32) { Some(v) => v, None => return false };
+    let _eamts = match slice_from_ptr(enc_amounts, output_count as usize * 8) { Some(v) => v, None => return false };
+    let _hps = match slice_from_ptr(hp_of_O_array, output_count as usize * 32) { Some(v) => v, None => return false };
+    if total_amount_out.is_null() || output_count == 0 { return false; }
+
+    // TODO(Phase 2e): Wire to shekyl_proofs::reserve_proof::verify_reserve_proof
+    false
 }
 
 fn arr32_from_ptr(ptr: *const u8) -> Option<[u8; 32]> {

@@ -35,7 +35,7 @@ use curve25519_dalek::{
 };
 use fips203::{ml_kem_768, traits::{Encaps, Decaps, SerDes}};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use shekyl_generators::{H, T};
 
@@ -198,11 +198,11 @@ pub fn construct_output(
         .expect("per_output_seed is 64 bytes");
     let (ml_ss, ml_ct) = ek.encaps_from_seed(&ml_kem_encaps_seed);
 
-    let ml_ss_bytes = ml_ss.into_bytes();
+    let ml_ss_bytes = Zeroizing::new(ml_ss.into_bytes());
     let ml_ct_bytes = ml_ct.into_bytes();
 
     let combined_ss: SharedSecret =
-        combine_shared_secrets(x25519_raw_ss.as_bytes(), &ml_ss_bytes)?;
+        combine_shared_secrets(x25519_raw_ss.as_bytes(), &*ml_ss_bytes)?;
 
     // --- View tag (X25519-only, pre-filter) ---
 
@@ -321,10 +321,10 @@ pub fn scan_output(
     let ml_ss = dk
         .try_decaps(&ct)
         .map_err(|e| CryptoError::DecapsulationFailed(format!("ML-KEM-768 decaps: {e}")))?;
-    let ml_ss_bytes = ml_ss.into_bytes();
+    let ml_ss_bytes = Zeroizing::new(ml_ss.into_bytes());
 
     let combined_ss: SharedSecret =
-        combine_shared_secrets(x25519_raw_ss.as_bytes(), &ml_ss_bytes)?;
+        combine_shared_secrets(x25519_raw_ss.as_bytes(), &*ml_ss_bytes)?;
 
     // --- Output secrets derivation ---
 
@@ -405,6 +405,7 @@ pub struct RecoveredOutput {
     pub amount: u64,
     pub amount_tag: u8,
     pub recovered_spend_key: [u8; 32],
+    pub combined_ss: [u8; 64],
     pub pqc_public_key: Vec<u8>,
     pub pqc_secret_key: Vec<u8>,
     pub h_pqc: [u8; 32],
@@ -417,6 +418,7 @@ impl Zeroize for RecoveredOutput {
         self.y.zeroize();
         self.z.zeroize();
         self.k_amount.zeroize();
+        self.combined_ss.zeroize();
         self.pqc_secret_key.zeroize();
     }
 }
@@ -487,10 +489,10 @@ pub fn scan_output_recover(
     let ml_ss = dk
         .try_decaps(&ct)
         .map_err(|e| CryptoError::DecapsulationFailed(format!("ML-KEM-768 decaps: {e}")))?;
-    let ml_ss_bytes = ml_ss.into_bytes();
+    let ml_ss_bytes = Zeroizing::new(ml_ss.into_bytes());
 
     let combined_ss: SharedSecret =
-        combine_shared_secrets(x25519_raw_ss.as_bytes(), &ml_ss_bytes)?;
+        combine_shared_secrets(x25519_raw_ss.as_bytes(), &*ml_ss_bytes)?;
 
     // --- Output secrets derivation ---
     let secrets: OutputSecrets = derive_output_secrets(&combined_ss.0, output_index);
@@ -545,6 +547,7 @@ pub fn scan_output_recover(
         amount,
         amount_tag: secrets.amount_tag,
         recovered_spend_key,
+        combined_ss: combined_ss.0,
         pqc_public_key: pqc_pk,
         pqc_secret_key: pqc_sk,
         h_pqc,
@@ -702,11 +705,11 @@ pub fn rederive_combined_ss(
         .expect("per_output_seed is 64 bytes");
     let (ml_ss, ml_ct) = ek.encaps_from_seed(&ml_kem_encaps_seed);
 
-    let ml_ss_bytes = ml_ss.into_bytes();
+    let ml_ss_bytes = Zeroizing::new(ml_ss.into_bytes());
     let ml_ct_bytes = ml_ct.into_bytes();
 
     let combined_ss: SharedSecret =
-        combine_shared_secrets(x25519_raw_ss.as_bytes(), &ml_ss_bytes)?;
+        combine_shared_secrets(x25519_raw_ss.as_bytes(), &*ml_ss_bytes)?;
 
     Ok((combined_ss, x_eph_pub.to_bytes(), ml_ct_bytes.to_vec()))
 }

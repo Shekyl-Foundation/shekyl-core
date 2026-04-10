@@ -41,7 +41,7 @@
 #![deny(unsafe_code)]
 
 mod error;
-mod types;
+pub mod types;
 mod validate;
 mod sign;
 mod ecdh;

@@ -25,8 +25,11 @@ shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-consensus = { path = "../shekyl-consensus" }
 shekyl-economics = { path = "../shekyl-economics" }
 shekyl-staking = { path = "../shekyl-staking" }
+shekyl-proofs = { path = "../shekyl-proofs" }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+curve25519-dalek = "4"
 rcgen = "0.14"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zeroize = "1"
 libc = "0.2"
