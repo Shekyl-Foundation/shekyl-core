@@ -52,6 +52,17 @@
   pre-filter behavior on adversarial match grinding, and the wallet cache
   version gate requirement for PR-wallet.
 
+- **Tightened malformed KEM ciphertext framing.** Reframed `amount_tag` as
+  a ~99.6% cheap pre-filter (performance optimization), not a security gate.
+  Commitment algebraic check `C == z*G + amount*H` is the soundness barrier.
+  Documented structural independence of the two algebraic checks (different
+  HKDF labels, different scalar families).
+
+- **Wallet cache version gate hardened.** Added mandatory AAD binding
+  (include `cache_format_version` in XChaCha20-Poly1305 AAD to prevent
+  version-confusion attacks) and hard no-migration policy (delete and resync
+  from seed, never in-place migration).
+
 ### 🔄 Changed
 
 - **`enc_amounts` field comment updated in `rctTypes.h`.** Clarifies that

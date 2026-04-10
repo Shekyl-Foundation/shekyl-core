@@ -319,14 +319,27 @@ the KEM shared secret to decrypt the output.
 - **Structurally valid but corrupted** (correct length, wrong content): ML-KEM-768 uses
   **implicit rejection** per FIPS 203 — `try_decaps` returns a pseudorandom shared secret
   (constant-time, no timing leak) rather than an error. This wrong SS propagates through
-  HKDF and produces incorrect output secrets. Downstream checks catch the mismatch:
-  - `amount_tag` verification: probabilistic 255/256 rejection (1 byte HKDF-derived AAD)
-  - `commitment` algebraic check: `C == z*G + amount*H` (infeasible to bypass)
-  - `output_key` algebraic check (`scan_output` only): `O == ho*G + B + y*T`
+  HKDF and produces incorrect output secrets. Two downstream checks catch the mismatch:
+  - `amount_tag` verification rejects ~99.6% (255/256) of corruptions cheaply before any
+    point arithmetic. This is a **fast pre-filter**, not the soundness barrier.
+  - `commitment` algebraic check `C == z*G + amount*H` is the **actual soundness barrier**.
+    The wrong HKDF output produces a wrong `z` scalar and wrong `k_amount`. For the check
+    to pass, the corrupted KEM ciphertext would need to produce a `combined_ss` that, after
+    HKDF, yields the exact `(z, k_amount)` pair that satisfies the Pedersen commitment
+    equation for the on-chain `C` — computationally infeasible.
+  - `output_key` algebraic check `O == ho*G + B + y*T` (`scan_output` only) provides an
+    independent second barrier using different HKDF-derived scalars (`ho`, `y`).
+
+The 1-in-256 `amount_tag` pass-through is harmless: the commitment check closes it
+unconditionally. An auditor should treat `amount_tag` as a performance optimization (avoids
+two point multiplications on 255/256 of corruptions), not as a security gate.
 
 No panics, no timing leaks, always returns `Err(CryptoError::...)`. Fuzz coverage:
-`fuzz_scan_malformed_ct` exercises corrupted, truncated, and random ciphertexts through the
-full scan path with a valid wallet KEM secret.
+`fuzz_scan_malformed_ct` exercises corrupted, truncated, and random ML-KEM ciphertexts
+through the full scan path with a valid wallet KEM secret. Tests 1 and 4 preserve the
+X25519 ephemeral key (ensuring the view-tag pre-filter matches) so the fuzzer reaches the
+ML-KEM decapsulation and downstream algebraic checks. Test 3 corrupts the X25519 key to
+separately exercise the view-tag rejection path.
 
 #### View-Tag Pre-Filter
 
@@ -346,16 +359,45 @@ Each successful tag match triggers the complete verification chain including two
 algebraic checks. The view tag reveals no information beyond what the attacker already has
 (the X25519 ephemeral key is on-chain).
 
+**Independence of algebraic checks**: The two verification equations use different HKDF
+labels and different scalar families:
+
+- **Output key check**: `O == ho*G + B + y*T` uses `ho` (label `shekyl-pqc-output`) and
+  `y` (label `shekyl-output-y`).
+- **Commitment check**: `C == z*G + amount*H` uses `z` (label `shekyl-output-mask`) and
+  `k_amount` (label `shekyl-output-amount-key`) for amount recovery.
+
+An attacker who induced a collision on one set of HKDF labels (already computationally
+infeasible against SHA-512) would gain zero advantage against the other check — the labels
+produce independent pseudorandom outputs. This is not "two checks of the same thing" but
+two structurally independent verification gates derived from disjoint key material.
+
 #### Wallet Cache Version Gate (PR-wallet Requirement)
 
 The wallet cache envelope (`cache_file_data`) currently has no pre-decryption version field.
 When PR-wallet bumps the serialization version for two-component key support, old-format
 wallets will decrypt successfully (same key derivation) but fail during deserialization with
-a generic error. **PR-wallet must add a plaintext `cache_format_version` to the
-`cache_file_data` envelope**, checked before XChaCha20 decryption, to produce a clear error:
-"Wallet cache format too old — delete cache and resync from seed." Without this gate, users
-will receive confusing "decryption failed" or "failed to deserialize" errors when the actual
-problem is a format mismatch.
+a generic error.
+
+**PR-wallet must add a plaintext `cache_format_version` to the `cache_file_data` envelope**,
+checked before XChaCha20 decryption, to produce a clear error: "Wallet cache format too
+old — delete cache and resync from seed."
+
+**AAD binding (mandatory)**: The `cache_format_version` field is an unauthenticated plaintext
+input. To prevent version-confusion attacks (an attacker flips the version byte on disk to
+trigger a different decode path that happens to parse), the version byte MUST be included in
+the XChaCha20-Poly1305 AAD (Additional Authenticated Data). On load, verify the version
+before decryption, then include it in the AAD during decryption — if an attacker tampers
+with the version, Poly1305 authentication fails. This is cheap to implement and prevents an
+entire class of envelope manipulation bugs.
+
+**Hard policy — no migration, resync only**: When the cache format version is too old, the
+wallet refuses to load and instructs the user to delete the cache and resync from seed.
+**There is no in-place migration path.** Migration code is a permanent attack surface for a
+one-time problem. Since Shekyl starts at v3-from-genesis with no legacy user base carrying
+forward years of wallet state, resync-from-seed is always correct and safe. PR-wallet must
+not introduce migration logic. If a future hard fork requires a cache format bump, the same
+delete-and-resync policy applies.
 
 ## Address Format
 
