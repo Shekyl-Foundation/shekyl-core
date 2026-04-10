@@ -1424,6 +1424,7 @@ bool construct_fcmp_tx(
 
   crypto::secret_key tx_key;
   std::vector<crypto::secret_key> additional_tx_keys;
+  rct::keyV v3_commitment_masks;
   std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
   subaddresses[from.get_keys().m_account_address.m_spend_public_key] = {0, 0};
   std::vector<tx_destination_entry> dests_copy = destinations;
@@ -1431,7 +1432,7 @@ bool construct_fcmp_tx(
   bool r = construct_tx_and_get_tx_key(
     from.get_keys(), subaddresses, sources, dests_copy,
     from.get_keys().m_account_address, std::vector<uint8_t>(),
-    tx, tx_key, additional_tx_keys, true, true, 1);
+    tx, tx_key, additional_tx_keys, true, true, 1, &v3_commitment_masks);
   CHECK_AND_ASSERT_MES(r, false, "construct_fcmp_tx: construct_tx_and_get_tx_key failed");
 
   // FCMP++ consensus requires y-normalized key images (sign bit of byte 31 cleared).
@@ -1452,16 +1453,17 @@ bool construct_fcmp_tx(
   std::vector<std::vector<uint8_t>> tree_paths(num_inputs);
   std::vector<std::vector<rct::fcmp_chunk_entry>> leaf_chunk_entries(num_inputs);
   rct::keyV pqc_pk_hashes(num_inputs);
-  std::vector<std::vector<uint8_t>> derived_pqc_public_keys(num_inputs);
-  std::vector<std::vector<uint8_t>> derived_pqc_secret_keys(num_inputs);
+
+  // Per-input combined_ss (64 bytes) + output_index for shekyl_sign_pqc_auth.
+  // ML-DSA secret key never leaves Rust — signing uses the high-level FFI.
+  struct pqc_sign_input { uint8_t combined_ss[64]; uint64_t output_index; };
+  std::vector<pqc_sign_input> pqc_sign_data(num_inputs);
 
   std::vector<const tx_source_entry*> matched_sources(num_inputs, nullptr);
 
-  auto wipe_keys = epee::misc_utils::create_scope_leave_handler([&derived_pqc_secret_keys]() {
-    for (auto& sk : derived_pqc_secret_keys) {
-      if (!sk.empty()) memwipe(sk.data(), sk.size());
-      sk.clear();
-    }
+  auto wipe_keys = epee::misc_utils::create_scope_leave_handler([&pqc_sign_data]() {
+    for (auto& sd : pqc_sign_data)
+      memwipe(sd.combined_ss, sizeof(sd.combined_ss));
   });
 
   crypto::hash reference_block{};
@@ -1582,14 +1584,22 @@ bool construct_fcmp_tx(
     LOG_PRINT_L1("construct_fcmp_tx: vin " << i << " recovered amount=" << recovered_amount
       << " output_in_tx=" << output_in_tx);
 
-    // Store PQC keys (used for signing later)
     CHECK_AND_ASSERT_MES(pqc_pk_buf.ptr && pqc_sk_buf.ptr, false,
       "construct_fcmp_tx: scan_output_recover returned null PQC buffers for vin " << i);
-    derived_pqc_public_keys[i].assign(pqc_pk_buf.ptr, pqc_pk_buf.ptr + pqc_pk_buf.len);
-    derived_pqc_secret_keys[i].assign(pqc_sk_buf.ptr, pqc_sk_buf.ptr + pqc_sk_buf.len);
     memcpy(pqc_pk_hashes[i].bytes, h_pqc_buf, 32);
     shekyl_buffer_free(pqc_pk_buf.ptr, pqc_pk_buf.len);
     shekyl_buffer_free(pqc_sk_buf.ptr, pqc_sk_buf.len);
+
+    // Derive combined_ss for PQC signing via shekyl_sign_pqc_auth later.
+    // ML-DSA secret key stays inside Rust — never materialized in C++.
+    bool decap_ok = shekyl_kem_decapsulate(
+        sender_keys.m_pqc_secret_key.data(),
+        sender_keys.m_pqc_secret_key.data() + X25519_SK_BYTES,
+        sender_keys.m_pqc_secret_key.size() - X25519_SK_BYTES,
+        ct_ptr, ct_ptr + X25519_CT_BYTES, ML_KEM_CT_BYTES,
+        pqc_sign_data[i].combined_ss);
+    CHECK_AND_ASSERT_MES(decap_ok, false, "construct_fcmp_tx: KEM decapsulate failed for vin " << i);
+    pqc_sign_data[i].output_index = static_cast<uint64_t>(output_in_tx);
 
     // Compute HKDF-correct dest key: ho + b_spend
     crypto::secret_key ho_key;
@@ -1686,15 +1696,9 @@ bool construct_fcmp_tx(
   for (size_t i = 0; i < dests_copy.size(); ++i)
     outamounts.push_back(dests_copy[i].amount);
 
-  rct::keyV amount_keys(destinations_rct.size());
-  for (size_t i = 0; i < destinations_rct.size(); ++i)
-  {
-    crypto::key_derivation derivation;
-    crypto::generate_key_derivation(dests_copy[i].addr.m_view_public_key, tx_key, derivation);
-    crypto::secret_key scalar;
-    crypto::derivation_to_scalar(derivation, i, scalar);
-    amount_keys[i] = rct::sk2rct(scalar);
-  }
+  CHECK_AND_ASSERT_MES(v3_commitment_masks.size() == destinations_rct.size(), false,
+    "construct_fcmp_tx: v3_commitment_masks size mismatch — construction did not produce HKDF masks");
+  auto saved_enc_amounts = tx.rct_signatures.enc_amounts;
 
   {
     uint64_t sum_in = 0, sum_out = 0;
@@ -1714,21 +1718,23 @@ bool construct_fcmp_tx(
   rct::rctSig rv = rct::genRctFcmpPlusPlus(
     rct::hash2rct(tx_prefix_hash),
     inSk, inPk,
-    destinations_rct, inamounts, outamounts, amount_keys,
+    destinations_rct, inamounts, outamounts,
+    v3_commitment_masks, saved_enc_amounts,
     y_keys,
     fee, reference_block, curve_tree_root, tree_depth,
     tree_paths, leaf_chunk_entries, pqc_pk_hashes,
     hw::get_device("default"));
   tx.rct_signatures = rv;
+  for (auto& m : v3_commitment_masks) memwipe(m.bytes, 32);
 
-  // Phase C: PQC auth signing
+  // Phase C: PQC auth signing via shekyl_sign_pqc_auth (ML-DSA secret key
+  // is derived, used, and wiped entirely inside Rust — never in C++).
   tx.pqc_auths.resize(num_inputs);
   for (size_t i = 0; i < num_inputs; ++i)
   {
     tx.pqc_auths[i].auth_version = 1;
     tx.pqc_auths[i].scheme_id = 1;
     tx.pqc_auths[i].flags = 0;
-    tx.pqc_auths[i].hybrid_public_key = derived_pqc_public_keys[i];
 
     std::string payload_blob;
     CHECK_AND_ASSERT_MES(get_transaction_signed_payload(tx, i, payload_blob), false,
@@ -1736,15 +1742,17 @@ bool construct_fcmp_tx(
     crypto::hash payload_hash;
     get_blob_hash(payload_blob, payload_hash);
 
-    ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
-      reinterpret_cast<const uint8_t*>(derived_pqc_secret_keys[i].data()),
-      derived_pqc_secret_keys[i].size(),
+    ShekylPqcAuthResult auth = shekyl_sign_pqc_auth(
+      pqc_sign_data[i].combined_ss, pqc_sign_data[i].output_index,
       reinterpret_cast<const uint8_t*>(payload_hash.data), sizeof(payload_hash.data));
-    CHECK_AND_ASSERT_MES(sig_result.success, false,
-      "construct_fcmp_tx: PQC signing failed for input " << i);
-    tx.pqc_auths[i].hybrid_signature.assign(sig_result.signature.ptr,
-      sig_result.signature.ptr + sig_result.signature.len);
-    shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
+    CHECK_AND_ASSERT_MES(auth.success, false,
+      "construct_fcmp_tx: shekyl_sign_pqc_auth failed for input " << i);
+
+    tx.pqc_auths[i].hybrid_public_key.assign(auth.hybrid_public_key.ptr,
+      auth.hybrid_public_key.ptr + auth.hybrid_public_key.len);
+    tx.pqc_auths[i].hybrid_signature.assign(auth.signature.ptr,
+      auth.signature.ptr + auth.signature.len);
+    shekyl_pqc_auth_result_free(&auth);
   }
 
   tx.invalidate_hashes();

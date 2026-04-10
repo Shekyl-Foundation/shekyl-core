@@ -3542,19 +3542,12 @@ output_data_t BlockchainLMDB::get_output_key(const uint64_t& amount, const uint6
   else if (get_result)
     throw0(DB_ERROR("Error attempting to retrieve an output pubkey from the db"));
 
+  // Shekyl: all outputs are RCT (amount == 0 table). No pre-RCT outputs exist.
+  if (amount != 0)
+    throw0(DB_ERROR("Non-zero amount in output lookup — Shekyl has no pre-RCT outputs"));
   output_data_t ret;
-  if (amount == 0)
-  {
-    const outkey *okp = (const outkey *)v.mv_data;
-    ret = okp->data;
-  }
-  else
-  {
-    const pre_rct_outkey *okp = (const pre_rct_outkey *)v.mv_data;
-    memcpy(&ret, &okp->data, sizeof(pre_rct_output_data_t));
-    if (include_commitmemt)
-      ret.commitment = rct::zeroCommit(amount);
-  }
+  const outkey *okp = (const outkey *)v.mv_data;
+  ret = okp->data;
   TXN_POSTFIX_RDONLY();
   return ret;
 }
@@ -4298,19 +4291,10 @@ void BlockchainLMDB::get_output_key(const epee::span<const uint64_t> &amounts, c
     else if (get_result)
       throw0(DB_ERROR(lmdb_error("Error attempting to retrieve an output pubkey from the db", get_result).c_str()));
 
-    if (amount == 0)
-    {
-      const outkey *okp = (const outkey *)v.mv_data;
-      outputs.push_back(okp->data);
-    }
-    else
-    {
-      const pre_rct_outkey *okp = (const pre_rct_outkey *)v.mv_data;
-      outputs.resize(outputs.size() + 1);
-      output_data_t &data = outputs.back();
-      memcpy(&data, &okp->data, sizeof(pre_rct_output_data_t));
-      data.commitment = rct::zeroCommit(amount);
-    }
+    if (amount != 0)
+      throw0(DB_ERROR("Non-zero amount in batch output lookup — Shekyl has no pre-RCT outputs"));
+    const outkey *okp = (const outkey *)v.mv_data;
+    outputs.push_back(okp->data);
   }
 
   TXN_POSTFIX_RDONLY();

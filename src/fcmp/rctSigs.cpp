@@ -117,13 +117,12 @@ namespace
         for (size_t i = 0; i < n_out; ++i)
         {
             sc_add(sumout.bytes, masks[i].bytes, sumout.bytes);
-            // XOR 8-byte amount with ecdhHash(amount_key), set tag to placeholder
+            // Stub: dummy enc_amounts — overwritten by v3_rct_data in construct_tx_with_tx_key.
             key amount_scalar = d2h(outamounts[i]);
             key ecdh_hash = ecdhHash(amount_keys[i]);
             for (int b = 0; b < 8; ++b)
                 rv.enc_amounts[i][b] = amount_scalar.bytes[b] ^ ecdh_hash.bytes[b];
-            // TODO(PR-construct): derive amount_tag from HKDF OutputSecrets.amount_tag
-            rv.enc_amounts[i][8] = 0x00; // RESERVED_AMOUNT_TAG_PLACEHOLDER
+            rv.enc_amounts[i][8] = 0x00;
         }
 
         rv.p.pseudoOuts.resize(n_in);
@@ -296,7 +295,8 @@ namespace
         const keyV &destinations,
         const std::vector<xmr_amount> &inamounts,
         const std::vector<xmr_amount> &outamounts,
-        const keyV &amount_keys,
+        const keyV &commitment_masks,
+        const std::vector<std::array<uint8_t, 9>> &enc_amounts_precomputed,
         const keyV &spend_key_y,
         xmr_amount txnFee,
         const crypto::hash &referenceBlock,
@@ -311,7 +311,8 @@ namespace
         CHECK_AND_ASSERT_THROW_MES(inamounts.size() == inSk.size(), "Different number of inamounts/inSk");
         CHECK_AND_ASSERT_THROW_MES(inamounts.size() == inPk.size(), "Different number of inamounts/inPk");
         CHECK_AND_ASSERT_THROW_MES(outamounts.size() == destinations.size(), "Different number of amounts/destinations");
-        CHECK_AND_ASSERT_THROW_MES(amount_keys.size() == destinations.size(), "Different number of amount_keys/destinations");
+        CHECK_AND_ASSERT_THROW_MES(commitment_masks.size() == destinations.size(), "Different number of commitment_masks/destinations");
+        CHECK_AND_ASSERT_THROW_MES(enc_amounts_precomputed.size() == destinations.size(), "Different number of enc_amounts_precomputed/destinations");
         CHECK_AND_ASSERT_THROW_MES(pqc_pk_hashes.size() == inamounts.size(), "Different number of pqc_pk_hashes/inputs");
         CHECK_AND_ASSERT_THROW_MES(spend_key_y.size() == inamounts.size(), "Different number of spend_key_y/inputs");
         CHECK_AND_ASSERT_THROW_MES(tree_paths.size() == inamounts.size(), "Different number of tree_paths/inputs");
@@ -331,6 +332,7 @@ namespace
             rv.outPk[i].dest = copy(destinations[i]);
 
         // --- Range proofs (Bulletproofs+) and pseudo-out blinding factors ---
+        // commitment_masks are HKDF z scalars — used directly as BP+ blinding factors.
         keyV pseudo_out_blinds(inamounts.size());
         rv.p.bulletproofs_plus.clear();
         {
@@ -341,8 +343,11 @@ namespace
             }
             else
             {
-                const epee::span<const key> keys{&amount_keys[0], amount_keys.size()};
-                rv.p.bulletproofs_plus.push_back(proveRangeBulletproofPlus(C, masks, outamounts, keys, hwdev));
+                masks = commitment_masks;
+                BulletproofPlus proof = bulletproof_plus_PROVE(outamounts, masks);
+                CHECK_AND_ASSERT_THROW_MES(proof.V.size() == outamounts.size(), "V does not have the expected size");
+                C = proof.V;
+                rv.p.bulletproofs_plus.push_back(std::move(proof));
             }
             ctkeyV outSk(destinations.size());
             for (size_t i = 0; i < outamounts.size(); ++i)
@@ -351,17 +356,12 @@ namespace
                 outSk[i].mask = masks[i];
             }
 
-            // Encode encrypted amounts (XOR with ecdhHash of amount key)
+            // Use pre-computed enc_amounts (HKDF k_amount XOR + amount_tag) from construct_output.
             key sumout = zero();
             for (size_t i = 0; i < outSk.size(); ++i)
             {
                 sc_add(sumout.bytes, outSk[i].mask.bytes, sumout.bytes);
-                key amount_scalar = d2h(outamounts[i]);
-                key ecdh_hash = ecdhHash(amount_keys[i]);
-                for (int b = 0; b < 8; ++b)
-                    rv.enc_amounts[i][b] = amount_scalar.bytes[b] ^ ecdh_hash.bytes[b];
-                // TODO(PR-construct): derive amount_tag from HKDF OutputSecrets.amount_tag
-                rv.enc_amounts[i][8] = 0x00; // RESERVED_AMOUNT_TAG_PLACEHOLDER
+                rv.enc_amounts[i] = enc_amounts_precomputed[i];
             }
 
             // --- Pseudo-out blinding factors (balance proof) ---

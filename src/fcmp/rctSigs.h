@@ -73,10 +73,15 @@ namespace rct {
         key h_pqc;         // H(pqc_pk)
     };
 
-    // FCMP++ transaction construction (replaces ring signatures with full-chain membership proof)
+    // FCMP++ transaction construction (replaces ring signatures with full-chain membership proof).
+    // commitment_masks: HKDF-derived z scalars (one per output) — used directly as BP+ blinding
+    //   factors and for pseudo-out balance. NOT hashed through genCommitmentMask.
+    // enc_amounts_precomputed: 9-byte (8 XOR'd amount + 1 tag) from construct_output per output.
     rctSig genRctFcmpPlusPlus(const key &message, const ctkeyV &inSk, const ctkeyV &inPk,
                                const keyV &destinations, const std::vector<xmr_amount> &inamounts,
-                               const std::vector<xmr_amount> &outamounts, const keyV &amount_keys,
+                               const std::vector<xmr_amount> &outamounts,
+                               const keyV &commitment_masks,
+                               const std::vector<std::array<uint8_t, 9>> &enc_amounts_precomputed,
                                const keyV &spend_key_y,
                                xmr_amount txnFee, const crypto::hash &referenceBlock,
                                const key &tree_root, uint8_t tree_depth,

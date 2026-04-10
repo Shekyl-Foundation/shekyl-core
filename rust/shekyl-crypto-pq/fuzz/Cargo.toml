@@ -53,4 +53,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_construct_output"
+path = "fuzz_targets/fuzz_construct_output.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

@@ -410,6 +410,43 @@ mod tests {
             "derive_pqc_leaf_hash must equal hash_pqc_public_key(derive_pqc_public_key(...))");
     }
 
+    #[derive(serde::Deserialize)]
+    struct LeafHashKat {
+        combined_ss: String,
+        output_index: u64,
+        h_pqc: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct LeafHashKatFile {
+        vectors: Vec<LeafHashKat>,
+    }
+
+    #[test]
+    fn pqc_leaf_hash_known_answer_vectors() {
+        let json = include_str!("../../../docs/test_vectors/PQC_LEAF_HASH_KAT.json");
+        let file: LeafHashKatFile = serde_json::from_str(json)
+            .expect("failed to parse PQC_LEAF_HASH_KAT.json");
+        assert!(!file.vectors.is_empty(), "no vectors in PQC_LEAF_HASH_KAT.json");
+
+        for (i, v) in file.vectors.iter().enumerate() {
+            let css_bytes = hex::decode(&v.combined_ss)
+                .unwrap_or_else(|_| panic!("vector {i}: invalid combined_ss hex"));
+            let css: [u8; 64] = css_bytes.as_slice().try_into()
+                .unwrap_or_else(|_| panic!("vector {i}: combined_ss not 64 bytes"));
+            let h_pqc = derive_pqc_leaf_hash(&css, v.output_index)
+                .unwrap_or_else(|e| panic!("vector {i}: derive_pqc_leaf_hash failed: {e}"));
+            let expected = hex::decode(&v.h_pqc)
+                .unwrap_or_else(|_| panic!("vector {i}: invalid h_pqc hex"));
+            assert_eq!(
+                h_pqc.as_slice(), expected.as_slice(),
+                "vector {i}: h_pqc mismatch for combined_ss={} idx={}:\n  got:      {}\n  expected: {}",
+                &v.combined_ss[..8], v.output_index,
+                hex::encode(h_pqc), v.h_pqc
+            );
+        }
+    }
+
     // ── OutputSecrets known-answer tests against locked vectors ──────────
 
     #[derive(serde::Deserialize)]

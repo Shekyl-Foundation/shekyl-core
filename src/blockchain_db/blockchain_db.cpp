@@ -245,24 +245,24 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
   // we need the index
   for (uint64_t i = 0; i < tx.vout.size(); ++i)
   {
-    // Miner coinbase txes: v3+ use on-chain outPk (real Pedersen commitment);
-    // v2 falls back to zeroCommit(amount) for backward compatibility.
-    if (miner_tx && tx.version >= 2)
+    // Shekyl: minimum tx version is 2, all outputs have on-chain outPk.
+    // Coinbase (v3+) stores real Pedersen commitments in outPk via construct_output.
+    if (miner_tx)
     {
       cryptonote::tx_out vout = tx.vout[i];
-      rct::key commitment;
-      if (tx.version >= 3 && i < tx.rct_signatures.outPk.size())
-        commitment = tx.rct_signatures.outPk[i].mask;
-      else
-        commitment = rct::zeroCommit(vout.amount);
+      CHECK_AND_ASSERT_THROW_MES(i < tx.rct_signatures.outPk.size(),
+        "miner tx outPk missing for output " + std::to_string(i));
+      rct::key commitment = tx.rct_signatures.outPk[i].mask;
       vout.amount = 0;
       amount_output_indices[i] = add_output(tx_hash, vout, i, tx.unlock_time,
         &commitment);
     }
     else
     {
+      CHECK_AND_ASSERT_THROW_MES(i < tx.rct_signatures.outPk.size(),
+        "tx outPk missing for output " + std::to_string(i));
       amount_output_indices[i] = add_output(tx_hash, tx.vout[i], i, tx.unlock_time,
-        tx.version > 1 ? &tx.rct_signatures.outPk[i].mask : NULL);
+        &tx.rct_signatures.outPk[i].mask);
     }
   }
   add_tx_amount_output_indices(tx_id, amount_output_indices);
@@ -374,15 +374,9 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
         else
           continue;
 
-        rct::key commitment;
-        if (is_miner && tx.version >= 3 && i < tx.rct_signatures.outPk.size())
-          commitment = tx.rct_signatures.outPk[i].mask;
-        else if (is_miner && tx.version >= 2)
-          commitment = rct::zeroCommit(vout.amount);
-        else if (tx.version > 1 && i < tx.rct_signatures.outPk.size())
-          commitment = tx.rct_signatures.outPk[i].mask;
-        else
+        if (i >= tx.rct_signatures.outPk.size())
           continue;
+        rct::key commitment = tx.rct_signatures.outPk[i].mask;
 
         uint8_t leaf[128];
         if (shekyl_construct_curve_tree_leaf(
@@ -542,15 +536,9 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
         else
           continue;
 
-        rct::key commitment;
-        if (is_miner && tx.version >= 3 && i < tx.rct_signatures.outPk.size())
-          commitment = tx.rct_signatures.outPk[i].mask;
-        else if (is_miner && tx.version >= 2)
-          commitment = rct::zeroCommit(vout.amount);
-        else if (tx.version > 1 && i < tx.rct_signatures.outPk.size())
-          commitment = tx.rct_signatures.outPk[i].mask;
-        else
+        if (i >= tx.rct_signatures.outPk.size())
           continue;
+        rct::key commitment = tx.rct_signatures.outPk[i].mask;
 
         uint8_t leaf[128];
         if (shekyl_construct_curve_tree_leaf(

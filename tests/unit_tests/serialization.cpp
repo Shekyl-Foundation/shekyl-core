@@ -663,3 +663,66 @@ TEST(Serialization, pqc_authentication_multisig_size_regression)
     EXPECT_EQ(auth1.hybrid_signature.size(), sig_blob);
   }
 }
+
+TEST(Serialization, rctsig_base_null_round_trip_with_outpk_and_enc_amounts)
+{
+  using namespace cryptonote;
+
+  transaction tx0;
+  tx0.set_null();
+  tx0.version = 3;
+
+  txin_gen gen;
+  gen.height = 42;
+  tx0.vin.push_back(gen);
+
+  for (size_t i = 0; i < 2; ++i)
+  {
+    tx_out out;
+    txout_to_tagged_key tk;
+    memset(&tk.key, static_cast<int>(0xA0 + i), sizeof(tk.key));
+    tk.view_tag.data = static_cast<uint8_t>(0xBB + i);
+    out.amount = 0;
+    out.target = tk;
+    tx0.vout.push_back(out);
+  }
+
+  rct::rctSig& rv = tx0.rct_signatures;
+  rv.type = rct::RCTTypeNull;
+  rv.outPk.resize(2);
+  rv.enc_amounts.resize(2);
+
+  for (size_t i = 0; i < 2; ++i)
+  {
+    memset(rv.outPk[i].mask.bytes, static_cast<int>(0x10 + i), 32);
+    for (size_t b = 0; b < 8; ++b)
+      rv.enc_amounts[i][b] = static_cast<uint8_t>(0x30 + i * 8 + b);
+    rv.enc_amounts[i][8] = static_cast<uint8_t>(0xF0 + i);
+  }
+  tx0.invalidate_hashes();
+
+  std::string blob;
+  ASSERT_TRUE(serialization::dump_binary(tx0, blob));
+  ASSERT_FALSE(blob.empty()) << "RCTTypeNull serialization produced empty blob";
+
+  transaction tx1;
+  ASSERT_TRUE(serialization::parse_binary(blob, tx1))
+    << "RCTTypeNull deserialization failed; blob size=" << blob.size();
+
+  EXPECT_EQ(tx1.rct_signatures.type, rct::RCTTypeNull);
+  ASSERT_EQ(tx1.rct_signatures.outPk.size(), 2u);
+  ASSERT_EQ(tx1.rct_signatures.enc_amounts.size(), 2u);
+
+  for (size_t i = 0; i < 2; ++i)
+  {
+    EXPECT_EQ(tx1.rct_signatures.outPk[i].mask, rv.outPk[i].mask)
+      << "outPk[" << i << "].mask mismatch after round-trip";
+    EXPECT_EQ(tx1.rct_signatures.enc_amounts[i], rv.enc_amounts[i])
+      << "enc_amounts[" << i << "] mismatch after round-trip (8-byte amount + 1-byte tag)";
+  }
+
+  EXPECT_EQ(tx1.rct_signatures.txnFee, 0u)
+    << "RCTTypeNull must not serialize txnFee, but it was non-zero after parse";
+  EXPECT_EQ(tx1.rct_signatures.referenceBlock, crypto::hash{})
+    << "RCTTypeNull must not serialize referenceBlock";
+}

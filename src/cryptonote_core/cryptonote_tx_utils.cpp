@@ -277,7 +277,7 @@ namespace cryptonote
     return addr.m_view_public_key;
   }
   //---------------------------------------------------------------
-  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, const std::vector<crypto::secret_key> &additional_tx_keys, bool rct, bool shuffle_outs, bool use_view_tags, uint8_t hf_version)
+  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, const std::vector<crypto::secret_key> &additional_tx_keys, bool rct, bool shuffle_outs, bool use_view_tags, uint8_t hf_version, rct::keyV *out_commitment_masks)
   {
     hw::device &hwdev = sender_account_keys.get_device();
 
@@ -474,10 +474,12 @@ namespace cryptonote
     }
 
     uint64_t summary_outs_money = 0;
-    // Per-output data from construct_output (v3 only), used to overwrite stub RCT.
+    // Per-output data from construct_output (v3 only), used to overwrite stub RCT
+    // and to provide HKDF-correct values to genRctFcmpPlusPlus.
     struct v3_output_rct {
       uint8_t commitment[32];
       std::array<uint8_t, 9> enc_amount_with_tag;
+      uint8_t commitment_mask[32]; // HKDF z scalar
     };
     std::vector<v3_output_rct> v3_rct_data;
 
@@ -525,6 +527,7 @@ namespace cryptonote
         memcpy(v3_rct_data[output_index].commitment, od.commitment, 32);
         memcpy(v3_rct_data[output_index].enc_amount_with_tag.data(), od.enc_amount, 8);
         v3_rct_data[output_index].enc_amount_with_tag[8] = od.amount_tag;
+        memcpy(v3_rct_data[output_index].commitment_mask, od.z, 32);
 
         kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
         if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
@@ -672,6 +675,8 @@ namespace cryptonote
       memwipe(inSk.data(), inSk.size() * sizeof(rct::ctkey));
 
       // v3: overwrite stub commitments and enc_amounts with real HKDF-derived values.
+      // Export commitment masks (z scalars) so genRctFcmpPlusPlus can produce
+      // BP+ proofs against the HKDF-derived commitments.
       if (!v3_rct_data.empty())
       {
         CHECK_AND_ASSERT_MES(v3_rct_data.size() == tx.rct_signatures.outPk.size(), false,
@@ -681,6 +686,14 @@ namespace cryptonote
           memcpy(tx.rct_signatures.outPk[i].mask.bytes, v3_rct_data[i].commitment, 32);
           tx.rct_signatures.enc_amounts[i] = v3_rct_data[i].enc_amount_with_tag;
         }
+        if (out_commitment_masks)
+        {
+          out_commitment_masks->resize(v3_rct_data.size());
+          for (size_t i = 0; i < v3_rct_data.size(); ++i)
+            memcpy((*out_commitment_masks)[i].bytes, v3_rct_data[i].commitment_mask, 32);
+        }
+        for (auto& rd : v3_rct_data)
+          memwipe(rd.commitment_mask, 32);
       }
 
       CHECK_AND_ASSERT_MES(tx.vout.size() == outSk.size() || outSk.empty(), false, "outSk size does not match vout");
@@ -714,7 +727,7 @@ namespace cryptonote
     return true;
   }
   //---------------------------------------------------------------
-  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, std::vector<crypto::secret_key> &additional_tx_keys, bool rct, bool use_view_tags, uint8_t hf_version)
+  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, std::vector<crypto::secret_key> &additional_tx_keys, bool rct, bool use_view_tags, uint8_t hf_version, rct::keyV *out_commitment_masks)
   {
     hw::device &hwdev = sender_account_keys.get_device();
     hwdev.open_tx(tx_key);
@@ -737,7 +750,7 @@ namespace cryptonote
       }
 
       bool shuffle_outs = true;
-      bool r = construct_tx_with_tx_key(sender_account_keys, subaddresses, sources, destinations, change_addr, extra, tx, tx_key, additional_tx_keys, rct, shuffle_outs, use_view_tags, hf_version);
+      bool r = construct_tx_with_tx_key(sender_account_keys, subaddresses, sources, destinations, change_addr, extra, tx, tx_key, additional_tx_keys, rct, shuffle_outs, use_view_tags, hf_version, out_commitment_masks);
       hwdev.close_tx();
       return r;
     } catch(...) {

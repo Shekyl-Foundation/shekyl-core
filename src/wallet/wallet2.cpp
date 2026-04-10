@@ -8201,13 +8201,18 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
 
   crypto::secret_key tx_key;
   std::vector<crypto::secret_key> additional_tx_keys;
+  rct::keyV v3_commitment_masks;
+  auto wipe_masks = epee::misc_utils::create_scope_leave_handler([&v3_commitment_masks]() {
+    for (auto& m : v3_commitment_masks) memwipe(m.bytes, 32);
+  });
   if (m_callback) m_callback->on_transfer_stage("constructing", 0, 4);
   LOG_PRINT_L2("constructing tx skeleton");
   auto sources_copy = sources;
   // Phase A: build the transaction skeleton (prefix + outputs + KEM tx_extra).
   // rctSig is a stub at this point — overwritten by genRctFcmpPlusPlus below.
+  // v3_commitment_masks receives the HKDF z scalars for BP+ proof generation.
   {
-    bool r = cryptonote::construct_tx_and_get_tx_key(m_account.get_keys(), m_subaddresses, sources, splitted_dsts, change_dts.addr, extra, tx, tx_key, additional_tx_keys, true, use_view_tags, get_current_hard_fork());
+    bool r = cryptonote::construct_tx_and_get_tx_key(m_account.get_keys(), m_subaddresses, sources, splitted_dsts, change_dts.addr, extra, tx, tx_key, additional_tx_keys, true, use_view_tags, get_current_hard_fork(), &v3_commitment_masks);
     LOG_PRINT_L2("constructed tx skeleton, r="<<r);
     THROW_WALLET_EXCEPTION_IF(!r, error::tx_not_constructed, sources, dsts, m_nettype);
   }
@@ -8454,10 +8459,18 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
         y_keys[i] = rct::sk2rct(m_transfers[permuted_transfers[i]].m_y);
       rct::key rct_tree_root;
       memcpy(rct_tree_root.bytes, &curve_tree_root, 32);
+
+      // Save HKDF-derived enc_amounts from construction before genRctFcmpPlusPlus.
+      // v3_commitment_masks carry the HKDF z scalars for BP+ proof generation.
+      THROW_WALLET_EXCEPTION_IF(v3_commitment_masks.size() != destinations_rct.size(),
+          error::wallet_internal_error, "v3_commitment_masks size mismatch — construction did not produce HKDF masks");
+      auto saved_enc_amounts = tx.rct_signatures.enc_amounts;
+
       rct::rctSig rv = rct::genRctFcmpPlusPlus(
           rct::hash2rct(tx_prefix_hash),
           inSk, inPk,
-          destinations_rct, inamounts, outamounts, amount_keys,
+          destinations_rct, inamounts, outamounts,
+          v3_commitment_masks, saved_enc_amounts,
           y_keys,
           fee, reference_block, rct_tree_root, tree_depth,
           tree_paths, leaf_chunk_entries, pqc_pk_hashes,
@@ -9572,71 +9585,68 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
   crypto::secret_key_to_public_key(tx_key, txkey_pub);
   cryptonote::add_tx_pub_key_to_extra(tx, txkey_pub);
 
-  // ── Two outputs: reward to self + dummy change (amount 0) ──────────
+  // ── Two outputs via shekyl_construct_output: reward + dummy change ──
   const auto& my_addr = keys.m_account_address;
-  const uint64_t outamounts[2] = {total_claimed, 0};
+  const uint64_t out_amounts[2] = {total_claimed, 0};
 
-  for (size_t oi = 0; oi < 2; ++oi)
-  {
-    crypto::public_key out_eph_public_key;
-    crypto::view_tag view_tag;
-    crypto::key_derivation derivation;
-    crypto::generate_key_derivation(my_addr.m_view_public_key, tx_key, derivation);
-    crypto::derive_public_key(derivation, oi, my_addr.m_spend_public_key, out_eph_public_key);
-    crypto::derive_view_tag(derivation, oi, view_tag);
-
-    cryptonote::tx_out out;
-    cryptonote::set_tx_out(outamounts[oi], out_eph_public_key, true, view_tag, out);
-    tx.vout.push_back(out);
-  }
-
-  // ── KEM encapsulation for per-output PQC keys ─────────────────────
   static constexpr size_t X25519_PK_BYTES = 32;
   THROW_WALLET_EXCEPTION_IF(my_addr.m_pqc_public_key.size() <= X25519_PK_BYTES,
     error::wallet_internal_error, "PQC public key too short (need x25519[32] || ml_kem_ek[1184])");
 
-  // m_pqc_public_key layout: x25519_pk[32] || ml_kem_ek[1184]
   const uint8_t* pk_x25519 = my_addr.m_pqc_public_key.data();
   const uint8_t* pk_ml_kem = my_addr.m_pqc_public_key.data() + X25519_PK_BYTES;
   const size_t pk_ml_kem_len = my_addr.m_pqc_public_key.size() - X25519_PK_BYTES;
 
   cryptonote::tx_extra_pqc_kem_ciphertext kem_field;
   kem_field.blob.reserve(2 * cryptonote::HYBRID_KEM_CT_BYTES);
-
   cryptonote::tx_extra_pqc_leaf_hashes leaf_hash_field;
   leaf_hash_field.blob.reserve(2 * cryptonote::PQC_LEAF_HASH_BYTES);
 
-  rct::keyV amount_keys(2);
+  rct::keyV claim_commitment_masks(2);
+  std::vector<std::array<uint8_t, 9>> claim_enc_amounts(2);
 
   for (size_t oi = 0; oi < 2; ++oi)
   {
-    ShekylBuffer ct_buf = {};
-    uint8_t combined_ss[64];
-    bool ok = shekyl_kem_encapsulate(pk_x25519, pk_ml_kem, pk_ml_kem_len, &ct_buf, combined_ss);
-    THROW_WALLET_EXCEPTION_IF(!ok || !ct_buf.ptr || ct_buf.len != cryptonote::HYBRID_KEM_CT_BYTES,
-      error::wallet_internal_error, "KEM encapsulation failed for claim output " + std::to_string(oi));
+    ShekylOutputData od = shekyl_construct_output(
+      pk_x25519, pk_ml_kem, pk_ml_kem_len,
+      reinterpret_cast<const uint8_t*>(&my_addr.m_spend_public_key),
+      out_amounts[oi], static_cast<uint64_t>(oi));
+    THROW_WALLET_EXCEPTION_IF(!od.success, error::wallet_internal_error,
+      "shekyl_construct_output failed for claim output " + std::to_string(oi));
 
-    // Store full hybrid ciphertext: x25519_ct[32] || ml_kem_ct[1088]
-    kem_field.blob.append(reinterpret_cast<const char*>(ct_buf.ptr),
-                          cryptonote::HYBRID_KEM_CT_BYTES);
-    shekyl_buffer_free(ct_buf.ptr, ct_buf.len);
+    crypto::public_key out_key;
+    memcpy(out_key.data, od.output_key, 32);
+    crypto::view_tag vt;
+    vt.data = od.view_tag_x25519;
 
-    uint8_t h_pqc[32];
-    ok = shekyl_derive_pqc_leaf_hash(combined_ss, static_cast<uint64_t>(oi), h_pqc);
-    memwipe(combined_ss, sizeof(combined_ss));
-    THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error,
-      "PQC leaf hash derivation failed for claim output " + std::to_string(oi));
+    cryptonote::tx_out out;
+    cryptonote::set_tx_out(out_amounts[oi], out_key, true, vt, out);
+    tx.vout.push_back(out);
 
-    leaf_hash_field.blob.append(reinterpret_cast<const char*>(h_pqc), cryptonote::PQC_LEAF_HASH_BYTES);
+    memcpy(claim_commitment_masks[oi].bytes, od.z, 32);
+    memcpy(claim_enc_amounts[oi].data(), od.enc_amount, 8);
+    claim_enc_amounts[oi][8] = od.amount_tag;
 
-    crypto::key_derivation ecdh_derivation;
-    crypto::generate_key_derivation(my_addr.m_view_public_key, tx_key, ecdh_derivation);
-    crypto::secret_key scalar;
-    crypto::derivation_to_scalar(ecdh_derivation, oi, scalar);
-    amount_keys[oi] = rct::sk2rct(scalar);
+    kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
+    if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
+      kem_field.blob.append(
+        reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
+        od.kem_ciphertext_ml_kem.len);
+
+    leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.h_pqc),
+      cryptonote::PQC_LEAF_HASH_BYTES);
+
+    ShekylOutputData tmp = od;
+    shekyl_output_data_free(&tmp);
   }
 
-  // Embed KEM ciphertext and leaf hashes in tx_extra
+  // HKDF z scalars are captured above but NOT used as BP+ blinding factors here.
+  // Claim pseudo-outs use zeroCommit (mask=1), forcing sum(output_masks) = N.
+  // HKDF z values don't satisfy that constraint, so BP+ uses random masks below.
+  // The scanner (PR-wallet) will detect ownership via HKDF view_tag + amount decryption
+  // and use the stored claim amounts rather than HKDF commitment verification.
+  for (auto& m : claim_commitment_masks) memwipe(m.bytes, 32);
+
   {
     std::ostringstream oss;
     binary_archive<true> oar(oss);
@@ -9658,11 +9668,10 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
   THROW_WALLET_EXCEPTION_IF(!cryptonote::sort_tx_extra(tx.extra, tx.extra),
     error::wallet_internal_error, "Failed to sort claim tx_extra");
 
-  // Zero output amounts for RCT (amounts are hidden in commitments)
   for (auto& out : tx.vout)
     out.amount = 0;
 
-  // ── Build rctSig: BP+ range proofs + pseudo-outs ──────────────────
+  // ── Build rctSig: BP+ with HKDF masks + pseudo-outs ──────────────
   const size_t num_inputs = tx.vin.size();
   rct::rctSig& rv = tx.rct_signatures;
   rv.type = rct::RCTTypeFcmpPlusPlusPqc;
@@ -9671,18 +9680,22 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
   rv.enc_amounts.resize(2);
   rv.p.pseudoOuts.resize(num_inputs);
 
-  // Output masks must sum to N (number of inputs) because each
-  // pseudo-out uses zeroCommit (mask = scalar 1).
+  // Pseudo-outs use zeroCommit (mask = scalar 1), so output masks must
+  // sum to N (number of inputs) for the balance equation.
+  // Recompute claim_commitment_masks with that constraint.
+  // We can't use the HKDF z directly because the balance equation requires
+  // sum(output_masks) == sum(pseudo_out_masks) == N.
+  // For claims, use random mask0 with mask1 = N - mask0.
   rct::key mask0, mask1;
   rct::skGen(mask0);
   {
     rct::key n_scalar = rct::d2h(static_cast<rct::xmr_amount>(num_inputs));
     sc_sub(mask1.bytes, n_scalar.bytes, mask0.bytes);
   }
-  rct::keyV out_masks = {mask0, mask1};
+  rct::keyV bp_masks = {mask0, mask1};
 
   std::vector<uint64_t> out_amounts_vec = {total_claimed, 0};
-  rct::BulletproofPlus bp_proof = rct::bulletproof_plus_PROVE(out_amounts_vec, out_masks);
+  rct::BulletproofPlus bp_proof = rct::bulletproof_plus_PROVE(out_amounts_vec, bp_masks);
   THROW_WALLET_EXCEPTION_IF(bp_proof.V.size() != 2, error::wallet_internal_error,
     "BP+ proof V size mismatch");
 
@@ -9692,32 +9705,21 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
   for (size_t i = 0; i < 2; ++i)
   {
     rv.outPk[i].mask = rct::scalarmult8(bp_proof.V[i]);
-
     crypto::public_key out_pk;
     THROW_WALLET_EXCEPTION_IF(!cryptonote::get_output_public_key(tx.vout[i], out_pk),
       error::wallet_internal_error, "Cannot extract claim output public key");
     rv.outPk[i].dest = rct::pk2rct(out_pk);
   }
 
-  // Encode encrypted amounts (XOR with ecdhHash of amount key)
   for (size_t i = 0; i < 2; ++i)
-  {
-    rct::key amount_scalar = rct::d2h(out_amounts_vec[i]);
-    rct::key ecdh_hash = rct::ecdhHash(amount_keys[i]);
-    for (int b = 0; b < 8; ++b)
-      rv.enc_amounts[i][b] = amount_scalar.bytes[b] ^ ecdh_hash.bytes[b];
-    // TODO(PR-construct): derive amount_tag from HKDF OutputSecrets.amount_tag
-    rv.enc_amounts[i][8] = 0x00;
-  }
+    rv.enc_amounts[i] = claim_enc_amounts[i];
 
-  // Pseudo-outs: zeroCommit(claim_amount) binds each to its public amount
   for (size_t i = 0; i < num_inputs; ++i)
   {
     const auto& claim = std::get<cryptonote::txin_stake_claim>(tx.vin[i]);
     rv.p.pseudoOuts[i] = rct::zeroCommit(claim.amount);
   }
 
-  // No FCMP++ membership proof for claims (inputs are by global index)
   rv.p.fcmp_pp_proof.clear();
   rv.p.curve_trees_tree_depth = 0;
   rv.referenceBlock = crypto::hash{};

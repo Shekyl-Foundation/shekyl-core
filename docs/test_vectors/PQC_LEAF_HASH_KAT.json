@@ -1,0 +1,44 @@
+{
+  "vectors": [
+    {
+      "combined_ss": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "h_pqc": "c252ad7922d1e15f386175d33e01257b9522a2b6fb77ae1c744d9b2cde0d550e",
+      "output_index": 0
+    },
+    {
+      "combined_ss": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "h_pqc": "5ee0137256859cfef5aa4f3abd601937d43a29269db2897cfa2f888565dd9800",
+      "output_index": 1
+    },
+    {
+      "combined_ss": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "h_pqc": "afc2e884d56c0e1dcc871b355ccfa67486c713f2e167c3d05a89b2a1dd0c174b",
+      "output_index": 0
+    },
+    {
+      "combined_ss": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "h_pqc": "9340877786236f144b371e903c61c43500c975ab878a9b6520790ebf54c34772",
+      "output_index": 42
+    },
+    {
+      "combined_ss": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "h_pqc": "ad5b337db7e2ddf45b912cd4dcfbcab85232827f9ead0143c3f93cbe8bf89708",
+      "output_index": 0
+    },
+    {
+      "combined_ss": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "h_pqc": "20c71ab7cfdcaa8553d9afb6b45879d1c2f41060944fe5ef279714192a79e87f",
+      "output_index": 255
+    },
+    {
+      "combined_ss": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "h_pqc": "1d6229f71f8cbd2af1ab10e3bded8c3723e95c86816f765b18f4b067c9a0d909",
+      "output_index": 18446744073709551615
+    },
+    {
+      "combined_ss": "01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+      "h_pqc": "dca797af6cd8700ad3a6759dc2796e8b4a7fcf1dbdfd5525dcf212695f6c8364",
+      "output_index": 7
+    }
+  ]
+}

@@ -180,6 +180,46 @@
   now use `shekyl_scan_output_recover` for HKDF-based output ownership
   detection, mask recovery, and key image computation.
 
+- **`genRctFcmpPlusPlus` uses HKDF commitment masks.** The function now accepts
+  pre-computed HKDF `z` scalars (`commitment_masks`) and pre-computed encrypted
+  amounts (`enc_amounts_precomputed`) instead of re-deriving them internally via
+  Keccak. This fixes a critical mismatch where BP+ proofs used Keccak-derived
+  masks while `scan_output` expected HKDF-derived values. The old `amount_keys`
+  parameter is removed. **Testnet reset required** — on-chain commitments and
+  encrypted amounts are now HKDF-derived, incompatible with prior Keccak format.
+
+- **Stake claim outputs use `shekyl_construct_output`.** The wallet's
+  `create_stake_claim_tx` now constructs outputs via the unified Rust HKDF path,
+  producing correct output keys, view tags, KEM ciphertexts, leaf hashes, and
+  `enc_amounts` with `amount_tag`. BP+ blinding factors remain constrained by
+  the `zeroCommit` pseudo-out balance equation (sum to N).
+
+- **Chaingen PQC signing via `shekyl_sign_pqc_auth`.** Core test
+  `construct_fcmp_tx` now uses the high-level FFI that derives, signs, and wipes
+  the ML-DSA secret key entirely inside Rust. The raw `shekyl_pqc_sign` call
+  (which accepted the secret key as a C++ byte pointer) is replaced.
+
+- **`zeroCommit` dead code removed from DB layer.** `blockchain_db.cpp` and
+  `db_lmdb.cpp` no longer fall back to `zeroCommit(amount)` for output
+  commitments. All outputs (including coinbase) use on-chain `outPk[i].mask`.
+  The `pre_rct_outkey` branch in LMDB now throws for `amount != 0` (Shekyl
+  has no pre-RCT outputs).
+
+- **RCTTypeNull round-trip serialization test.** New test in
+  `tests/unit_tests/serialization.cpp` verifies that `RCTTypeNull` transactions
+  with populated `outPk` and `enc_amounts` (8-byte amount + 1-byte `amount_tag`)
+  survive binary serialize/deserialize round-trip.
+
+- **libFuzzer harness for `construct_output`.** New fuzz target
+  `fuzz_construct_output` in `rust/shekyl-crypto-pq/fuzz/` exercises
+  `construct_output` + `scan_output` round-trip with arbitrary spend keys,
+  amounts, corrupted `enc_amount`, and wrong `amount_tag`.
+
+- **PQC leaf hash known-answer test.** New JSON fixture
+  `docs/test_vectors/PQC_LEAF_HASH_KAT.json` (8 vectors) pins the output of
+  `derive_pqc_leaf_hash(combined_ss, output_index)`. Rust KAT test validates
+  byte-for-byte against the fixture.
+
 ### 🔄 Changed
 
 - **`transfer_details::m_mask` type changed.** `rct::key` → `crypto::secret_key`
