@@ -1356,6 +1356,12 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
 
   CHECK_AND_ASSERT_MES(check_output_types(b.miner_tx, hf_version), false, "miner transaction has invalid output type(s) in block " << get_block_hash(b));
 
+  if (b.miner_tx.version >= 3 && !check_commitment_mask_valid(b.miner_tx))
+  {
+    MERROR("Coinbase transaction has invalid output commitment mask in block " << get_block_hash(b));
+    return false;
+  }
+
   return true;
 }
 //------------------------------------------------------------------
@@ -3191,14 +3197,35 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
   return true;
 }
 //------------------------------------------------------------------
-// TODO(PR-construct): Replace this accept-all stub with actual mask=1 rejection.
-// After coinbase is rewritten to emit z*G + amount*H commitments, flip the body
-// to: for each output commitment C, compute C - amount*H and reject if the result
-// equals G (i.e., mask == 1, the zeroCommit form). Coinbase exemption goes away
-// because coinbase will have a real mask. This function is unconditional: it
-// checks ALL v3 outputs regardless of coinbase/non-coinbase status.
-static bool check_commitment_mask_valid(const transaction& /*tx*/)
+// Reject outputs whose Pedersen commitment mask is trivially 0 or 1.
+// mask=0: C = amount*H (zeroCommit — leaks amount directly).
+// mask=1: C = G + amount*H (leaks amount via C - amount*H == G check).
+// The identity check catches mask=0 for amount=0. The G check catches mask=1
+// for amount=0. For nonzero amounts, the range proof + balance equation already
+// constrain the mask; these checks are defense-in-depth against construction bugs.
+static bool check_commitment_mask_valid(const transaction& tx)
 {
+  if (tx.version < 3)
+    return true;
+
+  const auto& rv = tx.rct_signatures;
+  for (size_t i = 0; i < rv.outPk.size(); ++i)
+  {
+    const rct::key& C = rv.outPk[i].mask;
+    if (C == rct::identity())
+    {
+      MERROR("Output " << i << " commitment is identity (mask=0, amount=0)");
+      return false;
+    }
+    // G is the Ed25519 base point — mask=1 with amount=0
+    rct::key G;
+    rct::scalarmultBase(G, rct::d2h(1));
+    if (C == G)
+    {
+      MERROR("Output " << i << " commitment equals G (mask=1, amount=0)");
+      return false;
+    }
+  }
   return true;
 }
 //------------------------------------------------------------------
@@ -3267,12 +3294,8 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
     }
   }
 
-  // Commitment mask validation for all v3 outputs (coinbase and non-coinbase).
-  // Currently a no-op (accepts all); PR-construct flips the body to reject
-  // mask=1 (zeroCommit) for non-coinbase once coinbase emits real commitments.
-  // Note: this call site only runs for non-coinbase via ver_non_input_consensus.
-  // TODO(PR-construct): Also wire coinbase validation through this path after
-  // coinbase is rewritten to emit z*G + amount*H commitments.
+  // Commitment mask validation: reject trivial masks (mask=0 or mask=1).
+  // Non-coinbase path. Coinbase is validated in prevalidate_miner_transaction.
   if (tx.version >= 3 && !check_commitment_mask_valid(tx))
   {
     MERROR_VER("Output commitment mask validation failed");

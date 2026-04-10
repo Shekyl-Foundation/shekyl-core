@@ -307,6 +307,8 @@ struct output_index {
   rct::key comm;
   const cryptonote::block *p_blk;
   const cryptonote::transaction *p_tx;
+  rct::key v3_mask{};
+  bool v3_recovered = false;
 
   output_index(const cryptonote::txout_target_v &_out, uint64_t _a, size_t _h, size_t tno, size_t ono, const cryptonote::block *_pb, const cryptonote::transaction *_pt)
       : out(_out), amount(_a), blk_height(_h), tx_no(tno), out_no(ono), idx(0), unlock_time(0),
@@ -318,7 +320,8 @@ struct output_index {
   output_index(const output_index &other)
       : out(other.out), amount(other.amount), blk_height(other.blk_height), tx_no(other.tx_no), rct(other.rct),
       out_no(other.out_no), idx(other.idx), unlock_time(other.unlock_time), is_coin_base(other.is_coin_base),
-      spent(other.spent), comm(other.comm), p_blk(other.p_blk), p_tx(other.p_tx) {  }
+      spent(other.spent), comm(other.comm), p_blk(other.p_blk), p_tx(other.p_tx),
+      v3_mask(other.v3_mask), v3_recovered(other.v3_recovered) {  }
 
   void set_rct(bool arct) {
     rct = arct;

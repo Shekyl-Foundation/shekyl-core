@@ -465,6 +465,74 @@ namespace
   }
 }
 
+static bool try_v3_scan_output(const cryptonote::account_base& from, const transaction& tx,
+    size_t j, uint64_t& amount_out, rct::key& mask_out)
+{
+    const auto& keys = from.get_keys();
+    if (keys.m_pqc_secret_key.empty()) return false;
+    if (tx.version < 3) return false;
+    if (j >= tx.rct_signatures.outPk.size()) return false;
+    if (j >= tx.rct_signatures.enc_amounts.size()) return false;
+
+    std::vector<tx_extra_field> extra_fields;
+    if (!parse_tx_extra(tx.extra, extra_fields)) return false;
+    tx_extra_pqc_kem_ciphertext kem_ct_field;
+    if (!find_tx_extra_field_by_type(extra_fields, kem_ct_field)) return false;
+
+    static constexpr size_t HYBRID_KEM_CT_BYTES = 1120;
+    static constexpr size_t X25519_SK_BYTES = 32;
+    static constexpr size_t X25519_CT_BYTES = 32;
+    static constexpr size_t ML_KEM_CT_BYTES = 1088;
+    if (kem_ct_field.blob.size() < (j + 1) * HYBRID_KEM_CT_BYTES) return false;
+
+    const uint8_t* ct_ptr = reinterpret_cast<const uint8_t*>(kem_ct_field.blob.data()) + j * HYBRID_KEM_CT_BYTES;
+    crypto::public_key output_public_key;
+    if (!cryptonote::get_output_public_key(tx.vout[j], output_public_key)) return false;
+
+    auto vt_opt = cryptonote::get_output_view_tag(tx.vout[j]);
+    uint8_t view_tag = vt_opt ? vt_opt->data : 0;
+    uint8_t amount_tag = tx.rct_signatures.enc_amounts[j][8];
+
+    uint8_t ho_buf[32], y_buf[32], z_buf[32], k_amount_buf[32], recovered_bprime[32];
+    uint64_t recovered_amount = 0;
+    ShekylBuffer pqc_pk_buf{}, pqc_sk_buf{};
+    uint8_t h_pqc_buf[32];
+
+    bool ok = shekyl_scan_output_recover(
+        keys.m_pqc_secret_key.data(),
+        keys.m_pqc_secret_key.data() + X25519_SK_BYTES,
+        keys.m_pqc_secret_key.size() - X25519_SK_BYTES,
+        ct_ptr, ct_ptr + X25519_CT_BYTES, ML_KEM_CT_BYTES,
+        reinterpret_cast<const uint8_t*>(&output_public_key),
+        tx.rct_signatures.outPk[j].mask.bytes,
+        tx.rct_signatures.enc_amounts[j].data(),
+        amount_tag, view_tag,
+        static_cast<uint64_t>(j),
+        ho_buf, y_buf, z_buf, k_amount_buf, &recovered_amount,
+        recovered_bprime, &pqc_pk_buf, &pqc_sk_buf, h_pqc_buf);
+
+    if (pqc_pk_buf.ptr) shekyl_buffer_free(pqc_pk_buf.ptr, pqc_pk_buf.len);
+    if (pqc_sk_buf.ptr) shekyl_buffer_free(pqc_sk_buf.ptr, pqc_sk_buf.len);
+
+    if (!ok) {
+        memwipe(ho_buf, 32); memwipe(y_buf, 32);
+        memwipe(z_buf, 32); memwipe(k_amount_buf, 32);
+        return false;
+    }
+
+    if (memcmp(recovered_bprime, &keys.m_account_address.m_spend_public_key, 32) != 0) {
+        memwipe(ho_buf, 32); memwipe(y_buf, 32);
+        memwipe(z_buf, 32); memwipe(k_amount_buf, 32);
+        return false;
+    }
+
+    amount_out = recovered_amount;
+    memcpy(mask_out.bytes, z_buf, 32);
+    memwipe(ho_buf, 32); memwipe(y_buf, 32);
+    memwipe(z_buf, 32); memwipe(k_amount_buf, 32);
+    return true;
+}
+
 bool init_output_indices(map_output_idx_t& outs, std::map<uint64_t, std::vector<size_t> >& outs_mine, const std::vector<cryptonote::block>& blockchain, const map_hash2tx_t& mtx, const cryptonote::account_base& from) {
 
     for (const block& blk : blockchain) {
@@ -479,8 +547,6 @@ bool init_output_indices(map_output_idx_t& outs, std::map<uint64_t, std::vector<
             vtx.push_back(cit->second);
         }
 
-        //vtx.insert(vtx.end(), blk.);
-        // TODO: add all other txes
         for (size_t i = 0; i < vtx.size(); i++) {
             const transaction &tx = *vtx[i];
 
@@ -498,23 +564,38 @@ bool init_output_indices(map_output_idx_t& outs, std::map<uint64_t, std::vector<
                     outs[amount_key].push_back(oi);
                     size_t tx_global_idx = outs[amount_key].size() - 1;
                     outs[amount_key][tx_global_idx].idx = tx_global_idx;
-                    crypto::public_key output_public_key;
-                    cryptonote::get_output_public_key(out, output_public_key);
-                    if (is_out_to_acc(from.get_keys(), output_public_key, get_tx_pub_key_from_extra(tx), get_additional_tx_pub_keys_from_extra(tx), j)) {
+
+                    uint64_t recovered_amount = 0;
+                    rct::key recovered_mask{};
+                    if (try_v3_scan_output(from, tx, j, recovered_amount, recovered_mask))
+                    {
                         outs_mine[amount_key].push_back(tx_global_idx);
-                        // Decrypt RCT amount for non-coinbase outputs
-                        if (!is_miner && tx.rct_signatures.type != rct::RCTTypeNull
-                            && j < tx.rct_signatures.enc_amounts.size()) {
-                            crypto::key_derivation derivation;
-                            crypto::public_key tx_pub = get_tx_pub_key_from_extra(tx);
-                            if (crypto::generate_key_derivation(tx_pub, from.get_keys().m_view_secret_key, derivation)) {
-                                crypto::secret_key scalar;
-                                crypto::derivation_to_scalar(derivation, j, scalar);
-                                rct::ecdhTuple ecdh_info;
-                                memset(&ecdh_info, 0, sizeof(ecdh_info));
-                                memcpy(ecdh_info.amount.bytes, tx.rct_signatures.enc_amounts[j].data(), 8);
-                                rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar), true);
-                                outs[amount_key][tx_global_idx].amount = rct::h2d(ecdh_info.amount);
+                        outs[amount_key][tx_global_idx].amount = recovered_amount;
+                        outs[amount_key][tx_global_idx].v3_mask = recovered_mask;
+                        outs[amount_key][tx_global_idx].v3_recovered = true;
+                        LOG_PRINT_L2("v3 output detected: blk_h=" << oi.blk_height
+                            << " tx_no=" << i << " out_no=" << j
+                            << " amount=" << recovered_amount);
+                    }
+                    else
+                    {
+                        crypto::public_key output_public_key;
+                        cryptonote::get_output_public_key(out, output_public_key);
+                        if (is_out_to_acc(from.get_keys(), output_public_key, get_tx_pub_key_from_extra(tx), get_additional_tx_pub_keys_from_extra(tx), j)) {
+                            outs_mine[amount_key].push_back(tx_global_idx);
+                            if (!is_miner && tx.rct_signatures.type != rct::RCTTypeNull
+                                && j < tx.rct_signatures.enc_amounts.size()) {
+                                crypto::key_derivation derivation;
+                                crypto::public_key tx_pub = get_tx_pub_key_from_extra(tx);
+                                if (crypto::generate_key_derivation(tx_pub, from.get_keys().m_view_secret_key, derivation)) {
+                                    crypto::secret_key scalar;
+                                    crypto::derivation_to_scalar(derivation, j, scalar);
+                                    rct::ecdhTuple ecdh_info;
+                                    memset(&ecdh_info, 0, sizeof(ecdh_info));
+                                    memcpy(ecdh_info.amount.bytes, tx.rct_signatures.enc_amounts[j].data(), 8);
+                                    rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar), true);
+                                    outs[amount_key][tx_global_idx].amount = rct::h2d(ecdh_info.amount);
+                                }
                             }
                         }
                     }
@@ -526,22 +607,103 @@ bool init_output_indices(map_output_idx_t& outs, std::map<uint64_t, std::vector<
     return true;
 }
 
+static bool compute_v3_key_image(const cryptonote::account_base& from,
+    const transaction& tx, size_t out_no, crypto::key_image& img_out)
+{
+    const auto& keys = from.get_keys();
+    if (keys.m_pqc_secret_key.empty() || tx.version < 3) return false;
+    if (out_no >= tx.rct_signatures.outPk.size()) return false;
+    if (out_no >= tx.rct_signatures.enc_amounts.size()) return false;
+
+    std::vector<tx_extra_field> extra_fields;
+    if (!parse_tx_extra(tx.extra, extra_fields)) return false;
+    tx_extra_pqc_kem_ciphertext kem_ct_field;
+    if (!find_tx_extra_field_by_type(extra_fields, kem_ct_field)) return false;
+
+    static constexpr size_t HYBRID_KEM_CT_BYTES = 1120;
+    static constexpr size_t X25519_SK_BYTES = 32;
+    static constexpr size_t X25519_CT_BYTES = 32;
+    static constexpr size_t ML_KEM_CT_BYTES = 1088;
+    if (kem_ct_field.blob.size() < (out_no + 1) * HYBRID_KEM_CT_BYTES) return false;
+
+    const uint8_t* ct_ptr = reinterpret_cast<const uint8_t*>(kem_ct_field.blob.data()) + out_no * HYBRID_KEM_CT_BYTES;
+    crypto::public_key output_public_key;
+    if (!cryptonote::get_output_public_key(tx.vout[out_no], output_public_key)) return false;
+
+    auto vt_opt = cryptonote::get_output_view_tag(tx.vout[out_no]);
+    uint8_t view_tag = vt_opt ? vt_opt->data : 0;
+    uint8_t amount_tag = tx.rct_signatures.enc_amounts[out_no][8];
+
+    uint8_t ho_buf[32], y_buf[32], z_buf[32], k_amount_buf[32], recovered_bprime[32];
+    uint64_t recovered_amount = 0;
+    ShekylBuffer pqc_pk_buf{}, pqc_sk_buf{};
+    uint8_t h_pqc_buf[32];
+
+    bool ok = shekyl_scan_output_recover(
+        keys.m_pqc_secret_key.data(),
+        keys.m_pqc_secret_key.data() + X25519_SK_BYTES,
+        keys.m_pqc_secret_key.size() - X25519_SK_BYTES,
+        ct_ptr, ct_ptr + X25519_CT_BYTES, ML_KEM_CT_BYTES,
+        reinterpret_cast<const uint8_t*>(&output_public_key),
+        tx.rct_signatures.outPk[out_no].mask.bytes,
+        tx.rct_signatures.enc_amounts[out_no].data(),
+        amount_tag, view_tag,
+        static_cast<uint64_t>(out_no),
+        ho_buf, y_buf, z_buf, k_amount_buf, &recovered_amount,
+        recovered_bprime, &pqc_pk_buf, &pqc_sk_buf, h_pqc_buf);
+
+    if (pqc_pk_buf.ptr) shekyl_buffer_free(pqc_pk_buf.ptr, pqc_pk_buf.len);
+    if (pqc_sk_buf.ptr) shekyl_buffer_free(pqc_sk_buf.ptr, pqc_sk_buf.len);
+
+    if (!ok) {
+        memwipe(ho_buf, 32); memwipe(y_buf, 32);
+        memwipe(z_buf, 32); memwipe(k_amount_buf, 32);
+        return false;
+    }
+
+    // ki = (ho + b_spend) * Hp(O)
+    crypto::secret_key ho;
+    memcpy(&ho, ho_buf, 32);
+    crypto::secret_key dest_key;
+    sc_add(reinterpret_cast<unsigned char*>(&dest_key),
+           reinterpret_cast<const unsigned char*>(&ho),
+           reinterpret_cast<const unsigned char*>(&keys.m_spend_secret_key));
+
+    crypto::generate_key_image(output_public_key, dest_key, img_out);
+
+    memwipe(&ho, sizeof(ho));
+    memwipe(&dest_key, sizeof(dest_key));
+    memwipe(ho_buf, 32); memwipe(y_buf, 32);
+    memwipe(z_buf, 32); memwipe(k_amount_buf, 32);
+    return true;
+}
+
 bool init_spent_output_indices(map_output_idx_t& outs, map_output_t& outs_mine, const std::vector<cryptonote::block>& blockchain, const map_hash2tx_t& mtx, const cryptonote::account_base& from) {
 
     for (const map_output_t::value_type &o : outs_mine) {
         for (size_t i = 0; i < o.second.size(); ++i) {
             output_index &oi = outs[o.first][o.second[i]];
 
-            // construct key image for this output
             crypto::key_image img;
-            keypair in_ephemeral;
-            crypto::public_key out_key;
-            CHECK_AND_ASSERT_MES(get_output_key_from_target(oi.out, out_key), false, "Invalid output target type in spent output");
-            std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
-            subaddresses[from.get_keys().m_account_address.m_spend_public_key] = {0,0};
-            generate_key_image_helper(from.get_keys(), subaddresses, out_key, get_tx_pub_key_from_extra(*oi.p_tx), get_additional_tx_pub_keys_from_extra(*oi.p_tx), oi.out_no, in_ephemeral, img, hw::get_device(("default")));
+            bool got_image = false;
 
-            // lookup for this key image in the events vector
+            if (oi.v3_recovered)
+            {
+                got_image = compute_v3_key_image(from, *oi.p_tx, oi.out_no, img);
+                if (got_image)
+                    crypto::key_image_y_normalize(img);
+            }
+
+            if (!got_image)
+            {
+                keypair in_ephemeral;
+                crypto::public_key out_key;
+                CHECK_AND_ASSERT_MES(get_output_key_from_target(oi.out, out_key), false, "Invalid output target type in spent output");
+                std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
+                subaddresses[from.get_keys().m_account_address.m_spend_public_key] = {0,0};
+                generate_key_image_helper(from.get_keys(), subaddresses, out_key, get_tx_pub_key_from_extra(*oi.p_tx), get_additional_tx_pub_keys_from_extra(*oi.p_tx), oi.out_no, in_ephemeral, img, hw::get_device(("default")));
+            }
+
             for (auto& tx_pair : mtx) {
                 const transaction& tx = *tx_pair.second;
                 for (const txin_v &in : tx.vin) {
@@ -631,13 +793,24 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
             ts.real_out_tx_key = get_tx_pub_key_from_extra(*oi.p_tx);
             ts.rct = true;
 
-            if (oi.is_coin_base) {
+            if (oi.v3_recovered)
+            {
                 ts.amount = oi.amount;
-                // zeroCommit(amount) = G + amount*H, so the Pedersen mask
-                // scalar is exactly 1. rct::identity() returns the 32-byte
-                // encoding [01 00 ...] which decodes as scalar 1.
+                ts.mask = oi.v3_mask;
+                rct::key C_check = rct::commit(ts.amount, ts.mask);
+                if (!rct::equalKeys(C_check, oi.p_tx->rct_signatures.outPk[oi.out_no].mask)) {
+                    LOG_ERROR("v3 recovered commitment mismatch for output " << oi.out_no
+                        << " amount=" << ts.amount);
+                    continue;
+                }
+            }
+            else if (oi.is_coin_base)
+            {
+                ts.amount = oi.amount;
                 ts.mask = rct::identity();
-            } else {
+            }
+            else
+            {
                 const transaction &src_tx = *oi.p_tx;
                 crypto::key_derivation derivation;
                 if (!crypto::generate_key_derivation(ts.real_out_tx_key, from.get_keys().m_view_secret_key, derivation))
@@ -1282,6 +1455,8 @@ bool construct_fcmp_tx(
   std::vector<std::vector<uint8_t>> derived_pqc_public_keys(num_inputs);
   std::vector<std::vector<uint8_t>> derived_pqc_secret_keys(num_inputs);
 
+  std::vector<const tx_source_entry*> matched_sources(num_inputs, nullptr);
+
   auto wipe_keys = epee::misc_utils::create_scope_leave_handler([&derived_pqc_secret_keys]() {
     for (auto& sk : derived_pqc_secret_keys) {
       if (!sk.empty()) memwipe(sk.data(), sk.size());
@@ -1306,15 +1481,24 @@ bool construct_fcmp_tx(
   rct::key curve_tree_root;
   memcpy(curve_tree_root.bytes, &ref_blk.curve_tree_root, 32);
 
-  // Build inSk/inPk and tree paths per input
-  // We need the original source order to match vin after construct_tx sorted them
+  static constexpr size_t HYBRID_KEM_CT_BYTES = 1120;
+  static constexpr size_t X25519_SK_BYTES = 32;
+  static constexpr size_t X25519_CT_BYTES = 32;
+  static constexpr size_t ML_KEM_CT_BYTES = 1088;
+
+  // Pre-build blockchain/mtx once for source tx lookup
+  std::vector<block> ev_blockchain;
+  map_hash2tx_t ev_mtx;
+  find_block_chain(events, ev_blockchain, ev_mtx, get_block_hash(blk_head));
+
+  // Build inSk/inPk and tree paths per input using HKDF (scan_output_recover)
   for (size_t i = 0; i < num_inputs; ++i)
   {
     CHECK_AND_ASSERT_MES(std::holds_alternative<txin_to_key>(tx.vin[i]), false,
       "construct_fcmp_tx: unexpected input type");
     const txin_to_key& in = std::get<txin_to_key>(tx.vin[i]);
 
-    // Find the source entry matching this vin by key image
+    // Match vin to source using legacy key image (both sides use the same derivation)
     const tx_source_entry* matched_src = nullptr;
     for (const auto& src : sources)
     {
@@ -1325,26 +1509,113 @@ bool construct_fcmp_tx(
         src.real_out_tx_key, src.real_out_additional_tx_keys,
         src.real_output_in_tx_index, in_eph, ki, hw::get_device("default"));
       crypto::key_image_y_normalize(ki);
-      if (ki == in.k_image)
-      {
-        matched_src = &src;
-        inSk[i].dest = rct::sk2rct(in_eph.sec);
-        inSk[i].mask = src.mask;
-        inPk[i].dest = rct::pk2rct(out_key);
-        inPk[i].mask = src.rct ? src.outputs[src.real_output].second.mask : rct::zeroCommit(src.amount);
-        // TODO(PR-construct): replace with Rust derive_output_secrets (HKDF "shekyl-output-y")
-        {
-          crypto::key_derivation y_derivation;
-          crypto::generate_key_derivation(src.real_out_tx_key,
-            from.get_keys().m_view_secret_key, y_derivation);
-          crypto::ec_scalar y_sc;
-          crypto::derivation_to_y_scalar(y_derivation, src.real_output_in_tx_index, y_sc);
-          memcpy(y_keys[i].bytes, &y_sc, 32);
-        }
-        break;
-      }
+      if (ki == in.k_image) { matched_src = &src; break; }
     }
     CHECK_AND_ASSERT_MES(matched_src, false, "construct_fcmp_tx: could not match source for vin " << i);
+    matched_sources[i] = matched_src;
+
+    // Find source transaction
+    transaction src_tx_data;
+    {
+      bool found = false;
+      for (const auto& blk : ev_blockchain)
+      {
+        crypto::public_key blk_tx_key = get_tx_pub_key_from_extra(blk.miner_tx);
+        if (blk_tx_key == matched_src->real_out_tx_key)
+        { src_tx_data = blk.miner_tx; found = true; break; }
+        for (const auto& [hash, ptx] : ev_mtx)
+        {
+          crypto::public_key tx_pk = get_tx_pub_key_from_extra(*ptx);
+          if (tx_pk == matched_src->real_out_tx_key)
+          { src_tx_data = *ptx; found = true; break; }
+        }
+        if (found) break;
+      }
+      CHECK_AND_ASSERT_MES(found, false, "construct_fcmp_tx: source tx not found in events for vin " << i);
+    }
+
+    size_t output_in_tx = matched_src->real_output_in_tx_index;
+    crypto::public_key out_key = rct::rct2pk(matched_src->outputs[matched_src->real_output].second.dest);
+
+    // Recover all per-output secrets via HKDF (KEM decap + HKDF inside Rust)
+    std::vector<tx_extra_field> extra_fields;
+    parse_tx_extra(src_tx_data.extra, extra_fields);
+    tx_extra_pqc_kem_ciphertext kem_ct_field;
+    bool has_kem = find_tx_extra_field_by_type(extra_fields, kem_ct_field);
+    CHECK_AND_ASSERT_MES(has_kem, false, "construct_fcmp_tx: source tx missing KEM ciphertext for vin " << i);
+    CHECK_AND_ASSERT_MES(kem_ct_field.blob.size() >= (output_in_tx + 1) * HYBRID_KEM_CT_BYTES, false,
+      "construct_fcmp_tx: KEM ciphertext blob too short for vin " << i);
+
+    const uint8_t* ct_ptr = reinterpret_cast<const uint8_t*>(kem_ct_field.blob.data()) + output_in_tx * HYBRID_KEM_CT_BYTES;
+    const auto& sender_keys = from.get_keys();
+    CHECK_AND_ASSERT_MES(sender_keys.m_pqc_secret_key.size() > X25519_SK_BYTES, false,
+      "construct_fcmp_tx: sender PQC secret key too short");
+
+    CHECK_AND_ASSERT_MES(output_in_tx < src_tx_data.rct_signatures.outPk.size(), false,
+      "construct_fcmp_tx: outPk index out of range");
+    CHECK_AND_ASSERT_MES(output_in_tx < src_tx_data.rct_signatures.enc_amounts.size(), false,
+      "construct_fcmp_tx: enc_amounts index out of range");
+
+    auto vt_opt = get_output_view_tag(src_tx_data.vout[output_in_tx]);
+    uint8_t view_tag = vt_opt ? vt_opt->data : 0;
+    uint8_t amount_tag = src_tx_data.rct_signatures.enc_amounts[output_in_tx][8];
+
+    uint8_t ho_buf[32], y_buf[32], z_buf[32], k_amount_buf[32], recovered_bprime[32];
+    uint64_t recovered_amount = 0;
+    ShekylBuffer pqc_pk_buf{}, pqc_sk_buf{};
+    uint8_t h_pqc_buf[32];
+
+    bool scan_ok = shekyl_scan_output_recover(
+        sender_keys.m_pqc_secret_key.data(),
+        sender_keys.m_pqc_secret_key.data() + X25519_SK_BYTES,
+        sender_keys.m_pqc_secret_key.size() - X25519_SK_BYTES,
+        ct_ptr, ct_ptr + X25519_CT_BYTES, ML_KEM_CT_BYTES,
+        reinterpret_cast<const uint8_t*>(&out_key),
+        src_tx_data.rct_signatures.outPk[output_in_tx].mask.bytes,
+        src_tx_data.rct_signatures.enc_amounts[output_in_tx].data(),
+        amount_tag, view_tag,
+        static_cast<uint64_t>(output_in_tx),
+        ho_buf, y_buf, z_buf, k_amount_buf, &recovered_amount,
+        recovered_bprime, &pqc_pk_buf, &pqc_sk_buf, h_pqc_buf);
+    CHECK_AND_ASSERT_MES(scan_ok, false, "construct_fcmp_tx: scan_output_recover failed for vin " << i);
+
+    LOG_PRINT_L1("construct_fcmp_tx: vin " << i << " recovered amount=" << recovered_amount
+      << " output_in_tx=" << output_in_tx);
+
+    // Store PQC keys (used for signing later)
+    CHECK_AND_ASSERT_MES(pqc_pk_buf.ptr && pqc_sk_buf.ptr, false,
+      "construct_fcmp_tx: scan_output_recover returned null PQC buffers for vin " << i);
+    derived_pqc_public_keys[i].assign(pqc_pk_buf.ptr, pqc_pk_buf.ptr + pqc_pk_buf.len);
+    derived_pqc_secret_keys[i].assign(pqc_sk_buf.ptr, pqc_sk_buf.ptr + pqc_sk_buf.len);
+    memcpy(pqc_pk_hashes[i].bytes, h_pqc_buf, 32);
+    shekyl_buffer_free(pqc_pk_buf.ptr, pqc_pk_buf.len);
+    shekyl_buffer_free(pqc_sk_buf.ptr, pqc_sk_buf.len);
+
+    // Compute HKDF-correct dest key: ho + b_spend
+    crypto::secret_key ho_key;
+    memcpy(&ho_key, ho_buf, 32);
+    crypto::secret_key dest_key;
+    sc_add(reinterpret_cast<unsigned char*>(&dest_key),
+           reinterpret_cast<const unsigned char*>(&ho_key),
+           reinterpret_cast<const unsigned char*>(&from.get_keys().m_spend_secret_key));
+
+    inSk[i].dest = rct::sk2rct(dest_key);
+    memcpy(inSk[i].mask.bytes, z_buf, 32);
+    inPk[i].dest = rct::pk2rct(out_key);
+    inPk[i].mask = matched_src->rct ? matched_src->outputs[matched_src->real_output].second.mask
+                                     : rct::zeroCommit(matched_src->amount);
+    memcpy(y_keys[i].bytes, y_buf, 32);
+
+    // Replace key image in vin with correct HKDF-derived one: (ho + b_spend) * Hp(O)
+    crypto::key_image correct_ki;
+    crypto::generate_key_image(out_key, dest_key, correct_ki);
+    crypto::key_image_y_normalize(correct_ki);
+    std::get<txin_to_key>(tx.vin[i]).k_image = correct_ki;
+
+    memwipe(&ho_key, sizeof(ho_key));
+    memwipe(&dest_key, sizeof(dest_key));
+    memwipe(ho_buf, 32); memwipe(y_buf, 32);
+    memwipe(z_buf, 32); memwipe(k_amount_buf, 32);
 
     // Assemble tree path for this output's global index
     uint64_t global_idx = matched_src->outputs[matched_src->real_output].first;
@@ -1387,120 +1658,18 @@ bool construct_fcmp_tx(
         leaf_chunk_entries[i].push_back(entry);
       }
     }
-
-    // Derive per-input PQC keypair
-    // For test coinbase outputs, we need the KEM shared secret. We can derive it
-    // from the miner's PQC secret key and the KEM ciphertext in tx_extra.
-    const transaction* src_tx = nullptr;
-    // Find source transaction from events
-    crypto::hash src_tx_hash = matched_src->real_out_tx_key == crypto::null_pkey
-      ? crypto::null_hash : crypto::null_hash;
-    // We need to find the source tx. Look it up from the blockchain.
-    transaction src_tx_data;
-    crypto::hash src_tx_id;
-    {
-      // The source tx_key lets us find it. For coinbase, the output's tx is the miner tx.
-      // We need the KEM ciphertext to derive the shared secret.
-      // Use the events to find the source tx.
-      std::vector<block> blockchain;
-      map_hash2tx_t mtx;
-      find_block_chain(events, blockchain, mtx, get_block_hash(blk_head));
-
-      bool found = false;
-      for (const auto& blk : blockchain)
-      {
-        crypto::public_key blk_tx_key = get_tx_pub_key_from_extra(blk.miner_tx);
-        if (blk_tx_key == matched_src->real_out_tx_key)
-        {
-          src_tx_data = blk.miner_tx;
-          found = true;
-          break;
-        }
-        for (const auto& [hash, ptx] : mtx)
-        {
-          crypto::public_key tx_pk = get_tx_pub_key_from_extra(*ptx);
-          if (tx_pk == matched_src->real_out_tx_key)
-          {
-            src_tx_data = *ptx;
-            found = true;
-            break;
-          }
-        }
-        if (found) break;
-      }
-      CHECK_AND_ASSERT_MES(found, false, "construct_fcmp_tx: source tx not found in events");
-    }
-
-    // Extract KEM ciphertext from source tx
-    std::vector<tx_extra_field> extra_fields;
-    parse_tx_extra(src_tx_data.extra, extra_fields);
-    tx_extra_pqc_kem_ciphertext kem_ct_field;
-    bool has_kem = find_tx_extra_field_by_type(extra_fields, kem_ct_field);
-    CHECK_AND_ASSERT_MES(has_kem, false, "construct_fcmp_tx: source tx missing KEM ciphertext in tx_extra");
-
-    static constexpr size_t HYBRID_KEM_CT_BYTES = 1120;
-    size_t output_in_tx = matched_src->real_output_in_tx_index;
-    CHECK_AND_ASSERT_MES(kem_ct_field.blob.size() >= (output_in_tx + 1) * HYBRID_KEM_CT_BYTES, false,
-      "construct_fcmp_tx: KEM ciphertext blob too short");
-
-    const uint8_t* ct_ptr = reinterpret_cast<const uint8_t*>(kem_ct_field.blob.data()) + output_in_tx * HYBRID_KEM_CT_BYTES;
-    static constexpr size_t X25519_CT_BYTES = 32;
-    static constexpr size_t ML_KEM_CT_BYTES = 1088;
-
-    const uint8_t* ct_x25519 = ct_ptr;
-    const uint8_t* ct_ml_kem = ct_ptr + X25519_CT_BYTES;
-
-    // Decapsulate using the sender's PQC secret key
-    const auto& sender_keys = from.get_keys();
-    static constexpr size_t X25519_SK_BYTES = 32;
-    CHECK_AND_ASSERT_MES(sender_keys.m_pqc_secret_key.size() > X25519_SK_BYTES, false,
-      "construct_fcmp_tx: sender PQC secret key too short");
-
-    const uint8_t* sk_x25519 = sender_keys.m_pqc_secret_key.data();
-    const uint8_t* sk_ml_kem = sender_keys.m_pqc_secret_key.data() + X25519_SK_BYTES;
-    size_t sk_ml_kem_len = sender_keys.m_pqc_secret_key.size() - X25519_SK_BYTES;
-
-    uint8_t combined_ss[64];
-    bool decap_ok = shekyl_kem_decapsulate(
-      sk_x25519, sk_ml_kem, sk_ml_kem_len,
-      ct_x25519, ct_ml_kem, ML_KEM_CT_BYTES,
-      combined_ss);
-    CHECK_AND_ASSERT_MES(decap_ok, false, "construct_fcmp_tx: KEM decapsulation failed for input " << i);
-
-    ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(combined_ss, static_cast<uint64_t>(output_in_tx));
-    memwipe(combined_ss, sizeof(combined_ss));
-    CHECK_AND_ASSERT_MES(kp.success && kp.public_key.ptr && kp.secret_key.ptr, false,
-      "construct_fcmp_tx: PQC keypair derivation failed for input " << i);
-
-    derived_pqc_public_keys[i].assign(kp.public_key.ptr, kp.public_key.ptr + kp.public_key.len);
-    derived_pqc_secret_keys[i].assign(kp.secret_key.ptr, kp.secret_key.ptr + kp.secret_key.len);
-
-    uint8_t h_pqc[32];
-    bool hash_ok = shekyl_fcmp_pqc_leaf_hash(kp.public_key.ptr, kp.public_key.len, h_pqc);
-    shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
-    shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
-    CHECK_AND_ASSERT_MES(hash_ok, false, "construct_fcmp_tx: PQC leaf hash failed for input " << i);
-    memcpy(pqc_pk_hashes[i].bytes, h_pqc, 32);
   }
+
+  // Key images were replaced with HKDF-correct values; invalidate cached hashes.
+  tx.invalidate_hashes();
 
   // Gather output data for genRctFcmpPlusPlus
   std::vector<rct::xmr_amount> inamounts, outamounts;
   rct::keyV destinations_rct;
   for (size_t i = 0; i < num_inputs; ++i)
   {
-    const tx_source_entry* src = nullptr;
-    const txin_to_key& in = std::get<txin_to_key>(tx.vin[i]);
-    for (const auto& s : sources)
-    {
-      crypto::public_key ok = rct::rct2pk(s.outputs[s.real_output].second.dest);
-      keypair ep; crypto::key_image ki;
-      generate_key_image_helper(from.get_keys(), subaddresses, ok,
-        s.real_out_tx_key, s.real_out_additional_tx_keys,
-        s.real_output_in_tx_index, ep, ki, hw::get_device("default"));
-      crypto::key_image_y_normalize(ki);
-      if (ki == in.k_image) { src = &s; break; }
-    }
-    inamounts.push_back(src->amount);
+    CHECK_AND_ASSERT_MES(matched_sources[i], false, "construct_fcmp_tx: missing matched source for vin " << i);
+    inamounts.push_back(matched_sources[i]->amount);
   }
   for (const auto& out : tx.vout)
   {

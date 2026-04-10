@@ -14,6 +14,7 @@ pub mod signature;
 pub mod multisig;
 pub mod kem;
 pub mod derivation;
+pub mod output;
 pub mod error;
 
 pub use shekyl_address as address;

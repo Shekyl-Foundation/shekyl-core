@@ -208,7 +208,7 @@ impl KeyEncapsulation for HybridX25519MlKem {
 /// `ikm = x25519_ss || ml_kem_ss`
 /// `salt = "shekyl-kem-v1"`
 /// Output: 64-byte combined secret (OKM).
-fn combine_shared_secrets(
+pub(crate) fn combine_shared_secrets(
     x25519_ss: &[u8],
     ml_kem_ss: &[u8],
 ) -> Result<SharedSecret, CryptoError> {

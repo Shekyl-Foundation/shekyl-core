@@ -290,6 +290,8 @@ namespace tools
       cryptonote::keypair in_ephemeral;
       crypto::key_image ki;
       rct::key mask;
+      crypto::secret_key y{};     // v3: HKDF-derived y (T-component scalar)
+      bool v3_hkdf_scanned = false; // true when y/mask came from Rust scan_output_recover
       uint64_t amount;
       uint64_t money_transfered;
       bool error;
@@ -309,7 +311,7 @@ namespace tools
       bool m_frozen = false;
       uint64_t m_spent_height = 0;
       crypto::key_image m_key_image{}; //TODO: key_image stored twice :(
-      rct::key m_mask{};
+      crypto::secret_key m_mask{}; // Pedersen commitment mask z; zeroized on drop.
       crypto::secret_key m_y{};
       uint64_t m_amount = 0;
       bool m_rct = false;
@@ -2041,7 +2043,7 @@ namespace boost
     {
         if (ver < 1)
         {
-          x.m_mask = rct::identity();
+          x.m_mask = rct::rct2sk(rct::identity());
           x.m_amount = x.m_tx.vout[x.m_internal_output_index].amount;
         }
         if (ver < 2)

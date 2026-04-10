@@ -245,12 +245,16 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
   // we need the index
   for (uint64_t i = 0; i < tx.vout.size(); ++i)
   {
-    // Miner coinbase txes have their output stored as rct (amount=0) with a
-    // zero-mask commitment (amount*H) for FCMP++ compatibility.
+    // Miner coinbase txes: v3+ use on-chain outPk (real Pedersen commitment);
+    // v2 falls back to zeroCommit(amount) for backward compatibility.
     if (miner_tx && tx.version >= 2)
     {
       cryptonote::tx_out vout = tx.vout[i];
-      rct::key commitment = rct::zeroCommit(vout.amount);
+      rct::key commitment;
+      if (tx.version >= 3 && i < tx.rct_signatures.outPk.size())
+        commitment = tx.rct_signatures.outPk[i].mask;
+      else
+        commitment = rct::zeroCommit(vout.amount);
       vout.amount = 0;
       amount_output_indices[i] = add_output(tx_hash, vout, i, tx.unlock_time,
         &commitment);
@@ -371,7 +375,9 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
           continue;
 
         rct::key commitment;
-        if (is_miner && tx.version >= 2)
+        if (is_miner && tx.version >= 3 && i < tx.rct_signatures.outPk.size())
+          commitment = tx.rct_signatures.outPk[i].mask;
+        else if (is_miner && tx.version >= 2)
           commitment = rct::zeroCommit(vout.amount);
         else if (tx.version > 1 && i < tx.rct_signatures.outPk.size())
           commitment = tx.rct_signatures.outPk[i].mask;
@@ -537,7 +543,9 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
           continue;
 
         rct::key commitment;
-        if (is_miner && tx.version >= 2)
+        if (is_miner && tx.version >= 3 && i < tx.rct_signatures.outPk.size())
+          commitment = tx.rct_signatures.outPk[i].mask;
+        else if (is_miner && tx.version >= 2)
           commitment = rct::zeroCommit(vout.amount);
         else if (tx.version > 1 && i < tx.rct_signatures.outPk.size())
           commitment = tx.rct_signatures.outPk[i].mask;

@@ -392,22 +392,24 @@ namespace
 
         for (size_t i = 0; i < num_inputs; ++i)
         {
-            const size_t hdr_start = witness.size();
-            witness.resize(hdr_start + SHEKYL_PROVE_WITNESS_HEADER_BYTES);
-            uint8_t* base = witness.data() + hdr_start;
-
-            memcpy(base, inPk[i].dest.bytes, 32);       // O
             ge_p3 hp;
             hash_to_p3(hp, inPk[i].dest);
             key ki_gen;
             ge_p3_tobytes(reinterpret_cast<unsigned char*>(ki_gen.bytes), &hp);
-            memcpy(base + 32, ki_gen.bytes, 32);         // I = Hp(O)
-            memcpy(base + 64, inPk[i].mask.bytes, 32);   // C
-            memcpy(base + 96, pqc_pk_hashes[i].bytes, 32); // h_pqc
-            memcpy(base + 128, inSk[i].dest.bytes, 32);  // spend_key_x
-            memcpy(base + 160, spend_key_y[i].bytes, 32); // spend_key_y
-            memcpy(base + 192, inSk[i].mask.bytes, 32);  // commitment_mask z
-            memcpy(base + 224, pseudo_out_blinds[i].bytes, 32); // pseudo-out blind a_i
+
+            ProveInputFields fields;
+            memcpy(fields.output_key, inPk[i].dest.bytes, 32);
+            memcpy(fields.key_image_gen, ki_gen.bytes, 32);
+            memcpy(fields.commitment, inPk[i].mask.bytes, 32);
+            memcpy(fields.h_pqc, pqc_pk_hashes[i].bytes, 32);
+            memcpy(fields.spend_key_x, inSk[i].dest.bytes, 32);
+            memcpy(fields.spend_key_y, spend_key_y[i].bytes, 32);
+            memcpy(fields.commitment_mask, inSk[i].mask.bytes, 32);
+            memcpy(fields.pseudo_out_blind, pseudo_out_blinds[i].bytes, 32);
+
+            const size_t hdr_start = witness.size();
+            witness.resize(hdr_start + SHEKYL_PROVE_WITNESS_HEADER_BYTES);
+            shekyl_fcmp_build_witness_header(&fields, witness.data() + hdr_start);
 
             // Leaf chunk: Ed25519 output entries
             const auto& entries = leaf_chunk_entries[i];

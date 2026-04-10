@@ -154,7 +154,7 @@ pub fn derive_hybrid_pqc_keypair(
 /// Expands the seed into the `(xi, rho')` inputs that ML-DSA expects,
 /// then performs standard keygen. This matches FIPS 204 Algorithm 1
 /// with deterministic randomness.
-fn keygen_from_seed(
+pub fn keygen_from_seed(
     seed: &[u8; 32],
 ) -> Result<(ml_dsa_65::PublicKey, ml_dsa_65::PrivateKey), CryptoError> {
     // fips204's try_keygen_with_rng expects a CryptoRng + RngCore.
@@ -211,6 +211,7 @@ const LABEL_OUTPUT_AMOUNT_KEY: &[u8] = b"shekyl-output-amount-key";
 const LABEL_OUTPUT_VIEW_TAG_COMBINED: &[u8] = b"shekyl-output-view-tag-combined";
 const LABEL_OUTPUT_AMOUNT_TAG: &[u8] = b"shekyl-output-amount-tag";
 const LABEL_OUTPUT_PQC: &[u8] = b"shekyl-pqc-output";
+const LABEL_OUTPUT_PQC_ED25519: &[u8] = b"shekyl-pqc-ed25519";
 const LABEL_VIEW_TAG_X25519: &[u8] = b"shekyl-view-tag-x25519";
 
 /// All per-output secrets derived from a combined KEM shared secret.
@@ -220,13 +221,14 @@ const LABEL_VIEW_TAG_X25519: &[u8] = b"shekyl-view-tag-x25519";
 /// combined_ss = X25519(eph_sk, view_pk) || ML-KEM-768.Decap(kem_sk, ct)
 /// prk = HKDF-Extract(salt="shekyl-output-derive-v1", ikm=combined_ss)
 ///
-/// ho           = wide_reduce(HKDF-Expand(prk, "shekyl-output-x"              || idx_le64, 64))
-/// y            = wide_reduce(HKDF-Expand(prk, "shekyl-output-y"              || idx_le64, 64))
-/// z            = wide_reduce(HKDF-Expand(prk, "shekyl-output-mask"           || idx_le64, 64))
-/// k_amount     =             HKDF-Expand(prk, "shekyl-output-amount-key"     || idx_le64, 32)
+/// ho              = wide_reduce(HKDF-Expand(prk, "shekyl-output-x"              || idx_le64, 64))
+/// y               = wide_reduce(HKDF-Expand(prk, "shekyl-output-y"              || idx_le64, 64))
+/// z               = wide_reduce(HKDF-Expand(prk, "shekyl-output-mask"           || idx_le64, 64))
+/// k_amount        =             HKDF-Expand(prk, "shekyl-output-amount-key"     || idx_le64, 32)
 /// view_tag_combined = first_byte(HKDF-Expand(prk, "shekyl-output-view-tag-combined" || idx_le64, 32))
-/// amount_tag   = first_byte(HKDF-Expand(prk, "shekyl-output-amount-tag"     || idx_le64, 32))
-/// ml_dsa_seed  =             HKDF-Expand(prk, "shekyl-pqc-output"           || idx_le64, 32)
+/// amount_tag      = first_byte(HKDF-Expand(prk, "shekyl-output-amount-tag"     || idx_le64, 32))
+/// ml_dsa_seed     =             HKDF-Expand(prk, "shekyl-pqc-output"           || idx_le64, 32)
+/// ed25519_pqc_seed=             HKDF-Expand(prk, "shekyl-pqc-ed25519"          || idx_le64, 32)
 /// ```
 #[derive(zeroize::Zeroize, zeroize::ZeroizeOnDrop)]
 pub struct OutputSecrets {
@@ -244,6 +246,8 @@ pub struct OutputSecrets {
     pub amount_tag: u8,
     /// ML-DSA-65 deterministic keygen seed
     pub ml_dsa_seed: [u8; 32],
+    /// Ed25519 PQC component seed (for hybrid signing)
+    pub ed25519_pqc_seed: [u8; 32],
 }
 
 /// Derive all per-output secrets from the combined KEM shared secret.
@@ -261,6 +265,7 @@ pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSec
     let view_tag_combined = expand_first_byte(&hk, LABEL_OUTPUT_VIEW_TAG_COMBINED, output_index);
     let amount_tag = expand_first_byte(&hk, LABEL_OUTPUT_AMOUNT_TAG, output_index);
     let ml_dsa_seed = expand_32(&hk, LABEL_OUTPUT_PQC, output_index);
+    let ed25519_pqc_seed = expand_32(&hk, LABEL_OUTPUT_PQC_ED25519, output_index);
 
     assert!(ho != [0u8; 32], "HKDF produced zero ho scalar -- implementation bug");
     assert!(y != [0u8; 32], "HKDF produced zero y scalar -- implementation bug");
@@ -273,6 +278,7 @@ pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSec
         view_tag_combined,
         amount_tag,
         ml_dsa_seed,
+        ed25519_pqc_seed,
     }
 }
 
@@ -599,6 +605,7 @@ mod tests {
         assert_eq!(s1.view_tag_combined, s2.view_tag_combined);
         assert_eq!(s1.amount_tag, s2.amount_tag);
         assert_eq!(s1.ml_dsa_seed, s2.ml_dsa_seed);
+        assert_eq!(s1.ed25519_pqc_seed, s2.ed25519_pqc_seed);
     }
 
     #[test]
@@ -647,5 +654,89 @@ mod tests {
             if a[i] > b[i] { return false; }
         }
         false // equal
+    }
+
+    // ── Phase 0 domain-trap test ─────────────────────────────────────────
+    //
+    // This test intentionally asserts that the HKDF-derived y scalar
+    // (from derive_output_secrets) and the Keccak-derived y scalar
+    // (from the C++ derivation_to_y_scalar path) DISAGREE for the same
+    // input material.
+    //
+    // If someone "fixes" this test by making the two derivations agree,
+    // they have silently reintroduced the Keccak domain into the HKDF
+    // world and the FCMP++ prover will start accepting the wrong y.
+    // Do not "fix".
+
+    /// Simulate the C++ `derivation_to_y_scalar(derivation, output_index)`
+    /// path: Keccak-256("shekyl_y" || derivation_32 || varint(idx)) → sc_reduce32.
+    fn simulate_keccak_derivation_to_y_scalar(
+        derivation: &[u8; 32],
+        output_index: u64,
+    ) -> [u8; 32] {
+        use sha3::{Keccak256, digest::Digest};
+
+        let mut buf = Vec::with_capacity(8 + 32 + 10);
+        buf.extend_from_slice(b"shekyl_y");
+        buf.extend_from_slice(derivation);
+        // Monero varint encoding
+        let mut idx = output_index;
+        loop {
+            let byte = (idx & 0x7F) as u8;
+            idx >>= 7;
+            if idx == 0 {
+                buf.push(byte);
+                break;
+            } else {
+                buf.push(byte | 0x80);
+            }
+        }
+
+        let hash: [u8; 32] = Keccak256::digest(&buf).into();
+        // sc_reduce32: interpret as little-endian integer, reduce mod l
+        Scalar::from_bytes_mod_order(hash).to_bytes()
+    }
+
+    #[test]
+    fn hkdf_y_must_not_equal_keccak_derivation_to_y_scalar() {
+        // Phase 0 domain-trap guard: HKDF y and Keccak y must disagree.
+        //
+        // The C++ wallet's legacy path computes y via:
+        //   derivation_to_y_scalar(key_derivation, output_index)
+        //     = sc_reduce32(Keccak256("shekyl_y" || derivation || varint(idx)))
+        //
+        // The canonical HKDF path computes y via:
+        //   derive_output_secrets(combined_ss, output_index).y
+        //     = wide_reduce(HKDF-Expand(HKDF-Extract(salt_B, combined_ss),
+        //                               "shekyl-output-y" || idx_le64, 64))
+        //
+        // These MUST produce different values. If they ever agree, someone
+        // has aliased the Keccak domain into the HKDF world (or vice versa)
+        // and the FCMP++ prover will silently accept the wrong y scalar.
+        // DO NOT "FIX" A FAILURE HERE — investigate the domain separation.
+
+        let test_inputs: &[(&[u8; 64], u64)] = &[
+            (&[0x00; 64], 0),
+            (&[0x00; 64], 1),
+            (&[0xFF; 64], 0),
+            (&[0xAB; 64], 42),
+        ];
+
+        for (combined_ss, idx) in test_inputs {
+            let hkdf_y = derive_output_secrets(*combined_ss, *idx).y;
+
+            // Use the first 32 bytes as a simulated key_derivation
+            let derivation: [u8; 32] = (*combined_ss)[..32].try_into().unwrap();
+            let keccak_y = simulate_keccak_derivation_to_y_scalar(&derivation, *idx);
+
+            assert_ne!(
+                hkdf_y, keccak_y,
+                "DOMAIN TRAP FAILURE: HKDF y == Keccak y for combined_ss[..8]={:02x}{:02x}..., idx={}. \
+                 The two derivations use different hash functions (HKDF-SHA512 vs Keccak-256) \
+                 and different domains. If this assertion fires, someone has silently \
+                 reintroduced the Keccak domain into the HKDF world. Do not suppress.",
+                combined_ss[0], combined_ss[1], idx
+            );
+        }
     }
 }

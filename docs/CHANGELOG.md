@@ -125,7 +125,67 @@
   all HKDF salt/info pairs for the per-output derivation stream and the
   separate X25519-only view tag derivation.
 
+- **Unified Rust output construction (`construct_output`).** New
+  `shekyl-crypto-pq/src/output.rs` implements `construct_output` (KEM
+  encapsulation + HKDF → two-component key `O = ho*G + B + y*T`, Pedersen
+  commitment `C = z*G + amount*H`, encrypted amount, view tag, PQC leaf
+  hash) and `scan_output_recover` (KEM decapsulation + HKDF → recovered
+  spend key `B' = O - ho*G - y*T` for subaddress lookup, plus all per-output
+  secrets). FFI exports: `shekyl_construct_output`, `shekyl_scan_output_recover`.
+
+- **PQC signing in Rust (`sign_pqc_auth`).** ML-DSA-65 keypair is derived,
+  used, and wiped entirely within Rust. The secret key never crosses the
+  FFI boundary. FFI export: `shekyl_sign_pqc_auth`.
+
+- **FCMP++ witness header assembly in Rust.** The 256-byte witness header
+  (`[O:32][I:32][C:32][h_pqc:32][x:32][y:32][z:32][a:32]`) is now assembled
+  via `shekyl_fcmp_build_witness_header` with a typed `ProveInputFields`
+  struct, replacing 8 raw `memcpy` calls in C++.
+
+- **`construct_miner_tx` and `construct_tx_with_tx_key` rewired to Rust.**
+  Both v3 output construction paths now call `shekyl_construct_output` per
+  output in a unified loop. KEM ciphertexts and PQC leaf hashes are written
+  to `tx_extra`. The legacy `derivation_to_y_scalar` path is retired on all
+  construction paths.
+
+- **Wallet scanner uses `scan_output_recover`.** `wallet2::process_new_transaction`
+  has a v3-specific scanning path that calls `shekyl_scan_output_recover`
+  for KEM decapsulation, HKDF derivation, amount recovery, and subaddress
+  lookup. Key images are computed as `(ho + b_spend) * Hp(O)`.
+
+- **X25519-derived view tag.** Per-output view tags are now derived from the
+  X25519 shared secret only (no ML-KEM needed), enabling fast wallet scan
+  pre-filtering. Written during construction, checked first during scanning.
+
+- **`additional_tx_keys` removed for v3.** `need_additional_txkeys` is false
+  for `tx.version >= 3`. The `additional_tx_public_keys` field is no longer
+  populated or consumed in v3 construction or scanning.
+
+- **Real Pedersen commitments for coinbase (`RCTTypeNull`).** `outPk` and
+  `enc_amounts` are now serialized for `RCTTypeNull` transactions.
+  `blockchain_db.cpp` uses the on-chain `outPk[i].mask` for v3+ coinbase
+  instead of computing `zeroCommit(amount)`.
+
+- **`check_commitment_mask_valid` enforced.** Rejects trivial commitment
+  masks (`z = 0` or `z = 1`) for all non-coinbase v3 outputs. Called from
+  both `check_tx_outputs` and `prevalidate_miner_transaction`.
+
+- **PQC salt consolidation.** All per-output PQC key derivation now uses the
+  unified `OutputSecrets.ml_dsa_seed` from salt B
+  (`shekyl-output-derive-v1`). The legacy `HKDF_SALT_PQC_DERIVE` salt A is
+  deleted. **Testnet reset required** — invalidates all existing `h_pqc`.
+
+- **Chaingen test infrastructure updated for v3.** `init_output_indices`,
+  `fill_tx_sources`, `init_spent_output_indices`, and `construct_fcmp_tx`
+  now use `shekyl_scan_output_recover` for HKDF-based output ownership
+  detection, mask recovery, and key image computation.
+
 ### 🔄 Changed
+
+- **`transfer_details::m_mask` type changed.** `rct::key` → `crypto::secret_key`
+  for automatic zeroization on drop. All RCT call sites use explicit
+  `rct::sk2rct()` / `rct::rct2sk()` conversion. Binary-compatible (same
+  32-byte layout).
 
 - **`ecdhInfo` replaced by `enc_amounts`.** The per-output encrypted amount
   format changes from `ecdhTuple` (64 bytes: 32 mask + 32 amount) to

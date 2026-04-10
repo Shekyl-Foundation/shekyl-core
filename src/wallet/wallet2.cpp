@@ -2249,6 +2249,134 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
     {
       // assume coinbase isn't for us
     }
+    else if (tx.version >= 3 && !m_account.get_keys().m_pqc_secret_key.empty())
+    {
+      // v3 scan: use Rust scan_output_recover for subaddress-aware HKDF scanning.
+      cryptonote::tx_extra_pqc_kem_ciphertext kem_ct_field;
+      bool has_kem = find_tx_extra_field_by_type(tx_extra_fields, kem_ct_field);
+      if (has_kem)
+      {
+        static constexpr size_t X25519_SK_BYTES = 32;
+        const auto& pqc_sk = m_account.get_keys().m_pqc_secret_key;
+        const uint8_t* sk_x25519 = pqc_sk.data();
+        const uint8_t* sk_ml_kem = pqc_sk.data() + X25519_SK_BYTES;
+        const size_t sk_ml_kem_len = pqc_sk.size() - X25519_SK_BYTES;
+
+        for (size_t i = 0; i < tx.vout.size(); ++i)
+        {
+          if (output_found[i]) continue;
+
+          if (kem_ct_field.blob.size() < (i + 1) * cryptonote::HYBRID_KEM_CT_BYTES)
+            continue;
+
+          const uint8_t* ct_ptr = reinterpret_cast<const uint8_t*>(
+              kem_ct_field.blob.data()) + i * cryptonote::HYBRID_KEM_CT_BYTES;
+          const uint8_t* ct_x25519 = ct_ptr;
+          const uint8_t* ct_ml_kem = ct_ptr + cryptonote::X25519_CT_BYTES;
+
+          crypto::public_key output_public_key;
+          if (!get_output_public_key(tx.vout[i], output_public_key))
+            continue;
+
+          const uint8_t* commitment_ptr = (i < tx.rct_signatures.outPk.size())
+              ? tx.rct_signatures.outPk[i].mask.bytes : nullptr;
+          if (!commitment_ptr) continue;
+
+          const uint8_t* enc_amount_ptr = (i < tx.rct_signatures.enc_amounts.size())
+              ? tx.rct_signatures.enc_amounts[i].data() : nullptr;
+          if (!enc_amount_ptr) continue;
+          uint8_t amount_tag_on_chain = (i < tx.rct_signatures.enc_amounts.size())
+              ? tx.rct_signatures.enc_amounts[i][8] : 0;
+
+          std::optional<crypto::view_tag> vt_opt = get_output_view_tag(tx.vout[i]);
+          uint8_t view_tag_on_chain = vt_opt ? vt_opt->data : 0;
+
+          uint8_t ho_buf[32], y_buf[32], z_buf[32], k_amount_buf[32], recovered_b[32], h_pqc_buf[32];
+          uint64_t recovered_amount = 0;
+          ShekylBuffer pqc_pk_buf = {}, pqc_sk_buf = {};
+
+          bool ok = shekyl_scan_output_recover(
+            sk_x25519, sk_ml_kem, sk_ml_kem_len,
+            ct_x25519, ct_ml_kem, cryptonote::ML_KEM_768_CT_BYTES,
+            reinterpret_cast<const uint8_t*>(&output_public_key),
+            commitment_ptr, enc_amount_ptr,
+            amount_tag_on_chain, view_tag_on_chain,
+            static_cast<uint64_t>(i),
+            ho_buf, y_buf, z_buf, k_amount_buf, &recovered_amount,
+            recovered_b, &pqc_pk_buf, &pqc_sk_buf, h_pqc_buf);
+
+          if (pqc_pk_buf.ptr) shekyl_buffer_free(pqc_pk_buf.ptr, pqc_pk_buf.len);
+          if (pqc_sk_buf.ptr) shekyl_buffer_free(pqc_sk_buf.ptr, pqc_sk_buf.len);
+
+          if (!ok)
+          {
+            memwipe(ho_buf, 32); memwipe(y_buf, 32); memwipe(z_buf, 32); memwipe(k_amount_buf, 32);
+            continue;
+          }
+
+          // Subaddress lookup: check recovered_b against known spend keys.
+          crypto::public_key recovered_spend_key;
+          memcpy(recovered_spend_key.data, recovered_b, 32);
+          auto subaddr_it = m_subaddresses.find(recovered_spend_key);
+          if (subaddr_it == m_subaddresses.end())
+          {
+            memwipe(ho_buf, 32); memwipe(y_buf, 32); memwipe(z_buf, 32); memwipe(k_amount_buf, 32);
+            continue;
+          }
+
+          // Output belongs to us at this subaddress.
+          output_found[i] = true;
+          tx_scan_info[i].received = cryptonote::subaddress_receive_info{
+              subaddr_it->second, derivation};
+          tx_scan_info[i].money_transfered = miner_tx ? tx.vout[i].amount : recovered_amount;
+          tx_scan_info[i].amount = tx_scan_info[i].money_transfered;
+          memcpy(tx_scan_info[i].mask.bytes, z_buf, 32);
+          memcpy(tx_scan_info[i].y.data, y_buf, 32);
+          tx_scan_info[i].v3_hkdf_scanned = true;
+          tx_scan_info[i].error = false;
+
+          // Key image for v3: I = (ho + b_spend) * Hp(O)
+          if (!m_background_syncing && !m_watch_only)
+          {
+            crypto::secret_key x_secret;
+            sc_add(reinterpret_cast<unsigned char*>(&x_secret),
+                   ho_buf, m_account.get_keys().m_spend_secret_key.data);
+            crypto::generate_key_image(output_public_key, x_secret, tx_scan_info[i].ki);
+            memwipe(&x_secret, sizeof(x_secret));
+            tx_scan_info[i].in_ephemeral.pub = output_public_key;
+            memcpy(tx_scan_info[i].in_ephemeral.sec.data, ho_buf, 32);
+          }
+          else
+          {
+            tx_scan_info[i].in_ephemeral.pub = output_public_key;
+            tx_scan_info[i].in_ephemeral.sec = crypto::null_skey;
+            tx_scan_info[i].ki = rct::rct2ki(rct::zero());
+          }
+
+          memwipe(ho_buf, 32); memwipe(y_buf, 32); memwipe(z_buf, 32); memwipe(k_amount_buf, 32);
+
+          // For v3, skip the legacy scan_output member (which calls decodeRct and
+          // generate_key_image_helper_precomp — neither works for two-component keys).
+          // Directly add to outs and bookkeep.
+          THROW_WALLET_EXCEPTION_IF(std::find(outs.begin(), outs.end(), i) != outs.end(),
+            error::wallet_internal_error, "Same output cannot be added twice");
+          if (tx_scan_info[i].money_transfered == 0)
+          {
+            MERROR("Invalid output amount from v3 scan, skipping");
+            tx_scan_info[i].error = true;
+            continue;
+          }
+          outs.push_back(i);
+          ++num_vouts_received;
+          THROW_WALLET_EXCEPTION_IF(
+            tx_money_got_in_outs[tx_scan_info[i].received->index] >=
+              std::numeric_limits<uint64_t>::max() - tx_scan_info[i].money_transfered,
+            error::wallet_internal_error, "Overflow in received amounts");
+          tx_money_got_in_outs[tx_scan_info[i].received->index] += tx_scan_info[i].money_transfered;
+          tx_amounts_individual_outs[tx_scan_info[i].received->index].push_back(tx_scan_info[i].money_transfered);
+        }
+      }
+    }
     else
     {
       for (size_t i = 0; i < tx.vout.size(); ++i)
@@ -2390,25 +2518,33 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
             td.m_subaddr_index = tx_scan_info[o].received->index;
             if (should_expand(tx_scan_info[o].received->index))
               expand_subaddresses(tx_scan_info[o].received->index);
-            if (tx.vout[o].amount == 0)
+            if (tx_scan_info[o].v3_hkdf_scanned)
             {
-              td.m_mask = tx_scan_info[o].mask;
+              td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
+              td.m_y = tx_scan_info[o].y;
               td.m_rct = true;
             }
-            else if (miner_tx && tx.version >= 2)
+            else if (tx.vout[o].amount == 0)
             {
-              td.m_mask = rct::identity();
+              td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
               td.m_rct = true;
-            }
-            else
-            {
-              td.m_mask = rct::identity();
-              td.m_rct = false;
-            }
-            {
               crypto::ec_scalar y_sc;
               crypto::derivation_to_y_scalar(tx_scan_info[o].received->derivation, o, y_sc);
               memcpy(&td.m_y, &y_sc, sizeof(td.m_y));
+            }
+            else if (miner_tx && tx.version >= 2)
+            {
+              td.m_mask = rct::rct2sk(rct::identity());
+              td.m_rct = true;
+              crypto::ec_scalar y_sc;
+              crypto::derivation_to_y_scalar(tx_scan_info[o].received->derivation, o, y_sc);
+              memcpy(&td.m_y, &y_sc, sizeof(td.m_y));
+            }
+            else
+            {
+              td.m_mask = rct::rct2sk(rct::identity());
+              td.m_rct = false;
+              memset(&td.m_y, 0, sizeof(td.m_y));
             }
             td.m_frozen = false;
             {
@@ -2522,25 +2658,33 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
             td.m_subaddr_index = tx_scan_info[o].received->index;
             if (should_expand(tx_scan_info[o].received->index))
               expand_subaddresses(tx_scan_info[o].received->index);
-            if (tx.vout[o].amount == 0)
+            if (tx_scan_info[o].v3_hkdf_scanned)
             {
-              td.m_mask = tx_scan_info[o].mask;
+              td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
+              td.m_y = tx_scan_info[o].y;
               td.m_rct = true;
             }
-            else if (miner_tx && tx.version >= 2)
+            else if (tx.vout[o].amount == 0)
             {
-              td.m_mask = rct::identity();
+              td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
               td.m_rct = true;
-            }
-            else
-            {
-              td.m_mask = rct::identity();
-              td.m_rct = false;
-            }
-            {
               crypto::ec_scalar y_sc;
               crypto::derivation_to_y_scalar(tx_scan_info[o].received->derivation, o, y_sc);
               memcpy(&td.m_y, &y_sc, sizeof(td.m_y));
+            }
+            else if (miner_tx && tx.version >= 2)
+            {
+              td.m_mask = rct::rct2sk(rct::identity());
+              td.m_rct = true;
+              crypto::ec_scalar y_sc;
+              crypto::derivation_to_y_scalar(tx_scan_info[o].received->derivation, o, y_sc);
+              memcpy(&td.m_y, &y_sc, sizeof(td.m_y));
+            }
+            else
+            {
+              td.m_mask = rct::rct2sk(rct::identity());
+              td.m_rct = false;
+              memset(&td.m_y, 0, sizeof(td.m_y));
             }
             if (output_tracker_cache)
               (*output_tracker_cache)[std::make_pair(tx.vout[o].amount, td.m_global_output_index)] = kit->second;
@@ -8019,13 +8163,13 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     tx_output_entry real_oe;
     real_oe.first = td.m_global_output_index;
     real_oe.second.dest = rct::pk2rct(td.get_public_key());
-    real_oe.second.mask = rct::commit(td.amount(), td.m_mask);
+    real_oe.second.mask = rct::commit(td.amount(), rct::sk2rct(td.m_mask));
     src.outputs.push_back(real_oe);
     src.real_output = 0;
     src.real_out_tx_key = get_tx_pub_key_from_extra(td.m_tx, td.m_pk_index);
     src.real_out_additional_tx_keys = get_additional_tx_pub_keys_from_extra(td.m_tx);
     src.real_output_in_tx_index = td.m_internal_output_index;
-    src.mask = td.m_mask;
+    src.mask = rct::sk2rct(td.m_mask);
     detail::print_source_entry(src);
   }
   LOG_PRINT_L2("FCMP++ inputs prepared");
@@ -8133,12 +8277,10 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
           src.real_output_in_tx_index, in_eph, tmp_ki, m_account.get_device());
         inSk[i].dest = rct::sk2rct(in_eph.sec);
       }
-      inSk[i].mask = td.m_mask;
+      inSk[i].mask = rct::sk2rct(td.m_mask);
 
       inPk[i].dest = rct::pk2rct(out_key);
-      // TODO(PR-construct): kill m_rct ternary — all v3 outputs have real commitments.
-      // Coinbase uses KEM self-encap to derive (ho, y, z), C = z*G + amount*H.
-      inPk[i].mask = td.m_rct ? rct::commit(td.m_amount, td.m_mask) : rct::zeroCommit(td.m_amount);
+      inPk[i].mask = td.m_rct ? rct::commit(td.m_amount, rct::sk2rct(td.m_mask)) : rct::zeroCommit(td.m_amount);
 
       auto path_it = m_fcmp_precomputed_paths.find(td.m_global_output_index);
       THROW_WALLET_EXCEPTION_IF(path_it == m_fcmp_precomputed_paths.end(), error::wallet_internal_error,
@@ -12653,7 +12795,7 @@ size_t wallet2::import_outputs(const std::tuple<uint64_t, uint64_t, std::vector<
     td.m_spent = etd.m_flags.m_spent;
     td.m_frozen = etd.m_flags.m_frozen;
     td.m_spent_height = 0;
-    td.m_mask = rct::identity();
+    td.m_mask = rct::rct2sk(rct::identity());
     td.m_amount = etd.m_amount;
     td.m_rct = etd.m_flags.m_rct;
     td.m_key_image_known = etd.m_flags.m_key_image_known;

@@ -18,6 +18,60 @@ static CONSENSUS_REGISTRY: Mutex<Option<shekyl_consensus::ConsensusRegistry>> = 
 ///   a    = pseudo-out blinding factor (r_c = a - z)
 pub const SHEKYL_PROVE_WITNESS_HEADER_BYTES: usize = 256;
 
+/// Typed struct for passing FCMP++ prover inputs across FFI.
+/// C++ fills named fields instead of writing at hand-counted byte offsets.
+#[repr(C)]
+pub struct ProveInputFields {
+    pub output_key: [u8; 32],
+    pub key_image_gen: [u8; 32],
+    pub commitment: [u8; 32],
+    pub h_pqc: [u8; 32],
+    pub spend_key_x: [u8; 32],
+    pub spend_key_y: [u8; 32],
+    pub commitment_mask: [u8; 32],
+    pub pseudo_out_blind: [u8; 32],
+}
+
+/// Result struct for construct_output FFI.
+#[repr(C)]
+pub struct ShekylOutputData {
+    pub output_key: [u8; 32],
+    pub commitment: [u8; 32],
+    pub enc_amount: [u8; 8],
+    pub amount_tag: u8,
+    pub view_tag_x25519: u8,
+    pub kem_ciphertext_x25519: [u8; 32],
+    pub kem_ciphertext_ml_kem: ShekylBuffer,
+    pub pqc_public_key: ShekylBuffer,
+    pub h_pqc: [u8; 32],
+    pub y: [u8; 32],
+    pub z: [u8; 32],
+    pub k_amount: [u8; 32],
+    pub success: bool,
+}
+
+/// Result struct for scan_output FFI.
+#[repr(C)]
+pub struct ShekylScannedOutput {
+    pub y: [u8; 32],
+    pub z: [u8; 32],
+    pub k_amount: [u8; 32],
+    pub amount: u64,
+    pub amount_tag: u8,
+    pub pqc_public_key: ShekylBuffer,
+    pub pqc_secret_key: ShekylBuffer,
+    pub h_pqc: [u8; 32],
+    pub success: bool,
+}
+
+/// Result struct for sign_pqc_auth FFI.
+#[repr(C)]
+pub struct ShekylPqcAuthResult {
+    pub hybrid_public_key: ShekylBuffer,
+    pub signature: ShekylBuffer,
+    pub success: bool,
+}
+
 // ─── Version / Init ─────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -2756,6 +2810,383 @@ fn tx_builder_error_code(e: &shekyl_tx_builder::TxBuilderError) -> i32 {
         FcmpProveError(_) => -25,
         PqcSignError { .. } => -26,
     }
+}
+
+// ─── Output Construction / Scanning / PQC Signing ────────────────────────────
+
+/// Build the 256-byte witness header from a typed struct.
+///
+/// # Safety
+/// - `input` must point to a valid `ProveInputFields`.
+/// - `out_buf` must point to at least 256 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_fcmp_build_witness_header(
+    input: *const ProveInputFields,
+    out_buf: *mut u8,
+) -> bool {
+    if input.is_null() || out_buf.is_null() {
+        return false;
+    }
+    let inp = &*input;
+    let buf = std::slice::from_raw_parts_mut(out_buf, SHEKYL_PROVE_WITNESS_HEADER_BYTES);
+    buf[0..32].copy_from_slice(&inp.output_key);
+    buf[32..64].copy_from_slice(&inp.key_image_gen);
+    buf[64..96].copy_from_slice(&inp.commitment);
+    buf[96..128].copy_from_slice(&inp.h_pqc);
+    buf[128..160].copy_from_slice(&inp.spend_key_x);
+    buf[160..192].copy_from_slice(&inp.spend_key_y);
+    buf[192..224].copy_from_slice(&inp.commitment_mask);
+    buf[224..256].copy_from_slice(&inp.pseudo_out_blind);
+    true
+}
+
+/// Construct a two-component output via the unified HKDF path.
+///
+/// # Safety
+/// - `x25519_pk` must point to 32 bytes.
+/// - `ml_kem_ek` must point to `ml_kem_ek_len` bytes (expected: 1184).
+/// - `spend_key` must point to 32 bytes (compressed Edwards point B).
+/// - The returned `ShekylOutputData` owns its buffer fields; free them
+///   with `shekyl_buffer_free` when done.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_construct_output(
+    x25519_pk: *const u8,
+    ml_kem_ek: *const u8,
+    ml_kem_ek_len: usize,
+    spend_key: *const u8,
+    amount: u64,
+    output_index: u64,
+) -> ShekylOutputData {
+    let fail = ShekylOutputData {
+        output_key: [0; 32],
+        commitment: [0; 32],
+        enc_amount: [0; 8],
+        amount_tag: 0,
+        view_tag_x25519: 0,
+        kem_ciphertext_x25519: [0; 32],
+        kem_ciphertext_ml_kem: ShekylBuffer::null(),
+        pqc_public_key: ShekylBuffer::null(),
+        h_pqc: [0; 32],
+        y: [0; 32],
+        z: [0; 32],
+        k_amount: [0; 32],
+        success: false,
+    };
+
+    let x_pk = match arr32_from_ptr(x25519_pk) {
+        Some(v) => v,
+        None => return fail,
+    };
+    let sk = match arr32_from_ptr(spend_key) {
+        Some(v) => v,
+        None => return fail,
+    };
+    let ek = match slice_from_ptr(ml_kem_ek, ml_kem_ek_len) {
+        Some(v) => v,
+        None => return fail,
+    };
+
+    use shekyl_crypto_pq::output::construct_output;
+    match construct_output(&x_pk, ek, &sk, amount, output_index) {
+        Ok(out) => ShekylOutputData {
+            output_key: out.output_key,
+            commitment: out.commitment,
+            enc_amount: out.enc_amount,
+            amount_tag: out.amount_tag,
+            view_tag_x25519: out.view_tag_x25519,
+            kem_ciphertext_x25519: out.kem_ciphertext_x25519,
+            kem_ciphertext_ml_kem: ShekylBuffer::from_vec(out.kem_ciphertext_ml_kem.clone()),
+            pqc_public_key: ShekylBuffer::from_vec(out.pqc_public_key.clone()),
+            h_pqc: out.h_pqc,
+            y: out.y,
+            z: out.z,
+            k_amount: out.k_amount,
+            success: true,
+            // out drops here — ZeroizeOnDrop wipes y, z, k_amount
+        },
+        Err(_) => fail,
+    }
+}
+
+/// Free a ShekylOutputData's heap-allocated buffer fields.
+///
+/// # Safety
+/// Only call once per ShekylOutputData returned from `shekyl_construct_output`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_output_data_free(data: *mut ShekylOutputData) {
+    if data.is_null() {
+        return;
+    }
+    let d = &mut *data;
+    // Wipe secret fields
+    use zeroize::Zeroize;
+    d.y.zeroize();
+    d.z.zeroize();
+    d.k_amount.zeroize();
+    if !d.kem_ciphertext_ml_kem.ptr.is_null() {
+        shekyl_buffer_free(d.kem_ciphertext_ml_kem.ptr, d.kem_ciphertext_ml_kem.len);
+        d.kem_ciphertext_ml_kem = ShekylBuffer::null();
+    }
+    if !d.pqc_public_key.ptr.is_null() {
+        shekyl_buffer_free(d.pqc_public_key.ptr, d.pqc_public_key.len);
+        d.pqc_public_key = ShekylBuffer::null();
+    }
+}
+
+/// Scan an output: KEM decap + HKDF derivation + verification.
+///
+/// # Safety
+/// - Pointer parameters must be valid and sized as documented.
+/// - `y_out`, `z_out`, `k_amount_out` must each point to 32 writable bytes
+///   (caller-owned secret buffers; caller is responsible for wiping).
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_scan_output(
+    x25519_sk: *const u8,
+    ml_kem_dk: *const u8,
+    ml_kem_dk_len: usize,
+    kem_ct_x25519: *const u8,
+    kem_ct_ml_kem: *const u8,
+    kem_ct_ml_kem_len: usize,
+    output_key: *const u8,
+    commitment: *const u8,
+    enc_amount: *const u8,
+    amount_tag_on_chain: u8,
+    view_tag_on_chain: u8,
+    spend_key: *const u8,
+    output_index: u64,
+    y_out: *mut u8,
+    z_out: *mut u8,
+    k_amount_out: *mut u8,
+    amount_out: *mut u64,
+    pqc_pk_out: *mut ShekylBuffer,
+    pqc_sk_out: *mut ShekylBuffer,
+    h_pqc_out: *mut [u8; 32],
+) -> bool {
+    let x_sk = match arr32_from_ptr(x25519_sk) {
+        Some(v) => v,
+        None => return false,
+    };
+    let dk = match slice_from_ptr(ml_kem_dk, ml_kem_dk_len) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ct_x = match arr32_from_ptr(kem_ct_x25519) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ct_ml = match slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) {
+        Some(v) => v,
+        None => return false,
+    };
+    let o = match arr32_from_ptr(output_key) {
+        Some(v) => v,
+        None => return false,
+    };
+    let c = match arr32_from_ptr(commitment) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ea = match slice_from_ptr(enc_amount, 8) {
+        Some(v) => {
+            let mut arr = [0u8; 8];
+            arr.copy_from_slice(v);
+            arr
+        },
+        None => return false,
+    };
+    let sk = match arr32_from_ptr(spend_key) {
+        Some(v) => v,
+        None => return false,
+    };
+
+    if y_out.is_null() || z_out.is_null() || k_amount_out.is_null()
+        || amount_out.is_null() || pqc_pk_out.is_null() || pqc_sk_out.is_null()
+        || h_pqc_out.is_null()
+    {
+        return false;
+    }
+
+    use shekyl_crypto_pq::output::scan_output;
+    match scan_output(
+        &x_sk, dk, &ct_x, ct_ml, &o, &c, &ea,
+        amount_tag_on_chain, view_tag_on_chain, &sk, output_index,
+    ) {
+        Ok(scanned) => {
+            std::ptr::copy_nonoverlapping(scanned.y.as_ptr(), y_out, 32);
+            std::ptr::copy_nonoverlapping(scanned.z.as_ptr(), z_out, 32);
+            std::ptr::copy_nonoverlapping(scanned.k_amount.as_ptr(), k_amount_out, 32);
+            *amount_out = scanned.amount;
+            *pqc_pk_out = ShekylBuffer::from_vec(scanned.pqc_public_key.clone());
+            *pqc_sk_out = ShekylBuffer::from_vec(scanned.pqc_secret_key.clone());
+            *h_pqc_out = scanned.h_pqc;
+            // scanned drops here — ZeroizeOnDrop wipes y, z, k_amount, pqc_secret_key
+            true
+        },
+        Err(_) => false,
+    }
+}
+
+/// Scan an output recovering the spend key B' = O - ho*G - y*T.
+///
+/// Unlike `shekyl_scan_output`, this function does NOT take a `spend_key`
+/// parameter. Instead, it returns the recovered spend key so the caller
+/// can look it up in a subaddress table.
+///
+/// # Safety
+/// - Same pointer requirements as `shekyl_scan_output`.
+/// - `recovered_spend_key_out`, `ho_out` must point to 32 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_scan_output_recover(
+    x25519_sk: *const u8,
+    ml_kem_dk: *const u8,
+    ml_kem_dk_len: usize,
+    kem_ct_x25519: *const u8,
+    kem_ct_ml_kem: *const u8,
+    kem_ct_ml_kem_len: usize,
+    output_key: *const u8,
+    commitment: *const u8,
+    enc_amount: *const u8,
+    amount_tag_on_chain: u8,
+    view_tag_on_chain: u8,
+    output_index: u64,
+    ho_out: *mut u8,
+    y_out: *mut u8,
+    z_out: *mut u8,
+    k_amount_out: *mut u8,
+    amount_out: *mut u64,
+    recovered_spend_key_out: *mut u8,
+    pqc_pk_out: *mut ShekylBuffer,
+    pqc_sk_out: *mut ShekylBuffer,
+    h_pqc_out: *mut [u8; 32],
+) -> bool {
+    let x_sk = match arr32_from_ptr(x25519_sk) {
+        Some(v) => v,
+        None => return false,
+    };
+    let dk = match slice_from_ptr(ml_kem_dk, ml_kem_dk_len) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ct_x = match arr32_from_ptr(kem_ct_x25519) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ct_ml = match slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) {
+        Some(v) => v,
+        None => return false,
+    };
+    let o = match arr32_from_ptr(output_key) {
+        Some(v) => v,
+        None => return false,
+    };
+    let c = match arr32_from_ptr(commitment) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ea = match slice_from_ptr(enc_amount, 8) {
+        Some(v) => {
+            let mut arr = [0u8; 8];
+            arr.copy_from_slice(v);
+            arr
+        },
+        None => return false,
+    };
+
+    if ho_out.is_null() || y_out.is_null() || z_out.is_null() || k_amount_out.is_null()
+        || amount_out.is_null() || recovered_spend_key_out.is_null()
+        || pqc_pk_out.is_null() || pqc_sk_out.is_null() || h_pqc_out.is_null()
+    {
+        return false;
+    }
+
+    use shekyl_crypto_pq::output::scan_output_recover;
+    match scan_output_recover(
+        &x_sk, dk, &ct_x, ct_ml, &o, &c, &ea,
+        amount_tag_on_chain, view_tag_on_chain, output_index,
+    ) {
+        Ok(recovered) => {
+            std::ptr::copy_nonoverlapping(recovered.ho.as_ptr(), ho_out, 32);
+            std::ptr::copy_nonoverlapping(recovered.y.as_ptr(), y_out, 32);
+            std::ptr::copy_nonoverlapping(recovered.z.as_ptr(), z_out, 32);
+            std::ptr::copy_nonoverlapping(recovered.k_amount.as_ptr(), k_amount_out, 32);
+            *amount_out = recovered.amount;
+            std::ptr::copy_nonoverlapping(recovered.recovered_spend_key.as_ptr(), recovered_spend_key_out, 32);
+            *pqc_pk_out = ShekylBuffer::from_vec(recovered.pqc_public_key.clone());
+            *pqc_sk_out = ShekylBuffer::from_vec(recovered.pqc_secret_key.clone());
+            *h_pqc_out = recovered.h_pqc;
+            true
+        },
+        Err(_) => false,
+    }
+}
+
+/// Sign a message using the HKDF-derived hybrid PQC keypair for an output.
+/// ML-DSA secret key never crosses this boundary — it lives and dies in Rust.
+///
+/// # Safety
+/// - `combined_ss` must point to 64 bytes.
+/// - `message` must point to `message_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_sign_pqc_auth(
+    combined_ss: *const u8,
+    output_index: u64,
+    message: *const u8,
+    message_len: usize,
+) -> ShekylPqcAuthResult {
+    let fail = ShekylPqcAuthResult {
+        hybrid_public_key: ShekylBuffer::null(),
+        signature: ShekylBuffer::null(),
+        success: false,
+    };
+
+    let ss = match slice_from_ptr(combined_ss, 64) {
+        Some(v) => {
+            let mut arr = [0u8; 64];
+            arr.copy_from_slice(v);
+            arr
+        },
+        None => return fail,
+    };
+    let msg = match slice_from_ptr(message, message_len) {
+        Some(v) => v,
+        None => return fail,
+    };
+
+    use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
+    match sign_pqc_auth_for_output(&ss, output_index, msg) {
+        Ok(auth) => ShekylPqcAuthResult {
+            hybrid_public_key: ShekylBuffer::from_vec(auth.hybrid_public_key),
+            signature: ShekylBuffer::from_vec(auth.signature),
+            success: true,
+        },
+        Err(_) => fail,
+    }
+}
+
+/// Free a ShekylPqcAuthResult's heap-allocated fields.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_pqc_auth_result_free(result: *mut ShekylPqcAuthResult) {
+    if result.is_null() {
+        return;
+    }
+    let r = &mut *result;
+    if !r.hybrid_public_key.ptr.is_null() {
+        shekyl_buffer_free(r.hybrid_public_key.ptr, r.hybrid_public_key.len);
+        r.hybrid_public_key = ShekylBuffer::null();
+    }
+    if !r.signature.ptr.is_null() {
+        shekyl_buffer_free(r.signature.ptr, r.signature.len);
+        r.signature = ShekylBuffer::null();
+    }
+}
+
+fn arr32_from_ptr(ptr: *const u8) -> Option<[u8; 32]> {
+    if ptr.is_null() {
+        return None;
+    }
+    let mut arr = [0u8; 32];
+    unsafe { std::ptr::copy_nonoverlapping(ptr, arr.as_mut_ptr(), 32) };
+    Some(arr)
 }
 
 #[cfg(test)]

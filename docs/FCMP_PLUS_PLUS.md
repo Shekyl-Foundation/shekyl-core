@@ -679,19 +679,26 @@ in vout order.
 
 ### Per-Output Keypair Derivation
 
-From the combined shared secret, each output derives its own PQC keypair:
+From the combined shared secret, each output derives its own PQC keypair
+using the unified `OutputSecrets` HKDF stream (salt B =
+`shekyl-output-derive-v1`):
 
 ```text
-output_seed = HKDF-Expand(
-    prk  = shared_secret,
-    info = "shekyl-pqc-output" || output_index (LE u32),
-    len  = 32
-)
-ml_dsa_keypair = ML-DSA-65.KeyGen(seed = output_seed)
+ml_dsa_seed = OutputSecrets.ml_dsa_seed   // HKDF info: "shekyl-pqc-output" || output_index_le64
+ml_dsa_keypair = ML-DSA-65.KeyGen(seed = ml_dsa_seed)
 ```
 
-This is implemented in `rust/shekyl-crypto-pq/src/derivation.rs` and
-exposed via `shekyl_fcmp_derive_pqc_keypair()`.
+This is implemented in `rust/shekyl-crypto-pq/src/output.rs` as part of
+`construct_output` and `scan_output_recover`. The FFI functions
+`shekyl_construct_output` and `shekyl_scan_output_recover` return the PQC
+public key (and secret key for scan). For signing, `shekyl_sign_pqc_auth`
+derives the keypair internally from `combined_ss`, signs, and wipes —
+the ML-DSA secret key never crosses the FFI boundary.
+
+> **Note:** The legacy `shekyl_fcmp_derive_pqc_keypair` function used a
+> separate HKDF salt A (`shekyl-pqc-derive-v1`). This was consolidated into
+> the unified salt B in PR-construct. All `h_pqc` leaf hashes from the
+> pre-consolidation testnet are invalid. A testnet reset is required.
 
 ### Wallet Restore from Seed
 
@@ -1169,6 +1176,22 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Wallet RPC `native-sign` feature (`transfer_native`) | **Done** | `rust/shekyl-wallet-rpc/src/wallet.rs` |
 | `wallet2_ffi_prepare_transfer` / `_finalize_transfer` | **Done** | `src/wallet/wallet2_ffi.cpp`, `wallet2_ffi.h` |
 | `shekyl-tx-builder` unit tests (19 tests) | **Done** | `rust/shekyl-tx-builder/src/tests.rs` |
+| Rust `construct_output` (KEM + HKDF → O, C, enc, view_tag, PQC) | **Done** | `shekyl-crypto-pq/src/output.rs` |
+| Rust `scan_output_recover` (KEM decap + HKDF → B', ho, y, z, PQC) | **Done** | `shekyl-crypto-pq/src/output.rs` |
+| FFI `shekyl_construct_output` / `shekyl_scan_output_recover` | **Done** | `shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
+| Rust PQC signing (`shekyl_sign_pqc_auth`, sk in Rust only) | **Done** | `shekyl-crypto-pq/src/output.rs`, `shekyl-ffi/src/lib.rs` |
+| Rust witness header assembly (`shekyl_fcmp_build_witness_header`) | **Done** | `shekyl-ffi/src/lib.rs` |
+| `construct_miner_tx` v3 → `shekyl_construct_output` | **Done** | `cryptonote_tx_utils.cpp` |
+| `construct_tx_with_tx_key` v3 → `shekyl_construct_output` | **Done** | `cryptonote_tx_utils.cpp` |
+| Wallet v3 scanner via `scan_output_recover` | **Done** | `wallet2.cpp` |
+| X25519-only view tag (sender + scanner) | **Done** | `output.rs`, `wallet2.cpp` |
+| `additional_tx_keys` removed for v3 | **Done** | `cryptonote_tx_utils.cpp` |
+| `RCTTypeNull` serializes `outPk` + `enc_amounts` | **Done** | `rctTypes.h` |
+| On-chain `outPk` for v3+ coinbase | **Done** | `blockchain_db.cpp` |
+| `check_commitment_mask_valid` rejects z=0/z=1 | **Done** | `blockchain.cpp` |
+| PQC salt unified to `shekyl-output-derive-v1` | **Done** | `derivation.rs`, `output.rs` |
+| `transfer_details::m_mask` → `crypto::secret_key` | **Done** | `wallet2.h`, `wallet2.cpp` |
+| Chaingen test infra for v3 HKDF outputs | **Done** | `chaingen.cpp`, `chaingen.h` |
 
 ---
 
@@ -1518,10 +1541,12 @@ The scanner checks `view_tag_x25519` first (cheap: one X25519 + one HKDF).
 On match, it performs full ML-KEM decap and verifies `view_tag_combined` as
 a cross-check (DoS hardening).
 
-**Interim (PR-foundation):** The current C++ code uses
-`derivation_to_y_scalar` with Keccak domain separator `"shekyl_y"`. This is
-marked `TODO(PR-construct)` and will be deleted when the wallet migrates to
-`derive_output_secrets`. The canonical HKDF derivation is the source of truth.
+**Interim path (legacy, removed):** The C++ `derivation_to_y_scalar` with
+Keccak domain separator `"shekyl_y"` was used during PR-foundation. As of
+PR-construct, all construction and scanning paths use the canonical HKDF
+derivation above via `shekyl_construct_output` (construction) and
+`shekyl_scan_output_recover` (scanning). The legacy Keccak derivation is
+no longer used on any consensus-critical path.
 
 ### Commitment Mask Independence
 
@@ -1542,9 +1567,10 @@ the legacy `ecdhInfo` (`ecdhTuple`):
 ```
 
 - `ecdhHash(k)` is `cn_fast_hash("amount" || k)`, truncated to 8 bytes
-- `amount_tag` is `0x00` (placeholder) until PR-construct derives it from HKDF
-- `ecdhTuple` is retained only as a local struct for the scanner shim
-  (`ecdhDecode` + `genCommitmentMask`), marked `TODO(PR-construct)`
+- `amount_tag` is derived from HKDF `OutputSecrets.amount_tag` (1 byte)
+- `ecdhTuple` is retained as a compatibility shim for `genRctFcmpPlusPlus`
+  internal amount encryption. Construction paths overwrite with HKDF-derived
+  values from `shekyl_construct_output` after the RCT stub is filled.
 - `ecdhEncode` has been removed from the codebase
 
 ### Witness Header (256 bytes)
@@ -1559,10 +1585,13 @@ the legacy `ecdhInfo` (`ecdhTuple`):
 | I | Key image generator Hp(O) |
 | C | Pedersen commitment (curve tree leaf) |
 | h_pqc | H(ml_dsa_pk) PQC leaf binding |
-| x | SAL spend secret key |
-| y | SAL output-key secret (`Hs_y(derivation, i)`) |
-| z | Pedersen commitment mask |
+| x | SAL spend secret key (`ho + b_spend`) |
+| y | SAL output-key secret (HKDF-derived) |
+| z | Pedersen commitment mask (HKDF-derived) |
 | a | Pseudo-out blinding factor |
+
+Assembly is performed by `shekyl_fcmp_build_witness_header` in Rust via a
+typed `ProveInputFields` `#[repr(C)]` struct, replacing raw `memcpy` calls.
 
 ### Security Properties
 

@@ -195,13 +195,19 @@ namespace rct {
         bool serialize_rctsig_base(Archive<W> &ar, size_t inputs, size_t outputs)
         {
           FIELD(type)
-          if (type == RCTTypeNull)
-            return ar.good();
-          if (type != RCTTypeFcmpPlusPlusPqc)
+          if (type != RCTTypeNull && type != RCTTypeFcmpPlusPlusPqc)
             return false;
-          VARINT_FIELD(txnFee)
-          FIELD(referenceBlock)
 
+          if (type == RCTTypeFcmpPlusPlusPqc)
+          {
+            VARINT_FIELD(txnFee)
+            FIELD(referenceBlock)
+          }
+
+          // outPk and enc_amounts are serialized for both RCTTypeNull (coinbase)
+          // and RCTTypeFcmpPlusPlusPqc. Coinbase outputs carry real Pedersen
+          // commitments C = z*G + amount*H so that check_commitment_mask_valid
+          // can reject mask=1 (trivial) commitments on all outputs uniformly.
           ar.tag("enc_amounts");
           ar.begin_array();
           PREPARE_CUSTOM_VECTOR_SERIALIZATION(outputs, enc_amounts);
@@ -210,7 +216,6 @@ namespace rct {
           for (size_t i = 0; i < outputs; ++i)
           {
             ar.begin_object();
-            // Wire format: 8 bytes encrypted amount + 1 byte amount tag = 9 bytes
             crypto::hash8 trunc_amount;
             uint8_t amount_tag;
             if (typename Archive<W>::is_saving())

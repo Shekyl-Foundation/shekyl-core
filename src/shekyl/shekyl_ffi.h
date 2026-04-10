@@ -321,6 +321,122 @@ bool shekyl_decode_blob(
     size_t data_out_cap,
     size_t* data_len_out);
 
+// ─── Output Construction / Scanning / PQC Signing ────────────────────────────
+
+// Typed struct for FCMP++ prover inputs (replaces hand-counted memcpy offsets).
+struct ProveInputFields {
+    uint8_t output_key[32];
+    uint8_t key_image_gen[32];
+    uint8_t commitment[32];
+    uint8_t h_pqc[32];
+    uint8_t spend_key_x[32];
+    uint8_t spend_key_y[32];
+    uint8_t commitment_mask[32];
+    uint8_t pseudo_out_blind[32];
+};
+
+// Build the 256-byte witness header from a typed ProveInputFields.
+// out_buf must point to at least 256 writable bytes.
+bool shekyl_fcmp_build_witness_header(
+    const ProveInputFields* input,
+    uint8_t* out_buf);
+
+// Result of construct_output.
+struct ShekylOutputData {
+    uint8_t output_key[32];
+    uint8_t commitment[32];
+    uint8_t enc_amount[8];
+    uint8_t amount_tag;
+    uint8_t view_tag_x25519;
+    uint8_t kem_ciphertext_x25519[32];
+    ShekylBuffer kem_ciphertext_ml_kem;
+    ShekylBuffer pqc_public_key;
+    uint8_t h_pqc[32];
+    uint8_t y[32];
+    uint8_t z[32];
+    uint8_t k_amount[32];
+    bool success;
+};
+
+// Construct a two-component output via unified HKDF path.
+ShekylOutputData shekyl_construct_output(
+    const uint8_t* x25519_pk,
+    const uint8_t* ml_kem_ek,
+    size_t ml_kem_ek_len,
+    const uint8_t* spend_key,
+    uint64_t amount,
+    uint64_t output_index);
+
+// Free heap-allocated fields in ShekylOutputData.
+void shekyl_output_data_free(ShekylOutputData* data);
+
+// Scan an output: KEM decap + HKDF + verification.
+// y_out, z_out, k_amount_out: caller-owned 32-byte buffers for secrets.
+// Caller is responsible for wiping these after use.
+bool shekyl_scan_output(
+    const uint8_t* x25519_sk,
+    const uint8_t* ml_kem_dk,
+    size_t ml_kem_dk_len,
+    const uint8_t* kem_ct_x25519,
+    const uint8_t* kem_ct_ml_kem,
+    size_t kem_ct_ml_kem_len,
+    const uint8_t* output_key,
+    const uint8_t* commitment,
+    const uint8_t* enc_amount,
+    uint8_t amount_tag_on_chain,
+    uint8_t view_tag_on_chain,
+    const uint8_t* spend_key,
+    uint64_t output_index,
+    uint8_t* y_out,
+    uint8_t* z_out,
+    uint8_t* k_amount_out,
+    uint64_t* amount_out,
+    ShekylBuffer* pqc_pk_out,
+    ShekylBuffer* pqc_sk_out,
+    uint8_t* h_pqc_out);
+
+// Scan an output recovering the spend key B' = O - ho*G - y*T.
+// Caller looks up B' in subaddress table to determine ownership.
+bool shekyl_scan_output_recover(
+    const uint8_t* x25519_sk,
+    const uint8_t* ml_kem_dk,
+    size_t ml_kem_dk_len,
+    const uint8_t* kem_ct_x25519,
+    const uint8_t* kem_ct_ml_kem,
+    size_t kem_ct_ml_kem_len,
+    const uint8_t* output_key,
+    const uint8_t* commitment,
+    const uint8_t* enc_amount,
+    uint8_t amount_tag_on_chain,
+    uint8_t view_tag_on_chain,
+    uint64_t output_index,
+    uint8_t* ho_out,
+    uint8_t* y_out,
+    uint8_t* z_out,
+    uint8_t* k_amount_out,
+    uint64_t* amount_out,
+    uint8_t* recovered_spend_key_out,
+    ShekylBuffer* pqc_pk_out,
+    ShekylBuffer* pqc_sk_out,
+    uint8_t* h_pqc_out);
+
+// PQC auth result (hybrid pk + signature).
+struct ShekylPqcAuthResult {
+    ShekylBuffer hybrid_public_key;
+    ShekylBuffer signature;
+    bool success;
+};
+
+// Sign using HKDF-derived hybrid PQC keypair. ML-DSA secret key never
+// crosses this boundary — derived, used, and wiped entirely in Rust.
+ShekylPqcAuthResult shekyl_sign_pqc_auth(
+    const uint8_t* combined_ss,
+    uint64_t output_index,
+    const uint8_t* message,
+    size_t message_len);
+
+void shekyl_pqc_auth_result_free(ShekylPqcAuthResult* result);
+
 // ─── FCMP++: Seed derivation ────────────────────────────────────────────────
 
 // Derive Ed25519 spend key from 32-byte master seed. Writes 32 bytes.

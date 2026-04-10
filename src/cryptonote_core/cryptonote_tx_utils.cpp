@@ -131,80 +131,61 @@ namespace cryptonote
     }
 
     uint64_t summary_amounts = 0;
-    for (size_t no = 0; no < out_amounts.size(); no++)
-    {
-      crypto::key_derivation derivation = AUTO_VAL_INIT(derivation);
-      crypto::public_key out_eph_public_key = AUTO_VAL_INIT(out_eph_public_key);
-      bool r = crypto::generate_key_derivation(miner_address.m_view_public_key, txkey.sec, derivation);
-      CHECK_AND_ASSERT_MES(r, false, "while creating outs: failed to generate_key_derivation(" << miner_address.m_view_public_key << ", " << crypto::secret_key_explicit_print_ref{txkey.sec} << ")");
 
-      r = crypto::derive_public_key(derivation, no, miner_address.m_spend_public_key, out_eph_public_key);
-      CHECK_AND_ASSERT_MES(r, false, "while creating outs: failed to derive_public_key(" << derivation << ", " << no << ", "<< miner_address.m_spend_public_key << ")");
-
-      uint64_t amount = out_amounts[no];
-      summary_amounts += amount;
-
-      bool use_view_tags = hard_fork_version >= HF_VERSION_VIEW_TAGS;
-      crypto::view_tag view_tag;
-      if (use_view_tags)
-        crypto::derive_view_tag(derivation, no, view_tag);
-
-      tx_out out;
-      cryptonote::set_tx_out(amount, out_eph_public_key, use_view_tags, view_tag, out);
-
-      tx.vout.push_back(out);
-    }
-
-    CHECK_AND_ASSERT_MES(summary_amounts == block_reward, false, "Failed to construct miner tx, summary_amounts = " << summary_amounts << " not equal block_reward = " << block_reward);
-
-    if (hard_fork_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC && miner_address.m_pqc_public_key.empty())
-    {
-      MWARNING("Miner address lacks PQC public key at HF " << (int)hard_fork_version
-        << "; coinbase outputs will have H(pqc_pk) = 0 in the curve tree leaf, "
-        "creating a distinguishable pattern. All genesis addresses must include PQC keys.");
-    }
+    // v3 unified construction via Rust FFI: single shekyl_construct_output call per output
+    // produces O, C, enc_amount, amount_tag, view_tag, KEM ciphertext, PQC leaf hash.
     if (hard_fork_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC && !miner_address.m_pqc_public_key.empty())
     {
       static constexpr size_t X25519_PK_BYTES = 32;
       CHECK_AND_ASSERT_MES(miner_address.m_pqc_public_key.size() > X25519_PK_BYTES,
         false, "miner PQC public key too short (need x25519[32] || ml_kem_ek[1184])");
 
-      // m_pqc_public_key layout: x25519_pk[32] || ml_kem_ek[1184]
       const uint8_t* pk_x25519 = miner_address.m_pqc_public_key.data();
       const uint8_t* pk_ml_kem = miner_address.m_pqc_public_key.data() + X25519_PK_BYTES;
       const size_t pk_ml_kem_len = miner_address.m_pqc_public_key.size() - X25519_PK_BYTES;
 
       tx_extra_pqc_kem_ciphertext kem_field;
       kem_field.blob.reserve(out_amounts.size() * HYBRID_KEM_CT_BYTES);
-
       tx_extra_pqc_leaf_hashes leaf_hash_field;
       leaf_hash_field.blob.reserve(out_amounts.size() * PQC_LEAF_HASH_BYTES);
 
+      tx.rct_signatures.outPk.resize(out_amounts.size());
+      tx.rct_signatures.enc_amounts.resize(out_amounts.size());
+
       for (size_t i = 0; i < out_amounts.size(); ++i)
       {
-        ShekylBuffer ct_buf = {};
-        uint8_t ss[64];
-        bool ok = shekyl_kem_encapsulate(pk_x25519, pk_ml_kem, pk_ml_kem_len, &ct_buf, ss);
-        CHECK_AND_ASSERT_MES(ok && ct_buf.ptr && ct_buf.len == HYBRID_KEM_CT_BYTES,
-          false, "KEM self-encapsulation failed for coinbase output " << i);
+        ShekylOutputData od = shekyl_construct_output(
+          pk_x25519, pk_ml_kem, pk_ml_kem_len,
+          reinterpret_cast<const uint8_t*>(&miner_address.m_spend_public_key),
+          out_amounts[i], static_cast<uint64_t>(i));
+        CHECK_AND_ASSERT_MES(od.success, false,
+          "shekyl_construct_output failed for coinbase output " << i);
 
-        // Store full hybrid ciphertext: x25519_ct[32] || ml_kem_ct[1088]
-        kem_field.blob.append(
-          reinterpret_cast<const char*>(ct_buf.ptr), HYBRID_KEM_CT_BYTES);
-        shekyl_buffer_free(ct_buf.ptr, ct_buf.len);
+        crypto::public_key out_key;
+        memcpy(out_key.data, od.output_key, 32);
+        crypto::view_tag vt;
+        vt.data = od.view_tag_x25519;
 
-        ShekylPqcKeypair derived = shekyl_fcmp_derive_pqc_keypair(ss, static_cast<uint64_t>(i));
-        memwipe(ss, sizeof(ss));
-        CHECK_AND_ASSERT_MES(derived.success && derived.public_key.ptr && derived.public_key.len > 0,
-          false, "Per-output PQC keypair derivation failed for coinbase output " << i);
+        tx_out out;
+        cryptonote::set_tx_out(out_amounts[i], out_key, true, vt, out);
+        tx.vout.push_back(out);
 
-        uint8_t h_pqc[32];
-        ok = shekyl_fcmp_pqc_leaf_hash(derived.public_key.ptr, derived.public_key.len, h_pqc);
-        shekyl_buffer_free(derived.public_key.ptr, derived.public_key.len);
-        shekyl_buffer_free(derived.secret_key.ptr, derived.secret_key.len);
-        CHECK_AND_ASSERT_MES(ok, false, "PQC leaf hash failed for coinbase output " << i);
+        memcpy(tx.rct_signatures.outPk[i].mask.bytes, od.commitment, 32);
 
-        leaf_hash_field.blob.append(reinterpret_cast<const char*>(h_pqc), PQC_LEAF_HASH_BYTES);
+        memcpy(tx.rct_signatures.enc_amounts[i].data(), od.enc_amount, 8);
+        tx.rct_signatures.enc_amounts[i][8] = od.amount_tag;
+
+        kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
+        if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
+          kem_field.blob.append(
+            reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
+            od.kem_ciphertext_ml_kem.len);
+
+        leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.h_pqc), PQC_LEAF_HASH_BYTES);
+
+        summary_amounts += out_amounts[i];
+        ShekylOutputData tmp = od;
+        shekyl_output_data_free(&tmp);
       }
 
       {
@@ -227,6 +208,38 @@ namespace cryptonote
       }
       if (!sort_tx_extra(tx.extra, tx.extra))
         return false;
+    }
+    else
+    {
+      if (hard_fork_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
+      {
+        MWARNING("Miner address lacks PQC public key at HF " << (int)hard_fork_version
+          << "; coinbase outputs will have H(pqc_pk) = 0 in the curve tree leaf, "
+          "creating a distinguishable pattern. All genesis addresses must include PQC keys.");
+      }
+
+      for (size_t no = 0; no < out_amounts.size(); no++)
+      {
+        crypto::key_derivation derivation = AUTO_VAL_INIT(derivation);
+        crypto::public_key out_eph_public_key = AUTO_VAL_INIT(out_eph_public_key);
+        bool r = crypto::generate_key_derivation(miner_address.m_view_public_key, txkey.sec, derivation);
+        CHECK_AND_ASSERT_MES(r, false, "while creating outs: failed to generate_key_derivation(" << miner_address.m_view_public_key << ", " << crypto::secret_key_explicit_print_ref{txkey.sec} << ")");
+
+        r = crypto::derive_public_key(derivation, no, miner_address.m_spend_public_key, out_eph_public_key);
+        CHECK_AND_ASSERT_MES(r, false, "while creating outs: failed to derive_public_key(" << derivation << ", " << no << ", "<< miner_address.m_spend_public_key << ")");
+
+        uint64_t amount = out_amounts[no];
+        summary_amounts += amount;
+
+        bool use_view_tags = hard_fork_version >= HF_VERSION_VIEW_TAGS;
+        crypto::view_tag view_tag;
+        if (use_view_tags)
+          crypto::derive_view_tag(derivation, no, view_tag);
+
+        tx_out out;
+        cryptonote::set_tx_out(amount, out_eph_public_key, use_view_tags, view_tag, out);
+        tx.vout.push_back(out);
+      }
     }
 
     tx.version = 3;
@@ -449,93 +462,82 @@ namespace cryptonote
 
     std::vector<crypto::public_key> additional_tx_public_keys;
 
-    // we don't need to include additional tx keys if:
-    //   - all the destinations are standard addresses
-    //   - there's only one destination which is a subaddress
-    bool need_additional_txkeys = num_subaddresses > 0 && (num_stdaddresses > 0 || num_subaddresses > 1);
-    if (need_additional_txkeys)
-      CHECK_AND_ASSERT_MES(destinations.size() == additional_tx_keys.size(), false, "Wrong amount of additional tx keys");
+    // v3+: per-output KEM ciphertext replaces additional_tx_keys entirely.
+    // additional_tx_keys are dead on v3 — per-output ephemeral key material
+    // comes from the hybrid KEM ciphertext (tag 0x06) instead.
+    bool need_additional_txkeys = false;
+    if (tx.version < 3)
+    {
+      need_additional_txkeys = num_subaddresses > 0 && (num_stdaddresses > 0 || num_subaddresses > 1);
+      if (need_additional_txkeys)
+        CHECK_AND_ASSERT_MES(destinations.size() == additional_tx_keys.size(), false, "Wrong amount of additional tx keys");
+    }
 
     uint64_t summary_outs_money = 0;
-    //fill outputs
-    size_t output_index = 0;
-    for(const tx_destination_entry& dst_entr: destinations)
-    {
-      CHECK_AND_ASSERT_MES(dst_entr.amount > 0 || tx.version > 1, false, "Destination with wrong amount: " << dst_entr.amount);
-      crypto::public_key out_eph_public_key;
-      crypto::view_tag view_tag;
+    // Per-output data from construct_output (v3 only), used to overwrite stub RCT.
+    struct v3_output_rct {
+      uint8_t commitment[32];
+      std::array<uint8_t, 9> enc_amount_with_tag;
+    };
+    std::vector<v3_output_rct> v3_rct_data;
 
-      hwdev.generate_output_ephemeral_keys(tx.version,sender_account_keys, txkey_pub, tx_key,
-                                           dst_entr, change_addr, output_index,
-                                           need_additional_txkeys, additional_tx_keys,
-                                           additional_tx_public_keys, amount_keys, out_eph_public_key,
-                                           use_view_tags, view_tag);
-
-      tx_out out;
-      if (dst_entr.is_staking)
-        cryptonote::set_staked_tx_out(dst_entr.amount, out_eph_public_key, view_tag, dst_entr.stake_tier, out);
-      else
-        cryptonote::set_tx_out(dst_entr.amount, out_eph_public_key, use_view_tags, view_tag, out);
-      tx.vout.push_back(out);
-      output_index++;
-      summary_outs_money += dst_entr.amount;
-    }
-    CHECK_AND_ASSERT_MES(additional_tx_public_keys.size() == additional_tx_keys.size(), false, "Internal error creating additional public keys");
-
-    remove_field_from_tx_extra(tx.extra, typeid(tx_extra_additional_pub_keys));
-
-    LOG_PRINT_L2("tx pubkey: " << txkey_pub);
-    if (need_additional_txkeys)
-    {
-      LOG_PRINT_L2("additional tx pubkeys: ");
-      for (size_t i = 0; i < additional_tx_public_keys.size(); ++i)
-        LOG_PRINT_L2(additional_tx_public_keys[i]);
-      add_additional_tx_pub_keys_to_extra(tx.extra, additional_tx_public_keys);
-    }
-
-    // ── KEM encapsulation for each output (FCMP++ per-output PQC keys) ────
     if (hf_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
     {
+      // v3 unified loop: shekyl_construct_output produces O, C, KEM CT, PQC data.
       static constexpr size_t X25519_PK_BYTES = 32;
       tx_extra_pqc_kem_ciphertext kem_field;
       kem_field.blob.reserve(destinations.size() * HYBRID_KEM_CT_BYTES);
       tx_extra_pqc_leaf_hashes leaf_hash_field;
       leaf_hash_field.blob.reserve(destinations.size() * PQC_LEAF_HASH_BYTES);
+      v3_rct_data.resize(destinations.size());
 
-      for (size_t i = 0; i < destinations.size(); ++i)
+      size_t output_index = 0;
+      for (const tx_destination_entry& dst_entr : destinations)
       {
-        const auto& dst = destinations[i];
-        if (dst.addr.m_pqc_public_key.size() <= X25519_PK_BYTES)
-        {
-          LOG_ERROR("Destination " << i << " lacks PQC KEM public key");
-          return false;
-        }
+        CHECK_AND_ASSERT_MES(dst_entr.amount > 0 || tx.version > 1, false,
+          "Destination with wrong amount: " << dst_entr.amount);
+        CHECK_AND_ASSERT_MES(dst_entr.addr.m_pqc_public_key.size() > X25519_PK_BYTES, false,
+          "Destination " << output_index << " lacks PQC KEM public key");
 
-        const uint8_t* pk_x25519 = dst.addr.m_pqc_public_key.data();
-        const uint8_t* pk_ml_kem = dst.addr.m_pqc_public_key.data() + X25519_PK_BYTES;
-        const size_t pk_ml_kem_len = dst.addr.m_pqc_public_key.size() - X25519_PK_BYTES;
+        const uint8_t* pk_x25519 = dst_entr.addr.m_pqc_public_key.data();
+        const uint8_t* pk_ml_kem = dst_entr.addr.m_pqc_public_key.data() + X25519_PK_BYTES;
+        const size_t pk_ml_kem_len = dst_entr.addr.m_pqc_public_key.size() - X25519_PK_BYTES;
 
-        ShekylBuffer ct_buf = {};
-        uint8_t ss[64];
-        bool ok = shekyl_kem_encapsulate(pk_x25519, pk_ml_kem, pk_ml_kem_len, &ct_buf, ss);
-        CHECK_AND_ASSERT_MES(ok && ct_buf.ptr && ct_buf.len == HYBRID_KEM_CT_BYTES,
-          false, "KEM encapsulation failed for output " << i);
+        ShekylOutputData od = shekyl_construct_output(
+          pk_x25519, pk_ml_kem, pk_ml_kem_len,
+          reinterpret_cast<const uint8_t*>(&dst_entr.addr.m_spend_public_key),
+          dst_entr.amount, static_cast<uint64_t>(output_index));
+        CHECK_AND_ASSERT_MES(od.success, false,
+          "shekyl_construct_output failed for output " << output_index);
 
-        kem_field.blob.append(reinterpret_cast<const char*>(ct_buf.ptr), HYBRID_KEM_CT_BYTES);
-        shekyl_buffer_free(ct_buf.ptr, ct_buf.len);
+        crypto::public_key out_key;
+        memcpy(out_key.data, od.output_key, 32);
+        crypto::view_tag vt;
+        vt.data = od.view_tag_x25519;
 
-        ShekylPqcKeypair derived = shekyl_fcmp_derive_pqc_keypair(ss, static_cast<uint64_t>(i));
-        memwipe(ss, sizeof(ss));
-        CHECK_AND_ASSERT_MES(derived.success && derived.public_key.ptr && derived.public_key.len > 0,
-          false, "Per-output PQC keypair derivation failed for output " << i);
+        tx_out out;
+        if (dst_entr.is_staking)
+          cryptonote::set_staked_tx_out(dst_entr.amount, out_key, vt, dst_entr.stake_tier, out);
+        else
+          cryptonote::set_tx_out(dst_entr.amount, out_key, true, vt, out);
+        tx.vout.push_back(out);
 
-        uint8_t h_pqc[32];
-        ok = shekyl_fcmp_pqc_leaf_hash(derived.public_key.ptr, derived.public_key.len, h_pqc);
-        shekyl_buffer_free(derived.public_key.ptr, derived.public_key.len);
-        shekyl_buffer_free(derived.secret_key.ptr, derived.secret_key.len);
-        CHECK_AND_ASSERT_MES(ok, false, "PQC leaf hash failed for output " << i);
+        memcpy(v3_rct_data[output_index].commitment, od.commitment, 32);
+        memcpy(v3_rct_data[output_index].enc_amount_with_tag.data(), od.enc_amount, 8);
+        v3_rct_data[output_index].enc_amount_with_tag[8] = od.amount_tag;
 
-        leaf_hash_field.blob.append(reinterpret_cast<const char*>(h_pqc), PQC_LEAF_HASH_BYTES);
+        kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
+        if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
+          kem_field.blob.append(
+            reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
+            od.kem_ciphertext_ml_kem.len);
+
+        leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.h_pqc), PQC_LEAF_HASH_BYTES);
+
+        summary_outs_money += dst_entr.amount;
+        ShekylOutputData tmp = od;
+        shekyl_output_data_free(&tmp);
+        output_index++;
       }
 
       {
@@ -555,6 +557,46 @@ namespace cryptonote
           "Failed to serialize PQC leaf hashes for tx_extra");
         std::string blob = oss.str();
         tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+      }
+    }
+    else
+    {
+      // Pre-v3 legacy output derivation path.
+      size_t output_index = 0;
+      for (const tx_destination_entry& dst_entr : destinations)
+      {
+        CHECK_AND_ASSERT_MES(dst_entr.amount > 0 || tx.version > 1, false,
+          "Destination with wrong amount: " << dst_entr.amount);
+        crypto::public_key out_eph_public_key;
+        crypto::view_tag view_tag;
+
+        hwdev.generate_output_ephemeral_keys(tx.version, sender_account_keys, txkey_pub, tx_key,
+                                             dst_entr, change_addr, output_index,
+                                             need_additional_txkeys, additional_tx_keys,
+                                             additional_tx_public_keys, amount_keys, out_eph_public_key,
+                                             use_view_tags, view_tag);
+
+        tx_out out;
+        if (dst_entr.is_staking)
+          cryptonote::set_staked_tx_out(dst_entr.amount, out_eph_public_key, view_tag, dst_entr.stake_tier, out);
+        else
+          cryptonote::set_tx_out(dst_entr.amount, out_eph_public_key, use_view_tags, view_tag, out);
+        tx.vout.push_back(out);
+        output_index++;
+        summary_outs_money += dst_entr.amount;
+      }
+      CHECK_AND_ASSERT_MES(additional_tx_public_keys.size() == additional_tx_keys.size(), false,
+        "Internal error creating additional public keys");
+
+      remove_field_from_tx_extra(tx.extra, typeid(tx_extra_additional_pub_keys));
+
+      LOG_PRINT_L2("tx pubkey: " << txkey_pub);
+      if (need_additional_txkeys)
+      {
+        LOG_PRINT_L2("additional tx pubkeys: ");
+        for (size_t i = 0; i < additional_tx_public_keys.size(); ++i)
+          LOG_PRINT_L2(additional_tx_public_keys[i]);
+        add_additional_tx_pub_keys_to_extra(tx.extra, additional_tx_public_keys);
       }
     }
 
@@ -629,6 +671,18 @@ namespace cryptonote
           crypto::null_hash, inamounts, outamounts, destinations, hwdev);
       memwipe(inSk.data(), inSk.size() * sizeof(rct::ctkey));
 
+      // v3: overwrite stub commitments and enc_amounts with real HKDF-derived values.
+      if (!v3_rct_data.empty())
+      {
+        CHECK_AND_ASSERT_MES(v3_rct_data.size() == tx.rct_signatures.outPk.size(), false,
+          "v3_rct_data size mismatch with outPk");
+        for (size_t i = 0; i < v3_rct_data.size(); ++i)
+        {
+          memcpy(tx.rct_signatures.outPk[i].mask.bytes, v3_rct_data[i].commitment, 32);
+          tx.rct_signatures.enc_amounts[i] = v3_rct_data[i].enc_amount_with_tag;
+        }
+      }
+
       CHECK_AND_ASSERT_MES(tx.vout.size() == outSk.size() || outSk.empty(), false, "outSk size does not match vout");
     }
 
@@ -670,7 +724,9 @@ namespace cryptonote
       size_t num_subaddresses = 0;
       account_public_address single_dest_subaddress;
       classify_addresses(destinations, change_addr, num_stdaddresses, num_subaddresses, single_dest_subaddress);
-      bool need_additional_txkeys = num_subaddresses > 0 && (num_stdaddresses > 0 || num_subaddresses > 1);
+      // v3+: per-output KEM ciphertext replaces additional_tx_keys entirely.
+      bool need_additional_txkeys = (hf_version < HF_VERSION_FCMP_PLUS_PLUS_PQC)
+          && num_subaddresses > 0 && (num_stdaddresses > 0 || num_subaddresses > 1);
       if (need_additional_txkeys)
       {
         additional_tx_keys.clear();
