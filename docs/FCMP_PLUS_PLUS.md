@@ -1617,6 +1617,155 @@ typed `ProveInputFields` `#[repr(C)]` struct, replacing raw `memcpy` calls.
 
 ---
 
+## 21. Wallet Proof Structure
+
+Shekyl wallet proofs (transaction proofs and reserve proofs) are a
+genesis-native design. There is no prior version, no migration path, and
+no backward-compatibility shims. The design draws on Monero's proof
+protocols as prior art but differs structurally due to the hybrid KEM
+construction. This section explains the design rationale so auditors
+familiar with Monero's DLEQ-based proofs understand why Shekyl's proofs
+use a different construction and why the difference is not a regression.
+
+### Why Monero's DLEQ does not apply
+
+In Monero, the sender proves they constructed a transaction by
+demonstrating knowledge of the discrete log behind both `tx_pubkey` (the
+on-chain Diffie-Hellman ephemeral key) and the shared secret derivation
+base. A single DLEQ proof does double duty: it proves sender identity
+*and* binds the proof to a message. Shekyl replaces Diffie-Hellman with
+hybrid KEM (X25519 + ML-KEM-768), so there is no discrete-log
+relationship between the transaction key and the shared secret. The DLEQ
+construction is inapplicable, not merely unnecessary.
+
+### Shekyl's decomposition
+
+Shekyl decomposes sender authentication and proof integrity into two
+independent mechanisms:
+
+- **KEM recomputation** handles "the prover really is the sender." The
+  sender reveals `tx_key_secret` (a per-transaction ephemeral value, not
+  a long-term key). The verifier re-runs deterministic KEM encapsulation
+  with that key and checks that the resulting X25519 ephemeral public key
+  and ML-KEM-768 ciphertext match the on-chain values. A match proves
+  the prover produced the transaction's KEM material.
+
+- **Ed25519 Schnorr signature** handles "the proof contents are not
+  tampered." The signature is bound to
+  `H(domain_separator || txid || address || message || per_output_data)`,
+  making the proof a sealed unit. Anyone holding the revealed
+  `tx_key_secret` can produce a *different* proof for a different
+  message, but they cannot take an existing proof and modify a field
+  without invalidating the signature. The signature protects the proof
+  from the verifier (or any third party who later obtains the key), not
+  from the world.
+
+Each proof type uses a distinct domain separator in the Schnorr hash to
+prevent cross-type replay:
+
+| Proof Type | Domain Separator |
+|---|---|
+| Outbound TX | `shekyl-outbound-tx-proof-v1` |
+| Inbound TX | `shekyl-inbound-tx-proof-v1` |
+| Reserve | `shekyl-reserve-proof-v1` |
+
+### Reserve proofs and the DLEQ requirement
+
+TX proofs assert "outputs were sent to / received by an address with
+certain amounts." Reserve proofs assert "outputs are owned and
+**unspent**." The unspent claim requires proving that the key image
+included in the proof was correctly derived: `key_image = (ho + b) ·
+Hp(O)`. Without this proof, a malicious prover can substitute a random
+32-byte value as the key image; the verifier checks the spent pool, finds
+no match, and incorrectly concludes the output is unspent. This is a
+reserve-proof forgery — the class of attack that breaks exchange
+proof-of-solvency.
+
+Reserve proofs therefore carry a standard two-base Schnorr DLEQ (64 bytes
+per output: challenge `c` + response `s`) proving
+`DL_G(P) == DL_{Hp(O)}(I)` where `P = O - y·T` and `I = key_image`. TX
+proofs do not need a DLEQ because they make no claim about spent status.
+
+The DLEQ challenge hash includes the bases, points, and a domain
+separator to prevent cross-protocol confusion:
+
+```text
+c = H("shekyl-reserve-proof-dleq-v1" || G || Hp(O) || R1 || R2 || P || I || msg)
+```
+
+`G` is a constant but is included for completeness. `Hp(O)` varies per
+output and its inclusion is mandatory to prevent base-substitution
+attacks across different outputs.
+
+### Wire Format
+
+| Proof Type | Header | Per-Output | Total |
+|---|---|---|---|
+| Outbound TX | 101 B (version[1] + tx_key_secret[32] + Schnorr[64] + count[4]) | 128 B (ho, y, z, k_amount) | `101 + 128*N` |
+| Inbound TX | 69 B (version[1] + Schnorr[64] + count[4]) | 128 B (ho, y, z, k_amount) | `69 + 128*N` |
+| Reserve | 69 B (version[1] + Schnorr[64] + count[4]) | 192 B (ho, y, k_amount, key_image, DLEQ) | `69 + 192*N` |
+
+The `output_count` field is 4 bytes (little-endian u32), supporting up to
+2³² − 1 outputs per proof. TX proofs will typically have single-digit
+outputs. Reserve proofs from large wallets (exchanges doing
+proof-of-solvency) may contain thousands of entries; the 4-byte count
+avoids an artificial 65,535 cap that would require proof splitting under
+pressure.
+
+### Proof version assertion
+
+The `version` byte is 1 for all current proof types. The verifier
+**must** check `version == CURRENT_PROOF_VERSION` as the very first
+operation, before any cryptographic work. On mismatch, the verifier
+returns an immediate error with a human-readable message. There is no
+version negotiation, no graceful degradation, and no fallback. A version
+mismatch is a developer error, not a user-recoverable condition.
+
+### TX proofs carry `z`; reserve proofs do not
+
+TX proofs include the Pedersen commitment mask `z` (32 bytes per output)
+to enable direct commitment verification `C = z·G + amount·H`. This is
+defense-in-depth: 32 bytes per output on a proof with single-digit
+outputs is negligible, and the explicit check catches any mismatch
+between the decrypted amount and the on-chain commitment.
+
+Reserve proofs omit `z` to save 32 bytes per output (192 vs 224 per
+entry). This asymmetry is justified because reserve proofs can have
+hundreds or thousands of entries, and the saving is material. The
+soundness argument for omitting `z` follows.
+
+**HKDF binding argument (why omitting `z` from reserve proofs is
+sound):** The per-output secrets `ho`, `y`, `z`, and `k_amount` are all
+derived from the same HKDF-SHA-512 stream keyed by `combined_ss` with
+per-label domain separation (labels pinned in
+`docs/test_vectors/PQC_OUTPUT_SECRETS.json`). The verifier checks
+`O == ho·G + B + y·T` against the on-chain output key `O`. If this
+check passes, the `ho` and `y` in the proof are the correct HKDF
+outputs for this specific `combined_ss` and output index. Because
+`k_amount` is derived from the same HKDF stream with a different label,
+providing a *wrong* `k_amount` requires providing a different
+`combined_ss`, which forces a different `ho` and `y`, which fails the
+algebraic `O` check. The prover **cannot** decouple `k_amount` from
+`(ho, y)` without breaking HKDF.
+
+The decrypted amount is then `amount = enc_amount XOR k_amount[..8]`.
+Since `k_amount` is forced correct by the HKDF binding, and `enc_amount`
+is read from the blockchain (see below), the decrypted amount is the
+genuine amount committed to in `C`. The on-chain Bulletproofs+ consensus
+check independently guarantees `C` commits to a value in `[0, 2⁶⁴)`.
+
+**Critical invariant: `enc_amount` must be fetched from the blockchain.**
+The reserve proof does **not** carry `enc_amount` as a field. The
+verifier reads `enc_amount` from the on-chain transaction, indexed by
+the output reference in the proof. If the proof carried `enc_amount`, a
+malicious prover could provide a manipulated `enc_amount` alongside a
+manipulated `k_amount` such that the XOR produces any desired amount —
+the HKDF binding argument would not protect against this because the
+verifier's XOR input would be attacker-controlled. Implementations must
+assert that `enc_amount` comes from chain lookup, not from the proof.
+
+---
+
 ## Related Documents
 
 - `docs/POST_QUANTUM_CRYPTOGRAPHY.md` — full PQC specification

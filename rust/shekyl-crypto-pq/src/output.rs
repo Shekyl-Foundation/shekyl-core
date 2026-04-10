@@ -634,12 +634,23 @@ pub fn sign_pqc_auth_for_output(
 
 /// Narrow projection of output secrets for proof protocols.
 ///
-/// Contains only the values a verifier needs -- `combined_ss` itself and
-/// `z`, `ml_dsa_seed`, `ed25519_pqc_seed` are never revealed.
+/// Contains the values a proof verifier needs to verify output ownership
+/// and decrypt amounts. `combined_ss` itself, `ml_dsa_seed`, and
+/// `ed25519_pqc_seed` are never revealed.
+///
+/// TX proofs (outbound/inbound) use all four fields: ho and y for the
+/// output key check `O = ho*G + B + y*T`, z for the commitment check
+/// `C = z*G + amount*H`, and k_amount for amount decryption.
+///
+/// Reserve proofs use ho, y, k_amount plus a DLEQ proof for key image
+/// correctness; z is omitted from the reserve wire format (the HKDF
+/// binding argument and on-chain Bulletproofs+ make it redundant) but
+/// is available here for optional defense-in-depth verification.
 #[derive(ZeroizeOnDrop)]
 pub struct ProofSecrets {
     pub ho: [u8; 32],
     pub y: [u8; 32],
+    pub z: [u8; 32],
     pub k_amount: [u8; 32],
 }
 
@@ -648,6 +659,7 @@ impl std::fmt::Debug for ProofSecrets {
         f.debug_struct("ProofSecrets")
             .field("ho", &"[REDACTED]")
             .field("y", &"[REDACTED]")
+            .field("z", &"[REDACTED]")
             .field("k_amount", &"[REDACTED]")
             .finish()
     }
@@ -699,11 +711,15 @@ pub fn rederive_combined_ss(
     Ok((combined_ss, x_eph_pub.to_bytes(), ml_ct_bytes.to_vec()))
 }
 
-/// Derive the narrow proof secrets projection from `combined_ss`.
+/// Derive the proof secrets projection from `combined_ss`.
 ///
-/// Returns only `(ho, y, k_amount)`. This is the ONLY function that
+/// Returns `(ho, y, z, k_amount)`. This is the ONLY function that
 /// converts `combined_ss` into values that leave Rust in the proof path.
-/// Does NOT return `z`, `ml_dsa_seed`, or `amount_tag`.
+/// Does NOT return `ml_dsa_seed`, `ed25519_pqc_seed`, or `amount_tag`.
+///
+/// TX proofs use all four fields (z for commitment verification).
+/// Reserve proofs use ho, y, k_amount (z omitted from wire format but
+/// available for optional defense-in-depth).
 pub fn derive_proof_secrets(
     combined_ss: &[u8; 64],
     output_index: u64,
@@ -712,6 +728,7 @@ pub fn derive_proof_secrets(
     ProofSecrets {
         ho: secrets.ho,
         y: secrets.y,
+        z: secrets.z,
         k_amount: secrets.k_amount,
     }
 }
@@ -1444,6 +1461,7 @@ mod tests {
 
         let ps = derive_proof_secrets(&ss_re.0, idx);
         assert_eq!(ps.y, out.y, "rederived y must match construct");
+        assert_eq!(ps.z, out.z, "rederived z must match construct");
         assert_eq!(ps.k_amount, out.k_amount, "rederived k_amount must match construct");
     }
 
@@ -1464,11 +1482,13 @@ mod tests {
 
         assert_ne!(ps.ho, [0u8; 32], "ho must not be zero");
         assert_ne!(ps.y, [0u8; 32], "y must not be zero");
+        assert_ne!(ps.z, [0u8; 32], "z must not be zero");
         assert_ne!(ps.k_amount, [0u8; 32], "k_amount must not be zero");
 
         let full_secrets = crate::derivation::derive_output_secrets(&ss.0, idx);
         assert_eq!(ps.ho, full_secrets.ho, "ProofSecrets.ho must equal OutputSecrets.ho");
         assert_eq!(ps.y, full_secrets.y, "ProofSecrets.y must equal OutputSecrets.y");
+        assert_eq!(ps.z, full_secrets.z, "ProofSecrets.z must equal OutputSecrets.z");
         assert_eq!(
             ps.k_amount, full_secrets.k_amount,
             "ProofSecrets.k_amount must equal OutputSecrets.k_amount"
@@ -1761,8 +1781,9 @@ mod tests {
         // Step 3: Derive proof secrets (narrow projection)
         let ps = derive_proof_secrets(&ss_re.0, idx);
         assert_eq!(ps.y, out.y, "proof_secrets.y must match construct y");
+        assert_eq!(ps.z, out.z, "proof_secrets.z must match construct z");
         assert_eq!(ps.k_amount, out.k_amount, "proof_secrets.k_amount must match construct k_amount");
-        eprintln!("[pipeline] derived ProofSecrets (ho, y, k_amount)");
+        eprintln!("[pipeline] derived ProofSecrets (ho, y, z, k_amount)");
 
         // Step 4: Derive output key and verify
         let derived_o = derive_output_key(&ss_re.0, &spend_key, idx).unwrap();

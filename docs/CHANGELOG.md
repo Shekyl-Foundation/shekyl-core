@@ -15,12 +15,32 @@
   `recover_recipient_spend_pubkey`, `decrypt_amount`,
   `compute_output_key_image`, and `compute_output_key_image_from_ho`. These
   support the V3 tx_proof / reserve_proof / key-image protocols. The narrow
-  `ProofSecrets(ho, y, k_amount)` projection ensures `combined_ss` never
+  `ProofSecrets(ho, y, z, k_amount)` projection ensures `combined_ss` never
   crosses the FFI boundary.
 
-- **`shekyl-proofs` crate skeleton.** New crate under `rust/` with `tx_proof`,
-  `reserve_proof`, and `error` modules. Includes 10-point round-trip test
-  skeleton (exit criterion for Phase 5).
+- **`ProofSecrets` widened to include `z`.** The Pedersen commitment mask is
+  now part of the proof secrets projection, enabling direct `C = z*G +
+  amount*H` verification in TX proofs. `derive_proof_secrets` passes `z`
+  through instead of discarding it.
+
+- **`shekyl-proofs` crate: full Phase 1a implementation.** Three modules:
+  - `dleq.rs`: Two-base Schnorr DLEQ proof with domain separator
+    `shekyl-reserve-proof-dleq-v1` and full base binding in the challenge
+    hash (`G`, `Hp(O)`, `R1`, `R2`, `P`, `I`, `msg`). 6 unit tests.
+  - `tx_proof.rs`: Outbound (101+128N bytes) and inbound (69+128N bytes)
+    proof generation and verification. Domain-separated Schnorr signatures
+    (`shekyl-outbound-tx-proof-v1`, `shekyl-inbound-tx-proof-v1`). Per-output
+    `ho`, `y`, `z`, `k_amount` with algebraic output key and commitment checks.
+  - `reserve_proof.rs`: Reserve proof (69+192N bytes) with per-output DLEQ
+    key image binding. `enc_amount` sourced from blockchain, not from proof.
+  - Version assertion (v1) before any cryptographic work. 4-byte output_count
+    (u32 LE) supporting up to 2³²−1 outputs per proof.
+  - 10-point round-trip test skeleton (exit criterion for Phase 5, `#[ignore]`).
+
+- **FCMP_PLUS_PLUS.md section 21: Wallet Proof Structure.** Genesis-native
+  proof design rationale. Documents the Schnorr/KEM decomposition, reserve
+  proof DLEQ requirement, HKDF binding argument for z-omission in reserve
+  proofs, and the `enc_amount`-from-chain invariant.
 
 - **KEM derivation KAT vectors.** `docs/test_vectors/KEM_DERIVE_V1_KAT.json`
   with 8 pinned vectors for `derive_kem_seed`. Serves as tripwire against

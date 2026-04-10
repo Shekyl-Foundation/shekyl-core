@@ -21,6 +21,12 @@ pub enum ProofError {
     #[error("output key mismatch at index {index}")]
     OutputKeyMismatch { index: usize },
 
+    #[error("commitment mismatch at index {index}: C != z*G + amount*H")]
+    CommitmentMismatch { index: usize },
+
+    #[error("DLEQ verification failed at index {index}: key_image != x*Hp(O)")]
+    DleqFailed { index: usize },
+
     #[error("signature verification failed")]
     SignatureFailed,
 }

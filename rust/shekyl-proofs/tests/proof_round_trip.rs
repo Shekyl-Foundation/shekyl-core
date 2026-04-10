@@ -15,9 +15,9 @@
 //! wallet2's tx_key absence error paths.
 //!
 //! Wire format size assertions (Phase 5):
-//!   outbound: 99 + 96*N bytes
-//!   inbound:  67 + 96*N bytes
-//!   reserve:  67 + 128*N bytes
+//!   outbound: 101 + 128*N bytes  (header: version[1]+tx_key[32]+schnorr[64]+count[4]; per-output: ho, y, z, k_amount)
+//!   inbound:   69 + 128*N bytes  (header: version[1]+schnorr[64]+count[4]; per-output: ho, y, z, k_amount)
+//!   reserve:   69 + 192*N bytes  (header: version[1]+schnorr[64]+count[4]; per-output: ho, y, k_amount, key_image, DLEQ)
 
 // --------------------------------------------------------------------------
 // Test 1: Construct V3 tx, generate outbound proof, third-party verifies.

@@ -199,10 +199,12 @@ The sender can re-derive `combined_ss` at proof time without storing it:
   The verifier compares `x25519_eph_pk` and `ml_kem_ct` against on-chain data
   for integrity.
 
-- **`derive_proof_secrets(combined_ss, output_index)`**: Returns the narrow
-  projection `ProofSecrets(ho, y, k_amount)`. This is the ONLY function that
-  converts `combined_ss` into values that leave Rust in the proof path. It
-  does NOT return `z`, `ml_dsa_seed`, or `amount_tag`.
+- **`derive_proof_secrets(combined_ss, output_index)`**: Returns the proof
+  secrets projection `ProofSecrets(ho, y, z, k_amount)`. This is the ONLY
+  function that converts `combined_ss` into values that leave Rust in the
+  proof path. TX proofs use all four fields; reserve proofs use `ho`, `y`,
+  `k_amount` (z omitted from wire format per the HKDF binding argument).
+  Does NOT return `ml_dsa_seed`, `ed25519_pqc_seed`, or `amount_tag`.
 
 - **`derive_output_key(combined_ss, spend_key, output_index)`**: Computes
   `O = ho*G + B + y*T`. Validates `spend_key` is on the prime-order subgroup.

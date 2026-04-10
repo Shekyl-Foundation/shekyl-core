@@ -7,16 +7,18 @@ license.workspace = true
 
 [dependencies]
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 curve25519-dalek = "4"
-hkdf = "0.12"
 sha2 = "0.10"
 zeroize = { version = "1", features = ["derive"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 thiserror.workspace = true
 
 [dev-dependencies]
 rand = "0.8"
 hex = "0.4"
+proptest = "1"
 
 [lints]
 workspace = true
