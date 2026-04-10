@@ -274,27 +274,41 @@ must never be zero. If `y == 0`, the output key degenerates to the single-compon
 
 **Defense stack:**
 
-1. **Construction-time Rust assert** (`derivation.rs`): `assert!(y != [0u8; 32])` panics
-   at output construction if HKDF produces a zero y scalar. Rust `assert!` is not stripped
-   in release builds — this is a hard crash, not a debug-only check.
+1. **Construction-time Rust assert** (`derivation.rs:223-224`):
+   `assert!(y != [0u8; 32])` panics at output construction if HKDF produces a zero y
+   scalar. This is `assert!`, not `debug_assert!` — Rust compiles it in all build
+   profiles including release. Hard crash, not a debug-only check.
 
-2. **Probabilistic impossibility**: `y` is derived from 64 bytes of HKDF-SHA-512 output
+2. **Receiver-side independent verification**: `derive_output_secrets` is called by both
+   `construct_output` (sender) and `scan_output` / `scan_output_recover` (receiver). The
+   receiver independently hits the same `assert!(y != [0u8; 32])` on every scan. A
+   malicious sender who bypassed their own assert (e.g., patched binary producing y=0
+   outputs) would still trip the receiver's assert before the output is marked spendable.
+   This is the closest thing to a "wire check" — the receiver re-derives y from the KEM
+   shared secret and crashes if it's zero, preventing the degenerate output from entering
+   the wallet's transfer set.
+
+3. **Probabilistic impossibility**: `y` is derived from 64 bytes of HKDF-SHA-512 output
    reduced mod l (Ed25519 scalar order, ~2^{252.2}). The probability of the reduction
    yielding exactly zero is ~2^{-252}. This is computationally infeasible to trigger or
    exploit.
 
-3. **Fuzz coverage**: All fuzz targets that exercise `construct_output` transitively call
-   `derive_output_secrets`, hitting the assert with random inputs.
+4. **Fuzz coverage**: All fuzz targets that exercise `construct_output` and
+   `scan_output_recover` transitively call `derive_output_secrets`, hitting the assert
+   with random inputs on both sender and receiver paths.
 
-**Why a wire-level y == 0 consensus check is impossible**: `y` is a secret scalar derived
-from `combined_ss`, which is only known to the sender and recipient. The on-chain output
-key `O = ho*G + B + y*T` is an elliptic curve point — without the discrete log, a verifier
+**Why a consensus-level y == 0 check is impossible**: `y` is a secret scalar derived from
+`combined_ss`, which is only known to the sender and recipient. The on-chain output key
+`O = ho*G + B + y*T` is an elliptic curve point — without the discrete log, a verifier
 cannot extract `y` from `O`. The commitment `C = z*G + amount*H` does not involve `y`.
 Therefore, no purely on-chain structural check for `y == 0` exists.
 
 The consensus layer's `check_commitment_mask_valid` rejects `z == 0` and `z == 1` because
 `z` controls the commitment mask which IS indirectly observable (trivial commitments are
-distinguishable). The `y` scalar has no analogous on-chain observable effect.
+distinguishable). The `y` scalar has no analogous on-chain observable effect. The defense
+relies on both endpoints (sender and receiver) executing the same `derive_output_secrets`
+code path, which is enforced by the protocol: the receiver must re-derive all secrets from
+the KEM shared secret to decrypt the output.
 
 #### Malformed KEM Ciphertext Handling
 
