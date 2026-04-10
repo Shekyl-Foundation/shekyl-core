@@ -31,7 +31,8 @@ fn dummy_spend_input(amount: u64) -> SpendInput {
         spend_key_y: [6u8; 32],
         commitment_mask: [7u8; 32],
         h_pqc: [4u8; 32],
-        pqc_secret_key: vec![0u8; crate::validate::EXPECTED_HYBRID_SK_LEN],
+        combined_ss: vec![0u8; 64],
+        output_index: 0,
         leaf_chunk: vec![dummy_leaf_entry()],
         c1_layers: vec![vec![[10u8; 32]]],
         c2_layers: vec![vec![[11u8; 32]]],
@@ -266,9 +267,9 @@ fn test_branch_layer_mismatch() {
 }
 
 #[test]
-fn test_invalid_pqc_key_length() {
+fn test_invalid_combined_ss_length() {
     let mut input = dummy_spend_input(100);
-    input.pqc_secret_key = vec![0u8; 10]; // wrong length
+    input.combined_ss = vec![0u8; 10]; // wrong length
     let result = sign_transaction(
         [0u8; 32],
         &[input],
@@ -278,7 +279,7 @@ fn test_invalid_pqc_key_length() {
     );
     assert!(matches!(
         result,
-        Err(TxBuilderError::InvalidPqcKeyLength { index: 0, .. })
+        Err(TxBuilderError::InvalidCombinedSsLength { index: 0, .. })
     ));
 }
 

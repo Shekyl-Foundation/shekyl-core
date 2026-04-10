@@ -38,8 +38,5 @@ pub const DOMAIN_PQC_LEAF: &[u8] = b"shekyl-pqc-leaf";
 /// Domain separator for KEM shared-secret derivation.
 pub const DOMAIN_KEM_V1: &[u8] = b"shekyl-kem-v1";
 
-/// Domain separator for per-output PQC keypair derivation.
-pub const DOMAIN_PQC_OUTPUT: &[u8] = b"shekyl-pqc-output";
-
 /// Maximum inputs per FCMP++ transaction (bounds proof gen time and tx size).
 pub const MAX_INPUTS: usize = 8;

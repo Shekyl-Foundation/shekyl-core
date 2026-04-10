@@ -400,6 +400,40 @@
 
 ### 🗑️ Removed
 
+- **`shekyl_fcmp_derive_pqc_keypair` FFI function.** Deleted the Rust FFI
+  function and its C declaration. This function returned the ML-DSA secret key
+  to C++, violating the security invariant that PQC secrets stay in Rust.
+  Replaced by `shekyl_derive_pqc_leaf_hash` (returns only h_pqc) and
+  `shekyl_derive_pqc_public_key` (returns only the public key).
+
+- **`derive_pqc_keypair`, `derive_hybrid_pqc_keypair`, `DerivedPqcKeypair`,
+  `DOMAIN_PQC_OUTPUT` from `shekyl-crypto-pq`.** These legacy derivation
+  functions used the old salt A (`shekyl-pqc-derive-v1`) and returned secret
+  key material. All callers now use `derive_output_secrets` (salt B) +
+  `keygen_from_seed` or the higher-level `sign_pqc_auth_for_output`.
+
+- **`derived_pqc_secret_keys`, `derived_pqc_public_keys`, `claim_signing_sks`
+  vectors in `wallet2.cpp`.** These C++ vectors held PQC secret keys in wallet
+  memory. All 4 call sites migrated to `shekyl_derive_pqc_leaf_hash` +
+  `shekyl_sign_pqc_auth`, which derive and zeroize internally in Rust.
+
+- **`pqc_secret_keys` from `native_sign_state` (`wallet2.h`).** The deferred
+  native-signing path no longer stores PQC secret keys. The Rust tx-builder
+  receives `combined_ss` + `output_index` and derives keys internally.
+
+- **`SpendInput::pqc_secret_key` from `shekyl-tx-builder`.** Replaced with
+  `combined_ss: Vec<u8>` (64 bytes) and `output_index: u64`. The Rust
+  `sign_pqc_auths` function now calls `sign_pqc_auth_for_output` internally.
+
+- **4 legacy Monero fixture tests in `serialization.cpp`.** Removed
+  `portability_wallet`, `portability_outputs`, `portability_unsigned_tx`,
+  `portability_signed_tx`. These tested Monero-era wallet/tx formats that
+  Shekyl does not support (no backward compatibility).
+
+- **10 Monero-specific long-term block weight tests.** Removed all tests from
+  `long_term_block_weight.cpp` (`empty_short` through `cache_matches_true_value`).
+  Monero-specific weight baselines do not apply to Shekyl economics.
+
 - **`chacha.c` (C ChaCha implementation).** Replaced by the Rust `shekyl-chacha`
   crate via FFI. The C implementation had a strict aliasing violation in its
   `U8TO32_LITTLE`/`U32TO8_LITTLE` macros (pointer cast to `uint32_t*`).
@@ -409,6 +443,13 @@
   files. Shekyl has no legacy wallets; these paths were unreachable.
 
 ### 🔒 Security
+
+- **ML-DSA secret keys never cross the FFI boundary.** All wallet PQC signing
+  paths now use `shekyl_sign_pqc_auth` (Rust FFI) or `sign_pqc_auth_for_output`
+  (Rust tx-builder), which derive the keypair from `combined_ss` + `output_index`,
+  sign, and zeroize the secret key — all within Rust. No ML-DSA secret key bytes
+  exist in C++ memory at any point. This eliminates the largest PQC secret key
+  exposure surface (~4064 bytes per input) from the wallet process.
 
 - **XChaCha20 192-bit nonces for wallet encryption.** Upgraded from the DJB
   ChaCha20 64-bit nonce to XChaCha20 192-bit nonce, eliminating nonce collision

@@ -7,12 +7,6 @@
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, SpendInput, TreeContext};
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
-use shekyl_crypto_pq::signature::ML_DSA_65_SECRET_KEY_LENGTH;
-
-/// Expected canonical-encoded hybrid secret key length:
-/// version(1) + scheme(1) + reserved(2) + ed_len(4) + ed25519_sk(32) + ml_len(4) + ml_dsa_sk(SK_LEN)
-pub(crate) const EXPECTED_HYBRID_SK_LEN: usize =
-    1 + 1 + 2 + 4 + 32 + 4 + ML_DSA_65_SECRET_KEY_LENGTH;
 
 /// Validate all inputs, outputs, tree context, and fee before proof generation.
 ///
@@ -103,12 +97,10 @@ pub(crate) fn validate_inputs(
             });
         }
 
-        // PQC secret key length
-        if inp.pqc_secret_key.len() != EXPECTED_HYBRID_SK_LEN {
-            return Err(TxBuilderError::InvalidPqcKeyLength {
+        if inp.combined_ss.len() != 64 {
+            return Err(TxBuilderError::InvalidCombinedSsLength {
                 index: i,
-                len: inp.pqc_secret_key.len(),
-                expected: EXPECTED_HYBRID_SK_LEN,
+                len: inp.combined_ss.len(),
             });
         }
     }

@@ -1325,6 +1325,8 @@ difficulty_type Blockchain::get_next_difficulty_for_alternative_chain(const std:
   return next_difficulty(timestamps, cumulative_difficulties, target);
 }
 //------------------------------------------------------------------
+static bool check_commitment_mask_valid(const transaction& tx);
+//------------------------------------------------------------------
 // This function does a sanity check on basic things that all miner
 // transactions have in common, such as:
 //   one input, of type txin_gen, with height set to the block's height

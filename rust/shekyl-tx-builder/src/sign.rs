@@ -202,7 +202,7 @@ pub fn sign_pqc_auths(
     payload_hashes: &[[u8; 32]],
     inputs: &[SpendInput],
 ) -> Result<Vec<PqcAuth>, TxBuilderError> {
-    use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridSecretKey, SignatureScheme};
+    use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 
     if payload_hashes.len() != inputs.len() {
         return Err(TxBuilderError::PqcSignError {
@@ -215,38 +215,31 @@ pub fn sign_pqc_auths(
         });
     }
 
-    let scheme = HybridEd25519MlDsa;
     let mut auths = Vec::with_capacity(inputs.len());
 
     for (i, (hash, inp)) in payload_hashes.iter().zip(inputs.iter()).enumerate() {
-        let sk = HybridSecretKey::from_canonical_bytes(&inp.pqc_secret_key).map_err(|e| {
-            TxBuilderError::PqcSignError {
+        if inp.combined_ss.len() != 64 {
+            return Err(TxBuilderError::PqcSignError {
                 index: i,
-                reason: format!("failed to decode PQC secret key: {e}"),
-            }
-        })?;
+                reason: format!(
+                    "combined_ss length {} != 64 for input {}",
+                    inp.combined_ss.len(), i
+                ),
+            });
+        }
+        let mut ss = [0u8; 64];
+        ss.copy_from_slice(&inp.combined_ss);
 
-        let pk_bytes = derive_public_key_from_secret(&sk).map_err(|e| {
-            TxBuilderError::PqcSignError {
+        let auth_sig = sign_pqc_auth_for_output(&ss, inp.output_index, hash)
+            .map_err(|e| TxBuilderError::PqcSignError {
                 index: i,
-                reason: format!("failed to derive PQC public key: {e}"),
-            }
-        })?;
-
-        let sig = scheme.sign(&sk, hash).map_err(|e| TxBuilderError::PqcSignError {
-            index: i,
-            reason: e.to_string(),
-        })?;
-
-        let sig_bytes = sig.to_canonical_bytes().map_err(|e| TxBuilderError::PqcSignError {
-            index: i,
-            reason: format!("failed to serialize PQC signature: {e}"),
-        })?;
+                reason: format!("sign_pqc_auth_for_output failed: {e}"),
+            })?;
 
         auths.push(PqcAuth {
             auth_version: 1,
-            signature: sig_bytes,
-            public_key: pk_bytes,
+            signature: auth_sig.signature,
+            public_key: auth_sig.hybrid_public_key,
         });
     }
 
@@ -263,35 +256,3 @@ fn compute_key_image_gen(output_key: &[u8; 32]) -> [u8; 32] {
         .to_bytes()
 }
 
-/// Derive the canonical public key bytes from a hybrid secret key.
-fn derive_public_key_from_secret(
-    sk: &shekyl_crypto_pq::signature::HybridSecretKey,
-) -> Result<Vec<u8>, shekyl_crypto_pq::CryptoError> {
-    use ed25519_dalek::SigningKey;
-    use fips204::ml_dsa_65;
-    use fips204::traits::{SerDes as _, Signer as _};
-    use shekyl_crypto_pq::signature::{HybridPublicKey, ML_DSA_65_SECRET_KEY_LENGTH};
-
-    let ed_sk_bytes: [u8; 32] = sk
-        .ed25519
-        .clone()
-        .try_into()
-        .map_err(|_| shekyl_crypto_pq::CryptoError::InvalidKeyMaterial)?;
-    let ed_signing = SigningKey::from_bytes(&ed_sk_bytes);
-    let ed_pk = ed_signing.verifying_key().to_bytes();
-
-    let ml_sk_bytes: [u8; ML_DSA_65_SECRET_KEY_LENGTH] = sk
-        .ml_dsa
-        .clone()
-        .try_into()
-        .map_err(|_| shekyl_crypto_pq::CryptoError::InvalidKeyMaterial)?;
-    let ml_private = ml_dsa_65::PrivateKey::try_from_bytes(ml_sk_bytes)
-        .map_err(|e| shekyl_crypto_pq::CryptoError::SerializationError(e.into()))?;
-    let ml_pk = ml_private.get_public_key();
-
-    let pk = HybridPublicKey {
-        ed25519: ed_pk,
-        ml_dsa: ml_pk.into_bytes().to_vec(),
-    };
-    pk.to_canonical_bytes()
-}

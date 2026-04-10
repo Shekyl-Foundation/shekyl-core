@@ -164,9 +164,10 @@ pub struct LeafEntry {
 /// # Field layout
 ///
 /// All 32-byte arrays are compressed Ed25519 points or scalars in
-/// little-endian canonical encoding. The `pqc_secret_key` is the full
-/// ML-DSA-65 secret key (4032 bytes) concatenated with the Ed25519 secret
-/// key, in the canonical encoding produced by `shekyl-crypto-pq`.
+/// little-endian canonical encoding. PQC signing uses `combined_ss` and
+/// `output_index` to derive the keypair internally via
+/// `sign_pqc_auth_for_output` — the ML-DSA secret key never exists as a
+/// field on this struct.
 #[derive(Clone, Debug, Deserialize)]
 pub struct SpendInput {
     /// Compressed one-time output public key O (Ed25519).
@@ -189,11 +190,12 @@ pub struct SpendInput {
     /// Hash of the PQC public key for this output: H(pqc_pk).
     #[serde(with = "hex_bytes32")]
     pub h_pqc: [u8; 32],
-    /// Derived hybrid secret key (Ed25519 + ML-DSA-65) for PQC signing.
-    /// Encoded in canonical form via `HybridSecretKey::to_canonical_bytes()`.
+    /// Combined KEM shared secret (X25519 || ML-KEM) for PQC key derivation.
     /// Zeroized on drop.
     #[serde(with = "hex_blob")]
-    pub pqc_secret_key: Vec<u8>,
+    pub combined_ss: Vec<u8>,
+    /// Output index within the transaction for PQC key derivation.
+    pub output_index: u64,
 
     /// All outputs in the same Selene leaf chunk as this input.
     /// Each entry contains (O, I, C, h_pqc). Must be non-empty and contain
@@ -213,7 +215,7 @@ impl Drop for SpendInput {
         self.spend_key_x.zeroize();
         self.spend_key_y.zeroize();
         self.commitment_mask.zeroize();
-        self.pqc_secret_key.zeroize();
+        self.combined_ss.zeroize();
     }
 }
 

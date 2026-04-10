@@ -2340,7 +2340,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
           {
             crypto::secret_key x_secret;
             sc_add(reinterpret_cast<unsigned char*>(&x_secret),
-                   ho_buf, m_account.get_keys().m_spend_secret_key.data);
+                   ho_buf, reinterpret_cast<const unsigned char*>(m_account.get_keys().m_spend_secret_key.data));
             crypto::generate_key_image(output_public_key, x_secret, tx_scan_info[i].ki);
             memwipe(&x_secret, sizeof(x_secret));
             tx_scan_info[i].in_ephemeral.pub = output_public_key;
@@ -3219,16 +3219,14 @@ void wallet2::validate_pqc_key_derivation_for_output(const transfer_details& td)
     "Cannot rederive PQC keys: combined shared secret missing or wrong size for output " +
     std::to_string(td.m_global_output_index));
 
-  ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
+  uint8_t h_pqc[32];
+  const bool ok = shekyl_derive_pqc_leaf_hash(
     td.m_combined_shared_secret.data(),
-    static_cast<uint64_t>(td.m_internal_output_index));
+    static_cast<uint64_t>(td.m_internal_output_index),
+    h_pqc);
+  THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error,
+    "PQC leaf hash derivation failed for output " + std::to_string(td.m_global_output_index));
 
-  THROW_WALLET_EXCEPTION_IF(!kp.success || !kp.public_key.ptr || !kp.secret_key.ptr,
-    error::wallet_internal_error,
-    "PQC keypair derivation failed for output " + std::to_string(td.m_global_output_index));
-
-  // Validation pass: if tx_extra has per-output PQC leaf hashes (tag 0x07),
-  // ensure the rederived key matches the committed H(pqc_pk) for this output.
   std::vector<tx_extra_field> tx_extra_fields;
   if (parse_tx_extra(td.m_tx.extra, tx_extra_fields))
   {
@@ -3238,19 +3236,12 @@ void wallet2::validate_pqc_key_derivation_for_output(const transfer_details& td)
       const size_t off = static_cast<size_t>(td.m_internal_output_index) * cryptonote::PQC_LEAF_HASH_BYTES;
       if (leaf_hashes.blob.size() >= off + cryptonote::PQC_LEAF_HASH_BYTES)
       {
-        uint8_t h_pqc[32];
-        const bool ok = shekyl_fcmp_pqc_leaf_hash(kp.public_key.ptr, kp.public_key.len, h_pqc);
-        THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error,
-          "PQC leaf hash derivation failed for output " + std::to_string(td.m_global_output_index));
         THROW_WALLET_EXCEPTION_IF(memcmp(h_pqc, leaf_hashes.blob.data() + off, 32) != 0,
           error::wallet_internal_error,
           "Derived PQC key mismatch for output " + std::to_string(td.m_global_output_index));
       }
     }
   }
-
-  shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
-  shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
 }
 //----------------------------------------------------------------------------------------------------
 void wallet2::rederive_all_pqc_keys()
@@ -8230,16 +8221,6 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     rct::ctkeyV inSk(num_inputs), inPk(num_inputs);
     std::vector<std::vector<uint8_t>> tree_paths(num_inputs);
     rct::keyV pqc_pk_hashes(num_inputs);
-    std::vector<std::vector<uint8_t>> derived_pqc_public_keys(num_inputs);
-    std::vector<std::vector<uint8_t>> derived_pqc_secret_keys(num_inputs);
-    auto wipe_derived_pqc_secret_keys = epee::misc_utils::create_scope_leave_handler([&derived_pqc_secret_keys]() {
-      for (auto& sk : derived_pqc_secret_keys)
-      {
-        if (!sk.empty())
-          memwipe(sk.data(), sk.size());
-        sk.clear();
-      }
-    });
     crypto::hash reference_block{};
     crypto::hash curve_tree_root{};
     uint8_t tree_depth = 0;
@@ -8308,25 +8289,16 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
           "Input tree_depth mismatch across selected inputs; rerun precompute_fcmp_paths()");
       }
 
-      // Per-input H(pqc_pk) from the combined shared secret
       THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.size() != 64,
         error::wallet_internal_error,
         "Missing combined shared secret for output " + std::to_string(td.m_global_output_index));
-      ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
-          td.m_combined_shared_secret.data(), static_cast<uint64_t>(td.m_internal_output_index));
-      THROW_WALLET_EXCEPTION_IF(!kp.success || !kp.public_key.ptr || !kp.secret_key.ptr, error::wallet_internal_error,
-          "PQC keypair derivation failed for input " + std::to_string(i));
-      derived_pqc_public_keys[i].assign(kp.public_key.ptr, kp.public_key.ptr + kp.public_key.len);
-      derived_pqc_secret_keys[i].assign(kp.secret_key.ptr, kp.secret_key.ptr + kp.secret_key.len);
       uint8_t h_pqc[32];
-      bool ok = shekyl_fcmp_pqc_leaf_hash(
-          reinterpret_cast<const uint8_t*>(derived_pqc_public_keys[i].data()),
-          derived_pqc_public_keys[i].size(),
+      bool ok = shekyl_derive_pqc_leaf_hash(
+          td.m_combined_shared_secret.data(),
+          static_cast<uint64_t>(td.m_internal_output_index),
           h_pqc);
-      shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
-      shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
       THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error,
-          "PQC leaf hash failed for input " + std::to_string(i));
+          "PQC leaf hash derivation failed for input " + std::to_string(i));
       memcpy(pqc_pk_hashes[i].bytes, h_pqc, 32);
     }
 
@@ -8386,11 +8358,18 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       tx.pqc_auths.resize(num_inputs);
       for (size_t i = 0; i < num_inputs; ++i)
       {
+        const transfer_details& td_stub = m_transfers[permuted_transfers[i]];
+        ShekylBuffer pk_buf = shekyl_derive_pqc_public_key(
+            td_stub.m_combined_shared_secret.data(),
+            static_cast<uint64_t>(td_stub.m_internal_output_index));
+        THROW_WALLET_EXCEPTION_IF(!pk_buf.ptr, error::wallet_internal_error,
+            "PQC public key derivation failed for input " + std::to_string(i));
         tx.pqc_auths[i].auth_version = 1;
         tx.pqc_auths[i].scheme_id = 1;
         tx.pqc_auths[i].flags = 0;
-        tx.pqc_auths[i].hybrid_public_key = derived_pqc_public_keys[i];
+        tx.pqc_auths[i].hybrid_public_key.assign(pk_buf.ptr, pk_buf.ptr + pk_buf.len);
         tx.pqc_auths[i].hybrid_signature.resize(3385, 0);
+        shekyl_buffer_free(pk_buf.ptr, pk_buf.len);
       }
 
       // Parse tree paths into branch layers and store signing state.
@@ -8456,8 +8435,6 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
         m_native_sign_state.outputs[i].amount_key = amount_keys[i];
       }
 
-      m_native_sign_state.pqc_public_keys = derived_pqc_public_keys;
-      m_native_sign_state.pqc_secret_keys = std::move(derived_pqc_secret_keys);
       m_native_sign_state.permuted_transfers.assign(permuted_transfers.begin(), permuted_transfers.end());
       m_native_sign_state.tx_prefix_hash = tx_prefix_hash;
       m_native_sign_state.fee = fee;
@@ -8491,10 +8468,10 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       tx.pqc_auths.resize(num_inputs);
       for (size_t i = 0; i < num_inputs; ++i)
       {
+        const transfer_details& td_sign = m_transfers[permuted_transfers[i]];
         tx.pqc_auths[i].auth_version = 1;
         tx.pqc_auths[i].scheme_id = 1;
         tx.pqc_auths[i].flags = 0;
-        tx.pqc_auths[i].hybrid_public_key = derived_pqc_public_keys[i];
 
         std::string payload_blob;
         THROW_WALLET_EXCEPTION_IF(!cryptonote::get_transaction_signed_payload(tx, i, payload_blob),
@@ -8502,15 +8479,17 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
         crypto::hash payload_hash;
         cryptonote::get_blob_hash(payload_blob, payload_hash);
 
-        ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
-            reinterpret_cast<const uint8_t*>(derived_pqc_secret_keys[i].data()),
-            derived_pqc_secret_keys[i].size(),
+        ShekylPqcAuthResult auth = shekyl_sign_pqc_auth(
+            td_sign.m_combined_shared_secret.data(),
+            static_cast<uint64_t>(td_sign.m_internal_output_index),
             reinterpret_cast<const uint8_t*>(payload_hash.data), sizeof(payload_hash.data));
-        THROW_WALLET_EXCEPTION_IF(!sig_result.success, error::wallet_internal_error,
+        THROW_WALLET_EXCEPTION_IF(!auth.success, error::wallet_internal_error,
             "PQC signing failed for input " + std::to_string(i));
-        tx.pqc_auths[i].hybrid_signature.assign(sig_result.signature.ptr,
-            sig_result.signature.ptr + sig_result.signature.len);
-        shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
+        tx.pqc_auths[i].hybrid_public_key.assign(auth.hybrid_public_key.ptr,
+            auth.hybrid_public_key.ptr + auth.hybrid_public_key.len);
+        tx.pqc_auths[i].hybrid_signature.assign(auth.signature.ptr,
+            auth.signature.ptr + auth.signature.len);
+        shekyl_pqc_auth_result_free(&auth);
       }
 
       tx.invalidate_hashes();
@@ -9642,17 +9621,11 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
                           cryptonote::HYBRID_KEM_CT_BYTES);
     shekyl_buffer_free(ct_buf.ptr, ct_buf.len);
 
-    ShekylPqcKeypair derived = shekyl_fcmp_derive_pqc_keypair(combined_ss, static_cast<uint64_t>(oi));
-    memwipe(combined_ss, sizeof(combined_ss));
-    THROW_WALLET_EXCEPTION_IF(!derived.success || !derived.public_key.ptr,
-      error::wallet_internal_error, "Per-output PQC keypair derivation failed for claim output " + std::to_string(oi));
-
     uint8_t h_pqc[32];
-    ok = shekyl_fcmp_pqc_leaf_hash(derived.public_key.ptr, derived.public_key.len, h_pqc);
-    shekyl_buffer_free(derived.public_key.ptr, derived.public_key.len);
-    shekyl_buffer_free(derived.secret_key.ptr, derived.secret_key.len);
+    ok = shekyl_derive_pqc_leaf_hash(combined_ss, static_cast<uint64_t>(oi), h_pqc);
+    memwipe(combined_ss, sizeof(combined_ss));
     THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error,
-      "PQC leaf hash failed for claim output " + std::to_string(oi));
+      "PQC leaf hash derivation failed for claim output " + std::to_string(oi));
 
     leaf_hash_field.blob.append(reinterpret_cast<const char*>(h_pqc), cryptonote::PQC_LEAF_HASH_BYTES);
 
@@ -9749,19 +9722,11 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
   rv.p.curve_trees_tree_depth = 0;
   rv.referenceBlock = crypto::hash{};
 
-  // ── PQC auth: sign with per-output KEM-derived keys ───────────────
+  // ── PQC auth: derive public keys, then sign ─────────────────────
   tx.pqc_auths.clear();
   tx.pqc_auths.resize(num_inputs);
-  std::vector<std::vector<uint8_t>> claim_signing_sks(num_inputs);
-  auto wipe_claim_signing_sks = epee::misc_utils::create_scope_leave_handler([&claim_signing_sks]() {
-    for (auto& sk : claim_signing_sks)
-    {
-      if (!sk.empty())
-        memwipe(sk.data(), sk.size());
-      sk.clear();
-    }
-  });
 
+  // Loop 1: populate public keys for all inputs before signing
   for (size_t i = 0; i < num_inputs; ++i)
   {
     const size_t td_idx = ordered_indices[i];
@@ -9769,26 +9734,26 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
 
     THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.size() != 64, error::wallet_internal_error,
       "Missing per-output combined shared secret for claim input " + std::to_string(i));
-    ShekylPqcKeypair kp = shekyl_fcmp_derive_pqc_keypair(
+    ShekylBuffer pk_buf = shekyl_derive_pqc_public_key(
         td.m_combined_shared_secret.data(),
         static_cast<uint64_t>(td.m_internal_output_index));
-    THROW_WALLET_EXCEPTION_IF(!kp.success || !kp.public_key.ptr || !kp.secret_key.ptr,
-      error::wallet_internal_error, "Per-output PQC keypair rederivation failed for claim input " + std::to_string(i));
-
-    tx.pqc_auths[i].hybrid_public_key.assign(kp.public_key.ptr, kp.public_key.ptr + kp.public_key.len);
-    claim_signing_sks[i].assign(kp.secret_key.ptr, kp.secret_key.ptr + kp.secret_key.len);
-    shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
-    shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
+    THROW_WALLET_EXCEPTION_IF(!pk_buf.ptr, error::wallet_internal_error,
+      "PQC public key derivation failed for claim input " + std::to_string(i));
 
     tx.pqc_auths[i].auth_version = 1;
     tx.pqc_auths[i].scheme_id = 1;
     tx.pqc_auths[i].flags = 0;
+    tx.pqc_auths[i].hybrid_public_key.assign(pk_buf.ptr, pk_buf.ptr + pk_buf.len);
     tx.pqc_auths[i].hybrid_signature.clear();
+    shekyl_buffer_free(pk_buf.ptr, pk_buf.len);
   }
 
-  // Sign all inputs after public keys are populated (payload includes all H(pqc_pk))
+  // Loop 2: sign all inputs (payload depends on all public keys being set)
   for (size_t i = 0; i < num_inputs; ++i)
   {
+    const size_t td_idx = ordered_indices[i];
+    const auto& td = m_transfers[td_idx];
+
     std::string payload_blob;
     THROW_WALLET_EXCEPTION_IF(!cryptonote::get_transaction_signed_payload(tx, i, payload_blob),
       error::wallet_internal_error, "Failed to build PQC signed payload for claim input " + std::to_string(i));
@@ -9796,17 +9761,17 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
     crypto::hash payload_hash;
     cryptonote::get_blob_hash(payload_blob, payload_hash);
 
-    ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
-        reinterpret_cast<const uint8_t*>(claim_signing_sks[i].data()), claim_signing_sks[i].size(),
+    ShekylPqcAuthResult auth = shekyl_sign_pqc_auth(
+        td.m_combined_shared_secret.data(),
+        static_cast<uint64_t>(td.m_internal_output_index),
         reinterpret_cast<const uint8_t*>(payload_hash.data),
         sizeof(payload_hash.data));
-
-    THROW_WALLET_EXCEPTION_IF(!sig_result.success, error::wallet_internal_error,
+    THROW_WALLET_EXCEPTION_IF(!auth.success, error::wallet_internal_error,
       "PQC signing failed for claim input " + std::to_string(i));
 
-    tx.pqc_auths[i].hybrid_signature.assign(
-        sig_result.signature.ptr, sig_result.signature.ptr + sig_result.signature.len);
-    shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
+    tx.pqc_auths[i].hybrid_signature.assign(auth.signature.ptr,
+        auth.signature.ptr + auth.signature.len);
+    shekyl_pqc_auth_result_free(&auth);
   }
 
   tx.invalidate_hashes();

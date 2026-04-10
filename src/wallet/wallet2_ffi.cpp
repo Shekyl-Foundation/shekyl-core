@@ -3756,12 +3756,17 @@ char* wallet2_ffi_prepare_transfer(wallet2_handle* w,
             add_hex_key(inp_obj, "spend_key_y", inp.spend_key_y, alloc);
             add_hex_key(inp_obj, "h_pqc", inp.h_pqc, alloc);
 
-            // PQC secret key (hex)
-            if (i < nss.pqc_secret_keys.size() && !nss.pqc_secret_keys[i].empty()) {
-                add_hex_bytes(inp_obj, "pqc_secret_key",
-                    nss.pqc_secret_keys[i].data(), nss.pqc_secret_keys[i].size(), alloc);
+            // Per-input combined_ss + output_index for Rust-side PQC signing
+            if (i < nss.permuted_transfers.size()) {
+                const auto& td_ffi = w->wallet->m_transfers[nss.permuted_transfers[i]];
+                add_hex_bytes(inp_obj, "combined_ss",
+                    td_ffi.m_combined_shared_secret.data(),
+                    td_ffi.m_combined_shared_secret.size(), alloc);
+                inp_obj.AddMember("output_index",
+                    static_cast<uint64_t>(td_ffi.m_internal_output_index), alloc);
             } else {
-                inp_obj.AddMember("pqc_secret_key", rj::Value("", alloc), alloc);
+                inp_obj.AddMember("combined_ss", rj::Value("", alloc), alloc);
+                inp_obj.AddMember("output_index", 0u, alloc);
             }
 
             // leaf_chunk: array of LeafEntry
@@ -3886,10 +3891,7 @@ char* wallet2_ffi_finalize_transfer(wallet2_handle* w,
             return nullptr;
         }
 
-        // Clean up state on scope exit
         auto cleanup = epee::misc_utils::create_scope_leave_handler([&nss]() {
-            for (auto& sk : nss.pqc_secret_keys)
-                if (!sk.empty()) { memwipe(sk.data(), sk.size()); sk.clear(); }
             nss.clear();
         });
 
@@ -3996,15 +3998,27 @@ char* wallet2_ffi_finalize_transfer(wallet2_handle* w,
                 memcpy(&tx.rct_signatures.referenceBlock, bin.data(), 32);
         }
 
-        // PQC signing: compute payload hashes and sign with stored PQC secret keys
+        // PQC signing: derive keypair and sign in Rust — secret key never in C++
         tx.pqc_auths.resize(num_inputs);
         for (size_t i = 0; i < num_inputs; ++i)
         {
+            if (i >= nss.permuted_transfers.size())
+            {
+                w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
+                    "Missing permuted transfer index for input " + std::to_string(i));
+                return nullptr;
+            }
+            const auto& td_fin = w->wallet->m_transfers[nss.permuted_transfers[i]];
+            if (td_fin.m_combined_shared_secret.size() != 64)
+            {
+                w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
+                    "Missing combined shared secret for input " + std::to_string(i));
+                return nullptr;
+            }
+
             tx.pqc_auths[i].auth_version = 1;
             tx.pqc_auths[i].scheme_id = 1;
             tx.pqc_auths[i].flags = 0;
-            if (i < nss.pqc_public_keys.size())
-                tx.pqc_auths[i].hybrid_public_key = nss.pqc_public_keys[i];
 
             std::string payload_blob;
             if (!cryptonote::get_transaction_signed_payload(tx, i, payload_blob))
@@ -4016,26 +4030,22 @@ char* wallet2_ffi_finalize_transfer(wallet2_handle* w,
             crypto::hash payload_hash;
             cryptonote::get_blob_hash(payload_blob, payload_hash);
 
-            if (i >= nss.pqc_secret_keys.size() || nss.pqc_secret_keys[i].empty())
-            {
-                w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
-                    "Missing PQC secret key for input " + std::to_string(i));
-                return nullptr;
-            }
-
-            ShekylPqcSignatureResult sig_result = shekyl_pqc_sign(
-                reinterpret_cast<const uint8_t*>(nss.pqc_secret_keys[i].data()),
-                nss.pqc_secret_keys[i].size(),
-                reinterpret_cast<const uint8_t*>(payload_hash.data), sizeof(payload_hash.data));
-            if (!sig_result.success)
+            ShekylPqcAuthResult auth = shekyl_sign_pqc_auth(
+                td_fin.m_combined_shared_secret.data(),
+                static_cast<uint64_t>(td_fin.m_internal_output_index),
+                reinterpret_cast<const uint8_t*>(payload_hash.data),
+                sizeof(payload_hash.data));
+            if (!auth.success)
             {
                 w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
                     "PQC signing failed for input " + std::to_string(i));
                 return nullptr;
             }
-            tx.pqc_auths[i].hybrid_signature.assign(sig_result.signature.ptr,
-                sig_result.signature.ptr + sig_result.signature.len);
-            shekyl_buffer_free(sig_result.signature.ptr, sig_result.signature.len);
+            tx.pqc_auths[i].hybrid_public_key.assign(auth.hybrid_public_key.ptr,
+                auth.hybrid_public_key.ptr + auth.hybrid_public_key.len);
+            tx.pqc_auths[i].hybrid_signature.assign(auth.signature.ptr,
+                auth.signature.ptr + auth.signature.len);
+            shekyl_pqc_auth_result_free(&auth);
         }
 
         tx.invalidate_hashes();

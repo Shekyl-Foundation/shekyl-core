@@ -3,16 +3,16 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! PQC rederivation benchmark (Phase 7e).
+//! PQC rederivation benchmark.
 //!
 //! Benchmarks the per-output key rederivation pipeline:
-//!   ML-KEM-768 decapsulation + HKDF-SHA-512 + ML-DSA-65 keygen
+//!   ML-KEM-768 decapsulation + HKDF-SHA-512 + ML-DSA-65 keygen + leaf hash
 //!
 //! Target: < 100ms per output on x86_64.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-use shekyl_crypto_pq::derivation::{derive_pqc_keypair, hash_pqc_public_key};
+use shekyl_crypto_pq::derivation::{derive_pqc_leaf_hash, hash_pqc_public_key};
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 
 fn bench_kem_decapsulate(c: &mut Criterion) {
@@ -27,12 +27,12 @@ fn bench_kem_decapsulate(c: &mut Criterion) {
     });
 }
 
-fn bench_pqc_keypair_derivation(c: &mut Criterion) {
+fn bench_pqc_leaf_hash_derivation(c: &mut Criterion) {
     let combined_ss = [0xab; 64];
 
-    c.bench_function("pqc_keypair_derivation_hkdf_plus_ml_dsa_65_keygen", |b| {
+    c.bench_function("pqc_leaf_hash_derivation_hkdf_keygen_hash", |b| {
         b.iter(|| {
-            let _ = derive_pqc_keypair(black_box(&combined_ss), black_box(0)).unwrap();
+            let _ = derive_pqc_leaf_hash(black_box(&combined_ss), black_box(0)).unwrap();
         })
     });
 }
@@ -54,14 +54,8 @@ fn bench_full_per_output_rederivation(c: &mut Criterion) {
 
     c.bench_function("full_per_output_rederivation", |b| {
         b.iter(|| {
-            // Step 1: ML-KEM-768 decapsulation
             let ss = kem.decapsulate(black_box(&sk), black_box(&ct)).unwrap();
-
-            // Step 2: HKDF-SHA-512 + ML-DSA-65 keygen (inside derive_pqc_keypair)
-            let kp = derive_pqc_keypair(black_box(&ss.0), black_box(0)).unwrap();
-
-            // Step 3: Hash public key for leaf scalar
-            let _ = hash_pqc_public_key(black_box(&kp.public_key));
+            let _ = derive_pqc_leaf_hash(black_box(&ss.0), black_box(0)).unwrap();
         })
     });
 }
@@ -69,7 +63,7 @@ fn bench_full_per_output_rederivation(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_kem_decapsulate,
-    bench_pqc_keypair_derivation,
+    bench_pqc_leaf_hash_derivation,
     bench_hash_pqc_public_key,
     bench_full_per_output_rederivation,
 );

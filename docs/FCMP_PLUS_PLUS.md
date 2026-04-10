@@ -540,7 +540,8 @@ rust/
 | `shekyl_fcmp_verify()` | `shekyl-ffi/src/lib.rs` | Verify FCMP++ proof |
 | `shekyl_fcmp_proof_len()` | `shekyl-ffi/src/lib.rs` | Estimate proof byte length |
 | `shekyl_fcmp_pqc_leaf_hash()` | `shekyl-ffi/src/lib.rs` | Hash ML-DSA-65 pubkey for leaf |
-| `shekyl_fcmp_derive_pqc_keypair()` | `shekyl-ffi/src/lib.rs` | Derive per-output PQC keypair |
+| `shekyl_derive_pqc_leaf_hash()` | `shekyl-ffi/src/lib.rs` | Derive h_pqc from combined_ss (secret stays in Rust) |
+| `shekyl_derive_pqc_public_key()` | `shekyl-ffi/src/lib.rs` | Derive hybrid public key from combined_ss (secret stays in Rust) |
 | `shekyl_fcmp_outputs_to_leaves()` | `shekyl-ffi/src/lib.rs` | Convert outputs to 4-scalar leaves |
 | `shekyl_frost_sal_session_new()` | `shekyl-ffi/src/lib.rs` | Create FROST SAL session per input (Rust-only, `multisig` feature) |
 | `shekyl_frost_sal_get_rerand()` | `shekyl-ffi/src/lib.rs` | Get rerandomized output from session (Rust-only, `multisig` feature) |
@@ -695,10 +696,18 @@ public key (and secret key for scan). For signing, `shekyl_sign_pqc_auth`
 derives the keypair internally from `combined_ss`, signs, and wipes —
 the ML-DSA secret key never crosses the FFI boundary.
 
-> **Note:** The legacy `shekyl_fcmp_derive_pqc_keypair` function used a
-> separate HKDF salt A (`shekyl-pqc-derive-v1`). This was consolidated into
-> the unified salt B in PR-construct. All `h_pqc` leaf hashes from the
-> pre-consolidation testnet are invalid. A testnet reset is required.
+For public-key-only derivation (e.g., computing `h_pqc` for FCMP++ proofs
+or populating `tx.pqc_auths[i].hybrid_public_key` before signing),
+`shekyl_derive_pqc_leaf_hash` and `shekyl_derive_pqc_public_key` derive
+the keypair internally, extract only the public component, and zeroize
+the secret key — no secret material is returned.
+
+> **Note:** The legacy `shekyl_fcmp_derive_pqc_keypair` function has been
+> deleted. It used a separate HKDF salt A (`shekyl-pqc-derive-v1`) and
+> returned the ML-DSA secret key to C++. All callers have been migrated to
+> `shekyl_derive_pqc_leaf_hash` + `shekyl_sign_pqc_auth`. All `h_pqc`
+> leaf hashes from the pre-consolidation testnet are invalid. A testnet
+> reset is required.
 
 ### Wallet Restore from Seed
 
@@ -1124,7 +1133,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | GUI wallet QR code (full Bech32m address) | **Done** | `shekyl-gui-wallet` |
 | GUI wallet fee preview on Send page | **Done** | `shekyl-gui-wallet` |
 | `rct::key::operator!=` for key-vs-key comparison | **Done** | `rctTypes.h` |
-| RAII scope guard for PQC signing keypair buffers | **Done** | `wallet2.cpp` (`transfer_selected_rct`) |
+| PQC secret keys eliminated from C++ wallet (sign via `shekyl_sign_pqc_auth`) | **Done** | `wallet2.cpp`, `wallet2_ffi.cpp` |
 | MSVC-compatible `binary_archive` construction | **Done** | `wallet2.cpp` |
 | Stressnet tooling (load gen, monitor, config) | **Done** | `tests/stressnet/` |
 | 4-scalar leaf circuit (x-only + H(pqc_pk)) in monero-oxide fork | **Done** | `crypto/fcmps/` (monero-oxide `fcmp++` branch) |

@@ -913,45 +913,54 @@ pub extern "C" fn shekyl_fcmp_pqc_leaf_hash(
     true
 }
 
-/// Derive a per-output hybrid (Ed25519 + ML-DSA-65) PQC keypair from combined
-/// KEM shared secret + output index.
+/// Derive `h_pqc = H(hybrid_public_key)` from combined shared secret and output
+/// index. Secret key is derived internally, used for public key derivation only,
+/// and zeroized immediately. No secret material crosses this boundary.
 ///
-/// Returns a ShekylPqcKeypair with canonical-encoded hybrid public and secret
-/// keys. The public key bytes are used for leaf-hash computation via
-/// `shekyl_fcmp_pqc_leaf_hash`, stored in `tx.pqc_auths[i].hybrid_public_key`,
-/// and verified by `shekyl_pqc_verify`. The secret key is used for signing
-/// via `shekyl_pqc_sign`.
+/// # Safety
+/// - `combined_ss_ptr` must point to 64 bytes.
+/// - `h_pqc_out` must point to 32 writable bytes.
 #[no_mangle]
-pub extern "C" fn shekyl_fcmp_derive_pqc_keypair(
+pub unsafe extern "C" fn shekyl_derive_pqc_leaf_hash(
     combined_ss_ptr: *const u8,
     output_index: u64,
-) -> ShekylPqcKeypair {
-    let fail = ShekylPqcKeypair {
-        public_key: ShekylBuffer::null(),
-        secret_key: ShekylBuffer::null(),
-        success: false,
-    };
-
-    if combined_ss_ptr.is_null() {
-        return fail;
+    h_pqc_out: *mut u8,
+) -> bool {
+    if combined_ss_ptr.is_null() || h_pqc_out.is_null() {
+        return false;
     }
-    let ss: [u8; 64] = unsafe {
-        let mut buf = [0u8; 64];
-        std::ptr::copy_nonoverlapping(combined_ss_ptr, buf.as_mut_ptr(), 64);
-        buf
-    };
+    let mut ss = [0u8; 64];
+    std::ptr::copy_nonoverlapping(combined_ss_ptr, ss.as_mut_ptr(), 64);
 
-    match shekyl_crypto_pq::derivation::derive_hybrid_pqc_keypair(&ss, output_index) {
-        Ok(mut kp) => {
-            let pk = std::mem::take(&mut kp.public_key);
-            let sk = std::mem::take(&mut kp.secret_key);
-            ShekylPqcKeypair {
-                public_key: ShekylBuffer::from_vec(pk),
-                secret_key: ShekylBuffer::from_vec(sk),
-                success: true,
-            }
+    match shekyl_crypto_pq::derivation::derive_pqc_leaf_hash(&ss, output_index) {
+        Ok(hash) => {
+            std::ptr::copy_nonoverlapping(hash.as_ptr(), h_pqc_out, 32);
+            true
         }
-        Err(_) => fail,
+        Err(_) => false,
+    }
+}
+
+/// Derive the canonical hybrid public key bytes from combined shared secret and
+/// output index. No secret material crosses this boundary.
+///
+/// # Safety
+/// - `combined_ss_ptr` must point to 64 bytes.
+/// - Returns a heap-allocated ShekylBuffer that must be freed with `shekyl_buffer_free`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_derive_pqc_public_key(
+    combined_ss_ptr: *const u8,
+    output_index: u64,
+) -> ShekylBuffer {
+    if combined_ss_ptr.is_null() {
+        return ShekylBuffer::null();
+    }
+    let mut ss = [0u8; 64];
+    std::ptr::copy_nonoverlapping(combined_ss_ptr, ss.as_mut_ptr(), 64);
+
+    match shekyl_crypto_pq::derivation::derive_pqc_public_key(&ss, output_index) {
+        Ok(pk) => ShekylBuffer::from_vec(pk),
+        Err(_) => ShekylBuffer::null(),
     }
 }
 
@@ -2805,7 +2814,7 @@ fn tx_builder_error_code(e: &shekyl_tx_builder::TxBuilderError) -> i32 {
         LeafChunkTooLarge { .. } => -20,
         ZeroTreeDepth => -21,
         BranchLayerMismatch { .. } => -22,
-        InvalidPqcKeyLength { .. } => -23,
+        InvalidCombinedSsLength { .. } => -23,
         BulletproofError(_) => -24,
         FcmpProveError(_) => -25,
         PqcSignError { .. } => -26,

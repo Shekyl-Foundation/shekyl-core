@@ -35,7 +35,7 @@ use curve25519_dalek::{
 };
 use fips203::{ml_kem_768, traits::{Encaps, Decaps, SerDes}};
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey, StaticSecret};
-use zeroize::ZeroizeOnDrop;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use shekyl_generators::{H, T};
 

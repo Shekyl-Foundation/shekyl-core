@@ -1944,8 +1944,6 @@ namespace tools
     bool m_native_sign_mode = false;
     struct native_sign_state {
       pending_tx ptx;
-      std::vector<std::vector<uint8_t>> pqc_public_keys;
-      std::vector<std::vector<uint8_t>> pqc_secret_keys;
       std::vector<size_t> permuted_transfers;
       // Per-input signing data extracted from transfer_selected_rct
       struct input_signing_data {
@@ -1975,11 +1973,6 @@ namespace tools
       std::string tx_blob_hex;
       bool valid = false;
       void clear() {
-        for (auto &sk : pqc_secret_keys) {
-          if (!sk.empty()) memwipe(sk.data(), sk.size());
-          sk.clear();
-        }
-        pqc_secret_keys.clear();
         for (auto &in : inputs) {
           memwipe(in.spend_key_x.bytes, sizeof(in.spend_key_x));
           memwipe(in.spend_key_y.bytes, sizeof(in.spend_key_y));

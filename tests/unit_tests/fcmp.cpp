@@ -461,37 +461,18 @@ TEST(fcmp, multisig_partial_sig_roundtrip)
   shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
 }
 
-TEST(fcmp, multisig_per_output_pqc_key_derivation_consistency)
+TEST(fcmp, per_output_pqc_leaf_hash_derivation_consistency)
 {
-  // Derive per-output PQC keypairs from the same combined_ss and verify
-  // different output indices produce different keys, same index = same key.
   uint8_t combined_ss[64];
   crypto::rand(64, combined_ss);
 
-  ShekylPqcKeypair kp1 = shekyl_fcmp_derive_pqc_keypair(combined_ss, 42);
-  ASSERT_TRUE(kp1.success);
+  uint8_t h1[32], h2[32], h3[32];
+  ASSERT_TRUE(shekyl_derive_pqc_leaf_hash(combined_ss, 42, h1));
+  ASSERT_TRUE(shekyl_derive_pqc_leaf_hash(combined_ss, 42, h2));
+  ASSERT_EQ(memcmp(h1, h2, 32), 0) << "Same input must produce same leaf hash";
 
-  ShekylPqcKeypair kp2 = shekyl_fcmp_derive_pqc_keypair(combined_ss, 42);
-  ASSERT_TRUE(kp2.success);
-
-  // Same input → same public key
-  ASSERT_EQ(kp1.public_key.len, kp2.public_key.len);
-  ASSERT_EQ(memcmp(kp1.public_key.ptr, kp2.public_key.ptr, kp1.public_key.len), 0);
-
-  ShekylPqcKeypair kp3 = shekyl_fcmp_derive_pqc_keypair(combined_ss, 99);
-  ASSERT_TRUE(kp3.success);
-
-  // Different output index → different public key
-  bool same_pk = (kp1.public_key.len == kp3.public_key.len &&
-      memcmp(kp1.public_key.ptr, kp3.public_key.ptr, kp1.public_key.len) == 0);
-  ASSERT_FALSE(same_pk);
-
-  shekyl_buffer_free(kp1.public_key.ptr, kp1.public_key.len);
-  shekyl_buffer_free(kp1.secret_key.ptr, kp1.secret_key.len);
-  shekyl_buffer_free(kp2.public_key.ptr, kp2.public_key.len);
-  shekyl_buffer_free(kp2.secret_key.ptr, kp2.secret_key.len);
-  shekyl_buffer_free(kp3.public_key.ptr, kp3.public_key.len);
-  shekyl_buffer_free(kp3.secret_key.ptr, kp3.secret_key.len);
+  ASSERT_TRUE(shekyl_derive_pqc_leaf_hash(combined_ss, 99, h3));
+  ASSERT_NE(memcmp(h1, h3, 32), 0) << "Different index must produce different leaf hash";
 }
 
 TEST(fcmp, multisig_2of3_sig_container_assembly)

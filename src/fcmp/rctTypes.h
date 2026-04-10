@@ -258,7 +258,24 @@ namespace rct {
           {
             FIELD(pseudoOuts)
           }
-          FIELD(enc_amounts)
+          {
+            std::string enc_amounts_blob;
+            if (typename Archive<W>::is_saving())
+            {
+              enc_amounts_blob.resize(enc_amounts.size() * 9);
+              for (size_t i = 0; i < enc_amounts.size(); ++i)
+                memcpy(&enc_amounts_blob[i * 9], enc_amounts[i].data(), 9);
+            }
+            FIELD(enc_amounts_blob)
+            if (!typename Archive<W>::is_saving())
+            {
+              if (enc_amounts_blob.size() % 9 != 0)
+                return false;
+              enc_amounts.resize(enc_amounts_blob.size() / 9);
+              for (size_t i = 0; i < enc_amounts.size(); ++i)
+                memcpy(enc_amounts[i].data(), &enc_amounts_blob[i * 9], 9);
+            }
+          }
           FIELD(outPk)
           VARINT_FIELD(txnFee)
           if (type == RCTTypeFcmpPlusPlusPqc)

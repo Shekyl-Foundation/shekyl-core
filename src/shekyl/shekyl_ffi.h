@@ -172,10 +172,19 @@ bool shekyl_fcmp_pqc_leaf_hash(
     size_t pqc_pk_len,
     uint8_t* out_ptr);
 
-// Derive per-output hybrid (Ed25519 + ML-DSA-65) keypair from combined KEM
-// shared secret. combined_ss_ptr: 64 bytes. Returns canonical-encoded
-// hybrid keys suitable for leaf hash, signing, and verification.
-ShekylPqcKeypair shekyl_fcmp_derive_pqc_keypair(
+// Derive h_pqc = H(hybrid_public_key) from combined KEM shared secret and
+// output index. Secret key derived internally and zeroized; never returned.
+// combined_ss_ptr: 64 bytes. h_pqc_out: 32-byte caller-provided buffer.
+bool shekyl_derive_pqc_leaf_hash(
+    const uint8_t* combined_ss_ptr,
+    uint64_t output_index,
+    uint8_t* h_pqc_out);
+
+// Derive canonical hybrid public key bytes from combined KEM shared secret
+// and output index. Secret key derived internally and zeroized; never returned.
+// combined_ss_ptr: 64 bytes. Returns heap-allocated buffer; free with
+// shekyl_buffer_free.
+ShekylBuffer shekyl_derive_pqc_public_key(
     const uint8_t* combined_ss_ptr,
     uint64_t output_index);
 

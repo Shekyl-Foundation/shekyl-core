@@ -84,12 +84,11 @@ pub enum TxBuilderError {
         depth: u8,
     },
 
-    /// A PQC secret key has the wrong byte length for ML-DSA-65.
-    #[error("input {index} PQC secret key has wrong length: {len} (expected {expected})")]
-    InvalidPqcKeyLength {
+    /// The combined_ss field has the wrong length (expected 64 bytes).
+    #[error("input {index} combined_ss has wrong length: {len} (expected 64)")]
+    InvalidCombinedSsLength {
         index: usize,
         len: usize,
-        expected: usize,
     },
 
     /// Bulletproof+ range proof generation failed.

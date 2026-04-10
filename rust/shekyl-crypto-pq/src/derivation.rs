@@ -20,134 +20,17 @@ use sha2::Sha512;
 use zeroize::Zeroize;
 
 use fips204::ml_dsa_65;
-use fips204::traits::SerDes as _;
 
 use crate::CryptoError;
 
 /// Domain separator for per-output PQC leaf hash.
 pub const DOMAIN_PQC_LEAF: &[u8] = b"shekyl-pqc-leaf";
 
-/// Domain separator for per-output PQC keypair derivation.
-pub const DOMAIN_PQC_OUTPUT: &[u8] = b"shekyl-pqc-output";
-
-/// Fixed HKDF salt for PQC key derivation, providing explicit domain separation
-/// to prevent cross-protocol seed reuse if the same combined shared secret
-/// appears in other contexts.
-const HKDF_SALT_PQC_DERIVE: &[u8] = b"shekyl-pqc-derive-v1";
-
-/// Size of the derivation seed extracted from HKDF for ML-DSA keygen.
-const DERIVATION_SEED_LEN: usize = 32;
-
 /// ML-DSA-65 public key length.
 pub const ML_DSA_65_PK_LEN: usize = ml_dsa_65::PK_LEN;
 
 /// ML-DSA-65 secret key length.
 pub const ML_DSA_65_SK_LEN: usize = ml_dsa_65::SK_LEN;
-
-/// A derived per-output ML-DSA-65 keypair.
-pub struct DerivedPqcKeypair {
-    pub public_key: Vec<u8>,
-    pub secret_key: Vec<u8>,
-}
-
-impl Drop for DerivedPqcKeypair {
-    fn drop(&mut self) {
-        self.secret_key.zeroize();
-    }
-}
-
-/// Derive a per-output ML-DSA-65 keypair from the combined KEM shared secret.
-///
-/// The derivation is deterministic: given the same `combined_ss` and
-/// `output_index`, the same keypair is always produced. This enables
-/// wallet restore-from-seed (the seed derives the KEM keys, KEM produces
-/// the shared secret, and this function produces the per-output PQC keys).
-///
-/// Steps:
-/// 1. Build info = DOMAIN_PQC_OUTPUT || output_index as LE u64
-/// 2. HKDF-Expand(combined_ss, info) → 32-byte seed
-/// 3. Use seed as deterministic RNG input for ML-DSA-65 keygen
-pub fn derive_pqc_keypair(
-    combined_ss: &[u8; 64],
-    output_index: u64,
-) -> Result<DerivedPqcKeypair, CryptoError> {
-    let mut info = Vec::with_capacity(DOMAIN_PQC_OUTPUT.len() + 8);
-    info.extend_from_slice(DOMAIN_PQC_OUTPUT);
-    info.extend_from_slice(&output_index.to_le_bytes());
-
-    let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_PQC_DERIVE), combined_ss);
-    let mut seed = [0u8; DERIVATION_SEED_LEN];
-    hk.expand(&info, &mut seed)
-        .map_err(|_| CryptoError::KeyGenerationFailed("HKDF expand for PQC seed".into()))?;
-
-    let (pk, sk) = keygen_from_seed(&seed)?;
-
-    seed.zeroize();
-
-    Ok(DerivedPqcKeypair {
-        public_key: pk.into_bytes().to_vec(),
-        secret_key: sk.into_bytes().to_vec(),
-    })
-}
-
-/// Domain separator for Ed25519 component of per-output hybrid key.
-const DOMAIN_PQC_ED25519: &[u8] = b"shekyl-pqc-ed25519";
-
-/// Derive a per-output HYBRID (Ed25519 + ML-DSA-65) keypair in canonical
-/// encoding, suitable for use with `shekyl_pqc_sign` / `HybridSecretKey`.
-///
-/// Internally derives both components from the same shared secret using
-/// distinct HKDF info domains: `DOMAIN_PQC_OUTPUT` for ML-DSA-65 and
-/// `DOMAIN_PQC_ED25519` for Ed25519.
-pub fn derive_hybrid_pqc_keypair(
-    combined_ss: &[u8; 64],
-    output_index: u64,
-) -> Result<DerivedPqcKeypair, CryptoError> {
-    use crate::signature::{HybridPublicKey, HybridSecretKey};
-    use ed25519_dalek::SigningKey;
-
-    let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_PQC_DERIVE), combined_ss);
-
-    // ML-DSA-65 derivation (same path as derive_pqc_keypair for leaf-hash compatibility)
-    let mut ml_info = Vec::with_capacity(DOMAIN_PQC_OUTPUT.len() + 8);
-    ml_info.extend_from_slice(DOMAIN_PQC_OUTPUT);
-    ml_info.extend_from_slice(&output_index.to_le_bytes());
-    let mut ml_seed = [0u8; DERIVATION_SEED_LEN];
-    hk.expand(&ml_info, &mut ml_seed)
-        .map_err(|_| CryptoError::KeyGenerationFailed("HKDF expand for ML-DSA seed".into()))?;
-    let (ml_pk, ml_sk) = keygen_from_seed(&ml_seed)?;
-    ml_seed.zeroize();
-
-    // Ed25519 derivation (separate domain)
-    let mut ed_info = Vec::with_capacity(DOMAIN_PQC_ED25519.len() + 8);
-    ed_info.extend_from_slice(DOMAIN_PQC_ED25519);
-    ed_info.extend_from_slice(&output_index.to_le_bytes());
-    let mut ed_seed = [0u8; 32];
-    hk.expand(&ed_info, &mut ed_seed)
-        .map_err(|_| CryptoError::KeyGenerationFailed("HKDF expand for Ed25519 seed".into()))?;
-    let ed_signing = SigningKey::from_bytes(&ed_seed);
-    ed_seed.zeroize();
-    let ed_verifying = ed_signing.verifying_key();
-
-    let hybrid_pk = HybridPublicKey {
-        ed25519: ed_verifying.to_bytes(),
-        ml_dsa: ml_pk.into_bytes().to_vec(),
-    };
-    let hybrid_sk = HybridSecretKey {
-        ed25519: ed_signing.to_bytes().to_vec(),
-        ml_dsa: ml_sk.into_bytes().to_vec(),
-    };
-
-    let pk_bytes = hybrid_pk.to_canonical_bytes()
-        .map_err(|e| CryptoError::KeyGenerationFailed(format!("hybrid PK encoding: {e}")))?;
-    let sk_bytes = hybrid_sk.to_canonical_bytes()
-        .map_err(|e| CryptoError::KeyGenerationFailed(format!("hybrid SK encoding: {e}")))?;
-
-    Ok(DerivedPqcKeypair {
-        public_key: pk_bytes,
-        secret_key: sk_bytes,
-    })
-}
 
 /// ML-DSA-65 keygen from a deterministic seed.
 ///
@@ -186,6 +69,68 @@ pub fn hash_pqc_public_key(pqc_pk_bytes: &[u8]) -> [u8; 32] {
     let field_elem = HelioseleneField::wide_reduce(uniform);
     uniform.zeroize();
     field_elem.to_repr()
+}
+
+/// Derive `h_pqc = H(hybrid_public_key)` from combined shared secret and output
+/// index, without returning any secret key material.
+///
+/// Internally derives the full hybrid keypair via `derive_output_secrets` (salt B)
+/// + `keygen_from_seed`, hashes the public key, and zeroizes the secret key on drop.
+pub fn derive_pqc_leaf_hash(
+    combined_ss: &[u8; 64],
+    output_index: u64,
+) -> Result<[u8; 32], CryptoError> {
+    use crate::signature::HybridPublicKey;
+    use ed25519_dalek::SigningKey;
+
+    let secrets = derive_output_secrets(combined_ss, output_index);
+    let (ml_pk, _ml_sk) = keygen_from_seed(&secrets.ml_dsa_seed)?;
+
+    let ed_signing = SigningKey::from_bytes(&secrets.ed25519_pqc_seed);
+    let ed_verifying = ed_signing.verifying_key();
+
+    let hybrid_pk = HybridPublicKey {
+        ed25519: ed_verifying.to_bytes(),
+        ml_dsa: {
+            use fips204::traits::SerDes;
+            ml_pk.into_bytes().to_vec()
+        },
+    };
+
+    let pk_bytes = hybrid_pk.to_canonical_bytes()
+        .map_err(|e| CryptoError::KeyGenerationFailed(format!("hybrid PK encoding: {e}")))?;
+
+    Ok(hash_pqc_public_key(&pk_bytes))
+}
+
+/// Derive the canonical hybrid public key bytes from combined shared secret and
+/// output index, without returning any secret key material.
+///
+/// Used where the full public key (not just its hash) is needed before signing,
+/// e.g. populating `tx.pqc_auths[i].hybrid_public_key` for payload construction.
+pub fn derive_pqc_public_key(
+    combined_ss: &[u8; 64],
+    output_index: u64,
+) -> Result<Vec<u8>, CryptoError> {
+    use crate::signature::HybridPublicKey;
+    use ed25519_dalek::SigningKey;
+
+    let secrets = derive_output_secrets(combined_ss, output_index);
+    let (ml_pk, _ml_sk) = keygen_from_seed(&secrets.ml_dsa_seed)?;
+
+    let ed_signing = SigningKey::from_bytes(&secrets.ed25519_pqc_seed);
+    let ed_verifying = ed_signing.verifying_key();
+
+    let hybrid_pk = HybridPublicKey {
+        ed25519: ed_verifying.to_bytes(),
+        ml_dsa: {
+            use fips204::traits::SerDes;
+            ml_pk.into_bytes().to_vec()
+        },
+    };
+
+    hybrid_pk.to_canonical_bytes()
+        .map_err(|e| CryptoError::KeyGenerationFailed(format!("hybrid PK encoding: {e}")))
 }
 
 // ── OutputSecrets: Unified HKDF derivation for two-component output keys ─────
@@ -329,49 +274,45 @@ mod tests {
     #[test]
     fn derivation_deterministic() {
         let ss = [0xab; 64];
-        let kp1 = derive_pqc_keypair(&ss, 0).unwrap();
-        let kp2 = derive_pqc_keypair(&ss, 0).unwrap();
-        assert_eq!(kp1.public_key, kp2.public_key);
-        assert_eq!(kp1.secret_key, kp2.secret_key);
+        let h1 = derive_pqc_leaf_hash(&ss, 0).unwrap();
+        let h2 = derive_pqc_leaf_hash(&ss, 0).unwrap();
+        assert_eq!(h1, h2);
     }
 
     #[test]
     fn different_indices_different_keys() {
         let ss = [0xab; 64];
-        let kp0 = derive_pqc_keypair(&ss, 0).unwrap();
-        let kp1 = derive_pqc_keypair(&ss, 1).unwrap();
-        assert_ne!(kp0.public_key, kp1.public_key);
+        let h0 = derive_pqc_leaf_hash(&ss, 0).unwrap();
+        let h1 = derive_pqc_leaf_hash(&ss, 1).unwrap();
+        assert_ne!(h0, h1);
     }
 
     #[test]
     fn different_secrets_different_keys() {
         let ss1 = [0xab; 64];
         let ss2 = [0xcd; 64];
-        let kp1 = derive_pqc_keypair(&ss1, 0).unwrap();
-        let kp2 = derive_pqc_keypair(&ss2, 0).unwrap();
-        assert_ne!(kp1.public_key, kp2.public_key);
+        let h1 = derive_pqc_leaf_hash(&ss1, 0).unwrap();
+        let h2 = derive_pqc_leaf_hash(&ss2, 0).unwrap();
+        assert_ne!(h1, h2);
     }
 
     #[test]
     fn derived_key_sizes() {
         let ss = [0xab; 64];
-        let kp = derive_pqc_keypair(&ss, 0).unwrap();
-        assert_eq!(kp.public_key.len(), ML_DSA_65_PK_LEN);
-        assert_eq!(kp.secret_key.len(), ML_DSA_65_SK_LEN);
+        let secrets = derive_output_secrets(&ss, 0);
+        let (pk, sk) = keygen_from_seed(&secrets.ml_dsa_seed).unwrap();
+        use fips204::traits::SerDes;
+        assert_eq!(pk.into_bytes().len(), ML_DSA_65_PK_LEN);
+        assert_eq!(sk.into_bytes().len(), ML_DSA_65_SK_LEN);
     }
 
     #[test]
     fn derived_key_signs_and_verifies() {
-        use fips204::traits::{Signer as _, Verifier as _};
+        use fips204::traits::{SerDes, Signer as _, Verifier as _};
 
         let ss = [0xab; 64];
-        let kp = derive_pqc_keypair(&ss, 42).unwrap();
-
-        let sk_bytes: [u8; ML_DSA_65_SK_LEN] = kp.secret_key.as_slice().try_into().unwrap();
-        let pk_bytes: [u8; ML_DSA_65_PK_LEN] = kp.public_key.as_slice().try_into().unwrap();
-
-        let sk = ml_dsa_65::PrivateKey::try_from_bytes(sk_bytes).unwrap();
-        let pk = ml_dsa_65::PublicKey::try_from_bytes(pk_bytes).unwrap();
+        let secrets = derive_output_secrets(&ss, 42);
+        let (pk, sk) = keygen_from_seed(&secrets.ml_dsa_seed).unwrap();
 
         let msg = b"shekyl per-output pqc test";
         let sig = sk.try_sign(msg, &[]).unwrap();
@@ -400,18 +341,18 @@ mod tests {
     #[test]
     fn derivation_sequential_indices_all_unique() {
         let ss = [0xab; 64];
-        let mut seen_pks = std::collections::HashSet::new();
+        let mut seen = std::collections::HashSet::new();
         for i in 0..10u64 {
-            let kp = derive_pqc_keypair(&ss, i).unwrap();
-            assert!(seen_pks.insert(kp.public_key.clone()), "index {i} produced duplicate key");
+            let h = derive_pqc_leaf_hash(&ss, i).unwrap();
+            assert!(seen.insert(h), "index {i} produced duplicate leaf hash");
         }
     }
 
     #[test]
     fn derivation_large_index() {
         let ss = [0xab; 64];
-        let kp = derive_pqc_keypair(&ss, u64::MAX).unwrap();
-        assert_eq!(kp.public_key.len(), ML_DSA_65_PK_LEN);
+        let h = derive_pqc_leaf_hash(&ss, u64::MAX).unwrap();
+        assert_ne!(h, [0u8; 32]);
     }
 
     #[test]
@@ -433,16 +374,12 @@ mod tests {
 
     #[test]
     fn derived_keypair_sign_verify_consistency() {
-        use fips204::traits::{Signer as _, Verifier as _};
+        use fips204::traits::{SerDes, Signer as _, Verifier as _};
 
         let ss = [0xcd; 64];
         for idx in [0u64, 1, 100, u64::MAX - 1] {
-            let kp = derive_pqc_keypair(&ss, idx).unwrap();
-
-            let sk_bytes: [u8; ML_DSA_65_SK_LEN] = kp.secret_key.as_slice().try_into().unwrap();
-            let pk_bytes: [u8; ML_DSA_65_PK_LEN] = kp.public_key.as_slice().try_into().unwrap();
-            let sk = ml_dsa_65::PrivateKey::try_from_bytes(sk_bytes).unwrap();
-            let pk = ml_dsa_65::PublicKey::try_from_bytes(pk_bytes).unwrap();
+            let secrets = derive_output_secrets(&ss, idx);
+            let (pk, sk) = keygen_from_seed(&secrets.ml_dsa_seed).unwrap();
 
             let msg = format!("test message for output index {idx}");
             let sig = sk.try_sign(msg.as_bytes(), &[]).unwrap();
@@ -456,68 +393,21 @@ mod tests {
         use shekyl_fcmp::leaf::PqcLeafScalar;
 
         let ss = [0xab; 64];
-        let kp = derive_pqc_keypair(&ss, 0).unwrap();
-        let h = hash_pqc_public_key(&kp.public_key);
-        let leaf_scalar = PqcLeafScalar::from_pqc_public_key(&kp.public_key);
+        let pk_bytes = derive_pqc_public_key(&ss, 0).unwrap();
+        let h = hash_pqc_public_key(&pk_bytes);
+        let leaf_scalar = PqcLeafScalar::from_pqc_public_key(&pk_bytes);
         assert_eq!(h, leaf_scalar.0,
             "hash_pqc_public_key and PqcLeafScalar::from_pqc_public_key must agree");
     }
 
     #[test]
-    fn hybrid_derivation_deterministic() {
+    fn leaf_hash_consistent_with_derive_pqc_public_key() {
         let ss = [0xab; 64];
-        let kp1 = derive_hybrid_pqc_keypair(&ss, 0).unwrap();
-        let kp2 = derive_hybrid_pqc_keypair(&ss, 0).unwrap();
-        assert_eq!(kp1.public_key, kp2.public_key);
-        assert_eq!(kp1.secret_key, kp2.secret_key);
-    }
-
-    #[test]
-    fn hybrid_derivation_different_indices() {
-        let ss = [0xab; 64];
-        let kp0 = derive_hybrid_pqc_keypair(&ss, 0).unwrap();
-        let kp1 = derive_hybrid_pqc_keypair(&ss, 1).unwrap();
-        assert_ne!(kp0.public_key, kp1.public_key);
-    }
-
-    #[test]
-    fn hybrid_keys_are_canonical() {
-        use crate::signature::{HybridPublicKey, HybridSecretKey};
-
-        let ss = [0xab; 64];
-        let kp = derive_hybrid_pqc_keypair(&ss, 0).unwrap();
-        HybridPublicKey::from_canonical_bytes(&kp.public_key)
-            .expect("hybrid pk must be canonical");
-        HybridSecretKey::from_canonical_bytes(&kp.secret_key)
-            .expect("hybrid sk must be canonical");
-    }
-
-    #[test]
-    fn hybrid_sign_and_verify() {
-        use crate::signature::{HybridEd25519MlDsa, HybridSecretKey, HybridPublicKey, SignatureScheme};
-
-        let ss = [0xab; 64];
-        let kp = derive_hybrid_pqc_keypair(&ss, 42).unwrap();
-
-        let sk = HybridSecretKey::from_canonical_bytes(&kp.secret_key).unwrap();
-        let pk = HybridPublicKey::from_canonical_bytes(&kp.public_key).unwrap();
-        let scheme = HybridEd25519MlDsa;
-
-        let msg = b"hybrid pqc signing test";
-        let sig = scheme.sign(&sk, msg).unwrap();
-        assert!(scheme.verify(&pk, msg, &sig).unwrap());
-    }
-
-    #[test]
-    fn hybrid_leaf_hash_consistent_with_ffi() {
-        use shekyl_fcmp::leaf::PqcLeafScalar;
-
-        let ss = [0xab; 64];
-        let kp = derive_hybrid_pqc_keypair(&ss, 0).unwrap();
-        let h = hash_pqc_public_key(&kp.public_key);
-        let leaf_scalar = PqcLeafScalar::from_pqc_public_key(&kp.public_key);
-        assert_eq!(h, leaf_scalar.0,
-            "leaf hash must agree for canonical hybrid pk");
+        let pk_bytes = derive_pqc_public_key(&ss, 0).unwrap();
+        let h_from_pk = hash_pqc_public_key(&pk_bytes);
+        let h_from_leaf = derive_pqc_leaf_hash(&ss, 0).unwrap();
+        assert_eq!(h_from_pk, h_from_leaf,
+            "derive_pqc_leaf_hash must equal hash_pqc_public_key(derive_pqc_public_key(...))");
     }
 
     // ── OutputSecrets known-answer tests against locked vectors ──────────
