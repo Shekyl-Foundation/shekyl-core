@@ -3758,7 +3758,7 @@ char* wallet2_ffi_prepare_transfer(wallet2_handle* w,
 
             // Per-input combined_ss + output_index for Rust-side PQC signing
             if (i < nss.permuted_transfers.size()) {
-                const auto& td_ffi = w->wallet->m_transfers[nss.permuted_transfers[i]];
+                const auto& td_ffi = w->wallet->get_transfer_details(nss.permuted_transfers[i]);
                 add_hex_bytes(inp_obj, "combined_ss",
                     td_ffi.m_combined_shared_secret.data(),
                     td_ffi.m_combined_shared_secret.size(), alloc);
@@ -4008,7 +4008,7 @@ char* wallet2_ffi_finalize_transfer(wallet2_handle* w,
                     "Missing permuted transfer index for input " + std::to_string(i));
                 return nullptr;
             }
-            const auto& td_fin = w->wallet->m_transfers[nss.permuted_transfers[i]];
+            const auto& td_fin = w->wallet->get_transfer_details(nss.permuted_transfers[i]);
             if (td_fin.m_combined_shared_secret.size() != 64)
             {
                 w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
