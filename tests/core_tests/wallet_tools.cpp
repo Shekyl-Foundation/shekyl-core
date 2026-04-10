@@ -180,7 +180,7 @@ void wallet_tools::gen_tx_src(size_t mixin, uint64_t cur_height, const tools::wa
   crypto::public_key wt_out_key;
   cryptonote::get_output_public_key(td.m_tx.vout[td.m_internal_output_index], wt_out_key);
   real_oe.second.dest = rct::pk2rct(wt_out_key);
-  real_oe.second.mask = rct::commit(td.amount(), td.m_mask);
+  real_oe.second.mask = rct::commit(td.amount(), rct::sk2rct(td.m_mask));
 
   std::sort(src.outputs.begin(), src.outputs.end(), [&](const cryptonote::tx_source_entry::output_entry i0, const cryptonote::tx_source_entry::output_entry i1) {
     return i0.first < i1.first;
@@ -193,7 +193,7 @@ void wallet_tools::gen_tx_src(size_t mixin, uint64_t cur_height, const tools::wa
     }
   }
 
-  src.mask = td.m_mask;
+  src.mask = rct::sk2rct(td.m_mask);
   src.real_out_tx_key = get_tx_pub_key_from_extra(td.m_tx, td.m_pk_index);
   src.real_out_additional_tx_keys = get_additional_tx_pub_keys_from_extra(td.m_tx);
   src.real_output_in_tx_index = td.m_internal_output_index;

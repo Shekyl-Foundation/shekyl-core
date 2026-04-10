@@ -2358,6 +2358,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-proofs"
+version = "2.0.0"
+dependencies = [
+ "curve25519-dalek",
+ "ed25519-dalek",
+ "hex",
+ "hkdf",
+ "rand",
+ "sha2",
+ "shekyl-crypto-pq",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-rpc"
 version = "0.1.0"
 dependencies = [
