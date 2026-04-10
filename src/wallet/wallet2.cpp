@@ -2518,34 +2518,17 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
             td.m_subaddr_index = tx_scan_info[o].received->index;
             if (should_expand(tx_scan_info[o].received->index))
               expand_subaddresses(tx_scan_info[o].received->index);
-            if (tx_scan_info[o].v3_hkdf_scanned)
-            {
-              td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
-              td.m_y = tx_scan_info[o].y;
-              td.m_rct = true;
-            }
-            else if (tx.vout[o].amount == 0)
-            {
-              td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
-              td.m_rct = true;
-              crypto::ec_scalar y_sc;
-              crypto::derivation_to_y_scalar(tx_scan_info[o].received->derivation, o, y_sc);
-              memcpy(&td.m_y, &y_sc, sizeof(td.m_y));
-            }
-            else if (miner_tx && tx.version >= 2)
-            {
-              td.m_mask = rct::rct2sk(rct::identity());
-              td.m_rct = true;
-              crypto::ec_scalar y_sc;
-              crypto::derivation_to_y_scalar(tx_scan_info[o].received->derivation, o, y_sc);
-              memcpy(&td.m_y, &y_sc, sizeof(td.m_y));
-            }
-            else
-            {
-              td.m_mask = rct::rct2sk(rct::identity());
-              td.m_rct = false;
-              memset(&td.m_y, 0, sizeof(td.m_y));
-            }
+            // Shekyl is v3 from genesis — all outputs use HKDF derivation.
+            // If a matched output didn't go through the HKDF scan path,
+            // something is catastrophically wrong (corrupt tx, missing PQC keys).
+            THROW_WALLET_EXCEPTION_IF(!tx_scan_info[o].v3_hkdf_scanned,
+              error::wallet_internal_error,
+              "Output " + std::to_string(o) + " in tx " + epee::string_tools::pod_to_hex(txid)
+              + " matched but HKDF scan did not succeed. "
+              "All Shekyl outputs require HKDF derivation (v3 from genesis).");
+            td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
+            td.m_y = tx_scan_info[o].y;
+            td.m_rct = true;
             td.m_frozen = false;
             {
               uint8_t stk_tier = 0;
@@ -2658,34 +2641,14 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
             td.m_subaddr_index = tx_scan_info[o].received->index;
             if (should_expand(tx_scan_info[o].received->index))
               expand_subaddresses(tx_scan_info[o].received->index);
-            if (tx_scan_info[o].v3_hkdf_scanned)
-            {
-              td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
-              td.m_y = tx_scan_info[o].y;
-              td.m_rct = true;
-            }
-            else if (tx.vout[o].amount == 0)
-            {
-              td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
-              td.m_rct = true;
-              crypto::ec_scalar y_sc;
-              crypto::derivation_to_y_scalar(tx_scan_info[o].received->derivation, o, y_sc);
-              memcpy(&td.m_y, &y_sc, sizeof(td.m_y));
-            }
-            else if (miner_tx && tx.version >= 2)
-            {
-              td.m_mask = rct::rct2sk(rct::identity());
-              td.m_rct = true;
-              crypto::ec_scalar y_sc;
-              crypto::derivation_to_y_scalar(tx_scan_info[o].received->derivation, o, y_sc);
-              memcpy(&td.m_y, &y_sc, sizeof(td.m_y));
-            }
-            else
-            {
-              td.m_mask = rct::rct2sk(rct::identity());
-              td.m_rct = false;
-              memset(&td.m_y, 0, sizeof(td.m_y));
-            }
+            THROW_WALLET_EXCEPTION_IF(!tx_scan_info[o].v3_hkdf_scanned,
+              error::wallet_internal_error,
+              "Output " + std::to_string(o) + " in tx " + epee::string_tools::pod_to_hex(txid)
+              + " matched but HKDF scan did not succeed. "
+              "All Shekyl outputs require HKDF derivation (v3 from genesis).");
+            td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
+            td.m_y = tx_scan_info[o].y;
+            td.m_rct = true;
             if (output_tracker_cache)
               (*output_tracker_cache)[std::make_pair(tx.vout[o].amount, td.m_global_output_index)] = kit->second;
             THROW_WALLET_EXCEPTION_IF(td.get_public_key() != tx_scan_info[o].in_ephemeral.pub, error::wallet_internal_error, "Inconsistent public keys");

@@ -220,6 +220,35 @@
   `derive_pqc_leaf_hash(combined_ss, output_index)`. Rust KAT test validates
   byte-for-byte against the fixture.
 
+- **Coinbase `check_commitment_mask_valid` hardened.** For `RCTTypeNull` (coinbase)
+  outputs, the consensus check now rejects commitments that equal
+  `zeroCommit(public_amount)` (i.e. `C = G + amount*H`), preventing miners
+  from constructing trivial-mask coinbases that leak amount to observers.
+  Non-coinbase defense-in-depth checks (identity and G) are retained.
+
+- **Dead Keccak y-scalar fallback removed from wallet scanner.** The
+  `else if (tx.vout[o].amount == 0)` and `else if (miner_tx)` branches that
+  fell back to `derivation_to_y_scalar` are removed. Shekyl is v3 from genesis;
+  all matched outputs must succeed the HKDF scan path. A hard
+  `wallet_internal_error` is thrown if `v3_hkdf_scanned` is false, preventing
+  silent domain fallback that would produce unspendable outputs.
+
+- **Legacy coinbase construction path removed.** `construct_miner_tx` now
+  returns `false` if the miner address lacks PQC keys, instead of falling back
+  to legacy Keccak `derive_public_key` / `derive_view_tag`. All Shekyl
+  addresses carry PQC keys from genesis.
+
+- **Genesis coinbase builder uses `shekyl_construct_output`.**
+  `build_genesis_coinbase_from_destinations` now constructs outputs via the
+  Rust HKDF path, producing correct HKDF-derived output keys, view tags,
+  commitments, encrypted amounts with `amount_tag`, KEM ciphertexts, and
+  PQC leaf hashes. The legacy Keccak derivation path is removed.
+
+- **Legacy `additional_tx_public_keys` dead code removed.** The
+  `need_additional_txkeys` logic, `additional_tx_public_keys` vector, and
+  pre-v3 output derivation loop in `construct_tx_with_tx_key` are deleted.
+  V3 replaces per-output additional tx keys with KEM ciphertext (tag 0x06).
+
 ### 🔄 Changed
 
 - **`transfer_details::m_mask` type changed.** `rct::key` → `crypto::secret_key`

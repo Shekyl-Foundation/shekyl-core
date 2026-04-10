@@ -3200,32 +3200,53 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
 }
 //------------------------------------------------------------------
 // Reject outputs whose Pedersen commitment mask is trivially 0 or 1.
-// mask=0: C = amount*H (zeroCommit — leaks amount directly).
-// mask=1: C = G + amount*H (leaks amount via C - amount*H == G check).
-// The identity check catches mask=0 for amount=0. The G check catches mask=1
-// for amount=0. For nonzero amounts, the range proof + balance equation already
-// constrain the mask; these checks are defense-in-depth against construction bugs.
+//
+// For non-coinbase (RCTTypeFcmpPlusPlusPqc): BP+ range proof + balance equation
+// fully constrain the mask, so the identity/G checks are defense-in-depth against
+// construction bugs (they only trigger when amount=0).
+//
+// For coinbase (RCTTypeNull): there is no range proof and no balance equation.
+// The amount is public in tx.vout[i].amount, so an attacker who sets mask=1
+// produces C = G + amount*H which is computable by anyone — a fingerprint that
+// defeats confidential-amount coinbase. We therefore check C != zeroCommit(amount)
+// for coinbase outputs, using the public amount.
 static bool check_commitment_mask_valid(const transaction& tx)
 {
   if (tx.version < 3)
     return true;
 
+  const bool is_coinbase = (tx.rct_signatures.type == rct::RCTTypeNull);
   const auto& rv = tx.rct_signatures;
+
   for (size_t i = 0; i < rv.outPk.size(); ++i)
   {
     const rct::key& C = rv.outPk[i].mask;
+
     if (C == rct::identity())
     {
       MERROR("Output " << i << " commitment is identity (mask=0, amount=0)");
       return false;
     }
-    // G is the Ed25519 base point — mask=1 with amount=0
+
     rct::key G;
     rct::scalarmultBase(G, rct::d2h(1));
     if (C == G)
     {
       MERROR("Output " << i << " commitment equals G (mask=1, amount=0)");
       return false;
+    }
+
+    // Coinbase-specific: reject C == zeroCommit(public_amount) for any amount.
+    // zeroCommit(a) = 1*G + a*H — trivial mask that leaks amount to observers.
+    if (is_coinbase && i < tx.vout.size())
+    {
+      rct::key trivial = rct::zeroCommit(tx.vout[i].amount);
+      if (C == trivial)
+      {
+        MERROR("Coinbase output " << i << " uses zeroCommit form (mask=1, amount="
+          << tx.vout[i].amount << ") — trivial commitment leaks amount");
+        return false;
+      }
     }
   }
   return true;
