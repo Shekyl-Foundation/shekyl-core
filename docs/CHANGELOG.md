@@ -215,6 +215,12 @@
   `construct_output` + `scan_output` round-trip with arbitrary spend keys,
   amounts, corrupted `enc_amount`, and wrong `amount_tag`.
 
+- **libFuzzer harness for malformed KEM keys.** New fuzz target
+  `fuzz_construct_output_malformed_kem` feeds arbitrary bytes as X25519
+  and ML-KEM-768 encapsulation keys to `construct_output`. Exercises
+  wrong-length, oversized, and garbage KEM public key inputs to ensure
+  the function returns `Err`, never panics.
+
 - **PQC leaf hash known-answer test.** New JSON fixture
   `docs/test_vectors/PQC_LEAF_HASH_KAT.json` (8 vectors) pins the output of
   `derive_pqc_leaf_hash(combined_ss, output_index)`. Rust KAT test validates
@@ -234,8 +240,10 @@
   silent domain fallback that would produce unspendable outputs.
 
 - **Legacy coinbase construction path removed.** `construct_miner_tx` now
-  returns `false` if the miner address lacks PQC keys, instead of falling back
-  to legacy Keccak `derive_public_key` / `derive_view_tag`. All Shekyl
+  asserts PQC key presence with a clear error message (`CHECK_AND_ASSERT_MES`)
+  before entering the output construction loop, instead of falling back to
+  legacy Keccak `derive_public_key` / `derive_view_tag` which would produce
+  an invalid (unscannable, missing `outPk`/`enc_amounts`) coinbase. All Shekyl
   addresses carry PQC keys from genesis.
 
 - **Genesis coinbase builder uses `shekyl_construct_output`.**

@@ -132,9 +132,12 @@ namespace cryptonote
 
     uint64_t summary_amounts = 0;
 
-    // v3 unified construction via Rust FFI: single shekyl_construct_output call per output
-    // produces O, C, enc_amount, amount_tag, view_tag, KEM ciphertext, PQC leaf hash.
-    if (hard_fork_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC && !miner_address.m_pqc_public_key.empty())
+    CHECK_AND_ASSERT_MES(hard_fork_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC, false,
+      "construct_miner_tx: hard_fork_version " << (int)hard_fork_version
+      << " < HF_VERSION_FCMP_PLUS_PLUS_PQC. Shekyl is v3 from genesis.");
+    CHECK_AND_ASSERT_MES(!miner_address.m_pqc_public_key.empty(), false,
+      "Miner address has no PQC public key; v3 requires per-output KEM encapsulation. "
+      "Regenerate your miner wallet with `--generate-new-wallet` on a v3 build.");
     {
       static constexpr size_t X25519_PK_BYTES = 32;
       CHECK_AND_ASSERT_MES(miner_address.m_pqc_public_key.size() > X25519_PK_BYTES,
@@ -208,15 +211,6 @@ namespace cryptonote
       }
       if (!sort_tx_extra(tx.extra, tx.extra))
         return false;
-    }
-    else
-    {
-      // Shekyl is v3 from genesis — all miner addresses must have PQC keys.
-      // A miner address without PQC keys cannot produce valid HKDF-derived outputs,
-      // making coinbase unscannable and curve tree leaves distinguishable.
-      LOG_ERROR("Miner address lacks PQC public key. Shekyl requires PQC keys "
-        "on all addresses from genesis. Cannot construct valid coinbase.");
-      return false;
     }
 
     tx.version = 3;

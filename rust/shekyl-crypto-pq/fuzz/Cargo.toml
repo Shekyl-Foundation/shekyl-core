@@ -60,4 +60,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_construct_output_malformed_kem"
+path = "fuzz_targets/fuzz_construct_output_malformed_kem.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
