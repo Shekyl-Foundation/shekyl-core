@@ -43,6 +43,20 @@ namespace hw {
 
   #ifdef WITH_DEVICE_LEDGER
 
+    // ──── V3 HARD GATE ────────────────────────────────────────────────
+    // The Ledger device path has not been updated for V3 two-component
+    // keys (HKDF-derived ho/y/z, deterministic KEM, etc.). Functions like
+    // genCommitmentMask, ecdhEncode/Decode, and generate_output_ephemeral_keys
+    // still use the Keccak-based derivation that V3 replaces with Rust FFI.
+    //
+    // If you're seeing this error, do NOT simply remove it. The Ledger
+    // firmware and APDU protocol must be updated for V3 before this path
+    // is safe to compile. See the Keccak eviction plan for details.
+    //
+    // Remove this gate only when the Ledger V3 protocol is implemented.
+    #error "Ledger device support is not yet updated for Shekyl V3. Do not enable -DWITH_DEVICE_LEDGER until the V3 APDU protocol is implemented."
+    // ──────────────────────────────────────────────────────────────────
+
     #undef SHEKYL_DEFAULT_LOG_CATEGORY
     #define SHEKYL_DEFAULT_LOG_CATEGORY "device.ledger"
 

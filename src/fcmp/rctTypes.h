@@ -179,9 +179,16 @@ namespace rct {
         uint8_t type;
         key message;
         keyV pseudoOuts;
-        // Per-output encrypted amount: 8 bytes XOR-encrypted amount + 1 byte amount tag.
-        // Replaces the old ecdhInfo vector. The amount tag is RESERVED_AMOUNT_TAG_PLACEHOLDER
-        // (0x00) until PR-construct derives it from HKDF.
+        // Per-output encrypted amount: bytes [0..8) = amount XOR k_amount[..8],
+        // byte [8] = amount_tag (HKDF-derived AAD for cheap integrity).
+        //
+        // The Rust scanner (scan_output / scan_output_recover) re-derives
+        // amount_tag from combined_ss and rejects on mismatch -- this catches
+        // KEM ciphertext corruption or tampering before amount decryption.
+        // The tag is NOT a MAC; it is a single-byte HKDF output that provides
+        // probabilistic (1/256) tamper detection as "cheap insurance."
+        //
+        // Replaces the old ecdhInfo vector. Serialized as 9-byte blob per output.
         std::vector<std::array<uint8_t, 9>> enc_amounts;
         ctkeyV outPk;
         xmr_amount txnFee; // contains b

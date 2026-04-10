@@ -264,6 +264,85 @@ fast wallet scanning.
 - Reference implementation: `tools/reference/derive_output_secrets.py`
 - Rust implementation: `rust/shekyl-crypto-pq/src/derivation.rs`
 
+### Security Properties of the Derivation
+
+#### y == 0 Defense-in-Depth
+
+The secret scalar `y` (T-component of the two-component output key `O = ho*G + B + y*T`)
+must never be zero. If `y == 0`, the output key degenerates to the single-component form
+`O = ho*G + B`, losing the security properties of the two-component construction.
+
+**Defense stack:**
+
+1. **Construction-time Rust assert** (`derivation.rs`): `assert!(y != [0u8; 32])` panics
+   at output construction if HKDF produces a zero y scalar. Rust `assert!` is not stripped
+   in release builds — this is a hard crash, not a debug-only check.
+
+2. **Probabilistic impossibility**: `y` is derived from 64 bytes of HKDF-SHA-512 output
+   reduced mod l (Ed25519 scalar order, ~2^{252.2}). The probability of the reduction
+   yielding exactly zero is ~2^{-252}. This is computationally infeasible to trigger or
+   exploit.
+
+3. **Fuzz coverage**: All fuzz targets that exercise `construct_output` transitively call
+   `derive_output_secrets`, hitting the assert with random inputs.
+
+**Why a wire-level y == 0 consensus check is impossible**: `y` is a secret scalar derived
+from `combined_ss`, which is only known to the sender and recipient. The on-chain output
+key `O = ho*G + B + y*T` is an elliptic curve point — without the discrete log, a verifier
+cannot extract `y` from `O`. The commitment `C = z*G + amount*H` does not involve `y`.
+Therefore, no purely on-chain structural check for `y == 0` exists.
+
+The consensus layer's `check_commitment_mask_valid` rejects `z == 0` and `z == 1` because
+`z` controls the commitment mask which IS indirectly observable (trivial commitments are
+distinguishable). The `y` scalar has no analogous on-chain observable effect.
+
+#### Malformed KEM Ciphertext Handling
+
+`scan_output_recover` fails closed on malformed ciphertexts through layered checks:
+
+- **Structurally invalid** (wrong length, unparseable): Caught by length checks and
+  `CipherText::try_from_bytes` → `Err(DecapsulationFailed)`.
+- **Structurally valid but corrupted** (correct length, wrong content): ML-KEM-768 uses
+  **implicit rejection** per FIPS 203 — `try_decaps` returns a pseudorandom shared secret
+  (constant-time, no timing leak) rather than an error. This wrong SS propagates through
+  HKDF and produces incorrect output secrets. Downstream checks catch the mismatch:
+  - `amount_tag` verification: probabilistic 255/256 rejection (1 byte HKDF-derived AAD)
+  - `commitment` algebraic check: `C == z*G + amount*H` (infeasible to bypass)
+  - `output_key` algebraic check (`scan_output` only): `O == ho*G + B + y*T`
+
+No panics, no timing leaks, always returns `Err(CryptoError::...)`. Fuzz coverage:
+`fuzz_scan_malformed_ct` exercises corrupted, truncated, and random ciphertexts through the
+full scan path with a valid wallet KEM secret.
+
+#### View-Tag Pre-Filter
+
+The X25519-only view tag (`derive_view_tag_x25519`) is a cheap O(1) pre-filter that
+rejects ~255/256 of non-owned outputs before the expensive ML-KEM decapsulation. On a
+view-tag match, the **full** verification chain runs without abbreviation:
+
+1. Full ML-KEM-768 decapsulation
+2. HKDF derivation of ALL output secrets (ho, y, z, k_amount, amount_tag, ml_dsa_seed)
+3. Amount tag verification (probabilistic rejection)
+4. Amount decryption
+5. Output key / commitment algebraic verification
+6. PQC keypair derivation
+
+An attacker grinding view tags to match a victim's X25519 tag wastes only their own CPU.
+Each successful tag match triggers the complete verification chain including two independent
+algebraic checks. The view tag reveals no information beyond what the attacker already has
+(the X25519 ephemeral key is on-chain).
+
+#### Wallet Cache Version Gate (PR-wallet Requirement)
+
+The wallet cache envelope (`cache_file_data`) currently has no pre-decryption version field.
+When PR-wallet bumps the serialization version for two-component key support, old-format
+wallets will decrypt successfully (same key derivation) but fail during deserialization with
+a generic error. **PR-wallet must add a plaintext `cache_format_version` to the
+`cache_file_data` envelope**, checked before XChaCha20 decryption, to produce a clear error:
+"Wallet cache format too old — delete cache and resync from seed." Without this gate, users
+will receive confusing "decryption failed" or "failed to deserialize" errors when the actual
+problem is a format mismatch.
+
 ## Address Format
 
 Shekyl uses a three-segment Bech32m encoding, where each segment stays

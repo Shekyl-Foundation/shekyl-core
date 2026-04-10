@@ -32,6 +32,33 @@
 - **Fuzz target for `derive_output_key`.** Exercises `derive_output_key` and
   `recover_recipient_spend_pubkey` round-trip with fuzzer-supplied inputs.
 
+- **Ledger V3 hard gate.** `device_ledger.cpp` now has a `#error` that fires
+  when `WITH_DEVICE_LEDGER` is defined, preventing silently broken builds.
+  The Ledger APDU protocol has not been updated for V3 two-component keys.
+
+- **Fuzz target for malformed KEM ciphertexts on scan.** New
+  `fuzz_scan_malformed_ct` exercises corrupted, truncated, and random ML-KEM
+  ciphertexts through `scan_output_recover` with a valid wallet KEM secret.
+  Validates ML-KEM implicit rejection + downstream algebraic checks fail
+  closed without panics or timing leaks.
+
+### 📚 Documentation
+
+- **Security properties of the derivation** section in
+  `docs/POST_QUANTUM_CRYPTOGRAPHY.md`. Documents the y==0 defense-in-depth
+  stack (construction assert + probabilistic impossibility + fuzz coverage),
+  explains why a wire-level y==0 check is impossible, documents malformed
+  KEM ciphertext handling through ML-KEM implicit rejection, view-tag
+  pre-filter behavior on adversarial match grinding, and the wallet cache
+  version gate requirement for PR-wallet.
+
+### 🔄 Changed
+
+- **`enc_amounts` field comment updated in `rctTypes.h`.** Clarifies that
+  byte [8] is the HKDF-derived `amount_tag` AAD, documents the Rust scanner
+  validation behavior (reject on mismatch), and removes the stale
+  `RESERVED_AMOUNT_TAG_PLACEHOLDER` reference.
+
 - **Comprehensive CLI User Guide (`docs/USER_GUIDE.md`).** Covers all shipped
   executables, daemon operation (flags, config file, console commands), wallet
   CLI (create, restore, send, receive, proofs), staking (tiers, unstake,

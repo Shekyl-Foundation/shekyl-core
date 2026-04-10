@@ -74,4 +74,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_scan_malformed_ct"
+path = "fuzz_targets/fuzz_scan_malformed_ct.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
