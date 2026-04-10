@@ -149,6 +149,14 @@ const HKDF_SALT_OUTPUT_DERIVE: &[u8] = b"shekyl-output-derive-v1";
 /// HKDF salt for X25519-only view tag derivation (Instance 2).
 const HKDF_SALT_VIEW_TAG_X25519: &[u8] = b"shekyl-view-tag-x25519-v1";
 
+/// HKDF salt for deterministic KEM seed derivation from tx_key (Instance 3).
+///
+/// Used by `construct_output` (sender-side deterministic encapsulation) and
+/// `rederive_combined_ss` (proof verification re-derivation).
+pub const SALT_KEM_DERIVE_V1: &[u8] = b"shekyl-output-kem-v1";
+
+const _: () = assert!(SALT_KEM_DERIVE_V1.len() == 20);
+
 const LABEL_OUTPUT_X: &[u8] = b"shekyl-output-x";
 const LABEL_OUTPUT_Y: &[u8] = b"shekyl-output-y";
 const LABEL_OUTPUT_MASK: &[u8] = b"shekyl-output-mask";
@@ -235,6 +243,41 @@ pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSec
 pub fn derive_view_tag_x25519(x25519_ss: &[u8; 32], output_index: u64) -> u8 {
     let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_VIEW_TAG_X25519), x25519_ss);
     expand_first_byte(&hk, LABEL_VIEW_TAG_X25519, output_index)
+}
+
+/// Derive the per-output KEM seed from `tx_key` and recipient public keys.
+///
+/// Returns a 64-byte seed split as:
+///   - `[0..32]`: X25519 ephemeral secret
+///   - `[32..64]`: ML-KEM-768 encapsulation seed (for `encaps_from_seed`)
+///
+/// The HKDF `info` field uses a 40-byte domain separator:
+/// `SHA3-256(x25519_pk || ml_kem_ek)` (32-byte fingerprint) `|| output_index_le64`.
+/// The fingerprint is collision-resistant at 2^128, far exceeding what's needed
+/// for domain separation, while avoiding a 1224-byte info field.
+pub fn derive_kem_seed(
+    tx_key_secret: &[u8; 32],
+    x25519_pk: &[u8; 32],
+    ml_kem_ek: &[u8],
+    output_index: u64,
+) -> zeroize::Zeroizing<[u8; 64]> {
+    use sha3::{Sha3_256, digest::Digest};
+
+    let mut hasher = Sha3_256::new();
+    hasher.update(x25519_pk);
+    hasher.update(ml_kem_ek);
+    let fingerprint: [u8; 32] = hasher.finalize().into();
+
+    let mut info = [0u8; 40];
+    info[..32].copy_from_slice(&fingerprint);
+    info[32..].copy_from_slice(&output_index.to_le_bytes());
+
+    let hk = Hkdf::<Sha512>::new(Some(SALT_KEM_DERIVE_V1), tx_key_secret);
+    let mut seed = zeroize::Zeroizing::new([0u8; 64]);
+    hk.expand(&info, seed.as_mut())
+        .expect("HKDF-Expand failed for 64-byte KEM seed output");
+
+    seed
 }
 
 fn make_info(label: &[u8], output_index: u64) -> Vec<u8> {
@@ -581,6 +624,207 @@ mod tests {
             if a[i] > b[i] { return false; }
         }
         false // equal
+    }
+
+    // ── KEM_DERIVE_V1 KAT tests ─────────────────────────────────────────
+
+    #[derive(serde::Deserialize)]
+    struct KemDeriveKat {
+        tx_key_secret: String,
+        x25519_pk: String,
+        ml_kem_ek: String,
+        output_index: u64,
+        recipient_fingerprint: String,
+        per_output_seed: String,
+        x25519_eph_pk: String,
+        ml_kem_ct: String,
+        ml_kem_ss: String,
+        x25519_ss: String,
+        combined_ss: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct KemDeriveKatFile {
+        vectors: Vec<KemDeriveKat>,
+    }
+
+    #[test]
+    fn kem_derive_v1_known_answer_vectors() {
+        let json = include_str!("../../../docs/test_vectors/KEM_DERIVE_V1_KAT.json");
+        let file: KemDeriveKatFile = serde_json::from_str(json)
+            .expect("failed to parse KEM_DERIVE_V1_KAT.json");
+        assert!(!file.vectors.is_empty(), "no vectors in KEM_DERIVE_V1_KAT.json");
+
+        for (i, v) in file.vectors.iter().enumerate() {
+            let tx_key: [u8; 32] = hex::decode(&v.tx_key_secret)
+                .unwrap_or_else(|_| panic!("vector {i}: invalid tx_key_secret hex"))
+                .as_slice().try_into()
+                .unwrap_or_else(|_| panic!("vector {i}: tx_key_secret not 32 bytes"));
+            let x25519_pk: [u8; 32] = hex::decode(&v.x25519_pk)
+                .unwrap_or_else(|_| panic!("vector {i}: invalid x25519_pk hex"))
+                .as_slice().try_into()
+                .unwrap_or_else(|_| panic!("vector {i}: x25519_pk not 32 bytes"));
+            let ml_kem_ek = hex::decode(&v.ml_kem_ek)
+                .unwrap_or_else(|_| panic!("vector {i}: invalid ml_kem_ek hex"));
+
+            let seed = derive_kem_seed(&tx_key, &x25519_pk, &ml_kem_ek, v.output_index);
+
+            let expected_seed = hex::decode(&v.per_output_seed)
+                .unwrap_or_else(|_| panic!("vector {i}: invalid per_output_seed hex"));
+            assert_eq!(
+                seed.as_slice(), expected_seed.as_slice(),
+                "vector {i}: per_output_seed mismatch\n  got:      {}\n  expected: {}",
+                hex::encode(seed.as_slice()), v.per_output_seed
+            );
+
+            let expected_fp = hex::decode(&v.recipient_fingerprint)
+                .unwrap_or_else(|_| panic!("vector {i}: invalid recipient_fingerprint hex"));
+            {
+                use sha3::{Sha3_256, digest::Digest as _};
+                let mut hasher = Sha3_256::new();
+                hasher.update(&x25519_pk);
+                hasher.update(&ml_kem_ek);
+                let fp: [u8; 32] = hasher.finalize().into();
+                assert_eq!(
+                    fp.as_slice(), expected_fp.as_slice(),
+                    "vector {i}: recipient_fingerprint mismatch"
+                );
+            }
+
+            // Verify X25519 ephemeral public key derivation
+            let x25519_eph_secret_bytes: [u8; 32] = seed[..32].try_into().unwrap();
+            let x25519_eph_sk = x25519_dalek::StaticSecret::from(x25519_eph_secret_bytes);
+            let x25519_eph_pk = x25519_dalek::PublicKey::from(&x25519_eph_sk);
+            let expected_eph_pk = hex::decode(&v.x25519_eph_pk)
+                .unwrap_or_else(|_| panic!("vector {i}: invalid x25519_eph_pk hex"));
+            assert_eq!(
+                x25519_eph_pk.as_bytes().as_slice(), expected_eph_pk.as_slice(),
+                "vector {i}: x25519_eph_pk mismatch"
+            );
+
+            // Verify X25519 shared secret
+            let x25519_recipient = x25519_dalek::PublicKey::from(x25519_pk);
+            let x25519_ss = x25519_eph_sk.diffie_hellman(&x25519_recipient);
+            let expected_x25519_ss = hex::decode(&v.x25519_ss)
+                .unwrap_or_else(|_| panic!("vector {i}: invalid x25519_ss hex"));
+            assert_eq!(
+                x25519_ss.as_bytes().as_slice(), expected_x25519_ss.as_slice(),
+                "vector {i}: x25519_ss mismatch"
+            );
+
+            // Verify ML-KEM deterministic encapsulation
+            let ml_kem_encaps_seed: [u8; 32] = seed[32..64].try_into().unwrap();
+            let ek_bytes: [u8; 1184] = ml_kem_ek.as_slice().try_into()
+                .unwrap_or_else(|_| panic!("vector {i}: ml_kem_ek not 1184 bytes"));
+            let ek = fips203::ml_kem_768::EncapsKey::try_from_bytes(ek_bytes)
+                .unwrap_or_else(|e| panic!("vector {i}: invalid EncapsKey: {e}"));
+            use fips203::traits::{Encaps as _, SerDes as _};
+            let (ml_ss, ml_ct) = ek.encaps_from_seed(&ml_kem_encaps_seed);
+            let ml_ss_bytes = ml_ss.into_bytes();
+            let ml_ct_bytes = ml_ct.into_bytes();
+
+            let expected_ml_ss = hex::decode(&v.ml_kem_ss)
+                .unwrap_or_else(|_| panic!("vector {i}: invalid ml_kem_ss hex"));
+            assert_eq!(
+                ml_ss_bytes.as_slice(), expected_ml_ss.as_slice(),
+                "vector {i}: ml_kem_ss mismatch"
+            );
+
+            let expected_ml_ct = hex::decode(&v.ml_kem_ct)
+                .unwrap_or_else(|_| panic!("vector {i}: invalid ml_kem_ct hex"));
+            assert_eq!(
+                ml_ct_bytes.as_slice(), expected_ml_ct.as_slice(),
+                "vector {i}: ml_kem_ct mismatch"
+            );
+
+            // Verify combined shared secret
+            let combined = crate::kem::combine_shared_secrets(
+                x25519_ss.as_bytes(), &ml_ss_bytes
+            ).unwrap_or_else(|e| panic!("vector {i}: combine_shared_secrets failed: {e}"));
+            let expected_combined = hex::decode(&v.combined_ss)
+                .unwrap_or_else(|_| panic!("vector {i}: invalid combined_ss hex"));
+            assert_eq!(
+                combined.0.as_slice(), expected_combined.as_slice(),
+                "vector {i}: combined_ss mismatch"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn generate_kem_derive_v1_kat() {
+        use fips203::ml_kem_768;
+        use fips203::traits::{Encaps as _, KeyGen as _, SerDes as _};
+        use rand::SeedableRng;
+        use sha3::{Sha3_256, digest::Digest as _};
+
+        // Deterministic recipient keypair
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0x01; 32]);
+        let (ek, _dk) = ml_kem_768::KG::try_keygen_with_rng(&mut rng).unwrap();
+        let ek_bytes = ek.into_bytes();
+        let x25519_sk = x25519_dalek::StaticSecret::from([0x02u8; 32]);
+        let x25519_pk = x25519_dalek::PublicKey::from(&x25519_sk);
+
+        let test_cases: Vec<([u8; 32], u64)> = vec![
+            ([0x00; 32], 0),
+            ([0x00; 32], 1),
+            ([0xAB; 32], 0),
+            ([0xAB; 32], 42),
+            ([0xFF; 32], 0),
+            ([0xFF; 32], u64::MAX),
+            ({
+                let mut k = [0u8; 32];
+                for (i, b) in k.iter_mut().enumerate() { *b = i as u8; }
+                k
+            }, 0),
+            ({
+                let mut k = [0u8; 32];
+                for (i, b) in k.iter_mut().enumerate() { *b = i as u8; }
+                k
+            }, 1000),
+        ];
+
+        let mut vectors = Vec::new();
+        for (tx_key, output_index) in &test_cases {
+            let seed = derive_kem_seed(tx_key, x25519_pk.as_bytes(), &ek_bytes, *output_index);
+
+            let mut hasher = Sha3_256::new();
+            hasher.update(x25519_pk.as_bytes());
+            hasher.update(&ek_bytes);
+            let fp: [u8; 32] = hasher.finalize().into();
+
+            let eph_secret_bytes: [u8; 32] = seed[..32].try_into().unwrap();
+            let eph_sk = x25519_dalek::StaticSecret::from(eph_secret_bytes);
+            let eph_pk = x25519_dalek::PublicKey::from(&eph_sk);
+            let x_ss = eph_sk.diffie_hellman(&x25519_pk);
+
+            let ml_seed: [u8; 32] = seed[32..64].try_into().unwrap();
+            let ek_parsed = ml_kem_768::EncapsKey::try_from_bytes(ek_bytes).unwrap();
+            let (ml_ss, ml_ct) = ek_parsed.encaps_from_seed(&ml_seed);
+            let ml_ss_bytes = ml_ss.into_bytes();
+            let ml_ct_bytes = ml_ct.into_bytes();
+
+            let combined = crate::kem::combine_shared_secrets(
+                x_ss.as_bytes(), &ml_ss_bytes
+            ).unwrap();
+
+            vectors.push(serde_json::json!({
+                "tx_key_secret": hex::encode(tx_key),
+                "x25519_pk": hex::encode(x25519_pk.as_bytes()),
+                "ml_kem_ek": hex::encode(&ek_bytes),
+                "output_index": output_index,
+                "recipient_fingerprint": hex::encode(fp),
+                "per_output_seed": hex::encode(seed.as_slice()),
+                "x25519_eph_pk": hex::encode(eph_pk.as_bytes()),
+                "x25519_ss": hex::encode(x_ss.as_bytes()),
+                "ml_kem_ct": hex::encode(&ml_ct_bytes),
+                "ml_kem_ss": hex::encode(&ml_ss_bytes),
+                "combined_ss": hex::encode(&combined.0),
+            }));
+        }
+
+        let doc = serde_json::json!({ "vectors": vectors });
+        println!("{}", serde_json::to_string_pretty(&doc).unwrap());
     }
 
     // ── Phase 0 domain-trap test ─────────────────────────────────────────

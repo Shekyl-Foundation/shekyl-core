@@ -17,18 +17,21 @@ curve25519-dalek = "4"
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 fips204 = "0.4.6"
-fips203 = "0.4"
+# Pinned exact: fips203 uses DummyRng::fill_bytes = unimplemented!() internally;
+# a minor-version bump could panic at runtime. Exact pin + KEM_DERIVE_V1_KAT.json
+# tripwire + Cargo.lock = three layers of defense against silent behavior changes.
+fips203 = "=0.4.3"
 hkdf = "0.12"
 sha2 = "0.10"
 blake2 = "0.10"
 shekyl-address = { path = "../shekyl-address" }
+sha3 = "0.10"
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
 
 [dev-dependencies]
 serde_json = "1"
 hex = "0.4"
-sha3 = "0.10"
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 criterion = { version = "0.5", features = ["html_reports"] }
 
