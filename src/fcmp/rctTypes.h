@@ -111,16 +111,6 @@ namespace rct {
     typedef std::vector<ctkey> ctkeyV;
     typedef std::vector<ctkeyV> ctkeyM;
 
-    //data for passing the amount to the receiver secretly
-    // If the pedersen commitment to an amount is C = aG + bH,
-    // ecdhTuple removed in V3: replaced by enc_amounts on rctSigBase.
-    // Kept as a local struct only for the scanner compatibility shim in wallet2.cpp.
-    // TODO(PR-construct): delete once wallet scanner is migrated to Rust.
-    struct ecdhTuple {
-        key mask;
-        key amount;
-    };
-
     //containers for representing amounts
     typedef uint64_t xmr_amount;
     typedef unsigned int bits[ATOMS];

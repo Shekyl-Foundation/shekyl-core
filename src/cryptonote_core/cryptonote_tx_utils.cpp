@@ -158,6 +158,7 @@ namespace cryptonote
       for (size_t i = 0; i < out_amounts.size(); ++i)
       {
         ShekylOutputData od = shekyl_construct_output(
+          reinterpret_cast<const uint8_t*>(&txkey.sec),
           pk_x25519, pk_ml_kem, pk_ml_kem_len,
           reinterpret_cast<const uint8_t*>(&miner_address.m_spend_public_key),
           out_amounts[i], static_cast<uint64_t>(i));
@@ -464,6 +465,7 @@ namespace cryptonote
         const size_t pk_ml_kem_len = dst_entr.addr.m_pqc_public_key.size() - X25519_PK_BYTES;
 
         ShekylOutputData od = shekyl_construct_output(
+          reinterpret_cast<const uint8_t*>(&tx_key),
           pk_x25519, pk_ml_kem, pk_ml_kem_len,
           reinterpret_cast<const uint8_t*>(&dst_entr.addr.m_spend_public_key),
           dst_entr.amount, static_cast<uint64_t>(output_index));
@@ -721,6 +723,7 @@ namespace cryptonote
       const size_t pk_ml_kem_len = dest.addr.m_pqc_public_key.size() - X25519_PK_BYTES;
 
       ShekylOutputData od = shekyl_construct_output(
+        reinterpret_cast<const uint8_t*>(&txkey.sec),
         pk_x25519, pk_ml_kem, pk_ml_kem_len,
         reinterpret_cast<const uint8_t*>(&dest.addr.m_spend_public_key),
         dest.amount, static_cast<uint64_t>(i));

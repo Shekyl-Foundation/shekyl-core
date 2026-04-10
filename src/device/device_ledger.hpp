@@ -262,9 +262,6 @@ namespace hw {
 
         rct::key genCommitmentMask(const rct::key &amount_key) override;
 
-        bool  ecdhEncode(rct::ecdhTuple & unmasked, const rct::key & sharedSec, bool short_format) override;
-        bool  ecdhDecode(rct::ecdhTuple & masked, const rct::key & sharedSec, bool short_format) override;
-
         bool  generate_output_ephemeral_keys(const size_t tx_version, const cryptonote::account_keys &sender_account_keys, const crypto::public_key &txkey_pub,  const crypto::secret_key &tx_key,
                                              const cryptonote::tx_destination_entry &dst_entr, const std::optional<cryptonote::account_public_address> &change_addr, const size_t output_index,
                                              const bool &need_additional_txkeys, const std::vector<crypto::secret_key> &additional_tx_keys,

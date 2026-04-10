@@ -122,6 +122,30 @@
   version-confusion attacks) and hard no-migration policy (delete and resync
   from seed, never in-place migration).
 
+### 🗑️ Removed
+
+- **`ecdhTuple` / `ecdhEncode` / `ecdhDecode` removal.** Deleted the
+  Monero-era ECDH amount-masking struct and encode/decode functions from
+  `rctTypes.h`, `rctOps.h/.cpp`, `device.hpp`, `device_default.hpp/.cpp`,
+  `device_ledger.hpp/.cpp`, and the Trezor protocol files. Call sites in
+  `wallet2.cpp` (`check_tx_key_helper`, `check_reserve_proof`) and
+  `rctSigs.cpp` (`decodeRctSimple`) now decode amounts inline using
+  `ecdhHash` XOR + `genCommitmentMask`, matching the V3 `enc_amounts`
+  format directly. The `enc_amount_to_ecdh_compat` shim is deleted.
+
+- **V3-from-genesis Boost serialization purge (`wallet2.h`).** Deleted all
+  `if (ver < N)` migration branches from Boost `serialize` functions for
+  `transfer_details`, `unconfirmed_transfer_details`, `confirmed_transfer_details`,
+  `payment_details`, `address_book_row`, `unsigned_tx_set`, `signed_tx_set`,
+  `tx_construction_data`, and `pending_tx`. Deleted the `initialize_transfer_details`
+  helper (both saving and loading overloads). Reset all `BOOST_CLASS_VERSION`
+  macros to 1 (genesis version). Added `assert(ver == 1)` guards. Epee cache
+  envelope `if (version < N)` branches also removed, replaced with
+  `assert(version == 2)`. Staking fields (`m_staked`, `m_stake_tier`,
+  `m_stake_lock_until`, `m_last_claimed_height`) and new Phase 2b field
+  (`m_k_amount`) added to the `transfer_details` Boost serializer. Legacy
+  `m_rct` field no longer serialized (previously removed from struct).
+
 ### 🔄 Changed
 
 - **`enc_amounts` field comment updated in `rctTypes.h`.** Clarifies that

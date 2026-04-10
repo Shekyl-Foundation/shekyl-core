@@ -184,9 +184,6 @@ namespace rct {
 
     // Amount encryption helpers
     key genCommitmentMask(const key &sk);
-    // TODO(PR-construct): ecdhDecode is kept alive for the wallet scanner shim.
-    // It will be deleted when the scanner migrates to Rust scan_output.
-    void ecdhDecode(ecdhTuple & masked, const key & sharedSec, bool v2);
     // Hash used for 8-byte amount XOR encryption: cn_fast_hash("amount" || key)
     key ecdhHash(const key &k);
 }

@@ -680,8 +680,6 @@ namespace rct {
         cn_fast_hash(hash, data, sizeof(data));
         return hash;
     }
-    // TODO(PR-construct): genCommitmentMask is kept for the scanner shim.
-    // Once the scanner migrates to Rust, delete this.
     key genCommitmentMask(const key &sk)
     {
         char data[15 + sizeof(key)];
@@ -690,24 +688,5 @@ namespace rct {
         key scalar;
         hash_to_scalar(scalar, data, sizeof(data));
         return scalar;
-    }
-
-    // TODO(PR-construct): ecdhDecode is kept for the scanner shim.
-    // Once the scanner migrates to Rust scan_output, delete this.
-    void ecdhDecode(ecdhTuple & masked, const key & sharedSec, bool v2) {
-        if (v2)
-        {
-          masked.mask = genCommitmentMask(sharedSec);
-          key hash = ecdhHash(sharedSec);
-          for (int i = 0; i < 8; ++i)
-              masked.amount.bytes[i] ^= hash.bytes[i];
-        }
-        else
-        {
-          key sharedSec1 = hash_to_scalar(sharedSec);
-          key sharedSec2 = hash_to_scalar(sharedSec1);
-          sc_sub(masked.mask.bytes, masked.mask.bytes, sharedSec1.bytes);
-          sc_sub(masked.amount.bytes, masked.amount.bytes, sharedSec2.bytes);
-        }
     }
 }

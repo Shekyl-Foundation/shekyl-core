@@ -638,7 +638,6 @@ namespace tx {
     cryptonote::tx_out tx_out;
     rct::BulletproofPlus bproof_plus{};
     rct::ctkey out_pk{};
-    rct::ecdhTuple ecdh{};
 
     bool has_rsig = false;
     std::string rsig_buff;
@@ -666,19 +665,9 @@ namespace tx {
       throw exc::ProtocolException("Cannot deserialize out_pk");
     }
 
-    if (m_ct.bp_version <= 1) {
-      if (!cn_deserialize(ack->ecdh_info(), ecdh)){
-        throw exc::ProtocolException("Cannot deserialize ecdhtuple");
-      }
-    } else {
-      CHECK_AND_ASSERT_THROW_MES(8 == ack->ecdh_info().size(), "Invalid ECDH.amount size");
-      memcpy(ecdh.amount.bytes, ack->ecdh_info().data(), 8);
-    }
-
     m_ct.tx.vout.emplace_back(tx_out);
     m_ct.tx_out_hmacs.push_back(ack->vouti_hmac());
     m_ct.tx_out_pk.emplace_back(out_pk);
-    m_ct.tx_out_ecdh.emplace_back(ecdh);
 
     rsig_v bp_obj{};
     if (has_rsig) {
@@ -800,10 +789,8 @@ namespace tx {
       string_to_key(dst->back(), pseudo_out);
     }
 
-    CHECK_AND_ASSERT_THROW_MES(m_ct.tx_out_pk.size() == m_ct.tx_out_ecdh.size(), "Invalid vector sizes");
-    for(size_t i = 0; i < m_ct.tx_out_ecdh.size(); ++i){
+    for(size_t i = 0; i < m_ct.tx_out_pk.size(); ++i){
       m_ct.rv->outPk.push_back(m_ct.tx_out_pk[i]);
-      m_ct.rv->ecdhInfo.push_back(m_ct.tx_out_ecdh[i]);
     }
 
     for(size_t i = 0; i < m_ct.tx_out_rsigs.size(); ++i){

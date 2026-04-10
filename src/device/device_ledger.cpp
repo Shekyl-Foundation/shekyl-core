@@ -46,7 +46,7 @@ namespace hw {
     // ──── V3 HARD GATE ────────────────────────────────────────────────
     // The Ledger device path has not been updated for V3 two-component
     // keys (HKDF-derived ho/y/z, deterministic KEM, etc.). Functions like
-    // genCommitmentMask, ecdhEncode/Decode, and generate_output_ephemeral_keys
+    // genCommitmentMask and generate_output_ephemeral_keys
     // still use the Keccak-based derivation that V3 replaces with Rust FFI.
     //
     // If you're seeing this error, do NOT simply remove it. The Ledger
@@ -1796,84 +1796,6 @@ namespace hw {
         #endif
         
         return mask;
-    }
-
-    bool  device_ledger::ecdhEncode(rct::ecdhTuple & unmasked, const rct::key & AKout, bool short_amount) {
-        AUTO_LOCK_CMD();
-
-        #ifdef DEBUG_HWDEVICE
-        const rct::key AKout_x =   hw::ledger::decrypt(AKout);
-        rct::ecdhTuple unmasked_x = unmasked;
-        this->controle_device->ecdhEncode(unmasked_x, AKout_x, short_amount);
-        #endif
-
-        int offset = set_command_header(INS_BLIND);
-        //options
-        this->buffer_send[offset] = short_amount?0x02:0x00;
-        offset += 1;        
-        // AKout
-        this->send_secret(AKout.bytes, offset);
-        //mask k
-        memmove(this->buffer_send+offset, unmasked.mask.bytes, 32);
-        offset += 32;
-        //value v
-        memmove(this->buffer_send+offset, unmasked.amount.bytes, 32);
-        offset += 32;
-
-        this->buffer_send[4] = offset-5;
-        this->length_send = offset;
-        this->exchange();
-
-        memmove(unmasked.amount.bytes, &this->buffer_recv[0],  32);
-        memmove(unmasked.mask.bytes,  &this->buffer_recv[32], 32);
-
-        #ifdef DEBUG_HWDEVICE
-        MDEBUG("ecdhEncode: Akout: "<<AKout_x);
-        hw::ledger::check32("ecdhEncode", "amount", (char*)unmasked_x.amount.bytes, (char*)unmasked.amount.bytes);
-        hw::ledger::check32("ecdhEncode", "mask", (char*)unmasked_x.mask.bytes, (char*)unmasked.mask.bytes);
-
-        log_hexbuffer("Blind AKV input", (char*)&this->buffer_recv[64], 3*32);
-        #endif
-
-        return true;
-    }
-
-    bool  device_ledger::ecdhDecode(rct::ecdhTuple & masked, const rct::key & AKout, bool short_amount) {
-        AUTO_LOCK_CMD();
-
-        #ifdef DEBUG_HWDEVICE
-        const rct::key AKout_x =   hw::ledger::decrypt(AKout);
-        rct::ecdhTuple masked_x = masked;
-        this->controle_device->ecdhDecode(masked_x, AKout_x, short_amount);
-        #endif
-
-        int offset = set_command_header(INS_UNBLIND);
-        //options
-        this->buffer_send[offset] = short_amount?0x02:0x00;
-        offset += 1;        
-        // AKout
-        this->send_secret(AKout.bytes, offset);
-        //mask k
-        memmove(this->buffer_send+offset, masked.mask.bytes, 32);
-        offset += 32;
-        //value v
-        memmove(this->buffer_send+offset, masked.amount.bytes, 32);
-        offset += 32;
-
-        this->buffer_send[4] = offset-5;
-        this->length_send = offset;
-        this->exchange();
-
-        memmove(masked.amount.bytes, &this->buffer_recv[0],  32);
-        memmove(masked.mask.bytes,  &this->buffer_recv[32], 32);
-
-        #ifdef DEBUG_HWDEVICE
-        MDEBUG("ecdhEncode: Akout: "<<AKout_x);
-        hw::ledger::check32("ecdhDecode", "amount", (char*)masked_x.amount.bytes, (char*)masked.amount.bytes);
-        hw::ledger::check32("ecdhDecode", "mask", (char*)masked_x.mask.bytes,(char*) masked.mask.bytes);
-        #endif
-
-        return true;
     }
 
     bool device_ledger::tx_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size,

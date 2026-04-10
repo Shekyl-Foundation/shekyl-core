@@ -4705,7 +4705,7 @@ bool simple_wallet::show_incoming_transfers(const std::vector<std::string>& args
         print_money(td.amount()) %
         (td.m_spent ? tr("T") : tr("F")) %
         (m_wallet->frozen(td) ? tr("[frozen]") : m_wallet->is_transfer_unlocked(td) ? tr("unlocked") : tr("locked")) %
-        (td.is_rct() ? tr("FCMP") : tr("-")) %
+        tr("FCMP") %
         td.m_global_output_index %
         td.m_txid %
         td.m_subaddr_index.minor %

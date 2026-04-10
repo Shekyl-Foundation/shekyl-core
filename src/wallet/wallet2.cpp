@@ -2050,17 +2050,17 @@ void wallet2::scan_output(const cryptonote::transaction &tx, bool miner_tx, cons
   crypto::public_key output_public_key;
   THROW_WALLET_EXCEPTION_IF(!get_output_public_key(tx.vout[i], output_public_key), error::wallet_internal_error, "Failed to get output public key");
 
+  tx_scan_info.output_key = output_public_key;
   if (m_background_syncing)
   {
-    tx_scan_info.in_ephemeral.pub = output_public_key;
-    tx_scan_info.in_ephemeral.sec = crypto::null_skey;
     tx_scan_info.ki = rct::rct2ki(rct::zero());
   }
   else
   {
-    bool r = cryptonote::generate_key_image_helper_precomp(m_account.get_keys(), output_public_key, tx_scan_info.received->derivation, i, tx_scan_info.received->index, tx_scan_info.in_ephemeral, tx_scan_info.ki, m_account.get_device());
+    cryptonote::keypair in_ephemeral;
+    bool r = cryptonote::generate_key_image_helper_precomp(m_account.get_keys(), output_public_key, tx_scan_info.received->derivation, i, tx_scan_info.received->index, in_ephemeral, tx_scan_info.ki, m_account.get_device());
     THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to generate key image");
-    THROW_WALLET_EXCEPTION_IF(tx_scan_info.in_ephemeral.pub != output_public_key,
+    THROW_WALLET_EXCEPTION_IF(in_ephemeral.pub != output_public_key,
         error::wallet_internal_error, "key_image generated ephemeral public key not matched with output_key");
   }
 
@@ -2343,13 +2343,11 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
                    ho_buf, reinterpret_cast<const unsigned char*>(m_account.get_keys().m_spend_secret_key.data));
             crypto::generate_key_image(output_public_key, x_secret, tx_scan_info[i].ki);
             memwipe(&x_secret, sizeof(x_secret));
-            tx_scan_info[i].in_ephemeral.pub = output_public_key;
-            memcpy(tx_scan_info[i].in_ephemeral.sec.data, ho_buf, 32);
+            tx_scan_info[i].output_key = output_public_key;
           }
           else
           {
-            tx_scan_info[i].in_ephemeral.pub = output_public_key;
-            tx_scan_info[i].in_ephemeral.sec = crypto::null_skey;
+            tx_scan_info[i].output_key = output_public_key;
             tx_scan_info[i].ki = rct::rct2ki(rct::zero());
           }
 
@@ -2475,7 +2473,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
 	THROW_WALLET_EXCEPTION_IF(tx.vout.size() <= o, error::wallet_internal_error, "wrong out in transaction: internal index=" +
 				  std::to_string(o) + ", total_outs=" + std::to_string(tx.vout.size()));
 
-        auto kit = m_pub_keys.find(tx_scan_info[o].in_ephemeral.pub);
+        auto kit = m_pub_keys.find(tx_scan_info[o].output_key);
 	THROW_WALLET_EXCEPTION_IF(kit != m_pub_keys.end() && kit->second >= m_transfers.size(),
             error::wallet_internal_error, std::string("Unexpected transfer index from public key: ")
             + "got " + (kit == m_pub_keys.end() ? "<none>" : std::to_string(kit->second))
@@ -2497,7 +2495,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
             if (!td.m_key_image_known)
             {
               // we might have cold signed, and have a mapping to key images
-              std::unordered_map<crypto::public_key, crypto::key_image>::const_iterator i = m_cold_key_images.find(tx_scan_info[o].in_ephemeral.pub);
+              std::unordered_map<crypto::public_key, crypto::key_image>::const_iterator i = m_cold_key_images.find(tx_scan_info[o].output_key);
               if (i != m_cold_key_images.end())
               {
                 td.m_key_image = i->second;
@@ -2528,7 +2526,6 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
               "All Shekyl outputs require HKDF derivation (v3 from genesis).");
             td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
             td.m_y = tx_scan_info[o].y;
-            td.m_rct = true;
             td.m_frozen = false;
             {
               uint8_t stk_tier = 0;
@@ -2587,7 +2584,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
 	    set_unspent(m_transfers.size()-1);
             if (td.m_key_image_known)
 	      m_key_images[td.m_key_image] = m_transfers.size()-1;
-	    m_pub_keys[tx_scan_info[o].in_ephemeral.pub] = m_transfers.size()-1;
+	    m_pub_keys[tx_scan_info[o].output_key] = m_transfers.size()-1;
             if (output_tracker_cache)
               (*output_tracker_cache)[std::make_pair(tx.vout[o].amount, td.m_global_output_index)] = m_transfers.size() - 1;
 	    LOG_PRINT_L0("Received money: " << print_money(td.amount()) << ", with tx: " << txid);
@@ -2648,10 +2645,9 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
               "All Shekyl outputs require HKDF derivation (v3 from genesis).");
             td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
             td.m_y = tx_scan_info[o].y;
-            td.m_rct = true;
             if (output_tracker_cache)
               (*output_tracker_cache)[std::make_pair(tx.vout[o].amount, td.m_global_output_index)] = kit->second;
-            THROW_WALLET_EXCEPTION_IF(td.get_public_key() != tx_scan_info[o].in_ephemeral.pub, error::wallet_internal_error, "Inconsistent public keys");
+            THROW_WALLET_EXCEPTION_IF(td.get_public_key() != tx_scan_info[o].output_key, error::wallet_internal_error, "Inconsistent public keys");
 	    THROW_WALLET_EXCEPTION_IF(td.m_spent, error::wallet_internal_error, "Inconsistent spent status");
 
 	    LOG_PRINT_L0("Received money: " << print_money(td.amount()) << ", with tx: " << txid);
@@ -4239,7 +4235,7 @@ std::shared_ptr<std::map<std::pair<uint64_t, uint64_t>, size_t>> wallet2::create
   for (size_t i = 0; i < m_transfers.size(); ++i)
   {
     const transfer_details &td = m_transfers[i];
-    (*cache)[std::make_pair(td.is_rct() ? 0 : td.amount(), td.m_global_output_index)] = i;
+    (*cache)[std::make_pair(0, td.m_global_output_index)] = i;
   }
   return cache;
 }
@@ -8087,12 +8083,10 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     THROW_WALLET_EXCEPTION_IF(needed_money < dt.amount, error::tx_sum_overflow, dsts, fee, m_nettype);
   }
 
-  bool all_rct = true;
   uint64_t found_money = 0;
   for(size_t idx: selected_transfers)
   {
     found_money += m_transfers[idx].amount();
-    all_rct &= m_transfers[idx].is_rct();
   }
 
   LOG_PRINT_L2("wanted " << print_money(needed_money) << ", found " << print_money(found_money) << ", fee " << print_money(fee));
@@ -8111,7 +8105,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     cryptonote::tx_source_entry& src = sources.back();
     const transfer_details& td = m_transfers[idx];
     src.amount = td.amount();
-    src.rct = td.is_rct();
+    src.rct = true;
 
     typedef cryptonote::tx_source_entry::output_entry tx_output_entry;
     tx_output_entry real_oe;
@@ -8229,7 +8223,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       inSk[i].mask = rct::sk2rct(td.m_mask);
 
       inPk[i].dest = rct::pk2rct(out_key);
-      inPk[i].mask = td.m_rct ? rct::commit(td.m_amount, rct::sk2rct(td.m_mask)) : rct::zeroCommit(td.m_amount);
+      inPk[i].mask = rct::commit(td.m_amount, rct::sk2rct(td.m_mask));
 
       auto path_it = m_fcmp_precomputed_paths.find(td.m_global_output_index);
       THROW_WALLET_EXCEPTION_IF(path_it == m_fcmp_precomputed_paths.end(), error::wallet_internal_error,
@@ -8527,7 +8521,7 @@ std::vector<size_t> wallet2::pick_preferred_rct_inputs(uint64_t needed_money, ui
   for (size_t i = 0; i < m_transfers.size(); ++i)
   {
     const transfer_details& td = m_transfers[i];
-    if (!is_spent(td, false) && !td.m_frozen && td.is_rct() && td.amount() >= needed_money && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
+    if (!is_spent(td, false) && !td.m_frozen && td.amount() >= needed_money && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
     {
       if (td.amount() > m_ignore_outputs_above || td.amount() < m_ignore_outputs_below)
       {
@@ -8547,7 +8541,7 @@ std::vector<size_t> wallet2::pick_preferred_rct_inputs(uint64_t needed_money, ui
   for (size_t i = 0; i < m_transfers.size(); ++i)
   {
     const transfer_details& td = m_transfers[i];
-    if (!is_spent(td, false) && !td.m_frozen && td.is_rct() && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
+    if (!is_spent(td, false) && !td.m_frozen && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
     {
       if (td.amount() > m_ignore_outputs_above || td.amount() < m_ignore_outputs_below)
       {
@@ -8563,7 +8557,7 @@ std::vector<size_t> wallet2::pick_preferred_rct_inputs(uint64_t needed_money, ui
           MDEBUG("Ignoring output " << j << " of amount " << print_money(td2.amount()) << " which is outside prescribed range [" << print_money(m_ignore_outputs_below) << ", " << print_money(m_ignore_outputs_above) << "]");
           continue;
         }
-        if (!is_spent(td2, false) && !td2.m_frozen && td2.is_rct() && td.amount() + td2.amount() >= needed_money && is_transfer_unlocked(td2) && td2.m_subaddr_index == td.m_subaddr_index)
+        if (!is_spent(td2, false) && !td2.m_frozen && td.amount() + td2.amount() >= needed_money && is_transfer_unlocked(td2) && td2.m_subaddr_index == td.m_subaddr_index)
         {
           // update our picks if those outputs are less related than any we
           // already found. If the same, don't update, and oldest suitable outputs
@@ -8602,37 +8596,14 @@ bool wallet2::should_pick_a_second_output(bool use_rct, size_t n_transfers, cons
   // we want at least one free rct output to avoid a corner case where
   // we'd choose a non rct output which doesn't have enough "siblings"
   // value-wise on the chain, and thus can't be mixed
-  bool found = false;
-  for (auto i: unused_dust_indices)
-  {
-    if (m_transfers[i].is_rct())
-    {
-      found = true;
-      break;
-    }
-  }
-  if (!found) for (auto i: unused_transfers_indices)
-  {
-    if (m_transfers[i].is_rct())
-    {
-      found = true;
-      break;
-    }
-  }
-  if (!found)
-    return false;
   return true;
 }
 
 std::vector<size_t> wallet2::get_only_rct(const std::vector<size_t> &unused_dust_indices, const std::vector<size_t> &unused_transfers_indices) const
 {
   std::vector<size_t> indices;
-  for (size_t n: unused_dust_indices)
-    if (m_transfers[n].is_rct())
-      indices.push_back(n);
-  for (size_t n: unused_transfers_indices)
-    if (m_transfers[n].is_rct())
-      indices.push_back(n);
+  indices.insert(indices.end(), unused_dust_indices.begin(), unused_dust_indices.end());
+  indices.insert(indices.end(), unused_transfers_indices.begin(), unused_transfers_indices.end());
   return indices;
 }
 
@@ -8862,7 +8833,7 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
       MDEBUG("Ignoring output " << i << " of amount " << print_money(td.amount()) << " which is below fractional threshold " << print_money(fractional_threshold));
       continue;
     }
-    if (!is_spent(td, false) && !td.m_frozen && (use_rct ? true : !td.is_rct()) && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
+    if (!is_spent(td, false) && !td.m_frozen && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && subaddr_indices.count(td.m_subaddr_index.minor) == 1)
     {
       if (td.amount() > m_ignore_outputs_above || td.amount() < m_ignore_outputs_below)
       {
@@ -8871,32 +8842,16 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_2(std::vector<cryp
       }
       const uint32_t index_minor = td.m_subaddr_index.minor;
       auto find_predicate = [&index_minor](const std::pair<uint32_t, std::vector<size_t>>& x) { return x.first == index_minor; };
-      if ((td.is_rct()) || is_valid_decomposed_amount(td.amount()))
+      auto found = std::find_if(unused_transfers_indices_per_subaddr.begin(), unused_transfers_indices_per_subaddr.end(), find_predicate);
+      if (found == unused_transfers_indices_per_subaddr.end())
       {
-        auto found = std::find_if(unused_transfers_indices_per_subaddr.begin(), unused_transfers_indices_per_subaddr.end(), find_predicate);
-        if (found == unused_transfers_indices_per_subaddr.end())
-        {
-          unused_transfers_indices_per_subaddr.push_back({index_minor, {i}});
-        }
-        else
-        {
-          found->second.push_back(i);
-        }
-        ++num_nondust_outputs;
+        unused_transfers_indices_per_subaddr.push_back({index_minor, {i}});
       }
       else
       {
-        auto found = std::find_if(unused_dust_indices_per_subaddr.begin(), unused_dust_indices_per_subaddr.end(), find_predicate);
-        if (found == unused_dust_indices_per_subaddr.end())
-        {
-          unused_dust_indices_per_subaddr.push_back({index_minor, {i}});
-        }
-        else
-        {
-          found->second.push_back(i);
-        }
-        ++num_dust_outputs;
+        found->second.push_back(i);
       }
+      ++num_nondust_outputs;
     }
   }
 
@@ -9571,6 +9526,7 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
   for (size_t oi = 0; oi < 2; ++oi)
   {
     ShekylOutputData od = shekyl_construct_output(
+      reinterpret_cast<const uint8_t*>(&tx_key),
       pk_x25519, pk_ml_kem, pk_ml_kem_len,
       reinterpret_cast<const uint8_t*>(&my_addr.m_spend_public_key),
       out_amounts[oi], static_cast<uint64_t>(oi));
@@ -9932,15 +9888,12 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_all(uint64_t below
       MDEBUG("Ignoring output " << i << " of amount " << print_money(td.amount()) << " which is below threshold " << print_money(fractional_threshold));
       continue;
     }
-    if (!is_spent(td, false) && !td.m_frozen && (use_rct ? true : !td.is_rct()) && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && (subaddr_indices.empty() || subaddr_indices.count(td.m_subaddr_index.minor) == 1))
+    if (!is_spent(td, false) && !td.m_frozen && is_transfer_unlocked(td) && td.m_subaddr_index.major == subaddr_account && (subaddr_indices.empty() || subaddr_indices.count(td.m_subaddr_index.minor) == 1))
     {
       fund_found = true;
       if (below == 0 || td.amount() < below)
       {
-        if ((td.is_rct()) || is_valid_decomposed_amount(td.amount()))
-          unused_transfer_dust_indices_per_subaddr[td.m_subaddr_index.minor].first.push_back(i);
-        else
-          unused_transfer_dust_indices_per_subaddr[td.m_subaddr_index.minor].second.push_back(i);
+        unused_transfer_dust_indices_per_subaddr[td.m_subaddr_index.minor].first.push_back(i);
       }
     }
   }
@@ -9975,17 +9928,12 @@ std::vector<wallet2::pending_tx> wallet2::create_transactions_single(const crypt
 {
   std::vector<size_t> unused_transfers_indices;
   std::vector<size_t> unused_dust_indices;
-  const bool use_rct = true;
-  // find output with the given key image
   for (size_t i = 0; i < m_transfers.size(); ++i)
   {
     const transfer_details& td = m_transfers[i];
-    if (td.m_key_image_known && td.m_key_image == ki && !is_spent(td, false) && !td.m_frozen && (use_rct ? true : !td.is_rct()) && is_transfer_unlocked(td))
+    if (td.m_key_image_known && td.m_key_image == ki && !is_spent(td, false) && !td.m_frozen && is_transfer_unlocked(td))
     {
-      if (td.is_rct() || is_valid_decomposed_amount(td.amount()))
-        unused_transfers_indices.push_back(i);
-      else
-        unused_dust_indices.push_back(i);
+      unused_transfers_indices.push_back(i);
       break;
     }
   }
@@ -10332,7 +10280,7 @@ std::vector<uint64_t> wallet2::get_unspent_amounts_vector(bool strict)
   for (const auto &td: m_transfers)
   {
     if (!is_spent(td, strict) && !td.m_frozen)
-      set.insert(td.is_rct() ? 0 : td.amount());
+      set.insert(0);
   }
   std::vector<uint64_t> vector;
   vector.reserve(set.size());
@@ -10573,18 +10521,21 @@ void wallet2::check_tx_key_helper(const cryptonote::transaction &tx, const crypt
       {
         crypto::secret_key scalar1;
         crypto::derivation_to_scalar(found_derivation, n, scalar1);
-        // Shim: convert enc_amounts to ecdhTuple for existing ecdhDecode path
-        rct::ecdhTuple ecdh_info;
-        memset(&ecdh_info, 0, sizeof(ecdh_info));
-        memcpy(ecdh_info.amount.bytes, tx.rct_signatures.enc_amounts[n].data(), 8);
-        rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar1), true);
+        rct::key sk_rct = rct::sk2rct(scalar1);
+        rct::key mask = rct::genCommitmentMask(sk_rct);
+        rct::key amount_key;
+        memset(&amount_key, 0, sizeof(amount_key));
+        memcpy(amount_key.bytes, tx.rct_signatures.enc_amounts[n].data(), 8);
+        rct::key hash = rct::ecdhHash(sk_rct);
+        for (int j = 0; j < 8; ++j)
+            amount_key.bytes[j] ^= hash.bytes[j];
         const rct::key C = tx.rct_signatures.outPk[n].mask;
         rct::key Ctmp;
-        THROW_WALLET_EXCEPTION_IF(sc_check(ecdh_info.mask.bytes) != 0, error::wallet_internal_error, "Bad ECDH input mask");
-        THROW_WALLET_EXCEPTION_IF(sc_check(ecdh_info.amount.bytes) != 0, error::wallet_internal_error, "Bad ECDH input amount");
-        rct::addKeys2(Ctmp, ecdh_info.mask, ecdh_info.amount, rct::H);
+        THROW_WALLET_EXCEPTION_IF(sc_check(mask.bytes) != 0, error::wallet_internal_error, "Bad ECDH input mask");
+        THROW_WALLET_EXCEPTION_IF(sc_check(amount_key.bytes) != 0, error::wallet_internal_error, "Bad ECDH input amount");
+        rct::addKeys2(Ctmp, mask, amount_key, rct::H);
         if (rct::equalKeys(C, Ctmp))
-          amount = rct::h2d(ecdh_info.amount);
+          amount = rct::h2d(amount_key);
         else
           amount = 0;
       }
@@ -11247,14 +11198,16 @@ bool wallet2::check_reserve_proof(const cryptonote::account_public_address &addr
     uint64_t amount = tx.vout[proof.index_in_tx].amount;
     if (amount == 0)
     {
-      // Shim: convert enc_amounts to ecdhTuple for existing ecdhDecode path
       crypto::secret_key shared_secret;
       crypto::derivation_to_scalar(derivation, proof.index_in_tx, shared_secret);
-      rct::ecdhTuple ecdh_info;
-      memset(&ecdh_info, 0, sizeof(ecdh_info));
-      memcpy(ecdh_info.amount.bytes, tx.rct_signatures.enc_amounts[proof.index_in_tx].data(), 8);
-      rct::ecdhDecode(ecdh_info, rct::sk2rct(shared_secret), true);
-      amount = rct::h2d(ecdh_info.amount);
+      rct::key sk_rct = rct::sk2rct(shared_secret);
+      rct::key amount_key;
+      memset(&amount_key, 0, sizeof(amount_key));
+      memcpy(amount_key.bytes, tx.rct_signatures.enc_amounts[proof.index_in_tx].data(), 8);
+      rct::key hash = rct::ecdhHash(sk_rct);
+      for (int j = 0; j < 8; ++j)
+          amount_key.bytes[j] ^= hash.bytes[j];
+      amount = rct::h2d(amount_key);
     }
     total += amount;
     if (kispent_res.spent_status[i])
@@ -12577,7 +12530,6 @@ std::tuple<uint64_t, uint64_t, std::vector<tools::wallet2::exported_transfer_det
     etd.m_flags.flags = 0;
     etd.m_flags.m_spent = td.m_spent;
     etd.m_flags.m_frozen = td.m_frozen;
-    etd.m_flags.m_rct = td.m_rct;
     etd.m_flags.m_key_image_known = td.m_key_image_known;
     etd.m_flags.m_key_image_request = td.m_key_image_request;
     etd.m_amount = td.m_amount;
@@ -12727,7 +12679,6 @@ size_t wallet2::import_outputs(const std::tuple<uint64_t, uint64_t, std::vector<
     td.m_spent_height = 0;
     td.m_mask = rct::rct2sk(rct::identity());
     td.m_amount = etd.m_amount;
-    td.m_rct = etd.m_flags.m_rct;
     td.m_key_image_known = etd.m_flags.m_key_image_known;
     td.m_key_image_request = etd.m_flags.m_key_image_request;
     td.m_subaddr_index.major = etd.m_subaddr_index_major;

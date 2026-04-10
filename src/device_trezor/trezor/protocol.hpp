@@ -186,7 +186,6 @@ namespace tx {
     std::vector<std::string> tx_out_hmacs;
     std::vector<rsig_v> tx_out_rsigs;
     std::vector<rct::ctkey> tx_out_pk;
-    std::vector<rct::ecdhTuple> tx_out_ecdh;
     std::vector<size_t> source_permutation;
     std::vector<std::string> alphas;
     std::vector<std::string> spend_encs;

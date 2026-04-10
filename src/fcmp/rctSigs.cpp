@@ -511,28 +511,20 @@ namespace
         return rv;
     }
 
-    // TODO(PR-construct): decodeRctSimple and this shim will be deleted when
-    // the scanner migrates to Rust scan_output. The shim translates enc_amounts
-    // back into the ecdhTuple format that ecdhDecode expects.
-    static ecdhTuple enc_amount_to_ecdh_compat(const std::array<uint8_t, 9>& enc, unsigned int /*index*/)
-    {
-        ecdhTuple tuple;
-        memset(&tuple, 0, sizeof(tuple));
-        memcpy(tuple.amount.bytes, enc.data(), 8);
-        // tuple.mask left zero; ecdhDecode v2 overwrites it with genCommitmentMask(sk)
-        return tuple;
-    }
-
     xmr_amount decodeRctSimple(const rctSig & rv, const key & sk, unsigned int i, key &mask, hw::device &hwdev) {
         CHECK_AND_ASSERT_MES(rv.type == RCTTypeFcmpPlusPlusPqc,
             false, "decodeRctSimple called on unsupported rctSig type");
         CHECK_AND_ASSERT_THROW_MES(i < rv.enc_amounts.size(), "Bad index");
         CHECK_AND_ASSERT_THROW_MES(rv.outPk.size() == rv.enc_amounts.size(), "Mismatched sizes of rv.outPk and rv.enc_amounts");
 
-        ecdhTuple ecdh_info = enc_amount_to_ecdh_compat(rv.enc_amounts[i], i);
-        hwdev.ecdhDecode(ecdh_info, sk, true);
-        mask = ecdh_info.mask;
-        key amount = ecdh_info.amount;
+        mask = genCommitmentMask(sk);
+        key amount;
+        memset(&amount, 0, sizeof(amount));
+        memcpy(amount.bytes, rv.enc_amounts[i].data(), 8);
+        key hash = ecdhHash(sk);
+        for (int j = 0; j < 8; ++j)
+            amount.bytes[j] ^= hash.bytes[j];
+
         key C = rv.outPk[i].mask;
         DP("C");
         DP(C);
