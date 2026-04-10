@@ -6,28 +6,32 @@ on:
   pull_request:
     branches: [main, dev]
   schedule:
-    - cron: "30 4 * * 1"
-
-permissions:
-  security-events: write
-  contents: read
+    - cron: "30 4 * * 1"   # Every Monday at 4:30 AM UTC
 
 jobs:
   analyze-rust:
     name: Analyze Rust
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    permissions:
+      security-events: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: rust
 
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+      - name: Build Rust workspace
+        run: cargo build --release --workspace
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
@@ -37,7 +41,10 @@ jobs:
   analyze-cpp:
     name: Analyze C/C++
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 150
+    permissions:
+      security-events: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,19 +59,16 @@ jobs:
             libsodium-dev libhidapi-dev libprotobuf-dev protobuf-compiler \
             libusb-1.0-0-dev libudev-dev libreadline-dev
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: c-cpp
 
-      - name: Build
+      - name: Configure and Build C++
         run: |
           mkdir -p build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
-          make -j$(nproc)
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+          cmake --build . -- -j$(nproc)
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
@@ -74,7 +78,10 @@ jobs:
   analyze-python:
     name: Analyze Python
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    permissions:
+      security-events: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -83,9 +90,6 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: python
-
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
