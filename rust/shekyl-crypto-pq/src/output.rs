@@ -34,7 +34,7 @@ use curve25519_dalek::{
     scalar::Scalar,
 };
 use fips203::{ml_kem_768, traits::{Encaps, Decaps, SerDes}};
-use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey, StaticSecret};
+use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use shekyl_generators::{H, T};
@@ -44,7 +44,7 @@ use crate::kem::{
     ML_KEM_768_CT_LEN, ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN,
 };
 use crate::derivation::{
-    derive_output_secrets, derive_view_tag_x25519,
+    derive_kem_seed, derive_output_secrets, derive_view_tag_x25519,
     hash_pqc_public_key, keygen_from_seed, OutputSecrets,
 };
 use crate::CryptoError;
@@ -140,12 +140,18 @@ impl std::fmt::Debug for ScannedOutput {
     }
 }
 
-/// Construct a two-component output.
+/// Construct a two-component output with deterministic KEM from `tx_key_secret`.
 ///
 /// `spend_key` is interpreted as a **compressed Edwards point** (opaque B),
 /// not a scalar. This preserves the V4 FROST SAL migration path where B
 /// may be a multisig aggregate key unknown to any single party as a scalar.
+///
+/// KEM encapsulation is deterministic: `tx_key_secret` + recipient public keys
+/// + `output_index` uniquely determine the X25519 ephemeral key and ML-KEM
+/// ciphertext. The sender can re-derive `combined_ss` at proof time from
+/// `tx_key_secret` (stored in `m_tx_keys`) + public data.
 pub fn construct_output(
+    tx_key_secret: &[u8; 32],
     x25519_pk: &[u8; 32],
     ml_kem_ek: &[u8],
     spend_key: &[u8; 32],
@@ -169,9 +175,14 @@ pub fn construct_output(
         return Err(CryptoError::InvalidKeyMaterial);
     }
 
-    // --- KEM encapsulation ---
+    // --- Deterministic KEM encapsulation from tx_key ---
 
-    let x_eph = EphemeralSecret::random_from_rng(rand::rngs::OsRng);
+    let per_output_seed = derive_kem_seed(tx_key_secret, x25519_pk, ml_kem_ek, output_index);
+
+    let x25519_eph_secret_bytes: [u8; 32] = per_output_seed[..32]
+        .try_into()
+        .expect("per_output_seed is 64 bytes");
+    let x_eph = StaticSecret::from(x25519_eph_secret_bytes);
     let x_eph_pub = X25519PublicKey::from(&x_eph);
     let x_recipient = X25519PublicKey::from(*x25519_pk);
     let x25519_raw_ss = x_eph.diffie_hellman(&x_recipient);
@@ -181,9 +192,11 @@ pub fn construct_output(
         .map_err(|_| CryptoError::InvalidKeyMaterial)?;
     let ek = ml_kem_768::EncapsKey::try_from_bytes(ek_bytes)
         .map_err(|e| CryptoError::EncapsulationFailed(format!("invalid encap key: {e}")))?;
-    let (ml_ss, ml_ct) = ek
-        .try_encaps()
-        .map_err(|e| CryptoError::EncapsulationFailed(format!("ML-KEM-768: {e}")))?;
+
+    let ml_kem_encaps_seed: [u8; 32] = per_output_seed[32..64]
+        .try_into()
+        .expect("per_output_seed is 64 bytes");
+    let (ml_ss, ml_ct) = ek.encaps_from_seed(&ml_kem_encaps_seed);
 
     let ml_ss_bytes = ml_ss.into_bytes();
     let ml_ct_bytes = ml_ct.into_bytes();
@@ -617,6 +630,290 @@ pub fn sign_pqc_auth_for_output(
     })
 }
 
+// ── Proof helpers (Phase 1) ───────────────────────────────────────────
+
+/// Narrow projection of output secrets for proof protocols.
+///
+/// Contains only the values a verifier needs -- `combined_ss` itself and
+/// `z`, `ml_dsa_seed`, `ed25519_pqc_seed` are never revealed.
+#[derive(ZeroizeOnDrop)]
+pub struct ProofSecrets {
+    pub ho: [u8; 32],
+    pub y: [u8; 32],
+    pub k_amount: [u8; 32],
+}
+
+impl std::fmt::Debug for ProofSecrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProofSecrets")
+            .field("ho", &"[REDACTED]")
+            .field("y", &"[REDACTED]")
+            .field("k_amount", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Re-derive `combined_ss` from `tx_key_secret` and recipient public keys.
+///
+/// Used by the outbound proof verifier to reconstruct the shared secret
+/// from the `tx_key` revealed in the proof. Returns the combined shared
+/// secret plus the X25519 ephemeral public key and ML-KEM ciphertext
+/// for on-chain integrity checking.
+pub fn rederive_combined_ss(
+    tx_key_secret: &[u8; 32],
+    x25519_pk: &[u8; 32],
+    ml_kem_ek: &[u8],
+    output_index: u64,
+) -> Result<(SharedSecret, [u8; 32], Vec<u8>), CryptoError> {
+    if ml_kem_ek.len() != ML_KEM_768_EK_LEN {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
+
+    let per_output_seed = derive_kem_seed(tx_key_secret, x25519_pk, ml_kem_ek, output_index);
+
+    let x25519_eph_secret_bytes: [u8; 32] = per_output_seed[..32]
+        .try_into()
+        .expect("per_output_seed is 64 bytes");
+    let x_eph = StaticSecret::from(x25519_eph_secret_bytes);
+    let x_eph_pub = X25519PublicKey::from(&x_eph);
+    let x_recipient = X25519PublicKey::from(*x25519_pk);
+    let x25519_raw_ss = x_eph.diffie_hellman(&x_recipient);
+
+    let ek_bytes: [u8; ML_KEM_768_EK_LEN] = ml_kem_ek
+        .try_into()
+        .map_err(|_| CryptoError::InvalidKeyMaterial)?;
+    let ek = ml_kem_768::EncapsKey::try_from_bytes(ek_bytes)
+        .map_err(|e| CryptoError::EncapsulationFailed(format!("invalid encap key: {e}")))?;
+
+    let ml_kem_encaps_seed: [u8; 32] = per_output_seed[32..64]
+        .try_into()
+        .expect("per_output_seed is 64 bytes");
+    let (ml_ss, ml_ct) = ek.encaps_from_seed(&ml_kem_encaps_seed);
+
+    let ml_ss_bytes = ml_ss.into_bytes();
+    let ml_ct_bytes = ml_ct.into_bytes();
+
+    let combined_ss: SharedSecret =
+        combine_shared_secrets(x25519_raw_ss.as_bytes(), &ml_ss_bytes)?;
+
+    Ok((combined_ss, x_eph_pub.to_bytes(), ml_ct_bytes.to_vec()))
+}
+
+/// Derive the narrow proof secrets projection from `combined_ss`.
+///
+/// Returns only `(ho, y, k_amount)`. This is the ONLY function that
+/// converts `combined_ss` into values that leave Rust in the proof path.
+/// Does NOT return `z`, `ml_dsa_seed`, or `amount_tag`.
+pub fn derive_proof_secrets(
+    combined_ss: &[u8; 64],
+    output_index: u64,
+) -> ProofSecrets {
+    let secrets = derive_output_secrets(combined_ss, output_index);
+    ProofSecrets {
+        ho: secrets.ho,
+        y: secrets.y,
+        k_amount: secrets.k_amount,
+    }
+}
+
+/// Derive the output public key `O = ho*G + B + y*T`.
+///
+/// Validates that `spend_key` decompresses to a prime-order point (not identity).
+pub fn derive_output_key(
+    combined_ss: &[u8; 64],
+    spend_key: &[u8; 32],
+    output_index: u64,
+) -> Result<[u8; 32], CryptoError> {
+    let b_point = CompressedEdwardsY(*spend_key)
+        .decompress()
+        .ok_or(CryptoError::InvalidKeyMaterial)?;
+    if b_point == EdwardsPoint::default() {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
+    if !b_point.is_torsion_free() {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
+
+    let secrets = derive_output_secrets(combined_ss, output_index);
+
+    let ho: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.ho))
+        .expect("ho from wide_reduce is always canonical");
+    let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.y))
+        .expect("y from wide_reduce is always canonical");
+
+    let output_point = (G * ho) + b_point + (*T * y_scalar);
+    Ok(output_point.compress().to_bytes())
+}
+
+/// Recover the recipient's spend public key `B' = O - ho*G - y*T`.
+///
+/// Validates that the recovered `B'` is on the prime-order subgroup and
+/// is not identity before returning.
+pub fn recover_recipient_spend_pubkey(
+    combined_ss: &[u8; 64],
+    output_key: &[u8; 32],
+    output_index: u64,
+) -> Result<[u8; 32], CryptoError> {
+    let o_point = CompressedEdwardsY(*output_key)
+        .decompress()
+        .ok_or_else(|| CryptoError::DecapsulationFailed("invalid output key point".into()))?;
+
+    let secrets = derive_output_secrets(combined_ss, output_index);
+
+    let ho: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.ho))
+        .expect("ho from wide_reduce is always canonical");
+    let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.y))
+        .expect("y from wide_reduce is always canonical");
+
+    let recovered_b = o_point - (G * ho) - (*T * y_scalar);
+
+    if recovered_b == EdwardsPoint::default() {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
+    if !recovered_b.is_torsion_free() {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
+
+    Ok(recovered_b.compress().to_bytes())
+}
+
+/// Decrypt the amount from `enc_amount` using secrets derived from `combined_ss`.
+///
+/// Verifies the `amount_tag` before returning. Returns `Err` if the tag
+/// doesn't match (possible KEM corruption or tampering).
+pub fn decrypt_amount(
+    combined_ss: &[u8; 64],
+    enc_amount: &[u8; 8],
+    amount_tag: u8,
+    output_index: u64,
+) -> Result<u64, CryptoError> {
+    let secrets = derive_output_secrets(combined_ss, output_index);
+
+    if secrets.amount_tag != amount_tag {
+        return Err(CryptoError::DecapsulationFailed(
+            "amount_tag mismatch — possible KEM ciphertext corruption or tampering".into(),
+        ));
+    }
+
+    let mut amount_le = [0u8; 8];
+    for i in 0..8 {
+        amount_le[i] = enc_amount[i] ^ secrets.k_amount[i];
+    }
+    Ok(u64::from_le_bytes(amount_le))
+}
+
+/// Result of key image computation.
+pub struct KeyImageResult {
+    /// Key image `I = x * Hp(O)` where `x = ho + b`.
+    pub key_image: [u8; 32],
+    /// Output spend secret `x = ho + b` (needed by `inSk[i].dest` at signing).
+    pub spend_secret_x: zeroize::Zeroizing<[u8; 32]>,
+}
+
+impl std::fmt::Debug for KeyImageResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct HexBytes<'a>(&'a [u8]);
+        impl std::fmt::Debug for HexBytes<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                for b in self.0 {
+                    write!(f, "{b:02x}")?;
+                }
+                Ok(())
+            }
+        }
+        f.debug_struct("KeyImageResult")
+            .field("key_image", &HexBytes(&self.key_image))
+            .field("spend_secret_x", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Compute the key image and output spend secret for a V3 output.
+///
+/// Derives `ho` internally from `combined_ss` -- `ho` never crosses FFI.
+/// Returns both the key image `I = x * Hp(O)` and the output spend secret
+/// `x = ho + b` (needed for signing).
+///
+/// `hp_of_output` is `Hp(O)` precomputed by C++ via `hash_to_ec` (Category 2
+/// Keccak, stays in C++). Must decompress to a prime-order point.
+pub fn compute_output_key_image(
+    combined_ss: &[u8; 64],
+    output_index: u64,
+    spend_secret: &[u8; 32],
+    hp_of_output: &[u8; 32],
+) -> Result<KeyImageResult, CryptoError> {
+    let hp_point = CompressedEdwardsY(*hp_of_output)
+        .decompress()
+        .ok_or_else(|| CryptoError::InvalidKeyMaterial)?;
+    if hp_point == EdwardsPoint::default() {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
+    if !hp_point.is_torsion_free() {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
+
+    let secrets = derive_output_secrets(combined_ss, output_index);
+    let ho: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.ho))
+        .expect("ho from wide_reduce is always canonical");
+
+    let b_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*spend_secret))
+        .ok_or(CryptoError::InvalidKeyMaterial)?;
+
+    let x = ho + b_scalar;
+    let key_image = (x * hp_point).compress().to_bytes();
+
+    let mut x_bytes = zeroize::Zeroizing::new(x.to_bytes());
+
+    let result = KeyImageResult {
+        key_image,
+        spend_secret_x: x_bytes.clone(),
+    };
+
+    x_bytes.zeroize();
+
+    Ok(result)
+}
+
+/// Compute key image from pre-derived `ho` (for `tx_source_entry` boundary).
+///
+/// Same as `compute_output_key_image` but takes `ho` directly instead of
+/// `combined_ss`. Used at the single site where `ho` has already crossed
+/// the wallet -> tx_utils boundary via `tx_source_entry`.
+pub fn compute_output_key_image_from_ho(
+    ho: &[u8; 32],
+    spend_secret: &[u8; 32],
+    hp_of_output: &[u8; 32],
+) -> Result<KeyImageResult, CryptoError> {
+    let hp_point = CompressedEdwardsY(*hp_of_output)
+        .decompress()
+        .ok_or_else(|| CryptoError::InvalidKeyMaterial)?;
+    if hp_point == EdwardsPoint::default() {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
+    if !hp_point.is_torsion_free() {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
+
+    let ho_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*ho))
+        .ok_or(CryptoError::InvalidKeyMaterial)?;
+    let b_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*spend_secret))
+        .ok_or(CryptoError::InvalidKeyMaterial)?;
+
+    let x = ho_scalar + b_scalar;
+    let key_image = (x * hp_point).compress().to_bytes();
+
+    let mut x_bytes = zeroize::Zeroizing::new(x.to_bytes());
+
+    let result = KeyImageResult {
+        key_image,
+        spend_secret_x: x_bytes.clone(),
+    };
+
+    x_bytes.zeroize();
+
+    Ok(result)
+}
+
 /// Internal helper: derive ML-DSA-65 keypair from seed bytes, returning
 /// serialized public and secret key.
 fn keygen_from_seed_bytes(
@@ -634,11 +931,16 @@ mod tests {
     use super::*;
     use crate::kem::{HybridX25519MlKem, KeyEncapsulation};
 
+    fn random_tx_key() -> [u8; 32] {
+        Scalar::random(&mut rand::rngs::OsRng).to_bytes()
+    }
+
     #[test]
     fn construct_scan_round_trip() {
         let kem = HybridX25519MlKem;
         let (recipient_pk, recipient_sk) = kem.keypair_generate().unwrap();
 
+        let tx_key = random_tx_key();
         let spend_scalar = Scalar::random(&mut rand::rngs::OsRng);
         let spend_point = G * spend_scalar;
         let spend_key = spend_point.compress().to_bytes();
@@ -647,6 +949,7 @@ mod tests {
         let output_index = 0u64;
 
         let out = construct_output(
+            &tx_key,
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             &spend_key,
@@ -689,12 +992,14 @@ mod tests {
         let kem = HybridX25519MlKem;
         let (recipient_pk, recipient_sk) = kem.keypair_generate().unwrap();
 
+        let tx_key = random_tx_key();
         let spend_scalar = Scalar::random(&mut rand::rngs::OsRng);
         let spend_key = (G * spend_scalar).compress().to_bytes();
 
         for idx in 0..4u64 {
             let amount = 100_000 * (idx + 1);
             let out = construct_output(
+                &tx_key,
                 &recipient_pk.x25519,
                 &recipient_pk.ml_kem,
                 &spend_key,
@@ -727,6 +1032,7 @@ mod tests {
         let kem = HybridX25519MlKem;
         let (recipient_pk, recipient_sk) = kem.keypair_generate().unwrap();
 
+        let tx_key = random_tx_key();
         let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
             .compress()
             .to_bytes();
@@ -735,6 +1041,7 @@ mod tests {
             .to_bytes();
 
         let out = construct_output(
+            &tx_key,
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             &spend_key,
@@ -771,11 +1078,13 @@ mod tests {
         let (recipient_pk, _) = kem.keypair_generate().unwrap();
         let (_, wrong_sk) = kem.keypair_generate().unwrap();
 
+        let tx_key = random_tx_key();
         let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
             .compress()
             .to_bytes();
 
         let out = construct_output(
+            &tx_key,
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             &spend_key,
@@ -806,11 +1115,13 @@ mod tests {
         let kem = HybridX25519MlKem;
         let (recipient_pk, recipient_sk) = kem.keypair_generate().unwrap();
 
+        let tx_key = random_tx_key();
         let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
             .compress()
             .to_bytes();
 
         let out = construct_output(
+            &tx_key,
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             &spend_key,
@@ -847,8 +1158,9 @@ mod tests {
         let kem = HybridX25519MlKem;
         let (pk, _) = kem.keypair_generate().unwrap();
 
+        let tx_key = random_tx_key();
         let identity = EdwardsPoint::default().compress().to_bytes();
-        let result = construct_output(&pk.x25519, &pk.ml_kem, &identity, 100, 0);
+        let result = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &identity, 100, 0);
         assert!(result.is_err(), "identity spend key must be rejected");
     }
 
@@ -857,8 +1169,9 @@ mod tests {
         let kem = HybridX25519MlKem;
         let (pk, _) = kem.keypair_generate().unwrap();
 
+        let tx_key = random_tx_key();
         let garbage = [0xFFu8; 32];
-        let result = construct_output(&pk.x25519, &pk.ml_kem, &garbage, 100, 0);
+        let result = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &garbage, 100, 0);
         assert!(result.is_err(), "garbage spend key must be rejected");
     }
 
@@ -871,7 +1184,8 @@ mod tests {
             .compress()
             .to_bytes();
 
-        let out = construct_output(&pk.x25519, &pk.ml_kem, &spend_key, 0, 0).unwrap();
+        let tx_key = random_tx_key();
+        let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 0, 0).unwrap();
 
         let scanned = scan_output(
             &sk.x25519,
@@ -896,11 +1210,13 @@ mod tests {
         let kem = HybridX25519MlKem;
         let (pk, sk) = kem.keypair_generate().unwrap();
 
+        let tx_key = random_tx_key();
         let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
             .compress()
             .to_bytes();
 
         let out = construct_output(
+            &tx_key,
             &pk.x25519,
             &pk.ml_kem,
             &spend_key,
@@ -932,12 +1248,13 @@ mod tests {
         let kem = HybridX25519MlKem;
         let (pk, _) = kem.keypair_generate().unwrap();
 
+        let tx_key = random_tx_key();
         let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
             .compress()
             .to_bytes();
 
-        let out0 = construct_output(&pk.x25519, &pk.ml_kem, &spend_key, 100, 0).unwrap();
-        let out1 = construct_output(&pk.x25519, &pk.ml_kem, &spend_key, 100, 1).unwrap();
+        let out0 = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 100, 0).unwrap();
+        let out1 = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 100, 1).unwrap();
 
         assert_ne!(out0.output_key, out1.output_key, "different indices must produce different O");
         assert_ne!(out0.commitment, out1.commitment, "different indices must produce different C");
@@ -953,11 +1270,12 @@ mod tests {
         let kem = HybridX25519MlKem;
         let (pk, sk) = kem.keypair_generate().unwrap();
 
+        let tx_key = random_tx_key();
         let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
             .compress()
             .to_bytes();
 
-        let out = construct_output(&pk.x25519, &pk.ml_kem, &spend_key, 999, 0).unwrap();
+        let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 999, 0).unwrap();
 
         let scanned = scan_output(
             &sk.x25519,
@@ -1025,11 +1343,12 @@ mod tests {
         let kem = HybridX25519MlKem;
         let (pk, sk) = kem.keypair_generate().unwrap();
 
+        let tx_key = random_tx_key();
         let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
             .compress()
             .to_bytes();
 
-        let out = construct_output(&pk.x25519, &pk.ml_kem, &spend_key, 500, 0).unwrap();
+        let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 500, 0).unwrap();
         let h_pqc_direct = hash_pqc_public_key(&out.pqc_public_key);
         assert_eq!(out.h_pqc, h_pqc_direct, "h_pqc from construct must match direct hash");
 
@@ -1049,5 +1368,519 @@ mod tests {
         .unwrap();
 
         assert_eq!(scanned.h_pqc, out.h_pqc, "scanner h_pqc must match sender h_pqc");
+    }
+
+    // ── Phase 1 tests: determinism, rederive, proof_secrets, key image ──
+
+    #[test]
+    fn construct_output_is_deterministic() {
+        let kem = HybridX25519MlKem;
+        let (pk, _) = kem.keypair_generate().unwrap();
+
+        let tx_key = random_tx_key();
+        let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
+            .compress()
+            .to_bytes();
+
+        let out1 = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 42, 7).unwrap();
+        let out2 = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 42, 7).unwrap();
+
+        assert_eq!(out1.output_key, out2.output_key, "O must be deterministic");
+        assert_eq!(out1.commitment, out2.commitment, "C must be deterministic");
+        assert_eq!(out1.enc_amount, out2.enc_amount, "enc_amount must be deterministic");
+        assert_eq!(out1.amount_tag, out2.amount_tag, "amount_tag must be deterministic");
+        assert_eq!(out1.view_tag_x25519, out2.view_tag_x25519, "view_tag must be deterministic");
+        assert_eq!(
+            out1.kem_ciphertext_x25519, out2.kem_ciphertext_x25519,
+            "X25519 eph pk must be deterministic"
+        );
+        assert_eq!(
+            out1.kem_ciphertext_ml_kem, out2.kem_ciphertext_ml_kem,
+            "ML-KEM CT must be deterministic"
+        );
+        assert_eq!(out1.pqc_public_key, out2.pqc_public_key, "PQC pk must be deterministic");
+        assert_eq!(out1.h_pqc, out2.h_pqc, "h_pqc must be deterministic");
+        assert_eq!(out1.y, out2.y, "y must be deterministic");
+        assert_eq!(out1.z, out2.z, "z must be deterministic");
+        assert_eq!(out1.k_amount, out2.k_amount, "k_amount must be deterministic");
+    }
+
+    #[test]
+    fn rederive_combined_ss_matches_construct() {
+        let kem = HybridX25519MlKem;
+        let (pk, _sk) = kem.keypair_generate().unwrap();
+
+        let tx_key = random_tx_key();
+        let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
+            .compress()
+            .to_bytes();
+        let amount = 500_000u64;
+        let idx = 3u64;
+
+        let out = construct_output(
+            &tx_key, &pk.x25519, &pk.ml_kem, &spend_key, amount, idx,
+        )
+        .unwrap();
+
+        let (ss_re, x25519_eph_re, ml_kem_ct_re) = rederive_combined_ss(
+            &tx_key, &pk.x25519, &pk.ml_kem, idx,
+        )
+        .unwrap();
+
+        assert_eq!(
+            x25519_eph_re, out.kem_ciphertext_x25519,
+            "rederived X25519 eph pk must match on-chain ciphertext"
+        );
+        assert_eq!(
+            ml_kem_ct_re, out.kem_ciphertext_ml_kem,
+            "rederived ML-KEM CT must match on-chain ciphertext"
+        );
+
+        let derived_o = derive_output_key(&ss_re.0, &spend_key, idx).unwrap();
+        assert_eq!(
+            derived_o, out.output_key,
+            "rederived combined_ss must produce same output key as construct"
+        );
+
+        let ps = derive_proof_secrets(&ss_re.0, idx);
+        assert_eq!(ps.y, out.y, "rederived y must match construct");
+        assert_eq!(ps.k_amount, out.k_amount, "rederived k_amount must match construct");
+    }
+
+    #[test]
+    fn derive_proof_secrets_narrow_projection() {
+        let kem = HybridX25519MlKem;
+        let (pk, _) = kem.keypair_generate().unwrap();
+
+        let tx_key = random_tx_key();
+        let idx = 0u64;
+
+        let (ss, _, _) = rederive_combined_ss(
+            &tx_key, &pk.x25519, &pk.ml_kem, idx,
+        )
+        .unwrap();
+
+        let ps = derive_proof_secrets(&ss.0, idx);
+
+        assert_ne!(ps.ho, [0u8; 32], "ho must not be zero");
+        assert_ne!(ps.y, [0u8; 32], "y must not be zero");
+        assert_ne!(ps.k_amount, [0u8; 32], "k_amount must not be zero");
+
+        let full_secrets = crate::derivation::derive_output_secrets(&ss.0, idx);
+        assert_eq!(ps.ho, full_secrets.ho, "ProofSecrets.ho must equal OutputSecrets.ho");
+        assert_eq!(ps.y, full_secrets.y, "ProofSecrets.y must equal OutputSecrets.y");
+        assert_eq!(
+            ps.k_amount, full_secrets.k_amount,
+            "ProofSecrets.k_amount must equal OutputSecrets.k_amount"
+        );
+    }
+
+    #[test]
+    fn derive_output_key_matches_construct() {
+        let kem = HybridX25519MlKem;
+        let (pk, _) = kem.keypair_generate().unwrap();
+
+        let tx_key = random_tx_key();
+        let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
+            .compress()
+            .to_bytes();
+
+        for idx in 0..4u64 {
+            let out = construct_output(
+                &tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 1000, idx,
+            )
+            .unwrap();
+
+            let (ss, _, _) = rederive_combined_ss(
+                &tx_key, &pk.x25519, &pk.ml_kem, idx,
+            )
+            .unwrap();
+
+            let derived_o = derive_output_key(&ss.0, &spend_key, idx).unwrap();
+            assert_eq!(
+                derived_o, out.output_key,
+                "derive_output_key must match construct_output's O at index {idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn derive_output_key_rejects_identity() {
+        let fake_ss = [0x42u8; 64];
+        let identity = EdwardsPoint::default().compress().to_bytes();
+
+        let result = derive_output_key(&fake_ss, &identity, 0);
+        assert!(result.is_err(), "identity spend key must be rejected");
+        eprintln!("derive_output_key identity rejection: {:?}", result.unwrap_err());
+    }
+
+    #[test]
+    fn derive_output_key_rejects_torsion_point() {
+        let fake_ss = [0x42u8; 64];
+
+        // Small-order torsion point (order 8): the bytes of the
+        // non-trivial low-order point on Curve25519.
+        let torsion_bytes: [u8; 32] = {
+            let mut b = [0u8; 32];
+            // c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa
+            // is a well-known small-order point
+            let hex = "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa";
+            for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
+                b[i] = u8::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16).unwrap();
+            }
+            b
+        };
+
+        if let Some(pt) = CompressedEdwardsY(torsion_bytes).decompress() {
+            if !pt.is_torsion_free() {
+                let result = derive_output_key(&fake_ss, &torsion_bytes, 0);
+                assert!(result.is_err(), "torsion point spend key must be rejected");
+                eprintln!("derive_output_key torsion rejection: {:?}", result.unwrap_err());
+            }
+        }
+    }
+
+    #[test]
+    fn recover_spend_pubkey_round_trip() {
+        let kem = HybridX25519MlKem;
+        let (pk, _) = kem.keypair_generate().unwrap();
+
+        let tx_key = random_tx_key();
+        let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
+            .compress()
+            .to_bytes();
+
+        for idx in 0..3u64 {
+            let (ss, _, _) = rederive_combined_ss(
+                &tx_key, &pk.x25519, &pk.ml_kem, idx,
+            )
+            .unwrap();
+
+            let output_key = derive_output_key(&ss.0, &spend_key, idx).unwrap();
+            let recovered_b = recover_recipient_spend_pubkey(&ss.0, &output_key, idx).unwrap();
+
+            assert_eq!(
+                recovered_b, spend_key,
+                "recovered spend pubkey must match original at index {idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn decrypt_amount_round_trip() {
+        let kem = HybridX25519MlKem;
+        let (pk, _) = kem.keypair_generate().unwrap();
+
+        let tx_key = random_tx_key();
+        let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
+            .compress()
+            .to_bytes();
+
+        let amounts = [0u64, 1, 999, 1_000_000_000, u64::MAX];
+        for (idx, &amount) in amounts.iter().enumerate() {
+            let out = construct_output(
+                &tx_key, &pk.x25519, &pk.ml_kem, &spend_key, amount, idx as u64,
+            )
+            .unwrap();
+
+            let (ss, _, _) = rederive_combined_ss(
+                &tx_key, &pk.x25519, &pk.ml_kem, idx as u64,
+            )
+            .unwrap();
+
+            let decrypted = decrypt_amount(&ss.0, &out.enc_amount, out.amount_tag, idx as u64)
+                .unwrap();
+            assert_eq!(
+                decrypted, amount,
+                "decrypted amount must match original (amount={amount}, idx={idx})"
+            );
+        }
+    }
+
+    #[test]
+    fn decrypt_amount_wrong_tag_fails() {
+        let kem = HybridX25519MlKem;
+        let (pk, _) = kem.keypair_generate().unwrap();
+
+        let tx_key = random_tx_key();
+        let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
+            .compress()
+            .to_bytes();
+
+        let out = construct_output(
+            &tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 12345, 0,
+        )
+        .unwrap();
+
+        let (ss, _, _) = rederive_combined_ss(&tx_key, &pk.x25519, &pk.ml_kem, 0).unwrap();
+
+        let bad_tag = out.amount_tag.wrapping_add(1);
+        let result = decrypt_amount(&ss.0, &out.enc_amount, bad_tag, 0);
+        assert!(result.is_err(), "wrong amount_tag must be rejected");
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("amount_tag mismatch"),
+            "expected amount_tag mismatch error, got: {err}"
+        );
+    }
+
+    /// Helper: get `combined_ss` and a valid `Hp(O)` point for key image tests.
+    fn setup_key_image_test() -> (
+        [u8; 64],   // combined_ss
+        [u8; 32],   // spend_secret (scalar b)
+        [u8; 32],   // output_key O
+        [u8; 32],   // hp_of_output (a valid prime-order point, NOT real hash_to_ec)
+        u64,        // output_index
+    ) {
+        let kem = HybridX25519MlKem;
+        let (pk, _) = kem.keypair_generate().unwrap();
+
+        let tx_key = random_tx_key();
+        let spend_scalar = Scalar::random(&mut rand::rngs::OsRng);
+        let spend_key = (G * spend_scalar).compress().to_bytes();
+        let idx = 2u64;
+
+        let out = construct_output(
+            &tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 1000, idx,
+        )
+        .unwrap();
+
+        let (ss, _, _) = rederive_combined_ss(&tx_key, &pk.x25519, &pk.ml_kem, idx).unwrap();
+
+        // Use a deterministic stand-in for Hp(O): hash output_key to a curve point
+        // In production, C++ provides this via hash_to_ec. For testing, we use
+        // the basepoint scaled by a hash (guaranteed prime-order and non-identity).
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(b"test-hp-of-output");
+        hasher.update(&out.output_key);
+        let hash: [u8; 32] = hasher.finalize().into();
+        let hp_scalar = Scalar::from_bytes_mod_order(hash);
+        let hp_point = (G * hp_scalar).compress().to_bytes();
+
+        (ss.0, spend_scalar.to_bytes(), out.output_key, hp_point, idx)
+    }
+
+    #[test]
+    fn key_image_both_variants_agree() {
+        let (combined_ss, spend_secret, _output_key, hp_of_output, idx) =
+            setup_key_image_test();
+
+        let from_ss = compute_output_key_image(
+            &combined_ss, idx, &spend_secret, &hp_of_output,
+        )
+        .unwrap();
+
+        let ps = derive_proof_secrets(&combined_ss, idx);
+        let from_ho = compute_output_key_image_from_ho(
+            &ps.ho, &spend_secret, &hp_of_output,
+        )
+        .unwrap();
+
+        assert_eq!(
+            from_ss.key_image, from_ho.key_image,
+            "compute_output_key_image and _from_ho must produce identical key images"
+        );
+        assert_eq!(
+            from_ss.spend_secret_x.as_ref(),
+            from_ho.spend_secret_x.as_ref(),
+            "both variants must produce identical spend_secret_x"
+        );
+    }
+
+    #[test]
+    fn key_image_is_deterministic() {
+        let (combined_ss, spend_secret, _output_key, hp_of_output, idx) =
+            setup_key_image_test();
+
+        let r1 = compute_output_key_image(&combined_ss, idx, &spend_secret, &hp_of_output).unwrap();
+        let r2 = compute_output_key_image(&combined_ss, idx, &spend_secret, &hp_of_output).unwrap();
+
+        assert_eq!(r1.key_image, r2.key_image, "key image must be deterministic");
+        assert_eq!(
+            r1.spend_secret_x.as_ref(),
+            r2.spend_secret_x.as_ref(),
+            "spend_secret_x must be deterministic"
+        );
+    }
+
+    #[test]
+    fn key_image_rejects_identity_hp() {
+        let (combined_ss, spend_secret, _, _, idx) = setup_key_image_test();
+
+        let identity = EdwardsPoint::default().compress().to_bytes();
+        let result = compute_output_key_image(&combined_ss, idx, &spend_secret, &identity);
+        assert!(result.is_err(), "identity Hp(O) must be rejected");
+        eprintln!("key_image identity Hp(O) rejection: {:?}", result.unwrap_err());
+    }
+
+    #[test]
+    fn key_image_rejects_non_canonical_spend_secret() {
+        let (combined_ss, _, _, hp_of_output, idx) = setup_key_image_test();
+
+        // L (the group order) is NOT a valid canonical scalar
+        let l_bytes: [u8; 32] = [
+            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
+            0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+        ];
+
+        let result = compute_output_key_image(&combined_ss, idx, &l_bytes, &hp_of_output);
+        assert!(result.is_err(), "non-canonical spend secret must be rejected");
+        eprintln!("key_image non-canonical rejection: {:?}", result.unwrap_err());
+    }
+
+    #[test]
+    fn full_proof_pipeline_end_to_end() {
+        let kem = HybridX25519MlKem;
+        let (pk, sk) = kem.keypair_generate().unwrap();
+
+        let tx_key = random_tx_key();
+        let spend_scalar = Scalar::random(&mut rand::rngs::OsRng);
+        let spend_key = (G * spend_scalar).compress().to_bytes();
+        let amount = 7_500_000u64;
+        let idx = 1u64;
+
+        // Step 1: Sender constructs output
+        let out = construct_output(
+            &tx_key, &pk.x25519, &pk.ml_kem, &spend_key, amount, idx,
+        )
+        .unwrap();
+        eprintln!("[pipeline] constructed output O={}", hex::encode(out.output_key));
+
+        // Step 2: Sender rederives combined_ss from tx_key (outbound proof path)
+        let (ss_re, x25519_eph_re, ml_kem_ct_re) = rederive_combined_ss(
+            &tx_key, &pk.x25519, &pk.ml_kem, idx,
+        )
+        .unwrap();
+        assert_eq!(x25519_eph_re, out.kem_ciphertext_x25519, "KEM CT X25519 integrity");
+        assert_eq!(ml_kem_ct_re, out.kem_ciphertext_ml_kem, "KEM CT ML-KEM integrity");
+        eprintln!("[pipeline] rederived combined_ss, KEM CT matches on-chain");
+
+        // Step 3: Derive proof secrets (narrow projection)
+        let ps = derive_proof_secrets(&ss_re.0, idx);
+        assert_eq!(ps.y, out.y, "proof_secrets.y must match construct y");
+        assert_eq!(ps.k_amount, out.k_amount, "proof_secrets.k_amount must match construct k_amount");
+        eprintln!("[pipeline] derived ProofSecrets (ho, y, k_amount)");
+
+        // Step 4: Derive output key and verify
+        let derived_o = derive_output_key(&ss_re.0, &spend_key, idx).unwrap();
+        assert_eq!(derived_o, out.output_key, "derived O must match");
+        eprintln!("[pipeline] derive_output_key matches construct");
+
+        // Step 5: Recover spend pubkey
+        let recovered_b = recover_recipient_spend_pubkey(&ss_re.0, &out.output_key, idx).unwrap();
+        assert_eq!(recovered_b, spend_key, "recovered B' must match original spend key");
+        eprintln!("[pipeline] recover_recipient_spend_pubkey round-trips");
+
+        // Step 6: Decrypt amount
+        let decrypted = decrypt_amount(&ss_re.0, &out.enc_amount, out.amount_tag, idx).unwrap();
+        assert_eq!(decrypted, amount, "decrypted amount must match");
+        eprintln!("[pipeline] decrypt_amount = {decrypted}");
+
+        // Step 7: Recipient scans and verifies
+        let scanned = scan_output(
+            &sk.x25519,
+            &sk.ml_kem,
+            &out.kem_ciphertext_x25519,
+            &out.kem_ciphertext_ml_kem,
+            &out.output_key,
+            &out.commitment,
+            &out.enc_amount,
+            out.amount_tag,
+            out.view_tag_x25519,
+            &spend_key,
+            idx,
+        )
+        .unwrap();
+        assert_eq!(scanned.amount, amount, "scan amount must match");
+        eprintln!("[pipeline] scan_output succeeds, amount={}", scanned.amount);
+
+        // Step 8: Compute key image (using test stand-in for Hp(O))
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(b"test-hp-of-output");
+        hasher.update(&out.output_key);
+        let hash: [u8; 32] = hasher.finalize().into();
+        let hp_scalar = Scalar::from_bytes_mod_order(hash);
+        let hp_point = (G * hp_scalar).compress().to_bytes();
+
+        let ki_result = compute_output_key_image(
+            &ss_re.0, idx, &spend_scalar.to_bytes(), &hp_point,
+        )
+        .unwrap();
+
+        assert_ne!(ki_result.key_image, [0u8; 32], "key image must not be zero");
+        eprintln!("[pipeline] key_image computed: {}", hex::encode(ki_result.key_image));
+
+        // Verify x = ho + b
+        let ho_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ps.ho))
+            .expect("ho must be canonical");
+        let expected_x = ho_scalar + spend_scalar;
+        assert_eq!(
+            ki_result.spend_secret_x.as_ref(),
+            &expected_x.to_bytes(),
+            "spend_secret_x must equal ho + b"
+        );
+
+        // Verify I = x * Hp(O)
+        let hp_pt = CompressedEdwardsY(hp_point).decompress().unwrap();
+        let expected_ki = (expected_x * hp_pt).compress().to_bytes();
+        assert_eq!(
+            ki_result.key_image, expected_ki,
+            "key image must equal x * Hp(O)"
+        );
+        eprintln!("[pipeline] key image algebraically verified: I = x * Hp(O)");
+
+        // Step 9: Verify _from_ho variant agrees
+        let ki_from_ho = compute_output_key_image_from_ho(
+            &ps.ho, &spend_scalar.to_bytes(), &hp_point,
+        )
+        .unwrap();
+        assert_eq!(
+            ki_result.key_image, ki_from_ho.key_image,
+            "_from_ho variant must produce same key image"
+        );
+        eprintln!("[pipeline] _from_ho variant agrees -- full pipeline passed");
+    }
+
+    #[test]
+    fn different_tx_keys_produce_different_outputs() {
+        let kem = HybridX25519MlKem;
+        let (pk, _) = kem.keypair_generate().unwrap();
+
+        let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
+            .compress()
+            .to_bytes();
+
+        let tx_key1 = random_tx_key();
+        let tx_key2 = random_tx_key();
+
+        let out1 = construct_output(&tx_key1, &pk.x25519, &pk.ml_kem, &spend_key, 100, 0).unwrap();
+        let out2 = construct_output(&tx_key2, &pk.x25519, &pk.ml_kem, &spend_key, 100, 0).unwrap();
+
+        assert_ne!(
+            out1.output_key, out2.output_key,
+            "different tx_keys must produce different O"
+        );
+        assert_ne!(
+            out1.kem_ciphertext_x25519, out2.kem_ciphertext_x25519,
+            "different tx_keys must produce different X25519 eph keys"
+        );
+        assert_ne!(
+            out1.kem_ciphertext_ml_kem, out2.kem_ciphertext_ml_kem,
+            "different tx_keys must produce different ML-KEM CTs"
+        );
+    }
+
+    #[test]
+    fn rederive_combined_ss_rejects_wrong_kem_ek_length() {
+        let tx_key = random_tx_key();
+        let x25519_pk = [0x42u8; 32];
+        let bad_ek = vec![0u8; 100]; // wrong length
+
+        let result = rederive_combined_ss(&tx_key, &x25519_pk, &bad_ek, 0);
+        assert!(result.is_err(), "wrong ML-KEM EK length must be rejected");
     }
 }

@@ -11,16 +11,18 @@ use shekyl_crypto_pq::{
 };
 
 fuzz_target!(|data: &[u8]| {
-    if data.len() < 8 + 32 + 8 {
+    if data.len() < 8 + 8 + 32 + 32 {
         return;
     }
 
     let amount = u64::from_le_bytes(data[..8].try_into().unwrap());
     let output_index = u64::from_le_bytes(data[8..16].try_into().unwrap()) % 256;
 
-    // Fuzz spend_key: arbitrary 32 bytes (treated as compressed point)
+    let mut tx_key = [0u8; 32];
+    tx_key.copy_from_slice(&data[16..48]);
+
     let mut spend_key = [0u8; 32];
-    spend_key.copy_from_slice(&data[16..48]);
+    spend_key.copy_from_slice(&data[48..80]);
 
     let kem = HybridX25519MlKem;
     let (pk, sk) = match kem.keypair_generate() {
@@ -28,8 +30,7 @@ fuzz_target!(|data: &[u8]| {
         Err(_) => return,
     };
 
-    // Construct must not panic regardless of inputs
-    let od = match construct_output(&pk.x25519, &pk.ml_kem, &spend_key, amount, output_index) {
+    let od = match construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, amount, output_index) {
         Ok(od) => od,
         Err(_) => return,
     };

@@ -2852,6 +2852,7 @@ pub unsafe extern "C" fn shekyl_fcmp_build_witness_header(
 /// Construct a two-component output via the unified HKDF path.
 ///
 /// # Safety
+/// - `tx_key_secret_ptr` must point to 32 bytes (sender's tx secret key).
 /// - `x25519_pk` must point to 32 bytes.
 /// - `ml_kem_ek` must point to `ml_kem_ek_len` bytes (expected: 1184).
 /// - `spend_key` must point to 32 bytes (compressed Edwards point B).
@@ -2859,6 +2860,7 @@ pub unsafe extern "C" fn shekyl_fcmp_build_witness_header(
 ///   with `shekyl_buffer_free` when done.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_construct_output(
+    tx_key_secret_ptr: *const u8,
     x25519_pk: *const u8,
     ml_kem_ek: *const u8,
     ml_kem_ek_len: usize,
@@ -2882,6 +2884,10 @@ pub unsafe extern "C" fn shekyl_construct_output(
         success: false,
     };
 
+    let tx_key = match arr32_from_ptr(tx_key_secret_ptr) {
+        Some(v) => v,
+        None => return fail,
+    };
     let x_pk = match arr32_from_ptr(x25519_pk) {
         Some(v) => v,
         None => return fail,
@@ -2896,7 +2902,7 @@ pub unsafe extern "C" fn shekyl_construct_output(
     };
 
     use shekyl_crypto_pq::output::construct_output;
-    match construct_output(&x_pk, ek, &sk, amount, output_index) {
+    match construct_output(&tx_key, &x_pk, ek, &sk, amount, output_index) {
         Ok(out) => ShekylOutputData {
             output_key: out.output_key,
             commitment: out.commitment,

@@ -140,8 +140,8 @@ This document consolidates key TODOs identified across Shekyl documentation and 
   - **Signatures**: Hybrid `Ed25519 + ML-DSA-65`; both must verify.
   - **KEM**: Hybrid `X25519 + ML-KEM-768` ships at genesis for per-output PQC key derivation.
 - **Types**: `HybridPublicKey`, `HybridSecretKey`, `HybridSignature`; `HybridKemPublicKey`, `HybridKemSecretKey`, `HybridCiphertext`, `SharedSecret`.
-- **Status**: Hybrid signature support is implemented with canonical serialization helpers and tests. KEM ships at genesis for per-output PQC key derivation.
-- **Integration**: Signature operations are exposed via `shekyl-ffi`; wallet/core spend-binding integration in the C++ path is still in progress.
+- **Status**: Hybrid signature support is implemented with canonical serialization helpers and tests. KEM ships at genesis for per-output PQC key derivation. Deterministic KEM encapsulation from `tx_key_secret` is implemented (`derive_kem_seed`). Proof pipeline helpers (`rederive_combined_ss`, `derive_proof_secrets`, `derive_output_key`, `recover_recipient_spend_pubkey`, `decrypt_amount`, `compute_output_key_image`) are implemented with full test coverage. KAT vectors at `docs/test_vectors/KEM_DERIVE_V1_KAT.json`.
+- **Integration**: Signature operations are exposed via `shekyl-ffi`; wallet/core spend-binding integration in the C++ path is still in progress. Proof helper FFI exports and C++ caller updates are deferred to Phase 3-4 of the Keccak eviction plan.
 
 ### 2.4 Gaps in PQC documentation
 
@@ -187,8 +187,11 @@ Remaining:
 Ships at genesis for per-output PQC key derivation:
 
 - X25519 + ML-KEM-768 hybrid KEM for per-output PQC keypair derivation
+- **Deterministic encapsulation** from `tx_key_secret` via `derive_kem_seed` (HKDF-SHA-512, salt `"shekyl-output-kem-v1"`, info = SHA3-256 recipient fingerprint &#124;&#124; index)
 - ML-KEM ciphertexts stored in `tx_extra` tag `0x06`
-- Combined shared secret via `HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = "shekyl-kem-v1", info = context_bytes)`
+- Combined shared secret via `HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = "shekyl-kem-v1", info = "")`
+- Proof helpers: `rederive_combined_ss`, `derive_proof_secrets`, `derive_output_key`, `recover_recipient_spend_pubkey`, `decrypt_amount`, `compute_output_key_image`
+- `fips203` pinned to `=0.4.3` (exact) with KAT tripwire (`KEM_DERIVE_V1_KAT.json`)
 - Full specification in `docs/POST_QUANTUM_CRYPTOGRAPHY.md` under "Per-Output PQC Key Derivation"
 
 ### Phase 3: FFI and C++ integration

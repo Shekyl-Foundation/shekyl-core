@@ -1,6 +1,6 @@
 # Post Quantum Cryptography (PQC)
 
-> **Last updated:** 2026-04-07
+> **Last updated:** 2026-04-10
 
 ## Purpose
 
@@ -135,42 +135,109 @@ membership; each `pqc_auths[i]` proves authorization for that input.
 ## Per-Output PQC Key Derivation
 
 Each transaction output receives a unique PQC keypair to prevent transaction
-linkability. The derivation flow is:
+linkability. KEM encapsulation is **deterministic** from the transaction key,
+recipient public keys, and output index. This allows the sender to re-derive
+`combined_ss` at proof time from `tx_key_secret` (stored in `m_tx_keys`)
+and public data, without caching per-output shared secrets.
 
-1. **Sender** reads the recipient's ML-KEM-768 encapsulation key from their
-   address (the PQC segment of the Bech32m address).
-2. **Sender** performs ML-KEM-768 encapsulation, producing:
-   - `ml_kem_ciphertext` (1088 bytes, stored in `tx_extra` tag `0x06`)
-   - `ml_kem_shared_secret` (32 bytes)
-3. **Sender** performs X25519 ECDH with the recipient's classical view key,
-   producing `x25519_shared_secret` (32 bytes).
-4. **Combined shared secret:**
+The derivation flow is:
+
+1. **Sender** reads the recipient's ML-KEM-768 encapsulation key and X25519
+   public key from their address (the PQC segment of the Bech32m address).
+2. **Derive deterministic per-output KEM seed:**
+   ```
+   fingerprint = SHA3-256(x25519_pk || ml_kem_ek)           // 32 bytes
+   info        = fingerprint || output_index_le64            // 40 bytes
+   per_output_seed = HKDF-SHA-512(
+     ikm  = tx_key_secret,
+     salt = "shekyl-output-kem-v1",
+     info = info
+   )                                                         // 64 bytes
+   ```
+   The first 32 bytes seed the X25519 ephemeral key; the last 32 bytes seed
+   ML-KEM-768 encapsulation.
+3. **Deterministic X25519 ECDH:**
+   ```
+   x25519_eph_sk = per_output_seed[0..32]
+   x25519_eph_pk = X25519(x25519_eph_sk, basepoint)
+   x25519_shared_secret = X25519(x25519_eph_sk, recipient_x25519_pk)
+   ```
+4. **Deterministic ML-KEM-768 encapsulation:**
+   ```
+   ml_kem_seed = per_output_seed[32..64]
+   (ml_kem_shared_secret, ml_kem_ciphertext) = ML-KEM-768.EncapsFromSeed(recipient_ek, ml_kem_seed)
+   ```
+   `ml_kem_ciphertext` (1088 bytes) is stored in `tx_extra` tag `0x06`.
+5. **Combined shared secret:**
    ```
    combined_ss = HKDF-SHA-512(
      ikm  = x25519_shared_secret || ml_kem_shared_secret,
      salt = "shekyl-kem-v1",
-     info = output_index || tx_public_key
-   )
+     info = ""
+   )                                                         // 64 bytes
    ```
-5. **Derive per-output ML-DSA-65 keypair:**
+6. **Derive per-output secrets** from `combined_ss` (see HKDF Label Registry below).
+7. **Derive per-output ML-DSA-65 keypair:**
    ```
-   (pqc_pk, pqc_sk) = ML-DSA-65.KeyGen(seed = HKDF-Expand(combined_ss, "shekyl-pqc-output-key", 32))
+   (pqc_pk, pqc_sk) = ML-DSA-65.KeyGen(seed = HKDF-Expand(combined_ss, "shekyl-pqc-output", 32))
    ```
-6. **Commit** `H(pqc_pk)` as the 4th scalar in the curve tree leaf for this
+8. **Commit** `H(pqc_pk)` as the 4th scalar in the curve tree leaf for this
    output.
 
-The recipient reverses steps 2-5 using their ML-KEM-768 decapsulation key and
+The recipient reverses steps 3-7 using their ML-KEM-768 decapsulation key and
 X25519 secret key to recover the per-output PQC keypair.
 
 For **coinbase transactions**, the miner self-encapsulates to their own
 ML-KEM-768 key, ensuring per-output PQC uniqueness even for miner rewards.
 
+### Proof Helpers
+
+The sender can re-derive `combined_ss` at proof time without storing it:
+
+- **`rederive_combined_ss(tx_key_secret, x25519_pk, ml_kem_ek, output_index)`**:
+  Replays steps 2-5 above. Returns `(combined_ss, x25519_eph_pk, ml_kem_ct)`.
+  The verifier compares `x25519_eph_pk` and `ml_kem_ct` against on-chain data
+  for integrity.
+
+- **`derive_proof_secrets(combined_ss, output_index)`**: Returns the narrow
+  projection `ProofSecrets(ho, y, k_amount)`. This is the ONLY function that
+  converts `combined_ss` into values that leave Rust in the proof path. It
+  does NOT return `z`, `ml_dsa_seed`, or `amount_tag`.
+
+- **`derive_output_key(combined_ss, spend_key, output_index)`**: Computes
+  `O = ho*G + B + y*T`. Validates `spend_key` is on the prime-order subgroup.
+
+- **`recover_recipient_spend_pubkey(combined_ss, output_key, output_index)`**:
+  Computes `B' = O - ho*G - y*T` for subaddress lookup. Validates the
+  recovered point is prime-order and non-identity.
+
+- **`decrypt_amount(combined_ss, enc_amount, amount_tag, output_index)`**:
+  Decrypts the amount and verifies the `amount_tag`.
+
+- **`compute_output_key_image(combined_ss, output_index, spend_secret, hp_of_O)`**:
+  Derives `ho` internally and computes `I = x * Hp(O)` where `x = ho + b`.
+  Returns both the key image and spend secret `x`. `Hp(O)` is provided by
+  C++ via `hash_to_ec` (Category 2 Keccak, stays in C++).
+
+- **`compute_output_key_image_from_ho(ho, spend_secret, hp_of_O)`**: Variant
+  for the `tx_source_entry` boundary where `ho` has already been extracted.
+
 ### HKDF Label Registry
 
-All per-output secrets are derived via HKDF-SHA-512. Two derivation contexts
-exist: the primary combined-SS derivation (using both X25519 and ML-KEM
-shared secrets), and a secondary X25519-only derivation for fast wallet
-scanning.
+All per-output secrets are derived via HKDF-SHA-512. Three derivation contexts
+exist: the KEM seed derivation (from `tx_key_secret`), the primary combined-SS
+derivation (from `combined_ss`), and a secondary X25519-only derivation for
+fast wallet scanning.
+
+**KEM seed derivation (from tx_key_secret):**
+
+| Secret | Salt | Info string | Output | Notes |
+|--------|------|-------------|--------|-------|
+| `per_output_seed` | `shekyl-output-kem-v1` | SHA3-256(x25519\_pk &#124;&#124; ml\_kem\_ek) &#124;&#124; index\_le64 | 64 B | First 32B = X25519 eph seed, last 32B = ML-KEM encaps seed |
+
+- `fips203` is pinned to `=0.4.3` (exact) because `DummyRng::fill_bytes =
+  unimplemented!()` pattern means a minor-version bump could panic at runtime.
+- KAT vectors: `docs/test_vectors/KEM_DERIVE_V1_KAT.json`
 
 **Primary derivation (combined shared secret):**
 

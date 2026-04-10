@@ -4,6 +4,34 @@
 
 ### ✨ Added
 
+- **Deterministic KEM encapsulation from `tx_key_secret`.** `construct_output`
+  now derives X25519 ephemeral keys and ML-KEM ciphertexts deterministically
+  via HKDF-SHA-512 (`derive_kem_seed`), eliminating the need to cache
+  per-output shared secrets. The sender can re-derive `combined_ss` at proof
+  time from `tx_key_secret` and public data.
+
+- **Proof pipeline helpers in `shekyl-crypto-pq`.** Seven new functions:
+  `rederive_combined_ss`, `derive_proof_secrets`, `derive_output_key`,
+  `recover_recipient_spend_pubkey`, `decrypt_amount`,
+  `compute_output_key_image`, and `compute_output_key_image_from_ho`. These
+  support the V3 tx_proof / reserve_proof / key-image protocols. The narrow
+  `ProofSecrets(ho, y, k_amount)` projection ensures `combined_ss` never
+  crosses the FFI boundary.
+
+- **`shekyl-proofs` crate skeleton.** New crate under `rust/` with `tx_proof`,
+  `reserve_proof`, and `error` modules. Includes 10-point round-trip test
+  skeleton (exit criterion for Phase 5).
+
+- **KEM derivation KAT vectors.** `docs/test_vectors/KEM_DERIVE_V1_KAT.json`
+  with 8 pinned vectors for `derive_kem_seed`. Serves as tripwire against
+  silent behavior changes from `fips203` or `curve25519-dalek` upgrades.
+
+- **`fips203` exact version pin.** Pinned to `=0.4.3` with audit comment
+  explaining the `DummyRng::fill_bytes = unimplemented!()` risk.
+
+- **Fuzz target for `derive_output_key`.** Exercises `derive_output_key` and
+  `recover_recipient_spend_pubkey` round-trip with fuzzer-supplied inputs.
+
 - **Comprehensive CLI User Guide (`docs/USER_GUIDE.md`).** Covers all shipped
   executables, daemon operation (flags, config file, console commands), wallet
   CLI (create, restore, send, receive, proofs), staking (tiers, unstake,
