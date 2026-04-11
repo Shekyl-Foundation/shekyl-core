@@ -364,26 +364,31 @@ namespace cryptonote
       }
       summary_inputs_money += src_entr.amount;
 
-      //key_derivation recv_derivation;
       in_contexts.push_back(input_generation_context_data());
       keypair& in_ephemeral = in_contexts.back().in_ephemeral;
       crypto::key_image img;
       const auto& out_key = reinterpret_cast<const crypto::public_key&>(src_entr.outputs[src_entr.real_output].second.dest);
-      if(!generate_key_image_helper(sender_account_keys, subaddresses, out_key, src_entr.real_out_tx_key, src_entr.real_out_additional_tx_keys, src_entr.real_output_in_tx_index, in_ephemeral,img, hwdev))
+      if (src_entr.v3_ho_valid)
       {
-        LOG_ERROR("Key image generation failed!");
-        return false;
+        // v3: x = ho + b, KI = x * Hp(O)
+        crypto::secret_key x_secret;
+        sc_add(reinterpret_cast<unsigned char*>(&x_secret),
+               reinterpret_cast<const unsigned char*>(&src_entr.ho),
+               reinterpret_cast<const unsigned char*>(&sender_account_keys.m_spend_secret_key));
+        in_ephemeral.pub = out_key;
+        in_ephemeral.sec = x_secret;
+        crypto::generate_key_image(out_key, x_secret, img);
+        memwipe(&x_secret, sizeof(x_secret));
       }
-
-      //check that derivated key is equal with real output key
-      if(!(in_ephemeral.pub == src_entr.outputs[src_entr.real_output].second.dest) )
+      else
       {
-        LOG_ERROR("derived public key mismatch with output public key at index " << idx << ", real out " << src_entr.real_output << "! "<< ENDL << "derived_key:"
-          << string_tools::pod_to_hex(in_ephemeral.pub) << ENDL << "real output_public_key:"
-          << string_tools::pod_to_hex(src_entr.outputs[src_entr.real_output].second.dest) );
-        LOG_ERROR("amount " << src_entr.amount << ", rct " << src_entr.rct);
-        LOG_ERROR("tx pubkey " << src_entr.real_out_tx_key << ", real_output_in_tx_index " << src_entr.real_output_in_tx_index);
-        return false;
+        if(!generate_key_image_helper(sender_account_keys, subaddresses, out_key, src_entr.real_out_tx_key, src_entr.real_out_additional_tx_keys, src_entr.real_output_in_tx_index, in_ephemeral, img, hwdev))
+        {
+          LOG_ERROR("Key image generation failed!");
+          return false;
+        }
+        CHECK_AND_ASSERT_MES(in_ephemeral.pub == src_entr.outputs[src_entr.real_output].second.dest,
+          false, "derived public key mismatch with output public key at index " << idx);
       }
 
       //put key image into tx input

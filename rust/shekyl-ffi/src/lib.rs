@@ -3433,8 +3433,7 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
         Some(v) => { let mut arr = [0u8; 8]; arr.copy_from_slice(v); arr },
         None => return false,
     };
-    let b_key = match arr32_from_ptr(spend_secret_key) { Some(v) => v, None => return false };
-    let hp = match arr32_from_ptr(hp_of_O) { Some(v) => v, None => return false };
+    let have_spend_key = !spend_secret_key.is_null() && !hp_of_O.is_null();
 
     if ho_out.is_null() || y_out.is_null() || z_out.is_null() || k_amount_out.is_null()
         || amount_out.is_null() || recovered_spend_key_out.is_null()
@@ -3467,16 +3466,21 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
     *pqc_sk_out = ShekylBuffer::from_vec(recovered.pqc_secret_key.clone());
     *h_pqc_out = recovered.h_pqc;
 
-    let ki_result = match compute_output_key_image_from_ho(&recovered.ho, &b_key, &hp) {
-        Ok(r) => r,
-        Err(_) => return false,
-    };
-    std::ptr::copy_nonoverlapping(ki_result.key_image.as_ptr(), key_image_out, 32);
+    if have_spend_key {
+        let b_key = &*(spend_secret_key as *const [u8; 32]);
+        let hp = &*(hp_of_O as *const [u8; 32]);
+        let ki_result = match compute_output_key_image_from_ho(&recovered.ho, b_key, hp) {
+            Ok(r) => r,
+            Err(_) => return false,
+        };
+        std::ptr::copy_nonoverlapping(ki_result.key_image.as_ptr(), key_image_out, 32);
+    } else {
+        std::ptr::write_bytes(key_image_out, 0, 32);
+    }
 
     if persist_combined_ss {
         std::ptr::copy_nonoverlapping(recovered.combined_ss.as_ptr(), combined_ss_out, 64);
     }
-    // recovered drops here — ZeroizeOnDrop wipes all secrets including combined_ss
 
     true
 }

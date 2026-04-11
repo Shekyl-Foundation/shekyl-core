@@ -291,13 +291,19 @@ namespace tools
       crypto::key_image ki;
       rct::key mask;
       crypto::secret_key y{};     // v3: HKDF-derived y (T-component scalar)
-      bool v3_hkdf_scanned = false; // true when y/mask came from Rust scan_output_recover
+      crypto::secret_key k_amount{}; // v3: HKDF-derived amount key
+      std::vector<uint8_t> combined_ss; // 64-byte combined shared secret from scan; empty for hot wallets
+      bool v3_hkdf_scanned = false; // true when y/mask came from Rust shekyl_scan_and_recover
       uint64_t amount;
       uint64_t money_transfered;
       bool error;
       std::optional<cryptonote::subaddress_receive_info> received;
 
       tx_scan_info_t(): amount(0), money_transfered(0), error(true) {}
+      ~tx_scan_info_t() {
+        memwipe(k_amount.data, sizeof(k_amount.data));
+        if (!combined_ss.empty()) { memwipe(combined_ss.data(), combined_ss.size()); combined_ss.clear(); }
+      }
     };
 
     struct transfer_details
@@ -411,6 +417,10 @@ namespace tools
       std::vector<crypto::public_key> m_additional_tx_keys;
       uint32_t m_subaddr_index_major;
       uint32_t m_subaddr_index_minor;
+      crypto::secret_key m_mask{};
+      crypto::secret_key m_y{};
+      crypto::secret_key m_k_amount{};
+      std::vector<uint8_t> m_combined_shared_secret; // 64 bytes when present
 
       BEGIN_SERIALIZE_OBJECT()
         VERSION_FIELD(3)
@@ -423,6 +433,10 @@ namespace tools
         FIELD(m_additional_tx_keys)
         VARINT_FIELD(m_subaddr_index_major)
         VARINT_FIELD(m_subaddr_index_minor)
+        FIELD(m_mask)
+        FIELD(m_y)
+        FIELD(m_k_amount)
+        FIELD(m_combined_shared_secret)
       END_SERIALIZE()
     };
 

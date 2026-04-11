@@ -1,0 +1,36 @@
+[package]
+name = "shekyl-proofs-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+shekyl-proofs = { path = ".." }
+shekyl-crypto-pq = { path = "../../shekyl-crypto-pq" }
+
+[[bin]]
+name = "fuzz_verify_tx_proof_outbound"
+path = "fuzz_targets/fuzz_verify_tx_proof_outbound.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_verify_tx_proof_inbound"
+path = "fuzz_targets/fuzz_verify_tx_proof_inbound.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_verify_reserve_proof"
+path = "fuzz_targets/fuzz_verify_reserve_proof.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

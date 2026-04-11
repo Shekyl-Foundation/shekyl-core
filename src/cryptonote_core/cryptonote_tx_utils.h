@@ -52,6 +52,10 @@ namespace cryptonote
     uint64_t amount;                    //money
     bool rct;                           //true if the output is rct
     rct::key mask;                      //amount mask
+    crypto::secret_key ho{};            // v3: HKDF-derived output secret scalar; wiped on destruction
+    bool v3_ho_valid = false;           // true when ho was populated from shekyl_scan_and_recover
+
+    ~tx_source_entry() { memwipe(ho.data, sizeof(ho.data)); }
 
     void push_output(uint64_t idx, const crypto::public_key &k, uint64_t amount) { outputs.push_back(std::make_pair(idx, rct::ctkey({rct::pk2rct(k), rct::zeroCommit(amount)}))); }
 
@@ -64,6 +68,8 @@ namespace cryptonote
       FIELD(amount)
       FIELD(rct)
       FIELD(mask)
+      FIELD(ho)
+      FIELD(v3_ho_valid)
 
       if (real_output >= outputs.size())
         return false;

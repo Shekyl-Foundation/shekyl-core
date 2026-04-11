@@ -145,6 +145,8 @@ namespace crypto {
     friend void generate_tx_proof_v1(const hash &, const public_key &, const public_key &, const std::optional<public_key> &, const public_key &, const secret_key &, signature &);
     static bool check_tx_proof(const hash &, const public_key &, const public_key &, const std::optional<public_key> &, const public_key &, const signature &, const int);
     friend bool check_tx_proof(const hash &, const public_key &, const public_key &, const std::optional<public_key> &, const public_key &, const signature &, const int);
+    static void hash_to_ec(const public_key &key, ec_point &result);
+    friend void hash_to_ec(const public_key &key, ec_point &result);
     static void generate_key_image(const public_key &, const secret_key &, key_image &);
     friend void generate_key_image(const public_key &, const secret_key &, key_image &);
     static void generate_ring_signature(const hash &, const key_image &,
@@ -283,6 +285,9 @@ namespace crypto {
    * * Then he selects a bunch of outputs, including the one he spends, and uses them to generate a ring signature.
    * To check the signature, it is necessary to collect all the keys that were used to generate it. To detect double spends, it is necessary to check that each key image is used at most once.
    */
+  inline void hash_to_ec(const public_key &key, ec_point &result) {
+    crypto_ops::hash_to_ec(key, result);
+  }
   inline void generate_key_image(const public_key &pub, const secret_key &sec, key_image &image) {
     crypto_ops::generate_key_image(pub, sec, image);
   }

@@ -663,7 +663,7 @@ namespace crypto {
     return sc_isnonzero(&c2) == 0;
   }
 
-  static void hash_to_ec(const public_key &key, ge_p3 &res) {
+  static void hash_to_ec_p3(const public_key &key, ge_p3 &res) {
     hash h;
     ge_p2 point;
     ge_p1p1 point2;
@@ -673,11 +673,17 @@ namespace crypto {
     ge_p1p1_to_p3(&res, &point2);
   }
 
+  void crypto_ops::hash_to_ec(const public_key &key, ec_point &result) {
+    ge_p3 point;
+    hash_to_ec_p3(key, point);
+    ge_p3_tobytes(reinterpret_cast<unsigned char*>(&result), &point);
+  }
+
   void crypto_ops::generate_key_image(const public_key &pub, const secret_key &sec, key_image &image) {
     ge_p3 point;
+    hash_to_ec_p3(pub, point);
     ge_p2 point2;
     assert(sc_check(&sec) == 0);
-    hash_to_ec(pub, point);
     ge_scalarmult(&point2, &unwrap(sec), &point);
     ge_tobytes(&image, &point2);
   }
@@ -738,7 +744,7 @@ POP_WARNINGS
         random_scalar(k);
         ge_scalarmult_base(&tmp3, &k);
         ge_p3_tobytes(&buf->ab[i].a, &tmp3);
-        hash_to_ec(*pubs[i], tmp3);
+        hash_to_ec_p3(*pubs[i], tmp3);
         ge_scalarmult(&tmp2, &k, &tmp3);
         ge_tobytes(&buf->ab[i].b, &tmp2);
       } else {
@@ -750,7 +756,7 @@ POP_WARNINGS
         }
         ge_double_scalarmult_base_vartime(&tmp2, &sig[i].c, &tmp3, &sig[i].r);
         ge_tobytes(&buf->ab[i].a, &tmp2);
-        hash_to_ec(*pubs[i], tmp3);
+        hash_to_ec_p3(*pubs[i], tmp3);
         ge_double_scalarmult_precomp_vartime(&tmp2, &sig[i].r, &tmp3, &sig[i].c, image_pre);
         ge_tobytes(&buf->ab[i].b, &tmp2);
         sc_add(&sum, &sum, &sig[i].c);
@@ -795,7 +801,7 @@ POP_WARNINGS
       }
       ge_double_scalarmult_base_vartime(&tmp2, &sig[i].c, &tmp3, &sig[i].r);
       ge_tobytes(&buf->ab[i].a, &tmp2);
-      hash_to_ec(*pubs[i], tmp3);
+      hash_to_ec_p3(*pubs[i], tmp3);
       ge_double_scalarmult_precomp_vartime(&tmp2, &sig[i].r, &tmp3, &sig[i].c, image_pre);
       ge_tobytes(&buf->ab[i].b, &tmp2);
       sc_add(&sum, &sum, &sig[i].c);

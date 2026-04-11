@@ -2292,18 +2292,33 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
           uint8_t view_tag_on_chain = vt_opt ? vt_opt->data : 0;
 
           uint8_t ho_buf[32], y_buf[32], z_buf[32], k_amount_buf[32], recovered_b[32], h_pqc_buf[32];
+          uint8_t ki_buf[32];
+          uint8_t combined_ss_buf[64];
           uint64_t recovered_amount = 0;
           ShekylBuffer pqc_pk_buf = {}, pqc_sk_buf = {};
 
-          bool ok = shekyl_scan_output_recover(
+          const bool want_ki = !m_background_syncing && !m_watch_only;
+          const bool want_combined_ss = true; // always persist for cold-sign support
+
+          // Compute Hp(O) for key image derivation inside the merged FFI.
+          crypto::ec_point hp_of_O;
+          if (want_ki)
+            crypto::hash_to_ec(output_public_key, hp_of_O);
+
+          bool ok = shekyl_scan_and_recover(
             sk_x25519, sk_ml_kem, sk_ml_kem_len,
             ct_x25519, ct_ml_kem, cryptonote::ML_KEM_768_CT_BYTES,
             reinterpret_cast<const uint8_t*>(&output_public_key),
             commitment_ptr, enc_amount_ptr,
             amount_tag_on_chain, view_tag_on_chain,
             static_cast<uint64_t>(i),
+            want_ki ? reinterpret_cast<const uint8_t*>(&m_account.get_keys().m_spend_secret_key) : nullptr,
+            want_ki ? reinterpret_cast<const uint8_t*>(&hp_of_O) : nullptr,
+            want_combined_ss,
             ho_buf, y_buf, z_buf, k_amount_buf, &recovered_amount,
-            recovered_b, &pqc_pk_buf, &pqc_sk_buf, h_pqc_buf);
+            recovered_b, ki_buf,
+            want_combined_ss ? combined_ss_buf : nullptr,
+            &pqc_pk_buf, &pqc_sk_buf, h_pqc_buf);
 
           if (pqc_pk_buf.ptr) shekyl_buffer_free(pqc_pk_buf.ptr, pqc_pk_buf.len);
           if (pqc_sk_buf.ptr) shekyl_buffer_free(pqc_sk_buf.ptr, pqc_sk_buf.len);
@@ -2311,6 +2326,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
           if (!ok)
           {
             memwipe(ho_buf, 32); memwipe(y_buf, 32); memwipe(z_buf, 32); memwipe(k_amount_buf, 32);
+            memwipe(ki_buf, 32); memwipe(combined_ss_buf, 64);
             continue;
           }
 
@@ -2321,6 +2337,7 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
           if (subaddr_it == m_subaddresses.end())
           {
             memwipe(ho_buf, 32); memwipe(y_buf, 32); memwipe(z_buf, 32); memwipe(k_amount_buf, 32);
+            memwipe(ki_buf, 32); memwipe(combined_ss_buf, 64);
             continue;
           }
 
@@ -2332,17 +2349,13 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
           tx_scan_info[i].amount = tx_scan_info[i].money_transfered;
           memcpy(tx_scan_info[i].mask.bytes, z_buf, 32);
           memcpy(tx_scan_info[i].y.data, y_buf, 32);
+          memcpy(tx_scan_info[i].k_amount.data, k_amount_buf, 32);
           tx_scan_info[i].v3_hkdf_scanned = true;
           tx_scan_info[i].error = false;
 
-          // Key image for v3: I = (ho + b_spend) * Hp(O)
-          if (!m_background_syncing && !m_watch_only)
+          if (want_ki)
           {
-            crypto::secret_key x_secret;
-            sc_add(reinterpret_cast<unsigned char*>(&x_secret),
-                   ho_buf, reinterpret_cast<const unsigned char*>(m_account.get_keys().m_spend_secret_key.data));
-            crypto::generate_key_image(output_public_key, x_secret, tx_scan_info[i].ki);
-            memwipe(&x_secret, sizeof(x_secret));
+            memcpy(&tx_scan_info[i].ki, ki_buf, 32);
             tx_scan_info[i].output_key = output_public_key;
           }
           else
@@ -2351,7 +2364,11 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
             tx_scan_info[i].ki = rct::rct2ki(rct::zero());
           }
 
+          if (want_combined_ss)
+            tx_scan_info[i].combined_ss.assign(combined_ss_buf, combined_ss_buf + 64);
+
           memwipe(ho_buf, 32); memwipe(y_buf, 32); memwipe(z_buf, 32); memwipe(k_amount_buf, 32);
+          memwipe(ki_buf, 32); memwipe(combined_ss_buf, 64);
 
           // For v3, skip the legacy scan_output member (which calls decodeRct and
           // generate_key_image_helper_precomp — neither works for two-component keys).
@@ -2526,6 +2543,8 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
               "All Shekyl outputs require HKDF derivation (v3 from genesis).");
             td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
             td.m_y = tx_scan_info[o].y;
+            td.m_k_amount = tx_scan_info[o].k_amount;
+            td.m_combined_shared_secret = std::move(tx_scan_info[o].combined_ss);
             td.m_frozen = false;
             {
               uint8_t stk_tier = 0;
@@ -2540,45 +2559,6 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
                 td.m_staked = false;
                 td.m_stake_tier = 0;
                 td.m_stake_lock_until = 0;
-              }
-            }
-            // ── KEM decapsulation: recover combined shared secret ────────
-            td.m_combined_shared_secret.clear();
-            if (!m_account.get_keys().m_pqc_secret_key.empty())
-            {
-              cryptonote::tx_extra_pqc_kem_ciphertext kem_ct_field;
-              if (find_tx_extra_field_by_type(tx_extra_fields, kem_ct_field)
-                  && kem_ct_field.blob.size() >= (o + 1) * cryptonote::HYBRID_KEM_CT_BYTES)
-              {
-                static constexpr size_t X25519_SK_BYTES = 32;
-                const auto& pqc_sk = m_account.get_keys().m_pqc_secret_key;
-                if (pqc_sk.size() > X25519_SK_BYTES)
-                {
-                  const uint8_t* ct_ptr = reinterpret_cast<const uint8_t*>(
-                      kem_ct_field.blob.data()) + o * cryptonote::HYBRID_KEM_CT_BYTES;
-                  const uint8_t* ct_x25519 = ct_ptr;
-                  const uint8_t* ct_ml_kem = ct_ptr + cryptonote::X25519_CT_BYTES;
-
-                  // m_pqc_secret_key layout: x25519_sk[32] || ml_kem_dk[2400]
-                  const uint8_t* sk_x25519 = pqc_sk.data();
-                  const uint8_t* sk_ml_kem = pqc_sk.data() + X25519_SK_BYTES;
-                  const size_t sk_ml_kem_len = pqc_sk.size() - X25519_SK_BYTES;
-
-                  uint8_t ss[64];
-                  bool kem_ok = shekyl_kem_decapsulate(
-                      sk_x25519, sk_ml_kem, sk_ml_kem_len,
-                      ct_x25519, ct_ml_kem, cryptonote::ML_KEM_768_CT_BYTES,
-                      ss);
-                  if (kem_ok)
-                  {
-                    td.m_combined_shared_secret.assign(ss, ss + 64);
-                  }
-                  else
-                  {
-                    MWARNING("KEM decapsulation failed for output " << o << " in tx " << txid);
-                  }
-                  memwipe(ss, sizeof(ss));
-                }
               }
             }
 	    set_unspent(m_transfers.size()-1);
@@ -2645,6 +2625,8 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
               "All Shekyl outputs require HKDF derivation (v3 from genesis).");
             td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
             td.m_y = tx_scan_info[o].y;
+            td.m_k_amount = tx_scan_info[o].k_amount;
+            td.m_combined_shared_secret = std::move(tx_scan_info[o].combined_ss);
             if (output_tracker_cache)
               (*output_tracker_cache)[std::make_pair(tx.vout[o].amount, td.m_global_output_index)] = kit->second;
             THROW_WALLET_EXCEPTION_IF(td.get_public_key() != tx_scan_info[o].output_key, error::wallet_internal_error, "Inconsistent public keys");
@@ -8118,6 +8100,20 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     src.real_out_additional_tx_keys = get_additional_tx_pub_keys_from_extra(td.m_tx);
     src.real_output_in_tx_index = td.m_internal_output_index;
     src.mask = rct::sk2rct(td.m_mask);
+
+    // v3: derive ho from combined_shared_secret for key image / signing
+    if (td.m_combined_shared_secret.size() == 64)
+    {
+      uint8_t ho_tmp[32], y_tmp[32], z_tmp[32], k_tmp[32];
+      if (shekyl_derive_proof_secrets(td.m_combined_shared_secret.data(),
+            td.m_internal_output_index, ho_tmp, y_tmp, z_tmp, k_tmp))
+      {
+        memcpy(src.ho.data, ho_tmp, 32);
+        src.v3_ho_valid = true;
+      }
+      memwipe(ho_tmp, 32); memwipe(y_tmp, 32); memwipe(z_tmp, 32); memwipe(k_tmp, 32);
+    }
+
     detail::print_source_entry(src);
   }
   LOG_PRINT_L2("FCMP++ inputs prepared");
@@ -9469,7 +9465,20 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
     claim.from_height = from_h;
     claim.to_height = to_h;
 
-    crypto::generate_key_image(td.get_public_key(), keys.m_spend_secret_key, claim.k_image);
+    // v3 key image: KI = (ho + b) * Hp(O), via Rust FFI
+    THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.size() != 64,
+      error::wallet_internal_error,
+      "Staked output missing combined_shared_secret for key image derivation");
+    crypto::ec_point hp_of_O;
+    crypto::hash_to_ec(td.get_public_key(), hp_of_O);
+    bool ki_ok = shekyl_compute_output_key_image(
+      td.m_combined_shared_secret.data(),
+      td.m_internal_output_index,
+      reinterpret_cast<const uint8_t*>(&keys.m_spend_secret_key),
+      reinterpret_cast<const uint8_t*>(&hp_of_O),
+      reinterpret_cast<uint8_t*>(&claim.k_image));
+    THROW_WALLET_EXCEPTION_IF(!ki_ok, error::wallet_internal_error,
+      "Failed to compute v3 key image for stake claim");
 
     tx.vin.push_back(claim);
     total_claimed += reward;
@@ -12536,6 +12545,10 @@ std::tuple<uint64_t, uint64_t, std::vector<tools::wallet2::exported_transfer_det
     etd.m_additional_tx_keys = get_additional_tx_pub_keys_from_extra(td.m_tx);
     etd.m_subaddr_index_major = td.m_subaddr_index.major;
     etd.m_subaddr_index_minor = td.m_subaddr_index.minor;
+    etd.m_mask = td.m_mask;
+    etd.m_y = td.m_y;
+    etd.m_k_amount = td.m_k_amount;
+    etd.m_combined_shared_secret = td.m_combined_shared_secret;
 
     outs.push_back(etd);
   }
@@ -12677,7 +12690,10 @@ size_t wallet2::import_outputs(const std::tuple<uint64_t, uint64_t, std::vector<
     td.m_spent = etd.m_flags.m_spent;
     td.m_frozen = etd.m_flags.m_frozen;
     td.m_spent_height = 0;
-    td.m_mask = rct::rct2sk(rct::identity());
+    td.m_mask = etd.m_mask;
+    td.m_y = etd.m_y;
+    td.m_k_amount = etd.m_k_amount;
+    td.m_combined_shared_secret = etd.m_combined_shared_secret;
     td.m_amount = etd.m_amount;
     td.m_key_image_known = etd.m_flags.m_key_image_known;
     td.m_key_image_request = etd.m_flags.m_key_image_request;
