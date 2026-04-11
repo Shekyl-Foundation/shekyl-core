@@ -252,6 +252,15 @@ impl Wallet2 {
         self.consume_json_ptr(ptr)
     }
 
+    /// Export scanner keys from the C++ wallet.
+    ///
+    /// Returns JSON with `spend_secret`, `view_secret`, `spend_public`,
+    /// `view_public`, `x25519_sk`, `ml_kem_dk` as hex strings.
+    pub fn get_scanner_keys(&self) -> WalletResult<serde_json::Value> {
+        let ptr = unsafe { ffi::wallet2_ffi_get_scanner_keys(self.handle) };
+        self.consume_json_ptr(ptr)
+    }
+
     pub fn get_version() -> u32 {
         unsafe { ffi::wallet2_ffi_get_version() }
     }

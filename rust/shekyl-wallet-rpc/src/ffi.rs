@@ -145,6 +145,15 @@ extern "C" {
         cb: Option<ProgressCallback>,
         user_data: *mut std::ffi::c_void,
     );
+
+    /// Export keys needed by the Rust scanner as JSON.
+    ///
+    /// Returns a JSON string: `{"spend_secret":"hex","view_secret":"hex",
+    /// "spend_public":"hex","view_public":"hex","x25519_sk":"hex",
+    /// "ml_kem_dk":"hex"}`.
+    ///
+    /// Caller must free the returned string via `wallet2_ffi_free_string`.
+    pub fn wallet2_ffi_get_scanner_keys(w: *mut Wallet2Handle) -> *mut c_char;
 }
 
 pub type ProgressCallback = extern "C" fn(

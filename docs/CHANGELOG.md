@@ -4,6 +4,15 @@
 
 ### ✨ Added
 
+- **GUI wallet native-sign activation (Phase 4a).** Added `native-sign`
+  feature to the GUI wallet's `shekyl-wallet-rpc` dependency. The transfer
+  path is now: C++ prepare → Rust sign → C++ finalize.
+
+- **Scanner keys FFI export (Phase 4b).** Added `wallet2_ffi_get_scanner_keys`
+  to the wallet2 FFI layer, returning all keys needed by the Rust scanner
+  (spend/view secrets, X25519 SK, ML-KEM DK) as JSON. Added `get_scanner_keys`
+  wrapper method to `Wallet2`.
+
 - **Hybrid PQC KEM scanner (Phase 3a).** `shekyl-scanner` now scans blocks
   using the V3 two-component key derivation: X25519 + ML-KEM-768 hybrid
   KEM. The `InternalScanner::scan_transaction` pipeline parses
