@@ -2651,6 +2651,7 @@ version = "2.0.0"
 dependencies = [
  "curve25519-dalek",
  "hex",
+ "proptest",
  "serde",
  "serde_json",
  "shekyl-address",
