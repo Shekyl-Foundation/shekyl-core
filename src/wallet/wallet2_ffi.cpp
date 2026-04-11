@@ -3961,8 +3961,8 @@ char* wallet2_ffi_finalize_transfer(wallet2_handle* w,
         }
 
         // Insert encrypted amounts (9 bytes each: 8 amount + 1 tag)
-        if (proofs_doc.HasMember("ecdh_amounts") && proofs_doc["ecdh_amounts"].IsArray()) {
-            const auto& ecdh = proofs_doc["ecdh_amounts"];
+        if (proofs_doc.HasMember("enc_amounts") && proofs_doc["enc_amounts"].IsArray()) {
+            const auto& ecdh = proofs_doc["enc_amounts"];
             tx.rct_signatures.enc_amounts.resize(ecdh.Size());
             for (rj::SizeType i = 0; i < ecdh.Size(); ++i) {
                 std::string bin;

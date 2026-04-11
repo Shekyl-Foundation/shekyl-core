@@ -29,6 +29,25 @@ pub mod hex_bytes32 {
     }
 }
 
+/// Serde helper: hex-encode/decode `[u8; 9]`.
+pub mod hex_bytes9 {
+    use serde::{self, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(bytes: &[u8; 9], serializer: S) -> Result<S::Ok, S::Error>
+    where S: Serializer {
+        serializer.serialize_str(&hex::encode(bytes))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 9], D::Error>
+    where D: Deserializer<'de> {
+        let s = String::deserialize(deserializer)?;
+        let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
+        v.try_into().map_err(|v: Vec<u8>| {
+            serde::de::Error::custom(format!("expected 9 bytes, got {}", v.len()))
+        })
+    }
+}
+
 /// Serde helper: hex-encode/decode `[u8; 8]`.
 #[allow(dead_code)]
 mod hex_bytes8 {
@@ -71,23 +90,23 @@ mod hex_vec32 {
     }
 }
 
-/// Serde helper: hex-encode/decode `Vec<[u8; 8]>`.
-mod hex_vec8 {
+/// Serde helper: hex-encode/decode `Vec<[u8; 9]>`.
+mod hex_vec9 {
     use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 
-    pub fn serialize<S>(items: &Vec<[u8; 8]>, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(items: &Vec<[u8; 9]>, serializer: S) -> Result<S::Ok, S::Error>
     where S: Serializer {
         let hexes: Vec<String> = items.iter().map(|b| hex::encode(b)).collect();
         hexes.serialize(serializer)
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<[u8; 8]>, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<[u8; 9]>, D::Error>
     where D: Deserializer<'de> {
         let hexes: Vec<String> = Vec::deserialize(deserializer)?;
         hexes.into_iter().map(|s| {
             let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
             v.try_into().map_err(|v: Vec<u8>| {
-                serde::de::Error::custom(format!("expected 8 bytes, got {}", v.len()))
+                serde::de::Error::custom(format!("expected 9 bytes, got {}", v.len()))
             })
         }).collect()
     }
@@ -227,10 +246,15 @@ pub struct OutputInfo {
     pub dest_key: [u8; 32],
     /// Amount in atomic units. Must be non-zero.
     pub amount: u64,
-    /// ECDH scalar derived from tx_key and dest_key, used for amount encoding.
-    /// This is `Hs(shared_secret || output_index)` — 32 bytes.
+    /// HKDF-derived commitment mask z where C = z*G + amount*H.
+    /// Pre-derived by `shekyl_construct_output` via HKDF from the shared secret.
     #[serde(with = "hex_bytes32")]
-    pub amount_key: [u8; 32],
+    pub commitment_mask: [u8; 32],
+    /// Pre-computed encrypted amount (9 bytes): [0..8] = amount XOR k_amount,
+    /// [8] = amount_tag (HKDF-derived integrity byte).
+    /// Created by `shekyl_construct_output`.
+    #[serde(with = "hex_bytes9")]
+    pub enc_amount: [u8; 9],
 }
 
 /// Curve tree context at the reference block height.
@@ -282,9 +306,9 @@ pub struct SignedProofs {
     /// Per-output Pedersen commitments (compressed points, scalarmult8 applied).
     #[serde(with = "hex_vec32")]
     pub commitments: Vec<[u8; 32]>,
-    /// Per-output ECDH-encoded amounts (compact v2 format, 8 bytes each).
-    #[serde(with = "hex_vec8")]
-    pub ecdh_amounts: Vec<[u8; 8]>,
+    /// Per-output encrypted amounts (9 bytes each: [0..8] = XOR-encrypted, [8] = HKDF tag).
+    #[serde(with = "hex_vec9")]
+    pub enc_amounts: Vec<[u8; 9]>,
     /// Per-input pseudo-output commitments (from FCMP prover).
     #[serde(with = "hex_vec32")]
     pub pseudo_outs: Vec<[u8; 32]>,

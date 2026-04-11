@@ -43,7 +43,8 @@ fn dummy_output(amount: u64) -> OutputInfo {
     OutputInfo {
         dest_key: [20u8; 32],
         amount,
-        amount_key: [21u8; 32],
+        commitment_mask: [21u8; 32],
+        enc_amount: [0u8; 9],
     }
 }
 

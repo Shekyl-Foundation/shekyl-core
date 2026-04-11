@@ -1076,7 +1076,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Key image y-normalization check | **Done** | `blockchain.cpp` |
 | FCMP++ proof FFI call | **Done** | `blockchain.cpp` → `shekyl_fcmp_verify()` |
 | Verification caching (mempool FCMP++ hash) | **Done** | `tx_pool.cpp`, `blockchain.cpp` |
-| `genRctFcmpPlusPlus` (wallet-side proof) | **Done** | `rctSigs.cpp` |
+| `genRctFcmpPlusPlus` (wallet-side proof) | **Deprecated** | `rctSigs.cpp` (test-only; production uses `shekyl_sign_fcmp_transaction`) |
 | Wallet tree-path precomputation | **Done** | `wallet2.cpp` |
 | PQC key rederivation from stored secret | **Done** | `wallet2.cpp` |
 | Restore-from-seed PQC rederivation | **Done** | `wallet2.cpp` |
@@ -1126,7 +1126,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Wallet KEM key generation (`kem_keypair_generate`) | **Done** | `account.cpp` |
 | Full hybrid ciphertext in tag 0x06 (1120 bytes/output) | **Done** | `cryptonote_tx_utils.cpp`, `wallet2.cpp` |
 | KEM decapsulation during wallet scanning | **Done** | `wallet2.cpp` (`process_new_transaction`) |
-| `transfer_selected_rct` FCMP++ (no decoys, genRctFcmpPlusPlus) | **Done** | `wallet2.cpp` |
+| `transfer_selected_rct` FCMP++ (collapsed Rust signing) | **Done** | `wallet2.cpp` → `shekyl_sign_fcmp_transaction` |
 | `construct_tx_with_tx_key` KEM encap + 0x06/0x07 for outputs | **Done** | `cryptonote_tx_utils.cpp` |
 | Per-input PQC auth with derived ML-DSA-65 keys | **Done** | `wallet2.cpp` (`transfer_selected_rct`) |
 | Fee estimation for FCMP++ proof size | **Done** | `wallet2.cpp` (`estimate_rct_tx_size`) |
@@ -1168,7 +1168,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | FROST SAL FFI (session new/get_rerand/aggregate_and_prove/free) | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
 | FROST DKG FFI (keys import/export/validate/group_key/free) | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
 | FFI `shekyl_fcmp_prove` variable-length witness format | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
-| `genRctFcmpPlusPlus` accepts leaf chunk entries | **Done** | `rctSigs.h/cpp` |
+| `genRctFcmpPlusPlus` accepts leaf chunk entries | **Deprecated** | `rctSigs.h/cpp` (test-only; production uses collapsed Rust signing) |
 | Daemon RPC `chunk_outputs_blob` in `get_curve_tree_path` | **Done** | `core_rpc_server.cpp`, `core_rpc_server_commands_defs.h` |
 | Wallet `fcmp_precomputed_path` stores `leaf_chunk_entries` | **Done** | `wallet2.h/cpp` |
 | C++ wallet FROST code removed | **Done** | `wallet2.h/cpp`, `wallet2_ffi.cpp`, `shekyl_ffi.h` (SHEKYL_MULTISIG blocks deleted) |
@@ -1577,10 +1577,10 @@ the legacy `ecdhInfo` (`ecdhTuple`):
 
 - `ecdhHash(k)` is `cn_fast_hash("amount" || k)`, truncated to 8 bytes
 - `amount_tag` is derived from HKDF `OutputSecrets.amount_tag` (1 byte)
-- `ecdhTuple` is retained as a compatibility shim for `genRctFcmpPlusPlus`
-  internal amount encryption. Construction paths overwrite with HKDF-derived
-  values from `shekyl_construct_output` after the RCT stub is filled.
+- `ecdhTuple` has been removed from the codebase
 - `ecdhEncode` has been removed from the codebase
+- Production signing uses `shekyl_sign_fcmp_transaction` which receives
+  pre-computed 9-byte `enc_amount` values from `shekyl_construct_output`
 
 ### Witness Header (256 bytes)
 

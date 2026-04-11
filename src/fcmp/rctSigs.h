@@ -73,10 +73,9 @@ namespace rct {
         key h_pqc;         // H(pqc_pk)
     };
 
-    // FCMP++ transaction construction (replaces ring signatures with full-chain membership proof).
-    // commitment_masks: HKDF-derived z scalars (one per output) — used directly as BP+ blinding
-    //   factors and for pseudo-out balance. NOT hashed through genCommitmentMask.
-    // enc_amounts_precomputed: 9-byte (8 XOR'd amount + 1 tag) from construct_output per output.
+    // DEPRECATED: Production wallet code now uses shekyl_sign_fcmp_transaction (Rust FFI).
+    // Retained only for core_tests/chaingen.cpp test infrastructure until that is migrated.
+    // TODO(PR-wallet): migrate chaingen.cpp to shekyl_sign_fcmp_transaction and delete this.
     rctSig genRctFcmpPlusPlus(const key &message, const ctkeyV &inSk, const ctkeyV &inPk,
                                const keyV &destinations, const std::vector<xmr_amount> &inamounts,
                                const std::vector<xmr_amount> &outamounts,
@@ -89,7 +88,7 @@ namespace rct {
                                const std::vector<std::vector<fcmp_chunk_entry>> &leaf_chunk_entries,
                                const std::vector<key> &pqc_pk_hashes, hw::device &hwdev);
 
-    /** Dummy BP+, pseudo-outs, and ECDH so construct_tx can serialize/hash; wallet replaces via genRctFcmpPlusPlus. */
+    /** Dummy BP+, pseudo-outs, and ECDH so construct_tx can serialize/hash; wallet replaces via shekyl_sign_fcmp_transaction. */
     void fill_construct_tx_rct_stub(rctSig &rv, const key &message, xmr_amount txnFee,
         const crypto::hash &referenceBlock, const std::vector<xmr_amount> &inamounts,
         const std::vector<xmr_amount> &outamounts, const keyV &destinations, hw::device &hwdev);

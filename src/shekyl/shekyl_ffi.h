@@ -6,11 +6,9 @@
 #include <cstddef>
 #include <cstdint>
 
-// Fixed-size witness header per input in the FCMP++ prove/verify FFI.
-// Layout: [O:32][I:32][C:32][h_pqc:32][x:32][y:32][z:32][a:32]
-//   x, y = SAL spend secrets (O = xG + yT)
-//   z    = Pedersen commitment mask (C = zG + amount*H)
-//   a    = pseudo-out blinding factor (r_c = a - z)
+// DEPRECATED: Production code now uses shekyl_sign_fcmp_transaction (collapsed signing).
+// Retained only for genRctFcmpPlusPlus in core_tests/chaingen.cpp.
+// TODO(PR-wallet): delete when genRctFcmpPlusPlus is removed.
 #define SHEKYL_PROVE_WITNESS_HEADER_BYTES 256
 
 extern "C" {
@@ -754,9 +752,8 @@ bool shekyl_construct_curve_tree_leaf(
     uint8_t* leaf_out_ptr);
 
 // ─── Transaction Builder ─────────────────────────────────────────────────────
-// Single-call FCMP++ proof generation: BP+, membership proof, ECDH, pseudo-outs.
-// Replaces the old genRctFcmpPlusPlus + shekyl_fcmp_prove + shekyl_pqc_sign
-// multi-FFI round-trip.
+// Single-call FCMP++ proof generation: BP+, membership proof, pseudo-outs.
+// Rust owns all witness assembly. C++ never touches ephemeral spend secrets.
 
 /// Result of shekyl_sign_transaction.
 /// On success: proofs_json contains JSON-encoded SignedProofs; error_code == 0.

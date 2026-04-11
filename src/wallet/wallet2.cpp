@@ -8162,7 +8162,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
   LOG_PRINT_L2("constructing tx skeleton");
   auto sources_copy = sources;
   // Phase A: build the transaction skeleton (prefix + outputs + KEM tx_extra).
-  // rctSig is a stub at this point — overwritten by genRctFcmpPlusPlus below.
+  // rctSig is a stub at this point — overwritten by shekyl_sign_fcmp_transaction below.
   // v3_commitment_masks receives the HKDF z scalars for BP+ proof generation.
   {
     bool r = cryptonote::construct_tx_and_get_tx_key(m_account.get_keys(), m_subaddresses, sources, splitted_dsts, change_dts.addr, extra, tx, tx_key, additional_tx_keys, true, use_view_tags, get_current_hard_fork(), &v3_commitment_masks);
@@ -8173,7 +8173,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
   std::vector<size_t> ins_order;
 
   if (m_callback) m_callback->on_transfer_stage("generating_proof", 1, 4);
-  // Phase B: generate FCMP++ proof via genRctFcmpPlusPlus.
+  // Phase B: generate FCMP++ proof via shekyl_sign_fcmp_transaction (Rust).
   {
     const size_t num_inputs = selected_transfers.size();
     rct::ctkeyV inSk(num_inputs), inPk(num_inputs);
@@ -8405,31 +8405,317 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     }
     else
     {
-      LOG_PRINT_L2("calling genRctFcmpPlusPlus with " << num_inputs << " inputs, "
+      LOG_PRINT_L2("calling shekyl_sign_fcmp_transaction with " << num_inputs << " inputs, "
           << destinations_rct.size() << " outputs");
-      rct::keyV y_keys(num_inputs);
-      for (size_t i = 0; i < num_inputs; ++i)
-        y_keys[i] = rct::sk2rct(m_transfers[permuted_transfers[i]].m_y);
-      rct::key rct_tree_root;
-      memcpy(rct_tree_root.bytes, &curve_tree_root, 32);
 
-      // Save HKDF-derived enc_amounts from construction before genRctFcmpPlusPlus.
-      // v3_commitment_masks carry the HKDF z scalars for BP+ proof generation.
       THROW_WALLET_EXCEPTION_IF(v3_commitment_masks.size() != destinations_rct.size(),
           error::wallet_internal_error, "v3_commitment_masks size mismatch — construction did not produce HKDF masks");
-      auto saved_enc_amounts = tx.rct_signatures.enc_amounts;
 
-      rct::rctSig rv = rct::genRctFcmpPlusPlus(
-          rct::hash2rct(tx_prefix_hash),
-          inSk, inPk,
-          destinations_rct, inamounts, outamounts,
-          v3_commitment_masks, saved_enc_amounts,
-          y_keys,
-          fee, reference_block, rct_tree_root, tree_depth,
-          tree_paths, leaf_chunk_entries, pqc_pk_hashes,
-          m_account.get_device());
-      tx.rct_signatures = rv;
+      const uint32_t SELENE_CW = shekyl_curve_tree_selene_chunk_width();
+      const uint32_t HELIOS_CW = shekyl_curve_tree_helios_chunk_width();
 
+      // ── Build JSON FcmpSignInput[] ──────────────────────────────────
+      rapidjson::Document inputs_doc;
+      inputs_doc.SetArray();
+      auto& ialloc = inputs_doc.GetAllocator();
+
+      for (size_t i = 0; i < num_inputs; ++i)
+      {
+        const transfer_details& td = m_transfers[permuted_transfers[i]];
+        THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.size() != 64,
+            error::wallet_internal_error,
+            "Missing combined_shared_secret for input " + std::to_string(i));
+
+        rapidjson::Value inp(rapidjson::kObjectType);
+
+        std::string ki_hex = epee::string_tools::pod_to_hex(td.m_key_image);
+        inp.AddMember("ki", rapidjson::Value(ki_hex.c_str(), ialloc), ialloc);
+
+        std::string css_hex = epee::string_tools::buff_to_hex_nodelimer(
+            std::string(reinterpret_cast<const char*>(td.m_combined_shared_secret.data()),
+                        td.m_combined_shared_secret.size()));
+        inp.AddMember("combined_ss", rapidjson::Value(css_hex.c_str(), ialloc), ialloc);
+        inp.AddMember("output_index", static_cast<uint64_t>(td.m_internal_output_index), ialloc);
+
+        crypto::ec_point hp_of_O;
+        crypto::hash_to_ec(td.get_public_key(), hp_of_O);
+        std::string hp_hex = epee::string_tools::pod_to_hex(hp_of_O);
+        inp.AddMember("hp_of_O", rapidjson::Value(hp_hex.c_str(), ialloc), ialloc);
+
+        inp.AddMember("amount", inamounts[i], ialloc);
+
+        std::string mask_hex = epee::string_tools::buff_to_hex_nodelimer(
+            std::string(reinterpret_cast<const char*>(&td.m_mask), sizeof(td.m_mask)));
+        inp.AddMember("commitment_mask", rapidjson::Value(mask_hex.c_str(), ialloc), ialloc);
+
+        {
+          char hex[65];
+          for (int b = 0; b < 32; ++b) { hex[b*2] = "0123456789abcdef"[(inPk[i].mask.bytes[b] >> 4) & 0xf]; hex[b*2+1] = "0123456789abcdef"[inPk[i].mask.bytes[b] & 0xf]; }
+          hex[64] = '\0';
+          inp.AddMember("commitment", rapidjson::Value(hex, 64, ialloc), ialloc);
+        }
+        {
+          char hex[65];
+          for (int b = 0; b < 32; ++b) { hex[b*2] = "0123456789abcdef"[(inPk[i].dest.bytes[b] >> 4) & 0xf]; hex[b*2+1] = "0123456789abcdef"[inPk[i].dest.bytes[b] & 0xf]; }
+          hex[64] = '\0';
+          inp.AddMember("output_key", rapidjson::Value(hex, 64, ialloc), ialloc);
+        }
+        {
+          char hex[65];
+          for (int b = 0; b < 32; ++b) { hex[b*2] = "0123456789abcdef"[(pqc_pk_hashes[i].bytes[b] >> 4) & 0xf]; hex[b*2+1] = "0123456789abcdef"[pqc_pk_hashes[i].bytes[b] & 0xf]; }
+          hex[64] = '\0';
+          inp.AddMember("h_pqc", rapidjson::Value(hex, 64, ialloc), ialloc);
+        }
+
+        // leaf_chunk entries
+        rapidjson::Value leaf_arr(rapidjson::kArrayType);
+        for (const auto& le : leaf_chunk_entries[i])
+        {
+          rapidjson::Value le_obj(rapidjson::kObjectType);
+          auto add_key = [&](const char* name, const rct::key& k) {
+            char h[65];
+            for (int b = 0; b < 32; ++b) { h[b*2] = "0123456789abcdef"[(k.bytes[b] >> 4) & 0xf]; h[b*2+1] = "0123456789abcdef"[k.bytes[b] & 0xf]; }
+            h[64] = '\0';
+            le_obj.AddMember(rapidjson::Value(name, ialloc), rapidjson::Value(h, 64, ialloc), ialloc);
+          };
+          add_key("output_key", le.output_key);
+          add_key("key_image_gen", le.key_image_gen);
+          add_key("commitment", le.commitment);
+          add_key("h_pqc", le.h_pqc);
+          leaf_arr.PushBack(le_obj, ialloc);
+        }
+        inp.AddMember("leaf_chunk", leaf_arr, ialloc);
+
+        // Parse tree_path blob into c1/c2 branch layers
+        std::vector<std::vector<rct::key>> c1_parsed, c2_parsed;
+        {
+          const auto& tp = tree_paths[i];
+          size_t tp_off = 0;
+          if (tp_off + 2 <= tp.size())
+          {
+            tp_off += 2; // leaf_pos u16
+            tp_off += leaf_chunk_entries[i].size() * 128; // leaf scalar data
+            for (uint8_t layer = 1; layer < tree_depth && tp_off + 2 <= tp.size(); ++layer)
+            {
+              tp_off += 2; // pos_in_parent u16
+              uint32_t width = (layer % 2 == 0) ? SELENE_CW : HELIOS_CW;
+              size_t layer_bytes = width * 32;
+              if (tp_off + layer_bytes > tp.size())
+                layer_bytes = tp.size() - tp_off;
+              size_t n_siblings = layer_bytes / 32;
+              std::vector<rct::key> siblings(n_siblings);
+              for (size_t s = 0; s < n_siblings; ++s)
+                memcpy(siblings[s].bytes, tp.data() + tp_off + s * 32, 32);
+              tp_off += layer_bytes;
+              if (layer % 2 == 0)
+                c1_parsed.push_back(std::move(siblings));
+              else
+                c2_parsed.push_back(std::move(siblings));
+            }
+          }
+        }
+
+        auto layers_to_json = [&](const std::vector<std::vector<rct::key>>& layers) {
+          rapidjson::Value arr(rapidjson::kArrayType);
+          for (const auto& layer : layers) {
+            rapidjson::Value layer_arr(rapidjson::kArrayType);
+            for (const auto& k : layer) {
+              char h[65];
+              for (int b = 0; b < 32; ++b) { h[b*2] = "0123456789abcdef"[(k.bytes[b] >> 4) & 0xf]; h[b*2+1] = "0123456789abcdef"[k.bytes[b] & 0xf]; }
+              h[64] = '\0';
+              layer_arr.PushBack(rapidjson::Value(h, 64, ialloc), ialloc);
+            }
+            arr.PushBack(layer_arr, ialloc);
+          }
+          return arr;
+        };
+        inp.AddMember("c1_layers", layers_to_json(c1_parsed), ialloc);
+        inp.AddMember("c2_layers", layers_to_json(c2_parsed), ialloc);
+
+        inputs_doc.PushBack(inp, ialloc);
+      }
+
+      // ── Build JSON OutputInfo[] ─────────────────────────────────────
+      rapidjson::Document outputs_doc;
+      outputs_doc.SetArray();
+      auto& oalloc = outputs_doc.GetAllocator();
+
+      for (size_t i = 0; i < destinations_rct.size(); ++i)
+      {
+        rapidjson::Value out(rapidjson::kObjectType);
+        {
+          char hex[65];
+          for (int b = 0; b < 32; ++b) { hex[b*2] = "0123456789abcdef"[(destinations_rct[i].bytes[b] >> 4) & 0xf]; hex[b*2+1] = "0123456789abcdef"[destinations_rct[i].bytes[b] & 0xf]; }
+          hex[64] = '\0';
+          out.AddMember("dest_key", rapidjson::Value(hex, 64, oalloc), oalloc);
+        }
+        out.AddMember("amount", outamounts[i], oalloc);
+        {
+          char hex[65];
+          for (int b = 0; b < 32; ++b) { hex[b*2] = "0123456789abcdef"[(v3_commitment_masks[i].bytes[b] >> 4) & 0xf]; hex[b*2+1] = "0123456789abcdef"[v3_commitment_masks[i].bytes[b] & 0xf]; }
+          hex[64] = '\0';
+          out.AddMember("commitment_mask", rapidjson::Value(hex, 64, oalloc), oalloc);
+        }
+        {
+          const auto& ea = tx.rct_signatures.enc_amounts[i];
+          std::string hex = epee::string_tools::buff_to_hex_nodelimer(
+              std::string(reinterpret_cast<const char*>(ea.data()), ea.size()));
+          out.AddMember("enc_amount", rapidjson::Value(hex.c_str(), oalloc), oalloc);
+        }
+        outputs_doc.PushBack(out, oalloc);
+      }
+
+      // ── Serialize JSON to strings ───────────────────────────────────
+      rapidjson::StringBuffer inputs_buf, outputs_buf;
+      {
+        rapidjson::Writer<rapidjson::StringBuffer> w(inputs_buf);
+        inputs_doc.Accept(w);
+      }
+      {
+        rapidjson::Writer<rapidjson::StringBuffer> w(outputs_buf);
+        outputs_doc.Accept(w);
+      }
+
+      // ── Call shekyl_sign_fcmp_transaction ────────────────────────────
+      ShekylSignResult sign_result = shekyl_sign_fcmp_transaction(
+          reinterpret_cast<const uint8_t*>(&m_account.get_keys().m_spend_secret_key),
+          reinterpret_cast<const uint8_t*>(&tx_prefix_hash),
+          reinterpret_cast<const uint8_t*>(inputs_buf.GetString()), inputs_buf.GetSize(),
+          reinterpret_cast<const uint8_t*>(outputs_buf.GetString()), outputs_buf.GetSize(),
+          fee,
+          reinterpret_cast<const uint8_t*>(&reference_block),
+          reinterpret_cast<const uint8_t*>(&curve_tree_root),
+          tree_depth);
+
+      auto sign_cleanup = epee::misc_utils::create_scope_leave_handler([&sign_result]() {
+        if (sign_result.proofs_json.ptr) shekyl_buffer_free(sign_result.proofs_json.ptr, sign_result.proofs_json.len);
+        if (sign_result.error_message.ptr) shekyl_buffer_free(sign_result.error_message.ptr, sign_result.error_message.len);
+      });
+
+      THROW_WALLET_EXCEPTION_IF(!sign_result.success, error::wallet_internal_error,
+          std::string("shekyl_sign_fcmp_transaction failed: ") +
+          (sign_result.error_message.ptr
+              ? std::string(reinterpret_cast<const char*>(sign_result.error_message.ptr), sign_result.error_message.len)
+              : "unknown error (code " + std::to_string(sign_result.error_code) + ")"));
+
+      // ── Unpack SignedProofs JSON into tx.rct_signatures ──────────────
+      rapidjson::Document proofs_doc;
+      {
+        const char* json_str = reinterpret_cast<const char*>(sign_result.proofs_json.ptr);
+        proofs_doc.Parse(json_str, sign_result.proofs_json.len);
+        THROW_WALLET_EXCEPTION_IF(proofs_doc.HasParseError() || !proofs_doc.IsObject(),
+            error::wallet_internal_error, "Failed to parse SignedProofs JSON from Rust");
+      }
+
+      tx.rct_signatures.type = rct::RCTTypeFcmpPlusPlusPqc;
+      tx.rct_signatures.txnFee = fee;
+      tx.rct_signatures.message = rct::hash2rct(tx_prefix_hash);
+      memcpy(&tx.rct_signatures.referenceBlock, &reference_block, 32);
+
+      // outPk commitments
+      if (proofs_doc.HasMember("commitments") && proofs_doc["commitments"].IsArray()) {
+        const auto& comms = proofs_doc["commitments"];
+        tx.rct_signatures.outPk.resize(comms.Size());
+        for (rapidjson::SizeType i = 0; i < comms.Size(); ++i) {
+          std::string bin;
+          epee::string_tools::parse_hexstr_to_binbuff(comms[i].GetString(), bin);
+          THROW_WALLET_EXCEPTION_IF(bin.size() != 32, error::wallet_internal_error,
+              "Commitment size mismatch at index " + std::to_string(i));
+          memcpy(tx.rct_signatures.outPk[i].mask.bytes, bin.data(), 32);
+        }
+      }
+
+      // Bulletproofs+: deserialize Rust blob → C++ BulletproofPlus struct
+      if (proofs_doc.HasMember("bulletproof_plus") && proofs_doc["bulletproof_plus"].IsString()) {
+        std::string bp_bin;
+        epee::string_tools::parse_hexstr_to_binbuff(proofs_doc["bulletproof_plus"].GetString(), bp_bin);
+        const uint8_t* bp_data = reinterpret_cast<const uint8_t*>(bp_bin.data());
+        size_t bp_len = bp_bin.size();
+        size_t bp_off = 0;
+
+        rct::BulletproofPlus bpp{};
+        bpp.V.resize(tx.rct_signatures.outPk.size());
+        for (size_t vi = 0; vi < tx.rct_signatures.outPk.size(); ++vi)
+          bpp.V[vi] = tx.rct_signatures.outPk[vi].mask;
+
+        THROW_WALLET_EXCEPTION_IF(bp_off + 192 > bp_len, error::wallet_internal_error,
+            "BP+ blob too short for fixed fields");
+        memcpy(bpp.A.bytes,  bp_data + bp_off, 32); bp_off += 32;
+        memcpy(bpp.A1.bytes, bp_data + bp_off, 32); bp_off += 32;
+        memcpy(bpp.B.bytes,  bp_data + bp_off, 32); bp_off += 32;
+        memcpy(bpp.r1.bytes, bp_data + bp_off, 32); bp_off += 32;
+        memcpy(bpp.s1.bytes, bp_data + bp_off, 32); bp_off += 32;
+        memcpy(bpp.d1.bytes, bp_data + bp_off, 32); bp_off += 32;
+
+        uint64_t l_len = 0;
+        {
+          auto it = bp_bin.cbegin() + bp_off;
+          auto end = bp_bin.cend();
+          int rd = tools::read_varint(it, end, l_len);
+          THROW_WALLET_EXCEPTION_IF(rd <= 0, error::wallet_internal_error, "BP+ L varint read failed");
+          bp_off += rd;
+        }
+        bpp.L.resize(l_len);
+        for (uint64_t li = 0; li < l_len; ++li) {
+          THROW_WALLET_EXCEPTION_IF(bp_off + 32 > bp_len, error::wallet_internal_error, "BP+ blob underflow in L");
+          memcpy(bpp.L[li].bytes, bp_data + bp_off, 32);
+          bp_off += 32;
+        }
+
+        uint64_t r_len = 0;
+        {
+          auto it = bp_bin.cbegin() + bp_off;
+          auto end = bp_bin.cend();
+          int rd = tools::read_varint(it, end, r_len);
+          THROW_WALLET_EXCEPTION_IF(rd <= 0, error::wallet_internal_error, "BP+ R varint read failed");
+          bp_off += rd;
+        }
+        bpp.R.resize(r_len);
+        for (uint64_t ri = 0; ri < r_len; ++ri) {
+          THROW_WALLET_EXCEPTION_IF(bp_off + 32 > bp_len, error::wallet_internal_error, "BP+ blob underflow in R");
+          memcpy(bpp.R[ri].bytes, bp_data + bp_off, 32);
+          bp_off += 32;
+        }
+
+        tx.rct_signatures.p.bulletproofs_plus.clear();
+        tx.rct_signatures.p.bulletproofs_plus.push_back(std::move(bpp));
+      }
+
+      // enc_amounts (9 bytes each)
+      if (proofs_doc.HasMember("enc_amounts") && proofs_doc["enc_amounts"].IsArray()) {
+        const auto& ea_arr = proofs_doc["enc_amounts"];
+        tx.rct_signatures.enc_amounts.resize(ea_arr.Size());
+        for (rapidjson::SizeType i = 0; i < ea_arr.Size(); ++i) {
+          std::string bin;
+          epee::string_tools::parse_hexstr_to_binbuff(ea_arr[i].GetString(), bin);
+          tx.rct_signatures.enc_amounts[i].fill(0);
+          memcpy(tx.rct_signatures.enc_amounts[i].data(), bin.data(), std::min<size_t>(bin.size(), 9));
+        }
+      }
+
+      // pseudo_outs
+      if (proofs_doc.HasMember("pseudo_outs") && proofs_doc["pseudo_outs"].IsArray()) {
+        const auto& po = proofs_doc["pseudo_outs"];
+        tx.rct_signatures.p.pseudoOuts.resize(po.Size());
+        for (rapidjson::SizeType i = 0; i < po.Size(); ++i) {
+          std::string bin;
+          epee::string_tools::parse_hexstr_to_binbuff(po[i].GetString(), bin);
+          THROW_WALLET_EXCEPTION_IF(bin.size() != 32, error::wallet_internal_error, "pseudo_out size mismatch");
+          memcpy(tx.rct_signatures.p.pseudoOuts[i].bytes, bin.data(), 32);
+        }
+      }
+
+      // FCMP++ proof
+      if (proofs_doc.HasMember("fcmp_proof") && proofs_doc["fcmp_proof"].IsString()) {
+        std::string proof_bin;
+        epee::string_tools::parse_hexstr_to_binbuff(proofs_doc["fcmp_proof"].GetString(), proof_bin);
+        tx.rct_signatures.p.fcmp_pp_proof.assign(proof_bin.begin(), proof_bin.end());
+      }
+
+      // tree metadata
+      tx.rct_signatures.p.curve_trees_tree_depth = tree_depth;
+
+      // ── PQC auth signing (unchanged — already uses Rust FFI) ────────
       if (m_callback) m_callback->on_transfer_stage("signing_pqc", 2, 4);
       tx.pqc_auths.resize(num_inputs);
       for (size_t i = 0; i < num_inputs; ++i)

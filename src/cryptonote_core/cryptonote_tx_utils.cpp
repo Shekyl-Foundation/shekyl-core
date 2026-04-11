@@ -439,7 +439,7 @@ namespace cryptonote
 
     uint64_t summary_outs_money = 0;
     // Per-output data from construct_output (v3 only), used to overwrite stub RCT
-    // and to provide HKDF-correct values to genRctFcmpPlusPlus.
+    // and to provide HKDF-correct values to shekyl_sign_fcmp_transaction.
     struct v3_output_rct {
       uint8_t commitment[32];
       std::array<uint8_t, 9> enc_amount_with_tag;
@@ -600,14 +600,14 @@ namespace cryptonote
       crypto::hash tx_prefix_hash;
       get_transaction_prefix_hash(tx, tx_prefix_hash, hwdev);
       rct::ctkeyV outSk;
-      // Serializable rctSig stub (dummy BP+); the wallet overwrites via genRctFcmpPlusPlus()
+      // Serializable rctSig stub (dummy BP+); the wallet overwrites via shekyl_sign_fcmp_transaction()
       // after constructing tree paths and per-output PQC material.
       rct::fill_construct_tx_rct_stub(tx.rct_signatures, rct::hash2rct(tx_prefix_hash), amount_in - amount_out,
           crypto::null_hash, inamounts, outamounts, destinations, hwdev);
       memwipe(inSk.data(), inSk.size() * sizeof(rct::ctkey));
 
       // v3: overwrite stub commitments and enc_amounts with real HKDF-derived values.
-      // Export commitment masks (z scalars) so genRctFcmpPlusPlus can produce
+      // Export commitment masks (z scalars) so shekyl_sign_fcmp_transaction can produce
       // BP+ proofs against the HKDF-derived commitments.
       if (!v3_rct_data.empty())
       {
@@ -632,7 +632,7 @@ namespace cryptonote
     }
 
     // PQC auth signing: for FCMP++ (HF1+), per-output derived keys are used.
-    // The wallet handles PQC signing after genRctFcmpPlusPlus. Multisig
+    // The wallet handles PQC signing after shekyl_sign_fcmp_transaction. Multisig
     // pre-assembled signatures are preserved as-is.
     if (tx.version >= 3)
     {
@@ -647,7 +647,7 @@ namespace cryptonote
       else
       {
         // Binary serialization requires |pqc_auths| == |vin| for v3 spends. The wallet
-        // replaces these stubs with per-input ML-DSA-65 material after genRctFcmpPlusPlus().
+        // replaces these stubs with per-input ML-DSA-65 material after shekyl_sign_fcmp_transaction().
         tx.pqc_auths.assign(tx.vin.size(), pqc_authentication{});
       }
     }

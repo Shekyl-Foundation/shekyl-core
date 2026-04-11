@@ -21,7 +21,6 @@ use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
 use shekyl_fcmp::PqcLeafScalar;
 use shekyl_primitives::Commitment;
 
-use crate::ecdh;
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext};
 use crate::validate::validate_inputs;
@@ -66,12 +65,13 @@ pub fn sign_transaction(
     let n_out = outputs.len();
 
     // ── 2. Bulletproofs+ range proof ─────────────────────────────────
-    // Generate random masks for each output commitment.
+    // Use HKDF-derived commitment masks from OutputInfo (pre-derived by construct_output).
     let mut masks = Zeroizing::new(Vec::with_capacity(n_out));
     let commitments_for_bp: Vec<Commitment> = outputs
         .iter()
         .map(|out| {
-            let mask = Scalar::random(&mut OsRng);
+            let mask = Scalar::from_canonical_bytes(out.commitment_mask)
+                .expect("commitment_mask is not a valid scalar");
             masks.push(mask);
             Commitment::new(mask, out.amount)
         })
@@ -97,10 +97,10 @@ pub fn sign_transaction(
         })
         .collect();
 
-    // ── 4. ECDH encode amounts ───────────────────────────────────────
-    let ecdh_amounts: Vec<[u8; 8]> = outputs
+    // ── 4. Pre-computed encrypted amounts (HKDF k_amount XOR + tag) ─
+    let enc_amounts: Vec<[u8; 9]> = outputs
         .iter()
-        .map(|out| ecdh::ecdh_encode_amount(out.amount, &out.amount_key))
+        .map(|out| out.enc_amount)
         .collect();
 
     // ── 5. Pseudo-output balancing ───────────────────────────────────
@@ -177,7 +177,7 @@ pub fn sign_transaction(
     Ok(SignedProofs {
         bulletproof_plus: bp_bytes,
         commitments: out_commitments,
-        ecdh_amounts,
+        enc_amounts,
         pseudo_outs: prove_result.pseudo_outs,
         fcmp_proof: prove_result.proof.data,
         pqc_auths: Vec::new(),

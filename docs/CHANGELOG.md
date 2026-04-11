@@ -148,6 +148,29 @@
 
 ### 🔄 Changed
 
+- **Phase 2d: Collapsed signing via `shekyl_sign_fcmp_transaction` (PR-wallet).**
+  The CLI wallet's `transfer_selected_rct` now calls the Rust collapsed
+  signing FFI instead of C++ `genRctFcmpPlusPlus`. C++ builds JSON arrays
+  of `FcmpSignInput` (per-input `combined_ss`, `output_index`, tree layers)
+  and `OutputInfo` (per-output `commitment_mask`, `enc_amount`), then
+  unpacks the returned `SignedProofs` (BP+ blob, FCMP++ proof, pseudo-outs,
+  commitments, enc_amounts) into `tx.rct_signatures`. Rust owns all
+  witness assembly — C++ never touches the ephemeral spend secret `x`.
+  `genRctFcmpPlusPlus` is deprecated (retained only for `chaingen.cpp`
+  test infrastructure).
+
+- **Rust `sign_transaction` updated for v3 HKDF semantics (PR-wallet).**
+  `OutputInfo` now carries `commitment_mask: [u8; 32]` and `enc_amount:
+  [u8; 9]` (pre-derived by `construct_output`), replacing the old
+  `amount_key` field. `SignedProofs.enc_amounts` widened from 8 to 9 bytes.
+  The signing pipeline uses pre-derived HKDF masks for BP+ instead of
+  generating random ones, and uses pre-encrypted amounts instead of
+  Keccak-based ECDH encoding.
+
+- **`wallet2_ffi.cpp` `enc_amounts` field name fix.** The native-sign
+  finalize path now reads `enc_amounts` from Rust `SignedProofs` JSON
+  (was incorrectly reading `ecdh_amounts`).
+
 - **`enc_amounts` field comment updated in `rctTypes.h`.** Clarifies that
   byte [8] is the HKDF-derived `amount_tag` AAD, documents the Rust scanner
   validation behavior (reject on mismatch), and removes the stale
