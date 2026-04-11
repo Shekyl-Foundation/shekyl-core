@@ -985,10 +985,11 @@ All Phase-1 (single-signer) and Phase-2 (multisig) items are implemented. This t
 | 11 | Fuzz testing (4 targets, 10M each) | Done | `rust/shekyl-crypto-pq/fuzz/fuzz_targets/`, `docs/PQC_TEST_VECTOR_002_MULTISIG.json` |
 | 12 | FCMP++ FFI (prove/verify) | Done | `rust/shekyl-fcmp/`, `rust/shekyl-ffi/src/lib.rs` |
 | 13 | Curve tree DB (grow/trim/root/path) | Done | `src/blockchain_db/`, `rust/shekyl-fcmp/` |
-| 14 | Per-output KEM derivation | Planned | `rust/shekyl-crypto-pq/src/kem.rs`, `src/cryptonote_core/cryptonote_tx_utils.cpp` |
+| 14 | Per-output KEM derivation | Done | `rust/shekyl-crypto-pq/src/kem.rs`, `rust/shekyl-crypto-pq/src/output.rs`; wallet scanning via `shekyl_scan_and_recover` FFI, construction via `shekyl_construct_output` FFI |
 | 15 | FCMP++ `check_tx_inputs` verification | Done (skeleton) | `src/cryptonote_core/blockchain.cpp`; see `docs/FCMP_PLUS_PLUS.md` |
-| 16 | Per-input `pqc_auths` migration | Planned | `src/cryptonote_basic/cryptonote_basic.h`, `src/cryptonote_core/tx_pqc_verify.cpp` |
-| 17 | Native Rust tx signing (`shekyl-tx-builder`) | Done | `rust/shekyl-tx-builder/` — BP+, FCMP++, ECDH, PQC signing in pure Rust; exposed via `shekyl_sign_transaction` FFI and `shekyl-wallet-rpc` `native-sign` feature |
+| 16 | Per-input `pqc_auths` migration | Done | `src/cryptonote_basic/cryptonote_basic.h` (`pqc_authentication`), `src/cryptonote_core/tx_pqc_verify.cpp`; signing via `shekyl_sign_fcmp_transaction` FFI |
+| 17 | Native Rust tx signing (`shekyl-tx-builder`) | Done | `rust/shekyl-tx-builder/` — BP+, FCMP++, PQC signing in pure Rust; CLI wallet uses `shekyl_sign_fcmp_transaction` FFI (collapsed signing), GUI uses `shekyl-wallet-rpc` `native-sign` feature |
+| 18 | Proof FFI (tx proof + reserve proof) | Done | `rust/shekyl-proofs/` — outbound/inbound tx proofs, reserve proofs; `rust/shekyl-ffi/src/lib.rs` (6 proof FFI exports); `src/wallet/wallet2.cpp` callers collapsed to Rust FFI |
 
 Notes:
 - Staking and unstaking use `create_transactions_2` which routes through

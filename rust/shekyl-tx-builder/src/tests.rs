@@ -293,28 +293,4 @@ fn test_sign_pqc_length_mismatch() {
     ));
 }
 
-// ── ECDH encoding tests ──────────────────────────────────────────────
-
-#[test]
-fn test_ecdh_encode_roundtrip() {
-    let amount: u64 = 42_000_000_000;
-    let key = [0xABu8; 32];
-    let encoded = crate::ecdh::ecdh_encode_amount(amount, &key);
-    let decoded = crate::ecdh::ecdh_encode_amount(
-        u64::from_le_bytes(encoded),
-        &key,
-    );
-    // XOR is self-inverse: encode(encode(amount)) == amount
-    assert_eq!(u64::from_le_bytes(decoded), amount);
-}
-
-#[test]
-fn test_ecdh_encode_zero() {
-    let key = [0x42u8; 32];
-    let encoded = crate::ecdh::ecdh_encode_amount(0, &key);
-    let decoded_amount = {
-        let re_encoded = crate::ecdh::ecdh_encode_amount(u64::from_le_bytes(encoded), &key);
-        u64::from_le_bytes(re_encoded)
-    };
-    assert_eq!(decoded_amount, 0);
-}
+// ECDH encoding tests removed — ecdh module deleted (Keccak Category 1 cleanup).

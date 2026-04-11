@@ -274,12 +274,7 @@ namespace hw {
 
         /* ======================================================================= */
         /*                               TRANSACTION                               */
-        /* ======================================================================= */
-        void device_default::generate_tx_proof(const crypto::hash &prefix_hash, 
-                                               const crypto::public_key &R, const crypto::public_key &A, const std::optional<crypto::public_key> &B, const crypto::public_key &D, const crypto::secret_key &r, 
-                                               crypto::signature &sig) {
-            crypto::generate_tx_proof(prefix_hash, R, A, B, D, r, sig);
-        }
+        // generate_tx_proof removed (KEM-based proofs in Rust)
 
         bool device_default::open_tx(crypto::secret_key &tx_key) {
             cryptonote::keypair txkey = cryptonote::keypair::generate(*this);

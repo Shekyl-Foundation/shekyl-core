@@ -127,11 +127,23 @@
 - **`ecdhTuple` / `ecdhEncode` / `ecdhDecode` removal.** Deleted the
   Monero-era ECDH amount-masking struct and encode/decode functions from
   `rctTypes.h`, `rctOps.h/.cpp`, `device.hpp`, `device_default.hpp/.cpp`,
-  `device_ledger.hpp/.cpp`, and the Trezor protocol files. Call sites in
-  `wallet2.cpp` (`check_tx_key_helper`, `check_reserve_proof`) and
-  `rctSigs.cpp` (`decodeRctSimple`) now decode amounts inline using
-  `ecdhHash` XOR + `genCommitmentMask`, matching the V3 `enc_amounts`
-  format directly. The `enc_amount_to_ecdh_compat` shim is deleted.
+  `device_ledger.hpp/.cpp`, and the Trezor protocol files. The
+  `enc_amount_to_ecdh_compat` shim is deleted.
+
+- **`check_tx_key_helper` / `is_out_to_acc` deletion.** Both overloads of
+  `wallet2::check_tx_key_helper` and `wallet2::is_out_to_acc` removed.
+  These used `derive_public_key` (Keccak Category 1) and the old ecdhDecode
+  path. Replaced by KEM-based proof FFI round-trip in `check_tx_key`.
+
+- **`crypto::generate_tx_proof` / `generate_tx_proof_v1` / `check_tx_proof`
+  deletion.** Monero-era DH-based Schnorr proof functions removed from
+  `crypto.cpp`, `crypto.h`, `device_default.cpp`, `device_ledger.cpp`,
+  `device.hpp`, and derived device headers. `HASH_KEY_TXPROOF_V2` removed
+  from `cryptonote_config.h`.
+
+- **`ecdh.rs` module stub cleanup.** Removed orphaned `mod ecdh` declaration
+  and associated test functions from `shekyl-tx-builder` (module file was
+  previously deleted, declaration left behind).
 
 - **V3-from-genesis Boost serialization purge (`wallet2.h`).** Deleted all
   `if (ver < N)` migration branches from Boost `serialize` functions for
@@ -147,6 +159,29 @@
   `m_rct` field no longer serialized (previously removed from struct).
 
 ### 🔄 Changed
+
+- **Phase 2e: Proof functions collapsed to Rust FFI (PR-wallet).** All six
+  wallet proof functions (`get_tx_proof`, `check_tx_proof`, `get_reserve_proof`,
+  `check_reserve_proof`) now delegate to the `shekyl-proofs` Rust crate via
+  the FFI bridge. `check_tx_key` also uses the FFI round-trip (generate outbound
+  proof + verify with on-chain data). The intermediate C++ helpers
+  `check_tx_key_helper` (both overloads) and `is_out_to_acc` have been deleted.
+  New `gather_on_chain_proof_data` helper extracts output keys, commitments,
+  encrypted amounts, and KEM ciphertexts from transactions for proof
+  verification. Reserve proof wire format now includes output locators
+  (txid + index_in_tx) as a header so the verifier can independently fetch
+  on-chain data from the daemon.
+
+- **Phase 2f: Category 1 Keccak deletions (PR-wallet).** Deleted Monero-era
+  DH-based proof functions from the crypto layer: `crypto::generate_tx_proof`,
+  `crypto::generate_tx_proof_v1`, `crypto::check_tx_proof`, along with their
+  device implementations (device_default, device_ledger) and virtual interface
+  declarations. Removed `HASH_KEY_TXPROOF_V2` from `cryptonote_config.h`.
+  Removed orphaned `ecdh.rs` module declaration and tests from
+  `shekyl-tx-builder`. Remaining Category 1 functions (`derive_public_key`,
+  `derivation_to_scalar`, `derive_subaddress_public_key`, `decodeRctSimple`,
+  `ecdhHash`, `genCommitmentMask`) still have live callers in scan/sign
+  paths and are deferred to Phase 3 migration.
 
 - **Phase 2d: Collapsed signing via `shekyl_sign_fcmp_transaction` (PR-wallet).**
   The CLI wallet's `transfer_selected_rct` now calls the Rust collapsed

@@ -1577,8 +1577,7 @@ the legacy `ecdhInfo` (`ecdhTuple`):
 
 - `ecdhHash(k)` is `cn_fast_hash("amount" || k)`, truncated to 8 bytes
 - `amount_tag` is derived from HKDF `OutputSecrets.amount_tag` (1 byte)
-- `ecdhTuple` has been removed from the codebase
-- `ecdhEncode` has been removed from the codebase
+- `ecdhTuple`, `ecdhEncode`, and `ecdhDecode` have been removed from the codebase
 - Production signing uses `shekyl_sign_fcmp_transaction` which receives
   pre-computed 9-byte `enc_amount` values from `shekyl_construct_output`
 

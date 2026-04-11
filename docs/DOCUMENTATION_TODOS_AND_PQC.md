@@ -141,7 +141,7 @@ This document consolidates key TODOs identified across Shekyl documentation and 
   - **KEM**: Hybrid `X25519 + ML-KEM-768` ships at genesis for per-output PQC key derivation.
 - **Types**: `HybridPublicKey`, `HybridSecretKey`, `HybridSignature`; `HybridKemPublicKey`, `HybridKemSecretKey`, `HybridCiphertext`, `SharedSecret`.
 - **Status**: Hybrid signature support is implemented with canonical serialization helpers and tests. KEM ships at genesis for per-output PQC key derivation. Deterministic KEM encapsulation from `tx_key_secret` is implemented (`derive_kem_seed`). Proof pipeline helpers (`rederive_combined_ss`, `derive_proof_secrets`, `derive_output_key`, `recover_recipient_spend_pubkey`, `decrypt_amount`, `compute_output_key_image`) are implemented with full test coverage. KAT vectors at `docs/test_vectors/KEM_DERIVE_V1_KAT.json`.
-- **Integration**: Signature operations are exposed via `shekyl-ffi`; wallet/core spend-binding integration in the C++ path is still in progress. Proof helper FFI exports and C++ caller updates are deferred to Phase 3-4 of the Keccak eviction plan.
+- **Integration**: Signature operations are exposed via `shekyl-ffi`. Proof helper FFI exports (`shekyl_generate_tx_proof_outbound/inbound`, `shekyl_verify_tx_proof_outbound/inbound`, `shekyl_generate_reserve_proof`, `shekyl_verify_reserve_proof`, `shekyl_derive_proof_secrets`) are wired and the C++ wallet2 proof functions (`get_tx_proof`, `check_tx_proof`, `get_reserve_proof`, `check_reserve_proof`) delegate to the Rust FFI. Monero-era DH proof functions (`crypto::generate_tx_proof`, `crypto::check_tx_proof`) and helpers (`check_tx_key_helper`, `is_out_to_acc`) have been deleted.
 
 ### 2.4 Gaps in PQC documentation
 

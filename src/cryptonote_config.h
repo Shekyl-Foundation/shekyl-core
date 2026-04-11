@@ -254,7 +254,6 @@ namespace config
   const unsigned char HASH_KEY_BACKGROUND_KEYS_FILE = 0x8f;
   const unsigned char HASH_KEY_RPC_PAYMENT_NONCE = 0x58;
   const unsigned char HASH_KEY_MEMORY = 'k';
-  const unsigned char HASH_KEY_TXPROOF_V2[] = "TXPROOF_V2";
   const char HASH_KEY_MESSAGE_SIGNING[] = "ShekylMessageSignature";
   const unsigned char HASH_KEY_MM_SLOT = 'm';
   // PQC Multisig (scheme_id = 2)

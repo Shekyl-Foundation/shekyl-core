@@ -1380,74 +1380,7 @@ namespace hw {
     /*                               TRANSACTION                               */
     /* ======================================================================= */
 
-    void device_ledger::generate_tx_proof(const crypto::hash &prefix_hash, 
-                                          const crypto::public_key &R, const crypto::public_key &A, const std::optional<crypto::public_key> &B, const crypto::public_key &D, const crypto::secret_key &r, 
-                                          crypto::signature &sig)  {
-
-      AUTO_LOCK_CMD();
-
-      #ifdef DEBUG_HWDEVICE
-      const crypto::hash prefix_hash_x = prefix_hash;
-      const crypto::public_key R_x = R;
-      const crypto::public_key A_x = A;
-      const std::optional<crypto::public_key> B_x = B;
-      const crypto::public_key D_x = D;
-      const crypto::secret_key r_x = hw::ledger::decrypt(r); 
-      crypto::signature sig_x;
-      log_hexbuffer("generate_tx_proof: [[IN]]  prefix_hash ", prefix_hash_x.data, 32);
-      log_hexbuffer("generate_tx_proof: [[IN]]  R ", R_x.data, 32);
-      log_hexbuffer("generate_tx_proof: [[IN]]  A ", A_x.data, 32);
-      if (B_x) {
-        log_hexbuffer("generate_tx_proof: [[IN]]  B ", (*B_x).data, 32);
-      }
-      log_hexbuffer("generate_tx_proof: [[IN]]  D ", D_x.data, 32);
-      log_hexbuffer("generate_tx_proof: [[IN]]  r ", r_x.data, 32);       
-      #endif
-
-         
-      int offset = set_command_header(INS_GET_TX_PROOF);
-      //options
-      this->buffer_send[offset] = B?0x01:0x00;
-      offset += 1;   
-      //prefix_hash
-      memmove(&this->buffer_send[offset], prefix_hash.data, 32);
-      offset += 32;
-      // R
-      memmove(&this->buffer_send[offset], R.data, 32);
-      offset += 32;
-      // A
-      memmove(&this->buffer_send[offset], A.data, 32);
-      offset += 32;
-      // B
-      if (B) {
-        memmove(&this->buffer_send[offset], (*B).data, 32);
-      } else {
-        memset(&this->buffer_send[offset], 0, 32);
-      }
-      offset += 32;
-      // D
-      memmove(&this->buffer_send[offset], D.data, 32);
-      offset += 32;
-      // r
-      this->send_secret((unsigned char*)r.data, offset);
-
-      this->buffer_send[4] = offset-5;
-      this->length_send = offset;
-      this->exchange();
-
-      memmove(sig.c.data, &this->buffer_recv[0], 32);
-      memmove(sig.r.data, &this->buffer_recv[32], 32);
-      #ifdef DEBUG_HWDEVICE      
-      log_hexbuffer("GENERATE_TX_PROOF: **c**   ", sig.c.data, sizeof( sig.c.data));
-      log_hexbuffer("GENERATE_TX_PROOF: **r**   ", sig.r.data, sizeof( sig.r.data));
-
-      this->controle_device->generate_tx_proof(prefix_hash_x, R_x, A_x, B_x, D_x, r_x, sig_x);      
-      MDEBUG("FAIL is normal if random is not fixed in proof");
-      hw::ledger::check32("generate_tx_proof", "c", sig_x.c.data, sig.c.data);
-      hw::ledger::check32("generate_tx_proof", "r", sig_x.r.data, sig.r.data);
-
-      #endif
-    }
+    // generate_tx_proof removed (KEM-based proofs in Rust)
 
     bool device_ledger::open_tx(crypto::secret_key &tx_key) {
         AUTO_LOCK_CMD();

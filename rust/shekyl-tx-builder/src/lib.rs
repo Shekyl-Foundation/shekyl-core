@@ -44,7 +44,6 @@ mod error;
 pub mod types;
 mod validate;
 mod sign;
-mod ecdh;
 
 #[cfg(test)]
 mod tests;

@@ -139,12 +139,7 @@ namespace crypto {
     friend void generate_signature(const hash &, const public_key &, const secret_key &, signature &);
     static bool check_signature(const hash &, const public_key &, const signature &);
     friend bool check_signature(const hash &, const public_key &, const signature &);
-    static void generate_tx_proof(const hash &, const public_key &, const public_key &, const std::optional<public_key> &, const public_key &, const secret_key &, signature &);
-    friend void generate_tx_proof(const hash &, const public_key &, const public_key &, const std::optional<public_key> &, const public_key &, const secret_key &, signature &);
-    static void generate_tx_proof_v1(const hash &, const public_key &, const public_key &, const std::optional<public_key> &, const public_key &, const secret_key &, signature &);
-    friend void generate_tx_proof_v1(const hash &, const public_key &, const public_key &, const std::optional<public_key> &, const public_key &, const secret_key &, signature &);
-    static bool check_tx_proof(const hash &, const public_key &, const public_key &, const std::optional<public_key> &, const public_key &, const signature &, const int);
-    friend bool check_tx_proof(const hash &, const public_key &, const public_key &, const std::optional<public_key> &, const public_key &, const signature &, const int);
+    // generate_tx_proof, generate_tx_proof_v1, check_tx_proof removed (KEM-based proofs in Rust)
     static void hash_to_ec(const public_key &key, ec_point &result);
     friend void hash_to_ec(const public_key &key, ec_point &result);
     static void generate_key_image(const public_key &, const secret_key &, key_image &);
@@ -265,19 +260,7 @@ namespace crypto {
     return crypto_ops::check_signature(prefix_hash, pub, sig);
   }
 
-  /* Generation and checking of a tx proof; given a tx pubkey R, the recipient's view pubkey A, and the key 
-   * derivation D, the signature proves the knowledge of the tx secret key r such that R=r*G and D=r*A
-   * When the recipient's address is a subaddress, the tx pubkey R is defined as R=r*B where B is the recipient's spend pubkey
-   */
-  inline void generate_tx_proof(const hash &prefix_hash, const public_key &R, const public_key &A, const std::optional<public_key> &B, const public_key &D, const secret_key &r, signature &sig) {
-    crypto_ops::generate_tx_proof(prefix_hash, R, A, B, D, r, sig);
-  }
-  inline void generate_tx_proof_v1(const hash &prefix_hash, const public_key &R, const public_key &A, const std::optional<public_key> &B, const public_key &D, const secret_key &r, signature &sig) {
-    crypto_ops::generate_tx_proof_v1(prefix_hash, R, A, B, D, r, sig);
-  }
-  inline bool check_tx_proof(const hash &prefix_hash, const public_key &R, const public_key &A, const std::optional<public_key> &B, const public_key &D, const signature &sig, const int version) {
-    return crypto_ops::check_tx_proof(prefix_hash, R, A, B, D, sig, version);
-  }
+  // DH-based tx proof functions removed; Shekyl uses KEM-based proofs via shekyl-proofs Rust crate.
 
   /* To send money to a key:
    * * The sender generates an ephemeral key and includes it in transaction output.

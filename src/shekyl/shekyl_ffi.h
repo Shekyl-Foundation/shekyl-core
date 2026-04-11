@@ -504,110 +504,119 @@ bool shekyl_derive_proof_secrets(
     uint8_t* out_k_amount);
 
 // ─── Wallet proofs (6 exports) ───────────────────────────────────────────────
+//
+// All proof functions delegate to the shekyl-proofs Rust crate via the FFI
+// bridge. The C++ caller gathers wallet/blockchain data and passes flat
+// byte arrays; Rust handles all cryptographic proof generation/verification.
 
-// Generate outbound transaction proof.
-// tx_key_secret: 32-byte ephemeral tx secret key.
-// Returns proof bytes via ShekylBuffer (caller frees with shekyl_buffer_free).
+// Generate outbound transaction proof (sender proves payment).
+// Rust re-derives combined_ss from tx_key_secret + recipient KEM keys,
+// then projects to ProofSecrets and builds the Schnorr proof.
+// output_indices: which tx output indices belong to this recipient.
 bool shekyl_generate_tx_proof_outbound(
-    const uint8_t* tx_key_secret,
-    const uint8_t* txid,
-    const uint8_t* recipient_address,
-    size_t recipient_address_len,
-    const uint8_t* message,
+    const uint8_t* tx_key_secret,          // 32 bytes
+    const uint8_t* txid,                   // 32 bytes
+    const uint8_t* address,                // address_len bytes (serialized)
+    size_t address_len,
+    const uint8_t* message,                // message_len bytes
     size_t message_len,
-    const uint8_t* kem_cts_x25519,
-    const uint8_t* kem_cts_ml_kem,
-    size_t kem_cts_ml_kem_len,
-    const uint8_t* output_keys,
-    const uint8_t* commitments,
-    const uint8_t* enc_amounts,
-    const uint8_t* amount_tags,
+    const uint8_t* recipient_x25519_pk,    // 32 bytes
+    const uint8_t* recipient_ml_kem_ek,    // ml_kem_ek_len bytes
+    size_t ml_kem_ek_len,
+    const uint64_t* output_indices,        // output_count values
     uint32_t output_count,
     ShekylBuffer* proof_out);
 
 // Verify outbound transaction proof.
+// On success, writes verified per-output amounts to amounts_out.
+// ml_kem_cts: contiguous per-output ML-KEM ciphertexts, each
+//   ml_kem_cts_len/output_count bytes.
 bool shekyl_verify_tx_proof_outbound(
     const uint8_t* proof_bytes,
     size_t proof_len,
-    const uint8_t* txid,
-    const uint8_t* recipient_address,
-    size_t recipient_address_len,
-    const uint8_t* message,
+    const uint8_t* txid,                   // 32 bytes
+    const uint8_t* address,                // address_len bytes
+    size_t address_len,
+    const uint8_t* message,                // message_len bytes
     size_t message_len,
-    const uint8_t* kem_cts_x25519,
-    const uint8_t* kem_cts_ml_kem,
-    size_t kem_cts_ml_kem_len,
-    const uint8_t* output_keys,
-    const uint8_t* commitments,
-    const uint8_t* enc_amounts,
-    const uint8_t* amount_tags,
+    const uint8_t* recipient_spend_pubkey, // 32 bytes
+    const uint8_t* recipient_x25519_pk,    // 32 bytes
+    const uint8_t* recipient_ml_kem_ek,    // ml_kem_ek_len bytes
+    size_t ml_kem_ek_len,
+    const uint8_t* output_keys,            // output_count * 32 bytes
+    const uint8_t* commitments,            // output_count * 32 bytes
+    const uint8_t* enc_amounts,            // output_count * 8 bytes
+    const uint8_t* x25519_eph_pks,         // output_count * 32 bytes
+    const uint8_t* ml_kem_cts,             // ml_kem_cts_len total bytes
+    size_t ml_kem_cts_len,
     uint32_t output_count,
-    uint64_t* amounts_out);
+    uint64_t* amounts_out);                // output_count u64 values
 
-// Generate inbound transaction proof.
+// Generate inbound transaction proof (recipient proves receipt).
+// proof_secrets: output_count * 128 bytes — packed (ho[32]+y[32]+z[32]+k_amount[32])
+//   per output, derived via shekyl_derive_proof_secrets.
 bool shekyl_generate_tx_proof_inbound(
-    const uint8_t* view_secret_key,
-    const uint8_t* ml_kem_dk,
-    size_t ml_kem_dk_len,
-    const uint8_t* txid,
-    const uint8_t* sender_address,
-    size_t sender_address_len,
-    const uint8_t* message,
+    const uint8_t* view_secret_key,        // 32 bytes
+    const uint8_t* txid,                   // 32 bytes
+    const uint8_t* address,                // address_len bytes
+    size_t address_len,
+    const uint8_t* message,                // message_len bytes
     size_t message_len,
-    const uint8_t* kem_cts_x25519,
-    const uint8_t* kem_cts_ml_kem,
-    size_t kem_cts_ml_kem_len,
-    const uint8_t* output_keys,
-    const uint8_t* commitments,
-    const uint8_t* enc_amounts,
-    const uint8_t* amount_tags,
+    const uint8_t* proof_secrets,          // output_count * 128 bytes
     uint32_t output_count,
     ShekylBuffer* proof_out);
 
 // Verify inbound transaction proof.
+// On success, writes verified per-output amounts to amounts_out.
 bool shekyl_verify_tx_proof_inbound(
     const uint8_t* proof_bytes,
     size_t proof_len,
-    const uint8_t* view_public_key,
-    const uint8_t* txid,
-    const uint8_t* sender_address,
-    size_t sender_address_len,
-    const uint8_t* message,
+    const uint8_t* txid,                   // 32 bytes
+    const uint8_t* address,                // address_len bytes
+    size_t address_len,
+    const uint8_t* message,                // message_len bytes
     size_t message_len,
-    const uint8_t* kem_cts_x25519,
-    const uint8_t* kem_cts_ml_kem,
-    size_t kem_cts_ml_kem_len,
-    const uint8_t* output_keys,
-    const uint8_t* commitments,
-    const uint8_t* enc_amounts,
-    const uint8_t* amount_tags,
+    const uint8_t* view_public_key,        // 32 bytes
+    const uint8_t* recipient_spend_pubkey, // 32 bytes
+    const uint8_t* output_keys,            // output_count * 32 bytes
+    const uint8_t* commitments,            // output_count * 32 bytes
+    const uint8_t* enc_amounts,            // output_count * 8 bytes
+    const uint8_t* x25519_eph_pks,         // output_count * 32 bytes
+    const uint8_t* ml_kem_cts,             // ml_kem_cts_len total bytes
+    size_t ml_kem_cts_len,
     uint32_t output_count,
-    uint64_t* amounts_out);
+    uint64_t* amounts_out);                // output_count u64 values
 
-// Generate reserve proof.
+// Generate reserve proof (prove ownership of unspent outputs).
+// proof_secrets: output_count * 128 bytes — packed per output.
+// spend_secrets: output_count * 32 bytes — per-output subaddress spend secret.
 bool shekyl_generate_reserve_proof(
-    const uint8_t* spend_secret_key,
-    const uint8_t* message,
+    const uint8_t* spend_secret_key,       // 32 bytes (master)
+    const uint8_t* address,                // address_len bytes
+    size_t address_len,
+    const uint8_t* message,                // message_len bytes
     size_t message_len,
-    const uint8_t* combined_ss_array,
-    const uint64_t* output_indices,
-    const uint8_t* output_keys,
-    const uint8_t* hp_of_O_array,
+    const uint8_t* proof_secrets,          // output_count * 128 bytes
+    const uint8_t* key_images,             // output_count * 32 bytes
+    const uint8_t* spend_secrets,          // output_count * 32 bytes
+    const uint8_t* output_keys,            // output_count * 32 bytes
     uint32_t output_count,
     ShekylBuffer* proof_out);
 
 // Verify reserve proof.
-// enc_amounts: 8 * output_count bytes — fetched from the blockchain, NOT from the proof.
+// enc_amounts MUST be fetched from the blockchain, NOT from the proof.
+// On success, writes total verified amount to total_amount_out.
 bool shekyl_verify_reserve_proof(
     const uint8_t* proof_bytes,
     size_t proof_len,
-    const uint8_t* spend_public_key,
-    const uint8_t* message,
+    const uint8_t* address,                // address_len bytes
+    size_t address_len,
+    const uint8_t* message,                // message_len bytes
     size_t message_len,
-    const uint8_t* output_keys,
-    const uint8_t* commitments,
-    const uint8_t* enc_amounts,
-    const uint8_t* hp_of_O_array,
+    const uint8_t* spend_pubkey,           // 32 bytes
+    const uint8_t* output_keys,            // output_count * 32 bytes
+    const uint8_t* commitments,            // output_count * 32 bytes
+    const uint8_t* enc_amounts,            // output_count * 8 bytes
     uint32_t output_count,
     uint64_t* total_amount_out);
 
