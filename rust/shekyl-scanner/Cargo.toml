@@ -37,6 +37,7 @@ test-utils = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }
+proptest = "1"
 
 [lints]
 workspace = true

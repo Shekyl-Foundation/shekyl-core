@@ -3760,8 +3760,7 @@ char* wallet2_ffi_prepare_transfer(wallet2_handle* w,
             if (i < nss.permuted_transfers.size()) {
                 const auto& td_ffi = w->wallet->get_transfer_details(nss.permuted_transfers[i]);
                 add_hex_bytes(inp_obj, "combined_ss",
-                    td_ffi.m_combined_shared_secret.data(),
-                    td_ffi.m_combined_shared_secret.size(), alloc);
+                    td_ffi.m_combined_shared_secret.data(), 64, alloc);
                 inp_obj.AddMember("output_index",
                     static_cast<uint64_t>(td_ffi.m_internal_output_index), alloc);
             } else {
@@ -4009,7 +4008,7 @@ char* wallet2_ffi_finalize_transfer(wallet2_handle* w,
                 return nullptr;
             }
             const auto& td_fin = w->wallet->get_transfer_details(nss.permuted_transfers[i]);
-            if (td_fin.m_combined_shared_secret.size() != 64)
+            if (!td_fin.m_combined_shared_secret_set)
             {
                 w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
                     "Missing combined shared secret for input " + std::to_string(i));

@@ -4,6 +4,71 @@
 
 ### 🔒 Security
 
+- **`m_combined_shared_secret` changed to `scrubbed_arr<uint8_t, 64>` (Phase 6,
+  Gate 3).** Replaced `std::vector<uint8_t>` with `tools::scrubbed_arr<uint8_t, 64>`
+  in both `transfer_details` and `exported_transfer_details`. This ensures
+  zero-on-drop semantics consistent with `m_y` and `m_mask`. A boolean
+  `m_combined_shared_secret_set` flag replaces size-based emptiness checks. All
+  serialization (epee and Boost) updated with safe vector round-trip conversion.
+
+- **WalletState invariant enforcement (Phase 6, Gate 5b).** Added
+  `check_invariants()` to `WalletState` verifying 8 structural properties
+  (balance consistency, spendable/spent partition, key image correspondence, etc.).
+  `debug_assert!` fires after every mutation in debug builds. Property test (Gate 5c)
+  exercises random operation sequences against invariant checks.
+
+### ✨ Added
+
+- **PQC output round-trip property tests (Phase 6, Gate 1).** `prop_round_trip.rs`
+  exercises `construct_output` → `scan_output_recover` → `derive_proof_secrets` →
+  `compute_key_image` with random keys and amounts via `proptest`. Asserts
+  determinism (same inputs → identical outputs) and non-zero secrets (`ho`, `y`,
+  `z`, `k_amount`, `key_image`). Includes boundary cases for `amount=0` and
+  `amount=u64::MAX`. Runs with `--release` in CI.
+
+- **Wallet cache AEAD tests (Phase 6, Gate 2).** `cache_crypto.rs` covers
+  encrypt/decrypt round-trip, version mismatch detection (returns -1 before AEAD
+  decryption attempt), wrong-key auth failure, empty ciphertext, and truncated
+  ciphertext. Sub-case A2 proves version check ordering by corrupting ciphertext
+  and asserting version mismatch fires first.
+
+- **100-iteration signing round-trip stress test (Phase 6, Gate 4).**
+  `test_gate4_signing_round_trip_100` in `proof_round_trip.rs` runs full outbound
+  prove+verify cycle 100 times with unique randomness per iteration.
+
+- **`unmark_spent` unit tests (Phase 6, Gate 5a).** Five tests covering: reversal
+  to spendable pool, unknown key image noop, idempotent on already-unspent, partial
+  set behavior, and invariant preservation after unmark.
+
+- **Random-sequence invariant property test (Phase 6, Gate 5c).** `proptest` drives
+  random sequences of `AddOutputs`, `MarkSpent`, `UnmarkSpent`, `Freeze`, `Thaw`,
+  and `Reorg` operations, asserting `check_invariants()` after each step.
+
+- **Sync bookkeeping tests (Phase 6, Gate 7).** Mock-block-driven tests for
+  `WalletState` mutations: progress monotonicity, spend detection, reorg state
+  restoration, empty block height advancement, and spend/unmark round-trip.
+  Explicitly documented as bookkeeping-only (not integration against a real daemon).
+
+- **CI grep gates (Phase 6).** Four blocking grep gates in `build.yml`:
+  `shekyl_y` absence, `derivation_to_y_scalar` absence, legacy RCT type absence,
+  v1/v2 tx version branch absence. All run without `continue-on-error`.
+
+- **FFI header documentation (Phase 6).** `shekyl_ffi.h` now has Doxygen-style
+  file-level documentation covering the memory model, secret handling conventions,
+  and error reporting contract.
+
+### 🗑️ Removed
+
+- **`derivation_to_y_scalar` deleted (Phase 6).** Removed the function body from
+  `crypto.cpp`, declarations from `crypto.h`, and all call sites in
+  `derive_public_key` and `derive_subaddress_public_key`. The `"shekyl_y"` salt
+  no longer appears in the binary.
+
+- **Test stubs 9-10 deleted (Phase 6).** Removed `#[ignore]` placeholder tests
+  `test_09_watch_only_outbound_proof_error` and
+  `test_10_restored_wallet_outbound_proof_error` from `proof_round_trip.rs`.
+  Future implementations tracked in `WALLET_STATE_MIGRATION.md`.
+
 - **Consensus hardening: commitment mask validation verified (Phase 5).**
   Audited `check_commitment_mask_valid` in `blockchain.cpp`: confirms
   rejection of identity commitment (mask=0, amount=0), generator-point

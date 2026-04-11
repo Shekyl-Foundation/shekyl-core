@@ -1,5 +1,34 @@
-// C++ declarations for functions exported by the Rust shekyl-ffi crate.
-// Link against libshekyl_ffi.a to resolve these symbols.
+/// @file shekyl_ffi.h
+/// @brief C declarations for the Rust shekyl-ffi crate (libshekyl_ffi.a).
+///
+/// This header is the sole FFI boundary between C++ and Rust in the Shekyl
+/// codebase. Every function here has a corresponding `#[no_mangle] pub extern "C"`
+/// in `rust/shekyl-ffi/src/lib.rs`.
+///
+/// ## Linking
+///
+/// Link against `libshekyl_ffi.a` (static archive produced by `cargo build`).
+/// The CMake integration is in `cmake/BuildRust.cmake`.
+///
+/// ## Memory model
+///
+/// All `ShekylBuffer` values returned by Rust are allocated on the Rust heap.
+/// The caller MUST free them with `shekyl_buffer_free(buf.ptr, buf.len)`.
+/// `shekyl_buffer_free` wipes the buffer contents before deallocation (defense
+/// against secrets leaking through freed memory).
+///
+/// ## Secret handling
+///
+/// Functions that accept secret material (keys, shared secrets, seeds) copy the
+/// input into `Zeroizing` containers on the Rust side. The C++ caller is
+/// responsible for wiping its copy after the call returns. See
+/// `docs/POST_QUANTUM_CRYPTOGRAPHY.md` for the full secret lifecycle.
+///
+/// ## Error reporting
+///
+/// Functions that can fail return either `bool` (success/failure) or `int32_t`
+/// (0 = success, negative = error code). Error codes are documented per function.
+/// Functions NEVER embed secret material in error messages or logs.
 
 #pragma once
 

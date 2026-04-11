@@ -330,7 +330,8 @@ namespace tools
       uint8_t m_stake_tier = 0;
       uint64_t m_stake_lock_until = 0;
       uint64_t m_last_claimed_height = 0; // claim watermark: last to_height of a successful claim
-      std::vector<uint8_t> m_combined_shared_secret; // 64 bytes when present; empty otherwise
+      tools::scrubbed_arr<uint8_t, 64> m_combined_shared_secret{}; // wiped on drop; structurally consistent with m_y / m_mask
+      bool m_combined_shared_secret_set = false; // true once populated from KEM decap
 
       transfer_details() = default;
 
@@ -370,7 +371,18 @@ namespace tools
         FIELD(m_stake_tier)
         VARINT_FIELD(m_stake_lock_until)
         VARINT_FIELD(m_last_claimed_height)
-        FIELD(m_combined_shared_secret)
+        do {
+          std::vector<uint8_t> _css_compat;
+          if (W) {
+            if (m_combined_shared_secret_set)
+              _css_compat.assign(m_combined_shared_secret.begin(), m_combined_shared_secret.end());
+          }
+          FIELD_N("m_combined_shared_secret", _css_compat)
+          if (!W && _css_compat.size() == 64) {
+            std::copy(_css_compat.begin(), _css_compat.end(), m_combined_shared_secret.begin());
+            m_combined_shared_secret_set = true;
+          }
+        } while(0);
       END_SERIALIZE()
     };
 
@@ -420,7 +432,8 @@ namespace tools
       crypto::secret_key m_mask{};
       crypto::secret_key m_y{};
       crypto::secret_key m_k_amount{};
-      std::vector<uint8_t> m_combined_shared_secret; // 64 bytes when present
+      tools::scrubbed_arr<uint8_t, 64> m_combined_shared_secret{}; // wiped on drop
+      bool m_combined_shared_secret_set = false;
 
       BEGIN_SERIALIZE_OBJECT()
         VERSION_FIELD(3)
@@ -436,7 +449,18 @@ namespace tools
         FIELD(m_mask)
         FIELD(m_y)
         FIELD(m_k_amount)
-        FIELD(m_combined_shared_secret)
+        do {
+          std::vector<uint8_t> _css_compat;
+          if (W) {
+            if (m_combined_shared_secret_set)
+              _css_compat.assign(m_combined_shared_secret.begin(), m_combined_shared_secret.end());
+          }
+          FIELD_N("m_combined_shared_secret", _css_compat)
+          if (!W && _css_compat.size() == 64) {
+            std::copy(_css_compat.begin(), _css_compat.end(), m_combined_shared_secret.begin());
+            m_combined_shared_secret_set = true;
+          }
+        } while(0);
       END_SERIALIZE()
     };
 
@@ -1923,7 +1947,18 @@ namespace boost
       a & x.m_stake_lock_until;
       a & x.m_last_claimed_height;
       a & x.m_frozen;
-      a & x.m_combined_shared_secret;
+      {
+        std::vector<uint8_t> css_vec;
+        if (typename Archive::is_saving()) {
+          if (x.m_combined_shared_secret_set)
+            css_vec.assign(x.m_combined_shared_secret.begin(), x.m_combined_shared_secret.end());
+        }
+        a & css_vec;
+        if (typename Archive::is_loading() && css_vec.size() == 64) {
+          std::copy(css_vec.begin(), css_vec.end(), x.m_combined_shared_secret.begin());
+          x.m_combined_shared_secret_set = true;
+        }
+      }
     }
 
     template <class Archive>

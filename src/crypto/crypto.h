@@ -152,9 +152,6 @@ namespace crypto {
       const public_key *const *, std::size_t, const signature *);
     friend bool check_ring_signature(const hash &, const key_image &,
       const public_key *const *, std::size_t, const signature *);
-    // TODO(PR-construct): delete — replaced by Rust derive_output_secrets (HKDF "shekyl-output-y")
-    static void derivation_to_y_scalar(const key_derivation &, std::size_t, ec_scalar &);
-    friend void derivation_to_y_scalar(const key_derivation &, std::size_t, ec_scalar &);
     static void derive_view_tag(const key_derivation &, std::size_t, view_tag &);
     friend void derive_view_tag(const key_derivation &, std::size_t, view_tag &);
   };
@@ -238,10 +235,6 @@ namespace crypto {
   }
   inline void derivation_to_scalar(const key_derivation &derivation, size_t output_index, ec_scalar &res) {
     return crypto_ops::derivation_to_scalar(derivation, output_index, res);
-  }
-  // TODO(PR-construct): delete — replaced by Rust derive_output_secrets (HKDF "shekyl-output-y")
-  inline void derivation_to_y_scalar(const key_derivation &derivation, size_t output_index, ec_scalar &res) {
-    return crypto_ops::derivation_to_y_scalar(derivation, output_index, res);
   }
   inline void derive_secret_key(const key_derivation &derivation, std::size_t output_index,
     const secret_key &base, secret_key &derived_key) {

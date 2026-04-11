@@ -543,28 +543,10 @@ fn test_08_wrong_view_key_inbound_rejected() {
         result.unwrap_err());
 }
 
-// --------------------------------------------------------------------------
-// Test 9: Watch-only wallet attempts outbound proof -> human-readable error.
-//
-// NOTE: Wallet-state test. The definitive implementation is a C++/FFI
-// core_test that exercises wallet2's m_tx_keys absence path.
-// --------------------------------------------------------------------------
-#[test]
-#[ignore = "Phase 5: C++/FFI test -- wallet2 tx_key absence (watch-only)"]
-fn test_09_watch_only_outbound_proof_error() {
-    todo!("Phase 5 C++: watch-only wallet outbound proof → clear error message");
-}
-
-// --------------------------------------------------------------------------
-// Test 10: Restored wallet attempts outbound proof on pre-restore tx.
-//
-// NOTE: Wallet-state test, same as test 9 — C++/FFI definitive.
-// --------------------------------------------------------------------------
-#[test]
-#[ignore = "Phase 5: C++/FFI test -- wallet2 tx_key absence (restored)"]
-fn test_10_restored_wallet_outbound_proof_error() {
-    todo!("Phase 5 C++: restored wallet outbound proof → clear error, suggest inbound");
-}
+// Tests 9 and 10 (watch-only / restored wallet outbound proof errors) are
+// wallet-state tests that belong in the C++ core_test suite exercising
+// wallet2's m_tx_keys absence path. They will be implemented as part of
+// the Wallet State Migration project (see docs/WALLET_STATE_MIGRATION.md).
 
 // --------------------------------------------------------------------------
 // Wire format size assertions
@@ -629,4 +611,50 @@ fn test_multi_output_outbound() {
         assert_eq!(v.amount, 100_000 + i as u64);
     }
     eprintln!("[multi_output] 5-output outbound proof verified");
+}
+
+// --------------------------------------------------------------------------
+// Gate 4: 100-iteration signing round-trip stress test.
+//
+// Runs the full outbound prove+verify cycle 100 times with unique
+// randomness (fresh spend keys, tx keys, KEM keypairs) on each iteration.
+// Catches non-determinism, resource leaks, and rare path failures.
+// --------------------------------------------------------------------------
+#[test]
+fn test_gate4_signing_round_trip_100() {
+    for iteration in 0..100 {
+        let ctx = setup(1, 1_000_000 + iteration as u64);
+        let indices = vec![0u64];
+
+        let proof = generate_outbound_proof(
+            &ctx.tx_key_secret,
+            &ctx.txid,
+            &ctx.address_bytes,
+            &ctx.user_message,
+            &ctx.kem_pk_x25519,
+            &ctx.kem_pk_ml_kem,
+            &indices,
+        )
+        .unwrap_or_else(|e| panic!("iteration {iteration}: generate failed: {e}"));
+
+        let verified = verify_outbound_proof(
+            &proof,
+            &ctx.txid,
+            &ctx.address_bytes,
+            &ctx.user_message,
+            &ctx.spend_pubkey,
+            &ctx.kem_pk_x25519,
+            &ctx.kem_pk_ml_kem,
+            &ctx.on_chain,
+        )
+        .unwrap_or_else(|e| panic!("iteration {iteration}: verify failed: {e}"));
+
+        assert_eq!(verified.len(), 1, "iteration {iteration}: wrong output count");
+        assert_eq!(
+            verified[0].amount,
+            1_000_000 + iteration as u64,
+            "iteration {iteration}: amount mismatch"
+        );
+    }
+    eprintln!("[Gate 4] 100-iteration outbound prove+verify passed");
 }

@@ -115,6 +115,9 @@ impl WalletState {
         self.synced_height = block_height;
         self.blockchain.push((block_height, block_hash));
 
+        debug_assert!(self.check_invariants().is_ok(),
+            "invariant violated after process_scanned_outputs: {}",
+            self.check_invariants().unwrap_err());
         added
     }
 
@@ -126,6 +129,9 @@ impl WalletState {
             if let Some(td) = self.transfers.get_mut(idx) {
                 td.spent = true;
                 td.spent_height = Some(spent_height);
+                debug_assert!(self.check_invariants().is_ok(),
+                    "invariant violated after mark_spent: {}",
+                    self.check_invariants().unwrap_err());
                 return true;
             }
         }
@@ -151,6 +157,9 @@ impl WalletState {
                 }
             }
         }
+        debug_assert!(self.check_invariants().is_ok(),
+            "invariant violated after unmark_spent: {}",
+            self.check_invariants().unwrap_err());
         unmarked
     }
 
@@ -173,6 +182,9 @@ impl WalletState {
             }
             td.key_image = Some(key_image);
             self.key_images.insert(key_image, transfer_idx);
+            debug_assert!(self.check_invariants().is_ok(),
+                "invariant violated after set_key_image: {}",
+                self.check_invariants().unwrap_err());
         }
     }
 
@@ -185,6 +197,9 @@ impl WalletState {
                 .map(|t| t.lock_blocks)
                 .unwrap_or(0);
             td.stake_lock_until = td.block_height + lock_blocks;
+            debug_assert!(self.check_invariants().is_ok(),
+                "invariant violated after set_staking_info: {}",
+                self.check_invariants().unwrap_err());
         }
     }
 
@@ -288,6 +303,10 @@ impl WalletState {
         }
 
         self.staker_pool.handle_reorg(fork_height);
+
+        debug_assert!(self.check_invariants().is_ok(),
+            "invariant violated after handle_reorg: {}",
+            self.check_invariants().unwrap_err());
     }
 
     /// Get spendable outputs with optional account/subaddress/amount filters.
@@ -335,6 +354,9 @@ impl WalletState {
     pub fn freeze(&mut self, transfer_idx: usize) -> bool {
         if let Some(td) = self.transfers.get_mut(transfer_idx) {
             td.frozen = true;
+            debug_assert!(self.check_invariants().is_ok(),
+                "invariant violated after freeze: {}",
+                self.check_invariants().unwrap_err());
             return true;
         }
         false
@@ -344,6 +366,9 @@ impl WalletState {
     pub fn thaw(&mut self, transfer_idx: usize) -> bool {
         if let Some(td) = self.transfers.get_mut(transfer_idx) {
             td.frozen = false;
+            debug_assert!(self.check_invariants().is_ok(),
+                "invariant violated after thaw: {}",
+                self.check_invariants().unwrap_err());
             return true;
         }
         false
@@ -412,6 +437,123 @@ impl WalletState {
     /// The number of tracked transfers.
     pub fn transfer_count(&self) -> usize {
         self.transfers.len()
+    }
+
+    /// Verify structural invariants of the wallet state.
+    ///
+    /// Returns `Ok(())` if all invariants hold, or `Err(description)` naming
+    /// the first violated invariant. Called via `debug_assert!` after every
+    /// mutation in debug builds, and explicitly in tests.
+    pub fn check_invariants(&self) -> Result<(), String> {
+        // 1. Balance consistency: sum of unspent amounts equals computed total.
+        let computed = BalanceSummary::compute(&self.transfers, self.synced_height);
+        let manual_total: u64 = self.transfers.iter()
+            .filter(|td| !td.spent)
+            .map(|td| td.amount())
+            .sum();
+        if computed.total != manual_total {
+            return Err(format!(
+                "balance mismatch: BalanceSummary.total={} but sum of unspent amounts={}",
+                computed.total, manual_total
+            ));
+        }
+
+        // 2. Key-image index -> transfer consistency.
+        for (ki, &idx) in &self.key_images {
+            if idx >= self.transfers.len() {
+                return Err(format!(
+                    "key_images[{}] = {} out of bounds (len={})",
+                    hex::encode(ki), idx, self.transfers.len()
+                ));
+            }
+            match &self.transfers[idx].key_image {
+                Some(td_ki) if td_ki == ki => {}
+                Some(td_ki) => return Err(format!(
+                    "key_images[{}] -> transfers[{}] but transfer has key_image={}",
+                    hex::encode(ki), idx, hex::encode(td_ki)
+                )),
+                None => return Err(format!(
+                    "key_images[{}] -> transfers[{}] but transfer has no key_image",
+                    hex::encode(ki), idx
+                )),
+            }
+        }
+
+        // 2b. Reverse: every transfer with a key image is indexed.
+        let ki_count = self.transfers.iter()
+            .filter(|td| td.key_image.is_some())
+            .count();
+        if self.key_images.len() != ki_count {
+            return Err(format!(
+                "key_images.len()={} but {} transfers have key_image.is_some()",
+                self.key_images.len(), ki_count
+            ));
+        }
+
+        // 3. Pub-key index -> transfer consistency.
+        for (pk, &idx) in &self.pub_keys {
+            if idx >= self.transfers.len() {
+                return Err(format!(
+                    "pub_keys[{}] = {} out of bounds (len={})",
+                    hex::encode(pk), idx, self.transfers.len()
+                ));
+            }
+            let td_pk = self.transfers[idx].key.compress().to_bytes();
+            if &td_pk != pk {
+                return Err(format!(
+                    "pub_keys[{}] -> transfers[{}] but transfer has key={}",
+                    hex::encode(pk), idx, hex::encode(td_pk)
+                ));
+            }
+        }
+
+        // 3b. Every transfer has its pub key indexed.
+        if self.pub_keys.len() != self.transfers.len() {
+            return Err(format!(
+                "pub_keys.len()={} but transfers.len()={}",
+                self.pub_keys.len(), self.transfers.len()
+            ));
+        }
+
+        // 4. Spent-height consistency.
+        for (i, td) in self.transfers.iter().enumerate() {
+            if td.spent && td.spent_height.is_none() {
+                return Err(format!(
+                    "transfers[{}] is spent but spent_height is None", i
+                ));
+            }
+            if !td.spent && td.spent_height.is_some() {
+                return Err(format!(
+                    "transfers[{}] is not spent but spent_height is Some({})",
+                    i, td.spent_height.unwrap()
+                ));
+            }
+        }
+
+        // 5. Blockchain monotonicity.
+        for window in self.blockchain.windows(2) {
+            if window[0].0 >= window[1].0 {
+                return Err(format!(
+                    "blockchain not monotonic: height {} followed by {}",
+                    window[0].0, window[1].0
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Explicit invariant check for callers of [`transfer_mut`].
+    ///
+    /// `transfer_mut` returns `&mut TransferDetails`, so the invariant checker
+    /// cannot fire automatically when the borrow ends. Callers should invoke
+    /// this method after completing their mutations.
+    pub fn check_after_mutation(&self) {
+        debug_assert!(
+            self.check_invariants().is_ok(),
+            "WalletState invariant violated after transfer_mut: {:?}",
+            self.check_invariants().unwrap_err()
+        );
     }
 }
 

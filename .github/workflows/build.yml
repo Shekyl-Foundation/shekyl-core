@@ -396,9 +396,40 @@ jobs:
       - name: cargo test (all workspace crates)
         working-directory: rust
         run: cargo test --locked --workspace
+      - name: "Gate 1: proptest (--release for speed)"
+        working-directory: rust
+        run: cargo test --locked --release -p shekyl-crypto-pq --test prop_round_trip
       - name: Bech32m address encoding tests
         working-directory: rust
         run: cargo test --locked -p shekyl-crypto-pq -- address
+      - name: "CI grep gate: no shekyl_y in C++ source"
+        run: |
+          if grep -rn 'shekyl_y' src/crypto/ src/wallet/ --include='*.cpp' --include='*.h'; then
+            echo "FATAL: 'shekyl_y' salt still present in C++ source"
+            exit 1
+          fi
+          echo "PASS: no shekyl_y in C++ source"
+      - name: "CI grep gate: no derivation_to_y_scalar in C++ source"
+        run: |
+          if grep -rn 'derivation_to_y_scalar' src/crypto/ src/wallet/ --include='*.cpp' --include='*.h'; then
+            echo "FATAL: derivation_to_y_scalar still present in C++ source"
+            exit 1
+          fi
+          echo "PASS: no derivation_to_y_scalar in C++ source"
+      - name: "CI grep gate: no RCTTypeFull/Simple/Bulletproof in C++ source"
+        run: |
+          if grep -rn 'RCTTypeFull\|RCTTypeSimple\|RCTTypeBulletproof[^P]' src/ --include='*.cpp' --include='*.h'; then
+            echo "FATAL: legacy RCT types still referenced in C++ source"
+            exit 1
+          fi
+          echo "PASS: no legacy RCT types"
+      - name: "CI grep gate: no v1/v2 tx version branches"
+        run: |
+          if grep -rn 'tx\.version\s*==\s*1\b\|tx\.version\s*<\s*2\b\|hf_version\s*<\s*1\b' src/ --include='*.cpp' --include='*.h'; then
+            echo "FATAL: legacy v1/v2 transaction version checks still present"
+            exit 1
+          fi
+          echo "PASS: no v1/v2 tx version branches"
       - name: determinism check (build twice, compare hashes)
         working-directory: rust
         run: |

@@ -2544,7 +2544,10 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
             td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
             td.m_y = tx_scan_info[o].y;
             td.m_k_amount = tx_scan_info[o].k_amount;
-            td.m_combined_shared_secret = std::move(tx_scan_info[o].combined_ss);
+            if (tx_scan_info[o].combined_ss.size() == 64) {
+              std::copy(tx_scan_info[o].combined_ss.begin(), tx_scan_info[o].combined_ss.end(), td.m_combined_shared_secret.begin());
+              td.m_combined_shared_secret_set = true;
+            }
             td.m_frozen = false;
             {
               uint8_t stk_tier = 0;
@@ -2626,7 +2629,10 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
             td.m_mask = rct::rct2sk(tx_scan_info[o].mask);
             td.m_y = tx_scan_info[o].y;
             td.m_k_amount = tx_scan_info[o].k_amount;
-            td.m_combined_shared_secret = std::move(tx_scan_info[o].combined_ss);
+            if (tx_scan_info[o].combined_ss.size() == 64) {
+              std::copy(tx_scan_info[o].combined_ss.begin(), tx_scan_info[o].combined_ss.end(), td.m_combined_shared_secret.begin());
+              td.m_combined_shared_secret_set = true;
+            }
             if (output_tracker_cache)
               (*output_tracker_cache)[std::make_pair(tx.vout[o].amount, td.m_global_output_index)] = kit->second;
             THROW_WALLET_EXCEPTION_IF(td.get_public_key() != tx_scan_info[o].output_key, error::wallet_internal_error, "Inconsistent public keys");
@@ -3155,9 +3161,9 @@ void wallet2::update_fcmp_paths_incremental(uint64_t new_height)
 //----------------------------------------------------------------------------------------------------
 void wallet2::validate_pqc_key_derivation_for_output(const transfer_details& td)
 {
-  THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.size() != 64,
+  THROW_WALLET_EXCEPTION_IF(!td.m_combined_shared_secret_set,
     error::wallet_internal_error,
-    "Cannot rederive PQC keys: combined shared secret missing or wrong size for output " +
+    "Cannot rederive PQC keys: combined shared secret missing for output " +
     std::to_string(td.m_global_output_index));
 
   uint8_t h_pqc[32];
@@ -3190,7 +3196,7 @@ void wallet2::rederive_all_pqc_keys()
   uint64_t total = 0;
   for (const auto& td : m_transfers)
   {
-    if (!td.m_combined_shared_secret.empty())
+    if (td.m_combined_shared_secret_set)
       ++total;
   }
   if (total == 0)
@@ -3200,7 +3206,7 @@ void wallet2::rederive_all_pqc_keys()
   uint64_t done = 0;
   for (const auto& td : m_transfers)
   {
-    if (td.m_combined_shared_secret.empty())
+    if (!td.m_combined_shared_secret_set)
       continue;
     validate_pqc_key_derivation_for_output(td);
     ++done;
@@ -8102,7 +8108,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
     src.mask = rct::sk2rct(td.m_mask);
 
     // v3: derive ho from combined_shared_secret for key image / signing
-    if (td.m_combined_shared_secret.size() == 64)
+    if (td.m_combined_shared_secret_set)
     {
       uint8_t ho_tmp[32], y_tmp[32], z_tmp[32], k_tmp[32];
       if (shekyl_derive_proof_secrets(td.m_combined_shared_secret.data(),
@@ -8247,7 +8253,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
           "Input tree_depth mismatch across selected inputs; rerun precompute_fcmp_paths()");
       }
 
-      THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.size() != 64,
+      THROW_WALLET_EXCEPTION_IF(!td.m_combined_shared_secret_set,
         error::wallet_internal_error,
         "Missing combined shared secret for output " + std::to_string(td.m_global_output_index));
       uint8_t h_pqc[32];
@@ -8422,7 +8428,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       for (size_t i = 0; i < num_inputs; ++i)
       {
         const transfer_details& td = m_transfers[permuted_transfers[i]];
-        THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.size() != 64,
+        THROW_WALLET_EXCEPTION_IF(!td.m_combined_shared_secret_set,
             error::wallet_internal_error,
             "Missing combined_shared_secret for input " + std::to_string(i));
 
@@ -8432,8 +8438,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
         inp.AddMember("ki", rapidjson::Value(ki_hex.c_str(), ialloc), ialloc);
 
         std::string css_hex = epee::string_tools::buff_to_hex_nodelimer(
-            std::string(reinterpret_cast<const char*>(td.m_combined_shared_secret.data()),
-                        td.m_combined_shared_secret.size()));
+            std::string(reinterpret_cast<const char*>(td.m_combined_shared_secret.data()), 64));
         inp.AddMember("combined_ss", rapidjson::Value(css_hex.c_str(), ialloc), ialloc);
         inp.AddMember("output_index", static_cast<uint64_t>(td.m_internal_output_index), ialloc);
 
@@ -9752,7 +9757,7 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
     claim.to_height = to_h;
 
     // v3 key image: KI = (ho + b) * Hp(O), via Rust FFI
-    THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.size() != 64,
+    THROW_WALLET_EXCEPTION_IF(!td.m_combined_shared_secret_set,
       error::wallet_internal_error,
       "Staked output missing combined_shared_secret for key image derivation");
     crypto::ec_point hp_of_O;
@@ -9948,7 +9953,7 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
     const size_t td_idx = ordered_indices[i];
     const auto& td = m_transfers[td_idx];
 
-    THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.size() != 64, error::wallet_internal_error,
+    THROW_WALLET_EXCEPTION_IF(!td.m_combined_shared_secret_set, error::wallet_internal_error,
       "Missing per-output combined shared secret for claim input " + std::to_string(i));
     ShekylBuffer pk_buf = shekyl_derive_pqc_public_key(
         td.m_combined_shared_secret.data(),
@@ -11043,7 +11048,7 @@ std::string wallet2::get_tx_proof(const crypto::hash &txid, const cryptonote::ac
     uint32_t output_count = 0;
     for (const auto& td : m_transfers)
     {
-      if (td.m_txid == txid && !td.m_combined_shared_secret.empty())
+      if (td.m_txid == txid && td.m_combined_shared_secret_set)
       {
         uint8_t ho[32], y_buf[32], z_buf[32], k_amount[32];
         shekyl_derive_proof_secrets(
@@ -11219,7 +11224,7 @@ std::string wallet2::get_reserve_proof(const std::optional<std::pair<uint32_t, u
   for (uint32_t i = 0; i < n; ++i)
   {
     const transfer_details &td = m_transfers[selected_transfers[i]];
-    THROW_WALLET_EXCEPTION_IF(td.m_combined_shared_secret.empty(),
+    THROW_WALLET_EXCEPTION_IF(!td.m_combined_shared_secret_set,
         error::wallet_internal_error, "Transfer missing combined_shared_secret for reserve proof");
 
     uint8_t ho[32], y_val[32], z_val[32], k_amount[32];
@@ -12688,6 +12693,7 @@ std::tuple<uint64_t, uint64_t, std::vector<tools::wallet2::exported_transfer_det
     etd.m_y = td.m_y;
     etd.m_k_amount = td.m_k_amount;
     etd.m_combined_shared_secret = td.m_combined_shared_secret;
+    etd.m_combined_shared_secret_set = td.m_combined_shared_secret_set;
 
     outs.push_back(etd);
   }
@@ -12833,6 +12839,7 @@ size_t wallet2::import_outputs(const std::tuple<uint64_t, uint64_t, std::vector<
     td.m_y = etd.m_y;
     td.m_k_amount = etd.m_k_amount;
     td.m_combined_shared_secret = etd.m_combined_shared_secret;
+    td.m_combined_shared_secret_set = etd.m_combined_shared_secret_set;
     td.m_amount = etd.m_amount;
     td.m_key_image_known = etd.m_flags.m_key_image_known;
     td.m_key_image_request = etd.m_flags.m_key_image_request;

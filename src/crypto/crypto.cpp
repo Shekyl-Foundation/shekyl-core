@@ -252,22 +252,9 @@ namespace crypto {
     ge_p1p1 sum1_p1p1;
     ge_add(&sum1_p1p1, &B_p3, &xG_cached);
 
-    // y_scalar*T
-    ec_scalar y_scalar;
-    derivation_to_y_scalar(derivation, output_index, y_scalar);
-    const ge_p3 &T = get_generator_T();
-    ge_p3 yT_p3;
-    ge_scalarmult_p3(&yT_p3, &y_scalar, &T);
-
-    // (B + x_scalar*G) + y_scalar*T
-    ge_p3 sum1_p3;
-    ge_p1p1_to_p3(&sum1_p3, &sum1_p1p1);
-    ge_cached yT_cached;
-    ge_p3_to_cached(&yT_cached, &yT_p3);
-    ge_p1p1 result_p1p1;
-    ge_add(&result_p1p1, &sum1_p3, &yT_cached);
+    // B + x_scalar*G → derived_key
     ge_p2 result_p2;
-    ge_p1p1_to_p2(&result_p2, &result_p1p1);
+    ge_p1p1_to_p2(&result_p2, &sum1_p1p1);
     ge_tobytes(&derived_key, &result_p2);
     return true;
   }
@@ -297,21 +284,9 @@ namespace crypto {
     ge_p1p1 sub1_p1p1;
     ge_sub(&sub1_p1p1, &O_p3, &xG_cached);
 
-    // (O - x_scalar*G) - y_scalar*T
-    ec_scalar y_scalar;
-    derivation_to_y_scalar(derivation, output_index, y_scalar);
-    const ge_p3 &T = get_generator_T();
-    ge_p3 yT_p3;
-    ge_scalarmult_p3(&yT_p3, &y_scalar, &T);
-
-    ge_p3 sub1_p3;
-    ge_p1p1_to_p3(&sub1_p3, &sub1_p1p1);
-    ge_cached yT_cached;
-    ge_p3_to_cached(&yT_cached, &yT_p3);
-    ge_p1p1 result_p1p1;
-    ge_sub(&result_p1p1, &sub1_p3, &yT_cached);
+    // O - x_scalar*G → derived_key
     ge_p2 result_p2;
-    ge_p1p1_to_p2(&result_p2, &result_p1p1);
+    ge_p1p1_to_p2(&result_p2, &sub1_p1p1);
     ge_tobytes(&derived_key, &result_p2);
     return true;
   }
@@ -548,26 +523,6 @@ POP_WARNINGS
 
   void key_image_y_normalize(key_image& ki) {
     reinterpret_cast<unsigned char*>(ki.data)[31] &= 0x7f;
-  }
-
-  // TODO(PR-construct): delete derivation_to_y_scalar. This interim Keccak-domain
-  // derivation ("shekyl_y") is replaced by OutputSecrets.y from the unified HKDF
-  // derivation in shekyl-crypto-pq. See PQC_OUTPUT_SECRETS.json for canonical vectors.
-  void crypto_ops::derivation_to_y_scalar(const key_derivation &derivation, size_t output_index, ec_scalar &res) {
-    #pragma pack(push, 1)
-    struct {
-      char salt[8];
-      key_derivation derivation;
-      char output_index[(sizeof(size_t) * 8 + 6) / 7];
-    } buf;
-    #pragma pack(pop)
-
-    char *end = buf.output_index;
-    memcpy(buf.salt, "shekyl_y", 8);
-    buf.derivation = derivation;
-    tools::write_varint(end, output_index);
-    assert(end <= buf.output_index + sizeof buf.output_index);
-    hash_to_scalar(&buf, end - reinterpret_cast<char *>(&buf), res);
   }
 
   void crypto_ops::derive_view_tag(const key_derivation &derivation, size_t output_index, view_tag &view_tag) {
