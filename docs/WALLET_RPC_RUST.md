@@ -263,10 +263,13 @@ HTTP POST /json_rpc → handlers::dispatch_with_scanner(method)
 
 | Module | Type | Purpose |
 |--------|------|---------|
-| `shekyl-scanner` | `Scanner` | Block/tx/output scan pipeline |
-| `shekyl-scanner` | `TransferDetails` | Extended output with staking + PQC fields |
-| `shekyl-scanner` | `WalletState` | In-memory transfer tracking, key image dedup |
-| `shekyl-scanner` | `BalanceSummary` | Staking-aware balance breakdown |
+| `shekyl-scanner` | `Scanner` | Hybrid PQC KEM block/tx/output scan pipeline |
+| `shekyl-scanner` | `RecoveredWalletOutput` | Scan result with all KEM-derived secrets + key image |
+| `shekyl-scanner` | `TransferDetails` | Extended output with staking + PQC fields + `eligible_height` |
+| `shekyl-scanner` | `WalletState` | In-memory transfer tracking, key image dedup, spend detection |
+| `shekyl-scanner` | `BalanceSummary` | Staking-aware balance breakdown (uses `eligible_height`) |
+| `shekyl-scanner::sync` | `run_sync_loop` | Background daemon polling + scan + spend detection loop |
+| `shekyl-scanner::sync` | `SyncProgress` | Per-block progress event (height, outputs found, spends) |
 | `shekyl-wallet-rpc` | `ScannerState` | Thread-safe wrapper around `WalletState` |
 
 ### GUI Integration
@@ -308,11 +311,49 @@ for the DKG ceremony flow.
 
 All byte fields are hex-encoded in request/response JSON.
 
+## Sync Loop
+
+The `shekyl-scanner::sync` module (feature-gated behind `rust-scanner`)
+implements the background sync loop:
+
+```rust
+pub async fn run_sync_loop<R, P, F>(
+    rpc: R,                            // Rpc trait implementor
+    scanner: Arc<Mutex<Scanner>>,      // Hybrid PQC KEM scanner
+    state: Arc<Mutex<WalletState>>,    // In-memory wallet state
+    cancel: CancellationToken,         // Graceful shutdown signal
+    poll_interval: Duration,           // Sleep between tip polls
+    flush_every_block: bool,           // Mobile: true; Desktop: false
+    on_progress: P,                    // SyncProgress callback
+    on_flush: F,                       // Persistence callback
+) -> Result<(), SyncError>
+```
+
+The loop fetches blocks from `wallet_state.height() + 1` up to the daemon
+tip via `get_scannable_block_by_number`, scans each block for wallet outputs,
+extracts key images from all block transactions for spend detection, and
+emits a `SyncProgress` event per block.
+
+**Reorg detection:** Before processing each block, the loop compares
+the block's `header.previous` hash against the hash stored in `WalletState`
+for the prior height. On mismatch, it walks backwards (via `find_fork_point`)
+to locate the common ancestor, calls `WalletState::handle_reorg` to roll
+back affected transfers, flushes, and restarts scanning from the fork point.
+
+**Block fetch retries:** Individual `get_scannable_block_by_number` calls
+retry up to 5 times with exponential backoff (500ms initial, 30s cap)
+before aborting. `get_height` retries indefinitely on each poll cycle.
+
+**Flush strategy:**
+- Desktop: flush every 100 blocks plus at the tip.
+- Mobile: flush every block (OS can kill without warning).
+- Always flushes on reorg rollback and on cancellation before returning.
+
+**Cancellation:** Dropping the `CancellationToken` or calling `.cancel()`
+causes the loop to finish the current block and return cleanly.
+
 ## Future Work
 
-- **Scanner sync loop**: Implement the background refresh loop that drives the
-  Rust scanner (fetch blocks via daemon RPC, feed to `Scanner::scan`, update
-  `WalletState`). Currently the scanner state must be populated externally.
 - **FCMP++ signing in Rust**: Transaction construction (FCMP++ proofs, PQC
   key signing) is the remaining major C++ dependency. Once implemented, the
   FFI layer can be removed entirely.

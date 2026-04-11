@@ -1,73 +1,104 @@
 // Copyright (c) 2025-2026, The Shekyl Foundation
 //
-// Adapted from monero-oxide (shekyl-wallet), MIT license.
 // All rights reserved.
 // BSD-3-Clause
 
-//! Block and transaction scanning pipeline.
+//! Block and transaction scanning pipeline using hybrid PQC KEM.
 //!
 //! Scans `ScannableBlock`s for outputs belonging to the wallet's view pair,
-//! with Shekyl extensions for KEM decapsulation and staking detection.
+//! using the Shekyl V3 two-component key derivation:
+//!
+//! 1. Parse `tx_extra` for PQC KEM ciphertext (tag 0x06)
+//! 2. X25519 DH pre-filter via view tag (rejects ~99.6% of non-matching outputs)
+//! 3. Full hybrid KEM decap + HKDF via `scan_output_recover`
+//! 4. Subaddress lookup via recovered spend key `B' = O - ho*G - y*T`
+//! 5. Key image computation via native Rust (no FFI)
 
-use core::ops::Deref;
 use std::collections::HashMap;
 
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
-
 use shekyl_oxide::{
     io::CompressedPoint,
     primitives::Commitment,
-    transaction::{Timelock, Pruned, Transaction},
+    transaction::{Pruned, Transaction},
 };
 use shekyl_rpc::ScannableBlock;
+
+use shekyl_crypto_pq::{
+    output::{scan_output_recover, compute_output_key_image},
+    kem::ML_KEM_768_CT_LEN,
+};
+use shekyl_generators::hash_to_point;
 
 use crate::{
     SubaddressIndex,
     ViewPair,
     GuaranteedViewPair,
-    SharedKeyDerivations,
     extra::{Extra, PaymentId},
     output::*,
 };
 
-/// A collection of outputs that may be subject to additional timelocks.
+const X25519_CT_BYTES: usize = 32;
+const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
+
+/// A recovered output with all PQC secrets populated at scan time.
+///
+/// Carries the HKDF-derived secrets (ho, y, z, k_amount), combined shared secret,
+/// and key image so that `TransferDetails` can be fully populated without
+/// re-derivation. Implements `ZeroizeOnDrop` — secrets are wiped when this
+/// struct leaves scope.
+#[derive(ZeroizeOnDrop)]
+pub struct RecoveredWalletOutput {
+    pub(crate) base: WalletOutput,
+    pub(crate) ho: Zeroizing<[u8; 32]>,
+    pub(crate) y: Zeroizing<[u8; 32]>,
+    pub(crate) z: Zeroizing<[u8; 32]>,
+    pub(crate) k_amount: Zeroizing<[u8; 32]>,
+    pub(crate) combined_shared_secret: Zeroizing<[u8; 64]>,
+    pub(crate) key_image: [u8; 32],
+    /// Recovered amount from KEM decryption.
+    #[zeroize(skip)]
+    pub(crate) amount: u64,
+}
+
+impl Zeroize for RecoveredWalletOutput {
+    fn zeroize(&mut self) {
+        self.base.zeroize();
+        self.ho.zeroize();
+        self.y.zeroize();
+        self.z.zeroize();
+        self.k_amount.zeroize();
+        self.combined_shared_secret.zeroize();
+        self.key_image.zeroize();
+        self.amount.zeroize();
+    }
+}
+
+impl RecoveredWalletOutput {
+    pub fn wallet_output(&self) -> &WalletOutput { &self.base }
+    pub fn ho(&self) -> &[u8; 32] { &self.ho }
+    pub fn y(&self) -> &[u8; 32] { &self.y }
+    pub fn z(&self) -> &[u8; 32] { &self.z }
+    pub fn k_amount(&self) -> &[u8; 32] { &self.k_amount }
+    pub fn combined_shared_secret(&self) -> &[u8; 64] { &self.combined_shared_secret }
+    pub fn key_image(&self) -> &[u8; 32] { &self.key_image }
+    pub fn amount(&self) -> u64 { self.amount }
+}
+
+/// A collection of recovered outputs from a block scan.
 #[derive(Zeroize, ZeroizeOnDrop)]
-pub struct Timelocked(pub(crate) Vec<WalletOutput>);
+pub struct Timelocked(pub(crate) Vec<RecoveredWalletOutput>);
 
 impl Timelocked {
     /// Create a Timelocked collection from a vector of outputs.
-    pub fn from_vec(outputs: Vec<WalletOutput>) -> Self {
+    pub fn from_vec(outputs: Vec<RecoveredWalletOutput>) -> Self {
         Self(outputs)
     }
 
-    /// Return only the outputs without additional timelocks.
+    /// Consume the wrapper and return all outputs.
     #[must_use]
-    pub fn not_additionally_locked(self) -> Vec<WalletOutput> {
-        self.0
-            .iter()
-            .filter(|o| o.additional_timelock() == Timelock::None)
-            .cloned()
-            .collect()
-    }
-
-    /// Return outputs whose additional timelock is satisfied by the given block/time.
-    #[must_use]
-    pub fn additional_timelock_satisfied_by(self, block: usize, time: u64) -> Vec<WalletOutput> {
-        self.0
-            .iter()
-            .filter(|o| {
-                (o.additional_timelock() <= Timelock::Block(block))
-                    || (o.additional_timelock() <= Timelock::Time(time))
-            })
-            .cloned()
-            .collect()
-    }
-
-    /// Consume the wrapper and return all outputs, ignoring timelocks.
-    #[must_use]
-    pub fn ignore_additional_timelock(mut self) -> Vec<WalletOutput> {
+    pub fn into_inner(mut self) -> Vec<RecoveredWalletOutput> {
         let mut res = vec![];
         core::mem::swap(&mut self.0, &mut res);
         res
@@ -85,7 +116,7 @@ impl Timelocked {
 }
 
 /// Errors when scanning a block.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, thiserror::Error)]
+#[derive(Clone, PartialEq, Eq, Debug, thiserror::Error)]
 pub enum ScanError {
     /// The block was for an unsupported protocol version.
     #[error("unsupported protocol version ({0})")]
@@ -98,14 +129,14 @@ pub enum ScanError {
 #[derive(Clone)]
 struct InternalScanner {
     pair: ViewPair,
-    guaranteed: bool,
+    spend_secret: Zeroizing<[u8; 32]>,
     subaddresses: HashMap<CompressedPoint, Option<SubaddressIndex>>,
 }
 
 impl Zeroize for InternalScanner {
     fn zeroize(&mut self) {
         self.pair.zeroize();
-        self.guaranteed.zeroize();
+        self.spend_secret.zeroize();
         for (mut key, mut value) in self.subaddresses.drain() {
             key.zeroize();
             value.zeroize();
@@ -120,12 +151,12 @@ impl Drop for InternalScanner {
 impl ZeroizeOnDrop for InternalScanner {}
 
 impl InternalScanner {
-    fn new(pair: ViewPair, guaranteed: bool) -> Self {
+    fn new(pair: ViewPair, spend_secret: Zeroizing<[u8; 32]>) -> Self {
         let mut subaddresses = HashMap::new();
         subaddresses.insert(pair.spend().compress().into(), None);
         Self {
             pair,
-            guaranteed,
+            spend_secret,
             subaddresses,
         }
     }
@@ -150,124 +181,145 @@ impl InternalScanner {
             return Ok(Timelocked(vec![]));
         };
 
-        let Some((tx_keys, additional)) = extra.keys() else {
-            return Ok(Timelocked(vec![]));
-        };
+        let kem_ct_blob = extra.pqc_kem_ciphertext();
         let payment_id = extra.payment_id();
 
         let mut res = vec![];
         for (o, output) in tx.prefix().outputs.iter().enumerate() {
-            let Some(output_key) = output.key.decompress() else {
+            let Some(output_key_point) = output.key.decompress() else {
                 continue;
             };
+            let output_key_bytes = output_key_point.compress().to_bytes();
 
-            let additional = additional.as_ref().map(|additional| additional.get(o));
+            let view_tag_on_chain: u8 = output.view_tag.unwrap_or(0);
 
-            #[allow(clippy::manual_let_else)]
-            for key in tx_keys
-                .iter()
-                .map(|key| Some(Some(key)))
-                .chain(core::iter::once(additional))
-            {
-                let key = match key {
-                    Some(Some(key)) => key,
-                    Some(None) | None => continue,
+            let (enc_amount, amount_tag_on_chain, commitment_bytes) =
+                match &tx {
+                    Transaction::V2 { proofs: Some(ref proofs), .. } => {
+                        match proofs.base.encrypted_amounts.get(o) {
+                            Some(ea) => {
+                                let c = proofs.base.commitments.get(o)
+                                    .ok_or(ScanError::InvalidScannableBlock(
+                                        "proofs without a commitment per output",
+                                    ))?;
+                                (ea.amount, ea.amount_tag, c.0)
+                            }
+                            None => continue,
+                        }
+                    }
+                    _ => {
+                        if output.amount.is_some() {
+                            ([0u8; 8], 0u8, [0u8; 32])
+                        } else {
+                            continue;
+                        }
+                    }
                 };
 
-                let ecdh = Zeroizing::new(self.pair.view.deref() * key);
-                let output_derivations = SharedKeyDerivations::output_derivations(
-                    if self.guaranteed {
-                        Some(SharedKeyDerivations::uniqueness(&tx.prefix().inputs))
-                    } else {
-                        None
-                    },
-                    ecdh.clone(),
-                    o,
-                );
-
-                if let Some(actual_view_tag) = output.view_tag {
-                    if actual_view_tag != output_derivations.view_tag {
-                        continue;
-                    }
-                }
-
-                let Some(subaddress) = ({
-                    let subaddress_spend_key =
-                        output_key - (&output_derivations.shared_key * ED25519_BASEPOINT_TABLE);
-                    self.subaddresses
-                        .get::<CompressedPoint>(&subaddress_spend_key.compress().into())
-                }) else {
-                    continue;
-                };
-                let subaddress = *subaddress;
-
-                let mut key_offset = output_derivations.shared_key;
-                if let Some(subaddress) = subaddress {
-                    key_offset += self.pair.subaddress_derivation(subaddress);
-                }
-
-                let mut commitment = Commitment::zero();
-
-                if let Some(amount) = output.amount {
-                    commitment.amount = amount;
-                } else {
-                    let Transaction::V2 {
-                        proofs: Some(ref proofs),
-                        ..
-                    } = &tx
-                    else {
-                        Err(ScanError::InvalidScannableBlock(
-                            "non-miner v2 transaction without proofs",
-                        ))?
-                    };
-
-                    commitment = match proofs.base.encrypted_amounts.get(o) {
-                        Some(amount) => output_derivations.decrypt(amount),
-                        None => Err(ScanError::InvalidScannableBlock(
-                            "proofs without an encrypted amount per output",
-                        ))?,
-                    };
-
-                    if Some(&CompressedPoint::from(commitment.calculate().compress()))
-                        != proofs.base.commitments.get(o)
-                    {
-                        continue;
-                    }
-                }
-
-                let payment_id =
-                    payment_id.map(|id| id ^ SharedKeyDerivations::payment_id_xor(ecdh));
-
-                let o = u64::try_from(o).expect("couldn't convert output index (usize) to u64");
-
-                res.push(WalletOutput {
-                    absolute_id: AbsoluteId {
-                        transaction: tx_hash,
-                        index_in_transaction: o,
-                    },
-                    relative_id: RelativeId {
-                        index_on_blockchain: output_index_for_first_ringct_output
-                            .checked_add(o)
-                            .ok_or(ScanError::InvalidScannableBlock(
-                                "transaction's output's index isn't representable as a u64",
-                            ))?,
-                    },
-                    data: OutputData {
-                        key: output_key,
-                        key_offset,
-                        commitment,
-                    },
-                    metadata: Metadata {
-                        additional_timelock: tx.prefix().additional_timelock,
-                        subaddress,
-                        payment_id,
-                        arbitrary_data: extra.arbitrary_data(),
-                    },
-                    staking: output.staking,
-                });
-
-                break;
+            // --- Try KEM path (tag 0x06) ---
+            let Some(blob) = kem_ct_blob else { continue };
+            let ct_offset = o * HYBRID_KEM_CT_BYTES;
+            if blob.len() < ct_offset + HYBRID_KEM_CT_BYTES {
+                continue;
             }
+
+            let ct_slice = &blob[ct_offset..ct_offset + HYBRID_KEM_CT_BYTES];
+            let ct_x25519: &[u8; 32] = ct_slice[..X25519_CT_BYTES]
+                .try_into()
+                .expect("slice is exactly 32 bytes");
+            let ct_ml_kem = &ct_slice[X25519_CT_BYTES..];
+            debug_assert_eq!(ct_ml_kem.len(), ML_KEM_768_CT_LEN);
+
+            let recovered = match scan_output_recover(
+                self.pair.x25519_sk(),
+                self.pair.ml_kem_dk(),
+                ct_x25519,
+                ct_ml_kem,
+                &output_key_bytes,
+                &commitment_bytes,
+                &enc_amount,
+                amount_tag_on_chain,
+                view_tag_on_chain,
+                o as u64,
+            ) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+
+            // --- Subaddress lookup via recovered spend key B' ---
+            let recovered_b_compressed: CompressedPoint =
+                CompressedPoint(recovered.recovered_spend_key);
+            let Some(subaddress) = self.subaddresses.get(&recovered_b_compressed) else {
+                continue;
+            };
+            let subaddress = *subaddress;
+
+            let amount = recovered.amount;
+            let commitment = Commitment::new(
+                curve25519_dalek::Scalar::from_canonical_bytes(recovered.z)
+                    .expect("z from wide_reduce is always canonical")
+                    .into(),
+                amount,
+            );
+
+            // --- Key image: KI = x * Hp(O) where x = ho + b ---
+            let hp_of_o = hash_to_point(output_key_bytes);
+            let hp_bytes = hp_of_o.compress().to_bytes();
+
+            let ki_result = compute_output_key_image(
+                &recovered.combined_ss,
+                o as u64,
+                &*self.spend_secret,
+                &hp_bytes,
+            );
+            let key_image = match ki_result {
+                Ok(r) => r.key_image,
+                Err(_) => continue,
+            };
+
+            // V3 does not use encrypted payment IDs. Pass through as-is.
+            let decrypted_payment_id = payment_id;
+
+            let global_index = output_index_for_first_ringct_output
+                .checked_add(o as u64)
+                .ok_or(ScanError::InvalidScannableBlock(
+                    "transaction's output's index isn't representable as a u64",
+                ))?;
+
+            let base_output = WalletOutput {
+                absolute_id: AbsoluteId {
+                    transaction: tx_hash,
+                    index_in_transaction: o as u64,
+                },
+                relative_id: RelativeId {
+                    index_on_blockchain: global_index,
+                },
+                data: OutputData {
+                    key: output_key_point,
+                    key_offset: curve25519_dalek::Scalar::from_canonical_bytes(recovered.ho)
+                        .expect("ho from wide_reduce is always canonical")
+                        .into(),
+                    commitment,
+                },
+                metadata: Metadata {
+                    additional_timelock: tx.prefix().additional_timelock,
+                    subaddress,
+                    payment_id: decrypted_payment_id,
+                    arbitrary_data: extra.arbitrary_data(),
+                },
+                staking: output.staking,
+            };
+
+            res.push(RecoveredWalletOutput {
+                base: base_output,
+                ho: Zeroizing::new(recovered.ho),
+                y: Zeroizing::new(recovered.y),
+                z: Zeroizing::new(recovered.z),
+                k_amount: Zeroizing::new(recovered.k_amount),
+                combined_shared_secret: Zeroizing::new(recovered.combined_ss),
+                key_image,
+                amount,
+            });
         }
 
         Ok(Timelocked(res))
@@ -322,10 +374,10 @@ impl InternalScanner {
             }
         }
 
-        // Shekyl never supports unencrypted payment IDs
+        // Shekyl never supports unencrypted payment IDs — strip them.
         for output in &mut res.0 {
-            if matches!(output.metadata.payment_id, Some(PaymentId::Unencrypted(_))) {
-                output.metadata.payment_id = None;
+            if matches!(output.base.metadata.payment_id, Some(PaymentId::Unencrypted(_))) {
+                output.base.metadata.payment_id = None;
             }
         }
 
@@ -333,17 +385,25 @@ impl InternalScanner {
     }
 }
 
-/// A transaction scanner for finding received outputs.
+/// A transaction scanner using hybrid PQC KEM (X25519 + ML-KEM-768).
 ///
-/// When an output is found, its key MUST be checked against the local database
-/// for prior observation (burning bug protection).
+/// Scans blocks for outputs belonging to this wallet. When an output is found,
+/// its key MUST be checked against the local database for prior observation
+/// (burning bug protection).
+///
+/// The scanner computes key images at scan time. All HKDF-derived secrets
+/// (ho, y, z, k_amount) are stored in the returned `RecoveredWalletOutput`
+/// to avoid re-derivation at sign time.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct Scanner(InternalScanner);
 
 impl Scanner {
-    /// Create a Scanner from a ViewPair.
-    pub fn new(pair: ViewPair) -> Self {
-        Self(InternalScanner::new(pair, false))
+    /// Create a Scanner from a ViewPair and the wallet's spend secret key.
+    ///
+    /// The spend secret is needed to compute key images at scan time
+    /// (KI = (ho + b) * Hp(O)).
+    pub fn new(pair: ViewPair, spend_secret: Zeroizing<[u8; 32]>) -> Self {
+        Self(InternalScanner::new(pair, spend_secret))
     }
 
     /// Register a subaddress to scan for.
@@ -362,9 +422,9 @@ impl Scanner {
 pub struct GuaranteedScanner(InternalScanner);
 
 impl GuaranteedScanner {
-    /// Create a GuaranteedScanner from a GuaranteedViewPair.
-    pub fn new(pair: GuaranteedViewPair) -> Self {
-        Self(InternalScanner::new(pair.0, true))
+    /// Create a GuaranteedScanner from a GuaranteedViewPair and spend secret.
+    pub fn new(pair: GuaranteedViewPair, spend_secret: Zeroizing<[u8; 32]>) -> Self {
+        Self(InternalScanner::new(pair.0, spend_secret))
     }
 
     /// Register a subaddress to scan for.

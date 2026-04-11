@@ -15,24 +15,28 @@ const MAX_FCMP_PROOF_SIZE: usize = 1_000_000;
 /// Upper bound on a single PQC auth signature blob (ML-DSA-65 signatures are ~3309 bytes).
 const MAX_PQC_AUTH_SIZE: usize = 4096;
 
-/// An encrypted amount (compact form, 8 bytes).
+/// An encrypted amount (9 bytes: 8 XOR-encrypted amount + 1 HKDF-derived AAD tag).
 ///
-/// Shekyl only uses the compact encrypted amount format introduced with Bulletproof+.
+/// The amount_tag detects KEM ciphertext corruption at decode time. It is derived
+/// from the HKDF output secrets and verified by the scanner during decryption.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct EncryptedAmount {
-  /// The amount, as a u64, encrypted.
+  /// The amount, as a u64, XOR-encrypted with k_amount[..8].
   pub amount: [u8; 8],
+  /// HKDF-derived integrity tag — detects silently corrupted KEM ciphertext.
+  pub amount_tag: u8,
 }
 
 impl EncryptedAmount {
-  /// Read an EncryptedAmount from a reader.
+  /// Read an EncryptedAmount from a reader (9 bytes).
   pub fn read<R: Read>(r: &mut R) -> io::Result<EncryptedAmount> {
-    Ok(EncryptedAmount { amount: read_bytes(r)? })
+    Ok(EncryptedAmount { amount: read_bytes(r)?, amount_tag: read_byte(r)? })
   }
 
-  /// Write the EncryptedAmount to a writer.
+  /// Write the EncryptedAmount to a writer (9 bytes).
   pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-    w.write_all(&self.amount)
+    w.write_all(&self.amount)?;
+    w.write_all(&[self.amount_tag])
   }
 }
 

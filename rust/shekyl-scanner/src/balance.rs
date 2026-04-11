@@ -9,9 +9,6 @@ use serde::Serialize;
 
 use crate::transfer::TransferDetails;
 
-/// Default lock window (outputs cannot be spent for this many blocks after creation).
-const DEFAULT_LOCK_WINDOW: u64 = 10;
-
 /// Complete balance summary with staking breakdown.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct BalanceSummary {
@@ -19,7 +16,7 @@ pub struct BalanceSummary {
     pub total: u64,
     /// Balance available to spend right now (unlocked, not staked, not frozen).
     pub unlocked: u64,
-    /// Total balance currently locked by the default lock window.
+    /// Total balance currently locked (below eligible_height).
     pub locked_by_timelock: u64,
     /// Total staked balance (all staking states combined).
     pub staked_total: u64,
@@ -49,8 +46,7 @@ impl BalanceSummary {
                 continue;
             }
 
-            let matured_at = td.block_height + DEFAULT_LOCK_WINDOW;
-            let timelock_satisfied = current_height >= matured_at;
+            let timelock_satisfied = current_height >= td.eligible_height;
 
             if td.staked {
                 summary.staked_total += amount;
@@ -81,6 +77,7 @@ mod tests {
     use shekyl_oxide::primitives::Commitment;
 
     fn make_td(amount: u64, height: u64) -> TransferDetails {
+        use crate::transfer::SPENDABLE_AGE;
         TransferDetails {
             tx_hash: [0u8; 32],
             internal_output_index: 0,
@@ -99,6 +96,11 @@ mod tests {
             stake_lock_until: 0,
             last_claimed_height: 0,
             combined_shared_secret: None,
+            ho: None,
+            y: None,
+            z: None,
+            k_amount: None,
+            eligible_height: height + SPENDABLE_AGE,
             frozen: false,
             fcmp_precomputed_path: None,
         }

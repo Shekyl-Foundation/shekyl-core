@@ -9,12 +9,13 @@
 pub(crate) mod staking {
     use curve25519_dalek::{Scalar, constants::ED25519_BASEPOINT_TABLE};
     use shekyl_oxide::{primitives::Commitment, transaction::StakingMeta};
+    use zeroize::Zeroizing;
 
     use crate::{
         output::*,
         transfer::TransferDetails,
         wallet_state::WalletState,
-        scan::Timelocked,
+        scan::{Timelocked, RecoveredWalletOutput},
         claim::ClaimableInfo,
     };
 
@@ -55,8 +56,25 @@ pub(crate) mod staking {
         }
     }
 
-    fn make_timelocked(outputs: Vec<WalletOutput>) -> Timelocked {
-        Timelocked(outputs)
+    /// Wrap a plain WalletOutput in a RecoveredWalletOutput with dummy KEM secrets.
+    /// For testing wallet state management only — the secrets are all zeroes.
+    fn wrap_recovered(output: WalletOutput, amount: u64) -> RecoveredWalletOutput {
+        let mut ki = [0u8; 32];
+        ki[..8].copy_from_slice(&output.index_on_blockchain().to_le_bytes());
+        RecoveredWalletOutput {
+            base: output,
+            ho: Zeroizing::new([0u8; 32]),
+            y: Zeroizing::new([0u8; 32]),
+            z: Zeroizing::new([0u8; 32]),
+            k_amount: Zeroizing::new([0u8; 32]),
+            combined_shared_secret: Zeroizing::new([0u8; 64]),
+            key_image: ki,
+            amount,
+        }
+    }
+
+    fn make_timelocked(outputs: Vec<(WalletOutput, u64)>) -> Timelocked {
+        Timelocked(outputs.into_iter().map(|(o, a)| wrap_recovered(o, a)).collect())
     }
 
     // ── Staking detection ──
@@ -241,11 +259,11 @@ pub(crate) mod staking {
     fn wallet_state_auto_detects_staked_outputs() {
         let mut ws = WalletState::new();
         let outputs = vec![
-            make_wallet_output([20; 32], 0, 200, 1_000_000_000, None),
-            make_wallet_output(
+            (make_wallet_output([20; 32], 0, 200, 1_000_000_000, None), 1_000_000_000),
+            (make_wallet_output(
                 [20; 32], 1, 201, 5_000_000_000,
                 Some(StakingMeta { lock_tier: 2 }),
-            ),
+            ), 5_000_000_000),
         ];
 
         ws.process_scanned_outputs(1000, [0xAA; 32], make_timelocked(outputs));
@@ -262,14 +280,14 @@ pub(crate) mod staking {
     fn wallet_state_claimable_outputs() {
         let mut ws = WalletState::new();
         let outputs = vec![
-            make_wallet_output(
+            (make_wallet_output(
                 [21; 32], 0, 300, 2_000_000_000,
                 Some(StakingMeta { lock_tier: 1 }),
-            ),
-            make_wallet_output(
+            ), 2_000_000_000),
+            (make_wallet_output(
                 [21; 32], 1, 301, 3_000_000_000,
                 Some(StakingMeta { lock_tier: 0 }),
-            ),
+            ), 3_000_000_000),
         ];
 
         ws.process_scanned_outputs(1000, [0xBB; 32], make_timelocked(outputs));
@@ -286,14 +304,14 @@ pub(crate) mod staking {
     fn wallet_state_unstakeable_outputs() {
         let mut ws = WalletState::new();
         let outputs = vec![
-            make_wallet_output(
+            (make_wallet_output(
                 [22; 32], 0, 400, 2_000_000_000,
                 Some(StakingMeta { lock_tier: 0 }),
-            ),
-            make_wallet_output(
+            ), 2_000_000_000),
+            (make_wallet_output(
                 [22; 32], 1, 401, 3_000_000_000,
                 Some(StakingMeta { lock_tier: 2 }),
-            ),
+            ), 3_000_000_000),
         ];
 
         ws.process_scanned_outputs(1000, [0xCC; 32], make_timelocked(outputs));
@@ -313,10 +331,10 @@ pub(crate) mod staking {
             1000,
             [0xD0; 32],
             make_timelocked(vec![
-                make_wallet_output(
+                (make_wallet_output(
                     [30; 32], 0, 500, 5_000_000_000,
                     Some(StakingMeta { lock_tier: 1 }),
-                ),
+                ), 5_000_000_000),
             ]),
         );
 
@@ -324,10 +342,10 @@ pub(crate) mod staking {
             2000,
             [0xD1; 32],
             make_timelocked(vec![
-                make_wallet_output(
+                (make_wallet_output(
                     [31; 32], 0, 501, 1_000_000_000,
                     Some(StakingMeta { lock_tier: 0 }),
-                ),
+                ), 1_000_000_000),
             ]),
         );
 
@@ -345,20 +363,22 @@ pub(crate) mod staking {
     #[test]
     fn detect_spends_marks_staked_output_spent() {
         let mut ws = WalletState::new();
-        let outputs = vec![make_wallet_output(
-            [40; 32], 0, 600, 2_000_000_000,
-            Some(StakingMeta { lock_tier: 0 }),
-        )];
+        let outputs = vec![
+            (make_wallet_output(
+                [40; 32], 0, 600, 2_000_000_000,
+                Some(StakingMeta { lock_tier: 0 }),
+            ), 2_000_000_000),
+        ];
 
         ws.process_scanned_outputs(1000, [0xE0; 32], make_timelocked(outputs));
-        ws.set_key_image(0, [0xFF; 32]);
 
         let past_maturity = 1000 + tier_lock(0) + 1000;
         assert!(ws.transfers()[0].staked);
         assert!(!ws.transfers()[0].spent);
         assert!(ws.transfers()[0].is_unstakeable(past_maturity));
 
-        ws.detect_spends(past_maturity, &[[0xFF; 32]]);
+        let ki = ws.transfers()[0].key_image.expect("key image should be set by process_scanned_outputs");
+        ws.detect_spends(past_maturity, &[ki]);
         assert!(ws.transfers()[0].spent);
         assert!(!ws.transfers()[0].is_unstakeable(past_maturity));
         assert!(!ws.transfers()[0].has_claimable_rewards(past_maturity));
@@ -369,10 +389,12 @@ pub(crate) mod staking {
     #[test]
     fn watermark_update_advances_claim_range() {
         let mut ws = WalletState::new();
-        let outputs = vec![make_wallet_output(
-            [50; 32], 0, 700, 5_000_000_000,
-            Some(StakingMeta { lock_tier: 2 }),
-        )];
+        let outputs = vec![
+            (make_wallet_output(
+                [50; 32], 0, 700, 5_000_000_000,
+                Some(StakingMeta { lock_tier: 2 }),
+            ), 5_000_000_000),
+        ];
 
         ws.process_scanned_outputs(1000, [0xF0; 32], make_timelocked(outputs));
 

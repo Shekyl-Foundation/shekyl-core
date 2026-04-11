@@ -4,6 +4,101 @@
 
 ### ✨ Added
 
+- **Hybrid PQC KEM scanner (Phase 3a).** `shekyl-scanner` now scans blocks
+  using the V3 two-component key derivation: X25519 + ML-KEM-768 hybrid
+  KEM. The `InternalScanner::scan_transaction` pipeline parses
+  `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` (0x06), applies X25519 view-tag
+  pre-filtering (~99.6% rejection), and calls `scan_output_recover` for
+  full KEM decapsulation, HKDF secret derivation, amount decryption, and
+  B' recovery. Key images are computed natively in Rust via
+  `hash_to_point` + `compute_output_key_image`. Legacy ECDH scan path
+  removed.
+
+- **`RecoveredWalletOutput` struct.** New scan result type carrying all
+  KEM-derived secrets (`ho`, `y`, `z`, `k_amount`, `combined_shared_secret`),
+  the computed `key_image`, and decrypted `amount` alongside the base
+  `WalletOutput`. Implements `ZeroizeOnDrop` — secrets are wiped when the
+  struct leaves scope.
+
+- **`TransferDetails` PQC fields and `eligible_height`.** Extended with
+  `ho`, `y`, `z`, `k_amount`, `combined_shared_secret` (all `Zeroizing`)
+  and `eligible_height: u64` (`block_height + SPENDABLE_AGE`). Outputs
+  below `eligible_height` are immature (no curve-tree path) and cannot be
+  spent. `is_spendable()` enforces this gate.
+
+- **`WalletState` KEM-aware processing.** `process_scanned_outputs` now
+  populates all PQC fields from `RecoveredWalletOutput`, sets key images at
+  scan time, and performs duplicate output key detection (burning bug).
+  `spendable_outputs` filters on `eligible_height`.
+
+- **`unmark_spent` for rollback.** `WalletState::unmark_spent` reverses
+  spent marks on outputs whose signing round succeeded but whose finalize
+  step failed (daemon rejection, relay timeout). Prevents phantom-spent
+  balance loss.
+
+- **Background sync loop (Phase 3b).** `shekyl-scanner::sync::run_sync_loop`
+  polls the daemon RPC for new blocks, feeds them through the hybrid KEM
+  scanner, detects spent outputs via key-image matching against block inputs,
+  and emits `SyncProgress` events after each block. Cancellation-safe via
+  `tokio_util::CancellationToken`. Configurable flush interval: every 100
+  blocks on desktop, every block on mobile (OS can kill without warning).
+
+- **`BalanceSummary` uses `eligible_height`.** Timelock categorization now
+  reads `td.eligible_height` directly instead of recomputing from
+  `block_height + DEFAULT_LOCK_WINDOW`.
+
+- **`ViewPair` extended with KEM keys.** Added `x25519_sk` and `ml_kem_dk`
+  fields to `ViewPair` for hybrid KEM decapsulation. The scanner requires
+  both the X25519 secret and ML-KEM decapsulation key.
+
+### 🐛 Fixed
+
+- **Multi-output scan bug.** Removed erroneous `break` in
+  `InternalScanner::scan_transaction` that exited the output iteration loop
+  after finding the first matching output. Transactions with multiple wallet
+  outputs (e.g., payment + change) now detect all of them.
+
+- **Reorg handling in `handle_reorg`.** Rewrote `WalletState::handle_reorg`
+  to use `(height, hash)` pairs instead of treating height as a direct vector
+  index. Correctly handles non-genesis-aligned and sparse sync histories.
+  `synced_height` is now derived from the last remaining block entry.
+
+- **Reorg detection in sync loop.** `run_sync_loop` now compares each incoming
+  block's `header.previous` hash against the wallet's stored hash for the
+  prior height. On mismatch, walks backwards to find the fork point and calls
+  `handle_reorg` before resuming.
+
+- **Block fetch retry with backoff.** Per-block `get_scannable_block_by_number`
+  calls now retry up to 5 times with exponential backoff (500ms initial,
+  capped at 30s) instead of immediately aborting the sync loop on transient
+  failures.
+
+- **Secure memory wiping.** `TransferDetails` now implements both `Zeroize`
+  (covering all fields including `key`, `commitment`, and `fcmp_precomputed_path`)
+  and `Drop` (calls `zeroize()` on drop). `WalletState` implements `Drop` to
+  wipe all transfers, key images, pub keys, and block hashes. Removed unsafe
+  `#[derive(Clone, Debug)]` from `TransferDetails`; `Debug` is now manual and
+  redacts secret fields.
+
+- **Misleading payment ID comment.** Corrected comment in `scan.rs` that
+  incorrectly described ECDH-based XOR decryption for payment IDs; V3
+  transactions do not use encrypted payment IDs.
+
+- **Always-true pattern in sync loop.** Removed `if let Some(tx_hashes) =
+  Some(&scannable.block.transactions)` which was a no-op guard. Block
+  transactions are now iterated directly.
+
+### 🔄 Changed
+
+- **`EncryptedAmount` wire format fix.** The Rust `EncryptedAmount` struct
+  (in `shekyl-oxide::fcmp`) now correctly includes both `amount: [u8; 8]`
+  and `amount_tag: u8`, matching the C++ 9-byte wire format. Previously
+  only the 8-byte amount was read, causing silent data misalignment.
+
+- **`Scanner::new` signature.** Now requires the wallet's `spend_secret`
+  (`Zeroizing<[u8; 32]>`) for native key image computation at scan time.
+  Both `Scanner::new` and `GuaranteedScanner::new` updated.
+
 - **Deterministic KEM encapsulation from `tx_key_secret`.** `construct_output`
   now derives X25519 ephemeral keys and ML-KEM ciphertexts deterministically
   via HKDF-SHA-512 (`derive_kem_seed`), eliminating the need to cache

@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use tracing::warn;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     scan::Timelocked,
@@ -27,8 +28,8 @@ pub struct WalletState {
     pub_keys: HashMap<[u8; 32], usize>,
     /// Current synced blockchain height.
     synced_height: u64,
-    /// Chain of block hashes for reorg detection.
-    blockchain: Vec<[u8; 32]>,
+    /// Processed block hashes keyed by height, for reorg detection.
+    blockchain: Vec<(u64, [u8; 32])>,
     /// Staker pool accrual data for local reward estimation.
     staker_pool: StakerPoolState,
 }
@@ -56,44 +57,63 @@ impl WalletState {
         &self.transfers
     }
 
+    /// Get the stored block hash for the given height, if we processed it.
+    pub fn block_hash_at(&self, height: u64) -> Option<&[u8; 32]> {
+        self.blockchain
+            .iter()
+            .rev()
+            .find(|(h, _)| *h == height)
+            .map(|(_, hash)| hash)
+    }
+
     /// Process scanned outputs from a block and add new transfers.
     ///
-    /// Returns the number of new transfers added.
+    /// Populates all PQC fields (ho, y, z, k_amount, combined_shared_secret,
+    /// key_image) from the `RecoveredWalletOutput`. Returns the number of new
+    /// transfers added.
     pub fn process_scanned_outputs(
         &mut self,
         block_height: u64,
         block_hash: [u8; 32],
         outputs: Timelocked,
     ) -> usize {
-        let outputs = outputs.ignore_additional_timelock();
+        let outputs = outputs.into_inner();
         let mut added = 0;
 
-        for output in &outputs {
-            let pub_key_bytes = output.key().compress().to_bytes();
+        for output in outputs {
+            let pub_key_bytes = output.wallet_output().key().compress().to_bytes();
 
             if self.pub_keys.contains_key(&pub_key_bytes) {
                 warn!(
-                    tx = hex::encode(output.transaction()),
-                    output_idx = output.index_in_transaction(),
+                    tx = hex::encode(output.wallet_output().transaction()),
+                    output_idx = output.wallet_output().index_in_transaction(),
                     "duplicate output key detected (potential burning bug) -- skipping"
                 );
                 continue;
             }
 
-            let td = TransferDetails::from_wallet_output(output, block_height);
+            let mut td = TransferDetails::from_wallet_output(
+                output.wallet_output(),
+                block_height,
+            );
+
+            td.ho = Some(Zeroizing::new(*output.ho()));
+            td.y = Some(Zeroizing::new(*output.y()));
+            td.z = Some(Zeroizing::new(*output.z()));
+            td.k_amount = Some(Zeroizing::new(*output.k_amount()));
+            td.combined_shared_secret = Some(Zeroizing::new(*output.combined_shared_secret()));
+            td.key_image = Some(*output.key_image());
+
             let idx = self.transfers.len();
             self.pub_keys.insert(pub_key_bytes, idx);
-
-            if let Some(ref ki) = td.key_image {
-                self.key_images.insert(*ki, idx);
-            }
+            self.key_images.insert(*output.key_image(), idx);
 
             self.transfers.push(td);
             added += 1;
         }
 
         self.synced_height = block_height;
-        self.blockchain.push(block_hash);
+        self.blockchain.push((block_height, block_hash));
 
         added
     }
@@ -110,6 +130,28 @@ impl WalletState {
             }
         }
         false
+    }
+
+    /// Reverse a spent mark for the given key images (rollback on finalize failure).
+    ///
+    /// After a signing round succeeds but the finalize step fails (daemon
+    /// rejection, disk error, relay timeout), the outputs must be returned to
+    /// the spendable pool. Without this, they become phantom-spent and the
+    /// wallet's usable balance shrinks permanently.
+    pub fn unmark_spent(&mut self, key_images: &[[u8; 32]]) -> usize {
+        let mut unmarked = 0;
+        for ki in key_images {
+            if let Some(&idx) = self.key_images.get(ki) {
+                if let Some(td) = self.transfers.get_mut(idx) {
+                    if td.spent {
+                        td.spent = false;
+                        td.spent_height = None;
+                        unmarked += 1;
+                    }
+                }
+            }
+        }
+        unmarked
     }
 
     /// Process incoming transaction inputs to detect spends of our outputs.
@@ -210,30 +252,31 @@ impl WalletState {
     }
 
     /// Handle a blockchain reorg by removing transfers at or above the given height.
+    ///
+    /// Removes all transfers discovered at `fork_height` or above, drops the
+    /// corresponding block hashes, rebuilds the key-image and pub-key indexes,
+    /// and rewinds `synced_height` to the highest remaining block.
     pub fn handle_reorg(&mut self, fork_height: u64) {
-        let mut removed_indices = vec![];
-        for (idx, td) in self.transfers.iter().enumerate() {
-            if td.block_height >= fork_height {
-                removed_indices.push(idx);
+        for idx in (0..self.transfers.len()).rev() {
+            if self.transfers[idx].block_height >= fork_height {
+                let td = &self.transfers[idx];
+                let pub_key_bytes = td.key.compress().to_bytes();
+                self.pub_keys.remove(&pub_key_bytes);
+                if let Some(ki) = &td.key_image {
+                    self.key_images.remove(ki);
+                }
+                self.transfers.remove(idx);
             }
         }
 
-        for &idx in removed_indices.iter().rev() {
-            let td = &self.transfers[idx];
-            let pub_key_bytes = td.key.compress().to_bytes();
-            self.pub_keys.remove(&pub_key_bytes);
-            if let Some(ki) = &td.key_image {
-                self.key_images.remove(ki);
-            }
-            self.transfers.remove(idx);
-        }
+        self.blockchain.retain(|(h, _)| *h < fork_height);
 
-        self.blockchain.truncate(
-            (fork_height.saturating_sub(1)) as usize,
-        );
-        self.synced_height = fork_height.saturating_sub(1);
+        self.synced_height = self
+            .blockchain
+            .last()
+            .map(|(h, _)| *h)
+            .unwrap_or(0);
 
-        // Reindex after removal
         self.key_images.clear();
         self.pub_keys.clear();
         for (idx, td) in self.transfers.iter().enumerate() {
@@ -248,6 +291,10 @@ impl WalletState {
     }
 
     /// Get spendable outputs with optional account/subaddress/amount filters.
+    ///
+    /// Only returns outputs where `current_height >= eligible_height` — the
+    /// daemon has no curve-tree path for immature outputs, so attempting to
+    /// spend them would fail at FCMP++ proof generation.
     pub fn spendable_outputs(
         &self,
         current_height: u64,
@@ -265,7 +312,7 @@ impl WalletState {
                 if let Some(acct) = account {
                     match td.subaddress {
                         Some(sa) if sa.account() == acct => {}
-                        None if acct == 0 => {} // primary account
+                        None if acct == 0 => {}
                         _ => return false,
                     }
                 }
@@ -371,5 +418,22 @@ impl WalletState {
 impl Default for WalletState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for WalletState {
+    fn drop(&mut self) {
+        for td in &mut self.transfers {
+            td.zeroize();
+        }
+        for (mut ki, _) in self.key_images.drain() {
+            ki.zeroize();
+        }
+        for (mut pk, _) in self.pub_keys.drain() {
+            pk.zeroize();
+        }
+        for (_, ref mut hash) in &mut self.blockchain {
+            hash.zeroize();
+        }
     }
 }

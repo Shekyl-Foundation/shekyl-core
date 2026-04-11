@@ -29,6 +29,7 @@ pub mod balance;
 pub mod claim;
 pub mod coin_select;
 pub mod staker_pool;
+pub mod sync;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -38,7 +39,7 @@ pub use extra::{PaymentId, Extra, ExtraField};
 pub use view_pair::{ViewPairError, ViewPair, GuaranteedViewPair};
 pub use output::WalletOutput;
 pub use shared_key::SharedKeyDerivations;
-pub use scan::{Timelocked, ScanError, Scanner, GuaranteedScanner};
+pub use scan::{Timelocked, RecoveredWalletOutput, ScanError, Scanner, GuaranteedScanner};
 pub use transfer::TransferDetails;
 pub use wallet_state::WalletState;
 pub use balance::BalanceSummary;

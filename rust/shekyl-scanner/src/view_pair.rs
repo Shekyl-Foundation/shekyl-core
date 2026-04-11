@@ -4,7 +4,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! View pair types for scanning: public spend key + private view key.
+//! View pair types for scanning: public spend key + private view key + KEM keys.
 
 use core::ops::Deref;
 
@@ -26,20 +26,37 @@ pub enum ViewPairError {
 
 /// The pair of keys necessary to scan transactions.
 ///
-/// Composed of the public spend key and the private view key.
-#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+/// Composed of the public spend key, the private view key, and the hybrid
+/// KEM secret keys (X25519 + ML-KEM-768) needed for PQC output recovery.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct ViewPair {
     spend: EdwardsPoint,
     pub(crate) view: Zeroizing<Scalar>,
+    /// X25519 secret key for view-tag pre-filter and KEM decap.
+    pub(crate) x25519_sk: Zeroizing<[u8; 32]>,
+    /// ML-KEM-768 decapsulation key (2400 bytes).
+    pub(crate) ml_kem_dk: Zeroizing<Vec<u8>>,
 }
 
+impl PartialEq for ViewPair {
+    fn eq(&self, other: &Self) -> bool {
+        self.spend == other.spend && *self.view == *other.view
+    }
+}
+impl Eq for ViewPair {}
+
 impl ViewPair {
-    /// Create a new ViewPair.
-    pub fn new(spend: EdwardsPoint, view: Zeroizing<Scalar>) -> Result<Self, ViewPairError> {
+    /// Create a new ViewPair with KEM keys for hybrid PQC scanning.
+    pub fn new(
+        spend: EdwardsPoint,
+        view: Zeroizing<Scalar>,
+        x25519_sk: Zeroizing<[u8; 32]>,
+        ml_kem_dk: Zeroizing<Vec<u8>>,
+    ) -> Result<Self, ViewPairError> {
         if !spend.is_torsion_free() {
             Err(ViewPairError::TorsionedSpendKey)?;
         }
-        Ok(ViewPair { spend, view })
+        Ok(ViewPair { spend, view, x25519_sk, ml_kem_dk })
     }
 
     /// The public spend key.
@@ -50,6 +67,16 @@ impl ViewPair {
     /// The public view key (view_scalar * G).
     pub fn view(&self) -> EdwardsPoint {
         self.view.deref() * ED25519_BASEPOINT_TABLE
+    }
+
+    /// The X25519 secret key bytes.
+    pub fn x25519_sk(&self) -> &[u8; 32] {
+        &self.x25519_sk
+    }
+
+    /// The ML-KEM-768 decapsulation key bytes.
+    pub fn ml_kem_dk(&self) -> &[u8] {
+        &self.ml_kem_dk
     }
 
     pub(crate) fn subaddress_derivation(&self, index: SubaddressIndex) -> Scalar {
@@ -77,13 +104,18 @@ impl ViewPair {
 /// Uses a modified shared-key derivation that incorporates input key images,
 /// guaranteeing scanned outputs are spendable under cryptographic hardness
 /// assumptions.
-#[derive(Clone, PartialEq, Eq, Zeroize)]
+#[derive(Clone, Zeroize)]
 pub struct GuaranteedViewPair(pub(crate) ViewPair);
 
 impl GuaranteedViewPair {
     /// Create a new GuaranteedViewPair.
-    pub fn new(spend: EdwardsPoint, view: Zeroizing<Scalar>) -> Result<Self, ViewPairError> {
-        ViewPair::new(spend, view).map(GuaranteedViewPair)
+    pub fn new(
+        spend: EdwardsPoint,
+        view: Zeroizing<Scalar>,
+        x25519_sk: Zeroizing<[u8; 32]>,
+        ml_kem_dk: Zeroizing<Vec<u8>>,
+    ) -> Result<Self, ViewPairError> {
+        ViewPair::new(spend, view, x25519_sk, ml_kem_dk).map(GuaranteedViewPair)
     }
 
     /// The public spend key.
