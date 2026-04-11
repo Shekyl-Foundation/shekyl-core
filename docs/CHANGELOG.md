@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### 🔒 Security
+
+- **Consensus hardening: commitment mask validation verified (Phase 5).**
+  Audited `check_commitment_mask_valid` in `blockchain.cpp`: confirms
+  rejection of identity commitment (mask=0, amount=0), generator-point
+  commitment (mask=1, amount=0), and coinbase `zeroCommit(amount)` form
+  (mask=1, any amount). Called unconditionally for both miner transactions
+  and regular transactions.
+
+- **y=0 defense-in-depth verified (Phase 5).** Confirmed construction-time
+  `assert!(y != [0u8; 32])` and `assert!(ho != [0u8; 32])` in
+  `derive_output_secrets` (Rust, release-mode assert). Both sender
+  (`construct_output`) and receiver (`scan_output_recover`) hit the same
+  assert. Documented in `POST_QUANTUM_CRYPTOGRAPHY.md` with full defense
+  stack analysis.
+
+### 🗑️ Removed
+
+- **Dead v1/v2 transaction branches in consensus (Phase 5).**
+  `check_tx_outputs` now rejects `tx.version < 3` instead of `< 2`.
+  Removed redundant `if (tx.version >= 2)` zero-amount guard (now
+  unconditional). Tightened coinbase version check from `>= 2` to `>= 3`.
+  Removed dead `tx.version < 3` early return in `check_commitment_mask_valid`.
+  Commitment mask checks are now unconditional (version is always >= 3).
+
 ### ✨ Added
 
 - **GUI wallet native-sign activation (Phase 4a).** Added `native-sign`

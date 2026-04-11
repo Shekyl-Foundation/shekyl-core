@@ -1338,7 +1338,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
   LOG_PRINT_L3("Blockchain::" << __func__);
   CHECK_AND_ASSERT_MES(b.miner_tx.vin.size() == 1, false, "coinbase transaction in the block has no inputs");
   CHECK_AND_ASSERT_MES(std::holds_alternative<txin_gen>(b.miner_tx.vin[0]), false, "coinbase transaction in the block has the wrong type");
-  CHECK_AND_ASSERT_MES(b.miner_tx.version >= 2, false, "Invalid coinbase transaction version: " << b.miner_tx.version);
+  CHECK_AND_ASSERT_MES(b.miner_tx.version >= 3, false, "Invalid coinbase transaction version: " << b.miner_tx.version << " (minimum: 3)");
   CHECK_AND_ASSERT_MES(b.miner_tx.rct_signatures.type == rct::RCTTypeNull, false, "FCMP++ signatures not allowed in coinbase transactions");
 
   if(std::get<txin_gen>(b.miner_tx.vin[0]).height != height)
@@ -1358,7 +1358,7 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
 
   CHECK_AND_ASSERT_MES(check_output_types(b.miner_tx, hf_version), false, "miner transaction has invalid output type(s) in block " << get_block_hash(b));
 
-  if (b.miner_tx.version >= 3 && !check_commitment_mask_valid(b.miner_tx))
+  if (!check_commitment_mask_valid(b.miner_tx))
   {
     MERROR("Coinbase transaction has invalid output commitment mask in block " << get_block_hash(b));
     return false;
@@ -3212,9 +3212,6 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
 // for coinbase outputs, using the public amount.
 static bool check_commitment_mask_valid(const transaction& tx)
 {
-  if (tx.version < 3)
-    return true;
-
   const bool is_coinbase = (tx.rct_signatures.type == rct::RCTTypeNull);
   const auto& rv = tx.rct_signatures;
 
@@ -3256,20 +3253,18 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
-  if (tx.version < 2)
+  if (tx.version < 3)
   {
-    MERROR_VER("v1 transactions are not supported");
+    MERROR_VER("Transaction version " << tx.version << " is not supported (minimum: 3)");
     tvc.m_invalid_output = true;
     return false;
   }
 
-  // in a v2 tx, all outputs must have 0 amount
-  if (tx.version >= 2) {
-    for (auto &o: tx.vout) {
-      if (o.amount != 0) {
-        tvc.m_invalid_output = true;
-        return false;
-      }
+  // All v3+ outputs must have 0 amount (amounts are encrypted in RingCT)
+  for (auto &o: tx.vout) {
+    if (o.amount != 0) {
+      tvc.m_invalid_output = true;
+      return false;
     }
   }
 
@@ -3319,7 +3314,7 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
 
   // Commitment mask validation: reject trivial masks (mask=0 or mask=1).
   // Non-coinbase path. Coinbase is validated in prevalidate_miner_transaction.
-  if (tx.version >= 3 && !check_commitment_mask_valid(tx))
+  if (!check_commitment_mask_valid(tx))
   {
     MERROR_VER("Output commitment mask validation failed");
     tvc.m_invalid_output = true;
