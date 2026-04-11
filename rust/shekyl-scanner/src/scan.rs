@@ -84,6 +84,20 @@ impl RecoveredWalletOutput {
     pub fn combined_shared_secret(&self) -> &[u8; 64] { &self.combined_shared_secret }
     pub fn key_image(&self) -> &[u8; 32] { &self.key_image }
     pub fn amount(&self) -> u64 { self.amount }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn new_for_test(base: WalletOutput, amount: u64) -> Self {
+        Self {
+            base,
+            ho: Zeroizing::new([0u8; 32]),
+            y: Zeroizing::new([0u8; 32]),
+            z: Zeroizing::new([0u8; 32]),
+            k_amount: Zeroizing::new([0u8; 32]),
+            combined_shared_secret: Zeroizing::new([0u8; 64]),
+            key_image: [0u8; 32],
+            amount,
+        }
+    }
 }
 
 /// A collection of recovered outputs from a block scan.

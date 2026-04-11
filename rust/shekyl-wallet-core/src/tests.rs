@@ -23,7 +23,7 @@ mod lifecycle {
         global_index: u64,
         amount: u64,
         staking: Option<StakingMeta>,
-    ) -> shekyl_scanner::WalletOutput {
+    ) -> shekyl_scanner::RecoveredWalletOutput {
         use curve25519_dalek::{Scalar, constants::ED25519_BASEPOINT_TABLE};
         use shekyl_oxide::primitives::Commitment;
 
@@ -32,12 +32,13 @@ mod lifecycle {
         let scalar = Scalar::from_bytes_mod_order(bytes);
         let key = &scalar * ED25519_BASEPOINT_TABLE;
 
-        shekyl_scanner::WalletOutput::new_for_test(
+        let base = shekyl_scanner::WalletOutput::new_for_test(
             tx_hash, 0, global_index,
             key, Scalar::ZERO,
             Commitment { mask: Scalar::ONE, amount },
             staking,
-        )
+        );
+        shekyl_scanner::RecoveredWalletOutput::new_for_test(base, amount)
     }
 
     fn simple_weight_fn(amount: u64, tier: u8) -> u64 {

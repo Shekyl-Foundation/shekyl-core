@@ -102,11 +102,14 @@ impl WalletState {
             td.z = Some(Zeroizing::new(*output.z()));
             td.k_amount = Some(Zeroizing::new(*output.k_amount()));
             td.combined_shared_secret = Some(Zeroizing::new(*output.combined_shared_secret()));
-            td.key_image = Some(*output.key_image());
-
+            let ki = *output.key_image();
             let idx = self.transfers.len();
             self.pub_keys.insert(pub_key_bytes, idx);
-            self.key_images.insert(*output.key_image(), idx);
+
+            if ki != [0u8; 32] {
+                td.key_image = Some(ki);
+                self.key_images.insert(ki, idx);
+            }
 
             self.transfers.push(td);
             added += 1;

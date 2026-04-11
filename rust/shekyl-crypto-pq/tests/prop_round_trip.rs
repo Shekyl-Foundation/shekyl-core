@@ -3,13 +3,16 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Gate 1: Property-based round-trip test for output construction → scan → key image.
+//! Gate 1: Property-based round-trip test for output construction -> scan -> key image.
 //!
-//! Tests the full pipeline: construct_output → scan_output_recover →
-//! derive_output_secrets → compute_output_key_image, asserting:
+//! Tests the full pipeline: construct_output -> scan_output_recover ->
+//! derive_output_secrets -> compute_output_key_image, asserting:
 //!
 //! 1. Round-trip succeeds for all valid inputs (random spend keys, amounts 0..u64::MAX).
-//! 2. Cross-cycle determinism: same inputs produce byte-identical outputs on every run.
+//! 2. Cross-cycle determinism: same inputs (including recipient keys) produce
+//!    byte-identical outputs. Note that `construct_output` derives its ephemeral
+//!    KEM material deterministically from `tx_key`, so given fixed recipient keys
+//!    and tx_key the entire pipeline is deterministic.
 //! 3. Amount=0 boundary: zero-amount outputs are legal and round-trip correctly.
 //! 4. All derived secrets (ho, y, z, k_amount, key_image) are non-zero.
 //!
@@ -17,14 +20,11 @@
 
 use proptest::prelude::*;
 
-use curve25519_dalek::{
-    constants::ED25519_BASEPOINT_POINT as G,
-    scalar::Scalar,
-};
+use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT as G, scalar::Scalar};
 use shekyl_crypto_pq::{
-    kem::{HybridX25519MlKem, KeyEncapsulation},
-    output::{construct_output, scan_output_recover, compute_output_key_image},
     derivation::derive_output_secrets,
+    kem::{HybridKemPublicKey, HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation},
+    output::{compute_output_key_image, construct_output, scan_output_recover},
 };
 use shekyl_generators::hash_to_point;
 
@@ -37,10 +37,13 @@ fn scalar_from_u64s(a: u64, b: u64, c: u64, d: u64) -> Scalar {
     Scalar::from_bytes_mod_order(bytes)
 }
 
-fn run_round_trip(spend_scalar: Scalar, amount: u64, output_index: u64) -> RoundTripResult {
-    let kem = HybridX25519MlKem;
-    let (recipient_pk, recipient_sk) = kem.keypair_generate().unwrap();
-
+fn run_round_trip(
+    spend_scalar: Scalar,
+    recipient_pk: &HybridKemPublicKey,
+    recipient_sk: &HybridKemSecretKey,
+    amount: u64,
+    output_index: u64,
+) -> RoundTripResult {
     let tx_key_scalar = Scalar::from_bytes_mod_order([42u8; 32]);
     let tx_key = tx_key_scalar.to_bytes();
 
@@ -60,13 +63,13 @@ fn run_round_trip(spend_scalar: Scalar, amount: u64, output_index: u64) -> Round
     let recovered = scan_output_recover(
         &recipient_sk.x25519,
         &recipient_sk.ml_kem,
-        &out.kem_ct[..32].try_into().unwrap(),
-        &out.kem_ct[32..],
+        &out.kem_ciphertext_x25519,
+        &out.kem_ciphertext_ml_kem,
         &out.output_key,
         &out.commitment,
         &out.enc_amount,
         out.amount_tag,
-        out.view_tag,
+        out.view_tag_x25519,
         output_index,
     )
     .expect("scan_output_recover failed");
@@ -131,8 +134,11 @@ proptest! {
             return Ok(());
         }
 
-        let result_1 = run_round_trip(spend_scalar, amount, output_index);
-        let result_2 = run_round_trip(spend_scalar, amount, output_index);
+        let kem = HybridX25519MlKem;
+        let (pk, sk) = kem.keypair_generate().unwrap();
+
+        let result_1 = run_round_trip(spend_scalar, &pk, &sk, amount, output_index);
+        let result_2 = run_round_trip(spend_scalar, &pk, &sk, amount, output_index);
 
         prop_assert_eq!(
             result_1, result_2,
@@ -144,15 +150,25 @@ proptest! {
 #[test]
 fn amount_zero_round_trip() {
     let spend_scalar = Scalar::from_bytes_mod_order([7u8; 32]);
-    let result = run_round_trip(spend_scalar, 0, 0);
+    let kem = HybridX25519MlKem;
+    let (pk, sk) = kem.keypair_generate().unwrap();
+    let result = run_round_trip(spend_scalar, &pk, &sk, 0, 0);
     assert_eq!(result.amount, 0, "zero-amount output should round-trip");
-    eprintln!("[Gate 1] amount=0 round-trip passed: key_image={}", hex::encode(result.key_image));
+    eprintln!(
+        "[Gate 1] amount=0 round-trip passed: key_image={}",
+        hex::encode(result.key_image)
+    );
 }
 
 #[test]
 fn amount_max_round_trip() {
     let spend_scalar = Scalar::from_bytes_mod_order([11u8; 32]);
-    let result = run_round_trip(spend_scalar, u64::MAX, 3);
+    let kem = HybridX25519MlKem;
+    let (pk, sk) = kem.keypair_generate().unwrap();
+    let result = run_round_trip(spend_scalar, &pk, &sk, u64::MAX, 3);
     assert_eq!(result.amount, u64::MAX);
-    eprintln!("[Gate 1] amount=MAX round-trip passed: key_image={}", hex::encode(result.key_image));
+    eprintln!(
+        "[Gate 1] amount=MAX round-trip passed: key_image={}",
+        hex::encode(result.key_image)
+    );
 }
