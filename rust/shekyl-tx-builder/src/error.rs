@@ -74,8 +74,9 @@ pub enum TxBuilderError {
 
     /// The number of C1/C2 branch layers is inconsistent with the tree depth.
     ///
-    /// For a tree of depth `d`, each input must have exactly `ceil(d/2)` C1
-    /// layers and `floor(d/2)` C2 layers (or the reverse, depending on parity).
+    /// For a tree of depth `d`, each input must have `c1 + c2 == d - 1` total
+    /// branch layers (the leaf hash at layer 0 needs no branch entry).
+    /// Additionally, `c2 == c1` or `c2 == c1 + 1`.
     #[error("input {index} has {c1} C1 layers and {c2} C2 layers, inconsistent with tree depth {depth}")]
     BranchLayerMismatch {
         index: usize,

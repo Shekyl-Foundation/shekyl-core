@@ -34,7 +34,7 @@ fn dummy_spend_input(amount: u64) -> SpendInput {
         combined_ss: vec![0u8; 64],
         output_index: 0,
         leaf_chunk: vec![dummy_leaf_entry()],
-        c1_layers: vec![vec![[10u8; 32]]],
+        c1_layers: vec![],
         c2_layers: vec![vec![[11u8; 32]]],
     }
 }
@@ -253,7 +253,7 @@ fn test_zero_tree_depth() {
 fn test_branch_layer_mismatch() {
     let mut input = dummy_spend_input(100);
     input.c1_layers = vec![vec![[10u8; 32]]];
-    input.c2_layers = vec![]; // depth = 2 but only 1 layer total
+    input.c2_layers = vec![vec![[11u8; 32]]]; // c1+c2=2 but depth-1=1
     let result = sign_transaction(
         [0u8; 32],
         &[input],

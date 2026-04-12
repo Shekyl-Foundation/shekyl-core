@@ -84,11 +84,12 @@ pub(crate) fn validate_inputs(
 
         // Branch layer consistency with tree depth.
         // The FCMP++ tree alternates Selene (C1) and Helios (C2) layers.
-        // For depth d: c1_count + c2_count should equal d.
+        // Layer 0 is always the leaf hash (Selene); branch layers sit above it.
+        // For depth d: c1_count + c2_count + 1 == d.
         let c1 = inp.c1_layers.len();
         let c2 = inp.c2_layers.len();
         let depth = tree.tree_depth as usize;
-        if c1 + c2 != depth {
+        if c1 + c2 + 1 != depth {
             return Err(TxBuilderError::BranchLayerMismatch {
                 index: i,
                 c1,

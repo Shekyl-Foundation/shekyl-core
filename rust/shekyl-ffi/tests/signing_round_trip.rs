@@ -255,34 +255,20 @@ fn build_leaf_and_root(
     );
     assert!(ok, "shekyl_construct_curve_tree_leaf failed");
 
-    // Layer 0 → Selene: hash the 4 leaf scalars into a Selene chunk point.
+    // tree_depth=1: the root IS the Selene hash of the single leaf chunk.
+    // No branch layers above it (c1=0, c2=0).
     let init_bytes: [u8; 32] = SELENE_HASH_INIT.to_bytes().into();
     let zero_scalar = [0u8; 32];
-    let mut selene_hash = [0u8; 32];
+    let mut root = [0u8; 32];
     let ok = shekyl_curve_tree_hash_grow_selene(
         init_bytes.as_ptr(),
         0,
         zero_scalar.as_ptr(),
         leaf.as_ptr(),
         4,
-        selene_hash.as_mut_ptr(),
-    );
-    assert!(ok, "shekyl_curve_tree_hash_grow_selene failed");
-
-    // Layer 1 → Helios: hash the Selene chunk hash (as a Helios child).
-    // The child is the x-coordinate of the Selene point; for Helios hash_grow
-    // the input is the serialized Selene point bytes which gets decomposed internally.
-    let helios_init: [u8; 32] = shekyl_generators::HELIOS_HASH_INIT.to_bytes().into();
-    let mut root = [0u8; 32];
-    let ok = shekyl_ffi::shekyl_curve_tree_hash_grow_helios(
-        helios_init.as_ptr(),
-        0,
-        zero_scalar.as_ptr(),
-        selene_hash.as_ptr(),
-        1,
         root.as_mut_ptr(),
     );
-    assert!(ok, "shekyl_curve_tree_hash_grow_helios failed");
+    assert!(ok, "shekyl_curve_tree_hash_grow_selene failed");
 
     (leaf, root)
 }
@@ -353,7 +339,7 @@ fn build_test_case(iteration: u32) {
         "h_pqc": hex_encode(&scanned.h_pqc),
         "leaf_chunk": [leaf_entry_json],
         "c1_layers": [],
-        "c2_layers": [[]],
+        "c2_layers": [],
     }]);
 
     let mut enc_amount_9 = [0u8; 9];

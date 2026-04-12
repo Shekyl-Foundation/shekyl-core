@@ -19,6 +19,27 @@
   `BOOST_FOREACH` usage is reintroduced via upstream cherry-picks. All 31
   prior instances were replaced with range-based for loops.
 
+### 🐛 Fixed
+
+- **FCMP++ branch layer validation off-by-one in `shekyl-tx-builder`.** The
+  `BranchLayerMismatch` check in `validate.rs` required `c1 + c2 == depth`
+  but the FCMP++ tree convention is `c1 + c2 + 1 == depth` (layer 0 is the
+  leaf hash, which needs no branch entry). This prevented valid depth=1 trees
+  from passing validation and silently accepted incorrect branch counts for
+  deeper trees. Fixed the check, updated the error docs, and corrected the
+  dummy test fixtures.
+
+### ✅ Testing
+
+- **FFI signing round-trip test rewritten to use `shekyl_sign_fcmp_transaction`.**
+  `rust/shekyl-ffi/tests/signing_round_trip.rs` now exercises the full C-ABI
+  FFI boundary: KEM keypair generation, output construction, output scanning,
+  curve tree leaf/root computation, JSON serialization of `FcmpSignInput` +
+  `OutputInfo`, signing via `shekyl_sign_fcmp_transaction`, and verification
+  via `shekyl_fcmp_verify`. Runs 10 iterations with different random seeds.
+  Previously called `proof::prove` directly, bypassing FFI JSON parsing, key
+  derivation, and buffer management.
+
 ### 📚 Documentation
 
 - **FFI header upgraded to `///` doc comments (Phase 6 completion).** Converted all
