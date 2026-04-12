@@ -42,9 +42,14 @@
 
 extern "C" {
 
-// Version / init
+/// Return the Rust crate version string (null-terminated, static lifetime).
 const char* shekyl_rust_version();
+
+/// Initialize the Rust runtime (logging, panic hooks). Call once at startup.
+/// Returns false if initialization fails.
 bool shekyl_rust_init();
+
+/// Return the active consensus module name (e.g. "fcmp++", static lifetime).
 const char* shekyl_active_consensus_module();
 
 // Generic Rust-owned buffer
@@ -69,12 +74,22 @@ struct ShekylPqcSignatureResult {
     bool success;
 };
 
+/// Generate a hybrid ML-DSA + Ed25519 keypair.
+/// Free both buffers with shekyl_buffer_free. Wipe secret_key after use.
 ShekylPqcKeypair shekyl_pqc_keypair_generate();
+
+/// Sign a message with a hybrid ML-DSA secret key.
+/// secret_key_ptr/len: secret key bytes from shekyl_pqc_keypair_generate.
+/// Returns signature blob. Caller frees with shekyl_buffer_free.
 ShekylPqcSignatureResult shekyl_pqc_sign(
     const uint8_t* secret_key_ptr,
     size_t secret_key_len,
     const uint8_t* message_ptr,
     size_t message_len);
+
+/// Verify a hybrid ML-DSA signature.
+/// scheme_id: PQC scheme discriminant (0 = ML-DSA-65 + Ed25519).
+/// Returns true if the signature is valid.
 bool shekyl_pqc_verify(
     uint8_t scheme_id,
     const uint8_t* pubkey_blob,
@@ -85,6 +100,9 @@ bool shekyl_pqc_verify(
     size_t message_len);
 
 #ifndef NDEBUG
+/// Debug variant of shekyl_pqc_verify returning granular error codes.
+/// 0 = valid, 1 = invalid Ed25519 sig, 2 = invalid ML-DSA sig,
+/// 3 = bad pubkey format, 4 = bad sig format.
 uint8_t shekyl_pqc_verify_debug(
     uint8_t scheme_id,
     const uint8_t* pubkey_blob,
@@ -95,23 +113,30 @@ uint8_t shekyl_pqc_verify_debug(
     size_t message_len);
 #endif
 
+/// Compute a deterministic group ID from a sorted set of participant keys.
+/// keys_ptr: concatenated public key blobs, keys_len total bytes.
+/// out_ptr: 32 writable bytes for the group ID hash.
 bool shekyl_pqc_multisig_group_id(
     const uint8_t* keys_ptr,
     size_t keys_len,
     uint8_t* out_ptr);
 
-// Crypto: Hash functions
+/// Compute Keccak-256 hash of data_ptr[0..data_len].
+/// out_ptr: 32 writable bytes for the hash output.
 bool shekyl_cn_fast_hash(
     const uint8_t* data_ptr,
     size_t data_len,
     uint8_t* out_ptr);
 
+/// Compute Merkle tree hash over `count` 32-byte hashes.
+/// hashes_ptr: count * 32 bytes (contiguous). out_ptr: 32 writable bytes.
 bool shekyl_tree_hash(
     const uint8_t* hashes_ptr,
     size_t count,
     uint8_t* out_ptr);
 
-// Release rate
+/// Calculate the adaptive release multiplier based on transaction volume.
+/// Returns multiplier in fixed-point (1e18 = 1.0).
 uint64_t shekyl_calc_release_multiplier(
     uint64_t tx_volume_avg,
     uint64_t tx_volume_baseline,

@@ -94,8 +94,6 @@ namespace rct {
         const std::vector<xmr_amount> &outamounts, const keyV &destinations, hw::device &hwdev);
     bool verRctSemanticsSimple(const rctSig & rv);
     bool verRctSemanticsSimple(const std::vector<const rctSig*> & rv);
-    xmr_amount decodeRctSimple(const rctSig & rv, const key & sk, unsigned int i, key & mask, hw::device &hwdev);
-    xmr_amount decodeRctSimple(const rctSig & rv, const key & sk, unsigned int i, hw::device &hwdev);
     key get_tx_prehash(const rctSig &rv, hw::device &hwdev);
 }
 #endif  /* RCTSIGS_H */

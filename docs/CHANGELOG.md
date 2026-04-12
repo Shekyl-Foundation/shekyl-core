@@ -49,9 +49,12 @@
   restoration, empty block height advancement, and spend/unmark round-trip.
   Explicitly documented as bookkeeping-only (not integration against a real daemon).
 
-- **CI grep gates (Phase 6).** Four blocking grep gates in `build.yml`:
+- **CI grep gates (Phase 6).** Seven blocking grep gates in `build.yml`:
   `shekyl_y` absence, `derivation_to_y_scalar` absence, legacy RCT type absence,
-  v1/v2 tx version branch absence. All run without `continue-on-error`.
+  v1/v2 tx version branch absence, `HASH_KEY_TXPROOF` absence,
+  `combined_shared_secret` confinement to wallet boundary,
+  `ecdhEncode`/`ecdhDecode` confinement to Ledger gate. All run without
+  `continue-on-error`.
 
 - **FFI header documentation (Phase 6).** `shekyl_ffi.h` now has Doxygen-style
   file-level documentation covering the memory model, secret handling conventions,
@@ -69,6 +72,25 @@
   `test_10_restored_wallet_outbound_proof_error` from `proof_round_trip.rs`.
   Future implementations tracked in `WALLET_STATE_MIGRATION.md`.
 
+- **Dead v1/v2 transaction branches in consensus (Phase 5).**
+  `check_tx_outputs` now rejects `tx.version < 3` instead of `< 2`.
+  Removed redundant `if (tx.version >= 2)` zero-amount guard (now
+  unconditional). Tightened coinbase version check from `>= 2` to `>= 3`.
+  Removed dead `tx.version < 3` early return in `check_commitment_mask_valid`.
+  Commitment mask checks are now unconditional (version is always >= 3).
+
+- **Dead legacy code excision (Phase 6 completion).**
+  Deleted `decodeRctSimple` and its overload from `rctSigs.cpp/.h`.
+  Deleted `tools::decodeRct` wrapper and all callers in `wallet2.cpp`.
+  Migrated 7 `generate_key_image_helper` call sites to `td.m_key_image` or
+  Rust FFI. Deleted `generate_key_image_helper` definitions from
+  `cryptonote_format_utils.cpp/.h`. Deleted `generate_output_ephemeral_keys`
+  declaration from `cryptonote_tx_utils.h`. Deleted `tx_proof.cpp` unit test
+  (referenced removed `crypto::generate_tx_proof_v1`). Deleted
+  `is_out_to_acc.h` performance test and its registrations.
+
+### 🔒 Security (Phase 5 Audit Notes)
+
 - **Consensus hardening: commitment mask validation verified (Phase 5).**
   Audited `check_commitment_mask_valid` in `blockchain.cpp`: confirms
   rejection of identity commitment (mask=0, amount=0), generator-point
@@ -82,15 +104,6 @@
   (`construct_output`) and receiver (`scan_output_recover`) hit the same
   assert. Documented in `POST_QUANTUM_CRYPTOGRAPHY.md` with full defense
   stack analysis.
-
-### 🗑️ Removed
-
-- **Dead v1/v2 transaction branches in consensus (Phase 5).**
-  `check_tx_outputs` now rejects `tx.version < 3` instead of `< 2`.
-  Removed redundant `if (tx.version >= 2)` zero-amount guard (now
-  unconditional). Tightened coinbase version check from `>= 2` to `>= 3`.
-  Removed dead `tx.version < 3` early return in `check_commitment_mask_valid`.
-  Commitment mask checks are now unconditional (version is always >= 3).
 
 ### ✨ Added
 

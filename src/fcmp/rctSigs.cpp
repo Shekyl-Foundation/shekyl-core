@@ -511,37 +511,4 @@ namespace
         return rv;
     }
 
-    xmr_amount decodeRctSimple(const rctSig & rv, const key & sk, unsigned int i, key &mask, hw::device &hwdev) {
-        CHECK_AND_ASSERT_MES(rv.type == RCTTypeFcmpPlusPlusPqc,
-            false, "decodeRctSimple called on unsupported rctSig type");
-        CHECK_AND_ASSERT_THROW_MES(i < rv.enc_amounts.size(), "Bad index");
-        CHECK_AND_ASSERT_THROW_MES(rv.outPk.size() == rv.enc_amounts.size(), "Mismatched sizes of rv.outPk and rv.enc_amounts");
-
-        mask = genCommitmentMask(sk);
-        key amount;
-        memset(&amount, 0, sizeof(amount));
-        memcpy(amount.bytes, rv.enc_amounts[i].data(), 8);
-        key hash = ecdhHash(sk);
-        for (int j = 0; j < 8; ++j)
-            amount.bytes[j] ^= hash.bytes[j];
-
-        key C = rv.outPk[i].mask;
-        DP("C");
-        DP(C);
-        key Ctmp;
-        CHECK_AND_ASSERT_THROW_MES(sc_check(mask.bytes) == 0, "warning, bad ECDH mask");
-        CHECK_AND_ASSERT_THROW_MES(sc_check(amount.bytes) == 0, "warning, bad ECDH amount");
-        addKeys2(Ctmp, mask, amount, H);
-        DP("Ctmp");
-        DP(Ctmp);
-        if (equalKeys(C, Ctmp) == false) {
-            CHECK_AND_ASSERT_THROW_MES(false, "warning, amount decoded incorrectly, will be unable to spend");
-        }
-        return h2d(amount);
-    }
-
-    xmr_amount decodeRctSimple(const rctSig & rv, const key & sk, unsigned int i, hw::device &hwdev) {
-      key mask;
-      return decodeRctSimple(rv, sk, i, mask, hwdev);
-    }
 }

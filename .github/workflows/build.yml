@@ -430,6 +430,27 @@ jobs:
             exit 1
           fi
           echo "PASS: no v1/v2 tx version branches"
+      - name: "CI grep gate: no HASH_KEY_TXPROOF in C++ source"
+        run: |
+          if grep -rn 'HASH_KEY_TXPROOF' --include='*.cpp' --include='*.h' src/ tests/; then
+            echo "FATAL: legacy HASH_KEY_TXPROOF still referenced"
+            exit 1
+          fi
+          echo "PASS: no HASH_KEY_TXPROOF"
+      - name: "CI grep gate: combined_shared_secret confined to wallet"
+        run: |
+          if grep -rn 'combined_shared_secret' --include='*.cpp' --include='*.h' src/common/ src/rpc/ src/cryptonote_protocol/; then
+            echo "FATAL: combined_shared_secret leaked outside wallet boundary"
+            exit 1
+          fi
+          echo "PASS: combined_shared_secret confined"
+      - name: "CI grep gate: no ecdhEncode/ecdhDecode outside Ledger"
+        run: |
+          if grep -rn 'ecdhEncode\|ecdhDecode' --include='*.cpp' --include='*.h' src/ | grep -v device_ledger; then
+            echo "FATAL: ecdhEncode/ecdhDecode used outside Ledger gate"
+            exit 1
+          fi
+          echo "PASS: no ecdhEncode/ecdhDecode outside Ledger"
       - name: determinism check (build twice, compare hashes)
         working-directory: rust
         run: |

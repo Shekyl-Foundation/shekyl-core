@@ -50,7 +50,6 @@
 #include "generate_key_image_helper.h"
 #include "generate_keypair.h"
 #include "signature.h"
-#include "is_out_to_acc.h"
 #include "out_can_be_to_acc.h"
 #include "subaddress_expand.h"
 #include "sc_reduce32.h"
@@ -139,8 +138,6 @@ int main(int argc, char** argv)
   TEST_PERFORMANCE4(filter, p, test_check_hash, 0xffffffffffffffff, 0xffffffffffffffff, 0, 1);
   TEST_PERFORMANCE4(filter, p, test_check_hash, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff);
 
-  TEST_PERFORMANCE0(filter, p, test_is_out_to_acc);
-  TEST_PERFORMANCE0(filter, p, test_is_out_to_acc_precomp);
   TEST_PERFORMANCE2(filter, p, test_out_can_be_to_acc, false, true); // no view tag, owned
   TEST_PERFORMANCE2(filter, p, test_out_can_be_to_acc, true, false); // use view tag, not owned
   TEST_PERFORMANCE2(filter, p, test_out_can_be_to_acc, true, true); // use view tag, owned

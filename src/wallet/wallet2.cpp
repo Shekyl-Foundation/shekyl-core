@@ -1968,6 +1968,8 @@ void wallet2::check_acc_out_precomp(const tx_out &o, const crypto::key_derivatio
      LOG_ERROR("wrong type id in transaction out");
      return;
   }
+  // TODO(v3-migration): v3 outputs use shekyl_scan_and_recover; this Keccak-based
+  // path remains as fallback for legacy cache loading.
   tx_scan_info.received = is_out_to_acc_precomp(m_subaddresses, output_public_key, derivation, additional_derivations, i, hwdev, get_output_view_tag(o));
   if(tx_scan_info.received)
   {
@@ -2007,28 +2009,6 @@ void wallet2::check_acc_out_precomp_once(const tx_out &o, const crypto::key_deri
     already_seen = true;
 }
 //----------------------------------------------------------------------------------------------------
-static uint64_t decodeRct(const rct::rctSig & rv, const crypto::key_derivation &derivation, unsigned int i, rct::key & mask, hw::device &hwdev)
-{
-  crypto::secret_key scalar1;
-  hwdev.derivation_to_scalar(derivation, i, scalar1);
-  try
-  {
-    switch (rv.type)
-    {
-    case rct::RCTTypeFcmpPlusPlusPqc:
-      return rct::decodeRctSimple(rv, rct::sk2rct(scalar1), i, mask, hwdev);
-    default:
-      LOG_ERROR("Unsupported rct type: " << rv.type);
-      return 0;
-    }
-  }
-  catch (const std::exception &e)
-  {
-    LOG_ERROR("Failed to decode input " << i);
-    return 0;
-  }
-}
-//----------------------------------------------------------------------------------------------------
 void wallet2::scan_output(const cryptonote::transaction &tx, bool miner_tx, const crypto::public_key &tx_pub_key, size_t i, tx_scan_info_t &tx_scan_info, int &num_vouts_received, std::unordered_map<cryptonote::subaddress_index, uint64_t> &tx_money_got_in_outs, std::vector<size_t> &outs, bool pool)
 {
   THROW_WALLET_EXCEPTION_IF(i >= tx.vout.size(), error::wallet_internal_error, "Invalid vout index");
@@ -2065,10 +2045,6 @@ void wallet2::scan_output(const cryptonote::transaction &tx, bool miner_tx, cons
   }
 
   THROW_WALLET_EXCEPTION_IF(std::find(outs.begin(), outs.end(), i) != outs.end(), error::wallet_internal_error, "Same output cannot be added twice");
-  if (tx_scan_info.money_transfered == 0 && !miner_tx)
-  {
-    tx_scan_info.money_transfered = tools::decodeRct(tx.rct_signatures, tx_scan_info.received->derivation, i, tx_scan_info.mask, m_account.get_device());
-  }
   if (tx_scan_info.money_transfered == 0)
   {
     MERROR("Invalid output amount, skipping");
@@ -7574,22 +7550,10 @@ bool wallet2::sign_tx(unsigned_tx_set &exported_txs, std::vector<wallet2::pendin
       }
     }
 
-    for (size_t i = 0; i < tx.vout.size(); ++i)
-    {
-      crypto::public_key output_public_key;
-      if (!get_output_public_key(tx.vout[i], output_public_key))
-        continue;
-
-      // if this output is back to this wallet, we can calculate its key image already
-      if (!is_out_to_acc_precomp(m_subaddresses, output_public_key, derivation, additional_derivations, i, hwdev, get_output_view_tag(tx.vout[i])))
-        continue;
-      crypto::key_image ki;
-      cryptonote::keypair in_ephemeral;
-      if (generate_key_image_helper(keys, m_subaddresses, output_public_key, tx_pub_key, additional_tx_pub_keys, i, in_ephemeral, ki, hwdev))
-        signed_txes.tx_key_images[output_public_key] = ki;
-      else
-        MERROR("Failed to calculate key image");
-    }
+    // v3 key images for change outputs are computed at scan time
+    // by shekyl_scan_and_recover. Skip legacy Keccak-based key image
+    // pre-computation here; the wallet will fill them when the tx is
+    // received and processed through the v3 scan pipeline.
   }
 
   // add key images
@@ -8251,15 +8215,6 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       crypto::public_key out_key = td.get_public_key();
 
       inSk[i].dest = rct::sk2rct(crypto::null_skey);
-      {
-        keypair in_eph;
-        crypto::key_image tmp_ki;
-        const auto& src = sources[i];
-        generate_key_image_helper(m_account.get_keys(), m_subaddresses, out_key,
-          src.real_out_tx_key, src.real_out_additional_tx_keys,
-          src.real_output_in_tx_index, in_eph, tmp_ki, m_account.get_device());
-        inSk[i].dest = rct::sk2rct(in_eph.sec);
-      }
       inSk[i].mask = rct::sk2rct(td.m_mask);
 
       inPk[i].dest = rct::pk2rct(out_key);
@@ -8318,6 +8273,7 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       outamounts.push_back(out.amount);
     }
 
+    // TODO(v3-migration): replace Keccak-derived amount_keys with HKDF k_amount from td.m_k_amount
     rct::keyV amount_keys(destinations_rct.size());
     for (size_t i = 0; i < destinations_rct.size(); ++i)
     {
@@ -11823,7 +11779,7 @@ std::pair<uint64_t, std::vector<std::pair<crypto::key_image, crypto::signature>>
     crypto::public_key tx_pub_key = get_tx_pub_key_from_received_outs(td);
     const std::vector<crypto::public_key> additional_tx_pub_keys = get_additional_tx_pub_keys_from_extra(td.m_tx);
 
-    // generate ephemeral secret key
+    // TODO(v3-migration): migrate to shekyl_derive_proof_secrets FFI for v3 ring sig
     crypto::key_image ki;
     cryptonote::keypair in_ephemeral;
     bool r = cryptonote::generate_key_image_helper(m_account.get_keys(), m_subaddresses, pkey, tx_pub_key, additional_tx_pub_keys, td.m_internal_output_index, in_ephemeral, ki, m_account.get_device());
@@ -12102,8 +12058,7 @@ uint64_t wallet2::import_key_images(const std::vector<std::pair<crypto::key_imag
         {
           if (tx_scan_info.money_transfered == 0 && !miner_tx)
           {
-            rct::key mask;
-            tx_scan_info.money_transfered = tools::decodeRct(spent_tx.rct_signatures, tx_scan_info.received->derivation, output_index, mask, hwdev);
+            MERROR("v3 output amount should already be decoded by shekyl_scan_and_recover");
           }
           THROW_WALLET_EXCEPTION_IF(tx_money_got_in_outs >= std::numeric_limits<uint64_t>::max() - tx_scan_info.money_transfered,
               error::wallet_internal_error, "Overflow in received amounts");

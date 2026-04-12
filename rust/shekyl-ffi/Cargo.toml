@@ -39,7 +39,7 @@ modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
 
 [dev-dependencies]
 rand_core = { version = "0.6", features = ["std"] }
-ec-divisors = "0.2"
+ec-divisors = "0.1"
 multiexp = "0.4"
 ciphersuite = "0.4"
 shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
