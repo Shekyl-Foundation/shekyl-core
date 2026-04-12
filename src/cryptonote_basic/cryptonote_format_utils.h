@@ -79,9 +79,9 @@ namespace cryptonote
   bool add_tx_pub_key_to_extra(transaction& tx, const crypto::public_key& tx_pub_key);
   bool add_tx_pub_key_to_extra(transaction_prefix& tx, const crypto::public_key& tx_pub_key);
   bool add_tx_pub_key_to_extra(std::vector<uint8_t>& tx_extra, const crypto::public_key& tx_pub_key);
-  std::vector<crypto::public_key> get_additional_tx_pub_keys_from_extra(const std::vector<uint8_t>& tx_extra);
-  std::vector<crypto::public_key> get_additional_tx_pub_keys_from_extra(const transaction_prefix& tx);
-  bool add_additional_tx_pub_keys_to_extra(std::vector<uint8_t>& tx_extra, const std::vector<crypto::public_key>& additional_pub_keys);
+  // additional_tx_pub_keys removed in V3: single tx pubkey per transaction, per-output KEM ciphertexts replace additional keys
+  inline std::vector<crypto::public_key> get_additional_tx_pub_keys_from_extra(const std::vector<uint8_t>&) { return {}; }
+  inline std::vector<crypto::public_key> get_additional_tx_pub_keys_from_extra(const transaction_prefix&) { return {}; }
   bool add_extra_nonce_to_tx_extra(std::vector<uint8_t>& tx_extra, const blobdata& extra_nonce);
   bool add_mm_merkle_root_to_tx_extra(std::vector<uint8_t>& tx_extra, const crypto::hash& mm_merkle_root, size_t mm_merkle_tree_depth);
   bool remove_field_from_tx_extra(std::vector<uint8_t>& tx_extra, const std::type_info &type);

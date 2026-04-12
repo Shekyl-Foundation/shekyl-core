@@ -426,7 +426,6 @@ namespace tools
         uint8_t flags;
       } m_flags;
       uint64_t m_amount;
-      std::vector<crypto::public_key> m_additional_tx_keys;
       uint32_t m_subaddr_index_major;
       uint32_t m_subaddr_index_minor;
       crypto::secret_key m_mask{};
@@ -443,7 +442,6 @@ namespace tools
         FIELD(m_tx_pubkey)
         FIELD(m_flags.flags)
         VARINT_FIELD(m_amount)
-        FIELD(m_additional_tx_keys)
         VARINT_FIELD(m_subaddr_index_major)
         VARINT_FIELD(m_subaddr_index_minor)
         FIELD(m_mask)
@@ -638,7 +636,6 @@ namespace tools
       std::vector<size_t> selected_transfers;
       std::string key_images;
       crypto::secret_key tx_key;
-      std::vector<crypto::secret_key> additional_tx_keys;
       std::vector<cryptonote::tx_destination_entry> dests;
 
       tx_construction_data construction_data;
@@ -653,7 +650,6 @@ namespace tools
         FIELD(selected_transfers)
         FIELD(key_images)
         FIELD(tx_key)
-        FIELD(additional_tx_keys)
         FIELD(dests)
         FIELD(construction_data)
       END_SERIALIZE()
@@ -1151,7 +1147,6 @@ namespace tools
       a & m_scanned_pool_txs[1];
       a & m_subaddresses.parent();
       a & m_subaddress_labels;
-      a & m_additional_tx_keys.parent();
       a & m_attributes.parent();
       a & m_account_tags.first.parent();
       a & m_account_tags.second;
@@ -1188,7 +1183,6 @@ namespace tools
       FIELD(m_scanned_pool_txs[1])
       FIELD(m_subaddresses)
       FIELD(m_subaddress_labels)
-      FIELD(m_additional_tx_keys)
       FIELD(m_attributes)
       FIELD(m_account_tags)
       FIELD(m_ring_history_saved)
@@ -1287,12 +1281,12 @@ namespace tools
     bool is_mismatched_daemon_version_allowed() const { return m_allow_mismatched_daemon_version; }
     void allow_mismatched_daemon_version(bool allow_mismatch) { m_allow_mismatched_daemon_version = allow_mismatch; }
 
-    bool get_tx_key_cached(const crypto::hash &txid, crypto::secret_key &tx_key, std::vector<crypto::secret_key> &additional_tx_keys) const;
-    void set_tx_key(const crypto::hash &txid, const crypto::secret_key &tx_key, const std::vector<crypto::secret_key> &additional_tx_keys, const std::optional<cryptonote::account_public_address> &single_destination_subaddress = std::nullopt);
-    bool get_tx_key(const crypto::hash &txid, crypto::secret_key &tx_key, std::vector<crypto::secret_key> &additional_tx_keys);
-    void check_tx_key(const crypto::hash &txid, const crypto::secret_key &tx_key, const std::vector<crypto::secret_key> &additional_tx_keys, const cryptonote::account_public_address &address, uint64_t &received, bool &in_pool, uint64_t &confirmations);
+    bool get_tx_key_cached(const crypto::hash &txid, crypto::secret_key &tx_key) const;
+    void set_tx_key(const crypto::hash &txid, const crypto::secret_key &tx_key, const std::optional<cryptonote::account_public_address> &single_destination_subaddress = std::nullopt);
+    bool get_tx_key(const crypto::hash &txid, crypto::secret_key &tx_key);
+    void check_tx_key(const crypto::hash &txid, const crypto::secret_key &tx_key, const cryptonote::account_public_address &address, uint64_t &received, bool &in_pool, uint64_t &confirmations);
     std::string get_tx_proof(const crypto::hash &txid, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message);
-    std::string get_tx_proof(const cryptonote::transaction &tx, const crypto::secret_key &tx_key, const std::vector<crypto::secret_key> &additional_tx_keys, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message) const;
+    std::string get_tx_proof(const cryptonote::transaction &tx, const crypto::secret_key &tx_key, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message) const;
     bool check_tx_proof(const crypto::hash &txid, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message, const std::string &sig_str, uint64_t &received, bool &in_pool, uint64_t &confirmations);
     bool check_tx_proof(const cryptonote::transaction &tx, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message, const std::string &sig_str, uint64_t &received) const;
 
@@ -1688,8 +1682,6 @@ namespace tools
     serializable_unordered_multimap<crypto::hash, pool_payment_details> m_unconfirmed_payments;
     serializable_unordered_map<crypto::hash, crypto::secret_key> m_tx_keys;
     cryptonote::checkpoints m_checkpoints;
-    serializable_unordered_map<crypto::hash, std::vector<crypto::secret_key>> m_additional_tx_keys;
-
     transfer_container m_transfers;
     payment_container m_payments;
     serializable_unordered_map<crypto::key_image, size_t> m_key_images;
@@ -2073,7 +2065,6 @@ namespace boost
       a & x.tx_key;
       a & x.dests;
       a & x.construction_data;
-      a & x.additional_tx_keys;
     }
 
     template <class Archive>

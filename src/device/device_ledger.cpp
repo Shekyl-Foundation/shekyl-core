@@ -177,12 +177,11 @@ namespace hw {
     /* ===                        Keymap                                ==== */
     /* ===================================================================== */
 
-    ABPkeys::ABPkeys(const rct::key& A, const rct::key& B, const bool is_subaddr,  const bool is_change, const bool need_additional_txkeys,  const size_t real_output_index, const rct::key& P, const rct::key& AK) {
+    ABPkeys::ABPkeys(const rct::key& A, const rct::key& B, const bool is_subaddr, const bool is_change, const size_t real_output_index, const rct::key& P, const rct::key& AK) {
       Aout = A;
       Bout = B;
       is_subaddress = is_subaddr;
       is_change_address = is_change;
-      additional_key = need_additional_txkeys;
       index = real_output_index;
       Pout = P;
       AKout = AK;
@@ -193,7 +192,6 @@ namespace hw {
       Bout = keys.Bout;
       is_subaddress = keys.is_subaddress;
       is_change_address = keys.is_change_address;
-      additional_key = keys.additional_key;
       index = keys.index;
       Pout = keys.Pout;
       AKout = keys.AKout;
@@ -206,7 +204,6 @@ namespace hw {
       Bout = keys.Bout;
       is_subaddress = keys.is_subaddress;
       is_change_address = keys.is_change_address;
-      additional_key = keys.additional_key;
       index = keys.index;
       Pout = keys.Pout;
       AKout = keys.AKout;
@@ -1063,22 +1060,8 @@ namespace hw {
       return r;
     }
 
-    bool device_ledger::conceal_derivation(crypto::key_derivation &derivation, const crypto::public_key &tx_pub_key, const std::vector<crypto::public_key> &additional_tx_pub_keys, const crypto::key_derivation &main_derivation, const std::vector<crypto::key_derivation> &additional_derivations) {
-      const crypto::public_key *pkey=NULL;
-      if (derivation == main_derivation) {        
-        pkey = &tx_pub_key;
-        MDEBUG("conceal derivation with main tx pub key");
-      } else {
-        for(size_t n=0; n < additional_derivations.size();++n) {
-          if(derivation == additional_derivations[n]) {
-            pkey = &additional_tx_pub_keys[n];
-            MDEBUG("conceal derivation with additional tx pub key");
-            break;
-          }
-        }
-      }
-      ASSERT_X(pkey, "Mismatched derivation on scan info");
-      return this->generate_key_derivation(*pkey,  crypto::null_skey, derivation);
+    bool device_ledger::conceal_derivation(crypto::key_derivation &derivation, const crypto::public_key &tx_pub_key, const crypto::key_derivation &main_derivation) {
+      return this->generate_key_derivation(tx_pub_key, crypto::null_skey, derivation);
     } 
 
     bool device_ledger::secret_key_to_public_key(const crypto::secret_key &sec, crypto::public_key &pub) {
@@ -1303,7 +1286,8 @@ namespace hw {
     bool  device_ledger::add_output_key_mapping(const crypto::public_key &Aout, const crypto::public_key &Bout, const bool is_subaddress, const bool is_change,
                                                 const bool need_additional, const size_t real_output_index,
                                                 const rct::key &amount_key,  const crypto::public_key &out_eph_public_key)  {
-        key_map.add(ABPkeys(rct::pk2rct(Aout),rct::pk2rct(Bout), is_subaddress, is_change, need_additional, real_output_index, rct::pk2rct(out_eph_public_key), amount_key));
+        (void)need_additional;
+        key_map.add(ABPkeys(rct::pk2rct(Aout),rct::pk2rct(Bout), is_subaddress, is_change, real_output_index, rct::pk2rct(out_eph_public_key), amount_key));
         return true;
     }
 

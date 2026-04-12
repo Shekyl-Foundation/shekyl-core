@@ -47,7 +47,6 @@ namespace cryptonote
     std::vector<output_entry> outputs;  //index + key + optional commitment
     uint64_t real_output;               //index in outputs vector of real output_entry
     crypto::public_key real_out_tx_key; //incoming real tx public key
-    std::vector<crypto::public_key> real_out_additional_tx_keys; //incoming real tx additional public keys
     uint64_t real_output_in_tx_index;   //index in transaction outputs vector
     uint64_t amount;                    //money
     bool rct;                           //true if the output is rct
@@ -63,7 +62,6 @@ namespace cryptonote
       FIELD(outputs)
       FIELD(real_output)
       FIELD(real_out_tx_key)
-      FIELD(real_out_additional_tx_keys)
       FIELD(real_output_in_tx_index)
       FIELD(amount)
       FIELD(rct)
@@ -128,8 +126,8 @@ namespace cryptonote
   //---------------------------------------------------------------
   crypto::public_key get_destination_view_key_pub(const std::vector<tx_destination_entry> &destinations, const std::optional<cryptonote::account_public_address>& change_addr);
   bool construct_tx(const account_keys& sender_account_keys, std::vector<tx_source_entry> &sources, const std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx);
-  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, const std::vector<crypto::secret_key> &additional_tx_keys, bool rct = false, bool shuffle_outs = true, bool use_view_tags = false, uint8_t hf_version = 0, rct::keyV *out_commitment_masks = nullptr);
-  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, std::vector<crypto::secret_key> &additional_tx_keys, bool rct = false, bool use_view_tags = false, uint8_t hf_version = 0, rct::keyV *out_commitment_masks = nullptr);
+  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, bool rct = false, bool shuffle_outs = true, bool use_view_tags = false, uint8_t hf_version = 0, rct::keyV *out_commitment_masks = nullptr);
+  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, bool rct = false, bool use_view_tags = false, uint8_t hf_version = 0, rct::keyV *out_commitment_masks = nullptr);
   bool build_genesis_coinbase_from_destinations(
       const std::vector<tx_destination_entry>& destinations
     , std::string& tx_hex_out
@@ -166,9 +164,6 @@ namespace boost
       a & x.amount;
       a & x.rct;
       a & x.mask;
-      if (ver < 1)
-        return;
-      a & x.real_out_additional_tx_keys;
     }
 
     template <class Archive>

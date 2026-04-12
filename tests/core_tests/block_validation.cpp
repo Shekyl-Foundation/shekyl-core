@@ -31,11 +31,66 @@
 #include "chaingen.h"
 #include "block_validation.h"
 
+extern "C" {
+#include "crypto/crypto-ops.h"
+}
+
 using namespace epee;
 using namespace cryptonote;
 
 namespace
 {
+  // Inline replacements for removed crypto:: helpers (v3 HKDF replaces them).
+  // derivation_to_scalar: Hs(derivation || varint(output_index))
+  static void local_derivation_to_scalar(const crypto::key_derivation &d, size_t output_index, crypto::ec_scalar &res)
+  {
+    #pragma pack(push, 1)
+    struct { crypto::key_derivation d; uint8_t vi[8]; } buf;
+    #pragma pack(pop)
+    buf.d = d;
+    size_t idx = output_index, vi_len = 0;
+    while (idx >= 0x80) { buf.vi[vi_len++] = (uint8_t)(idx & 0x7f) | 0x80; idx >>= 7; }
+    buf.vi[vi_len++] = (uint8_t)idx;
+    crypto::hash_to_scalar(&buf, sizeof(crypto::key_derivation) + vi_len, res);
+  }
+
+  // derive_public_key: Hs(D||i)*G + spend_public_key
+  static bool local_derive_public_key(const crypto::key_derivation &d, size_t output_index,
+                                      const crypto::public_key &spend_pub, crypto::public_key &out)
+  {
+    crypto::ec_scalar hs;
+    local_derivation_to_scalar(d, output_index, hs);
+    ge_p3 point1;
+    ge_scalarmult_base(&point1, reinterpret_cast<const unsigned char*>(&hs));
+    ge_p3 point2;
+    if (ge_frombytes_vartime(&point2, reinterpret_cast<const unsigned char*>(&spend_pub)) != 0)
+      return false;
+    ge_cached point2c;
+    ge_p3_to_cached(&point2c, &point2);
+    ge_p1p1 sum;
+    ge_add(&sum, &point1, &point2c);
+    ge_p3 result;
+    ge_p1p1_to_p3(&result, &sum);
+    ge_p3_tobytes(reinterpret_cast<unsigned char*>(&out), &result);
+    return true;
+  }
+
+  // derive_view_tag: first byte of H("view_tag" || D || varint(i))
+  static void local_derive_view_tag(const crypto::key_derivation &d, size_t output_index, crypto::view_tag &vt)
+  {
+    #pragma pack(push, 1)
+    struct { char tag[8]; crypto::key_derivation d; uint8_t vi[8]; } buf;
+    #pragma pack(pop)
+    memcpy(buf.tag, "view_tag", 8);
+    buf.d = d;
+    size_t idx = output_index, vi_len = 0;
+    while (idx >= 0x80) { buf.vi[vi_len++] = (uint8_t)(idx & 0x7f) | 0x80; idx >>= 7; }
+    buf.vi[vi_len++] = (uint8_t)idx;
+    crypto::hash h;
+    crypto::cn_fast_hash(&buf, sizeof(buf.tag) + sizeof(crypto::key_derivation) + vi_len, h);
+    vt.data = h.data[0];
+  }
+
   bool lift_up_difficulty(std::vector<test_event_entry>& events, std::vector<uint64_t>& timestamps,
                           std::vector<difficulty_type>& cummulative_difficulties, test_generator& generator,
                           size_t new_block_count, const block &blk_last, const account_base& miner_account)
@@ -484,13 +539,13 @@ bool gen_block_miner_tx_has_out_to_alice::generate(std::vector<test_event_entry>
   crypto::key_derivation derivation;
   crypto::public_key out_eph_public_key;
   crypto::generate_key_derivation(alice.get_keys().m_account_address.m_view_public_key, txkey.sec, derivation);
-  crypto::derive_public_key(derivation, 1, alice.get_keys().m_account_address.m_spend_public_key, out_eph_public_key);
+  local_derive_public_key(derivation, 1, alice.get_keys().m_account_address.m_spend_public_key, out_eph_public_key);
 
   tx_out out_to_alice;
   out_to_alice.amount = miner_tx.vout[0].amount / 2;
   miner_tx.vout[0].amount -= out_to_alice.amount;
   crypto::view_tag vt;
-  crypto::derive_view_tag(derivation, 1, vt);
+  local_derive_view_tag(derivation, 1, vt);
   cryptonote::set_tx_out(out_to_alice.amount, out_eph_public_key, true, vt, out_to_alice);
   miner_tx.vout.push_back(out_to_alice);
 
@@ -756,8 +811,8 @@ bool gen_block_miner_tx_out_has_view_tag_before_hf_view_tags::generate(std::vect
   crypto::public_key output_public_key;
   crypto::view_tag view_tag;
   crypto::generate_key_derivation(miner_account.get_keys().m_account_address.m_view_public_key, txkey.sec, derivation);
-  crypto::derive_public_key(derivation, 0, miner_account.get_keys().m_account_address.m_spend_public_key, output_public_key);
-  crypto::derive_view_tag(derivation, 0, view_tag);
+  local_derive_public_key(derivation, 0, miner_account.get_keys().m_account_address.m_spend_public_key, output_public_key);
+  local_derive_view_tag(derivation, 0, view_tag);
 
   // set the view tag on the miner tx output
   cryptonote::set_tx_out(miner_tx.vout[0].amount, output_public_key, use_view_tags, view_tag, miner_tx.vout[0]);
@@ -790,8 +845,8 @@ bool gen_block_miner_tx_out_has_view_tag_from_hf_view_tags::generate(std::vector
   crypto::public_key output_public_key;
   crypto::view_tag view_tag;
   crypto::generate_key_derivation(miner_account.get_keys().m_account_address.m_view_public_key, txkey.sec, derivation);
-  crypto::derive_public_key(derivation, 0, miner_account.get_keys().m_account_address.m_spend_public_key, output_public_key);
-  crypto::derive_view_tag(derivation, 0, view_tag);
+  local_derive_public_key(derivation, 0, miner_account.get_keys().m_account_address.m_spend_public_key, output_public_key);
+  local_derive_view_tag(derivation, 0, view_tag);
 
   std::optional<crypto::view_tag> actual_vt = cryptonote::get_output_view_tag(miner_tx.vout[0]);
   CHECK_AND_ASSERT_MES(actual_vt && *actual_vt == view_tag, false, "unexpected output view tag");

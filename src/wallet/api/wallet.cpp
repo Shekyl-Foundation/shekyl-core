@@ -1694,17 +1694,14 @@ std::string WalletImpl::getTxKey(const std::string &txid_str) const
     }
 
     crypto::secret_key tx_key;
-    std::vector<crypto::secret_key> additional_tx_keys;
     try
     {
         clearStatus();
-        if (m_wallet->get_tx_key(txid, tx_key, additional_tx_keys))
+        if (m_wallet->get_tx_key(txid, tx_key))
         {
             clearStatus();
             std::ostringstream oss;
             oss << epee::string_tools::pod_to_hex(unwrap(unwrap(tx_key)));
-            for (size_t i = 0; i < additional_tx_keys.size(); ++i)
-                oss << epee::string_tools::pod_to_hex(unwrap(unwrap(additional_tx_keys[i])));
             return oss.str();
         }
         else
@@ -1730,22 +1727,10 @@ bool WalletImpl::checkTxKey(const std::string &txid_str, std::string tx_key_str,
     }
 
     crypto::secret_key tx_key;
-    std::vector<crypto::secret_key> additional_tx_keys;
     if (!epee::string_tools::hex_to_pod(tx_key_str.substr(0, 64), tx_key))
     {
         setStatusError(tr("Failed to parse tx key"));
         return false;
-    }
-    tx_key_str = tx_key_str.substr(64);
-    while (!tx_key_str.empty())
-    {
-        additional_tx_keys.resize(additional_tx_keys.size() + 1);
-        if (!epee::string_tools::hex_to_pod(tx_key_str.substr(0, 64), additional_tx_keys.back()))
-        {
-            setStatusError(tr("Failed to parse tx key"));
-            return false;
-        }
-        tx_key_str = tx_key_str.substr(64);
     }
 
     cryptonote::address_parse_info info;
@@ -1757,7 +1742,7 @@ bool WalletImpl::checkTxKey(const std::string &txid_str, std::string tx_key_str,
 
     try
     {
-        m_wallet->check_tx_key(txid, tx_key, additional_tx_keys, info.address, received, in_pool, confirmations);
+        m_wallet->check_tx_key(txid, tx_key, info.address, received, in_pool, confirmations);
         clearStatus();
         return true;
     }

@@ -143,29 +143,24 @@ int main(int argc, char *argv[]) {
         goto error;
       }
     } else if (cmd == "derive_public_key") {
+      // Removed: crypto::derive_public_key no longer exists in Shekyl (v3 HKDF replaces it).
+      // Skip the test vector data without failing.
       key_derivation derivation;
       size_t output_index;
       public_key base;
-      bool expected1, actual1;
-      public_key expected2, actual2;
+      bool expected1;
       get(input, derivation, output_index, base, expected1);
       if (expected1) {
-        get(input, expected2);
-      }
-      actual1 = derive_public_key(derivation, output_index, base, actual2);
-      if (expected1 != actual1 || (expected1 && expected2 != actual2)) {
-        goto error;
+        public_key dummy;
+        get(input, dummy);
       }
     } else if (cmd == "derive_secret_key") {
+      // Removed: crypto::derive_secret_key no longer exists in Shekyl (v3 HKDF replaces it).
       key_derivation derivation;
       size_t output_index;
       secret_key base;
-      secret_key expected, actual;
+      secret_key expected;
       get(input, derivation, output_index, base, expected);
-      derive_secret_key(derivation, output_index, base, actual);
-      if (expected != actual) {
-        goto error;
-      }
     } else if (cmd == "generate_signature") {
       chash prefix_hash;
       public_key pub;
@@ -269,14 +264,11 @@ int main(int argc, char *argv[]) {
         goto error;
       }
     } else if (cmd == "derive_view_tag") {
+      // Removed: crypto::derive_view_tag no longer exists in Shekyl (v3 HKDF replaces it).
       key_derivation derivation;
       size_t output_index;
-      view_tag expected, actual;
+      view_tag expected;
       get(input, derivation, output_index, expected);
-      derive_view_tag(derivation, output_index, actual);
-      if (expected != actual) {
-        goto error;
-      }
     } else {
       throw ios_base::failure("Unknown function: " + cmd);
     }

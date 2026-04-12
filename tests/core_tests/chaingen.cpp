@@ -56,6 +56,10 @@
 
 #include "chaingen.h"
 #include "device/device.hpp"
+
+extern "C" {
+#include "crypto/crypto-ops.h"
+}
 #include "fcmp/rctOps.h"
 #include "fcmp/rctSigs.h"
 #include "memwipe.h"
@@ -577,28 +581,6 @@ bool init_output_indices(map_output_idx_t& outs, std::map<uint64_t, std::vector<
                             << " tx_no=" << i << " out_no=" << j
                             << " amount=" << recovered_amount);
                     }
-                    else
-                    {
-                        crypto::public_key output_public_key;
-                        cryptonote::get_output_public_key(out, output_public_key);
-                        if (is_out_to_acc(from.get_keys(), output_public_key, get_tx_pub_key_from_extra(tx), get_additional_tx_pub_keys_from_extra(tx), j)) {
-                            outs_mine[amount_key].push_back(tx_global_idx);
-                            if (!is_miner && tx.rct_signatures.type != rct::RCTTypeNull
-                                && j < tx.rct_signatures.enc_amounts.size()) {
-                                crypto::key_derivation derivation;
-                                crypto::public_key tx_pub = get_tx_pub_key_from_extra(tx);
-                                if (crypto::generate_key_derivation(tx_pub, from.get_keys().m_view_secret_key, derivation)) {
-                                    crypto::secret_key scalar;
-                                    crypto::derivation_to_scalar(derivation, j, scalar);
-                                    rct::ecdhTuple ecdh_info;
-                                    memset(&ecdh_info, 0, sizeof(ecdh_info));
-                                    memcpy(ecdh_info.amount.bytes, tx.rct_signatures.enc_amounts[j].data(), 8);
-                                    rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar), true);
-                                    outs[amount_key][tx_global_idx].amount = rct::h2d(ecdh_info.amount);
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -803,29 +785,8 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
             }
             else
             {
-                const transaction &src_tx = *oi.p_tx;
-                crypto::key_derivation derivation;
-                if (!crypto::generate_key_derivation(ts.real_out_tx_key, from.get_keys().m_view_secret_key, derivation))
-                    continue;
-                crypto::secret_key scalar;
-                crypto::derivation_to_scalar(derivation, oi.out_no, scalar);
-
-                if (src_tx.rct_signatures.type == rct::RCTTypeNull)
-                    continue;
-
-                rct::ecdhTuple ecdh_info;
-                memset(&ecdh_info, 0, sizeof(ecdh_info));
-                memcpy(ecdh_info.amount.bytes, src_tx.rct_signatures.enc_amounts[oi.out_no].data(), 8);
-                rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar), true);
-
-                ts.amount = rct::h2d(ecdh_info.amount);
-                ts.mask = ecdh_info.mask;
-
-                rct::key C_expected = rct::commit(ts.amount, ts.mask);
-                if (!rct::equalKeys(C_expected, src_tx.rct_signatures.outPk[oi.out_no].mask)) {
-                    LOG_ERROR("RCT output commitment mismatch for output " << oi.out_no);
-                    continue;
-                }
+                LOG_ERROR("Non-v3, non-coinbase output cannot be recovered (legacy scanning removed)");
+                continue;
             }
 
             size_t realOutput;
@@ -1208,6 +1169,55 @@ std::vector<cryptonote::tx_destination_entry> build_dsts(std::initializer_list<d
   return res;
 }
 
+namespace {
+  static void local_derivation_to_scalar(const crypto::key_derivation &d, size_t output_index, crypto::ec_scalar &res)
+  {
+    #pragma pack(push, 1)
+    struct { crypto::key_derivation d; uint8_t vi[8]; } buf;
+    #pragma pack(pop)
+    buf.d = d;
+    size_t idx = output_index, vi_len = 0;
+    while (idx >= 0x80) { buf.vi[vi_len++] = (uint8_t)(idx & 0x7f) | 0x80; idx >>= 7; }
+    buf.vi[vi_len++] = (uint8_t)idx;
+    crypto::hash_to_scalar(&buf, sizeof(crypto::key_derivation) + vi_len, res);
+  }
+
+  static bool local_derive_public_key(const crypto::key_derivation &d, size_t output_index,
+                                      const crypto::public_key &spend_pub, crypto::public_key &out)
+  {
+    crypto::ec_scalar hs;
+    local_derivation_to_scalar(d, output_index, hs);
+    ge_p3 point1;
+    ge_scalarmult_base(&point1, reinterpret_cast<const unsigned char*>(&hs));
+    ge_p3 point2;
+    if (ge_frombytes_vartime(&point2, reinterpret_cast<const unsigned char*>(&spend_pub)) != 0)
+      return false;
+    ge_cached point2c;
+    ge_p3_to_cached(&point2c, &point2);
+    ge_p1p1 sum;
+    ge_add(&sum, &point1, &point2c);
+    ge_p3 result;
+    ge_p1p1_to_p3(&result, &sum);
+    ge_p3_tobytes(reinterpret_cast<unsigned char*>(&out), &result);
+    return true;
+  }
+
+  static void local_derive_view_tag(const crypto::key_derivation &d, size_t output_index, crypto::view_tag &vt)
+  {
+    #pragma pack(push, 1)
+    struct { char tag[8]; crypto::key_derivation d; uint8_t vi[8]; } buf;
+    #pragma pack(pop)
+    memcpy(buf.tag, "view_tag", 8);
+    buf.d = d;
+    size_t idx = output_index, vi_len = 0;
+    while (idx >= 0x80) { buf.vi[vi_len++] = (uint8_t)(idx & 0x7f) | 0x80; idx >>= 7; }
+    buf.vi[vi_len++] = (uint8_t)idx;
+    crypto::hash h;
+    crypto::cn_fast_hash(&buf, sizeof(buf.tag) + sizeof(crypto::key_derivation) + vi_len, h);
+    vt.data = h.data[0];
+  }
+} // anonymous namespace
+
 bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins,
                                  const account_public_address& miner_address, transaction& tx, uint64_t fee,
                                  uint8_t hf_version/* = 1*/, keypair* p_txkey/* = 0*/)
@@ -1239,12 +1249,12 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
   crypto::key_derivation derivation;
   crypto::public_key out_eph_public_key;
   crypto::generate_key_derivation(miner_address.m_view_public_key, txkey.sec, derivation);
-  crypto::derive_public_key(derivation, 0, miner_address.m_spend_public_key, out_eph_public_key);
+  local_derive_public_key(derivation, 0, miner_address.m_spend_public_key, out_eph_public_key);
 
   bool use_view_tags = hf_version >= HF_VERSION_VIEW_TAGS;
   crypto::view_tag view_tag;
   if (use_view_tags)
-    crypto::derive_view_tag(derivation, 0, view_tag);
+    local_derive_view_tag(derivation, 0, view_tag);
 
   tx_out out;
   cryptonote::set_tx_out(block_reward, out_eph_public_key, use_view_tags, view_tag, out);
@@ -1310,9 +1320,8 @@ bool construct_tx_rct(const cryptonote::account_keys& sender_account_keys, std::
   std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
   subaddresses[sender_account_keys.m_account_address.m_spend_public_key] = {0, 0};
   crypto::secret_key tx_key;
-  std::vector<crypto::secret_key> additional_tx_keys;
   std::vector<tx_destination_entry> destinations_copy = destinations;
-  return construct_tx_and_get_tx_key(sender_account_keys, subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, additional_tx_keys, rct, true, hf_version);
+  return construct_tx_and_get_tx_key(sender_account_keys, subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, rct, true, hf_version);
 }
 
 transaction construct_tx_with_fee(std::vector<test_event_entry>& events, const block& blk_head,
@@ -1415,7 +1424,6 @@ bool construct_fcmp_tx(
   }
 
   crypto::secret_key tx_key;
-  std::vector<crypto::secret_key> additional_tx_keys;
   rct::keyV v3_commitment_masks;
   std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
   subaddresses[from.get_keys().m_account_address.m_spend_public_key] = {0, 0};
@@ -1424,7 +1432,7 @@ bool construct_fcmp_tx(
   bool r = construct_tx_and_get_tx_key(
     from.get_keys(), subaddresses, sources, dests_copy,
     from.get_keys().m_account_address, std::vector<uint8_t>(),
-    tx, tx_key, additional_tx_keys, true, true, 1, &v3_commitment_masks);
+    tx, tx_key, true, true, 1, &v3_commitment_masks);
   CHECK_AND_ASSERT_MES(r, false, "construct_fcmp_tx: construct_tx_and_get_tx_key failed");
 
   // FCMP++ consensus requires y-normalized key images (sign bit of byte 31 cleared).

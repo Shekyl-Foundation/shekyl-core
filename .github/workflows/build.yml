@@ -33,6 +33,44 @@ env:
     ccache --set-config=compression=true
 
 jobs:
+  lint-rust-debug-macros:
+    name: 'Lint: no debug macros in production Rust'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: reject eprintln!/dbg!/println! in production Rust
+        run: |
+          FOUND=0
+          for f in $(find rust/shekyl-*/src -name '*.rs' \
+                     ! -name 'build.rs' ! -name 'main.rs' ! -path '*/examples/*'); do
+            TEST_LINE=$(grep -n '#\[cfg(test)\]' "$f" | head -1 | cut -d: -f1)
+            if [ -n "$TEST_LINE" ]; then
+              HITS=$(head -n "$((TEST_LINE - 1))" "$f" \
+                     | grep -n 'eprintln!\|dbg!\|println!' || true)
+            else
+              HITS=$(grep -n 'eprintln!\|dbg!\|println!' "$f" || true)
+            fi
+            if [ -n "$HITS" ]; then
+              echo "$f:"
+              echo "$HITS"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" -eq 1 ]; then
+            echo "FATAL: debug macros in production Rust (above #[cfg(test)])"
+            exit 1
+          fi
+          echo "No debug macros in production Rust — OK"
+      - name: reject BOOST_FOREACH in C++
+        run: |
+          HITS=$(grep -rn 'BOOST_FOREACH' src/ tests/ --include='*.cpp' --include='*.h' --include='*.hpp' || true)
+          if [ -n "$HITS" ]; then
+            echo "FATAL: BOOST_FOREACH found — use range-based for loops:"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "No BOOST_FOREACH — OK"
+
   build-macos:
     name: 'macOS (brew)'
     runs-on: macOS-latest

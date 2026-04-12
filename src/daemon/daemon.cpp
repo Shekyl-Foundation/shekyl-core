@@ -198,28 +198,30 @@ bool t_daemon::run(bool interactive)
     if (!mp_internals->core.run())
       return false;
 
-    for(auto& rpc: mp_internals->rpcs)
-      rpc->run();
-
-    // Start Rust/Axum daemon RPC if --rust-rpc is set
     if (mp_internals->rust_rpc_enabled)
     {
       for (auto& rpc : mp_internals->rpcs)
       {
         auto* server = rpc->get_server();
-        std::string bind_addr = "127.0.0.1:" + std::to_string(server->get_binded_port() + 10000);
+        std::string bind_addr = "127.0.0.1:" + std::to_string(server->get_binded_port());
         auto* rust_handle = shekyl_daemon_rpc_start(
             static_cast<void*>(server), bind_addr.c_str(), false);
         if (rust_handle)
         {
-          MGINFO("Rust daemon RPC started on " << bind_addr);
+          MGINFO("Axum RPC listening on " << bind_addr << " (epee HTTP skipped)");
           mp_internals->rust_rpc_handles.push_back(rust_handle);
         }
         else
         {
-          MWARNING("Failed to start Rust daemon RPC on " << bind_addr);
+          MERROR("Failed to start Axum RPC on " << bind_addr << ", falling back to epee");
+          rpc->run();
         }
       }
+    }
+    else
+    {
+      for(auto& rpc: mp_internals->rpcs)
+        rpc->run();
     }
 
     std::unique_ptr<daemonize::t_command_server> rpc_commands;

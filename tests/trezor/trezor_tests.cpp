@@ -1211,7 +1211,6 @@ void gen_trezor_base::test_get_tx(
     const ::crypto::hash tx_prefix_hash = cryptonote::get_transaction_prefix_hash(c_tx);
 
     auto tx_pub = cryptonote::get_tx_pub_key_from_extra(c_tx.extra);
-    auto additional_pub_keys = cryptonote::get_additional_tx_pub_keys_from_extra(c_tx.extra);
 
     hw::device_cold:: tx_key_data_t tx_key_data;
     std::vector<::crypto::secret_key> tx_keys;
@@ -1222,12 +1221,7 @@ void gen_trezor_base::test_get_tx(
     dev_cold->get_tx_key(tx_keys, tx_key_data, m_alice_account.get_keys().m_view_secret_key);
     CHECK_AND_ASSERT_THROW_MES(!tx_keys.empty(), "Empty TX keys");
     CHECK_AND_ASSERT_THROW_MES(verify_tx_key(tx_keys[0], tx_pub, all_subs), "Tx pub mismatch");
-    CHECK_AND_ASSERT_THROW_MES(additional_pub_keys.size() == tx_keys.size() - 1, "Invalid additional keys count");
-
-    for(size_t i = 0; i < additional_pub_keys.size(); ++i)
-    {
-      CHECK_AND_ASSERT_THROW_MES(verify_tx_key(tx_keys[i + 1], additional_pub_keys[i], all_subs), "Tx pub mismatch");
-    }
+    // additional_tx_pub_keys infrastructure removed in Shekyl v3
   }
 }
 
@@ -1341,7 +1335,8 @@ tsx_builder * tsx_builder::compute_sources_to_sub(std::optional<size_t> num_utxo
 tsx_builder * tsx_builder::compute_sources_to_sub_acc(std::optional<size_t> num_utxo, std::optional<uint64_t> min_amount, ssize_t offset, int step, std::optional<fnc_accept_tx_source_t> fnc_accept)
 {
   fnc_accept_tx_source_t fnc = [&fnc_accept] (const tx_source_info_crate_t &info, bool &abort) -> bool {
-    if (info.td->m_subaddr_index.minor == 0 || info.src->real_out_additional_tx_keys.size() == 0){
+    // additional_tx_keys removed in Shekyl v3; filter only on subaddress index
+    if (info.td->m_subaddr_index.minor == 0){
       return false;
     }
     if (fnc_accept){
@@ -1439,14 +1434,13 @@ tsx_builder * tsx_builder::construct_pending_tx(tools::wallet2::pending_tx &ptx,
   cryptonote::transaction tx;
   subaddresses_t & subaddresses = wallet_accessor_test::get_subaddresses(m_from);
   crypto::secret_key tx_key;
-  std::vector<crypto::secret_key> additional_tx_keys;
   std::vector<tx_destination_entry> destinations_copy = m_destinations;
 
   auto sources_copy = m_sources;
   auto change_addr = m_from->get_account().get_keys().m_account_address;
   bool r = construct_tx_and_get_tx_key(m_from->get_account().get_keys(), subaddresses, m_sources, destinations_copy,
-                                       change_addr, extra ? extra.get() : std::vector<uint8_t>(), tx, 0, tx_key,
-                                       additional_tx_keys, true, m_rct_config, nullptr);
+                                       change_addr, extra ? extra.get() : std::vector<uint8_t>(), tx, tx_key,
+                                       true, true, 1);
   CHECK_AND_ASSERT_THROW_MES(r, "Transaction construction failed");
 
   // Selected transfers permutation
@@ -1471,7 +1465,6 @@ tsx_builder * tsx_builder::construct_pending_tx(tools::wallet2::pending_tx &ptx,
   ptx.selected_transfers = m_selected_transfers;
   tools::apply_permutation(ins_order, ptx.selected_transfers);
   ptx.tx_key = tx_key;
-  ptx.additional_tx_keys = additional_tx_keys;
   ptx.dests = m_destinations;
   ptx.construction_data.sources = m_sources;
   ptx.construction_data.change_dts = m_destinations.back();
@@ -1616,9 +1609,22 @@ bool gen_trezor_live_refresh::generate(std::vector<test_event_entry>& events)
     ::crypto::secret_key_to_public_key(r, R);
     memcpy(D.data, rct::scalarmultKey(rct::pk2rct(R), rct::sk2rct(m_alice_account.get_keys().m_view_secret_key)).bytes, 32);
 
+    // derive_secret_key removed — inline the derivation: Hs(D || varint(i)) + spend_secret
+    ::crypto::ec_scalar hs_scalar;
+    {
+      struct { ::crypto::key_derivation d; uint8_t vi[8]; } buf;
+      buf.d = D;
+      size_t idx = i, vi_len = 0;
+      while (idx >= 0x80) { buf.vi[vi_len++] = (uint8_t)(idx & 0x7f) | 0x80; idx >>= 7; }
+      buf.vi[vi_len++] = (uint8_t)idx;
+      ::crypto::hash_to_scalar(&buf, sizeof(::crypto::key_derivation) + vi_len, hs_scalar);
+    }
     ::crypto::secret_key scalar_step1;
+    sc_add(reinterpret_cast<unsigned char*>(&scalar_step1),
+           reinterpret_cast<const unsigned char*>(&hs_scalar),
+           reinterpret_cast<const unsigned char*>(&m_alice_account.get_keys().m_spend_secret_key));
+
     ::crypto::secret_key scalar_step2;
-    ::crypto::derive_secret_key(D, i, m_alice_account.get_keys().m_spend_secret_key, scalar_step1);
     if (i == 0)
     {
       scalar_step2 = scalar_step1;

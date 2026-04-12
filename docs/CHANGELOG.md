@@ -2,7 +2,66 @@
 
 ## Unreleased
 
+### ✨ Added
+
+- **CI lint: no debug macros in production Rust.** Added a workflow step that
+  rejects `eprintln!`, `dbg!`, and `println!` in production Rust code
+  (excluding test modules, build scripts, binary entry points, and the
+  economics simulator). Prevents accidental debug logging from reaching
+  production builds.
+
+- **CI lint: BOOST_FOREACH guard.** Added a workflow step that fails if any
+  `BOOST_FOREACH` usage is reintroduced via upstream cherry-picks. All 31
+  prior instances were replaced with range-based for loops.
+
+### 🔄 Changed
+
+- **Axum RPC binds to standard port.** When `--no-rust-rpc` is not set, the
+  Axum daemon RPC server now binds to the standard RPC port (11029/12029/13029)
+  and the epee HTTP listener is skipped. Falls back to epee on Axum startup
+  failure. Previously Axum bound to `epee_port + 10000`.
+
+- **Production `eprintln!` removed from Rust FFI.** Replaced 6 `eprintln!`
+  calls in `shekyl-ffi/src/lib.rs` error handlers with silent error
+  suppression (the C++ caller checks the bool return). Converted 1
+  `eprintln!` in `shekyl-daemon-rpc/src/ffi_exports.rs` to `tracing::error!`.
+
+- **Test code migrated to remove all calls to deleted crypto/device functions.**
+  Updated 14 test files across `tests/crypto/`, `tests/unit_tests/`,
+  `tests/core_tests/`, `tests/performance_tests/`, `tests/trezor/`, and
+  `tests/benchmark.cpp` to remove references to `derive_public_key`,
+  `derive_secret_key`, `derivation_to_scalar`, `derive_subaddress_public_key`,
+  `derive_view_tag`, `is_out_to_acc`, `lookup_acc_outs`, `ecdhDecode`,
+  `ecdhHash`, `genCommitmentMask`, `generate_key_image_helper`, and
+  `generate_output_ephemeral_keys`. Where inline key derivation was needed
+  (block/miner-tx construction tests), local helpers using Ed25519 primitives
+  (`hash_to_scalar`, `ge_scalarmult_base`, `sc_add`) replace the deleted
+  functions. Legacy output scanning in `chaingen.cpp` and `chain_switch_1.cpp`
+  falls through to the v3 scan path. All `additional_tx_keys` parameters
+  removed from `construct_tx_and_get_tx_key` call sites. Benchmark harnesses
+  for `derive_subaddress_public_key` and per-tx scanning removed.
+
 ### 🗑️ Removed
+
+- **`additional_tx_keys` / `additional_tx_pub_keys` infrastructure fully
+  removed.** Deleted member variables, struct fields, serialization entries, and
+  function parameters referencing additional transaction keys from `wallet2.h`,
+  `wallet2.cpp`, `cryptonote_tx_utils.h/.cpp`, `cryptonote_format_utils.h`,
+  `device.hpp`, `device_default.hpp/.cpp`, and `device_ledger.hpp/.cpp`. In
+  `wallet2.cpp`, removed all `additional_tx_pub_keys` / `additional_tx_keys`
+  local variables, derivation computation loops, `m_additional_tx_keys` map
+  operations, `etd.m_additional_tx_keys` export/import paths, and updated
+  function definitions (`get_tx_key_cached`, `get_tx_key`, `set_tx_key`,
+  `check_tx_key`, `get_tx_proof`) to match the simplified header signatures. The
+  `conceal_derivation` device method implementations were updated to match
+  the simplified signatures (no additional keys/derivations parameters). The
+  `ABPkeys` struct no longer carries `additional_key`. Cleaned up all remaining
+  call sites across `wallet2_ffi.cpp`, `wallet/api/wallet.cpp`,
+  `simplewallet.cpp`, `wallet_rpc_server.cpp`, and `trezor/protocol.cpp` —
+  removing additional-key parsing loops, serialization, and pass-through
+  parameters. `get_additional_tx_pub_keys_from_extra` is now an inline stub
+  returning an empty vector. In V3, per-output KEM ciphertexts replace
+  additional tx keys; there is only one tx pubkey per transaction.
 
 - **`derive_public_key`, `derive_secret_key`, and `derivation_to_scalar` removed
   from the device interface chain.** Deleted the pure virtual declarations from

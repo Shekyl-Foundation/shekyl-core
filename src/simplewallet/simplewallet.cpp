@@ -6521,12 +6521,10 @@ bool simple_wallet::submit_transfer(const std::vector<std::string> &args_)
   return true;
 }
 //----------------------------------------------------------------------------------------------------
-std::string get_tx_key_stream(crypto::secret_key tx_key, std::vector<crypto::secret_key> additional_tx_keys)
+std::string get_tx_key_stream(crypto::secret_key tx_key)
 {
   ostringstream oss;
   oss << epee::string_tools::pod_to_hex(unwrap(unwrap(tx_key)));
-  for (size_t i = 0; i < additional_tx_keys.size(); ++i)
-    oss << epee::string_tools::pod_to_hex(unwrap(unwrap(additional_tx_keys[i])));
   return oss.str();
 }
 
@@ -6556,12 +6554,11 @@ bool simple_wallet::get_tx_key(const std::vector<std::string> &args_)
   SCOPED_WALLET_UNLOCK();
 
   crypto::secret_key tx_key;
-  std::vector<crypto::secret_key> additional_tx_keys;
 
-  bool found_tx_key = m_wallet->get_tx_key(txid, tx_key, additional_tx_keys);
+  bool found_tx_key = m_wallet->get_tx_key(txid, tx_key);
   if (found_tx_key)
   {
-    std::string stream = get_tx_key_stream(tx_key, additional_tx_keys);
+    std::string stream = get_tx_key_stream(tx_key);
     success_msg_writer() << tr("Tx key: ") << stream;
     return true;
   }
@@ -6607,25 +6604,12 @@ bool simple_wallet::set_tx_key(const std::vector<std::string> &args_)
   }
 
   crypto::secret_key tx_key;
-  std::vector<crypto::secret_key> additional_tx_keys;
   try
   {
     if (!epee::string_tools::hex_to_pod(local_args[1].substr(0, 64), tx_key))
     {
       fail_msg_writer() << tr("failed to parse tx_key");
       return true;
-    }
-    while(true)
-    {
-      local_args[1] = local_args[1].substr(64);
-      if (local_args[1].empty())
-        break;
-      additional_tx_keys.resize(additional_tx_keys.size() + 1);
-      if (!epee::string_tools::hex_to_pod(local_args[1].substr(0, 64), additional_tx_keys.back()))
-      {
-        fail_msg_writer() << tr("failed to parse tx_key");
-        return true;
-      }
     }
   }
   catch (const std::out_of_range &e)
@@ -6638,7 +6622,7 @@ bool simple_wallet::set_tx_key(const std::vector<std::string> &args_)
 
   try
   {
-    m_wallet->set_tx_key(txid, tx_key, additional_tx_keys, single_destination_subaddress);
+    m_wallet->set_tx_key(txid, tx_key, single_destination_subaddress);
     success_msg_writer() << tr("Tx key successfully stored.");
   }
   catch (const std::exception &e)
@@ -6717,22 +6701,10 @@ bool simple_wallet::check_tx_key(const std::vector<std::string> &args_)
   }
 
   crypto::secret_key tx_key;
-  std::vector<crypto::secret_key> additional_tx_keys;
   if(!epee::string_tools::hex_to_pod(local_args[1].substr(0, 64), tx_key))
   {
     fail_msg_writer() << tr("failed to parse tx key");
     return true;
-  }
-  local_args[1] = local_args[1].substr(64);
-  while (!local_args[1].empty())
-  {
-    additional_tx_keys.resize(additional_tx_keys.size() + 1);
-    if(!epee::string_tools::hex_to_pod(local_args[1].substr(0, 64), additional_tx_keys.back()))
-    {
-      fail_msg_writer() << tr("failed to parse tx key");
-      return true;
-    }
-    local_args[1] = local_args[1].substr(64);
   }
 
   cryptonote::address_parse_info info;
@@ -6747,7 +6719,7 @@ bool simple_wallet::check_tx_key(const std::vector<std::string> &args_)
     uint64_t received;
     bool in_pool;
     uint64_t confirmations;
-    m_wallet->check_tx_key(txid, tx_key, additional_tx_keys, info.address, received, in_pool, confirmations);
+    m_wallet->check_tx_key(txid, tx_key, info.address, received, in_pool, confirmations);
 
     if (received > 0)
     {
@@ -7376,12 +7348,11 @@ bool simple_wallet::export_transfers(const std::vector<std::string>& args_)
     }
 
     crypto::secret_key tx_key;
-    std::vector<crypto::secret_key> additional_tx_keys;
-    bool found_tx_key = m_wallet->get_tx_key(transfer.hash, tx_key, additional_tx_keys);
+    bool found_tx_key = m_wallet->get_tx_key(transfer.hash, tx_key);
     std::string key_string;
     if (export_keys && found_tx_key)
     {
-      key_string = get_tx_key_stream(tx_key, additional_tx_keys);
+      key_string = get_tx_key_stream(tx_key);
     }
 
     file << formatter

@@ -3715,7 +3715,7 @@ pub unsafe extern "C" fn shekyl_generate_tx_proof_outbound(
             true
         }
         Err(e) => {
-            eprintln!("shekyl_generate_tx_proof_outbound: {e}");
+            let _ = e;
             false
         }
     }
@@ -3808,7 +3808,7 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_outbound(
             true
         }
         Err(e) => {
-            eprintln!("shekyl_verify_tx_proof_outbound: {e}");
+            let _ = e;
             false
         }
     }
@@ -3864,7 +3864,7 @@ pub unsafe extern "C" fn shekyl_generate_tx_proof_inbound(
             true
         }
         Err(e) => {
-            eprintln!("shekyl_generate_tx_proof_inbound: {e}");
+            let _ = e;
             false
         }
     }
@@ -3950,7 +3950,7 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_inbound(
             true
         }
         Err(e) => {
-            eprintln!("shekyl_verify_tx_proof_inbound: {e}");
+            let _ = e;
             false
         }
     }
@@ -4025,7 +4025,7 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
             true
         }
         Err(e) => {
-            eprintln!("shekyl_generate_reserve_proof: {e}");
+            let _ = e;
             false
         }
     }
@@ -4094,7 +4094,7 @@ pub unsafe extern "C" fn shekyl_verify_reserve_proof(
             true
         }
         Err(e) => {
-            eprintln!("shekyl_verify_reserve_proof: {e}");
+            let _ = e;
             false
         }
     }

@@ -1362,15 +1362,12 @@ static char* dispatch_get_tx_key(wallet2_handle* w, const rj::Value& p) {
         return nullptr;
     }
     crypto::secret_key tx_key;
-    std::vector<crypto::secret_key> additional_tx_keys;
-    if (!w->wallet->get_tx_key(txid, tx_key, additional_tx_keys)) {
+    if (!w->wallet->get_tx_key(txid, tx_key)) {
         w->set_error(WALLET_RPC_ERROR_CODE_NO_TXKEY, "No tx secret key found for txid");
         return nullptr;
     }
     epee::wipeable_string ws;
     ws += epee::to_hex::wipeable_string(tx_key);
-    for (const auto& k : additional_tx_keys)
-        ws += epee::to_hex::wipeable_string(k);
     std::string key_str(ws.data(), ws.size());
 
     rj::Document doc;
@@ -1913,17 +1910,6 @@ static char* dispatch_check_tx_key(wallet2_handle* w, const rj::Value& p) {
         w->set_error(WALLET_RPC_ERROR_CODE_WRONG_KEY, "Tx key has invalid format");
         return nullptr;
     }
-    size_t offset = 64;
-    std::vector<crypto::secret_key> additional_tx_keys;
-    while (offset < tx_key_str.size()) {
-        additional_tx_keys.resize(additional_tx_keys.size() + 1);
-        if (!epee::wipeable_string(data + offset, 64).hex_to_pod(unwrap(unwrap(additional_tx_keys.back())))) {
-            w->set_error(WALLET_RPC_ERROR_CODE_WRONG_KEY, "Tx key has invalid format");
-            return nullptr;
-        }
-        offset += 64;
-    }
-
     cryptonote::address_parse_info info;
     if (!get_account_address_from_str(info, w->wallet->nettype(), json_str(p, "address"))) {
         w->set_error(WALLET_RPC_ERROR_CODE_WRONG_ADDRESS, "Invalid address");
@@ -1934,7 +1920,7 @@ static char* dispatch_check_tx_key(wallet2_handle* w, const rj::Value& p) {
         uint64_t received = 0;
         bool in_pool = false;
         uint64_t confirmations = 0;
-        w->wallet->check_tx_key(txid, tx_key, additional_tx_keys, info.address, received, in_pool, confirmations);
+        w->wallet->check_tx_key(txid, tx_key, info.address, received, in_pool, confirmations);
 
         rj::Document doc;
         doc.SetObject();
@@ -2485,8 +2471,6 @@ static bool fill_split_response(
 
         if (get_tx_keys) {
             epee::wipeable_string s = epee::to_hex::wipeable_string(ptx.tx_key);
-            for (const auto& k : ptx.additional_tx_keys)
-                s += epee::to_hex::wipeable_string(k);
             tx_key_list.PushBack(json_val_str(std::string(s.data(), s.size()), a), a);
         }
 
@@ -2686,8 +2670,6 @@ static char* dispatch_sign_transfer(wallet2_handle* w, const rj::Value& p) {
                 epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx)), a), a);
             if (get_tx_keys) {
                 epee::wipeable_string s = epee::to_hex::wipeable_string(ptx.tx_key);
-                for (const auto& k : ptx.additional_tx_keys)
-                    s += epee::to_hex::wipeable_string(k);
                 tx_key_list.PushBack(json_val_str(std::string(s.data(), s.size()), a), a);
             }
             if (export_raw) {
@@ -3104,8 +3086,6 @@ static char* dispatch_sweep_single(wallet2_handle* w, const rj::Value& p) {
 
         if (get_tx_key) {
             epee::wipeable_string s = epee::to_hex::wipeable_string(ptx.tx_key);
-            for (const auto& k : ptx.additional_tx_keys)
-                s += epee::to_hex::wipeable_string(k);
             doc.AddMember("tx_key", json_val_str(
                 std::string(s.data(), s.size()), a), a);
         }

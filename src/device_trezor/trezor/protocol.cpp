@@ -158,7 +158,6 @@ namespace ki {
   {
     for(auto & td : transfers){
       ::crypto::public_key tx_pub_key = wallet->get_tx_pub_key_from_received_outs(td);
-      const std::vector<::crypto::public_key> additional_tx_pub_keys = cryptonote::get_additional_tx_pub_keys_from_extra(td.m_tx);
 
       res.emplace_back();
       auto & cres = res.back();
@@ -167,9 +166,6 @@ namespace ki {
       cres.set_internal_output_index(td.m_internal_output_index);
       cres.set_sub_addr_major(td.m_subaddr_index.major);
       cres.set_sub_addr_minor(td.m_subaddr_index.minor);
-      if (!additional_tx_pub_keys.empty() && additional_tx_pub_keys.size() > td.m_internal_output_index) {
-        cres.add_additional_tx_pub_keys(key_to_string(additional_tx_pub_keys[td.m_internal_output_index]));
-      }
     }
 
     return true;
@@ -185,10 +181,6 @@ namespace ki {
     keccak_init(&kck);
     keccak_update(&kck, reinterpret_cast<const uint8_t *>(rr.out_key().data()), 32);
     keccak_update(&kck, reinterpret_cast<const uint8_t *>(rr.tx_pub_key().data()), 32);
-    for (const auto &aux : rr.additional_tx_pub_keys()){
-      CHECK_AND_ASSERT_THROW_MES(aux.size() == 32, "Invalid aux size");
-      keccak_update(&kck, reinterpret_cast<const uint8_t *>(aux.data()), 32);
-    }
 
     auto index_serialized = tools::get_varint_data(rr.internal_output_index());
     keccak_update(&kck, reinterpret_cast<const uint8_t *>(index_serialized.data()), index_serialized.size());
@@ -438,9 +430,6 @@ namespace tx {
 
     dst->set_real_out_tx_key(key_to_string(src.real_out_tx_key));
     dst->set_real_output_in_tx_index(src.real_output_in_tx_index);
-    if (!src.real_out_additional_tx_keys.empty()) {
-      dst->add_real_out_additional_tx_keys(key_to_string(src.real_out_additional_tx_keys.at(src.real_output_in_tx_index)));
-    }
     dst->set_amount(src.amount);
     dst->set_rct(src.rct);
     dst->set_mask(key_to_string(src.mask));

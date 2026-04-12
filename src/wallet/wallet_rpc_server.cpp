@@ -1130,8 +1130,6 @@ namespace tools
       if (get_tx_key)
       {
         epee::wipeable_string s = epee::to_hex::wipeable_string(ptx.tx_key);
-        for (const crypto::secret_key& additional_tx_key : ptx.additional_tx_keys)
-          s += epee::to_hex::wipeable_string(additional_tx_key);
         fill(tx_key, std::string(s.data(), s.size()));
       }
       // Compute amount leaving wallet in tx. By convention dests does not include change outputs
@@ -1375,8 +1373,6 @@ namespace tools
       if (req.get_tx_keys)
       {
         res.tx_key_list.push_back(epee::string_tools::pod_to_hex(unwrap(unwrap(ptx.tx_key))));
-        for (const crypto::secret_key& additional_tx_key : ptx.additional_tx_keys)
-          res.tx_key_list.back() += epee::string_tools::pod_to_hex(unwrap(unwrap(additional_tx_key)));
       }
     }
 
@@ -2723,8 +2719,7 @@ namespace tools
     }
 
     crypto::secret_key tx_key;
-    std::vector<crypto::secret_key> additional_tx_keys;
-    if (!m_wallet->get_tx_key(txid, tx_key, additional_tx_keys))
+    if (!m_wallet->get_tx_key(txid, tx_key))
     {
       er.code = WALLET_RPC_ERROR_CODE_NO_TXKEY;
       er.message = "No tx secret key is stored for this tx";
@@ -2733,8 +2728,6 @@ namespace tools
 
     epee::wipeable_string s;
     s += epee::to_hex::wipeable_string(tx_key);
-    for (size_t i = 0; i < additional_tx_keys.size(); ++i)
-      s += epee::to_hex::wipeable_string(additional_tx_keys[i]);
     res.tx_key = std::string(s.data(), s.size());
     return true;
   }
@@ -2766,20 +2759,6 @@ namespace tools
       er.message = "Tx key has invalid format";
       return false;
     }
-    size_t offset = 64;
-    std::vector<crypto::secret_key> additional_tx_keys;
-    while (offset < tx_key_str.size())
-    {
-      additional_tx_keys.resize(additional_tx_keys.size() + 1);
-      if (!epee::wipeable_string(data + offset, 64).hex_to_pod(unwrap(unwrap(additional_tx_keys.back()))))
-      {
-        er.code = WALLET_RPC_ERROR_CODE_WRONG_KEY;
-        er.message = "Tx key has invalid format";
-        return false;
-      }
-      offset += 64;
-    }
-
     cryptonote::address_parse_info info;
     if(!get_account_address_from_str(info, m_wallet->nettype(), req.address))
     {
@@ -2790,7 +2769,7 @@ namespace tools
 
     try
     {
-      m_wallet->check_tx_key(txid, tx_key, additional_tx_keys, info.address, res.received, res.in_pool, res.confirmations);
+      m_wallet->check_tx_key(txid, tx_key, info.address, res.received, res.in_pool, res.confirmations);
     }
     catch (const std::exception &e)
     {

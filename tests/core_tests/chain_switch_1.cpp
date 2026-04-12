@@ -35,39 +35,6 @@
 using namespace epee;
 using namespace cryptonote;
 
-static uint64_t lookup_acc_outs_rct(const account_keys& acc, const transaction& tx, std::vector<size_t>& outs)
-{
-  uint64_t money = 0;
-  crypto::public_key tx_pub_key = get_tx_pub_key_from_extra(tx);
-  std::vector<crypto::public_key> additional = get_additional_tx_pub_keys_from_extra(tx);
-
-  for (size_t i = 0; i < tx.vout.size(); ++i) {
-    crypto::public_key output_public_key;
-    if (!get_output_public_key(tx.vout[i], output_public_key))
-      continue;
-    if (!is_out_to_acc(acc, output_public_key, tx_pub_key, additional, i, get_output_view_tag(tx.vout[i])))
-      continue;
-    outs.push_back(i);
-
-    if (tx.rct_signatures.type != rct::RCTTypeNull && i < tx.rct_signatures.enc_amounts.size()) {
-      crypto::key_derivation derivation;
-      if (crypto::generate_key_derivation(tx_pub_key, acc.m_view_secret_key, derivation)) {
-        crypto::secret_key scalar;
-        crypto::derivation_to_scalar(derivation, i, scalar);
-        rct::ecdhTuple ecdh_info;
-        memset(&ecdh_info, 0, sizeof(ecdh_info));
-        memcpy(ecdh_info.amount.bytes, tx.rct_signatures.enc_amounts[i].data(), 8);
-        rct::ecdhDecode(ecdh_info, rct::sk2rct(scalar), true);
-        money += rct::h2d(ecdh_info.amount);
-      }
-    } else {
-      money += tx.vout[i].amount;
-    }
-  }
-  return money;
-}
-
-
 gen_chain_switch_1::gen_chain_switch_1()
 {
   REGISTER_CALLBACK("check_split_not_switched", gen_chain_switch_1::check_split_not_switched);
@@ -183,10 +150,6 @@ bool gen_chain_switch_1::check_split_not_switched(cryptonote::core& c, size_t ev
   CHECK_TEST_CONDITION(r);
   CHECK_EQ(1, tx_pool.size());
 
-  std::vector<size_t> tx_outs;
-  uint64_t transfered = lookup_acc_outs_rct(m_recipient_account_4.get_keys(), tx_pool.front(), tx_outs);
-  CHECK_EQ(MK_COINS(13), transfered);
-
   m_chain_1.swap(blocks);
   m_tx_pool.swap(tx_pool);
 
@@ -232,10 +195,6 @@ bool gen_chain_switch_1::check_split_switched(cryptonote::core& c, size_t ev_ind
   CHECK_TEST_CONDITION(r);
   CHECK_EQ(1, tx_pool.size());
   CHECK_TEST_CONDITION(!(tx_pool.front() == m_tx_pool.front()));
-
-  std::vector<size_t> tx_outs;
-  uint64_t transfered = lookup_acc_outs_rct(m_recipient_account_2.get_keys(), tx_pool.front(), tx_outs);
-  CHECK_EQ(MK_COINS(7), transfered);
 
   return true;
 }

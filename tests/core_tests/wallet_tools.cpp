@@ -195,7 +195,6 @@ void wallet_tools::gen_tx_src(size_t mixin, uint64_t cur_height, const tools::wa
 
   src.mask = rct::sk2rct(td.m_mask);
   src.real_out_tx_key = get_tx_pub_key_from_extra(td.m_tx, td.m_pk_index);
-  src.real_out_additional_tx_keys = get_additional_tx_pub_keys_from_extra(td.m_tx);
   src.real_output_in_tx_index = td.m_internal_output_index;
 }
 
@@ -275,7 +274,6 @@ bool construct_tx_rct(tools::wallet2 * sender_wallet, std::vector<cryptonote::tx
 {
   subaddresses_t & subaddresses = wallet_accessor_test::get_subaddresses(sender_wallet);
   crypto::secret_key tx_key;
-  std::vector<crypto::secret_key> additional_tx_keys;
   std::vector<tx_destination_entry> destinations_copy = destinations;
-  return construct_tx_and_get_tx_key(sender_wallet->get_account().get_keys(), subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, additional_tx_keys, rct, true, hf_version);
+  return construct_tx_and_get_tx_key(sender_wallet->get_account().get_keys(), subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, rct, true, hf_version);
 }

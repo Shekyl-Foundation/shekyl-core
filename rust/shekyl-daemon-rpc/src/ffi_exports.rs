@@ -77,7 +77,7 @@ pub extern "C" fn shekyl_daemon_rpc_start(
 
     rt.spawn(async move {
         if let Err(e) = crate::server::run_server(core, config, shutdown_for_server).await {
-            eprintln!("daemon-rpc server error: {e}");
+            tracing::error!("daemon-rpc server error: {e}");
         }
     });
 
