@@ -182,9 +182,5 @@ namespace rct {
     //sums a vector of curve points (for scalars use sc_add)
     void sumKeys(key & Csum, const key &Cis);
 
-    // Amount encryption helpers
-    key genCommitmentMask(const key &sk);
-    // Hash used for 8-byte amount XOR encryption: cn_fast_hash("amount" || key)
-    key ecdhHash(const key &k);
 }
 #endif  /* RCTOPS_H */

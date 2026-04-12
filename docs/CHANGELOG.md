@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### 🗑️ Removed
+
+- **`ecdhHash` and `genCommitmentMask` dead code removed.** Deleted the
+  `ecdhHash` and `genCommitmentMask` function definitions from `rctOps.cpp`,
+  their declarations from `rctOps.h`, the `genCommitmentMask` virtual method
+  from the device interface chain (`device.hpp`, `device_default`,
+  `device_ledger`), and the `ecdhDecode` unit test that depended on them.
+  These Keccak-based helpers were superseded by HKDF-derived amount encryption
+  in V3.
+
+- **Ring signature / decoy infrastructure removed from wallet2.** Removed
+  `fake_outs_count` parameters from `create_transactions_2`,
+  `create_transactions_all`, `create_transactions_single`, and
+  `create_transactions_from`. Removed `transfer_selected_rct`'s
+  `fake_outputs_count` and `outs` parameters. Deleted `get_output_relatedness`,
+  `outs_unique`, `m_print_ring_members`, and `m_rings` bookkeeping. FCMP++
+  eliminates ring signatures, making decoy selection and output relatedness
+  scoring dead code.
+
 ### 🔒 Security
 
 - **`m_combined_shared_secret` changed to `scrubbed_arr<uint8_t, 64>` (Phase 6,
@@ -386,9 +405,9 @@
   declarations. Removed `HASH_KEY_TXPROOF_V2` from `cryptonote_config.h`.
   Removed orphaned `ecdh.rs` module declaration and tests from
   `shekyl-tx-builder`. Remaining Category 1 functions (`derive_public_key`,
-  `derivation_to_scalar`, `derive_subaddress_public_key`, `decodeRctSimple`,
-  `ecdhHash`, `genCommitmentMask`) still have live callers in scan/sign
-  paths and are deferred to Phase 3 migration.
+  `derivation_to_scalar`, `derive_subaddress_public_key`, `decodeRctSimple`)
+  still have live callers in scan/sign paths and are deferred to Phase 3
+  migration. `ecdhHash` and `genCommitmentMask` have been removed.
 
 - **Phase 2d: Collapsed signing via `shekyl_sign_fcmp_transaction` (PR-wallet).**
   The CLI wallet's `transfer_selected_rct` now calls the Rust collapsed
@@ -687,9 +706,10 @@
 
 - **`ecdhEncode` removed.** The ECDH encoding function is deleted from
   `rctOps`, `device.hpp`, and `device_default`. Transaction construction now
-  writes `enc_amounts` directly using `ecdhHash` for XOR encryption.
-  `ecdhDecode` and `genCommitmentMask` are retained as a scanner shim until
-  the wallet migrates to Rust `scan_output`.
+  writes `enc_amounts` directly via Rust HKDF-based output construction.
+  `ecdhDecode` is retained as a scanner shim until the wallet migrates to
+  Rust `scan_output`. `ecdhHash` and `genCommitmentMask` have been fully
+  removed from `rctOps`, the device interface chain, and tests.
 
 - **FROST SAL deferred to V4.** Per-output HKDF-derived `y` is incompatible
   with DKG group-shared `y`. FROST SAL section in `docs/PQC_MULTISIG.md`

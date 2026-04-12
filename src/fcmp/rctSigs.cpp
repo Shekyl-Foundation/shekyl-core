@@ -84,7 +84,7 @@ namespace
 
     void fill_construct_tx_rct_stub(rctSig &rv, const key &message, xmr_amount txnFee,
         const crypto::hash &referenceBlock, const std::vector<xmr_amount> &inamounts,
-        const std::vector<xmr_amount> &outamounts, const keyV &destinations, hw::device &hwdev)
+        const std::vector<xmr_amount> &outamounts, const keyV &destinations)
     {
         CHECK_AND_ASSERT_THROW_MES(!inamounts.empty(), "fill_construct_tx_rct_stub: no inputs");
         const size_t n_out = outamounts.size();
@@ -109,20 +109,11 @@ namespace
         for (size_t i = 0; i < n_out; ++i)
             rv.outPk[i].mask = scalarmult8(C[i]);
 
-        keyV amount_keys(n_out);
-        for (size_t i = 0; i < n_out; ++i)
-            amount_keys[i] = skGen();
-
         key sumout = zero();
         for (size_t i = 0; i < n_out; ++i)
         {
             sc_add(sumout.bytes, masks[i].bytes, sumout.bytes);
-            // Stub: dummy enc_amounts — overwritten by v3_rct_data in construct_tx_with_tx_key.
-            key amount_scalar = d2h(outamounts[i]);
-            key ecdh_hash = ecdhHash(amount_keys[i]);
-            for (int b = 0; b < 8; ++b)
-                rv.enc_amounts[i][b] = amount_scalar.bytes[b] ^ ecdh_hash.bytes[b];
-            rv.enc_amounts[i][8] = 0x00;
+            memset(rv.enc_amounts[i].data(), 0, rv.enc_amounts[i].size());
         }
 
         rv.p.pseudoOuts.resize(n_in);
@@ -137,18 +128,6 @@ namespace
         const size_t last = n_in - 1;
         sc_sub(a[last].bytes, sumout.bytes, sumpouts.bytes);
         genC(rv.p.pseudoOuts[last], a[last], inamounts[last]);
-    }
-
-    BulletproofPlus proveRangeBulletproofPlus(keyV &C, keyV &masks, const std::vector<uint64_t> &amounts, epee::span<const key> sk, hw::device &hwdev)
-    {
-        CHECK_AND_ASSERT_THROW_MES(amounts.size() == sk.size(), "Invalid amounts/sk sizes");
-        masks.resize(amounts.size());
-        for (size_t i = 0; i < masks.size(); ++i)
-            masks[i] = hwdev.genCommitmentMask(sk[i]);
-        BulletproofPlus proof = bulletproof_plus_PROVE(amounts, masks);
-        CHECK_AND_ASSERT_THROW_MES(proof.V.size() == amounts.size(), "V does not have the expected size");
-        C = proof.V;
-        return proof;
     }
 
     bool verBulletproofPlus(const BulletproofPlus &proof)

@@ -1512,8 +1512,6 @@ PendingTransaction *WalletImpl::createTransactionMultDest(const std::vector<stri
             setStatusError(tr("no connection to daemon. Please make sure daemon is running."));
         } catch (const tools::error::wallet_rpc_error& e) {
             setStatusError(tr("RPC error: ") +  e.to_string());
-        } catch (const tools::error::get_outs_error &e) {
-            setStatusError((boost::format(tr("failed to get outputs to mix: %s")) % e.what()).str());
         } catch (const tools::error::not_enough_unlocked_money& e) {
             std::ostringstream writer;
 

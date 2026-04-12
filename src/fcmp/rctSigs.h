@@ -91,7 +91,7 @@ namespace rct {
     /** Dummy BP+, pseudo-outs, and ECDH so construct_tx can serialize/hash; wallet replaces via shekyl_sign_fcmp_transaction. */
     void fill_construct_tx_rct_stub(rctSig &rv, const key &message, xmr_amount txnFee,
         const crypto::hash &referenceBlock, const std::vector<xmr_amount> &inamounts,
-        const std::vector<xmr_amount> &outamounts, const keyV &destinations, hw::device &hwdev);
+        const std::vector<xmr_amount> &outamounts, const keyV &destinations);
     bool verRctSemanticsSimple(const rctSig & rv);
     bool verRctSemanticsSimple(const std::vector<const rctSig*> & rv);
     key get_tx_prehash(const rctSig &rv, hw::device &hwdev);

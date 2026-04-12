@@ -1,0 +1,25 @@
+[package]
+name = "shekyl-tx-builder-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+shekyl-bulletproofs = { path = "../../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
+shekyl-primitives = { path = "../../shekyl-oxide/shekyl-oxide/primitives" }
+shekyl-io = { path = "../../shekyl-oxide/shekyl-oxide/io" }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+rand_core = { version = "0.6", features = ["std"] }
+
+[[bin]]
+name = "fuzz_bp_plus_masks"
+path = "fuzz_targets/fuzz_bp_plus_masks.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

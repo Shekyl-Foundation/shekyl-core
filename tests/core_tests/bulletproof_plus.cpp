@@ -190,17 +190,6 @@ bool gen_bpp_tx_validation_base::generate_with(std::vector<test_event_entry>& ev
     starting_rct_tx_hashes.push_back(get_transaction_hash(rct_txes.back()));
     LOG_PRINT_L0("Test tx: " << obj_to_json_str(rct_txes.back()));
 
-    for (int o = 0; amounts_paid[o] != (uint64_t)-1; ++o)
-    {
-      crypto::key_derivation derivation;
-      bool r = crypto::generate_key_derivation(destinations[o].addr.m_view_public_key, tx_key, derivation);
-      CHECK_AND_ASSERT_MES(r, false, "Failed to generate key derivation");
-      crypto::secret_key amount_key;
-      crypto::derivation_to_scalar(derivation, o, amount_key);
-      rct::key rct_tx_mask;
-      rct::decodeRctSimple(rct_txes.back().rct_signatures, rct::sk2rct(amount_key), o, rct_tx_mask, hw::get_device("default"));
-    }
-
     while (amounts_paid[0] != (size_t)-1)
       ++amounts_paid;
     ++amounts_paid;
@@ -383,12 +372,3 @@ bool gen_bpp_tx_invalid_wrong_amount::generate(std::vector<test_event_entry>& ev
   });
 }
 
-bool gen_bpp_tx_invalid_clsag_type::generate(std::vector<test_event_entry>& events) const
-{
-  DEFINE_TESTS_ERROR_CONTEXT("gen_bpp_tx_invalid_clsag_type");
-  const size_t mixin = 10;
-  const uint64_t amounts_paid[] = {5000, 5000, (uint64_t)-1};
-  return generate_with(events, mixin, 1, amounts_paid, false, HF_VERSION_BULLETPROOF_PLUS, NULL, [&](cryptonote::transaction &tx, size_t tx_idx){
-    return true;
-  });
-}

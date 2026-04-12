@@ -3816,7 +3816,7 @@ char* wallet2_ffi_prepare_transfer(wallet2_handle* w,
             rj::Value out_obj(rj::kObjectType);
             add_hex_key(out_obj, "dest_key", out.dest_key, alloc);
             out_obj.AddMember("amount", out.amount, alloc);
-            add_hex_key(out_obj, "amount_key", out.amount_key, alloc);
+            add_hex_key(out_obj, "commitment_mask", out.commitment_mask, alloc);
             outputs_arr.PushBack(out_obj, alloc);
         }
         doc.AddMember("outputs", outputs_arr, alloc);

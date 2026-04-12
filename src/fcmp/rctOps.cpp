@@ -669,24 +669,4 @@ namespace rct {
         }
     }
 
-    //Elliptic Curve Diffie Helman: encodes and decodes the amount b and mask a
-    // where C= aG + bH
-    key ecdhHash(const key &k)
-    {
-        char data[38];
-        rct::key hash;
-        memcpy(data, "amount", 6);
-        memcpy(data + 6, &k, sizeof(k));
-        cn_fast_hash(hash, data, sizeof(data));
-        return hash;
-    }
-    key genCommitmentMask(const key &sk)
-    {
-        char data[15 + sizeof(key)];
-        memcpy(data, "commitment_mask", 15);
-        memcpy(data + 15, &sk, sizeof(sk));
-        key scalar;
-        hash_to_scalar(scalar, data, sizeof(data));
-        return scalar;
-    }
 }

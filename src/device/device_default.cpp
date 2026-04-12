@@ -364,10 +364,6 @@ namespace hw {
             return true;
         }
 
-        rct::key device_default::genCommitmentMask(const rct::key &amount_key) {
-            return rct::genCommitmentMask(amount_key);
-        }
-
         bool device_default::tx_prepare(const rct::key &H, const rct::key &xx,
                                          rct::key &a, rct::key &aG, rct::key &aHP, rct::key &II) {
             rct::skpkGen(a, aG);

@@ -598,7 +598,7 @@ namespace cryptonote
       // Serializable rctSig stub (dummy BP+); the wallet overwrites via shekyl_sign_fcmp_transaction()
       // after constructing tree paths and per-output PQC material.
       rct::fill_construct_tx_rct_stub(tx.rct_signatures, rct::hash2rct(tx_prefix_hash), amount_in - amount_out,
-          crypto::null_hash, inamounts, outamounts, destinations, hwdev);
+          crypto::null_hash, inamounts, outamounts, destinations);
       memwipe(inSk.data(), inSk.size() * sizeof(rct::ctkey));
 
       // v3: overwrite stub commitments and enc_amounts with real HKDF-derived values.

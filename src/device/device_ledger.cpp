@@ -46,8 +46,8 @@ namespace hw {
     // ──── V3 HARD GATE ────────────────────────────────────────────────
     // The Ledger device path has not been updated for V3 two-component
     // keys (HKDF-derived ho/y/z, deterministic KEM, etc.). Functions like
-    // genCommitmentMask and generate_output_ephemeral_keys
-    // still use the Keccak-based derivation that V3 replaces with Rust FFI.
+    // generate_output_ephemeral_keys still use the Keccak-based derivation
+    // that V3 replaces with Rust FFI.
     //
     // If you're seeing this error, do NOT simply remove it. The Ledger
     // firmware and APDU protocol must be updated for V3 before this path
@@ -1704,31 +1704,6 @@ namespace hw {
                                                 const rct::key &amount_key,  const crypto::public_key &out_eph_public_key)  {
         key_map.add(ABPkeys(rct::pk2rct(Aout),rct::pk2rct(Bout), is_subaddress, is_change, need_additional, real_output_index, rct::pk2rct(out_eph_public_key), amount_key));
         return true;
-    }
-
-    rct::key device_ledger::genCommitmentMask(const rct::key &AKout) {
-        #ifdef DEBUG_HWDEVICE
-        const rct::key AKout_x =  hw::ledger::decrypt(AKout);
-        rct::key mask_x;
-        mask_x = this->controle_device->genCommitmentMask(AKout_x);
-        #endif
-
-        rct::key mask;
-        int offset = set_command_header_noopt(INS_GEN_COMMITMENT_MASK);
-        // AKout
-        this->send_secret(AKout.bytes, offset);
-
-        this->buffer_send[4] = offset-5;
-        this->length_send = offset;
-        this->exchange();
-
-        memmove(mask.bytes, &this->buffer_recv[0],  32);
-
-        #ifdef DEBUG_HWDEVICE
-        hw::ledger::check32("genCommitmentMask", "mask", (const char*)mask_x.bytes, (const char*)mask.bytes);
-        #endif
-        
-        return mask;
     }
 
     bool device_ledger::tx_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size,

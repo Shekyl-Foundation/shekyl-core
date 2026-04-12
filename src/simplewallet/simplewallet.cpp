@@ -616,10 +616,6 @@ void simple_wallet::handle_transfer_exception(const std::exception_ptr &e, bool 
       LOG_ERROR("RPC error: " << e.to_string());
       fail_msg_writer() << sw::tr("RPC error: ") << e.what();
     }
-    catch (const tools::error::get_outs_error &e)
-    {
-      fail_msg_writer() << sw::tr("failed to get random outputs to mix: ") << e.what();
-    }
     catch (const tools::error::not_enough_unlocked_money& e)
     {
       LOG_PRINT_L0(boost::format("not enough money to transfer, available only %s, sent amount %s") %
@@ -1410,19 +1406,6 @@ bool simple_wallet::set_always_confirm_transfers(const std::vector<std::string> 
   {
     parse_bool_and_use(args[1], [&](bool r) {
       m_wallet->always_confirm_transfers(r);
-      m_wallet->rewrite(m_wallet_file, pwd_container->password());
-    });
-  }
-  return true;
-}
-
-bool simple_wallet::set_print_ring_members(const std::vector<std::string> &args/* = std::vector<std::string>()*/)
-{
-  const auto pwd_container = get_and_verify_password();
-  if (pwd_container)
-  {
-    parse_bool_and_use(args[1], [&](bool r) {
-      m_wallet->print_ring_members(r);
       m_wallet->rewrite(m_wallet_file, pwd_container->password());
     });
   }
@@ -2359,8 +2342,6 @@ simple_wallet::simple_wallet()
                                   "  Set the wallet's seed language.\n "
                                   "always-confirm-transfers <1|0>\n "
                                   "  Whether to confirm unsplit txes.\n "
-                                  "print-ring-members <1|0>\n "
-                                  "  Whether to print detailed information about ring members during confirmation.\n "
                                   "store-tx-info <1|0>\n "
                                   "  Whether to store outgoing tx info (destination address, payment ID, tx secret key) for future reference.\n "
                                   "auto-refresh <1|0>\n "
@@ -2646,7 +2627,6 @@ bool simple_wallet::set_variable(const std::vector<std::string> &args)
     }
     success_msg_writer() << "seed = " << seed_language;
     success_msg_writer() << "always-confirm-transfers = " << m_wallet->always_confirm_transfers();
-    success_msg_writer() << "print-ring-members = " << m_wallet->print_ring_members();
     success_msg_writer() << "store-tx-info = " << m_wallet->store_tx_info();
     success_msg_writer() << "default-ring-size = 0 (FCMP++ uses implicit privacy set)";
     success_msg_writer() << "auto-refresh = " << m_wallet->auto_refresh();
@@ -2720,7 +2700,6 @@ bool simple_wallet::set_variable(const std::vector<std::string> &args)
       }
     }
     CHECK_SIMPLE_VARIABLE("always-confirm-transfers", set_always_confirm_transfers, tr("0 or 1"));
-    CHECK_SIMPLE_VARIABLE("print-ring-members", set_print_ring_members, tr("0 or 1"));
     CHECK_SIMPLE_VARIABLE("store-tx-info", set_store_tx_info, tr("0 or 1"));
     CHECK_SIMPLE_VARIABLE("auto-refresh", set_auto_refresh, tr("0 or 1"));
     CHECK_SIMPLE_VARIABLE("refresh-type", set_refresh_type, tr("full (slowest, no assumptions); optimize-coinbase (fast, assumes the whole coinbase is paid to a single address); no-coinbase (fastest, assumes we receive no coinbase transaction), default (same as optimize-coinbase)"));
@@ -5201,119 +5180,6 @@ std::pair<std::string, std::string> simple_wallet::show_outputs_line(const std::
   return std::make_pair(ostr.str(), ring_str);
 }
 //----------------------------------------------------------------------------------------------------
-bool simple_wallet::process_ring_members(const std::vector<tools::wallet2::pending_tx>& ptx_vector, std::ostream& ostr, bool verbose)
-{
-  uint32_t version;
-  if (!try_connect_to_daemon(false, &version))
-  {
-    fail_msg_writer() << tr("failed to connect to daemon");
-    return false;
-  }
-  // available for RPC version 1.4 or higher
-  if (version < MAKE_CORE_RPC_VERSION(1, 4))
-    return true;
-  std::string err;
-  uint64_t blockchain_height = get_daemon_blockchain_height(err);
-  if (!err.empty())
-  {
-    fail_msg_writer() << tr("failed to get blockchain height: ") << err;
-    return false;
-  }
-  // for each transaction
-  for (size_t n = 0; n < ptx_vector.size(); ++n)
-  {
-    const cryptonote::transaction& tx = ptx_vector[n].tx;
-    const tools::wallet2::tx_construction_data& construction_data = ptx_vector[n].construction_data;
-    if (verbose)
-      ostr << boost::format(tr("\nTransaction %llu/%llu: txid=%s")) % (n + 1) % ptx_vector.size() % cryptonote::get_transaction_hash(tx);
-    // for each input
-    std::vector<uint64_t>     spent_key_height(tx.vin.size());
-    std::vector<crypto::hash> spent_key_txid  (tx.vin.size());
-    for (size_t i = 0; i < tx.vin.size(); ++i)
-    {
-      if (!std::holds_alternative<cryptonote::txin_to_key>(tx.vin[i]))
-        continue;
-      const cryptonote::txin_to_key& in_key = std::get<cryptonote::txin_to_key>(tx.vin[i]);
-      const tools::wallet2::transfer_details &td = m_wallet->get_transfer_details(construction_data.selected_transfers[i]);
-      const cryptonote::tx_source_entry *sptr = NULL;
-      for (const auto &src: construction_data.sources)
-        if (src.outputs[src.real_output].second.dest == td.get_public_key())
-          sptr = &src;
-      if (!sptr)
-      {
-        fail_msg_writer() << tr("failed to find construction data for tx input");
-        return false;
-      }
-      const cryptonote::tx_source_entry& source = *sptr;
-
-      if (verbose)
-        ostr << boost::format(tr("\nInput %llu/%llu (%s): amount=%s")) % (i + 1) % tx.vin.size() % epee::string_tools::pod_to_hex(in_key.k_image) % print_money(source.amount);
-      // convert relative offsets of ring member keys into absolute offsets (indices) associated with the amount
-      std::vector<uint64_t> absolute_offsets = cryptonote::relative_output_offsets_to_absolute(in_key.key_offsets);
-      // get block heights from which those ring member keys originated
-      COMMAND_RPC_GET_OUTPUTS_BIN::request req = AUTO_VAL_INIT(req);
-      req.outputs.resize(absolute_offsets.size());
-      for (size_t j = 0; j < absolute_offsets.size(); ++j)
-      {
-        req.outputs[j].amount = in_key.amount;
-        req.outputs[j].index = absolute_offsets[j];
-      }
-      COMMAND_RPC_GET_OUTPUTS_BIN::response res = AUTO_VAL_INIT(res);
-      req.get_txid = true;
-      req.client = cryptonote::make_rpc_payment_signature(m_wallet->get_rpc_client_secret_key());
-      bool r = m_wallet->invoke_http_bin("/get_outs.bin", req, res);
-      err = interpret_rpc_response(r, res.status);
-      if (!err.empty())
-      {
-        fail_msg_writer() << tr("failed to get output: ") << err;
-        return false;
-      }
-      // make sure that returned block heights are less than blockchain height
-      for (auto& res_out : res.outs)
-      {
-        if (res_out.height >= blockchain_height)
-        {
-          fail_msg_writer() << tr("output key's originating block height shouldn't be higher than the blockchain height");
-          return false;
-        }
-      }
-      if (verbose)
-        ostr << tr("\nOriginating block heights: ");
-      spent_key_height[i] = res.outs[source.real_output].height;
-      spent_key_txid  [i] = res.outs[source.real_output].txid;
-      std::vector<uint64_t> heights(absolute_offsets.size(), 0);
-      for (size_t j = 0; j < absolute_offsets.size(); ++j)
-      {
-        heights[j] = res.outs[j].height;
-      }
-      std::pair<std::string, std::string> ring_str = show_outputs_line(heights, blockchain_height, source.real_output);
-      if (verbose)
-        ostr << ring_str.first << tr("\n|") << ring_str.second << tr("|\n");
-    }
-    // warn if rings contain keys originating from the same tx or temporally very close block heights
-    bool are_keys_from_same_tx      = false;
-    bool are_keys_from_close_height = false;
-    for (size_t i = 0; i < tx.vin.size(); ++i) {
-      for (size_t j = i + 1; j < tx.vin.size(); ++j)
-      {
-        if (spent_key_txid[i] == spent_key_txid[j])
-          are_keys_from_same_tx = true;
-        if (std::abs((int64_t)(spent_key_height[i] - spent_key_height[j])) < (int64_t)5)
-          are_keys_from_close_height = true;
-      }
-    }
-    if (are_keys_from_same_tx || are_keys_from_close_height)
-    {
-      ostr
-        << tr("\nWarning: Some input keys being spent are from ")
-        << (are_keys_from_same_tx ? tr("the same transaction") : tr("blocks that are temporally very close"))
-        << tr(", which can break the anonymity of ring signatures. Make sure this is intentional!");
-    }
-    ostr << ENDL;
-  }
-  return true;
-}
-//----------------------------------------------------------------------------------------------------
 bool simple_wallet::prompt_if_old(const std::vector<tools::wallet2::pending_tx> &ptx_vector)
 {
   // count the number of old outputs
@@ -5476,8 +5342,6 @@ bool simple_wallet::transfer(const std::vector<std::string> &args_)
 
   priority = m_wallet->adjust_priority(priority);
 
-  size_t fake_outs_count = 0;
-
   const size_t min_args = 1;
   if(local_args.size() < min_args)
   {
@@ -5632,7 +5496,7 @@ bool simple_wallet::transfer(const std::vector<std::string> &args_)
   try
   {
     // figure out what tx will be necessary
-    auto ptx_vector = m_wallet->create_transactions_2(dsts, fake_outs_count, priority, extra,
+    auto ptx_vector = m_wallet->create_transactions_2(dsts, priority, extra,
       m_current_subaddress_account, subaddr_indices, subtract_fee_from_outputs);
 
     if (ptx_vector.empty())
@@ -5743,8 +5607,6 @@ bool simple_wallet::transfer(const std::vector<std::string> &args_)
         if (dust_in_fee != 0) prompt << boost::format(tr(", of which %s is dust from change")) % print_money(dust_in_fee);
         if (dust_not_in_fee != 0)  prompt << tr(".") << ENDL << boost::format(tr("A total of %s from dust change will be sent to dust address")) 
                                                    % print_money(dust_not_in_fee);
-        if (!process_ring_members(ptx_vector, prompt, m_wallet->print_ring_members()))
-          return false;
         prompt << ENDL << tr("Is this okay?");
         
         std::string accepted = input_line(prompt.str(), true);
@@ -5896,8 +5758,6 @@ bool simple_wallet::sweep_main(uint32_t account, uint64_t below, const std::vect
 
   priority = m_wallet->adjust_priority(priority);
 
-  size_t fake_outs_count = 0;
-
   size_t outputs = 1;
   if (local_args.size() > 0 && local_args[0].substr(0, 8) == "outputs=")
   {
@@ -5972,7 +5832,7 @@ bool simple_wallet::sweep_main(uint32_t account, uint64_t below, const std::vect
   try
   {
     // figure out what tx will be necessary
-    auto ptx_vector = m_wallet->create_transactions_all(below, info.address, info.is_subaddress, outputs, fake_outs_count, priority, extra, account, subaddr_indices);
+    auto ptx_vector = m_wallet->create_transactions_all(below, info.address, info.is_subaddress, outputs, priority, extra, account, subaddr_indices);
 
     if (ptx_vector.empty())
     {
@@ -6007,8 +5867,6 @@ bool simple_wallet::sweep_main(uint32_t account, uint64_t below, const std::vect
       if (subaddr_indices.size() > 1)
         prompt << tr("WARNING: Outputs of multiple addresses are being used together, which might potentially compromise your privacy.\n");
     }
-    if (!process_ring_members(ptx_vector, prompt, m_wallet->print_ring_members()))
-      return true;
     if (ptx_vector.size() > 1) {
       prompt << boost::format(tr("Sweeping %s in %llu transactions for a total fee of %s.  Is this okay?")) %
         print_money(total_sent) %
@@ -6100,8 +5958,6 @@ bool simple_wallet::sweep_single(const std::vector<std::string> &args_)
 
   priority = m_wallet->adjust_priority(priority);
 
-  size_t fake_outs_count = 0;
-
   size_t outputs = 1;
   if (local_args.size() > 0 && local_args[0].substr(0, 8) == "outputs=")
   {
@@ -6190,7 +6046,7 @@ bool simple_wallet::sweep_single(const std::vector<std::string> &args_)
   try
   {
     // figure out what tx will be necessary
-    auto ptx_vector = m_wallet->create_transactions_single(ki, info.address, info.is_subaddress, outputs, fake_outs_count, priority, extra);
+    auto ptx_vector = m_wallet->create_transactions_single(ki, info.address, info.is_subaddress, outputs, priority, extra);
 
     if (ptx_vector.empty())
     {
@@ -6212,8 +6068,6 @@ bool simple_wallet::sweep_single(const std::vector<std::string> &args_)
     uint64_t total_fee = ptx_vector[0].fee;
     uint64_t total_sent = m_wallet->get_transfer_details(ptx_vector[0].selected_transfers.front()).amount();
     std::ostringstream prompt;
-    if (!process_ring_members(ptx_vector, prompt, m_wallet->print_ring_members()))
-      return true;
     prompt << boost::format(tr("Sweeping %s for a total fee of %s.  Is this okay?")) %
       print_money(total_sent) %
       print_money(total_fee);

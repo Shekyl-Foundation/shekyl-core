@@ -950,12 +950,32 @@ The KEM combining rule is implemented and ships at genesis:
   (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`).
 - Implementation: `rust/shekyl-crypto-pq/src/kem.rs`
 
+### Amount Encryption and Commitment Masks (HKDF Only)
+
+All amount encryption and commitment mask derivation uses HKDF exclusively.
+The legacy Keccak-based derivation path (`derivation_to_scalar` for amount
+keys, `ecdhHash`/`genCommitmentMask` for commitment masks) has been fully
+removed from construction, scanning, and signing paths.
+
+- **Amount encryption**: `enc_amount = k_amount XOR d2h(amount)` where
+  `k_amount` is derived via HKDF (label `shekyl-output-amount-key`).
+- **Commitment masks**: `z` scalar derived via HKDF (label
+  `shekyl-output-mask`). Used directly by the Rust BP+ prover.
+- **Construction**: `construct_output` (Rust FFI) produces `enc_amount`,
+  commitment, and `z` scalar. The C++ `construct_tx_with_tx_key` stores
+  these in `v3_rct_data` and exports `z` scalars as `v3_commitment_masks`
+  for the signing path.
+- **Signing**: `shekyl_sign_fcmp_transaction` receives commitment masks
+  directly; the C++ `proveRangeBulletproofPlus` function has been deleted.
+  All BP+ proof generation occurs in Rust.
+- **Scanning**: `shekyl_scan_and_recover` (Rust FFI) derives all output
+  secrets from `combined_ss` via HKDF. No Keccak fallback exists.
+
 ## Deferred Scope
 
 The following are explicitly deferred:
 
 - PQ stealth-address redesign
-- mixed legacy/reboot transaction coexistence logic
 - lattice-based composite threshold multisig (V4; see `docs/PQC_MULTISIG.md`)
 - hardware wallet support details (targeted for v1.1)
 
