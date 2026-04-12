@@ -4,6 +4,13 @@
 
 ### ✨ Added
 
+- **`shekyl-cli` interactive CLI wallet scaffold.** New Rust crate
+  `rust/shekyl-cli/` providing an interactive REPL replacement for
+  `simplewallet`. Consumes `shekyl-wallet-rpc` in library mode (same stack
+  as the GUI). MVP commands: create, open, close, address, balance, transfer,
+  transfers, seed, restore, refresh, save, status, help. Uses `rustyline` for
+  readline/history and `rpassword` for no-echo password input.
+
 - **CI gate: `dalek-ff-group` version isolation.** Added a workflow step that
   asserts `shekyl-ffi`'s normal dependency tree never pulls in
   `dalek-ff-group` v0.4. The 0.4 version is allowed transitively inside
@@ -53,6 +60,11 @@
 
 ### 🔄 Changed
 
+- **`simplewallet` marked deprecated.** Added a yellow deprecation banner to
+  `simplewallet.cpp` startup: "shekyl-wallet-cli is deprecated and will be
+  removed. Use shekyl-cli instead." No new features will be added; the binary
+  will be deleted once `shekyl-cli` reaches parity.
+
 - **Axum RPC binds to standard port.** When `--no-rust-rpc` is not set, the
   Axum daemon RPC server now binds to the standard RPC port (11029/12029/13029)
   and the epee HTTP listener is skipped. Falls back to epee on Axum startup
@@ -79,6 +91,21 @@
   for `derive_subaddress_public_key` and per-tx scanning removed.
 
 ### 🗑️ Removed
+
+- **`wallet/api/` C++ wrapper layer deleted (~3,900 lines).** The
+  `src/wallet/api/` directory (22 files) wrapped `wallet2` for GUI consumption.
+  With the Tauri GUI using `wallet2_ffi` via Rust, no production consumer
+  remained. Removed the directory, `add_subdirectory(api)` from wallet
+  CMakeLists, `wallet/api` includes and sizeof reporters from
+  `object_sizes.cpp`, broken includes in `subaddress.cpp` and trezor tests,
+  `wallet_api` link target from trezor CMakeLists, and CI `--target wallet_api`
+  build steps.
+
+- **`libwallet_api_tests/` test suite deleted (~1,300 lines).** Removed the
+  `tests/libwallet_api_tests/` directory and its CMake entry. Cleaned up the
+  Makefile's `libwallet_api_tests` ctest exclusions (originally disabled for
+  Issue #895, now fully removed). Also removed the `wallet_api_tests` class
+  and implementation from trezor tests.
 
 - **`load_deprecated_formats` / `is_deprecated` dead code excised (Phase 6
   completion).** Removed the `is_deprecated()` method, `is_old_file_format`

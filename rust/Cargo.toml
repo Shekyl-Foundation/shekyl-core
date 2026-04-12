@@ -39,6 +39,9 @@ members = [
 
     # Shekyl wallet core: transaction builders
     "shekyl-wallet-core",
+
+    # Interactive CLI wallet (replacement for simplewallet)
+    "shekyl-cli",
 ]
 resolver = "2"
 

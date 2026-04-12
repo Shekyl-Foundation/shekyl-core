@@ -1,0 +1,23 @@
+[package]
+name = "shekyl-cli"
+description = "Interactive CLI wallet for Shekyl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "shekyl-cli"
+path = "src/main.rs"
+
+[dependencies]
+shekyl-wallet-rpc = { path = "../shekyl-wallet-rpc", features = ["rust-scanner", "native-sign"] }
+clap = { version = "4", features = ["derive"] }
+rustyline = "15"
+tokio = { version = "1", features = ["full"] }
+serde = { workspace = true }
+serde_json = "1"
+zeroize = { version = "1", features = ["derive"] }
+rpassword = "7"
+dirs = "6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
