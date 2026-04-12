@@ -38,11 +38,6 @@
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
 #include "blockchain_db/lmdb/db_lmdb.h"
 #include "wallet/wallet2.h"
-#include "wallet/api/wallet.h"
-#include "wallet/api/transaction_info.h"
-#include "wallet/api/transaction_history.h"
-#include "wallet/api/unsigned_transaction.h"
-#include "wallet/api/pending_transaction.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "debugtools.objectsizes"
@@ -109,13 +104,6 @@ int main(int argc, char* argv[])
   SL(tools::wallet2::pending_tx);
   SL(tools::wallet2::unsigned_tx_set);
   SL(tools::wallet2::signed_tx_set);
-
-  SL(Monero::WalletImpl);
-  SL(Monero::AddressBookRow);
-  SL(Monero::TransactionInfoImpl);
-  SL(Monero::TransactionHistoryImpl);
-  SL(Monero::PendingTransactionImpl);
-  SL(Monero::UnsignedTransactionImpl);
 
   return 0;
 }

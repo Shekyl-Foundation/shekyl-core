@@ -99,5 +99,3 @@ if(NOT IOS)
       OUTPUT_NAME "shekyl-wallet-rpc")
   install(TARGETS wallet_rpc_server DESTINATION bin)
 endif()
-
-add_subdirectory(api)

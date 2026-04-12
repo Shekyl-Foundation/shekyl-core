@@ -31,7 +31,6 @@
 #pragma once
 
 #include <device_trezor/device_trezor.hpp>
-#include <wallet/api/wallet2_api.h>
 #include "daemon.h"
 #include "../core_tests/chaingen.h"
 #include "../core_tests/wallet_tools.h"
@@ -325,16 +324,4 @@ class gen_trezor_many_utxo_many_txo : public gen_trezor_base
 {
 public:
   bool generate(std::vector<test_event_entry>& events) override;
-};
-
-// Wallet::API tests
-class wallet_api_tests : public gen_trezor_base
-{
-public:
-  virtual ~wallet_api_tests();
-  void init();
-  bool generate(std::vector<test_event_entry>& events) override;
-
-protected:
-  boost::filesystem::path m_wallet_dir;
 };

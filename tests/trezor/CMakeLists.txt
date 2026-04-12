@@ -53,7 +53,6 @@ target_link_libraries(trezor_tests
     device
     device_trezor
     wallet
-    wallet_api
     rpc
     cryptonote_protocol
     daemon_rpc_server

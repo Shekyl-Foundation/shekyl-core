@@ -38,12 +38,6 @@ Each item is out of scope for the current PR but worth tracking for future work.
   `eprintln!` is idiomatic for this pattern. No change needed unless the sim
   gains a long-running mode where structured logging is warranted.
 
-- **`wallet/api/wallet.cpp` Phase 0 deletion candidate.**
-  The `wallet/api/` directory wraps `wallet2` for GUI consumption. With the
-  Tauri GUI wallet (`shekyl-gui-wallet`) using Rust wallet crates directly,
-  this C++ API layer is dead weight. Deletion is "genuinely free" — no
-  downstream consumers remain — and should be a separate commit.
-
 - **Test code `wallet_tools.cpp` still uses mixin/decoy infrastructure.**
   The `gen_tx_src` function constructs fake outputs for ring-style source
   entries. This is legacy test infrastructure that works but is conceptually

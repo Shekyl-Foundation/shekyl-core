@@ -206,7 +206,6 @@ int main(int argc, char* argv[])
       TREZOR_COMMON_TEST_CASE(gen_trezor_2utxo_sub_acc_to_1norm_2sub, core, trezor_base);
       TREZOR_COMMON_TEST_CASE(gen_trezor_4utxo_to_7outs, core, trezor_base);
       TREZOR_COMMON_TEST_CASE(gen_trezor_4utxo_to_15outs, core, trezor_base);
-      TREZOR_COMMON_TEST_CASE(wallet_api_tests, core, trezor_base);
     }
 
     if (trezor_base.heavy_tests())
@@ -1896,62 +1895,4 @@ bool gen_trezor_many_utxo_many_txo::generate(std::vector<test_event_entry>& even
   TREZOR_TEST_SUFFIX();
 }
 
-void wallet_api_tests::init()
-{
-  m_wallet_dir = boost::filesystem::unique_path();
-  boost::filesystem::create_directories(m_wallet_dir);
-}
-
-wallet_api_tests::~wallet_api_tests()
-{
-  try
-  {
-    if (!m_wallet_dir.empty() && boost::filesystem::exists(m_wallet_dir))
-    {
-      boost::filesystem::remove_all(m_wallet_dir);
-    }
-  }
-  catch(...)
-  {
-    MERROR("Could not remove wallet directory");
-  }
-}
-
-bool wallet_api_tests::generate(std::vector<test_event_entry>& events)
-{
-  init();
-  test_setup(events);
-  const std::string wallet_path = (m_wallet_dir / "wallet").string();
-  const auto api_net_type = m_network_type == TESTNET ? Monero::TESTNET : Monero::MAINNET;
-
-  Monero::WalletManager *wmgr = Monero::WalletManagerFactory::getWalletManager();
-  std::unique_ptr<Monero::Wallet> w{wmgr->createWalletFromDevice(wallet_path, "", api_net_type, m_trezor_path, 1)};
-  CHECK_AND_ASSERT_THROW_MES(w->init(daemon()->rpc_addr(), 0), "Wallet init fail");
-  CHECK_AND_ASSERT_THROW_MES(w->refresh(), "Refresh fail");
-  uint64_t balance = w->balance(0);
-  MDEBUG("Balance: " << balance);
-  CHECK_AND_ASSERT_THROW_MES(w->status() == Monero::PendingTransaction::Status_Ok, "Status nok, " << w->errorString());
-
-  auto addr = get_address(m_eve_account);
-  auto recepient_address = cryptonote::get_account_address_as_str(m_network_type, false, addr);
-  Monero::PendingTransaction * transaction = w->createTransaction(recepient_address,
-                                                                  "",
-                                                                  MK_COINS(10),
-                                                                  num_mixin(),
-                                                                  Monero::PendingTransaction::Priority_Medium,
-                                                                  0,
-                                                                  std::set<uint32_t>{});
-  CHECK_AND_ASSERT_THROW_MES(transaction->status() == Monero::PendingTransaction::Status_Ok, "Status nok: " << transaction->status() << ", msg: " << transaction->errorString());
-  w->refresh();
-
-  CHECK_AND_ASSERT_THROW_MES(w->balance(0) == balance, "Err");
-  CHECK_AND_ASSERT_THROW_MES(transaction->amount() == MK_COINS(10), "Err");
-  CHECK_AND_ASSERT_THROW_MES(transaction->commit(), "Err");
-  CHECK_AND_ASSERT_THROW_MES(w->balance(0) != balance, "Err");
-  CHECK_AND_ASSERT_THROW_MES(wmgr->closeWallet(w.get()), "Err");
-  (void)w.release();
-
-  mine_and_test(events);
-  return true;
-}
 

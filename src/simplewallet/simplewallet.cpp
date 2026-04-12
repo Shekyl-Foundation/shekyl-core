@@ -3329,6 +3329,8 @@ bool simple_wallet::init(const boost::program_options::variables_map& vm)
   if (!skip_check_backround_mining)
     check_background_mining(password);
 
+  message_writer(console_color_yellow, true) << tr("NOTE: shekyl-wallet-cli is deprecated and will be removed. Use shekyl-cli instead.");
+
   if (welcome)
     message_writer(console_color_yellow, true) << tr("If you are new to Shekyl, type \"welcome\" for a brief overview.");
 
