@@ -1126,7 +1126,6 @@ wallet2::wallet2(network_type nettype, uint64_t kdf_rounds, bool unattended, std
   m_auto_mine_for_rpc_payment_threshold(-1.0f),
   m_is_initialized(false),
   m_kdf_rounds(kdf_rounds),
-  is_old_file_format(false),
   m_watch_only(false),
   m_node_rpc_proxy(*m_http_client, m_rpc_payment_state, m_daemon_rpc_mutex),
   m_account_public_address{crypto::null_pkey, crypto::null_pkey},
@@ -1143,7 +1142,6 @@ wallet2::wallet2(network_type nettype, uint64_t kdf_rounds, bool unattended, std
   m_offline(false),
   m_rpc_version(0),
   m_export_format(ExportFormat::Binary),
-  m_load_deprecated_formats(false),
   m_credits_target(0),
   m_pool_info_query_time(0),
   m_has_ever_refreshed_from_node(false),
@@ -1851,14 +1849,6 @@ void wallet2::set_subaddress_lookahead(size_t major, size_t minor)
       m_subaddresses[D] = index2;
     }
   }
-}
-//----------------------------------------------------------------------------------------------------
-/*!
- * \brief Tells if the wallet file is deprecated.
- */
-bool wallet2::is_deprecated() const
-{
-  return is_old_file_format;
 }
 //----------------------------------------------------------------------------------------------------
 void wallet2::set_spent(size_t idx, uint64_t height)
@@ -4853,9 +4843,6 @@ std::optional<wallet2::keys_file_data> wallet2::get_keys_file_data(const crypto:
   value2.SetInt(m_export_format);
   json.AddMember("export_format", value2, json.GetAllocator());
 
-  value2.SetInt(m_load_deprecated_formats);
-  json.AddMember("load_deprecated_formats", value2, json.GetAllocator());
-
   value2.SetUint(1);
   json.AddMember("encrypted_secret_keys", value2, json.GetAllocator());
 
@@ -5062,53 +5049,11 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
     }
   }
 
-  // The contents should be JSON if the wallet follows the new format.
+  // Shekyl wallet keys files are always JSON (v3-from-genesis; no legacy formats).
   if (json.Parse(account_data.c_str()).HasParseError())
   {
-    is_old_file_format = true;
-    m_watch_only = false;
-    m_always_confirm_transfers = false;
-    m_store_tx_info = true;
-    m_default_priority = fee_priority::Default;
-    m_auto_refresh = true;
-    m_refresh_type = RefreshType::RefreshDefault;
-    m_refresh_from_block_height = 0;
-    m_skip_to_height = 0;
-    m_ask_password = AskPasswordToDecrypt;
-    cryptonote::set_default_decimal_point(CRYPTONOTE_DISPLAY_DECIMAL_POINT);
-    m_max_reorg_depth = ORPHANED_BLOCKS_MAX_COUNT;
-    m_min_output_count = 0;
-    m_min_output_value = 0;
-    m_merge_destinations = false;
-    m_confirm_backlog = true;
-    m_confirm_backlog_threshold = 0;
-    m_confirm_export_overwrite = true;
-    m_auto_low_priority = true;
-    m_segregate_pre_fork_outputs = true;
-    m_key_reuse_mitigation2 = true;
-    m_segregation_height = 0;
-    m_ignore_fractional_outputs = true;
-    m_ignore_outputs_above = MONEY_SUPPLY;
-    m_ignore_outputs_below = 0;
-    m_track_uses = false;
-    m_background_sync_type = BackgroundSyncOff;
-    m_show_wallet_name_when_locked = false;
-    m_inactivity_lock_timeout = DEFAULT_INACTIVITY_LOCK_TIMEOUT;
-    m_setup_background_mining = BackgroundMiningMaybe;
-    m_subaddress_lookahead_major = SUBADDRESS_LOOKAHEAD_MAJOR;
-    m_subaddress_lookahead_minor = SUBADDRESS_LOOKAHEAD_MINOR;
-    m_original_keys_available = false;
-    m_export_format = ExportFormat::Binary;
-    m_load_deprecated_formats = false;
-    m_device_name = "";
-    m_device_derivation_path = "";
-    m_key_device_type = hw::device::device_type::SOFTWARE;
-    encrypted_secret_keys = false;
-    m_persistent_rpc_client_id = false;
-    m_auto_mine_for_rpc_payment_threshold = -1.0f;
-    m_credits_target = 0;
-    m_allow_mismatched_daemon_version = false;
-    m_custom_background_key = std::nullopt;
+    LOG_ERROR("Wallet keys file is not valid JSON — Shekyl does not support pre-JSON wallet formats");
+    return false;
   }
   else if(json.IsObject())
   {
@@ -5236,9 +5181,6 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
 
     GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, export_format, ExportFormat, Int, false, Binary);
     m_export_format = field_export_format;
-
-    GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, load_deprecated_formats, int, Int, false, false);
-    m_load_deprecated_formats = field_load_deprecated_formats;
 
     GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, device_name, std::string, String, false, std::string());
     if (m_device_name.empty())
@@ -7235,54 +7177,7 @@ bool wallet2::parse_unsigned_tx_from_str(const std::string &unsigned_tx_st, unsi
   s = s.substr(magiclen);
   const char version = s[0];
   s = s.substr(1);
-  if (version == '\003')
-  {
-    if (!m_load_deprecated_formats)
-    {
-      LOG_PRINT_L0("Not loading deprecated format");
-      return false;
-    }
-    try
-    {
-      std::istringstream iss(s);
-      boost::archive::portable_binary_iarchive ar(iss);
-      ar >> exported_txs;
-    }
-    catch (...)
-    {
-      LOG_PRINT_L0("Failed to parse data from unsigned tx");
-      return false;
-    }
-  }
-  else if (version == '\004')
-  {
-    if (!m_load_deprecated_formats)
-    {
-      LOG_PRINT_L0("Not loading deprecated format");
-      return false;
-    }
-    try
-    {
-      s = decrypt_with_view_secret_key(s);
-      try
-      {
-        std::istringstream iss(s);
-        boost::archive::portable_binary_iarchive ar(iss);
-        ar >> exported_txs;
-      }
-      catch (...)
-      {
-        LOG_PRINT_L0("Failed to parse data from unsigned tx");
-        return false;
-      }
-    }
-    catch (const std::exception &e)
-    {
-      LOG_PRINT_L0("Failed to decrypt unsigned tx: " << e.what());
-      return false;
-    }
-  }
-  else if (version == '\005')
+  if (version == '\005')
   {
     try { s = decrypt_with_view_secret_key(s); }
     catch(const std::exception &e) { LOG_PRINT_L0("Failed to decrypt unsigned tx: " << e.what()); return false; }
@@ -7518,54 +7413,7 @@ bool wallet2::parse_tx_from_str(const std::string &signed_tx_st, std::vector<too
   s = s.substr(magiclen);
   const char version = s[0];
   s = s.substr(1);
-  if (version == '\003')
-  {
-    if (!m_load_deprecated_formats)
-    {
-      LOG_PRINT_L0("Not loading deprecated format");
-      return false;
-    }
-    try
-    {
-      std::istringstream iss(s);
-      boost::archive::portable_binary_iarchive ar(iss);
-      ar >> signed_txs;
-    }
-    catch (...)
-    {
-      LOG_PRINT_L0("Failed to parse data from signed transaction");
-      return false;
-    }
-  }
-  else if (version == '\004')
-  {
-    if (!m_load_deprecated_formats)
-    {
-      LOG_PRINT_L0("Not loading deprecated format");
-      return false;
-    }
-    try
-    {
-      s = decrypt_with_view_secret_key(s);
-      try
-      {
-        std::istringstream iss(s);
-        boost::archive::portable_binary_iarchive ar(iss);
-        ar >> signed_txs;
-      }
-      catch (...)
-      {
-        LOG_PRINT_L0("Failed to parse decrypted data from signed transaction");
-        return false;
-      }
-    }
-    catch (const std::exception &e)
-    {
-      LOG_PRINT_L0("Failed to decrypt signed transaction: " << e.what());
-      return false;
-    }
-  }
-  else if (version == '\005')
+  if (version == '\005')
   {
     try { s = decrypt_with_view_secret_key(s); }
     catch (const std::exception &e) { LOG_PRINT_L0("Failed to decrypt signed transaction: " << e.what()); return false; }
@@ -12731,19 +12579,6 @@ size_t wallet2::import_outputs_from_str(const std::string &outputs_st)
           loaded = true;
     }
     catch (...) {}
-
-    if (!loaded && m_load_deprecated_formats)
-    {
-      try
-      {
-        std::stringstream iss;
-        iss << body;
-        boost::archive::portable_binary_iarchive ar(iss);
-        ar >> outputs;
-        loaded = true;
-      }
-      catch (...) {}
-    }
 
     if (!loaded)
     {

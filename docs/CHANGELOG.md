@@ -19,6 +19,17 @@
   `BOOST_FOREACH` usage is reintroduced via upstream cherry-picks. All 31
   prior instances were replaced with range-based for loops.
 
+### 📚 Documentation
+
+- **FFI header upgraded to `///` doc comments (Phase 6 completion).** Converted all
+  `//` function and struct documentation comments in `src/shekyl/shekyl_ffi.h` to
+  `///` Doxygen-style. Covers all ~70 FFI exports: output construction/scanning,
+  key image computation, FCMP++ prove/verify, wallet proofs, cache encryption,
+  KEM operations, Bech32m encoding, curve tree hashing, seed derivation, and
+  daemon RPC. Rewrote the `SHEKYL_PROVE_WITNESS_HEADER_BYTES` comment from
+  `DEPRECATED`/`TODO` language to document its role as test infrastructure for
+  `genRctFcmpPlusPlus` in `core_tests`.
+
 ### 🔄 Changed
 
 - **Axum RPC binds to standard port.** When `--no-rust-rpc` is not set, the
@@ -47,6 +58,18 @@
   for `derive_subaddress_public_key` and per-tx scanning removed.
 
 ### 🗑️ Removed
+
+- **`load_deprecated_formats` / `is_deprecated` dead code excised (Phase 6
+  completion).** Removed the `is_deprecated()` method, `is_old_file_format`
+  member, `m_load_deprecated_formats` member and its getter/setter from
+  `wallet2.h`. Deleted the `is_deprecated()` definition, JSON save/load of
+  `load_deprecated_formats`, the non-JSON wallet keys file fallback (now a hard
+  error), and the boost `portable_binary_iarchive` version `\003`/`\004`
+  branches in `parse_unsigned_tx_from_str` and `parse_tx_from_str` from
+  `wallet2.cpp`. Removed the `set_load_deprecated_formats` command, its
+  `CHECK_SIMPLE_VARIABLE` entry, settings display line, and the `is_deprecated()`
+  upgrade flow from `simplewallet.cpp`/`.h`. Shekyl is v3-from-genesis; there are
+  no legacy non-JSON wallet files or boost-serialized transaction blobs to load.
 
 - **`additional_tx_keys` / `additional_tx_pub_keys` infrastructure fully
   removed.** Deleted member variables, struct fields, serialization entries, and
@@ -292,6 +315,12 @@
   `POST_QUANTUM_CRYPTOGRAPHY.md`: the output-key check uses `ho` with label
   `shekyl-output-x`, not `shekyl-pqc-output` (which is the ML-DSA seed
   label).
+
+- **Test compilation: `json_serialization.cpp` aggregate init.**
+  Replaced brace-enclosed initializer list for `tx_source_entry` with explicit
+  member assignment. The struct is no longer an aggregate (user-declared
+  destructor for `ho` wiping) and the old initializer also referenced a removed
+  `real_out_additional_tx_keys` field.
 
 - **Multi-output scan bug.** Removed erroneous `break` in
   `InternalScanner::scan_transaction` that exited the output iteration loop

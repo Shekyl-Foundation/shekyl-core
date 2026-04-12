@@ -63,9 +63,16 @@ namespace test
                         out_key = t.key;
                 }, input.value().target);
 
-                actual_sources.push_back(
-                    {{}, 0, key_field.pub_key, {}, std::size_t(input.index()), input.value().amount, rct, rct::identity()}
-                );
+                {
+                    cryptonote::tx_source_entry src{};
+                    src.real_output = 0;
+                    src.real_out_tx_key = key_field.pub_key;
+                    src.real_output_in_tx_index = std::size_t(input.index());
+                    src.amount = input.value().amount;
+                    src.rct = rct;
+                    src.mask = rct::identity();
+                    actual_sources.push_back(std::move(src));
+                }
 
                 for (unsigned ring = 0; ring < 10; ++ring)
                     actual_sources.back().push_output(input.index(), out_key, input.value().amount);
