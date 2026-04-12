@@ -132,7 +132,6 @@ bool wallet_tools::fill_tx_sources(tools::wallet2 * wallet, std::vector<cryptono
       MDEBUG("Selected " << i << " from tx: " << dump_keys(td.m_txid.data)
                         << " ki: " << dump_keys(td.m_key_image.data)
                         << " amnt: " << td.amount()
-                        << " rct: " << td.is_rct()
                         << " glob: " << td.m_global_output_index);
 
       sum += td.amount();
@@ -145,7 +144,7 @@ bool wallet_tools::fill_tx_sources(tools::wallet2 * wallet, std::vector<cryptono
 
     } catch(const std::exception &e){
       MTRACE("Output " << i << ", from: " <<  dump_keys(td.m_txid.data)
-                       << ", amnt: " << td.amount() << ", rct: " << td.is_rct()
+                       << ", amnt: " << td.amount()
                        << ", glob: " << td.m_global_output_index << " is not applicable: " << e.what());
     }
   }
@@ -159,10 +158,10 @@ void wallet_tools::gen_tx_src(size_t mixin, uint64_t cur_height, const tools::wa
 {
   CHECK_AND_ASSERT_THROW_MES(mixin != 0, "mixin is zero");
   src.amount = td.amount();
-  src.rct = td.is_rct();
+  src.rct = true;
 
-  std::vector<tools::wallet2::get_outs_entry> outs;
-  bt.get_fake_outs(mixin, td.is_rct() ? 0 : td.amount(), td.m_global_output_index, cur_height, outs);
+  std::vector<get_outs_entry> outs;
+  bt.get_fake_outs(mixin, 0, td.m_global_output_index, cur_height, outs);
 
   for (size_t n = 0; n < mixin; ++n)
   {

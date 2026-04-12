@@ -4,6 +4,11 @@
 
 ### ✨ Added
 
+- **CI gate: `dalek-ff-group` version isolation.** Added a workflow step that
+  asserts `shekyl-ffi`'s normal dependency tree never pulls in
+  `dalek-ff-group` v0.4. The 0.4 version is allowed transitively inside
+  `ciphersuite` internals but must never be used directly by Shekyl code.
+
 - **CI lint: no debug macros in production Rust.** Added a workflow step that
   rejects `eprintln!`, `dbg!`, and `println!` in production Rust code
   (excluding test modules, build scripts, binary entry points, and the
@@ -270,6 +275,23 @@
   both the X25519 secret and ML-KEM decapsulation key.
 
 ### 🐛 Fixed
+
+- **Stale `fake_outs_count` arguments in wallet transaction creation.**
+  Removed vestigial `0` (decoy count) from 9 call sites across
+  `wallet2_ffi.cpp`, `wallet_rpc_server.cpp`, and `wallet/api/wallet.cpp`
+  that no longer match `create_transactions_2`, `create_transactions_all`,
+  and `create_transactions_single` signatures after ring removal.
+
+- **Test compilation: `wallet_tools.cpp` and `transactions_flow_test.cpp`.**
+  Replaced removed `td.is_rct()` calls with `true` (all Shekyl outputs are
+  RCT), changed `tools::wallet2::get_outs_entry` to the local typedef from
+  `chaingen.h`, and removed stale `mix_in_factor` argument in the functional
+  test.
+
+- **PQC doc label error.** Fixed incorrect HKDF label reference in
+  `POST_QUANTUM_CRYPTOGRAPHY.md`: the output-key check uses `ho` with label
+  `shekyl-output-x`, not `shekyl-pqc-output` (which is the ML-DSA seed
+  label).
 
 - **Multi-output scan bug.** Removed erroneous `break` in
   `InternalScanner::scan_transaction` that exited the output iteration loop

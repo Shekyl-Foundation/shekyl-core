@@ -364,7 +364,7 @@ algebraic checks. The view tag reveals no information beyond what the attacker a
 **Independence of algebraic checks**: The two verification equations use different HKDF
 labels and different scalar families:
 
-- **Output key check**: `O == ho*G + B + y*T` uses `ho` (label `shekyl-pqc-output`) and
+- **Output key check**: `O == ho*G + B + y*T` uses `ho` (label `shekyl-output-x`) and
   `y` (label `shekyl-output-y`).
 - **Commitment check**: `C == z*G + amount*H` uses `z` (label `shekyl-output-mask`) and
   `k_amount` (label `shekyl-output-amount-key`) for amount recovery.
