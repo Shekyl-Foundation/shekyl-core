@@ -1021,7 +1021,7 @@ namespace cryptonote
               return true;
             }
             const cryptonote::blobdata pruned = ss.str();
-            const crypto::hash prunable_hash = td.tx.version == 1 ? crypto::null_hash : get_transaction_prunable_hash(td.tx);
+            const crypto::hash prunable_hash = get_transaction_prunable_hash(td.tx);
             sorted_txs.push_back(std::make_tuple(h, pruned, prunable_hash, std::string(td.tx_blob, pruned.size())));
             missed_txs.erase(std::find(missed_txs.begin(), missed_txs.end(), h));
             pool_tx_hashes.insert(h);

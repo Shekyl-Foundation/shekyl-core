@@ -6272,8 +6272,35 @@ void wallet2::load_wallet_cache(const bool use_fs, const std::string& cache_buf)
       r = ::serialization::parse_binary(use_fs ? cache_file_buf : cache_buf, cache_file_data);
       THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "internal error: failed to deserialize \"" + m_wallet_file + '\"');
       std::string cache_data;
-      cache_data.resize(cache_file_data.cache_data.size());
-      crypto::xchacha20(cache_file_data.cache_data.data(), cache_file_data.cache_data.size(), get_cache_key(), cache_file_data.iv, &cache_data[0]);
+
+      static const crypto::chacha_iv zero_iv{};
+      static constexpr uint8_t SHEKYL_CACHE_FORMAT_VERSION = 1;
+      const bool is_aead_format = (memcmp(&cache_file_data.iv, &zero_iv, sizeof(zero_iv)) == 0);
+
+      if (is_aead_format)
+      {
+        const crypto::chacha_key cache_key = get_cache_key();
+        ShekylBuffer out_buf{};
+        int32_t rc = shekyl_decrypt_wallet_cache(
+            reinterpret_cast<const uint8_t*>(cache_file_data.cache_data.data()),
+            cache_file_data.cache_data.size(),
+            SHEKYL_CACHE_FORMAT_VERSION,
+            cache_key.data(),
+            &out_buf);
+        THROW_WALLET_EXCEPTION_IF(rc == -1, error::wallet_internal_error,
+            "Wallet cache version mismatch (expected v" + std::to_string(SHEKYL_CACHE_FORMAT_VERSION) + ")");
+        THROW_WALLET_EXCEPTION_IF(rc == -2, error::wallet_internal_error,
+            "Wallet cache authentication failed — wrong password or corrupted file");
+        THROW_WALLET_EXCEPTION_IF(rc != 0, error::wallet_internal_error,
+            "Wallet cache decryption failed (code " + std::to_string(rc) + ")");
+        cache_data.assign(reinterpret_cast<char*>(out_buf.ptr), out_buf.len);
+        shekyl_buffer_free(out_buf.ptr, out_buf.len);
+      }
+      else
+      {
+        cache_data.resize(cache_file_data.cache_data.size());
+        crypto::xchacha20(cache_file_data.cache_data.data(), cache_file_data.cache_data.size(), get_cache_key(), cache_file_data.iv, &cache_data[0]);
+      }
 
       try {
         bool loaded = false;
@@ -6642,13 +6669,24 @@ std::optional<wallet2::cache_file_data> wallet2::get_cache_file_data()
     if (!::serialization::serialize(ar, *this))
       return std::nullopt;
 
+    const std::string plaintext = oss.str();
+    const crypto::chacha_key cache_key = get_cache_key();
+
+    static constexpr uint8_t SHEKYL_CACHE_FORMAT_VERSION = 1;
+    ShekylBuffer out_buf{};
+    bool ok = shekyl_encrypt_wallet_cache(
+        reinterpret_cast<const uint8_t*>(plaintext.data()),
+        plaintext.size(),
+        SHEKYL_CACHE_FORMAT_VERSION,
+        cache_key.data(),
+        &out_buf);
+    if (!ok || !out_buf.ptr)
+      return std::nullopt;
+
     std::optional<wallet2::cache_file_data> cache_file_data = wallet2::cache_file_data{};
-    cache_file_data->cache_data = oss.str();
-    std::string cipher;
-    cipher.resize(cache_file_data->cache_data.size());
-    cache_file_data->iv = crypto::rand<crypto::chacha_iv>();
-    crypto::xchacha20(cache_file_data->cache_data.data(), cache_file_data->cache_data.size(), get_cache_key(), cache_file_data->iv, &cipher[0]);
-    cache_file_data->cache_data = cipher;
+    memset(&cache_file_data->iv, 0, sizeof(cache_file_data->iv));
+    cache_file_data->cache_data.assign(reinterpret_cast<char*>(out_buf.ptr), out_buf.len);
+    shekyl_buffer_free(out_buf.ptr, out_buf.len);
     return cache_file_data;
   }
   catch(...)

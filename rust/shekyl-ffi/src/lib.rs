@@ -2889,11 +2889,11 @@ pub extern "C" fn shekyl_sign_fcmp_transaction(
         return ShekylSignResult::err(-1, "null pointer argument".into());
     }
 
-    let spend_secret: [u8; 32] = unsafe {
+    let spend_secret: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(unsafe {
         let mut buf = [0u8; 32];
         std::ptr::copy_nonoverlapping(spend_secret_ptr, buf.as_mut_ptr(), 32);
         buf
-    };
+    });
     let tx_prefix_hash: [u8; 32] = unsafe {
         let mut buf = [0u8; 32];
         std::ptr::copy_nonoverlapping(tx_prefix_hash_ptr, buf.as_mut_ptr(), 32);
@@ -2929,7 +2929,7 @@ pub extern "C" fn shekyl_sign_fcmp_transaction(
     use shekyl_crypto_pq::derivation::derive_output_secrets;
     use zeroize::Zeroize;
 
-    let b_scalar = match curve25519_scalar_from_bytes(&spend_secret) {
+    let mut b_scalar = match curve25519_scalar_from_bytes(&spend_secret) {
         Some(s) => s,
         None => return ShekylSignResult::err(-5, "invalid spend secret key".into()),
     };
@@ -2996,6 +2996,7 @@ pub extern "C" fn shekyl_sign_fcmp_transaction(
     };
 
     drop(spend_inputs);
+    b_scalar.zeroize();
     result
 }
 

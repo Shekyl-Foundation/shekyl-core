@@ -65,6 +65,7 @@ set(unit_tests_sources
   main.cpp
   memwipe.cpp
   mining_parity.cpp
+  transfer_details_wipe.cpp
   mlocker.cpp
   mnemonics.cpp
   mul_div.cpp
@@ -150,6 +151,7 @@ endif ()
 SET_PROPERTY(SOURCE main.cpp PROPERTY COMPILE_FLAGS -DDEFAULT_DATA_DIR="\\"${CMAKE_SOURCE_DIR}/tests/data\\"")
 
 SET_PROPERTY(SOURCE memwipe.cpp PROPERTY COMPILE_FLAGS -Ofast)
+SET_PROPERTY(SOURCE transfer_details_wipe.cpp PROPERTY COMPILE_FLAGS -Ofast)
 
 add_test(
   NAME    unit_tests

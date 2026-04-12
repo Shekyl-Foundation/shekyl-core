@@ -1682,11 +1682,12 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
     {
       LOG_ERROR("Creating block template: error: invalid transaction weight");
     }
-    if (cur_tx.tx.version < 2)
+    if (cur_tx.tx.version < 3)
     {
-      LOG_ERROR("Creating block template: error: v1 transactions are not supported");
+      LOG_ERROR("Creating block template: error: tx version < 3 is not supported on Shekyl");
+      continue;
     }
-    else if (cur_tx.fee != cur_tx.tx.rct_signatures.txnFee)
+    if (cur_tx.fee != cur_tx.tx.rct_signatures.txnFee)
     {
       LOG_ERROR("Creating block template: error: invalid fee");
     }

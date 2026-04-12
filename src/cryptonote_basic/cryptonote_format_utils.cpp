@@ -371,8 +371,7 @@ namespace cryptonote
   uint64_t get_transaction_weight(const transaction &tx, size_t blob_size)
   {
     CHECK_AND_ASSERT_MES(!tx.pruned, std::numeric_limits<uint64_t>::max(), "get_transaction_weight does not support pruned txes");
-    if (tx.version < 2)
-      return blob_size;
+    CHECK_AND_ASSERT_MES(tx.version >= 3, blob_size, "Shekyl requires tx version >= 3");
     const rct::rctSig &rv = tx.rct_signatures;
     if (!rct::is_rct_bulletproof_plus(rv.type))
       return blob_size;
@@ -805,11 +804,6 @@ namespace cryptonote
       crypto::public_key output_public_key;
       CHECK_AND_ASSERT_MES(get_output_public_key(out, output_public_key), false, "Failed to get output public key (output target index: "
         << out.target.index() << "), in transaction id=" << get_transaction_hash(tx));
-
-      if (tx.version == 1)
-      {
-        CHECK_AND_NO_ASSERT_MES(0 < out.amount, false, "zero amount output in transaction id=" << get_transaction_hash(tx));
-      }
 
       if(!check_key(output_public_key))
         return false;

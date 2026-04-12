@@ -118,7 +118,13 @@ struct RoundTripResult {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(100))]
+    #![proptest_config(ProptestConfig {
+        cases: std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10_000),
+        ..ProptestConfig::default()
+    })]
 
     #[test]
     fn round_trip_succeeds_and_is_deterministic(

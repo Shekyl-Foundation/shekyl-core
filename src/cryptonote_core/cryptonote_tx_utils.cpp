@@ -556,12 +556,7 @@ namespace cryptonote
       MDEBUG("Null secret key, skipping signatures");
     }
 
-    if (tx.version == 1)
-    {
-      LOG_ERROR("v1 transactions are not supported on Shekyl");
-      return false;
-    }
-    else
+    CHECK_AND_ASSERT_MES(tx.version >= 3, false, "Shekyl requires tx version >= 3");
     {
       uint64_t amount_in = 0, amount_out = 0;
       rct::ctkeyV inSk;
