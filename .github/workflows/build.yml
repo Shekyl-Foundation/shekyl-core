@@ -489,6 +489,28 @@ jobs:
             exit 1
           fi
           echo "PASS: no ecdhEncode/ecdhDecode outside Ledger"
+      - name: "CI grep gate: no direct dalek_ff_group 0.4 usage"
+        working-directory: rust
+        run: |
+          # The workspace carries two dalek-ff-group versions:
+          #   0.5.x — used directly by shekyl crates
+          #   0.4.x — pulled transitively by ciphersuite internals
+          # Only 0.5 may appear in *our* source code. The 0.4 version
+          # must stay hidden behind Ciphersuite trait abstractions.
+          DIRECT=$(grep -rn 'dalek_ff_group' --include='*.rs' \
+                   shekyl-*/src shekyl-ffi/src shekyl-ffi/tests 2>/dev/null \
+                   | grep -v '^\s*//' || true)
+          if [ -n "$DIRECT" ]; then
+            echo "Files referencing dalek_ff_group directly (must all resolve to 0.5):"
+            echo "$DIRECT"
+          fi
+          # Fail if any non-shekyl-oxide crate depends on the 0.4 line
+          if cargo tree -p shekyl-ffi --edges normal 2>/dev/null \
+             | grep 'dalek-ff-group v0\.4'; then
+            echo "FATAL: shekyl-ffi has a normal (non-dev) dependency on dalek-ff-group 0.4"
+            exit 1
+          fi
+          echo "PASS: dalek-ff-group version isolation enforced"
       - name: determinism check (build twice, compare hashes)
         working-directory: rust
         run: |

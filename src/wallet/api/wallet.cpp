@@ -1495,11 +1495,11 @@ PendingTransaction *WalletImpl::createTransactionMultDest(const std::vector<stri
         }
         try {
             if (amount) {
-                transaction->m_pending_tx = m_wallet->create_transactions_2(dsts, 0,
+                transaction->m_pending_tx = m_wallet->create_transactions_2(dsts,
                                                                             adjusted_priority,
                                                                             extra, subaddr_account, subaddr_indices);
             } else {
-                transaction->m_pending_tx = m_wallet->create_transactions_all(0, info.address, info.is_subaddress, 1, 0,
+                transaction->m_pending_tx = m_wallet->create_transactions_all(0, info.address, info.is_subaddress, 1,
                                                                               adjusted_priority,
                                                                               extra, subaddr_account, subaddr_indices);
             }

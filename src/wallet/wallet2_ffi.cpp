@@ -766,7 +766,7 @@ char* wallet2_ffi_transfer(wallet2_handle* w,
         const tools::fee_priority fp = w->wallet->adjust_priority(tools::fee_priority_utilities::from_integral(priority));
         std::set<uint32_t> subaddr_indices;
         std::vector<tools::wallet2::pending_tx> ptx_vector =
-            w->wallet->create_transactions_2(dsts, 0, fp, extra, account_index, subaddr_indices);
+            w->wallet->create_transactions_2(dsts, fp, extra, account_index, subaddr_indices);
 
         if (ptx_vector.empty()) {
             w->set_error(WALLET_RPC_ERROR_CODE_TX_NOT_POSSIBLE, "No transaction created");
@@ -2596,7 +2596,7 @@ static char* dispatch_transfer_split(wallet2_handle* w, const rj::Value& p) {
         std::set<uint32_t> subaddr_indices = parse_subaddr_indices(p);
 
         std::vector<tools::wallet2::pending_tx> ptx_vector =
-            w->wallet->create_transactions_2(dsts, 0, fp, extra,
+            w->wallet->create_transactions_2(dsts, fp, extra,
                 account_index, subaddr_indices);
 
         if (ptx_vector.empty()) {
@@ -2979,7 +2979,7 @@ static char* dispatch_sweep_all(wallet2_handle* w, const rj::Value& p) {
 
         std::vector<tools::wallet2::pending_tx> ptx_vector =
             w->wallet->create_transactions_all(below_amount, info.address,
-                info.is_subaddress, outputs, 0, fp, extra,
+                info.is_subaddress, outputs, fp, extra,
                 account_index, subaddr_indices);
 
         bool get_tx_keys = json_bool(p, "get_tx_keys");
@@ -3037,7 +3037,7 @@ static char* dispatch_sweep_single(wallet2_handle* w, const rj::Value& p) {
 
         std::vector<tools::wallet2::pending_tx> ptx_vector =
             w->wallet->create_transactions_single(ki, info.address,
-                info.is_subaddress, outputs, 0, fp, extra);
+                info.is_subaddress, outputs, fp, extra);
 
         if (ptx_vector.empty()) {
             w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "No outputs found");
@@ -3688,7 +3688,7 @@ char* wallet2_ffi_prepare_transfer(wallet2_handle* w,
         });
 
         std::vector<tools::wallet2::pending_tx> ptx_vector =
-            w->wallet->create_transactions_2(dsts, 0, fp, extra, account_index, subaddr_indices);
+            w->wallet->create_transactions_2(dsts, fp, extra, account_index, subaddr_indices);
 
         if (ptx_vector.empty()) {
             w->set_error(WALLET_RPC_ERROR_CODE_TX_NOT_POSSIBLE, "No transaction created");
