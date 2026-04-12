@@ -47,7 +47,6 @@
 #include "ge_tobytes.h"
 #include "generate_key_derivation.h"
 #include "generate_key_image.h"
-#include "generate_key_image_helper.h"
 #include "generate_keypair.h"
 #include "signature.h"
 #include "out_can_be_to_acc.h"
@@ -141,7 +140,6 @@ int main(int argc, char** argv)
   TEST_PERFORMANCE2(filter, p, test_out_can_be_to_acc, false, true); // no view tag, owned
   TEST_PERFORMANCE2(filter, p, test_out_can_be_to_acc, true, false); // use view tag, not owned
   TEST_PERFORMANCE2(filter, p, test_out_can_be_to_acc, true, true); // use view tag, owned
-  TEST_PERFORMANCE0(filter, p, test_generate_key_image_helper);
   TEST_PERFORMANCE0(filter, p, test_generate_key_derivation);
   TEST_PERFORMANCE0(filter, p, test_generate_key_image);
   TEST_PERFORMANCE0(filter, p, test_derive_public_key);

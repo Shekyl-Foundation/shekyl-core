@@ -39,10 +39,8 @@ set(performance_tests_headers
   ge_frombytes_vartime.h
   generate_key_derivation.h
   generate_key_image.h
-  generate_key_image_helper.h
   generate_keypair.h
   signature.h
-  is_out_to_acc.h
   out_can_be_to_acc.h
   subaddress_expand.h
   bulletproof_plus.h
