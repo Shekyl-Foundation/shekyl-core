@@ -127,14 +127,6 @@ namespace crypto {
     friend bool secret_key_to_public_key(const secret_key &, public_key &);
     static bool generate_key_derivation(const public_key &, const secret_key &, key_derivation &);
     friend bool generate_key_derivation(const public_key &, const secret_key &, key_derivation &);
-    static void derivation_to_scalar(const key_derivation &derivation, size_t output_index, ec_scalar &res);
-    friend void derivation_to_scalar(const key_derivation &derivation, size_t output_index, ec_scalar &res);
-    static bool derive_public_key(const key_derivation &, std::size_t, const public_key &, public_key &);
-    friend bool derive_public_key(const key_derivation &, std::size_t, const public_key &, public_key &);
-    static void derive_secret_key(const key_derivation &, std::size_t, const secret_key &, secret_key &);
-    friend void derive_secret_key(const key_derivation &, std::size_t, const secret_key &, secret_key &);
-    static bool derive_subaddress_public_key(const public_key &, const key_derivation &, std::size_t, public_key &);
-    friend bool derive_subaddress_public_key(const public_key &, const key_derivation &, std::size_t, public_key &);
     static void generate_signature(const hash &, const public_key &, const secret_key &, signature &);
     friend void generate_signature(const hash &, const public_key &, const secret_key &, signature &);
     static bool check_signature(const hash &, const public_key &, const signature &);
@@ -152,8 +144,6 @@ namespace crypto {
       const public_key *const *, std::size_t, const signature *);
     friend bool check_ring_signature(const hash &, const key_image &,
       const public_key *const *, std::size_t, const signature *);
-    static void derive_view_tag(const key_derivation &, std::size_t, view_tag &);
-    friend void derive_view_tag(const key_derivation &, std::size_t, view_tag &);
   };
 
   void generate_random_bytes_thread_safe(size_t N, uint8_t *bytes);
@@ -229,20 +219,6 @@ namespace crypto {
   inline bool generate_key_derivation(const public_key &key1, const secret_key &key2, key_derivation &derivation) {
     return crypto_ops::generate_key_derivation(key1, key2, derivation);
   }
-  inline bool derive_public_key(const key_derivation &derivation, std::size_t output_index,
-    const public_key &base, public_key &derived_key) {
-    return crypto_ops::derive_public_key(derivation, output_index, base, derived_key);
-  }
-  inline void derivation_to_scalar(const key_derivation &derivation, size_t output_index, ec_scalar &res) {
-    return crypto_ops::derivation_to_scalar(derivation, output_index, res);
-  }
-  inline void derive_secret_key(const key_derivation &derivation, std::size_t output_index,
-    const secret_key &base, secret_key &derived_key) {
-    crypto_ops::derive_secret_key(derivation, output_index, base, derived_key);
-  }
-  inline bool derive_subaddress_public_key(const public_key &out_key, const key_derivation &derivation, std::size_t output_index, public_key &result) {
-    return crypto_ops::derive_subaddress_public_key(out_key, derivation, output_index, result);
-  }
 
   /* Generation and checking of a standard signature.
    */
@@ -291,14 +267,6 @@ namespace crypto {
     const std::vector<const public_key *> &pubs,
     const signature *sig) {
     return check_ring_signature(prefix_hash, image, pubs.data(), pubs.size(), sig);
-  }
-
-  /* Derive a 1-byte view tag from the sender-receiver shared secret to reduce scanning time.
-   * When scanning outputs that were not sent to the user, checking the view tag for a match removes the need to proceed with expensive EC operations
-   * for an expected 99.6% of outputs (expected false positive rate = 1/2^8 = 1/256 = 0.4% = 100% - 99.6%).
-   */
-  inline void derive_view_tag(const key_derivation &derivation, std::size_t output_index, view_tag &vt) {
-    crypto_ops::derive_view_tag(derivation, output_index, vt);
   }
 
   inline std::ostream &operator <<(std::ostream &o, const crypto::public_key &v) {

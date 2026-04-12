@@ -488,24 +488,6 @@ namespace trezor {
       }
     }
 
-    bool device_trezor::compute_key_image(
-        const ::cryptonote::account_keys& ack,
-        const ::crypto::public_key& out_key,
-        const ::crypto::key_derivation& recv_derivation,
-        size_t real_output_index,
-        const ::cryptonote::subaddress_index& received_index,
-        ::cryptonote::keypair& in_ephemeral,
-        ::crypto::key_image& ki)
-    {
-      if (!is_live_refresh_enabled())
-      {
-        return false;
-      }
-
-      live_refresh(ack.m_view_secret_key, out_key, recv_derivation, real_output_index, received_index, in_ephemeral, ki);
-      return true;
-    }
-
     void device_trezor::tx_sign(wallet_shim * wallet,
                                 const tools::wallet2::unsigned_tx_set & unsigned_tx,
                                 tools::wallet2::signed_tx_set & signed_tx,

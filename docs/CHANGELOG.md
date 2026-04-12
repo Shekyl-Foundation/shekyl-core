@@ -4,6 +4,24 @@
 
 ### 🗑️ Removed
 
+- **`derive_public_key`, `derive_secret_key`, and `derivation_to_scalar` removed
+  from the device interface chain.** Deleted the pure virtual declarations from
+  `device.hpp` and all override implementations from `device_default` and
+  `device_ledger`. Also deleted `derive_public_key` and `derive_secret_key` from
+  `crypto.cpp`/`crypto.h` (kept `derivation_to_scalar` in crypto, still needed by
+  `derive_subaddress_public_key`). Removed associated performance test files.
+  These Keccak-based one-component key derivation helpers are superseded by the
+  V3 HKDF two-component output key derivation in `cryptonote_tx_utils`.
+
+- **`out_can_be_to_acc`, `is_out_to_acc_precomp`, and `derive_view_tag` dead
+  code removed.** Deleted the Keccak-based `out_can_be_to_acc` and
+  `is_out_to_acc_precomp` functions from `cryptonote_format_utils`, the
+  `derive_view_tag` function from `crypto`, and the `derive_view_tag` virtual
+  method from the device interface chain (`device.hpp`, `device_default`,
+  `device_ledger`). Removed associated performance tests. These functions were
+  superseded by the X25519/HKDF view-tag derivation path in the V3 transaction
+  format.
+
 - **`ecdhHash` and `genCommitmentMask` dead code removed.** Deleted the
   `ecdhHash` and `genCommitmentMask` function definitions from `rctOps.cpp`,
   their declarations from `rctOps.h`, the `genCommitmentMask` virtual method
@@ -101,12 +119,22 @@
 - **Dead legacy code excision (Phase 6 completion).**
   Deleted `decodeRctSimple` and its overload from `rctSigs.cpp/.h`.
   Deleted `tools::decodeRct` wrapper and all callers in `wallet2.cpp`.
-  Migrated 7 `generate_key_image_helper` call sites to `td.m_key_image` or
-  Rust FFI. Deleted `generate_key_image_helper` definitions from
-  `cryptonote_format_utils.cpp/.h`. Deleted `generate_output_ephemeral_keys`
+  Deleted `generate_output_ephemeral_keys`
   declaration from `cryptonote_tx_utils.h`. Deleted `tx_proof.cpp` unit test
   (referenced removed `crypto::generate_tx_proof_v1`). Deleted
   `is_out_to_acc.h` performance test and its registrations.
+
+- **`generate_key_image_helper` / `generate_key_image_helper_precomp` fully
+  removed.** Migrated remaining production callers in `wallet2.cpp`
+  (`export_key_images`, two `import_outputs` overloads) to the v3 HKDF path
+  via `shekyl_derive_proof_secrets` FFI. Replaced dead `else` branch in
+  `cryptonote_tx_utils.cpp::construct_tx_with_tx_key` with a hard error.
+  Replaced `scan_output`'s `generate_key_image_helper_precomp` call with a
+  v3-only assertion (function is dead for v3 scanning). Deleted both function
+  definitions from `cryptonote_format_utils.cpp/.h`, the `compute_key_image`
+  virtual method from `device.hpp` and its Trezor override in
+  `device_trezor.hpp/.cpp`. Updated test callers in `chaingen.cpp` and
+  `tx_validation.cpp` to use v3 `sc_add(ho, b)` derivation.
 
 ### 🔒 Security (Phase 5 Audit Notes)
 

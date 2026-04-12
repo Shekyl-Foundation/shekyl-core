@@ -2034,11 +2034,8 @@ void wallet2::scan_output(const cryptonote::transaction &tx, bool miner_tx, cons
   }
   else
   {
-    cryptonote::keypair in_ephemeral;
-    bool r = cryptonote::generate_key_image_helper_precomp(m_account.get_keys(), output_public_key, tx_scan_info.received->derivation, i, tx_scan_info.received->index, in_ephemeral, tx_scan_info.ki, m_account.get_device());
-    THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to generate key image");
-    THROW_WALLET_EXCEPTION_IF(in_ephemeral.pub != output_public_key,
-        error::wallet_internal_error, "key_image generated ephemeral public key not matched with output_key");
+    THROW_WALLET_EXCEPTION(error::wallet_internal_error,
+        "scan_output legacy key-image path is not supported in Shekyl v3");
   }
 
   THROW_WALLET_EXCEPTION_IF(std::find(outs.begin(), outs.end(), i) != outs.end(), error::wallet_internal_error, "Same output cannot be added twice");
@@ -11627,33 +11624,24 @@ std::pair<uint64_t, std::vector<std::pair<crypto::key_image, crypto::signature>>
     // get ephemeral public key
     const crypto::public_key pkey = td.get_public_key();
 
-    // get tx pub key
-    std::vector<tx_extra_field> tx_extra_fields;
-    if(!parse_tx_extra(td.m_tx.extra, tx_extra_fields))
-    {
-      // Extra may only be partially parsed, it's OK if tx_extra_fields contains public key
-    }
+    THROW_WALLET_EXCEPTION_IF(!td.m_key_image_known, error::wallet_internal_error, "Key image not known for transfer " + std::to_string(n));
+    THROW_WALLET_EXCEPTION_IF(!td.m_combined_shared_secret_set, error::wallet_internal_error, "No combined shared secret for transfer " + std::to_string(n));
 
-    crypto::public_key tx_pub_key = get_tx_pub_key_from_received_outs(td);
-    const std::vector<crypto::public_key> additional_tx_pub_keys = get_additional_tx_pub_keys_from_extra(td.m_tx);
+    uint8_t ho_buf[32], y_buf[32], z_buf[32], k_buf[32];
+    bool ok = shekyl_derive_proof_secrets(td.m_combined_shared_secret.data(), td.m_internal_output_index, ho_buf, y_buf, z_buf, k_buf);
+    THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to derive proof secrets for transfer " + std::to_string(n));
 
-    // TODO(v3-migration): migrate to shekyl_derive_proof_secrets FFI for v3 ring sig
-    crypto::key_image ki;
-    cryptonote::keypair in_ephemeral;
-    bool r = cryptonote::generate_key_image_helper(m_account.get_keys(), m_subaddresses, pkey, tx_pub_key, additional_tx_pub_keys, td.m_internal_output_index, in_ephemeral, ki, m_account.get_device());
-    THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to generate key image");
+    crypto::secret_key x_secret;
+    sc_add(reinterpret_cast<unsigned char*>(&x_secret),
+           ho_buf,
+           reinterpret_cast<const unsigned char*>(&m_account.get_keys().m_spend_secret_key));
+    memwipe(ho_buf, 32); memwipe(y_buf, 32); memwipe(z_buf, 32); memwipe(k_buf, 32);
 
-    THROW_WALLET_EXCEPTION_IF(td.m_key_image_known && ki != td.m_key_image,
-        error::wallet_internal_error, "key_image generated not matched with cached key image");
-    THROW_WALLET_EXCEPTION_IF(in_ephemeral.pub != pkey,
-        error::wallet_internal_error, "key_image generated ephemeral public key not matched with output_key");
-
-    // sign the key image with the output secret key
     crypto::signature signature;
     std::vector<const crypto::public_key*> key_ptrs;
     key_ptrs.push_back(&pkey);
-
-    crypto::generate_ring_signature((const crypto::hash&)td.m_key_image, td.m_key_image, key_ptrs, in_ephemeral.sec, 0, &signature);
+    crypto::generate_ring_signature((const crypto::hash&)td.m_key_image, td.m_key_image, key_ptrs, x_secret, 0, &signature);
+    memwipe(&x_secret, sizeof(x_secret));
 
     ski.push_back(std::make_pair(td.m_key_image, signature));
   }
@@ -12621,26 +12609,33 @@ size_t wallet2::import_outputs(const std::tuple<uint64_t, uint64_t, std::vector<
 
 process:
 
-    // the hot wallet wouldn't have known about key images (except if we already exported them)
-    cryptonote::keypair in_ephemeral;
-
     THROW_WALLET_EXCEPTION_IF(td.m_tx.vout.empty(), error::wallet_internal_error, "tx with no outputs at index " + std::to_string(i + offset));
-    crypto::public_key tx_pub_key = get_tx_pub_key_from_received_outs(td);
-    const std::vector<crypto::public_key> additional_tx_pub_keys = get_additional_tx_pub_keys_from_extra(td.m_tx);
-
     THROW_WALLET_EXCEPTION_IF(td.m_internal_output_index >= td.m_tx.vout.size(),
         error::wallet_internal_error, "Internal index is out of range");
     crypto::public_key out_key = td.get_public_key();
     if (should_expand(td.m_subaddr_index))
       create_one_off_subaddress(td.m_subaddr_index);
-    bool r = cryptonote::generate_key_image_helper(m_account.get_keys(), m_subaddresses, out_key, tx_pub_key, additional_tx_pub_keys, td.m_internal_output_index, in_ephemeral, td.m_key_image, m_account.get_device());
-    THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to generate key image");
+
+    THROW_WALLET_EXCEPTION_IF(!td.m_combined_shared_secret_set, error::wallet_internal_error,
+        "No combined shared secret for imported transfer " + std::to_string(i + offset));
+    {
+      uint8_t ho_buf[32], y_buf[32], z_buf[32], k_buf[32];
+      bool ok = shekyl_derive_proof_secrets(td.m_combined_shared_secret.data(), td.m_internal_output_index, ho_buf, y_buf, z_buf, k_buf);
+      THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to derive proof secrets");
+
+      crypto::secret_key x_secret;
+      sc_add(reinterpret_cast<unsigned char*>(&x_secret),
+             ho_buf,
+             reinterpret_cast<const unsigned char*>(&m_account.get_keys().m_spend_secret_key));
+      crypto::generate_key_image(out_key, x_secret, td.m_key_image);
+      memwipe(&x_secret, sizeof(x_secret));
+      memwipe(ho_buf, 32); memwipe(y_buf, 32); memwipe(z_buf, 32); memwipe(k_buf, 32);
+    }
+
     if (should_expand(td.m_subaddr_index))
       expand_subaddresses(td.m_subaddr_index);
     td.m_key_image_known = true;
     td.m_key_image_request = true;
-    THROW_WALLET_EXCEPTION_IF(in_ephemeral.pub != out_key,
-        error::wallet_internal_error, "key_image generated ephemeral public key not matched with output_key at index " + std::to_string(i + offset));
 
     m_key_images[td.m_key_image] = i + offset;
     m_pub_keys[td.get_public_key()] = i + offset;
@@ -12730,22 +12725,30 @@ size_t wallet2::import_outputs(const std::tuple<uint64_t, uint64_t, std::vector<
     if (!etd.m_additional_tx_keys.empty())
       add_additional_tx_pub_keys_to_extra(td.m_tx.extra, etd.m_additional_tx_keys);
 
-    // the hot wallet wouldn't have known about key images (except if we already exported them)
-    cryptonote::keypair in_ephemeral;
-
-    const crypto::public_key &tx_pub_key = etd.m_tx_pubkey;
-    const std::vector<crypto::public_key> &additional_tx_pub_keys = etd.m_additional_tx_keys;
     const crypto::public_key& out_key = etd.m_pubkey;
     if (should_expand(td.m_subaddr_index))
       create_one_off_subaddress(td.m_subaddr_index);
-    bool r = cryptonote::generate_key_image_helper(m_account.get_keys(), m_subaddresses, out_key, tx_pub_key, additional_tx_pub_keys, td.m_internal_output_index, in_ephemeral, td.m_key_image, m_account.get_device());
-    THROW_WALLET_EXCEPTION_IF(!r, error::wallet_internal_error, "Failed to generate key image");
+
+    THROW_WALLET_EXCEPTION_IF(!td.m_combined_shared_secret_set, error::wallet_internal_error,
+        "No combined shared secret for imported transfer " + std::to_string(i + offset));
+    {
+      uint8_t ho_buf[32], y_buf[32], z_buf[32], k_buf[32];
+      bool ok = shekyl_derive_proof_secrets(td.m_combined_shared_secret.data(), td.m_internal_output_index, ho_buf, y_buf, z_buf, k_buf);
+      THROW_WALLET_EXCEPTION_IF(!ok, error::wallet_internal_error, "Failed to derive proof secrets");
+
+      crypto::secret_key x_secret;
+      sc_add(reinterpret_cast<unsigned char*>(&x_secret),
+             ho_buf,
+             reinterpret_cast<const unsigned char*>(&m_account.get_keys().m_spend_secret_key));
+      crypto::generate_key_image(out_key, x_secret, td.m_key_image);
+      memwipe(&x_secret, sizeof(x_secret));
+      memwipe(ho_buf, 32); memwipe(y_buf, 32); memwipe(z_buf, 32); memwipe(k_buf, 32);
+    }
+
     if (should_expand(td.m_subaddr_index))
       expand_subaddresses(td.m_subaddr_index);
     td.m_key_image_known = true;
     td.m_key_image_request = true;
-    THROW_WALLET_EXCEPTION_IF(in_ephemeral.pub != out_key,
-        error::wallet_internal_error, "key_image generated ephemeral public key not matched with output_key at index " + std::to_string(i + offset));
 
     m_key_images[td.m_key_image] = i + offset;
     m_pub_keys[td.get_public_key()] = i + offset;

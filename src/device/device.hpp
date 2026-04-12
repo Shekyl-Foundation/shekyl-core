@@ -158,7 +158,6 @@ namespace hw {
         /* ======================================================================= */
         /*                               SUB ADDRESS                               */
         /* ======================================================================= */
-        virtual bool  derive_subaddress_public_key(const crypto::public_key &pub, const crypto::key_derivation &derivation, const std::size_t output_index,  crypto::public_key &derived_pub) = 0;
         virtual crypto::public_key  get_subaddress_spend_public_key(const cryptonote::account_keys& keys, const cryptonote::subaddress_index& index) = 0;
         virtual std::vector<crypto::public_key>  get_subaddress_spend_public_keys(const cryptonote::account_keys &keys, uint32_t account, uint32_t begin, uint32_t end) = 0;
         virtual cryptonote::account_public_address  get_subaddress(const cryptonote::account_keys& keys, const cryptonote::subaddress_index &index) = 0;
@@ -174,13 +173,8 @@ namespace hw {
         virtual crypto::secret_key  generate_keys(crypto::public_key &pub, crypto::secret_key &sec, const crypto::secret_key& recovery_key = crypto::secret_key(), bool recover = false) = 0;
         virtual bool  generate_key_derivation(const crypto::public_key &pub, const crypto::secret_key &sec, crypto::key_derivation &derivation) = 0;
         virtual bool  conceal_derivation(crypto::key_derivation &derivation, const crypto::public_key &tx_pub_key, const std::vector<crypto::public_key> &additional_tx_pub_keys, const crypto::key_derivation &main_derivation, const std::vector<crypto::key_derivation> &additional_derivations) = 0;
-        virtual bool  derivation_to_scalar(const crypto::key_derivation &derivation, const size_t output_index, crypto::ec_scalar &res) = 0;
-        virtual bool  derive_secret_key(const crypto::key_derivation &derivation, const std::size_t output_index, const crypto::secret_key &sec,  crypto::secret_key &derived_sec) = 0;
-        virtual bool  derive_public_key(const crypto::key_derivation &derivation, const std::size_t output_index, const crypto::public_key &pub,  crypto::public_key &derived_pub) = 0;
         virtual bool  secret_key_to_public_key(const crypto::secret_key &sec, crypto::public_key &pub) = 0;
         virtual bool  generate_key_image(const crypto::public_key &pub, const crypto::secret_key &sec, crypto::key_image &image) = 0;
-        virtual bool  derive_view_tag(const crypto::key_derivation &derivation, const std::size_t output_index, crypto::view_tag &view_tag) = 0;
-
         // alternative prototypes available in libfcmp
         rct::key scalarmultKey(const rct::key &P, const rct::key &a)
         {
@@ -213,13 +207,6 @@ namespace hw {
             return encrypt_payment_id(payment_id, public_key, secret_key);
         }
 
-        virtual bool  generate_output_ephemeral_keys(const size_t tx_version, const cryptonote::account_keys &sender_account_keys, const crypto::public_key &txkey_pub,  const crypto::secret_key &tx_key,
-                                                     const cryptonote::tx_destination_entry &dst_entr, const std::optional<cryptonote::account_public_address> &change_addr, const size_t output_index,
-                                                     const bool &need_additional_txkeys, const std::vector<crypto::secret_key> &additional_tx_keys,
-                                                     std::vector<crypto::public_key> &additional_tx_public_keys,
-                                                     std::vector<rct::key> &amount_keys,
-                                                     crypto::public_key &out_eph_public_key,
-                                                     const bool use_view_tags, crypto::view_tag &view_tag) = 0;
 
         virtual bool  tx_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size, const rct::keyV &hashes, const rct::ctkeyV &outPk, rct::key &prehash) = 0;
         virtual bool  tx_prepare(const rct::key &H, const rct::key &xx, rct::key &a, rct::key &aG, rct::key &aHP, rct::key &rvII) = 0;
@@ -239,7 +226,6 @@ namespace hw {
         virtual bool  has_ki_cold_sync(void) const { return false; }
         virtual bool  has_tx_cold_sign(void) const { return false; }
         virtual bool  has_ki_live_refresh(void) const { return true; }
-        virtual bool  compute_key_image(const cryptonote::account_keys& ack, const crypto::public_key& out_key, const crypto::key_derivation& recv_derivation, size_t real_output_index, const cryptonote::subaddress_index& received_index, cryptonote::keypair& in_ephemeral, crypto::key_image& ki) { return false; }
         virtual void  computing_key_images(bool started) {};
         virtual void  set_network_type(cryptonote::network_type network_type) { }
         virtual void  display_address(const cryptonote::subaddress_index& index, const std::optional<crypto::hash8> &payment_id) {}

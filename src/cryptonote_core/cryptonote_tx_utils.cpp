@@ -382,13 +382,8 @@ namespace cryptonote
       }
       else
       {
-        if(!generate_key_image_helper(sender_account_keys, subaddresses, out_key, src_entr.real_out_tx_key, src_entr.real_out_additional_tx_keys, src_entr.real_output_in_tx_index, in_ephemeral, img, hwdev))
-        {
-          LOG_ERROR("Key image generation failed!");
-          return false;
-        }
-        CHECK_AND_ASSERT_MES(in_ephemeral.pub == src_entr.outputs[src_entr.real_output].second.dest,
-          false, "derived public key mismatch with output public key at index " << idx);
+        LOG_ERROR("v3_ho_valid must be set for all source entries in Shekyl");
+        return false;
       }
 
       //put key image into tx input

@@ -694,15 +694,7 @@ bool init_spent_output_indices(map_output_idx_t& outs, map_output_t& outs_mine, 
                     crypto::key_image_y_normalize(img);
             }
 
-            if (!got_image)
-            {
-                keypair in_ephemeral;
-                crypto::public_key out_key;
-                CHECK_AND_ASSERT_MES(get_output_key_from_target(oi.out, out_key), false, "Invalid output target type in spent output");
-                std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
-                subaddresses[from.get_keys().m_account_address.m_spend_public_key] = {0,0};
-                generate_key_image_helper(from.get_keys(), subaddresses, out_key, get_tx_pub_key_from_extra(*oi.p_tx), get_additional_tx_pub_keys_from_extra(*oi.p_tx), oi.out_no, in_ephemeral, img, hw::get_device(("default")));
-            }
+            CHECK_AND_ASSERT_MES(got_image, false, "v3 key image derivation failed for output " << oi.out_no);
 
             for (auto& tx_pair : mtx) {
                 const transaction& tx = *tx_pair.second;
@@ -1505,11 +1497,16 @@ bool construct_fcmp_tx(
     for (const auto& src : sources)
     {
       crypto::public_key out_key = rct::rct2pk(src.outputs[src.real_output].second.dest);
-      keypair in_eph;
       crypto::key_image ki;
-      generate_key_image_helper(from.get_keys(), subaddresses, out_key,
-        src.real_out_tx_key, src.real_out_additional_tx_keys,
-        src.real_output_in_tx_index, in_eph, ki, hw::get_device("default"));
+      CHECK_AND_ASSERT_MES(src.v3_ho_valid, false, "construct_fcmp_tx: source missing v3 ho");
+      {
+        crypto::secret_key x_secret;
+        sc_add(reinterpret_cast<unsigned char*>(&x_secret),
+               reinterpret_cast<const unsigned char*>(&src.ho),
+               reinterpret_cast<const unsigned char*>(&from.get_keys().m_spend_secret_key));
+        crypto::generate_key_image(out_key, x_secret, ki);
+        memwipe(&x_secret, sizeof(x_secret));
+      }
       crypto::key_image_y_normalize(ki);
       if (ki == in.k_image) { matched_src = &src; break; }
     }

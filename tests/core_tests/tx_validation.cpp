@@ -60,10 +60,23 @@ namespace
         m_in_contexts.push_back(keypair());
         keypair& in_ephemeral = m_in_contexts.back();
         crypto::key_image img;
-        std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
-        subaddresses[sender_account_keys.m_account_address.m_spend_public_key] = {0,0};
         auto& out_key = reinterpret_cast<const crypto::public_key&>(src_entr.outputs[src_entr.real_output].second.dest);
-        generate_key_image_helper(sender_account_keys, subaddresses, out_key, src_entr.real_out_tx_key, src_entr.real_out_additional_tx_keys, src_entr.real_output_in_tx_index, in_ephemeral, img, hw::get_device(("default")));
+        if (src_entr.v3_ho_valid)
+        {
+          crypto::secret_key x_secret;
+          sc_add(reinterpret_cast<unsigned char*>(&x_secret),
+                 reinterpret_cast<const unsigned char*>(&src_entr.ho),
+                 reinterpret_cast<const unsigned char*>(&sender_account_keys.m_spend_secret_key));
+          in_ephemeral.pub = out_key;
+          in_ephemeral.sec = x_secret;
+          crypto::generate_key_image(out_key, x_secret, img);
+          memwipe(&x_secret, sizeof(x_secret));
+        }
+        else
+        {
+          LOG_ERROR("v3_ho_valid must be set for all source entries in Shekyl");
+          return;
+        }
 
         // put key image into tx input
         txin_to_key input_to_key;

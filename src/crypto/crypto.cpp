@@ -220,77 +220,6 @@ namespace crypto {
     return true;
   }
 
-  void crypto_ops::derivation_to_scalar(const key_derivation &derivation, size_t output_index, ec_scalar &res) {
-    struct {
-      key_derivation derivation;
-      char output_index[(sizeof(size_t) * 8 + 6) / 7];
-    } buf;
-    char *end = buf.output_index;
-    buf.derivation = derivation;
-    tools::write_varint(end, output_index);
-    assert(end <= buf.output_index + sizeof buf.output_index);
-    hash_to_scalar(&buf, end - reinterpret_cast<char *>(&buf), res);
-  }
-
-  bool crypto_ops::derive_public_key(const key_derivation &derivation, size_t output_index,
-    const public_key &base, public_key &derived_key) {
-    // O = Hs(d||i)*G + B + Hs_y(d||i)*T
-    ge_p3 B_p3;
-    if (ge_frombytes_vartime(&B_p3, &base) != 0) {
-      return false;
-    }
-
-    // x_scalar*G
-    ec_scalar x_scalar;
-    derivation_to_scalar(derivation, output_index, x_scalar);
-    ge_p3 xG_p3;
-    ge_scalarmult_base(&xG_p3, &x_scalar);
-
-    // B + x_scalar*G
-    ge_cached xG_cached;
-    ge_p3_to_cached(&xG_cached, &xG_p3);
-    ge_p1p1 sum1_p1p1;
-    ge_add(&sum1_p1p1, &B_p3, &xG_cached);
-
-    // B + x_scalar*G → derived_key
-    ge_p2 result_p2;
-    ge_p1p1_to_p2(&result_p2, &sum1_p1p1);
-    ge_tobytes(&derived_key, &result_p2);
-    return true;
-  }
-
-  void crypto_ops::derive_secret_key(const key_derivation &derivation, size_t output_index,
-    const secret_key &base, secret_key &derived_key) {
-    ec_scalar scalar;
-    assert(sc_check(&base) == 0);
-    derivation_to_scalar(derivation, output_index, scalar);
-    sc_add(&unwrap(derived_key), &unwrap(base), &scalar);
-  }
-
-  bool crypto_ops::derive_subaddress_public_key(const public_key &out_key, const key_derivation &derivation, std::size_t output_index, public_key &derived_key) {
-    // B' = O - Hs(d||i)*G - Hs_y(d||i)*T
-    ge_p3 O_p3;
-    if (ge_frombytes_vartime(&O_p3, &out_key) != 0) {
-      return false;
-    }
-
-    // O - x_scalar*G
-    ec_scalar x_scalar;
-    derivation_to_scalar(derivation, output_index, x_scalar);
-    ge_p3 xG_p3;
-    ge_scalarmult_base(&xG_p3, &x_scalar);
-    ge_cached xG_cached;
-    ge_p3_to_cached(&xG_cached, &xG_p3);
-    ge_p1p1 sub1_p1p1;
-    ge_sub(&sub1_p1p1, &O_p3, &xG_cached);
-
-    // O - x_scalar*G → derived_key
-    ge_p2 result_p2;
-    ge_p1p1_to_p2(&result_p2, &sub1_p1p1);
-    ge_tobytes(&derived_key, &result_p2);
-    return true;
-  }
-
   struct s_comm {
     hash h;
     ec_point key;
@@ -525,27 +454,4 @@ POP_WARNINGS
     reinterpret_cast<unsigned char*>(ki.data)[31] &= 0x7f;
   }
 
-  void crypto_ops::derive_view_tag(const key_derivation &derivation, size_t output_index, view_tag &view_tag) {
-    #pragma pack(push, 1)
-    struct {
-      char salt[8]; // view tag domain-separator
-      key_derivation derivation;
-      char output_index[(sizeof(size_t) * 8 + 6) / 7];
-    } buf;
-    #pragma pack(pop)
-
-    char *end = buf.output_index;
-    memcpy(buf.salt, "view_tag", 8); // leave off null terminator
-    buf.derivation = derivation;
-    tools::write_varint(end, output_index);
-    assert(end <= buf.output_index + sizeof buf.output_index);
-
-    // view_tag_full = H[salt|derivation|output_index]
-    hash view_tag_full;
-    cn_fast_hash(&buf, end - reinterpret_cast<char *>(&buf), view_tag_full);
-
-    // only need a slice of view_tag_full to realize optimal perf/space efficiency
-    static_assert(sizeof(crypto::view_tag) <= sizeof(view_tag_full), "view tag should not be larger than hash result");
-    memcpy(&view_tag, &view_tag_full, sizeof(crypto::view_tag));
-  }
 }
