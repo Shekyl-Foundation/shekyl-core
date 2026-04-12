@@ -32,7 +32,8 @@
 //! This binary is useful for integration testing with a mock FFI backend.
 
 fn main() {
-    eprintln!("shekyl-daemon-rpc: standalone mode not yet implemented.");
-    eprintln!("The daemon RPC server is started from the C++ daemon via --rust-rpc.");
+    eprintln!("error: shekyl-daemon-rpc cannot run standalone.");
+    eprintln!("The RPC server is started from the C++ daemon via shekyl-ffi exports.");
+    eprintln!("To run a node: shekyl-daemon --rust-rpc");
     std::process::exit(1);
 }

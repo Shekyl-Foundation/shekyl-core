@@ -7,13 +7,17 @@ Each item is out of scope for the current PR but worth tracking for future work.
 
 - **`dalek-ff-group` version isolation enforced via CI gate.**
   The Rust workspace carries two versions: 0.5.x (used directly by Shekyl
-  crates) and 0.4.x (pulled transitively by `ciphersuite` internals). A CI
-  grep gate in `.github/workflows/build.yml` asserts that `shekyl-ffi`'s
-  normal dependency tree never pulls in 0.4. Direct `dalek_ff_group` usage
-  must always resolve to 0.5; the 0.4 version stays hidden behind
-  `Ciphersuite` trait abstractions (`<Ed25519 as Ciphersuite>::G`, etc.).
-  Never reach into `ciphersuite`'s internals. If upstream `ciphersuite`
-  upgrades to `dalek-ff-group` 0.5, remove the gate.
+  crates) and 0.4.x (pulled transitively by vendored serai/`ciphersuite`
+  internals). A CI grep gate in `.github/workflows/build.yml` checks all
+  Shekyl crates (`shekyl-ffi`, `shekyl-fcmp`, `shekyl-crypto-pq`,
+  `shekyl-proofs`, `shekyl-tx-builder`, `shekyl-scanner`, `shekyl-wallet-rpc`,
+  `shekyl-daemon-rpc`) and asserts that none of their normal dependency
+  trees pull in 0.4. Direct `dalek_ff_group` usage in source is printed for
+  visibility but does not fail (legitimate 0.5 usage is expected). The 0.4
+  version must stay hidden behind `Ciphersuite` trait abstractions
+  (`<Ed25519 as Ciphersuite>::G`, etc.). Never reach into `ciphersuite`'s
+  internals. If upstream `ciphersuite` upgrades to `dalek-ff-group` 0.5,
+  remove the gate.
 
 - **`signing_round_trip.rs` tests Rust proof API, not raw FFI.**
   The re-added `rust/shekyl-ffi/tests/signing_round_trip.rs` calls

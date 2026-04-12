@@ -492,11 +492,19 @@ jobs:
       - name: "CI grep gate: no direct dalek_ff_group 0.4 usage"
         working-directory: rust
         run: |
+          # Design intent (see docs/FOLLOWUPS.md "dalek-ff-group version isolation"):
+          #
           # The workspace carries two dalek-ff-group versions:
           #   0.5.x — used directly by shekyl crates
-          #   0.4.x — pulled transitively by ciphersuite internals
-          # Only 0.5 may appear in *our* source code. The 0.4 version
-          # must stay hidden behind Ciphersuite trait abstractions.
+          #   0.4.x — pulled transitively by vendored serai/ciphersuite internals
+          #
+          # Direct dalek_ff_group usage in our source is allowed (must resolve
+          # to 0.5). The informational grep below prints matches for visibility
+          # but does NOT fail — legitimate 0.5 usage is expected.
+          #
+          # The structural check below asserts that none of our crates pull
+          # 0.4 as a *normal* (non-dev, non-build) dependency. If upstream
+          # ciphersuite upgrades to 0.5, this gate can be removed entirely.
           DIRECT=$(grep -rn 'dalek_ff_group' --include='*.rs' \
                    shekyl-*/src shekyl-ffi/src shekyl-ffi/tests 2>/dev/null \
                    | grep -v '^\s*//' || true)
@@ -504,13 +512,15 @@ jobs:
             echo "Files referencing dalek_ff_group directly (must all resolve to 0.5):"
             echo "$DIRECT"
           fi
-          # Fail if any non-shekyl-oxide crate depends on the 0.4 line
-          if cargo tree -p shekyl-ffi --edges normal 2>/dev/null \
-             | grep 'dalek-ff-group v0\.4'; then
-            echo "FATAL: shekyl-ffi has a normal (non-dev) dependency on dalek-ff-group 0.4"
-            exit 1
-          fi
-          echo "PASS: dalek-ff-group version isolation enforced"
+          # Fail if any shekyl crate has a normal dependency on the 0.4 line
+          for crate in shekyl-ffi shekyl-fcmp shekyl-crypto-pq shekyl-proofs shekyl-tx-builder shekyl-scanner shekyl-wallet-rpc shekyl-daemon-rpc; do
+            if cargo tree -p "$crate" --edges normal 2>/dev/null \
+               | grep 'dalek-ff-group v0\.4'; then
+              echo "FATAL: $crate has a normal (non-dev) dependency on dalek-ff-group 0.4"
+              exit 1
+            fi
+          done
+          echo "PASS: all shekyl crates isolated from dalek-ff-group 0.4"
       - name: determinism check (build twice, compare hashes)
         working-directory: rust
         run: |
