@@ -820,19 +820,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ec-divisors"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b93d5f2211afcd09f865caa169e33bd310d27fd64629a155dc6f0c2e0dfb286d"
-dependencies = [
- "flexible-transcript",
- "group",
- "rand_core 0.6.4",
- "subtle",
- "zeroize",
-]
-
-[[package]]
 name = "ecdsa"
 version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1024,7 +1011,7 @@ dependencies = [
  "blake2",
  "ciphersuite",
  "dalek-ff-group 0.5.0",
- "ec-divisors 0.1.0",
+ "ec-divisors",
  "generalized-bulletproofs",
  "generalized-bulletproofs-circuit-abstraction",
  "generalized-bulletproofs-ec-gadgets",
@@ -1226,7 +1213,7 @@ dependencies = [
  "ciphersuite",
  "crypto-bigint",
  "dalek-ff-group 0.5.0",
- "ec-divisors 0.1.0",
+ "ec-divisors",
  "ff",
  "ff-group-tests",
  "group",
@@ -2501,7 +2488,7 @@ dependencies = [
  "curve25519-dalek",
  "dalek-ff-group 0.5.0",
  "dkg-pedpop",
- "ec-divisors 0.1.0",
+ "ec-divisors",
  "flexible-transcript",
  "generalized-bulletproofs",
  "helioselene",
@@ -2524,7 +2511,7 @@ dependencies = [
  "blake2",
  "ciphersuite",
  "dalek-ff-group 0.5.0",
- "ec-divisors 0.1.0",
+ "ec-divisors",
  "flexible-transcript",
  "full-chain-membership-proofs",
  "generalized-bulletproofs",
@@ -2547,7 +2534,8 @@ dependencies = [
  "ciphersuite",
  "curve25519-dalek",
  "dalek-ff-group 0.5.0",
- "ec-divisors 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ec-divisors",
+ "helioselene",
  "libc",
  "modular-frost",
  "multiexp",
@@ -2563,6 +2551,7 @@ dependencies = [
  "shekyl-economics",
  "shekyl-encoding",
  "shekyl-fcmp",
+ "shekyl-fcmp-plus-plus",
  "shekyl-generators",
  "shekyl-primitives",
  "shekyl-proofs",
