@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## [core-v3.1.0] - 2026-04-13
+
+### 🔄 Changed
+
+- **Dev merged into main.** 128 commits from `dev` promoted to `main`
+  including: FCMP++ curve-tree integration, hybrid PQC KEM scanning,
+  shekyl-cli full parity, shekyl-address Bech32m encoding, native Rust
+  transaction signing, staking enhancements, wallet/api removal, and
+  ZeroMQ cleanup. Tagged as `core-v3.1.0` for GUI wallet CI pinning.
+
 ### ✨ Added
 
 - **`shekyl-cli` full parity with simplewallet (40 of 81 commands).** The
