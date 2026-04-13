@@ -94,6 +94,11 @@ static inline int use_v4_jit(void)
   }
   return use_v4_jit_flag;
 #else
+  /* MSVC x86_64 lands here because it defines _M_X64, not __x86_64__.
+   * This is intentional: the JIT stub returns -1 which would abort.
+   * Do NOT add _M_X64 to the #if above without replacing the stub
+   * with a real JIT implementation.  See CryptonightR_JIT_stub.c.
+   */
   return 0;
 #endif
 }
