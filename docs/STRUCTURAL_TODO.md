@@ -415,8 +415,8 @@ plan.
 
 ---
 
-*Last updated: 2026-04-11 — C4334 (23 sites) and C4333 (2 sites) fixes
-landed on `dev`. FCMP++ Phases 1-7 complete (Phase 7 = CLSAG / dead code
-purge). Monero #10157 verification caching complete. BOOST_FOREACH CI
-guard added. See `FCMP_BUILD_PLAN.md` for remaining Phases 8-9
-(multisig integration, testing/audit).*
+*Last updated: 2026-04-13 — Added `rct_signatures` naming issue. C4334
+(23 sites) and C4333 (2 sites) fixes landed on `dev`. FCMP++ Phases 1-7
+complete (Phase 7 = CLSAG / dead code purge). Monero #10157 verification
+caching complete. BOOST_FOREACH CI guard added. See `FCMP_BUILD_PLAN.md`
+for remaining Phases 8-9 (multisig integration, testing/audit).*
