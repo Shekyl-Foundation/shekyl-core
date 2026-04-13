@@ -58,6 +58,7 @@
 #include "cryptonote_protocol/enums.h"
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
 #include "misc_language.h"
+#include "memwipe.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "tests.core"
@@ -308,6 +309,7 @@ struct output_index {
   const cryptonote::block *p_blk;
   const cryptonote::transaction *p_tx;
   rct::key v3_mask{};
+  crypto::secret_key v3_ho{};
   bool v3_recovered = false;
 
   output_index(const cryptonote::txout_target_v &_out, uint64_t _a, size_t _h, size_t tno, size_t ono, const cryptonote::block *_pb, const cryptonote::transaction *_pt)
@@ -317,11 +319,13 @@ struct output_index {
 
   }
 
+  ~output_index() { memwipe(v3_ho.data, sizeof(v3_ho.data)); }
+
   output_index(const output_index &other)
       : out(other.out), amount(other.amount), blk_height(other.blk_height), tx_no(other.tx_no), rct(other.rct),
       out_no(other.out_no), idx(other.idx), unlock_time(other.unlock_time), is_coin_base(other.is_coin_base),
       spent(other.spent), comm(other.comm), p_blk(other.p_blk), p_tx(other.p_tx),
-      v3_mask(other.v3_mask), v3_recovered(other.v3_recovered) {  }
+      v3_mask(other.v3_mask), v3_ho(other.v3_ho), v3_recovered(other.v3_recovered) {  }
 
   void set_rct(bool arct) {
     rct = arct;
@@ -430,6 +434,9 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
                                  const cryptonote::account_public_address& miner_address, cryptonote::transaction& tx,
                                  uint64_t fee, uint8_t hf_version = 1,
                                  cryptonote::keypair* p_txkey = nullptr);
+
+bool append_v3_output_to_miner_tx(cryptonote::transaction& tx, const crypto::secret_key& txkey_sec,
+                                  const cryptonote::account_public_address& addr, uint64_t amount);
 
 bool construct_tx_to_key(const std::vector<test_event_entry>& events, cryptonote::transaction& tx,
                          const cryptonote::block& blk_head, const cryptonote::account_base& from, const var_addr_t& to, uint64_t amount,

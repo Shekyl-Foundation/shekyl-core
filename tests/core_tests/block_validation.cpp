@@ -386,38 +386,13 @@ bool gen_block_miner_tx_has_2_in::generate(std::vector<test_event_entry>& events
   BLOCK_VALIDATION_INIT_GENERATE();
   REWIND_BLOCKS(events, blk_0r, blk_0, miner_account);
 
-  GENERATE_ACCOUNT(alice);
-
-  tx_source_entry se;
-  se.amount = blk_0.miner_tx.vout[0].amount;
-  crypto::public_key blk0_out_key;
-  CHECK_AND_ASSERT_MES(cryptonote::get_output_public_key(blk_0.miner_tx.vout[0], blk0_out_key), false, "Invalid miner output key type");
-  se.push_output(0, blk0_out_key, se.amount);
-  se.real_output = 0;
-  se.rct = true;
-  se.mask = rct::identity();
-  {
-    rct::key comm = rct::zeroCommit(se.amount);
-    for (auto &ot : se.outputs)
-      ot.second.mask = comm;
-  }
-  se.real_out_tx_key = get_tx_pub_key_from_extra(blk_0.miner_tx);
-  se.real_output_in_tx_index = 0;
-  std::vector<tx_source_entry> sources;
-  sources.push_back(se);
-
-  tx_destination_entry de;
-  de.addr = miner_account.get_keys().m_account_address;
-  de.amount = se.amount;
-  std::vector<tx_destination_entry> destinations;
-  destinations.push_back(de);
-
-  transaction tmp_tx;
-  if (!construct_tx_rct(miner_account.get_keys(), sources, destinations, miner_account.get_keys().m_account_address, std::vector<uint8_t>(), tmp_tx))
-    return false;
+  txin_to_key fake_spend;
+  fake_spend.amount = 0;
+  fake_spend.key_offsets.push_back(0);
+  crypto::generate_random_bytes_thread_safe(32, reinterpret_cast<uint8_t*>(&fake_spend.k_image));
 
   MAKE_MINER_TX_MANUALLY(miner_tx, blk_0);
-  miner_tx.vin.push_back(tmp_tx.vin[0]);
+  miner_tx.vin.push_back(fake_spend);
 
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0r, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx);
@@ -432,47 +407,18 @@ bool gen_block_miner_tx_with_txin_to_key::generate(std::vector<test_event_entry>
 {
   BLOCK_VALIDATION_INIT_GENERATE();
 
-  // This block has only one output
+  txin_to_key fake_spend;
+  fake_spend.amount = 0;
+  fake_spend.key_offsets.push_back(0);
+  crypto::generate_random_bytes_thread_safe(32, reinterpret_cast<uint8_t*>(&fake_spend.k_image));
+
+  MAKE_MINER_TX_MANUALLY(miner_tx, blk_0);
+  miner_tx.vin[0] = fake_spend;
+  miner_tx.pqc_auths.resize(1);
+
   block blk_1;
-  generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_none);
+  generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx);
   events.push_back(blk_1);
-
-  REWIND_BLOCKS(events, blk_1r, blk_1, miner_account);
-
-  tx_source_entry se;
-  se.amount = blk_1.miner_tx.vout[0].amount;
-  crypto::public_key blk1_out_key;
-  CHECK_AND_ASSERT_MES(cryptonote::get_output_public_key(blk_1.miner_tx.vout[0], blk1_out_key), false, "Invalid miner output key type");
-  se.push_output(0, blk1_out_key, se.amount);
-  se.real_output = 0;
-  se.rct = true;
-  se.mask = rct::identity();
-  {
-    rct::key comm = rct::zeroCommit(se.amount);
-    for (auto &ot : se.outputs)
-      ot.second.mask = comm;
-  }
-  se.real_out_tx_key = get_tx_pub_key_from_extra(blk_1.miner_tx);
-  se.real_output_in_tx_index = 0;
-  std::vector<tx_source_entry> sources;
-  sources.push_back(se);
-
-  tx_destination_entry de;
-  de.addr = miner_account.get_keys().m_account_address;
-  de.amount = se.amount;
-  std::vector<tx_destination_entry> destinations;
-  destinations.push_back(de);
-
-  transaction tmp_tx;
-  if (!construct_tx_rct(miner_account.get_keys(), sources, destinations, miner_account.get_keys().m_account_address, std::vector<uint8_t>(), tmp_tx))
-    return false;
-
-  MAKE_MINER_TX_MANUALLY(miner_tx, blk_1);
-  miner_tx.vin[0] = tmp_tx.vin[0];
-
-  block blk_2;
-  generator.construct_block_manually(blk_2, blk_1r, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx);
-  events.push_back(blk_2);
 
   DO_CALLBACK(events, "check_block_purged");
 
@@ -517,6 +463,8 @@ bool gen_block_miner_tx_has_no_out::generate(std::vector<test_event_entry>& even
 
   MAKE_MINER_TX_MANUALLY(miner_tx, blk_0);
   miner_tx.vout.clear();
+  miner_tx.rct_signatures.outPk.clear();
+  miner_tx.rct_signatures.enc_amounts.clear();
 
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx);
@@ -536,18 +484,11 @@ bool gen_block_miner_tx_has_out_to_alice::generate(std::vector<test_event_entry>
   keypair txkey;
   MAKE_MINER_TX_AND_KEY_MANUALLY(miner_tx, blk_0, &txkey);
 
-  crypto::key_derivation derivation;
-  crypto::public_key out_eph_public_key;
-  crypto::generate_key_derivation(alice.get_keys().m_account_address.m_view_public_key, txkey.sec, derivation);
-  local_derive_public_key(derivation, 1, alice.get_keys().m_account_address.m_spend_public_key, out_eph_public_key);
+  uint64_t alice_amount = miner_tx.vout[0].amount / 2;
+  miner_tx.vout[0].amount -= alice_amount;
 
-  tx_out out_to_alice;
-  out_to_alice.amount = miner_tx.vout[0].amount / 2;
-  miner_tx.vout[0].amount -= out_to_alice.amount;
-  crypto::view_tag vt;
-  local_derive_view_tag(derivation, 1, vt);
-  cryptonote::set_tx_out(out_to_alice.amount, out_eph_public_key, true, vt, out_to_alice);
-  miner_tx.vout.push_back(out_to_alice);
+  if (!append_v3_output_to_miner_tx(miner_tx, txkey.sec, alice.get_keys().m_account_address, alice_amount))
+    return false;
 
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx);
@@ -578,7 +519,6 @@ bool gen_block_is_too_big::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();
 
-  // Creating a huge miner_tx, it will have a lot of outs
   MAKE_MINER_TX_MANUALLY(miner_tx, blk_0);
   static const size_t tx_out_count = CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V1 / 2;
   uint64_t amount = get_outs_money_amount(miner_tx);
@@ -586,12 +526,16 @@ bool gen_block_is_too_big::generate(std::vector<test_event_entry>& events) const
   uint64_t remainder = amount % tx_out_count;
   txout_target_v target = miner_tx.vout[0].target;
   miner_tx.vout.clear();
+  miner_tx.rct_signatures.outPk.clear();
+  miner_tx.rct_signatures.enc_amounts.clear();
   for (size_t i = 0; i < tx_out_count; ++i)
   {
     tx_out o;
     o.amount = portion;
     o.target = target;
     miner_tx.vout.push_back(o);
+    miner_tx.rct_signatures.outPk.push_back({});
+    miner_tx.rct_signatures.enc_amounts.push_back({});
   }
   if (0 < remainder)
   {
@@ -599,10 +543,10 @@ bool gen_block_is_too_big::generate(std::vector<test_event_entry>& events) const
     o.amount = remainder;
     o.target = target;
     miner_tx.vout.push_back(o);
+    miner_tx.rct_signatures.outPk.push_back({});
+    miner_tx.rct_signatures.enc_amounts.push_back({});
   }
 
-  // Block reward will be incorrect, as it must be reduced if cumulative block size is very big,
-  // but in this test it doesn't matter
   block blk_1;
   if (!generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx))
     return false;
@@ -799,25 +743,12 @@ bool gen_block_miner_tx_out_has_no_view_tag_from_hf_view_tags::generate(std::vec
 
 bool gen_block_miner_tx_out_has_view_tag_before_hf_view_tags::generate(std::vector<test_event_entry>& events) const
 {
-  bool use_view_tags = true;
-
   BLOCK_VALIDATION_INIT_GENERATE();
 
-  keypair txkey;
-  MAKE_MINER_TX_AND_KEY_MANUALLY(miner_tx, blk_0, &txkey);
+  MAKE_MINER_TX_MANUALLY(miner_tx, blk_0);
 
-  // derive the view tag for the miner tx output
-  crypto::key_derivation derivation;
-  crypto::public_key output_public_key;
-  crypto::view_tag view_tag;
-  crypto::generate_key_derivation(miner_account.get_keys().m_account_address.m_view_public_key, txkey.sec, derivation);
-  local_derive_public_key(derivation, 0, miner_account.get_keys().m_account_address.m_spend_public_key, output_public_key);
-  local_derive_view_tag(derivation, 0, view_tag);
-
-  // set the view tag on the miner tx output
-  cryptonote::set_tx_out(miner_tx.vout[0].amount, output_public_key, use_view_tags, view_tag, miner_tx.vout[0]);
-  std::optional<crypto::view_tag> actual_vt = cryptonote::get_output_view_tag(miner_tx.vout[0]);
-  CHECK_AND_ASSERT_MES(actual_vt && *actual_vt == view_tag, false, "unexpected output view tag");
+  CHECK_AND_ASSERT_MES(cryptonote::get_output_view_tag(miner_tx.vout[0]), false,
+    "v3 miner tx output should have a view tag (HKDF-derived)");
 
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx);
@@ -831,30 +762,12 @@ bool gen_block_miner_tx_out_has_view_tag_before_hf_view_tags::generate(std::vect
 
 bool gen_block_miner_tx_out_has_view_tag_from_hf_view_tags::generate(std::vector<test_event_entry>& events) const
 {
-  bool use_view_tags = true;
-
   BLOCK_VALIDATION_INIT_GENERATE();
 
-  keypair txkey;
-  MAKE_MINER_TX_AND_KEY_AT_HF_MANUALLY(miner_tx, blk_0, HF_VERSION_VIEW_TAGS, &txkey);
+  MAKE_MINER_TX_AND_KEY_AT_HF_MANUALLY(miner_tx, blk_0, HF_VERSION_VIEW_TAGS, nullptr);
 
-  CHECK_AND_ASSERT_MES(cryptonote::get_output_view_tag(miner_tx.vout[0]), false, "output should have a view tag");
-
-  // derive the view tag for the miner tx output
-  crypto::key_derivation derivation;
-  crypto::public_key output_public_key;
-  crypto::view_tag view_tag;
-  crypto::generate_key_derivation(miner_account.get_keys().m_account_address.m_view_public_key, txkey.sec, derivation);
-  local_derive_public_key(derivation, 0, miner_account.get_keys().m_account_address.m_spend_public_key, output_public_key);
-  local_derive_view_tag(derivation, 0, view_tag);
-
-  std::optional<crypto::view_tag> actual_vt = cryptonote::get_output_view_tag(miner_tx.vout[0]);
-  CHECK_AND_ASSERT_MES(actual_vt && *actual_vt == view_tag, false, "unexpected output view tag");
-
-  // set the view tag on the miner tx output
-  cryptonote::set_tx_out(miner_tx.vout[0].amount, output_public_key, use_view_tags, view_tag, miner_tx.vout[0]);
-  std::optional<crypto::view_tag> actual_vt_after_setting = cryptonote::get_output_view_tag(miner_tx.vout[0]);
-  CHECK_AND_ASSERT_MES(actual_vt_after_setting && *actual_vt_after_setting == view_tag, false, "unexpected output view tag after setting");
+  CHECK_AND_ASSERT_MES(cryptonote::get_output_view_tag(miner_tx.vout[0]), false,
+    "v3 miner tx output should have a view tag (HKDF-derived)");
 
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0, miner_account,

@@ -470,7 +470,8 @@ namespace
 }
 
 static bool try_v3_scan_output(const cryptonote::account_base& from, const transaction& tx,
-    size_t j, uint64_t& amount_out, rct::key& mask_out)
+    size_t j, uint64_t& amount_out, rct::key& mask_out,
+    crypto::secret_key* ho_out = nullptr)
 {
     const auto& keys = from.get_keys();
     if (keys.m_pqc_secret_key.empty()) return false;
@@ -532,6 +533,8 @@ static bool try_v3_scan_output(const cryptonote::account_base& from, const trans
 
     amount_out = recovered_amount;
     memcpy(mask_out.bytes, z_buf, 32);
+    if (ho_out)
+        memcpy(ho_out->data, ho_buf, 32);
     memwipe(ho_buf, 32); memwipe(y_buf, 32);
     memwipe(z_buf, 32); memwipe(k_amount_buf, 32);
     return true;
@@ -571,11 +574,14 @@ bool init_output_indices(map_output_idx_t& outs, std::map<uint64_t, std::vector<
 
                     uint64_t recovered_amount = 0;
                     rct::key recovered_mask{};
-                    if (try_v3_scan_output(from, tx, j, recovered_amount, recovered_mask))
+                    crypto::secret_key recovered_ho{};
+                    if (try_v3_scan_output(from, tx, j, recovered_amount, recovered_mask, &recovered_ho))
                     {
                         outs_mine[amount_key].push_back(tx_global_idx);
                         outs[amount_key][tx_global_idx].amount = recovered_amount;
                         outs[amount_key][tx_global_idx].v3_mask = recovered_mask;
+                        outs[amount_key][tx_global_idx].v3_ho = recovered_ho;
+                        memwipe(recovered_ho.data, sizeof(recovered_ho.data));
                         outs[amount_key][tx_global_idx].v3_recovered = true;
                         LOG_PRINT_L2("v3 output detected: blk_h=" << oi.blk_height
                             << " tx_no=" << i << " out_no=" << j
@@ -771,6 +777,8 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
             {
                 ts.amount = oi.amount;
                 ts.mask = oi.v3_mask;
+                ts.ho = oi.v3_ho;
+                ts.v3_ho_valid = true;
                 rct::key C_check = rct::commit(ts.amount, ts.mask);
                 if (!rct::equalKeys(C_check, oi.p_tx->rct_signatures.outPk[oi.out_no].mask)) {
                     LOG_ERROR("v3 recovered commitment mismatch for output " << oi.out_no
@@ -778,14 +786,9 @@ bool fill_tx_sources(std::vector<tx_source_entry>& sources, const std::vector<te
                     continue;
                 }
             }
-            else if (oi.is_coin_base)
-            {
-                ts.amount = oi.amount;
-                ts.mask = rct::identity();
-            }
             else
             {
-                LOG_ERROR("Non-v3, non-coinbase output cannot be recovered (legacy scanning removed)");
+                LOG_ERROR("Non-v3 output cannot be recovered (legacy scanning removed)");
                 continue;
             }
 
@@ -1222,23 +1225,25 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
                                  const account_public_address& miner_address, transaction& tx, uint64_t fee,
                                  uint8_t hf_version/* = 1*/, keypair* p_txkey/* = 0*/)
 {
-  keypair txkey;
-  txkey = keypair::generate(hw::get_device("default"));
-  add_tx_pub_key_to_extra(tx, txkey.pub);
+  tx.vin.clear();
+  tx.vout.clear();
+  tx.extra.clear();
+  tx.rct_signatures = {};
 
-  if (0 != p_txkey)
+  keypair txkey = keypair::generate(hw::get_device("default"));
+  add_tx_pub_key_to_extra(tx, txkey.pub);
+  if (!sort_tx_extra(tx.extra, tx.extra))
+    return false;
+
+  if (p_txkey)
     *p_txkey = txkey;
 
   txin_gen in;
   in.height = height;
-  tx.vin.push_back(in);
 
   uint64_t block_reward;
   if (!get_block_reward(0, 0, already_generated_coins, block_reward, hf_version, 0))
-  {
-    LOG_PRINT_L0("Block is too big");
     return false;
-  }
 
   shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, 0, hf_version);
   block_reward = em_split.miner_emission;
@@ -1246,24 +1251,158 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
   shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, 0, 0, hf_version);
   block_reward += burn.miner_fee_income;
 
-  crypto::key_derivation derivation;
-  crypto::public_key out_eph_public_key;
-  crypto::generate_key_derivation(miner_address.m_view_public_key, txkey.sec, derivation);
-  local_derive_public_key(derivation, 0, miner_address.m_spend_public_key, out_eph_public_key);
+  CHECK_AND_ASSERT_MES(!miner_address.m_pqc_public_key.empty(), false,
+    "construct_miner_tx_manually: miner address has no PQC public key");
 
-  bool use_view_tags = hf_version >= HF_VERSION_VIEW_TAGS;
-  crypto::view_tag view_tag;
-  if (use_view_tags)
-    local_derive_view_tag(derivation, 0, view_tag);
+  static constexpr size_t X25519_PK_BYTES = 32;
+  CHECK_AND_ASSERT_MES(miner_address.m_pqc_public_key.size() > X25519_PK_BYTES,
+    false, "miner PQC public key too short");
+
+  const uint8_t* pk_x25519 = miner_address.m_pqc_public_key.data();
+  const uint8_t* pk_ml_kem = miner_address.m_pqc_public_key.data() + X25519_PK_BYTES;
+  const size_t pk_ml_kem_len = miner_address.m_pqc_public_key.size() - X25519_PK_BYTES;
+
+  tx_extra_pqc_kem_ciphertext kem_field;
+  kem_field.blob.reserve(HYBRID_KEM_CT_BYTES);
+  tx_extra_pqc_leaf_hashes leaf_hash_field;
+  leaf_hash_field.blob.reserve(PQC_LEAF_HASH_BYTES);
+
+  tx.rct_signatures.outPk.resize(1);
+  tx.rct_signatures.enc_amounts.resize(1);
+
+  ShekylOutputData od = shekyl_construct_output(
+    reinterpret_cast<const uint8_t*>(&txkey.sec),
+    pk_x25519, pk_ml_kem, pk_ml_kem_len,
+    reinterpret_cast<const uint8_t*>(&miner_address.m_spend_public_key),
+    block_reward, 0);
+  CHECK_AND_ASSERT_MES(od.success, false, "shekyl_construct_output failed for manual coinbase");
+
+  crypto::public_key out_key;
+  memcpy(out_key.data, od.output_key, 32);
+  crypto::view_tag vt;
+  vt.data = od.view_tag_x25519;
 
   tx_out out;
-  cryptonote::set_tx_out(block_reward, out_eph_public_key, use_view_tags, view_tag, out);
-
+  cryptonote::set_tx_out(block_reward, out_key, true, vt, out);
   tx.vout.push_back(out);
 
-  tx.version = 2;
-  tx.unlock_time = height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
+  memcpy(tx.rct_signatures.outPk[0].mask.bytes, od.commitment, 32);
+  memcpy(tx.rct_signatures.enc_amounts[0].data(), od.enc_amount, 8);
+  tx.rct_signatures.enc_amounts[0][8] = od.amount_tag;
 
+  kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
+  if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
+    kem_field.blob.append(
+      reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
+      od.kem_ciphertext_ml_kem.len);
+  leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.h_pqc), PQC_LEAF_HASH_BYTES);
+
+  ShekylOutputData tmp = od;
+  shekyl_output_data_free(&tmp);
+
+  {
+    std::ostringstream oss;
+    binary_archive<true> oar(oss);
+    tx_extra_field variant_field = kem_field;
+    if (!::do_serialize(oar, variant_field)) return false;
+    std::string blob = oss.str();
+    tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+  }
+  {
+    std::ostringstream oss;
+    binary_archive<true> oar(oss);
+    tx_extra_field variant_field = leaf_hash_field;
+    if (!::do_serialize(oar, variant_field)) return false;
+    std::string blob = oss.str();
+    tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+  }
+  if (!sort_tx_extra(tx.extra, tx.extra))
+    return false;
+
+  tx.version = 3;
+  tx.unlock_time = height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
+  tx.vin.push_back(in);
+  tx.invalidate_hashes();
+
+  return true;
+}
+
+bool append_v3_output_to_miner_tx(transaction& tx, const crypto::secret_key& txkey_sec,
+                                  const account_public_address& addr, uint64_t amount)
+{
+  CHECK_AND_ASSERT_MES(tx.version == 3, false, "append_v3_output_to_miner_tx requires a v3 tx");
+  CHECK_AND_ASSERT_MES(!addr.m_pqc_public_key.empty(), false, "recipient has no PQC public key");
+
+  static constexpr size_t X25519_PK_BYTES = 32;
+  CHECK_AND_ASSERT_MES(addr.m_pqc_public_key.size() > X25519_PK_BYTES, false,
+    "recipient PQC public key too short");
+
+  const uint8_t* pk_x25519 = addr.m_pqc_public_key.data();
+  const uint8_t* pk_ml_kem = addr.m_pqc_public_key.data() + X25519_PK_BYTES;
+  const size_t pk_ml_kem_len = addr.m_pqc_public_key.size() - X25519_PK_BYTES;
+  const size_t out_idx = tx.vout.size();
+
+  ShekylOutputData od = shekyl_construct_output(
+    reinterpret_cast<const uint8_t*>(&txkey_sec),
+    pk_x25519, pk_ml_kem, pk_ml_kem_len,
+    reinterpret_cast<const uint8_t*>(&addr.m_spend_public_key),
+    amount, static_cast<uint64_t>(out_idx));
+  CHECK_AND_ASSERT_MES(od.success, false, "shekyl_construct_output failed for appended output");
+
+  crypto::public_key out_key;
+  memcpy(out_key.data, od.output_key, 32);
+  crypto::view_tag vt;
+  vt.data = od.view_tag_x25519;
+
+  tx_out out;
+  cryptonote::set_tx_out(amount, out_key, true, vt, out);
+  tx.vout.push_back(out);
+
+  rct::ctkey pk_entry;
+  memcpy(pk_entry.mask.bytes, od.commitment, 32);
+  tx.rct_signatures.outPk.push_back(pk_entry);
+
+  std::array<uint8_t, 9> enc_amt{};
+  memcpy(enc_amt.data(), od.enc_amount, 8);
+  enc_amt[8] = od.amount_tag;
+  tx.rct_signatures.enc_amounts.push_back(enc_amt);
+
+  std::vector<tx_extra_field> extra_fields;
+  CHECK_AND_ASSERT_MES(parse_tx_extra(tx.extra, extra_fields), false, "failed to parse tx.extra");
+
+  tx_extra_pqc_kem_ciphertext kem_field;
+  find_tx_extra_field_by_type(extra_fields, kem_field);
+  kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
+  if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
+    kem_field.blob.append(
+      reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
+      od.kem_ciphertext_ml_kem.len);
+
+  tx_extra_pqc_leaf_hashes leaf_hash_field;
+  find_tx_extra_field_by_type(extra_fields, leaf_hash_field);
+  leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.h_pqc), PQC_LEAF_HASH_BYTES);
+
+  ShekylOutputData tmp = od;
+  shekyl_output_data_free(&tmp);
+
+  tx.extra.clear();
+  for (auto& f : extra_fields)
+  {
+    if (std::holds_alternative<tx_extra_pqc_kem_ciphertext>(f))
+      f = kem_field;
+    else if (std::holds_alternative<tx_extra_pqc_leaf_hashes>(f))
+      f = leaf_hash_field;
+
+    std::ostringstream oss;
+    binary_archive<true> oar(oss);
+    CHECK_AND_ASSERT_MES(::do_serialize(oar, f), false, "failed to re-serialize extra field");
+    std::string blob = oss.str();
+    tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+  }
+  if (!sort_tx_extra(tx.extra, tx.extra))
+    return false;
+
+  tx.invalidate_hashes();
   return true;
 }
 
