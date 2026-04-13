@@ -46,17 +46,16 @@ further changes to the interface.
   - [ ] Twitter announcement
   - [ ] Reddit announcement
   - [ ] Project website announcement
-- [ ] Notify wallets
-  - [ ] (Update with Shekyl-compatible or compatible third-party wallets)
-  - [ ] Cake Wallet
-  - [ ] Monerujo
-  - [ ] Other compatible wallets as applicable
-- [ ] Notify exchanges
-  - [ ] Project website / community merchant list (exchanges)
-- [ ] Notify 3rd party payment processors
-  - [ ] Project website / community merchant list (payment gateways)
-- [ ] Notify mining pools
-  - [ ] Mining pool listing / pool operators
+- [ ] Notify wallets *(placeholder -- replace with actual Shekyl-compatible wallets pre-launch)*
+  - [ ] Shekyl GUI Wallet (first-party)
+  - [ ] Shekyl CLI (first-party)
+  - [ ] *(third-party wallet integrations TBD)*
+- [ ] Notify exchanges *(placeholder -- replace with actual exchange partners pre-launch)*
+  - [ ] *(exchange integrations TBD)*
+- [ ] Notify 3rd party payment processors *(placeholder)*
+  - [ ] *(payment gateway integrations TBD)*
+- [ ] Notify mining pools *(placeholder)*
+  - [ ] *(mining pool partnerships TBD)*
 - [ ] Release tagged
   - [ ] Update src/version.cpp.in with new version AND new name (if necessary)
   - [ ] Update Gitian YML files in contrib/gitian/ to the new version number

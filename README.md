@@ -44,27 +44,26 @@ Portions Copyright (c) 2012-2013 The Cryptonote developers.
 Shekyl research and design notes are maintained in this repository under `docs/`, including:
 
 - `docs/DESIGN_CONCEPTS.md`
-- `docs/PUBLIC_NARRATIVE_FAQ.md`
-- `docs/SEEDS_SETUP.md`
 - `docs/INSTALLATION_GUIDE.md`
+- `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
+- `docs/FCMP_PLUS_PLUS.md`
+- `shekyl-dev/docs/PUBLIC_NARRATIVE_FAQ.md` *(in the shekyl-dev repository)*
+- `shekyl-dev/docs/SEEDS_SETUP.md` *(in the shekyl-dev repository)*
 
 ## Announcements
 
 - Major release and security announcements are published via `shekyl.org` and repository release notes.
 
 ## Translations
-The CLI wallet is available in different languages. Translation workflow details will be published in `docs/` as Shekyl localization infrastructure is finalized.
-&nbsp;
 
-If you want to contribute translations now, open an issue and we will coordinate files and review process.
+The CLI wallet supports multiple languages. See [README.i18n.md](docs/README.i18n.md)
+for the translation workflow. To contribute translations, open an issue and we
+will coordinate files and review process.
 
 ## Coverage
 
 | Type      | Status |
 |-----------|--------|
-| Coverity  | [![Coverity Status](https://scan.coverity.com/projects/9657/badge.svg)](https://scan.coverity.com/projects/9657/)
-| OSS Fuzz  | [![Fuzzing Status](https://oss-fuzz-build-logs.storage.googleapis.com/badges/monero.svg)](https://bugs.chromium.org/p/oss-fuzz/issues/list?sort=-opened&can=1&q=proj:monero)
-| Coveralls | [![Coveralls Status](https://coveralls.io/repos/github/monero-project/monero/badge.svg?branch=master)](https://coveralls.io/github/monero-project/monero?branch=master)
 | License   | [![License](https://img.shields.io/badge/license-BSD3-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
 ## Why the name Shekyl
@@ -140,13 +139,15 @@ If you want to help out, see [CONTRIBUTING](docs/CONTRIBUTING.md) for a set of g
 
 ## Scheduled software upgrades
 
-Shekyl uses a fixed-schedule software upgrade (hard fork) mechanism to implement new features. Users and service providers should run current versions and upgrade software on a regular schedule. Software upgrades occur during the months of April and October. The required software for these upgrades will be available prior to the scheduled date.
-Dates are provided in the format YYYY-MM-DD.
-
+Shekyl uses a feature-driven upgrade (hard fork) cadence rather than a fixed
+calendar schedule. Hard fork activation is governed by on-chain signaling
+when consensus thresholds are met.
 
 ## Release staging schedule and protocol
 
-Approximately three months prior to a scheduled software upgrade, a branch from master will be created with the new release version tag. Pull requests that address bugs should then be made to both master and the new release branch. Pull requests that require extensive review and testing (generally, optimizations and new features) should *not* be made to the release branch.
+Releases follow the `dev` -> `main` workflow. Active development happens on
+`dev`; `main` advances only via tagged merges from `dev`. See
+[docs/RELEASING.md](docs/RELEASING.md) for the release process.
 
 ## Compiling Shekyl from source
 
@@ -258,7 +259,7 @@ invokes cmake commands as needed.
 
     ```bash
     cd Shekyl
-    git checkout release-v0.18
+    git checkout dev
     make
     ```
 
@@ -267,11 +268,9 @@ invokes cmake commands as needed.
     this to be worthwhile, the machine should have one core and about 2GB of RAM
     available per thread.
 
-    *Note*: The instructions above will compile the most stable release of the
-    Shekyl software. If you would like to use and test the most recent software,
-    use `git checkout master`. The master branch may contain updates that are
-    both unstable and incompatible with release software, though testing is always
-    encouraged.
+    *Note*: The `dev` branch contains the latest development code. For the most
+    recent tagged release, check the repository tags and use
+    `git checkout <tag>` instead.
 
 * The resulting executables can be found in `build/release/bin`
 
@@ -313,87 +312,13 @@ Dependencies need to be built with -fPIC. Static libraries usually aren't, so yo
     sudo apt install ccache
     ```
 
-#### On the Raspberry Pi
+#### On the Raspberry Pi (ARM)
 
-Tested on a Raspberry Pi Zero with a clean install of minimal Raspbian Stretch (2017-09-07 or later) from https://www.raspberrypi.org/downloads/raspbian/. If you are using Raspian Jessie, [please see note in the following section](#note-for-raspbian-jessie-users).
-
-* `apt-get update && apt-get upgrade` to install all of the latest software
-
-* Install the dependencies for Shekyl from the Debian column in the table above.
-
-* Increase the system swap size:
-
-    ```bash
-    sudo /etc/init.d/dphys-swapfile stop  
-    sudo nano /etc/dphys-swapfile  
-    CONF_SWAPSIZE=2048
-    sudo /etc/init.d/dphys-swapfile start
-    ```
-
-* If using an external hard disk without an external power supply, ensure it gets enough power to avoid hardware issues when syncing, by adding the line "max_usb_current=1" to /boot/config.txt
-
-* Clone Shekyl and checkout the most recent release version:
-
-    ```bash
-    git clone https://github.com/Shekyl/Shekyl.git
-    cd Shekyl
-    git checkout v0.18.4.5
-    ```
-
-* Build:
-
-    ```bash
-    USE_SINGLE_BUILDDIR=1 make release
-    ```
-
-* Wait 4-6 hours
-
-* The resulting executables can be found in `build/release/bin`
-
-* Add `export PATH="$PATH:$HOME/Shekyl/build/release/bin"` to `$HOME/.profile`
-
-* Run `source $HOME/.profile`
-
-* Run Shekyl with `shekyld --detach`
-
-* You may wish to reduce the size of the swap file after the build has finished, and delete the boost directory from your home directory
-
-#### *Note for Raspbian Jessie users:*
-
-If you are using the older Raspbian Jessie image, compiling Shekyl is more complicated. The version of Boost available in the Debian Jessie repositories may be too old, so you may need to compile a newer version yourself.
-
-* As before, `apt-get update && apt-get upgrade` to install all of the latest software, and increase the system swap size
-
-    ```bash
-    sudo /etc/init.d/dphys-swapfile stop
-    sudo nano /etc/dphys-swapfile
-    CONF_SWAPSIZE=2048
-    sudo /etc/init.d/dphys-swapfile start
-    ```
-
-
-* Then, install dependencies except for `libunwind` and `libboost-all-dev`
-
-* Install the latest version of boost (this may first require invoking `apt-get remove --purge libboost*-dev` to remove a previous version if you're not using a clean install):
-
-    ```bash
-    cd
-    wget https://sourceforge.net/projects/boost/files/boost/1.72.0/boost_1_72_0.tar.bz2
-    tar xvfo boost_1_72_0.tar.bz2
-    cd boost_1_72_0
-    ./bootstrap.sh
-    sudo ./b2
-    ```
-
-* Wait ~8 hours
-
-    ```bash    
-    sudo ./bjam cxxflags=-fPIC cflags=-fPIC -a install
-    ```
-
-* Wait ~4 hours
-
-* From here, follow the [general Raspberry Pi instructions](#on-the-raspberry-pi) from the "Clone Shekyl and checkout most recent release version" step.
+ARM builds are supported via the cross-compilation targets above
+(`make depends target=aarch64-linux-gnu` for 64-bit ARM). Native compilation on
+a Pi is possible but slow; use at least a Pi 4 with 4 GB RAM and increase swap
+to 2 GB. Install dependencies from the Debian column in the table above, clone,
+and build with `USE_SINGLE_BUILDDIR=1 make release`.
 
 #### On Windows:
 
@@ -456,10 +381,10 @@ application.
     cd Shekyl
     ```
 
-* If you would like a specific [version/tag](https://github.com/Shekyl/Shekyl/tags), do a git checkout for that version. If you do not care about version pinning and want binaries from `master`, skip this step:
+* If you would like a specific [version/tag](https://github.com/Shekyl/Shekyl/tags), do a git checkout for that version. If you do not care about version pinning and want binaries from `dev`, skip this step:
 
     ```bash
-    git checkout v0.18.4.5
+    git checkout <tag>
     ```
 
 * If you are on a 64-bit system, run:
@@ -504,7 +429,7 @@ You will need to add a few packages to your system. `pkg_add cmake gmake libicon
 The `doxygen` and `graphviz` packages are optional and require the xbase set.
 Running the test suite also requires `py-requests` package.
 
-Build monero: `env DEVELOPER_LOCAL_TOOLS=1 BOOST_ROOT=/usr/local gmake release-static`
+Build Shekyl: `env DEVELOPER_LOCAL_TOOLS=1 BOOST_ROOT=/usr/local gmake release-static`
 
 Note: you may encounter the following error when compiling the latest version as a normal user:
 
@@ -583,74 +508,8 @@ The produced binaries still link libc dynamically. If the binary is compiled on 
 
 ## Installing Shekyl from a package
 
-**DISCLAIMER: These packages are not part of this repository or maintained by this project's contributors, and as such, do not go through the same review process to ensure their trustworthiness and security.**
-
-Packages are available for
-
-* Debian Buster
-
-    See the [instructions in the whonix/monero-gui repository](https://gitlab.com/whonix/monero-gui#how-to-install-monero-using-apt-get)
-
-* Debian Bullseye and Sid
-
-    ```bash
-    sudo apt install monero
-    ```
-More info and versions in the [Debian package tracker](https://tracker.debian.org/pkg/monero).
-
-* Arch Linux [(via Community packages)](https://www.archlinux.org/packages/community/x86_64/monero/):
-
-    ```bash
-    sudo pacman -S monero
-    ```
-
-* Void Linux:
-
-    ```bash
-    xbps-install -S monero
-    ```
-
-* GuixSD
-
-    ```bash
-    guix package -i monero
-    ```
-
-* Gentoo (community package overlays may exist; verify maintainers and package names before install)
-
-    ```bash
-    emerge --noreplace eselect-repository
-    eselect repository enable monero
-    emaint sync -r monero
-    echo '*/*::monero ~amd64' >> /etc/portage/package.accept_keywords
-    emerge net-p2p/monero
-    ```
-
-* macOS [(homebrew)](https://brew.sh/)
-    ```bash
-    brew install shekyl
-    ```
-
-* Docker
-
-    ```bash
-    # Build using all available cores
-    docker build -t shekyl .
-
-    # or build using a specific number of cores (reduce RAM requirement)
-    docker build --build-arg NPROC=1 -t shekyl .
-
-    # either run in foreground
-    docker run -it -v /shekyl/chain:/home/shekyl/.shekyl -v /shekyl/wallet:/wallet -p 11021:11021 shekyl
-
-    # or in background
-    docker run -it -d -v /shekyl/chain:/home/shekyl/.shekyl -v /shekyl/wallet:/wallet -p 11021:11021 shekyl
-    ```
-
-* The build needs 3 GB space.
-* Wait one hour or more
-
-Packaging for your favorite distribution would be a welcome contribution!
+No distribution packages exist yet. Build from source using the instructions
+above. Packaging contributions are welcome.
 
 ## Running shekyld
 
@@ -674,12 +533,9 @@ To run in background:
 ./bin/shekyld --log-file shekyld.log --detach
 ```
 
-To run as a systemd service, copy
-[monerod.service](utils/systemd/monerod.service) to `/etc/systemd/system/` and
-[monerod.conf](utils/conf/monerod.conf) to `/etc/`. The [example
-service](utils/systemd/monerod.service) assumes that the user `shekyl` exists
-and its home is the data directory specified in the [example
-config](utils/conf/monerod.conf).
+To run as a systemd service, see the example unit files under `utils/systemd/`
+and configuration under `utils/conf/`. Adapt paths and the service user to your
+deployment.
 
 If you're on Mac, you may need to add the `--max-concurrency 1` option to
 shekyl-cli, and possibly shekyld, if you get crashes refreshing.
@@ -700,8 +556,8 @@ While Shekyl is not primarily designed as a Tor-integrated stack, it can be used
 setting the following configuration parameters and environment variables:
 
 * `--p2p-bind-ip 127.0.0.1` on the command line or `p2p-bind-ip=127.0.0.1` in
-  monerod.conf to disable listening for connections on external interfaces.
-* `--no-igd` on the command line or `no-igd=1` in monerod.conf to disable IGD
+  the config file to disable listening for connections on external interfaces.
+* `--no-igd` on the command line or `no-igd=1` in the config file to disable IGD
   (UPnP port forwarding negotiation), which is pointless with Tor.
 * `DNS_PUBLIC=tcp` or `DNS_PUBLIC=tcp://x.x.x.x` where x.x.x.x is the IP of the
   desired DNS server, for DNS requests to go over TCP, so that they are routed
@@ -713,8 +569,8 @@ setting the following configuration parameters and environment variables:
    necessary to allow binding to local LAN/VPN interfaces to allow wallets to
    connect from remote hosts. On other systems, it may be needed for local wallets
    as well.
-* Do NOT pass `--detach` when running through torsocks with systemd, (see
-  [utils/systemd/monerod.service](utils/systemd/monerod.service) for details).
+* Do NOT pass `--detach` when running through torsocks with systemd (see
+  the example service files under `utils/systemd/` for details).
 * If you use the wallet with a Tor daemon via the loopback IP (eg, 127.0.0.1:9050),
   then use `--untrusted-daemon` unless it is your own hidden service.
 
@@ -734,22 +590,18 @@ to add a rule to allow this connection too, in addition to telling torsocks to
 allow inbound connections. Full example:
 
 ```bash
-sudo iptables -I OUTPUT 2 -p tcp -d 127.0.0.1 -m tcp --dport 18081 -j ACCEPT
+sudo iptables -I OUTPUT 2 -p tcp -d 127.0.0.1 -m tcp --dport 11029 -j ACCEPT
 DNS_PUBLIC=tcp torsocks ./shekyld --p2p-bind-ip 127.0.0.1 --no-igd --rpc-bind-ip 127.0.0.1 \
     --data-dir /home/amnesia/Persistent/your/directory/to/the/blockchain
 ```
 
 ## Pruning
 
-As of April 2022, the full upstream Monero-derived blockchain file was about 130 GB. One can store a pruned blockchain, which was about 45 GB.
-A pruned blockchain can only serve part of the historical chain data to other peers, but is otherwise identical in
-functionality to the full blockchain.
-To use a pruned blockchain, it is best to start the initial sync with `--prune-blockchain`. However, it is also possible
-to prune an existing blockchain using the pruning tool or using the `--prune-blockchain` `shekyld` option
-with an existing chain. If an existing chain exists, pruning will temporarily require disk space to store both the full
-and pruned blockchains.
-
-For more detailed information, see project pruning documentation.
+Shekyl supports blockchain pruning via the `--prune-blockchain` flag. A pruned
+node can only serve part of the historical chain data to peers but is otherwise
+fully functional. Start the initial sync with `--prune-blockchain` for the
+smallest footprint, or prune an existing chain using the same flag or the
+pruning tool. Chain sizes will be established after mainnet launch.
 
 ## Debugging
 

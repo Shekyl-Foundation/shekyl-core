@@ -71,7 +71,7 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 | Item | Description |
 |------|-------------|
 | **Economics chain-state wiring** | `tx_volume_avg` is now computed from recent chain history and passed into miner template construction, tx pool block-reward estimation, and miner reward validation. `circulating_supply` is sourced from `already_generated_coins`; `stake_ratio` is now computed from chain-state scanning of locked `txout_to_staked_key` outputs. |
-| **Modular PoW schema** | PoW hashing now routes through a schema interface and registry (`IPowSchema`, RandomX schema, Cryptonight schema) while preserving historic behavior (`major_version >= RX_BLOCK_VERSION` => RandomX; older => Cryptonight variants). |
+| **Modular PoW schema** | PoW hashing routes through a schema interface and registry (`IPowSchema`, RandomX schema). Shekyl uses RandomX from genesis (HF1); CryptoNight variants are not supported. |
 | **Follow-up TODO** | Add configuration-driven PoW activation policy and expand test coverage for schema-selection parity against legacy `get_block_longhash` behavior. |
 
 ### 1.11 Boost Migration Status
@@ -153,10 +153,10 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 - Hybrid signature vector verification is now covered in Rust unit tests (`documented_vector_verifies`).
 - **FCMP++ / stealth addresses**: hybrid PQ spend protection works alongside FCMP++ membership proofs. The FCMP++ 4-scalar leaf `H(pqc_pk)` binds per-output PQC ownership to the UTXO in-circuit.
 - **v3 boundary**: anonymous per-input PQ ownership enforcement is solved at genesis via FCMP++ 4-scalar leaf: `H(pqc_pk)` proven in-circuit, binding per-output PQC ownership to the UTXO.
-- FCMP++ documentation tasks:
-  - FCMP++ design document (`docs/FCMP_PLUS_PLUS.md`) to be created in Phase 8
-  - Per-output PQC key derivation specification
-  - Curve tree operations guide (`docs/CURVE_TREE_OPERATIONS.md`)
+- FCMP++ documentation:
+  - FCMP++ design document: **created** -- see [`docs/FCMP_PLUS_PLUS.md`](FCMP_PLUS_PLUS.md)
+  - Per-output PQC key derivation: documented in `POST_QUANTUM_CRYPTOGRAPHY.md` and `FCMP_PLUS_PLUS.md`
+  - Curve tree operations: covered in `FCMP_PLUS_PLUS.md` (dedicated `CURVE_TREE_OPERATIONS.md` not needed)
   - Bech32m address format specification
 
 ---
@@ -260,7 +260,7 @@ Completed:
    - FCMP++ fuzz targets (6 harnesses, 10M iterations each)
    - Per-output PQC key derivation end-to-end testing
    - Bech32m address encoding/decoding
-   - `docs/FCMP_PLUS_PLUS.md` design document (Phase 8)
+   - FCMP++ design document: **created** -- see `docs/FCMP_PLUS_PLUS.md`
 
 ---
 
@@ -268,7 +268,7 @@ Completed:
 
 | Area | Key TODOs | PQC-related |
 |------|-----------|-------------|
-| Genesis / emission | Emission economics redesign; snapshot/UTXO; v2.0 tx format | v2.0 depends on PQC |
+| Genesis / emission | Emission economics redesign; snapshot/UTXO; v3 tx format | v3 depends on PQC |
 | Design / economics | Params provisionally locked; 8-scenario simulation complete (`shekyl-economics-sim`); test coverage expanding | — |
 | Build / test | Adopt or reimplement upstream build/test improvements | — |
 | Levin / wire | Complete list of data on wire | — |

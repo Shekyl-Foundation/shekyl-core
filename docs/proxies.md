@@ -1,4 +1,4 @@
-# Proxy usage in the Monero ecosystem
+# Proxy usage in the Shekyl ecosystem
 The CLI/RPC wallets and daemon both support proxies and use the same parameters
 to configure them. Currently socks 4, 4a, and 5 are supported and can be
 selected with command-line options.

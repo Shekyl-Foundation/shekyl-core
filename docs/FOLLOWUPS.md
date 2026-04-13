@@ -79,6 +79,29 @@ Each item is out of scope for the current PR but worth tracking for future work.
   dead for Shekyl (no rings). A future cleanup should replace `gen_tx_src`
   with a direct FCMP++-style source entry constructor.
 
+- **Fuzz harness for `derive_output_secrets`.**
+  The `OutputSecrets` derivation path (`rust/shekyl-crypto-pq/src/derivation.rs`)
+  processes untrusted ciphertext and shared secret material. A dedicated
+  `cargo-fuzz` target should exercise malformed KEM ciphertexts, truncated
+  HKDF output, and boundary output indices (0, u32::MAX).
+
+- **Witness header round-trip test.**
+  The FCMP++ witness header (tree depth, reference block, branch data) is
+  serialized across the FFI boundary. A round-trip test that serializes a
+  header in Rust, deserializes in C++, and re-serializes should be added
+  to catch any endianness or padding mismatches.
+
+- **y=0 consensus check for two-component output keys.**
+  The SAL secret `y` in two-component output keys `O = xG + yT` must not
+  be zero (this would collapse the key to a single-component key, breaking
+  FCMP++ circuit assumptions). A consensus-level check should reject
+  transactions where any output has `y == 0`.
+
+- **`docs/AUDIT_SCOPE.md` not yet created.**
+  Referenced by `RELEASE_CHECKLIST.md` and `FCMP_PLUS_PLUS.md`. Must define
+  the scope for the 4-scalar leaf circuit security audit before engaging
+  auditors.
+
 ---
 
 ## Completed audit trail

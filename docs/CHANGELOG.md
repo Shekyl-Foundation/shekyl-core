@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### 📚 Documentation
+
+- **Cross-repo documentation audit.** Comprehensive review across all five
+  Shekyl repos fixing stale references, Monero-era branding, completed-but-
+  unchecked items, and broken cross-references. Key changes:
+  - `README.md`: Removed Monero CI badges (Coverity, OSS Fuzz, Coveralls),
+    stale distribution packages (`apt install monero`, etc.), Raspberry Pi
+    Jessie instructions, 2022-era pruning sizes, `monerod.conf` references.
+    Fixed research section cross-references to shekyl-dev repo.
+  - `proxies.md`: Renamed "Monero ecosystem" to "Shekyl ecosystem".
+  - `DOCUMENTATION_TODOS_AND_PQC.md`: Fixed FCMP++ "Phase 8" references
+    (doc exists), CryptoNight reference (Shekyl uses RandomX from genesis),
+    `CURVE_TREE_OPERATIONS.md` reference (covered in `FCMP_PLUS_PLUS.md`),
+    v2.0 tx references (should be v3).
+  - `INSTALLATION_GUIDE.md`: `FCMP_PLUS_PLUS.md` exists, not "planned."
+  - `V4_DESIGN_NOTES.md`: Checked boxes for items done in V3.
+  - `RELEASE_CHECKLIST.md`: Marked wallet/exchange/pool entries as
+    placeholders for Shekyl-specific partners.
+  - `FOLLOWUPS.md`: Added items for fuzz harness on `derive_output_secrets`,
+    witness header round-trip test, y=0 consensus check, and
+    `AUDIT_SCOPE.md` creation.
+  - KEM plan: Updated 18 todo items from `pending` to `completed` matching
+    actual codebase state.
+
 ### 🗑️ Removed
 
 - **`simplewallet` (shekyl-wallet-cli) deleted.** The 9,126-line C++ interactive
@@ -20,6 +44,17 @@
   `address_from_url.cpp`.
 
 ### 🐛 Fixed
+
+- **19 `core_tests` failures and SEGFAULT from v3 transaction incompatibility.**
+  The test framework's `construct_miner_tx_manually` was hardcoded to produce v2
+  transactions without PQC output construction, causing 16 block validation tests
+  to fail during generation and a SEGFAULT in `tx_validation` tests. Rewrote the
+  function to perform genuine v3 output construction via `shekyl_construct_output`
+  FFI. Added `append_v3_output_to_miner_tx` helper for tests that add outputs to
+  coinbase. Fixed `fill_tx_sources` to populate `ho`/`v3_ho_valid` on source
+  entries via `try_v3_scan_output`. Removed stale classical key derivation from
+  view tag tests. Fixed serialization consistency in tests that modify
+  `vout`/`vin` without updating `rct_signatures` fields.
 
 - **Non-exhaustive `TxBuilderError` match in FFI error-code mapping.**
   Commit `aff9f777` added `TreeDepthTooLarge(u8)` to `TxBuilderError` but did

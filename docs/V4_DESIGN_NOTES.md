@@ -44,8 +44,8 @@ When the migration is undertaken, it should follow these principles:
 
 Before starting the migration:
 
-- [ ] `docs/LMDB_SCHEMA.md` must be complete and verified (done as of V3)
-- [ ] All write atomicity gaps must be resolved (done as of V3; see audit document)
+- [x] `docs/LMDB_SCHEMA.md` must be complete and verified (done as of V3)
+- [x] All write atomicity gaps must be resolved (done as of V3; see audit document)
 - [ ] The Rust wallet and scanner must be proven stable in production use on V3
 - [ ] A comprehensive database round-trip test must exist: write via C++, read via Rust (and vice versa) for every sub-database, to verify struct layout compatibility
 

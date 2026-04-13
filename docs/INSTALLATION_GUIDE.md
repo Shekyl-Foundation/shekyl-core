@@ -272,4 +272,4 @@ Rebuild with `-DBACKCOMPAT=ON`.
 - `shekyl-dev/docs/SEEDS_SETUP.md` (seed bootstrap model and runtime seed/peer controls)
 - `shekyl-dev/docs/SEED_NODE_DEPLOYMENT.md` (step-by-step seed node and shekyl.org caching deployment)
 - `docs/POST_QUANTUM_CRYPTOGRAPHY.md` (canonical PQC spec and reboot-only transaction format)
-- `docs/FCMP_PLUS_PLUS.md` (FCMP++ design document — planned, Phase 8)
+- `docs/FCMP_PLUS_PLUS.md` (FCMP++ design document)
