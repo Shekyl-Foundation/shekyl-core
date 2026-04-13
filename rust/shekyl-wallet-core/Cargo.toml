@@ -1,0 +1,31 @@
+[package]
+name = "shekyl-wallet-core"
+version = "2.0.0"
+edition = "2021"
+license = "BSD-3-Clause"
+description = "Shekyl wallet core: transaction builders for stake, unstake, and claim operations"
+
+[dependencies]
+shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-scanner = { path = "../shekyl-scanner" }
+shekyl-staking = { path = "../shekyl-staking" }
+shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", optional = true }
+modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+zeroize = { version = "1", features = ["derive"], optional = true }
+hex = { version = "0.4", optional = true }
+thiserror = "2"
+
+[dev-dependencies]
+curve25519-dalek = { version = "4", features = ["alloc"] }
+shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
+
+[features]
+default = []
+multisig = ["shekyl-fcmp/multisig", "shekyl-crypto-pq", "modular-frost", "serde", "serde_json", "zeroize", "hex"]
+
+[lints]
+workspace = true

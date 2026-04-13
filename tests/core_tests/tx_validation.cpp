@@ -32,6 +32,10 @@
 #include "tx_validation.h"
 #include "device/device.hpp"
 
+extern "C" {
+#include "crypto/crypto-ops.h"
+}
+
 using namespace epee;
 using namespace crypto;
 using namespace cryptonote;
@@ -60,10 +64,23 @@ namespace
         m_in_contexts.push_back(keypair());
         keypair& in_ephemeral = m_in_contexts.back();
         crypto::key_image img;
-        std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
-        subaddresses[sender_account_keys.m_account_address.m_spend_public_key] = {0,0};
         auto& out_key = reinterpret_cast<const crypto::public_key&>(src_entr.outputs[src_entr.real_output].second.dest);
-        generate_key_image_helper(sender_account_keys, subaddresses, out_key, src_entr.real_out_tx_key, src_entr.real_out_additional_tx_keys, src_entr.real_output_in_tx_index, in_ephemeral, img, hw::get_device(("default")));
+        if (src_entr.v3_ho_valid)
+        {
+          crypto::secret_key x_secret;
+          sc_add(reinterpret_cast<unsigned char*>(&x_secret),
+                 reinterpret_cast<const unsigned char*>(&src_entr.ho),
+                 reinterpret_cast<const unsigned char*>(&sender_account_keys.m_spend_secret_key));
+          in_ephemeral.pub = out_key;
+          in_ephemeral.sec = x_secret;
+          crypto::generate_key_image(out_key, x_secret, img);
+          memwipe(&x_secret, sizeof(x_secret));
+        }
+        else
+        {
+          LOG_ERROR("v3_ho_valid must be set for all source entries in Shekyl");
+          return;
+        }
 
         // put key image into tx input
         txin_to_key input_to_key;
@@ -87,7 +104,24 @@ namespace
         crypto::key_derivation derivation;
         crypto::public_key out_eph_public_key;
         crypto::generate_key_derivation(dst_entr.addr.m_view_public_key, m_tx_key.sec, derivation);
-        crypto::derive_public_key(derivation, output_index, dst_entr.addr.m_spend_public_key, out_eph_public_key);
+        {
+          // Inline derive_public_key: Hs(D||varint(i))*G + spend_pub
+          #pragma pack(push, 1)
+          struct { crypto::key_derivation d; uint8_t vi[8]; } hbuf;
+          #pragma pack(pop)
+          hbuf.d = derivation;
+          size_t idx = output_index, vi_len = 0;
+          while (idx >= 0x80) { hbuf.vi[vi_len++] = (uint8_t)(idx & 0x7f) | 0x80; idx >>= 7; }
+          hbuf.vi[vi_len++] = (uint8_t)idx;
+          crypto::ec_scalar hs;
+          crypto::hash_to_scalar(&hbuf, sizeof(crypto::key_derivation) + vi_len, hs);
+          ge_p3 p1; ge_scalarmult_base(&p1, reinterpret_cast<const unsigned char*>(&hs));
+          ge_p3 p2; ge_frombytes_vartime(&p2, reinterpret_cast<const unsigned char*>(&dst_entr.addr.m_spend_public_key));
+          ge_cached p2c; ge_p3_to_cached(&p2c, &p2);
+          ge_p1p1 sum; ge_add(&sum, &p1, &p2c);
+          ge_p3 res; ge_p1p1_to_p3(&res, &sum);
+          ge_p3_tobytes(reinterpret_cast<unsigned char*>(&out_eph_public_key), &res);
+        }
 
         tx_out out;
         out.amount = dst_entr.amount;

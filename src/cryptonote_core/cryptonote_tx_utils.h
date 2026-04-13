@@ -33,7 +33,7 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/utility.hpp>
-#include "ringct/rctOps.h"
+#include "fcmp/rctOps.h"
 
 namespace cryptonote
 {
@@ -44,14 +44,17 @@ namespace cryptonote
   {
     typedef std::pair<uint64_t, rct::ctkey> output_entry;
 
-    std::vector<output_entry> outputs;  //index + key + optional ringct commitment
+    std::vector<output_entry> outputs;  //index + key + optional commitment
     uint64_t real_output;               //index in outputs vector of real output_entry
     crypto::public_key real_out_tx_key; //incoming real tx public key
-    std::vector<crypto::public_key> real_out_additional_tx_keys; //incoming real tx additional public keys
     uint64_t real_output_in_tx_index;   //index in transaction outputs vector
     uint64_t amount;                    //money
     bool rct;                           //true if the output is rct
-    rct::key mask;                      //ringct amount mask
+    rct::key mask;                      //amount mask
+    crypto::secret_key ho{};            // v3: HKDF-derived output secret scalar; wiped on destruction
+    bool v3_ho_valid = false;           // true when ho was populated from shekyl_scan_and_recover
+
+    ~tx_source_entry() { memwipe(ho.data, sizeof(ho.data)); }
 
     void push_output(uint64_t idx, const crypto::public_key &k, uint64_t amount) { outputs.push_back(std::make_pair(idx, rct::ctkey({rct::pk2rct(k), rct::zeroCommit(amount)}))); }
 
@@ -59,11 +62,12 @@ namespace cryptonote
       FIELD(outputs)
       FIELD(real_output)
       FIELD(real_out_tx_key)
-      FIELD(real_out_additional_tx_keys)
       FIELD(real_output_in_tx_index)
       FIELD(amount)
       FIELD(rct)
       FIELD(mask)
+      FIELD(ho)
+      FIELD(v3_ho_valid)
 
       if (real_output >= outputs.size())
         return false;
@@ -79,11 +83,10 @@ namespace cryptonote
     bool is_integrated;
     bool is_staking;
     uint8_t stake_tier;
-    uint64_t stake_lock_until;
 
-    tx_destination_entry() : amount(0), addr(AUTO_VAL_INIT(addr)), is_subaddress(false), is_integrated(false), is_staking(false), stake_tier(0), stake_lock_until(0) { }
-    tx_destination_entry(uint64_t a, const account_public_address &ad, bool is_subaddress) : amount(a), addr(ad), is_subaddress(is_subaddress), is_integrated(false), is_staking(false), stake_tier(0), stake_lock_until(0) { }
-    tx_destination_entry(const std::string &o, uint64_t a, const account_public_address &ad, bool is_subaddress) : original(o), amount(a), addr(ad), is_subaddress(is_subaddress), is_integrated(false), is_staking(false), stake_tier(0), stake_lock_until(0) { }
+    tx_destination_entry() : amount(0), addr(AUTO_VAL_INIT(addr)), is_subaddress(false), is_integrated(false), is_staking(false), stake_tier(0) { }
+    tx_destination_entry(uint64_t a, const account_public_address &ad, bool is_subaddress) : amount(a), addr(ad), is_subaddress(is_subaddress), is_integrated(false), is_staking(false), stake_tier(0) { }
+    tx_destination_entry(const std::string &o, uint64_t a, const account_public_address &ad, bool is_subaddress) : original(o), amount(a), addr(ad), is_subaddress(is_subaddress), is_integrated(false), is_staking(false), stake_tier(0) { }
 
     std::string address(network_type nettype, const crypto::hash &payment_id) const
     {
@@ -108,7 +111,6 @@ namespace cryptonote
       FIELD(is_integrated)
       FIELD(is_staking)
       FIELD(stake_tier)
-      VARINT_FIELD(stake_lock_until)
     END_SERIALIZE()
   };
 
@@ -124,24 +126,8 @@ namespace cryptonote
   //---------------------------------------------------------------
   crypto::public_key get_destination_view_key_pub(const std::vector<tx_destination_entry> &destinations, const std::optional<cryptonote::account_public_address>& change_addr);
   bool construct_tx(const account_keys& sender_account_keys, std::vector<tx_source_entry> &sources, const std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx);
-  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, const std::vector<crypto::secret_key> &additional_tx_keys, bool rct = false, const rct::RCTConfig &rct_config = { rct::RangeProofBorromean, 0 }, bool shuffle_outs = true, bool use_view_tags = false, uint8_t hf_version = 0);
-  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, std::vector<crypto::secret_key> &additional_tx_keys, bool rct = false, const rct::RCTConfig &rct_config = { rct::RangeProofBorromean, 0 }, bool use_view_tags = false, uint8_t hf_version = 0);
-  bool generate_output_ephemeral_keys(const size_t tx_version, const cryptonote::account_keys &sender_account_keys, const crypto::public_key &txkey_pub,  const crypto::secret_key &tx_key,
-                                      const cryptonote::tx_destination_entry &dst_entr, const std::optional<cryptonote::account_public_address> &change_addr, const size_t output_index,
-                                      const bool &need_additional_txkeys, const std::vector<crypto::secret_key> &additional_tx_keys,
-                                      std::vector<crypto::public_key> &additional_tx_public_keys,
-                                      std::vector<rct::key> &amount_keys,
-                                      crypto::public_key &out_eph_public_key,
-                                      const bool use_view_tags, crypto::view_tag &view_tag) ;
-
-  bool generate_output_ephemeral_keys(const size_t tx_version, const cryptonote::account_keys &sender_account_keys, const crypto::public_key &txkey_pub,  const crypto::secret_key &tx_key,
-                                      const cryptonote::tx_destination_entry &dst_entr, const std::optional<cryptonote::account_public_address> &change_addr, const size_t output_index,
-                                      const bool &need_additional_txkeys, const std::vector<crypto::secret_key> &additional_tx_keys,
-                                      std::vector<crypto::public_key> &additional_tx_public_keys,
-                                      std::vector<rct::key> &amount_keys,
-                                      crypto::public_key &out_eph_public_key,
-                                      const bool use_view_tags, crypto::view_tag &view_tag) ;
-
+  bool construct_tx_with_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, const crypto::secret_key &tx_key, bool rct = false, bool shuffle_outs = true, bool use_view_tags = false, uint8_t hf_version = 0, rct::keyV *out_commitment_masks = nullptr);
+  bool construct_tx_and_get_tx_key(const account_keys& sender_account_keys, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, std::vector<tx_source_entry>& sources, std::vector<tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, const std::vector<uint8_t> &extra, transaction& tx, crypto::secret_key &tx_key, bool rct = false, bool use_view_tags = false, uint8_t hf_version = 0, rct::keyV *out_commitment_masks = nullptr);
   bool build_genesis_coinbase_from_destinations(
       const std::vector<tx_destination_entry>& destinations
     , std::string& tx_hex_out
@@ -178,9 +164,6 @@ namespace boost
       a & x.amount;
       a & x.rct;
       a & x.mask;
-      if (ver < 1)
-        return;
-      a & x.real_out_additional_tx_keys;
     }
 
     template <class Archive>
@@ -202,12 +185,10 @@ namespace boost
       {
         x.is_staking = false;
         x.stake_tier = 0;
-        x.stake_lock_until = 0;
         return;
       }
       a & x.is_staking;
       a & x.stake_tier;
-      a & x.stake_lock_until;
     }
   }
 }

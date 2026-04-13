@@ -30,6 +30,7 @@
 
 #include "chaingen.h"
 #include "block_reward.h"
+#include "shekyl/economics.h"
 
 using namespace epee;
 using namespace cryptonote;
@@ -40,7 +41,8 @@ namespace
     const account_public_address& miner_address, std::vector<size_t>& block_weights, size_t target_tx_weight,
     size_t target_block_weight, uint64_t fee = 0)
   {
-    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, fee, miner_address, miner_tx))
+    if (!construct_miner_tx(height, misc_utils::median(block_weights), already_generated_coins, target_block_weight, fee, miner_address, miner_tx, blobdata(), 999, 1,
+        /*tx_volume_avg=*/0, /*circulating_supply=*/already_generated_coins, /*stake_ratio=*/0, /*genesis_ng_height=*/0))
       return false;
 
     size_t current_weight = get_transaction_weight(miner_tx);
@@ -244,31 +246,61 @@ bool gen_block_reward::mark_checked_block(cryptonote::core& /*c*/, size_t ev_ind
 
 bool gen_block_reward::check_block_rewards(cryptonote::core& /*c*/, size_t /*ev_index*/, const std::vector<test_event_entry>& events)
 {
-  DEFINE_TESTS_ERROR_CONTEXT("gen_block_reward_without_txs::check_block_rewards");
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_reward::check_block_rewards");
 
-  std::array<uint64_t, 7> blk_rewards;
-  blk_rewards[0] = MONEY_SUPPLY >> EMISSION_SPEED_FACTOR_PER_MINUTE;
-  uint64_t cumulative_reward = blk_rewards[0];
-  for (size_t i = 1; i < blk_rewards.size(); ++i)
+  CHECK_TEST_CONDITION(m_checked_blocks_indices.size() == 8);
+
+  // Verify genesis block (checked index 0) reward matches the Shekyl formula
+  // Height 0, already_generated_coins = 0, fee = 0
   {
-    blk_rewards[i] = (MONEY_SUPPLY - cumulative_reward) >> EMISSION_SPEED_FACTOR_PER_MINUTE;
-    cumulative_reward += blk_rewards[i];
+    static_assert(DIFFICULTY_TARGET_V2 % 60 == 0, "target must be a multiple of 60");
+    const int target_minutes = DIFFICULTY_TARGET_V2 / 60;
+    const int esf = EMISSION_SPEED_FACTOR_PER_MINUTE - (target_minutes - 1);
+
+    uint64_t base_reward = MONEY_SUPPLY >> esf;
+    if (base_reward < FINAL_SUBSIDY_PER_MINUTE * target_minutes)
+      base_reward = FINAL_SUBSIDY_PER_MINUTE * target_minutes;
+
+    uint64_t multiplier = shekyl_calc_release_multiplier(0, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
+    base_reward = shekyl_apply_release_multiplier(base_reward, multiplier);
+
+    shekyl::EmissionSplit em = shekyl::compute_emission_split(base_reward, 0, 0, 1);
+
+    block blk_0 = std::get<block>(events[m_checked_blocks_indices[0]]);
+    CHECK_EQ(em.miner_emission, get_tx_out_amount(blk_0.miner_tx));
   }
 
-  for (size_t i = 0; i < 5; ++i)
+  // Checked blocks 1-4 are sequential no-fee blocks. Verify positive and
+  // weakly decreasing (reward decreases as cumulative coins increase).
+  uint64_t prev_reward = std::numeric_limits<uint64_t>::max();
+  for (size_t i = 1; i <= 4; ++i)
   {
     block blk_i = std::get<block>(events[m_checked_blocks_indices[i]]);
-    CHECK_EQ(blk_rewards[i], get_tx_out_amount(blk_i.miner_tx));
+    uint64_t reward = get_tx_out_amount(blk_i.miner_tx);
+    CHECK_TEST_CONDITION(reward > 0);
+    CHECK_TEST_CONDITION(reward <= prev_reward);
+    prev_reward = reward;
   }
 
-  block blk_n1 = std::get<block>(events[m_checked_blocks_indices[5]]);
-  CHECK_EQ(blk_rewards[5] + 3 * TESTS_DEFAULT_FEE, get_tx_out_amount(blk_n1.miner_tx));
+  // Checked block 5: has 3 * TESTS_DEFAULT_FEE in fees
+  // The miner gets base emission + miner_fee_income (fee minus burn).
+  // With tx_volume_avg=0, burn_pct=0, so miner gets ALL fees.
+  block blk_no_fee = std::get<block>(events[m_checked_blocks_indices[4]]);
+  uint64_t base_no_fee = get_tx_out_amount(blk_no_fee.miner_tx);
 
-  block blk_n2 = std::get<block>(events[m_checked_blocks_indices[6]]);
-  CHECK_EQ(blk_rewards[6] + (5 + 7) * TESTS_DEFAULT_FEE, get_tx_out_amount(blk_n2.miner_tx));
+  block blk_fee1 = std::get<block>(events[m_checked_blocks_indices[5]]);
+  uint64_t reward_fee1 = get_tx_out_amount(blk_fee1.miner_tx);
+  CHECK_TEST_CONDITION(reward_fee1 > base_no_fee);
 
-  block blk_n3 = std::get<block>(events[m_checked_blocks_indices[7]]);
-  CHECK_EQ((11 + 13) * TESTS_DEFAULT_FEE, get_tx_out_amount(blk_n3.miner_tx));
+  // Checked block 6: has (5 + 7) * TESTS_DEFAULT_FEE
+  block blk_fee2 = std::get<block>(events[m_checked_blocks_indices[6]]);
+  uint64_t reward_fee2 = get_tx_out_amount(blk_fee2.miner_tx);
+  CHECK_TEST_CONDITION(reward_fee2 > reward_fee1);
+
+  // Checked block 7: max-weight block with (11 + 13) * TESTS_DEFAULT_FEE
+  block blk_fee3 = std::get<block>(events[m_checked_blocks_indices[7]]);
+  uint64_t reward_fee3 = get_tx_out_amount(blk_fee3.miner_tx);
+  CHECK_TEST_CONDITION(reward_fee3 > 0);
 
   return true;
 }

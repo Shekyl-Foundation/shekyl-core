@@ -47,8 +47,8 @@ namespace epee
         - The internal buffer can be taken without a copy.
         - The internal buffer can be given to `byte_slice` with zero
           allocations for reference count.
-        - The internal buffer can be given to `zmq_msg_data_init` without a
-          copy or extra allocation.
+        - The internal buffer can be given to zero-copy message APIs without
+          an extra allocation.
       an additional advantage over `std::stringstream`:
         - Construction is significantly faster - the global `std::locale`
           does not have to be acquired (global thread synchronization), and

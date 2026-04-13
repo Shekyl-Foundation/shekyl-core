@@ -1,0 +1,49 @@
+---
+description: Consensus is PoW-based; staking is an economic primitive. Speculative consensus scaffolding is forbidden.
+globs:
+  - "**/consensus/**"
+  - "**/cryptonote_core/**"
+  - rust/shekyl-consensus/**
+  - rust/shekyl-economics/**
+---
+
+# Consensus and staking
+
+## Current architecture
+
+- **Consensus base is PoW** (RandomX lineage). All block validation,
+  difficulty, and reorg logic assume a single PoW proof type.
+- **Staking is an economic primitive**, not a consensus proof. Stake-ratio
+  governance signals, staker emission share with decay, and lock-based
+  participant alignment all live in `shekyl-economics` and influence
+  emission/burn — not block validity. See `STAKER_REWARD_DISBURSEMENT.md`
+  and `DESIGN_CONCEPTS.md`.
+
+This split is deliberate: staking gives small holders economic alignment
+without making them gatekeepers of consensus, and keeps consensus
+attack-surface analysis bounded to PoW.
+
+## Rule against speculative scaffolding
+
+Do **not** introduce a `ConsensusProof` trait, `Box<dyn ConsensusProof>`
+orchestrator, abstract base class, registry, or other multi-proof
+abstraction *unless* a second proof type has been formally proposed in a
+design document and accepted.
+
+Speculative architecture is debt under `15-deletion-and-debt.mdc`. An empty
+abstraction reads to future maintainers as "there must be a reason for
+this," and the cost of removing it later exceeds the cost of adding it now.
+
+## If a hybrid consensus is ever proposed
+
+A second proof type would require, before any code lands:
+
+1. A design document covering security model, weighting between proof types,
+   reorg rules under disagreement, and the migration path from PoW-only.
+2. Explicit accessibility analysis: PoW must remain CPU-friendly (RandomX),
+   any PoS component must have a stake floor low enough for individuals,
+   and delegation mechanisms must not concentrate power at exchanges.
+3. The migration discipline from `20-rust-vs-cpp-policy.mdc` (its own
+   design doc, its own review cycle, its own PR).
+
+Until that exists, the PoW assumption is load-bearing — code freely.

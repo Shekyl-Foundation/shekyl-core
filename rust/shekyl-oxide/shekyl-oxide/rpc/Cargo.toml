@@ -1,0 +1,45 @@
+[package]
+name = "shekyl-rpc"
+version = "0.1.0"
+description = "Trait for an RPC connection to a Shekyl daemon, built around shekyl-oxide"
+license = "MIT"
+repository = "https://github.com/Shekyl-Foundation/shekyl-oxide/tree/main/shekyl-oxide/rpc"
+authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
+edition = "2021"
+rust-version = "1.75"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dependencies]
+std-shims = { version = "0.1.4", default-features = false }
+
+thiserror = { version = "2", default-features = false }
+
+zeroize = { version = "^1.5", default-features = false, features = ["zeroize_derive"] }
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+
+shekyl-oxide = { path = "..", default-features = false }
+
+[features]
+std = [
+  "std-shims/std",
+
+  "thiserror/std",
+
+  "zeroize/std",
+  "hex/std",
+  "serde/std",
+  "serde_json/std",
+
+  "shekyl-oxide/std",
+]
+default = ["std"]

@@ -1,0 +1,54 @@
+name: shekyl-oxide divergence
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+jobs:
+  compare-upstream-tip:
+    name: Compare vendored snapshot to fork tip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read vendored snapshot metadata
+        id: snapshot
+        run: |
+          FILE="rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT"
+          if [ ! -f "$FILE" ]; then
+            echo "Missing $FILE"
+            exit 1
+          fi
+          REPO=$(awk -F= '$1=="upstream_repo"{print $2}' "$FILE")
+          BRANCH=$(awk -F= '$1=="upstream_branch"{print $2}' "$FILE")
+          COMMIT=$(awk -F= '$1=="upstream_commit"{print $2}' "$FILE")
+          if [ -z "$REPO" ] || [ -z "$BRANCH" ] || [ -z "$COMMIT" ]; then
+            echo "Invalid snapshot metadata in $FILE"
+            exit 1
+          fi
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+      - name: Resolve fork tip
+        id: remote
+        run: |
+          URL="${{ steps.snapshot.outputs.repo }}.git"
+          BRANCH="${{ steps.snapshot.outputs.branch }}"
+          TIP=$(git ls-remote "$URL" "refs/heads/$BRANCH" | awk '{print $1}')
+          if [ -z "$TIP" ]; then
+            echo "Failed to resolve remote tip for $URL $BRANCH"
+            exit 1
+          fi
+          echo "tip=$TIP" >> "$GITHUB_OUTPUT"
+      - name: Compare vendored snapshot to fork tip
+        run: |
+          SNAPSHOT="${{ steps.snapshot.outputs.commit }}"
+          TIP="${{ steps.remote.outputs.tip }}"
+          if [ "$SNAPSHOT" != "$TIP" ]; then
+            echo "Vendored shekyl-oxide snapshot is behind/changed:"
+            echo "  snapshot: $SNAPSHOT"
+            echo "  fork tip: $TIP"
+            echo "Sync rust/shekyl-oxide and update UPSTREAM_MONERO_OXIDE_COMMIT."
+            exit 1
+          fi
+          echo "Vendored snapshot matches fork tip: $TIP"

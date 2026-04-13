@@ -28,7 +28,7 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "gtest/gtest.h"
-#include "ringct/rctOps.h"
+#include "fcmp/rctOps.h"
 #include "device/device_default.hpp"
 
 TEST(device, name)
@@ -94,17 +94,8 @@ TEST(device, ops)
   crypto::generate_key_derivation(pk0, sk0, der);
   ASSERT_FALSE(memcmp(&derd, &der, sizeof(der)));
 
-  dev.derivation_to_scalar(der, 0, ressc0);
-  crypto::derivation_to_scalar(der, 0, ressc1);
-  ASSERT_FALSE(memcmp(&ressc0, &ressc1, sizeof(ressc1)));
-
-  dev.derive_secret_key(der, 0, rct::rct2sk(sk), sk0);
-  crypto::derive_secret_key(der, 0, rct::rct2sk(sk), sk1);
-  ASSERT_EQ(sk0, sk1);
-
-  dev.derive_public_key(der, 0, rct::rct2pk(pk), pk0);
-  crypto::derive_public_key(der, 0, rct::rct2pk(pk), pk1);
-  ASSERT_EQ(pk0, pk1);
+  // Removed: derivation_to_scalar, derive_secret_key, derive_public_key
+  // no longer exist in Shekyl (v3 HKDF replaces them).
 
   dev.secret_key_to_public_key(rct::rct2sk(sk), pk0);
   crypto::secret_key_to_public_key(rct::rct2sk(sk), pk1);
@@ -113,19 +104,5 @@ TEST(device, ops)
   dev.generate_key_image(pk0, sk0, ki0);
   crypto::generate_key_image(pk0, sk0, ki1);
   ASSERT_EQ(ki0, ki1);
-}
-
-TEST(device, ecdh32)
-{
-  hw::core::device_default dev;
-  rct::ecdhTuple tuple, tuple2;
-  rct::key key = rct::skGen();
-  tuple.mask = rct::skGen();
-  tuple.amount = rct::skGen();
-  tuple2 = tuple;
-  dev.ecdhEncode(tuple, key, false);
-  dev.ecdhDecode(tuple, key, false);
-  ASSERT_EQ(tuple2.mask, tuple.mask);
-  ASSERT_EQ(tuple2.amount, tuple.amount);
 }
 

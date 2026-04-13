@@ -132,7 +132,6 @@ bool wallet_tools::fill_tx_sources(tools::wallet2 * wallet, std::vector<cryptono
       MDEBUG("Selected " << i << " from tx: " << dump_keys(td.m_txid.data)
                         << " ki: " << dump_keys(td.m_key_image.data)
                         << " amnt: " << td.amount()
-                        << " rct: " << td.is_rct()
                         << " glob: " << td.m_global_output_index);
 
       sum += td.amount();
@@ -145,7 +144,7 @@ bool wallet_tools::fill_tx_sources(tools::wallet2 * wallet, std::vector<cryptono
 
     } catch(const std::exception &e){
       MTRACE("Output " << i << ", from: " <<  dump_keys(td.m_txid.data)
-                       << ", amnt: " << td.amount() << ", rct: " << td.is_rct()
+                       << ", amnt: " << td.amount()
                        << ", glob: " << td.m_global_output_index << " is not applicable: " << e.what());
     }
   }
@@ -159,10 +158,10 @@ void wallet_tools::gen_tx_src(size_t mixin, uint64_t cur_height, const tools::wa
 {
   CHECK_AND_ASSERT_THROW_MES(mixin != 0, "mixin is zero");
   src.amount = td.amount();
-  src.rct = td.is_rct();
+  src.rct = true;
 
-  std::vector<tools::wallet2::get_outs_entry> outs;
-  bt.get_fake_outs(mixin, td.is_rct() ? 0 : td.amount(), td.m_global_output_index, cur_height, outs);
+  std::vector<get_outs_entry> outs;
+  bt.get_fake_outs(mixin, 0, td.m_global_output_index, cur_height, outs);
 
   for (size_t n = 0; n < mixin; ++n)
   {
@@ -180,7 +179,7 @@ void wallet_tools::gen_tx_src(size_t mixin, uint64_t cur_height, const tools::wa
   crypto::public_key wt_out_key;
   cryptonote::get_output_public_key(td.m_tx.vout[td.m_internal_output_index], wt_out_key);
   real_oe.second.dest = rct::pk2rct(wt_out_key);
-  real_oe.second.mask = rct::commit(td.amount(), td.m_mask);
+  real_oe.second.mask = rct::commit(td.amount(), rct::sk2rct(td.m_mask));
 
   std::sort(src.outputs.begin(), src.outputs.end(), [&](const cryptonote::tx_source_entry::output_entry i0, const cryptonote::tx_source_entry::output_entry i1) {
     return i0.first < i1.first;
@@ -193,9 +192,8 @@ void wallet_tools::gen_tx_src(size_t mixin, uint64_t cur_height, const tools::wa
     }
   }
 
-  src.mask = td.m_mask;
+  src.mask = rct::sk2rct(td.m_mask);
   src.real_out_tx_key = get_tx_pub_key_from_extra(td.m_tx, td.m_pk_index);
-  src.real_out_additional_tx_keys = get_additional_tx_pub_keys_from_extra(td.m_tx);
   src.real_output_in_tx_index = td.m_internal_output_index;
 }
 
@@ -253,30 +251,28 @@ cryptonote::account_public_address get_address(const tools::wallet2* inp)
 bool construct_tx_to_key(cryptonote::transaction& tx,
                          tools::wallet2 * sender_wallet, const var_addr_t& to, uint64_t amount,
                          std::vector<cryptonote::tx_source_entry> &sources,
-                         uint64_t fee, bool rct, rct::RangeProofType range_proof_type, int bp_version)
+                         uint64_t fee, bool rct)
 {
   vector<tx_destination_entry> destinations;
   fill_tx_destinations(sender_wallet->get_account(), get_address(to), amount, fee, sources, destinations, rct);
-  return construct_tx_rct(sender_wallet, sources, destinations, get_address(sender_wallet), std::vector<uint8_t>(), tx, rct, range_proof_type, bp_version);
+  return construct_tx_rct(sender_wallet, sources, destinations, get_address(sender_wallet), std::vector<uint8_t>(), tx, rct);
 }
 
 bool construct_tx_to_key(cryptonote::transaction& tx,
                          tools::wallet2 * sender_wallet,
                          const std::vector<cryptonote::tx_destination_entry>& destinations,
                          std::vector<cryptonote::tx_source_entry> &sources,
-                         uint64_t fee, bool rct, rct::RangeProofType range_proof_type, int bp_version)
+                         uint64_t fee, bool rct)
 {
   vector<tx_destination_entry> all_destinations;
   fill_tx_destinations(sender_wallet->get_account(), destinations, fee, sources, all_destinations, rct);
-  return construct_tx_rct(sender_wallet, sources, all_destinations, get_address(sender_wallet), std::vector<uint8_t>(), tx, rct, range_proof_type, bp_version);
+  return construct_tx_rct(sender_wallet, sources, all_destinations, get_address(sender_wallet), std::vector<uint8_t>(), tx, rct);
 }
 
-bool construct_tx_rct(tools::wallet2 * sender_wallet, std::vector<cryptonote::tx_source_entry>& sources, const std::vector<cryptonote::tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, std::vector<uint8_t> extra, cryptonote::transaction& tx, bool rct, rct::RangeProofType range_proof_type, int bp_version, uint8_t hf_version)
+bool construct_tx_rct(tools::wallet2 * sender_wallet, std::vector<cryptonote::tx_source_entry>& sources, const std::vector<cryptonote::tx_destination_entry>& destinations, const std::optional<cryptonote::account_public_address>& change_addr, std::vector<uint8_t> extra, cryptonote::transaction& tx, bool rct, uint8_t hf_version)
 {
   subaddresses_t & subaddresses = wallet_accessor_test::get_subaddresses(sender_wallet);
   crypto::secret_key tx_key;
-  std::vector<crypto::secret_key> additional_tx_keys;
   std::vector<tx_destination_entry> destinations_copy = destinations;
-  rct::RCTConfig rct_config = {range_proof_type, bp_version};
-  return construct_tx_and_get_tx_key(sender_wallet->get_account().get_keys(), subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, additional_tx_keys, rct, rct_config, true, hf_version);
+  return construct_tx_and_get_tx_key(sender_wallet->get_account().get_keys(), subaddresses, sources, destinations_copy, change_addr, extra, tx, tx_key, rct, true, hf_version);
 }

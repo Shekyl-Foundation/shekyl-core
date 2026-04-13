@@ -30,12 +30,10 @@ set(unit_tests_sources
   account.cpp
   apply_permutation.cpp
   address_from_url.cpp
-  base58.cpp
   blockchain_db.cpp
   block_queue.cpp
   block_reward.cpp
   bootstrap_node_selector.cpp
-  bulletproofs.cpp
   bulletproofs_plus.cpp
   canonical_amounts.cpp
   chacha.cpp
@@ -67,6 +65,7 @@ set(unit_tests_sources
   main.cpp
   memwipe.cpp
   mining_parity.cpp
+  transfer_details_wipe.cpp
   mlocker.cpp
   mnemonics.cpp
   mul_div.cpp
@@ -88,23 +87,23 @@ set(unit_tests_sources
   test_peerlist.cpp
   test_protocol_pack.cpp
   threadpool.cpp
-  tx_proof.cpp
   hardfork.cpp
   unbound.cpp
   uri.cpp
   util.cpp
   varint.cpp
-  ver_rct_non_semantics_simple_cached.cpp
-  ringct.cpp
-  output_selection.cpp
+  fcmp.cpp
   vercmp.cpp
-  ringdb.cpp
   wallet_storage.cpp
   wipeable_string.cpp
   is_hdd.cpp
   aligned.cpp
   rpc_version_str.cpp
-  zmq_rpc.cpp)
+  staking.cpp
+  deferred_insertion.cpp
+  tx_data_pruning_lmdb.cpp
+  pending_tree_fuzz.cpp
+  )
 
 set(unit_tests_headers
   unit_tests_utils.h)
@@ -114,11 +113,9 @@ monero_add_minimal_executable(unit_tests
   ${unit_tests_headers})
 target_link_libraries(unit_tests
   PRIVATE
-    ringct
+    fcmp
     cryptonote_protocol
     cryptonote_core
-    daemon_messages
-    daemon_rpc_server
     blockchain_db
     lmdb_lib
     rpc
@@ -132,8 +129,7 @@ target_link_libraries(unit_tests
     ${Boost_THREAD_LIBRARY}
     ${GTEST_LIBRARIES}
     ${CMAKE_THREAD_LIBS_INIT}
-    ${EXTRA_LIBRARIES}
-    ${ZMQ_LIB})
+    ${EXTRA_LIBRARIES})
 if(UNIX AND NOT APPLE)
   target_link_libraries(unit_tests PRIVATE pthread dl)
 endif()
@@ -151,6 +147,7 @@ endif ()
 SET_PROPERTY(SOURCE main.cpp PROPERTY COMPILE_FLAGS -DDEFAULT_DATA_DIR="\\"${CMAKE_SOURCE_DIR}/tests/data\\"")
 
 SET_PROPERTY(SOURCE memwipe.cpp PROPERTY COMPILE_FLAGS -Ofast)
+SET_PROPERTY(SOURCE transfer_details_wipe.cpp PROPERTY COMPILE_FLAGS -Ofast)
 
 add_test(
   NAME    unit_tests

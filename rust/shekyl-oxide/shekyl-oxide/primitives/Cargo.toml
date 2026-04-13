@@ -1,0 +1,44 @@
+[package]
+name = "shekyl-primitives"
+version = "0.1.0"
+description = "Primitives for the Shekyl protocol"
+license = "MIT"
+repository = "https://github.com/Shekyl-Foundation/shekyl-oxide/tree/main/shekyl-oxide/primitives"
+authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
+edition = "2021"
+rust-version = "1.66"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dependencies]
+std-shims = { version = "0.1.5", default-features = false }
+
+zeroize = { version = "^1.5", default-features = false, features = ["zeroize_derive"] }
+
+# Cryptographic dependencies
+sha3 = { version = "0.10", default-features = false }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+
+# Other Shekyl dependencies
+shekyl-io = { path = "../io", version = "0.1", default-features = false }
+shekyl-generators = { path = "../generators", version = "0.4", default-features = false }
+
+[dev-dependencies]
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+
+[features]
+std = [
+  "std-shims/std",
+
+  "zeroize/std",
+
+  "sha3/std",
+
+  "shekyl-generators/std",
+]
+default = ["std"]

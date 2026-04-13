@@ -1,0 +1,58 @@
+{
+  "description": "Pinned test vectors for tx_extra round-trip: KEM ciphertexts (tag 0x06) and PQC leaf hashes (tag 0x07) must survive serialize → sort → re-parse with byte-identical field contents. Verified by tests/unit_tests/test_tx_utils.cpp.",
+  "tags": {
+    "TX_EXTRA_TAG_PUBKEY": "0x01",
+    "TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT": "0x06",
+    "TX_EXTRA_TAG_PQC_LEAF_HASHES": "0x07"
+  },
+  "constants": {
+    "HYBRID_KEM_CT_BYTES": 1120,
+    "PQC_LEAF_HASH_BYTES": 32
+  },
+  "vectors": [
+    {
+      "name": "kem_and_leaf_hashes_survive_sort",
+      "description": "Canonical order (pubkey, KEM, leaf hashes). sort_tx_extra preserves all field contents and is idempotent.",
+      "inputs": {
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kem_ciphertext_num_outputs": 2,
+        "kem_ciphertext_pattern": "sequential byte (i & 0xFF) for i in 0..2240",
+        "kem_ciphertext_total_bytes": 2240,
+        "leaf_hashes_num_outputs": 2,
+        "leaf_hashes_pattern": "sequential byte ((i + 0x42) & 0xFF) for i in 0..64",
+        "leaf_hashes_total_bytes": 64,
+        "field_insertion_order": ["pubkey", "kem_ciphertext", "leaf_hashes"]
+      },
+      "expected": {
+        "field_count_before_sort": 3,
+        "field_count_after_sort": 3,
+        "kem_blob_byte_equal": true,
+        "leaf_hashes_blob_byte_equal": true,
+        "pubkey_preserved": true,
+        "double_sort_idempotent": true
+      }
+    },
+    {
+      "name": "kem_and_leaf_hashes_reverse_order",
+      "description": "Non-canonical insertion order (leaf hashes, KEM, pubkey). sort_tx_extra reorders to canonical (pubkey first, tag 0x01 < 0x06 < 0x07) while preserving contents.",
+      "inputs": {
+        "pubkey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "kem_ciphertext_num_outputs": 1,
+        "kem_ciphertext_pattern": "constant byte 0x55 repeated 1120 times",
+        "kem_ciphertext_total_bytes": 1120,
+        "leaf_hashes_num_outputs": 1,
+        "leaf_hashes_pattern": "constant byte 0x77 repeated 32 times",
+        "leaf_hashes_total_bytes": 32,
+        "field_insertion_order": ["leaf_hashes", "kem_ciphertext", "pubkey"]
+      },
+      "expected": {
+        "field_count_before_sort": 3,
+        "field_count_after_sort": 3,
+        "canonical_order_after_sort": ["pubkey", "kem_ciphertext", "leaf_hashes"],
+        "kem_blob_byte_equal": true,
+        "leaf_hashes_blob_byte_equal": true,
+        "pubkey_first_after_sort": true
+      }
+    }
+  ]
+}

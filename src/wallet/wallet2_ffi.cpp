@@ -28,10 +28,12 @@
 
 #include "wallet2_ffi.h"
 #include "wallet2.h"
+#include "memwipe.h"
 #include "wallet_rpc_server_error_codes.h"
 #include "wallet_rpc_server_commands_defs.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_basic/account.h"
+#include "cryptonote_core/tx_pqc_verify.h"
 #include "rpc/core_rpc_server_commands_defs.h"
 #include "mnemonics/electrum-words.h"
 #include "string_tools.h"
@@ -42,19 +44,25 @@
 #include "serialization/binary_archive.h"
 #include <boost/archive/portable_binary_iarchive.hpp>
 #include "span.h"
+#include "shekyl/shekyl_ffi.h"
 
 #include <rapidjson/document.h>
 #include <rapidjson/writer.h>
 #include <rapidjson/stringbuffer.h>
 
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <filesystem>
 #include <sstream>
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "wallet.ffi"
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
+
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "wallet.ffi"
 
 namespace rj = rapidjson;
 
@@ -97,9 +105,6 @@ struct wallet2_handle {
         catch (const tools::error::tx_not_possible& ex) {
             set_error(WALLET_RPC_ERROR_CODE_TX_NOT_POSSIBLE, ex.what());
         }
-        catch (const tools::error::not_enough_outs_to_mix& ex) {
-            set_error(WALLET_RPC_ERROR_CODE_NOT_ENOUGH_OUTS_TO_MIX, ex.what());
-        }
         catch (const tools::error::file_exists& ex) {
             set_error(WALLET_RPC_ERROR_CODE_WALLET_ALREADY_EXISTS, ex.what());
         }
@@ -139,10 +144,51 @@ static cryptonote::network_type nettype_from_u8(uint8_t n)
     }
 }
 
+// ── Progress callback bridge ─────────────────────────────────────────────────
+
+class ffi_callback_bridge : public tools::i_wallet2_callback {
+    wallet2_ffi_progress_callback m_fn;
+    void* m_user_data;
+public:
+    ffi_callback_bridge(wallet2_ffi_progress_callback fn, void* ud)
+        : m_fn(fn), m_user_data(ud) {}
+
+    void on_transfer_stage(const char* stage, uint8_t idx, uint8_t total) override {
+        if (m_fn) m_fn("transfer_stage", idx, total, stage, m_user_data);
+    }
+    void on_fcmp_path_precompute_progress(uint64_t done, uint64_t total) override {
+        if (m_fn) m_fn("fcmp_precompute", done, total, nullptr, m_user_data);
+    }
+    void on_pqc_rederivation_progress(uint64_t done, uint64_t total) override {
+        if (m_fn) m_fn("pqc_rederivation", done, total, nullptr, m_user_data);
+    }
+};
+
+static std::unique_ptr<ffi_callback_bridge> g_callback_bridge;
+
+void wallet2_ffi_set_progress_callback(wallet2_handle* w,
+                                       wallet2_ffi_progress_callback cb,
+                                       void* user_data)
+{
+    if (!w || !w->wallet) return;
+    if (cb) {
+        g_callback_bridge = std::make_unique<ffi_callback_bridge>(cb, user_data);
+        w->wallet->callback(g_callback_bridge.get());
+    } else {
+        w->wallet->callback(nullptr);
+        g_callback_bridge.reset();
+    }
+}
+
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
 wallet2_handle* wallet2_ffi_create(uint8_t nettype)
 {
+#ifdef __linux__
+    static std::once_flag prctl_flag;
+    std::call_once(prctl_flag, []{ prctl(PR_SET_DUMPABLE, 0); });
+#endif
+
     auto* h = new(std::nothrow) wallet2_handle();
     if (!h) return nullptr;
     h->wallet = std::make_unique<tools::wallet2>(nettype_from_u8(nettype), 1, true);
@@ -228,7 +274,10 @@ const char* wallet2_ffi_last_error_msg(const wallet2_handle* w)
 
 void wallet2_ffi_free_string(char* str)
 {
-    free(str);
+    if (str) {
+        memwipe(str, strlen(str));
+        free(str);
+    }
 }
 
 // ── Wallet file operations ───────────────────────────────────────────────────
@@ -671,8 +720,7 @@ uint32_t wallet2_ffi_get_version(void)
 char* wallet2_ffi_transfer(wallet2_handle* w,
                            const char* destinations_json,
                            uint32_t priority,
-                           uint32_t account_index,
-                           uint32_t ring_size)
+                           uint32_t account_index)
 {
     if (!w || !w->wallet) {
         if (w) w->set_error(WALLET_RPC_ERROR_CODE_NOT_OPEN, "No wallet file");
@@ -715,11 +763,10 @@ char* wallet2_ffi_transfer(wallet2_handle* w,
     }
 
     try {
-        uint64_t mixin = w->wallet->adjust_mixin(ring_size > 0 ? ring_size - 1 : 0);
         const tools::fee_priority fp = w->wallet->adjust_priority(tools::fee_priority_utilities::from_integral(priority));
         std::set<uint32_t> subaddr_indices;
         std::vector<tools::wallet2::pending_tx> ptx_vector =
-            w->wallet->create_transactions_2(dsts, mixin, fp, extra, account_index, subaddr_indices);
+            w->wallet->create_transactions_2(dsts, fp, extra, account_index, subaddr_indices);
 
         if (ptx_vector.empty()) {
             w->set_error(WALLET_RPC_ERROR_CODE_TX_NOT_POSSIBLE, "No transaction created");
@@ -923,6 +970,11 @@ static std::string json_str(const rj::Value& v, const char* key, const char* def
     if (v.HasMember(key) && v[key].IsString()) return v[key].GetString();
     return def;
 }
+static epee::wipeable_string json_wipeable_str(const rj::Value& v, const char* key, const char* def = "") {
+    if (v.HasMember(key) && v[key].IsString())
+        return epee::wipeable_string(v[key].GetString(), v[key].GetStringLength());
+    return epee::wipeable_string(def);
+}
 
 static char* dispatch_get_height(wallet2_handle* w, const rj::Value&) {
     rj::Document doc;
@@ -1117,13 +1169,19 @@ static char* dispatch_get_languages(wallet2_handle*, const rj::Value&) {
 }
 
 static char* dispatch_change_wallet_password(wallet2_handle* w, const rj::Value& p) {
-    std::string old_pw = json_str(p, "old_password");
-    std::string new_pw = json_str(p, "new_password");
-    if (!w->wallet->verify_password(old_pw)) {
+    epee::wipeable_string old_pw = json_wipeable_str(p, "old_password");
+    epee::wipeable_string new_pw = json_wipeable_str(p, "new_password");
+    std::string old_pw_s(old_pw.data(), old_pw.size());
+    std::string new_pw_s(new_pw.data(), new_pw.size());
+    if (!w->wallet->verify_password(old_pw_s)) {
+        memwipe(old_pw_s.data(), old_pw_s.size());
+        memwipe(new_pw_s.data(), new_pw_s.size());
         w->set_error(WALLET_RPC_ERROR_CODE_INVALID_PASSWORD, "Invalid original password");
         return nullptr;
     }
-    w->wallet->change_password(w->wallet->get_wallet_file(), old_pw, new_pw);
+    w->wallet->change_password(w->wallet->get_wallet_file(), old_pw_s, new_pw_s);
+    memwipe(old_pw_s.data(), old_pw_s.size());
+    memwipe(new_pw_s.data(), new_pw_s.size());
     rj::Document doc;
     doc.SetObject();
     return json_to_string(doc);
@@ -1304,15 +1362,12 @@ static char* dispatch_get_tx_key(wallet2_handle* w, const rj::Value& p) {
         return nullptr;
     }
     crypto::secret_key tx_key;
-    std::vector<crypto::secret_key> additional_tx_keys;
-    if (!w->wallet->get_tx_key(txid, tx_key, additional_tx_keys)) {
+    if (!w->wallet->get_tx_key(txid, tx_key)) {
         w->set_error(WALLET_RPC_ERROR_CODE_NO_TXKEY, "No tx secret key found for txid");
         return nullptr;
     }
     epee::wipeable_string ws;
     ws += epee::to_hex::wipeable_string(tx_key);
-    for (const auto& k : additional_tx_keys)
-        ws += epee::to_hex::wipeable_string(k);
     std::string key_str(ws.data(), ws.size());
 
     rj::Document doc;
@@ -1855,17 +1910,6 @@ static char* dispatch_check_tx_key(wallet2_handle* w, const rj::Value& p) {
         w->set_error(WALLET_RPC_ERROR_CODE_WRONG_KEY, "Tx key has invalid format");
         return nullptr;
     }
-    size_t offset = 64;
-    std::vector<crypto::secret_key> additional_tx_keys;
-    while (offset < tx_key_str.size()) {
-        additional_tx_keys.resize(additional_tx_keys.size() + 1);
-        if (!epee::wipeable_string(data + offset, 64).hex_to_pod(unwrap(unwrap(additional_tx_keys.back())))) {
-            w->set_error(WALLET_RPC_ERROR_CODE_WRONG_KEY, "Tx key has invalid format");
-            return nullptr;
-        }
-        offset += 64;
-    }
-
     cryptonote::address_parse_info info;
     if (!get_account_address_from_str(info, w->wallet->nettype(), json_str(p, "address"))) {
         w->set_error(WALLET_RPC_ERROR_CODE_WRONG_ADDRESS, "Invalid address");
@@ -1876,7 +1920,7 @@ static char* dispatch_check_tx_key(wallet2_handle* w, const rj::Value& p) {
         uint64_t received = 0;
         bool in_pool = false;
         uint64_t confirmations = 0;
-        w->wallet->check_tx_key(txid, tx_key, additional_tx_keys, info.address, received, in_pool, confirmations);
+        w->wallet->check_tx_key(txid, tx_key, info.address, received, in_pool, confirmations);
 
         rj::Document doc;
         doc.SetObject();
@@ -1953,47 +1997,6 @@ static char* dispatch_check_tx_proof(wallet2_handle* w, const rj::Value& p) {
     }
 }
 
-static char* dispatch_get_spend_proof(wallet2_handle* w, const rj::Value& p) {
-    std::string txid_str = json_str(p, "txid");
-    crypto::hash txid;
-    if (!epee::string_tools::hex_to_pod(txid_str, txid)) {
-        w->set_error(WALLET_RPC_ERROR_CODE_WRONG_TXID, "TX ID has invalid format");
-        return nullptr;
-    }
-
-    try {
-        std::string signature = w->wallet->get_spend_proof(txid, json_str(p, "message"));
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        doc.AddMember("signature", json_val_str(signature, a), a);
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, e.what());
-        return nullptr;
-    }
-}
-
-static char* dispatch_check_spend_proof(wallet2_handle* w, const rj::Value& p) {
-    std::string txid_str = json_str(p, "txid");
-    crypto::hash txid;
-    if (!epee::string_tools::hex_to_pod(txid_str, txid)) {
-        w->set_error(WALLET_RPC_ERROR_CODE_WRONG_TXID, "TX ID has invalid format");
-        return nullptr;
-    }
-
-    try {
-        bool good = w->wallet->check_spend_proof(txid, json_str(p, "message"), json_str(p, "signature"));
-        rj::Document doc;
-        doc.SetObject();
-        auto& a = doc.GetAllocator();
-        doc.AddMember("good", good, a);
-        return json_to_string(doc);
-    } catch (const std::exception& e) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, e.what());
-        return nullptr;
-    }
-}
 
 static char* dispatch_get_reserve_proof(wallet2_handle* w, const rj::Value& p) {
     bool all = json_bool(p, "all");
@@ -2352,6 +2355,7 @@ static char* dispatch_claim_rewards(wallet2_handle* w, const rj::Value&) {
         std::string last_hash;
         for (auto& ptx : ptx_vector) {
             w->wallet->commit_tx(ptx);
+            w->wallet->stage_claim_watermarks(ptx);
             last_hash = epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx));
             for (const auto& o : ptx.tx.vout)
                 total += o.amount;
@@ -2467,8 +2471,6 @@ static bool fill_split_response(
 
         if (get_tx_keys) {
             epee::wipeable_string s = epee::to_hex::wipeable_string(ptx.tx_key);
-            for (const auto& k : ptx.additional_tx_keys)
-                s += epee::to_hex::wipeable_string(k);
             tx_key_list.PushBack(json_val_str(std::string(s.data(), s.size()), a), a);
         }
 
@@ -2588,15 +2590,13 @@ static char* dispatch_transfer_split(wallet2_handle* w, const rj::Value& p) {
         return nullptr;
 
     try {
-        uint64_t ring_size = json_u64(p, "ring_size");
-        uint64_t mixin = w->wallet->adjust_mixin(ring_size > 0 ? ring_size - 1 : 0);
         const tools::fee_priority fp = w->wallet->adjust_priority(
             tools::fee_priority_utilities::from_integral(priority));
         uint32_t account_index = json_u32(p, "account_index");
         std::set<uint32_t> subaddr_indices = parse_subaddr_indices(p);
 
         std::vector<tools::wallet2::pending_tx> ptx_vector =
-            w->wallet->create_transactions_2(dsts, mixin, fp, extra,
+            w->wallet->create_transactions_2(dsts, fp, extra,
                 account_index, subaddr_indices);
 
         if (ptx_vector.empty()) {
@@ -2670,8 +2670,6 @@ static char* dispatch_sign_transfer(wallet2_handle* w, const rj::Value& p) {
                 epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx)), a), a);
             if (get_tx_keys) {
                 epee::wipeable_string s = epee::to_hex::wipeable_string(ptx.tx_key);
-                for (const auto& k : ptx.additional_tx_keys)
-                    s += epee::to_hex::wipeable_string(k);
                 tx_key_list.PushBack(json_val_str(std::string(s.data(), s.size()), a), a);
             }
             if (export_raw) {
@@ -2749,7 +2747,6 @@ static char* dispatch_describe_transfer(wallet2_handle* w, const rj::Value& p) {
                 std::pair<std::string, uint64_t>> tx_dests;
 
             uint64_t amount_in = 0, amount_out = 0, change_amount = 0;
-            uint32_t ring_size = std::numeric_limits<uint32_t>::max();
 
             std::vector<cryptonote::tx_extra_field> tx_extra_fields;
             std::string payment_id_str;
@@ -2774,8 +2771,6 @@ static char* dispatch_describe_transfer(wallet2_handle* w, const rj::Value& p) {
 
             for (size_t s = 0; s < cd.sources.size(); ++s) {
                 amount_in += cd.sources[s].amount;
-                size_t rs = cd.sources[s].outputs.size();
-                if (rs < ring_size) ring_size = static_cast<uint32_t>(rs);
             }
 
             for (size_t d = 0; d < cd.splitted_dsts.size(); ++d) {
@@ -2851,7 +2846,6 @@ static char* dispatch_describe_transfer(wallet2_handle* w, const rj::Value& p) {
 
             desc.AddMember("amount_in", amount_in, a);
             desc.AddMember("amount_out", amount_out, a);
-            desc.AddMember("ring_size", ring_size, a);
             desc.AddMember("unlock_time", cd.unlock_time, a);
             desc.AddMember("recipients", recipients, a);
             desc.AddMember("payment_id", json_val_str(payment_id_str, a), a);
@@ -2978,8 +2972,6 @@ static char* dispatch_sweep_all(wallet2_handle* w, const rj::Value& p) {
     }
 
     try {
-        uint64_t ring_size = json_u64(p, "ring_size");
-        uint64_t mixin = w->wallet->adjust_mixin(ring_size > 0 ? ring_size - 1 : 0);
         const tools::fee_priority fp = w->wallet->adjust_priority(
             tools::fee_priority_utilities::from_integral(priority));
         uint64_t below_amount = json_u64(p, "below_amount");
@@ -2987,7 +2979,7 @@ static char* dispatch_sweep_all(wallet2_handle* w, const rj::Value& p) {
 
         std::vector<tools::wallet2::pending_tx> ptx_vector =
             w->wallet->create_transactions_all(below_amount, info.address,
-                info.is_subaddress, outputs, mixin, fp, extra,
+                info.is_subaddress, outputs, fp, extra,
                 account_index, subaddr_indices);
 
         bool get_tx_keys = json_bool(p, "get_tx_keys");
@@ -3039,15 +3031,13 @@ static char* dispatch_sweep_single(wallet2_handle* w, const rj::Value& p) {
     }
 
     try {
-        uint64_t ring_size = json_u64(p, "ring_size");
-        uint64_t mixin = w->wallet->adjust_mixin(ring_size > 0 ? ring_size - 1 : 0);
         const tools::fee_priority fp = w->wallet->adjust_priority(
             tools::fee_priority_utilities::from_integral(priority));
         std::vector<uint8_t> extra;
 
         std::vector<tools::wallet2::pending_tx> ptx_vector =
             w->wallet->create_transactions_single(ki, info.address,
-                info.is_subaddress, outputs, mixin, fp, extra);
+                info.is_subaddress, outputs, fp, extra);
 
         if (ptx_vector.empty()) {
             w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "No outputs found");
@@ -3096,8 +3086,6 @@ static char* dispatch_sweep_single(wallet2_handle* w, const rj::Value& p) {
 
         if (get_tx_key) {
             epee::wipeable_string s = epee::to_hex::wipeable_string(ptx.tx_key);
-            for (const auto& k : ptx.additional_tx_keys)
-                s += epee::to_hex::wipeable_string(k);
             doc.AddMember("tx_key", json_val_str(
                 std::string(s.data(), s.size()), a), a);
         }
@@ -3309,9 +3297,8 @@ static char* dispatch_verify(wallet2_handle* w, const rj::Value& p) {
 static char* dispatch_estimate_tx_size_and_weight(wallet2_handle* w, const rj::Value& p) {
     uint32_t n_inputs = json_u32(p, "n_inputs");
     uint32_t n_outputs = json_u32(p, "n_outputs");
-    uint32_t ring_size = json_u32(p, "ring_size");
     bool rct = json_bool(p, "rct", true);
-    auto sw = w->wallet->estimate_tx_size_and_weight(rct, n_inputs, ring_size, n_outputs, 0);
+    auto sw = w->wallet->estimate_tx_size_and_weight(rct, n_inputs, n_outputs, 0);
     rj::Document doc;
     doc.SetObject();
     auto& a = doc.GetAllocator();
@@ -3369,29 +3356,6 @@ static char* dispatch_get_pqc_multisig_info(wallet2_handle* w, const rj::Value&)
     return json_to_string(doc);
 }
 
-static char* dispatch_sign_multisig_partial(wallet2_handle* w, const rj::Value& p) {
-    std::string signing_request = json_str(p, "signing_request");
-    if (signing_request.empty()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "signing_request is required");
-        return nullptr;
-    }
-    std::string response;
-    if (!w->wallet->sign_multisig_partial(signing_request, response)) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "Failed to produce partial signature");
-        return nullptr;
-    }
-    rj::Document doc;
-    doc.SetObject();
-    auto& a = doc.GetAllocator();
-    doc.AddMember("signature_response", json_val_str(response, a), a);
-    return json_to_string(doc);
-}
-
-static char* dispatch_import_multisig_signatures(wallet2_handle* w, const rj::Value&) {
-    w->set_error(-32601, "Not yet available via RPC -- use GUI workflow");
-    return nullptr;
-}
-
 char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* params_json)
 {
     if (!w) return nullptr;
@@ -3432,17 +3396,21 @@ char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* pa
     try {
         // Wallet file operations (use existing individual functions internally)
         if (m == "create_wallet") {
+            std::string pw = json_str(params, "password");
+            auto pw_wipe = epee::misc_utils::create_scope_leave_handler([&]{ memwipe(pw.data(), pw.size()); });
             int rc = wallet2_ffi_create_wallet(w,
                 json_str(params, "filename").c_str(),
-                json_str(params, "password").c_str(),
+                pw.c_str(),
                 json_str(params, "language", "English").c_str());
             if (rc != 0) return nullptr;
             rj::Document doc; doc.SetObject(); return json_to_string(doc);
         }
         if (m == "open_wallet") {
+            std::string pw = json_str(params, "password");
+            auto pw_wipe = epee::misc_utils::create_scope_leave_handler([&]{ memwipe(pw.data(), pw.size()); });
             int rc = wallet2_ffi_open_wallet(w,
                 json_str(params, "filename").c_str(),
-                json_str(params, "password").c_str());
+                pw.c_str());
             if (rc != 0) return nullptr;
             rj::Document doc; doc.SetObject(); return json_to_string(doc);
         }
@@ -3452,21 +3420,37 @@ char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* pa
             rj::Document doc; doc.SetObject(); return json_to_string(doc);
         }
         if (m == "restore_deterministic_wallet") {
+            std::string seed = json_str(params, "seed");
+            std::string pw = json_str(params, "password");
+            std::string seed_offset = json_str(params, "seed_offset");
+            auto wipe_guard = epee::misc_utils::create_scope_leave_handler([&]{
+                memwipe(seed.data(), seed.size());
+                memwipe(pw.data(), pw.size());
+                memwipe(seed_offset.data(), seed_offset.size());
+            });
             return wallet2_ffi_restore_deterministic_wallet(w,
                 json_str(params, "filename").c_str(),
-                json_str(params, "seed").c_str(),
-                json_str(params, "password").c_str(),
+                seed.c_str(),
+                pw.c_str(),
                 json_str(params, "language", "English").c_str(),
                 json_u64(params, "restore_height"),
-                json_str(params, "seed_offset").c_str());
+                seed_offset.c_str());
         }
         if (m == "generate_from_keys") {
+            std::string spendkey = json_str(params, "spendkey");
+            std::string viewkey = json_str(params, "viewkey");
+            std::string pw = json_str(params, "password");
+            auto wipe_guard = epee::misc_utils::create_scope_leave_handler([&]{
+                memwipe(spendkey.data(), spendkey.size());
+                memwipe(viewkey.data(), viewkey.size());
+                memwipe(pw.data(), pw.size());
+            });
             return wallet2_ffi_generate_from_keys(w,
                 json_str(params, "filename").c_str(),
                 json_str(params, "address").c_str(),
-                json_str(params, "spendkey").c_str(),
-                json_str(params, "viewkey").c_str(),
-                json_str(params, "password").c_str(),
+                spendkey.c_str(),
+                viewkey.c_str(),
+                pw.c_str(),
                 json_str(params, "language").c_str(),
                 json_u64(params, "restore_height"));
         }
@@ -3493,8 +3477,7 @@ char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* pa
             }
             return wallet2_ffi_transfer(w, buf.GetString(),
                 json_u32(params, "priority"),
-                json_u32(params, "account_index"),
-                json_u32(params, "ring_size"));
+                json_u32(params, "account_index"));
         }
         if (m == "transfer_split") return dispatch_transfer_split(w, params);
         if (m == "sign_transfer") return dispatch_sign_transfer(w, params);
@@ -3553,8 +3536,7 @@ char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* pa
         if (m == "check_tx_key") return dispatch_check_tx_key(w, params);
         if (m == "get_tx_proof") return dispatch_get_tx_proof(w, params);
         if (m == "check_tx_proof") return dispatch_check_tx_proof(w, params);
-        if (m == "get_spend_proof") return dispatch_get_spend_proof(w, params);
-        if (m == "check_spend_proof") return dispatch_check_spend_proof(w, params);
+
         if (m == "get_reserve_proof") return dispatch_get_reserve_proof(w, params);
         if (m == "check_reserve_proof") return dispatch_check_reserve_proof(w, params);
 
@@ -3613,14 +3595,460 @@ char* wallet2_ffi_json_rpc(wallet2_handle* w, const char* method, const char* pa
         // PQC Multisig
         if (m == "create_pqc_multisig_group") return dispatch_create_pqc_multisig_group(w, params);
         if (m == "get_pqc_multisig_info") return dispatch_get_pqc_multisig_info(w, params);
-        if (m == "sign_multisig_partial") return dispatch_sign_multisig_partial(w, params);
-        if (m == "import_multisig_signatures") return dispatch_import_multisig_signatures(w, params);
 
         // Not yet implemented methods return a structured error
         w->set_error(-32601, "Method not implemented: " + m);
         return nullptr;
     } catch (const std::exception& e) {
         w->set_error_from_exception(e, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
+        return nullptr;
+    }
+}
+
+// ── Split transfer pipeline ──────────────────────────────────────────────────
+
+// hex encode 32-byte key
+static void rct_key_to_hex(const rct::key& k, char out[65])
+{
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < 32; ++i) {
+        out[i*2]   = hex[(k.bytes[i] >> 4) & 0xf];
+        out[i*2+1] = hex[k.bytes[i] & 0xf];
+    }
+    out[64] = '\0';
+}
+
+static void add_hex_key(rj::Value& obj, const char* name, const rct::key& k, rj::Document::AllocatorType& alloc)
+{
+    char hex[65];
+    rct_key_to_hex(k, hex);
+    obj.AddMember(rj::Value(name, alloc), rj::Value(hex, 64, alloc), alloc);
+}
+
+static void add_hex_bytes(rj::Value& obj, const char* name, const uint8_t* data, size_t len, rj::Document::AllocatorType& alloc)
+{
+    std::string hex = epee::string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(data), len));
+    obj.AddMember(rj::Value(name, alloc), rj::Value(hex.c_str(), alloc), alloc);
+}
+
+char* wallet2_ffi_prepare_transfer(wallet2_handle* w,
+                                   const char* destinations_json,
+                                   uint32_t priority,
+                                   uint32_t account_index)
+{
+    if (!w || !w->wallet) {
+        if (w) w->set_error(WALLET_RPC_ERROR_CODE_NOT_OPEN, "No wallet file");
+        return nullptr;
+    }
+    w->clear_error();
+
+    if (!tools::fee_priority_utilities::is_valid(priority)) {
+        w->set_error(WALLET_RPC_ERROR_CODE_INVALID_FEE_PRIORITY, "Invalid priority (0-4)");
+        return nullptr;
+    }
+
+    rj::Document dests_doc;
+    if (dests_doc.Parse(destinations_json).HasParseError() || !dests_doc.IsArray()) {
+        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "Invalid destinations JSON");
+        return nullptr;
+    }
+
+    std::vector<cryptonote::tx_destination_entry> dsts;
+    std::vector<uint8_t> extra;
+
+    for (rj::SizeType i = 0; i < dests_doc.Size(); ++i) {
+        const auto& d = dests_doc[i];
+        if (!d.HasMember("address") || !d.HasMember("amount")) {
+            w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "Each destination must have address and amount");
+            return nullptr;
+        }
+        cryptonote::address_parse_info info;
+        if (!cryptonote::get_account_address_from_str(info, w->wallet->nettype(), d["address"].GetString())) {
+            w->set_error(WALLET_RPC_ERROR_CODE_WRONG_ADDRESS,
+                         std::string("Invalid address: ") + d["address"].GetString());
+            return nullptr;
+        }
+        dsts.emplace_back(d["amount"].GetUint64(), info.address, info.is_subaddress);
+    }
+
+    if (dsts.empty()) {
+        w->set_error(WALLET_RPC_ERROR_CODE_ZERO_DESTINATION, "No destinations");
+        return nullptr;
+    }
+
+    try {
+        const tools::fee_priority fp = w->wallet->adjust_priority(tools::fee_priority_utilities::from_integral(priority));
+        std::set<uint32_t> subaddr_indices;
+
+        // Enable native-sign mode: transfer_selected_rct will skip C++ proof
+        // generation and store signing data for the Rust shekyl-tx-builder.
+        w->wallet->m_native_sign_mode = true;
+        auto disable_native_mode = epee::misc_utils::create_scope_leave_handler([&]() {
+            w->wallet->m_native_sign_mode = false;
+        });
+
+        std::vector<tools::wallet2::pending_tx> ptx_vector =
+            w->wallet->create_transactions_2(dsts, fp, extra, account_index, subaddr_indices);
+
+        if (ptx_vector.empty()) {
+            w->set_error(WALLET_RPC_ERROR_CODE_TX_NOT_POSSIBLE, "No transaction created");
+            return nullptr;
+        }
+        if (ptx_vector.size() != 1) {
+            w->set_error(WALLET_RPC_ERROR_CODE_TX_TOO_LARGE, "Transaction too large, use transfer_split");
+            return nullptr;
+        }
+
+        auto& nss = w->wallet->m_native_sign_state;
+        if (!nss.valid) {
+            w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "Native sign state not populated");
+            return nullptr;
+        }
+
+        // Store the pending_tx for finalize
+        nss.ptx = ptx_vector[0];
+
+        // Serialize the tx prefix as hex blob for finalize
+        std::string tx_blob = t_serializable_object_to_blob(ptx_vector[0].tx);
+        nss.tx_blob_hex = epee::string_tools::buff_to_hex_nodelimer(tx_blob);
+
+        // Build JSON response matching Rust SpendInput/OutputInfo/TreeContext
+        rj::Document doc;
+        doc.SetObject();
+        auto& alloc = doc.GetAllocator();
+
+        // tx_prefix_hash
+        {
+            std::string hex = epee::string_tools::pod_to_hex(nss.tx_prefix_hash);
+            doc.AddMember("tx_prefix_hash", rj::Value(hex.c_str(), alloc), alloc);
+        }
+
+        // inputs: array of SpendInput-compatible objects
+        rj::Value inputs_arr(rj::kArrayType);
+        for (size_t i = 0; i < nss.inputs.size(); ++i) {
+            const auto& inp = nss.inputs[i];
+            rj::Value inp_obj(rj::kObjectType);
+
+            add_hex_key(inp_obj, "output_key", inp.output_key, alloc);
+            add_hex_key(inp_obj, "commitment", inp.commitment, alloc);
+            inp_obj.AddMember("amount", inp.amount, alloc);
+            add_hex_key(inp_obj, "spend_key_x", inp.spend_key_x, alloc);
+            add_hex_key(inp_obj, "spend_key_y", inp.spend_key_y, alloc);
+            add_hex_key(inp_obj, "h_pqc", inp.h_pqc, alloc);
+
+            // Per-input combined_ss + output_index for Rust-side PQC signing
+            if (i < nss.permuted_transfers.size()) {
+                const auto& td_ffi = w->wallet->get_transfer_details(nss.permuted_transfers[i]);
+                add_hex_bytes(inp_obj, "combined_ss",
+                    td_ffi.m_combined_shared_secret.data(), 64, alloc);
+                inp_obj.AddMember("output_index",
+                    static_cast<uint64_t>(td_ffi.m_internal_output_index), alloc);
+            } else {
+                inp_obj.AddMember("combined_ss", rj::Value("", alloc), alloc);
+                inp_obj.AddMember("output_index", 0u, alloc);
+            }
+
+            // leaf_chunk: array of LeafEntry
+            rj::Value leaf_arr(rj::kArrayType);
+            for (const auto& le : inp.leaf_chunk) {
+                rj::Value le_obj(rj::kObjectType);
+                add_hex_key(le_obj, "output_key", le.output_key, alloc);
+                add_hex_key(le_obj, "key_image_gen", le.key_image_gen, alloc);
+                add_hex_key(le_obj, "commitment", le.commitment, alloc);
+                add_hex_key(le_obj, "h_pqc", le.h_pqc, alloc);
+                leaf_arr.PushBack(le_obj, alloc);
+            }
+            inp_obj.AddMember("leaf_chunk", leaf_arr, alloc);
+
+            // c1_layers: array of arrays of hex-encoded 32-byte keys
+            rj::Value c1_arr(rj::kArrayType);
+            for (const auto& layer : inp.c1_layers) {
+                rj::Value layer_arr(rj::kArrayType);
+                for (const auto& k : layer) {
+                    char hex[65];
+                    rct_key_to_hex(k, hex);
+                    layer_arr.PushBack(rj::Value(hex, 64, alloc), alloc);
+                }
+                c1_arr.PushBack(layer_arr, alloc);
+            }
+            inp_obj.AddMember("c1_layers", c1_arr, alloc);
+
+            // c2_layers
+            rj::Value c2_arr(rj::kArrayType);
+            for (const auto& layer : inp.c2_layers) {
+                rj::Value layer_arr(rj::kArrayType);
+                for (const auto& k : layer) {
+                    char hex[65];
+                    rct_key_to_hex(k, hex);
+                    layer_arr.PushBack(rj::Value(hex, 64, alloc), alloc);
+                }
+                c2_arr.PushBack(layer_arr, alloc);
+            }
+            inp_obj.AddMember("c2_layers", c2_arr, alloc);
+
+            inputs_arr.PushBack(inp_obj, alloc);
+        }
+        doc.AddMember("inputs", inputs_arr, alloc);
+
+        // outputs: array of OutputInfo-compatible objects
+        rj::Value outputs_arr(rj::kArrayType);
+        for (const auto& out : nss.outputs) {
+            rj::Value out_obj(rj::kObjectType);
+            add_hex_key(out_obj, "dest_key", out.dest_key, alloc);
+            out_obj.AddMember("amount", out.amount, alloc);
+            add_hex_key(out_obj, "commitment_mask", out.commitment_mask, alloc);
+            outputs_arr.PushBack(out_obj, alloc);
+        }
+        doc.AddMember("outputs", outputs_arr, alloc);
+
+        doc.AddMember("fee", nss.fee, alloc);
+
+        // tree: TreeContext
+        rj::Value tree_obj(rj::kObjectType);
+        {
+            std::string hex = epee::string_tools::pod_to_hex(nss.reference_block);
+            tree_obj.AddMember("reference_block", rj::Value(hex.c_str(), alloc), alloc);
+        }
+        {
+            std::string hex = epee::string_tools::pod_to_hex(nss.curve_tree_root);
+            tree_obj.AddMember("tree_root", rj::Value(hex.c_str(), alloc), alloc);
+        }
+        tree_obj.AddMember("tree_depth", nss.tree_depth, alloc);
+        doc.AddMember("tree", tree_obj, alloc);
+
+        doc.AddMember("tx_blob", rj::Value(nss.tx_blob_hex.c_str(), alloc), alloc);
+
+        return json_to_string(doc);
+    } catch (const std::exception& e) {
+        w->set_error_from_exception(e, WALLET_RPC_ERROR_CODE_GENERIC_TRANSFER_ERROR);
+        return nullptr;
+    }
+}
+
+// Parse a hex string into 32 bytes. Returns false on failure.
+static bool hex_to_key(const char* hex, size_t hex_len, rct::key& out)
+{
+    if (hex_len != 64) return false;
+    std::string bin;
+    auto wiper = epee::misc_utils::create_scope_leave_handler([&]{ memwipe(bin.data(), bin.size()); });
+    if (!epee::string_tools::parse_hexstr_to_binbuff(std::string(hex, hex_len), bin) || bin.size() != 32)
+        return false;
+    memcpy(out.bytes, bin.data(), 32);
+    return true;
+}
+
+// Read a Monero-style varint from a byte buffer. Returns 0 on underflow.
+static uint64_t read_varint(const uint8_t* data, size_t len, size_t& offset)
+{
+    uint64_t result = 0;
+    unsigned shift = 0;
+    while (offset < len) {
+        uint8_t b = data[offset++];
+        result |= static_cast<uint64_t>(b & 0x7f) << shift;
+        if ((b & 0x80) == 0) return result;
+        shift += 7;
+        if (shift >= 64) break;
+    }
+    return result;
+}
+
+char* wallet2_ffi_finalize_transfer(wallet2_handle* w,
+                                    const char* signed_proofs_json,
+                                    const char* tx_blob_hex)
+{
+    if (!w || !w->wallet || !signed_proofs_json || !tx_blob_hex) {
+        if (w) w->set_error(WALLET_RPC_ERROR_CODE_NOT_OPEN, "No wallet file or missing arguments");
+        return nullptr;
+    }
+    w->clear_error();
+
+    try {
+        auto& nss = w->wallet->m_native_sign_state;
+        if (!nss.valid) {
+            w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
+                "No pending native-sign transaction. Call wallet2_ffi_prepare_transfer first.");
+            return nullptr;
+        }
+
+        auto cleanup = epee::misc_utils::create_scope_leave_handler([&nss]() {
+            nss.clear();
+        });
+
+        // Parse the Rust-generated SignedProofs JSON
+        rj::Document proofs_doc;
+        if (proofs_doc.Parse(signed_proofs_json).HasParseError() || !proofs_doc.IsObject()) {
+            w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "Invalid signed_proofs_json");
+            return nullptr;
+        }
+
+        auto& tx = nss.ptx.tx;
+        const size_t num_inputs = tx.vin.size();
+
+        // Insert commitments → outPk masks
+        if (proofs_doc.HasMember("commitments") && proofs_doc["commitments"].IsArray()) {
+            const auto& comms = proofs_doc["commitments"];
+            for (rj::SizeType i = 0; i < comms.Size() && i < tx.rct_signatures.outPk.size(); ++i)
+                hex_to_key(comms[i].GetString(), comms[i].GetStringLength(), tx.rct_signatures.outPk[i].mask);
+        }
+
+        // Insert Bulletproofs+: parse Rust blob (A A1 B r1 s1 d1 varint(L) L[] varint(R) R[])
+        // and reconstruct the C++ BulletproofPlus struct (which also includes V from commitments)
+        if (proofs_doc.HasMember("bulletproof_plus") && proofs_doc["bulletproof_plus"].IsString()) {
+            std::string bp_bin;
+            epee::string_tools::parse_hexstr_to_binbuff(proofs_doc["bulletproof_plus"].GetString(), bp_bin);
+            const uint8_t* bp_data = reinterpret_cast<const uint8_t*>(bp_bin.data());
+            size_t bp_len = bp_bin.size();
+            size_t bp_off = 0;
+
+            rct::BulletproofPlus bpp{};
+
+            // V = outPk masks (uncofactored commitments needed by verifier).
+            // The Rust proof stores cofactored (8*C) in commitments; divide by 8.
+            // C++ stores V as raw C before scalarmult8. For V, use the outPk values
+            // divided by cofactor. However, the standard approach is: V = outPk[i].mask
+            // which are already the cofactored values — and that's what the C++ verifier
+            // expects in V. Copy directly from outPk.
+            bpp.V.resize(tx.rct_signatures.outPk.size());
+            for (size_t i = 0; i < tx.rct_signatures.outPk.size(); ++i)
+                bpp.V[i] = tx.rct_signatures.outPk[i].mask;
+
+            if (bp_off + 192 <= bp_len) {
+                memcpy(bpp.A.bytes,  bp_data + bp_off, 32); bp_off += 32;
+                memcpy(bpp.A1.bytes, bp_data + bp_off, 32); bp_off += 32;
+                memcpy(bpp.B.bytes,  bp_data + bp_off, 32); bp_off += 32;
+                memcpy(bpp.r1.bytes, bp_data + bp_off, 32); bp_off += 32;
+                memcpy(bpp.s1.bytes, bp_data + bp_off, 32); bp_off += 32;
+                memcpy(bpp.d1.bytes, bp_data + bp_off, 32); bp_off += 32;
+            }
+
+            uint64_t l_len = read_varint(bp_data, bp_len, bp_off);
+            bpp.L.resize(l_len);
+            for (uint64_t i = 0; i < l_len && bp_off + 32 <= bp_len; ++i) {
+                memcpy(bpp.L[i].bytes, bp_data + bp_off, 32);
+                bp_off += 32;
+            }
+
+            uint64_t r_len = read_varint(bp_data, bp_len, bp_off);
+            bpp.R.resize(r_len);
+            for (uint64_t i = 0; i < r_len && bp_off + 32 <= bp_len; ++i) {
+                memcpy(bpp.R[i].bytes, bp_data + bp_off, 32);
+                bp_off += 32;
+            }
+
+            tx.rct_signatures.p.bulletproofs_plus.clear();
+            tx.rct_signatures.p.bulletproofs_plus.push_back(std::move(bpp));
+        }
+
+        // Insert encrypted amounts (9 bytes each: 8 amount + 1 tag)
+        if (proofs_doc.HasMember("enc_amounts") && proofs_doc["enc_amounts"].IsArray()) {
+            const auto& ecdh = proofs_doc["enc_amounts"];
+            tx.rct_signatures.enc_amounts.resize(ecdh.Size());
+            for (rj::SizeType i = 0; i < ecdh.Size(); ++i) {
+                std::string bin;
+                epee::string_tools::parse_hexstr_to_binbuff(ecdh[i].GetString(), bin);
+                tx.rct_signatures.enc_amounts[i].fill(0);
+                if (bin.size() >= 8)
+                    memcpy(tx.rct_signatures.enc_amounts[i].data(), bin.data(), std::min<size_t>(bin.size(), 9));
+            }
+        }
+
+        // Insert pseudo-outs
+        if (proofs_doc.HasMember("pseudo_outs") && proofs_doc["pseudo_outs"].IsArray()) {
+            const auto& po = proofs_doc["pseudo_outs"];
+            tx.rct_signatures.p.pseudoOuts.resize(po.Size());
+            for (rj::SizeType i = 0; i < po.Size(); ++i)
+                hex_to_key(po[i].GetString(), po[i].GetStringLength(), tx.rct_signatures.p.pseudoOuts[i]);
+        }
+
+        // Insert FCMP++ proof
+        if (proofs_doc.HasMember("fcmp_proof") && proofs_doc["fcmp_proof"].IsString()) {
+            std::string proof_bin;
+            epee::string_tools::parse_hexstr_to_binbuff(proofs_doc["fcmp_proof"].GetString(), proof_bin);
+            tx.rct_signatures.p.fcmp_pp_proof.assign(proof_bin.begin(), proof_bin.end());
+        }
+
+        // Insert tree metadata
+        if (proofs_doc.HasMember("tree_depth"))
+            tx.rct_signatures.p.curve_trees_tree_depth = proofs_doc["tree_depth"].GetUint();
+        if (proofs_doc.HasMember("reference_block") && proofs_doc["reference_block"].IsString()) {
+            std::string bin;
+            epee::string_tools::parse_hexstr_to_binbuff(proofs_doc["reference_block"].GetString(), bin);
+            if (bin.size() == 32)
+                memcpy(&tx.rct_signatures.referenceBlock, bin.data(), 32);
+        }
+
+        // PQC signing: derive keypair and sign in Rust — secret key never in C++
+        tx.pqc_auths.resize(num_inputs);
+        for (size_t i = 0; i < num_inputs; ++i)
+        {
+            if (i >= nss.permuted_transfers.size())
+            {
+                w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
+                    "Missing permuted transfer index for input " + std::to_string(i));
+                return nullptr;
+            }
+            const auto& td_fin = w->wallet->get_transfer_details(nss.permuted_transfers[i]);
+            if (!td_fin.m_combined_shared_secret_set)
+            {
+                w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
+                    "Missing combined shared secret for input " + std::to_string(i));
+                return nullptr;
+            }
+
+            tx.pqc_auths[i].auth_version = 1;
+            tx.pqc_auths[i].scheme_id = 1;
+            tx.pqc_auths[i].flags = 0;
+
+            std::string payload_blob;
+            if (!cryptonote::get_transaction_signed_payload(tx, i, payload_blob))
+            {
+                w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
+                    "Failed to build PQC signed payload for input " + std::to_string(i));
+                return nullptr;
+            }
+            crypto::hash payload_hash;
+            cryptonote::get_blob_hash(payload_blob, payload_hash);
+
+            ShekylPqcAuthResult auth = shekyl_sign_pqc_auth(
+                td_fin.m_combined_shared_secret.data(),
+                static_cast<uint64_t>(td_fin.m_internal_output_index),
+                reinterpret_cast<const uint8_t*>(payload_hash.data),
+                sizeof(payload_hash.data));
+            if (!auth.success)
+            {
+                w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
+                    "PQC signing failed for input " + std::to_string(i));
+                return nullptr;
+            }
+            tx.pqc_auths[i].hybrid_public_key.assign(auth.hybrid_public_key.ptr,
+                auth.hybrid_public_key.ptr + auth.hybrid_public_key.len);
+            tx.pqc_auths[i].hybrid_signature.assign(auth.signature.ptr,
+                auth.signature.ptr + auth.signature.len);
+            shekyl_pqc_auth_result_free(&auth);
+        }
+
+        tx.invalidate_hashes();
+
+        // Commit and broadcast
+        std::vector<tools::wallet2::pending_tx> ptx_vec;
+        ptx_vec.push_back(std::move(nss.ptx));
+        w->wallet->commit_tx(ptx_vec);
+
+        auto& committed = ptx_vec[0];
+        std::string tx_hash = epee::string_tools::pod_to_hex(
+            cryptonote::get_transaction_hash(committed.tx));
+        uint64_t fee = committed.fee;
+
+        rj::Document result_doc;
+        result_doc.SetObject();
+        auto& alloc = result_doc.GetAllocator();
+        result_doc.AddMember("tx_hash", rj::Value(tx_hash.c_str(), alloc), alloc);
+        result_doc.AddMember("fee", fee, alloc);
+
+        return json_to_string(result_doc);
+    } catch (const std::exception& e) {
+        w->wallet->m_native_sign_state.clear();
+        w->set_error_from_exception(e, WALLET_RPC_ERROR_CODE_GENERIC_TRANSFER_ERROR);
         return nullptr;
     }
 }

@@ -29,7 +29,9 @@
 #include <atomic>
 #include <cstdio>
 #include <algorithm>
+#include <chrono>
 #include <fstream>
+#include <thread>
 
 #include <chrono>
 #include <thread>
@@ -45,8 +47,8 @@
 #include "include_base_utils.h"
 #include "cryptonote_core/cryptonote_core.h"
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "bcutil"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "bcutil"
 
 namespace
 {

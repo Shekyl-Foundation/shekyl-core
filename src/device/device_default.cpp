@@ -32,11 +32,10 @@
 
 #include "device_default.hpp"
 #include "int-util.h"
-#include "crypto/wallet/crypto.h"
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/subaddress_index.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
-#include "ringct/rctOps.h"
+#include "fcmp/rctOps.h"
 #include "cryptonote_config.h"
 
 namespace hw {
@@ -119,10 +118,6 @@ namespace hw {
         /* ======================================================================= */
         /*                               SUB ADDRESS                               */
         /* ======================================================================= */
-
-        bool device_default::derive_subaddress_public_key(const crypto::public_key &out_key, const crypto::key_derivation &derivation, const std::size_t output_index, crypto::public_key &derived_key) {
-            return crypto::wallet::derive_subaddress_public_key(out_key, derivation, output_index,derived_key);
-        }
 
         crypto::public_key device_default::get_subaddress_spend_public_key(const cryptonote::account_keys& keys, const cryptonote::subaddress_index &index) {
             if (index.is_zero())
@@ -237,21 +232,7 @@ namespace hw {
         }
 
         bool device_default::generate_key_derivation(const crypto::public_key &key1, const crypto::secret_key &key2, crypto::key_derivation &derivation) {
-            return crypto::wallet::generate_key_derivation(key1, key2, derivation);
-        }
-
-        bool device_default::derivation_to_scalar(const crypto::key_derivation &derivation, const size_t output_index, crypto::ec_scalar &res){
-            crypto::derivation_to_scalar(derivation,output_index, res);
-            return true;
-        }
-
-        bool device_default::derive_secret_key(const crypto::key_derivation &derivation, const std::size_t output_index, const crypto::secret_key &base, crypto::secret_key &derived_key){
-            crypto::derive_secret_key(derivation, output_index, base, derived_key);
-            return true;
-        }
-
-        bool device_default::derive_public_key(const crypto::key_derivation &derivation, const std::size_t output_index, const crypto::public_key &base, crypto::public_key &derived_key){
-            return crypto::derive_public_key(derivation, output_index, base, derived_key);
+            return crypto::generate_key_derivation(key1, key2, derivation);
         }
 
         bool device_default::secret_key_to_public_key(const crypto::secret_key &sec, crypto::public_key &pub) {
@@ -263,23 +244,13 @@ namespace hw {
             return true;
         }
 
-        bool device_default::derive_view_tag(const crypto::key_derivation &derivation, const std::size_t output_index, crypto::view_tag &view_tag) {
-            crypto::derive_view_tag(derivation, output_index, view_tag);
-            return true;
-        }
-
-        bool device_default::conceal_derivation(crypto::key_derivation &derivation, const crypto::public_key &tx_pub_key, const std::vector<crypto::public_key> &additional_tx_pub_keys, const crypto::key_derivation &main_derivation, const std::vector<crypto::key_derivation> &additional_derivations){
+        bool device_default::conceal_derivation(crypto::key_derivation &derivation, const crypto::public_key &tx_pub_key, const crypto::key_derivation &main_derivation){
             return true;
         }
 
         /* ======================================================================= */
         /*                               TRANSACTION                               */
-        /* ======================================================================= */
-        void device_default::generate_tx_proof(const crypto::hash &prefix_hash, 
-                                               const crypto::public_key &R, const crypto::public_key &A, const std::optional<crypto::public_key> &B, const crypto::public_key &D, const crypto::secret_key &r, 
-                                               crypto::signature &sig) {
-            crypto::generate_tx_proof(prefix_hash, R, A, B, D, r, sig);
-        }
+        // generate_tx_proof removed (KEM-based proofs in Rust)
 
         bool device_default::open_tx(crypto::secret_key &tx_key) {
             cryptonote::keypair txkey = cryptonote::keypair::generate(*this);
@@ -291,65 +262,6 @@ namespace hw {
             cryptonote::get_transaction_prefix_hash(tx, h);
         }
 
-        bool device_default::generate_output_ephemeral_keys(const size_t tx_version,
-                                                            const cryptonote::account_keys &sender_account_keys, const crypto::public_key &txkey_pub,  const crypto::secret_key &tx_key,
-                                                            const cryptonote::tx_destination_entry &dst_entr, const std::optional<cryptonote::account_public_address> &change_addr, const size_t output_index,
-                                                            const bool &need_additional_txkeys, const std::vector<crypto::secret_key> &additional_tx_keys,
-                                                            std::vector<crypto::public_key> &additional_tx_public_keys,
-                                                            std::vector<rct::key> &amount_keys,  crypto::public_key &out_eph_public_key,
-                                                            const bool use_view_tags, crypto::view_tag &view_tag) {
-
-            crypto::key_derivation derivation;
-
-            // make additional tx pubkey if necessary
-            cryptonote::keypair additional_txkey;
-            if (need_additional_txkeys)
-            {
-                additional_txkey.sec = additional_tx_keys[output_index];
-                if (dst_entr.is_subaddress)
-                    additional_txkey.pub = rct::rct2pk(rct::scalarmultKey(rct::pk2rct(dst_entr.addr.m_spend_public_key), rct::sk2rct(additional_txkey.sec)));
-                else
-                    additional_txkey.pub = rct::rct2pk(rct::scalarmultBase(rct::sk2rct(additional_txkey.sec)));
-            }
-
-            bool r;
-            if (change_addr && dst_entr.addr == *change_addr)
-            {
-            // sending change to yourself; derivation = a*R
-                r = generate_key_derivation(txkey_pub, sender_account_keys.m_view_secret_key, derivation);
-                CHECK_AND_ASSERT_MES(r, false, "at creation outs: failed to generate_key_derivation(" << txkey_pub << ", <viewkey>)");
-            }
-            else
-            {
-            // sending to the recipient; derivation = r*A (or s*C in the subaddress scheme)
-                const crypto::secret_key &tx_privkey{dst_entr.is_subaddress && need_additional_txkeys ? additional_txkey.sec : tx_key};
-                r = generate_key_derivation(dst_entr.addr.m_view_public_key, tx_privkey, derivation);
-                CHECK_AND_ASSERT_MES(r, false, "at creation outs: failed to generate_key_derivation("
-                    << dst_entr.addr.m_view_public_key << ", " << crypto::secret_key_explicit_print_ref{tx_privkey} << ")");
-            }
-
-            if (need_additional_txkeys)
-            {
-                additional_tx_public_keys.push_back(additional_txkey.pub);
-            }
-
-            if (tx_version > 1)
-            {
-                crypto::secret_key scalar1;
-                derivation_to_scalar(derivation, output_index, scalar1);
-                amount_keys.push_back(rct::sk2rct(scalar1));
-            }
-
-            if (use_view_tags)
-            {
-                derive_view_tag(derivation, output_index, view_tag);
-            }
-
-            r = derive_public_key(derivation, output_index, dst_entr.addr.m_spend_public_key, out_eph_public_key);
-            CHECK_AND_ASSERT_MES(r, false, "at creation outs: failed to derive_public_key(" << derivation << ", " << output_index << ", "<< dst_entr.addr.m_spend_public_key << ")");
-
-            return r;
-        }
 
         bool  device_default::encrypt_payment_id(crypto::hash8 &payment_id, const crypto::public_key &public_key, const crypto::secret_key &secret_key) {
             crypto::key_derivation derivation;
@@ -369,43 +281,29 @@ namespace hw {
             return true;
         }
 
-        rct::key device_default::genCommitmentMask(const rct::key &amount_key) {
-            return rct::genCommitmentMask(amount_key);
-        }
-
-        bool  device_default::ecdhEncode(rct::ecdhTuple & unmasked, const rct::key & sharedSec, bool short_amount) {
-            rct::ecdhEncode(unmasked, sharedSec, short_amount);
-            return true;
-        }
-
-        bool  device_default::ecdhDecode(rct::ecdhTuple & masked, const rct::key & sharedSec, bool short_amount) {
-            rct::ecdhDecode(masked, sharedSec, short_amount);
-            return true;
-        }
-
-        bool device_default::mlsag_prepare(const rct::key &H, const rct::key &xx,
+        bool device_default::tx_prepare(const rct::key &H, const rct::key &xx,
                                          rct::key &a, rct::key &aG, rct::key &aHP, rct::key &II) {
             rct::skpkGen(a, aG);
             rct::scalarmultKey(aHP, H, a);
             rct::scalarmultKey(II, H, xx);
             return true;
         }
-        bool  device_default::mlsag_prepare(rct::key &a, rct::key &aG) {
+        bool  device_default::tx_prepare(rct::key &a, rct::key &aG) {
             rct::skpkGen(a, aG);
             return true;
         }
-        bool  device_default::mlsag_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size, const rct::keyV &hashes, const rct::ctkeyV &outPk, rct::key &prehash) {
+        bool  device_default::tx_prehash(const std::string &blob, size_t inputs_size, size_t outputs_size, const rct::keyV &hashes, const rct::ctkeyV &outPk, rct::key &prehash) {
             prehash = rct::cn_fast_hash(hashes);
             return true;
         }
 
 
-        bool device_default::mlsag_hash(const rct::keyV &toHash, rct::key &c_old) {
+        bool device_default::tx_hash(const rct::keyV &toHash, rct::key &c_old) {
             c_old = rct::hash_to_scalar(toHash);
             return true;
         }
 
-        bool device_default::mlsag_sign(const rct::key &c,  const rct::keyV &xx, const rct::keyV &alpha, const size_t rows, const size_t dsRows, rct::keyV &ss ) {
+        bool device_default::tx_sign(const rct::key &c,  const rct::keyV &xx, const rct::keyV &alpha, const size_t rows, const size_t dsRows, rct::keyV &ss ) {
             CHECK_AND_ASSERT_THROW_MES(dsRows<=rows, "dsRows greater than rows");
             CHECK_AND_ASSERT_THROW_MES(xx.size() == rows, "xx size does not match rows");
             CHECK_AND_ASSERT_THROW_MES(alpha.size() == rows, "alpha size does not match rows");
@@ -416,26 +314,15 @@ namespace hw {
             return true;
         }
 
-        bool device_default::clsag_prepare(const rct::key &p, const rct::key &z, rct::key &I, rct::key &D, const rct::key &H, rct::key &a, rct::key &aG, rct::key &aH) {
-            rct::skpkGen(a,aG); // aG = a*G
-            rct::scalarmultKey(aH,H,a); // aH = a*H
-            rct::scalarmultKey(I,H,p); // I = p*H
-            rct::scalarmultKey(D,H,z); // D = z*H
+        bool device_default::fcmp_prepare(const rct::key &tree_root, uint8_t tree_depth) {
             return true;
         }
 
-        bool device_default::clsag_hash(const rct::keyV &data, rct::key &hash) {
-            hash = rct::hash_to_scalar(data);
+        bool device_default::fcmp_proof_start(size_t num_inputs) {
             return true;
         }
 
-        bool device_default::clsag_sign(const rct::key &c, const rct::key &a, const rct::key &p, const rct::key &z, const rct::key &mu_P, const rct::key &mu_C, rct::key &s) {
-            rct::key s0_p_mu_P;
-            sc_mul(s0_p_mu_P.bytes,mu_P.bytes,p.bytes);
-            rct::key s0_add_z_mu_C;
-            sc_muladd(s0_add_z_mu_C.bytes,mu_C.bytes,z.bytes,s0_p_mu_P.bytes);
-            sc_mulsub(s.bytes,c.bytes,s0_add_z_mu_C.bytes,a.bytes);
-
+        bool device_default::fcmp_proof_add_input(const rct::key &key_image, const std::vector<uint8_t> &tree_path) {
             return true;
         }
 

@@ -46,8 +46,6 @@ void mock_daemon::init_options(boost::program_options::options_description & opt
   t_node_server::init_options(option_spec);
   cryptonote::core_rpc_server::init_options(option_spec);
 
-  command_line::add_arg(option_spec, daemon_args::arg_zmq_rpc_bind_ip);
-  command_line::add_arg(option_spec, daemon_args::arg_zmq_rpc_bind_port);
 }
 
 void mock_daemon::default_options(boost::program_options::variables_map & vm)
@@ -75,10 +73,6 @@ void mock_daemon::default_options(boost::program_options::variables_map & vm)
   auto rpc_port = std::string(test_rpc_port && strlen(test_rpc_port) > 0 ? test_rpc_port : "61341");
   tools::options::set_option(vm, cryptonote::core_rpc_server::arg_rpc_bind_port, po::variable_value(rpc_port, false));
 
-  const char *test_zmq_port = getenv("TEST_ZMQ_PORT");
-  auto zmq_port = std::string(test_zmq_port && strlen(test_zmq_port) > 0 ? test_zmq_port : "61342");
-  tools::options::set_option(vm, daemon_args::arg_zmq_rpc_bind_port, po::variable_value(zmq_port, false));
-
   po::notify(vm);
 }
 
@@ -87,7 +81,6 @@ void mock_daemon::set_ports(boost::program_options::variables_map & vm, unsigned
   CHECK_AND_ASSERT_THROW_MES(initial_port < 65535-2, "Invalid port number");
   tools::options::set_option(vm, nodetool::arg_p2p_bind_port, po::variable_value(std::to_string(initial_port), false));
   tools::options::set_option(vm, cryptonote::core_rpc_server::arg_rpc_bind_port, po::variable_value(std::to_string(initial_port + 1), false));
-  tools::options::set_option(vm, daemon_args::arg_zmq_rpc_bind_port, po::variable_value(std::to_string(initial_port + 2), false));
   po::notify(vm);
 }
 
@@ -95,7 +88,6 @@ void mock_daemon::load_params(boost::program_options::variables_map const & vm)
 {
   m_p2p_bind_port = command_line::get_arg(vm, nodetool::arg_p2p_bind_port);
   m_rpc_bind_port = command_line::get_arg(vm, cryptonote::core_rpc_server::arg_rpc_bind_port);
-  m_zmq_bind_port = command_line::get_arg(vm, daemon_args::arg_zmq_rpc_bind_port);
   m_network_type = command_line::get_arg(vm, cryptonote::arg_testnet_on) ? cryptonote::TESTNET : cryptonote::MAINNET;
 }
 
@@ -227,7 +219,6 @@ void mock_daemon::run()
 bool mock_daemon::run_main()
 {
   CHECK_AND_ASSERT_THROW_MES(!m_terminated, "Can't run stopped daemon");
-  CHECK_AND_ASSERT_THROW_MES(!m_start_zmq || m_start_p2p, "ZMQ requires P2P");
   boost::thread stop_thread = boost::thread([this] {
     while (!this->m_stopped)
       epee::misc_utils::sleep_no_w(100);
@@ -242,24 +233,6 @@ bool mock_daemon::run_main()
   try
   {
     CHECK_AND_ASSERT_THROW_MES(m_rpc_server.run(2, false), "Failed to start RPC");
-    cryptonote::rpc::DaemonHandler rpc_daemon_handler(*m_core, m_server);
-    cryptonote::rpc::ZmqServer zmq_server(rpc_daemon_handler);
-
-    if (m_start_zmq)
-    {
-      if (!zmq_server.init_rpc("127.0.0.1", m_zmq_bind_port))
-      {
-        MERROR("Failed to add TCP Socket (127.0.0.1:" << m_zmq_bind_port << ") to ZMQ RPC Server");
-
-        stop_rpc();
-        return false;
-      }
-
-      MINFO("Starting ZMQ server...");
-      zmq_server.run();
-
-      MINFO("ZMQ server started at 127.0.0.1: " << m_zmq_bind_port);
-    }
 
     if (m_start_p2p)
     {
@@ -270,9 +243,6 @@ bool mock_daemon::run_main()
       while (!this->m_stopped)
         epee::misc_utils::sleep_no_w(100);
     }
-
-    if (m_start_zmq)
-      zmq_server.stop();
 
     stop_rpc();
     return true;

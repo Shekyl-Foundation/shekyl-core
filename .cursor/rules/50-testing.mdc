@@ -1,0 +1,92 @@
+---
+description: Test gate discipline, including diagnostic output rules. Absorbs former debug-test guidance.
+globs:
+  - rust/**/tests/**
+  - tests/**
+  - "**/test*.rs"
+  - "**/test*.cpp"
+  - "**/*_test.rs"
+  - "**/*_test.cpp"
+---
+
+# Testing discipline
+
+## Property tests for cryptographic correctness
+
+Cryptographic operations have property tests that exercise the algebraic
+relations, not just specific values:
+
+- `construct_output → scan_output → recover` round-trips byte-for-byte
+- `prove → verify` accepts honest proofs and rejects malformed ones
+- `derive_output_secrets` is deterministic for fixed inputs
+
+Property tests run with `proptest::ProptestConfig::with_cases(N)` where:
+
+- N = 10,000 on every PR (CI gate)
+- N = 1,000,000 nightly with 30-minute wall-clock ceiling
+
+The wall-clock ceiling failing is itself a regression signal — if iterations
+got slower, find out why.
+
+## Test the production code, not a local re-implementation
+
+If a test defines local helpers that mirror production behavior, the test
+verifies the helpers, not the production code. Tests that exercise FFI
+surfaces must call the real FFI via `unsafe extern`, not a Rust-side
+reimplementation.
+
+## Test fixtures are spec-derived, not behavior-derived
+
+A fixture written as "whatever values make the existing test pass" will
+satisfy whatever rule the existing code happens to enforce, including a
+wrong rule. Fixtures must be derivable from the specification — for tree
+depth N, the branch-layer fixture is computed from N according to the
+documented tower structure, not observed empirically and pasted in.
+
+When a fixture and the code under test are both wrong in complementary ways,
+the test passes but verifies nothing. Surface this with property tests
+sampling unfamiliar values, FFI tests calling the production path, or review
+by someone who didn't write the code.
+
+## Test names describe properties, not implementations
+
+- `test_amount_zero_round_trip` — good (names the invariant)
+- `test_construct_output` — bad (names the function)
+
+A reader scanning test names should be able to enumerate the properties the
+system maintains without reading test bodies.
+
+## Diagnostic output: verbose on failure, never leaking secrets
+
+Tests should produce maximum useful diagnostic output when they fail —
+developers, not users, read it, and good diagnostics shorten the
+hypothesis-to-root-cause loop. But test diagnostics are also a privileged
+channel into program state, and these rules are non-negotiable:
+
+- **Never print, log, or `Debug`-format raw secret material.** Secret types
+  redact in their `Debug` impl (or don't derive `Debug` at all). The full
+  list lives in `35-secure-memory.mdc`.
+- **Plant canaries on error paths and assert their absence in error output.**
+  The "no 64-char hex in error messages" heuristic is a supplement, not a
+  replacement for explicit canary checks.
+- **Prefer structured failure messages over scattered prints.** Use
+  `proptest`'s shrinking output, `assert_eq!` with descriptive messages, or
+  `eprintln!` gated on the failure branch — not unconditional `println!` on
+  the happy path.
+- **`dbg!` is fine in development, never committed.** CI rejects `dbg!` in
+  merged code.
+
+If a test would benefit from emitting a value that *might* be secret-derived,
+treat that as a signal that the type is missing a redacted `Debug` and fix
+the type, not the test.
+
+## Audit tables in PR descriptions
+
+For changes that touch many sites (>10), the PR description includes:
+
+| Site | File:Line | Disposition | Rationale |
+|------|-----------|-------------|-----------|
+| ...  | ...       | correct/fixed/deleted | ... |
+
+The audit is done when every row has a disposition and the count matches the
+grep count. "Audit confirmed" without evidence is unfalsifiable.

@@ -44,8 +44,8 @@
 #include "file_io_utils.h"
 #include "shekyl/shekyl_ffi.h"
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "net.ssl"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "net.ssl"
 
 
 #if BOOST_VERSION >= 107300

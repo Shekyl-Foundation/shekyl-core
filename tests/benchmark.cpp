@@ -43,10 +43,6 @@
 #include <boost/spirit/include/karma_sequence.hpp>
 #include <boost/spirit/include/karma_string.hpp>
 #include <boost/spirit/include/karma_uint.hpp>
-#include <boost/spirit/include/qi_char.hpp>
-#include <boost/spirit/include/qi_list.hpp>
-#include <boost/spirit/include/qi_parse.hpp>
-#include <boost/spirit/include/qi_uint.hpp>
 #include <chrono>
 #include <cstring>
 #include <functional>
@@ -91,12 +87,6 @@
         {                                                                                                                                                                \
             return CRYPTO_FUNCTION(library, _generate_key_derivation) (out.data, tx_pub.data, view_sec.data) == 0;                                                       \
         }                                                                                                                                                                \
-        static bool derive_subaddress_public_key(const ::crypto::public_key &spend_pub, const ::crypto::key_derivation &d, std::size_t index, ::crypto::public_key &out) \
-        {                                                                                                                                                                \
-            ::crypto::ec_scalar scalar;                                                                                                                                  \
-            ::crypto::derivation_to_scalar(d, index, scalar);                                                                                                            \
-            return CRYPTO_FUNCTION(library, _generate_subaddress_public_key) (out.data, spend_pub.data, scalar.data) == 0;                                               \
-        }                                                                                                                                                                \
     };
 
 
@@ -118,7 +108,6 @@ namespace
     {
         static constexpr const char* name() noexcept { return "cn"; }
         FORWARD_FUNCTION( generate_key_derivation );
-        FORWARD_FUNCTION( derive_subaddress_public_key );
     };
 
     // Define functions for every library except for `cn` which is the head library.
@@ -225,123 +214,9 @@ namespace
         }
     };
 
-    /*! Tests the shared-secret to output-key step used for monero txes where
-        the users spend-public is always de-compressed. */
-    struct output_pub_standard
-    {
-        using result = std::vector<std::pair<std::chrono::steady_clock::duration, std::string>>;
-        static constexpr const char* name() noexcept { return "standard"; }
-
-        const bench_args args;
-
-        template<typename L>
-        result operator()(result out, const L library) const
-        {
-            crypto::key_derivation derived;
-            crypto::public_key us;
-            crypto::public_key them;
-            CHECK(crypto::generate_key_derivation(args.one.pub, args.two.sec, derived));
-            CHECK(library.derive_subaddress_public_key(args.two.pub, derived, 0, us));
-            CHECK(crypto::derive_subaddress_public_key(args.two.pub, derived, 0, them));
-            CHECK(compare(us, them));
-
-            unsigned i = 0;
-            for (unsigned j = 0; j < 100; ++j)
-                i += library.derive_subaddress_public_key(args.two.pub, derived, j, us);
-            CHECK(i == 100);
-
-            i = 0;
-            const auto start = std::chrono::steady_clock::now();
-            for (unsigned j = 0; j < args.iterations; ++j)
-                i += library.derive_subaddress_public_key(args.two.pub, derived, j, us);
-            const auto end = std::chrono::steady_clock::now();
-            CHECK(i == args.iterations);
-
-            out.push_back({end - start, library.name()});
-            return out;
-        }
-    };
-
-    //! Tests various possible optimizations for shared-secret to output-key step.
-    struct output_pub_suite
-    {
-        using result = std::vector<std::pair<output_pub_standard::result, std::string>>;
-        static constexpr const char* name() noexcept { return "derive_subaddress_public_key step"; }
-
-        const bench_args args;
-
-        result operator()() const
-        {
-            return run_benchmarks<result>(output_pub_standard{args});
-        }
-    };
-
-    struct tx_bench_args
-    {
-        const bench_args main;
-        unsigned outputs;
-    };
-
-    /*! Simulates "standard" tx scanning where a tx-pubkey is de-compressed into
-        a table and user spend-public is de-compressed, every time. */
-    struct tx_standard
-    {
-        using result = std::vector<std::pair<std::chrono::steady_clock::duration, std::string>>;
-        static constexpr const char* name() noexcept { return "standard"; }
-
-        const tx_bench_args args;
-
-        template<typename L>
-        result operator()(result out, const L library) const
-        {
-            crypto::key_derivation derived_us;
-            crypto::key_derivation derived_them;
-            crypto::public_key us;
-            crypto::public_key them;
-            CHECK(library.generate_key_derivation(args.main.one.pub, args.main.two.sec, derived_us));
-            CHECK(crypto::generate_key_derivation(args.main.one.pub, args.main.two.sec, derived_them));
-            CHECK(library.derive_subaddress_public_key(args.main.two.pub, derived_us, 0, us));
-            CHECK(crypto::derive_subaddress_public_key(args.main.two.pub, derived_them, 0, them));
-            CHECK(compare(us, them));
-
-            unsigned i = 0;
-            for (unsigned j = 0; j < 100; ++j)
-            {
-                i += library.generate_key_derivation(args.main.one.pub, args.main.two.sec, derived_us);
-                i += library.derive_subaddress_public_key(args.main.two.pub, derived_us, j, us);
-            }
-            CHECK(i == 200);
-
-            i = 0;
-            const auto start = std::chrono::steady_clock::now();
-            for (unsigned j = 0; j < args.main.iterations; ++j)
-            {
-                i += library.generate_key_derivation(args.main.one.pub, args.main.two.sec, derived_us);
-                for (unsigned k = 0; k < args.outputs; ++k)
-                    i += library.derive_subaddress_public_key(args.main.two.pub, derived_us, k, us);
-            }
-            const auto end = std::chrono::steady_clock::now();
-            CHECK(i == args.main.iterations + args.main.iterations * args.outputs);
-
-            out.push_back({end - start, library.name()});
-            return out;
-        }
-    };
-
-    //! Tests various possible optimizations for tx scanning.
-    struct tx_suite
-    {
-        using result = std::vector<std::pair<output_pub_standard::result, std::string>>;
-        std::string name() const { return "Transactions with " + std::to_string(args.outputs) + " outputs"; }
-
-        const tx_bench_args args;
-
-        result operator()() const
-        {
-            return run_benchmarks<result>(tx_standard{args});
-
-        }
-    };
+    // derive_subaddress_public_key and derivation_to_scalar removed in Shekyl v3.
+    // output_pub_standard, output_pub_suite, tx_standard, and tx_suite benchmarks
+    // depended on these functions and have been removed.
 
     std::chrono::steady_clock::duration print(const tx_pub_standard::result& leaf, std::ostream& out, unsigned depth)
     {
@@ -392,20 +267,7 @@ int main(int argc, char** argv)
     try
     {
         unsigned iterations = default_iterations;
-        std::vector<unsigned> nums{};
         if (2 <= argc) iterations = std::stoul(argv[1]);
-        if (3 <= argc)
-        {
-            namespace qi = boost::spirit::qi;
-            if (!qi::parse(argv[2], argv[2] + strlen(argv[2]), (qi::uint_ % ','), nums))
-                throw std::runtime_error{"bad tx outputs string"};
-        }
-        else
-        {
-            nums = {2, 4};
-        }
-        std::sort(nums.begin(), nums.end());
-        nums.erase(std::unique(nums.begin(), nums.end()), nums.end());
 
         std::cout << "Running benchmark using " << iterations << " iterations" << std::endl;
 
@@ -416,15 +278,6 @@ int main(int argc, char** argv)
         std::cout << "Transaction Component Benchmarks" << std::endl;
         std::cout << "--------------------------------" << std::endl;
         val.push_back(run_suite(tx_pub_suite{args}));
-        val.push_back(run_suite(output_pub_suite{args}));
-        std::sort(val.begin(), val.end());
-        print(val, std::cout, 0);
-
-        val.clear();
-        std::cout << "Transaction Benchmarks" << std::endl;
-        std::cout << "----------------------" << std::endl;
-        for (const unsigned num : nums)
-            val.push_back(run_suite(tx_suite{{args, num}}));
         std::sort(val.begin(), val.end());
         print(val, std::cout, 0);
     }

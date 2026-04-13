@@ -50,8 +50,12 @@
 #include "common/stack_trace.h"
 #endif // STACK_TRACE
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "daemon"
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
+
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "daemon"
 
 namespace po = boost::program_options;
 namespace bf = boost::filesystem;
@@ -130,6 +134,10 @@ int main(int argc, char const * argv[])
 
     tools::on_startup();
 
+#ifdef __linux__
+    prctl(PR_SET_DUMPABLE, 0);
+#endif
+
     epee::string_tools::set_module_name_and_folder(argv[0]);
 
     // Build argument description
@@ -155,10 +163,6 @@ int main(int argc, char const * argv[])
       command_line::add_arg(core_settings, daemon_args::arg_proxy);
       command_line::add_arg(core_settings, daemon_args::arg_proxy_allow_dns_leaks);
       command_line::add_arg(core_settings, daemon_args::arg_public_node);
-      command_line::add_arg(core_settings, daemon_args::arg_zmq_rpc_bind_ip);
-      command_line::add_arg(core_settings, daemon_args::arg_zmq_rpc_bind_port);
-      command_line::add_arg(core_settings, daemon_args::arg_zmq_pub);
-      command_line::add_arg(core_settings, daemon_args::arg_zmq_rpc_disabled);
       command_line::add_arg(core_settings, daemon_args::arg_no_rust_rpc);
 
       daemonizer::init_options(hidden_options, visible_options);

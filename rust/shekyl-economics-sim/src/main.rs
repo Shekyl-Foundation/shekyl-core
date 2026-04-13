@@ -5,6 +5,12 @@ use engine::{run_scenario, ScenarioResult, SimParams};
 use scenarios::all_scenarios;
 use std::io::Write;
 
+/// Runs all economics simulation scenarios and writes results as JSON to stdout.
+///
+/// **Output convention**: Machine-readable JSON goes to **stdout** (pipe-friendly).
+/// Human-readable progress and summaries go to **stderr** via `eprintln!`.
+/// This lets callers do `cargo run -p shekyl-economics-sim > results.json`
+/// while still seeing progress on the terminal.
 fn main() {
     let params = SimParams::default();
     let configs = all_scenarios(&params);

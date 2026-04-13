@@ -27,8 +27,14 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "net/levin_base.h"
+#include "net/levin_compression.h"
 
+#include "byte_slice.h"
+#include "byte_stream.h"
 #include "int-util.h"
+#include "misc_log_ex.h"
+
+#include <cstring>
 
 namespace epee
 {
@@ -64,6 +70,40 @@ namespace levin
     head.m_protocol_version = SWAP32LE(LEVIN_PROTOCOL_VER_1);
     head.m_flags = SWAP32LE(flags);
     return head;
+  }
+
+  byte_slice try_compress_message(byte_slice input)
+  {
+    if (!is_compression_available())
+      return input;
+
+    const auto data = to_span(input);
+    if (data.size() <= sizeof(bucket_head2))
+      return input;
+
+    bucket_head2 existing_head;
+    std::memcpy(&existing_head, data.data(), sizeof(existing_head));
+    if (SWAP32LE(existing_head.m_flags) & LEVIN_PACKET_COMPRESSED)
+      return input;
+
+    const span<const uint8_t> payload{data.data() + sizeof(bucket_head2), data.size() - sizeof(bucket_head2)};
+    if (payload.size() < COMPRESSION_MIN_PAYLOAD)
+      return input;
+
+    std::string compressed;
+    if (!compress_payload(payload, compressed))
+      return input;
+
+    bucket_head2 head;
+    std::memcpy(&head, data.data(), sizeof(head));
+    head.m_flags = SWAP32LE(SWAP32LE(head.m_flags) | LEVIN_PACKET_COMPRESSED);
+    head.m_cb = SWAP64LE(static_cast<uint64_t>(compressed.size()));
+
+    byte_stream out;
+    out.reserve(sizeof(head) + compressed.size());
+    out.write(reinterpret_cast<const uint8_t*>(&head), sizeof(head));
+    out.write(reinterpret_cast<const uint8_t*>(compressed.data()), compressed.size());
+    return byte_slice{std::move(out)};
   }
 
   byte_slice make_noise_notify(const std::size_t noise_bytes)

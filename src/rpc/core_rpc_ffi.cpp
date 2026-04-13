@@ -38,8 +38,8 @@
 #include <functional>
 #include <sstream>
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "daemon.rpc.ffi"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "daemon.rpc.ffi"
 
 using namespace cryptonote;
 
@@ -209,7 +209,6 @@ const std::unordered_map<std::string, json_fn>& get_json_table() {
         DJSON("/get_info",                          on_get_info,                     COMMAND_RPC_GET_INFO),
         DJSON("/getinfo",                           on_get_info,                     COMMAND_RPC_GET_INFO),
         DJSON("/get_limit",                         on_get_limit,                    COMMAND_RPC_GET_LIMIT),
-        DJSON("/get_outs",                          on_get_outs,                     COMMAND_RPC_GET_OUTPUTS),
         // Restricted-only endpoints (Rust checks restriction before calling)
         DJSON("/start_mining",                      on_start_mining,                 COMMAND_RPC_START_MINING),
         DJSON("/stop_mining",                       on_stop_mining,                  COMMAND_RPC_STOP_MINING),
@@ -240,7 +239,6 @@ const std::unordered_map<std::string, bin_fn>& get_bin_table() {
         DBIN("/get_hashes.bin",            on_get_hashes,                  COMMAND_RPC_GET_HASHES_FAST),
         DBIN("/gethashes.bin",             on_get_hashes,                  COMMAND_RPC_GET_HASHES_FAST),
         DBIN("/get_o_indexes.bin",         on_get_indexes,                 COMMAND_RPC_GET_TX_GLOBAL_OUTPUTS_INDEXES),
-        DBIN("/get_outs.bin",              on_get_outs_bin,                COMMAND_RPC_GET_OUTPUTS_BIN),
         DBIN("/get_output_distribution.bin", on_get_output_distribution_bin, COMMAND_RPC_GET_OUTPUT_DISTRIBUTION),
     };
     return t;
@@ -444,13 +442,7 @@ void core_rpc_ffi_destroy(core_rpc_handle* h)
 bool core_rpc_ffi_is_restricted(const core_rpc_handle* h)
 {
     if (!h || !h->rpc) return true;
-    // The m_restricted member is private; access it via the same pattern
-    // the daemon uses (set at init time). We expose it via the handle.
-    // For now, we check by trying a restricted-only endpoint and seeing
-    // if the URI map would accept it. A cleaner solution would be to add
-    // a public accessor to core_rpc_server, but that's a minimal change.
-    // TODO: Add bool core_rpc_server::is_restricted() const { return m_restricted; }
-    return false; // Caller tracks restriction separately in Rust AppState
+    return h->rpc->is_restricted();
 }
 
 char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,

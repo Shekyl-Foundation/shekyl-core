@@ -1,0 +1,55 @@
+[package]
+name = "shekyl-bulletproofs"
+version = "0.1.0"
+description = "Bulletproofs(+) range proofs, as defined by the Shekyl protocol"
+license = "MIT"
+repository = "https://github.com/Shekyl-Foundation/shekyl-oxide/tree/main/shekyl-oxide/fcmp/bulletproofs"
+authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
+edition = "2021"
+rust-version = "1.67"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dependencies]
+std-shims = { version = "0.1.5", default-features = false }
+
+thiserror = { version = "2", default-features = false }
+
+rand_core = { version = "0.6", default-features = false }
+zeroize = { version = "^1.5", default-features = false, features = ["zeroize_derive"] }
+
+# Cryptographic dependencies
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+
+# Other Shekyl dependencies
+shekyl-io = { path = "../../io", version = "0.1", default-features = false }
+shekyl-generators = { path = "../../generators", version = "0.4", default-features = false }
+shekyl-primitives = { path = "../../primitives", version = "0.1", default-features = false }
+
+[build-dependencies]
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+shekyl-generators = { path = "../../generators", version = "0.4", default-features = false }
+
+[dev-dependencies]
+hex-literal = { version = ">= 0.4, <= 1", default-features = false }
+
+[features]
+std = [
+  "std-shims/std",
+
+  "thiserror/std",
+
+  "rand_core/std",
+  "zeroize/std",
+
+  "shekyl-io/std",
+  "shekyl-generators/std",
+  "shekyl-primitives/std",
+]
+compile-time-generators = ["curve25519-dalek/precomputed-tables"]
+default = ["std", "compile-time-generators"]

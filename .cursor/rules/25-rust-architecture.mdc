@@ -1,0 +1,45 @@
+---
+description: How Rust code is structured in Shekyl. Workspace layout, FFI crate, dependency rules.
+globs:
+  - rust/**
+  - src/shekyl/shekyl_ffi.h
+  - cmake/BuildRust.cmake
+---
+
+# Rust architecture
+
+All Rust code lives under `rust/` in a Cargo workspace. The single FFI crate
+`shekyl-ffi` produces `libshekyl_ffi.a`, linked into C++ targets via
+`cmake/BuildRust.cmake`. New Rust functionality follows this pattern:
+
+1. Implement logic in a dedicated Rust crate under `rust/` (e.g.,
+   `shekyl-crypto-pq`, `shekyl-economics`).
+2. Expose a C ABI in `rust/shekyl-ffi/src/lib.rs` with
+   `#[no_mangle] pub extern "C" fn`.
+3. Declare the FFI in `src/shekyl/shekyl_ffi.h`.
+4. Call from C++ through the header. Delete the replaced C++ once the Rust
+   path is verified.
+
+## Where things go
+
+- **Crypto primitives:** RustCrypto crates (`sha2`, `blake2`, `ed25519-dalek`,
+  `curve25519-dalek`, `hkdf`) and the lattice equivalents.
+- **Pure computation:** Economics, staking math, fee calculations,
+  serialization helpers — extend the existing Rust crates.
+- **Data structures with no C++ coupling:** If a struct only flows through
+  FFI, define it in Rust.
+
+## Rules
+
+- **Never add new Boost dependencies.** Use C++17 standard library or Rust.
+- **`#![deny(unsafe_code)]` at the crate level**, except `shekyl-ffi` which
+  requires `unsafe` for FFI exports. `shekyl-ffi` keeps `unsafe` confined to
+  the export wrappers; logic lives in safe-only crates.
+- **Pin Rust dependency versions in `Cargo.lock`.** Audit new crate additions
+  with `cargo audit`.
+- **Use `cbindgen` or hand-maintained headers** for FFI. Keep
+  `shekyl_ffi.h` in sync with `lib.rs` — drift here is a consensus bug.
+- **Cross-compilation must work:** verify `BuildRust.cmake` handles new
+  crates for all CI platforms before merge.
+- **Vendored dependencies (e.g., `monero-oxide`) live under `rust/` as path
+  dependencies**, not git deps. See `SHEKYL_OXIDE_VENDORING.md`.

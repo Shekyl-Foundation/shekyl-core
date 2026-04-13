@@ -34,6 +34,7 @@
 
 #include "common/util.h"
 #include "cryptonote_basic/cryptonote_basic.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_basic/tx_extra.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 
@@ -356,4 +357,137 @@ TEST(remove_field_from_tx_extra, invalid_varint)
 
   ASSERT_FALSE(cryptonote::remove_field_from_tx_extra(extra, typeid(cryptonote::tx_extra_nonce)));
   ASSERT_EQ(sizeof(extra_arr), extra.size());
+}
+
+TEST(tx_extra_pqc_round_trip, kem_and_leaf_hashes_survive_sort)
+{
+  // Build tx_extra with: pubkey (0x01) + KEM ciphertext (0x06) + leaf hashes (0x07)
+  // Then serialize → sort → re-parse and verify byte equality of recovered fields.
+
+  // Deterministic fake pubkey (32 bytes)
+  crypto::public_key fake_pk;
+  memset(fake_pk.data, 0xAA, sizeof(fake_pk));
+
+  // 2 outputs × 1120 bytes = 2240 bytes of KEM ciphertext
+  static constexpr size_t HYBRID_KEM_CT_BYTES = 1120;
+  cryptonote::tx_extra_pqc_kem_ciphertext kem_field;
+  kem_field.blob.resize(2 * HYBRID_KEM_CT_BYTES);
+  for (size_t i = 0; i < kem_field.blob.size(); ++i)
+    kem_field.blob[i] = static_cast<char>(i & 0xFF);
+
+  // 2 outputs × 32 bytes = 64 bytes of leaf hashes
+  cryptonote::tx_extra_pqc_leaf_hashes lh_field;
+  lh_field.blob.resize(2 * cryptonote::PQC_LEAF_HASH_BYTES);
+  for (size_t i = 0; i < lh_field.blob.size(); ++i)
+    lh_field.blob[i] = static_cast<char>((i + 0x42) & 0xFF);
+
+  // Build extra: pubkey first, then KEM, then leaf hashes
+  std::vector<uint8_t> extra;
+  ASSERT_TRUE(cryptonote::add_tx_pub_key_to_extra(extra, fake_pk));
+
+  auto append_field = [&](const auto& field) -> bool {
+    std::ostringstream oss;
+    binary_archive<true> oar(oss);
+    cryptonote::tx_extra_field variant_field = field;
+    if (!::do_serialize(oar, variant_field))
+      return false;
+    std::string blob = oss.str();
+    extra.insert(extra.end(), blob.begin(), blob.end());
+    return true;
+  };
+  ASSERT_TRUE(append_field(kem_field)) << "Failed to serialize KEM ciphertext field";
+  ASSERT_TRUE(append_field(lh_field)) << "Failed to serialize leaf hashes field";
+
+  // Parse before sort
+  std::vector<cryptonote::tx_extra_field> fields_before;
+  ASSERT_TRUE(cryptonote::parse_tx_extra(extra, fields_before));
+  ASSERT_EQ(3u, fields_before.size()) << "Expected pubkey + KEM + leaf hashes";
+
+  // Sort
+  std::vector<uint8_t> sorted;
+  ASSERT_TRUE(cryptonote::sort_tx_extra(extra, sorted));
+
+  // Re-parse after sort
+  std::vector<cryptonote::tx_extra_field> fields_after;
+  ASSERT_TRUE(cryptonote::parse_tx_extra(sorted, fields_after));
+  ASSERT_EQ(3u, fields_after.size()) << "Field count changed after sort";
+
+  // Verify each field type survived
+  cryptonote::tx_extra_pqc_kem_ciphertext recovered_kem;
+  ASSERT_TRUE(cryptonote::find_tx_extra_field_by_type(fields_after, recovered_kem));
+  ASSERT_EQ(kem_field.blob, recovered_kem.blob)
+    << "KEM ciphertext blob changed after sort (size orig=" << kem_field.blob.size()
+    << " recovered=" << recovered_kem.blob.size() << ")";
+
+  cryptonote::tx_extra_pqc_leaf_hashes recovered_lh;
+  ASSERT_TRUE(cryptonote::find_tx_extra_field_by_type(fields_after, recovered_lh));
+  ASSERT_EQ(lh_field.blob, recovered_lh.blob)
+    << "Leaf hashes blob changed after sort (size orig=" << lh_field.blob.size()
+    << " recovered=" << recovered_lh.blob.size() << ")";
+
+  crypto::public_key recovered_pk = cryptonote::get_tx_pub_key_from_extra(sorted);
+  ASSERT_EQ(fake_pk, recovered_pk) << "Pubkey changed after sort";
+
+  // Double-sort should be idempotent
+  std::vector<uint8_t> double_sorted;
+  ASSERT_TRUE(cryptonote::sort_tx_extra(sorted, double_sorted));
+  ASSERT_EQ(sorted, double_sorted) << "sort_tx_extra not idempotent";
+}
+
+TEST(tx_extra_pqc_round_trip, kem_and_leaf_hashes_reverse_order)
+{
+  // Insert leaf hashes BEFORE KEM ciphertext (wrong canonical order)
+  // sort_tx_extra should reorder to canonical order, preserving contents.
+
+  crypto::public_key fake_pk;
+  memset(fake_pk.data, 0xBB, sizeof(fake_pk));
+
+  static constexpr size_t HYBRID_KEM_CT_BYTES = 1120;
+  cryptonote::tx_extra_pqc_kem_ciphertext kem_field;
+  kem_field.blob.resize(HYBRID_KEM_CT_BYTES, '\x55');
+
+  cryptonote::tx_extra_pqc_leaf_hashes lh_field;
+  lh_field.blob.resize(cryptonote::PQC_LEAF_HASH_BYTES, '\x77');
+
+  // Intentionally wrong order: leaf hashes first, then KEM
+  std::vector<uint8_t> extra;
+  auto append_field = [&](const auto& field) -> bool {
+    std::ostringstream oss;
+    binary_archive<true> oar(oss);
+    cryptonote::tx_extra_field variant_field = field;
+    if (!::do_serialize(oar, variant_field))
+      return false;
+    std::string blob = oss.str();
+    extra.insert(extra.end(), blob.begin(), blob.end());
+    return true;
+  };
+  ASSERT_TRUE(append_field(lh_field)) << "Failed to serialize leaf hashes field";
+  ASSERT_TRUE(append_field(kem_field)) << "Failed to serialize KEM ciphertext field";
+  ASSERT_TRUE(cryptonote::add_tx_pub_key_to_extra(extra, fake_pk));
+
+  // Parse — should find all three
+  std::vector<cryptonote::tx_extra_field> fields;
+  ASSERT_TRUE(cryptonote::parse_tx_extra(extra, fields));
+  ASSERT_EQ(3u, fields.size());
+
+  // Sort
+  std::vector<uint8_t> sorted;
+  ASSERT_TRUE(cryptonote::sort_tx_extra(extra, sorted));
+
+  // Re-parse and verify contents
+  std::vector<cryptonote::tx_extra_field> sorted_fields;
+  ASSERT_TRUE(cryptonote::parse_tx_extra(sorted, sorted_fields));
+  ASSERT_EQ(3u, sorted_fields.size());
+
+  cryptonote::tx_extra_pqc_kem_ciphertext recovered_kem;
+  ASSERT_TRUE(cryptonote::find_tx_extra_field_by_type(sorted_fields, recovered_kem));
+  ASSERT_EQ(kem_field.blob, recovered_kem.blob);
+
+  cryptonote::tx_extra_pqc_leaf_hashes recovered_lh;
+  ASSERT_TRUE(cryptonote::find_tx_extra_field_by_type(sorted_fields, recovered_lh));
+  ASSERT_EQ(lh_field.blob, recovered_lh.blob);
+
+  // Pubkey should be first in canonical order (tag 0x01 < 0x06 < 0x07)
+  ASSERT_TRUE(std::holds_alternative<cryptonote::tx_extra_pub_key>(sorted_fields[0]))
+    << "Pubkey should be first after sort";
 }

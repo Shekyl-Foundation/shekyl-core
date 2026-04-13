@@ -42,7 +42,6 @@
 #include <boost/serialization/deque.hpp>
 #include <boost/thread/lock_guard.hpp>
 #include <atomic>
-#include <random>
 
 #include "include_base_utils.h"
 #include "cryptonote_basic/account.h"
@@ -57,8 +56,8 @@
 #include "common/util.h"
 #include "crypto/chacha.h"
 #include "crypto/hash.h"
-#include "ringct/rctTypes.h"
-#include "ringct/rctOps.h"
+#include "fcmp/rctTypes.h"
+#include "fcmp/rctOps.h"
 #include "checkpoints/checkpoints.h"
 #include "serialization/crypto.h"
 #include "serialization/string.h"
@@ -66,16 +65,16 @@
 #include "serialization/tuple.h"
 #include "serialization/containers.h"
 
+#include "memwipe.h"
 #include "wallet_errors.h"
 #include "common/password.h"
 #include "node_rpc_proxy.h"
-#include "wallet_light_rpc.h"
 #include "wallet_rpc_helpers.h"
 #include "fee_priority.h"
 #include "fee_algorithm.h"
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "wallet.wallet2"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "wallet.wallet2"
 
 #define THROW_ON_RPC_RESPONSE_ERROR(r, error, res, method, ...) \
   do { \
@@ -92,34 +91,8 @@ class wallet_accessor_test;
 
 namespace tools
 {
-  class ringdb;
   class wallet2;
   class Notify;
-
-  class gamma_picker
-  {
-  public:
-    uint64_t pick();
-    gamma_picker(const std::vector<uint64_t> &rct_offsets);
-    gamma_picker(const std::vector<uint64_t> &rct_offsets, double shape, double scale);
-    uint64_t get_num_rct_outs() const { return num_rct_outputs; }
-
-  private:
-    struct gamma_engine
-    {
-      typedef uint64_t result_type;
-      static constexpr result_type min() { return 0; }
-      static constexpr result_type max() { return std::numeric_limits<result_type>::max(); }
-      result_type operator()() { return crypto::rand<result_type>(); }
-    } engine;
-
-private:
-    std::gamma_distribution<double> gamma;
-    const std::vector<uint64_t> &rct_offsets;
-    const uint64_t *begin, *end;
-    uint64_t num_rct_outputs;
-    double average_output_time;
-  };
 
   class wallet_keys_unlocker
   {
@@ -159,6 +132,10 @@ private:
     virtual void on_device_progress(const hw::device_progress& event) {};
     // Common callbacks
     virtual void on_pool_tx_removed(const crypto::hash &txid) {}
+    // FCMP++ callbacks
+    virtual void on_pqc_rederivation_progress(uint64_t outputs_done, uint64_t outputs_total) {}
+    virtual void on_fcmp_path_precompute_progress(uint64_t outputs_done, uint64_t outputs_total) {}
+    virtual void on_transfer_stage(const char* stage, uint8_t stage_index, uint8_t total_stages) {}
     virtual ~i_wallet2_callback() {}
   };
 
@@ -216,7 +193,7 @@ private:
     }
 
     BEGIN_SERIALIZE_OBJECT()
-      VERSION_FIELD(0)
+      VERSION_FIELD(3)
       VARINT_FIELD(m_offset)
       FIELD(m_genesis)
       FIELD(m_blockchain)
@@ -310,15 +287,23 @@ private:
 
     struct tx_scan_info_t
     {
-      cryptonote::keypair in_ephemeral;
+      crypto::public_key output_key{}; // output public key from tx.vout
       crypto::key_image ki;
       rct::key mask;
+      crypto::secret_key y{};     // v3: HKDF-derived y (T-component scalar)
+      crypto::secret_key k_amount{}; // v3: HKDF-derived amount key
+      std::vector<uint8_t> combined_ss; // 64-byte combined shared secret from scan; empty for hot wallets
+      bool v3_hkdf_scanned = false; // true when y/mask came from Rust shekyl_scan_and_recover
       uint64_t amount;
       uint64_t money_transfered;
       bool error;
       std::optional<cryptonote::subaddress_receive_info> received;
 
       tx_scan_info_t(): amount(0), money_transfered(0), error(true) {}
+      ~tx_scan_info_t() {
+        memwipe(k_amount.data, sizeof(k_amount.data));
+        if (!combined_ss.empty()) { memwipe(combined_ss.data(), combined_ss.size()); combined_ss.clear(); }
+      }
     };
 
     struct transfer_details
@@ -332,9 +317,10 @@ private:
       bool m_frozen = false;
       uint64_t m_spent_height = 0;
       crypto::key_image m_key_image{}; //TODO: key_image stored twice :(
-      rct::key m_mask{};
+      crypto::secret_key m_mask{}; // Pedersen commitment mask z; zeroized on drop.
+      crypto::secret_key m_y{};
+      crypto::secret_key m_k_amount{}; // HKDF-derived amount key; zeroized on drop.
       uint64_t m_amount = 0;
-      bool m_rct = false;
       bool m_key_image_known = false;
       bool m_key_image_request = false; // view wallets: we want to request it; cold wallets: it was requested
       uint64_t m_pk_index = 0;
@@ -343,10 +329,12 @@ private:
       bool m_staked = false;
       uint8_t m_stake_tier = 0;
       uint64_t m_stake_lock_until = 0;
+      uint64_t m_last_claimed_height = 0; // claim watermark: last to_height of a successful claim
+      tools::scrubbed_arr<uint8_t, 64> m_combined_shared_secret{}; // wiped on drop; structurally consistent with m_y / m_mask
+      bool m_combined_shared_secret_set = false; // true once populated from KEM decap
 
       transfer_details() = default;
 
-      bool is_rct() const { return m_rct; }
       uint64_t amount() const { return m_amount; }
       bool is_staked() const { return m_staked; }
       bool is_staked_and_locked(uint64_t current_height) const { return m_staked && current_height < m_stake_lock_until; }
@@ -371,8 +359,9 @@ private:
         FIELD(m_spent_height)
         FIELD(m_key_image)
         FIELD(m_mask)
+        FIELD(m_y)
+        FIELD(m_k_amount)
         FIELD(m_amount)
-        FIELD(m_rct)
         FIELD(m_key_image_known)
         FIELD(m_key_image_request)
         FIELD(m_pk_index)
@@ -381,7 +370,42 @@ private:
         FIELD(m_staked)
         FIELD(m_stake_tier)
         VARINT_FIELD(m_stake_lock_until)
+        VARINT_FIELD(m_last_claimed_height)
+        do {
+          std::vector<uint8_t> _css_compat;
+          if (W) {
+            if (m_combined_shared_secret_set)
+              _css_compat.assign(m_combined_shared_secret.begin(), m_combined_shared_secret.end());
+          }
+          FIELD_N("m_combined_shared_secret", _css_compat)
+          if (!W && _css_compat.size() == 64) {
+            std::copy(_css_compat.begin(), _css_compat.end(), m_combined_shared_secret.begin());
+            m_combined_shared_secret_set = true;
+          }
+        } while(0);
       END_SERIALIZE()
+    };
+
+    struct fcmp_precomputed_path
+    {
+      uint64_t global_output_index = 0;
+      std::vector<uint8_t> tree_path;
+      // Compressed Ed25519 output keys for each leaf in the chunk.
+      // Each entry: { output_key (O), key_image_gen (I=Hp(O)), commitment (C) }.
+      // Parallel to the 128-byte leaf scalars in tree_path layer 0.
+      struct chunk_output_entry {
+        rct::key output_key;    // O: compressed Ed25519
+        rct::key key_image_gen; // I = Hp(O): compressed Ed25519
+        rct::key commitment;    // C: compressed Ed25519
+        rct::key h_pqc;         // H(pqc_pk): 32-byte scalar
+      };
+      std::vector<chunk_output_entry> leaf_chunk_entries;
+      // The daemon-provided reference block hash used in rct_signatures.referenceBlock.
+      crypto::hash reference_block_at_precompute{};
+      // The curve tree root at the reference block height.
+      crypto::hash curve_tree_root_at_precompute{};
+      uint8_t tree_depth_at_precompute = 0;
+      uint64_t precompute_height = 0;
     };
 
     struct exported_transfer_details
@@ -396,30 +420,45 @@ private:
         {
           uint8_t m_spent: 1;
           uint8_t m_frozen: 1;
-          uint8_t m_rct: 1;
           uint8_t m_key_image_known: 1;
           uint8_t m_key_image_request: 1; // view wallets: we want to request it; cold wallets: it was requested
         };
         uint8_t flags;
       } m_flags;
       uint64_t m_amount;
-      std::vector<crypto::public_key> m_additional_tx_keys;
       uint32_t m_subaddr_index_major;
       uint32_t m_subaddr_index_minor;
+      crypto::secret_key m_mask{};
+      crypto::secret_key m_y{};
+      crypto::secret_key m_k_amount{};
+      tools::scrubbed_arr<uint8_t, 64> m_combined_shared_secret{}; // wiped on drop
+      bool m_combined_shared_secret_set = false;
 
       BEGIN_SERIALIZE_OBJECT()
-        VERSION_FIELD(1)
-        if (version < 1)
-          return false;
+        VERSION_FIELD(3)
         FIELD(m_pubkey)
         VARINT_FIELD(m_internal_output_index)
         VARINT_FIELD(m_global_output_index)
         FIELD(m_tx_pubkey)
         FIELD(m_flags.flags)
         VARINT_FIELD(m_amount)
-        FIELD(m_additional_tx_keys)
         VARINT_FIELD(m_subaddr_index_major)
         VARINT_FIELD(m_subaddr_index_minor)
+        FIELD(m_mask)
+        FIELD(m_y)
+        FIELD(m_k_amount)
+        do {
+          std::vector<uint8_t> _css_compat;
+          if (W) {
+            if (m_combined_shared_secret_set)
+              _css_compat.assign(m_combined_shared_secret.begin(), m_combined_shared_secret.end());
+          }
+          FIELD_N("m_combined_shared_secret", _css_compat)
+          if (!W && _css_compat.size() == 64) {
+            std::copy(_css_compat.begin(), _css_compat.end(), m_combined_shared_secret.begin());
+            m_combined_shared_secret_set = true;
+          }
+        } while(0);
       END_SERIALIZE()
     };
 
@@ -437,7 +476,7 @@ private:
       cryptonote::subaddress_index m_subaddr_index{};
 
       BEGIN_SERIALIZE_OBJECT()
-        VERSION_FIELD(0)
+        VERSION_FIELD(3)
         FIELD(m_tx_hash)
         VARINT_FIELD(m_amount)
         FIELD(m_amounts)
@@ -450,19 +489,13 @@ private:
       END_SERIALIZE()
     };
 
-    struct address_tx : payment_details
-    {
-      bool m_mempool;
-      bool m_incoming;
-    };
-
     struct pool_payment_details
     {
       payment_details m_pd;
       bool m_double_spend_seen;
 
       BEGIN_SERIALIZE_OBJECT()
-        VERSION_FIELD(0)
+        VERSION_FIELD(3)
         FIELD(m_pd)
         FIELD(m_double_spend_seen)
       END_SERIALIZE()
@@ -481,10 +514,8 @@ private:
       uint64_t m_timestamp;
       uint32_t m_subaddr_account;   // subaddress account of your wallet to be used in this transfer
       std::set<uint32_t> m_subaddr_indices;  // set of address indices used as inputs in this transfer
-      std::vector<std::pair<crypto::key_image, std::vector<uint64_t>>> m_rings; // relative
-
       BEGIN_SERIALIZE_OBJECT()
-        VERSION_FIELD(1)
+        VERSION_FIELD(4)
         FIELD(m_tx)
         VARINT_FIELD(m_amount_in)
         VARINT_FIELD(m_amount_out)
@@ -492,12 +523,10 @@ private:
         VARINT_FIELD(m_sent_time)
         FIELD(m_dests)
         FIELD(m_payment_id)
-        if (version >= 1)
-          VARINT_FIELD(m_state)
+        VARINT_FIELD(m_state)
         VARINT_FIELD(m_timestamp)
         VARINT_FIELD(m_subaddr_account)
         FIELD(m_subaddr_indices)
-        FIELD(m_rings)
       END_SERIALIZE()
     };
 
@@ -514,16 +543,13 @@ private:
       uint64_t m_unlock_time;
       uint32_t m_subaddr_account;   // subaddress account of your wallet to be used in this transfer
       std::set<uint32_t> m_subaddr_indices;  // set of address indices used as inputs in this transfer
-      std::vector<std::pair<crypto::key_image, std::vector<uint64_t>>> m_rings; // relative
-
       confirmed_transfer_details(): m_amount_in(0), m_amount_out(0), m_change((uint64_t)-1), m_block_height(0), m_payment_id(crypto::null_hash), m_timestamp(0), m_unlock_time(0), m_subaddr_account((uint32_t)-1) {}
       confirmed_transfer_details(const unconfirmed_transfer_details &utd, uint64_t height):
-        m_tx(utd.m_tx), m_amount_in(utd.m_amount_in), m_amount_out(utd.m_amount_out), m_change(utd.m_change), m_block_height(height), m_dests(utd.m_dests), m_payment_id(utd.m_payment_id), m_timestamp(utd.m_timestamp), m_unlock_time(utd.m_tx.unlock_time), m_subaddr_account(utd.m_subaddr_account), m_subaddr_indices(utd.m_subaddr_indices), m_rings(utd.m_rings) {}
+        m_tx(utd.m_tx), m_amount_in(utd.m_amount_in), m_amount_out(utd.m_amount_out), m_change(utd.m_change), m_block_height(height), m_dests(utd.m_dests), m_payment_id(utd.m_payment_id), m_timestamp(utd.m_timestamp), m_unlock_time(utd.m_tx.unlock_time), m_subaddr_account(utd.m_subaddr_account), m_subaddr_indices(utd.m_subaddr_indices) {}
 
       BEGIN_SERIALIZE_OBJECT()
-        VERSION_FIELD(1)
-        if (version >= 1)
-          FIELD(m_tx)
+        VERSION_FIELD(4)
+        FIELD(m_tx)
         VARINT_FIELD(m_amount_in)
         VARINT_FIELD(m_amount_out)
         VARINT_FIELD(m_change)
@@ -534,7 +560,6 @@ private:
         VARINT_FIELD(m_unlock_time)
         VARINT_FIELD(m_subaddr_account)
         FIELD(m_subaddr_indices)
-        FIELD(m_rings)
       END_SERIALIZE()
     };
 
@@ -547,7 +572,6 @@ private:
       std::vector<uint8_t> extra;
       uint64_t unlock_time;
       bool use_rct;
-      rct::RCTConfig rct_config;
       bool use_view_tags;
       std::vector<cryptonote::tx_destination_entry> dests; // original setup, does not include change
       uint32_t subaddr_account;   // subaddress account of your wallet to be used in this transfer
@@ -590,7 +614,6 @@ private:
           FIELD_N("use_rct", construction_flags)
         }
 
-        FIELD(rct_config)
         FIELD(dests)
         FIELD(subaddr_account)
         FIELD(subaddr_indices)
@@ -613,13 +636,12 @@ private:
       std::vector<size_t> selected_transfers;
       std::string key_images;
       crypto::secret_key tx_key;
-      std::vector<crypto::secret_key> additional_tx_keys;
       std::vector<cryptonote::tx_destination_entry> dests;
 
       tx_construction_data construction_data;
 
       BEGIN_SERIALIZE_OBJECT()
-        VERSION_FIELD(1)
+        VERSION_FIELD(3)
         FIELD(tx)
         FIELD(dust)
         FIELD(fee)
@@ -628,7 +650,6 @@ private:
         FIELD(selected_transfers)
         FIELD(key_images)
         FIELD(tx_key)
-        FIELD(additional_tx_keys)
         FIELD(dests)
         FIELD(construction_data)
       END_SERIALIZE()
@@ -643,27 +664,8 @@ private:
       std::tuple<uint64_t, uint64_t, std::vector<wallet2::exported_transfer_details>> new_transfers;
 
       BEGIN_SERIALIZE_OBJECT()
-        VERSION_FIELD(2)
+        VERSION_FIELD(3)
         FIELD(txes)
-        if (version == 0)
-        {
-          std::pair<size_t, wallet2::transfer_container> v0_transfers;
-          FIELD(v0_transfers);
-          std::get<0>(transfers) = std::get<0>(v0_transfers);
-          std::get<1>(transfers) = std::get<0>(v0_transfers) + std::get<1>(v0_transfers).size();
-          std::get<2>(transfers) = std::get<1>(v0_transfers);
-          return true;
-        }
-        if (version == 1)
-        {
-          std::pair<size_t, std::vector<wallet2::exported_transfer_details>> v1_transfers;
-          FIELD(v1_transfers);
-          std::get<0>(new_transfers) = std::get<0>(v1_transfers);
-          std::get<1>(new_transfers) = std::get<0>(v1_transfers) + std::get<1>(v1_transfers).size();
-          std::get<2>(new_transfers) = std::get<1>(v1_transfers);
-          return true;
-        }
-
         FIELD(new_transfers)
       END_SERIALIZE()
     };
@@ -675,7 +677,7 @@ private:
       serializable_unordered_map<crypto::public_key, crypto::key_image> tx_key_images;
 
       BEGIN_SERIALIZE_OBJECT()
-        VERSION_FIELD(0)
+        VERSION_FIELD(3)
         FIELD(ptx)
         FIELD(key_images)
         FIELD(tx_key_images)
@@ -714,7 +716,7 @@ private:
       bool m_has_payment_id;
 
       BEGIN_SERIALIZE_OBJECT()
-        VERSION_FIELD(0)
+        VERSION_FIELD(3)
         FIELD(m_address)
         FIELD(m_payment_id)
         FIELD(m_description)
@@ -733,7 +735,7 @@ private:
       crypto::signature key_image_sig;
 
       BEGIN_SERIALIZE_OBJECT()
-        VERSION_FIELD(0)
+        VERSION_FIELD(3)
         FIELD(txid)
         VARINT_FIELD(index_in_tx)
         FIELD(shared_secret)
@@ -753,7 +755,7 @@ private:
       bool double_spend_seen;
 
       BEGIN_SERIALIZE_OBJECT()
-        VERSION_FIELD(0)
+        VERSION_FIELD(3)
         VARINT_FIELD(index_in_background_sync_data)
 
         // prune tx; don't need to keep signature data
@@ -780,7 +782,7 @@ private:
       RefreshType wallet_refresh_type;
 
       BEGIN_SERIALIZE_OBJECT()
-        VERSION_FIELD(0)
+        VERSION_FIELD(3)
         FIELD(first_refresh_done)
         FIELD(start_height)
         FIELD(txs)
@@ -790,8 +792,6 @@ private:
         VARINT_FIELD(wallet_refresh_type)
       END_SERIALIZE()
     };
-
-    typedef std::tuple<uint64_t, crypto::public_key, rct::key> get_outs_entry;
 
     struct parsed_block
     {
@@ -984,14 +984,6 @@ private:
     bool get_seed(epee::wipeable_string& electrum_words, const epee::wipeable_string &passphrase = epee::wipeable_string()) const;
 
     /*!
-    * \brief Checks if light wallet. A light wallet sends view key to a server where the blockchain is scanned.
-    */
-    bool light_wallet() const { return m_light_wallet; }
-    void set_light_wallet(bool light_wallet) { m_light_wallet = light_wallet; }
-    uint64_t get_light_wallet_scanned_block_height() const { return m_light_wallet_scanned_block_height; }
-    uint64_t get_light_wallet_blockchain_height() const { return m_light_wallet_blockchain_height; }
-
-    /*!
      * \brief Gets the seed language
      */
     const std::string &get_seed_language() const;
@@ -1026,10 +1018,6 @@ private:
     void set_subaddress_label(const cryptonote::subaddress_index &index, const std::string &label);
     void set_subaddress_lookahead(size_t major, size_t minor);
     std::pair<size_t, size_t> get_subaddress_lookahead() const { return {m_subaddress_lookahead_major, m_subaddress_lookahead_minor}; }
-    /*!
-     * \brief Tells if the wallet file is deprecated.
-     */
-    bool is_deprecated() const;
     void refresh(bool trusted_daemon);
     void refresh(bool trusted_daemon, uint64_t start_height, uint64_t & blocks_fetched);
     void refresh(bool trusted_daemon, uint64_t start_height, uint64_t & blocks_fetched, bool& received_money, bool check_pool = true, bool try_incremental = true, uint64_t max_blocks = std::numeric_limits<uint64_t>::max());
@@ -1037,6 +1025,15 @@ private:
 
     void set_refresh_type(RefreshType refresh_type) { m_refresh_type = refresh_type; }
     RefreshType get_refresh_type() const { return m_refresh_type; }
+
+    // FCMP++ wallet precomputation (Phase 5e)
+    void precompute_fcmp_paths();
+    void update_fcmp_paths_incremental(uint64_t new_height);
+    const std::unordered_map<uint64_t, fcmp_precomputed_path>& get_fcmp_precomputed_paths() const { return m_fcmp_precomputed_paths; }
+
+    // FCMP++ PQC key rederivation (Phase 5.5)
+    void validate_pqc_key_derivation_for_output(const transfer_details& td);
+    void rederive_all_pqc_keys();
 
     cryptonote::network_type nettype() const { return m_nettype; }
     bool watch_only() const { return m_watch_only; }
@@ -1055,13 +1052,9 @@ private:
     // all locked & unlocked balances of all subaddress accounts
     uint64_t balance_all(bool strict) const;
     uint64_t unlocked_balance_all(bool strict, uint64_t *blocks_to_unlock = NULL, uint64_t *time_to_unlock = NULL);
-    template<typename T>
-    void transfer_selected(const std::vector<cryptonote::tx_destination_entry>& dsts, const std::vector<size_t>& selected_transfers, size_t fake_outputs_count,
-      std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs, std::unordered_set<crypto::public_key> &valid_public_keys_cache,
-      uint64_t fee, const std::vector<uint8_t>& extra, T destination_split_strategy, const tx_dust_policy& dust_policy, cryptonote::transaction& tx, pending_tx &ptx, const bool use_view_tags);
-    void transfer_selected_rct(std::vector<cryptonote::tx_destination_entry> dsts, const std::vector<size_t>& selected_transfers, size_t fake_outputs_count,
-      std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs, std::unordered_set<crypto::public_key> &valid_public_keys_cache,
-      uint64_t fee, const std::vector<uint8_t>& extra, cryptonote::transaction& tx, pending_tx &ptx, const rct::RCTConfig &rct_config, const bool use_view_tags);
+    void transfer_selected_rct(std::vector<cryptonote::tx_destination_entry> dsts, const std::vector<size_t>& selected_transfers,
+      std::unordered_set<crypto::public_key> &valid_public_keys_cache,
+      uint64_t fee, const std::vector<uint8_t>& extra, cryptonote::transaction& tx, pending_tx &ptx, const bool use_view_tags);
 
     void commit_tx(pending_tx& ptx_vector);
     void commit_tx(std::vector<pending_tx>& ptx_vector);
@@ -1078,10 +1071,10 @@ private:
     bool parse_unsigned_tx_from_str(const std::string &unsigned_tx_st, unsigned_tx_set &exported_txs) const;
     bool load_tx(const std::string &signed_filename, std::vector<tools::wallet2::pending_tx> &ptx, std::function<bool(const signed_tx_set&)> accept_func = NULL);
     bool parse_tx_from_str(const std::string &signed_tx_st, std::vector<tools::wallet2::pending_tx> &ptx, std::function<bool(const signed_tx_set &)> accept_func);
-    std::vector<wallet2::pending_tx> create_transactions_2(std::vector<cryptonote::tx_destination_entry> dsts, const size_t fake_outs_count, fee_priority priority, const std::vector<uint8_t>& extra, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices, const unique_index_container& subtract_fee_from_outputs = {});
-    std::vector<wallet2::pending_tx> create_transactions_all(uint64_t below, const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, const size_t fake_outs_count, fee_priority priority, const std::vector<uint8_t>& extra, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices);
-    std::vector<wallet2::pending_tx> create_transactions_single(const crypto::key_image &ki, const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, const size_t fake_outs_count, fee_priority priority, const std::vector<uint8_t>& extra);
-    std::vector<wallet2::pending_tx> create_transactions_from(const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, std::vector<size_t> unused_transfers_indices, std::vector<size_t> unused_dust_indices, const size_t fake_outs_count, fee_priority priority, const std::vector<uint8_t>& extra);
+    std::vector<wallet2::pending_tx> create_transactions_2(std::vector<cryptonote::tx_destination_entry> dsts, fee_priority priority, const std::vector<uint8_t>& extra, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices, const unique_index_container& subtract_fee_from_outputs = {});
+    std::vector<wallet2::pending_tx> create_transactions_all(uint64_t below, const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, fee_priority priority, const std::vector<uint8_t>& extra, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices);
+    std::vector<wallet2::pending_tx> create_transactions_single(const crypto::key_image &ki, const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, fee_priority priority, const std::vector<uint8_t>& extra);
+    std::vector<wallet2::pending_tx> create_transactions_from(const cryptonote::account_public_address &address, bool is_subaddress, const size_t outputs, std::vector<size_t> unused_transfers_indices, std::vector<size_t> unused_dust_indices, fee_priority priority, const std::vector<uint8_t>& extra);
     std::vector<wallet2::pending_tx> create_staking_transaction(uint8_t tier, uint64_t amount, fee_priority priority, uint32_t subaddr_account, std::set<uint32_t> subaddr_indices);
     std::vector<wallet2::pending_tx> create_unstake_transaction(const std::vector<size_t>& staked_indices, fee_priority priority);
 
@@ -1091,13 +1084,13 @@ private:
     uint8_t pqc_multisig_m() const { return m_pqc_multisig_m; }
     crypto::hash pqc_multisig_group_id() const { return m_pqc_multisig_group_id; }
     bool create_pqc_multisig_group(uint8_t n_total, uint8_t m_required, const std::vector<std::vector<uint8_t>>& participant_public_keys);
-    std::string export_multisig_signing_request(const pending_tx& ptx);
-    bool sign_multisig_partial(const std::string& signing_request_json, std::string& signature_response_json);
-    bool import_multisig_signatures(pending_tx& ptx, const std::vector<std::string>& signature_response_jsons);
     std::vector<wallet2::pending_tx> create_claim_transaction(const std::vector<size_t>& staked_indices);
     std::vector<size_t> get_matured_staked_outputs() const;
     std::vector<size_t> get_locked_staked_outputs() const;
     std::vector<size_t> get_claimable_staked_outputs() const;
+    void stage_claim_watermarks(const pending_tx& ptx);
+    void confirm_claim_watermarks(const crypto::hash& tx_hash);
+    void expire_pending_claim_watermarks(uint64_t current_height, uint64_t max_age = 100);
     uint64_t get_staked_balance(uint64_t current_height) const;
     uint64_t estimate_claimable_reward(size_t transfer_index);
     bool sanity_check(const std::vector<wallet2::pending_tx> &ptx_vector, const std::vector<cryptonote::tx_destination_entry>& dsts, const unique_index_container& subtract_fee_from_outputs = {}) const;
@@ -1116,9 +1109,12 @@ private:
     void get_unconfirmed_payments_out(std::list<std::pair<crypto::hash,wallet2::unconfirmed_transfer_details>>& unconfirmed_payments, const std::optional<uint32_t>& subaddr_account = std::nullopt, const std::set<uint32_t>& subaddr_indices = {}) const;
     void get_unconfirmed_payments(std::list<std::pair<crypto::hash,wallet2::pool_payment_details>>& unconfirmed_payments, const std::optional<uint32_t>& subaddr_account = std::nullopt, const std::set<uint32_t>& subaddr_indices = {}) const;
 
-    uint64_t get_blockchain_current_height() const { return m_light_wallet_blockchain_height ? m_light_wallet_blockchain_height : m_blockchain.size(); }
+    uint64_t get_blockchain_current_height() const { return m_blockchain.size(); }
     void rescan_spent();
     void rescan_blockchain(bool hard, bool refresh = true, bool keep_key_images = false);
+    // Staked outputs always return false here: they are not part of the
+    // regular spendable balance and can only be consumed via the unstake
+    // transaction path after their lock period expires.
     bool is_transfer_unlocked(const transfer_details& td);
     bool is_transfer_unlocked(uint64_t unlock_time, uint64_t block_height);
 
@@ -1130,142 +1126,34 @@ private:
     template <class t_archive>
     inline void serialize(t_archive &a, const unsigned int ver)
     {
-      uint64_t dummy_refresh_height = 0; // moved to keys file
-      if(ver < 5)
-        return;
-      if (ver < 19)
-      {
-        std::vector<crypto::hash> blockchain;
-        a & blockchain;
-        m_blockchain.clear();
-        for (const auto &b: blockchain)
-        {
-          m_blockchain.push_back(b);
-        }
-      }
-      else
-      {
-        a & m_blockchain;
-      }
+      assert(ver == 3);
+      a & m_blockchain;
       a & m_transfers;
       a & m_account_public_address;
       a & m_key_images.parent();
-      if(ver < 6)
-        return;
       a & m_unconfirmed_txs.parent();
-      if(ver < 7)
-        return;
       a & m_payments.parent();
-      if(ver < 8)
-        return;
       a & m_tx_keys.parent();
-      if(ver < 9)
-        return;
       a & m_confirmed_txs.parent();
-      if(ver < 11)
-        return;
-      a & dummy_refresh_height;
-      if(ver < 12)
-        return;
       a & m_tx_notes.parent();
-      if(ver < 13)
-        return;
-      if (ver < 17)
-      {
-        // we're loading an old version, where m_unconfirmed_payments was a std::map
-        std::unordered_map<crypto::hash, payment_details> m;
-        a & m;
-        m_unconfirmed_payments.clear();
-        for (std::unordered_map<crypto::hash, payment_details>::const_iterator i = m.begin(); i != m.end(); ++i)
-          m_unconfirmed_payments.insert(std::make_pair(i->first, pool_payment_details{i->second, false}));
-      }
-      if(ver < 14)
-        return;
-      if(ver < 15)
-      {
-        // we're loading an older wallet without a pubkey map, rebuild it
-        m_pub_keys.clear();
-        for (size_t i = 0; i < m_transfers.size(); ++i)
-        {
-          const transfer_details &td = m_transfers[i];
-          m_pub_keys.emplace(td.get_public_key(), i);
-        }
-        return;
-      }
       a & m_pub_keys.parent();
-      if(ver < 16)
-        return;
       a & m_address_book;
-      if(ver < 17)
-        return;
-      if (ver < 22)
-      {
-        // we're loading an old version, where m_unconfirmed_payments payload was payment_details
-        std::unordered_multimap<crypto::hash, payment_details> m;
-        a & m;
-        m_unconfirmed_payments.clear();
-        for (const auto &i: m)
-          m_unconfirmed_payments.insert(std::make_pair(i.first, pool_payment_details{i.second, false}));
-      }
-      if(ver < 18)
-        return;
+      a & m_unconfirmed_payments.parent();
       a & m_scanned_pool_txs[0];
       a & m_scanned_pool_txs[1];
-      if (ver < 20)
-        return;
       a & m_subaddresses.parent();
-      std::unordered_map<cryptonote::subaddress_index, crypto::public_key> dummy_subaddresses_inv;
-      a & dummy_subaddresses_inv;
       a & m_subaddress_labels;
-      a & m_additional_tx_keys.parent();
-      if(ver < 21)
-        return;
       a & m_attributes.parent();
-      if(ver < 22)
-        return;
-      a & m_unconfirmed_payments.parent();
-      if(ver < 23)
-        return;
       a & m_account_tags.first.parent();
       a & m_account_tags.second;
-      if(ver < 24)
-        return;
       a & m_ring_history_saved;
-      if(ver < 25)
-        return;
       a & m_last_block_reward;
-      if(ver < 26)
-        return;
       a & m_tx_device.parent();
-      if(ver < 27)
-        return;
       a & m_device_last_key_image_sync;
-      if(ver < 28)
-        return;
       a & m_cold_key_images.parent();
-      if(ver < 29)
-        return;
       a & m_rpc_client_secret_key;
-      if(ver < 30)
-      {
-        m_has_ever_refreshed_from_node = false;
-        return;
-      }
       a & m_has_ever_refreshed_from_node;
-      if(ver < 31)
-      {
-        m_background_sync_data = background_sync_data_t{};
-        return;
-      }
       a & m_background_sync_data;
-      if(ver < 32)
-      {
-        m_pqc_multisig_keys.clear();
-        m_pqc_multisig_group_id = crypto::null_hash;
-        m_pqc_multisig_n = 0;
-        m_pqc_multisig_m = 0;
-        return;
-      }
       a & m_pqc_multisig_keys;
       a & m_pqc_multisig_group_id;
       a & m_pqc_multisig_n;
@@ -1274,7 +1162,7 @@ private:
 
     BEGIN_SERIALIZE_OBJECT()
       MAGIC_FIELD("shekyl wallet cache")
-      VERSION_FIELD(2)
+      VERSION_FIELD(3)
       FIELD(m_blockchain)
       FIELD(m_transfers)
       FIELD(m_account_public_address)
@@ -1291,7 +1179,6 @@ private:
       FIELD(m_scanned_pool_txs[1])
       FIELD(m_subaddresses)
       FIELD(m_subaddress_labels)
-      FIELD(m_additional_tx_keys)
       FIELD(m_attributes)
       FIELD(m_account_tags)
       FIELD(m_ring_history_saved)
@@ -1300,17 +1187,8 @@ private:
       FIELD(m_device_last_key_image_sync)
       FIELD(m_cold_key_images)
       FIELD(m_rpc_client_secret_key)
-      if (version < 1)
-      {
-        m_has_ever_refreshed_from_node = false;
-        return true;
-      }
+      assert(version == 3);
       FIELD(m_has_ever_refreshed_from_node)
-      if (version < 2)
-      {
-        m_background_sync_data = background_sync_data_t{};
-        return true;
-      }
       FIELD(m_background_sync_data)
     END_SERIALIZE()
 
@@ -1335,12 +1213,8 @@ private:
 
     bool always_confirm_transfers() const { return m_always_confirm_transfers; }
     void always_confirm_transfers(bool always) { m_always_confirm_transfers = always; }
-    bool print_ring_members() const { return m_print_ring_members; }
-    void print_ring_members(bool value) { m_print_ring_members = value; }
     bool store_tx_info() const { return m_store_tx_info; }
     void store_tx_info(bool store) { m_store_tx_info = store; }
-    uint32_t default_mixin() const { return m_default_mixin; }
-    void default_mixin(uint32_t m) { m_default_mixin = m; }
     fee_priority get_default_priority() const { return m_default_priority; }
     void set_default_priority(fee_priority p) { m_default_priority = p; }
     bool auto_refresh() const { return m_auto_refresh; }
@@ -1369,8 +1243,6 @@ private:
     void segregation_height(uint64_t height) { m_segregation_height = height; }
     bool ignore_fractional_outputs() const { return m_ignore_fractional_outputs; }
     void ignore_fractional_outputs(bool value) { m_ignore_fractional_outputs = value; }
-    bool confirm_non_default_ring_size() const { return m_confirm_non_default_ring_size; }
-    void confirm_non_default_ring_size(bool always) { m_confirm_non_default_ring_size = always; }
     uint64_t ignore_outputs_above() const { return m_ignore_outputs_above; }
     void ignore_outputs_above(uint64_t value) { m_ignore_outputs_above = value; }
     uint64_t ignore_outputs_below() const { return m_ignore_outputs_below; }
@@ -1392,8 +1264,6 @@ private:
     void device_derivation_path(const std::string &device_derivation_path) { m_device_derivation_path = device_derivation_path; }
     const ExportFormat & export_format() const { return m_export_format; }
     inline void set_export_format(const ExportFormat& export_format) { m_export_format = export_format; }
-    bool load_deprecated_formats() const { return m_load_deprecated_formats; }
-    void load_deprecated_formats(bool load) { m_load_deprecated_formats = load; }
     bool persistent_rpc_client_id() const { return m_persistent_rpc_client_id; }
     void persistent_rpc_client_id(bool persistent) { m_persistent_rpc_client_id = persistent; }
     void auto_mine_for_rpc_payment_threshold(float threshold) { m_auto_mine_for_rpc_payment_threshold = threshold; }
@@ -1405,20 +1275,14 @@ private:
     bool is_mismatched_daemon_version_allowed() const { return m_allow_mismatched_daemon_version; }
     void allow_mismatched_daemon_version(bool allow_mismatch) { m_allow_mismatched_daemon_version = allow_mismatch; }
 
-    bool get_tx_key_cached(const crypto::hash &txid, crypto::secret_key &tx_key, std::vector<crypto::secret_key> &additional_tx_keys) const;
-    void set_tx_key(const crypto::hash &txid, const crypto::secret_key &tx_key, const std::vector<crypto::secret_key> &additional_tx_keys, const std::optional<cryptonote::account_public_address> &single_destination_subaddress = std::nullopt);
-    bool get_tx_key(const crypto::hash &txid, crypto::secret_key &tx_key, std::vector<crypto::secret_key> &additional_tx_keys);
-    void check_tx_key(const crypto::hash &txid, const crypto::secret_key &tx_key, const std::vector<crypto::secret_key> &additional_tx_keys, const cryptonote::account_public_address &address, uint64_t &received, bool &in_pool, uint64_t &confirmations);
-    void check_tx_key_helper(const crypto::hash &txid, const crypto::key_derivation &derivation, const std::vector<crypto::key_derivation> &additional_derivations, const cryptonote::account_public_address &address, uint64_t &received, bool &in_pool, uint64_t &confirmations);
-    void check_tx_key_helper(const cryptonote::transaction &tx, const crypto::key_derivation &derivation, const std::vector<crypto::key_derivation> &additional_derivations, const cryptonote::account_public_address &address, uint64_t &received) const;
-    bool is_out_to_acc(const cryptonote::account_public_address &address, const crypto::public_key& out_key, const crypto::key_derivation &derivation, const std::vector<crypto::key_derivation> &additional_derivations, const size_t output_index, const std::optional<crypto::view_tag> &view_tag_opt, crypto::key_derivation &found_derivation) const;
+    bool get_tx_key_cached(const crypto::hash &txid, crypto::secret_key &tx_key) const;
+    void set_tx_key(const crypto::hash &txid, const crypto::secret_key &tx_key, const std::optional<cryptonote::account_public_address> &single_destination_subaddress = std::nullopt);
+    bool get_tx_key(const crypto::hash &txid, crypto::secret_key &tx_key);
+    void check_tx_key(const crypto::hash &txid, const crypto::secret_key &tx_key, const cryptonote::account_public_address &address, uint64_t &received, bool &in_pool, uint64_t &confirmations);
     std::string get_tx_proof(const crypto::hash &txid, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message);
-    std::string get_tx_proof(const cryptonote::transaction &tx, const crypto::secret_key &tx_key, const std::vector<crypto::secret_key> &additional_tx_keys, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message) const;
+    std::string get_tx_proof(const cryptonote::transaction &tx, const crypto::secret_key &tx_key, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message) const;
     bool check_tx_proof(const crypto::hash &txid, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message, const std::string &sig_str, uint64_t &received, bool &in_pool, uint64_t &confirmations);
     bool check_tx_proof(const cryptonote::transaction &tx, const cryptonote::account_public_address &address, bool is_subaddress, const std::string &message, const std::string &sig_str, uint64_t &received) const;
-
-    std::string get_spend_proof(const crypto::hash &txid, const std::string &message);
-    bool check_spend_proof(const crypto::hash &txid, const std::string &message, const std::string &sig_str);
 
     void scan_tx(const std::unordered_set<crypto::hash> &txids);
 
@@ -1472,9 +1336,7 @@ private:
     */
     uint64_t get_approximate_blockchain_height() const;
     uint64_t estimate_blockchain_height();
-    std::vector<size_t> select_available_outputs_from_histogram(uint64_t count, bool atleast, bool unlocked, bool allow_rct);
     std::vector<size_t> select_available_outputs(const std::function<bool(const transfer_details &td)> &f);
-    std::vector<size_t> select_available_mixable_outputs();
 
     size_t pop_best_value_from(const transfer_container &transfers, std::vector<size_t> &unused_dust_indices, const std::vector<size_t>& selected_transfers, bool smallest = false) const;
     size_t pop_best_value(std::vector<size_t> &unused_dust_indices, const std::vector<size_t>& selected_transfers, bool smallest = false) const;
@@ -1561,15 +1423,11 @@ private:
     std::vector<std::pair<uint64_t, uint64_t>> estimate_backlog(const std::vector<std::pair<double, double>> &fee_levels);
     std::vector<std::pair<uint64_t, uint64_t>> estimate_backlog(uint64_t min_tx_weight, uint64_t max_tx_weight, const std::vector<uint64_t> &fees);
 
-    static uint64_t estimate_fee(bool use_per_byte_fee, bool use_rct, int n_inputs, int mixin, int n_outputs, size_t extra_size, bool bulletproof, bool clsag, bool bulletproof_plus, bool use_view_tags, uint64_t base_fee, uint64_t fee_quantization_mask);
+    static uint64_t estimate_fee(bool use_per_byte_fee, bool use_rct, int n_inputs, int n_outputs, size_t extra_size, bool use_view_tags, uint64_t base_fee, uint64_t fee_quantization_mask);
     uint64_t get_fee_multiplier(fee_priority priority, fee_algorithm fee_algorithm = fee_algorithm::Unset);
     uint64_t get_base_fee(fee_priority priority);
     uint64_t get_base_fee();
     uint64_t get_fee_quantization_mask();
-    uint64_t get_min_ring_size();
-    uint64_t get_max_ring_size();
-    uint64_t adjust_mixin(uint64_t mixin);
-
     fee_priority adjust_priority(fee_priority priority);
 
     /*
@@ -1581,7 +1439,7 @@ private:
 
     bool is_unattended() const { return m_unattended; }
 
-    std::pair<size_t, uint64_t> estimate_tx_size_and_weight(bool use_rct, int n_inputs, int ring_size, int n_outputs, size_t extra_size);
+    std::pair<size_t, uint64_t> estimate_tx_size_and_weight(bool use_rct, int n_inputs, int n_outputs, size_t extra_size);
 
     bool get_rpc_payment_info(bool mining, bool &payment_required, uint64_t &credits, uint64_t &diff, uint64_t &credits_per_hash_found, cryptonote::blobdata &hashing_blob, uint64_t &height, uint64_t &seed_height, crypto::hash &seed_hash, crypto::hash &next_seed_hash, uint32_t &cookie);
     bool daemon_requires_payment();
@@ -1597,24 +1455,6 @@ private:
       }
     }
     template<typename T> void handle_payment_changes(const T &res, std::false_type) {}
-
-    // Light wallet specific functions
-    // fetch unspent outs from lw node and store in m_transfers
-    void light_wallet_get_unspent_outs();
-    // fetch txs and store in m_payments
-    void light_wallet_get_address_txs();
-    // get_address_info
-    bool light_wallet_get_address_info(tools::COMMAND_RPC_GET_ADDRESS_INFO::response &response);
-    // Login. new_address is true if address hasn't been used on lw node before.
-    bool light_wallet_login(bool &new_address);
-    // Send an import request to lw node. returns info about import fee, address and payment_id
-    bool light_wallet_import_wallet_request(tools::COMMAND_RPC_IMPORT_WALLET_REQUEST::response &response);
-    // get random outputs from light wallet server
-    void light_wallet_get_outs(std::vector<std::vector<get_outs_entry>> &outs, const std::vector<size_t> &selected_transfers, size_t fake_outputs_count);
-    // Parse rct string
-    bool light_wallet_parse_rct_str(const std::string& rct_string, const crypto::public_key& tx_pub_key, uint64_t internal_output_index, rct::key& decrypted_mask, rct::key& rct_commit, bool decrypt) const;
-    // check if key image is ours
-    bool light_wallet_key_image_is_ours(const crypto::key_image& key_image, const crypto::public_key& tx_public_key, uint64_t out_index);
 
     /*
      * "attributes" are a mechanism to store an arbitrary number of string values
@@ -1656,22 +1496,6 @@ private:
       boost::lock_guard<boost::recursive_mutex> lock(m_daemon_rpc_mutex);
       return epee::net_utils::invoke_http_json_rpc(uri, method_name, req, res, *m_http_client, timeout, http_method, req_id);
     }
-
-    bool set_ring_database(const std::string &filename);
-    const std::string get_ring_database() const { return m_ring_database; }
-    bool get_ring(const crypto::key_image &key_image, std::vector<uint64_t> &outs);
-    bool get_rings(const crypto::hash &txid, std::vector<std::pair<crypto::key_image, std::vector<uint64_t>>> &outs);
-    bool get_rings(const crypto::chacha_key &key, const std::vector<crypto::key_image> &key_images, std::vector<std::vector<uint64_t>> &outs);
-    bool set_ring(const crypto::key_image &key_image, const std::vector<uint64_t> &outs, bool relative);
-    bool set_rings(const std::vector<std::pair<crypto::key_image, std::vector<uint64_t>>> &rings, bool relative);
-    bool unset_ring(const std::vector<crypto::key_image> &key_images);
-    bool unset_ring(const crypto::hash &txid);
-    [[deprecated]] bool find_and_save_rings(bool force = true);
-
-    bool blackball_output(const std::pair<uint64_t, uint64_t> &output);
-    bool set_blackballed_outputs(const std::vector<std::pair<uint64_t, uint64_t>> &outputs, bool add = false);
-    bool unblackball_output(const std::pair<uint64_t, uint64_t> &output);
-    bool is_output_blackballed(const std::pair<uint64_t, uint64_t> &output) const;
 
     void freeze(size_t idx);
     void thaw(size_t idx);
@@ -1781,24 +1605,15 @@ private:
     uint64_t get_upper_transaction_weight_limit();
     std::vector<uint64_t> get_unspent_amounts_vector(bool strict);
     uint64_t get_dynamic_base_fee_estimate();
-    float get_output_relatedness(const transfer_details &td0, const transfer_details &td1) const;
     std::vector<size_t> pick_preferred_rct_inputs(uint64_t needed_money, uint32_t subaddr_account, const std::set<uint32_t> &subaddr_indices);
     void set_spent(size_t idx, uint64_t height);
     void set_unspent(size_t idx);
     bool is_spent(const transfer_details &td, bool strict = true) const;
     bool is_spent(size_t idx, bool strict = true) const;
-    void get_outs(std::vector<std::vector<get_outs_entry>> &outs, const std::vector<size_t> &selected_transfers, size_t fake_outputs_count, bool rct, std::unordered_set<crypto::public_key> &valid_public_keys_cache);
-    void get_outs(std::vector<std::vector<get_outs_entry>> &outs, const std::vector<size_t> &selected_transfers, size_t fake_outputs_count, std::vector<uint64_t> &rct_offsets, std::unordered_set<crypto::public_key> &valid_public_keys_cache);
-    bool tx_add_fake_output(std::vector<std::vector<tools::wallet2::get_outs_entry>> &outs, uint64_t global_index, const crypto::public_key& tx_public_key, const rct::key& mask, uint64_t real_index, bool unlocked, std::unordered_set<crypto::public_key> &valid_public_keys_cache) const;
     bool should_pick_a_second_output(bool use_rct, size_t n_transfers, const std::vector<size_t> &unused_transfers_indices, const std::vector<size_t> &unused_dust_indices) const;
     std::vector<size_t> get_only_rct(const std::vector<size_t> &unused_dust_indices, const std::vector<size_t> &unused_transfers_indices) const;
     void scan_output(const cryptonote::transaction &tx, bool miner_tx, const crypto::public_key &tx_pub_key, size_t i, tx_scan_info_t &tx_scan_info, int &num_vouts_received, std::unordered_map<cryptonote::subaddress_index, uint64_t> &tx_money_got_in_outs, std::vector<size_t> &outs, bool pool);
     void trim_hashchain();
-    bool add_rings(const crypto::chacha_key &key, const cryptonote::transaction_prefix &tx);
-    bool add_rings(const cryptonote::transaction_prefix &tx);
-    bool remove_rings(const cryptonote::transaction_prefix &tx);
-    bool get_ring(const crypto::chacha_key &key, const crypto::key_image &key_image, std::vector<uint64_t> &outs);
-    crypto::chacha_key get_ringdb_key();
     void setup_keys(const epee::wipeable_string &password);
     const crypto::chacha_key get_cache_key();
     void verify_password_with_cached_key(const epee::wipeable_string &password);
@@ -1861,11 +1676,17 @@ private:
     serializable_unordered_multimap<crypto::hash, pool_payment_details> m_unconfirmed_payments;
     serializable_unordered_map<crypto::hash, crypto::secret_key> m_tx_keys;
     cryptonote::checkpoints m_checkpoints;
-    serializable_unordered_map<crypto::hash, std::vector<crypto::secret_key>> m_additional_tx_keys;
-
     transfer_container m_transfers;
     payment_container m_payments;
     serializable_unordered_map<crypto::key_image, size_t> m_key_images;
+
+    struct pending_claim_watermark {
+      uint64_t global_output_index;
+      uint64_t to_height;
+      uint64_t broadcast_height;
+      crypto::hash tx_hash;
+    };
+    std::vector<pending_claim_watermark> m_pending_claim_watermarks;
     serializable_unordered_map<crypto::public_key, size_t> m_pub_keys;
     cryptonote::account_public_address m_account_public_address;
     serializable_unordered_map<crypto::public_key, cryptonote::subaddress_index> m_subaddresses;
@@ -1887,12 +1708,9 @@ private:
     cryptonote::network_type m_nettype;
     uint64_t m_kdf_rounds;
     std::string seed_language; /*!< Language of the mnemonics (seed). */
-    bool is_old_file_format; /*!< Whether the wallet file is of an old file format */
     bool m_watch_only; /*!< no spend key */
     bool m_always_confirm_transfers;
-    bool m_print_ring_members;
     bool m_store_tx_info; /*!< request txkey to be returned in RPC, and store in the wallet cache file */
-    uint32_t m_default_mixin;
     fee_priority m_default_priority;
     RefreshType m_refresh_type;
     bool m_auto_refresh;
@@ -1906,7 +1724,6 @@ private:
     uint64_t m_skip_to_height;
     // m_skip_to_height is useful when we don't want to modify the wallet's restore height.
     // m_refresh_from_block_height is also a wallet's restore height which should remain constant unless explicitly modified by the user.
-    bool m_confirm_non_default_ring_size;
     AskPasswordType m_ask_password;
     uint64_t m_max_reorg_depth;
     uint32_t m_min_output_count;
@@ -1948,24 +1765,10 @@ private:
     // Aux transaction data from device
     serializable_unordered_map<crypto::hash, std::string> m_tx_device;
 
-    // Light wallet
-    bool m_light_wallet; /* sends view key to daemon for scanning */
-    uint64_t m_light_wallet_scanned_block_height;
-    uint64_t m_light_wallet_blockchain_height;
-    uint64_t m_light_wallet_per_kb_fee = FEE_PER_KB;
-    bool m_light_wallet_connected;
-    uint64_t m_light_wallet_balance;
-    uint64_t m_light_wallet_unlocked_balance;
-    // Light wallet info needed to populate m_payment requires 2 separate api calls (get_address_txs and get_unspent_outs)
-    // We save the info from the first call in m_light_wallet_address_txs for easier lookup.
-    std::unordered_map<crypto::hash, address_tx> m_light_wallet_address_txs;
     // store calculated key image for faster lookup
     serializable_unordered_map<crypto::public_key, serializable_map<uint64_t, crypto::key_image> > m_key_image_cache;
 
-    std::string m_ring_database;
     bool m_ring_history_saved;
-    std::unique_ptr<ringdb> m_ringdb;
-    std::optional<crypto::chacha_key> m_ringdb_key;
 
     uint64_t m_last_block_reward;
     std::unique_ptr<tools::file_locker> m_keys_file_locker;
@@ -1986,7 +1789,6 @@ private:
     std::unique_ptr<wallet_device_callback> m_device_callback;
 
     ExportFormat m_export_format;
-    bool m_load_deprecated_formats;
 
     bool m_has_ever_refreshed_from_node;
 
@@ -1997,6 +1799,63 @@ private:
     bool m_processing_background_cache;
     background_sync_data_t m_background_sync_data;
 
+    // FCMP++ precomputed tree paths (Phase 5e, runtime cache -- not serialized)
+    std::unordered_map<uint64_t, fcmp_precomputed_path> m_fcmp_precomputed_paths;
+    uint64_t m_fcmp_last_precompute_height = 0;
+
+  public:
+    // Native-sign mode: when true, transfer_selected_rct skips C++ proof generation
+    // and stores signing data for the Rust shekyl-tx-builder path. Public because
+    // wallet2_ffi accesses these directly for the split prepare/finalize pipeline.
+    bool m_native_sign_mode = false;
+    struct native_sign_state {
+      pending_tx ptx;
+      std::vector<size_t> permuted_transfers;
+      // Per-input signing data extracted from transfer_selected_rct
+      struct input_signing_data {
+        rct::key output_key;
+        rct::key commitment;
+        uint64_t amount;
+        rct::key spend_key_x;
+        rct::key spend_key_y;
+        rct::key h_pqc;
+        std::vector<fcmp_precomputed_path::chunk_output_entry> leaf_chunk;
+        std::vector<std::vector<rct::key>> c1_layers;
+        std::vector<std::vector<rct::key>> c2_layers;
+      };
+      std::vector<input_signing_data> inputs;
+      // Per-output data
+      struct output_signing_data {
+        rct::key dest_key;
+        uint64_t amount;
+        rct::key commitment_mask; // HKDF z scalar for BP+ proof generation
+      };
+      std::vector<output_signing_data> outputs;
+      crypto::hash tx_prefix_hash{};
+      uint64_t fee = 0;
+      crypto::hash reference_block{};
+      crypto::hash curve_tree_root{};
+      uint8_t tree_depth = 0;
+      std::string tx_blob_hex;
+      bool valid = false;
+      void clear() {
+        for (auto &in : inputs) {
+          memwipe(in.spend_key_x.bytes, sizeof(in.spend_key_x));
+          memwipe(in.spend_key_y.bytes, sizeof(in.spend_key_y));
+          memwipe(in.h_pqc.bytes, sizeof(in.h_pqc));
+        }
+        inputs.clear();
+        for (auto &out : outputs) {
+          memwipe(out.commitment_mask.bytes, sizeof(out.commitment_mask));
+        }
+        outputs.clear();
+        memwipe(&tx_prefix_hash, sizeof(tx_prefix_hash));
+        valid = false;
+      }
+    };
+    native_sign_state m_native_sign_state;
+
+  private:
     // PQC multisig state (scheme_id = 2)
     std::vector<uint8_t> m_pqc_multisig_keys;
     crypto::hash m_pqc_multisig_group_id;
@@ -2004,20 +1863,20 @@ private:
     uint8_t m_pqc_multisig_m = 0;
   };
 }
-BOOST_CLASS_VERSION(tools::wallet2, 32)
-BOOST_CLASS_VERSION(tools::wallet2::transfer_details, 12)
-BOOST_CLASS_VERSION(tools::wallet2::payment_details, 5)
-BOOST_CLASS_VERSION(tools::wallet2::pool_payment_details, 1)
-BOOST_CLASS_VERSION(tools::wallet2::unconfirmed_transfer_details, 8)
-BOOST_CLASS_VERSION(tools::wallet2::confirmed_transfer_details, 6)
-BOOST_CLASS_VERSION(tools::wallet2::address_book_row, 18)
-BOOST_CLASS_VERSION(tools::wallet2::reserve_proof_entry, 0)
-BOOST_CLASS_VERSION(tools::wallet2::unsigned_tx_set, 1)
-BOOST_CLASS_VERSION(tools::wallet2::signed_tx_set, 1)
-BOOST_CLASS_VERSION(tools::wallet2::tx_construction_data, 4)
+BOOST_CLASS_VERSION(tools::wallet2, 3)
+BOOST_CLASS_VERSION(tools::wallet2::transfer_details, 3)
+BOOST_CLASS_VERSION(tools::wallet2::payment_details, 3)
+BOOST_CLASS_VERSION(tools::wallet2::pool_payment_details, 3)
+BOOST_CLASS_VERSION(tools::wallet2::unconfirmed_transfer_details, 3)
+BOOST_CLASS_VERSION(tools::wallet2::confirmed_transfer_details, 3)
+BOOST_CLASS_VERSION(tools::wallet2::address_book_row, 3)
+BOOST_CLASS_VERSION(tools::wallet2::reserve_proof_entry, 3)
+BOOST_CLASS_VERSION(tools::wallet2::unsigned_tx_set, 3)
+BOOST_CLASS_VERSION(tools::wallet2::signed_tx_set, 3)
+BOOST_CLASS_VERSION(tools::wallet2::tx_construction_data, 3)
 BOOST_CLASS_VERSION(tools::wallet2::pending_tx, 3)
-BOOST_CLASS_VERSION(tools::wallet2::background_synced_tx_t, 0)
-BOOST_CLASS_VERSION(tools::wallet2::background_sync_data_t, 0)
+BOOST_CLASS_VERSION(tools::wallet2::background_synced_tx_t, 3)
+BOOST_CLASS_VERSION(tools::wallet2::background_sync_data_t, 3)
 
 namespace boost
 {
@@ -2035,185 +1894,60 @@ namespace boost
     }
 
     template <class Archive>
-    inline typename std::enable_if<!Archive::is_loading::value, void>::type initialize_transfer_details(Archive &a, tools::wallet2::transfer_details &x, const boost::serialization::version_type ver)
-    {
-    }
-    template <class Archive>
-    inline typename std::enable_if<Archive::is_loading::value, void>::type initialize_transfer_details(Archive &a, tools::wallet2::transfer_details &x, const boost::serialization::version_type ver)
-    {
-        if (ver < 1)
-        {
-          x.m_mask = rct::identity();
-          x.m_amount = x.m_tx.vout[x.m_internal_output_index].amount;
-        }
-        if (ver < 2)
-        {
-          x.m_spent_height = 0;
-        }
-        if (ver < 4)
-        {
-          x.m_rct = x.m_tx.vout[x.m_internal_output_index].amount == 0;
-        }
-        if (ver < 6)
-        {
-          x.m_key_image_known = true;
-        }
-        if (ver < 7)
-        {
-          x.m_pk_index = 0;
-        }
-        if (ver < 8)
-        {
-          x.m_subaddr_index = {};
-        }
-        if (ver < 10)
-        {
-          x.m_key_image_request = false;
-        }
-        if (ver < 12)
-        {
-          x.m_frozen = false;
-        }
-    }
-
-    template <class Archive>
     inline void serialize(Archive &a, tools::wallet2::transfer_details &x, const boost::serialization::version_type ver)
     {
+      assert(ver == 3);
       a & x.m_block_height;
       a & x.m_global_output_index;
       a & x.m_internal_output_index;
-      if (ver < 3)
-      {
-        cryptonote::transaction tx;
-        a & tx;
-        x.m_tx = (const cryptonote::transaction_prefix&)tx;
-        x.m_txid = cryptonote::get_transaction_hash(tx);
-      }
-      else
-      {
-        a & x.m_tx;
-      }
+      a & x.m_tx;
+      a & x.m_txid;
       a & x.m_spent;
       a & x.m_key_image;
-      if (ver < 1)
-      {
-        // ensure mask and amount are set
-        initialize_transfer_details(a, x, ver);
-        return;
-      }
       a & x.m_mask;
+      a & x.m_y;
+      a & x.m_k_amount;
       a & x.m_amount;
-      if (ver < 2)
-      {
-        initialize_transfer_details(a, x, ver);
-        return;
-      }
       a & x.m_spent_height;
-      if (ver < 3)
-      {
-        initialize_transfer_details(a, x, ver);
-        return;
-      }
-      a & x.m_txid;
-      if (ver < 4)
-      {
-        initialize_transfer_details(a, x, ver);
-        return;
-      }
-      a & x.m_rct;
-      if (ver < 5)
-      {
-        initialize_transfer_details(a, x, ver);
-        return;
-      }
-      if (ver < 6)
-      {
-        // v5 did not properly initialize
-        uint8_t u;
-        a & u;
-        x.m_key_image_known = true;
-        return;
-      }
       a & x.m_key_image_known;
-      if (ver < 7)
-      {
-        initialize_transfer_details(a, x, ver);
-        return;
-      }
-      a & x.m_pk_index;
-      if (ver < 8)
-      {
-        initialize_transfer_details(a, x, ver);
-        return;
-      }
-      a & x.m_subaddr_index;
-      if (ver < 10)
-      {
-        initialize_transfer_details(a, x, ver);
-        return;
-      }
       a & x.m_key_image_request;
-      if (ver < 11)
-      {
-        initialize_transfer_details(a, x, ver);
-        return;
-      }
+      a & x.m_pk_index;
+      a & x.m_subaddr_index;
       a & x.m_uses;
-      if (ver < 12)
-      {
-        initialize_transfer_details(a, x, ver);
-        return;
-      }
+      a & x.m_staked;
+      a & x.m_stake_tier;
+      a & x.m_stake_lock_until;
+      a & x.m_last_claimed_height;
       a & x.m_frozen;
+      {
+        std::vector<uint8_t> css_vec;
+        if (typename Archive::is_saving()) {
+          if (x.m_combined_shared_secret_set)
+            css_vec.assign(x.m_combined_shared_secret.begin(), x.m_combined_shared_secret.end());
+        }
+        a & css_vec;
+        if (typename Archive::is_loading() && css_vec.size() == 64) {
+          std::copy(css_vec.begin(), css_vec.end(), x.m_combined_shared_secret.begin());
+          x.m_combined_shared_secret_set = true;
+        }
+      }
     }
 
     template <class Archive>
     inline void serialize(Archive &a, tools::wallet2::unconfirmed_transfer_details &x, const boost::serialization::version_type ver)
     {
+      assert(ver == 3);
       a & x.m_change;
       a & x.m_sent_time;
-      if (ver < 5)
-      {
-        cryptonote::transaction tx;
-        a & tx;
-        x.m_tx = (const cryptonote::transaction_prefix&)tx;
-      }
-      else
-      {
-        a & x.m_tx;
-      }
-      if (ver < 1)
-        return;
+      a & x.m_tx;
       a & x.m_dests;
       a & x.m_payment_id;
-      if (ver < 2)
-        return;
       a & x.m_state;
-      if (ver < 3)
-        return;
       a & x.m_timestamp;
-      if (ver < 4)
-        return;
       a & x.m_amount_in;
       a & x.m_amount_out;
-      if (ver < 6)
-      {
-        // v<6 may not have change accumulated in m_amount_out, which is a pain,
-        // as it's readily understood to be sum of outputs.
-        // We convert it to include change from v6
-        if (!typename Archive::is_saving() && x.m_change != (uint64_t)-1)
-          x.m_amount_out += x.m_change;
-      }
-      if (ver < 7)
-      {
-        x.m_subaddr_account = 0;
-        return;
-      }
       a & x.m_subaddr_account;
       a & x.m_subaddr_indices;
-      if (ver < 8)
-        return;
-      a & x.m_rings;
     }
 
     template <class Archive>
@@ -2223,78 +1957,26 @@ namespace boost
       a & x.m_amount_out;
       a & x.m_change;
       a & x.m_block_height;
-      if (ver < 1)
-        return;
       a & x.m_dests;
       a & x.m_payment_id;
-      if (ver < 2)
-        return;
       a & x.m_timestamp;
-      if (ver < 3)
-      {
-        // v<3 may not have change accumulated in m_amount_out, which is a pain,
-        // as it's readily understood to be sum of outputs. Whether it got added
-        // or not depends on whether it came from a unconfirmed_transfer_details
-        // (not included) or not (included). We can't reliably tell here, so we
-        // check whether either yields a "negative" fee, or use the other if so.
-        // We convert it to include change from v3
-        if (!typename Archive::is_saving() && x.m_change != (uint64_t)-1)
-        {
-          if (x.m_amount_in > (x.m_amount_out + x.m_change))
-            x.m_amount_out += x.m_change;
-        }
-      }
-      if (ver < 4)
-      {
-        if (!typename Archive::is_saving())
-          x.m_unlock_time = 0;
-        return;
-      }
       a & x.m_unlock_time;
-      if (ver < 5)
-      {
-        x.m_subaddr_account = 0;
-        return;
-      }
       a & x.m_subaddr_account;
       a & x.m_subaddr_indices;
-      if (ver < 6)
-        return;
-      a & x.m_rings;
     }
 
     template <class Archive>
     inline void serialize(Archive& a, tools::wallet2::payment_details& x, const boost::serialization::version_type ver)
     {
+      assert(ver == 3);
       a & x.m_tx_hash;
       a & x.m_amount;
       a & x.m_block_height;
       a & x.m_unlock_time;
-      if (ver < 1)
-        return;
       a & x.m_timestamp;
-      if (ver < 2)
-      {
-        x.m_coinbase = false;
-        x.m_subaddr_index = {};
-        return;
-      }
       a & x.m_subaddr_index;
-      if (ver < 3)
-      {
-        x.m_coinbase = false;
-        x.m_fee = 0;
-        return;
-      }
       a & x.m_fee;
-      if (ver < 4)
-      {
-        x.m_coinbase = false;
-        return;
-      }
       a & x.m_coinbase;
-      if (ver < 5)
-        return;
       a & x.m_amounts;
     }
 
@@ -2308,36 +1990,10 @@ namespace boost
     template <class Archive>
     inline void serialize(Archive& a, tools::wallet2::address_book_row& x, const boost::serialization::version_type ver)
     {
+      assert(ver == 3);
       a & x.m_address;
-      if (ver < 18)
-      {
-        crypto::hash payment_id;
-        a & payment_id;
-        x.m_has_payment_id = !(payment_id == crypto::null_hash);
-        if (x.m_has_payment_id)
-        {
-          bool is_long = false;
-          for (int i = 8; i < 32; ++i)
-            is_long |= payment_id.data[i];
-          if (is_long)
-          {
-            MWARNING("Long payment ID ignored on address book load");
-            x.m_payment_id = crypto::null_hash8;
-            x.m_has_payment_id = false;
-          }
-          else
-            memcpy(x.m_payment_id.data, payment_id.data, 8);
-        }
-      }
       a & x.m_description;
-      if (ver < 17)
-      {
-        x.m_is_subaddress = false;
-        return;
-      }
       a & x.m_is_subaddress;
-      if (ver < 18)
-        return;
       a & x.m_has_payment_id;
       if (x.m_has_payment_id)
         a & x.m_payment_id;
@@ -2357,114 +2013,56 @@ namespace boost
     template <class Archive>
     inline void serialize(Archive &a, tools::wallet2::unsigned_tx_set &x, const boost::serialization::version_type ver)
     {
+      assert(ver == 3);
       a & x.txes;
-      if (ver == 0)
-      {
-        // load old version
-        std::pair<size_t, tools::wallet2::transfer_container> old_transfers;
-        a & old_transfers;
-        std::get<0>(x.transfers) = std::get<0>(old_transfers);
-        std::get<1>(x.transfers) = std::get<0>(old_transfers) + std::get<1>(old_transfers).size();
-        std::get<2>(x.transfers) = std::get<1>(old_transfers);
-        return;
-      }
-      throw std::runtime_error("Boost serialization not supported for newest unsigned_tx_set");
+      a & x.transfers;
     }
 
     template <class Archive>
     inline void serialize(Archive &a, tools::wallet2::signed_tx_set &x, const boost::serialization::version_type ver)
     {
+      assert(ver == 3);
       a & x.ptx;
       a & x.key_images;
-      if (ver < 1)
-        return;
       a & x.tx_key_images.parent();
     }
 
     template <class Archive>
     inline void serialize(Archive &a, tools::wallet2::tx_construction_data &x, const boost::serialization::version_type ver)
     {
+      assert(ver == 3);
       a & x.sources;
       a & x.change_dts;
       a & x.splitted_dsts;
-      if (ver < 2)
-      {
-        // load list to vector
-        std::list<size_t> selected_transfers;
-        a & selected_transfers;
-        x.selected_transfers.clear();
-        x.selected_transfers.reserve(selected_transfers.size());
-        for (size_t t: selected_transfers)
-          x.selected_transfers.push_back(t);
-      }
+      a & x.selected_transfers;
       a & x.extra;
       a & x.unlock_time;
       a & x.use_rct;
       a & x.dests;
-      if (ver < 1)
-      {
-        x.subaddr_account = 0;
-        return;
-      }
       a & x.subaddr_account;
       a & x.subaddr_indices;
-      if (ver < 2)
-      {
-        if (!typename Archive::is_saving())
-          x.rct_config = { rct::RangeProofPaddedBulletproof, 0 };
-        return;
-      }
-      a & x.selected_transfers;
-      if (ver < 3)
-      {
-        if (!typename Archive::is_saving())
-          x.rct_config = { rct::RangeProofPaddedBulletproof, 0 };
-        return;
-      }
-      if (ver < 4)
-      {
-        bool use_bulletproofs = true;
-        a & use_bulletproofs;
-        if (!typename Archive::is_saving())
-          x.rct_config = { rct::RangeProofPaddedBulletproof, 0 };
-        return;
-      }
-      a & x.rct_config;
     }
 
     template <class Archive>
     inline void serialize(Archive &a, tools::wallet2::pending_tx &x, const boost::serialization::version_type ver)
     {
+      assert(ver == 3);
       a & x.tx;
       a & x.dust;
       a & x.fee;
       a & x.dust_added_to_fee;
       a & x.change_dts;
-      if (ver < 2)
-      {
-        // load list to vector
-        std::list<size_t> selected_transfers;
-        a & selected_transfers;
-        x.selected_transfers.clear();
-        x.selected_transfers.reserve(selected_transfers.size());
-        for (size_t t: selected_transfers)
-          x.selected_transfers.push_back(t);
-      }
+      a & x.selected_transfers;
       a & x.key_images;
       a & x.tx_key;
       a & x.dests;
       a & x.construction_data;
-      if (ver < 1)
-        return;
-      a & x.additional_tx_keys;
-      if (ver < 2)
-        return;
-      a & x.selected_transfers;
     }
 
     template <class Archive>
     inline void serialize(Archive& a, tools::wallet2::background_synced_tx_t &x, const boost::serialization::version_type ver)
     {
+      assert(ver == 3);
       a & x.index_in_background_sync_data;
       a & x.tx;
       a & x.output_indices;
@@ -2476,6 +2074,7 @@ namespace boost
     template <class Archive>
     inline void serialize(Archive& a, tools::wallet2::background_sync_data_t &x, const boost::serialization::version_type ver)
     {
+      assert(ver == 3);
       a & x.first_refresh_done;
       a & x.start_height;
       a & x.txs.parent();

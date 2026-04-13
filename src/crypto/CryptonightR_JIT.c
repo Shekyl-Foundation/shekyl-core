@@ -3,7 +3,12 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#if defined(_MSC_VER)
+#include <windows.h>
+#endif
+#if !defined(_MSC_VER)
 #include <unistd.h>
+#endif
 #if !(defined(_MSC_VER) || defined(__MINGW32__))
 #include <sys/mman.h>
 #endif
@@ -12,7 +17,9 @@
 #include "hash-ops.h"
 #include "variant4_random_math.h"
 #include "CryptonightR_JIT.h"
+#if defined(__i386) || defined(__i386__) || defined(__x86_64__)
 #include "CryptonightR_template.h"
+#endif
 
 static const uint8_t prologue[] = {
 #if defined __i386 || defined __x86_64__
@@ -114,7 +121,12 @@ int v4_generate_JIT_code(const struct V4_Instruction* code, v4_random_math_JIT_f
 		return -1;
 #endif
 
+#if defined(_MSC_VER)
+	if (!FlushInstructionCache(GetCurrentProcess(), buf, (SIZE_T)(JIT_code - (uint8_t*)buf)))
+		return -1;
+#else
 	__builtin___clear_cache((char*)buf, (char*)JIT_code);
+#endif
 
 	return 0;
 #else

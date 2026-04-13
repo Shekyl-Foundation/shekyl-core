@@ -1,0 +1,27 @@
+---
+description: Shekyl mission and the canonical priority hierarchy. Apply to all changes.
+alwaysApply: true
+---
+
+# Shekyl mission
+
+Shekyl is privacy-preserving money designed to last. Three commitments, in this
+order of precedence when they conflict:
+
+1. **Security and quantum resilience are preconditions.** Hybrid PQC ships from
+   genesis. A change that weakens the security or PQC posture is rejected,
+   regardless of what it gains in privacy, usability, or features.
+2. **Privacy is the product.** Every user gets the same anonymity guarantees by
+   default — privacy is never a setting. A change that weakens privacy to add a
+   feature of any kind other than security is rejected.
+3. **The system must outlast the team.** Code is written for an unknown future
+   maintainer. Every decision is evaluated against three timeframes: now, end
+   of the mining era (~30 years), and the V4 lattice-only transition.
+
+These commitments rarely conflict; they only arbitrate edge cases. When
+invoking the hierarchy, name which commitment is binding and why the
+alternatives were considered.
+
+This file is the single source of truth on priority ordering. Other rules
+reference this hierarchy rather than restating it. If another rule appears to
+contradict this file, this file wins.

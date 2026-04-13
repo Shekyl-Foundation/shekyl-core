@@ -1,0 +1,35 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-tx-builder"
+description = "Native Rust transaction signing for Shekyl FCMP++ (BP+, membership proof, PQC auth)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
+shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
+shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
+
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
+fips204 = "0.4.6"
+rand_core = { version = "0.6", features = ["std"] }
+zeroize = { version = "1", features = ["derive"] }
+thiserror.workspace = true
+serde.workspace = true
+hex = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+rand = "0.8"
+
+[lints]
+workspace = true

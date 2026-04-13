@@ -60,9 +60,8 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 |------|-------------|
 | **Shekyl-specific** | CONTRIBUTING and i18n docs have been updated to reference Shekyl maintainers, project channels, and binary names (e.g. `shekyl-wallet-cli`). |
 
-### 1.9 Other docs (ZMQ, PORTABLE_STORAGE, INSTALLATION_GUIDE, PUBLIC_NARRATIVE_FAQ)
+### 1.9 Other docs (PORTABLE_STORAGE, INSTALLATION_GUIDE, PUBLIC_NARRATIVE_FAQ)
 
-- **ZMQ.md**: No explicit TODOs; describes current/future ZMQ status in Shekyl; note any differences from upstream if relevant.
 - **PORTABLE_STORAGE.md**: No TODOs; reference doc.
 - **INSTALLATION_GUIDE.md**: Shekyl-native; no critical TODOs.
 - **PUBLIC_NARRATIVE_FAQ.md**: Narrative/positioning; no technical TODOs.
@@ -138,10 +137,10 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 - **Purpose**: Post-quantum primitives for Shekyl (ML-DSA, ML-KEM, hybrid signatures).
 - **Design**:
   - **Signatures**: Hybrid `Ed25519 + ML-DSA-65`; both must verify.
-  - **KEM**: Hybrid `X25519 + ML-KEM-768` remains deferred until a concrete protocol use is specified.
+  - **KEM**: Hybrid `X25519 + ML-KEM-768` ships at genesis for per-output PQC key derivation.
 - **Types**: `HybridPublicKey`, `HybridSecretKey`, `HybridSignature`; `HybridKemPublicKey`, `HybridKemSecretKey`, `HybridCiphertext`, `SharedSecret`.
-- **Status**: Hybrid signature support is implemented with canonical serialization helpers and tests. KEM remains present only as deferred future work.
-- **Integration**: Signature operations are exposed via `shekyl-ffi`; wallet/core spend-binding integration in the C++ path is still in progress.
+- **Status**: Hybrid signature support is implemented with canonical serialization helpers and tests. KEM ships at genesis for per-output PQC key derivation. Deterministic KEM encapsulation from `tx_key_secret` is implemented (`derive_kem_seed`). Proof pipeline helpers (`rederive_combined_ss`, `derive_proof_secrets`, `derive_output_key`, `recover_recipient_spend_pubkey`, `decrypt_amount`, `compute_output_key_image`) are implemented with full test coverage. KAT vectors at `docs/test_vectors/KEM_DERIVE_V1_KAT.json`.
+- **Integration**: Signature operations are exposed via `shekyl-ffi`. Proof helper FFI exports (`shekyl_generate_tx_proof_outbound/inbound`, `shekyl_verify_tx_proof_outbound/inbound`, `shekyl_generate_reserve_proof`, `shekyl_verify_reserve_proof`, `shekyl_derive_proof_secrets`) are wired and the C++ wallet2 proof functions (`get_tx_proof`, `check_tx_proof`, `get_reserve_proof`, `check_reserve_proof`) delegate to the Rust FFI. Monero-era DH proof functions (`crypto::generate_tx_proof`, `crypto::check_tx_proof`) and helpers (`check_tx_key_helper`, `is_out_to_acc`) have been deleted.
 
 ### 2.4 Gaps in PQC documentation
 
@@ -152,8 +151,13 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 - Operator-facing rollout notes now exist (`docs/V3_ROLLOUT.md`).
 - Wallet scanning vs hybrid authorization coexistence is now documented in `docs/POST_QUANTUM_CRYPTOGRAPHY.md`.
 - Hybrid signature vector verification is now covered in Rust unit tests (`documented_vector_verifies`).
-- **RingCT / stealth addresses**: hybrid PQ spend protection is specified as an augmentation of the existing privacy primitives, but the production integration still needs implementation and review.
-- **v3 boundary**: address/account PQ groundwork can land now, but anonymous per-input PQ ownership enforcement remains deferred so v3 does not regress ring privacy.
+- **FCMP++ / stealth addresses**: hybrid PQ spend protection works alongside FCMP++ membership proofs. The FCMP++ 4-scalar leaf `H(pqc_pk)` binds per-output PQC ownership to the UTXO in-circuit.
+- **v3 boundary**: anonymous per-input PQ ownership enforcement is solved at genesis via FCMP++ 4-scalar leaf: `H(pqc_pk)` proven in-circuit, binding per-output PQC ownership to the UTXO.
+- FCMP++ documentation tasks:
+  - FCMP++ design document (`docs/FCMP_PLUS_PLUS.md`) to be created in Phase 8
+  - Per-output PQC key derivation specification
+  - Curve tree operations guide (`docs/CURVE_TREE_OPERATIONS.md`)
+  - Bech32m address format specification
 
 ---
 
@@ -175,15 +179,19 @@ Remaining:
   - `PQC_TEST_VECTOR_003_wrong_scheme_id.json` (scheme_id 0x01 → 0x02)
   - `PQC_TEST_VECTOR_004_oversized_blob.json` (ML-DSA length field inflated beyond blob)
   - Integration tests in `rust/shekyl-crypto-pq/tests/negative_vectors.rs`
-- future KEM vectors (deferred until KEM protocol use is specified)
+- KEM test vectors (ships at genesis with per-output PQC key derivation)
 
 ### Phase 2: KEM (`HybridX25519MlKem`)
 
-Deferred:
+Ships at genesis for per-output PQC key derivation:
 
-- do not make KEM consensus-critical yet
-- do not finalize dependencies or ABI until a concrete protocol use is defined
-- when revived, define secret-combining/KDF rules explicitly before implementation
+- X25519 + ML-KEM-768 hybrid KEM for per-output PQC keypair derivation
+- **Deterministic encapsulation** from `tx_key_secret` via `derive_kem_seed` (HKDF-SHA-512, salt `"shekyl-output-kem-v1"`, info = SHA3-256 recipient fingerprint &#124;&#124; index)
+- ML-KEM ciphertexts stored in `tx_extra` tag `0x06`
+- Combined shared secret via `HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = "shekyl-kem-v1", info = "")`
+- Proof helpers: `rederive_combined_ss`, `derive_proof_secrets`, `derive_output_key`, `recover_recipient_spend_pubkey`, `decrypt_amount`, `compute_output_key_image`
+- `fips203` pinned to `=0.4.3` (exact) with KAT tripwire (`KEM_DERIVE_V1_KAT.json`)
+- Full specification in `docs/POST_QUANTUM_CRYPTOGRAPHY.md` under "Per-Output PQC Key Derivation"
 
 ### Phase 3: FFI and C++ integration
 
@@ -236,14 +244,23 @@ Completed:
    - Keep it aligned with the hybrid spend/ownership model as code lands.
 
 2. **Privacy**
-   - Describe impact on RingCT and stealth addresses (if any); ensure no key material in logs; constant-time and side-channel notes.
-   - Make the v3 privacy boundary explicit: no anonymous per-input PQ ownership proof is shipped yet.
+   - FCMP++ provides full-chain anonymity; pqc_auth provides quantum-resistant authorization.
+   - Ensure no key material in logs; constant-time and side-channel notes.
+   - Per-output PQC keys via hybrid KEM prevent transaction linkability.
 
 3. **Test vectors**
    - Publish test vectors for hybrid sign/verify and KEM for interop and future audits.
 
 4. **Security review**
    - Schedule review of PQC integration (crypto + integration points) before mainnet.
+
+5. **FCMP++ integration** (major next step)
+   - FCMP++ FFI bridge (prove/verify round-trip)
+   - Curve tree DB operations (grow/trim/root/path)
+   - FCMP++ fuzz targets (6 harnesses, 10M iterations each)
+   - Per-output PQC key derivation end-to-end testing
+   - Bech32m address encoding/decoding
+   - `docs/FCMP_PLUS_PLUS.md` design document (Phase 8)
 
 ---
 
@@ -260,7 +277,7 @@ Completed:
 | Seeds | Populate DNS/IP seeds; runtime seed add; Shekyl naming | — |
 | Economics / PoW | Finish config-driven proof activation and staker-claim transaction grammar | Stake-ratio chain-state tracking implemented; modular PoW scaffolding implemented |
 | **Boost migration** | C++17 bump complete; `boost::optional` fully migrated (~93 files); `boost::variant` fully migrated (~40 files); `boost::filesystem` migrated in wallet/RPC/utility layers; `boost::format` removed from wallet2/wallet_rpc/wallet_args; Boost minimum bumped to 1.74; CI updated to Ubuntu 22.04+; **daemon RPC HTTP server migrated from epee to Rust/Axum** (Phase 1); remaining hard areas deferred with `TODO(shekyl-v4)` (see §1.11) | Majority of codebase now uses `std::optional`, `std::variant`, `std::filesystem`; daemon RPC on Axum |
-| **PQC** | **v3 complete; 4 published vectors (1 positive, 3 negative); V4 roadmap published; external audit and KEM implementation remain** | **Core of this document** |
+| **PQC** | **v3 complete; 4 published vectors (1 positive, 3 negative); V4 roadmap updated; KEM ships at genesis; FCMP++ integration is major next step; external audit remains** | **Core of this document** |
 
 ---
 

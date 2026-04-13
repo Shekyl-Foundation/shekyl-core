@@ -1,0 +1,48 @@
+---
+description: Shekyl is v3-from-genesis with no Monero chain history. Remove dead pre-genesis code.
+alwaysApply: true
+---
+
+# No Monero legacy
+
+Shekyl begins at its own genesis with `RCTTypeFcmpPlusPlusPqc` as the
+minimum transaction type. There is no Monero chain to sync, no pre-genesis
+blocks to validate, and no users with legacy wallet state. Code that exists
+solely to handle pre-genesis Monero behavior is dead weight.
+
+## Removed from construction and verification
+
+The following are deleted, not preserved behind version checks:
+
+- MLSAG ring signatures (including any residue in the Ledger device path)
+- Borromean range proofs
+- CLSAG ring signatures (replaced by FCMP++ full-chain membership proofs
+  from genesis)
+- `RCTTypeFull`, `RCTTypeSimple`, `RCTTypeBulletproof`, `RCTTypeBulletproofPlus`
+- CryptoNight variants and pre-RandomX PoW paths
+- Mixin enforcement, `partial_block_reward`, and other pre-FCMP++ economic
+  shims
+- The wallet's `get_outs` / `get_outs.bin` ring-decoy selection path
+
+Accepted transaction types: `RCTTypeFcmpPlusPlusPqc` (and `RCTTypeNull` for
+coinbase). Anything else is a consensus error, not a compatibility branch.
+
+## Rules
+
+- When you encounter `if (version < N)` or `if (hf_version < N)` for any
+  Monero-era hard fork, **delete the dead branch** rather than maintaining
+  it. Shekyl's minimum hard fork version is 1; checks below that are dead
+  code.
+- Tests that exercise only Monero-era behavior are deleted or rewritten
+  against Shekyl's HF1+ rules.
+- Do **not** import Monero upstream changes that add backward-compatibility
+  shims for old hard forks. Adapt only the forward-looking logic.
+- Inherited data structures with fields used only for pre-genesis validation
+  must have those fields removed and all callers updated.
+- Prefer outright removal over commenting out. Git history is the archive.
+
+## Lifecycle note
+
+The "no Monero legacy" rule is permanent — it's a fact about Shekyl's
+genesis, not a transitional policy. The separate question of "no in-Shekyl
+migration code" flips at V3 launch; see `15-deletion-and-debt.mdc`.

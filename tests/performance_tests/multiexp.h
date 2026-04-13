@@ -32,8 +32,8 @@
 #pragma once
 
 #include <vector>
-#include "ringct/rctOps.h"
-#include "ringct/multiexp.h"
+#include "fcmp/rctOps.h"
+#include "fcmp/multiexp.h"
 
 enum test_multiexp_algorithm
 {

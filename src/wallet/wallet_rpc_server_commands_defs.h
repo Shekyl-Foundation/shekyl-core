@@ -36,8 +36,8 @@
 #include "crypto/hash.h"
 #include "wallet_rpc_server_error_codes.h"
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "wallet.rpc"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "wallet.rpc"
 
 // When making *any* change here, bump minor
 // If the change is incompatible, then bump major and set minor to 0
@@ -1459,57 +1459,6 @@ namespace wallet_rpc
     END_KV_SERIALIZE_MAP()
   };
 
-  struct COMMAND_RPC_GET_SPEND_PROOF
-  {
-    struct request_t
-    {
-      std::string txid;
-      std::string message;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(txid)
-        KV_SERIALIZE(message)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      std::string signature;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(signature)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
-  struct COMMAND_RPC_CHECK_SPEND_PROOF
-  {
-    struct request_t
-    {
-      std::string txid;
-      std::string message;
-      std::string signature;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(txid)
-        KV_SERIALIZE(message)
-        KV_SERIALIZE(signature)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      bool good;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(good)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
 
   struct COMMAND_RPC_GET_RESERVE_PROOF
   {
@@ -2468,13 +2417,11 @@ namespace wallet_rpc
     {
       uint32_t n_inputs;
       uint32_t n_outputs;
-      uint32_t ring_size;
       bool rct;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(n_inputs)
         KV_SERIALIZE(n_outputs)
-        KV_SERIALIZE_OPT(ring_size, 0u)
         KV_SERIALIZE_OPT(rct, true)
       END_KV_SERIALIZE_MAP()
     };

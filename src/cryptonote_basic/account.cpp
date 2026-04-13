@@ -42,9 +42,11 @@ extern "C"
 #include "cryptonote_format_utils.h"
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
+#include "shekyl/shekyl_secure_mem.h"
+#include "memwipe.h"
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "account"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "account"
 
 using namespace std;
 
@@ -61,7 +63,12 @@ DISABLE_VS_WARNINGS(4244 4345)
 
     bool generate_pqc_key_material(account_keys &keys)
     {
-      ShekylPqcKeypair keypair = shekyl_pqc_keypair_generate();
+      // Generate hybrid X25519 + ML-KEM-768 KEM keypair. The public key
+      // (x25519_pk[32] || ml_kem_ek[1184]) goes into the address; the secret
+      // key (x25519_sk[32] || ml_kem_dk[2400]) stays in the wallet.
+      // Per-output ML-DSA-65 signing keys are derived from the KEM shared
+      // secret at spend time — the wallet never stores wallet-level signing keys.
+      ShekylPqcKeypair keypair = shekyl_kem_keypair_generate();
       if (!keypair.success || keypair.public_key.ptr == nullptr || keypair.secret_key.ptr == nullptr)
       {
         if (keypair.public_key.ptr != nullptr)
@@ -75,10 +82,25 @@ DISABLE_VS_WARNINGS(4244 4345)
       copy_rust_buffer(keys.m_pqc_secret_key, keypair.secret_key);
       shekyl_buffer_free(keypair.public_key.ptr, keypair.public_key.len);
       shekyl_buffer_free(keypair.secret_key.ptr, keypair.secret_key.len);
+
+      if (!keys.m_pqc_secret_key.empty()) {
+        shekyl_mlock(keys.m_pqc_secret_key.data(), keys.m_pqc_secret_key.size());
+        shekyl_madvise_dontdump(keys.m_pqc_secret_key.data(), keys.m_pqc_secret_key.size());
+      }
       return true;
     }
   }
 
+  //-----------------------------------------------------------------
+  account_keys::~account_keys()
+  {
+    memwipe(&m_spend_secret_key, sizeof(m_spend_secret_key));
+    memwipe(&m_view_secret_key, sizeof(m_view_secret_key));
+    if (!m_pqc_secret_key.empty()) {
+      shekyl_memwipe(m_pqc_secret_key.data(), m_pqc_secret_key.size());
+      shekyl_munlock(m_pqc_secret_key.data(), m_pqc_secret_key.size());
+    }
+  }
   //-----------------------------------------------------------------
   hw::device& account_keys::get_device() const  {
     return *m_device;
@@ -107,13 +129,12 @@ DISABLE_VS_WARNINGS(4244 4345)
     // chacha
     epee::wipeable_string buffer0(std::string(bytes, '\0'));
     epee::wipeable_string buffer1 = buffer0;
-    crypto::chacha20(buffer0.data(), buffer0.size(), key, iv, buffer1.data());
+    crypto::xchacha20(buffer0.data(), buffer0.size(), key, iv, buffer1.data());
     return buffer1;
   }
   //-----------------------------------------------------------------
   void account_keys::xor_with_key_stream(const crypto::chacha_key &key)
   {
-    // encrypt a large enough byte stream with chacha20
     const size_t pq_bytes = m_pqc_secret_key.size();
     epee::wipeable_string key_stream = get_key_stream(key, m_encryption_iv, sizeof(crypto::secret_key) * 2 + pq_bytes);
     const char *ptr = key_stream.data();
@@ -134,11 +155,14 @@ DISABLE_VS_WARNINGS(4244 4345)
   void account_keys::decrypt(const crypto::chacha_key &key)
   {
     xor_with_key_stream(key);
+    if (!m_pqc_secret_key.empty()) {
+      shekyl_mlock(m_pqc_secret_key.data(), m_pqc_secret_key.size());
+      shekyl_madvise_dontdump(m_pqc_secret_key.data(), m_pqc_secret_key.size());
+    }
   }
   //-----------------------------------------------------------------
   void account_keys::encrypt_viewkey(const crypto::chacha_key &key)
   {
-    // encrypt a large enough byte stream with chacha20
     epee::wipeable_string key_stream = get_key_stream(key, m_encryption_iv, sizeof(crypto::secret_key) * 2);
     const char *ptr = key_stream.data();
     ptr += sizeof(crypto::secret_key);
@@ -158,6 +182,12 @@ DISABLE_VS_WARNINGS(4244 4345)
   //-----------------------------------------------------------------
   void account_base::set_null()
   {
+    memwipe(&m_keys.m_spend_secret_key, sizeof(m_keys.m_spend_secret_key));
+    memwipe(&m_keys.m_view_secret_key, sizeof(m_keys.m_view_secret_key));
+    if (!m_keys.m_pqc_secret_key.empty()) {
+      shekyl_memwipe(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
+      shekyl_munlock(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
+    }
     m_keys = account_keys();
     m_creation_timestamp = 0;
   }
@@ -174,6 +204,10 @@ DISABLE_VS_WARNINGS(4244 4345)
   void account_base::forget_spend_key()
   {
     m_keys.m_spend_secret_key = crypto::secret_key();
+    if (!m_keys.m_pqc_secret_key.empty()) {
+      shekyl_memwipe(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
+      shekyl_munlock(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
+    }
     m_keys.m_pqc_secret_key.clear();
   }
   //-----------------------------------------------------------------
@@ -225,6 +259,10 @@ DISABLE_VS_WARNINGS(4244 4345)
     m_keys.m_account_address = address;
     m_keys.m_spend_secret_key = spendkey;
     m_keys.m_view_secret_key = viewkey;
+    if (!m_keys.m_pqc_secret_key.empty()) {
+      shekyl_memwipe(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
+      shekyl_munlock(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
+    }
     m_keys.m_pqc_secret_key.clear();
 
     struct tm timestamp = {0};
@@ -296,13 +334,11 @@ DISABLE_VS_WARNINGS(4244 4345)
   //-----------------------------------------------------------------
   std::string account_base::get_public_address_str(network_type nettype) const
   {
-    //TODO: change this code into base 58
     return get_account_address_as_str(nettype, false, m_keys.m_account_address);
   }
   //-----------------------------------------------------------------
   std::string account_base::get_public_integrated_address_str(const crypto::hash8 &payment_id, network_type nettype) const
   {
-    //TODO: change this code into base 58
     return get_account_integrated_address_as_str(nettype, m_keys.m_account_address, payment_id);
   }
   //-----------------------------------------------------------------

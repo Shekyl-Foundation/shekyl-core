@@ -105,7 +105,6 @@ extern "C" {
         destinations_json: *const c_char,
         priority: u32,
         account_index: u32,
-        ring_size: u32,
     ) -> *mut c_char;
 
     pub fn wallet2_ffi_get_transfers(
@@ -127,4 +126,40 @@ extern "C" {
         method: *const c_char,
         params_json: *const c_char,
     ) -> *mut c_char;
+
+    pub fn wallet2_ffi_prepare_transfer(
+        w: *mut Wallet2Handle,
+        destinations_json: *const c_char,
+        priority: u32,
+        account_index: u32,
+    ) -> *mut c_char;
+
+    pub fn wallet2_ffi_finalize_transfer(
+        w: *mut Wallet2Handle,
+        signed_proofs_json: *const c_char,
+        tx_blob_hex: *const c_char,
+    ) -> *mut c_char;
+
+    pub fn wallet2_ffi_set_progress_callback(
+        w: *mut Wallet2Handle,
+        cb: Option<ProgressCallback>,
+        user_data: *mut std::ffi::c_void,
+    );
+
+    /// Export keys needed by the Rust scanner as JSON.
+    ///
+    /// Returns a JSON string: `{"spend_secret":"hex","view_secret":"hex",
+    /// "spend_public":"hex","view_public":"hex","x25519_sk":"hex",
+    /// "ml_kem_dk":"hex"}`.
+    ///
+    /// Caller must free the returned string via `wallet2_ffi_free_string`.
+    pub fn wallet2_ffi_get_scanner_keys(w: *mut Wallet2Handle) -> *mut c_char;
 }
+
+pub type ProgressCallback = extern "C" fn(
+    event_type: *const c_char,
+    current: u64,
+    total: u64,
+    detail: *const c_char,
+    user_data: *mut std::ffi::c_void,
+);

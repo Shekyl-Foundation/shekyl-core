@@ -81,9 +81,7 @@ void hash_to_point(const crypto::hash &h, crypto::ec_point &res) {
 }
 
 void hash_to_ec(const crypto::public_key &key, crypto::ec_point &res) {
-  crypto::ge_p3 tmp;
-  crypto::hash_to_ec(key, tmp);
-  crypto::ge_p3_tobytes(crypto::operator &(res), &tmp);
+  crypto::hash_to_ec(key, res);
 }
 
 bool check_ge_p3_identity_failure(const crypto::public_key &point)

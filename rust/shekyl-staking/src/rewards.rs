@@ -31,7 +31,7 @@ pub fn distribute_staker_rewards(
     for (i, entry) in registry.active_entries().iter().enumerate() {
         let weight = entry.weight();
         let reward =
-            (staker_pool_amount as u128 * weight as u128 / total_weight as u128) as u64;
+            (staker_pool_amount as u128 * weight as u128 / total_weight) as u64;
         if reward > 0 {
             distributed += reward;
             rewards.push(StakerReward {

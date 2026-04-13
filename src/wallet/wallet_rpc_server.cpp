@@ -58,8 +58,8 @@ using namespace epee;
 #include "daemonizer/daemonizer.h"
 #include "fee_priority.h"
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "wallet.rpc"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "wallet.rpc"
 
 #define DEFAULT_AUTO_REFRESH_PERIOD 20 // seconds
 #define REFRESH_INDICATIVE_BLOCK_CHUNK_SIZE 256    // just to split refresh in separate calls to play nicer with other threads
@@ -1130,8 +1130,6 @@ namespace tools
       if (get_tx_key)
       {
         epee::wipeable_string s = epee::to_hex::wipeable_string(ptx.tx_key);
-        for (const crypto::secret_key& additional_tx_key : ptx.additional_tx_keys)
-          s += epee::to_hex::wipeable_string(additional_tx_key);
         fill(tx_key, std::string(s.data(), s.size()));
       }
       // Compute amount leaving wallet in tx. By convention dests does not include change outputs
@@ -1222,9 +1220,8 @@ namespace tools
 
     try
     {
-      uint64_t mixin = m_wallet->adjust_mixin(req.ring_size ? req.ring_size - 1 : 0);
       const fee_priority priority = m_wallet->adjust_priority(fee_priority_utilities::from_integral(req.priority));
-      std::vector<wallet2::pending_tx> ptx_vector = m_wallet->create_transactions_2(dsts, mixin, priority, extra, req.account_index, req.subaddr_indices, req.subtract_fee_from_outputs);
+      std::vector<wallet2::pending_tx> ptx_vector = m_wallet->create_transactions_2(dsts, priority, extra, req.account_index, req.subaddr_indices, req.subtract_fee_from_outputs);
 
       if (ptx_vector.empty())
       {
@@ -1286,10 +1283,9 @@ namespace tools
 
     try
     {
-      uint64_t mixin = m_wallet->adjust_mixin(req.ring_size ? req.ring_size - 1 : 0);
       const fee_priority priority = m_wallet->adjust_priority(fee_priority_utilities::from_integral(req.priority));
       LOG_PRINT_L2("on_transfer_split calling create_transactions_2");
-      std::vector<wallet2::pending_tx> ptx_vector = m_wallet->create_transactions_2(dsts, mixin, priority, extra, req.account_index, req.subaddr_indices);
+      std::vector<wallet2::pending_tx> ptx_vector = m_wallet->create_transactions_2(dsts, priority, extra, req.account_index, req.subaddr_indices);
       LOG_PRINT_L2("on_transfer_split called create_transactions_2");
 
       if (ptx_vector.empty())
@@ -1377,8 +1373,6 @@ namespace tools
       if (req.get_tx_keys)
       {
         res.tx_key_list.push_back(epee::string_tools::pod_to_hex(unwrap(unwrap(ptx.tx_key))));
-        for (const crypto::secret_key& additional_tx_key : ptx.additional_tx_keys)
-          res.tx_key_list.back() += epee::string_tools::pod_to_hex(unwrap(unwrap(additional_tx_key)));
       }
     }
 
@@ -1719,9 +1713,8 @@ namespace tools
 
     try
     {
-      uint64_t mixin = m_wallet->adjust_mixin(req.ring_size ? req.ring_size - 1 : 0);
       const fee_priority priority = m_wallet->adjust_priority(fee_priority_utilities::from_integral(req.priority));
-      std::vector<wallet2::pending_tx> ptx_vector = m_wallet->create_transactions_all(req.below_amount, dsts[0].addr, dsts[0].is_subaddress, req.outputs, mixin, priority, extra, req.account_index, subaddr_indices);
+      std::vector<wallet2::pending_tx> ptx_vector = m_wallet->create_transactions_all(req.below_amount, dsts[0].addr, dsts[0].is_subaddress, req.outputs, priority, extra, req.account_index, subaddr_indices);
 
       return fill_response(ptx_vector, req.get_tx_keys, res.tx_key_list, res.amount_list, res.amounts_by_dest_list, res.fee_list, res.weight_list, res.unsigned_txset, req.do_not_relay,
           res.tx_hash_list, req.get_tx_hex, res.tx_blob_list, req.get_tx_metadata, res.tx_metadata_list, res.spent_key_images_list, er);
@@ -1786,9 +1779,8 @@ namespace tools
 
     try
     {
-      uint64_t mixin = m_wallet->adjust_mixin(req.ring_size ? req.ring_size - 1 : 0);
       const fee_priority priority = m_wallet->adjust_priority(fee_priority_utilities::from_integral(req.priority));
-      std::vector<wallet2::pending_tx> ptx_vector = m_wallet->create_transactions_single(ki, dsts[0].addr, dsts[0].is_subaddress, req.outputs, mixin, priority, extra);
+      std::vector<wallet2::pending_tx> ptx_vector = m_wallet->create_transactions_single(ki, dsts[0].addr, dsts[0].is_subaddress, req.outputs, priority, extra);
 
       if (ptx_vector.empty())
       {
@@ -2727,8 +2719,7 @@ namespace tools
     }
 
     crypto::secret_key tx_key;
-    std::vector<crypto::secret_key> additional_tx_keys;
-    if (!m_wallet->get_tx_key(txid, tx_key, additional_tx_keys))
+    if (!m_wallet->get_tx_key(txid, tx_key))
     {
       er.code = WALLET_RPC_ERROR_CODE_NO_TXKEY;
       er.message = "No tx secret key is stored for this tx";
@@ -2737,8 +2728,6 @@ namespace tools
 
     epee::wipeable_string s;
     s += epee::to_hex::wipeable_string(tx_key);
-    for (size_t i = 0; i < additional_tx_keys.size(); ++i)
-      s += epee::to_hex::wipeable_string(additional_tx_keys[i]);
     res.tx_key = std::string(s.data(), s.size());
     return true;
   }
@@ -2770,20 +2759,6 @@ namespace tools
       er.message = "Tx key has invalid format";
       return false;
     }
-    size_t offset = 64;
-    std::vector<crypto::secret_key> additional_tx_keys;
-    while (offset < tx_key_str.size())
-    {
-      additional_tx_keys.resize(additional_tx_keys.size() + 1);
-      if (!epee::wipeable_string(data + offset, 64).hex_to_pod(unwrap(unwrap(additional_tx_keys.back()))))
-      {
-        er.code = WALLET_RPC_ERROR_CODE_WRONG_KEY;
-        er.message = "Tx key has invalid format";
-        return false;
-      }
-      offset += 64;
-    }
-
     cryptonote::address_parse_info info;
     if(!get_account_address_from_str(info, m_wallet->nettype(), req.address))
     {
@@ -2794,7 +2769,7 @@ namespace tools
 
     try
     {
-      m_wallet->check_tx_key(txid, tx_key, additional_tx_keys, info.address, res.received, res.in_pool, res.confirmations);
+      m_wallet->check_tx_key(txid, tx_key, info.address, res.received, res.in_pool, res.confirmations);
     }
     catch (const std::exception &e)
     {
@@ -2862,56 +2837,6 @@ namespace tools
     try
     {
       res.good = m_wallet->check_tx_proof(txid, info.address, info.is_subaddress, req.message, req.signature, res.received, res.in_pool, res.confirmations);
-    }
-    catch (const std::exception &e)
-    {
-      er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-      er.message = e.what();
-      return false;
-    }
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool wallet_rpc_server::on_get_spend_proof(const wallet_rpc::COMMAND_RPC_GET_SPEND_PROOF::request& req, wallet_rpc::COMMAND_RPC_GET_SPEND_PROOF::response& res, epee::json_rpc::error& er, const connection_context *ctx)
-  {
-    if (!m_wallet) return not_open(er);
-
-    crypto::hash txid;
-    if (!epee::string_tools::hex_to_pod(req.txid, txid))
-    {
-      er.code = WALLET_RPC_ERROR_CODE_WRONG_TXID;
-      er.message = "TX ID has invalid format";
-      return false;
-    }
-
-    try
-    {
-      res.signature = m_wallet->get_spend_proof(txid, req.message);
-    }
-    catch (const std::exception &e)
-    {
-      er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-      er.message = e.what();
-      return false;
-    }
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool wallet_rpc_server::on_check_spend_proof(const wallet_rpc::COMMAND_RPC_CHECK_SPEND_PROOF::request& req, wallet_rpc::COMMAND_RPC_CHECK_SPEND_PROOF::response& res, epee::json_rpc::error& er, const connection_context *ctx)
-  {
-    if (!m_wallet) return not_open(er);
-
-    crypto::hash txid;
-    if (!epee::string_tools::hex_to_pod(req.txid, txid))
-    {
-      er.code = WALLET_RPC_ERROR_CODE_WRONG_TXID;
-      er.message = "TX ID has invalid format";
-      return false;
-    }
-
-    try
-    {
-      res.good = m_wallet->check_spend_proof(txid, req.message, req.signature);
     }
     catch (const std::exception &e)
     {
@@ -3927,11 +3852,6 @@ namespace tools
         cryptonote::print_money(e.fee()) + tr(" (fee)");
       er.message = e.what();
     }
-    catch (const tools::error::not_enough_outs_to_mix& e)
-    {
-      er.code = WALLET_RPC_ERROR_CODE_NOT_ENOUGH_OUTS_TO_MIX;
-      er.message = e.what() + std::string(" Please use sweep_dust.");
-    }
     catch (const error::file_exists& e)
     {
       er.code = WALLET_RPC_ERROR_CODE_WALLET_ALREADY_EXISTS;
@@ -4485,7 +4405,7 @@ namespace tools
     try
     {
       size_t extra_size = 34 /* pubkey */ + 10 /* encrypted payment id */; // typical makeup
-      const std::pair<size_t, uint64_t> sw = m_wallet->estimate_tx_size_and_weight(req.rct, req.n_inputs, req.ring_size, req.n_outputs, extra_size);
+      const std::pair<size_t, uint64_t> sw = m_wallet->estimate_tx_size_and_weight(req.rct, req.n_inputs, req.n_outputs, extra_size);
       res.size = sw.first;
       res.weight = sw.second;
     }

@@ -52,7 +52,7 @@ target_link_libraries(cryptonote_core
     common
     cncrypto
     blockchain_db
-    ringct
+    fcmp
     device
     hardforks
     ${Boost_DATE_TIME_LIBRARY}

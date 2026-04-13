@@ -177,6 +177,33 @@ public:
   virtual void set_staker_claim_watermark(uint64_t output_index, uint64_t last_claimed_height) override {}
   virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const override { return 0; }
   virtual void remove_staker_claim_watermark(uint64_t output_index) override {}
+
+  virtual void add_pending_tree_leaf(uint64_t, const uint8_t*) override {}
+  virtual void remove_pending_tree_leaf(uint64_t, const uint8_t*) override {}
+  virtual uint64_t drain_pending_tree_leaves(uint64_t, std::vector<uint8_t>&) override { return 0; }
+  virtual void add_pending_tree_drain_entry(uint64_t, uint64_t, const uint8_t*) override {}
+  virtual std::vector<std::pair<uint64_t, std::array<uint8_t, 128>>> get_pending_tree_drain_entries(uint64_t) const override { return {}; }
+  virtual void remove_pending_tree_drain_entries(uint64_t) override {}
+
+  virtual void store_output_metadata(uint64_t, const output_pruning_metadata_t&) override {}
+  virtual bool get_output_metadata(uint64_t, output_pruning_metadata_t&) const override { return false; }
+  virtual bool is_output_pruned(uint64_t) const override { return false; }
+  virtual bool prune_tx_data(uint64_t) override { return true; }
+  virtual uint64_t get_last_pruned_tx_data_height() const override { return 0; }
+  virtual bool tx_has_verification_data(const crypto::hash&) const override { return true; }
+
+  virtual void grow_curve_tree(const std::vector<uint8_t>&, uint64_t) override {}
+  virtual void trim_curve_tree(uint64_t) override {}
+  virtual std::array<uint8_t, 32> get_curve_tree_root() const override { return {}; }
+  virtual uint8_t get_curve_tree_depth() const override { return 0; }
+  virtual uint64_t get_curve_tree_leaf_count() const override { return 0; }
+  virtual bool get_curve_tree_layer_hash(uint8_t, uint64_t, uint8_t*) const override { return false; }
+  virtual bool get_curve_tree_leaf(uint64_t, uint8_t*) const override { return false; }
+
+  virtual void save_curve_tree_checkpoint(uint64_t) override {}
+  virtual bool get_curve_tree_checkpoint(uint64_t, std::vector<uint8_t>&) const override { return false; }
+  virtual uint64_t get_latest_curve_tree_checkpoint_height() const override { return 0; }
+  virtual void prune_curve_tree_intermediate_layers(uint64_t) override {}
 };
 
 }

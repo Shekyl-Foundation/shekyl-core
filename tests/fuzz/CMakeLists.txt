@@ -125,19 +125,6 @@ set_property(TARGET load-from-json_fuzz_tests
   PROPERTY
     FOLDER "tests")
 
-monero_add_minimal_executable(base58_fuzz_tests base58.cpp fuzzer.cpp)
-target_link_libraries(base58_fuzz_tests
-  PRIVATE
-    common
-    epee
-    ${Boost_PROGRAM_OPTIONS_LIBRARY}
-    ${CMAKE_THREAD_LIBS_INIT}
-    ${EXTRA_LIBRARIES}
-    $ENV{LIB_FUZZING_ENGINE})
-set_property(TARGET base58_fuzz_tests
-  PROPERTY
-    FOLDER "tests")
-
 monero_add_minimal_executable(parse-url_fuzz_tests parse_url.cpp fuzzer.cpp)
 target_link_libraries(parse-url_fuzz_tests
   PRIVATE

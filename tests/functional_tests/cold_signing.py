@@ -29,6 +29,24 @@
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """Test cold tx signing
+
+Phase 6 regression coverage (Gap 2/3):
+  Gap 2 (export/import PQC fidelity): The transfer() method exercises
+  export_outputs → import_outputs → create unsigned tx → sign → submit.
+  If PQC fields (m_y, m_mask, m_k_amount, m_combined_shared_secret) are
+  lost during export/import serialization, the cold wallet's signing step
+  fails because derive_proof_secrets depends on combined_shared_secret.
+  A green transfer() is implicit proof that PQC fields survive the
+  export/import round-trip.
+
+  Gap 3 (cold-sign PQC round-trip): The cold signing flow uses unsigned_tx_set
+  which carries PQC secrets to the cold signer. If these secrets are corrupted
+  or missing, shekyl_sign_fcmp_transaction (or its equivalent) will fail at
+  the key image computation step. A successful transfer() covers this case.
+
+  Note: This test must be adapted to use Shekyl addresses and V3 transactions
+  before it can run on the Shekyl testnet/stressnet. The current test uses
+  Monero-era addresses and will be updated as part of the stressnet gate.
 """
 
 from __future__ import print_function

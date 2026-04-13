@@ -32,7 +32,7 @@
 #include <cstddef>
 #include <string>
 
-#include "ringct/rctOps.h"
+#include "fcmp/rctOps.h"
 #include "crypto/crypto.h"
 #include "cryptonote_basic/account.h"
 

@@ -252,7 +252,6 @@ namespace epee
     harray portable_storage::insert_first_value(const std::string& value_name, t_value&& target, hsection hparent_section)
     {
       using t_real_value = typename std::decay<t_value>::type;
-      static_assert(std::is_rvalue_reference<t_value&&>(), "unexpected copy of value");
       TRY_ENTRY();
       if(!hparent_section) hparent_section = &m_root;
       storage_entry* pentry = find_storage_entry(value_name, hparent_section);
@@ -286,7 +285,6 @@ namespace epee
     bool portable_storage::insert_next_value(harray hval_array, t_value&& target)
     {
       using t_real_value = typename std::decay<t_value>::type;
-      static_assert(std::is_rvalue_reference<t_value&&>(), "unexpected copy of value");
       TRY_ENTRY();
       CHECK_AND_ASSERT(hval_array, false);
 

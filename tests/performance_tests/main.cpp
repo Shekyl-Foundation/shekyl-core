@@ -40,18 +40,12 @@
 #include "check_tx_signature.h"
 #include "check_hash.h"
 #include "cn_slow_hash.h"
-#include "derive_public_key.h"
-#include "derive_secret_key.h"
-#include "derive_view_tag.h"
 #include "ge_frombytes_vartime.h"
 #include "ge_tobytes.h"
 #include "generate_key_derivation.h"
 #include "generate_key_image.h"
-#include "generate_key_image_helper.h"
 #include "generate_keypair.h"
 #include "signature.h"
-#include "is_out_to_acc.h"
-#include "out_can_be_to_acc.h"
 #include "subaddress_expand.h"
 #include "sc_reduce32.h"
 #include "sc_check.h"
@@ -60,7 +54,6 @@
 #include "bulletproof_plus.h"
 #include "crypto_ops.h"
 #include "multiexp.h"
-#include "sig_clsag.h"
 
 namespace po = boost::program_options;
 
@@ -107,24 +100,24 @@ int main(int argc, char** argv)
   performance_timer timer;
   timer.start();
 
-  // v3 RCT + BP+ transaction construction benchmarks
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 1, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 2, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 2, 10, true, rct::RangeProofPaddedBulletproof, 4);
+  // RCT + BP+ transaction construction benchmarks
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 1, true);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 2, true);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 2, 10, true);
 
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 1, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 2, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 10, 10, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 1, true);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 2, true);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 10, 10, true);
 
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 1, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 2, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_construct_tx, 100, 10, true, rct::RangeProofPaddedBulletproof, 4);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 1, true);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 2, true);
+  TEST_PERFORMANCE3(filter, p, test_construct_tx, 100, 10, true);
 
-  // v3 RCT + BP+ signature verification benchmarks
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 2, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 10, 2, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 100, 2, true, rct::RangeProofPaddedBulletproof, 4);
-  TEST_PERFORMANCE5(filter, p, test_check_tx_signature, 2, 10, true, rct::RangeProofPaddedBulletproof, 4);
+  // RCT + BP+ signature verification benchmarks
+  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 2, 2, true);
+  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 10, 2, true);
+  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 100, 2, true);
+  TEST_PERFORMANCE3(filter, p, test_check_tx_signature, 2, 10, true);
 
   // Aggregated BP+ verification benchmarks
   TEST_PERFORMANCE4(filter, p, test_check_tx_signature_aggregated_bulletproofs, 2, 2, 62, 4);
@@ -140,16 +133,8 @@ int main(int argc, char** argv)
   TEST_PERFORMANCE4(filter, p, test_check_hash, 0xffffffffffffffff, 0xffffffffffffffff, 0, 1);
   TEST_PERFORMANCE4(filter, p, test_check_hash, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff);
 
-  TEST_PERFORMANCE0(filter, p, test_is_out_to_acc);
-  TEST_PERFORMANCE0(filter, p, test_is_out_to_acc_precomp);
-  TEST_PERFORMANCE2(filter, p, test_out_can_be_to_acc, false, true); // no view tag, owned
-  TEST_PERFORMANCE2(filter, p, test_out_can_be_to_acc, true, false); // use view tag, not owned
-  TEST_PERFORMANCE2(filter, p, test_out_can_be_to_acc, true, true); // use view tag, owned
-  TEST_PERFORMANCE0(filter, p, test_generate_key_image_helper);
   TEST_PERFORMANCE0(filter, p, test_generate_key_derivation);
   TEST_PERFORMANCE0(filter, p, test_generate_key_image);
-  TEST_PERFORMANCE0(filter, p, test_derive_public_key);
-  TEST_PERFORMANCE0(filter, p, test_derive_secret_key);
   TEST_PERFORMANCE0(filter, p, test_ge_frombytes_vartime);
   TEST_PERFORMANCE0(filter, p, test_ge_tobytes);
   TEST_PERFORMANCE0(filter, p, test_generate_keypair);
@@ -157,7 +142,7 @@ int main(int argc, char** argv)
   TEST_PERFORMANCE0(filter, p, test_sc_check);
   TEST_PERFORMANCE1(filter, p, test_signature, false);
   TEST_PERFORMANCE1(filter, p, test_signature, true);
-  TEST_PERFORMANCE0(filter, p, test_derive_view_tag);
+
 
   TEST_PERFORMANCE2(filter, p, test_wallet2_expand_subaddresses, 50, 200);
 
@@ -167,14 +152,6 @@ int main(int argc, char** argv)
   TEST_PERFORMANCE1(filter, p, test_cn_slow_hash, 4);
   TEST_PERFORMANCE1(filter, p, test_cn_fast_hash, 32);
   TEST_PERFORMANCE1(filter, p, test_cn_fast_hash, 16384);
-
-  TEST_PERFORMANCE3(filter, p, test_sig_clsag, 4, 2, 2); // CLSAG verification
-  TEST_PERFORMANCE3(filter, p, test_sig_clsag, 8, 2, 2);
-  TEST_PERFORMANCE3(filter, p, test_sig_clsag, 16, 2, 2);
-  TEST_PERFORMANCE3(filter, p, test_sig_clsag, 32, 2, 2);
-  TEST_PERFORMANCE3(filter, p, test_sig_clsag, 64, 2, 2);
-  TEST_PERFORMANCE3(filter, p, test_sig_clsag, 128, 2, 2);
-  TEST_PERFORMANCE3(filter, p, test_sig_clsag, 256, 2, 2);
 
   TEST_PERFORMANCE2(filter, p, test_equality, memcmp32, true);
   TEST_PERFORMANCE2(filter, p, test_equality, memcmp32, false);

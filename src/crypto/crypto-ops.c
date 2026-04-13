@@ -3811,6 +3811,17 @@ static int64_t signum(int64_t a) {
   return a > 0 ? 1 : a < 0 ? -1 : 0;
 }
 
+/* Left-shifting a negative signed integer is UB in C.  GCC defines it
+   as sign-extension, but other compilers may not.  Use multiplication
+   which is well-defined for all values in range. */
+static int64_t signed_lshift(int64_t v, unsigned k) {
+#if defined(__GNUC__)
+  return v << k;
+#else
+  return v * ((int64_t)1 << k);
+#endif
+}
+
 int sc_check(const unsigned char *s) {
   int64_t s0 = load_4(s);
   int64_t s1 = load_4(s + 4);
@@ -3820,7 +3831,7 @@ int sc_check(const unsigned char *s) {
   int64_t s5 = load_4(s + 20);
   int64_t s6 = load_4(s + 24);
   int64_t s7 = load_4(s + 28);
-  return (signum(1559614444 - s0) + (signum(1477600026 - s1) << 1) + (signum(2734136534 - s2) << 2) + (signum(350157278 - s3) << 3) + (signum(-s4) << 4) + (signum(-s5) << 5) + (signum(-s6) << 6) + (signum(268435456 - s7) << 7)) >> 8;
+  return (int)((signum(1559614444 - s0) + signed_lshift(signum(1477600026 - s1), 1) + signed_lshift(signum(2734136534 - s2), 2) + signed_lshift(signum(350157278 - s3), 3) + signed_lshift(signum(-s4), 4) + signed_lshift(signum(-s5), 5) + signed_lshift(signum(-s6), 6) + signed_lshift(signum(268435456 - s7), 7)) >> 8);
 }
 
 int sc_isnonzero(const unsigned char *s) {

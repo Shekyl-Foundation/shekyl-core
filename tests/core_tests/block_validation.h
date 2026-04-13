@@ -213,7 +213,7 @@ struct gen_block_late_v1_coinbase_tx : public gen_block_verification_base<1>
 };
 template<>
 struct get_test_options<gen_block_late_v1_coinbase_tx> {
-  const std::pair<uint8_t, uint64_t> hard_forks[3] = {std::make_pair(1, 0), std::make_pair(HF_VERSION_MIN_V2_COINBASE_TX, 1), std::make_pair(0, 0)};
+  const std::pair<uint8_t, uint64_t> hard_forks[3] = {std::make_pair(1, 0), std::make_pair(1, 1), std::make_pair(0, 0)};
   const cryptonote::test_options test_options = {
     hard_forks, 0
   };

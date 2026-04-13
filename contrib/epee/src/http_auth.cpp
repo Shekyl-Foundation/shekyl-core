@@ -67,6 +67,7 @@
 #include <iterator>
 #include <limits>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 #include <tuple>
 #include <type_traits>
 
@@ -116,10 +117,10 @@ namespace
       template<typename T>
       void operator()(const T& arg) const
       {
-        const boost::iterator_range<const char*> data(boost::as_literal(arg));
+        const auto data = boost::as_literal(arg);
         EVP_DigestUpdate(
           ctx,
-          reinterpret_cast<const std::uint8_t*>(data.begin()),
+          reinterpret_cast<const std::uint8_t*>(&*data.begin()),
           data.size()
         );
       }
@@ -299,11 +300,17 @@ namespace
 
       std::array<char, 8> nc{{}};
       boost::copy(out, nc.data());
+
+      std::array<unsigned char, 16> cnonce_bytes{{}};
+      RAND_bytes(cnonce_bytes.data(), cnonce_bytes.size());
+      const auto cnonce_hex = epee::to_hex::array(cnonce_bytes);
+
       const auto response = digest(
-        generate_a1(digest, user), u8":", user.server.nonce, u8":", nc, u8"::auth:", digest(method, u8":", uri)
+        generate_a1(digest, user), u8":", user.server.nonce, u8":", nc, u8":", cnonce_hex, u8":auth:", digest(method, u8":", uri)
       );
       out.clear();
       init_client_value(out, Digest::name, user, uri, response);
+      add_field(out, u8"cnonce", quoted_(boost::string_ref(cnonce_hex.data(), cnonce_hex.size())));
       add_field(out, u8"qop", ceref(u8"auth"));
       add_field(out, u8"nc", nc);
       return out;

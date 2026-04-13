@@ -1,4 +1,5 @@
 // Copyright (c) 2014-2022, The Monero Project
+// Copyright (c) 2024-2026, The Shekyl Foundation
 // 
 // All rights reserved.
 // 
@@ -25,8 +26,6 @@
 // INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-// 
-// Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #pragma once
 
@@ -34,7 +33,7 @@
 #include <stddef.h>
 
 #define CHACHA_KEY_SIZE 32
-#define CHACHA_IV_SIZE 8
+#define CHACHA_IV_SIZE 24
 
 #if defined(__cplusplus)
 #include <memory.h>
@@ -46,15 +45,13 @@
 namespace crypto {
   extern "C" {
 #endif
-    void chacha8(const void* data, size_t length, const uint8_t* key, const uint8_t* iv, char* cipher);
-    void chacha20(const void* data, size_t length, const uint8_t* key, const uint8_t* iv, char* cipher);
+    void xchacha20(const void* data, size_t length, const uint8_t* key, const uint8_t* nonce, char* cipher);
 #if defined(__cplusplus)
   }
 
   using chacha_key = epee::mlocked<tools::scrubbed_arr<uint8_t, CHACHA_KEY_SIZE>>;
 
 #pragma pack(push, 1)
-  // MS VC 2012 doesn't interpret `class chacha_iv` as POD in spite of [9.0.10], so it is a struct
   struct chacha_iv {
     uint8_t data[CHACHA_IV_SIZE];
   };
@@ -62,12 +59,8 @@ namespace crypto {
 
   static_assert(sizeof(chacha_key) == CHACHA_KEY_SIZE && sizeof(chacha_iv) == CHACHA_IV_SIZE, "Invalid structure size");
 
-  inline void chacha8(const void* data, std::size_t length, const chacha_key& key, const chacha_iv& iv, char* cipher) {
-    chacha8(data, length, key.data(), reinterpret_cast<const uint8_t*>(&iv), cipher);
-  }
-
-  inline void chacha20(const void* data, std::size_t length, const chacha_key& key, const chacha_iv& iv, char* cipher) {
-    chacha20(data, length, key.data(), reinterpret_cast<const uint8_t*>(&iv), cipher);
+  inline void xchacha20(const void* data, std::size_t length, const chacha_key& key, const chacha_iv& iv, char* cipher) {
+    xchacha20(data, length, key.data(), reinterpret_cast<const uint8_t*>(&iv), cipher);
   }
 
   inline void generate_chacha_key(const void *data, size_t size, chacha_key& key, uint64_t kdf_rounds) {

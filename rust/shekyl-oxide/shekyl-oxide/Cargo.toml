@@ -1,0 +1,56 @@
+[package]
+name = "shekyl-oxide"
+version = "0.1.4-alpha"
+description = "A Shekyl transaction library (shekyl-oxide fork with FCMP++ support)"
+license = "MIT"
+repository = "https://github.com/Shekyl-Foundation/shekyl-oxide/tree/main/shekyl-oxide"
+authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
+edition = "2021"
+rust-version = "1.74"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dependencies]
+std-shims = { version = "0.1.5", default-features = false }
+
+zeroize = { version = "^1.5", default-features = false, features = ["zeroize_derive"] }
+
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+
+shekyl-io = { path = "io", version = "0.1", default-features = false }
+shekyl-generators = { path = "generators", version = "0.4", default-features = false }
+shekyl-primitives = { path = "primitives", version = "0.1", default-features = false }
+shekyl-bulletproofs = { path = "fcmp/bulletproofs", version = "0.1", default-features = false }
+shekyl-fcmp-plus-plus = { path = "fcmp/fcmp++", version = "0.1", default-features = false }
+
+hex-literal = { version = ">= 0.4, <= 1", default-features = false }
+
+[dev-dependencies]
+hex = { version = "0.4", default-features = false, features = ["std"] }
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+
+[features]
+std = [
+  "std-shims/std",
+
+  "zeroize/std",
+
+  "shekyl-io/std",
+  "shekyl-generators/std",
+  "shekyl-primitives/std",
+  "shekyl-bulletproofs/std",
+  "shekyl-fcmp-plus-plus/std",
+]
+
+compile-time-generators = [
+  "curve25519-dalek/precomputed-tables",
+  "shekyl-bulletproofs/compile-time-generators",
+  "shekyl-fcmp-plus-plus/compile-time-generators",
+]
+default = ["std", "compile-time-generators"]

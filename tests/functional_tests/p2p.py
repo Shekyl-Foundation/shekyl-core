@@ -113,10 +113,13 @@ class P2PTest():
         # reconnect, daemon2 will now switch to daemon3's chain
         daemon2.out_peers(8)
         daemon3.out_peers(8)
-        time.sleep(10)
-        res = daemon2.get_info()
-        assert res.height == height + 3
-        assert res.top_block_hash == daemon3_top_block_hash
+        deadline = time.monotonic() + 240
+        while True:
+            res = daemon2.get_info()
+            if res.height == height + 3 and res.top_block_hash == daemon3_top_block_hash:
+                break
+            assert time.monotonic() < deadline, "Timed out waiting for daemon2 to reorg to daemon3's chain"
+            time.sleep(.25)
 
         # disconect, mine on daemon2 again more than daemon3
         daemon2.out_peers(0)
@@ -138,10 +141,13 @@ class P2PTest():
         # reconnect, daemon3 will now switch to daemon2's chain
         daemon2.out_peers(8)
         daemon3.out_peers(8)
-        time.sleep(5)
-        res = daemon3.get_info()
-        assert res.height == height + 6
-        assert res.top_block_hash == daemon2_top_block_hash
+        deadline = time.monotonic() + 240
+        while True:
+            res = daemon3.get_info()
+            if res.height == height + 6 and res.top_block_hash == daemon2_top_block_hash:
+                break
+            assert time.monotonic() < deadline, "Timed out waiting for daemon3 to reorg to daemon2's chain"
+            time.sleep(.25)
 
         # disconnect and mine a lot on daemon3
         daemon2.out_peers(0)
@@ -151,15 +157,14 @@ class P2PTest():
         # reconnect and wait for sync
         daemon2.out_peers(8)
         daemon3.out_peers(8)
-        loops = 100
+        deadline = time.monotonic() + 240
         while True:
             res2 = daemon2.get_info()
             res3 = daemon3.get_info()
             if res2.top_block_hash == res3.top_block_hash:
                 break
-            time.sleep(10)
-            loops -= 1
-            assert loops >= 0
+            assert time.monotonic() < deadline, "Timed out waiting for 500-block reorg sync"
+            time.sleep(.25)
 
     def test_p2p_tx_propagation(self):
         print('Testing P2P tx propagation')

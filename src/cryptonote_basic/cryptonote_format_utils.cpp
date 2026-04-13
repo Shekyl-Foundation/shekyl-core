@@ -38,12 +38,12 @@
 #include "cryptonote_config.h"
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
-#include "ringct/rctSigs.h"
+#include "fcmp/rctSigs.h"
 
 using namespace epee;
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "cn"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "cn"
 
 // #define ENABLE_HASH_CASH_INTEGRITY_CHECK
 
@@ -92,9 +92,7 @@ namespace cryptonote
 
   uint64_t get_transaction_weight_clawback(const transaction &tx, size_t n_padded_outputs)
   {
-    const rct::rctSig &rv = tx.rct_signatures;
-    const bool plus = rv.type == rct::RCTTypeBulletproofPlus;
-    const uint64_t bp_base = (32 * ((plus ? 6 : 9) + 7 * 2)) / 2; // notional size of a 2 output proof, normalized to 1 proof (ie, divided by 2)
+    const uint64_t bp_base = (32 * (6 + 7 * 2)) / 2;
     const size_t n_outputs = tx.vout.size();
     if (n_padded_outputs <= 2)
       return 0;
@@ -102,7 +100,7 @@ namespace cryptonote
     while ((1u << nlr) < n_padded_outputs)
       ++nlr;
     nlr += 6;
-    const size_t bp_size = 32 * ((plus ? 6 : 9) + 2 * nlr);
+    const size_t bp_size = 32 * (6 + 2 * nlr);
     CHECK_AND_ASSERT_THROW_MES_L1(n_outputs <= BULLETPROOF_MAX_OUTPUTS, "maximum number of outputs is " + std::to_string(BULLETPROOF_MAX_OUTPUTS) + " per transaction");
     CHECK_AND_ASSERT_THROW_MES_L1(bp_base * n_padded_outputs >= bp_size, "Invalid bulletproof clawback: bp_base " + std::to_string(bp_base) + ", n_padded_outputs "
         + std::to_string(n_padded_outputs) + ", bp_size " + std::to_string(bp_size));
@@ -153,9 +151,7 @@ namespace cryptonote
 
       if (!base_only)
       {
-        const bool bulletproof = rct::is_rct_bulletproof(rv.type);
-        const bool bulletproof_plus = rct::is_rct_bulletproof_plus(rv.type);
-        if (bulletproof_plus)
+        if (rct::is_rct_bulletproof_plus(rv.type))
         {
           if (rv.p.bulletproofs_plus.size() != 1)
           {
@@ -178,30 +174,6 @@ namespace cryptonote
           rv.p.bulletproofs_plus[0].V.resize(n_amounts);
           for (size_t i = 0; i < n_amounts; ++i)
             rv.p.bulletproofs_plus[0].V[i] = rct::scalarmultKey(rv.outPk[i].mask, rct::INV_EIGHT);
-        }
-        else if (bulletproof)
-        {
-          if (rv.p.bulletproofs.size() != 1)
-          {
-            LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs size in tx " << get_transaction_hash(tx));
-            return false;
-          }
-          if (rv.p.bulletproofs[0].L.size() < 6)
-          {
-            LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs L size in tx " << get_transaction_hash(tx));
-            return false;
-          }
-          const size_t max_outputs = 1 << (rv.p.bulletproofs[0].L.size() - 6);
-          if (max_outputs < tx.vout.size())
-          {
-            LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs max outputs in tx " << get_transaction_hash(tx));
-            return false;
-          }
-          const size_t n_amounts = tx.vout.size();
-          CHECK_AND_ASSERT_MES(n_amounts == rv.outPk.size(), false, "Internal error filling out V");
-          rv.p.bulletproofs[0].V.resize(n_amounts);
-          for (size_t i = 0; i < n_amounts; ++i)
-            rv.p.bulletproofs[0].V[i] = rct::scalarmultKey(rv.outPk[i].mask, rct::INV_EIGHT);
         }
       }
     }
@@ -245,8 +217,6 @@ namespace cryptonote
     CHECK_AND_ASSERT_MES(expand_transaction_1(tx, false), false, "Failed to expand transaction data");
     tx.invalidate_hashes();
     tx.set_blob_size(tx_blob.size());
-    //TODO: validate tx
-
     return get_transaction_hash(tx, tx_hash);
   }
   //---------------------------------------------------------------
@@ -272,85 +242,6 @@ namespace cryptonote
   bool is_v1_tx(const blobdata& tx_blob)
   {
     return is_v1_tx(blobdata_ref{tx_blob.data(), tx_blob.size()});
-  }
-  //---------------------------------------------------------------
-  bool generate_key_image_helper(const account_keys& ack, const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, const crypto::public_key& out_key, const crypto::public_key& tx_public_key, const std::vector<crypto::public_key>& additional_tx_public_keys, size_t real_output_index, keypair& in_ephemeral, crypto::key_image& ki, hw::device &hwdev)
-  {
-    crypto::key_derivation recv_derivation = AUTO_VAL_INIT(recv_derivation);
-    bool r = hwdev.generate_key_derivation(tx_public_key, ack.m_view_secret_key, recv_derivation);
-    if (!r)
-    {
-      MWARNING("key image helper: failed to generate_key_derivation(" << tx_public_key << ", <viewkey>)");
-      memcpy(&recv_derivation, rct::identity().bytes, sizeof(recv_derivation));
-    }
-
-    std::vector<crypto::key_derivation> additional_recv_derivations;
-    for (size_t i = 0; i < additional_tx_public_keys.size(); ++i)
-    {
-      crypto::key_derivation additional_recv_derivation = AUTO_VAL_INIT(additional_recv_derivation);
-      r = hwdev.generate_key_derivation(additional_tx_public_keys[i], ack.m_view_secret_key, additional_recv_derivation);
-      if (!r)
-      {
-        MWARNING("key image helper: failed to generate_key_derivation(" << additional_tx_public_keys[i] << ", <viewkey>)");
-      }
-      else
-      {
-        additional_recv_derivations.push_back(additional_recv_derivation);
-      }
-    }
-
-    std::optional<subaddress_receive_info> subaddr_recv_info = is_out_to_acc_precomp(subaddresses, out_key, recv_derivation, additional_recv_derivations, real_output_index,hwdev);
-    CHECK_AND_ASSERT_MES(subaddr_recv_info, false, "key image helper: given output pubkey doesn't seem to belong to this address");
-
-    return generate_key_image_helper_precomp(ack, out_key, subaddr_recv_info->derivation, real_output_index, subaddr_recv_info->index, in_ephemeral, ki, hwdev);
-  }
-  //---------------------------------------------------------------
-  bool generate_key_image_helper_precomp(const account_keys& ack, const crypto::public_key& out_key, const crypto::key_derivation& recv_derivation, size_t real_output_index, const subaddress_index& received_index, keypair& in_ephemeral, crypto::key_image& ki, hw::device &hwdev)
-  {
-    if (hwdev.compute_key_image(ack, out_key, recv_derivation, real_output_index, received_index, in_ephemeral, ki))
-    {
-      return true;
-    }
-
-    if (ack.m_spend_secret_key == crypto::null_skey)
-    {
-      // for watch-only wallet, simply copy the known output pubkey
-      in_ephemeral.pub = out_key;
-      in_ephemeral.sec = crypto::null_skey;
-    }
-    else
-    {
-      // derive secret key with subaddress - step 1: original CN derivation
-      crypto::secret_key scalar_step1;
-      crypto::secret_key spend_skey = ack.m_spend_secret_key;
-
-      // computes Hs(a*R || idx) + b
-      hwdev.derive_secret_key(recv_derivation, real_output_index, spend_skey, scalar_step1);
-
-      // step 2: add Hs(a || index_major || index_minor)
-      crypto::secret_key subaddr_sk;
-      crypto::secret_key scalar_step2;
-      if (received_index.is_zero())
-      {
-        scalar_step2 = scalar_step1;    // treat index=(0,0) as a special case representing the main address
-      }
-      else
-      {
-        subaddr_sk = hwdev.get_subaddress_secret_key(ack.m_view_secret_key, received_index);
-        hwdev.sc_secret_add(scalar_step2, scalar_step1,subaddr_sk);
-      }
-
-      in_ephemeral.sec = scalar_step2;
-
-      // full spend secret key: output pubkey via scalarmultBase
-      CHECK_AND_ASSERT_MES(hwdev.secret_key_to_public_key(in_ephemeral.sec, in_ephemeral.pub), false, "Failed to derive public key");
-
-      CHECK_AND_ASSERT_MES(in_ephemeral.pub == out_key,
-           false, "key image helper precomp: given output pubkey doesn't match the derived one");
-    }
-
-    hwdev.generate_key_image(in_ephemeral.pub, in_ephemeral.sec, ki);
-    return true;
   }
   //---------------------------------------------------------------
   uint64_t power_integral(uint64_t a, uint64_t b)
@@ -401,14 +292,11 @@ namespace cryptonote
   uint64_t get_transaction_weight(const transaction &tx, size_t blob_size)
   {
     CHECK_AND_ASSERT_MES(!tx.pruned, std::numeric_limits<uint64_t>::max(), "get_transaction_weight does not support pruned txes");
-    if (tx.version < 2)
-      return blob_size;
+    CHECK_AND_ASSERT_MES(tx.version >= 3, blob_size, "Shekyl requires tx version >= 3");
     const rct::rctSig &rv = tx.rct_signatures;
-    const bool bulletproof = rct::is_rct_bulletproof(rv.type);
-    const bool bulletproof_plus = rct::is_rct_bulletproof_plus(rv.type);
-    if (!bulletproof && !bulletproof_plus)
+    if (!rct::is_rct_bulletproof_plus(rv.type))
       return blob_size;
-    const size_t n_padded_outputs = bulletproof_plus ? rct::n_bulletproof_plus_max_amounts(rv.p.bulletproofs_plus) : rct::n_bulletproof_max_amounts(rv.p.bulletproofs);
+    const size_t n_padded_outputs = rct::n_bulletproof_plus_max_amounts(rv.p.bulletproofs_plus);
     uint64_t bp_clawback = get_transaction_weight_clawback(tx, n_padded_outputs);
     CHECK_AND_ASSERT_THROW_MES_L1(bp_clawback <= std::numeric_limits<uint64_t>::max() - blob_size, "Weight overflow");
     return blob_size + bp_clawback;
@@ -418,10 +306,9 @@ namespace cryptonote
   {
     CHECK_AND_ASSERT_MES(tx.pruned, std::numeric_limits<uint64_t>::max(), "get_pruned_transaction_weight does not support non pruned txes");
     CHECK_AND_ASSERT_MES(tx.version >= 2, std::numeric_limits<uint64_t>::max(), "get_pruned_transaction_weight does not support v1 txes");
-    CHECK_AND_ASSERT_MES(tx.rct_signatures.type == rct::RCTTypeBulletproof2 || tx.rct_signatures.type == rct::RCTTypeCLSAG || tx.rct_signatures.type == rct::RCTTypeBulletproofPlus,
+    CHECK_AND_ASSERT_MES(tx.rct_signatures.type == rct::RCTTypeFcmpPlusPlusPqc,
         std::numeric_limits<uint64_t>::max(), "Unsupported rct_signatures type in get_pruned_transaction_weight");
     CHECK_AND_ASSERT_MES(!tx.vin.empty(), std::numeric_limits<uint64_t>::max(), "empty vin");
-    CHECK_AND_ASSERT_MES(std::holds_alternative<cryptonote::txin_to_key>(tx.vin[0]), std::numeric_limits<uint64_t>::max(), "empty vin");
 
     // get pruned data size
     std::ostringstream s;
@@ -432,24 +319,19 @@ namespace cryptonote
     // nbps (technically varint)
     weight += 1;
 
-    // calculate deterministic bulletproofs size (assumes canonical BP format)
+    // calculate deterministic BP+ size (assumes canonical format)
     size_t nrl = 0, n_padded_outputs;
     while ((n_padded_outputs = (1u << nrl)) < tx.vout.size())
       ++nrl;
     nrl += 6;
-    extra = 32 * ((rct::is_rct_bulletproof_plus(tx.rct_signatures.type) ? 6 : 9) + 2 * nrl) + 2;
+    extra = 32 * (6 + 2 * nrl) + 2;
     weight += extra;
 
-    // calculate deterministic CLSAG/MLSAG data size
-    const size_t ring_size = std::get<cryptonote::txin_to_key>(tx.vin[0]).key_offsets.size();
-    if (rct::is_rct_clsag(tx.rct_signatures.type))
-      extra = tx.vin.size() * (ring_size + 2) * 32;
-    else
-      extra = tx.vin.size() * (ring_size * (1 + 1) * 32 + 32 /* cc */);
-    weight += extra;
+    // FCMP++ proof size (serialized as varint length + bytes) -- already in pruned blob
+    // No CLSAG data in FCMP++
 
     // calculate deterministic pseudoOuts size
-    extra =  32 * (tx.vin.size());
+    extra = 32 * (tx.vin.size());
     weight += extra;
 
     // clawback
@@ -605,6 +487,8 @@ namespace cryptonote
     if (!pick<tx_extra_merge_mining_tag>(nar, tx_extra_fields, TX_EXTRA_MERGE_MINING_TAG)) return false;
     if (!pick<tx_extra_mysterious_minergate>(nar, tx_extra_fields, TX_EXTRA_MYSTERIOUS_MINERGATE_TAG)) return false;
     if (!pick<tx_extra_pqc_ownership>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_OWNERSHIP)) return false;
+    if (!pick<tx_extra_pqc_kem_ciphertext>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT)) return false;
+    if (!pick<tx_extra_pqc_leaf_hashes>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_LEAF_HASHES)) return false;
     if (!pick<tx_extra_padding>(nar, tx_extra_fields, TX_EXTRA_TAG_PADDING)) return false;
 
     // if not empty, someone added a new type and did not add a case above
@@ -661,40 +545,6 @@ namespace cryptonote
     tx_extra.resize(tx_extra.size() + 1 + sizeof(crypto::public_key));
     tx_extra[tx_extra.size() - 1 - sizeof(crypto::public_key)] = TX_EXTRA_TAG_PUBKEY;
     *reinterpret_cast<crypto::public_key*>(&tx_extra[tx_extra.size() - sizeof(crypto::public_key)]) = tx_pub_key;
-    return true;
-  }
-  //---------------------------------------------------------------
-  std::vector<crypto::public_key> get_additional_tx_pub_keys_from_extra(const std::vector<uint8_t>& tx_extra)
-  {
-    // parse
-    std::vector<tx_extra_field> tx_extra_fields;
-    parse_tx_extra(tx_extra, tx_extra_fields);
-    // find corresponding field
-    tx_extra_additional_pub_keys additional_pub_keys;
-    if(!find_tx_extra_field_by_type(tx_extra_fields, additional_pub_keys))
-      return {};
-    return additional_pub_keys.data;
-  }
-  //---------------------------------------------------------------
-  std::vector<crypto::public_key> get_additional_tx_pub_keys_from_extra(const transaction_prefix& tx)
-  {
-    return get_additional_tx_pub_keys_from_extra(tx.extra);
-  }
-  //---------------------------------------------------------------
-  bool add_additional_tx_pub_keys_to_extra(std::vector<uint8_t>& tx_extra, const std::vector<crypto::public_key>& additional_pub_keys)
-  {
-    // convert to variant
-    tx_extra_field field = tx_extra_additional_pub_keys{ additional_pub_keys };
-    // serialize
-    std::ostringstream oss;
-    binary_archive<true> ar(oss);
-    bool r = ::do_serialize(ar, field);
-    CHECK_AND_NO_ASSERT_MES_L1(r, false, "failed to serialize tx extra additional tx pub keys");
-    // append
-    std::string tx_extra_str = oss.str();
-    size_t pos = tx_extra.size();
-    tx_extra.resize(tx_extra.size() + tx_extra_str.size());
-    memcpy(&tx_extra[pos], tx_extra_str.data(), tx_extra_str.size());
     return true;
   }
   //---------------------------------------------------------------
@@ -803,8 +653,14 @@ namespace cryptonote
     money = 0;
     for(const auto& in: tx.vin)
     {
-      CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
-      money += tokey_in.amount;
+      if (std::holds_alternative<txin_to_key>(in))
+        money += std::get<txin_to_key>(in).amount;
+      else if (std::holds_alternative<txin_stake_claim>(in))
+        money += std::get<txin_stake_claim>(in).amount;
+      else if (std::holds_alternative<txin_gen>(in))
+        continue;
+      else
+        return false;
     }
     return true;
   }
@@ -836,11 +692,6 @@ namespace cryptonote
       CHECK_AND_ASSERT_MES(get_output_public_key(out, output_public_key), false, "Failed to get output public key (output target index: "
         << out.target.index() << "), in transaction id=" << get_transaction_hash(tx));
 
-      if (tx.version == 1)
-      {
-        CHECK_AND_NO_ASSERT_MES(0 < out.amount, false, "zero amount output in transaction id=" << get_transaction_hash(tx));
-      }
-
       if(!check_key(output_public_key))
         return false;
     }
@@ -857,10 +708,18 @@ namespace cryptonote
     uint64_t money = 0;
     for(const auto& in: tx.vin)
     {
-      CHECKED_GET_SPECIFIC_VARIANT(in, const txin_to_key, tokey_in, false);
-      if(money > tokey_in.amount + money)
+      uint64_t amount = 0;
+      if (std::holds_alternative<txin_to_key>(in))
+        amount = std::get<txin_to_key>(in).amount;
+      else if (std::holds_alternative<txin_stake_claim>(in))
+        amount = std::get<txin_stake_claim>(in).amount;
+      else if (std::holds_alternative<txin_gen>(in))
+        continue;
+      else
         return false;
-      money += tokey_in.amount;
+      if(money > amount + money)
+        return false;
+      money += amount;
     }
     return true;
   }
@@ -940,24 +799,22 @@ namespace cryptonote
     }
   }
   //---------------------------------------------------------------
-  void set_staked_tx_out(const uint64_t amount, const crypto::public_key& output_public_key, const crypto::view_tag& view_tag, uint8_t lock_tier, uint64_t lock_until, tx_out& out)
+  void set_staked_tx_out(const uint64_t amount, const crypto::public_key& output_public_key, const crypto::view_tag& view_tag, uint8_t lock_tier, tx_out& out)
   {
     out.amount = amount;
     txout_to_staked_key tsk;
     tsk.key = output_public_key;
     tsk.view_tag = view_tag;
     tsk.lock_tier = lock_tier;
-    tsk.lock_until = lock_until;
     out.target = tsk;
   }
   //---------------------------------------------------------------
-  bool get_output_staking_info(const tx_out& out, uint8_t& lock_tier, uint64_t& lock_until)
+  bool get_output_staking_info(const tx_out& out, uint8_t& lock_tier)
   {
     if (std::holds_alternative<txout_to_staked_key>(out.target))
     {
       const auto& staked = std::get<txout_to_staked_key>(out.target);
       lock_tier = staked.lock_tier;
-      lock_until = staked.lock_until;
       return true;
     }
     return false;
@@ -998,116 +855,6 @@ namespace cryptonote
           << o.target.index() << " and " << tx.vout[0].target.index() << "), "
           << "expected matching variant types in transaction id=" << get_transaction_hash(tx));
       }
-    }
-    return true;
-  }
-  //---------------------------------------------------------------
-  bool out_can_be_to_acc(const std::optional<crypto::view_tag>& view_tag_opt, const crypto::key_derivation& derivation, const size_t output_index, hw::device* hwdev)
-  {
-    // If there is no view tag to check, the output can possibly belong to the account.
-    // Will need to derive the output pub key to be certain whether or not the output belongs to the account.
-    if (!view_tag_opt)
-      return true;
-
-    crypto::view_tag view_tag = *view_tag_opt;
-
-    // If the output's view tag does *not* match the derived view tag, the output should not belong to the account.
-    // Therefore can fail out early to avoid expensive crypto ops needlessly deriving output public key to
-    // determine if output belongs to the account.
-    crypto::view_tag derived_view_tag;
-    if (hwdev != nullptr)
-    {
-      bool r = hwdev->derive_view_tag(derivation, output_index, derived_view_tag);
-      CHECK_AND_ASSERT_MES(r, false, "Failed to derive view tag");
-    }
-    else
-    {
-      crypto::derive_view_tag(derivation, output_index, derived_view_tag);
-    }
-    return view_tag == derived_view_tag;
-  }
-  //---------------------------------------------------------------
-  bool is_out_to_acc(const account_keys& acc, const crypto::public_key& output_public_key, const crypto::public_key& tx_pub_key, const std::vector<crypto::public_key>& additional_tx_pub_keys, size_t output_index, const std::optional<crypto::view_tag>& view_tag_opt)
-  {
-    crypto::key_derivation derivation;
-    bool r = acc.get_device().generate_key_derivation(tx_pub_key, acc.m_view_secret_key, derivation);
-    CHECK_AND_ASSERT_MES(r, false, "Failed to generate key derivation");
-    crypto::public_key pk;
-    if (out_can_be_to_acc(view_tag_opt, derivation, output_index, &acc.get_device()))
-    {
-      r = acc.get_device().derive_public_key(derivation, output_index, acc.m_account_address.m_spend_public_key, pk);
-      CHECK_AND_ASSERT_MES(r, false, "Failed to derive public key");
-      if (pk == output_public_key)
-        return true;
-    }
-
-    // try additional tx pubkeys if available
-    if (!additional_tx_pub_keys.empty())
-    {
-      CHECK_AND_ASSERT_MES(output_index < additional_tx_pub_keys.size(), false, "wrong number of additional tx pubkeys");
-      r = acc.get_device().generate_key_derivation(additional_tx_pub_keys[output_index], acc.m_view_secret_key, derivation);
-      CHECK_AND_ASSERT_MES(r, false, "Failed to generate key derivation");
-      if (out_can_be_to_acc(view_tag_opt, derivation, output_index, &acc.get_device()))
-      {
-        r = acc.get_device().derive_public_key(derivation, output_index, acc.m_account_address.m_spend_public_key, pk);
-        CHECK_AND_ASSERT_MES(r, false, "Failed to derive public key");
-        return pk == output_public_key;
-      }
-    }
-    return false;
-  }
-  //---------------------------------------------------------------
-  std::optional<subaddress_receive_info> is_out_to_acc_precomp(const std::unordered_map<crypto::public_key, subaddress_index>& subaddresses, const crypto::public_key& out_key, const crypto::key_derivation& derivation, const std::vector<crypto::key_derivation>& additional_derivations, size_t output_index, hw::device &hwdev, const std::optional<crypto::view_tag>& view_tag_opt)
-  {
-    // try the shared tx pubkey
-    crypto::public_key subaddress_spendkey;
-    if (out_can_be_to_acc(view_tag_opt, derivation, output_index, &hwdev))
-    {
-      CHECK_AND_ASSERT_MES(hwdev.derive_subaddress_public_key(out_key, derivation, output_index, subaddress_spendkey), std::nullopt, "Failed to derive subaddress public key");
-      auto found = subaddresses.find(subaddress_spendkey);
-      if (found != subaddresses.end())
-        return subaddress_receive_info{ found->second, derivation };
-    }
-
-    // try additional tx pubkeys if available
-    if (!additional_derivations.empty())
-    {
-      CHECK_AND_ASSERT_MES(output_index < additional_derivations.size(), std::nullopt, "wrong number of additional derivations");
-      if (out_can_be_to_acc(view_tag_opt, additional_derivations[output_index], output_index, &hwdev))
-      {
-        CHECK_AND_ASSERT_MES(hwdev.derive_subaddress_public_key(out_key, additional_derivations[output_index], output_index, subaddress_spendkey), std::nullopt, "Failed to derive subaddress public key");
-        auto found = subaddresses.find(subaddress_spendkey);
-        if (found != subaddresses.end())
-          return subaddress_receive_info{ found->second, additional_derivations[output_index] };
-      }
-    }
-    return std::nullopt;
-  }
-  //---------------------------------------------------------------
-  bool lookup_acc_outs(const account_keys& acc, const transaction& tx, std::vector<size_t>& outs, uint64_t& money_transfered)
-  {
-    crypto::public_key tx_pub_key = get_tx_pub_key_from_extra(tx);
-    if(null_pkey == tx_pub_key)
-      return false;
-    std::vector<crypto::public_key> additional_tx_pub_keys = get_additional_tx_pub_keys_from_extra(tx);
-    return lookup_acc_outs(acc, tx, tx_pub_key, additional_tx_pub_keys, outs, money_transfered);
-  }
-  //---------------------------------------------------------------
-  bool lookup_acc_outs(const account_keys& acc, const transaction& tx, const crypto::public_key& tx_pub_key, const std::vector<crypto::public_key>& additional_tx_pub_keys, std::vector<size_t>& outs, uint64_t& money_transfered)
-  {
-    CHECK_AND_ASSERT_MES(additional_tx_pub_keys.empty() || additional_tx_pub_keys.size() == tx.vout.size(), false, "wrong number of additional pubkeys" );
-    money_transfered = 0;
-    size_t i = 0;
-    for(const tx_out& o:  tx.vout)
-    {
-      crypto::public_key output_public_key;
-      CHECK_AND_ASSERT_MES(get_output_public_key(o, output_public_key), false, "unable to get output public key from transaction out" );
-      if(is_out_to_acc(acc, output_public_key, tx_pub_key, additional_tx_pub_keys, i, get_output_view_tag(o)))
-      {
-        outs.push_back(i);
-        money_transfered += o.amount;
-      }
-      i++;
     }
     return true;
   }
@@ -1298,8 +1045,7 @@ namespace cryptonote
       binary_archive<true> ba(ss);
       const size_t inputs = t.vin.size();
       const size_t outputs = t.vout.size();
-      const size_t mixin = t.vin.empty() ? 0 : std::holds_alternative<txin_to_key>(t.vin[0]) ? std::get<txin_to_key>(t.vin[0]).key_offsets.size() - 1 : 0;
-      bool r = tt.rct_signatures.p.serialize_rctsig_prunable(ba, t.rct_signatures.type, inputs, outputs, mixin);
+      bool r = tt.rct_signatures.p.serialize_rctsig_prunable(ba, t.rct_signatures.type, inputs, outputs);
       CHECK_AND_ASSERT_MES(r, false, "Failed to serialize rct signatures prunable");
       cryptonote::get_blob_hash(ss.str(), res);
     }
@@ -1357,15 +1103,15 @@ namespace cryptonote
       prunable_hash = pruned_data_hash;
 
     crypto::hash res;
-    if (has_pqc && t.pqc_auth)
+    if (has_pqc && !t.pqc_auths.empty())
     {
-      // v3: hash(prefix, base_rct, pqc_auth, prunable)
+      // v3: hash(prefix, base_rct, pqc_auths, prunable)
       crypto::hash pqc_auth_hash;
       std::stringstream ss;
       binary_archive<true> ba(ss);
-      pqc_authentication auth_tmp = *t.pqc_auth;
-      bool r = ::do_serialize(ba, auth_tmp);
-      CHECK_AND_ASSERT_THROW_MES(r, "Failed to serialize pqc_auth");
+      std::vector<pqc_authentication> pqc_tmp = t.pqc_auths;
+      bool r = ::do_serialize(ba, pqc_tmp);
+      CHECK_AND_ASSERT_THROW_MES(r, "Failed to serialize pqc_auths");
       cryptonote::get_blob_hash(ss.str(), pqc_auth_hash);
 
       crypto::hash hashes[4] = { prefix_hash, base_rct_hash, pqc_auth_hash, prunable_hash };
@@ -1404,7 +1150,7 @@ namespace cryptonote
 
     CHECK_AND_ASSERT_MES(prefix_size <= unprunable_size && unprunable_size <= blob.size(), false, "Inconsistent transaction prefix, unprunable and blob sizes");
 
-    // base rct (blob from prefix_size to end of rct base; for v3, we must serialize separately since pqc_auth follows)
+    // base rct (blob from prefix_size to end of rct base; for v3, we must serialize separately since pqc_auths follows)
     crypto::hash base_rct_hash;
     {
       transaction &tt = const_cast<transaction&>(t);
@@ -1427,15 +1173,15 @@ namespace cryptonote
       CHECK_AND_ASSERT_MES(calculate_transaction_prunable_hash(t, &blobref, prunable_hash), false, "Failed to get tx prunable hash");
     }
 
-    if (has_pqc && t.pqc_auth)
+    if (has_pqc && !t.pqc_auths.empty())
     {
-      // v3: hash(prefix, base_rct, pqc_auth, prunable)
+      // v3: hash(prefix, base_rct, pqc_auths, prunable)
       crypto::hash pqc_auth_hash;
       std::stringstream ss;
       binary_archive<true> ba(ss);
-      pqc_authentication auth_tmp = *t.pqc_auth;
-      bool r = ::do_serialize(ba, auth_tmp);
-      CHECK_AND_ASSERT_MES(r, false, "Failed to serialize pqc_auth");
+      std::vector<pqc_authentication> pqc_tmp = t.pqc_auths;
+      bool r = ::do_serialize(ba, pqc_tmp);
+      CHECK_AND_ASSERT_MES(r, false, "Failed to serialize pqc_auths");
       cryptonote::get_blob_hash(ss.str(), pqc_auth_hash);
 
       crypto::hash hashes[4] = { prefix_hash, base_rct_hash, pqc_auth_hash, prunable_hash };

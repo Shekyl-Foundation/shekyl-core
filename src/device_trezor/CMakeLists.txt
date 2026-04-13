@@ -85,7 +85,7 @@ if(DEVICE_TREZOR_READY)
             PUBLIC
             device
             cncrypto
-            ringct_basic
+            fcmp_basic
             cryptonote_core
             common
             ${SODIUM_LIBRARY}

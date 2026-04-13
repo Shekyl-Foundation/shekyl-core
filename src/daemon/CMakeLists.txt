@@ -56,18 +56,17 @@ target_link_libraries(daemon
     cryptonote_protocol
     daemonizer
     serialization
-    daemon_rpc_server
     ${EPEE_READLINE}
     version
     ${SHEKYL_FFI_LINK_LIBS}
     ${SHEKYL_DAEMON_RPC_LINK_LIBS}
+    rpc
     ${Boost_CHRONO_LIBRARY}
     ${Boost_FILESYSTEM_LIBRARY}
     ${Boost_PROGRAM_OPTIONS_LIBRARY}
     ${Boost_REGEX_LIBRARY}
     ${Boost_SYSTEM_LIBRARY}
     ${CMAKE_THREAD_LIBS_INIT}
-    ${ZMQ_LIB}
     ${GNU_READLINE_LIBRARY}
     ${EXTRA_LIBRARIES}
     ${Blocks})

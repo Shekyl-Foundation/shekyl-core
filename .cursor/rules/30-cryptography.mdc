@@ -1,0 +1,85 @@
+---
+description: Cryptographic implementation discipline.
+globs:
+  - rust/shekyl-crypto-pq/**
+  - rust/shekyl-proofs/**
+  - rust/shekyl-fcmp/**
+  - rust/monero-oxide/**
+  - src/crypto/**
+  - src/fcmp/**
+  - src/ringct/**
+---
+
+# Cryptography rules
+
+## Hybrid post-quantum is the default
+
+Every classical primitive ships alongside its lattice counterpart. X25519
+ships with ML-KEM-768. Ed25519 ships with ML-DSA-65. The hybrid composition
+is non-negotiable — never propose a classical-only operation on the wallet
+path. The V4 transition removes the classical half; classical-only today is
+V4 deletion debt.
+
+## Per-output PQC keys (Option C)
+
+PQC signing uses per-output KEM-derived keys, not the wallet master key.
+Per-output keys give forward secrecy per output. The ML-KEM ciphertext lives
+in `tx_extra` under tag `0x06` and must survive pruning permanently — it is
+required for wallet PQC key rederivation.
+
+## Test vectors are pinned, not generated
+
+Cryptographic operations have known-answer test vectors in
+`docs/test_vectors/*.json`. Vectors are written *before* the implementation.
+The implementation is tested against the vectors, not the other way around.
+A change to a vector requires explicit review and a CHANGELOG entry — vectors
+define consensus and cannot drift silently.
+
+## Wide-reduce, not modular reduction
+
+Scalar derivation from HKDF output uses 64-byte wide reduction
+(`Scalar::from_bytes_mod_order_wide`), not 32-byte modular reduction. The
+bias difference (2⁻²⁵⁵ vs. 2⁻¹²⁵) is invisible in practice but auditors will
+flag the latter. One extra HKDF round is negligible.
+
+## Domain separators on every hash
+
+Every Fiat-Shamir challenge, signature hash, and HKDF derivation includes an
+explicit domain separator string and version suffix:
+
+- `"shekyl-output-derive-v1"` for output secret derivation
+- `"shekyl-outbound-tx-proof-v3"` for outbound proofs
+- `"shekyl-reserve-proof-dleq-v1"` for reserve proof DLEQs
+
+The version suffix is how V4 cleanly invalidates V3 hashes. Forgetting the
+version means a future protocol upgrade can't safely change the construction.
+
+## Memwipe is structural, not manual
+
+In Rust, secrets are `Zeroizing<[u8; N]>` or a struct with
+`#[derive(Zeroize, ZeroizeOnDrop)]`. Manual memwipe via `let _ = ...` or
+explicit drop calls is a code smell — the type system enforces wipe-on-drop,
+not the developer's discipline.
+
+In C++, secrets use `crypto::secret_key` or `tools::scrubbed_arr`. Raw
+`std::vector<uint8_t>` for secret data is a bug. If you're writing a C++
+destructor that calls `memwipe`, ask whether the field should be a wrapped
+type instead. See `35-secure-memory.mdc` for full secret-handling rules.
+
+## Direct-write to destination
+
+When Rust returns a secret to C++, the FFI writes directly into the
+destination field, not into a scratch buffer that gets copied and wiped. The
+scratch pattern requires manual wipe discipline at every call site;
+direct-write makes the field's wipe-on-drop semantics handle cleanup
+automatically. If you find yourself writing "C++ receives, copies, wipes,"
+the FFI signature is wrong — fix the signature.
+
+## Constant-time and trusted randomness
+
+- Side-channel resistance (constant-time operations) is mandatory for all
+  crypto code paths.
+- All randomness comes from cryptographically secure sources: `OsRng` in
+  Rust, `/dev/urandom` or equivalent in C++. Never seed from time, PID, or
+  user input.
+- Never log, serialize to plaintext, or expose key material in error messages.

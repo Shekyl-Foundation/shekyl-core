@@ -76,7 +76,6 @@ namespace tools
     //         not_enough_unlocked_money
     //         not_enough_money
     //         tx_not_possible
-    //         not_enough_outs_to_mix
     //         tx_not_constructed
     //         tx_rejected
     //         tx_sum_overflow
@@ -128,15 +127,13 @@ namespace tools
     const char* const failed_rpc_request_messages[] = {
       "failed to get blocks",
       "failed to get hashes",
-      "failed to get out indices",
-      "failed to get random outs"
+      "failed to get out indices"
     };
     enum failed_rpc_request_message_indices
     {
       get_blocks_error_message_index,
       get_hashes_error_message_index,
-      get_out_indices_error_message_index,
-      get_outs_error_message_index
+      get_out_indices_error_message_index
     };
 
     template<typename Base, int msg_index>
@@ -455,8 +452,6 @@ namespace tools
       }
     };
     //----------------------------------------------------------------------------------------------------
-    typedef failed_rpc_request<transfer_error, get_outs_error_message_index> get_outs_error;
-    //----------------------------------------------------------------------------------------------------
     struct not_enough_unlocked_money : public transfer_error
     {
       explicit not_enough_unlocked_money(std::string&& loc, uint64_t available, uint64_t tx_amount, uint64_t fee)
@@ -539,36 +534,6 @@ namespace tools
       uint64_t m_fee;
     };
     //----------------------------------------------------------------------------------------------------
-    struct not_enough_outs_to_mix : public transfer_error
-    {
-      typedef std::unordered_map<uint64_t, uint64_t> scanty_outs_t;
-
-      explicit not_enough_outs_to_mix(std::string&& loc, const scanty_outs_t& scanty_outs, size_t mixin_count)
-        : transfer_error(std::move(loc), "not enough outputs to use")
-        , m_scanty_outs(scanty_outs)
-        , m_mixin_count(mixin_count)
-      {
-      }
-
-      const scanty_outs_t& scanty_outs() const { return m_scanty_outs; }
-      size_t mixin_count() const { return m_mixin_count; }
-
-      std::string to_string() const
-      {
-        std::ostringstream ss;
-        ss << transfer_error::to_string() << ", ring size = " << (m_mixin_count + 1) << ", scanty_outs:";
-        for (const auto& out: m_scanty_outs)
-        {
-          ss << '\n' << cryptonote::print_money(out.first) << " - " << out.second;
-        }
-        return ss.str();
-      }
-
-    private:
-      scanty_outs_t m_scanty_outs;
-      size_t m_mixin_count;
-    };
-    //----------------------------------------------------------------------------------------------------
     struct tx_not_constructed : public transfer_error
     {
       typedef std::vector<cryptonote::tx_source_entry> sources_t;
@@ -627,6 +592,17 @@ namespace tools
       sources_t m_sources;
       destinations_t m_destinations;
       cryptonote::network_type m_nettype;
+    };
+    //----------------------------------------------------------------------------------------------------
+    struct destination_missing_pqc_kem_key : public transfer_error
+    {
+      explicit destination_missing_pqc_kem_key(std::string&& loc)
+        : transfer_error(std::move(loc),
+            "Cannot send to this address — it does not contain a quantum-resistant key. Ask the recipient for their full address.")
+      {
+      }
+
+      std::string to_string() const { return transfer_error::to_string(); }
     };
     //----------------------------------------------------------------------------------------------------
     struct tx_rejected : public transfer_error
@@ -933,8 +909,6 @@ namespace tools
     };
     //----------------------------------------------------------------------------------------------------
 
-#if !defined(_MSC_VER)
-
     template<typename TException, typename... TArgs>
     void throw_wallet_ex(std::string&& loc, const TArgs&... args)
     {
@@ -942,31 +916,6 @@ namespace tools
       LOG_PRINT_L0(e.to_string());
       throw e;
     }
-
-#else
-    #include <boost/preprocessor/repetition/enum_binary_params.hpp>
-    #include <boost/preprocessor/repetition/enum_params.hpp>
-    #include <boost/preprocessor/repetition/repeat_from_to.hpp>
-
-    template<typename TException>
-    void throw_wallet_ex(std::string&& loc)
-    {
-      TException e(std::move(loc));
-      LOG_PRINT_L0(e.to_string());
-      throw e;
-    }
-
-#define GEN_throw_wallet_ex(z, n, data)                                                       \
-    template<typename TException, BOOST_PP_ENUM_PARAMS(n, typename TArg)>                     \
-    void throw_wallet_ex(std::string&& loc, BOOST_PP_ENUM_BINARY_PARAMS(n, const TArg, &arg)) \
-    {                                                                                         \
-      TException e(std::move(loc), BOOST_PP_ENUM_PARAMS(n, arg));                             \
-      LOG_PRINT_L0(e.to_string());                                                            \
-      throw e;                                                                                \
-    }
-
-    BOOST_PP_REPEAT_FROM_TO(1, 6, GEN_throw_wallet_ex, ~)
-#endif
   }
 }
 

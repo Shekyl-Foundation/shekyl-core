@@ -59,8 +59,8 @@
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
 #include "misc_language.h"
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "tests.core"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "tests.core"
 
 
 
@@ -307,6 +307,8 @@ struct output_index {
   rct::key comm;
   const cryptonote::block *p_blk;
   const cryptonote::transaction *p_tx;
+  rct::key v3_mask{};
+  bool v3_recovered = false;
 
   output_index(const cryptonote::txout_target_v &_out, uint64_t _a, size_t _h, size_t tno, size_t ono, const cryptonote::block *_pb, const cryptonote::transaction *_pt)
       : out(_out), amount(_a), blk_height(_h), tx_no(tno), out_no(ono), idx(0), unlock_time(0),
@@ -318,14 +320,15 @@ struct output_index {
   output_index(const output_index &other)
       : out(other.out), amount(other.amount), blk_height(other.blk_height), tx_no(other.tx_no), rct(other.rct),
       out_no(other.out_no), idx(other.idx), unlock_time(other.unlock_time), is_coin_base(other.is_coin_base),
-      spent(other.spent), comm(other.comm), p_blk(other.p_blk), p_tx(other.p_tx) {  }
+      spent(other.spent), comm(other.comm), p_blk(other.p_blk), p_tx(other.p_tx),
+      v3_mask(other.v3_mask), v3_recovered(other.v3_recovered) {  }
 
   void set_rct(bool arct) {
     rct = arct;
-    if (rct &&  p_tx->rct_signatures.outPk.size() > out_no)
+    if (rct && p_tx->rct_signatures.outPk.size() > out_no)
       comm = p_tx->rct_signatures.outPk[out_no].mask;
     else
-      comm = rct::commit(amount, rct::identity());
+      comm = rct::zeroCommit(amount);
   }
 
   rct::key commitment() const {
@@ -430,19 +433,19 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
 
 bool construct_tx_to_key(const std::vector<test_event_entry>& events, cryptonote::transaction& tx,
                          const cryptonote::block& blk_head, const cryptonote::account_base& from, const var_addr_t& to, uint64_t amount,
-                         uint64_t fee, size_t nmix, bool rct=true, rct::RangeProofType range_proof_type=rct::RangeProofPaddedBulletproof, int bp_version = 4);
+                         uint64_t fee, size_t nmix, bool rct=true);
 
 bool construct_tx_to_key(const std::vector<test_event_entry>& events, cryptonote::transaction& tx, const cryptonote::block& blk_head,
                          const cryptonote::account_base& from, std::vector<cryptonote::tx_destination_entry> destinations,
-                         uint64_t fee, size_t nmix, bool rct=true, rct::RangeProofType range_proof_type=rct::RangeProofPaddedBulletproof, int bp_version = 4);
+                         uint64_t fee, size_t nmix, bool rct=true);
 
 bool construct_tx_to_key(cryptonote::transaction& tx, const cryptonote::account_base& from, const var_addr_t& to, uint64_t amount,
                          std::vector<cryptonote::tx_source_entry> &sources,
-                         uint64_t fee, bool rct=true, rct::RangeProofType range_proof_type=rct::RangeProofPaddedBulletproof, int bp_version = 4);
+                         uint64_t fee, bool rct=true);
 
 bool construct_tx_to_key(cryptonote::transaction& tx, const cryptonote::account_base& from, const std::vector<cryptonote::tx_destination_entry>& destinations,
                          std::vector<cryptonote::tx_source_entry> &sources,
-                         uint64_t fee, bool rct=true, rct::RangeProofType range_proof_type=rct::RangeProofPaddedBulletproof, int bp_version = 4);
+                         uint64_t fee, bool rct=true);
 
 cryptonote::transaction construct_tx_with_fee(std::vector<test_event_entry>& events, const cryptonote::block& blk_head,
                                             const cryptonote::account_base& acc_from, const var_addr_t& to,
@@ -453,8 +456,7 @@ bool construct_tx_rct(const cryptonote::account_keys& sender_account_keys,
     const std::vector<cryptonote::tx_destination_entry>& destinations,
     const std::optional<cryptonote::account_public_address>& change_addr,
     std::vector<uint8_t> extra, cryptonote::transaction& tx,
-    bool rct=true, rct::RangeProofType range_proof_type=rct::RangeProofPaddedBulletproof, int bp_version = 4,
-    uint8_t hf_version = 1);
+    bool rct=true, uint8_t hf_version = 1);
 
 
 uint64_t num_blocks(const std::vector<test_event_entry>& events);
@@ -484,6 +486,19 @@ void fill_tx_destinations(const var_addr_t& from, const cryptonote::account_publ
                           std::vector<cryptonote::tx_destination_entry>& destinations_pure,
                           bool always_change=false);
 
+
+bool fill_tx_sources(std::vector<cryptonote::tx_source_entry>& sources, const std::vector<test_event_entry>& events,
+                     const cryptonote::block& blk_head, const cryptonote::account_base& from, uint64_t amount, size_t nmix);
+
+bool construct_fcmp_tx(
+    cryptonote::core& c,
+    const cryptonote::account_base& from,
+    const cryptonote::account_public_address& to,
+    uint64_t amount,
+    uint64_t fee,
+    const std::vector<test_event_entry>& events,
+    const cryptonote::block& blk_head,
+    cryptonote::transaction& tx);
 
 void fill_tx_sources_and_destinations(const std::vector<test_event_entry>& events, const cryptonote::block& blk_head,
                                       const cryptonote::account_base& from, const cryptonote::account_public_address& to,
@@ -1083,4 +1098,4 @@ inline bool do_replay_file(const std::string& filename)
 #define CHECK_EQ(v1, v2) CHECK_AND_ASSERT_MES(v1 == v2, false, "[" << perr_context << "] failed: \"" << QUOTEME(v1) << " == " << QUOTEME(v2) << "\", " << v1 << " != " << v2)
 #define CHECK_NOT_EQ(v1, v2) CHECK_AND_ASSERT_MES(!(v1 == v2), false, "[" << perr_context << "] failed: \"" << QUOTEME(v1) << " != " << QUOTEME(v2) << "\", " << v1 << " == " << v2)
 #define MK_COINS(amount) (UINT64_C(amount) * COIN)
-#define TESTS_DEFAULT_FEE ((uint64_t)1000000000) // 1.0 COIN — covers dynamic fee for v3 PQC txs (~10 KB at ~65K/byte)
+#define TESTS_DEFAULT_FEE ((uint64_t)3000000000) // 3.0 COIN — covers dynamic fee for FCMP++ PQC txs (~30 KB at ~65K/byte)

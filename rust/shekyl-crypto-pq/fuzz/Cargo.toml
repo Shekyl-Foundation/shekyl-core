@@ -39,4 +39,46 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_bech32m_address_decode"
+path = "fuzz_targets/fuzz_bech32m_address_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_kem_decapsulate"
+path = "fuzz_targets/fuzz_kem_decapsulate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_construct_output"
+path = "fuzz_targets/fuzz_construct_output.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_construct_output_malformed_kem"
+path = "fuzz_targets/fuzz_construct_output_malformed_kem.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_derive_output_key"
+path = "fuzz_targets/fuzz_derive_output_key.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_scan_malformed_ct"
+path = "fuzz_targets/fuzz_scan_malformed_ct.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

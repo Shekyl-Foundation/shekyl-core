@@ -68,6 +68,16 @@ Drift labels:
    - Status: `implemented`
    - Drift: none
 
+2. **C++ core_tests aligned with Shekyl economics**
+   - `gen_block_reward` test re-enabled and rewritten to verify miner
+     outputs against the four-component formula (release multiplier +
+     emission split + fee burn). `chaingen.cpp` test generator now passes
+     explicit `circulating_supply`, `tx_volume_avg`, `stake_ratio`, and
+     `genesis_ng_height` to `construct_miner_tx` for parameter parity
+     with the validator.
+   - Status: `implemented` (80/80 core_tests pass)
+   - Drift: none
+
 2. **Rust sim parity with canonical config**
    - Current sim defaults are hardcoded in `rust/shekyl-economics-sim/src/engine.rs`.
    - Status: `partial`

@@ -138,8 +138,8 @@ int main(int argc, char* argv[])
     hw::register_device(HW_TREZOR_NAME, ensure_trezor_test_device());  // shim device for call tracking
 
     // Bootstrapping common chain & accounts
-    const uint8_t initial_hf =  (uint8_t)get_env_long("TEST_MIN_HF", HF_VERSION_CLSAG);
-    const uint8_t max_hf = (uint8_t)get_env_long("TEST_MAX_HF", HF_VERSION_CLSAG);
+    const uint8_t initial_hf =  (uint8_t)get_env_long("TEST_MIN_HF", 1);
+    const uint8_t max_hf = (uint8_t)get_env_long("TEST_MAX_HF", 1);
     auto sync_test = get_env_long("TEST_KI_SYNC", 1);
     MINFO("Test versions " << MONERO_RELEASE_NAME << "' (v" << MONERO_VERSION_FULL << ")");
     MINFO("Testing hardforks [" << (int)initial_hf << ", " << (int)max_hf << "], sync-test: " << sync_test);
@@ -206,7 +206,6 @@ int main(int argc, char* argv[])
       TREZOR_COMMON_TEST_CASE(gen_trezor_2utxo_sub_acc_to_1norm_2sub, core, trezor_base);
       TREZOR_COMMON_TEST_CASE(gen_trezor_4utxo_to_7outs, core, trezor_base);
       TREZOR_COMMON_TEST_CASE(gen_trezor_4utxo_to_15outs, core, trezor_base);
-      TREZOR_COMMON_TEST_CASE(wallet_api_tests, core, trezor_base);
     }
 
     if (trezor_base.heavy_tests())
@@ -835,9 +834,7 @@ bool gen_trezor_base::generate(std::vector<test_event_entry>& events)
 
   // Simple transaction check
   bool resx = rct::verRctSemanticsSimple(txs_blk_5.begin()->rct_signatures);
-  bool resy = rct::verRctNonSemanticsSimple(txs_blk_5.begin()->rct_signatures);
   CHECK_AND_ASSERT_THROW_MES(resx, "Tsx5[0] semantics failed");
-  CHECK_AND_ASSERT_THROW_MES(resy, "Tsx5[0] non-semantics failed");
 
   REWIND_BLOCKS_HF(events, blk_5r, blk_5, m_miner_account, CUR_HF);  // rewind to unlock
 
@@ -859,9 +856,7 @@ bool gen_trezor_base::generate(std::vector<test_event_entry>& events)
 
   // Simple transaction check
   resx = rct::verRctSemanticsSimple(tx_1.rct_signatures);
-  resy = rct::verRctNonSemanticsSimple(tx_1.rct_signatures);
   CHECK_AND_ASSERT_THROW_MES(resx, "tx_1 semantics failed");
-  CHECK_AND_ASSERT_THROW_MES(resy, "tx_1 non-semantics failed");
 
   REWIND_BLOCKS_N_HF(events, blk_6r, blk_6, m_miner_account, 10, CUR_HF);
   wallet_tools::process_transactions(m_wl_alice.get(), events, blk_6, m_bt);
@@ -1051,9 +1046,7 @@ void gen_trezor_base::test_trezor_tx(std::vector<test_event_entry>& events, std:
     // Simple TX tests, more complex are performed in the core.
     MTRACE(cryptonote::obj_to_json_str(c_ptx.tx));
     bool resx = rct::verRctSemanticsSimple(c_ptx.tx.rct_signatures);
-    bool resy = rct::verRctNonSemanticsSimple(c_ptx.tx.rct_signatures);
     CHECK_AND_ASSERT_THROW_MES(resx, "Trezor tx_1 semantics failed");
-    CHECK_AND_ASSERT_THROW_MES(resy, "Trezor tx_1 Nonsemantics failed");
 
     tx_list.push_back(c_ptx.tx);
     MDEBUG("Transaction: " << dump_data(c_ptx.tx));
@@ -1217,7 +1210,6 @@ void gen_trezor_base::test_get_tx(
     const ::crypto::hash tx_prefix_hash = cryptonote::get_transaction_prefix_hash(c_tx);
 
     auto tx_pub = cryptonote::get_tx_pub_key_from_extra(c_tx.extra);
-    auto additional_pub_keys = cryptonote::get_additional_tx_pub_keys_from_extra(c_tx.extra);
 
     hw::device_cold:: tx_key_data_t tx_key_data;
     std::vector<::crypto::secret_key> tx_keys;
@@ -1228,12 +1220,7 @@ void gen_trezor_base::test_get_tx(
     dev_cold->get_tx_key(tx_keys, tx_key_data, m_alice_account.get_keys().m_view_secret_key);
     CHECK_AND_ASSERT_THROW_MES(!tx_keys.empty(), "Empty TX keys");
     CHECK_AND_ASSERT_THROW_MES(verify_tx_key(tx_keys[0], tx_pub, all_subs), "Tx pub mismatch");
-    CHECK_AND_ASSERT_THROW_MES(additional_pub_keys.size() == tx_keys.size() - 1, "Invalid additional keys count");
-
-    for(size_t i = 0; i < additional_pub_keys.size(); ++i)
-    {
-      CHECK_AND_ASSERT_THROW_MES(verify_tx_key(tx_keys[i + 1], additional_pub_keys[i], all_subs), "Tx pub mismatch");
-    }
+    // additional_tx_pub_keys infrastructure removed in Shekyl v3
   }
 }
 
@@ -1273,7 +1260,7 @@ void gen_trezor_base::set_hard_fork(uint8_t hf)
     rct_config({rct::RangeProofPaddedBulletproof, 1});
   } else if (hf == 12){
     rct_config({rct::RangeProofPaddedBulletproof, 2});
-  } else if (hf == HF_VERSION_CLSAG){
+  } else if (hf == 1){
     rct_config({rct::RangeProofPaddedBulletproof, 3});
   }  else if (hf == HF_VERSION_BULLETPROOF_PLUS){
     rct_config({rct::RangeProofPaddedBulletproof, 4});
@@ -1347,7 +1334,8 @@ tsx_builder * tsx_builder::compute_sources_to_sub(std::optional<size_t> num_utxo
 tsx_builder * tsx_builder::compute_sources_to_sub_acc(std::optional<size_t> num_utxo, std::optional<uint64_t> min_amount, ssize_t offset, int step, std::optional<fnc_accept_tx_source_t> fnc_accept)
 {
   fnc_accept_tx_source_t fnc = [&fnc_accept] (const tx_source_info_crate_t &info, bool &abort) -> bool {
-    if (info.td->m_subaddr_index.minor == 0 || info.src->real_out_additional_tx_keys.size() == 0){
+    // additional_tx_keys removed in Shekyl v3; filter only on subaddress index
+    if (info.td->m_subaddr_index.minor == 0){
       return false;
     }
     if (fnc_accept){
@@ -1445,14 +1433,13 @@ tsx_builder * tsx_builder::construct_pending_tx(tools::wallet2::pending_tx &ptx,
   cryptonote::transaction tx;
   subaddresses_t & subaddresses = wallet_accessor_test::get_subaddresses(m_from);
   crypto::secret_key tx_key;
-  std::vector<crypto::secret_key> additional_tx_keys;
   std::vector<tx_destination_entry> destinations_copy = m_destinations;
 
   auto sources_copy = m_sources;
   auto change_addr = m_from->get_account().get_keys().m_account_address;
   bool r = construct_tx_and_get_tx_key(m_from->get_account().get_keys(), subaddresses, m_sources, destinations_copy,
-                                       change_addr, extra ? extra.get() : std::vector<uint8_t>(), tx, 0, tx_key,
-                                       additional_tx_keys, true, m_rct_config, nullptr);
+                                       change_addr, extra ? extra.get() : std::vector<uint8_t>(), tx, tx_key,
+                                       true, true, 1);
   CHECK_AND_ASSERT_THROW_MES(r, "Transaction construction failed");
 
   // Selected transfers permutation
@@ -1477,7 +1464,6 @@ tsx_builder * tsx_builder::construct_pending_tx(tools::wallet2::pending_tx &ptx,
   ptx.selected_transfers = m_selected_transfers;
   tools::apply_permutation(ins_order, ptx.selected_transfers);
   ptx.tx_key = tx_key;
-  ptx.additional_tx_keys = additional_tx_keys;
   ptx.dests = m_destinations;
   ptx.construction_data.sources = m_sources;
   ptx.construction_data.change_dts = m_destinations.back();
@@ -1622,9 +1608,22 @@ bool gen_trezor_live_refresh::generate(std::vector<test_event_entry>& events)
     ::crypto::secret_key_to_public_key(r, R);
     memcpy(D.data, rct::scalarmultKey(rct::pk2rct(R), rct::sk2rct(m_alice_account.get_keys().m_view_secret_key)).bytes, 32);
 
+    // derive_secret_key removed — inline the derivation: Hs(D || varint(i)) + spend_secret
+    ::crypto::ec_scalar hs_scalar;
+    {
+      struct { ::crypto::key_derivation d; uint8_t vi[8]; } buf;
+      buf.d = D;
+      size_t idx = i, vi_len = 0;
+      while (idx >= 0x80) { buf.vi[vi_len++] = (uint8_t)(idx & 0x7f) | 0x80; idx >>= 7; }
+      buf.vi[vi_len++] = (uint8_t)idx;
+      ::crypto::hash_to_scalar(&buf, sizeof(::crypto::key_derivation) + vi_len, hs_scalar);
+    }
     ::crypto::secret_key scalar_step1;
+    sc_add(reinterpret_cast<unsigned char*>(&scalar_step1),
+           reinterpret_cast<const unsigned char*>(&hs_scalar),
+           reinterpret_cast<const unsigned char*>(&m_alice_account.get_keys().m_spend_secret_key));
+
     ::crypto::secret_key scalar_step2;
-    ::crypto::derive_secret_key(D, i, m_alice_account.get_keys().m_spend_secret_key, scalar_step1);
     if (i == 0)
     {
       scalar_step2 = scalar_step1;
@@ -1896,62 +1895,4 @@ bool gen_trezor_many_utxo_many_txo::generate(std::vector<test_event_entry>& even
   TREZOR_TEST_SUFFIX();
 }
 
-void wallet_api_tests::init()
-{
-  m_wallet_dir = boost::filesystem::unique_path();
-  boost::filesystem::create_directories(m_wallet_dir);
-}
-
-wallet_api_tests::~wallet_api_tests()
-{
-  try
-  {
-    if (!m_wallet_dir.empty() && boost::filesystem::exists(m_wallet_dir))
-    {
-      boost::filesystem::remove_all(m_wallet_dir);
-    }
-  }
-  catch(...)
-  {
-    MERROR("Could not remove wallet directory");
-  }
-}
-
-bool wallet_api_tests::generate(std::vector<test_event_entry>& events)
-{
-  init();
-  test_setup(events);
-  const std::string wallet_path = (m_wallet_dir / "wallet").string();
-  const auto api_net_type = m_network_type == TESTNET ? Monero::TESTNET : Monero::MAINNET;
-
-  Monero::WalletManager *wmgr = Monero::WalletManagerFactory::getWalletManager();
-  std::unique_ptr<Monero::Wallet> w{wmgr->createWalletFromDevice(wallet_path, "", api_net_type, m_trezor_path, 1)};
-  CHECK_AND_ASSERT_THROW_MES(w->init(daemon()->rpc_addr(), 0), "Wallet init fail");
-  CHECK_AND_ASSERT_THROW_MES(w->refresh(), "Refresh fail");
-  uint64_t balance = w->balance(0);
-  MDEBUG("Balance: " << balance);
-  CHECK_AND_ASSERT_THROW_MES(w->status() == Monero::PendingTransaction::Status_Ok, "Status nok, " << w->errorString());
-
-  auto addr = get_address(m_eve_account);
-  auto recepient_address = cryptonote::get_account_address_as_str(m_network_type, false, addr);
-  Monero::PendingTransaction * transaction = w->createTransaction(recepient_address,
-                                                                  "",
-                                                                  MK_COINS(10),
-                                                                  num_mixin(),
-                                                                  Monero::PendingTransaction::Priority_Medium,
-                                                                  0,
-                                                                  std::set<uint32_t>{});
-  CHECK_AND_ASSERT_THROW_MES(transaction->status() == Monero::PendingTransaction::Status_Ok, "Status nok: " << transaction->status() << ", msg: " << transaction->errorString());
-  w->refresh();
-
-  CHECK_AND_ASSERT_THROW_MES(w->balance(0) == balance, "Err");
-  CHECK_AND_ASSERT_THROW_MES(transaction->amount() == MK_COINS(10), "Err");
-  CHECK_AND_ASSERT_THROW_MES(transaction->commit(), "Err");
-  CHECK_AND_ASSERT_THROW_MES(w->balance(0) != balance, "Err");
-  CHECK_AND_ASSERT_THROW_MES(wmgr->closeWallet(w.get()), "Err");
-  (void)w.release();
-
-  mine_and_test(events);
-  return true;
-}
 

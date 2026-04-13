@@ -1,0 +1,43 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+
+#![no_main]
+
+use libfuzzer_sys::fuzz_target;
+use shekyl_proofs::tx_proof::{verify_inbound_proof, OnChainOutput};
+
+fuzz_target!(|data: &[u8]| {
+    if data.len() < 97 {
+        return;
+    }
+
+    let mut txid = [0u8; 32];
+    txid.copy_from_slice(&data[..32]);
+    let mut view_pubkey = [0u8; 32];
+    view_pubkey.copy_from_slice(&data[32..64]);
+    let mut spend_pubkey = [0u8; 32];
+    spend_pubkey.copy_from_slice(&data[64..96]);
+
+    let proof_bytes = &data[96..];
+    let address = b"fuzz-address";
+    let msg = b"fuzz-msg";
+
+    let on_chain = vec![OnChainOutput {
+        output_key: [0u8; 32],
+        commitment: [0u8; 32],
+        enc_amount: [0u8; 8],
+        x25519_eph_pk: [0u8; 32],
+        ml_kem_ct: vec![0u8; 1088],
+    }];
+
+    let _ = verify_inbound_proof(
+        proof_bytes,
+        &txid,
+        address,
+        msg,
+        &view_pubkey,
+        &spend_pubkey,
+        &on_chain,
+    );
+});

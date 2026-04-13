@@ -82,7 +82,7 @@ struct gen_bpp_tx_validation_base : public test_chain_unit_base
   }
 
   bool generate_with(std::vector<test_event_entry>& events, size_t mixin,
-      size_t n_txes, const uint64_t *amounts_paid, bool valid, const rct::RCTConfig *rct_config, uint8_t hf_version,
+      size_t n_txes, const uint64_t *amounts_paid, bool valid, uint8_t hf_version,
       const std::function<bool(std::vector<cryptonote::tx_source_entry> &sources, std::vector<cryptonote::tx_destination_entry> &destinations, size_t)> &pre_tx,
       const std::function<bool(cryptonote::transaction &tx, size_t)> &post_tx) const;
 
@@ -199,8 +199,3 @@ struct gen_bpp_tx_invalid_wrong_amount : public gen_bpp_tx_validation_base
 };
 template<> struct get_test_options<gen_bpp_tx_invalid_wrong_amount>: public get_bpp_versioned_test_options<HF_VERSION_BULLETPROOF_PLUS> {};
 
-struct gen_bpp_tx_invalid_clsag_type : public gen_bpp_tx_validation_base
-{
-  bool generate(std::vector<test_event_entry>& events) const;
-};
-template<> struct get_test_options<gen_bpp_tx_invalid_clsag_type>: public get_bpp_versioned_test_options<HF_VERSION_BULLETPROOF_PLUS> {};

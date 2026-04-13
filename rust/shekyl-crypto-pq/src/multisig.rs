@@ -298,6 +298,59 @@ pub fn verify_multisig(
 }
 
 // ---------------------------------------------------------------------------
+// FCMP++ multisig helpers
+// ---------------------------------------------------------------------------
+
+/// Compute the PQC leaf hash for a multisig key container.
+///
+/// In FCMP++ transactions, each curve-tree leaf contains H(pqc_pk). For
+/// multisig outputs, pqc_pk is the canonical encoding of the
+/// MultisigKeyContainer. This function returns H(container_bytes) as a
+/// 32-byte hash suitable for the prover and verifier.
+pub fn multisig_pqc_leaf_hash(
+    container: &MultisigKeyContainer,
+) -> Result<[u8; 32], PqcVerifyError> {
+    let canonical = container.to_canonical_bytes()?;
+    Ok(cn_fast_hash(&canonical))
+}
+
+/// Verify that a set of partial signatures forms a valid M-of-N multisig
+/// for an FCMP++ transaction payload.
+///
+/// This is a convenience wrapper that:
+///  1. Builds a MultisigSigContainer from the provided partial signatures.
+///  2. Delegates to `verify_multisig` with the given key container and message.
+///
+/// `partials` is a sorted (ascending by index) slice of (signer_index, signature).
+pub fn verify_fcmp_multisig_partials(
+    key_container: &MultisigKeyContainer,
+    partials: &[(u8, HybridSignature)],
+    message: &[u8],
+    expected_group_id: Option<&[u8; 32]>,
+) -> Result<bool, PqcVerifyError> {
+    if partials.len() != key_container.m_required as usize {
+        return Err(PqcVerifyError::ThresholdMismatch);
+    }
+
+    let sig_container = MultisigSigContainer {
+        sig_count: partials.len() as u8,
+        sigs: partials.iter().map(|(_, sig)| sig.clone()).collect(),
+        signer_indices: partials.iter().map(|(idx, _)| *idx).collect(),
+    };
+
+    let key_blob = key_container.to_canonical_bytes()?;
+    let sig_blob = sig_container.to_canonical_bytes()?;
+
+    verify_multisig(
+        HYBRID_SCHEME_ID_MULTISIG,
+        &key_blob,
+        &sig_blob,
+        message,
+        expected_group_id,
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -712,5 +765,57 @@ mod tests {
                 subset,
             );
         }
+    }
+
+    // -- FCMP++ multisig helpers --
+
+    #[test]
+    fn multisig_pqc_leaf_hash_deterministic() {
+        let pairs = gen_keypairs(3);
+        let kc = make_key_container(&pairs, 2);
+        let h1 = super::multisig_pqc_leaf_hash(&kc).unwrap();
+        let h2 = super::multisig_pqc_leaf_hash(&kc).unwrap();
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn multisig_pqc_leaf_hash_differs_for_different_groups() {
+        let pairs1 = gen_keypairs(3);
+        let pairs2 = gen_keypairs(3);
+        let kc1 = make_key_container(&pairs1, 2);
+        let kc2 = make_key_container(&pairs2, 2);
+        assert_ne!(
+            super::multisig_pqc_leaf_hash(&kc1).unwrap(),
+            super::multisig_pqc_leaf_hash(&kc2).unwrap()
+        );
+    }
+
+    #[test]
+    fn verify_fcmp_multisig_partials_valid_2_of_3() {
+        let pairs = gen_keypairs(3);
+        let kc = make_key_container(&pairs, 2);
+        let msg = b"fcmp-multisig-payload";
+        let group_id = multisig_group_id(&kc).unwrap();
+        let scheme = HybridEd25519MlDsa;
+
+        let sig0 = scheme.sign(&pairs[0].1, msg).unwrap();
+        let sig2 = scheme.sign(&pairs[2].1, msg).unwrap();
+
+        let partials = vec![(0u8, sig0), (2u8, sig2)];
+        let result = super::verify_fcmp_multisig_partials(&kc, &partials, msg, Some(&group_id));
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn verify_fcmp_multisig_partials_threshold_mismatch() {
+        let pairs = gen_keypairs(3);
+        let kc = make_key_container(&pairs, 2);
+        let msg = b"threshold-mismatch";
+        let scheme = HybridEd25519MlDsa;
+
+        let sig0 = scheme.sign(&pairs[0].1, msg).unwrap();
+        let partials = vec![(0u8, sig0)];
+        let result = super::verify_fcmp_multisig_partials(&kc, &partials, msg, None);
+        assert_eq!(result.unwrap_err(), PqcVerifyError::ThresholdMismatch);
     }
 }

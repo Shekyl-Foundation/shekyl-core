@@ -1,0 +1,79 @@
+---
+description: Rust formatting and lint gates. Run cargo fmt and cargo clippy before any Rust commit.
+globs:
+  - "**/*.rs"
+  - "**/Cargo.toml"
+  - "**/rustfmt.toml"
+  - "**/clippy.toml"
+---
+
+# Rust lint checks
+
+Every Rust workspace in the Shekyl ecosystem (`shekyl-core/rust/`,
+`shekyl-gui-wallet/src-tauri/`, vendored `rust/monero-oxide/`, and any
+future Rust tree) enforces formatting and clippy gates. CI rejects
+violations; agents must run them locally before claiming a Rust change is
+done.
+
+## Pre-commit gates
+
+Before finalizing any edit to a `.rs` file:
+
+1. Run `cargo fmt` from the relevant workspace root.
+2. Run `cargo clippy --all-targets -- -D warnings` from the same root.
+3. Run `cargo build --all-targets` to confirm no warnings outside clippy's
+   scope.
+
+A change that compiles but fails fmt or clippy is not done.
+
+## CI parity
+
+CI runs:
+
+- `cargo fmt --check` (formatting drift fails the build)
+- `cargo clippy --all-targets -- -D warnings` (any warning fails the build)
+- `cargo test --workspace` (per `50-testing.mdc`)
+- `cargo audit` on `Cargo.lock` changes (per `25-rust-architecture.mdc`)
+
+Agents do not "fix CI later" — local runs must match.
+
+## Configuration
+
+- Use the project's `rustfmt.toml` and `clippy.toml` if present; otherwise
+  rely on defaults. **Do not introduce a `rustfmt.toml` to silence a
+  formatting disagreement** — fix the code instead.
+- Do not edit existing `rustfmt.toml` / `clippy.toml` outside a dedicated
+  PR with rationale.
+
+## Suppressing warnings
+
+`#[allow(...)]` is permitted only when:
+
+1. A specific lint produces a false positive, AND
+2. The attribute is **scoped as narrowly as possible** (item-level, not
+   crate-level), AND
+3. A `// SAFETY:` or `// CLIPPY:` comment immediately precedes it
+   explaining *which* invariant makes the lint inappropriate.
+
+Crate-level `#![allow(...)]` requires explicit review and a `FOLLOWUPS.md`
+entry to revisit. The `unsafe_code` lint is a hard rule: per
+`25-rust-architecture.mdc`, only `shekyl-ffi` may relax it, and only at
+crate level.
+
+## Patterns clippy will catch that matter
+
+These show up often in CryptoNote-derived code and are real bugs, not
+style:
+
+- `clippy::indexing_slicing` on untrusted input → use `.get()` and propagate
+  `Option`/`Result`. See `20-rust-vs-cpp-policy.mdc` rule 3.
+- `clippy::arithmetic_side_effects` on amount math → use
+  `checked_add`/`checked_mul`. See `20-rust-vs-cpp-policy.mdc` rule 4.
+- `clippy::needless_collect`, `clippy::redundant_clone` → often a sign that
+  a secret is being copied unnecessarily; check whether the type should be
+  `Zeroizing<T>` first.
+- `clippy::missing_safety_doc` on `unsafe fn` in `shekyl-ffi` → the safety
+  contract must be documented; this is an FFI audit obligation.
+
+If clippy flags one of these, the fix is the actual change, not an
+`#[allow]`.

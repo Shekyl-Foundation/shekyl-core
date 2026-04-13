@@ -1,0 +1,47 @@
+name: nightly/proptest-exhaustive
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  proptest-exhaustive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: nightly-proptest-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: nightly-proptest-
+
+      - name: Run proptest (1 000 000 cases)
+        working-directory: rust
+        env:
+          PROPTEST_CASES: "1000000"
+        run: |
+          START=$(date +%s)
+          cargo test --locked --release -p shekyl-crypto-pq --test prop_round_trip -- --nocapture 2>&1
+          END=$(date +%s)
+          ELAPSED=$((END - START))
+          echo "::notice::Proptest completed in ${ELAPSED}s"

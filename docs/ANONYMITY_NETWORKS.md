@@ -21,7 +21,7 @@ PQC note:
 (see `docs/V3_ROLLOUT.md` for exact component sizes). Practical consequences
 for anonymity relay:
 
-- A typical 2-in/2-out RingCT transaction grows from ~2–3 KB to ~7–8 KB.
+- A typical 2-in/2-out FCMP++ transaction grows from ~2–3 KB to ~7–8 KB.
 - On Tor, a single cell is 512 bytes; a v3 transaction spans ~14–16 cells
   vs ~4–6 cells pre-PQC. The burst pattern is more distinctive.
 - On I2P, tunnel messages are 1 KB; the same transaction requires ~7–8

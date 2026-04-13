@@ -10,12 +10,15 @@ on:
       - 'docs/**'
       - '**/README.md'
 
+permissions:
+  contents: read
+
 # The below variables reduce repetitions across similar targets
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # ARCH="default" (not "native") ensures, that a different execution host can execute binaries compiled elsewhere.
-  BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all && cmake --build build --target wallet_api'
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc libunbound-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libzmq3-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl'
+  BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
+  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc libunbound-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl'
   INSTALL_RUST: |
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     echo "$HOME/.cargo/bin" >> $GITHUB_PATH
@@ -30,6 +33,45 @@ env:
     ccache --set-config=compression=true
 
 jobs:
+  lint-rust-debug-macros:
+    name: 'Lint: no debug macros in production Rust'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: reject eprintln!/dbg!/println! in production Rust
+        run: |
+          FOUND=0
+          for f in $(find rust/shekyl-*/src -name '*.rs' \
+                     ! -name 'build.rs' ! -name 'main.rs' ! -path '*/examples/*' \
+                     ! -path '*/shekyl-cli/*'); do
+            TEST_LINE=$(grep -n '#\[cfg(test)\]' "$f" | head -1 | cut -d: -f1)
+            if [ -n "$TEST_LINE" ]; then
+              HITS=$(head -n "$((TEST_LINE - 1))" "$f" \
+                     | grep -n 'eprintln!\|dbg!\|println!' || true)
+            else
+              HITS=$(grep -n 'eprintln!\|dbg!\|println!' "$f" || true)
+            fi
+            if [ -n "$HITS" ]; then
+              echo "$f:"
+              echo "$HITS"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" -eq 1 ]; then
+            echo "FATAL: debug macros in production Rust (above #[cfg(test)])"
+            exit 1
+          fi
+          echo "No debug macros in production Rust — OK"
+      - name: reject BOOST_FOREACH in C++
+        run: |
+          HITS=$(grep -rn 'BOOST_FOREACH' src/ tests/ --include='*.cpp' --include='*.h' --include='*.hpp' || true)
+          if [ -n "$HITS" ]; then
+            echo "FATAL: BOOST_FOREACH found — use range-based for loops:"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "No BOOST_FOREACH — OK"
+
   build-macos:
     name: 'macOS (brew)'
     runs-on: macOS-latest
@@ -39,6 +81,21 @@ jobs:
       - uses: actions/checkout@v5
         with:
           submodules: recursive
+      - name: guard against absolute local Cargo paths
+        run: |
+          MATCHES=""
+          while IFS= read -r file; do
+            HITS="$(grep -nE '/home/|/Users/|[A-Za-z]:\\\\Users\\\\' "$file" || true)"
+            if [ -n "$HITS" ]; then
+              MATCHES="${MATCHES}${file}\n${HITS}\n"
+            fi
+          done < <(find rust -type f \( -name Cargo.toml -o -path '*/.cargo/config' -o -path '*/.cargo/config.toml' \))
+          if [ -n "$MATCHES" ]; then
+            echo "FATAL: detected absolute local paths in Cargo manifests/config:"
+            printf "%b" "$MATCHES"
+            exit 1
+          fi
+          echo "Cargo path portability guard passed."
       - uses: actions/cache@v5
         with:
           path: /Users/runner/Library/Caches/ccache
@@ -49,7 +106,7 @@ jobs:
         run: |
           brew uninstall cmake
           brew update
-          brew install --quiet cmake boost hidapi openssl zmq libpgm miniupnpc expat libunwind-headers protobuf abseil ccache
+          brew install --quiet cmake boost hidapi openssl libpgm miniupnpc expat libunwind-headers protobuf abseil ccache zstd
       - uses: dtolnay/rust-toolchain@stable
       - name: build
         run: |
@@ -77,7 +134,7 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           update: true
-          install: mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-ccache mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-zeromq mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi mingw-w64-x86_64-protobuf mingw-w64-x86_64-abseil-cpp mingw-w64-x86_64-libusb mingw-w64-x86_64-unbound mingw-w64-x86_64-rust git
+          install: mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-ccache mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi mingw-w64-x86_64-protobuf mingw-w64-x86_64-abseil-cpp mingw-w64-x86_64-libusb mingw-w64-x86_64-unbound mingw-w64-x86_64-rust git
       - uses: ./.github/actions/set-make-job-count
       - name: build
         run: |
@@ -91,7 +148,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: install dependencies
-        run: pacman -Syyu --noconfirm base-devel git cmake boost boost-libs openssl zeromq unbound libsodium readline expat gtest python3 doxygen graphviz hidapi libusb protobuf abseil-cpp rust
+        run: pacman -Syyu --noconfirm base-devel git cmake boost boost-libs openssl unbound libsodium readline expat gtest python3 doxygen graphviz hidapi libusb protobuf abseil-cpp rust
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
@@ -180,7 +237,7 @@ jobs:
       - name: install Rust
         run: ${{env.INSTALL_RUST}}
       - name: install Python dependencies
-        run: apt install -y python3-requests python3-psutil python3-monotonic python3-zmq python3-deepdiff
+        run: apt install -y python3-requests python3-psutil python3-monotonic python3-deepdiff
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
@@ -203,6 +260,57 @@ jobs:
           ${{env.CCACHE_SETTINGS}}
           ${{env.BUILD_DEFAULT_LINUX}}
           cmake --build build --target test
+
+  build-windows-msvc:
+    name: 'Windows (MSVC, wallet-core only)'
+    runs-on: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: restore vcpkg cache
+        uses: actions/cache/restore@v5
+        id: vcpkg-cache
+        with:
+          path: |
+            C:\vcpkg\downloads
+            C:\vcpkg\installed
+            C:\vcpkg\archives
+          key: vcpkg-x64-windows-static-${{ hashFiles('.github/workflows/build.yml', 'vcpkg-overlay/**') }}
+          restore-keys: vcpkg-x64-windows-static-
+      - name: install vcpkg dependencies
+        shell: pwsh
+        env:
+          VCPKG_BINARY_SOURCES: clear;files,C:\vcpkg\archives,readwrite
+        run: |
+          vcpkg install --triplet x64-windows-static --overlay-ports="${{ github.workspace }}/vcpkg-overlay/ports" boost openssl libsodium libusb lmdb
+      - name: save vcpkg cache
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            C:\vcpkg\downloads
+            C:\vcpkg\installed
+            C:\vcpkg\archives
+          key: vcpkg-x64-windows-static-${{ hashFiles('.github/workflows/build.yml', 'vcpkg-overlay/**') }}
+      - name: configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build `
+            -G "Visual Studio 18 2026" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DSTATIC=ON `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DBUILD_TESTS=OFF `
+            -DSTACK_TRACE=OFF `
+            -DUSE_DEVICE_TREZOR=OFF `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static
+      - name: build wallet-core libraries
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --target wallet --parallel 2
 
   source-archive:
     name: "source archive"
@@ -235,3 +343,194 @@ jobs:
         with:
           name: ${{ env.OUTPUT }}
           path: ${{ env.OUTPUT }}
+
+  rust-audit-and-test:
+    name: "Rust: audit, test, determinism"
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: set apt conf
+        run: ${{env.APT_SET_CONF}}
+      - name: update apt
+        run: apt update
+      - name: install dependencies
+        run: apt -y install build-essential git curl pkg-config libssl-dev
+      - name: install Rust
+        run: ${{env.INSTALL_RUST}}
+      - name: install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: configure git
+        run: git config --global --add safe.directory '*'
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: guard against absolute local Cargo paths
+        shell: bash
+        run: |
+          MATCHES=""
+          while IFS= read -r file; do
+            HITS="$(grep -nE '/home/|/Users/|[A-Za-z]:\\\\Users\\\\' "$file" || true)"
+            if [ -n "$HITS" ]; then
+              MATCHES="${MATCHES}${file}\n${HITS}\n"
+            fi
+          done < <(find rust -type f \( -name Cargo.toml -o -path '*/.cargo/config' -o -path '*/.cargo/config.toml' \))
+          if [ -n "$MATCHES" ]; then
+            echo "FATAL: detected absolute local paths in Cargo manifests/config:"
+            printf "%b" "$MATCHES"
+            exit 1
+          fi
+          echo "Cargo path portability guard passed."
+      - name: verify x86_64 architecture
+        run: |
+          ARCH=$(uname -m)
+          echo "Runner architecture: $ARCH"
+          if [ "$ARCH" != "x86_64" ]; then
+            echo "FATAL: expected x86_64 runner, got $ARCH"
+            exit 1
+          fi
+      - name: verify fuzz harness inventory (smoke gate)
+        shell: bash
+        run: |
+          REQUIRED_TARGETS=(
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_fcmp_proof_deserialize.rs
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_curve_tree_leaf_hash.rs
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_block_header_tree_root.rs
+            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_tx_deserialize_fcmp_type7.rs
+            rust/shekyl-staking/fuzz/fuzz_targets/fuzz_claim_reward.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_kem_decapsulate.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_bech32m_address_decode.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_verify.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_key_blob.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_sig_blob.rs
+            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_group_id.rs
+          )
+          MISSING=0
+          for target in "${REQUIRED_TARGETS[@]}"; do
+            if [ ! -f "$target" ]; then
+              echo "FATAL: missing required fuzz harness: $target"
+              MISSING=1
+            fi
+          done
+          if [ "$MISSING" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Fuzz harness inventory smoke gate passed (${#REQUIRED_TARGETS[@]} targets present)."
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: rust-
+      - name: cargo audit
+        working-directory: rust
+        run: cargo audit
+      - name: build shekyl-fcmp crate
+        working-directory: rust
+        run: cargo build --locked -p shekyl-fcmp
+      - name: cargo test (all workspace crates)
+        working-directory: rust
+        run: cargo test --locked --workspace
+      - name: "Gate 1: proptest (--release for speed)"
+        working-directory: rust
+        run: cargo test --locked --release -p shekyl-crypto-pq --test prop_round_trip
+      - name: Bech32m address encoding tests
+        working-directory: rust
+        run: cargo test --locked -p shekyl-crypto-pq -- address
+      - name: "CI grep gate: no shekyl_y in C++ source"
+        run: |
+          if grep -rn 'shekyl_y' src/crypto/ src/wallet/ --include='*.cpp' --include='*.h'; then
+            echo "FATAL: 'shekyl_y' salt still present in C++ source"
+            exit 1
+          fi
+          echo "PASS: no shekyl_y in C++ source"
+      - name: "CI grep gate: no derivation_to_y_scalar in C++ source"
+        run: |
+          if grep -rn 'derivation_to_y_scalar' src/crypto/ src/wallet/ --include='*.cpp' --include='*.h'; then
+            echo "FATAL: derivation_to_y_scalar still present in C++ source"
+            exit 1
+          fi
+          echo "PASS: no derivation_to_y_scalar in C++ source"
+      - name: "CI grep gate: no RCTTypeFull/Simple/Bulletproof in C++ source"
+        run: |
+          if grep -rn 'RCTTypeFull\|RCTTypeSimple\|RCTTypeBulletproof[^P]' src/ --include='*.cpp' --include='*.h'; then
+            echo "FATAL: legacy RCT types still referenced in C++ source"
+            exit 1
+          fi
+          echo "PASS: no legacy RCT types"
+      - name: "CI grep gate: no v1/v2 tx version branches"
+        run: |
+          if grep -rn 'tx\.version\s*==\s*1\b\|tx\.version\s*<\s*2\b\|hf_version\s*<\s*1\b' src/ --include='*.cpp' --include='*.h'; then
+            echo "FATAL: legacy v1/v2 transaction version checks still present"
+            exit 1
+          fi
+          echo "PASS: no v1/v2 tx version branches"
+      - name: "CI grep gate: no HASH_KEY_TXPROOF in C++ source"
+        run: |
+          if grep -rn 'HASH_KEY_TXPROOF' --include='*.cpp' --include='*.h' src/ tests/; then
+            echo "FATAL: legacy HASH_KEY_TXPROOF still referenced"
+            exit 1
+          fi
+          echo "PASS: no HASH_KEY_TXPROOF"
+      - name: "CI grep gate: combined_shared_secret confined to wallet"
+        run: |
+          if grep -rn 'combined_shared_secret' --include='*.cpp' --include='*.h' src/common/ src/rpc/ src/cryptonote_protocol/; then
+            echo "FATAL: combined_shared_secret leaked outside wallet boundary"
+            exit 1
+          fi
+          echo "PASS: combined_shared_secret confined"
+      - name: "CI grep gate: no ecdhEncode/ecdhDecode outside Ledger"
+        run: |
+          if grep -rn 'ecdhEncode\|ecdhDecode' --include='*.cpp' --include='*.h' src/ | grep -v device_ledger; then
+            echo "FATAL: ecdhEncode/ecdhDecode used outside Ledger gate"
+            exit 1
+          fi
+          echo "PASS: no ecdhEncode/ecdhDecode outside Ledger"
+      - name: "CI grep gate: no direct dalek_ff_group 0.4 usage"
+        working-directory: rust
+        run: |
+          # Design intent (see docs/FOLLOWUPS.md "dalek-ff-group version isolation"):
+          #
+          # The workspace carries two dalek-ff-group versions:
+          #   0.5.x — used directly by shekyl crates
+          #   0.4.x — pulled transitively by vendored serai/ciphersuite internals
+          #
+          # Direct dalek_ff_group usage in our source is allowed (must resolve
+          # to 0.5). The informational grep below prints matches for visibility
+          # but does NOT fail — legitimate 0.5 usage is expected.
+          #
+          # The structural check below asserts that none of our crates pull
+          # 0.4 as a *normal* (non-dev, non-build) dependency. If upstream
+          # ciphersuite upgrades to 0.5, this gate can be removed entirely.
+          DIRECT=$(grep -rn 'dalek_ff_group' --include='*.rs' \
+                   shekyl-*/src shekyl-ffi/src shekyl-ffi/tests 2>/dev/null \
+                   | grep -v '^\s*//' || true)
+          if [ -n "$DIRECT" ]; then
+            echo "Files referencing dalek_ff_group directly (must all resolve to 0.5):"
+            echo "$DIRECT"
+          fi
+          # Fail if any shekyl crate has a normal dependency on the 0.4 line
+          for crate in shekyl-ffi shekyl-fcmp shekyl-crypto-pq shekyl-proofs shekyl-tx-builder shekyl-scanner shekyl-wallet-rpc shekyl-daemon-rpc; do
+            if cargo tree -p "$crate" --edges normal 2>/dev/null \
+               | grep 'dalek-ff-group v0\.4'; then
+              echo "FATAL: $crate has a normal (non-dev) dependency on dalek-ff-group 0.4"
+              exit 1
+            fi
+          done
+          echo "PASS: all shekyl crates isolated from dalek-ff-group 0.4"
+      - name: determinism check (build twice, compare hashes)
+        working-directory: rust
+        run: |
+          cargo build --locked --release -p shekyl-ffi
+          sha256sum target/release/libshekyl_ffi.a > /tmp/build1.sha256
+          cargo clean -p shekyl-ffi --release
+          cargo build --locked --release -p shekyl-ffi
+          sha256sum target/release/libshekyl_ffi.a > /tmp/build2.sha256
+          echo "=== Build 1 ===" && cat /tmp/build1.sha256
+          echo "=== Build 2 ===" && cat /tmp/build2.sha256
+          diff /tmp/build1.sha256 /tmp/build2.sha256 || (echo "FATAL: non-deterministic Rust build" && exit 1)
+          echo "Determinism check PASSED"

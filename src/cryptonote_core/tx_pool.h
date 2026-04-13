@@ -666,6 +666,10 @@ private:
     //! cache/call Blockchain::check_tx_inputs results
     bool check_tx_inputs(const std::function<cryptonote::transaction&(void)> &get_tx, const crypto::hash &txid, uint64_t &max_used_block_height, crypto::hash &max_used_block_id, tx_verification_context &tvc, bool kept_by_block = false) const;
 
+    //! Check whether an FCMP++ tx's proof was previously verified and the
+    //! cached verification hash in the meta still matches the tx contents.
+    bool is_fcmp_verification_cached(const txpool_tx_meta_t& meta, const transaction& tx) const;
+
     //! transactions which are unlikely to be included in blocks
     /*! These transactions are kept in RAM in case they *are* included
      *  in a block eventually, but this container is not saved to disk.

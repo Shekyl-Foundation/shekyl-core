@@ -33,9 +33,6 @@
 #include <boost/algorithm/string/split.hpp>
 #include "misc_log_ex.h"
 #include "daemon/daemon.h"
-#include "rpc/daemon_handler.h"
-#include "rpc/zmq_pub.h"
-#include "rpc/zmq_server.h"
 
 #include "common/password.h"
 #include "common/util.h"
@@ -55,21 +52,10 @@ using namespace epee;
 
 #include <functional>
 
-#undef MONERO_DEFAULT_LOG_CATEGORY
-#define MONERO_DEFAULT_LOG_CATEGORY "daemon"
+#undef SHEKYL_DEFAULT_LOG_CATEGORY
+#define SHEKYL_DEFAULT_LOG_CATEGORY "daemon"
 
 namespace daemonize {
-
-struct zmq_internals
-{
-  explicit zmq_internals(t_core& core, t_p2p& p2p)
-    : rpc_handler{core.get(), p2p.get()}
-    , server{rpc_handler}
-  {}
-
-  cryptonote::rpc::DaemonHandler rpc_handler;
-  cryptonote::rpc::ZmqServer server;
-};
 
 struct t_internals {
 private:
@@ -78,7 +64,6 @@ public:
   t_core core;
   t_p2p p2p;
   std::vector<std::unique_ptr<t_rpc>> rpcs;
-  std::unique_ptr<zmq_internals> zmq;
   bool rust_rpc_enabled;
   std::vector<ShekylDaemonRpcHandle*> rust_rpc_handles;
 
@@ -88,10 +73,8 @@ public:
     : core{vm}
     , protocol{vm, core, command_line::get_arg(vm, cryptonote::arg_offline)}
     , p2p{vm, protocol}
-    , zmq{nullptr}
     , rust_rpc_enabled{!command_line::get_arg(vm, daemon_args::arg_no_rust_rpc)}
   {
-    // Handle circular dependencies
     protocol.set_p2p_endpoint(p2p.get());
     core.set_protocol(protocol.get());
 
@@ -105,29 +88,6 @@ public:
     {
       auto restricted_rpc_port = command_line::get_arg(vm, restricted_rpc_port_arg);
       rpcs.emplace_back(new t_rpc{vm, core, p2p, true, restricted_rpc_port, "restricted", true});
-    }
-
-    if (!command_line::get_arg(vm, daemon_args::arg_zmq_rpc_disabled))
-    {
-      zmq.reset(new zmq_internals{core, p2p});
-
-      const std::string zmq_port = command_line::get_arg(vm, daemon_args::arg_zmq_rpc_bind_port);
-      const std::string zmq_address = command_line::get_arg(vm, daemon_args::arg_zmq_rpc_bind_ip);
-
-      if (!zmq->server.init_rpc(zmq_address, zmq_port))
-        throw std::runtime_error{"Failed to add TCP socket(" + zmq_address + ":" + zmq_port + ") to ZMQ RPC Server"};
-
-      std::shared_ptr<cryptonote::listener::zmq_pub> shared;
-      const std::vector<std::string> zmq_pub = command_line::get_arg(vm, daemon_args::arg_zmq_pub);
-      if (!zmq_pub.empty() && !(shared = zmq->server.init_pub(epee::to_span(zmq_pub))))
-        throw std::runtime_error{"Failed to initialize zmq_pub"};
-
-      if (shared)
-      {
-        core.get().get_blockchain_storage().set_txpool_notify(cryptonote::listener::zmq_pub::txpool_add{shared});
-        core.get().get_blockchain_storage().add_block_notify(cryptonote::listener::zmq_pub::chain_main{shared});
-        core.get().get_blockchain_storage().add_miner_notify(cryptonote::listener::zmq_pub::miner_data{shared});
-      }
     }
   }
 };
@@ -198,28 +158,30 @@ bool t_daemon::run(bool interactive)
     if (!mp_internals->core.run())
       return false;
 
-    for(auto& rpc: mp_internals->rpcs)
-      rpc->run();
-
-    // Start Rust/Axum daemon RPC if --rust-rpc is set
     if (mp_internals->rust_rpc_enabled)
     {
       for (auto& rpc : mp_internals->rpcs)
       {
         auto* server = rpc->get_server();
-        std::string bind_addr = "127.0.0.1:" + std::to_string(server->get_binded_port() + 10000);
+        std::string bind_addr = "127.0.0.1:" + std::to_string(server->get_binded_port());
         auto* rust_handle = shekyl_daemon_rpc_start(
             static_cast<void*>(server), bind_addr.c_str(), false);
         if (rust_handle)
         {
-          MGINFO("Rust daemon RPC started on " << bind_addr);
+          MGINFO("Axum RPC listening on " << bind_addr << " (epee HTTP skipped)");
           mp_internals->rust_rpc_handles.push_back(rust_handle);
         }
         else
         {
-          MWARNING("Failed to start Rust daemon RPC on " << bind_addr);
+          MERROR("Failed to start Axum RPC on " << bind_addr << ", falling back to epee");
+          rpc->run();
         }
       }
+    }
+    else
+    {
+      for(auto& rpc: mp_internals->rpcs)
+        rpc->run();
     }
 
     std::unique_ptr<daemonize::t_command_server> rpc_commands;
@@ -229,11 +191,6 @@ bool t_daemon::run(bool interactive)
       rpc_commands.reset(new daemonize::t_command_server(0, 0, std::nullopt, epee::net_utils::ssl_support_t::e_ssl_support_disabled, false, mp_internals->rpcs.front()->get_server()));
       rpc_commands->start_handling(std::bind(&daemonize::t_daemon::stop_p2p, this));
     }
-
-    if (mp_internals->zmq)
-      mp_internals->zmq->server.run();
-    else
-      MINFO("ZMQ server disabled");
 
     if (public_rpc_port > 0)
     {
@@ -245,9 +202,6 @@ bool t_daemon::run(bool interactive)
 
     if (rpc_commands)
       rpc_commands->stop_handling();
-
-    if (mp_internals->zmq)
-      mp_internals->zmq->server.stop();
 
     for (auto* rust_handle : mp_internals->rust_rpc_handles)
       shekyl_daemon_rpc_stop(rust_handle);

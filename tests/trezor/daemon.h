@@ -30,8 +30,6 @@
 
 #include "misc_log_ex.h"
 #include "daemon/daemon.h"
-#include "rpc/daemon_handler.h"
-#include "rpc/zmq_server.h"
 #include "common/password.h"
 #include "common/util.h"
 #include "daemon/core.h"
@@ -86,12 +84,10 @@ public:
   epee::net_utils::http::http_simple_client m_http_client;
 
   bool m_start_p2p;
-  bool m_start_zmq;
   boost::program_options::variables_map m_vm;
 
   std::string m_p2p_bind_port;
   std::string m_rpc_bind_port;
-  std::string m_zmq_bind_port;
 
   std::atomic<bool> m_stopped;
   std::atomic<bool> m_terminated;
@@ -105,7 +101,6 @@ public:
       : m_core(core)
       , m_vm(vm)
       , m_start_p2p(false)
-      , m_start_zmq(false)
       , m_terminated(false)
       , m_deinitalized(false)
       , m_stopped(false)
@@ -126,7 +121,6 @@ public:
   static void set_ports(boost::program_options::variables_map & vm, unsigned initial_port);
 
   mock_daemon * set_start_p2p(bool fl) { m_start_p2p = fl; return this; }
-  mock_daemon * set_start_zmq(bool fl) { m_start_zmq = fl; return this; }
 
   void init();
   void deinit();
@@ -146,7 +140,6 @@ public:
 
   void load_params(boost::program_options::variables_map const & vm);
 
-  std::string zmq_addr() const { return std::string("127.0.0.1:") + m_zmq_bind_port; }
   std::string rpc_addr() const { return std::string("127.0.0.1:") + m_rpc_bind_port; }
   std::string p2p_addr() const { return std::string("127.0.0.1:") + m_p2p_bind_port; }
   cryptonote::network_type nettype() const { return m_network_type; }

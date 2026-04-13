@@ -1,17 +1,16 @@
 # Shekyl Licensing
 
-This repository contains code derived from the Monero codebase and new code authored for Shekyl.
+This repository is licensed under the **BSD 3-Clause License**.
 
-Licensing is therefore split by provenance:
-
-- **Upstream-derived Monero code** remains under the Monero BSD 3-Clause license.
-- **Shekyl-authored additions and modifications** are licensed under the MIT License, unless a file or directory states otherwise.
+This includes both code derived from the Monero codebase and new code authored
+for Shekyl. BSD 3-Clause was chosen for consistency with the upstream Monero
+license and because it is well-suited to open-source cryptocurrency projects.
 
 When redistributing this project, preserve all applicable license notices.
 
-## 1) Upstream Monero License (BSD 3-Clause)
+## 1) Shekyl License (BSD 3-Clause)
 
-Copyright (c) 2014-2022, The Monero Project
+Copyright (c) 2024-2026, The Shekyl Foundation
 
 All rights reserved.
 
@@ -38,29 +37,30 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Historical upstream attributions retained in this codebase:
+## 2) Historical upstream attributions
 
+This codebase contains code originally derived from the Monero project,
+also licensed under BSD 3-Clause:
+
+- Copyright (c) 2014-2022, The Monero Project
 - Parts originally copyright (c) 2012-2013 The Cryptonote developers.
 - Parts originally copyright (c) 2014 The Boolberry developers.
 
-## 2) Shekyl License (MIT)
+## 3) Vendored shekyl-oxide third-party crates
 
-Copyright (c) 2026 Shekyl contributors
+Consensus-critical FCMP++ dependencies are vendored under `rust/shekyl-oxide/`.
+Their upstream project and snapshot metadata are tracked in:
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+- `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT`
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Per-crate upstream license files are preserved in the vendored tree, including:
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+- `rust/shekyl-oxide/crypto/divisors/LICENSE`
+- `rust/shekyl-oxide/crypto/helioselene/LICENSE`
+- `rust/shekyl-oxide/crypto/generalized-bulletproofs/LICENSE`
+- `rust/shekyl-oxide/crypto/fcmps/LICENSE`
+- `rust/shekyl-oxide/crypto/fcmps/circuit-abstraction/LICENSE`
+- `rust/shekyl-oxide/crypto/fcmps/ec-gadgets/LICENSE`
+- `rust/shekyl-oxide/shekyl-oxide/io/LICENSE`
+- `rust/shekyl-oxide/shekyl-oxide/generators/LICENSE`
+- `rust/shekyl-oxide/shekyl-oxide/fcmp/fcmp++/LICENSE`

@@ -30,7 +30,7 @@
 
 #pragma once
 
-#include "ringct/rctSigs.h"
+#include "fcmp/rctSigs.h"
 
 template<bool a_verify>
 class test_range_proof

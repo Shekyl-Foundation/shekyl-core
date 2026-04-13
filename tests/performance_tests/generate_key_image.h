@@ -52,8 +52,32 @@ public:
     crypto::key_derivation recv_derivation;
     crypto::generate_key_derivation(m_tx_pub_key, bob_keys.m_view_secret_key, recv_derivation);
 
-    crypto::derive_public_key(recv_derivation, 0, bob_keys.m_account_address.m_spend_public_key, m_in_ephemeral.pub);
-    crypto::derive_secret_key(recv_derivation, 0, bob_keys.m_spend_secret_key, m_in_ephemeral.sec);
+    // Inline derivation_to_scalar: Hs(derivation || varint(0))
+    crypto::ec_scalar hs_scalar;
+    {
+      struct { crypto::key_derivation d; uint8_t vi; } buf;
+      buf.d = recv_derivation;
+      buf.vi = 0;
+      crypto::hash_to_scalar(&buf, sizeof(crypto::key_derivation) + 1, hs_scalar);
+    }
+
+    // derive_public_key: hs_scalar * G + spend_public_key
+    ge_p3 point1;
+    ge_scalarmult_base(&point1, reinterpret_cast<const unsigned char*>(&hs_scalar));
+    ge_p3 point2;
+    ge_frombytes_vartime(&point2, reinterpret_cast<const unsigned char*>(&bob_keys.m_account_address.m_spend_public_key));
+    ge_cached point2c;
+    ge_p3_to_cached(&point2c, &point2);
+    ge_p1p1 sum;
+    ge_add(&sum, &point1, &point2c);
+    ge_p3 result;
+    ge_p1p1_to_p3(&result, &sum);
+    ge_p3_tobytes(reinterpret_cast<unsigned char*>(&m_in_ephemeral.pub), &result);
+
+    // derive_secret_key: hs_scalar + spend_secret_key
+    sc_add(reinterpret_cast<unsigned char*>(&m_in_ephemeral.sec),
+           reinterpret_cast<const unsigned char*>(&hs_scalar),
+           reinterpret_cast<const unsigned char*>(&bob_keys.m_spend_secret_key));
 
     return true;
   }

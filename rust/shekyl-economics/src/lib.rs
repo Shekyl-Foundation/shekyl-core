@@ -9,6 +9,8 @@
 //! All calculations use u64 fixed-point with 10^6 scale (SCALE = 1_000_000).
 //! A value of 1_000_000 represents 1.0, 400_000 represents 0.4, etc.
 
+#![deny(unsafe_code)]
+
 pub mod params;
 pub mod release;
 pub mod burn;

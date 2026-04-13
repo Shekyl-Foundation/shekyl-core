@@ -1,0 +1,36 @@
+---
+description: Self-regulating system design principles. Minimize need for manual intervention or coordinated upgrades.
+alwaysApply: true
+---
+
+# System Autonomy
+
+Design for self-regulating systems. Minimize the need for manual
+intervention or coordinated off-chain upgrades.
+
+## Rules
+
+- Difficulty adjustment must be automatic and responsive — no manual resets
+  or emergency interventions in normal operation.
+- Fee markets should be adaptive, adjusting to network load without
+  governance votes or hard-coded thresholds. Adaptive burn (`burn.rs`) is
+  the model.
+- Self-healing network: nodes automatically recover from partitions, stale
+  peers, and temporary failures.
+- Monitoring and health metrics are built into the node, not bolted on as
+  external tooling.
+- Every tunable parameter has a documented rationale for its default value
+  and bounds for safe adjustment.
+
+## Governance caveat
+
+On-chain signaling for activation of already-defined upgrade paths is
+preferred over off-chain coordination. **However:** consensus-rule changes
+themselves still require hard forks reviewed against the security hierarchy
+in `00-mission.mdc`. On-chain governance has its own attack surface
+(vote-buying, whale capture, rushed parameter changes), and Shekyl does not
+adopt arbitrary on-chain parameter mutation as a substitute for engineering
+review.
+
+The rule of thumb: on-chain mechanisms decide *when* a pre-specified change
+activates; humans decide *what* the change is.

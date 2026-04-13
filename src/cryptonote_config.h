@@ -39,6 +39,7 @@
 #define CRYPTONOTE_DNS_TIMEOUT_MS                       20000
 
 #define CRYPTONOTE_MAX_BLOCK_NUMBER                     500000000
+#define CRYPTONOTE_MAX_BLOCK_HEIGHT_SENTINEL            CRYPTONOTE_MAX_BLOCK_NUMBER
 #define CRYPTONOTE_MAX_TX_SIZE                          1000000
 #define CRYPTONOTE_MAX_TX_PER_BLOCK                     0x10000000
 #define CRYPTONOTE_PUBLIC_ADDRESS_TEXTBLOB_VER          0
@@ -48,6 +49,8 @@
 #define CURRENT_BLOCK_MINOR_VERSION                     0
 #define CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT              60*60*2
 #define CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE             10
+/** Depth (in blocks) below the chain tip before tx verification data may be pruned (~7d at 120s/block). */
+#define CRYPTONOTE_TX_PRUNE_DEPTH                       5000
 
 #define BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW               60
 
@@ -156,7 +159,8 @@
 #define P2P_IDLE_CONNECTION_KILL_INTERVAL               (5*60) //5 minutes
 
 #define P2P_SUPPORT_FLAG_FLUFFY_BLOCKS                  0x01
-#define P2P_SUPPORT_FLAGS                               P2P_SUPPORT_FLAG_FLUFFY_BLOCKS
+#define P2P_SUPPORT_FLAG_ZSTD_COMPRESSION               0x02
+#define P2P_SUPPORT_FLAGS                               (P2P_SUPPORT_FLAG_FLUFFY_BLOCKS | P2P_SUPPORT_FLAG_ZSTD_COMPRESSION)
 
 #define RPC_IP_FAILS_BEFORE_BLOCK                       3
 
@@ -169,31 +173,33 @@
 
 #define THREAD_STACK_SIZE                       5 * 1024 * 1024
 
-// Rebooted chain: all legacy features active from genesis (HF 1).
-// Constants kept as named symbols for code clarity; all resolve to 1.
+// Rebooted chain: all features active from genesis (HF 1).
+// Only constants still referenced in production code are kept.
 #define HF_VERSION_DYNAMIC_FEE                  1
-#define HF_VERSION_MIN_MIXIN_4                  1
-#define HF_VERSION_MIN_MIXIN_6                  1
 #define HF_VERSION_CRYPTONIGHT_VARIANT_1        1
-#define HF_VERSION_MIN_MIXIN_10                 1
-#define HF_VERSION_MIN_MIXIN_15                 1
-#define HF_VERSION_ENFORCE_RCT                  1
 #define HF_VERSION_PER_BYTE_FEE                 1
 #define HF_VERSION_SMALLER_BP                   1
 #define HF_VERSION_LONG_TERM_BLOCK_WEIGHT       1
-#define HF_VERSION_MIN_2_OUTPUTS                1
-#define HF_VERSION_MIN_V2_COINBASE_TX           1
-#define HF_VERSION_SAME_MIXIN                   1
-#define HF_VERSION_REJECT_SIGS_IN_COINBASE      1
-#define HF_VERSION_ENFORCE_MIN_AGE              1
-#define HF_VERSION_EFFECTIVE_SHORT_TERM_MEDIAN_IN_PENALTY 1
 #define HF_VERSION_EXACT_COINBASE               1
-#define HF_VERSION_CLSAG                        1
-#define HF_VERSION_DETERMINISTIC_UNLOCK_TIME    1
 #define HF_VERSION_BULLETPROOF_PLUS             1
 #define HF_VERSION_VIEW_TAGS                    1
 #define HF_VERSION_2021_SCALING                 1
 #define HF_VERSION_SHEKYL_NG                    1  // Three-component economics: release rate, burn, staking
+#define HF_VERSION_FCMP_PLUS_PLUS_PQC           1  // FCMP++ full-chain membership proofs + per-output PQC keys
+
+// FCMP++ consensus parameters
+//
+// Output maturity is enforced by universal deferred tree insertion: outputs
+// only enter the curve tree after their type-specific maturity period
+// (coinbase: MINED_MONEY_UNLOCK_WINDOW, regular: DEFAULT_TX_SPENDABLE_AGE,
+// staked: max(effective_lock_until, DEFAULT_TX_SPENDABLE_AGE)).  MIN_AGE is a reorg
+// safety margin ensuring the referenced tree state is stable.
+#define FCMP_REFERENCE_BLOCK_MAX_AGE            100  // ~3.3 hours at 2-min blocks; max referenceBlock staleness
+#define FCMP_REFERENCE_BLOCK_MIN_AGE            5    // reorg safety margin; maturity enforced by deferred tree insertion
+#define FCMP_MAX_INPUTS_PER_TX                  8    // bounds proof generation time and tx size
+constexpr uint64_t FCMP_CURVE_TREE_CHECKPOINT_INTERVAL = 10000;
+static_assert(FCMP_REFERENCE_BLOCK_MAX_AGE > FCMP_REFERENCE_BLOCK_MIN_AGE,
+  "FCMP_REFERENCE_BLOCK_MAX_AGE must be > MIN_AGE to give wallets a valid reference block window");
 
 #define PER_KB_FEE_QUANTIZATION_DECIMALS        6 // Keep fee quantization at 1e-6 SKL while display precision is 1e-9 SKL.
 #define CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES 2
@@ -213,10 +219,10 @@
 
 #define DNS_BLOCKLIST_LIFETIME (86400 * 8)
 
-//The limit is enough for the mandatory transaction content with 16 outputs (547 bytes),
-//a custom tag (1 byte) and up to 32 bytes of custom data for each recipient.
-// (1+32) + (1+1+16*32) + (1+16*32) = 1060
-#define MAX_TX_EXTRA_SIZE                       1060
+// Legacy Monero-era cap was 1060 bytes. FCMP++ adds per-output tx_extra (tags 0x06/0x07):
+// hybrid KEM ciphertext (~1120 B) + PQC leaf hash (32 B) each, plus pubkey/nonce/padding.
+// Worst case BULLETPROOF_PLUS_MAX_OUTPUTS (16) needs on the order of 20 KiB; 24 KiB leaves headroom.
+#define MAX_TX_EXTRA_SIZE                       24576
 
 // New constants are intended to go here
 namespace config
@@ -226,16 +232,12 @@ namespace config
   uint64_t const DEFAULT_DUST_THRESHOLD = ((uint64_t)2000000); // 2 * pow(10, 6) = 0.002 SKL
   uint64_t const BASE_REWARD_CLAMP_THRESHOLD = ((uint64_t)100000); // pow(10, 5) = 0.0001 SKL
 
-  uint64_t const CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX = 55;
-  uint64_t const CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX = 56;
-  uint64_t const CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX = 50;
   uint16_t const P2P_DEFAULT_PORT = 11021;
   uint16_t const RPC_DEFAULT_PORT = 11029;
-  uint16_t const ZMQ_RPC_DEFAULT_PORT = 11025;
   boost::uuids::uuid const NETWORK_ID = { {
       0x6F, 0x04, 0x08, 0x0F, 0x10, 0x17, 0x2A, 0x6F, 0x6F, 0x04, 0x08, 0x0F, 0x10, 0x17, 0x2A, 0x6F
     } }; // Bender's nightmare
-  std::string const GENESIS_TX = "023c01ff00018080a0d9e61d03bd6e72aaa34956e2cfbcea033e825c8e94078da2469906d3e5d6194f516e723f142101e315dc29e3226b530a219ff70823220600467494af69d63328b14a78d30495e400";
+  std::string const GENESIS_TX = "033c01ff00018080a0d9e61d03bd6e72aaa34956e2cfbcea033e825c8e94078da2469906d3e5d6194f516e723f142101e315dc29e3226b530a219ff70823220600467494af69d63328b14a78d30495e4000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
   uint32_t const GENESIS_NONCE = 10000;
 
   // Hash domain separators
@@ -251,44 +253,37 @@ namespace config
   const unsigned char HASH_KEY_BACKGROUND_KEYS_FILE = 0x8f;
   const unsigned char HASH_KEY_RPC_PAYMENT_NONCE = 0x58;
   const unsigned char HASH_KEY_MEMORY = 'k';
-  const unsigned char HASH_KEY_TXPROOF_V2[] = "TXPROOF_V2";
-  const unsigned char HASH_KEY_CLSAG_ROUND[] = "CLSAG_round";
-  const unsigned char HASH_KEY_CLSAG_AGG_0[] = "CLSAG_agg_0";
-  const unsigned char HASH_KEY_CLSAG_AGG_1[] = "CLSAG_agg_1";
   const char HASH_KEY_MESSAGE_SIGNING[] = "ShekylMessageSignature";
   const unsigned char HASH_KEY_MM_SLOT = 'm';
-  const constexpr char HASH_KEY_TXHASH_AND_MIXRING[] = "txhash_and_mixring";
-
   // PQC Multisig (scheme_id = 2)
   const uint32_t MAX_MULTISIG_PARTICIPANTS{7};
+  // Max serialized PQC blob sizes for deserialization bounds checking.
+  // Ed25519(32) + ML-DSA-65(1952) + 12 header = 1996 per participant.
+  constexpr size_t PQC_HYBRID_SINGLE_KEY_LEN = 1996;
+  constexpr size_t PQC_MAX_PUBLIC_KEY_BLOB = 2 + MAX_MULTISIG_PARTICIPANTS * PQC_HYBRID_SINGLE_KEY_LEN;
+  // Ed25519(64) + ML-DSA-65(3309) + 12 header = 3385 per participant.
+  constexpr size_t PQC_HYBRID_SINGLE_SIG_LEN = 3385;
+  constexpr size_t PQC_MAX_SIGNATURE_BLOB = 2 + MAX_MULTISIG_PARTICIPANTS * PQC_HYBRID_SINGLE_SIG_LEN;
 
   namespace testnet
   {
-    uint64_t const CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX = 53;
-    uint64_t const CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX = 54;
-    uint64_t const CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX = 63;
     uint16_t const P2P_DEFAULT_PORT = 12021;
     uint16_t const RPC_DEFAULT_PORT = 12029;
-    uint16_t const ZMQ_RPC_DEFAULT_PORT = 12025;
     boost::uuids::uuid const NETWORK_ID = { {
         0xDE, 0x04, 0x08, 0x0F, 0x10, 0x17, 0x2A, 0xDE, 0xDE, 0x04, 0x08, 0x0F, 0x10, 0x17, 0x2A, 0xDE
       } }; // Bender's daydream
-      std::string const GENESIS_TX = "023c01ff00058080a0f8fa0503010169c3add3b0110e1274b56fefe3d18d74da3bc4ac3f93ad1976646709de2c2c8080a0f8fa050395f9d0f831808e3ef711d56cf8a025c823233a47b6e034e107710163308ad9526f8080a0f8fa0503a092b7cb689ffa3fffdc9e73deee160212f316d423ad5df2d2271fd1e5b80cd1d38080a0f8fa0503734156f553123daaec7280640c5a073c197810701374e331e7b0218dc59cf9c03c8080a0f8fa050367a338532f43379358b2dd8fe044ea1a6f529dd9fe766822e9b7dedb5e1f83df13210113ef4a9d419042c4c60d44da8a20ffc70eb5d9421abc8f7dc8bcaac50b13024e00";
+      std::string const GENESIS_TX = "033c01ff00058080a0f8fa0503010169c3add3b0110e1274b56fefe3d18d74da3bc4ac3f93ad1976646709de2c2c8080a0f8fa050395f9d0f831808e3ef711d56cf8a025c823233a47b6e034e107710163308ad9526f8080a0f8fa0503a092b7cb689ffa3fffdc9e73deee160212f316d423ad5df2d2271fd1e5b80cd1d38080a0f8fa0503734156f553123daaec7280640c5a073c197810701374e331e7b0218dc59cf9c03c8080a0f8fa050367a338532f43379358b2dd8fe044ea1a6f529dd9fe766822e9b7dedb5e1f83df13210113ef4a9d419042c4c60d44da8a20ffc70eb5d9421abc8f7dc8bcaac50b13024e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
     uint32_t const GENESIS_NONCE = 10101;
   }
 
   namespace stagenet
   {
-    uint64_t const CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX = 24;
-    uint64_t const CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX = 25;
-    uint64_t const CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX = 36;
     uint16_t const P2P_DEFAULT_PORT = 13021;
     uint16_t const RPC_DEFAULT_PORT = 13029;
-    uint16_t const ZMQ_RPC_DEFAULT_PORT = 13025;
     boost::uuids::uuid const NETWORK_ID = { {
         0x12 ,0x30, 0xF1, 0x71 , 0x61, 0x04 , 0x41, 0x61, 0x17, 0x31, 0x00, 0x82, 0x16, 0xA1, 0xA1, 0x12
       } }; // Bender's daydream
-    std::string const GENESIS_TX = "023c01ff00018080a0d9e61d03a91ea46d9778bdf71db67566064b90d5e89083bafbb7893b016200fbc4e77e4dfc2101ee336d3021ffa4463ff8f34ddcb41ee550b42b33f15f3cfc0c20829a4ca406ca00";
+    std::string const GENESIS_TX = "033c01ff00018080a0d9e61d03a91ea46d9778bdf71db67566064b90d5e89083bafbb7893b016200fbc4e77e4dfc2101ee336d3021ffa4463ff8f34ddcb41ee550b42b33f15f3cfc0c20829a4ca406ca000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
     uint32_t const GENESIS_NONCE = 10002;
   }
 }
@@ -305,12 +300,8 @@ namespace cryptonote
   };
   struct config_t
   {
-    uint64_t const CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX;
-    uint64_t const CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX;
-    uint64_t const CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX;
     uint16_t const P2P_DEFAULT_PORT;
     uint16_t const RPC_DEFAULT_PORT;
-    uint16_t const ZMQ_RPC_DEFAULT_PORT;
     boost::uuids::uuid const NETWORK_ID;
     std::string const GENESIS_TX;
     uint32_t const GENESIS_NONCE;
@@ -318,34 +309,22 @@ namespace cryptonote
   inline const config_t& get_config(network_type nettype)
   {
     static const config_t mainnet = {
-      ::config::CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX,
-      ::config::CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX,
-      ::config::CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX,
       ::config::P2P_DEFAULT_PORT,
       ::config::RPC_DEFAULT_PORT,
-      ::config::ZMQ_RPC_DEFAULT_PORT,
       ::config::NETWORK_ID,
       ::config::GENESIS_TX,
       ::config::GENESIS_NONCE
     };
     static const config_t testnet = {
-      ::config::testnet::CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX,
-      ::config::testnet::CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX,
-      ::config::testnet::CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX,
       ::config::testnet::P2P_DEFAULT_PORT,
       ::config::testnet::RPC_DEFAULT_PORT,
-      ::config::testnet::ZMQ_RPC_DEFAULT_PORT,
       ::config::testnet::NETWORK_ID,
       ::config::testnet::GENESIS_TX,
       ::config::testnet::GENESIS_NONCE
     };
     static const config_t stagenet = {
-      ::config::stagenet::CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX,
-      ::config::stagenet::CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX,
-      ::config::stagenet::CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX,
       ::config::stagenet::P2P_DEFAULT_PORT,
       ::config::stagenet::RPC_DEFAULT_PORT,
-      ::config::stagenet::ZMQ_RPC_DEFAULT_PORT,
       ::config::stagenet::NETWORK_ID,
       ::config::stagenet::GENESIS_TX,
       ::config::stagenet::GENESIS_NONCE

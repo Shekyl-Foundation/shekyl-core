@@ -33,6 +33,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <boost/thread/mutex.hpp>
 #include <boost/thread/lock_guard.hpp>
 #include <boost/shared_ptr.hpp>
@@ -72,6 +73,29 @@ namespace crypto {
 
   const crypto::public_key null_pkey = crypto::public_key{};
   const crypto::secret_key null_skey = crypto::secret_key{};
+
+  // T = hash_to_point(keccak256("Monero Generator T"))
+  // Compressed Ed25519 bytes, computed deterministically from the Rust
+  // shekyl-generators crate. Hardcoded to avoid FFI at runtime and
+  // static-initialization-order hazards.
+  static constexpr unsigned char SHEKYL_GENERATOR_T_BYTES[32] = {
+    0x61, 0xb7, 0x36, 0xce, 0x93, 0xb6, 0x2a, 0x3d,
+    0x37, 0x78, 0xab, 0x20, 0x4d, 0xa8, 0x5d, 0x3b,
+    0x4c, 0xdc, 0x07, 0x25, 0x0f, 0x5d, 0xa7, 0xe3,
+    0xdf, 0x26, 0x29, 0x92, 0x81, 0x34, 0xd5, 0x26
+  };
+
+  static ge_p3 generator_T_p3;
+  static std::once_flag generator_T_init_flag;
+
+  static const ge_p3& get_generator_T()
+  {
+    std::call_once(generator_T_init_flag, []() {
+      if (ge_frombytes_vartime(&generator_T_p3, SHEKYL_GENERATOR_T_BYTES) != 0)
+        local_abort("SHEKYL_GENERATOR_T_BYTES is not a valid Ed25519 point");
+    });
+    return generator_T_p3;
+  }
 
   static inline unsigned char *operator &(ec_point &point) {
     return &reinterpret_cast<unsigned char &>(point);
@@ -144,11 +168,6 @@ namespace crypto {
     sc_reduce32(&res);
   }
 
-  /* 
-   * generate public and secret keys from a random 256-bit integer
-   * TODO: allow specifying random value (for wallet recovery)
-   * 
-   */
   secret_key crypto_ops::generate_keys(public_key &pub, secret_key &sec, const secret_key& recovery_key, bool recover) {
     ge_p3 point;
 
@@ -198,65 +217,6 @@ namespace crypto {
     ge_mul8(&point3, &point2);
     ge_p1p1_to_p2(&point2, &point3);
     ge_tobytes(&derivation, &point2);
-    return true;
-  }
-
-  void crypto_ops::derivation_to_scalar(const key_derivation &derivation, size_t output_index, ec_scalar &res) {
-    struct {
-      key_derivation derivation;
-      char output_index[(sizeof(size_t) * 8 + 6) / 7];
-    } buf;
-    char *end = buf.output_index;
-    buf.derivation = derivation;
-    tools::write_varint(end, output_index);
-    assert(end <= buf.output_index + sizeof buf.output_index);
-    hash_to_scalar(&buf, end - reinterpret_cast<char *>(&buf), res);
-  }
-
-  bool crypto_ops::derive_public_key(const key_derivation &derivation, size_t output_index,
-    const public_key &base, public_key &derived_key) {
-    ec_scalar scalar;
-    ge_p3 point1;
-    ge_p3 point2;
-    ge_cached point3;
-    ge_p1p1 point4;
-    ge_p2 point5;
-    if (ge_frombytes_vartime(&point1, &base) != 0) {
-      return false;
-    }
-    derivation_to_scalar(derivation, output_index, scalar);
-    ge_scalarmult_base(&point2, &scalar);
-    ge_p3_to_cached(&point3, &point2);
-    ge_add(&point4, &point1, &point3);
-    ge_p1p1_to_p2(&point5, &point4);
-    ge_tobytes(&derived_key, &point5);
-    return true;
-  }
-
-  void crypto_ops::derive_secret_key(const key_derivation &derivation, size_t output_index,
-    const secret_key &base, secret_key &derived_key) {
-    ec_scalar scalar;
-    assert(sc_check(&base) == 0);
-    derivation_to_scalar(derivation, output_index, scalar);
-    sc_add(&unwrap(derived_key), &unwrap(base), &scalar);
-  }
-
-  bool crypto_ops::derive_subaddress_public_key(const public_key &out_key, const key_derivation &derivation, std::size_t output_index, public_key &derived_key) {
-    ec_scalar scalar;
-    ge_p3 point1;
-    ge_p3 point2;
-    ge_cached point3;
-    ge_p1p1 point4;
-    ge_p2 point5;
-    if (ge_frombytes_vartime(&point1, &out_key) != 0) {
-      return false;
-    }
-    derivation_to_scalar(derivation, output_index, scalar);
-    ge_scalarmult_base(&point2, &scalar);
-    ge_p3_to_cached(&point3, &point2);
-    ge_sub(&point4, &point1, &point3);
-    ge_p1p1_to_p2(&point5, &point4);
-    ge_tobytes(&derived_key, &point5);
     return true;
   }
 
@@ -339,275 +299,10 @@ namespace crypto {
     return sc_isnonzero(&c) == 0;
   }
 
-  // Generate a proof of knowledge of `r` such that (`R = rG` and `D = rA`) or (`R = rB` and `D = rA`) via a Schnorr proof
-  // This handles use cases for both standard addresses and subaddresses
-  //
-  // NOTE: This generates old v1 proofs, and is for TESTING ONLY
-  void crypto_ops::generate_tx_proof_v1(const hash &prefix_hash, const public_key &R, const public_key &A, const std::optional<public_key> &B, const public_key &D, const secret_key &r, signature &sig) {
-    // sanity check
-    ge_p3 R_p3;
-    ge_p3 A_p3;
-    ge_p3 B_p3;
-    ge_p3 D_p3;
-    if (ge_frombytes_vartime(&R_p3, &R) != 0) throw std::runtime_error("tx pubkey is invalid");
-    if (ge_frombytes_vartime(&A_p3, &A) != 0) throw std::runtime_error("recipient view pubkey is invalid");
-    if (B && ge_frombytes_vartime(&B_p3, &*B) != 0) throw std::runtime_error("recipient spend pubkey is invalid");
-    if (ge_frombytes_vartime(&D_p3, &D) != 0) throw std::runtime_error("key derivation is invalid");
-#if !defined(NDEBUG)
-    {
-      assert(sc_check(&r) == 0);
-      // check R == r*G or R == r*B
-      public_key dbg_R;
-      if (B)
-      {
-        ge_p2 dbg_R_p2;
-        ge_scalarmult(&dbg_R_p2, &r, &B_p3);
-        ge_tobytes(&dbg_R, &dbg_R_p2);
-      }
-      else
-      {
-        ge_p3 dbg_R_p3;
-        ge_scalarmult_base(&dbg_R_p3, &r);
-        ge_p3_tobytes(&dbg_R, &dbg_R_p3);
-      }
-      assert(R == dbg_R);
-      // check D == r*A
-      ge_p2 dbg_D_p2;
-      ge_scalarmult(&dbg_D_p2, &r, &A_p3);
-      public_key dbg_D;
-      ge_tobytes(&dbg_D, &dbg_D_p2);
-      assert(D == dbg_D);
-    }
-#endif
+  // Monero-era DH tx proof functions (generate_tx_proof_v1, generate_tx_proof,
+  // check_tx_proof) deleted. Shekyl uses KEM-based proofs via shekyl-proofs Rust crate.
 
-    // pick random k
-    ec_scalar k;
-    random_scalar(k);
-    
-    s_comm_2_v1 buf;
-    buf.msg = prefix_hash;
-    buf.D = D;
-    
-    if (B)
-    {
-      // compute X = k*B
-      ge_p2 X_p2;
-      ge_scalarmult(&X_p2, &k, &B_p3);
-      ge_tobytes(&buf.X, &X_p2);
-    }
-    else
-    {
-      // compute X = k*G
-      ge_p3 X_p3;
-      ge_scalarmult_base(&X_p3, &k);
-      ge_p3_tobytes(&buf.X, &X_p3);
-    }
-    
-    // compute Y = k*A
-    ge_p2 Y_p2;
-    ge_scalarmult(&Y_p2, &k, &A_p3);
-    ge_tobytes(&buf.Y, &Y_p2);
-
-    // sig.c = Hs(Msg || D || X || Y) 
-    hash_to_scalar(&buf, sizeof(buf), sig.c);
-
-    // sig.r = k - sig.c*r
-    sc_mulsub(&sig.r, &sig.c, &unwrap(r), &k);
-  }
-
-  // Generate a proof of knowledge of `r` such that (`R = rG` and `D = rA`) or (`R = rB` and `D = rA`) via a Schnorr proof
-  // This handles use cases for both standard addresses and subaddresses
-  //
-  // Generates only proofs for InProofV2 and OutProofV2
-  void crypto_ops::generate_tx_proof(const hash &prefix_hash, const public_key &R, const public_key &A, const std::optional<public_key> &B, const public_key &D, const secret_key &r, signature &sig) {
-    // sanity check
-    ge_p3 R_p3;
-    ge_p3 A_p3;
-    ge_p3 B_p3;
-    ge_p3 D_p3;
-    if (ge_frombytes_vartime(&R_p3, &R) != 0) throw std::runtime_error("tx pubkey is invalid");
-    if (ge_frombytes_vartime(&A_p3, &A) != 0) throw std::runtime_error("recipient view pubkey is invalid");
-    if (B && ge_frombytes_vartime(&B_p3, &*B) != 0) throw std::runtime_error("recipient spend pubkey is invalid");
-    if (ge_frombytes_vartime(&D_p3, &D) != 0) throw std::runtime_error("key derivation is invalid");
-#if !defined(NDEBUG)
-    {
-      assert(sc_check(&r) == 0);
-      // check R == r*G or R == r*B
-      public_key dbg_R;
-      if (B)
-      {
-        ge_p2 dbg_R_p2;
-        ge_scalarmult(&dbg_R_p2, &r, &B_p3);
-        ge_tobytes(&dbg_R, &dbg_R_p2);
-      }
-      else
-      {
-        ge_p3 dbg_R_p3;
-        ge_scalarmult_base(&dbg_R_p3, &r);
-        ge_p3_tobytes(&dbg_R, &dbg_R_p3);
-      }
-      assert(R == dbg_R);
-      // check D == r*A
-      ge_p2 dbg_D_p2;
-      ge_scalarmult(&dbg_D_p2, &r, &A_p3);
-      public_key dbg_D;
-      ge_tobytes(&dbg_D, &dbg_D_p2);
-      assert(D == dbg_D);
-    }
-#endif
-
-    // pick random k
-    ec_scalar k;
-    random_scalar(k);
-    
-    // if B is not present
-    static const ec_point zero = {{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }};
-
-    s_comm_2 buf;
-    buf.msg = prefix_hash;
-    buf.D = D;
-    buf.R = R;
-    buf.A = A;
-    if (B)
-        buf.B = *B;
-    else
-        buf.B = zero;
-    cn_fast_hash(config::HASH_KEY_TXPROOF_V2, sizeof(config::HASH_KEY_TXPROOF_V2)-1, buf.sep);
-    
-    if (B)
-    {
-      // compute X = k*B
-      ge_p2 X_p2;
-      ge_scalarmult(&X_p2, &k, &B_p3);
-      ge_tobytes(&buf.X, &X_p2);
-    }
-    else
-    {
-      // compute X = k*G
-      ge_p3 X_p3;
-      ge_scalarmult_base(&X_p3, &k);
-      ge_p3_tobytes(&buf.X, &X_p3);
-    }
-    
-    // compute Y = k*A
-    ge_p2 Y_p2;
-    ge_scalarmult(&Y_p2, &k, &A_p3);
-    ge_tobytes(&buf.Y, &Y_p2);
-
-    // sig.c = Hs(Msg || D || X || Y || sep || R || A || B) 
-    hash_to_scalar(&buf, sizeof(buf), sig.c);
-
-    // sig.r = k - sig.c*r
-    sc_mulsub(&sig.r, &sig.c, &unwrap(r), &k);
-
-    memwipe(&k, sizeof(k));
-  }
-
-  // Verify a proof: either v1 (version == 1) or v2 (version == 2)
-  bool crypto_ops::check_tx_proof(const hash &prefix_hash, const public_key &R, const public_key &A, const std::optional<public_key> &B, const public_key &D, const signature &sig, const int version) {
-    // sanity check
-    ge_p3 R_p3;
-    ge_p3 A_p3;
-    ge_p3 B_p3;
-    ge_p3 D_p3;
-    if (ge_frombytes_vartime(&R_p3, &R) != 0) return false;
-    if (ge_frombytes_vartime(&A_p3, &A) != 0) return false;
-    if (B && ge_frombytes_vartime(&B_p3, &*B) != 0) return false;
-    if (ge_frombytes_vartime(&D_p3, &D) != 0) return false;
-    if (sc_check(&sig.c) != 0 || sc_check(&sig.r) != 0) return false;
-
-    // compute sig.c*R
-    ge_p3 cR_p3;
-    {
-      ge_p2 cR_p2;
-      ge_scalarmult(&cR_p2, &sig.c, &R_p3);
-      public_key cR;
-      ge_tobytes(&cR, &cR_p2);
-      if (ge_frombytes_vartime(&cR_p3, &cR) != 0) return false;
-    }
-
-    ge_p1p1 X_p1p1;
-    if (B)
-    {
-      // compute X = sig.c*R + sig.r*B
-      ge_p2 rB_p2;
-      ge_scalarmult(&rB_p2, &sig.r, &B_p3);
-      public_key rB;
-      ge_tobytes(&rB, &rB_p2);
-      ge_p3 rB_p3;
-      if (ge_frombytes_vartime(&rB_p3, &rB) != 0) return false;
-      ge_cached rB_cached;
-      ge_p3_to_cached(&rB_cached, &rB_p3);
-      ge_add(&X_p1p1, &cR_p3, &rB_cached);
-    }
-    else
-    {
-      // compute X = sig.c*R + sig.r*G
-      ge_p3 rG_p3;
-      ge_scalarmult_base(&rG_p3, &sig.r);
-      ge_cached rG_cached;
-      ge_p3_to_cached(&rG_cached, &rG_p3);
-      ge_add(&X_p1p1, &cR_p3, &rG_cached);
-    }
-    ge_p2 X_p2;
-    ge_p1p1_to_p2(&X_p2, &X_p1p1);
-
-    // compute sig.c*D
-    ge_p2 cD_p2;
-    ge_scalarmult(&cD_p2, &sig.c, &D_p3);
-
-    // compute sig.r*A
-    ge_p2 rA_p2;
-    ge_scalarmult(&rA_p2, &sig.r, &A_p3);
-
-    // compute Y = sig.c*D + sig.r*A
-    public_key cD;
-    public_key rA;
-    ge_tobytes(&cD, &cD_p2);
-    ge_tobytes(&rA, &rA_p2);
-    ge_p3 cD_p3;
-    ge_p3 rA_p3;
-    if (ge_frombytes_vartime(&cD_p3, &cD) != 0) return false;
-    if (ge_frombytes_vartime(&rA_p3, &rA) != 0) return false;
-    ge_cached rA_cached;
-    ge_p3_to_cached(&rA_cached, &rA_p3);
-    ge_p1p1 Y_p1p1;
-    ge_add(&Y_p1p1, &cD_p3, &rA_cached);
-    ge_p2 Y_p2;
-    ge_p1p1_to_p2(&Y_p2, &Y_p1p1);
-
-    // Compute hash challenge
-    // for v1, c2 = Hs(Msg || D || X || Y)
-    // for v2, c2 = Hs(Msg || D || X || Y || sep || R || A || B)
-
-    // if B is not present
-    static const ec_point zero = {{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }};
-
-    s_comm_2 buf;
-    buf.msg = prefix_hash;
-    buf.D = D;
-    buf.R = R;
-    buf.A = A;
-    if (B)
-        buf.B = *B;
-    else
-        buf.B = zero;
-    cn_fast_hash(config::HASH_KEY_TXPROOF_V2, sizeof(config::HASH_KEY_TXPROOF_V2)-1, buf.sep);
-    ge_tobytes(&buf.X, &X_p2);
-    ge_tobytes(&buf.Y, &Y_p2);
-    ec_scalar c2;
-
-    // Hash depends on version
-    if (version == 1) hash_to_scalar(&buf, sizeof(s_comm_2) - 3*sizeof(ec_point) - sizeof(hash), c2);
-    else if (version == 2) hash_to_scalar(&buf, sizeof(s_comm_2), c2);
-    else return false;
-
-    // test if c2 == sig.c
-    sc_sub(&c2, &c2, &sig.c);
-    return sc_isnonzero(&c2) == 0;
-  }
-
-  static void hash_to_ec(const public_key &key, ge_p3 &res) {
+  static void hash_to_ec_p3(const public_key &key, ge_p3 &res) {
     hash h;
     ge_p2 point;
     ge_p1p1 point2;
@@ -617,11 +312,17 @@ namespace crypto {
     ge_p1p1_to_p3(&res, &point2);
   }
 
+  void crypto_ops::hash_to_ec(const public_key &key, ec_point &result) {
+    ge_p3 point;
+    hash_to_ec_p3(key, point);
+    ge_p3_tobytes(reinterpret_cast<unsigned char*>(&result), &point);
+  }
+
   void crypto_ops::generate_key_image(const public_key &pub, const secret_key &sec, key_image &image) {
     ge_p3 point;
+    hash_to_ec_p3(pub, point);
     ge_p2 point2;
     assert(sc_check(&sec) == 0);
-    hash_to_ec(pub, point);
     ge_scalarmult(&point2, &unwrap(sec), &point);
     ge_tobytes(&image, &point2);
   }
@@ -682,7 +383,7 @@ POP_WARNINGS
         random_scalar(k);
         ge_scalarmult_base(&tmp3, &k);
         ge_p3_tobytes(&buf->ab[i].a, &tmp3);
-        hash_to_ec(*pubs[i], tmp3);
+        hash_to_ec_p3(*pubs[i], tmp3);
         ge_scalarmult(&tmp2, &k, &tmp3);
         ge_tobytes(&buf->ab[i].b, &tmp2);
       } else {
@@ -694,7 +395,7 @@ POP_WARNINGS
         }
         ge_double_scalarmult_base_vartime(&tmp2, &sig[i].c, &tmp3, &sig[i].r);
         ge_tobytes(&buf->ab[i].a, &tmp2);
-        hash_to_ec(*pubs[i], tmp3);
+        hash_to_ec_p3(*pubs[i], tmp3);
         ge_double_scalarmult_precomp_vartime(&tmp2, &sig[i].r, &tmp3, &sig[i].c, image_pre);
         ge_tobytes(&buf->ab[i].b, &tmp2);
         sc_add(&sum, &sum, &sig[i].c);
@@ -739,7 +440,7 @@ POP_WARNINGS
       }
       ge_double_scalarmult_base_vartime(&tmp2, &sig[i].c, &tmp3, &sig[i].r);
       ge_tobytes(&buf->ab[i].a, &tmp2);
-      hash_to_ec(*pubs[i], tmp3);
+      hash_to_ec_p3(*pubs[i], tmp3);
       ge_double_scalarmult_precomp_vartime(&tmp2, &sig[i].r, &tmp3, &sig[i].c, image_pre);
       ge_tobytes(&buf->ab[i].b, &tmp2);
       sc_add(&sum, &sum, &sig[i].c);
@@ -749,27 +450,8 @@ POP_WARNINGS
     return sc_isnonzero(&h) == 0;
   }
 
-  void crypto_ops::derive_view_tag(const key_derivation &derivation, size_t output_index, view_tag &view_tag) {
-    #pragma pack(push, 1)
-    struct {
-      char salt[8]; // view tag domain-separator
-      key_derivation derivation;
-      char output_index[(sizeof(size_t) * 8 + 6) / 7];
-    } buf;
-    #pragma pack(pop)
-
-    char *end = buf.output_index;
-    memcpy(buf.salt, "view_tag", 8); // leave off null terminator
-    buf.derivation = derivation;
-    tools::write_varint(end, output_index);
-    assert(end <= buf.output_index + sizeof buf.output_index);
-
-    // view_tag_full = H[salt|derivation|output_index]
-    hash view_tag_full;
-    cn_fast_hash(&buf, end - reinterpret_cast<char *>(&buf), view_tag_full);
-
-    // only need a slice of view_tag_full to realize optimal perf/space efficiency
-    static_assert(sizeof(crypto::view_tag) <= sizeof(view_tag_full), "view tag should not be larger than hash result");
-    memcpy(&view_tag, &view_tag_full, sizeof(crypto::view_tag));
+  void key_image_y_normalize(key_image& ki) {
+    reinterpret_cast<unsigned char*>(ki.data)[31] &= 0x7f;
   }
+
 }

@@ -1,6 +1,6 @@
 # Post Quantum Cryptography (PQC)
 
-> **Last updated:** 2026-04-01
+> **Last updated:** 2026-04-10
 
 ## Purpose
 
@@ -19,8 +19,9 @@ It defines:
 
 This document is source-of-truth for PQC-related implementation work in:
 
-- `rust/shekyl-crypto-pq`
-- `rust/shekyl-ffi`
+- `rust/shekyl-crypto-pq` — hybrid signatures, KEM, address encoding, per-output derivation
+- `rust/shekyl-fcmp` — FCMP++ wrapper with 4-scalar PQC leaf
+- `rust/shekyl-ffi` — C++ FFI bridge for all PQC and FCMP++ operations
 - `src/cryptonote_basic`
 - `src/cryptonote_core`
 - `src/wallet`
@@ -52,10 +53,11 @@ In scope for v3:
 - preserve as much of the current privacy schema as practical
 - augment the existing privacy machinery rather than replacing it outright
 
-Out of scope for v3:
+Achieved at genesis:
 
-- full post-quantum replacement of RingCT / CLSAG / stealth addresses
-- full post-quantum private transaction system
+- FCMP++ replaces CLSAG for membership proofs; per-output PQC keys via
+  hybrid KEM prevent transaction linkability
+- `pqc_auths` (one entry per input) provides quantum-resistant spend authorization
 
 The chain must remain secure if either:
 
@@ -87,16 +89,358 @@ Rationale:
   choice for a public chain.
 - The combination gives classical and PQ assurance during the migration period.
 
-### Phase 2: KEM
+### Phase 2: KEM (Ships at Genesis)
 
-KEM is deferred until transaction authentication is stable.
-
-Planned direction:
+KEM ships at genesis for per-output PQC key derivation. Each transaction
+output receives a unique PQC keypair derived from a hybrid KEM exchange,
+preventing transaction linkability.
 
 - Classical component: `X25519`
-- PQ component: `ML-KEM-768`
+- PQ component: `ML-KEM-768` (NIST level 3)
+- Combining rule: `HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = "shekyl-kem-v1", info = context_bytes)`
+- ML-KEM ciphertexts are stored in `tx_extra` under tag `0x06`
+  (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`), one per output (1088 bytes each).
 
-KEM is not consensus-critical in phase 1 and must not block signature rollout.
+See "Per-Output PQC Key Derivation" section below for the full flow.
+
+## Curve Tower
+
+FCMP++ membership proofs operate over a curve tower: Ed25519 → Helios → Selene.
+
+The tower structure enables efficient recursive proof composition:
+
+- **Ed25519**: The base curve for output keys, key images, and Pedersen
+  commitments. All outputs in the UTXO set are points on Ed25519.
+- **Helios**: An intermediate curve whose base field matches Ed25519's scalar
+  field. Enables efficient arithmetic over Ed25519 scalars.
+- **Selene**: A curve whose base field matches Helios's scalar field,
+  completing the cycle back to Ed25519's base field.
+
+The curve tree is a Merkle-like structure where:
+
+- Leaves are 4-tuples of Ed25519 scalars: `{O.x, I.x, C.x, H(pqc_pk)}`
+  (output key x-coordinate, key image x-coordinate, commitment x-coordinate,
+  hash of PQC public key).
+- Odd-level internal nodes are Helios hash commitments.
+- Even-level internal nodes are Selene hash commitments.
+- The root is committed in the block header as `curve_tree_root`.
+
+The membership proof is classical (it operates over elliptic curves, not
+lattice structures), but the overall scheme achieves quantum resistance through
+the `H(pqc_pk)` leaf binding: even if an attacker could break the EC discrete
+log problem, they cannot forge a valid per-input `pqc_auths[i]` signature without the
+ML-DSA-65 secret key bound to the leaf. The FCMP++ proof demonstrates
+membership; each `pqc_auths[i]` proves authorization for that input.
+
+## Per-Output PQC Key Derivation
+
+Each transaction output receives a unique PQC keypair to prevent transaction
+linkability. KEM encapsulation is **deterministic** from the transaction key,
+recipient public keys, and output index. This allows the sender to re-derive
+`combined_ss` at proof time from `tx_key_secret` (stored in `m_tx_keys`)
+and public data, without caching per-output shared secrets.
+
+The derivation flow is:
+
+1. **Sender** reads the recipient's ML-KEM-768 encapsulation key and X25519
+   public key from their address (the PQC segment of the Bech32m address).
+2. **Derive deterministic per-output KEM seed:**
+   ```
+   fingerprint = SHA3-256(x25519_pk || ml_kem_ek)           // 32 bytes
+   info        = fingerprint || output_index_le64            // 40 bytes
+   per_output_seed = HKDF-SHA-512(
+     ikm  = tx_key_secret,
+     salt = "shekyl-output-kem-v1",
+     info = info
+   )                                                         // 64 bytes
+   ```
+   The first 32 bytes seed the X25519 ephemeral key; the last 32 bytes seed
+   ML-KEM-768 encapsulation.
+3. **Deterministic X25519 ECDH:**
+   ```
+   x25519_eph_sk = per_output_seed[0..32]
+   x25519_eph_pk = X25519(x25519_eph_sk, basepoint)
+   x25519_shared_secret = X25519(x25519_eph_sk, recipient_x25519_pk)
+   ```
+4. **Deterministic ML-KEM-768 encapsulation:**
+   ```
+   ml_kem_seed = per_output_seed[32..64]
+   (ml_kem_shared_secret, ml_kem_ciphertext) = ML-KEM-768.EncapsFromSeed(recipient_ek, ml_kem_seed)
+   ```
+   `ml_kem_ciphertext` (1088 bytes) is stored in `tx_extra` tag `0x06`.
+5. **Combined shared secret:**
+   ```
+   combined_ss = HKDF-SHA-512(
+     ikm  = x25519_shared_secret || ml_kem_shared_secret,
+     salt = "shekyl-kem-v1",
+     info = ""
+   )                                                         // 64 bytes
+   ```
+6. **Derive per-output secrets** from `combined_ss` (see HKDF Label Registry below).
+7. **Derive per-output ML-DSA-65 keypair:**
+   ```
+   (pqc_pk, pqc_sk) = ML-DSA-65.KeyGen(seed = HKDF-Expand(combined_ss, "shekyl-pqc-output", 32))
+   ```
+8. **Commit** `H(pqc_pk)` as the 4th scalar in the curve tree leaf for this
+   output.
+
+The recipient reverses steps 3-7 using their ML-KEM-768 decapsulation key and
+X25519 secret key to recover the per-output PQC keypair.
+
+For **coinbase transactions**, the miner self-encapsulates to their own
+ML-KEM-768 key, ensuring per-output PQC uniqueness even for miner rewards.
+
+### Proof Helpers
+
+The sender can re-derive `combined_ss` at proof time without storing it:
+
+- **`rederive_combined_ss(tx_key_secret, x25519_pk, ml_kem_ek, output_index)`**:
+  Replays steps 2-5 above. Returns `(combined_ss, x25519_eph_pk, ml_kem_ct)`.
+  The verifier compares `x25519_eph_pk` and `ml_kem_ct` against on-chain data
+  for integrity.
+
+- **`derive_proof_secrets(combined_ss, output_index)`**: Returns the proof
+  secrets projection `ProofSecrets(ho, y, z, k_amount)`. This is the ONLY
+  function that converts `combined_ss` into values that leave Rust in the
+  proof path. TX proofs use all four fields; reserve proofs use `ho`, `y`,
+  `k_amount` (z omitted from wire format per the HKDF binding argument).
+  Does NOT return `ml_dsa_seed`, `ed25519_pqc_seed`, or `amount_tag`.
+
+- **`derive_output_key(combined_ss, spend_key, output_index)`**: Computes
+  `O = ho*G + B + y*T`. Validates `spend_key` is on the prime-order subgroup.
+
+- **`recover_recipient_spend_pubkey(combined_ss, output_key, output_index)`**:
+  Computes `B' = O - ho*G - y*T` for subaddress lookup. Validates the
+  recovered point is prime-order and non-identity.
+
+- **`decrypt_amount(combined_ss, enc_amount, amount_tag, output_index)`**:
+  Decrypts the amount and verifies the `amount_tag`.
+
+- **`compute_output_key_image(combined_ss, output_index, spend_secret, hp_of_O)`**:
+  Derives `ho` internally and computes `I = x * Hp(O)` where `x = ho + b`.
+  Returns both the key image and spend secret `x`. `Hp(O)` is provided by
+  C++ via `hash_to_ec` (Category 2 Keccak, stays in C++).
+
+- **`compute_output_key_image_from_ho(ho, spend_secret, hp_of_O)`**: Variant
+  for the `tx_source_entry` boundary where `ho` has already been extracted.
+
+### HKDF Label Registry
+
+All per-output secrets are derived via HKDF-SHA-512. Three derivation contexts
+exist: the KEM seed derivation (from `tx_key_secret`), the primary combined-SS
+derivation (from `combined_ss`), and a secondary X25519-only derivation for
+fast wallet scanning.
+
+**KEM seed derivation (from tx_key_secret):**
+
+| Secret | Salt | Info string | Output | Notes |
+|--------|------|-------------|--------|-------|
+| `per_output_seed` | `shekyl-output-kem-v1` | SHA3-256(x25519\_pk &#124;&#124; ml\_kem\_ek) &#124;&#124; index\_le64 | 64 B | First 32B = X25519 eph seed, last 32B = ML-KEM encaps seed |
+
+- `fips203` is pinned to `=0.4.3` (exact) because `DummyRng::fill_bytes =
+  unimplemented!()` pattern means a minor-version bump could panic at runtime.
+- KAT vectors: `docs/test_vectors/KEM_DERIVE_V1_KAT.json`
+
+**Primary derivation (combined shared secret):**
+
+| Secret | Salt | Info string | Output | Reduction |
+|--------|------|-------------|--------|-----------|
+| `ho` (x-derivation) | `shekyl-output-derive-v1` | `shekyl-output-x` &#124;&#124; index\_le64 | 64 B | mod l (wide) |
+| `y` (T-component) | `shekyl-output-derive-v1` | `shekyl-output-y` &#124;&#124; index\_le64 | 64 B | mod l (wide) |
+| `z` (commitment mask) | `shekyl-output-derive-v1` | `shekyl-output-mask` &#124;&#124; index\_le64 | 64 B | mod l (wide) |
+| `k_amount` | `shekyl-output-derive-v1` | `shekyl-output-amount-key` &#124;&#124; index\_le64 | 32 B | raw |
+| `view_tag_combined` | `shekyl-output-derive-v1` | `shekyl-output-view-tag` &#124;&#124; index\_le64 | 1 B | first byte |
+| `amount_tag` | `shekyl-output-derive-v1` | `shekyl-output-amount-tag` &#124;&#124; index\_le64 | 1 B | first byte |
+| `ml_dsa_seed` | `shekyl-output-derive-v1` | `shekyl-pqc-output` &#124;&#124; index\_le64 | 32 B | raw |
+
+**Secondary derivation (X25519 shared secret only, for fast scan):**
+
+| Secret | Salt | Info string | Output | Reduction |
+|--------|------|-------------|--------|-----------|
+| `view_tag_x25519` | `shekyl-view-tag-x25519-v1` | `shekyl-view-tag` &#124;&#124; index\_le64 | 1 B | first byte |
+
+- `index_le64` is the output index as a little-endian 8-byte integer.
+- "wide reduce" means expanding 64 bytes via HKDF-Expand, then reducing
+  mod Ed25519 scalar order `l` using `Scalar::from_bytes_mod_order_wide`.
+- Test vectors: `docs/test_vectors/PQC_OUTPUT_SECRETS.json`
+- Reference implementation: `tools/reference/derive_output_secrets.py`
+- Rust implementation: `rust/shekyl-crypto-pq/src/derivation.rs`
+
+### Security Properties of the Derivation
+
+#### y == 0 Defense-in-Depth
+
+The secret scalar `y` (T-component of the two-component output key `O = ho*G + B + y*T`)
+must never be zero. If `y == 0`, the output key degenerates to the single-component form
+`O = ho*G + B`, losing the security properties of the two-component construction.
+
+**Defense stack:**
+
+1. **Construction-time Rust assert** (`derivation.rs:223-224`):
+   `assert!(y != [0u8; 32])` panics at output construction if HKDF produces a zero y
+   scalar. This is `assert!`, not `debug_assert!` — Rust compiles it in all build
+   profiles including release. Hard crash, not a debug-only check.
+
+2. **Receiver-side independent verification**: `derive_output_secrets` is called by both
+   `construct_output` (sender) and `scan_output` / `scan_output_recover` (receiver). The
+   receiver independently hits the same `assert!(y != [0u8; 32])` on every scan. A
+   malicious sender who bypassed their own assert (e.g., patched binary producing y=0
+   outputs) would still trip the receiver's assert before the output is marked spendable.
+   This is the closest thing to a "wire check" — the receiver re-derives y from the KEM
+   shared secret and crashes if it's zero, preventing the degenerate output from entering
+   the wallet's transfer set.
+
+3. **Probabilistic impossibility**: `y` is derived from 64 bytes of HKDF-SHA-512 output
+   reduced mod l (Ed25519 scalar order, ~2^{252.2}). The probability of the reduction
+   yielding exactly zero is ~2^{-252}. This is computationally infeasible to trigger or
+   exploit.
+
+4. **Fuzz coverage**: All fuzz targets that exercise `construct_output` and
+   `scan_output_recover` transitively call `derive_output_secrets`, hitting the assert
+   with random inputs on both sender and receiver paths.
+
+**Why a consensus-level y == 0 check is impossible**: `y` is a secret scalar derived from
+`combined_ss`, which is only known to the sender and recipient. The on-chain output key
+`O = ho*G + B + y*T` is an elliptic curve point — without the discrete log, a verifier
+cannot extract `y` from `O`. The commitment `C = z*G + amount*H` does not involve `y`.
+Therefore, no purely on-chain structural check for `y == 0` exists.
+
+The consensus layer's `check_commitment_mask_valid` rejects `z == 0` and `z == 1` because
+`z` controls the commitment mask which IS indirectly observable (trivial commitments are
+distinguishable). The `y` scalar has no analogous on-chain observable effect. The defense
+relies on both endpoints (sender and receiver) executing the same `derive_output_secrets`
+code path, which is enforced by the protocol: the receiver must re-derive all secrets from
+the KEM shared secret to decrypt the output.
+
+#### Malformed KEM Ciphertext Handling
+
+`scan_output_recover` fails closed on malformed ciphertexts through layered checks:
+
+- **Structurally invalid** (wrong length, unparseable): Caught by length checks and
+  `CipherText::try_from_bytes` → `Err(DecapsulationFailed)`.
+- **Structurally valid but corrupted** (correct length, wrong content): ML-KEM-768 uses
+  **implicit rejection** per FIPS 203 — `try_decaps` returns a pseudorandom shared secret
+  (constant-time, no timing leak) rather than an error. This wrong SS propagates through
+  HKDF and produces incorrect output secrets. Two downstream checks catch the mismatch:
+  - `amount_tag` verification rejects ~99.6% (255/256) of corruptions cheaply before any
+    point arithmetic. This is a **fast pre-filter**, not the soundness barrier.
+  - `commitment` algebraic check `C == z*G + amount*H` is the **actual soundness barrier**.
+    The wrong HKDF output produces a wrong `z` scalar and wrong `k_amount`. For the check
+    to pass, the corrupted KEM ciphertext would need to produce a `combined_ss` that, after
+    HKDF, yields the exact `(z, k_amount)` pair that satisfies the Pedersen commitment
+    equation for the on-chain `C` — computationally infeasible.
+  - `output_key` algebraic check `O == ho*G + B + y*T` (`scan_output` only) provides an
+    independent second barrier using different HKDF-derived scalars (`ho`, `y`).
+
+The 1-in-256 `amount_tag` pass-through is harmless: the commitment check closes it
+unconditionally. An auditor should treat `amount_tag` as a performance optimization (avoids
+two point multiplications on 255/256 of corruptions), not as a security gate.
+
+No panics, no timing leaks, always returns `Err(CryptoError::...)`. Fuzz coverage:
+`fuzz_scan_malformed_ct` exercises corrupted, truncated, and random ML-KEM ciphertexts
+through the full scan path with a valid wallet KEM secret. Tests 1 and 4 preserve the
+X25519 ephemeral key (ensuring the view-tag pre-filter matches) so the fuzzer reaches the
+ML-KEM decapsulation and downstream algebraic checks. Test 3 corrupts the X25519 key to
+separately exercise the view-tag rejection path.
+
+#### View-Tag Pre-Filter
+
+The X25519-only view tag (`derive_view_tag_x25519`) is a cheap O(1) pre-filter that
+rejects ~255/256 of non-owned outputs before the expensive ML-KEM decapsulation. On a
+view-tag match, the **full** verification chain runs without abbreviation:
+
+1. Full ML-KEM-768 decapsulation
+2. HKDF derivation of ALL output secrets (ho, y, z, k_amount, amount_tag, ml_dsa_seed)
+3. Amount tag verification (probabilistic rejection)
+4. Amount decryption
+5. Output key / commitment algebraic verification
+6. PQC keypair derivation
+
+An attacker grinding view tags to match a victim's X25519 tag wastes only their own CPU.
+Each successful tag match triggers the complete verification chain including two independent
+algebraic checks. The view tag reveals no information beyond what the attacker already has
+(the X25519 ephemeral key is on-chain).
+
+**Independence of algebraic checks**: The two verification equations use different HKDF
+labels and different scalar families:
+
+- **Output key check**: `O == ho*G + B + y*T` uses `ho` (label `shekyl-output-x`) and
+  `y` (label `shekyl-output-y`).
+- **Commitment check**: `C == z*G + amount*H` uses `z` (label `shekyl-output-mask`) and
+  `k_amount` (label `shekyl-output-amount-key`) for amount recovery.
+
+An attacker who induced a collision on one set of HKDF labels (already computationally
+infeasible against SHA-512) would gain zero advantage against the other check — the labels
+produce independent pseudorandom outputs. This is not "two checks of the same thing" but
+two structurally independent verification gates derived from disjoint key material.
+
+#### Wallet Cache Version Gate (PR-wallet Requirement)
+
+The wallet cache envelope (`cache_file_data`) currently has no pre-decryption version field.
+When PR-wallet bumps the serialization version for two-component key support, old-format
+wallets will decrypt successfully (same key derivation) but fail during deserialization with
+a generic error.
+
+**PR-wallet must add a plaintext `cache_format_version` to the `cache_file_data` envelope**,
+checked before XChaCha20 decryption, to produce a clear error: "Wallet cache format too
+old — delete cache and resync from seed."
+
+**AAD binding (mandatory)**: The `cache_format_version` field is an unauthenticated plaintext
+input. To prevent version-confusion attacks (an attacker flips the version byte on disk to
+trigger a different decode path that happens to parse), the version byte MUST be included in
+the XChaCha20-Poly1305 AAD (Additional Authenticated Data). On load, verify the version
+before decryption, then include it in the AAD during decryption — if an attacker tampers
+with the version, Poly1305 authentication fails. This is cheap to implement and prevents an
+entire class of envelope manipulation bugs.
+
+**Hard policy — no migration, resync only**: When the cache format version is too old, the
+wallet refuses to load and instructs the user to delete the cache and resync from seed.
+**There is no in-place migration path.** Migration code is a permanent attack surface for a
+one-time problem. Since Shekyl starts at v3-from-genesis with no legacy user base carrying
+forward years of wallet state, resync-from-seed is always correct and safe. PR-wallet must
+not introduce migration logic. If a future hard fork requires a cache format bump, the same
+delete-and-resync policy applies.
+
+## Address Format
+
+Shekyl uses a three-segment Bech32m encoding, where each segment stays
+within Bech32m's proven checksum detection range (<1023 characters):
+
+```
+<classical_bech32m> / <pqc_a_bech32m> / <pqc_b_bech32m>
+```
+
+Example structure:
+```
+shekyl1<version 0x01><spend_key 32B><view_key 32B><checksum>
+/skpq1<ml_kem_first_592B><checksum>
+/skpq21<ml_kem_last_592B><checksum>
+```
+
+| Segment | HRP | Raw bytes | Bech32m chars (approx) |
+|---|---|---|---|
+| Classical | `shekyl` | 1 + 64 = 65 | ~113 |
+| PQC-A | `skpq` | 592 | ~956 |
+| PQC-B | `skpq2` | 592 | ~957 |
+| **Total** | — | **1249** | **~2030** |
+
+Design notes:
+
+- The version byte (`0x01`) enables future address format upgrades (e.g.,
+  compact addresses via on-chain KEM registration).
+- The classical segment alone (`shekyl1...`) is sufficient for view-only
+  wallets, human identification, and scanning infrastructure.
+- The `/`-separated PQC segments carry the ML-KEM-768 encapsulation key
+  needed for per-output PQC key derivation.
+- The three-segment design ensures each individual Bech32m string stays
+  within the proven error-detection range of the Bech32m checksum polynomial.
+- Addresses are too long for QR codes at standard error correction levels.
+  Wallets should support URI-based sharing and clipboard operations. A future
+  compact address format (via on-chain KEM key registration) is planned to
+  reduce the address to ~120 characters.
+- Implementation: `rust/shekyl-crypto-pq/src/address.rs` (`ShekylAddress`
+  type with `encode()`, `decode()`, `encode_classical_display()` methods).
+  FFI: `shekyl_address_encode()`, `shekyl_address_decode()`.
 
 ## Why `tx_extra` Is Not Used
 
@@ -128,9 +472,10 @@ The intended split is:
 
 In plain terms:
 
-- we are not trying to fully replace RingCT/CLSAG in v3
-- we are trying to make spending materially safer against plausible future
-  quantum attacks while keeping the current privacy architecture mostly intact
+- FCMP++ replaces CLSAG entirely from genesis, providing full-chain
+  membership proofs with complete UTXO-set anonymity
+- `pqc_auths` remains the hybrid spend authorization layer, ensuring quantum
+  resistance for ownership verification
 
 ## Ownership and Spend Authorization
 
@@ -162,30 +507,27 @@ fixed:
 - hybrid protection belongs to the spend/ownership layer
 - transaction wrapper signatures only support that binding
 
-### Privacy-preserving v3 boundary
+### FCMP++ and PQC ownership binding
 
-The current RingCT / CLSAG stack does not give us a clean way to add
-consensus-time, per-input PQ ownership verification without either:
+FCMP++ solves the anonymous per-input PQC ownership verification problem.
+Each curve tree leaf contains 4 scalars: `{O.x, I.x, C.x, H(pqc_pk)}`.
+The 4th scalar `H(pqc_pk)` is a hash of the output's PQC public key, proven
+in-circuit during the FCMP++ membership proof. This binds PQC ownership to
+the UTXO without revealing which output is being spent -- the full UTXO set
+serves as the anonymity set.
 
-- redesigning the anonymity machinery, or
-- revealing or strongly hinting which ring member is real
+The binding works as follows:
 
-For v3, Shekyl explicitly chooses to preserve the current ring privacy
-properties.
-
-Therefore phase-1 implementation work includes:
-
-- making PQ key material first-class wallet/account/address state
-- carrying the upgraded address/account format through wallet and operator flows
-- adding transaction-format groundwork needed for later integration
-
-And it explicitly does not include:
-
-- consensus-critical anonymous per-input PQ ownership proofs
-- any shortcut that materially degrades ring-member ambiguity
-
-That deeper anonymous spend-binding problem is deferred to v4 alongside the
-broader post-ECC privacy redesign.
+- When an output is created, the sender derives a per-output PQC keypair via
+  hybrid KEM (X25519 + ML-KEM-768) and commits `H(pqc_pk)` as the 4th leaf
+  scalar in the curve tree.
+- When spending, the FCMP++ proof demonstrates that the referenced leaf
+  (including its `H(pqc_pk)`) exists in the curve tree, without revealing
+  which leaf.
+- Each `pqc_auths[i]` entry then provides the hybrid Ed25519 + ML-DSA-65
+  signature for that input, proving knowledge of the corresponding PQC secret key.
+- An attacker cannot substitute a different PQC key because the in-circuit
+  proof binds the leaf's `H(pqc_pk)` to the membership proof.
 
 ## Transaction Format
 
@@ -202,27 +544,38 @@ High-level rule:
 
 ### Structure
 
-`TransactionV3` keeps the existing CryptoNote-style prefix and RingCT body, but
+`TransactionV3` keeps the existing CryptoNote-style prefix and FCMP++ body, but
 adds a dedicated hybrid authorization structure outside `tx_extra`.
+
+The FCMP++ type for user transactions is `RCTTypeFcmpPlusPlusPqc = 7`. This is
+Shekyl's only non-coinbase RCT type. It replaces CLSAG ring signatures with
+FCMP++ membership proofs, uses Bulletproof+ range proofs, and adds a
+`referenceBlock` field to `rctSigBase` anchoring the proof to a specific curve
+tree snapshot. The prunable section carries `curve_trees_tree_depth` and an
+opaque `fcmp_pp_proof` blob instead of CLSAGs.
+
+Coinbase transactions continue to use `RCTTypeNull = 0`.
 
 Conceptually:
 
 ```text
 TransactionV3 {
   prefix: TransactionPrefixV3
-  rct_signatures: rctSig
-  pqc_auth: PqcAuthentication
+  rct_signatures: rctSig          // type = RCTTypeFcmpPlusPlusPqc (7)
+  pqc_auths: std::vector<PqcAuthentication>   // one per input (pqc_auths.size() == vin.size())
 }
 ```
 
 Coinbase and block-level note:
 
-- `pqc_auth` is required for user transactions (`vin[0] != txin_gen`) on the
-  rebooted chain.
-- Miner transactions (coinbase) are explicitly excluded from `pqc_auth`
-  serialization and verification.
-- Block construction itself (`block_header`, `miner_tx`, `tx_hashes`) does not
-  require structural changes for v3 PQC.
+- `pqc_auths` is required for user transactions (`vin[0] != txin_gen`) on the
+  rebooted chain. Each input has its own `PqcAuthentication` entry
+  (`pqc_auths.size() == vin.size()`).
+- Miner transactions (coinbase) are explicitly excluded from `pqc_auths`
+  serialization and verification. Coinbase KEM self-encapsulation ensures
+  per-output PQC key uniqueness.
+- Block construction includes a `curve_tree_root` consensus commitment in
+  the block header.
 
 Where:
 
@@ -361,7 +714,9 @@ signed_payload =
   cn_fast_hash(
     serialize(TransactionPrefixV3)
     || serialize(RctSigningBody)
+    || H(serialize(RctSigPrunable))
     || serialize(PqcAuthHeader)
+    || H(pqc_pk_0) || H(pqc_pk_1) || ... || H(pqc_pk_{N-1})
   )
 ```
 
@@ -369,8 +724,13 @@ Where:
 
 - `TransactionPrefixV3` is the full serialized transaction prefix, including
   `extra`
-- `RctSigningBody` is the non-PQC RingCT body data required to bind the actual
+- `RctSigningBody` is the non-PQC FCMP++ body data required to bind the actual
   transaction economics, outputs, and spend semantics (see layout below)
+- `H(serialize(RctSigPrunable))` is `cn_fast_hash` of the serialized prunable
+  data (`fcmp_pp_proof`, `pseudoOuts`, `curve_trees_tree_depth`,
+  `BulletproofPlus`), binding the signature to the FCMP++ proof
+- `H(pqc_pk_i)` is `cn_fast_hash` of the `hybrid_public_key` blob for each
+  input, binding each signature to all inputs' authorized PQC keys
 - `PqcAuthHeader` is:
 
 ```text
@@ -385,8 +745,9 @@ PqcAuthHeader {
 ### RctSigningBody Layout
 
 `RctSigningBody` is the output of `rctSig.serialize_rctsig_base(ar, num_inputs, num_outputs)`.
-It comprises the base (non-prunable) RingCT structure: type, message, mixRing
-(or equivalent for the RCT variant), pseudoOuts/ecdhInfo as applicable.
+It comprises the base (non-prunable) FCMP++ structure: type, message,
+pseudoOuts/ecdhInfo as applicable, and `referenceBlock` (the block height
+anchoring the FCMP++ curve tree snapshot, validated within `[tip - 100, tip - 2]`).
 This is the same byte sequence used as the base RCT component in the v3
 transaction hash calculation.
 
@@ -453,16 +814,18 @@ The wallet must keep two ideas separate:
 Rules:
 
 - stealth-address and tx pubkey scanning metadata can remain in `extra`
-- hybrid authorization data lives in `pqc_auth`
+- hybrid authorization data lives in `pqc_auths`
 - wallet construction must build the transaction body first, then compute the
-  signed payload, then attach `pqc_auth.signature`
+  signed payload, then attach each input's hybrid signature in `pqc_auths[i]`
 - wallet restore and scanning logic must not assume PQ keys replace one-time
   address derivation keys
 - the wallet must not treat a detached hybrid signature as sufficient proof of
   spend authority on its own
 
-PQC spend/ownership augmentation does not itself replace RingCT, stealth
-addresses, CLSAG, or one-time output derivation in phase 1.
+PQC spend/ownership authorization works alongside the FCMP++ membership proof
+layer. FCMP++ provides full-chain anonymity; `pqc_auths` provides quantum-resistant
+spend authorization. Stealth addresses and one-time output derivation remain
+part of the privacy stack.
 
 ## FFI Contract
 
@@ -492,129 +855,129 @@ Operational consequences:
 
 - mempool pressure increases
 - relay bandwidth increases
-- ZMQ/RPC consumers must expect larger transaction payloads
+- RPC consumers must expect larger transaction payloads
 - documentation and operator guidance must explicitly call this out
 
 ### v3 Privacy Boundary (Operator-Facing)
 
-`TransactionV3` phase-1 protection boundary is:
+`TransactionV3` protection boundary is:
 
 - **Protected by hybrid PQ auth**
-  - authorization metadata in `pqc_auth`
-  - canonical payload hash over prefix + RingCT base + PQ auth header
+  - per-input authorization metadata in `pqc_auths`
+  - canonical payload hash over prefix + FCMP++ base + PQ auth header
   - dual verification requirement (`Ed25519 && ML-DSA-65`)
-- **Still classical in phase 1**
-  - ring anonymity machinery (`CLSAG`, RingCT internals)
+  - per-output PQC keys via hybrid KEM prevent transaction linkability
+- **Classical (but full-chain anonymous)**
+  - FCMP++ membership proof operates over classical elliptic curves
+    (Ed25519 → Helios → Selene curve tower)
   - stealth addressing and one-time output derivation
-  - broader privacy assumptions of current CryptoNote stack
+  - full UTXO set serves as the anonymity set (no ring subset selection)
+- **Quantum-resistant binding**
+  - `H(pqc_pk)` in each curve tree leaf binds PQC ownership to the UTXO
+  - even if EC discrete log is broken, the ML-DSA-65 authorization prevents
+    unauthorized spending
 
-Operationally: v3 raises the cost of key-compromise style spend forgery under
-future quantum pressure, but it is not yet a full PQ privacy rewrite.
+Operationally: the FCMP++ EC membership proof provides full-chain anonymity
+while `pqc_auths` provides quantum-resistant authorization. The combination
+achieves both privacy and quantum resistance.
 
 ### v3 Rollout Notes
 
 - `HF_VERSION_SHEKYL_NG` (`1`) gates `TransactionV3` validation behavior.
-- Coinbase transactions remain excluded from `pqc_auth`.
+- Coinbase transactions have no `pqc_auths` entries (coinbase is not a v3 spend).
 - Nodes, wallets, and indexers should budget for ~5.3KB extra auth material per
   user transaction (before other serialization overhead).
-- RPC/ZMQ consumers should avoid rigid tx-size assumptions and update parser
+- RPC consumers should avoid rigid tx-size assumptions and update parser
   limits accordingly.
 
-## V4 Privacy Roadmap (Tentative)
+## V4 Roadmap
 
-V3 protects the spend/ownership authorization layer with hybrid PQ
-signatures. The ring anonymity machinery (CLSAG, RingCT, stealth addresses)
-remains classical. V4 addresses this gap with a phased approach.
+V3 (genesis) ships FCMP++ for full-chain membership proofs, hybrid PQ
+spend authorization, and per-output PQC key derivation via KEM. The V4
+roadmap focuses on incremental improvements to the cryptographic stack.
 
 Shekyl uses a feature-driven upgrade policy: hard forks ship when the
-feature is ready, not on a fixed calendar. V4 depends on research maturity
-of lattice-based privacy primitives that are not yet NIST-standardized, so
-no fixed timeline is committed. See `docs/UPGRADE_POLICY.md`.
+feature is ready, not on a fixed calendar. See `docs/UPGRADE_POLICY.md`.
 
-### V4-A: Research and Specification
+The V4 "lattice-based ring signature survey" originally planned under V4-A
+through V4-D is **retired**. FCMP++ is the chosen anonymity primitive from
+genesis, providing full-UTXO-set anonymity without ring subsets.
 
-Prerequisite: v3 mainnet stabilized; no critical issues in the hybrid
-spend/ownership layer.
+### V4-A: ML-KEM Algorithm Upgrades
 
-- Survey candidate PQ-anonymous ownership primitives:
-  - Lattice-based ring signatures (e.g. extensions of Esgin et al. 2019,
-    Lyubashevsky et al. 2022).
-  - PQ zero-knowledge proofs for membership/range (lattice-based Bulletproofs
-    analogues, PQ SNARKs/STARKs).
-  - Hybrid classical+PQ ring constructions that preserve existing anonymity set
-    sizes.
-- Evaluate ML-KEM-768 for PQ stealth address derivation:
-  - Combining rule: `shared_secret = KDF(X25519_ss || ML-KEM_ss)` using
-    `HKDF-SHA-512` with a domain-separated info string.
-  - Must not break one-time address unlinkability.
-- Define a formal threat model update that covers:
-  - Quantum adversary with selective ring-member de-anonymization capability.
-  - Harvest-now-decrypt-later attacks against stealth address material.
-  - Timing/size side channels introduced by PQ primitives.
-- Extend the `scheme_id` registry to accommodate new hybrid schemes.
-- Deliverable: published V4 specification draft in `docs/`.
+Prerequisite: v3 mainnet stabilized; per-output KEM derivation confirmed
+stable.
 
-### V4-B: Prototype
+- Monitor NIST PQC standardization for ML-KEM parameter updates or
+  replacement algorithms.
+- Evaluate ML-KEM-1024 (NIST level 5) as a potential upgrade for
+  higher-security deployments.
+- Define migration path for address format changes if the encapsulation key
+  size changes.
+- Extend the `scheme_id` registry to accommodate upgraded KEM parameters.
 
-Prerequisite: V4-A specification published and reviewed.
+### V4-B: Compact Address Format
 
-- Implement candidate primitives as non-consensus Rust crates under
-  `rust/shekyl-crypto-pq-v4/`.
-- Implement lattice-based composite threshold multisig prototype
-  (`scheme_id = 3`) per `docs/PQC_MULTISIG.md` V4 roadmap.
-- Benchmark transaction size, verification time, and memory usage against
-  v3 baseline.
-- Size budget target: total v4 transaction should not exceed 2x the v3 size
-  for equivalent ring size.
-- Deliverable: benchmark report and prototype crate with test vectors.
+Prerequisite: V4-A evaluation complete.
 
-### V4-C: Testnet Experiment
+- Implement on-chain KEM key registration: users register their ML-KEM-768
+  encapsulation key in a transaction, receiving a short registration index.
+- Compact address format: `shekyl1:<version 0x02><classical 64B><registration_index>`
+  (~120 characters total).
+- Senders look up the full encapsulation key from the chain using the
+  registration index.
+- QR-code compatible at standard error correction levels.
 
-Prerequisite: V4-B benchmarks meet size and performance targets.
+### V4-C: Lattice Threshold Multisig
 
-- Feature-gate v4 transaction format behind a testnet-only hard fork version.
-- Run privacy regression tests: verify that ring-member ambiguity is not
-  degraded vs v3.
-- Measure anonymity-network impact (Tor/I2P cell counts, burst patterns).
-- Identify any consensus-rule changes required for v4 activation.
-- Deliverable: testnet running v4 transactions; go/no-go report for mainnet.
+Prerequisite: V4-B or independent of address format work.
 
-### V4-D: Activation
+- Implement lattice-based composite threshold multisig (`scheme_id = 3`) per
+  `docs/PQC_MULTISIG.md` V4 roadmap.
+- DKG protocol implementation in Tauri wallet.
+- Single compact on-chain signature regardless of M or N.
+- Formal security review required before consensus activation.
 
-Prerequisite: V4-C go report; formal security review of the chosen
-lattice-based scheme.
+### KEM Composition (Implemented at Genesis)
 
-- Single hard fork activation height (same pattern as HF1).
-- Migration notes for wallets, indexers, and operators.
-- v3 transactions remain valid; v4 is opt-in initially, mandatory after a
-  grace period.
-
-### Pre-V4 Dependency: KEM Composition
-
-Before V4-A can finalize stealth-address PQ protection, the KEM combining
-rule must be decided. The current placeholder is in `rust/shekyl-crypto-pq/src/kem.rs`.
-
-Planned direction:
+The KEM combining rule is implemented and ships at genesis:
 
 - Classical: `X25519`
 - PQ: `ML-KEM-768` (NIST level 3)
 - Combining: `HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = "shekyl-kem-v1", info = context_bytes)`
-- The combined shared secret feeds into one-time address derivation, replacing
-  the current `X25519`-only path.
-- KEM must be implemented and tested in `shekyl-crypto-pq` before V4-A spec
-  work begins.
+- The combined shared secret feeds into per-output PQC key derivation.
+- ML-KEM ciphertexts stored in `tx_extra` tag `0x06`
+  (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`).
+- Implementation: `rust/shekyl-crypto-pq/src/kem.rs`
+
+### Amount Encryption and Commitment Masks (HKDF Only)
+
+All amount encryption and commitment mask derivation uses HKDF exclusively.
+The legacy Keccak-based derivation path (`derivation_to_scalar` for amount
+keys, `ecdhHash`/`genCommitmentMask` for commitment masks) has been fully
+removed from construction, scanning, and signing paths.
+
+- **Amount encryption**: `enc_amount = k_amount XOR d2h(amount)` where
+  `k_amount` is derived via HKDF (label `shekyl-output-amount-key`).
+- **Commitment masks**: `z` scalar derived via HKDF (label
+  `shekyl-output-mask`). Used directly by the Rust BP+ prover.
+- **Construction**: `construct_output` (Rust FFI) produces `enc_amount`,
+  commitment, and `z` scalar. The C++ `construct_tx_with_tx_key` stores
+  these in `v3_rct_data` and exports `z` scalars as `v3_commitment_masks`
+  for the signing path.
+- **Signing**: `shekyl_sign_fcmp_transaction` receives commitment masks
+  directly; the C++ `proveRangeBulletproofPlus` function has been deleted.
+  All BP+ proof generation occurs in Rust.
+- **Scanning**: `shekyl_scan_and_recover` (Rust FFI) derives all output
+  secrets from `combined_ss` via HKDF. No Keccak fallback exists.
 
 ## Deferred Scope
 
-The following are explicitly deferred until after phase-1 hybrid spend/ownership
-protection is stable:
+The following are explicitly deferred:
 
-- KEM in consensus-critical transaction validation
-- PQ replacement of RingCT primitives
 - PQ stealth-address redesign
-- mixed legacy/reboot transaction coexistence logic
 - lattice-based composite threshold multisig (V4; see `docs/PQC_MULTISIG.md`)
-- hardware wallet support details
+- hardware wallet support details (targeted for v1.1)
 
 ### No Longer Deferred
 
@@ -640,6 +1003,13 @@ All Phase-1 (single-signer) and Phase-2 (multisig) items are implemented. This t
 | 9 | Consensus verification + scheme downgrade | Done | `src/cryptonote_core/tx_pqc_verify.cpp`, `src/cryptonote_basic/tx_extra.h` (`tx_extra_pqc_ownership`) |
 | 10 | Wallet multisig coordination | Done | `src/wallet/wallet2.cpp` (group creation, file-based signing), `src/wallet/wallet2.h` |
 | 11 | Fuzz testing (4 targets, 10M each) | Done | `rust/shekyl-crypto-pq/fuzz/fuzz_targets/`, `docs/PQC_TEST_VECTOR_002_MULTISIG.json` |
+| 12 | FCMP++ FFI (prove/verify) | Done | `rust/shekyl-fcmp/`, `rust/shekyl-ffi/src/lib.rs` |
+| 13 | Curve tree DB (grow/trim/root/path) | Done | `src/blockchain_db/`, `rust/shekyl-fcmp/` |
+| 14 | Per-output KEM derivation | Done | `rust/shekyl-crypto-pq/src/kem.rs`, `rust/shekyl-crypto-pq/src/output.rs`; wallet scanning via `shekyl_scan_and_recover` FFI, construction via `shekyl_construct_output` FFI |
+| 15 | FCMP++ `check_tx_inputs` verification | Done (skeleton) | `src/cryptonote_core/blockchain.cpp`; see `docs/FCMP_PLUS_PLUS.md` |
+| 16 | Per-input `pqc_auths` migration | Done | `src/cryptonote_basic/cryptonote_basic.h` (`pqc_authentication`), `src/cryptonote_core/tx_pqc_verify.cpp`; signing via `shekyl_sign_fcmp_transaction` FFI |
+| 17 | Native Rust tx signing (`shekyl-tx-builder`) | Done | `rust/shekyl-tx-builder/` — BP+, FCMP++, PQC signing in pure Rust; CLI wallet uses `shekyl_sign_fcmp_transaction` FFI (collapsed signing), GUI uses `shekyl-wallet-rpc` `native-sign` feature |
+| 18 | Proof FFI (tx proof + reserve proof) | Done | `rust/shekyl-proofs/` — outbound/inbound tx proofs, reserve proofs; `rust/shekyl-ffi/src/lib.rs` (6 proof FFI exports); `src/wallet/wallet2.cpp` callers collapsed to Rust FFI |
 
 Notes:
 - Staking and unstaking use `create_transactions_2` which routes through
@@ -649,8 +1019,8 @@ Notes:
 - Classical Monero-style multisig (secret-splitting, `make_multisig`) is
   removed from the rebooted chain. All multisig is PQC-only via
   `scheme_id = 2` — see `docs/PQC_MULTISIG.md`.
-- The CLSAG/RingCT layer always uses a single classical key for multisig
-  transactions. M-of-N authorization lives entirely in the `pqc_auth` layer.
+- The FCMP++ membership proof is constructed by the coordinator for multisig;
+  pqc_auths provide M-of-N authorization per input.
 
 ## Open Items
 
@@ -669,7 +1039,7 @@ sets the intended direction:
 - **Ownership binding:** `PqcAuthentication` is attached to `TransactionV3`;
   the signed payload covers prefix + RCT base + auth header (excluding the
   signature itself). Implemented in `tx_pqc_verify.cpp`.
-- **Max transaction size:** Measured at 5,385 bytes per user tx for `pqc_auth`
+- **Max transaction size:** Measured at 5,385 bytes per user tx for `pqc_auths`
   (see Measured Sizes above). Operator limits documented in
   `docs/V3_ROLLOUT.md` under "Payload Limit Guidance."
 - **Multisig approach:** V3 uses signature-list (`scheme_id = 2`); lattice
