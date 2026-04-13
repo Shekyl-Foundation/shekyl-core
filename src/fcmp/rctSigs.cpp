@@ -38,6 +38,8 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
+#include <iomanip>
+#include <sstream>
 
 using namespace crypto;
 using namespace std;
@@ -460,6 +462,20 @@ namespace
             }
         }
 
+        {
+            std::ostringstream root_hex;
+            for (int b = 0; b < 32; ++b)
+                root_hex << std::hex << std::setfill('0') << std::setw(2) << (int)(unsigned char)tree_root.bytes[b];
+            std::ostringstream msg_hex;
+            for (int b = 0; b < 32; ++b)
+                msg_hex << std::hex << std::setfill('0') << std::setw(2) << (int)(unsigned char)message.bytes[b];
+            LOG_PRINT_L0("genRctFcmpPlusPlus: prove with num_inputs=" << num_inputs
+              << " tree_depth=" << (int)tree_depth
+              << " tree_root=" << root_hex.str()
+              << " message=" << msg_hex.str()
+              << " witness_size=" << witness.size());
+        }
+
         ShekylFcmpProveResult result = shekyl_fcmp_prove(
             witness.data(),
             witness.size(),
@@ -467,6 +483,10 @@ namespace
             tree_root.bytes,
             tree_depth,
             message.bytes);
+
+        LOG_PRINT_L0("genRctFcmpPlusPlus: result.success=" << result.success
+          << " proof_len=" << (result.proof.ptr ? result.proof.len : 0)
+          << " pseudo_outs_len=" << (result.pseudo_outs.ptr ? result.pseudo_outs.len : 0));
 
         if (result.success && result.proof.ptr != nullptr && result.proof.len > 0)
         {

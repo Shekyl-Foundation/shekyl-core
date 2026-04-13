@@ -3681,6 +3681,13 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         // because FAKECHAIN block headers carry placeholder roots from test_generator)
         std::array<uint8_t, 32> tree_root = m_db->get_curve_tree_root_at_height(ref_height);
 
+        MDEBUG("FCMP++ verify: ref_height=" << ref_height
+          << " tree_root=" << epee::string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(tree_root.data()), 32))
+          << " tx_depth=" << (int)rv.p.curve_trees_tree_depth
+          << " proof_len=" << rv.p.fcmp_pp_proof.size()
+          << " num_inputs=" << num_inputs
+          << " tx_prefix_hash=" << epee::string_tools::pod_to_hex(tx_prefix_hash));
+
         // Step 3: Validate curve_trees_tree_depth
         const uint8_t current_depth = m_db->get_curve_tree_depth();
         if (rv.p.curve_trees_tree_depth == 0 || rv.p.curve_trees_tree_depth > current_depth)
@@ -3721,6 +3728,14 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             tvc.m_verifivation_failed = true;
             return false;
           }
+        }
+
+        for (size_t dbg_i = 0; dbg_i < num_inputs; ++dbg_i)
+        {
+          MDEBUG("FCMP++ verify input " << dbg_i
+            << " ki=" << epee::string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(key_images_flat.data() + dbg_i * 32), 32))
+            << " pseudo_out=" << epee::string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(pseudo_outs_flat.data() + dbg_i * 32), 32))
+            << " pqc_hash=" << epee::string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(pqc_hashes_flat.data() + dbg_i * 32), 32)));
         }
 
         if (skip_fcmp_verify)
