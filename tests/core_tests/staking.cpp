@@ -31,9 +31,14 @@
 #include <vector>
 #include <list>
 #include "cryptonote_basic/cryptonote_format_utils.h"
+#include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "cryptonote_core/blockchain.h"
 #include "int-util.h"
+
+#ifndef CHECK_TEST_CONDITION_MSG
+#define CHECK_TEST_CONDITION_MSG(expr, msg) CHECK_TEST_CONDITION(expr)
+#endif
 
 using namespace cryptonote;
 
@@ -98,6 +103,76 @@ bool staking_test_base::check_staking_output_in_chain(
   uint64_t height = c.get_current_blockchain_height();
   CHECK_TEST_CONDITION(height > 1);
 
+  return true;
+}
+
+bool staking_test_base::check_fcmp_staking_accepted(
+  core& c, size_t ev_index, const std::vector<test_event_entry>& events)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("staking_test_base::check_fcmp_staking_accepted");
+
+  const account_base& miner_account = std::get<account_base>(events[1]);
+  const account_base& staker_account = std::get<account_base>(events[2]);
+  block blk_head = get_head_block(events);
+
+  CHECK_TEST_CONDITION(c.get_current_blockchain_height() >
+    CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW + FCMP_REFERENCE_BLOCK_MIN_AGE);
+  CHECK_TEST_CONDITION(c.get_blockchain_storage().get_db().get_curve_tree_leaf_count() > 0);
+
+  const uint64_t stake_amount = 1000000000;
+  const uint8_t tier = 0;
+  const uint64_t fee = TESTS_DEFAULT_FEE;
+
+  transaction tx;
+  bool r = construct_fcmp_staked_tx(c, miner_account, staker_account,
+    stake_amount, fee, tier, events, blk_head, tx);
+  CHECK_TEST_CONDITION_MSG(r, "construct_fcmp_staked_tx failed");
+
+  tx_verification_context tvc{};
+  cryptonote::blobdata tx_blob;
+  CHECK_TEST_CONDITION_MSG(t_serializable_object_to_blob(tx, tx_blob), "Failed to serialize staking tx");
+  r = c.handle_incoming_tx(tx_blob, tvc, cryptonote::relay_method::local, false);
+  CHECK_TEST_CONDITION_MSG(!tvc.m_verifivation_failed, "FCMP++ staking transaction was rejected by the pool");
+  CHECK_TEST_CONDITION_MSG(r, "handle_incoming_tx returned false");
+
+  LOG_PRINT_L0("FCMP++ staking transaction " << get_transaction_hash(tx) << " accepted into pool");
+  return true;
+}
+
+bool staking_test_base::check_fcmp_stake_all_tiers(
+  core& c, size_t ev_index, const std::vector<test_event_entry>& events)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("staking_test_base::check_fcmp_stake_all_tiers");
+
+  const account_base& miner_account = std::get<account_base>(events[1]);
+  const account_base& staker_account = std::get<account_base>(events[2]);
+  block blk_head = get_head_block(events);
+
+  CHECK_TEST_CONDITION(c.get_current_blockchain_height() >
+    CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW + FCMP_REFERENCE_BLOCK_MIN_AGE);
+  CHECK_TEST_CONDITION(c.get_blockchain_storage().get_db().get_curve_tree_leaf_count() > 0);
+
+  const uint64_t stake_amount = 1000000000;
+  const uint64_t fee = TESTS_DEFAULT_FEE;
+  const uint8_t tier = 0;
+
+  const uint64_t lock_blocks = shekyl_stake_lock_blocks(tier);
+  CHECK_TEST_CONDITION(lock_blocks > 0);
+  CHECK_TEST_CONDITION(shekyl_stake_weight(stake_amount, tier) > 0);
+
+  transaction tx;
+  bool r = construct_fcmp_staked_tx(c, miner_account, staker_account,
+    stake_amount, fee, tier, events, blk_head, tx);
+  CHECK_TEST_CONDITION_MSG(r, "construct_fcmp_staked_tx (tier 0) failed");
+
+  tx_verification_context tvc{};
+  cryptonote::blobdata tx_blob;
+  CHECK_TEST_CONDITION_MSG(t_serializable_object_to_blob(tx, tx_blob), "Failed to serialize staking tx");
+  r = c.handle_incoming_tx(tx_blob, tvc, cryptonote::relay_method::local, false);
+  CHECK_TEST_CONDITION_MSG(!tvc.m_verifivation_failed, "FCMP++ all-tiers staking tx was rejected");
+  CHECK_TEST_CONDITION_MSG(r, "handle_incoming_tx returned false");
+
+  LOG_PRINT_L0("FCMP++ tier-0 staking transaction " << get_transaction_hash(tx) << " accepted into pool");
   return true;
 }
 
@@ -309,31 +384,21 @@ bool staking_test_base::check_mempool_claim_key_image(
 }
 
 // ====================================================================
-// 2b. Happy path: staking lifecycle
+// 2b. Happy path: staking lifecycle (callback-based for FCMP++ proving)
 // ====================================================================
 bool gen_staking_lifecycle::generate(std::vector<test_event_entry>& events) const
 {
-  STAKING_INIT();
+  uint64_t ts_start = 1338224400;
 
-  // Build a chain with enough blocks so the staker has spendable coinbase
-  REWIND_BLOCKS(events, blk_1, blk_0r, miner_account);
+  GENERATE_ACCOUNT(miner_account);
+  GENERATE_ACCOUNT(staker_account);
+  MAKE_GENESIS_BLOCK(events, blk_0, miner_account, ts_start);
+  events.push_back(miner_account);
+  events.push_back(staker_account);
 
-  // Create a transaction with a staked output (tier 0).
-  // lock_until is no longer on-chain; effective_lock_until is computed
-  // as creation_height + tier_lock_blocks at all consensus check sites.
-  const uint64_t stake_amount = 1000000000; // 1 SKL
-  const uint8_t tier = 0;
+  REWIND_BLOCKS_N(events, blk_mature, blk_0, miner_account, 70);
 
-  transaction tx_stake;
-  if (!construct_staked_tx(events, tx_stake, blk_1, miner_account, staker_account,
-                           stake_amount, tier))
-    return false;
-  events.push_back(tx_stake);
-
-  MAKE_NEXT_BLOCK_TX1(events, blk_2, blk_1, miner_account, tx_stake);
-
-  // Verify the staked output is in the chain
-  DO_CALLBACK(events, "check_staking_output_in_chain");
+  DO_CALLBACK(events, "check_fcmp_staking_accepted");
 
   return true;
 }
@@ -485,34 +550,21 @@ bool gen_claim_sorted_inputs::generate(std::vector<test_event_entry>& events) co
 }
 
 // ====================================================================
-// 2i. All tiers staking
+// 2i. All tiers staking (callback-based for FCMP++ proving)
 // ====================================================================
 bool gen_stake_all_tiers::generate(std::vector<test_event_entry>& events) const
 {
-  STAKING_INIT();
-  REWIND_BLOCKS(events, blk_1, blk_0r, miner_account);
+  uint64_t ts_start = 1338224400;
 
-  const uint64_t stake_amount = 1000000000;
+  GENERATE_ACCOUNT(miner_account);
+  GENERATE_ACCOUNT(staker_account);
+  MAKE_GENESIS_BLOCK(events, blk_0, miner_account, ts_start);
+  events.push_back(miner_account);
+  events.push_back(staker_account);
 
-  // Test tier 0
-  {
-    const uint8_t tier = 0;
-    const uint64_t lock_blocks = shekyl_stake_lock_blocks(tier);
-    if (lock_blocks == 0) return false;
+  REWIND_BLOCKS_N(events, blk_mature, blk_0, miner_account, 70);
 
-    GENERATE_ACCOUNT(tier0_account);
-    transaction tx_stake0;
-    if (!construct_staked_tx(events, tx_stake0, blk_1, miner_account, tier0_account,
-                             stake_amount, tier))
-      return false;
-    events.push_back(tx_stake0);
-    MAKE_NEXT_BLOCK_TX1(events, blk_2, blk_1, miner_account, tx_stake0);
-
-    // Verify weight is positive
-    if (shekyl_stake_weight(stake_amount, tier) == 0) return false;
-  }
-
-  DO_CALLBACK(events, "check_staking_output_in_chain");
+  DO_CALLBACK(events, "check_fcmp_stake_all_tiers");
 
   return true;
 }

@@ -1472,36 +1472,82 @@ transaction construct_tx_with_fee(std::vector<test_event_entry>& events, const b
   return tx;
 }
 
+static uint64_t compute_leaf_count_at_height(
+    cryptonote::core& c, uint64_t target_height)
+{
+  const auto& bs = c.get_blockchain_storage();
+  const auto& db = bs.get_db();
+  uint64_t leaf_count = 0;
+
+  for (uint64_t h = 0; h <= target_height; ++h)
+  {
+    cryptonote::block blk = db.get_block_from_height(h);
+    const uint64_t block_height = h + 1;
+
+    // Coinbase outputs
+    uint64_t coinbase_maturity = block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
+    if (coinbase_maturity <= target_height + 1)
+      leaf_count += blk.miner_tx.vout.size();
+
+    // Non-coinbase tx outputs
+    for (const auto& tx_hash : blk.tx_hashes)
+    {
+      cryptonote::transaction tx;
+      if (!db.get_tx(tx_hash, tx))
+        continue;
+      for (const auto& vout : tx.vout)
+      {
+        uint64_t mat;
+        if (std::holds_alternative<cryptonote::txout_to_staked_key>(vout.target))
+        {
+          const auto& staked = std::get<cryptonote::txout_to_staked_key>(vout.target);
+          uint64_t lock_until = block_height + shekyl_stake_lock_blocks(staked.lock_tier);
+          mat = std::max(lock_until, block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE);
+        }
+        else
+          mat = block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+
+        if (mat <= target_height + 1)
+          ++leaf_count;
+      }
+    }
+  }
+  return leaf_count;
+}
+
 static bool assemble_tree_path_for_output(
     const BlockchainDB& db,
     uint64_t output_idx,
+    uint64_t ref_leaf_count,
     std::vector<uint8_t>& path_out)
 {
   const uint8_t depth = db.get_curve_tree_depth();
-  const uint64_t leaf_count = db.get_curve_tree_leaf_count();
-  if (leaf_count == 0 || output_idx >= leaf_count || depth == 0)
+  if (ref_leaf_count == 0 || output_idx >= ref_leaf_count || depth == 0)
     return false;
 
   const uint32_t SELENE_CHUNK = shekyl_curve_tree_selene_chunk_width();
   const uint32_t HELIOS_CHUNK = shekyl_curve_tree_helios_chunk_width();
+  static constexpr uint32_t SCALARS_PER_LEAF = 4;
 
   auto chunk_width = [&](uint8_t layer) -> uint32_t {
     if (layer == 0) return SELENE_CHUNK;
     return (layer % 2 == 0) ? SELENE_CHUNK : HELIOS_CHUNK;
   };
 
+  const uint64_t current_leaf_count = db.get_curve_tree_leaf_count();
+
   path_out.clear();
 
-  // Layer 0: leaf scalars in the chunk
+  // Layer 0: leaf scalars in the chunk (bounded by ref_leaf_count)
   uint64_t chunk_idx = output_idx / SELENE_CHUNK;
   uint64_t chunk_start = chunk_idx * SELENE_CHUNK;
-  uint64_t chunk_end = std::min(chunk_start + SELENE_CHUNK, leaf_count);
+  uint64_t chunk_end = std::min(chunk_start + static_cast<uint64_t>(SELENE_CHUNK), ref_leaf_count);
 
   uint16_t leaf_pos = static_cast<uint16_t>(output_idx - chunk_start);
   path_out.push_back(static_cast<uint8_t>(leaf_pos & 0xFF));
   path_out.push_back(static_cast<uint8_t>((leaf_pos >> 8) & 0xFF));
 
-  static constexpr size_t LEAF_BYTES = 128; // 4 scalars * 32 bytes
+  static constexpr size_t LEAF_BYTES = 128;
   for (uint64_t i = chunk_start; i < chunk_end; ++i)
   {
     uint8_t leaf[LEAF_BYTES];
@@ -1510,78 +1556,120 @@ static bool assemble_tree_path_for_output(
     path_out.insert(path_out.end(), leaf, leaf + LEAF_BYTES);
   }
 
-  // Upper layers: sibling hashes
+  // Compute node counts at each layer for the ref state, and identify
+  // the last chunk at each layer that may need hash correction.
+  uint64_t ref_nodes_at_prev_layer = ref_leaf_count;
+  uint64_t cur_nodes_at_prev_layer = current_leaf_count;
+
   uint64_t parent_idx = chunk_idx;
   for (uint8_t layer = 1; layer < depth; ++layer)
   {
+    uint32_t prev_cw = chunk_width(layer - 1);
     uint32_t cw = chunk_width(layer);
-    uint64_t layer_chunks = (parent_idx / cw) * cw;
-    // Get total nodes at this layer for bounds
-    uint64_t prev_count = (layer == 1) ? leaf_count : 0;
-    // Simplified: we just read the chunk of siblings
+
+    uint64_t ref_chunks_below = (ref_nodes_at_prev_layer + prev_cw - 1) / prev_cw;
+    uint64_t cur_chunks_below = (cur_nodes_at_prev_layer + prev_cw - 1) / prev_cw;
+    uint64_t last_ref_chunk_below = (ref_chunks_below > 0) ? ref_chunks_below - 1 : 0;
+
     uint64_t my_chunk_idx = parent_idx / cw;
     uint64_t sib_start = my_chunk_idx * cw;
     uint16_t pos_in_chunk = static_cast<uint16_t>(parent_idx - sib_start);
     path_out.push_back(static_cast<uint8_t>(pos_in_chunk & 0xFF));
     path_out.push_back(static_cast<uint8_t>((pos_in_chunk >> 8) & 0xFF));
 
-    // Read sibling hashes at this layer
-    for (uint64_t j = sib_start; ; ++j)
+    // Read sibling hashes from layer below (layer-1 chunk hashes).
+    // Pad to full chunk width with zeros for the prover.
+    for (uint32_t c = 0; c < cw; ++c)
     {
-      uint8_t hash[32];
-      if (!db.get_curve_tree_layer_hash(layer, j, hash))
-        break;
+      uint64_t sibling_chunk = sib_start + c;
+      uint8_t hash[32] = {};
+
+      if (sibling_chunk < ref_chunks_below)
+      {
+        db.get_curve_tree_layer_hash(layer - 1, sibling_chunk, hash);
+
+        // If this sibling is the boundary chunk that grew since ref_height,
+        // trim back to the ref state.
+        if (sibling_chunk == last_ref_chunk_below &&
+            ref_nodes_at_prev_layer != cur_nodes_at_prev_layer &&
+            ref_nodes_at_prev_layer % prev_cw != 0)
+        {
+          uint64_t ref_in_chunk = ref_nodes_at_prev_layer - sibling_chunk * prev_cw;
+          uint64_t cur_in_chunk = std::min(
+              cur_nodes_at_prev_layer - sibling_chunk * prev_cw,
+              static_cast<uint64_t>(prev_cw));
+
+          if (cur_in_chunk > ref_in_chunk)
+          {
+            uint64_t scalars_per_entry = (layer == 1) ? SCALARS_PER_LEAF : 1;
+            uint64_t trim_offset = ref_in_chunk * scalars_per_entry;
+            uint64_t num_extra = cur_in_chunk - ref_in_chunk;
+            uint64_t num_extra_scalars = num_extra * scalars_per_entry;
+
+            std::vector<uint8_t> extra_data;
+            if (layer == 1)
+            {
+              for (uint64_t li = sibling_chunk * prev_cw + ref_in_chunk;
+                   li < sibling_chunk * prev_cw + cur_in_chunk; ++li)
+              {
+                uint8_t leaf[LEAF_BYTES];
+                if (db.get_curve_tree_leaf(li, leaf))
+                  extra_data.insert(extra_data.end(), leaf, leaf + LEAF_BYTES);
+                else
+                  extra_data.insert(extra_data.end(), LEAF_BYTES, 0);
+              }
+            }
+            else
+            {
+              for (uint64_t li = sibling_chunk * prev_cw + ref_in_chunk;
+                   li < sibling_chunk * prev_cw + cur_in_chunk; ++li)
+              {
+                uint8_t h[32] = {};
+                db.get_curve_tree_layer_hash(layer - 2, li, h);
+                extra_data.insert(extra_data.end(), h, h + 32);
+              }
+            }
+
+            uint8_t zero_scalar[32] = {};
+            uint8_t trimmed[32];
+            bool is_selene = (layer - 1) % 2 == 0;
+            bool ok;
+            if (is_selene)
+              ok = shekyl_curve_tree_hash_trim_selene(
+                  hash, trim_offset, extra_data.data(),
+                  num_extra_scalars, zero_scalar, trimmed);
+            else
+              ok = shekyl_curve_tree_hash_trim_helios(
+                  hash, trim_offset, extra_data.data(),
+                  num_extra_scalars, zero_scalar, trimmed);
+
+            if (ok)
+              memcpy(hash, trimmed, 32);
+          }
+        }
+      }
       path_out.insert(path_out.end(), hash, hash + 32);
-      if (j - sib_start + 1 >= cw)
-        break;
     }
+
+    ref_nodes_at_prev_layer = ref_chunks_below;
+    cur_nodes_at_prev_layer = cur_chunks_below;
     parent_idx = my_chunk_idx;
   }
 
   return !path_out.empty();
 }
 
-bool construct_fcmp_tx(
+static bool apply_fcmp_pipeline(
     cryptonote::core& c,
     const cryptonote::account_base& from,
-    const cryptonote::account_public_address& to,
-    uint64_t amount,
+    const std::vector<tx_source_entry>& sources,
+    const std::vector<tx_destination_entry>& dests_copy,
+    rct::keyV& v3_commitment_masks,
     uint64_t fee,
     const std::vector<test_event_entry>& events,
     const cryptonote::block& blk_head,
     cryptonote::transaction& tx)
 {
-  // Phase A: fill sources and destinations, build tx prefix
-  vector<tx_source_entry> sources;
-  vector<tx_destination_entry> destinations;
-  fill_tx_sources_and_destinations(events, blk_head, from, to, amount, fee, 0, sources, destinations);
-
-  if (sources.empty())
-  {
-    LOG_ERROR("construct_fcmp_tx: no sources found");
-    return false;
-  }
-
-  crypto::secret_key tx_key;
-  rct::keyV v3_commitment_masks;
-  std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
-  subaddresses[from.get_keys().m_account_address.m_spend_public_key] = {0, 0};
-  std::vector<tx_destination_entry> dests_copy = destinations;
-
-  bool r = construct_tx_and_get_tx_key(
-    from.get_keys(), subaddresses, sources, dests_copy,
-    from.get_keys().m_account_address, std::vector<uint8_t>(),
-    tx, tx_key, true, true, 1, &v3_commitment_masks);
-  CHECK_AND_ASSERT_MES(r, false, "construct_fcmp_tx: construct_tx_and_get_tx_key failed");
-
-  // FCMP++ consensus requires y-normalized key images (sign bit of byte 31 cleared).
-  // construct_tx_and_get_tx_key stores raw key images; normalize them here.
-  for (auto& vin : tx.vin)
-  {
-    if (std::holds_alternative<txin_to_key>(vin))
-      crypto::key_image_y_normalize(std::get<txin_to_key>(vin).k_image);
-  }
-
   // Phase B: build FCMP++ proof
   const auto& bs = c.get_blockchain_storage();
   const auto& db = bs.get_db();
@@ -1621,6 +1709,11 @@ bool construct_fcmp_tx(
     "construct_fcmp_tx: cannot fetch reference block");
   rct::key curve_tree_root;
   memcpy(curve_tree_root.bytes, &ref_blk.curve_tree_root, 32);
+
+  const uint64_t ref_leaf_count = compute_leaf_count_at_height(c, ref_height);
+  LOG_PRINT_L1("construct_fcmp_tx: ref_height=" << ref_height
+    << " ref_leaf_count=" << ref_leaf_count
+    << " current_leaf_count=" << db.get_curve_tree_leaf_count());
 
   static constexpr size_t HYBRID_KEM_CT_BYTES = 1120;
   static constexpr size_t X25519_SK_BYTES = 32;
@@ -1773,15 +1866,14 @@ bool construct_fcmp_tx(
 
     // Assemble tree path for this output's global index
     uint64_t global_idx = matched_src->outputs[matched_src->real_output].first;
-    CHECK_AND_ASSERT_MES(assemble_tree_path_for_output(db, global_idx, tree_paths[i]), false,
+    CHECK_AND_ASSERT_MES(assemble_tree_path_for_output(db, global_idx, ref_leaf_count, tree_paths[i]), false,
       "construct_fcmp_tx: tree path assembly failed for global_idx " << global_idx);
 
     // Populate leaf chunk entries (Ed25519 points for every output in the same chunk)
     {
       const uint32_t SELENE_CHUNK = shekyl_curve_tree_selene_chunk_width();
-      const uint64_t leaf_count = db.get_curve_tree_leaf_count();
       uint64_t chunk_start = (global_idx / SELENE_CHUNK) * SELENE_CHUNK;
-      uint64_t chunk_end = std::min(chunk_start + SELENE_CHUNK, leaf_count);
+      uint64_t chunk_end = std::min(chunk_start + static_cast<uint64_t>(SELENE_CHUNK), ref_leaf_count);
 
       for (uint64_t oi = chunk_start; oi < chunk_end; ++oi)
       {
@@ -1901,6 +1993,108 @@ bool construct_fcmp_tx(
 
   tx.invalidate_hashes();
   return true;
+}
+
+bool construct_fcmp_tx(
+    cryptonote::core& c,
+    const cryptonote::account_base& from,
+    const cryptonote::account_public_address& to,
+    uint64_t amount,
+    uint64_t fee,
+    const std::vector<test_event_entry>& events,
+    const cryptonote::block& blk_head,
+    cryptonote::transaction& tx)
+{
+  vector<tx_source_entry> sources;
+  vector<tx_destination_entry> destinations;
+  fill_tx_sources_and_destinations(events, blk_head, from, to, amount, fee, 0, sources, destinations);
+
+  if (sources.empty())
+  {
+    LOG_ERROR("construct_fcmp_tx: no sources found");
+    return false;
+  }
+
+  crypto::secret_key tx_key;
+  rct::keyV v3_commitment_masks;
+  std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
+  subaddresses[from.get_keys().m_account_address.m_spend_public_key] = {0, 0};
+  std::vector<tx_destination_entry> dests_copy = destinations;
+
+  bool r = construct_tx_and_get_tx_key(
+    from.get_keys(), subaddresses, sources, dests_copy,
+    from.get_keys().m_account_address, std::vector<uint8_t>(),
+    tx, tx_key, true, true, 1, &v3_commitment_masks);
+  CHECK_AND_ASSERT_MES(r, false, "construct_fcmp_tx: construct_tx_and_get_tx_key failed");
+
+  for (auto& vin : tx.vin)
+  {
+    if (std::holds_alternative<txin_to_key>(vin))
+      crypto::key_image_y_normalize(std::get<txin_to_key>(vin).k_image);
+  }
+
+  return apply_fcmp_pipeline(c, from, sources, dests_copy, v3_commitment_masks,
+                             fee, events, blk_head, tx);
+}
+
+bool construct_fcmp_staked_tx(
+    cryptonote::core& c,
+    const cryptonote::account_base& from,
+    const cryptonote::account_base& to,
+    uint64_t amount,
+    uint64_t fee,
+    uint8_t tier,
+    const std::vector<test_event_entry>& events,
+    const cryptonote::block& blk_head,
+    cryptonote::transaction& tx)
+{
+  std::vector<tx_source_entry> sources;
+  if (!fill_tx_sources(sources, events, blk_head, from, amount + fee, 0))
+  {
+    LOG_ERROR("construct_fcmp_staked_tx: no sources found");
+    return false;
+  }
+
+  std::vector<tx_destination_entry> destinations;
+  tx_destination_entry staking_dest;
+  staking_dest.amount = amount;
+  staking_dest.addr = to.get_keys().m_account_address;
+  staking_dest.is_subaddress = false;
+  staking_dest.is_staking = true;
+  staking_dest.stake_tier = tier;
+  destinations.push_back(staking_dest);
+
+  uint64_t sources_amount = 0;
+  for (const auto& s : sources) sources_amount += s.amount;
+  if (sources_amount > amount + fee)
+  {
+    tx_destination_entry change;
+    change.amount = sources_amount - amount - fee;
+    change.addr = from.get_keys().m_account_address;
+    change.is_subaddress = false;
+    destinations.push_back(change);
+  }
+
+  crypto::secret_key tx_key;
+  rct::keyV v3_commitment_masks;
+  std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
+  subaddresses[from.get_keys().m_account_address.m_spend_public_key] = {0, 0};
+  std::vector<tx_destination_entry> dests_copy = destinations;
+
+  bool r = construct_tx_and_get_tx_key(
+    from.get_keys(), subaddresses, sources, dests_copy,
+    from.get_keys().m_account_address, std::vector<uint8_t>(),
+    tx, tx_key, true, true, 1, &v3_commitment_masks);
+  CHECK_AND_ASSERT_MES(r, false, "construct_fcmp_staked_tx: construct_tx_and_get_tx_key failed");
+
+  for (auto& vin : tx.vin)
+  {
+    if (std::holds_alternative<txin_to_key>(vin))
+      crypto::key_image_y_normalize(std::get<txin_to_key>(vin).k_image);
+  }
+
+  return apply_fcmp_pipeline(c, from, sources, dests_copy, v3_commitment_masks,
+                             fee, events, blk_head, tx);
 }
 
 uint64_t get_balance(const cryptonote::account_base& addr, const std::vector<cryptonote::block>& blockchain, const map_hash2tx_t& mtx) {

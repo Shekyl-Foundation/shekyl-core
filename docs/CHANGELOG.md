@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### 🐛 Fixed
+
+- **FCMP++ test harness: tree state mismatch.** `assemble_tree_path_for_output`
+  and `construct_fcmp_tx` in `tests/core_tests/chaingen.cpp` read the current
+  (tip) curve tree state but the verifier checks against the reference block's
+  historical tree root. Fixed by computing `ref_leaf_count` at the reference
+  block height and capping all leaf/layer reads to that count, with boundary
+  chunk hash trimming via `shekyl_curve_tree_hash_trim_selene` for siblings
+  that changed since the reference block. Also fixed a layer offset bug where
+  sibling hashes were read from `layer` instead of `layer - 1`.
+
+- **FCMP++ test harness: staking tests missing FCMP++ pipeline.**
+  `gen_staking_lifecycle` and `gen_stake_all_tiers` used `construct_staked_tx`
+  which produced stub RCT signatures without FCMP++ proofs or PQC auth.
+  Rewritten to use callback-based testing (like `gen_fcmp_tx_valid`) with a
+  new `construct_fcmp_staked_tx` that routes through the full FCMP++ proving
+  and PQC signing pipeline via `apply_fcmp_pipeline`.
+
 ### 🔄 Changed
 
 - **Workspace-wide clippy cleanup.** Resolved all `cargo clippy --all-targets

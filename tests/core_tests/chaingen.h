@@ -507,6 +507,17 @@ bool construct_fcmp_tx(
     const cryptonote::block& blk_head,
     cryptonote::transaction& tx);
 
+bool construct_fcmp_staked_tx(
+    cryptonote::core& c,
+    const cryptonote::account_base& from,
+    const cryptonote::account_base& to,
+    uint64_t amount,
+    uint64_t fee,
+    uint8_t tier,
+    const std::vector<test_event_entry>& events,
+    const cryptonote::block& blk_head,
+    cryptonote::transaction& tx);
+
 void fill_tx_sources_and_destinations(const std::vector<test_event_entry>& events, const cryptonote::block& blk_head,
                                       const cryptonote::account_base& from, const cryptonote::account_public_address& to,
                                       uint64_t amount, uint64_t fee, size_t nmix,

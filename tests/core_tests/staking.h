@@ -43,6 +43,8 @@ public:
     REGISTER_CALLBACK_METHOD(staking_test_base, mark_invalid_tx);
     REGISTER_CALLBACK_METHOD(staking_test_base, mark_invalid_block);
     REGISTER_CALLBACK_METHOD(staking_test_base, check_staking_output_in_chain);
+    REGISTER_CALLBACK_METHOD(staking_test_base, check_fcmp_staking_accepted);
+    REGISTER_CALLBACK_METHOD(staking_test_base, check_fcmp_stake_all_tiers);
     REGISTER_CALLBACK_METHOD(staking_test_base, check_claim_validation_basics);
     REGISTER_CALLBACK_METHOD(staking_test_base, check_claim_bad_range_inverted);
     REGISTER_CALLBACK_METHOD(staking_test_base, check_claim_bad_range_too_large);
@@ -85,10 +87,9 @@ public:
     return true;
   }
 
-  // Callback: verify a staked output exists in the chain
   bool check_staking_output_in_chain(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
-
-  // Callback: basic claim validation checks on the blockchain directly
+  bool check_fcmp_staking_accepted(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
+  bool check_fcmp_stake_all_tiers(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
   bool check_claim_validation_basics(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
   bool check_claim_bad_range_inverted(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
   bool check_claim_bad_range_too_large(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);

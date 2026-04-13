@@ -115,6 +115,18 @@ Each item is out of scope for the current PR but worth tracking for future work.
   See `PQC_MULTISIG.md` Attack 1 for the corrected analysis. The
   `expected_scheme_id` parameter may be removed as dead code in V3.1.
 
+- **`on_get_curve_tree_path` RPC reads current tree state, not reference-block state.**
+  `src/rpc/core_rpc_server.cpp` line ~3647 reads `db.get_curve_tree_leaf_count()`
+  (tip state) but returns a `reference_block` that's `FCMP_REFERENCE_BLOCK_MIN_AGE`
+  blocks behind tip. The tree may have grown between `reference_height` and tip,
+  so leaf count and layer hashes returned by the RPC may not match the reference
+  block's `curve_tree_root`. This is benign for large production trees (new
+  leaves only affect the last partial chunk), but is technically incorrect and
+  can cause proof failures in edge cases where the wallet's output is near the
+  tree boundary. Fix: compute `ref_leaf_count` at `reference_height` and cap
+  all reads to that count, with boundary-chunk hash trimming for changed
+  siblings. Target: **V3.1**.
+
 - **`docs/AUDIT_SCOPE.md` not yet created.**
   Referenced by `RELEASE_CHECKLIST.md` and `FCMP_PLUS_PLUS.md`. Must define
   the scope for the 4-scalar leaf circuit security audit before engaging
