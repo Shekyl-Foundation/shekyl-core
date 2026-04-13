@@ -103,7 +103,7 @@ set(unit_tests_sources
   deferred_insertion.cpp
   tx_data_pruning_lmdb.cpp
   pending_tree_fuzz.cpp
-  zmq_rpc.cpp)
+  )
 
 set(unit_tests_headers
   unit_tests_utils.h)
@@ -116,8 +116,6 @@ target_link_libraries(unit_tests
     fcmp
     cryptonote_protocol
     cryptonote_core
-    daemon_messages
-    daemon_rpc_server
     blockchain_db
     lmdb_lib
     rpc
@@ -131,8 +129,7 @@ target_link_libraries(unit_tests
     ${Boost_THREAD_LIBRARY}
     ${GTEST_LIBRARIES}
     ${CMAKE_THREAD_LIBS_INIT}
-    ${EXTRA_LIBRARIES}
-    ${ZMQ_LIB})
+    ${EXTRA_LIBRARIES})
 if(UNIX AND NOT APPLE)
   target_link_libraries(unit_tests PRIVATE pthread dl)
 endif()

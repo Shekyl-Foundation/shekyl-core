@@ -93,9 +93,8 @@
 
 - **`test::make_transaction` ring-style helper.** The helper constructs
   Monero-era ring-signature source entries incompatible with v3/FCMP++
-  transaction construction. Tests depending on it (`BulletproofPlusTransaction`,
-  8 ZMQ txpool tests, `zmq_server.pub`) are now `GTEST_SKIP`'d pending
-  FCMP++ test infrastructure.
+  transaction construction. `BulletproofPlusTransaction` is `GTEST_SKIP`'d
+  pending FCMP++ test infrastructure.
 
 - **[CONSENSUS-ADJACENT] Branch layer depth validation off-by-one in
   `shekyl-tx-builder`.** The rule `c1 + c2 == depth` was corrected to
@@ -166,6 +165,21 @@
   for `derive_subaddress_public_key` and per-tx scanning removed.
 
 ### 🗑️ Removed
+
+- **Complete ZMQ removal.** Deleted the entire ZeroMQ subsystem: ZMQ pub/sub
+  (`zmq_pub.cpp`), ZMQ RPC server (`zmq_server.cpp`, `daemon_handler.cpp`,
+  `daemon_messages.cpp`), low-level ZMQ helpers (`net/zmq.cpp`), message schema
+  (`message.cpp`, `daemon_rpc_version.h`, `rpc/fwd.h`), and the `rpc_pub`,
+  `daemon_rpc_server`, `daemon_messages` CMake targets. Removed `libzmq`
+  build dependency from root CMakeLists, `contrib/depends`, and all link
+  targets. Deleted 3 test files (`zmq_rpc.cpp`, `txpool.py`,
+  `python-rpc/framework/zmq.py`) and the `zeromq.mk` depends recipe with its
+  patches. Removed `--zmq-rpc-bind-ip`, `--zmq-rpc-bind-port`, `--zmq-pub`,
+  `--no-zmq` CLI arguments. ZMQ was a duplicate, unauthenticated RPC surface
+  inherited from an abandoned Monero "migrate RPC to ZMQ" effort. It had zero
+  first-party consumers, leaked `do_not_relay` transactions, and its tests had
+  been broken for 82+ consecutive CI runs, polluting the test signal during
+  the FCMP++ migration. Ports 11025/12025/13025 are now reserved.
 
 - **`wallet/api/` C++ wrapper layer deleted (~3,900 lines).** The
   `src/wallet/api/` directory (22 files) wrapped `wallet2` for GUI consumption.

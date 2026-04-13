@@ -159,14 +159,14 @@ cargo build
 ```bash
 sudo apt-get install -y \
   build-essential cmake pkg-config \
-  libboost-all-dev libssl-dev libzmq3-dev libunbound-dev \
+  libboost-all-dev libssl-dev libunbound-dev \
   libsodium-dev libhidapi-dev libusb-1.0-0-dev \
   libprotobuf-dev protobuf-compiler libudev-dev
 ```
 
 **macOS** (Homebrew):
 ```bash
-brew install cmake boost hidapi openssl zmq libpgm \
+brew install cmake boost hidapi openssl libpgm \
   miniupnpc expat protobuf abseil libsodium unbound
 ```
 

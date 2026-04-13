@@ -1,0 +1,35 @@
+---
+description: Documentation must be updated after executing a Plan; the doc update is always the final task.
+alwaysApply: true
+---
+
+# Documentation After Plans
+
+After any Plan is executed, documentation must be read and updated to reflect
+the changes.
+
+## Rules
+
+- **Final task always:** When creating or executing a Plan, the final task
+  must be: read and update relevant documentation.
+- **Before closing a Plan:** read the docs that cover the changed area
+  (`docs/`, README, design docs, API comments) and update them so they match
+  current behavior, APIs, or design.
+- **What to update:** fix outdated steps, names, examples, and TODOs; add
+  or revise sections for new behavior; keep cross-references and checklist
+  items accurate. Update `CHANGELOG.md`.
+- **Scope:** prefer docs under `docs/` and the main README; update
+  file-level or inline docs (Doxygen, module READMEs, Rust crate-level
+  `//!` comments) when the change touches that code.
+- **Stale-doc detection:** if a doc references behavior that no longer
+  exists (e.g., a removed RPC field, a deleted RCT type), the doc update is
+  not optional — the doc is wrong and will mislead readers.
+
+## Example
+
+When a Plan has N tasks, the (N+1)th task is:
+
+> "Read and update documentation (docs/*.md, README, design/API docs) to
+> reflect the changes. Ensure CHANGELOG.md is updated."
+
+Complete that task before considering the Plan done.

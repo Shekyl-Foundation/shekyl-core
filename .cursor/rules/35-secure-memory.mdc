@@ -1,0 +1,67 @@
+---
+description: Secure memory wiping conventions for cryptographic secrets.
+globs:
+  - rust/**
+  - src/crypto/**
+  - src/wallet/**
+  - src/device/**
+  - src/ringct/**
+  - src/fcmp/**
+  - src/shekyl/**
+---
+
+# Secure Memory Wiping
+
+All cryptographic secrets must zeroize on drop and be protected from leaking
+to swap or core dumps. Use project-provided wrappers — never rely on normal
+deallocation.
+
+## Rust
+
+- Wrap secret scalars and key bytes in `Zeroizing<T>`. Prefer
+  `Zeroizing<[u8; N]>` over bare arrays for fixed-size secrets.
+- For structs holding multiple secret fields, `#[derive(ZeroizeOnDrop)]`
+  **only** if every field implements `Zeroize`. Otherwise implement `Drop`
+  manually and call `.zeroize()` on each secret field.
+- Never derive `Clone`, `Debug`, or `Serialize` on secret-bearing types
+  unless there is an explicit, documented reason. If `Debug` is required,
+  implement it manually to redact secrets.
+- Use `Zeroizing::new(...)` at point of creation — never let a bare secret
+  exist in a local that gets moved into a wrapper later.
+- `#[deny(unsafe_code)]` at crate level (except `shekyl-ffi`). All wiping
+  goes through `zeroize`, which guarantees the write is not elided.
+
+## C++
+
+- Use `epee::wipeable_string` for secret strings (seeds, passwords, mnemonics).
+- Use `memwipe(ptr, len)` (backed by `shekyl_memwipe` → Rust `zeroize`) for
+  raw buffers. Never use plain `memset` — the compiler may optimize it away.
+- For RAII scope cleanup, prefer
+  `auto wiper = epee::misc_utils::create_scope_leave_handler([&] { memwipe(...); });`
+  immediately after allocating the secret.
+- Secret key structs must be wiped in their destructor or by the enclosing
+  scope guard.
+
+## FFI boundary
+
+- `shekyl_buffer_free` already wipes before deallocating. Always use it for
+  Rust-allocated buffers returned to C++.
+- When passing secrets from C++ to Rust as byte pointers, the Rust side must
+  copy into a `Zeroizing` container and the C++ caller must wipe its copy
+  after the call returns.
+
+## OS-level protection
+
+- Call `shekyl_mlock` (or `mlock`) on pages holding long-lived secrets
+  (wallet spend keys, PQC secret keys) to prevent paging to swap.
+- Daemon and wallet processes set `prctl(PR_SET_DUMPABLE, 0)` on Linux to
+  suppress core dumps containing secrets.
+- Use `madvise(MADV_DONTDUMP)` on secret-holding allocations as a
+  belt-and-suspenders measure.
+
+## What counts as a secret
+
+Any of: spend secret key, view secret key, PQC secret key (ML-DSA / ML-KEM
+private), one-time private keys, key images pre-publication, commitment
+masks, ECDH shared secrets, transaction signing scalars, mnemonic seeds,
+wallet passwords, ChaCha20 key material.

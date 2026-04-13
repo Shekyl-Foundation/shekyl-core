@@ -855,7 +855,7 @@ Operational consequences:
 
 - mempool pressure increases
 - relay bandwidth increases
-- ZMQ/RPC consumers must expect larger transaction payloads
+- RPC consumers must expect larger transaction payloads
 - documentation and operator guidance must explicitly call this out
 
 ### v3 Privacy Boundary (Operator-Facing)
@@ -887,7 +887,7 @@ achieves both privacy and quantum resistance.
 - Coinbase transactions have no `pqc_auths` entries (coinbase is not a v3 spend).
 - Nodes, wallets, and indexers should budget for ~5.3KB extra auth material per
   user transaction (before other serialization overhead).
-- RPC/ZMQ consumers should avoid rigid tx-size assumptions and update parser
+- RPC consumers should avoid rigid tx-size assumptions and update parser
   limits accordingly.
 
 ## V4 Roadmap

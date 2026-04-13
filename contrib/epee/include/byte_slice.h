@@ -43,7 +43,7 @@ namespace epee
 
   struct release_byte_slice
   {
-    //! For use with `zmq_message_init_data`, use second arg for buffer pointer.
+    //! For use with zero-copy message APIs; use second arg for buffer pointer.
     static void call(void*, void* ptr) noexcept;
     void operator()(byte_slice_data* ptr) const noexcept
     {

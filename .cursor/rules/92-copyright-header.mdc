@@ -1,0 +1,62 @@
+---
+description: Add Shekyl Foundation copyright when editing source files.
+globs:
+  - "src/**/*.cpp"
+  - "src/**/*.h"
+  - "src/**/*.c"
+  - "src/**/*.inl"
+  - "cmake/**/*.cmake"
+  - "rust/**/*.rs"
+  - "tests/**/*.cpp"
+  - "tests/**/*.h"
+---
+
+# Copyright Header
+
+When editing a file that has an existing copyright header, add a Shekyl
+Foundation line if one is not already present. Preserve the original
+copyright (e.g., Monero Project).
+
+## Rules
+
+- Add `Copyright (c) 2025-2026, The Shekyl Foundation` immediately **before**
+  the existing copyright line(s).
+- Use the file's existing comment style (`//`, `#`, `--`, etc.).
+- If the file already has a Shekyl Foundation copyright line, do not
+  duplicate it.
+- If a file is **brand new** (no prior copyright), use only the Shekyl
+  Foundation line with the current year.
+- Both projects operate under BSD-3-Clause. If this is a prior Monero file,
+  add `Parts of this file are originally copyright (c) [dates], The Monero
+  Project` at the bottom, similar to where the CryptoNote attribution sits.
+
+## Examples
+
+C++ / existing Monero file:
+
+```cpp
+// Copyright (c) 2025-2026, The Shekyl Foundation
+// Copyright (c) 2014-2022, The Monero Project
+//
+// All rights reserved.
+// ...
+```
+
+CMake / existing Monero file:
+
+```cmake
+# Copyright (c) 2025-2026, The Shekyl Foundation
+# Copyright (c) 2014-2022, The Monero Project
+#
+# All rights reserved.
+# ...
+```
+
+Rust / new Shekyl file:
+
+```rust
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// ...
+```

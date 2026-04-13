@@ -31,8 +31,8 @@ The last three (`shekyl-utils-*`) are only built when `BUILD_DEBUG_UTILITIES=ON`
 
 ## Default network ports
 
-| Network | P2P | RPC (HTTP) | ZMQ |
-|---------|-----|------------|-----|
+| Network | P2P | RPC (HTTP) | Reserved |
+|---------|-----|------------|----------|
 | Mainnet | 11021 | 11029 | 11025 |
 | Testnet | 12021 | 12029 | 12025 |
 | Stagenet | 13021 | 13029 | 13025 |
@@ -86,8 +86,6 @@ shekyld [options] [command]
 | `--public-node` | Advertise as a public node |
 | `--prune-blockchain` | Enable blockchain pruning |
 | `--offline` | Run without P2P networking |
-| `--zmq-rpc-bind-port <port>` | ZMQ RPC port |
-| `--no-zmq` | Disable ZMQ entirely |
 | `--ban-list <file>` | File of IPs to ban |
 | `--max-txpool-weight <bytes>` | Maximum transaction pool size |
 | `--block-notify <cmd>` | Execute command on new block (substitutes `%s` with hash) |

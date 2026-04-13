@@ -90,7 +90,7 @@ further changes to the interface.
   - [ ] Bech32m address encoding/decoding tested
   - [ ] Transaction pruning mode tested (`--prune-blockchain`)
   - [ ] Block header `curve_tree_root` commitment validated
-  - [ ] ZMQ/RPC consumer regression testing for larger transactions
+  - [ ] RPC consumer regression testing for larger transactions
 - [ ] CLI reproducible builds validated
 - [ ] Rust/PQC reproducible build inputs documented
 - [ ] CLI released

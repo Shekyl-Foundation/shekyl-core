@@ -1,0 +1,38 @@
+---
+description: Usability-first design principles for end-user-facing Shekyl interfaces.
+globs:
+  - src/wallet/**
+  - src/simplewallet/**
+  - src/wallet_rpc_server/**
+  - rust/shekyl-wallet*/**
+  - shekyl-gui-wallet/**
+---
+
+# Usability
+
+End-user-facing interfaces (CLI wallets, GUI wallet, wallet RPC) must
+prioritize ease of use. Minimize technical barriers for non-developer users.
+
+This rule applies to **end-user surfaces only**. Developer-facing tools
+(`monerod`/`shekyld` operator CLI, debug RPCs, raw transaction inspectors)
+appropriately expose block heights, hex hashes, and raw byte counts —
+those are the right output for their audience.
+
+## Rules
+
+- Prefer sensible defaults over requiring configuration. A new user should
+  be able to run a wallet with zero flags.
+- Error messages must be human-readable. Include what went wrong, why, and
+  what the user can do about it. Per `35-secure-memory.mdc`, error messages
+  must never contain secret material.
+- CLI commands follow consistent verb-noun patterns
+  (e.g., `shekyl wallet create`, `shekyl wallet send`).
+- Avoid exposing internal jargon (raw block heights, hex hashes, byte
+  counts) in user-facing wallet output unless explicitly requested via a
+  verbose/debug flag.
+- Provide progress indicators for long-running operations (sync, key
+  generation, large send construction).
+- Document every public Rust wallet API with usage examples, not just type
+  signatures.
+- Rust wallet APIs use the builder pattern or sensible defaults rather than
+  requiring all parameters upfront.

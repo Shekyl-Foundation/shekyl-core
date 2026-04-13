@@ -52,7 +52,6 @@ using namespace epee;
 #include "fcmp/rctTypes.h"
 #include "blockchain_db/blockchain_db.h"
 #include "fcmp/rctSigs.h"
-#include "rpc/zmq_pub.h"
 #include "common/notify.h"
 #include "hardforks/hardforks.h"
 #include "tx_verification_utils.h"
@@ -1096,7 +1095,7 @@ namespace cryptonote
     uint8_t version = m_blockchain_storage.get_current_hard_fork_version();
     const bool res = m_mempool.add_tx(tx, tx_hash, blob, tx_weight, tvc, tx_relay, relayed, version);
 
-    // If new incoming tx passed verification and entered the pool, notify ZMQ
+    // If new incoming tx passed verification and entered the pool, notify subscribers
     if (!tvc.m_verifivation_failed && tvc.m_added_to_pool && matches_category(tx_relay, relay_category::legacy))
     {
       txpool_event evt{};
@@ -1161,12 +1160,10 @@ namespace cryptonote
     if (tx_blobs.size() != tx_hashes.size() || tx_blobs.size() != txs.size() || tx_blobs.size() != just_broadcasted.size())
       return false;
 
-    /* Publish txs via ZMQ that are "just broadcasted" by the daemon. This is
-       done here in order to guarantee txs
-       are pub'd via ZMQ when we know the daemon has/will broadcast to other
-       nodes & *after* the tx is visible in the pool. This should get called
-       when the user submits a tx to a daemon in the "fluff" epoch relaying txs
-       via a public network. */
+    /* Notify subscribers about txs "just broadcasted" by the daemon. Done here
+       to guarantee notifications fire after the tx is visible in the pool and
+       the daemon has/will broadcast to other nodes. Called when the user submits
+       a tx in the "fluff" epoch relaying via a public network. */
     if (std::count(just_broadcasted.begin(), just_broadcasted.end(), true) == 0)
       return true;
 
@@ -1188,7 +1185,7 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   void core::on_transactions_relayed(const epee::span<const cryptonote::blobdata> tx_blobs, const relay_method tx_relay)
   {
-    // lock ensures duplicate txs aren't pub'd via zmq
+    // lock ensures duplicate txs aren't notified twice
     CRITICAL_REGION_LOCAL(m_incoming_tx_lock);
 
     std::vector<crypto::hash> tx_hashes{};

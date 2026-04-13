@@ -49,7 +49,6 @@
 #include "warnings.h"
 #include "crypto/hash.h"
 #include "span.h"
-#include "rpc/fwd.h"
 
 PUSH_WARNINGS
 DISABLE_VS_WARNINGS(4355)

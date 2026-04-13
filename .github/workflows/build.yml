@@ -18,7 +18,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # ARCH="default" (not "native") ensures, that a different execution host can execute binaries compiled elsewhere.
   BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc libunbound-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libzmq3-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl'
+  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev miniupnpc libunbound-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev protobuf-compiler ccache git curl'
   INSTALL_RUST: |
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     echo "$HOME/.cargo/bin" >> $GITHUB_PATH
@@ -106,7 +106,7 @@ jobs:
         run: |
           brew uninstall cmake
           brew update
-          brew install --quiet cmake boost hidapi openssl zmq libpgm miniupnpc expat libunwind-headers protobuf abseil ccache zstd
+          brew install --quiet cmake boost hidapi openssl libpgm miniupnpc expat libunwind-headers protobuf abseil ccache zstd
       - uses: dtolnay/rust-toolchain@stable
       - name: build
         run: |
@@ -134,7 +134,7 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           update: true
-          install: mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-ccache mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-zeromq mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi mingw-w64-x86_64-protobuf mingw-w64-x86_64-abseil-cpp mingw-w64-x86_64-libusb mingw-w64-x86_64-unbound mingw-w64-x86_64-rust git
+          install: mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-ccache mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi mingw-w64-x86_64-protobuf mingw-w64-x86_64-abseil-cpp mingw-w64-x86_64-libusb mingw-w64-x86_64-unbound mingw-w64-x86_64-rust git
       - uses: ./.github/actions/set-make-job-count
       - name: build
         run: |
@@ -148,7 +148,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: install dependencies
-        run: pacman -Syyu --noconfirm base-devel git cmake boost boost-libs openssl zeromq unbound libsodium readline expat gtest python3 doxygen graphviz hidapi libusb protobuf abseil-cpp rust
+        run: pacman -Syyu --noconfirm base-devel git cmake boost boost-libs openssl unbound libsodium readline expat gtest python3 doxygen graphviz hidapi libusb protobuf abseil-cpp rust
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
@@ -237,7 +237,7 @@ jobs:
       - name: install Rust
         run: ${{env.INSTALL_RUST}}
       - name: install Python dependencies
-        run: apt install -y python3-requests python3-psutil python3-monotonic python3-zmq python3-deepdiff
+        run: apt install -y python3-requests python3-psutil python3-monotonic python3-deepdiff
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
@@ -284,7 +284,7 @@ jobs:
         env:
           VCPKG_BINARY_SOURCES: clear;files,C:\vcpkg\archives,readwrite
         run: |
-          vcpkg install --triplet x64-windows-static --overlay-ports="${{ github.workspace }}/vcpkg-overlay/ports" boost openssl libsodium zeromq libusb lmdb
+          vcpkg install --triplet x64-windows-static --overlay-ports="${{ github.workspace }}/vcpkg-overlay/ports" boost openssl libsodium libusb lmdb
       - name: save vcpkg cache
         if: steps.vcpkg-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5

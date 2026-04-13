@@ -55,7 +55,7 @@ Practical effect:
 
 - larger mempool footprint
 - higher relay bandwidth usage
-- larger RPC/ZMQ transaction payloads
+- larger RPC transaction payloads
 
 ## Wallet Migration Notes
 
@@ -93,7 +93,7 @@ Operators and indexers must accommodate the increased per-transaction size:
   bounds the worst-case `pqc_auth` overhead to ~37 KB (7-of-7). Typical
   configurations (2-of-3, 3-of-5) are well under this. Operators should not
   reject transactions solely based on pre-PQC size assumptions.
-- **ZMQ/RPC consumers:** adjust any hardcoded maximum payload buffers to at
+- **RPC consumers:** adjust any hardcoded maximum payload buffers to at
   least 150 KB per transaction (typical 2-input/2-output tx + PQC auth).
   For multisig, budget up to 200 KB.
 - **Levin relay:** the existing 100 MB default message limit is sufficient, but

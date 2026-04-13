@@ -80,7 +80,6 @@ cmake-build-debug/
 
 ### VSCode ###
 .vscode/
-.cursor/
 
 ### Eclipse ###
 *.pydevproject

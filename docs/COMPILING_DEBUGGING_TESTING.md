@@ -123,7 +123,7 @@ static libraries.
   C++ Desktop workload.  The CI uses VS 2026 for forward compatibility,
   but the build works on VS 2022 as well thanks to the
   `CryptonightR_JIT_stub.c` workaround for the PDB ICE (see below).
-- vcpkg (for Boost, libsodium, OpenSSL, ZeroMQ, libunbound, LMDB)
+- vcpkg (for Boost, libsodium, OpenSSL, libunbound, LMDB)
 - Rust toolchain (`stable-x86_64-pc-windows-msvc`)
 - CMake 3.25+ (or CMake 4.0+ if using VS 2026)
 
@@ -246,7 +246,7 @@ As PQC code lands, developers should add a dedicated validation loop covering:
 - transaction serialization tests for the reboot-only PQ transaction format
 - wallet sign/core verify integration tests
 - malformed signature and malformed length rejection tests
-- encoded-size regression checks for mempool, RPC, and ZMQ consumers
+- encoded-size regression checks for mempool and RPC consumers
 
 ## Running core_tests
 
@@ -318,7 +318,7 @@ CMake cache values cannot leak architecture-specific flags.
 
 - Boost (chrono, date-time, filesystem, program-options, regex, serialization,
   system, thread)
-- OpenSSL, ZeroMQ, libunbound, libsodium, readline, expat
+- OpenSSL, libunbound, libsodium, readline, expat
 
 No HIDAPI, protobuf, or libusb packages are required on the target machine.
 

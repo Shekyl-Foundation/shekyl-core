@@ -42,7 +42,7 @@ If you are starting fresh, prefer:
 The dependency matrix is maintained in `README.md` and includes:
 
 - compiler/tooling: GCC, CMake, pkg-config
-- core libs: Boost, OpenSSL, libzmq/OpenPGM, libunbound, libsodium
+- core libs: Boost, OpenSSL, libunbound, libsodium
 - optional libs/tools: libunwind, readline, expat, gtest, ccache, doxygen/graphviz
 - optional hardware wallet stack: hidapi, libusb, protobuf/protoc, libudev
 
@@ -139,7 +139,7 @@ Open MSYS2 MinGW shell and install toolchain + dependencies (64-bit example):
 ```bash
 pacman -Syu
 pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake \
-  mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-zeromq \
+  mingw-w64-x86_64-boost mingw-w64-x86_64-openssl \
   mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi mingw-w64-x86_64-unbound
 ```
 

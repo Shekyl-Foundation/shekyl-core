@@ -1,0 +1,38 @@
+---
+description: Shekyl core is the priority codebase; the monero-oxide fork is a disposable downstream consumer.
+alwaysApply: true
+---
+
+# Shekyl-First Development
+
+The `shekyl-core` repository is the authoritative codebase. The `monero-oxide`
+fork exists solely to simplify cherry-picking upstream Monero fixes. It is a
+downstream consumer, not a source of truth.
+
+## Development flow
+
+1. **All new code originates in `shekyl-core`.** New Rust crates, FFI exports,
+   encoding logic, address types, and crypto primitives are first-class
+   workspace members under `rust/` in the Shekyl repo.
+2. **The fork vendors from Shekyl, not the reverse.** When the fork needs
+   shared logic, it copies the crate from Shekyl. Shekyl must never depend on
+   or import from the fork.
+3. **If the fork fights a change, defer the fork.** When a Shekyl-first
+   decision conflicts with the fork's Monero-inherited structure, the fork
+   adapts or defers. Never contort Shekyl's APIs to accommodate upstream
+   Monero patterns.
+4. **The fork is disposable.** Once divergence makes the fork more expensive
+   to maintain than the value of cherry-picked fixes, it will be dropped.
+   Design every Shekyl crate self-contained so that transition is frictionless.
+
+## Rules
+
+- Never create code in the fork that Shekyl core depends on.
+- Never shape a Shekyl crate's API to match Monero conventions when a cleaner
+  Shekyl-native API exists.
+- When a plan has both Shekyl-core and fork phases, the fork phase is always
+  lower priority and explicitly deferrable.
+- Shared Rust crates must compile and pass tests within the Shekyl workspace
+  alone, with no fork-specific feature flags or conditional compilation.
+- When cherry-picking Monero upstream fixes, adapt the concept to Shekyl's
+  architecture rather than preserving the upstream patch structure.

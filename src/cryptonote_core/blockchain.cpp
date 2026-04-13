@@ -2217,7 +2217,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
         return false;
       }
 
-      // If new incoming tx in alt block passed verification and entered the pool, notify ZMQ
+      // If new incoming tx in alt block passed verification and entered the pool, notify subscribers
       if (tvc.m_added_to_pool)
       {
         txpool_event evt{};
@@ -4460,7 +4460,7 @@ leave:
   //                          txid     weight mempool?
   std::vector<std::tuple<crypto::hash, size_t, bool>> txs_meta;
 
-  // This will be the data sent to the ZMQ pool listeners for txs which skipped the mempool
+  // Notification data for pool listeners for txs which skipped the mempool
   std::vector<txpool_event> txpool_events;
 
   // this lambda returns relevant txs back to the mempool

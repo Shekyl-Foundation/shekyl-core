@@ -38,13 +38,12 @@ Each item is out of scope for the current PR but worth tracking for future work.
   `eprintln!` is idiomatic for this pattern. No change needed unless the sim
   gains a long-running mode where structured logging is warranted.
 
-- **10 unit tests skipped: require FCMP++ non-coinbase transaction construction.**
-  `JsonSerialization.BulletproofPlusTransaction`, 8 `zmq_pub` txpool tests,
-  and `zmq_server.pub` are `GTEST_SKIP`'d because `test::make_transaction`
-  builds ring-style source entries incompatible with v3/FCMP++. To restore:
-  rewrite `make_transaction` to construct FCMP++ transactions with proper
-  curve-tree witnesses, or build a mock FCMP++ tx fixture. Tracked as
-  prerequisite for full ZMQ test coverage.
+- **1 unit test skipped: requires FCMP++ non-coinbase transaction construction.**
+  `JsonSerialization.BulletproofPlusTransaction` is `GTEST_SKIP`'d because
+  `test::make_transaction` builds ring-style source entries incompatible with
+  v3/FCMP++. To restore: rewrite `make_transaction` to construct FCMP++
+  transactions with proper curve-tree witnesses, or build a mock FCMP++ tx
+  fixture.
 
 - **Genesis TX blobs use zero-filled `enc_amounts`/`outPk`.**
   The regenerated v3 genesis blobs carry all-zero encrypted amounts and

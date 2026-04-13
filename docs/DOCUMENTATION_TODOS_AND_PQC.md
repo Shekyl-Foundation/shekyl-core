@@ -60,9 +60,8 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 |------|-------------|
 | **Shekyl-specific** | CONTRIBUTING and i18n docs have been updated to reference Shekyl maintainers, project channels, and binary names (e.g. `shekyl-wallet-cli`). |
 
-### 1.9 Other docs (ZMQ, PORTABLE_STORAGE, INSTALLATION_GUIDE, PUBLIC_NARRATIVE_FAQ)
+### 1.9 Other docs (PORTABLE_STORAGE, INSTALLATION_GUIDE, PUBLIC_NARRATIVE_FAQ)
 
-- **ZMQ.md**: No explicit TODOs; describes current/future ZMQ status in Shekyl; note any differences from upstream if relevant.
 - **PORTABLE_STORAGE.md**: No TODOs; reference doc.
 - **INSTALLATION_GUIDE.md**: Shekyl-native; no critical TODOs.
 - **PUBLIC_NARRATIVE_FAQ.md**: Narrative/positioning; no technical TODOs.

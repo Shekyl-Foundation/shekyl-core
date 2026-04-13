@@ -15,7 +15,7 @@ The CI workflows install all dependencies automatically. For local builds:
 - **Rust toolchain**: stable Rust via [rustup](https://rustup.rs/) (builds `libshekyl_ffi.a`)
 - **CMake** >= 3.14 (required for `FetchContent`)
 - **Google Test**: system `libgtest-dev` is preferred; if absent, CMake fetches GoogleTest v1.16.0 at configure time
-- **Boost, OpenSSL, ZeroMQ, libunbound, libsodium** and other standard Monero-derived dependencies
+- **Boost, OpenSSL, libunbound, libsodium** and other standard Monero-derived dependencies
 
 ## Branch Strategy
 

@@ -45,9 +45,6 @@ endif()
 
 endif()
 
-SET(ZMQ_INCLUDE_PATH @prefix@/include)
-SET(ZMQ_LIB @prefix@/lib/libzmq.a)
-
 SET(Boost_IGNORE_SYSTEM_PATH ON)
 SET(BOOST_ROOT @prefix@)
 SET(BOOST_INCLUDEDIR @prefix@/include)

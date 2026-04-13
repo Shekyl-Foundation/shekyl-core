@@ -1646,7 +1646,7 @@ namespace cryptonote
     void cache_block_template(const block &b, const cryptonote::account_public_address &address, const blobdata &nonce, const difficulty_type &diff, uint64_t height, uint64_t expected_reward, uint64_t seed_height, const crypto::hash &seed_hash, uint64_t pool_cookie);
 
     /**
-     * @brief sends new block notifications to ZMQ `miner_data` subscribers
+     * @brief sends new block notifications to `miner_data` subscribers
      *
      * @param height current blockchain height
      * @param seed_hash seed hash to use for mining

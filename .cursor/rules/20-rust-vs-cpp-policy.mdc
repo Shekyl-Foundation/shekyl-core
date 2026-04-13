@@ -1,0 +1,51 @@
+---
+description: When to use Rust vs. C++ in Shekyl. The decision policy.
+alwaysApply: true
+---
+
+# Rust vs. C++: decision policy
+
+Shekyl is migrating crypto-critical paths from C++ to Rust. New code follows
+these rules. The companion file `25-rust-architecture.mdc` covers *how* Rust
+code is structured; this file covers *when* to choose Rust.
+
+## Rust if any of:
+
+1. **Touches a secret.** Wallet keys, output secrets, key images, anything
+   that requires wipe-on-drop. The `ZeroizeOnDrop` discipline is free in Rust
+   and manual in C++; manual equals "eventually forgotten."
+2. **Defines a cryptographic contract that other code consumes.** HKDF
+   derivation, proof construction, witness assembly, key image computation.
+   The type system enforces contracts at every use site rather than in
+   documentation.
+3. **Parses untrusted input.** Block deserialization, RPC response parsing,
+   transaction validation. Safe slicing and `Result` propagation eliminate
+   buffer-overrun bug classes.
+4. **Performs integer arithmetic on amounts.** `checked_add`/`checked_mul` is
+   explicit in Rust; silent overflow in C++ is a financial bug waiting to
+   happen.
+
+## C++ if all of:
+
+1. Doesn't touch secrets, OR touches them only briefly with explicit wipe.
+2. Orchestrates other code rather than implementing crypto itself.
+3. Already exists in C++ and migrating would touch >100 sites without
+   proportional benefit.
+4. Needs to touch C++ APIs (epee, LMDB, Boost) that would be painful to
+   re-expose. Wallet state machines, daemon RPC glue, mempool fall here.
+
+## Default: when in doubt, Rust
+
+The historical reason for keeping things in C++ was inertia. The forward
+direction is Rust.
+
+## Migration is a planning activity, not a "while we're here" activity
+
+Migrating a C++ subsystem to Rust requires:
+
+- Its own design document
+- Its own review cycle (target: 4–6 rounds before implementation)
+- Its own test gates
+- Its own PR, separate from any feature work
+
+Folding a migration into a feature PR produces unreviewable changes. Don't.

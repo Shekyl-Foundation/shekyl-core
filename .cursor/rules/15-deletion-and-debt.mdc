@@ -1,0 +1,58 @@
+---
+description: Deletion vs. deferral decisions, and the lifecycle of migration code.
+alwaysApply: true
+---
+
+# When to delete, when to defer
+
+## Default: delete
+
+Code with no live caller, code that handles state that doesn't exist, code
+marked `[[deprecated]]` for more than one release cycle — all of it goes. Dead
+code is audit surface, attack surface, and review fatigue.
+
+## When to use `[[deprecated]]`
+
+Almost never. The annotation is a promise to delete by a specific version. If
+you can't name the version, you can't deprecate — delete now or schedule the
+deletion in `docs/FOLLOWUPS.md`. `[[deprecated]]` without a deletion date is
+debt that compounds.
+
+## Migration code is a permanent attack surface for a one-time problem
+
+Code that detects an old format and converts it runs forever to handle state
+that exists for a finite period.
+
+- **Pre-V3 launch:** `rm -rf ~/.shekyl` and re-sync is the migration path. No
+  in-Shekyl format-detection code is justified. Ruthless about deletion.
+- **Post-V3 launch:** real users have real state. Migration code becomes
+  load-bearing where it exists, but should be the smallest possible code with
+  the clearest possible scope, and should still have a deletion target.
+
+This rule is distinct from `60-no-monero-legacy.mdc`, which says no Monero-era
+compatibility code exists at all — that's a permanent fact about genesis, not
+a transitional policy.
+
+## FOLLOWUPS.md is not a graveyard
+
+Items in `docs/FOLLOWUPS.md` have a target version (V3.1, V3.2, V4). Items
+without a target version get one within 30 days or get closed as "won't fix."
+
+## "While we're here" is the enemy
+
+Every PR has a stated scope. Changes outside that scope go in a separate PR,
+even when they're obvious improvements. Reviewer attention is finite;
+bisection requires small commits. When you spot something worth fixing
+outside scope, write it down in `FOLLOWUPS.md` and keep going.
+
+## V3.x as the long-term platform
+
+V3 ships with FCMP++ and hybrid PQC from genesis. V4 (lattice-only) is gated
+on external standardization (NIST lattice threshold algorithms) and may be
+12–24 months away. Between those points, V3.x is where improvements land:
+
+- V3.1: transfer_details Rust migration, audit response
+- V3.2: wallet_rpc_server Rust cutover, performance work
+- V3.3+: as findings emerge
+
+Items that don't fit V3.0 don't have to wait for V4.

@@ -1,0 +1,45 @@
+---
+description: System-level design discipline. Apply to all changes.
+alwaysApply: true
+---
+
+# Shekyl is a system, not a feature collection
+
+Per `00-mission.mdc`, every change is evaluated against three timeframes:
+
+1. **Now**: does this work for the current protocol version?
+2. **Mining era end (~30 years)**: does this still work when block rewards
+   transition toward fee-only with bounded terminal subsidy?
+3. **Post-quantum era (V4)**: does this survive the transition to lattice-only
+   cryptography?
+
+Name which timeframe(s) a change addresses and which it does not. A change that
+works for now but fails in either of the others is design debt, not a feature.
+Record the debt in `docs/FOLLOWUPS.md` with a target resolution version.
+
+## Specification first, code second
+
+For any cryptographic, consensus, or wallet-state change:
+
+1. Write the specification: what does the verifier/validator/wallet need to
+   know, what conclusion must they reach, what values does the data structure
+   carry, what is the byte layout?
+2. Get specification review before writing code.
+3. Implement against the spec; let the wire format fall out of the spec, not
+   the other way around.
+
+If you find yourself adjusting the spec to fit the bytes you already wrote,
+stop and revert to the spec.
+
+## Ask "why is this here?" for inherited code
+
+Shekyl forked from Monero (which forked from CryptoNote). Inherited code
+carries assumptions that may not apply. When working in any inherited
+subsystem, ask:
+
+1. Does Shekyl actually need this?
+2. If yes, does it want to be in the language and shape it currently is?
+3. If no, what's the deletion or migration path?
+
+Record the answer in the module's docstring or in `docs/FOLLOWUPS.md`. Don't
+assume something is needed because it exists.

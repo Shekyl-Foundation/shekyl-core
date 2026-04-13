@@ -1,0 +1,71 @@
+---
+description: FFI surface management. Apply when adding or modifying FFI exports.
+globs:
+  - rust/shekyl-ffi/**
+  - src/shekyl/shekyl_ffi.h
+---
+
+# FFI discipline
+
+## The FFI surface is an audit obligation
+
+Every FFI export is permanent. Every export must justify its existence at the
+boundary. Growing the surface requires explicit rationale.
+
+## Coarse calls over fine calls
+
+Prefer one FFI call that does a complete operation over multiple calls that
+orchestrate primitives:
+
+- `shekyl_scan_and_recover` (one call) over `scan_output` + `compute_key_image`
+- `shekyl_sign_fcmp_transaction` (one call) over `parse_witness` + `prove` +
+  `assemble_proofs`
+
+Orchestration in C++ holding intermediate secrets is exactly where contract
+mismatches happen. Coarse calls keep secret lifetime entirely inside Rust.
+
+## ShekylBuffer for variable-length data, raw pointers for fixed-size
+
+Variable-length blobs cross FFI as opaque `ShekylBuffer` byte arrays with
+Rust-defined canonical encoding. C++ never parses Rust-emitted bytes; Rust
+never parses C++-emitted bytes. The encoding is versioned in Rust.
+
+Fixed-size data crosses as `*const u8` with a documented length (e.g.,
+`*const u8 // 32 bytes`). Both sides agree on the length at compile time.
+
+## Direct-write output pointers
+
+Output pointers point into the destination data structure, not into
+intermediate buffers. The destination owns the wipe responsibility.
+
+```c
+// Good: writes directly into transfer_details fields
+shekyl_scan_and_recover(..., out_y: &td.m_y.data[0], ...)
+
+// Bad: requires C++ to manage scratch + wipe
+uint8_t y_scratch[32];
+shekyl_scan_and_recover(..., out_y: y_scratch, ...);
+memcpy(&td.m_y.data[0], y_scratch, 32);
+memwipe(y_scratch, 32);  // hope you remembered
+```
+
+## Error handling: distinct codes, not booleans
+
+FFI returns specific error codes for distinct failure modes:
+
+- `0` success
+- `-1` version mismatch
+- `-2` authentication failure
+- `-3` invalid format
+- `-4` null pointer
+
+Returning `bool` collapses error semantics and prevents the verifier from
+making security decisions based on failure mode (e.g., rejecting before AEAD
+decryption to prevent timing side channels).
+
+## Bounded deserialization
+
+Any `ShekylBuffer` accepted from the C++ side has a documented maximum
+length. Unbounded deserialization (e.g., the historical
+`pqc_authentication` blob) is a DoS surface and a parsing-bug surface.
+Enforce the bound at the Rust entry point before doing anything else.
