@@ -3,11 +3,11 @@
 //! Exposes Rust functionality to C++ through a C-compatible ABI.
 //! All public functions use `extern "C"` with `#[no_mangle]`.
 
-use std::os::raw::c_char;
-use std::sync::Mutex;
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
 };
+use std::os::raw::c_char;
+use std::sync::Mutex;
 
 static CONSENSUS_REGISTRY: Mutex<Option<shekyl_consensus::ConsensusRegistry>> = Mutex::new(None);
 
@@ -414,7 +414,7 @@ pub extern "C" fn shekyl_pqc_multisig_group_id(
         return false;
     };
 
-    use shekyl_crypto_pq::multisig::{MultisigKeyContainer, multisig_group_id};
+    use shekyl_crypto_pq::multisig::{multisig_group_id, MultisigKeyContainer};
 
     let container = match MultisigKeyContainer::from_canonical_bytes(keys_bytes) {
         Ok(c) => c,
@@ -461,11 +461,7 @@ pub extern "C" fn shekyl_cn_fast_hash(
 /// `hashes_ptr` points to `count * 32` contiguous bytes.
 /// Result is written to `out_ptr` (32 bytes).
 #[no_mangle]
-pub extern "C" fn shekyl_tree_hash(
-    hashes_ptr: *const u8,
-    count: usize,
-    out_ptr: *mut u8,
-) -> bool {
+pub extern "C" fn shekyl_tree_hash(hashes_ptr: *const u8, count: usize, out_ptr: *mut u8) -> bool {
     if out_ptr.is_null() || (count > 0 && hashes_ptr.is_null()) {
         return false;
     }
@@ -561,8 +557,7 @@ pub extern "C" fn shekyl_compute_burn_split(
     burn_pct: u64,
     staker_pool_share: u64,
 ) -> ShekylBurnSplit {
-    let split =
-        shekyl_economics::burn::compute_burn_split(total_fees, burn_pct, staker_pool_share);
+    let split = shekyl_economics::burn::compute_burn_split(total_fees, burn_pct, staker_pool_share);
     ShekylBurnSplit {
         miner_fee_income: split.miner_fee_income,
         staker_pool_amount: split.staker_pool_amount,
@@ -582,8 +577,8 @@ pub extern "C" fn shekyl_stake_weight(amount: u64, tier_id: u8) -> u64 {
         Some(t) => t,
         None => return 0,
     };
-    ((amount as u128 * tier.yield_multiplier as u128)
-        / shekyl_economics::params::SCALE as u128) as u64
+    ((amount as u128 * tier.yield_multiplier as u128) / shekyl_economics::params::SCALE as u128)
+        as u64
 }
 
 /// Get lock duration in blocks for a given tier.
@@ -630,7 +625,8 @@ pub extern "C" fn shekyl_calc_per_block_staker_reward(
             *overflow_out = 0;
         }
     }
-    let total_weighted_stake = (total_weighted_stake_hi as u128) << 64 | (total_weighted_stake_lo as u128);
+    let total_weighted_stake =
+        (total_weighted_stake_hi as u128) << 64 | (total_weighted_stake_lo as u128);
     if total_weighted_stake == 0 {
         return 0;
     }
@@ -676,8 +672,8 @@ pub extern "C" fn shekyl_calc_stake_ratio(total_staked: u64, circulating_supply:
     if circulating_supply == 0 {
         return 0;
     }
-    (total_staked as u128 * shekyl_economics::params::SCALE as u128
-        / circulating_supply as u128) as u64
+    (total_staked as u128 * shekyl_economics::params::SCALE as u128 / circulating_supply as u128)
+        as u64
 }
 
 // ─── Emission Share (Component 4) ───────────────────────────────────────────
@@ -794,7 +790,11 @@ pub extern "C" fn shekyl_mlock(ptr: *const libc::c_void, len: usize) -> i32 {
             fn VirtualLock(lpAddress: *const libc::c_void, dwSize: usize) -> i32;
         }
         let ret = unsafe { VirtualLock(ptr, len) };
-        if ret != 0 { 0 } else { -1 }
+        if ret != 0 {
+            0
+        } else {
+            -1
+        }
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -821,7 +821,11 @@ pub extern "C" fn shekyl_munlock(ptr: *const libc::c_void, len: usize) -> i32 {
             fn VirtualUnlock(lpAddress: *const libc::c_void, dwSize: usize) -> i32;
         }
         let ret = unsafe { VirtualUnlock(ptr, len) };
-        if ret != 0 { 0 } else { -1 }
+        if ret != 0 {
+            0
+        } else {
+            -1
+        }
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -858,17 +862,31 @@ pub extern "C" fn shekyl_page_size() -> usize {
     #[cfg(unix)]
     {
         let ret = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-        if ret <= 0 { 0 } else { ret as usize }
+        if ret <= 0 {
+            0
+        } else {
+            ret as usize
+        }
     }
     #[cfg(windows)]
     {
         #[repr(C)]
-        struct SystemInfo { _pad: [u8; 4], page_size: u32, _rest: [u8; 52] }
+        struct SystemInfo {
+            _pad: [u8; 4],
+            page_size: u32,
+            _rest: [u8; 52],
+        }
         extern "system" {
             fn GetSystemInfo(info: *mut SystemInfo);
         }
-        let mut info = SystemInfo { _pad: [0; 4], page_size: 0, _rest: [0; 52] };
-        unsafe { GetSystemInfo(&mut info); }
+        let mut info = SystemInfo {
+            _pad: [0; 4],
+            page_size: 0,
+            _rest: [0; 52],
+        };
+        unsafe {
+            GetSystemInfo(&mut info);
+        }
         info.page_size as usize
     }
     #[cfg(not(any(unix, windows)))]
@@ -886,7 +904,9 @@ pub extern "C" fn shekyl_page_size() -> usize {
 #[no_mangle]
 pub extern "C" fn shekyl_generator_T(out_ptr: *mut u8) {
     use ciphersuite::group::GroupEncoding;
-    if out_ptr.is_null() { return; }
+    if out_ptr.is_null() {
+        return;
+    }
     let t_bytes: [u8; 32] = shekyl_generators::T.to_bytes().into();
     unsafe { std::ptr::copy_nonoverlapping(t_bytes.as_ptr(), out_ptr, 32) };
 }
@@ -996,9 +1016,7 @@ pub extern "C" fn shekyl_derive_output_secrets(
         return false;
     }
 
-    let ss = unsafe {
-        std::slice::from_raw_parts(combined_ss_ptr, combined_ss_len as usize)
-    };
+    let ss = unsafe { std::slice::from_raw_parts(combined_ss_ptr, combined_ss_len as usize) };
 
     let secrets = shekyl_crypto_pq::derivation::derive_output_secrets(ss, output_index);
 
@@ -1020,10 +1038,7 @@ pub extern "C" fn shekyl_derive_output_secrets(
 /// `x25519_ss_ptr` must point to exactly 32 bytes. Returns the 1-byte tag.
 /// Returns 0 if the pointer is null (callers should check for null separately).
 #[no_mangle]
-pub extern "C" fn shekyl_derive_view_tag_x25519(
-    x25519_ss_ptr: *const u8,
-    output_index: u64,
-) -> u8 {
+pub extern "C" fn shekyl_derive_view_tag_x25519(x25519_ss_ptr: *const u8, output_index: u64) -> u8 {
     if x25519_ss_ptr.is_null() {
         return 0;
     }
@@ -1138,7 +1153,10 @@ pub extern "C" fn shekyl_fcmp_prove(
     }
 }
 
-fn parse_prove_witness(data: &[u8], num_inputs: usize) -> Option<Vec<shekyl_fcmp::proof::ProveInput>> {
+fn parse_prove_witness(
+    data: &[u8],
+    num_inputs: usize,
+) -> Option<Vec<shekyl_fcmp::proof::ProveInput>> {
     let mut offset = 0usize;
     let mut inputs = Vec::with_capacity(num_inputs);
 
@@ -1163,7 +1181,8 @@ fn parse_prove_witness(data: &[u8], num_inputs: usize) -> Option<Vec<shekyl_fcmp
         spend_key_x.copy_from_slice(&data[offset + 128..offset + 160]);
         spend_key_y.copy_from_slice(&data[offset + 160..offset + 192]);
         commitment_mask.copy_from_slice(&data[offset + 192..offset + 224]);
-        pseudo_out_blind.copy_from_slice(&data[offset + 224..offset + SHEKYL_PROVE_WITNESS_HEADER_BYTES]);
+        pseudo_out_blind
+            .copy_from_slice(&data[offset + 224..offset + SHEKYL_PROVE_WITNESS_HEADER_BYTES]);
         offset += SHEKYL_PROVE_WITNESS_HEADER_BYTES;
 
         // Leaf chunk
@@ -1297,8 +1316,10 @@ pub extern "C" fn shekyl_fcmp_verify(
     let Some(ph_bytes) = slice_from_ptr(pqc_pk_hashes_ptr, pqc_hash_count * 32) else {
         return false;
     };
-    if tree_root_ptr.is_null() || signable_tx_hash_ptr.is_null()
-        || ki_count != po_count || ki_count != pqc_hash_count
+    if tree_root_ptr.is_null()
+        || signable_tx_hash_ptr.is_null()
+        || ki_count != po_count
+        || ki_count != pqc_hash_count
     {
         return false;
     }
@@ -1338,8 +1359,13 @@ pub extern "C" fn shekyl_fcmp_verify(
     }
 
     match shekyl_fcmp::proof::verify(
-        &proof, &key_images, &pseudo_outs, &pqc_hashes,
-        &tree_root, tree_depth, signable_tx_hash,
+        &proof,
+        &key_images,
+        &pseudo_outs,
+        &pqc_hashes,
+        &tree_root,
+        tree_depth,
+        signable_tx_hash,
     ) {
         Ok(ok) => ok,
         Err(_) => false,
@@ -1423,11 +1449,7 @@ pub extern "C" fn shekyl_frost_sal_session_new(
     match shekyl_fcmp::frost_sal::FrostSalSession::new(&input_data) {
         Ok(session) => {
             unsafe {
-                std::ptr::copy_nonoverlapping(
-                    session.pseudo_out().as_ptr(),
-                    pseudo_out_ptr,
-                    32,
-                );
+                std::ptr::copy_nonoverlapping(session.pseudo_out().as_ptr(), pseudo_out_ptr, 32);
             }
             Box::into_raw(Box::new(ShekylFrostSalSession(session)))
         }
@@ -1627,8 +1649,11 @@ pub extern "C" fn shekyl_frost_coordinator_aggregate_and_prove(
         success: false,
     };
 
-    if coord.is_null() || session_ptrs.is_null() || group_key_ptr.is_null()
-        || witness_ptr.is_null() || tree_root_ptr.is_null()
+    if coord.is_null()
+        || session_ptrs.is_null()
+        || group_key_ptr.is_null()
+        || witness_ptr.is_null()
+        || tree_root_ptr.is_null()
     {
         return fail;
     }
@@ -1650,7 +1675,8 @@ pub extern "C" fn shekyl_frost_coordinator_aggregate_and_prove(
     };
 
     use ciphersuite::group::GroupEncoding;
-    let gk_ct = <dalek_ff_group::EdwardsPoint as GroupEncoding>::from_bytes(&group_key_bytes.into());
+    let gk_ct =
+        <dalek_ff_group::EdwardsPoint as GroupEncoding>::from_bytes(&group_key_bytes.into());
     if bool::from(gk_ct.is_none()) {
         return fail;
     }
@@ -1672,8 +1698,14 @@ pub extern "C" fn shekyl_frost_coordinator_aggregate_and_prove(
     }
 
     let original_outputs: Vec<_> = sessions.iter().map(|s| *s.original_output()).collect();
-    let rerands: Vec<_> = sessions.iter().map(|s| s.rerandomized_output().clone()).collect();
-    let pseudo_outs_flat: Vec<u8> = sessions.iter().flat_map(|s| s.pseudo_out().iter().copied()).collect();
+    let rerands: Vec<_> = sessions
+        .iter()
+        .map(|s| s.rerandomized_output().clone())
+        .collect();
+    let pseudo_outs_flat: Vec<u8> = sessions
+        .iter()
+        .flat_map(|s| s.pseudo_out().iter().copied())
+        .collect();
 
     let leaf_chunks: Vec<_> = prove_inputs
         .iter()
@@ -1715,7 +1747,9 @@ pub extern "C" fn shekyl_frost_coordinator_aggregate_and_prove(
 #[no_mangle]
 pub extern "C" fn shekyl_frost_coordinator_free(coord: *mut ShekylFrostCoordinator) {
     if !coord.is_null() {
-        unsafe { drop(Box::from_raw(coord)); }
+        unsafe {
+            drop(Box::from_raw(coord));
+        }
     }
 }
 
@@ -1774,7 +1808,11 @@ pub extern "C" fn shekyl_frost_signer_sign(
     num_included: u32,
     nonce_sums_ptr: *const u8,
 ) -> ShekylBuffer {
-    if session.is_null() || keys_handle.is_null() || included_ptr.is_null() || nonce_sums_ptr.is_null() {
+    if session.is_null()
+        || keys_handle.is_null()
+        || included_ptr.is_null()
+        || nonce_sums_ptr.is_null()
+    {
         return ShekylBuffer::null();
     }
 
@@ -1799,7 +1837,8 @@ pub extern "C" fn shekyl_frost_signer_sign(
     unsafe { std::ptr::copy_nonoverlapping(nonce_sums_ptr, nonce_sum_bytes.as_mut_ptr(), 32) };
 
     use ciphersuite::group::GroupEncoding;
-    let nonce_sum_ct = <dalek_ff_group::EdwardsPoint as GroupEncoding>::from_bytes(&nonce_sum_bytes.into());
+    let nonce_sum_ct =
+        <dalek_ff_group::EdwardsPoint as GroupEncoding>::from_bytes(&nonce_sum_bytes.into());
     if bool::from(nonce_sum_ct.is_none()) {
         return ShekylBuffer::null();
     }
@@ -1855,7 +1894,10 @@ pub extern "C" fn shekyl_frost_keys_import(
 pub extern "C" fn shekyl_frost_keys_export(
     handle: *const ShekylFrostThresholdKeys,
 ) -> ShekylBuffer {
-    let fail = ShekylBuffer { ptr: std::ptr::null_mut(), len: 0 };
+    let fail = ShekylBuffer {
+        ptr: std::ptr::null_mut(),
+        len: 0,
+    };
     if handle.is_null() {
         return fail;
     }
@@ -1964,7 +2006,11 @@ pub extern "C" fn shekyl_kem_encapsulate(
 ) -> bool {
     use shekyl_crypto_pq::kem::{HybridKemPublicKey, HybridX25519MlKem, KeyEncapsulation};
 
-    if pk_x25519_ptr.is_null() || pk_ml_kem_ptr.is_null() || ct_out.is_null() || ss_out_ptr.is_null() {
+    if pk_x25519_ptr.is_null()
+        || pk_ml_kem_ptr.is_null()
+        || ct_out.is_null()
+        || ss_out_ptr.is_null()
+    {
         return false;
     }
 
@@ -1977,7 +2023,10 @@ pub extern "C" fn shekyl_kem_encapsulate(
         return false;
     };
 
-    let pk = HybridKemPublicKey { x25519, ml_kem: ml_kem.to_vec() };
+    let pk = HybridKemPublicKey {
+        x25519,
+        ml_kem: ml_kem.to_vec(),
+    };
     let kem = HybridX25519MlKem;
 
     match kem.encapsulate(&pk) {
@@ -2007,10 +2056,15 @@ pub extern "C" fn shekyl_kem_decapsulate(
     ct_ml_kem_len: usize,
     ss_out_ptr: *mut u8,
 ) -> bool {
-    use shekyl_crypto_pq::kem::{HybridCiphertext, HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation};
+    use shekyl_crypto_pq::kem::{
+        HybridCiphertext, HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation,
+    };
 
-    if sk_x25519_ptr.is_null() || sk_ml_kem_ptr.is_null() || ct_x25519_ptr.is_null()
-        || ct_ml_kem_ptr.is_null() || ss_out_ptr.is_null()
+    if sk_x25519_ptr.is_null()
+        || sk_ml_kem_ptr.is_null()
+        || ct_x25519_ptr.is_null()
+        || ct_ml_kem_ptr.is_null()
+        || ss_out_ptr.is_null()
     {
         return false;
     }
@@ -2032,8 +2086,14 @@ pub extern "C" fn shekyl_kem_decapsulate(
         return false;
     };
 
-    let sk = HybridKemSecretKey { x25519: sk_x25519, ml_kem: sk_ml_kem.to_vec() };
-    let ct = HybridCiphertext { x25519: ct_x25519, ml_kem: ct_ml_kem.to_vec() };
+    let sk = HybridKemSecretKey {
+        x25519: sk_x25519,
+        ml_kem: sk_ml_kem.to_vec(),
+    };
+    let ct = HybridCiphertext {
+        x25519: ct_x25519,
+        ml_kem: ct_ml_kem.to_vec(),
+    };
     let kem = HybridX25519MlKem;
 
     match kem.decapsulate(&sk, &ct) {
@@ -2092,12 +2152,7 @@ pub extern "C" fn shekyl_address_encode(
         slice.to_vec()
     };
 
-    let addr = shekyl_address::ShekylAddress::new(
-        net,
-        spend_key,
-        view_key,
-        ml_kem_ek,
-    );
+    let addr = shekyl_address::ShekylAddress::new(net, spend_key, view_key, ml_kem_ek);
 
     match addr.encode() {
         Ok(s) => ShekylBuffer::from_vec(s.into_bytes()),
@@ -2118,8 +2173,10 @@ pub extern "C" fn shekyl_address_decode(
     spend_key_out: *mut u8,
     view_key_out: *mut u8,
 ) -> ShekylBuffer {
-    if encoded_ptr.is_null() || network_out.is_null()
-        || spend_key_out.is_null() || view_key_out.is_null()
+    if encoded_ptr.is_null()
+        || network_out.is_null()
+        || spend_key_out.is_null()
+        || view_key_out.is_null()
     {
         return ShekylBuffer::null();
     }
@@ -2195,8 +2252,11 @@ pub extern "C" fn shekyl_decode_blob(
     data_out_cap: usize,
     data_len_out: *mut usize,
 ) -> bool {
-    if encoded_ptr.is_null() || hrp_out.is_null() || hrp_len_out.is_null()
-        || data_out.is_null() || data_len_out.is_null()
+    if encoded_ptr.is_null()
+        || hrp_out.is_null()
+        || hrp_len_out.is_null()
+        || data_out.is_null()
+        || data_len_out.is_null()
     {
         return false;
     }
@@ -2326,8 +2386,12 @@ pub extern "C" fn shekyl_curve_tree_hash_grow_selene(
         })
         .collect();
 
-    match shekyl_fcmp::tree::hash_grow_selene(&existing_hash, offset as usize, &existing_child, &children)
-    {
+    match shekyl_fcmp::tree::hash_grow_selene(
+        &existing_hash,
+        offset as usize,
+        &existing_child,
+        &children,
+    ) {
         Some(result) => {
             unsafe { std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32) };
             true
@@ -2374,8 +2438,12 @@ pub extern "C" fn shekyl_curve_tree_hash_grow_helios(
         })
         .collect();
 
-    match shekyl_fcmp::tree::hash_grow_helios(&existing_hash, offset as usize, &existing_child, &children)
-    {
+    match shekyl_fcmp::tree::hash_grow_helios(
+        &existing_hash,
+        offset as usize,
+        &existing_child,
+        &children,
+    ) {
         Some(result) => {
             unsafe { std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32) };
             true
@@ -2422,8 +2490,12 @@ pub extern "C" fn shekyl_curve_tree_hash_trim_selene(
         })
         .collect();
 
-    match shekyl_fcmp::tree::hash_trim_selene(&existing_hash, offset as usize, &children, &grow_back)
-    {
+    match shekyl_fcmp::tree::hash_trim_selene(
+        &existing_hash,
+        offset as usize,
+        &children,
+        &grow_back,
+    ) {
         Some(result) => {
             unsafe { std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32) };
             true
@@ -2470,8 +2542,12 @@ pub extern "C" fn shekyl_curve_tree_hash_trim_helios(
         })
         .collect();
 
-    match shekyl_fcmp::tree::hash_trim_helios(&existing_hash, offset as usize, &children, &grow_back)
-    {
+    match shekyl_fcmp::tree::hash_trim_helios(
+        &existing_hash,
+        offset as usize,
+        &children,
+        &grow_back,
+    ) {
         Some(result) => {
             unsafe { std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32) };
             true
@@ -2621,8 +2697,10 @@ pub extern "C" fn shekyl_construct_curve_tree_leaf(
     h_pqc_ptr: *const u8,
     leaf_out_ptr: *mut u8,
 ) -> bool {
-    if output_key_ptr.is_null() || commitment_ptr.is_null()
-        || h_pqc_ptr.is_null() || leaf_out_ptr.is_null()
+    if output_key_ptr.is_null()
+        || commitment_ptr.is_null()
+        || h_pqc_ptr.is_null()
+        || leaf_out_ptr.is_null()
     {
         return false;
     }
@@ -2785,12 +2863,10 @@ pub extern "C" fn shekyl_sign_transaction(
     };
 
     match shekyl_tx_builder::sign_transaction(tx_prefix_hash, &inputs, &outputs, fee, &tree) {
-        Ok(proofs) => {
-            match serde_json::to_vec(&proofs) {
-                Ok(json) => ShekylSignResult::ok(json),
-                Err(e) => ShekylSignResult::err(-3, format!("result serialization error: {e}")),
-            }
-        }
+        Ok(proofs) => match serde_json::to_vec(&proofs) {
+            Ok(json) => ShekylSignResult::ok(json),
+            Err(e) => ShekylSignResult::err(-3, format!("result serialization error: {e}")),
+        },
         Err(e) => {
             let code = tx_builder_error_code(&e);
             ShekylSignResult::err(code, e.to_string())
@@ -2883,9 +2959,12 @@ pub extern "C" fn shekyl_sign_fcmp_transaction(
     tree_root_ptr: *const u8,
     tree_depth: u8,
 ) -> ShekylSignResult {
-    if spend_secret_ptr.is_null() || tx_prefix_hash_ptr.is_null()
-        || inputs_json_ptr.is_null() || outputs_json_ptr.is_null()
-        || reference_block_ptr.is_null() || tree_root_ptr.is_null()
+    if spend_secret_ptr.is_null()
+        || tx_prefix_hash_ptr.is_null()
+        || inputs_json_ptr.is_null()
+        || outputs_json_ptr.is_null()
+        || reference_block_ptr.is_null()
+        || tree_root_ptr.is_null()
     {
         return ShekylSignResult::err(-1, "null pointer argument".into());
     }
@@ -2935,14 +3014,18 @@ pub extern "C" fn shekyl_sign_fcmp_transaction(
         None => return ShekylSignResult::err(-5, "invalid spend secret key".into()),
     };
 
-    let mut spend_inputs: Vec<shekyl_tx_builder::SpendInput> = Vec::with_capacity(collapsed_inputs.len());
+    let mut spend_inputs: Vec<shekyl_tx_builder::SpendInput> =
+        Vec::with_capacity(collapsed_inputs.len());
     for inp in &collapsed_inputs {
         if inp.combined_ss.len() != 64 {
             drop(spend_inputs);
-            return ShekylSignResult::err(-5, format!(
-                "combined_ss must be 64 bytes, got {}",
-                inp.combined_ss.len()
-            ));
+            return ShekylSignResult::err(
+                -5,
+                format!(
+                    "combined_ss must be 64 bytes, got {}",
+                    inp.combined_ss.len()
+                ),
+            );
         }
         let mut ss = [0u8; 64];
         ss.copy_from_slice(&inp.combined_ss);
@@ -2983,13 +3066,17 @@ pub extern "C" fn shekyl_sign_fcmp_transaction(
         tree_depth,
     };
 
-    let result = match shekyl_tx_builder::sign_transaction(tx_prefix_hash, &spend_inputs, &outputs, fee, &tree) {
-        Ok(proofs) => {
-            match serde_json::to_vec(&proofs) {
-                Ok(json) => ShekylSignResult::ok(json),
-                Err(e) => ShekylSignResult::err(-3, format!("result serialization error: {e}")),
-            }
-        }
+    let result = match shekyl_tx_builder::sign_transaction(
+        tx_prefix_hash,
+        &spend_inputs,
+        &outputs,
+        fee,
+        &tree,
+    ) {
+        Ok(proofs) => match serde_json::to_vec(&proofs) {
+            Ok(json) => ShekylSignResult::ok(json),
+            Err(e) => ShekylSignResult::err(-3, format!("result serialization error: {e}")),
+        },
         Err(e) => {
             let code = tx_builder_error_code(&e);
             ShekylSignResult::err(code, e.to_string())
@@ -3190,7 +3277,7 @@ pub unsafe extern "C" fn shekyl_scan_output(
             let mut arr = [0u8; 8];
             arr.copy_from_slice(v);
             arr
-        },
+        }
         None => return false,
     };
     let sk = match arr32_from_ptr(spend_key) {
@@ -3198,8 +3285,12 @@ pub unsafe extern "C" fn shekyl_scan_output(
         None => return false,
     };
 
-    if y_out.is_null() || z_out.is_null() || k_amount_out.is_null()
-        || amount_out.is_null() || pqc_pk_out.is_null() || pqc_sk_out.is_null()
+    if y_out.is_null()
+        || z_out.is_null()
+        || k_amount_out.is_null()
+        || amount_out.is_null()
+        || pqc_pk_out.is_null()
+        || pqc_sk_out.is_null()
         || h_pqc_out.is_null()
     {
         return false;
@@ -3207,8 +3298,17 @@ pub unsafe extern "C" fn shekyl_scan_output(
 
     use shekyl_crypto_pq::output::scan_output;
     match scan_output(
-        &x_sk, dk, &ct_x, ct_ml, &o, &c, &ea,
-        amount_tag_on_chain, view_tag_on_chain, &sk, output_index,
+        &x_sk,
+        dk,
+        &ct_x,
+        ct_ml,
+        &o,
+        &c,
+        &ea,
+        amount_tag_on_chain,
+        view_tag_on_chain,
+        &sk,
+        output_index,
     ) {
         Ok(scanned) => {
             std::ptr::copy_nonoverlapping(scanned.y.as_ptr(), y_out, 32);
@@ -3220,7 +3320,7 @@ pub unsafe extern "C" fn shekyl_scan_output(
             *h_pqc_out = scanned.h_pqc;
             // scanned drops here — ZeroizeOnDrop wipes y, z, k_amount, pqc_secret_key
             true
-        },
+        }
         Err(_) => false,
     }
 }
@@ -3287,21 +3387,35 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
             let mut arr = [0u8; 8];
             arr.copy_from_slice(v);
             arr
-        },
+        }
         None => return false,
     };
 
-    if ho_out.is_null() || y_out.is_null() || z_out.is_null() || k_amount_out.is_null()
-        || amount_out.is_null() || recovered_spend_key_out.is_null()
-        || pqc_pk_out.is_null() || pqc_sk_out.is_null() || h_pqc_out.is_null()
+    if ho_out.is_null()
+        || y_out.is_null()
+        || z_out.is_null()
+        || k_amount_out.is_null()
+        || amount_out.is_null()
+        || recovered_spend_key_out.is_null()
+        || pqc_pk_out.is_null()
+        || pqc_sk_out.is_null()
+        || h_pqc_out.is_null()
     {
         return false;
     }
 
     use shekyl_crypto_pq::output::scan_output_recover;
     match scan_output_recover(
-        &x_sk, dk, &ct_x, ct_ml, &o, &c, &ea,
-        amount_tag_on_chain, view_tag_on_chain, output_index,
+        &x_sk,
+        dk,
+        &ct_x,
+        ct_ml,
+        &o,
+        &c,
+        &ea,
+        amount_tag_on_chain,
+        view_tag_on_chain,
+        output_index,
     ) {
         Ok(recovered) => {
             std::ptr::copy_nonoverlapping(recovered.ho.as_ptr(), ho_out, 32);
@@ -3309,12 +3423,16 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
             std::ptr::copy_nonoverlapping(recovered.z.as_ptr(), z_out, 32);
             std::ptr::copy_nonoverlapping(recovered.k_amount.as_ptr(), k_amount_out, 32);
             *amount_out = recovered.amount;
-            std::ptr::copy_nonoverlapping(recovered.recovered_spend_key.as_ptr(), recovered_spend_key_out, 32);
+            std::ptr::copy_nonoverlapping(
+                recovered.recovered_spend_key.as_ptr(),
+                recovered_spend_key_out,
+                32,
+            );
             *pqc_pk_out = ShekylBuffer::from_vec(recovered.pqc_public_key.clone());
             *pqc_sk_out = ShekylBuffer::from_vec(recovered.pqc_secret_key.clone());
             *h_pqc_out = recovered.h_pqc;
             true
-        },
+        }
         Err(_) => false,
     }
 }
@@ -3343,7 +3461,7 @@ pub unsafe extern "C" fn shekyl_sign_pqc_auth(
             let mut arr = [0u8; 64];
             arr.copy_from_slice(v);
             arr
-        },
+        }
         None => return fail,
     };
     let msg = match slice_from_ptr(message, message_len) {
@@ -3425,21 +3543,49 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
     pqc_sk_out: *mut ShekylBuffer,
     h_pqc_out: *mut [u8; 32],
 ) -> bool {
-    let x_sk = match arr32_from_ptr(x25519_sk) { Some(v) => v, None => return false };
-    let dk = match slice_from_ptr(ml_kem_dk, ml_kem_dk_len) { Some(v) => v, None => return false };
-    let ct_x = match arr32_from_ptr(kem_ct_x25519) { Some(v) => v, None => return false };
-    let ct_ml = match slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) { Some(v) => v, None => return false };
-    let o = match arr32_from_ptr(output_key) { Some(v) => v, None => return false };
-    let c = match arr32_from_ptr(commitment) { Some(v) => v, None => return false };
+    let x_sk = match arr32_from_ptr(x25519_sk) {
+        Some(v) => v,
+        None => return false,
+    };
+    let dk = match slice_from_ptr(ml_kem_dk, ml_kem_dk_len) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ct_x = match arr32_from_ptr(kem_ct_x25519) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ct_ml = match slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) {
+        Some(v) => v,
+        None => return false,
+    };
+    let o = match arr32_from_ptr(output_key) {
+        Some(v) => v,
+        None => return false,
+    };
+    let c = match arr32_from_ptr(commitment) {
+        Some(v) => v,
+        None => return false,
+    };
     let ea = match slice_from_ptr(enc_amount, 8) {
-        Some(v) => { let mut arr = [0u8; 8]; arr.copy_from_slice(v); arr },
+        Some(v) => {
+            let mut arr = [0u8; 8];
+            arr.copy_from_slice(v);
+            arr
+        }
         None => return false,
     };
     let have_spend_key = !spend_secret_key.is_null() && !hp_of_O.is_null();
 
-    if ho_out.is_null() || y_out.is_null() || z_out.is_null() || k_amount_out.is_null()
-        || amount_out.is_null() || recovered_spend_key_out.is_null()
-        || key_image_out.is_null() || pqc_pk_out.is_null() || pqc_sk_out.is_null()
+    if ho_out.is_null()
+        || y_out.is_null()
+        || z_out.is_null()
+        || k_amount_out.is_null()
+        || amount_out.is_null()
+        || recovered_spend_key_out.is_null()
+        || key_image_out.is_null()
+        || pqc_pk_out.is_null()
+        || pqc_sk_out.is_null()
         || h_pqc_out.is_null()
     {
         return false;
@@ -3448,11 +3594,19 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
         return false;
     }
 
-    use shekyl_crypto_pq::output::{scan_output_recover, compute_output_key_image_from_ho};
+    use shekyl_crypto_pq::output::{compute_output_key_image_from_ho, scan_output_recover};
 
     let recovered = match scan_output_recover(
-        &x_sk, dk, &ct_x, ct_ml, &o, &c, &ea,
-        amount_tag_on_chain, view_tag_on_chain, output_index,
+        &x_sk,
+        dk,
+        &ct_x,
+        ct_ml,
+        &o,
+        &c,
+        &ea,
+        amount_tag_on_chain,
+        view_tag_on_chain,
+        output_index,
     ) {
         Ok(r) => r,
         Err(_) => return false,
@@ -3463,7 +3617,11 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
     std::ptr::copy_nonoverlapping(recovered.z.as_ptr(), z_out, 32);
     std::ptr::copy_nonoverlapping(recovered.k_amount.as_ptr(), k_amount_out, 32);
     *amount_out = recovered.amount;
-    std::ptr::copy_nonoverlapping(recovered.recovered_spend_key.as_ptr(), recovered_spend_key_out, 32);
+    std::ptr::copy_nonoverlapping(
+        recovered.recovered_spend_key.as_ptr(),
+        recovered_spend_key_out,
+        32,
+    );
     *pqc_pk_out = ShekylBuffer::from_vec(recovered.pqc_public_key.clone());
     *pqc_sk_out = ShekylBuffer::from_vec(recovered.pqc_secret_key.clone());
     *h_pqc_out = recovered.h_pqc;
@@ -3503,12 +3661,24 @@ pub unsafe extern "C" fn shekyl_compute_output_key_image(
     out_ki: *mut u8,
 ) -> bool {
     let ss = match slice_from_ptr(combined_ss, 64) {
-        Some(v) => { let mut arr = [0u8; 64]; arr.copy_from_slice(v); arr },
+        Some(v) => {
+            let mut arr = [0u8; 64];
+            arr.copy_from_slice(v);
+            arr
+        }
         None => return false,
     };
-    let b = match arr32_from_ptr(spend_secret_key) { Some(v) => v, None => return false };
-    let hp = match arr32_from_ptr(hp_of_O) { Some(v) => v, None => return false };
-    if out_ki.is_null() { return false; }
+    let b = match arr32_from_ptr(spend_secret_key) {
+        Some(v) => v,
+        None => return false,
+    };
+    let hp = match arr32_from_ptr(hp_of_O) {
+        Some(v) => v,
+        None => return false,
+    };
+    if out_ki.is_null() {
+        return false;
+    }
 
     match shekyl_crypto_pq::output::compute_output_key_image(&ss, output_index, &b, &hp) {
         Ok(result) => {
@@ -3533,10 +3703,21 @@ pub unsafe extern "C" fn shekyl_compute_output_key_image_from_ho(
     hp_of_O: *const u8,
     out_ki: *mut u8,
 ) -> bool {
-    let ho_arr = match arr32_from_ptr(ho) { Some(v) => v, None => return false };
-    let b = match arr32_from_ptr(spend_secret_key) { Some(v) => v, None => return false };
-    let hp = match arr32_from_ptr(hp_of_O) { Some(v) => v, None => return false };
-    if out_ki.is_null() { return false; }
+    let ho_arr = match arr32_from_ptr(ho) {
+        Some(v) => v,
+        None => return false,
+    };
+    let b = match arr32_from_ptr(spend_secret_key) {
+        Some(v) => v,
+        None => return false,
+    };
+    let hp = match arr32_from_ptr(hp_of_O) {
+        Some(v) => v,
+        None => return false,
+    };
+    if out_ki.is_null() {
+        return false;
+    }
 
     match shekyl_crypto_pq::output::compute_output_key_image_from_ho(&ho_arr, &b, &hp) {
         Ok(result) => {
@@ -3565,7 +3746,11 @@ pub unsafe extern "C" fn shekyl_derive_proof_secrets(
     out_k_amount: *mut u8,
 ) -> bool {
     let ss = match slice_from_ptr(combined_ss, 64) {
-        Some(v) => { let mut arr = [0u8; 64]; arr.copy_from_slice(v); arr },
+        Some(v) => {
+            let mut arr = [0u8; 64];
+            arr.copy_from_slice(v);
+            arr
+        }
         None => return false,
     };
     if out_ho.is_null() || out_y.is_null() || out_z.is_null() || out_k_amount.is_null() {
@@ -3600,9 +3785,17 @@ pub unsafe extern "C" fn shekyl_encrypt_wallet_cache(
     password_derived_key: *const u8,
     out_buf: *mut ShekylBuffer,
 ) -> bool {
-    let pt = match slice_from_ptr(plaintext, plaintext_len) { Some(v) => v, None => return false };
-    let key = match arr32_from_ptr(password_derived_key) { Some(v) => v, None => return false };
-    if out_buf.is_null() { return false; }
+    let pt = match slice_from_ptr(plaintext, plaintext_len) {
+        Some(v) => v,
+        None => return false,
+    };
+    let key = match arr32_from_ptr(password_derived_key) {
+        Some(v) => v,
+        None => return false,
+    };
+    if out_buf.is_null() {
+        return false;
+    }
 
     let aad = [cache_format_version];
     let encrypted = shekyl_chacha::encrypt_with_aad(&key, &aad, pt);
@@ -3638,8 +3831,14 @@ pub unsafe extern "C" fn shekyl_decrypt_wallet_cache(
     if ciphertext.is_null() || password_derived_key.is_null() || out_buf.is_null() {
         return -4;
     }
-    let ct = match slice_from_ptr(ciphertext, ciphertext_len) { Some(v) => v, None => return -4 };
-    let key = match arr32_from_ptr(password_derived_key) { Some(v) => v, None => return -4 };
+    let ct = match slice_from_ptr(ciphertext, ciphertext_len) {
+        Some(v) => v,
+        None => return -4,
+    };
+    let key = match arr32_from_ptr(password_derived_key) {
+        Some(v) => v,
+        None => return -4,
+    };
 
     if ct.is_empty() {
         return -3;
@@ -3696,15 +3895,37 @@ pub unsafe extern "C" fn shekyl_generate_tx_proof_outbound(
     output_count: u32,
     proof_out: *mut ShekylBuffer,
 ) -> bool {
-    let tx_key = match arr32_from_ptr(tx_key_secret) { Some(v) => v, None => return false };
-    let tx_id = match arr32_from_ptr(txid) { Some(v) => v, None => return false };
-    let addr = match slice_from_ptr(address, address_len) { Some(v) => v, None => return false };
-    let msg = if message_len == 0 { &[] as &[u8] } else {
-        match slice_from_ptr(message, message_len) { Some(v) => v, None => return false }
+    let tx_key = match arr32_from_ptr(tx_key_secret) {
+        Some(v) => v,
+        None => return false,
     };
-    let x25519_pk = match arr32_from_ptr(recipient_x25519_pk) { Some(v) => v, None => return false };
-    let ml_kem_ek = match slice_from_ptr(recipient_ml_kem_ek, ml_kem_ek_len) { Some(v) => v, None => return false };
-    if proof_out.is_null() || output_count == 0 || output_indices.is_null() { return false; }
+    let tx_id = match arr32_from_ptr(txid) {
+        Some(v) => v,
+        None => return false,
+    };
+    let addr = match slice_from_ptr(address, address_len) {
+        Some(v) => v,
+        None => return false,
+    };
+    let msg = if message_len == 0 {
+        &[] as &[u8]
+    } else {
+        match slice_from_ptr(message, message_len) {
+            Some(v) => v,
+            None => return false,
+        }
+    };
+    let x25519_pk = match arr32_from_ptr(recipient_x25519_pk) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ml_kem_ek = match slice_from_ptr(recipient_ml_kem_ek, ml_kem_ek_len) {
+        Some(v) => v,
+        None => return false,
+    };
+    if proof_out.is_null() || output_count == 0 || output_indices.is_null() {
+        return false;
+    }
 
     let indices = std::slice::from_raw_parts(output_indices, output_count as usize);
 
@@ -3757,44 +3978,88 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_outbound(
     output_count: u32,
     amounts_out: *mut u64,
 ) -> bool {
-    let proof = match slice_from_ptr(proof_bytes, proof_len) { Some(v) => v, None => return false };
-    let tx_id = match arr32_from_ptr(txid) { Some(v) => v, None => return false };
-    let addr = match slice_from_ptr(address, address_len) { Some(v) => v, None => return false };
-    let msg = if message_len == 0 { &[] as &[u8] } else {
-        match slice_from_ptr(message, message_len) { Some(v) => v, None => return false }
+    let proof = match slice_from_ptr(proof_bytes, proof_len) {
+        Some(v) => v,
+        None => return false,
     };
-    let spend_pk = match arr32_from_ptr(recipient_spend_pubkey) { Some(v) => v, None => return false };
-    let x25519_pk = match arr32_from_ptr(recipient_x25519_pk) { Some(v) => v, None => return false };
-    let ml_ek = match slice_from_ptr(recipient_ml_kem_ek, ml_kem_ek_len) { Some(v) => v, None => return false };
+    let tx_id = match arr32_from_ptr(txid) {
+        Some(v) => v,
+        None => return false,
+    };
+    let addr = match slice_from_ptr(address, address_len) {
+        Some(v) => v,
+        None => return false,
+    };
+    let msg = if message_len == 0 {
+        &[] as &[u8]
+    } else {
+        match slice_from_ptr(message, message_len) {
+            Some(v) => v,
+            None => return false,
+        }
+    };
+    let spend_pk = match arr32_from_ptr(recipient_spend_pubkey) {
+        Some(v) => v,
+        None => return false,
+    };
+    let x25519_pk = match arr32_from_ptr(recipient_x25519_pk) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ml_ek = match slice_from_ptr(recipient_ml_kem_ek, ml_kem_ek_len) {
+        Some(v) => v,
+        None => return false,
+    };
     let n = output_count as usize;
-    if amounts_out.is_null() || n == 0 { return false; }
+    if amounts_out.is_null() || n == 0 {
+        return false;
+    }
 
-    let okeys = match slice_from_ptr(output_keys, n * 32) { Some(v) => v, None => return false };
-    let comms = match slice_from_ptr(commitments, n * 32) { Some(v) => v, None => return false };
-    let eamts = match slice_from_ptr(enc_amounts, n * 8) { Some(v) => v, None => return false };
-    let eph_pks = match slice_from_ptr(x25519_eph_pks, n * 32) { Some(v) => v, None => return false };
-    let ml_cts = match slice_from_ptr(ml_kem_cts, ml_kem_cts_len) { Some(v) => v, None => return false };
+    let okeys = match slice_from_ptr(output_keys, n * 32) {
+        Some(v) => v,
+        None => return false,
+    };
+    let comms = match slice_from_ptr(commitments, n * 32) {
+        Some(v) => v,
+        None => return false,
+    };
+    let eamts = match slice_from_ptr(enc_amounts, n * 8) {
+        Some(v) => v,
+        None => return false,
+    };
+    let eph_pks = match slice_from_ptr(x25519_eph_pks, n * 32) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ml_cts = match slice_from_ptr(ml_kem_cts, ml_kem_cts_len) {
+        Some(v) => v,
+        None => return false,
+    };
 
-    if ml_kem_cts_len % n != 0 { return false; }
+    if ml_kem_cts_len % n != 0 {
+        return false;
+    }
     let ct_size = ml_kem_cts_len / n;
 
-    let on_chain: Vec<shekyl_proofs::tx_proof::OnChainOutput> = (0..n).map(|i| {
-        let mut ok = [0u8; 32];
-        let mut cm = [0u8; 32];
-        let mut ea = [0u8; 8];
-        let mut ep = [0u8; 32];
-        ok.copy_from_slice(&okeys[i * 32..(i + 1) * 32]);
-        cm.copy_from_slice(&comms[i * 32..(i + 1) * 32]);
-        ea.copy_from_slice(&eamts[i * 8..(i + 1) * 8]);
-        ep.copy_from_slice(&eph_pks[i * 32..(i + 1) * 32]);
-        shekyl_proofs::tx_proof::OnChainOutput {
-            output_key: ok,
-            commitment: cm,
-            enc_amount: ea,
-            x25519_eph_pk: ep,
-            ml_kem_ct: ml_cts[i * ct_size..(i + 1) * ct_size].to_vec(),
-        }
-    }).collect();
+    let on_chain: Vec<shekyl_proofs::tx_proof::OnChainOutput> = (0..n)
+        .map(|i| {
+            let mut ok = [0u8; 32];
+            let mut cm = [0u8; 32];
+            let mut ea = [0u8; 8];
+            let mut ep = [0u8; 32];
+            ok.copy_from_slice(&okeys[i * 32..(i + 1) * 32]);
+            cm.copy_from_slice(&comms[i * 32..(i + 1) * 32]);
+            ea.copy_from_slice(&eamts[i * 8..(i + 1) * 8]);
+            ep.copy_from_slice(&eph_pks[i * 32..(i + 1) * 32]);
+            shekyl_proofs::tx_proof::OnChainOutput {
+                output_key: ok,
+                commitment: cm,
+                enc_amount: ea,
+                x25519_eph_pk: ep,
+                ml_kem_ct: ml_cts[i * ct_size..(i + 1) * ct_size].to_vec(),
+            }
+        })
+        .collect();
 
     match shekyl_proofs::tx_proof::verify_outbound_proof(
         proof, &tx_id, addr, msg, &spend_pk, &x25519_pk, ml_ek, &on_chain,
@@ -3834,32 +4099,51 @@ pub unsafe extern "C" fn shekyl_generate_tx_proof_inbound(
     output_count: u32,
     proof_out: *mut ShekylBuffer,
 ) -> bool {
-    let vsk = match arr32_from_ptr(view_secret_key) { Some(v) => v, None => return false };
-    let tx_id = match arr32_from_ptr(txid) { Some(v) => v, None => return false };
-    let addr = match slice_from_ptr(address, address_len) { Some(v) => v, None => return false };
-    let msg = if message_len == 0 { &[] as &[u8] } else {
-        match slice_from_ptr(message, message_len) { Some(v) => v, None => return false }
+    let vsk = match arr32_from_ptr(view_secret_key) {
+        Some(v) => v,
+        None => return false,
+    };
+    let tx_id = match arr32_from_ptr(txid) {
+        Some(v) => v,
+        None => return false,
+    };
+    let addr = match slice_from_ptr(address, address_len) {
+        Some(v) => v,
+        None => return false,
+    };
+    let msg = if message_len == 0 {
+        &[] as &[u8]
+    } else {
+        match slice_from_ptr(message, message_len) {
+            Some(v) => v,
+            None => return false,
+        }
     };
     let n = output_count as usize;
-    if proof_out.is_null() || n == 0 { return false; }
+    if proof_out.is_null() || n == 0 {
+        return false;
+    }
 
-    let ps_bytes = match slice_from_ptr(proof_secrets_ptr, n * 128) { Some(v) => v, None => return false };
-    let secrets: Vec<shekyl_crypto_pq::output::ProofSecrets> = (0..n).map(|i| {
-        let base = i * 128;
-        let mut ho = [0u8; 32];
-        let mut y = [0u8; 32];
-        let mut z = [0u8; 32];
-        let mut k_amount = [0u8; 32];
-        ho.copy_from_slice(&ps_bytes[base..base + 32]);
-        y.copy_from_slice(&ps_bytes[base + 32..base + 64]);
-        z.copy_from_slice(&ps_bytes[base + 64..base + 96]);
-        k_amount.copy_from_slice(&ps_bytes[base + 96..base + 128]);
-        shekyl_crypto_pq::output::ProofSecrets { ho, y, z, k_amount }
-    }).collect();
+    let ps_bytes = match slice_from_ptr(proof_secrets_ptr, n * 128) {
+        Some(v) => v,
+        None => return false,
+    };
+    let secrets: Vec<shekyl_crypto_pq::output::ProofSecrets> = (0..n)
+        .map(|i| {
+            let base = i * 128;
+            let mut ho = [0u8; 32];
+            let mut y = [0u8; 32];
+            let mut z = [0u8; 32];
+            let mut k_amount = [0u8; 32];
+            ho.copy_from_slice(&ps_bytes[base..base + 32]);
+            y.copy_from_slice(&ps_bytes[base + 32..base + 64]);
+            z.copy_from_slice(&ps_bytes[base + 64..base + 96]);
+            k_amount.copy_from_slice(&ps_bytes[base + 96..base + 128]);
+            shekyl_crypto_pq::output::ProofSecrets { ho, y, z, k_amount }
+        })
+        .collect();
 
-    match shekyl_proofs::tx_proof::generate_inbound_proof(
-        &vsk, &tx_id, addr, msg, &secrets,
-    ) {
+    match shekyl_proofs::tx_proof::generate_inbound_proof(&vsk, &tx_id, addr, msg, &secrets) {
         Ok(proof_bytes) => {
             *proof_out = ShekylBuffer::from_vec(proof_bytes);
             true
@@ -3900,43 +4184,84 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_inbound(
     output_count: u32,
     amounts_out: *mut u64,
 ) -> bool {
-    let proof = match slice_from_ptr(proof_bytes, proof_len) { Some(v) => v, None => return false };
-    let tx_id = match arr32_from_ptr(txid) { Some(v) => v, None => return false };
-    let addr = match slice_from_ptr(address, address_len) { Some(v) => v, None => return false };
-    let msg = if message_len == 0 { &[] as &[u8] } else {
-        match slice_from_ptr(message, message_len) { Some(v) => v, None => return false }
+    let proof = match slice_from_ptr(proof_bytes, proof_len) {
+        Some(v) => v,
+        None => return false,
     };
-    let vpk = match arr32_from_ptr(view_public_key) { Some(v) => v, None => return false };
-    let spend_pk = match arr32_from_ptr(recipient_spend_pubkey) { Some(v) => v, None => return false };
+    let tx_id = match arr32_from_ptr(txid) {
+        Some(v) => v,
+        None => return false,
+    };
+    let addr = match slice_from_ptr(address, address_len) {
+        Some(v) => v,
+        None => return false,
+    };
+    let msg = if message_len == 0 {
+        &[] as &[u8]
+    } else {
+        match slice_from_ptr(message, message_len) {
+            Some(v) => v,
+            None => return false,
+        }
+    };
+    let vpk = match arr32_from_ptr(view_public_key) {
+        Some(v) => v,
+        None => return false,
+    };
+    let spend_pk = match arr32_from_ptr(recipient_spend_pubkey) {
+        Some(v) => v,
+        None => return false,
+    };
     let n = output_count as usize;
-    if amounts_out.is_null() || n == 0 { return false; }
+    if amounts_out.is_null() || n == 0 {
+        return false;
+    }
 
-    let okeys = match slice_from_ptr(output_keys, n * 32) { Some(v) => v, None => return false };
-    let comms = match slice_from_ptr(commitments, n * 32) { Some(v) => v, None => return false };
-    let eamts = match slice_from_ptr(enc_amounts, n * 8) { Some(v) => v, None => return false };
-    let eph_pks = match slice_from_ptr(x25519_eph_pks, n * 32) { Some(v) => v, None => return false };
-    let ml_cts = match slice_from_ptr(ml_kem_cts, ml_kem_cts_len) { Some(v) => v, None => return false };
+    let okeys = match slice_from_ptr(output_keys, n * 32) {
+        Some(v) => v,
+        None => return false,
+    };
+    let comms = match slice_from_ptr(commitments, n * 32) {
+        Some(v) => v,
+        None => return false,
+    };
+    let eamts = match slice_from_ptr(enc_amounts, n * 8) {
+        Some(v) => v,
+        None => return false,
+    };
+    let eph_pks = match slice_from_ptr(x25519_eph_pks, n * 32) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ml_cts = match slice_from_ptr(ml_kem_cts, ml_kem_cts_len) {
+        Some(v) => v,
+        None => return false,
+    };
 
-    if ml_kem_cts_len % n != 0 { return false; }
+    if ml_kem_cts_len % n != 0 {
+        return false;
+    }
     let ct_size = ml_kem_cts_len / n;
 
-    let on_chain: Vec<shekyl_proofs::tx_proof::OnChainOutput> = (0..n).map(|i| {
-        let mut ok = [0u8; 32];
-        let mut cm = [0u8; 32];
-        let mut ea = [0u8; 8];
-        let mut ep = [0u8; 32];
-        ok.copy_from_slice(&okeys[i * 32..(i + 1) * 32]);
-        cm.copy_from_slice(&comms[i * 32..(i + 1) * 32]);
-        ea.copy_from_slice(&eamts[i * 8..(i + 1) * 8]);
-        ep.copy_from_slice(&eph_pks[i * 32..(i + 1) * 32]);
-        shekyl_proofs::tx_proof::OnChainOutput {
-            output_key: ok,
-            commitment: cm,
-            enc_amount: ea,
-            x25519_eph_pk: ep,
-            ml_kem_ct: ml_cts[i * ct_size..(i + 1) * ct_size].to_vec(),
-        }
-    }).collect();
+    let on_chain: Vec<shekyl_proofs::tx_proof::OnChainOutput> = (0..n)
+        .map(|i| {
+            let mut ok = [0u8; 32];
+            let mut cm = [0u8; 32];
+            let mut ea = [0u8; 8];
+            let mut ep = [0u8; 32];
+            ok.copy_from_slice(&okeys[i * 32..(i + 1) * 32]);
+            cm.copy_from_slice(&comms[i * 32..(i + 1) * 32]);
+            ea.copy_from_slice(&eamts[i * 8..(i + 1) * 8]);
+            ep.copy_from_slice(&eph_pks[i * 32..(i + 1) * 32]);
+            shekyl_proofs::tx_proof::OnChainOutput {
+                output_key: ok,
+                commitment: cm,
+                enc_amount: ea,
+                x25519_eph_pk: ep,
+                ml_kem_ct: ml_cts[i * ct_size..(i + 1) * ct_size].to_vec(),
+            }
+        })
+        .collect();
 
     match shekyl_proofs::tx_proof::verify_inbound_proof(
         proof, &tx_id, addr, msg, &vpk, &spend_pk, &on_chain,
@@ -3979,48 +4304,73 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
     output_count: u32,
     proof_out: *mut ShekylBuffer,
 ) -> bool {
-    let bsk = match arr32_from_ptr(spend_secret_key) { Some(v) => v, None => return false };
-    let addr = match slice_from_ptr(address, address_len) { Some(v) => v, None => return false };
-    let msg = if message_len == 0 { &[] as &[u8] } else {
-        match slice_from_ptr(message, message_len) { Some(v) => v, None => return false }
+    let bsk = match arr32_from_ptr(spend_secret_key) {
+        Some(v) => v,
+        None => return false,
+    };
+    let addr = match slice_from_ptr(address, address_len) {
+        Some(v) => v,
+        None => return false,
+    };
+    let msg = if message_len == 0 {
+        &[] as &[u8]
+    } else {
+        match slice_from_ptr(message, message_len) {
+            Some(v) => v,
+            None => return false,
+        }
     };
     let n = output_count as usize;
-    if proof_out.is_null() || n == 0 { return false; }
+    if proof_out.is_null() || n == 0 {
+        return false;
+    }
 
-    let ps_bytes = match slice_from_ptr(proof_secrets_ptr, n * 128) { Some(v) => v, None => return false };
-    let ki_bytes = match slice_from_ptr(key_images, n * 32) { Some(v) => v, None => return false };
-    let ss_bytes = match slice_from_ptr(spend_secrets, n * 32) { Some(v) => v, None => return false };
-    let ok_bytes = match slice_from_ptr(output_keys, n * 32) { Some(v) => v, None => return false };
+    let ps_bytes = match slice_from_ptr(proof_secrets_ptr, n * 128) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ki_bytes = match slice_from_ptr(key_images, n * 32) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ss_bytes = match slice_from_ptr(spend_secrets, n * 32) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ok_bytes = match slice_from_ptr(output_keys, n * 32) {
+        Some(v) => v,
+        None => return false,
+    };
 
-    let entries: Vec<shekyl_proofs::reserve_proof::ReserveOutputEntry> = (0..n).map(|i| {
-        let base = i * 128;
-        let mut ho = [0u8; 32];
-        let mut y = [0u8; 32];
-        let mut z = [0u8; 32];
-        let mut k_amount = [0u8; 32];
-        ho.copy_from_slice(&ps_bytes[base..base + 32]);
-        y.copy_from_slice(&ps_bytes[base + 32..base + 64]);
-        z.copy_from_slice(&ps_bytes[base + 64..base + 96]);
-        k_amount.copy_from_slice(&ps_bytes[base + 96..base + 128]);
+    let entries: Vec<shekyl_proofs::reserve_proof::ReserveOutputEntry> = (0..n)
+        .map(|i| {
+            let base = i * 128;
+            let mut ho = [0u8; 32];
+            let mut y = [0u8; 32];
+            let mut z = [0u8; 32];
+            let mut k_amount = [0u8; 32];
+            ho.copy_from_slice(&ps_bytes[base..base + 32]);
+            y.copy_from_slice(&ps_bytes[base + 32..base + 64]);
+            z.copy_from_slice(&ps_bytes[base + 64..base + 96]);
+            k_amount.copy_from_slice(&ps_bytes[base + 96..base + 128]);
 
-        let mut ki = [0u8; 32];
-        let mut ss = [0u8; 32];
-        let mut ok = [0u8; 32];
-        ki.copy_from_slice(&ki_bytes[i * 32..(i + 1) * 32]);
-        ss.copy_from_slice(&ss_bytes[i * 32..(i + 1) * 32]);
-        ok.copy_from_slice(&ok_bytes[i * 32..(i + 1) * 32]);
+            let mut ki = [0u8; 32];
+            let mut ss = [0u8; 32];
+            let mut ok = [0u8; 32];
+            ki.copy_from_slice(&ki_bytes[i * 32..(i + 1) * 32]);
+            ss.copy_from_slice(&ss_bytes[i * 32..(i + 1) * 32]);
+            ok.copy_from_slice(&ok_bytes[i * 32..(i + 1) * 32]);
 
-        shekyl_proofs::reserve_proof::ReserveOutputEntry {
-            proof_secrets: shekyl_crypto_pq::output::ProofSecrets { ho, y, z, k_amount },
-            key_image: ki,
-            spend_secret: ss,
-            output_key: ok,
-        }
-    }).collect();
+            shekyl_proofs::reserve_proof::ReserveOutputEntry {
+                proof_secrets: shekyl_crypto_pq::output::ProofSecrets { ho, y, z, k_amount },
+                key_image: ki,
+                spend_secret: ss,
+                output_key: ok,
+            }
+        })
+        .collect();
 
-    match shekyl_proofs::reserve_proof::generate_reserve_proof(
-        &bsk, addr, msg, &entries,
-    ) {
+    match shekyl_proofs::reserve_proof::generate_reserve_proof(&bsk, addr, msg, &entries) {
         Ok(proof_bytes) => {
             *proof_out = ShekylBuffer::from_vec(proof_bytes);
             true
@@ -4059,36 +4409,61 @@ pub unsafe extern "C" fn shekyl_verify_reserve_proof(
     output_count: u32,
     total_amount_out: *mut u64,
 ) -> bool {
-    let proof = match slice_from_ptr(proof_bytes, proof_len) { Some(v) => v, None => return false };
-    let addr = match slice_from_ptr(address, address_len) { Some(v) => v, None => return false };
-    let msg = if message_len == 0 { &[] as &[u8] } else {
-        match slice_from_ptr(message, message_len) { Some(v) => v, None => return false }
+    let proof = match slice_from_ptr(proof_bytes, proof_len) {
+        Some(v) => v,
+        None => return false,
     };
-    let spk = match arr32_from_ptr(spend_pubkey) { Some(v) => v, None => return false };
-    let n = output_count as usize;
-    if total_amount_out.is_null() || n == 0 { return false; }
-
-    let ok_bytes = match slice_from_ptr(output_keys, n * 32) { Some(v) => v, None => return false };
-    let cm_bytes = match slice_from_ptr(commitments, n * 32) { Some(v) => v, None => return false };
-    let ea_bytes = match slice_from_ptr(enc_amounts, n * 8) { Some(v) => v, None => return false };
-
-    let on_chain: Vec<shekyl_proofs::reserve_proof::ReserveOnChainOutput> = (0..n).map(|i| {
-        let mut ok = [0u8; 32];
-        let mut cm = [0u8; 32];
-        let mut ea = [0u8; 8];
-        ok.copy_from_slice(&ok_bytes[i * 32..(i + 1) * 32]);
-        cm.copy_from_slice(&cm_bytes[i * 32..(i + 1) * 32]);
-        ea.copy_from_slice(&ea_bytes[i * 8..(i + 1) * 8]);
-        shekyl_proofs::reserve_proof::ReserveOnChainOutput {
-            output_key: ok,
-            commitment: cm,
-            enc_amount: ea,
+    let addr = match slice_from_ptr(address, address_len) {
+        Some(v) => v,
+        None => return false,
+    };
+    let msg = if message_len == 0 {
+        &[] as &[u8]
+    } else {
+        match slice_from_ptr(message, message_len) {
+            Some(v) => v,
+            None => return false,
         }
-    }).collect();
+    };
+    let spk = match arr32_from_ptr(spend_pubkey) {
+        Some(v) => v,
+        None => return false,
+    };
+    let n = output_count as usize;
+    if total_amount_out.is_null() || n == 0 {
+        return false;
+    }
 
-    match shekyl_proofs::reserve_proof::verify_reserve_proof(
-        proof, addr, msg, &spk, &on_chain,
-    ) {
+    let ok_bytes = match slice_from_ptr(output_keys, n * 32) {
+        Some(v) => v,
+        None => return false,
+    };
+    let cm_bytes = match slice_from_ptr(commitments, n * 32) {
+        Some(v) => v,
+        None => return false,
+    };
+    let ea_bytes = match slice_from_ptr(enc_amounts, n * 8) {
+        Some(v) => v,
+        None => return false,
+    };
+
+    let on_chain: Vec<shekyl_proofs::reserve_proof::ReserveOnChainOutput> = (0..n)
+        .map(|i| {
+            let mut ok = [0u8; 32];
+            let mut cm = [0u8; 32];
+            let mut ea = [0u8; 8];
+            ok.copy_from_slice(&ok_bytes[i * 32..(i + 1) * 32]);
+            cm.copy_from_slice(&cm_bytes[i * 32..(i + 1) * 32]);
+            ea.copy_from_slice(&ea_bytes[i * 8..(i + 1) * 8]);
+            shekyl_proofs::reserve_proof::ReserveOnChainOutput {
+                output_key: ok,
+                commitment: cm,
+                enc_amount: ea,
+            }
+        })
+        .collect();
+
+    match shekyl_proofs::reserve_proof::verify_reserve_proof(proof, addr, msg, &spk, &on_chain) {
         Ok(verified) => {
             let total: u64 = verified.iter().map(|v| v.amount).sum();
             *total_amount_out = total;
@@ -4145,10 +4520,14 @@ mod tests {
     #[test]
     fn test_per_block_staker_reward_ffi() {
         let mut overflow = 0u8;
-        let q = shekyl_calc_per_block_staker_reward(1_000_000, 500_000, 2_000_000, 0, &mut overflow);
+        let q =
+            shekyl_calc_per_block_staker_reward(1_000_000, 500_000, 2_000_000, 0, &mut overflow);
         assert_eq!(overflow, 0);
         assert_eq!(q, 250_000);
-        assert_eq!(shekyl_calc_per_block_staker_reward(100, 0, 50, 0, std::ptr::null_mut()), 0);
+        assert_eq!(
+            shekyl_calc_per_block_staker_reward(100, 0, 50, 0, std::ptr::null_mut()),
+            0
+        );
         let q2 = shekyl_calc_per_block_staker_reward(10, 10, 1, 0, std::ptr::null_mut());
         assert_eq!(q2, 100);
     }
@@ -4221,13 +4600,38 @@ mod tests {
     #[test]
     fn test_burn_pct_ffi_matches_rust_impl() {
         let cases = [
-            (50u64, 50u64, 1_000_000u64, 4_294_967_296_000_000_000u64, 100_000u64, 500_000u64, 900_000u64),
-            (200, 50, 2_000_000_000_000_000_000, 4_294_967_296_000_000_000, 250_000, 500_000, 900_000),
-            (500, 50, 3_000_000_000_000_000_000, 4_294_967_296_000_000_000, 400_000, 500_000, 900_000),
+            (
+                50u64,
+                50u64,
+                1_000_000u64,
+                4_294_967_296_000_000_000u64,
+                100_000u64,
+                500_000u64,
+                900_000u64,
+            ),
+            (
+                200,
+                50,
+                2_000_000_000_000_000_000,
+                4_294_967_296_000_000_000,
+                250_000,
+                500_000,
+                900_000,
+            ),
+            (
+                500,
+                50,
+                3_000_000_000_000_000_000,
+                4_294_967_296_000_000_000,
+                400_000,
+                500_000,
+                900_000,
+            ),
         ];
         for (txv, base, circ, total, stake, rate, cap) in cases {
             let ffi = shekyl_calc_burn_pct(txv, base, circ, total, stake, rate, cap);
-            let direct = shekyl_economics::burn::calc_burn_pct(txv, base, circ, total, stake, rate, cap);
+            let direct =
+                shekyl_economics::burn::calc_burn_pct(txv, base, circ, total, stake, rate, cap);
             assert_eq!(ffi, direct);
         }
     }
@@ -4286,15 +4690,16 @@ mod tests {
     fn test_ssl_cert_generation_ecdsa() {
         let mut key_pem = ShekylBuffer::null();
         let mut cert_pem = ShekylBuffer::null();
-        let ok = shekyl_generate_ssl_certificate(
-            &mut key_pem,
-            &mut cert_pem,
-        );
+        let ok = shekyl_generate_ssl_certificate(&mut key_pem, &mut cert_pem);
         assert!(ok);
         assert!(!key_pem.ptr.is_null());
         assert!(!cert_pem.ptr.is_null());
-        let key_str = unsafe { std::str::from_utf8(std::slice::from_raw_parts(key_pem.ptr, key_pem.len)).unwrap() };
-        let cert_str = unsafe { std::str::from_utf8(std::slice::from_raw_parts(cert_pem.ptr, cert_pem.len)).unwrap() };
+        let key_str = unsafe {
+            std::str::from_utf8(std::slice::from_raw_parts(key_pem.ptr, key_pem.len)).unwrap()
+        };
+        let cert_str = unsafe {
+            std::str::from_utf8(std::slice::from_raw_parts(cert_pem.ptr, cert_pem.len)).unwrap()
+        };
         assert!(key_str.contains("BEGIN PRIVATE KEY"));
         assert!(cert_str.contains("BEGIN CERTIFICATE"));
         shekyl_buffer_free(key_pem.ptr, key_pem.len);
@@ -4388,8 +4793,12 @@ mod tests {
     #[test]
     fn test_frost_sal_session_new_null_returns_null() {
         let session = shekyl_frost_sal_session_new(
-            std::ptr::null(), std::ptr::null(), std::ptr::null(),
-            std::ptr::null(), std::ptr::null(), std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
         );
         assert!(session.is_null());
     }
@@ -4406,5 +4815,171 @@ mod tests {
         let buf = shekyl_frost_sal_get_rerand(std::ptr::null());
         assert!(buf.ptr.is_null());
         assert_eq!(buf.len, 0);
+    }
+
+    // ── Witness header round-trip tests ──────────────────────────────────
+    //
+    // Verifies that shekyl_fcmp_build_witness_header (writer) and
+    // parse_prove_witness (reader) agree byte-for-byte on all 8 header
+    // fields, using locked vectors from docs/test_vectors/WITNESS_HEADER.json.
+
+    #[derive(serde::Deserialize)]
+    struct WitnessHeaderVector {
+        output_key: String,
+        key_image_gen: String,
+        commitment: String,
+        h_pqc: String,
+        spend_key_x: String,
+        spend_key_y: String,
+        commitment_mask: String,
+        pseudo_out_blind: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct WitnessHeaderFile {
+        vectors: Vec<WitnessHeaderVector>,
+    }
+
+    fn decode_32(hex_str: &str, label: &str, vec_idx: usize) -> [u8; 32] {
+        let bytes = hex::decode(hex_str)
+            .unwrap_or_else(|_| panic!("vector {vec_idx}: invalid hex for {label}"));
+        bytes
+            .as_slice()
+            .try_into()
+            .unwrap_or_else(|_| panic!("vector {vec_idx}: {label} not 32 bytes"))
+    }
+
+    #[test]
+    fn witness_header_build_then_parse_roundtrip() {
+        let json = include_str!("../../../docs/test_vectors/WITNESS_HEADER.json");
+        let file: WitnessHeaderFile =
+            serde_json::from_str(json).expect("failed to parse WITNESS_HEADER.json");
+        assert!(
+            !file.vectors.is_empty(),
+            "no vectors in WITNESS_HEADER.json"
+        );
+
+        for (i, v) in file.vectors.iter().enumerate() {
+            let fields = ProveInputFields {
+                output_key: decode_32(&v.output_key, "output_key", i),
+                key_image_gen: decode_32(&v.key_image_gen, "key_image_gen", i),
+                commitment: decode_32(&v.commitment, "commitment", i),
+                h_pqc: decode_32(&v.h_pqc, "h_pqc", i),
+                spend_key_x: decode_32(&v.spend_key_x, "spend_key_x", i),
+                spend_key_y: decode_32(&v.spend_key_y, "spend_key_y", i),
+                commitment_mask: decode_32(&v.commitment_mask, "commitment_mask", i),
+                pseudo_out_blind: decode_32(&v.pseudo_out_blind, "pseudo_out_blind", i),
+            };
+
+            // Build: typed struct → 256-byte blob (same path as C++ FFI)
+            let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
+            let ok =
+                unsafe { shekyl_fcmp_build_witness_header(&fields as *const _, blob.as_mut_ptr()) };
+            assert!(
+                ok,
+                "vector {i}: shekyl_fcmp_build_witness_header returned false"
+            );
+            assert_eq!(blob.len(), 256, "vector {i}: blob not 256 bytes");
+
+            // Verify raw byte layout matches the field offsets
+            assert_eq!(
+                &blob[0..32],
+                fields.output_key.as_slice(),
+                "vector {i}: O mismatch in blob"
+            );
+            assert_eq!(
+                &blob[32..64],
+                fields.key_image_gen.as_slice(),
+                "vector {i}: I mismatch in blob"
+            );
+            assert_eq!(
+                &blob[64..96],
+                fields.commitment.as_slice(),
+                "vector {i}: C mismatch in blob"
+            );
+            assert_eq!(
+                &blob[96..128],
+                fields.h_pqc.as_slice(),
+                "vector {i}: h_pqc mismatch in blob"
+            );
+            assert_eq!(
+                &blob[128..160],
+                fields.spend_key_x.as_slice(),
+                "vector {i}: x mismatch in blob"
+            );
+            assert_eq!(
+                &blob[160..192],
+                fields.spend_key_y.as_slice(),
+                "vector {i}: y mismatch in blob"
+            );
+            assert_eq!(
+                &blob[192..224],
+                fields.commitment_mask.as_slice(),
+                "vector {i}: z mismatch in blob"
+            );
+            assert_eq!(
+                &blob[224..256],
+                fields.pseudo_out_blind.as_slice(),
+                "vector {i}: a mismatch in blob"
+            );
+
+            // Parse: 256-byte blob → ProveInput (same path as Rust FFI verifier).
+            // parse_prove_witness expects a full witness (header + leaf + branch data).
+            // We append a minimal valid trailer: 1 leaf entry + 0 branch layers.
+            let mut witness = blob.clone();
+            // leaf chunk_count = 1 (must have at least 1 to parse)
+            witness.extend_from_slice(&1u32.to_le_bytes());
+            // one leaf entry: 4 x 32 bytes (O, I, C, h_pqc)
+            witness.extend_from_slice(&fields.output_key);
+            witness.extend_from_slice(&fields.key_image_gen);
+            witness.extend_from_slice(&fields.commitment);
+            witness.extend_from_slice(&fields.h_pqc);
+            // c1_layer_count = 0
+            witness.extend_from_slice(&0u32.to_le_bytes());
+            // c2_layer_count = 0
+            witness.extend_from_slice(&0u32.to_le_bytes());
+
+            let parsed = parse_prove_witness(&witness, 1);
+            assert!(
+                parsed.is_some(),
+                "vector {i}: parse_prove_witness returned None"
+            );
+            let inputs = parsed.unwrap();
+            assert_eq!(inputs.len(), 1, "vector {i}: expected 1 input");
+            let pi = &inputs[0];
+
+            assert_eq!(
+                pi.output_key, fields.output_key,
+                "vector {i}: parsed O mismatch"
+            );
+            assert_eq!(
+                pi.key_image_gen, fields.key_image_gen,
+                "vector {i}: parsed I mismatch"
+            );
+            assert_eq!(
+                pi.commitment, fields.commitment,
+                "vector {i}: parsed C mismatch"
+            );
+            assert_eq!(
+                pi.h_pqc.0, fields.h_pqc,
+                "vector {i}: parsed h_pqc mismatch"
+            );
+            assert_eq!(
+                pi.spend_key_x, fields.spend_key_x,
+                "vector {i}: parsed x mismatch"
+            );
+            assert_eq!(
+                pi.spend_key_y, fields.spend_key_y,
+                "vector {i}: parsed y mismatch"
+            );
+            assert_eq!(
+                pi.commitment_mask, fields.commitment_mask,
+                "vector {i}: parsed z mismatch"
+            );
+            assert_eq!(
+                pi.pseudo_out_blind, fields.pseudo_out_blind,
+                "vector {i}: parsed a mismatch"
+            );
+        }
     }
 }

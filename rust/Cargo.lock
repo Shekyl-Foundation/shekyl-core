@@ -2725,6 +2725,7 @@ dependencies = [
  "dalek-ff-group 0.5.0",
  "ec-divisors",
  "helioselene",
+ "hex",
  "libc",
  "modular-frost",
  "multiexp",

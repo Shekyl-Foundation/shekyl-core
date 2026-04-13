@@ -81,4 +81,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_derive_output_secrets"
+path = "fuzz_targets/fuzz_derive_output_secrets.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

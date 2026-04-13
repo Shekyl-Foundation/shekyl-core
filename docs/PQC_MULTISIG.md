@@ -324,16 +324,30 @@ identity) and submits a spend transaction with `scheme_id = 1`, using one
 of the N individual keypairs to produce a valid single-signer hybrid
 signature.
 
-*Mitigation:* The output's ownership commitment must bind to the
-`multisig_group_id`, which includes `scheme_id`, `n_total`, `m_required`,
-and all N public keys. A `scheme_id = 1` spend produces a different
-ownership derivation and fails to match the output. The consensus layer
-must reject any spend where the spending `scheme_id` does not match the
-output's committed scheme.
+*Mitigation:* The FCMP++ curve tree leaf commits `h_pqc = H(hybrid_public_key)`
+where `H` is Blake2b-512 with domain separator `"shekyl-pqc-leaf"`. The
+canonical encoding of a multisig group key (2-byte header + N individual
+keys) differs structurally from a single-signer key (1996 bytes). A
+scheme downgrade would require `H(single_key_blob) == H(multisig_group_key_blob)`,
+which is a Blake2b-512 preimage attack — computationally infeasible.
 
-*Validation:* Hard reject in `tx_pqc_verify.cpp` before calling the Rust
-FFI. The output's ownership material determines the expected scheme — the
-spender cannot override it.
+The FCMP++ proof verifies `h_pqc` from the spending transaction's
+`pqc_auths[i].hybrid_public_key` against the curve tree leaf committed
+when the output was created. Key format consistency is further enforced
+by size checks in `tx_pqc_verify.cpp` (scheme_id=1 requires exactly
+1996 bytes; scheme_id=2 requires the multisig header format).
+
+*Why not `expected_scheme_id`?* The `verify_transaction_pqc_auth`
+two-argument overload with `expected_scheme_id` was designed before
+FCMP++ was finalized. Under FCMP++, the verifier cannot determine which
+output is being spent (that is the privacy guarantee), so it cannot look
+up the creating transaction's committed scheme. The `h_pqc` curve tree
+leaf binding provides strictly stronger protection: it binds to the
+*exact key bytes*, not just a scheme tag.
+
+*Validation:* FCMP++ proof verification in `blockchain.cpp` (h_pqc
+recomputed from `pqc_auths[i].hybrid_public_key` and checked against
+proof). Size-format consistency in `tx_pqc_verify.cpp`.
 
 **Attack 2: Signer index manipulation.**
 An attacker submits M signatures but manipulates `signer_indices` to map

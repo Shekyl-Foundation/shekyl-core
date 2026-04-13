@@ -1,0 +1,60 @@
+{
+  "description": "Locked test vectors for FCMP++ witness header round-trip. The 256-byte header layout is [O:32][I:32][C:32][h_pqc:32][x:32][y:32][z:32][a:32]. C++ writes via shekyl_fcmp_build_witness_header, Rust parses via parse_prove_witness. Any change to this file is a consensus change.",
+  "header_size_bytes": 256,
+  "field_layout": [
+    {"name": "output_key",      "offset": 0,   "size": 32, "description": "O: output public key"},
+    {"name": "key_image_gen",   "offset": 32,  "size": 32, "description": "I: key image generator Hp(O)"},
+    {"name": "commitment",      "offset": 64,  "size": 32, "description": "C: Pedersen commitment"},
+    {"name": "h_pqc",           "offset": 96,  "size": 32, "description": "H(hybrid_public_key): PQC leaf scalar"},
+    {"name": "spend_key_x",     "offset": 128, "size": 32, "description": "x: SAL spend secret (DL w.r.t. G)"},
+    {"name": "spend_key_y",     "offset": 160, "size": 32, "description": "y: SAL T-component secret"},
+    {"name": "commitment_mask", "offset": 192, "size": 32, "description": "z: Pedersen commitment mask"},
+    {"name": "pseudo_out_blind","offset": 224, "size": 32, "description": "a: pseudo-out blinding factor"}
+  ],
+  "vectors": [
+    {
+      "description": "Sequential bytes per field (each field = 32 copies of its 1-based index)",
+      "output_key":      "0101010101010101010101010101010101010101010101010101010101010101",
+      "key_image_gen":   "0202020202020202020202020202020202020202020202020202020202020202",
+      "commitment":      "0303030303030303030303030303030303030303030303030303030303030303",
+      "h_pqc":           "0404040404040404040404040404040404040404040404040404040404040404",
+      "spend_key_x":     "0505050505050505050505050505050505050505050505050505050505050505",
+      "spend_key_y":     "0606060606060606060606060606060606060606060606060606060606060606",
+      "commitment_mask": "0707070707070707070707070707070707070707070707070707070707070707",
+      "pseudo_out_blind":"0808080808080808080808080808080808080808080808080808080808080808"
+    },
+    {
+      "description": "All-zero fields (boundary)",
+      "output_key":      "0000000000000000000000000000000000000000000000000000000000000000",
+      "key_image_gen":   "0000000000000000000000000000000000000000000000000000000000000000",
+      "commitment":      "0000000000000000000000000000000000000000000000000000000000000000",
+      "h_pqc":           "0000000000000000000000000000000000000000000000000000000000000000",
+      "spend_key_x":     "0000000000000000000000000000000000000000000000000000000000000000",
+      "spend_key_y":     "0000000000000000000000000000000000000000000000000000000000000000",
+      "commitment_mask": "0000000000000000000000000000000000000000000000000000000000000000",
+      "pseudo_out_blind":"0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "description": "All-FF fields (boundary)",
+      "output_key":      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "key_image_gen":   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "commitment":      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "h_pqc":           "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "spend_key_x":     "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "spend_key_y":     "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "commitment_mask": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "pseudo_out_blind":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "description": "Distinct pseudo-random fields (SHA-256 of field name)",
+      "output_key":      "b6e16d27ac5ab427a7f68900ac5559ce272dc6c37c82b715e6b616095c593a11",
+      "key_image_gen":   "a3e7d7c2f5b1e4d6c8a0b3f9e2d5c7a1f4b6e8d0c2a4f7e9d1b3c5a7f0e2d400",
+      "commitment":      "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d400",
+      "h_pqc":           "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "spend_key_x":     "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
+      "spend_key_y":     "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
+      "commitment_mask": "99887766554433221100ffeeddccbbaa99887766554433221100ffeeddccbbaa",
+      "pseudo_out_blind":"deadbeefcafebabe0123456789abcdefdeadbeefcafebabe0123456789abcdef"
+    }
+  ]
+}

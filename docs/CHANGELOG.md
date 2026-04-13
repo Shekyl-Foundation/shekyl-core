@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### ✨ Added
+
+- **Fuzz target for `derive_output_secrets`.** New `fuzz_derive_output_secrets`
+  cargo-fuzz harness in `rust/shekyl-crypto-pq/fuzz/`. Exercises arbitrary
+  `combined_ss` inputs (up to 1200 bytes) and output indices; asserts
+  determinism, non-zero ho/y scalars, and absence of panics on
+  truncated/oversized input. Closes FOLLOWUPS.md fuzz-derivation item.
+
+- **Witness header round-trip test.** New `witness_header_build_then_parse_roundtrip`
+  test in `rust/shekyl-ffi/` with locked vectors in
+  `docs/test_vectors/WITNESS_HEADER.json`. Proves `shekyl_fcmp_build_witness_header`
+  (writer) and `parse_prove_witness` (reader) agree byte-for-byte on all 8
+  header fields `[O:32][I:32][C:32][h_pqc:32][x:32][y:32][z:32][a:32]`.
+  Closes FOLLOWUPS.md witness-roundtrip item.
+
+### 📚 Documentation
+
+- **y=0 consensus check resolved as infeasible.** Documented that a
+  consensus-level rejection of outputs with `y=0` T-component cannot be
+  implemented: the verifier does not know `y` (it is a KEM-derived secret)
+  and testing whether `O` lies in the G-only subgroup requires knowing the
+  DL between G and T. Defense is structural via `derive_output_secrets`
+  hard-assert and fuzz coverage. Closes FOLLOWUPS.md y=0-consensus item.
+
+- **scheme_id binding analysis corrected in `PQC_MULTISIG.md`.** The
+  `expected_scheme_id` parameter in `verify_transaction_pqc_auth` is unused
+  because FCMP++ hides which output is being spent. Scheme downgrade
+  protection is provided by the `h_pqc` curve tree leaf commitment —
+  the FCMP++ proof binds `H(hybrid_public_key)` to the leaf, making a
+  downgrade require a Blake2b-512 collision. Updated Attack 1 mitigation
+  description and `POST_QUANTUM_CRYPTOGRAPHY.md` accordingly.
+
 ### 📚 Documentation
 
 - **Cross-repo documentation audit.** Comprehensive review across all five

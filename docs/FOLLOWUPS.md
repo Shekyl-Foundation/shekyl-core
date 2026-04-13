@@ -79,23 +79,41 @@ Each item is out of scope for the current PR but worth tracking for future work.
   dead for Shekyl (no rings). A future cleanup should replace `gen_tx_src`
   with a direct FCMP++-style source entry constructor.
 
-- **Fuzz harness for `derive_output_secrets`.**
-  The `OutputSecrets` derivation path (`rust/shekyl-crypto-pq/src/derivation.rs`)
-  processes untrusted ciphertext and shared secret material. A dedicated
-  `cargo-fuzz` target should exercise malformed KEM ciphertexts, truncated
-  HKDF output, and boundary output indices (0, u32::MAX).
+- **~~Fuzz harness for `derive_output_secrets`.~~** RESOLVED.
+  Added `fuzz_derive_output_secrets` target in
+  `rust/shekyl-crypto-pq/fuzz/fuzz_targets/`. Asserts determinism,
+  non-zero ho/y for all non-empty combined_ss inputs, and no panics on
+  truncated/oversized inputs.
 
-- **Witness header round-trip test.**
-  The FCMP++ witness header (tree depth, reference block, branch data) is
-  serialized across the FFI boundary. A round-trip test that serializes a
-  header in Rust, deserializes in C++, and re-serializes should be added
-  to catch any endianness or padding mismatches.
+- **~~Witness header round-trip test.~~** RESOLVED.
+  Added `witness_header_build_then_parse_roundtrip` test in
+  `rust/shekyl-ffi/src/lib.rs` with locked vectors in
+  `docs/test_vectors/WITNESS_HEADER.json`. Verifies all 8 header fields
+  survive the build → blob → parse cycle byte-for-byte.
 
-- **y=0 consensus check for two-component output keys.**
-  The SAL secret `y` in two-component output keys `O = xG + yT` must not
-  be zero (this would collapse the key to a single-component key, breaking
-  FCMP++ circuit assumptions). A consensus-level check should reject
-  transactions where any output has `y == 0`.
+- **~~y=0 consensus check for two-component output keys.~~** RESOLVED (infeasible).
+  A consensus-level rejection of `y=0` outputs is not implementable: the
+  verifier sees only `O` on the chain and `y` is a secret derived from
+  the KEM shared secret. Testing whether `O` lies in the G-only subgroup
+  (i.e., `O = x*G` for some `x` with zero T-component) requires knowing
+  the discrete log relationship between G and T, which is unknown by
+  design. Defense is structural: (1) `derive_output_secrets` hard-asserts
+  `y != 0` (probability 2^-252 from honest HKDF), (2) `construct_output`
+  is the sole construction path, (3) `fuzz_derive_output_secrets` covers
+  the derivation with arbitrary inputs.
+
+- **~~scheme_id binding (`expected_scheme_id` unused).~~** RESOLVED (by design).
+  The `verify_transaction_pqc_auth` two-argument overload accepting
+  `expected_scheme_id` is never called with a value because FCMP++ hides
+  which output is being spent — the verifier cannot look up the creating
+  transaction's committed scheme. Scheme downgrade protection is provided
+  by the `h_pqc` curve tree leaf commitment: the FCMP++ proof binds the
+  spending key's `H(hybrid_public_key)` to the leaf committed at output
+  creation. A downgrade requires a Blake2b-512 collision between
+  structurally different key encodings (single-signer 1996 bytes vs.
+  multisig 2+N*1996 bytes), which is computationally infeasible.
+  See `PQC_MULTISIG.md` Attack 1 for the corrected analysis. The
+  `expected_scheme_id` parameter may be removed as dead code in V3.1.
 
 - **`docs/AUDIT_SCOPE.md` not yet created.**
   Referenced by `RELEASE_CHECKLIST.md` and `FCMP_PLUS_PLUS.md`. Must define
