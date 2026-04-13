@@ -415,6 +415,9 @@ complete (Phase 7 = CLSAG / dead code purge). Monero #10157 verification
 caching complete. BOOST_FOREACH CI guard added. `json_serialization` test
 reworked from stub to real FFI-based FCMP++ transaction construction.
 `rctSig` JSON serializer fixed to round-trip `message` and `referenceBlock`
-fields. `core_tests` FCMP++ proof verification failures documented in
-FOLLOWUPS.md. See `FCMP_BUILD_PLAN.md` for remaining Phases 8-9
-(multisig integration, testing/audit).*
+fields. `core_tests` FCMP++ proof verification failures fixed: added
+per-height `m_curve_tree_roots` LMDB table so that both prover and verifier
+read the correct historical tree root (replacing block-header placeholder).
+`compute_leaf_count_at_height` aligned with production `collect_outputs`.
+`vcpkg.json` manifest removed (broke MSVC CI). See `FCMP_BUILD_PLAN.md`
+for remaining Phases 8-9 (multisig integration, testing/audit).*

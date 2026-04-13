@@ -409,6 +409,8 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
       save_curve_tree_checkpoint(prev_height);
       prune_curve_tree_intermediate_layers(prev_height);
     }
+
+    store_curve_tree_root_at_height(prev_height + 1, get_curve_tree_root());
   }
 
   // call out to subclass implementation to add the block & metadata
@@ -467,6 +469,8 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
 
   if (blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
   {
+    remove_curve_tree_root_at_height(block_height);
+
     // With universal deferred insertion, only drained leaves are in the tree.
     // Read the drain journal to know how many to trim and what to restore.
     auto drain_entries = get_pending_tree_drain_entries(block_height);

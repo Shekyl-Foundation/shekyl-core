@@ -3677,11 +3677,9 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 
         *pmax_used_block_height = ref_height;
 
-        // Step 2: Curve tree root lookup
-        const block_header ref_hdr = m_db->get_block_header(rv.referenceBlock);
-        std::array<uint8_t, 32> tree_root{};
-        static_assert(sizeof(ref_hdr.curve_tree_root) == 32, "curve_tree_root must be 32 bytes");
-        memcpy(tree_root.data(), &ref_hdr.curve_tree_root, 32);
+        // Step 2: Curve tree root lookup (from per-height root table, not block header,
+        // because FAKECHAIN block headers carry placeholder roots from test_generator)
+        std::array<uint8_t, 32> tree_root = m_db->get_curve_tree_root_at_height(ref_height);
 
         // Step 3: Validate curve_trees_tree_depth
         const uint8_t current_depth = m_db->get_curve_tree_depth();

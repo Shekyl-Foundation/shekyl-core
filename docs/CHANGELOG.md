@@ -4,6 +4,23 @@
 
 ### 🐛 Fixed
 
+- **Fixed `core_tests` FCMP++ proof verification failures.**
+  `gen_fcmp_tx_valid`, `gen_fcmp_tx_double_spend`, and `gen_staking_lifecycle`
+  all failed with "FCMP++ proof verification failed" because test-chain block
+  headers carried a placeholder `curve_tree_root` (`selene_hash_init`) while
+  witness paths were assembled from the real LMDB tree. Added per-height curve
+  tree root storage (`m_curve_tree_roots` LMDB table) so both the prover and
+  verifier read the correct historical root for any reference block height.
+  Also aligned `compute_leaf_count_at_height` in `chaingen.cpp` with production
+  `collect_outputs` logic (output-type filtering and `outPk` bounds checks).
+
+- **Reverted `vcpkg.json` manifest that broke MSVC CI.**
+  Commit `397817b` introduced a `vcpkg.json` with `"builtin-baseline": null`,
+  which caused the MSVC CI job to fail (vcpkg auto-detected the manifest and
+  rejected the null baseline). The CI workflow already manages vcpkg
+  dependencies via explicit CLI invocation. Deleted the manifest to restore
+  the working state.
+
 - **Restored and upgraded `JsonSerialization.FcmpPlusPlusTransaction` test.**
   Replaced ring-style `make_transaction` with `make_fcmp_transaction()` that
   constructs a real v3 FCMP++ transaction via the full Rust FFI signing

@@ -258,6 +258,7 @@ const char* const LMDB_CURVE_TREE_LEAVES = "curve_tree_leaves";
 const char* const LMDB_CURVE_TREE_LAYERS = "curve_tree_layers";
 const char* const LMDB_CURVE_TREE_META   = "curve_tree_meta";
 const char* const LMDB_CURVE_TREE_CHECKPOINTS = "curve_tree_checkpoints";
+const char* const LMDB_CURVE_TREE_ROOTS = "curve_tree_roots";
 
 const char* const LMDB_OUTPUT_METADATA = "output_metadata";
 
@@ -1587,6 +1588,7 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   lmdb_db_open(txn, LMDB_CURVE_TREE_LAYERS, MDB_INTEGERKEY | MDB_CREATE, m_curve_tree_layers, "Failed to open db handle for m_curve_tree_layers");
   lmdb_db_open(txn, LMDB_CURVE_TREE_META,   MDB_CREATE, m_curve_tree_meta, "Failed to open db handle for m_curve_tree_meta");
   lmdb_db_open(txn, LMDB_CURVE_TREE_CHECKPOINTS, MDB_INTEGERKEY | MDB_CREATE, m_curve_tree_checkpoints, "Failed to open db handle for m_curve_tree_checkpoints");
+  lmdb_db_open(txn, LMDB_CURVE_TREE_ROOTS, MDB_INTEGERKEY | MDB_CREATE, m_curve_tree_roots, "Failed to open db handle for m_curve_tree_roots");
 
   lmdb_db_open(txn, LMDB_OUTPUT_METADATA, MDB_INTEGERKEY | MDB_CREATE, m_output_metadata, "Failed to open db handle for m_output_metadata");
 
@@ -5734,6 +5736,47 @@ bool BlockchainLMDB::get_curve_tree_leaf(uint64_t global_output_index, uint8_t* 
     memcpy(leaf_out, v.mv_data, CT_LEAF_SIZE);
   TXN_POSTFIX_RDONLY();
   return found;
+}
+
+void BlockchainLMDB::store_curve_tree_root_at_height(uint64_t block_height, const std::array<uint8_t, 32>& root)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  MDB_val k = {sizeof(block_height), (void *)&block_height};
+  MDB_val v = {root.size(), (void *)root.data()};
+  int result = mdb_put(*m_write_txn, m_curve_tree_roots, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to store curve tree root at height: ", result).c_str()));
+}
+
+std::array<uint8_t, 32> BlockchainLMDB::get_curve_tree_root_at_height(uint64_t block_height) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  MDB_val k = {sizeof(block_height), (void *)&block_height};
+  MDB_val v;
+  int result = mdb_get(m_txn, m_curve_tree_roots, &k, &v);
+  std::array<uint8_t, 32> root{};
+  if (result == 0 && v.mv_size == 32)
+    memcpy(root.data(), v.mv_data, 32);
+  else if (result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Error looking up curve tree root at height: ", result).c_str()));
+  TXN_POSTFIX_RDONLY();
+  return root;
+}
+
+void BlockchainLMDB::remove_curve_tree_root_at_height(uint64_t block_height)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  MDB_val k = {sizeof(block_height), (void *)&block_height};
+  int result = mdb_del(*m_write_txn, m_curve_tree_roots, &k, nullptr);
+  if (result && result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to remove curve tree root at height: ", result).c_str()));
 }
 
 void BlockchainLMDB::save_curve_tree_checkpoint(uint64_t block_height)

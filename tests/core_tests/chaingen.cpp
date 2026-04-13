@@ -166,6 +166,10 @@ namespace
     virtual bool get_curve_tree_layer_hash(uint8_t, uint64_t, uint8_t*) const override { return false; }
     virtual bool get_curve_tree_leaf(uint64_t, uint8_t*) const override { return false; }
 
+    virtual void store_curve_tree_root_at_height(uint64_t, const std::array<uint8_t, 32>&) override {}
+    virtual std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t) const override { return {}; }
+    virtual void remove_curve_tree_root_at_height(uint64_t) override {}
+
     virtual void save_curve_tree_checkpoint(uint64_t) override {}
     virtual bool get_curve_tree_checkpoint(uint64_t, std::vector<uint8_t>&) const override { return false; }
     virtual uint64_t get_latest_curve_tree_checkpoint_height() const override { return 0; }
@@ -1472,6 +1476,46 @@ transaction construct_tx_with_fee(std::vector<test_event_entry>& events, const b
   return tx;
 }
 
+// Mirrors production collect_outputs() in blockchain_db.cpp: only counts
+// outputs with recognized vout types that also have an outPk entry (commitment).
+static uint64_t count_eligible_outputs(const cryptonote::transaction& tx, bool is_miner, uint64_t block_height)
+{
+  uint64_t count = 0;
+  for (uint64_t i = 0; i < tx.vout.size(); ++i)
+  {
+    const auto& vout = tx.vout[i];
+
+    uint64_t maturity;
+    if (std::holds_alternative<cryptonote::txout_to_tagged_key>(vout.target))
+    {
+      maturity = is_miner
+          ? block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
+          : block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+    }
+    else if (std::holds_alternative<cryptonote::txout_to_key>(vout.target))
+    {
+      maturity = is_miner
+          ? block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
+          : block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+    }
+    else if (std::holds_alternative<cryptonote::txout_to_staked_key>(vout.target))
+    {
+      const auto& staked = std::get<cryptonote::txout_to_staked_key>(vout.target);
+      uint64_t lock_until = block_height + shekyl_stake_lock_blocks(staked.lock_tier);
+      maturity = std::max(lock_until, block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE);
+    }
+    else
+      continue;
+
+    if (i >= tx.rct_signatures.outPk.size())
+      continue;
+
+    (void)maturity;
+    ++count;
+  }
+  return count;
+}
+
 static uint64_t compute_leaf_count_at_height(
     cryptonote::core& c, uint64_t target_height)
 {
@@ -1484,10 +1528,12 @@ static uint64_t compute_leaf_count_at_height(
     cryptonote::block blk = db.get_block_from_height(h);
     const uint64_t block_height = h + 1;
 
-    // Coinbase outputs
-    uint64_t coinbase_maturity = block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
-    if (coinbase_maturity <= target_height + 1)
-      leaf_count += blk.miner_tx.vout.size();
+    // Coinbase: count eligible outputs and check maturity
+    {
+      uint64_t coinbase_maturity = block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
+      if (coinbase_maturity <= target_height + 1)
+        leaf_count += count_eligible_outputs(blk.miner_tx, true, block_height);
+    }
 
     // Non-coinbase tx outputs
     for (const auto& tx_hash : blk.tx_hashes)
@@ -1495,17 +1541,27 @@ static uint64_t compute_leaf_count_at_height(
       cryptonote::transaction tx;
       if (!db.get_tx(tx_hash, tx))
         continue;
-      for (const auto& vout : tx.vout)
+
+      for (uint64_t i = 0; i < tx.vout.size(); ++i)
       {
+        const auto& vout = tx.vout[i];
+
         uint64_t mat;
-        if (std::holds_alternative<cryptonote::txout_to_staked_key>(vout.target))
+        if (std::holds_alternative<cryptonote::txout_to_tagged_key>(vout.target))
+          mat = block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+        else if (std::holds_alternative<cryptonote::txout_to_key>(vout.target))
+          mat = block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+        else if (std::holds_alternative<cryptonote::txout_to_staked_key>(vout.target))
         {
           const auto& staked = std::get<cryptonote::txout_to_staked_key>(vout.target);
           uint64_t lock_until = block_height + shekyl_stake_lock_blocks(staked.lock_tier);
           mat = std::max(lock_until, block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE);
         }
         else
-          mat = block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+          continue;
+
+        if (i >= tx.rct_signatures.outPk.size())
+          continue;
 
         if (mat <= target_height + 1)
           ++leaf_count;
@@ -1704,16 +1760,18 @@ static bool apply_fcmp_pipeline(
   uint64_t ref_height = chain_height - 1 - FCMP_REFERENCE_BLOCK_MIN_AGE;
   reference_block = bs.get_block_id_by_height(ref_height);
 
-  block ref_blk;
-  CHECK_AND_ASSERT_MES(bs.get_block_by_hash(reference_block, ref_blk), false,
-    "construct_fcmp_tx: cannot fetch reference block");
   rct::key curve_tree_root;
-  memcpy(curve_tree_root.bytes, &ref_blk.curve_tree_root, 32);
+  {
+    auto stored_root = db.get_curve_tree_root_at_height(ref_height);
+    memcpy(curve_tree_root.bytes, stored_root.data(), 32);
+  }
 
   const uint64_t ref_leaf_count = compute_leaf_count_at_height(c, ref_height);
   LOG_PRINT_L1("construct_fcmp_tx: ref_height=" << ref_height
     << " ref_leaf_count=" << ref_leaf_count
-    << " current_leaf_count=" << db.get_curve_tree_leaf_count());
+    << " current_leaf_count=" << db.get_curve_tree_leaf_count()
+    << " tree_depth=" << (int)tree_depth
+    << " curve_tree_root=" << epee::string_tools::pod_to_hex(curve_tree_root));
 
   static constexpr size_t HYBRID_KEM_CT_BYTES = 1120;
   static constexpr size_t X25519_SK_BYTES = 32;
@@ -1866,6 +1924,10 @@ static bool apply_fcmp_pipeline(
 
     // Assemble tree path for this output's global index
     uint64_t global_idx = matched_src->outputs[matched_src->real_output].first;
+    LOG_PRINT_L1("construct_fcmp_tx: vin " << i
+      << " global_idx=" << global_idx
+      << " key_image=" << epee::string_tools::pod_to_hex(std::get<txin_to_key>(tx.vin[i]).k_image)
+      << " h_pqc=" << epee::string_tools::pod_to_hex(pqc_pk_hashes[i]));
     CHECK_AND_ASSERT_MES(assemble_tree_path_for_output(db, global_idx, ref_leaf_count, tree_paths[i]), false,
       "construct_fcmp_tx: tree path assembly failed for global_idx " << global_idx);
 

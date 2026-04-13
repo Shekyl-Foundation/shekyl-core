@@ -2061,6 +2061,32 @@ public:
    */
   virtual bool get_curve_tree_leaf(uint64_t global_output_index, uint8_t* leaf_out) const = 0;
 
+  // ─── FCMP++ Per-Height Curve Tree Root ──────────────────────────────────
+
+  /**
+   * @brief store the current curve tree root keyed by block height.
+   *
+   * Called after every block addition so that historical tree roots can be
+   * looked up by height during FCMP++ proof construction and verification
+   * (where the reference block's tree root is needed, not the current tip).
+   */
+  virtual void store_curve_tree_root_at_height(uint64_t block_height, const std::array<uint8_t, 32>& root) = 0;
+
+  /**
+   * @brief retrieve the curve tree root that was current at a given height.
+   *
+   * @param block_height  the height to look up
+   * @return 32-byte root hash (all-zero if no entry exists)
+   */
+  virtual std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t block_height) const = 0;
+
+  /**
+   * @brief remove the stored curve tree root for a given height.
+   *
+   * Called during pop_block to keep the table consistent with chain state.
+   */
+  virtual void remove_curve_tree_root_at_height(uint64_t block_height) = 0;
+
   // ─── FCMP++ Curve Tree Checkpoints & Pruning ─────────────────────────────
 
   /**

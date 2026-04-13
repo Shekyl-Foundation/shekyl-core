@@ -466,6 +466,10 @@ private:
   virtual bool get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const override;
   virtual bool get_curve_tree_leaf(uint64_t global_output_index, uint8_t* leaf_out) const override;
 
+  virtual void store_curve_tree_root_at_height(uint64_t block_height, const std::array<uint8_t, 32>& root) override;
+  virtual std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t block_height) const override;
+  virtual void remove_curve_tree_root_at_height(uint64_t block_height) override;
+
   virtual void save_curve_tree_checkpoint(uint64_t block_height) override;
   virtual bool get_curve_tree_checkpoint(uint64_t block_height, std::vector<uint8_t>& checkpoint_data) const override;
   virtual uint64_t get_latest_curve_tree_checkpoint_height() const override;
@@ -550,6 +554,7 @@ private:
   MDB_dbi m_curve_tree_layers;    // (layer_idx << 56 | chunk_idx) -> 32 bytes hash
   MDB_dbi m_curve_tree_meta;      // key string -> value (root, leaf_count, depth)
   MDB_dbi m_curve_tree_checkpoints; // block_height -> serialized checkpoint (root + depth + leaf_count)
+  MDB_dbi m_curve_tree_roots;       // block_height -> 32-byte curve tree root (one entry per block)
 
   MDB_dbi m_output_metadata;      // global_output_index -> output_pruning_metadata_t
 

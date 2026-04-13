@@ -129,16 +129,19 @@ Each item is out of scope for the current PR but worth tracking for future work.
   4-scalar leaf circuit security audit. Referenced by `RELEASE_CHECKLIST.md`
   and `FCMP_PLUS_PLUS.md`.
 
-- **`core_tests` FCMP++ proof verification failures (3 tests).**
-  `gen_fcmp_tx_valid`, `gen_fcmp_tx_double_spend`, and `gen_staking_lifecycle`
-  fail with "FCMP++ proof verification failed." The proof IS generated
-  (non-empty) by `genRctFcmpPlusPlus` → `shekyl_fcmp_prove`, but
-  `shekyl_fcmp_verify` rejects it during blockchain replay. Likely a
-  witness/parameter mismatch in `apply_fcmp_pipeline` (chaingen.cpp lines
-  1662-1960) — possibly tree root, key image normalization, or PQC hash
-  computation differences between prover and verifier. This is a
-  pre-existing bug, not introduced by the test infrastructure rework.
-  Requires its own investigation PR.
+- **~~`core_tests` FCMP++ proof verification failures (3 tests).~~** RESOLVED.
+  Root cause: `test_generator::construct_block` set `blk.curve_tree_root` to
+  `shekyl_curve_tree_selene_hash_init()` (a fixed placeholder), not the real
+  Merkle root from the DB. FAKECHAIN skipped the root check, so block headers
+  were stored with placeholder roots. `apply_fcmp_pipeline` read the placeholder
+  root from the reference block header but assembled witness paths from the real
+  LMDB tree — causing an inconsistent proof that verification rejected.
+  Fix: added per-height curve tree root storage (`m_curve_tree_roots` LMDB
+  table) that records the real root at every block height. Both the prover
+  (`apply_fcmp_pipeline`) and verifier (`check_tx_inputs`) now read the root
+  from this table instead of block headers. Also aligned
+  `compute_leaf_count_at_height` with production `collect_outputs` logic
+  (output-type and `outPk` bounds checks).
 
 ---
 
