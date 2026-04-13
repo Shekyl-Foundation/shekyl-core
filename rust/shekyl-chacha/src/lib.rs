@@ -71,11 +71,11 @@ pub fn encrypt_with_aad(
 
     let mut nonce_bytes = [0u8; NONCE_SIZE];
     OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = chacha20poly1305::XNonce::from_slice(&nonce_bytes);
+    let nonce = chacha20poly1305::XNonce::from(nonce_bytes);
 
     let cipher = XChaCha20Poly1305::new(key.into());
     let ct = cipher
-        .encrypt(nonce, Payload { msg: plaintext, aad })
+        .encrypt(&nonce, Payload { msg: plaintext, aad })
         .expect("encryption should never fail with valid key/nonce");
 
     let mut out = Vec::with_capacity(NONCE_SIZE + ct.len());
@@ -96,12 +96,15 @@ pub fn decrypt_with_aad(
     if data.len() < NONCE_SIZE + TAG_SIZE {
         return Err(AeadError::AuthenticationFailed);
     }
-    let nonce = chacha20poly1305::XNonce::from_slice(&data[..NONCE_SIZE]);
+    let nonce_bytes: [u8; NONCE_SIZE] = data[..NONCE_SIZE]
+        .try_into()
+        .map_err(|_| AeadError::AuthenticationFailed)?;
+    let nonce = chacha20poly1305::XNonce::from(nonce_bytes);
     let ciphertext_and_tag = &data[NONCE_SIZE..];
 
     let cipher = XChaCha20Poly1305::new(key.into());
     cipher
-        .decrypt(nonce, Payload { msg: ciphertext_and_tag, aad })
+        .decrypt(&nonce, Payload { msg: ciphertext_and_tag, aad })
         .map_err(|_| AeadError::AuthenticationFailed)
 }
 

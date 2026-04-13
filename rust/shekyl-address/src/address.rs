@@ -76,15 +76,13 @@ pub struct ShekylAddress {
     pub ml_kem_encap_key: Vec<u8>,
 }
 
-fn bech32m_encode(hrp: &Hrp, data: &[u8]) -> Result<String, AddressError> {
-    let s: String = data
-        .iter()
+fn bech32m_encode(hrp: &Hrp, data: &[u8]) -> String {
+    data.iter()
         .copied()
         .bytes_to_fes()
         .with_checksum::<Bech32m>(hrp)
         .chars()
-        .collect();
-    Ok(s)
+        .collect()
 }
 
 fn bech32m_decode(encoded: &str) -> Result<(Hrp, Vec<u8>), AddressError> {
@@ -129,8 +127,8 @@ impl ShekylAddress {
         let hrp_a = parse_hrp(network::pqc_a_hrp(self.network))?;
         let hrp_b = parse_hrp(network::pqc_b_hrp(self.network))?;
 
-        let pqc_a = bech32m_encode(&hrp_a, &self.ml_kem_encap_key[..PQC_SPLIT])?;
-        let pqc_b = bech32m_encode(&hrp_b, &self.ml_kem_encap_key[PQC_SPLIT..])?;
+        let pqc_a = bech32m_encode(&hrp_a, &self.ml_kem_encap_key[..PQC_SPLIT]);
+        let pqc_b = bech32m_encode(&hrp_b, &self.ml_kem_encap_key[PQC_SPLIT..]);
 
         Ok(format!("{classical}{SEGMENT_SEPARATOR}{pqc_a}{SEGMENT_SEPARATOR}{pqc_b}"))
     }
@@ -146,7 +144,7 @@ impl ShekylAddress {
         payload.push(self.version);
         payload.extend_from_slice(&self.spend_key);
         payload.extend_from_slice(&self.view_key);
-        bech32m_encode(&hrp, &payload)
+        Ok(bech32m_encode(&hrp, &payload))
     }
 
     /// Decode a Shekyl address from its encoded form.

@@ -21,6 +21,7 @@ use crate::params::SCALE;
 /// over whole years plus a fractional-year correction.
 ///
 /// Returns a fixed-point value in SCALE (e.g., 150_000 = 15%).
+#[allow(clippy::cast_possible_truncation)]
 pub fn calc_effective_emission_share(
     current_height: u64,
     genesis_height: u64,
@@ -37,9 +38,9 @@ pub fn calc_effective_emission_share(
     let remaining_blocks = elapsed % blocks_per_year;
 
     // Apply annual decay for each whole year: share *= (decay/SCALE) per year
-    let mut share = initial_share as u128;
-    let decay = annual_decay as u128;
-    let scale = SCALE as u128;
+    let mut share = u128::from(initial_share);
+    let decay = u128::from(annual_decay);
+    let scale = u128::from(SCALE);
 
     for _ in 0..whole_years {
         share = share * decay / scale;
@@ -55,8 +56,8 @@ pub fn calc_effective_emission_share(
     //        = share - share * (SCALE - decay) * remaining_blocks / (SCALE * blocks_per_year)
     if remaining_blocks > 0 {
         let decay_delta = scale - decay; // how much is lost per year
-        let fractional_loss = share * decay_delta * remaining_blocks as u128
-            / (scale * blocks_per_year as u128);
+        let fractional_loss = share * decay_delta * u128::from(remaining_blocks)
+            / (scale * u128::from(blocks_per_year));
         share = share.saturating_sub(fractional_loss);
     }
 
@@ -66,6 +67,7 @@ pub fn calc_effective_emission_share(
 /// Split block emission between miner and staker pool.
 ///
 /// Returns (miner_emission, staker_emission).
+#[allow(clippy::cast_possible_truncation)]
 pub fn split_block_emission(
     block_emission: u64,
     effective_share: u64,
@@ -73,7 +75,7 @@ pub fn split_block_emission(
     if effective_share == 0 || block_emission == 0 {
         return (block_emission, 0);
     }
-    let staker = (block_emission as u128 * effective_share as u128 / SCALE as u128) as u64;
+    let staker = (u128::from(block_emission) * u128::from(effective_share) / u128::from(SCALE)) as u64;
     let miner = block_emission.saturating_sub(staker);
     (miner, staker)
 }

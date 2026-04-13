@@ -116,8 +116,8 @@ where
     c_blind: PointWithDlog<Parameters>,
     C: (Variable, Variable),
 
-    extra_leaf_vars: Vec<Variable>,
-    extra_leaf_public_values: Vec<C::F>,
+    extra_leaf_vars: &[Variable],
+    extra_leaf_public_values: &[C::F],
 
     branch: Vec<Vec<Variable>>,
   ) {
@@ -164,7 +164,7 @@ where
 
     // Membership tuple: x-coordinates of O, I, C plus any extra leaf scalars
     let mut member = vec![O.x(), I.x(), C.x()];
-    member.extend(extra_leaf_vars.iter().cloned());
+    member.extend(extra_leaf_vars.iter().copied());
     self.tuple_member_of_list(transcript, member, branch);
   }
 

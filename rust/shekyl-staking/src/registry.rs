@@ -12,9 +12,10 @@ pub struct StakeEntry {
 }
 
 impl StakeEntry {
+    #[allow(clippy::cast_possible_truncation)] // CLIPPY: product / SCALE fits in u64 by design
     pub fn weight(&self) -> u64 {
         let tier = tier_by_id(self.tier_id).unwrap_or(&crate::tiers::TIERS[0]);
-        ((self.amount as u128 * tier.yield_multiplier as u128) / SCALE as u128) as u64
+        ((u128::from(self.amount) * u128::from(tier.yield_multiplier)) / u128::from(SCALE)) as u64
     }
 
     pub fn is_unlocked(&self, current_height: u64) -> bool {
@@ -57,16 +58,17 @@ impl StakeRegistry {
     }
 
     pub fn total_weighted_stake(&self) -> u128 {
-        self.entries.iter().map(|e| e.weight() as u128).sum()
+        self.entries.iter().map(|e| u128::from(e.weight())).sum()
     }
 
     /// Compute stake_ratio = total_staked / circulating_supply (fixed-point SCALE).
+    #[allow(clippy::cast_possible_truncation)] // CLIPPY: ratio <= SCALE which fits in u64
     pub fn stake_ratio(&self, circulating_supply: u64) -> u64 {
         if circulating_supply == 0 {
             return 0;
         }
         let staked = self.total_staked();
-        (staked as u128 * SCALE as u128 / circulating_supply as u128) as u64
+        (u128::from(staked) * u128::from(SCALE) / u128::from(circulating_supply)) as u64
     }
 
     /// Remove stakes that have expired and return them.

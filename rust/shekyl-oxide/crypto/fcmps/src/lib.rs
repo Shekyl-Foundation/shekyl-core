@@ -422,8 +422,8 @@ where
       opening.c_blind_claim,
       opening.C,
       //
-      opening.extra_leaf_vars.clone(),
-      input.extra_leaf_scalars.clone(),
+      &opening.extra_leaf_vars,
+      &input.extra_leaf_scalars,
       //
       // If the leaves are the only layer, the root branch is the leaves
       // Else, the first C1 branch is the leaves

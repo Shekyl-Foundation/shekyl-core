@@ -14,7 +14,7 @@
 //!              checks the version byte first, preventing a side channel where an
 //!              attacker could learn auth-failure vs. version-failure ordering.
 
-use shekyl_chacha::{encrypt_with_aad, decrypt_with_aad};
+use shekyl_chacha::{decrypt_with_aad, encrypt_with_aad};
 
 fn test_key() -> [u8; 32] {
     [0xABu8; 32]
@@ -59,7 +59,10 @@ fn round_trip_succeeds() {
 
     assert_eq!(code, 0, "round-trip should succeed");
     assert_eq!(pt, plaintext, "recovered plaintext must match");
-    eprintln!("[Gate 2] basic round-trip passed: {} bytes", plaintext.len());
+    eprintln!(
+        "[Gate 2] basic round-trip passed: {} bytes",
+        plaintext.len()
+    );
 }
 
 #[test]
@@ -95,8 +98,7 @@ fn version_check_before_aead_decryption() {
     assert_eq!(
         code, -1,
         "sub-case A2: version mismatch MUST be detected before AEAD auth check. \
-         Got error code {} (expected -1, would get -2 if decryption ran first)",
-        code
+         Got error code {code} (expected -1, would get -2 if decryption ran first)",
     );
     eprintln!("[Gate 2] sub-case A2: version mismatch detected before corrupted AEAD → -1");
 }

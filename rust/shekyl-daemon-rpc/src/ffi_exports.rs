@@ -19,14 +19,18 @@ pub struct ShekylDaemonRpcHandle {
 
 /// Start the Axum daemon RPC server on a dedicated Tokio runtime.
 ///
-/// `rpc_server_ptr`: pointer to an initialized `core_rpc_server`.
-/// `bind_addr`: "ip:port" to listen on (C string).
-/// `restricted`: true to block admin-only endpoints.
-///
 /// Returns an opaque handle, or null on failure. Caller must eventually call
 /// `shekyl_daemon_rpc_stop` to shut down.
+///
+/// # Safety
+///
+/// - `rpc_server_ptr` must be a valid pointer to an initialized `core_rpc_server`,
+///   or null (returns null immediately).
+/// - `bind_addr` must be a valid null-terminated C string, or null (returns null).
+/// - The pointed-to `core_rpc_server` must remain alive for the lifetime of the
+///   returned handle.
 #[no_mangle]
-pub extern "C" fn shekyl_daemon_rpc_start(
+pub unsafe extern "C" fn shekyl_daemon_rpc_start(
     rpc_server_ptr: *mut std::ffi::c_void,
     bind_addr: *const c_char,
     restricted: bool,
@@ -38,7 +42,7 @@ pub extern "C" fn shekyl_daemon_rpc_start(
         return std::ptr::null_mut();
     }
 
-    let bind = match unsafe { std::ffi::CStr::from_ptr(bind_addr) }.to_str() {
+    let bind = match std::ffi::CStr::from_ptr(bind_addr).to_str() {
         Ok(s) => s.to_owned(),
         Err(_) => {
             DAEMON_RPC_RUNNING.store(false, Ordering::SeqCst);
@@ -46,7 +50,7 @@ pub extern "C" fn shekyl_daemon_rpc_start(
         }
     };
 
-    let core = match unsafe { crate::core::CoreRpc::from_raw(rpc_server_ptr) } {
+    let core = match crate::core::CoreRpc::from_raw(rpc_server_ptr) {
         Some(c) => std::sync::Arc::new(c),
         None => {
             DAEMON_RPC_RUNNING.store(false, Ordering::SeqCst);
@@ -90,20 +94,25 @@ pub extern "C" fn shekyl_daemon_rpc_start(
 }
 
 /// Stop the Axum daemon RPC server and release all resources.
+///
+/// # Safety
+///
+/// - `handle` must be a pointer returned by `shekyl_daemon_rpc_start`, or null
+///   (no-op). Each handle must be stopped exactly once.
 #[no_mangle]
-pub extern "C" fn shekyl_daemon_rpc_stop(handle: *mut ShekylDaemonRpcHandle) {
+pub unsafe extern "C" fn shekyl_daemon_rpc_stop(handle: *mut ShekylDaemonRpcHandle) {
     if handle.is_null() {
         return;
     }
-    let handle = unsafe { Box::from_raw(handle) };
+    let handle = Box::from_raw(handle);
 
     if !handle.shutdown.is_null() {
-        let notify = unsafe { std::sync::Arc::from_raw(handle.shutdown) };
+        let notify = std::sync::Arc::from_raw(handle.shutdown);
         notify.notify_one();
     }
 
     if !handle.rt.is_null() {
-        let rt = unsafe { Box::from_raw(handle.rt as *mut tokio::runtime::Runtime) };
+        let rt = Box::from_raw(handle.rt as *mut tokio::runtime::Runtime);
         rt.shutdown_background();
     }
 

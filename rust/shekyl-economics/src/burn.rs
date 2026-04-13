@@ -42,6 +42,7 @@ pub struct BurnSplit {
 ///
 /// # Returns
 /// Burn percentage in fixed-point SCALE units (e.g. 400_000 = 40%).
+#[allow(clippy::cast_possible_truncation)]
 pub fn calc_burn_pct(
     tx_volume: u64,
     tx_baseline: u64,
@@ -57,13 +58,13 @@ pub fn calc_burn_pct(
 
     // sqrt(tx_volume / tx_baseline) scaled to SCALE
     // = sqrt(tx_volume * SCALE^2 / tx_baseline) but we do it step by step
-    let volume_ratio_scaled = (tx_volume as u128 * SCALE as u128 * SCALE as u128
-        / tx_baseline as u128) as u64;
+    let volume_ratio_scaled = (u128::from(tx_volume) * u128::from(SCALE) * u128::from(SCALE)
+        / u128::from(tx_baseline)) as u64;
     let sqrt_volume = isqrt(volume_ratio_scaled); // result is in SCALE units
 
     // circulating_supply / total_supply scaled to SCALE
     let supply_ratio =
-        (circulating_supply as u128 * SCALE as u128 / total_supply as u128) as u64;
+        (u128::from(circulating_supply) * u128::from(SCALE) / u128::from(total_supply)) as u64;
 
     // (1 + stake_ratio) in SCALE units
     let stake_factor = SCALE.saturating_add(stake_ratio);

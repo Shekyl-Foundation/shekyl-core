@@ -21,8 +21,7 @@ impl ConsensusRegistry {
         let name = module.name().to_string();
         if self.modules.contains_key(&name) {
             return Err(ConsensusError::UnknownProofType(format!(
-                "module '{}' already registered",
-                name
+                "module '{name}' already registered",
             )));
         }
         if self.active_module.is_none() {
@@ -35,8 +34,7 @@ impl ConsensusRegistry {
     pub fn set_active(&mut self, name: &str) -> Result<(), ConsensusError> {
         if !self.modules.contains_key(name) {
             return Err(ConsensusError::UnknownProofType(format!(
-                "module '{}' not registered",
-                name
+                "module '{name}' not registered",
             )));
         }
         self.active_module = Some(name.to_string());
@@ -47,15 +45,15 @@ impl ConsensusRegistry {
         self.active_module
             .as_ref()
             .and_then(|name| self.modules.get(name))
-            .map(|m| m.as_ref())
+            .map(AsRef::as_ref)
     }
 
     pub fn get(&self, name: &str) -> Option<&dyn ConsensusProof> {
-        self.modules.get(name).map(|m| m.as_ref())
+        self.modules.get(name).map(AsRef::as_ref)
     }
 
     pub fn list_modules(&self) -> Vec<&str> {
-        self.modules.keys().map(|k| k.as_str()).collect()
+        self.modules.keys().map(String::as_str).collect()
     }
 }
 

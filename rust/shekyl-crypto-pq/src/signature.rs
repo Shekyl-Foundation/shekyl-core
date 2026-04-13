@@ -58,6 +58,8 @@ impl HybridPublicKey {
         Ok(())
     }
 
+    // CLIPPY: lengths validated by `self.validate()` against constants that fit in u32.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, CryptoError> {
         self.validate()?;
 
@@ -113,6 +115,8 @@ impl HybridSecretKey {
         Ok(())
     }
 
+    // CLIPPY: lengths validated by `self.validate()` against constants that fit in u32.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, CryptoError> {
         self.validate()?;
 
@@ -168,6 +172,8 @@ impl HybridSignature {
         Ok(())
     }
 
+    // CLIPPY: lengths validated by `self.validate()` against constants that fit in u32.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, CryptoError> {
         self.validate()?;
 
