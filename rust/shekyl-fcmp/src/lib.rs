@@ -40,3 +40,11 @@ pub const DOMAIN_KEM_V1: &[u8] = b"shekyl-kem-v1";
 
 /// Maximum inputs per FCMP++ transaction (bounds proof gen time and tx size).
 pub const MAX_INPUTS: usize = 8;
+
+/// Maximum tree depth the protocol supports.
+///
+/// With Selene chunk width 38 and Helios chunk width 18, a depth-24 tree
+/// can index over 10^30 outputs -- far beyond any realistic anonymity set
+/// even at Bitcoin-scale adoption. This bound prevents unreasonable
+/// resource consumption during proving and caps proof size.
+pub const MAX_TREE_DEPTH: u8 = 24;

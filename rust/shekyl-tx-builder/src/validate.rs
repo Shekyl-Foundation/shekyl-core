@@ -8,7 +8,11 @@ use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, SpendInput, TreeContext};
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
 
-/// Validate all inputs, outputs, tree context, and fee before proof generation.
+/// Prover-side input validation for FCMP++ signing.
+///
+/// Validates the witness shape before proof construction. The verifier side
+/// does not check c1/c2 counts explicitly -- the proof structure implicitly
+/// enforces depth through the serialized transcript layout.
 ///
 /// Returns `Ok(())` if all preconditions hold, or the first failing
 /// [`TxBuilderError`] variant.
@@ -66,6 +70,9 @@ pub(crate) fn validate_inputs(
     if tree.tree_depth == 0 {
         return Err(TxBuilderError::ZeroTreeDepth);
     }
+    if tree.tree_depth > shekyl_fcmp::MAX_TREE_DEPTH {
+        return Err(TxBuilderError::TreeDepthTooLarge(tree.tree_depth));
+    }
 
     let selene_chunk_width = shekyl_fcmp::SELENE_CHUNK_WIDTH;
 
@@ -86,10 +93,15 @@ pub(crate) fn validate_inputs(
         // The FCMP++ tree alternates Selene (C1) and Helios (C2) layers.
         // Layer 0 is always the leaf hash (Selene); branch layers sit above it.
         // For depth d: c1_count + c2_count + 1 == d.
+        // Even-indexed branches are C1, odd-indexed are C2, so c1 == c2 or
+        // c1 == c2 + 1.
         let c1 = inp.c1_layers.len();
         let c2 = inp.c2_layers.len();
         let depth = tree.tree_depth as usize;
-        if c1 + c2 + 1 != depth {
+        let branch_count = depth.saturating_sub(1);
+        let expected_c1 = (branch_count + 1) / 2;
+        let expected_c2 = branch_count / 2;
+        if c1 != expected_c1 || c2 != expected_c2 {
             return Err(TxBuilderError::BranchLayerMismatch {
                 index: i,
                 c1,

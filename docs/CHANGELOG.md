@@ -28,13 +28,19 @@
 
 ### 🐛 Fixed
 
-- **FCMP++ branch layer validation off-by-one in `shekyl-tx-builder`.** The
-  `BranchLayerMismatch` check in `validate.rs` required `c1 + c2 == depth`
-  but the FCMP++ tree convention is `c1 + c2 + 1 == depth` (layer 0 is the
-  leaf hash, which needs no branch entry). This prevented valid depth=1 trees
-  from passing validation and silently accepted incorrect branch counts for
-  deeper trees. Fixed the check, updated the error docs, and corrected the
-  dummy test fixtures.
+- **[CONSENSUS-ADJACENT] Branch layer depth validation off-by-one in
+  `shekyl-tx-builder`.** The rule `c1 + c2 == depth` was corrected to
+  `c1 + c2 + 1 == depth` (layer 0 is the leaf hash and has no branch
+  entry). The previous rule incorrectly rejected valid witnesses at
+  depth=1 and accepted structurally wrong branch counts at all other
+  depths. Discovered by the FFI signing round-trip test introduced in
+  this release. Verifier side verified: uses proof-structure-implicit
+  depth enforcement (no explicit c1/c2 check needed). Additionally,
+  validation now enforces the spec-correct C1/C2 alternation split
+  (`c1 == c2` or `c1 == c2 + 1`), the error.rs doc was corrected
+  (previously stated the relationship backwards), and `MAX_TREE_DEPTH=24`
+  was added as a named constant in `shekyl-fcmp` with enforcement in both
+  prover and verifier. See FOLLOWUPS.md for the full audit trail.
 
 ### ✅ Testing
 

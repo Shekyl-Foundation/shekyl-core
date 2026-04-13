@@ -43,3 +43,38 @@ Each item is out of scope for the current PR but worth tracking for future work.
   entries. This is legacy test infrastructure that works but is conceptually
   dead for Shekyl (no rings). A future cleanup should replace `gen_tx_src`
   with a direct FCMP++-style source entry constructor.
+
+---
+
+## Completed audit trail
+
+- **Branch layer depth formula correction (April 12, 2026).**
+  `shekyl-tx-builder` validation rule corrected from `c1 + c2 == depth`
+  to `c1 + c2 + 1 == depth` (commit 03d233652). Discovered by the FFI
+  signing round-trip test (Phase 6). Autopsy: old tests used depth=2
+  with c1=1, c2=1 -- structurally wrong for a depth-2 tree but happened
+  to satisfy the wrong formula. Two errors cancelled: wrong fixture +
+  wrong rule = passing test that tests nothing. Depth=1 was never tested
+  before Phase 6.
+
+  Verifier-side check: not needed -- `shekyl-fcmp::proof::verify` uses
+  proof-structure-implicit depth enforcement (branch data embedded in
+  proof blob; verifier replays transcript using `tree_depth` as layer
+  count). Both prover and verifier reject depth=0.
+
+  Hardening applied:
+  - `MAX_TREE_DEPTH=24` constant added to `shekyl-fcmp::lib` (single
+    source of truth), enforced in both `shekyl-tx-builder::validate_inputs`
+    and `shekyl-fcmp::proof::verify`.
+  - C1/C2 alternation constraint now enforced in `validate_inputs`
+    (previously only total count was checked). The `error.rs` doc was
+    corrected -- it previously stated `c2 == c1 or c2 == c1 + 1` but
+    the protocol requires `c1 == c2 or c1 == c2 + 1` (C1 at even
+    indices, C2 at odd).
+  - Parametric depth sweep test covers `1..=MAX_TREE_DEPTH` plus
+    rejection at `MAX_TREE_DEPTH + 1`.
+  - All test fixtures in `shekyl-tx-builder/src/tests.rs` corrected to
+    be spec-derived (c1/c2 split computed from depth per the tower
+    alternation rule, not pasted from observed behavior).
+  - Testing rule added to `.cursor/rules/40-testing.mdc`: fixtures must
+    be spec-derived, not behavior-derived.

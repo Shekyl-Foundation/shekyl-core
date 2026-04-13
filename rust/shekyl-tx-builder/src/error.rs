@@ -6,6 +6,7 @@
 //! (crypto errors).
 
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
+use shekyl_fcmp::MAX_TREE_DEPTH;
 
 /// Structured error covering every failure mode in transaction signing.
 ///
@@ -72,11 +73,17 @@ pub enum TxBuilderError {
     #[error("tree depth is 0")]
     ZeroTreeDepth,
 
+    /// The tree depth exceeds the protocol maximum.
+    #[error("tree depth {0} exceeds maximum {MAX_TREE_DEPTH}")]
+    TreeDepthTooLarge(u8),
+
     /// The number of C1/C2 branch layers is inconsistent with the tree depth.
     ///
     /// For a tree of depth `d`, each input must have `c1 + c2 == d - 1` total
     /// branch layers (the leaf hash at layer 0 needs no branch entry).
-    /// Additionally, `c2 == c1` or `c2 == c1 + 1`.
+    /// The FCMP++ tower alternates Selene (C1) at even indices and Helios (C2)
+    /// at odd indices, so `c1 == c2` (odd branch count) or `c1 == c2 + 1`
+    /// (even branch count).
     #[error("input {index} has {c1} C1 layers and {c2} C2 layers, inconsistent with tree depth {depth}")]
     BranchLayerMismatch {
         index: usize,

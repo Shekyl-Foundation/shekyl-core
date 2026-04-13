@@ -9,7 +9,7 @@
 //! a public input verified in-circuit against the 4th leaf scalar.
 
 use crate::leaf::PqcLeafScalar;
-use crate::MAX_INPUTS;
+use crate::{MAX_INPUTS, MAX_TREE_DEPTH};
 use thiserror::Error;
 use zeroize::Zeroize;
 
@@ -81,6 +81,9 @@ pub enum VerifyError {
 
     #[error("batch verification failed")]
     BatchVerificationFailed,
+
+    #[error("tree depth {0} exceeds maximum {MAX_TREE_DEPTH}")]
+    TreeDepthTooLarge(u8),
 }
 
 /// A serialized FCMP++ proof blob (opaque to C++ callers).
@@ -552,6 +555,9 @@ pub fn verify(
     if proof.tree_depth != tree_depth {
         return Err(VerifyError::InvalidTreeRoot);
     }
+    if tree_depth > MAX_TREE_DEPTH {
+        return Err(VerifyError::TreeDepthTooLarge(tree_depth));
+    }
 
     let layers = tree_depth as usize;
 
@@ -905,6 +911,28 @@ mod tests {
             &[0; 32], 0, [0; 32],
         );
         assert!(result.is_err(), "tree depth 0 should be rejected");
+    }
+
+    #[test]
+    fn verify_rejects_tree_depth_above_max() {
+        let bad_depth = MAX_TREE_DEPTH + 1;
+        let proof = ShekylFcmpProof {
+            data: vec![0; 100],
+            num_inputs: 1,
+            tree_depth: bad_depth,
+        };
+        let result = verify(
+            &proof,
+            &[[0; 32]],
+            &[[0; 32]],
+            &[PqcLeafScalar([0; 32])],
+            &[0; 32], bad_depth, [0; 32],
+        );
+        assert!(
+            matches!(result, Err(VerifyError::TreeDepthTooLarge(d)) if d == bad_depth),
+            "tree depth {} should be rejected as exceeding MAX_TREE_DEPTH ({})",
+            bad_depth, MAX_TREE_DEPTH,
+        );
     }
 
     #[test]
