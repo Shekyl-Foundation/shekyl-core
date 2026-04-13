@@ -28,6 +28,11 @@
 
 ### 🗑️ Removed
 
+- **`tests/unit_tests/address_from_url.cpp` deleted.** The test referenced
+  `MONERO_DONATION_ADDR` (removed constant) and tested Monero OpenAlias DNS
+  resolution against `donate.getmonero.org`. Both the constant and the DNS
+  endpoint are irrelevant to Shekyl; the test broke the macOS CI build.
+
 - **`simplewallet` (shekyl-wallet-cli) deleted.** The 9,126-line C++ interactive
   wallet REPL has been removed. Its replacement, `shekyl-cli` (Rust), was
   already at full parity for all actively-used commands. Removed
