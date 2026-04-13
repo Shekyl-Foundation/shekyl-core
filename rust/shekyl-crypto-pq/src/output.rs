@@ -253,7 +253,7 @@ pub fn construct_output(
     // --- PQC keypair ---
 
     let (pqc_pk, _pqc_sk) = keygen_from_seed_bytes(&secrets.ml_dsa_seed)?;
-    let h_pqc = hash_pqc_public_key(&pqc_pk);
+    let h_pqc = compute_hybrid_h_pqc(&secrets)?;
 
     Ok(OutputData {
         output_key,
@@ -390,7 +390,7 @@ pub fn scan_output(
     // --- PQC keypair derivation ---
 
     let (pqc_pk, pqc_sk) = keygen_from_seed_bytes(&secrets.ml_dsa_seed)?;
-    let h_pqc = hash_pqc_public_key(&pqc_pk);
+    let h_pqc = compute_hybrid_h_pqc(&secrets)?;
 
     Ok(ScannedOutput {
         y: secrets.y,
@@ -554,7 +554,7 @@ pub fn scan_output_recover(
 
     // --- PQC keypair derivation ---
     let (pqc_pk, pqc_sk) = keygen_from_seed_bytes(&secrets.ml_dsa_seed)?;
-    let h_pqc = hash_pqc_public_key(&pqc_pk);
+    let h_pqc = compute_hybrid_h_pqc(&secrets)?;
 
     Ok(RecoveredOutput {
         ho: secrets.ho,
@@ -954,6 +954,32 @@ fn keygen_from_seed_bytes(ml_dsa_seed: &[u8; 32]) -> Result<(Vec<u8>, Vec<u8>), 
     let pk_bytes: Vec<u8> = pk.into_bytes().to_vec();
     let sk_bytes: Vec<u8> = sk.into_bytes().to_vec();
     Ok((pk_bytes, sk_bytes))
+}
+
+/// Compute h_pqc from the full hybrid public key (Ed25519 + ML-DSA),
+/// matching what the verifier computes from `tx.pqc_auths[i].hybrid_public_key`.
+fn compute_hybrid_h_pqc(secrets: &OutputSecrets) -> Result<[u8; 32], CryptoError> {
+    use crate::signature::HybridPublicKey;
+    use ed25519_dalek::SigningKey;
+
+    let (ml_pk, _ml_sk) = keygen_from_seed(&secrets.ml_dsa_seed)?;
+
+    let ed_signing = SigningKey::from_bytes(&secrets.ed25519_pqc_seed);
+    let ed_verifying = ed_signing.verifying_key();
+
+    let hybrid_pk = HybridPublicKey {
+        ed25519: ed_verifying.to_bytes(),
+        ml_dsa: {
+            use fips204::traits::SerDes;
+            ml_pk.into_bytes().to_vec()
+        },
+    };
+
+    let pk_bytes = hybrid_pk
+        .to_canonical_bytes()
+        .map_err(|e| CryptoError::KeyGenerationFailed(format!("hybrid PK encoding: {e}")))?;
+
+    Ok(hash_pqc_public_key(&pk_bytes))
 }
 
 #[cfg(test)]
@@ -1363,22 +1389,23 @@ mod tests {
             .expect("verify must not error");
         assert!(ok, "signature must verify");
 
-        // h_pqc from construct must match what sign produces
+        // h_pqc from construct/scan must match what the verifier computes
+        // from the signing path's hybrid public key.
         let h_pqc_from_sign = crate::derivation::hash_pqc_public_key(&auth.hybrid_public_key);
         assert_eq!(
             scanned.h_pqc, out.h_pqc,
             "scanner h_pqc must match sender h_pqc"
         );
-        // The h_pqc from the hybrid signing pk WILL differ because
-        // construct_output hashes only the ML-DSA pk, while the signing
-        // path produces a full hybrid pk. The curve tree leaf uses h_pqc
-        // from the hybrid pk canonical encoding.
-        let _ = h_pqc_from_sign; // reserved for future assertion when leaf format settles
+        assert_eq!(
+            out.h_pqc, h_pqc_from_sign,
+            "construct h_pqc must match hash of signing hybrid pk"
+        );
     }
 
     #[test]
-    fn h_pqc_matches_pqc_leaf_scalar() {
-        use crate::derivation::hash_pqc_public_key;
+    fn h_pqc_matches_hybrid_pk_hash() {
+        use crate::derivation::{derive_pqc_leaf_hash, hash_pqc_public_key};
+        use crate::kem::combine_shared_secrets;
 
         let kem = HybridX25519MlKem;
         let (pk, sk) = kem.keypair_generate().unwrap();
@@ -1389,10 +1416,12 @@ mod tests {
             .to_bytes();
 
         let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 500, 0).unwrap();
-        let h_pqc_direct = hash_pqc_public_key(&out.pqc_public_key);
-        assert_eq!(
-            out.h_pqc, h_pqc_direct,
-            "h_pqc from construct must match direct hash"
+
+        // h_pqc must NOT equal hash of just ML-DSA pk (that was the old bug)
+        let h_pqc_ml_dsa_only = hash_pqc_public_key(&out.pqc_public_key);
+        assert_ne!(
+            out.h_pqc, h_pqc_ml_dsa_only,
+            "h_pqc must hash the full hybrid pk, not just ML-DSA"
         );
 
         let scanned = scan_output(
@@ -1413,6 +1442,24 @@ mod tests {
         assert_eq!(
             scanned.h_pqc, out.h_pqc,
             "scanner h_pqc must match sender h_pqc"
+        );
+
+        // Also verify via derive_pqc_leaf_hash (the standalone derivation path)
+        let x_secret = StaticSecret::from(sk.x25519);
+        let x_eph_pub = X25519PublicKey::from(out.kem_ciphertext_x25519);
+        let x25519_raw_ss = x_secret.diffie_hellman(&x_eph_pub);
+        let dk_bytes: [u8; ML_KEM_768_DK_LEN] = sk.ml_kem.as_slice().try_into().unwrap();
+        let dk = ml_kem_768::DecapsKey::try_from_bytes(dk_bytes).unwrap();
+        let ct_bytes: [u8; ML_KEM_768_CT_LEN] =
+            out.kem_ciphertext_ml_kem.as_slice().try_into().unwrap();
+        let ct = ml_kem_768::CipherText::try_from_bytes(ct_bytes).unwrap();
+        let ml_ss = dk.try_decaps(&ct).unwrap();
+        let combined_ss =
+            combine_shared_secrets(x25519_raw_ss.as_bytes(), &ml_ss.into_bytes()).unwrap();
+        let h_pqc_derived = derive_pqc_leaf_hash(&combined_ss.0, 0).unwrap();
+        assert_eq!(
+            out.h_pqc, h_pqc_derived,
+            "h_pqc must match derive_pqc_leaf_hash"
         );
     }
 
