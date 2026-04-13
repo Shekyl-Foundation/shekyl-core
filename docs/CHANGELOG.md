@@ -180,6 +180,11 @@
   first-party consumers, leaked `do_not_relay` transactions, and its tests had
   been broken for 82+ consecutive CI runs, polluting the test signal during
   the FCMP++ migration. Ports 11025/12025/13025 are now reserved.
+  Re-audit follow-up: removed stale `#include "rpc/daemon_messages.h"` and
+  two ZMQ-schema-dependent tests (`DaemonInfo`, `HandlerFromJson`) from
+  `json_serialization.cpp`, and fixed daemon link order (`rpc` after
+  `${SHEKYL_DAEMON_RPC_LINK_LIBS}`) to resolve circular FFI back-references
+  previously satisfied transitively through `daemon_rpc_server`.
 
 - **`wallet/api/` C++ wrapper layer deleted (~3,900 lines).** The
   `src/wallet/api/` directory (22 files) wrapped `wallet2` for GUI consumption.

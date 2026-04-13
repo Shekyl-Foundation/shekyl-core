@@ -60,6 +60,7 @@ target_link_libraries(daemon
     version
     ${SHEKYL_FFI_LINK_LIBS}
     ${SHEKYL_DAEMON_RPC_LINK_LIBS}
+    rpc
     ${Boost_CHRONO_LIBRARY}
     ${Boost_FILESYSTEM_LIBRARY}
     ${Boost_PROGRAM_OPTIONS_LIBRARY}
