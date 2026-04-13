@@ -79,6 +79,23 @@ Each item is out of scope for the current PR but worth tracking for future work.
   dead for Shekyl (no rings). A future cleanup should replace `gen_tx_src`
   with a direct FCMP++-style source entry constructor.
 
+- **MSVC daemon builds are unsupported; CryptonightR JIT stub is permanent.**
+  The `CryptonightR_JIT_stub.c` disables JIT PoW compilation on MSVC. The
+  interpreter fallback is significantly slower. CMake enforces
+  `BUILD_WALLET_ONLY=ON` by default on MSVC with a `FATAL_ERROR` gate for
+  daemon builds. The JIT stub's safety depends on `use_v4_jit()` checking
+  `__x86_64__` (GCC/Clang only), not `_M_X64` (MSVC). If MSVC daemon builds
+  become needed, the JIT must be reimplemented for MSVC or the stub must be
+  replaced with an interpreter-only path that doesn't risk abort. See
+  `CryptonightR_JIT_stub.c` and `slow-hash.c:use_v4_jit()` for the full
+  safety chain documentation.
+
+- **Original `feature/msvc-wallet-core` branch archived.**
+  The 43-commit debugging history is preserved at tag
+  `archive/feature-msvc-wallet-core-2026-04-13`. The tag was created before
+  branch deletion. Anyone investigating future MSVC build issues should
+  check there for the ICE diagnosis sequence.
+
 ---
 
 ## Completed audit trail

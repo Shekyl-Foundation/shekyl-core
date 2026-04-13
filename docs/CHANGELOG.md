@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### 🔒 Security
+
+- **CMake: MSVC defaults to wallet-only build.** `BUILD_WALLET_ONLY=ON` is
+  now automatic when MSVC is detected. Attempting to build the daemon with
+  MSVC hits `FATAL_ERROR` unless overridden with
+  `-DMSVC_DAEMON_UNSUPPORTED_OK=ON`. CryptonightR JIT is disabled on MSVC
+  (stub returns -1), making PoW verification significantly slower.
+
+### 📚 Documentation
+
+- **CryptonightR JIT stub safety chain documented.** The stub header and
+  `use_v4_jit()` `#else` branch now explain the full safety chain: MSVC
+  lands in the interpreter path because `use_v4_jit()` checks `__x86_64__`
+  (GCC/Clang), not `_M_X64` (MSVC). Future maintainers are warned not to
+  "fix" the guard without replacing the stub.
+- **`feature/msvc-wallet-core` archived.** The original 43-commit debugging
+  history is at tag `archive/feature-msvc-wallet-core-2026-04-13`. All MSVC
+  portability code was already on `dev`; only the CMake guard and safety
+  documentation were new.
+
 ## [core-v3.1.0] - 2026-04-13
 
 ### 🔄 Changed

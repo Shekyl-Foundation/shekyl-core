@@ -71,3 +71,34 @@ No other CVEs have been filed against LMDB core (`mdb.c`, `lmdb.h`) as of April 
 ### Compilation
 
 LMDB is compiled via `external/db_drivers/liblmdb/CMakeLists.txt`. It is statically linked into all Shekyl executables that use `BlockchainLMDB`. No external LMDB shared library is used.
+
+---
+
+## vcpkg Overlay Port: LMDB
+
+### Location
+
+`vcpkg-overlay/ports/lmdb/`
+
+### Purpose
+
+Custom vcpkg port for LMDB used by the Windows MSVC build. The upstream
+vcpkg LMDB port does not build correctly with the project's CMake
+configuration. This overlay provides a patched build that:
+
+- Builds LMDB as a static library with vcpkg's triplet system
+- Patches `mdb_dump.c`, `mdb_load.c`, `mdb_stat.c` for MSVC compatibility
+  (`getopt.h` instead of `unistd.h`, `ssize_t` typedef)
+- Exports `unofficial::lmdb::lmdb` CMake target
+
+### Version
+
+LMDB 0.9.33 (tracks `LMDB/lmdb` GitHub mirror, `LMDB_0.9.33` tag).
+
+### Maintenance
+
+When updating the vendored LMDB in `external/db_drivers/liblmdb/`, check
+whether the vcpkg overlay port version also needs updating. The two are
+independent copies: the vendored one is compiled directly by CMake for all
+platforms; the vcpkg overlay is used only on MSVC builds via
+`--overlay-ports`.
