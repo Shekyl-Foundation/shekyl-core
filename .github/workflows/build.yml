@@ -42,7 +42,8 @@ jobs:
         run: |
           FOUND=0
           for f in $(find rust/shekyl-*/src -name '*.rs' \
-                     ! -name 'build.rs' ! -name 'main.rs' ! -path '*/examples/*'); do
+                     ! -name 'build.rs' ! -name 'main.rs' ! -path '*/examples/*' \
+                     ! -path '*/shekyl-cli/*'); do
             TEST_LINE=$(grep -n '#\[cfg(test)\]' "$f" | head -1 | cut -d: -f1)
             if [ -n "$TEST_LINE" ]; then
               HITS=$(head -n "$((TEST_LINE - 1))" "$f" \

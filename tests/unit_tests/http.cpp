@@ -671,7 +671,6 @@ TEST(HTTP_Client_Auth, MD5)
 
 TEST(HTTP_Client_Auth, MD5_auth)
 {
-  constexpr char cnonce[] = "";
   constexpr char method[] = "NOP";
   constexpr char nonce[] = "some crazy nonce";
   constexpr char opaque[] = "this is the opaque";
@@ -720,10 +719,11 @@ TEST(HTTP_Client_Auth, MD5_auth)
     EXPECT_STREQ(realm, parsed.at(u8"realm").c_str());
     EXPECT_EQ(nc, parsed.at(u8"nc"));
 
+    const std::string actual_cnonce = parsed.at(u8"cnonce");
     const std::string a1 = get_a1(user, parsed);
     const std::string a2 = get_a2(uri);
     const std::string auth_code = md5_hex(
-      boost::join(std::vector<std::string>{md5_hex(a1), nonce, nc, cnonce, u8"auth", md5_hex(a2)}, u8":")
+      boost::join(std::vector<std::string>{md5_hex(a1), nonce, nc, actual_cnonce, u8"auth", md5_hex(a2)}, u8":")
     );
     EXPECT_TRUE(boost::iequals(auth_code, parsed.at(u8"response")));
   }

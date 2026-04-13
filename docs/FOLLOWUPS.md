@@ -38,6 +38,22 @@ Each item is out of scope for the current PR but worth tracking for future work.
   `eprintln!` is idiomatic for this pattern. No change needed unless the sim
   gains a long-running mode where structured logging is warranted.
 
+- **10 unit tests skipped: require FCMP++ non-coinbase transaction construction.**
+  `JsonSerialization.BulletproofPlusTransaction`, 8 `zmq_pub` txpool tests,
+  and `zmq_server.pub` are `GTEST_SKIP`'d because `test::make_transaction`
+  builds ring-style source entries incompatible with v3/FCMP++. To restore:
+  rewrite `make_transaction` to construct FCMP++ transactions with proper
+  curve-tree witnesses, or build a mock FCMP++ tx fixture. Tracked as
+  prerequisite for full ZMQ test coverage.
+
+- **Genesis TX blobs use zero-filled `enc_amounts`/`outPk`.**
+  The regenerated v3 genesis blobs carry all-zero encrypted amounts and
+  Pedersen commitments. This is structurally valid for parsing/hashing but
+  means the genesis coinbase outputs are not cryptographically real. Before
+  mainnet launch, regenerate using `build_genesis_coinbase_from_destinations`
+  with proper PQC-enabled miner addresses to produce real commitments and
+  KEM ciphertexts.
+
 - **Test code `wallet_tools.cpp` still uses mixin/decoy infrastructure.**
   The `gen_tx_src` function constructs fake outputs for ring-style source
   entries. This is legacy test infrastructure that works but is conceptually
