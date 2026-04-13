@@ -1229,8 +1229,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::rctSig& 
   };
 
   INSERT_INTO_JSON_OBJECT(dest, type, sig.type);
-  // enc_amounts and outPk are serialized for both RCTTypeNull (v3 coinbase)
-  // and RCTTypeFcmpPlusPlusPqc, matching the binary wire format in rctTypes.h.
+  INSERT_INTO_JSON_OBJECT(dest, message, sig.message);
   if (!sig.enc_amounts.empty())
     INSERT_INTO_JSON_OBJECT(dest, enc_amounts, sig.enc_amounts);
   if (!sig.outPk.empty())
@@ -1238,6 +1237,7 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::rctSig& 
   if (sig.type == rct::RCTTypeFcmpPlusPlusPqc)
   {
     INSERT_INTO_JSON_OBJECT(dest, fee, sig.txnFee);
+    INSERT_INTO_JSON_OBJECT(dest, referenceBlock, sig.referenceBlock);
   }
 
   // prunable
@@ -1268,6 +1268,8 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
   }
 
   GET_FROM_JSON_OBJECT(val, sig.type, type);
+  if (val.HasMember("message"))
+    GET_FROM_JSON_OBJECT(val, sig.message, message);
   if (val.HasMember("enc_amounts"))
     GET_FROM_JSON_OBJECT(val, sig.enc_amounts, enc_amounts);
   if (val.HasMember("commitments"))
@@ -1275,6 +1277,8 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
   if (sig.type == rct::RCTTypeFcmpPlusPlusPqc)
   {
     GET_FROM_JSON_OBJECT(val, sig.txnFee, fee);
+    if (val.HasMember("referenceBlock"))
+      GET_FROM_JSON_OBJECT(val, sig.referenceBlock, referenceBlock);
   }
 
   // prunable

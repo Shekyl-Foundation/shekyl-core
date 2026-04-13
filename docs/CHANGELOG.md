@@ -4,12 +4,23 @@
 
 ### 🐛 Fixed
 
-- **Restored `JsonSerialization.BulletproofPlusTransaction` test.** Replaced
-  ring-style `make_transaction` with `make_v3_transaction_stub()` that builds
-  a structurally valid v3 transaction (BulletproofPlus type with tagged key
-  outputs and PQC auth stubs) for JSON serialization round-trip testing.
-  Deprecated `wallet_tools::gen_tx_src` with migration note pointing to the
-  FCMP++ pipeline in `chaingen.cpp`.
+- **Restored and upgraded `JsonSerialization.FcmpPlusPlusTransaction` test.**
+  Replaced ring-style `make_transaction` with `make_fcmp_transaction()` that
+  constructs a real v3 FCMP++ transaction via the full Rust FFI signing
+  pipeline: KEM keypair generation, output construction, scan-and-recover,
+  curve tree leaf/root building, FCMP++ proof signing and verification, and
+  PQC auth signing. The test now exercises real cryptographic operations
+  (not stubs) before round-tripping through JSON serialization. Deprecated
+  `wallet_tools::gen_tx_src` with migration note pointing to the FCMP++
+  pipeline in `chaingen.cpp`.
+
+- **Fixed `rctSig` JSON serializer missing `message` and `referenceBlock`.**
+  The JSON round-trip for `rct::rctSig` did not serialize the `message` field
+  (tx prefix hash) or the `referenceBlock` field (for `RCTTypeFcmpPlusPlusPqc`).
+  Both are part of the binary wire format in `rctTypes.h` but were silently
+  lost during JSON serialization. Added `message` to all rctSig JSON output
+  and `referenceBlock` for FCMP++ transactions. Discovered by the
+  `FcmpPlusPlusTransaction` JSON round-trip test.
 
 - **`on_get_curve_tree_path` RPC consistency fix.** The RPC handler read
   `leaf_count` from tip state but returned a `reference_block` several blocks

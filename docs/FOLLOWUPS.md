@@ -35,10 +35,15 @@ Each item is out of scope for the current PR but worth tracking for future work.
   gains a long-running mode where structured logging is warranted.
 
 - **~~1 unit test skipped: requires FCMP++ non-coinbase transaction construction.~~** RESOLVED.
-  `JsonSerialization.BulletproofPlusTransaction` restored using
-  `make_v3_transaction_stub()` which builds a structurally valid v3
-  transaction for JSON serialization round-trip testing. The old ring-style
-  `make_transaction` was replaced.
+  `JsonSerialization.FcmpPlusPlusTransaction` restored using
+  `make_fcmp_transaction()` which builds a real v3 FCMP++ transaction via
+  the full Rust FFI signing pipeline: KEM keypair generation, output
+  construction, scan-and-recover, curve tree leaf+root building, FCMP++
+  proof signing (`shekyl_sign_fcmp_transaction`), proof verification
+  (`shekyl_fcmp_verify`), and PQC auth signing (`shekyl_sign_pqc_auth`).
+  The resulting transaction struct is populated with real cryptographic
+  data (key images, commitments, proof blobs, PQC public keys and
+  signatures) and round-tripped through JSON serialization.
 
 - **Genesis TX blobs use zero-filled `enc_amounts`/`outPk`.**
   The regenerated v3 genesis blobs carry all-zero encrypted amounts and
@@ -123,6 +128,17 @@ Each item is out of scope for the current PR but worth tracking for future work.
   `docs/AUDIT_SCOPE.md` created (April 12, 2026). Defines scope for the
   4-scalar leaf circuit security audit. Referenced by `RELEASE_CHECKLIST.md`
   and `FCMP_PLUS_PLUS.md`.
+
+- **`core_tests` FCMP++ proof verification failures (3 tests).**
+  `gen_fcmp_tx_valid`, `gen_fcmp_tx_double_spend`, and `gen_staking_lifecycle`
+  fail with "FCMP++ proof verification failed." The proof IS generated
+  (non-empty) by `genRctFcmpPlusPlus` → `shekyl_fcmp_prove`, but
+  `shekyl_fcmp_verify` rejects it during blockchain replay. Likely a
+  witness/parameter mismatch in `apply_fcmp_pipeline` (chaingen.cpp lines
+  1662-1960) — possibly tree root, key image normalization, or PQC hash
+  computation differences between prover and verifier. This is a
+  pre-existing bug, not introduced by the test infrastructure rework.
+  Requires its own investigation PR.
 
 ---
 
