@@ -1,1006 +1,1342 @@
-# PQC Multisig for Shekyl
+# PQC Multisig V3.1: Equal-Participants Multisig with Per-Output Forward Privacy
 
-> **Last updated:** 2026-04-07
-
-## Purpose
-
-This document specifies how multisignature spend authorization integrates with
-Shekyl's post-quantum cryptography (`pqc_auth`) framework.
-
-Multisig is implemented in two phases:
-
-- **V3 (HF1):** Hybrid signature list — M individual hybrid signatures from
-  the existing `Ed25519 + ML-DSA-65` scheme, carried in an extended
-  `pqc_auth` container. Uses only proven, NIST-backed primitives.
-- **V4 (future):** Lattice-based composite threshold signatures — a single
-  compact on-chain signature produced by M-of-N participants via distributed
-  key generation. Requires further research maturity before deployment.
-
-## Design Principles
-
-1. **Ship proven primitives first.** The V3 signature-list approach reuses the
-   existing hybrid scheme (`scheme_id = 1`) with zero new cryptographic
-   assumptions. Lattice threshold signatures are theoretically elegant but not
-   yet NIST-standardized or thoroughly audited.
-2. **Tolerate known costs over unmodeled risks.** The signature-list approach
-   adds ~5.3 KB per additional signer. This is a known, bounded cost.
-   Multisig transactions represent well under 1% of on-chain volume (Monero
-   data confirms multisig usage is negligible — and on-chain
-   indistinguishable from single-key spends due to secret-splitting). The
-   aggregate chain growth impact is noise.
-3. **Preserve full-chain anonymity.** All multisig coordination happens
-   off-chain. On-chain transactions must remain indistinguishable from
-   single-key spends at the FCMP++ membership proof layer. The `pqc_auth`
-   field carries authorization material, not membership proof data.
-4. **Protect long-duration staked outputs.** The primary use case driving V3
-   multisig is securing staked positions locked for 25,000–150,000 blocks
-   (35–208 days). A single key controlling a locked position for months is a
-   single point of failure. Multisig staked outputs and claim transactions
-   address this directly.
-
-## Classical Multisig: Removed
-
-Shekyl NG does not carry forward Monero's classical multisig implementation.
-
-Monero's additive N-of-M scheme on Ed25519 uses secret-splitting to
-reconstruct a single spend key from multiple participants. This design had
-known bugs until mid-2022 (PR #8149), remains flagged as experimental, has
-no formal specification, no completed third-party audit, and is CLI-only
-with negligible real-world usage.
-
-On the rebooted Shekyl chain, the classical multisig code is removed:
-
-- `account_base::make_multisig` and its secret-splitting machinery are
-  deleted from `account.cpp`.
-- The MMS (Multisig Messaging System) transport layer is not carried forward.
-- No classical multi-round signing coordination (MMS-style) exists in the
-  codebase. PQC multisig uses file-based signing rounds; optional FROST
-  SAL uses structured round coordination via Rust wallet crates.
-- Wallet file format does not include classical multisig key state.
-- `wallet2.cpp` contains zero classical multisig code: all multisig
-  functions (`make_multisig`, `exchange_multisig_keys`, `export_multisig`,
-  `import_multisig`, `sign_multisig_tx`, etc.), member variables, JSON
-  serialization fields, MMS file handling, and scattered `m_multisig`
-  guard branches have been removed.
-
-**All multisig on Shekyl NG is PQC multisig (`scheme_id = 2`).**
-
-### Architecture: Single Classical Key + PQC Multisig
-
-The FCMP++ layer uses a single classical key. The M-of-N authorization
-lives entirely in the `pqc_auth` layer:
-
-```text
-FCMP++ layer:       coordinator constructs membership proof → single proof covers all inputs
-PQC auth layer:     M-of-N hybrid signatures → scheme_id = 2
-
-Transaction building:
-  1. Coordinator builds tx body with single classical key (standard FCMP++ proof construction)
-  2. Coordinator computes canonical signing payload
-  3. M signers each produce independent hybrid (Ed25519 + ML-DSA-65) signatures
-  4. Coordinator assembles pqc_auths and broadcasts
-```
-
-This eliminates the dual-layer coordination problem entirely. There is no
-sequencing of membership proof multisig rounds followed by PQC signing
-rounds — the FCMP++ layer is always single-key, and the PQC layer handles
-all multi-party authorization.
-
-The classical key used at the FCMP++ layer is held by the coordinator (or
-derived from a shared secret agreed during group setup). This key is NOT
-the security boundary for multisig — the `pqc_auth` M-of-N threshold is.
-An attacker who compromises the classical key alone cannot spend: they
-still need M hybrid PQC signatures.
-
-For Shekyl, multisig is being designed with wallet GUI integration from
-launch, which should improve adoption over Monero's CLI-only experience —
-but the power-user nature of the feature means it will never dominate
-transaction volume.
+> **Status:** DRAFT for implementation
+> **Supersedes:** `PQC_MULTISIG.md`, the standalone V3.1 governance and receiving drafts
+> **Companion:** `PQC_MULTISIG_V3_1_ANALYSIS.md` (size analysis, attack catalog, design rationale)
+> **Consensus impact:** None. Wallet-layer protocol on existing V3 consensus rules.
 
 ---
 
-## V3: Hybrid Signature List (HF1)
+## Table of Contents
 
-### Overview
+1. [Purpose and Scope](#1-purpose-and-scope)
+2. [Design Principles](#2-design-principles)
+3. [Threat Model](#3-threat-model)
+4. [Roles](#4-roles)
+5. [Group Setup](#5-group-setup)
+6. [Address Format](#6-address-format)
+7. [Receiving Outputs](#7-receiving-outputs)
+8. [Wallet Scanning](#8-wallet-scanning)
+9. [Spend Intent](#9-spend-intent)
+10. [Canonical Construction](#10-canonical-construction)
+11. [Spending: Prover and Signing](#11-spending-prover-and-signing)
+12. [Messages and Transport](#12-messages-and-transport)
+13. [State Machine and Counter Recovery](#13-state-machine-and-counter-recovery)
+14. [Security Properties](#14-security-properties)
+15. [Forward Compatibility](#15-forward-compatibility)
+16. [Implementation Plan](#16-implementation-plan)
 
-A new `scheme_id` value extends the existing `PqcAuthentication` container to
-carry M hybrid signatures and M hybrid public keys. Each signer produces a
-complete `Ed25519 + ML-DSA-65` hybrid signature over the same canonical
-signing payload. The verifier checks all M signatures independently.
+---
 
-### Scheme Registry Extension
+## 1. Purpose and Scope
 
-| `scheme_id` | Name | Description |
+Shekyl V3.1 multisig replaces the original coordinator-based design with an
+**equal-participants** model that:
+
+- Eliminates the central coordinator role as a power center
+- Achieves deterministic transaction construction
+- Provides per-output forward privacy on the receive side (Option C model)
+- Composes cleanly with the existing `scheme_id = 2` consensus rules
+
+This document is the single source of truth. It supersedes the original
+`PQC_MULTISIG.md` and the two split drafts (`PQC_MULTISIG_V3_1.md` and
+`PQC_MULTISIG_V3_1_RECEIVING.md`) that were merged here.
+
+**No consensus changes are made by V3.1.** All bindings, checks, and
+authorizations rely on rules and code paths already present in V3.
+
+---
+
+## 2. Design Principles
+
+1. **Symmetric authority.** The four authorities historically conflated
+   in "coordinator" — proposal, construction, signing, assembly — are split.
+   Only the FCMP++ proving role retains a designated holder per output, and
+   that role rotates deterministically across the group.
+2. **Deterministic construction.** Given a spend intent and a committed
+   chain snapshot, every participant produces byte-identical transaction
+   bytes. There is no interface latitude.
+3. **Per-output forward privacy.** Each output to a multisig group derives
+   N fresh ephemeral hybrid keypairs. Two spends from the same group are
+   cryptographically indistinguishable from spends by two different groups
+   of the same cardinality.
+4. **No consensus changes.** Every binding is achievable within existing
+   V3 rules. The worst-case failure of a wallet-layer bug is a failed
+   broadcast, never a chain split.
+5. **Get it right.** Where deferring a feature lets us avoid shipping
+   speculative cryptography, we defer. FROST SAL (V4), key rotation
+   (V3.2+), and chain-anchored group registries (V3.3+) are all explicitly
+   out of V3.1 scope, with reserved namespace for clean future addition.
+6. **Honest-signer protocol invariants.** Where consensus cannot enforce
+   a property without a hard fork, the property is enforced at the wallet
+   layer by honest signers. Specs that assume "every honest signer
+   verifies X before signing" are explicit and documented.
+
+---
+
+## 3. Threat Model
+
+### 3.1 In scope
+
+| Adversary | Capabilities | Defended by |
 |---|---|---|
-| 1 | `ed25519_ml_dsa_65` | Single-signer hybrid (existing V3) |
-| 2 | `ed25519_ml_dsa_65_multisig` | M-of-N hybrid signature list (V3 multisig) |
+| Malicious sender | Constructs outputs to grief recipients | §7.5 wallet-side filtering |
+| Malicious group member (single) | Tries to spend alone, redirect funds, or DoS | M-of-N threshold; §11.4 honest-signer prover verification; veto |
+| Malicious prover | Tries to construct invalid or substitute proof | §11.3 signer-side proof verification before signing |
+| Malicious assembler | Tries to broadcast tampered tx | §10.5 tx-hash commitments in signature shares |
+| Network observer | Tries to identify groups, link spends | §6 file-based addresses; §7 per-output ephemeral keys; §12 encrypted transport |
+| Malicious relay operator | Drops, reorders, injects messages | §12.4 mandatory multi-relay; §13.3 heartbeat protocol |
+| Network partition | Causes state divergence | §13.4 CounterProof recovery |
 
-### PqcAuthentication Structure (scheme_id = 2)
+### 3.2 Out of scope
 
-```text
-PqcAuthentication {
-  u8   auth_version        // 1
-  u8   scheme_id           // 2
-  u16  flags               // reserved, must be 0
-  u8   n_total             // N (total authorized signers)
-  u8   m_required          // M (threshold)
-  u8   sig_count           // number of signatures present (must equal m_required)
-  HybridPublicKey[n_total] ownership_keys    // all N public keys (defines the multisig group)
-  HybridSignature[m_required] signatures     // M signatures from the signing subset
-  u8[m_required] signer_indices              // which of the N keys produced each signature
-}
+| Threat | Reason |
+|---|---|
+| M-of-N collusion | Defeats any multisig by definition |
+| Compromise of group's enduring KEM private keys | Catastrophic by design; mitigated by V3.2 key rotation |
+| Quantum break of both ML-KEM and X25519 simultaneously | The hybrid scheme's whole point |
+| Permanent loss of a participant's keys | 1/N of group's outputs become unrecoverable; documented limitation |
+| FCMP++ prover liveness on permanent participant loss | 1/N of outputs locked; V4 FROST SAL fixes |
+| Selective disclosure by M signers to outside auditor | Inherent to any threshold scheme |
+| Sustained griefing-attack scanning cost | Bounded; see §3.3 |
+
+### 3.3 Accepted but bounded threats
+
+**Griefing via malformed multisig output.** A malicious sender can construct
+outputs that *appear* to target a multisig group (correct `tx_extra`
+fields, correct `group_id` claim) but whose KEM ciphertexts do not
+correspond to the group's real KEM public keys. The recipient's wallet
+attempts decap, fails, and discards the output. The attacker pays the fee;
+the recipient gets nothing.
+
+This attack is **bounded by attacker fee cost.** Sustained griefing
+requires sustained fee expenditure. At Shekyl's expected fee rates,
+sustained attack against a single group requires non-trivial economic
+commitment by the attacker.
+
+**Mitigation:** §7.5 wallet-side filtering ensures these outputs never
+appear in user-facing balance or transaction history. Residual cost is
+scanner CPU. A consensus-layer fix would require a chain-anchored group
+registry (V3.3+ candidate); accepted as residual risk for V3.1.
+
+### 3.4 Attacks mitigated by previous work but worth naming
+
+| Attack | Mitigation |
+|---|---|
+| Scheme downgrade (output committed scheme_id=2, spent as scheme_id=1) | §7.4 indirect binding via leaf hash + `pqc_auth` size check; §7.4 wired `expected_scheme_id` and `expected_group_id` for defense in depth |
+| Key substitution within a group | Existing `verify_multisig` Check 8 (key uniqueness) |
+| Signer index manipulation | Existing `verify_multisig` Checks 6 and 7 (range, ascending) |
+| Blob truncation/padding | Strict size checks in `tx_pqc_verify.cpp` |
+| Replay across groups | `group_id` binding in canonical signing payload (existing) |
+| Replay within group | `intent_id` + `tx_counter` + `expires_at` + `reference_block_hash` |
+
+---
+
+## 4. Roles
+
+| Role | Authority | Who | Adversarial bound |
+|---|---|---|---|
+| Proposer | Publishes signed spend intent | Any group member | Signers veto by refusing to sign |
+| Prover | Constructs FCMP++ membership proof for a specific output | Deterministically rotated; see §11.1 | Cannot modify tx; proof binds to signers' computed payload |
+| Signer | Produces hybrid signature over canonical payload | Any M of the N members | Cannot individually authorize; needs M−1 collaborators |
+| Assembler | Collects M signatures, broadcasts | Any group member with M sigs | Can only broadcast what signers produced |
+
+The prover role is the only structural asymmetry remaining in V3.1, and
+even it is per-output rather than per-group. V4 FROST SAL eliminates the
+prover role entirely by threshold-sharing the classical key.
+
+---
+
+## 5. Group Setup
+
+### 5.1 Group parameters
+
+A group is defined by:
+
+- `n_total`: total signers, `1 ≤ n_total ≤ 7` (consensus cap)
+- `m_required`: threshold, `1 ≤ m_required ≤ n_total`
+- `group_version`: `0x01` for V3.1 (reserved for future rotation)
+- N hybrid signing keypairs (Ed25519 + ML-DSA-65), one per participant
+- N hybrid KEM keypairs (X25519 + ML-KEM-768), one per participant
+
+### 5.2 Distributed Key Generation (mandatory)
+
+V3.1 groups MUST be created via Distributed Key Generation for the
+**group shared transport secret**. Simple-mode shared-secret distribution
+(where the founding proposer generates and distributes the secret) is
+explicitly **NOT permitted in production**. Wallets MAY include simple-mode
+as a testing fixture, but production deployments MUST use DKG.
+
+The DKG ceremony uses the existing `dkg-pedpop` infrastructure already
+present in `shekyl-wallet-core/src/multisig/dkg.rs`. The DKG output is
+the 32-byte `group_shared_secret` from which per-message encryption keys
+are derived (see §12.3).
+
+DKG is performed once at group creation. The shared secret persists for
+the lifetime of the group's transport layer. (Note: this secret is
+distinct from any cryptographic spend key. Its only purpose is encrypting
+multisig coordination messages on relays/transport.)
+
+### 5.3 group_id derivation
+
+The 32-byte `group_id` binds the group's identity:
+
 ```
-
-### Canonical Serialization
-
-```text
-MultisigPqcAuth {
-  u8   auth_version
-  u8   scheme_id           // 2
-  u16  flags               // 0
-  u8   n_total
-  u8   m_required
-  u8   sig_count
-  // ownership keys: N × HybridPublicKey (same encoding as scheme_id=1)
-  for i in 0..n_total:
-    HybridPublicKey[i]
-  // signatures: M × HybridSignature (same encoding as scheme_id=1)
-  for i in 0..m_required:
-    HybridSignature[i]
-  // signer indices: M bytes, each in range [0, n_total)
-  for i in 0..m_required:
-    u8 signer_index[i]
-}
-```
-
-Constraints:
-
-- `auth_version = 1`
-- `scheme_id = 2`
-- `flags = 0`
-- `1 <= m_required <= n_total <= MAX_MULTISIG_PARTICIPANTS` where
-  `MAX_MULTISIG_PARTICIPANTS = 7`
-- `sig_count == m_required`
-- All `signer_index` values must be unique and in range `[0, n_total)`
-- `signer_index` array must be sorted ascending (canonical ordering)
-- Each `HybridPublicKey` and `HybridSignature` uses the same canonical
-  encoding defined in `POST_QUANTUM_CRYPTOGRAPHY.md` for `scheme_id = 1`
-
-#### Consensus participant cap
-
-`MAX_MULTISIG_PARTICIPANTS = 7` is a consensus constant. Transactions with
-`n_total > 7` are invalid and rejected at the structural validation stage.
-
-Rationale: 5-of-7 is the realistic ceiling for treasury management. Going
-above 7 signers pushes coordination complexity into "custom tooling"
-territory with no practical benefit. The cap also bounds the maximum
-`pqc_auth` size to ~37 KB (see Transaction Size Impact below), limiting
-the DoS surface from oversized payloads. If a genuine need for 8+ signers
-emerges, the V4 lattice threshold scheme (`scheme_id = 3`) produces a
-compact fixed-size signature regardless of N.
-
-### Wire Format Mapping (C++ ↔ Rust)
-
-The C++ `pqc_authentication` struct is intentionally unchanged from
-single-signer V3. It carries three fields:
-
-```text
-pqc_authentication {
-  u8                scheme_id          // discriminator: 1 = single, 2 = multisig
-  std::string       hybrid_public_key  // opaque blob
-  std::string       hybrid_signature   // opaque blob
-}
-```
-
-C++ never parses multisig internals. It reads `scheme_id`, passes the two
-blobs to the Rust FFI verifier, and receives a boolean result. All
-deserialization, structural validation, and cryptographic verification
-happens inside `rust/shekyl-crypto-pq`.
-
-For `scheme_id = 2`, the logical structure described above is packed into
-the two blob fields as follows:
-
-**`hybrid_public_key` blob (ownership material):**
-
-```text
-u8   n_total                           // N (total authorized signers)
-u8   m_required                        // M (threshold)
-HybridPublicKey[0]                     // canonical encoding, 1996 bytes each
-HybridPublicKey[1]
-...
-HybridPublicKey[n_total - 1]
-```
-
-Expected blob size: `2 + (n_total × 1996)` bytes.
-
-**`hybrid_signature` blob (authorization material):**
-
-```text
-u8   sig_count                         // must equal m_required from key blob
-HybridSignature[0]                     // canonical encoding, 3385 bytes each
-HybridSignature[1]
-...
-HybridSignature[sig_count - 1]
-u8   signer_indices[0]                 // which key each signature corresponds to
-u8   signer_indices[1]
-...
-u8   signer_indices[sig_count - 1]
-```
-
-Expected blob size: `1 + (sig_count × 3385) + sig_count` bytes.
-
-**Why this mapping:**
-
-- **No C++ struct changes.** The existing boost serialization for
-  `pqc_authentication` handles `scheme_id` + two blob fields. Adding
-  multisig requires zero changes to the C++ serialization layer.
-- **Rust owns all parsing.** The Rust FFI function receives `scheme_id` and
-  both blobs. For `scheme_id = 1`, it parses single key + single signature.
-  For `scheme_id = 2`, it parses the multisig-encoded blobs. The dispatch is
-  a match on `scheme_id` at the top of the verify function.
-- **Cross-blob validation.** The Rust verifier must read `m_required` from
-  the key blob and `sig_count` from the signature blob and confirm they
-  match. This is an atomic check — both blobs are required to validate
-  either.
-
-**FFI function signature (planned extension):**
-
-The existing `shekyl_pqc_verify` function signature already accepts
-`scheme_id`, key blob, signature blob, and message. No new FFI entry points
-are needed — the Rust implementation dispatches internally based on
-`scheme_id`. This minimizes the C++ integration surface.
-
-```rust
-// Existing signature — unchanged
-pub extern "C" fn shekyl_pqc_verify(
-    scheme_id: u8,
-    pubkey_blob: *const u8, pubkey_len: usize,
-    sig_blob: *const u8, sig_len: usize,
-    message: *const u8, message_len: usize,
-) -> bool;
-```
-
-For `scheme_id = 2`, this function internally:
-1. Deserializes the key blob into N `HybridPublicKey` values + threshold params
-2. Deserializes the signature blob into M `HybridSignature` values + signer indices
-3. Performs all structural and cryptographic validation checks
-4. Returns `true` only if every check passes
-
-### Signed Payload
-
-The signed payload is identical to single-signer V3:
-
-```text
-signed_payload =
-  cn_fast_hash(
-    serialize(TransactionPrefixV3)
-    || serialize(RctSigningBody)
-    || H(serialize(RctSigPrunable))
-    || serialize(PqcAuthHeader)
-    || H(pqc_pk_0) || ... || H(pqc_pk_{N-1})
-  )
-```
-
-Where `PqcAuthHeader` for multisig includes:
-
-```text
-PqcAuthHeader {
-  auth_version
-  scheme_id           // 2
-  flags
-  n_total
-  m_required
-  HybridPublicKey[n_total]   // all N ownership keys
-}
-```
-
-All M signers sign the same payload. The signatures themselves are excluded
-from the payload (no self-reference).
-
-### Verification Rule
-
-For `scheme_id = 2`, validation succeeds only if ALL of the following hold:
-
-1. Standard transaction structural checks pass.
-2. Existing privacy-layer checks pass.
-3. Canonical PQC field decoding succeeds.
-4. `m_required <= n_total <= 7` and `sig_count == m_required`.
-5. `signer_index` array is sorted ascending with no duplicates.
-6. For each of the M signatures at position `i`:
-   - Let `key = ownership_keys[signer_indices[i]]`
-   - `Ed25519.verify(signed_payload, sig.ed25519_sig, key.ed25519_pub)` succeeds
-   - `ML-DSA.verify(signed_payload, sig.ml_dsa_sig, key.ml_dsa_pub)` succeeds
-7. If any individual signature fails either check, the entire spend
-   authorization is invalid.
-
-### Adversarial Analysis
-
-The following attacks were evaluated during the design of `scheme_id = 2`.
-Each maps to a specific validation requirement in the Rust verifier.
-
-**Attack 1: Scheme downgrade.**
-An attacker takes a multisig UTXO (committed with `scheme_id = 2` group
-identity) and submits a spend transaction with `scheme_id = 1`, using one
-of the N individual keypairs to produce a valid single-signer hybrid
-signature.
-
-*Mitigation:* The FCMP++ curve tree leaf commits `h_pqc = H(hybrid_public_key)`
-where `H` is Blake2b-512 with domain separator `"shekyl-pqc-leaf"`. The
-canonical encoding of a multisig group key (2-byte header + N individual
-keys) differs structurally from a single-signer key (1996 bytes). A
-scheme downgrade would require `H(single_key_blob) == H(multisig_group_key_blob)`,
-which is a Blake2b-512 preimage attack — computationally infeasible.
-
-The FCMP++ proof verifies `h_pqc` from the spending transaction's
-`pqc_auths[i].hybrid_public_key` against the curve tree leaf committed
-when the output was created. Key format consistency is further enforced
-by size checks in `tx_pqc_verify.cpp` (scheme_id=1 requires exactly
-1996 bytes; scheme_id=2 requires the multisig header format).
-
-*Why not `expected_scheme_id`?* The `verify_transaction_pqc_auth`
-two-argument overload with `expected_scheme_id` was designed before
-FCMP++ was finalized. Under FCMP++, the verifier cannot determine which
-output is being spent (that is the privacy guarantee), so it cannot look
-up the creating transaction's committed scheme. The `h_pqc` curve tree
-leaf binding provides strictly stronger protection: it binds to the
-*exact key bytes*, not just a scheme tag.
-
-*Validation:* FCMP++ proof verification in `blockchain.cpp` (h_pqc
-recomputed from `pqc_auths[i].hybrid_public_key` and checked against
-proof). Size-format consistency in `tx_pqc_verify.cpp`.
-
-**Attack 2: Signer index manipulation.**
-An attacker submits M signatures but manipulates `signer_indices` to map
-two signatures to the same key (duplicate index), to an out-of-range
-index, or to an unsorted order that could confuse the verifier.
-
-*Mitigation:* The Rust verifier enforces three hard checks on
-`signer_indices`:
-1. Every index is in range `[0, n_total)`.
-2. The array is sorted in strictly ascending order.
-3. No duplicate values (implied by strict ascending, but checked explicitly).
-
-*Validation:* Hard reject before any signature verification begins. Fail
-fast on structural invalidity.
-
-**Attack 3: Blob truncation or padding.**
-An attacker submits a `hybrid_public_key` blob that claims `n_total = 3`
-but contains fewer than 3 keys' worth of bytes (truncation), or extra
-trailing bytes (padding), hoping the parser reads past the buffer or
-ignores surplus data.
-
-*Mitigation:* The Rust deserializer computes the expected blob size from
-the declared parameters and rejects any mismatch:
-- Key blob: exactly `2 + (n_total × 1996)` bytes.
-- Signature blob: exactly `1 + (sig_count × 3385) + sig_count` bytes.
-
-Any deviation — short, long, or with trailing garbage — is a hard reject.
-No tolerant parsing. No ignoring of extra bytes.
-
-*Validation:* Checked at the top of deserialization, before any key or
-signature bytes are read.
-
-**Attack 4: Key substitution in group.**
-A participant who is one of N signers replaces another participant's
-public key in the `ownership_keys` array with a second copy of their own
-key, giving themselves control of M keys out of N and the ability to spend
-unilaterally.
-
-*Mitigation:* The `multisig_group_id` hash covers all N keys in their
-canonical order. Any key substitution produces a different group ID that
-does not match the output's commitment. The attacker cannot forge a valid
-spend against an output they did not originally participate in creating.
-
-*Validation:* The Rust verifier recomputes the group ID from the supplied
-keys and confirms it matches the output's committed ownership material.
-Additionally, the verifier rejects duplicate public keys in the
-`ownership_keys` array — no two entries may be byte-identical.
-
-**Attack 5: sig_count / m_required mismatch.**
-The `sig_count` field lives in the signature blob; `m_required` lives in
-the key blob. An attacker could set `sig_count > m_required` (submitting
-extra signatures to reach a different threshold interpretation) or
-`sig_count < m_required` (hoping the verifier short-circuits after fewer
-checks).
-
-*Mitigation:* The Rust verifier reads `m_required` from the key blob and
-`sig_count` from the signature blob and enforces exact equality. This is a
-cross-blob validation — the verifier must parse both blobs before
-accepting either.
-
-*Validation:* Hard reject if `sig_count != m_required`. This check
-occurs after blob length validation but before any signature verification.
-
-**Attack 6: Signature replay across groups.**
-M valid signatures produced for multisig group A are submitted against a
-different multisig group B's output, where some participants overlap
-between groups.
-
-*Mitigation:* The signed payload includes the `PqcAuthHeader`, which
-contains all N ownership keys for the specific group. Signatures are
-cryptographically bound to the exact group composition. Signatures
-produced for group A's payload will fail verification against group B's
-payload even if individual keys appear in both groups.
-
-*Validation:* Inherent in the signature scheme — no additional check
-needed beyond correct payload construction.
-
-**Summary of verifier checks (execution order):**
-
-| Order | Check | Reject condition |
-|---|---|---|
-| 1 | Scheme match | Spending `scheme_id` ≠ output's committed scheme |
-| 2 | Parameter bounds | `n_total = 0`, `m_required = 0`, `m_required > n_total`, or `n_total > 7` |
-| 3 | Key blob length | Actual length ≠ `2 + (n_total × 1996)` |
-| 4 | Sig blob length | Actual length ≠ `1 + (sig_count × 3385) + sig_count` |
-| 5 | Threshold match | `sig_count ≠ m_required` |
-| 6 | Index validity | Any `signer_index ∉ [0, n_total)` |
-| 7 | Index ordering | `signer_indices` not strictly ascending |
-| 8 | Key uniqueness | Any two `ownership_keys` are byte-identical |
-| 9 | Group ID match | Recomputed `multisig_group_id` ≠ output commitment |
-| 10 | Signatures (×M) | Any Ed25519 or ML-DSA verification failure |
-
-All checks 1–9 are structural and occur before any expensive cryptographic
-operations. This fail-fast ordering minimizes the cost of rejecting
-malformed transactions and limits denial-of-service exposure from
-oversized multisig payloads.
-
-### Transaction Size Impact
-
-With per-input `pqc_auths`, the authorization overhead is now per-input.
-A typical 2-in/2-out multisig transaction is larger than a single-input
-equivalent because each input carries its own `PqcAuthentication` entry.
-
-Measured per-signer contribution (from V3 phase-1 measurements):
-
-- `HybridPublicKey`: 1,996 bytes
-- `HybridSignature`: 3,385 bytes
-
-| Configuration | Keys | Signatures | Auth overhead | vs single-signer |
-|---|---|---|---|---|
-| Single (scheme 1) | 1,996 | 3,385 | ~5,385 | baseline |
-| 2-of-3 | 5,988 | 6,770 | ~12,769 | +7,384 (~2.4x) |
-| 3-of-5 | 9,980 | 10,155 | ~20,153 | +14,768 (~3.7x) |
-| 5-of-7 (max) | 13,972 | 16,925 | ~30,921 | +25,536 (~5.7x) |
-| **7-of-7 (worst case)** | **13,972** | **23,695** | **~37,680** | **+32,295 (~7.0x)** |
-
-The consensus cap `MAX_MULTISIG_PARTICIPANTS = 7` bounds the worst-case
-`pqc_auth` overhead to ~37 KB. At sub-0.1% of transaction volume, even the
-worst case has negligible impact on aggregate chain growth.
-
-### Multisig Group Identity
-
-The multisig group is defined by the ordered set of N `HybridPublicKey`
-values. The group identity (for address generation and UTXO matching) is:
-
-```text
-multisig_group_id = cn_fast_hash(
-  "shekyl-multisig-group-v1"
-  || u8(n_total)
-  || u8(m_required)
-  || HybridPublicKey[0] || HybridPublicKey[1] || ... || HybridPublicKey[n_total-1]
+group_id = cn_fast_hash(
+    group_version ||
+    scheme_id (= 2) ||
+    n_total ||
+    m_required ||
+    concat(sorted(hybrid_signing_pubkeys))
 )
 ```
 
-Note: the domain separator string `"shekyl-multisig-group-v1"` is
-provisional. The exact byte-level constant will be finalized in the Rust
-implementation (`rust/shekyl-crypto-pq`) and published as part of the test
-vector set to avoid any future collision risk with other hash-domain uses.
+The signing pubkeys (not KEM pubkeys) define group identity. This allows
+KEM-only rotation (compromised KEM keys) without changing authorization
+identity, in a future V3.2 enhancement.
 
-This deterministic group ID allows wallets to identify outputs belonging to
-the multisig group during scanning.
+### 5.4 Address derivation
 
-### Staking Integration
+The group's address is derived from all N hybrid pubkeys (signing and KEM)
+plus the group's parameters; see §6.
 
-Multisig staked outputs use the same `txout_to_staked_key` format. The
-ownership key in the staking output references the multisig group identity.
+### 5.5 Setup ceremony (informative summary)
 
-Claim transactions (`txin_stake_claim`) from multisig staked outputs require
-`scheme_id = 2` authorization with the same M-of-N threshold.
+Concrete steps for participants forming a new group:
 
-Lock enforcement is unchanged — the protocol-level lock applies regardless
-of whether the staked output uses single-signer or multisig authorization.
+1. Each participant generates fresh hybrid signing and KEM keypairs.
+2. Participants exchange signing public keys and KEM public keys via
+   authenticated out-of-band channels (cryptographic verification: each
+   participant signs a setup attestation with their hybrid signing key
+   over the canonical encoding of all participants' public keys).
+3. Each participant independently computes `group_id` and verifies all
+   others derived the same value.
+4. Participants jointly run the DKG ceremony for `group_shared_secret`.
+5. Each participant constructs the full multisig address locally; all
+   should produce byte-identical addresses.
+6. Address is exported as a file (too large for QR/clipboard at most N
+   values).
+7. Participants store group state: their own keypairs, the N pubkeys of
+   others, group_id, group_version, threshold parameters, DKG-derived
+   shared secret, and an initial `tx_counter = 0`.
 
-### Wallet Implementation Notes
+---
 
-#### Key generation
+## 6. Address Format
 
-Each participant generates their own hybrid keypair independently. The N
-public keys are exchanged out-of-band and assembled into the multisig
-group. No DKG protocol is required — this is a significant simplification
-over the V4 lattice threshold approach.
+### 6.1 Bech32m encoding with new HRP
 
-#### Classical key management
+Multisig addresses use a new Bech32m human-readable prefix:
 
-The FCMP++ layer uses a single classical key held by the coordinator
-(or derived from a shared secret agreed during group setup). This key is
-NOT the multisig security boundary — it only satisfies the membership proof
-layer. The M-of-N PQC threshold is the authorization gate.
+```
+single-sig:     shekyl1:<version 0x01><classical>/<pqc>
+single-sig tn:  shekyltest1:<...>
+multisig:       shekyl1m:<version 0x01><group_metadata>
+multisig tn:    shekyltest1m:<...>
+```
 
-#### Per-output PQC key coordination
+The visible `m` suffix prevents wallet confusion: a multisig address
+cannot be parsed as single-sig and vice versa. Wallets MUST type-check
+the HRP at parse time.
 
-Each signer must derive the per-output PQC keypair for the output being
-spent from their copy of the KEM shared secret. The coordinator distributes
-the ML-KEM ciphertexts during the signing request phase so each signer can
-independently compute the combined shared secret and derive the correct
-per-output PQC keypair for authorization.
+**Reserved for future:** `shekyl1n...` (rotated-key multisig, V3.2+).
+Do not issue.
 
-#### Signing protocol (file-based)
+### 6.2 Multisig address payload
 
-The V3 signing transport is file-based exchange. No MMS or real-time
-transport is required. The flow:
+```
+MultisigAddressPayload {
+    version:             u8   (= 0x01)
+    group_version:       u8   (= 0x01)
+    network_byte:        u8
+    n_total:             u8   (1..=7)
+    m_required:          u8   (1..=n_total)
 
-1. **Coordinator** builds the complete transaction body (prefix + RCT with
-   single classical key).
-2. **Coordinator** computes the canonical signing payload and exports it as
-   a JSON blob file ("signing request").
-3. Each **signer** imports the signing request, reviews the transaction
-   details, signs with their hybrid keypair, and exports their signature
-   blob file ("signature response").
-4. **Coordinator** collects M signature response files, assembles the
-   `pqc_auth` container, and broadcasts the transaction.
+    hybrid_kem_pubkeys:  [HybridKemPubkey; n_total]
+    // Each: X25519 (32 B) + ML-KEM-768 (1184 B) = 1216 B
+    // Canonically ordered by participant_index (0..n_total)
 
-The Tauri wallet implements this as "Export signing request" / "Import
-signature" / "Assemble and broadcast" actions. Real-time transport (MMS,
-QR relay, peer-to-peer) is a follow-up UX enhancement, not a prerequisite.
+    hybrid_sign_pubkeys: [HybridSignPubkey; n_total]
+    // Each: Ed25519 (32 B) + ML-DSA-65 (1952 B) = 1984 B
+    // Canonically ordered by participant_index (0..n_total)
 
-#### ML-DSA signature non-determinism
-
-ML-DSA signatures are non-deterministic (hedged signing per FIPS 204). The
-same signer signing the same payload twice produces different valid
-signatures. Implications:
-
-- Signature blobs must not be compared for equality or cached across
-  signing attempts.
-- If a signer needs to re-sign (network failure, timeout, changed their
-  mind), the coordinator accepts the replacement and discards the old
-  signature.
-- The coordinator uses "replace by signer index" semantics, not
-  deduplication.
-
-#### Transaction hash finality
-
-The transaction hash includes the full serialized `pqc_auth` including
-signatures. Different signing subsets for the same M-of-N group (e.g.,
-signers {0,1} vs {0,2} in a 2-of-3) produce different tx hashes. The tx
-hash is finalized only after the coordinator assembles all M signatures.
-
-Signers operate on the canonical signing payload, which is deterministic
-and independent of the signing subset. The coordinator must not share a
-"final tx hash" with signers before assembly is complete.
-
-#### GUI integration
-
-The Tauri wallet should expose multisig group creation and signing
-coordination in the GUI, especially integrated with the staking flow
-("Create multisig staking position"). See Rollout Dependencies below for
-the staking FFI prerequisite.
-
-### Rollout Dependencies
-
-#### Phase split
-
-The multisig feature ships in two sub-phases to avoid blocking on the
-Tauri↔wallet2 FFI staking bridge (which is currently a stub):
-
-- **Phase A: Multisig spends.** Regular send/transfer transactions with
-  `scheme_id = 2`. Requires only the PQC multisig Rust implementation,
-  FFI dispatch, consensus validation, and wallet CLI/GUI signing flow.
-  No dependency on staking FFI.
-
-- **Phase B: Multisig staking.** Creating multisig staked outputs and
-  claiming rewards with M-of-N authorization. Blocked by: single-signer
-  staking must be wired through the Tauri↔wallet2 FFI bridge first.
-  The GUI `stake` and `get_staking_info` commands in `commands.rs` are
-  currently error stubs.
-
-Phase B must not block Phase A. Multisig spends are useful independently
-of staking integration.
-
-#### Codebase removals (blocking Phase A) — DONE
-
-Classical multisig code has been removed:
-
-- ~~Remove `account_base::make_multisig` and classical secret-splitting from
-  `account.cpp`.~~ Done.
-- ~~Remove MMS transport code.~~ Done (`message_store.h/cpp`,
-  `message_transporter.h/cpp` deleted; `wallet2.h` no longer includes them).
-- ~~Remove or gate any wallet paths that produce v2 multisig transactions.~~ Done.
-  All classical multisig types (`multisig_info`, `multisig_sig`,
-  `multisig_kLR_bundle`, `multisig_tx_set`), public/private multisig API
-  methods, and multisig wallet state fields have been removed from `wallet2.h`.
-- ~~Confirm no residual classical multisig state in wallet file serialization.~~
-  Done. Boost serialization functions and FIELD() entries for multisig types
-  have been removed.
-- ~~Remove classical multisig from wallet API layer
-  (`wallet2_api.h`, `wallet.h`, `wallet.cpp`, `pending_transaction.cpp`).~~
-  Done. Removed `MultisigState` struct, all virtual multisig declarations,
-  `publicMultisigSignerKey`, `signMultisigParticipant`, multisig helper
-  functions, multisig transaction creation/restore, and multisig threshold
-  checks from PendingTransaction commit path.
-
-### Wallet File Format
-
-Adding PQC multisig state to the wallet requires a file format version
-bump:
-
-- New fields: `m_pqc_multisig_keys` (the N hybrid public keys defining the
-  group), `m_pqc_multisig_group_id` (the deterministic group identity
-  hash), `m_pqc_multisig_n` and `m_pqc_multisig_m` (group parameters).
-- Existing single-signer V3 wallets opened with multisig-aware code find
-  these fields absent — default to empty/none. No migration needed.
-- New multisig wallets are created fresh. Converting a funded wallet to
-  multisig is not supported (same constraint as Monero).
-- The wallet file version number is bumped. Older wallet binaries that
-  encounter the new format must refuse to open with a clear error message,
-  not silently corrupt.
-- Classical multisig wallet state (`m_multisig_keys`,
-  `m_multisig_threshold`, etc.) is removed from the serialization format
-  entirely.
-
-### FFI Contract
-
-#### Consensus path
-
-The existing `shekyl_pqc_verify` FFI function handles both `scheme_id = 1`
-and `scheme_id = 2` via internal dispatch. It returns a bare `bool`. This
-is intentional — the consensus path must be minimal with no error-message
-side channels.
-
-#### Debug/logging path
-
-A separate function is provided for wallet-side debugging and operator
-logging:
-
-```rust
-#[repr(u8)]
-pub enum PqcVerifyError {
-    Ok = 0,
-    InvalidSchemeId = 1,
-    BlobLengthMismatch = 2,
-    ParameterBoundsViolation = 3,
-    ThresholdMismatch = 4,
-    SignerIndexOutOfRange = 5,
-    SignerIndexNotSorted = 6,
-    DuplicateOwnershipKey = 7,
-    GroupIdMismatch = 8,
-    Ed25519FailureAtIndex = 9,    // low nibble: signer index
-    MlDsaFailureAtIndex = 10,     // low nibble: signer index
-    DeserializationError = 255,
+    checksum:            [u8; 4]   // Bech32m
 }
-
-pub extern "C" fn shekyl_pqc_verify_debug(
-    scheme_id: u8,
-    pubkey_blob: *const u8, pubkey_len: usize,
-    sig_blob: *const u8, sig_len: usize,
-    message: *const u8, message_len: usize,
-) -> u8;  // returns PqcVerifyError discriminant
 ```
 
-This function is used only by the wallet and logging paths, never in
-consensus validation. The error enum matches the adversarial analysis check
-ordering so operators can pinpoint exactly where validation failed.
+Total payload: `9 + N × 3200` bytes.
 
-### Fuzz Testing Requirements
-
-The Rust deserializer is the entire security boundary for multisig — C++
-passes opaque blobs and trusts the boolean result. Malformed blobs are the
-primary DoS vector.
-
-Required `cargo-fuzz` targets (hard prerequisite before testnet):
-
-| Target | Input | Coverage |
+| N | Payload bytes | Bech32m chars |
 |---|---|---|
-| `fuzz_multisig_key_blob` | Random bytes → `MultisigKeyContainer::from_canonical_bytes` | Length checks, parameter bounds, key parsing |
-| `fuzz_multisig_sig_blob` | Random bytes → `MultisigSigContainer::from_canonical_bytes` | Length checks, index validation, signature parsing |
-| `fuzz_multisig_verify` | Random `(scheme_id, key_blob, sig_blob, message)` → `shekyl_pqc_verify` | Full dispatch path including cross-blob validation |
-| `fuzz_group_id` | Random key arrays → `multisig_group_id` computation | Hash stability, no panics on edge-case inputs |
+| 2 | 6,409 | ~10,260 |
+| 3 | 9,609 | ~15,380 |
+| 5 | 16,009 | ~25,620 |
+| 7 | 22,409 | ~35,860 |
 
-Minimum bar: **10M iterations per target with zero panics, zero OOM, zero
-unbounded allocations.** Any panic is a bug. Any allocation proportional to
-attacker-controlled length fields without bounds checking is a
-vulnerability.
+### 6.3 Address handling and the size problem
 
-The fuzz harness should include a "valid-then-corrupt" mode: generate a
-structurally valid multisig blob, then flip random bits/truncate/extend to
-exercise the boundary between valid and invalid inputs.
+A 35 KB address is unusable in QR codes, clipboard, email, or most UIs.
+Wallets MUST handle multisig addresses via:
 
----
+**Primary (canonical):** export to file, transfer via authenticated
+channel, import from file at recipient end.
 
-## FROST Threshold SAL for FCMP++ Classical Keys
+**Optional convenience:** display a 32-byte fingerprint (hex-encoded) of
+the canonical address payload:
 
-> **Status: DEFERRED to V4.** FROST SAL is architecturally incompatible with
-> HKDF-derived per-output `y`. In V3, `y` is deterministically derived from
-> the KEM shared secret via `derive_output_secrets`, making it per-output and
-> not FROST-shareable. FROST SAL requires `y` to be a DKG group key (constant
-> per wallet, not per output). The V4 resolution is a Carrot-style address
-> scheme where multisig wallets use DKG-shared `y` and single-sig wallets use
-> HKDF-derived per-output `y`, gated by address type. The code below remains
-> for reference and V4 implementation.
-
-### Overview
-
-While the V3 PQC multisig layer (`scheme_id = 2`) handles M-of-N hybrid
-signature authorization, the FCMP++ classical layer (the membership proof)
-is constructed by a single coordinator holding the spend key `x`. This
-creates a single-point-of-failure at the classical key layer.
-
-**FROST SAL** (Flexible Round-Optimized Schnorr Threshold — Spend
-Authorization and Linkability) addresses this by threshold-sharing the
-classical spend key `y` across N participants using `modular-frost`'s
-`Ed25519T` ciphersuite. The coordinator retains `x` (not shared) and the
-FROST group key `Y = y * T` replaces the single-signer `y` in the FCMP++
-proof construction.
-
-### Architecture
-
-```text
-Classical key decomposition:  O = x*G + y*T
-  x: held by coordinator (not threshold-shared)
-  y: FROST threshold-shared across N participants via DKG
-
-FCMP++ proof flow (multisig):
-  1. Coordinator creates FrostSalSession per input (rerandomizes output)
-  2. Coordinator exports signing request with FROST round-1 data
-  3. M participants produce FROST signing shares
-  4. Coordinator aggregates shares → SpendAuthAndLinkability
-  5. Coordinator calls prove_with_sal() → complete FCMP++ proof
+```
+address_fingerprint = cn_fast_hash(canonical(MultisigAddressPayload))
 ```
 
-### Key Components
+The fingerprint is short enough for human verification but cryptographically
+binding. Wallets MUST display this fingerprint during send confirmation
+(see §7.6) so users can verify they are sending to the intended group via
+out-of-band fingerprint comparison.
 
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| `FrostSalSession` | `rust/shekyl-fcmp/src/frost_sal.rs` | Per-input FROST SAL state machine |
-| `FrostSigningCoordinator` | `rust/shekyl-fcmp/src/frost_sal.rs` | Nonce aggregation, share collection, multi-input orchestration |
-| `prove_with_sal()` | `rust/shekyl-fcmp/src/proof.rs` | Proof construction from pre-aggregated SAL |
-| `DkgSession` | `rust/shekyl-fcmp/src/frost_dkg.rs` | State-machine DKG ceremony (3-round PedPoP) |
-| `SerializedThresholdKeys` | `rust/shekyl-fcmp/src/frost_dkg.rs` | Threshold key serialization/deserialization |
-| `MultisigDkgSession` | `rust/shekyl-wallet-core/src/multisig/dkg.rs` | Wallet-level DKG orchestration wrapper |
-| `MultisigGroup` | `rust/shekyl-wallet-core/src/multisig/group.rs` | Group metadata, PQC keypairs, threshold keys |
-| `MultisigSigningSession` | `rust/shekyl-wallet-core/src/multisig/signing.rs` | Wallet-level multi-input signing orchestration |
-| FROST SAL FFI | `rust/shekyl-ffi/src/lib.rs` | C ABI for session/coordinator/signer lifecycle |
-| FROST DKG FFI | `rust/shekyl-ffi/src/lib.rs` | C ABI for key import/export/validation |
-| Multisig RPC handlers | `rust/shekyl-wallet-rpc/src/multisig_handlers.rs` | JSON-RPC endpoints for signing coordination |
+### 6.4 Mandatory fingerprint UI requirement
 
-**Note:** C++ wallet FROST integration (`wallet2.cpp`/`wallet2_ffi.cpp`)
-has been removed. All FROST multisig logic now lives in the Rust wallet
-crates (`shekyl-wallet-core`, `shekyl-wallet-rpc`). The Rust FFI functions
-remain behind `#[cfg(feature = "multisig")]` for any future C++ consumers.
+When constructing a transaction with a multisig recipient, the sender's
+wallet MUST:
 
-### DKG Setup
+1. Compute and display the recipient address fingerprint
+2. Require explicit user confirmation that the displayed fingerprint
+   matches what the recipient communicated out-of-band
+3. Refuse to construct the transaction if confirmation is not given
 
-Before FROST signing, participants must complete a Distributed Key
-Generation (DKG) ceremony to produce `ThresholdKeys<Ed25519T>`. The DKG
-uses the `dkg-pedpop` crate's `KeyGenMachine` state machine:
+This protects against:
 
-1. `KeyGenMachine::new(params, context)` → round-1 coefficients
-2. `SecretShareMachine::generate_secret_shares(rng, commitments)` → encrypted shares
-3. `KeyMachine::calculate_share(rng, shares)` → `BlameMachine`
-4. `BlameMachine::complete()` → `ThresholdKeys<Ed25519T>`
+- Address file substitution (attacker swaps the recipient's exported file
+  for one with attacker-controlled keys)
+- Truncation or partial-paste corruption
+- Social engineering ("send to my new address" with a substituted file)
 
-`MultisigDkgSession` in `shekyl-wallet-core` wraps this state machine
-with type-safe round transitions and error handling. DKG messages are
-exchanged as files (air-gap compatible); they are **not** exposed over
-RPC due to the `dkg-pedpop` types lacking `serde` serialization support.
+The fingerprint comparison places a small but real burden on users. This
+is intentional. The alternative — silently sending to whatever address
+the wallet parses — is unacceptable for high-value multisig usage.
 
-The resulting `ThresholdKeys` are serialized and stored in `MultisigGroup`
-alongside the PQC keypair material and group metadata.
+### 6.5 Future: chain-anchored group registry
 
-### Signing Protocol (Rust-native)
-
-The FROST signing protocol is orchestrated through `MultisigSigningSession`
-in `shekyl-wallet-core` and exposed via JSON-RPC in `shekyl-wallet-rpc`:
-
-1. **`multisig_create_signing`**: Creates a `MultisigSigningSession` with
-   `FrostSalSession` per input and a `FrostSigningCoordinator`.
-
-2. **`multisig_sign_preprocess`**: The local participant generates FROST
-   commitments (nonces) for all inputs.
-
-3. **`multisig_sign_add_preprocess`**: Commitments from remote participants
-   are added to the coordinator.
-
-4. **`multisig_sign_nonce_sums`**: Once all preprocesses are collected, the
-   coordinator computes aggregated nonce sums per input.
-
-5. **`multisig_sign_own`**: The local participant produces FROST signing
-   shares using the aggregated nonces.
-
-6. **`multisig_sign_add_shares`**: Shares from remote participants are
-   added to the coordinator.
-
-7. **`multisig_sign_aggregate`**: The coordinator aggregates all shares
-   into `SpendAuthAndLinkability` pairs and calls `prove_with_sal()` to
-   produce the final FCMP++ proof.
-
-All byte fields in RPC are hex-encoded for transport. PQC hybrid
-signatures are assembled alongside the FROST proof as in non-FROST mode.
-
-### Transition to Lattice Threshold
-
-FROST SAL provides classical threshold signing as a bridge. When lattice
-threshold research matures sufficiently for a NIST-backed standard, the
-FROST SAL layer will be replaced by a lattice threshold scheme that
-provides quantum resistance for both the classical and PQC layers.
+A V3.3+ candidate enhancement would add a `CreateGroup` transaction type
+that commits a group's pubkeys on-chain at a short identifier. Addresses
+would reference the on-chain group by short hash (~100 B address). This is
+explicitly out of V3.1 scope and would be a consensus change.
 
 ---
 
-## V4: Lattice-Based Composite Threshold (Future)
+## 7. Receiving Outputs
 
-### Motivation
+### 7.1 Per-output KEM fan-out (Option C)
 
-The V3 signature-list approach is functional but scales linearly in
-transaction size with the number of signers. For configurations beyond
-3-of-5, the size overhead becomes material. A lattice-based threshold
-scheme produces a single compact signature regardless of M or N.
+For each multisig-recipient output, the sender performs N separate KEM
+encapsulations, producing N independent ephemeral hybrid signing keypairs.
 
-### Core Concept
+```python
+def construct_multisig_output(
+    sender_tx_secret_key:  secret_key,
+    recipient_address:     MultisigAddress,
+    amount:                u64,
+    output_index:          u64,
+    kem_seed:              [u8; 32],   # see §7.2
+):
+    kem_ciphertexts    = []   # N × HybridKemCiphertext
+    ephemeral_sign_pks = []   # N × HybridSignPubkey
+    view_tag_hints     = []   # N × u8
 
-In lattice cryptography, the hardness assumption is finding short vectors
-in a high-dimensional lattice (Module-LWE / SIS problems).
+    for i in range(recipient_address.n_total):
+        # Per-participant deterministic KEM randomness
+        kem_randomness_i = HKDF_Expand(
+            kem_seed,
+            b"shekyl-v31-multisig-kem" || u64_le(output_index) || u8(i),
+            64
+        )
 
-- Each participant's private key is a short vector `s_i` (small
-  coefficients).
-- The composite public key is the vector sum:
-  `pk = s_1 + s_2 + ... + s_N`
-- To sign, any M participants each produce a partial short vector `p_j`.
-- The verifier receives the sum: `sigma = p_1 + p_2 + ... + p_M`
-- Verification succeeds if `sigma` is sufficiently short AND satisfies the
-  lattice equation for `pk`.
+        # Encap to participant i's KEM pubkey
+        ct_i, ss_i = HybridKEM.encap_deterministic(
+            recipient_address.hybrid_kem_pubkeys[i],
+            kem_randomness_i
+        )
+        kem_ciphertexts.append(ct_i)
 
-The threshold property comes from the fact that only M short vectors are
-needed to reach a valid short `sigma`; fewer than M vectors fail the
-equation. The remaining (N-M) vectors stay secret.
+        # Derive participant i's per-output ephemeral signing keypair
+        secrets_i = derive_output_secrets(ss_i, output_index)
+        ephemeral_pk_i = derive_hybrid_sign_pubkey(secrets_i)
+        ephemeral_sign_pks.append(ephemeral_pk_i)
 
-### Advantages Over Signature List
+        # 1-byte hint for fast scanner identification
+        view_tag_hints.append(
+            HKDF_Expand(ss_i, b"shekyl-v31-view-tag", 1)[0]
+        )
 
-- Single compact `pqc_auth` field (~7-9 KB for any M-of-N, vs linear
-  scaling).
-- True threshold security (no single party can spend).
-- Single-equation verification (constant time, independent of N).
-- Preserves full-chain anonymity (threshold math happens off-chain).
+    # Canonical leaf container
+    leaf_container = MultisigKeyContainer {
+        n_total:    recipient_address.n_total,
+        m_required: recipient_address.m_required,
+        keys:       ephemeral_sign_pks,
+    }
 
-### Barriers (Realistic)
+    # 4th leaf scalar (consensus re-derives this on spend)
+    h_pqc = multisig_pqc_leaf_hash(leaf_container)
 
-- **Research maturity:** Threshold lattice signatures (e.g. "Threshold
-  Dilithium" variants from 2024-2026 literature) are not NIST-standardized.
-  Specific scheme selection requires further survey.
-- **DKG complexity:** Distributed key generation must be secure against
-  malicious participants. This adds protocol steps and attack surface that
-  the V3 approach avoids entirely.
-- **Performance:** Lattice operations are heavier than Ed25519. Partial
-  signing rounds add latency during coordination (not during on-chain
-  validation).
-- **Audit requirements:** A formal security review of the chosen threshold
-  scheme is mandatory before consensus activation.
+    # Output public key uses prover's per-output classical material
+    # (see §11.1 for prover assignment)
+    prover_idx = rotating_prover_index(
+        recipient_address.group_id,
+        output_index,
+        reference_block_hash
+    )
+    prover_secrets = derive_output_secrets(
+        shared_secrets[prover_idx], output_index
+    )
+    output_pubkey = prover_secrets.classical_pk
+    commitment    = Commit(amount, prover_secrets.commitment_mask)
 
-### Integration Plan
+    return OutputConstruction {
+        output_pubkey,
+        commitment,
+        kem_ciphertexts,
+        view_tag_hints,
+        h_pqc,
+        leaf_container,
+    }
+```
 
-| `scheme_id` | Name | Target |
-|---|---|---|
-| 3 | `lattice_threshold_composite` | V4 (HF2+) |
+### 7.2 Deterministic KEM seed
 
-The `PqcAuthentication` container carries the composite public key and
-summed signature. Verification is a single lattice relation check.
+The `kem_seed` derives from the transaction's secret key:
 
-### Rollout Phases
+```
+kem_seed = HKDF_Expand(
+    tx_secret_key,
+    b"shekyl-v31-kem-seed" || u64_le(output_index),
+    32
+)
+```
 
-Shekyl uses a feature-driven upgrade policy (see `docs/UPGRADE_POLICY.md`).
-Phases advance when their prerequisites are met, not on a fixed calendar.
-Lattice threshold standards are not yet finalized by NIST.
+`tx_secret_key` MUST be freshly generated per transaction. Wallets MUST
+assert this and refuse to construct a transaction if `tx_secret_key`
+is reused.
 
-| Phase | Feature | Prerequisite |
-|---|---|---|
-| V4.0 | Scheme selection and Rust prototype in `rust/shekyl-crypto-pq` | V3 mainnet stabilized |
-| V4.1 | DKG protocol implementation in Tauri wallet | V4.0 prototype reviewed |
-| V4.2 | Testnet experiment with `scheme_id = 3` behind feature gate | V4.1 complete |
-| V4.3 | Security audit and mainnet activation (HF2+) | V4.2 go report; formal audit |
+### 7.3 tx_extra additions
 
-### Hybrid Fallback
+Per multisig-recipient output:
 
-During the V4 transition period, `scheme_id = 2` (signature list) remains
-valid. Wallets can offer both options. `scheme_id = 3` becomes mandatory
-only after a grace period following activation.
+```
+TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT  (0x06)  N × 1120 B
+TX_EXTRA_TAG_PQC_LEAF_HASHES     (0x07)  32 B
+TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS  (0x09)  N × 1 B  (NEW in V3.1)
+```
 
-### Open Research Items
+`TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS` (0x09) MUST be absent for single-sig
+outputs. Wallets MUST reject any single-sig-shaped output that contains
+this tag, to prevent ambiguous classification.
 
-- Select a specific lattice threshold scheme from recent literature and
-  evaluate against Shekyl's size/performance constraints.
-- Define the DKG protocol and its security model (honest-majority vs
-  dishonest-majority).
-- Benchmark signing time, verification time, and tx size for realistic
-  M-of-N configurations.
-- ~~Publish test vectors once the Rust prototype is complete.~~
-  Published as `docs/PQC_TEST_VECTOR_002_MULTISIG.json` (wire-format sizes,
-  verification pipeline, and adversarial inputs for `scheme_id = 2`).
+**Reserved tags (do not use in V3.1):**
+- `0x08`: `TX_EXTRA_TAG_MULTISIG_MIGRATION` — future group-to-group migration
+
+### 7.4 Spend-time consensus binding
+
+The spend-time binding works through the existing FCMP++ leaf hash check
+combined with the `pqc_auth` size check, both already in V3 consensus.
+
+When the multisig-owned output is spent:
+
+1. The spender presents `pqc_auths[i].hybrid_public_key` containing the
+   canonical `MultisigKeyContainer` (the same N ephemeral pubkeys).
+2. `blockchain.cpp:3720` computes `shekyl_fcmp_pqc_leaf_hash(blob)`.
+3. The FCMP++ proof confirms this leaf is in the curve tree.
+4. Any blob other than the canonical container fails leaf hash matching,
+   and the proof rejects.
+
+The size check at `tx_pqc_verify.cpp:206-211` independently rejects
+attempts to spend with `scheme_id=1` against a multisig-shaped blob
+(blob size ≠ HYBRID_SINGLE_KEY_LEN of 1996 bytes).
+
+**Defense-in-depth wiring fixes** (no consensus rule change, but explicit
+enforcement of rules already implicitly guaranteed):
+
+- `blockchain.cpp:3768` SHOULD pass `expected_scheme_id` derived from
+  the output's `tx_extra_pqc_ownership` to `verify_transaction_pqc_auth`
+- `rust/shekyl-ffi/src/lib.rs:343` SHOULD pass `expected_group_id` to
+  `verify_multisig` when `scheme_id == 2`
+
+These plug latent wiring gaps that the existing code's comments
+explicitly call out as "consensus must supply this." Both fixes increase
+robustness without changing what consensus accepts.
+
+### 7.5 Wallet-side filtering of malformed outputs
+
+Outputs that look multisig-shaped but cannot be decapped by the claimed
+recipient group are griefing artifacts (see §3.3). Wallets MUST:
+
+1. Attempt KEM decap on every output where the participant's KEM
+   ciphertext slot is present
+2. If decap fails, mark the output as garbage in wallet state and never
+   surface it in balance, history, or any user-visible interface
+3. Periodically purge garbage entries to prevent state bloat
+4. Optionally log griefing-attack indicators if a sustained pattern is
+   detected (without false-positive risk for normal failed decaps)
+
+This bounds the attack to scanner CPU cost, with no user impact.
+
+### 7.6 Wallet send-side requirements
+
+When sending to a multisig recipient, the sender's wallet MUST:
+
+1. Display the address fingerprint (§6.3) and require user confirmation
+2. Verify that the parsed address has a valid Bech32m checksum
+3. Verify that all N hybrid pubkey blobs deserialize correctly
+4. Reject addresses with `n_total > 7` or `m_required > n_total`
+5. Compute and surface the per-output size cost (so users understand
+   why a multisig-recipient transaction is larger than a single-sig)
 
 ---
 
-## Use Cases
+## 8. Wallet Scanning
 
-### Treasury Management
+### 8.1 View tag hint check
 
-Organizations holding significant SHEKYL — development funds, community
-treasuries, business operating accounts — require that no single person can
-unilaterally spend. A 2-of-3 or 3-of-5 multisig ensures cooperative
-authorization.
+Each participant's wallet processes outputs as follows:
 
-### Staking Security
+```python
+def check_output_for_me(output, my_participant_index, my_kem_secret):
+    hints = parse_tx_extra_tag(output.tx_extra, 0x09)
+    if hints is None:
+        return None  # not multisig-shaped
 
-Staked positions locked at the long tier (150,000 blocks / ~208 days)
-represent months of illiquidity with real yield at stake. A single key
-controlling that position is a single point of failure for 7 months.
-Multisig staked outputs require M-of-N authorization for claim transactions
-and for the eventual unlock-and-spend.
+    if my_participant_index >= len(hints):
+        return None  # group cardinality mismatch
 
-### Inheritance and Recovery
+    # Decap only my slot
+    my_ct = parse_kem_ciphertext_slot(output, my_participant_index)
+    ss = HybridKEM.decap(my_kem_secret, my_ct)
+    if ss is None:
+        return None  # decap failure (could be grief or unrelated tx)
 
-A 2-of-3 setup where the owner holds two keys and a trusted party holds one
-allows normal day-to-day operation (owner uses their two keys) while
-providing estate recovery if the owner is incapacitated.
+    # Fast hint check
+    expected_hint = HKDF_Expand(ss, b"shekyl-v31-view-tag", 1)[0]
+    if expected_hint != hints[my_participant_index]:
+        return None  # not for us; mark as garbage if decap-shaped
 
-### Escrow
+    # Full verification (slower path)
+    secrets = derive_output_secrets(ss, output_index)
+    if not verify_output_ownership(output, secrets):
+        return None  # malformed; mark as garbage
 
-Buyer, seller, and arbitrator each hold a key in a 2-of-3. Direct
-settlement requires buyer + seller agreement. Disputes are resolved by the
-arbitrator co-signing with the aggrieved party.
+    return MatchedOutput { secrets, ... }
+```
 
----
+### 8.2 Cost
 
-## Privacy Considerations
+Per output: 1 KEM decap + 1 HKDF for hint comparison. False positive rate
+~1/256 (1-byte hint), each false positive triggering a full output
+ownership check that ultimately rejects.
 
-### On-Chain Indistinguishability
+Per-participant scanning cost is **not multiplied by N**. Each participant
+processes only their own ciphertext slot.
 
-For V3 (signature list), multisig transactions are distinguishable from
-single-signer transactions by their `scheme_id` and larger `pqc_auth` size.
-This is a privacy trade-off accepted for V3 given negligible multisig
-volume.
+### 8.3 Garbage tracking
 
-For V4 (lattice threshold), the composite signature is the same size
-regardless of M or N, but the `scheme_id` still differs from single-signer.
-True indistinguishability would require all transactions to use the same
-scheme — this is a V5+ consideration if multisig adoption grows
-significantly.
-
-### FCMP++ Anonymity
-
-Neither V3 nor V4 multisig affects the FCMP++ membership proof layer. The
-`pqc_auths` field carries authorization material, not membership proof data.
-The anonymity set (full UTXO set) is unchanged.
+Outputs that fail decap or hint check are tracked separately from real
+balance state. Garbage entries are purged periodically (e.g., every 10,000
+blocks) to bound state growth.
 
 ---
 
-## Relationship to Other Documents
+## 9. Spend Intent
 
-| Document | Relevant changes |
+### 9.1 Schema
+
+```
+SpendIntent {
+    // Versioning
+    version:          u8 (= 1)
+    intent_id:        [u8; 32]   // random per intent
+
+    // Group binding
+    group_id:         [u8; 32]
+
+    // Proposer
+    proposer_index:   u8
+    proposer_sig:     HybridSignature   // over all other fields
+
+    // Temporal binding
+    created_at:       u64
+    expires_at:       u64
+    tx_counter:       u64
+    reference_block_height: u64
+    reference_block_hash:   [u8; 32]
+
+    // Content
+    recipients: [
+        { address: Bech32mAddress, amount: u64 }
+    ]   // sorted
+    fee:              u64
+    input_global_indices: [u64]   // sorted ascending
+
+    // Determinism anchor
+    kem_randomness_seed: [u8; 32]   // 32 fresh random bytes
+
+    // Optional: chain state fingerprint binding
+    chain_state_fingerprint: [u8; 32]   // see §9.3
+}
+```
+
+### 9.2 Invariants (verified before any signer signs)
+
+1. `version == 1`
+2. `group_id` matches the verifier's group
+3. `proposer_index < n_total`
+4. `proposer_sig` verifies against `hybrid_signing_pubkeys[proposer_index]`
+5. `created_at ≤ now ≤ expires_at`
+6. `expires_at - created_at ≤ 86400` (24-hour validity max)
+7. `tx_counter` equals the group's currently-expected counter
+8. `reference_block_height ≥ FCMP_REFERENCE_BLOCK_MIN_AGE` blocks behind
+   tip and `≤ FCMP_REFERENCE_BLOCK_MAX_AGE`
+9. `reference_block_hash` matches the chain's block at
+   `reference_block_height` per the verifier's local view
+10. All `input_global_indices` are owned by the group, unspent, and
+    eligible at the reference height
+11. Recipients are sorted; no duplicate (address, amount) tuples
+12. `sum(recipient.amount) + fee == sum(input.amount)` per local view
+13. `kem_randomness_seed` is unique within the group's history of
+    `seen_intents` (replay/linkability prevention)
+14. `chain_state_fingerprint` matches the verifier's local fingerprint
+    (see §9.3); mismatch → resync, do not sign
+
+### 9.3 Chain state fingerprint
+
+Members must agree on chain state to safely sign. Each intent commits to:
+
+```
+chain_state_fingerprint = cn_fast_hash(
+    reference_block_hash ||
+    sorted_concat(input_global_indices) ||
+    sorted_concat(input_eligible_heights) ||
+    sorted_concat(input_amounts)
+)
+```
+
+This fingerprint is computed by the proposer. Each verifier independently
+recomputes from their local view. Mismatch indicates either chain state
+divergence or attempted manipulation. Either way: do not sign; trigger
+sync.
+
+### 9.4 Intent hash
+
+```
+intent_hash = cn_fast_hash(canonical_serialize(SpendIntent))
+```
+
+`intent_hash` is the durable identifier. All subsequent messages reference
+it.
+
+---
+
+## 10. Canonical Construction
+
+### 10.1 Algorithm
+
+Given verified `SpendIntent`, every member runs:
+
+1. **Pre-flight verification** (§9.2 invariants). On any failure, publish
+   `Veto`; do not proceed.
+2. **Output derivation** (§7.1). For each recipient (and the change
+   output, if any), derive output public key, KEM ciphertext(s), leaf hash.
+3. **Transaction prefix construction.** Inputs reference key images
+   computed from each input's prover-assigned `y` (§11.1); outputs are
+   derived per step 2; `tx_extra` includes KEM ciphertexts, leaf hashes,
+   view tag hints.
+4. **RCT base.** Type = `RCTTypeFcmpPlusPlusPqc (=7)`; ecdh info,
+   commitment masks, pseudo outputs all deterministic from intent.
+5. **Compute `signing_payload`** (§10.4).
+
+### 10.2 Bulletproof+ range proofs
+
+**Important change from earlier drafts:** Bulletproof+ range proofs use
+**fresh randomness produced by the prover**, not deterministic blinding
+from the intent. This was changed during V3.1 design after cryptographic
+review concerns about deterministic BP+ blinding.
+
+Concrete protocol:
+
+1. The prover (§11.1) constructs the BP+ proof with fresh randomness
+2. The prover publishes it as part of the `ProverOutput` message (§12.2)
+3. Each signer independently verifies the BP+ proof against the canonical
+   output commitments before signing
+4. The signer signs only after BP+ verification succeeds
+
+This costs one verification round per signer (~10ms per verification) but
+eliminates novel cryptographic claims about deterministic BP+ blinding.
+The prover already has discretion over FCMP++ proof construction; BP+
+joins it.
+
+### 10.3 Change output handling
+
+When the group sends to itself (a change output):
+
+- The change recipient is the group's own multisig address
+- The Option C construction (§7.1) applies identically
+- N KEM encapsulations to the group's own KEM pubkeys
+- N fresh per-output ephemeral keys derived
+- Leaf hash committed
+- Result: change output is byte-identically constructible by every
+  participant from the intent + group address
+
+**There is no single-sig change escape hatch.** Change outputs are full
+multisig-bound outputs requiring `scheme_id=2` authorization to spend,
+identical to any other multisig output.
+
+### 10.4 Canonical signing payload
+
+```
+signing_payload = cn_fast_hash(
+    serialize(TransactionPrefixV3) ||
+    serialize(RctSigBase) ||
+    cn_fast_hash(serialize(RctSigPrunable_skeleton)) ||
+    serialize(PqcAuthHeader) ||
+    H(hybrid_pubkeys[0]) || ... || H(hybrid_pubkeys[n_total-1])
+)
+```
+
+Where `RctSigPrunable_skeleton` excludes the FCMP++ proof and BP+ proof
+(both come from the prover asynchronously). Their hashes are included
+separately in the signature share commitment (§12.2.1).
+
+### 10.5 Tiebreaker for conflicting intents
+
+When two proposers publish conflicting intents at the same `tx_counter`:
+
+```
+winner = intent that the prover (per §11.1) acknowledges first via
+         signed ProverReceipt message (§12.2)
+```
+
+The prover acts as a deterministic tiebreaker by emitting a
+`ProverReceipt` for the first valid intent they receive. The receipt is
+a hybrid-signed message:
+
+```
+ProverReceipt {
+    prover_index:    u8
+    intent_hash:     [u8; 32]
+    received_at:     u64
+    sig:             HybridSignature   // over all above
+}
+```
+
+Members observing two conflicting intents accept the one with the
+prover's earlier-timestamped, signed receipt. Members who already signed
+the losing intent publish a `Veto` to reset state.
+
+**Why not hash-based tiebreaking:** hash comparison can be ground by an
+attacker varying `intent_id`, `created_at`, `kem_randomness_seed`. The
+prover-receipt mechanism cannot be ground because the prover holds private
+state (their own per-output classical key) that determines who they ack
+first based on observation order, not intent content.
+
+---
+
+## 11. Spending: Prover and Signing
+
+### 11.1 Rotating prover assignment
+
+For each output being spent, the prover is determined deterministically:
+
+```
+prover_index(output) = first_byte(
+    cn_fast_hash(
+        group_id ||
+        output_block_height ||
+        output_position_in_block ||
+        reference_block_hash
+    )
+) mod n_total
+```
+
+This uses on-chain-observable data (the output's block height and position
+within that block) plus the group_id and reference_block_hash from the
+intent. Every group member computes the same prover_index for the same
+output.
+
+### 11.2 Prover responsibilities per output
+
+The prover for an input:
+
+1. Computes the FCMP++ proof using their per-output ephemeral classical
+   key `y_prover_i`
+2. Generates fresh-randomness Bulletproof+ range proofs for the
+   transaction's outputs (§10.2)
+3. Publishes a `ProverOutput` message (§12.2) containing both proofs
+
+The prover holds **only** the per-output classical key for outputs they
+were assigned. Compromise of one prover's host exposes their per-output
+keys for those outputs only — not the group's spending power generally.
+
+### 11.3 Signer verification of prover assignment (CRITICAL INVARIANT)
+
+Honest signers MUST verify that the FCMP++ proof was constructed by the
+**correct** assigned prover before producing a signature. This is the
+honest-signer enforcement of prover-uniqueness.
+
+Concretely, before signing:
+
+```python
+def verify_prover_assignment(input, prover_output, intent):
+    expected_prover = rotating_prover_index(
+        intent.group_id,
+        input.output_block_height,
+        input.output_position_in_block,
+        intent.reference_block_hash
+    )
+    if prover_output.prover_index != expected_prover:
+        raise ProverAssignmentMismatch
+    
+    # Verify the proof's key image is derivable from the expected
+    # prover's per-output classical key
+    expected_key_image = compute_expected_key_image(
+        input, expected_prover, group.kem_shared_secrets
+    )
+    if input.key_image != expected_key_image:
+        raise KeyImageProverMismatch
+    
+    return True
+```
+
+**Why this matters:** consensus does not enforce prover assignment. If
+honest signers don't verify it, a malicious member could construct a
+valid FCMP++ proof for an output they're *not* assigned to spend (using
+their own per-output `y_i`), produce a different valid key image, and —
+with M-of-N collusion — successfully drain that output. With honest-signer
+verification, this attack requires M signers to all skip the check. In
+the M-of-N collusion case, security is already lost; in the
+honest-majority case, security holds.
+
+This invariant is the V3.1 substitute for consensus-level prover-uniqueness
+enforcement (which would require a hard fork).
+
+### 11.4 Signing protocol (non-interactive scheme_id=2)
+
+Each signer in the M-of-N selected subset:
+
+1. Receives intent + ProverOutput (with FCMP++ proof + BP+ proof)
+2. Independently reconstructs the canonical transaction (§10)
+3. Verifies the FCMP++ proof against signing_payload
+4. Verifies the BP+ range proofs
+5. Verifies prover assignment (§11.3)
+6. Computes the final tx_hash (including the prover's proofs)
+7. Produces hybrid (Ed25519 + ML-DSA-65) signature over signing_payload
+8. Publishes `SignatureShare` (§12.2) including the tx_hash commitment
+
+### 11.5 Assembly
+
+Any member with M valid SignatureShare messages:
+
+1. Verifies all M tx_hash commitments agree (mismatch → publish Veto,
+   abort; this catches prover equivocation, see §12.2.4)
+2. Constructs `pqc_auth` blob with scheme_id=2 layout
+3. Submits transaction to daemon
+
+Multiple members may attempt assembly simultaneously. Network picks
+whichever broadcast succeeds first.
+
+### 11.6 The 1/N permanent loss limitation
+
+A participant who permanently loses their keys cannot serve as prover for
+the outputs they were assigned. Approximately 1/N of group outputs become
+permanently unspendable.
+
+For N=3: 33% loss risk per missing key.
+For N=5: 20%.
+For N=7: 14%.
+
+This is documented as an accepted V3.1 limitation. Users MUST be informed
+during group setup. V4 FROST SAL eliminates this entirely by making
+proving a threshold operation; V3.2 may add a key escrow protocol as a
+mitigation.
+
+---
+
+## 12. Messages and Transport
+
+### 12.1 Common envelope
+
+```
+MultisigEnvelope {
+    version:        u8 (= 1)
+    group_id:       [u8; 32]
+    message_type:   u8                  // ENCRYPTED in payload (see §12.5)
+    intent_hash:    [u8; 32]
+    sender_index:   u8
+    sender_sig:     HybridSignature     // over above + payload
+    payload:        EncryptedBlob
+}
+```
+
+The envelope's `message_type` is encrypted along with the payload (§12.5)
+to prevent role-pattern leakage to relay observers. Cleartext envelope
+fields are limited to: `version`, `group_id`, `sender_index`, `intent_hash`,
+`sender_sig`, encrypted payload.
+
+### 12.2 Message types (encrypted)
+
+- `0x01` — `SpendIntent` (proposer publishes)
+- `0x02` — `ProverOutput` (FCMP++ proof + BP+ proofs)
+- `0x03` — `SignatureShare` (signer's hybrid signature + tx_hash commitment)
+- `0x04` — `Veto` (refusal to participate or abort signal)
+- `0x05` — `ProverReceipt` (prover's tiebreaker acknowledgment)
+- `0x06` — `Heartbeat` (liveness + censorship detection, §13.3)
+- `0x07` — `CounterProof` (state recovery, §13.4)
+- `0x08` — `GroupStateSummary` (periodic synchronization)
+
+#### 12.2.1 SignatureShare structure
+
+```
+SignatureShare {
+    signer_index:               u8
+    hybrid_sig:                 HybridSignature
+    tx_hash_commitment:         [u8; 32]
+    fcmp_proof_commitment:      [u8; 32]
+    bp_plus_proof_commitment:   [u8; 32]
+}
+```
+
+The three commitments let the assembler detect prover equivocation
+(see §12.2.4).
+
+#### 12.2.4 Prover equivocation detection
+
+If a malicious prover sends different `ProverOutput` messages to different
+signer subsets, the resulting `SignatureShare` messages will have
+disagreeing `fcmp_proof_commitment` or `bp_plus_proof_commitment` values.
+
+Detection rule: if any two signature shares for the same intent have
+disagreeing commitments, the prover has equivocated. Members publish:
+
+```
+EquivocationProof {
+    prover_index:    u8
+    intent_hash:     [u8; 32]
+    proof_a:         (ProverOutput message including prover_sig)
+    proof_b:         (different ProverOutput message including prover_sig)
+}
+```
+
+The two prover_sig values together prove the prover signed two different
+outputs for the same intent — undeniable equivocation. The prover is
+marked untrusted by all members. Recovery options: rotate prover for
+remaining outputs (deterministic rotation already gives some natural
+rotation), or in extreme cases, group rebuild (V3.2+ protocol).
+
+### 12.3 Encryption
+
+Per-message symmetric key derivation:
+
+```
+message_key = HKDF_Expand(
+    group_shared_secret,
+    intent_hash || u8(message_type) || u8(sender_index),
+    32
+)
+```
+
+The `group_shared_secret` is the DKG-derived 32-byte value from §5.2.
+**Production deployments MUST use DKG** (no member knows the full secret
+alone).
+
+AEAD: ChaCha20-Poly1305 with 96-bit nonce derived as
+`HKDF_Expand(group_shared_secret, b"nonce" || u8(sender_index) || u64(message_counter), 12)`.
+
+### 12.4 Multi-relay mandatory
+
+Members MUST publish each message to **at least 3 independent relays**
+operated by disjoint operators. The list of subscribed relays is part of
+group state, established at setup time.
+
+Members read from all subscribed relays. The first valid copy of any
+message wins; later duplicates are deduplicated by `(intent_hash,
+message_type, sender_index)`.
+
+### 12.5 Cleartext envelope minimization
+
+The encrypted `message_type` prevents passive observers from inferring
+roles (only-prover-sends-0x02, only-signers-send-0x03). Observers see
+encrypted blobs at varying sizes addressed to a stable `group_id`. This
+is significant timing/role obfuscation but not perfect — for stronger
+privacy, see traffic padding in V3.2 future work.
+
+### 12.6 Transport bindings
+
+**Nostr relay binding:** Each message posted as a Nostr kind-30000
+replaceable event with `d` tag including `group_id` and unique message
+identifier. Nostr signature is for relay acceptance only; cryptographic
+authority is the envelope's `sender_sig`.
+
+**Direct P2P binding:** Members connect via mTLS with hybrid certificates
+when network topology permits. Direct messages still subject to all
+envelope/encryption requirements.
+
+**File binding:** Air-gap-compatible. Files written with naming convention
+`shekyl-multisig-<group_id_hex>-<intent_hash>-<message_type>-<sender_index>.bin`.
+Note: file naming reveals message_type in cleartext on the filesystem —
+acceptable for air-gap workflows but should be flagged in user-facing
+docs as a metadata leak risk if files are stored on shared media.
+
+---
+
+## 13. State Machine and Counter Recovery
+
+### 13.1 Per-intent state
+
+Each member tracks per-intent state:
+
+```
+PROPOSED       → intent received, not yet verified
+VERIFIED       → §9.2 invariants pass
+PROVER_READY   → ProverOutput received and verified
+SIGNED         → this member produced and published SignatureShare
+ASSEMBLED      → M signatures observed
+BROADCAST      → tx confirmed in mempool / on-chain
+REJECTED       → veto threshold reached or chain-rejected
+TIMED_OUT      → expires_at reached without BROADCAST
+```
+
+### 13.2 tx_counter advancement
+
+`tx_counter` advances ONLY upon observed chain state, not local optimism.
+Specifically: tx_counter increments to k+1 when a member observes the
+broadcast tx confirmed in their local chain at height ≥ N confirmations
+(default N=3; configurable per group).
+
+### 13.3 Heartbeat protocol
+
+Members publish a `Heartbeat` message every `HEARTBEAT_INTERVAL`
+(default: 5 minutes) to all subscribed relays:
+
+```
+Heartbeat {
+    sender_index:       u8
+    timestamp:          u64
+    last_seen_intent:   [u8; 32]   // most recent intent_hash this member observed
+    sig:                HybridSignature
+}
+```
+
+Members compare received heartbeats to detect:
+
+- Missing heartbeats from a specific member (offline or censored)
+- Disagreement on `last_seen_intent` (relay censorship)
+- Time skew
+
+If a member observes heartbeats from M-1 others but is missing one
+expected member's heartbeat, they should retry across all subscribed
+relays before assuming the member is offline.
+
+If members observe disagreement on `last_seen_intent` across heartbeats,
+this indicates relay censorship targeting some subset of members. Action:
+escalate to user, attempt cross-relay recovery, do not advance state
+optimistically.
+
+### 13.4 CounterProof recovery
+
+When a member is at stale tx_counter (others have advanced beyond them),
+recovery uses cryptographic chain proof:
+
+```
+CounterProof {
+    sender_index:      u8
+    advancing_to:      u64                  // new tx_counter value
+    tx_hash:           [u8; 32]             // tx that advanced the counter
+    block_height:      u64
+    block_hash:        [u8; 32]
+    tx_position:       u16
+    sender_sig:        HybridSignature
+}
+```
+
+A stale member receiving a `CounterProof`:
+
+1. Verifies `block_hash` matches their local chain at `block_height`
+   (waits for sync if necessary)
+2. Verifies `tx_hash` appears in that block at `tx_position`
+3. Verifies the tx was indeed a multisig spend by their group (via
+   `pqc_auths.scheme_id == 2` and `multisig_pqc_leaf_hash` matching one
+   of their tracked outputs)
+4. If all checks pass, advances local `tx_counter` to `advancing_to`
+
+This is a verifiable forward jump. No trust required: stale members
+cryptographically confirm the counter advancement against on-chain
+reality. The mechanism resolves the partition-driven desync attack
+identified in adversarial review.
+
+If a member receives a `CounterProof` for a block they don't yet have,
+they wait for chain sync. They do NOT veto or treat conflicting intents
+as adversarial — they're temporarily behind, and the proof tells them
+exactly how to catch up.
+
+### 13.5 Disagreement resolution
+
+**Conflicting intents same counter** → §10.5 prover-receipt tiebreaker
+
+**Proposer disappears mid-flight** → expires_at; group transitions to
+TIMED_OUT and discards
+
+**Prover disappears** → for that output, intent times out; rotating prover
+means subsequent intents involving different outputs may proceed normally;
+1/N permanent-loss applies per §11.6
+
+**Chain reorg of reference_block** → all in-flight intents referencing the
+orphaned block transition to TIMED_OUT; require re-proposal with new
+reference_block
+
+**Equivocation by prover** → §12.2.4 detection and untrust
+
+### 13.6 Per-proposer rate limiting
+
+To prevent intent-spam DoS:
+
+- Each proposer_index may have at most 1 active intent at a time per
+  group (active = state in {PROPOSED, VERIFIED, PROVER_READY, SIGNED})
+- New proposals from same proposer are rejected with rate-limit veto
+  until prior intent reaches BROADCAST, REJECTED, or TIMED_OUT
+
+This bounds verification work to N concurrent intents maximum (one per
+member).
+
+---
+
+## 14. Security Properties
+
+### 14.1 Authorization
+
+| Property | Mechanism |
 |---|---|
-| `POST_QUANTUM_CRYPTOGRAPHY.md` | `scheme_id` registry extended; deferred scope updated; classical multisig removed from implementation notes |
-| `V3_ROLLOUT.md` | Multisig tx size guidance with `MAX_MULTISIG_PARTICIPANTS = 7` ceiling; classical multisig removal noted; staking FFI dependency flagged |
-| `DESIGN_CONCEPTS.md` | Staking section references multisig as operational security option |
-| `STAKER_REWARD_DISBURSEMENT.md` | Claim transactions support multisig authorization |
-| `RELEASE_CHECKLIST.md` | Multisig testing items and fuzz targets to be added |
-| `account.cpp` | `make_multisig` and classical secret-splitting code removed |
-| `wallet2.h` | All classical multisig types, methods, fields, and MMS integration removed |
-| `wallet_errors.h` | `mms_error`, `no_connection_to_bitmessage`, `bitmessage_api_error` removed |
-| `wallet/api/wallet2_api.h` | `MultisigState` struct, all virtual multisig API declarations removed |
-| `wallet/api/wallet.h` | Multisig method override declarations removed |
-| `wallet/api/wallet.cpp` | Multisig helpers, implementations, `PRE_VALIDATE_BACKGROUND_SYNC` multisig guard, `signMultisigParticipant` removed |
-| `wallet/api/pending_transaction.cpp` | `multisigSignData`, `signMultisigTx`, multisig threshold check removed |
-| `device_trezor/protocol.*` | `translate_klrki`, `MoneroMultisigKLRki`, `m_multisig`, and cout decryption removed |
-| `wallet_tools.cpp` | `m_multisig*` wallet resets removed |
-| `trezor_tests.cpp` | `multisig_sigs.clear()` removed |
-| `functional_tests/multisig.py` | Deleted (classical multisig functional test) |
-| `cold_signing.py` | `multisig_txset` assertion removed |
+| No unilateral spend | scheme_id=2 consensus requires M PQC signatures |
+| No unilateral redirect | Deterministic construction; signers reconstruct and verify |
+| No prover override | §11.3 honest-signer prover assignment verification |
+
+### 14.2 Privacy
+
+| Property | Mechanism |
+|---|---|
+| Per-output forward privacy | Option C N-fold KEM fan-out; per-output ephemeral keys |
+| Spend-to-spend unlinkability | Different ephemeral N-key blobs per spend |
+| Group identity privacy from passive observer | group_id not on-chain; encrypted transport |
+| Role-pattern privacy from relay observers | Encrypted message_type in envelope |
+
+### 14.3 Liveness
+
+| Property | Status |
+|---|---|
+| Any M honest signers can advance | Yes (assuming the assigned prover is among them) |
+| Proposer disappearance recovery | Yes (timeout + re-propose) |
+| Signer disappearance recovery | Yes if M others remain |
+| Prover disappearance per-output | Limited; 1/N outputs lock per missing prover (V4 fixes) |
+| Network partition recovery | Yes via CounterProof |
+| Relay censorship resistance | Multi-relay + heartbeat detection |
+
+### 14.4 Integrity
+
+| Property | Mechanism |
+|---|---|
+| Tx hash integrity through assembly | tx_hash_commitment in SignatureShare |
+| Prover proof integrity | fcmp_proof_commitment + bp_plus_proof_commitment in SignatureShare |
+| Prover non-equivocation | Equivocation produces undeniable proof (§12.2.4) |
+| Counter integrity | CounterProof recovery (§13.4); advances on observed chain state |
+| Replay resistance | intent_id, kem_randomness_seed freshness, expires_at, reference_block_hash, tx_counter |
 
 ---
 
-## References
+## 15. Forward Compatibility
 
-- Monero multisig documentation: <https://docs.getmonero.org/multisignature/>
-- Monero MMS guide: <https://web.getmonero.org/resources/user-guides/multisig-messaging-system.html>
-- Esgin et al., "Practical Exact Proofs from Lattices" (2019)
-- Lyubashevsky et al., lattice-based ring/group signature constructions (2022-2026)
-- NIST PQC standards: ML-DSA (FIPS 204), ML-KEM (FIPS 203)
-- Shekyl PQC spec: `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
-- Shekyl staker disbursement: `docs/STAKER_REWARD_DISBURSEMENT.md`
+### 15.1 Reserved namespace
+
+| Reserved Item | Purpose |
+|---|---|
+| `group_version` field, value `0x01` | Future rotated groups use higher values |
+| HRP `shekyl1n...` | Rotated-key multisig (V3.2+) |
+| `TX_EXTRA_TAG_MULTISIG_MIGRATION (0x08)` | Group-to-group migration (V3.2+) |
+
+### 15.2 V3.2 candidate features
+
+- **Group key rotation:** Migration tx that consumes current group's
+  outputs and re-emits to a new group_version with rotated keys
+- **Granular KEM-only rotation:** Replace KEM keys without changing
+  signing keys (or vice versa)
+- **Key escrow protocol:** Optional escrow of prover-required material
+  to mitigate 1/N permanent loss
+
+### 15.3 V3.3 candidate features
+
+- **Chain-anchored group registry:** New tx type committing groups
+  on-chain at short identifiers; reduces address size from ~35 KB to
+  ~100 bytes; opt-in (groups preferring privacy keep addresses off-chain)
+- **Traffic padding for transport privacy:** Dummy messages, batched
+  delivery to obscure timing
+
+### 15.4 V4 path
+
+- **FROST SAL with Carrot-style address typing:** Threshold-shared
+  classical key eliminates the prover role entirely; no per-output
+  prover assignment; no 1/N permanent loss
+- Receiving model (Option C) carries forward unchanged
+- Governance protocol (this document's §9-13) carries forward unchanged
+- Only the prover layer changes
+
+### 15.5 Migration to V4
+
+The V3.1→V4 migration is designed to be smooth: existing V3.1 groups can
+opt to upgrade by performing FROST DKG over their existing signing keys,
+producing distributed `y_threshold` material. Existing outputs to the
+group can be spent under V4 rules without re-creating the group. Group
+identity (group_id) remains stable; only the proving mechanism changes.
+
+---
+
+## 16. Implementation Plan
+
+### 16.1 New Rust modules
+
+```
+shekyl-wallet-core/src/multisig/v31/
+├── intent.rs              — SpendIntent type, canonical serialization
+├── construction.rs        — canonical_construct() deterministic function
+├── prover.rs              — ProverOutput; rotating prover assignment
+├── signing.rs             — non-interactive scheme_id=2 signing
+├── messages.rs            — envelope + message types
+├── encryption.rs          — group_shared_secret + AEAD
+├── transport/
+│   ├── mod.rs
+│   ├── nostr.rs           — Nostr binding
+│   ├── p2p.rs             — direct P2P binding
+│   └── file.rs            — air-gap file binding
+├── state.rs               — per-intent state machine
+├── heartbeat.rs           — liveness protocol
+├── counter_proof.rs       — recovery mechanism
+└── tx_counter.rs          — counter advancement on observed chain state
+
+shekyl-crypto-pq/src/multisig_receiving.rs
+├── construct_multisig_output_for_sender
+├── scan_multisig_output_for_participant
+└── rotating_prover_index
+```
+
+### 16.2 New tx_extra tag
+
+`src/cryptonote_basic/tx_extra.h`:
+- Add `TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS = 0x09`
+- Reserve `TX_EXTRA_TAG_MULTISIG_MIGRATION = 0x08`
+
+### 16.3 Defense-in-depth wiring fixes
+
+`src/cryptonote_core/blockchain.cpp:3768`:
+- Wire `expected_scheme_id` from output's `tx_extra_pqc_ownership`
+
+`rust/shekyl-ffi/src/lib.rs:343`:
+- Pass `expected_group_id` to `verify_multisig` for scheme_id=2
+
+These are not strictly required for correctness (existing leaf hash + size
+check provide indirect binding) but plug latent wiring gaps.
+
+### 16.4 Modified C++
+
+- `src/cryptonote_core/cryptonote_tx_utils.cpp`: add multisig-aware output
+  construction path (new function; does not modify single-sig path)
+- `src/wallet/wallet2.cpp`: add multisig output scanning and garbage filtering
+
+### 16.5 New address parsing
+
+- `rust/shekyl-encoding/src/lib.rs`: add `shekyl1m` HRP parsing
+- `rust/shekyl-address/`: add `MultisigAddress` type
+
+### 16.6 GUI wallet changes
+
+- Multisig page: file-based address import/export
+- Multisig page: mandatory fingerprint verification dialog
+- Multisig page: per-intent state display, veto, equivocation indicators
+- Settings: relay configuration (minimum 3 mandatory)
+- Settings: heartbeat interval
+- DKG ceremony UI for group setup
+
+### 16.7 Feature flag
+
+`shekyl-wallet-rpc` crate: add `multisig-v3.1` feature, replacing the
+dormant `multisig` feature. The pre-existing FROST SAL scaffolding moves
+to a separate `frost-sal-v4` feature, kept for V4 work.
+
+### 16.8 Test matrix
+
+**Functional:**
+- 2-of-3, 3-of-5, 5-of-7 happy paths (receive + spend)
+- Single-sig sender → multisig receiver
+- Multisig sender → multisig receiver (chained groups)
+- Change outputs (group sending to itself)
+- Staked outputs received and claimed by multisig groups
+
+**Adversarial:**
+- Malicious proposer (bad recipients, bad fee, bad reference block)
+- Malicious prover (wrong payload, malformed proof, equivocation)
+- Malicious signer (no sig, wrong payload, duplicate sig)
+- Malicious assembler (tampered tx, dropped signatures)
+- Network partition + CounterProof recovery
+- Relay censorship (drop, reorder, inject, split-brain)
+- Conflicting simultaneous intents (prover-receipt tiebreaking)
+- Tiebreaker grinding attempts (prove non-grindability)
+- Wrong-prover key image attempt (honest-signer detection)
+- Prover equivocation (detection + EquivocationProof)
+- Sustained griefing attack (wallet filtering, no balance corruption)
+
+**Determinism:**
+- Same intent + chain state → byte-identical tx across 10⁶ iterations
+- Cross-platform determinism (x86_64 Linux, macOS, Windows)
+
+**Performance:**
+- Scanner cost at 10k+ tx/block with 5%/10%/25% multisig adoption
+- Prover proof construction time benchmark
+- Multi-relay overhead measurement
+
+### 16.9 Fuzz targets
+
+- `fuzz_spend_intent_deserialize`
+- `fuzz_construction_determinism`
+- `fuzz_envelope_parser`
+- `fuzz_multisig_address_parse`
+- `fuzz_view_tag_hint_check`
+- `fuzz_rotating_prover_assignment` (uniformity statistics)
+- `fuzz_counter_proof_verifier`
+- `fuzz_equivocation_proof_verifier`
+
+### 16.10 Rollout sequencing
+
+1. **Phase 1 (4-6 weeks):** Receiving model + sender-side construction
+   in `shekyl-crypto-pq`. Address format and parsing. tx_extra tag
+   addition. Wallet-side filtering. Defense-in-depth wiring fixes.
+2. **Phase 2 (4-6 weeks):** Governance protocol (intent, construction,
+   signing, assembly). State machine. CounterProof. Heartbeat. Multi-relay
+   transport. DKG mandatory enforcement.
+3. **Phase 3 (2-3 weeks):** GUI integration. Fingerprint verification UI.
+   Group setup ceremony UI. State visualization.
+4. **Phase 4 (2-4 weeks):** Test matrix execution. Fuzz harness setup.
+   Cross-platform determinism validation.
+5. **Phase 5 (2 weeks):** Adversarial review by external reviewers.
+6. **Phase 6 (TBD):** Cryptographer review of view-tag-hint information
+   theory; rotating prover assignment uniformity; KEM-derivation chain.
+
+Total estimate: **14-23 weeks** of focused engineering work, plus review.
+
+---
+
+## Appendix A: Mapping from Original Spec
+
+This document supersedes:
+
+- `PQC_MULTISIG.md` (original; coordinator-based)
+- `PQC_MULTISIG_V3_1.md` (governance draft)
+- `PQC_MULTISIG_V3_1_RECEIVING.md` (Option C receiving draft)
+
+All material from the three predecessor documents is consolidated here.
+The two predecessor V3.1 drafts can be deleted from the repo once this
+document is merged. The original `PQC_MULTISIG.md` should be updated to
+a single-paragraph deprecation pointer.
+
+For attack analysis, size analysis, and design rationale, see the
+companion document `PQC_MULTISIG_V3_1_ANALYSIS.md`.
