@@ -698,6 +698,9 @@ pub fn verify(
     let c2_ok = HELIOS_FCMP_GENERATORS.generators.verify(c2_verifier);
 
     if !ed_ok || !c1_ok || !c2_ok {
+        eprintln!(
+            "[fcmp::verify] batch check failed: ed={ed_ok} c1={c1_ok} c2={c2_ok}"
+        );
         return Err(VerifyError::BatchVerificationFailed);
     }
 

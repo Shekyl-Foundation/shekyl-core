@@ -1409,7 +1409,7 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
         pqc_hashes.push(shekyl_fcmp::leaf::PqcLeafScalar(ph));
     }
 
-    shekyl_fcmp::proof::verify(
+    match shekyl_fcmp::proof::verify(
         &proof,
         &key_images,
         &pseudo_outs,
@@ -1417,8 +1417,17 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
         &tree_root,
         tree_depth,
         signable_tx_hash,
-    )
-    .unwrap_or_default()
+    ) {
+        Ok(true) => true,
+        Ok(false) => {
+            eprintln!("[shekyl_fcmp_verify] proof verification returned false");
+            false
+        }
+        Err(e) => {
+            eprintln!("[shekyl_fcmp_verify] proof verification error: {e:?}");
+            false
+        }
+    }
 }
 
 /// Convert raw output data into serialized 4-scalar leaves.
