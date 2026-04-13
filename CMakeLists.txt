@@ -735,6 +735,19 @@ endif()
 # Trezor support check
 include(CheckTrezor)
 
+if(MSVC AND NOT DEFINED BUILD_WALLET_ONLY)
+  set(BUILD_WALLET_ONLY ON CACHE BOOL "MSVC: default to wallet-only (daemon unsupported)" FORCE)
+  message(STATUS "MSVC detected -- defaulting to BUILD_WALLET_ONLY=ON. Override with -DBUILD_WALLET_ONLY=OFF -DMSVC_DAEMON_UNSUPPORTED_OK=ON")
+endif()
+
+if(MSVC AND NOT BUILD_WALLET_ONLY AND NOT MSVC_DAEMON_UNSUPPORTED_OK)
+  message(FATAL_ERROR
+    "MSVC daemon builds are unsupported. CryptonightR JIT is disabled (stub), "
+    "so PoW verification is significantly slower than GCC/Clang builds.\n"
+    "  - For wallet-core only: remove -DBUILD_WALLET_ONLY=OFF (it defaults to ON on MSVC)\n"
+    "  - To force daemon build anyway: add -DMSVC_DAEMON_UNSUPPORTED_OK=ON")
+endif()
+
 if(MSVC)
   add_definitions("/bigobj /MP /FS /W3 /GS- /D_CRT_SECURE_NO_WARNINGS /wd4996 /wd4345 /D_WIN32_WINNT=0x0600 /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DGTEST_HAS_TR1_TUPLE=0 /FIinline_c.h /D__SSE4_1__ /Zc:preprocessor")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FIiso646.h")
