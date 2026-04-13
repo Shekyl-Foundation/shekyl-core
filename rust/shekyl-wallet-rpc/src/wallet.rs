@@ -29,6 +29,24 @@
 //! Safe Rust wrapper around the wallet2 C FFI.
 //!
 //! All methods serialize/deserialize through JSON at the FFI boundary.
+//!
+//! # Account-state invariant (SECURITY PROPERTY)
+//!
+//! This library has **no current-account state**. Every method that operates
+//! on an account takes an explicit `account_index` parameter. There is no
+//! `set_account`, no per-connection session default, no interior-mutable
+//! current-account field.
+//!
+//! When a Rust wallet RPC server is built on top of this library, the same
+//! invariant must hold: **every RPC method schema requires `account_index`
+//! as a parameter; there is no `set_account` method.** Client-side defaults
+//! are the client's responsibility (e.g. `ReplSession` in shekyl-cli).
+//!
+//! Rationale: server-side current-account state creates race conditions
+//! between concurrent clients, produces non-deterministic audit logs, and
+//! has been a persistent source of user-funds-loss bugs in the Bitcoin
+//! `accounts` API (deprecated for exactly this reason). Do not reintroduce
+//! this pattern.
 
 use crate::ffi;
 use std::ffi::{CStr, CString};

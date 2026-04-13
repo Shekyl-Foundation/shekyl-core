@@ -9,7 +9,13 @@
 //! Rust wallet stack as the GUI: wallet2 via FFI for lifecycle, Rust scanner
 //! for reads, and native-sign for transaction construction.
 
-mod commands;
+pub mod commands;
+pub mod daemon;
+pub mod display;
+pub mod errors;
+pub mod resolve;
+pub mod session;
+pub mod validate;
 mod wallet;
 
 use clap::Parser;
@@ -21,8 +27,8 @@ use tracing_subscriber::EnvFilter;
     about = "Shekyl interactive CLI wallet",
     version
 )]
-struct Cli {
-    /// Daemon address (host:port)
+pub struct Cli {
+    /// Daemon address (host:port or full URL)
     #[arg(long, default_value = "localhost:11028")]
     daemon_address: String,
 
@@ -45,6 +51,21 @@ struct Cli {
     /// Open a wallet file immediately on startup
     #[arg(long)]
     wallet_file: Option<String>,
+
+    /// SOCKS5 proxy for daemon connections (e.g. socks5://127.0.0.1:9050).
+    /// Uses distinct SOCKS auth for Tor stream isolation.
+    #[arg(long)]
+    proxy: Option<String>,
+
+    /// Path to PEM CA certificate for self-signed daemon TLS.
+    /// Only needed for https:// daemon addresses with custom CAs.
+    #[arg(long)]
+    daemon_ca_cert: Option<String>,
+
+    /// Show raw error details. Output goes to stderr (if TTY) or
+    /// ~/.shekyl/debug.log (0600) when stderr is piped.
+    #[arg(long, default_value_t = false)]
+    pub debug: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -79,13 +100,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &cli.wallet_dir,
     )?;
 
+    let daemon_client = match daemon::DaemonClient::new(
+        &cli.daemon_address,
+        cli.proxy.as_deref(),
+        cli.daemon_ca_cert.as_deref(),
+    ) {
+        Ok(dc) => Some(dc),
+        Err(daemon::DaemonError::NotConfigured) => None,
+        Err(e) => {
+            eprintln!("Warning: daemon client init failed: {e}");
+            None
+        }
+    };
+
     if let Some(ref filename) = cli.wallet_file {
         let password = prompt_password("Wallet password: ")?;
         ctx.open(filename, &password)?;
         println!("Opened wallet: {filename}");
     }
 
-    commands::repl(ctx)
+    commands::repl(ctx, daemon_client, cli.debug)
 }
 
 pub fn prompt_password(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {

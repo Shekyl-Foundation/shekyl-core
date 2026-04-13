@@ -4,12 +4,47 @@
 
 ### ✨ Added
 
-- **`shekyl-cli` interactive CLI wallet scaffold.** New Rust crate
-  `rust/shekyl-cli/` providing an interactive REPL replacement for
-  `simplewallet`. Consumes `shekyl-wallet-rpc` in library mode (same stack
-  as the GUI). MVP commands: create, open, close, address, balance, transfer,
-  transfers, seed, restore, refresh, save, status, help. Uses `rustyline` for
-  readline/history and `rpassword` for no-echo password input.
+- **`shekyl-cli` full parity with simplewallet (40 of 81 commands).** The
+  `rust/shekyl-cli/` crate now covers all actively-used simplewallet
+  functionality. Key additions since the initial scaffold:
+  - **Security-hardened UX**: `display.rs` for secret display with TTY
+    checks, multiplexer warnings, best-effort scrollback clear, and honest
+    residual-scrollback warning. `errors.rs` for JSON-RPC error sanitization
+    (strips paths/hex; `--debug` routes raw errors to stderr or 0600 log
+    file, never stdout). Context-specific `confirm_dangerous()` tokens for
+    destructive operations (sweep amount, address prefix, acknowledgment
+    phrase).
+  - **Stateless account model**: `ReplSession` holds session-default
+    account on REPL stack; `ResolvedCommand` enum resolves `--account N` at
+    parse time. No wallet-level current-account state.
+    `--subaddr-index`/`--subaddr-indices` for subaddress selection.
+  - **Independent daemon client**: `daemon.rs` using ureq (rustls backend,
+    pinned) for `chain_health`. SOCKS stream isolation via distinct auth
+    username. `--daemon-ca-cert` and `--proxy` CLI flags. Differentiated
+    error reporting (5 failure modes).
+  - **Staking**: `stake`, `unstake`, `claim`, `staking_info`, `chain_health`.
+  - **Keys**: `viewkey`, `spendkey` with terminal safety; `export_key_images`
+    (0600 permissions, `--since-height`, `--all`); `import_key_images` with
+    format validation.
+  - **Proofs**: `get_tx_key`, `check_tx_key`, `get_tx_proof`,
+    `check_tx_proof`, `get_reserve_proof`, `check_reserve_proof`.
+  - **Wallet ops**: `password` (old-first with fast-fail validation),
+    `rescan` (`confirm_dangerous`), `sweep_all` (privacy warning),
+    `show_transfer`.
+  - **Offline signing**: `describe_transfer`, `sign_transfer`,
+    `submit_transfer`; `--do-not-relay` on `transfer`.
+  - **Signing**: `sign`, `verify` (domain separation documented),
+    `version`, `wallet_info` (no filename).
+  - **Input validation**: `validate.rs` with hex, txid, address, and
+    input-length validators.
+  - **Fuzz tests**: `proptest` dev-dependency with 14 property tests for
+    amount parsing, hex validation, address validation, and argument
+    parsing.
+  - **Parity matrix**: `docs/CLI_PARITY_MATRIX.md` maps all 81
+    simplewallet commands to shekyl-cli equivalents or explicit out-of-scope
+    with reasons. Phase 3 deletion gate defined.
+  - **Categorized help** with per-command usage docs and domain-separation
+    note on sign/verify.
 
 - **CI gate: `dalek-ff-group` version isolation.** Added a workflow step that
   asserts `shekyl-ffi`'s normal dependency tree never pulls in

@@ -54,6 +54,26 @@ Each item is out of scope for the current PR but worth tracking for future work.
   with proper PQC-enabled miner addresses to produce real commitments and
   KEM ciphertexts.
 
+- **`shekyl-cli` offline signing uses hex blobs on the command line.**
+  A future improvement should support QR-code-sized chunked transfer for
+  air-gapped signing (e.g. `--qr` flag that splits into scannable chunks).
+  Currently, unsigned/signed transaction sets are passed as hex strings
+  which can be very long for multi-output transactions.
+
+- **`shekyl-cli` key image export uses JSON-RPC format, not C++ binary.**
+  The current implementation exports key images via the `export_key_images`
+  JSON-RPC method and writes JSON. For byte-identical interop with the C++
+  binary format (`"Shekyl key image export\003"` magic + view-key encrypted),
+  add FFI functions `wallet2_ffi_export_key_images_to_file` and
+  `wallet2_ffi_import_key_images_from_file` that call the underlying C++
+  file-based export/import. This preserves interop with hardware-wallet and
+  cold-spend workflows built on the binary format.
+
+- **`rpassword` transitive dependency audit.** Pin `rpassword = "7"` and
+  periodically audit for `windows-sys` bumps. Terminal echo restoration on
+  panic has had CVEs in CLI password tooling. Run `cargo audit` in CI
+  (already configured) with `rpassword` in scope.
+
 - **Test code `wallet_tools.cpp` still uses mixin/decoy infrastructure.**
   The `gen_tx_src` function constructs fake outputs for ring-style source
   entries. This is legacy test infrastructure that works but is conceptually
