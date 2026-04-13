@@ -12,27 +12,24 @@
 //!
 //! Wire format size assertions are inline.
 
-use curve25519_dalek::{
-    constants::ED25519_BASEPOINT_POINT as G,
-    scalar::Scalar,
-};
+use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT as G, scalar::Scalar};
 use rand_core::OsRng;
 
 use shekyl_crypto_pq::{
     kem::{HybridX25519MlKem, KeyEncapsulation},
     output::{
-        construct_output, compute_output_key_image, derive_proof_secrets,
-        rederive_combined_ss, scan_output_recover, OutputData,
+        compute_output_key_image, construct_output, derive_proof_secrets, rederive_combined_ss,
+        scan_output_recover, OutputData,
     },
 };
 use shekyl_proofs::{
-    tx_proof::{
-        self, generate_outbound_proof, verify_outbound_proof,
-        generate_inbound_proof, verify_inbound_proof, OnChainOutput,
-    },
     reserve_proof::{
-        self, generate_reserve_proof, verify_reserve_proof,
-        ReserveOutputEntry, ReserveOnChainOutput,
+        self, generate_reserve_proof, verify_reserve_proof, ReserveOnChainOutput,
+        ReserveOutputEntry,
+    },
+    tx_proof::{
+        self, generate_inbound_proof, generate_outbound_proof, verify_inbound_proof,
+        verify_outbound_proof, OnChainOutput,
     },
 };
 
@@ -136,9 +133,13 @@ fn test_01_outbound_proof_round_trip() {
     .expect("generate outbound proof");
 
     let expected_size = tx_proof::outbound_proof_size(1);
-    assert_eq!(proof.len(), expected_size,
-        "outbound proof size: expected {expected_size}, got {}", proof.len());
-    assert_eq!(expected_size, 101 + 128 * 1, "wire format: 101 + 128*N");
+    assert_eq!(
+        proof.len(),
+        expected_size,
+        "outbound proof size: expected {expected_size}, got {}",
+        proof.len()
+    );
+    assert_eq!(expected_size, 101 + 128, "wire format: 101 + 128*N");
 
     let verified = verify_outbound_proof(
         &proof,
@@ -155,7 +156,10 @@ fn test_01_outbound_proof_round_trip() {
     assert_eq!(verified.len(), 1);
     assert_eq!(verified[0].output_index, 0);
     assert_eq!(verified[0].amount, 1_000_000);
-    eprintln!("[test_01] outbound proof round-trip OK, amount={}", verified[0].amount);
+    eprintln!(
+        "[test_01] outbound proof round-trip OK, amount={}",
+        verified[0].amount
+    );
 }
 
 // --------------------------------------------------------------------------
@@ -179,10 +183,7 @@ fn test_02_inbound_proof_round_trip() {
     )
     .expect("scan_output_recover");
 
-    let ps = derive_proof_secrets(
-        &recovered.combined_ss.try_into().expect("64 bytes"),
-        0,
-    );
+    let ps = derive_proof_secrets(&recovered.combined_ss, 0);
 
     let proof = generate_inbound_proof(
         &ctx.view_secret,
@@ -195,7 +196,7 @@ fn test_02_inbound_proof_round_trip() {
 
     let expected_size = tx_proof::inbound_proof_size(1);
     assert_eq!(proof.len(), expected_size);
-    assert_eq!(expected_size, 69 + 128 * 1, "wire format: 69 + 128*N");
+    assert_eq!(expected_size, 69 + 128, "wire format: 69 + 128*N");
 
     let verified = verify_inbound_proof(
         &proof,
@@ -210,7 +211,10 @@ fn test_02_inbound_proof_round_trip() {
 
     assert_eq!(verified.len(), 1);
     assert_eq!(verified[0].amount, 2_000_000);
-    eprintln!("[test_02] inbound proof round-trip OK, amount={}", verified[0].amount);
+    eprintln!(
+        "[test_02] inbound proof round-trip OK, amount={}",
+        verified[0].amount
+    );
 }
 
 // --------------------------------------------------------------------------
@@ -259,10 +263,7 @@ fn test_03_outbound_inbound_consistency() {
             i as u64,
         )
         .expect("scan");
-        per_output_secrets.push(derive_proof_secrets(
-            &recovered.combined_ss.try_into().expect("64"),
-            i as u64,
-        ));
+        per_output_secrets.push(derive_proof_secrets(&recovered.combined_ss, i as u64));
     }
 
     let inbound = generate_inbound_proof(
@@ -288,10 +289,16 @@ fn test_03_outbound_inbound_consistency() {
     assert_eq!(outbound_verified.len(), inbound_verified.len());
     for (ov, iv) in outbound_verified.iter().zip(&inbound_verified) {
         assert_eq!(ov.output_index, iv.output_index);
-        assert_eq!(ov.amount, iv.amount,
-            "outbound/inbound amount mismatch at output {}", ov.output_index);
+        assert_eq!(
+            ov.amount, iv.amount,
+            "outbound/inbound amount mismatch at output {}",
+            ov.output_index
+        );
     }
-    eprintln!("[test_03] outbound/inbound consistency OK for {} outputs", outbound_verified.len());
+    eprintln!(
+        "[test_03] outbound/inbound consistency OK for {} outputs",
+        outbound_verified.len()
+    );
 }
 
 // --------------------------------------------------------------------------
@@ -318,13 +325,9 @@ fn test_04_reserve_proof_round_trip() {
         let hp_point = shekyl_generators::biased_hash_to_point(ctx.on_chain[i].output_key);
         let hp_bytes = hp_point.compress().to_bytes();
 
-        let ki_result = compute_output_key_image(
-            &combined_ss.0,
-            i as u64,
-            &ctx.spend_secret,
-            &hp_bytes,
-        )
-        .expect("key image");
+        let ki_result =
+            compute_output_key_image(&combined_ss.0, i as u64, &ctx.spend_secret, &hp_bytes)
+                .expect("key image");
 
         entries.push(ReserveOutputEntry {
             proof_secrets: ps,
@@ -365,8 +368,12 @@ fn test_04_reserve_proof_round_trip() {
     let mut total = 0u64;
     for v in &verified {
         total += v.amount;
-        eprintln!("[test_04] output {}: amount={}, ki={}", v.output_index, v.amount,
-            hex::encode(&v.key_image[..8]));
+        eprintln!(
+            "[test_04] output {}: amount={}, ki={}",
+            v.output_index,
+            v.amount,
+            hex::encode(&v.key_image[..8])
+        );
     }
     assert_eq!(total, 10_000_000 + 10_000_001 + 10_000_002);
     eprintln!("[test_04] reserve proof round-trip OK, total={total}");
@@ -405,8 +412,10 @@ fn test_05_tampered_proof_secrets_rejected() {
     );
 
     assert!(result.is_err(), "tampered ho must be rejected");
-    eprintln!("[test_05] tampered ProofSecrets correctly rejected: {:?}",
-        result.unwrap_err());
+    eprintln!(
+        "[test_05] tampered ProofSecrets correctly rejected: {:?}",
+        result.unwrap_err()
+    );
 }
 
 // --------------------------------------------------------------------------
@@ -449,8 +458,10 @@ fn test_06_swapped_proof_secrets_rejected() {
     );
 
     assert!(result.is_err(), "swapped ProofSecrets must be rejected");
-    eprintln!("[test_06] swapped ProofSecrets correctly rejected: {:?}",
-        result.unwrap_err());
+    eprintln!(
+        "[test_06] swapped ProofSecrets correctly rejected: {:?}",
+        result.unwrap_err()
+    );
 }
 
 // --------------------------------------------------------------------------
@@ -486,9 +497,14 @@ fn test_07_cross_tx_replay_rejected() {
         &ctx.on_chain,
     );
 
-    assert!(result.is_err(), "cross-tx replay must be rejected (Schnorr is txid-bound)");
-    eprintln!("[test_07] cross-tx replay correctly rejected: {:?}",
-        result.unwrap_err());
+    assert!(
+        result.is_err(),
+        "cross-tx replay must be rejected (Schnorr is txid-bound)"
+    );
+    eprintln!(
+        "[test_07] cross-tx replay correctly rejected: {:?}",
+        result.unwrap_err()
+    );
 }
 
 // --------------------------------------------------------------------------
@@ -512,10 +528,7 @@ fn test_08_wrong_view_key_inbound_rejected() {
     )
     .expect("scan");
 
-    let ps = derive_proof_secrets(
-        &recovered.combined_ss.try_into().expect("64"),
-        0,
-    );
+    let ps = derive_proof_secrets(&recovered.combined_ss, 0);
 
     let wrong_view_secret = Scalar::random(&mut OsRng).to_bytes();
 
@@ -539,8 +552,10 @@ fn test_08_wrong_view_key_inbound_rejected() {
     );
 
     assert!(result.is_err(), "wrong view key must be rejected");
-    eprintln!("[test_08] wrong view key correctly rejected: {:?}",
-        result.unwrap_err());
+    eprintln!(
+        "[test_08] wrong view key correctly rejected: {:?}",
+        result.unwrap_err()
+    );
 }
 
 // Tests 9 and 10 (watch-only / restored wallet outbound proof errors) are
@@ -622,8 +637,8 @@ fn test_multi_output_outbound() {
 // --------------------------------------------------------------------------
 #[test]
 fn test_gate4_signing_round_trip_100() {
-    for iteration in 0..100 {
-        let ctx = setup(1, 1_000_000 + iteration as u64);
+    for iteration in 0u64..100 {
+        let ctx = setup(1, 1_000_000 + iteration);
         let indices = vec![0u64];
 
         let proof = generate_outbound_proof(
@@ -649,10 +664,14 @@ fn test_gate4_signing_round_trip_100() {
         )
         .unwrap_or_else(|e| panic!("iteration {iteration}: verify failed: {e}"));
 
-        assert_eq!(verified.len(), 1, "iteration {iteration}: wrong output count");
+        assert_eq!(
+            verified.len(),
+            1,
+            "iteration {iteration}: wrong output count"
+        );
         assert_eq!(
             verified[0].amount,
-            1_000_000 + iteration as u64,
+            1_000_000 + iteration,
             "iteration {iteration}: amount mismatch"
         );
     }

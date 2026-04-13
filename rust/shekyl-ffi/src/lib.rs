@@ -3,6 +3,20 @@
 //! Exposes Rust functionality to C++ through a C-compatible ABI.
 //! All public functions use `extern "C"` with `#[no_mangle]`.
 
+// FFI boundary code has structural patterns that trigger clippy lints:
+// - extern "C" functions take raw pointers (not_unsafe_ptr_arg_deref)
+// - C-compatible APIs require specific cast patterns
+// - Mathematical variable names follow cryptographic notation (non_snake_case)
+#![allow(
+    clippy::not_unsafe_ptr_arg_deref,
+    clippy::missing_safety_doc,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::manual_let_else,
+    clippy::ptr_as_ptr,
+    non_snake_case
+)]
+
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
 };
@@ -143,13 +157,11 @@ impl ShekylBuffer {
 /// different `len` is undefined behavior — it reconstructs a `Vec` with
 /// mismatched capacity.
 #[no_mangle]
-pub extern "C" fn shekyl_buffer_free(ptr: *mut u8, len: usize) {
+pub unsafe extern "C" fn shekyl_buffer_free(ptr: *mut u8, len: usize) {
     if !ptr.is_null() && len > 0 {
-        unsafe {
-            use zeroize::Zeroize;
-            std::slice::from_raw_parts_mut(ptr, len).zeroize();
-            drop(Vec::from_raw_parts(ptr, len, len));
-        }
+        use zeroize::Zeroize;
+        std::slice::from_raw_parts_mut(ptr, len).zeroize();
+        drop(Vec::from_raw_parts(ptr, len, len));
     }
 }
 
@@ -270,14 +282,11 @@ pub extern "C" fn shekyl_pqc_sign(
     };
 
     let scheme = HybridEd25519MlDsa;
-    let secret_key = match HybridSecretKey::from_canonical_bytes(secret_key_bytes) {
-        Ok(sk) => sk,
-        Err(_) => {
-            return ShekylPqcSignatureResult {
-                signature: ShekylBuffer::null(),
-                success: false,
-            }
-        }
+    let Ok(secret_key) = HybridSecretKey::from_canonical_bytes(secret_key_bytes) else {
+        return ShekylPqcSignatureResult {
+            signature: ShekylBuffer::null(),
+            success: false,
+        };
     };
 
     match scheme
@@ -328,13 +337,11 @@ pub extern "C" fn shekyl_pqc_verify(
     match scheme_id {
         1 => {
             let scheme = HybridEd25519MlDsa;
-            let pk = match HybridPublicKey::from_canonical_bytes(pk_bytes) {
-                Ok(pk) => pk,
-                Err(_) => return false,
+            let Ok(pk) = HybridPublicKey::from_canonical_bytes(pk_bytes) else {
+                return false;
             };
-            let sig = match HybridSignature::from_canonical_bytes(sig_bytes) {
-                Ok(s) => s,
-                Err(_) => return false,
+            let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
+                return false;
             };
             scheme.verify(&pk, msg, &sig).unwrap_or(false)
         }
@@ -372,18 +379,15 @@ pub extern "C" fn shekyl_pqc_verify_debug(
     match scheme_id {
         1 => {
             let scheme = HybridEd25519MlDsa;
-            let pk = match HybridPublicKey::from_canonical_bytes(pk_bytes) {
-                Ok(pk) => pk,
-                Err(_) => return 11,
+            let Ok(pk) = HybridPublicKey::from_canonical_bytes(pk_bytes) else {
+                return 11;
             };
-            let sig = match HybridSignature::from_canonical_bytes(sig_bytes) {
-                Ok(s) => s,
-                Err(_) => return 11,
+            let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
+                return 11;
             };
             match scheme.verify(&pk, msg, &sig) {
                 Ok(true) => 0,
-                Ok(false) => 10, // CryptoVerifyFailed
-                Err(_) => 10,
+                Ok(false) | Err(_) => 10,
             }
         }
         2 => {
@@ -401,8 +405,11 @@ pub extern "C" fn shekyl_pqc_verify_debug(
 /// Compute the deterministic group_id for a MultisigKeyContainer blob.
 ///
 /// Writes 32 bytes to `out_ptr`. Returns true on success.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_pqc_multisig_group_id(
+pub unsafe extern "C" fn shekyl_pqc_multisig_group_id(
     keys_ptr: *const u8,
     keys_len: usize,
     out_ptr: *mut u8,
@@ -416,16 +423,13 @@ pub extern "C" fn shekyl_pqc_multisig_group_id(
 
     use shekyl_crypto_pq::multisig::{multisig_group_id, MultisigKeyContainer};
 
-    let container = match MultisigKeyContainer::from_canonical_bytes(keys_bytes) {
-        Ok(c) => c,
-        Err(_) => return false,
+    let Ok(container) = MultisigKeyContainer::from_canonical_bytes(keys_bytes) else {
+        return false;
     };
 
     match multisig_group_id(&container) {
         Ok(id) => {
-            unsafe {
-                std::ptr::copy_nonoverlapping(id.as_ptr(), out_ptr, 32);
-            }
+            std::ptr::copy_nonoverlapping(id.as_ptr(), out_ptr, 32);
             true
         }
         Err(_) => false,
@@ -437,8 +441,11 @@ pub extern "C" fn shekyl_pqc_multisig_group_id(
 /// Compute Keccak-256 (cn_fast_hash) of `data_len` bytes at `data_ptr`.
 /// Result is written to `out_ptr` which must point to 32 writable bytes.
 /// Returns true on success, false if pointers are null.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_cn_fast_hash(
+pub unsafe extern "C" fn shekyl_cn_fast_hash(
     data_ptr: *const u8,
     data_len: usize,
     out_ptr: *mut u8,
@@ -446,33 +453,36 @@ pub extern "C" fn shekyl_cn_fast_hash(
     if out_ptr.is_null() {
         return false;
     }
-    let data = match slice_from_ptr(data_ptr, data_len) {
-        Some(s) => s,
-        None => return false,
+    let Some(data) = slice_from_ptr(data_ptr, data_len) else {
+        return false;
     };
     let hash = shekyl_crypto_hash::cn_fast_hash(data);
-    unsafe {
-        std::ptr::copy_nonoverlapping(hash.as_ptr(), out_ptr, 32);
-    }
+    std::ptr::copy_nonoverlapping(hash.as_ptr(), out_ptr, 32);
     true
 }
 
 /// Compute Merkle tree root hash from an array of 32-byte hashes.
 /// `hashes_ptr` points to `count * 32` contiguous bytes.
 /// Result is written to `out_ptr` (32 bytes).
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_tree_hash(hashes_ptr: *const u8, count: usize, out_ptr: *mut u8) -> bool {
+pub unsafe extern "C" fn shekyl_tree_hash(
+    hashes_ptr: *const u8,
+    count: usize,
+    out_ptr: *mut u8,
+) -> bool {
     if out_ptr.is_null() || (count > 0 && hashes_ptr.is_null()) {
         return false;
     }
     let hashes: Vec<shekyl_crypto_hash::Hash> = if count == 0 {
         vec![]
     } else {
-        let byte_len = match count.checked_mul(32) {
-            Some(n) => n,
-            None => return false,
+        let Some(byte_len) = count.checked_mul(32) else {
+            return false;
         };
-        let raw = unsafe { std::slice::from_raw_parts(hashes_ptr, byte_len) };
+        let raw = std::slice::from_raw_parts(hashes_ptr, byte_len);
         raw.chunks_exact(32)
             .map(|c| {
                 let mut h = [0u8; 32];
@@ -482,9 +492,7 @@ pub extern "C" fn shekyl_tree_hash(hashes_ptr: *const u8, count: usize, out_ptr:
             .collect()
     };
     let root = shekyl_crypto_hash::tree_hash(&hashes);
-    unsafe {
-        std::ptr::copy_nonoverlapping(root.as_ptr(), out_ptr, 32);
-    }
+    std::ptr::copy_nonoverlapping(root.as_ptr(), out_ptr, 32);
     true
 }
 
@@ -573,12 +581,14 @@ pub extern "C" fn shekyl_compute_burn_split(
 #[no_mangle]
 pub extern "C" fn shekyl_stake_weight(amount: u64, tier_id: u8) -> u64 {
     use shekyl_staking::tiers::tier_by_id;
-    let tier = match tier_by_id(tier_id) {
-        Some(t) => t,
-        None => return 0,
+    let Some(tier) = tier_by_id(tier_id) else {
+        return 0;
     };
-    ((amount as u128 * tier.yield_multiplier as u128) / shekyl_economics::params::SCALE as u128)
-        as u64
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        ((u128::from(amount) * u128::from(tier.yield_multiplier))
+            / u128::from(shekyl_economics::params::SCALE)) as u64
+    }
 }
 
 /// Get lock duration in blocks for a given tier.
@@ -612,50 +622,55 @@ pub extern "C" fn shekyl_stake_yield_multiplier(tier_id: u8) -> u64 {
 /// If `total_weighted_stake == 0`, returns `0`.
 /// If the quotient does not fit in `u64`, returns `0` and sets `*overflow_out` to `1` when
 /// `overflow_out` is non-null.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_calc_per_block_staker_reward(
+pub unsafe extern "C" fn shekyl_calc_per_block_staker_reward(
     total_reward_at_height: u64,
     stake_weight: u64,
     total_weighted_stake_lo: u64,
     total_weighted_stake_hi: u64,
     overflow_out: *mut u8,
 ) -> u64 {
-    unsafe {
-        if !overflow_out.is_null() {
-            *overflow_out = 0;
-        }
+    if !overflow_out.is_null() {
+        *overflow_out = 0;
     }
     let total_weighted_stake =
-        (total_weighted_stake_hi as u128) << 64 | (total_weighted_stake_lo as u128);
+        u128::from(total_weighted_stake_hi) << 64 | u128::from(total_weighted_stake_lo);
     if total_weighted_stake == 0 {
         return 0;
     }
-    let num = (total_reward_at_height as u128) * (stake_weight as u128);
+    let num = u128::from(total_reward_at_height) * u128::from(stake_weight);
     let q = num / total_weighted_stake;
-    if q > u64::MAX as u128 {
-        unsafe {
-            if !overflow_out.is_null() {
-                *overflow_out = 1;
-            }
+    if q > u128::from(u64::MAX) {
+        if !overflow_out.is_null() {
+            *overflow_out = 1;
         }
         return 0;
     }
-    q as u64
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        q as u64
+    }
 }
 
 /// Number of staking lock tiers (length of `TIERS`).
 #[no_mangle]
 pub extern "C" fn shekyl_stake_tier_count() -> u32 {
-    shekyl_staking::tiers::TIERS.len() as u32
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        shekyl_staking::tiers::TIERS.len() as u32
+    }
 }
 
 /// UTF-8 tier display name, null-terminated. Returns null for invalid `tier_id`.
 #[no_mangle]
 pub extern "C" fn shekyl_stake_tier_name(tier_id: u8) -> *const c_char {
     match tier_id {
-        0 => b"Short\0".as_ptr() as *const c_char,
-        1 => b"Medium\0".as_ptr() as *const c_char,
-        2 => b"Long\0".as_ptr() as *const c_char,
+        0 => c"Short".as_ptr(),
+        1 => c"Medium".as_ptr(),
+        2 => c"Long".as_ptr(),
         _ => std::ptr::null(),
     }
 }
@@ -672,8 +687,11 @@ pub extern "C" fn shekyl_calc_stake_ratio(total_staked: u64, circulating_supply:
     if circulating_supply == 0 {
         return 0;
     }
-    (total_staked as u128 * shekyl_economics::params::SCALE as u128 / circulating_supply as u128)
-        as u64
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        (u128::from(total_staked) * u128::from(shekyl_economics::params::SCALE)
+            / u128::from(circulating_supply)) as u64
+    }
 }
 
 // ─── Emission Share (Component 4) ───────────────────────────────────────────
@@ -725,8 +743,11 @@ pub extern "C" fn shekyl_split_block_emission(
 /// Writes PEM-encoded private key to `key_pem_out` and PEM-encoded certificate
 /// to `cert_pem_out`. Caller owns both buffers and must free them with
 /// `shekyl_buffer_free`. Certificate validity follows rcgen defaults (~1 year).
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_generate_ssl_certificate(
+pub unsafe extern "C" fn shekyl_generate_ssl_certificate(
     key_pem_out: *mut ShekylBuffer,
     cert_pem_out: *mut ShekylBuffer,
 ) -> bool {
@@ -734,23 +755,19 @@ pub extern "C" fn shekyl_generate_ssl_certificate(
         return false;
     }
 
-    let key_pair = match rcgen::KeyPair::generate() {
-        Ok(kp) => kp,
-        Err(_) => return false,
+    let Ok(key_pair) = rcgen::KeyPair::generate() else {
+        return false;
     };
 
-    let cert = match rcgen::CertificateParams::default().self_signed(&key_pair) {
-        Ok(c) => c,
-        Err(_) => return false,
+    let Ok(cert) = rcgen::CertificateParams::default().self_signed(&key_pair) else {
+        return false;
     };
 
     let key_pem_str = key_pair.serialize_pem();
     let cert_pem_str = cert.pem();
 
-    unsafe {
-        *key_pem_out = ShekylBuffer::from_vec(key_pem_str.into_bytes());
-        *cert_pem_out = ShekylBuffer::from_vec(cert_pem_str.into_bytes());
-    }
+    *key_pem_out = ShekylBuffer::from_vec(key_pem_str.into_bytes());
+    *cert_pem_out = ShekylBuffer::from_vec(cert_pem_str.into_bytes());
     true
 }
 
@@ -760,36 +777,40 @@ pub extern "C" fn shekyl_generate_ssl_certificate(
 ///
 /// Uses `zeroize` to guarantee the write is not optimized away.
 /// C signature: `void shekyl_memwipe(void *ptr, size_t len)`
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_memwipe(ptr: *mut libc::c_void, len: usize) {
+pub unsafe extern "C" fn shekyl_memwipe(ptr: *mut libc::c_void, len: usize) {
     if ptr.is_null() || len == 0 {
         return;
     }
-    unsafe {
-        use zeroize::Zeroize;
-        std::slice::from_raw_parts_mut(ptr as *mut u8, len).zeroize();
-    }
+    use zeroize::Zeroize;
+    std::slice::from_raw_parts_mut(ptr as *mut u8, len).zeroize();
 }
 
 /// Lock memory pages containing `[ptr, ptr+len)` into RAM.
 ///
 /// Returns 0 on success, -1 on failure (mirrors POSIX mlock).
 /// C signature: `int shekyl_mlock(const void *ptr, size_t len)`
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_mlock(ptr: *const libc::c_void, len: usize) -> i32 {
+pub unsafe extern "C" fn shekyl_mlock(ptr: *const libc::c_void, len: usize) -> i32 {
     if ptr.is_null() || len == 0 {
         return -1;
     }
     #[cfg(unix)]
     {
-        unsafe { libc::mlock(ptr, len) }
+        libc::mlock(ptr, len)
     }
     #[cfg(windows)]
     {
         extern "system" {
             fn VirtualLock(lpAddress: *const libc::c_void, dwSize: usize) -> i32;
         }
-        let ret = unsafe { VirtualLock(ptr, len) };
+        let ret = VirtualLock(ptr, len);
         if ret != 0 {
             0
         } else {
@@ -806,21 +827,24 @@ pub extern "C" fn shekyl_mlock(ptr: *const libc::c_void, len: usize) -> i32 {
 ///
 /// Returns 0 on success, -1 on failure (mirrors POSIX munlock).
 /// C signature: `int shekyl_munlock(const void *ptr, size_t len)`
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_munlock(ptr: *const libc::c_void, len: usize) -> i32 {
+pub unsafe extern "C" fn shekyl_munlock(ptr: *const libc::c_void, len: usize) -> i32 {
     if ptr.is_null() || len == 0 {
         return -1;
     }
     #[cfg(unix)]
     {
-        unsafe { libc::munlock(ptr, len) }
+        libc::munlock(ptr, len)
     }
     #[cfg(windows)]
     {
         extern "system" {
             fn VirtualUnlock(lpAddress: *const libc::c_void, dwSize: usize) -> i32;
         }
-        let ret = unsafe { VirtualUnlock(ptr, len) };
+        let ret = VirtualUnlock(ptr, len);
         if ret != 0 {
             0
         } else {
@@ -838,14 +862,17 @@ pub extern "C" fn shekyl_munlock(ptr: *const libc::c_void, len: usize) -> i32 {
 /// Uses `madvise(MADV_DONTDUMP)` on Linux. No-op on other platforms.
 /// Returns 0 on success, -1 on failure.
 /// C signature: `int shekyl_madvise_dontdump(const void *ptr, size_t len)`
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_madvise_dontdump(ptr: *const libc::c_void, len: usize) -> i32 {
+pub unsafe extern "C" fn shekyl_madvise_dontdump(ptr: *const libc::c_void, len: usize) -> i32 {
     if ptr.is_null() || len == 0 {
         return -1;
     }
     #[cfg(target_os = "linux")]
     {
-        unsafe { libc::madvise(ptr as *mut libc::c_void, len, libc::MADV_DONTDUMP) }
+        libc::madvise(ptr.cast_mut(), len, libc::MADV_DONTDUMP)
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -857,15 +884,21 @@ pub extern "C" fn shekyl_madvise_dontdump(ptr: *const libc::c_void, len: usize) 
 /// Return the system page size in bytes.
 ///
 /// Returns 0 on failure.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_page_size() -> usize {
+pub unsafe extern "C" fn shekyl_page_size() -> usize {
     #[cfg(unix)]
     {
-        let ret = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        let ret = libc::sysconf(libc::_SC_PAGESIZE);
         if ret <= 0 {
             0
         } else {
-            ret as usize
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            {
+                ret as usize
+            }
         }
     }
     #[cfg(windows)]
@@ -884,9 +917,7 @@ pub extern "C" fn shekyl_page_size() -> usize {
             page_size: 0,
             _rest: [0; 52],
         };
-        unsafe {
-            GetSystemInfo(&mut info);
-        }
+        GetSystemInfo(&mut info);
         info.page_size as usize
     }
     #[cfg(not(any(unix, windows)))]
@@ -901,14 +932,17 @@ pub extern "C" fn shekyl_page_size() -> usize {
 ///
 /// T = hash_to_point(keccak256("Monero Generator T")) — the generator used
 /// to blind the key-image commitment in two-component output keys: O = xG + yT.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_generator_T(out_ptr: *mut u8) {
+pub unsafe extern "C" fn shekyl_generator_T(out_ptr: *mut u8) {
     use ciphersuite::group::GroupEncoding;
     if out_ptr.is_null() {
         return;
     }
-    let t_bytes: [u8; 32] = shekyl_generators::T.to_bytes().into();
-    unsafe { std::ptr::copy_nonoverlapping(t_bytes.as_ptr(), out_ptr, 32) };
+    let t_bytes: [u8; 32] = shekyl_generators::T.to_bytes();
+    std::ptr::copy_nonoverlapping(t_bytes.as_ptr(), out_ptr, 32);
 }
 
 // ─── FCMP++: Proof and Tree Operations ──────────────────────────────────────
@@ -916,8 +950,11 @@ pub extern "C" fn shekyl_generator_T(out_ptr: *mut u8) {
 /// Compute H(pqc_pk) leaf scalar for a PQC public key.
 ///
 /// Writes 32 bytes to `out_ptr`. Returns true on success.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_fcmp_pqc_leaf_hash(
+pub unsafe extern "C" fn shekyl_fcmp_pqc_leaf_hash(
     pqc_pk_ptr: *const u8,
     pqc_pk_len: usize,
     out_ptr: *mut u8,
@@ -929,7 +966,7 @@ pub extern "C" fn shekyl_fcmp_pqc_leaf_hash(
         return false;
     }
     let hash = shekyl_crypto_pq::derivation::hash_pqc_public_key(pk_bytes);
-    unsafe { std::ptr::copy_nonoverlapping(hash.as_ptr(), out_ptr, 32) };
+    std::ptr::copy_nonoverlapping(hash.as_ptr(), out_ptr, 32);
     true
 }
 
@@ -991,8 +1028,11 @@ pub unsafe extern "C" fn shekyl_derive_pqc_public_key(
 /// non-null and point to writable memory of the stated size.
 ///
 /// Returns true on success, false if any pointer is null.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_derive_output_secrets(
+pub unsafe extern "C" fn shekyl_derive_output_secrets(
     combined_ss_ptr: *const u8,
     combined_ss_len: u32,
     output_index: u64,
@@ -1016,19 +1056,17 @@ pub extern "C" fn shekyl_derive_output_secrets(
         return false;
     }
 
-    let ss = unsafe { std::slice::from_raw_parts(combined_ss_ptr, combined_ss_len as usize) };
+    let ss = std::slice::from_raw_parts(combined_ss_ptr, combined_ss_len as usize);
 
     let secrets = shekyl_crypto_pq::derivation::derive_output_secrets(ss, output_index);
 
-    unsafe {
-        std::ptr::copy_nonoverlapping(secrets.ho.as_ptr(), out_ho, 32);
-        std::ptr::copy_nonoverlapping(secrets.y.as_ptr(), out_y, 32);
-        std::ptr::copy_nonoverlapping(secrets.z.as_ptr(), out_z, 32);
-        std::ptr::copy_nonoverlapping(secrets.k_amount.as_ptr(), out_k_amount, 32);
-        *out_view_tag_combined = secrets.view_tag_combined;
-        *out_amount_tag = secrets.amount_tag;
-        std::ptr::copy_nonoverlapping(secrets.ml_dsa_seed.as_ptr(), out_ml_dsa_seed, 32);
-    }
+    std::ptr::copy_nonoverlapping(secrets.ho.as_ptr(), out_ho, 32);
+    std::ptr::copy_nonoverlapping(secrets.y.as_ptr(), out_y, 32);
+    std::ptr::copy_nonoverlapping(secrets.z.as_ptr(), out_z, 32);
+    std::ptr::copy_nonoverlapping(secrets.k_amount.as_ptr(), out_k_amount, 32);
+    *out_view_tag_combined = secrets.view_tag_combined;
+    *out_amount_tag = secrets.amount_tag;
+    std::ptr::copy_nonoverlapping(secrets.ml_dsa_seed.as_ptr(), out_ml_dsa_seed, 32);
 
     true
 }
@@ -1037,8 +1075,14 @@ pub extern "C" fn shekyl_derive_output_secrets(
 ///
 /// `x25519_ss_ptr` must point to exactly 32 bytes. Returns the 1-byte tag.
 /// Returns 0 if the pointer is null (callers should check for null separately).
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_derive_view_tag_x25519(x25519_ss_ptr: *const u8, output_index: u64) -> u8 {
+pub unsafe extern "C" fn shekyl_derive_view_tag_x25519(
+    x25519_ss_ptr: *const u8,
+    output_index: u64,
+) -> u8 {
     if x25519_ss_ptr.is_null() {
         return 0;
     }
@@ -1095,8 +1139,11 @@ pub struct ShekylFcmpProveResult {
 ///
 /// `tree_root_ptr`: 32-byte curve tree root.
 /// `signable_tx_hash_ptr`: 32-byte transaction binding hash.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_fcmp_prove(
+pub unsafe extern "C" fn shekyl_fcmp_prove(
     witness_ptr: *const u8,
     witness_len: usize,
     num_inputs: u32,
@@ -1290,8 +1337,11 @@ fn parse_prove_witness(
 ///
 /// `signable_tx_hash_ptr`: 32-byte hash that binds the proof to the transaction.
 /// Returns true if the proof is valid.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_fcmp_verify(
+pub unsafe extern "C" fn shekyl_fcmp_verify(
     proof_ptr: *const u8,
     proof_len: usize,
     key_images_ptr: *const u8,
@@ -1336,6 +1386,7 @@ pub extern "C" fn shekyl_fcmp_verify(
 
     let proof = shekyl_fcmp::proof::ShekylFcmpProof {
         data: proof_bytes.to_vec(),
+        #[allow(clippy::cast_possible_truncation)]
         num_inputs: ki_count as u32,
         tree_depth,
     };
@@ -1358,7 +1409,7 @@ pub extern "C" fn shekyl_fcmp_verify(
         pqc_hashes.push(shekyl_fcmp::leaf::PqcLeafScalar(ph));
     }
 
-    match shekyl_fcmp::proof::verify(
+    shekyl_fcmp::proof::verify(
         &proof,
         &key_images,
         &pseudo_outs,
@@ -1366,10 +1417,8 @@ pub extern "C" fn shekyl_fcmp_verify(
         &tree_root,
         tree_depth,
         signable_tx_hash,
-    ) {
-        Ok(ok) => ok,
-        Err(_) => false,
-    }
+    )
+    .unwrap_or_default()
 }
 
 /// Convert raw output data into serialized 4-scalar leaves.
@@ -1413,8 +1462,11 @@ pub struct ShekylFrostSalSession(shekyl_fcmp::frost_sal::FrostSalSession);
 ///
 /// Returns an opaque session handle, or null on failure.
 /// The returned pseudo-out (32 bytes) is written to `pseudo_out_ptr`.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_sal_session_new(
+pub unsafe extern "C" fn shekyl_frost_sal_session_new(
     output_key_ptr: *const u8,
     key_image_gen_ptr: *const u8,
     commitment_ptr: *const u8,
@@ -1434,7 +1486,7 @@ pub extern "C" fn shekyl_frost_sal_session_new(
 
     let read32 = |ptr: *const u8| -> [u8; 32] {
         let mut buf = [0u8; 32];
-        unsafe { std::ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 32) };
+        std::ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 32);
         buf
     };
 
@@ -1448,9 +1500,7 @@ pub extern "C" fn shekyl_frost_sal_session_new(
 
     match shekyl_fcmp::frost_sal::FrostSalSession::new(&input_data) {
         Ok(session) => {
-            unsafe {
-                std::ptr::copy_nonoverlapping(session.pseudo_out().as_ptr(), pseudo_out_ptr, 32);
-            }
+            std::ptr::copy_nonoverlapping(session.pseudo_out().as_ptr(), pseudo_out_ptr, 32);
             Box::into_raw(Box::new(ShekylFrostSalSession(session)))
         }
         Err(_) => std::ptr::null_mut(),
@@ -1462,14 +1512,17 @@ pub extern "C" fn shekyl_frost_sal_session_new(
 ///
 /// Returns a buffer that can be deserialized by peers to reconstruct
 /// the rerandomized tuple for signing. The caller must free the buffer.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_sal_get_rerand(
+pub unsafe extern "C" fn shekyl_frost_sal_get_rerand(
     session: *const ShekylFrostSalSession,
 ) -> ShekylBuffer {
     if session.is_null() {
         return ShekylBuffer::null();
     }
-    let session = unsafe { &*session };
+    let session = &*session;
     let mut data = Vec::new();
     if session.0.rerandomized_output().write(&mut data).is_err() {
         return ShekylBuffer::null();
@@ -1492,7 +1545,7 @@ pub struct ShekylFrostCoordinator(shekyl_fcmp::frost_sal::FrostSigningCoordinato
 /// # Safety
 /// `included_ptr` must point to `num_included` valid u16 values.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_coordinator_new(
+pub unsafe extern "C" fn shekyl_frost_coordinator_new(
     num_inputs: u32,
     included_ptr: *const u16,
     num_included: u32,
@@ -1503,7 +1556,7 @@ pub extern "C" fn shekyl_frost_coordinator_new(
 
     let included: Vec<modular_frost::Participant> = (0..num_included as usize)
         .filter_map(|i| {
-            let idx = unsafe { *included_ptr.add(i) };
+            let idx = *included_ptr.add(i);
             modular_frost::Participant::new(idx)
         })
         .collect();
@@ -1531,7 +1584,7 @@ pub extern "C" fn shekyl_frost_coordinator_new(
 /// # Safety
 /// `coord` must be a valid handle. `data_ptr` must point to `num_inputs * 32` bytes.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_coordinator_add_preprocesses(
+pub unsafe extern "C" fn shekyl_frost_coordinator_add_preprocesses(
     coord: *mut ShekylFrostCoordinator,
     participant: u16,
     data_ptr: *const u8,
@@ -1543,13 +1596,13 @@ pub extern "C" fn shekyl_frost_coordinator_add_preprocesses(
     let Some(p) = modular_frost::Participant::new(participant) else {
         return false;
     };
-    let coord = unsafe { &mut *coord };
+    let coord = &mut *coord;
     let n = num_inputs as usize;
 
     let mut preprocesses = Vec::with_capacity(n);
     for i in 0..n {
         let offset = i * 32;
-        let slice = unsafe { std::slice::from_raw_parts(data_ptr.add(offset), 32) };
+        let slice = std::slice::from_raw_parts(data_ptr.add(offset), 32);
         preprocesses.push(shekyl_fcmp::frost_sal::FrostPreprocessResult {
             nonce_commitments: slice.to_vec(),
             addendum: Vec::new(),
@@ -1568,13 +1621,13 @@ pub extern "C" fn shekyl_frost_coordinator_add_preprocesses(
 /// # Safety
 /// `coord` must be a valid handle with all preprocesses collected.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_coordinator_nonce_sums(
+pub unsafe extern "C" fn shekyl_frost_coordinator_nonce_sums(
     coord: *mut ShekylFrostCoordinator,
 ) -> ShekylBuffer {
     if coord.is_null() {
         return ShekylBuffer::null();
     }
-    let coord = unsafe { &mut *coord };
+    let coord = &mut *coord;
     match coord.0.nonce_sums_bytes() {
         Ok(per_input) => {
             let mut flat = Vec::new();
@@ -1595,7 +1648,7 @@ pub extern "C" fn shekyl_frost_coordinator_nonce_sums(
 /// # Safety
 /// `coord` must be a valid handle. `data_ptr` must point to `num_inputs * 32` bytes.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_coordinator_add_shares(
+pub unsafe extern "C" fn shekyl_frost_coordinator_add_shares(
     coord: *mut ShekylFrostCoordinator,
     participant: u16,
     data_ptr: *const u8,
@@ -1607,15 +1660,13 @@ pub extern "C" fn shekyl_frost_coordinator_add_shares(
     let Some(p) = modular_frost::Participant::new(participant) else {
         return false;
     };
-    let coord = unsafe { &mut *coord };
+    let coord = &mut *coord;
     let n = num_inputs as usize;
 
     let mut shares = Vec::with_capacity(n);
     for i in 0..n {
         let mut buf = [0u8; 32];
-        unsafe {
-            std::ptr::copy_nonoverlapping(data_ptr.add(i * 32), buf.as_mut_ptr(), 32);
-        }
+        std::ptr::copy_nonoverlapping(data_ptr.add(i * 32), buf.as_mut_ptr(), 32);
         shares.push(shekyl_fcmp::frost_sal::FrostSignShareResult { share: buf });
     }
 
@@ -1633,7 +1684,7 @@ pub extern "C" fn shekyl_frost_coordinator_add_shares(
 /// # Safety
 /// All sessions and the coordinator are consumed on success and must not be used after.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_coordinator_aggregate_and_prove(
+pub unsafe extern "C" fn shekyl_frost_coordinator_aggregate_and_prove(
     coord: *mut ShekylFrostCoordinator,
     session_ptrs: *const *mut ShekylFrostSalSession,
     num_inputs: u32,
@@ -1665,7 +1716,7 @@ pub extern "C" fn shekyl_frost_coordinator_aggregate_and_prove(
 
     let read32 = |ptr: *const u8| -> [u8; 32] {
         let mut buf = [0u8; 32];
-        unsafe { std::ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 32) };
+        std::ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), 32);
         buf
     };
 
@@ -1686,11 +1737,11 @@ pub extern "C" fn shekyl_frost_coordinator_aggregate_and_prove(
         return fail;
     };
 
-    let mut coord_box = unsafe { Box::from_raw(coord) };
+    let mut coord_box = Box::from_raw(coord);
 
     let mut sessions: Vec<shekyl_fcmp::frost_sal::FrostSalSession> = Vec::with_capacity(n);
     for i in 0..n {
-        let ptr = unsafe { *session_ptrs.add(i) };
+        let ptr = *session_ptrs.add(i);
         if ptr.is_null() {
             return fail;
         }
@@ -1718,9 +1769,8 @@ pub extern "C" fn shekyl_frost_coordinator_aggregate_and_prove(
         })
         .collect();
 
-    let sal_pairs = match coord_box.0.aggregate_all(sessions, group_key) {
-        Ok(pairs) => pairs,
-        Err(_) => return fail,
+    let Ok(sal_pairs) = coord_box.0.aggregate_all(sessions, group_key) else {
+        return fail;
     };
 
     match shekyl_fcmp::proof::prove_with_sal(
@@ -1745,11 +1795,9 @@ pub extern "C" fn shekyl_frost_coordinator_aggregate_and_prove(
 /// # Safety
 /// `coord` must be a valid handle or null.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_coordinator_free(coord: *mut ShekylFrostCoordinator) {
+pub unsafe extern "C" fn shekyl_frost_coordinator_free(coord: *mut ShekylFrostCoordinator) {
     if !coord.is_null() {
-        unsafe {
-            drop(Box::from_raw(coord));
-        }
+        drop(Box::from_raw(coord));
     }
 }
 
@@ -1766,19 +1814,18 @@ pub extern "C" fn shekyl_frost_coordinator_free(coord: *mut ShekylFrostCoordinat
 /// # Safety
 /// Both handles must be valid.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_signer_preprocess(
+pub unsafe extern "C" fn shekyl_frost_signer_preprocess(
     session: *mut ShekylFrostSalSession,
     keys_handle: *const ShekylFrostThresholdKeys,
 ) -> ShekylBuffer {
     if session.is_null() || keys_handle.is_null() {
         return ShekylBuffer::null();
     }
-    let session = unsafe { &mut *session };
-    let keys_handle = unsafe { &*keys_handle };
+    let session = &mut *session;
+    let keys_handle = &*keys_handle;
 
-    let keys = match keys_handle.0.deserialize() {
-        Ok(k) => k,
-        Err(_) => return ShekylBuffer::null(),
+    let Ok(keys) = keys_handle.0.deserialize() else {
+        return ShekylBuffer::null();
     };
 
     match session.0.preprocess(&keys) {
@@ -1801,7 +1848,7 @@ pub extern "C" fn shekyl_frost_signer_preprocess(
 /// # Safety
 /// All pointers must be valid. `included_ptr` must have `num_included` u16 values.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_signer_sign(
+pub unsafe extern "C" fn shekyl_frost_signer_sign(
     session: *mut ShekylFrostSalSession,
     keys_handle: *const ShekylFrostThresholdKeys,
     included_ptr: *const u16,
@@ -1816,17 +1863,16 @@ pub extern "C" fn shekyl_frost_signer_sign(
         return ShekylBuffer::null();
     }
 
-    let session = unsafe { &mut *session };
-    let keys_handle = unsafe { &*keys_handle };
+    let session = &mut *session;
+    let keys_handle = &*keys_handle;
 
-    let keys = match keys_handle.0.deserialize() {
-        Ok(k) => k,
-        Err(_) => return ShekylBuffer::null(),
+    let Ok(keys) = keys_handle.0.deserialize() else {
+        return ShekylBuffer::null();
     };
 
     let included: Vec<modular_frost::Participant> = (0..num_included as usize)
         .filter_map(|i| {
-            let idx = unsafe { *included_ptr.add(i) };
+            let idx = *included_ptr.add(i);
             modular_frost::Participant::new(idx)
         })
         .collect();
@@ -1834,7 +1880,7 @@ pub extern "C" fn shekyl_frost_signer_sign(
     let view = keys.view(included).unwrap();
 
     let mut nonce_sum_bytes = [0u8; 32];
-    unsafe { std::ptr::copy_nonoverlapping(nonce_sums_ptr, nonce_sum_bytes.as_mut_ptr(), 32) };
+    std::ptr::copy_nonoverlapping(nonce_sums_ptr, nonce_sum_bytes.as_mut_ptr(), 32);
 
     use ciphersuite::group::GroupEncoding;
     let nonce_sum_ct =
@@ -1852,12 +1898,13 @@ pub extern "C" fn shekyl_frost_signer_sign(
 
 #[cfg(feature = "multisig")]
 /// Free a FROST SAL session handle.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_sal_session_free(session: *mut ShekylFrostSalSession) {
+pub unsafe extern "C" fn shekyl_frost_sal_session_free(session: *mut ShekylFrostSalSession) {
     if !session.is_null() {
-        unsafe {
-            drop(Box::from_raw(session));
-        }
+        drop(Box::from_raw(session));
     }
 }
 
@@ -1871,15 +1918,18 @@ pub struct ShekylFrostThresholdKeys(shekyl_fcmp::frost_dkg::SerializedThresholdK
 /// Import FROST threshold keys from a serialized blob.
 /// Returns an opaque handle, or NULL if deserialization fails.
 /// The caller must later free the handle with `shekyl_frost_keys_free`.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_keys_import(
+pub unsafe extern "C" fn shekyl_frost_keys_import(
     data_ptr: *const u8,
     data_len: usize,
 ) -> *mut ShekylFrostThresholdKeys {
     if data_ptr.is_null() || data_len == 0 {
         return std::ptr::null_mut();
     }
-    let data = unsafe { std::slice::from_raw_parts(data_ptr, data_len) };
+    let data = std::slice::from_raw_parts(data_ptr, data_len);
     let serialized = shekyl_fcmp::frost_dkg::SerializedThresholdKeys::from_bytes(data);
     if serialized.deserialize().is_err() {
         return std::ptr::null_mut();
@@ -1890,8 +1940,11 @@ pub extern "C" fn shekyl_frost_keys_import(
 #[cfg(feature = "multisig")]
 /// Export FROST threshold keys as a serialized blob.
 /// Returns a ShekylBuffer with the serialized data, or empty on failure.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_keys_export(
+pub unsafe extern "C" fn shekyl_frost_keys_export(
     handle: *const ShekylFrostThresholdKeys,
 ) -> ShekylBuffer {
     let fail = ShekylBuffer {
@@ -1901,7 +1954,7 @@ pub extern "C" fn shekyl_frost_keys_export(
     if handle.is_null() {
         return fail;
     }
-    let keys = unsafe { &*handle };
+    let keys = &*handle;
     let bytes = keys.0.as_bytes().to_vec();
     let len = bytes.len();
     let ptr = Box::into_raw(bytes.into_boxed_slice()) as *mut u8;
@@ -1911,19 +1964,22 @@ pub extern "C" fn shekyl_frost_keys_export(
 #[cfg(feature = "multisig")]
 /// Get the 32-byte group public key from threshold keys.
 /// Writes 32 bytes to `out_ptr`. Returns true on success.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_keys_group_key(
+pub unsafe extern "C" fn shekyl_frost_keys_group_key(
     handle: *const ShekylFrostThresholdKeys,
     out_ptr: *mut u8,
 ) -> bool {
     if handle.is_null() || out_ptr.is_null() {
         return false;
     }
-    let keys_handle = unsafe { &*handle };
+    let keys_handle = &*handle;
     match keys_handle.0.deserialize() {
         Ok(keys) => {
             let gk = shekyl_fcmp::frost_dkg::group_key_bytes(&keys);
-            unsafe { std::ptr::copy_nonoverlapping(gk.as_ptr(), out_ptr, 32) };
+            std::ptr::copy_nonoverlapping(gk.as_ptr(), out_ptr, 32);
             true
         }
         Err(_) => false,
@@ -1933,8 +1989,11 @@ pub extern "C" fn shekyl_frost_keys_group_key(
 #[cfg(feature = "multisig")]
 /// Validate that threshold keys match expected M-of-N parameters.
 /// Returns true if valid.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_keys_validate(
+pub unsafe extern "C" fn shekyl_frost_keys_validate(
     handle: *const ShekylFrostThresholdKeys,
     expected_m: u16,
     expected_n: u16,
@@ -1942,7 +2001,7 @@ pub extern "C" fn shekyl_frost_keys_validate(
     if handle.is_null() {
         return false;
     }
-    let keys_handle = unsafe { &*handle };
+    let keys_handle = &*handle;
     match keys_handle.0.deserialize() {
         Ok(keys) => shekyl_fcmp::frost_dkg::validate_keys(&keys, expected_m, expected_n).is_ok(),
         Err(_) => false,
@@ -1951,12 +2010,13 @@ pub extern "C" fn shekyl_frost_keys_validate(
 
 #[cfg(feature = "multisig")]
 /// Free a FROST threshold keys handle.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_frost_keys_free(handle: *mut ShekylFrostThresholdKeys) {
+pub unsafe extern "C" fn shekyl_frost_keys_free(handle: *mut ShekylFrostThresholdKeys) {
     if !handle.is_null() {
-        unsafe {
-            drop(Box::from_raw(handle));
-        }
+        drop(Box::from_raw(handle));
     }
 }
 
@@ -1996,8 +2056,11 @@ pub extern "C" fn shekyl_kem_keypair_generate() -> ShekylPqcKeypair {
 
 /// Encapsulate to a hybrid public key. Returns ciphertext in the buffer.
 /// Combined shared secret is written to `ss_out_ptr` (64 bytes).
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_kem_encapsulate(
+pub unsafe extern "C" fn shekyl_kem_encapsulate(
     pk_x25519_ptr: *const u8,
     pk_ml_kem_ptr: *const u8,
     pk_ml_kem_len: usize,
@@ -2035,10 +2098,8 @@ pub extern "C" fn shekyl_kem_encapsulate(
             ct_bytes.extend_from_slice(&ct.x25519);
             ct_bytes.extend_from_slice(&ct.ml_kem);
 
-            unsafe {
-                *ct_out = ShekylBuffer::from_vec(ct_bytes);
-                std::ptr::copy_nonoverlapping(ss.0.as_ptr(), ss_out_ptr, 64);
-            }
+            *ct_out = ShekylBuffer::from_vec(ct_bytes);
+            std::ptr::copy_nonoverlapping(ss.0.as_ptr(), ss_out_ptr, 64);
             true
         }
         Err(_) => false,
@@ -2046,8 +2107,11 @@ pub extern "C" fn shekyl_kem_encapsulate(
 }
 
 /// Decapsulate a hybrid ciphertext. Writes combined shared secret to `ss_out_ptr` (64 bytes).
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_kem_decapsulate(
+pub unsafe extern "C" fn shekyl_kem_decapsulate(
     sk_x25519_ptr: *const u8,
     sk_ml_kem_ptr: *const u8,
     sk_ml_kem_len: usize,
@@ -2098,7 +2162,7 @@ pub extern "C" fn shekyl_kem_decapsulate(
 
     match kem.decapsulate(&sk, &ct) {
         Ok(ss) => {
-            unsafe { std::ptr::copy_nonoverlapping(ss.0.as_ptr(), ss_out_ptr, 64) };
+            std::ptr::copy_nonoverlapping(ss.0.as_ptr(), ss_out_ptr, 64);
             true
         }
         Err(_) => false,
@@ -2114,8 +2178,11 @@ pub extern "C" fn shekyl_kem_decapsulate(
 /// `ml_kem_ek_ptr`: 1184 bytes (ML-KEM-768 encapsulation key).
 ///
 /// Returns a ShekylBuffer containing the UTF-8 encoded address string.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_address_encode(
+pub unsafe extern "C" fn shekyl_address_encode(
     network: u8,
     spend_key_ptr: *const u8,
     view_key_ptr: *const u8,
@@ -2166,8 +2233,11 @@ pub extern "C" fn shekyl_address_encode(
 /// `network_out`: receives network discriminant (0=mainnet, 1=testnet, 2=stagenet).
 /// Writes: 32 bytes to `spend_key_out`, 32 bytes to `view_key_out`.
 /// Returns ML-KEM encapsulation key in a ShekylBuffer (1184 bytes, or 0 if classical-only).
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_address_decode(
+pub unsafe extern "C" fn shekyl_address_decode(
     encoded_ptr: *const c_char,
     network_out: *mut u8,
     spend_key_out: *mut u8,
@@ -2181,19 +2251,16 @@ pub extern "C" fn shekyl_address_decode(
         return ShekylBuffer::null();
     }
 
-    let c_str = unsafe { std::ffi::CStr::from_ptr(encoded_ptr) };
-    let encoded = match c_str.to_str() {
-        Ok(s) => s,
-        Err(_) => return ShekylBuffer::null(),
+    let c_str = std::ffi::CStr::from_ptr(encoded_ptr);
+    let Ok(encoded) = c_str.to_str() else {
+        return ShekylBuffer::null();
     };
 
     match shekyl_address::ShekylAddress::decode(encoded) {
         Ok(addr) => {
-            unsafe {
-                *network_out = addr.network.as_u8();
-                std::ptr::copy_nonoverlapping(addr.spend_key.as_ptr(), spend_key_out, 32);
-                std::ptr::copy_nonoverlapping(addr.view_key.as_ptr(), view_key_out, 32);
-            }
+            *network_out = addr.network.as_u8();
+            std::ptr::copy_nonoverlapping(addr.spend_key.as_ptr(), spend_key_out, 32);
+            std::ptr::copy_nonoverlapping(addr.view_key.as_ptr(), view_key_out, 32);
             ShekylBuffer::from_vec(addr.ml_kem_encap_key)
         }
         Err(_) => ShekylBuffer::null(),
@@ -2219,9 +2286,8 @@ pub extern "C" fn shekyl_encode_blob(
     let Some(hrp_bytes) = slice_from_ptr(hrp_ptr, hrp_len) else {
         return ShekylBuffer::null();
     };
-    let hrp = match std::str::from_utf8(hrp_bytes) {
-        Ok(s) => s,
-        Err(_) => return ShekylBuffer::null(),
+    let Ok(hrp) = std::str::from_utf8(hrp_bytes) else {
+        return ShekylBuffer::null();
     };
     let Some(data) = slice_from_ptr(data_ptr, data_len) else {
         return ShekylBuffer::null();
@@ -2242,8 +2308,11 @@ pub extern "C" fn shekyl_encode_blob(
 /// `data_len_out`: receives the actual payload byte length.
 ///
 /// Returns true on success. If a buffer is too small, writes nothing and returns false.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_decode_blob(
+pub unsafe extern "C" fn shekyl_decode_blob(
     encoded_ptr: *const c_char,
     hrp_out: *mut u8,
     hrp_out_cap: usize,
@@ -2261,15 +2330,13 @@ pub extern "C" fn shekyl_decode_blob(
         return false;
     }
 
-    let c_str = unsafe { std::ffi::CStr::from_ptr(encoded_ptr) };
-    let encoded = match c_str.to_str() {
-        Ok(s) => s,
-        Err(_) => return false,
+    let c_str = std::ffi::CStr::from_ptr(encoded_ptr);
+    let Ok(encoded) = c_str.to_str() else {
+        return false;
     };
 
-    let (hrp, data) = match shekyl_encoding::decode_blob(encoded) {
-        Ok(v) => v,
-        Err(_) => return false,
+    let Ok((hrp, data)) = shekyl_encoding::decode_blob(encoded) else {
+        return false;
     };
 
     let hrp_bytes = hrp.as_bytes();
@@ -2277,12 +2344,10 @@ pub extern "C" fn shekyl_decode_blob(
         return false;
     }
 
-    unsafe {
-        std::ptr::copy_nonoverlapping(hrp_bytes.as_ptr(), hrp_out, hrp_bytes.len());
-        *hrp_len_out = hrp_bytes.len();
-        std::ptr::copy_nonoverlapping(data.as_ptr(), data_out, data.len());
-        *data_len_out = data.len();
-    }
+    std::ptr::copy_nonoverlapping(hrp_bytes.as_ptr(), hrp_out, hrp_bytes.len());
+    *hrp_len_out = hrp_bytes.len();
+    std::ptr::copy_nonoverlapping(data.as_ptr(), data_out, data.len());
+    *data_len_out = data.len();
     true
 }
 
@@ -2290,8 +2355,11 @@ pub extern "C" fn shekyl_decode_blob(
 
 /// Derive Ed25519 spend secret key from master seed.
 /// `seed_ptr`: 32 bytes. Writes 32 bytes to `out_ptr`.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_seed_derive_spend(seed_ptr: *const u8, out_ptr: *mut u8) -> bool {
+pub unsafe extern "C" fn shekyl_seed_derive_spend(seed_ptr: *const u8, out_ptr: *mut u8) -> bool {
     if seed_ptr.is_null() || out_ptr.is_null() {
         return false;
     }
@@ -2301,13 +2369,16 @@ pub extern "C" fn shekyl_seed_derive_spend(seed_ptr: *const u8, out_ptr: *mut u8
         buf
     };
     let key = shekyl_crypto_pq::kem::SeedDerivation::derive_ed25519_spend(&seed);
-    unsafe { std::ptr::copy_nonoverlapping(key.as_ptr(), out_ptr, 32) };
+    std::ptr::copy_nonoverlapping(key.as_ptr(), out_ptr, 32);
     true
 }
 
 /// Derive Ed25519 view secret key from master seed.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_seed_derive_view(seed_ptr: *const u8, out_ptr: *mut u8) -> bool {
+pub unsafe extern "C" fn shekyl_seed_derive_view(seed_ptr: *const u8, out_ptr: *mut u8) -> bool {
     if seed_ptr.is_null() || out_ptr.is_null() {
         return false;
     }
@@ -2317,14 +2388,17 @@ pub extern "C" fn shekyl_seed_derive_view(seed_ptr: *const u8, out_ptr: *mut u8)
         buf
     };
     let key = shekyl_crypto_pq::kem::SeedDerivation::derive_ed25519_view(&seed);
-    unsafe { std::ptr::copy_nonoverlapping(key.as_ptr(), out_ptr, 32) };
+    std::ptr::copy_nonoverlapping(key.as_ptr(), out_ptr, 32);
     true
 }
 
 /// Derive ML-KEM-768 seed material from master seed.
 /// Writes 64 bytes to `out_ptr`.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_seed_derive_ml_kem(seed_ptr: *const u8, out_ptr: *mut u8) -> bool {
+pub unsafe extern "C" fn shekyl_seed_derive_ml_kem(seed_ptr: *const u8, out_ptr: *mut u8) -> bool {
     if seed_ptr.is_null() || out_ptr.is_null() {
         return false;
     }
@@ -2334,7 +2408,7 @@ pub extern "C" fn shekyl_seed_derive_ml_kem(seed_ptr: *const u8, out_ptr: *mut u
         buf
     };
     let material = shekyl_crypto_pq::kem::SeedDerivation::derive_ml_kem_seed(&seed);
-    unsafe { std::ptr::copy_nonoverlapping(material.as_ptr(), out_ptr, 64) };
+    std::ptr::copy_nonoverlapping(material.as_ptr(), out_ptr, 64);
     true
 }
 
@@ -2349,8 +2423,11 @@ pub extern "C" fn shekyl_seed_derive_ml_kem(seed_ptr: *const u8, out_ptr: *mut u
 /// - `existing_child_at_offset_ptr`: 32 bytes, old Selene scalar at offset (zero for fresh)
 /// - `new_children_ptr`: `num_children * 32` bytes, new Selene scalars
 /// - `out_hash_ptr`: 32 bytes output buffer for the new Selene point
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_curve_tree_hash_grow_selene(
+pub unsafe extern "C" fn shekyl_curve_tree_hash_grow_selene(
     existing_hash_ptr: *const u8,
     offset: u64,
     existing_child_at_offset_ptr: *const u8,
@@ -2377,7 +2454,7 @@ pub extern "C" fn shekyl_curve_tree_hash_grow_selene(
         buf
     };
 
-    let n = num_children as usize;
+    let n = usize::try_from(num_children).unwrap_or(0);
     let children: Vec<[u8; 32]> = (0..n)
         .map(|i| unsafe {
             let mut buf = [0u8; 32];
@@ -2388,12 +2465,12 @@ pub extern "C" fn shekyl_curve_tree_hash_grow_selene(
 
     match shekyl_fcmp::tree::hash_grow_selene(
         &existing_hash,
-        offset as usize,
+        usize::try_from(offset).unwrap_or(0),
         &existing_child,
         &children,
     ) {
         Some(result) => {
-            unsafe { std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32) };
+            std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32);
             true
         }
         None => false,
@@ -2401,8 +2478,11 @@ pub extern "C" fn shekyl_curve_tree_hash_grow_selene(
 }
 
 /// Incrementally grow a Helios-layer chunk hash with new children.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_curve_tree_hash_grow_helios(
+pub unsafe extern "C" fn shekyl_curve_tree_hash_grow_helios(
     existing_hash_ptr: *const u8,
     offset: u64,
     existing_child_at_offset_ptr: *const u8,
@@ -2429,7 +2509,7 @@ pub extern "C" fn shekyl_curve_tree_hash_grow_helios(
         buf
     };
 
-    let n = num_children as usize;
+    let n = usize::try_from(num_children).unwrap_or(0);
     let children: Vec<[u8; 32]> = (0..n)
         .map(|i| unsafe {
             let mut buf = [0u8; 32];
@@ -2440,12 +2520,12 @@ pub extern "C" fn shekyl_curve_tree_hash_grow_helios(
 
     match shekyl_fcmp::tree::hash_grow_helios(
         &existing_hash,
-        offset as usize,
+        usize::try_from(offset).unwrap_or(0),
         &existing_child,
         &children,
     ) {
         Some(result) => {
-            unsafe { std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32) };
+            std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32);
             true
         }
         None => false,
@@ -2453,8 +2533,11 @@ pub extern "C" fn shekyl_curve_tree_hash_grow_helios(
 }
 
 /// Trim children from a Selene-layer chunk hash.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_curve_tree_hash_trim_selene(
+pub unsafe extern "C" fn shekyl_curve_tree_hash_trim_selene(
     existing_hash_ptr: *const u8,
     offset: u64,
     children_ptr: *const u8,
@@ -2481,7 +2564,7 @@ pub extern "C" fn shekyl_curve_tree_hash_trim_selene(
         buf
     };
 
-    let n = num_children as usize;
+    let n = usize::try_from(num_children).unwrap_or(0);
     let children: Vec<[u8; 32]> = (0..n)
         .map(|i| unsafe {
             let mut buf = [0u8; 32];
@@ -2492,12 +2575,12 @@ pub extern "C" fn shekyl_curve_tree_hash_trim_selene(
 
     match shekyl_fcmp::tree::hash_trim_selene(
         &existing_hash,
-        offset as usize,
+        usize::try_from(offset).unwrap_or(0),
         &children,
         &grow_back,
     ) {
         Some(result) => {
-            unsafe { std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32) };
+            std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32);
             true
         }
         None => false,
@@ -2505,8 +2588,11 @@ pub extern "C" fn shekyl_curve_tree_hash_trim_selene(
 }
 
 /// Trim children from a Helios-layer chunk hash.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_curve_tree_hash_trim_helios(
+pub unsafe extern "C" fn shekyl_curve_tree_hash_trim_helios(
     existing_hash_ptr: *const u8,
     offset: u64,
     children_ptr: *const u8,
@@ -2533,7 +2619,7 @@ pub extern "C" fn shekyl_curve_tree_hash_trim_helios(
         buf
     };
 
-    let n = num_children as usize;
+    let n = usize::try_from(num_children).unwrap_or(0);
     let children: Vec<[u8; 32]> = (0..n)
         .map(|i| unsafe {
             let mut buf = [0u8; 32];
@@ -2544,12 +2630,12 @@ pub extern "C" fn shekyl_curve_tree_hash_trim_helios(
 
     match shekyl_fcmp::tree::hash_trim_helios(
         &existing_hash,
-        offset as usize,
+        usize::try_from(offset).unwrap_or(0),
         &children,
         &grow_back,
     ) {
         Some(result) => {
-            unsafe { std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32) };
+            std::ptr::copy_nonoverlapping(result.as_ptr(), out_hash_ptr, 32);
             true
         }
         None => false,
@@ -2560,8 +2646,11 @@ pub extern "C" fn shekyl_curve_tree_hash_trim_helios(
 ///
 /// Used when propagating Selene layer hashes up to the next Helios layer.
 /// Writes 32 bytes to `out_scalar_ptr`.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_curve_tree_selene_to_helios_scalar(
+pub unsafe extern "C" fn shekyl_curve_tree_selene_to_helios_scalar(
     selene_point_ptr: *const u8,
     out_scalar_ptr: *mut u8,
 ) -> bool {
@@ -2575,7 +2664,7 @@ pub extern "C" fn shekyl_curve_tree_selene_to_helios_scalar(
     };
     match shekyl_fcmp::tree::selene_point_to_helios_scalar(&point) {
         Some(scalar) => {
-            unsafe { std::ptr::copy_nonoverlapping(scalar.as_ptr(), out_scalar_ptr, 32) };
+            std::ptr::copy_nonoverlapping(scalar.as_ptr(), out_scalar_ptr, 32);
             true
         }
         None => false,
@@ -2583,8 +2672,11 @@ pub extern "C" fn shekyl_curve_tree_selene_to_helios_scalar(
 }
 
 /// Convert a Helios point to a Selene scalar (x-coordinate extraction).
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_curve_tree_helios_to_selene_scalar(
+pub unsafe extern "C" fn shekyl_curve_tree_helios_to_selene_scalar(
     helios_point_ptr: *const u8,
     out_scalar_ptr: *mut u8,
 ) -> bool {
@@ -2598,7 +2690,7 @@ pub extern "C" fn shekyl_curve_tree_helios_to_selene_scalar(
     };
     match shekyl_fcmp::tree::helios_point_to_selene_scalar(&point) {
         Some(scalar) => {
-            unsafe { std::ptr::copy_nonoverlapping(scalar.as_ptr(), out_scalar_ptr, 32) };
+            std::ptr::copy_nonoverlapping(scalar.as_ptr(), out_scalar_ptr, 32);
             true
         }
         None => false,
@@ -2606,43 +2698,58 @@ pub extern "C" fn shekyl_curve_tree_helios_to_selene_scalar(
 }
 
 /// Get the Selene hash initialization point (32 bytes).
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_curve_tree_selene_hash_init(out_ptr: *mut u8) -> bool {
+pub unsafe extern "C" fn shekyl_curve_tree_selene_hash_init(out_ptr: *mut u8) -> bool {
     if out_ptr.is_null() {
         return false;
     }
     let init = shekyl_fcmp::tree::selene_hash_init();
-    unsafe { std::ptr::copy_nonoverlapping(init.as_ptr(), out_ptr, 32) };
+    std::ptr::copy_nonoverlapping(init.as_ptr(), out_ptr, 32);
     true
 }
 
 /// Get the Helios hash initialization point (32 bytes).
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_curve_tree_helios_hash_init(out_ptr: *mut u8) -> bool {
+pub unsafe extern "C" fn shekyl_curve_tree_helios_hash_init(out_ptr: *mut u8) -> bool {
     if out_ptr.is_null() {
         return false;
     }
     let init = shekyl_fcmp::tree::helios_hash_init();
-    unsafe { std::ptr::copy_nonoverlapping(init.as_ptr(), out_ptr, 32) };
+    std::ptr::copy_nonoverlapping(init.as_ptr(), out_ptr, 32);
     true
 }
 
 /// Return the number of scalars per leaf (4 for Shekyl: O.x, I.x, C.x, H(pqc_pk)).
 #[no_mangle]
 pub extern "C" fn shekyl_curve_tree_scalars_per_leaf() -> u32 {
-    shekyl_fcmp::SCALARS_PER_LEAF as u32
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        shekyl_fcmp::SCALARS_PER_LEAF as u32
+    }
 }
 
 /// Return the Selene-layer chunk width (branching factor = LAYER_ONE_LEN = 38).
 #[no_mangle]
 pub extern "C" fn shekyl_curve_tree_selene_chunk_width() -> u32 {
-    shekyl_fcmp::SELENE_CHUNK_WIDTH as u32
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        shekyl_fcmp::SELENE_CHUNK_WIDTH as u32
+    }
 }
 
 /// Return the Helios-layer chunk width (branching factor = LAYER_TWO_LEN = 18).
 #[no_mangle]
 pub extern "C" fn shekyl_curve_tree_helios_chunk_width() -> u32 {
-    shekyl_fcmp::HELIOS_CHUNK_WIDTH as u32
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        shekyl_fcmp::HELIOS_CHUNK_WIDTH as u32
+    }
 }
 
 // ─── FCMP++: Ed25519 → Selene scalar conversion ────────────────────────────
@@ -2652,8 +2759,11 @@ pub extern "C" fn shekyl_curve_tree_helios_chunk_width() -> u32 {
 ///
 /// Returns true on success (writes 32 bytes to `out_scalar_ptr`).
 /// Returns false if the point cannot be decompressed or is the identity.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_ed25519_to_selene_scalar(
+pub unsafe extern "C" fn shekyl_ed25519_to_selene_scalar(
     compressed_ptr: *const u8,
     out_scalar_ptr: *mut u8,
 ) -> bool {
@@ -2669,7 +2779,7 @@ pub extern "C" fn shekyl_ed25519_to_selene_scalar(
 
     match shekyl_fcmp::tree::ed25519_point_to_selene_scalar(&compressed) {
         Some(scalar) => {
-            unsafe { std::ptr::copy_nonoverlapping(scalar.as_ptr(), out_scalar_ptr, 32) };
+            std::ptr::copy_nonoverlapping(scalar.as_ptr(), out_scalar_ptr, 32);
             true
         }
         None => false,
@@ -2690,8 +2800,11 @@ pub extern "C" fn shekyl_ed25519_to_selene_scalar(
 /// from `h_pqc_ptr`.
 ///
 /// Returns true on success, false on decompression failure.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_construct_curve_tree_leaf(
+pub unsafe extern "C" fn shekyl_construct_curve_tree_leaf(
     output_key_ptr: *const u8,
     commitment_ptr: *const u8,
     h_pqc_ptr: *const u8,
@@ -2723,7 +2836,7 @@ pub extern "C" fn shekyl_construct_curve_tree_leaf(
 
     match shekyl_fcmp::tree::construct_leaf(&output_key, &commitment, &h_pqc) {
         Some(leaf) => {
-            unsafe { std::ptr::copy_nonoverlapping(leaf.as_ptr(), leaf_out_ptr, 128) };
+            std::ptr::copy_nonoverlapping(leaf.as_ptr(), leaf_out_ptr, 128);
             true
         }
         None => false,
@@ -2802,8 +2915,11 @@ impl ShekylSignResult {
 ///
 /// The caller owns both `proofs_json` and `error_message` buffers and must
 /// free them via `shekyl_buffer_free`.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub extern "C" fn shekyl_sign_transaction(
+pub unsafe extern "C" fn shekyl_sign_transaction(
     tx_prefix_hash_ptr: *const u8,
     inputs_json_ptr: *const u8,
     inputs_json_len: usize,
@@ -2875,26 +2991,26 @@ pub extern "C" fn shekyl_sign_transaction(
 }
 
 fn tx_builder_error_code(e: &shekyl_tx_builder::TxBuilderError) -> i32 {
-    use shekyl_tx_builder::TxBuilderError::*;
+    use shekyl_tx_builder::TxBuilderError;
     match e {
-        NoInputs => -10,
-        TooManyInputs(_) => -11,
-        NoOutputs => -12,
-        TooManyOutputs(_) => -13,
-        ZeroInputAmount { .. } => -14,
-        ZeroOutputAmount { .. } => -15,
-        InputAmountOverflow => -16,
-        OutputAmountOverflow => -17,
-        InsufficientFunds { .. } => -18,
-        EmptyLeafChunk { .. } => -19,
-        LeafChunkTooLarge { .. } => -20,
-        ZeroTreeDepth => -21,
-        BranchLayerMismatch { .. } => -22,
-        InvalidCombinedSsLength { .. } => -23,
-        BulletproofError(_) => -24,
-        FcmpProveError(_) => -25,
-        PqcSignError { .. } => -26,
-        TreeDepthTooLarge(_) => -27,
+        TxBuilderError::NoInputs => -10,
+        TxBuilderError::TooManyInputs(_) => -11,
+        TxBuilderError::NoOutputs => -12,
+        TxBuilderError::TooManyOutputs(_) => -13,
+        TxBuilderError::ZeroInputAmount { .. } => -14,
+        TxBuilderError::ZeroOutputAmount { .. } => -15,
+        TxBuilderError::InputAmountOverflow => -16,
+        TxBuilderError::OutputAmountOverflow => -17,
+        TxBuilderError::InsufficientFunds { .. } => -18,
+        TxBuilderError::EmptyLeafChunk { .. } => -19,
+        TxBuilderError::LeafChunkTooLarge { .. } => -20,
+        TxBuilderError::ZeroTreeDepth => -21,
+        TxBuilderError::BranchLayerMismatch { .. } => -22,
+        TxBuilderError::InvalidCombinedSsLength { .. } => -23,
+        TxBuilderError::BulletproofError(_) => -24,
+        TxBuilderError::FcmpProveError(_) => -25,
+        TxBuilderError::PqcSignError { .. } => -26,
+        TxBuilderError::TreeDepthTooLarge(_) => -27,
     }
 }
 
@@ -2903,6 +3019,7 @@ fn tx_builder_error_code(e: &shekyl_tx_builder::TxBuilderError) -> i32 {
 /// Input struct for collapsed signing. C++ passes `combined_ss` + `output_index`
 /// instead of `spend_key_x` / `spend_key_y`. Rust derives those internally.
 #[derive(serde::Deserialize)]
+#[allow(dead_code)]
 struct FcmpSignInput {
     #[serde(with = "shekyl_tx_builder::types::hex_bytes32")]
     ki: [u8; 32],
@@ -2910,6 +3027,7 @@ struct FcmpSignInput {
     combined_ss: Vec<u8>,
     output_index: u64,
     #[serde(with = "shekyl_tx_builder::types::hex_bytes32")]
+    #[allow(non_snake_case)]
     hp_of_O: [u8; 32],
     amount: u64,
     #[serde(with = "shekyl_tx_builder::types::hex_bytes32")]
@@ -2947,7 +3065,7 @@ impl Drop for FcmpSignInput {
 /// - `reference_block_ptr`, `tree_root_ptr`: 32 bytes each.
 /// - JSON pointers: valid for their documented lengths.
 #[no_mangle]
-pub extern "C" fn shekyl_sign_fcmp_transaction(
+pub unsafe extern "C" fn shekyl_sign_fcmp_transaction(
     spend_secret_ptr: *const u8,
     tx_prefix_hash_ptr: *const u8,
     inputs_json_ptr: *const u8,
@@ -3009,9 +3127,8 @@ pub extern "C" fn shekyl_sign_fcmp_transaction(
     use shekyl_crypto_pq::derivation::derive_output_secrets;
     use zeroize::Zeroize;
 
-    let mut b_scalar = match curve25519_scalar_from_bytes(&spend_secret) {
-        Some(s) => s,
-        None => return ShekylSignResult::err(-5, "invalid spend secret key".into()),
+    let Some(mut b_scalar) = curve25519_scalar_from_bytes(&spend_secret) else {
+        return ShekylSignResult::err(-5, "invalid spend secret key".into());
     };
 
     let mut spend_inputs: Vec<shekyl_tx_builder::SpendInput> =
@@ -3032,12 +3149,9 @@ pub extern "C" fn shekyl_sign_fcmp_transaction(
         let secrets = derive_output_secrets(&ss, inp.output_index);
         ss.zeroize();
 
-        let ho_scalar = match curve25519_scalar_from_bytes(&secrets.ho) {
-            Some(s) => s,
-            None => {
-                drop(spend_inputs);
-                return ShekylSignResult::err(-5, "invalid ho scalar".into());
-            }
+        let Some(ho_scalar) = curve25519_scalar_from_bytes(&secrets.ho) else {
+            drop(spend_inputs);
+            return ShekylSignResult::err(-5, "invalid ho scalar".into());
         };
         let x = ho_scalar + b_scalar;
         let mut x_bytes = x.to_bytes();
@@ -3155,21 +3269,17 @@ pub unsafe extern "C" fn shekyl_construct_output(
         success: false,
     };
 
-    let tx_key = match arr32_from_ptr(tx_key_secret_ptr) {
-        Some(v) => v,
-        None => return fail,
+    let Some(tx_key) = arr32_from_ptr(tx_key_secret_ptr) else {
+        return fail;
     };
-    let x_pk = match arr32_from_ptr(x25519_pk) {
-        Some(v) => v,
-        None => return fail,
+    let Some(x_pk) = arr32_from_ptr(x25519_pk) else {
+        return fail;
     };
-    let sk = match arr32_from_ptr(spend_key) {
-        Some(v) => v,
-        None => return fail,
+    let Some(sk) = arr32_from_ptr(spend_key) else {
+        return fail;
     };
-    let ek = match slice_from_ptr(ml_kem_ek, ml_kem_ek_len) {
-        Some(v) => v,
-        None => return fail,
+    let Some(ek) = slice_from_ptr(ml_kem_ek, ml_kem_ek_len) else {
+        return fail;
     };
 
     use shekyl_crypto_pq::output::construct_output;
@@ -3248,29 +3358,23 @@ pub unsafe extern "C" fn shekyl_scan_output(
     pqc_sk_out: *mut ShekylBuffer,
     h_pqc_out: *mut [u8; 32],
 ) -> bool {
-    let x_sk = match arr32_from_ptr(x25519_sk) {
-        Some(v) => v,
-        None => return false,
+    let Some(x_sk) = arr32_from_ptr(x25519_sk) else {
+        return false;
     };
-    let dk = match slice_from_ptr(ml_kem_dk, ml_kem_dk_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(dk) = slice_from_ptr(ml_kem_dk, ml_kem_dk_len) else {
+        return false;
     };
-    let ct_x = match arr32_from_ptr(kem_ct_x25519) {
-        Some(v) => v,
-        None => return false,
+    let Some(ct_x) = arr32_from_ptr(kem_ct_x25519) else {
+        return false;
     };
-    let ct_ml = match slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(ct_ml) = slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) else {
+        return false;
     };
-    let o = match arr32_from_ptr(output_key) {
-        Some(v) => v,
-        None => return false,
+    let Some(o) = arr32_from_ptr(output_key) else {
+        return false;
     };
-    let c = match arr32_from_ptr(commitment) {
-        Some(v) => v,
-        None => return false,
+    let Some(c) = arr32_from_ptr(commitment) else {
+        return false;
     };
     let ea = match slice_from_ptr(enc_amount, 8) {
         Some(v) => {
@@ -3280,9 +3384,8 @@ pub unsafe extern "C" fn shekyl_scan_output(
         }
         None => return false,
     };
-    let sk = match arr32_from_ptr(spend_key) {
-        Some(v) => v,
-        None => return false,
+    let Some(sk) = arr32_from_ptr(spend_key) else {
+        return false;
     };
 
     if y_out.is_null()
@@ -3358,29 +3461,23 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
     pqc_sk_out: *mut ShekylBuffer,
     h_pqc_out: *mut [u8; 32],
 ) -> bool {
-    let x_sk = match arr32_from_ptr(x25519_sk) {
-        Some(v) => v,
-        None => return false,
+    let Some(x_sk) = arr32_from_ptr(x25519_sk) else {
+        return false;
     };
-    let dk = match slice_from_ptr(ml_kem_dk, ml_kem_dk_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(dk) = slice_from_ptr(ml_kem_dk, ml_kem_dk_len) else {
+        return false;
     };
-    let ct_x = match arr32_from_ptr(kem_ct_x25519) {
-        Some(v) => v,
-        None => return false,
+    let Some(ct_x) = arr32_from_ptr(kem_ct_x25519) else {
+        return false;
     };
-    let ct_ml = match slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(ct_ml) = slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) else {
+        return false;
     };
-    let o = match arr32_from_ptr(output_key) {
-        Some(v) => v,
-        None => return false,
+    let Some(o) = arr32_from_ptr(output_key) else {
+        return false;
     };
-    let c = match arr32_from_ptr(commitment) {
-        Some(v) => v,
-        None => return false,
+    let Some(c) = arr32_from_ptr(commitment) else {
+        return false;
     };
     let ea = match slice_from_ptr(enc_amount, 8) {
         Some(v) => {
@@ -3464,9 +3561,8 @@ pub unsafe extern "C" fn shekyl_sign_pqc_auth(
         }
         None => return fail,
     };
-    let msg = match slice_from_ptr(message, message_len) {
-        Some(v) => v,
-        None => return fail,
+    let Some(msg) = slice_from_ptr(message, message_len) else {
+        return fail;
     };
 
     use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
@@ -3481,6 +3577,9 @@ pub unsafe extern "C" fn shekyl_sign_pqc_auth(
 }
 
 /// Free a ShekylPqcAuthResult's heap-allocated fields.
+///
+/// # Safety
+/// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_pqc_auth_result_free(result: *mut ShekylPqcAuthResult) {
     if result.is_null() {
@@ -3515,6 +3614,7 @@ pub unsafe extern "C" fn shekyl_pqc_auth_result_free(result: *mut ShekylPqcAuthR
 /// - `spend_secret_key`: 32 bytes (wallet master spend key `b`).
 /// - `hp_of_O`: 32 bytes (hash_to_ec of the output key, precomputed by C++).
 #[no_mangle]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn shekyl_scan_and_recover(
     x25519_sk: *const u8,
     ml_kem_dk: *const u8,
@@ -3543,29 +3643,23 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
     pqc_sk_out: *mut ShekylBuffer,
     h_pqc_out: *mut [u8; 32],
 ) -> bool {
-    let x_sk = match arr32_from_ptr(x25519_sk) {
-        Some(v) => v,
-        None => return false,
+    let Some(x_sk) = arr32_from_ptr(x25519_sk) else {
+        return false;
     };
-    let dk = match slice_from_ptr(ml_kem_dk, ml_kem_dk_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(dk) = slice_from_ptr(ml_kem_dk, ml_kem_dk_len) else {
+        return false;
     };
-    let ct_x = match arr32_from_ptr(kem_ct_x25519) {
-        Some(v) => v,
-        None => return false,
+    let Some(ct_x) = arr32_from_ptr(kem_ct_x25519) else {
+        return false;
     };
-    let ct_ml = match slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(ct_ml) = slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) else {
+        return false;
     };
-    let o = match arr32_from_ptr(output_key) {
-        Some(v) => v,
-        None => return false,
+    let Some(o) = arr32_from_ptr(output_key) else {
+        return false;
     };
-    let c = match arr32_from_ptr(commitment) {
-        Some(v) => v,
-        None => return false,
+    let Some(c) = arr32_from_ptr(commitment) else {
+        return false;
     };
     let ea = match slice_from_ptr(enc_amount, 8) {
         Some(v) => {
@@ -3596,7 +3690,7 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
 
     use shekyl_crypto_pq::output::{compute_output_key_image_from_ho, scan_output_recover};
 
-    let recovered = match scan_output_recover(
+    let Ok(recovered) = scan_output_recover(
         &x_sk,
         dk,
         &ct_x,
@@ -3607,9 +3701,8 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
         amount_tag_on_chain,
         view_tag_on_chain,
         output_index,
-    ) {
-        Ok(r) => r,
-        Err(_) => return false,
+    ) else {
+        return false;
     };
 
     std::ptr::copy_nonoverlapping(recovered.ho.as_ptr(), ho_out, 32);
@@ -3629,9 +3722,8 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
     if have_spend_key {
         let b_key = &*(spend_secret_key as *const [u8; 32]);
         let hp = &*(hp_of_O as *const [u8; 32]);
-        let ki_result = match compute_output_key_image_from_ho(&recovered.ho, b_key, hp) {
-            Ok(r) => r,
-            Err(_) => return false,
+        let Ok(ki_result) = compute_output_key_image_from_ho(&recovered.ho, b_key, hp) else {
+            return false;
         };
         std::ptr::copy_nonoverlapping(ki_result.key_image.as_ptr(), key_image_out, 32);
     } else {
@@ -3653,6 +3745,7 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
 /// # Safety
 /// - `combined_ss`: 64 bytes. `spend_secret_key`, `hp_of_O`, `out_ki`: 32 bytes each.
 #[no_mangle]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn shekyl_compute_output_key_image(
     combined_ss: *const u8,
     output_index: u64,
@@ -3668,13 +3761,11 @@ pub unsafe extern "C" fn shekyl_compute_output_key_image(
         }
         None => return false,
     };
-    let b = match arr32_from_ptr(spend_secret_key) {
-        Some(v) => v,
-        None => return false,
+    let Some(b) = arr32_from_ptr(spend_secret_key) else {
+        return false;
     };
-    let hp = match arr32_from_ptr(hp_of_O) {
-        Some(v) => v,
-        None => return false,
+    let Some(hp) = arr32_from_ptr(hp_of_O) else {
+        return false;
     };
     if out_ki.is_null() {
         return false;
@@ -3697,23 +3788,21 @@ pub unsafe extern "C" fn shekyl_compute_output_key_image(
 /// # Safety
 /// - `ho`, `spend_secret_key`, `hp_of_O`, `out_ki`: 32 bytes each.
 #[no_mangle]
+#[allow(non_snake_case)]
 pub unsafe extern "C" fn shekyl_compute_output_key_image_from_ho(
     ho: *const u8,
     spend_secret_key: *const u8,
     hp_of_O: *const u8,
     out_ki: *mut u8,
 ) -> bool {
-    let ho_arr = match arr32_from_ptr(ho) {
-        Some(v) => v,
-        None => return false,
+    let Some(ho_arr) = arr32_from_ptr(ho) else {
+        return false;
     };
-    let b = match arr32_from_ptr(spend_secret_key) {
-        Some(v) => v,
-        None => return false,
+    let Some(b) = arr32_from_ptr(spend_secret_key) else {
+        return false;
     };
-    let hp = match arr32_from_ptr(hp_of_O) {
-        Some(v) => v,
-        None => return false,
+    let Some(hp) = arr32_from_ptr(hp_of_O) else {
+        return false;
     };
     if out_ki.is_null() {
         return false;
@@ -3785,13 +3874,11 @@ pub unsafe extern "C" fn shekyl_encrypt_wallet_cache(
     password_derived_key: *const u8,
     out_buf: *mut ShekylBuffer,
 ) -> bool {
-    let pt = match slice_from_ptr(plaintext, plaintext_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(pt) = slice_from_ptr(plaintext, plaintext_len) else {
+        return false;
     };
-    let key = match arr32_from_ptr(password_derived_key) {
-        Some(v) => v,
-        None => return false,
+    let Some(key) = arr32_from_ptr(password_derived_key) else {
+        return false;
     };
     if out_buf.is_null() {
         return false;
@@ -3831,13 +3918,11 @@ pub unsafe extern "C" fn shekyl_decrypt_wallet_cache(
     if ciphertext.is_null() || password_derived_key.is_null() || out_buf.is_null() {
         return -4;
     }
-    let ct = match slice_from_ptr(ciphertext, ciphertext_len) {
-        Some(v) => v,
-        None => return -4,
+    let Some(ct) = slice_from_ptr(ciphertext, ciphertext_len) else {
+        return -4;
     };
-    let key = match arr32_from_ptr(password_derived_key) {
-        Some(v) => v,
-        None => return -4,
+    let Some(key) = arr32_from_ptr(password_derived_key) else {
+        return -4;
     };
 
     if ct.is_empty() {
@@ -3895,17 +3980,14 @@ pub unsafe extern "C" fn shekyl_generate_tx_proof_outbound(
     output_count: u32,
     proof_out: *mut ShekylBuffer,
 ) -> bool {
-    let tx_key = match arr32_from_ptr(tx_key_secret) {
-        Some(v) => v,
-        None => return false,
+    let Some(tx_key) = arr32_from_ptr(tx_key_secret) else {
+        return false;
     };
-    let tx_id = match arr32_from_ptr(txid) {
-        Some(v) => v,
-        None => return false,
+    let Some(tx_id) = arr32_from_ptr(txid) else {
+        return false;
     };
-    let addr = match slice_from_ptr(address, address_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(addr) = slice_from_ptr(address, address_len) else {
+        return false;
     };
     let msg = if message_len == 0 {
         &[] as &[u8]
@@ -3915,13 +3997,11 @@ pub unsafe extern "C" fn shekyl_generate_tx_proof_outbound(
             None => return false,
         }
     };
-    let x25519_pk = match arr32_from_ptr(recipient_x25519_pk) {
-        Some(v) => v,
-        None => return false,
+    let Some(x25519_pk) = arr32_from_ptr(recipient_x25519_pk) else {
+        return false;
     };
-    let ml_kem_ek = match slice_from_ptr(recipient_ml_kem_ek, ml_kem_ek_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(ml_kem_ek) = slice_from_ptr(recipient_ml_kem_ek, ml_kem_ek_len) else {
+        return false;
     };
     if proof_out.is_null() || output_count == 0 || output_indices.is_null() {
         return false;
@@ -3978,17 +4058,14 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_outbound(
     output_count: u32,
     amounts_out: *mut u64,
 ) -> bool {
-    let proof = match slice_from_ptr(proof_bytes, proof_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(proof) = slice_from_ptr(proof_bytes, proof_len) else {
+        return false;
     };
-    let tx_id = match arr32_from_ptr(txid) {
-        Some(v) => v,
-        None => return false,
+    let Some(tx_id) = arr32_from_ptr(txid) else {
+        return false;
     };
-    let addr = match slice_from_ptr(address, address_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(addr) = slice_from_ptr(address, address_len) else {
+        return false;
     };
     let msg = if message_len == 0 {
         &[] as &[u8]
@@ -3998,45 +4075,37 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_outbound(
             None => return false,
         }
     };
-    let spend_pk = match arr32_from_ptr(recipient_spend_pubkey) {
-        Some(v) => v,
-        None => return false,
+    let Some(spend_pk) = arr32_from_ptr(recipient_spend_pubkey) else {
+        return false;
     };
-    let x25519_pk = match arr32_from_ptr(recipient_x25519_pk) {
-        Some(v) => v,
-        None => return false,
+    let Some(x25519_pk) = arr32_from_ptr(recipient_x25519_pk) else {
+        return false;
     };
-    let ml_ek = match slice_from_ptr(recipient_ml_kem_ek, ml_kem_ek_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(ml_ek) = slice_from_ptr(recipient_ml_kem_ek, ml_kem_ek_len) else {
+        return false;
     };
     let n = output_count as usize;
     if amounts_out.is_null() || n == 0 {
         return false;
     }
 
-    let okeys = match slice_from_ptr(output_keys, n * 32) {
-        Some(v) => v,
-        None => return false,
+    let Some(okeys) = slice_from_ptr(output_keys, n * 32) else {
+        return false;
     };
-    let comms = match slice_from_ptr(commitments, n * 32) {
-        Some(v) => v,
-        None => return false,
+    let Some(comms) = slice_from_ptr(commitments, n * 32) else {
+        return false;
     };
-    let eamts = match slice_from_ptr(enc_amounts, n * 8) {
-        Some(v) => v,
-        None => return false,
+    let Some(eamts) = slice_from_ptr(enc_amounts, n * 8) else {
+        return false;
     };
-    let eph_pks = match slice_from_ptr(x25519_eph_pks, n * 32) {
-        Some(v) => v,
-        None => return false,
+    let Some(eph_pks) = slice_from_ptr(x25519_eph_pks, n * 32) else {
+        return false;
     };
-    let ml_cts = match slice_from_ptr(ml_kem_cts, ml_kem_cts_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(ml_cts) = slice_from_ptr(ml_kem_cts, ml_kem_cts_len) else {
+        return false;
     };
 
-    if ml_kem_cts_len % n != 0 {
+    if !ml_kem_cts_len.is_multiple_of(n) {
         return false;
     }
     let ct_size = ml_kem_cts_len / n;
@@ -4099,17 +4168,14 @@ pub unsafe extern "C" fn shekyl_generate_tx_proof_inbound(
     output_count: u32,
     proof_out: *mut ShekylBuffer,
 ) -> bool {
-    let vsk = match arr32_from_ptr(view_secret_key) {
-        Some(v) => v,
-        None => return false,
+    let Some(vsk) = arr32_from_ptr(view_secret_key) else {
+        return false;
     };
-    let tx_id = match arr32_from_ptr(txid) {
-        Some(v) => v,
-        None => return false,
+    let Some(tx_id) = arr32_from_ptr(txid) else {
+        return false;
     };
-    let addr = match slice_from_ptr(address, address_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(addr) = slice_from_ptr(address, address_len) else {
+        return false;
     };
     let msg = if message_len == 0 {
         &[] as &[u8]
@@ -4124,9 +4190,8 @@ pub unsafe extern "C" fn shekyl_generate_tx_proof_inbound(
         return false;
     }
 
-    let ps_bytes = match slice_from_ptr(proof_secrets_ptr, n * 128) {
-        Some(v) => v,
-        None => return false,
+    let Some(ps_bytes) = slice_from_ptr(proof_secrets_ptr, n * 128) else {
+        return false;
     };
     let secrets: Vec<shekyl_crypto_pq::output::ProofSecrets> = (0..n)
         .map(|i| {
@@ -4184,17 +4249,14 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_inbound(
     output_count: u32,
     amounts_out: *mut u64,
 ) -> bool {
-    let proof = match slice_from_ptr(proof_bytes, proof_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(proof) = slice_from_ptr(proof_bytes, proof_len) else {
+        return false;
     };
-    let tx_id = match arr32_from_ptr(txid) {
-        Some(v) => v,
-        None => return false,
+    let Some(tx_id) = arr32_from_ptr(txid) else {
+        return false;
     };
-    let addr = match slice_from_ptr(address, address_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(addr) = slice_from_ptr(address, address_len) else {
+        return false;
     };
     let msg = if message_len == 0 {
         &[] as &[u8]
@@ -4204,41 +4266,34 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_inbound(
             None => return false,
         }
     };
-    let vpk = match arr32_from_ptr(view_public_key) {
-        Some(v) => v,
-        None => return false,
+    let Some(vpk) = arr32_from_ptr(view_public_key) else {
+        return false;
     };
-    let spend_pk = match arr32_from_ptr(recipient_spend_pubkey) {
-        Some(v) => v,
-        None => return false,
+    let Some(spend_pk) = arr32_from_ptr(recipient_spend_pubkey) else {
+        return false;
     };
     let n = output_count as usize;
     if amounts_out.is_null() || n == 0 {
         return false;
     }
 
-    let okeys = match slice_from_ptr(output_keys, n * 32) {
-        Some(v) => v,
-        None => return false,
+    let Some(okeys) = slice_from_ptr(output_keys, n * 32) else {
+        return false;
     };
-    let comms = match slice_from_ptr(commitments, n * 32) {
-        Some(v) => v,
-        None => return false,
+    let Some(comms) = slice_from_ptr(commitments, n * 32) else {
+        return false;
     };
-    let eamts = match slice_from_ptr(enc_amounts, n * 8) {
-        Some(v) => v,
-        None => return false,
+    let Some(eamts) = slice_from_ptr(enc_amounts, n * 8) else {
+        return false;
     };
-    let eph_pks = match slice_from_ptr(x25519_eph_pks, n * 32) {
-        Some(v) => v,
-        None => return false,
+    let Some(eph_pks) = slice_from_ptr(x25519_eph_pks, n * 32) else {
+        return false;
     };
-    let ml_cts = match slice_from_ptr(ml_kem_cts, ml_kem_cts_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(ml_cts) = slice_from_ptr(ml_kem_cts, ml_kem_cts_len) else {
+        return false;
     };
 
-    if ml_kem_cts_len % n != 0 {
+    if !ml_kem_cts_len.is_multiple_of(n) {
         return false;
     }
     let ct_size = ml_kem_cts_len / n;
@@ -4304,13 +4359,11 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
     output_count: u32,
     proof_out: *mut ShekylBuffer,
 ) -> bool {
-    let bsk = match arr32_from_ptr(spend_secret_key) {
-        Some(v) => v,
-        None => return false,
+    let Some(bsk) = arr32_from_ptr(spend_secret_key) else {
+        return false;
     };
-    let addr = match slice_from_ptr(address, address_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(addr) = slice_from_ptr(address, address_len) else {
+        return false;
     };
     let msg = if message_len == 0 {
         &[] as &[u8]
@@ -4325,21 +4378,17 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
         return false;
     }
 
-    let ps_bytes = match slice_from_ptr(proof_secrets_ptr, n * 128) {
-        Some(v) => v,
-        None => return false,
+    let Some(ps_bytes) = slice_from_ptr(proof_secrets_ptr, n * 128) else {
+        return false;
     };
-    let ki_bytes = match slice_from_ptr(key_images, n * 32) {
-        Some(v) => v,
-        None => return false,
+    let Some(ki_bytes) = slice_from_ptr(key_images, n * 32) else {
+        return false;
     };
-    let ss_bytes = match slice_from_ptr(spend_secrets, n * 32) {
-        Some(v) => v,
-        None => return false,
+    let Some(ss_bytes) = slice_from_ptr(spend_secrets, n * 32) else {
+        return false;
     };
-    let ok_bytes = match slice_from_ptr(output_keys, n * 32) {
-        Some(v) => v,
-        None => return false,
+    let Some(ok_bytes) = slice_from_ptr(output_keys, n * 32) else {
+        return false;
     };
 
     let entries: Vec<shekyl_proofs::reserve_proof::ReserveOutputEntry> = (0..n)
@@ -4409,13 +4458,11 @@ pub unsafe extern "C" fn shekyl_verify_reserve_proof(
     output_count: u32,
     total_amount_out: *mut u64,
 ) -> bool {
-    let proof = match slice_from_ptr(proof_bytes, proof_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(proof) = slice_from_ptr(proof_bytes, proof_len) else {
+        return false;
     };
-    let addr = match slice_from_ptr(address, address_len) {
-        Some(v) => v,
-        None => return false,
+    let Some(addr) = slice_from_ptr(address, address_len) else {
+        return false;
     };
     let msg = if message_len == 0 {
         &[] as &[u8]
@@ -4425,26 +4472,22 @@ pub unsafe extern "C" fn shekyl_verify_reserve_proof(
             None => return false,
         }
     };
-    let spk = match arr32_from_ptr(spend_pubkey) {
-        Some(v) => v,
-        None => return false,
+    let Some(spk) = arr32_from_ptr(spend_pubkey) else {
+        return false;
     };
     let n = output_count as usize;
     if total_amount_out.is_null() || n == 0 {
         return false;
     }
 
-    let ok_bytes = match slice_from_ptr(output_keys, n * 32) {
-        Some(v) => v,
-        None => return false,
+    let Some(ok_bytes) = slice_from_ptr(output_keys, n * 32) else {
+        return false;
     };
-    let cm_bytes = match slice_from_ptr(commitments, n * 32) {
-        Some(v) => v,
-        None => return false,
+    let Some(cm_bytes) = slice_from_ptr(commitments, n * 32) else {
+        return false;
     };
-    let ea_bytes = match slice_from_ptr(enc_amounts, n * 8) {
-        Some(v) => v,
-        None => return false,
+    let Some(ea_bytes) = slice_from_ptr(enc_amounts, n * 8) else {
+        return false;
     };
 
     let on_chain: Vec<shekyl_proofs::reserve_proof::ReserveOnChainOutput> = (0..n)
@@ -4519,43 +4562,50 @@ mod tests {
 
     #[test]
     fn test_per_block_staker_reward_ffi() {
-        let mut overflow = 0u8;
-        let q =
-            shekyl_calc_per_block_staker_reward(1_000_000, 500_000, 2_000_000, 0, &mut overflow);
-        assert_eq!(overflow, 0);
-        assert_eq!(q, 250_000);
-        assert_eq!(
-            shekyl_calc_per_block_staker_reward(100, 0, 50, 0, std::ptr::null_mut()),
-            0
-        );
-        let q2 = shekyl_calc_per_block_staker_reward(10, 10, 1, 0, std::ptr::null_mut());
-        assert_eq!(q2, 100);
+        unsafe {
+            let mut overflow = 0u8;
+            let q = shekyl_calc_per_block_staker_reward(
+                1_000_000,
+                500_000,
+                2_000_000,
+                0,
+                &raw mut overflow,
+            );
+            assert_eq!(overflow, 0);
+            assert_eq!(q, 250_000);
+            assert_eq!(
+                shekyl_calc_per_block_staker_reward(100, 0, 50, 0, std::ptr::null_mut()),
+                0
+            );
+            let q2 = shekyl_calc_per_block_staker_reward(10, 10, 1, 0, std::ptr::null_mut());
+            assert_eq!(q2, 100);
+        }
     }
 
     #[test]
     fn test_per_block_staker_reward_overflow_flag() {
-        let mut overflow = 0u8;
-        let q = shekyl_calc_per_block_staker_reward(u64::MAX, u64::MAX, 1, 0, &mut overflow);
-        assert_eq!(q, 0);
-        assert_eq!(overflow, 1);
+        unsafe {
+            let mut overflow = 0u8;
+            let q =
+                shekyl_calc_per_block_staker_reward(u64::MAX, u64::MAX, 1, 0, &raw mut overflow);
+            assert_eq!(q, 0);
+            assert_eq!(overflow, 1);
+        }
     }
 
     #[test]
     fn test_per_block_staker_reward_u128_denominator() {
-        let mut overflow = 0u8;
-        // Denominator = 1 << 64 = u64::MAX + 1 (hi=1, lo=0)
-        let q = shekyl_calc_per_block_staker_reward(1_000_000, 1_000_000, 0, 1, &mut overflow);
-        assert_eq!(overflow, 0);
-        // numerator = 10^12, denominator = 2^64 ≈ 1.844 * 10^19
-        // result = 10^12 / 1.844*10^19 ≈ 0 (floor)
-        assert_eq!(q, 0);
+        unsafe {
+            let mut overflow = 0u8;
+            let q =
+                shekyl_calc_per_block_staker_reward(1_000_000, 1_000_000, 0, 1, &raw mut overflow);
+            assert_eq!(overflow, 0);
+            assert_eq!(q, 0);
 
-        // Smaller hi value: denominator = (1 << 64) + 100
-        let q2 = shekyl_calc_per_block_staker_reward(u64::MAX, 2, 100, 1, &mut overflow);
-        assert_eq!(overflow, 0);
-        // numerator = 2 * u64::MAX ≈ 3.69 * 10^19, denom ≈ 1.844 * 10^19 + 100
-        // result ≈ 1 (floor division)
-        assert_eq!(q2, 1);
+            let q2 = shekyl_calc_per_block_staker_reward(u64::MAX, 2, 100, 1, &raw mut overflow);
+            assert_eq!(overflow, 0);
+            assert_eq!(q2, 1);
+        }
     }
 
     #[test]
@@ -4655,108 +4705,113 @@ mod tests {
 
     #[test]
     fn test_pqc_keygen_sign_verify_ffi() {
-        let kp = shekyl_pqc_keypair_generate();
-        assert!(kp.success);
-        assert!(!kp.public_key.ptr.is_null());
-        assert!(!kp.secret_key.ptr.is_null());
+        unsafe {
+            let kp = shekyl_pqc_keypair_generate();
+            assert!(kp.success);
+            assert!(!kp.public_key.ptr.is_null());
+            assert!(!kp.secret_key.ptr.is_null());
 
-        let msg = b"ffi hybrid pq signature";
-        let sig = shekyl_pqc_sign(
-            kp.secret_key.ptr,
-            kp.secret_key.len,
-            msg.as_ptr(),
-            msg.len(),
-        );
-        assert!(sig.success);
-        assert!(!sig.signature.ptr.is_null());
+            let msg = b"ffi hybrid pq signature";
+            let sig = shekyl_pqc_sign(
+                kp.secret_key.ptr,
+                kp.secret_key.len,
+                msg.as_ptr(),
+                msg.len(),
+            );
+            assert!(sig.success);
+            assert!(!sig.signature.ptr.is_null());
 
-        let verified = shekyl_pqc_verify(
-            1, // scheme_id for single-signer
-            kp.public_key.ptr,
-            kp.public_key.len,
-            sig.signature.ptr,
-            sig.signature.len,
-            msg.as_ptr(),
-            msg.len(),
-        );
-        assert!(verified);
+            let verified = shekyl_pqc_verify(
+                1,
+                kp.public_key.ptr,
+                kp.public_key.len,
+                sig.signature.ptr,
+                sig.signature.len,
+                msg.as_ptr(),
+                msg.len(),
+            );
+            assert!(verified);
 
-        shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
-        shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
-        shekyl_buffer_free(sig.signature.ptr, sig.signature.len);
+            shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
+            shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
+            shekyl_buffer_free(sig.signature.ptr, sig.signature.len);
+        }
     }
 
     #[test]
     fn test_ssl_cert_generation_ecdsa() {
-        let mut key_pem = ShekylBuffer::null();
-        let mut cert_pem = ShekylBuffer::null();
-        let ok = shekyl_generate_ssl_certificate(&mut key_pem, &mut cert_pem);
-        assert!(ok);
-        assert!(!key_pem.ptr.is_null());
-        assert!(!cert_pem.ptr.is_null());
-        let key_str = unsafe {
-            std::str::from_utf8(std::slice::from_raw_parts(key_pem.ptr, key_pem.len)).unwrap()
-        };
-        let cert_str = unsafe {
-            std::str::from_utf8(std::slice::from_raw_parts(cert_pem.ptr, cert_pem.len)).unwrap()
-        };
-        assert!(key_str.contains("BEGIN PRIVATE KEY"));
-        assert!(cert_str.contains("BEGIN CERTIFICATE"));
-        shekyl_buffer_free(key_pem.ptr, key_pem.len);
-        shekyl_buffer_free(cert_pem.ptr, cert_pem.len);
+        unsafe {
+            let mut key_pem = ShekylBuffer::null();
+            let mut cert_pem = ShekylBuffer::null();
+            let ok = shekyl_generate_ssl_certificate(&raw mut key_pem, &raw mut cert_pem);
+            assert!(ok);
+            assert!(!key_pem.ptr.is_null());
+            assert!(!cert_pem.ptr.is_null());
+            let key_str =
+                std::str::from_utf8(std::slice::from_raw_parts(key_pem.ptr, key_pem.len)).unwrap();
+            let cert_str =
+                std::str::from_utf8(std::slice::from_raw_parts(cert_pem.ptr, cert_pem.len))
+                    .unwrap();
+            assert!(key_str.contains("BEGIN PRIVATE KEY"));
+            assert!(cert_str.contains("BEGIN CERTIFICATE"));
+            shekyl_buffer_free(key_pem.ptr, key_pem.len);
+            shekyl_buffer_free(cert_pem.ptr, cert_pem.len);
+        }
     }
 
     #[test]
     fn test_memwipe_zeroes_buffer() {
         let mut buf = vec![0xABu8; 64];
-        shekyl_memwipe(buf.as_mut_ptr() as *mut libc::c_void, buf.len());
+        unsafe { shekyl_memwipe(buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
         assert!(buf.iter().all(|&b| b == 0));
     }
 
     #[test]
     fn test_page_size_nonzero() {
-        let ps = shekyl_page_size();
-        assert!(ps > 0, "page size should be > 0, got {}", ps);
+        let ps = unsafe { shekyl_page_size() };
+        assert!(ps > 0, "page size should be > 0, got {ps}");
         assert!(ps.is_power_of_two(), "page size should be power of 2");
     }
 
     #[test]
     fn test_pqc_verify_rejects_modified_signature() {
-        let kp = shekyl_pqc_keypair_generate();
-        let msg = b"ffi hybrid pq signature";
-        let sig = shekyl_pqc_sign(
-            kp.secret_key.ptr,
-            kp.secret_key.len,
-            msg.as_ptr(),
-            msg.len(),
-        );
-        assert!(sig.success);
+        unsafe {
+            let kp = shekyl_pqc_keypair_generate();
+            let msg = b"ffi hybrid pq signature";
+            let sig = shekyl_pqc_sign(
+                kp.secret_key.ptr,
+                kp.secret_key.len,
+                msg.as_ptr(),
+                msg.len(),
+            );
+            assert!(sig.success);
 
-        let mut sig_bytes =
-            unsafe { std::slice::from_raw_parts(sig.signature.ptr, sig.signature.len) }.to_vec();
-        let last = sig_bytes.len() - 1;
-        sig_bytes[last] ^= 0x01;
+            let mut sig_bytes =
+                std::slice::from_raw_parts(sig.signature.ptr, sig.signature.len).to_vec();
+            let last = sig_bytes.len() - 1;
+            sig_bytes[last] ^= 0x01;
 
-        let verified = shekyl_pqc_verify(
-            1, // scheme_id for single-signer
-            kp.public_key.ptr,
-            kp.public_key.len,
-            sig_bytes.as_ptr(),
-            sig_bytes.len(),
-            msg.as_ptr(),
-            msg.len(),
-        );
-        assert!(!verified);
+            let verified = shekyl_pqc_verify(
+                1,
+                kp.public_key.ptr,
+                kp.public_key.len,
+                sig_bytes.as_ptr(),
+                sig_bytes.len(),
+                msg.as_ptr(),
+                msg.len(),
+            );
+            assert!(!verified);
 
-        shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
-        shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
-        shekyl_buffer_free(sig.signature.ptr, sig.signature.len);
+            shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
+            shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
+            shekyl_buffer_free(sig.signature.ptr, sig.signature.len);
+        }
     }
 
     #[cfg(feature = "multisig")]
     #[test]
     fn test_frost_keys_import_null_returns_null() {
-        let handle = shekyl_frost_keys_import(std::ptr::null(), 0);
+        let handle = unsafe { shekyl_frost_keys_import(std::ptr::null(), 0) };
         assert!(handle.is_null());
     }
 
@@ -4764,14 +4819,14 @@ mod tests {
     #[test]
     fn test_frost_keys_import_invalid_data_returns_null() {
         let garbage = [0xDE, 0xAD, 0xBE, 0xEF];
-        let handle = shekyl_frost_keys_import(garbage.as_ptr(), garbage.len());
+        let handle = unsafe { shekyl_frost_keys_import(garbage.as_ptr(), garbage.len()) };
         assert!(handle.is_null());
     }
 
     #[cfg(feature = "multisig")]
     #[test]
     fn test_frost_keys_validate_null_returns_false() {
-        let valid = shekyl_frost_keys_validate(std::ptr::null(), 2, 3);
+        let valid = unsafe { shekyl_frost_keys_validate(std::ptr::null(), 2, 3) };
         assert!(!valid);
     }
 
@@ -4779,40 +4834,42 @@ mod tests {
     #[test]
     fn test_frost_keys_group_key_null_returns_false() {
         let mut out = [0u8; 32];
-        let ok = shekyl_frost_keys_group_key(std::ptr::null(), out.as_mut_ptr());
+        let ok = unsafe { shekyl_frost_keys_group_key(std::ptr::null(), out.as_mut_ptr()) };
         assert!(!ok);
     }
 
     #[cfg(feature = "multisig")]
     #[test]
     fn test_frost_keys_free_null_is_safe() {
-        shekyl_frost_keys_free(std::ptr::null_mut());
+        unsafe { shekyl_frost_keys_free(std::ptr::null_mut()) };
     }
 
     #[cfg(feature = "multisig")]
     #[test]
     fn test_frost_sal_session_new_null_returns_null() {
-        let session = shekyl_frost_sal_session_new(
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null_mut(),
-        );
+        let session = unsafe {
+            shekyl_frost_sal_session_new(
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+            )
+        };
         assert!(session.is_null());
     }
 
     #[cfg(feature = "multisig")]
     #[test]
     fn test_frost_sal_session_free_null_is_safe() {
-        shekyl_frost_sal_session_free(std::ptr::null_mut());
+        unsafe { shekyl_frost_sal_session_free(std::ptr::null_mut()) };
     }
 
     #[cfg(feature = "multisig")]
     #[test]
     fn test_frost_sal_get_rerand_null_returns_empty() {
-        let buf = shekyl_frost_sal_get_rerand(std::ptr::null());
+        let buf = unsafe { shekyl_frost_sal_get_rerand(std::ptr::null()) };
         assert!(buf.ptr.is_null());
         assert_eq!(buf.len, 0);
     }
@@ -4874,7 +4931,7 @@ mod tests {
             // Build: typed struct → 256-byte blob (same path as C++ FFI)
             let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
             let ok =
-                unsafe { shekyl_fcmp_build_witness_header(&fields as *const _, blob.as_mut_ptr()) };
+                unsafe { shekyl_fcmp_build_witness_header(&raw const fields, blob.as_mut_ptr()) };
             assert!(
                 ok,
                 "vector {i}: shekyl_fcmp_build_witness_header returned false"

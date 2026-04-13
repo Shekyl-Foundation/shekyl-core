@@ -11,7 +11,7 @@
 //! - 0x07: PQC leaf hash commitments (for FCMP++ binding)
 
 use core::ops::BitXor;
-use std::io::{self, Read, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 
 use zeroize::Zeroize;
 
@@ -53,11 +53,9 @@ impl BitXor<[u8; 8]> for PaymentId {
     fn bitxor(self, bytes: [u8; 8]) -> PaymentId {
         match self {
             PaymentId::Unencrypted(_) => self,
-            PaymentId::Encrypted(id) => {
-                PaymentId::Encrypted(
-                    (u64::from_le_bytes(id) ^ u64::from_le_bytes(bytes)).to_le_bytes(),
-                )
-            }
+            PaymentId::Encrypted(id) => PaymentId::Encrypted(
+                (u64::from_le_bytes(id) ^ u64::from_le_bytes(bytes)).to_le_bytes(),
+            ),
         }
     }
 }
@@ -81,7 +79,8 @@ impl PaymentId {
     /// Serialize the PaymentId to a `Vec<u8>`.
     pub fn serialize(&self) -> Vec<u8> {
         let mut res = Vec::with_capacity(1 + 8);
-        self.write(&mut res).expect("write failed but <Vec as io::Write> doesn't fail");
+        self.write(&mut res)
+            .expect("write failed but <Vec as io::Write> doesn't fail");
         res
     }
 
@@ -162,7 +161,8 @@ impl ExtraField {
     /// Serialize the ExtraField to a `Vec<u8>`.
     pub fn serialize(&self) -> Vec<u8> {
         let mut res = Vec::with_capacity(1 + 8);
-        self.write(&mut res).expect("write failed but <Vec as io::Write> doesn't fail");
+        self.write(&mut res)
+            .expect("write failed but <Vec as io::Write> doesn't fail");
         res
     }
 
@@ -313,7 +313,8 @@ impl Extra {
     /// Serialize the Extra to a `Vec<u8>`.
     pub fn serialize(&self) -> Vec<u8> {
         let mut buf = vec![];
-        self.write(&mut buf).expect("write failed but <Vec as io::Write> doesn't fail");
+        self.write(&mut buf)
+            .expect("write failed but <Vec as io::Write> doesn't fail");
         buf
     }
 
@@ -322,7 +323,9 @@ impl Extra {
     pub fn read<R: BufRead>(r: &mut R) -> io::Result<Extra> {
         let mut res = Extra(vec![]);
         while !r.fill_buf()?.is_empty() {
-            let Ok(field) = ExtraField::read(r) else { break };
+            let Ok(field) = ExtraField::read(r) else {
+                break;
+            };
             res.0.push(field);
         }
         Ok(res)

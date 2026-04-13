@@ -22,11 +22,7 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(
-    name = "shekyl-cli",
-    about = "Shekyl interactive CLI wallet",
-    version
-)]
+#[command(name = "shekyl-cli", about = "Shekyl interactive CLI wallet", version)]
 pub struct Cli {
     /// Daemon address (host:port or full URL)
     #[arg(long, default_value = "localhost:11028")]

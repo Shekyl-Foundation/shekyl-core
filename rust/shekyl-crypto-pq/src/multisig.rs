@@ -9,8 +9,7 @@ use crate::signature::{
     ML_DSA_65_PUBLIC_KEY_LENGTH, ML_DSA_65_SIGNATURE_LENGTH,
 };
 use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH as ED25519_PUBLIC_KEY_LENGTH,
-    SIGNATURE_LENGTH as ED25519_SIGNATURE_LENGTH,
+    PUBLIC_KEY_LENGTH as ED25519_PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH as ED25519_SIGNATURE_LENGTH,
 };
 use shekyl_crypto_hash::cn_fast_hash;
 
@@ -169,8 +168,7 @@ impl MultisigSigContainer {
             return Err(PqcVerifyError::ParameterBounds);
         }
 
-        let expected_len =
-            1 + (sig_count as usize) * SINGLE_SIG_CANONICAL_LEN + sig_count as usize;
+        let expected_len = 1 + (sig_count as usize) * SINGLE_SIG_CANONICAL_LEN + sig_count as usize;
         if bytes.len() != expected_len {
             return Err(PqcVerifyError::SigBlobLength);
         }
@@ -322,6 +320,8 @@ pub fn multisig_pqc_leaf_hash(
 ///  2. Delegates to `verify_multisig` with the given key container and message.
 ///
 /// `partials` is a sorted (ascending by index) slice of (signer_index, signature).
+// CLIPPY: partials.len() is checked == m_required (u8) immediately below.
+#[allow(clippy::cast_possible_truncation)]
 pub fn verify_fcmp_multisig_partials(
     key_container: &MultisigKeyContainer,
     partials: &[(u8, HybridSignature)],
@@ -364,6 +364,7 @@ mod tests {
         (0..n).map(|_| scheme.keypair_generate().unwrap()).collect()
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn make_key_container(
         pairs: &[(HybridPublicKey, crate::signature::HybridSecretKey)],
         m: u8,
@@ -375,6 +376,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn sign_multisig(
         pairs: &[(HybridPublicKey, crate::signature::HybridSecretKey)],
         signer_indices: &[u8],
@@ -435,7 +437,10 @@ mod tests {
         let pairs2 = gen_keypairs(3);
         let kc1 = make_key_container(&pairs1, 2);
         let kc2 = make_key_container(&pairs2, 2);
-        assert_ne!(multisig_group_id(&kc1).unwrap(), multisig_group_id(&kc2).unwrap());
+        assert_ne!(
+            multisig_group_id(&kc1).unwrap(),
+            multisig_group_id(&kc2).unwrap()
+        );
     }
 
     #[test]
@@ -443,7 +448,10 @@ mod tests {
         let pairs = gen_keypairs(3);
         let kc2 = make_key_container(&pairs, 2);
         let kc3 = make_key_container(&pairs, 3);
-        assert_ne!(multisig_group_id(&kc2).unwrap(), multisig_group_id(&kc3).unwrap());
+        assert_ne!(
+            multisig_group_id(&kc2).unwrap(),
+            multisig_group_id(&kc3).unwrap()
+        );
     }
 
     // -- Full verification pipeline --
@@ -761,8 +769,7 @@ mod tests {
             let result = verify_multisig(2, &key_blob, &sig_blob, msg, Some(&group_id));
             assert!(
                 result.unwrap(),
-                "subset {:?} should verify successfully",
-                subset,
+                "subset {subset:?} should verify successfully",
             );
         }
     }

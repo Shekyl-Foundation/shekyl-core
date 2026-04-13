@@ -18,13 +18,13 @@ mod inner {
 
     use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
-    use tracing::{debug, info, warn, error};
+    use tracing::{debug, error, info, warn};
 
     use shekyl_oxide::transaction::Input;
     use shekyl_rpc::{Rpc, RpcError};
 
     use crate::{
-        scan::{Scanner, ScanError},
+        scan::{ScanError, Scanner},
         wallet_state::WalletState,
     };
 
@@ -109,11 +109,7 @@ mod inner {
             let wallet_height = state.lock().await.height();
 
             if wallet_height >= daemon_height {
-                debug!(
-                    wallet_height,
-                    daemon_height,
-                    "wallet is synced, sleeping"
-                );
+                debug!(wallet_height, daemon_height, "wallet is synced, sleeping");
                 tokio::select! {
                     _ = cancel.cancelled() => break,
                     _ = tokio::time::sleep(poll_interval) => continue,
@@ -128,9 +124,7 @@ mod inner {
                     break;
                 }
 
-                let scannable = fetch_block_with_retry(
-                    &rpc, h, &cancel,
-                ).await?;
+                let scannable = fetch_block_with_retry(&rpc, h, &cancel).await?;
 
                 // --- Reorg detection ---
                 // Compare the block's `previous` hash with what we stored for (h-1).
@@ -149,16 +143,17 @@ mod inner {
                                 "chain reorg detected, rolling back"
                             );
 
-                            let fork_height = find_fork_point(
-                                &rpc, &state, h - 1, &cancel,
-                            ).await?;
+                            let fork_height = find_fork_point(&rpc, &state, h - 1, &cancel).await?;
 
                             let mut state_guard = state.lock().await;
                             state_guard.handle_reorg(fork_height);
                             on_flush(&state_guard);
                             drop(state_guard);
 
-                            info!(fork_height, "reorg handled, restarting scan from fork point");
+                            info!(
+                                fork_height,
+                                "reorg handled, restarting scan from fork point"
+                            );
                             break;
                         }
                     }
@@ -181,8 +176,8 @@ mod inner {
 
                 let miner_tx = scannable.block.miner_transaction();
                 for input in &miner_tx.prefix().inputs {
-                    if let Input::ToKey { key_image, .. }
-                    | Input::StakeClaim { key_image, .. } = input
+                    if let Input::ToKey { key_image, .. } | Input::StakeClaim { key_image, .. } =
+                        input
                     {
                         block_key_images.push(key_image.0);
                     }
@@ -200,10 +195,8 @@ mod inner {
 
                 let mut state_guard = state.lock().await;
 
-                let outputs_found =
-                    state_guard.process_scanned_outputs(h, block_hash, outputs);
-                let spends_detected =
-                    state_guard.detect_spends(h, &block_key_images);
+                let outputs_found = state_guard.process_scanned_outputs(h, block_hash, outputs);
+                let spends_detected = state_guard.detect_spends(h, &block_key_images);
 
                 let progress = SyncProgress {
                     height: h,
@@ -215,15 +208,12 @@ mod inner {
                 if outputs_found > 0 || spends_detected > 0 {
                     info!(
                         height = h,
-                        outputs_found,
-                        spends_detected,
-                        "block processed with wallet activity"
+                        outputs_found, spends_detected, "block processed with wallet activity"
                     );
                 }
 
-                let should_flush = flush_every_block
-                    || (h % DESKTOP_FLUSH_INTERVAL == 0)
-                    || h == daemon_height;
+                let should_flush =
+                    flush_every_block || (h % DESKTOP_FLUSH_INTERVAL == 0) || h == daemon_height;
 
                 if should_flush {
                     on_flush(&state_guard);
@@ -236,7 +226,10 @@ mod inner {
 
         let guard = state.lock().await;
         on_flush(&guard);
-        info!(final_height = guard.height(), "sync loop stopped, final flush done");
+        info!(
+            final_height = guard.height(),
+            "sync loop stopped, final flush done"
+        );
 
         Ok(())
     }

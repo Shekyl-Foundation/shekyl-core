@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### 🔄 Changed
+
+- **Workspace-wide clippy cleanup.** Resolved all `cargo clippy --all-targets
+  --no-deps -- -D warnings` errors across the Rust workspace (14 crates,
+  52 files). Key changes: replaced `as u128` casts with `u128::from()`,
+  added `#[allow]` for intentional truncation in economics/FFI code,
+  marked FFI `extern "C"` functions `unsafe` with `# Safety` docs,
+  replaced redundant closures with method references, used `let...else`,
+  switched `from_slice` to `GenericArray::from()` in chacha20poly1305,
+  changed `&Vec<T>` to `&[T]` in public APIs. No behavioral changes.
+
 ### ✨ Added
 
 - **Fuzz target for `derive_output_secrets`.** New `fuzz_derive_output_secrets`

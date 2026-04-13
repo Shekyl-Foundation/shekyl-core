@@ -13,14 +13,14 @@
 //! - Unstake transactions (spending matured staked outputs)
 //! - Combined claim-and-unstake workflow
 
-pub mod error;
 pub mod claim_builder;
-pub mod workflow;
+pub mod error;
 #[cfg(feature = "multisig")]
 pub mod multisig;
+pub mod workflow;
 
-pub use error::WalletCoreError;
 pub use claim_builder::{ClaimTxBuilder, ClaimTxPlan};
+pub use error::WalletCoreError;
 pub use workflow::ClaimAndUnstakePlan;
 
 #[cfg(test)]

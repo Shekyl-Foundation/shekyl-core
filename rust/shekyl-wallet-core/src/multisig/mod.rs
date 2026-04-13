@@ -12,12 +12,12 @@
 //!   collecting nonce commitments and partial shares from M signers,
 //!   then aggregating into a complete FCMP++ proof.
 
-pub mod group;
 pub mod dkg;
+pub mod group;
 pub mod signing;
 
-pub use group::MultisigGroup;
 pub use dkg::MultisigDkgSession;
+pub use group::MultisigGroup;
 pub use signing::MultisigSigningSession;
 
 #[cfg(test)]

@@ -155,7 +155,10 @@ pub fn select_outputs(
     let mut rel_score: u64 = 0;
     for i in 0..selected.len() {
         for j in (i + 1)..selected.len() {
-            rel_score += u64::from(relatedness(candidates[selected[i]], candidates[selected[j]]));
+            rel_score += u64::from(relatedness(
+                candidates[selected[i]],
+                candidates[selected[j]],
+            ));
         }
     }
 

@@ -17,31 +17,31 @@
 //! The scanner core is adapted from the monero-oxide wallet library,
 //! extended to handle Shekyl's 3-key HKDF model and staking economy.
 
-pub mod subaddress;
-pub mod extra;
-pub mod view_pair;
-pub mod output;
-pub mod shared_key;
-pub mod scan;
-pub mod transfer;
-pub mod wallet_state;
 pub mod balance;
 pub mod claim;
 pub mod coin_select;
+pub mod extra;
+pub mod output;
+pub mod scan;
+pub mod shared_key;
 pub mod staker_pool;
+pub mod subaddress;
 pub mod sync;
+pub mod transfer;
+pub mod view_pair;
+pub mod wallet_state;
 
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub use subaddress::SubaddressIndex;
-pub use extra::{PaymentId, Extra, ExtraField};
-pub use view_pair::{ViewPairError, ViewPair, GuaranteedViewPair};
-pub use output::WalletOutput;
-pub use shared_key::SharedKeyDerivations;
-pub use scan::{Timelocked, RecoveredWalletOutput, ScanError, Scanner, GuaranteedScanner};
-pub use transfer::TransferDetails;
-pub use wallet_state::WalletState;
 pub use balance::BalanceSummary;
 pub use claim::ClaimableInfo;
-pub use staker_pool::{StakerPoolState, AccrualRecord, ConservationCheck};
+pub use extra::{Extra, ExtraField, PaymentId};
+pub use output::WalletOutput;
+pub use scan::{GuaranteedScanner, RecoveredWalletOutput, ScanError, Scanner, Timelocked};
+pub use shared_key::SharedKeyDerivations;
+pub use staker_pool::{AccrualRecord, ConservationCheck, StakerPoolState};
+pub use subaddress::SubaddressIndex;
+pub use transfer::TransferDetails;
+pub use view_pair::{GuaranteedViewPair, ViewPair, ViewPairError};
+pub use wallet_state::WalletState;

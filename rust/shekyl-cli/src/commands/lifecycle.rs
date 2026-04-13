@@ -19,7 +19,9 @@ pub fn cmd_create(ctx: &WalletContext, args: &[&str]) {
             return;
         }
     };
-    let Some(mut password) = super::read_password("New wallet password: ") else { return };
+    let Some(mut password) = super::read_password("New wallet password: ") else {
+        return;
+    };
     let Some(confirm) = super::read_password("Confirm password: ") else {
         password.zeroize();
         return;
@@ -49,7 +51,9 @@ pub fn cmd_open(ctx: &WalletContext, args: &[&str]) {
             return;
         }
     };
-    let Some(mut password) = super::read_password("Wallet password: ") else { return };
+    let Some(mut password) = super::read_password("Wallet password: ") else {
+        return;
+    };
 
     match ctx.open(filename, &password) {
         Ok(()) => println!("Opened wallet: {filename}"),
@@ -79,7 +83,9 @@ pub fn cmd_restore(ctx: &WalletContext, args: &[&str]) {
     let filename = args[0];
     let seed = args[1..].join(" ");
 
-    let Some(mut password) = super::read_password("New wallet password: ") else { return };
+    let Some(mut password) = super::read_password("New wallet password: ") else {
+        return;
+    };
 
     eprint!("Restore height (0 for full scan): ");
     let mut height_str = String::new();
@@ -139,7 +145,9 @@ pub fn cmd_password(ctx: &WalletContext) {
         return;
     }
 
-    let Some(mut old_pw) = super::read_password("Password: ") else { return };
+    let Some(mut old_pw) = super::read_password("Password: ") else {
+        return;
+    };
 
     match ctx.json_rpc("get_version", "{}") {
         Ok(_) => {}

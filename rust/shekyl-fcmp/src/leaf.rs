@@ -85,7 +85,12 @@ impl ShekylLeaf {
         i_x.copy_from_slice(&bytes[32..64]);
         c_x.copy_from_slice(&bytes[64..96]);
         h_pqc.copy_from_slice(&bytes[96..128]);
-        ShekylLeaf { o_x, i_x, c_x, h_pqc: PqcLeafScalar(h_pqc) }
+        ShekylLeaf {
+            o_x,
+            i_x,
+            c_x,
+            h_pqc: PqcLeafScalar(h_pqc),
+        }
     }
 }
 
@@ -116,8 +121,10 @@ mod tests {
         let s = PqcLeafScalar::from_pqc_public_key(&pk);
         // Verify the result is a canonical HelioseleneField element by round-tripping
         use ciphersuite::group::ff::PrimeField;
-        assert!(bool::from(HelioseleneField::from_repr(s.0).is_some()),
-            "leaf scalar must be a canonical Selene base field element");
+        assert!(
+            bool::from(HelioseleneField::from_repr(s.0).is_some()),
+            "leaf scalar must be a canonical Selene base field element"
+        );
     }
 
     #[test]

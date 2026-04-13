@@ -10,7 +10,7 @@ use core::ops::Deref;
 
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar, EdwardsPoint};
+use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, EdwardsPoint, Scalar};
 
 use shekyl_oxide::primitives::keccak256_to_scalar;
 
@@ -56,7 +56,12 @@ impl ViewPair {
         if !spend.is_torsion_free() {
             Err(ViewPairError::TorsionedSpendKey)?;
         }
-        Ok(ViewPair { spend, view, x25519_sk, ml_kem_dk })
+        Ok(ViewPair {
+            spend,
+            view,
+            x25519_sk,
+            ml_kem_dk,
+        })
     }
 
     /// The public spend key.

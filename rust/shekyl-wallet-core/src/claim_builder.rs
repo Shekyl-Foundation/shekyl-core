@@ -10,10 +10,7 @@
 //! the tx-builder crate, but this module computes the correct claim
 //! parameters: from_height, to_height, estimated reward, and splitting.
 
-use shekyl_scanner::{
-    WalletState,
-    ClaimableInfo,
-};
+use shekyl_scanner::{ClaimableInfo, WalletState};
 
 use crate::error::WalletCoreError;
 
@@ -75,11 +72,12 @@ impl ClaimTxBuilder {
         let mut total_reward = 0u64;
 
         for td in &claimable {
-            let idx = match wallet.transfers().iter().position(|t| {
-                t.global_output_index == td.global_output_index
-            }) {
-                Some(i) => i,
-                None => return Err(WalletCoreError::TransferNotFound),
+            let Some(idx) = wallet
+                .transfers()
+                .iter()
+                .position(|t| t.global_output_index == td.global_output_index)
+            else {
+                return Err(WalletCoreError::TransferNotFound);
             };
 
             if let Some(info) = ClaimableInfo::from_transfer(td, idx, current_height) {
@@ -88,10 +86,7 @@ impl ClaimTxBuilder {
                 // Split if range exceeds max
                 let mut cursor = info.from_height;
                 while cursor < info.to_height {
-                    let chunk_end = std::cmp::min(
-                        cursor + self.max_claim_range,
-                        info.to_height,
-                    );
+                    let chunk_end = std::cmp::min(cursor + self.max_claim_range, info.to_height);
                     let reward = pool.estimate_reward(cursor, chunk_end, weight);
                     claims.push(ClaimInputPlan {
                         transfer_index: idx,
@@ -135,7 +130,8 @@ impl ClaimTxBuilder {
         let mut total_reward = 0u64;
 
         for &idx in indices {
-            let td = transfers.get(idx)
+            let td = transfers
+                .get(idx)
                 .ok_or(WalletCoreError::NotStaked { index: idx })?;
 
             if !td.staked {
@@ -152,10 +148,7 @@ impl ClaimTxBuilder {
 
             let mut cursor = info.from_height;
             while cursor < info.to_height {
-                let chunk_end = std::cmp::min(
-                    cursor + self.max_claim_range,
-                    info.to_height,
-                );
+                let chunk_end = std::cmp::min(cursor + self.max_claim_range, info.to_height);
                 let reward = pool.estimate_reward(cursor, chunk_end, weight);
                 claims.push(ClaimInputPlan {
                     transfer_index: idx,

@@ -130,7 +130,10 @@ mod tests {
     fn test_strip_unix_paths() {
         let msg = "Failed to open /home/user/.shekyl/wallet.keys";
         let cleaned = strip_paths(msg);
-        assert!(!cleaned.contains("/home/user"), "path not stripped: {cleaned}");
+        assert!(
+            !cleaned.contains("/home/user"),
+            "path not stripped: {cleaned}"
+        );
         assert!(cleaned.contains("<path>"), "missing <path>: {cleaned}");
     }
 
@@ -138,7 +141,10 @@ mod tests {
     fn test_strip_windows_paths() {
         let msg = r"Cannot read C:\Users\foo\wallet.keys";
         let cleaned = strip_paths(msg);
-        assert!(!cleaned.contains(r"C:\Users"), "path not stripped: {cleaned}");
+        assert!(
+            !cleaned.contains(r"C:\Users"),
+            "path not stripped: {cleaned}"
+        );
         assert!(cleaned.contains("<path>"), "missing <path>: {cleaned}");
     }
 
@@ -175,9 +181,6 @@ mod tests {
             !output.contains("/home/user"),
             "path leaked for unknown code: {output}"
         );
-        assert!(
-            output.contains("code -999"),
-            "code not shown: {output}"
-        );
+        assert!(output.contains("code -999"), "code not shown: {output}");
     }
 }

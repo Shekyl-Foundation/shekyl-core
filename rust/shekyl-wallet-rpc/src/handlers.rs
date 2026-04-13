@@ -79,21 +79,16 @@ fn dispatch_scanner_method(
         "get_unstakeable_outputs" => scanner_get_unstakeable_outputs(scanner),
         "freeze" => scanner_freeze(scanner, params),
         "thaw" => scanner_thaw(scanner, params),
-        "get_transfer_by_txid" | "get_payments" | "get_bulk_payments" => {
-            Err(WalletError {
-                code: -1,
-                message: format!("scanner handler for '{method}' not yet implemented"),
-            })
-        }
+        "get_transfer_by_txid" | "get_payments" | "get_bulk_payments" => Err(WalletError {
+            code: -1,
+            message: format!("scanner handler for '{method}' not yet implemented"),
+        }),
         _ => unreachable!("method not in SCANNER_METHODS"),
     }
 }
 
 #[cfg(feature = "rust-scanner")]
-fn scanner_get_balance(
-    scanner: &ScannerState,
-    _params: Value,
-) -> Result<Value, WalletError> {
+fn scanner_get_balance(scanner: &ScannerState, _params: Value) -> Result<Value, WalletError> {
     let state = scanner.state.lock().map_err(|e| WalletError {
         code: -1,
         message: format!("scanner lock poisoned: {e}"),
@@ -116,10 +111,7 @@ fn scanner_get_height(scanner: &ScannerState) -> Result<Value, WalletError> {
 }
 
 #[cfg(feature = "rust-scanner")]
-fn scanner_get_transfers(
-    scanner: &ScannerState,
-    params: Value,
-) -> Result<Value, WalletError> {
+fn scanner_get_transfers(scanner: &ScannerState, params: Value) -> Result<Value, WalletError> {
     let want_in = params.get("in").and_then(|v| v.as_bool()).unwrap_or(false);
     let want_out = params.get("out").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -154,10 +146,7 @@ fn scanner_get_transfers(
 }
 
 #[cfg(feature = "rust-scanner")]
-fn scanner_incoming_transfers(
-    scanner: &ScannerState,
-    params: Value,
-) -> Result<Value, WalletError> {
+fn scanner_incoming_transfers(scanner: &ScannerState, params: Value) -> Result<Value, WalletError> {
     let transfer_type = params
         .get("transfer_type")
         .and_then(|v| v.as_str())
@@ -184,9 +173,7 @@ fn scanner_incoming_transfers(
 }
 
 #[cfg(feature = "rust-scanner")]
-fn scanner_get_staked_outputs(
-    scanner: &ScannerState,
-) -> Result<Value, WalletError> {
+fn scanner_get_staked_outputs(scanner: &ScannerState) -> Result<Value, WalletError> {
     let state = scanner.state.lock().map_err(|e| WalletError {
         code: -1,
         message: format!("scanner lock poisoned: {e}"),
@@ -211,9 +198,7 @@ fn scanner_get_staked_outputs(
 }
 
 #[cfg(feature = "rust-scanner")]
-fn scanner_get_staked_balance(
-    scanner: &ScannerState,
-) -> Result<Value, WalletError> {
+fn scanner_get_staked_balance(scanner: &ScannerState) -> Result<Value, WalletError> {
     let state = scanner.state.lock().map_err(|e| WalletError {
         code: -1,
         message: format!("scanner lock poisoned: {e}"),
@@ -229,9 +214,7 @@ fn scanner_get_staked_balance(
 }
 
 #[cfg(feature = "rust-scanner")]
-fn scanner_get_claimable_stakes(
-    scanner: &ScannerState,
-) -> Result<Value, WalletError> {
+fn scanner_get_claimable_stakes(scanner: &ScannerState) -> Result<Value, WalletError> {
     let state = scanner.state.lock().map_err(|e| WalletError {
         code: -1,
         message: format!("scanner lock poisoned: {e}"),
@@ -265,9 +248,7 @@ fn scanner_get_claimable_stakes(
 }
 
 #[cfg(feature = "rust-scanner")]
-fn scanner_get_unstakeable_outputs(
-    scanner: &ScannerState,
-) -> Result<Value, WalletError> {
+fn scanner_get_unstakeable_outputs(scanner: &ScannerState) -> Result<Value, WalletError> {
     let state = scanner.state.lock().map_err(|e| WalletError {
         code: -1,
         message: format!("scanner lock poisoned: {e}"),
@@ -293,10 +274,7 @@ fn scanner_get_unstakeable_outputs(
 }
 
 #[cfg(feature = "rust-scanner")]
-fn scanner_freeze(
-    scanner: &ScannerState,
-    params: Value,
-) -> Result<Value, WalletError> {
+fn scanner_freeze(scanner: &ScannerState, params: Value) -> Result<Value, WalletError> {
     let key_image = params
         .get("key_image")
         .and_then(|v| v.as_str())
@@ -327,10 +305,7 @@ fn scanner_freeze(
 }
 
 #[cfg(feature = "rust-scanner")]
-fn scanner_thaw(
-    scanner: &ScannerState,
-    params: Value,
-) -> Result<Value, WalletError> {
+fn scanner_thaw(scanner: &ScannerState, params: Value) -> Result<Value, WalletError> {
     let key_image = params
         .get("key_image")
         .and_then(|v| v.as_str())

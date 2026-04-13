@@ -26,17 +26,15 @@ use shekyl_oxide::{
 use shekyl_rpc::ScannableBlock;
 
 use shekyl_crypto_pq::{
-    output::{scan_output_recover, compute_output_key_image},
     kem::ML_KEM_768_CT_LEN,
+    output::{compute_output_key_image, scan_output_recover},
 };
 use shekyl_generators::hash_to_point;
 
 use crate::{
-    SubaddressIndex,
-    ViewPair,
-    GuaranteedViewPair,
     extra::{Extra, PaymentId},
     output::*,
+    GuaranteedViewPair, SubaddressIndex, ViewPair,
 };
 
 const X25519_CT_BYTES: usize = 32;
@@ -76,14 +74,30 @@ impl Zeroize for RecoveredWalletOutput {
 }
 
 impl RecoveredWalletOutput {
-    pub fn wallet_output(&self) -> &WalletOutput { &self.base }
-    pub fn ho(&self) -> &[u8; 32] { &self.ho }
-    pub fn y(&self) -> &[u8; 32] { &self.y }
-    pub fn z(&self) -> &[u8; 32] { &self.z }
-    pub fn k_amount(&self) -> &[u8; 32] { &self.k_amount }
-    pub fn combined_shared_secret(&self) -> &[u8; 64] { &self.combined_shared_secret }
-    pub fn key_image(&self) -> &[u8; 32] { &self.key_image }
-    pub fn amount(&self) -> u64 { self.amount }
+    pub fn wallet_output(&self) -> &WalletOutput {
+        &self.base
+    }
+    pub fn ho(&self) -> &[u8; 32] {
+        &self.ho
+    }
+    pub fn y(&self) -> &[u8; 32] {
+        &self.y
+    }
+    pub fn z(&self) -> &[u8; 32] {
+        &self.z
+    }
+    pub fn k_amount(&self) -> &[u8; 32] {
+        &self.k_amount
+    }
+    pub fn combined_shared_secret(&self) -> &[u8; 64] {
+        &self.combined_shared_secret
+    }
+    pub fn key_image(&self) -> &[u8; 32] {
+        &self.key_image
+    }
+    pub fn amount(&self) -> u64 {
+        self.amount
+    }
 
     #[cfg(any(test, feature = "test-utils"))]
     pub fn new_for_test(base: WalletOutput, amount: u64) -> Self {
@@ -207,28 +221,29 @@ impl InternalScanner {
 
             let view_tag_on_chain: u8 = output.view_tag.unwrap_or(0);
 
-            let (enc_amount, amount_tag_on_chain, commitment_bytes) =
-                match &tx {
-                    Transaction::V2 { proofs: Some(ref proofs), .. } => {
-                        match proofs.base.encrypted_amounts.get(o) {
-                            Some(ea) => {
-                                let c = proofs.base.commitments.get(o)
-                                    .ok_or(ScanError::InvalidScannableBlock(
-                                        "proofs without a commitment per output",
-                                    ))?;
-                                (ea.amount, ea.amount_tag, c.0)
-                            }
-                            None => continue,
-                        }
+            let (enc_amount, amount_tag_on_chain, commitment_bytes) = match &tx {
+                Transaction::V2 {
+                    proofs: Some(ref proofs),
+                    ..
+                } => match proofs.base.encrypted_amounts.get(o) {
+                    Some(ea) => {
+                        let c = proofs.base.commitments.get(o).ok_or(
+                            ScanError::InvalidScannableBlock(
+                                "proofs without a commitment per output",
+                            ),
+                        )?;
+                        (ea.amount, ea.amount_tag, c.0)
                     }
-                    _ => {
-                        if output.amount.is_some() {
-                            ([0u8; 8], 0u8, [0u8; 32])
-                        } else {
-                            continue;
-                        }
+                    None => continue,
+                },
+                _ => {
+                    if output.amount.is_some() {
+                        ([0u8; 8], 0u8, [0u8; 32])
+                    } else {
+                        continue;
                     }
-                };
+                }
+            };
 
             // --- Try KEM path (tag 0x06) ---
             let Some(blob) = kem_ct_blob else { continue };
@@ -244,7 +259,7 @@ impl InternalScanner {
             let ct_ml_kem = &ct_slice[X25519_CT_BYTES..];
             debug_assert_eq!(ct_ml_kem.len(), ML_KEM_768_CT_LEN);
 
-            let recovered = match scan_output_recover(
+            let Ok(recovered) = scan_output_recover(
                 self.pair.x25519_sk(),
                 self.pair.ml_kem_dk(),
                 ct_x25519,
@@ -255,9 +270,8 @@ impl InternalScanner {
                 amount_tag_on_chain,
                 view_tag_on_chain,
                 o as u64,
-            ) {
-                Ok(r) => r,
-                Err(_) => continue,
+            ) else {
+                continue;
             };
 
             // --- Subaddress lookup via recovered spend key B' ---
@@ -271,8 +285,7 @@ impl InternalScanner {
             let amount = recovered.amount;
             let commitment = Commitment::new(
                 curve25519_dalek::Scalar::from_canonical_bytes(recovered.z)
-                    .expect("z from wide_reduce is always canonical")
-                    .into(),
+                    .expect("z from wide_reduce is always canonical"),
                 amount,
             );
 
@@ -283,7 +296,7 @@ impl InternalScanner {
             let ki_result = compute_output_key_image(
                 &recovered.combined_ss,
                 o as u64,
-                &*self.spend_secret,
+                &self.spend_secret,
                 &hp_bytes,
             );
             let key_image = match ki_result {
@@ -311,8 +324,7 @@ impl InternalScanner {
                 data: OutputData {
                     key: output_key_point,
                     key_offset: curve25519_dalek::Scalar::from_canonical_bytes(recovered.ho)
-                        .expect("ho from wide_reduce is always canonical")
-                        .into(),
+                        .expect("ho from wide_reduce is always canonical"),
                     commitment,
                 },
                 metadata: Metadata {
@@ -350,14 +362,15 @@ impl InternalScanner {
                 "scanning a ScannableBlock with more/less transactions than it should have",
             ))?;
         }
-        let Some(mut output_index_for_first_ringct_output) =
-            output_index_for_first_ringct_output
+        let Some(mut output_index_for_first_ringct_output) = output_index_for_first_ringct_output
         else {
             return Ok(Timelocked(vec![]));
         };
 
         if block.header.hardfork_version < 1 {
-            Err(ScanError::UnsupportedProtocol(block.header.hardfork_version))?;
+            Err(ScanError::UnsupportedProtocol(
+                block.header.hardfork_version,
+            ))?;
         }
 
         let mut txs_with_hashes = vec![(
@@ -382,15 +395,17 @@ impl InternalScanner {
             }
 
             if matches!(tx, Transaction::V2 { .. }) {
-                output_index_for_first_ringct_output +=
-                    u64::try_from(tx.prefix().outputs.len())
-                        .expect("couldn't convert amount of outputs (usize) to u64")
+                output_index_for_first_ringct_output += u64::try_from(tx.prefix().outputs.len())
+                    .expect("couldn't convert amount of outputs (usize) to u64")
             }
         }
 
         // Shekyl never supports unencrypted payment IDs — strip them.
         for output in &mut res.0 {
-            if matches!(output.base.metadata.payment_id, Some(PaymentId::Unencrypted(_))) {
+            if matches!(
+                output.base.metadata.payment_id,
+                Some(PaymentId::Unencrypted(_))
+            ) {
                 output.base.metadata.payment_id = None;
             }
         }

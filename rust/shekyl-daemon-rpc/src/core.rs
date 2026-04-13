@@ -65,11 +65,7 @@ impl CoreRpc {
         let c_uri = CString::new(uri).ok()?;
         let c_body = CString::new(body).ok()?;
         unsafe {
-            let ptr = ffi::core_rpc_ffi_json_endpoint(
-                self.handle,
-                c_uri.as_ptr(),
-                c_body.as_ptr(),
-            );
+            let ptr = ffi::core_rpc_ffi_json_endpoint(self.handle, c_uri.as_ptr(), c_body.as_ptr());
             consume_c_string(ptr)
         }
     }
@@ -105,11 +101,7 @@ impl CoreRpc {
         let c_method = CString::new(method).ok()?;
         let c_params = CString::new(params).ok()?;
         unsafe {
-            let ptr = ffi::core_rpc_ffi_json_rpc(
-                self.handle,
-                c_method.as_ptr(),
-                c_params.as_ptr(),
-            );
+            let ptr = ffi::core_rpc_ffi_json_rpc(self.handle, c_method.as_ptr(), c_params.as_ptr());
             consume_c_string(ptr)
         }
     }

@@ -33,19 +33,21 @@ use curve25519_dalek::{
     edwards::{CompressedEdwardsY, EdwardsPoint},
     scalar::Scalar,
 };
-use fips203::{ml_kem_768, traits::{Encaps, Decaps, SerDes}};
+use fips203::{
+    ml_kem_768,
+    traits::{Decaps, Encaps, SerDes},
+};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use shekyl_generators::{H, T};
 
-use crate::kem::{
-    combine_shared_secrets, SharedSecret,
-    ML_KEM_768_CT_LEN, ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN,
-};
 use crate::derivation::{
-    derive_kem_seed, derive_output_secrets, derive_view_tag_x25519,
-    hash_pqc_public_key, keygen_from_seed, OutputSecrets,
+    derive_kem_seed, derive_output_secrets, derive_view_tag_x25519, hash_pqc_public_key,
+    keygen_from_seed, OutputSecrets,
+};
+use crate::kem::{
+    combine_shared_secrets, SharedSecret, ML_KEM_768_CT_LEN, ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN,
 };
 use crate::CryptoError;
 
@@ -87,6 +89,8 @@ pub struct OutputData {
     pub k_amount: [u8; 32],
 }
 
+// CLIPPY: omitted fields are intentionally redacted (secrets or bulky ciphertexts).
+#[allow(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for OutputData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OutputData")
@@ -126,6 +130,8 @@ pub struct ScannedOutput {
     pub h_pqc: [u8; 32],
 }
 
+// CLIPPY: pqc_public_key intentionally omitted (bulky, derivable from pqc_secret_key).
+#[allow(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for ScannedOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScannedOutput")
@@ -148,8 +154,8 @@ impl std::fmt::Debug for ScannedOutput {
 ///
 /// KEM encapsulation is deterministic: `tx_key_secret` + recipient public keys
 /// + `output_index` uniquely determine the X25519 ephemeral key and ML-KEM
-/// ciphertext. The sender can re-derive `combined_ss` at proof time from
-/// `tx_key_secret` (stored in `m_tx_keys`) + public data.
+///   ciphertext. The sender can re-derive `combined_ss` at proof time from
+///   `tx_key_secret` (stored in `m_tx_keys`) + public data.
 pub fn construct_output(
     tx_key_secret: &[u8; 32],
     x25519_pk: &[u8; 32],
@@ -162,7 +168,7 @@ pub fn construct_output(
 
     let b_point = CompressedEdwardsY(*spend_key)
         .decompress()
-        .ok_or_else(|| CryptoError::InvalidKeyMaterial)?;
+        .ok_or(CryptoError::InvalidKeyMaterial)?;
 
     if b_point == EdwardsPoint::default() {
         return Err(CryptoError::InvalidKeyMaterial);
@@ -270,6 +276,9 @@ pub fn construct_output(
 /// Returns `Err` for outputs that don't belong to this key, or for
 /// cryptographic integrity failures. View-tag mismatch returns early
 /// (cheap rejection). Amount-tag mismatch is a loud cryptographic failure.
+// CLIPPY: parameters correspond 1:1 to on-chain output fields plus recipient
+// keys; bundling into a struct would just move the field list elsewhere.
+#[allow(clippy::too_many_arguments)]
 pub fn scan_output(
     x25519_sk: &[u8; 32],
     ml_kem_dk: &[u8],
@@ -303,7 +312,9 @@ pub fn scan_output(
         return Err(CryptoError::InvalidKeyMaterial);
     }
     if kem_ct_ml_kem.len() != ML_KEM_768_CT_LEN {
-        return Err(CryptoError::DecapsulationFailed("invalid ML-KEM ciphertext length".into()));
+        return Err(CryptoError::DecapsulationFailed(
+            "invalid ML-KEM ciphertext length".into(),
+        ));
     }
 
     let dk_bytes: [u8; ML_KEM_768_DK_LEN] = ml_kem_dk
@@ -350,7 +361,7 @@ pub fn scan_output(
 
     let b_point = CompressedEdwardsY(*spend_key)
         .decompress()
-        .ok_or_else(|| CryptoError::InvalidKeyMaterial)?;
+        .ok_or(CryptoError::InvalidKeyMaterial)?;
 
     let ho: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.ho))
         .expect("ho from wide_reduce is always canonical");
@@ -423,6 +434,8 @@ impl Zeroize for RecoveredOutput {
     }
 }
 
+// CLIPPY: omitted fields are secrets intentionally redacted for safe debug output.
+#[allow(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for RecoveredOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RecoveredOutput")
@@ -441,6 +454,8 @@ impl std::fmt::Debug for RecoveredOutput {
 /// This avoids iterating over subaddresses in Rust. The caller checks
 /// `B'` against its subaddress table to determine ownership. Commitment
 /// verification (`C == z*G + amount*H`) IS performed here.
+// CLIPPY: parameters correspond 1:1 to on-chain output fields plus recipient keys.
+#[allow(clippy::too_many_arguments)]
 pub fn scan_output_recover(
     x25519_sk: &[u8; 32],
     ml_kem_dk: &[u8],
@@ -471,7 +486,9 @@ pub fn scan_output_recover(
         return Err(CryptoError::InvalidKeyMaterial);
     }
     if kem_ct_ml_kem.len() != ML_KEM_768_CT_LEN {
-        return Err(CryptoError::DecapsulationFailed("invalid ML-KEM ciphertext length".into()));
+        return Err(CryptoError::DecapsulationFailed(
+            "invalid ML-KEM ciphertext length".into(),
+        ));
     }
 
     let dk_bytes: [u8; ML_KEM_768_DK_LEN] = ml_kem_dk
@@ -589,9 +606,7 @@ pub fn sign_pqc_auth_for_output(
     output_index: u64,
     message: &[u8],
 ) -> Result<PqcAuthSignature, CryptoError> {
-    use crate::signature::{
-        HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, SignatureScheme,
-    };
+    use crate::signature::{HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, SignatureScheme};
     use ed25519_dalek::SigningKey;
 
     let secrets: OutputSecrets = derive_output_secrets(combined_ss, output_index);
@@ -723,10 +738,7 @@ pub fn rederive_combined_ss(
 /// TX proofs use all four fields (z for commitment verification).
 /// Reserve proofs use ho, y, k_amount (z omitted from wire format but
 /// available for optional defense-in-depth).
-pub fn derive_proof_secrets(
-    combined_ss: &[u8; 64],
-    output_index: u64,
-) -> ProofSecrets {
+pub fn derive_proof_secrets(combined_ss: &[u8; 64], output_index: u64) -> ProofSecrets {
     let secrets = derive_output_secrets(combined_ss, output_index);
     ProofSecrets {
         ho: secrets.ho,
@@ -864,7 +876,7 @@ pub fn compute_output_key_image(
 ) -> Result<KeyImageResult, CryptoError> {
     let hp_point = CompressedEdwardsY(*hp_of_output)
         .decompress()
-        .ok_or_else(|| CryptoError::InvalidKeyMaterial)?;
+        .ok_or(CryptoError::InvalidKeyMaterial)?;
     if hp_point == EdwardsPoint::default() {
         return Err(CryptoError::InvalidKeyMaterial);
     }
@@ -906,7 +918,7 @@ pub fn compute_output_key_image_from_ho(
 ) -> Result<KeyImageResult, CryptoError> {
     let hp_point = CompressedEdwardsY(*hp_of_output)
         .decompress()
-        .ok_or_else(|| CryptoError::InvalidKeyMaterial)?;
+        .ok_or(CryptoError::InvalidKeyMaterial)?;
     if hp_point == EdwardsPoint::default() {
         return Err(CryptoError::InvalidKeyMaterial);
     }
@@ -914,8 +926,8 @@ pub fn compute_output_key_image_from_ho(
         return Err(CryptoError::InvalidKeyMaterial);
     }
 
-    let ho_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*ho))
-        .ok_or(CryptoError::InvalidKeyMaterial)?;
+    let ho_scalar: Scalar =
+        Option::from(Scalar::from_canonical_bytes(*ho)).ok_or(CryptoError::InvalidKeyMaterial)?;
     let b_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*spend_secret))
         .ok_or(CryptoError::InvalidKeyMaterial)?;
 
@@ -936,9 +948,7 @@ pub fn compute_output_key_image_from_ho(
 
 /// Internal helper: derive ML-DSA-65 keypair from seed bytes, returning
 /// serialized public and secret key.
-fn keygen_from_seed_bytes(
-    ml_dsa_seed: &[u8; 32],
-) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
+fn keygen_from_seed_bytes(ml_dsa_seed: &[u8; 32]) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
     use fips204::traits::SerDes;
     let (pk, sk) = keygen_from_seed(ml_dsa_seed)?;
     let pk_bytes: Vec<u8> = pk.into_bytes().to_vec();
@@ -1001,10 +1011,19 @@ mod tests {
         assert_eq!(scanned.amount, amount, "recovered amount must match");
         assert_eq!(scanned.y, out.y, "scanner y must match sender y");
         assert_eq!(scanned.z, out.z, "scanner z must match sender z");
-        assert_eq!(scanned.k_amount, out.k_amount, "scanner k_amount must match");
-        assert_eq!(scanned.pqc_public_key, out.pqc_public_key, "PQC pk must match");
+        assert_eq!(
+            scanned.k_amount, out.k_amount,
+            "scanner k_amount must match"
+        );
+        assert_eq!(
+            scanned.pqc_public_key, out.pqc_public_key,
+            "PQC pk must match"
+        );
         assert_eq!(scanned.h_pqc, out.h_pqc, "h_pqc must match");
-        assert!(!scanned.pqc_secret_key.is_empty(), "PQC sk must be non-empty");
+        assert!(
+            !scanned.pqc_secret_key.is_empty(),
+            "PQC sk must be non-empty"
+        );
     }
 
     #[test]
@@ -1235,15 +1254,8 @@ mod tests {
             .compress()
             .to_bytes();
 
-        let out = construct_output(
-            &tx_key,
-            &pk.x25519,
-            &pk.ml_kem,
-            &spend_key,
-            u64::MAX,
-            0,
-        )
-        .unwrap();
+        let out =
+            construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, u64::MAX, 0).unwrap();
 
         let scanned = scan_output(
             &sk.x25519,
@@ -1276,9 +1288,18 @@ mod tests {
         let out0 = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 100, 0).unwrap();
         let out1 = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 100, 1).unwrap();
 
-        assert_ne!(out0.output_key, out1.output_key, "different indices must produce different O");
-        assert_ne!(out0.commitment, out1.commitment, "different indices must produce different C");
-        assert_ne!(out0.h_pqc, out1.h_pqc, "different indices must produce different h_pqc");
+        assert_ne!(
+            out0.output_key, out1.output_key,
+            "different indices must produce different O"
+        );
+        assert_ne!(
+            out0.commitment, out1.commitment,
+            "different indices must produce different C"
+        );
+        assert_ne!(
+            out0.h_pqc, out1.h_pqc,
+            "different indices must produce different h_pqc"
+        );
     }
 
     #[test]
@@ -1343,8 +1364,7 @@ mod tests {
         assert!(ok, "signature must verify");
 
         // h_pqc from construct must match what sign produces
-        let h_pqc_from_sign =
-            crate::derivation::hash_pqc_public_key(&auth.hybrid_public_key);
+        let h_pqc_from_sign = crate::derivation::hash_pqc_public_key(&auth.hybrid_public_key);
         assert_eq!(
             scanned.h_pqc, out.h_pqc,
             "scanner h_pqc must match sender h_pqc"
@@ -1370,7 +1390,10 @@ mod tests {
 
         let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 500, 0).unwrap();
         let h_pqc_direct = hash_pqc_public_key(&out.pqc_public_key);
-        assert_eq!(out.h_pqc, h_pqc_direct, "h_pqc from construct must match direct hash");
+        assert_eq!(
+            out.h_pqc, h_pqc_direct,
+            "h_pqc from construct must match direct hash"
+        );
 
         let scanned = scan_output(
             &sk.x25519,
@@ -1387,7 +1410,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(scanned.h_pqc, out.h_pqc, "scanner h_pqc must match sender h_pqc");
+        assert_eq!(
+            scanned.h_pqc, out.h_pqc,
+            "scanner h_pqc must match sender h_pqc"
+        );
     }
 
     // ── Phase 1 tests: determinism, rederive, proof_secrets, key image ──
@@ -1407,9 +1433,18 @@ mod tests {
 
         assert_eq!(out1.output_key, out2.output_key, "O must be deterministic");
         assert_eq!(out1.commitment, out2.commitment, "C must be deterministic");
-        assert_eq!(out1.enc_amount, out2.enc_amount, "enc_amount must be deterministic");
-        assert_eq!(out1.amount_tag, out2.amount_tag, "amount_tag must be deterministic");
-        assert_eq!(out1.view_tag_x25519, out2.view_tag_x25519, "view_tag must be deterministic");
+        assert_eq!(
+            out1.enc_amount, out2.enc_amount,
+            "enc_amount must be deterministic"
+        );
+        assert_eq!(
+            out1.amount_tag, out2.amount_tag,
+            "amount_tag must be deterministic"
+        );
+        assert_eq!(
+            out1.view_tag_x25519, out2.view_tag_x25519,
+            "view_tag must be deterministic"
+        );
         assert_eq!(
             out1.kem_ciphertext_x25519, out2.kem_ciphertext_x25519,
             "X25519 eph pk must be deterministic"
@@ -1418,11 +1453,17 @@ mod tests {
             out1.kem_ciphertext_ml_kem, out2.kem_ciphertext_ml_kem,
             "ML-KEM CT must be deterministic"
         );
-        assert_eq!(out1.pqc_public_key, out2.pqc_public_key, "PQC pk must be deterministic");
+        assert_eq!(
+            out1.pqc_public_key, out2.pqc_public_key,
+            "PQC pk must be deterministic"
+        );
         assert_eq!(out1.h_pqc, out2.h_pqc, "h_pqc must be deterministic");
         assert_eq!(out1.y, out2.y, "y must be deterministic");
         assert_eq!(out1.z, out2.z, "z must be deterministic");
-        assert_eq!(out1.k_amount, out2.k_amount, "k_amount must be deterministic");
+        assert_eq!(
+            out1.k_amount, out2.k_amount,
+            "k_amount must be deterministic"
+        );
     }
 
     #[test]
@@ -1437,15 +1478,11 @@ mod tests {
         let amount = 500_000u64;
         let idx = 3u64;
 
-        let out = construct_output(
-            &tx_key, &pk.x25519, &pk.ml_kem, &spend_key, amount, idx,
-        )
-        .unwrap();
+        let out =
+            construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, amount, idx).unwrap();
 
-        let (ss_re, x25519_eph_re, ml_kem_ct_re) = rederive_combined_ss(
-            &tx_key, &pk.x25519, &pk.ml_kem, idx,
-        )
-        .unwrap();
+        let (ss_re, x25519_eph_re, ml_kem_ct_re) =
+            rederive_combined_ss(&tx_key, &pk.x25519, &pk.ml_kem, idx).unwrap();
 
         assert_eq!(
             x25519_eph_re, out.kem_ciphertext_x25519,
@@ -1465,7 +1502,10 @@ mod tests {
         let ps = derive_proof_secrets(&ss_re.0, idx);
         assert_eq!(ps.y, out.y, "rederived y must match construct");
         assert_eq!(ps.z, out.z, "rederived z must match construct");
-        assert_eq!(ps.k_amount, out.k_amount, "rederived k_amount must match construct");
+        assert_eq!(
+            ps.k_amount, out.k_amount,
+            "rederived k_amount must match construct"
+        );
     }
 
     #[test]
@@ -1476,10 +1516,7 @@ mod tests {
         let tx_key = random_tx_key();
         let idx = 0u64;
 
-        let (ss, _, _) = rederive_combined_ss(
-            &tx_key, &pk.x25519, &pk.ml_kem, idx,
-        )
-        .unwrap();
+        let (ss, _, _) = rederive_combined_ss(&tx_key, &pk.x25519, &pk.ml_kem, idx).unwrap();
 
         let ps = derive_proof_secrets(&ss.0, idx);
 
@@ -1489,9 +1526,18 @@ mod tests {
         assert_ne!(ps.k_amount, [0u8; 32], "k_amount must not be zero");
 
         let full_secrets = crate::derivation::derive_output_secrets(&ss.0, idx);
-        assert_eq!(ps.ho, full_secrets.ho, "ProofSecrets.ho must equal OutputSecrets.ho");
-        assert_eq!(ps.y, full_secrets.y, "ProofSecrets.y must equal OutputSecrets.y");
-        assert_eq!(ps.z, full_secrets.z, "ProofSecrets.z must equal OutputSecrets.z");
+        assert_eq!(
+            ps.ho, full_secrets.ho,
+            "ProofSecrets.ho must equal OutputSecrets.ho"
+        );
+        assert_eq!(
+            ps.y, full_secrets.y,
+            "ProofSecrets.y must equal OutputSecrets.y"
+        );
+        assert_eq!(
+            ps.z, full_secrets.z,
+            "ProofSecrets.z must equal OutputSecrets.z"
+        );
         assert_eq!(
             ps.k_amount, full_secrets.k_amount,
             "ProofSecrets.k_amount must equal OutputSecrets.k_amount"
@@ -1509,15 +1555,10 @@ mod tests {
             .to_bytes();
 
         for idx in 0..4u64 {
-            let out = construct_output(
-                &tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 1000, idx,
-            )
-            .unwrap();
+            let out =
+                construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 1000, idx).unwrap();
 
-            let (ss, _, _) = rederive_combined_ss(
-                &tx_key, &pk.x25519, &pk.ml_kem, idx,
-            )
-            .unwrap();
+            let (ss, _, _) = rederive_combined_ss(&tx_key, &pk.x25519, &pk.ml_kem, idx).unwrap();
 
             let derived_o = derive_output_key(&ss.0, &spend_key, idx).unwrap();
             assert_eq!(
@@ -1534,7 +1575,10 @@ mod tests {
 
         let result = derive_output_key(&fake_ss, &identity, 0);
         assert!(result.is_err(), "identity spend key must be rejected");
-        eprintln!("derive_output_key identity rejection: {:?}", result.unwrap_err());
+        eprintln!(
+            "derive_output_key identity rejection: {:?}",
+            result.unwrap_err()
+        );
     }
 
     #[test]
@@ -1558,7 +1602,10 @@ mod tests {
             if !pt.is_torsion_free() {
                 let result = derive_output_key(&fake_ss, &torsion_bytes, 0);
                 assert!(result.is_err(), "torsion point spend key must be rejected");
-                eprintln!("derive_output_key torsion rejection: {:?}", result.unwrap_err());
+                eprintln!(
+                    "derive_output_key torsion rejection: {:?}",
+                    result.unwrap_err()
+                );
             }
         }
     }
@@ -1574,10 +1621,7 @@ mod tests {
             .to_bytes();
 
         for idx in 0..3u64 {
-            let (ss, _, _) = rederive_combined_ss(
-                &tx_key, &pk.x25519, &pk.ml_kem, idx,
-            )
-            .unwrap();
+            let (ss, _, _) = rederive_combined_ss(&tx_key, &pk.x25519, &pk.ml_kem, idx).unwrap();
 
             let output_key = derive_output_key(&ss.0, &spend_key, idx).unwrap();
             let recovered_b = recover_recipient_spend_pubkey(&ss.0, &output_key, idx).unwrap();
@@ -1606,13 +1650,11 @@ mod tests {
             )
             .unwrap();
 
-            let (ss, _, _) = rederive_combined_ss(
-                &tx_key, &pk.x25519, &pk.ml_kem, idx as u64,
-            )
-            .unwrap();
+            let (ss, _, _) =
+                rederive_combined_ss(&tx_key, &pk.x25519, &pk.ml_kem, idx as u64).unwrap();
 
-            let decrypted = decrypt_amount(&ss.0, &out.enc_amount, out.amount_tag, idx as u64)
-                .unwrap();
+            let decrypted =
+                decrypt_amount(&ss.0, &out.enc_amount, out.amount_tag, idx as u64).unwrap();
             assert_eq!(
                 decrypted, amount,
                 "decrypted amount must match original (amount={amount}, idx={idx})"
@@ -1630,10 +1672,7 @@ mod tests {
             .compress()
             .to_bytes();
 
-        let out = construct_output(
-            &tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 12345, 0,
-        )
-        .unwrap();
+        let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 12345, 0).unwrap();
 
         let (ss, _, _) = rederive_combined_ss(&tx_key, &pk.x25519, &pk.ml_kem, 0).unwrap();
 
@@ -1649,11 +1688,11 @@ mod tests {
 
     /// Helper: get `combined_ss` and a valid `Hp(O)` point for key image tests.
     fn setup_key_image_test() -> (
-        [u8; 64],   // combined_ss
-        [u8; 32],   // spend_secret (scalar b)
-        [u8; 32],   // output_key O
-        [u8; 32],   // hp_of_output (a valid prime-order point, NOT real hash_to_ec)
-        u64,        // output_index
+        [u8; 64], // combined_ss
+        [u8; 32], // spend_secret (scalar b)
+        [u8; 32], // output_key O
+        [u8; 32], // hp_of_output (a valid prime-order point, NOT real hash_to_ec)
+        u64,      // output_index
     ) {
         let kem = HybridX25519MlKem;
         let (pk, _) = kem.keypair_generate().unwrap();
@@ -1663,17 +1702,14 @@ mod tests {
         let spend_key = (G * spend_scalar).compress().to_bytes();
         let idx = 2u64;
 
-        let out = construct_output(
-            &tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 1000, idx,
-        )
-        .unwrap();
+        let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 1000, idx).unwrap();
 
         let (ss, _, _) = rederive_combined_ss(&tx_key, &pk.x25519, &pk.ml_kem, idx).unwrap();
 
         // Use a deterministic stand-in for Hp(O): hash output_key to a curve point
         // In production, C++ provides this via hash_to_ec. For testing, we use
         // the basepoint scaled by a hash (guaranteed prime-order and non-identity).
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(b"test-hp-of-output");
         hasher.update(&out.output_key);
@@ -1686,19 +1722,14 @@ mod tests {
 
     #[test]
     fn key_image_both_variants_agree() {
-        let (combined_ss, spend_secret, _output_key, hp_of_output, idx) =
-            setup_key_image_test();
+        let (combined_ss, spend_secret, _output_key, hp_of_output, idx) = setup_key_image_test();
 
-        let from_ss = compute_output_key_image(
-            &combined_ss, idx, &spend_secret, &hp_of_output,
-        )
-        .unwrap();
+        let from_ss =
+            compute_output_key_image(&combined_ss, idx, &spend_secret, &hp_of_output).unwrap();
 
         let ps = derive_proof_secrets(&combined_ss, idx);
-        let from_ho = compute_output_key_image_from_ho(
-            &ps.ho, &spend_secret, &hp_of_output,
-        )
-        .unwrap();
+        let from_ho =
+            compute_output_key_image_from_ho(&ps.ho, &spend_secret, &hp_of_output).unwrap();
 
         assert_eq!(
             from_ss.key_image, from_ho.key_image,
@@ -1713,13 +1744,15 @@ mod tests {
 
     #[test]
     fn key_image_is_deterministic() {
-        let (combined_ss, spend_secret, _output_key, hp_of_output, idx) =
-            setup_key_image_test();
+        let (combined_ss, spend_secret, _output_key, hp_of_output, idx) = setup_key_image_test();
 
         let r1 = compute_output_key_image(&combined_ss, idx, &spend_secret, &hp_of_output).unwrap();
         let r2 = compute_output_key_image(&combined_ss, idx, &spend_secret, &hp_of_output).unwrap();
 
-        assert_eq!(r1.key_image, r2.key_image, "key image must be deterministic");
+        assert_eq!(
+            r1.key_image, r2.key_image,
+            "key image must be deterministic"
+        );
         assert_eq!(
             r1.spend_secret_x.as_ref(),
             r2.spend_secret_x.as_ref(),
@@ -1734,7 +1767,10 @@ mod tests {
         let identity = EdwardsPoint::default().compress().to_bytes();
         let result = compute_output_key_image(&combined_ss, idx, &spend_secret, &identity);
         assert!(result.is_err(), "identity Hp(O) must be rejected");
-        eprintln!("key_image identity Hp(O) rejection: {:?}", result.unwrap_err());
+        eprintln!(
+            "key_image identity Hp(O) rejection: {:?}",
+            result.unwrap_err()
+        );
     }
 
     #[test]
@@ -1743,15 +1779,20 @@ mod tests {
 
         // L (the group order) is NOT a valid canonical scalar
         let l_bytes: [u8; 32] = [
-            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
-            0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9,
+            0xde, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x10,
         ];
 
         let result = compute_output_key_image(&combined_ss, idx, &l_bytes, &hp_of_output);
-        assert!(result.is_err(), "non-canonical spend secret must be rejected");
-        eprintln!("key_image non-canonical rejection: {:?}", result.unwrap_err());
+        assert!(
+            result.is_err(),
+            "non-canonical spend secret must be rejected"
+        );
+        eprintln!(
+            "key_image non-canonical rejection: {:?}",
+            result.unwrap_err()
+        );
     }
 
     #[test]
@@ -1766,26 +1807,34 @@ mod tests {
         let idx = 1u64;
 
         // Step 1: Sender constructs output
-        let out = construct_output(
-            &tx_key, &pk.x25519, &pk.ml_kem, &spend_key, amount, idx,
-        )
-        .unwrap();
-        eprintln!("[pipeline] constructed output O={}", hex::encode(out.output_key));
+        let out =
+            construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, amount, idx).unwrap();
+        eprintln!(
+            "[pipeline] constructed output O={}",
+            hex::encode(out.output_key)
+        );
 
         // Step 2: Sender rederives combined_ss from tx_key (outbound proof path)
-        let (ss_re, x25519_eph_re, ml_kem_ct_re) = rederive_combined_ss(
-            &tx_key, &pk.x25519, &pk.ml_kem, idx,
-        )
-        .unwrap();
-        assert_eq!(x25519_eph_re, out.kem_ciphertext_x25519, "KEM CT X25519 integrity");
-        assert_eq!(ml_kem_ct_re, out.kem_ciphertext_ml_kem, "KEM CT ML-KEM integrity");
+        let (ss_re, x25519_eph_re, ml_kem_ct_re) =
+            rederive_combined_ss(&tx_key, &pk.x25519, &pk.ml_kem, idx).unwrap();
+        assert_eq!(
+            x25519_eph_re, out.kem_ciphertext_x25519,
+            "KEM CT X25519 integrity"
+        );
+        assert_eq!(
+            ml_kem_ct_re, out.kem_ciphertext_ml_kem,
+            "KEM CT ML-KEM integrity"
+        );
         eprintln!("[pipeline] rederived combined_ss, KEM CT matches on-chain");
 
         // Step 3: Derive proof secrets (narrow projection)
         let ps = derive_proof_secrets(&ss_re.0, idx);
         assert_eq!(ps.y, out.y, "proof_secrets.y must match construct y");
         assert_eq!(ps.z, out.z, "proof_secrets.z must match construct z");
-        assert_eq!(ps.k_amount, out.k_amount, "proof_secrets.k_amount must match construct k_amount");
+        assert_eq!(
+            ps.k_amount, out.k_amount,
+            "proof_secrets.k_amount must match construct k_amount"
+        );
         eprintln!("[pipeline] derived ProofSecrets (ho, y, z, k_amount)");
 
         // Step 4: Derive output key and verify
@@ -1795,7 +1844,10 @@ mod tests {
 
         // Step 5: Recover spend pubkey
         let recovered_b = recover_recipient_spend_pubkey(&ss_re.0, &out.output_key, idx).unwrap();
-        assert_eq!(recovered_b, spend_key, "recovered B' must match original spend key");
+        assert_eq!(
+            recovered_b, spend_key,
+            "recovered B' must match original spend key"
+        );
         eprintln!("[pipeline] recover_recipient_spend_pubkey round-trips");
 
         // Step 6: Decrypt amount
@@ -1822,7 +1874,7 @@ mod tests {
         eprintln!("[pipeline] scan_output succeeds, amount={}", scanned.amount);
 
         // Step 8: Compute key image (using test stand-in for Hp(O))
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(b"test-hp-of-output");
         hasher.update(&out.output_key);
@@ -1830,17 +1882,18 @@ mod tests {
         let hp_scalar = Scalar::from_bytes_mod_order(hash);
         let hp_point = (G * hp_scalar).compress().to_bytes();
 
-        let ki_result = compute_output_key_image(
-            &ss_re.0, idx, &spend_scalar.to_bytes(), &hp_point,
-        )
-        .unwrap();
+        let ki_result =
+            compute_output_key_image(&ss_re.0, idx, &spend_scalar.to_bytes(), &hp_point).unwrap();
 
         assert_ne!(ki_result.key_image, [0u8; 32], "key image must not be zero");
-        eprintln!("[pipeline] key_image computed: {}", hex::encode(ki_result.key_image));
+        eprintln!(
+            "[pipeline] key_image computed: {}",
+            hex::encode(ki_result.key_image)
+        );
 
         // Verify x = ho + b
-        let ho_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ps.ho))
-            .expect("ho must be canonical");
+        let ho_scalar: Scalar =
+            Option::from(Scalar::from_canonical_bytes(ps.ho)).expect("ho must be canonical");
         let expected_x = ho_scalar + spend_scalar;
         assert_eq!(
             ki_result.spend_secret_x.as_ref(),
@@ -1858,10 +1911,8 @@ mod tests {
         eprintln!("[pipeline] key image algebraically verified: I = x * Hp(O)");
 
         // Step 9: Verify _from_ho variant agrees
-        let ki_from_ho = compute_output_key_image_from_ho(
-            &ps.ho, &spend_scalar.to_bytes(), &hp_point,
-        )
-        .unwrap();
+        let ki_from_ho =
+            compute_output_key_image_from_ho(&ps.ho, &spend_scalar.to_bytes(), &hp_point).unwrap();
         assert_eq!(
             ki_result.key_image, ki_from_ho.key_image,
             "_from_ho variant must produce same key image"

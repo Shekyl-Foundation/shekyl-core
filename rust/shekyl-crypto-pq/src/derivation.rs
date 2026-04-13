@@ -97,7 +97,8 @@ pub fn derive_pqc_leaf_hash(
         },
     };
 
-    let pk_bytes = hybrid_pk.to_canonical_bytes()
+    let pk_bytes = hybrid_pk
+        .to_canonical_bytes()
         .map_err(|e| CryptoError::KeyGenerationFailed(format!("hybrid PK encoding: {e}")))?;
 
     Ok(hash_pqc_public_key(&pk_bytes))
@@ -129,7 +130,8 @@ pub fn derive_pqc_public_key(
         },
     };
 
-    hybrid_pk.to_canonical_bytes()
+    hybrid_pk
+        .to_canonical_bytes()
         .map_err(|e| CryptoError::KeyGenerationFailed(format!("hybrid PK encoding: {e}")))
 }
 
@@ -220,8 +222,14 @@ pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSec
     let ml_dsa_seed = expand_32(&hk, LABEL_OUTPUT_PQC, output_index);
     let ed25519_pqc_seed = expand_32(&hk, LABEL_OUTPUT_PQC_ED25519, output_index);
 
-    assert!(ho != [0u8; 32], "HKDF produced zero ho scalar -- implementation bug");
-    assert!(y != [0u8; 32], "HKDF produced zero y scalar -- implementation bug");
+    assert!(
+        ho != [0u8; 32],
+        "HKDF produced zero ho scalar -- implementation bug"
+    );
+    assert!(
+        y != [0u8; 32],
+        "HKDF produced zero y scalar -- implementation bug"
+    );
 
     OutputSecrets {
         ho,
@@ -261,7 +269,7 @@ pub fn derive_kem_seed(
     ml_kem_ek: &[u8],
     output_index: u64,
 ) -> zeroize::Zeroizing<[u8; 64]> {
-    use sha3::{Sha3_256, digest::Digest};
+    use sha3::{digest::Digest, Sha3_256};
 
     let mut hasher = Sha3_256::new();
     hasher.update(x25519_pk);
@@ -351,7 +359,7 @@ mod tests {
 
     #[test]
     fn derived_key_signs_and_verifies() {
-        use fips204::traits::{SerDes, Signer as _, Verifier as _};
+        use fips204::traits::{Signer as _, Verifier as _};
 
         let ss = [0xab; 64];
         let secrets = derive_output_secrets(&ss, 42);
@@ -377,8 +385,10 @@ mod tests {
 
         let pk = vec![0xff; ML_DSA_65_PK_LEN];
         let h = hash_pqc_public_key(&pk);
-        assert!(bool::from(HelioseleneField::from_repr(h).is_some()),
-            "hash must produce a canonical Selene base field element");
+        assert!(
+            bool::from(HelioseleneField::from_repr(h).is_some()),
+            "hash must produce a canonical Selene base field element"
+        );
     }
 
     #[test]
@@ -417,7 +427,7 @@ mod tests {
 
     #[test]
     fn derived_keypair_sign_verify_consistency() {
-        use fips204::traits::{SerDes, Signer as _, Verifier as _};
+        use fips204::traits::{Signer as _, Verifier as _};
 
         let ss = [0xcd; 64];
         for idx in [0u64, 1, 100, u64::MAX - 1] {
@@ -426,8 +436,10 @@ mod tests {
 
             let msg = format!("test message for output index {idx}");
             let sig = sk.try_sign(msg.as_bytes(), &[]).unwrap();
-            assert!(pk.verify(msg.as_bytes(), &sig, &[]),
-                "sign/verify failed for index {idx}");
+            assert!(
+                pk.verify(msg.as_bytes(), &sig, &[]),
+                "sign/verify failed for index {idx}"
+            );
         }
     }
 
@@ -439,8 +451,10 @@ mod tests {
         let pk_bytes = derive_pqc_public_key(&ss, 0).unwrap();
         let h = hash_pqc_public_key(&pk_bytes);
         let leaf_scalar = PqcLeafScalar::from_pqc_public_key(&pk_bytes);
-        assert_eq!(h, leaf_scalar.0,
-            "hash_pqc_public_key and PqcLeafScalar::from_pqc_public_key must agree");
+        assert_eq!(
+            h, leaf_scalar.0,
+            "hash_pqc_public_key and PqcLeafScalar::from_pqc_public_key must agree"
+        );
     }
 
     #[test]
@@ -449,8 +463,10 @@ mod tests {
         let pk_bytes = derive_pqc_public_key(&ss, 0).unwrap();
         let h_from_pk = hash_pqc_public_key(&pk_bytes);
         let h_from_leaf = derive_pqc_leaf_hash(&ss, 0).unwrap();
-        assert_eq!(h_from_pk, h_from_leaf,
-            "derive_pqc_leaf_hash must equal hash_pqc_public_key(derive_pqc_public_key(...))");
+        assert_eq!(
+            h_from_pk, h_from_leaf,
+            "derive_pqc_leaf_hash must equal hash_pqc_public_key(derive_pqc_public_key(...))"
+        );
     }
 
     #[derive(serde::Deserialize)]
@@ -468,19 +484,24 @@ mod tests {
     #[test]
     fn pqc_leaf_hash_known_answer_vectors() {
         let json = include_str!("../../../docs/test_vectors/PQC_LEAF_HASH_KAT.json");
-        let file: LeafHashKatFile = serde_json::from_str(json)
-            .expect("failed to parse PQC_LEAF_HASH_KAT.json");
-        assert!(!file.vectors.is_empty(), "no vectors in PQC_LEAF_HASH_KAT.json");
+        let file: LeafHashKatFile =
+            serde_json::from_str(json).expect("failed to parse PQC_LEAF_HASH_KAT.json");
+        assert!(
+            !file.vectors.is_empty(),
+            "no vectors in PQC_LEAF_HASH_KAT.json"
+        );
 
         for (i, v) in file.vectors.iter().enumerate() {
             let css_bytes = hex::decode(&v.combined_ss)
                 .unwrap_or_else(|_| panic!("vector {i}: invalid combined_ss hex"));
-            let css: [u8; 64] = css_bytes.as_slice().try_into()
+            let css: [u8; 64] = css_bytes
+                .as_slice()
+                .try_into()
                 .unwrap_or_else(|_| panic!("vector {i}: combined_ss not 64 bytes"));
             let h_pqc = derive_pqc_leaf_hash(&css, v.output_index)
                 .unwrap_or_else(|e| panic!("vector {i}: derive_pqc_leaf_hash failed: {e}"));
-            let expected = hex::decode(&v.h_pqc)
-                .unwrap_or_else(|_| panic!("vector {i}: invalid h_pqc hex"));
+            let expected =
+                hex::decode(&v.h_pqc).unwrap_or_else(|_| panic!("vector {i}: invalid h_pqc hex"));
             assert_eq!(
                 h_pqc.as_slice(), expected.as_slice(),
                 "vector {i}: h_pqc mismatch for combined_ss={} idx={}:\n  got:      {}\n  expected: {}",
@@ -514,8 +535,8 @@ mod tests {
 
     fn load_test_vectors() -> Vec<TestVector> {
         let json = include_str!("../../../docs/test_vectors/PQC_OUTPUT_SECRETS.json");
-        let file: TestVectorFile = serde_json::from_str(json)
-            .expect("failed to parse PQC_OUTPUT_SECRETS.json");
+        let file: TestVectorFile =
+            serde_json::from_str(json).expect("failed to parse PQC_OUTPUT_SECRETS.json");
         file.vectors
     }
 
@@ -534,20 +555,39 @@ mod tests {
             let expected_k = hex::decode(&v.k_amount).unwrap();
             let expected_seed = hex::decode(&v.ml_dsa_seed).unwrap();
 
-            assert_eq!(secrets.ho.as_slice(), expected_ho.as_slice(),
-                "vector {i}: ho mismatch");
-            assert_eq!(secrets.y.as_slice(), expected_y.as_slice(),
-                "vector {i}: y mismatch");
-            assert_eq!(secrets.z.as_slice(), expected_z.as_slice(),
-                "vector {i}: z mismatch");
-            assert_eq!(secrets.k_amount.as_slice(), expected_k.as_slice(),
-                "vector {i}: k_amount mismatch");
-            assert_eq!(secrets.view_tag_combined, v.view_tag_combined,
-                "vector {i}: view_tag_combined mismatch");
-            assert_eq!(secrets.amount_tag, v.amount_tag,
-                "vector {i}: amount_tag mismatch");
-            assert_eq!(secrets.ml_dsa_seed.as_slice(), expected_seed.as_slice(),
-                "vector {i}: ml_dsa_seed mismatch");
+            assert_eq!(
+                secrets.ho.as_slice(),
+                expected_ho.as_slice(),
+                "vector {i}: ho mismatch"
+            );
+            assert_eq!(
+                secrets.y.as_slice(),
+                expected_y.as_slice(),
+                "vector {i}: y mismatch"
+            );
+            assert_eq!(
+                secrets.z.as_slice(),
+                expected_z.as_slice(),
+                "vector {i}: z mismatch"
+            );
+            assert_eq!(
+                secrets.k_amount.as_slice(),
+                expected_k.as_slice(),
+                "vector {i}: k_amount mismatch"
+            );
+            assert_eq!(
+                secrets.view_tag_combined, v.view_tag_combined,
+                "vector {i}: view_tag_combined mismatch"
+            );
+            assert_eq!(
+                secrets.amount_tag, v.amount_tag,
+                "vector {i}: amount_tag mismatch"
+            );
+            assert_eq!(
+                secrets.ml_dsa_seed.as_slice(),
+                expected_seed.as_slice(),
+                "vector {i}: ml_dsa_seed mismatch"
+            );
         }
     }
 
@@ -558,8 +598,10 @@ mod tests {
             let x_ss_bytes = hex::decode(&v.x25519_ss).unwrap();
             let x_ss: [u8; 32] = x_ss_bytes.as_slice().try_into().unwrap();
             let tag = derive_view_tag_x25519(&x_ss, v.output_index);
-            assert_eq!(tag, v.view_tag_x25519,
-                "vector {i}: view_tag_x25519 mismatch");
+            assert_eq!(
+                tag, v.view_tag_x25519,
+                "vector {i}: view_tag_x25519 mismatch"
+            );
         }
     }
 
@@ -594,16 +636,17 @@ mod tests {
     fn output_secrets_scalars_valid() {
         let css = [0xcd; 64];
         let l_bytes_le: [u8; 32] = [
-            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
-            0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9,
+            0xde, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x10,
         ];
         for idx in [0u64, 1, 42, u64::MAX] {
             let s = derive_output_secrets(&css, idx);
             for (name, scalar_bytes) in [("ho", s.ho), ("y", s.y), ("z", s.z)] {
-                assert!(le_bytes_lt(&scalar_bytes, &l_bytes_le),
-                    "index {idx}: {name} is not < l");
+                assert!(
+                    le_bytes_lt(&scalar_bytes, &l_bytes_le),
+                    "index {idx}: {name} is not < l"
+                );
             }
         }
     }
@@ -620,8 +663,12 @@ mod tests {
 
     fn le_bytes_lt(a: &[u8; 32], b: &[u8; 32]) -> bool {
         for i in (0..32).rev() {
-            if a[i] < b[i] { return true; }
-            if a[i] > b[i] { return false; }
+            if a[i] < b[i] {
+                return true;
+            }
+            if a[i] > b[i] {
+                return false;
+            }
         }
         false // equal
     }
@@ -651,18 +698,23 @@ mod tests {
     #[test]
     fn kem_derive_v1_known_answer_vectors() {
         let json = include_str!("../../../docs/test_vectors/KEM_DERIVE_V1_KAT.json");
-        let file: KemDeriveKatFile = serde_json::from_str(json)
-            .expect("failed to parse KEM_DERIVE_V1_KAT.json");
-        assert!(!file.vectors.is_empty(), "no vectors in KEM_DERIVE_V1_KAT.json");
+        let file: KemDeriveKatFile =
+            serde_json::from_str(json).expect("failed to parse KEM_DERIVE_V1_KAT.json");
+        assert!(
+            !file.vectors.is_empty(),
+            "no vectors in KEM_DERIVE_V1_KAT.json"
+        );
 
         for (i, v) in file.vectors.iter().enumerate() {
             let tx_key: [u8; 32] = hex::decode(&v.tx_key_secret)
                 .unwrap_or_else(|_| panic!("vector {i}: invalid tx_key_secret hex"))
-                .as_slice().try_into()
+                .as_slice()
+                .try_into()
                 .unwrap_or_else(|_| panic!("vector {i}: tx_key_secret not 32 bytes"));
             let x25519_pk: [u8; 32] = hex::decode(&v.x25519_pk)
                 .unwrap_or_else(|_| panic!("vector {i}: invalid x25519_pk hex"))
-                .as_slice().try_into()
+                .as_slice()
+                .try_into()
                 .unwrap_or_else(|_| panic!("vector {i}: x25519_pk not 32 bytes"));
             let ml_kem_ek = hex::decode(&v.ml_kem_ek)
                 .unwrap_or_else(|_| panic!("vector {i}: invalid ml_kem_ek hex"));
@@ -672,21 +724,24 @@ mod tests {
             let expected_seed = hex::decode(&v.per_output_seed)
                 .unwrap_or_else(|_| panic!("vector {i}: invalid per_output_seed hex"));
             assert_eq!(
-                seed.as_slice(), expected_seed.as_slice(),
+                seed.as_slice(),
+                expected_seed.as_slice(),
                 "vector {i}: per_output_seed mismatch\n  got:      {}\n  expected: {}",
-                hex::encode(seed.as_slice()), v.per_output_seed
+                hex::encode(seed.as_slice()),
+                v.per_output_seed
             );
 
             let expected_fp = hex::decode(&v.recipient_fingerprint)
                 .unwrap_or_else(|_| panic!("vector {i}: invalid recipient_fingerprint hex"));
             {
-                use sha3::{Sha3_256, digest::Digest as _};
+                use sha3::{digest::Digest as _, Sha3_256};
                 let mut hasher = Sha3_256::new();
-                hasher.update(&x25519_pk);
+                hasher.update(x25519_pk);
                 hasher.update(&ml_kem_ek);
                 let fp: [u8; 32] = hasher.finalize().into();
                 assert_eq!(
-                    fp.as_slice(), expected_fp.as_slice(),
+                    fp.as_slice(),
+                    expected_fp.as_slice(),
                     "vector {i}: recipient_fingerprint mismatch"
                 );
             }
@@ -698,7 +753,8 @@ mod tests {
             let expected_eph_pk = hex::decode(&v.x25519_eph_pk)
                 .unwrap_or_else(|_| panic!("vector {i}: invalid x25519_eph_pk hex"));
             assert_eq!(
-                x25519_eph_pk.as_bytes().as_slice(), expected_eph_pk.as_slice(),
+                x25519_eph_pk.as_bytes().as_slice(),
+                expected_eph_pk.as_slice(),
                 "vector {i}: x25519_eph_pk mismatch"
             );
 
@@ -708,13 +764,16 @@ mod tests {
             let expected_x25519_ss = hex::decode(&v.x25519_ss)
                 .unwrap_or_else(|_| panic!("vector {i}: invalid x25519_ss hex"));
             assert_eq!(
-                x25519_ss.as_bytes().as_slice(), expected_x25519_ss.as_slice(),
+                x25519_ss.as_bytes().as_slice(),
+                expected_x25519_ss.as_slice(),
                 "vector {i}: x25519_ss mismatch"
             );
 
             // Verify ML-KEM deterministic encapsulation
             let ml_kem_encaps_seed: [u8; 32] = seed[32..64].try_into().unwrap();
-            let ek_bytes: [u8; 1184] = ml_kem_ek.as_slice().try_into()
+            let ek_bytes: [u8; 1184] = ml_kem_ek
+                .as_slice()
+                .try_into()
                 .unwrap_or_else(|_| panic!("vector {i}: ml_kem_ek not 1184 bytes"));
             let ek = fips203::ml_kem_768::EncapsKey::try_from_bytes(ek_bytes)
                 .unwrap_or_else(|e| panic!("vector {i}: invalid EncapsKey: {e}"));
@@ -726,25 +785,27 @@ mod tests {
             let expected_ml_ss = hex::decode(&v.ml_kem_ss)
                 .unwrap_or_else(|_| panic!("vector {i}: invalid ml_kem_ss hex"));
             assert_eq!(
-                ml_ss_bytes.as_slice(), expected_ml_ss.as_slice(),
+                ml_ss_bytes.as_slice(),
+                expected_ml_ss.as_slice(),
                 "vector {i}: ml_kem_ss mismatch"
             );
 
             let expected_ml_ct = hex::decode(&v.ml_kem_ct)
                 .unwrap_or_else(|_| panic!("vector {i}: invalid ml_kem_ct hex"));
             assert_eq!(
-                ml_ct_bytes.as_slice(), expected_ml_ct.as_slice(),
+                ml_ct_bytes.as_slice(),
+                expected_ml_ct.as_slice(),
                 "vector {i}: ml_kem_ct mismatch"
             );
 
             // Verify combined shared secret
-            let combined = crate::kem::combine_shared_secrets(
-                x25519_ss.as_bytes(), &ml_ss_bytes
-            ).unwrap_or_else(|e| panic!("vector {i}: combine_shared_secrets failed: {e}"));
+            let combined = crate::kem::combine_shared_secrets(x25519_ss.as_bytes(), &ml_ss_bytes)
+                .unwrap_or_else(|e| panic!("vector {i}: combine_shared_secrets failed: {e}"));
             let expected_combined = hex::decode(&v.combined_ss)
                 .unwrap_or_else(|_| panic!("vector {i}: invalid combined_ss hex"));
             assert_eq!(
-                combined.0.as_slice(), expected_combined.as_slice(),
+                combined.0.as_slice(),
+                expected_combined.as_slice(),
                 "vector {i}: combined_ss mismatch"
             );
         }
@@ -756,7 +817,7 @@ mod tests {
         use fips203::ml_kem_768;
         use fips203::traits::{Encaps as _, KeyGen as _, SerDes as _};
         use rand::SeedableRng;
-        use sha3::{Sha3_256, digest::Digest as _};
+        use sha3::{digest::Digest as _, Sha3_256};
 
         // Deterministic recipient keypair
         let mut rng = rand_chacha::ChaCha20Rng::from_seed([0x01; 32]);
@@ -772,16 +833,28 @@ mod tests {
             ([0xAB; 32], 42),
             ([0xFF; 32], 0),
             ([0xFF; 32], u64::MAX),
-            ({
-                let mut k = [0u8; 32];
-                for (i, b) in k.iter_mut().enumerate() { *b = i as u8; }
-                k
-            }, 0),
-            ({
-                let mut k = [0u8; 32];
-                for (i, b) in k.iter_mut().enumerate() { *b = i as u8; }
-                k
-            }, 1000),
+            (
+                {
+                    let mut k = [0u8; 32];
+                    #[allow(clippy::cast_possible_truncation)]
+                    for (i, b) in k.iter_mut().enumerate() {
+                        *b = i as u8;
+                    }
+                    k
+                },
+                0,
+            ),
+            (
+                {
+                    let mut k = [0u8; 32];
+                    #[allow(clippy::cast_possible_truncation)]
+                    for (i, b) in k.iter_mut().enumerate() {
+                        *b = i as u8;
+                    }
+                    k
+                },
+                1000,
+            ),
         ];
 
         let mut vectors = Vec::new();
@@ -790,7 +863,7 @@ mod tests {
 
             let mut hasher = Sha3_256::new();
             hasher.update(x25519_pk.as_bytes());
-            hasher.update(&ek_bytes);
+            hasher.update(ek_bytes);
             let fp: [u8; 32] = hasher.finalize().into();
 
             let eph_secret_bytes: [u8; 32] = seed[..32].try_into().unwrap();
@@ -804,21 +877,20 @@ mod tests {
             let ml_ss_bytes = ml_ss.into_bytes();
             let ml_ct_bytes = ml_ct.into_bytes();
 
-            let combined = crate::kem::combine_shared_secrets(
-                x_ss.as_bytes(), &ml_ss_bytes
-            ).unwrap();
+            let combined =
+                crate::kem::combine_shared_secrets(x_ss.as_bytes(), &ml_ss_bytes).unwrap();
 
             vectors.push(serde_json::json!({
                 "tx_key_secret": hex::encode(tx_key),
                 "x25519_pk": hex::encode(x25519_pk.as_bytes()),
-                "ml_kem_ek": hex::encode(&ek_bytes),
+                "ml_kem_ek": hex::encode(ek_bytes),
                 "output_index": output_index,
                 "recipient_fingerprint": hex::encode(fp),
                 "per_output_seed": hex::encode(seed.as_slice()),
                 "x25519_eph_pk": hex::encode(eph_pk.as_bytes()),
                 "x25519_ss": hex::encode(x_ss.as_bytes()),
-                "ml_kem_ct": hex::encode(&ml_ct_bytes),
-                "ml_kem_ss": hex::encode(&ml_ss_bytes),
+                "ml_kem_ct": hex::encode(ml_ct_bytes),
+                "ml_kem_ss": hex::encode(ml_ss_bytes),
                 "combined_ss": hex::encode(&combined.0),
             }));
         }
@@ -845,7 +917,7 @@ mod tests {
         derivation: &[u8; 32],
         output_index: u64,
     ) -> [u8; 32] {
-        use sha3::{Keccak256, digest::Digest};
+        use sha3::{digest::Digest, Keccak256};
 
         let mut buf = Vec::with_capacity(8 + 32 + 10);
         buf.extend_from_slice(b"shekyl_y");
@@ -858,9 +930,8 @@ mod tests {
             if idx == 0 {
                 buf.push(byte);
                 break;
-            } else {
-                buf.push(byte | 0x80);
             }
+            buf.push(byte | 0x80);
         }
 
         let hash: [u8; 32] = Keccak256::digest(&buf).into();

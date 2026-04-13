@@ -9,8 +9,8 @@
 
 use chacha20::XChaCha20;
 use chacha20poly1305::{
-    XChaCha20Poly1305,
     aead::{Aead, KeyInit, Payload},
+    XChaCha20Poly1305,
 };
 use cipher::{KeyIvInit, StreamCipher};
 
@@ -61,11 +61,7 @@ impl std::error::Error for AeadError {}
 /// Poly1305 tag. Returns `nonce || ciphertext || tag`.
 ///
 /// The nonce is randomly generated from `OsRng`.
-pub fn encrypt_with_aad(
-    key: &[u8; KEY_SIZE],
-    aad: &[u8],
-    plaintext: &[u8],
-) -> Vec<u8> {
+pub fn encrypt_with_aad(key: &[u8; KEY_SIZE], aad: &[u8], plaintext: &[u8]) -> Vec<u8> {
     use rand_core::OsRng;
     use rand_core::RngCore;
 
@@ -75,7 +71,13 @@ pub fn encrypt_with_aad(
 
     let cipher = XChaCha20Poly1305::new(key.into());
     let ct = cipher
-        .encrypt(&nonce, Payload { msg: plaintext, aad })
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
         .expect("encryption should never fail with valid key/nonce");
 
     let mut out = Vec::with_capacity(NONCE_SIZE + ct.len());
@@ -104,7 +106,13 @@ pub fn decrypt_with_aad(
 
     let cipher = XChaCha20Poly1305::new(key.into());
     cipher
-        .decrypt(&nonce, Payload { msg: ciphertext_and_tag, aad })
+        .decrypt(
+            &nonce,
+            Payload {
+                msg: ciphertext_and_tag,
+                aad,
+            },
+        )
         .map_err(|_| AeadError::AuthenticationFailed)
 }
 
@@ -120,10 +128,18 @@ mod tests {
         let mut buf = plaintext.to_vec();
 
         xchacha20_apply(&key, &nonce, &mut buf);
-        assert_ne!(&buf[..], &plaintext[..], "ciphertext must differ from plaintext");
+        assert_ne!(
+            &buf[..],
+            &plaintext[..],
+            "ciphertext must differ from plaintext"
+        );
 
         xchacha20_apply(&key, &nonce, &mut buf);
-        assert_eq!(&buf[..], &plaintext[..], "decryption must recover plaintext");
+        assert_eq!(
+            &buf[..],
+            &plaintext[..],
+            "decryption must recover plaintext"
+        );
     }
 
     #[test]
@@ -172,7 +188,10 @@ mod tests {
 
         let encrypted = encrypt_with_aad(&key, aad, plaintext);
         assert!(encrypted.len() > NONCE_SIZE + TAG_SIZE);
-        assert_ne!(&encrypted[NONCE_SIZE..encrypted.len() - TAG_SIZE], &plaintext[..]);
+        assert_ne!(
+            &encrypted[NONCE_SIZE..encrypted.len() - TAG_SIZE],
+            &plaintext[..]
+        );
 
         let decrypted = decrypt_with_aad(&key, aad, &encrypted).unwrap();
         assert_eq!(&decrypted[..], &plaintext[..]);
@@ -197,8 +216,11 @@ mod tests {
 
         let encrypted = encrypt_with_aad(&key, b"version_1", plaintext);
         let result = decrypt_with_aad(&key, b"version_2", &encrypted);
-        assert_eq!(result, Err(AeadError::AuthenticationFailed),
-            "AAD mismatch must fail authentication");
+        assert_eq!(
+            result,
+            Err(AeadError::AuthenticationFailed),
+            "AAD mismatch must fail authentication"
+        );
     }
 
     #[test]

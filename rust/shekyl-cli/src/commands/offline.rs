@@ -34,8 +34,14 @@ pub fn cmd_describe_transfer(ctx: &WalletContext, unsigned_hex: &str) {
                     let fee = tx.get("fee").and_then(|f| f.as_u64()).unwrap_or(0);
                     println!("  Fee: {} SKL", super::format_amount(fee));
                     if let Some(change) = tx.get("change_address").and_then(|c| c.as_str()) {
-                        let change_amt = tx.get("change_amount").and_then(|a| a.as_u64()).unwrap_or(0);
-                        println!("  Change: {} SKL -> {change}", super::format_amount(change_amt));
+                        let change_amt = tx
+                            .get("change_amount")
+                            .and_then(|a| a.as_u64())
+                            .unwrap_or(0);
+                        println!(
+                            "  Change: {} SKL -> {change}",
+                            super::format_amount(change_amt)
+                        );
                     }
                 }
             } else {

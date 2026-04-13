@@ -84,7 +84,9 @@ pub enum TxBuilderError {
     /// The FCMP++ tower alternates Selene (C1) at even indices and Helios (C2)
     /// at odd indices, so `c1 == c2` (odd branch count) or `c1 == c2 + 1`
     /// (even branch count).
-    #[error("input {index} has {c1} C1 layers and {c2} C2 layers, inconsistent with tree depth {depth}")]
+    #[error(
+        "input {index} has {c1} C1 layers and {c2} C2 layers, inconsistent with tree depth {depth}"
+    )]
     BranchLayerMismatch {
         index: usize,
         c1: usize,
@@ -94,10 +96,7 @@ pub enum TxBuilderError {
 
     /// The combined_ss field has the wrong length (expected 64 bytes).
     #[error("input {index} combined_ss has wrong length: {len} (expected 64)")]
-    InvalidCombinedSsLength {
-        index: usize,
-        len: usize,
-    },
+    InvalidCombinedSsLength { index: usize, len: usize },
 
     /// Bulletproof+ range proof generation failed.
     #[error("Bulletproof+ proving failed: {0}")]

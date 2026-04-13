@@ -7,11 +7,11 @@
 
 use zeroize::{Zeroize, Zeroizing};
 
-use curve25519_dalek::{Scalar, EdwardsPoint};
+use curve25519_dalek::{EdwardsPoint, Scalar};
 
 use shekyl_oxide::primitives::Commitment;
 
-use crate::{SubaddressIndex, extra::PaymentId, output::WalletOutput};
+use crate::{extra::PaymentId, output::WalletOutput, SubaddressIndex};
 
 /// Outputs must mature this many blocks before the daemon inserts them into
 /// the curve tree. Mirrors `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE` (C++).
@@ -61,7 +61,6 @@ pub struct TransferDetails {
     pub last_claimed_height: u64,
 
     // ── PQC / KEM-derived secrets (populated at scan time) ──
-
     /// 64-byte combined shared secret from KEM decapsulation (X25519 || ML-KEM).
     pub combined_shared_secret: Option<Zeroizing<[u8; 64]>>,
     /// HKDF-derived scalar: `x = ho + b` gives the discrete log of O w.r.t. G.
@@ -134,10 +133,7 @@ impl TransferDetails {
     /// the unstake transaction path once matured. Outputs below `eligible_height`
     /// are immature (no curve-tree path yet) and cannot be spent.
     pub fn is_spendable(&self, current_height: u64) -> bool {
-        !self.spent
-            && !self.frozen
-            && !self.staked
-            && current_height >= self.eligible_height
+        !self.spent && !self.frozen && !self.staked && current_height >= self.eligible_height
     }
 
     /// Whether this staked output can be unstaked (lock period expired, not yet spent).

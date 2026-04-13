@@ -13,8 +13,8 @@
 use shekyl_scanner::WalletState;
 
 use crate::{
-    error::WalletCoreError,
     claim_builder::{ClaimTxBuilder, ClaimTxPlan},
+    error::WalletCoreError,
 };
 
 /// A two-step plan for claiming remaining rewards then unstaking.
@@ -47,7 +47,8 @@ where
     let mut total_unstake = 0u64;
 
     for &idx in indices {
-        let td = transfers.get(idx)
+        let td = transfers
+            .get(idx)
             .ok_or(WalletCoreError::NotStaked { index: idx })?;
 
         if !td.staked {

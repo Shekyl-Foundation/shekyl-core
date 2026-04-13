@@ -113,7 +113,13 @@ impl FrostSalSession {
         let rng = rand_chacha::ChaCha20Rng::from_seed(seed);
         let transcript = RecommendedTranscript::new(b"Shekyl FROST SAL v1");
 
-        let algorithm = SalAlgorithm::new(rng, transcript, input_data.signable_tx_hash, rerand.clone(), x);
+        let algorithm = SalAlgorithm::new(
+            rng,
+            transcript,
+            input_data.signable_tx_hash,
+            rerand.clone(),
+            x,
+        );
 
         Ok(Self {
             original_output: output,
@@ -212,10 +218,9 @@ impl FrostSalSession {
             .as_mut()
             .ok_or(ProveError::UpstreamError("session already consumed".into()))?;
 
-        let k = self
-            .nonce_secret
-            .take()
-            .ok_or(ProveError::UpstreamError("nonce not generated (call preprocess first)".into()))?;
+        let k = self.nonce_secret.take().ok_or(ProveError::UpstreamError(
+            "nonce not generated (call preprocess first)".into(),
+        ))?;
 
         let share = algo.sign_share(params, nonce_sums, vec![k], &[]);
         Ok(FrostSignShareResult {
@@ -240,7 +245,9 @@ impl FrostSalSession {
 
         let sal = algo
             .verify(group_key, nonce_sums, sum)
-            .ok_or(ProveError::UpstreamError("FROST SAL verification failed".into()))?;
+            .ok_or(ProveError::UpstreamError(
+                "FROST SAL verification failed".into(),
+            ))?;
 
         Ok((self.input, sal))
     }
@@ -310,10 +317,7 @@ impl FrostSigningCoordinator {
     }
 
     /// Convenience constructor for SalAlgorithm's nonce structure.
-    pub fn new_for_sal(
-        num_inputs: usize,
-        included: Vec<Participant>,
-    ) -> Result<Self, ProveError> {
+    pub fn new_for_sal(num_inputs: usize, included: Vec<Participant>) -> Result<Self, ProveError> {
         Self::new(num_inputs, vec![1], included)
     }
 
@@ -600,7 +604,11 @@ mod tests {
         };
 
         let session = FrostSalSession::new(&input);
-        assert!(session.is_ok(), "Session creation failed: {:?}", session.err());
+        assert!(
+            session.is_ok(),
+            "Session creation failed: {:?}",
+            session.err()
+        );
 
         let session = session.unwrap();
         assert_ne!(*session.pseudo_out(), [0u8; 32]);
@@ -699,10 +707,7 @@ mod tests {
         let p2 = Participant::new(2).unwrap();
         let mut coord = FrostSigningCoordinator::new_for_sal(1, vec![p1, p2]).unwrap();
 
-        let result = coord.collect_shares(
-            p1,
-            vec![FrostSignShareResult { share: [0u8; 32] }],
-        );
+        let result = coord.collect_shares(p1, vec![FrostSignShareResult { share: [0u8; 32] }]);
         assert!(
             result.is_ok(),
             "Share collection is independent of preprocess collection"
@@ -733,7 +738,10 @@ mod tests {
         }];
         coord.collect_preprocesses(p1, fake).unwrap();
         let result = coord.nonce_sums();
-        assert!(result.is_err(), "Should fail: only 1 of 2 preprocesses collected");
+        assert!(
+            result.is_err(),
+            "Should fail: only 1 of 2 preprocesses collected"
+        );
     }
 
     #[test]

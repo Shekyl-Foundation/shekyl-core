@@ -35,15 +35,10 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use std::sync::Arc;
 
-async fn dispatch_bin(
-    state: Arc<AppState>,
-    uri: &'static str,
-    body: Bytes,
-) -> impl IntoResponse {
+async fn dispatch_bin(state: Arc<AppState>, uri: &'static str, body: Bytes) -> impl IntoResponse {
     let core = state.core.clone();
     let body_vec = body.to_vec();
-    let result =
-        tokio::task::spawn_blocking(move || core.bin_endpoint(uri, &body_vec)).await;
+    let result = tokio::task::spawn_blocking(move || core.bin_endpoint(uri, &body_vec)).await;
 
     match result {
         Ok(Ok(data)) => (

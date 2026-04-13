@@ -18,11 +18,15 @@ pub struct ReplSession {
     pub default_account: u32,
 }
 
+impl Default for ReplSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReplSession {
     pub fn new() -> Self {
-        Self {
-            default_account: 0,
-        }
+        Self { default_account: 0 }
     }
 
     /// Build the REPL prompt string, reflecting the current default account.

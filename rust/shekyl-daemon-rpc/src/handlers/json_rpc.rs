@@ -74,7 +74,9 @@ pub async fn handle(
         );
     }
 
-    let params_str = if request.params.is_null() || request.params.is_object() && request.params.as_object().is_none_or(|m| m.is_empty()) {
+    let params_str = if request.params.is_null()
+        || request.params.is_object() && request.params.as_object().is_none_or(|m| m.is_empty())
+    {
         String::new()
     } else {
         serde_json::to_string(&request.params).unwrap_or_default()

@@ -8,15 +8,16 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        StakeRegistry,
         distribute_staker_rewards,
-        tiers::{TIERS, tier_by_id, MAX_CLAIM_RANGE},
+        tiers::{tier_by_id, MAX_CLAIM_RANGE, TIERS},
+        StakeRegistry,
     };
     use shekyl_economics::params::SCALE;
 
+    #[allow(clippy::cast_possible_truncation)] // CLIPPY: product / SCALE fits in u64 by design
     fn weight(amount: u64, tier_id: u8) -> u64 {
         let tier = tier_by_id(tier_id).unwrap();
-        ((amount as u128 * tier.yield_multiplier as u128) / SCALE as u128) as u64
+        ((u128::from(amount) * u128::from(tier.yield_multiplier)) / u128::from(SCALE)) as u64
     }
 
     // ── Conservation property ──
@@ -35,7 +36,11 @@ mod tests {
 
             let rewards = distribute_staker_rewards(&reg, pool);
             let total_distributed: u64 = rewards.iter().map(|r| r.amount).sum();
-            assert_eq!(total_distributed, pool, "tier {}: total must equal pool", tier.id);
+            assert_eq!(
+                total_distributed, pool,
+                "tier {}: total must equal pool",
+                tier.id
+            );
         }
     }
 
@@ -114,8 +119,13 @@ mod tests {
         // 2:1 ratio (within dust tolerance)
         let r1 = rewards[0].amount;
         let r2 = rewards[1].amount;
+        #[allow(clippy::cast_precision_loss)]
+        // CLIPPY: approximate ratio check, precision loss is acceptable
         let ratio = r2 as f64 / r1 as f64;
-        assert!((ratio - 2.0).abs() < 0.1, "ratio should be ~2.0, got {ratio}");
+        assert!(
+            (ratio - 2.0).abs() < 0.1,
+            "ratio should be ~2.0, got {ratio}"
+        );
     }
 
     // ── No over-distribution without dust assignment ──
@@ -136,7 +146,11 @@ mod tests {
                 .active_entries()
                 .iter()
                 .map(|e| {
-                    ((pool as u128 * e.weight() as u128) / total_weight) as u64
+                    #[allow(clippy::cast_possible_truncation)]
+                    // CLIPPY: per-staker share < pool which is u64
+                    {
+                        (u128::from(pool) * u128::from(e.weight()) / total_weight) as u64
+                    }
                 })
                 .sum();
 
@@ -155,7 +169,10 @@ mod tests {
         let amount = 10_000_000_000u64;
         for tier in &TIERS {
             let w = weight(amount, tier.id);
-            let expected = ((amount as u128 * tier.yield_multiplier as u128) / SCALE as u128) as u64;
+            #[allow(clippy::cast_possible_truncation)]
+            // CLIPPY: product / SCALE fits in u64 by design
+            let expected = ((u128::from(amount) * u128::from(tier.yield_multiplier))
+                / u128::from(SCALE)) as u64;
             assert_eq!(
                 w, expected,
                 "tier {}: weight mismatch: {w} != {expected}",
@@ -215,7 +232,11 @@ mod tests {
 
         // The dust staker's weight is tiny but with a large enough pool,
         // they should still get something
-        let whale_reward = rewards.iter().find(|r| r.entry_index == 0).map(|r| r.amount).unwrap_or(0);
+        let whale_reward = rewards
+            .iter()
+            .find(|r| r.entry_index == 0)
+            .map(|r| r.amount)
+            .unwrap_or(0);
         assert!(whale_reward > 0, "whale should get rewards");
     }
 

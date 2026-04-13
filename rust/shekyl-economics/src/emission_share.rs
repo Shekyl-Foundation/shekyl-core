@@ -68,14 +68,12 @@ pub fn calc_effective_emission_share(
 ///
 /// Returns (miner_emission, staker_emission).
 #[allow(clippy::cast_possible_truncation)]
-pub fn split_block_emission(
-    block_emission: u64,
-    effective_share: u64,
-) -> (u64, u64) {
+pub fn split_block_emission(block_emission: u64, effective_share: u64) -> (u64, u64) {
     if effective_share == 0 || block_emission == 0 {
         return (block_emission, 0);
     }
-    let staker = (u128::from(block_emission) * u128::from(effective_share) / u128::from(SCALE)) as u64;
+    let staker =
+        (u128::from(block_emission) * u128::from(effective_share) / u128::from(SCALE)) as u64;
     let miner = block_emission.saturating_sub(staker);
     (miner, staker)
 }
@@ -85,19 +83,24 @@ mod tests {
     use super::*;
 
     const INITIAL_SHARE: u64 = 150_000; // 15%
-    const ANNUAL_DECAY: u64 = 900_000;  // 0.90
+    const ANNUAL_DECAY: u64 = 900_000; // 0.90
     const BLOCKS_PER_YEAR: u64 = 262_800;
 
     #[test]
     fn test_genesis_block_returns_initial_share() {
-        let share = calc_effective_emission_share(0, 0, INITIAL_SHARE, ANNUAL_DECAY, BLOCKS_PER_YEAR);
+        let share =
+            calc_effective_emission_share(0, 0, INITIAL_SHARE, ANNUAL_DECAY, BLOCKS_PER_YEAR);
         assert_eq!(share, 150_000);
     }
 
     #[test]
     fn test_year_1() {
         let share = calc_effective_emission_share(
-            BLOCKS_PER_YEAR, 0, INITIAL_SHARE, ANNUAL_DECAY, BLOCKS_PER_YEAR,
+            BLOCKS_PER_YEAR,
+            0,
+            INITIAL_SHARE,
+            ANNUAL_DECAY,
+            BLOCKS_PER_YEAR,
         );
         // 15% * 0.90 = 13.5% = 135_000
         assert_eq!(share, 135_000);
@@ -106,7 +109,11 @@ mod tests {
     #[test]
     fn test_year_2() {
         let share = calc_effective_emission_share(
-            2 * BLOCKS_PER_YEAR, 0, INITIAL_SHARE, ANNUAL_DECAY, BLOCKS_PER_YEAR,
+            2 * BLOCKS_PER_YEAR,
+            0,
+            INITIAL_SHARE,
+            ANNUAL_DECAY,
+            BLOCKS_PER_YEAR,
         );
         // 15% * 0.90^2 = 12.15% = 121_500
         assert_eq!(share, 121_500);
@@ -115,7 +122,11 @@ mod tests {
     #[test]
     fn test_year_5() {
         let share = calc_effective_emission_share(
-            5 * BLOCKS_PER_YEAR, 0, INITIAL_SHARE, ANNUAL_DECAY, BLOCKS_PER_YEAR,
+            5 * BLOCKS_PER_YEAR,
+            0,
+            INITIAL_SHARE,
+            ANNUAL_DECAY,
+            BLOCKS_PER_YEAR,
         );
         // 15% * 0.90^5 = 15% * 0.59049 = 8.85735% ≈ 88_573
         assert_eq!(share, 88_573); // 0.15 * 0.9^5 * 10^6
@@ -124,7 +135,11 @@ mod tests {
     #[test]
     fn test_year_10() {
         let share = calc_effective_emission_share(
-            10 * BLOCKS_PER_YEAR, 0, INITIAL_SHARE, ANNUAL_DECAY, BLOCKS_PER_YEAR,
+            10 * BLOCKS_PER_YEAR,
+            0,
+            INITIAL_SHARE,
+            ANNUAL_DECAY,
+            BLOCKS_PER_YEAR,
         );
         // 15% * 0.90^10 ≈ 5.23% — integer truncation over 10 iterations
         assert_eq!(share, 52_299);
@@ -133,16 +148,25 @@ mod tests {
     #[test]
     fn test_year_20() {
         let share = calc_effective_emission_share(
-            20 * BLOCKS_PER_YEAR, 0, INITIAL_SHARE, ANNUAL_DECAY, BLOCKS_PER_YEAR,
+            20 * BLOCKS_PER_YEAR,
+            0,
+            INITIAL_SHARE,
+            ANNUAL_DECAY,
+            BLOCKS_PER_YEAR,
         );
         // 15% * 0.90^20 ≈ 1.82% — integer truncation over 20 iterations
         assert_eq!(share, 18_233);
     }
 
     #[test]
+    #[allow(clippy::cast_possible_wrap)]
     fn test_year_30() {
         let share = calc_effective_emission_share(
-            30 * BLOCKS_PER_YEAR, 0, INITIAL_SHARE, ANNUAL_DECAY, BLOCKS_PER_YEAR,
+            30 * BLOCKS_PER_YEAR,
+            0,
+            INITIAL_SHARE,
+            ANNUAL_DECAY,
+            BLOCKS_PER_YEAR,
         );
         // 15% * 0.90^30 ≈ 0.635% ≈ 6_354
         let expected = 6_354u64;
@@ -153,7 +177,11 @@ mod tests {
     fn test_half_year_interpolation() {
         let half_year = BLOCKS_PER_YEAR / 2;
         let share = calc_effective_emission_share(
-            half_year, 0, INITIAL_SHARE, ANNUAL_DECAY, BLOCKS_PER_YEAR,
+            half_year,
+            0,
+            INITIAL_SHARE,
+            ANNUAL_DECAY,
+            BLOCKS_PER_YEAR,
         );
         // Should be between 150_000 (year 0) and 135_000 (year 1)
         // Linear interpolation: 150_000 - (150_000 - 135_000) * 0.5 = 142_500
@@ -186,7 +214,11 @@ mod tests {
     fn test_eventual_convergence_to_zero() {
         // After 100 years the share should be negligible
         let share = calc_effective_emission_share(
-            100 * BLOCKS_PER_YEAR, 0, INITIAL_SHARE, ANNUAL_DECAY, BLOCKS_PER_YEAR,
+            100 * BLOCKS_PER_YEAR,
+            0,
+            INITIAL_SHARE,
+            ANNUAL_DECAY,
+            BLOCKS_PER_YEAR,
         );
         assert!(share < 10); // effectively zero
     }
@@ -195,7 +227,11 @@ mod tests {
     fn test_non_zero_genesis_height() {
         let genesis = 100_000u64;
         let share = calc_effective_emission_share(
-            genesis + BLOCKS_PER_YEAR, genesis, INITIAL_SHARE, ANNUAL_DECAY, BLOCKS_PER_YEAR,
+            genesis + BLOCKS_PER_YEAR,
+            genesis,
+            INITIAL_SHARE,
+            ANNUAL_DECAY,
+            BLOCKS_PER_YEAR,
         );
         assert_eq!(share, 135_000);
     }
@@ -211,7 +247,10 @@ mod tests {
                 ANNUAL_DECAY,
                 BLOCKS_PER_YEAR,
             );
-            assert!(share <= prev, "share increased at year {year}: {share} > {prev}");
+            assert!(
+                share <= prev,
+                "share increased at year {year}: {share} > {prev}"
+            );
             prev = share;
         }
     }

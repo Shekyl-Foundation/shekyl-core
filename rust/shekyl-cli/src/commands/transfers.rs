@@ -32,7 +32,10 @@ pub fn cmd_transfer(ctx: &WalletContext, args: &[&str], account_index: u32) {
         "address": address
     }]);
 
-    println!("Sending {} SKL to {address}...", super::format_amount(atomic));
+    println!(
+        "Sending {} SKL to {address}...",
+        super::format_amount(atomic)
+    );
 
     match ctx.transfer(&destinations.to_string(), 0, account_index) {
         Ok(val) => {
@@ -90,7 +93,10 @@ pub fn cmd_show_transfer(ctx: &WalletContext, txid: &str) {
     match ctx.json_rpc("get_transfer_by_txid", &params.to_string()) {
         Ok(val) => {
             if let Some(transfer) = val.get("transfer") {
-                println!("{}", serde_json::to_string_pretty(transfer).unwrap_or_default());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(transfer).unwrap_or_default()
+                );
             } else {
                 println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
             }
@@ -117,13 +123,22 @@ pub fn cmd_sweep_all(
 
     match ctx.get_balance(account_index) {
         Ok(val) => {
-            let balance = val.get("unlocked_balance").and_then(|b| b.as_u64()).unwrap_or(0);
+            let balance = val
+                .get("unlocked_balance")
+                .and_then(|b| b.as_u64())
+                .unwrap_or(0);
             let amount_str = super::format_amount(balance);
-            println!("Will sweep approximately {} SKL from account {account_index}.", amount_str);
+            println!(
+                "Will sweep approximately {} SKL from account {account_index}.",
+                amount_str
+            );
 
             let addr_match = match ctx.get_address(account_index) {
                 Ok(addr_val) => {
-                    let own_addr = addr_val.get("address").and_then(|a| a.as_str()).unwrap_or("");
+                    let own_addr = addr_val
+                        .get("address")
+                        .and_then(|a| a.as_str())
+                        .unwrap_or("");
                     dest.starts_with(&own_addr[..8.min(own_addr.len())])
                 }
                 Err(_) => false,

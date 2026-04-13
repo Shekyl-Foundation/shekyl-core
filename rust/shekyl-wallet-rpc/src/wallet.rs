@@ -108,7 +108,10 @@ impl Wallet2 {
                 message: "Failed to create wallet handle".into(),
             });
         }
-        Ok(Self { handle, _progress_sender: None })
+        Ok(Self {
+            handle,
+            _progress_sender: None,
+        })
     }
 
     fn last_error(&self) -> WalletError {
@@ -135,7 +138,10 @@ impl Wallet2 {
     fn to_cstring(s: &str) -> WalletResult<CString> {
         CString::new(s).map_err(|_| WalletError {
             code: -1,
-            message: format!("string contains interior NUL byte: {:?}", &s[..s.len().min(32)]),
+            message: format!(
+                "string contains interior NUL byte: {:?}",
+                &s[..s.len().min(32)]
+            ),
         })
     }
 
@@ -165,7 +171,13 @@ impl Wallet2 {
         let user = Self::to_cstring(daemon_username)?;
         let pass = Self::to_cstring(daemon_password)?;
         let rc = unsafe {
-            ffi::wallet2_ffi_init(self.handle, addr.as_ptr(), user.as_ptr(), pass.as_ptr(), trusted_daemon)
+            ffi::wallet2_ffi_init(
+                self.handle,
+                addr.as_ptr(),
+                user.as_ptr(),
+                pass.as_ptr(),
+                trusted_daemon,
+            )
         };
         self.check_rc(rc)
     }
@@ -185,7 +197,12 @@ impl Wallet2 {
         self.check_rc(rc)
     }
 
-    pub fn create_wallet(&self, filename: &str, password: &str, language: &str) -> WalletResult<()> {
+    pub fn create_wallet(
+        &self,
+        filename: &str,
+        password: &str,
+        language: &str,
+    ) -> WalletResult<()> {
         let f = Self::to_cstring(filename)?;
         let p = Self::to_cstring(password)?;
         let l = Self::to_cstring(language)?;
@@ -223,12 +240,19 @@ impl Wallet2 {
         let o = Self::to_cstring(seed_offset)?;
         let ptr = unsafe {
             ffi::wallet2_ffi_restore_deterministic_wallet(
-                self.handle, f.as_ptr(), s.as_ptr(), p.as_ptr(), l.as_ptr(), restore_height, o.as_ptr(),
+                self.handle,
+                f.as_ptr(),
+                s.as_ptr(),
+                p.as_ptr(),
+                l.as_ptr(),
+                restore_height,
+                o.as_ptr(),
             )
         };
         self.consume_json_ptr(ptr)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn generate_from_keys(
         &self,
         filename: &str,
@@ -247,7 +271,13 @@ impl Wallet2 {
         let l = Self::to_cstring(language)?;
         let ptr = unsafe {
             ffi::wallet2_ffi_generate_from_keys(
-                self.handle, f.as_ptr(), a.as_ptr(), sk.as_ptr(), vk.as_ptr(), p.as_ptr(), l.as_ptr(),
+                self.handle,
+                f.as_ptr(),
+                a.as_ptr(),
+                sk.as_ptr(),
+                vk.as_ptr(),
+                p.as_ptr(),
+                l.as_ptr(),
                 restore_height,
             )
         };
@@ -290,9 +320,8 @@ impl Wallet2 {
         account_index: u32,
     ) -> WalletResult<serde_json::Value> {
         let d = Self::to_cstring(destinations_json)?;
-        let ptr = unsafe {
-            ffi::wallet2_ffi_transfer(self.handle, d.as_ptr(), priority, account_index)
-        };
+        let ptr =
+            unsafe { ffi::wallet2_ffi_transfer(self.handle, d.as_ptr(), priority, account_index) };
         self.consume_json_ptr(ptr)
     }
 
@@ -306,7 +335,15 @@ impl Wallet2 {
         account_index: u32,
     ) -> WalletResult<serde_json::Value> {
         let ptr = unsafe {
-            ffi::wallet2_ffi_get_transfers(self.handle, r#in, out, pending, failed, pool, account_index)
+            ffi::wallet2_ffi_get_transfers(
+                self.handle,
+                r#in,
+                out,
+                pending,
+                failed,
+                pool,
+                account_index,
+            )
         };
         self.consume_json_ptr(ptr)
     }
@@ -326,7 +363,11 @@ impl Wallet2 {
 
     /// Generic JSON-RPC dispatch for all methods (Phase 2 expansion).
     /// Routes to the C++ dispatcher which handles the full method surface.
-    pub fn json_rpc_call(&self, method: &str, params_json: &str) -> WalletResult<serde_json::Value> {
+    pub fn json_rpc_call(
+        &self,
+        method: &str,
+        params_json: &str,
+    ) -> WalletResult<serde_json::Value> {
         let m = Self::to_cstring(method)?;
         let p = Self::to_cstring(params_json)?;
         let ptr = unsafe { ffi::wallet2_ffi_json_rpc(self.handle, m.as_ptr(), p.as_ptr()) };
@@ -375,22 +416,18 @@ impl Wallet2 {
 
         // Phase A: prepare (builds tx prefix, returns structured signing inputs)
         let prep_ptr = unsafe {
-            ffi::wallet2_ffi_prepare_transfer(
-                self.handle,
-                dests.as_ptr(),
-                priority,
-                account_index,
-            )
+            ffi::wallet2_ffi_prepare_transfer(self.handle, dests.as_ptr(), priority, account_index)
         };
         let prep_json = self.consume_json_ptr(prep_ptr)?;
 
         // Extract signing inputs from the prepared data
-        let tx_prefix_hash_hex = prep_json["tx_prefix_hash"]
-            .as_str()
-            .ok_or_else(|| WalletError {
-                code: -1,
-                message: "missing tx_prefix_hash in prepare response".into(),
-            })?;
+        let tx_prefix_hash_hex =
+            prep_json["tx_prefix_hash"]
+                .as_str()
+                .ok_or_else(|| WalletError {
+                    code: -1,
+                    message: "missing tx_prefix_hash in prepare response".into(),
+                })?;
 
         let inputs: Vec<shekyl_tx_builder::SpendInput> =
             serde_json::from_value(prep_json["inputs"].clone()).map_err(|e| WalletError {
@@ -419,31 +456,23 @@ impl Wallet2 {
         hex_decode(tx_prefix_hash_hex, &mut tx_prefix_hash)?;
 
         // Phase B: sign (pure Rust, no FFI crossing)
-        let proofs = shekyl_tx_builder::sign_transaction(
-            tx_prefix_hash,
-            &inputs,
-            &outputs,
-            fee,
-            &tree,
-        )
-        .map_err(WalletError::from)?;
+        let proofs =
+            shekyl_tx_builder::sign_transaction(tx_prefix_hash, &inputs, &outputs, fee, &tree)
+                .map_err(WalletError::from)?;
 
-        let proofs_json_str =
-            serde_json::to_string(&proofs).map_err(|e| WalletError {
-                code: -1,
-                message: format!("failed to serialize proofs: {e}"),
-            })?;
+        let proofs_json_str = serde_json::to_string(&proofs).map_err(|e| WalletError {
+            code: -1,
+            message: format!("failed to serialize proofs: {e}"),
+        })?;
 
-        let tx_blob_hex = prep_json["tx_blob"]
-            .as_str()
-            .ok_or_else(|| WalletError {
-                code: -1,
-                message: "missing tx_blob in prepare response".into(),
-            })?;
+        let tx_blob_hex = prep_json["tx_blob"].as_str().ok_or_else(|| WalletError {
+            code: -1,
+            message: "missing tx_blob in prepare response".into(),
+        })?;
 
         // Phase C: finalize (inserts proofs, PQC signs, broadcasts)
         let proofs_cstr = Self::to_cstring(&proofs_json_str)?;
-        let tx_blob_cstr = Self::to_cstring(&tx_blob_hex)?;
+        let tx_blob_cstr = Self::to_cstring(tx_blob_hex)?;
         let fin_ptr = unsafe {
             ffi::wallet2_ffi_finalize_transfer(
                 self.handle,
@@ -469,12 +498,18 @@ extern "C" fn progress_trampoline(
     let event_type_str = if event_type.is_null() {
         String::new()
     } else {
-        unsafe { CStr::from_ptr(event_type) }.to_string_lossy().into_owned()
+        unsafe { CStr::from_ptr(event_type) }
+            .to_string_lossy()
+            .into_owned()
     };
     let detail_str = if detail.is_null() {
         None
     } else {
-        Some(unsafe { CStr::from_ptr(detail) }.to_string_lossy().into_owned())
+        Some(
+            unsafe { CStr::from_ptr(detail) }
+                .to_string_lossy()
+                .into_owned(),
+        )
     };
     let _ = tx.send(ProgressEvent {
         event_type: event_type_str,

@@ -30,8 +30,8 @@
 //! assert_eq!(decoded.spend_key, [0xaa; 32]);
 //! ```
 
-pub mod network;
 pub mod address;
+pub mod network;
 
 pub use address::{
     AddressError, ShekylAddress, ADDRESS_VERSION_V1, CLASSICAL_PAYLOAD_LEN, PQC_PAYLOAD_LEN,

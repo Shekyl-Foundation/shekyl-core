@@ -51,10 +51,7 @@ impl ConsensusProof for RandomXProof {
         Ok(())
     }
 
-    fn difficulty_for_next_block(
-        &self,
-        chain: &ChainState,
-    ) -> Result<Difficulty, ConsensusError> {
+    fn difficulty_for_next_block(&self, chain: &ChainState) -> Result<Difficulty, ConsensusError> {
         // In practice, difficulty adjustment is computed from the last N block
         // timestamps and difficulties. The actual algorithm runs in C++
         // (next_difficulty_v2). This returns the chain's current difficulty

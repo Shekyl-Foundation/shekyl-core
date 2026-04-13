@@ -10,17 +10,17 @@ use std::io::{self, Read, Write};
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use curve25519_dalek::{Scalar, edwards::EdwardsPoint};
+use curve25519_dalek::{edwards::EdwardsPoint, Scalar};
 
 use shekyl_oxide::{
     io::*,
     primitives::Commitment,
-    transaction::{Timelock, StakingMeta},
+    transaction::{StakingMeta, Timelock},
 };
 
 use crate::{
-    SubaddressIndex,
     extra::{PaymentId, MAX_ARBITRARY_DATA_SIZE, MAX_EXTRA_SIZE_BY_RELAY_RULE},
+    SubaddressIndex,
 };
 
 #[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
@@ -156,8 +156,8 @@ impl Metadata {
 
         write_varint(&self.arbitrary_data.len(), w)?;
         for part in &self.arbitrary_data {
-            const _ASSERT_MAX_ARBITRARY_DATA_SIZE_FITS_WITHIN_U8: [();
-                (u8::MAX as usize) - MAX_ARBITRARY_DATA_SIZE] = [(); _];
+            const _ASSERT_MAX_ARBITRARY_DATA_SIZE_FITS_WITHIN_U8: [(); (u8::MAX as usize)
+                - MAX_ARBITRARY_DATA_SIZE] = [(); _];
             w.write_all(&[u8::try_from(part.len())
                 .expect("piece of arbitrary data exceeded max length of u8::MAX")])?;
             w.write_all(part)?;
@@ -288,9 +288,18 @@ impl WalletOutput {
         staking: Option<StakingMeta>,
     ) -> Self {
         WalletOutput {
-            absolute_id: AbsoluteId { transaction: tx_hash, index_in_transaction },
-            relative_id: RelativeId { index_on_blockchain },
-            data: OutputData { key, key_offset, commitment },
+            absolute_id: AbsoluteId {
+                transaction: tx_hash,
+                index_in_transaction,
+            },
+            relative_id: RelativeId {
+                index_on_blockchain,
+            },
+            data: OutputData {
+                key,
+                key_offset,
+                commitment,
+            },
             metadata: Metadata {
                 additional_timelock: shekyl_oxide::transaction::Timelock::None,
                 subaddress: None,
@@ -339,6 +348,12 @@ impl WalletOutput {
             }
             _ => Err(io::Error::other("invalid staking flag in WalletOutput"))?,
         };
-        Ok(WalletOutput { absolute_id, relative_id, data, metadata, staking })
+        Ok(WalletOutput {
+            absolute_id,
+            relative_id,
+            data,
+            metadata,
+            staking,
+        })
     }
 }

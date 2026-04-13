@@ -31,9 +31,7 @@ fn main() {
         if let Some(last) = result.years.last() {
             eprintln!(
                 "  -> Last year: burn={:.2}%, staker_yield={:.4}%, release={:.3}x",
-                last.effective_burn_rate_pct,
-                last.staker_annual_yield_pct,
-                last.release_multiplier,
+                last.effective_burn_rate_pct, last.staker_annual_yield_pct, last.release_multiplier,
             );
         }
 

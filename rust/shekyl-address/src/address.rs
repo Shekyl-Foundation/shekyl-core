@@ -130,7 +130,9 @@ impl ShekylAddress {
         let pqc_a = bech32m_encode(&hrp_a, &self.ml_kem_encap_key[..PQC_SPLIT]);
         let pqc_b = bech32m_encode(&hrp_b, &self.ml_kem_encap_key[PQC_SPLIT..]);
 
-        Ok(format!("{classical}{SEGMENT_SEPARATOR}{pqc_a}{SEGMENT_SEPARATOR}{pqc_b}"))
+        Ok(format!(
+            "{classical}{SEGMENT_SEPARATOR}{pqc_a}{SEGMENT_SEPARATOR}{pqc_b}"
+        ))
     }
 
     /// Encode just the classical segment (short form for display).

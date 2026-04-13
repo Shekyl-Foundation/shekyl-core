@@ -1,31 +1,33 @@
 use std_shims::{vec, vec::Vec};
 
 use curve25519_dalek::{
-  traits::{MultiscalarMul, VartimeMultiscalarMul},
-  scalar::Scalar,
-  edwards::EdwardsPoint,
+    edwards::EdwardsPoint,
+    scalar::Scalar,
+    traits::{MultiscalarMul, VartimeMultiscalarMul},
 };
 
-pub(crate) use shekyl_generators::{MAX_BULLETPROOF_COMMITMENTS as MAX_COMMITMENTS, COMMITMENT_BITS};
+pub(crate) use shekyl_generators::{
+    COMMITMENT_BITS, MAX_BULLETPROOF_COMMITMENTS as MAX_COMMITMENTS,
+};
 
 pub(crate) fn multiexp(pairs: &[(Scalar, EdwardsPoint)]) -> EdwardsPoint {
-  let mut buf_scalars = Vec::with_capacity(pairs.len());
-  let mut buf_points = Vec::with_capacity(pairs.len());
-  for (scalar, point) in pairs {
-    buf_scalars.push(scalar);
-    buf_points.push(point);
-  }
-  EdwardsPoint::multiscalar_mul(buf_scalars, buf_points)
+    let mut buf_scalars = Vec::with_capacity(pairs.len());
+    let mut buf_points = Vec::with_capacity(pairs.len());
+    for (scalar, point) in pairs {
+        buf_scalars.push(scalar);
+        buf_points.push(point);
+    }
+    EdwardsPoint::multiscalar_mul(buf_scalars, buf_points)
 }
 
 pub(crate) fn multiexp_vartime(pairs: &[(Scalar, EdwardsPoint)]) -> EdwardsPoint {
-  let mut buf_scalars = Vec::with_capacity(pairs.len());
-  let mut buf_points = Vec::with_capacity(pairs.len());
-  for (scalar, point) in pairs {
-    buf_scalars.push(scalar);
-    buf_points.push(point);
-  }
-  EdwardsPoint::vartime_multiscalar_mul(buf_scalars, buf_points)
+    let mut buf_scalars = Vec::with_capacity(pairs.len());
+    let mut buf_points = Vec::with_capacity(pairs.len());
+    for (scalar, point) in pairs {
+        buf_scalars.push(scalar);
+        buf_points.push(point);
+    }
+    EdwardsPoint::vartime_multiscalar_mul(buf_scalars, buf_points)
 }
 
 /*
@@ -48,27 +50,27 @@ When there are 4 challenges (n=16), the iterative approach does 28 multiplicatio
 versus divide and conquer's 24.
 */
 pub(crate) fn challenge_products(challenges: &[(Scalar, Scalar)]) -> Vec<Scalar> {
-  let mut products = vec![Scalar::ONE; 1 << challenges.len()];
+    let mut products = vec![Scalar::ONE; 1 << challenges.len()];
 
-  if !challenges.is_empty() {
-    products[0] = challenges[0].1;
-    products[1] = challenges[0].0;
+    if !challenges.is_empty() {
+        products[0] = challenges[0].1;
+        products[1] = challenges[0].0;
 
-    for (j, challenge) in challenges.iter().enumerate().skip(1) {
-      let mut slots = (1 << (j + 1)) - 1;
-      while slots > 0 {
-        products[slots] = products[slots / 2] * challenge.0;
-        products[slots - 1] = products[slots / 2] * challenge.1;
+        for (j, challenge) in challenges.iter().enumerate().skip(1) {
+            let mut slots = (1 << (j + 1)) - 1;
+            while slots > 0 {
+                products[slots] = products[slots / 2] * challenge.0;
+                products[slots - 1] = products[slots / 2] * challenge.1;
 
-        slots = slots.saturating_sub(2);
-      }
+                slots = slots.saturating_sub(2);
+            }
+        }
+
+        // Sanity check since if the above failed to populate, it'd be critical
+        for product in &products {
+            debug_assert!(*product != Scalar::ZERO);
+        }
     }
 
-    // Sanity check since if the above failed to populate, it'd be critical
-    for product in &products {
-      debug_assert!(*product != Scalar::ZERO);
-    }
-  }
-
-  products
+    products
 }

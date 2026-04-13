@@ -6,14 +6,14 @@
 
 #![deny(unsafe_code)]
 
-pub mod proof;
 pub mod error;
-pub mod types;
+pub mod proof;
 pub mod randomx;
 pub mod registry;
+pub mod types;
 
 pub use error::ConsensusError;
 pub use proof::{ConsensusProof, ProofType};
-pub use types::{BlockHeader, ChainState, Difficulty};
 pub use randomx::RandomXProof;
 pub use registry::ConsensusRegistry;
+pub use types::{BlockHeader, ChainState, Difficulty};

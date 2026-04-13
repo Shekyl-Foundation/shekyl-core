@@ -7,7 +7,7 @@
 //! All `[u8; 32]` fields serialize/deserialize as hex strings when used with
 //! JSON (via the `hex_bytes` module), matching the C++ FFI convention.
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
 /// Serde helper: hex-encode/decode `[u8; 32]`.
@@ -15,12 +15,16 @@ pub mod hex_bytes32 {
     use serde::{self, Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(bytes: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         serializer.serialize_str(&hex::encode(bytes))
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let s = String::deserialize(deserializer)?;
         let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
         v.try_into().map_err(|v: Vec<u8>| {
@@ -34,12 +38,16 @@ pub mod hex_bytes9 {
     use serde::{self, Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(bytes: &[u8; 9], serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         serializer.serialize_str(&hex::encode(bytes))
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 9], D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let s = String::deserialize(deserializer)?;
         let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
         v.try_into().map_err(|v: Vec<u8>| {
@@ -54,12 +62,16 @@ mod hex_bytes8 {
     use serde::{self, Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(bytes: &[u8; 8], serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         serializer.serialize_str(&hex::encode(bytes))
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 8], D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let s = String::deserialize(deserializer)?;
         let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
         v.try_into().map_err(|v: Vec<u8>| {
@@ -72,21 +84,28 @@ mod hex_bytes8 {
 mod hex_vec32 {
     use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 
-    pub fn serialize<S>(items: &Vec<[u8; 32]>, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
-        let hexes: Vec<String> = items.iter().map(|b| hex::encode(b)).collect();
+    pub fn serialize<S>(items: &[[u8; 32]], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let hexes: Vec<String> = items.iter().map(hex::encode).collect();
         hexes.serialize(serializer)
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<[u8; 32]>, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let hexes: Vec<String> = Vec::deserialize(deserializer)?;
-        hexes.into_iter().map(|s| {
-            let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
-            v.try_into().map_err(|v: Vec<u8>| {
-                serde::de::Error::custom(format!("expected 32 bytes, got {}", v.len()))
+        hexes
+            .into_iter()
+            .map(|s| {
+                let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
+                v.try_into().map_err(|v: Vec<u8>| {
+                    serde::de::Error::custom(format!("expected 32 bytes, got {}", v.len()))
+                })
             })
-        }).collect()
+            .collect()
     }
 }
 
@@ -94,21 +113,28 @@ mod hex_vec32 {
 mod hex_vec9 {
     use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 
-    pub fn serialize<S>(items: &Vec<[u8; 9]>, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
-        let hexes: Vec<String> = items.iter().map(|b| hex::encode(b)).collect();
+    pub fn serialize<S>(items: &[[u8; 9]], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let hexes: Vec<String> = items.iter().map(hex::encode).collect();
         hexes.serialize(serializer)
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<[u8; 9]>, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let hexes: Vec<String> = Vec::deserialize(deserializer)?;
-        hexes.into_iter().map(|s| {
-            let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
-            v.try_into().map_err(|v: Vec<u8>| {
-                serde::de::Error::custom(format!("expected 9 bytes, got {}", v.len()))
+        hexes
+            .into_iter()
+            .map(|s| {
+                let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
+                v.try_into().map_err(|v: Vec<u8>| {
+                    serde::de::Error::custom(format!("expected 9 bytes, got {}", v.len()))
+                })
             })
-        }).collect()
+            .collect()
     }
 }
 
@@ -117,26 +143,36 @@ mod hex_vec9 {
 pub mod hex_layers {
     use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 
-    pub fn serialize<S>(layers: &Vec<Vec<[u8; 32]>>, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    pub fn serialize<S>(layers: &[Vec<[u8; 32]>], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
         let outer: Vec<Vec<String>> = layers
             .iter()
-            .map(|layer| layer.iter().map(|b| hex::encode(b)).collect())
+            .map(|layer| layer.iter().map(hex::encode).collect())
             .collect();
         outer.serialize(serializer)
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Vec<[u8; 32]>>, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let outer: Vec<Vec<String>> = Vec::deserialize(deserializer)?;
-        outer.into_iter().map(|layer| {
-            layer.into_iter().map(|s| {
-                let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
-                v.try_into().map_err(|v: Vec<u8>| {
-                    serde::de::Error::custom(format!("expected 32 bytes, got {}", v.len()))
-                })
-            }).collect()
-        }).collect()
+        outer
+            .into_iter()
+            .map(|layer| {
+                layer
+                    .into_iter()
+                    .map(|s| {
+                        let v = hex::decode(&s).map_err(serde::de::Error::custom)?;
+                        v.try_into().map_err(|v: Vec<u8>| {
+                            serde::de::Error::custom(format!("expected 32 bytes, got {}", v.len()))
+                        })
+                    })
+                    .collect()
+            })
+            .collect()
     }
 }
 
@@ -145,12 +181,16 @@ pub mod hex_blob {
     use serde::{self, Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(bytes: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
-    where S: Serializer {
+    where
+        S: Serializer,
+    {
         serializer.serialize_str(&hex::encode(bytes))
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let s = String::deserialize(deserializer)?;
         hex::decode(&s).map_err(serde::de::Error::custom)
     }
