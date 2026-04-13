@@ -1,0 +1,92 @@
+---
+description: Branch policy for shekyl-core and shekyl-gui-wallet
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Branch Policy
+
+This repo uses **main = stable, dev = integration**. The AI assistant must
+follow these rules without exception. If a request seems to require violating
+one of these rules, stop and ask the human first.
+
+## Hard rules
+
+1. **Never commit directly to `main`.** Ever. `main` only moves via
+   fast-forward from a tagged commit on `dev`. Even a one-line typo fix
+   goes through `dev`.
+
+2. **Never create a long-lived feature branch.** "Long-lived" means any
+   branch expected to exist for more than ~5 working days or accumulate
+   more than ~10 commits before merging. The cautionary example is
+   `feature/msvc-wallet-core` (closed 2026-04): it accumulated 45 commits
+   and 141-commit dev drift before being merged, and the merge itself
+   became a multi-day project. Do not recreate this pattern.
+
+3. **Never merge `dev` into a feature branch to "keep it current".**
+   This is the failure pattern that produces orphaned branches. If a
+   feature branch is falling behind dev, the answer is to land it on dev
+   sooner, not to repeatedly merge dev into it. If the branch isn't ready
+   to land, the work is too large and must be broken into smaller pieces
+   that can each land on dev behind a feature flag or in disabled state.
+
+4. **Never push to `dev` without the user's explicit instruction for that
+   specific push.** "Run the tests and push" is not a standing instruction.
+   Each push is a separate authorization.
+
+5. **Never delete a branch without explicit confirmation from the user**,
+   even if it appears stale or merged. Branches may contain unmerged work
+   that isn't obvious from `git log`. If a branch needs deletion, propose
+   it and wait for confirmation, ideally after tagging the HEAD as
+   `archive/<branch-name>-<date>` for recoverability.
+
+6. **Never force-push to `main` or `dev`.** Force-push is permitted only
+   on short-lived branches owned by a single contributor, and only when
+   that contributor has explicitly asked for it.
+
+## Default workflow for any code change
+
+1. Confirm you are on `dev` (or a short-lived branch off `dev`).
+   If on `main`, stop and ask which branch to use.
+2. Make the change.
+3. Run formatters, linters, and tests as defined in the repo's other
+   cursor rules (e.g. `rust-fmt-check.mdc`).
+4. Commit with a message following `commits.mdc`.
+5. **Do not push.** Surface the commit to the user and wait for
+   instruction.
+
+## When a short-lived branch is appropriate
+
+A branch off `dev` is appropriate when:
+- The change touches >~5 files or >~200 lines and would benefit from
+  PR review before landing on `dev`.
+- The change is experimental and may be discarded.
+- The change must be coordinated with other contributors before merging.
+
+In all cases the branch should be named `<author>/<short-description>`
+or `chore/<description>` / `fix/<description>` / `feat/<description>`,
+and should land on `dev` within 5 working days. If it can't, the change
+is too large; break it down.
+
+## When to ask the user instead of proceeding
+
+- Any request that mentions `main` directly ("commit this to main",
+  "fix on main", "tag main")
+- Any request to create a branch with `feature/` prefix (the prefix
+  itself is a smell — see rule 2)
+- Any request to merge between long-lived branches
+- Any request to delete a branch
+- Any request to force-push, rewrite history on a shared branch, or
+  use `git reset --hard` on a tracked branch
+- Any operation that would touch git tags (creation, deletion, moving)
+
+## Release flow (for reference, not for AI execution)
+
+1. `dev` is tagged with a release candidate (e.g. `v0.4.0-beta.2`).
+2. The tag is verified by CI and (for GUI) by manual testing.
+3. `main` is fast-forwarded to the tagged commit.
+4. The release artifact is built from `main` at the tag.
+
+The AI does not perform release operations. If asked to "cut a release",
+"tag a version", or "promote to main", stop and confirm the user wants
+to walk through the release flow manually.

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### 🐛 Fixed
+
+- **Non-exhaustive `TxBuilderError` match in FFI error-code mapping.**
+  Commit `aff9f777` added `TreeDepthTooLarge(u8)` to `TxBuilderError` but did
+  not add the corresponding arm to `tx_builder_error_code()` in `shekyl-ffi`,
+  breaking CI compilation on all platforms. Added `TreeDepthTooLarge(_) => -27`.
+
 ## [core-v3.1.0] - 2026-04-13
 
 ### 🔄 Changed

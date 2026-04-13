@@ -2818,6 +2818,7 @@ fn tx_builder_error_code(e: &shekyl_tx_builder::TxBuilderError) -> i32 {
         BulletproofError(_) => -24,
         FcmpProveError(_) => -25,
         PqcSignError { .. } => -26,
+        TreeDepthTooLarge(_) => -27,
     }
 }
 
