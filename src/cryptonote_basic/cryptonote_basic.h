@@ -56,6 +56,11 @@ namespace cryptonote
 {
   typedef std::vector<crypto::signature> ring_signature;
 
+  // Migration alias: the inherited field name "rct_signatures" and type "rct::rctSig"
+  // predate Shekyl's FCMP++ architecture. New code should use ct_signatures.
+  // Full rename to ct:: namespace deferred to a separate PR.
+  using ct_signatures = rct::rctSig;
+
 
   /* outputs */
 

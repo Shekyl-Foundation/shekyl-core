@@ -191,12 +191,12 @@ void BootstrapFile::flush_chunk()
   {
     m_max_chunk = chunk_size;
   }
-  long pos_before = m_raw_data_file->tellp();
+  std::streamoff pos_before = m_raw_data_file->tellp();
   std::copy(m_buffer.begin(), m_buffer.end(), std::ostreambuf_iterator<char>(*m_raw_data_file));
   m_raw_data_file->flush();
-  long pos_after = m_raw_data_file->tellp();
-  long num_chars_written = pos_after - pos_before;
-  if (static_cast<unsigned long>(num_chars_written) != chunk_size)
+  std::streamoff pos_after = m_raw_data_file->tellp();
+  std::streamoff num_chars_written = pos_after - pos_before;
+  if (static_cast<uint64_t>(num_chars_written) != chunk_size)
   {
     MFATAL("Error writing chunk:  height: " << m_cur_height << "  chunk_size: " << chunk_size << "  num chars written: " << num_chars_written);
     throw std::runtime_error("Error writing chunk");

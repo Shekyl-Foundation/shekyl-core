@@ -28,8 +28,29 @@
 
 #pragma once
 
-// MSVC does not define ssize_t (POSIX type). Provide it via <basetsd.h>.
+// Centralized platform-compatibility shims.
+// Include this header instead of scattering #ifdef _WIN32 / _MSC_VER
+// guards around POSIX headers in every translation unit.
+
+// --- ssize_t ---
 #if defined(_MSC_VER) && !defined(ssize_t)
 #include <basetsd.h>
 typedef SSIZE_T ssize_t;
+#endif
+
+// --- unistd.h (POSIX) vs io.h (MSVC) ---
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
+// --- dlfcn.h (POSIX dynamic loader) ---
+#if !defined(_WIN32) && !defined(STATICLIB)
+#include <dlfcn.h>
+#endif
+
+// --- sys/mman.h (POSIX memory mapping) ---
+#if !defined(_WIN32) && !defined(__MINGW32__)
+#include <sys/mman.h>
 #endif

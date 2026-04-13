@@ -303,9 +303,9 @@ namespace crypto {
   inline bool operator>(const public_key &p1, const public_key &p2) { return p2 < p1; }
 }
 
-CRYPTO_MAKE_HASHABLE(public_key)
+CRYPTO_MAKE_HASHABLE_CONSTANT_TIME(public_key)
 CRYPTO_MAKE_HASHABLE_CONSTANT_TIME(secret_key)
 CRYPTO_MAKE_HASHABLE_CONSTANT_TIME(public_key_memsafe)
-CRYPTO_MAKE_HASHABLE(key_image)
+CRYPTO_MAKE_HASHABLE_CONSTANT_TIME(key_image)
 CRYPTO_MAKE_COMPARABLE(signature)
 CRYPTO_MAKE_COMPARABLE(view_tag)

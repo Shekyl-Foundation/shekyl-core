@@ -767,9 +767,9 @@ void drop_from_short_history(std::list<crypto::hash> &short_chain_history, size_
   // drop early N off, skipping the genesis block
   if (short_chain_history.size() > N) {
     right = short_chain_history.end();
-    std::advance(right,-1);
+    std::advance(right, -1);
     std::list<crypto::hash>::iterator left = right;
-    std::advance(left, -N);
+    std::advance(left, -static_cast<ptrdiff_t>(N));
     short_chain_history.erase(left, right);
   }
 }

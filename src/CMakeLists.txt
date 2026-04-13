@@ -51,7 +51,7 @@ function (enable_stack_trace target)
   if(STACK_TRACE)
     set_property(TARGET ${target}
       APPEND PROPERTY COMPILE_DEFINITIONS "STACK_TRACE")
-    if (STATIC)
+    if (STATIC AND NOT MSVC)
       set_property(TARGET "${target}"
         APPEND PROPERTY LINK_FLAGS "-Wl,--wrap=__cxa_throw")
     endif()

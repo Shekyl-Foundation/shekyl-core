@@ -154,6 +154,11 @@ bool wallet_tools::fill_tx_sources(tools::wallet2 * wallet, std::vector<cryptono
 #undef EVAL_BRK_COND
 }
 
+// DEPRECATED: builds ring-style decoy outputs incompatible with FCMP++.
+// Shekyl does not use mixins/decoys. For FCMP++ transaction construction in tests,
+// use construct_fcmp_tx / apply_fcmp_pipeline from chaingen.cpp instead.
+// This function is retained only for wallet_tools::process_transactions callers
+// that haven't been migrated yet.
 void wallet_tools::gen_tx_src(size_t mixin, uint64_t cur_height, const tools::wallet2::transfer_details & td, cryptonote::tx_source_entry & src, block_tracker &bt)
 {
   CHECK_AND_ASSERT_THROW_MES(mixin != 0, "mixin is zero");

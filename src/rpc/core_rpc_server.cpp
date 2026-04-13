@@ -3644,9 +3644,9 @@ namespace cryptonote
 
     const auto &db = m_core.get_blockchain_storage().get_db();
     const uint8_t depth = db.get_curve_tree_depth();
-    const uint64_t leaf_count = db.get_curve_tree_leaf_count();
+    const uint64_t tip_leaf_count = db.get_curve_tree_leaf_count();
 
-    if (leaf_count == 0)
+    if (tip_leaf_count == 0)
     {
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = "Curve tree is empty";
@@ -3655,8 +3655,6 @@ namespace cryptonote
 
     const uint64_t height = m_core.get_current_blockchain_height();
     const uint64_t top_height = height - 1;
-    // Return a reference block old enough to satisfy mempool min-age checks.
-    // Use one extra block of margin to avoid edge races near tip updates.
     const uint64_t min_anchor_age = FCMP_REFERENCE_BLOCK_MIN_AGE + 1;
     const uint64_t reference_height = top_height > min_anchor_age ? (top_height - min_anchor_age) : 0;
     const crypto::hash reference_hash = m_core.get_block_id_by_height(reference_height);
@@ -3666,11 +3664,20 @@ namespace cryptonote
     res.curve_tree_root = epee::string_tools::pod_to_hex(ref_blk.curve_tree_root);
     res.reference_height = reference_height;
     res.tree_depth = depth;
-    res.leaf_count = leaf_count;
+
+    // Compute the leaf count at reference_height (not tip) by subtracting
+    // leaves drained into the tree after reference_height.
+    uint64_t leaves_after_ref = 0;
+    for (uint64_t h = reference_height + 1; h <= top_height; ++h)
+      leaves_after_ref += db.get_pending_tree_drain_entries(h).size();
+    const uint64_t ref_leaf_count = tip_leaf_count - leaves_after_ref;
+
+    res.leaf_count = ref_leaf_count;
     res.paths.clear();
 
     const uint32_t SELENE_CHUNK_WIDTH = shekyl_curve_tree_selene_chunk_width();
     const uint32_t HELIOS_CHUNK_WIDTH = shekyl_curve_tree_helios_chunk_width();
+    static constexpr uint32_t SCALARS_PER_LEAF = 4;
 
     auto chunk_width = [&](uint8_t layer) -> uint32_t {
       if (layer == 0) return SELENE_CHUNK_WIDTH;
@@ -3683,33 +3690,25 @@ namespace cryptonote
       entry.output_index = output_idx;
       entry.tree_depth = depth;
 
-      if (output_idx >= leaf_count)
+      if (output_idx >= ref_leaf_count)
       {
         error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-        error_resp.message = "output_index " + std::to_string(output_idx) + " >= leaf_count " + std::to_string(leaf_count);
+        error_resp.message = "output_index " + std::to_string(output_idx) + " >= ref_leaf_count " + std::to_string(ref_leaf_count);
         return false;
       }
 
-      // path_blob format per layer:
-      //   layer 0 (leaf layer): all leaf scalars in the chunk (4*32 bytes each)
-      //   layer 1+: all sibling hashes in the chunk (32 bytes each)
-      // The verifier uses the output's position within each chunk to locate
-      // the proven element; everything else in the chunk is the "path."
       std::string path_hex;
 
-      // Layer 0: collect all leaf scalars in the chunk
+      // Layer 0: collect leaf scalars in the chunk, bounded by ref_leaf_count
       uint64_t chunk_idx = output_idx / SELENE_CHUNK_WIDTH;
       uint64_t chunk_start = chunk_idx * SELENE_CHUNK_WIDTH;
-      uint64_t chunk_end = std::min(chunk_start + SELENE_CHUNK_WIDTH, leaf_count);
+      uint64_t chunk_end = std::min(chunk_start + static_cast<uint64_t>(SELENE_CHUNK_WIDTH), ref_leaf_count);
 
       std::vector<uint8_t> path_bytes;
-      // Encode position of the proven leaf within the chunk (2 bytes LE)
       uint16_t leaf_pos = static_cast<uint16_t>(output_idx - chunk_start);
       path_bytes.push_back(static_cast<uint8_t>(leaf_pos & 0xFF));
       path_bytes.push_back(static_cast<uint8_t>((leaf_pos >> 8) & 0xFF));
 
-      // Also collect compressed Ed25519 output data for the FCMP++ prover.
-      // Per entry: [O:32][I:32][C:32][h_pqc:32] = 128 bytes.
       std::vector<uint8_t> chunk_output_bytes;
 
       for (uint64_t i = chunk_start; i < chunk_end; ++i)
@@ -3723,13 +3722,11 @@ namespace cryptonote
         }
         path_bytes.insert(path_bytes.end(), leaf, leaf + 128);
 
-        // Fetch the compressed Ed25519 output key and commitment
         output_data_t od = db.get_output_key(0, i);
         chunk_output_bytes.insert(chunk_output_bytes.end(),
             reinterpret_cast<const uint8_t*>(od.pubkey.data),
             reinterpret_cast<const uint8_t*>(od.pubkey.data) + 32);
 
-        // I = Hp(O): hash-to-point of the output key
         ge_p3 hp;
         rct::key od_rct;
         memcpy(od_rct.bytes, od.pubkey.data, 32);
@@ -3742,41 +3739,112 @@ namespace cryptonote
             reinterpret_cast<const uint8_t*>(od.commitment.bytes),
             reinterpret_cast<const uint8_t*>(od.commitment.bytes) + 32);
 
-        // h_pqc is the 4th scalar in the leaf data (bytes 96..128)
         chunk_output_bytes.insert(chunk_output_bytes.end(), leaf + 96, leaf + 128);
       }
 
       entry.chunk_outputs_blob = epee::string_tools::buff_to_hex_nodelimer(
         std::string(reinterpret_cast<const char*>(chunk_output_bytes.data()), chunk_output_bytes.size()));
 
-      // Layers 1..depth-1: collect sibling hashes in each parent chunk
+      // Layers 1..depth-1: collect sibling hashes with boundary-chunk trimming
+      uint64_t ref_nodes_at_prev_layer = ref_leaf_count;
+      uint64_t cur_nodes_at_prev_layer = tip_leaf_count;
       uint64_t child_chunk = chunk_idx;
+
       for (uint8_t layer = 1; layer < depth; ++layer)
       {
-        uint32_t width = chunk_width(layer);
-        uint64_t parent_chunk = child_chunk / width;
-        uint64_t pos_in_parent = child_chunk % width;
+        uint32_t prev_cw = chunk_width(layer - 1);
+        uint32_t cw = chunk_width(layer);
 
-        // Encode position (2 bytes LE)
-        uint16_t pos16 = static_cast<uint16_t>(pos_in_parent);
-        path_bytes.push_back(static_cast<uint8_t>(pos16 & 0xFF));
-        path_bytes.push_back(static_cast<uint8_t>((pos16 >> 8) & 0xFF));
+        uint64_t ref_chunks_below = (ref_nodes_at_prev_layer + prev_cw - 1) / prev_cw;
+        uint64_t cur_chunks_below = (cur_nodes_at_prev_layer + prev_cw - 1) / prev_cw;
+        uint64_t last_ref_chunk_below = (ref_chunks_below > 0) ? ref_chunks_below - 1 : 0;
 
-        // Collect all children in this parent chunk
-        for (uint32_t c = 0; c < width; ++c)
+        uint64_t parent_chunk = child_chunk / cw;
+        uint64_t sib_start = parent_chunk * cw;
+        uint16_t pos_in_parent = static_cast<uint16_t>(child_chunk - sib_start);
+
+        path_bytes.push_back(static_cast<uint8_t>(pos_in_parent & 0xFF));
+        path_bytes.push_back(static_cast<uint8_t>((pos_in_parent >> 8) & 0xFF));
+
+        for (uint32_t c = 0; c < cw; ++c)
         {
-          uint64_t sibling_chunk = parent_chunk * width + c;
+          uint64_t sibling_chunk = sib_start + c;
           uint8_t hash[32] = {};
-          if (!db.get_curve_tree_layer_hash(layer - 1, sibling_chunk, hash))
+
+          if (sibling_chunk < ref_chunks_below)
           {
-            error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-            error_resp.message = "Internal error: missing layer hash at layer "
-              + std::to_string(layer - 1) + " chunk " + std::to_string(sibling_chunk);
-            return false;
+            if (!db.get_curve_tree_layer_hash(layer - 1, sibling_chunk, hash))
+            {
+              error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+              error_resp.message = "Internal error: missing layer hash at layer "
+                + std::to_string(layer - 1) + " chunk " + std::to_string(sibling_chunk);
+              return false;
+            }
+
+            // Trim boundary chunk that grew since reference_height
+            if (sibling_chunk == last_ref_chunk_below &&
+                ref_nodes_at_prev_layer != cur_nodes_at_prev_layer &&
+                ref_nodes_at_prev_layer % prev_cw != 0)
+            {
+              uint64_t ref_in_chunk = ref_nodes_at_prev_layer - sibling_chunk * prev_cw;
+              uint64_t cur_in_chunk = std::min(
+                  cur_nodes_at_prev_layer - sibling_chunk * prev_cw,
+                  static_cast<uint64_t>(prev_cw));
+
+              if (cur_in_chunk > ref_in_chunk)
+              {
+                uint64_t scalars_per_entry = (layer == 1) ? SCALARS_PER_LEAF : 1;
+                uint64_t trim_offset = ref_in_chunk * scalars_per_entry;
+                uint64_t num_extra = cur_in_chunk - ref_in_chunk;
+                uint64_t num_extra_scalars = num_extra * scalars_per_entry;
+
+                std::vector<uint8_t> extra_data;
+                if (layer == 1)
+                {
+                  for (uint64_t li = sibling_chunk * prev_cw + ref_in_chunk;
+                       li < sibling_chunk * prev_cw + cur_in_chunk; ++li)
+                  {
+                    uint8_t lf[128];
+                    if (db.get_curve_tree_leaf(li, lf))
+                      extra_data.insert(extra_data.end(), lf, lf + 128);
+                    else
+                      extra_data.insert(extra_data.end(), 128, 0);
+                  }
+                }
+                else
+                {
+                  for (uint64_t li = sibling_chunk * prev_cw + ref_in_chunk;
+                       li < sibling_chunk * prev_cw + cur_in_chunk; ++li)
+                  {
+                    uint8_t h[32] = {};
+                    db.get_curve_tree_layer_hash(layer - 2, li, h);
+                    extra_data.insert(extra_data.end(), h, h + 32);
+                  }
+                }
+
+                uint8_t zero_scalar[32] = {};
+                uint8_t trimmed[32];
+                bool is_selene = (layer - 1) % 2 == 0;
+                bool ok;
+                if (is_selene)
+                  ok = shekyl_curve_tree_hash_trim_selene(
+                      hash, trim_offset, extra_data.data(),
+                      num_extra_scalars, zero_scalar, trimmed);
+                else
+                  ok = shekyl_curve_tree_hash_trim_helios(
+                      hash, trim_offset, extra_data.data(),
+                      num_extra_scalars, zero_scalar, trimmed);
+
+                if (ok)
+                  memcpy(hash, trimmed, 32);
+              }
+            }
           }
           path_bytes.insert(path_bytes.end(), hash, hash + 32);
         }
 
+        ref_nodes_at_prev_layer = ref_chunks_below;
+        cur_nodes_at_prev_layer = cur_chunks_below;
         child_chunk = parent_chunk;
       }
 

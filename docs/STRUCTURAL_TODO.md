@@ -39,9 +39,11 @@ All 10 call sites across 6 files (`blockchain.cpp`, `cryptonote_core.cpp`,
 `levin_notify.cpp`, `multisig_tx_builder_ringct.cpp`, `wallet2.cpp`)
 rewritten from `{.field = val}` to C++17 member assignment. *(Landed on
 `dev` in `f275a6a3b`; merged to `feature/msvc-wallet-core` in
-`93440c429`.)* **Remaining action:** Audit for other C++20-isms
+`93440c429`.)* **Remaining action:** ~~Audit for other C++20-isms
 (concepts, ranges, `std::format`, coroutines, `<=>` operator) that
-GCC/Clang silently accept but MSVC doesn't.
+GCC/Clang silently accept but MSVC doesn't.~~ ✅ Audited April 2026:
+no designated initializers, `std::format`, concepts, ranges, or `<=>`
+found in `src/`.
 
 ### C++ alternative tokens (`not`, `and`, `or`) used extensively
 Hundreds of call sites use `not` instead of `!`, `and` instead of `&&`,
@@ -50,6 +52,11 @@ etc. MSVC does not treat these as keywords by default. Current workaround:
 1. Adopt `/permissive-` for full C++ conformance on MSVC.
 2. Standardize on `!` / `&&` / `||` operators (large mechanical change).
 3. Keep the `/FIiso646.h` workaround (simplest, but fragile).
+
+**Decision (April 2026):** Keep option 3 (`/FIiso646.h`). The mechanical
+change to replace hundreds of `not`/`and`/`or` sites is high-effort,
+low-value, and risks merge conflicts with upstream Monero cherry-picks.
+Revisit if the codebase adopts `/permissive-` (option 1).
 
 ### ~~MSVC treats `xor` as reserved in C mode~~ ✅ Resolved
 Even after moving `/FIiso646.h` to C++ only, MSVC rejects `xor` as a
@@ -101,12 +108,13 @@ across compilers.
 
 ## Third-Party / Dependency Issues
 
-### easylogging++ vendored with no MSVC support — partially resolved
+### ~~easylogging++ vendored with no MSVC support~~ ✅ Resolved
 `external/easylogging++/easylogging++.cc` had three issues, all now fixed:
 unconditional `#include <unistd.h>` (guarded in `d92533e34`), `__thread`
 TLS (replaced with `thread_local` in `f275a6a3b`), and hardcoded `-fPIC`
 in CMakeLists.txt (replaced with `POSITION_INDEPENDENT_CODE ON` in
-`0730a7bd4`). The library is unmaintained upstream and any future MSVC
+`0730a7bd4`). All three fixes confirmed in tree April 2026.
+The library is unmaintained upstream and any future MSVC
 issues will require local patches. **Options:**
 1. Maintain a local fork with MSVC patches (current approach).
 2. Replace with `spdlog` or another maintained logging library (larger
@@ -149,12 +157,14 @@ reported upstream or patched locally if we diverge from upstream.
 
 ## CI / Build Hygiene
 
-### vcpkg builds take 45+ minutes
+### vcpkg builds take 45+ minutes — partially resolved
 Even with `actions/cache` for binary packages, the vcpkg install step
 takes 45+ minutes on cold runs and 10-15 minutes on warm cache hits.
-There is no `vcpkg.json` manifest — packages are listed in the CI YAML.
-**Fix:** Create a `vcpkg.json` manifest at the repo root for deterministic
-dependency management and better cache key hashing.
+~~There is no `vcpkg.json` manifest — packages are listed in the CI YAML.~~
+✅ Root `vcpkg.json` manifest created (April 2026) with the 5 dependencies
+(boost, openssl, libsodium, libusb, lmdb). **Remaining:** Update CI YAML
+to use `vcpkg install --x-manifest-root=.` instead of explicit package list,
+and verify cache key hashing improves.
 
 ### ~~No CI guard against `BOOST_FOREACH` re-introduction~~ ✅ Resolved
 31 `BOOST_FOREACH` / `BOOST_REVERSE_FOREACH` sites were manually replaced
@@ -208,16 +218,11 @@ builds, which are not currently done on MSVC.
 **Priority**: Medium (not in wallet-core library, but affects CLI tools)
 
 On 64-bit MSVC, `long` / `unsigned long` are 32 bits (LLP64 model) vs
-64 bits on Linux (LP64). Several sites outside the wallet-core library
-use `long` for values that can exceed 32 bits:
+64 bits on Linux (LP64). ~~Several sites outside the wallet-core library
+used `long` for values that can exceed 32 bits.~~ `simplewallet.cpp`
+has been deleted from the repository; its two sites no longer exist.
+One active site remains:
 
-- **`simplewallet.cpp:~1880`**: `sscanf("%lu", &offset)` parses ring
-  member offsets into `unsigned long`, then pushes to
-  `std::vector<uint64_t>`. Offsets > 2^32 would silently truncate on
-  MSVC. **Fix:** Use `uint64_t` + `SCNu64` or `strtoull`.
-- **`simplewallet.cpp:~616`**: `strtoul` returns 32-bit on MSVC; the
-  subsequent `> std::numeric_limits<uint32_t>::max()` check becomes a
-  tautology. **Fix:** Use `strtoull` + `uint64_t`.
 - **`bootstrap_file.cpp:~194`**: `tellp()` stream positions stored in
   `long` and cast to `unsigned long`. Large blockchain exports would
   overflow. **Fix:** Use `std::streamoff` / `int64_t`.
@@ -257,17 +262,17 @@ Pattern: `1 << n` stored in `uint64_t`. Changed all 23 sites to
 
 *(Fixed on `dev` branch, April 2026.)*
 
-### Unsafe bool/char mixing in `wallet2.h:2324` (C4805)
-**Priority**: Low — logic concern
+### ~~Unsafe bool/char mixing in `wallet2.h:2324` (C4805)~~ ✅ Resolved
+Line/pattern no longer exists after wallet refactoring (`wallet2.h` is
+now 2144 lines; `|=` bool/char pattern not found).
 
-`|=` mixes `bool` and `char` operands. Could mask a logic bug where a
-char value is interpreted as a boolean. Worth auditing the intent.
-
-### Unsigned negation in `wallet2.cpp:782` (C4146)
+### Unsigned negation in `wallet2.cpp:772` (was 782) (C4146)
 **Priority**: Low — well-defined but suspicious
 
-Negating an unsigned type is well-defined C++ (wraps to `UINT_MAX - n + 1`)
-but almost always unintended. Worth auditing.
+Line shifted to 772 after wallet refactoring. Pattern is
+`std::advance(left, -N)` where `N` is `size_t` — unsigned negation.
+Well-defined C++ (wraps to `UINT_MAX - n + 1`) but worth fixing with
+a `static_cast<ptrdiff_t>` for clarity and MSVC warning suppression.
 
 ---
 
@@ -289,8 +294,9 @@ infrastructure.
 `m_spend_public_key`, `m_view_public_key`, and `m_pqc_public_key`
 member-wise in `cryptonote_basic.h`. All production `memcmp` sites on
 `account_public_address` (`wallet2.cpp`, `wallet2_ffi.cpp`,
-`wallet_rpc_server.cpp`, `simplewallet.cpp`, `unsigned_transaction.cpp`)
-now use `==` / `!=`. Added
+`wallet_rpc_server.cpp`, `unsigned_transaction.cpp`)
+now use `==` / `!=`. (`simplewallet.cpp` was deleted from the
+repository.) Added
 `static_assert(!std::is_trivially_copyable_v<account_public_address>)`
 after the struct to discourage future raw `memcmp` on the type.
 
@@ -302,24 +308,15 @@ after the struct to discourage future raw `memcmp` on the type.
 uses `crypto_verify_32` for secret lookup. Both replace short-circuiting
 `memcmp` on 32-byte secrets.
 
-### 🟢 LOW — Inconsistent constant-time macro usage in `generic-ops.h`
-**Priority**: Low — no current vulnerability, but a footgun
+### ~~🟢 LOW — Inconsistent constant-time macro usage in `generic-ops.h`~~ ✅ Resolved
+**Priority**: Was low — no current vulnerability, but a footgun
 
-The codebase has two parallel operator-generation macros:
-- `CRYPTO_MAKE_COMPARABLE` → `memcmp` (used for `public_key`,
-  `key_image`, `hash`, `signature`, `view_tag`, `hash8`)
-- `CRYPTO_MAKE_COMPARABLE_CONSTANT_TIME` → `crypto_verify_32` (used
-  only for `secret_key` and `public_key_memsafe`)
-
-Public types do not need constant-time equality for security. However,
-the split means a developer who adds a new secret-bearing 32-byte type
-might use the wrong macro by analogy. **Options:**
-1. Unify all 32-byte types on `crypto_verify_32` (eliminates the
-   footgun; negligible performance cost for 32-byte compares).
-2. Keep the split but add a code comment in `generic-ops.h` explaining
-   when to use which macro.
-3. Add a CI lint that greps for `CRYPTO_MAKE_COMPARABLE` on types whose
-   names contain `secret` or `private`.
+All 32-byte types (`public_key`, `key_image`, `hash`) now use
+`CRYPTO_MAKE_HASHABLE_CONSTANT_TIME` → `crypto_verify_32`. The
+non-constant-time `CRYPTO_MAKE_COMPARABLE` is retained only for
+non-32-byte types (`signature` at 64 bytes, `view_tag` at 1 byte,
+`hash8` at 8 bytes) where `crypto_verify_32` does not apply. This
+eliminates the footgun of choosing the wrong macro for new 32-byte types.
 
 ### Additional `memcmp` notes
 
@@ -335,8 +332,8 @@ might use the wrong macro by analogy. **Options:**
   blob at a computed offset: correct for fixed-size byte arrays.
 - `crypto.cpp:335`, `rx-slow-hash.c:75-76` — byte-array comparisons
   against constants: no issues.
-- 84 test-only `memcmp` calls: low priority, but `tests/` should adopt
-  `operator==` as production code is migrated.
+- ~90 test-only `memcmp` calls (updated April 2026): low priority, but
+  `tests/` should adopt `operator==` as production code is migrated.
 
 **Prerequisite:** Core wallet correctness fixes in `shekyl-dev`
 `docs/STRUCTURAL_TODO.md` (e.g. `account_public_address` must not be compared
@@ -347,7 +344,7 @@ shekyl-core before large epee removals.
 
 ## Naming / Code Clarity
 
-### `rct_signatures` field name is a Monero-era misnomer
+### `rct_signatures` field name is a Monero-era misnomer — partially addressed
 **Priority**: Low — cosmetic, but misleading
 
 `transaction::rct_signatures` (typed `rct::rctSig`) no longer holds ring
@@ -365,13 +362,10 @@ All ring signature types (`RCTTypeFull`, `RCTTypeSimple`, `RCTTypeCLSAG`,
 deserialization. The name "rct" (Ring Confidential Transactions) is
 misleading since the ring component no longer exists.
 
-**Options:**
-1. Rename to `ct_signatures` / `confidential_proof` / `fcmp_signatures`
-   (touches every serialization path — large mechanical change).
-2. Add a type alias (`using ct_signatures = rct::rctSig`) and migrate
-   callers incrementally.
-3. Keep the name but add a prominent code comment explaining the
-   discrepancy (least effort, most confusing for new contributors).
+**Status (April 2026):** `using ct_signatures = rct::rctSig;` type alias
+added in `cryptonote_basic.h`. New code should use `ct_signatures` for the
+type. The full caller migration and `rct::` namespace rename to `ct::` are
+deferred to V4 when Monero upstream cherry-picks end.
 
 The `rct::` namespace (`src/fcmp/rctTypes.h`, `rctOps.h`, `rctSigs.h`)
 has the same problem — it was renamed from `ringct/` to `fcmp/` at the

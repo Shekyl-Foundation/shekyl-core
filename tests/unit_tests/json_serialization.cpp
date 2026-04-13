@@ -1,6 +1,4 @@
 
-#include <optional>
-#include <boost/range/adaptor/indexed.hpp>
 #include <gtest/gtest.h>
 #include <rapidjson/document.h>
 #include <rapidjson/writer.h>
@@ -13,6 +11,7 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
 #include "serialization/json_object.h"
+#include "string_tools.h"
 
 
 namespace test
@@ -32,67 +31,60 @@ namespace test
     }
 
     cryptonote::transaction
-    make_transaction(
-        cryptonote::account_keys const& from,
-        std::vector<cryptonote::transaction> const& sources,
-        std::vector<cryptonote::account_public_address> const& destinations,
-        bool rct)
+    make_v3_transaction_stub()
     {
-        std::uint64_t source_amount = 0;
-        std::vector<cryptonote::tx_source_entry> actual_sources;
-        for (auto const& source : sources)
+        cryptonote::transaction tx{};
+        tx.version = 3;
+        tx.unlock_time = 0;
+        tx.pruned = false;
+
+        // One input: txin_to_key with a dummy key image
+        cryptonote::txin_to_key in{};
+        in.amount = 0;
+        crypto::key_image ki;
+        memset(&ki, 0x42, sizeof(ki));
+        in.k_image = ki;
+        in.key_offsets.push_back(12345);
+        tx.vin.push_back(in);
+
+        // Two outputs: tagged keys with dummy public keys
+        for (int i = 0; i < 2; ++i)
         {
-            std::vector<cryptonote::tx_extra_field> extra_fields;
-            if (!cryptonote::parse_tx_extra(source.extra, extra_fields))
-                throw std::runtime_error{"invalid transaction"};
-
-            cryptonote::tx_extra_pub_key key_field{};
-            if (!cryptonote::find_tx_extra_field_by_type(extra_fields, key_field))
-                throw std::runtime_error{"invalid transaction"};
-
-            for (auto const input : boost::adaptors::index(source.vout))
-            {
-                source_amount += input.value().amount;
-                crypto::public_key out_key{};
-                std::visit([&out_key](auto const& t) {
-                    using T = std::decay_t<decltype(t)>;
-                    if constexpr (std::is_same_v<T, cryptonote::txout_to_key>)
-                        out_key = t.key;
-                    else if constexpr (std::is_same_v<T, cryptonote::txout_to_tagged_key>)
-                        out_key = t.key;
-                }, input.value().target);
-
-                {
-                    cryptonote::tx_source_entry src{};
-                    src.real_output = 0;
-                    src.real_out_tx_key = key_field.pub_key;
-                    src.real_output_in_tx_index = std::size_t(input.index());
-                    src.amount = input.value().amount;
-                    src.rct = rct;
-                    src.mask = rct::identity();
-                    actual_sources.push_back(std::move(src));
-                }
-
-                for (unsigned ring = 0; ring < 10; ++ring)
-                    actual_sources.back().push_output(input.index(), out_key, input.value().amount);
-                actual_sources.back().mask =
-                    actual_sources.back().outputs[actual_sources.back().real_output].second.mask;
-            }
+            cryptonote::tx_out out{};
+            out.amount = 0;
+            cryptonote::txout_to_tagged_key tagged{};
+            memset(&tagged.key, 0x10 + i, sizeof(tagged.key));
+            tagged.view_tag = static_cast<uint8_t>(i);
+            out.target = tagged;
+            tx.vout.push_back(out);
         }
 
-        std::vector<cryptonote::tx_destination_entry> to;
-        for (auto const& destination : destinations)
-            to.push_back({(source_amount / destinations.size()), destination, false});
+        // Minimal extra (tx pubkey)
+        crypto::public_key dummy_tx_pub;
+        memset(&dummy_tx_pub, 0xAA, sizeof(dummy_tx_pub));
+        cryptonote::add_tx_pub_key_to_extra(tx, dummy_tx_pub);
 
-        cryptonote::transaction tx{};
+        // RCT signatures: BulletproofPlus type with minimal valid structure
+        tx.rct_signatures.type = rct::RCTTypeBulletproofPlus;
+        tx.rct_signatures.txnFee = 1000;
+        tx.rct_signatures.ecdhInfo.resize(2);
+        for (auto& info : tx.rct_signatures.ecdhInfo)
+        {
+            memset(info.amount.bytes, 0xCC, 8);
+            memset(info.amount.bytes + 8, 0, 24);
+        }
+        tx.rct_signatures.outPk.resize(2);
+        for (auto& pk : tx.rct_signatures.outPk)
+            memset(pk.mask.bytes, 0xDD, 32);
 
-        crypto::secret_key tx_key{};
-
-        std::unordered_map<crypto::public_key, cryptonote::subaddress_index> subaddresses;
-        subaddresses[from.m_account_address.m_spend_public_key] = {0,0};
-
-        if (!cryptonote::construct_tx_and_get_tx_key(from, subaddresses, actual_sources, to, std::nullopt, {}, tx, tx_key, rct, true, 1))
-            throw std::runtime_error{"transaction construction error"};
+        // PQC auth stub (one per input)
+        cryptonote::pqc_authentication auth{};
+        auth.auth_version = 1;
+        auth.scheme_id = 1;
+        auth.flags = 0;
+        auth.hybrid_public_key.resize(32, 0xEE);
+        auth.hybrid_signature.resize(64, 0xFF);
+        tx.pqc_auths.push_back(auth);
 
         return tx;
     }
@@ -163,8 +155,41 @@ TEST(JsonSerialization, MinerTransaction)
 
 TEST(JsonSerialization, BulletproofPlusTransaction)
 {
-    GTEST_SKIP() << "Requires FCMP++ transaction construction infrastructure. "
-                    "make_transaction builds ring-style sources incompatible with v3/FCMP++. "
-                    "See docs/FOLLOWUPS.md for tracking.";
+    const auto tx = test::make_v3_transaction_stub();
+
+    crypto::hash tx_hash{};
+    ASSERT_TRUE(cryptonote::get_transaction_hash(tx, tx_hash))
+        << "DEBUG: Failed to hash v3 tx stub";
+
+    cryptonote::transaction tx_copy = test_json(tx);
+
+    crypto::hash tx_copy_hash{};
+    ASSERT_TRUE(cryptonote::get_transaction_hash(tx_copy, tx_copy_hash))
+        << "DEBUG: Failed to hash round-tripped v3 tx";
+    EXPECT_EQ(tx_hash, tx_copy_hash)
+        << "DEBUG: tx hash mismatch after JSON round-trip. "
+        << "Original: " << epee::string_tools::pod_to_hex(tx_hash)
+        << " Copy: " << epee::string_tools::pod_to_hex(tx_copy_hash);
+
+    EXPECT_EQ(tx_copy.version, 3u)
+        << "DEBUG: version mismatch";
+    EXPECT_EQ(tx_copy.vout.size(), 2u)
+        << "DEBUG: output count mismatch";
+    EXPECT_EQ(tx_copy.vin.size(), 1u)
+        << "DEBUG: input count mismatch";
+    EXPECT_EQ(tx_copy.rct_signatures.type, rct::RCTTypeBulletproofPlus)
+        << "DEBUG: rct type mismatch";
+    EXPECT_EQ(tx_copy.pqc_auths.size(), 1u)
+        << "DEBUG: pqc_auths count mismatch";
+
+    cryptonote::blobdata tx_bytes{};
+    cryptonote::blobdata tx_copy_bytes{};
+    ASSERT_TRUE(cryptonote::t_serializable_object_to_blob(tx, tx_bytes))
+        << "DEBUG: Failed to serialize original tx to blob";
+    ASSERT_TRUE(cryptonote::t_serializable_object_to_blob(tx_copy, tx_copy_bytes))
+        << "DEBUG: Failed to serialize round-tripped tx to blob";
+    EXPECT_EQ(tx_bytes, tx_copy_bytes)
+        << "DEBUG: blob mismatch. Original size=" << tx_bytes.size()
+        << " Copy size=" << tx_copy_bytes.size();
 }
 

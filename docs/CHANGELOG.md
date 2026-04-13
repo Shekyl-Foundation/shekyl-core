@@ -4,6 +4,32 @@
 
 ### 🐛 Fixed
 
+- **Restored `JsonSerialization.BulletproofPlusTransaction` test.** Replaced
+  ring-style `make_transaction` with `make_v3_transaction_stub()` that builds
+  a structurally valid v3 transaction (BulletproofPlus type with tagged key
+  outputs and PQC auth stubs) for JSON serialization round-trip testing.
+  Deprecated `wallet_tools::gen_tx_src` with migration note pointing to the
+  FCMP++ pipeline in `chaingen.cpp`.
+
+- **`on_get_curve_tree_path` RPC consistency fix.** The RPC handler read
+  `leaf_count` from tip state but returned a `reference_block` several blocks
+  behind tip. If the tree grew in between, the returned leaf data and layer
+  hashes did not match the reference block's `curve_tree_root`. Fixed by
+  computing `ref_leaf_count` at `reference_height` via drain journal, capping
+  all reads to that count, and applying boundary-chunk hash trimming for
+  sibling chunks that changed since the reference block. Mirrors the fix
+  already applied to the test harness in `chaingen.cpp`.
+
+- **MSVC portability batch.** Expanded `src/common/compat.h` with centralized
+  platform-conditional includes for `unistd.h`/`io.h`, `dlfcn.h`, and
+  `sys/mman.h`. Added `AND NOT MSVC` guards to `monero_enable_coverage`
+  (GCC-only `--coverage` flags) and `enable_stack_trace` (GNU `ld`
+  `-Wl,--wrap=__cxa_throw`). Fixed `bootstrap_file.cpp` `long` types to
+  `std::streamoff`/`uint64_t` for LLP64 correctness. Fixed unsigned negation
+  in `wallet2.cpp:772` (`std::advance(left, -N)` where N is `size_t`) with
+  `static_cast<ptrdiff_t>`. Created root `vcpkg.json` manifest for
+  deterministic dependency management.
+
 - **FCMP++ test harness: tree state mismatch.** `assemble_tree_path_for_output`
   and `construct_fcmp_tx` in `tests/core_tests/chaingen.cpp` read the current
   (tip) curve tree state but the verifier checks against the reference block's
@@ -21,6 +47,21 @@
   and PQC signing pipeline via `apply_fcmp_pipeline`.
 
 ### 🔄 Changed
+
+- **Unified constant-time comparison for all 32-byte crypto types.**
+  `public_key`, `key_image`, and `hash` now use `crypto_verify_32` via
+  `CRYPTO_MAKE_HASHABLE_CONSTANT_TIME` instead of `memcmp`-based
+  `CRYPTO_MAKE_HASHABLE`. Eliminates the footgun of a developer choosing
+  the non-constant-time macro for a new secret-bearing 32-byte type.
+
+- **Added `ct_signatures` type alias.** `using ct_signatures = rct::rctSig;`
+  added in `cryptonote_basic.h` as the starting point for migrating away
+  from the Monero-era `rct_signatures` name. Full caller migration and
+  `rct::` namespace rename deferred to V4.
+
+- **Documented alternative tokens decision.** Keeping `/FIiso646.h`
+  workaround for MSVC; mechanical replacement of `not`/`and`/`or` is
+  high-effort, low-value. Recorded in STRUCTURAL_TODO.md.
 
 - **Workspace-wide clippy cleanup.** Resolved all `cargo clippy --all-targets
   --no-deps -- -D warnings` errors across the Rust workspace (14 crates,
@@ -62,6 +103,16 @@
   the FCMP++ proof binds `H(hybrid_public_key)` to the leaf, making a
   downgrade require a Blake2b-512 collision. Updated Attack 1 mitigation
   description and `POST_QUANTUM_CRYPTOGRAPHY.md` accordingly.
+
+- **FOLLOWUPS.md and STRUCTURAL_TODO.md audit and cleanup.**
+  Marked 5 stale items as resolved (2 in FOLLOWUPS, 3 in STRUCTURAL_TODO):
+  `signing_round_trip.rs` now exercises FFI, `AUDIT_SCOPE.md` exists,
+  C++20-isms audit complete, easylogging++ MSVC fully fixed, `wallet2.h:2324`
+  bool/char pattern removed by wallet refactoring. Updated 2 stale references:
+  `simplewallet.cpp` deleted (removed from `long` type sites and `memcmp`
+  resolution list), `wallet2.cpp:782` shifted to line 772. Updated test
+  `memcmp` count from 84 to ~90. Annotated `expected_scheme_id` removal as
+  deferred to PQC multisig PR.
 
 ### 📚 Documentation
 

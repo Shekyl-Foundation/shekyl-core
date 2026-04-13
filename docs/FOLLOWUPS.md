@@ -19,14 +19,10 @@ Each item is out of scope for the current PR but worth tracking for future work.
   internals. If upstream `ciphersuite` upgrades to `dalek-ff-group` 0.5,
   remove the gate.
 
-- **`signing_round_trip.rs` tests Rust proof API, not raw FFI.**
-  The re-added `rust/shekyl-ffi/tests/signing_round_trip.rs` calls
-  `shekyl_fcmp::proof::{prove, verify}` (Rust-level) rather than the C FFI
-  `shekyl_sign_fcmp_transaction`. This validates the cryptographic round-trip
-  but does not exercise the FFI boundary serialization for signing. A future
-  Gate 4 FFI test should call `shekyl_sign_fcmp_transaction` end-to-end once
-  the test infrastructure supports constructing a full `FcmpSignRequest` JSON
-  blob.
+- **~~`signing_round_trip.rs` tests Rust proof API, not raw FFI.~~** RESOLVED.
+  The test now calls `shekyl_sign_fcmp_transaction` and `shekyl_fcmp_verify`
+  through C-ABI FFI, exercising the full FFI boundary serialization for
+  signing. See `rust/shekyl-ffi/tests/signing_round_trip.rs`.
 
 - **`shekyl-daemon-rpc/src/main.rs` uses `eprintln!` intentionally.**
   The standalone binary is a stub that exits with an error. No logging
@@ -38,12 +34,11 @@ Each item is out of scope for the current PR but worth tracking for future work.
   `eprintln!` is idiomatic for this pattern. No change needed unless the sim
   gains a long-running mode where structured logging is warranted.
 
-- **1 unit test skipped: requires FCMP++ non-coinbase transaction construction.**
-  `JsonSerialization.BulletproofPlusTransaction` is `GTEST_SKIP`'d because
-  `test::make_transaction` builds ring-style source entries incompatible with
-  v3/FCMP++. To restore: rewrite `make_transaction` to construct FCMP++
-  transactions with proper curve-tree witnesses, or build a mock FCMP++ tx
-  fixture.
+- **~~1 unit test skipped: requires FCMP++ non-coinbase transaction construction.~~** RESOLVED.
+  `JsonSerialization.BulletproofPlusTransaction` restored using
+  `make_v3_transaction_stub()` which builds a structurally valid v3
+  transaction for JSON serialization round-trip testing. The old ring-style
+  `make_transaction` was replaced.
 
 - **Genesis TX blobs use zero-filled `enc_amounts`/`outPk`.**
   The regenerated v3 genesis blobs carry all-zero encrypted amounts and
@@ -103,6 +98,7 @@ Each item is out of scope for the current PR but worth tracking for future work.
   the derivation with arbitrary inputs.
 
 - **~~scheme_id binding (`expected_scheme_id` unused).~~** RESOLVED (by design).
+  Deferred to PQC multisig PR; see `PQC_MULTISIG.md`.
   The `verify_transaction_pqc_auth` two-argument overload accepting
   `expected_scheme_id` is never called with a value because FCMP++ hides
   which output is being spent — the verifier cannot look up the creating
@@ -114,23 +110,19 @@ Each item is out of scope for the current PR but worth tracking for future work.
   multisig 2+N*1996 bytes), which is computationally infeasible.
   See `PQC_MULTISIG.md` Attack 1 for the corrected analysis. The
   `expected_scheme_id` parameter may be removed as dead code in V3.1.
+  **Decision on removal deferred to multisig PR.**
 
-- **`on_get_curve_tree_path` RPC reads current tree state, not reference-block state.**
-  `src/rpc/core_rpc_server.cpp` line ~3647 reads `db.get_curve_tree_leaf_count()`
-  (tip state) but returns a `reference_block` that's `FCMP_REFERENCE_BLOCK_MIN_AGE`
-  blocks behind tip. The tree may have grown between `reference_height` and tip,
-  so leaf count and layer hashes returned by the RPC may not match the reference
-  block's `curve_tree_root`. This is benign for large production trees (new
-  leaves only affect the last partial chunk), but is technically incorrect and
-  can cause proof failures in edge cases where the wallet's output is near the
-  tree boundary. Fix: compute `ref_leaf_count` at `reference_height` and cap
-  all reads to that count, with boundary-chunk hash trimming for changed
-  siblings. Target: **V3.1**.
+- **~~`on_get_curve_tree_path` RPC reads current tree state, not reference-block state.~~** RESOLVED.
+  Fixed by computing `ref_leaf_count` at `reference_height` (subtracting
+  leaves drained after reference block via `get_pending_tree_drain_entries`),
+  capping all leaf/layer reads to `ref_leaf_count`, and applying
+  boundary-chunk hash trimming via `shekyl_curve_tree_hash_trim_{selene,helios}`
+  for sibling chunks that grew since the reference block.
 
-- **`docs/AUDIT_SCOPE.md` not yet created.**
-  Referenced by `RELEASE_CHECKLIST.md` and `FCMP_PLUS_PLUS.md`. Must define
-  the scope for the 4-scalar leaf circuit security audit before engaging
-  auditors.
+- **~~`docs/AUDIT_SCOPE.md` not yet created.~~** RESOLVED.
+  `docs/AUDIT_SCOPE.md` created (April 12, 2026). Defines scope for the
+  4-scalar leaf circuit security audit. Referenced by `RELEASE_CHECKLIST.md`
+  and `FCMP_PLUS_PLUS.md`.
 
 ---
 
