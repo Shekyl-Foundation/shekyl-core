@@ -8,7 +8,7 @@ All binaries are placed in `build/release/bin/` (or `build/debug/bin/`).
 | Binary | Purpose |
 |--------|---------|
 | `shekyld` | Full-node daemon (P2P, consensus, RPC) |
-| `shekyl-wallet-cli` | Interactive command-line wallet |
+| `shekyl-cli` | Interactive command-line wallet (Rust) |
 | `shekyl-wallet-rpc` | Headless wallet exposed via JSON-RPC |
 | `shekyl-gen-trusted-multisig` | Offline multisig wallet set generator |
 | `shekyl-gen-ssl-cert` | TLS certificate / key generator for RPC |
@@ -152,142 +152,126 @@ shekyld --prune-blockchain
 
 ---
 
-## 2. `shekyl-wallet-cli` — Interactive Wallet
+## 2. `shekyl-cli` — Interactive CLI Wallet (Rust)
 
-A full-featured command-line wallet supporting transfers, staking, multisig,
-hardware wallets, and message signing.
+A Rust-native interactive CLI wallet built on `shekyl-wallet-rpc` (library
+mode). Uses the same wallet stack as the GUI: wallet2 via FFI for lifecycle
+operations, Rust scanner for reads, and native-sign for transaction
+construction.
+
+Replaces the legacy `shekyl-wallet-cli` (C++ simplewallet), which has been
+removed.
 
 ### Usage
 
 ```
-shekyl-wallet-cli [--wallet-file=<file> | --generate-new-wallet=<file>] [options]
+shekyl-cli [options]
 ```
 
 ### Key options
 
 | Option | Description |
 |--------|-------------|
-| `--wallet-file <file>` | Open an existing wallet |
-| `--generate-new-wallet <file>` | Create a new wallet |
-| `--restore-deterministic-wallet` | Restore from a 25-word mnemonic seed |
-| `--restore-height <height>` | Block height to start scanning from during restore |
-| `--electrum-seed <words>` | Provide the seed on the command line |
-| `--generate-from-view-key <file>` | Create a view-only wallet |
-| `--generate-from-spend-key <file>` | Create a wallet from a spend key |
-| `--generate-from-keys <file>` | Create a wallet from address + view key + spend key |
-| `--generate-from-device <file>` | Create a wallet backed by a hardware device |
-| `--daemon-address <host:port>` | Daemon to connect to |
-| `--daemon-host <host>` | Daemon hostname |
-| `--daemon-port <port>` | Daemon RPC port |
-| `--trusted-daemon` | Trust the daemon (enables advanced queries) |
-| `--untrusted-daemon` | Treat the daemon as untrusted |
-| `--testnet` | Use testnet |
-| `--stagenet` | Use stagenet |
-| `--password <pass>` | Wallet password (avoid on shared systems) |
-| `--password-file <file>` | Read password from a file |
-| `--daemon-ssl <mode>` | SSL mode for daemon connection |
-| `--hw-device <device>` | Hardware wallet device string |
-| `--mnemonic-language <lang>` | Language for the seed phrase |
-| `--subaddress-lookahead <m:n>` | Subaddress lookahead range |
-| `--offline` | Run without connecting to a daemon |
-| `--config-file <file>` | Read options from a config file |
+| `--daemon-address <host:port>` | Daemon to connect to (default `localhost:11028`) |
+| `--daemon-login <user:password>` | Daemon authentication |
+| `--trusted-daemon` | Trust the daemon (skip proof verification) |
+| `--network <type>` | `mainnet`, `testnet`, or `stagenet` |
+| `--wallet-dir <path>` | Directory for wallet files (default `.`) |
+| `--wallet-file <file>` | Open a wallet file on startup |
+| `--proxy <socks5://host:port>` | SOCKS5 proxy with stream isolation |
+| `--daemon-ca-cert <pem>` | PEM CA certificate for self-signed daemon TLS |
+| `--debug` | Show raw error details in stderr or debug log |
 
-### Interactive wallet commands
+### Interactive commands
 
-After opening a wallet, these commands are available at the `[wallet ...]:`
-prompt:
-
-**Balances and addresses**
+**Wallet lifecycle**
 
 | Command | Description |
 |---------|-------------|
-| `balance [detail]` | Display balance (unlocked and total) |
-| `address [new <label> \| all \| <index>]` | Show, create, or list subaddresses |
-| `account [new <label> \| switch <idx> \| all]` | Manage accounts |
-| `integrated_address [payment_id]` | Generate an integrated address |
-| `address_book [add\|delete]` | Manage the address book |
-| `wallet_info` | Wallet type, address, path, daemon |
+| `create <filename> [language]` | Create a new wallet |
+| `open <filename>` | Open an existing wallet |
+| `close` | Close the current wallet (auto-saves) |
+| `restore <file> <seed> [height]` | Restore from mnemonic seed |
+| `save` | Save wallet to disk |
+| `password` | Change wallet password |
 
-**Transfers**
+**Queries**
 
 | Command | Description |
 |---------|-------------|
-| `transfer <addr> <amount> [payment_id]` | Send SKL |
-| `sweep_all <addr>` | Send entire balance to an address |
-| `sweep_account <idx> <addr>` | Send all funds from one account |
-| `sweep_single <key_image> <addr>` | Sweep a specific output |
-| `show_transfers [in\|out\|pending\|failed\|pool]` | Transaction history |
-| `incoming_transfers [available\|unavailable]` | List incoming outputs |
-| `export_transfers [csv]` | Export transaction history |
+| `address [account]` | Show wallet address |
+| `balance` | Show unlocked, locked, and staked balances |
+| `status` | Sync status and daemon info |
+| `transfers [in\|out\|pending\|failed\|all]` | Transaction history |
+| `show_transfer <txid>` | Details for a single transaction |
+| `wallet_info` | Wallet type, address, network |
+
+**Transactions**
+
+| Command | Description |
+|---------|-------------|
+| `transfer <amount> <address> [priority]` | Send SKL |
+| `sweep_all <address>` | Send entire balance |
+| `refresh` | Sync from daemon |
 
 **Staking**
 
 | Command | Description |
 |---------|-------------|
-| `stake <tier> <amount>` | Lock coins for staking (tier 0/1/2) |
-| `unstake` | Release matured staked outputs |
-| `claim_rewards` | Claim accrued staking rewards |
-| `staking_info` | Display current staking status |
+| `stake <tier> [amount]` | Stake to a tier |
+| `unstake [key_image]` | Request unstaking |
+| `claim` | Claim staking rewards |
+| `staking_info` | Current staking status |
+| `chain_health` | Network health via daemon RPC |
 
 **Keys and proofs**
 
 | Command | Description |
 |---------|-------------|
-| `seed` | Display the mnemonic seed |
-| `viewkey` | Display the private view key |
-| `spendkey` | Display the private spend key |
-| `get_tx_key <txid>` | Get a transaction's secret key |
+| `seed` | Display mnemonic seed (with confirmation gate) |
+| `viewkey` | Display private view key |
+| `spendkey` | Display private spend key |
+| `get_tx_key <txid>` | Get transaction secret key |
 | `check_tx_key <txid> <key> <addr>` | Verify a transaction proof |
-| `sign <file>` | Sign a file with the wallet key |
+| `get_tx_proof <txid> <addr> [msg]` | Generate tx proof |
+| `check_tx_proof <txid> <addr> <sig> [msg]` | Verify tx proof |
+| `get_reserve_proof [amount]` | Generate reserve proof |
+| `check_reserve_proof <addr> <sig>` | Verify reserve proof |
+| `sign <file>` | Sign a file |
 | `verify <file> <addr> <sig>` | Verify a signed file |
+| `export_key_images <file>` | Export key images |
+| `import_key_images <file>` | Import key images |
 
-**Mining**
-
-| Command | Description |
-|---------|-------------|
-| `start_mining [threads]` | Start mining through the daemon |
-| `stop_mining` | Stop mining |
-
-**Maintenance**
+**Offline signing**
 
 | Command | Description |
 |---------|-------------|
-| `refresh` | Rescan for new transactions |
-| `rescan_bc [hard]` | Full blockchain rescan |
-| `bc_height` | Current blockchain height |
-| `fee` | Current fee estimate |
-| `status` | Wallet and daemon sync status |
-| `save` | Save the wallet to disk |
-| `password <new>` | Change the wallet password |
-| `set <option> <value>` | Change wallet settings |
-| `help [command]` | Show help for a command |
-| `exit` | Close the wallet |
+| `describe_transfer <file>` | Describe an unsigned transaction |
+| `sign_transfer <file>` | Sign an unsigned transaction |
+| `submit_transfer <file>` | Submit a signed transaction |
 
-**Multisig (PQC-only via `scheme_id = 2`)**
+**Other**
 
-Classical Monero-style multisig commands (`prepare_multisig`, `make_multisig`,
-`exchange_multisig_keys`, `export_multisig_info`, `import_multisig_info`,
-`sign_multisig`, `submit_multisig`) have been removed. All multisig on Shekyl
-NG uses PQC-only authorization via `scheme_id = 2` in the `pqc_auth` layer.
-See `docs/PQC_MULTISIG.md` for the file-based signing protocol.
+| Command | Description |
+|---------|-------------|
+| `rescan` | Full blockchain rescan (requires confirmation) |
+| `version` | Show version |
+| `help [command]` | Show help |
+| `exit` / `quit` | Close wallet and exit |
 
 ### Examples
 
 ```bash
-# Create a new wallet
-shekyl-wallet-cli --generate-new-wallet ~/wallets/main
+# Create a new wallet interactively
+shekyl-cli --wallet-dir ~/wallets
 
 # Open an existing wallet against a testnet daemon
-shekyl-wallet-cli --testnet --wallet-file ~/wallets/testnet \
-                  --daemon-address 127.0.0.1:12029
+shekyl-cli --network testnet --wallet-file ~/wallets/testnet \
+           --daemon-address 127.0.0.1:12029
 
-# Restore a wallet from seed starting at a specific height
-shekyl-wallet-cli --restore-deterministic-wallet \
-                  --restore-height 100000 \
-                  --generate-new-wallet ~/wallets/restored
-
-# Non-interactive: get balance and exit
-echo "balance" | shekyl-wallet-cli --wallet-file ~/wallets/main --password "pass"
+# Use a Tor proxy for stream-isolated daemon connection
+shekyl-cli --proxy socks5://127.0.0.1:9050 \
+           --daemon-address mynode.onion:11028
 ```
 
 ---

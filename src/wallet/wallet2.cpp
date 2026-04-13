@@ -3805,12 +3805,12 @@ void wallet2::process_unconfirmed_transfer(bool incremental, const crypto::hash 
 }
 //----------------------------------------------------------------------------------------------------
 // This public method is typically called to make sure that the wallet's pool state is up-to-date by
-// clients like simplewallet and the RPC daemon. Before incremental update this was the same method
+// clients like the CLI wallet and the RPC daemon. Before incremental update this was the same method
 // that 'refresh' also used, but now it's more complicated because for the time being we support
 // the "old" and the "new" way of updating the pool and because only the 'getblocks' call supports
 // incremental update but we don't want any blocks here.
 //
-// simplewallet does NOT update the pool info during automatic refresh to avoid disturbing interactive
+// The CLI wallet does NOT update the pool info during automatic refresh to avoid disturbing interactive
 // messages and prompts. When it finally calls this method here "to catch up" so to say we can't use
 // incremental update anymore, because with that we might miss some txs altogether.
 void wallet2::update_pool_state(std::vector<std::tuple<cryptonote::transaction, crypto::hash, bool>> &process_txs, bool refreshed, bool try_incremental)
@@ -4072,7 +4072,7 @@ void wallet2::fast_refresh(uint64_t stop_height, uint64_t &blocks_start_height, 
         m_blockchain.push_back(bl_id);
 
         if (0 != m_callback)
-        { // FIXME: this isn't right, but simplewallet just logs that we got a block.
+        { // FIXME: this isn't right, but the callback just logs that we got a block.
           cryptonote::block dummy;
           m_callback->on_new_block(current_index, dummy);
         }

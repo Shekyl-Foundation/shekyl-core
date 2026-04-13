@@ -58,7 +58,7 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 
 | Item | Description |
 |------|-------------|
-| **Shekyl-specific** | CONTRIBUTING and i18n docs have been updated to reference Shekyl maintainers, project channels, and binary names (e.g. `shekyl-wallet-cli`). |
+| **Shekyl-specific** | CONTRIBUTING and i18n docs have been updated to reference Shekyl maintainers, project channels, and binary names (e.g. `shekyl-cli`). |
 
 ### 1.9 Other docs (PORTABLE_STORAGE, INSTALLATION_GUIDE, PUBLIC_NARRATIVE_FAQ)
 
@@ -83,7 +83,7 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 - `boost::variant` → `std::variant` (complete). Rewrote `serialization/variant.h` to use `if constexpr` recursion and `std::visit` (eliminated Boost.MPL dependency). Changed all 5 variant typedefs (`txin_v`, `txout_target_v`, `tx_extra_field`, `transfer_view::block`, Trezor `rsig_v`). Added local Boost.Serialization shim for `std::variant` in `cryptonote_boost_serialization.h`. Mechanical replacements across ~40 files in `src/` and `tests/` (~100+ sites). Replaced `boost::mpl::bool_` with `std::bool_constant` in archive headers.
 - `boost::algorithm::string` → `tools::string_util` (trim, to_lower, iequals, join).
 - `boost::format` → `snprintf` / stream output / string concat in `util.cpp`, `message_store.cpp`, `gen_ssl_cert.cpp`, `gen_multisig.cpp`, `wallet2.cpp`, `wallet_rpc_server.cpp`, `wallet_args.cpp`.
-- `boost::regex` → `std::regex` in `simplewallet.cpp`, `wallet_manager.cpp`.
+- `boost::regex` → `std::regex` in `wallet_manager.cpp`. (`simplewallet.cpp` has been deleted.)
 - `boost::mutex` / `boost::lock_guard` / `boost::unique_lock` / `boost::condition_variable` → `std::mutex` / `std::lock_guard` / `std::unique_lock` / `std::condition_variable` in `util.h`, `util.cpp`, `threadpool.h`, `threadpool.cpp`, `rpc_payment.h`, `rpc_payment.cpp`.
 - `boost::filesystem` → `std::filesystem` in `blockchain_export.cpp`, `blockchain_import.cpp`, `cn_deserialize.cpp`, `util.cpp`, `bootstrap_file.h`/`.cpp`, `blocksdat_file.h`/`.cpp`, `wallet_manager.cpp`, `wallet_rpc_server.cpp`, `core_rpc_server.cpp`, `wallet_args.cpp`.
 - `boost::chrono`/`boost::this_thread` → `std::chrono`/`std::this_thread` in `windows_service.cpp` (daemonizer).
@@ -110,7 +110,7 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 | **Spirit parser** | `http_auth.cpp` | Heavyweight compile dep; small grammar, but needs manual rewrite |
 | **Multiprecision** | `difficulty.h`, `int-util.cpp` | Consensus-critical 128-bit arithmetic; evaluate `__uint128_t` |
 | **Filesystem (net_ssl)** | `net_ssl.cpp` | epee SSL layer with permissions API coupling |
-| **boost::format (simplewallet)** | `simplewallet.cpp` | 106 translated format strings; migration needs i18n audit |
+| ~~**boost::format (simplewallet)**~~ | ~~`simplewallet.cpp`~~ | Deleted -- simplewallet has been replaced by `shekyl-cli` (Rust) |
 | **boost::split (token_compress)** | `util.cpp` (vercmp, word_wrap) | `token_compress_on` has no direct std equivalent |
 | **boost::regex (network parsers)** | `http_base.cpp`, `http_client.h`, `wallet_rpc_server.cpp` | Parse untrusted network input; edge-case semantics must be verified |
 | **boost::posix_time / date_time** | `connection_context.h`, `block_queue.h`, `net_node.h` | Types cross P2P protocol boundaries; must migrate as a coordinated unit |

@@ -682,7 +682,7 @@ and its home is the data directory specified in the [example
 config](utils/conf/monerod.conf).
 
 If you're on Mac, you may need to add the `--max-concurrency 1` option to
-shekyl-wallet-cli, and possibly shekyld, if you get crashes refreshing.
+shekyl-cli, and possibly shekyld, if you get crashes refreshing.
 
 ## Internationalization
 

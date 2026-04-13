@@ -114,7 +114,7 @@ Tested on testnet (2026-04-02) with dual-server mode. Test data saved to
 
 Before removing the epee HTTP listener entirely:
 
-1. **Wallet sync test** -- connect `shekyl-wallet-cli` to Axum-only RPC,
+1. **Wallet sync test** -- connect `shekyl-cli` to Axum-only RPC,
    verify block sync via `/getblocks.bin` and curve tree path fetch via `/get_curve_tree_path`
 2. **Standard port binding** -- when Axum is sole server, bind to 11029/12029/13029
    (not +10000) so existing clients and config files work unchanged

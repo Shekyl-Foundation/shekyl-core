@@ -124,5 +124,5 @@ jobs:
       with:
         name: ${{ matrix.toolchain.name }}
         path: |
-          build/${{ matrix.toolchain.host }}/release/bin/shekyl-wallet-cli*
+          build/${{ matrix.toolchain.host }}/release/bin/shekyl-cli*
           build/${{ matrix.toolchain.host }}/release/bin/shekyld*

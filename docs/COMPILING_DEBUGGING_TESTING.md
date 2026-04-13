@@ -361,7 +361,7 @@ cmake --build build/testnet-release --target daemon -- -j"$(nproc)"
 Wallet CLI:
 
 ```bash
-cmake --build build/testnet-release --target simplewallet -- -j"$(nproc)"
+cargo build -p shekyl-cli --release
 ```
 
 Wallet RPC:

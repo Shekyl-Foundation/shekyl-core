@@ -125,7 +125,7 @@ jobs:
             STAGE="$(pwd)/stage-deb-amd64"
             mkdir -p "$STAGE/usr/local/bin"
             cp "$BIN_X86"/shekyld "$STAGE/usr/local/bin/"
-            cp "$BIN_X86"/shekyl-wallet-cli "$STAGE/usr/local/bin/" 2>/dev/null || true
+            cp "$BIN_X86"/shekyl-cli "$STAGE/usr/local/bin/" 2>/dev/null || true
             cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE/usr/local/bin/" 2>/dev/null || true
             fpm -s dir -t deb \
               -p "$RELEASE/shekyl_${VERSION}_amd64.deb" \
@@ -141,7 +141,7 @@ jobs:
             STAGE_RPM="$(pwd)/stage-rpm-x86_64"
             mkdir -p "$STAGE_RPM/usr/local/bin"
             cp "$BIN_X86"/shekyld "$STAGE_RPM/usr/local/bin/"
-            cp "$BIN_X86"/shekyl-wallet-cli "$STAGE_RPM/usr/local/bin/" 2>/dev/null || true
+            cp "$BIN_X86"/shekyl-cli "$STAGE_RPM/usr/local/bin/" 2>/dev/null || true
             cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/" 2>/dev/null || true
             fpm -s dir -t rpm \
               -p "$RELEASE/shekyl-${VERSION}-1.x86_64.rpm" \
@@ -166,7 +166,7 @@ jobs:
             STAGE="$(pwd)/stage-deb-arm64"
             mkdir -p "$STAGE/usr/local/bin"
             cp "$BIN_ARM"/shekyld "$STAGE/usr/local/bin/"
-            cp "$BIN_ARM"/shekyl-wallet-cli "$STAGE/usr/local/bin/" 2>/dev/null || true
+            cp "$BIN_ARM"/shekyl-cli "$STAGE/usr/local/bin/" 2>/dev/null || true
             cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE/usr/local/bin/" 2>/dev/null || true
             fpm -s dir -t deb \
               -p "$RELEASE/shekyl_${VERSION}_arm64.deb" \
@@ -182,7 +182,7 @@ jobs:
             STAGE_RPM="$(pwd)/stage-rpm-aarch64"
             mkdir -p "$STAGE_RPM/usr/local/bin"
             cp "$BIN_ARM"/shekyld "$STAGE_RPM/usr/local/bin/"
-            cp "$BIN_ARM"/shekyl-wallet-cli "$STAGE_RPM/usr/local/bin/" 2>/dev/null || true
+            cp "$BIN_ARM"/shekyl-cli "$STAGE_RPM/usr/local/bin/" 2>/dev/null || true
             cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/" 2>/dev/null || true
             fpm -s dir -t rpm \
               -p "$RELEASE/shekyl-${VERSION}-1.aarch64.rpm" \

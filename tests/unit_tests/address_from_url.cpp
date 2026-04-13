@@ -32,7 +32,6 @@
 
 #include "wallet/wallet2.h"
 #include "common/dns_utils.h"
-#include "simplewallet/simplewallet.h"
 #include <string>
 
 TEST(AddressFromTXT, Success)

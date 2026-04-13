@@ -160,7 +160,7 @@ For 32-bit builds use `make release-static-win32`.
 The current CMake targets produce:
 
 - daemon: `shekyld`
-- CLI wallet: `shekyl-wallet-cli`
+- CLI wallet: `shekyl-cli`
 - wallet RPC: `shekyl-wallet-rpc`
 
 Typical output location:
@@ -170,7 +170,7 @@ Typical output location:
 For a common release flow:
 
 - `build/release/bin/shekyld`
-- `build/release/bin/shekyl-wallet-cli`
+- `build/release/bin/shekyl-cli`
 - `build/release/bin/shekyl-wallet-rpc`
 
 Note: some legacy or upstream docs/config examples may still use older daemon/wallet names; use Shekyl names above for this repository.
@@ -184,7 +184,7 @@ From your build output directory:
 ```bash
 ./shekyld --version
 ./shekyld --help
-./shekyl-wallet-cli --help
+./shekyl-cli --help
 ./shekyl-wallet-rpc --help
 ```
 

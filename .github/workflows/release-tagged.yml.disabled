@@ -65,7 +65,7 @@ jobs:
       - name: Smoke check binaries
         run: |
           ./build/release/bin/shekyld --version
-          ./build/release/bin/shekyl-wallet-cli --version || true
+          ./build/release/bin/shekyl-cli --version || true
           ./build/release/bin/shekyl-wallet-rpc --version || true
 
       - name: Extract version from tag
@@ -77,7 +77,7 @@ jobs:
           RELEASE_DIR="shekyl-${GITHUB_REF_NAME}-linux-x86_64"
           mkdir -p "${RELEASE_DIR}"
           cp build/release/bin/shekyld "${RELEASE_DIR}/"
-          cp build/release/bin/shekyl-wallet-cli "${RELEASE_DIR}/" 2>/dev/null || true
+          cp build/release/bin/shekyl-cli "${RELEASE_DIR}/" 2>/dev/null || true
           cp build/release/bin/shekyl-wallet-rpc "${RELEASE_DIR}/" 2>/dev/null || true
           cp build/release/bin/shekyl-gen-trusted-multisig "${RELEASE_DIR}/" 2>/dev/null || true
           cp build/release/bin/shekyl-blockchain-import "${RELEASE_DIR}/" 2>/dev/null || true
@@ -90,7 +90,7 @@ jobs:
           STAGE="$(pwd)/staging-deb"
           mkdir -p "${STAGE}/usr/local/bin"
           cp build/release/bin/shekyld "${STAGE}/usr/local/bin/"
-          cp build/release/bin/shekyl-wallet-cli "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          cp build/release/bin/shekyl-cli "${STAGE}/usr/local/bin/" 2>/dev/null || true
           cp build/release/bin/shekyl-wallet-rpc "${STAGE}/usr/local/bin/" 2>/dev/null || true
           fpm -s dir -t deb \
             --name shekyl \
@@ -111,7 +111,7 @@ jobs:
           STAGE="$(pwd)/staging-rpm"
           mkdir -p "${STAGE}/usr/local/bin"
           cp build/release/bin/shekyld "${STAGE}/usr/local/bin/"
-          cp build/release/bin/shekyl-wallet-cli "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          cp build/release/bin/shekyl-cli "${STAGE}/usr/local/bin/" 2>/dev/null || true
           cp build/release/bin/shekyl-wallet-rpc "${STAGE}/usr/local/bin/" 2>/dev/null || true
           fpm -s dir -t rpm \
             --name shekyl \
@@ -193,7 +193,7 @@ jobs:
           RELEASE_DIR="shekyl-${GITHUB_REF_NAME}-win-x64"
           mkdir -p "${RELEASE_DIR}"
           cp build/x86_64-w64-mingw32/release/bin/shekyld.exe "${RELEASE_DIR}/" 2>/dev/null || true
-          cp build/x86_64-w64-mingw32/release/bin/shekyl-wallet-cli.exe "${RELEASE_DIR}/" 2>/dev/null || true
+          cp build/x86_64-w64-mingw32/release/bin/shekyl-cli.exe "${RELEASE_DIR}/" 2>/dev/null || true
           cp build/x86_64-w64-mingw32/release/bin/shekyl-wallet-rpc.exe "${RELEASE_DIR}/" 2>/dev/null || true
           cp build/x86_64-w64-mingw32/release/bin/shekyl-gen-trusted-multisig.exe "${RELEASE_DIR}/" 2>/dev/null || true
           apt -y install zip
@@ -312,7 +312,7 @@ jobs:
           RELEASE_DIR="shekyl-${GITHUB_REF_NAME}-${{ matrix.platform.artifact_suffix }}"
           BIN_DIR="build/${{ matrix.platform.host }}/release/bin"
           mkdir -p "${RELEASE_DIR}"
-          for bin in shekyld shekyl-wallet-cli shekyl-wallet-rpc \
+          for bin in shekyld shekyl-cli shekyl-wallet-rpc \
                      shekyl-gen-trusted-multisig shekyl-blockchain-import \
                      shekyl-blockchain-export; do
             cp "${BIN_DIR}/${bin}" "${RELEASE_DIR}/" 2>/dev/null || true
@@ -333,7 +333,7 @@ jobs:
           STAGE="$(pwd)/staging-deb"
           mkdir -p "${STAGE}/usr/local/bin"
           cp "${BIN_DIR}/shekyld" "${STAGE}/usr/local/bin/"
-          cp "${BIN_DIR}/shekyl-wallet-cli" "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          cp "${BIN_DIR}/shekyl-cli" "${STAGE}/usr/local/bin/" 2>/dev/null || true
           cp "${BIN_DIR}/shekyl-wallet-rpc" "${STAGE}/usr/local/bin/" 2>/dev/null || true
           fpm -s dir -t deb \
             --name shekyl \
@@ -356,7 +356,7 @@ jobs:
           STAGE="$(pwd)/staging-rpm"
           mkdir -p "${STAGE}/usr/local/bin"
           cp "${BIN_DIR}/shekyld" "${STAGE}/usr/local/bin/"
-          cp "${BIN_DIR}/shekyl-wallet-cli" "${STAGE}/usr/local/bin/" 2>/dev/null || true
+          cp "${BIN_DIR}/shekyl-cli" "${STAGE}/usr/local/bin/" 2>/dev/null || true
           cp "${BIN_DIR}/shekyl-wallet-rpc" "${STAGE}/usr/local/bin/" 2>/dev/null || true
           fpm -s dir -t rpm \
             --name shekyl \

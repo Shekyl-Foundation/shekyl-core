@@ -403,7 +403,7 @@ namespace tools
     tools::wallet2::BackgroundMiningSetupType setup = m_wallet->setup_background_mining();
     if (setup == tools::wallet2::BackgroundMiningNo)
     {
-      MLOG_RED(el::Level::Warning, "Background mining not enabled. Run \"set setup-background-mining 1\" in shekyl-wallet-cli to change.");
+      MLOG_RED(el::Level::Warning, "Background mining not enabled. Run \"set setup-background-mining 1\" in shekyl-cli to change.");
       return;
     }
 
@@ -429,7 +429,7 @@ namespace tools
       MINFO("The daemon is not set up to background mine.");
       MINFO("With background mining enabled, the daemon will mine when idle and not on battery.");
       MINFO("Enabling this supports the network you are using, and makes you eligible for receiving new shekyl");
-      MINFO("Set setup-background-mining to 1 in shekyl-wallet-cli to change.");
+      MINFO("Set setup-background-mining to 1 in shekyl-cli to change.");
       return;
     }
 

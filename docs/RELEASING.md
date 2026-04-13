@@ -113,7 +113,7 @@ Each release produces these files (all binaries are Gitian reproducible builds):
 ## Linux Package Details
 
 The `.deb` and `.rpm` packages are available for both x86_64 and ARM64:
-- Install `shekyld`, `shekyl-wallet-cli`, and `shekyl-wallet-rpc` to `/usr/local/bin/`
+- Install `shekyld`, `shekyl-cli`, and `shekyl-wallet-rpc` to `/usr/local/bin/`
 - Include a systemd service unit for `shekyld`
 - After install: `sudo systemctl enable --now shekyld`
 - Data directory: `/var/lib/shekyl`

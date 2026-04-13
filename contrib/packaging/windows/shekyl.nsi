@@ -45,7 +45,7 @@ Section "Shekyl Core (required)" SecCore
   SetOutPath "$INSTDIR"
 
   File "${BIN_DIR}\shekyld.exe"
-  File /nonfatal "${BIN_DIR}\shekyl-wallet-cli.exe"
+  File /nonfatal "${BIN_DIR}\shekyl-cli.exe"
   File /nonfatal "${BIN_DIR}\shekyl-wallet-rpc.exe"
   File /nonfatal "${BIN_DIR}\shekyl-gen-trusted-multisig.exe"
 
@@ -80,7 +80,7 @@ SectionEnd
 Section "Start Menu Shortcuts" SecShortcuts
   CreateDirectory "$SMPROGRAMS\Shekyl"
   CreateShortCut "$SMPROGRAMS\Shekyl\Shekyl Daemon.lnk" "$INSTDIR\shekyld.exe"
-  CreateShortCut "$SMPROGRAMS\Shekyl\Shekyl Wallet CLI.lnk" "$INSTDIR\shekyl-wallet-cli.exe"
+  CreateShortCut "$SMPROGRAMS\Shekyl\Shekyl CLI Wallet.lnk" "$INSTDIR\shekyl-cli.exe"
   CreateShortCut "$SMPROGRAMS\Shekyl\Uninstall.lnk" "$INSTDIR\uninstall.exe"
 SectionEnd
 
@@ -92,7 +92,7 @@ SectionEnd
 
 Section "Uninstall"
   Delete "$INSTDIR\shekyld.exe"
-  Delete "$INSTDIR\shekyl-wallet-cli.exe"
+  Delete "$INSTDIR\shekyl-cli.exe"
   Delete "$INSTDIR\shekyl-wallet-rpc.exe"
   Delete "$INSTDIR\shekyl-gen-trusted-multisig.exe"
   Delete "$INSTDIR\uninstall.exe"

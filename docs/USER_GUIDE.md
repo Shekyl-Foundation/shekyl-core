@@ -12,7 +12,7 @@ cross-reference equivalent features.
 
 1. [Introduction and Prerequisites](#introduction-and-prerequisites)
 2. [Running a Node (shekyld)](#running-a-node-shekyld)
-3. [Wallet Basics (shekyl-wallet-cli)](#wallet-basics-shekyl-wallet-cli)
+3. [Wallet Basics (shekyl-cli)](#wallet-basics-shekyl-cli)
 4. [Sending and Receiving](#sending-and-receiving)
 5. [Staking](#staking)
 6. [Mining](#mining)
@@ -57,7 +57,7 @@ Use the CLI tools when you want to:
 | Binary | Purpose |
 |--------|---------|
 | `shekyld` | Full node daemon -- connects to the network, syncs the chain, relays transactions |
-| `shekyl-wallet-cli` | Interactive command-line wallet |
+| `shekyl-cli` | Interactive command-line wallet |
 | `shekyl-wallet-rpc` | Wallet RPC server for programmatic access |
 | `shekyl-gen-ssl-cert` | Generate self-signed SSL certificates for RPC |
 | `shekyl-blockchain-import` | Import blockchain from a file |
@@ -249,12 +249,12 @@ Type `help` to list all commands. The most useful ones, grouped by purpose:
 
 ---
 
-## Wallet Basics (`shekyl-wallet-cli`)
+## Wallet Basics (`shekyl-cli`)
 
 ### Creating a new wallet
 
 ```bash
-./shekyl-wallet-cli --generate-new-wallet /path/to/mywallet
+./shekyl-cli --generate-new-wallet /path/to/mywallet
 ```
 
 You will be prompted for a password and a language for your mnemonic seed.
@@ -268,7 +268,7 @@ Your wallet is automatically a V3 wallet with full post-quantum key material
 ### Restoring from a seed phrase
 
 ```bash
-./shekyl-wallet-cli --restore-deterministic-wallet \
+./shekyl-cli --restore-deterministic-wallet \
     --generate-new-wallet /path/to/restored \
     --restore-height 100000
 ```
@@ -290,7 +290,7 @@ For advanced recovery, you can restore from individual keys:
 ### Opening an existing wallet
 
 ```bash
-./shekyl-wallet-cli --wallet-file /path/to/mywallet
+./shekyl-cli --wallet-file /path/to/mywallet
 ```
 
 ### Connecting to a daemon
@@ -299,7 +299,7 @@ By default, the wallet connects to `localhost:11029`. To connect to a
 different daemon:
 
 ```bash
-./shekyl-wallet-cli --wallet-file /path/to/mywallet \
+./shekyl-cli --wallet-file /path/to/mywallet \
     --daemon-address 192.168.1.10:11029 \
     --trusted-daemon
 ```
@@ -311,7 +311,7 @@ precautions to avoid leaking information.
 To connect through a SOCKS proxy (e.g. Tor):
 
 ```bash
-./shekyl-wallet-cli --wallet-file /path/to/mywallet \
+./shekyl-cli --wallet-file /path/to/mywallet \
     --proxy socks4a:127.0.0.1:9050 \
     --daemon-address <onion-address>:11029
 ```
@@ -682,7 +682,7 @@ For I2P:
 ### Wallet through Tor
 
 ```bash
-./shekyl-wallet-cli --wallet-file /path/to/wallet \
+./shekyl-cli --wallet-file /path/to/wallet \
     --proxy socks4a:127.0.0.1:9050 \
     --daemon-address <onion-address>:11029
 ```
@@ -716,7 +716,7 @@ Both the daemon and wallet must be started with the same network flag:
 
 ```bash
 ./shekyld --testnet
-./shekyl-wallet-cli --testnet --wallet-file /path/to/testnet-wallet
+./shekyl-cli --testnet --wallet-file /path/to/testnet-wallet
 ```
 
 To switch the daemon to a different network inside the wallet at runtime:
@@ -932,7 +932,7 @@ key images from your full wallet and import them:
 For additional brute-force resistance when your wallet file might be exposed:
 
 ```bash
-./shekyl-wallet-cli --wallet-file /path/to/wallet --kdf-rounds 10000
+./shekyl-cli --wallet-file /path/to/wallet --kdf-rounds 10000
 ```
 
 Higher values slow down wallet opening but make password cracking much harder.
@@ -976,7 +976,7 @@ Higher values slow down wallet opening but make password cracking much harder.
 If the wallet warns about a daemon version mismatch:
 
 ```bash
-./shekyl-wallet-cli --allow-mismatched-daemon-version --wallet-file /path/to/wallet
+./shekyl-cli --allow-mismatched-daemon-version --wallet-file /path/to/wallet
 ```
 
 This should only be used temporarily while updating.
@@ -1040,7 +1040,7 @@ Wallet logs are written to the same directory as the wallet file, with a
   [USER_GUIDE.md](https://github.com/Shekyl-Foundation/shekyl-gui-wallet/blob/main/docs/USER_GUIDE.md)
   covers the same features from the graphical interface.
 - **Source code:** [shekyl-core on GitHub](https://github.com/Shekyl-Foundation/shekyl-core)
-- **Built-in help:** Run `shekyld --help`, `shekyl-wallet-cli --help`, or
+- **Built-in help:** Run `shekyld --help`, `shekyl-cli --help`, or
   type `help` inside any interactive console.
 
 ---

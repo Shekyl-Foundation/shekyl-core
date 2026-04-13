@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### 🗑️ Removed
+
+- **`simplewallet` (shekyl-wallet-cli) deleted.** The 9,126-line C++ interactive
+  wallet REPL has been removed. Its replacement, `shekyl-cli` (Rust), was
+  already at full parity for all actively-used commands. Removed
+  `src/simplewallet/` directory, CMake target, CI artifact references, and
+  Windows installer entries. The `translations/` directory retains
+  simplewallet-era `.ts` strings as dead entries within shared i18n files.
+
+- **`wallet/api/` C++ wrapper layer deleted.** The 3,909-line Monero-era C++
+  wrapper (`wallet2_api.h` and 10 implementation files) had no production
+  consumer -- the GUI uses `wallet2_ffi` via `shekyl-wallet-rpc` (Rust). Removed
+  `src/wallet/api/` directory, `tests/libwallet_api_tests/`, and the
+  `add_subdirectory(api)` entry from `src/wallet/CMakeLists.txt`. Cleaned up
+  stale `#include "wallet/api/*.h"` references in `object_sizes.cpp` and
+  `address_from_url.cpp`.
+
 ### 🐛 Fixed
 
 - **Non-exhaustive `TxBuilderError` match in FFI error-code mapping.**
