@@ -30,28 +30,32 @@ fuzz_target!(|data: &[u8]| {
         Err(_) => return,
     };
 
-    let od = match construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, amount, output_index) {
+    let od = match construct_output(
+        &tx_key,
+        &pk.x25519,
+        &pk.ml_kem,
+        &spend_key,
+        amount,
+        output_index,
+    ) {
         Ok(od) => od,
         Err(_) => return,
     };
 
-    // Round-trip via scan_output: valid keypair + freshly constructed output
-    // should always succeed or fail gracefully
     let _ = scan_output(
         &sk.x25519,
         &sk.ml_kem,
-        &od.kem_ct.x25519,
-        &od.kem_ct.ml_kem,
+        &od.kem_ciphertext_x25519,
+        &od.kem_ciphertext_ml_kem,
         &od.output_key,
         &od.commitment,
         &od.enc_amount,
         od.amount_tag,
         od.view_tag_x25519,
-        output_index,
         &spend_key,
+        output_index,
     );
 
-    // Feed corrupted enc_amount to scan_output — must not panic
     if data.len() >= 48 + 8 {
         let mut bad_enc = od.enc_amount;
         for (i, &b) in data[48..].iter().take(8).enumerate() {
@@ -60,30 +64,29 @@ fuzz_target!(|data: &[u8]| {
         let _ = scan_output(
             &sk.x25519,
             &sk.ml_kem,
-            &od.kem_ct.x25519,
-            &od.kem_ct.ml_kem,
+            &od.kem_ciphertext_x25519,
+            &od.kem_ciphertext_ml_kem,
             &od.output_key,
             &od.commitment,
             &bad_enc,
             od.amount_tag,
             od.view_tag_x25519,
-            output_index,
             &spend_key,
+            output_index,
         );
     }
 
-    // Feed wrong amount_tag — must not panic
     let _ = scan_output(
         &sk.x25519,
         &sk.ml_kem,
-        &od.kem_ct.x25519,
-        &od.kem_ct.ml_kem,
+        &od.kem_ciphertext_x25519,
+        &od.kem_ciphertext_ml_kem,
         &od.output_key,
         &od.commitment,
         &od.enc_amount,
         od.amount_tag.wrapping_add(1),
         od.view_tag_x25519,
-        output_index,
         &spend_key,
+        output_index,
     );
 });
