@@ -45,9 +45,10 @@ pub fn clamp(value: u64, lo: u64, hi: u64) -> u64 {
 
 /// Multiply two u64 values and divide by SCALE, using u128 intermediary to avoid overflow.
 #[inline]
+#[allow(clippy::cast_possible_truncation)]
 pub fn mul_scale(a: u64, b: u64) -> u64 {
-    let product = (a as u128) * (b as u128);
-    (product / SCALE as u128) as u64
+    let product = u128::from(a) * u128::from(b);
+    (product / u128::from(SCALE)) as u64
 }
 
 /// Integer square root via Newton's method (floor).
@@ -56,7 +57,7 @@ pub fn isqrt(n: u64) -> u64 {
         return 0;
     }
     let mut x = n;
-    let mut y = (x + 1) / 2;
+    let mut y = x.div_ceil(2);
     while y < x {
         x = y;
         y = (x + n / x) / 2;

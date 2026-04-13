@@ -42,6 +42,7 @@ pub struct BurnSplit {
 ///
 /// # Returns
 /// Burn percentage in fixed-point SCALE units (e.g. 400_000 = 40%).
+#[allow(clippy::cast_possible_truncation)]
 pub fn calc_burn_pct(
     tx_volume: u64,
     tx_baseline: u64,
@@ -57,13 +58,13 @@ pub fn calc_burn_pct(
 
     // sqrt(tx_volume / tx_baseline) scaled to SCALE
     // = sqrt(tx_volume * SCALE^2 / tx_baseline) but we do it step by step
-    let volume_ratio_scaled = (tx_volume as u128 * SCALE as u128 * SCALE as u128
-        / tx_baseline as u128) as u64;
+    let volume_ratio_scaled = (u128::from(tx_volume) * u128::from(SCALE) * u128::from(SCALE)
+        / u128::from(tx_baseline)) as u64;
     let sqrt_volume = isqrt(volume_ratio_scaled); // result is in SCALE units
 
     // circulating_supply / total_supply scaled to SCALE
     let supply_ratio =
-        (circulating_supply as u128 * SCALE as u128 / total_supply as u128) as u64;
+        (u128::from(circulating_supply) * u128::from(SCALE) / u128::from(total_supply)) as u64;
 
     // (1 + stake_ratio) in SCALE units
     let stake_factor = SCALE.saturating_add(stake_ratio);
@@ -83,11 +84,7 @@ pub fn calc_burn_pct(
 /// * `total_fees` - Sum of all tx fees in the block (atomic units)
 /// * `burn_pct` - Burn percentage (fixed-point SCALE)
 /// * `staker_pool_share` - Fraction of burn redirected to stakers (fixed-point SCALE)
-pub fn compute_burn_split(
-    total_fees: u64,
-    burn_pct: u64,
-    staker_pool_share: u64,
-) -> BurnSplit {
+pub fn compute_burn_split(total_fees: u64, burn_pct: u64, staker_pool_share: u64) -> BurnSplit {
     let burned_amount = mul_scale(total_fees, burn_pct);
     let staker_pool_amount = mul_scale(burned_amount, staker_pool_share);
     let actually_destroyed = burned_amount.saturating_sub(staker_pool_amount);
@@ -142,8 +139,16 @@ mod tests {
         let supply = 4_294_967_296_000_000_000u64;
         let circulating = supply; // 100% circulating
         let stake_ratio = 500_000; // 50%
-        // Extreme volume: 10x baseline
-        let burn = calc_burn_pct(1000, 100, circulating, supply, stake_ratio, 400_000, 900_000);
+                                   // Extreme volume: 10x baseline
+        let burn = calc_burn_pct(
+            1000,
+            100,
+            circulating,
+            supply,
+            stake_ratio,
+            400_000,
+            900_000,
+        );
         assert_eq!(burn, 900_000); // capped at 90%
     }
 
@@ -154,9 +159,9 @@ mod tests {
         let staker_share = 200_000; // 20%
         let split = compute_burn_split(total_fees, burn_pct, staker_share);
 
-        assert_eq!(split.miner_fee_income, 600_000_000);     // 60% of fees
-        assert_eq!(split.staker_pool_amount, 80_000_000);     // 20% of 40%
-        assert_eq!(split.actually_destroyed, 320_000_000);     // 80% of 40%
+        assert_eq!(split.miner_fee_income, 600_000_000); // 60% of fees
+        assert_eq!(split.staker_pool_amount, 80_000_000); // 20% of 40%
+        assert_eq!(split.actually_destroyed, 320_000_000); // 80% of 40%
         assert_eq!(
             split.miner_fee_income + split.staker_pool_amount + split.actually_destroyed,
             total_fees

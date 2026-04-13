@@ -56,7 +56,9 @@ impl FromStr for Network {
             "mainnet" => Ok(Network::Mainnet),
             "testnet" => Ok(Network::Testnet),
             "stagenet" => Ok(Network::Stagenet),
-            _ => Err(format!("unknown network '{s}' -- expected mainnet, testnet, or stagenet")),
+            _ => Err(format!(
+                "unknown network '{s}' -- expected mainnet, testnet, or stagenet"
+            )),
         }
     }
 }

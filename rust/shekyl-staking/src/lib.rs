@@ -4,15 +4,15 @@
 
 #![deny(unsafe_code)]
 
-pub mod tiers;
+pub mod error;
 pub mod registry;
 pub mod rewards;
-pub mod error;
+pub mod tiers;
 
 pub use error::StakingError;
-pub use tiers::{StakeTier, TIERS, MAX_CLAIM_RANGE};
 pub use registry::{StakeEntry, StakeRegistry};
 pub use rewards::distribute_staker_rewards;
+pub use tiers::{StakeTier, MAX_CLAIM_RANGE, TIERS};
 
 #[cfg(test)]
 mod property_tests;

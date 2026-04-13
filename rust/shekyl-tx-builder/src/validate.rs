@@ -99,7 +99,7 @@ pub(crate) fn validate_inputs(
         let c2 = inp.c2_layers.len();
         let depth = tree.tree_depth as usize;
         let branch_count = depth.saturating_sub(1);
-        let expected_c1 = (branch_count + 1) / 2;
+        let expected_c1 = branch_count.div_ceil(2);
         let expected_c2 = branch_count / 2;
         if c1 != expected_c1 || c2 != expected_c2 {
             return Err(TxBuilderError::BranchLayerMismatch {

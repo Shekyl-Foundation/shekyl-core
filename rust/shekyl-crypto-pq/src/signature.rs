@@ -58,6 +58,8 @@ impl HybridPublicKey {
         Ok(())
     }
 
+    // CLIPPY: lengths validated by `self.validate()` against constants that fit in u32.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, CryptoError> {
         self.validate()?;
 
@@ -95,8 +97,9 @@ impl HybridPublicKey {
             ));
         }
 
-        let ed25519: [u8; ED25519_PUBLIC_KEY_LENGTH] =
-            ed_bytes.try_into().map_err(|_| CryptoError::InvalidKeyMaterial)?;
+        let ed25519: [u8; ED25519_PUBLIC_KEY_LENGTH] = ed_bytes
+            .try_into()
+            .map_err(|_| CryptoError::InvalidKeyMaterial)?;
         let public_key = Self { ed25519, ml_dsa };
         public_key.validate()?;
         Ok(public_key)
@@ -113,6 +116,8 @@ impl HybridSecretKey {
         Ok(())
     }
 
+    // CLIPPY: lengths validated by `self.validate()` against constants that fit in u32.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, CryptoError> {
         self.validate()?;
 
@@ -168,6 +173,8 @@ impl HybridSignature {
         Ok(())
     }
 
+    // CLIPPY: lengths validated by `self.validate()` against constants that fit in u32.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, CryptoError> {
         self.validate()?;
 
@@ -213,8 +220,17 @@ impl HybridSignature {
 
 pub trait SignatureScheme {
     fn keypair_generate(&self) -> Result<(HybridPublicKey, HybridSecretKey), CryptoError>;
-    fn sign(&self, secret_key: &HybridSecretKey, message: &[u8]) -> Result<HybridSignature, CryptoError>;
-    fn verify(&self, public_key: &HybridPublicKey, message: &[u8], signature: &HybridSignature) -> Result<bool, CryptoError>;
+    fn sign(
+        &self,
+        secret_key: &HybridSecretKey,
+        message: &[u8],
+    ) -> Result<HybridSignature, CryptoError>;
+    fn verify(
+        &self,
+        public_key: &HybridPublicKey,
+        message: &[u8],
+        signature: &HybridSignature,
+    ) -> Result<bool, CryptoError>;
 }
 
 pub struct HybridEd25519MlDsa;
@@ -238,7 +254,11 @@ impl SignatureScheme for HybridEd25519MlDsa {
         Ok((public_key, secret_key))
     }
 
-    fn sign(&self, secret_key: &HybridSecretKey, message: &[u8]) -> Result<HybridSignature, CryptoError> {
+    fn sign(
+        &self,
+        secret_key: &HybridSecretKey,
+        message: &[u8],
+    ) -> Result<HybridSignature, CryptoError> {
         secret_key.validate()?;
 
         let ed25519_secret: Zeroizing<[u8; ED25519_SECRET_KEY_LENGTH]> = Zeroizing::new(
@@ -271,7 +291,12 @@ impl SignatureScheme for HybridEd25519MlDsa {
         })
     }
 
-    fn verify(&self, public_key: &HybridPublicKey, message: &[u8], signature: &HybridSignature) -> Result<bool, CryptoError> {
+    fn verify(
+        &self,
+        public_key: &HybridPublicKey,
+        message: &[u8],
+        signature: &HybridSignature,
+    ) -> Result<bool, CryptoError> {
         public_key.validate()?;
         signature.validate()?;
 
@@ -305,7 +330,9 @@ impl SignatureScheme for HybridEd25519MlDsa {
 
 fn read_u8(bytes: &[u8], cursor: &mut usize) -> Result<u8, CryptoError> {
     if *cursor + 1 > bytes.len() {
-        return Err(CryptoError::SerializationError("truncated canonical encoding".into()));
+        return Err(CryptoError::SerializationError(
+            "truncated canonical encoding".into(),
+        ));
     }
     let v = bytes[*cursor];
     *cursor += 1;
@@ -314,7 +341,9 @@ fn read_u8(bytes: &[u8], cursor: &mut usize) -> Result<u8, CryptoError> {
 
 fn read_u16(bytes: &[u8], cursor: &mut usize) -> Result<u16, CryptoError> {
     if *cursor + 2 > bytes.len() {
-        return Err(CryptoError::SerializationError("truncated canonical encoding".into()));
+        return Err(CryptoError::SerializationError(
+            "truncated canonical encoding".into(),
+        ));
     }
     let mut buf = [0u8; 2];
     buf.copy_from_slice(&bytes[*cursor..*cursor + 2]);
@@ -324,7 +353,9 @@ fn read_u16(bytes: &[u8], cursor: &mut usize) -> Result<u16, CryptoError> {
 
 fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, CryptoError> {
     if *cursor + 4 > bytes.len() {
-        return Err(CryptoError::SerializationError("truncated canonical encoding".into()));
+        return Err(CryptoError::SerializationError(
+            "truncated canonical encoding".into(),
+        ));
     }
     let mut buf = [0u8; 4];
     buf.copy_from_slice(&bytes[*cursor..*cursor + 4]);
@@ -334,7 +365,9 @@ fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, CryptoError> {
 
 fn read_vec(bytes: &[u8], cursor: &mut usize, len: usize) -> Result<Vec<u8>, CryptoError> {
     if *cursor + len > bytes.len() {
-        return Err(CryptoError::SerializationError("truncated canonical encoding".into()));
+        return Err(CryptoError::SerializationError(
+            "truncated canonical encoding".into(),
+        ));
     }
     let out = bytes[*cursor..*cursor + len].to_vec();
     *cursor += len;
@@ -350,6 +383,7 @@ mod tests {
         HybridEd25519MlDsa
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn from_hex(s: &str) -> Vec<u8> {
         assert_eq!(s.len() % 2, 0, "hex string must have even length");
         let mut out = Vec::with_capacity(s.len() / 2);
@@ -384,14 +418,17 @@ mod tests {
         let public_key_bytes = from_hex(public_key_hex);
         let signature_bytes = from_hex(signature_hex);
 
-        assert_eq!(
-            public_key_bytes.len(),
-            v["hybrid_public_key_len"].as_u64().unwrap() as usize
-        );
-        assert_eq!(
-            signature_bytes.len(),
-            v["hybrid_signature_len"].as_u64().unwrap() as usize
-        );
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            assert_eq!(
+                public_key_bytes.len(),
+                v["hybrid_public_key_len"].as_u64().unwrap() as usize
+            );
+            assert_eq!(
+                signature_bytes.len(),
+                v["hybrid_signature_len"].as_u64().unwrap() as usize
+            );
+        }
 
         let pk = HybridPublicKey::from_canonical_bytes(&public_key_bytes).unwrap();
         let sig = HybridSignature::from_canonical_bytes(&signature_bytes).unwrap();

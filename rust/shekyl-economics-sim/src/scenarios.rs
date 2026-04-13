@@ -1,17 +1,17 @@
-use crate::engine::{ScenarioConfig, VolumeSchedule, StakeSchedule, SimParams};
+use crate::engine::{ScenarioConfig, SimParams, StakeSchedule, VolumeSchedule};
 
 fn default_stake_schedule() -> StakeSchedule {
     StakeSchedule {
         get_stake_ratio: Box::new(|block, blocks_per_year, _circ| {
             let year = block / blocks_per_year;
             match year {
-                0 => 50_000,       // 5%
-                1 => 100_000,      // 10%
-                2..=4 => 150_000,  // 15%
-                5..=9 => 200_000,  // 20%
-                10..=14 => 250_000,// 25%
-                15..=19 => 300_000,// 30%
-                _ => 350_000,      // 35%
+                0 => 50_000,        // 5%
+                1 => 100_000,       // 10%
+                2..=4 => 150_000,   // 15%
+                5..=9 => 200_000,   // 20%
+                10..=14 => 250_000, // 25%
+                15..=19 => 300_000, // 30%
+                _ => 350_000,       // 35%
             }
         }),
     }
@@ -155,7 +155,9 @@ pub fn scenario_7_bootstrap(params: &SimParams) -> ScenarioConfig {
     let baseline = params.tx_volume_baseline;
     ScenarioConfig {
         name: "chain_bootstrap".into(),
-        description: "First 2 years from genesis with very low organic transaction volume (10% of baseline)".into(),
+        description:
+            "First 2 years from genesis with very low organic transaction volume (10% of baseline)"
+                .into(),
         sim_years: 5,
         volume: VolumeSchedule {
             get_volume: Box::new(move |block, blocks_per_year| {

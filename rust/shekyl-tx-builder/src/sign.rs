@@ -98,10 +98,7 @@ pub fn sign_transaction(
         .collect();
 
     // ── 4. Pre-computed encrypted amounts (HKDF k_amount XOR + tag) ─
-    let enc_amounts: Vec<[u8; 9]> = outputs
-        .iter()
-        .map(|out| out.enc_amount)
-        .collect();
+    let enc_amounts: Vec<[u8; 9]> = outputs.iter().map(|out| out.enc_amount).collect();
 
     // ── 5. Pseudo-output balancing ───────────────────────────────────
     // Generate random blindings for all-but-last input; the last mask is
@@ -129,8 +126,7 @@ pub fn sign_transaction(
                 .iter()
                 .map(|e| (e.output_key, e.key_image_gen, e.commitment))
                 .collect();
-            let leaf_h_pqc: Vec<[u8; 32]> =
-                inp.leaf_chunk.iter().map(|e| e.h_pqc).collect();
+            let leaf_h_pqc: Vec<[u8; 32]> = inp.leaf_chunk.iter().map(|e| e.h_pqc).collect();
 
             let c1_branch_layers: Vec<BranchLayer> = inp
                 .c1_layers
@@ -223,18 +219,20 @@ pub fn sign_pqc_auths(
                 index: i,
                 reason: format!(
                     "combined_ss length {} != 64 for input {}",
-                    inp.combined_ss.len(), i
+                    inp.combined_ss.len(),
+                    i
                 ),
             });
         }
         let mut ss = [0u8; 64];
         ss.copy_from_slice(&inp.combined_ss);
 
-        let auth_sig = sign_pqc_auth_for_output(&ss, inp.output_index, hash)
-            .map_err(|e| TxBuilderError::PqcSignError {
+        let auth_sig = sign_pqc_auth_for_output(&ss, inp.output_index, hash).map_err(|e| {
+            TxBuilderError::PqcSignError {
                 index: i,
                 reason: format!("sign_pqc_auth_for_output failed: {e}"),
-            })?;
+            }
+        })?;
 
         auths.push(PqcAuth {
             auth_version: 1,
@@ -255,4 +253,3 @@ fn compute_key_image_gen(output_key: &[u8; 32]) -> [u8; 32] {
         .compress()
         .to_bytes()
 }
-

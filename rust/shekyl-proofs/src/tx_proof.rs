@@ -36,10 +36,8 @@ use zeroize::Zeroize;
 
 use shekyl_generators::{H as H_POINT_LAZY, T as T_LAZY};
 
-use shekyl_crypto_pq::output::{
-    derive_proof_secrets, rederive_combined_ss, ProofSecrets,
-};
 use crate::error::ProofError;
+use shekyl_crypto_pq::output::{derive_proof_secrets, rederive_combined_ss, ProofSecrets};
 
 pub const CURRENT_PROOF_VERSION: u8 = 1;
 
@@ -111,16 +109,10 @@ fn schnorr_sign(
     sig
 }
 
-fn schnorr_verify(
-    domain: &[u8],
-    public_key: &EdwardsPoint,
-    msg: &[u8],
-    sig: &[u8; 64],
-) -> bool {
+fn schnorr_verify(domain: &[u8], public_key: &EdwardsPoint, msg: &[u8], sig: &[u8; 64]) -> bool {
     let r_compressed = CompressedEdwardsY::from_slice(&sig[..32]);
-    let r_point = match r_compressed.ok().and_then(|c| c.decompress()) {
-        Some(p) => p,
-        None => return false,
+    let Some(r_point) = r_compressed.ok().and_then(|c| c.decompress()) else {
+        return false;
     };
     let mut s_arr = [0u8; 32];
     s_arr.copy_from_slice(&sig[32..]);
@@ -142,7 +134,8 @@ fn assemble_proof_message(
     user_message: &[u8],
     per_output_data: &[u8],
 ) -> Vec<u8> {
-    let mut msg = Vec::with_capacity(32 + address_bytes.len() + user_message.len() + per_output_data.len());
+    let mut msg =
+        Vec::with_capacity(32 + address_bytes.len() + user_message.len() + per_output_data.len());
     msg.extend_from_slice(txid);
     msg.extend_from_slice(address_bytes);
     msg.extend_from_slice(user_message);
@@ -175,6 +168,7 @@ pub struct VerifiedOutput {
 /// - `recipient_x25519_pk`: recipient's X25519 view public key
 /// - `recipient_ml_kem_ek`: recipient's ML-KEM-768 encapsulation key
 /// - `output_indices`: which output indices in the tx to include
+#[allow(clippy::cast_possible_truncation)]
 pub fn generate_outbound_proof(
     tx_key_secret: &[u8; 32],
     txid: &[u8; 32],
@@ -203,8 +197,9 @@ pub fn generate_outbound_proof(
 
     let msg = assemble_proof_message(txid, address_bytes, user_message, &per_output_blob);
 
-    let sk_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*tx_key_secret))
-        .ok_or(ProofError::InvalidFormat("tx_key_secret is not a canonical scalar".into()))?;
+    let sk_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*tx_key_secret)).ok_or(
+        ProofError::InvalidFormat("tx_key_secret is not a canonical scalar".into()),
+    )?;
     let pk_point = sk_scalar * G_POINT;
 
     let sig = schnorr_sign(OUTBOUND_DOMAIN, &sk_scalar, &pk_point, &msg);
@@ -249,6 +244,7 @@ pub struct OnChainOutput {
 /// - `recipient_x25519_pk`: recipient's X25519 view public key
 /// - `recipient_ml_kem_ek`: recipient's ML-KEM-768 encapsulation key
 /// - `on_chain_outputs`: per-output data fetched from the blockchain
+#[allow(clippy::too_many_arguments)]
 pub fn verify_outbound_proof(
     proof_bytes: &[u8],
     txid: &[u8; 32],
@@ -260,7 +256,9 @@ pub fn verify_outbound_proof(
     on_chain_outputs: &[OnChainOutput],
 ) -> Result<Vec<VerifiedOutput>, ProofError> {
     if proof_bytes.len() < OUTBOUND_HEADER_SIZE {
-        return Err(ProofError::InvalidFormat("proof too short for header".into()));
+        return Err(ProofError::InvalidFormat(
+            "proof too short for header".into(),
+        ));
     }
 
     let version = proof_bytes[0];
@@ -276,9 +274,7 @@ pub fn verify_outbound_proof(
     let mut sig = [0u8; 64];
     sig.copy_from_slice(&proof_bytes[33..97]);
 
-    let output_count = u32::from_le_bytes(
-        proof_bytes[97..101].try_into().unwrap(),
-    ) as usize;
+    let output_count = u32::from_le_bytes(proof_bytes[97..101].try_into().unwrap()) as usize;
 
     let expected_len = OUTBOUND_HEADER_SIZE + output_count * PER_OUTPUT_SIZE;
     if proof_bytes.len() != expected_len {
@@ -299,8 +295,9 @@ pub fn verify_outbound_proof(
 
     let msg = assemble_proof_message(txid, address_bytes, user_message, per_output_blob);
 
-    let sk_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(tx_key_secret))
-        .ok_or(ProofError::InvalidFormat("tx_key_secret not canonical".into()))?;
+    let sk_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(tx_key_secret)).ok_or(
+        ProofError::InvalidFormat("tx_key_secret not canonical".into()),
+    )?;
     let pk_point = sk_scalar * G_POINT;
 
     if !schnorr_verify(OUTBOUND_DOMAIN, &pk_point, &msg, &sig) {
@@ -317,8 +314,12 @@ pub fn verify_outbound_proof(
         let offset = i * PER_OUTPUT_SIZE;
         let ps = read_per_output(&per_output_blob[offset..])?;
 
-        let (rederived_ss, rederived_x25519_eph, rederived_ml_kem_ct) =
-            rederive_combined_ss(&tx_key_secret, recipient_x25519_pk, recipient_ml_kem_ek, i as u64)?;
+        let (rederived_ss, rederived_x25519_eph, rederived_ml_kem_ct) = rederive_combined_ss(
+            &tx_key_secret,
+            recipient_x25519_pk,
+            recipient_ml_kem_ek,
+            i as u64,
+        )?;
 
         if rederived_x25519_eph != on_chain.x25519_eph_pk {
             return Err(ProofError::KemCtMismatch);
@@ -328,45 +329,46 @@ pub fn verify_outbound_proof(
         }
 
         let expected_ps = derive_proof_secrets(&rederived_ss.0, i as u64);
-        if ps.ho != expected_ps.ho || ps.y != expected_ps.y
-            || ps.z != expected_ps.z || ps.k_amount != expected_ps.k_amount
+        if ps.ho != expected_ps.ho
+            || ps.y != expected_ps.y
+            || ps.z != expected_ps.z
+            || ps.k_amount != expected_ps.k_amount
         {
             return Err(ProofError::VerificationFailed(format!(
                 "ProofSecrets mismatch at output {i}"
             )));
         }
 
-        let ho_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ps.ho))
-            .ok_or(ProofError::InvalidFormat(format!("non-canonical ho at output {i}")))?;
-        let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ps.y))
-            .ok_or(ProofError::InvalidFormat(format!("non-canonical y at output {i}")))?;
+        let ho_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ps.ho)).ok_or(
+            ProofError::InvalidFormat(format!("non-canonical ho at output {i}")),
+        )?;
+        let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ps.y)).ok_or(
+            ProofError::InvalidFormat(format!("non-canonical y at output {i}")),
+        )?;
 
         let expected_o = ho_scalar * G_POINT + b_point + y_scalar * *T_LAZY;
-        let on_chain_o = CompressedEdwardsY(on_chain.output_key)
-            .decompress()
-            .ok_or(ProofError::InvalidFormat(format!(
-                "invalid on-chain output key at index {i}"
-            )))?;
+        let on_chain_o = CompressedEdwardsY(on_chain.output_key).decompress().ok_or(
+            ProofError::InvalidFormat(format!("invalid on-chain output key at index {i}")),
+        )?;
 
         if expected_o != on_chain_o {
             return Err(ProofError::OutputKeyMismatch { index: i });
         }
 
         let mut amount_bytes = [0u8; 8];
-        for j in 0..8 {
-            amount_bytes[j] = on_chain.enc_amount[j] ^ ps.k_amount[j];
+        for (j, b) in amount_bytes.iter_mut().enumerate() {
+            *b = on_chain.enc_amount[j] ^ ps.k_amount[j];
         }
         let amount = u64::from_le_bytes(amount_bytes);
 
-        let z_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ps.z))
-            .ok_or(ProofError::InvalidFormat(format!("non-canonical z at output {i}")))?;
+        let z_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ps.z)).ok_or(
+            ProofError::InvalidFormat(format!("non-canonical z at output {i}")),
+        )?;
         let amount_scalar = Scalar::from(amount);
         let expected_c = z_scalar * G_POINT + amount_scalar * *H_POINT_LAZY;
-        let on_chain_c = CompressedEdwardsY(on_chain.commitment)
-            .decompress()
-            .ok_or(ProofError::InvalidFormat(format!(
-                "invalid on-chain commitment at index {i}"
-            )))?;
+        let on_chain_c = CompressedEdwardsY(on_chain.commitment).decompress().ok_or(
+            ProofError::InvalidFormat(format!("invalid on-chain commitment at index {i}")),
+        )?;
 
         if expected_c != on_chain_c {
             return Err(ProofError::VerificationFailed(format!(
@@ -400,6 +402,7 @@ pub fn verify_outbound_proof(
 /// - `user_message`: arbitrary user-supplied message string
 /// - `per_output_secrets`: ProofSecrets for each output, derived from
 ///   KEM decapsulation by the recipient
+#[allow(clippy::cast_possible_truncation)]
 pub fn generate_inbound_proof(
     view_secret_key: &[u8; 32],
     txid: &[u8; 32],
@@ -419,8 +422,9 @@ pub fn generate_inbound_proof(
 
     let msg = assemble_proof_message(txid, address_bytes, user_message, &per_output_blob);
 
-    let sk_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*view_secret_key))
-        .ok_or(ProofError::InvalidFormat("view_secret_key not canonical".into()))?;
+    let sk_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*view_secret_key)).ok_or(
+        ProofError::InvalidFormat("view_secret_key not canonical".into()),
+    )?;
     let pk_point = sk_scalar * G_POINT;
 
     let sig = schnorr_sign(INBOUND_DOMAIN, &sk_scalar, &pk_point, &msg);
@@ -454,7 +458,9 @@ pub fn verify_inbound_proof(
     on_chain_outputs: &[OnChainOutput],
 ) -> Result<Vec<VerifiedOutput>, ProofError> {
     if proof_bytes.len() < INBOUND_HEADER_SIZE {
-        return Err(ProofError::InvalidFormat("proof too short for header".into()));
+        return Err(ProofError::InvalidFormat(
+            "proof too short for header".into(),
+        ));
     }
 
     let version = proof_bytes[0];
@@ -467,9 +473,7 @@ pub fn verify_inbound_proof(
     let mut sig = [0u8; 64];
     sig.copy_from_slice(&proof_bytes[1..65]);
 
-    let output_count = u32::from_le_bytes(
-        proof_bytes[65..69].try_into().unwrap(),
-    ) as usize;
+    let output_count = u32::from_le_bytes(proof_bytes[65..69].try_into().unwrap()) as usize;
 
     let expected_len = INBOUND_HEADER_SIZE + output_count * PER_OUTPUT_SIZE;
     if proof_bytes.len() != expected_len {
@@ -508,37 +512,36 @@ pub fn verify_inbound_proof(
         let offset = i * PER_OUTPUT_SIZE;
         let ps = read_per_output(&per_output_blob[offset..])?;
 
-        let ho_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ps.ho))
-            .ok_or(ProofError::InvalidFormat(format!("non-canonical ho at output {i}")))?;
-        let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ps.y))
-            .ok_or(ProofError::InvalidFormat(format!("non-canonical y at output {i}")))?;
+        let ho_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ps.ho)).ok_or(
+            ProofError::InvalidFormat(format!("non-canonical ho at output {i}")),
+        )?;
+        let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ps.y)).ok_or(
+            ProofError::InvalidFormat(format!("non-canonical y at output {i}")),
+        )?;
 
         let expected_o = ho_scalar * G_POINT + b_point + y_scalar * *T_LAZY;
-        let on_chain_o = CompressedEdwardsY(on_chain.output_key)
-            .decompress()
-            .ok_or(ProofError::InvalidFormat(format!(
-                "invalid on-chain output key at index {i}"
-            )))?;
+        let on_chain_o = CompressedEdwardsY(on_chain.output_key).decompress().ok_or(
+            ProofError::InvalidFormat(format!("invalid on-chain output key at index {i}")),
+        )?;
 
         if expected_o != on_chain_o {
             return Err(ProofError::OutputKeyMismatch { index: i });
         }
 
         let mut amount_bytes = [0u8; 8];
-        for j in 0..8 {
-            amount_bytes[j] = on_chain.enc_amount[j] ^ ps.k_amount[j];
+        for (j, b) in amount_bytes.iter_mut().enumerate() {
+            *b = on_chain.enc_amount[j] ^ ps.k_amount[j];
         }
         let amount = u64::from_le_bytes(amount_bytes);
 
-        let z_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ps.z))
-            .ok_or(ProofError::InvalidFormat(format!("non-canonical z at output {i}")))?;
+        let z_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ps.z)).ok_or(
+            ProofError::InvalidFormat(format!("non-canonical z at output {i}")),
+        )?;
         let amount_scalar = Scalar::from(amount);
         let expected_c = z_scalar * G_POINT + amount_scalar * *H_POINT_LAZY;
-        let on_chain_c = CompressedEdwardsY(on_chain.commitment)
-            .decompress()
-            .ok_or(ProofError::InvalidFormat(format!(
-                "invalid on-chain commitment at index {i}"
-            )))?;
+        let on_chain_c = CompressedEdwardsY(on_chain.commitment).decompress().ok_or(
+            ProofError::InvalidFormat(format!("invalid on-chain commitment at index {i}")),
+        )?;
 
         if expected_c != on_chain_c {
             return Err(ProofError::VerificationFailed(format!(

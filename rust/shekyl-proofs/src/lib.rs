@@ -22,6 +22,6 @@
 #![deny(unsafe_code)]
 
 pub mod dleq;
-pub mod tx_proof;
-pub mod reserve_proof;
 pub mod error;
+pub mod reserve_proof;
+pub mod tx_proof;

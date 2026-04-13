@@ -20,7 +20,8 @@ impl WalletContext {
         trusted_daemon: bool,
         wallet_dir: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let wallet = Wallet2::new(nettype).map_err(|e| format!("Failed to create wallet handle: {e}"))?;
+        let wallet =
+            Wallet2::new(nettype).map_err(|e| format!("Failed to create wallet handle: {e}"))?;
         wallet.set_wallet_dir(wallet_dir);
         if !daemon_address.is_empty() {
             wallet
@@ -73,7 +74,8 @@ impl WalletContext {
         priority: u32,
         account_index: u32,
     ) -> Result<serde_json::Value, WalletError> {
-        self.wallet.transfer_native(destinations_json, priority, account_index)
+        self.wallet
+            .transfer_native(destinations_json, priority, account_index)
     }
 
     pub fn query_key(&self, key_type: &str) -> Result<serde_json::Value, WalletError> {
@@ -93,7 +95,8 @@ impl WalletContext {
         pool: bool,
         account_index: u32,
     ) -> Result<serde_json::Value, WalletError> {
-        self.wallet.get_transfers(incoming, outgoing, pending, failed, pool, account_index)
+        self.wallet
+            .get_transfers(incoming, outgoing, pending, failed, pool, account_index)
     }
 
     pub fn restore_from_seed(
@@ -105,7 +108,14 @@ impl WalletContext {
         restore_height: u64,
         seed_offset: &str,
     ) -> Result<serde_json::Value, WalletError> {
-        self.wallet.restore_deterministic_wallet(filename, seed, password, language, restore_height, seed_offset)
+        self.wallet.restore_deterministic_wallet(
+            filename,
+            seed,
+            password,
+            language,
+            restore_height,
+            seed_offset,
+        )
     }
 
     pub fn json_rpc(&self, method: &str, params: &str) -> Result<serde_json::Value, WalletError> {

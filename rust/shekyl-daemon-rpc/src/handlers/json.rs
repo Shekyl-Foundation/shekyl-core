@@ -37,20 +37,12 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use std::sync::Arc;
 
-async fn dispatch_json(
-    state: Arc<AppState>,
-    uri: &'static str,
-    body: String,
-) -> impl IntoResponse {
+async fn dispatch_json(state: Arc<AppState>, uri: &'static str, body: String) -> impl IntoResponse {
     let core = state.core.clone();
     let result = tokio::task::spawn_blocking(move || core.json_endpoint(uri, &body)).await;
 
     match result {
-        Ok(Some(json)) => (
-            StatusCode::OK,
-            [("content-type", "application/json")],
-            json,
-        ),
+        Ok(Some(json)) => (StatusCode::OK, [("content-type", "application/json")], json),
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [("content-type", "application/json")],
@@ -78,7 +70,10 @@ json_handler!(is_key_image_spent, "/is_key_image_spent");
 json_handler!(send_raw_transaction, "/send_raw_transaction");
 json_handler!(get_public_nodes, "/get_public_nodes");
 json_handler!(get_transaction_pool, "/get_transaction_pool");
-json_handler!(get_transaction_pool_hashes_bin, "/get_transaction_pool_hashes.bin");
+json_handler!(
+    get_transaction_pool_hashes_bin,
+    "/get_transaction_pool_hashes.bin"
+);
 json_handler!(get_transaction_pool_hashes, "/get_transaction_pool_hashes");
 json_handler!(get_transaction_pool_stats, "/get_transaction_pool_stats");
 json_handler!(get_info, "/get_info");

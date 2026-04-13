@@ -13,7 +13,8 @@ fn get_u64(map: &BTreeMap<String, serde_json::Value>, key: &str) -> u64 {
 }
 
 fn main() {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
+    let manifest_dir =
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
     let config_path = manifest_dir
         .parent()
         .expect("workspace/rust path expected")

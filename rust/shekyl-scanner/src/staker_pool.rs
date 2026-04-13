@@ -82,12 +82,7 @@ impl StakerPoolState {
     /// summed over `(from_height, to_height]`.
     ///
     /// The `weight` should be computed as `shekyl_stake_weight(amount, tier)`.
-    pub fn estimate_reward(
-        &self,
-        from_height: u64,
-        to_height: u64,
-        weight: u64,
-    ) -> u64 {
+    pub fn estimate_reward(&self, from_height: u64, to_height: u64, weight: u64) -> u64 {
         if from_height >= to_height || weight == 0 {
             return 0;
         }
@@ -101,8 +96,9 @@ impl StakerPoolState {
             if block_total == 0 || record.total_weighted_stake == 0 {
                 continue;
             }
-            let reward = ((block_total as u128) * (weight as u128)
-                / record.total_weighted_stake) as u64;
+            #[allow(clippy::cast_possible_truncation)]
+            let reward =
+                (u128::from(block_total) * u128::from(weight) / record.total_weighted_stake) as u64;
             total = total.saturating_add(reward);
         }
 
@@ -144,12 +140,7 @@ impl StakerPoolState {
     pub fn handle_reorg(&mut self, fork_height: u64) {
         // split_off returns all entries >= fork_height; self.records keeps < fork_height
         let _removed = self.records.split_off(&fork_height);
-        self.max_height = self
-            .records
-            .keys()
-            .next_back()
-            .copied()
-            .unwrap_or(0);
+        self.max_height = self.records.keys().next_back().copied().unwrap_or(0);
     }
 
     /// Verify the conservation property: for a given block, the sum of
@@ -176,8 +167,10 @@ impl StakerPoolState {
         let distributed: u64 = staker_weights
             .iter()
             .map(|&w| {
-                ((block_total as u128) * (w as u128)
-                    / record.total_weighted_stake) as u64
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    (u128::from(block_total) * u128::from(w) / record.total_weighted_stake) as u64
+                }
             })
             .sum();
 

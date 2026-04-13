@@ -36,8 +36,14 @@ pub fn cmd_check_tx_key(ctx: &WalletContext, txid: &str, tx_key: &str, address: 
     match ctx.json_rpc("check_tx_key", &params.to_string()) {
         Ok(val) => {
             let received = val.get("received").and_then(|r| r.as_u64()).unwrap_or(0);
-            let confirmations = val.get("confirmations").and_then(|c| c.as_u64()).unwrap_or(0);
-            let in_pool = val.get("in_pool").and_then(|p| p.as_bool()).unwrap_or(false);
+            let confirmations = val
+                .get("confirmations")
+                .and_then(|c| c.as_u64())
+                .unwrap_or(0);
+            let in_pool = val
+                .get("in_pool")
+                .and_then(|p| p.as_bool())
+                .unwrap_or(false);
             println!("Received: {} SKL", super::format_amount(received));
             if in_pool {
                 println!("Status: in pool (unconfirmed)");
@@ -95,8 +101,14 @@ pub fn cmd_check_tx_proof(
             let good = val.get("good").and_then(|g| g.as_bool()).unwrap_or(false);
             if good {
                 let received = val.get("received").and_then(|r| r.as_u64()).unwrap_or(0);
-                let confirmations = val.get("confirmations").and_then(|c| c.as_u64()).unwrap_or(0);
-                println!("Proof VALID. Received: {} SKL, Confirmations: {confirmations}", super::format_amount(received));
+                let confirmations = val
+                    .get("confirmations")
+                    .and_then(|c| c.as_u64())
+                    .unwrap_or(0);
+                println!(
+                    "Proof VALID. Received: {} SKL, Confirmations: {confirmations}",
+                    super::format_amount(received)
+                );
             } else {
                 println!("Proof INVALID.");
             }

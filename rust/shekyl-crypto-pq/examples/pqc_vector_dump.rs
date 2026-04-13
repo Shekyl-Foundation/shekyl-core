@@ -3,7 +3,7 @@ use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
 fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {
-        out.push_str(&format!("{:02x}", b));
+        out.push_str(&format!("{b:02x}"));
     }
     out
 }
@@ -23,7 +23,10 @@ fn main() {
 
     println!("{{");
     println!("  \"scheme\": \"ed25519_ml_dsa_65\",");
-    println!("  \"message_utf8\": \"{}\",", String::from_utf8_lossy(message));
+    println!(
+        "  \"message_utf8\": \"{}\",",
+        String::from_utf8_lossy(message)
+    );
     println!("  \"message_hex\": \"{}\",", hex(message));
     println!("  \"hybrid_public_key_hex\": \"{}\",", hex(&pk_bytes));
     println!("  \"hybrid_secret_key_hex\": \"{}\",", hex(&sk_bytes));
@@ -31,6 +34,6 @@ fn main() {
     println!("  \"hybrid_public_key_len\": {},", pk_bytes.len());
     println!("  \"hybrid_secret_key_len\": {},", sk_bytes.len());
     println!("  \"hybrid_signature_len\": {},", sig_bytes.len());
-    println!("  \"verify_result\": {}", verified);
+    println!("  \"verify_result\": {verified}");
     println!("}}");
 }

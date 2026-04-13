@@ -11,12 +11,12 @@
 
 use zeroize::{Zeroize, Zeroizing};
 
-use curve25519_dalek::{Scalar, EdwardsPoint};
+use curve25519_dalek::{EdwardsPoint, Scalar};
 
 use shekyl_oxide::{
-    io::write_varint,
-    primitives::{Commitment, keccak256, keccak256_to_scalar},
     fcmp::EncryptedAmount,
+    io::write_varint,
+    primitives::{keccak256, keccak256_to_scalar, Commitment},
     transaction::Input,
 };
 
@@ -36,8 +36,9 @@ impl SharedKeyDerivations {
                     write_varint(height, &mut u)
                         .expect("write failed but <Vec as io::Write> doesn't fail");
                 }
-                Input::ToKey { key_image, .. } => u.extend(key_image.to_bytes()),
-                Input::StakeClaim { key_image, .. } => u.extend(key_image.to_bytes()),
+                Input::ToKey { key_image, .. } | Input::StakeClaim { key_image, .. } => {
+                    u.extend(key_image.to_bytes())
+                }
             }
         }
         keccak256(u)
@@ -51,10 +52,7 @@ impl SharedKeyDerivations {
         o: usize,
     ) -> Zeroizing<SharedKeyDerivations> {
         let mut output_derivation = Zeroizing::new(
-            Zeroizing::new(
-                Zeroizing::new(ecdh.mul_by_cofactor()).compress().to_bytes(),
-            )
-            .to_vec(),
+            Zeroizing::new(Zeroizing::new(ecdh.mul_by_cofactor()).compress().to_bytes()).to_vec(),
         );
 
         {
@@ -81,10 +79,7 @@ impl SharedKeyDerivations {
     #[allow(clippy::needless_pass_by_value)]
     pub fn payment_id_xor(ecdh: Zeroizing<EdwardsPoint>) -> [u8; 8] {
         let output_derivation = Zeroizing::new(
-            Zeroizing::new(
-                Zeroizing::new(ecdh.mul_by_cofactor()).compress().to_bytes(),
-            )
-            .to_vec(),
+            Zeroizing::new(Zeroizing::new(ecdh.mul_by_cofactor()).compress().to_bytes()).to_vec(),
         );
 
         let mut payment_id_xor = [0; 8];
@@ -93,6 +88,7 @@ impl SharedKeyDerivations {
         payment_id_xor
     }
 
+    #[allow(dead_code)]
     pub(crate) fn commitment_mask(&self) -> Scalar {
         let mut mask = b"commitment_mask".to_vec();
         mask.extend(self.shared_key.as_bytes());
@@ -101,6 +97,7 @@ impl SharedKeyDerivations {
         res
     }
 
+    #[allow(dead_code)]
     pub(crate) fn compact_amount_encryption(&self, amount: u64) -> [u8; 8] {
         let mut amount_mask = Zeroizing::new(b"amount".to_vec());
         amount_mask.extend(self.shared_key.to_bytes());
@@ -113,6 +110,7 @@ impl SharedKeyDerivations {
         (amount ^ u64::from_le_bytes(amount_mask_8)).to_le_bytes()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn decrypt(&self, enc_amount: &EncryptedAmount) -> Commitment {
         Commitment::new(
             self.commitment_mask(),

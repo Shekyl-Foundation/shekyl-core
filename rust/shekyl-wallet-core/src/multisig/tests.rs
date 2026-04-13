@@ -44,9 +44,11 @@ fn run_dkg(threshold: u16, total: u16) -> Vec<MultisigGroup> {
         let my_shares: HashMap<Participant, DkgRound2Message> = round2_outgoing
             .iter()
             .enumerate()
-            .filter_map(|(j, shares_map)| shares_map.get(&p).map(|s| {
-                (Participant::new((j + 1) as u16).unwrap(), s.clone())
-            }))
+            .filter_map(|(j, shares_map)| {
+                shares_map
+                    .get(&p)
+                    .map(|s| (Participant::new((j + 1) as u16).unwrap(), s.clone()))
+            })
             .collect();
         sessions[i].process_shares(my_shares).unwrap();
     }

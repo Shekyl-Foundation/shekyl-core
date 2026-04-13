@@ -71,14 +71,38 @@ fn build_router(state: Arc<AppState>) -> Router {
         // Unrestricted JSON REST (with aliases) -- GET + POST to match epee behavior
         .route("/get_height", get(json::get_height).post(json::get_height))
         .route("/getheight", get(json::get_height).post(json::get_height))
-        .route("/get_transactions", get(json::get_transactions).post(json::get_transactions))
-        .route("/gettransactions", get(json::get_transactions).post(json::get_transactions))
-        .route("/get_alt_blocks_hashes", get(json::get_alt_blocks_hashes).post(json::get_alt_blocks_hashes))
-        .route("/is_key_image_spent", get(json::is_key_image_spent).post(json::is_key_image_spent))
-        .route("/send_raw_transaction", get(json::send_raw_transaction).post(json::send_raw_transaction))
-        .route("/sendrawtransaction", get(json::send_raw_transaction).post(json::send_raw_transaction))
-        .route("/get_public_nodes", get(json::get_public_nodes).post(json::get_public_nodes))
-        .route("/get_transaction_pool", get(json::get_transaction_pool).post(json::get_transaction_pool))
+        .route(
+            "/get_transactions",
+            get(json::get_transactions).post(json::get_transactions),
+        )
+        .route(
+            "/gettransactions",
+            get(json::get_transactions).post(json::get_transactions),
+        )
+        .route(
+            "/get_alt_blocks_hashes",
+            get(json::get_alt_blocks_hashes).post(json::get_alt_blocks_hashes),
+        )
+        .route(
+            "/is_key_image_spent",
+            get(json::is_key_image_spent).post(json::is_key_image_spent),
+        )
+        .route(
+            "/send_raw_transaction",
+            get(json::send_raw_transaction).post(json::send_raw_transaction),
+        )
+        .route(
+            "/sendrawtransaction",
+            get(json::send_raw_transaction).post(json::send_raw_transaction),
+        )
+        .route(
+            "/get_public_nodes",
+            get(json::get_public_nodes).post(json::get_public_nodes),
+        )
+        .route(
+            "/get_transaction_pool",
+            get(json::get_transaction_pool).post(json::get_transaction_pool),
+        )
         .route(
             "/get_transaction_pool_hashes.bin",
             get(json::get_transaction_pool_hashes_bin).post(json::get_transaction_pool_hashes_bin),
@@ -97,7 +121,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         // Binary endpoints (always available)
         .route("/get_blocks.bin", post(binary::get_blocks))
         .route("/getblocks.bin", post(binary::get_blocks))
-        .route("/get_blocks_by_height.bin", post(binary::get_blocks_by_height))
+        .route(
+            "/get_blocks_by_height.bin",
+            post(binary::get_blocks_by_height),
+        )
         .route(
             "/getblocks_by_height.bin",
             post(binary::get_blocks_by_height),
@@ -108,17 +135,47 @@ fn build_router(state: Arc<AppState>) -> Router {
 
     if !restricted {
         router = router
-            .route("/start_mining", get(json::start_mining).post(json::start_mining))
-            .route("/stop_mining", get(json::stop_mining).post(json::stop_mining))
-            .route("/mining_status", get(json::mining_status).post(json::mining_status))
+            .route(
+                "/start_mining",
+                get(json::start_mining).post(json::start_mining),
+            )
+            .route(
+                "/stop_mining",
+                get(json::stop_mining).post(json::stop_mining),
+            )
+            .route(
+                "/mining_status",
+                get(json::mining_status).post(json::mining_status),
+            )
             .route("/save_bc", get(json::save_bc).post(json::save_bc))
-            .route("/get_peer_list", get(json::get_peer_list).post(json::get_peer_list))
-            .route("/set_log_hash_rate", get(json::set_log_hash_rate).post(json::set_log_hash_rate))
-            .route("/set_log_level", get(json::set_log_level).post(json::set_log_level))
-            .route("/set_log_categories", get(json::set_log_categories).post(json::set_log_categories))
-            .route("/set_bootstrap_daemon", get(json::set_bootstrap_daemon).post(json::set_bootstrap_daemon))
-            .route("/stop_daemon", get(json::stop_daemon).post(json::stop_daemon))
-            .route("/get_net_stats", get(json::get_net_stats).post(json::get_net_stats))
+            .route(
+                "/get_peer_list",
+                get(json::get_peer_list).post(json::get_peer_list),
+            )
+            .route(
+                "/set_log_hash_rate",
+                get(json::set_log_hash_rate).post(json::set_log_hash_rate),
+            )
+            .route(
+                "/set_log_level",
+                get(json::set_log_level).post(json::set_log_level),
+            )
+            .route(
+                "/set_log_categories",
+                get(json::set_log_categories).post(json::set_log_categories),
+            )
+            .route(
+                "/set_bootstrap_daemon",
+                get(json::set_bootstrap_daemon).post(json::set_bootstrap_daemon),
+            )
+            .route(
+                "/stop_daemon",
+                get(json::stop_daemon).post(json::stop_daemon),
+            )
+            .route(
+                "/get_net_stats",
+                get(json::get_net_stats).post(json::get_net_stats),
+            )
             .route("/set_limit", get(json::set_limit).post(json::set_limit))
             .route("/out_peers", get(json::out_peers).post(json::out_peers))
             .route("/in_peers", get(json::in_peers).post(json::in_peers))

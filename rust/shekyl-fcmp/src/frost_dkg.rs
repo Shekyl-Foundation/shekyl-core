@@ -25,11 +25,11 @@ use std::collections::HashMap;
 use rand_core::OsRng;
 use zeroize::Zeroizing;
 
-use modular_frost::{Participant, ThresholdKeys, ThresholdParams};
 use dkg_pedpop::{
-    BlameMachine, Commitments, EncryptedMessage, EncryptionKeyMessage, KeyGenMachine,
-    KeyMachine, PedPoPError, SecretShare, SecretShareMachine,
+    BlameMachine, Commitments, EncryptedMessage, EncryptionKeyMessage, KeyGenMachine, KeyMachine,
+    PedPoPError, SecretShare, SecretShareMachine,
 };
+use modular_frost::{Participant, ThresholdKeys, ThresholdParams};
 
 use shekyl_fcmp_plus_plus::sal::multisig::Ed25519T;
 
@@ -43,7 +43,8 @@ use crate::proof::ProveError;
 pub type DkgRound1Message = EncryptionKeyMessage<Ed25519T, Commitments<Ed25519T>>;
 
 /// Round 2 per-recipient message: encrypted secret share.
-pub type DkgRound2Message = EncryptedMessage<Ed25519T, SecretShare<<Ed25519T as ciphersuite::Ciphersuite>::F>>;
+pub type DkgRound2Message =
+    EncryptedMessage<Ed25519T, SecretShare<<Ed25519T as ciphersuite::Ciphersuite>::F>>;
 
 // ---------------------------------------------------------------------------
 // DKG Session (type-state enum)
@@ -147,9 +148,7 @@ impl DkgSession {
     /// reached the `AwaitingConfirmation` state without errors.
     pub fn confirm_complete(self) -> Result<ThresholdKeys<Ed25519T>, ProveError> {
         match self {
-            DkgSession::AwaitingConfirmation(blame_machine) => {
-                Ok(blame_machine.complete())
-            }
+            DkgSession::AwaitingConfirmation(blame_machine) => Ok(blame_machine.complete()),
             _ => Err(ProveError::UpstreamError(
                 "DKG session not in AwaitingConfirmation state".into(),
             )),
@@ -214,14 +213,13 @@ impl DkgParams {
                 self.our_index, self.total
             ))
         })?;
-        let params = ThresholdParams::new(self.threshold, self.total, participant).map_err(
-            |_| {
+        let params =
+            ThresholdParams::new(self.threshold, self.total, participant).map_err(|_| {
                 ProveError::UpstreamError(format!(
                     "Invalid threshold params: {}-of-{}",
                     self.threshold, self.total
                 ))
-            },
-        )?;
+            })?;
         Ok((params, participant))
     }
 }
@@ -267,10 +265,7 @@ pub fn validate_keys(
 /// Generate test threshold keys for N participants with threshold M.
 /// Only available in test builds; uses modular-frost's built-in key_gen.
 #[cfg(test)]
-pub fn generate_test_keys(
-    _m: u16,
-    _n: u16,
-) -> HashMap<Participant, ThresholdKeys<Ed25519T>> {
+pub fn generate_test_keys(_m: u16, _n: u16) -> HashMap<Participant, ThresholdKeys<Ed25519T>> {
     use modular_frost::tests::key_gen;
     key_gen::<_, Ed25519T>(&mut OsRng)
 }
@@ -348,7 +343,11 @@ mod tests {
         let mut round1_msgs: HashMap<Participant, DkgRound1Message> = HashMap::new();
 
         for i in 1..=total {
-            let params = DkgParams { threshold, total, our_index: i };
+            let params = DkgParams {
+                threshold,
+                total,
+                our_index: i,
+            };
             let session = DkgSession::new(&params, context).unwrap();
             let (session, msg) = session.generate_coefficients().unwrap();
             let p = Participant::new(i).unwrap();
@@ -356,7 +355,8 @@ mod tests {
             round1_msgs.insert(p, msg);
         }
 
-        let mut round2_outgoing: HashMap<Participant, HashMap<Participant, DkgRound2Message>> = HashMap::new();
+        let mut round2_outgoing: HashMap<Participant, HashMap<Participant, DkgRound2Message>> =
+            HashMap::new();
 
         for i in 1..=total {
             let p = Participant::new(i).unwrap();
@@ -378,9 +378,7 @@ mod tests {
 
             let my_shares: HashMap<Participant, DkgRound2Message> = round2_outgoing
                 .iter()
-                .filter_map(|(sender, shares_map)| {
-                    shares_map.get(&p).map(|s| (*sender, s.clone()))
-                })
+                .filter_map(|(sender, shares_map)| shares_map.get(&p).map(|s| (*sender, s.clone())))
                 .collect();
 
             let session = session.calculate_share(my_shares).unwrap();
@@ -409,10 +407,17 @@ mod tests {
 
     #[test]
     fn test_dkg_wrong_state_errors() {
-        let params = DkgParams { threshold: 2, total: 3, our_index: 1 };
+        let params = DkgParams {
+            threshold: 2,
+            total: 3,
+            our_index: 1,
+        };
         let session = DkgSession::new(&params, [0; 32]).unwrap();
 
         let result = session.generate_secret_shares(HashMap::new());
-        assert!(result.is_err(), "Should fail: not in AwaitingCommitments state");
+        assert!(
+            result.is_err(),
+            "Should fail: not in AwaitingCommitments state"
+        );
     }
 }

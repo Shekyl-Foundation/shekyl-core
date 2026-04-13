@@ -41,16 +41,16 @@
 #![deny(unsafe_code)]
 
 mod error;
+mod sign;
 pub mod types;
 mod validate;
-mod sign;
 
 #[cfg(test)]
 mod tests;
 
 pub use error::TxBuilderError;
-pub use types::{SpendInput, LeafEntry, OutputInfo, TreeContext, SignedProofs, PqcAuth};
 pub use sign::{sign_pqc_auths, sign_transaction};
+pub use types::{LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext};
 
 /// Maximum number of inputs per transaction (consensus limit, matches `shekyl-fcmp::MAX_INPUTS`).
 pub const MAX_INPUTS: usize = shekyl_fcmp::MAX_INPUTS;

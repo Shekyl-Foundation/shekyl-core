@@ -11,26 +11,25 @@
 
 #![deny(unsafe_code)]
 
-pub mod leaf;
-pub mod tree;
-pub mod proof;
-#[cfg(feature = "multisig")]
-pub mod frost_sal;
 #[cfg(feature = "multisig")]
 pub mod frost_dkg;
+#[cfg(feature = "multisig")]
+pub mod frost_sal;
+pub mod leaf;
+pub mod proof;
+pub mod tree;
 
 pub use leaf::{PqcLeafScalar, ShekylLeaf};
-pub use tree::{
-    TreeOp, HashGrowResult, HashTrimResult, LayerUpdate,
-    SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH, HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS,
-    ed25519_point_to_selene_scalar, construct_leaf,
-};
-pub use proof::{ShekylFcmpProof, ProveError, VerifyError, ProveResult, ProveInput, BranchLayer};
 #[cfg(feature = "multisig")]
 pub use proof::ProveInputLeafChunk;
+pub use proof::{BranchLayer, ProveError, ProveInput, ProveResult, ShekylFcmpProof, VerifyError};
+pub use tree::{
+    construct_leaf, ed25519_point_to_selene_scalar, HashGrowResult, HashTrimResult, LayerUpdate,
+    TreeOp, HELIOS_CHUNK_WIDTH, LEAF_CHUNK_SCALARS, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
+};
 
-pub use shekyl_fcmp_plus_plus::{Input, Output};
 pub use shekyl_fcmp_plus_plus::sal::SpendAuthAndLinkability;
+pub use shekyl_fcmp_plus_plus::{Input, Output};
 
 /// Domain separator for Shekyl's PQC leaf hash: H(pqc_pk) -> 4th scalar.
 pub const DOMAIN_PQC_LEAF: &[u8] = b"shekyl-pqc-leaf";

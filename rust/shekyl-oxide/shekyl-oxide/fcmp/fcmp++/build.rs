@@ -1,38 +1,38 @@
 use std::{
-  io::Write,
-  env,
-  path::Path,
-  fs::{File, remove_file},
+    env,
+    fs::{remove_file, File},
+    io::Write,
+    path::Path,
 };
 
 #[cfg(feature = "compile-time-generators")]
 trait NewGenerators: ciphersuite::Ciphersuite {
-  fn new_generators() -> shekyl_generators::FcmpGenerators<Self>;
+    fn new_generators() -> shekyl_generators::FcmpGenerators<Self>;
 }
 #[cfg(feature = "compile-time-generators")]
 impl NewGenerators for helioselene::Helios {
-  fn new_generators() -> shekyl_generators::FcmpGenerators<Self> {
-    shekyl_generators::FcmpGenerators::<Self>::new()
-  }
+    fn new_generators() -> shekyl_generators::FcmpGenerators<Self> {
+        shekyl_generators::FcmpGenerators::<Self>::new()
+    }
 }
 #[cfg(feature = "compile-time-generators")]
 impl NewGenerators for helioselene::Selene {
-  fn new_generators() -> shekyl_generators::FcmpGenerators<Self> {
-    shekyl_generators::FcmpGenerators::<Self>::new()
-  }
+    fn new_generators() -> shekyl_generators::FcmpGenerators<Self> {
+        shekyl_generators::FcmpGenerators::<Self>::new()
+    }
 }
 
 #[cfg(feature = "compile-time-generators")]
 fn generator_set<C: NewGenerators>()
 where
-  C::G: ec_divisors::DivisorCurve,
+    C::G: ec_divisors::DivisorCurve,
 {
-  use ciphersuite::group::ff::PrimeField;
-  use ec_divisors::DivisorCurve;
+    use ciphersuite::group::ff::PrimeField;
+    use ec_divisors::DivisorCurve;
 
-  fn read_point(point: &str, x_str: &str, y_str: &str) -> String {
-    format!(
-      "
+    fn read_point(point: &str, x_str: &str, y_str: &str) -> String {
+        format!(
+            "
         helioselene::{point}::from_xy(
           <
             <helioselene::{point} as ec_divisors::DivisorCurve>::FieldElement
@@ -46,50 +46,50 @@ where
           >::from_repr({y_str}).expect(\"build script y wasn't reduced\"),
         ).expect(\"generator from build script wasn't on-curve\")
       "
-    )
-  }
-
-  fn serialize<G: DivisorCurve>(point: &str, generator: G) -> String {
-    let (x, y) = G::to_xy(generator).expect("generator was the identity?");
-    read_point(
-      point,
-      &format!("{:?}", x.to_repr().as_ref()),
-      &format!("{:?}", y.to_repr().as_ref()),
-    )
-  }
-
-  let id =
-    String::from_utf8(C::ID.to_vec()).expect("Helios/Selene Ciphersuite ID wasn't valid UTF-8");
-  let point = format!("{id}Point");
-  let path = format!("{}_generators", id.clone().to_lowercase());
-  let g_bold_path = path.clone() + "_g_bold";
-  let h_bold_path = path.clone() + "_h_bold";
-  let path = path + ".rs";
-
-  let generators = C::new_generators();
-
-  let dir = env::var("OUT_DIR").expect("cargo didn't set $OUT_DIR");
-  let dir = Path::new(&dir);
-
-  let read_bytes = |path, points: &[C::G]| {
-    let mut bytes: Vec<u8> = Vec::with_capacity((2 * 32) * points.len());
-    for generator in points {
-      let (x, y) = C::G::to_xy(*generator).expect("generator was the identity?");
-      bytes.extend(x.to_repr().as_ref());
-      bytes.extend(y.to_repr().as_ref());
+        )
     }
 
-    {
-      let path = dir.join(&path);
-      let _ = remove_file(&path);
-      File::create(&path)
-        .expect("failed to create file in $OUT_DIR")
-        .write_all(&bytes)
-        .expect("couldn't write points as bytes to file in $OUT_DIR");
+    fn serialize<G: DivisorCurve>(point: &str, generator: G) -> String {
+        let (x, y) = G::to_xy(generator).expect("generator was the identity?");
+        read_point(
+            point,
+            &format!("{:?}", x.to_repr().as_ref()),
+            &format!("{:?}", y.to_repr().as_ref()),
+        )
     }
 
-    format!(
-      "
+    let id =
+        String::from_utf8(C::ID.to_vec()).expect("Helios/Selene Ciphersuite ID wasn't valid UTF-8");
+    let point = format!("{id}Point");
+    let path = format!("{}_generators", id.clone().to_lowercase());
+    let g_bold_path = path.clone() + "_g_bold";
+    let h_bold_path = path.clone() + "_h_bold";
+    let path = path + ".rs";
+
+    let generators = C::new_generators();
+
+    let dir = env::var("OUT_DIR").expect("cargo didn't set $OUT_DIR");
+    let dir = Path::new(&dir);
+
+    let read_bytes = |path, points: &[C::G]| {
+        let mut bytes: Vec<u8> = Vec::with_capacity((2 * 32) * points.len());
+        for generator in points {
+            let (x, y) = C::G::to_xy(*generator).expect("generator was the identity?");
+            bytes.extend(x.to_repr().as_ref());
+            bytes.extend(y.to_repr().as_ref());
+        }
+
+        {
+            let path = dir.join(&path);
+            let _ = remove_file(&path);
+            File::create(&path)
+                .expect("failed to create file in $OUT_DIR")
+                .write_all(&bytes)
+                .expect("couldn't write points as bytes to file in $OUT_DIR");
+        }
+
+        format!(
+            "
         {{
           const BYTES: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{path}\"));
           let mut bytes = BYTES;
@@ -106,20 +106,20 @@ where
           res
         }}
       ",
-      points.len(),
-      read_point(&point, "x", "y"),
-    )
-  };
+            points.len(),
+            read_point(&point, "x", "y"),
+        )
+    };
 
-  let path = dir.join(&path);
-  let _ = remove_file(&path);
-  // TODO(shekyl): Consider restricting visibility once downstream consumers are audited.
-  // Currently `pub` is required because shekyl-fcmp and shekyl-ffi import these generators.
-  File::create(&path)
-    .expect("failed to create file in $OUT_DIR")
-    .write_all(
-      format!(
-        "
+    let path = dir.join(&path);
+    let _ = remove_file(&path);
+    // TODO(shekyl): Consider restricting visibility once downstream consumers are audited.
+    // Currently `pub` is required because shekyl-fcmp and shekyl-ffi import these generators.
+    File::create(&path)
+        .expect("failed to create file in $OUT_DIR")
+        .write_all(
+            format!(
+                "
           /// The FCMP generators for {id}.
           pub static {}_FCMP_GENERATORS:
             std_shims::sync::LazyLock<shekyl_generators::FcmpGenerators<helioselene::{}>> =
@@ -132,46 +132,46 @@ where
                 ).unwrap()
               }});
         ",
-        id.clone().to_uppercase(),
-        id,
-        serialize(&point, generators.generators.g()),
-        serialize(&point, generators.generators.h()),
-        read_bytes(g_bold_path, generators.generators.g_bold_slice()),
-        read_bytes(h_bold_path, generators.generators.h_bold_slice()),
-      )
-      .as_bytes(),
-    )
-    .expect("couldn't write generated source code to file on disk");
+                id.clone().to_uppercase(),
+                id,
+                serialize(&point, generators.generators.g()),
+                serialize(&point, generators.generators.h()),
+                read_bytes(g_bold_path, generators.generators.g_bold_slice()),
+                read_bytes(h_bold_path, generators.generators.h_bold_slice()),
+            )
+            .as_bytes(),
+        )
+        .expect("couldn't write generated source code to file on disk");
 }
 
 #[cfg(feature = "compile-time-generators")]
 fn generators() {
-  generator_set::<helioselene::Helios>();
-  generator_set::<helioselene::Selene>();
-  let path =
-    Path::new(&env::var("OUT_DIR").expect("cargo didn't set $OUT_DIR")).join("generators.rs");
-  let _ = remove_file(&path);
-  File::create(&path)
-    .expect("failed to create file in $OUT_DIR")
-    .write_all(
-      b"
+    generator_set::<helioselene::Helios>();
+    generator_set::<helioselene::Selene>();
+    let path =
+        Path::new(&env::var("OUT_DIR").expect("cargo didn't set $OUT_DIR")).join("generators.rs");
+    let _ = remove_file(&path);
+    File::create(&path)
+        .expect("failed to create file in $OUT_DIR")
+        .write_all(
+            b"
         include!(concat!(env!(\"OUT_DIR\"), \"/helios_generators.rs\"));
         include!(concat!(env!(\"OUT_DIR\"), \"/selene_generators.rs\"));
       ",
-    )
-    .expect("couldn't write generated source code to file on disk");
+        )
+        .expect("couldn't write generated source code to file on disk");
 }
 
 #[cfg(not(feature = "compile-time-generators"))]
 fn generators() {
-  let path =
-    Path::new(&env::var("OUT_DIR").expect("cargo didn't set $OUT_DIR")).join("generators.rs");
-  let _ = remove_file(&path);
-  File::create(&path)
-    .expect("failed to create file in $OUT_DIR")
-    .write_all(
-      format!(
-        "
+    let path =
+        Path::new(&env::var("OUT_DIR").expect("cargo didn't set $OUT_DIR")).join("generators.rs");
+    let _ = remove_file(&path);
+    File::create(&path)
+        .expect("failed to create file in $OUT_DIR")
+        .write_all(
+            format!(
+                "
           /// The FCMP generators for Helios.
           pub static HELIOS_FCMP_GENERATORS: LazyLock<shekyl_generators::FcmpGenerators<Helios>> =
             LazyLock::new(shekyl_generators::FcmpGenerators::<Helios>::new);
@@ -179,14 +179,14 @@ fn generators() {
           pub static SELENE_FCMP_GENERATORS: LazyLock<shekyl_generators::FcmpGenerators<Selene>> =
             LazyLock::new(shekyl_generators::FcmpGenerators::<Selene>::new);
       ",
-      )
-      .as_bytes(),
-    )
-    .expect("couldn't write generated source code to file on disk");
+            )
+            .as_bytes(),
+        )
+        .expect("couldn't write generated source code to file on disk");
 }
 
 fn main() {
-  println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=build.rs");
 
-  generators();
+    generators();
 }

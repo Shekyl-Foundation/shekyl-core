@@ -92,11 +92,8 @@ async fn json_rpc_handler(
 
     #[cfg(feature = "multisig")]
     if crate::multisig_handlers::MULTISIG_METHODS.contains(&method.as_str()) {
-        let result = crate::multisig_handlers::dispatch_multisig(
-            &state.multisig,
-            &method,
-            request.params,
-        );
+        let result =
+            crate::multisig_handlers::dispatch_multisig(&state.multisig, &method, request.params);
         let response = match result {
             Ok(value) => JsonRpcResponse::success(id, value),
             Err(e) => JsonRpcResponse::error(id, e.code, e.message),
@@ -107,9 +104,14 @@ async fn json_rpc_handler(
     let wallet_guard = match state.wallet.lock() {
         Ok(g) => g,
         Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(
-                JsonRpcResponse::error(id, -32603, "wallet lock poisoned".into()),
-            ));
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(JsonRpcResponse::error(
+                    id,
+                    -32603,
+                    "wallet lock poisoned".into(),
+                )),
+            );
         }
     };
 

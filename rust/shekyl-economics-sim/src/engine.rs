@@ -1,11 +1,9 @@
-use shekyl_economics::{
-    calc_burn_pct, calc_release_multiplier,
-    calc_effective_emission_share, split_block_emission,
-    burn::compute_burn_split,
-    release::apply_release_multiplier,
-    params::SCALE,
-};
 use serde::Serialize;
+use shekyl_economics::{
+    burn::compute_burn_split, calc_burn_pct, calc_effective_emission_share,
+    calc_release_multiplier, params::SCALE, release::apply_release_multiplier,
+    split_block_emission,
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct YearSnapshot {
@@ -112,7 +110,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         if block_in_year == 0 {
             staker_emission_earned_year = 0;
             staker_fee_earned_year = 0;
-            year_start_circulating = (already_generated as u128).saturating_sub(total_burned);
+            year_start_circulating = already_generated.saturating_sub(total_burned);
         }
 
         let remaining = money_supply.saturating_sub(already_generated);
@@ -123,11 +121,8 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
 
         let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
         let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
-        let stake_ratio = (config.stake.get_stake_ratio)(
-            block,
-            params.blocks_per_year,
-            circulating,
-        );
+        let stake_ratio =
+            (config.stake.get_stake_ratio)(block, params.blocks_per_year, circulating);
 
         let multiplier = calc_release_multiplier(
             tx_volume,
@@ -178,16 +173,10 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         staker_fee_earned_year += fee_split.staker_pool_amount as u128;
 
         if block_in_year == params.blocks_per_year - 1 || block == total_blocks - 1 {
-            let circ_now =
-                (already_generated as u128).saturating_sub(total_burned) as f64 / COIN;
-            let supply_emitted_pct =
-                already_generated as f64 / money_supply as f64 * 100.0;
+            let circ_now = already_generated.saturating_sub(total_burned) as f64 / COIN;
+            let supply_emitted_pct = already_generated as f64 / money_supply as f64 * 100.0;
 
-            let avg_block_reward = if block_in_year > 0 {
-                effective_reward as f64 / COIN
-            } else {
-                effective_reward as f64 / COIN
-            };
+            let avg_block_reward = effective_reward as f64 / COIN;
 
             let staked_amount = if stake_ratio > 0 && circulating > 0 {
                 (circulating as u128 * stake_ratio as u128 / SCALE as u128) as f64 / COIN
@@ -195,8 +184,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
                 0.0
             };
 
-            let total_staker_income =
-                staker_emission_earned_year + staker_fee_earned_year;
+            let total_staker_income = staker_emission_earned_year + staker_fee_earned_year;
             let staker_yield = if staked_amount > 0.0 {
                 total_staker_income as f64 / COIN / staked_amount * 100.0
             } else {
@@ -261,20 +249,36 @@ mod tests {
 
     #[test]
     fn sim_defaults_match_canonical_economics_config() {
-        let cfg: Value = serde_json::from_str(include_str!("../../../config/economics_params.json"))
-            .expect("economics_params.json must be valid JSON");
+        let cfg: Value =
+            serde_json::from_str(include_str!("../../../config/economics_params.json"))
+                .expect("economics_params.json must be valid JSON");
         let p = SimParams::default();
 
         assert_eq!(p.money_supply, cfg_u64(&cfg, "money_supply"));
-        assert_eq!(p.final_subsidy_per_minute, cfg_u64(&cfg, "final_subsidy_per_minute"));
+        assert_eq!(
+            p.final_subsidy_per_minute,
+            cfg_u64(&cfg, "final_subsidy_per_minute")
+        );
         assert_eq!(p.blocks_per_year, cfg_u64(&cfg, "shekyl_blocks_per_year"));
-        assert_eq!(p.tx_volume_baseline, cfg_u64(&cfg, "shekyl_tx_volume_baseline"));
+        assert_eq!(
+            p.tx_volume_baseline,
+            cfg_u64(&cfg, "shekyl_tx_volume_baseline")
+        );
         assert_eq!(p.release_min, cfg_u64(&cfg, "shekyl_release_min"));
         assert_eq!(p.release_max, cfg_u64(&cfg, "shekyl_release_max"));
         assert_eq!(p.burn_base_rate, cfg_u64(&cfg, "shekyl_burn_base_rate"));
         assert_eq!(p.burn_cap, cfg_u64(&cfg, "shekyl_burn_cap"));
-        assert_eq!(p.staker_pool_share, cfg_u64(&cfg, "shekyl_staker_pool_share"));
-        assert_eq!(p.staker_emission_share, cfg_u64(&cfg, "shekyl_staker_emission_share"));
-        assert_eq!(p.staker_emission_decay, cfg_u64(&cfg, "shekyl_staker_emission_decay"));
+        assert_eq!(
+            p.staker_pool_share,
+            cfg_u64(&cfg, "shekyl_staker_pool_share")
+        );
+        assert_eq!(
+            p.staker_emission_share,
+            cfg_u64(&cfg, "shekyl_staker_emission_share")
+        );
+        assert_eq!(
+            p.staker_emission_decay,
+            cfg_u64(&cfg, "shekyl_staker_emission_decay")
+        );
     }
 }

@@ -19,10 +19,17 @@ use crate::session::ReplSession;
 #[derive(Debug)]
 pub enum ResolvedCommand {
     // -- Lifecycle (no account needed) --
-    Create { filename: String },
-    Open { filename: String },
+    Create {
+        filename: String,
+    },
+    Open {
+        filename: String,
+    },
     Close,
-    Restore { filename: String, seed_words: Vec<String> },
+    Restore {
+        filename: String,
+        seed_words: Vec<String>,
+    },
     Refresh,
     Save,
     Status,
@@ -30,13 +37,23 @@ pub enum ResolvedCommand {
     Exit,
 
     // -- Balance / address --
-    Balance { account_index: u32, subaddr_index: Option<u32> },
-    Address { account_index: u32, subaddr_index: Option<u32> },
+    Balance {
+        account_index: u32,
+        subaddr_index: Option<u32>,
+    },
+    Address {
+        account_index: u32,
+        subaddr_index: Option<u32>,
+    },
 
     // -- Account management --
     AccountShow,
-    AccountDefault { index: u32 },
-    AccountNew { label: String },
+    AccountDefault {
+        index: u32,
+    },
+    AccountNew {
+        label: String,
+    },
 
     // -- Transfers --
     Transfer {
@@ -48,8 +65,12 @@ pub enum ResolvedCommand {
         do_not_relay: bool,
         no_confirm: bool,
     },
-    Transfers { account_index: u32 },
-    ShowTransfer { txid: String },
+    Transfers {
+        account_index: u32,
+    },
+    ShowTransfer {
+        txid: String,
+    },
     SweepAll {
         account_index: u32,
         subaddr_indices: Vec<u32>,
@@ -58,44 +79,101 @@ pub enum ResolvedCommand {
     },
 
     // -- Staking --
-    Stake { account_index: u32, tier: Option<u8>, amount: u64 },
-    Unstake { account_index: u32 },
-    Claim { account_index: u32 },
-    StakingInfo { account_index: u32 },
+    Stake {
+        account_index: u32,
+        tier: Option<u8>,
+        amount: u64,
+    },
+    Unstake {
+        account_index: u32,
+    },
+    Claim {
+        account_index: u32,
+    },
+    StakingInfo {
+        account_index: u32,
+    },
     ChainHealth,
 
     // -- Keys --
     Seed,
     Viewkey,
     Spendkey,
-    ExportKeyImages { filename: String, all: bool, since_height: Option<u64>, account_index: u32 },
-    ImportKeyImages { filename: String },
+    ExportKeyImages {
+        filename: String,
+        all: bool,
+        since_height: Option<u64>,
+        account_index: u32,
+    },
+    ImportKeyImages {
+        filename: String,
+    },
 
     // -- Proofs --
-    GetTxKey { txid: String },
-    CheckTxKey { txid: String, tx_key: String, address: String },
-    GetTxProof { txid: String, address: String, message: Option<String> },
-    CheckTxProof { txid: String, address: String, signature: String, message: Option<String> },
-    GetReserveProof { account_index: u32, amount: Option<u64>, message: Option<String> },
-    CheckReserveProof { address: String, signature: String, message: Option<String> },
+    GetTxKey {
+        txid: String,
+    },
+    CheckTxKey {
+        txid: String,
+        tx_key: String,
+        address: String,
+    },
+    GetTxProof {
+        txid: String,
+        address: String,
+        message: Option<String>,
+    },
+    CheckTxProof {
+        txid: String,
+        address: String,
+        signature: String,
+        message: Option<String>,
+    },
+    GetReserveProof {
+        account_index: u32,
+        amount: Option<u64>,
+        message: Option<String>,
+    },
+    CheckReserveProof {
+        address: String,
+        signature: String,
+        message: Option<String>,
+    },
 
     // -- Signing --
-    Sign { message: String },
-    Verify { address: String, message: String, signature: String },
+    Sign {
+        message: String,
+    },
+    Verify {
+        address: String,
+        message: String,
+        signature: String,
+    },
 
     // -- Offline signing --
-    DescribeTransfer { unsigned_hex: String },
-    SignTransfer { unsigned_hex: String, file: Option<String> },
-    SubmitTransfer { signed_hex: String },
+    DescribeTransfer {
+        unsigned_hex: String,
+    },
+    SignTransfer {
+        unsigned_hex: String,
+        file: Option<String>,
+    },
+    SubmitTransfer {
+        signed_hex: String,
+    },
 
     // -- Meta --
     Password,
-    Rescan { hard: bool },
+    Rescan {
+        hard: bool,
+    },
     Version,
     WalletInfo,
 
     // -- Unknown --
-    Unknown { cmd: String },
+    Unknown {
+        cmd: String,
+    },
 }
 
 /// Parse a line of user input into a ResolvedCommand.
@@ -123,16 +201,24 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
         "exit" | "quit" => ResolvedCommand::Exit,
         "create" => {
             if let Some(filename) = args.first() {
-                ResolvedCommand::Create { filename: filename.to_string() }
+                ResolvedCommand::Create {
+                    filename: filename.to_string(),
+                }
             } else {
-                ResolvedCommand::Unknown { cmd: "create: missing filename".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "create: missing filename".to_string(),
+                }
             }
         }
         "open" => {
             if let Some(filename) = args.first() {
-                ResolvedCommand::Open { filename: filename.to_string() }
+                ResolvedCommand::Open {
+                    filename: filename.to_string(),
+                }
             } else {
-                ResolvedCommand::Unknown { cmd: "open: missing filename".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "open: missing filename".to_string(),
+                }
             }
         }
         "close" => ResolvedCommand::Close,
@@ -140,44 +226,58 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
             if args.len() >= 2 {
                 let filename = args[0].to_string();
                 let seed_words = args[1..].iter().map(|s| s.to_string()).collect();
-                ResolvedCommand::Restore { filename, seed_words }
+                ResolvedCommand::Restore {
+                    filename,
+                    seed_words,
+                }
             } else {
-                ResolvedCommand::Unknown { cmd: "restore: need <filename> <seed...>".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "restore: need <filename> <seed...>".to_string(),
+                }
             }
         }
         "refresh" => ResolvedCommand::Refresh,
         "save" => ResolvedCommand::Save,
         "status" => ResolvedCommand::Status,
-        "balance" => ResolvedCommand::Balance { account_index, subaddr_index },
+        "balance" => ResolvedCommand::Balance {
+            account_index,
+            subaddr_index,
+        },
         "address" => {
-            if args.first().map(|s| *s) == Some("new") {
+            if args.first().copied() == Some("new") {
                 let label = args.get(1..).map(|s| s.join(" ")).unwrap_or_default();
                 return ResolvedCommand::AccountNew { label };
             }
-            ResolvedCommand::Address { account_index, subaddr_index }
-        }
-        "account" => {
-            match args.first().map(|s| *s) {
-                Some("show") | None => ResolvedCommand::AccountShow,
-                Some("default") => {
-                    if let Some(idx) = args.get(1).and_then(|s| s.parse::<u32>().ok()) {
-                        ResolvedCommand::AccountDefault { index: idx }
-                    } else {
-                        ResolvedCommand::Unknown { cmd: "account default: need index".to_string() }
-                    }
-                }
-                Some("new") => {
-                    let label = args.get(1..).map(|s| s.join(" ")).unwrap_or_default();
-                    ResolvedCommand::AccountNew { label }
-                }
-                _ => ResolvedCommand::Unknown { cmd: format!("account: unknown subcommand {:?}", args.first()) },
+            ResolvedCommand::Address {
+                account_index,
+                subaddr_index,
             }
         }
+        "account" => match args.first().copied() {
+            Some("show") | None => ResolvedCommand::AccountShow,
+            Some("default") => {
+                if let Some(idx) = args.get(1).and_then(|s| s.parse::<u32>().ok()) {
+                    ResolvedCommand::AccountDefault { index: idx }
+                } else {
+                    ResolvedCommand::Unknown {
+                        cmd: "account default: need index".to_string(),
+                    }
+                }
+            }
+            Some("new") => {
+                let label = args.get(1..).map(|s| s.join(" ")).unwrap_or_default();
+                ResolvedCommand::AccountNew { label }
+            }
+            _ => ResolvedCommand::Unknown {
+                cmd: format!("account: unknown subcommand {:?}", args.first()),
+            },
+        },
         "transfer" => {
             let do_not_relay = args.contains(&"--do-not-relay");
             let no_confirm = args.contains(&"--no-confirm");
             let priority = extract_flag_u32(&args, "--priority");
-            let filtered: Vec<&str> = args.iter()
+            let filtered: Vec<&str> = args
+                .iter()
                 .filter(|a| !a.starts_with("--"))
                 .copied()
                 .collect();
@@ -193,23 +293,32 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
                         no_confirm,
                     }
                 } else {
-                    ResolvedCommand::Unknown { cmd: format!("transfer: invalid amount {:?}", filtered[0]) }
+                    ResolvedCommand::Unknown {
+                        cmd: format!("transfer: invalid amount {:?}", filtered[0]),
+                    }
                 }
             } else {
-                ResolvedCommand::Unknown { cmd: "transfer: need <amount> <address>".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "transfer: need <amount> <address>".to_string(),
+                }
             }
         }
         "transfers" => ResolvedCommand::Transfers { account_index },
         "show_transfer" => {
             if let Some(txid) = args.first() {
-                ResolvedCommand::ShowTransfer { txid: txid.to_string() }
+                ResolvedCommand::ShowTransfer {
+                    txid: txid.to_string(),
+                }
             } else {
-                ResolvedCommand::Unknown { cmd: "show_transfer: need <txid>".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "show_transfer: need <txid>".to_string(),
+                }
             }
         }
         "sweep_all" => {
             let priority = extract_flag_u32(&args, "--priority");
-            let filtered: Vec<&str> = args.iter()
+            let filtered: Vec<&str> = args
+                .iter()
                 .filter(|a| !a.starts_with("--"))
                 .copied()
                 .collect();
@@ -221,23 +330,34 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
                     priority,
                 }
             } else {
-                ResolvedCommand::Unknown { cmd: "sweep_all: need <address>".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "sweep_all: need <address>".to_string(),
+                }
             }
         }
         "stake" => {
-            let filtered: Vec<&str> = args.iter()
+            let filtered: Vec<&str> = args
+                .iter()
                 .filter(|a| !a.starts_with("--"))
                 .copied()
                 .collect();
             if let Some(amount_str) = filtered.first() {
                 if let Some(amount) = crate::commands::parse_amount(amount_str) {
                     let tier = filtered.get(1).and_then(|s| s.parse::<u8>().ok());
-                    ResolvedCommand::Stake { account_index, tier, amount }
+                    ResolvedCommand::Stake {
+                        account_index,
+                        tier,
+                        amount,
+                    }
                 } else {
-                    ResolvedCommand::Unknown { cmd: format!("stake: invalid amount {amount_str:?}") }
+                    ResolvedCommand::Unknown {
+                        cmd: format!("stake: invalid amount {amount_str:?}"),
+                    }
                 }
             } else {
-                ResolvedCommand::Unknown { cmd: "stake: need <amount>".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "stake: need <amount>".to_string(),
+                }
             }
         }
         "unstake" => ResolvedCommand::Unstake { account_index },
@@ -250,26 +370,42 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
         "export_key_images" => {
             let all = args.contains(&"--all");
             let since_height = extract_flag_u64(&args, "--since-height");
-            let filtered: Vec<&str> = args.iter()
+            let filtered: Vec<&str> = args
+                .iter()
                 .filter(|a| !a.starts_with("--"))
                 .copied()
                 .collect();
-            let filename = filtered.first().map(|s| s.to_string())
+            let filename = filtered
+                .first()
+                .map(|s| s.to_string())
                 .unwrap_or_else(|| "key_images".to_string());
-            ResolvedCommand::ExportKeyImages { filename, all, since_height, account_index }
+            ResolvedCommand::ExportKeyImages {
+                filename,
+                all,
+                since_height,
+                account_index,
+            }
         }
         "import_key_images" => {
             if let Some(filename) = args.first() {
-                ResolvedCommand::ImportKeyImages { filename: filename.to_string() }
+                ResolvedCommand::ImportKeyImages {
+                    filename: filename.to_string(),
+                }
             } else {
-                ResolvedCommand::Unknown { cmd: "import_key_images: need <filename>".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "import_key_images: need <filename>".to_string(),
+                }
             }
         }
         "get_tx_key" => {
             if let Some(txid) = args.first() {
-                ResolvedCommand::GetTxKey { txid: txid.to_string() }
+                ResolvedCommand::GetTxKey {
+                    txid: txid.to_string(),
+                }
             } else {
-                ResolvedCommand::Unknown { cmd: "get_tx_key: need <txid>".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "get_tx_key: need <txid>".to_string(),
+                }
             }
         }
         "check_tx_key" => {
@@ -280,7 +416,9 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
                     address: args[2].to_string(),
                 }
             } else {
-                ResolvedCommand::Unknown { cmd: "check_tx_key: need <txid> <tx_key> <address>".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "check_tx_key: need <txid> <tx_key> <address>".to_string(),
+                }
             }
         }
         "get_tx_proof" => {
@@ -291,7 +429,9 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
                     message: args.get(2).map(|s| s.to_string()),
                 }
             } else {
-                ResolvedCommand::Unknown { cmd: "get_tx_proof: need <txid> <address> [message]".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "get_tx_proof: need <txid> <address> [message]".to_string(),
+                }
             }
         }
         "check_tx_proof" => {
@@ -303,17 +443,26 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
                     message: args.get(3).map(|s| s.to_string()),
                 }
             } else {
-                ResolvedCommand::Unknown { cmd: "check_tx_proof: need <txid> <address> <sig> [msg]".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "check_tx_proof: need <txid> <address> <sig> [msg]".to_string(),
+                }
             }
         }
         "get_reserve_proof" => {
-            let filtered: Vec<&str> = args.iter()
+            let filtered: Vec<&str> = args
+                .iter()
                 .filter(|a| !a.starts_with("--"))
                 .copied()
                 .collect();
-            let amount = filtered.first().and_then(|s| crate::commands::parse_amount(s));
+            let amount = filtered
+                .first()
+                .and_then(|s| crate::commands::parse_amount(s));
             let message = filtered.get(1).map(|s| s.to_string());
-            ResolvedCommand::GetReserveProof { account_index, amount, message }
+            ResolvedCommand::GetReserveProof {
+                account_index,
+                amount,
+                message,
+            }
         }
         "check_reserve_proof" => {
             if args.len() >= 2 {
@@ -323,13 +472,17 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
                     message: args.get(2).map(|s| s.to_string()),
                 }
             } else {
-                ResolvedCommand::Unknown { cmd: "check_reserve_proof: need <address> <sig> [msg]".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "check_reserve_proof: need <address> <sig> [msg]".to_string(),
+                }
             }
         }
         "sign" => {
             let message = args.join(" ");
             if message.is_empty() {
-                ResolvedCommand::Unknown { cmd: "sign: need <message>".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "sign: need <message>".to_string(),
+                }
             } else {
                 ResolvedCommand::Sign { message }
             }
@@ -342,49 +495,71 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
                     signature: args[2].to_string(),
                 }
             } else {
-                ResolvedCommand::Unknown { cmd: "verify: need <address> <message> <signature>".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "verify: need <address> <message> <signature>".to_string(),
+                }
             }
         }
         "describe_transfer" => {
             if let Some(hex) = args.first() {
-                ResolvedCommand::DescribeTransfer { unsigned_hex: hex.to_string() }
+                ResolvedCommand::DescribeTransfer {
+                    unsigned_hex: hex.to_string(),
+                }
             } else {
-                ResolvedCommand::Unknown { cmd: "describe_transfer: need <unsigned_hex>".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "describe_transfer: need <unsigned_hex>".to_string(),
+                }
             }
         }
         "sign_transfer" => {
             let file = extract_flag_str(&args, "--file");
-            let filtered: Vec<&str> = args.iter()
+            let filtered: Vec<&str> = args
+                .iter()
                 .filter(|a| !a.starts_with("--"))
                 .copied()
                 .collect();
             if let Some(hex) = filtered.first() {
-                ResolvedCommand::SignTransfer { unsigned_hex: hex.to_string(), file }
+                ResolvedCommand::SignTransfer {
+                    unsigned_hex: hex.to_string(),
+                    file,
+                }
             } else if file.is_some() {
-                ResolvedCommand::SignTransfer { unsigned_hex: String::new(), file }
+                ResolvedCommand::SignTransfer {
+                    unsigned_hex: String::new(),
+                    file,
+                }
             } else {
-                ResolvedCommand::Unknown { cmd: "sign_transfer: need <hex> or --file <path>".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "sign_transfer: need <hex> or --file <path>".to_string(),
+                }
             }
         }
         "submit_transfer" => {
-            let filtered: Vec<&str> = args.iter()
+            let filtered: Vec<&str> = args
+                .iter()
                 .filter(|a| !a.starts_with("--"))
                 .copied()
                 .collect();
             if let Some(hex) = filtered.first() {
-                ResolvedCommand::SubmitTransfer { signed_hex: hex.to_string() }
+                ResolvedCommand::SubmitTransfer {
+                    signed_hex: hex.to_string(),
+                }
             } else {
-                ResolvedCommand::Unknown { cmd: "submit_transfer: need <signed_hex>".to_string() }
+                ResolvedCommand::Unknown {
+                    cmd: "submit_transfer: need <signed_hex>".to_string(),
+                }
             }
         }
         "password" => ResolvedCommand::Password,
         "rescan" => {
-            let hard = args.first().map(|s| *s) == Some("hard");
+            let hard = args.first().copied() == Some("hard");
             ResolvedCommand::Rescan { hard }
         }
         "version" => ResolvedCommand::Version,
         "wallet_info" => ResolvedCommand::WalletInfo,
-        other => ResolvedCommand::Unknown { cmd: other.to_string() },
+        other => ResolvedCommand::Unknown {
+            cmd: other.to_string(),
+        },
     }
 }
 
@@ -431,7 +606,10 @@ fn extract_subaddr_indices<'a>(args: &[&'a str]) -> (Vec<u32>, Vec<&'a str>) {
         }
         if *arg == "--subaddr-indices" {
             if let Some(val) = args.get(i + 1) {
-                indices = val.split(',').filter_map(|s| s.trim().parse::<u32>().ok()).collect();
+                indices = val
+                    .split(',')
+                    .filter_map(|s| s.trim().parse::<u32>().ok())
+                    .collect();
                 skip_next = true;
                 continue;
             }
@@ -507,7 +685,10 @@ mod tests {
         assert!(matches!(parse("exit", &session()), ResolvedCommand::Exit));
         assert!(matches!(parse("quit", &session()), ResolvedCommand::Exit));
         assert!(matches!(parse("close", &session()), ResolvedCommand::Close));
-        assert!(matches!(parse("refresh", &session()), ResolvedCommand::Refresh));
+        assert!(matches!(
+            parse("refresh", &session()),
+            ResolvedCommand::Refresh
+        ));
     }
 
     #[test]
@@ -533,7 +714,12 @@ mod tests {
     #[test]
     fn test_transfer_parsing() {
         match parse("transfer 1.5 skl1abc123", &session()) {
-            ResolvedCommand::Transfer { amount, dest, account_index, .. } => {
+            ResolvedCommand::Transfer {
+                amount,
+                dest,
+                account_index,
+                ..
+            } => {
                 assert_eq!(amount, 1_500_000_000_000);
                 assert_eq!(dest, "skl1abc123");
                 assert_eq!(account_index, 0);
@@ -553,7 +739,9 @@ mod tests {
     #[test]
     fn test_subaddr_indices() {
         match parse("transfer --subaddr-indices 0,1,3 1.0 skl1addr", &session()) {
-            ResolvedCommand::Transfer { subaddr_indices, .. } => {
+            ResolvedCommand::Transfer {
+                subaddr_indices, ..
+            } => {
                 assert_eq!(subaddr_indices, vec![0, 1, 3]);
             }
             other => panic!("expected Transfer, got {other:?}"),

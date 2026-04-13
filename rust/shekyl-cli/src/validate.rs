@@ -15,7 +15,7 @@ pub fn validate_hex(s: &str) -> Result<(), &'static str> {
     if s.len() > 256 {
         return Err("hex string too long (max 256 chars / 128 bytes)");
     }
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("hex string has odd length");
     }
     if s.contains('\0') {
@@ -173,7 +173,7 @@ mod tests {
         let ok = "a".repeat(1_048_576);
         assert!(validate_input_length(&ok, 1_048_576).is_ok());
 
-        let with_null = format!("abc\0def");
+        let with_null = "abc\0def".to_string();
         assert!(validate_input_length(&with_null, 1_048_576).is_err());
     }
 

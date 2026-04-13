@@ -94,7 +94,7 @@ pub fn hash_grow_selene(
     new_children: &[[u8; 32]],
 ) -> Option<[u8; 32]> {
     let generators = &shekyl_fcmp_plus_plus::SELENE_FCMP_GENERATORS.generators;
-    let existing = <Selene as Ciphersuite>::G::from_bytes(existing_hash.into());
+    let existing = <Selene as Ciphersuite>::G::from_bytes(existing_hash);
     if bool::from(existing.is_none()) {
         return None;
     }
@@ -103,18 +103,13 @@ pub fn hash_grow_selene(
     let old_child = deserialize_selene_scalar(existing_child_at_offset)?;
     let children: Vec<<Selene as Ciphersuite>::F> = new_children
         .iter()
-        .map(|b| deserialize_selene_scalar(b))
+        .map(deserialize_selene_scalar)
         .collect::<Option<Vec<_>>>()?;
 
-    let result = fcmps::tree::hash_grow::<Selene>(
-        generators,
-        existing,
-        offset,
-        old_child,
-        &children,
-    )?;
+    let result =
+        fcmps::tree::hash_grow::<Selene>(generators, existing, offset, old_child, &children)?;
 
-    Some(result.to_bytes().into())
+    Some(result.to_bytes())
 }
 
 /// Trim children from an existing Selene chunk hash.
@@ -125,7 +120,7 @@ pub fn hash_trim_selene(
     child_to_grow_back: &[u8; 32],
 ) -> Option<[u8; 32]> {
     let generators = &shekyl_fcmp_plus_plus::SELENE_FCMP_GENERATORS.generators;
-    let existing = <Selene as Ciphersuite>::G::from_bytes(existing_hash.into());
+    let existing = <Selene as Ciphersuite>::G::from_bytes(existing_hash);
     if bool::from(existing.is_none()) {
         return None;
     }
@@ -133,19 +128,14 @@ pub fn hash_trim_selene(
 
     let children: Vec<<Selene as Ciphersuite>::F> = children_to_remove
         .iter()
-        .map(|b| deserialize_selene_scalar(b))
+        .map(deserialize_selene_scalar)
         .collect::<Option<Vec<_>>>()?;
     let grow_back = deserialize_selene_scalar(child_to_grow_back)?;
 
-    let result = fcmps::tree::hash_trim::<Selene>(
-        generators,
-        existing,
-        offset,
-        &children,
-        grow_back,
-    )?;
+    let result =
+        fcmps::tree::hash_trim::<Selene>(generators, existing, offset, &children, grow_back)?;
 
-    Some(result.to_bytes().into())
+    Some(result.to_bytes())
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +150,7 @@ pub fn hash_grow_helios(
     new_children: &[[u8; 32]],
 ) -> Option<[u8; 32]> {
     let generators = &shekyl_fcmp_plus_plus::HELIOS_FCMP_GENERATORS.generators;
-    let existing = <Helios as Ciphersuite>::G::from_bytes(existing_hash.into());
+    let existing = <Helios as Ciphersuite>::G::from_bytes(existing_hash);
     if bool::from(existing.is_none()) {
         return None;
     }
@@ -169,18 +159,13 @@ pub fn hash_grow_helios(
     let old_child = deserialize_helios_scalar(existing_child_at_offset)?;
     let children: Vec<<Helios as Ciphersuite>::F> = new_children
         .iter()
-        .map(|b| deserialize_helios_scalar(b))
+        .map(deserialize_helios_scalar)
         .collect::<Option<Vec<_>>>()?;
 
-    let result = fcmps::tree::hash_grow::<Helios>(
-        generators,
-        existing,
-        offset,
-        old_child,
-        &children,
-    )?;
+    let result =
+        fcmps::tree::hash_grow::<Helios>(generators, existing, offset, old_child, &children)?;
 
-    Some(result.to_bytes().into())
+    Some(result.to_bytes())
 }
 
 /// Trim children from an existing Helios chunk hash.
@@ -191,7 +176,7 @@ pub fn hash_trim_helios(
     child_to_grow_back: &[u8; 32],
 ) -> Option<[u8; 32]> {
     let generators = &shekyl_fcmp_plus_plus::HELIOS_FCMP_GENERATORS.generators;
-    let existing = <Helios as Ciphersuite>::G::from_bytes(existing_hash.into());
+    let existing = <Helios as Ciphersuite>::G::from_bytes(existing_hash);
     if bool::from(existing.is_none()) {
         return None;
     }
@@ -199,19 +184,14 @@ pub fn hash_trim_helios(
 
     let children: Vec<<Helios as Ciphersuite>::F> = children_to_remove
         .iter()
-        .map(|b| deserialize_helios_scalar(b))
+        .map(deserialize_helios_scalar)
         .collect::<Option<Vec<_>>>()?;
     let grow_back = deserialize_helios_scalar(child_to_grow_back)?;
 
-    let result = fcmps::tree::hash_trim::<Helios>(
-        generators,
-        existing,
-        offset,
-        &children,
-        grow_back,
-    )?;
+    let result =
+        fcmps::tree::hash_trim::<Helios>(generators, existing, offset, &children, grow_back)?;
 
-    Some(result.to_bytes().into())
+    Some(result.to_bytes())
 }
 
 // ---------------------------------------------------------------------------
@@ -224,22 +204,22 @@ pub fn hash_trim_helios(
 /// field elements. This conversion feeds Selene layer hashes into the
 /// next Helios layer as children.
 pub fn selene_point_to_helios_scalar(selene_point: &[u8; 32]) -> Option<[u8; 32]> {
-    let point = <Selene as Ciphersuite>::G::from_bytes(selene_point.into());
+    let point = <Selene as Ciphersuite>::G::from_bytes(selene_point);
     if bool::from(point.is_none()) {
         return None;
     }
     let (x, _y) = <<Selene as Ciphersuite>::G as DivisorCurve>::to_xy(point.unwrap())?;
-    Some(x.to_repr().into())
+    Some(x.to_repr())
 }
 
 /// Extract the x-coordinate of a Helios point as a Selene scalar.
 pub fn helios_point_to_selene_scalar(helios_point: &[u8; 32]) -> Option<[u8; 32]> {
-    let point = <Helios as Ciphersuite>::G::from_bytes(helios_point.into());
+    let point = <Helios as Ciphersuite>::G::from_bytes(helios_point);
     if bool::from(point.is_none()) {
         return None;
     }
     let (x, _y) = <<Helios as Ciphersuite>::G as DivisorCurve>::to_xy(point.unwrap())?;
-    Some(x.to_repr().into())
+    Some(x.to_repr())
 }
 
 // ---------------------------------------------------------------------------
@@ -248,12 +228,12 @@ pub fn helios_point_to_selene_scalar(helios_point: &[u8; 32]) -> Option<[u8; 32]
 
 /// Get the Selene hash initialization point (used for empty chunks).
 pub fn selene_hash_init() -> [u8; 32] {
-    SELENE_HASH_INIT.to_bytes().into()
+    SELENE_HASH_INIT.to_bytes()
 }
 
 /// Get the Helios hash initialization point (used for empty chunks).
 pub fn helios_hash_init() -> [u8; 32] {
-    HELIOS_HASH_INIT.to_bytes().into()
+    HELIOS_HASH_INIT.to_bytes()
 }
 
 // ---------------------------------------------------------------------------
@@ -269,12 +249,12 @@ pub fn helios_hash_init() -> [u8; 32] {
 pub fn ed25519_point_to_selene_scalar(compressed: &[u8; 32]) -> Option<[u8; 32]> {
     use dalek_ff_group::EdwardsPoint as DfgEdwardsPoint;
 
-    let point = <DfgEdwardsPoint as GroupEncoding>::from_bytes(compressed.into());
+    let point = <DfgEdwardsPoint as GroupEncoding>::from_bytes(compressed);
     if bool::from(point.is_none()) {
         return None;
     }
     let (x, _y) = DfgEdwardsPoint::to_xy(point.unwrap())?;
-    Some(x.to_repr().into())
+    Some(x.to_repr())
 }
 
 /// Construct a 128-byte curve tree leaf from an output's public key, commitment,
@@ -332,9 +312,7 @@ pub fn proof_size(num_inputs: usize, tree_depth: usize) -> usize {
 /// Even non-leaf layers (Selene) use `SELENE_CHUNK_WIDTH`.
 /// Odd layers (Helios) use `HELIOS_CHUNK_WIDTH`.
 pub fn chunk_width(layer: u8) -> usize {
-    if layer == 0 {
-        SELENE_CHUNK_WIDTH
-    } else if layer % 2 == 0 {
+    if layer.is_multiple_of(2) {
         SELENE_CHUNK_WIDTH
     } else {
         HELIOS_CHUNK_WIDTH
@@ -343,7 +321,7 @@ pub fn chunk_width(layer: u8) -> usize {
 
 /// Returns true if the given layer uses Selene (even layers), false for Helios (odd layers).
 pub fn layer_is_selene(layer: u8) -> bool {
-    layer % 2 == 0
+    layer.is_multiple_of(2)
 }
 
 // ---------------------------------------------------------------------------
@@ -351,7 +329,7 @@ pub fn layer_is_selene(layer: u8) -> bool {
 // ---------------------------------------------------------------------------
 
 fn deserialize_selene_scalar(bytes: &[u8; 32]) -> Option<<Selene as Ciphersuite>::F> {
-    let repr = <Selene as Ciphersuite>::F::from_repr((*bytes).into());
+    let repr = <Selene as Ciphersuite>::F::from_repr(*bytes);
     if bool::from(repr.is_some()) {
         Some(repr.unwrap())
     } else {
@@ -360,7 +338,7 @@ fn deserialize_selene_scalar(bytes: &[u8; 32]) -> Option<<Selene as Ciphersuite>
 }
 
 fn deserialize_helios_scalar(bytes: &[u8; 32]) -> Option<<Helios as Ciphersuite>::F> {
-    let repr = <Helios as Ciphersuite>::F::from_repr((*bytes).into());
+    let repr = <Helios as Ciphersuite>::F::from_repr(*bytes);
     if bool::from(repr.is_some()) {
         Some(repr.unwrap())
     } else {
@@ -475,7 +453,10 @@ mod tests {
 
         let one = hash_grow_selene(&init, 0, &zero, &[s1]).unwrap();
         let two = hash_grow_selene(&init, 0, &zero, &[s1, s2]).unwrap();
-        assert_ne!(one, two, "different child counts must produce different hashes");
+        assert_ne!(
+            one, two,
+            "different child counts must produce different hashes"
+        );
     }
 
     #[test]
@@ -552,8 +533,10 @@ mod tests {
 
     #[test]
     fn construct_leaf_rejects_identity_point() {
-        let identity = [1u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let identity = [
+            1u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0,
+        ];
         let _ = construct_leaf(&identity, &identity, &[0u8; 32]);
     }
 

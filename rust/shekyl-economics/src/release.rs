@@ -20,6 +20,7 @@ use crate::params::{clamp, SCALE};
 ///
 /// # Returns
 /// Fixed-point multiplier in SCALE units. 1_000_000 = 1.0x release rate.
+#[allow(clippy::cast_possible_truncation)]
 pub fn calc_release_multiplier(
     tx_volume_avg: u64,
     tx_volume_baseline: u64,
@@ -31,7 +32,8 @@ pub fn calc_release_multiplier(
     }
 
     // ratio = tx_volume_avg / tx_volume_baseline, scaled to SCALE
-    let ratio = (tx_volume_avg as u128 * SCALE as u128 / tx_volume_baseline as u128) as u64;
+    let ratio =
+        (u128::from(tx_volume_avg) * u128::from(SCALE) / u128::from(tx_volume_baseline)) as u64;
 
     clamp(ratio, release_min, release_max)
 }
@@ -39,8 +41,9 @@ pub fn calc_release_multiplier(
 /// Apply the release multiplier to a base reward.
 ///
 /// Uses u128 intermediate to prevent overflow.
+#[allow(clippy::cast_possible_truncation)]
 pub fn apply_release_multiplier(base_reward: u64, multiplier: u64) -> u64 {
-    ((base_reward as u128 * multiplier as u128) / SCALE as u128) as u64
+    (u128::from(base_reward) * u128::from(multiplier) / u128::from(SCALE)) as u64
 }
 
 #[cfg(test)]
@@ -92,10 +95,11 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_possible_truncation)]
     fn test_apply_no_overflow_large_reward() {
         let large_reward = 4_294_967_296_000_000_000u64; // full money supply
         let result = apply_release_multiplier(large_reward, 1_300_000);
-        let expected = (large_reward as u128 * 1_300_000u128 / 1_000_000u128) as u64;
+        let expected = (u128::from(large_reward) * 1_300_000u128 / 1_000_000u128) as u64;
         assert_eq!(result, expected);
     }
 
@@ -115,8 +119,14 @@ mod tests {
         let mut prev = 0u64;
         for s in samples {
             let m = calc_release_multiplier(s, baseline, min, max);
-            assert!(m >= prev, "multiplier regressed at volume {s}: {m} < {prev}");
-            assert!(m >= min && m <= max, "multiplier out of bounds at volume {s}: {m}");
+            assert!(
+                m >= prev,
+                "multiplier regressed at volume {s}: {m} < {prev}"
+            );
+            assert!(
+                m >= min && m <= max,
+                "multiplier out of bounds at volume {s}: {m}"
+            );
             prev = m;
         }
     }

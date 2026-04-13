@@ -10,12 +10,12 @@
 
 #![deny(unsafe_code)]
 
-pub mod signature;
-pub mod multisig;
-pub mod kem;
 pub mod derivation;
-pub mod output;
 pub mod error;
+pub mod kem;
+pub mod multisig;
+pub mod output;
+pub mod signature;
 
-pub use shekyl_address as address;
 pub use error::CryptoError;
+pub use shekyl_address as address;

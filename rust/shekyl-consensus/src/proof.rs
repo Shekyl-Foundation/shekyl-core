@@ -6,10 +6,7 @@ use serde::{Deserialize, Serialize};
 pub enum ProofType {
     ProofOfWork,
     ProofOfStake,
-    Hybrid {
-        pow_weight: f64,
-        pos_weight: f64,
-    },
+    Hybrid { pow_weight: f64, pos_weight: f64 },
 }
 
 /// Core trait that all proof mechanisms must implement.
@@ -25,10 +22,7 @@ pub trait ConsensusProof: Send + Sync {
         proof_data: &[u8],
     ) -> Result<(), ConsensusError>;
 
-    fn difficulty_for_next_block(
-        &self,
-        chain: &ChainState,
-    ) -> Result<Difficulty, ConsensusError>;
+    fn difficulty_for_next_block(&self, chain: &ChainState) -> Result<Difficulty, ConsensusError>;
 
     fn proof_type(&self) -> ProofType;
 

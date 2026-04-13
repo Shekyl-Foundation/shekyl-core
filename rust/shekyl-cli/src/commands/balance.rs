@@ -30,15 +30,12 @@ pub fn cmd_balance(ctx: &WalletContext, account_index: u32) {
     match ctx.get_balance(account_index) {
         Ok(val) => {
             let balance = val.get("balance").and_then(|v| v.as_u64()).unwrap_or(0);
-            let unlocked = val.get("unlocked_balance").and_then(|v| v.as_u64()).unwrap_or(0);
-            println!(
-                "Balance:          {} SKL",
-                super::format_amount(balance)
-            );
-            println!(
-                "Unlocked balance: {} SKL",
-                super::format_amount(unlocked)
-            );
+            let unlocked = val
+                .get("unlocked_balance")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            println!("Balance:          {} SKL", super::format_amount(balance));
+            println!("Unlocked balance: {} SKL", super::format_amount(unlocked));
         }
         Err(e) => eprintln!("Failed to get balance: {e}"),
     }

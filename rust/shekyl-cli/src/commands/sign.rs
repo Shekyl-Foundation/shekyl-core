@@ -60,26 +60,20 @@ pub fn cmd_wallet_info(ctx: &WalletContext) {
     println!("Wallet info:");
     println!("  Height: {height}");
 
-    match ctx.get_address(0) {
-        Ok(val) => {
-            if let Some(addr) = val.get("address").and_then(|a| a.as_str()) {
-                let truncated = if addr.len() > 16 {
-                    format!("{}...{}", &addr[..8], &addr[addr.len() - 8..])
-                } else {
-                    addr.to_string()
-                };
-                println!("  Primary address: {truncated}");
-            }
+    if let Ok(val) = ctx.get_address(0) {
+        if let Some(addr) = val.get("address").and_then(|a| a.as_str()) {
+            let truncated = if addr.len() > 16 {
+                format!("{}...{}", &addr[..8], &addr[addr.len() - 8..])
+            } else {
+                addr.to_string()
+            };
+            println!("  Primary address: {truncated}");
         }
-        Err(_) => {}
     }
 
-    match ctx.json_rpc("get_accounts", "{}") {
-        Ok(val) => {
-            if let Some(accts) = val.get("subaddress_accounts").and_then(|a| a.as_array()) {
-                println!("  Accounts: {}", accts.len());
-            }
+    if let Ok(val) = ctx.json_rpc("get_accounts", "{}") {
+        if let Some(accts) = val.get("subaddress_accounts").and_then(|a| a.as_array()) {
+            println!("  Accounts: {}", accts.len());
         }
-        Err(_) => {}
     }
 }

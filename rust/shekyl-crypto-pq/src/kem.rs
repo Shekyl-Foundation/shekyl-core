@@ -258,14 +258,16 @@ impl SeedDerivation {
     fn hkdf_expand_32(seed: &[u8; 32], info: &[u8]) -> [u8; 32] {
         let hk = Hkdf::<Sha512>::new(Some(Self::HKDF_SALT_MASTER_DERIVE), seed);
         let mut okm = [0u8; 32];
-        hk.expand(info, &mut okm).expect("32 bytes < max HKDF output");
+        hk.expand(info, &mut okm)
+            .expect("32 bytes < max HKDF output");
         okm
     }
 
     fn hkdf_expand_64(seed: &[u8; 32], info: &[u8]) -> [u8; 64] {
         let hk = Hkdf::<Sha512>::new(Some(Self::HKDF_SALT_MASTER_DERIVE), seed);
         let mut okm = [0u8; 64];
-        hk.expand(info, &mut okm).expect("64 bytes < max HKDF output");
+        hk.expand(info, &mut okm)
+            .expect("64 bytes < max HKDF output");
         okm
     }
 }
@@ -296,7 +298,10 @@ mod tests {
 
         let (ss1, _ct1) = kem.encapsulate(&pk).unwrap();
         let (ss2, _ct2) = kem.encapsulate(&pk).unwrap();
-        assert_ne!(ss1.0, ss2.0, "each encapsulation must produce a unique secret");
+        assert_ne!(
+            ss1.0, ss2.0,
+            "each encapsulation must produce a unique secret"
+        );
     }
 
     #[test]
@@ -311,7 +316,10 @@ mod tests {
         // (implicit rejection), so it won't match the sender's. X25519 will also differ.
         // The function itself shouldn't error, but the secrets won't match.
         if let Ok(wrong_ss) = result {
-            assert_ne!(wrong_ss.0, _ss.0, "wrong key should produce different secret");
+            assert_ne!(
+                wrong_ss.0, _ss.0,
+                "wrong key should produce different secret"
+            );
         }
     }
 

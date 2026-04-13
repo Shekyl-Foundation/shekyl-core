@@ -2,10 +2,10 @@
 //! or tampered cryptographic material, persist the vectors as JSON under
 //! `docs/`, and verify that the hybrid signature scheme rejects them.
 
+use serde_json::json;
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
 };
-use serde_json::json;
 use std::path::PathBuf;
 
 fn docs_dir() -> PathBuf {
@@ -15,6 +15,7 @@ fn docs_dir() -> PathBuf {
         .expect("docs/ directory must exist relative to crate root")
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn from_hex(s: &str) -> Vec<u8> {
     assert_eq!(s.len() % 2, 0, "hex string must have even length");
     let mut out = Vec::with_capacity(s.len() / 2);
@@ -115,16 +116,15 @@ fn generate_and_write_vector_004() -> serde_json::Value {
     //   [0] version  [1] scheme  [2..3] reserved
     //   [4..7] ed25519_len (u32 LE)  [8..8+ed_len-1] ed25519 data
     //   [8+ed_len..8+ed_len+3] ml_dsa_len (u32 LE)  then ml_dsa data
-    let ed_len = u32::from_le_bytes(
-        sig_bytes[4..8].try_into().unwrap(),
-    ) as usize;
+    let ed_len = u32::from_le_bytes(sig_bytes[4..8].try_into().unwrap()) as usize;
     let ml_len_offset = 8 + ed_len;
     let original_ml_len = u32::from_le_bytes(
-        sig_bytes[ml_len_offset..ml_len_offset + 4].try_into().unwrap(),
+        sig_bytes[ml_len_offset..ml_len_offset + 4]
+            .try_into()
+            .unwrap(),
     );
     let inflated = original_ml_len + 256;
-    sig_bytes[ml_len_offset..ml_len_offset + 4]
-        .copy_from_slice(&inflated.to_le_bytes());
+    sig_bytes[ml_len_offset..ml_len_offset + 4].copy_from_slice(&inflated.to_le_bytes());
 
     let vector = json!({
         "scheme": "ed25519_ml_dsa_65",
@@ -157,16 +157,10 @@ fn vector_002_tampered_ownership_rejected() {
 
     let sig = HybridSignature::from_canonical_bytes(&sig_bytes).unwrap();
 
-    match HybridPublicKey::from_canonical_bytes(&pk_bytes) {
-        Ok(pk) => {
-            let result = HybridEd25519MlDsa.verify(&pk, &message, &sig);
-            match result {
-                Ok(true) => panic!("tampered ownership must NOT verify as Ok(true)"),
-                Ok(false) => {} // signature math rejects — expected
-                Err(_) => {}    // invalid curve point — also expected
-            }
+    if let Ok(pk) = HybridPublicKey::from_canonical_bytes(&pk_bytes) {
+        if let Ok(true) = HybridEd25519MlDsa.verify(&pk, &message, &sig) {
+            panic!("tampered ownership must NOT verify as Ok(true)");
         }
-        Err(_) => {} // corrupted key cannot even parse — valid rejection
     }
 }
 

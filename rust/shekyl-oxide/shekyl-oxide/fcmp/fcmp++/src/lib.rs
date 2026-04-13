@@ -5,27 +5,29 @@
 #![deny(unsafe_code)]
 #![allow(non_snake_case)]
 
-use std_shims::{sync::LazyLock, vec, vec::Vec, io};
+use std_shims::{io, sync::LazyLock, vec, vec::Vec};
 
-use rand_core::{RngCore, CryptoRng};
+use rand_core::{CryptoRng, RngCore};
 use zeroize::Zeroize;
 
 use generic_array::typenum::U;
 
-use blake2::{Digest, Blake2b512};
+use blake2::{Blake2b512, Digest};
 
-use dalek_ff_group::{EdwardsPoint, Ed25519};
 use ciphersuite::{
-  group::{ff::PrimeField, GroupEncoding},
-  Ciphersuite,
+    group::{ff::PrimeField, GroupEncoding},
+    Ciphersuite,
 };
-use helioselene::{Selene, Helios};
+use dalek_ff_group::{Ed25519, EdwardsPoint};
+use helioselene::{Helios, Selene};
 
-use generalized_bulletproofs_ec_gadgets::*;
 pub use fcmps;
 use fcmps::*;
+use generalized_bulletproofs_ec_gadgets::*;
 
-use shekyl_generators::{T, FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, HELIOS_HASH_INIT, SELENE_HASH_INIT};
+use shekyl_generators::{
+    FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, HELIOS_HASH_INIT, SELENE_HASH_INIT, T,
+};
 
 /// The Spend-Authorization and Linkability proof.
 pub mod sal;
@@ -38,34 +40,34 @@ mod tests;
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Ed25519Params;
 impl DiscreteLogParameter for Ed25519Params {
-  type ScalarBits = U<{ <<Ed25519 as Ciphersuite>::F as PrimeField>::NUM_BITS as usize }>;
+    type ScalarBits = U<{ <<Ed25519 as Ciphersuite>::F as PrimeField>::NUM_BITS as usize }>;
 }
 
 /// The discrete-log gadget parameters for Selene.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SeleneParams;
 impl DiscreteLogParameter for SeleneParams {
-  type ScalarBits = U<{ <<Selene as Ciphersuite>::F as PrimeField>::NUM_BITS as usize }>;
+    type ScalarBits = U<{ <<Selene as Ciphersuite>::F as PrimeField>::NUM_BITS as usize }>;
 }
 
 /// The discrete-log gadget parameters for Helios.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct HeliosParams;
 impl DiscreteLogParameter for HeliosParams {
-  type ScalarBits = U<{ <<Helios as Ciphersuite>::F as PrimeField>::NUM_BITS as usize }>;
+    type ScalarBits = U<{ <<Helios as Ciphersuite>::F as PrimeField>::NUM_BITS as usize }>;
 }
 
 /// The curves to use with the FCMP.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Curves;
 impl FcmpCurves for Curves {
-  type OC = Ed25519;
-  type OcParameters = Ed25519Params;
-  type C1 = Selene;
-  type C1Parameters = SeleneParams;
-  type C2 = Helios;
-  type C2Parameters = HeliosParams;
-  const EXTRA_LEAF_SCALARS: usize = 1;
+    type OC = Ed25519;
+    type OcParameters = Ed25519Params;
+    type C1 = Selene;
+    type C1Parameters = SeleneParams;
+    type C2 = Helios;
+    type C2Parameters = HeliosParams;
+    const EXTRA_LEAF_SCALARS: usize = 1;
 }
 
 include!(concat!(env!("OUT_DIR"), "/generators.rs"));
@@ -74,19 +76,19 @@ include!(concat!(env!("OUT_DIR"), "/generators.rs"));
 // TODO(shekyl): Wrap in a safe builder/accessor API. Current LazyLock is immutable and safe;
 // encapsulation is a code-quality improvement, not a correctness requirement.
 pub static FCMP_PARAMS: LazyLock<FcmpParams<Curves>> = LazyLock::new(|| {
-  FcmpParams::<Curves>::new(
-    SELENE_FCMP_GENERATORS.generators.clone(),
-    HELIOS_FCMP_GENERATORS.generators.clone(),
-    // Hash init generators
-    *SELENE_HASH_INIT,
-    *HELIOS_HASH_INIT,
-    // G, T, U, V
-    <Ed25519 as Ciphersuite>::generator(),
-    EdwardsPoint(*T),
-    EdwardsPoint(*FCMP_PLUS_PLUS_U),
-    EdwardsPoint(*FCMP_PLUS_PLUS_V),
-  )
-  .expect("FCMP generator points must not be the identity")
+    FcmpParams::<Curves>::new(
+        SELENE_FCMP_GENERATORS.generators.clone(),
+        HELIOS_FCMP_GENERATORS.generators.clone(),
+        // Hash init generators
+        *SELENE_HASH_INIT,
+        *HELIOS_HASH_INIT,
+        // G, T, U, V
+        <Ed25519 as Ciphersuite>::generator(),
+        EdwardsPoint(*T),
+        EdwardsPoint(*FCMP_PLUS_PLUS_U),
+        EdwardsPoint(*FCMP_PLUS_PLUS_V),
+    )
+    .expect("FCMP generator points must not be the identity")
 });
 
 /// An input tuple.
@@ -95,72 +97,72 @@ pub static FCMP_PARAMS: LazyLock<FcmpParams<Curves>> = LazyLock::new(|| {
 /// be preferred.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize)]
 pub struct Input {
-  O_tilde: <Ed25519 as Ciphersuite>::G,
-  I_tilde: <Ed25519 as Ciphersuite>::G,
-  R: <Ed25519 as Ciphersuite>::G,
-  C_tilde: <Ed25519 as Ciphersuite>::G,
+    O_tilde: <Ed25519 as Ciphersuite>::G,
+    I_tilde: <Ed25519 as Ciphersuite>::G,
+    R: <Ed25519 as Ciphersuite>::G,
+    C_tilde: <Ed25519 as Ciphersuite>::G,
 }
 
 impl Input {
-  // Write an Input without the pseudo-out.
-  fn write_partial(&self, writer: &mut impl io::Write) -> io::Result<()> {
-    writer.write_all(&self.O_tilde.to_bytes())?;
-    writer.write_all(&self.I_tilde.to_bytes())?;
-    writer.write_all(&self.R.to_bytes())
-  }
+    // Write an Input without the pseudo-out.
+    fn write_partial(&self, writer: &mut impl io::Write) -> io::Result<()> {
+        writer.write_all(&self.O_tilde.to_bytes())?;
+        writer.write_all(&self.I_tilde.to_bytes())?;
+        writer.write_all(&self.R.to_bytes())
+    }
 
-  fn read_partial(
-    C_tilde: <Ed25519 as Ciphersuite>::G,
-    reader: &mut impl io::Read,
-  ) -> io::Result<Input> {
-    Ok(Self {
-      O_tilde: Ed25519::read_G(reader)?,
-      I_tilde: Ed25519::read_G(reader)?,
-      R: Ed25519::read_G(reader)?,
-      C_tilde,
-    })
-  }
+    fn read_partial(
+        C_tilde: <Ed25519 as Ciphersuite>::G,
+        reader: &mut impl io::Read,
+    ) -> io::Result<Input> {
+        Ok(Self {
+            O_tilde: Ed25519::read_G(reader)?,
+            I_tilde: Ed25519::read_G(reader)?,
+            R: Ed25519::read_G(reader)?,
+            C_tilde,
+        })
+    }
 
-  // Write the full pseudo-out.
-  fn write_full(&self, writer: &mut impl io::Write) -> io::Result<()> {
-    self.write_partial(writer)?;
-    writer.write_all(&self.C_tilde.to_bytes())
-  }
+    // Write the full pseudo-out.
+    fn write_full(&self, writer: &mut impl io::Write) -> io::Result<()> {
+        self.write_partial(writer)?;
+        writer.write_all(&self.C_tilde.to_bytes())
+    }
 
-  fn read_full(reader: &mut impl io::Read) -> io::Result<Input> {
-    let mut OIR = [0; 3 * 32];
-    reader.read_exact(&mut OIR)?;
-    let C_tilde = Ed25519::read_G(reader)?;
-    Self::read_partial(C_tilde, &mut OIR.as_slice())
-  }
+    fn read_full(reader: &mut impl io::Read) -> io::Result<Input> {
+        let mut OIR = [0; 3 * 32];
+        reader.read_exact(&mut OIR)?;
+        let C_tilde = Ed25519::read_G(reader)?;
+        Self::read_partial(C_tilde, &mut OIR.as_slice())
+    }
 
-  fn transcript(&self, transcript: &mut Blake2b512, L: <Ed25519 as Ciphersuite>::G) {
-    transcript.update(self.O_tilde.to_bytes());
-    transcript.update(self.I_tilde.to_bytes());
-    transcript.update(self.C_tilde.to_bytes());
-    transcript.update(self.R.to_bytes());
-    transcript.update(L.to_bytes());
-  }
+    fn transcript(&self, transcript: &mut Blake2b512, L: <Ed25519 as Ciphersuite>::G) {
+        transcript.update(self.O_tilde.to_bytes());
+        transcript.update(self.I_tilde.to_bytes());
+        transcript.update(self.C_tilde.to_bytes());
+        transcript.update(self.R.to_bytes());
+        transcript.update(L.to_bytes());
+    }
 
-  /// O~ from the input commitment.
-  pub fn O_tilde(&self) -> <Ed25519 as Ciphersuite>::G {
-    self.O_tilde
-  }
+    /// O~ from the input commitment.
+    pub fn O_tilde(&self) -> <Ed25519 as Ciphersuite>::G {
+        self.O_tilde
+    }
 
-  /// I~ from the input commitment.
-  pub fn I_tilde(&self) -> <Ed25519 as Ciphersuite>::G {
-    self.I_tilde
-  }
+    /// I~ from the input commitment.
+    pub fn I_tilde(&self) -> <Ed25519 as Ciphersuite>::G {
+        self.I_tilde
+    }
 
-  /// R from the input commitment.
-  pub fn R(&self) -> <Ed25519 as Ciphersuite>::G {
-    self.R
-  }
+    /// R from the input commitment.
+    pub fn R(&self) -> <Ed25519 as Ciphersuite>::G {
+        self.R
+    }
 
-  /// C~ from the input commitment (the pseudo-out).
-  pub fn C_tilde(&self) -> <Ed25519 as Ciphersuite>::G {
-    self.C_tilde
-  }
+    /// C~ from the input commitment (the pseudo-out).
+    pub fn C_tilde(&self) -> <Ed25519 as Ciphersuite>::G {
+        self.C_tilde
+    }
 }
 
 /// A FCMP++ output tuple.
@@ -169,113 +171,124 @@ pub type Output = fcmps::Output<<Ed25519 as Ciphersuite>::G>;
 /// An error encountered when working with FCMP++.
 #[derive(Debug)]
 pub enum FcmpPlusPlusError {
-  /// An invalid quantity of key images was provided.
-  InvalidKeyImageQuantity,
-  /// A propagated FCMP error.
-  FcmpError(FcmpError),
+    /// An invalid quantity of key images was provided.
+    InvalidKeyImageQuantity,
+    /// A propagated FCMP error.
+    FcmpError(FcmpError),
 }
 impl From<FcmpError> for FcmpPlusPlusError {
-  fn from(err: FcmpError) -> FcmpPlusPlusError {
-    FcmpPlusPlusError::FcmpError(err)
-  }
+    fn from(err: FcmpError) -> FcmpPlusPlusError {
+        FcmpPlusPlusError::FcmpError(err)
+    }
 }
 
 /// A FCMP++ proof for a set of inputs.
 #[derive(Clone, Debug, Zeroize)]
 pub struct FcmpPlusPlus {
-  inputs: Vec<(Input, SpendAuthAndLinkability)>,
-  fcmp: Fcmp<Curves>,
+    inputs: Vec<(Input, SpendAuthAndLinkability)>,
+    fcmp: Fcmp<Curves>,
 }
 
 impl FcmpPlusPlus {
-  /// Create a new FCMP++ proof from its components.
-  pub fn new(inputs: Vec<(Input, SpendAuthAndLinkability)>, fcmp: Fcmp<Curves>) -> FcmpPlusPlus {
-    FcmpPlusPlus { inputs, fcmp }
-  }
-
-  /// The size of a FCMP++ proof.
-  pub fn proof_size(inputs: usize, layers: usize) -> usize {
-    // Each input tuple, without C~, each SAL, and the FCMP
-    (inputs * ((3 * 32) + (12 * 32))) + Fcmp::<Curves>::proof_size(inputs, layers)
-  }
-
-  /// Write a FCMP++ proof.
-  pub fn write(&self, writer: &mut impl io::Write) -> io::Result<()> {
-    for (input, spend_auth_and_linkability) in &self.inputs {
-      input.write_partial(writer)?;
-      spend_auth_and_linkability.write(writer)?;
-    }
-    self.fcmp.write(writer)
-  }
-
-  /// Read an FCMP++.
-  ///
-  /// The pseudo-outs are passed in as Monero already defines a field for them. It's less annoying
-  /// to receive them here than to move them into here and expose them to Monero. It also informs
-  /// us of how many inputs we're reading a proof for.
-  ///
-  /// The amount of layers for the FCMP are also passed in here as the FCMP's length is variable to
-  /// that.
-  pub fn read(
-    pseudo_outs: &[[u8; 32]],
-    layers: usize,
-    reader: &mut impl io::Read,
-  ) -> io::Result<Self> {
-    let mut inputs = vec![];
-    for pseudo_out in pseudo_outs {
-      let C_tilde = Ed25519::read_G(&mut pseudo_out.as_slice())?;
-      inputs.push((Input::read_partial(C_tilde, reader)?, SpendAuthAndLinkability::read(reader)?));
-    }
-    let fcmp = Fcmp::read(reader, pseudo_outs.len(), layers)?;
-    Ok(Self { inputs, fcmp })
-  }
-
-  /// Verify an FCMP++.
-  ///
-  /// See [`Fcmp::verify`] for further context.
-  ///
-  /// `signable_tx_hash` must be binding to the transaction prefix, the RingCT base, and the
-  /// pseudo-outs.
-  ///
-  /// This only queues the proofs for batch verification. The BatchVerifiers MUST also be verified.
-  ///
-  /// If this function returns an error, the BatchVerifiers MUST be considered corrupted and
-  /// discarded.
-  #[allow(clippy::too_many_arguments)]
-  pub fn verify(
-    &self,
-    rng: &mut (impl RngCore + CryptoRng),
-    verifier_ed: &mut multiexp::BatchVerifier<(), <Ed25519 as Ciphersuite>::G>,
-    verifier_1: &mut generalized_bulletproofs::BatchVerifier<Selene>,
-    verifier_2: &mut generalized_bulletproofs::BatchVerifier<Helios>,
-    tree: TreeRoot<<Curves as FcmpCurves>::C1, <Curves as FcmpCurves>::C2>,
-    layers: usize,
-    signable_tx_hash: [u8; 32],
-    key_images: Vec<<Ed25519 as Ciphersuite>::G>,
-    pqc_pk_hashes: Vec<<Selene as Ciphersuite>::F>,
-  ) -> Result<(), FcmpPlusPlusError> {
-    if self.inputs.len() != key_images.len() {
-      Err(FcmpPlusPlusError::InvalidKeyImageQuantity)?;
-    }
-    if self.inputs.len() != pqc_pk_hashes.len() {
-      Err(FcmpPlusPlusError::InvalidKeyImageQuantity)?;
+    /// Create a new FCMP++ proof from its components.
+    pub fn new(inputs: Vec<(Input, SpendAuthAndLinkability)>, fcmp: Fcmp<Curves>) -> FcmpPlusPlus {
+        FcmpPlusPlus { inputs, fcmp }
     }
 
-    let mut fcmp_inputs = Vec::with_capacity(self.inputs.len());
-    for (((input, spend_auth_and_linkability), key_image), h_pqc) in
-      self.inputs.iter().zip(key_images).zip(pqc_pk_hashes)
-    {
-      spend_auth_and_linkability.verify(rng, verifier_ed, signable_tx_hash, input, key_image);
-
-      fcmp_inputs.push(fcmps::Input::with_extra_scalars(
-        input.O_tilde,
-        input.I_tilde,
-        input.R,
-        input.C_tilde,
-        vec![h_pqc],
-      )?);
+    /// The size of a FCMP++ proof.
+    pub fn proof_size(inputs: usize, layers: usize) -> usize {
+        // Each input tuple, without C~, each SAL, and the FCMP
+        (inputs * ((3 * 32) + (12 * 32))) + Fcmp::<Curves>::proof_size(inputs, layers)
     }
 
-    Ok(self.fcmp.verify(rng, verifier_1, verifier_2, &*FCMP_PARAMS, tree, layers, &fcmp_inputs)?)
-  }
+    /// Write a FCMP++ proof.
+    pub fn write(&self, writer: &mut impl io::Write) -> io::Result<()> {
+        for (input, spend_auth_and_linkability) in &self.inputs {
+            input.write_partial(writer)?;
+            spend_auth_and_linkability.write(writer)?;
+        }
+        self.fcmp.write(writer)
+    }
+
+    /// Read an FCMP++.
+    ///
+    /// The pseudo-outs are passed in as Monero already defines a field for them. It's less annoying
+    /// to receive them here than to move them into here and expose them to Monero. It also informs
+    /// us of how many inputs we're reading a proof for.
+    ///
+    /// The amount of layers for the FCMP are also passed in here as the FCMP's length is variable to
+    /// that.
+    pub fn read(
+        pseudo_outs: &[[u8; 32]],
+        layers: usize,
+        reader: &mut impl io::Read,
+    ) -> io::Result<Self> {
+        let mut inputs = vec![];
+        for pseudo_out in pseudo_outs {
+            let C_tilde = Ed25519::read_G(&mut pseudo_out.as_slice())?;
+            inputs.push((
+                Input::read_partial(C_tilde, reader)?,
+                SpendAuthAndLinkability::read(reader)?,
+            ));
+        }
+        let fcmp = Fcmp::read(reader, pseudo_outs.len(), layers)?;
+        Ok(Self { inputs, fcmp })
+    }
+
+    /// Verify an FCMP++.
+    ///
+    /// See [`Fcmp::verify`] for further context.
+    ///
+    /// `signable_tx_hash` must be binding to the transaction prefix, the RingCT base, and the
+    /// pseudo-outs.
+    ///
+    /// This only queues the proofs for batch verification. The BatchVerifiers MUST also be verified.
+    ///
+    /// If this function returns an error, the BatchVerifiers MUST be considered corrupted and
+    /// discarded.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify(
+        &self,
+        rng: &mut (impl RngCore + CryptoRng),
+        verifier_ed: &mut multiexp::BatchVerifier<(), <Ed25519 as Ciphersuite>::G>,
+        verifier_1: &mut generalized_bulletproofs::BatchVerifier<Selene>,
+        verifier_2: &mut generalized_bulletproofs::BatchVerifier<Helios>,
+        tree: TreeRoot<<Curves as FcmpCurves>::C1, <Curves as FcmpCurves>::C2>,
+        layers: usize,
+        signable_tx_hash: [u8; 32],
+        key_images: Vec<<Ed25519 as Ciphersuite>::G>,
+        pqc_pk_hashes: Vec<<Selene as Ciphersuite>::F>,
+    ) -> Result<(), FcmpPlusPlusError> {
+        if self.inputs.len() != key_images.len() {
+            Err(FcmpPlusPlusError::InvalidKeyImageQuantity)?;
+        }
+        if self.inputs.len() != pqc_pk_hashes.len() {
+            Err(FcmpPlusPlusError::InvalidKeyImageQuantity)?;
+        }
+
+        let mut fcmp_inputs = Vec::with_capacity(self.inputs.len());
+        for (((input, spend_auth_and_linkability), key_image), h_pqc) in
+            self.inputs.iter().zip(key_images).zip(pqc_pk_hashes)
+        {
+            spend_auth_and_linkability.verify(rng, verifier_ed, signable_tx_hash, input, key_image);
+
+            fcmp_inputs.push(fcmps::Input::with_extra_scalars(
+                input.O_tilde,
+                input.I_tilde,
+                input.R,
+                input.C_tilde,
+                vec![h_pqc],
+            )?);
+        }
+
+        Ok(self.fcmp.verify(
+            rng,
+            verifier_1,
+            verifier_2,
+            &*FCMP_PARAMS,
+            tree,
+            layers,
+            &fcmp_inputs,
+        )?)
+    }
 }

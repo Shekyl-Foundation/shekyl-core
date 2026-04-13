@@ -16,6 +16,7 @@ pub struct StakerReward {
 ///
 /// Returns a list of (index, reward_amount) pairs. The total distributed
 /// will equal `staker_pool_amount` minus any dust from rounding.
+#[allow(clippy::cast_possible_truncation)] // CLIPPY: per-staker share < staker_pool_amount which is u64
 pub fn distribute_staker_rewards(
     registry: &StakeRegistry,
     staker_pool_amount: u64,
@@ -30,8 +31,7 @@ pub fn distribute_staker_rewards(
 
     for (i, entry) in registry.active_entries().iter().enumerate() {
         let weight = entry.weight();
-        let reward =
-            (staker_pool_amount as u128 * weight as u128 / total_weight) as u64;
+        let reward = (u128::from(staker_pool_amount) * u128::from(weight) / total_weight) as u64;
         if reward > 0 {
             distributed += reward;
             rewards.push(StakerReward {

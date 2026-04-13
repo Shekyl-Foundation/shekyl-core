@@ -118,6 +118,6 @@ mod tests {
     #[test]
     fn max_claim_range_matches_config() {
         assert_eq!(MAX_CLAIM_RANGE, GENERATED_STAKE_MAX_CLAIM_RANGE);
-        assert!(MAX_CLAIM_RANGE > 0);
+        const { assert!(MAX_CLAIM_RANGE > 0) };
     }
 }

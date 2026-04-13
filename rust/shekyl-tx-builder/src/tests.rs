@@ -10,8 +10,8 @@
 
 use crate::error::TxBuilderError;
 use crate::sign::{sign_pqc_auths, sign_transaction};
-use crate::validate::validate_inputs;
 use crate::types::*;
+use crate::validate::validate_inputs;
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
 
 fn dummy_leaf_entry() -> LeafEntry {
@@ -68,32 +68,20 @@ fn test_no_inputs() {
 
 #[test]
 fn test_too_many_inputs() {
-    let inputs: Vec<SpendInput> = (0..MAX_INPUTS + 1).map(|_| dummy_spend_input(100)).collect();
-    let result = sign_transaction(
-        [0u8; 32],
-        &inputs,
-        &[dummy_output(100)],
-        0,
-        &dummy_tree(),
-    );
+    let inputs: Vec<SpendInput> = (0..=MAX_INPUTS).map(|_| dummy_spend_input(100)).collect();
+    let result = sign_transaction([0u8; 32], &inputs, &[dummy_output(100)], 0, &dummy_tree());
     assert!(matches!(result, Err(TxBuilderError::TooManyInputs(_))));
 }
 
 #[test]
 fn test_no_outputs() {
-    let result = sign_transaction(
-        [0u8; 32],
-        &[dummy_spend_input(100)],
-        &[],
-        0,
-        &dummy_tree(),
-    );
+    let result = sign_transaction([0u8; 32], &[dummy_spend_input(100)], &[], 0, &dummy_tree());
     assert!(matches!(result, Err(TxBuilderError::NoOutputs)));
 }
 
 #[test]
 fn test_too_many_outputs() {
-    let outputs: Vec<OutputInfo> = (0..MAX_OUTPUTS + 1).map(|_| dummy_output(100)).collect();
+    let outputs: Vec<OutputInfo> = (0..=MAX_OUTPUTS).map(|_| dummy_output(100)).collect();
     let result = sign_transaction(
         [0u8; 32],
         &[dummy_spend_input(100 * (MAX_OUTPUTS as u64 + 1))],
@@ -137,13 +125,7 @@ fn test_zero_output_amount() {
 #[test]
 fn test_input_amount_overflow() {
     let inputs = vec![dummy_spend_input(u64::MAX), dummy_spend_input(1)];
-    let result = sign_transaction(
-        [0u8; 32],
-        &inputs,
-        &[dummy_output(100)],
-        0,
-        &dummy_tree(),
-    );
+    let result = sign_transaction([0u8; 32], &inputs, &[dummy_output(100)], 0, &dummy_tree());
     assert!(matches!(result, Err(TxBuilderError::InputAmountOverflow)));
 }
 
@@ -206,13 +188,7 @@ fn test_insufficient_funds_with_fee() {
 fn test_empty_leaf_chunk() {
     let mut input = dummy_spend_input(100);
     input.leaf_chunk.clear();
-    let result = sign_transaction(
-        [0u8; 32],
-        &[input],
-        &[dummy_output(100)],
-        0,
-        &dummy_tree(),
-    );
+    let result = sign_transaction([0u8; 32], &[input], &[dummy_output(100)], 0, &dummy_tree());
     assert!(matches!(
         result,
         Err(TxBuilderError::EmptyLeafChunk { index: 0 })
@@ -224,13 +200,7 @@ fn test_leaf_chunk_too_large() {
     let mut input = dummy_spend_input(100);
     let width = shekyl_fcmp::SELENE_CHUNK_WIDTH;
     input.leaf_chunk = vec![dummy_leaf_entry(); width + 1];
-    let result = sign_transaction(
-        [0u8; 32],
-        &[input],
-        &[dummy_output(100)],
-        0,
-        &dummy_tree(),
-    );
+    let result = sign_transaction([0u8; 32], &[input], &[dummy_output(100)], 0, &dummy_tree());
     assert!(matches!(
         result,
         Err(TxBuilderError::LeafChunkTooLarge { index: 0, .. })
@@ -257,13 +227,7 @@ fn test_branch_layer_mismatch() {
     // c1=2, c2=0 -> c1+c2+1=3, but tree_depth=2 -> mismatch
     input.c1_layers = vec![vec![[10u8; 32]], vec![[11u8; 32]]];
     input.c2_layers = vec![];
-    let result = sign_transaction(
-        [0u8; 32],
-        &[input],
-        &[dummy_output(100)],
-        0,
-        &dummy_tree(),
-    );
+    let result = sign_transaction([0u8; 32], &[input], &[dummy_output(100)], 0, &dummy_tree());
     assert!(matches!(
         result,
         Err(TxBuilderError::BranchLayerMismatch { index: 0, .. })
@@ -274,13 +238,7 @@ fn test_branch_layer_mismatch() {
 fn test_invalid_combined_ss_length() {
     let mut input = dummy_spend_input(100);
     input.combined_ss = vec![0u8; 10]; // wrong length
-    let result = sign_transaction(
-        [0u8; 32],
-        &[input],
-        &[dummy_output(100)],
-        0,
-        &dummy_tree(),
-    );
+    let result = sign_transaction([0u8; 32], &[input], &[dummy_output(100)], 0, &dummy_tree());
     assert!(matches!(
         result,
         Err(TxBuilderError::InvalidCombinedSsLength { index: 0, .. })
@@ -306,7 +264,7 @@ fn test_sign_pqc_length_mismatch() {
 fn dummy_spend_input_at_depth(depth: u8) -> SpendInput {
     let branch_count = depth.saturating_sub(1) as usize;
     // Even-indexed branches are C1, odd-indexed are C2
-    let c1_count = (branch_count + 1) / 2;
+    let c1_count = branch_count.div_ceil(2);
     let c2_count = branch_count / 2;
     SpendInput {
         output_key: [1u8; 32],
@@ -342,7 +300,7 @@ fn validate_accepts_all_legal_depths() {
             result.is_ok(),
             "depth {} should pass validation (c1={}, c2={}), got: {:?}",
             depth,
-            (depth.saturating_sub(1) as usize + 1) / 2,
+            (depth.saturating_sub(1) as usize).div_ceil(2),
             depth.saturating_sub(1) as usize / 2,
             result,
         );
@@ -358,7 +316,9 @@ fn validate_rejects_above_max_depth() {
     assert!(
         matches!(result, Err(TxBuilderError::TreeDepthTooLarge(d)) if d == bad_depth),
         "depth {} should be rejected as exceeding MAX_TREE_DEPTH ({}), got: {:?}",
-        bad_depth, shekyl_fcmp::MAX_TREE_DEPTH, result,
+        bad_depth,
+        shekyl_fcmp::MAX_TREE_DEPTH,
+        result,
     );
 }
 
@@ -372,7 +332,11 @@ fn validate_depth_1_correct_branch_split() {
 #[test]
 fn validate_depth_2_correct_branch_split() {
     let input = dummy_spend_input_at_depth(2);
-    assert_eq!(input.c1_layers.len(), 1, "depth=2: c1 should be 1 (layer 0 is C1)");
+    assert_eq!(
+        input.c1_layers.len(),
+        1,
+        "depth=2: c1 should be 1 (layer 0 is C1)"
+    );
     assert_eq!(input.c2_layers.len(), 0, "depth=2: c2 should be 0");
 }
 
@@ -391,7 +355,7 @@ fn validate_rejects_wrong_branch_count_for_depth() {
     let result = validate_inputs(&[input], &[dummy_output(100)], 0, &tree);
     assert!(
         matches!(result, Err(TxBuilderError::BranchLayerMismatch { .. })),
-        "c1+c2+1 != depth should trigger BranchLayerMismatch, got: {:?}", result,
+        "c1+c2+1 != depth should trigger BranchLayerMismatch, got: {result:?}",
     );
 }
 
@@ -409,6 +373,6 @@ fn validate_rejects_swapped_c1_c2_alternation() {
     let result = validate_inputs(&[input], &[dummy_output(100)], 0, &tree);
     assert!(
         matches!(result, Err(TxBuilderError::BranchLayerMismatch { .. })),
-        "swapped c1/c2 alternation should trigger BranchLayerMismatch, got: {:?}", result,
+        "swapped c1/c2 alternation should trigger BranchLayerMismatch, got: {result:?}",
     );
 }

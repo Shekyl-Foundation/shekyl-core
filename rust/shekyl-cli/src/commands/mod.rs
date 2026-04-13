@@ -151,7 +151,10 @@ pub fn repl(
                         lifecycle::cmd_open(&ctx, &[&filename]);
                     }
                     ResolvedCommand::Close => lifecycle::cmd_close(&ctx),
-                    ResolvedCommand::Restore { filename, seed_words } => {
+                    ResolvedCommand::Restore {
+                        filename,
+                        seed_words,
+                    } => {
                         let mut args: Vec<&str> = vec![&filename];
                         args.extend(seed_words.iter().map(|s| s.as_str()));
                         lifecycle::cmd_restore(&ctx, &args);
@@ -170,16 +173,36 @@ pub fn repl(
 
                     // Account management
                     ResolvedCommand::AccountShow => {
-                        if !require_open(&ctx) { continue; }
+                        if !require_open(&ctx) {
+                            continue;
+                        }
                         match ctx.json_rpc("get_accounts", "{}") {
                             Ok(val) => {
-                                if let Some(accts) = val.get("subaddress_accounts").and_then(|a| a.as_array()) {
+                                if let Some(accts) =
+                                    val.get("subaddress_accounts").and_then(|a| a.as_array())
+                                {
                                     for acct in accts {
-                                        let idx = acct.get("account_index").and_then(|i| i.as_u64()).unwrap_or(0);
-                                        let balance = acct.get("balance").and_then(|b| b.as_u64()).unwrap_or(0);
-                                        let label = acct.get("label").and_then(|l| l.as_str()).unwrap_or("");
-                                        let marker = if idx as u32 == session.default_account { " *" } else { "" };
-                                        println!("  Account {idx}{marker}: {label} ({})", format_amount(balance));
+                                        let idx = acct
+                                            .get("account_index")
+                                            .and_then(|i| i.as_u64())
+                                            .unwrap_or(0);
+                                        let balance = acct
+                                            .get("balance")
+                                            .and_then(|b| b.as_u64())
+                                            .unwrap_or(0);
+                                        let label = acct
+                                            .get("label")
+                                            .and_then(|l| l.as_str())
+                                            .unwrap_or("");
+                                        let marker = if idx as u32 == session.default_account {
+                                            " *"
+                                        } else {
+                                            ""
+                                        };
+                                        println!(
+                                            "  Account {idx}{marker}: {label} ({})",
+                                            format_amount(balance)
+                                        );
                                     }
                                 }
                             }
@@ -187,10 +210,13 @@ pub fn repl(
                         }
                     }
                     ResolvedCommand::AccountDefault { index } => {
-                        if !require_open(&ctx) { continue; }
+                        if !require_open(&ctx) {
+                            continue;
+                        }
                         match ctx.json_rpc("get_accounts", "{}") {
                             Ok(val) => {
-                                let count = val.get("subaddress_accounts")
+                                let count = val
+                                    .get("subaddress_accounts")
                                     .and_then(|a| a.as_array())
                                     .map(|a| a.len() as u32)
                                     .unwrap_or(0);
@@ -206,12 +232,18 @@ pub fn repl(
                         }
                     }
                     ResolvedCommand::AccountNew { label } => {
-                        if !require_open(&ctx) { continue; }
+                        if !require_open(&ctx) {
+                            continue;
+                        }
                         let params = serde_json::json!({ "label": label }).to_string();
                         match ctx.json_rpc("create_account", &params) {
                             Ok(val) => {
-                                let idx = val.get("account_index").and_then(|i| i.as_u64()).unwrap_or(0);
-                                let addr = val.get("address").and_then(|a| a.as_str()).unwrap_or("?");
+                                let idx = val
+                                    .get("account_index")
+                                    .and_then(|i| i.as_u64())
+                                    .unwrap_or(0);
+                                let addr =
+                                    val.get("address").and_then(|a| a.as_str()).unwrap_or("?");
                                 println!("Created account {idx}: {addr}");
                             }
                             Err(e) => eprintln!("Failed to create account: {e}"),
@@ -219,7 +251,12 @@ pub fn repl(
                     }
 
                     // Transfers
-                    ResolvedCommand::Transfer { account_index, dest, amount, .. } => {
+                    ResolvedCommand::Transfer {
+                        account_index,
+                        dest,
+                        amount,
+                        ..
+                    } => {
                         let amount_str = format_amount(amount);
                         let dest_ref: &str = &dest;
                         transfers::cmd_transfer(&ctx, &[&amount_str, dest_ref], account_index);
@@ -237,12 +274,27 @@ pub fn repl(
                     ResolvedCommand::ShowTransfer { txid } => {
                         transfers::cmd_show_transfer(&ctx, &txid);
                     }
-                    ResolvedCommand::SweepAll { account_index, subaddr_indices, dest, priority } => {
-                        transfers::cmd_sweep_all(&ctx, account_index, &subaddr_indices, &dest, priority);
+                    ResolvedCommand::SweepAll {
+                        account_index,
+                        subaddr_indices,
+                        dest,
+                        priority,
+                    } => {
+                        transfers::cmd_sweep_all(
+                            &ctx,
+                            account_index,
+                            &subaddr_indices,
+                            &dest,
+                            priority,
+                        );
                     }
 
                     // Staking
-                    ResolvedCommand::Stake { account_index, tier, amount } => {
+                    ResolvedCommand::Stake {
+                        account_index,
+                        tier,
+                        amount,
+                    } => {
                         staking::cmd_stake(&ctx, account_index, tier, amount);
                     }
                     ResolvedCommand::Unstake { account_index } => {
@@ -261,8 +313,19 @@ pub fn repl(
                     // Keys
                     ResolvedCommand::Viewkey => keys::cmd_viewkey(&ctx),
                     ResolvedCommand::Spendkey => keys::cmd_spendkey(&ctx),
-                    ResolvedCommand::ExportKeyImages { filename, all, since_height, account_index } => {
-                        keys::cmd_export_key_images(&ctx, &filename, all, since_height, account_index);
+                    ResolvedCommand::ExportKeyImages {
+                        filename,
+                        all,
+                        since_height,
+                        account_index,
+                    } => {
+                        keys::cmd_export_key_images(
+                            &ctx,
+                            &filename,
+                            all,
+                            since_height,
+                            account_index,
+                        );
                     }
                     ResolvedCommand::ImportKeyImages { filename } => {
                         keys::cmd_import_key_images(&ctx, &filename);
@@ -272,25 +335,66 @@ pub fn repl(
                     ResolvedCommand::GetTxKey { txid } => {
                         proofs::cmd_get_tx_key(&ctx, &txid);
                     }
-                    ResolvedCommand::CheckTxKey { txid, tx_key, address } => {
+                    ResolvedCommand::CheckTxKey {
+                        txid,
+                        tx_key,
+                        address,
+                    } => {
                         proofs::cmd_check_tx_key(&ctx, &txid, &tx_key, &address);
                     }
-                    ResolvedCommand::GetTxProof { txid, address, message } => {
+                    ResolvedCommand::GetTxProof {
+                        txid,
+                        address,
+                        message,
+                    } => {
                         proofs::cmd_get_tx_proof(&ctx, &txid, &address, message.as_deref());
                     }
-                    ResolvedCommand::CheckTxProof { txid, address, signature, message } => {
-                        proofs::cmd_check_tx_proof(&ctx, &txid, &address, &signature, message.as_deref());
+                    ResolvedCommand::CheckTxProof {
+                        txid,
+                        address,
+                        signature,
+                        message,
+                    } => {
+                        proofs::cmd_check_tx_proof(
+                            &ctx,
+                            &txid,
+                            &address,
+                            &signature,
+                            message.as_deref(),
+                        );
                     }
-                    ResolvedCommand::GetReserveProof { account_index, amount, message } => {
-                        proofs::cmd_get_reserve_proof(&ctx, account_index, amount, message.as_deref());
+                    ResolvedCommand::GetReserveProof {
+                        account_index,
+                        amount,
+                        message,
+                    } => {
+                        proofs::cmd_get_reserve_proof(
+                            &ctx,
+                            account_index,
+                            amount,
+                            message.as_deref(),
+                        );
                     }
-                    ResolvedCommand::CheckReserveProof { address, signature, message } => {
-                        proofs::cmd_check_reserve_proof(&ctx, &address, &signature, message.as_deref());
+                    ResolvedCommand::CheckReserveProof {
+                        address,
+                        signature,
+                        message,
+                    } => {
+                        proofs::cmd_check_reserve_proof(
+                            &ctx,
+                            &address,
+                            &signature,
+                            message.as_deref(),
+                        );
                     }
 
                     // Signing
                     ResolvedCommand::Sign { message } => sign::cmd_sign(&ctx, &message),
-                    ResolvedCommand::Verify { address, message, signature } => {
+                    ResolvedCommand::Verify {
+                        address,
+                        message,
+                        signature,
+                    } => {
                         sign::cmd_verify(&ctx, &address, &message, &signature);
                     }
 
@@ -456,7 +560,13 @@ mod tests {
 
     #[test]
     fn test_parse_format_roundtrip() {
-        for val in [0, 1, 999_999_999_999, 1_000_000_000_000, 123_456_789_012_345] {
+        for val in [
+            0,
+            1,
+            999_999_999_999,
+            1_000_000_000_000,
+            123_456_789_012_345,
+        ] {
             let formatted = format_amount(val);
             let parsed = parse_amount(&formatted).expect("roundtrip should succeed");
             assert_eq!(val, parsed, "roundtrip failed for {val}");

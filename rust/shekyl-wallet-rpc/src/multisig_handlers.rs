@@ -15,12 +15,17 @@ use serde_json::Value;
 
 use shekyl_fcmp::frost_sal::FrostSalInput;
 use shekyl_wallet_core::multisig::group::MultisigGroup;
-use shekyl_wallet_core::multisig::signing::{MultisigSigningSession, PreprocessResponse, ShareResponse};
+use shekyl_wallet_core::multisig::signing::{
+    MultisigSigningSession, PreprocessResponse, ShareResponse,
+};
 
 use crate::wallet::WalletError;
 
 fn rpc_err(msg: impl Into<String>) -> WalletError {
-    WalletError { code: -1, message: msg.into() }
+    WalletError {
+        code: -1,
+        message: msg.into(),
+    }
 }
 
 /// In-memory state for multisig signing sessions.
@@ -70,7 +75,9 @@ pub fn dispatch_multisig(
     method: &str,
     params: Value,
 ) -> Result<Value, WalletError> {
-    let mut ms = state.lock().map_err(|e| rpc_err(format!("multisig lock poisoned: {e}")))?;
+    let mut ms = state
+        .lock()
+        .map_err(|e| rpc_err(format!("multisig lock poisoned: {e}")))?;
 
     match method {
         "multisig_register_group" => handle_register_group(&mut ms, params),
@@ -227,10 +234,7 @@ struct AddPreprocessParams {
     commitments: Vec<String>,
 }
 
-fn handle_sign_add_preprocess(
-    ms: &mut MultisigState,
-    params: Value,
-) -> Result<Value, WalletError> {
+fn handle_sign_add_preprocess(ms: &mut MultisigState, params: Value) -> Result<Value, WalletError> {
     let p: AddPreprocessParams =
         serde_json::from_value(params).map_err(|e| rpc_err(format!("invalid params: {e}")))?;
     let session = ms
@@ -238,7 +242,8 @@ fn handle_sign_add_preprocess(
         .get_mut(&p.session_id)
         .ok_or_else(|| rpc_err("signing session not found"))?;
 
-    let commitments: Result<Vec<Vec<u8>>, _> = p.commitments.iter().map(|s| hex::decode(s)).collect();
+    let commitments: Result<Vec<Vec<u8>>, _> =
+        p.commitments.iter().map(|s| hex::decode(s)).collect();
     let commitments = commitments.map_err(|e| rpc_err(format!("invalid commitment hex: {e}")))?;
 
     session

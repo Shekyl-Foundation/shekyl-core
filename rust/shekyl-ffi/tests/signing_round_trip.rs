@@ -3,11 +3,17 @@
 //! Exercises the full `shekyl_sign_fcmp_transaction` -> `shekyl_fcmp_verify` cycle
 //! through C-ABI FFI calls, following the same pattern as `cache_ffi_round_trip.rs`.
 
+#![allow(
+    clippy::borrow_as_ptr,
+    clippy::useless_conversion,
+    clippy::uninlined_format_args
+)]
+
 use shekyl_ffi::{
     shekyl_buffer_free, shekyl_construct_curve_tree_leaf, shekyl_construct_output,
     shekyl_curve_tree_hash_grow_selene, shekyl_fcmp_verify, shekyl_kem_keypair_generate,
-    shekyl_output_data_free, shekyl_scan_and_recover, shekyl_sign_fcmp_transaction,
-    ShekylBuffer, ShekylOutputData,
+    shekyl_output_data_free, shekyl_scan_and_recover, shekyl_sign_fcmp_transaction, ShekylBuffer,
+    ShekylOutputData,
 };
 
 use ciphersuite::group::GroupEncoding;
@@ -16,7 +22,7 @@ use rand_core::OsRng;
 use shekyl_generators::SELENE_HASH_INIT;
 
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn hex_decode(s: &str) -> Vec<u8> {
@@ -46,10 +52,9 @@ impl Drop for WalletKeys {
 
 fn generate_wallet_keys() -> WalletKeys {
     let b = Scalar::random(&mut OsRng);
-    let big_b =
-        (curve25519_dalek::constants::ED25519_BASEPOINT_POINT * b)
-            .compress()
-            .to_bytes();
+    let big_b = (curve25519_dalek::constants::ED25519_BASEPOINT_POINT * b)
+        .compress()
+        .to_bytes();
 
     let kem = shekyl_kem_keypair_generate();
     assert!(kem.success, "KEM keypair generation failed");
@@ -80,8 +85,8 @@ fn generate_wallet_keys() -> WalletKeys {
     x25519_sk.copy_from_slice(&sk_bytes[..32]);
     let ml_kem_dk = sk_bytes[32..].to_vec();
 
-    shekyl_buffer_free(kem.public_key.ptr, kem.public_key.len);
-    shekyl_buffer_free(kem.secret_key.ptr, kem.secret_key.len);
+    unsafe { shekyl_buffer_free(kem.public_key.ptr, kem.public_key.len) };
+    unsafe { shekyl_buffer_free(kem.secret_key.ptr, kem.secret_key.len) };
 
     WalletKeys {
         spend_secret: b.to_bytes(),
@@ -126,9 +131,13 @@ fn construct_output_ffi(
     };
     assert!(data.success, "shekyl_construct_output failed");
 
-    let kem_ct_ml_kem =
-        unsafe { std::slice::from_raw_parts(data.kem_ciphertext_ml_kem.ptr, data.kem_ciphertext_ml_kem.len) }
-            .to_vec();
+    let kem_ct_ml_kem = unsafe {
+        std::slice::from_raw_parts(
+            data.kem_ciphertext_ml_kem.ptr,
+            data.kem_ciphertext_ml_kem.len,
+        )
+    }
+    .to_vec();
 
     let result = ConstructedOutput {
         output_key: data.output_key,
@@ -143,7 +152,7 @@ fn construct_output_ffi(
         z: data.z,
     };
 
-    unsafe { shekyl_output_data_free(&mut data) };
+    unsafe { shekyl_output_data_free(&raw mut data) };
     result
 }
 
@@ -185,8 +194,14 @@ fn scan_output_ffi(
     let mut recovered_spend_key = [0u8; 32];
     let mut key_image = [0u8; 32];
     let mut combined_ss = [0u8; 64];
-    let mut pqc_pk_buf = ShekylBuffer { ptr: std::ptr::null_mut(), len: 0 };
-    let mut pqc_sk_buf = ShekylBuffer { ptr: std::ptr::null_mut(), len: 0 };
+    let mut pqc_pk_buf = ShekylBuffer {
+        ptr: std::ptr::null_mut(),
+        len: 0,
+    };
+    let mut pqc_sk_buf = ShekylBuffer {
+        ptr: std::ptr::null_mut(),
+        len: 0,
+    };
     let mut h_pqc = [0u8; 32];
 
     let ok = unsafe {
@@ -210,23 +225,21 @@ fn scan_output_ffi(
             y.as_mut_ptr(),
             z.as_mut_ptr(),
             k_amount.as_mut_ptr(),
-            &mut amount,
+            &raw mut amount,
             recovered_spend_key.as_mut_ptr(),
             key_image.as_mut_ptr(),
             combined_ss.as_mut_ptr(),
-            &mut pqc_pk_buf,
-            &mut pqc_sk_buf,
-            &mut h_pqc,
+            &raw mut pqc_pk_buf,
+            &raw mut pqc_sk_buf,
+            &raw mut h_pqc,
         )
     };
     assert!(ok, "shekyl_scan_and_recover failed");
 
-    let pqc_pk =
-        unsafe { std::slice::from_raw_parts(pqc_pk_buf.ptr, pqc_pk_buf.len) }.to_vec();
-    let pqc_sk =
-        unsafe { std::slice::from_raw_parts(pqc_sk_buf.ptr, pqc_sk_buf.len) }.to_vec();
-    shekyl_buffer_free(pqc_pk_buf.ptr, pqc_pk_buf.len);
-    shekyl_buffer_free(pqc_sk_buf.ptr, pqc_sk_buf.len);
+    let pqc_pk = unsafe { std::slice::from_raw_parts(pqc_pk_buf.ptr, pqc_pk_buf.len) }.to_vec();
+    let pqc_sk = unsafe { std::slice::from_raw_parts(pqc_sk_buf.ptr, pqc_sk_buf.len) }.to_vec();
+    unsafe { shekyl_buffer_free(pqc_pk_buf.ptr, pqc_pk_buf.len) };
+    unsafe { shekyl_buffer_free(pqc_sk_buf.ptr, pqc_sk_buf.len) };
 
     ScannedSecrets {
         ho,
@@ -247,27 +260,31 @@ fn build_leaf_and_root(
     h_pqc: &[u8; 32],
 ) -> ([u8; 128], [u8; 32]) {
     let mut leaf = [0u8; 128];
-    let ok = shekyl_construct_curve_tree_leaf(
-        output_key.as_ptr(),
-        commitment.as_ptr(),
-        h_pqc.as_ptr(),
-        leaf.as_mut_ptr(),
-    );
+    let ok = unsafe {
+        shekyl_construct_curve_tree_leaf(
+            output_key.as_ptr(),
+            commitment.as_ptr(),
+            h_pqc.as_ptr(),
+            leaf.as_mut_ptr(),
+        )
+    };
     assert!(ok, "shekyl_construct_curve_tree_leaf failed");
 
     // tree_depth=1: the root IS the Selene hash of the single leaf chunk.
     // No branch layers above it (c1=0, c2=0).
-    let init_bytes: [u8; 32] = SELENE_HASH_INIT.to_bytes().into();
+    let init_bytes: [u8; 32] = SELENE_HASH_INIT.to_bytes();
     let zero_scalar = [0u8; 32];
     let mut root = [0u8; 32];
-    let ok = shekyl_curve_tree_hash_grow_selene(
-        init_bytes.as_ptr(),
-        0,
-        zero_scalar.as_ptr(),
-        leaf.as_ptr(),
-        4,
-        root.as_mut_ptr(),
-    );
+    let ok = unsafe {
+        shekyl_curve_tree_hash_grow_selene(
+            init_bytes.as_ptr(),
+            0,
+            zero_scalar.as_ptr(),
+            leaf.as_ptr(),
+            4,
+            root.as_mut_ptr(),
+        )
+    };
     assert!(ok, "shekyl_curve_tree_hash_grow_selene failed");
 
     (leaf, root)
@@ -291,7 +308,8 @@ fn build_test_case(iteration: u32) {
     let input_output_index: u64 = 0;
 
     eprintln!("  [signing_round_trip] iteration {iteration}: constructing input output...");
-    let input_out = construct_output_ffi(&tx_secret_bytes, &wallet, input_amount, input_output_index);
+    let input_out =
+        construct_output_ffi(&tx_secret_bytes, &wallet, input_amount, input_output_index);
 
     eprintln!("  [signing_round_trip] iteration {iteration}: scanning input output...");
     let scanned = scan_output_ffi(&wallet, &input_out, input_output_index);
@@ -367,22 +385,34 @@ fn build_test_case(iteration: u32) {
 
     let tree_depth: u8 = 1;
 
-    eprintln!("  [signing_round_trip] iteration {iteration}: calling shekyl_sign_fcmp_transaction...");
-    eprintln!("    inputs_json ({} bytes): {}", inputs_bytes.len(), std::str::from_utf8(&inputs_bytes).unwrap_or("<invalid utf8>"));
-    eprintln!("    outputs_json ({} bytes): {}", outputs_bytes.len(), std::str::from_utf8(&outputs_bytes).unwrap_or("<invalid utf8>"));
-
-    let result = shekyl_sign_fcmp_transaction(
-        wallet.spend_secret.as_ptr(),
-        tx_prefix_hash.as_ptr(),
-        inputs_bytes.as_ptr(),
-        inputs_bytes.len(),
-        outputs_bytes.as_ptr(),
-        outputs_bytes.len(),
-        fee,
-        reference_block.as_ptr(),
-        tree_root.as_ptr(),
-        tree_depth,
+    eprintln!(
+        "  [signing_round_trip] iteration {iteration}: calling shekyl_sign_fcmp_transaction..."
     );
+    eprintln!(
+        "    inputs_json ({} bytes): {}",
+        inputs_bytes.len(),
+        std::str::from_utf8(&inputs_bytes).unwrap_or("<invalid utf8>")
+    );
+    eprintln!(
+        "    outputs_json ({} bytes): {}",
+        outputs_bytes.len(),
+        std::str::from_utf8(&outputs_bytes).unwrap_or("<invalid utf8>")
+    );
+
+    let result = unsafe {
+        shekyl_sign_fcmp_transaction(
+            wallet.spend_secret.as_ptr(),
+            tx_prefix_hash.as_ptr(),
+            inputs_bytes.as_ptr(),
+            inputs_bytes.len(),
+            outputs_bytes.as_ptr(),
+            outputs_bytes.len(),
+            fee,
+            reference_block.as_ptr(),
+            tree_root.as_ptr(),
+            tree_depth,
+        )
+    };
 
     if !result.success {
         let err_msg = if !result.error_message.ptr.is_null() && result.error_message.len > 0 {
@@ -396,8 +426,8 @@ fn build_test_case(iteration: u32) {
         } else {
             "(no message)".to_string()
         };
-        shekyl_buffer_free(result.error_message.ptr, result.error_message.len);
-        shekyl_buffer_free(result.proofs_json.ptr, result.proofs_json.len);
+        unsafe { shekyl_buffer_free(result.error_message.ptr, result.error_message.len) };
+        unsafe { shekyl_buffer_free(result.proofs_json.ptr, result.proofs_json.len) };
         panic!(
             "iteration {iteration}: shekyl_sign_fcmp_transaction failed (code={}): {err_msg}",
             result.error_code
@@ -440,24 +470,26 @@ fn build_test_case(iteration: u32) {
     let pseudo_out = hex_decode(pseudo_outs_arr[0].as_str().unwrap());
     assert_eq!(pseudo_out.len(), 32);
 
-    shekyl_buffer_free(result.proofs_json.ptr, result.proofs_json.len);
-    shekyl_buffer_free(result.error_message.ptr, result.error_message.len);
+    unsafe { shekyl_buffer_free(result.proofs_json.ptr, result.proofs_json.len) };
+    unsafe { shekyl_buffer_free(result.error_message.ptr, result.error_message.len) };
 
     eprintln!("  [signing_round_trip] iteration {iteration}: verifying proof...");
 
-    let verified = shekyl_fcmp_verify(
-        fcmp_proof.as_ptr(),
-        fcmp_proof.len(),
-        scanned.key_image.as_ptr(),
-        1,
-        pseudo_out.as_ptr(),
-        1,
-        scanned.h_pqc.as_ptr(),
-        1,
-        tree_root.as_ptr(),
-        tree_depth,
-        tx_prefix_hash.as_ptr(),
-    );
+    let verified = unsafe {
+        shekyl_fcmp_verify(
+            fcmp_proof.as_ptr(),
+            fcmp_proof.len(),
+            scanned.key_image.as_ptr(),
+            1,
+            pseudo_out.as_ptr(),
+            1,
+            scanned.h_pqc.as_ptr(),
+            1,
+            tree_root.as_ptr(),
+            tree_depth,
+            tx_prefix_hash.as_ptr(),
+        )
+    };
     assert!(
         verified,
         "iteration {iteration}: shekyl_fcmp_verify returned false for a valid proof"

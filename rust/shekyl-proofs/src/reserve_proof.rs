@@ -29,9 +29,9 @@ use zeroize::Zeroize;
 
 use shekyl_generators::T as T_LAZY;
 
-use shekyl_crypto_pq::output::ProofSecrets;
 use crate::dleq::{self, DleqProof};
 use crate::error::ProofError;
+use shekyl_crypto_pq::output::ProofSecrets;
 
 pub const CURRENT_PROOF_VERSION: u8 = 1;
 
@@ -73,11 +73,7 @@ fn write_per_output(
 
 // ── Schnorr (same pattern as tx_proof, different domain) ────────────
 
-fn schnorr_challenge(
-    public_key: &EdwardsPoint,
-    r_point: &EdwardsPoint,
-    msg: &[u8],
-) -> Scalar {
+fn schnorr_challenge(public_key: &EdwardsPoint, r_point: &EdwardsPoint, msg: &[u8]) -> Scalar {
     let mut hasher = Sha512::new();
     hasher.update(RESERVE_DOMAIN);
     hasher.update(public_key.compress().as_bytes());
@@ -86,11 +82,7 @@ fn schnorr_challenge(
     Scalar::from_hash(hasher)
 }
 
-fn schnorr_sign(
-    secret_key: &Scalar,
-    public_key: &EdwardsPoint,
-    msg: &[u8],
-) -> [u8; 64] {
+fn schnorr_sign(secret_key: &Scalar, public_key: &EdwardsPoint, msg: &[u8]) -> [u8; 64] {
     let mut k = Scalar::random(&mut rand_core::OsRng);
     let r_point = k * G_POINT;
     let c = schnorr_challenge(public_key, &r_point, msg);
@@ -103,15 +95,10 @@ fn schnorr_sign(
     sig
 }
 
-fn schnorr_verify(
-    public_key: &EdwardsPoint,
-    msg: &[u8],
-    sig: &[u8; 64],
-) -> bool {
+fn schnorr_verify(public_key: &EdwardsPoint, msg: &[u8], sig: &[u8; 64]) -> bool {
     let r_compressed = CompressedEdwardsY::from_slice(&sig[..32]);
-    let r_point = match r_compressed.ok().and_then(|c| c.decompress()) {
-        Some(p) => p,
-        None => return false,
+    let Some(r_point) = r_compressed.ok().and_then(|c| c.decompress()) else {
+        return false;
     };
     let mut s_arr = [0u8; 32];
     s_arr.copy_from_slice(&sig[32..]);
@@ -129,7 +116,8 @@ fn assemble_proof_message(
     user_message: &[u8],
     per_output_data: &[u8],
 ) -> Vec<u8> {
-    let mut msg = Vec::with_capacity(address_bytes.len() + user_message.len() + per_output_data.len());
+    let mut msg =
+        Vec::with_capacity(address_bytes.len() + user_message.len() + per_output_data.len());
     msg.extend_from_slice(address_bytes);
     msg.extend_from_slice(user_message);
     msg.extend_from_slice(per_output_data);
@@ -150,6 +138,7 @@ fn assemble_proof_message(
 /// - `address_bytes`: canonical encoding of the prover's address
 /// - `user_message`: arbitrary user-supplied message string
 /// - `entries`: per-output data including ProofSecrets, key_image, and output_key
+#[allow(clippy::cast_possible_truncation)]
 pub fn generate_reserve_proof(
     spend_secret_key: &[u8; 32],
     address_bytes: &[u8],
@@ -160,8 +149,9 @@ pub fn generate_reserve_proof(
         return Err(ProofError::InvalidFormat("no outputs specified".into()));
     }
 
-    let b_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*spend_secret_key))
-        .ok_or(ProofError::InvalidFormat("spend_secret_key not canonical".into()))?;
+    let b_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*spend_secret_key)).ok_or(
+        ProofError::InvalidFormat("spend_secret_key not canonical".into()),
+    )?;
     let b_point = b_scalar * G_POINT;
 
     let n = entries.len();
@@ -188,7 +178,12 @@ pub fn generate_reserve_proof(
         let dleq_msg = assemble_dleq_context(address_bytes, user_message, &entry.output_key);
         let dleq_proof = dleq::prove_dleq(&x, &hp_of_o, &p, &ki_point, &dleq_msg);
 
-        write_per_output(&entry.proof_secrets, &entry.key_image, &dleq_proof, &mut per_output_blob);
+        write_per_output(
+            &entry.proof_secrets,
+            &entry.key_image,
+            &dleq_proof,
+            &mut per_output_blob,
+        );
     }
 
     let msg = assemble_proof_message(address_bytes, user_message, &per_output_blob);
@@ -248,7 +243,9 @@ pub fn verify_reserve_proof(
     on_chain_outputs: &[ReserveOnChainOutput],
 ) -> Result<Vec<VerifiedReserveOutput>, ProofError> {
     if proof_bytes.len() < HEADER_SIZE {
-        return Err(ProofError::InvalidFormat("proof too short for header".into()));
+        return Err(ProofError::InvalidFormat(
+            "proof too short for header".into(),
+        ));
     }
 
     let version = proof_bytes[0];
@@ -261,9 +258,7 @@ pub fn verify_reserve_proof(
     let mut sig = [0u8; 64];
     sig.copy_from_slice(&proof_bytes[1..65]);
 
-    let output_count = u32::from_le_bytes(
-        proof_bytes[65..69].try_into().unwrap(),
-    ) as usize;
+    let output_count = u32::from_le_bytes(proof_bytes[65..69].try_into().unwrap()) as usize;
 
     let expected_len = HEADER_SIZE + output_count * PER_OUTPUT_SIZE;
     if proof_bytes.len() != expected_len {
@@ -310,17 +305,17 @@ pub fn verify_reserve_proof(
         key_image.copy_from_slice(&chunk[96..128]);
         dleq_bytes.copy_from_slice(&chunk[128..192]);
 
-        let ho_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ho))
-            .ok_or(ProofError::InvalidFormat(format!("non-canonical ho at output {i}")))?;
-        let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(y_bytes))
-            .ok_or(ProofError::InvalidFormat(format!("non-canonical y at output {i}")))?;
+        let ho_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(ho)).ok_or(
+            ProofError::InvalidFormat(format!("non-canonical ho at output {i}")),
+        )?;
+        let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(y_bytes)).ok_or(
+            ProofError::InvalidFormat(format!("non-canonical y at output {i}")),
+        )?;
 
         let expected_o = ho_scalar * G_POINT + b_point + y_scalar * *T_LAZY;
-        let on_chain_o = CompressedEdwardsY(on_chain.output_key)
-            .decompress()
-            .ok_or(ProofError::InvalidFormat(format!(
-                "invalid on-chain output key at index {i}"
-            )))?;
+        let on_chain_o = CompressedEdwardsY(on_chain.output_key).decompress().ok_or(
+            ProofError::InvalidFormat(format!("invalid on-chain output key at index {i}")),
+        )?;
 
         if expected_o != on_chain_o {
             return Err(ProofError::OutputKeyMismatch { index: i });
@@ -331,11 +326,12 @@ pub fn verify_reserve_proof(
         // P = O - y*T = (ho + b)*G = x*G
         let p = expected_o - y_scalar * *T_LAZY;
 
-        let ki_point = CompressedEdwardsY(key_image)
-            .decompress()
-            .ok_or(ProofError::InvalidFormat(format!(
-                "invalid key image at index {i}"
-            )))?;
+        let ki_point =
+            CompressedEdwardsY(key_image)
+                .decompress()
+                .ok_or(ProofError::InvalidFormat(format!(
+                    "invalid key image at index {i}"
+                )))?;
 
         let dleq_proof = DleqProof::from_bytes(&dleq_bytes);
         let dleq_msg = assemble_dleq_context(address_bytes, user_message, &on_chain.output_key);
