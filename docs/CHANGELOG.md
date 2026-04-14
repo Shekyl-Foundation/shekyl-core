@@ -108,6 +108,27 @@
   `82-failure-mode-ux.mdc` (every feature must enumerate failure modes
   before implementation, failure states get dedicated UI).
 
+### 🔒 Security
+
+- **`PersistedMultisigOutput` Debug redaction.** The `Debug` derive on
+  `PersistedMultisigOutput` was replaced with a manual implementation that
+  redacts `my_shared_secret` (64-byte KEM-derived material). Prevents
+  accidental secret exposure through `dbg!` or structured logging.
+
+- **`validate_balance` checked arithmetic.** `SpendIntent::validate_balance`
+  now uses `checked_add` for input sums, output sums, and fee addition.
+  Previously used wrapping `sum()` — crafted u64 values could wrap both
+  sides to the same value and pass the equality check.
+
+- **HKDF derivations return `Result`.** `derive_multisig_kem_seed` and
+  `derive_participant_kem_randomness` now return `Result<..., CryptoError>`
+  instead of panicking via `.expect()` on the transaction construction path.
+
+- **`eprintln!` removed from `shekyl_fcmp_verify` FFI.** Two diagnostic
+  `eprintln!` calls in the FCMP verification FFI path have been removed.
+  The C++ caller already logs verification failures; the Rust-side stderr
+  output was redundant and failed the CI lint.
+
 ### 🐛 Fixed
 
 - **Consensus-critical: curve tree leaf ordering bug (DB v6 → v7).**

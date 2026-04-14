@@ -102,7 +102,7 @@ pub fn derive_hybrid_sign_seed(
 pub fn derive_multisig_kem_seed(
     tx_secret_key: &[u8; 32],
     output_index: u64,
-) -> zeroize::Zeroizing<[u8; 32]> {
+) -> Result<zeroize::Zeroizing<[u8; 32]>, CryptoError> {
     let hk = Hkdf::<Sha512>::new(None, tx_secret_key.as_slice());
     let mut info = Vec::with_capacity(LABEL_KEM_SEED.len() + 8);
     info.extend_from_slice(LABEL_KEM_SEED);
@@ -110,8 +110,8 @@ pub fn derive_multisig_kem_seed(
 
     let mut seed = zeroize::Zeroizing::new([0u8; 32]);
     hk.expand(&info, seed.as_mut())
-        .expect("HKDF-Expand failed for 32-byte KEM seed");
-    seed
+        .map_err(|_| CryptoError::KeyGenerationFailed("HKDF-Expand for KEM seed".into()))?;
+    Ok(seed)
 }
 
 /// Derive per-participant KEM randomness from the output-level KEM seed (§7.1).
@@ -127,7 +127,7 @@ pub fn derive_participant_kem_randomness(
     kem_seed: &[u8; 32],
     output_index: u64,
     participant_index: u8,
-) -> zeroize::Zeroizing<[u8; 64]> {
+) -> Result<zeroize::Zeroizing<[u8; 64]>, CryptoError> {
     let hk = Hkdf::<Sha512>::new(None, kem_seed.as_slice());
     let mut info = Vec::with_capacity(LABEL_MULTISIG_KEM.len() + 9);
     info.extend_from_slice(LABEL_MULTISIG_KEM);
@@ -136,8 +136,8 @@ pub fn derive_participant_kem_randomness(
 
     let mut randomness = zeroize::Zeroizing::new([0u8; 64]);
     hk.expand(&info, randomness.as_mut())
-        .expect("HKDF-Expand failed for 64-byte KEM randomness");
-    randomness
+        .map_err(|_| CryptoError::KeyGenerationFailed("HKDF-Expand for KEM randomness".into()))?;
+    Ok(randomness)
 }
 
 // ── Output construction (PQC_MULTISIG.md §7.1) ─────────────────────────
@@ -333,7 +333,7 @@ pub fn validate_multisig_output_at_receive(
 // ── Persistence struct (PQC_MULTISIG.md §8.4) ──────────────────────────
 
 /// Per-output persisted multisig state for wallet storage.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PersistedMultisigOutput {
     pub output_id: [u8; 32],
     pub global_output_index: u64,
@@ -350,6 +350,23 @@ pub struct PersistedMultisigOutput {
     pub assigned_prover_index: u8,
     pub received_at_height: u64,
     pub eligible_height: u64,
+}
+
+impl std::fmt::Debug for PersistedMultisigOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PersistedMultisigOutput")
+            .field("output_id", &format_args!("{:02x?}", &self.output_id[..4]))
+            .field("global_output_index", &self.global_output_index)
+            .field("my_participant_index", &self.my_participant_index)
+            .field("my_shared_secret", &"[REDACTED]")
+            .field("spend_auth_version", &self.spend_auth_version)
+            .field("output_pubkey", &format_args!("{:02x?}", &self.output_pubkey[..4]))
+            .field("amount", &self.amount)
+            .field("assigned_prover_index", &self.assigned_prover_index)
+            .field("received_at_height", &self.received_at_height)
+            .field("eligible_height", &self.eligible_height)
+            .finish()
+    }
 }
 
 // ── Griefing defense (PQC_MULTISIG.md §7.6) ────────────────────────────
@@ -477,40 +494,40 @@ mod tests {
     #[test]
     fn kem_seed_deterministic() {
         let tx_key = [0xab; 32];
-        let s1 = derive_multisig_kem_seed(&tx_key, 0);
-        let s2 = derive_multisig_kem_seed(&tx_key, 0);
+        let s1 = derive_multisig_kem_seed(&tx_key, 0).unwrap();
+        let s2 = derive_multisig_kem_seed(&tx_key, 0).unwrap();
         assert_eq!(*s1, *s2);
     }
 
     #[test]
     fn kem_seed_varies_with_index() {
         let tx_key = [0xab; 32];
-        let s0 = derive_multisig_kem_seed(&tx_key, 0);
-        let s1 = derive_multisig_kem_seed(&tx_key, 1);
+        let s0 = derive_multisig_kem_seed(&tx_key, 0).unwrap();
+        let s1 = derive_multisig_kem_seed(&tx_key, 1).unwrap();
         assert_ne!(*s0, *s1);
     }
 
     #[test]
     fn participant_kem_randomness_deterministic() {
         let seed = [0xab; 32];
-        let r1 = derive_participant_kem_randomness(&seed, 0, 0);
-        let r2 = derive_participant_kem_randomness(&seed, 0, 0);
+        let r1 = derive_participant_kem_randomness(&seed, 0, 0).unwrap();
+        let r2 = derive_participant_kem_randomness(&seed, 0, 0).unwrap();
         assert_eq!(*r1, *r2);
     }
 
     #[test]
     fn participant_kem_randomness_varies_with_participant() {
         let seed = [0xab; 32];
-        let r0 = derive_participant_kem_randomness(&seed, 0, 0);
-        let r1 = derive_participant_kem_randomness(&seed, 0, 1);
+        let r0 = derive_participant_kem_randomness(&seed, 0, 0).unwrap();
+        let r1 = derive_participant_kem_randomness(&seed, 0, 1).unwrap();
         assert_ne!(*r0, *r1);
     }
 
     #[test]
     fn participant_kem_randomness_varies_with_output() {
         let seed = [0xab; 32];
-        let r0 = derive_participant_kem_randomness(&seed, 0, 0);
-        let r1 = derive_participant_kem_randomness(&seed, 1, 0);
+        let r0 = derive_participant_kem_randomness(&seed, 0, 0).unwrap();
+        let r1 = derive_participant_kem_randomness(&seed, 1, 0).unwrap();
         assert_ne!(*r0, *r1);
     }
 

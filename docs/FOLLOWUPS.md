@@ -203,6 +203,36 @@ Each item is out of scope for the current PR but worth tracking for future work.
   The protocol already supports this model (a service is just another
   participant), but practical validation is needed.
 
+- **PQC Multisig V3.1: wire `shekyl_pqc_verify_with_group_id` into
+  consensus verifier.** Target: V3.1 audit response.
+  The FFI export `shekyl_pqc_verify_with_group_id` exists and accepts an
+  `expected_group_id` parameter, but the daemon's C++ verifier
+  (`tx_pqc_verify.cpp`) still calls `shekyl_pqc_verify` for `scheme_id == 2`
+  without passing a group ID. This means defense-in-depth group binding
+  (PQC_MULTISIG.md SS16.3) is implemented in the Rust library but not
+  enforced at the consensus verification layer. Wiring it in requires the
+  C++ verifier to extract `group_id` from the multisig key blob and pass it
+  through, which is a small change but consensus-touching — requires its own
+  review cycle.
+
+- **PQC Multisig V3.1: FFI returns `bool` not error codes.** Target: V3.2.
+  Per `30-ffi-discipline.mdc`, security-relevant FFI functions should return
+  distinct error codes rather than bare `bool`. The multisig verification
+  functions (`shekyl_pqc_verify`, `shekyl_pqc_verify_with_group_id`,
+  `shekyl_fcmp_verify`) currently return `bool`. The Rust side already has
+  `PqcVerifyError` with per-check error codes — the plumbing to expose
+  these through the C ABI and consume them in C++ is the remaining work.
+
+- **PQC Multisig V3.1: harden ephemeral seed stack copies in
+  `construct_multisig_output_for_sender`.** Target: V3.1 audit response.
+  In `multisig_receiving.rs`, the hybrid signing seed's `ed_seed` and
+  `ml_seed` slices are stack copies from a `Zeroizing`-wrapped hybrid seed.
+  The stack copies are not explicitly zeroized on drop. This is not a leak
+  (the stack frame is short-lived and the values are ephemeral per-output
+  material, not long-term secrets), but explicit `Zeroizing` wrapping of the
+  intermediate slices would close a theoretical side-channel surface and
+  align with the crate's defense-in-depth posture.
+
 ---
 
 ## Completed audit trail

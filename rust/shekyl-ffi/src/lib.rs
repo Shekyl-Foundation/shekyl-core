@@ -1470,15 +1470,8 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
         tree_depth,
         signable_tx_hash,
     ) {
-        Ok(true) => true,
-        Ok(false) => {
-            eprintln!("[shekyl_fcmp_verify] proof verification returned false");
-            false
-        }
-        Err(e) => {
-            eprintln!("[shekyl_fcmp_verify] proof verification error: {e:?}");
-            false
-        }
+        Ok(result) => result,
+        Err(_) => false,
     }
 }
 

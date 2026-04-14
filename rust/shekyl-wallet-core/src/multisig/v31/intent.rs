@@ -309,9 +309,22 @@ impl SpendIntent {
 
     /// Validate balance (check 12 from SS9.2).
     pub fn validate_balance(&self, input_amounts: &[u64]) -> Result<(), SpendIntentError> {
-        let inputs_sum: u64 = input_amounts.iter().copied().sum();
-        let outputs_sum: u64 = self.recipients.iter().map(|r| r.amount).sum();
-        let outputs_plus_fee = outputs_sum.checked_add(self.fee).unwrap_or(u64::MAX);
+        let inputs_sum: u64 = input_amounts
+            .iter()
+            .copied()
+            .try_fold(0u64, |acc, x| acc.checked_add(x))
+            .ok_or_else(|| SpendIntentError::Serialization("input amounts overflow u64".into()))?;
+        let outputs_sum: u64 = self
+            .recipients
+            .iter()
+            .map(|r| r.amount)
+            .try_fold(0u64, |acc, x| acc.checked_add(x))
+            .ok_or_else(|| {
+                SpendIntentError::Serialization("output amounts overflow u64".into())
+            })?;
+        let outputs_plus_fee = outputs_sum.checked_add(self.fee).ok_or_else(|| {
+            SpendIntentError::Serialization("outputs + fee overflow u64".into())
+        })?;
         if inputs_sum != outputs_plus_fee {
             return Err(SpendIntentError::BalanceMismatch {
                 inputs: inputs_sum,
