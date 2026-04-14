@@ -6,15 +6,19 @@
 //! Coordinator-less governance with deterministic transaction construction,
 //! per-output forward privacy, and rotating prover assignment.
 
+pub mod encryption;
 pub mod intent;
 pub mod invariants;
+pub mod messages;
 pub mod prover;
 
+pub use encryption::{decrypt_payload, encrypt_payload, EncryptionError};
 pub use intent::{ChainStateFingerprint, SpendIntent, SpendIntentError};
 pub use invariants::{
     check_assembly_consensus, check_pre_signing_invariants, InvariantCheckInput,
     InvariantCheckResult, InvariantId,
 };
+pub use messages::{DecryptedPayload, EnvelopeError, MessageType, MultisigEnvelope};
 pub use prover::{
     EquivocationProof, InvariantViolation, ProverInputProof, ProverOutput, ProverReceipt,
     SignatureShare, Veto, VetoReason,
