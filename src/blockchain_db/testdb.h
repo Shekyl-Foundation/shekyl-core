@@ -178,12 +178,21 @@ public:
   virtual uint64_t get_staker_claim_watermark(uint64_t output_index) const override { return 0; }
   virtual void remove_staker_claim_watermark(uint64_t output_index) override {}
 
-  virtual void add_pending_tree_leaf(uint64_t, const uint8_t*) override {}
-  virtual void remove_pending_tree_leaf(uint64_t, const uint8_t*) override {}
-  virtual uint64_t drain_pending_tree_leaves(uint64_t, std::vector<uint8_t>&) override { return 0; }
-  virtual void add_pending_tree_drain_entry(uint64_t, uint64_t, const uint8_t*) override {}
-  virtual std::vector<std::pair<uint64_t, std::array<uint8_t, 128>>> get_pending_tree_drain_entries(uint64_t) const override { return {}; }
-  virtual void remove_pending_tree_drain_entries(uint64_t) override {}
+  virtual void add_pending_tree_leaf(shekyl::db::MaturityHeight, shekyl::db::OutputIndex, const uint8_t*) override {}
+  virtual void remove_pending_tree_leaf(shekyl::db::MaturityHeight, shekyl::db::OutputIndex) override {}
+  virtual uint64_t drain_pending_tree_leaves(shekyl::db::BlockHeight, std::vector<uint8_t>&) override { return 0; }
+  virtual void add_pending_tree_drain_entry(shekyl::db::BlockHeight, shekyl::db::OutputIndex, shekyl::db::MaturityHeight, const uint8_t*) override {}
+  virtual std::vector<drain_entry_t> get_pending_tree_drain_entries(shekyl::db::BlockHeight) const override { return {}; }
+  virtual void remove_pending_tree_drain_entries(shekyl::db::BlockHeight) override {}
+
+  virtual void add_block_pending_addition(shekyl::db::BlockHeight, shekyl::db::OutputIndex, shekyl::db::MaturityHeight) override {}
+  virtual std::vector<std::pair<shekyl::db::MaturityHeight, shekyl::db::OutputIndex>> get_block_pending_additions(shekyl::db::BlockHeight) const override { return {}; }
+  virtual void remove_block_pending_additions(shekyl::db::BlockHeight) override {}
+
+  virtual void add_output_leaf_mapping(shekyl::db::OutputIndex, shekyl::db::TreePosition) override {}
+  virtual void remove_output_leaf_mapping(shekyl::db::OutputIndex, shekyl::db::TreePosition) override {}
+  virtual bool get_output_leaf_index(shekyl::db::OutputIndex, shekyl::db::TreePosition&) const override { return false; }
+  virtual bool get_leaf_output_index(shekyl::db::TreePosition, shekyl::db::OutputIndex&) const override { return false; }
 
   virtual void store_output_metadata(uint64_t, const output_pruning_metadata_t&) override {}
   virtual bool get_output_metadata(uint64_t, output_pruning_metadata_t&) const override { return false; }

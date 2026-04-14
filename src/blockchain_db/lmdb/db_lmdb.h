@@ -450,12 +450,23 @@ private:
   virtual void remove_staker_claim_watermark(uint64_t output_index) override;
 
   // Deferred tree leaf insertion (universal: all outputs go through pending)
-  virtual void add_pending_tree_leaf(uint64_t maturity_height, const uint8_t* leaf_data) override;
-  virtual void remove_pending_tree_leaf(uint64_t maturity_height, const uint8_t* leaf_data) override;
-  virtual uint64_t drain_pending_tree_leaves(uint64_t current_height, std::vector<uint8_t>& out_leaves) override;
-  virtual void add_pending_tree_drain_entry(uint64_t block_height, uint64_t maturity_height, const uint8_t* leaf_data) override;
-  virtual std::vector<std::pair<uint64_t, std::array<uint8_t, 128>>> get_pending_tree_drain_entries(uint64_t block_height) const override;
-  virtual void remove_pending_tree_drain_entries(uint64_t block_height) override;
+  virtual void add_pending_tree_leaf(shekyl::db::MaturityHeight maturity, shekyl::db::OutputIndex output, const uint8_t* leaf_data) override;
+  virtual void remove_pending_tree_leaf(shekyl::db::MaturityHeight maturity, shekyl::db::OutputIndex output) override;
+  virtual uint64_t drain_pending_tree_leaves(shekyl::db::BlockHeight current_height, std::vector<uint8_t>& out_leaves) override;
+  virtual void add_pending_tree_drain_entry(shekyl::db::BlockHeight block_height, shekyl::db::OutputIndex output, shekyl::db::MaturityHeight maturity, const uint8_t* leaf_data) override;
+  virtual std::vector<drain_entry_t> get_pending_tree_drain_entries(shekyl::db::BlockHeight block_height) const override;
+  virtual void remove_pending_tree_drain_entries(shekyl::db::BlockHeight block_height) override;
+
+  // Block pending additions journal
+  virtual void add_block_pending_addition(shekyl::db::BlockHeight height, shekyl::db::OutputIndex output, shekyl::db::MaturityHeight maturity) override;
+  virtual std::vector<std::pair<shekyl::db::MaturityHeight, shekyl::db::OutputIndex>> get_block_pending_additions(shekyl::db::BlockHeight height) const override;
+  virtual void remove_block_pending_additions(shekyl::db::BlockHeight height) override;
+
+  // Output ↔ Leaf mapping
+  virtual void add_output_leaf_mapping(shekyl::db::OutputIndex output, shekyl::db::TreePosition tree_pos) override;
+  virtual void remove_output_leaf_mapping(shekyl::db::OutputIndex output, shekyl::db::TreePosition tree_pos) override;
+  virtual bool get_output_leaf_index(shekyl::db::OutputIndex output, shekyl::db::TreePosition& pos_out) const override;
+  virtual bool get_leaf_output_index(shekyl::db::TreePosition tree_pos, shekyl::db::OutputIndex& out_out) const override;
 
   // FCMP++ Curve tree
   virtual void grow_curve_tree(const std::vector<uint8_t>& leaf_data, uint64_t num_new_outputs) override;
@@ -547,8 +558,11 @@ private:
   MDB_dbi m_staker_accrual;
   MDB_dbi m_staker_claims;
 
-  MDB_dbi m_pending_tree_leaves;  // maturity_height -> 128 bytes leaf data (DUPSORT, DUPFIXED)
-  MDB_dbi m_pending_tree_drain;   // block_height -> (uint64_t maturity_height + uint8_t leaf[128]) = 136 bytes (DUPSORT, DUPFIXED)
+  MDB_dbi m_pending_tree_leaves;      // BE(maturity)||BE(output) [16B] -> leaf [128B]
+  MDB_dbi m_pending_tree_drain;       // BE(block_height)||BE(output) [16B] -> maturity[8]||leaf[128] [136B]
+  MDB_dbi m_block_pending_additions;  // BE(block_height)||BE(output) [16B] -> BE(maturity) [8B]
+  MDB_dbi m_output_to_leaf;           // output_index [8B native] -> tree_position [8B native] (MDB_INTEGERKEY)
+  MDB_dbi m_leaf_to_output;           // tree_position [8B native] -> output_index [8B native] (MDB_INTEGERKEY)
 
   MDB_dbi m_curve_tree_leaves;    // global_output_index -> 128 bytes leaf data
   MDB_dbi m_curve_tree_layers;    // (layer_idx << 56 | chunk_idx) -> 32 bytes hash

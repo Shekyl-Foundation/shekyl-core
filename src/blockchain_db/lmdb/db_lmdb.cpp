@@ -61,8 +61,11 @@
 using epee::string_tools::pod_to_hex;
 using namespace crypto;
 
-// Increase when the DB structure changes
-#define VERSION 6
+// Increase when the DB structure changes.
+// V7: curve-tree tables restructured — composite keys replace DUPSORT,
+// bidirectional output↔leaf mapping tables and block-pending journal added.
+// Nodes with V6 data dirs must delete and resync.
+#define VERSION 7
 
 namespace
 {
@@ -253,6 +256,9 @@ const char* const LMDB_STAKER_CLAIMS = "staker_claims";
 
 const char* const LMDB_PENDING_TREE_LEAVES = "pending_tree_leaves";
 const char* const LMDB_PENDING_TREE_DRAIN = "pending_tree_drain";
+const char* const LMDB_BLOCK_PENDING_ADDITIONS = "block_pending_additions";
+const char* const LMDB_OUTPUT_TO_LEAF = "output_to_leaf";
+const char* const LMDB_LEAF_TO_OUTPUT = "leaf_to_output";
 
 const char* const LMDB_CURVE_TREE_LEAVES = "curve_tree_leaves";
 const char* const LMDB_CURVE_TREE_LAYERS = "curve_tree_layers";
@@ -1490,7 +1496,7 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   // set up lmdb environment
   if ((result = mdb_env_create(&m_env)))
     throw0(DB_ERROR(lmdb_error("Failed to create lmdb environment: ", result).c_str()));
-  if ((result = mdb_env_set_maxdbs(m_env, 32)))
+  if ((result = mdb_env_set_maxdbs(m_env, 36)))
     throw0(DB_ERROR(lmdb_error("Failed to set max number of dbs: ", result).c_str()));
 
   int threads = tools::get_max_concurrency();
@@ -1581,8 +1587,21 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
   lmdb_db_open(txn, LMDB_STAKER_ACCRUAL, MDB_INTEGERKEY | MDB_CREATE, m_staker_accrual, "Failed to open db handle for m_staker_accrual");
   lmdb_db_open(txn, LMDB_STAKER_CLAIMS, MDB_INTEGERKEY | MDB_CREATE, m_staker_claims, "Failed to open db handle for m_staker_claims");
 
-  lmdb_db_open(txn, LMDB_PENDING_TREE_LEAVES, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_CREATE, m_pending_tree_leaves, "Failed to open db handle for m_pending_tree_leaves");
-  lmdb_db_open(txn, LMDB_PENDING_TREE_DRAIN, MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED | MDB_CREATE, m_pending_tree_drain, "Failed to open db handle for m_pending_tree_drain");
+  // INVARIANT: Shekyl curve-tree state uses composite keys. No DUPSORT.
+  // If you're reaching for MDB_DUPSORT, stop and use a composite key instead.
+  // The prior DUPSORT-on-content design was the root cause of a consensus bug
+  // where leaf ordering depended on byte-sorted content instead of output index.
+  //
+  // Do NOT add MDB_INTEGERKEY to these — composite keys are multi-field
+  // big-endian byte arrays, not native-endian integers. MDB_INTEGERKEY would
+  // silently break sort order on little-endian machines.
+  lmdb_db_open(txn, LMDB_PENDING_TREE_LEAVES, MDB_CREATE, m_pending_tree_leaves, "Failed to open db handle for m_pending_tree_leaves");
+  lmdb_db_open(txn, LMDB_PENDING_TREE_DRAIN, MDB_CREATE, m_pending_tree_drain, "Failed to open db handle for m_pending_tree_drain");
+  lmdb_db_open(txn, LMDB_BLOCK_PENDING_ADDITIONS, MDB_CREATE, m_block_pending_additions, "Failed to open db handle for m_block_pending_additions");
+
+  // MDB_INTEGERKEY is correct here — single native-endian uint64 keys.
+  lmdb_db_open(txn, LMDB_OUTPUT_TO_LEAF, MDB_INTEGERKEY | MDB_CREATE, m_output_to_leaf, "Failed to open db handle for m_output_to_leaf");
+  lmdb_db_open(txn, LMDB_LEAF_TO_OUTPUT, MDB_INTEGERKEY | MDB_CREATE, m_leaf_to_output, "Failed to open db handle for m_leaf_to_output");
 
   lmdb_db_open(txn, LMDB_CURVE_TREE_LEAVES, MDB_INTEGERKEY | MDB_CREATE, m_curve_tree_leaves, "Failed to open db handle for m_curve_tree_leaves");
   lmdb_db_open(txn, LMDB_CURVE_TREE_LAYERS, MDB_INTEGERKEY | MDB_CREATE, m_curve_tree_layers, "Failed to open db handle for m_curve_tree_layers");
@@ -4832,38 +4851,53 @@ void BlockchainLMDB::remove_staker_claim_watermark(uint64_t output_index)
 
 // ─── Deferred Staked Leaf Insertion ─────────────────────────────────────────
 
-void BlockchainLMDB::add_pending_tree_leaf(uint64_t maturity_height, const uint8_t* leaf_data)
+using shekyl::db::MaturityHeight;
+using shekyl::db::OutputIndex;
+using shekyl::db::BlockHeight;
+using shekyl::db::TreePosition;
+using shekyl::db::PendingLeafKey;
+using shekyl::db::DrainKey;
+using shekyl::db::DrainValue;
+using shekyl::db::BlockPendingKey;
+using shekyl::db::BlockPendingValue;
+using shekyl::db::U64Key;
+using shekyl::db::kLeafSize;
+
+void BlockchainLMDB::add_pending_tree_leaf(MaturityHeight maturity, OutputIndex output, const uint8_t* leaf_data)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  MDB_val k = {sizeof(maturity_height), (void *)&maturity_height};
-  MDB_val v = {128, const_cast<uint8_t*>(leaf_data)};
+  PendingLeafKey key(maturity, output);
+  MDB_val k = key.as_mdb_val();
+  MDB_val v = {kLeafSize, const_cast<uint8_t*>(leaf_data)};
 
   int result = mdb_put(*m_write_txn, m_pending_tree_leaves, &k, &v, 0);
   if (result)
     throw0(DB_ERROR(lmdb_error("Failed to add pending tree leaf: ", result).c_str()));
 }
 
-void BlockchainLMDB::remove_pending_tree_leaf(uint64_t maturity_height, const uint8_t* leaf_data)
+void BlockchainLMDB::remove_pending_tree_leaf(MaturityHeight maturity, OutputIndex output)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  MDB_val k = {sizeof(maturity_height), (void *)&maturity_height};
-  MDB_val v = {128, const_cast<uint8_t*>(leaf_data)};
+  PendingLeafKey key(maturity, output);
+  MDB_val k = key.as_mdb_val();
 
-  int result = mdb_del(*m_write_txn, m_pending_tree_leaves, &k, &v);
+  int result = mdb_del(*m_write_txn, m_pending_tree_leaves, &k, nullptr);
   if (result && result != MDB_NOTFOUND)
     throw0(DB_ERROR(lmdb_error("Failed to remove pending tree leaf: ", result).c_str()));
 }
 
-uint64_t BlockchainLMDB::drain_pending_tree_leaves(uint64_t current_height, std::vector<uint8_t>& out_leaves)
+uint64_t BlockchainLMDB::drain_pending_tree_leaves(BlockHeight current_height, std::vector<uint8_t>& out_leaves)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
   uint64_t count = 0;
+  const uint64_t tree_leaf_base = get_curve_tree_leaf_count();
+
   MDB_cursor *cur;
   int result = mdb_cursor_open(*m_write_txn, m_pending_tree_leaves, &cur);
   if (result)
@@ -4873,14 +4907,22 @@ uint64_t BlockchainLMDB::drain_pending_tree_leaves(uint64_t current_height, std:
   result = mdb_cursor_get(cur, &k, &v, MDB_FIRST);
   while (result == 0)
   {
-    uint64_t maturity = *(const uint64_t*)k.mv_data;
-    if (maturity > current_height)
+    auto decoded = PendingLeafKey::from_mdb_val(k);
+    if (decoded.maturity().value > current_height.value)
       break;
 
-    const uint8_t* leaf_ptr = reinterpret_cast<const uint8_t*>(v.mv_data);
-    out_leaves.insert(out_leaves.end(), leaf_ptr, leaf_ptr + 128);
+    if (v.mv_size != kLeafSize)
+    {
+      mdb_cursor_close(cur);
+      throw0(DB_ERROR("Unexpected pending tree leaf value size"));
+    }
 
-    add_pending_tree_drain_entry(current_height, maturity, leaf_ptr);
+    const uint8_t* leaf_ptr = reinterpret_cast<const uint8_t*>(v.mv_data);
+    out_leaves.insert(out_leaves.end(), leaf_ptr, leaf_ptr + kLeafSize);
+
+    TreePosition tree_pos{tree_leaf_base + count};
+    add_pending_tree_drain_entry(current_height, decoded.output(), decoded.maturity(), leaf_ptr);
+    add_output_leaf_mapping(decoded.output(), tree_pos);
     ++count;
 
     result = mdb_cursor_del(cur, 0);
@@ -4902,29 +4944,28 @@ uint64_t BlockchainLMDB::drain_pending_tree_leaves(uint64_t current_height, std:
   return count;
 }
 
-void BlockchainLMDB::add_pending_tree_drain_entry(uint64_t block_height, uint64_t maturity_height, const uint8_t* leaf_data)
+void BlockchainLMDB::add_pending_tree_drain_entry(BlockHeight block_height, OutputIndex output,
+                                                    MaturityHeight maturity, const uint8_t* leaf_data)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  uint8_t entry[136];
-  memcpy(entry, &maturity_height, sizeof(maturity_height));
-  memcpy(entry + sizeof(maturity_height), leaf_data, 128);
-
-  MDB_val k = {sizeof(block_height), (void *)&block_height};
-  MDB_val v = {sizeof(entry), entry};
+  DrainKey dk(block_height, output);
+  DrainValue dv(maturity, leaf_data);
+  MDB_val k = dk.as_mdb_val();
+  MDB_val v = dv.as_mdb_val();
 
   int result = mdb_put(*m_write_txn, m_pending_tree_drain, &k, &v, 0);
   if (result)
     throw0(DB_ERROR(lmdb_error("Failed to add pending tree drain entry: ", result).c_str()));
 }
 
-std::vector<std::pair<uint64_t, std::array<uint8_t, 128>>> BlockchainLMDB::get_pending_tree_drain_entries(uint64_t block_height) const
+std::vector<BlockchainDB::drain_entry_t> BlockchainLMDB::get_pending_tree_drain_entries(BlockHeight block_height) const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
 
-  std::vector<std::pair<uint64_t, std::array<uint8_t, 128>>> entries;
+  std::vector<drain_entry_t> entries;
   TXN_PREFIX_RDONLY();
 
   MDB_cursor *cur;
@@ -4932,45 +4973,37 @@ std::vector<std::pair<uint64_t, std::array<uint8_t, 128>>> BlockchainLMDB::get_p
   if (result)
     throw0(DB_ERROR(lmdb_error("Failed to open cursor for pending_tree_drain: ", result).c_str()));
 
-  MDB_val k = {sizeof(block_height), (void *)&block_height};
+  DrainKey seek = DrainKey::prefix(block_height);
+  MDB_val k = seek.as_mdb_val();
   MDB_val v;
-  result = mdb_cursor_get(cur, &k, &v, MDB_SET);
-  if (result == MDB_NOTFOUND)
+  result = mdb_cursor_get(cur, &k, &v, MDB_SET_RANGE);
+  while (result == 0)
+  {
+    auto decoded_key = DrainKey::from_mdb_val(k);
+    if (decoded_key.block_height() != block_height)
+      break;
+
+    auto decoded_val = DrainValue::from_mdb_val(v);
+    drain_entry_t entry;
+    entry.maturity = decoded_val.maturity();
+    entry.output = decoded_key.output();
+    std::memcpy(entry.leaf.data(), decoded_val.leaf(), kLeafSize);
+    entries.push_back(entry);
+
+    result = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
+  }
+  if (result != MDB_NOTFOUND && result != 0)
   {
     mdb_cursor_close(cur);
-    TXN_POSTFIX_RDONLY();
-    return entries;
+    throw0(DB_ERROR(lmdb_error("Error reading pending_tree_drain: ", result).c_str()));
   }
-  if (result)
-  {
-    mdb_cursor_close(cur);
-    throw0(DB_ERROR(lmdb_error("Failed to seek pending_tree_drain: ", result).c_str()));
-  }
-
-  // Iterate all duplicate values for this key
-  do
-  {
-    if (v.mv_size != 136)
-    {
-      mdb_cursor_close(cur);
-      throw0(DB_ERROR("Unexpected pending tree drain entry size"));
-    }
-    const uint8_t* data = reinterpret_cast<const uint8_t*>(v.mv_data);
-    uint64_t maturity;
-    memcpy(&maturity, data, sizeof(maturity));
-    std::array<uint8_t, 128> leaf;
-    memcpy(leaf.data(), data + sizeof(maturity), 128);
-    entries.emplace_back(maturity, leaf);
-
-    result = mdb_cursor_get(cur, &k, &v, MDB_NEXT_DUP);
-  } while (result == 0);
 
   mdb_cursor_close(cur);
   TXN_POSTFIX_RDONLY();
   return entries;
 }
 
-void BlockchainLMDB::remove_pending_tree_drain_entries(uint64_t block_height)
+void BlockchainLMDB::remove_pending_tree_drain_entries(BlockHeight block_height)
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
@@ -4980,33 +5013,226 @@ void BlockchainLMDB::remove_pending_tree_drain_entries(uint64_t block_height)
   if (result)
     throw0(DB_ERROR(lmdb_error("Failed to open cursor for pending_tree_drain: ", result).c_str()));
 
-  MDB_val k = {sizeof(block_height), (void *)&block_height};
+  DrainKey seek = DrainKey::prefix(block_height);
+  MDB_val k = seek.as_mdb_val();
   MDB_val v;
-  result = mdb_cursor_get(cur, &k, &v, MDB_SET);
-  if (result == MDB_NOTFOUND)
+  result = mdb_cursor_get(cur, &k, &v, MDB_SET_RANGE);
+  while (result == 0)
   {
-    mdb_cursor_close(cur);
-    return;
-  }
-  if (result)
-  {
-    mdb_cursor_close(cur);
-    throw0(DB_ERROR(lmdb_error("Failed to seek pending_tree_drain for removal: ", result).c_str()));
-  }
+    auto decoded = DrainKey::from_mdb_val(k);
+    if (decoded.block_height() != block_height)
+      break;
 
-  // Delete all duplicate values under this key
-  do
-  {
     result = mdb_cursor_del(cur, 0);
     if (result)
     {
       mdb_cursor_close(cur);
       throw0(DB_ERROR(lmdb_error("Failed to delete pending tree drain entry: ", result).c_str()));
     }
-    result = mdb_cursor_get(cur, &k, &v, MDB_NEXT_DUP);
-  } while (result == 0);
+
+    result = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
+  }
+  if (result != MDB_NOTFOUND && result != 0)
+  {
+    mdb_cursor_close(cur);
+    throw0(DB_ERROR(lmdb_error("Error iterating pending_tree_drain for removal: ", result).c_str()));
+  }
 
   mdb_cursor_close(cur);
+}
+
+// ─── Block Pending Additions Journal ────────────────────────────────────────
+
+void BlockchainLMDB::add_block_pending_addition(BlockHeight height, OutputIndex output, MaturityHeight maturity)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  BlockPendingKey bpk(height, output);
+  BlockPendingValue bpv(maturity);
+  MDB_val k = bpk.as_mdb_val();
+  MDB_val v = bpv.as_mdb_val();
+
+  int result = mdb_put(*m_write_txn, m_block_pending_additions, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to add block pending addition: ", result).c_str()));
+}
+
+std::vector<std::pair<MaturityHeight, OutputIndex>> BlockchainLMDB::get_block_pending_additions(BlockHeight height) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  std::vector<std::pair<MaturityHeight, OutputIndex>> entries;
+  TXN_PREFIX_RDONLY();
+
+  MDB_cursor *cur;
+  int result = mdb_cursor_open(m_txn, m_block_pending_additions, &cur);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to open cursor for block_pending_additions: ", result).c_str()));
+
+  BlockPendingKey seek = BlockPendingKey::prefix(height);
+  MDB_val k = seek.as_mdb_val();
+  MDB_val v;
+  result = mdb_cursor_get(cur, &k, &v, MDB_SET_RANGE);
+  while (result == 0)
+  {
+    auto decoded = BlockPendingKey::from_mdb_val(k);
+    if (decoded.block_height() != height)
+      break;
+
+    auto val = BlockPendingValue::from_mdb_val(v);
+    entries.emplace_back(val.maturity(), decoded.output());
+
+    result = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
+  }
+  if (result != MDB_NOTFOUND && result != 0)
+  {
+    mdb_cursor_close(cur);
+    throw0(DB_ERROR(lmdb_error("Error reading block_pending_additions: ", result).c_str()));
+  }
+
+  mdb_cursor_close(cur);
+  TXN_POSTFIX_RDONLY();
+  return entries;
+}
+
+void BlockchainLMDB::remove_block_pending_additions(BlockHeight height)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  MDB_cursor *cur;
+  int result = mdb_cursor_open(*m_write_txn, m_block_pending_additions, &cur);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to open cursor for block_pending_additions: ", result).c_str()));
+
+  BlockPendingKey seek = BlockPendingKey::prefix(height);
+  MDB_val k = seek.as_mdb_val();
+  MDB_val v;
+  result = mdb_cursor_get(cur, &k, &v, MDB_SET_RANGE);
+  while (result == 0)
+  {
+    auto decoded = BlockPendingKey::from_mdb_val(k);
+    if (decoded.block_height() != height)
+      break;
+
+    result = mdb_cursor_del(cur, 0);
+    if (result)
+    {
+      mdb_cursor_close(cur);
+      throw0(DB_ERROR(lmdb_error("Failed to delete block pending addition: ", result).c_str()));
+    }
+
+    result = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
+  }
+  if (result != MDB_NOTFOUND && result != 0)
+  {
+    mdb_cursor_close(cur);
+    throw0(DB_ERROR(lmdb_error("Error iterating block_pending_additions for removal: ", result).c_str()));
+  }
+
+  mdb_cursor_close(cur);
+}
+
+// ─── Output ↔ Leaf Mapping ──────────────────────────────────────────────────
+
+void BlockchainLMDB::add_output_leaf_mapping(OutputIndex output, TreePosition tree_pos)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  U64Key ok(output.value);
+  U64Key tv(tree_pos.value);
+  MDB_val k = ok.as_mdb_val();
+  MDB_val v = tv.as_mdb_val();
+  int result = mdb_put(*m_write_txn, m_output_to_leaf, &k, &v, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to add output->leaf mapping: ", result).c_str()));
+
+  U64Key tk(tree_pos.value);
+  U64Key ov(output.value);
+  MDB_val k2 = tk.as_mdb_val();
+  MDB_val v2 = ov.as_mdb_val();
+  result = mdb_put(*m_write_txn, m_leaf_to_output, &k2, &v2, 0);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to add leaf->output mapping: ", result).c_str()));
+}
+
+void BlockchainLMDB::remove_output_leaf_mapping(OutputIndex output, TreePosition tree_pos)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  // Verify stored value matches before deleting
+  U64Key ok(output.value);
+  MDB_val k = ok.as_mdb_val();
+  MDB_val v;
+  int result = mdb_get(*m_write_txn, m_output_to_leaf, &k, &v);
+  if (result == MDB_NOTFOUND)
+    return;
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to look up output->leaf for removal: ", result).c_str()));
+  if (v.mv_size != sizeof(uint64_t) || *(const uint64_t*)v.mv_data != tree_pos.value)
+    throw0(DB_ERROR("output->leaf mapping mismatch during removal"));
+
+  result = mdb_del(*m_write_txn, m_output_to_leaf, &k, nullptr);
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to delete output->leaf mapping: ", result).c_str()));
+
+  U64Key tk(tree_pos.value);
+  MDB_val k2 = tk.as_mdb_val();
+  result = mdb_del(*m_write_txn, m_leaf_to_output, &k2, nullptr);
+  if (result && result != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("Failed to delete leaf->output mapping: ", result).c_str()));
+}
+
+bool BlockchainLMDB::get_output_leaf_index(OutputIndex output, TreePosition& pos_out) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  U64Key ok(output.value);
+  MDB_val k = ok.as_mdb_val();
+  MDB_val v;
+  int result = mdb_get(m_txn, m_output_to_leaf, &k, &v);
+  if (result == MDB_NOTFOUND)
+  {
+    TXN_POSTFIX_RDONLY();
+    return false;
+  }
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to get output->leaf mapping: ", result).c_str()));
+  if (v.mv_size != sizeof(uint64_t))
+    throw0(DB_ERROR("Unexpected output->leaf value size"));
+  pos_out = TreePosition{*(const uint64_t*)v.mv_data};
+  TXN_POSTFIX_RDONLY();
+  return true;
+}
+
+bool BlockchainLMDB::get_leaf_output_index(TreePosition tree_pos, OutputIndex& out_out) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+
+  TXN_PREFIX_RDONLY();
+  U64Key tk(tree_pos.value);
+  MDB_val k = tk.as_mdb_val();
+  MDB_val v;
+  int result = mdb_get(m_txn, m_leaf_to_output, &k, &v);
+  if (result == MDB_NOTFOUND)
+  {
+    TXN_POSTFIX_RDONLY();
+    return false;
+  }
+  if (result)
+    throw0(DB_ERROR(lmdb_error("Failed to get leaf->output mapping: ", result).c_str()));
+  if (v.mv_size != sizeof(uint64_t))
+    throw0(DB_ERROR("Unexpected leaf->output value size"));
+  out_out = OutputIndex{*(const uint64_t*)v.mv_data};
+  TXN_POSTFIX_RDONLY();
+  return true;
 }
 
 // ─── FCMP++ Curve Tree ──────────────────────────────────────────────────────

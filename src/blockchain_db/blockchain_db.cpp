@@ -315,12 +315,28 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   time_add_transaction += time1;
 
   // FCMP++ curve tree: append new output leaves
+  //
+  // INVARIANT: pending, drain, output_to_leaf, leaf_to_output, block_pending_additions,
+  // and curve_tree_* tables MUST be mutated within the same m_write_txn as the block add.
+  // Any partial commit here is a consensus split.
   if (blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
   {
-    const uint64_t block_height = prev_height + 1;
+    using shekyl::db::MaturityHeight;
+    using shekyl::db::OutputIndex;
+    using shekyl::db::BlockHeight;
+
+    const uint64_t block_height_raw = prev_height + 1;
+    const BlockHeight bh{block_height_raw};
     std::vector<uint8_t> leaf_data;
     uint64_t new_output_count = 0;
     static constexpr uint8_t zero_pqc[32] = {};
+
+    // Capture output count BEFORE add_transaction calls above added this block's outputs.
+    // add_transaction has already run by this point, so we subtract back.
+    uint64_t this_block_output_count = blk.miner_tx.vout.size();
+    for (const auto& tx_pair : txs)
+      this_block_output_count += tx_pair.first.vout.size();
+    uint64_t next_output_seq = get_num_outputs(0) - this_block_output_count;
 
     auto extract_leaf_hashes = [](const transaction& tx) -> std::vector<uint8_t> {
       std::vector<tx_extra_field> fields;
@@ -335,41 +351,43 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     };
 
     // All outputs are deferred: compute leaf, determine maturity, add to pending.
+    // Each output is tracked by its global output index for exact reversal.
     auto collect_outputs = [&](const transaction& tx, bool is_miner) {
       const auto leaf_hash_blob = extract_leaf_hashes(tx);
       const size_t num_leaf_hashes = leaf_hash_blob.size() / PQC_LEAF_HASH_BYTES;
 
       for (uint64_t i = 0; i < tx.vout.size(); ++i) {
+        const OutputIndex this_output{next_output_seq++};
         const auto& vout = tx.vout[i];
         const uint8_t* h_pqc = (i < num_leaf_hashes)
             ? (leaf_hash_blob.data() + i * PQC_LEAF_HASH_BYTES)
             : zero_pqc;
 
         crypto::public_key output_key;
-        uint64_t maturity_height;
+        uint64_t maturity_raw;
 
         if (std::holds_alternative<txout_to_tagged_key>(vout.target))
         {
           output_key = std::get<txout_to_tagged_key>(vout.target).key;
-          maturity_height = is_miner
-              ? block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
-              : block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+          maturity_raw = is_miner
+              ? block_height_raw + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
+              : block_height_raw + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
         }
         else if (std::holds_alternative<txout_to_key>(vout.target))
         {
           output_key = std::get<txout_to_key>(vout.target).key;
-          maturity_height = is_miner
-              ? block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
-              : block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+          maturity_raw = is_miner
+              ? block_height_raw + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
+              : block_height_raw + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
         }
         else if (std::holds_alternative<txout_to_staked_key>(vout.target))
         {
           const auto& staked = std::get<txout_to_staked_key>(vout.target);
           output_key = staked.key;
-          const uint64_t effective_lock_until = block_height + shekyl_stake_lock_blocks(staked.lock_tier);
-          maturity_height = std::max(
+          const uint64_t effective_lock_until = block_height_raw + shekyl_stake_lock_blocks(staked.lock_tier);
+          maturity_raw = std::max(
               effective_lock_until,
-              block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE);
+              block_height_raw + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE);
         }
         else
           continue;
@@ -378,17 +396,22 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
           continue;
         rct::key commitment = tx.rct_signatures.outPk[i].mask;
 
+        const MaturityHeight mat{maturity_raw};
         uint8_t leaf[128];
         if (shekyl_construct_curve_tree_leaf(
               reinterpret_cast<const uint8_t*>(&output_key),
               commitment.bytes, h_pqc, leaf))
-          add_pending_tree_leaf(maturity_height, leaf);
+        {
+          add_pending_tree_leaf(mat, this_output, leaf);
+          add_block_pending_addition(bh, this_output, mat);
+        }
       }
     };
 
     // Drain matured pending leaves: only drained leaves enter the tree.
-    // drain_pending_tree_leaves auto-journals each entry for pop_block.
-    uint64_t drained_count = drain_pending_tree_leaves(block_height, leaf_data);
+    // drain_pending_tree_leaves auto-journals each entry for pop_block
+    // and writes output↔leaf mappings as tree positions are assigned.
+    uint64_t drained_count = drain_pending_tree_leaves(bh, leaf_data);
     new_output_count += drained_count;
 
     // Insert this block's outputs into the pending table (deferred).
@@ -467,94 +490,53 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   }
   remove_transaction(get_transaction_hash(blk.miner_tx));
 
+  // INVARIANT: pending, drain, output_to_leaf, leaf_to_output, block_pending_additions,
+  // and curve_tree_* tables MUST be mutated within the same m_write_txn as the block pop.
+  // Any partial commit here is a consensus split.
   if (blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
   {
+    using shekyl::db::MaturityHeight;
+    using shekyl::db::OutputIndex;
+    using shekyl::db::BlockHeight;
+    using shekyl::db::TreePosition;
+
+    const BlockHeight bh{block_height};
+
     remove_curve_tree_root_at_height(block_height);
 
-    // With universal deferred insertion, only drained leaves are in the tree.
-    // Read the drain journal to know how many to trim and what to restore.
-    auto drain_entries = get_pending_tree_drain_entries(block_height);
+    // Step 1: Read the drain journal to know how many leaves to trim
+    // and what to restore to pending.
+    auto drain_entries = get_pending_tree_drain_entries(bh);
     const uint64_t drained_count = drain_entries.size();
 
+    // Step 2: Remove output↔leaf mappings for drained entries.
     if (drained_count > 0)
-      trim_curve_tree(drained_count);
-
-    // Restore drained leaves back to the pending table
-    for (const auto& [maturity, leaf] : drain_entries)
-      add_pending_tree_leaf(maturity, leaf.data());
-
-    remove_pending_tree_drain_entries(block_height);
-
-    // Remove this block's own pending entries by recomputing each output's
-    // maturity_height and leaf_data, then deleting the exact match.
-    static constexpr uint8_t zero_pqc[32] = {};
-
-    auto extract_leaf_hashes = [](const transaction& tx) -> std::vector<uint8_t> {
-      std::vector<tx_extra_field> fields;
-      if (!parse_tx_extra(tx.extra, fields))
-        return {};
-      tx_extra_pqc_leaf_hashes lh;
-      if (!find_tx_extra_field_by_type(fields, lh))
-        return {};
-      if (lh.blob.size() % PQC_LEAF_HASH_BYTES != 0)
-        return {};
-      return std::vector<uint8_t>(lh.blob.begin(), lh.blob.end());
-    };
-
-    auto remove_block_pending = [&](const transaction& tx, bool is_miner) {
-      const auto leaf_hash_blob = extract_leaf_hashes(tx);
-      const size_t num_leaf_hashes = leaf_hash_blob.size() / PQC_LEAF_HASH_BYTES;
-
-      for (uint64_t i = 0; i < tx.vout.size(); ++i) {
-        const auto& vout = tx.vout[i];
-        const uint8_t* h_pqc = (i < num_leaf_hashes)
-            ? (leaf_hash_blob.data() + i * PQC_LEAF_HASH_BYTES)
-            : zero_pqc;
-
-        crypto::public_key output_key;
-        uint64_t maturity_height;
-
-        if (std::holds_alternative<txout_to_tagged_key>(vout.target))
-        {
-          output_key = std::get<txout_to_tagged_key>(vout.target).key;
-          maturity_height = is_miner
-              ? block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
-              : block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
-        }
-        else if (std::holds_alternative<txout_to_key>(vout.target))
-        {
-          output_key = std::get<txout_to_key>(vout.target).key;
-          maturity_height = is_miner
-              ? block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
-              : block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
-        }
-        else if (std::holds_alternative<txout_to_staked_key>(vout.target))
-        {
-          const auto& staked = std::get<txout_to_staked_key>(vout.target);
-          output_key = staked.key;
-          const uint64_t effective_lock_until = block_height + shekyl_stake_lock_blocks(staked.lock_tier);
-          maturity_height = std::max(
-              effective_lock_until,
-              block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE);
-        }
-        else
-          continue;
-
-        if (i >= tx.rct_signatures.outPk.size())
-          continue;
-        rct::key commitment = tx.rct_signatures.outPk[i].mask;
-
-        uint8_t leaf[128];
-        if (shekyl_construct_curve_tree_leaf(
-              reinterpret_cast<const uint8_t*>(&output_key),
-              commitment.bytes, h_pqc, leaf))
-          remove_pending_tree_leaf(maturity_height, leaf);
+    {
+      const uint64_t leaf_count = get_curve_tree_leaf_count();
+      for (uint64_t j = 0; j < drained_count; ++j)
+      {
+        TreePosition tree_pos{leaf_count - drained_count + j};
+        remove_output_leaf_mapping(drain_entries[j].output, tree_pos);
       }
-    };
 
-    remove_block_pending(blk.miner_tx, true);
-    for (const auto& tx : txs)
-      remove_block_pending(tx, false);
+      // Step 3: Trim the tree.
+      trim_curve_tree(drained_count);
+    }
+
+    // Step 4: Restore drained leaves back to the pending table.
+    for (const auto& entry : drain_entries)
+      add_pending_tree_leaf(entry.maturity, entry.output, entry.leaf.data());
+
+    // Step 5: Remove drain journal entries for this block.
+    remove_pending_tree_drain_entries(bh);
+
+    // Step 6: Remove this block's pending additions using the journal.
+    // Zero reconstruction — the journal contains the exact (maturity, output)
+    // composite keys needed to delete from m_pending_tree_leaves.
+    auto additions = get_block_pending_additions(bh);
+    for (const auto& [maturity, output] : additions)
+      remove_pending_tree_leaf(maturity, output);
+    remove_block_pending_additions(bh);
   }
 }
 

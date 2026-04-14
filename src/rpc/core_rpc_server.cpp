@@ -3669,7 +3669,7 @@ namespace cryptonote
     // leaves drained into the tree after reference_height.
     uint64_t leaves_after_ref = 0;
     for (uint64_t h = reference_height + 1; h <= top_height; ++h)
-      leaves_after_ref += db.get_pending_tree_drain_entries(h).size();
+      leaves_after_ref += db.get_pending_tree_drain_entries(shekyl::db::BlockHeight{h}).size();
     const uint64_t ref_leaf_count = tip_leaf_count - leaves_after_ref;
 
     res.leaf_count = ref_leaf_count;

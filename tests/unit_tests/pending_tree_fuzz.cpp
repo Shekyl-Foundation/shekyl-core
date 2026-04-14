@@ -38,10 +38,14 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 
 using namespace cryptonote;
+using shekyl::db::MaturityHeight;
+using shekyl::db::OutputIndex;
+using shekyl::db::BlockHeight;
 
 namespace {
 
 static constexpr size_t LEAF_BYTES = 128;
+static uint64_t g_output_seq = 0;
 
 struct TempLMDB {
   boost::filesystem::path tmpdir;
@@ -76,6 +80,7 @@ TEST(pending_tree_fuzz, add_remove_roundtrip)
 {
   TempLMDB env;
   BlockchainDB& db = env.db;
+  g_output_seq = 0;
 
   db.batch_start();
 
@@ -83,15 +88,14 @@ TEST(pending_tree_fuzz, add_remove_roundtrip)
   uint8_t leaf[LEAF_BYTES];
   make_leaf(0x42, leaf);
 
-  db.add_pending_tree_leaf(MAT_HEIGHT, leaf);
+  db.add_pending_tree_leaf(MaturityHeight{MAT_HEIGHT}, OutputIndex{g_output_seq++}, leaf);
 
-  // Leaf should drain at exactly MAT_HEIGHT
   std::vector<uint8_t> drained;
-  uint64_t count = db.drain_pending_tree_leaves(MAT_HEIGHT - 1, drained);
+  uint64_t count = db.drain_pending_tree_leaves(BlockHeight{MAT_HEIGHT - 1}, drained);
   ASSERT_EQ(count, 0u);
   ASSERT_TRUE(drained.empty());
 
-  count = db.drain_pending_tree_leaves(MAT_HEIGHT, drained);
+  count = db.drain_pending_tree_leaves(BlockHeight{MAT_HEIGHT}, drained);
   ASSERT_EQ(count, 1u);
   ASSERT_EQ(drained.size(), LEAF_BYTES);
   ASSERT_EQ(memcmp(drained.data(), leaf, LEAF_BYTES), 0);
@@ -103,6 +107,7 @@ TEST(pending_tree_fuzz, add_remove_multiple_heights)
 {
   TempLMDB env;
   BlockchainDB& db = env.db;
+  g_output_seq = 0;
 
   db.batch_start();
 
@@ -110,24 +115,21 @@ TEST(pending_tree_fuzz, add_remove_multiple_heights)
   {
     uint8_t leaf[LEAF_BYTES];
     make_leaf(static_cast<uint8_t>(h), leaf);
-    db.add_pending_tree_leaf(h, leaf);
+    db.add_pending_tree_leaf(MaturityHeight{h}, OutputIndex{g_output_seq++}, leaf);
   }
 
-  // Drain at height 12 should get leaves for 10, 11, 12
   std::vector<uint8_t> drained;
-  uint64_t count = db.drain_pending_tree_leaves(12, drained);
+  uint64_t count = db.drain_pending_tree_leaves(BlockHeight{12}, drained);
   ASSERT_EQ(count, 3u);
   ASSERT_EQ(drained.size(), 3 * LEAF_BYTES);
 
-  // Drain at height 15 should get remaining 3
   drained.clear();
-  count = db.drain_pending_tree_leaves(15, drained);
+  count = db.drain_pending_tree_leaves(BlockHeight{15}, drained);
   ASSERT_EQ(count, 3u);
   ASSERT_EQ(drained.size(), 3 * LEAF_BYTES);
 
-  // Nothing left
   drained.clear();
-  count = db.drain_pending_tree_leaves(100, drained);
+  count = db.drain_pending_tree_leaves(BlockHeight{100}, drained);
   ASSERT_EQ(count, 0u);
 
   db.batch_stop();
@@ -144,18 +146,18 @@ TEST(pending_tree_fuzz, drain_journal_entries)
   make_leaf(0x01, leaf1);
   make_leaf(0x02, leaf2);
 
-  db.add_pending_tree_drain_entry(50, 10, leaf1);
-  db.add_pending_tree_drain_entry(50, 20, leaf2);
+  db.add_pending_tree_drain_entry(BlockHeight{50}, OutputIndex{0}, MaturityHeight{10}, leaf1);
+  db.add_pending_tree_drain_entry(BlockHeight{50}, OutputIndex{1}, MaturityHeight{20}, leaf2);
 
-  auto entries = db.get_pending_tree_drain_entries(50);
+  auto entries = db.get_pending_tree_drain_entries(BlockHeight{50});
   ASSERT_EQ(entries.size(), 2u);
-  ASSERT_EQ(entries[0].first, 10u);
-  ASSERT_EQ(entries[1].first, 20u);
-  ASSERT_EQ(memcmp(entries[0].second.data(), leaf1, LEAF_BYTES), 0);
-  ASSERT_EQ(memcmp(entries[1].second.data(), leaf2, LEAF_BYTES), 0);
+  ASSERT_EQ(entries[0].maturity.value, 10u);
+  ASSERT_EQ(entries[1].maturity.value, 20u);
+  ASSERT_EQ(memcmp(entries[0].leaf.data(), leaf1, LEAF_BYTES), 0);
+  ASSERT_EQ(memcmp(entries[1].leaf.data(), leaf2, LEAF_BYTES), 0);
 
-  db.remove_pending_tree_drain_entries(50);
-  entries = db.get_pending_tree_drain_entries(50);
+  db.remove_pending_tree_drain_entries(BlockHeight{50});
+  entries = db.get_pending_tree_drain_entries(BlockHeight{50});
   ASSERT_TRUE(entries.empty());
 
   db.batch_stop();
@@ -165,6 +167,7 @@ TEST(pending_tree_fuzz, randomized_add_pop_cycles)
 {
   TempLMDB env;
   BlockchainDB& db = env.db;
+  g_output_seq = 0;
 
   std::mt19937 rng(12345);
   std::uniform_int_distribution<uint64_t> height_dist(1, 200);
@@ -177,17 +180,15 @@ TEST(pending_tree_fuzz, randomized_add_pop_cycles)
   };
   std::vector<PendingEntry> expected_pending;
 
-  // Add 100 random leaves at random maturity heights
   for (int i = 0; i < 100; ++i)
   {
     PendingEntry e;
     e.maturity_height = height_dist(rng);
     make_leaf(static_cast<uint8_t>(i), e.leaf.data());
-    db.add_pending_tree_leaf(e.maturity_height, e.leaf.data());
+    db.add_pending_tree_leaf(MaturityHeight{e.maturity_height}, OutputIndex{g_output_seq++}, e.leaf.data());
     expected_pending.push_back(e);
   }
 
-  // Drain at various heights and verify counts
   uint64_t total_drained = 0;
   for (uint64_t h = 1; h <= 200; ++h)
   {
@@ -196,7 +197,7 @@ TEST(pending_tree_fuzz, randomized_add_pop_cycles)
       if (e.maturity_height == h) ++expected_count;
 
     std::vector<uint8_t> drained;
-    uint64_t count = db.drain_pending_tree_leaves(h, drained);
+    uint64_t count = db.drain_pending_tree_leaves(BlockHeight{h}, drained);
     ASSERT_EQ(count, expected_count) << "Mismatch at height " << h;
     ASSERT_EQ(drained.size(), expected_count * LEAF_BYTES);
     total_drained += count;
@@ -211,6 +212,7 @@ TEST(pending_tree_fuzz, remove_pending_leaf)
 {
   TempLMDB env;
   BlockchainDB& db = env.db;
+  g_output_seq = 0;
 
   db.batch_start();
 
@@ -218,15 +220,15 @@ TEST(pending_tree_fuzz, remove_pending_leaf)
   make_leaf(0x10, leaf1);
   make_leaf(0x20, leaf2);
 
-  db.add_pending_tree_leaf(100, leaf1);
-  db.add_pending_tree_leaf(100, leaf2);
+  const OutputIndex out1{g_output_seq++};
+  const OutputIndex out2{g_output_seq++};
+  db.add_pending_tree_leaf(MaturityHeight{100}, out1, leaf1);
+  db.add_pending_tree_leaf(MaturityHeight{100}, out2, leaf2);
 
-  // Remove one
-  db.remove_pending_tree_leaf(100, leaf1);
+  db.remove_pending_tree_leaf(MaturityHeight{100}, out1);
 
-  // Only leaf2 should drain
   std::vector<uint8_t> drained;
-  uint64_t count = db.drain_pending_tree_leaves(100, drained);
+  uint64_t count = db.drain_pending_tree_leaves(BlockHeight{100}, drained);
   ASSERT_EQ(count, 1u);
   ASSERT_EQ(memcmp(drained.data(), leaf2, LEAF_BYTES), 0);
 

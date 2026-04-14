@@ -31,6 +31,7 @@
 #pragma once
 
 #include <array>
+#include <cstring>
 #include <string>
 #include <exception>
 #include <boost/program_options.hpp>
@@ -41,6 +42,7 @@
 #include "cryptonote_basic/difficulty.h"
 #include "cryptonote_basic/hardfork.h"
 #include "cryptonote_protocol/enums.h"
+#include "blockchain_db/shekyl_types.h"
 
 /** \file
  * Cryptonote Blockchain Database Interface
@@ -1951,59 +1953,150 @@ public:
    * All outputs are deferred: they enter the pending table at creation and
    * drain into the curve tree when their maturity height is reached.
    *
-   * @param maturity_height  the height at which this leaf becomes eligible
-   * @param leaf_data        128 bytes of pre-computed leaf data
+   * @param maturity   the height at which this leaf becomes eligible
+   * @param output     the global output index of this output
+   * @param leaf_data  128 bytes of pre-computed leaf data
    */
-  virtual void add_pending_tree_leaf(uint64_t maturity_height, const uint8_t* leaf_data) = 0;
+  virtual void add_pending_tree_leaf(shekyl::db::MaturityHeight maturity,
+                                     shekyl::db::OutputIndex output,
+                                     const uint8_t* leaf_data) = 0;
 
   /**
-   * @brief remove a specific pending tree leaf (exact key + value match).
+   * @brief remove a specific pending tree leaf by composite key.
    *
-   * Used by pop_block to remove outputs that were added to pending at the
-   * popped block height.
+   * Used by pop_block (via the block-pending journal) to remove outputs
+   * that were added to pending at the popped block height.
    *
-   * @param maturity_height  the maturity key of the leaf to remove
-   * @param leaf_data        128 bytes identifying the exact leaf to remove
+   * @param maturity   the maturity key of the leaf to remove
+   * @param output     the output index (second half of composite key)
    */
-  virtual void remove_pending_tree_leaf(uint64_t maturity_height, const uint8_t* leaf_data) = 0;
+  virtual void remove_pending_tree_leaf(shekyl::db::MaturityHeight maturity,
+                                        shekyl::db::OutputIndex output) = 0;
 
   /**
    * @brief drain all pending leaves whose maturity_height <= current_height.
    *
    * Removes matching entries from the pending table, appends their 128-byte
    * leaf data to @p out_leaves, and journals each drained leaf via
-   * add_pending_tree_drain_entry for pop_block reversibility.
+   * add_pending_tree_drain_entry. Also writes output-to-leaf and
+   * leaf-to-output mappings as tree positions are assigned.
    *
    * @param current_height  the height of the block being added (also the journal key)
    * @param out_leaves      output buffer; 128 bytes appended per drained leaf
    * @return number of leaves drained
    */
-  virtual uint64_t drain_pending_tree_leaves(uint64_t current_height, std::vector<uint8_t>& out_leaves) = 0;
+  virtual uint64_t drain_pending_tree_leaves(shekyl::db::BlockHeight current_height,
+                                              std::vector<uint8_t>& out_leaves) = 0;
+
+  struct drain_entry_t {
+    shekyl::db::MaturityHeight maturity;
+    shekyl::db::OutputIndex    output;
+    std::array<uint8_t, 128>   leaf;
+
+    drain_entry_t()
+      : maturity(shekyl::db::MaturityHeight{0})
+      , output(shekyl::db::OutputIndex{0})
+      , leaf{}
+    {}
+
+    drain_entry_t(shekyl::db::MaturityHeight m, shekyl::db::OutputIndex o, const uint8_t* data)
+      : maturity(m), output(o), leaf{}
+    {
+      if (data) std::memcpy(leaf.data(), data, 128);
+    }
+  };
 
   /**
    * @brief journal a drained leaf for pop_block reversibility.
    *
-   * Each drained leaf is recorded with its original maturity_height so that
-   * pop_block can re-insert it into the pending table.
+   * Each drained leaf is recorded with its original maturity_height and
+   * output_index so that pop_block can re-insert it into the pending table.
    *
-   * @param block_height     the block at which the drain occurred
-   * @param maturity_height  the leaf's original pending table key
-   * @param leaf_data        128 bytes of leaf data
+   * @param block_height  the block at which the drain occurred
+   * @param output        the output index (part of the composite drain key)
+   * @param maturity      the leaf's original pending table maturity
+   * @param leaf_data     128 bytes of leaf data
    */
-  virtual void add_pending_tree_drain_entry(uint64_t block_height, uint64_t maturity_height, const uint8_t* leaf_data) = 0;
+  virtual void add_pending_tree_drain_entry(shekyl::db::BlockHeight block_height,
+                                            shekyl::db::OutputIndex output,
+                                            shekyl::db::MaturityHeight maturity,
+                                            const uint8_t* leaf_data) = 0;
 
   /**
    * @brief read all drain journal entries for a given block height.
    *
    * @param block_height  the block to query
-   * @return vector of (maturity_height, leaf_data[128]) pairs
+   * @return vector of drain_entry_t (maturity, output, leaf) in drain order
    */
-  virtual std::vector<std::pair<uint64_t, std::array<uint8_t, 128>>> get_pending_tree_drain_entries(uint64_t block_height) const = 0;
+  virtual std::vector<drain_entry_t> get_pending_tree_drain_entries(shekyl::db::BlockHeight block_height) const = 0;
 
   /**
    * @brief remove all drain journal entries for a given block height.
    */
-  virtual void remove_pending_tree_drain_entries(uint64_t block_height) = 0;
+  virtual void remove_pending_tree_drain_entries(shekyl::db::BlockHeight block_height) = 0;
+
+  // ─── Block Pending Additions Journal ───────────────────────────────────────
+
+  /**
+   * @brief record that a pending tree leaf was added by this block.
+   *
+   * pop_block reads this journal to delete exact entries from
+   * m_pending_tree_leaves without reconstruction.
+   */
+  virtual void add_block_pending_addition(shekyl::db::BlockHeight height,
+                                          shekyl::db::OutputIndex output,
+                                          shekyl::db::MaturityHeight maturity) = 0;
+
+  /**
+   * @brief read all pending additions journaled for a given block.
+   *
+   * @return vector of (maturity, output) pairs
+   */
+  virtual std::vector<std::pair<shekyl::db::MaturityHeight, shekyl::db::OutputIndex>>
+      get_block_pending_additions(shekyl::db::BlockHeight height) const = 0;
+
+  /**
+   * @brief remove all block-pending-addition journal entries for a block.
+   */
+  virtual void remove_block_pending_additions(shekyl::db::BlockHeight height) = 0;
+
+  // ─── Output ↔ Leaf Mapping ─────────────────────────────────────────────────
+
+  /**
+   * @brief record the bidirectional mapping between output index and tree position.
+   *
+   * Written during drain when a tree position is assigned.
+   */
+  virtual void add_output_leaf_mapping(shekyl::db::OutputIndex output,
+                                       shekyl::db::TreePosition tree_pos) = 0;
+
+  /**
+   * @brief remove the bidirectional output↔leaf mapping.
+   *
+   * Asserts stored value matches @p tree_pos before deleting.
+   */
+  virtual void remove_output_leaf_mapping(shekyl::db::OutputIndex output,
+                                          shekyl::db::TreePosition tree_pos) = 0;
+
+  /**
+   * @brief look up the tree position for a given global output index.
+   *
+   * @param output  the output to query
+   * @param pos_out filled on success
+   * @return true if mapping exists
+   */
+  virtual bool get_output_leaf_index(shekyl::db::OutputIndex output,
+                                     shekyl::db::TreePosition& pos_out) const = 0;
+
+  /**
+   * @brief look up the global output index for a given tree position.
+   *
+   * @param tree_pos the tree position to query
+   * @param out_out  filled on success
+   * @return true if mapping exists
+   */
+  virtual bool get_leaf_output_index(shekyl::db::TreePosition tree_pos,
+                                     shekyl::db::OutputIndex& out_out) const = 0;
 
   // ─── FCMP++ Curve Tree ─────────────────────────────────────────────────────
 

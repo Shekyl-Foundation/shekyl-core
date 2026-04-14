@@ -1958,6 +1958,33 @@ static bool apply_fcmp_pipeline(
           memcpy(entry.h_pqc.bytes, chunk_lh.blob.data() + txi.second * PQC_LEAF_HASH_BYTES, 32);
         }
 
+        // DEBUG: verify reconstructed leaf matches what's stored in the tree
+        {
+          uint8_t reconstructed_leaf[128];
+          bool leaf_ok = shekyl_construct_curve_tree_leaf(
+              entry.output_key.bytes, entry.commitment.bytes,
+              entry.h_pqc.bytes, reconstructed_leaf);
+          if (!leaf_ok) {
+            LOG_PRINT_L0("construct_fcmp_tx DEBUG: shekyl_construct_curve_tree_leaf failed for output " << oi);
+          } else {
+            uint8_t stored_leaf[128];
+            if (db.get_curve_tree_leaf(oi, stored_leaf)) {
+              if (memcmp(reconstructed_leaf, stored_leaf, 128) != 0) {
+                LOG_PRINT_L0("construct_fcmp_tx DEBUG: LEAF MISMATCH at output " << oi);
+                LOG_PRINT_L0("  reconstructed: " << epee::string_tools::buff_to_hex_nodelimer(
+                    std::string(reinterpret_cast<const char*>(reconstructed_leaf), 128)));
+                LOG_PRINT_L0("  stored:        " << epee::string_tools::buff_to_hex_nodelimer(
+                    std::string(reinterpret_cast<const char*>(stored_leaf), 128)));
+              } else {
+                LOG_PRINT_L0("construct_fcmp_tx DEBUG: leaf OK for output " << oi);
+              }
+            } else {
+              LOG_PRINT_L0("construct_fcmp_tx DEBUG: get_curve_tree_leaf returned false for output " << oi
+                << " (might be pending/deferred)");
+            }
+          }
+        }
+
         leaf_chunk_entries[i].push_back(entry);
       }
     }

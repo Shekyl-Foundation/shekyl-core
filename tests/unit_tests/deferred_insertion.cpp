@@ -37,10 +37,14 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 
 using namespace cryptonote;
+using shekyl::db::MaturityHeight;
+using shekyl::db::OutputIndex;
+using shekyl::db::BlockHeight;
 
 namespace {
 
 static constexpr size_t LEAF_BYTES = 128;
+static uint64_t g_output_seq = 0;
 
 struct TempLMDB {
   boost::filesystem::path tmpdir;
@@ -80,25 +84,23 @@ TEST(deferred_insertion, outputs_not_drainable_before_maturity)
 {
   TempLMDB env;
   BlockchainDB& db = env.db;
+  g_output_seq = 0;
 
   db.batch_start();
 
-  // Add a leaf that matures at height 50
   uint8_t leaf[LEAF_BYTES];
   make_leaf(0xAA, leaf);
-  db.add_pending_tree_leaf(50, leaf);
+  db.add_pending_tree_leaf(MaturityHeight{50}, OutputIndex{g_output_seq++}, leaf);
 
-  // Verify it does NOT drain at heights < 50
   for (uint64_t h = 0; h < 50; ++h)
   {
     std::vector<uint8_t> drained;
-    uint64_t count = db.drain_pending_tree_leaves(h, drained);
+    uint64_t count = db.drain_pending_tree_leaves(BlockHeight{h}, drained);
     ASSERT_EQ(count, 0u) << "Leaf drained too early at height " << h;
   }
 
-  // At exactly height 50, the leaf should drain
   std::vector<uint8_t> drained;
-  uint64_t count = db.drain_pending_tree_leaves(50, drained);
+  uint64_t count = db.drain_pending_tree_leaves(BlockHeight{50}, drained);
   ASSERT_EQ(count, 1u);
   ASSERT_EQ(drained.size(), LEAF_BYTES);
   ASSERT_EQ(memcmp(drained.data(), leaf, LEAF_BYTES), 0);
@@ -110,24 +112,21 @@ TEST(deferred_insertion, coinbase_maturity_window)
 {
   TempLMDB env;
   BlockchainDB& db = env.db;
+  g_output_seq = 0;
 
   db.batch_start();
 
-  // Simulate a coinbase output mined at height H=5.
-  // Maturity height = H + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW = 5 + 60 = 65
   const uint64_t block_height = 5;
   const uint64_t maturity = block_height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
   uint8_t leaf[LEAF_BYTES];
   make_leaf(0x55, leaf);
-  db.add_pending_tree_leaf(maturity, leaf);
+  db.add_pending_tree_leaf(MaturityHeight{maturity}, OutputIndex{g_output_seq++}, leaf);
 
-  // Not drainable at maturity - 1
   std::vector<uint8_t> drained;
-  uint64_t count = db.drain_pending_tree_leaves(maturity - 1, drained);
+  uint64_t count = db.drain_pending_tree_leaves(BlockHeight{maturity - 1}, drained);
   ASSERT_EQ(count, 0u);
 
-  // Drainable at maturity
-  count = db.drain_pending_tree_leaves(maturity, drained);
+  count = db.drain_pending_tree_leaves(BlockHeight{maturity}, drained);
   ASSERT_EQ(count, 1u);
   ASSERT_EQ(drained.size(), LEAF_BYTES);
 
@@ -138,22 +137,21 @@ TEST(deferred_insertion, regular_tx_maturity_window)
 {
   TempLMDB env;
   BlockchainDB& db = env.db;
+  g_output_seq = 0;
 
   db.batch_start();
 
-  // Simulate a regular tx output at height H=10.
-  // Maturity height = H + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE = 10 + 10 = 20
   const uint64_t block_height = 10;
   const uint64_t maturity = block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
   uint8_t leaf[LEAF_BYTES];
   make_leaf(0x66, leaf);
-  db.add_pending_tree_leaf(maturity, leaf);
+  db.add_pending_tree_leaf(MaturityHeight{maturity}, OutputIndex{g_output_seq++}, leaf);
 
   std::vector<uint8_t> drained;
-  uint64_t count = db.drain_pending_tree_leaves(maturity - 1, drained);
+  uint64_t count = db.drain_pending_tree_leaves(BlockHeight{maturity - 1}, drained);
   ASSERT_EQ(count, 0u);
 
-  count = db.drain_pending_tree_leaves(maturity, drained);
+  count = db.drain_pending_tree_leaves(BlockHeight{maturity}, drained);
   ASSERT_EQ(count, 1u);
 
   db.batch_stop();
@@ -170,44 +168,39 @@ TEST(deferred_insertion, drain_journal_atomicity)
 {
   TempLMDB env;
   BlockchainDB& db = env.db;
+  g_output_seq = 0;
 
   db.batch_start();
 
-  // Simulate: at block 100, we drained outputs that had maturity heights 50 and 60.
   uint8_t leaf1[LEAF_BYTES], leaf2[LEAF_BYTES];
   make_leaf(0x01, leaf1);
   make_leaf(0x02, leaf2);
 
-  db.add_pending_tree_drain_entry(100, 50, leaf1);
-  db.add_pending_tree_drain_entry(100, 60, leaf2);
+  db.add_pending_tree_drain_entry(BlockHeight{100}, OutputIndex{0}, MaturityHeight{50}, leaf1);
+  db.add_pending_tree_drain_entry(BlockHeight{100}, OutputIndex{1}, MaturityHeight{60}, leaf2);
 
-  // Retrieve journal for block 100
-  auto entries = db.get_pending_tree_drain_entries(100);
+  auto entries = db.get_pending_tree_drain_entries(BlockHeight{100});
   ASSERT_EQ(entries.size(), 2u);
 
-  // Entries should be (maturity_height, leaf_data) pairs
-  ASSERT_EQ(entries[0].first, 50u);
-  ASSERT_EQ(entries[1].first, 60u);
-  ASSERT_EQ(memcmp(entries[0].second.data(), leaf1, LEAF_BYTES), 0);
-  ASSERT_EQ(memcmp(entries[1].second.data(), leaf2, LEAF_BYTES), 0);
+  ASSERT_EQ(entries[0].maturity.value, 50u);
+  ASSERT_EQ(entries[1].maturity.value, 60u);
+  ASSERT_EQ(memcmp(entries[0].leaf.data(), leaf1, LEAF_BYTES), 0);
+  ASSERT_EQ(memcmp(entries[1].leaf.data(), leaf2, LEAF_BYTES), 0);
 
-  // Simulate pop: remove drain entries and re-add leaves to pending
-  for (const auto& [mat_h, leaf_arr] : entries)
-    db.add_pending_tree_leaf(mat_h, leaf_arr.data());
+  for (const auto& entry : entries)
+    db.add_pending_tree_leaf(entry.maturity, entry.output, entry.leaf.data());
 
-  db.remove_pending_tree_drain_entries(100);
+  db.remove_pending_tree_drain_entries(BlockHeight{100});
 
-  // Journal should be empty
-  entries = db.get_pending_tree_drain_entries(100);
+  entries = db.get_pending_tree_drain_entries(BlockHeight{100});
   ASSERT_TRUE(entries.empty());
 
-  // Leaves should be back in pending and drainable at their maturity heights
   std::vector<uint8_t> drained;
-  uint64_t count = db.drain_pending_tree_leaves(50, drained);
+  uint64_t count = db.drain_pending_tree_leaves(BlockHeight{50}, drained);
   ASSERT_EQ(count, 1u);
 
   drained.clear();
-  count = db.drain_pending_tree_leaves(60, drained);
+  count = db.drain_pending_tree_leaves(BlockHeight{60}, drained);
   ASSERT_EQ(count, 1u);
 
   db.batch_stop();
@@ -222,28 +215,26 @@ TEST(deferred_insertion, drain_journal_atomicity)
 TEST(deferred_insertion, ordering_determinism)
 {
   auto run_sequence = [](BlockchainDB& db) {
+    uint64_t seq = 0;
     db.batch_start();
 
-    // Add multiple leaves at the same maturity height
     for (uint8_t i = 0; i < 10; ++i)
     {
       uint8_t leaf[LEAF_BYTES];
       make_leaf(i, leaf);
-      db.add_pending_tree_leaf(100, leaf);
+      db.add_pending_tree_leaf(MaturityHeight{100}, OutputIndex{seq++}, leaf);
     }
 
-    // Also add leaves at earlier heights to test mixed draining
     for (uint8_t i = 10; i < 15; ++i)
     {
       uint8_t leaf[LEAF_BYTES];
       make_leaf(i, leaf);
-      db.add_pending_tree_leaf(50, leaf);
+      db.add_pending_tree_leaf(MaturityHeight{50}, OutputIndex{seq++}, leaf);
     }
 
-    // Drain all
     std::vector<uint8_t> drained;
-    db.drain_pending_tree_leaves(50, drained);
-    db.drain_pending_tree_leaves(100, drained);
+    db.drain_pending_tree_leaves(BlockHeight{50}, drained);
+    db.drain_pending_tree_leaves(BlockHeight{100}, drained);
 
     db.batch_stop();
     return drained;
@@ -274,4 +265,200 @@ TEST(deferred_insertion, ordering_determinism)
   db2.close();
   boost::filesystem::remove_all(dir1);
   boost::filesystem::remove_all(dir2);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// C4: Same-maturity leaf ordering by output index
+// Multiple outputs at the same maturity height must drain in output_index
+// order, not in leaf-content byte order.
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST(deferred_insertion, same_maturity_drain_order_by_output_index)
+{
+  TempLMDB env;
+  BlockchainDB& db = env.db;
+  g_output_seq = 0;
+
+  db.batch_start();
+
+  // Create leaves with different byte content but same maturity.
+  // If DUPSORT were still in play, byte-sorted order would differ from
+  // insertion order. Composite-key design guarantees output_index order.
+  const size_t N = 10;
+  std::vector<std::array<uint8_t, LEAF_BYTES>> leaves(N);
+  for (size_t i = 0; i < N; ++i)
+  {
+    // Seed backwards so byte-sort would reverse the order
+    make_leaf(static_cast<uint8_t>(N - 1 - i), leaves[i].data());
+    db.add_pending_tree_leaf(MaturityHeight{100}, OutputIndex{g_output_seq++}, leaves[i].data());
+  }
+
+  std::vector<uint8_t> drained;
+  uint64_t count = db.drain_pending_tree_leaves(BlockHeight{100}, drained);
+  ASSERT_EQ(count, N);
+  ASSERT_EQ(drained.size(), N * LEAF_BYTES);
+
+  // Verify drain order matches insertion (output_index) order, not byte order
+  for (size_t i = 0; i < N; ++i)
+  {
+    ASSERT_EQ(memcmp(drained.data() + i * LEAF_BYTES, leaves[i].data(), LEAF_BYTES), 0)
+      << "Leaf at drain position " << i << " does not match output " << i
+      << " -- drain order is not by output_index";
+  }
+
+  db.batch_stop();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// C5: Block pending journal round-trip
+// Verify that add_block_pending_addition / get_block_pending_additions /
+// remove_block_pending_additions round-trip correctly.
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST(deferred_insertion, block_pending_journal_round_trip)
+{
+  TempLMDB env;
+  BlockchainDB& db = env.db;
+
+  db.batch_start();
+
+  db.add_block_pending_addition(BlockHeight{42}, OutputIndex{10}, MaturityHeight{100});
+  db.add_block_pending_addition(BlockHeight{42}, OutputIndex{11}, MaturityHeight{110});
+  db.add_block_pending_addition(BlockHeight{42}, OutputIndex{12}, MaturityHeight{100});
+
+  auto entries = db.get_block_pending_additions(BlockHeight{42});
+  ASSERT_EQ(entries.size(), 3u);
+
+  // Should be ordered by output_index (composite key)
+  ASSERT_EQ(entries[0].second.value, 10u);
+  ASSERT_EQ(entries[1].second.value, 11u);
+  ASSERT_EQ(entries[2].second.value, 12u);
+  ASSERT_EQ(entries[0].first.value, 100u);
+  ASSERT_EQ(entries[1].first.value, 110u);
+  ASSERT_EQ(entries[2].first.value, 100u);
+
+  // Unrelated block should be empty
+  auto empty = db.get_block_pending_additions(BlockHeight{43});
+  ASSERT_TRUE(empty.empty());
+
+  // Remove
+  db.remove_block_pending_additions(BlockHeight{42});
+  entries = db.get_block_pending_additions(BlockHeight{42});
+  ASSERT_TRUE(entries.empty());
+
+  db.batch_stop();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// C6: Output↔Leaf mapping round-trip
+// Verify bidirectional mapping tables work correctly.
+// ═══════════════════════════════════════════════════════════════════════════
+
+using shekyl::db::TreePosition;
+
+TEST(deferred_insertion, output_leaf_mapping_round_trip)
+{
+  TempLMDB env;
+  BlockchainDB& db = env.db;
+
+  db.batch_start();
+
+  db.add_output_leaf_mapping(OutputIndex{5}, TreePosition{0});
+  db.add_output_leaf_mapping(OutputIndex{3}, TreePosition{1});
+  db.add_output_leaf_mapping(OutputIndex{8}, TreePosition{2});
+
+  // Forward lookup
+  TreePosition pos{0};
+  ASSERT_TRUE(db.get_output_leaf_index(OutputIndex{5}, pos));
+  ASSERT_EQ(pos.value, 0u);
+  ASSERT_TRUE(db.get_output_leaf_index(OutputIndex{3}, pos));
+  ASSERT_EQ(pos.value, 1u);
+  ASSERT_TRUE(db.get_output_leaf_index(OutputIndex{8}, pos));
+  ASSERT_EQ(pos.value, 2u);
+
+  // Reverse lookup
+  OutputIndex out{0};
+  ASSERT_TRUE(db.get_leaf_output_index(TreePosition{0}, out));
+  ASSERT_EQ(out.value, 5u);
+  ASSERT_TRUE(db.get_leaf_output_index(TreePosition{1}, out));
+  ASSERT_EQ(out.value, 3u);
+  ASSERT_TRUE(db.get_leaf_output_index(TreePosition{2}, out));
+  ASSERT_EQ(out.value, 8u);
+
+  // Nonexistent lookups
+  ASSERT_FALSE(db.get_output_leaf_index(OutputIndex{99}, pos));
+  ASSERT_FALSE(db.get_leaf_output_index(TreePosition{99}, out));
+
+  // Remove with assertion
+  db.remove_output_leaf_mapping(OutputIndex{3}, TreePosition{1});
+  ASSERT_FALSE(db.get_output_leaf_index(OutputIndex{3}, pos));
+  ASSERT_FALSE(db.get_leaf_output_index(TreePosition{1}, out));
+
+  // Other mappings still intact
+  ASSERT_TRUE(db.get_output_leaf_index(OutputIndex{5}, pos));
+  ASSERT_EQ(pos.value, 0u);
+
+  db.batch_stop();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// C7: Pop-block reversal via journal (unit-level)
+// Add pending leaves for two blocks, drain at first block, then simulate
+// pop_block by reading journals and reversing.
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST(deferred_insertion, pop_block_journal_reversal)
+{
+  TempLMDB env;
+  BlockchainDB& db = env.db;
+  g_output_seq = 0;
+
+  db.batch_start();
+
+  // Block 1: add 3 outputs with different maturities
+  uint8_t leaf_a[LEAF_BYTES], leaf_b[LEAF_BYTES], leaf_c[LEAF_BYTES];
+  make_leaf(0xA0, leaf_a);
+  make_leaf(0xB0, leaf_b);
+  make_leaf(0xC0, leaf_c);
+
+  const OutputIndex oa{g_output_seq++}, ob{g_output_seq++}, oc{g_output_seq++};
+  db.add_pending_tree_leaf(MaturityHeight{50}, oa, leaf_a);
+  db.add_block_pending_addition(BlockHeight{1}, oa, MaturityHeight{50});
+  db.add_pending_tree_leaf(MaturityHeight{50}, ob, leaf_b);
+  db.add_block_pending_addition(BlockHeight{1}, ob, MaturityHeight{50});
+  db.add_pending_tree_leaf(MaturityHeight{100}, oc, leaf_c);
+  db.add_block_pending_addition(BlockHeight{1}, oc, MaturityHeight{100});
+
+  // Drain at height 50 (only leaf_a, leaf_b mature)
+  std::vector<uint8_t> drained;
+  uint64_t count = db.drain_pending_tree_leaves(BlockHeight{50}, drained);
+  ASSERT_EQ(count, 2u);
+
+  // Now simulate pop_block for the drain at height 50:
+  // 1. Read drain journal
+  auto drain_entries = db.get_pending_tree_drain_entries(BlockHeight{50});
+  ASSERT_EQ(drain_entries.size(), 2u);
+
+  // 2. Restore drained leaves to pending
+  for (const auto& entry : drain_entries)
+    db.add_pending_tree_leaf(entry.maturity, entry.output, entry.leaf.data());
+  db.remove_pending_tree_drain_entries(BlockHeight{50});
+
+  // 3. Remove block 1's pending additions via journal
+  auto additions = db.get_block_pending_additions(BlockHeight{1});
+  ASSERT_EQ(additions.size(), 3u);
+  for (const auto& [mat, out] : additions)
+    db.remove_pending_tree_leaf(mat, out);
+  db.remove_block_pending_additions(BlockHeight{1});
+
+  // Verify: pending table is empty (all entries from block 1 removed)
+  drained.clear();
+  count = db.drain_pending_tree_leaves(BlockHeight{9999}, drained);
+  ASSERT_EQ(count, 0u) << "Pending table should be empty after full pop reversal";
+
+  // Journals should be empty too
+  ASSERT_TRUE(db.get_pending_tree_drain_entries(BlockHeight{50}).empty());
+  ASSERT_TRUE(db.get_block_pending_additions(BlockHeight{1}).empty());
+
+  db.batch_stop();
 }
