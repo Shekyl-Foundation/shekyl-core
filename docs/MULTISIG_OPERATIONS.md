@@ -468,7 +468,86 @@ reserved for V4.
 
 ---
 
-## 10. Message Types
+## 10. Fee Impact Analysis
+
+### How Shekyl Fees Work
+
+Shekyl fees scale with transaction size in bytes. The base fee rate is
+adaptive (see `burn.rs`), adjusting to network load. Multisig
+transactions are larger than single-sig, so they cost more in absolute
+terms.
+
+### Size Comparison
+
+| Transaction Type | Approx Size (2-in/2-out) | Fee Multiplier |
+|-----------------|--------------------------|----------------|
+| **Single-sig** | ~23 KB | 1.0x (baseline) |
+| **2-of-3 multisig** | ~36 KB | ~1.6x |
+| **3-of-5 multisig** | ~43 KB | ~1.9x |
+| **5-of-7 multisig** | ~54 KB | ~2.3x |
+
+### Where the Overhead Comes From
+
+**Per-input overhead (authentication):**
+
+| Config | Auth overhead | vs single-sig |
+|--------|---------------|---------------|
+| Single-sig | ~5,385 B | baseline |
+| 2-of-3 | ~12,769 B | +7,384 B (~2.4x) |
+| 3-of-5 | ~20,153 B | +14,768 B (~3.7x) |
+| 5-of-7 | ~30,921 B | +25,536 B (~5.7x) |
+
+**Per-output overhead (multisig-specific `tx_extra`):**
+
+| N | Extra per output |
+|---|-----------------|
+| 2 | ~2,339 B |
+| 3 | ~3,492 B |
+| 5 | ~5,798 B |
+
+### Comparison with Bitcoin
+
+Bitcoin multisig is per-input overhead (public keys and signatures in
+the witness/script). Bitcoin P2WSH 2-of-3 multisig is approximately 3x
+the cost of P2WPKH single-sig. During the 2017 and 2021 fee spikes,
+multisig became prohibitively expensive for small amounts.
+
+Shekyl's overhead model differs:
+
+1. **Per-output overhead is hidden behind FCMP++.** The verifier does
+   not see per-output PQC key data; it's in `tx_extra` consumed only by
+   the recipient's wallet. The chain stores it, but verification cost
+   doesn't scale with N.
+2. **Fee rate is adaptive, not auction-based.** Shekyl's adaptive burn
+   mechanism smooths fee spikes; there is no fee-rate auction that
+   creates winner-take-all dynamics.
+3. **Smaller absolute multiplier.** 2-of-3 multisig is ~1.6x single-sig
+   fees, compared to Bitcoin's ~3x. This is because FCMP++ proofs and
+   PQC auth dominate the base transaction size, so the relative
+   multisig overhead is proportionally smaller.
+
+### Economic Viability
+
+At current fee levels (assuming adaptive base rate):
+
+- **Small transactions (< 1 SKL):** viable for 2-of-3 and 3-of-5.
+  The fee difference between single-sig and multisig is negligible at
+  normal network load.
+- **Micro-transactions (< 0.01 SKL):** not recommended for any
+  transaction type (single-sig or multisig). The base fee for a ~23 KB
+  transaction may exceed the amount.
+- **During congestion:** multisig fees will be 1.6-2.3x single-sig
+  fees. The adaptive burn mechanism prevents extreme fee spikes, but
+  users should expect higher fees during high-load periods.
+
+**Conclusion:** Shekyl V3.1 multisig does not have Bitcoin's
+"rich users only" problem. The fee multiplier is modest, and the
+adaptive fee mechanism prevents the fee-spike dynamics that made
+Bitcoin multisig unusable for small amounts.
+
+---
+
+## 11. Message Types
 
 The protocol defines 11 message types (see `SHEKYL_MULTISIG_WIRE_FORMAT.md`
 for binary layouts):
