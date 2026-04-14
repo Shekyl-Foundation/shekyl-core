@@ -57,6 +57,57 @@
   surface (KDF, prover assignment, invariants, AEAD, CounterProof,
   griefing defense).
 
+- **`docs/SHEKYL_MULTISIG_WIRE_FORMAT.md`**: standalone portable wire
+  format spec for the V3.1 multisig protocol. Covers MultisigEnvelope
+  binary layout, SpendIntent canonical serialization, 11 message type
+  discriminants, AEAD parameters (ChaCha20-Poly1305 with HKDF-SHA256),
+  DecryptedPayload encoding, chain state fingerprint computation,
+  file transport conventions, and conformance requirements. Enables
+  third-party wallet implementations without reading the full spec.
+
+- **GroupDescriptor**: canonical JSON backup file format for multisig
+  groups. One file contains everything needed to restore a group from
+  seeds (group_id, threshold, pubkeys, relays, fingerprint). Rust type
+  in `shekyl-wallet-core`, Tauri export/import commands, and GUI
+  component in `shekyl-gui-wallet`.
+
+- **Failure-mode UX**: Multisig page restructured with 6 failure-mode
+  alert banners (unresponsive co-signer, counter divergence, relay
+  disconnect, fingerprint change, stuck intent, CounterProof failure).
+  All Phase 3 components (SigningDashboard, ViolationAlert, ProverView,
+  FingerprintBadge, LossAcknowledgment, AddressProvenance, RelayConfig)
+  wired into the Multisig page.
+
+- **File-based transport**: promoted from placeholder to first-class GUI
+  option with Tauri file I/O commands and functional import/sign/export
+  workflow. Equal prominence with relay transport.
+
+- **Fee impact analysis**: added to MULTISIG_OPERATIONS.md with tx size
+  comparison, per-input/per-output overhead, Bitcoin comparison, and
+  economic viability analysis for small transactions.
+
+- **Address format discipline**: cursor rule
+  `65-address-format-discipline.mdc` codifying that `shekyl1m` is the
+  sole multisig HRP for V3.x, with version bytes as the extension
+  mechanism.
+
+### 📚 Documentation
+
+- **`docs/MULTISIG_OPERATIONS.md`**: expanded from 222-line protocol
+  reference to ~500-line comprehensive operations guide with decision
+  framework, 3 operational playbooks, 6 failure recovery guides,
+  threat model worksheet, and honest limitations section.
+
+- **`docs/FOLLOWUPS.md`**: added hardware wallet constraints (ML-DSA-65
+  computation cost on Cortex-M, screen constraints, vendor outreach)
+  and headless co-signer service reference implementation, both
+  targeting V3.2.
+
+- **GUI wallet cursor rules**: added `81-no-protocol-knowledge.mdc`
+  (users never see FCMP++, KEM, HKDF in the UI) and
+  `82-failure-mode-ux.mdc` (every feature must enumerate failure modes
+  before implementation, failure states get dedicated UI).
+
 ### 🐛 Fixed
 
 - **Consensus-critical: curve tree leaf ordering bug (DB v6 → v7).**
