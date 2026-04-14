@@ -8,6 +8,7 @@
 
 pub mod counter_proof;
 pub mod encryption;
+pub mod group_descriptor;
 pub mod heartbeat;
 pub mod intent;
 pub mod invariants;
@@ -16,6 +17,7 @@ pub mod prover;
 pub mod state;
 
 pub use counter_proof::{CounterProof, CounterProofChainView, CounterProofVerifyResult};
+pub use group_descriptor::{GroupDescriptor, GroupDescriptorError};
 pub use encryption::{decrypt_payload, encrypt_payload, EncryptionError};
 pub use heartbeat::{Heartbeat, HeartbeatAnomaly, HeartbeatTracker};
 pub use intent::{ChainStateFingerprint, SpendIntent, SpendIntentError};
