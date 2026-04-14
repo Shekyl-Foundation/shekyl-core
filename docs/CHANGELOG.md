@@ -2,6 +2,133 @@
 
 ## Unreleased
 
+### ✨ Added
+
+- **PQC Multisig V3.1: equal-participants protocol implementation.**
+  Full implementation of the coordinator-less multisig protocol as
+  specified in `PQC_MULTISIG.md`. Key components:
+  - `MultisigKeyContainer` v1.1 with `spend_auth_version` field and
+    `multisig_group_id` v1.1 (includes version byte)
+  - `rotating_prover_index`: cryptographic hash-based prover assignment
+  - 8 HKDF-derived key/nonce labels for domain-separated derivation
+  - `construct_multisig_output_for_sender`, `scan_for_multisig_output`,
+    `validate_multisig_output_i7` for output lifecycle
+  - `GriefingTracker`: per-output cost bounding for invalid outputs
+  - `shekyl1m` Bech32m address format with file-based handling and
+    3-representation fingerprint
+  - `SpendIntent`: 14-check validation pipeline (structural, temporal,
+    chain state, balance)
+  - `ProverOutput`, `SignatureShare`, `ProverReceipt`: prover and
+    signing flow types with equivocation detection
+  - Honest-signer invariants I1–I7 enforcement
+  - `MultisigEnvelope` with 11 message types and AEAD encryption
+    (ChaCha20-Poly1305 with HKDF-derived keys)
+  - Per-intent state machine (8 states: Proposed → Broadcast + terminal)
+  - `HeartbeatTracker`: liveness, censorship, and sync anomaly detection
+  - `CounterProof`: 8-rule chain evidence verification for counter recovery
+  - C++ `tx_extra` tags 0x08, 0x09, 0x0A for multisig metadata
+  - FFI: `shekyl_pqc_verify_with_group_id` for defense-in-depth
+  - Consensus: scheme_id consistency enforcement across transaction inputs
+
+- **PQC Multisig V3.1: GUI components (shekyl-gui-wallet).**
+  7 React components for the multisig UX:
+  - `FingerprintBadge`: grouped hex fingerprint with copy and metadata
+  - `ProverView`: per-participant prover assignment breakdown
+  - `LossAcknowledgment`: mandatory 1/N loss checkbox
+  - `AddressProvenance`: fingerprint history with change detection
+  - `RelayConfig`: multi-relay management with operator diversity
+  - `ViolationAlert`: I1–I7 violation display with auto-abort
+  - `SigningDashboard`: real-time intent state with sign/veto actions
+
+- **PQC Multisig V3.1: test infrastructure.**
+  - 93 unit tests across all V3.1 modules
+  - 19 integration tests (functional, adversarial, determinism)
+  - 4 cross-platform determinism canaries with pinned byte prefixes
+  - 11 fuzz harnesses (wallet-core) covering serialization, encryption,
+    state machine, validation, and verification
+  - Criterion benchmarks for intent_hash, encryption, serialization,
+    fingerprint computation, and assembly consensus
+
+- **`docs/MULTISIG_OPERATIONS.md`**: end-user operations guide covering
+  group setup, receiving, spending, recovery, relay configuration, and
+  security considerations.
+
+- **`docs/AUDIT_SCOPE.md`**: expanded to include V3.1 multisig attack
+  surface (KDF, prover assignment, invariants, AEAD, CounterProof,
+  griefing defense).
+
+- **`docs/SHEKYL_MULTISIG_WIRE_FORMAT.md`**: standalone portable wire
+  format spec for the V3.1 multisig protocol. Covers MultisigEnvelope
+  binary layout, SpendIntent canonical serialization, 11 message type
+  discriminants, AEAD parameters (ChaCha20-Poly1305 with HKDF-SHA256),
+  DecryptedPayload encoding, chain state fingerprint computation,
+  file transport conventions, and conformance requirements. Enables
+  third-party wallet implementations without reading the full spec.
+
+- **GroupDescriptor**: canonical JSON backup file format for multisig
+  groups. One file contains everything needed to restore a group from
+  seeds (group_id, threshold, pubkeys, relays, fingerprint). Rust type
+  in `shekyl-wallet-core`, Tauri export/import commands, and GUI
+  component in `shekyl-gui-wallet`.
+
+- **Failure-mode UX**: Multisig page restructured with 6 failure-mode
+  alert banners (unresponsive co-signer, counter divergence, relay
+  disconnect, fingerprint change, stuck intent, CounterProof failure).
+  All Phase 3 components (SigningDashboard, ViolationAlert, ProverView,
+  FingerprintBadge, LossAcknowledgment, AddressProvenance, RelayConfig)
+  wired into the Multisig page.
+
+- **File-based transport**: promoted from placeholder to first-class GUI
+  option with Tauri file I/O commands and functional import/sign/export
+  workflow. Equal prominence with relay transport.
+
+- **Fee impact analysis**: added to MULTISIG_OPERATIONS.md with tx size
+  comparison, per-input/per-output overhead, Bitcoin comparison, and
+  economic viability analysis for small transactions.
+
+- **Address format discipline**: cursor rule
+  `65-address-format-discipline.mdc` codifying that `shekyl1m` is the
+  sole multisig HRP for V3.x, with version bytes as the extension
+  mechanism.
+
+### 📚 Documentation
+
+- **`docs/MULTISIG_OPERATIONS.md`**: expanded from 222-line protocol
+  reference to ~500-line comprehensive operations guide with decision
+  framework, 3 operational playbooks, 6 failure recovery guides,
+  threat model worksheet, and honest limitations section.
+
+- **`docs/FOLLOWUPS.md`**: added hardware wallet constraints (ML-DSA-65
+  computation cost on Cortex-M, screen constraints, vendor outreach)
+  and headless co-signer service reference implementation, both
+  targeting V3.2.
+
+- **GUI wallet cursor rules**: added `81-no-protocol-knowledge.mdc`
+  (users never see FCMP++, KEM, HKDF in the UI) and
+  `82-failure-mode-ux.mdc` (every feature must enumerate failure modes
+  before implementation, failure states get dedicated UI).
+
+### 🔒 Security
+
+- **`PersistedMultisigOutput` Debug redaction.** The `Debug` derive on
+  `PersistedMultisigOutput` was replaced with a manual implementation that
+  redacts `my_shared_secret` (64-byte KEM-derived material). Prevents
+  accidental secret exposure through `dbg!` or structured logging.
+
+- **`validate_balance` checked arithmetic.** `SpendIntent::validate_balance`
+  now uses `checked_add` for input sums, output sums, and fee addition.
+  Previously used wrapping `sum()` — crafted u64 values could wrap both
+  sides to the same value and pass the equality check.
+
+- **HKDF derivations return `Result`.** `derive_multisig_kem_seed` and
+  `derive_participant_kem_randomness` now return `Result<..., CryptoError>`
+  instead of panicking via `.expect()` on the transaction construction path.
+
+- **`eprintln!` removed from `shekyl_fcmp_verify` FFI.** Two diagnostic
+  `eprintln!` calls in the FCMP verification FFI path have been removed.
+  The C++ caller already logs verification failures; the Rust-side stderr
+  output was redundant and failed the CI lint.
+
 ### 🐛 Fixed
 
 - **Consensus-critical: curve tree leaf ordering bug (DB v6 → v7).**

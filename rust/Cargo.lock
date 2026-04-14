@@ -2533,6 +2533,7 @@ version = "2.0.0"
 dependencies = [
  "bech32",
  "serde",
+ "shekyl-crypto-hash",
  "shekyl-encoding",
  "thiserror",
 ]
@@ -2913,11 +2914,16 @@ dependencies = [
 name = "shekyl-wallet-core"
 version = "2.0.0"
 dependencies = [
+ "chacha20poly1305",
+ "criterion",
  "curve25519-dalek",
  "hex",
+ "hkdf",
  "modular-frost",
  "serde",
  "serde_json",
+ "sha2",
+ "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-fcmp",
  "shekyl-oxide",

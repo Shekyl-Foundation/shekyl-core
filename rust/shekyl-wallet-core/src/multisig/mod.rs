@@ -15,6 +15,7 @@
 pub mod dkg;
 pub mod group;
 pub mod signing;
+pub mod v31;
 
 pub use dkg::MultisigDkgSession;
 pub use group::MultisigGroup;

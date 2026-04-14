@@ -31,10 +31,15 @@
 //! ```
 
 pub mod address;
+pub mod multisig_address;
 pub mod network;
 
 pub use address::{
     AddressError, ShekylAddress, ADDRESS_VERSION_V1, CLASSICAL_PAYLOAD_LEN, PQC_PAYLOAD_LEN,
     SEGMENT_SEPARATOR,
 };
-pub use network::Network;
+pub use multisig_address::{
+    address_fingerprint, fingerprint_badge, fingerprint_hex, AddressProvenance,
+    MultisigAddressError, MultisigAddressPayload, MULTISIG_ADDRESS_VERSION,
+};
+pub use network::{AddressKind, Network};

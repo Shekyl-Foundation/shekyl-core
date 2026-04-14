@@ -92,20 +92,48 @@ pub fn pqc_b_hrp(net: Network) -> &'static str {
     }
 }
 
-/// All classical HRPs across all networks.
-const ALL_CLASSICAL_HRPS: &[(&str, Network)] = &[
-    ("shekyl", Network::Mainnet),
-    ("tshekyl", Network::Testnet),
-    ("sshekyl", Network::Stagenet),
+/// Multisig address HRP for a given network (PQC_MULTISIG.md SS6.1).
+pub fn multisig_hrp(net: Network) -> &'static str {
+    match net {
+        Network::Mainnet => "shekyl1m",
+        Network::Testnet => "shekyltest1m",
+        Network::Stagenet => "sshekyl1m",
+    }
+}
+
+/// All known HRPs mapped to (Network, AddressKind).
+const ALL_HRPS: &[(&str, Network, AddressKind)] = &[
+    ("shekyl", Network::Mainnet, AddressKind::SingleSig),
+    ("tshekyl", Network::Testnet, AddressKind::SingleSig),
+    ("sshekyl", Network::Stagenet, AddressKind::SingleSig),
+    ("shekyl1m", Network::Mainnet, AddressKind::Multisig),
+    ("shekyltest1m", Network::Testnet, AddressKind::Multisig),
+    ("sshekyl1m", Network::Stagenet, AddressKind::Multisig),
 ];
 
-/// Infer the network from a classical segment HRP string.
+/// Distinguishes single-sig from multisig addresses at the HRP level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AddressKind {
+    SingleSig,
+    Multisig,
+}
+
+/// Infer the network from a classical (single-sig) segment HRP string.
 pub fn network_from_hrp(hrp: &str) -> Option<Network> {
     let lower = hrp.to_lowercase();
-    ALL_CLASSICAL_HRPS
+    ALL_HRPS
         .iter()
-        .find(|(h, _)| *h == lower.as_str())
-        .map(|(_, net)| *net)
+        .find(|(h, _, kind)| *h == lower.as_str() && *kind == AddressKind::SingleSig)
+        .map(|(_, net, _)| *net)
+}
+
+/// Infer the network and address kind from any known HRP string.
+pub fn network_and_kind_from_hrp(hrp: &str) -> Option<(Network, AddressKind)> {
+    let lower = hrp.to_lowercase();
+    ALL_HRPS
+        .iter()
+        .find(|(h, _, _)| *h == lower.as_str())
+        .map(|(_, net, kind)| (*net, *kind))
 }
 
 #[cfg(test)]
@@ -149,7 +177,15 @@ mod tests {
                 assert_ne!(classical_hrp(nets[i]), classical_hrp(nets[j]));
                 assert_ne!(pqc_a_hrp(nets[i]), pqc_a_hrp(nets[j]));
                 assert_ne!(pqc_b_hrp(nets[i]), pqc_b_hrp(nets[j]));
+                assert_ne!(multisig_hrp(nets[i]), multisig_hrp(nets[j]));
             }
+        }
+    }
+
+    #[test]
+    fn multisig_hrp_distinct_from_single_sig() {
+        for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
+            assert_ne!(classical_hrp(net), multisig_hrp(net));
         }
     }
 
@@ -160,5 +196,23 @@ mod tests {
         assert_eq!(network_from_hrp("sshekyl"), Some(Network::Stagenet));
         assert_eq!(network_from_hrp("SHEKYL"), Some(Network::Mainnet));
         assert_eq!(network_from_hrp("bitcoin"), None);
+        assert_eq!(network_from_hrp("shekyl1m"), None, "multisig HRP not returned by single-sig lookup");
+    }
+
+    #[test]
+    fn network_and_kind_from_hrp_works() {
+        assert_eq!(
+            network_and_kind_from_hrp("shekyl"),
+            Some((Network::Mainnet, AddressKind::SingleSig))
+        );
+        assert_eq!(
+            network_and_kind_from_hrp("shekyl1m"),
+            Some((Network::Mainnet, AddressKind::Multisig))
+        );
+        assert_eq!(
+            network_and_kind_from_hrp("shekyltest1m"),
+            Some((Network::Testnet, AddressKind::Multisig))
+        );
+        assert_eq!(network_and_kind_from_hrp("bitcoin"), None);
     }
 }
