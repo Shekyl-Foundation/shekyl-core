@@ -1255,16 +1255,13 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
   shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, 0, 0, hf_version);
   block_reward += burn.miner_fee_income;
 
-  CHECK_AND_ASSERT_MES(!miner_address.m_pqc_public_key.empty(), false,
-    "construct_miner_tx_manually: miner address has no PQC public key");
-
-  static constexpr size_t X25519_PK_BYTES = 32;
-  CHECK_AND_ASSERT_MES(miner_address.m_pqc_public_key.size() > X25519_PK_BYTES,
-    false, "miner PQC public key too short");
+  CHECK_AND_ASSERT_MES(miner_address.m_pqc_public_key.size() == SHEKYL_PQC_PUBLIC_KEY_BYTES, false,
+    "construct_miner_tx_manually: miner PQC public key size "
+    << miner_address.m_pqc_public_key.size() << " != " << SHEKYL_PQC_PUBLIC_KEY_BYTES);
 
   const uint8_t* pk_x25519 = miner_address.m_pqc_public_key.data();
-  const uint8_t* pk_ml_kem = miner_address.m_pqc_public_key.data() + X25519_PK_BYTES;
-  const size_t pk_ml_kem_len = miner_address.m_pqc_public_key.size() - X25519_PK_BYTES;
+  const uint8_t* pk_ml_kem = miner_address.m_pqc_public_key.data() + SHEKYL_X25519_PK_BYTES;
+  const size_t pk_ml_kem_len = miner_address.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
 
   tx_extra_pqc_kem_ciphertext kem_field;
   kem_field.blob.reserve(HYBRID_KEM_CT_BYTES);
@@ -1335,15 +1332,13 @@ bool append_v3_output_to_miner_tx(transaction& tx, const crypto::secret_key& txk
                                   const account_public_address& addr, uint64_t amount)
 {
   CHECK_AND_ASSERT_MES(tx.version == 3, false, "append_v3_output_to_miner_tx requires a v3 tx");
-  CHECK_AND_ASSERT_MES(!addr.m_pqc_public_key.empty(), false, "recipient has no PQC public key");
-
-  static constexpr size_t X25519_PK_BYTES = 32;
-  CHECK_AND_ASSERT_MES(addr.m_pqc_public_key.size() > X25519_PK_BYTES, false,
-    "recipient PQC public key too short");
+  CHECK_AND_ASSERT_MES(addr.m_pqc_public_key.size() == SHEKYL_PQC_PUBLIC_KEY_BYTES, false,
+    "append_v3_output: recipient PQC public key size "
+    << addr.m_pqc_public_key.size() << " != " << SHEKYL_PQC_PUBLIC_KEY_BYTES);
 
   const uint8_t* pk_x25519 = addr.m_pqc_public_key.data();
-  const uint8_t* pk_ml_kem = addr.m_pqc_public_key.data() + X25519_PK_BYTES;
-  const size_t pk_ml_kem_len = addr.m_pqc_public_key.size() - X25519_PK_BYTES;
+  const uint8_t* pk_ml_kem = addr.m_pqc_public_key.data() + SHEKYL_X25519_PK_BYTES;
+  const size_t pk_ml_kem_len = addr.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
   const size_t out_idx = tx.vout.size();
 
   ShekylOutputData od = shekyl_construct_output(

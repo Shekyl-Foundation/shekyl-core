@@ -658,17 +658,23 @@ bool tx_has_verification_data(const crypto::hash& tx_hash) const;
 Every output has a unique PQC keypair derived deterministically from the
 combined KEM shared secret, enabling wallet restore from seed.
 
-### Hybrid KEM (X25519 + ML-KEM-768)
+### Hybrid KEM (Unclamped Montgomery DH + ML-KEM-768)
 
-The sender performs a hybrid key encapsulation. The recipient's X25519
-public key is derived from their Ed25519 view public key via the standard
-Edwards→Montgomery birational map (`ed25519_pk_to_x25519_pk` in
-`montgomery.rs`), not carried separately in the address.
+The sender performs a hybrid key encapsulation to derive a per-output
+shared secret. The classical component uses unclamped Montgomery DH over
+Curve25519 — **not** RFC 7748 X25519. The recipient's X25519 public key is
+not transmitted in the address; it is derived from the Ed25519 view public
+key via the canonical Edwards→Montgomery birational map.
+
+For the full specification of the X25519 derivation, unclamped DH
+semantics, and low-order point rejection rules, see
+`POST_QUANTUM_CRYPTOGRAPHY.md` §X25519 Binding to View Key and
+§DH Semantics.
 
 ```text
-1. X25519 KEM:     ss_classical = unclamped_dh(ephemeral_sk, recipient_x25519_pk)
-                   (recipient_x25519_pk derived from Ed25519 view pub)
-2. ML-KEM-768 KEM: ss_pq, ciphertext = ML-KEM-768.Encaps(recipient_ml_kem_pk)
+1. Montgomery DH:  ss_classical = ephemeral_scalar * recipient_x25519_pk
+                   (unclamped; recipient_x25519_pk = EdwardsToMontgomery(view_pub))
+2. ML-KEM-768:     ss_pq, ciphertext = ML-KEM-768.Encaps(recipient_ml_kem_pk)
 3. Combined:       shared_secret = HKDF-SHA-512(
                        salt = "shekyl-kem-v1",
                        ikm  = ss_classical || ss_pq,
@@ -676,9 +682,8 @@ Edwards→Montgomery birational map (`ed25519_pk_to_x25519_pk` in
                    )
 ```
 
-Low-order Montgomery points are explicitly rejected before DH on both
-sides (recipient: mandatory check on `kem_ct_x25519`; sender:
-defense-in-depth check on derived recipient X25519 pub).
+Recipients MUST reject low-order Montgomery points on `kem_ct_x25519`
+before performing DH (see `POST_QUANTUM_CRYPTOGRAPHY.md` §DH Semantics).
 
 The hybrid KEM ciphertexts are stored in `tx_extra` as
 `tx_extra_pqc_kem_ciphertext`: tag `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` (`0x06`),
@@ -762,8 +767,9 @@ limit.
 For human-readable display (QR codes, clipboard), only the classical
 segment is shown by default. The full address (all three segments) is
 used for machine-to-machine communication and is required for sending
-funds (the PQC segments carry the ML-KEM public key needed for hybrid
-KEM encapsulation).
+funds (the PQC segments carry the ML-KEM-768 encapsulation key; the X25519
+public key is derived from the view key in the classical segment — see
+`POST_QUANTUM_CRYPTOGRAPHY.md` §X25519 Binding to View Key).
 
 ### Network HRPs
 
@@ -995,8 +1001,8 @@ any other output. Specifically:
 - Reward outputs use confidential amounts (Pedersen commitment + BP+
   range proof), not plaintext amounts with `RCTTypeNull`.
 - Per-output PQC keys are derived via the standard hybrid KEM path
-  (X25519 + ML-KEM-768 → HKDF → ML-DSA-65 keypair), with the ML-KEM
-  ciphertext embedded in `tx_extra` under tag `0x06`.
+  (unclamped Montgomery DH + ML-KEM-768 → HKDF → ML-DSA-65 keypair),
+  with the ML-KEM ciphertext embedded in `tx_extra` under tag `0x06`.
 - Claim transactions include a dummy change output (amount = 0) to
   match the 2-output structure of regular transactions, preventing
   structural fingerprinting.

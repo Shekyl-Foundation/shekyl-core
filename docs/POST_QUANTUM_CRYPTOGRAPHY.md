@@ -95,13 +95,133 @@ KEM ships at genesis for per-output PQC key derivation. Each transaction
 output receives a unique PQC keypair derived from a hybrid KEM exchange,
 preventing transaction linkability.
 
-- Classical component: `X25519`
+- Classical component: unclamped Montgomery DH over Curve25519 (see
+  "X25519 Binding to View Key" and "DH Semantics" below)
 - PQ component: `ML-KEM-768` (NIST level 3)
 - Combining rule: `HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = "shekyl-kem-v1", info = context_bytes)`
 - ML-KEM ciphertexts are stored in `tx_extra` under tag `0x06`
   (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`), one per output (1088 bytes each).
 
 See "Per-Output PQC Key Derivation" section below for the full flow.
+
+### X25519 Binding to View Key
+
+The recipient's X25519 public key is not transmitted in the address. It is
+a **derived quantity**: the canonical Edwards→Montgomery image of the
+Ed25519 view public key carried in the classical Bech32m segment. Any
+conforming implementation MUST derive the X25519 public key via this map;
+generating or transmitting an independent X25519 key produces incompatible
+`combined_ss` values and breaks interoperability.
+
+**Derivation (public side):**
+
+```
+x25519_pub = Edwards_to_Montgomery(view_pub)
+           = u where u = (1 + y) / (1 - y) mod p
+```
+
+Where `y` is the y-coordinate of the compressed Edwards point `view_pub`,
+and `p = 2^255 - 19`. The sign bit (bit 255 of the compressed encoding)
+selects between `±x` on the Edwards curve; the Montgomery u-coordinate
+depends only on `y`, so both sign variants produce the same `x25519_pub`.
+
+**Derivation (secret side):**
+
+```
+x25519_sec = Scalar::from_bytes_mod_order(view_secret_key)
+```
+
+The Ed25519 view secret key bytes are interpreted directly as an unclamped
+Montgomery scalar. No bit-clearing or bit-setting is applied. This scalar
+is already reduced mod `ℓ` (the Ed25519 group order) by construction.
+
+**Rejection rules (public side):**
+
+A conforming implementation MUST reject the following inputs to the
+Edwards→Montgomery conversion:
+
+| Input | Reason |
+|-------|--------|
+| Non-canonical y (≥ p after masking sign bit) | `curve25519-dalek` silently reduces mod p; explicit canonicality check required |
+| Decompression failure (y not on curve) | Not a valid Ed25519 point |
+| Identity point (y = 1, maps to u = 0) | Montgomery identity; DH output is always zero regardless of scalar |
+| u = 0 after conversion | Defense-in-depth; same as identity |
+
+**Why the view key:**
+
+The Ed25519 view public key is already present in every Shekyl address
+(classical segment). Deriving X25519 from it adds zero bytes on the wire.
+The derivation is the standard birational map used by age, Signal,
+WireGuard, and (implicitly) Monero's own stealth-address ECDH. An observer
+who knows the address can compute the X25519 public key — but they could
+already read the view key, so no new information is revealed. The hybrid
+property is preserved: if either X25519 or ML-KEM is secure, `combined_ss`
+is secure. Forward secrecy against quantum attack comes from the ML-KEM
+component, which is structurally unaffected.
+
+**Implementation:**
+
+- Rust: `shekyl-crypto-pq/src/montgomery.rs` (`ed25519_pk_to_x25519_pk`,
+  `ed25519_sk_as_montgomery_scalar`, `is_low_order_montgomery`)
+- FFI: `shekyl_view_pub_to_x25519_pub` in `shekyl-ffi`
+- Test vectors: `docs/test_vectors/PQC_TEST_VECTOR_005_X25519_DERIVATION.json`
+
+### DH Semantics
+
+**This is not RFC 7748 X25519.** Shekyl's classical KEM component performs
+Diffie-Hellman over the Montgomery curve Curve25519, but does NOT apply
+RFC 7748 scalar clamping (clear bits 0, 1, 2 and 255; set bit 254).
+
+The DH operation is:
+
+```
+shared_secret = scalar * MontgomeryPoint
+```
+
+Where `scalar` is either:
+- **Sender (ephemeral):** `Scalar::from_bytes_mod_order(per_output_seed[0..32])`
+- **Recipient (view key):** `Scalar::from_bytes_mod_order(view_secret_key)`
+
+Both scalars are used as-is after `mod ℓ` reduction. Clamping is
+incompatible with this design because the view secret key is an Ed25519
+scalar already reduced mod `ℓ`; applying RFC 7748 clamping would mutate
+it, producing a different scalar on the recipient side than the sender
+used to derive the ephemeral shared secret.
+
+**Low-order point rejection (mandatory recipient-side validation rule):**
+
+Before performing DH, the recipient MUST reject low-order Montgomery
+points on the ephemeral ciphertext input `kem_ct_x25519`:
+
+```
+if (Scalar::from(8) * MontgomeryPoint(kem_ct_x25519)).is_identity():
+    reject  // CryptoError::LowOrderPoint
+```
+
+This check detects all points of order dividing 8 (the 12 low-order
+points on Curve25519's Montgomery form: order 1, 2, 4, and 8). Without
+this check, an attacker who publishes a low-order ephemeral point in
+`tx_extra` can observe `view_scalar mod 8` (3 bits) through the
+recipient's subsequent on-chain behavior. RFC 7748 clamping neutralizes
+this by forcing `scalar ≡ 0 mod 8`; since Shekyl does not clamp, explicit
+rejection replaces that defense.
+
+On the sender side, the same check is applied as defense-in-depth on the
+recipient's derived X25519 public key (to catch conversion bugs). This
+check should never trigger for honestly-derived keys.
+
+**Constant-time guarantee:** `curve25519-dalek`'s `Scalar * MontgomeryPoint`
+is constant-time regardless of scalar value or point. The low-order check
+uses `Scalar::from(8) * point` which is also constant-time.
+
+**Rationale summary:**
+
+| Property | RFC 7748 X25519 | Shekyl's DH |
+|----------|----------------|-------------|
+| Scalar source | Random 32 bytes, clamped | Ed25519 scalar, reduced mod ℓ, unclamped |
+| Cofactor safety | Clamping forces scalar ≡ 0 mod 8 | Explicit low-order point rejection |
+| Sender/receiver symmetry | Both clamp independently | Both use unreduced scalars; consistency follows from using the same derivation |
+| Constant-time | Yes (per library) | Yes (per `curve25519-dalek`) |
 
 ## Curve Tower
 
@@ -142,11 +262,10 @@ and public data, without caching per-output shared secrets.
 
 The derivation flow is:
 
-1. **Sender** reads the recipient's ML-KEM-768 encapsulation key from their
-   address (the PQC segment of the Bech32m address) and derives the X25519
-   public key from the Ed25519 view public key via the standard
-   Edwards→Montgomery birational map `u = (1 + y) / (1 - y) mod p`
-   (implemented in `shekyl-crypto-pq/src/montgomery.rs`).
+1. **Sender** reads the recipient's ML-KEM-768 encapsulation key from the
+   PQC segments of the Bech32m address and derives the recipient's X25519
+   public key from the Ed25519 view public key in the classical segment
+   (see §X25519 Binding to View Key).
 2. **Derive deterministic per-output KEM seed:**
    ```
    fingerprint = SHA3-256(x25519_pk || ml_kem_ek)           // 32 bytes
@@ -159,12 +278,14 @@ The derivation flow is:
    ```
    The first 32 bytes seed the X25519 ephemeral key; the last 32 bytes seed
    ML-KEM-768 encapsulation.
-3. **Deterministic X25519 ECDH:**
+3. **Deterministic Montgomery DH** (see §DH Semantics — not RFC 7748):
    ```
-   x25519_eph_sk = per_output_seed[0..32]
-   x25519_eph_pk = X25519(x25519_eph_sk, basepoint)
-   x25519_shared_secret = X25519(x25519_eph_sk, recipient_x25519_pk)
+   x25519_eph_scalar = Scalar::from_bytes_mod_order(per_output_seed[0..32])
+   x25519_eph_pk     = x25519_eph_scalar * MONTGOMERY_BASEPOINT
+   x25519_shared_secret = x25519_eph_scalar * recipient_x25519_pk
    ```
+   Sender SHOULD reject `recipient_x25519_pk` if it is a low-order point
+   (defense-in-depth; see §DH Semantics).
 4. **Deterministic ML-KEM-768 encapsulation:**
    ```
    ml_kem_seed = per_output_seed[32..64]
@@ -188,7 +309,9 @@ The derivation flow is:
    output.
 
 The recipient reverses steps 3-7 using their ML-KEM-768 decapsulation key and
-X25519 secret key to recover the per-output PQC keypair.
+their Ed25519 view secret as the unclamped Montgomery scalar (see §DH
+Semantics). The recipient MUST reject the sender's ephemeral X25519 public
+key (`kem_ct_x25519`) if it is a low-order point, before performing DH.
 
 For **coinbase transactions**, the miner self-encapsulates to their own
 ML-KEM-768 key, ensuring per-output PQC uniqueness even for miner rewards.
@@ -434,7 +557,11 @@ Design notes:
 - The classical segment alone (`shekyl1...`) is sufficient for view-only
   wallets, human identification, and scanning infrastructure.
 - The `/`-separated PQC segments carry the ML-KEM-768 encapsulation key
-  needed for per-output PQC key derivation.
+  (1184 bytes) needed for per-output PQC key derivation. The X25519 public
+  key is **not** transmitted in the address; it is derived from the Ed25519
+  view public key in the classical segment via the canonical
+  Edwards→Montgomery map (see §X25519 Binding to View Key). This means the
+  PQC segments carry ML-KEM material exclusively.
 - The three-segment design ensures each individual Bech32m string stays
   within the proven error-detection range of the Bech32m checksum polynomial.
 - Addresses are too long for QR codes at standard error correction levels.
@@ -941,35 +1068,40 @@ Prerequisite: V4-B or independent of address format work.
 - Single compact on-chain signature regardless of M or N.
 - Formal security review required before consensus activation.
 
-### KEM Composition (Implemented at Genesis)
+### KEM Composition (Ships at Genesis)
 
-The KEM combining rule is implemented and ships at genesis:
+The hybrid KEM combines:
 
-- Classical: `X25519` (unclamped Montgomery DH using the Ed25519 view key)
-- PQ: `ML-KEM-768` (NIST level 3)
-- Combining: `HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = "shekyl-kem-v1", info = context_bytes)`
-- The combined shared secret feeds into per-output PQC key derivation.
-- ML-KEM ciphertexts stored in `tx_extra` tag `0x06`
-  (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`).
-- Implementation: `rust/shekyl-crypto-pq/src/kem.rs`
+- **Classical:** unclamped Montgomery DH over Curve25519 with the Ed25519
+  view key (see §X25519 Binding to View Key and §DH Semantics)
+- **Post-quantum:** `ML-KEM-768` (NIST level 3)
+- **Combining rule:** `HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = "shekyl-kem-v1", info = context_bytes)`
 
-**X25519 key derivation:** The X25519 public key is not carried in the
-address. It is deterministically derived from the Ed25519 view public key
-via the Edwards→Montgomery birational map (`ed25519_pk_to_x25519_pk` in
-`montgomery.rs`). On the secret side, the Ed25519 view secret key is used
-directly as the unclamped Montgomery scalar (`ed25519_sk_as_montgomery_scalar`).
-This avoids X25519's default scalar clamping, which would desynchronize the
-sender/receiver DH computation. Low-order Montgomery points are explicitly
-rejected on both the recipient side (mandatory: `kem_ct_x25519` from
-network transactions) and the sender side (defense-in-depth: derived
-recipient X25519 public key). See `docs/AUDIT_SCOPE.md` for the targeted
-review scope covering this composition.
+The combined shared secret feeds into per-output PQC key derivation (see
+§Per-Output PQC Key Derivation). ML-KEM ciphertexts (1088 bytes each) are
+stored in `tx_extra` tag `0x06` (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`).
 
-**`m_pqc_public_key` layout invariant:** 1216 bytes, laid out as
-`X25519_pub[0..32] || ML-KEM_ek[32..1216]`. Canonical assemblers:
-`get_account_address_from_str` (address decode path) and
-`generate_pqc_key_material` (wallet keygen path). Runtime checks enforce
-`size == 1216` at every split site.
+Implementation: `rust/shekyl-crypto-pq/src/kem.rs`
+
+> **Invariant: `m_pqc_public_key` layout**
+>
+> `m_pqc_public_key` is exactly **1216 bytes**, laid out as:
+>
+> ```
+> X25519_pub[0..32] || ML-KEM-768_ek[32..1216]
+> ```
+>
+> `X25519_pub` is **derived, never transmitted**: it is the
+> Edwards→Montgomery image of the Ed25519 view public key in the classical
+> address segment. The canonical assemblers are `get_account_address_from_str`
+> (address decode path) and `generate_pqc_key_material` (wallet keygen path).
+> Code that splits `m_pqc_public_key` at byte 32 relies on this layout;
+> runtime checks enforce `size == SHEKYL_PQC_PUBLIC_KEY_BYTES (1216)` at
+> every split site.
+>
+> On the secret side, `m_pqc_secret_key[0..32]` is identical to
+> `m_view_secret_key`. The wallet enforces this at load time and refuses to
+> open on mismatch.
 
 ### Amount Encryption and Commitment Masks (HKDF Only)
 

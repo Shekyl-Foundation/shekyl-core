@@ -185,7 +185,9 @@ Remaining:
 
 Ships at genesis for per-output PQC key derivation:
 
-- X25519 + ML-KEM-768 hybrid KEM for per-output PQC keypair derivation
+- Unclamped Montgomery DH + ML-KEM-768 hybrid KEM for per-output PQC keypair
+  derivation (X25519 public key derived from Ed25519 view key; not RFC 7748;
+  see `POST_QUANTUM_CRYPTOGRAPHY.md` §X25519 Binding to View Key, §DH Semantics)
 - **Deterministic encapsulation** from `tx_key_secret` via `derive_kem_seed` (HKDF-SHA-512, salt `"shekyl-output-kem-v1"`, info = SHA3-256 recipient fingerprint &#124;&#124; index)
 - ML-KEM ciphertexts stored in `tx_extra` tag `0x06`
 - Combined shared secret via `HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = "shekyl-kem-v1", info = "")`

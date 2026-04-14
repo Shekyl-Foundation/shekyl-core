@@ -15,9 +15,12 @@ hardware wallet firmware:
    existing Ledger and Trezor firmware does not support.
 
 2. **KEM-derived secrets**: Output construction and scanning use a unified
-   HKDF-SHA-512 derivation from a combined X25519 + ML-KEM-768 shared secret.
-   Hardware devices would need to implement ML-KEM-768 encapsulation and
-   decapsulation, which requires firmware changes.
+   HKDF-SHA-512 derivation from a combined Montgomery DH + ML-KEM-768
+   shared secret. The classical DH is **not** RFC 7748 X25519 (no scalar
+   clamping); see `POST_QUANTUM_CRYPTOGRAPHY.md` §DH Semantics. Hardware
+   devices would need to implement ML-KEM-768 encapsulation/decapsulation
+   and unclamped Montgomery scalar multiplication, which requires firmware
+   changes.
 
 3. **ECDH removal**: The legacy `ecdhEncode`/`ecdhDecode` amount encryption
    protocol has been replaced by `enc_amounts` (direct XOR with an HKDF-derived

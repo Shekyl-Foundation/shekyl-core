@@ -1,0 +1,76 @@
+{
+  "description": "X25519 derivation from Ed25519 view key, unclamped Montgomery DH, and DH shared secret.",
+  "spec_reference": "POST_QUANTUM_CRYPTOGRAPHY.md §X25519 Binding to View Key, §DH Semantics",
+  "notes": [
+    "All hex values are little-endian byte encodings.",
+    "Scalars are interpreted via Scalar::from_bytes_mod_order (no clamping).",
+    "DH is unclamped: shared_secret = scalar * MontgomeryPoint (not RFC 7748 X25519).",
+    "derived_x25519_pub = EdwardsToMontgomery(view_pub) = (1 + y) / (1 - y) mod p.",
+    "The ephemeral scalar is shared across all vectors to test different recipient keys.",
+    "Vector 1 uses scalar=1 (Ed25519 basepoint); its X25519 image is u=9 (X25519 basepoint).",
+    "Third-party implementations MUST reproduce these values bit-for-bit to interoperate."
+  ],
+  "ephemeral_scalar": "0500000000000000000000000000000000000000000000000000000000000000",
+  "ephemeral_x25519_pub": "877c4978577d530dcb491d58bcc9cba87f9e075e6e02c003f27aee503cecb641",
+  "vectors": [
+    {
+      "view_secret_key": "0100000000000000000000000000000000000000000000000000000000000000",
+      "view_public_key_ed25519": "5866666666666666666666666666666666666666666666666666666666666666",
+      "derived_x25519_pub": "0900000000000000000000000000000000000000000000000000000000000000",
+      "unclamped_dh_shared_secret": "877c4978577d530dcb491d58bcc9cba87f9e075e6e02c003f27aee503cecb641",
+      "note": "scalar=1 gives Ed25519 basepoint; X25519 image is u=9 (Montgomery basepoint)"
+    },
+    {
+      "view_secret_key": "0200000000000000000000000000000000000000000000000000000000000000",
+      "view_public_key_ed25519": "c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022",
+      "derived_x25519_pub": "fb4e68dd9c46ae5c5c0b351eed5c3f8f1471157d680c75d9b7f17318d542d320",
+      "unclamped_dh_shared_secret": "7b9c3a2c8942ce83030e08d24318e53ee43fcbd7e54cfb71040659b155a6ed41"
+    },
+    {
+      "view_secret_key": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f00",
+      "view_public_key_ed25519": "1002914718d20426783fce7735c3d25d1a808f994ac277746654c7739807ab04",
+      "derived_x25519_pub": "14b2591599fc6c8d7cd825e93037a8b141d64179f56aa9fd61274a43137e114c",
+      "unclamped_dh_shared_secret": "956cc8158500d2d76c6f0981985afd3a56173115bdd57f37285db9d7b78db70a",
+      "note": "Uses RFC 8032 test key bytes (first 32 bytes of test vector 1)"
+    }
+  ],
+  "low_order_rejection_vectors": [
+    {
+      "u_coordinate": "0000000000000000000000000000000000000000000000000000000000000000",
+      "must_reject": true,
+      "description": "Montgomery identity (u=0), order 1"
+    },
+    {
+      "u_coordinate": "0100000000000000000000000000000000000000000000000000000000000000",
+      "must_reject": true,
+      "description": "u=1, order 2"
+    },
+    {
+      "u_coordinate": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "must_reject": true,
+      "description": "u=p-1 (2^255-20), order 4"
+    },
+    {
+      "u_coordinate": "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+      "must_reject": true,
+      "description": "Order 8 point"
+    },
+    {
+      "u_coordinate": "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+      "must_reject": true,
+      "description": "Order 8 point"
+    }
+  ],
+  "edwards_rejection_vectors": [
+    {
+      "ed25519_pub": "0100000000000000000000000000000000000000000000000000000000000000",
+      "must_reject": true,
+      "reason": "identity point (y=1)"
+    },
+    {
+      "ed25519_pub": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "must_reject": true,
+      "reason": "non-canonical y >= p"
+    }
+  ]
+}

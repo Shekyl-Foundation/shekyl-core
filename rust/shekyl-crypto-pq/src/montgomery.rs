@@ -327,9 +327,6 @@ mod tests {
 
     #[test]
     fn view_key_round_trip_consistency() {
-        // Generate a random Ed25519 scalar (simulating a view secret key),
-        // derive the public key, convert both sides to Montgomery, and verify
-        // that DH is consistent (sender and receiver compute the same SS).
         use curve25519_dalek::constants::{ED25519_BASEPOINT_TABLE, X25519_BASEPOINT};
 
         for _ in 0..10 {
@@ -339,21 +336,16 @@ mod tests {
             let x25519_pub = ed25519_pk_to_x25519_pk(&view_pub.0).unwrap();
             let x25519_sec = ed25519_sk_as_montgomery_scalar(&view_scalar.to_bytes());
 
-            // Verify pub == sec * basepoint
             let computed_pub = &x25519_sec * &X25519_BASEPOINT;
             assert_eq!(
                 x25519_pub, computed_pub.0,
                 "public key from Edwards map must match scalar * basepoint"
             );
 
-            // Simulate sender: ephemeral keypair
             let eph_scalar = Scalar::random(&mut rand::rngs::OsRng);
             let eph_pub = &eph_scalar * &X25519_BASEPOINT;
 
-            // Sender DH: eph_scalar * recipient_x25519_pub
             let sender_ss = &eph_scalar * &MontgomeryPoint(x25519_pub);
-
-            // Receiver DH: view_scalar * eph_pub
             let receiver_ss = &x25519_sec * &eph_pub;
 
             assert_eq!(
@@ -362,4 +354,5 @@ mod tests {
             );
         }
     }
+
 }

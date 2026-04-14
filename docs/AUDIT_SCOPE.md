@@ -60,74 +60,113 @@ extension preserves the zero-knowledge proof system's security properties.
 
 ---
 
-## Targeted Review: Edwards→Montgomery DH Composition
+## Targeted Review: Unclamped Montgomery DH Composition
 
-> **Added:** 2026-04-13
->
 > **Scope:** Separate from the 4-scalar leaf audit above. Can be
 > commissioned as a smaller targeted review or folded into a broader
-> wallet-crypto audit.
+> wallet-crypto audit. Must be completed before mainnet.
 
 ### Summary
 
-The X25519 component of the hybrid KEM no longer uses `x25519-dalek`'s
-clamped DH. Instead, the Ed25519 view secret key is used directly as an
-unclamped Montgomery scalar via `curve25519-dalek`, and the X25519 public
-key is derived from the Ed25519 view public key via the standard
-Edwards→Montgomery birational map `u = (1 + y) / (1 - y) mod p`.
+Shekyl's hybrid KEM classical component performs unclamped Montgomery DH
+over Curve25519 rather than RFC 7748 X25519. The protocol binds the X25519
+public key to the Ed25519 view key via the standard Edwards→Montgomery
+birational map and uses the view secret key directly as the unclamped
+Montgomery scalar. Low-order Montgomery point rejection replaces X25519's
+scalar clamping as the cofactor-safety mechanism.
 
-This introduces a cryptographic composition (view-key-as-Montgomery-scalar,
-unclamped DH, explicit low-order point rejection) that warrants reviewer
-attention.
+This is a novel cryptographic composition with four properties that require
+independent verification:
+
+1. **Edwards→Montgomery correctness and edge cases**
+2. **Unclamped DH safety** (scalar not clamped; cofactor safety via
+   point rejection)
+3. **Low-order point rejection** (completeness of the check)
+4. **Identity composition** (view-scanning identity collapsed with
+   encap identity: KCI implications, forward-secrecy properties)
+
+For the protocol specification of these properties, see
+`POST_QUANTUM_CRYPTOGRAPHY.md` §X25519 Binding to View Key and
+§DH Semantics.
 
 ### In-Scope
 
-1. **`montgomery.rs` conversion functions**
-   - `ed25519_pk_to_x25519_pk`: Edwards→Montgomery public key conversion
-     with non-canonical y rejection, identity rejection, and zero-u rejection
-   - `ed25519_sk_as_montgomery_scalar`: unclamped scalar conversion
-   - `is_low_order_montgomery`: cofactor-8 low-order point check
+1. **Edwards→Montgomery conversion correctness**
+   - `ed25519_pk_to_x25519_pk`: birational map with non-canonical y
+     rejection, identity rejection, and zero-u rejection
+   - `ed25519_sk_as_montgomery_scalar`: unclamped scalar interpretation
+   - `is_low_order_montgomery`: cofactor-8 low-order point detection
+   - Verify: is the set of rejected inputs exactly the set of inputs
+     that would produce exploitable DH outputs?
+   - Verify: does sign-bit ambiguity (two Edwards points per Montgomery
+     u-coordinate) cause any interoperability or security issue?
    - File: `rust/shekyl-crypto-pq/src/montgomery.rs`
 
-2. **Unclamped DH sites in `output.rs`**
-   - `construct_output`: sender-side DH with recipient X25519 pub
-   - `scan_output` / `scan_output_recover`: recipient-side DH with
-     ephemeral X25519 pub from `kem_ct_x25519`
-   - `rederive_combined_ss`: proof-time DH re-derivation
-   - Low-order point rejection on both sides (recipient: mandatory;
-     sender: defense-in-depth)
-   - File: `rust/shekyl-crypto-pq/src/output.rs`
+2. **Unclamped DH safety analysis**
+   - Sender-side: `construct_output`, `rederive_combined_ss` in `output.rs`
+   - Recipient-side: `scan_output`, `scan_output_recover` in `output.rs`
+   - `encapsulate` / `decapsulate` in `kem.rs`
+   - Verify: with the view secret interpreted as `Scalar::from_bytes_mod_order`
+     (already reduced mod ℓ), does the absence of clamping introduce any
+     information leakage or DH-output bias beyond what low-order rejection
+     addresses?
+   - Verify: is there a timing or side-channel distinction between clamped
+     and unclamped scalar multiplication in `curve25519-dalek`?
+   - Files: `rust/shekyl-crypto-pq/src/output.rs`, `rust/shekyl-crypto-pq/src/kem.rs`
 
-3. **Unclamped DH in `kem.rs`**
-   - `encapsulate` / `decapsulate`: same unclamped pattern
-   - `keypair_generate`: test-only unclamped keygen
-   - File: `rust/shekyl-crypto-pq/src/kem.rs`
+3. **Low-order point rejection completeness**
+   - The check is `(Scalar::from(8) * point).is_identity()`
+   - Verify: does this correctly identify all 12 low-order points on
+     Curve25519's Montgomery form (orders 1, 2, 4, 8)?
+   - Verify: no valid transaction ephemeral key can be falsely rejected
+   - Verify: constant-time behavior of the rejection check
+   - Test vectors: `docs/test_vectors/PQC_TEST_VECTOR_005_X25519_DERIVATION.json`
 
-4. **FFI export `shekyl_view_pub_to_x25519_pub`**
-   - File: `rust/shekyl-ffi/src/lib.rs`
+4. **KCI and forward-secrecy composition**
+   - The view-scanning identity and KEM-encap identity are now the same key
+     (view key in Edwards form = DH key in Montgomery form)
+   - Verify: does this collapse introduce a key-compromise impersonation
+     (KCI) path that did not exist when the keys were independent?
+   - Verify: forward secrecy against a quantum adversary still depends only
+     on the ML-KEM component, not on the classical DH
+   - Verify: the composition `HKDF(unclamped_dh_ss || ml_kem_ss)` remains
+     a secure combiner when the DH scalar is a mod-ℓ-reduced Ed25519 scalar
 
-5. **C++ callers of the derived X25519 key**
-   - `get_account_address_from_str`: derives X25519 from view key, assembles
-     1216-byte `m_pqc_public_key`
-   - `generate_pqc_key_material`: derives X25519 from view key for wallet
-     keygen
+5. **FFI boundary and C++ integration**
+   - `shekyl_view_pub_to_x25519_pub` FFI export
+   - `get_account_address_from_str`: derives X25519, assembles 1216-byte
+     `m_pqc_public_key`
+   - `generate_pqc_key_material`: derives X25519 from view key at wallet keygen
    - `wallet2::load`: post-load consistency check
-     `m_pqc_secret_key[0..32] == m_view_secret_key`
+     (`m_pqc_secret_key[0..32] == m_view_secret_key`)
+   - Verify: no C++ call site reintroduces clamping or constructs X25519
+     keys independently of the canonical derivation
+   - Files: `rust/shekyl-ffi/src/lib.rs`, `src/shekyl/shekyl_ffi.h`,
+     `src/cryptonote_basic/cryptonote_basic_impl.cpp`,
+     `src/cryptonote_basic/account.cpp`, `src/wallet/wallet2.cpp`
 
 ### Key Questions for the Reviewer
 
-1. Does the unclamped Montgomery DH with explicit low-order point rejection
-   provide equivalent security to X25519's clamped DH for this use case?
+1. Does unclamped Montgomery DH with explicit low-order point rejection
+   provide security equivalent to RFC 7748 X25519 for this use case
+   (DH secret is an Ed25519 scalar, already reduced mod ℓ)?
 
-2. Is the low-order point rejection check (`mul_by_cofactor().is_identity()`)
-   sufficient to prevent small-subgroup information leakage against the
-   view secret scalar?
+2. Is `(Scalar::from(8) * point).is_identity()` the complete and correct
+   low-order check for Curve25519's Montgomery form, covering all 12
+   points of order dividing the cofactor?
 
-3. Does the Edwards→Montgomery conversion correctly handle all edge cases
-   (non-canonical y, identity, torsion points)?
+3. Does the Edwards→Montgomery conversion produce correct results for
+   all valid Ed25519 public keys, including points near the identity and
+   points with non-zero torsion component?
 
-4. Is the composition "HKDF(unclamped_x25519_ss || ml_kem_ss)" sound when
-   the X25519 scalar is an unreduced Ed25519 scalar?
+4. Is the HKDF combiner `HKDF(unclamped_dh_ss || ml_kem_ss)` a sound
+   KEM combiner when the DH input scalar is not independently random but
+   is deterministically derived from the Ed25519 view key?
+
+5. Does collapsing the scanning identity and the DH-encap identity into
+   a single key introduce a KCI path, or is this equivalent to the
+   existing Monero stealth-address model where the view key was already
+   the ECDH identity?
 
 ---
 
@@ -138,10 +177,12 @@ attention.
 | Forked monero-oxide repository | `shekyl/monero-oxide` (branch `fcmp++`) | Shekyl's fork with 4-scalar modifications |
 | Diff from upstream | `git diff 92af05e0..HEAD` in monero-oxide | Precise changeset under review |
 | `shekyl-fcmp` crate | `rust/shekyl-fcmp/` | Rust FCMP++ integration: leaf hashing, proof calls |
+| `shekyl-crypto-pq` crate | `rust/shekyl-crypto-pq/` | PQC crypto: KEM, output construction/scanning, Montgomery conversion |
 | `shekyl-ffi` crate | `rust/shekyl-ffi/` | FFI exports called from C++ |
 | FCMP++ specification | `docs/FCMP_PLUS_PLUS.md` | Full technical reference |
-| PQC specification | `docs/POST_QUANTUM_CRYPTOGRAPHY.md` | PQC key derivation, signing |
-| Test vectors | `tests/data/fcmp_test_vectors/` | 4-scalar leaf proof test vectors |
+| PQC specification | `docs/POST_QUANTUM_CRYPTOGRAPHY.md` | PQC key derivation, DH semantics, X25519 binding |
+| X25519 derivation test vectors | `docs/test_vectors/PQC_TEST_VECTOR_005_X25519_DERIVATION.json` | Pinned Ed25519→X25519 derivation, unclamped DH, combined_ss |
+| 4-scalar leaf proof test vectors | `tests/data/fcmp_test_vectors/` | FCMP++ proof test vectors |
 | Stressnet results | `stressnet_reports/` | 4-week sustained-load test data |
 
 ---
