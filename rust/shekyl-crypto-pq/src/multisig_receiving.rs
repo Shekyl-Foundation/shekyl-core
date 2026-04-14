@@ -1,9 +1,12 @@
-//! Per-output multisig receiving derivations (PQC_MULTISIG.md SS7.2).
+//! Per-output multisig receiving derivations (PQC_MULTISIG.md SS7.1–SS8.4).
 //!
 //! Domain-separated HKDF expansions from each participant's KEM shared secret
 //! to derive ephemeral material for multisig outputs. These functions implement
 //! the three-label KDF scheme from §7.2 plus the KEM randomness derivation
 //! from §7.3.
+//!
+//! Also implements output construction (§7.1), scanning (§8.1), and receive-time
+//! validation (§8.3 / invariant I7).
 //!
 //! Labels are the single source of truth for domain separation:
 //! - `"shekyl-v31-hybrid-sign"`     → ephemeral hybrid signing keypair
@@ -19,6 +22,14 @@ use sha2::Sha512;
 use zeroize::Zeroize;
 
 use crate::error::CryptoError;
+use crate::kem::{
+    HybridCiphertext, HybridKemPublicKey, HybridKemSecretKey, HybridX25519MlKem,
+    KeyEncapsulation, SharedSecret,
+};
+use crate::multisig::{
+    rotating_prover_index, MultisigKeyContainer, MULTISIG_CONTAINER_VERSION,
+    SPEND_AUTH_VERSION_ED25519,
+};
 
 // ── KDF labels (must match PQC_MULTISIG.md §7.2 table) ─────────────────
 
@@ -128,6 +139,263 @@ pub fn derive_participant_kem_randomness(
         .expect("HKDF-Expand failed for 64-byte KEM randomness");
     randomness
 }
+
+// ── Output construction (PQC_MULTISIG.md §7.1) ─────────────────────────
+
+/// Result of constructing a multisig output for one recipient.
+#[derive(Debug)]
+pub struct MultisigOutputConstruction {
+    pub output_pubkey: [u8; 32],
+    pub kem_ciphertexts: Vec<HybridCiphertext>,
+    pub view_tag_hints: Vec<u8>,
+    pub spend_auth_pubkeys: Vec<[u8; 32]>,
+    pub assigned_prover_index: u8,
+    pub key_container: MultisigKeyContainer,
+}
+
+/// Construct a multisig output for a sender (§7.1).
+///
+/// Performs N KEM encapsulations (one per participant), derives per-participant
+/// ephemeral material, determines the assigned prover, and builds the
+/// `MultisigKeyContainer` with all spend-auth pubkeys.
+///
+/// `kem_pubkeys`: N participant KEM public keys (in canonical participant order).
+/// `hybrid_sign_pubkeys`: populated by this function using per-participant KEM derivation.
+#[allow(clippy::too_many_arguments)]
+pub fn construct_multisig_output_for_sender(
+    n_total: u8,
+    m_required: u8,
+    kem_pubkeys: &[HybridKemPublicKey],
+    group_id: &[u8; 32],
+    output_index_in_tx: u64,
+    tx_secret_key_hash: &[u8; 32],
+    reference_block_hash: &[u8; 32],
+) -> Result<MultisigOutputConstruction, CryptoError> {
+    if kem_pubkeys.len() != n_total as usize {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
+    if n_total == 0 || m_required == 0 || m_required > n_total || n_total > 7 {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
+
+    let kem = HybridX25519MlKem;
+    let mut kem_ciphertexts = Vec::with_capacity(n_total as usize);
+    let mut shared_secrets = Vec::with_capacity(n_total as usize);
+    let mut spend_auth_pubkeys = Vec::with_capacity(n_total as usize);
+    let mut view_tag_hints = Vec::with_capacity(n_total as usize);
+    let mut hybrid_sign_pks = Vec::with_capacity(n_total as usize);
+
+    for i in 0..n_total as usize {
+        let (ss, ct) = kem.encapsulate(&kem_pubkeys[i])?;
+        kem_ciphertexts.push(ct);
+
+        let (_, sa_pk) = derive_spend_auth_pubkey(&ss.0)?;
+        spend_auth_pubkeys.push(sa_pk);
+
+        let view_tag = derive_view_tag_hint(&ss.0)?;
+        view_tag_hints.push(view_tag);
+
+        let hybrid_seed = derive_hybrid_sign_seed(&ss.0)?;
+        let ed_seed: [u8; 32] = hybrid_seed[..32].try_into().unwrap();
+        let ed_signing = ed25519_dalek::SigningKey::from_bytes(&ed_seed);
+        let ml_seed: [u8; 32] = hybrid_seed[32..].try_into().unwrap();
+        let (ml_pk, _ml_sk) = crate::derivation::keygen_from_seed(&ml_seed)?;
+
+        let hybrid_pk = crate::signature::HybridPublicKey {
+            ed25519: ed_signing.verifying_key().to_bytes(),
+            ml_dsa: {
+                use fips204::traits::SerDes;
+                ml_pk.into_bytes().to_vec()
+            },
+        };
+        hybrid_sign_pks.push(hybrid_pk);
+
+        shared_secrets.push(ss);
+    }
+
+    let assigned_prover = rotating_prover_index(
+        group_id,
+        output_index_in_tx,
+        tx_secret_key_hash,
+        reference_block_hash,
+        n_total,
+    );
+
+    let output_pubkey = spend_auth_pubkeys[assigned_prover as usize];
+
+    let key_container = MultisigKeyContainer {
+        version: MULTISIG_CONTAINER_VERSION,
+        n_total,
+        m_required,
+        keys: hybrid_sign_pks,
+        spend_auth_pubkeys: spend_auth_pubkeys.clone(),
+    };
+
+    Ok(MultisigOutputConstruction {
+        output_pubkey,
+        kem_ciphertexts,
+        view_tag_hints,
+        spend_auth_pubkeys,
+        assigned_prover_index: assigned_prover,
+        key_container,
+    })
+}
+
+// ── Scanning (PQC_MULTISIG.md §8.1) ────────────────────────────────────
+
+/// Result of a successful multisig output scan.
+#[derive(Debug)]
+pub struct ScannedMultisigOutput {
+    pub shared_secret: SharedSecret,
+    pub my_participant_index: u8,
+    pub spend_auth_version: u8,
+}
+
+/// Attempt to scan a candidate multisig output for a specific participant (§8.1).
+///
+/// Returns `None` if the output doesn't belong to us (hint mismatch or decap
+/// failure). Returns `Some(ScannedMultisigOutput)` on successful match.
+pub fn scan_multisig_output_for_participant(
+    my_participant_index: u8,
+    my_kem_secret: &HybridKemSecretKey,
+    my_ciphertext: &HybridCiphertext,
+    expected_view_tag: u8,
+    spend_auth_version: u8,
+) -> Result<Option<ScannedMultisigOutput>, CryptoError> {
+    if spend_auth_version != SPEND_AUTH_VERSION_ED25519 {
+        return Ok(None);
+    }
+
+    let kem = HybridX25519MlKem;
+    let ss = kem.decapsulate(my_kem_secret, my_ciphertext)?;
+
+    let computed_hint = derive_view_tag_hint(&ss.0)?;
+    if computed_hint != expected_view_tag {
+        return Ok(None);
+    }
+
+    Ok(Some(ScannedMultisigOutput {
+        shared_secret: ss,
+        my_participant_index,
+        spend_auth_version,
+    }))
+}
+
+// ── Receive-time validation (PQC_MULTISIG.md §8.3, invariant I7) ───────
+
+/// Validate a multisig output at receive time (invariant I7).
+///
+/// Checks:
+/// 1. My own published spend-auth pubkey matches my derivation from the shared secret.
+/// 2. The output pubkey `O` matches `spend_auth_pubkeys[rotating_prover_index(...)]`.
+///
+/// Returns `true` if valid, `false` if griefing/buggy sender detected.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_multisig_output_at_receive(
+    my_shared_secret: &SharedSecret,
+    my_participant_index: u8,
+    published_spend_auth_pubkeys: &[[u8; 32]],
+    output_pubkey: &[u8; 32],
+    group_id: &[u8; 32],
+    output_index_in_tx: u64,
+    tx_secret_key_hash: &[u8; 32],
+    reference_block_hash: &[u8; 32],
+    n_total: u8,
+) -> Result<bool, CryptoError> {
+    if my_participant_index as usize >= published_spend_auth_pubkeys.len() {
+        return Ok(false);
+    }
+
+    let (_, my_computed_pk) = derive_spend_auth_pubkey(&my_shared_secret.0)?;
+    if published_spend_auth_pubkeys[my_participant_index as usize] != my_computed_pk {
+        return Ok(false);
+    }
+
+    let assigned = rotating_prover_index(
+        group_id,
+        output_index_in_tx,
+        tx_secret_key_hash,
+        reference_block_hash,
+        n_total,
+    );
+
+    if assigned as usize >= published_spend_auth_pubkeys.len() {
+        return Ok(false);
+    }
+
+    if output_pubkey != &published_spend_auth_pubkeys[assigned as usize] {
+        return Ok(false);
+    }
+
+    Ok(true)
+}
+
+// ── Persistence struct (PQC_MULTISIG.md §8.4) ──────────────────────────
+
+/// Per-output persisted multisig state for wallet storage.
+#[derive(Debug, Clone)]
+pub struct PersistedMultisigOutput {
+    pub output_id: [u8; 32],
+    pub global_output_index: u64,
+    pub my_participant_index: u8,
+    pub my_shared_secret: [u8; 64],
+    pub spend_auth_version: u8,
+    pub spend_auth_pubkeys: Vec<[u8; 32]>,
+    pub output_pubkey: [u8; 32],
+    pub commitment: [u8; 32],
+    pub amount: u64,
+    pub reference_block_hash: [u8; 32],
+    pub output_index_in_tx: u64,
+    pub tx_secret_key_hash: [u8; 32],
+    pub assigned_prover_index: u8,
+    pub received_at_height: u64,
+    pub eligible_height: u64,
+}
+
+// ── Griefing defense (PQC_MULTISIG.md §7.6) ────────────────────────────
+
+/// Per-sender griefing tracker for scan-time filtering.
+///
+/// Maintains a rolling 24-hour window of failed-validation counts per sender.
+/// See spec §7.6 for thresholds and cooldown periods.
+#[derive(Debug, Clone)]
+pub struct GriefingTracker {
+    pub sender_id: [u8; 32],
+    pub failure_count_24h: u32,
+    pub window_start_height: u64,
+    pub cooldown_until_height: Option<u64>,
+}
+
+impl GriefingTracker {
+    /// Check if this sender is currently in cooldown.
+    pub fn is_in_cooldown(&self, current_height: u64) -> bool {
+        self.cooldown_until_height
+            .map_or(false, |h| current_height < h)
+    }
+
+    /// Register a validation failure and update cooldown state.
+    pub fn register_failure(&mut self, current_height: u64) {
+        self.failure_count_24h = self.failure_count_24h.saturating_add(1);
+
+        const BLOCKS_PER_DAY: u64 = 720;
+        const COOLDOWN_BLOCKS: u64 = 720 * 7;
+
+        if current_height > self.window_start_height + BLOCKS_PER_DAY {
+            self.failure_count_24h = 1;
+            self.window_start_height = current_height;
+        }
+
+        if self.failure_count_24h >= 100 {
+            self.cooldown_until_height = Some(current_height + COOLDOWN_BLOCKS);
+        }
+    }
+}
+
+/// Maximum number of garbage (failed-validation) entries to retain per wallet.
+pub const MAX_GARBAGE_ENTRIES: usize = 10_000;
+
+/// Default garbage purge interval in blocks.
+pub const GARBAGE_PURGE_INTERVAL_BLOCKS: u64 = 10_000;
 
 #[cfg(test)]
 mod tests {
@@ -263,5 +531,253 @@ mod tests {
             spend_scalar[0],
             "view tag should generally differ from first byte of spend scalar (not a hard guarantee, but overwhelmingly likely)"
         );
+    }
+
+    // -- Construction + scan round-trip tests --
+
+    #[test]
+    fn construct_and_scan_round_trip_2_of_3() {
+        use crate::kem::{HybridX25519MlKem, KeyEncapsulation};
+
+        let kem = HybridX25519MlKem;
+        let mut kem_pks = Vec::new();
+        let mut kem_sks = Vec::new();
+        for _ in 0..3 {
+            let (pk, sk) = kem.keypair_generate().unwrap();
+            kem_pks.push(pk);
+            kem_sks.push(sk);
+        }
+
+        let group_id = [0xAB; 32];
+        let tx_sk_hash = [0xCD; 32];
+        let ref_block = [0xEF; 32];
+
+        let construction = construct_multisig_output_for_sender(
+            3, 2, &kem_pks, &group_id, 0, &tx_sk_hash, &ref_block,
+        )
+        .unwrap();
+
+        assert_eq!(construction.kem_ciphertexts.len(), 3);
+        assert_eq!(construction.view_tag_hints.len(), 3);
+        assert_eq!(construction.spend_auth_pubkeys.len(), 3);
+        assert!(construction.assigned_prover_index < 3);
+
+        assert_eq!(
+            construction.output_pubkey,
+            construction.spend_auth_pubkeys[construction.assigned_prover_index as usize]
+        );
+
+        construction.key_container.validate().unwrap();
+
+        for i in 0..3u8 {
+            let scanned = scan_multisig_output_for_participant(
+                i,
+                &kem_sks[i as usize],
+                &construction.kem_ciphertexts[i as usize],
+                construction.view_tag_hints[i as usize],
+                SPEND_AUTH_VERSION_ED25519,
+            )
+            .unwrap();
+
+            assert!(
+                scanned.is_some(),
+                "participant {i} should successfully scan"
+            );
+
+            let scanned = scanned.unwrap();
+            assert_eq!(scanned.my_participant_index, i);
+
+            let valid = validate_multisig_output_at_receive(
+                &scanned.shared_secret,
+                i,
+                &construction.spend_auth_pubkeys,
+                &construction.output_pubkey,
+                &group_id,
+                0,
+                &tx_sk_hash,
+                &ref_block,
+                3,
+            )
+            .unwrap();
+
+            assert!(valid, "participant {i} receive-time validation must pass");
+        }
+    }
+
+    #[test]
+    fn scan_wrong_participant_ciphertext_fails() {
+        use crate::kem::{HybridX25519MlKem, KeyEncapsulation};
+
+        let kem = HybridX25519MlKem;
+        let (pk0, _sk0) = kem.keypair_generate().unwrap();
+        let (pk1, sk1) = kem.keypair_generate().unwrap();
+        let (pk2, _sk2) = kem.keypair_generate().unwrap();
+
+        let construction = construct_multisig_output_for_sender(
+            3,
+            2,
+            &[pk0, pk1, pk2],
+            &[0; 32],
+            0,
+            &[0; 32],
+            &[0; 32],
+        )
+        .unwrap();
+
+        let result = scan_multisig_output_for_participant(
+            1,
+            &sk1,
+            &construction.kem_ciphertexts[0], // wrong ciphertext (belongs to participant 0)
+            construction.view_tag_hints[1],
+            SPEND_AUTH_VERSION_ED25519,
+        )
+        .unwrap();
+
+        assert!(
+            result.is_none(),
+            "scanning with wrong ciphertext should fail hint check"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_wrong_output_pubkey() {
+        use crate::kem::{HybridX25519MlKem, KeyEncapsulation};
+
+        let kem = HybridX25519MlKem;
+        let mut kem_pks = Vec::new();
+        let mut kem_sks = Vec::new();
+        for _ in 0..2 {
+            let (pk, sk) = kem.keypair_generate().unwrap();
+            kem_pks.push(pk);
+            kem_sks.push(sk);
+        }
+
+        let group_id = [0xAB; 32];
+        let tx_sk_hash = [0xCD; 32];
+        let ref_block = [0xEF; 32];
+
+        let construction = construct_multisig_output_for_sender(
+            2, 2, &kem_pks, &group_id, 0, &tx_sk_hash, &ref_block,
+        )
+        .unwrap();
+
+        let scanned = scan_multisig_output_for_participant(
+            0,
+            &kem_sks[0],
+            &construction.kem_ciphertexts[0],
+            construction.view_tag_hints[0],
+            SPEND_AUTH_VERSION_ED25519,
+        )
+        .unwrap()
+        .unwrap();
+
+        let wrong_pubkey = [0xFF; 32];
+        let valid = validate_multisig_output_at_receive(
+            &scanned.shared_secret,
+            0,
+            &construction.spend_auth_pubkeys,
+            &wrong_pubkey,
+            &group_id,
+            0,
+            &tx_sk_hash,
+            &ref_block,
+            2,
+        )
+        .unwrap();
+
+        assert!(!valid, "wrong output pubkey must fail validation");
+    }
+
+    #[test]
+    fn scan_rejects_unknown_spend_auth_version() {
+        use crate::kem::{HybridX25519MlKem, KeyEncapsulation};
+
+        let kem = HybridX25519MlKem;
+        let (_pk, sk) = kem.keypair_generate().unwrap();
+        let ct = HybridCiphertext {
+            x25519: [0; 32],
+            ml_kem: vec![0; 1088],
+        };
+
+        let result =
+            scan_multisig_output_for_participant(0, &sk, &ct, 0, 0xFF).unwrap();
+
+        assert!(
+            result.is_none(),
+            "unknown spend_auth_version should be silently skipped"
+        );
+    }
+
+    // -- Griefing tracker tests --
+
+    #[test]
+    fn griefing_tracker_cooldown_after_100_failures() {
+        let mut tracker = GriefingTracker {
+            sender_id: [0; 32],
+            failure_count_24h: 0,
+            window_start_height: 1000,
+            cooldown_until_height: None,
+        };
+
+        for _ in 0..99 {
+            tracker.register_failure(1050);
+            assert!(!tracker.is_in_cooldown(1050));
+        }
+
+        tracker.register_failure(1050);
+        assert!(tracker.is_in_cooldown(1050));
+        assert!(!tracker.is_in_cooldown(1050 + 720 * 7));
+    }
+
+    /// Cross-platform determinism canary (catches endian bugs, HashMap
+    /// iteration, float contamination).  Fixed inputs -> pinned expected
+    /// bytes.  Must produce identical output on Linux x86_64 and macOS
+    /// ARM64.  If this test fails on any platform, something broke the
+    /// canonical derivation path.
+    #[test]
+    fn cross_platform_determinism_canary() {
+        use crate::multisig::rotating_prover_index;
+
+        let shared_secret = [0x42u8; 64];
+
+        let (_scalar, pubkey) = derive_spend_auth_pubkey(&shared_secret).unwrap();
+        assert_eq!(
+            pubkey,
+            [
+                0xb6, 0x33, 0x9d, 0x98, 0x87, 0x98, 0xa5, 0x47, 0x11, 0x08, 0x58,
+                0x35, 0x39, 0x81, 0xcf, 0x30, 0xda, 0x1d, 0x18, 0xb0, 0x10, 0x75,
+                0x1b, 0x7e, 0x56, 0x37, 0x74, 0x42, 0x1a, 0x0f, 0x62, 0xb1,
+            ],
+            "spend_auth_pubkey diverged — platform determinism broken"
+        );
+
+        let hint = derive_view_tag_hint(&shared_secret).unwrap();
+        assert_eq!(hint, 0x8e, "view_tag_hint diverged");
+
+        let seed = derive_hybrid_sign_seed(&shared_secret).unwrap();
+        assert_eq!(
+            &seed[..8],
+            &[0x17, 0x13, 0x1b, 0xd4, 0xf3, 0x62, 0xae, 0xa8],
+            "hybrid_sign_seed prefix diverged"
+        );
+
+        let prover = rotating_prover_index(
+            &[0xAA; 32], 7, &[0xBB; 32], &[0xCC; 32], 3,
+        );
+        assert_eq!(prover, 0, "rotating_prover_index diverged");
+    }
+
+    #[test]
+    fn griefing_tracker_window_reset() {
+        let mut tracker = GriefingTracker {
+            sender_id: [0; 32],
+            failure_count_24h: 50,
+            window_start_height: 1000,
+            cooldown_until_height: None,
+        };
+
+        tracker.register_failure(1000 + 721);
+        assert_eq!(tracker.failure_count_24h, 1);
+        assert_eq!(tracker.window_start_height, 1000 + 721);
     }
 }
