@@ -1,0 +1,46 @@
+# Address Format Discipline
+
+Resist address-format proliferation. Bitcoin's multisig ecosystem
+suffers from P2SH, P2WSH, and P2TR overlap — three formats with
+competing use cases that fragment wallet UX and confuse users. Shekyl
+must not replicate this.
+
+## Current HRPs
+
+| HRP | Purpose | Status |
+|-----|---------|--------|
+| `shekyl1` | Single-sig addresses | Active, V3.0+ |
+| `shekyl1m` | Multisig addresses | Active, V3.1+ |
+| `shekyl1n` | Multisig rotation (post-rotation) | Reserved, V4 |
+
+## Rules
+
+1. **`shekyl1m` is the sole multisig address HRP for V3.x.** No
+   additional multisig HRPs are introduced until V4.
+
+2. **`shekyl1n` is reserved but not activated until V4.** Do not
+   implement, parse, or recognize `shekyl1n` addresses in V3.x code.
+
+3. **New HRPs require spec-level justification.** A new HRP must have:
+   - A specification section explaining why the existing HRPs are
+     insufficient.
+   - An explicit migration path from existing addresses.
+   - Review against `00-mission.mdc` commitment 3 (outlast the team).
+
+4. **Internal format changes use the version byte, not new HRPs.** The
+   payload version byte inside the Bech32m encoding is the extension
+   mechanism. A new payload version with the same HRP is always
+   preferred over a new HRP.
+
+5. **One format used universally beats three with overlapping use cases.**
+   When in doubt, do not add an HRP. If a proposed change "could" use
+   a new HRP or "could" use a version bump, use the version bump.
+
+## Rationale
+
+Every new HRP is a permanent addition to the ecosystem: wallets must
+recognize it, block explorers must display it, documentation must
+explain it, and users must understand when to use which format. The
+cost compounds over time. Bitcoin's experience shows that address-format
+proliferation is one of the most persistent sources of user confusion
+and wallet incompatibility.
