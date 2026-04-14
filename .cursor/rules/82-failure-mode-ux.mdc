@@ -1,0 +1,60 @@
+---
+description: Every GUI feature must enumerate failure modes as part of design, not as afterthought.
+globs:
+  - src/**
+---
+
+# Failure-Mode UX as First-Class Scope
+
+The happy path is a small fraction of user experience. What happens
+when things go wrong is the majority. Every feature must design for
+failure as explicitly as it designs for success.
+
+This rule is motivated by Bitcoin's multisig ecosystem: Sparrow Wallet
+and Specter Desktop spend disproportionate UI surface area on failure
+scenarios, and that is why users trust them.
+
+## Rules
+
+1. **Every new feature or component must enumerate its failure modes
+   before implementation.** The enumeration goes in the design doc, PR
+   description, or inline comments — not discovered during QA.
+
+2. **Failure-mode UX is reviewed separately from happy-path UX.** A PR
+   that ships the happy path without failure handling is incomplete. It
+   may land behind a feature flag, but the failure modes must be tracked
+   as follow-up items with a target version.
+
+3. **Failure states have dedicated UI, not just error toasts.** An
+   unresponsive co-signer is not a toast — it's a persistent banner
+   with actionable options. A stuck transaction is not a red flash —
+   it's a state with retry/cancel affordances.
+
+4. **Error messages guide the next action.** "Connection failed" is
+   insufficient. "Relay disconnected. Check your connection, or switch
+   to a backup relay in Settings." tells the user what to do.
+
+5. **Failure scenarios to consider for any network-dependent feature:**
+   - Connection lost mid-operation
+   - Peer unresponsive for >N minutes
+   - Data inconsistency between local and remote state
+   - Operation succeeded locally but failed to propagate
+   - Unexpected data format from peer (version mismatch, corruption)
+   - Timeout without response
+
+6. **Failure scenarios to consider for any multi-party feature
+   (multisig, DKG, relay):**
+   - One participant goes offline
+   - Two participants disagree on state
+   - A participant sends invalid or malicious data
+   - The operation partially completes (some signed, not all)
+   - Recovery from a previous failed attempt
+
+## Anti-patterns
+
+- "Error: Something went wrong" — no guidance, no context
+- Error states that require page reload to clear
+- Failures that silently discard user work
+- Toast notifications for persistent error conditions
+- Error messages that expose protocol internals (see
+  `81-no-protocol-knowledge.mdc`)

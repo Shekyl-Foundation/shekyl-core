@@ -20,12 +20,17 @@ pub use counter_proof::{CounterProof, CounterProofChainView, CounterProofVerifyR
 pub use group_descriptor::{GroupDescriptor, GroupDescriptorError};
 pub use encryption::{decrypt_payload, encrypt_payload, EncryptionError};
 pub use heartbeat::{Heartbeat, HeartbeatAnomaly, HeartbeatTracker};
-pub use intent::{ChainStateFingerprint, SpendIntent, SpendIntentError};
+pub use intent::{
+    ChainStateFingerprint, SpendIntent, SpendIntentError, MAX_ADDRESS_LEN, MAX_INPUTS,
+    MAX_RECIPIENTS,
+};
 pub use invariants::{
     check_assembly_consensus, check_pre_signing_invariants, InvariantCheckInput,
     InvariantCheckResult, InvariantId,
 };
-pub use messages::{DecryptedPayload, EnvelopeError, MessageType, MultisigEnvelope};
+pub use messages::{
+    DecryptedPayload, EnvelopeError, MessageType, MultisigEnvelope, MAX_PAYLOAD_LEN, MAX_SIG_LEN,
+};
 pub use prover::{
     EquivocationProof, InvariantViolation, ProverInputProof, ProverOutput, ProverReceipt,
     SignatureShare, Veto, VetoReason,

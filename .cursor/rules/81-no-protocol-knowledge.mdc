@@ -1,0 +1,47 @@
+---
+description: Users should never need to understand cryptographic protocols to use the wallet.
+globs:
+  - src/**
+  - src-tauri/src/**
+---
+
+# No Protocol Knowledge Required
+
+Users should never need to understand FCMP++, KEM, HKDF, ML-DSA-65,
+ChaCha20-Poly1305, curve trees, or any other protocol concept to
+complete a wallet operation — including multisig.
+
+This is a design principle, not a documentation rule. It governs
+what the user sees, not what the code does.
+
+## Rules
+
+1. **Error messages describe outcomes, not mechanisms.** "Could not
+   verify the transaction proof" is acceptable. "FCMP++ verification
+   failed: invalid curve point in layer 3" is not — that belongs in
+   logs, not in the user's face.
+
+2. **Labels use human concepts.** "Signature" not "Ed25519+ML-DSA-65
+   hybrid signature." "Proof" not "FCMP++ membership proof." "Encrypted
+   message" not "ChaCha20-Poly1305 AEAD ciphertext."
+
+3. **Actions describe what happens, not how.** "Send to group members"
+   not "Broadcast encrypted MultisigEnvelope via Nostr relay." "Verify
+   fingerprint" not "Compare cn_fast_hash of MultisigKeyContainer."
+
+4. **Numbers are human-scale.** Show amounts in SKL, not atomic units.
+   Show time in "3 minutes" not "180 seconds" or "~1.5 blocks."
+
+5. **Protocol version numbers are invisible.** The user does not see
+   `scheme_id = 2`, `ENVELOPE_VERSION = 1`, or
+   `SPEND_INTENT_VERSION = 1` anywhere in the UI. These are internal
+   to the protocol.
+
+6. **When in doubt, ask: "Would my parent understand this?"** If the
+   answer is no, rewrite it. The protocol exists to serve the user, not
+   the other way around.
+
+## Exceptions
+
+Developer-facing surfaces (debug mode, logs, CLI with `--verbose`) may
+expose protocol details. The rule applies to the default GUI experience.

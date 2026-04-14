@@ -68,13 +68,19 @@ pub struct MultisigEnvelope {
 }
 
 impl MultisigEnvelope {
-    /// Bytes that the sender signs (everything except sender_sig and payload).
+    /// Bytes that the sender signs: version || group_id || intent_hash ||
+    /// sender_index || payload_len || encrypted_payload.
+    ///
+    /// payload_len is included to prevent framing attacks where an attacker
+    /// swaps the length prefix while preserving the ciphertext. sig_len is
+    /// NOT included because it is metadata about the signature itself.
     pub fn signable_header(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(98);
+        let mut buf = Vec::with_capacity(70 + self.encrypted_payload.len());
         buf.push(self.version);
         buf.extend_from_slice(&self.group_id);
         buf.extend_from_slice(&self.intent_hash);
         buf.push(self.sender_index);
+        buf.extend_from_slice(&(self.encrypted_payload.len() as u32).to_le_bytes());
         buf.extend_from_slice(&self.encrypted_payload);
         buf
     }
@@ -116,8 +122,12 @@ impl MultisigEnvelope {
         if offset + 4 > data.len() {
             return Err(EnvelopeError::TooShort);
         }
-        let sig_len =
-            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+        let sig_len_raw =
+            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+        if sig_len_raw > MAX_SIG_LEN {
+            return Err(EnvelopeError::SigTooLong(sig_len_raw));
+        }
+        let sig_len = sig_len_raw as usize;
         offset += 4;
         if offset + sig_len > data.len() {
             return Err(EnvelopeError::TooShort);
@@ -128,8 +138,12 @@ impl MultisigEnvelope {
         if offset + 4 > data.len() {
             return Err(EnvelopeError::TooShort);
         }
-        let payload_len =
-            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+        let payload_len_raw =
+            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+        if payload_len_raw > MAX_PAYLOAD_LEN {
+            return Err(EnvelopeError::PayloadTooLong(payload_len_raw));
+        }
+        let payload_len = payload_len_raw as usize;
         offset += 4;
         if offset + payload_len > data.len() {
             return Err(EnvelopeError::TooShort);
@@ -147,6 +161,12 @@ impl MultisigEnvelope {
     }
 }
 
+/// Maximum signature length (hybrid sigs are ~3,385 bytes; headroom for future).
+pub const MAX_SIG_LEN: u32 = 8192;
+
+/// Maximum encrypted payload length (1 MiB).
+pub const MAX_PAYLOAD_LEN: u32 = 1_048_576;
+
 /// Errors during envelope parsing.
 #[derive(Debug, thiserror::Error)]
 pub enum EnvelopeError {
@@ -154,6 +174,10 @@ pub enum EnvelopeError {
     TooShort,
     #[error("unsupported version: {0}")]
     UnsupportedVersion(u8),
+    #[error("sig_len {0} exceeds maximum {MAX_SIG_LEN}")]
+    SigTooLong(u32),
+    #[error("payload_len {0} exceeds maximum {MAX_PAYLOAD_LEN}")]
+    PayloadTooLong(u32),
 }
 
 /// Decrypted payload: message_type + type-specific body.

@@ -22,6 +22,15 @@ pub const FCMP_REFERENCE_BLOCK_MIN_AGE: u64 = 10;
 /// Maximum reference block age in blocks behind tip.
 pub const FCMP_REFERENCE_BLOCK_MAX_AGE: u64 = 100;
 
+/// Maximum recipients per intent (bounds allocation from untrusted input).
+pub const MAX_RECIPIENTS: u32 = 16;
+
+/// Maximum inputs per intent (bounds allocation from untrusted input).
+pub const MAX_INPUTS: u32 = 128;
+
+/// Maximum address byte length (bounds allocation from untrusted input).
+pub const MAX_ADDRESS_LEN: u32 = 65536;
+
 /// Errors during SpendIntent validation (SS9.2 invariant checks).
 #[derive(Debug, thiserror::Error)]
 pub enum SpendIntentError {
