@@ -7,5 +7,15 @@
 //! per-output forward privacy, and rotating prover assignment.
 
 pub mod intent;
+pub mod invariants;
+pub mod prover;
 
 pub use intent::{ChainStateFingerprint, SpendIntent, SpendIntentError};
+pub use invariants::{
+    check_assembly_consensus, check_pre_signing_invariants, InvariantCheckInput,
+    InvariantCheckResult, InvariantId,
+};
+pub use prover::{
+    EquivocationProof, InvariantViolation, ProverInputProof, ProverOutput, ProverReceipt,
+    SignatureShare, Veto, VetoReason,
+};
