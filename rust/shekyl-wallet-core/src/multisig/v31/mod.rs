@@ -29,3 +29,6 @@ pub use prover::{
     SignatureShare, Veto, VetoReason,
 };
 pub use state::{IntentState, StateError, TrackedIntent, TxCounterTracker};
+
+#[cfg(test)]
+mod tests;
