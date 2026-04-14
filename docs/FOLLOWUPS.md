@@ -145,6 +145,25 @@ Each item is out of scope for the current PR but worth tracking for future work.
   `compute_leaf_count_at_height` with production `collect_outputs` logic
   (output-type and `outPk` bounds checks).
 
+- **PQC Multisig V3.1: external adversarial review (Phase 5).** Target: V3.1.
+  Round 4 wargame against the V3.1 multisig implementation per
+  `PQC_MULTISIG_V3_1_ANALYSIS.md` SS5.4. Review targets:
+  - Attacks on Solution C mechanism (grinding on `tx_secret_key_hash`)
+  - Attacks on SS2.7 invariant enforcement
+  - Unknown-version silent-skip exploits
+  - Relay directory signing process attacks
+  - DKG ceremony failure modes
+  Status: code complete, awaiting human coordination to schedule the review.
+
+- **PQC Multisig V3.1: cryptographer review (Phase 6).** Target: V3.1.
+  Four targeted reviews per `PQC_MULTISIG_V3_1_ANALYSIS.md` SS7:
+  1. KDF domain separation soundness
+  2. HKDF-derived Ed25519 scalar for FCMP++ prover (bit-clamping question)
+  3. FCMP++ proof binding to Y_prover
+  4. Rotation-rule grinding cost analysis
+  Status: outreach should begin immediately; does not block other work.
+  Findings are folded in via targeted `fix/ms31-crypto-review-*` branches.
+
 ---
 
 ## Completed audit trail

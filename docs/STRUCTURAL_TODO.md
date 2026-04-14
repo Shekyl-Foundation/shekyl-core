@@ -427,5 +427,10 @@ verification failures fixed: added per-height `m_curve_tree_roots` LMDB
 table so that both prover and verifier read the correct historical tree
 root (replacing block-header placeholder). `compute_leaf_count_at_height`
 aligned with production `collect_outputs`. `vcpkg.json` manifest removed
-(broke MSVC CI). See `FCMP_BUILD_PLAN.md` for remaining Phases 8-9
-(multisig integration, testing/audit).*
+(broke MSVC CI). ~~See `FCMP_BUILD_PLAN.md` for remaining Phases 8-9
+(multisig integration, testing/audit).~~ ✅ Phase 8 (multisig
+integration) completed via `PQC_MULTISIG.md` V3.1 implementation.
+Phase 9 (testing/audit) partially complete: 93 unit tests, 19
+integration tests, 11 fuzz harnesses, and criterion benchmarks landed.
+External adversarial review and cryptographer review tracked in
+`docs/FOLLOWUPS.md`.*

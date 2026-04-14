@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+### ✨ Added
+
+- **PQC Multisig V3.1: equal-participants protocol implementation.**
+  Full implementation of the coordinator-less multisig protocol as
+  specified in `PQC_MULTISIG.md`. Key components:
+  - `MultisigKeyContainer` v1.1 with `spend_auth_version` field and
+    `multisig_group_id` v1.1 (includes version byte)
+  - `rotating_prover_index`: cryptographic hash-based prover assignment
+  - 8 HKDF-derived key/nonce labels for domain-separated derivation
+  - `construct_multisig_output_for_sender`, `scan_for_multisig_output`,
+    `validate_multisig_output_i7` for output lifecycle
+  - `GriefingTracker`: per-output cost bounding for invalid outputs
+  - `shekyl1m` Bech32m address format with file-based handling and
+    3-representation fingerprint
+  - `SpendIntent`: 14-check validation pipeline (structural, temporal,
+    chain state, balance)
+  - `ProverOutput`, `SignatureShare`, `ProverReceipt`: prover and
+    signing flow types with equivocation detection
+  - Honest-signer invariants I1–I7 enforcement
+  - `MultisigEnvelope` with 11 message types and AEAD encryption
+    (ChaCha20-Poly1305 with HKDF-derived keys)
+  - Per-intent state machine (8 states: Proposed → Broadcast + terminal)
+  - `HeartbeatTracker`: liveness, censorship, and sync anomaly detection
+  - `CounterProof`: 8-rule chain evidence verification for counter recovery
+  - C++ `tx_extra` tags 0x08, 0x09, 0x0A for multisig metadata
+  - FFI: `shekyl_pqc_verify_with_group_id` for defense-in-depth
+  - Consensus: scheme_id consistency enforcement across transaction inputs
+
+- **PQC Multisig V3.1: GUI components (shekyl-gui-wallet).**
+  7 React components for the multisig UX:
+  - `FingerprintBadge`: grouped hex fingerprint with copy and metadata
+  - `ProverView`: per-participant prover assignment breakdown
+  - `LossAcknowledgment`: mandatory 1/N loss checkbox
+  - `AddressProvenance`: fingerprint history with change detection
+  - `RelayConfig`: multi-relay management with operator diversity
+  - `ViolationAlert`: I1–I7 violation display with auto-abort
+  - `SigningDashboard`: real-time intent state with sign/veto actions
+
+- **PQC Multisig V3.1: test infrastructure.**
+  - 93 unit tests across all V3.1 modules
+  - 19 integration tests (functional, adversarial, determinism)
+  - 4 cross-platform determinism canaries with pinned byte prefixes
+  - 11 fuzz harnesses (wallet-core) covering serialization, encryption,
+    state machine, validation, and verification
+  - Criterion benchmarks for intent_hash, encryption, serialization,
+    fingerprint computation, and assembly consensus
+
+- **`docs/MULTISIG_OPERATIONS.md`**: end-user operations guide covering
+  group setup, receiving, spending, recovery, relay configuration, and
+  security considerations.
+
+- **`docs/AUDIT_SCOPE.md`**: expanded to include V3.1 multisig attack
+  surface (KDF, prover assignment, invariants, AEAD, CounterProof,
+  griefing defense).
+
 ### 🐛 Fixed
 
 - **Consensus-critical: curve tree leaf ordering bug (DB v6 → v7).**
