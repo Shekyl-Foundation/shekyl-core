@@ -33,6 +33,7 @@ modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
 dkg-pedpop = { version = "0.6", optional = true }
 rand_chacha = { version = "0.3", optional = true }
 
+tracing = "0.1"
 thiserror.workspace = true
 serde.workspace = true
 
