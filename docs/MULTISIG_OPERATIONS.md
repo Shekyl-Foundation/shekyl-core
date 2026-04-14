@@ -452,8 +452,19 @@ files. This is a UX trade-off for full PQC key inclusion.
 
 Current hardware wallets (Coldcard, Trezor, Ledger, Jade) do not
 support ML-DSA-65. V3.1 signing requires a full desktop or laptop.
-Hardware wallet support is a V3.2+ goal pending vendor engagement.
-See `docs/FOLLOWUPS.md` for tracking.
+
+**Why not yet:**
+- ML-DSA-65 signing on Cortex-M class MCUs takes 1-5 seconds (vs ~100ms
+  on desktop CPUs). Most hardware wallets run ARM Cortex-M4 at 120MHz.
+- Coldcard Mk4 (480MHz Cortex-M7) is the most viable near-term target.
+- The signing payload is already designed to be representable on small
+  screens: "Sign intent {hash_prefix} sending {amount} SKL to
+  {address_prefix}" is all the hardware wallet needs to display.
+- No protocol changes are needed — the signing payload is self-contained
+  and verifiable offline.
+
+Hardware wallet support is a V3.2 goal. See `docs/FOLLOWUPS.md` for
+vendor outreach recommendations and technical constraints.
 
 ### 9.5 All Participants Online for DKG
 

@@ -164,6 +164,45 @@ Each item is out of scope for the current PR but worth tracking for future work.
   Status: outreach should begin immediately; does not block other work.
   Findings are folded in via targeted `fix/ms31-crypto-review-*` branches.
 
+- **PQC Multisig V3.1: hardware wallet integration.** Target: V3.2.
+  Current hardware wallets (Coldcard, Trezor, Ledger, Jade) cannot
+  support V3.1 multisig signing. Constraints:
+  1. **ML-DSA-65 computation cost.** Signing takes ~100ms on modern
+     desktop CPUs. On Cortex-M class MCUs (ARM Cortex-M4 @ 120MHz),
+     ML-DSA-65 signing is estimated at 1-5 seconds. ML-KEM-768
+     decapsulation is faster (~50ms on Cortex-M4) but still significant.
+     Coldcard Mk4 (STM32H753, 480MHz Cortex-M7) may be the first viable
+     target.
+  2. **Screen constraints.** Hardware wallet displays are typically
+     128x64 pixels. The signing payload (§10.4 of PQC_MULTISIG.md)
+     should be representable as: "Sign intent {hash_prefix} sending
+     {amount} SKL to {address_prefix}, fee {fee}". The intent_hash is
+     32 bytes; showing a 4-byte prefix is sufficient for verification.
+  3. **Signing payload self-containment.** The §10.4 canonical signing
+     payload is already self-contained — no network calls are needed
+     during signing. A hardware wallet can verify the payload offline
+     given only the persisted output state. This is by design and must
+     not change.
+  4. **Vendor outreach.** Recommend the Foundation contact Coinkite
+     (Coldcard) and Blockstream (Jade) during V3.1 launch. Both have
+     shown interest in post-quantum cryptography. Trezor and Ledger
+     have larger teams but longer decision cycles.
+  5. **Protocol impact:** none. V3.1 is designed so hardware wallet
+     integration requires no protocol changes. The signing payload and
+     hybrid signature format are stable.
+  Status: documentation complete. Code work deferred to V3.2.
+
+- **PQC Multisig V3.1: headless co-signer service.** Target: V3.2.
+  Build a `shekyl-cosigner-headless` reference implementation (CLI, no
+  GUI) to validate the "co-signer service" model where one of N
+  participants is a dedicated automated signing service. Validates:
+  - Policy-based auto-signing (amount limits, allowlists, time delays)
+  - HSM key storage integration (PKCS#11 or similar)
+  - Subscription/billing hooks (out of protocol scope but must not conflict)
+  - Headless heartbeat and CounterProof handling
+  The protocol already supports this model (a service is just another
+  participant), but practical validation is needed.
+
 ---
 
 ## Completed audit trail
