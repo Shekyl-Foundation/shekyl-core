@@ -2919,6 +2919,7 @@ dependencies = [
  "modular-frost",
  "serde",
  "serde_json",
+ "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-fcmp",
  "shekyl-oxide",
