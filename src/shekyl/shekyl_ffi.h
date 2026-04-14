@@ -104,6 +104,20 @@ bool shekyl_pqc_verify(
     const uint8_t* message,
     size_t message_len);
 
+/// Verify a hybrid ML-DSA signature with optional group ID binding.
+/// Same as shekyl_pqc_verify, but for scheme_id=2 passes expected_group_id
+/// to verify_multisig for defense-in-depth group binding (PQC_MULTISIG.md SS16.3).
+/// expected_group_id: 32 bytes, or NULL to skip group ID check.
+bool shekyl_pqc_verify_with_group_id(
+    uint8_t scheme_id,
+    const uint8_t* pubkey_blob,
+    size_t pubkey_len,
+    const uint8_t* sig_blob,
+    size_t sig_len,
+    const uint8_t* message,
+    size_t message_len,
+    const uint8_t* expected_group_id);
+
 #ifndef NDEBUG
 /// Debug variant of shekyl_pqc_verify returning granular error codes.
 /// 0 = valid, 1 = invalid Ed25519 sig, 2 = invalid ML-DSA sig,

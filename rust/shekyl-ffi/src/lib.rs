@@ -353,6 +353,58 @@ pub extern "C" fn shekyl_pqc_verify(
     }
 }
 
+/// Verify a PQC-authenticated message with optional group ID binding.
+///
+/// Same as `shekyl_pqc_verify` but for `scheme_id = 2`, passes `expected_group_id`
+/// to `verify_multisig` for defense-in-depth group binding (PQC_MULTISIG.md SS16.3).
+///
+/// `expected_group_id_ptr`: pointer to 32 bytes of expected group ID, or null to skip.
+#[no_mangle]
+pub extern "C" fn shekyl_pqc_verify_with_group_id(
+    scheme_id: u8,
+    pubkey_blob: *const u8,
+    pubkey_len: usize,
+    sig_blob: *const u8,
+    sig_len: usize,
+    message: *const u8,
+    message_len: usize,
+    expected_group_id_ptr: *const u8,
+) -> bool {
+    let Some(pk_bytes) = slice_from_ptr(pubkey_blob, pubkey_len) else {
+        return false;
+    };
+    let Some(msg) = slice_from_ptr(message, message_len) else {
+        return false;
+    };
+    let Some(sig_bytes) = slice_from_ptr(sig_blob, sig_len) else {
+        return false;
+    };
+
+    match scheme_id {
+        1 => {
+            let scheme = HybridEd25519MlDsa;
+            let Ok(pk) = HybridPublicKey::from_canonical_bytes(pk_bytes) else {
+                return false;
+            };
+            let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
+                return false;
+            };
+            scheme.verify(&pk, msg, &sig).unwrap_or(false)
+        }
+        2 => {
+            use shekyl_crypto_pq::multisig::verify_multisig;
+            let group_id: Option<&[u8; 32]> = if expected_group_id_ptr.is_null() {
+                None
+            } else {
+                slice_from_ptr(expected_group_id_ptr, 32)
+                    .and_then(|s| <&[u8; 32]>::try_from(s).ok())
+            };
+            verify_multisig(scheme_id, pk_bytes, sig_bytes, msg, group_id).unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
 /// Debug variant of verify: returns `PqcVerifyError` discriminant (1-11) on failure, 0 on success.
 /// Only compiled in debug/test builds to prevent use as a signature oracle.
 #[cfg(any(debug_assertions, test, feature = "debug-verify"))]

@@ -2533,6 +2533,7 @@ version = "2.0.0"
 dependencies = [
  "bech32",
  "serde",
+ "shekyl-crypto-hash",
  "shekyl-encoding",
  "thiserror",
 ]

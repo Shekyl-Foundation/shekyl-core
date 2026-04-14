@@ -12,6 +12,7 @@ license.workspace = true
 
 [dependencies]
 shekyl-encoding = { path = "../shekyl-encoding" }
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 bech32 = "0.11"
 thiserror.workspace = true
 serde = { workspace = true, optional = true }
