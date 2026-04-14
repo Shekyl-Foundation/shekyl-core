@@ -15,6 +15,7 @@ pub mod error;
 pub mod kem;
 pub mod montgomery;
 pub mod multisig;
+pub mod multisig_receiving;
 pub mod output;
 pub mod signature;
 

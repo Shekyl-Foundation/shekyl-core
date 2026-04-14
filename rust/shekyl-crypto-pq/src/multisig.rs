@@ -2,6 +2,10 @@
 //!
 //! Wire format uses opaque blobs that embed in the existing `pqc_auth`
 //! fields (`hybrid_public_key`, `hybrid_signature`) with `scheme_id = 2`.
+//!
+//! V3.1 extends the container with a `version` byte and per-participant
+//! classical spend-auth pubkeys (`spend_auth_pubkeys`). See `PQC_MULTISIG.md`
+//! v1.1 for the full specification.
 
 use crate::error::PqcVerifyError;
 use crate::signature::{
@@ -16,7 +20,15 @@ use shekyl_crypto_hash::cn_fast_hash;
 pub const MAX_MULTISIG_PARTICIPANTS: u8 = 7;
 pub const HYBRID_SCHEME_ID_MULTISIG: u8 = 2;
 
-const DOMAIN_SEP: &[u8] = b"shekyl-multisig-group-v1";
+/// V3.1 container version (first version with spend_auth_pubkeys).
+pub const MULTISIG_CONTAINER_VERSION: u8 = 0x01;
+
+/// V3.1 group_id domain separator. Binds group_version, scheme_id,
+/// and spend_auth_version into the preimage (PQC_MULTISIG.md SS5.3).
+const DOMAIN_SEP_V31: &[u8] = b"shekyl-multisig-group-v31";
+
+/// Classical spend-auth pubkey length (compressed Ed25519 point).
+pub const SPEND_AUTH_PUBKEY_LEN: usize = 32;
 
 /// Size of a single `HybridPublicKey` in canonical encoding.
 pub const SINGLE_KEY_CANONICAL_LEN: usize =
@@ -30,18 +42,28 @@ pub const SINGLE_SIG_CANONICAL_LEN: usize =
 // MultisigKeyContainer
 // ---------------------------------------------------------------------------
 
-/// N hybrid public keys packed for on-chain commitment.
+/// N hybrid public keys + N classical spend-auth pubkeys for on-chain commitment.
 ///
-/// Wire layout: `n_total(1) || m_required(1) || key[0](1996) || ... || key[N-1](1996)`
+/// V3.1 wire layout:
+/// ```text
+/// version(1) || n_total(1) || m_required(1) ||
+/// key[0](1996) || ... || key[N-1](1996) ||
+/// spend_auth_pk[0](32) || ... || spend_auth_pk[N-1](32)
+/// ```
 #[derive(Debug, Clone)]
 pub struct MultisigKeyContainer {
+    pub version: u8,
     pub n_total: u8,
     pub m_required: u8,
     pub keys: Vec<HybridPublicKey>,
+    pub spend_auth_pubkeys: Vec<[u8; 32]>,
 }
 
 impl MultisigKeyContainer {
     pub fn validate(&self) -> Result<(), PqcVerifyError> {
+        if self.version != MULTISIG_CONTAINER_VERSION {
+            return Err(PqcVerifyError::ParameterBounds);
+        }
         if self.m_required == 0
             || self.n_total == 0
             || self.m_required > self.n_total
@@ -52,13 +74,22 @@ impl MultisigKeyContainer {
         if self.keys.len() != self.n_total as usize {
             return Err(PqcVerifyError::KeyBlobLength);
         }
+        if self.spend_auth_pubkeys.len() != self.n_total as usize {
+            return Err(PqcVerifyError::KeyBlobLength);
+        }
         Ok(())
+    }
+
+    /// Compute the expected byte length of a V3.1 canonical encoding.
+    pub fn expected_blob_len(n: u8) -> usize {
+        3 + (n as usize) * SINGLE_KEY_CANONICAL_LEN + (n as usize) * SPEND_AUTH_PUBKEY_LEN
     }
 
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, PqcVerifyError> {
         self.validate()?;
-        let cap = 2 + (self.n_total as usize) * SINGLE_KEY_CANONICAL_LEN;
+        let cap = Self::expected_blob_len(self.n_total);
         let mut out = Vec::with_capacity(cap);
+        out.push(self.version);
         out.push(self.n_total);
         out.push(self.m_required);
         for key in &self.keys {
@@ -67,16 +98,23 @@ impl MultisigKeyContainer {
                 .map_err(|_| PqcVerifyError::DeserializationFailed)?;
             out.extend_from_slice(&kb);
         }
+        for sa_pk in &self.spend_auth_pubkeys {
+            out.extend_from_slice(sa_pk);
+        }
         debug_assert_eq!(out.len(), cap);
         Ok(out)
     }
 
     pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, PqcVerifyError> {
-        if bytes.len() < 2 {
+        if bytes.len() < 3 {
             return Err(PqcVerifyError::KeyBlobLength);
         }
-        let n_total = bytes[0];
-        let m_required = bytes[1];
+        let version = bytes[0];
+        if version != MULTISIG_CONTAINER_VERSION {
+            return Err(PqcVerifyError::ParameterBounds);
+        }
+        let n_total = bytes[1];
+        let m_required = bytes[2];
 
         if m_required == 0
             || n_total == 0
@@ -86,13 +124,13 @@ impl MultisigKeyContainer {
             return Err(PqcVerifyError::ParameterBounds);
         }
 
-        let expected_len = 2 + (n_total as usize) * SINGLE_KEY_CANONICAL_LEN;
+        let expected_len = Self::expected_blob_len(n_total);
         if bytes.len() != expected_len {
             return Err(PqcVerifyError::KeyBlobLength);
         }
 
         let mut keys = Vec::with_capacity(n_total as usize);
-        let mut cursor = 2usize;
+        let mut cursor = 3usize;
         for _ in 0..n_total {
             let end = cursor + SINGLE_KEY_CANONICAL_LEN;
             let pk = HybridPublicKey::from_canonical_bytes(&bytes[cursor..end])
@@ -101,10 +139,24 @@ impl MultisigKeyContainer {
             cursor = end;
         }
 
+        let mut spend_auth_pubkeys = Vec::with_capacity(n_total as usize);
+        for _ in 0..n_total {
+            let end = cursor + SPEND_AUTH_PUBKEY_LEN;
+            if end > bytes.len() {
+                return Err(PqcVerifyError::KeyBlobLength);
+            }
+            let mut pk = [0u8; 32];
+            pk.copy_from_slice(&bytes[cursor..end]);
+            spend_auth_pubkeys.push(pk);
+            cursor = end;
+        }
+
         let container = Self {
+            version,
             n_total,
             m_required,
             keys,
+            spend_auth_pubkeys,
         };
         container.validate()?;
         Ok(container)
@@ -198,14 +250,45 @@ impl MultisigSigContainer {
 // Group identity
 // ---------------------------------------------------------------------------
 
-/// Deterministic group identity: `cn_fast_hash(domain || n || m || key[0] || ... || key[N-1])`.
+/// Deterministic group identity (V3.1).
+///
+/// Preimage: `domain_v31 || group_version(1) || scheme_id(1) || spend_auth_version(1)
+///            || n(1) || m(1) || key[0] || ... || key[N-1]
+///            || spend_auth_pk[0](32) || ... || spend_auth_pk[N-1](32)`
+///
+/// `spend_auth_version` is currently 0x01 (Ed25519). Future lattice-only
+/// versions (V4) will use a different value.
 pub fn multisig_group_id(container: &MultisigKeyContainer) -> Result<[u8; 32], PqcVerifyError> {
+    multisig_group_id_with_versions(
+        container,
+        MULTISIG_CONTAINER_VERSION,
+        HYBRID_SCHEME_ID_MULTISIG,
+        SPEND_AUTH_VERSION_ED25519,
+    )
+}
+
+/// Classical spend-auth version byte: Ed25519.
+pub const SPEND_AUTH_VERSION_ED25519: u8 = 0x01;
+
+/// Compute group_id with explicit version parameters.
+/// Exposed for testing and forward compatibility.
+pub fn multisig_group_id_with_versions(
+    container: &MultisigKeyContainer,
+    group_version: u8,
+    scheme_id: u8,
+    spend_auth_version: u8,
+) -> Result<[u8; 32], PqcVerifyError> {
     container.validate()?;
 
-    let mut preimage = Vec::with_capacity(
-        DOMAIN_SEP.len() + 2 + (container.n_total as usize) * SINGLE_KEY_CANONICAL_LEN,
-    );
-    preimage.extend_from_slice(DOMAIN_SEP);
+    let key_data_len = (container.n_total as usize) * SINGLE_KEY_CANONICAL_LEN;
+    let sa_data_len = (container.n_total as usize) * SPEND_AUTH_PUBKEY_LEN;
+    let mut preimage =
+        Vec::with_capacity(DOMAIN_SEP_V31.len() + 5 + key_data_len + sa_data_len);
+
+    preimage.extend_from_slice(DOMAIN_SEP_V31);
+    preimage.push(group_version);
+    preimage.push(scheme_id);
+    preimage.push(spend_auth_version);
     preimage.push(container.n_total);
     preimage.push(container.m_required);
     for key in &container.keys {
@@ -214,8 +297,44 @@ pub fn multisig_group_id(container: &MultisigKeyContainer) -> Result<[u8; 32], P
             .map_err(|_| PqcVerifyError::DeserializationFailed)?;
         preimage.extend_from_slice(&kb);
     }
+    for sa_pk in &container.spend_auth_pubkeys {
+        preimage.extend_from_slice(sa_pk);
+    }
 
     Ok(cn_fast_hash(&preimage))
+}
+
+// ---------------------------------------------------------------------------
+// Rotating prover selection (PQC_MULTISIG.md SS11.1)
+// ---------------------------------------------------------------------------
+
+/// Deterministic, sender-computable prover selection per output.
+///
+/// ```text
+/// prover_index = first_byte(
+///     cn_fast_hash(group_id || u64_le(output_index) || tx_secret_key_hash || reference_block_hash)
+/// ) mod n_total
+/// ```
+///
+/// All inputs are known to the sender before broadcasting. The hash-based
+/// derivation provides roughly-uniform rotation and grinding resistance.
+pub fn rotating_prover_index(
+    group_id: &[u8; 32],
+    output_index_in_tx: u64,
+    tx_secret_key_hash: &[u8; 32],
+    reference_block_hash: &[u8; 32],
+    n_total: u8,
+) -> u8 {
+    assert!(n_total > 0, "n_total must be > 0");
+
+    let mut preimage = Vec::with_capacity(32 + 8 + 32 + 32);
+    preimage.extend_from_slice(group_id);
+    preimage.extend_from_slice(&output_index_in_tx.to_le_bytes());
+    preimage.extend_from_slice(tx_secret_key_hash);
+    preimage.extend_from_slice(reference_block_hash);
+
+    let hash = cn_fast_hash(&preimage);
+    hash[0] % n_total
 }
 
 // ---------------------------------------------------------------------------
@@ -364,15 +483,29 @@ mod tests {
         (0..n).map(|_| scheme.keypair_generate().unwrap()).collect()
     }
 
+    fn gen_spend_auth_pubkeys(n: usize) -> Vec<[u8; 32]> {
+        use ed25519_dalek::SigningKey;
+        use rand::rngs::OsRng;
+        (0..n)
+            .map(|_| {
+                let sk = SigningKey::generate(&mut OsRng);
+                sk.verifying_key().to_bytes()
+            })
+            .collect()
+    }
+
     #[allow(clippy::cast_possible_truncation)]
     fn make_key_container(
         pairs: &[(HybridPublicKey, crate::signature::HybridSecretKey)],
         m: u8,
     ) -> MultisigKeyContainer {
+        let n = pairs.len();
         MultisigKeyContainer {
-            n_total: pairs.len() as u8,
+            version: MULTISIG_CONTAINER_VERSION,
+            n_total: n as u8,
             m_required: m,
             keys: pairs.iter().map(|(pk, _)| pk.clone()).collect(),
+            spend_auth_pubkeys: gen_spend_auth_pubkeys(n),
         }
     }
 
@@ -401,11 +534,14 @@ mod tests {
         let pairs = gen_keypairs(3);
         let kc = make_key_container(&pairs, 2);
         let blob = kc.to_canonical_bytes().unwrap();
-        assert_eq!(blob.len(), 2 + 3 * SINGLE_KEY_CANONICAL_LEN);
+        assert_eq!(blob.len(), MultisigKeyContainer::expected_blob_len(3));
         let kc2 = MultisigKeyContainer::from_canonical_bytes(&blob).unwrap();
+        assert_eq!(kc2.version, MULTISIG_CONTAINER_VERSION);
         assert_eq!(kc2.n_total, 3);
         assert_eq!(kc2.m_required, 2);
         assert_eq!(kc2.keys.len(), 3);
+        assert_eq!(kc2.spend_auth_pubkeys.len(), 3);
+        assert_eq!(kc2.spend_auth_pubkeys, kc.spend_auth_pubkeys);
     }
 
     #[test]
@@ -515,16 +651,28 @@ mod tests {
 
     #[test]
     fn check2_parameter_bounds() {
-        let result = MultisigKeyContainer::from_canonical_bytes(&[0, 2]);
+        // Too short
+        let result = MultisigKeyContainer::from_canonical_bytes(&[0x01, 0]);
+        assert_eq!(result.unwrap_err(), PqcVerifyError::KeyBlobLength);
+
+        // Wrong version
+        let result = MultisigKeyContainer::from_canonical_bytes(&[0x00, 3, 2]);
         assert_eq!(result.unwrap_err(), PqcVerifyError::ParameterBounds);
 
-        let result = MultisigKeyContainer::from_canonical_bytes(&[3, 0]);
+        // n_total = 0
+        let result = MultisigKeyContainer::from_canonical_bytes(&[0x01, 0, 2]);
         assert_eq!(result.unwrap_err(), PqcVerifyError::ParameterBounds);
 
-        let result = MultisigKeyContainer::from_canonical_bytes(&[2, 3]);
+        // m_required = 0
+        let result = MultisigKeyContainer::from_canonical_bytes(&[0x01, 3, 0]);
         assert_eq!(result.unwrap_err(), PqcVerifyError::ParameterBounds);
 
-        let result = MultisigKeyContainer::from_canonical_bytes(&[8, 2]);
+        // m > n
+        let result = MultisigKeyContainer::from_canonical_bytes(&[0x01, 2, 3]);
+        assert_eq!(result.unwrap_err(), PqcVerifyError::ParameterBounds);
+
+        // n > MAX_MULTISIG_PARTICIPANTS
+        let result = MultisigKeyContainer::from_canonical_bytes(&[0x01, 8, 2]);
         assert_eq!(result.unwrap_err(), PqcVerifyError::ParameterBounds);
     }
 
@@ -629,10 +777,13 @@ mod tests {
     #[test]
     fn check8_duplicate_keys() {
         let pairs = gen_keypairs(2);
+        let sa_pks = gen_spend_auth_pubkeys(3);
         let dup_kc = MultisigKeyContainer {
+            version: MULTISIG_CONTAINER_VERSION,
             n_total: 3,
             m_required: 2,
             keys: vec![pairs[0].0.clone(), pairs[1].0.clone(), pairs[0].0.clone()],
+            spend_auth_pubkeys: sa_pks,
         };
         let msg = b"dup-keys";
         let scheme = HybridEd25519MlDsa;
@@ -824,5 +975,92 @@ mod tests {
         let partials = vec![(0u8, sig0)];
         let result = super::verify_fcmp_multisig_partials(&kc, &partials, msg, None);
         assert_eq!(result.unwrap_err(), PqcVerifyError::ThresholdMismatch);
+    }
+
+    // -- Rotating prover index tests --
+
+    #[test]
+    fn rotating_prover_deterministic() {
+        let group_id = [0xAB; 32];
+        let tx_sk_hash = [0xCD; 32];
+        let ref_block = [0xEF; 32];
+
+        let idx1 = rotating_prover_index(&group_id, 0, &tx_sk_hash, &ref_block, 3);
+        let idx2 = rotating_prover_index(&group_id, 0, &tx_sk_hash, &ref_block, 3);
+        assert_eq!(idx1, idx2);
+    }
+
+    #[test]
+    fn rotating_prover_within_bounds() {
+        let group_id = [0xAB; 32];
+        let tx_sk_hash = [0xCD; 32];
+        let ref_block = [0xEF; 32];
+
+        for n in 1..=MAX_MULTISIG_PARTICIPANTS {
+            for output_idx in 0..20u64 {
+                let prover = rotating_prover_index(
+                    &group_id, output_idx, &tx_sk_hash, &ref_block, n,
+                );
+                assert!(prover < n, "prover index {prover} >= n_total {n}");
+            }
+        }
+    }
+
+    #[test]
+    fn rotating_prover_varies_with_inputs() {
+        let group_id = [0xAB; 32];
+        let tx_sk_hash = [0xCD; 32];
+        let ref_block = [0xEF; 32];
+
+        let mut indices = std::collections::HashSet::new();
+        for output_idx in 0..100u64 {
+            indices.insert(rotating_prover_index(
+                &group_id, output_idx, &tx_sk_hash, &ref_block, 7,
+            ));
+        }
+        assert!(
+            indices.len() > 1,
+            "prover index should vary across outputs (got {indices:?})"
+        );
+    }
+
+    #[test]
+    fn rotating_prover_1_of_1() {
+        let group_id = [0; 32];
+        let tx_sk_hash = [0; 32];
+        let ref_block = [0; 32];
+        assert_eq!(rotating_prover_index(&group_id, 0, &tx_sk_hash, &ref_block, 1), 0);
+        assert_eq!(rotating_prover_index(&group_id, 99, &tx_sk_hash, &ref_block, 1), 0);
+    }
+
+    // -- V3.1 group_id tests --
+
+    #[test]
+    fn group_id_v31_includes_version_fields() {
+        let pairs = gen_keypairs(3);
+        let kc = make_key_container(&pairs, 2);
+
+        let id_v31 = multisig_group_id(&kc).unwrap();
+
+        let id_wrong_scheme = multisig_group_id_with_versions(
+            &kc,
+            MULTISIG_CONTAINER_VERSION,
+            0xFF,
+            SPEND_AUTH_VERSION_ED25519,
+        )
+        .unwrap();
+        assert_ne!(id_v31, id_wrong_scheme, "scheme_id must affect group_id");
+
+        let id_wrong_sa_ver = multisig_group_id_with_versions(
+            &kc,
+            MULTISIG_CONTAINER_VERSION,
+            HYBRID_SCHEME_ID_MULTISIG,
+            0xFF,
+        )
+        .unwrap();
+        assert_ne!(
+            id_v31, id_wrong_sa_ver,
+            "spend_auth_version must affect group_id"
+        );
     }
 }

@@ -400,12 +400,20 @@ TEST(fcmp, multisig_pqc_leaf_hash_via_ffi)
     shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
   }
 
-  // Build multisig key container blob: [n_total(1) | m_required(1) | key0 | key1 | key2]
+  // V3.1 wire format: [version(1) | n_total(1) | m_required(1) | key0 | key1 | key2 | sa_pk0 | sa_pk1 | sa_pk2]
   std::vector<uint8_t> keys_blob;
-  keys_blob.push_back(3);
-  keys_blob.push_back(2);
+  keys_blob.push_back(0x01);  // MULTISIG_CONTAINER_VERSION
+  keys_blob.push_back(3);     // n_total
+  keys_blob.push_back(2);     // m_required
   for (const auto& pk : pub_keys)
     keys_blob.insert(keys_blob.end(), pk.begin(), pk.end());
+  // Append 3 dummy 32-byte spend_auth_pubkeys (deterministic placeholder for test)
+  for (int i = 0; i < 3; ++i)
+  {
+    uint8_t sa_pk[32];
+    memset(sa_pk, 0x10 + i, 32);
+    keys_blob.insert(keys_blob.end(), sa_pk, sa_pk + 32);
+  }
 
   uint8_t hash_out[32] = {};
   bool ok = shekyl_fcmp_pqc_leaf_hash(keys_blob.data(), keys_blob.size(), hash_out);
@@ -511,14 +519,21 @@ TEST(fcmp, multisig_2of3_sig_container_assembly)
   for (const auto& p : partials)
     sig_blob.push_back(p.first);
 
-  // Build MultisigKeyContainer blob: [n(1) | m(1) | pk0 | pk1 | pk2]
+  // V3.1 MultisigKeyContainer blob: [version(1) | n(1) | m(1) | pk0 | pk1 | pk2 | sa_pk0..2]
   std::vector<uint8_t> key_blob;
+  key_blob.push_back(0x01);  // MULTISIG_CONTAINER_VERSION
   key_blob.push_back(3);
   key_blob.push_back(2);
   for (int i = 0; i < 3; ++i)
   {
     key_blob.insert(key_blob.end(),
         kps[i].public_key.ptr, kps[i].public_key.ptr + kps[i].public_key.len);
+  }
+  for (int i = 0; i < 3; ++i)
+  {
+    uint8_t sa_pk[32];
+    memset(sa_pk, 0x20 + i, 32);
+    key_blob.insert(key_blob.end(), sa_pk, sa_pk + 32);
   }
 
   // Verify the assembled multisig via FFI (scheme_id = 2 triggers multisig path)
