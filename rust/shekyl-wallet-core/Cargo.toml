@@ -26,6 +26,12 @@ thiserror = "2"
 curve25519-dalek = { version = "4", features = ["alloc"] }
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "multisig_v31"
+harness = false
+required-features = ["multisig"]
 
 [features]
 default = []
