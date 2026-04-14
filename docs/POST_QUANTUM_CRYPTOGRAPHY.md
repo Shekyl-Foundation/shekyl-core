@@ -142,8 +142,11 @@ and public data, without caching per-output shared secrets.
 
 The derivation flow is:
 
-1. **Sender** reads the recipient's ML-KEM-768 encapsulation key and X25519
-   public key from their address (the PQC segment of the Bech32m address).
+1. **Sender** reads the recipient's ML-KEM-768 encapsulation key from their
+   address (the PQC segment of the Bech32m address) and derives the X25519
+   public key from the Ed25519 view public key via the standard
+   Edwards→Montgomery birational map `u = (1 + y) / (1 - y) mod p`
+   (implemented in `shekyl-crypto-pq/src/montgomery.rs`).
 2. **Derive deterministic per-output KEM seed:**
    ```
    fingerprint = SHA3-256(x25519_pk || ml_kem_ek)           // 32 bytes
@@ -942,13 +945,31 @@ Prerequisite: V4-B or independent of address format work.
 
 The KEM combining rule is implemented and ships at genesis:
 
-- Classical: `X25519`
+- Classical: `X25519` (unclamped Montgomery DH using the Ed25519 view key)
 - PQ: `ML-KEM-768` (NIST level 3)
 - Combining: `HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = "shekyl-kem-v1", info = context_bytes)`
 - The combined shared secret feeds into per-output PQC key derivation.
 - ML-KEM ciphertexts stored in `tx_extra` tag `0x06`
   (`TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT`).
 - Implementation: `rust/shekyl-crypto-pq/src/kem.rs`
+
+**X25519 key derivation:** The X25519 public key is not carried in the
+address. It is deterministically derived from the Ed25519 view public key
+via the Edwards→Montgomery birational map (`ed25519_pk_to_x25519_pk` in
+`montgomery.rs`). On the secret side, the Ed25519 view secret key is used
+directly as the unclamped Montgomery scalar (`ed25519_sk_as_montgomery_scalar`).
+This avoids X25519's default scalar clamping, which would desynchronize the
+sender/receiver DH computation. Low-order Montgomery points are explicitly
+rejected on both the recipient side (mandatory: `kem_ct_x25519` from
+network transactions) and the sender side (defense-in-depth: derived
+recipient X25519 public key). See `docs/AUDIT_SCOPE.md` for the targeted
+review scope covering this composition.
+
+**`m_pqc_public_key` layout invariant:** 1216 bytes, laid out as
+`X25519_pub[0..32] || ML-KEM_ek[32..1216]`. Canonical assemblers:
+`get_account_address_from_str` (address decode path) and
+`generate_pqc_key_material` (wallet keygen path). Runtime checks enforce
+`size == 1216` at every split site.
 
 ### Amount Encryption and Commitment Masks (HKDF Only)
 
@@ -1005,7 +1026,7 @@ All Phase-1 (single-signer) and Phase-2 (multisig) items are implemented. This t
 | 11 | Fuzz testing (4 targets, 10M each) | Done | `rust/shekyl-crypto-pq/fuzz/fuzz_targets/`, `docs/PQC_TEST_VECTOR_002_MULTISIG.json` |
 | 12 | FCMP++ FFI (prove/verify) | Done | `rust/shekyl-fcmp/`, `rust/shekyl-ffi/src/lib.rs` |
 | 13 | Curve tree DB (grow/trim/root/path) | Done | `src/blockchain_db/`, `rust/shekyl-fcmp/` |
-| 14 | Per-output KEM derivation | Done | `rust/shekyl-crypto-pq/src/kem.rs`, `rust/shekyl-crypto-pq/src/output.rs`; wallet scanning via `shekyl_scan_and_recover` FFI, construction via `shekyl_construct_output` FFI |
+| 14 | Per-output KEM derivation | Done | `rust/shekyl-crypto-pq/src/kem.rs`, `rust/shekyl-crypto-pq/src/output.rs`, `rust/shekyl-crypto-pq/src/montgomery.rs`; wallet scanning via `shekyl_scan_and_recover` FFI, construction via `shekyl_construct_output` FFI; X25519 derived from Ed25519 view key via Edwards→Montgomery map |
 | 15 | FCMP++ `check_tx_inputs` verification | Done (skeleton) | `src/cryptonote_core/blockchain.cpp`; see `docs/FCMP_PLUS_PLUS.md` |
 | 16 | Per-input `pqc_auths` migration | Done | `src/cryptonote_basic/cryptonote_basic.h` (`pqc_authentication`), `src/cryptonote_core/tx_pqc_verify.cpp`; signing via `shekyl_sign_fcmp_transaction` FFI |
 | 17 | Native Rust tx signing (`shekyl-tx-builder`) | Done | `rust/shekyl-tx-builder/` — BP+, FCMP++, PQC signing in pure Rust; CLI wallet uses `shekyl_sign_fcmp_transaction` FFI (collapsed signing), GUI uses `shekyl-wallet-rpc` `native-sign` feature |

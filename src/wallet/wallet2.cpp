@@ -6068,6 +6068,19 @@ void wallet2::load(const std::string& wallet_, const epee::wipeable_string& pass
   wallet_keys_unlocker unlocker(*this, m_ask_password == AskPasswordToDecrypt && !m_unattended && !m_watch_only && !m_is_background_wallet, password);
 
   //keys loaded ok!
+  // Post-load invariant: m_pqc_secret_key[0..32] must equal m_view_secret_key.
+  // After the X25519-from-view-key derivation change, these are the same bytes.
+  // A mismatch indicates a corrupted or pre-derivation-era wallet file.
+  if (!m_watch_only && m_account.get_keys().m_pqc_secret_key.size() >= SHEKYL_X25519_PK_BYTES)
+  {
+    THROW_WALLET_EXCEPTION_IF(
+      memcmp(m_account.get_keys().m_pqc_secret_key.data(),
+             &m_account.get_keys().m_view_secret_key, SHEKYL_X25519_PK_BYTES) != 0,
+      error::wallet_internal_error,
+      "Wallet PQC secret key X25519 prefix does not match view secret key. "
+      "Wallet file may be corrupted or from a pre-derivation version.");
+  }
+
   //try to load wallet cache. but even if we failed, it is not big problem
   load_wallet_cache(use_fs, cache_buf);
 
@@ -9448,13 +9461,13 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
   const auto& my_addr = keys.m_account_address;
   const uint64_t out_amounts[2] = {total_claimed, 0};
 
-  static constexpr size_t X25519_PK_BYTES = 32;
-  THROW_WALLET_EXCEPTION_IF(my_addr.m_pqc_public_key.size() <= X25519_PK_BYTES,
-    error::wallet_internal_error, "PQC public key too short (need x25519[32] || ml_kem_ek[1184])");
+  THROW_WALLET_EXCEPTION_IF(my_addr.m_pqc_public_key.size() != SHEKYL_PQC_PUBLIC_KEY_BYTES,
+    error::wallet_internal_error, "PQC public key size " + std::to_string(my_addr.m_pqc_public_key.size())
+    + " != " + std::to_string(SHEKYL_PQC_PUBLIC_KEY_BYTES));
 
   const uint8_t* pk_x25519 = my_addr.m_pqc_public_key.data();
-  const uint8_t* pk_ml_kem = my_addr.m_pqc_public_key.data() + X25519_PK_BYTES;
-  const size_t pk_ml_kem_len = my_addr.m_pqc_public_key.size() - X25519_PK_BYTES;
+  const uint8_t* pk_ml_kem = my_addr.m_pqc_public_key.data() + SHEKYL_X25519_PK_BYTES;
+  const size_t pk_ml_kem_len = my_addr.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
 
   cryptonote::tx_extra_pqc_kem_ciphertext kem_field;
   kem_field.blob.reserve(2 * cryptonote::HYBRID_KEM_CT_BYTES);
@@ -10447,9 +10460,11 @@ void wallet2::check_tx_key(const crypto::hash &txid, const crypto::secret_key &t
   THROW_WALLET_EXCEPTION_IF(tx_hash != txid, error::wallet_internal_error,
       "Failed to get the right transaction from daemon");
 
+  THROW_WALLET_EXCEPTION_IF(address.m_pqc_public_key.size() != SHEKYL_PQC_PUBLIC_KEY_BYTES,
+    error::wallet_internal_error, "Address PQC key size mismatch");
   const uint8_t* x25519_pk = address.m_pqc_public_key.data();
-  const uint8_t* ml_kem_ek = address.m_pqc_public_key.data() + 32;
-  const size_t ml_kem_ek_len = address.m_pqc_public_key.size() - 32;
+  const uint8_t* ml_kem_ek = address.m_pqc_public_key.data() + SHEKYL_X25519_PK_BYTES;
+  const size_t ml_kem_ek_len = address.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
 
   std::vector<uint64_t> output_indices;
   for (uint64_t i = 0; i < tx.vout.size(); ++i)
@@ -10636,9 +10651,11 @@ std::string wallet2::get_tx_proof(const crypto::hash &txid, const cryptonote::ac
     THROW_WALLET_EXCEPTION_IF(!get_tx_key(txid, tx_key),
         error::wallet_internal_error, "Tx secret key wasn't found in the wallet file.");
 
+    THROW_WALLET_EXCEPTION_IF(address.m_pqc_public_key.size() != SHEKYL_PQC_PUBLIC_KEY_BYTES,
+        error::wallet_internal_error, "Address PQC key size mismatch");
     const uint8_t* x25519_pk = address.m_pqc_public_key.data();
-    const uint8_t* ml_kem_ek = address.m_pqc_public_key.data() + 32;
-    const size_t ml_kem_ek_len = address.m_pqc_public_key.size() - 32;
+    const uint8_t* ml_kem_ek = address.m_pqc_public_key.data() + SHEKYL_X25519_PK_BYTES;
+    const size_t ml_kem_ek_len = address.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
 
     std::vector<uint64_t> output_indices;
     for (uint64_t i = 0; i < tx.vout.size(); ++i)
@@ -10760,11 +10777,11 @@ bool wallet2::check_tx_proof(const cryptonote::transaction &tx, const cryptonote
 
   if (is_out)
   {
-    THROW_WALLET_EXCEPTION_IF(address.m_pqc_public_key.size() < 33,
-        error::wallet_internal_error, "Recipient address missing PQC public key");
+    THROW_WALLET_EXCEPTION_IF(address.m_pqc_public_key.size() != SHEKYL_PQC_PUBLIC_KEY_BYTES,
+        error::wallet_internal_error, "Address PQC key size mismatch");
     const uint8_t* x25519_pk = address.m_pqc_public_key.data();
-    const uint8_t* ml_kem_ek = address.m_pqc_public_key.data() + 32;
-    const size_t ml_kem_ek_len = address.m_pqc_public_key.size() - 32;
+    const uint8_t* ml_kem_ek = address.m_pqc_public_key.data() + SHEKYL_X25519_PK_BYTES;
+    const size_t ml_kem_ek_len = address.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
 
     verify_ok = shekyl_verify_tx_proof_outbound(
         reinterpret_cast<const uint8_t*>(decoded_blob.data()), decoded_blob.size(),

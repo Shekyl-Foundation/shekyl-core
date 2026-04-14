@@ -2063,6 +2063,35 @@ pub extern "C" fn shekyl_kem_keypair_generate() -> ShekylPqcKeypair {
     }
 }
 
+/// Convert an Ed25519 view public key to its X25519 (Montgomery u-coordinate)
+/// equivalent. The caller provides a 32-byte Ed25519 public key and receives
+/// the 32-byte X25519 public key. Returns false on rejection (identity point,
+/// non-canonical encoding).
+///
+/// # Safety
+/// Both pointers must point to valid 32-byte buffers.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_view_pub_to_x25519_pub(
+    ed_pub_ptr: *const u8,
+    x25519_out_ptr: *mut u8,
+) -> bool {
+    use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
+
+    if ed_pub_ptr.is_null() || x25519_out_ptr.is_null() {
+        return false;
+    }
+
+    let ed_pub: &[u8; 32] = unsafe { &*(ed_pub_ptr as *const [u8; 32]) };
+
+    match ed25519_pk_to_x25519_pk(ed_pub) {
+        Ok(x25519_pk) => {
+            unsafe { std::ptr::copy_nonoverlapping(x25519_pk.as_ptr(), x25519_out_ptr, 32) };
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// Encapsulate to a hybrid public key. Returns ciphertext in the buffer.
 /// Combined shared secret is written to `ss_out_ptr` (64 bytes).
 ///

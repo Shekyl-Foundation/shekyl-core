@@ -660,10 +660,14 @@ combined KEM shared secret, enabling wallet restore from seed.
 
 ### Hybrid KEM (X25519 + ML-KEM-768)
 
-The sender performs a hybrid key encapsulation:
+The sender performs a hybrid key encapsulation. The recipient's X25519
+public key is derived from their Ed25519 view public key via the standard
+Edwards→Montgomery birational map (`ed25519_pk_to_x25519_pk` in
+`montgomery.rs`), not carried separately in the address.
 
 ```text
-1. X25519 KEM:     ss_classical = X25519(ephemeral_sk, recipient_pk)
+1. X25519 KEM:     ss_classical = unclamped_dh(ephemeral_sk, recipient_x25519_pk)
+                   (recipient_x25519_pk derived from Ed25519 view pub)
 2. ML-KEM-768 KEM: ss_pq, ciphertext = ML-KEM-768.Encaps(recipient_ml_kem_pk)
 3. Combined:       shared_secret = HKDF-SHA-512(
                        salt = "shekyl-kem-v1",
@@ -671,6 +675,10 @@ The sender performs a hybrid key encapsulation:
                        info = ""
                    )
 ```
+
+Low-order Montgomery points are explicitly rejected before DH on both
+sides (recipient: mandatory check on `kem_ct_x25519`; sender:
+defense-in-depth check on derived recipient X25519 pub).
 
 The hybrid KEM ciphertexts are stored in `tx_extra` as
 `tx_extra_pqc_kem_ciphertext`: tag `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` (`0x06`),

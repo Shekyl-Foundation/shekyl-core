@@ -45,13 +45,15 @@ Each item is out of scope for the current PR but worth tracking for future work.
   data (key images, commitments, proof blobs, PQC public keys and
   signatures) and round-tripped through JSON serialization.
 
-- **Genesis TX blobs use zero-filled `enc_amounts`/`outPk`.**
-  The regenerated v3 genesis blobs carry all-zero encrypted amounts and
-  Pedersen commitments. This is structurally valid for parsing/hashing but
-  means the genesis coinbase outputs are not cryptographically real. Before
-  mainnet launch, regenerate using `build_genesis_coinbase_from_destinations`
-  with proper PQC-enabled miner addresses to produce real commitments and
-  KEM ciphertexts.
+- **~~Genesis TX blobs use zero-filled `enc_amounts`/`outPk`.~~** RESOLVED.
+  The genesis pipeline now consumes Bech32m addresses, derives X25519 from
+  the Ed25519 view key via Edwards→Montgomery mapping, assembles the full
+  1216-byte `m_pqc_public_key` (`X25519_pub || ML-KEM_ek`), and routes
+  through `build_genesis_coinbase_from_destinations` to produce real
+  commitments and KEM ciphertexts. The `genesis_builder` tool has been
+  updated; testnet hex regeneration requires a rebuild after this change.
+  See `scripts/verify_genesis.py` in `shekyl-dev` for reproducibility
+  verification.
 
 - **`shekyl-cli` offline signing uses hex blobs on the command line.**
   A future improvement should support QR-code-sized chunked transfer for

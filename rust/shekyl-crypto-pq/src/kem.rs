@@ -11,10 +11,12 @@
 //! which per-output ML-DSA-65 keypairs are deterministically derived.
 
 use crate::CryptoError;
+use curve25519_dalek::{
+    constants::X25519_BASEPOINT, montgomery::MontgomeryPoint, scalar::Scalar,
+};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha512;
-use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
 use fips203::ml_kem_768;
@@ -97,8 +99,13 @@ pub struct HybridX25519MlKem;
 
 impl KeyEncapsulation for HybridX25519MlKem {
     fn keypair_generate(&self) -> Result<(HybridKemPublicKey, HybridKemSecretKey), CryptoError> {
-        let x_secret = StaticSecret::random_from_rng(rand::rngs::OsRng);
-        let x_public = X25519PublicKey::from(&x_secret);
+        // Generate X25519 key without clamping: raw scalar * basepoint.
+        // In production, the X25519 secret is derived from the Ed25519 view key
+        // and the public key from the Edwards-to-Montgomery birational map.
+        // This standalone keygen is for testing; real wallets use
+        // generate_pqc_key_material which derives from the view key.
+        let x_secret_scalar = Scalar::random(&mut rand::rngs::OsRng);
+        let x_public_mont = &x_secret_scalar * &X25519_BASEPOINT;
 
         let (ek, dk) = ml_kem_768::KG::try_keygen()
             .map_err(|e| CryptoError::KeyGenerationFailed(format!("ML-KEM-768 keygen: {e}")))?;
@@ -108,11 +115,11 @@ impl KeyEncapsulation for HybridX25519MlKem {
 
         Ok((
             HybridKemPublicKey {
-                x25519: x_public.to_bytes(),
+                x25519: x_public_mont.0,
                 ml_kem: ek_bytes.to_vec(),
             },
             HybridKemSecretKey {
-                x25519: x_secret.to_bytes(),
+                x25519: x_secret_scalar.to_bytes(),
                 ml_kem: dk_bytes.to_vec(),
             },
         ))
@@ -126,11 +133,14 @@ impl KeyEncapsulation for HybridX25519MlKem {
             return Err(CryptoError::InvalidKeyMaterial);
         }
 
-        // X25519 ECDH with ephemeral key
-        let x_ephemeral = EphemeralSecret::random_from_rng(rand::rngs::OsRng);
-        let x_ephemeral_public = X25519PublicKey::from(&x_ephemeral);
-        let x_recipient = X25519PublicKey::from(public_key.x25519);
-        let x25519_ss = x_ephemeral.diffie_hellman(&x_recipient);
+        // X25519 ECDH with ephemeral key (unclamped Montgomery scalar)
+        let eph_scalar = Scalar::random(&mut rand::rngs::OsRng);
+        let eph_mont_pub = &eph_scalar * &X25519_BASEPOINT;
+        let recipient_mont = MontgomeryPoint(public_key.x25519);
+        if crate::montgomery::is_low_order_montgomery(&recipient_mont) {
+            return Err(CryptoError::LowOrderPoint);
+        }
+        let x25519_ss = &eph_scalar * &recipient_mont;
 
         // ML-KEM-768 encapsulation
         let ek_bytes: [u8; ML_KEM_768_EK_LEN] = public_key
@@ -147,13 +157,12 @@ impl KeyEncapsulation for HybridX25519MlKem {
         let ml_ss_bytes: [u8; ML_KEM_768_SS_LEN] = ml_ss.into_bytes();
         let ml_ct_bytes: [u8; ML_KEM_768_CT_LEN] = ml_ct.into_bytes();
 
-        // Combine: HKDF-SHA-512(ikm = X25519_ss || ML-KEM_ss, salt = KEM_DOMAIN_SALT)
-        let combined_ss = combine_shared_secrets(x25519_ss.as_bytes(), &ml_ss_bytes)?;
+        let combined_ss = combine_shared_secrets(&x25519_ss.0, &ml_ss_bytes)?;
 
         Ok((
             combined_ss,
             HybridCiphertext {
-                x25519: x_ephemeral_public.to_bytes(),
+                x25519: eph_mont_pub.0,
                 ml_kem: ml_ct_bytes.to_vec(),
             },
         ))
@@ -173,10 +182,13 @@ impl KeyEncapsulation for HybridX25519MlKem {
             ));
         }
 
-        // X25519 ECDH
-        let x_secret = StaticSecret::from(secret_key.x25519);
-        let x_ephemeral_pub = X25519PublicKey::from(ciphertext.x25519);
-        let x25519_ss = x_secret.diffie_hellman(&x_ephemeral_pub);
+        // X25519 ECDH (unclamped Montgomery scalar)
+        let view_scalar = Scalar::from_bytes_mod_order(secret_key.x25519);
+        let eph_mont = MontgomeryPoint(ciphertext.x25519);
+        if crate::montgomery::is_low_order_montgomery(&eph_mont) {
+            return Err(CryptoError::LowOrderPoint);
+        }
+        let x25519_ss = &view_scalar * &eph_mont;
 
         // ML-KEM-768 decapsulation
         let dk_bytes: [u8; ML_KEM_768_DK_LEN] = secret_key
@@ -199,7 +211,7 @@ impl KeyEncapsulation for HybridX25519MlKem {
             .map_err(|e| CryptoError::DecapsulationFailed(format!("ML-KEM-768 decaps: {e}")))?;
         let ml_ss_bytes: [u8; ML_KEM_768_SS_LEN] = ml_ss.into_bytes();
 
-        combine_shared_secrets(x25519_ss.as_bytes(), &ml_ss_bytes)
+        combine_shared_secrets(&x25519_ss.0, &ml_ss_bytes)
     }
 }
 

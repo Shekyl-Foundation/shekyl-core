@@ -63,11 +63,12 @@ DISABLE_VS_WARNINGS(4244 4345)
 
     bool generate_pqc_key_material(account_keys &keys)
     {
-      // Generate hybrid X25519 + ML-KEM-768 KEM keypair. The public key
-      // (x25519_pk[32] || ml_kem_ek[1184]) goes into the address; the secret
-      // key (x25519_sk[32] || ml_kem_dk[2400]) stays in the wallet.
-      // Per-output ML-DSA-65 signing keys are derived from the KEM shared
-      // secret at spend time — the wallet never stores wallet-level signing keys.
+      // Generate ML-KEM-768 keypair via the existing FFI, then replace the
+      // X25519 portion with view-key-derived material. After this:
+      //   m_pqc_public_key = X25519_pub[32] || ML-KEM_ek[1184]  (1216 bytes)
+      //   m_pqc_secret_key = view_secret[32] || ML-KEM_dk[2400]  (2432 bytes)
+      // X25519_pub is derived from m_view_public_key via Edwards→Montgomery.
+      // The X25519 secret IS the view secret (used unclamped).
       ShekylPqcKeypair keypair = shekyl_kem_keypair_generate();
       if (!keypair.success || keypair.public_key.ptr == nullptr || keypair.secret_key.ptr == nullptr)
       {
@@ -78,8 +79,42 @@ DISABLE_VS_WARNINGS(4244 4345)
         return false;
       }
 
-      copy_rust_buffer(keys.m_account_address.m_pqc_public_key, keypair.public_key);
-      copy_rust_buffer(keys.m_pqc_secret_key, keypair.secret_key);
+      // Derive X25519 public key from the Ed25519 view public key
+      uint8_t x25519_pk[SHEKYL_X25519_PK_BYTES];
+      if (!shekyl_view_pub_to_x25519_pub(
+              reinterpret_cast<const uint8_t*>(&keys.m_account_address.m_view_public_key),
+              x25519_pk))
+      {
+        shekyl_buffer_free(keypair.public_key.ptr, keypair.public_key.len);
+        shekyl_buffer_free(keypair.secret_key.ptr, keypair.secret_key.len);
+        return false;
+      }
+
+      // Assemble m_pqc_public_key: X25519_pub[32] || ML-KEM_ek[1184]
+      // The FFI returns x25519[32] || ml_kem[1184]; replace the first 32 bytes.
+      keys.m_account_address.m_pqc_public_key.clear();
+      keys.m_account_address.m_pqc_public_key.reserve(SHEKYL_PQC_PUBLIC_KEY_BYTES);
+      keys.m_account_address.m_pqc_public_key.insert(
+          keys.m_account_address.m_pqc_public_key.end(),
+          x25519_pk, x25519_pk + SHEKYL_X25519_PK_BYTES);
+      keys.m_account_address.m_pqc_public_key.insert(
+          keys.m_account_address.m_pqc_public_key.end(),
+          keypair.public_key.ptr + SHEKYL_X25519_PK_BYTES,
+          keypair.public_key.ptr + keypair.public_key.len);
+
+      // Assemble m_pqc_secret_key: view_secret[32] || ML-KEM_dk[2400]
+      // Use the raw view secret bytes as the X25519 secret (unclamped).
+      keys.m_pqc_secret_key.clear();
+      keys.m_pqc_secret_key.reserve(SHEKYL_X25519_PK_BYTES + (keypair.secret_key.len - SHEKYL_X25519_PK_BYTES));
+      const uint8_t* view_sec = reinterpret_cast<const uint8_t*>(&keys.m_view_secret_key);
+      keys.m_pqc_secret_key.insert(
+          keys.m_pqc_secret_key.end(),
+          view_sec, view_sec + SHEKYL_X25519_PK_BYTES);
+      keys.m_pqc_secret_key.insert(
+          keys.m_pqc_secret_key.end(),
+          keypair.secret_key.ptr + SHEKYL_X25519_PK_BYTES,
+          keypair.secret_key.ptr + keypair.secret_key.len);
+
       shekyl_buffer_free(keypair.public_key.ptr, keypair.public_key.len);
       shekyl_buffer_free(keypair.secret_key.ptr, keypair.secret_key.len);
 

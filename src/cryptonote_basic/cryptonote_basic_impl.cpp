@@ -233,9 +233,29 @@ namespace cryptonote {
 
     if (ml_kem_buf.len > 0)
     {
-      info.address.m_pqc_public_key.assign(
-          ml_kem_buf.ptr, ml_kem_buf.ptr + ml_kem_buf.len);
+      // Derive X25519 public key from Ed25519 view key via Edwards→Montgomery map.
+      // m_pqc_public_key layout: X25519_pub[32] || ML-KEM_ek[1184] = 1216 bytes.
+      // Canonical assembler: this function. See account_public_address field comment.
+      uint8_t x25519_pk[32];
+      if (!shekyl_view_pub_to_x25519_pub(
+              reinterpret_cast<const uint8_t*>(&info.address.m_view_public_key), x25519_pk))
+      {
+        LOG_PRINT_L1("Failed to derive X25519 public key from view key");
+        shekyl_buffer_free(ml_kem_buf.ptr, ml_kem_buf.len);
+        return false;
+      }
+
+      info.address.m_pqc_public_key.clear();
+      info.address.m_pqc_public_key.reserve(SHEKYL_X25519_PK_BYTES + ml_kem_buf.len);
+      info.address.m_pqc_public_key.insert(
+          info.address.m_pqc_public_key.end(), x25519_pk, x25519_pk + SHEKYL_X25519_PK_BYTES);
+      info.address.m_pqc_public_key.insert(
+          info.address.m_pqc_public_key.end(), ml_kem_buf.ptr, ml_kem_buf.ptr + ml_kem_buf.len);
       shekyl_buffer_free(ml_kem_buf.ptr, ml_kem_buf.len);
+
+      CHECK_AND_ASSERT_MES(info.address.m_pqc_public_key.size() == SHEKYL_PQC_PUBLIC_KEY_BYTES,
+        false, "m_pqc_public_key assembly error: expected " << SHEKYL_PQC_PUBLIC_KEY_BYTES
+        << " bytes, got " << info.address.m_pqc_public_key.size());
     }
     else
     {

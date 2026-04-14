@@ -40,6 +40,11 @@
 /// Production signing uses shekyl_sign_fcmp_transaction (collapsed path).
 #define SHEKYL_PROVE_WITNESS_HEADER_BYTES 256
 
+/// m_pqc_public_key canonical layout: X25519_pub[32] || ML-KEM-768_ek[1184].
+#define SHEKYL_PQC_PUBLIC_KEY_BYTES 1216
+#define SHEKYL_X25519_PK_BYTES 32
+#define SHEKYL_ML_KEM_768_EK_BYTES 1184
+
 extern "C" {
 
 /// Return the Rust crate version string (null-terminated, static lifetime).
@@ -314,6 +319,15 @@ ShekylBuffer shekyl_fcmp_outputs_to_leaves(
 
 /// Generate hybrid X25519 + ML-KEM-768 keypair.
 ShekylPqcKeypair shekyl_kem_keypair_generate();
+
+/// Convert an Ed25519 view public key to its X25519 (Montgomery u-coordinate)
+/// equivalent via the birational map u = (1+y)/(1-y).
+/// ed_pub_ptr: 32-byte Ed25519 public key.
+/// x25519_out_ptr: receives 32-byte X25519 public key.
+/// Returns false on rejection (identity, non-canonical).
+bool shekyl_view_pub_to_x25519_pub(
+    const uint8_t* ed_pub_ptr,
+    uint8_t* x25519_out_ptr);
 
 /// Encapsulate to hybrid public key.
 /// pk_ml_kem_ptr: 1184 bytes (ML-KEM-768 encap key).

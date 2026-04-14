@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+### ✨ Added
+
+- **Edwards→Montgomery conversion module (`montgomery.rs`).**
+  New `shekyl-crypto-pq` module implementing `ed25519_pk_to_x25519_pk`,
+  `ed25519_sk_as_montgomery_scalar`, and `is_low_order_montgomery`. The X25519
+  public key is now deterministically derived from the Ed25519 view key via the
+  standard birational map `u = (1 + y) / (1 - y) mod p`, eliminating the need
+  to carry a separate X25519 key in the address format. Includes non-canonical
+  y rejection, identity rejection, and comprehensive unit tests.
+
+- **Low-order Montgomery point rejection.**
+  Recipient-side DH (`scan_output`, `scan_output_recover`) now explicitly rejects
+  low-order `kem_ct_x25519` ephemeral keys before performing unclamped DH. This
+  replaces X25519's scalar clamping defense with an explicit subgroup check
+  (`cofactor_mul.is_identity()`). Defense-in-depth check also added on sender-side
+  derived recipient X25519 public key.
+
+- **`shekyl_view_pub_to_x25519_pub` FFI export.**
+  New FFI function for C++ callers to derive X25519 public keys from Ed25519 view
+  keys via the canonical `montgomery.rs` helper.
+
+- **`m_pqc_public_key` 1216-byte invariant enforcement.**
+  All split sites in `cryptonote_tx_utils.cpp` and `wallet2.cpp` now check
+  `size == SHEKYL_PQC_PUBLIC_KEY_BYTES` (1216) instead of weaker `> 32` guards.
+  The `m_pqc_public_key` declaration in `cryptonote_basic.h` documents the
+  `X25519_pub[0..32] || ML-KEM_ek[32..1216]` layout invariant.
+
+- **Wallet post-load consistency check.**
+  `wallet2::load` now verifies `m_pqc_secret_key[0..32] == m_view_secret_key`
+  and refuses to open on mismatch, catching corrupted or tampered wallet files.
+
+- **Genesis reproducibility artifacts.**
+  Added `verify_genesis.py` script and `GENESIS_BUILD_INFO.txt` in
+  `shekyl-dev/tools/genesis_builder/` for independent verification that
+  `GENESIS_TX` hex matches the committed recipient addresses and amounts.
+
+### 🔄 Changed
+
+- **X25519 DH replaced with unclamped Montgomery DH.**
+  `output.rs` and `kem.rs` now use `curve25519-dalek` `Scalar * MontgomeryPoint`
+  instead of `x25519-dalek`'s clamped `StaticSecret` DH. The Ed25519 view secret
+  is used directly as the Montgomery scalar, keeping sender/receiver DH
+  synchronized. Rationale and security analysis documented in `AUDIT_SCOPE.md`.
+
+- **`get_account_address_from_str` derives X25519 from view key.**
+  Address decoding now derives the X25519 public key from the Ed25519 view key
+  via FFI and assembles the full 1216-byte `m_pqc_public_key`, so downstream
+  callers (`build_genesis_coinbase_from_destinations`, `construct_tx_with_tx_key`)
+  receive valid hybrid key material without address format changes.
+
+- **`generate_pqc_key_material` derives X25519 from view key.**
+  Wallet keygen now derives the X25519 public key from the view key
+  deterministically (not random), and uses the raw view secret as the X25519
+  secret. This ensures `m_pqc_secret_key[0..32] == m_view_secret_key`.
+
+- **`genesis_builder` print_usage updated to Bech32m.**
+  Usage example now shows `<bech32m>` addresses instead of `<base58>`.
+
 ### 🐛 Fixed
 
 - **Fixed `core_tests` FCMP++ proof verification failures.**

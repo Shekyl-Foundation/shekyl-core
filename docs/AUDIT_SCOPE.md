@@ -55,9 +55,79 @@ extension preserves the zero-knowledge proof system's security properties.
 - KEM implementation (standard FIPS 203 ML-KEM-768)
 - ML-DSA signing (standard FIPS 204 ML-DSA-65)
 - Classical cryptography (Ed25519, Bulletproofs+)
-- Wallet implementation (key derivation, address encoding)
 - Networking, consensus, database, or RPC code
 - Economic model (staking, fee burn, emission)
+
+---
+
+## Targeted Review: Edwards→Montgomery DH Composition
+
+> **Added:** 2026-04-13
+>
+> **Scope:** Separate from the 4-scalar leaf audit above. Can be
+> commissioned as a smaller targeted review or folded into a broader
+> wallet-crypto audit.
+
+### Summary
+
+The X25519 component of the hybrid KEM no longer uses `x25519-dalek`'s
+clamped DH. Instead, the Ed25519 view secret key is used directly as an
+unclamped Montgomery scalar via `curve25519-dalek`, and the X25519 public
+key is derived from the Ed25519 view public key via the standard
+Edwards→Montgomery birational map `u = (1 + y) / (1 - y) mod p`.
+
+This introduces a cryptographic composition (view-key-as-Montgomery-scalar,
+unclamped DH, explicit low-order point rejection) that warrants reviewer
+attention.
+
+### In-Scope
+
+1. **`montgomery.rs` conversion functions**
+   - `ed25519_pk_to_x25519_pk`: Edwards→Montgomery public key conversion
+     with non-canonical y rejection, identity rejection, and zero-u rejection
+   - `ed25519_sk_as_montgomery_scalar`: unclamped scalar conversion
+   - `is_low_order_montgomery`: cofactor-8 low-order point check
+   - File: `rust/shekyl-crypto-pq/src/montgomery.rs`
+
+2. **Unclamped DH sites in `output.rs`**
+   - `construct_output`: sender-side DH with recipient X25519 pub
+   - `scan_output` / `scan_output_recover`: recipient-side DH with
+     ephemeral X25519 pub from `kem_ct_x25519`
+   - `rederive_combined_ss`: proof-time DH re-derivation
+   - Low-order point rejection on both sides (recipient: mandatory;
+     sender: defense-in-depth)
+   - File: `rust/shekyl-crypto-pq/src/output.rs`
+
+3. **Unclamped DH in `kem.rs`**
+   - `encapsulate` / `decapsulate`: same unclamped pattern
+   - `keypair_generate`: test-only unclamped keygen
+   - File: `rust/shekyl-crypto-pq/src/kem.rs`
+
+4. **FFI export `shekyl_view_pub_to_x25519_pub`**
+   - File: `rust/shekyl-ffi/src/lib.rs`
+
+5. **C++ callers of the derived X25519 key**
+   - `get_account_address_from_str`: derives X25519 from view key, assembles
+     1216-byte `m_pqc_public_key`
+   - `generate_pqc_key_material`: derives X25519 from view key for wallet
+     keygen
+   - `wallet2::load`: post-load consistency check
+     `m_pqc_secret_key[0..32] == m_view_secret_key`
+
+### Key Questions for the Reviewer
+
+1. Does the unclamped Montgomery DH with explicit low-order point rejection
+   provide equivalent security to X25519's clamped DH for this use case?
+
+2. Is the low-order point rejection check (`mul_by_cofactor().is_identity()`)
+   sufficient to prevent small-subgroup information leakage against the
+   view secret scalar?
+
+3. Does the Edwards→Montgomery conversion correctly handle all edge cases
+   (non-canonical y, identity, torsion points)?
+
+4. Is the composition "HKDF(unclamped_x25519_ss || ml_kem_ss)" sound when
+   the X25519 scalar is an unreduced Ed25519 scalar?
 
 ---
 

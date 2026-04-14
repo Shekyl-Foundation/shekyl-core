@@ -29,15 +29,15 @@
 //! ```
 
 use curve25519_dalek::{
-    constants::ED25519_BASEPOINT_POINT as G,
+    constants::{ED25519_BASEPOINT_POINT as G, X25519_BASEPOINT},
     edwards::{CompressedEdwardsY, EdwardsPoint},
+    montgomery::MontgomeryPoint,
     scalar::Scalar,
 };
 use fips203::{
     ml_kem_768,
     traits::{Decaps, Encaps, SerDes},
 };
-use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use shekyl_generators::{H, T};
@@ -188,10 +188,13 @@ pub fn construct_output(
     let x25519_eph_secret_bytes: [u8; 32] = per_output_seed[..32]
         .try_into()
         .expect("per_output_seed is 64 bytes");
-    let x_eph = StaticSecret::from(x25519_eph_secret_bytes);
-    let x_eph_pub = X25519PublicKey::from(&x_eph);
-    let x_recipient = X25519PublicKey::from(*x25519_pk);
-    let x25519_raw_ss = x_eph.diffie_hellman(&x_recipient);
+    let eph_scalar = Scalar::from_bytes_mod_order(x25519_eph_secret_bytes);
+    let eph_mont_pub = &eph_scalar * &X25519_BASEPOINT;
+    let recipient_mont = MontgomeryPoint(*x25519_pk);
+    if crate::montgomery::is_low_order_montgomery(&recipient_mont) {
+        return Err(CryptoError::LowOrderPoint);
+    }
+    let x25519_raw_ss = &eph_scalar * &recipient_mont;
 
     let ek_bytes: [u8; ML_KEM_768_EK_LEN] = ml_kem_ek
         .try_into()
@@ -208,12 +211,11 @@ pub fn construct_output(
     let ml_ct_bytes = ml_ct.into_bytes();
 
     let combined_ss: SharedSecret =
-        combine_shared_secrets(x25519_raw_ss.as_bytes(), &*ml_ss_bytes)?;
+        combine_shared_secrets(&x25519_raw_ss.0, &*ml_ss_bytes)?;
 
     // --- View tag (X25519-only, pre-filter) ---
 
-    let x25519_ss_arr: &[u8; 32] = x25519_raw_ss.as_bytes();
-    let view_tag_x25519 = derive_view_tag_x25519(x25519_ss_arr, output_index);
+    let view_tag_x25519 = derive_view_tag_x25519(&x25519_raw_ss.0, output_index);
 
     // --- Output secrets derivation ---
 
@@ -261,7 +263,7 @@ pub fn construct_output(
         enc_amount,
         amount_tag: secrets.amount_tag,
         view_tag_x25519,
-        kem_ciphertext_x25519: x_eph_pub.to_bytes(),
+        kem_ciphertext_x25519: eph_mont_pub.0,
         kem_ciphertext_ml_kem: ml_ct_bytes.to_vec(),
         pqc_public_key: pqc_pk,
         h_pqc,
@@ -294,12 +296,21 @@ pub fn scan_output(
 ) -> Result<ScannedOutput, CryptoError> {
     // --- X25519 view tag pre-filter ---
 
-    let x_secret = StaticSecret::from(*x25519_sk);
-    let x_eph_pub = X25519PublicKey::from(*kem_ct_x25519);
-    let x25519_raw_ss = x_secret.diffie_hellman(&x_eph_pub);
+    let view_scalar = Scalar::from_bytes_mod_order(*x25519_sk);
+    let eph_mont = MontgomeryPoint(*kem_ct_x25519);
 
-    let x25519_ss_arr: &[u8; 32] = x25519_raw_ss.as_bytes();
-    let expected_view_tag = derive_view_tag_x25519(x25519_ss_arr, output_index);
+    // kem_ct_x25519 arrives from tx_extra on a network transaction — attacker-controlled.
+    // Without clamping, view_scalar * low_order_point leaks view_scalar mod 8.
+    if crate::montgomery::is_low_order_montgomery(&eph_mont) {
+        return Err(CryptoError::LowOrderPoint);
+    }
+
+    // View secret is an Ed25519 scalar already reduced mod l; clamping would mutate it
+    // and desynchronize from sender-side derivation. Low-order points are rejected above.
+    // Constant-time: curve25519-dalek scalar * MontgomeryPoint is always constant-time.
+    let x25519_raw_ss = &view_scalar * &eph_mont;
+
+    let expected_view_tag = derive_view_tag_x25519(&x25519_raw_ss.0, output_index);
     if expected_view_tag != view_tag_on_chain {
         return Err(CryptoError::DecapsulationFailed(
             "X25519 view tag mismatch — output not for this key".into(),
@@ -335,7 +346,7 @@ pub fn scan_output(
     let ml_ss_bytes = Zeroizing::new(ml_ss.into_bytes());
 
     let combined_ss: SharedSecret =
-        combine_shared_secrets(x25519_raw_ss.as_bytes(), &*ml_ss_bytes)?;
+        combine_shared_secrets(&x25519_raw_ss.0, &*ml_ss_bytes)?;
 
     // --- Output secrets derivation ---
 
@@ -469,12 +480,21 @@ pub fn scan_output_recover(
     output_index: u64,
 ) -> Result<RecoveredOutput, CryptoError> {
     // --- X25519 view tag pre-filter ---
-    let x_secret = StaticSecret::from(*x25519_sk);
-    let x_eph_pub = X25519PublicKey::from(*kem_ct_x25519);
-    let x25519_raw_ss = x_secret.diffie_hellman(&x_eph_pub);
+    let view_scalar = Scalar::from_bytes_mod_order(*x25519_sk);
+    let eph_mont = MontgomeryPoint(*kem_ct_x25519);
 
-    let x25519_ss_arr: &[u8; 32] = x25519_raw_ss.as_bytes();
-    let expected_view_tag = derive_view_tag_x25519(x25519_ss_arr, output_index);
+    // kem_ct_x25519 arrives from tx_extra on a network transaction — attacker-controlled.
+    // Without clamping, view_scalar * low_order_point leaks view_scalar mod 8.
+    if crate::montgomery::is_low_order_montgomery(&eph_mont) {
+        return Err(CryptoError::LowOrderPoint);
+    }
+
+    // View secret is an Ed25519 scalar already reduced mod l; clamping would mutate it
+    // and desynchronize from sender-side derivation. Low-order points are rejected above.
+    // Constant-time: curve25519-dalek scalar * MontgomeryPoint is always constant-time.
+    let x25519_raw_ss = &view_scalar * &eph_mont;
+
+    let expected_view_tag = derive_view_tag_x25519(&x25519_raw_ss.0, output_index);
     if expected_view_tag != view_tag_on_chain {
         return Err(CryptoError::DecapsulationFailed(
             "X25519 view tag mismatch — output not for this key".into(),
@@ -509,7 +529,7 @@ pub fn scan_output_recover(
     let ml_ss_bytes = Zeroizing::new(ml_ss.into_bytes());
 
     let combined_ss: SharedSecret =
-        combine_shared_secrets(x25519_raw_ss.as_bytes(), &*ml_ss_bytes)?;
+        combine_shared_secrets(&x25519_raw_ss.0, &*ml_ss_bytes)?;
 
     // --- Output secrets derivation ---
     let secrets: OutputSecrets = derive_output_secrets(&combined_ss.0, output_index);
@@ -704,10 +724,13 @@ pub fn rederive_combined_ss(
     let x25519_eph_secret_bytes: [u8; 32] = per_output_seed[..32]
         .try_into()
         .expect("per_output_seed is 64 bytes");
-    let x_eph = StaticSecret::from(x25519_eph_secret_bytes);
-    let x_eph_pub = X25519PublicKey::from(&x_eph);
-    let x_recipient = X25519PublicKey::from(*x25519_pk);
-    let x25519_raw_ss = x_eph.diffie_hellman(&x_recipient);
+    let eph_scalar = Scalar::from_bytes_mod_order(x25519_eph_secret_bytes);
+    let eph_mont_pub = &eph_scalar * &X25519_BASEPOINT;
+    let recipient_mont = MontgomeryPoint(*x25519_pk);
+    if crate::montgomery::is_low_order_montgomery(&recipient_mont) {
+        return Err(CryptoError::LowOrderPoint);
+    }
+    let x25519_raw_ss = &eph_scalar * &recipient_mont;
 
     let ek_bytes: [u8; ML_KEM_768_EK_LEN] = ml_kem_ek
         .try_into()
@@ -724,9 +747,9 @@ pub fn rederive_combined_ss(
     let ml_ct_bytes = ml_ct.into_bytes();
 
     let combined_ss: SharedSecret =
-        combine_shared_secrets(x25519_raw_ss.as_bytes(), &*ml_ss_bytes)?;
+        combine_shared_secrets(&x25519_raw_ss.0, &*ml_ss_bytes)?;
 
-    Ok((combined_ss, x_eph_pub.to_bytes(), ml_ct_bytes.to_vec()))
+    Ok((combined_ss, eph_mont_pub.0, ml_ct_bytes.to_vec()))
 }
 
 /// Derive the proof secrets projection from `combined_ss`.
@@ -1360,9 +1383,9 @@ mod tests {
         .unwrap();
 
         // Recover the combined_ss by re-decapsulating (in real wallet this is cached)
-        let x_secret = StaticSecret::from(sk.x25519);
-        let x_eph_pub = X25519PublicKey::from(out.kem_ciphertext_x25519);
-        let x25519_raw_ss = x_secret.diffie_hellman(&x_eph_pub);
+        let view_scalar = Scalar::from_bytes_mod_order(sk.x25519);
+        let eph_mont = MontgomeryPoint(out.kem_ciphertext_x25519);
+        let x25519_raw_ss = &view_scalar * &eph_mont;
 
         let dk_bytes: [u8; ML_KEM_768_DK_LEN] = sk.ml_kem.as_slice().try_into().unwrap();
         let dk = ml_kem_768::DecapsKey::try_from_bytes(dk_bytes).unwrap();
@@ -1371,7 +1394,7 @@ mod tests {
         let ct = ml_kem_768::CipherText::try_from_bytes(ct_bytes).unwrap();
         let ml_ss = dk.try_decaps(&ct).unwrap();
         let combined_ss =
-            combine_shared_secrets(x25519_raw_ss.as_bytes(), &ml_ss.into_bytes()).unwrap();
+            combine_shared_secrets(&x25519_raw_ss.0, &ml_ss.into_bytes()).unwrap();
 
         let msg = b"test signing message";
         let auth = sign_pqc_auth_for_output(&combined_ss.0, 0, msg)
@@ -1445,9 +1468,9 @@ mod tests {
         );
 
         // Also verify via derive_pqc_leaf_hash (the standalone derivation path)
-        let x_secret = StaticSecret::from(sk.x25519);
-        let x_eph_pub = X25519PublicKey::from(out.kem_ciphertext_x25519);
-        let x25519_raw_ss = x_secret.diffie_hellman(&x_eph_pub);
+        let view_scalar = Scalar::from_bytes_mod_order(sk.x25519);
+        let eph_mont = MontgomeryPoint(out.kem_ciphertext_x25519);
+        let x25519_raw_ss = &view_scalar * &eph_mont;
         let dk_bytes: [u8; ML_KEM_768_DK_LEN] = sk.ml_kem.as_slice().try_into().unwrap();
         let dk = ml_kem_768::DecapsKey::try_from_bytes(dk_bytes).unwrap();
         let ct_bytes: [u8; ML_KEM_768_CT_LEN] =
@@ -1455,7 +1478,7 @@ mod tests {
         let ct = ml_kem_768::CipherText::try_from_bytes(ct_bytes).unwrap();
         let ml_ss = dk.try_decaps(&ct).unwrap();
         let combined_ss =
-            combine_shared_secrets(x25519_raw_ss.as_bytes(), &ml_ss.into_bytes()).unwrap();
+            combine_shared_secrets(&x25519_raw_ss.0, &ml_ss.into_bytes()).unwrap();
         let h_pqc_derived = derive_pqc_leaf_hash(&combined_ss.0, 0).unwrap();
         assert_eq!(
             out.h_pqc, h_pqc_derived,
@@ -2004,5 +2027,221 @@ mod tests {
 
         let result = rederive_combined_ss(&tx_key, &x25519_pk, &bad_ek, 0);
         assert!(result.is_err(), "wrong ML-KEM EK length must be rejected");
+    }
+
+    // ======================================================================
+    // Phase 10: View-key-derived X25519 round-trip and low-order rejection
+    // ======================================================================
+
+    #[test]
+    fn construct_scan_round_trip_with_view_key_derived_x25519() {
+        use crate::montgomery::{ed25519_pk_to_x25519_pk, ed25519_sk_as_montgomery_scalar};
+
+        let kem = HybridX25519MlKem;
+
+        // Generate view keypair (Ed25519)
+        let view_scalar = Scalar::random(&mut rand::rngs::OsRng);
+        let view_pub = (&view_scalar * curve25519_dalek::constants::ED25519_BASEPOINT_TABLE)
+            .compress();
+
+        // Derive X25519 from the view key
+        let x25519_pub = ed25519_pk_to_x25519_pk(&view_pub.0).unwrap();
+        let x25519_sec = ed25519_sk_as_montgomery_scalar(&view_scalar.to_bytes());
+
+        // Generate ML-KEM keypair
+        let (full_pk, full_sk) = kem.keypair_generate().unwrap();
+
+        // Use the view-key-derived X25519 instead of the random one from keypair_generate
+        let tx_key = random_tx_key();
+        let spend_scalar = Scalar::random(&mut rand::rngs::OsRng);
+        let spend_key = (G * spend_scalar).compress().to_bytes();
+        let amount = 42_000_000u64;
+        let idx = 0u64;
+
+        // Sender constructs with view-key-derived X25519
+        let out = construct_output(
+            &tx_key, &x25519_pub, &full_pk.ml_kem, &spend_key, amount, idx,
+        )
+        .unwrap();
+
+        // Recipient scans using the view-key-derived secret
+        let recovered = scan_output_recover(
+            &x25519_sec.to_bytes(),
+            &full_sk.ml_kem,
+            &out.kem_ciphertext_x25519,
+            &out.kem_ciphertext_ml_kem,
+            &out.output_key,
+            &out.commitment,
+            &out.enc_amount,
+            out.amount_tag,
+            out.view_tag_x25519,
+            idx,
+        )
+        .unwrap();
+
+        assert_eq!(recovered.amount, amount, "amount must match");
+        assert_eq!(
+            recovered.pqc_public_key, out.pqc_public_key,
+            "PQC public key must match"
+        );
+    }
+
+    #[test]
+    fn construct_scan_round_trip_multiple_outputs_with_view_key_x25519() {
+        use crate::montgomery::{ed25519_pk_to_x25519_pk, ed25519_sk_as_montgomery_scalar};
+
+        let kem = HybridX25519MlKem;
+
+        let view_scalar = Scalar::random(&mut rand::rngs::OsRng);
+        let view_pub = (&view_scalar * curve25519_dalek::constants::ED25519_BASEPOINT_TABLE)
+            .compress();
+        let x25519_pub = ed25519_pk_to_x25519_pk(&view_pub.0).unwrap();
+        let x25519_sec = ed25519_sk_as_montgomery_scalar(&view_scalar.to_bytes());
+
+        let (full_pk, full_sk) = kem.keypair_generate().unwrap();
+        let tx_key = random_tx_key();
+        let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
+            .compress()
+            .to_bytes();
+
+        for idx in 0u64..5 {
+            let amount = (idx + 1) * 1_000_000;
+            let out = construct_output(
+                &tx_key, &x25519_pub, &full_pk.ml_kem, &spend_key, amount, idx,
+            )
+            .unwrap();
+
+            let recovered = scan_output_recover(
+                &x25519_sec.to_bytes(),
+                &full_sk.ml_kem,
+                &out.kem_ciphertext_x25519,
+                &out.kem_ciphertext_ml_kem,
+                &out.output_key,
+                &out.commitment,
+                &out.enc_amount,
+                out.amount_tag,
+                out.view_tag_x25519,
+                idx,
+            )
+            .unwrap();
+
+            assert_eq!(recovered.amount, amount, "amount mismatch at output {idx}");
+        }
+    }
+
+    #[test]
+    fn scan_output_recover_rejects_low_order_x25519_ephemeral() {
+        use crate::montgomery::ed25519_sk_as_montgomery_scalar;
+
+        let kem = HybridX25519MlKem;
+        let (_, full_sk) = kem.keypair_generate().unwrap();
+
+        let view_scalar = Scalar::random(&mut rand::rngs::OsRng);
+        let x25519_sec = ed25519_sk_as_montgomery_scalar(&view_scalar.to_bytes());
+
+        // All known low-order u-coordinates on Curve25519
+        let low_order_u_coords: Vec<[u8; 32]> = {
+            let mut pts = Vec::new();
+
+            // u = 0 (identity, order 1)
+            pts.push([0u8; 32]);
+
+            // u = 1 (order 2)
+            let mut u1 = [0u8; 32];
+            u1[0] = 1;
+            pts.push(u1);
+
+            // u = p-1 = 2^255 - 20 (order 4)
+            let mut pm1 = [0u8; 32];
+            pm1[0] = 0xEC;
+            for byte in pm1.iter_mut().skip(1).take(30) {
+                *byte = 0xFF;
+            }
+            pm1[31] = 0x7F;
+            pts.push(pm1);
+
+            // Additional low-order points from the 8-torsion subgroup.
+            // These are the u-coordinates of the remaining 9 small-subgroup points
+            // (total 12 points on the twist and curve combined).
+            // u = 325606250916557431795983626356110631294008115727848805560023387167927233504
+            // (from https://cr.yp.to/ecdh.html)
+            let u_order8_a: [u8; 32] = [
+                0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3,
+                0xfa, 0xf1, 0x9f, 0xc4, 0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32,
+                0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49, 0xb8, 0x00,
+            ];
+            pts.push(u_order8_a);
+
+            // u = 39382357235489614581723060781553021112529911719440698176882885853963445705823
+            let u_order8_b: [u8; 32] = [
+                0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1,
+                0x55, 0x9c, 0x83, 0xef, 0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c,
+                0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f, 0x11, 0x57,
+            ];
+            pts.push(u_order8_b);
+
+            pts
+        };
+
+        let dummy_ml_kem_ct = vec![0u8; 1088]; // will never be reached
+
+        for (i, low_order_u) in low_order_u_coords.iter().enumerate() {
+            let result = scan_output_recover(
+                &x25519_sec.to_bytes(),
+                &full_sk.ml_kem,
+                low_order_u,
+                &dummy_ml_kem_ct,
+                &[0u8; 32],   // dummy output key
+                &[0u8; 32],   // dummy commitment
+                &[0u8; 8],    // dummy enc_amount
+                0,             // dummy amount_tag
+                0,             // dummy view_tag
+                0,             // output_index
+            );
+            assert!(
+                result.is_err(),
+                "low-order point {i} (u={:02x}{:02x}...) must be rejected",
+                low_order_u[0],
+                low_order_u[1],
+            );
+            match result.unwrap_err() {
+                CryptoError::LowOrderPoint => {}
+                other => panic!(
+                    "low-order point {i} should give LowOrderPoint, got {:?}",
+                    other
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn scan_output_rejects_low_order_x25519_ephemeral() {
+        use crate::montgomery::ed25519_sk_as_montgomery_scalar;
+
+        let kem = HybridX25519MlKem;
+        let (_, full_sk) = kem.keypair_generate().unwrap();
+
+        let view_scalar = Scalar::random(&mut rand::rngs::OsRng);
+        let x25519_sec = ed25519_sk_as_montgomery_scalar(&view_scalar.to_bytes());
+        let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
+            .compress()
+            .to_bytes();
+
+        // u = 0 (identity)
+        let zero_eph = [0u8; 32];
+        let result = scan_output(
+            &x25519_sec.to_bytes(),
+            &full_sk.ml_kem,
+            &zero_eph,
+            &vec![0u8; 1088],
+            &[0u8; 32],
+            &[0u8; 32],
+            &[0u8; 8],
+            0,
+            0,
+            &spend_key,
+            0,
+        );
+        assert!(result.is_err(), "zero ephemeral must be rejected by scan_output");
     }
 }

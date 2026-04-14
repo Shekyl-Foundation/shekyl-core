@@ -13,6 +13,7 @@
 pub mod derivation;
 pub mod error;
 pub mod kem;
+pub mod montgomery;
 pub mod multisig;
 pub mod output;
 pub mod signature;

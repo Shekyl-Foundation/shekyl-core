@@ -139,13 +139,14 @@ namespace cryptonote
       "Miner address has no PQC public key; v3 requires per-output KEM encapsulation. "
       "Regenerate your miner wallet with `--generate-new-wallet` on a v3 build.");
     {
-      static constexpr size_t X25519_PK_BYTES = 32;
-      CHECK_AND_ASSERT_MES(miner_address.m_pqc_public_key.size() > X25519_PK_BYTES,
-        false, "miner PQC public key too short (need x25519[32] || ml_kem_ek[1184])");
+      CHECK_AND_ASSERT_MES(miner_address.m_pqc_public_key.size() == SHEKYL_PQC_PUBLIC_KEY_BYTES,
+        false, "miner PQC public key size " << miner_address.m_pqc_public_key.size()
+        << " != expected " << SHEKYL_PQC_PUBLIC_KEY_BYTES
+        << " (x25519[32] || ml_kem_ek[1184])");
 
       const uint8_t* pk_x25519 = miner_address.m_pqc_public_key.data();
-      const uint8_t* pk_ml_kem = miner_address.m_pqc_public_key.data() + X25519_PK_BYTES;
-      const size_t pk_ml_kem_len = miner_address.m_pqc_public_key.size() - X25519_PK_BYTES;
+      const uint8_t* pk_ml_kem = miner_address.m_pqc_public_key.data() + SHEKYL_X25519_PK_BYTES;
+      const size_t pk_ml_kem_len = miner_address.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
 
       tx_extra_pqc_kem_ciphertext kem_field;
       kem_field.blob.reserve(out_amounts.size() * HYBRID_KEM_CT_BYTES);
@@ -444,7 +445,6 @@ namespace cryptonote
     if (hf_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC)
     {
       // v3 unified loop: shekyl_construct_output produces O, C, KEM CT, PQC data.
-      static constexpr size_t X25519_PK_BYTES = 32;
       tx_extra_pqc_kem_ciphertext kem_field;
       kem_field.blob.reserve(destinations.size() * HYBRID_KEM_CT_BYTES);
       tx_extra_pqc_leaf_hashes leaf_hash_field;
@@ -456,12 +456,13 @@ namespace cryptonote
       {
         CHECK_AND_ASSERT_MES(dst_entr.amount > 0 || tx.version > 1, false,
           "Destination with wrong amount: " << dst_entr.amount);
-        CHECK_AND_ASSERT_MES(dst_entr.addr.m_pqc_public_key.size() > X25519_PK_BYTES, false,
-          "Destination " << output_index << " lacks PQC KEM public key");
+        CHECK_AND_ASSERT_MES(dst_entr.addr.m_pqc_public_key.size() == SHEKYL_PQC_PUBLIC_KEY_BYTES, false,
+          "Destination " << output_index << " PQC key size "
+          << dst_entr.addr.m_pqc_public_key.size() << " != " << SHEKYL_PQC_PUBLIC_KEY_BYTES);
 
         const uint8_t* pk_x25519 = dst_entr.addr.m_pqc_public_key.data();
-        const uint8_t* pk_ml_kem = dst_entr.addr.m_pqc_public_key.data() + X25519_PK_BYTES;
-        const size_t pk_ml_kem_len = dst_entr.addr.m_pqc_public_key.size() - X25519_PK_BYTES;
+        const uint8_t* pk_ml_kem = dst_entr.addr.m_pqc_public_key.data() + SHEKYL_X25519_PK_BYTES;
+        const size_t pk_ml_kem_len = dst_entr.addr.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
 
         ShekylOutputData od = shekyl_construct_output(
           reinterpret_cast<const uint8_t*>(&tx_key),
@@ -693,7 +694,6 @@ namespace cryptonote
     if (!sort_tx_extra(tx.extra, tx.extra))
       return false;
 
-    static constexpr size_t X25519_PK_BYTES = 32;
     tx_extra_pqc_kem_ciphertext kem_field;
     kem_field.blob.reserve(destinations.size() * HYBRID_KEM_CT_BYTES);
     tx_extra_pqc_leaf_hashes leaf_hash_field;
@@ -707,13 +707,13 @@ namespace cryptonote
     for (size_t i = 0; i < destinations.size(); ++i)
     {
       const auto& dest = destinations[i];
-      CHECK_AND_ASSERT_MES(dest.addr.m_pqc_public_key.size() > X25519_PK_BYTES, false,
-        "Genesis destination " << i << " lacks PQC KEM public key. "
-        "All Shekyl addresses require PQC keys from genesis.");
+      CHECK_AND_ASSERT_MES(dest.addr.m_pqc_public_key.size() == SHEKYL_PQC_PUBLIC_KEY_BYTES, false,
+        "Genesis destination " << i << " PQC key size "
+        << dest.addr.m_pqc_public_key.size() << " != " << SHEKYL_PQC_PUBLIC_KEY_BYTES);
 
       const uint8_t* pk_x25519 = dest.addr.m_pqc_public_key.data();
-      const uint8_t* pk_ml_kem = dest.addr.m_pqc_public_key.data() + X25519_PK_BYTES;
-      const size_t pk_ml_kem_len = dest.addr.m_pqc_public_key.size() - X25519_PK_BYTES;
+      const uint8_t* pk_ml_kem = dest.addr.m_pqc_public_key.data() + SHEKYL_X25519_PK_BYTES;
+      const size_t pk_ml_kem_len = dest.addr.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
 
       ShekylOutputData od = shekyl_construct_output(
         reinterpret_cast<const uint8_t*>(&txkey.sec),

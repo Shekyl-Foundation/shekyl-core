@@ -653,6 +653,10 @@ namespace cryptonote
   {
     crypto::public_key m_spend_public_key;
     crypto::public_key m_view_public_key;
+    // Invariant: 1216 bytes = X25519_pub[0..32] || ML-KEM-768_ek[32..1216].
+    // X25519_pub is derived from m_view_public_key via Edwards→Montgomery map.
+    // Canonical assemblers: get_account_address_from_str, generate_pqc_key_material.
+    // See SHEKYL_PQC_PUBLIC_KEY_BYTES in shekyl_ffi.h.
     std::vector<uint8_t> m_pqc_public_key;
 
     BEGIN_SERIALIZE_OBJECT()
