@@ -165,14 +165,21 @@ pub unsafe extern "C" fn shekyl_buffer_free(ptr: *mut u8, len: usize) {
     }
 }
 
-fn slice_from_ptr<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
+/// # Safety
+///
+/// The caller must ensure that `ptr` points to a valid allocation of at
+/// least `len` bytes, and that the returned reference does not outlive the
+/// allocation. This is the standard FFI raw-pointer-to-slice contract —
+/// the function is `unsafe` because safe Rust cannot verify these
+/// preconditions.
+unsafe fn slice_from_ptr<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
     if len == 0 {
         return Some(&[]);
     }
     if ptr.is_null() {
         return None;
     }
-    Some(unsafe { std::slice::from_raw_parts(ptr, len) })
+    Some(std::slice::from_raw_parts(ptr, len))
 }
 
 // ─── XChaCha20 Stream Cipher ─────────────────────────────────────────────────
@@ -268,13 +275,13 @@ pub extern "C" fn shekyl_pqc_sign(
     message_ptr: *const u8,
     message_len: usize,
 ) -> ShekylPqcSignatureResult {
-    let Some(secret_key_bytes) = slice_from_ptr(secret_key_ptr, secret_key_len) else {
+    let Some(secret_key_bytes) = (unsafe { slice_from_ptr(secret_key_ptr, secret_key_len) }) else {
         return ShekylPqcSignatureResult {
             signature: ShekylBuffer::null(),
             success: false,
         };
     };
-    let Some(message) = slice_from_ptr(message_ptr, message_len) else {
+    let Some(message) = (unsafe { slice_from_ptr(message_ptr, message_len) }) else {
         return ShekylPqcSignatureResult {
             signature: ShekylBuffer::null(),
             success: false,
@@ -324,13 +331,13 @@ pub extern "C" fn shekyl_pqc_verify(
     message: *const u8,
     message_len: usize,
 ) -> bool {
-    let Some(pk_bytes) = slice_from_ptr(pubkey_blob, pubkey_len) else {
+    let Some(pk_bytes) = (unsafe { slice_from_ptr(pubkey_blob, pubkey_len) }) else {
         return false;
     };
-    let Some(msg) = slice_from_ptr(message, message_len) else {
+    let Some(msg) = (unsafe { slice_from_ptr(message, message_len) }) else {
         return false;
     };
-    let Some(sig_bytes) = slice_from_ptr(sig_blob, sig_len) else {
+    let Some(sig_bytes) = (unsafe { slice_from_ptr(sig_blob, sig_len) }) else {
         return false;
     };
 
@@ -370,13 +377,13 @@ pub extern "C" fn shekyl_pqc_verify_with_group_id(
     message_len: usize,
     expected_group_id_ptr: *const u8,
 ) -> bool {
-    let Some(pk_bytes) = slice_from_ptr(pubkey_blob, pubkey_len) else {
+    let Some(pk_bytes) = (unsafe { slice_from_ptr(pubkey_blob, pubkey_len) }) else {
         return false;
     };
-    let Some(msg) = slice_from_ptr(message, message_len) else {
+    let Some(msg) = (unsafe { slice_from_ptr(message, message_len) }) else {
         return false;
     };
-    let Some(sig_bytes) = slice_from_ptr(sig_blob, sig_len) else {
+    let Some(sig_bytes) = (unsafe { slice_from_ptr(sig_blob, sig_len) }) else {
         return false;
     };
 
@@ -396,7 +403,7 @@ pub extern "C" fn shekyl_pqc_verify_with_group_id(
             let group_id: Option<&[u8; 32]> = if expected_group_id_ptr.is_null() {
                 None
             } else {
-                slice_from_ptr(expected_group_id_ptr, 32)
+                unsafe { slice_from_ptr(expected_group_id_ptr, 32) }
                     .and_then(|s| <&[u8; 32]>::try_from(s).ok())
             };
             verify_multisig(scheme_id, pk_bytes, sig_bytes, msg, group_id).unwrap_or(false)
@@ -418,13 +425,13 @@ pub extern "C" fn shekyl_pqc_verify_debug(
     message: *const u8,
     message_len: usize,
 ) -> u8 {
-    let Some(pk_bytes) = slice_from_ptr(pubkey_blob, pubkey_len) else {
+    let Some(pk_bytes) = (unsafe { slice_from_ptr(pubkey_blob, pubkey_len) }) else {
         return 11; // DeserializationFailed
     };
-    let Some(msg) = slice_from_ptr(message, message_len) else {
+    let Some(msg) = (unsafe { slice_from_ptr(message, message_len) }) else {
         return 11;
     };
-    let Some(sig_bytes) = slice_from_ptr(sig_blob, sig_len) else {
+    let Some(sig_bytes) = (unsafe { slice_from_ptr(sig_blob, sig_len) }) else {
         return 11;
     };
 
@@ -469,7 +476,7 @@ pub unsafe extern "C" fn shekyl_pqc_multisig_group_id(
     if out_ptr.is_null() {
         return false;
     }
-    let Some(keys_bytes) = slice_from_ptr(keys_ptr, keys_len) else {
+    let Some(keys_bytes) = (unsafe { slice_from_ptr(keys_ptr, keys_len) }) else {
         return false;
     };
 
@@ -505,7 +512,7 @@ pub unsafe extern "C" fn shekyl_cn_fast_hash(
     if out_ptr.is_null() {
         return false;
     }
-    let Some(data) = slice_from_ptr(data_ptr, data_len) else {
+    let Some(data) = (unsafe { slice_from_ptr(data_ptr, data_len) }) else {
         return false;
     };
     let hash = shekyl_crypto_hash::cn_fast_hash(data);
@@ -1011,7 +1018,7 @@ pub unsafe extern "C" fn shekyl_fcmp_pqc_leaf_hash(
     pqc_pk_len: usize,
     out_ptr: *mut u8,
 ) -> bool {
-    let Some(pk_bytes) = slice_from_ptr(pqc_pk_ptr, pqc_pk_len) else {
+    let Some(pk_bytes) = (unsafe { slice_from_ptr(pqc_pk_ptr, pqc_pk_len) }) else {
         return false;
     };
     if out_ptr.is_null() {
@@ -1218,7 +1225,7 @@ pub unsafe extern "C" fn shekyl_fcmp_prove(
         return fail;
     }
 
-    let Some(witness) = slice_from_ptr(witness_ptr, witness_len) else {
+    let Some(witness) = (unsafe { slice_from_ptr(witness_ptr, witness_len) }) else {
         return fail;
     };
     let tree_root: [u8; 32] = unsafe {
@@ -1406,16 +1413,16 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
     tree_depth: u8,
     signable_tx_hash_ptr: *const u8,
 ) -> bool {
-    let Some(proof_bytes) = slice_from_ptr(proof_ptr, proof_len) else {
+    let Some(proof_bytes) = (unsafe { slice_from_ptr(proof_ptr, proof_len) }) else {
         return false;
     };
-    let Some(ki_bytes) = slice_from_ptr(key_images_ptr, ki_count * 32) else {
+    let Some(ki_bytes) = (unsafe { slice_from_ptr(key_images_ptr, ki_count * 32) }) else {
         return false;
     };
-    let Some(po_bytes) = slice_from_ptr(pseudo_outs_ptr, po_count * 32) else {
+    let Some(po_bytes) = (unsafe { slice_from_ptr(pseudo_outs_ptr, po_count * 32) }) else {
         return false;
     };
-    let Some(ph_bytes) = slice_from_ptr(pqc_pk_hashes_ptr, pqc_hash_count * 32) else {
+    let Some(ph_bytes) = (unsafe { slice_from_ptr(pqc_pk_hashes_ptr, pqc_hash_count * 32) }) else {
         return false;
     };
     if tree_root_ptr.is_null()
@@ -1487,7 +1494,7 @@ pub extern "C" fn shekyl_fcmp_outputs_to_leaves(
     count: usize,
 ) -> ShekylBuffer {
     let total = count * 128;
-    let Some(bytes) = slice_from_ptr(outputs_ptr, total) else {
+    let Some(bytes) = (unsafe { slice_from_ptr(outputs_ptr, total) }) else {
         return ShekylBuffer::null();
     };
 
@@ -1775,7 +1782,7 @@ pub unsafe extern "C" fn shekyl_frost_coordinator_aggregate_and_prove(
     };
 
     let group_key_bytes = read32(group_key_ptr);
-    let Some(witness) = slice_from_ptr(witness_ptr, witness_len) else {
+    let Some(witness) = (unsafe { slice_from_ptr(witness_ptr, witness_len) }) else {
         return fail;
     };
 
@@ -2165,7 +2172,7 @@ pub unsafe extern "C" fn shekyl_kem_encapsulate(
         std::ptr::copy_nonoverlapping(pk_x25519_ptr, buf.as_mut_ptr(), 32);
         buf
     };
-    let Some(ml_kem) = slice_from_ptr(pk_ml_kem_ptr, pk_ml_kem_len) else {
+    let Some(ml_kem) = (unsafe { slice_from_ptr(pk_ml_kem_ptr, pk_ml_kem_len) }) else {
         return false;
     };
 
@@ -2221,7 +2228,7 @@ pub unsafe extern "C" fn shekyl_kem_decapsulate(
         std::ptr::copy_nonoverlapping(sk_x25519_ptr, buf.as_mut_ptr(), 32);
         buf
     };
-    let Some(sk_ml_kem) = slice_from_ptr(sk_ml_kem_ptr, sk_ml_kem_len) else {
+    let Some(sk_ml_kem) = (unsafe { slice_from_ptr(sk_ml_kem_ptr, sk_ml_kem_len) }) else {
         return false;
     };
     let ct_x25519: [u8; 32] = unsafe {
@@ -2229,7 +2236,7 @@ pub unsafe extern "C" fn shekyl_kem_decapsulate(
         std::ptr::copy_nonoverlapping(ct_x25519_ptr, buf.as_mut_ptr(), 32);
         buf
     };
-    let Some(ct_ml_kem) = slice_from_ptr(ct_ml_kem_ptr, ct_ml_kem_len) else {
+    let Some(ct_ml_kem) = (unsafe { slice_from_ptr(ct_ml_kem_ptr, ct_ml_kem_len) }) else {
         return false;
     };
 
@@ -2296,7 +2303,7 @@ pub unsafe extern "C" fn shekyl_address_encode(
     let ml_kem_ek = if ml_kem_ek_len == 0 {
         Vec::new()
     } else {
-        let Some(slice) = slice_from_ptr(ml_kem_ek_ptr, ml_kem_ek_len) else {
+        let Some(slice) = (unsafe { slice_from_ptr(ml_kem_ek_ptr, ml_kem_ek_len) }) else {
             return ShekylBuffer::null();
         };
         slice.to_vec()
@@ -2366,13 +2373,13 @@ pub extern "C" fn shekyl_encode_blob(
     data_ptr: *const u8,
     data_len: usize,
 ) -> ShekylBuffer {
-    let Some(hrp_bytes) = slice_from_ptr(hrp_ptr, hrp_len) else {
+    let Some(hrp_bytes) = (unsafe { slice_from_ptr(hrp_ptr, hrp_len) }) else {
         return ShekylBuffer::null();
     };
     let Ok(hrp) = std::str::from_utf8(hrp_bytes) else {
         return ShekylBuffer::null();
     };
-    let Some(data) = slice_from_ptr(data_ptr, data_len) else {
+    let Some(data) = (unsafe { slice_from_ptr(data_ptr, data_len) }) else {
         return ShekylBuffer::null();
     };
 
@@ -3039,10 +3046,10 @@ pub unsafe extern "C" fn shekyl_sign_transaction(
         buf
     };
 
-    let Some(inputs_json) = slice_from_ptr(inputs_json_ptr, inputs_json_len) else {
+    let Some(inputs_json) = (unsafe { slice_from_ptr(inputs_json_ptr, inputs_json_len) }) else {
         return ShekylSignResult::err(-1, "invalid inputs_json pointer".into());
     };
-    let Some(outputs_json) = slice_from_ptr(outputs_json_ptr, outputs_json_len) else {
+    let Some(outputs_json) = (unsafe { slice_from_ptr(outputs_json_ptr, outputs_json_len) }) else {
         return ShekylSignResult::err(-1, "invalid outputs_json pointer".into());
     };
 
@@ -3191,10 +3198,10 @@ pub unsafe extern "C" fn shekyl_sign_fcmp_transaction(
         buf
     };
 
-    let Some(inputs_json) = slice_from_ptr(inputs_json_ptr, inputs_json_len) else {
+    let Some(inputs_json) = (unsafe { slice_from_ptr(inputs_json_ptr, inputs_json_len) }) else {
         return ShekylSignResult::err(-1, "invalid inputs_json pointer".into());
     };
-    let Some(outputs_json) = slice_from_ptr(outputs_json_ptr, outputs_json_len) else {
+    let Some(outputs_json) = (unsafe { slice_from_ptr(outputs_json_ptr, outputs_json_len) }) else {
         return ShekylSignResult::err(-1, "invalid outputs_json pointer".into());
     };
 
@@ -3361,7 +3368,7 @@ pub unsafe extern "C" fn shekyl_construct_output(
     let Some(sk) = arr32_from_ptr(spend_key) else {
         return fail;
     };
-    let Some(ek) = slice_from_ptr(ml_kem_ek, ml_kem_ek_len) else {
+    let Some(ek) = (unsafe { slice_from_ptr(ml_kem_ek, ml_kem_ek_len) }) else {
         return fail;
     };
 
@@ -3444,13 +3451,13 @@ pub unsafe extern "C" fn shekyl_scan_output(
     let Some(x_sk) = arr32_from_ptr(x25519_sk) else {
         return false;
     };
-    let Some(dk) = slice_from_ptr(ml_kem_dk, ml_kem_dk_len) else {
+    let Some(dk) = (unsafe { slice_from_ptr(ml_kem_dk, ml_kem_dk_len) }) else {
         return false;
     };
     let Some(ct_x) = arr32_from_ptr(kem_ct_x25519) else {
         return false;
     };
-    let Some(ct_ml) = slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) else {
+    let Some(ct_ml) = (unsafe { slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) }) else {
         return false;
     };
     let Some(o) = arr32_from_ptr(output_key) else {
@@ -3459,7 +3466,7 @@ pub unsafe extern "C" fn shekyl_scan_output(
     let Some(c) = arr32_from_ptr(commitment) else {
         return false;
     };
-    let ea = match slice_from_ptr(enc_amount, 8) {
+    let ea = match unsafe { slice_from_ptr(enc_amount, 8) } {
         Some(v) => {
             let mut arr = [0u8; 8];
             arr.copy_from_slice(v);
@@ -3547,13 +3554,13 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
     let Some(x_sk) = arr32_from_ptr(x25519_sk) else {
         return false;
     };
-    let Some(dk) = slice_from_ptr(ml_kem_dk, ml_kem_dk_len) else {
+    let Some(dk) = (unsafe { slice_from_ptr(ml_kem_dk, ml_kem_dk_len) }) else {
         return false;
     };
     let Some(ct_x) = arr32_from_ptr(kem_ct_x25519) else {
         return false;
     };
-    let Some(ct_ml) = slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) else {
+    let Some(ct_ml) = (unsafe { slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) }) else {
         return false;
     };
     let Some(o) = arr32_from_ptr(output_key) else {
@@ -3562,7 +3569,7 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
     let Some(c) = arr32_from_ptr(commitment) else {
         return false;
     };
-    let ea = match slice_from_ptr(enc_amount, 8) {
+    let ea = match unsafe { slice_from_ptr(enc_amount, 8) } {
         Some(v) => {
             let mut arr = [0u8; 8];
             arr.copy_from_slice(v);
@@ -3636,7 +3643,7 @@ pub unsafe extern "C" fn shekyl_sign_pqc_auth(
         success: false,
     };
 
-    let ss = match slice_from_ptr(combined_ss, 64) {
+    let ss = match unsafe { slice_from_ptr(combined_ss, 64) } {
         Some(v) => {
             let mut arr = [0u8; 64];
             arr.copy_from_slice(v);
@@ -3644,7 +3651,7 @@ pub unsafe extern "C" fn shekyl_sign_pqc_auth(
         }
         None => return fail,
     };
-    let Some(msg) = slice_from_ptr(message, message_len) else {
+    let Some(msg) = (unsafe { slice_from_ptr(message, message_len) }) else {
         return fail;
     };
 
@@ -3729,13 +3736,13 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
     let Some(x_sk) = arr32_from_ptr(x25519_sk) else {
         return false;
     };
-    let Some(dk) = slice_from_ptr(ml_kem_dk, ml_kem_dk_len) else {
+    let Some(dk) = (unsafe { slice_from_ptr(ml_kem_dk, ml_kem_dk_len) }) else {
         return false;
     };
     let Some(ct_x) = arr32_from_ptr(kem_ct_x25519) else {
         return false;
     };
-    let Some(ct_ml) = slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) else {
+    let Some(ct_ml) = (unsafe { slice_from_ptr(kem_ct_ml_kem, kem_ct_ml_kem_len) }) else {
         return false;
     };
     let Some(o) = arr32_from_ptr(output_key) else {
@@ -3744,7 +3751,7 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
     let Some(c) = arr32_from_ptr(commitment) else {
         return false;
     };
-    let ea = match slice_from_ptr(enc_amount, 8) {
+    let ea = match unsafe { slice_from_ptr(enc_amount, 8) } {
         Some(v) => {
             let mut arr = [0u8; 8];
             arr.copy_from_slice(v);
@@ -3836,7 +3843,7 @@ pub unsafe extern "C" fn shekyl_compute_output_key_image(
     hp_of_O: *const u8,
     out_ki: *mut u8,
 ) -> bool {
-    let ss = match slice_from_ptr(combined_ss, 64) {
+    let ss = match unsafe { slice_from_ptr(combined_ss, 64) } {
         Some(v) => {
             let mut arr = [0u8; 64];
             arr.copy_from_slice(v);
@@ -3917,7 +3924,7 @@ pub unsafe extern "C" fn shekyl_derive_proof_secrets(
     out_z: *mut u8,
     out_k_amount: *mut u8,
 ) -> bool {
-    let ss = match slice_from_ptr(combined_ss, 64) {
+    let ss = match unsafe { slice_from_ptr(combined_ss, 64) } {
         Some(v) => {
             let mut arr = [0u8; 64];
             arr.copy_from_slice(v);
@@ -3957,7 +3964,7 @@ pub unsafe extern "C" fn shekyl_encrypt_wallet_cache(
     password_derived_key: *const u8,
     out_buf: *mut ShekylBuffer,
 ) -> bool {
-    let Some(pt) = slice_from_ptr(plaintext, plaintext_len) else {
+    let Some(pt) = (unsafe { slice_from_ptr(plaintext, plaintext_len) }) else {
         return false;
     };
     let Some(key) = arr32_from_ptr(password_derived_key) else {
@@ -4001,7 +4008,7 @@ pub unsafe extern "C" fn shekyl_decrypt_wallet_cache(
     if ciphertext.is_null() || password_derived_key.is_null() || out_buf.is_null() {
         return -4;
     }
-    let Some(ct) = slice_from_ptr(ciphertext, ciphertext_len) else {
+    let Some(ct) = (unsafe { slice_from_ptr(ciphertext, ciphertext_len) }) else {
         return -4;
     };
     let Some(key) = arr32_from_ptr(password_derived_key) else {
@@ -4069,13 +4076,13 @@ pub unsafe extern "C" fn shekyl_generate_tx_proof_outbound(
     let Some(tx_id) = arr32_from_ptr(txid) else {
         return false;
     };
-    let Some(addr) = slice_from_ptr(address, address_len) else {
+    let Some(addr) = (unsafe { slice_from_ptr(address, address_len) }) else {
         return false;
     };
     let msg = if message_len == 0 {
         &[] as &[u8]
     } else {
-        match slice_from_ptr(message, message_len) {
+        match unsafe { slice_from_ptr(message, message_len) } {
             Some(v) => v,
             None => return false,
         }
@@ -4083,7 +4090,7 @@ pub unsafe extern "C" fn shekyl_generate_tx_proof_outbound(
     let Some(x25519_pk) = arr32_from_ptr(recipient_x25519_pk) else {
         return false;
     };
-    let Some(ml_kem_ek) = slice_from_ptr(recipient_ml_kem_ek, ml_kem_ek_len) else {
+    let Some(ml_kem_ek) = (unsafe { slice_from_ptr(recipient_ml_kem_ek, ml_kem_ek_len) }) else {
         return false;
     };
     if proof_out.is_null() || output_count == 0 || output_indices.is_null() {
@@ -4141,19 +4148,19 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_outbound(
     output_count: u32,
     amounts_out: *mut u64,
 ) -> bool {
-    let Some(proof) = slice_from_ptr(proof_bytes, proof_len) else {
+    let Some(proof) = (unsafe { slice_from_ptr(proof_bytes, proof_len) }) else {
         return false;
     };
     let Some(tx_id) = arr32_from_ptr(txid) else {
         return false;
     };
-    let Some(addr) = slice_from_ptr(address, address_len) else {
+    let Some(addr) = (unsafe { slice_from_ptr(address, address_len) }) else {
         return false;
     };
     let msg = if message_len == 0 {
         &[] as &[u8]
     } else {
-        match slice_from_ptr(message, message_len) {
+        match unsafe { slice_from_ptr(message, message_len) } {
             Some(v) => v,
             None => return false,
         }
@@ -4164,7 +4171,7 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_outbound(
     let Some(x25519_pk) = arr32_from_ptr(recipient_x25519_pk) else {
         return false;
     };
-    let Some(ml_ek) = slice_from_ptr(recipient_ml_kem_ek, ml_kem_ek_len) else {
+    let Some(ml_ek) = (unsafe { slice_from_ptr(recipient_ml_kem_ek, ml_kem_ek_len) }) else {
         return false;
     };
     let n = output_count as usize;
@@ -4172,19 +4179,19 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_outbound(
         return false;
     }
 
-    let Some(okeys) = slice_from_ptr(output_keys, n * 32) else {
+    let Some(okeys) = (unsafe { slice_from_ptr(output_keys, n * 32) }) else {
         return false;
     };
-    let Some(comms) = slice_from_ptr(commitments, n * 32) else {
+    let Some(comms) = (unsafe { slice_from_ptr(commitments, n * 32) }) else {
         return false;
     };
-    let Some(eamts) = slice_from_ptr(enc_amounts, n * 8) else {
+    let Some(eamts) = (unsafe { slice_from_ptr(enc_amounts, n * 8) }) else {
         return false;
     };
-    let Some(eph_pks) = slice_from_ptr(x25519_eph_pks, n * 32) else {
+    let Some(eph_pks) = (unsafe { slice_from_ptr(x25519_eph_pks, n * 32) }) else {
         return false;
     };
-    let Some(ml_cts) = slice_from_ptr(ml_kem_cts, ml_kem_cts_len) else {
+    let Some(ml_cts) = (unsafe { slice_from_ptr(ml_kem_cts, ml_kem_cts_len) }) else {
         return false;
     };
 
@@ -4257,13 +4264,13 @@ pub unsafe extern "C" fn shekyl_generate_tx_proof_inbound(
     let Some(tx_id) = arr32_from_ptr(txid) else {
         return false;
     };
-    let Some(addr) = slice_from_ptr(address, address_len) else {
+    let Some(addr) = (unsafe { slice_from_ptr(address, address_len) }) else {
         return false;
     };
     let msg = if message_len == 0 {
         &[] as &[u8]
     } else {
-        match slice_from_ptr(message, message_len) {
+        match unsafe { slice_from_ptr(message, message_len) } {
             Some(v) => v,
             None => return false,
         }
@@ -4273,7 +4280,7 @@ pub unsafe extern "C" fn shekyl_generate_tx_proof_inbound(
         return false;
     }
 
-    let Some(ps_bytes) = slice_from_ptr(proof_secrets_ptr, n * 128) else {
+    let Some(ps_bytes) = (unsafe { slice_from_ptr(proof_secrets_ptr, n * 128) }) else {
         return false;
     };
     let secrets: Vec<shekyl_crypto_pq::output::ProofSecrets> = (0..n)
@@ -4332,19 +4339,19 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_inbound(
     output_count: u32,
     amounts_out: *mut u64,
 ) -> bool {
-    let Some(proof) = slice_from_ptr(proof_bytes, proof_len) else {
+    let Some(proof) = (unsafe { slice_from_ptr(proof_bytes, proof_len) }) else {
         return false;
     };
     let Some(tx_id) = arr32_from_ptr(txid) else {
         return false;
     };
-    let Some(addr) = slice_from_ptr(address, address_len) else {
+    let Some(addr) = (unsafe { slice_from_ptr(address, address_len) }) else {
         return false;
     };
     let msg = if message_len == 0 {
         &[] as &[u8]
     } else {
-        match slice_from_ptr(message, message_len) {
+        match unsafe { slice_from_ptr(message, message_len) } {
             Some(v) => v,
             None => return false,
         }
@@ -4360,19 +4367,19 @@ pub unsafe extern "C" fn shekyl_verify_tx_proof_inbound(
         return false;
     }
 
-    let Some(okeys) = slice_from_ptr(output_keys, n * 32) else {
+    let Some(okeys) = (unsafe { slice_from_ptr(output_keys, n * 32) }) else {
         return false;
     };
-    let Some(comms) = slice_from_ptr(commitments, n * 32) else {
+    let Some(comms) = (unsafe { slice_from_ptr(commitments, n * 32) }) else {
         return false;
     };
-    let Some(eamts) = slice_from_ptr(enc_amounts, n * 8) else {
+    let Some(eamts) = (unsafe { slice_from_ptr(enc_amounts, n * 8) }) else {
         return false;
     };
-    let Some(eph_pks) = slice_from_ptr(x25519_eph_pks, n * 32) else {
+    let Some(eph_pks) = (unsafe { slice_from_ptr(x25519_eph_pks, n * 32) }) else {
         return false;
     };
-    let Some(ml_cts) = slice_from_ptr(ml_kem_cts, ml_kem_cts_len) else {
+    let Some(ml_cts) = (unsafe { slice_from_ptr(ml_kem_cts, ml_kem_cts_len) }) else {
         return false;
     };
 
@@ -4445,13 +4452,13 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
     let Some(bsk) = arr32_from_ptr(spend_secret_key) else {
         return false;
     };
-    let Some(addr) = slice_from_ptr(address, address_len) else {
+    let Some(addr) = (unsafe { slice_from_ptr(address, address_len) }) else {
         return false;
     };
     let msg = if message_len == 0 {
         &[] as &[u8]
     } else {
-        match slice_from_ptr(message, message_len) {
+        match unsafe { slice_from_ptr(message, message_len) } {
             Some(v) => v,
             None => return false,
         }
@@ -4461,16 +4468,16 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
         return false;
     }
 
-    let Some(ps_bytes) = slice_from_ptr(proof_secrets_ptr, n * 128) else {
+    let Some(ps_bytes) = (unsafe { slice_from_ptr(proof_secrets_ptr, n * 128) }) else {
         return false;
     };
-    let Some(ki_bytes) = slice_from_ptr(key_images, n * 32) else {
+    let Some(ki_bytes) = (unsafe { slice_from_ptr(key_images, n * 32) }) else {
         return false;
     };
-    let Some(ss_bytes) = slice_from_ptr(spend_secrets, n * 32) else {
+    let Some(ss_bytes) = (unsafe { slice_from_ptr(spend_secrets, n * 32) }) else {
         return false;
     };
-    let Some(ok_bytes) = slice_from_ptr(output_keys, n * 32) else {
+    let Some(ok_bytes) = (unsafe { slice_from_ptr(output_keys, n * 32) }) else {
         return false;
     };
 
@@ -4541,16 +4548,16 @@ pub unsafe extern "C" fn shekyl_verify_reserve_proof(
     output_count: u32,
     total_amount_out: *mut u64,
 ) -> bool {
-    let Some(proof) = slice_from_ptr(proof_bytes, proof_len) else {
+    let Some(proof) = (unsafe { slice_from_ptr(proof_bytes, proof_len) }) else {
         return false;
     };
-    let Some(addr) = slice_from_ptr(address, address_len) else {
+    let Some(addr) = (unsafe { slice_from_ptr(address, address_len) }) else {
         return false;
     };
     let msg = if message_len == 0 {
         &[] as &[u8]
     } else {
-        match slice_from_ptr(message, message_len) {
+        match unsafe { slice_from_ptr(message, message_len) } {
             Some(v) => v,
             None => return false,
         }
@@ -4563,13 +4570,13 @@ pub unsafe extern "C" fn shekyl_verify_reserve_proof(
         return false;
     }
 
-    let Some(ok_bytes) = slice_from_ptr(output_keys, n * 32) else {
+    let Some(ok_bytes) = (unsafe { slice_from_ptr(output_keys, n * 32) }) else {
         return false;
     };
-    let Some(cm_bytes) = slice_from_ptr(commitments, n * 32) else {
+    let Some(cm_bytes) = (unsafe { slice_from_ptr(commitments, n * 32) }) else {
         return false;
     };
-    let Some(ea_bytes) = slice_from_ptr(enc_amounts, n * 8) else {
+    let Some(ea_bytes) = (unsafe { slice_from_ptr(enc_amounts, n * 8) }) else {
         return false;
     };
 

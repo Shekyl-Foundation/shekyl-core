@@ -219,7 +219,7 @@ pub fn construct_multisig_output_for_sender(
         tx_secret_key_hash,
         reference_block_hash,
         n_total,
-    );
+    )?;
 
     let output_pubkey = spend_auth_pubkeys[assigned_prover as usize];
 
@@ -317,7 +317,7 @@ pub fn validate_multisig_output_at_receive(
         tx_secret_key_hash,
         reference_block_hash,
         n_total,
-    );
+    )?;
 
     if assigned as usize >= published_spend_auth_pubkeys.len() {
         return Ok(false);
@@ -780,7 +780,7 @@ mod tests {
 
         let prover = rotating_prover_index(
             &[0xAA; 32], 7, &[0xBB; 32], &[0xCC; 32], 3,
-        );
+        ).unwrap();
         assert_eq!(prover, 0, "rotating_prover_index diverged");
     }
 

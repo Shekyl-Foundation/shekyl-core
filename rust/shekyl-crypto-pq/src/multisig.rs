@@ -7,6 +7,7 @@
 //! classical spend-auth pubkeys (`spend_auth_pubkeys`). See `PQC_MULTISIG.md`
 //! v1.1 for the full specification.
 
+use crate::CryptoError;
 use crate::error::PqcVerifyError;
 use crate::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
@@ -324,8 +325,10 @@ pub fn rotating_prover_index(
     tx_secret_key_hash: &[u8; 32],
     reference_block_hash: &[u8; 32],
     n_total: u8,
-) -> u8 {
-    assert!(n_total > 0, "n_total must be > 0");
+) -> Result<u8, CryptoError> {
+    if n_total == 0 {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
 
     let mut preimage = Vec::with_capacity(32 + 8 + 32 + 32);
     preimage.extend_from_slice(group_id);
@@ -334,7 +337,7 @@ pub fn rotating_prover_index(
     preimage.extend_from_slice(reference_block_hash);
 
     let hash = cn_fast_hash(&preimage);
-    hash[0] % n_total
+    Ok(hash[0] % n_total)
 }
 
 // ---------------------------------------------------------------------------
@@ -985,8 +988,8 @@ mod tests {
         let tx_sk_hash = [0xCD; 32];
         let ref_block = [0xEF; 32];
 
-        let idx1 = rotating_prover_index(&group_id, 0, &tx_sk_hash, &ref_block, 3);
-        let idx2 = rotating_prover_index(&group_id, 0, &tx_sk_hash, &ref_block, 3);
+        let idx1 = rotating_prover_index(&group_id, 0, &tx_sk_hash, &ref_block, 3).unwrap();
+        let idx2 = rotating_prover_index(&group_id, 0, &tx_sk_hash, &ref_block, 3).unwrap();
         assert_eq!(idx1, idx2);
     }
 
@@ -1000,7 +1003,7 @@ mod tests {
             for output_idx in 0..20u64 {
                 let prover = rotating_prover_index(
                     &group_id, output_idx, &tx_sk_hash, &ref_block, n,
-                );
+                ).unwrap();
                 assert!(prover < n, "prover index {prover} >= n_total {n}");
             }
         }
@@ -1016,7 +1019,7 @@ mod tests {
         for output_idx in 0..100u64 {
             indices.insert(rotating_prover_index(
                 &group_id, output_idx, &tx_sk_hash, &ref_block, 7,
-            ));
+            ).unwrap());
         }
         assert!(
             indices.len() > 1,
@@ -1029,8 +1032,8 @@ mod tests {
         let group_id = [0; 32];
         let tx_sk_hash = [0; 32];
         let ref_block = [0; 32];
-        assert_eq!(rotating_prover_index(&group_id, 0, &tx_sk_hash, &ref_block, 1), 0);
-        assert_eq!(rotating_prover_index(&group_id, 99, &tx_sk_hash, &ref_block, 1), 0);
+        assert_eq!(rotating_prover_index(&group_id, 0, &tx_sk_hash, &ref_block, 1).unwrap(), 0);
+        assert_eq!(rotating_prover_index(&group_id, 99, &tx_sk_hash, &ref_block, 1).unwrap(), 0);
     }
 
     // -- V3.1 group_id tests --

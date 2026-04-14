@@ -65,6 +65,9 @@ pub enum MultisigAddressError {
     #[error("payload length mismatch: header implies {expected} bytes, got {got}")]
     PayloadLengthMismatch { expected: usize, got: usize },
 
+    #[error("unknown network byte 0x{byte:02x}")]
+    UnknownNetwork { byte: u8 },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -189,8 +192,8 @@ impl MultisigAddressPayload {
         let m_required = data[5];
 
         let network = Network::from_u8(network_byte).ok_or(
-            MultisigAddressError::UnsupportedVersion {
-                version: network_byte,
+            MultisigAddressError::UnknownNetwork {
+                byte: network_byte,
             },
         )?;
 
