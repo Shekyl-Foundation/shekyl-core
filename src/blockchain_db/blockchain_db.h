@@ -2146,13 +2146,29 @@ public:
   virtual bool get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const = 0;
 
   /**
-   * @brief get the leaf data for a specific global output index.
+   * @brief get the leaf data for a specific tree position.
    *
-   * @param global_output_index  the output's global index
-   * @param leaf_out  128-byte output buffer
+   * WARNING: The parameter is a tree_position, NOT a global_output_index.
+   * Use get_curve_tree_leaf_by_output_index() if you have an output index.
+   *
+   * @param tree_position  the leaf's position in the curve tree (0-indexed)
+   * @param leaf_out       128-byte output buffer
    * @return true if the leaf exists
    */
-  virtual bool get_curve_tree_leaf(uint64_t global_output_index, uint8_t* leaf_out) const = 0;
+  virtual bool get_curve_tree_leaf_by_tree_position(uint64_t tree_position, uint8_t* leaf_out) const = 0;
+
+  /**
+   * @brief get the leaf data for a specific global output index.
+   *
+   * Performs a double lookup: output_index → tree_position via m_output_to_leaf,
+   * then tree_position → leaf via m_curve_tree_leaves.
+   * Callers who want a consistent pair must do both inside a single read txn.
+   *
+   * @param output_index  the global output index
+   * @param leaf_out      128-byte output buffer
+   * @return true if the output has a tree leaf (i.e., it has been drained)
+   */
+  virtual bool get_curve_tree_leaf_by_output_index(uint64_t output_index, uint8_t* leaf_out) const = 0;
 
   // ─── FCMP++ Per-Height Curve Tree Root ──────────────────────────────────
 

@@ -3714,10 +3714,10 @@ namespace cryptonote
       for (uint64_t i = chunk_start; i < chunk_end; ++i)
       {
         uint8_t leaf[128];
-        if (!db.get_curve_tree_leaf(i, leaf))
+        if (!db.get_curve_tree_leaf_by_tree_position(i, leaf))
         {
           error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-          error_resp.message = "Failed to read leaf at index " + std::to_string(i);
+          error_resp.message = "Failed to read leaf at tree position " + std::to_string(i);
           return false;
         }
         path_bytes.insert(path_bytes.end(), leaf, leaf + 128);
@@ -3805,7 +3805,7 @@ namespace cryptonote
                        li < sibling_chunk * prev_cw + cur_in_chunk; ++li)
                   {
                     uint8_t lf[128];
-                    if (db.get_curve_tree_leaf(li, lf))
+                    if (db.get_curve_tree_leaf_by_tree_position(li, lf))
                       extra_data.insert(extra_data.end(), lf, lf + 128);
                     else
                       extra_data.insert(extra_data.end(), 128, 0);

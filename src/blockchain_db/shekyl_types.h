@@ -6,8 +6,10 @@
 // unwritable:
 //
 //     uint64_t output_idx = ...;
-//     db.get_curve_tree_leaf(output_idx, buf);   // silently wrong: parameter
-//                                                 // is actually tree position
+//     db.get_curve_tree_leaf(output_idx, buf);   // was silently wrong: parameter
+//                                                 // was actually tree position
+//     db.get_curve_tree_leaf_by_tree_position(pos, buf);  // now explicit
+//     db.get_curve_tree_leaf_by_output_index(idx, buf);   // double-lookup via mapping
 //
 // Every id that used to be a bare uint64_t in curve-tree code is now a
 // distinct type with no implicit conversions. Passing the wrong kind is a

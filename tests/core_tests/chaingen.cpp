@@ -164,7 +164,8 @@ namespace
     virtual uint8_t get_curve_tree_depth() const override { return 0; }
     virtual uint64_t get_curve_tree_leaf_count() const override { return 0; }
     virtual bool get_curve_tree_layer_hash(uint8_t, uint64_t, uint8_t*) const override { return false; }
-    virtual bool get_curve_tree_leaf(uint64_t, uint8_t*) const override { return false; }
+    virtual bool get_curve_tree_leaf_by_tree_position(uint64_t, uint8_t*) const override { return false; }
+    virtual bool get_curve_tree_leaf_by_output_index(uint64_t, uint8_t*) const override { return false; }
 
     virtual void store_curve_tree_root_at_height(uint64_t, const std::array<uint8_t, 32>&) override {}
     virtual std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t) const override { return {}; }
@@ -1602,7 +1603,7 @@ static bool assemble_tree_path_for_output(
   for (uint64_t i = chunk_start; i < chunk_end; ++i)
   {
     uint8_t leaf[LEAF_BYTES];
-    if (!db.get_curve_tree_leaf(i, leaf))
+    if (!db.get_curve_tree_leaf_by_tree_position(i, leaf))
       return false;
     path_out.insert(path_out.end(), leaf, leaf + LEAF_BYTES);
   }
@@ -1664,7 +1665,7 @@ static bool assemble_tree_path_for_output(
                    li < sibling_chunk * prev_cw + cur_in_chunk; ++li)
               {
                 uint8_t leaf[LEAF_BYTES];
-                if (db.get_curve_tree_leaf(li, leaf))
+                if (db.get_curve_tree_leaf_by_tree_position(li, leaf))
                   extra_data.insert(extra_data.end(), leaf, leaf + LEAF_BYTES);
                 else
                   extra_data.insert(extra_data.end(), LEAF_BYTES, 0);
@@ -1968,7 +1969,7 @@ static bool apply_fcmp_pipeline(
             LOG_PRINT_L0("construct_fcmp_tx DEBUG: shekyl_construct_curve_tree_leaf failed for output " << oi);
           } else {
             uint8_t stored_leaf[128];
-            if (db.get_curve_tree_leaf(oi, stored_leaf)) {
+            if (db.get_curve_tree_leaf_by_output_index(oi, stored_leaf)) {
               if (memcmp(reconstructed_leaf, stored_leaf, 128) != 0) {
                 LOG_PRINT_L0("construct_fcmp_tx DEBUG: LEAF MISMATCH at output " << oi);
                 LOG_PRINT_L0("  reconstructed: " << epee::string_tools::buff_to_hex_nodelimer(
@@ -1979,7 +1980,7 @@ static bool apply_fcmp_pipeline(
                 LOG_PRINT_L0("construct_fcmp_tx DEBUG: leaf OK for output " << oi);
               }
             } else {
-              LOG_PRINT_L0("construct_fcmp_tx DEBUG: get_curve_tree_leaf returned false for output " << oi
+              LOG_PRINT_L0("construct_fcmp_tx DEBUG: get_curve_tree_leaf_by_output_index returned false for output " << oi
                 << " (might be pending/deferred)");
             }
           }

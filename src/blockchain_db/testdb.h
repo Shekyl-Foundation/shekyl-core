@@ -207,7 +207,8 @@ public:
   virtual uint8_t get_curve_tree_depth() const override { return 0; }
   virtual uint64_t get_curve_tree_leaf_count() const override { return 0; }
   virtual bool get_curve_tree_layer_hash(uint8_t, uint64_t, uint8_t*) const override { return false; }
-  virtual bool get_curve_tree_leaf(uint64_t, uint8_t*) const override { return false; }
+  virtual bool get_curve_tree_leaf_by_tree_position(uint64_t, uint8_t*) const override { return false; }
+  virtual bool get_curve_tree_leaf_by_output_index(uint64_t, uint8_t*) const override { return false; }
 
   virtual void store_curve_tree_root_at_height(uint64_t, const std::array<uint8_t, 32>&) override {}
   virtual std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t) const override { return {}; }

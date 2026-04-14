@@ -4125,22 +4125,14 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
     return false;
   }
 
-  // Verify the staked output's leaf is present in the curve tree.
-  // The leaf count is the number of outputs that have been inserted;
-  // if staked_output_index >= leaf_count, the output hasn't entered the
-  // tree yet (e.g., deferred insertion not yet executed).
-  const uint64_t leaf_count = m_db->get_curve_tree_leaf_count();
-  if (claim.staked_output_index >= leaf_count)
+  // Verify the staked output is present in the curve tree by looking up its
+  // output→leaf mapping. This is the definitive check — an output is "in the
+  // tree" iff it has a mapping entry (written during drain).
+  uint8_t leaf_data[128];
+  if (!m_db->get_curve_tree_leaf_by_output_index(claim.staked_output_index, leaf_data))
   {
     MERROR_VER("Staked output " << claim.staked_output_index
-      << " is not in the curve tree (leaf_count " << leaf_count << ")");
-    return false;
-  }
-
-  uint8_t leaf_data[128];
-  if (!m_db->get_curve_tree_leaf(claim.staked_output_index, leaf_data))
-  {
-    MERROR_VER("Failed to read curve tree leaf for staked output " << claim.staked_output_index);
+      << " is not in the curve tree (no output→leaf mapping)");
     return false;
   }
 

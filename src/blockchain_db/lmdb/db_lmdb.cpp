@@ -5947,14 +5947,14 @@ bool BlockchainLMDB::get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, ui
   return found;
 }
 
-bool BlockchainLMDB::get_curve_tree_leaf(uint64_t global_output_index, uint8_t* leaf_out) const
+bool BlockchainLMDB::get_curve_tree_leaf_by_tree_position(uint64_t tree_position, uint8_t* leaf_out) const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();
   if (!leaf_out) return false;
 
   TXN_PREFIX_RDONLY();
-  MDB_val k = {sizeof(global_output_index), (void *)&global_output_index};
+  MDB_val k = {sizeof(tree_position), (void *)&tree_position};
   MDB_val v;
   int result = mdb_get(m_txn, m_curve_tree_leaves, &k, &v);
   bool found = (result == 0 && v.mv_size == CT_LEAF_SIZE);
@@ -5962,6 +5962,18 @@ bool BlockchainLMDB::get_curve_tree_leaf(uint64_t global_output_index, uint8_t* 
     memcpy(leaf_out, v.mv_data, CT_LEAF_SIZE);
   TXN_POSTFIX_RDONLY();
   return found;
+}
+
+bool BlockchainLMDB::get_curve_tree_leaf_by_output_index(uint64_t output_index, uint8_t* leaf_out) const
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (!leaf_out) return false;
+
+  TreePosition pos{0};
+  if (!get_output_leaf_index(OutputIndex{output_index}, pos))
+    return false;
+  return get_curve_tree_leaf_by_tree_position(pos.value, leaf_out);
 }
 
 void BlockchainLMDB::store_curve_tree_root_at_height(uint64_t block_height, const std::array<uint8_t, 32>& root)
