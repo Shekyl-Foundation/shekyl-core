@@ -409,15 +409,23 @@ plan.
 
 ---
 
-*Last updated: 2026-04-13 — Added `rct_signatures` naming issue. C4334
-(23 sites) and C4333 (2 sites) fixes landed on `dev`. FCMP++ Phases 1-7
-complete (Phase 7 = CLSAG / dead code purge). Monero #10157 verification
-caching complete. BOOST_FOREACH CI guard added. `json_serialization` test
-reworked from stub to real FFI-based FCMP++ transaction construction.
-`rctSig` JSON serializer fixed to round-trip `message` and `referenceBlock`
-fields. `core_tests` FCMP++ proof verification failures fixed: added
-per-height `m_curve_tree_roots` LMDB table so that both prover and verifier
-read the correct historical tree root (replacing block-header placeholder).
-`compute_leaf_count_at_height` aligned with production `collect_outputs`.
-`vcpkg.json` manifest removed (broke MSVC CI). See `FCMP_BUILD_PLAN.md`
-for remaining Phases 8-9 (multisig integration, testing/audit).*
+*Last updated: 2026-04-12 — Consensus-critical curve-tree leaf ordering
+bug fixed (DB v6→v7): `MDB_DUPSORT` on leaf bytes replaced with composite
+keys, explicit output↔leaf mapping tables, and block-pending journal. API
+renamed (`get_curve_tree_leaf` → `get_curve_tree_leaf_by_tree_position` +
+`get_curve_tree_leaf_by_output_index`). Stake claim validation tightened
+with leaf recomputation. Typed wrappers in `shekyl_types.h`. 4 regression
+tests added. See `LMDB_SCHEMA.md` §v6→v7 and `FCMP_PLUS_PLUS.md`
+deferred insertion section. Previous: Added `rct_signatures` naming issue.
+C4334 (23 sites) and C4333 (2 sites) fixes landed on `dev`. FCMP++ Phases
+1-7 complete (Phase 7 = CLSAG / dead code purge). Monero #10157
+verification caching complete. BOOST_FOREACH CI guard added.
+`json_serialization` test reworked from stub to real FFI-based FCMP++
+transaction construction. `rctSig` JSON serializer fixed to round-trip
+`message` and `referenceBlock` fields. `core_tests` FCMP++ proof
+verification failures fixed: added per-height `m_curve_tree_roots` LMDB
+table so that both prover and verifier read the correct historical tree
+root (replacing block-header placeholder). `compute_leaf_count_at_height`
+aligned with production `collect_outputs`. `vcpkg.json` manifest removed
+(broke MSVC CI). See `FCMP_BUILD_PLAN.md` for remaining Phases 8-9
+(multisig integration, testing/audit).*

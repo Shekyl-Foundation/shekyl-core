@@ -4136,6 +4136,53 @@ bool Blockchain::check_stake_claim_input(const txin_stake_claim& claim, uint64_t
     return false;
   }
 
+  // Recompute the expected leaf from the staked output's public data and
+  // verify bytewise equality with the stored leaf.  This binds the claim to
+  // the actual output: without it, any staked_output_index that has a
+  // mapping entry would pass the gate, even if the stored leaf belongs to a
+  // different output (which can't happen if the schema is correct, but the
+  // whole point of defense-in-depth is not trusting the schema).
+  {
+    crypto::public_key output_key{};
+    if (std::holds_alternative<txout_to_staked_key>(staked_out.target))
+      output_key = std::get<txout_to_staked_key>(staked_out.target).key;
+    else if (std::holds_alternative<txout_to_tagged_key>(staked_out.target))
+      output_key = std::get<txout_to_tagged_key>(staked_out.target).key;
+    else if (std::holds_alternative<txout_to_key>(staked_out.target))
+      output_key = std::get<txout_to_key>(staked_out.target).key;
+    else
+    {
+      MERROR_VER("Staked output " << claim.staked_output_index << " has unrecognized target type");
+      return false;
+    }
+
+    if (oi.second >= staked_tx.rct_signatures.outPk.size())
+    {
+      MERROR_VER("Staked output " << claim.staked_output_index
+        << " has no commitment (outPk index " << oi.second << " out of range)");
+      return false;
+    }
+    const rct::key& commitment = staked_tx.rct_signatures.outPk[oi.second].mask;
+
+    uint8_t expected_leaf[128];
+    if (!shekyl_construct_curve_tree_leaf(
+          reinterpret_cast<const uint8_t*>(&output_key),
+          commitment.bytes,
+          leaf_data + 96,
+          expected_leaf))
+    {
+      MERROR_VER("Failed to reconstruct curve tree leaf for staked output " << claim.staked_output_index);
+      return false;
+    }
+
+    if (memcmp(leaf_data, expected_leaf, 128) != 0)
+    {
+      MERROR_VER("Curve tree leaf mismatch for staked output " << claim.staked_output_index
+        << " — stored leaf does not match recomputed leaf from output data");
+      return false;
+    }
+  }
+
   if (out_leaf_h_pqc)
     memcpy(out_leaf_h_pqc, leaf_data + 96, 32);
 

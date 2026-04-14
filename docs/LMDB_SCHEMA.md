@@ -1,8 +1,8 @@
 # LMDB Schema Reference
 
 **Last updated:** April 2026
-**DB version:** 6 (after migration `migrate_5_6`)
-**Source:** `src/blockchain_db/lmdb/db_lmdb.cpp`, `src/blockchain_db/lmdb/db_lmdb.h`, `src/blockchain_db/blockchain_db.h`
+**DB version:** 7 (schema v7: composite-key pending/drain tables, output↔leaf mapping)
+**Source:** `src/blockchain_db/lmdb/db_lmdb.cpp`, `src/blockchain_db/lmdb/db_lmdb.h`, `src/blockchain_db/blockchain_db.h`, `src/blockchain_db/shekyl_types.h`
 
 ## Conventions
 
@@ -12,7 +12,11 @@ All integer fields are stored in **native host byte order** (little-endian on x8
 
 ### Integer keys
 
-Sub-databases opened with `MDB_INTEGERKEY` use 8-byte `uint64_t` keys. LMDB's built-in integer comparator orders them numerically.
+Sub-databases opened with `MDB_INTEGERKEY` use 8-byte `uint64_t` keys in **native-endian** layout. LMDB's built-in integer comparator orders them numerically.
+
+### Big-endian composite keys (Shekyl curve-tree state)
+
+Shekyl-specific curve-tree tables (`pending_tree_leaves`, `pending_tree_drain`, `block_pending_additions`) use 16-byte composite keys encoded as `BE(field_1) || BE(field_2)` in big-endian byte order. LMDB's default byte-wise comparator then yields canonical `(field_1, field_2)` sort order without custom comparators. These tables do **NOT** use `MDB_INTEGERKEY` (which expects native-endian single integers) or `MDB_DUPSORT`. The typed key/value encoders in `src/blockchain_db/shekyl_types.h` encapsulate the byte layout.
 
 ### Zerokval pattern
 
@@ -410,10 +414,10 @@ Full-chain membership proof tree leaf nodes.
 |---|---|
 | LMDB name | `"curve_tree_leaves"` |
 | Flags | `MDB_INTEGERKEY` |
-| Key | `uint64_t` global output index (0-based leaf order, 8 bytes) |
+| Key | `uint64_t` tree position (0-based, dense, monotonic; assigned during drain, 8 bytes). **Not** the global output index — use `output_to_leaf` for the mapping. |
 | Value | 128 bytes — 4 × 32-byte curve scalars forming the leaf tuple |
 | Writers | `grow_curve_tree`, `trim_curve_tree` |
-| Readers | `get_curve_tree_leaf`, leaf iteration for proof generation |
+| Readers | `get_curve_tree_leaf_by_tree_position`, `get_curve_tree_leaf_by_output_index` (double lookup via `output_to_leaf`), leaf iteration for proof generation |
 | Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
 
 ### `curve_tree_layers`
@@ -478,42 +482,90 @@ Offset  Size  Field
 
 ### `pending_tree_leaves`
 
-Outputs that have been created but not yet matured into the curve tree.
+Outputs that have been created but not yet matured into the curve tree. Composite key enforces canonical `(maturity, output_index)` drain order.
 
 | Property | Value |
 |---|---|
 | LMDB name | `"pending_tree_leaves"` |
-| Flags | `MDB_INTEGERKEY \| MDB_DUPSORT \| MDB_DUPFIXED` |
-| Key | `uint64_t` maturity height (8 bytes) |
-| Value (dup) | 128 bytes — leaf tuple data (same format as `curve_tree_leaves`) |
-| Dup sort | LMDB default byte-order for dup data |
+| Flags | `MDB_CREATE` only — **no** `MDB_DUPSORT`, **no** `MDB_INTEGERKEY` |
+| Key | 16 bytes: `BE(maturity_height) \|\| BE(global_output_index)` — see `PendingLeafKey` in `shekyl_types.h` |
+| Value | 128 bytes — leaf tuple data (same format as `curve_tree_leaves`) |
 | Writers | `add_pending_tree_leaf` (block connect), removed by `drain_pending_tree_leaves` |
-| Readers | `drain_pending_tree_leaves` (at maturity height) |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
+| Readers | `drain_pending_tree_leaves` (cursor scan up to current height) |
+| Notes | LMDB's default byte-compare yields canonical `(maturity, output_index)` order. No `DUPSORT` anywhere in curve-tree state — this was changed in DB v7 to fix a consensus-critical bug where `DUPSORT` on leaf bytes caused non-deterministic drain order for outputs sharing the same maturity height. |
+| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC (schema v7) |
 
 ### `pending_tree_drain`
 
-Journal of leaves that were drained from `pending_tree_leaves` into the curve tree. Used for rollback: if a block is popped, these entries are restored to `pending_tree_leaves`.
+Journal of leaves that were drained from `pending_tree_leaves` into the curve tree. Used for rollback: if a block is popped, these entries are restored to `pending_tree_leaves`. Contains everything needed for exact reversal without consulting other tables.
 
 | Property | Value |
 |---|---|
 | LMDB name | `"pending_tree_drain"` |
-| Flags | `MDB_INTEGERKEY \| MDB_DUPSORT \| MDB_DUPFIXED` |
-| Key | `uint64_t` block height where drain occurred (8 bytes) |
-| Value (dup) | 136 bytes: |
+| Flags | `MDB_CREATE` only — **no** `MDB_DUPSORT`, **no** `MDB_INTEGERKEY` |
+| Key | 16 bytes: `BE(block_height) \|\| BE(global_output_index)` — see `DrainKey` in `shekyl_types.h` |
+| Value | 136 bytes — see `DrainValue` in `shekyl_types.h`: |
 
 ```
 Offset  Size  Field
-0        8    uint64_t maturity_height (original pending key)
+0        8    BE(maturity_height) — original pending key, needed for re-insertion
 8      128    leaf tuple data
 ```
 
 | Property | Value |
 |---|---|
-| Dup sort | LMDB default byte-order for dup data |
 | Writers | `drain_pending_tree_leaves` (records what was drained) |
 | Readers | `BlockchainDB::pop_block` (restores entries on rollback) |
-| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
+| Notes | `pop_block` range-scans by `DrainKey::prefix(block_height)` to find all entries for the popped block, then restores each to `pending_tree_leaves` and removes the output→leaf mapping. |
+| Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC (schema v7) |
+
+### `block_pending_additions`
+
+Journal recording which outputs were added to `pending_tree_leaves` by each block. Enables `pop_block` to remove the exact pending entries without reconstructing output IDs from the post-pop state.
+
+| Property | Value |
+|---|---|
+| LMDB name | `"block_pending_additions"` |
+| Flags | `MDB_CREATE` only — **no** `MDB_DUPSORT`, **no** `MDB_INTEGERKEY` |
+| Key | 16 bytes: `BE(block_height) \|\| BE(global_output_index)` — see `BlockPendingKey` in `shekyl_types.h` |
+| Value | 8 bytes: `BE(maturity_height)` — see `BlockPendingValue` in `shekyl_types.h` |
+
+| Property | Value |
+|---|---|
+| Writers | `add_block_pending_addition` (during `collect_outputs` in `add_block`) |
+| Readers | `get_block_pending_additions` (consumed by `pop_block`) |
+| Notes | One entry per output added to pending. `pop_block` range-scans by `BlockPendingKey::prefix(block_height)`, then deletes each listed entry from `pending_tree_leaves` by primary key `PendingLeafKey(maturity, output_index)`. |
+| Introduced | DB v7 |
+
+### `output_to_leaf`
+
+Bidirectional mapping: global output index → tree position. Written during drain when a tree position is assigned. Enables `get_curve_tree_leaf_by_output_index` (double lookup).
+
+| Property | Value |
+|---|---|
+| LMDB name | `"output_to_leaf"` |
+| Flags | `MDB_INTEGERKEY \| MDB_CREATE` |
+| Key | `uint64_t` global output index (native-endian, 8 bytes) |
+| Value | `uint64_t` tree position (native-endian, 8 bytes) |
+| Writers | `add_output_leaf_mapping` (during drain), `remove_output_leaf_mapping` (during `pop_block`) |
+| Readers | `get_output_leaf_index`, `get_curve_tree_leaf_by_output_index` |
+| Notes | Cannot be pruned beyond the reorg window. Checkpoint snapshots must include this table's state (or its content hash). |
+| Introduced | DB v7 |
+
+### `leaf_to_output`
+
+Bidirectional mapping: tree position → global output index. Inverse of `output_to_leaf`.
+
+| Property | Value |
+|---|---|
+| LMDB name | `"leaf_to_output"` |
+| Flags | `MDB_INTEGERKEY \| MDB_CREATE` |
+| Key | `uint64_t` tree position (native-endian, 8 bytes) |
+| Value | `uint64_t` global output index (native-endian, 8 bytes) |
+| Writers | `add_output_leaf_mapping` (during drain), `remove_output_leaf_mapping` (during `pop_block`) |
+| Readers | `get_leaf_output_index` |
+| Notes | Same lifecycle as `output_to_leaf`. Both tables are exact inverses — a debug invariant asserts `size(output_to_leaf) == size(leaf_to_output) == leaf_count` after every block. |
+| Introduced | DB v7 |
 
 ---
 
@@ -651,7 +703,7 @@ General key-value store for database-level metadata.
 
 | Key | Value type | Description |
 |---|---|---|
-| `"version"` (NUL-terminated) | `uint32_t` | Database schema version (currently 6) |
+| `"version"` (NUL-terminated) | `uint32_t` | Database schema version (currently 7) |
 | `"pruning_seed"` (NUL-terminated) | `uint32_t` | Blockchain pruning seed |
 | `"tx_prune_next_block"` (NUL-terminated) | `uint64_t` | Next block height for tx pruning |
 | `"last_pruned_tx_data_height"` (NUL-terminated) | `uint64_t` | Height of last pruned tx data |
@@ -686,17 +738,29 @@ General key-value store for database-level metadata.
 | 14 | `spent_keys` | zerokval | `crypto::key_image` | 32 | `INTEGERKEY\|DUPSORT\|DUPFIXED` |
 | 15 | `staker_accrual` | `uint64_t` height | `staker_accrual_record` | 40 | `INTEGERKEY` |
 | 16 | `staker_claims` | `uint64_t` output_idx | `uint64_t` height | 8 | `INTEGERKEY` |
-| 17 | `curve_tree_leaves` | `uint64_t` output_idx | leaf tuple | 128 | `INTEGERKEY` |
+| 17 | `curve_tree_leaves` | `uint64_t` tree_pos | leaf tuple | 128 | `INTEGERKEY` |
 | 18 | `curve_tree_layers` | `uint64_t` composite | chunk hash | 32 | `INTEGERKEY` |
 | 19 | `curve_tree_meta` | string | varies | varies | — |
 | 20 | `curve_tree_checkpoints` | `uint64_t` height | snapshot | 41 | `INTEGERKEY` |
-| 21 | `pending_tree_leaves` | `uint64_t` maturity | leaf tuple | 128 | `INTEGERKEY\|DUPSORT\|DUPFIXED` |
-| 22 | `pending_tree_drain` | `uint64_t` height | maturity+leaf | 136 | `INTEGERKEY\|DUPSORT\|DUPFIXED` |
-| 23 | `hf_versions` | `uint64_t` height | `uint8_t` version | 1 | `INTEGERKEY` |
-| 24 | `txpool_meta` | `crypto::hash` txid | `txpool_tx_meta_t` | 192 | — |
-| 25 | `txpool_blob` | `crypto::hash` txid | tx blob | var | — |
-| 26 | `alt_blocks` | `crypto::hash` blkid | meta + blob | var | — |
-| 27 | `properties` | string | varies | varies | — |
-| 28 | `txs` (legacy) | `uint64_t` tx_id | — | — | `INTEGERKEY` |
+| 21 | `pending_tree_leaves` | BE(maturity)\|\|BE(output) | leaf tuple | 128 | `CREATE` only |
+| 22 | `pending_tree_drain` | BE(block_h)\|\|BE(output) | maturity+leaf | 136 | `CREATE` only |
+| 23 | `block_pending_additions` | BE(block_h)\|\|BE(output) | BE(maturity) | 8 | `CREATE` only |
+| 24 | `output_to_leaf` | `uint64_t` output_idx | `uint64_t` tree_pos | 8 | `INTEGERKEY` |
+| 25 | `leaf_to_output` | `uint64_t` tree_pos | `uint64_t` output_idx | 8 | `INTEGERKEY` |
+| 26 | `hf_versions` | `uint64_t` height | `uint8_t` version | 1 | `INTEGERKEY` |
+| 27 | `txpool_meta` | `crypto::hash` txid | `txpool_tx_meta_t` | 192 | — |
+| 28 | `txpool_blob` | `crypto::hash` txid | tx blob | var | — |
+| 29 | `alt_blocks` | `crypto::hash` blkid | meta + blob | var | — |
+| 30 | `properties` | string | varies | varies | — |
+| 31 | `txs` (legacy) | `uint64_t` tx_id | — | — | `INTEGERKEY` |
 
-Total: **28 sub-databases** (27 active + 1 legacy migration stub).
+Total: **31 sub-databases** (30 active + 1 legacy migration stub).
+
+### Schema v6 → v7 migration (breaking)
+
+DB v7 is **not** backward compatible with v6. Nodes with v6 data must resync from genesis. The schema change:
+- `pending_tree_leaves`: changed from `MDB_INTEGERKEY | MDB_DUPSORT | MDB_DUPFIXED` (key=maturity, dup=leaf) to composite 16-byte key `BE(maturity) || BE(output_index)` with `MDB_CREATE` only.
+- `pending_tree_drain`: same restructuring (key was block_height with DUPSORT, now composite key).
+- Three new tables: `block_pending_additions`, `output_to_leaf`, `leaf_to_output`.
+- `maxdbs` increased from 32 to 36.
+- Typed key/value encoders added in `src/blockchain_db/shekyl_types.h`.

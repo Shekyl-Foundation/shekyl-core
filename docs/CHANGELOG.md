@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### 🐛 Fixed
+
+- **Consensus-critical: curve tree leaf ordering bug (DB v6 → v7).**
+  `pending_tree_leaves` used `MDB_DUPSORT` on 128-byte leaf data, causing
+  outputs with the same maturity height to drain into the curve tree in
+  byte-sorted order rather than `global_output_index` order. This broke the
+  implicit `global_output_index == tree_leaf_index` assumption that every
+  caller of `get_curve_tree_leaf()` relied on. Replaced with 16-byte
+  composite keys `BE(maturity) || BE(output_index)` enforcing canonical
+  drain order. Same restructuring applied to `pending_tree_drain`. Added
+  explicit bidirectional mapping tables (`output_to_leaf`, `leaf_to_output`)
+  and a `block_pending_additions` journal for robust `pop_block` reversal.
+  DB schema bumped to v7 (incompatible with v6 — requires resync).
+
+- **`get_curve_tree_leaf()` parameter was silently misnamed.**
+  The function accepted `global_output_index` in its signature but actually
+  looked up by tree position. Renamed to `get_curve_tree_leaf_by_tree_position()`
+  and added `get_curve_tree_leaf_by_output_index()` (double lookup via mapping
+  table). All callers updated — compile errors catch any missed sites.
+
+- **`check_stake_claim_input` now recomputes and verifies the stored leaf.**
+  Previously the stake claim gate only checked bounds
+  (`staked_output_index < leaf_count`). Now the stored leaf is retrieved via
+  the output→leaf mapping and bytewise-compared to a leaf recomputed from
+  the output's `(output_key, commitment, h_pqc)`. This binds the claim to
+  the actual output data in the tree.
+
+### ✨ Added
+
+- **`src/blockchain_db/shekyl_types.h`**: Strongly-typed identifiers
+  (`TreePosition`, `OutputIndex`, `MaturityHeight`, `BlockHeight`) and
+  LMDB key/value encoders (`PendingLeafKey`, `DrainKey`, `DrainValue`,
+  `BlockPendingKey`, `BlockPendingValue`) for curve-tree state. Designed
+  for 1:1 translation to Rust newtypes and heed `BytesEncode`/`BytesDecode`.
+
+- **4 new regression tests** in `deferred_insertion.cpp`:
+  same-maturity drain order by output_index, block_pending_additions
+  journal round-trip, output↔leaf mapping round-trip, pop_block
+  journal-driven reversal simulation.
+
 ### 📋 Protocol
 
 - **X25519 public key derived from Ed25519 view key.**

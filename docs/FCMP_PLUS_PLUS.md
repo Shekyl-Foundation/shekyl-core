@@ -46,13 +46,15 @@ scalar field is the other's base field), enabling efficient recursive hash
 computations. The alternating structure allows the zero-knowledge proof to
 "step through" the tree without revealing which path was taken.
 
-The tree is **append-only**: each new output is **indexed into the tree when
-it is created** (in the block that contains the transaction). **Spend
-maturity** (coinbase unlock, regular spendable age, and FCMP++
-`referenceBlock` depth rules) is enforced by consensus separately — outputs
-are not withheld from the tree until unlock. Spent outputs remain in the tree
-permanently. Removing spent outputs would reveal which output was spent,
-breaking the anonymity guarantee.
+The tree is **append-only**: outputs enter the tree via **deferred insertion**
+— they are added to a pending table at creation time and drain into the tree
+only after their type-specific maturity height is reached. The tree position
+assigned during drain is determined by the canonical `(maturity_height,
+global_output_index)` sort order, enforced by composite keys in LMDB.
+Tree position is **not** the same as global output index; explicit
+bidirectional mapping tables (`output_to_leaf`, `leaf_to_output`) track
+the relationship. Spent outputs remain in the tree permanently — removing
+them would reveal which output was spent, breaking the anonymity guarantee.
 
 ### 4-Scalar Leaf Format
 
@@ -958,15 +960,22 @@ reached.  Maturity heights are:
 - **Regular:**  `block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE` (10)
 - **Staked:**   `max(effective_lock_until, block_height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE)`
 
-The `pending_tree_leaves` LMDB table (keyed by `maturity_height`,
-DUPSORT/DUPFIXED with 128-byte leaf values) stores pre-computed leaves.
-On each `add_block`, `drain_pending_tree_leaves` collects all entries with
-`maturity_height <= block_height`, deletes them from the pending table,
-journals each entry in the `pending_tree_drain` table (keyed by block height,
-136-byte values: 8-byte maturity + 128-byte leaf), and appends the leaf data
-to the curve tree growth batch. `pop_block` reads the drain journal to
-restore drained leaves to pending and recomputes each block output's leaf
-to remove it from pending.
+The `pending_tree_leaves` LMDB table uses a 16-byte composite key
+`BE(maturity_height) || BE(global_output_index)` with 128-byte leaf values
+(no DUPSORT — the composite key enforces canonical ordering). On each
+`add_block`, `drain_pending_tree_leaves` cursor-scans all entries with
+`maturity_height <= block_height` in `(maturity, output_index)` order,
+removes them from pending, journals each in `pending_tree_drain`
+(key: `BE(block_height) || BE(output_index)`, value: 136 bytes =
+8-byte maturity + 128-byte leaf), writes the bidirectional mapping
+(`output_to_leaf`, `leaf_to_output`), and appends the leaf data to the
+curve tree growth batch. A separate journal `block_pending_additions`
+records each output added to pending by each block (key:
+`BE(block_height) || BE(output_index)`, value: 8-byte maturity).
+`pop_block` reads both journals to perform exact reversal: the drain
+journal restores drained leaves to pending and removes mapping entries;
+the block-pending journal deletes this block's pending additions by
+primary key — no reconstruction from the output DB state is needed.
 
 Because `FCMP_REFERENCE_BLOCK_MIN_AGE` (5) is now a reorg safety margin
 only (not a maturity enforcement mechanism), the tree is guaranteed to
@@ -978,11 +987,13 @@ the staked output's `effective_lock_until` (computed as
 128-bit integer arithmetic for precision). Claims are valid both during the
 lock period and after maturity; the constraint is
 `to_height <= min(current_height, effective_lock_until)`.
-Additionally, `check_stake_claim_input` verifies the staked output's leaf
-is present in the curve tree by checking
-`staked_output_index < get_curve_tree_leaf_count()` and reading the leaf
-data with `get_curve_tree_leaf()`. If the output hasn't been inserted
-into the tree (e.g., deferred insertion pending), the claim is rejected.
+Additionally, `check_stake_claim_input` verifies the staked output is
+present in the curve tree via `get_curve_tree_leaf_by_output_index()`,
+which performs a double lookup through the `output_to_leaf` mapping table.
+If the output has no mapping (deferred insertion still pending), the
+claim is rejected. After retrieval, the stored leaf is bytewise-compared
+to a recomputed leaf from the output's `(output_key, commitment, h_pqc)`
+to bind the claim to the actual output data in the tree.
 
 **PQC ownership cross-check:** For each stake claim input `i`, the
 `H(pqc_pk)` stored at bytes 96–128 of the curve tree leaf must match
@@ -1119,7 +1130,7 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | PQC `auth_version`/`flags` consensus checks | **Done** | `tx_pqc_verify.cpp` |
 | Single-signer key size validation | **Done** | `tx_pqc_verify.cpp` |
 | Dead `verRctNonSemanticsSimple` / cache removal | **Done** | `rctSigs.h/cpp`, `tx_verification_utils.h/cpp` |
-| Universal deferred tree insertion | **Done** | `pending_tree_leaves` / `pending_tree_drain` DB tables, `blockchain_db.cpp` |
+| Universal deferred tree insertion | **Done** | `pending_tree_leaves` / `pending_tree_drain` / `block_pending_additions` / `output_to_leaf` / `leaf_to_output` DB tables, `blockchain_db.cpp`, `shekyl_types.h` |
 | Per-input `pqc_auths` field | **Done** | `cryptonote_basic.h` |
 | Per-input PQC signature verification | **Done** | `tx_pqc_verify.cpp` |
 | PQC signed payload binds prunable data + all H(pqc_pk) | **Done** | `tx_pqc_verify.cpp` |
@@ -1328,6 +1339,10 @@ cd rust && cargo test --workspace
 - Regular tx maturity window (10 blocks) boundary
 - Drain journal add/retrieve/remove atomicity round-trip
 - Insertion ordering determinism across two LMDB instances
+- Same-maturity drain order by output_index (regression for DUPSORT bug)
+- `block_pending_additions` journal round-trip
+- `output_to_leaf` / `leaf_to_output` bidirectional mapping round-trip
+- `pop_block` journal-driven reversal simulation
 
 `tests/unit_tests/pending_tree_fuzz.cpp` covers:
 
@@ -1336,6 +1351,9 @@ cd rust && cargo test --workspace
 - Drain journal entry CRUD operations
 - Randomized stress test (100 leaves, random maturity heights)
 - Single-leaf removal from multi-leaf pending set
+- Composite-key ordering (same maturity, different output indices)
+- Block pending additions journal CRUD
+- Output↔leaf mapping CRUD and inverse correctness
 
 ### C++ Core Tests (chaingen)
 
