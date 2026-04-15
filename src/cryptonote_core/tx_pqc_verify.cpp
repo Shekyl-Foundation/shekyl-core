@@ -228,7 +228,7 @@ bool verify_transaction_pqc_auth(const transaction& tx,
     crypto::hash payload_hash;
     cryptonote::get_blob_hash(payload_blob, payload_hash);
 
-    bool ok = shekyl_pqc_verify(
+    uint8_t pqc_result = shekyl_pqc_verify(
         auth.scheme_id,
         auth.hybrid_public_key.data(),
         auth.hybrid_public_key.size(),
@@ -237,21 +237,9 @@ bool verify_transaction_pqc_auth(const transaction& tx,
         reinterpret_cast<const uint8_t*>(payload_hash.data),
         sizeof(payload_hash.data));
 
-    if (!ok)
+    if (pqc_result != 0)
     {
-#ifndef NDEBUG
-      uint8_t err = shekyl_pqc_verify_debug(
-          auth.scheme_id,
-          auth.hybrid_public_key.data(),
-          auth.hybrid_public_key.size(),
-          auth.hybrid_signature.data(),
-          auth.hybrid_signature.size(),
-          reinterpret_cast<const uint8_t*>(payload_hash.data),
-          sizeof(payload_hash.data));
-      MERROR("PQC verify failed: error code " << (int)err << " (input " << idx << ")");
-#else
-      MERROR("PQC verify failed (input " << idx << ")");
-#endif
+      MERROR("PQC verify failed: error code " << (int)pqc_result << " (input " << idx << ")");
       return false;
     }
   }

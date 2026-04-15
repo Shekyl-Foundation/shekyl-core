@@ -1152,7 +1152,7 @@ All Phase-1 (single-signer) and Phase-2 (multisig) items are implemented. This t
 | 5 | Wallet construction | Done | `src/cryptonote_core/cryptonote_tx_utils.cpp` (standard txs), `src/wallet/wallet2.cpp` (claim txs) |
 | 6 | Documentation | Done | `docs/POST_QUANTUM_CRYPTOGRAPHY.md`, `docs/DOCUMENTATION_TODOS_AND_PQC.md`, `docs/CHANGELOG.md` |
 | 7 | Rust multisig core (scheme_id=2) | Done | `rust/shekyl-crypto-pq/src/multisig.rs` |
-| 8 | FFI scheme dispatch + multisig | Done | `rust/shekyl-ffi/src/lib.rs` (`shekyl_pqc_verify` with scheme_id, `shekyl_pqc_verify_debug`, `shekyl_pqc_multisig_group_id`) |
+| 8 | FFI scheme dispatch + multisig | Done | `rust/shekyl-ffi/src/lib.rs` (`shekyl_pqc_verify` returning typed `u8` error codes, `shekyl_pqc_multisig_group_id`) |
 | 9 | Consensus verification + scheme downgrade | Done | `src/cryptonote_core/tx_pqc_verify.cpp` (size-format checks), FCMP++ `h_pqc` leaf binding (see `PQC_MULTISIG.md` Attack 1) |
 | 10 | Wallet multisig coordination | Done | `src/wallet/wallet2.cpp` (group creation, file-based signing), `src/wallet/wallet2.h` |
 | 11 | Fuzz testing (4 targets, 10M each) | Done | `rust/shekyl-crypto-pq/fuzz/fuzz_targets/`, `docs/PQC_TEST_VECTOR_002_MULTISIG.json` |

@@ -11,9 +11,7 @@
 //! which per-output ML-DSA-65 keypairs are deterministically derived.
 
 use crate::CryptoError;
-use curve25519_dalek::{
-    constants::X25519_BASEPOINT, montgomery::MontgomeryPoint, scalar::Scalar,
-};
+use curve25519_dalek::{constants::X25519_BASEPOINT, montgomery::MontgomeryPoint, scalar::Scalar};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha512;
@@ -105,7 +103,7 @@ impl KeyEncapsulation for HybridX25519MlKem {
         // This standalone keygen is for testing; real wallets use
         // generate_pqc_key_material which derives from the view key.
         let x_secret_scalar = Scalar::random(&mut rand::rngs::OsRng);
-        let x_public_mont = &x_secret_scalar * &X25519_BASEPOINT;
+        let x_public_mont = x_secret_scalar * X25519_BASEPOINT;
 
         let (ek, dk) = ml_kem_768::KG::try_keygen()
             .map_err(|e| CryptoError::KeyGenerationFailed(format!("ML-KEM-768 keygen: {e}")))?;
@@ -135,12 +133,12 @@ impl KeyEncapsulation for HybridX25519MlKem {
 
         // X25519 ECDH with ephemeral key (unclamped Montgomery scalar)
         let eph_scalar = Scalar::random(&mut rand::rngs::OsRng);
-        let eph_mont_pub = &eph_scalar * &X25519_BASEPOINT;
+        let eph_mont_pub = eph_scalar * X25519_BASEPOINT;
         let recipient_mont = MontgomeryPoint(public_key.x25519);
         if crate::montgomery::is_low_order_montgomery(&recipient_mont) {
             return Err(CryptoError::LowOrderPoint);
         }
-        let x25519_ss = &eph_scalar * &recipient_mont;
+        let x25519_ss = eph_scalar * recipient_mont;
 
         // ML-KEM-768 encapsulation
         let ek_bytes: [u8; ML_KEM_768_EK_LEN] = public_key
@@ -188,7 +186,7 @@ impl KeyEncapsulation for HybridX25519MlKem {
         if crate::montgomery::is_low_order_montgomery(&eph_mont) {
             return Err(CryptoError::LowOrderPoint);
         }
-        let x25519_ss = &view_scalar * &eph_mont;
+        let x25519_ss = view_scalar * eph_mont;
 
         // ML-KEM-768 decapsulation
         let dk_bytes: [u8; ML_KEM_768_DK_LEN] = secret_key

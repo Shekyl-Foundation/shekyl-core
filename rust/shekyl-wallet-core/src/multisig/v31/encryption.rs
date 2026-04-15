@@ -156,8 +156,23 @@ mod tests {
     #[test]
     fn encrypt_decrypt_roundtrip() {
         let plaintext = b"hello multisig world";
-        let ct = encrypt_payload(
-            &SECRET,
+        let ct =
+            encrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 0, 1, plaintext).unwrap();
+
+        assert_ne!(ct.as_slice(), plaintext);
+        assert!(ct.len() > plaintext.len());
+
+        let pt = decrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 0, 1, &ct).unwrap();
+        assert_eq!(pt, plaintext);
+    }
+
+    #[test]
+    fn different_keys_produce_different_ciphertexts() {
+        let plaintext = b"test";
+        let ct1 =
+            encrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 0, 1, plaintext).unwrap();
+        let ct2 = encrypt_payload(
+            &[0x99; 32],
             &INTENT,
             MessageType::SpendIntent,
             0,
@@ -165,67 +180,43 @@ mod tests {
             plaintext,
         )
         .unwrap();
-
-        assert_ne!(ct.as_slice(), plaintext);
-        assert!(ct.len() > plaintext.len());
-
-        let pt = decrypt_payload(
-            &SECRET,
-            &INTENT,
-            MessageType::SpendIntent,
-            0,
-            1,
-            &ct,
-        )
-        .unwrap();
-        assert_eq!(pt, plaintext);
-    }
-
-    #[test]
-    fn different_keys_produce_different_ciphertexts() {
-        let plaintext = b"test";
-        let ct1 = encrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 0, 1, plaintext)
-            .unwrap();
-        let ct2 = encrypt_payload(&[0x99; 32], &INTENT, MessageType::SpendIntent, 0, 1, plaintext)
-            .unwrap();
         assert_ne!(ct1, ct2);
     }
 
     #[test]
     fn different_message_types_produce_different_ciphertexts() {
         let plaintext = b"test";
-        let ct1 = encrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 0, 1, plaintext)
-            .unwrap();
-        let ct2 = encrypt_payload(&SECRET, &INTENT, MessageType::ProverOutput, 0, 1, plaintext)
-            .unwrap();
+        let ct1 =
+            encrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 0, 1, plaintext).unwrap();
+        let ct2 =
+            encrypt_payload(&SECRET, &INTENT, MessageType::ProverOutput, 0, 1, plaintext).unwrap();
         assert_ne!(ct1, ct2);
     }
 
     #[test]
     fn different_sender_indices_produce_different_ciphertexts() {
         let plaintext = b"test";
-        let ct1 = encrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 0, 1, plaintext)
-            .unwrap();
-        let ct2 = encrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 1, 1, plaintext)
-            .unwrap();
+        let ct1 =
+            encrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 0, 1, plaintext).unwrap();
+        let ct2 =
+            encrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 1, 1, plaintext).unwrap();
         assert_ne!(ct1, ct2);
     }
 
     #[test]
     fn wrong_key_fails_decrypt() {
         let plaintext = b"secret data";
-        let ct = encrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 0, 1, plaintext)
-            .unwrap();
-        let result =
-            decrypt_payload(&[0x99; 32], &INTENT, MessageType::SpendIntent, 0, 1, &ct);
+        let ct =
+            encrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 0, 1, plaintext).unwrap();
+        let result = decrypt_payload(&[0x99; 32], &INTENT, MessageType::SpendIntent, 0, 1, &ct);
         assert!(matches!(result, Err(EncryptionError::DecryptFailed)));
     }
 
     #[test]
     fn tampered_ciphertext_fails_decrypt() {
         let plaintext = b"secret data";
-        let mut ct = encrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 0, 1, plaintext)
-            .unwrap();
+        let mut ct =
+            encrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 0, 1, plaintext).unwrap();
         ct[0] ^= 0xFF;
         let result = decrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 0, 1, &ct);
         assert!(matches!(result, Err(EncryptionError::DecryptFailed)));
@@ -233,14 +224,7 @@ mod tests {
 
     #[test]
     fn too_short_ciphertext_rejected() {
-        let result = decrypt_payload(
-            &SECRET,
-            &INTENT,
-            MessageType::SpendIntent,
-            0,
-            1,
-            &[0; 10],
-        );
+        let result = decrypt_payload(&SECRET, &INTENT, MessageType::SpendIntent, 0, 1, &[0; 10]);
         assert!(matches!(result, Err(EncryptionError::CiphertextTooShort)));
     }
 

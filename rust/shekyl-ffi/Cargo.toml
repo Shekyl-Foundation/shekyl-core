@@ -12,7 +12,6 @@ crate-type = ["staticlib", "rlib"]
 [features]
 default = []
 multisig = ["shekyl-fcmp/multisig", "modular-frost"]
-debug-verify = []
 
 [dependencies]
 shekyl-chacha = { path = "../shekyl-chacha" }

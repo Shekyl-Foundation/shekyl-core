@@ -313,6 +313,11 @@ pub extern "C" fn shekyl_pqc_sign(
 
 /// Verify a PQC-authenticated message.
 ///
+/// Returns 0 on success, or a nonzero `PqcVerifyError` discriminant (1-11) on failure:
+///   1=SchemeMismatch, 2=ParameterBounds, 3=KeyBlobLength, 4=SigBlobLength,
+///   5=ThresholdMismatch, 6=IndexOutOfRange, 7=IndicesNotAscending, 8=DuplicateKeys,
+///   9=GroupIdMismatch, 10=CryptoVerifyFailed, 11=DeserializationFailed
+///
 /// `scheme_id = 1`: single-signer hybrid Ed25519 + ML-DSA-65.
 /// `scheme_id = 2`: M-of-N multisig over hybrid keys.
 ///
@@ -323,100 +328,6 @@ pub extern "C" fn shekyl_pqc_sign(
 /// `shekyl_pqc_multisig_group_id` and compare against the expected value.
 #[no_mangle]
 pub extern "C" fn shekyl_pqc_verify(
-    scheme_id: u8,
-    pubkey_blob: *const u8,
-    pubkey_len: usize,
-    sig_blob: *const u8,
-    sig_len: usize,
-    message: *const u8,
-    message_len: usize,
-) -> bool {
-    let Some(pk_bytes) = (unsafe { slice_from_ptr(pubkey_blob, pubkey_len) }) else {
-        return false;
-    };
-    let Some(msg) = (unsafe { slice_from_ptr(message, message_len) }) else {
-        return false;
-    };
-    let Some(sig_bytes) = (unsafe { slice_from_ptr(sig_blob, sig_len) }) else {
-        return false;
-    };
-
-    match scheme_id {
-        1 => {
-            let scheme = HybridEd25519MlDsa;
-            let Ok(pk) = HybridPublicKey::from_canonical_bytes(pk_bytes) else {
-                return false;
-            };
-            let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
-                return false;
-            };
-            scheme.verify(&pk, msg, &sig).unwrap_or(false)
-        }
-        2 => {
-            use shekyl_crypto_pq::multisig::verify_multisig;
-            verify_multisig(scheme_id, pk_bytes, sig_bytes, msg, None).unwrap_or(false)
-        }
-        _ => false,
-    }
-}
-
-/// Verify a PQC-authenticated message with optional group ID binding.
-///
-/// Same as `shekyl_pqc_verify` but for `scheme_id = 2`, passes `expected_group_id`
-/// to `verify_multisig` for defense-in-depth group binding (PQC_MULTISIG.md SS16.3).
-///
-/// `expected_group_id_ptr`: pointer to 32 bytes of expected group ID, or null to skip.
-#[no_mangle]
-pub extern "C" fn shekyl_pqc_verify_with_group_id(
-    scheme_id: u8,
-    pubkey_blob: *const u8,
-    pubkey_len: usize,
-    sig_blob: *const u8,
-    sig_len: usize,
-    message: *const u8,
-    message_len: usize,
-    expected_group_id_ptr: *const u8,
-) -> bool {
-    let Some(pk_bytes) = (unsafe { slice_from_ptr(pubkey_blob, pubkey_len) }) else {
-        return false;
-    };
-    let Some(msg) = (unsafe { slice_from_ptr(message, message_len) }) else {
-        return false;
-    };
-    let Some(sig_bytes) = (unsafe { slice_from_ptr(sig_blob, sig_len) }) else {
-        return false;
-    };
-
-    match scheme_id {
-        1 => {
-            let scheme = HybridEd25519MlDsa;
-            let Ok(pk) = HybridPublicKey::from_canonical_bytes(pk_bytes) else {
-                return false;
-            };
-            let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
-                return false;
-            };
-            scheme.verify(&pk, msg, &sig).unwrap_or(false)
-        }
-        2 => {
-            use shekyl_crypto_pq::multisig::verify_multisig;
-            let group_id: Option<&[u8; 32]> = if expected_group_id_ptr.is_null() {
-                None
-            } else {
-                unsafe { slice_from_ptr(expected_group_id_ptr, 32) }
-                    .and_then(|s| <&[u8; 32]>::try_from(s).ok())
-            };
-            verify_multisig(scheme_id, pk_bytes, sig_bytes, msg, group_id).unwrap_or(false)
-        }
-        _ => false,
-    }
-}
-
-/// Debug variant of verify: returns `PqcVerifyError` discriminant (1-11) on failure, 0 on success.
-/// Only compiled in debug/test builds to prevent use as a signature oracle.
-#[cfg(any(debug_assertions, test, feature = "debug-verify"))]
-#[no_mangle]
-pub extern "C" fn shekyl_pqc_verify_debug(
     scheme_id: u8,
     pubkey_blob: *const u8,
     pubkey_len: usize,
@@ -446,14 +357,74 @@ pub extern "C" fn shekyl_pqc_verify_debug(
             };
             match scheme.verify(&pk, msg, &sig) {
                 Ok(true) => 0,
-                Ok(false) | Err(_) => 10,
+                Ok(false) | Err(_) => 10, // CryptoVerifyFailed
             }
         }
         2 => {
             use shekyl_crypto_pq::multisig::verify_multisig;
             match verify_multisig(scheme_id, pk_bytes, sig_bytes, msg, None) {
                 Ok(true) => 0,
-                Ok(false) => 10,
+                Ok(false) => 10, // CryptoVerifyFailed
+                Err(e) => e as u8,
+            }
+        }
+        _ => 1, // SchemeMismatch
+    }
+}
+
+/// Verify a PQC-authenticated message with optional group ID binding.
+///
+/// Same error codes as `shekyl_pqc_verify` (0=success, 1-11=PqcVerifyError).
+/// For `scheme_id = 2`, passes `expected_group_id` to `verify_multisig` for
+/// defense-in-depth group binding (PQC_MULTISIG.md SS16.3).
+///
+/// `expected_group_id_ptr`: pointer to 32 bytes of expected group ID, or null to skip.
+#[no_mangle]
+pub extern "C" fn shekyl_pqc_verify_with_group_id(
+    scheme_id: u8,
+    pubkey_blob: *const u8,
+    pubkey_len: usize,
+    sig_blob: *const u8,
+    sig_len: usize,
+    message: *const u8,
+    message_len: usize,
+    expected_group_id_ptr: *const u8,
+) -> u8 {
+    let Some(pk_bytes) = (unsafe { slice_from_ptr(pubkey_blob, pubkey_len) }) else {
+        return 11; // DeserializationFailed
+    };
+    let Some(msg) = (unsafe { slice_from_ptr(message, message_len) }) else {
+        return 11;
+    };
+    let Some(sig_bytes) = (unsafe { slice_from_ptr(sig_blob, sig_len) }) else {
+        return 11;
+    };
+
+    match scheme_id {
+        1 => {
+            let scheme = HybridEd25519MlDsa;
+            let Ok(pk) = HybridPublicKey::from_canonical_bytes(pk_bytes) else {
+                return 11;
+            };
+            let Ok(sig) = HybridSignature::from_canonical_bytes(sig_bytes) else {
+                return 11;
+            };
+            match scheme.verify(&pk, msg, &sig) {
+                Ok(true) => 0,
+                Ok(false) | Err(_) => 10, // CryptoVerifyFailed
+            }
+        }
+        2 => {
+            use shekyl_crypto_pq::multisig::verify_multisig;
+            let group_id: Option<&[u8; 32]> = if expected_group_id_ptr.is_null() {
+                None
+            } else {
+                unsafe { slice_from_ptr(expected_group_id_ptr, 32) }
+                    .and_then(|s| <&[u8; 32]>::try_from(s).ok())
+            };
+            match verify_multisig(scheme_id, pk_bytes, sig_bytes, msg, group_id) {
+                Ok(true) => 0,
+                Ok(false) => 10, // CryptoVerifyFailed
                 Err(e) => e as u8,
             }
         }
@@ -1417,8 +1388,12 @@ fn parse_prove_witness(
 
 /// Verify an FCMP++ proof with batch verification.
 ///
+/// Returns 0 on success, or a nonzero `VerifyError` discriminant (1-7) on failure:
+///   1=DeserializationFailed, 2=InvalidTreeRoot, 3=PqcCommitmentMismatch,
+///   4=KeyImageCountMismatch, 5=UpstreamError, 6=BatchVerificationFailed,
+///   7=TreeDepthTooLarge
+///
 /// `signable_tx_hash_ptr`: 32-byte hash that binds the proof to the transaction.
-/// Returns true if the proof is valid.
 ///
 /// # Safety
 /// Caller must ensure all pointer arguments are valid or null.
@@ -1435,25 +1410,25 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
     tree_root_ptr: *const u8,
     tree_depth: u8,
     signable_tx_hash_ptr: *const u8,
-) -> bool {
+) -> u8 {
     let Some(proof_bytes) = (unsafe { slice_from_ptr(proof_ptr, proof_len) }) else {
-        return false;
+        return 1; // DeserializationFailed
     };
     let Some(ki_bytes) = (unsafe { slice_from_ptr(key_images_ptr, ki_count * 32) }) else {
-        return false;
+        return 1;
     };
     let Some(po_bytes) = (unsafe { slice_from_ptr(pseudo_outs_ptr, po_count * 32) }) else {
-        return false;
+        return 1;
     };
     let Some(ph_bytes) = (unsafe { slice_from_ptr(pqc_pk_hashes_ptr, pqc_hash_count * 32) }) else {
-        return false;
+        return 1;
     };
     if tree_root_ptr.is_null()
         || signable_tx_hash_ptr.is_null()
         || ki_count != po_count
         || ki_count != pqc_hash_count
     {
-        return false;
+        return 1; // DeserializationFailed (invalid parameters)
     }
     let tree_root: [u8; 32] = unsafe {
         let mut buf = [0u8; 32];
@@ -1503,10 +1478,11 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
         layers,
         signable_tx_hash,
     ) {
-        Ok(result) => result,
+        Ok(true) => 0,
+        Ok(false) => 6, // BatchVerificationFailed
         Err(e) => {
             tracing::debug!(?e, tree_depth, layers, "FCMP++ verify failed");
-            false
+            e.discriminant()
         }
     }
 }
@@ -4840,7 +4816,7 @@ mod tests {
             assert!(sig.success);
             assert!(!sig.signature.ptr.is_null());
 
-            let verified = shekyl_pqc_verify(
+            let result = shekyl_pqc_verify(
                 1,
                 kp.public_key.ptr,
                 kp.public_key.len,
@@ -4849,7 +4825,7 @@ mod tests {
                 msg.as_ptr(),
                 msg.len(),
             );
-            assert!(verified);
+            assert_eq!(result, 0, "expected success (0), got error code {result}");
 
             shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
             shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
@@ -4910,7 +4886,7 @@ mod tests {
             let last = sig_bytes.len() - 1;
             sig_bytes[last] ^= 0x01;
 
-            let verified = shekyl_pqc_verify(
+            let result = shekyl_pqc_verify(
                 1,
                 kp.public_key.ptr,
                 kp.public_key.len,
@@ -4919,7 +4895,7 @@ mod tests {
                 msg.as_ptr(),
                 msg.len(),
             );
-            assert!(!verified);
+            assert_ne!(result, 0, "corrupted signature should not verify");
 
             shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
             shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);

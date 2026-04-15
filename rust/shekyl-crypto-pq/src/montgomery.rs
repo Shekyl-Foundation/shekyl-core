@@ -16,10 +16,7 @@
 //! cofactor-clearing role.
 
 use curve25519_dalek::{
-    edwards::CompressedEdwardsY,
-    montgomery::MontgomeryPoint,
-    scalar::Scalar,
-    traits::IsIdentity,
+    edwards::CompressedEdwardsY, montgomery::MontgomeryPoint, scalar::Scalar, traits::IsIdentity,
 };
 
 use crate::CryptoError;
@@ -101,7 +98,7 @@ pub fn ed25519_sk_as_montgomery_scalar(ed_sec: &[u8; 32]) -> Scalar {
 /// 12 low-order points including the identity).
 pub fn is_low_order_montgomery(point: &MontgomeryPoint) -> bool {
     let cofactor = Scalar::from(8u64);
-    let cleared = &cofactor * point;
+    let cleared = cofactor * point;
     cleared == MontgomeryPoint([0u8; 32])
 }
 
@@ -178,23 +175,22 @@ mod tests {
         use curve25519_dalek::constants::X25519_BASEPOINT;
 
         let secret_bytes: [u8; 32] = [
-            0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a,
-            0xf4, 0x92, 0xec, 0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32,
-            0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x00,
+            0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec,
+            0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03,
+            0x1c, 0xae, 0x7f, 0x00,
         ];
 
         let scalar = ed25519_sk_as_montgomery_scalar(&secret_bytes);
         let ed_scalar = Scalar::from_bytes_mod_order(secret_bytes);
 
         // Compute Ed25519 public key
-        let ed_pub = (&ed_scalar * curve25519_dalek::constants::ED25519_BASEPOINT_TABLE)
-            .compress();
+        let ed_pub = (&ed_scalar * curve25519_dalek::constants::ED25519_BASEPOINT_TABLE).compress();
 
         // Convert to Montgomery via birational map
         let x25519_from_ed = ed25519_pk_to_x25519_pk(&ed_pub.0).unwrap();
 
         // Compute Montgomery public key from scalar directly
-        let x25519_from_scalar = &scalar * &X25519_BASEPOINT;
+        let x25519_from_scalar = scalar * X25519_BASEPOINT;
 
         assert_eq!(
             x25519_from_ed, x25519_from_scalar.0,
@@ -272,7 +268,7 @@ mod tests {
     fn random_point_not_low_order() {
         use curve25519_dalek::constants::X25519_BASEPOINT;
         let scalar = Scalar::from(42u64);
-        let point = &scalar * &X25519_BASEPOINT;
+        let point = scalar * X25519_BASEPOINT;
         assert!(!is_low_order_montgomery(&point));
     }
 
@@ -302,15 +298,15 @@ mod tests {
             },
             // u = 325606250916557431795983626356110631294008115727848805560023387167927233504 (order 8)
             [
-                0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3,
-                0xfa, 0xf1, 0x9f, 0xc4, 0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32,
-                0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49, 0xb8, 0x00,
+                0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f,
+                0xc4, 0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16,
+                0x5f, 0x49, 0xb8, 0x00,
             ],
             // u = 39382357235489614581723060781553021112529911719440698176882885853963445705823 (order 8)
             [
-                0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1,
-                0x55, 0x9c, 0x83, 0xef, 0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c,
-                0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f, 0x11, 0x57,
+                0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83,
+                0xef, 0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd,
+                0xd0, 0x9f, 0x11, 0x57,
             ],
         ];
 
@@ -336,17 +332,17 @@ mod tests {
             let x25519_pub = ed25519_pk_to_x25519_pk(&view_pub.0).unwrap();
             let x25519_sec = ed25519_sk_as_montgomery_scalar(&view_scalar.to_bytes());
 
-            let computed_pub = &x25519_sec * &X25519_BASEPOINT;
+            let computed_pub = x25519_sec * X25519_BASEPOINT;
             assert_eq!(
                 x25519_pub, computed_pub.0,
                 "public key from Edwards map must match scalar * basepoint"
             );
 
             let eph_scalar = Scalar::random(&mut rand::rngs::OsRng);
-            let eph_pub = &eph_scalar * &X25519_BASEPOINT;
+            let eph_pub = eph_scalar * X25519_BASEPOINT;
 
-            let sender_ss = &eph_scalar * &MontgomeryPoint(x25519_pub);
-            let receiver_ss = &x25519_sec * &eph_pub;
+            let sender_ss = eph_scalar * MontgomeryPoint(x25519_pub);
+            let receiver_ss = x25519_sec * eph_pub;
 
             assert_eq!(
                 sender_ss.0, receiver_ss.0,
@@ -354,5 +350,4 @@ mod tests {
             );
         }
     }
-
 }

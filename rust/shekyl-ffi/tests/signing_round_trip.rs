@@ -475,7 +475,7 @@ fn build_test_case(iteration: u32) {
 
     eprintln!("  [signing_round_trip] iteration {iteration}: verifying proof...");
 
-    let verified = unsafe {
+    let verify_result = unsafe {
         shekyl_fcmp_verify(
             fcmp_proof.as_ptr(),
             fcmp_proof.len(),
@@ -490,9 +490,9 @@ fn build_test_case(iteration: u32) {
             tx_prefix_hash.as_ptr(),
         )
     };
-    assert!(
-        verified,
-        "iteration {iteration}: shekyl_fcmp_verify returned false for a valid proof"
+    assert_eq!(
+        verify_result, 0,
+        "iteration {iteration}: shekyl_fcmp_verify returned error code {verify_result}"
     );
 
     eprintln!("  [signing_round_trip] iteration {iteration}: sign+verify OK");

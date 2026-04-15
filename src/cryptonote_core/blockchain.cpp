@@ -3720,7 +3720,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         }
         else
         {
-          const bool proof_ok = shekyl_fcmp_verify(
+          const uint8_t fcmp_result = shekyl_fcmp_verify(
             rv.p.fcmp_pp_proof.data(),
             rv.p.fcmp_pp_proof.size(),
             key_images_flat.data(),
@@ -3734,9 +3734,10 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             reinterpret_cast<const uint8_t*>(tx_prefix_hash.data)
           );
 
-          if (!proof_ok)
+          if (fcmp_result != 0)
           {
-            MERROR_VER("FCMP++ proof verification failed for tx " << get_transaction_hash(tx));
+            MERROR_VER("FCMP++ proof verification failed for tx " << get_transaction_hash(tx)
+                       << " (error code " << (int)fcmp_result << ")");
             tvc.m_verifivation_failed = true;
             return false;
           }

@@ -94,6 +94,24 @@ pub enum VerifyError {
     TreeDepthTooLarge(u8),
 }
 
+impl VerifyError {
+    /// FFI-stable discriminant for crossing the C ABI boundary.
+    ///
+    /// Codes 1-7 map to the enum variants in declaration order.
+    /// Code 0 is reserved for success (not an error).
+    pub fn discriminant(&self) -> u8 {
+        match self {
+            Self::DeserializationFailed => 1,
+            Self::InvalidTreeRoot => 2,
+            Self::PqcCommitmentMismatch(_) => 3,
+            Self::KeyImageCountMismatch { .. } => 4,
+            Self::UpstreamError(_) => 5,
+            Self::BatchVerificationFailed => 6,
+            Self::TreeDepthTooLarge(_) => 7,
+        }
+    }
+}
+
 /// A serialized FCMP++ proof blob (opaque to C++ callers).
 #[derive(Clone, Debug, Zeroize)]
 pub struct ShekylFcmpProof {

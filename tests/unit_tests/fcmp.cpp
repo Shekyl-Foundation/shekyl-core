@@ -425,12 +425,12 @@ TEST(fcmp, multisig_partial_sig_roundtrip)
   ASSERT_EQ(memcmp(recovered.data(), sig_bytes.data(), sig_bytes.size()), 0);
 
   // Verify the roundtripped signature (scheme_id 1 = PQC_SCHEME_SINGLE)
-  bool valid = shekyl_pqc_verify(
+  uint8_t pqc_result = shekyl_pqc_verify(
       1,
       kp.public_key.ptr, kp.public_key.len,
       reinterpret_cast<const uint8_t*>(recovered.data()), recovered.size(),
       msg, 32);
-  ASSERT_TRUE(valid);
+  ASSERT_EQ(pqc_result, 0) << "PQC verify error code: " << (int)pqc_result;
 
   shekyl_buffer_free(kp.public_key.ptr, kp.public_key.len);
   shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
@@ -506,12 +506,12 @@ TEST(fcmp, multisig_2of3_sig_container_assembly)
   // Verify the assembled multisig via FFI (scheme_id = 2 triggers multisig path)
   // shekyl_pqc_verify dispatches to verify_multisig internally for scheme_id 2.
   // The pubkey_blob is the key container; sig_blob is the sig container.
-  bool valid = shekyl_pqc_verify(
+  uint8_t pqc_result = shekyl_pqc_verify(
       2,  // scheme_id = multisig
       key_blob.data(), key_blob.size(),
       sig_blob.data(), sig_blob.size(),
       payload_hash, 32);
-  ASSERT_TRUE(valid);
+  ASSERT_EQ(pqc_result, 0) << "multisig PQC verify error code: " << (int)pqc_result;
 
   // Cleanup
   for (int i = 0; i < 3; ++i)

@@ -122,8 +122,7 @@ impl MultisigEnvelope {
         if offset + 4 > data.len() {
             return Err(EnvelopeError::TooShort);
         }
-        let sig_len_raw =
-            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+        let sig_len_raw = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
         if sig_len_raw > MAX_SIG_LEN {
             return Err(EnvelopeError::SigTooLong(sig_len_raw));
         }
@@ -138,8 +137,7 @@ impl MultisigEnvelope {
         if offset + 4 > data.len() {
             return Err(EnvelopeError::TooShort);
         }
-        let payload_len_raw =
-            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+        let payload_len_raw = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
         if payload_len_raw > MAX_PAYLOAD_LEN {
             return Err(EnvelopeError::PayloadTooLong(payload_len_raw));
         }

@@ -210,11 +210,7 @@ impl SpendIntent {
 
     /// Validate structural invariants that don't require external state
     /// (checks 1, 3, 5-6, 11 from SS9.2).
-    pub fn validate_structural(
-        &self,
-        n_total: u8,
-        now_secs: u64,
-    ) -> Result<(), SpendIntentError> {
+    pub fn validate_structural(&self, n_total: u8, now_secs: u64) -> Result<(), SpendIntentError> {
         if self.version != SPEND_INTENT_VERSION {
             return Err(SpendIntentError::WrongVersion(self.version));
         }
@@ -319,12 +315,10 @@ impl SpendIntent {
             .iter()
             .map(|r| r.amount)
             .try_fold(0u64, |acc, x| acc.checked_add(x))
-            .ok_or_else(|| {
-                SpendIntentError::Serialization("output amounts overflow u64".into())
-            })?;
-        let outputs_plus_fee = outputs_sum.checked_add(self.fee).ok_or_else(|| {
-            SpendIntentError::Serialization("outputs + fee overflow u64".into())
-        })?;
+            .ok_or_else(|| SpendIntentError::Serialization("output amounts overflow u64".into()))?;
+        let outputs_plus_fee = outputs_sum
+            .checked_add(self.fee)
+            .ok_or_else(|| SpendIntentError::Serialization("outputs + fee overflow u64".into()))?;
         if inputs_sum != outputs_plus_fee {
             return Err(SpendIntentError::BalanceMismatch {
                 inputs: inputs_sum,
@@ -516,9 +510,7 @@ mod tests {
     #[test]
     fn validate_temporal_passes() {
         let intent = make_test_intent();
-        intent
-            .validate_temporal(5, 950, &[0xCC; 32])
-            .unwrap();
+        intent.validate_temporal(5, 950, &[0xCC; 32]).unwrap();
     }
 
     #[test]
@@ -526,7 +518,10 @@ mod tests {
         let intent = make_test_intent();
         assert!(matches!(
             intent.validate_temporal(6, 950, &[0xCC; 32]),
-            Err(SpendIntentError::CounterMismatch { expected: 6, got: 5 })
+            Err(SpendIntentError::CounterMismatch {
+                expected: 6,
+                got: 5
+            })
         ));
     }
 

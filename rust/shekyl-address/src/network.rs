@@ -196,7 +196,11 @@ mod tests {
         assert_eq!(network_from_hrp("sshekyl"), Some(Network::Stagenet));
         assert_eq!(network_from_hrp("SHEKYL"), Some(Network::Mainnet));
         assert_eq!(network_from_hrp("bitcoin"), None);
-        assert_eq!(network_from_hrp("shekyl1m"), None, "multisig HRP not returned by single-sig lookup");
+        assert_eq!(
+            network_from_hrp("shekyl1m"),
+            None,
+            "multisig HRP not returned by single-sig lookup"
+        );
     }
 
     #[test]

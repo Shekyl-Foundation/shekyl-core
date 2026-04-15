@@ -7,12 +7,12 @@
 //! classical spend-auth pubkeys (`spend_auth_pubkeys`). See `PQC_MULTISIG.md`
 //! v1.1 for the full specification.
 
-use crate::CryptoError;
 use crate::error::PqcVerifyError;
 use crate::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
     ML_DSA_65_PUBLIC_KEY_LENGTH, ML_DSA_65_SIGNATURE_LENGTH,
 };
+use crate::CryptoError;
 use ed25519_dalek::{
     PUBLIC_KEY_LENGTH as ED25519_PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH as ED25519_SIGNATURE_LENGTH,
 };
@@ -283,8 +283,7 @@ pub fn multisig_group_id_with_versions(
 
     let key_data_len = (container.n_total as usize) * SINGLE_KEY_CANONICAL_LEN;
     let sa_data_len = (container.n_total as usize) * SPEND_AUTH_PUBKEY_LEN;
-    let mut preimage =
-        Vec::with_capacity(DOMAIN_SEP_V31.len() + 5 + key_data_len + sa_data_len);
+    let mut preimage = Vec::with_capacity(DOMAIN_SEP_V31.len() + 5 + key_data_len + sa_data_len);
 
     preimage.extend_from_slice(DOMAIN_SEP_V31);
     preimage.push(group_version);
@@ -1001,9 +1000,9 @@ mod tests {
 
         for n in 1..=MAX_MULTISIG_PARTICIPANTS {
             for output_idx in 0..20u64 {
-                let prover = rotating_prover_index(
-                    &group_id, output_idx, &tx_sk_hash, &ref_block, n,
-                ).unwrap();
+                let prover =
+                    rotating_prover_index(&group_id, output_idx, &tx_sk_hash, &ref_block, n)
+                        .unwrap();
                 assert!(prover < n, "prover index {prover} >= n_total {n}");
             }
         }
@@ -1017,9 +1016,9 @@ mod tests {
 
         let mut indices = std::collections::HashSet::new();
         for output_idx in 0..100u64 {
-            indices.insert(rotating_prover_index(
-                &group_id, output_idx, &tx_sk_hash, &ref_block, 7,
-            ).unwrap());
+            indices.insert(
+                rotating_prover_index(&group_id, output_idx, &tx_sk_hash, &ref_block, 7).unwrap(),
+            );
         }
         assert!(
             indices.len() > 1,
@@ -1032,8 +1031,14 @@ mod tests {
         let group_id = [0; 32];
         let tx_sk_hash = [0; 32];
         let ref_block = [0; 32];
-        assert_eq!(rotating_prover_index(&group_id, 0, &tx_sk_hash, &ref_block, 1).unwrap(), 0);
-        assert_eq!(rotating_prover_index(&group_id, 99, &tx_sk_hash, &ref_block, 1).unwrap(), 0);
+        assert_eq!(
+            rotating_prover_index(&group_id, 0, &tx_sk_hash, &ref_block, 1).unwrap(),
+            0
+        );
+        assert_eq!(
+            rotating_prover_index(&group_id, 99, &tx_sk_hash, &ref_block, 1).unwrap(),
+            0
+        );
     }
 
     // -- V3.1 group_id tests --

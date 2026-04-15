@@ -397,14 +397,14 @@ namespace test
         shekyl_buffer_free(result.error_message.ptr, result.error_message.len);
 
         // --- 10. Verify the proof ---
-        bool verified = shekyl_fcmp_verify(
+        uint8_t fcmp_result = shekyl_fcmp_verify(
             fcmp_proof.data(), fcmp_proof.size(),
             scanned.key_image, 1,
             pseudo_out.data(), 1,
             scanned.h_pqc, 1,
             tree_root, tree_depth,
             tx_prefix_hash);
-        EXPECT_TRUE(verified) << "DEBUG: shekyl_fcmp_verify returned false for valid proof";
+        EXPECT_EQ(fcmp_result, 0) << "shekyl_fcmp_verify error code: " << (int)fcmp_result;
 
         // --- 11. Build transaction struct from SignedProofs ---
         cryptonote::transaction tx{};

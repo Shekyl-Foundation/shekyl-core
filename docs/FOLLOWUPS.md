@@ -214,13 +214,16 @@ Each item is out of scope for the current PR but worth tracking for future work.
   through, which is a small change but consensus-touching — requires its own
   review cycle.
 
-- **PQC Multisig V3.1: FFI returns `bool` not error codes.** Target: V3.2.
-  Per `30-ffi-discipline.mdc`, security-relevant FFI functions should return
-  distinct error codes rather than bare `bool`. The multisig verification
-  functions (`shekyl_pqc_verify`, `shekyl_pqc_verify_with_group_id`,
-  `shekyl_fcmp_verify`) currently return `bool`. The Rust side already has
-  `PqcVerifyError` with per-check error codes — the plumbing to expose
-  these through the C ABI and consume them in C++ is the remaining work.
+- **~~PQC Multisig V3.1: FFI returns `bool` not error codes.~~** RESOLVED.
+  All three verification FFI functions (`shekyl_pqc_verify`,
+  `shekyl_pqc_verify_with_group_id`, `shekyl_fcmp_verify`) now return
+  `u8` error codes: 0 = success, nonzero = typed error discriminant.
+  PQC verify uses `PqcVerifyError` codes 1-11 (from
+  `shekyl-crypto-pq/src/error.rs`). FCMP verify uses `VerifyError`
+  discriminants 1-7 (from `shekyl-fcmp/src/proof.rs`). The debug-only
+  `shekyl_pqc_verify_debug` is deleted (now redundant). C++ callers
+  (`tx_pqc_verify.cpp`, `blockchain.cpp`) log error codes in all build
+  modes. Per `30-ffi-discipline.mdc`.
 
 - **~~PQC Multisig V3.1: harden ephemeral seed stack copies in
   `construct_multisig_output_for_sender`.~~** RESOLVED.

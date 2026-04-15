@@ -158,6 +158,37 @@
   `blockchain.cpp`, contrary to the prior note). Marked `rpassword` audit
   as covered by CI.
 
+### 🔄 Changed
+
+- **FFI: verification functions return typed `u8` error codes instead of
+  `bool`.** `shekyl_pqc_verify`, `shekyl_pqc_verify_with_group_id`, and
+  `shekyl_fcmp_verify` now return 0 on success and a nonzero error
+  discriminant on failure. PQC verify uses `PqcVerifyError` codes 1-11;
+  FCMP verify uses `VerifyError` codes 1-7. Error codes are available in
+  all build modes, eliminating the debug-only double-call pattern. C++
+  callers (`tx_pqc_verify.cpp`, `blockchain.cpp`) updated to log error
+  codes unconditionally. Per `30-ffi-discipline.mdc`.
+
+- **Clippy lint rename: `unchecked_duration_subtraction` →
+  `unchecked_time_subtraction`.** Updated in workspace `Cargo.toml` to
+  track the upstream rename.
+
+### 🗑️ Removed
+
+- **`shekyl_pqc_verify_debug` deleted.** Now that production
+  `shekyl_pqc_verify` returns typed error codes, the debug-only variant
+  is redundant. All call sites and the `#ifndef NDEBUG` C header guard
+  removed.
+
+### 🐛 Fixed (continued)
+
+- **All Rust clippy warnings resolved in `shekyl-crypto-pq`.** Fixed 1
+  error (`missing_fields_in_debug` in `PersistedMultisigOutput`) and 13
+  warnings: `op_ref` (11 sites in `kem.rs`, `montgomery.rs`, `output.rs`),
+  `needless_range_loop` and `unnecessary_map_or` (in
+  `multisig_receiving.rs`), `uninlined_format_args` (in `output.rs`
+  tests). Also ran `cargo fmt` across workspace.
+
 - **FCMP++ proof verification: five integration bugs fixed, first green CI.**
   The FCMP++ core tests (`gen_fcmp_tx_valid`, `gen_fcmp_tx_double_spend`,
   `gen_fcmp_tx_reference_block_too_old`, `gen_fcmp_tx_reference_block_too_recent`,

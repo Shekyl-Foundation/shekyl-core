@@ -5,11 +5,11 @@
 //! the V3.1 multisig protocol flow.
 
 use crate::multisig::v31::{
+    encryption::{decrypt_payload, encrypt_payload},
     intent::{ChainStateFingerprint, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION},
     messages::{DecryptedPayload, MessageType, MultisigEnvelope, ENVELOPE_VERSION},
     prover::{ProverReceipt, SignatureShare},
     state::{IntentState, TrackedIntent, TxCounterTracker},
-    encryption::{encrypt_payload, decrypt_payload},
 };
 
 #[test]

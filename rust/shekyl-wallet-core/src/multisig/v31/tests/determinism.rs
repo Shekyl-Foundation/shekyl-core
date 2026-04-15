@@ -70,8 +70,7 @@ fn message_key_derivation_canary() {
     let group_secret = [0x42; 32];
     let intent_hash = [0xAA; 32];
 
-    let key =
-        derive_message_key(&group_secret, &intent_hash, MessageType::SpendIntent, 0).unwrap();
+    let key = derive_message_key(&group_secret, &intent_hash, MessageType::SpendIntent, 0).unwrap();
 
     assert_eq!(
         &key[..4],

@@ -96,10 +96,16 @@ ShekylPqcSignatureResult shekyl_pqc_sign(
     const uint8_t* message_ptr,
     size_t message_len);
 
-/// Verify a hybrid ML-DSA signature.
-/// scheme_id: PQC scheme discriminant (0 = ML-DSA-65 + Ed25519).
-/// Returns true if the signature is valid.
-bool shekyl_pqc_verify(
+/// Verify a hybrid PQC signature.
+///
+/// Returns 0 on success, or a nonzero PqcVerifyError discriminant on failure:
+///   1  = SchemeMismatch         5  = ThresholdMismatch     9  = GroupIdMismatch
+///   2  = ParameterBounds        6  = IndexOutOfRange       10 = CryptoVerifyFailed
+///   3  = KeyBlobLength          7  = IndicesNotAscending   11 = DeserializationFailed
+///   4  = SigBlobLength          8  = DuplicateKeys
+/// For scheme_id 1 (single-signer), only codes 10 and 11 apply.
+/// See rust/shekyl-crypto-pq/src/error.rs PqcVerifyError for canonical definitions.
+uint8_t shekyl_pqc_verify(
     uint8_t scheme_id,
     const uint8_t* pubkey_blob,
     size_t pubkey_len,
@@ -108,11 +114,12 @@ bool shekyl_pqc_verify(
     const uint8_t* message,
     size_t message_len);
 
-/// Verify a hybrid ML-DSA signature with optional group ID binding.
-/// Same as shekyl_pqc_verify, but for scheme_id=2 passes expected_group_id
-/// to verify_multisig for defense-in-depth group binding (PQC_MULTISIG.md SS16.3).
+/// Verify a hybrid PQC signature with optional group ID binding.
+/// Same error codes as shekyl_pqc_verify (0=success, 1-11=PqcVerifyError).
+/// For scheme_id=2, passes expected_group_id to verify_multisig for
+/// defense-in-depth group binding (PQC_MULTISIG.md SS16.3).
 /// expected_group_id: 32 bytes, or NULL to skip group ID check.
-bool shekyl_pqc_verify_with_group_id(
+uint8_t shekyl_pqc_verify_with_group_id(
     uint8_t scheme_id,
     const uint8_t* pubkey_blob,
     size_t pubkey_len,
@@ -121,25 +128,6 @@ bool shekyl_pqc_verify_with_group_id(
     const uint8_t* message,
     size_t message_len,
     const uint8_t* expected_group_id);
-
-#ifndef NDEBUG
-/// Debug variant of shekyl_pqc_verify returning PqcVerifyError codes.
-/// 0 = success.  For scheme_id 2 (multisig): 1 = SchemeMismatch,
-/// 2 = ParameterBounds, 3 = KeyBlobLength, 4 = SigBlobLength,
-/// 5 = ThresholdMismatch, 6 = IndexOutOfRange, 7 = IndicesNotAscending,
-/// 8 = DuplicateKeys, 9 = GroupIdMismatch, 10 = CryptoVerifyFailed,
-/// 11 = DeserializationFailed.  For scheme_id 1 (single-signer):
-/// 10 = CryptoVerifyFailed, 11 = DeserializationFailed.
-/// See rust/shekyl-crypto-pq/src/error.rs PqcVerifyError for canonical defs.
-uint8_t shekyl_pqc_verify_debug(
-    uint8_t scheme_id,
-    const uint8_t* pubkey_blob,
-    size_t pubkey_len,
-    const uint8_t* sig_blob,
-    size_t sig_len,
-    const uint8_t* message,
-    size_t message_len);
-#endif
 
 /// Compute a deterministic group ID from a sorted set of participant keys.
 /// keys_ptr: concatenated public key blobs, keys_len total bytes.
@@ -318,9 +306,16 @@ ShekylFcmpProveResult shekyl_fcmp_prove(
     const uint8_t* signable_tx_hash_ptr);
 
 /// Verify FCMP++ proof with batch verification.
+///
+/// Returns 0 on success, or a nonzero VerifyError discriminant (1-7) on failure:
+///   1 = DeserializationFailed   4 = KeyImageCountMismatch  7 = TreeDepthTooLarge
+///   2 = InvalidTreeRoot         5 = UpstreamError
+///   3 = PqcCommitmentMismatch   6 = BatchVerificationFailed
+/// See rust/shekyl-fcmp/src/proof.rs VerifyError for canonical definitions.
+///
 /// signable_tx_hash_ptr: 32-byte transaction binding hash.
 /// pqc_hash_count must equal ki_count.
-bool shekyl_fcmp_verify(
+uint8_t shekyl_fcmp_verify(
     const uint8_t* proof_ptr,
     size_t proof_len,
     const uint8_t* key_images_ptr,

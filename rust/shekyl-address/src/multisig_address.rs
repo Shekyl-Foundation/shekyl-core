@@ -191,11 +191,8 @@ impl MultisigAddressPayload {
         let n_total = data[4];
         let m_required = data[5];
 
-        let network = Network::from_u8(network_byte).ok_or(
-            MultisigAddressError::UnknownNetwork {
-                byte: network_byte,
-            },
-        )?;
+        let network = Network::from_u8(network_byte)
+            .ok_or(MultisigAddressError::UnknownNetwork { byte: network_byte })?;
 
         if n_total == 0 || n_total > 7 {
             return Err(MultisigAddressError::InvalidParticipantCount { n: n_total });
@@ -308,9 +305,7 @@ mod tests {
             Network::Mainnet,
             n,
             m,
-            (0..n)
-                .map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN])
-                .collect(),
+            (0..n).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
             (0..n)
                 .map(|i| vec![0x80 + i; HYBRID_SIGN_PUBKEY_LEN])
                 .collect(),
@@ -347,9 +342,7 @@ mod tests {
 
     #[test]
     fn rejects_n_zero() {
-        assert!(MultisigAddressPayload::new(
-            Network::Mainnet, 0, 0, vec![], vec![]
-        ).is_err());
+        assert!(MultisigAddressPayload::new(Network::Mainnet, 0, 0, vec![], vec![]).is_err());
     }
 
     #[test]
@@ -360,7 +353,8 @@ mod tests {
             3,
             (0..8).map(|i| vec![i; HYBRID_KEM_PUBKEY_LEN]).collect(),
             (0..8).map(|i| vec![i; HYBRID_SIGN_PUBKEY_LEN]).collect(),
-        ).is_err());
+        )
+        .is_err());
     }
 
     #[test]
@@ -371,7 +365,8 @@ mod tests {
             3,
             vec![vec![0; HYBRID_KEM_PUBKEY_LEN]; 2],
             vec![vec![0; HYBRID_SIGN_PUBKEY_LEN]; 2],
-        ).is_err());
+        )
+        .is_err());
     }
 
     #[test]
@@ -382,7 +377,8 @@ mod tests {
             2,
             vec![vec![0; 100], vec![0; HYBRID_KEM_PUBKEY_LEN]],
             vec![vec![0; HYBRID_SIGN_PUBKEY_LEN]; 2],
-        ).is_err());
+        )
+        .is_err());
     }
 
     #[test]
@@ -484,10 +480,7 @@ mod tests {
             vec![vec![0; HYBRID_SIGN_PUBKEY_LEN]; 2],
         )
         .unwrap();
-        assert_ne!(
-            p_main.to_canonical_bytes(),
-            p_test.to_canonical_bytes()
-        );
+        assert_ne!(p_main.to_canonical_bytes(), p_test.to_canonical_bytes());
         assert_ne!(address_fingerprint(&p_main), address_fingerprint(&p_test));
     }
 }

@@ -6,7 +6,9 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn bench_intent_hash(c: &mut Criterion) {
-    use shekyl_wallet_core::multisig::v31::intent::{IntentRecipient, SpendIntent, SPEND_INTENT_VERSION};
+    use shekyl_wallet_core::multisig::v31::intent::{
+        IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
+    };
 
     let intent = SpendIntent {
         version: SPEND_INTENT_VERSION,
@@ -35,7 +37,9 @@ fn bench_intent_hash(c: &mut Criterion) {
 }
 
 fn bench_intent_serialization(c: &mut Criterion) {
-    use shekyl_wallet_core::multisig::v31::intent::{IntentRecipient, SpendIntent, SPEND_INTENT_VERSION};
+    use shekyl_wallet_core::multisig::v31::intent::{
+        IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
+    };
 
     let intent = SpendIntent {
         version: SPEND_INTENT_VERSION,
@@ -64,20 +68,35 @@ fn bench_intent_serialization(c: &mut Criterion) {
 }
 
 fn bench_encrypt_decrypt(c: &mut Criterion) {
-    use shekyl_wallet_core::multisig::v31::encryption::{encrypt_payload, decrypt_payload};
+    use shekyl_wallet_core::multisig::v31::encryption::{decrypt_payload, encrypt_payload};
     use shekyl_wallet_core::multisig::v31::messages::MessageType;
 
     let key = [0x42; 32];
     let intent_hash = [0xAA; 32];
     let plaintext = vec![0xBB; 1024];
 
-    let ct = encrypt_payload(&key, &intent_hash, MessageType::SpendIntent, 0, 1, &plaintext).unwrap();
+    let ct = encrypt_payload(
+        &key,
+        &intent_hash,
+        MessageType::SpendIntent,
+        0,
+        1,
+        &plaintext,
+    )
+    .unwrap();
 
     c.bench_function("encrypt_1kb", |b| {
         b.iter(|| {
             black_box(
-                encrypt_payload(&key, &intent_hash, MessageType::SpendIntent, 0, 1, &plaintext)
-                    .unwrap(),
+                encrypt_payload(
+                    &key,
+                    &intent_hash,
+                    MessageType::SpendIntent,
+                    0,
+                    1,
+                    &plaintext,
+                )
+                .unwrap(),
             )
         })
     });
@@ -85,8 +104,7 @@ fn bench_encrypt_decrypt(c: &mut Criterion) {
     c.bench_function("decrypt_1kb", |b| {
         b.iter(|| {
             black_box(
-                decrypt_payload(&key, &intent_hash, MessageType::SpendIntent, 0, 1, &ct)
-                    .unwrap(),
+                decrypt_payload(&key, &intent_hash, MessageType::SpendIntent, 0, 1, &ct).unwrap(),
             )
         })
     });

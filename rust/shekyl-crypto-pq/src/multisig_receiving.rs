@@ -23,8 +23,8 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::CryptoError;
 use crate::kem::{
-    HybridCiphertext, HybridKemPublicKey, HybridKemSecretKey, HybridX25519MlKem,
-    KeyEncapsulation, SharedSecret,
+    HybridCiphertext, HybridKemPublicKey, HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation,
+    SharedSecret,
 };
 use crate::multisig::{
     rotating_prover_index, MultisigKeyContainer, MULTISIG_CONTAINER_VERSION,
@@ -185,8 +185,8 @@ pub fn construct_multisig_output_for_sender(
     let mut view_tag_hints = Vec::with_capacity(n_total as usize);
     let mut hybrid_sign_pks = Vec::with_capacity(n_total as usize);
 
-    for i in 0..n_total as usize {
-        let (ss, ct) = kem.encapsulate(&kem_pubkeys[i])?;
+    for kem_pubkey in &kem_pubkeys[..n_total as usize] {
+        let (ss, ct) = kem.encapsulate(kem_pubkey)?;
         kem_ciphertexts.push(ct);
 
         let (_, sa_pk) = derive_spend_auth_pubkey(&ss.0)?;
@@ -360,12 +360,15 @@ impl std::fmt::Debug for PersistedMultisigOutput {
             .field("my_participant_index", &self.my_participant_index)
             .field("my_shared_secret", &"[REDACTED]")
             .field("spend_auth_version", &self.spend_auth_version)
-            .field("output_pubkey", &format_args!("{:02x?}", &self.output_pubkey[..4]))
+            .field(
+                "output_pubkey",
+                &format_args!("{:02x?}", &self.output_pubkey[..4]),
+            )
             .field("amount", &self.amount)
             .field("assigned_prover_index", &self.assigned_prover_index)
             .field("received_at_height", &self.received_at_height)
             .field("eligible_height", &self.eligible_height)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -387,7 +390,7 @@ impl GriefingTracker {
     /// Check if this sender is currently in cooldown.
     pub fn is_in_cooldown(&self, current_height: u64) -> bool {
         self.cooldown_until_height
-            .map_or(false, |h| current_height < h)
+            .is_some_and(|h| current_height < h)
     }
 
     /// Register a validation failure and update cooldown state.
@@ -570,7 +573,13 @@ mod tests {
         let ref_block = [0xEF; 32];
 
         let construction = construct_multisig_output_for_sender(
-            3, 2, &kem_pks, &group_id, 0, &tx_sk_hash, &ref_block,
+            3,
+            2,
+            &kem_pks,
+            &group_id,
+            0,
+            &tx_sk_hash,
+            &ref_block,
         )
         .unwrap();
 
@@ -674,7 +683,13 @@ mod tests {
         let ref_block = [0xEF; 32];
 
         let construction = construct_multisig_output_for_sender(
-            2, 2, &kem_pks, &group_id, 0, &tx_sk_hash, &ref_block,
+            2,
+            2,
+            &kem_pks,
+            &group_id,
+            0,
+            &tx_sk_hash,
+            &ref_block,
         )
         .unwrap();
 
@@ -716,8 +731,7 @@ mod tests {
             ml_kem: vec![0; 1088],
         };
 
-        let result =
-            scan_multisig_output_for_participant(0, &sk, &ct, 0, 0xFF).unwrap();
+        let result = scan_multisig_output_for_participant(0, &sk, &ct, 0, 0xFF).unwrap();
 
         assert!(
             result.is_none(),
@@ -761,9 +775,9 @@ mod tests {
         assert_eq!(
             pubkey,
             [
-                0xb6, 0x33, 0x9d, 0x98, 0x87, 0x98, 0xa5, 0x47, 0x11, 0x08, 0x58,
-                0x35, 0x39, 0x81, 0xcf, 0x30, 0xda, 0x1d, 0x18, 0xb0, 0x10, 0x75,
-                0x1b, 0x7e, 0x56, 0x37, 0x74, 0x42, 0x1a, 0x0f, 0x62, 0xb1,
+                0xb6, 0x33, 0x9d, 0x98, 0x87, 0x98, 0xa5, 0x47, 0x11, 0x08, 0x58, 0x35, 0x39, 0x81,
+                0xcf, 0x30, 0xda, 0x1d, 0x18, 0xb0, 0x10, 0x75, 0x1b, 0x7e, 0x56, 0x37, 0x74, 0x42,
+                0x1a, 0x0f, 0x62, 0xb1,
             ],
             "spend_auth_pubkey diverged — platform determinism broken"
         );
@@ -778,9 +792,7 @@ mod tests {
             "hybrid_sign_seed prefix diverged"
         );
 
-        let prover = rotating_prover_index(
-            &[0xAA; 32], 7, &[0xBB; 32], &[0xCC; 32], 3,
-        ).unwrap();
+        let prover = rotating_prover_index(&[0xAA; 32], 7, &[0xBB; 32], &[0xCC; 32], 3).unwrap();
         assert_eq!(prover, 0, "rotating_prover_index diverged");
     }
 

@@ -7,9 +7,7 @@ use crate::multisig::v31::{
     encryption::{decrypt_payload, encrypt_payload},
     heartbeat::{Heartbeat, HeartbeatAnomaly, HeartbeatTracker},
     intent::{IntentRecipient, SpendIntent, SpendIntentError, SPEND_INTENT_VERSION},
-    invariants::{
-        check_assembly_consensus, InvariantCheckResult, InvariantId,
-    },
+    invariants::{check_assembly_consensus, InvariantCheckResult, InvariantId},
     messages::MessageType,
     prover::{EquivocationProof, ProverInputProof, ProverOutput, SignatureShare},
     state::{IntentState, TrackedIntent},

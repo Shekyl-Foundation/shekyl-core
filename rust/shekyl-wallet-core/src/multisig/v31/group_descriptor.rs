@@ -64,8 +64,8 @@ impl GroupDescriptor {
     }
 
     pub fn from_json(json: &str) -> Result<Self, GroupDescriptorError> {
-        let desc: Self =
-            serde_json::from_str(json).map_err(|e| GroupDescriptorError::ParseFailed(e.to_string()))?;
+        let desc: Self = serde_json::from_str(json)
+            .map_err(|e| GroupDescriptorError::ParseFailed(e.to_string()))?;
 
         if desc.version != GROUP_DESCRIPTOR_VERSION {
             return Err(GroupDescriptorError::UnsupportedVersion(desc.version));
