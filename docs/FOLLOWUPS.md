@@ -309,3 +309,12 @@ Each item is out of scope for the current PR but worth tracking for future work.
   asserts `compute_leaf_count_at_height(H) == count_of(drain_pending_tree_leaves(H))`
   for every height. This is the invariant that the off-by-one bug violated
   and is the highest-value regression gate for this class of bug.
+
+- **Expose FCMP++ verification cache stats via daemon RPC (F14).** Target: V3.1.
+  Add `verification_cache_hits` and `verification_cache_misses` fields to
+  `get_info` (or a new `get_cache_stats` JSON-RPC method). Currently the
+  verification cache hit/miss counters (`fcmp_verified`,
+  `fcmp_verification_hash`) are internal to `tx_pool.cpp` with no RPC
+  exposure. The stressnet wallet exerciser (`shekyl-dev/stressnet/`) uses
+  block validation p95 as an indirect proxy until this endpoint exists.
+  Filed from stressnet plan finding F14.
