@@ -294,8 +294,6 @@ namespace crypto {
     epee::to_hex::formatted(o, epee::as_byte_span(v)); return o;
   }
 
-  void key_image_y_normalize(key_image& ki);
-
   const extern crypto::public_key null_pkey;
   const extern crypto::secret_key null_skey;
 

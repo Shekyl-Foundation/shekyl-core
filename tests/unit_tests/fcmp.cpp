@@ -229,39 +229,6 @@ TEST(fcmp, RCTTypeNull_serialization)
   ASSERT_EQ(rv2.type, rct::RCTTypeNull);
 }
 
-TEST(fcmp, key_image_y_normalize_clears_sign_bit)
-{
-  crypto::key_image ki;
-  memset(&ki, 0xFF, sizeof(ki));
-
-  ASSERT_EQ(reinterpret_cast<unsigned char*>(&ki)[31], 0xFF);
-  crypto::key_image_y_normalize(ki);
-  ASSERT_EQ(reinterpret_cast<unsigned char*>(&ki)[31] & 0x80, 0);
-  ASSERT_EQ(reinterpret_cast<unsigned char*>(&ki)[31], 0x7F);
-}
-
-TEST(fcmp, key_image_y_normalize_preserves_already_normalized)
-{
-  crypto::key_image ki;
-  memset(&ki, 0x42, sizeof(ki));
-  reinterpret_cast<unsigned char*>(&ki)[31] = 0x05;
-
-  crypto::key_image ki_copy = ki;
-  crypto::key_image_y_normalize(ki_copy);
-  ASSERT_EQ(memcmp(&ki, &ki_copy, sizeof(ki)), 0);
-}
-
-TEST(fcmp, key_image_y_normalize_idempotent)
-{
-  crypto::key_image ki;
-  memset(&ki, 0xDE, sizeof(ki));
-
-  crypto::key_image_y_normalize(ki);
-  crypto::key_image ki_after_first = ki;
-  crypto::key_image_y_normalize(ki);
-  ASSERT_EQ(memcmp(&ki, &ki_after_first, sizeof(ki)), 0);
-}
-
 TEST(fcmp, referenceBlock_staleness_constants)
 {
   ASSERT_GT(FCMP_REFERENCE_BLOCK_MAX_AGE, FCMP_REFERENCE_BLOCK_MIN_AGE);

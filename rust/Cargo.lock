@@ -2691,6 +2691,7 @@ dependencies = [
  "shekyl-fcmp-plus-plus",
  "shekyl-generators",
  "thiserror",
+ "tracing",
  "zeroize",
 ]
 
@@ -2748,6 +2749,7 @@ dependencies = [
  "shekyl-proofs",
  "shekyl-staking",
  "shekyl-tx-builder",
+ "tracing",
  "zeroize",
 ]
 

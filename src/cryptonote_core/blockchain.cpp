@@ -3467,20 +3467,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   if (is_stake_claim_only)
   {
     // Claim transactions: inputs are txin_stake_claim, skip FCMP++ input
-    // validation but still require y-normalized key images.
-    for (const auto& txin : tx.vin)
-    {
-      const txin_stake_claim& claim = std::get<txin_stake_claim>(txin);
-      crypto::key_image ki_copy = claim.k_image;
-      crypto::key_image_y_normalize(ki_copy);
-      if (ki_copy != claim.k_image)
-      {
-        MERROR_VER("Claim tx " << get_transaction_hash(tx)
-          << " has non-y-normalized key image " << claim.k_image);
-        tvc.m_verifivation_failed = true;
-        return false;
-      }
-    }
+    // validation (no membership proof needed for claims).
   }
   else if (is_fcmp_pp)
   {
@@ -3503,17 +3490,6 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       {
         MERROR_VER("Key image already spent in blockchain: " << epee::string_tools::pod_to_hex(in_to_key.k_image));
         tvc.m_double_spend = true;
-        return false;
-      }
-
-      // FCMP++ requires y-normalized key images (sign bit of byte 31 cleared)
-      crypto::key_image ki_copy = in_to_key.k_image;
-      crypto::key_image_y_normalize(ki_copy);
-      if (ki_copy != in_to_key.k_image)
-      {
-        MERROR_VER("FCMP++ tx " << get_transaction_hash(tx)
-          << " has non-y-normalized key image " << in_to_key.k_image);
-        tvc.m_verifivation_failed = true;
         return false;
       }
     }

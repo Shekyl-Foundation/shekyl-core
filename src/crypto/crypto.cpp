@@ -450,8 +450,4 @@ POP_WARNINGS
     return sc_isnonzero(&h) == 0;
   }
 
-  void key_image_y_normalize(key_image& ki) {
-    reinterpret_cast<unsigned char*>(ki.data)[31] &= 0x7f;
-  }
-
 }

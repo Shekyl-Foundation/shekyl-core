@@ -3750,7 +3750,7 @@ namespace cryptonote
       uint64_t cur_nodes_at_prev_layer = tip_leaf_count;
       uint64_t child_chunk = chunk_idx;
 
-      for (uint8_t layer = 1; layer < depth; ++layer)
+      for (uint8_t layer = 1; layer <= depth; ++layer)
       {
         uint32_t prev_cw = chunk_width(layer - 1);
         uint32_t cw = chunk_width(layer);

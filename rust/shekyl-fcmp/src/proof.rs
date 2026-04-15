@@ -698,7 +698,7 @@ pub fn verify(
     let c2_ok = HELIOS_FCMP_GENERATORS.generators.verify(c2_verifier);
 
     if !ed_ok || !c1_ok || !c2_ok {
-        tracing::debug!(ed_ok, c1_ok, c2_ok, "batch check failed");
+        eprintln!("[DIAG] batch check: ed={ed_ok} c1={c1_ok} c2={c2_ok}");
         return Err(VerifyError::BatchVerificationFailed);
     }
 
@@ -848,21 +848,17 @@ mod tests {
         let tree_depth: u8 = 1;
         let signable_tx_hash = [0xABu8; 32];
 
-        // Generate spend keys and derive output point O = xG + yT
         let x = Scalar::random(&mut OsRng);
         let y = Scalar::random(&mut OsRng);
         let O = (EdwardsPoint::generator() * x) + (EdwardsPoint(*T) * y);
         let I = EdwardsPoint::random(&mut OsRng);
         let C = EdwardsPoint::random(&mut OsRng);
 
-        // Key image: L = I * x
         let L = I * x;
 
-        // Random PQC leaf scalar
         let h_pqc_field = <Selene as Ciphersuite>::F::random(&mut OsRng);
         let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr();
 
-        // Compute tree root: single-leaf Selene Pedersen commitment
         let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
         let tree_root_point: <Selene as Ciphersuite>::G = *SELENE_HASH_INIT
             + multiexp_vartime(&[
@@ -882,7 +878,6 @@ mod tests {
             ]);
         let tree_root: [u8; 32] = tree_root_point.to_bytes();
 
-        // Compressed points for ProveInput
         let o_bytes = O.to_bytes();
         let i_bytes = I.to_bytes();
         let c_bytes = C.to_bytes();
@@ -1204,7 +1199,6 @@ mod tests {
         let x = Scalar::random(&mut OsRng);
         let mask = Scalar::random(&mut OsRng);
 
-        // Legacy output: O = x*G (no T component)
         let O = EdwardsPoint::generator() * x;
         let I = EdwardsPoint::random(&mut OsRng);
         let C = EdwardsPoint::random(&mut OsRng);
@@ -1242,7 +1236,6 @@ mod tests {
             commitment: c_bytes,
             h_pqc: PqcLeafScalar(h_pqc_bytes),
             spend_key_x: x.to_repr(),
-            // BUG: passing commitment mask as y (the old wallet2.cpp bug)
             spend_key_y: mask.to_repr(),
             commitment_mask: mask.to_repr(),
             pseudo_out_blind: a.to_repr(),
@@ -1273,7 +1266,6 @@ mod tests {
         let y = Scalar::random(&mut OsRng);
         let z = Scalar::random(&mut OsRng);
 
-        // Two-component output: O = x*G + y*T
         let O = (EdwardsPoint::generator() * x) + (EdwardsPoint(*T) * y);
         let I = EdwardsPoint::random(&mut OsRng);
         let C = EdwardsPoint::random(&mut OsRng);

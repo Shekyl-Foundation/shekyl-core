@@ -31,6 +31,7 @@ curve25519-dalek = "4"
 rcgen = "0.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tracing = "0.1"
 zeroize = "1"
 libc = "0.2"
 dalek-ff-group = "0.5"

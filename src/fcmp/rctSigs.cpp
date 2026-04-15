@@ -423,9 +423,13 @@ namespace
             const size_t leaf_entries_in_chunk = entries.size();
             tp_off += leaf_entries_in_chunk * 128; // skip leaf scalar data
 
-            // Extract branch layers: alternating Selene (even) / Helios (odd)
+            // Extract branch layers and convert LMDB point hashes to cycle
+            // scalars.  The tree path stores raw layer hashes (curve points)
+            // from LMDB, but the FCMP++ prover expects cycle scalars:
+            //   odd layer  (Helios): children are Selene points → Helios scalars
+            //   even layer (Selene): children are Helios points → Selene scalars
             std::vector<std::vector<uint8_t>> c1_layers, c2_layers;
-            for (uint8_t layer = 1; layer < tree_depth && tp_off + 2 <= tp.size(); ++layer)
+            for (uint8_t layer = 1; layer <= tree_depth && tp_off + 2 <= tp.size(); ++layer)
             {
                 tp_off += 2; // skip pos_in_parent u16
                 uint32_t width = (layer % 2 == 0) ? SELENE_CHUNK_WIDTH : HELIOS_CHUNK_WIDTH;
@@ -433,14 +437,74 @@ namespace
                 if (tp_off + layer_bytes > tp.size())
                     layer_bytes = tp.size() - tp_off;
 
-                std::vector<uint8_t> siblings(tp.begin() + tp_off, tp.begin() + tp_off + layer_bytes);
+                size_t sib_count = layer_bytes / 32;
+                std::vector<uint8_t> scalars(sib_count * 32, 0);
+                size_t converted = 0, skipped_zero = 0, conv_fail = 0;
+                for (size_t s = 0; s < sib_count; ++s)
+                {
+                    const uint8_t *point = &tp[tp_off + s * 32];
+                    uint8_t zero[32] = {};
+                    if (memcmp(point, zero, 32) == 0) {
+                        ++skipped_zero;
+                        continue;
+                    }
+                    bool ok;
+                    if (layer % 2 != 0)
+                        ok = shekyl_curve_tree_selene_to_helios_scalar(point, &scalars[s * 32]);
+                    else
+                        ok = shekyl_curve_tree_helios_to_selene_scalar(point, &scalars[s * 32]);
+                    if (ok) ++converted; else ++conv_fail;
+                }
+                LOG_PRINT_L0("genRctFcmpPlusPlus: branch layer=" << (int)layer
+                  << " width=" << width << " sibs=" << sib_count
+                  << " converted=" << converted << " zero=" << skipped_zero
+                  << " fail=" << conv_fail);
                 tp_off += layer_bytes;
 
-                // Layer 1 is Helios (odd), layer 2 is Selene (even), ...
                 if (layer % 2 == 0)
-                    c1_layers.push_back(std::move(siblings));
+                    c1_layers.push_back(std::move(scalars));
                 else
-                    c2_layers.push_back(std::move(siblings));
+                    c2_layers.push_back(std::move(scalars));
+            }
+            LOG_PRINT_L0("genRctFcmpPlusPlus: c1_layers=" << c1_layers.size()
+              << " c2_layers=" << c2_layers.size());
+
+            // DIAG: Merkle-root-from-witness check (first input only)
+            if (i == 0 && !c2_layers.empty())
+            {
+                uint8_t helios_init[32];
+                shekyl_curve_tree_helios_hash_init(helios_init);
+                uint8_t zero_scalar[32] = {};
+
+                const auto& branch = c2_layers[0];
+                uint64_t n_scalars = branch.size() / 32;
+
+                uint8_t computed_root[32];
+                bool hash_ok = shekyl_curve_tree_hash_grow_helios(
+                    helios_init, 0, zero_scalar,
+                    branch.data(), n_scalars,
+                    computed_root);
+
+                auto to_hex = [](const uint8_t *p, size_t len) {
+                    std::ostringstream oss;
+                    for (size_t b = 0; b < len; ++b)
+                        oss << std::hex << std::setfill('0') << std::setw(2) << (int)p[b];
+                    return oss.str();
+                };
+                bool root_match = hash_ok && memcmp(computed_root, tree_root.bytes, 32) == 0;
+                LOG_PRINT_L0("DIAG root-from-branch: hash_ok=" << hash_ok
+                  << " match=" << root_match
+                  << " computed=" << to_hex(computed_root, 32)
+                  << " claimed=" << to_hex(tree_root.bytes, 32));
+
+                // Also check: what does LMDB store as the layer-0 chunk hash
+                // at the same position we're converting?
+                for (uint64_t s = 0; s < n_scalars && s < 4; ++s)
+                {
+                    const uint8_t *scalar = branch.data() + s * 32;
+                    if (memcmp(scalar, zero_scalar, 32) != 0)
+                        LOG_PRINT_L0("DIAG c2[0][" << s << "] scalar=" << to_hex(scalar, 32));
+                }
             }
 
             // Serialize C1 (Selene) branch layers
@@ -462,20 +526,6 @@ namespace
             }
         }
 
-        {
-            std::ostringstream root_hex;
-            for (int b = 0; b < 32; ++b)
-                root_hex << std::hex << std::setfill('0') << std::setw(2) << (int)(unsigned char)tree_root.bytes[b];
-            std::ostringstream msg_hex;
-            for (int b = 0; b < 32; ++b)
-                msg_hex << std::hex << std::setfill('0') << std::setw(2) << (int)(unsigned char)message.bytes[b];
-            LOG_PRINT_L0("genRctFcmpPlusPlus: prove with num_inputs=" << num_inputs
-              << " tree_depth=" << (int)tree_depth
-              << " tree_root=" << root_hex.str()
-              << " message=" << msg_hex.str()
-              << " witness_size=" << witness.size());
-        }
-
         ShekylFcmpProveResult result = shekyl_fcmp_prove(
             witness.data(),
             witness.size(),
@@ -484,7 +534,7 @@ namespace
             tree_depth,
             message.bytes);
 
-        LOG_PRINT_L0("genRctFcmpPlusPlus: result.success=" << result.success
+        LOG_PRINT_L2("genRctFcmpPlusPlus: result.success=" << result.success
           << " proof_len=" << (result.proof.ptr ? result.proof.len : 0)
           << " pseudo_outs_len=" << (result.pseudo_outs.ptr ? result.pseudo_outs.len : 0));
 
@@ -500,6 +550,7 @@ namespace
                     memcpy(rv.p.pseudoOuts[i].bytes, result.pseudo_outs.ptr + i * 32, 32);
                 shekyl_buffer_free(result.pseudo_outs.ptr, result.pseudo_outs.len);
             }
+
         }
         else
         {
