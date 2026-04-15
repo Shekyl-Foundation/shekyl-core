@@ -19,7 +19,7 @@ MAJOR.MINOR.PATCH[-PRERELEASE]
 |-----------|-------------|
 | MAJOR | Breaking change to the repo's external interface: RPC removal, CLI flag change, config format change, LMDB schema requiring resync, wallet file format change. |
 | MINOR | Backward-compatible feature addition: new RPC endpoint, new CLI command, new wallet capability. |
-| PATCH | Bug fix, performance improvement, or non-breaking internal change. |
+| PATCH | Bug fix, performance improvement, or non-breaking internal change. Documentation, CI, and internal-only changes do not require a version bump and can land between tags without one. |
 | PRERELEASE | `alpha.N` / `beta.N` / `rc.N` (see below). |
 
 MAJOR, MINOR, and PATCH are **not coupled across repos**. shekyl-core
@@ -28,12 +28,18 @@ describes that repo's artifact, nothing more.
 
 ### Pre-release stages
 
-| Stage | Meaning | Entry condition |
-|-------|---------|-----------------|
-| `alpha.N` | Feature-incomplete, interfaces may change. Suitable for developer testing. | Feature branch merged to dev. |
+| Stage | Meaning | Transition from previous stage |
+|-------|---------|-------------------------------|
+| `alpha.N` | Feature-incomplete, interfaces may change. Suitable for developer testing. | First alpha: feature branch merged to dev. |
 | `beta.N` | Feature-complete, bugs expected. Suitable for stressnet and community testing. | All planned features merged; stressnet deployed. |
 | `rc.N` | Release candidate. No known blocking issues. | Stressnet stable; audit findings addressed. |
 | *(none)* | Stable release. | RC period elapsed without blocking findings. |
+
+Incrementing the counter within a stage (alpha.1 to alpha.2, etc.) is at
+maintainer discretion. The threshold is "enough has changed to warrant a
+new pre-release artifact for testing." In practice: tag a new alpha when
+a testing milestone is reached, or roughly every two weeks if meaningful
+merges have landed. There is no automatic trigger.
 
 Pre-release identifiers use lowercase with dot-separated numeric
 counters, per SemVer: `3.1.0-alpha.1 < 3.1.0-beta.1 < 3.1.0-rc.1 < 3.1.0`.
@@ -101,19 +107,27 @@ user-facing source of truth for "can I use component X with component Y?"
 | Software | Version | Protocol | Notes |
 |----------|---------|----------|-------|
 | shekyl-core | 3.1.0-alpha.1 | 3 | Reference implementation. |
-| shekyl-gui-wallet | 3.1.0-alpha.1 | requires 3, refuses 4 | First release under aligned versioning. |
+| shekyl-gui-wallet | 3.1.0-alpha.1 | requires 3 | First release under aligned versioning. |
 
 Update this table when shipping new versions. Third-party implementations
 should declare their own protocol compatibility.
 
+During the V3 to V4 transition, wallets will declare support for both
+protocol versions to allow spending V3-era outputs after V4 launch
+(V3.1 outputs remain spendable indefinitely under the V3 spend-auth
+scheme). Migration semantics will be specified in the V4 protocol
+document.
+
 ### Why the versions happen to match
 
 For the initial alpha, both repos are at software version 3.1.0. This is
-a coincidence of timing, not a coupling rule. The software MAJOR is 3
-because the first public release ships with protocol 3 — there are no
-prior stable releases to be backward-compatible with, so MAJOR starts at
-3 rather than 1. Future software MAJOR bumps (breaking RPC changes,
-schema migrations) will diverge from the protocol version.
+a coincidence of timing, not a coupling rule. The software MAJOR is 3 as
+a one-time alignment to make the initial release legible: the first
+public release ships with protocol 3, and starting the software version
+at 3 avoids the confusion of "software v1.0.0 implements protocol 3."
+This is a project decision, not a SemVer requirement — SemVer would
+equally permit starting at 1.0.0. Future software MAJOR bumps (breaking
+RPC changes, schema migrations) will diverge from the protocol version.
 
 ---
 
@@ -140,8 +154,24 @@ schema migrations) will diverge from the protocol version.
 ### Consistency rule
 
 All version sources within a repo must agree at tag time. CI should
-assert this. Between tags, development builds use `git describe` output
-and sources may temporarily diverge from the next planned version.
+assert this.
+
+### Development builds between tags
+
+For shekyl-core, `cmake/GitVersion.cmake` determines the build version:
+
+- **Tagged commit:** version is extracted from the tag (e.g., tag
+  `v3.1.0-alpha.1` produces version `3.1.0-alpha.1`).
+- **Untagged commit:** version falls back to `SHEKYL_VERSION_DEFAULT`
+  from `cmake/Version.cmake`, with the version tag set to the 9-char
+  commit hash (e.g., `3.1.0-1a2b3c4d5`).
+- **No git available:** version is `SHEKYL_VERSION_DEFAULT` with tag
+  `unknown`.
+
+For shekyl-gui-wallet, the `package.json` version is the source of
+truth for development builds. Between tags, it reflects the next
+planned version (e.g., `3.1.0-alpha.2` while working toward that
+release).
 
 ---
 
