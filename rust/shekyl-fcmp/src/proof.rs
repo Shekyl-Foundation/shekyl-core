@@ -676,13 +676,19 @@ pub fn verify(
 
     let layers = tree_depth as usize;
 
-    let tree = deserialize_tree_root(tree_root, layers).ok_or(VerifyError::InvalidTreeRoot)?;
+    let tree = deserialize_tree_root(tree_root, layers).ok_or_else(|| {
+        tracing::debug!(layers, "deserialize_tree_root failed");
+        VerifyError::InvalidTreeRoot
+    })?;
 
     let ki_points: Vec<<Ed25519 as Ciphersuite>::G> = key_images
         .iter()
         .map(decompress_ed25519)
         .collect::<Option<Vec<_>>>()
-        .ok_or(VerifyError::DeserializationFailed)?;
+        .ok_or_else(|| {
+            tracing::debug!("key_image decompression failed");
+            VerifyError::DeserializationFailed
+        })?;
 
     let pqc_selene: Vec<<Selene as Ciphersuite>::F> = pqc_pk_hashes
         .iter()
@@ -691,7 +697,10 @@ pub fn verify(
         .collect::<Result<Vec<_>, _>>()?;
 
     let fcmp_pp = FcmpPlusPlus::read(pseudo_outs, layers, &mut proof.data.as_slice())
-        .map_err(|_| VerifyError::DeserializationFailed)?;
+        .map_err(|e| {
+            tracing::debug!(proof_len = proof.data.len(), layers, error = %e, "FcmpPlusPlus::read failed");
+            VerifyError::DeserializationFailed
+        })?;
 
     let mut ed_verifier = multiexp::BatchVerifier::new(num_inputs);
     let mut c1_verifier = generalized_bulletproofs::Generators::batch_verifier();

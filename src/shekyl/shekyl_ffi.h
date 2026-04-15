@@ -297,6 +297,9 @@ struct ShekylFcmpProveResult {
 ///   z = Pedersen commitment mask
 ///   a = desired pseudo-out blinding factor
 /// See shekyl-ffi crate docs for the full wire format specification.
+///
+/// tree_depth: upstream library `layers` count (= LMDB depth + 1).
+/// C++ callers must convert: layers = lmdb_depth + 1.
 ShekylFcmpProveResult shekyl_fcmp_prove(
     const uint8_t* witness_ptr,
     size_t witness_len,
@@ -313,6 +316,8 @@ ShekylFcmpProveResult shekyl_fcmp_prove(
 ///   3 = PqcCommitmentMismatch   6 = BatchVerificationFailed
 /// See rust/shekyl-fcmp/src/proof.rs VerifyError for canonical definitions.
 ///
+/// tree_depth: upstream library `layers` count (= LMDB depth + 1).
+/// C++ callers must convert: layers = lmdb_depth + 1.
 /// signable_tx_hash_ptr: 32-byte transaction binding hash.
 /// pqc_hash_count must equal ki_count.
 uint8_t shekyl_fcmp_verify(

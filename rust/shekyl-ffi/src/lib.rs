@@ -1214,30 +1214,18 @@ pub unsafe extern "C" fn shekyl_fcmp_prove(
         return fail;
     };
 
-    // Curve-tree layer convention (authoritative — see also FCMP_PLUS_PLUS.md):
+    // The `tree_depth` parameter is the upstream library's `layers` count:
+    // the total number of tree layers including the leaf layer. C++ callers
+    // are responsible for converting LMDB depth to layers (depth + 1) before
+    // calling this function. See FCMP_PLUS_PLUS.md §FFI Invariants.
     //
-    //   LMDB stores `depth` = highest layer index (0-indexed).
-    //     depth 0 = only leaf hashes exist (layer 0, Selene).
-    //     depth 1 = Selene leaves → Helios root (layers 0..1).
-    //     depth N = N non-leaf layers above the leaf layer.
-    //
-    //   The upstream FCMP++ library uses `layers` = total non-leaf layer count
-    //   including the root.  Formula: layers = depth + 1.
-    //     layers 1 = single Selene root (degenerate, root IS the leaf layer).
-    //     layers 2 = Selene leaves → Helios root.
-    //     layers 3 = Selene leaves → Helios → Selene root.
+    //   layers 1 = single Selene root (degenerate, root IS the leaf hash).
+    //   layers 2 = Selene leaves → Helios root.
+    //   layers 3 = Selene leaves → Helios → Selene root.
     //
     //   Root curve parity: layers % 2 == 1 → C1 (Selene), == 0 → C2 (Helios).
-    //
-    //   The witness must contain:
-    //     - For each input: leaf chunk data (Ed25519 points)
-    //     - c2_branch_layers: ceil(depth / 2) entries of Helios scalars
-    //     - c1_branch_layers: floor(depth / 2) entries of Selene scalars
-    //   Branch scalars are CYCLE SCALARS: Selene points from LMDB are converted
-    //   to Helios field elements (and vice versa) via point_to_cycle_scalar.
-    let layers = tree_depth.saturating_add(1);
 
-    match shekyl_fcmp::proof::prove(&inputs, &tree_root, layers, signable_tx_hash) {
+    match shekyl_fcmp::proof::prove(&inputs, &tree_root, tree_depth, signable_tx_hash) {
         Ok(result) => {
             let mut po_flat = Vec::with_capacity(n * 32);
             for po in &result.pseudo_outs {
@@ -1441,14 +1429,15 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
         buf
     };
 
-    // See convention comment in shekyl_fcmp_prove: layers = depth + 1.
-    let layers = tree_depth.saturating_add(1);
+    // The `tree_depth` parameter is the upstream library's `layers` count.
+    // C++ callers convert LMDB depth to layers (depth + 1) before calling.
+    // See convention comment in shekyl_fcmp_prove.
 
     let proof = shekyl_fcmp::proof::ShekylFcmpProof {
         data: proof_bytes.to_vec(),
         #[allow(clippy::cast_possible_truncation)]
         num_inputs: ki_count as u32,
-        tree_depth: layers,
+        tree_depth,
     };
 
     let mut key_images = Vec::with_capacity(ki_count);
@@ -1475,13 +1464,13 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
         &pseudo_outs,
         &pqc_hashes,
         &tree_root,
-        layers,
+        tree_depth,
         signable_tx_hash,
     ) {
         Ok(true) => 0,
         Ok(false) => 6, // BatchVerificationFailed
         Err(e) => {
-            tracing::debug!(?e, tree_depth, layers, "FCMP++ verify failed");
+            tracing::debug!(error = ?e, tree_depth, "verify error");
             e.discriminant()
         }
     }
@@ -3269,10 +3258,12 @@ pub unsafe extern "C" fn shekyl_sign_fcmp_transaction(
         x_bytes.zeroize();
     }
 
+    // C++ wallet passes LMDB depth; convert to upstream layers (depth + 1).
+    let layers = tree_depth.saturating_add(1);
     let tree = shekyl_tx_builder::TreeContext {
         reference_block,
         tree_root,
-        tree_depth,
+        tree_depth: layers,
     };
 
     let result = match shekyl_tx_builder::sign_transaction(

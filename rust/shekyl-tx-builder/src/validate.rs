@@ -89,16 +89,17 @@ pub(crate) fn validate_inputs(
             });
         }
 
-        // Branch layer consistency with tree depth.
-        // The FCMP++ tree alternates Selene (C1) and Helios (C2) layers.
-        // Layer 0 is always the leaf hash (Selene); branch layers sit above it.
-        // For depth d: c1_count + c2_count + 1 == d.
-        // Even-indexed branches are C1, odd-indexed are C2, so c1 == c2 or
-        // c1 == c2 + 1.
+        // Branch layer consistency with tree depth (= upstream layers count).
+        //
+        // tree_depth here is the upstream library's `layers` value, which
+        // includes the leaf layer: layers = LMDB_depth + 1.
+        // Branch layers cover everything above the leaf layer:
+        //   branch_count = layers - 1
+        // Even-indexed branches are C1 (Selene), odd-indexed are C2 (Helios):
+        //   c1 = ceil(B/2), c2 = floor(B/2).
         let c1 = inp.c1_layers.len();
         let c2 = inp.c2_layers.len();
-        let depth = tree.tree_depth as usize;
-        let branch_count = depth.saturating_sub(1);
+        let branch_count = (tree.tree_depth as usize).saturating_sub(1);
         let expected_c1 = branch_count.div_ceil(2);
         let expected_c2 = branch_count / 2;
         if c1 != expected_c1 || c2 != expected_c2 {

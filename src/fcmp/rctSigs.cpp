@@ -486,12 +486,14 @@ namespace
             }
         }
 
+        // Convert LMDB depth to upstream layers count (depth + 1).
+        const uint8_t fcmp_layers = static_cast<uint8_t>(tree_depth + 1);
         ShekylFcmpProveResult result = shekyl_fcmp_prove(
             witness.data(),
             witness.size(),
             num_inputs,
             tree_root.bytes,
-            tree_depth,
+            fcmp_layers,
             message.bytes);
 
         LOG_PRINT_L2("genRctFcmpPlusPlus: result.success=" << result.success

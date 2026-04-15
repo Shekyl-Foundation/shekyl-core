@@ -136,6 +136,21 @@
 
 ### 🐛 Fixed
 
+- **FCMP++ FFI: move depth-to-layers conversion to C++ callers.**
+  `shekyl_fcmp_prove` and `shekyl_fcmp_verify` previously converted
+  LMDB depth to upstream `layers` internally (`layers = depth + 1`).
+  This created an ambiguous contract where the same `tree_depth`
+  parameter meant different things in different FFI functions. Now both
+  functions accept the upstream `layers` count directly; C++ callers
+  (`blockchain.cpp`, `rctSigs.cpp`) perform `depth + 1` before calling.
+  `shekyl_sign_fcmp_transaction` still accepts LMDB depth and converts
+  internally (wallet callers pass LMDB depth). Added diagnostic tracing
+  to `proof::verify` for `FcmpPlusPlus::read` and key image
+  decompression failures. Fixed `validate.rs` c1/c2 alternation comment
+  (the formula was correct but had been transiently swapped during
+  refactoring). Tests simplified to single-layer Selene root (layers=1)
+  to match the Rust unit test convention.
+
 - **CI: fix `cargo audit` failure from RUSTSEC-2026-0098/0099.** Bumped
   `rustls-webpki` 0.103.10 -> 0.103.12 and `rand` 0.9.2 -> 0.9.4 in
   `Cargo.lock`. Added `rust/audit.toml` to acknowledge `rand` 0.8.5

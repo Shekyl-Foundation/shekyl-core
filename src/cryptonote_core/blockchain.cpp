@@ -3720,6 +3720,8 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         }
         else
         {
+          // Convert LMDB depth to upstream layers count (depth + 1).
+          const uint8_t fcmp_layers = static_cast<uint8_t>(rv.p.curve_trees_tree_depth + 1);
           const uint8_t fcmp_result = shekyl_fcmp_verify(
             rv.p.fcmp_pp_proof.data(),
             rv.p.fcmp_pp_proof.size(),
@@ -3730,7 +3732,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             pqc_hashes_flat.data(),
             num_inputs,
             tree_root.data(),
-            rv.p.curve_trees_tree_depth,
+            fcmp_layers,
             reinterpret_cast<const uint8_t*>(tx_prefix_hash.data)
           );
 

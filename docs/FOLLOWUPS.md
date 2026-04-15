@@ -267,6 +267,18 @@ Each item is out of scope for the current PR but worth tracking for future work.
   - Testing rule added to `.cursor/rules/40-testing.mdc`: fixtures must
     be spec-derived, not behavior-derived.
 
+- **FFI depth-to-layers convention fix (April 15, 2026).**
+  `shekyl_fcmp_prove` and `shekyl_fcmp_verify` were performing an internal
+  `layers = tree_depth + 1` conversion. This was opaque to C++ callers and
+  led to double-conversion bugs when test code also added 1. Fix: removed
+  the internal conversion; FFI functions now accept `layers` directly.
+  C++ callers (`blockchain.cpp`, `rctSigs.cpp`) explicitly convert before
+  calling. `shekyl_sign_fcmp_transaction` still accepts LMDB depth and
+  converts internally. Both FFI tests (`signing_round_trip.rs`,
+  `json_serialization.cpp`) simplified to layers=1 Selene root with
+  LMDB depth=0. Also caught a transient c1/c2 alternation swap in
+  `validate.rs` introduced during the same refactoring session.
+
 - **Historical tree path assembly uses current LMDB state.** (Target: V3.1)
   `assemble_tree_path_for_output` (in both `chaingen.cpp` and
   `core_rpc_server.cpp`) reads sibling hashes from the current LMDB tree

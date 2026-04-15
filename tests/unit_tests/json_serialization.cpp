@@ -270,21 +270,18 @@ namespace test
             << "DEBUG: scanned amount mismatch: expected " << input_amount
             << " got " << scanned.amount;
 
-        // --- 4. Build curve tree leaf + depth-1 root ---
+        // --- 4. Build single-layer Selene curve tree root (layers=1) ---
         uint8_t leaf[128];
         bool leaf_ok = shekyl_construct_curve_tree_leaf(
             input_out.output_key, input_out.commitment, scanned.h_pqc, leaf);
         EXPECT_TRUE(leaf_ok) << "DEBUG: shekyl_construct_curve_tree_leaf failed";
 
         uint8_t selene_init[32];
-        EXPECT_TRUE(shekyl_curve_tree_selene_hash_init(selene_init))
-            << "DEBUG: shekyl_curve_tree_selene_hash_init failed";
-
+        EXPECT_TRUE(shekyl_curve_tree_selene_hash_init(selene_init));
         uint8_t zero_scalar[32] = {};
         uint8_t tree_root[32];
-        bool root_ok = shekyl_curve_tree_hash_grow_selene(
-            selene_init, 0, zero_scalar, leaf, 4, tree_root);
-        EXPECT_TRUE(root_ok) << "DEBUG: shekyl_curve_tree_hash_grow_selene failed";
+        EXPECT_TRUE(shekyl_curve_tree_hash_grow_selene(
+            selene_init, 0, zero_scalar, leaf, 4, tree_root));
 
         // --- 5. Construct change output ---
         WalletKeys change_wallet = generate_wallet_keys();
@@ -346,7 +343,9 @@ namespace test
         reference_block[0] = 0xCC;
         reference_block[31] = 0xDD;
 
-        const uint8_t tree_depth = 1;
+        // LMDB depth 0 = leaves only (single Selene root). The signing FFI
+        // converts to layers = 0 + 1 = 1 for the upstream library.
+        const uint8_t tree_depth = 0;
 
         ShekylSignResult result = shekyl_sign_fcmp_transaction(
             wallet.spend_secret,
@@ -397,12 +396,14 @@ namespace test
         shekyl_buffer_free(result.error_message.ptr, result.error_message.len);
 
         // --- 10. Verify the proof ---
+        // shekyl_fcmp_verify expects layers (= LMDB depth + 1).
+        const uint8_t verify_layers = static_cast<uint8_t>(tree_depth + 1);
         uint8_t fcmp_result = shekyl_fcmp_verify(
             fcmp_proof.data(), fcmp_proof.size(),
             scanned.key_image, 1,
             pseudo_out.data(), 1,
             scanned.h_pqc, 1,
-            tree_root, tree_depth,
+            tree_root, verify_layers,
             tx_prefix_hash);
         EXPECT_EQ(fcmp_result, 0) << "shekyl_fcmp_verify error code: " << (int)fcmp_result;
 

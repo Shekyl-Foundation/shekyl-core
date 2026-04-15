@@ -12,8 +12,8 @@
 use shekyl_ffi::{
     shekyl_buffer_free, shekyl_construct_curve_tree_leaf, shekyl_construct_output,
     shekyl_curve_tree_hash_grow_selene, shekyl_fcmp_verify, shekyl_kem_keypair_generate,
-    shekyl_output_data_free, shekyl_scan_and_recover, shekyl_sign_fcmp_transaction, ShekylBuffer,
-    ShekylOutputData,
+    shekyl_output_data_free, shekyl_scan_and_recover, shekyl_sign_fcmp_transaction,
+    ShekylBuffer, ShekylOutputData,
 };
 
 use ciphersuite::group::GroupEncoding;
@@ -254,11 +254,15 @@ fn scan_output_ffi(
     }
 }
 
-fn build_leaf_and_root(
+/// Build a single-layer Selene curve tree root (layers=1).
+///
+/// The root is the Selene hash of the single leaf chunk. With layers=1
+/// the root IS the leaf-layer hash, so no branch layers are needed.
+fn build_selene_root(
     output_key: &[u8; 32],
     commitment: &[u8; 32],
     h_pqc: &[u8; 32],
-) -> ([u8; 128], [u8; 32]) {
+) -> [u8; 32] {
     let mut leaf = [0u8; 128];
     let ok = unsafe {
         shekyl_construct_curve_tree_leaf(
@@ -270,14 +274,12 @@ fn build_leaf_and_root(
     };
     assert!(ok, "shekyl_construct_curve_tree_leaf failed");
 
-    // tree_depth=1: the root IS the Selene hash of the single leaf chunk.
-    // No branch layers above it (c1=0, c2=0).
-    let init_bytes: [u8; 32] = SELENE_HASH_INIT.to_bytes();
+    let selene_init: [u8; 32] = SELENE_HASH_INIT.to_bytes();
     let zero_scalar = [0u8; 32];
     let mut root = [0u8; 32];
     let ok = unsafe {
         shekyl_curve_tree_hash_grow_selene(
-            init_bytes.as_ptr(),
+            selene_init.as_ptr(),
             0,
             zero_scalar.as_ptr(),
             leaf.as_ptr(),
@@ -287,7 +289,7 @@ fn build_leaf_and_root(
     };
     assert!(ok, "shekyl_curve_tree_hash_grow_selene failed");
 
-    (leaf, root)
+    root
 }
 
 fn build_test_case(iteration: u32) {
@@ -319,8 +321,8 @@ fn build_test_case(iteration: u32) {
     );
 
     eprintln!("  [signing_round_trip] iteration {iteration}: building curve tree...");
-    let (_leaf, tree_root) =
-        build_leaf_and_root(&input_out.output_key, &input_out.commitment, &scanned.h_pqc);
+    let tree_root =
+        build_selene_root(&input_out.output_key, &input_out.commitment, &scanned.h_pqc);
 
     let hp_of_o_point = shekyl_generators::biased_hash_to_point(input_out.output_key);
     let hp_of_o: [u8; 32] = hp_of_o_point.compress().to_bytes();
@@ -383,7 +385,9 @@ fn build_test_case(iteration: u32) {
     reference_block[0] = 0xCC;
     reference_block[31] = 0xDD;
 
-    let tree_depth: u8 = 1;
+    // LMDB depth 0 = leaves only (single Selene root). The signing FFI
+    // converts this to layers = 0 + 1 = 1 for the upstream library.
+    let tree_depth: u8 = 0;
 
     eprintln!(
         "  [signing_round_trip] iteration {iteration}: calling shekyl_sign_fcmp_transaction..."
@@ -473,8 +477,15 @@ fn build_test_case(iteration: u32) {
     unsafe { shekyl_buffer_free(result.proofs_json.ptr, result.proofs_json.len) };
     unsafe { shekyl_buffer_free(result.error_message.ptr, result.error_message.len) };
 
-    eprintln!("  [signing_round_trip] iteration {iteration}: verifying proof...");
+    eprintln!(
+        "  [signing_round_trip] iteration {iteration}: proof len={}",
+        fcmp_proof.len(),
+    );
 
+    // shekyl_fcmp_verify expects layers (not LMDB depth).
+    // The signing FFI converts depth → layers internally, so the proof
+    // was built with layers = tree_depth + 1.
+    let verify_layers: u8 = tree_depth + 1;
     let verify_result = unsafe {
         shekyl_fcmp_verify(
             fcmp_proof.as_ptr(),
@@ -486,7 +497,7 @@ fn build_test_case(iteration: u32) {
             scanned.h_pqc.as_ptr(),
             1,
             tree_root.as_ptr(),
-            tree_depth,
+            verify_layers,
             tx_prefix_hash.as_ptr(),
         )
     };

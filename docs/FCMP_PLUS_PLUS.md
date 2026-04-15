@@ -592,9 +592,12 @@ and must be preserved by any code that touches the FFI boundary.
 1. **`layers` (library) = `depth + 1` (LMDB).** LMDB stores a 0-indexed
    `tree_depth` where depth 0 means "leaves only, no intermediate layers"
    and depth 1 means "one Helios layer above Selene leaves." The upstream
-   FCMP++ library's `layers` parameter is a 1-indexed count of non-leaf
-   layers. The conversion `layers = tree_depth + 1` is applied at the FFI
-   boundary in both `shekyl_fcmp_prove` and `shekyl_fcmp_verify`.
+   FCMP++ library's `layers` parameter is a 1-indexed count including the
+   leaf layer. **C++ callers are responsible for the conversion:** they
+   must pass `static_cast<uint8_t>(lmdb_depth + 1)` to `shekyl_fcmp_prove`
+   and `shekyl_fcmp_verify`. The FFI functions accept `layers` directly
+   and do not adjust. For `shekyl_sign_fcmp_transaction`, the C++ wallet
+   passes LMDB depth; the Rust signing path converts internally.
 
 2. **Branch assembly must include all layers up to and including the root.**
    For a tree with `depth = D`, the witness must contain branch data for
