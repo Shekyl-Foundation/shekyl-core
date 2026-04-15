@@ -164,6 +164,12 @@
 
 #define RPC_IP_FAILS_BEFORE_BLOCK                       3
 
+// Shekyl protocol version. Single integer, independent of software version.
+// See docs/VERSIONING.md for the full scheme.
+//   3 = FCMP++ curve tree, hybrid PQC (Ed25519+ML-DSA-65, X25519+ML-KEM-768)
+//   4 = lattice-only threshold sigs (future, pending NIST standardization)
+#define SHEKYL_PROTOCOL_VERSION                 3
+
 #define CRYPTONOTE_NAME                         "shekyl"
 #define CRYPTONOTE_BLOCKCHAINDATA_FILENAME      "data.mdb"
 #define CRYPTONOTE_BLOCKCHAINDATA_LOCK_FILENAME "lock.mdb"

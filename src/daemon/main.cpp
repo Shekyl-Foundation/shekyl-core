@@ -44,6 +44,7 @@
 #include "rpc/core_rpc_server.h"
 #include "rpc/rpc_args.h"
 #include "daemon/command_line_args.h"
+#include "cryptonote_config.h"
 #include "version.h"
 
 #ifdef STACK_TRACE
@@ -204,7 +205,8 @@ int main(int argc, char const * argv[])
     // Shekyl Version
     if (command_line::get_arg(vm, command_line::arg_version))
     {
-      std::cout << "Shekyl '" << MONERO_RELEASE_NAME << "' (v" << MONERO_VERSION_FULL << ")" << ENDL;
+      std::cout << "Shekyl '" << MONERO_RELEASE_NAME << "' (v" << MONERO_VERSION_FULL
+                << ", protocol " << SHEKYL_PROTOCOL_VERSION << ")" << ENDL;
       return 0;
     }
 

@@ -712,6 +712,7 @@ namespace cryptonote
       bool update_available;
       bool busy_syncing;
       std::string version;
+      uint32_t protocol_version;
       bool synchronized;
       bool restricted;
 
@@ -764,6 +765,7 @@ namespace cryptonote
         KV_SERIALIZE(update_available)
         KV_SERIALIZE(busy_syncing)
         KV_SERIALIZE(version)
+        KV_SERIALIZE(protocol_version)
         KV_SERIALIZE(synchronized)
         KV_SERIALIZE(restricted)
         KV_SERIALIZE(release_multiplier)

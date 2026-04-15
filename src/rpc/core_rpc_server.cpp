@@ -571,6 +571,7 @@ namespace cryptonote
       res.database_size = round_up(res.database_size, 5ull* 1024 * 1024 * 1024);
     res.update_available = restricted ? false : m_core.is_update_available();
     res.version = restricted ? "" : MONERO_VERSION_FULL;
+    res.protocol_version = SHEKYL_PROTOCOL_VERSION;
     res.synchronized = check_core_ready();
     res.busy_syncing = m_p2p.get_payload_object().is_busy_syncing();
     res.restricted = restricted;

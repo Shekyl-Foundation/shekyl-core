@@ -1,5 +1,40 @@
 # Shekyl Changelog
 
+## [3.1.0-alpha.1] - 2026-04-15
+
+First public alpha release. First green CI in repository history.
+
+This release establishes the Shekyl versioning scheme: software versions
+follow SemVer independently per repo; the protocol version is a separate
+integer (`protocol_version = 3`). See `docs/VERSIONING.md` for the full
+scheme. The version jump from prior tags (v3.0.x-RC series) to 3.1.0
+reflects the addition of FROST-style multisig to the feature set.
+
+### Highlights
+
+- **FCMP++ end-to-end test suite passing.** The full prove-sign-verify
+  pipeline works across C++ and Rust via FFI, validated by 10-iteration
+  randomized round-trip tests and C++ unit tests on Ubuntu 22.04/24.04,
+  Arch Linux, macOS, and Windows.
+
+- **Five FCMP++ integration bugs fixed.** Root causes documented in
+  `docs/FOLLOWUPS.md` audit trail: FFI depth/layers off-by-one, branch
+  extraction loop bound, missing point-to-scalar conversion, leaf count
+  off-by-one, key image y-normalization breaking batch verification.
+  Additionally, a sixth bug (FFI depth-to-layers convention ambiguity)
+  was found and fixed during CI stabilization.
+
+- **V3.1 multisig protocol specified and implemented.** FROST-style
+  coordinator-less multisig with hybrid PQC signing, specified in
+  `docs/PQC_MULTISIG.md` and wire format in
+  `docs/SHEKYL_MULTISIG_WIRE_FORMAT.md`. 93 unit tests, 19 integration
+  tests, 11 fuzz harnesses.
+
+- **Versioning scheme established.** `docs/VERSIONING.md` defines SemVer
+  for software versions and a separate integer protocol version.
+  `SHEKYL_PROTOCOL_VERSION` constant added to `cryptonote_config.h`,
+  exposed via `--version` output and `/get_info` RPC.
+
 ## Unreleased
 
 ### ✨ Added
