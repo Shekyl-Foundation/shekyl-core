@@ -1,3 +1,7 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+
 /// @file shekyl_ffi.h
 /// @brief C declarations for the Rust shekyl-ffi crate (libshekyl_ffi.a).
 ///
@@ -119,9 +123,14 @@ bool shekyl_pqc_verify_with_group_id(
     const uint8_t* expected_group_id);
 
 #ifndef NDEBUG
-/// Debug variant of shekyl_pqc_verify returning granular error codes.
-/// 0 = valid, 1 = invalid Ed25519 sig, 2 = invalid ML-DSA sig,
-/// 3 = bad pubkey format, 4 = bad sig format.
+/// Debug variant of shekyl_pqc_verify returning PqcVerifyError codes.
+/// 0 = success.  For scheme_id 2 (multisig): 1 = SchemeMismatch,
+/// 2 = ParameterBounds, 3 = KeyBlobLength, 4 = SigBlobLength,
+/// 5 = ThresholdMismatch, 6 = IndexOutOfRange, 7 = IndicesNotAscending,
+/// 8 = DuplicateKeys, 9 = GroupIdMismatch, 10 = CryptoVerifyFailed,
+/// 11 = DeserializationFailed.  For scheme_id 1 (single-signer):
+/// 10 = CryptoVerifyFailed, 11 = DeserializationFailed.
+/// See rust/shekyl-crypto-pq/src/error.rs PqcVerifyError for canonical defs.
 uint8_t shekyl_pqc_verify_debug(
     uint8_t scheme_id,
     const uint8_t* pubkey_blob,

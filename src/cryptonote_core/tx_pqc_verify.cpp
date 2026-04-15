@@ -1,3 +1,4 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
 // Copyright (c) 2024, The Monero Project
 //
 // All rights reserved.
@@ -148,11 +149,6 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
 
   payload_out = prefix_blob + rct_blob + prunable_hash_blob + pqc_header_blob + all_pqc_key_hashes;
   return true;
-}
-
-bool verify_transaction_pqc_auth(const transaction& tx)
-{
-  return verify_transaction_pqc_auth(tx, boost::none);
 }
 
 bool verify_transaction_pqc_auth(const transaction& tx,

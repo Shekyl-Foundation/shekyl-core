@@ -1,6 +1,6 @@
 //! Negative PQC test vectors — integration tests that generate malformed
 //! or tampered cryptographic material, persist the vectors as JSON under
-//! `docs/`, and verify that the hybrid signature scheme rejects them.
+//! `tmp/` (gitignored), and verify that the hybrid signature scheme rejects them.
 
 use serde_json::json;
 use shekyl_crypto_pq::signature::{
@@ -8,11 +8,11 @@ use shekyl_crypto_pq::signature::{
 };
 use std::path::PathBuf;
 
-fn docs_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs")
-        .canonicalize()
-        .expect("docs/ directory must exist relative to crate root")
+fn tmp_dir() -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tmp");
+    std::fs::create_dir_all(&dir).expect("failed to create tmp/ directory");
+    dir.canonicalize()
+        .expect("tmp/ directory must be resolvable")
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -65,7 +65,7 @@ fn generate_and_write_vector_002() -> serde_json::Value {
         "failure_reason": "Ed25519 public key byte 8 XOR 0x01 — corrupted ownership material"
     });
 
-    let path = docs_dir().join("PQC_TEST_VECTOR_002_tampered_ownership.json");
+    let path = tmp_dir().join("PQC_TEST_VECTOR_002_tampered_ownership.json");
     std::fs::write(&path, serde_json::to_string_pretty(&vector).unwrap()).unwrap();
     vector
 }
@@ -96,7 +96,7 @@ fn generate_and_write_vector_003() -> serde_json::Value {
         "failure_reason": "scheme_id byte changed from 0x01 to 0x02 — from_canonical_bytes must reject"
     });
 
-    let path = docs_dir().join("PQC_TEST_VECTOR_003_wrong_scheme_id.json");
+    let path = tmp_dir().join("PQC_TEST_VECTOR_003_wrong_scheme_id.json");
     std::fs::write(&path, serde_json::to_string_pretty(&vector).unwrap()).unwrap();
     vector
 }
@@ -138,7 +138,7 @@ fn generate_and_write_vector_004() -> serde_json::Value {
         "failure_reason": "ml_dsa length field inflated by 256 beyond actual data — truncated blob"
     });
 
-    let path = docs_dir().join("PQC_TEST_VECTOR_004_oversized_blob.json");
+    let path = tmp_dir().join("PQC_TEST_VECTOR_004_oversized_blob.json");
     std::fs::write(&path, serde_json::to_string_pretty(&vector).unwrap()).unwrap();
     vector
 }

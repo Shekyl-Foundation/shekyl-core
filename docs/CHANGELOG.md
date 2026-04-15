@@ -110,6 +110,11 @@
 
 ### 🔒 Security
 
+- **Zeroize ephemeral multisig signing seeds.** `ed_seed` and `ml_seed`
+  stack copies in `construct_multisig_output_for_sender` are now wrapped
+  in `Zeroizing<[u8; 32]>`, ensuring automatic zeroing on drop. Closes
+  a theoretical side-channel surface from FOLLOWUPS.md V3.1 audit response.
+
 - **`PersistedMultisigOutput` Debug redaction.** The `Debug` derive on
   `PersistedMultisigOutput` was replaced with a manual implementation that
   redacts `my_shared_secret` (64-byte KEM-derived material). Prevents
@@ -130,6 +135,28 @@
   output was redundant and failed the CI lint.
 
 ### 🐛 Fixed
+
+- **CI: fix `cargo audit` failure from RUSTSEC-2026-0098/0099.** Bumped
+  `rustls-webpki` 0.103.10 -> 0.103.12 and `rand` 0.9.2 -> 0.9.4 in
+  `Cargo.lock`. Added `rust/audit.toml` to acknowledge `rand` 0.8.5
+  (RUSTSEC-2026-0097, not applicable: Shekyl uses `OsRng`, not
+  `rand::rng()` with a custom logger).
+
+- **Remove dead `verify_transaction_pqc_auth` one-arg overload.** The
+  no-argument overload in `tx_pqc_verify.cpp` had zero callers — the
+  sole production caller (`blockchain.cpp`) uses the two-arg form with
+  `expected_scheme_id`. Replaced with a default parameter. Per
+  `15-deletion-and-debt.mdc`: dead code goes.
+
+- **Fix stale `shekyl_ffi.h` `shekyl_pqc_verify_debug` comment.** The
+  error code documentation (0-4) did not match the Rust `PqcVerifyError`
+  enum (0-11). Updated to reflect the actual `repr(u8)` discriminants.
+
+- **Reconcile FOLLOWUPS.md and STRUCTURAL_TODO.md.** Marked 5 items in
+  STRUCTURAL_TODO as resolved (code already fixed). Corrected the
+  `expected_scheme_id` FOLLOWUPS entry (parameter is actively used by
+  `blockchain.cpp`, contrary to the prior note). Marked `rpassword` audit
+  as covered by CI.
 
 - **FCMP++ proof verification: five integration bugs fixed, first green CI.**
   The FCMP++ core tests (`gen_fcmp_tx_valid`, `gen_fcmp_tx_double_spend`,

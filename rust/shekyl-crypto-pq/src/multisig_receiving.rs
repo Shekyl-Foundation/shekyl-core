@@ -19,7 +19,7 @@ use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use curve25519_dalek::scalar::Scalar;
 use hkdf::Hkdf;
 use sha2::Sha512;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::CryptoError;
 use crate::kem::{
@@ -196,9 +196,9 @@ pub fn construct_multisig_output_for_sender(
         view_tag_hints.push(view_tag);
 
         let hybrid_seed = derive_hybrid_sign_seed(&ss.0)?;
-        let ed_seed: [u8; 32] = hybrid_seed[..32].try_into().unwrap();
+        let ed_seed = Zeroizing::new(<[u8; 32]>::try_from(&hybrid_seed[..32]).unwrap());
         let ed_signing = ed25519_dalek::SigningKey::from_bytes(&ed_seed);
-        let ml_seed: [u8; 32] = hybrid_seed[32..].try_into().unwrap();
+        let ml_seed = Zeroizing::new(<[u8; 32]>::try_from(&hybrid_seed[32..]).unwrap());
         let (ml_pk, _ml_sk) = crate::derivation::keygen_from_seed(&ml_seed)?;
 
         let hybrid_pk = crate::signature::HybridPublicKey {

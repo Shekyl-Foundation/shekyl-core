@@ -70,10 +70,12 @@ Each item is out of scope for the current PR but worth tracking for future work.
   file-based export/import. This preserves interop with hardware-wallet and
   cold-spend workflows built on the binary format.
 
-- **`rpassword` transitive dependency audit.** Pin `rpassword = "7"` and
-  periodically audit for `windows-sys` bumps. Terminal echo restoration on
-  panic has had CVEs in CLI password tooling. Run `cargo audit` in CI
-  (already configured) with `rpassword` in scope.
+- **~~`rpassword` transitive dependency audit.~~** RESOLVED (covered by CI).
+  `rpassword = "7"` is pinned in `shekyl-cli/Cargo.toml` (resolves to
+  7.4.0). `cargo audit` runs in CI (`.github/workflows/build.yml`
+  lines 429-431) and covers `rpassword` and its `windows-sys` transitive
+  dependency. `rust/audit.toml` acknowledges known non-applicable
+  advisories. No additional audit tooling needed.
 
 - **Test code `wallet_tools.cpp` still uses mixin/decoy infrastructure.**
   The `gen_tx_src` function constructs fake outputs for ring-style source
@@ -104,20 +106,17 @@ Each item is out of scope for the current PR but worth tracking for future work.
   is the sole construction path, (3) `fuzz_derive_output_secrets` covers
   the derivation with arbitrary inputs.
 
-- **~~scheme_id binding (`expected_scheme_id` unused).~~** RESOLVED (by design).
-  Deferred to PQC multisig PR; see `PQC_MULTISIG.md`.
-  The `verify_transaction_pqc_auth` two-argument overload accepting
-  `expected_scheme_id` is never called with a value because FCMP++ hides
-  which output is being spent — the verifier cannot look up the creating
-  transaction's committed scheme. Scheme downgrade protection is provided
-  by the `h_pqc` curve tree leaf commitment: the FCMP++ proof binds the
-  spending key's `H(hybrid_public_key)` to the leaf committed at output
-  creation. A downgrade requires a Blake2b-512 collision between
-  structurally different key encodings (single-signer 1996 bytes vs.
-  multisig 2+N*1996 bytes), which is computationally infeasible.
-  See `PQC_MULTISIG.md` Attack 1 for the corrected analysis. The
-  `expected_scheme_id` parameter may be removed as dead code in V3.1.
-  **Decision on removal deferred to multisig PR.**
+- **~~scheme_id binding (`expected_scheme_id` unused).~~** RESOLVED (active).
+  Contrary to the original note, `expected_scheme_id` IS used:
+  `blockchain.cpp` (line 3766) calls `verify_transaction_pqc_auth(tx,
+  expected_scheme)` where `expected_scheme` is derived from
+  `tx.pqc_auths[0].scheme_id`. This enforces cross-input scheme consistency
+  — all inputs in a transaction must use the same scheme_id. The unused
+  one-arg overload was removed (April 2026); the function now has
+  `expected_scheme_id = boost::none` as a default parameter.
+  Scheme downgrade protection across outputs is still provided by the
+  `h_pqc` curve tree leaf commitment as described in `PQC_MULTISIG.md`
+  Attack 1.
 
 - **~~`on_get_curve_tree_path` RPC reads current tree state, not reference-block state.~~** RESOLVED.
   Fixed by computing `ref_leaf_count` at `reference_height` (subtracting
@@ -223,15 +222,12 @@ Each item is out of scope for the current PR but worth tracking for future work.
   `PqcVerifyError` with per-check error codes — the plumbing to expose
   these through the C ABI and consume them in C++ is the remaining work.
 
-- **PQC Multisig V3.1: harden ephemeral seed stack copies in
-  `construct_multisig_output_for_sender`.** Target: V3.1 audit response.
-  In `multisig_receiving.rs`, the hybrid signing seed's `ed_seed` and
-  `ml_seed` slices are stack copies from a `Zeroizing`-wrapped hybrid seed.
-  The stack copies are not explicitly zeroized on drop. This is not a leak
-  (the stack frame is short-lived and the values are ephemeral per-output
-  material, not long-term secrets), but explicit `Zeroizing` wrapping of the
-  intermediate slices would close a theoretical side-channel surface and
-  align with the crate's defense-in-depth posture.
+- **~~PQC Multisig V3.1: harden ephemeral seed stack copies in
+  `construct_multisig_output_for_sender`.~~** RESOLVED.
+  `ed_seed` and `ml_seed` in `multisig_receiving.rs` are now
+  `Zeroizing<[u8; 32]>`, ensuring automatic zeroization on drop.
+  Closes the theoretical side-channel surface identified during
+  the V3.1 audit response review.
 
 ---
 

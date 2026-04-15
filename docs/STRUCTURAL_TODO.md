@@ -161,10 +161,10 @@ reported upstream or patched locally if we diverge from upstream.
 Even with `actions/cache` for binary packages, the vcpkg install step
 takes 45+ minutes on cold runs and 10-15 minutes on warm cache hits.
 ~~There is no `vcpkg.json` manifest — packages are listed in the CI YAML.~~
-✅ Root `vcpkg.json` manifest created (April 2026) with the 5 dependencies
-(boost, openssl, libsodium, libusb, lmdb). **Remaining:** Update CI YAML
-to use `vcpkg install --x-manifest-root=.` instead of explicit package list,
-and verify cache key hashing improves.
+~~Root `vcpkg.json` manifest created (April 2026).~~ Reverted: the manifest
+broke MSVC CI and was removed. Packages are listed explicitly in
+`.github/workflows/build.yml`. A manifest-mode migration remains possible
+but is low priority — CI timing is acceptable with warm caches.
 
 ### ~~No CI guard against `BOOST_FOREACH` re-introduction~~ ✅ Resolved
 31 `BOOST_FOREACH` / `BOOST_REVERSE_FOREACH` sites were manually replaced
@@ -195,40 +195,25 @@ problematic headers. The ICE reproduces on both MSVC 14.44 (VS 2022)
 and 14.50 (VS 2026) -- the stub is the actual fix, not a compiler
 upgrade. Full diagnosis in `shekyl-core/docs/COMPILING_DEBUGGING_TESTING.md`.
 
-### `COVERAGE=ON` applies GCC-only flags without MSVC guard
-**Priority**: Low
-`monero_enable_coverage()` in root `CMakeLists.txt` appends
-`-fprofile-arcs -ftest-coverage --coverage` to `CMAKE_C/CXX_FLAGS` with
-no `if(NOT MSVC)` guard. Enabling `COVERAGE` on an MSVC build would pass
-unrecognized flags. Nobody enables coverage on MSVC today, but the option
-should be gated.
+### ~~`COVERAGE=ON` applies GCC-only flags without MSVC guard~~ ✅ Resolved
+`monero_enable_coverage()` in root `CMakeLists.txt` (line 664) already
+guards with `if(NOT MSVC)`. Verified April 2026.
 
-### `enable_stack_trace` linker flag not MSVC-safe
-**Priority**: Low
-`src/CMakeLists.txt` appends `-Wl,--wrap=__cxa_throw` to `LINK_FLAGS`
-when `STATIC` is set, with no MSVC guard. This is GNU `ld` syntax that
-MSVC's linker would reject. Only triggers for `STATIC + STACK_TRACE`
-builds, which are not currently done on MSVC.
+### ~~`enable_stack_trace` linker flag not MSVC-safe~~ ✅ Resolved
+`src/CMakeLists.txt` `enable_stack_trace` function (line 54) already
+guards the `-Wl,--wrap=__cxa_throw` flag with `if(STATIC AND NOT MSVC)`.
+Verified April 2026.
 
 ---
 
 ## Data Type Portability
 
-### `long` is 32-bit on MSVC x64 — several format/parse mismatches
-**Priority**: Medium (not in wallet-core library, but affects CLI tools)
-
-On 64-bit MSVC, `long` / `unsigned long` are 32 bits (LLP64 model) vs
-64 bits on Linux (LP64). ~~Several sites outside the wallet-core library
-used `long` for values that can exceed 32 bits.~~ `simplewallet.cpp`
-has been deleted from the repository; its two sites no longer exist.
-One active site remains:
-
-- **`bootstrap_file.cpp:~194`**: `tellp()` stream positions stored in
-  `long` and cast to `unsigned long`. Large blockchain exports would
-  overflow. **Fix:** Use `std::streamoff` / `int64_t`.
-- **Various display code**: `boost::format` with `%lu` and
-  `(unsigned long)uint64_t_value` truncates on MSVC. **Fix:** Use
-  `PRIu64` or stream insertion.
+### ~~`long` is 32-bit on MSVC x64 — several format/parse mismatches~~ ✅ Resolved
+~~Several sites outside the wallet-core library used `long` for values
+that can exceed 32 bits.~~ `simplewallet.cpp` was deleted from the
+repository. `bootstrap_file.cpp` now uses `std::streamoff` end-to-end
+for stream positions (verified April 2026). No remaining `long`-typed
+stream positions or `%lu`-formatted `uint64_t` values found in active code.
 
 ### ~~`blockchain_import.cpp` uses POSIX `sleep()`~~ ✅ Resolved
 Replaced `sleep(90)` with `std::this_thread::sleep_for(std::chrono::seconds(90))`
@@ -266,13 +251,10 @@ Pattern: `1 << n` stored in `uint64_t`. Changed all 23 sites to
 Line/pattern no longer exists after wallet refactoring (`wallet2.h` is
 now 2144 lines; `|=` bool/char pattern not found).
 
-### Unsigned negation in `wallet2.cpp:772` (was 782) (C4146)
-**Priority**: Low — well-defined but suspicious
-
-Line shifted to 772 after wallet refactoring. Pattern is
-`std::advance(left, -N)` where `N` is `size_t` — unsigned negation.
-Well-defined C++ (wraps to `UINT_MAX - n + 1`) but worth fixing with
-a `static_cast<ptrdiff_t>` for clarity and MSVC warning suppression.
+### ~~Unsigned negation in `wallet2.cpp:772` (was 782) (C4146)~~ ✅ Resolved
+The `std::advance(left, -N)` call at line 772 already uses
+`-static_cast<ptrdiff_t>(N)`, avoiding unsigned negation. Verified
+April 2026.
 
 ---
 
@@ -409,7 +391,10 @@ plan.
 
 ---
 
-*Last updated: 2026-04-12 — Consensus-critical curve-tree leaf ordering
+*Last updated: 2026-04-15 — Pre-main tech debt sweep: marked
+`COVERAGE=ON`, `enable_stack_trace`, `wallet2.cpp` unsigned negation,
+`bootstrap_file.cpp` long-type, and vcpkg manifest items as resolved.
+Previous: 2026-04-12 — Consensus-critical curve-tree leaf ordering
 bug fixed (DB v6→v7): `MDB_DUPSORT` on leaf bytes replaced with composite
 keys, explicit output↔leaf mapping tables, and block-pending journal. API
 renamed (`get_curve_tree_leaf` → `get_curve_tree_leaf_by_tree_position` +

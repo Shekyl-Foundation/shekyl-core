@@ -1,0 +1,9 @@
+# cargo-audit configuration
+# See https://github.com/rustsec/rustsec/tree/main/cargo-audit
+
+[advisories]
+# rand 0.8.5 -- RUSTSEC-2026-0097: unsound with custom logger using
+# `rand::rng()`. Does not apply to Shekyl: we use `OsRng` directly and
+# never call `rand::rng()` with a custom logger. No 0.8.x patch exists;
+# the 0.8 line is pulled transitively by vendored serai/ciphersuite.
+ignore = ["RUSTSEC-2026-0097"]
