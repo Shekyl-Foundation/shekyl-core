@@ -163,7 +163,7 @@ Each item is out of scope for the current PR but worth tracking for future work.
   Status: outreach should begin immediately; does not block other work.
   Findings are folded in via targeted `fix/ms31-crypto-review-*` branches.
 
-- **PQC Multisig V3.1: hardware wallet integration.** Target: V3.2.
+- **PQC Multisig V3.1: hardware wallet integration.** Target: TBD.
   Current hardware wallets (Coldcard, Trezor, Ledger, Jade) cannot
   support V3.1 multisig signing. Constraints:
   1. **ML-DSA-65 computation cost.** Signing takes ~100ms on modern
@@ -191,7 +191,7 @@ Each item is out of scope for the current PR but worth tracking for future work.
      hybrid signature format are stable.
   Status: documentation complete. Code work deferred to V3.2.
 
-- **PQC Multisig V3.1: headless co-signer service.** Target: V3.2.
+- **PQC Multisig V3.1: headless co-signer service.** Target: V3.1.
   Build a `shekyl-cosigner-headless` reference implementation (CLI, no
   GUI) to validate the "co-signer service" model where one of N
   participants is a dedicated automated signing service. Validates:
