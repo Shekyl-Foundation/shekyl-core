@@ -267,3 +267,34 @@ Each item is out of scope for the current PR but worth tracking for future work.
     alternation rule, not pasted from observed behavior).
   - Testing rule added to `.cursor/rules/40-testing.mdc`: fixtures must
     be spec-derived, not behavior-derived.
+
+- **Historical tree path assembly uses current LMDB state.** (Target: V3.1)
+  `assemble_tree_path_for_output` (in both `chaingen.cpp` and
+  `core_rpc_server.cpp`) reads sibling hashes from the current LMDB tree
+  state even when the reference block predates the chain tip. When
+  `ref_leaf_count < current_leaf_count`, the sibling structure differs
+  between historical and current state, and the assembled witness hashes
+  to a root that matches neither the historical nor the current tree root.
+  The current tests pass because they use `ref_leaf_count == current_leaf_count`
+  (reference block is always at the tip). This will fail for any real
+  wallet that uses a historical reference block (allowed by
+  `FCMP_REFERENCE_BLOCK_MAX_AGE = 100`). Stressnet (Phase 7.7) with
+  realistic reorg and varied reference-block usage will exercise this.
+  Approach: reconstruct historical tree state on demand using per-block
+  root snapshots already stored by `store_curve_tree_root_at_height`.
+
+- **Audit FCMP++ integration for paired computations.** (Target: V3.1)
+  Five integration bugs were found during the first CI green effort,
+  all sharing the shape "two functions answer the same question differently."
+  A deliberate sweep of remaining paired computations would surface similar
+  latent bugs. Key surfaces to audit: any function that computes leaf
+  count, layer count, or tree depth independently of another that answers
+  the same question. Document the canonical answer and delete the
+  duplicate, or add cross-check assertions.
+
+- **Regression test: `compute_leaf_count_at_height` vs LMDB drain.**
+  (Target: V3.1)
+  Add a test that, for a chain with outputs at varied maturity heights,
+  asserts `compute_leaf_count_at_height(H) == count_of(drain_pending_tree_leaves(H))`
+  for every height. This is the invariant that the off-by-one bug violated
+  and is the highest-value regression gate for this class of bug.

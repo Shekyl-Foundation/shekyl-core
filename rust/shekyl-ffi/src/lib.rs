@@ -1505,7 +1505,7 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
     ) {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("[DIAG] verify error: {e:?} tree_depth(raw)={tree_depth} layers={layers}");
+            tracing::debug!(?e, tree_depth, layers, "FCMP++ verify failed");
             false
         }
     }

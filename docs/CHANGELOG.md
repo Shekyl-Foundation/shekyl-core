@@ -131,6 +131,38 @@
 
 ### 🐛 Fixed
 
+- **FCMP++ proof verification: five integration bugs fixed, first green CI.**
+  The FCMP++ core tests (`gen_fcmp_tx_valid`, `gen_fcmp_tx_double_spend`,
+  `gen_fcmp_tx_reference_block_too_old`, `gen_fcmp_tx_reference_block_too_recent`,
+  `gen_fcmp_tx_timestamp_unlock_rejected`) have never passed since integration.
+  Root causes identified and fixed:
+  1. **FFI depth/layers off-by-one.** LMDB stores 0-indexed `tree_depth`;
+     the upstream library expects 1-indexed `layers` count.
+     Fix: `layers = tree_depth + 1` at the FFI boundary.
+  2. **C++ branch extraction loop was `< depth` instead of `<= depth`.**
+     Both `genRctFcmpPlusPlus` and `assemble_tree_path_for_output` skipped
+     the root layer's branch data. Fix: `layer <= tree_depth` in both.
+  3. **Point-to-scalar conversion missing in witness construction.**
+     Raw LMDB point hashes were passed as branch siblings without converting
+     to cycle scalars. Fix: `selene_to_helios_scalar` / `helios_to_selene_scalar`
+     applied during `genRctFcmpPlusPlus` branch assembly.
+  4. **`compute_leaf_count_at_height` off-by-one.** Maturity comparison used
+     `<= target_height + 1` while LMDB's `drain_pending_tree_leaves` uses
+     `<= current_height`. Fix: removed the `+ 1` to match LMDB semantics.
+  5. **`key_image_y_normalize` broke Ed25519 batch verification.** The
+     normalization (clearing byte 31 sign bit) modified the key image away
+     from the true `x * Hp(O)` used by the Rust prover. Fix: deleted
+     `key_image_y_normalize` entirely — FCMP++ key images are not
+     y-normalized.
+  6. **PQC signing payload computed before all public keys were derived.**
+     `get_transaction_signed_payload` hashes all inputs' `hybrid_public_key`
+     values, but the single-loop approach signed early inputs before later
+     keys existed. Fix: two-phase PQC signing (derive all keys, then sign
+     all inputs).
+  All 5 FCMP++ core tests, 4 staking tests, 28 FCMP unit tests, and 45
+  Rust `shekyl-fcmp` tests now pass. This is the first green CI in the
+  repository's history.
+
 - **Consensus-critical: curve tree leaf ordering bug (DB v6 → v7).**
   `pending_tree_leaves` used `MDB_DUPSORT` on 128-byte leaf data, causing
   outputs with the same maturity height to drain into the curve tree in

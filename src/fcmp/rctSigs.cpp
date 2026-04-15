@@ -38,8 +38,6 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
-#include <iomanip>
-#include <sstream>
 
 using namespace crypto;
 using namespace std;
@@ -468,44 +466,6 @@ namespace
             }
             LOG_PRINT_L0("genRctFcmpPlusPlus: c1_layers=" << c1_layers.size()
               << " c2_layers=" << c2_layers.size());
-
-            // DIAG: Merkle-root-from-witness check (first input only)
-            if (i == 0 && !c2_layers.empty())
-            {
-                uint8_t helios_init[32];
-                shekyl_curve_tree_helios_hash_init(helios_init);
-                uint8_t zero_scalar[32] = {};
-
-                const auto& branch = c2_layers[0];
-                uint64_t n_scalars = branch.size() / 32;
-
-                uint8_t computed_root[32];
-                bool hash_ok = shekyl_curve_tree_hash_grow_helios(
-                    helios_init, 0, zero_scalar,
-                    branch.data(), n_scalars,
-                    computed_root);
-
-                auto to_hex = [](const uint8_t *p, size_t len) {
-                    std::ostringstream oss;
-                    for (size_t b = 0; b < len; ++b)
-                        oss << std::hex << std::setfill('0') << std::setw(2) << (int)p[b];
-                    return oss.str();
-                };
-                bool root_match = hash_ok && memcmp(computed_root, tree_root.bytes, 32) == 0;
-                LOG_PRINT_L0("DIAG root-from-branch: hash_ok=" << hash_ok
-                  << " match=" << root_match
-                  << " computed=" << to_hex(computed_root, 32)
-                  << " claimed=" << to_hex(tree_root.bytes, 32));
-
-                // Also check: what does LMDB store as the layer-0 chunk hash
-                // at the same position we're converting?
-                for (uint64_t s = 0; s < n_scalars && s < 4; ++s)
-                {
-                    const uint8_t *scalar = branch.data() + s * 32;
-                    if (memcmp(scalar, zero_scalar, 32) != 0)
-                        LOG_PRINT_L0("DIAG c2[0][" << s << "] scalar=" << to_hex(scalar, 32));
-                }
-            }
 
             // Serialize C1 (Selene) branch layers
             push_le_u32(witness, static_cast<uint32_t>(c1_layers.size()));

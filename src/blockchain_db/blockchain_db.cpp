@@ -435,16 +435,6 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
 
     auto ct_root = get_curve_tree_root();
     store_curve_tree_root_at_height(prev_height + 1, ct_root);
-    {
-      auto th = [](const uint8_t *p, size_t n) {
-        std::string s; char buf[3];
-        for (size_t i=0;i<n;i++) { snprintf(buf,3,"%02x",p[i]); s += buf; }
-        return s;
-      };
-      uint64_t lc = get_curve_tree_leaf_count();
-      LOG_PRINT_L0("DIAG store_root: height=" << (prev_height+1)
-        << " leaves=" << lc << " root=" << th(ct_root.data(), 32));
-    }
   }
 
   // call out to subclass implementation to add the block & metadata

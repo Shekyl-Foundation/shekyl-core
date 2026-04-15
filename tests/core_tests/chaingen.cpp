@@ -32,7 +32,6 @@
 #include <vector>
 #include <iostream>
 #include <sstream>
-#include <iomanip>
 #include <algorithm>
 #include <array>
 #include <random>
@@ -1695,114 +1694,12 @@ static bool assemble_tree_path_for_output(
                   hash, trim_offset, extra_data.data(),
                   num_extra_scalars, zero_scalar, trimmed);
 
-            LOG_PRINT_L0("DIAG trim: layer=" << (int)(layer-1) << " chunk=" << sibling_chunk
-              << " ref_in=" << ref_in_chunk << " cur_in=" << cur_in_chunk
-              << " trim_off=" << trim_offset << " n_extra_s=" << num_extra_scalars
-              << " is_selene=" << is_selene << " ok=" << ok);
             if (ok)
-            {
               memcpy(hash, trimmed, 32);
-
-              // Cross-check: recompute the chunk hash from scratch using
-              // only the ref-time entries and compare against the trimmed hash.
-              if (layer == 1 && is_selene)
-              {
-                std::vector<uint8_t> ref_leaf_data;
-                for (uint64_t li = sibling_chunk * prev_cw;
-                     li < sibling_chunk * prev_cw + ref_in_chunk; ++li)
-                {
-                  uint8_t leaf[LEAF_BYTES];
-                  if (db.get_curve_tree_leaf_by_tree_position(li, leaf))
-                    ref_leaf_data.insert(ref_leaf_data.end(), leaf, leaf + LEAF_BYTES);
-                  else
-                    ref_leaf_data.insert(ref_leaf_data.end(), LEAF_BYTES, 0);
-                }
-                uint8_t selene_init[32];
-                shekyl_curve_tree_selene_hash_init(selene_init);
-                uint8_t recomputed[32];
-                uint8_t zero_s[32] = {};
-                bool rok = shekyl_curve_tree_hash_grow_selene(
-                    selene_init, 0, zero_s,
-                    ref_leaf_data.data(),
-                    ref_in_chunk * SCALARS_PER_LEAF,
-                    recomputed);
-                bool match = rok && memcmp(recomputed, hash, 32) == 0;
-                LOG_PRINT_L0("DIAG trim cross-check: rok=" << rok << " match=" << match);
-              }
-            }
-            else
-              LOG_PRINT_L0("DIAG trim FAILED for layer=" << (int)(layer-1) << " chunk=" << sibling_chunk);
           }
         }
       }
       path_out.insert(path_out.end(), hash, hash + 32);
-    }
-
-    // DIAG: after all siblings for this layer are assembled, verify the
-    // parent hash they produce matches the stored root (for layer 1 / depth 1).
-    if (layer == 1 && depth == 1)
-    {
-      uint8_t helios_init[32];
-      shekyl_curve_tree_helios_hash_init(helios_init);
-
-      // Convert all sibling hashes (Selene points) to Helios scalars
-      // and compute the parent hash from scratch.
-      std::vector<uint8_t> helios_scalars(cw * 32, 0);
-      size_t sibs_path_start = path_out.size() - cw * 32;
-      size_t conv_ok = 0, conv_fail = 0, conv_zero = 0;
-      for (uint32_t s = 0; s < cw; ++s)
-      {
-        const uint8_t *pt = path_out.data() + sibs_path_start + s * 32;
-        uint8_t zero[32] = {};
-        if (memcmp(pt, zero, 32) == 0) { ++conv_zero; continue; }
-        bool ok = shekyl_curve_tree_selene_to_helios_scalar(pt, &helios_scalars[s * 32]);
-        if (ok) ++conv_ok; else ++conv_fail;
-      }
-
-      uint8_t zero_s[32] = {};
-      uint8_t computed_root[32];
-      bool rok = shekyl_curve_tree_hash_grow_helios(
-          helios_init, 0, zero_s,
-          helios_scalars.data(), cw,
-          computed_root);
-
-      // Compare with the stored ref-height root
-      auto stored_root = db.get_curve_tree_root_at_height(0); // placeholder
-      // We don't have ref_height here, so just log the computed root
-      auto to_hex = [](const uint8_t *p, size_t len) {
-        std::ostringstream oss;
-        for (size_t b = 0; b < len; ++b)
-          oss << std::hex << std::setfill('0') << std::setw(2) << (int)p[b];
-        return oss.str();
-      };
-      LOG_PRINT_L0("DIAG assemble root-check: rok=" << rok
-        << " conv_ok=" << conv_ok << " conv_fail=" << conv_fail << " conv_zero=" << conv_zero
-        << " computed=" << to_hex(computed_root, 32));
-
-      // Also log the raw Selene point bytes for the first 2 siblings
-      for (uint32_t s = 0; s < 2 && s < cw; ++s)
-      {
-        const uint8_t *pt = path_out.data() + sibs_path_start + s * 32;
-        LOG_PRINT_L0("DIAG raw_selene_point[" << s << "]=" << to_hex(pt, 32));
-      }
-
-      // Sequential computation: hash one scalar at a time (like grow_curve_tree)
-      uint8_t seq_root[32];
-      memcpy(seq_root, helios_init, 32);
-      for (uint32_t s = 0; s < cw; ++s)
-      {
-        uint8_t zero_ch[32] = {};
-        if (memcmp(&helios_scalars[s * 32], zero_ch, 32) == 0) continue;
-        uint8_t step[32];
-        bool sok = shekyl_curve_tree_hash_grow_helios(
-            seq_root, s, zero_ch, &helios_scalars[s * 32], 1, step);
-        if (sok) memcpy(seq_root, step, 32);
-        LOG_PRINT_L0("DIAG seq step " << s << " sok=" << sok
-          << " result=" << to_hex(seq_root, 32));
-      }
-      LOG_PRINT_L0("DIAG seq_root=" << to_hex(seq_root, 32)
-        << " all_at_once=" << to_hex(computed_root, 32)
-        << " match=" << (memcmp(seq_root, computed_root, 32) == 0));
     }
 
     ref_nodes_at_prev_layer = ref_chunks_below;
@@ -2012,29 +1909,6 @@ static bool apply_fcmp_pipeline(
     crypto::key_image correct_ki;
     crypto::generate_key_image(out_key, dest_key, correct_ki);
     std::get<txin_to_key>(tx.vin[i]).k_image = correct_ki;
-
-    // DIAG: verify Ed25519 relationships before wiping secrets
-    {
-      rct::key check_commit;
-      rct::genC(check_commit, inSk[i].mask, recovered_amount);
-      bool commit_ok = check_commit == inPk[i].mask;
-
-      output_data_t db_od = db.get_output_key(0, matched_src->outputs[matched_src->real_output].first, true);
-      bool pk_match = memcmp(&db_od.pubkey, inPk[i].dest.bytes, 32) == 0;
-      bool commit_db_match = memcmp(db_od.commitment.bytes, inPk[i].mask.bytes, 32) == 0;
-
-      // Check x*G == O (without y component)
-      rct::key xG;
-      rct::scalarmultBase(xG, inSk[i].dest);
-      bool xG_eq_O = xG == inPk[i].dest;
-
-      LOG_PRINT_L0("DIAG ed25519 vin " << i
-        << " commit_ok=" << commit_ok
-        << " pk_match=" << pk_match
-        << " commit_db_match=" << commit_db_match
-        << " xG==O=" << xG_eq_O
-        << " amount=" << recovered_amount);
-    }
 
     memwipe(&ho_key, sizeof(ho_key));
     memwipe(&dest_key, sizeof(dest_key));

@@ -5527,39 +5527,6 @@ void BlockchainLMDB::grow_curve_tree(const std::vector<uint8_t>& leaf_data, uint
   // Update meta: root, leaf_count, depth
   if (!updated_chunks.empty())
   {
-    // DIAG: verify incremental root vs from-scratch root
-    {
-      uint64_t n_layer0_chunks = (new_leaf_count + CT_SELENE_CHUNK_WIDTH - 1) / CT_SELENE_CHUNK_WIDTH;
-      uint8_t hinit[32];
-      shekyl_curve_tree_helios_hash_init(hinit);
-      uint8_t from_scratch[32];
-      memcpy(from_scratch, hinit, 32);
-      for (uint64_t c = 0; c < n_layer0_chunks; ++c)
-      {
-        uint64_t lk = ct_layer_chunk_key(0, c);
-        MDB_val dk = {sizeof(lk), (void *)&lk};
-        MDB_val dv;
-        int r = mdb_get(*m_write_txn, m_curve_tree_layers, &dk, &dv);
-        if (r != 0 || dv.mv_size != 32) continue;
-        uint8_t hscalar[32];
-        bool ok = shekyl_curve_tree_selene_to_helios_scalar((const uint8_t*)dv.mv_data, hscalar);
-        if (!ok) continue;
-        uint8_t step[32];
-        uint8_t zero[32] = {};
-        ok = shekyl_curve_tree_hash_grow_helios(from_scratch, (uint32_t)c, zero, hscalar, 1, step);
-        if (ok) memcpy(from_scratch, step, 32);
-      }
-      bool root_ok = memcmp(from_scratch, updated_chunks.back().new_hash.data(), 32) == 0;
-      auto th = [](const uint8_t *p) {
-        char buf[65]; for (int i=0;i<32;i++) snprintf(buf+i*2,3,"%02x",p[i]); return std::string(buf);
-      };
-      if (!root_ok || new_leaf_count <= 60)
-        LOG_PRINT_L0("DIAG grow_root: leaves=" << new_leaf_count << " chunks=" << n_layer0_chunks
-          << " match=" << root_ok
-          << " incremental=" << th(updated_chunks.back().new_hash.data())
-          << " from_scratch=" << th(from_scratch));
-    }
-
     const std::string root_key = "root";
     MDB_val k = {root_key.size(), (void *)root_key.data()};
     MDB_val v = {32, updated_chunks.back().new_hash.data()};

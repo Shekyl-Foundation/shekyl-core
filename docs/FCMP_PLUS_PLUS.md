@@ -1,6 +1,6 @@
 # FCMP++ Full-Chain Membership Proofs — Specification
 
-> **Last updated:** 2026-04-09
+> **Last updated:** 2026-04-15
 >
 > **Parent document:** `docs/POST_QUANTUM_CRYPTOGRAPHY.md`
 
@@ -583,6 +583,50 @@ not through C++ code.
 `libshekyl_ffi.a` (static library) with the `--locked` flag for
 reproducible builds. The static library is linked into C++ targets via
 `${SHEKYL_FFI_LINK_LIBS}`.
+
+### FFI Invariants
+
+These invariants were established during the FCMP++ integration debugging
+and must be preserved by any code that touches the FFI boundary.
+
+1. **`layers` (library) = `depth + 1` (LMDB).** LMDB stores a 0-indexed
+   `tree_depth` where depth 0 means "leaves only, no intermediate layers"
+   and depth 1 means "one Helios layer above Selene leaves." The upstream
+   FCMP++ library's `layers` parameter is a 1-indexed count of non-leaf
+   layers. The conversion `layers = tree_depth + 1` is applied at the FFI
+   boundary in both `shekyl_fcmp_prove` and `shekyl_fcmp_verify`.
+
+2. **Branch assembly must include all layers up to and including the root.**
+   For a tree with `depth = D`, the witness must contain branch data for
+   layers 1 through D inclusive. The loop condition is `layer <= depth`,
+   not `layer < depth`. This applies to `genRctFcmpPlusPlus` (prover) and
+   `assemble_tree_path_for_output` (test/RPC path assembly).
+
+3. **LMDB stores raw curve points; the witness needs cycle scalars.**
+   Each LMDB layer stores 32-byte hashes that are points on the
+   layer's native curve (Selene for odd layers, Helios for even). When
+   assembling branch data for the witness, these must be converted to
+   scalars on the *parent* curve via `selene_point_to_helios_scalar` or
+   `helios_point_to_selene_scalar` before insertion into the witness.
+
+4. **`compute_leaf_count_at_height(H)` and `drain_pending_tree_leaves(H)`
+   must agree.** Both answer "how many leaves are in the tree at height H."
+   The canonical comparison is `maturity <= H` (not `maturity <= H + 1`).
+   Any divergence between these two functions produces witnesses that hash
+   to incorrect roots.
+
+5. **FCMP++ key images are not y-normalized.** The key image `I = x * Hp(O)`
+   is used as-is. Clearing the sign bit of byte 31 (Monero's
+   `key_image_y_normalize`) breaks the Ed25519 batch verification because
+   the prover computes `I` algebraically while the verifier would receive
+   the modified value.
+
+6. **PQC signing requires two phases.** `get_transaction_signed_payload`
+   hashes all inputs' `hybrid_public_key` values. All public keys must be
+   derived and placed into `tx.pqc_auths[i].hybrid_public_key` before any
+   input is signed. A single-pass approach where key derivation and signing
+   are interleaved produces payload hashes that don't match at verification
+   time.
 
 ---
 
