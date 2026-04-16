@@ -330,16 +330,20 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $daemon = 'build/bin/Release/shekyld.exe'
           $wrpc   = 'build/bin/Release/shekyl-wallet-rpc.exe'
+          # Out-String collapses PowerShell's mixed stdout+ErrorRecord array
+          # from `2>&1` into a single string so `-notmatch` returns a bool
+          # instead of the non-matching array elements (which are truthy when
+          # non-empty and produce a false-positive `throw`).
           & $daemon --help | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "shekyld --help failed ($LASTEXITCODE)" }
           & $wrpc   --help | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "shekyl-wallet-rpc --help failed ($LASTEXITCODE)" }
-          $detach = & $daemon --detach 2>&1
+          $detach = (& $daemon --detach 2>&1 | Out-String)
           if ($LASTEXITCODE -eq 0) { throw "shekyld --detach unexpectedly succeeded" }
           if ($detach -notmatch "was removed in V3\.1") {
             throw "shekyld --detach did not produce the V3.1 migration message; output: $detach"
           }
-          $detach2 = & $wrpc --pidfile=C:\temp\x 2>&1
+          $detach2 = (& $wrpc --pidfile=C:\temp\x 2>&1 | Out-String)
           if ($LASTEXITCODE -eq 0) { throw "shekyl-wallet-rpc --pidfile unexpectedly succeeded" }
           if ($detach2 -notmatch "was removed in V3\.1") {
             throw "shekyl-wallet-rpc --pidfile did not produce the V3.1 migration message; output: $detach2"
