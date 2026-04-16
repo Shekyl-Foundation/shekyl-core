@@ -31,6 +31,9 @@
 #pragma once
 
 #include "rpc/core_rpc_server.h"
+#include "daemon/core.h"
+#include "daemon/p2p.h"
+#include "daemon/command_line_args.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon"
