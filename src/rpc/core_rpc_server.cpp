@@ -248,7 +248,7 @@ namespace cryptonote
     }
     else if (address == "auto")
     {
-      auto get_nodes = [this]() {
+      auto get_nodes = [this, credits_per_hash_threshold]() {
         return get_public_nodes(credits_per_hash_threshold);
       };
       m_bootstrap_daemon.reset(new bootstrap_daemon(std::move(get_nodes), rpc_payment_enabled, m_bootstrap_daemon_proxy.empty() ? proxy : m_bootstrap_daemon_proxy));
@@ -2044,7 +2044,13 @@ namespace cryptonote
     }
     catch (const std::exception &e)
     {
-      MERROR("Caught unexpected error while hashing in " << __PRETTY_FUNCTION__ << ": " << e.what());
+      MERROR("Caught unexpected error while hashing in " <<
+#ifdef _MSC_VER
+        __FUNCSIG__
+#else
+        __PRETTY_FUNCTION__
+#endif
+        << ": " << e.what());
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = e.what();
       return false;

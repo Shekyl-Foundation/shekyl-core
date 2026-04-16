@@ -303,7 +303,7 @@ namespace net_utils
 
 	public:
 		network_address() : self(nullptr) {}
-		template<typename T>
+		template<typename T, decltype(std::declval<const T&>().port(), int()) = 0>
 		network_address(const T& src)
 			: self(std::make_shared<implementation<T>>(src)) {}
 		bool equal(const network_address &other) const;
