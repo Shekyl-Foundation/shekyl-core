@@ -328,6 +328,15 @@ jobs:
         # behaviors diverge at exactly this boundary.
         run: |
           $ErrorActionPreference = 'Stop'
+          # PowerShell 7.4+ (what ships on windows-2025-vs2026) defaults
+          # $PSNativeCommandUseErrorActionPreference to $true, which under
+          # $ErrorActionPreference='Stop' converts *any* nonzero exit from a
+          # native command into a terminating error before the surrounding
+          # script can observe $LASTEXITCODE. That's hostile to a test whose
+          # entire point is that `shekyld --detach` and `shekyl-wallet-rpc
+          # --pidfile=...` are expected to exit nonzero. Opt out so the
+          # explicit $LASTEXITCODE checks below actually get a chance to run.
+          $PSNativeCommandUseErrorActionPreference = $false
           $daemon = 'build/bin/Release/shekyld.exe'
           $wrpc   = 'build/bin/Release/shekyl-wallet-rpc.exe'
           # Out-String collapses PowerShell's mixed stdout+ErrorRecord array
