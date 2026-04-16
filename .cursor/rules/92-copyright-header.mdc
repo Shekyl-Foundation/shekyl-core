@@ -1,5 +1,5 @@
 ---
-description: Add Shekyl Foundation copyright when editing source files.
+description: Copyright headers on all source files. Shekyl Foundation is the copyright holder. Never add Monero copyright to new files.
 globs:
   - "src/**/*.cpp"
   - "src/**/*.h"
@@ -9,54 +9,93 @@ globs:
   - "rust/**/*.rs"
   - "tests/**/*.cpp"
   - "tests/**/*.h"
+  - "src-tauri/**/*.rs"
 ---
 
 # Copyright Header
 
-When editing a file that has an existing copyright header, add a Shekyl
-Foundation line if one is not already present. Preserve the original
-copyright (e.g., Monero Project).
+The Shekyl Foundation is the copyright holder for all Shekyl code. Monero
+Project copyright lines exist in some inherited files and must not be
+removed from those files, but must **never** be added to files that don't
+already have them.
 
-## Rules
+## The one rule that matters most
 
-- Add `Copyright (c) 2025-2026, The Shekyl Foundation` immediately **before**
-  the existing copyright line(s).
-- Use the file's existing comment style (`//`, `#`, `--`, etc.).
-- If the file already has a Shekyl Foundation copyright line, do not
-  duplicate it.
-- If a file is **brand new** (no prior copyright), use only the Shekyl
-  Foundation line with the current year.
-- Both projects operate under BSD-3-Clause. If this is a prior Monero file,
-  add `Parts of this file are originally copyright (c) [dates], The Monero
-  Project` at the bottom, similar to where the CryptoNote attribution sits.
+**NEVER write a Monero copyright line into a file that does not already
+contain one.** Not in new files, not in files you're rewriting, not in
+files where you're replacing all the code. If the file didn't have a Monero
+copyright before your edit, it doesn't get one after. This is the most
+common AI-agent mistake in this codebase.
 
-## Examples
+## New files (no prior copyright)
 
-C++ / existing Monero file:
+Use only the Shekyl Foundation copyright. No Monero line, no CryptoNote
+line, no other attribution:
 
 ```cpp
 // Copyright (c) 2025-2026, The Shekyl Foundation
-// Copyright (c) 2014-2022, The Monero Project
 //
 // All rights reserved.
-// ...
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+// ... (BSD-3-Clause terms)
 ```
-
-CMake / existing Monero file:
-
-```cmake
-# Copyright (c) 2025-2026, The Shekyl Foundation
-# Copyright (c) 2014-2022, The Monero Project
-#
-# All rights reserved.
-# ...
-```
-
-Rust / new Shekyl file:
 
 ```rust
 // Copyright (c) 2025-2026, The Shekyl Foundation
 //
 // All rights reserved.
+// ... (BSD-3-Clause terms)
+```
+
+```cmake
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# ... (BSD-3-Clause terms)
+```
+
+## Existing files inherited from Monero
+
+If a file **already** has a Monero Project copyright line:
+
+1. Add the Shekyl Foundation line **above** the existing Monero line.
+2. **Do not remove** the existing Monero copyright — it is legally required.
+3. **Do not change the dates** on the Monero line.
+4. Use the file's existing comment style.
+
+```cpp
+// Copyright (c) 2025-2026, The Shekyl Foundation
+// Copyright (c) 2014-2022, The Monero Project   ← already present, kept
+//
+// All rights reserved.
 // ...
 ```
+
+## Existing files that already have a Shekyl Foundation line
+
+Do not duplicate it. If both a Shekyl and a Monero line are already present
+and correctly ordered, leave the header alone.
+
+## How to decide: Monero attribution or not?
+
+- **Does the file already have a Monero copyright line?** → Keep it, add
+  Shekyl above it.
+- **Is this a new file?** → Shekyl only. No Monero.
+- **Did you rewrite every line in an inherited file?** → The Monero line
+  stays if it was there before. Copyright attaches to the original work,
+  not to how much of it survives.
+- **Are you unsure?** → Check the file's git history. If the oldest commit
+  has a Monero header, keep it. If not, Shekyl only.
+
+## Common AI-agent mistakes to avoid
+
+- Copying the Monero copyright line from a neighboring file into a new file
+  "for consistency." **Don't.** New files get Shekyl only.
+- Adding `Parts of this file are originally copyright (c) ... The Monero
+  Project` to a new file because the code pattern was inspired by Monero
+  code. **Don't.** That attribution is for files that literally carried a
+  Monero copyright, not for new code written in Shekyl.
+- Omitting the Shekyl Foundation copyright entirely. Every source file in
+  the project must have the Shekyl Foundation copyright line.
