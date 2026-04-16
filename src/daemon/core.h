@@ -28,13 +28,19 @@
 
 #pragma once
 
-#pragma message("=== DIAG: core.h START (after #pragma once) ===")
-
+#pragma message("=== DIAG: core.h [1] START ===")
 #include "blocks/blocks.h"
+#pragma message("=== DIAG: core.h [2] after blocks.h ===")
 #include "cryptonote_core/cryptonote_core.h"
+#pragma message("=== DIAG: core.h [3] after cryptonote_core.h ===")
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
+#pragma message("=== DIAG: core.h [4] after protocol_handler.h ===")
 #include "misc_log_ex.h"
+#pragma message("=== DIAG: core.h [5] after misc_log_ex.h ===")
 #include "daemon/command_line_args.h"
+#pragma message("=== DIAG: core.h [6] after command_line_args.h ===")
+
+#pragma message("=== DIAG: core.h [7] before namespace ===")
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon"
@@ -111,6 +117,6 @@ public:
   }
 };
 
-#pragma message("=== DIAG: core.h t_core DEFINED ===")
+#pragma message("=== DIAG: core.h [8] t_core DEFINED ===")
 
 }

@@ -30,15 +30,17 @@
 
 #pragma once
 
-#pragma message("=== DIAG: protocol.h START ===")
-
+#pragma message("=== DIAG: proto.h [A] START ===")
 #include <stdexcept>
+#pragma message("=== DIAG: proto.h [B] after stdexcept ===")
 #include <boost/program_options/variables_map.hpp>
+#pragma message("=== DIAG: proto.h [C] after variables_map ===")
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
+#pragma message("=== DIAG: proto.h [D] after handler.h ===")
 #include "p2p/net_node.h"
+#pragma message("=== DIAG: proto.h [E] after net_node.h ===")
 #include "daemon/core.h"
-
-#pragma message("=== DIAG: protocol.h after #include daemon/core.h ===")
+#pragma message("=== DIAG: proto.h [F] after core.h ===")
 typedef daemonize::t_core _diag_verify_t_core_visible;
 
 #include "misc_log_ex.h"
