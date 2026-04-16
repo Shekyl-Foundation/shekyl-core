@@ -262,7 +262,7 @@ jobs:
           cmake --build build --target test
 
   build-windows-msvc:
-    name: 'Windows (MSVC, wallet-core only)'
+    name: 'Windows (MSVC, daemon+wallet)'
     runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v5
@@ -307,10 +307,10 @@ jobs:
             -DUSE_DEVICE_TREZOR=OFF `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static
-      - name: build wallet-core libraries
+      - name: build daemon and wallet
         shell: pwsh
         run: |
-          cmake --build build --config Release --target wallet --parallel 2
+          cmake --build build --config Release --target daemon wallet --parallel 2
 
   source-archive:
     name: "source archive"

@@ -30,10 +30,12 @@
 
 #pragma once
 
+#include <stdexcept>
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
 #include "p2p/net_node.h"
 #include "daemon/protocol.h"
 #include "daemon/command_line_args.h"
+#include "misc_log_ex.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon"

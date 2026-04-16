@@ -30,6 +30,13 @@
 
 #pragma once
 
+#include <stdexcept>
+#include <boost/program_options/variables_map.hpp>
+#include "cryptonote_protocol/cryptonote_protocol_handler.h"
+#include "p2p/net_node.h"
+#include "daemon/core.h"
+#include "misc_log_ex.h"
+
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon"
 

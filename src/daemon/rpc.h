@@ -30,6 +30,8 @@
 
 #pragma once
 
+#include <stdexcept>
+#include <string>
 #include "rpc/core_rpc_server.h"
 #include "daemon/core.h"
 #include "daemon/p2p.h"

@@ -1,5 +1,30 @@
 # Shekyl Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Made all `src/daemon/` headers self-contained for MSVC portability:
+  `protocol.h` (6 missing includes), `p2p.h` (2), `daemon.h` (2),
+  `rpc.h` (2). These headers relied on include ordering from their
+  callers, which GCC/Clang tolerated but MSVC rejects.
+- Fixed `#ifdef` inside `MERROR()` macro argument in `core_rpc_server.cpp`
+  (undefined behavior, C2059 on MSVC). Replaced with literal function name.
+- Explicitly captured `handshake` in lambda in
+  `abstract_tcp_server2.inl` (C3493 on MSVC).
+- Explicitly captured `credits_per_hash_threshold` in lambda in
+  `core_rpc_server.cpp` (C3493 on MSVC).
+- SFINAE-constrained `network_address` template constructor in
+  `net_utils_base.h` to prevent MSVC eager instantiation (C2039).
+
+### Changed
+
+- MSVC CI job now builds `--target daemon wallet` instead of just
+  `--target wallet`, matching what the GUI wallet release workflow
+  actually compiles. Future MSVC regressions in daemon code will be
+  caught in shekyl-core CI rather than surfacing in the GUI wallet
+  release after an hour of compilation.
+
 ## [3.1.0-alpha.1] - 2026-04-15
 
 First public alpha release. First green CI in repository history.

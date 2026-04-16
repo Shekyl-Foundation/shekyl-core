@@ -310,6 +310,13 @@ Each item is out of scope for the current PR but worth tracking for future work.
   for every height. This is the invariant that the off-by-one bug violated
   and is the highest-value regression gate for this class of bug.
 
+- **MSVC CI now covers daemon target.** The `build-windows-msvc` job
+  builds `--target daemon wallet` as of this change. Any new daemon code
+  must compile under MSVC. If a future change introduces MSVC-only errors,
+  shekyl-core CI will catch it before the GUI wallet release workflow does.
+  No further action needed unless the MSVC CI job is removed or the GUI
+  wallet stops building the daemon target.
+
 - **Expose FCMP++ verification cache stats via daemon RPC (F14).** Target: V3.1.
   Add `verification_cache_hits` and `verification_cache_misses` fields to
   `get_info` (or a new `get_cache_stats` JSON-RPC method). Currently the
