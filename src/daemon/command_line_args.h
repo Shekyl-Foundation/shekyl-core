@@ -118,7 +118,6 @@ namespace daemon_args
   , false
   };
 
-#pragma message("=== DIAG: daemon_args namespace END ===")
 }  // namespace daemon_args
 
 #endif // DAEMON_COMMAND_LINE_ARGS_H

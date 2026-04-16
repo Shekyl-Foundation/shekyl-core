@@ -29,6 +29,7 @@
 set(daemon_sources
   command_parser_executor.cpp
   command_server.cpp
+  core.cpp
   daemon.cpp
   executor.cpp
   main.cpp

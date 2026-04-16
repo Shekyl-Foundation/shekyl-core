@@ -1,21 +1,21 @@
 // Copyright (c) 2014-2022, The Monero Project
-// 
+//
 // All rights reserved.
-// 
+//
 // Redistribution and use in source and binary forms, with or without modification, are
 // permitted provided that the following conditions are met:
-// 
+//
 // 1. Redistributions of source code must retain the above copyright notice, this list of
 //    conditions and the following disclaimer.
-// 
+//
 // 2. Redistributions in binary form must reproduce the above copyright notice, this list
 //    of conditions and the following disclaimer in the documentation and/or other
 //    materials provided with the distribution.
-// 
+//
 // 3. Neither the name of the copyright holder nor the names of its contributors may be
 //    used to endorse or promote products derived from this software without specific
 //    prior written permission.
-// 
+//
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
 // EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
 // MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
@@ -26,12 +26,8 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#pragma once
-
-#include "blocks/blocks.h"
-#include "cryptonote_core/cryptonote_core.h"
-#include "cryptonote_protocol/cryptonote_protocol_handler.h"
-#include "misc_log_ex.h"
+#include "daemon/core.h"
+#include "daemon/command_line_args.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon"
@@ -39,35 +35,39 @@
 namespace daemonize
 {
 
-class t_core final
+t_core::t_core(boost::program_options::variables_map const & vm)
+  : m_core{nullptr}
+  , m_vm_HACK{vm}
 {
-public:
-  static void init_options(boost::program_options::options_description & option_spec)
-  {
-    cryptonote::core::init_options(option_spec);
-  }
-private:
-  typedef cryptonote::t_cryptonote_protocol_handler<cryptonote::core> t_protocol_raw;
-  cryptonote::core m_core;
-  boost::program_options::variables_map const m_vm_HACK;
-public:
-  t_core(boost::program_options::variables_map const & vm);
-  ~t_core();
+  MGINFO("Initializing core...");
+#if defined(PER_BLOCK_CHECKPOINT)
+  const cryptonote::GetCheckpointsCallback& get_checkpoints = blocks::GetCheckpointsData;
+#else
+  const cryptonote::GetCheckpointsCallback& get_checkpoints = nullptr;
+#endif
 
-  void set_protocol(t_protocol_raw & protocol)
-  {
-    m_core.set_cryptonote_protocol(&protocol);
+  if (command_line::is_arg_defaulted(vm, daemon_args::arg_proxy) && command_line::get_arg(vm, daemon_args::arg_proxy_allow_dns_leaks)) {
+    MLOG_RED(el::Level::Warning, "--" << daemon_args::arg_proxy_allow_dns_leaks.name << " is enabled, but --"
+      << daemon_args::arg_proxy.name << " is not specified.");
   }
 
-  bool run()
+  const bool allow_dns = command_line::is_arg_defaulted(vm, daemon_args::arg_proxy) || command_line::get_arg(vm, daemon_args::arg_proxy_allow_dns_leaks);
+  if (!m_core.init(m_vm_HACK, nullptr, get_checkpoints, allow_dns))
   {
-    return true;
+    throw std::runtime_error("Failed to initialize core");
   }
+  MGINFO("Core initialized OK");
+}
 
-  cryptonote::core & get()
-  {
-    return m_core;
+t_core::~t_core()
+{
+  MGINFO("Deinitializing core...");
+  try {
+    m_core.deinit();
+    m_core.set_cryptonote_protocol(nullptr);
+  } catch (...) {
+    MERROR("Failed to deinitialize core...");
   }
-};
+}
 
 }
