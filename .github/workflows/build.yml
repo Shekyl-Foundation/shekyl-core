@@ -262,7 +262,7 @@ jobs:
           cmake --build build --target test
 
   build-windows-msvc:
-    name: 'Windows (MSVC, daemon+wallet)'
+    name: 'Windows (MSVC, daemon+wallet+wallet-rpc)'
     runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v5
@@ -307,10 +307,43 @@ jobs:
             -DUSE_DEVICE_TREZOR=OFF `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static
-      - name: build daemon and wallet
+      - name: build daemon, wallet, and wallet-rpc
         shell: pwsh
         run: |
-          cmake --build build --config Release --target daemon wallet --parallel 2
+          cmake --build build --config Release --target daemon wallet wallet_rpc_server --parallel 2
+      - name: smoke-test daemonizer removal
+        shell: pwsh
+        # After the V3.1 daemonizer removal, shekyld.exe and
+        # shekyl-wallet-rpc.exe must (a) link cleanly on MSVC without the
+        # src/daemonizer/ subsystem, (b) run without invoking the removed
+        # POSIX fork() / Windows SCM code paths, and (c) intercept the
+        # retired CLI flags via src/common/removed_flags.{h,cpp}. --help
+        # exits 0 after printing the option list, which exercises the full
+        # argument-parsing + logger-init path without waiting on a network
+        # port. --detach is expected to exit nonzero with the V3.1
+        # migration message; grepping the message pins the shim so a
+        # future regression ("unknown option --detach") fails CI loudly
+        # rather than shipping as a user-visible downgrade. The checks
+        # are intentionally Windows-only because POSIX fork / Windows SCM
+        # behaviors diverge at exactly this boundary.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $daemon = 'build/bin/Release/shekyld.exe'
+          $wrpc   = 'build/bin/Release/shekyl-wallet-rpc.exe'
+          & $daemon --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "shekyld --help failed ($LASTEXITCODE)" }
+          & $wrpc   --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "shekyl-wallet-rpc --help failed ($LASTEXITCODE)" }
+          $detach = & $daemon --detach 2>&1
+          if ($LASTEXITCODE -eq 0) { throw "shekyld --detach unexpectedly succeeded" }
+          if ($detach -notmatch "was removed in V3\.1") {
+            throw "shekyld --detach did not produce the V3.1 migration message; output: $detach"
+          }
+          $detach2 = & $wrpc --pidfile=C:\temp\x 2>&1
+          if ($LASTEXITCODE -eq 0) { throw "shekyl-wallet-rpc --pidfile unexpectedly succeeded" }
+          if ($detach2 -notmatch "was removed in V3\.1") {
+            throw "shekyl-wallet-rpc --pidfile did not produce the V3.1 migration message; output: $detach2"
+          }
 
   source-archive:
     name: "source archive"
