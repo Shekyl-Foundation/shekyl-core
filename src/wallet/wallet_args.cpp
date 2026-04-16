@@ -29,6 +29,7 @@
 
 #include <filesystem>
 #include "common/i18n.h"
+#include "common/removed_flags.h"
 #include "common/util.h"
 #include "misc_log_ex.h"
 #include "string_tools.h"
@@ -142,7 +143,23 @@ namespace wallet_args
     bool r = command_line::handle_error_helper(desc_all, [&]()
     {
       auto parser = po::command_line_parser(argc, argv).options(desc_all).positional(positional_options);
-      po::store(parser.run(), vm);
+      try
+      {
+        po::store(parser.run(), vm);
+      }
+      catch (po::unknown_option const & ex)
+      {
+        // Friendly-error shim for flags removed in V3.1 when the daemonizer
+        // was deleted. Binary name is derived from argv[0] so this stays
+        // correct if another wallet tool ever picks up wallet_args::main.
+        std::filesystem::path const prog(argv[0]);
+        std::string const binary_name = prog.stem().string();
+        if (shekyl::cli::handle_removed_flag(ex, binary_name.c_str()))
+        {
+          return false;
+        }
+        throw;
+      }
 
       if (command_line::get_arg(vm, command_line::arg_help))
       {
