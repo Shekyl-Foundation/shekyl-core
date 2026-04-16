@@ -355,6 +355,100 @@ directory level but retains the `rct::` namespace internally.
 
 ---
 
+## Daemon Orchestration Layer
+
+Target: V3.1. See `FOLLOWUPS.md` for the summary. This section is the
+full structural analysis.
+
+### Problem: wrapper classes with no abstraction value
+
+`src/daemon/` contains four wrapper classes:
+
+| Class | Wraps | Methods |
+|-------|-------|---------|
+| `t_core` | `cryptonote::core` | `init_options`, `set_protocol`, `run` (returns true), `get` |
+| `t_protocol` | `t_cryptonote_protocol_handler` | constructor calls `init`, `get`, `set_p2p_endpoint` |
+| `t_p2p` | `node_server` | `init_options`, `run`, `stop`, `get` |
+| `t_rpc` | `core_rpc_server` | `init_options`, `run`, `stop`, `get_server` |
+
+Every constructor takes `boost::program_options::variables_map const &`,
+extracts a few args, calls the engine's `init()`, and logs. Every
+destructor calls `deinit()` and logs. The wrappers add no invariants,
+no error recovery, no retry logic — just indirection.
+
+`t_internals` in `daemon.cpp` composes them into the only arrangement
+that ever exists: core → protocol → p2p → rpc(s). There is no other
+composition. The wrappers exist for a CryptoNote-era design pattern
+(uniform `init_options`/`init`/`run`/`deinit` lifecycle) that buys
+nothing when there is exactly one composition.
+
+### Problem: `t_executor` is dead abstraction
+
+`t_executor` exists so the `daemonizer` can be generic over "what daemon
+am I running." There is exactly one executor. It's a typedef, a
+`create_daemon` method that calls `t_daemon`'s constructor, and two
+`run_*` methods. All of this can be inlined into `main()`.
+
+### Problem: `daemonizer/` adds Windows circular includes and may be unnecessary
+
+The `daemonizer/` subsystem provides:
+- **POSIX:** `posix_fork.h` — `fork()`-based backgrounding.
+- **Windows:** `windows_service.h`, `windows_service_runner.h`,
+  `windows_daemonizer.inl` — Windows SCM service registration.
+
+On Windows, `command_line_args.h` includes `daemonizer/daemonizer.h`,
+which includes `windows_daemonizer.inl`, which includes `<shlobj.h>`,
+`windows_service.h`, `windows_service_runner.h`, and
+`cryptonote_core/cryptonote_core.h`. This chain re-enters daemon headers
+before types are fully defined, causing `#pragma once` to skip
+re-inclusion, leaving `t_core`/`t_p2p`/`t_rpc` undefined. Three `.cpp`
+files were created (April 2026) solely to work around this.
+
+**Shekyl may not need in-process daemonization at all:**
+- GUI wallet: Tauri manages the `shekyld` sidecar lifecycle.
+- Standalone node: `systemd` (Linux), `launchd` (macOS), Task Scheduler
+  (Windows) handle backgrounding at the OS level.
+- The Windows service registration code has no test coverage and may not
+  work with Shekyl's diverged command-line args.
+
+### Problem: `boost::program_options` threading
+
+Every constructor takes `variables_map const &` and digs args out with
+`command_line::get_arg`. This forces every header to see the full
+`variables_map` type and all `arg_*` definitions from
+`command_line_args.h`, which is the trigger for the circular include
+chain. A config struct parsed once in `main()` would eliminate the
+coupling.
+
+### Proposed cleanup
+
+1. Delete `src/daemonizer/` entirely. `main()` runs the daemon in the
+   foreground. Background execution is delegated to the OS.
+2. Collapse `t_core`, `t_protocol`, `t_p2p`, `t_rpc` into a single
+   `Daemon` struct in `daemon.cpp`. The individual headers disappear.
+3. Parse `boost::program_options` in `main.cpp` into a `DaemonConfig`
+   struct (proxy settings, RPC ports, restricted mode, offline flag).
+   Pass the struct to `Daemon::init()`.
+4. Delete `t_executor`. `main()` calls `Daemon` directly.
+5. Delete the three workaround `.cpp` files (`core.cpp`, `p2p.cpp`,
+   `rpc.cpp`) that exist only to break the circular dependency.
+
+Result: ~12 files with circular-include landmines → ~3 files
+(`main.cpp`, `daemon.h`, `daemon.cpp`) with a clean config-struct
+boundary.
+
+### Rust migration: not applicable
+
+Per `20-rust-vs-cpp-policy.mdc`, this layer orchestrates other code and
+doesn't touch secrets, crypto, untrusted input parsing, or amount
+arithmetic. It stays in C++ until the engines it wraps
+(`cryptonote_core`, `node_server`, `core_rpc_server`) are themselves
+migrated — a much larger, separate project. The Rust RPC server
+(`shekyl-daemon-rpc`) already replaces the epee HTTP layer via FFI,
+which is the correct migration boundary.
+
+---
+
 ## Upstream Techniques to Track
 
 Cross-references to Monero upstream PRs whose structural techniques are
@@ -391,7 +485,9 @@ plan.
 
 ---
 
-*Last updated: 2026-04-15 — Pre-main tech debt sweep: marked
+*Last updated: 2026-04-16 — Added daemon orchestration layer analysis
+(circular includes, wrapper class collapse, daemonizer deletion).
+Previous: 2026-04-15 — Pre-main tech debt sweep: marked
 `COVERAGE=ON`, `enable_stack_trace`, `wallet2.cpp` unsigned negation,
 `bootstrap_file.cpp` long-type, and vcpkg manifest items as resolved.
 Previous: 2026-04-12 — Consensus-critical curve-tree leaf ordering
