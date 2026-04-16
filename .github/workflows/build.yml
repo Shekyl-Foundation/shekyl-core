@@ -327,36 +327,47 @@ jobs:
         # are intentionally Windows-only because POSIX fork / Windows SCM
         # behaviors diverge at exactly this boundary.
         run: |
+          # Native invocations go through `cmd /c` rather than PowerShell's `&`
+          # operator. The previous two iterations of this step hit PowerShell
+          # gotchas (array-vs-scalar -notmatch on 2>&1 output, then
+          # $PSNativeCommandUseErrorActionPreference turning expected-nonzero
+          # exits into terminating errors before $LASTEXITCODE could be read).
+          # cmd.exe has none of that behavior — exit code is just the exit
+          # code, stderr merges to the file via `2>&1` without any ErrorRecord
+          # elevation. PowerShell is reduced to "inspect $LASTEXITCODE" and
+          # "Select-String on a file," which are the well-behaved parts.
           $ErrorActionPreference = 'Stop'
-          # PowerShell 7.4+ (what ships on windows-2025-vs2026) defaults
-          # $PSNativeCommandUseErrorActionPreference to $true, which under
-          # $ErrorActionPreference='Stop' converts *any* nonzero exit from a
-          # native command into a terminating error before the surrounding
-          # script can observe $LASTEXITCODE. That's hostile to a test whose
-          # entire point is that `shekyld --detach` and `shekyl-wallet-rpc
-          # --pidfile=...` are expected to exit nonzero. Opt out so the
-          # explicit $LASTEXITCODE checks below actually get a chance to run.
-          $PSNativeCommandUseErrorActionPreference = $false
-          $daemon = 'build/bin/Release/shekyld.exe'
-          $wrpc   = 'build/bin/Release/shekyl-wallet-rpc.exe'
-          # Out-String collapses PowerShell's mixed stdout+ErrorRecord array
-          # from `2>&1` into a single string so `-notmatch` returns a bool
-          # instead of the non-matching array elements (which are truthy when
-          # non-empty and produce a false-positive `throw`).
-          & $daemon --help | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "shekyld --help failed ($LASTEXITCODE)" }
-          & $wrpc   --help | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "shekyl-wallet-rpc --help failed ($LASTEXITCODE)" }
-          $detach = (& $daemon --detach 2>&1 | Out-String)
-          if ($LASTEXITCODE -eq 0) { throw "shekyld --detach unexpectedly succeeded" }
-          if ($detach -notmatch "was removed in V3\.1") {
-            throw "shekyld --detach did not produce the V3.1 migration message; output: $detach"
+          $daemon = 'build\bin\Release\shekyld.exe'
+          $wrpc   = 'build\bin\Release\shekyl-wallet-rpc.exe'
+
+          function Assert-HelpOk([string]$exe, [string]$label) {
+            cmd /c "`"$exe`" --help > NUL 2>&1"
+            if ($LASTEXITCODE -ne 0) {
+              throw "$label --help failed with exit $LASTEXITCODE"
+            }
           }
-          $detach2 = (& $wrpc --pidfile=C:\temp\x 2>&1 | Out-String)
-          if ($LASTEXITCODE -eq 0) { throw "shekyl-wallet-rpc --pidfile unexpectedly succeeded" }
-          if ($detach2 -notmatch "was removed in V3\.1") {
-            throw "shekyl-wallet-rpc --pidfile did not produce the V3.1 migration message; output: $detach2"
+
+          function Assert-RemovedFlag([string]$exe, [string]$label, [string]$flag) {
+            $outFile = New-TemporaryFile
+            try {
+              cmd /c "`"$exe`" $flag > `"$outFile`" 2>&1"
+              $exit = $LASTEXITCODE
+              $out  = Get-Content -Raw -LiteralPath $outFile
+              if ($exit -eq 0) {
+                throw "$label $flag unexpectedly succeeded; output: $out"
+              }
+              if ($out -notmatch 'was removed in V3\.1') {
+                throw "$label $flag did not produce the V3.1 migration message; output: $out"
+              }
+            } finally {
+              Remove-Item -LiteralPath $outFile -ErrorAction SilentlyContinue
+            }
           }
+
+          Assert-HelpOk $daemon 'shekyld'
+          Assert-HelpOk $wrpc   'shekyl-wallet-rpc'
+          Assert-RemovedFlag $daemon 'shekyld'           '--detach'
+          Assert-RemovedFlag $wrpc   'shekyl-wallet-rpc' '--pidfile=C:\temp\x'
 
   source-archive:
     name: "source archive"
