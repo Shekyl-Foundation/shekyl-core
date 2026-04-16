@@ -195,6 +195,31 @@ problematic headers. The ICE reproduces on both MSVC 14.44 (VS 2022)
 and 14.50 (VS 2026) -- the stub is the actual fix, not a compiler
 upgrade. Full diagnosis in `shekyl-core/docs/COMPILING_DEBUGGING_TESTING.md`.
 
+### ~~`ARCH_ID` not lowercased, breaking RandomX JIT on MSVC~~ ✅ Resolved
+**Priority**: Was high — silent performance degradation on MSVC daemon
+
+Root `CMakeLists.txt` set `ARCH_ID` from `CMAKE_SYSTEM_PROCESSOR`
+without lowercasing. On Windows, `CMAKE_SYSTEM_PROCESSOR` returns
+`AMD64` (uppercase). RandomX's `CMakeLists.txt` checks for lowercase
+`"amd64"` to include `jit_compiler_x86.cpp`. RandomX's own CMakeLists
+lowercases when `ARCH_ID` isn't already set, but the parent scope
+pre-empts that. Result: `jit_compiler_x86.cpp` was never compiled,
+causing LNK2019 for `JitCompilerX86` symbols. MSVC-built `shekyld`
+would have run RandomX in interpreted mode only (orders of magnitude
+slower for mining). Fix: `string(TOLOWER "${ARCH_ID}" ARCH_ID)` in root
+CMakeLists. *(Landed on `dev` in `feb631d08`, April 2026.)*
+
+### ~~`blocks.cpp` C/C++ linkage mismatch on MSVC~~ ✅ Resolved
+**Priority**: Was medium — daemon link failure on MSVC only
+
+`blocks.cpp` declared `extern const unsigned char checkpoints[]` etc.
+without `extern "C"`. The generated `.c` files produce C-linkage
+symbols. On GCC/Clang, namespace-scope variables don't get C++
+name-mangled, so C and C++ symbols match. On MSVC, they're mangled
+differently (`?checkpoints@@3QBEB` vs `_checkpoints`), causing LNK2019.
+Fix: wrapped extern declarations in `extern "C" {}`. *(Landed on `dev`
+in `feb631d08`, April 2026.)*
+
 ### ~~`COVERAGE=ON` applies GCC-only flags without MSVC guard~~ ✅ Resolved
 `monero_enable_coverage()` in root `CMakeLists.txt` (line 664) already
 guards with `if(NOT MSVC)`. Verified April 2026.
@@ -487,6 +512,9 @@ plan.
 
 *Last updated: 2026-04-16 — Added daemon orchestration layer analysis
 (circular includes, wrapper class collapse, daemonizer deletion).
+Resolved ARCH_ID case mismatch (RandomX JIT never compiled on MSVC)
+and blocks.cpp C/C++ linkage mismatch. Added math_helper.h missing
+windows.h include.
 Previous: 2026-04-15 — Pre-main tech debt sweep: marked
 `COVERAGE=ON`, `enable_stack_trace`, `wallet2.cpp` unsigned negation,
 `bootstrap_file.cpp` long-type, and vcpkg manifest items as resolved.
