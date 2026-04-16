@@ -213,6 +213,15 @@ char* wallet2_ffi_finalize_transfer(wallet2_handle* w,
                                     const char* signed_proofs_json,
                                     const char* tx_blob_hex);
 
+// ── Scanner keys ─────────────────────────────────────────────────────────
+
+// Export keys needed by the Rust scanner as JSON.
+// Returns: {"spend_secret":"hex","view_secret":"hex","spend_public":"hex",
+//           "view_public":"hex","x25519_sk":"hex","ml_kem_dk":"hex"}
+// or NULL on error.
+// The caller must free the returned string with wallet2_ffi_free_string().
+char* wallet2_ffi_get_scanner_keys(wallet2_handle* w);
+
 // ── Generic JSON-RPC dispatcher ──────────────────────────────────────────────
 
 // Dispatch any wallet RPC method by name with JSON params.

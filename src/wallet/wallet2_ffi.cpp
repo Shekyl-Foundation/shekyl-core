@@ -715,6 +715,69 @@ uint32_t wallet2_ffi_get_version(void)
     return WALLET_RPC_VERSION;
 }
 
+// ── Scanner keys ─────────────────────────────────────────────────────────────
+
+char* wallet2_ffi_get_scanner_keys(wallet2_handle* w)
+{
+    if (!w || !w->wallet) {
+        if (w) w->set_error(WALLET_RPC_ERROR_CODE_NOT_OPEN, "No wallet file");
+        return nullptr;
+    }
+    w->clear_error();
+
+    try {
+        if (w->wallet->watch_only()) {
+            w->set_error(WALLET_RPC_ERROR_CODE_WATCH_ONLY,
+                         "Watch-only wallet does not have scanner keys");
+            return nullptr;
+        }
+
+        const auto& keys = w->wallet->get_account().get_keys();
+
+        epee::wipeable_string spend_sec_hex = epee::to_hex::wipeable_string(
+            keys.m_spend_secret_key);
+        epee::wipeable_string view_sec_hex = epee::to_hex::wipeable_string(
+            keys.m_view_secret_key);
+        std::string spend_pub_hex = epee::string_tools::pod_to_hex(
+            keys.m_account_address.m_spend_public_key);
+        std::string view_pub_hex = epee::string_tools::pod_to_hex(
+            keys.m_account_address.m_view_public_key);
+
+        // m_pqc_secret_key layout: x25519_sk[32] || ml_kem_dk[2400]
+        if (keys.m_pqc_secret_key.size() <= SHEKYL_X25519_PK_BYTES) {
+            w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
+                         "PQC secret key is missing or truncated");
+            return nullptr;
+        }
+        std::string x25519_sk_hex = epee::to_hex::string(
+            {keys.m_pqc_secret_key.data(), SHEKYL_X25519_PK_BYTES});
+        std::string ml_kem_dk_hex = epee::to_hex::string(
+            {keys.m_pqc_secret_key.data() + SHEKYL_X25519_PK_BYTES,
+             keys.m_pqc_secret_key.size() - SHEKYL_X25519_PK_BYTES});
+
+        rj::Document doc;
+        doc.SetObject();
+        auto& alloc = doc.GetAllocator();
+        doc.AddMember("spend_secret",
+            rj::Value(std::string(spend_sec_hex.data(), spend_sec_hex.size()).c_str(), alloc), alloc);
+        doc.AddMember("view_secret",
+            rj::Value(std::string(view_sec_hex.data(), view_sec_hex.size()).c_str(), alloc), alloc);
+        doc.AddMember("spend_public",
+            rj::Value(spend_pub_hex.c_str(), alloc), alloc);
+        doc.AddMember("view_public",
+            rj::Value(view_pub_hex.c_str(), alloc), alloc);
+        doc.AddMember("x25519_sk",
+            rj::Value(x25519_sk_hex.c_str(), alloc), alloc);
+        doc.AddMember("ml_kem_dk",
+            rj::Value(ml_kem_dk_hex.c_str(), alloc), alloc);
+
+        return json_to_string(doc);
+    } catch (const std::exception& e) {
+        w->set_error_from_exception(e, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
+        return nullptr;
+    }
+}
+
 // ── Transfers ────────────────────────────────────────────────────────────────
 
 char* wallet2_ffi_transfer(wallet2_handle* w,
