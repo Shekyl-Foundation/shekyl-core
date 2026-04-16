@@ -39,6 +39,7 @@
 #include "daemon/core.h"
 
 #pragma message("=== DIAG: protocol.h after #include daemon/core.h ===")
+typedef daemonize::t_core _diag_verify_t_core_visible;
 
 #include "misc_log_ex.h"
 
