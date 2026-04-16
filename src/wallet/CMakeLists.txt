@@ -73,7 +73,7 @@ if(NOT IOS)
 
   monero_private_headers(wallet_rpc_server
     ${wallet_rpc_private_headers})
-  monero_add_executable(wallet_rpc_server
+  shekyl_add_executable(wallet_rpc_server
     ${wallet_rpc_sources}
     ${wallet_rpc_headers}
     ${wallet_rpc_private_headers})

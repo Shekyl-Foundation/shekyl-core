@@ -41,7 +41,7 @@ monero_find_all_headers(daemon_private_headers "${CMAKE_CURRENT_SOURCE_DIR}")
 
 monero_private_headers(daemon
   ${daemon_private_headers})
-monero_add_executable(daemon
+shekyl_add_executable(daemon
   ${daemon_sources}
   ${daemon_headers}
   ${daemon_private_headers})
