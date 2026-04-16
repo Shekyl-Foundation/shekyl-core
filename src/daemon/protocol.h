@@ -30,11 +30,16 @@
 
 #pragma once
 
+#pragma message("=== DIAG: protocol.h START ===")
+
 #include <stdexcept>
 #include <boost/program_options/variables_map.hpp>
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
 #include "p2p/net_node.h"
 #include "daemon/core.h"
+
+#pragma message("=== DIAG: protocol.h after #include daemon/core.h ===")
+
 #include "misc_log_ex.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
