@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2022, The Monero Project
+// Copyright (c) 2018-2026, The Shekyl Foundation
 //
 // All rights reserved.
 //
@@ -26,34 +26,36 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "daemon/p2p.h"
-#include "daemon/command_line_args.h"
+// TODO(v3.2): delete this file and its .cpp. Coordinated with the
+// wallet_rpc_server Rust cutover (see docs/FOLLOWUPS.md §"removed_flags
+// shim"). The shim exists only to give users a friendly migration message
+// for --detach, --pidfile, and the Windows --*-service flags removed in
+// V3.1 when the daemonizer was deleted. Call sites are the two main()
+// functions in src/daemon/main.cpp and src/wallet/wallet_rpc_server.cpp;
+// both disappear at V3.2 (shekyld keeps its caller, shekyl-wallet-rpc is
+// replaced by the Rust binary).
 
-#undef SHEKYL_DEFAULT_LOG_CATEGORY
-#define SHEKYL_DEFAULT_LOG_CATEGORY "daemon"
+#pragma once
 
-namespace daemonize
-{
+#include <boost/program_options/errors.hpp>
 
-t_p2p::t_p2p(boost::program_options::variables_map const & vm, t_protocol & protocol)
-  : m_server{protocol.get()}
-{
-  MGINFO("Initializing p2p server...");
-  if (!m_server.init(vm, command_line::get_arg(vm, daemon_args::arg_proxy), command_line::get_arg(vm, daemon_args::arg_proxy_allow_dns_leaks)))
-  {
-    throw std::runtime_error("Failed to initialize p2p server.");
-  }
-  MGINFO("p2p server initialized OK");
-}
+namespace shekyl { namespace cli {
 
-t_p2p::~t_p2p()
-{
-  MGINFO("Deinitializing p2p...");
-  try {
-    m_server.deinit();
-  } catch (...) {
-    MERROR("Failed to deinitialize p2p...");
-  }
-}
+// If `ex` names one of the daemonizer flags removed in V3.1
+// (--detach, --pidfile, --install-service, --uninstall-service,
+// --start-service, --stop-service, --run-as-service), write a
+// migration message to stderr pointing the operator at systemd /
+// launchd / Task Scheduler / Tauri sidecar, then return true.
+// Caller should exit nonzero.
+//
+// Otherwise returns false — caller should re-throw / print the normal
+// parse error.
+//
+// `binary_name` is used verbatim in the message ("shekyld" or
+// "shekyl-wallet-rpc"), so per-binary hints read naturally without
+// branching in the caller.
+bool handle_removed_flag(
+    boost::program_options::unknown_option const & ex,
+    char const * binary_name);
 
-}
+}} // namespace shekyl::cli

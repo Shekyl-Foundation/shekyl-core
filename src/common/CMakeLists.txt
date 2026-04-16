@@ -30,6 +30,7 @@ include_directories(SYSTEM ${OPENSSL_INCLUDE_DIR})
 
 set(common_sources
   command_line.cpp
+  daemon_default_data_dir.cpp
   dns_utils.cpp
   download.cpp
   error.cpp
@@ -40,6 +41,7 @@ set(common_sources
   password.cpp
   perf_timer.cpp
   pruning.cpp
+  removed_flags.cpp
   spawn.cpp
   threadpool.cpp
   updates.cpp
