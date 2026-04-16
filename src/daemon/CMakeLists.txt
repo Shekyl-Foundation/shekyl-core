@@ -33,6 +33,8 @@ set(daemon_sources
   daemon.cpp
   executor.cpp
   main.cpp
+  p2p.cpp
+  rpc.cpp
   rpc_command_executor.cpp
 )
 

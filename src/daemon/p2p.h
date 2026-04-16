@@ -34,7 +34,6 @@
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
 #include "p2p/net_node.h"
 #include "daemon/protocol.h"
-#include "daemon/command_line_args.h"
 #include "misc_log_ex.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -56,20 +55,8 @@ public:
 private:
   t_node_server m_server;
 public:
-  t_p2p(
-      boost::program_options::variables_map const & vm
-    , t_protocol & protocol
-    )
-    : m_server{protocol.get()}
-  {
-    //initialize objects
-    MGINFO("Initializing p2p server...");
-    if (!m_server.init(vm, command_line::get_arg(vm, daemon_args::arg_proxy), command_line::get_arg(vm, daemon_args::arg_proxy_allow_dns_leaks)))
-    {
-      throw std::runtime_error("Failed to initialize p2p server.");
-    }
-    MGINFO("p2p server initialized OK");
-  }
+  t_p2p(boost::program_options::variables_map const & vm, t_protocol & protocol);
+  ~t_p2p();
 
   t_node_server & get()
   {
@@ -86,16 +73,6 @@ public:
   void stop()
   {
     m_server.send_stop_signal();
-  }
-
-  ~t_p2p()
-  {
-    MGINFO("Deinitializing p2p...");
-    try {
-      m_server.deinit();
-    } catch (...) {
-      MERROR("Failed to deinitialize p2p...");
-    }
   }
 };
 
