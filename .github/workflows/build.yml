@@ -369,6 +369,17 @@ jobs:
           Assert-RemovedFlag $daemon 'shekyld'           '--detach'
           Assert-RemovedFlag $wrpc   'shekyl-wallet-rpc' '--pidfile=C:\temp\x'
 
+          # Both Assert-RemovedFlag calls deliberately leave $LASTEXITCODE
+          # nonzero — that's exactly what we're asserting on. GitHub Actions'
+          # pwsh shell wrapper is literally:
+          #     pwsh -Command ". '$script'; if (Test-Path variable:\LASTEXITCODE) { exit $LASTEXITCODE }"
+          # so a script that returns successfully but leaves $LASTEXITCODE=1
+          # behind (from the last native command) gets miscategorized as a
+          # failed step. Reset explicitly. Any earlier failure fires `throw`
+          # inside the Assert-* helpers, which aborts before we get here, so
+          # this only runs on genuine success.
+          exit 0
+
   source-archive:
     name: "source archive"
     runs-on: ubuntu-latest
