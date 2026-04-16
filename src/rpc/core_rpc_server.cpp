@@ -2044,13 +2044,7 @@ namespace cryptonote
     }
     catch (const std::exception &e)
     {
-      MERROR("Caught unexpected error while hashing in " <<
-#ifdef _MSC_VER
-        __FUNCSIG__
-#else
-        __PRETTY_FUNCTION__
-#endif
-        << ": " << e.what());
+      MERROR("Caught unexpected error while hashing in core_rpc_server::on_calc_pow: " << e.what());
       error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
       error_resp.message = e.what();
       return false;

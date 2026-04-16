@@ -286,7 +286,7 @@ namespace net_utils
     ).ssl_options().configure(connection_basic::socket_, handshake);
     boost::asio::post(
       m_strand,
-      [this, self, on_handshake]{
+      [this, self, on_handshake, handshake]{
         connection_basic::socket_.async_handshake(
           handshake,
           boost::asio::buffer(
