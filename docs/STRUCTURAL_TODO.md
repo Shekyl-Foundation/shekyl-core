@@ -380,10 +380,22 @@ directory level but retains the `rct::` namespace internally.
 
 ---
 
-## Daemon Orchestration Layer
+## Daemon Orchestration Layer ✅ Resolved
 
-Target: V3.1. See `FOLLOWUPS.md` for the summary. This section is the
-full structural analysis.
+**Resolved in V3.1** (chore/remove-daemonizer-layer, April 2026). The
+analysis below is retained as an audit trail; the refactor collapsed
+`src/daemon/`'s four wrapper classes and the `t_executor` shim into a
+single `daemonize::Daemon` in `daemon.{h,cpp}`, deleted `src/daemonizer/`
+wholesale, and moved the Windows admin-vs-user default data-directory
+logic into `src/common/daemon_default_data_dir.{h,cpp}` (pinned by a
+`daemon_default_data_dir` unit test). `shekyl-wallet-rpc` received the
+same treatment: its inline class was renamed to `WalletRpcDaemon` and
+its `daemonizer::init_options` / `daemonizer::daemonize` calls were
+replaced by a direct `WalletRpcDaemon{vm}.run()`. A small transitional
+shim (`src/common/removed_flags.{h,cpp}`, `TODO(v3.2)`) prints a
+migration message for `--detach`, `--pidfile`, and the Windows
+`--*-service` flags. See `CHANGELOG.md` V3.1 entry and `FOLLOWUPS.md`
+§"`removed_flags` shim sunset" for the V3.2 deletion plan.
 
 ### Problem: wrapper classes with no abstraction value
 

@@ -170,11 +170,16 @@ example.
 
 **Background operation**
 
+`shekyld` always runs in the foreground. Use your platform's service
+manager for background operation (systemd on Linux, launchd on macOS,
+Task Scheduler on Windows); the GUI wallet supervises its own bundled
+`shekyld` via the Tauri sidecar. An example systemd unit lives at
+`contrib/packaging/linux/shekyld.service`. The `--detach`, `--pidfile`,
+and `--*-service` flags were removed in V3.1.
+
 | Flag | Description |
 |------|-------------|
-| `--detach` | Run as a background daemon (Linux/macOS) |
-| `--pidfile <path>` | Write the process ID to a file (use with `--detach`) |
-| `--non-interactive` | Disable the interactive console |
+| `--non-interactive` | Disable the interactive console (required under a service manager) |
 
 ### Interactive console
 
