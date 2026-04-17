@@ -635,33 +635,61 @@ mod tests {
         use crate::kem::{HybridX25519MlKem, KeyEncapsulation};
 
         let kem = HybridX25519MlKem;
-        let (pk0, _sk0) = kem.keypair_generate().unwrap();
-        let (pk1, sk1) = kem.keypair_generate().unwrap();
-        let (pk2, _sk2) = kem.keypair_generate().unwrap();
 
-        let construction = construct_multisig_output_for_sender(
-            3,
-            2,
-            &[pk0, pk1, pk2],
-            &[0; 32],
-            0,
-            &[0; 32],
-            &[0; 32],
-        )
-        .unwrap();
+        // The view tag hint is a single byte (see `derive_view_tag_hint`),
+        // so a wrong-ciphertext decapsulation has roughly a 1-in-256
+        // chance of accidentally producing the same hint as the published
+        // one. That collision probability is inherent to the pre-filter's
+        // design, not a bug — but it makes a naive one-shot test flaky
+        // at ~0.4% per run. Retry keypair generation until the
+        // wrong-ciphertext hint actually differs from the participant's
+        // published hint, so the test exercises the rejection path
+        // rather than coin-flipping on a collision. The 64-attempt bound
+        // would only trip if hint derivation or the KEM degenerated
+        // (probability of 64 consecutive collisions is ~(1/256)^64).
+        for attempt in 0..64 {
+            let (pk0, _sk0) = kem.keypair_generate().unwrap();
+            let (pk1, sk1) = kem.keypair_generate().unwrap();
+            let (pk2, _sk2) = kem.keypair_generate().unwrap();
 
-        let result = scan_multisig_output_for_participant(
-            1,
-            &sk1,
-            &construction.kem_ciphertexts[0], // wrong ciphertext (belongs to participant 0)
-            construction.view_tag_hints[1],
-            SPEND_AUTH_VERSION_ED25519,
-        )
-        .unwrap();
+            let construction = construct_multisig_output_for_sender(
+                3,
+                2,
+                &[pk0, pk1, pk2],
+                &[0; 32],
+                0,
+                &[0; 32],
+                &[0; 32],
+            )
+            .unwrap();
 
-        assert!(
-            result.is_none(),
-            "scanning with wrong ciphertext should fail hint check"
+            let wrong_ss = kem
+                .decapsulate(&sk1, &construction.kem_ciphertexts[0])
+                .unwrap();
+            let wrong_hint = derive_view_tag_hint(&wrong_ss.0).unwrap();
+            if wrong_hint == construction.view_tag_hints[1] {
+                continue;
+            }
+
+            let result = scan_multisig_output_for_participant(
+                1,
+                &sk1,
+                &construction.kem_ciphertexts[0], // wrong ciphertext (belongs to participant 0)
+                construction.view_tag_hints[1],
+                SPEND_AUTH_VERSION_ED25519,
+            )
+            .unwrap();
+
+            assert!(
+                result.is_none(),
+                "scanning with wrong ciphertext (attempt {attempt}) should fail hint check"
+            );
+            return;
+        }
+
+        panic!(
+            "could not produce a non-colliding wrong-ciphertext hint in 64 attempts; \
+             view tag derivation or KEM may be degenerate"
         );
     }
 
