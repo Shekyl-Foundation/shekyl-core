@@ -194,11 +194,14 @@ Start daemon in foreground:
 ./shekyld
 ```
 
-Start daemon detached:
-
-```bash
-./shekyld --log-file shekyld.log --detach
-```
+Run the daemon in the background via your platform's service manager
+(systemd on Linux, launchd on macOS, Task Scheduler on Windows). An
+example systemd unit lives at `contrib/packaging/linux/shekyld.service`;
+copy it to `/etc/systemd/system/shekyld.service` and `systemctl enable
+--now shekyld`. `--detach`, `--pidfile`, and the Windows `--*-service`
+flags were removed in V3.1; the daemon now only runs in the foreground
+and is supervised externally. The GUI wallet embeds `shekyld` as a
+Tauri sidecar and does not require a separate service unit.
 
 If running a public remote RPC node, always use restricted mode.
 

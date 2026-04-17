@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **Daemonizer layer.** Deleted `src/daemonizer/` (POSIX `fork()` detach,
+  Windows Service Control Manager registration, console-control glue)
+  and the four thin wrapper classes in `src/daemon/` (`t_core`,
+  `t_protocol`, `t_p2p`, `t_rpc`) plus the executor shim. Background
+  execution is now delegated to systemd (Linux), launchd (macOS), Task
+  Scheduler (Windows), or the Tauri sidecar (GUI wallet); in-process
+  forking and Windows service registration were untested code paths
+  touching privilege boundaries and file-descriptor lifetimes, so their
+  removal is a security improvement in addition to an audit-surface
+  reduction. The removal also breaks the circular include chain where
+  `daemon/command_line_args.h` transitively pulled `windows.h` into
+  most of the codebase. Closes FOLLOWUPS.md §"windows-daemonizer-cleanup"
+  and STRUCTURAL_TODO.md §"Daemonizer removal".
+- **Daemonizer CLI flags:** `--detach`, `--pidfile`, `--install-service`,
+  `--uninstall-service`, `--start-service`, `--stop-service`,
+  `--run-as-service`. Both `shekyld` and `shekyl-wallet-rpc` accept
+  these only long enough to print a migration message pointing at
+  platform service managers (see `src/common/removed_flags.{h,cpp}`,
+  marked `TODO(v3.2)` for deletion alongside the `shekyl-wallet-rpc`
+  Rust cutover). `--non-interactive` is preserved in both binaries.
+
+### Changed
+
+- **Daemon orchestration class renamed.** `daemonize::t_daemon` is now
+  `daemonize::Daemon` in `shekyld`, and `shekyl-wallet-rpc`'s unrelated
+  inline class is now `WalletRpcDaemon`. The two binaries no longer
+  share a type name, clarifying audit scope and the V3.2 Rust cutover
+  plan.
+- **Default data directory resolution moved to `src/common/`.** The
+  admin-vs-user `CSIDL_*` branching formerly in `daemonizer` now lives
+  in `common/daemon_default_data_dir.{h,cpp}`, preserving the exact
+  path `shekyld` resolved before V3.1. Pinned by a new
+  `daemon_default_data_dir` unit test so a future refactor cannot
+  silently point operators at an empty data directory.
+
 ### Fixed
 
 - Made all `src/daemon/` headers self-contained for MSVC portability:

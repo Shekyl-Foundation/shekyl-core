@@ -276,7 +276,9 @@ invokes cmake commands as needed.
 
 * Add `PATH="$PATH:$HOME/Shekyl/build/release/bin"` to `.profile`
 
-* Run Shekyl with `shekyld --detach`
+* Run Shekyl with `shekyld` (foreground), or supervise it with systemd/
+  launchd/Task Scheduler for background operation. See
+  `contrib/packaging/linux/shekyld.service` for an example systemd unit.
 
 * **Optional**: build and run the test suite to verify the binaries:
 
@@ -527,15 +529,13 @@ specified either on the command line or in a configuration file passed by the
 a line with the syntax `argumentname=value`, where `argumentname` is the name
 of the argument without the leading dashes, for example, `log-level=1`.
 
-To run in background:
-
-```bash
-./bin/shekyld --log-file shekyld.log --detach
-```
-
-To run as a systemd service, see the example unit files under `utils/systemd/`
-and configuration under `utils/conf/`. Adapt paths and the service user to your
-deployment.
+To run in the background, use your platform's service manager (systemd,
+launchd, or Task Scheduler). See the example systemd unit files under
+`utils/systemd/` and `contrib/packaging/linux/`, and the configuration
+examples under `utils/conf/`; adapt paths and the service user to your
+deployment. The `--detach` / `--pidfile` / `--*-service` flags were
+removed in V3.1 — `shekyld` always runs in the foreground and is
+supervised externally.
 
 If you're on Mac, you may need to add the `--max-concurrency 1` option to
 shekyl-cli, and possibly shekyld, if you get crashes refreshing.
@@ -569,8 +569,10 @@ setting the following configuration parameters and environment variables:
    necessary to allow binding to local LAN/VPN interfaces to allow wallets to
    connect from remote hosts. On other systems, it may be needed for local wallets
    as well.
-* Do NOT pass `--detach` when running through torsocks with systemd (see
-  the example service files under `utils/systemd/` for details).
+* Rely on systemd/launchd/Task Scheduler to supervise `shekyld` under
+  torsocks — `--detach` was removed in V3.1 and `shekyld` always runs in
+  the foreground. See the example service files under `utils/systemd/`
+  for details.
 * If you use the wallet with a Tor daemon via the loopback IP (eg, 127.0.0.1:9050),
   then use `--untrusted-daemon` unless it is your own hidden service.
 

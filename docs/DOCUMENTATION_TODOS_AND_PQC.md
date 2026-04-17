@@ -86,8 +86,8 @@ This document consolidates key TODOs identified across Shekyl documentation and 
 - `boost::regex` → `std::regex` in `wallet_manager.cpp`. (`simplewallet.cpp` has been deleted.)
 - `boost::mutex` / `boost::lock_guard` / `boost::unique_lock` / `boost::condition_variable` → `std::mutex` / `std::lock_guard` / `std::unique_lock` / `std::condition_variable` in `util.h`, `util.cpp`, `threadpool.h`, `threadpool.cpp`, `rpc_payment.h`, `rpc_payment.cpp`.
 - `boost::filesystem` → `std::filesystem` in `blockchain_export.cpp`, `blockchain_import.cpp`, `cn_deserialize.cpp`, `util.cpp`, `bootstrap_file.h`/`.cpp`, `blocksdat_file.h`/`.cpp`, `wallet_manager.cpp`, `wallet_rpc_server.cpp`, `core_rpc_server.cpp`, `wallet_args.cpp`.
-- `boost::chrono`/`boost::this_thread` → `std::chrono`/`std::this_thread` in `windows_service.cpp` (daemonizer).
-- Upstream Monero PRs #9628 (ASIO `io_service` → `io_context`), #6690 (serialization), #9544 (daemonizer) confirmed already absorbed.
+- `boost::chrono`/`boost::this_thread` → `std::chrono`/`std::this_thread` in `windows_service.cpp` (daemonizer). *[File subsequently deleted wholesale with `src/daemonizer/` in V3.1 — see `CHANGELOG.md`.]*
+- Upstream Monero PRs #9628 (ASIO `io_service` → `io_context`), #6690 (serialization), #9544 (daemonizer) confirmed already absorbed. *[V3.1 deleted the daemonizer subsystem entirely; the #9544 changes are preserved in git history only.]*
 - Boost minimum version bumped from 1.62 to 1.74 (`BOOST_MIN_VER` in `CMakeLists.txt`). `contrib/depends` Boost upgraded from 1.69.0 to 1.74.0 with C++17 flags. CI containers updated to Ubuntu 22.04 minimum (Debian 11 and Ubuntu 20.04 dropped).
 
 **Phase 1 complete: Daemon RPC migrated to Rust/Axum** (see `docs/DAEMON_RPC_RUST.md`):

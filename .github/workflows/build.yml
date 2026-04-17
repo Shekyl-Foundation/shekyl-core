@@ -262,7 +262,7 @@ jobs:
           cmake --build build --target test
 
   build-windows-msvc:
-    name: 'Windows (MSVC, daemon+wallet)'
+    name: 'Windows (MSVC, daemon+wallet+wallet-rpc)'
     runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v5
@@ -307,10 +307,78 @@ jobs:
             -DUSE_DEVICE_TREZOR=OFF `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static
-      - name: build daemon and wallet
+      - name: build daemon, wallet, and wallet-rpc
         shell: pwsh
         run: |
-          cmake --build build --config Release --target daemon wallet --parallel 2
+          cmake --build build --config Release --target daemon wallet wallet_rpc_server --parallel 2
+      - name: smoke-test daemonizer removal
+        shell: pwsh
+        # After the V3.1 daemonizer removal, shekyld.exe and
+        # shekyl-wallet-rpc.exe must (a) link cleanly on MSVC without the
+        # src/daemonizer/ subsystem, (b) run without invoking the removed
+        # POSIX fork() / Windows SCM code paths, and (c) intercept the
+        # retired CLI flags via src/common/removed_flags.{h,cpp}. --help
+        # exits 0 after printing the option list, which exercises the full
+        # argument-parsing + logger-init path without waiting on a network
+        # port. --detach is expected to exit nonzero with the V3.1
+        # migration message; grepping the message pins the shim so a
+        # future regression ("unknown option --detach") fails CI loudly
+        # rather than shipping as a user-visible downgrade. The checks
+        # are intentionally Windows-only because POSIX fork / Windows SCM
+        # behaviors diverge at exactly this boundary.
+        run: |
+          # Native invocations go through `cmd /c` rather than PowerShell's `&`
+          # operator. The previous two iterations of this step hit PowerShell
+          # gotchas (array-vs-scalar -notmatch on 2>&1 output, then
+          # $PSNativeCommandUseErrorActionPreference turning expected-nonzero
+          # exits into terminating errors before $LASTEXITCODE could be read).
+          # cmd.exe has none of that behavior — exit code is just the exit
+          # code, stderr merges to the file via `2>&1` without any ErrorRecord
+          # elevation. PowerShell is reduced to "inspect $LASTEXITCODE" and
+          # "Select-String on a file," which are the well-behaved parts.
+          $ErrorActionPreference = 'Stop'
+          $daemon = 'build\bin\Release\shekyld.exe'
+          $wrpc   = 'build\bin\Release\shekyl-wallet-rpc.exe'
+
+          function Assert-HelpOk([string]$exe, [string]$label) {
+            cmd /c "`"$exe`" --help > NUL 2>&1"
+            if ($LASTEXITCODE -ne 0) {
+              throw "$label --help failed with exit $LASTEXITCODE"
+            }
+          }
+
+          function Assert-RemovedFlag([string]$exe, [string]$label, [string]$flag) {
+            $outFile = New-TemporaryFile
+            try {
+              cmd /c "`"$exe`" $flag > `"$outFile`" 2>&1"
+              $exit = $LASTEXITCODE
+              $out  = Get-Content -Raw -LiteralPath $outFile
+              if ($exit -eq 0) {
+                throw "$label $flag unexpectedly succeeded; output: $out"
+              }
+              if ($out -notmatch 'was removed in V3\.1') {
+                throw "$label $flag did not produce the V3.1 migration message; output: $out"
+              }
+            } finally {
+              Remove-Item -LiteralPath $outFile -ErrorAction SilentlyContinue
+            }
+          }
+
+          Assert-HelpOk $daemon 'shekyld'
+          Assert-HelpOk $wrpc   'shekyl-wallet-rpc'
+          Assert-RemovedFlag $daemon 'shekyld'           '--detach'
+          Assert-RemovedFlag $wrpc   'shekyl-wallet-rpc' '--pidfile=C:\temp\x'
+
+          # Both Assert-RemovedFlag calls deliberately leave $LASTEXITCODE
+          # nonzero — that's exactly what we're asserting on. GitHub Actions'
+          # pwsh shell wrapper is literally:
+          #     pwsh -Command ". '$script'; if (Test-Path variable:\LASTEXITCODE) { exit $LASTEXITCODE }"
+          # so a script that returns successfully but leaves $LASTEXITCODE=1
+          # behind (from the last native command) gets miscategorized as a
+          # failed step. Reset explicitly. Any earlier failure fires `throw`
+          # inside the Assert-* helpers, which aborts before we get here, so
+          # this only runs on genuine success.
+          exit 0
 
   source-archive:
     name: "source archive"

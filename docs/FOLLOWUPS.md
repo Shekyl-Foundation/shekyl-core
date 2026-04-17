@@ -232,29 +232,16 @@ Each item is out of scope for the current PR but worth tracking for future work.
   Closes the theoretical side-channel surface identified during
   the V3.1 audit response review.
 
-- **Daemon orchestration layer: collapse wrappers, delete daemonizer.**
-  Target: V3.1.
-  The `src/daemon/` layer has four thin wrapper classes (`t_core`,
-  `t_protocol`, `t_p2p`, `t_rpc`) that each wrap a single C++ engine with
-  15-line init/run/stop methods, plus a `t_executor` that adds polymorphism
-  for exactly one executor. The wrappers add headers, types, and
-  circular-include risk for zero abstraction benefit. The `daemonizer/`
-  subsystem (`windows_service.h`, `windows_daemonizer.inl`, `posix_fork.h`)
-  enables in-process Windows service and POSIX background daemonization —
-  patterns that Shekyl doesn't need (GUI wallet uses Tauri sidecar;
-  standalone nodes use OS service managers). The daemonizer is also the root
-  cause of the Windows circular include chain: `command_line_args.h`
-  conditionally includes `daemonizer.h`, which pulls in `windows.h` and
-  re-enters daemon headers before types are fully defined. Three `.cpp`
-  files (`core.cpp`, `p2p.cpp`, `rpc.cpp`) were created solely to work
-  around this circular dependency.
-  Cleanup: delete `daemonizer/` entirely; collapse `t_core`/`t_protocol`/
-  `t_p2p`/`t_rpc` into a single `Daemon` struct in `daemon.cpp`; parse
-  `boost::program_options` once in `main.cpp` into a `DaemonConfig` struct;
-  delete `t_executor`. Takes ~12 files with circular-include landmines to
-  ~3 files with a clean config-struct boundary. Does not touch secrets,
-  crypto, consensus, or wallet state — pure orchestration cleanup.
-  See `STRUCTURAL_TODO.md` "Daemon Orchestration Layer" for full analysis.
+- **`removed_flags` shim sunset.** Target: V3.2.
+  `src/common/removed_flags.{h,cpp}` is a transitional utility introduced
+  in V3.1 to give operators a friendly migration message when they pass
+  `--detach`, `--pidfile`, or the Windows `--*-service` flags that the
+  daemonizer removal retired. The flag list is maintained there as a
+  single source of truth — `CHANGELOG.md` entries reference the file
+  rather than duplicating the list. The file is deleted in V3.2
+  alongside the `shekyl-wallet-rpc` Rust cutover (which removes one of
+  the two call sites); `shekyld`'s call site is deleted in the same
+  V3.2 cleanup pass. Greppable as `TODO(v3.2)` in the file header.
 
 ---
 

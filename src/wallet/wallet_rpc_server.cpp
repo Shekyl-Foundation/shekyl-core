@@ -55,7 +55,6 @@ using namespace epee;
 #include "mnemonics/electrum-words.h"
 #include "rpc/rpc_args.h"
 #include "rpc/core_rpc_server_commands_defs.h"
-#include "daemonizer/daemonizer.h"
 #include "fee_priority.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -4450,7 +4449,12 @@ namespace tools
   //------------------------------------------------------------------------------------------------------------------------------
 }
 
-class t_daemon
+// Wallet RPC orchestration class. Distinct from daemonize::Daemon in
+// src/daemon/ — this one drives a wallet2 + wallet_rpc_server pair, not
+// the full-node core/p2p/rpc stack. V3.2 target: replaced by the
+// shekyl-wallet-rpc Rust cutover, at which point this class and its
+// call site in main() are deleted (see docs/FOLLOWUPS.md).
+class WalletRpcDaemon
 {
 private:
   const boost::program_options::variables_map& vm;
@@ -4458,7 +4462,7 @@ private:
   std::unique_ptr<tools::wallet_rpc_server> wrpc;
 
 public:
-  t_daemon(boost::program_options::variables_map const & _vm)
+  WalletRpcDaemon(boost::program_options::variables_map const & _vm)
     : vm(_vm)
     , wrpc(new tools::wallet_rpc_server)
   {
@@ -4617,36 +4621,6 @@ public:
   }
 };
 
-class t_executor final
-{
-public:
-  static std::string const NAME;
-
-  typedef ::t_daemon t_daemon;
-
-  std::string const & name() const
-  {
-    return NAME;
-  }
-
-  t_daemon create_daemon(boost::program_options::variables_map const & vm)
-  {
-    return t_daemon(vm);
-  }
-
-  bool run_non_interactive(boost::program_options::variables_map const & vm)
-  {
-    return t_daemon(vm).run();
-  }
-
-  bool run_interactive(boost::program_options::variables_map const & vm)
-  {
-    return t_daemon(vm).run();
-  }
-};
-
-std::string const t_executor::NAME = "Wallet RPC Daemon";
-
 int main(int argc, char** argv) {
   TRY_ENTRY();
 
@@ -4675,7 +4649,18 @@ int main(int argc, char** argv) {
   command_line::add_arg(desc_params, arg_rpc_max_connections);
   command_line::add_arg(desc_params, arg_rpc_response_soft_limit);
 
-  daemonizer::init_options(hidden_options, desc_params);
+  // Local, wallet-RPC-specific copy of --non-interactive. Intentionally
+  // not a shared descriptor — shekyld declares its own in
+  // src/daemon/command_line_args.h. Keeping the two copies separate
+  // prevents a shared header from re-creating the coupling the
+  // daemonizer removal just eliminated.
+  const command_line::arg_descriptor<bool> arg_non_interactive = {
+    "non-interactive",
+    "Run non-interactive (signals still work)",
+    false,
+  };
+  command_line::add_arg(desc_params, arg_non_interactive);
+
   desc_params.add(hidden_options);
 
   std::optional<po::variables_map> vm;
@@ -4699,6 +4684,6 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  return daemonizer::daemonize(argc, const_cast<const char**>(argv), t_executor{}, *vm) ? 0 : 1;
+  return WalletRpcDaemon{*vm}.run() ? 0 : 1;
   CATCH_ENTRY_L0("main", 1);
 }

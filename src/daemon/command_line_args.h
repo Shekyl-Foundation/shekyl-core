@@ -1,4 +1,4 @@
-// Copyright (c) 2014-2022, The Monero Project
+// Copyright (c) 2018-2026, The Shekyl Foundation
 // 
 // All rights reserved.
 // 
@@ -30,24 +30,22 @@
 #define DAEMON_COMMAND_LINE_ARGS_H
 
 #include "common/command_line.h"
+#include "common/daemon_default_data_dir.h"
 #include "cryptonote_config.h"
-#include "daemonizer/daemonizer.h"
 
 namespace daemon_args
 {
-  std::string const WINDOWS_SERVICE_NAME = "Shekyl Daemon";
-
   const command_line::arg_descriptor<std::string, false, true, 2> arg_config_file = {
     "config-file"
   , "Specify configuration file"
-  , (daemonizer::get_default_data_dir() / std::string(CRYPTONOTE_NAME ".conf")).string()
+  , (daemonize::daemon_default_data_dir() / std::string(CRYPTONOTE_NAME ".conf")).string()
   , {{ &cryptonote::arg_testnet_on, &cryptonote::arg_stagenet_on }}
   , [](std::array<bool, 2> testnet_stagenet, bool defaulted, std::string val)->std::string {
       if (testnet_stagenet[0] && defaulted)
-        return (daemonizer::get_default_data_dir() / "testnet" /
+        return (daemonize::daemon_default_data_dir() / "testnet" /
                 std::string(CRYPTONOTE_NAME ".conf")).string();
       else if (testnet_stagenet[1] && defaulted)
-        return (daemonizer::get_default_data_dir() / "stagenet" /
+        return (daemonize::daemon_default_data_dir() / "stagenet" /
                 std::string(CRYPTONOTE_NAME ".conf")).string();
       return val;
     }
@@ -55,14 +53,14 @@ namespace daemon_args
   const command_line::arg_descriptor<std::string, false, true, 2> arg_log_file = {
     "log-file"
   , "Specify log file"
-  , (daemonizer::get_default_data_dir() / std::string(CRYPTONOTE_NAME ".log")).string()
+  , (daemonize::daemon_default_data_dir() / std::string(CRYPTONOTE_NAME ".log")).string()
   , {{ &cryptonote::arg_testnet_on, &cryptonote::arg_stagenet_on }}
   , [](std::array<bool, 2> testnet_stagenet, bool defaulted, std::string val)->std::string {
       if (testnet_stagenet[0] && defaulted)
-        return (daemonizer::get_default_data_dir() / "testnet" /
+        return (daemonize::daemon_default_data_dir() / "testnet" /
                 std::string(CRYPTONOTE_NAME ".log")).string();
       else if (testnet_stagenet[1] && defaulted)
-        return (daemonizer::get_default_data_dir() / "stagenet" /
+        return (daemonize::daemon_default_data_dir() / "stagenet" /
                 std::string(CRYPTONOTE_NAME ".log")).string();
       return val;
     }
@@ -115,6 +113,16 @@ namespace daemon_args
   const command_line::arg_descriptor<bool> arg_no_rust_rpc = {
     "no-rust-rpc"
   , "Disable the Rust/Axum daemon RPC server (enabled by default)"
+  , false
+  };
+
+  // shekyld's local --non-interactive flag. This is the only surviving piece
+  // of the old daemonizer CLI on either binary: it suppresses the interactive
+  // readline command console without touching process lifecycle. The wallet
+  // RPC server declares its own separate copy of this flag in wallet_rpc_server.cpp.
+  const command_line::arg_descriptor<bool> arg_non_interactive = {
+    "non-interactive"
+  , "Run non-interactive (suppress readline console; signals still work)"
   , false
   };
 

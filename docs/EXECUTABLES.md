@@ -62,9 +62,7 @@ shekyld [options] [command]
 | `--stagenet` | Run on stagenet |
 | `--log-level <0-4>` | Logging verbosity |
 | `--log-file <path>` | Log output file |
-| `--detach` | Run as a background daemon (Linux) |
-| `--pidfile <path>` | PID file when detached |
-| `--non-interactive` | Disable interactive console |
+| `--non-interactive` | Disable interactive console (for use under a service manager) |
 | `--rpc-bind-ip <ip>` | RPC listen address (default `127.0.0.1`) |
 | `--rpc-bind-port <port>` | RPC listen port (default per network, see table above) |
 | `--restricted-rpc` | Restrict RPC to view-only / safe methods |
@@ -93,8 +91,10 @@ shekyld [options] [command]
 
 ### Interactive console commands
 
-When running interactively (without `--non-interactive` or `--detach`), the
-daemon provides a command console:
+When running interactively (without `--non-interactive`), the
+daemon provides a command console. Under a service manager (systemd,
+launchd, Task Scheduler, or the GUI wallet's Tauri sidecar), run with
+`--non-interactive`:
 
 | Command | Description |
 |---------|-------------|
@@ -138,8 +138,9 @@ shekyld
 # Start a testnet node bound to all interfaces
 shekyld --testnet --rpc-bind-ip 0.0.0.0 --confirm-external-bind
 
-# Start a restricted public node as a background service
-shekyld --detach --restricted-rpc --public-node \
+# Start a restricted public node (background it via systemd — see
+# contrib/packaging/linux/shekyld.service for an example unit)
+shekyld --non-interactive --restricted-rpc --public-node \
         --rpc-bind-ip 0.0.0.0 --confirm-external-bind \
         --config-file /etc/shekyl/shekyld.conf
 
@@ -308,8 +309,7 @@ shekyl-wallet-rpc [--wallet-file=<file> | --wallet-dir=<dir>] --rpc-bind-port=<p
 | `--password <pass>` | Wallet password |
 | `--password-file <file>` | Read password from a file |
 | `--no-initial-sync` | Skip initial blockchain sync at startup |
-| `--detach` | Run as a background daemon (Linux) |
-| `--non-interactive` | Disable console input |
+| `--non-interactive` | Disable console input (for use under a service manager) |
 | `--rpc-ssl <mode>` | TLS for the RPC server |
 | `--rpc-ssl-certificate <pem>` | TLS certificate |
 | `--rpc-ssl-private-key <pem>` | TLS private key |
@@ -324,12 +324,13 @@ shekyl-wallet-rpc --wallet-file ~/wallets/main \
                   --rpc-login user:password \
                   --daemon-address 127.0.0.1:11029
 
-# Multi-wallet mode (exchange use case)
+# Multi-wallet mode (exchange use case; supervise with systemd/launchd/
+# Task Scheduler — V3.1 removed the in-process --detach flag)
 shekyl-wallet-rpc --wallet-dir ~/wallets/ \
                   --rpc-bind-port 18083 \
                   --rpc-login user:password \
                   --disable-rpc-login \
-                  --non-interactive --detach
+                  --non-interactive
 
 # Testnet with TLS
 shekyl-wallet-rpc --testnet --wallet-file ~/wallets/testnet \

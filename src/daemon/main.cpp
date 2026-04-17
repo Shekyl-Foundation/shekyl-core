@@ -28,7 +28,10 @@
 //
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+#include <boost/filesystem/operations.hpp>
+
 #include "common/command_line.h"
+#include "common/removed_flags.h"
 #include "common/scoped_message_writer.h"
 #include "common/password.h"
 #include "common/util.h"
@@ -36,8 +39,6 @@
 #include "cryptonote_basic/miner.h"
 #include "daemon/command_server.h"
 #include "daemon/daemon.h"
-#include "daemon/executor.h"
-#include "daemonizer/daemonizer.h"
 #include "misc_log_ex.h"
 #include "net/parse.h"
 #include "p2p/net_node.h"
@@ -165,9 +166,9 @@ int main(int argc, char const * argv[])
       command_line::add_arg(core_settings, daemon_args::arg_proxy_allow_dns_leaks);
       command_line::add_arg(core_settings, daemon_args::arg_public_node);
       command_line::add_arg(core_settings, daemon_args::arg_no_rust_rpc);
+      command_line::add_arg(visible_options, daemon_args::arg_non_interactive);
 
-      daemonizer::init_options(hidden_options, visible_options);
-      daemonize::t_executor::init_options(core_settings);
+      daemonize::Daemon::init_options(core_settings);
 
       // Hidden options
       command_line::add_arg(hidden_options, daemon_args::arg_command);
@@ -184,11 +185,22 @@ int main(int argc, char const * argv[])
     po::variables_map vm;
     bool ok = command_line::handle_error_helper(visible_options, [&]()
     {
-      boost::program_options::store(
-        boost::program_options::command_line_parser(argc, argv)
-          .options(all_options).positional(positional_options).run()
-      , vm
-      );
+      try
+      {
+        boost::program_options::store(
+          boost::program_options::command_line_parser(argc, argv)
+            .options(all_options).positional(positional_options).run()
+        , vm
+        );
+      }
+      catch (boost::program_options::unknown_option const & e)
+      {
+        if (shekyl::cli::handle_removed_flag(e, "shekyld"))
+        {
+          return false;
+        }
+        throw;
+      }
 
       return true;
     });
@@ -278,8 +290,6 @@ int main(int argc, char const * argv[])
     }
 #endif
 
-    // FIXME: not sure on windows implementation default, needs further review
-    //bf::path relative_path_base = daemonizer::get_relative_path_base(vm);
     bf::path relative_path_base = data_dir;
 
     po::notify(vm);
@@ -371,9 +381,15 @@ int main(int argc, char const * argv[])
       }
     }
 
-    MINFO("Moving from main() into the daemonize now.");
+    MINFO("Constructing daemon.");
 
-    return daemonizer::daemonize(argc, argv, daemonize::t_executor{parse_public_rpc_port(vm)}, vm) ? 0 : 1;
+    LOG_PRINT_L0("Shekyl '" << MONERO_RELEASE_NAME << "' (v" << MONERO_VERSION_FULL << ")");
+
+    daemonize::DaemonConfig daemon_config;
+    daemon_config.public_rpc_port = parse_public_rpc_port(vm);
+    daemonize::Daemon daemon{daemon_config, vm};
+    const bool interactive = !command_line::get_arg(vm, daemon_args::arg_non_interactive);
+    return daemon.run(interactive) ? 0 : 1;
   }
   catch (std::exception const & ex)
   {
