@@ -41,6 +41,15 @@
 
 ### Fixed
 
+- Fixed probabilistic flake in
+  `shekyl-crypto-pq::multisig_receiving::tests::scan_wrong_participant_ciphertext_fails`.
+  The view tag hint is a single byte by design (fast scanner pre-filter),
+  so a wrong-ciphertext decapsulation had ~1/256 chance of producing a
+  hint that collided with the published one, causing the test's
+  rejection assertion to fail. Test now retries keypair generation
+  (bounded to 64 attempts) until the wrong-ciphertext hint actually
+  differs, so the rejection path is exercised deterministically. No
+  protocol or code change; scan semantics are unchanged.
 - Made all `src/daemon/` headers self-contained for MSVC portability:
   `protocol.h` (6 missing includes), `p2p.h` (2), `daemon.h` (2),
   `rpc.h` (2). These headers relied on include ordering from their
