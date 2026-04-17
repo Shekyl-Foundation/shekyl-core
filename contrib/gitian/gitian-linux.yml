@@ -35,11 +35,6 @@ remotes:
 files: []
 script: |
 
-  # i386 headers for 32-bit Linux build (needs arch enabled first)
-  sudo dpkg --add-architecture i386
-  sudo apt-get update -qq
-  sudo apt-get --no-install-recommends -y install linux-libc-dev:i386
-
   WRAP_DIR=$HOME/wrapped
   HOSTS="x86_64-linux-gnu arm-linux-gnueabihf aarch64-linux-gnu riscv64-linux-gnu"
   FAKETIME_HOST_PROGS=""
