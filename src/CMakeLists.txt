@@ -58,7 +58,7 @@ function (enable_stack_trace target)
   endif()
 endfunction()
 
-function (monero_add_executable name)
+function (shekyl_add_executable name)
   source_group("${name}"
     FILES
       ${ARGN})
@@ -105,7 +105,6 @@ endif()
 add_subdirectory(cryptonote_protocol)
 if(NOT IOS)
   add_subdirectory(gen_ssl_cert)
-  add_subdirectory(daemonizer)
   add_subdirectory(daemon)
   add_subdirectory(blockchain_utilities)
 endif()

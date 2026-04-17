@@ -54,8 +54,6 @@ complete -c monero-wallet-rpc -l generate-from-json -r -k -a "(__fish_complete_s
 complete -c monero-wallet-rpc -l wallet-dir -r -F -d "Directory for newly created wallets"
 complete -c monero-wallet-rpc -l prompt-for-password -d "Prompts for password when not provided"
 complete -c monero-wallet-rpc -l rpc-client-secret-key -r -d "Set RPC client secret key for RPC payments"
-complete -c monero-wallet-rpc -l detach -d "Run as daemon"
-complete -c monero-wallet-rpc -l pidfile -r -F -d "File path to write the daemon's PID to (optional, requires --detach)"
 complete -c monero-wallet-rpc -l non-interactive -d "Run non-interactive"
 complete -c monero-wallet-rpc -l log-file -r -F -d "Specify log file"
 complete -c monero-wallet-rpc -l log-level -r -a "0 1 2 3 4" -d "0-4 or categories"

@@ -1,4 +1,5 @@
-# Copyright (c) 2014-2022, The Monero Project
+# Copyright (c) 2018-2026, The Shekyl Foundation
+# Copyright (c) 2018-2026, The Shekyl Foundation
 #
 # All rights reserved.
 #
@@ -30,7 +31,6 @@ set(daemon_sources
   command_parser_executor.cpp
   command_server.cpp
   daemon.cpp
-  executor.cpp
   main.cpp
   rpc_command_executor.cpp
 )
@@ -41,7 +41,7 @@ monero_find_all_headers(daemon_private_headers "${CMAKE_CURRENT_SOURCE_DIR}")
 
 monero_private_headers(daemon
   ${daemon_private_headers})
-monero_add_executable(daemon
+shekyl_add_executable(daemon
   ${daemon_sources}
   ${daemon_headers}
   ${daemon_private_headers})
@@ -54,7 +54,6 @@ target_link_libraries(daemon
     common
     p2p
     cryptonote_protocol
-    daemonizer
     serialization
     ${EPEE_READLINE}
     version

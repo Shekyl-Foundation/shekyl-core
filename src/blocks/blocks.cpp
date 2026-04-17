@@ -2,12 +2,14 @@
 
 #include <unordered_map>
 
-extern const unsigned char checkpoints[];
-extern const size_t checkpoints_len;
-extern const unsigned char stagenet_blocks[];
-extern const size_t stagenet_blocks_len;
-extern const unsigned char testnet_blocks[];
-extern const size_t testnet_blocks_len;
+extern "C" {
+  extern const unsigned char checkpoints[];
+  extern const size_t checkpoints_len;
+  extern const unsigned char stagenet_blocks[];
+  extern const size_t stagenet_blocks_len;
+  extern const unsigned char testnet_blocks[];
+  extern const size_t testnet_blocks_len;
+}
 
 namespace blocks
 {

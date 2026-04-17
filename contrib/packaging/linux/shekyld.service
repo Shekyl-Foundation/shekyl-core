@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/shekyld --non-interactive --data-dir /var/lib/shekyl --log-file /var/log/shekyl/shekyld.log --detach=0
+ExecStart=/usr/local/bin/shekyld --non-interactive --data-dir /var/lib/shekyl --log-file /var/log/shekyl/shekyld.log
 ExecStartPre=/bin/mkdir -p /var/log/shekyl
 
 User=shekyl

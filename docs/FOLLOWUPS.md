@@ -232,6 +232,17 @@ Each item is out of scope for the current PR but worth tracking for future work.
   Closes the theoretical side-channel surface identified during
   the V3.1 audit response review.
 
+- **`removed_flags` shim sunset.** Target: V3.2.
+  `src/common/removed_flags.{h,cpp}` is a transitional utility introduced
+  in V3.1 to give operators a friendly migration message when they pass
+  `--detach`, `--pidfile`, or the Windows `--*-service` flags that the
+  daemonizer removal retired. The flag list is maintained there as a
+  single source of truth — `CHANGELOG.md` entries reference the file
+  rather than duplicating the list. The file is deleted in V3.2
+  alongside the `shekyl-wallet-rpc` Rust cutover (which removes one of
+  the two call sites); `shekyld`'s call site is deleted in the same
+  V3.2 cleanup pass. Greppable as `TODO(v3.2)` in the file header.
+
 ---
 
 ## Completed audit trail
@@ -309,3 +320,19 @@ Each item is out of scope for the current PR but worth tracking for future work.
   asserts `compute_leaf_count_at_height(H) == count_of(drain_pending_tree_leaves(H))`
   for every height. This is the invariant that the off-by-one bug violated
   and is the highest-value regression gate for this class of bug.
+
+- **MSVC CI now covers daemon target.** The `build-windows-msvc` job
+  builds `--target daemon wallet` as of this change. Any new daemon code
+  must compile under MSVC. If a future change introduces MSVC-only errors,
+  shekyl-core CI will catch it before the GUI wallet release workflow does.
+  No further action needed unless the MSVC CI job is removed or the GUI
+  wallet stops building the daemon target.
+
+- **Expose FCMP++ verification cache stats via daemon RPC (F14).** Target: V3.1.
+  Add `verification_cache_hits` and `verification_cache_misses` fields to
+  `get_info` (or a new `get_cache_stats` JSON-RPC method). Currently the
+  verification cache hit/miss counters (`fcmp_verified`,
+  `fcmp_verification_hash`) are internal to `tx_pool.cpp` with no RPC
+  exposure. The stressnet wallet exerciser (`shekyl-dev/stressnet/`) uses
+  block validation p95 as an indirect proxy until this endpoint exists.
+  Filed from stressnet plan finding F14.

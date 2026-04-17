@@ -1,21 +1,21 @@
 // Copyright (c) 2014-2022, The Monero Project
-// 
+//
 // All rights reserved.
-// 
+//
 // Redistribution and use in source and binary forms, with or without modification, are
 // permitted provided that the following conditions are met:
-// 
+//
 // 1. Redistributions of source code must retain the above copyright notice, this list of
 //    conditions and the following disclaimer.
-// 
+//
 // 2. Redistributions in binary form must reproduce the above copyright notice, this list
 //    of conditions and the following disclaimer in the documentation and/or other
 //    materials provided with the distribution.
-// 
+//
 // 3. Neither the name of the copyright holder nor the names of its contributors may be
 //    used to endorse or promote products derived from this software without specific
 //    prior written permission.
-// 
+//
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
 // EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
 // MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
@@ -27,6 +27,9 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #pragma once
+
+#include <cstdint>
+#include <memory>
 #include <boost/program_options.hpp>
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -36,24 +39,43 @@ namespace daemonize {
 
 struct t_internals;
 
-class t_daemon final {
+// Orchestration-layer daemon configuration.
+//
+// Contains only the values main.cpp extracts from variables_map before handing
+// off to Daemon. The variables_map itself is still forwarded to the wrapped
+// engines (cryptonote::core::init, node_server::init, core_rpc_server::init),
+// which keep their own engine-internal option extraction for their eventual
+// Rust cutover. DaemonConfig is the scope boundary between "orchestration" and
+// "engine" configuration: refactoring engines to typed configs is a separate
+// project with consensus-adjacent risk and is intentionally out of scope here.
+struct DaemonConfig {
+  // Advertised public RPC port; 0 means "not a public node".
+  uint16_t public_rpc_port = 0;
+};
+
+class Daemon final {
 public:
   static void init_options(boost::program_options::options_description & option_spec);
-private:
-  void stop_p2p();
-private:
-  std::unique_ptr<t_internals> mp_internals;
-  uint16_t public_rpc_port;
-public:
-  t_daemon(
-      boost::program_options::variables_map const & vm,
-      uint16_t public_rpc_port = 0
+
+  Daemon(
+      DaemonConfig const & config,
+      boost::program_options::variables_map const & vm
     );
-  t_daemon(t_daemon && other);
-  t_daemon & operator=(t_daemon && other);
-  ~t_daemon();
+  ~Daemon();
+
+  Daemon(Daemon const &) = delete;
+  Daemon & operator=(Daemon const &) = delete;
+  Daemon(Daemon &&);
+  Daemon & operator=(Daemon &&);
 
   bool run(bool interactive = false);
   void stop();
+
+private:
+  void stop_p2p();
+
+  std::unique_ptr<t_internals> mp_internals;
+  uint16_t public_rpc_port;
 };
-}
+
+} // namespace daemonize

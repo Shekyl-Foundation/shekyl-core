@@ -195,6 +195,31 @@ problematic headers. The ICE reproduces on both MSVC 14.44 (VS 2022)
 and 14.50 (VS 2026) -- the stub is the actual fix, not a compiler
 upgrade. Full diagnosis in `shekyl-core/docs/COMPILING_DEBUGGING_TESTING.md`.
 
+### ~~`ARCH_ID` not lowercased, breaking RandomX JIT on MSVC~~ ✅ Resolved
+**Priority**: Was high — silent performance degradation on MSVC daemon
+
+Root `CMakeLists.txt` set `ARCH_ID` from `CMAKE_SYSTEM_PROCESSOR`
+without lowercasing. On Windows, `CMAKE_SYSTEM_PROCESSOR` returns
+`AMD64` (uppercase). RandomX's `CMakeLists.txt` checks for lowercase
+`"amd64"` to include `jit_compiler_x86.cpp`. RandomX's own CMakeLists
+lowercases when `ARCH_ID` isn't already set, but the parent scope
+pre-empts that. Result: `jit_compiler_x86.cpp` was never compiled,
+causing LNK2019 for `JitCompilerX86` symbols. MSVC-built `shekyld`
+would have run RandomX in interpreted mode only (orders of magnitude
+slower for mining). Fix: `string(TOLOWER "${ARCH_ID}" ARCH_ID)` in root
+CMakeLists. *(Landed on `dev` in `feb631d08`, April 2026.)*
+
+### ~~`blocks.cpp` C/C++ linkage mismatch on MSVC~~ ✅ Resolved
+**Priority**: Was medium — daemon link failure on MSVC only
+
+`blocks.cpp` declared `extern const unsigned char checkpoints[]` etc.
+without `extern "C"`. The generated `.c` files produce C-linkage
+symbols. On GCC/Clang, namespace-scope variables don't get C++
+name-mangled, so C and C++ symbols match. On MSVC, they're mangled
+differently (`?checkpoints@@3QBEB` vs `_checkpoints`), causing LNK2019.
+Fix: wrapped extern declarations in `extern "C" {}`. *(Landed on `dev`
+in `feb631d08`, April 2026.)*
+
 ### ~~`COVERAGE=ON` applies GCC-only flags without MSVC guard~~ ✅ Resolved
 `monero_enable_coverage()` in root `CMakeLists.txt` (line 664) already
 guards with `if(NOT MSVC)`. Verified April 2026.
@@ -355,6 +380,112 @@ directory level but retains the `rct::` namespace internally.
 
 ---
 
+## Daemon Orchestration Layer ✅ Resolved
+
+**Resolved in V3.1** (chore/remove-daemonizer-layer, April 2026). The
+analysis below is retained as an audit trail; the refactor collapsed
+`src/daemon/`'s four wrapper classes and the `t_executor` shim into a
+single `daemonize::Daemon` in `daemon.{h,cpp}`, deleted `src/daemonizer/`
+wholesale, and moved the Windows admin-vs-user default data-directory
+logic into `src/common/daemon_default_data_dir.{h,cpp}` (pinned by a
+`daemon_default_data_dir` unit test). `shekyl-wallet-rpc` received the
+same treatment: its inline class was renamed to `WalletRpcDaemon` and
+its `daemonizer::init_options` / `daemonizer::daemonize` calls were
+replaced by a direct `WalletRpcDaemon{vm}.run()`. A small transitional
+shim (`src/common/removed_flags.{h,cpp}`, `TODO(v3.2)`) prints a
+migration message for `--detach`, `--pidfile`, and the Windows
+`--*-service` flags. See `CHANGELOG.md` V3.1 entry and `FOLLOWUPS.md`
+§"`removed_flags` shim sunset" for the V3.2 deletion plan.
+
+### Problem: wrapper classes with no abstraction value
+
+`src/daemon/` contains four wrapper classes:
+
+| Class | Wraps | Methods |
+|-------|-------|---------|
+| `t_core` | `cryptonote::core` | `init_options`, `set_protocol`, `run` (returns true), `get` |
+| `t_protocol` | `t_cryptonote_protocol_handler` | constructor calls `init`, `get`, `set_p2p_endpoint` |
+| `t_p2p` | `node_server` | `init_options`, `run`, `stop`, `get` |
+| `t_rpc` | `core_rpc_server` | `init_options`, `run`, `stop`, `get_server` |
+
+Every constructor takes `boost::program_options::variables_map const &`,
+extracts a few args, calls the engine's `init()`, and logs. Every
+destructor calls `deinit()` and logs. The wrappers add no invariants,
+no error recovery, no retry logic — just indirection.
+
+`t_internals` in `daemon.cpp` composes them into the only arrangement
+that ever exists: core → protocol → p2p → rpc(s). There is no other
+composition. The wrappers exist for a CryptoNote-era design pattern
+(uniform `init_options`/`init`/`run`/`deinit` lifecycle) that buys
+nothing when there is exactly one composition.
+
+### Problem: `t_executor` is dead abstraction
+
+`t_executor` exists so the `daemonizer` can be generic over "what daemon
+am I running." There is exactly one executor. It's a typedef, a
+`create_daemon` method that calls `t_daemon`'s constructor, and two
+`run_*` methods. All of this can be inlined into `main()`.
+
+### Problem: `daemonizer/` adds Windows circular includes and may be unnecessary
+
+The `daemonizer/` subsystem provides:
+- **POSIX:** `posix_fork.h` — `fork()`-based backgrounding.
+- **Windows:** `windows_service.h`, `windows_service_runner.h`,
+  `windows_daemonizer.inl` — Windows SCM service registration.
+
+On Windows, `command_line_args.h` includes `daemonizer/daemonizer.h`,
+which includes `windows_daemonizer.inl`, which includes `<shlobj.h>`,
+`windows_service.h`, `windows_service_runner.h`, and
+`cryptonote_core/cryptonote_core.h`. This chain re-enters daemon headers
+before types are fully defined, causing `#pragma once` to skip
+re-inclusion, leaving `t_core`/`t_p2p`/`t_rpc` undefined. Three `.cpp`
+files were created (April 2026) solely to work around this.
+
+**Shekyl may not need in-process daemonization at all:**
+- GUI wallet: Tauri manages the `shekyld` sidecar lifecycle.
+- Standalone node: `systemd` (Linux), `launchd` (macOS), Task Scheduler
+  (Windows) handle backgrounding at the OS level.
+- The Windows service registration code has no test coverage and may not
+  work with Shekyl's diverged command-line args.
+
+### Problem: `boost::program_options` threading
+
+Every constructor takes `variables_map const &` and digs args out with
+`command_line::get_arg`. This forces every header to see the full
+`variables_map` type and all `arg_*` definitions from
+`command_line_args.h`, which is the trigger for the circular include
+chain. A config struct parsed once in `main()` would eliminate the
+coupling.
+
+### Proposed cleanup
+
+1. Delete `src/daemonizer/` entirely. `main()` runs the daemon in the
+   foreground. Background execution is delegated to the OS.
+2. Collapse `t_core`, `t_protocol`, `t_p2p`, `t_rpc` into a single
+   `Daemon` struct in `daemon.cpp`. The individual headers disappear.
+3. Parse `boost::program_options` in `main.cpp` into a `DaemonConfig`
+   struct (proxy settings, RPC ports, restricted mode, offline flag).
+   Pass the struct to `Daemon::init()`.
+4. Delete `t_executor`. `main()` calls `Daemon` directly.
+5. Delete the three workaround `.cpp` files (`core.cpp`, `p2p.cpp`,
+   `rpc.cpp`) that exist only to break the circular dependency.
+
+Result: ~12 files with circular-include landmines → ~3 files
+(`main.cpp`, `daemon.h`, `daemon.cpp`) with a clean config-struct
+boundary.
+
+### Rust migration: not applicable
+
+Per `20-rust-vs-cpp-policy.mdc`, this layer orchestrates other code and
+doesn't touch secrets, crypto, untrusted input parsing, or amount
+arithmetic. It stays in C++ until the engines it wraps
+(`cryptonote_core`, `node_server`, `core_rpc_server`) are themselves
+migrated — a much larger, separate project. The Rust RPC server
+(`shekyl-daemon-rpc`) already replaces the epee HTTP layer via FFI,
+which is the correct migration boundary.
+
+---
+
 ## Upstream Techniques to Track
 
 Cross-references to Monero upstream PRs whose structural techniques are
@@ -391,7 +522,12 @@ plan.
 
 ---
 
-*Last updated: 2026-04-15 — Pre-main tech debt sweep: marked
+*Last updated: 2026-04-16 — Added daemon orchestration layer analysis
+(circular includes, wrapper class collapse, daemonizer deletion).
+Resolved ARCH_ID case mismatch (RandomX JIT never compiled on MSVC)
+and blocks.cpp C/C++ linkage mismatch. Added math_helper.h missing
+windows.h include.
+Previous: 2026-04-15 — Pre-main tech debt sweep: marked
 `COVERAGE=ON`, `enable_stack_trace`, `wallet2.cpp` unsigned negation,
 `bootstrap_file.cpp` long-type, and vcpkg manifest items as resolved.
 Previous: 2026-04-12 — Consensus-critical curve-tree leaf ordering

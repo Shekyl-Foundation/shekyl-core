@@ -120,7 +120,7 @@ monero_private_headers(blockchain_stats
 	  ${blockchain_stats_private_headers})
 
 
-monero_add_executable(blockchain_import
+shekyl_add_executable(blockchain_import
   ${blockchain_import_sources}
   ${blockchain_import_private_headers})
 
@@ -147,7 +147,7 @@ set_property(TARGET blockchain_import
 	OUTPUT_NAME "shekyl-blockchain-import")
 install(TARGETS blockchain_import DESTINATION bin)
 
-monero_add_executable(blockchain_export
+shekyl_add_executable(blockchain_export
   ${blockchain_export_sources}
   ${blockchain_export_private_headers})
 
@@ -168,7 +168,7 @@ set_property(TARGET blockchain_export
 	OUTPUT_NAME "shekyl-blockchain-export")
 install(TARGETS blockchain_export DESTINATION bin)
 
-monero_add_executable(blockchain_usage
+shekyl_add_executable(blockchain_usage
   ${blockchain_usage_sources}
   ${blockchain_usage_private_headers})
 
@@ -189,7 +189,7 @@ set_property(TARGET blockchain_usage
 	OUTPUT_NAME "shekyl-blockchain-usage")
 install(TARGETS blockchain_usage DESTINATION bin)
 
-monero_add_executable(blockchain_ancestry
+shekyl_add_executable(blockchain_ancestry
   ${blockchain_ancestry_sources}
   ${blockchain_ancestry_private_headers})
 
@@ -210,7 +210,7 @@ set_property(TARGET blockchain_ancestry
 	OUTPUT_NAME "shekyl-blockchain-ancestry")
 install(TARGETS blockchain_ancestry DESTINATION bin)
 
-monero_add_executable(blockchain_depth
+shekyl_add_executable(blockchain_depth
   ${blockchain_depth_sources}
   ${blockchain_depth_private_headers})
 
@@ -231,7 +231,7 @@ set_property(TARGET blockchain_depth
 	OUTPUT_NAME "shekyl-blockchain-depth")
 install(TARGETS blockchain_depth DESTINATION bin)
 
-monero_add_executable(blockchain_stats
+shekyl_add_executable(blockchain_stats
   ${blockchain_stats_sources}
   ${blockchain_stats_private_headers})
 
@@ -252,7 +252,7 @@ set_property(TARGET blockchain_stats
 	OUTPUT_NAME "shekyl-blockchain-stats")
 install(TARGETS blockchain_stats DESTINATION bin)
 
-monero_add_executable(blockchain_prune_known_spent_data
+shekyl_add_executable(blockchain_prune_known_spent_data
   ${blockchain_prune_known_spent_data_sources}
   ${blockchain_prune_known_spent_data_private_headers})
 
@@ -274,7 +274,7 @@ set_property(TARGET blockchain_prune_known_spent_data
 	OUTPUT_NAME "shekyl-blockchain-prune-known-spent-data")
 install(TARGETS blockchain_prune_known_spent_data DESTINATION bin)
 
-monero_add_executable(blockchain_prune
+shekyl_add_executable(blockchain_prune
   ${blockchain_prune_sources}
   ${blockchain_prune_private_headers})
 
