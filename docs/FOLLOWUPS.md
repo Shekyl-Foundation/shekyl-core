@@ -5,6 +5,16 @@ Each item is out of scope for the current PR but worth tracking for future work.
 
 ---
 
+- **Dead `i686_linux_*` target in `contrib/depends/hosts/linux.mk` (V3.1).**
+  `linux.mk` still declares `i686_linux_CC=gcc -m32`, `i686_linux_CXX=g++
+  -m32`, `i686_linux_AR=ar`. Nothing references it: no Gitian descriptor's
+  `HOSTS` list includes `i686-linux-gnu`, the release workflows don't build
+  32-bit x86, and `shekyl-gui-wallet` has no 32-bit Linux target. Inherited
+  dead code from Monero's Gitian descriptor. Delete in the next `contrib/`
+  cleanup PR (target: V3.1).
+
+---
+
 - **`dalek-ff-group` version isolation enforced via CI gate.**
   The Rust workspace carries two versions: 0.5.x (used directly by Shekyl
   crates) and 0.4.x (pulled transitively by vendored serai/`ciphersuite`
