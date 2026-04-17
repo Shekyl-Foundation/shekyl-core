@@ -688,8 +688,7 @@ mod tests {
         }
 
         panic!(
-            "could not produce a non-colliding wrong-ciphertext hint in 64 attempts; \
-             view tag derivation or KEM may be degenerate"
+            "could not produce a non-colliding wrong-ciphertext hint in 64 attempts; view tag derivation or KEM may be degenerate"
         );
     }
 
