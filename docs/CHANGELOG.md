@@ -27,6 +27,27 @@
 
 ### Changed
 
+- **`wallet2_ffi` no longer carries wallet-directory state.** Removed
+  `wallet2_ffi_set_wallet_dir` and the `wallet_dir` field on
+  `wallet2_handle`. The four wallet-file FFI entry points
+  (`wallet2_ffi_create_wallet`, `wallet2_ffi_open_wallet`,
+  `wallet2_ffi_restore_deterministic_wallet`,
+  `wallet2_ffi_generate_from_keys`) now take a full `wallet_path`
+  parameter in place of the bare `filename` that was joined with
+  `wallet_dir` using a hardcoded `"/"` separator. Path construction was
+  inherited Monero `wallet_rpc_server` scaffolding and produced
+  mixed-separator paths on Windows (`C:\Users\x\...\...//My Wallet.keys`).
+  Callers now join paths in Rust via `PathBuf::join`, which is
+  platform-correct on every target. The legacy C++
+  `wallet_rpc_server.cpp` keeps its own `wallet_dir` state and is
+  unaffected — it does not go through the FFI. The `shekyl-cli`
+  `WalletContext` now holds the directory and joins filenames before
+  each call; the `shekyl-wallet-rpc` Rust shim keeps
+  `ServerConfig.wallet_dir` for the V3.2 cutover when its handlers
+  will own wallet-file creation. `validate_filename` was narrowed and
+  renamed to `validate_wallet_path` (empty-path check only) —
+  path-component validation is the caller's responsibility now that
+  the caller also owns the directory.
 - **Daemon orchestration class renamed.** `daemonize::t_daemon` is now
   `daemonize::Daemon` in `shekyld`, and `shekyl-wallet-rpc`'s unrelated
   inline class is now `WalletRpcDaemon`. The two binaries no longer

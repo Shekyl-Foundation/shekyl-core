@@ -48,7 +48,11 @@ pub struct AppState {
 
 pub async fn run_server(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
     let wallet = Wallet2::new(config.nettype)?;
-    wallet.set_wallet_dir(&config.wallet_dir);
+    // wallet2_ffi no longer carries a wallet_dir; when JSON-RPC create_wallet
+    // handlers are wired up (V3.2 cutover), they will read config.wallet_dir
+    // and pass fully-joined paths to Wallet2::create_wallet. Until then the
+    // field is informational only.
+    let _ = &config.wallet_dir;
 
     if !config.daemon_address.is_empty() {
         wallet.init(

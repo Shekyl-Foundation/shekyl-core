@@ -486,6 +486,37 @@ which is the correct migration boundary.
 
 ---
 
+## ~~`wallet2_ffi` carried filesystem state~~ ✅ Resolved
+
+**Priority**: Was medium — inherited Monero `wallet_rpc_server`
+scaffolding leaking host-filesystem assumptions across the FFI
+boundary.
+
+`wallet2_handle` held a `std::string wallet_dir`, populated via
+`wallet2_ffi_set_wallet_dir(dir)` and concatenated with
+`"/" + filename` at the four wallet-file entry points. Safe on POSIX,
+wrong on Windows: `"C:\\Users\\x\\...\\AppData" + "/" + "My Wallet.keys"`
+produced mixed-separator paths that displayed incorrectly and broke
+some Win32-only APIs, while NTFS tolerated enough of them to hide the
+bug in alpha.
+
+**Resolution (April 2026):** Removed `wallet_dir` from `wallet2_handle`
+and deleted `wallet2_ffi_set_wallet_dir`. The four FFI entry points
+now take a full `wallet_path` string built by the caller — the GUI
+wallet uses Rust's `PathBuf::join`, which is platform-correct on every
+target. `validate_filename` narrowed to `validate_wallet_path` (empty
+check only); path-component safety is the caller's job now that the
+caller owns directory resolution. The legacy C++ `wallet_rpc_server`
+keeps its own `wallet_dir` state because it does not route through the
+FFI.
+
+Per `20-rust-vs-cpp-policy.mdc`: path construction parses untrusted
+input and defines a contract other code consumes — the Rust side is
+the right owner. The FFI no longer has an opinion on the host
+filesystem layout.
+
+---
+
 ## Upstream Techniques to Track
 
 Cross-references to Monero upstream PRs whose structural techniques are

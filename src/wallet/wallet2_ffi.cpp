@@ -68,7 +68,6 @@ namespace rj = rapidjson;
 
 struct wallet2_handle {
     std::unique_ptr<tools::wallet2> wallet;
-    std::string wallet_dir;
     int last_error_code = 0;
     std::string last_error_msg;
 
@@ -282,43 +281,30 @@ void wallet2_ffi_free_string(char* str)
 
 // ── Wallet file operations ───────────────────────────────────────────────────
 
-void wallet2_ffi_set_wallet_dir(wallet2_handle* w, const char* dir)
+// Defense-in-depth: reject obviously-empty paths at the FFI boundary.
+// Path-component validation (rejecting separators in a bare filename) is
+// the caller's job — the caller is the one who already picked the
+// directory and knows which characters are meaningful on the host
+// platform. See docs/CHANGELOG.md §"wallet2_ffi no longer carries
+// wallet-directory state".
+static bool validate_wallet_path(const char* wallet_path, wallet2_handle* w)
 {
-    if (!w) return;
-    w->wallet_dir = dir ? dir : "";
-}
-
-static bool validate_filename(const char* filename, wallet2_handle* w)
-{
-    if (!filename || filename[0] == '\0') {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "Empty filename");
-        return false;
-    }
-    if (strchr(filename, '/') != nullptr
-#ifdef _WIN32
-        || strchr(filename, '\\') != nullptr
-        || strchr(filename, ':') != nullptr
-#endif
-    ) {
-        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "Invalid filename");
+    if (!wallet_path || wallet_path[0] == '\0') {
+        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "Empty wallet path");
         return false;
     }
     return true;
 }
 
 int wallet2_ffi_create_wallet(wallet2_handle* w,
-                              const char* filename,
+                              const char* wallet_path,
                               const char* password,
                               const char* language)
 {
     if (!w) return WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
     w->clear_error();
 
-    if (w->wallet_dir.empty()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_NO_WALLET_DIR, "No wallet dir configured");
-        return w->last_error_code;
-    }
-    if (!validate_filename(filename, w))
+    if (!validate_wallet_path(wallet_path, w))
         return w->last_error_code;
     if (!language || !crypto::ElectrumWords::is_valid_language(language)) {
         w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
@@ -326,7 +312,7 @@ int wallet2_ffi_create_wallet(wallet2_handle* w,
         return w->last_error_code;
     }
 
-    std::string wallet_file = w->wallet_dir + "/" + filename;
+    std::string wallet_file = wallet_path;
 
     try {
         auto wal = std::make_unique<tools::wallet2>(w->wallet->nettype(), 1, true);
@@ -354,20 +340,16 @@ int wallet2_ffi_create_wallet(wallet2_handle* w,
 }
 
 int wallet2_ffi_open_wallet(wallet2_handle* w,
-                            const char* filename,
+                            const char* wallet_path,
                             const char* password)
 {
     if (!w) return WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
     w->clear_error();
 
-    if (w->wallet_dir.empty()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_NO_WALLET_DIR, "No wallet dir configured");
-        return w->last_error_code;
-    }
-    if (!validate_filename(filename, w))
+    if (!validate_wallet_path(wallet_path, w))
         return w->last_error_code;
 
-    std::string wallet_file = w->wallet_dir + "/" + filename;
+    std::string wallet_file = wallet_path;
 
     try {
         auto wal = std::make_unique<tools::wallet2>(w->wallet->nettype(), 1, true);
@@ -402,7 +384,7 @@ int wallet2_ffi_close_wallet(wallet2_handle* w, bool autosave)
 }
 
 char* wallet2_ffi_restore_deterministic_wallet(wallet2_handle* w,
-                                               const char* filename,
+                                               const char* wallet_path,
                                                const char* seed,
                                                const char* password,
                                                const char* language,
@@ -412,18 +394,14 @@ char* wallet2_ffi_restore_deterministic_wallet(wallet2_handle* w,
     if (!w) return nullptr;
     w->clear_error();
 
-    if (w->wallet_dir.empty()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_NO_WALLET_DIR, "No wallet dir configured");
-        return nullptr;
-    }
     if (!seed || seed[0] == '\0') {
         w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "Seed is required");
         return nullptr;
     }
-    if (!validate_filename(filename, w))
+    if (!validate_wallet_path(wallet_path, w))
         return nullptr;
 
-    std::string wallet_file = w->wallet_dir + "/" + filename;
+    std::string wallet_file = wallet_path;
 
     try {
         std::error_code ignored_ec;
@@ -478,7 +456,7 @@ char* wallet2_ffi_restore_deterministic_wallet(wallet2_handle* w,
 }
 
 char* wallet2_ffi_generate_from_keys(wallet2_handle* w,
-                                     const char* filename,
+                                     const char* wallet_path,
                                      const char* address,
                                      const char* spendkey,
                                      const char* viewkey,
@@ -489,10 +467,6 @@ char* wallet2_ffi_generate_from_keys(wallet2_handle* w,
     if (!w) return nullptr;
     w->clear_error();
 
-    if (w->wallet_dir.empty()) {
-        w->set_error(WALLET_RPC_ERROR_CODE_NO_WALLET_DIR, "No wallet dir configured");
-        return nullptr;
-    }
     if (!viewkey || viewkey[0] == '\0') {
         w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "viewkey is required");
         return nullptr;
@@ -501,10 +475,10 @@ char* wallet2_ffi_generate_from_keys(wallet2_handle* w,
         w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "address is required");
         return nullptr;
     }
-    if (!validate_filename(filename, w))
+    if (!validate_wallet_path(wallet_path, w))
         return nullptr;
 
-    std::string wallet_file = w->wallet_dir + "/" + filename;
+    std::string wallet_file = wallet_path;
 
     try {
         std::error_code ignored_ec;
