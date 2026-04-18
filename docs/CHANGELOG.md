@@ -19,10 +19,29 @@
   on a consensus path at runtime. Inspection shows the
   `cryptography.hazmat.primitives.{hashes,kdf.hkdf}` imports in that
   script are unused — all HKDF logic is hand-rolled with stdlib
-  `hmac`/`hashlib` — so the bump cannot change its output. Verified by
+  `hmac`/`hashlib` — so the bump cannot change its output.   Verified by
   regenerating `docs/test_vectors/PQC_OUTPUT_SECRETS.json` under the
   new version in a clean venv; SHA-256 matches byte-for-byte
   (`1159cb6de2ce3fa4af5d7a8f88eac71ed35c8f00ebf297a4d9259439b6477163`).
+
+- **Accept seven `rand 0.8.5` Dependabot alerts as risk-tolerated.**
+  [GHSA-cq8v-f236-94qc](https://github.com/advisories/GHSA-cq8v-f236-94qc)
+  ("Rand is unsound with a custom logger using rand::rng()") indexes
+  against the five workspace crates that pin `rand = "0.8"` plus two
+  `Cargo.lock` files. CVSS is 0 on all seven; the actual exploit
+  requires calling `rand::rng()` (a 0.9+ thread-local RNG API that
+  does not exist in 0.8) while a custom `log::Log` implementation is
+  installed. Shekyl uses `rand::rngs::OsRng` directly and
+  `rand_chacha::ChaCha20Rng::from_seed` for deterministic derivation,
+  and the daemon installs no custom `log::Log`, so no Shekyl code
+  path reaches the vulnerable code. Migrating to `rand = "0.9"`
+  cascades into bumping `curve25519-dalek` 4 → 5 plus several other
+  crypto crates; per `.cursor/rules/20-rust-vs-cpp-policy.mdc` that
+  is a planning activity with its own design doc and review cycle,
+  tracked in `docs/FOLLOWUPS.md` §"rand 0.9 migration and
+  curve25519-dalek 5 cascade" with target V3.1.x. Alerts #3 through
+  #9 dismissed on GitHub with reason "risk tolerated" and a link to
+  the follow-up.
 
 ### Removed
 
