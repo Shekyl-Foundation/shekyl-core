@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Security
+
+- **Bump `cryptography` from `44.0.2` to `46.0.6`** in
+  `tools/reference/requirements.txt` to clear two Dependabot advisories
+  indexed 2026-04-13:
+  - [GHSA-r6ph-v2qm-q3c2](https://github.com/advisories/GHSA-r6ph-v2qm-q3c2)
+    (high): missing subgroup validation for SECT curves could allow a
+    small-subgroup attack during ECDH.
+  - [GHSA-m959-cc7f-wv43](https://github.com/advisories/GHSA-m959-cc7f-wv43)
+    (low): incomplete DNS name constraint enforcement on peer names.
+
+  **Not exploitable against Shekyl users.** `cryptography` is pulled in
+  only by `tools/reference/derive_output_secrets.py`, a developer-only
+  HKDF test-vector generator that never ships in any binary and is not
+  on a consensus path at runtime. Inspection shows the
+  `cryptography.hazmat.primitives.{hashes,kdf.hkdf}` imports in that
+  script are unused — all HKDF logic is hand-rolled with stdlib
+  `hmac`/`hashlib` — so the bump cannot change its output. Verified by
+  regenerating `docs/test_vectors/PQC_OUTPUT_SECRETS.json` under the
+  new version in a clean venv; SHA-256 matches byte-for-byte
+  (`1159cb6de2ce3fa4af5d7a8f88eac71ed35c8f00ebf297a4d9259439b6477163`).
+
 ### Removed
 
 - **Daemonizer layer.** Deleted `src/daemonizer/` (POSIX `fork()` detach,
