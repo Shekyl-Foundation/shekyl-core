@@ -253,6 +253,25 @@ Each item is out of scope for the current PR but worth tracking for future work.
   the two call sites); `shekyld`'s call site is deleted in the same
   V3.2 cleanup pass. Greppable as `TODO(v3.2)` in the file header.
 
+- **Shekyl Foundation institutional signing key.** Target: V3.1.x+,
+  contingent on multi-maintainer structure.
+  `docs/SIGNING.md` records the V3.1 position: release tags are signed
+  by **maintainer** keys, not by a Foundation institutional key. A
+  single-person "Foundation key" is operationally identical to a
+  personal key with worse threat-model clarity ("who actually signed
+  this?"), and building institutional-key ceremony (HSM or hardware
+  token storage, documented rotation policy, quorum signing for
+  release authority) before the Foundation has staffing and process to
+  maintain it adds operational risk without corresponding security
+  gain.
+  Gate for picking this up: Foundation transitions from
+  project-entity to multi-maintainer operational entity, with at least
+  two active release maintainers. When that happens, an institutional
+  key is introduced **alongside** (not replacing) maintainer keys —
+  downloaders can then verify against either, and the transition is
+  additive. Reviewing `docs/SIGNING.md` at that point is the first
+  task.
+
 ---
 
 ## Completed audit trail
