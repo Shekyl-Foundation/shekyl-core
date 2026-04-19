@@ -15,7 +15,9 @@ one of these rules, stop and ask the human first.
 1. **Never commit directly to `main`.** Ever. `main` only advances via a
    merge commit from `dev` (GitHub "Create a merge commit" / `git merge
    --no-ff dev`), with a signed annotated tag placed on the resulting
-   merge commit. Even a one-line typo fix goes through `dev`.
+   merge commit. Even a one-line typo fix goes through `dev`. Tag
+   signing policy, maintainer keys, and verification instructions live
+   in [`docs/SIGNING.md`](../../docs/SIGNING.md).
 
    **Forbidden `dev → main` operations:** fast-forward merges
    (`--ff-only`), rebase-and-merge, squash-and-merge, and force-push.
@@ -103,7 +105,10 @@ is too large; break it down.
 4. A **signed annotated tag** is placed on the resulting merge commit
    on `main`: `git tag -a -s vX.Y.Z -m "Shekyl vX.Y.Z"`. The tag
    signature is the cryptographic release marker; the merge commit is
-   the branch-topology release marker. Both are required.
+   the branch-topology release marker. Both are required. The signing
+   key must be one of the maintainer keys listed in
+   [`docs/SIGNING.md`](../../docs/SIGNING.md); that file also documents
+   how downstream users verify the tag with `git verify-tag`.
 5. The tag is pushed: `git push origin vX.Y.Z`. The release artifact is
    built from `main` at the tag, reproducibly (Guix).
 6. `dev` is not rebased onto `main` after release. Because the merge is
