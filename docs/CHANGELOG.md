@@ -1,6 +1,6 @@
 # Shekyl Changelog
 
-## [Unreleased]
+## [3.1.0-alpha.3] - 2026-04-18
 
 ### Security
 
@@ -19,7 +19,7 @@
   on a consensus path at runtime. Inspection shows the
   `cryptography.hazmat.primitives.{hashes,kdf.hkdf}` imports in that
   script are unused — all HKDF logic is hand-rolled with stdlib
-  `hmac`/`hashlib` — so the bump cannot change its output.   Verified by
+  `hmac`/`hashlib` — so the bump cannot change its output. Verified by
   regenerating `docs/test_vectors/PQC_OUTPUT_SECRETS.json` under the
   new version in a clean venv; SHA-256 matches byte-for-byte
   (`1159cb6de2ce3fa4af5d7a8f88eac71ed35c8f00ebf297a4d9259439b6477163`).
@@ -42,6 +42,39 @@
   curve25519-dalek 5 cascade" with target V3.1.x. Alerts #3 through
   #9 dismissed on GitHub with reason "risk tolerated" and a link to
   the follow-up.
+
+### Changed
+
+- **`wallet2_ffi` no longer carries wallet-directory state.** Removed
+  `wallet2_ffi_set_wallet_dir` and the `wallet_dir` field on
+  `wallet2_handle`. The four wallet-file FFI entry points
+  (`wallet2_ffi_create_wallet`, `wallet2_ffi_open_wallet`,
+  `wallet2_ffi_restore_deterministic_wallet`,
+  `wallet2_ffi_generate_from_keys`) now take a full `wallet_path`
+  parameter in place of the bare `filename` that was joined with
+  `wallet_dir` using a hardcoded `"/"` separator. Path construction was
+  inherited Monero `wallet_rpc_server` scaffolding and produced
+  mixed-separator paths on Windows (`C:\Users\x\...\...//My Wallet.keys`).
+  Callers now join paths in Rust via `PathBuf::join`, which is
+  platform-correct on every target. The legacy C++
+  `wallet_rpc_server.cpp` keeps its own `wallet_dir` state and is
+  unaffected — it does not go through the FFI. The `shekyl-cli`
+  `WalletContext` now holds the directory and joins filenames before
+  each call; the `shekyl-wallet-rpc` Rust shim keeps
+  `ServerConfig.wallet_dir` for the V3.2 cutover when its handlers
+  will own wallet-file creation. `validate_filename` was narrowed and
+  renamed to `validate_wallet_path` (empty-path check only) —
+  path-component validation is the caller's responsibility now that
+  the caller also owns the directory.
+
+## [3.1.0-alpha.2] - 2026-04-17
+
+> Retroactive CHANGELOG entry. The v3.1.0-alpha.2 tag was created without
+> promoting `[Unreleased]` first; the bullets below were subsequently
+> split out from `[Unreleased]` during the alpha.3 release cycle. The
+> split is based on the commit range `v3.1.0-alpha.1..v3.1.0-alpha.2`;
+> content is verbatim from the original `[Unreleased]` copy and has
+> not been edited retrospectively.
 
 ### Removed
 
@@ -68,27 +101,6 @@
 
 ### Changed
 
-- **`wallet2_ffi` no longer carries wallet-directory state.** Removed
-  `wallet2_ffi_set_wallet_dir` and the `wallet_dir` field on
-  `wallet2_handle`. The four wallet-file FFI entry points
-  (`wallet2_ffi_create_wallet`, `wallet2_ffi_open_wallet`,
-  `wallet2_ffi_restore_deterministic_wallet`,
-  `wallet2_ffi_generate_from_keys`) now take a full `wallet_path`
-  parameter in place of the bare `filename` that was joined with
-  `wallet_dir` using a hardcoded `"/"` separator. Path construction was
-  inherited Monero `wallet_rpc_server` scaffolding and produced
-  mixed-separator paths on Windows (`C:\Users\x\...\...//My Wallet.keys`).
-  Callers now join paths in Rust via `PathBuf::join`, which is
-  platform-correct on every target. The legacy C++
-  `wallet_rpc_server.cpp` keeps its own `wallet_dir` state and is
-  unaffected — it does not go through the FFI. The `shekyl-cli`
-  `WalletContext` now holds the directory and joins filenames before
-  each call; the `shekyl-wallet-rpc` Rust shim keeps
-  `ServerConfig.wallet_dir` for the V3.2 cutover when its handlers
-  will own wallet-file creation. `validate_filename` was narrowed and
-  renamed to `validate_wallet_path` (empty-path check only) —
-  path-component validation is the caller's responsibility now that
-  the caller also owns the directory.
 - **Daemon orchestration class renamed.** `daemonize::t_daemon` is now
   `daemonize::Daemon` in `shekyld`, and `shekyl-wallet-rpc`'s unrelated
   inline class is now `WalletRpcDaemon`. The two binaries no longer
@@ -100,6 +112,11 @@
   path `shekyld` resolved before V3.1. Pinned by a new
   `daemon_default_data_dir` unit test so a future refactor cannot
   silently point operators at an empty data directory.
+- MSVC CI job now builds `--target daemon wallet` instead of just
+  `--target wallet`, matching what the GUI wallet release workflow
+  actually compiles. Future MSVC regressions in daemon code will be
+  caught in shekyl-core CI rather than surfacing in the GUI wallet
+  release after an hour of compilation.
 
 ### Fixed
 
@@ -124,14 +141,6 @@
   `core_rpc_server.cpp` (C3493 on MSVC).
 - SFINAE-constrained `network_address` template constructor in
   `net_utils_base.h` to prevent MSVC eager instantiation (C2039).
-
-### Changed
-
-- MSVC CI job now builds `--target daemon wallet` instead of just
-  `--target wallet`, matching what the GUI wallet release workflow
-  actually compiles. Future MSVC regressions in daemon code will be
-  caught in shekyl-core CI rather than surfacing in the GUI wallet
-  release after an hour of compilation.
 
 ## [3.1.0-alpha.1] - 2026-04-15
 
