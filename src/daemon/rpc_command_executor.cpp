@@ -38,7 +38,6 @@
 #include "cryptonote_basic/difficulty.h"
 #include "cryptonote_basic/hardfork.h"
 #include "rpc/rpc_payment_signature.h"
-#include "rpc/rpc_version_str.h"
 #include <boost/format.hpp>
 #include <ctime>
 #include <string>
@@ -2536,7 +2535,7 @@ bool t_rpc_command_executor::version()
         }
     }
 
-    if (res.version.empty() || !cryptonote::rpc::is_version_string_valid(res.version))
+    if (res.version.empty())
     {
         tools::fail_msg_writer() << "The daemon software version is not available.";
     }
