@@ -73,19 +73,22 @@ const char* wallet2_ffi_last_error_msg(const wallet2_handle* w);
 void wallet2_ffi_free_string(char* str);
 
 // ── Wallet file operations ───────────────────────────────────────────────────
+//
+// The FFI does not carry filesystem state. Callers construct the full
+// wallet path (directory + filename) in their preferred language — Rust's
+// PathBuf::join on the Tauri/wallet-rpc side is platform-correct on every
+// target — and pass it in here. See docs/CHANGELOG.md §"wallet2_ffi
+// no longer carries wallet-directory state".
 
-// Set the wallet directory for create/open operations.
-void wallet2_ffi_set_wallet_dir(wallet2_handle* w, const char* dir);
-
-// Create a new wallet. Returns 0 on success.
+// Create a new wallet at the given absolute or relative path. Returns 0 on success.
 int wallet2_ffi_create_wallet(wallet2_handle* w,
-                              const char* filename,
+                              const char* wallet_path,
                               const char* password,
                               const char* language);
 
-// Open an existing wallet. Returns 0 on success.
+// Open an existing wallet at the given path. Returns 0 on success.
 int wallet2_ffi_open_wallet(wallet2_handle* w,
-                            const char* filename,
+                            const char* wallet_path,
                             const char* password);
 
 // Close the current wallet (stores first if autosave is true). Returns 0 on success.
@@ -93,7 +96,7 @@ int wallet2_ffi_close_wallet(wallet2_handle* w, bool autosave);
 
 // Restore from mnemonic seed. Returns JSON: {"address":"...","seed":"...","info":"..."} or NULL.
 char* wallet2_ffi_restore_deterministic_wallet(wallet2_handle* w,
-                                               const char* filename,
+                                               const char* wallet_path,
                                                const char* seed,
                                                const char* password,
                                                const char* language,
@@ -102,7 +105,7 @@ char* wallet2_ffi_restore_deterministic_wallet(wallet2_handle* w,
 
 // Restore from keys. Returns JSON: {"address":"...","info":"..."} or NULL.
 char* wallet2_ffi_generate_from_keys(wallet2_handle* w,
-                                     const char* filename,
+                                     const char* wallet_path,
                                      const char* address,
                                      const char* spendkey,
                                      const char* viewkey,

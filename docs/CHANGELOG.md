@@ -1,6 +1,133 @@
 # Shekyl Changelog
 
-## [Unreleased]
+## [3.1.0-alpha.3] - 2026-04-19
+
+### Added
+
+- **Release signing policy and maintainer keys (`docs/SIGNING.md`).**
+  New document establishing that every release tag from `v3.1.0-alpha.3`
+  onward is a signed annotated tag created with `git tag -a -s`. It
+  records the initial maintainer signing key (Rick Dawson, ed25519
+  `FEFEC7EF9952D40C`, ASCII-armored public key embedded in the doc so
+  downstream verifiers can import it from the repo without trusting a
+  keyserver lookup), and documents verification with `git verify-tag`,
+  the reproducible-build cross-check that tag verification does not
+  subsume, procedures for adding new maintainer keys, rotation,
+  retirement, revocation, key hygiene expectations (passphrase,
+  offline revocation certificate, hardware token or encrypted
+  storage, GitHub registration), and the rationale for GPG over SSH
+  signing or Sigstore at this stage. Earlier alpha tags
+  (`v3.1.0-alpha.1`, `v3.1.0-alpha.2`) predate this policy and are
+  not signed; their authenticity is established by branch topology
+  and reproducible Guix builds.
+
+### Changed
+
+- **Branch policy mandates signed annotated release tags and
+  non-fast-forward merges from `dev` to `main`.**
+  `.cursor/rules/06-branching.mdc` was updated to require that `main`
+  advance only via a merge commit (`git merge --no-ff dev`, GitHub
+  "Create a merge commit") with a signed annotated tag placed on the
+  resulting merge commit. Fast-forward, rebase-and-merge,
+  squash-and-merge, and force-push to `main` are now explicitly
+  forbidden. The rule cross-links to `docs/SIGNING.md` at both the
+  Hard rule 1 mention and the Release flow step 4 mention so a
+  maintainer reading the policy lands on the signing doc. A new
+  "Rationale (why merge commit, not fast-forward)" section was added
+  to capture the reasoning so the decision is not re-litigated each
+  cycle.
+
+- **`docs/FOLLOWUPS.md` tracks Shekyl Foundation institutional
+  signing key as V3.1.x+ item.** Records the V3.1 decision: release
+  signing uses maintainer keys, not an institutional Foundation key,
+  until the Foundation has multi-maintainer operational structure
+  (two or more active release maintainers). Cross-referenced from
+  `docs/SIGNING.md` §"Future: Foundation institutional signing key".
+
+### Security
+
+- **Bump `cryptography` from `44.0.2` to `46.0.6`** in
+  `tools/reference/requirements.txt` to clear two Dependabot advisories
+  indexed 2026-04-13:
+  - [GHSA-r6ph-v2qm-q3c2](https://github.com/advisories/GHSA-r6ph-v2qm-q3c2)
+    (high): missing subgroup validation for SECT curves could allow a
+    small-subgroup attack during ECDH.
+  - [GHSA-m959-cc7f-wv43](https://github.com/advisories/GHSA-m959-cc7f-wv43)
+    (low): incomplete DNS name constraint enforcement on peer names.
+
+  **Not exploitable against Shekyl users.** `cryptography` is pulled in
+  only by `tools/reference/derive_output_secrets.py`, a developer-only
+  HKDF test-vector generator that never ships in any binary and is not
+  on a consensus path at runtime. Inspection shows the
+  `cryptography.hazmat.primitives.{hashes,kdf.hkdf}` imports in that
+  script are unused — all HKDF logic is hand-rolled with stdlib
+  `hmac`/`hashlib` — so the bump cannot change its output. Verified by
+  regenerating `docs/test_vectors/PQC_OUTPUT_SECRETS.json` under the
+  new version in a clean venv; SHA-256 matches byte-for-byte
+  (`1159cb6de2ce3fa4af5d7a8f88eac71ed35c8f00ebf297a4d9259439b6477163`).
+
+- **Accept seven `rand 0.8.5` Dependabot alerts as risk-tolerated.**
+  [GHSA-cq8v-f236-94qc](https://github.com/advisories/GHSA-cq8v-f236-94qc)
+  ("Rand is unsound with a custom logger using rand::rng()") indexes
+  against the five workspace crates that pin `rand = "0.8"` plus two
+  `Cargo.lock` files. CVSS is 0 on all seven; the actual exploit
+  requires calling `rand::rng()` (a 0.9+ thread-local RNG API that
+  does not exist in 0.8) while a custom `log::Log` implementation is
+  installed. Shekyl uses `rand::rngs::OsRng` directly and
+  `rand_chacha::ChaCha20Rng::from_seed` for deterministic derivation,
+  and the daemon installs no custom `log::Log`, so no Shekyl code
+  path reaches the vulnerable code. Migrating to `rand = "0.9"`
+  cascades into bumping `curve25519-dalek` 4 → 5 plus several other
+  crypto crates; per `.cursor/rules/20-rust-vs-cpp-policy.mdc` that
+  is a planning activity with its own design doc and review cycle,
+  tracked in `docs/FOLLOWUPS.md` §"rand 0.9 migration and
+  curve25519-dalek 5 cascade" with target V3.1.x. Alerts #3 through
+  #9 dismissed on GitHub with reason "risk tolerated" and a link to
+  the follow-up.
+
+### Changed
+
+- **`wallet2_ffi` no longer carries wallet-directory state.** Removed
+  `wallet2_ffi_set_wallet_dir` and the `wallet_dir` field on
+  `wallet2_handle`. The four wallet-file FFI entry points
+  (`wallet2_ffi_create_wallet`, `wallet2_ffi_open_wallet`,
+  `wallet2_ffi_restore_deterministic_wallet`,
+  `wallet2_ffi_generate_from_keys`) now take a full `wallet_path`
+  parameter in place of the bare `filename` that was joined with
+  `wallet_dir` using a hardcoded `"/"` separator. Path construction was
+  inherited Monero `wallet_rpc_server` scaffolding and produced
+  mixed-separator paths on Windows (`C:\Users\x\...\...//My Wallet.keys`).
+  Callers now join paths in Rust via `PathBuf::join`, which is
+  platform-correct on every target. The legacy C++
+  `wallet_rpc_server.cpp` keeps its own `wallet_dir` state and is
+  unaffected — it does not go through the FFI. The `shekyl-cli`
+  `WalletContext` now holds the directory and joins filenames before
+  each call; the `shekyl-wallet-rpc` Rust shim keeps
+  `ServerConfig.wallet_dir` for the V3.2 cutover when its handlers
+  will own wallet-file creation. `validate_filename` was narrowed and
+  renamed to `validate_wallet_path` (empty-path check only) —
+  path-component validation is the caller's responsibility now that
+  the caller also owns the directory.
+
+- **Nightly `proptest-exhaustive` job tuned and extended to `dev`.** Dropped
+  `PROPTEST_CASES` from `1_000_000` to `200_000` — the old value could not
+  finish inside the 30-minute runner cap on `ubuntu-latest` (ML-KEM-768
+  keygen per case dominates wall time, the run was being cancelled not
+  failed). Raised `timeout-minutes` to `180` so the job has real headroom,
+  and added a branch matrix `[main, dev]` with per-branch cache keys so
+  nightly coverage tracks both active histories instead of only the default
+  branch. Actual elapsed time is surfaced via the job's `::notice::`
+  annotation so the 200k / 180m bracket can be tightened once we have real
+  data. See `.github/workflows/nightly.yml`.
+
+## [3.1.0-alpha.2] - 2026-04-17
+
+> Retroactive CHANGELOG entry. The v3.1.0-alpha.2 tag was created without
+> promoting `[Unreleased]` first; the bullets below were subsequently
+> split out from `[Unreleased]` during the alpha.3 release cycle. The
+> split is based on the commit range `v3.1.0-alpha.1..v3.1.0-alpha.2`;
+> content is verbatim from the original `[Unreleased]` copy and has
+> not been edited retrospectively.
 
 ### Removed
 
@@ -38,6 +165,11 @@
   path `shekyld` resolved before V3.1. Pinned by a new
   `daemon_default_data_dir` unit test so a future refactor cannot
   silently point operators at an empty data directory.
+- MSVC CI job now builds `--target daemon wallet` instead of just
+  `--target wallet`, matching what the GUI wallet release workflow
+  actually compiles. Future MSVC regressions in daemon code will be
+  caught in shekyl-core CI rather than surfacing in the GUI wallet
+  release after an hour of compilation.
 
 ### Fixed
 
@@ -62,14 +194,6 @@
   `core_rpc_server.cpp` (C3493 on MSVC).
 - SFINAE-constrained `network_address` template constructor in
   `net_utils_base.h` to prevent MSVC eager instantiation (C2039).
-
-### Changed
-
-- MSVC CI job now builds `--target daemon wallet` instead of just
-  `--target wallet`, matching what the GUI wallet release workflow
-  actually compiles. Future MSVC regressions in daemon code will be
-  caught in shekyl-core CI rather than surfacing in the GUI wallet
-  release after an hour of compilation.
 
 ## [3.1.0-alpha.1] - 2026-04-15
 

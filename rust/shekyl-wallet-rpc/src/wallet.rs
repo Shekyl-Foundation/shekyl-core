@@ -182,11 +182,6 @@ impl Wallet2 {
         self.check_rc(rc)
     }
 
-    pub fn set_wallet_dir(&self, dir: &str) {
-        let d = CString::new(dir).unwrap_or_default();
-        unsafe { ffi::wallet2_ffi_set_wallet_dir(self.handle, d.as_ptr()) };
-    }
-
     pub fn refresh(&self) -> WalletResult<()> {
         let rc = unsafe { ffi::wallet2_ffi_refresh(self.handle) };
         self.check_rc(rc)
@@ -199,11 +194,11 @@ impl Wallet2 {
 
     pub fn create_wallet(
         &self,
-        filename: &str,
+        wallet_path: &str,
         password: &str,
         language: &str,
     ) -> WalletResult<()> {
-        let f = Self::to_cstring(filename)?;
+        let f = Self::to_cstring(wallet_path)?;
         let p = Self::to_cstring(password)?;
         let l = Self::to_cstring(language)?;
         let rc = unsafe {
@@ -212,8 +207,8 @@ impl Wallet2 {
         self.check_rc(rc)
     }
 
-    pub fn open_wallet(&self, filename: &str, password: &str) -> WalletResult<()> {
-        let f = Self::to_cstring(filename)?;
+    pub fn open_wallet(&self, wallet_path: &str, password: &str) -> WalletResult<()> {
+        let f = Self::to_cstring(wallet_path)?;
         let p = Self::to_cstring(password)?;
         let rc = unsafe { ffi::wallet2_ffi_open_wallet(self.handle, f.as_ptr(), p.as_ptr()) };
         self.check_rc(rc)
@@ -226,14 +221,14 @@ impl Wallet2 {
 
     pub fn restore_deterministic_wallet(
         &self,
-        filename: &str,
+        wallet_path: &str,
         seed: &str,
         password: &str,
         language: &str,
         restore_height: u64,
         seed_offset: &str,
     ) -> WalletResult<serde_json::Value> {
-        let f = Self::to_cstring(filename)?;
+        let f = Self::to_cstring(wallet_path)?;
         let s = Self::to_cstring(seed)?;
         let p = Self::to_cstring(password)?;
         let l = Self::to_cstring(language)?;
@@ -255,7 +250,7 @@ impl Wallet2 {
     #[allow(clippy::too_many_arguments)]
     pub fn generate_from_keys(
         &self,
-        filename: &str,
+        wallet_path: &str,
         address: &str,
         spendkey: &str,
         viewkey: &str,
@@ -263,7 +258,7 @@ impl Wallet2 {
         language: &str,
         restore_height: u64,
     ) -> WalletResult<serde_json::Value> {
-        let f = Self::to_cstring(filename)?;
+        let f = Self::to_cstring(wallet_path)?;
         let a = Self::to_cstring(address)?;
         let sk = Self::to_cstring(spendkey)?;
         let vk = Self::to_cstring(viewkey)?;

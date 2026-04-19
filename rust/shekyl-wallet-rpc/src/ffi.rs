@@ -54,18 +54,16 @@ extern "C" {
     pub fn wallet2_ffi_last_error_msg(w: *const Wallet2Handle) -> *const c_char;
     pub fn wallet2_ffi_free_string(s: *mut c_char);
 
-    pub fn wallet2_ffi_set_wallet_dir(w: *mut Wallet2Handle, dir: *const c_char);
-
     pub fn wallet2_ffi_create_wallet(
         w: *mut Wallet2Handle,
-        filename: *const c_char,
+        wallet_path: *const c_char,
         password: *const c_char,
         language: *const c_char,
     ) -> c_int;
 
     pub fn wallet2_ffi_open_wallet(
         w: *mut Wallet2Handle,
-        filename: *const c_char,
+        wallet_path: *const c_char,
         password: *const c_char,
     ) -> c_int;
 
@@ -73,7 +71,7 @@ extern "C" {
 
     pub fn wallet2_ffi_restore_deterministic_wallet(
         w: *mut Wallet2Handle,
-        filename: *const c_char,
+        wallet_path: *const c_char,
         seed: *const c_char,
         password: *const c_char,
         language: *const c_char,
@@ -83,7 +81,7 @@ extern "C" {
 
     pub fn wallet2_ffi_generate_from_keys(
         w: *mut Wallet2Handle,
-        filename: *const c_char,
+        wallet_path: *const c_char,
         address: *const c_char,
         spendkey: *const c_char,
         viewkey: *const c_char,

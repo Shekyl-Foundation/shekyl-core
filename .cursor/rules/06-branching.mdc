@@ -12,9 +12,19 @@ one of these rules, stop and ask the human first.
 
 ## Hard rules
 
-1. **Never commit directly to `main`.** Ever. `main` only moves via
-   fast-forward from a tagged commit on `dev`. Even a one-line typo fix
-   goes through `dev`.
+1. **Never commit directly to `main`.** Ever. `main` only advances via a
+   merge commit from `dev` (GitHub "Create a merge commit" / `git merge
+   --no-ff dev`), with a signed annotated tag placed on the resulting
+   merge commit. Even a one-line typo fix goes through `dev`. Tag
+   signing policy, maintainer keys, and verification instructions live
+   in [`docs/SIGNING.md`](../../docs/SIGNING.md).
+
+   **Forbidden `dev → main` operations:** fast-forward merges
+   (`--ff-only`), rebase-and-merge, squash-and-merge, and force-push.
+   Each of these either rewrites SHAs or elides the release boundary.
+   The only acceptable `dev → main` operation is a non-fast-forward
+   merge commit. Do not argue for `--ff-only` on the grounds that it is
+   "more conservative" — it is not, and the argument has been had.
 
 2. **Never create a long-lived feature branch.** "Long-lived" means any
    branch expected to exist for more than ~5 working days or accumulate
@@ -82,11 +92,58 @@ is too large; break it down.
 
 ## Release flow (for reference, not for AI execution)
 
-1. `dev` is tagged with a release candidate (e.g. `v0.4.0-beta.2`).
-2. The tag is verified by CI and (for GUI) by manual testing.
-3. `main` is fast-forwarded to the tagged commit.
-4. The release artifact is built from `main` at the tag.
+1. `dev` is verified: CI green, manual testing complete for GUI
+   changes, PQC/staking/consensus changes reviewed per the normal
+   process.
+2. A PR is opened from `dev` to `main` titled `Release: vX.Y.Z` with
+   the changelog delta in the body. The PR exists for audit trail even
+   when there is only one maintainer.
+3. The PR is merged using GitHub's **"Create a merge commit"** option
+   (equivalently `git merge --no-ff dev` on the CLI). This is the only
+   acceptable merge strategy for `dev → main`. Rebase-and-merge and
+   squash-and-merge are disabled or must not be used.
+4. A **signed annotated tag** is placed on the resulting merge commit
+   on `main`: `git tag -a -s vX.Y.Z -m "Shekyl vX.Y.Z"`. The tag
+   signature is the cryptographic release marker; the merge commit is
+   the branch-topology release marker. Both are required. The signing
+   key must be one of the maintainer keys listed in
+   [`docs/SIGNING.md`](../../docs/SIGNING.md); that file also documents
+   how downstream users verify the tag with `git verify-tag`.
+5. The tag is pushed: `git push origin vX.Y.Z`. The release artifact is
+   built from `main` at the tag, reproducibly (Guix).
+6. `dev` is not rebased onto `main` after release. Because the merge is
+   non-fast-forward, `dev`'s history is unchanged and new work continues
+   on `dev` normally. If `main` accumulates hotfix commits later (which
+   should itself go through a short-lived branch → dev → main cycle),
+   no special sync step is needed.
 
 The AI does not perform release operations. If asked to "cut a release",
 "tag a version", or "promote to main", stop and confirm the user wants
 to walk through the release flow manually.
+
+## Rationale (why merge commit, not fast-forward)
+
+This section exists so the policy does not get re-litigated every time
+an AI assistant suggests `--ff-only` is "more conservative."
+
+- **Fast-forward fails on any divergence.** Once `main` accumulates any
+  commit not on `dev` — a hotfix, a tag-adjustment, or tree-identical
+  commits with different SHAs (as happened in the alpha.3 cycle) — a
+  fast-forward merge is impossible and the policy contradicts itself.
+  Merge commits handle divergence correctly by construction.
+- **SHA identity between `dev` tip and `main` tip is not security-relevant.**
+  What auditors and node operators verify is (a) the signed tag's
+  signature, and (b) that the tree at the tag matches the reviewed
+  source. Both are independent of whether `main`'s tip is a merge
+  commit or an FF'd `dev` commit. Reproducible Guix builds verify
+  trees, not commit SHAs.
+- **The merge commit is the release boundary.** `git log --graph main`
+  shows each release as a visible two-parent commit. This is the
+  honest representation of what happened: two lines of development
+  (ongoing `dev` work and the stable `main` line) were reconciled at
+  release time.
+- **Append-only `main` is the actual security property.** No
+  force-push, no rebase, no history rewriting on `main`. Merge style
+  is orthogonal to this; both FF and merge-commit preserve SHAs of
+  commits that exist on both branches. The append-only property is
+  enforced by branch protection, not by merge style.

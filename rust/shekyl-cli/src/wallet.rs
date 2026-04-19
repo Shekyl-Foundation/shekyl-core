@@ -6,9 +6,11 @@
 //! Wallet context: owns the wallet2 FFI handle and provides command-friendly methods.
 
 use shekyl_wallet_rpc::{Wallet2, WalletError};
+use std::path::PathBuf;
 
 pub struct WalletContext {
     wallet: Wallet2,
+    wallet_dir: PathBuf,
 }
 
 impl WalletContext {
@@ -22,13 +24,19 @@ impl WalletContext {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let wallet =
             Wallet2::new(nettype).map_err(|e| format!("Failed to create wallet handle: {e}"))?;
-        wallet.set_wallet_dir(wallet_dir);
         if !daemon_address.is_empty() {
             wallet
                 .init(daemon_address, daemon_user, daemon_pass, trusted_daemon)
                 .map_err(|e| format!("Failed to connect to daemon: {e}"))?;
         }
-        Ok(Self { wallet })
+        Ok(Self {
+            wallet,
+            wallet_dir: PathBuf::from(wallet_dir),
+        })
+    }
+
+    fn join_path(&self, filename: &str) -> String {
+        self.wallet_dir.join(filename).to_string_lossy().to_string()
     }
 
     pub fn is_open(&self) -> bool {
@@ -41,11 +49,13 @@ impl WalletContext {
         password: &str,
         language: &str,
     ) -> Result<(), WalletError> {
-        self.wallet.create_wallet(filename, password, language)
+        let path = self.join_path(filename);
+        self.wallet.create_wallet(&path, password, language)
     }
 
     pub fn open(&self, filename: &str, password: &str) -> Result<(), WalletError> {
-        self.wallet.open_wallet(filename, password)
+        let path = self.join_path(filename);
+        self.wallet.open_wallet(&path, password)
     }
 
     pub fn close(&self) -> Result<(), WalletError> {
@@ -108,8 +118,9 @@ impl WalletContext {
         restore_height: u64,
         seed_offset: &str,
     ) -> Result<serde_json::Value, WalletError> {
+        let path = self.join_path(filename);
         self.wallet.restore_deterministic_wallet(
-            filename,
+            &path,
             seed,
             password,
             language,

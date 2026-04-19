@@ -253,6 +253,25 @@ Each item is out of scope for the current PR but worth tracking for future work.
   the two call sites); `shekyld`'s call site is deleted in the same
   V3.2 cleanup pass. Greppable as `TODO(v3.2)` in the file header.
 
+- **Shekyl Foundation institutional signing key.** Target: V3.1.x+,
+  contingent on multi-maintainer structure.
+  `docs/SIGNING.md` records the V3.1 position: release tags are signed
+  by **maintainer** keys, not by a Foundation institutional key. A
+  single-person "Foundation key" is operationally identical to a
+  personal key with worse threat-model clarity ("who actually signed
+  this?"), and building institutional-key ceremony (HSM or hardware
+  token storage, documented rotation policy, quorum signing for
+  release authority) before the Foundation has staffing and process to
+  maintain it adds operational risk without corresponding security
+  gain.
+  Gate for picking this up: Foundation transitions from
+  project-entity to multi-maintainer operational entity, with at least
+  two active release maintainers. When that happens, an institutional
+  key is introduced **alongside** (not replacing) maintainer keys —
+  downloaders can then verify against either, and the transition is
+  additive. Reviewing `docs/SIGNING.md` at that point is the first
+  task.
+
 ---
 
 ## Completed audit trail
@@ -346,3 +365,108 @@ Each item is out of scope for the current PR but worth tracking for future work.
   exposure. The stressnet wallet exerciser (`shekyl-dev/stressnet/`) uses
   block validation p95 as an indirect proxy until this endpoint exists.
   Filed from stressnet plan finding F14.
+
+---
+
+## rand 0.9 migration and curve25519-dalek 5 cascade — target: V3.1.x
+
+Seven Dependabot alerts on `shekyl-core` cite
+[GHSA-cq8v-f236-94qc](https://github.com/advisories/GHSA-cq8v-f236-94qc)
+("Rand is unsound with a custom logger using rand::rng()"), vulnerable
+range `>= 0.7.0, < 0.9.3`. We currently pin `rand = "0.8"` in five
+workspace crates and `rand 0.8.5` is transitively selected in the
+`rust/Cargo.lock` and `rust/shekyl-crypto-pq/fuzz/Cargo.lock` lockfiles.
+CVSS for all seven is 0 (Dependabot severity label "low"). These alerts
+have been dismissed on GitHub with reason "risk tolerated" and a link to
+this follow-up.
+
+### Affected manifests (all seven alerts)
+
+- `rust/Cargo.lock` (alert #3)
+- `rust/shekyl-crypto-pq/fuzz/Cargo.lock` (alert #4)
+- `rust/shekyl-crypto-pq/Cargo.toml` (alert #5)
+- `rust/shekyl-chacha/Cargo.toml` (alert #6)
+- `rust/shekyl-fcmp/Cargo.toml` (alert #7)
+- `rust/shekyl-proofs/Cargo.toml` (alert #8)
+- `rust/shekyl-tx-builder/Cargo.toml` (alert #9)
+
+### Not exploitable today
+
+The `rand::rng()` function named in the advisory is the 0.9+
+thread-local RNG API and does not exist in rand 0.8. Shekyl's crypto
+paths obtain randomness two ways:
+
+- `rand::rngs::OsRng` passed directly to dalek's `Scalar::random` and to
+  `SigningKey::generate` (see `rust/shekyl-crypto-pq/src/montgomery.rs`,
+  `kem.rs`, `signature.rs`, `multisig.rs`).
+- `rand_chacha::ChaCha20Rng::from_seed([...])` for deterministic key
+  derivation (see `rust/shekyl-crypto-pq/src/derivation.rs`).
+
+Neither codepath calls `rand::rng()` and the Shekyl daemon does not
+install a custom `log::Log` implementation, so the logging-induced
+soundness bug described in the advisory has no path to the RNG state
+in any Shekyl binary.
+
+### Why we can't just bump rand to 0.9
+
+rand 0.9 moved `RngCore` / `CryptoRng` trait definitions and renamed
+several methods (`gen` → `random`, `gen_range` → `random_range`,
+`thread_rng` → `rng`). The rest of the crypto ecosystem we depend on
+is still pinned to the rand 0.8 `rand_core` trait set:
+
+- `curve25519-dalek = "4"` (and its `Scalar::random` wiring)
+- `ed25519-dalek = "2.2.0"` with the `rand_core` feature
+- `rand_chacha = "0.3"`
+- `fips204 = "0.4.6"`, `fips203 = "=0.4.3"` (NIST PQC implementations)
+
+Attempting to bump rand to 0.9 in isolation fails to compile because
+`Scalar::random(&mut rand::rngs::OsRng)` expects the 0.8 trait set. A
+real migration cascades into bumping curve25519-dalek to 5.x (plus its
+downstream consumers) and re-auditing every crypto call site.
+
+Per `.cursor/rules/20-rust-vs-cpp-policy.mdc`, a migration of this size
+is a planning activity — its own design document, 4-6 review rounds,
+its own test gates, its own PR. Folding it into any other change
+produces an unreviewable diff.
+
+### Gate
+
+Do not start this migration until:
+
+1. `curve25519-dalek 5.x` has at least one stable release with a
+   reviewable changelog against 4.x.
+2. `ed25519-dalek`, `rand_chacha`, and the `fips204`/`fips203` crates
+   have released versions that advertise rand 0.9 compatibility.
+3. We have a test plan that confirms every `OsRng` / `from_seed`
+   call site produces byte-identical output against pre-migration
+   test vectors (HKDF vectors, signing round-trip vectors, FCMP++
+   blinding-factor vectors).
+
+### Scope when picked up
+
+- Bump rand, rand_chacha, and rand_core in all five workspace crates.
+- Update `Scalar::random`, `SigningKey::generate`, and
+  `ChaCha20Rng::from_seed` call sites to the new trait API.
+- Re-run the full test-vector regeneration path and confirm no drift.
+- Dedicated PR; the "rand migration" lands on `dev` behind no feature
+  flag, but must not be bundled with any other security or feature
+  change.
+
+### Residual: digest_auth transitive
+
+Even after our workspace crates migrate, `digest_auth v0.3.1` (a
+transitive dependency of `shekyl-simple-request-rpc` via the
+`shekyl-oxide` vendor tree) selects rand 0.8.5 for cnonce generation.
+It has no newer crates.io release. Alerts #3 and #4 (the two
+`Cargo.lock` alerts) will reappear until `digest_auth` is either:
+
+- upstream-patched and a new version published,
+- replaced with a different HTTP-digest library (evaluate
+  `http-auth`, `reqwest-middleware` auth patterns), or
+- vendored and patched in-tree under `shekyl-oxide/`.
+
+Track that replacement as a sub-task of this item, not as a separate
+follow-up; both will land together.
+
+Target version: **V3.1.x**, specific minor decided when the
+curve25519-dalek 5.x release window becomes visible.
