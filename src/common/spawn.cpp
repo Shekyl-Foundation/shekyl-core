@@ -29,9 +29,7 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <errno.h>
-#ifndef _WIN32
-#include <unistd.h>
-#endif
+#include "common/compat.h"
 #include <sys/types.h>
 #ifdef _WIN32
 #include <boost/scope_exit.hpp>

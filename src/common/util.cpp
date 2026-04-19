@@ -29,11 +29,8 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
-#ifndef _WIN32
-#include <unistd.h>
-#endif
+#include "common/compat.h"
 #ifdef _MSC_VER
-#include <io.h>
 #include <fcntl.h>
 #endif
 #include <cstdint>
@@ -48,7 +45,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
-#include <unistd.h>
 #include <dirent.h>
 #include <string.h>
 #include <ctype.h>

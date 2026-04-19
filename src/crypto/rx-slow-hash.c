@@ -34,9 +34,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#if !defined(_MSC_VER)
-#include <unistd.h>
-#endif
+#include "common/compat.h"
 #include <limits.h>
 
 #include "randomx.h"

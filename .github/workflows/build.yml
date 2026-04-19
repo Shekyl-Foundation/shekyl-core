@@ -71,6 +71,26 @@ jobs:
             exit 1
           fi
           echo "No BOOST_FOREACH — OK"
+      - name: reject direct POSIX-header includes in src/
+        run: |
+          # The three POSIX headers owned by src/common/compat.h:
+          #   unistd.h, dlfcn.h, sys/mman.h
+          # Every new site should #include "common/compat.h" instead of
+          # repeating the _WIN32 / _MSC_VER guard dance inline.
+          #
+          # Allow-list (files whose direct include has an architectural
+          # reason — OS-specific arms, vendored ref10 code, or compat.h
+          # itself). Keep this list tight; prefer migrating new sites.
+          ALLOW='^(src/common/compat\.h|src/common/compat/glibc_compat\.cpp|src/common/password\.cpp|src/cryptonote_basic/miner\.cpp|src/crypto/random\.c|src/crypto/oaes_lib\.c|src/crypto/crypto_ops_builder/randombytes\.c|src/crypto/slow-hash\.c):'
+          HITS=$(grep -rnE '^[[:space:]]*#include[[:space:]]*<(unistd|dlfcn|sys/mman)\.h>' \
+                 src/ --include='*.c' --include='*.cpp' --include='*.h' --include='*.hpp' \
+                 | grep -vE "$ALLOW" || true)
+          if [ -n "$HITS" ]; then
+            echo "FATAL: direct POSIX-header include — use #include \"common/compat.h\":"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "No unguarded POSIX-header includes outside compat.h — OK"
 
   build-macos:
     name: 'macOS (brew)'

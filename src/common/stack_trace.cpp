@@ -44,11 +44,7 @@
 #include <libunwind.h>
 #include <cxxabi.h>
 #endif
-#ifndef STATICLIB
-#ifndef _WIN32
-#include <dlfcn.h>
-#endif
-#endif
+#include "common/compat.h"
 #include <boost/algorithm/string.hpp>
 #include "common/stack_trace.h"
 #include "misc_log_ex.h"
