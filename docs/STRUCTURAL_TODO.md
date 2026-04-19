@@ -5,6 +5,18 @@ Issues discovered during the MSVC wallet-core enablement (branch
 just one-off portability patches. Tracked here so they survive branch
 switches in shekyl-core.
 
+> **Framing note (April 2026).** Several decisions below cite "upstream
+> Monero cherry-pick risk" as a constraint. The merge base with
+> `monero/master` is June 2014, and upstream activity on the C/C++ files
+> Shekyl inherited is effectively dormant (~3 substantive commits across
+> 8 inherited files in the last 2 years; several files are 88-100%+
+> diverged by line count). Shekyl is a cousin, not a downstream, of
+> Monero. Decisions that weigh heavily on cherry-pick preservation
+> should be re-examined on their own merits; the cost they assume is
+> largely notional. See `docs/FOLLOWUPS.md` for the scheduled V3.2
+> revisit of the `/FIiso646.h` workaround and the `rct::` → `ct::`
+> rename, both of which rest on this premise.
+
 ---
 
 ## Platform Abstraction Gaps
@@ -15,15 +27,23 @@ for MSVC. Both `util.h` and `download.h` now `#include "common/compat.h"`
 instead of inline guards. *(Landed on `dev` in `f275a6a3b`; merged to
 `feature/msvc-wallet-core` in `93440c429`.)*
 
-### Unconditional POSIX includes scattered across 6+ files — partially resolved
+### ~~Unconditional POSIX includes scattered across 6+ files~~ ✅ Resolved
 `unistd.h`, `dlfcn.h`, `sys/mman.h` were individually guarded with
-`#ifndef _WIN32` or `#if !defined(_MSC_VER)` in `util.cpp`,
-`stack_trace.cpp`, `slow-hash.c`, `rx-slow-hash.c`, `aligned.c`,
-`spawn.cpp`, `keccak.c`, `CryptonightR_JIT.c`. Individual guards are in
-place and `util.cpp` now has full MSVC coverage (`<io.h>`, `setenv`→
-`putenv`, `umask`→noop, `closefrom`→noop on `_WIN32`). A centralized
-platform-compat header would still prevent future regressions from
-upstream cherry-picks or new code.
+`#ifndef _WIN32` or `#if !defined(_MSC_VER)` in eight first-party files
+(`util.cpp`, `stack_trace.cpp`, `slow-hash.c`, `rx-slow-hash.c`,
+`aligned.c`, `spawn.cpp`, `keccak.c`, `CryptonightR_JIT.c`). All eight
+sites now `#include "common/compat.h"`, which owns the three POSIX vs.
+Windows header blocks in one place. A CI lint step
+(`.github/workflows/build.yml`, modeled on the `BOOST_FOREACH` guard)
+rejects new direct `#include <unistd.h|dlfcn.h|sys/mman.h>` in `src/`
+outside a tight allow-list (OS-specific arms in `miner.cpp` /
+`password.cpp`, vendored ref10 / oaes code, the arch-specific inner
+`sys/mman.h` blocks in `slow-hash.c`, and `compat.h` itself). The
+behavioral shims still inlined in `util.cpp` (`setenv`→`putenv`,
+`umask`→noop, `closefrom`→noop) are a separate concern, tracked as a
+V3.2 item in `docs/FOLLOWUPS.md` — they require their own design pass
+because they define *what a function does* on Windows, not *which
+header supplies a symbol*.
 
 ### ~~`xor` used as a C parameter name in `slow-hash.c`~~ ✅ Resolved
 Renamed to `xor_pad` in both x86/SSE and ARM/NEON variants of

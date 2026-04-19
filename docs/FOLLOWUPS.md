@@ -5,6 +5,35 @@ Each item is out of scope for the current PR but worth tracking for future work.
 
 ---
 
+- **Consolidate MSVC behavioral shims from `util.cpp` into `common/platform` (V3.2).**
+  `src/common/util.cpp` carries three inline behavioral shims for
+  Windows: `setenv`→`putenv` (around line 739), `umask`→noop (around
+  line 845), and `closefrom`→noop (`void closefrom(int fd)` around
+  line 1074). These are different in
+  kind from the POSIX-include migration closed in the April 2026
+  `common/compat.h` sweep: they define what a function *does* on
+  Windows, not which header supplies a symbol. Consolidation requires
+  a design pass — inline wrappers in a header vs. a new
+  `src/common/platform.cpp`; naming; and an explicit security
+  justification for the `closefrom`→noop contract in Shekyl's Windows
+  build (does the process ever exec across the fd table on Windows?).
+  Target: V3.2. See `docs/STRUCTURAL_TODO.md` §"Platform Abstraction
+  Gaps" for the closed POSIX-include half of this thread.
+
+- **Re-examine `/FIiso646.h` and `rct::` → `ct::` deferrals (V3.2).**
+  `docs/STRUCTURAL_TODO.md` §"C++ alternative tokens" (the
+  `/FIiso646.h` workaround) and §"`rct_signatures` field name" (the
+  `rct::` → `ct::` rename) both list upstream Monero cherry-pick
+  preservation as a primary factor. The April 2026 framing note at the
+  top of `STRUCTURAL_TODO.md` observes that that cost is largely
+  notional today (merge base with `monero/master` is June 2014;
+  upstream activity on inherited files is effectively dormant). Both
+  decisions should be re-examined on their own merits in V3.2. No
+  commitment to change either outcome — the revisit may well reaffirm
+  option 3 (keep `/FIiso646.h`) and defer the `rct::` rename to V4 —
+  but the premise should not quietly remain in force on a basis the
+  framing note contradicts.
+
 - **Dead `i686_linux_*` target in `contrib/depends/hosts/linux.mk` (V3.1).**
   `linux.mk` still declares `i686_linux_CC=gcc -m32`, `i686_linux_CXX=g++
   -m32`, `i686_linux_AR=ar`. Nothing references it: no Gitian descriptor's

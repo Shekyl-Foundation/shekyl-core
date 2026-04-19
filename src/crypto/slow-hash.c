@@ -34,9 +34,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
-#if !defined(_MSC_VER)
-#include <unistd.h>
-#endif
+#include "common/compat.h"
 
 #include "int-util.h"
 #include "hash-ops.h"
