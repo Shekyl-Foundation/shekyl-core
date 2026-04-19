@@ -1,6 +1,48 @@
 # Shekyl Changelog
 
-## [3.1.0-alpha.3] - 2026-04-18
+## [3.1.0-alpha.3] - 2026-04-19
+
+### Added
+
+- **Release signing policy and maintainer keys (`docs/SIGNING.md`).**
+  New document establishing that every release tag from `v3.1.0-alpha.3`
+  onward is a signed annotated tag created with `git tag -a -s`. It
+  records the initial maintainer signing key (Rick Dawson, ed25519
+  `FEFEC7EF9952D40C`, ASCII-armored public key embedded in the doc so
+  downstream verifiers can import it from the repo without trusting a
+  keyserver lookup), and documents verification with `git verify-tag`,
+  the reproducible-build cross-check that tag verification does not
+  subsume, procedures for adding new maintainer keys, rotation,
+  retirement, revocation, key hygiene expectations (passphrase,
+  offline revocation certificate, hardware token or encrypted
+  storage, GitHub registration), and the rationale for GPG over SSH
+  signing or Sigstore at this stage. Earlier alpha tags
+  (`v3.1.0-alpha.1`, `v3.1.0-alpha.2`) predate this policy and are
+  not signed; their authenticity is established by branch topology
+  and reproducible Guix builds.
+
+### Changed
+
+- **Branch policy mandates signed annotated release tags and
+  non-fast-forward merges from `dev` to `main`.**
+  `.cursor/rules/06-branching.mdc` was updated to require that `main`
+  advance only via a merge commit (`git merge --no-ff dev`, GitHub
+  "Create a merge commit") with a signed annotated tag placed on the
+  resulting merge commit. Fast-forward, rebase-and-merge,
+  squash-and-merge, and force-push to `main` are now explicitly
+  forbidden. The rule cross-links to `docs/SIGNING.md` at both the
+  Hard rule 1 mention and the Release flow step 4 mention so a
+  maintainer reading the policy lands on the signing doc. A new
+  "Rationale (why merge commit, not fast-forward)" section was added
+  to capture the reasoning so the decision is not re-litigated each
+  cycle.
+
+- **`docs/FOLLOWUPS.md` tracks Shekyl Foundation institutional
+  signing key as V3.1.x+ item.** Records the V3.1 decision: release
+  signing uses maintainer keys, not an institutional Foundation key,
+  until the Foundation has multi-maintainer operational structure
+  (two or more active release maintainers). Cross-referenced from
+  `docs/SIGNING.md` §"Future: Foundation institutional signing key".
 
 ### Security
 
