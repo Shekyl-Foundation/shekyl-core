@@ -1,20 +1,5 @@
 # Shekyl Changelog
 
-## [Unreleased]
-
-### Changed
-
-- **Nightly `proptest-exhaustive` job tuned and extended to `dev`.** Dropped
-  `PROPTEST_CASES` from `1_000_000` to `200_000` — the old value could not
-  finish inside the 30-minute runner cap on `ubuntu-latest` (ML-KEM-768
-  keygen per case dominates wall time, the run was being cancelled not
-  failed). Raised `timeout-minutes` to `180` so the job has real headroom,
-  and added a branch matrix `[main, dev]` with per-branch cache keys so
-  nightly coverage tracks both active histories instead of only the default
-  branch. Actual elapsed time is surfaced via the job's `::notice::`
-  annotation so the 200k / 180m bracket can be tightened once we have real
-  data. See `.github/workflows/nightly.yml`.
-
 ## [3.1.0-alpha.3] - 2026-04-18
 
 ### Security
@@ -81,6 +66,17 @@
   renamed to `validate_wallet_path` (empty-path check only) —
   path-component validation is the caller's responsibility now that
   the caller also owns the directory.
+
+- **Nightly `proptest-exhaustive` job tuned and extended to `dev`.** Dropped
+  `PROPTEST_CASES` from `1_000_000` to `200_000` — the old value could not
+  finish inside the 30-minute runner cap on `ubuntu-latest` (ML-KEM-768
+  keygen per case dominates wall time, the run was being cancelled not
+  failed). Raised `timeout-minutes` to `180` so the job has real headroom,
+  and added a branch matrix `[main, dev]` with per-branch cache keys so
+  nightly coverage tracks both active histories instead of only the default
+  branch. Actual elapsed time is surfaced via the job's `::notice::`
+  annotation so the 200k / 180m bracket can be tightened once we have real
+  data. See `.github/workflows/nightly.yml`.
 
 ## [3.1.0-alpha.2] - 2026-04-17
 
