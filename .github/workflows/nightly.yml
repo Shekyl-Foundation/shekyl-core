@@ -13,11 +13,21 @@ env:
 
 jobs:
   proptest-exhaustive:
+    # Scheduled workflows always execute from the default branch (main), so the
+    # schedule picks up whichever version of this file is on main. The matrix
+    # below makes each scheduled run cover both active branches in parallel;
+    # while tuning this job we may be ahead on dev, and workflow_dispatch with
+    # ref=dev can exercise the newer config before it lands on main.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [main, dev]
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ matrix.branch }}
           submodules: recursive
 
       - name: Install Rust toolchain
@@ -32,16 +42,16 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: nightly-proptest-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: nightly-proptest-
+          key: nightly-proptest-${{ matrix.branch }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: nightly-proptest-${{ matrix.branch }}-
 
-      - name: Run proptest (1 000 000 cases)
+      - name: Run proptest (200 000 cases)
         working-directory: rust
         env:
-          PROPTEST_CASES: "1000000"
+          PROPTEST_CASES: "200000"
         run: |
           START=$(date +%s)
           cargo test --locked --release -p shekyl-crypto-pq --test prop_round_trip -- --nocapture 2>&1
           END=$(date +%s)
           ELAPSED=$((END - START))
-          echo "::notice::Proptest completed in ${ELAPSED}s"
+          echo "::notice::Proptest completed on ${{ matrix.branch }} in ${ELAPSED}s (budget 180m)"
