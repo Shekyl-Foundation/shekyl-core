@@ -451,15 +451,15 @@ mod tests {
     fn file_roundtrip() {
         let payload = make_test_payload(2, 2);
         let dir = std::env::temp_dir().join("shekyl_test_multisig_addr");
-        drop(std::fs::create_dir_all(&dir));
+        std::fs::create_dir_all(&dir).expect("create test tempdir");
         let path = dir.join("test_addr.bin");
 
         payload.write_to_file(&path).unwrap();
         let loaded = MultisigAddressPayload::read_from_file(&path).unwrap();
         assert_eq!(payload, loaded);
 
-        drop(std::fs::remove_file(&path));
-        drop(std::fs::remove_dir(&dir));
+        std::fs::remove_file(&path).expect("remove test payload file");
+        std::fs::remove_dir(&dir).expect("remove test tempdir");
     }
 
     #[test]
