@@ -126,6 +126,15 @@ fn emit_flush_roundtrip_writes_event_to_disk_nonunix() {
     let dir = tempfile::tempdir().expect("tmpdir").keep();
     let prefix = "rust-shekyl-logging-filesink-nonunix.log";
 
+    // Match the Unix branch's env hermeticity: an ambient
+    // `SHEKYL_LOG` value on CI or a developer shell could either
+    // escalate/mute our emitted event or, if syntactically invalid,
+    // cause `init` to return `FilterParse` and fail this test for a
+    // reason that has nothing to do with the file sink.
+    // SAFETY: integration tests run one file per process, and this
+    // test does not spawn threads of its own before `init`.
+    unsafe { std::env::remove_var(shekyl_logging::SHEKYL_LOG_ENV) };
+
     let cfg = Config::with_file_sink(Level::TRACE, FileSink::unrotated(&dir, prefix));
     {
         let _guard = init(cfg).expect("init");
