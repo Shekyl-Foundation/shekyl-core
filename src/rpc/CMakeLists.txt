@@ -37,7 +37,6 @@ set(rpc_sources
   core_rpc_server.cpp
   core_rpc_ffi.cpp
   rpc_payment.cpp
-  rpc_version_str.cpp
   instanciations.cpp)
 
 
@@ -47,7 +46,6 @@ set(rpc_base_headers
   rpc_handler.h)
 
 set(rpc_headers
-  rpc_version_str.h
   rpc_handler.h)
 
 set(rpc_private_headers

@@ -6,12 +6,7 @@
 #if defined(_MSC_VER)
 #include <windows.h>
 #endif
-#if !defined(_MSC_VER)
-#include <unistd.h>
-#endif
-#if !(defined(_MSC_VER) || defined(__MINGW32__))
-#include <sys/mman.h>
-#endif
+#include "common/compat.h"
 
 #include "int-util.h"
 #include "hash-ops.h"

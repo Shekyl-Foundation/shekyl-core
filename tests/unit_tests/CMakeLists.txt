@@ -98,7 +98,6 @@ set(unit_tests_sources
   wipeable_string.cpp
   is_hdd.cpp
   aligned.cpp
-  rpc_version_str.cpp
   staking.cpp
   deferred_insertion.cpp
   tx_data_pruning_lmdb.cpp

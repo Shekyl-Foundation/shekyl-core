@@ -1,5 +1,46 @@
 # Shekyl Changelog
 
+## [Unreleased]
+
+### Removed
+
+- **`src/rpc/rpc_version_str.{h,cpp}` and its unit test
+  (`tests/unit_tests/rpc_version_str.cpp`), inherited from Monero.** The
+  daemon constructs its own version string deterministically in
+  `cmake/GitVersion.cmake` from the annotated tag on HEAD, then emits
+  `SHEKYL_VERSION_FULL` over RPC as an opaque value. The validator
+  regex was a Monero-era sanity check that parsed that string back
+  against a hardcoded pattern — "protecting" consumers from a failure
+  mode that the CMake construction logic already makes impossible.
+
+  Exposed on the `v3.1.0-alpha.3` tag-push CI run
+  ([#394](https://github.com/Shekyl-Foundation/shekyl-core/actions/runs/24637252528),
+  `test-ubuntu` matrix): on a tagged build, `SHEKYL_VERSION_FULL`
+  resolves to `3.1.0-alpha.3-release`, and the regex (adapted from
+  Monero but never taught SemVer 2.0.0 §9 dotted pre-release
+  identifiers) rejects the dot in `-alpha.3`. Every tagged release
+  using `-alpha.N` / `-beta.N` / `-rc.N` numbering would trip the same
+  assertion — so every tagged release with this file in tree is
+  inherently broken, which is enough of a tell that the file is wrong
+  to have on disk.
+
+  Per `.cursor/rules/60-no-monero-legacy.mdc` "ask why is this here?"
+  — this is an inherited assertion against a Shekyl-owned invariant.
+  The invariant is enforced by `cmake/GitVersion.cmake`; the daemon
+  should not re-parse its own output to re-check it. `rpc_command_executor.cpp`
+  keeps the empty-string guard (`if (res.version.empty())`) so the CLI
+  still reports "version not available" when the RPC response lacks a
+  version, but no longer attempts to format-validate the string it
+  receives.
+
+### Fixed
+
+- **Tagged-release `ci/gh-actions/cli` jobs on `test-ubuntu` matrix.**
+  Follows from the `rpc_version_str` removal above. `v3.1.0-alpha.3`
+  shipped with the daemon, wallet, and source archive built cleanly,
+  but its tag-push CI ran red on this single unit test; `v3.1.0-alpha.4`
+  will be the first alpha whose tag-push CI is green end-to-end.
+
 ## [3.1.0-alpha.3] - 2026-04-19
 
 ### Added
