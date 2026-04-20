@@ -86,7 +86,9 @@ fn emit_flush_and_mode_0600_roundtrip() {
     assert_eq!(mode, 0o600, "expected 0600, got {mode:o}");
 
     unsafe { libc::umask(saved_umask) };
-    let _ = fs::remove_dir_all(&dir);
+    // Best-effort cleanup; a stray tmpfs on test failure is not worth
+    // masking real test failure with a panic here.
+    drop(fs::remove_dir_all(&dir));
 }
 
 #[cfg(not(unix))]
@@ -124,5 +126,5 @@ fn emit_flush_roundtrip_writes_event_to_disk_nonunix() {
         content.contains("hello from the file sink"),
         "sink file did not contain the emitted event; got: {content:?}",
     );
-    let _ = fs::remove_dir_all(&dir);
+    drop(fs::remove_dir_all(&dir));
 }
