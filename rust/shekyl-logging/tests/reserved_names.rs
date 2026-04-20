@@ -20,7 +20,57 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const RESERVED: &[&str] = &["target: \"logging\"", "target: \"msgwriter\""];
+/// Reserved `tracing` target names (bare, unquoted). The matcher in
+/// [`line_uses_reserved_target`] looks for `target <ws>? : <ws>?
+/// "{name}"` so it catches formatting variants — `target:"logging"`,
+/// `target : "logging"`, tabs, extra spaces, etc. — that rustfmt may
+/// or may not normalize before CI runs. The previous implementation
+/// matched exact substrings like `target: "logging"`, which a hand
+/// edit could silently bypass.
+const RESERVED: &[&str] = &["logging", "msgwriter"];
+
+/// Return true if `line` contains a `target: "<reserved>"`-shaped
+/// assignment for any name in `reserved`, tolerating arbitrary ASCII
+/// whitespace around the colon and requiring that `target` is a
+/// whole word (not a suffix of some longer identifier like
+/// `my_target`).
+fn line_uses_reserved_target(line: &str, reserved: &[&str]) -> bool {
+    let bytes = line.as_bytes();
+    for name in reserved {
+        let needle = format!("\"{name}\"");
+        let mut search_from = 0usize;
+        while let Some(rel) = line[search_from..].find(&needle) {
+            let quote_start = search_from + rel;
+            // Walk left over whitespace, then expect `:`, then walk
+            // left over whitespace, then expect the word `target`
+            // preceded by a non-identifier byte (or start of line).
+            let mut i = quote_start;
+            while i > 0 && (bytes[i - 1] == b' ' || bytes[i - 1] == b'\t') {
+                i -= 1;
+            }
+            if i == 0 || bytes[i - 1] != b':' {
+                search_from = quote_start + needle.len();
+                continue;
+            }
+            i -= 1;
+            while i > 0 && (bytes[i - 1] == b' ' || bytes[i - 1] == b'\t') {
+                i -= 1;
+            }
+            const TARGET: &[u8] = b"target";
+            if i >= TARGET.len() && &bytes[i - TARGET.len()..i] == TARGET {
+                let before = i - TARGET.len();
+                let prev_is_ident = before > 0
+                    && (bytes[before - 1].is_ascii_alphanumeric()
+                        || bytes[before - 1] == b'_');
+                if !prev_is_ident {
+                    return true;
+                }
+            }
+            search_from = quote_start + needle.len();
+        }
+    }
+    false
+}
 
 fn rust_root() -> PathBuf {
     // Cargo sets CARGO_MANIFEST_DIR to this crate's root during tests.
@@ -97,13 +147,44 @@ fn visit(dir: &Path, offenders: &mut Vec<(PathBuf, usize, String)>) {
                 }
                 continue;
             }
-            for needle in RESERVED {
-                if line.contains(needle) {
-                    offenders.push((path.clone(), lineno + 1, line.trim().to_owned()));
-                }
+            if line_uses_reserved_target(line, RESERVED) {
+                offenders.push((path.clone(), lineno + 1, line.trim().to_owned()));
             }
         }
     }
+}
+
+#[test]
+fn matcher_accepts_canonical_and_rejects_safe_variants() {
+    // Rustfmt canonical + common hand-edit variants all flag.
+    assert!(line_uses_reserved_target(
+        "tracing::info!(target: \"logging\", \"hi\");",
+        RESERVED
+    ));
+    assert!(line_uses_reserved_target(
+        "tracing::info!(target:\"logging\", \"hi\");",
+        RESERVED
+    ));
+    assert!(line_uses_reserved_target(
+        "tracing::info!(target : \"logging\", \"hi\");",
+        RESERVED
+    ));
+    assert!(line_uses_reserved_target(
+        "tracing::info!(target:\t\"msgwriter\", \"hi\");",
+        RESERVED
+    ));
+
+    // Identifier that merely ends in `target` must not trip the matcher.
+    assert!(!line_uses_reserved_target(
+        "let my_target: &str = \"logging\";",
+        RESERVED
+    ));
+
+    // Other reserved names are not flagged.
+    assert!(!line_uses_reserved_target(
+        "tracing::info!(target: \"net.p2p\", \"hi\");",
+        RESERVED
+    ));
 }
 
 #[test]
