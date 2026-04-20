@@ -69,12 +69,32 @@ fn visit(dir: &Path, offenders: &mut Vec<(PathBuf, usize, String)>) {
         let Ok(contents) = fs::read_to_string(&path) else {
             continue;
         };
+        // Track `/* ... */` block-comment state across lines so prose
+        // inside multi-line block comments doesn't produce false
+        // positives. `//` / `///` / `//!` are all caught by the
+        // `starts_with("//")` check since `//!` starts with `//`.
+        let mut in_block_comment = false;
         for (lineno, line) in contents.lines().enumerate() {
-            // Ignore comment-only lines — offenders are actual macro
-            // invocations, not prose that happens to mention the
-            // needle.
             let stripped = line.trim_start();
-            if stripped.starts_with("//") || stripped.starts_with("///") {
+            if in_block_comment {
+                // A `*/` on this line closes the block; anything
+                // before it is still prose, so skip the whole line
+                // either way.
+                if stripped.contains("*/") {
+                    in_block_comment = false;
+                }
+                continue;
+            }
+            if stripped.starts_with("//") {
+                continue;
+            }
+            if stripped.starts_with("/*") {
+                // Single-line block comment (`/* ... */`) stays in
+                // prose mode for this line; multi-line (`/* ...`)
+                // flips the state until we see the close token.
+                if !stripped.contains("*/") {
+                    in_block_comment = true;
+                }
                 continue;
             }
             for needle in RESERVED {
