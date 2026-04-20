@@ -20,13 +20,35 @@ use tracing::Level;
 /// itself is driven entirely by upstream; this crate does not claim to
 /// validate rotation triggering in its test suite (see the `tests/file_sink.rs`
 /// doc-comment).
+///
+/// # POSIX `0600` discipline and rotation
+///
+/// `shekyl-logging` enforces mode `0600` on sink files at [`crate::init`]
+/// time by sweeping the directory for anything matching the prefix. For
+/// [`Rotation::Never`] the sink file is also pre-created with mode
+/// `0600` before `tracing_appender` ever opens it, so the mode is
+/// guaranteed end-to-end.
+///
+/// For [`Rotation::Hourly`] and [`Rotation::Daily`], the active filename
+/// is chosen by `tracing_appender` at first write with a date/hour
+/// suffix we can't race. Files created by *rotation after* startup
+/// therefore inherit the process umask (typically `0644`) until another
+/// init, another sweep, or a rotation-aware wrapper runs. **Do not use
+/// these variants when the `0600` discipline must hold for the lifetime
+/// of the process.** A size-rolling variant that owns the rename path
+/// and re-enforces `0600` per new file lands with the daemon default
+/// sink work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rotation {
-    /// No automatic rotation. The file grows unboundedly.
+    /// No automatic rotation. The file grows unboundedly, and
+    /// `shekyl-logging` can guarantee mode `0600` on the active file
+    /// from first write onward.
     Never,
-    /// Rotate every hour.
+    /// Rotate every hour. See the variant-group doc comment for the
+    /// caveat about mode `0600` on rotation-created files.
     Hourly,
-    /// Rotate every day.
+    /// Rotate every day. See the variant-group doc comment for the
+    /// caveat about mode `0600` on rotation-created files.
     Daily,
 }
 
@@ -36,8 +58,11 @@ pub enum Rotation {
 /// `directory / filename_prefix[-YYYY-MM-DD[-HH]]` with a
 /// [`tracing_appender`] non-blocking writer.
 ///
-/// On POSIX, the sink file is chmod'd to `0600` on creation (see
-/// [`crate::filter`] and `appender.rs` for the exact call path).
+/// On POSIX, the sink file is chmod'd to `0600` at init and, for
+/// [`Rotation::Never`], pre-created with mode `0600` before first
+/// write. For [`Rotation::Hourly`]/[`Rotation::Daily`] the mode is
+/// re-enforced only on files that exist at init time — see the
+/// [`Rotation`] docs for the post-rotation gap.
 #[derive(Debug, Clone)]
 pub struct FileSink {
     /// Directory the log file lives in. Created with `0700` perms if
@@ -58,6 +83,11 @@ impl FileSink {
     /// want the active file to end in `.log` should pass
     /// `filename_prefix = "something.log"` and accept the resulting
     /// `something.log.YYYY-MM-DD` on-disk filename.
+    ///
+    /// **Mode `0600` caveat.** See [`Rotation::Daily`]: files created by
+    /// post-startup rotation inherit the process umask and are not
+    /// re-chmod'd by this crate yet. Use [`FileSink::unrotated`] if the
+    /// `0600` discipline must hold for the process lifetime.
     pub fn daily(directory: impl Into<PathBuf>, filename_prefix: impl Into<String>) -> Self {
         Self {
             directory: directory.into(),

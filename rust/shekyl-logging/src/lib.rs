@@ -13,8 +13,9 @@
 //!
 //! - One env var — `SHEKYL_LOG` — controls filter directives. `RUST_LOG` is
 //!   intentionally not honored in release builds (see [`filter`]).
-//! - File sinks are optional, per-binary, and POSIX-mode `0600` when enabled
-//!   (see [`config::FileSink`]).
+//! - File sinks are optional, per-binary, and POSIX-mode `0600` on the
+//!   active file at init time (see [`config::FileSink`] for the
+//!   rotation caveat).
 //! - A translator ([`filter::directives_from_legacy_categories`]) converts
 //!   the legacy C++ easylogging++ `log-levels=` grammar to EnvFilter
 //!   directives so the unified logger can absorb configuration shipped by

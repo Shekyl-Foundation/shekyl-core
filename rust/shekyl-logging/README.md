@@ -16,9 +16,10 @@ chores:
   bootstraps scattered across Shekyl's Rust binaries (`shekyl-cli`,
   `shekyl-wallet-rpc`, `shekyl-daemon-rpc`) behind a single
   `shekyl_logging::init` entry point. Define the canonical env var
-  (`SHEKYL_LOG`), the file-sink discipline (`0600` on POSIX,
-  opt-in), and ship a stateful translator for the legacy category
-  grammar so Chore #2 has a hinge.
+  (`SHEKYL_LOG`), the file-sink discipline (`0600` on POSIX for
+  non-rotating sinks — see the rotation caveat below), and ship a
+  stateful translator for the legacy category grammar so Chore #2
+  has a hinge.
 - **Chore #2 (V4).** Replace `MINFO` / `MDEBUG` / etc. macros in
   `src/` and `contrib/` with calls that route through a Rust FFI
   bridge into this crate. Drop `external/easylogging++/` from the
@@ -72,8 +73,22 @@ Describes a file sink. Two constructors:
 - `FileSink::unrotated(directory, filename_prefix)` — no rotation.
   Intended for operator-owned `--log-file <PATH>` opt-ins.
 
-On POSIX, the sink directory is created with `0700` perms if
-missing, and the sink file is chmod'd to `0600` on first write.
+On POSIX:
+
+- The sink *directory* is created with `0700` perms when
+  `shekyl-logging` creates it. Pre-existing operator-managed
+  directories (`--log-file /var/log/...`) are left alone.
+- The `FileSink::unrotated` sink *file* is pre-created with mode
+  `0600` before `tracing_appender` ever opens it, and the mode
+  is re-enforced by the init-time directory sweep.
+- The `FileSink::daily` / `FileSink::hourly` sinks have a gap:
+  `tracing_appender` picks the active filename at first write with
+  a date/hour suffix we can't predict, so files created by
+  *rotation after init* inherit the process umask (typically
+  `0644`) until a later init or sweep runs. The Chore #2
+  size-rolling wrapper closes this hole. Until then, prefer
+  `unrotated` when the `0600` discipline must hold for the process
+  lifetime.
 
 ### `LoggerGuard`
 
