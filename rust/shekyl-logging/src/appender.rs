@@ -71,9 +71,28 @@ pub(crate) fn open(sink: &FileSink) -> Result<(NonBlocking, WorkerGuard), InitEr
         Rotation::Daily => tracing_appender::rolling::daily(dir, &sink.filename_prefix),
     };
 
-    // Sweep any existing sink files to `0600` so a reopen against files
-    // left behind by a prior run normalizes their mode.
-    chmod_matching_files_0600(dir, &sink.filename_prefix).map_err(InitError::FileSinkCreate)?;
+    // Normalize permissions on any sink files left behind by a prior
+    // run. The sweep is gated on the rotation policy:
+    //
+    // - `Rotation::Never` uses a fixed, exact filename
+    //   (`dir/filename_prefix`) and was already pre-created at `0600`
+    //   above. A directory-wide prefix sweep would incorrectly chmod
+    //   unrelated files whose names merely start with
+    //   `filename_prefix` — e.g. `shekyld.log.old` from an external
+    //   rotator, a `shekyld.log.bak` the operator keeps next to the
+    //   live file, or a `shekyld.logrotate.conf`. So for `Never` we
+    //   skip the sweep entirely.
+    // - `Rotation::Hourly` / `Rotation::Daily` need the prefix sweep
+    //   because `tracing_appender` appends a runtime-generated
+    //   date/hour suffix to the active filename and may have written
+    //   previous rotations with the ambient umask.
+    match sink.rotation {
+        Rotation::Never => {}
+        Rotation::Hourly | Rotation::Daily => {
+            chmod_matching_files_0600(dir, &sink.filename_prefix)
+                .map_err(InitError::FileSinkCreate)?;
+        }
+    }
 
     let (non_blocking, guard) = tracing_appender::non_blocking(appender);
     Ok((non_blocking, guard))
