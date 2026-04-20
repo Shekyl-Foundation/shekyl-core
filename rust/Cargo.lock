@@ -2559,6 +2559,7 @@ dependencies = [
  "serde",
  "shekyl-crypto-hash",
  "shekyl-encoding",
+ "tempfile",
  "thiserror",
 ]
 
