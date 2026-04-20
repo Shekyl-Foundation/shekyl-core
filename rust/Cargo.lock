@@ -2601,10 +2601,10 @@ dependencies = [
  "rustyline",
  "serde",
  "serde_json",
+ "shekyl-logging",
  "shekyl-wallet-rpc",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "ureq",
  "zeroize",
 ]
