@@ -58,8 +58,12 @@ fn visit(dir: &Path, offenders: &mut Vec<(PathBuf, usize, String)>) {
         // tests: this crate owns the reservation and discusses the
         // reserved names in prose (doc-comments, fixture text, etc.).
         // The reservation binds callers; we're looking for them, not
-        // ourselves.
-        if path.to_string_lossy().contains("/shekyl-logging/") {
+        // ourselves. Match on `Path` components so the skip works on
+        // Windows (where separators are `\`) and on Unix alike.
+        if path
+            .components()
+            .any(|c| c.as_os_str() == "shekyl-logging")
+        {
             continue;
         }
         let Ok(contents) = fs::read_to_string(&path) else {
