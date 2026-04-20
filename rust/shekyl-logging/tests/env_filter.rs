@@ -186,21 +186,11 @@ fn shekyl_log_value_roundtrips_through_translator() {
     });
 }
 
-#[cfg(feature = "dev-env-fallback")]
-#[test]
-fn rust_log_fallback_is_honored_under_feature_flag() {
-    // Only meaningful when the feature is on; the gated cfg keeps the
-    // test compiled out in the default feature set.
-    with_env(
-        &[
-            (SHEKYL_LOG_ENV, None),
-            ("RUST_LOG", Some("wallet=info")),
-        ],
-        || {
-            // There's no public resolver fn; validate by spinning up a
-            // subscriber and asserting it picks up the directive.
-            // (Kept conservative: we re-use the translator rather than
-            // reaching into the private resolver.)
-        },
-    );
-}
+// NOTE: No test currently exercises `dev-env-fallback` end-to-end.
+// `filter::resolve_env_filter` is crate-internal and the only public
+// path through it (`init`) installs a process-global subscriber, which
+// makes a "does RUST_LOG still work under the feature?" test brittle
+// against integration-test file-sharing. Rather than carry an empty
+// placeholder that would lie about coverage, we intentionally leave
+// the feature to be covered by a dedicated harness once one of the
+// binaries actually ships the flag behind a conditional compile.
