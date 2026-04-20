@@ -31,13 +31,39 @@ pub(crate) fn open(sink: &FileSink) -> Result<(NonBlocking, WorkerGuard), InitEr
     if dir.exists() && !dir.is_dir() {
         return Err(InitError::InvalidDirectory(dir.to_path_buf()));
     }
-    if !dir.exists() {
+    // Only apply the `0700` directory discipline to directories this code
+    // path creates. Chmod'ing an operator-managed directory that happened
+    // to already exist is dangerous: `--log-file /tmp/wallet.log` would
+    // otherwise try to chmod `/tmp` to `0700`, which either fails with
+    // `EPERM` (breaking startup) or, if the binary happens to run
+    // privileged, restricts every other process using `/tmp`.
+    let created_dir = if dir.exists() {
+        false
+    } else {
         fs::create_dir_all(dir).map_err(InitError::FileSinkCreate)?;
+        true
+    };
+    if created_dir {
+        set_dir_mode_0700(dir).map_err(InitError::FileSinkCreate)?;
     }
 
-    // Apply the directory permission discipline on POSIX. The file's own
-    // mode is handled after the appender opens it below.
-    set_dir_mode_0700(dir).map_err(InitError::FileSinkCreate)?;
+    // For `Rotation::Never` we know the exact filename the appender will
+    // open (`dir/filename_prefix`), so pre-create it with `0600` before
+    // `tracing_appender` opens it in append mode. This closes the
+    // brand-new-sink race where the first emitted event would otherwise
+    // land in a file whose mode was set by the process umask.
+    //
+    // For rotating policies the filename carries a date/hour suffix
+    // chosen by `tracing_appender` at first write; we can't race it to
+    // the exact path. The `chmod_matching_files_0600` sweep below keeps
+    // us honest for files that already exist at init time and for
+    // subsequent test reapplications via `__test_only_reapply_file_modes`.
+    // A future size-rolling appender (Chore #2) will re-enforce `0600`
+    // as part of its rename/prune pass.
+    if matches!(sink.rotation, Rotation::Never) {
+        precreate_file_mode_0600(&dir.join(&sink.filename_prefix))
+            .map_err(InitError::FileSinkCreate)?;
+    }
 
     let appender: RollingFileAppender = match sink.rotation {
         Rotation::Never => tracing_appender::rolling::never(dir, &sink.filename_prefix),
@@ -45,25 +71,38 @@ pub(crate) fn open(sink: &FileSink) -> Result<(NonBlocking, WorkerGuard), InitEr
         Rotation::Daily => tracing_appender::rolling::daily(dir, &sink.filename_prefix),
     };
 
-    // After the appender has run once it will have created the active log
-    // file. Walk the directory and chmod any file beginning with the
-    // prefix to `0600`. We do this proactively (not just on first open)
-    // because rotation creates new files whose mode inherits from the
-    // process umask; the chmod loop is the enforcement.
-    //
-    // We apply the chmod BEFORE returning, using a single synthetic write
-    // to force `tracing_appender` to open the current file. That write is
-    // then consumed by the subscriber path; see also `tests/file_sink.rs`
-    // which observes the initial `0600` state.
-    //
-    // Implementation note: `tracing_appender` exposes no hook for "after
-    // open." The first log event will trigger the file open. Therefore
-    // the 0600 guarantee is best-effort on a brand-new sink; the test
-    // suite verifies it after one log event has been emitted.
+    // Sweep any existing sink files to `0600` so a reopen against files
+    // left behind by a prior run normalizes their mode.
     chmod_matching_files_0600(dir, &sink.filename_prefix).map_err(InitError::FileSinkCreate)?;
 
     let (non_blocking, guard) = tracing_appender::non_blocking(appender);
     Ok((non_blocking, guard))
+}
+
+#[cfg(unix)]
+fn precreate_file_mode_0600(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    // `create(true)` + `append(true)` is idempotent: existing files are
+    // opened without truncation. `.mode(0o600)` applies only on creation;
+    // for the existing-file path we `set_permissions` explicitly below.
+    let _file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(path)?;
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_mode(0o600);
+    fs::set_permissions(path, perms)
+}
+
+#[cfg(not(unix))]
+fn precreate_file_mode_0600(path: &Path) -> std::io::Result<()> {
+    let _file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    Ok(())
 }
 
 #[cfg(unix)]
