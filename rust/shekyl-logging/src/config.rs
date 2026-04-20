@@ -50,7 +50,14 @@ pub struct FileSink {
 }
 
 impl FileSink {
-    /// A file sink at `directory/filename_prefix.log` with no rotation.
+    /// A file sink rotated daily.
+    ///
+    /// `tracing_appender` opens files under `directory/` with names of the
+    /// form `filename_prefix.YYYY-MM-DD` (UTC). The `filename_prefix`
+    /// argument is therefore a stem, not a full filename — callers that
+    /// want the active file to end in `.log` should pass
+    /// `filename_prefix = "something.log"` and accept the resulting
+    /// `something.log.YYYY-MM-DD` on-disk filename.
     pub fn daily(directory: impl Into<PathBuf>, filename_prefix: impl Into<String>) -> Self {
         Self {
             directory: directory.into(),
