@@ -153,10 +153,31 @@ fn chmod_matching_files_0600(dir: &Path, prefix: &str) -> std::io::Result<()> {
         if !name_str.starts_with(prefix) {
             continue;
         }
-        let meta = entry.metadata()?;
-        if !meta.is_file() {
+        // Skip symlinks (and anything else that isn't a regular file).
+        //
+        // `DirEntry::file_type()` does *not* follow symlinks — it returns
+        // the type of the entry itself. That matters because
+        // `fs::set_permissions(path, …)` on a symlink on Linux follows
+        // the link and chmods the *target*. If the log directory is
+        // writable by more than one principal (e.g. an operator points
+        // `--log-file` at a shared `/tmp/shekyl.log` and runs elevated,
+        // or a daemon shares its log dir with a less-privileged user),
+        // an attacker who can create a prefix-matching symlink inside
+        // that directory — `shekyld.log.evil` → `/etc/ssh/sshd_config`,
+        // say — would trick us into clobbering the target's mode to
+        // `0600`. Skipping non-regular entries here closes the direct
+        // symlink vector. A fuller defense (`openat` + `O_NOFOLLOW` +
+        // `fchmod`) isn't available in stable `std::fs`; the
+        // `DirEntry::metadata()` call below is still scoped to entries
+        // we just verified are regular files, so the TOCTOU window
+        // between that check and `set_permissions` shrinks to a
+        // regular-file → regular-file swap, which isn't the planted-
+        // symlink attack we're closing here.
+        let file_type = entry.file_type()?;
+        if !file_type.is_file() {
             continue;
         }
+        let meta = entry.metadata()?;
         let mut perms = meta.permissions();
         perms.set_mode(0o600);
         fs::set_permissions(entry.path(), perms)?;
