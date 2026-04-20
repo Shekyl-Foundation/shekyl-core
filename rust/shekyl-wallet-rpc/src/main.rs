@@ -93,15 +93,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `~/.shekyl/logs/` file on the user's behalf; operators opt in
     // explicitly and own the path.
     let config = if let Some(ref path) = cli.log_file {
+        // Reject paths that clearly can't name a log file before we
+        // surface a deeper `Is a directory` / `No such file` error
+        // from `OpenOptions::open`. The operator-facing message here
+        // tells them exactly which invariant they broke.
+        if path.exists() && path.is_dir() {
+            return Err(format!(
+                "--log-file {} points at an existing directory; \
+                 pass a file path (e.g. {}/wallet-rpc.log)",
+                path.display(),
+                path.display(),
+            )
+            .into());
+        }
         let directory = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .map_or_else(|| PathBuf::from("."), PathBuf::from);
+        // Refuse non-UTF-8 filename components rather than silently
+        // lossy-converting them via `to_string_lossy()`: the replaced
+        // bytes would point `tracing_appender` at a *different* file
+        // than the one the operator named.
         let filename_prefix = path
             .file_name()
             .ok_or("--log-file must name a file, not a directory")?
-            .to_string_lossy()
-            .into_owned();
+            .to_str()
+            .ok_or("--log-file filename must be valid UTF-8")?
+            .to_owned();
         let sink = shekyl_logging::FileSink::unrotated(directory, filename_prefix);
         shekyl_logging::Config::with_file_sink(tracing::Level::INFO, sink)
     } else {
