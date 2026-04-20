@@ -266,12 +266,33 @@ fn translate_categories(spec: &str) -> Result<TranslationReport, FilterError> {
     for raw_entry in spec.split(',') {
         let entry = raw_entry.trim();
         if entry.is_empty() {
+            // Tolerate trailing / interstitial commas (`foo:INFO,` or
+            // `foo:INFO,,bar:WARN`) — legacy easylogging++ parses those
+            // the same way. The all-empty case is caught after the loop
+            // so we can't accidentally emit an empty directive.
             continue;
         }
         if let Some(glob_err) = detect_suffix_glob(entry) {
             return Err(glob_err);
         }
         translate_one_entry(entry, &mut directive_parts, &mut unknown, &mut warnings)?;
+    }
+
+    // Reject specs whose every comma-separated entry was empty after
+    // trimming (`","`, `",,,"`, `"   , \t , "`). Without this guard the
+    // function would happily return `directive == ""`, which
+    // `EnvFilter::try_new("")` accepts and silently treats as "nothing
+    // enabled" — the exact landmine the startup fallback and the
+    // runtime `"off"` branch in `translate()` were added to prevent.
+    // Surfacing it as `MalformedSpec` gives the operator a hard error
+    // at config-load time instead of a silent logging blackout.
+    if directive_parts.is_empty() {
+        return Err(FilterError::MalformedSpec {
+            reason: format!(
+                "spec {spec:?} contained no non-empty category entries after \
+                 trimming; check for stray commas or whitespace"
+            ),
+        });
     }
 
     Ok(TranslationReport {
@@ -521,6 +542,54 @@ mod tests {
     fn whitespace_only_treated_as_empty() {
         let report = translate(None, "   \t\n", Level::WARN).unwrap();
         assert_eq!(report.directive, "warn");
+    }
+
+    #[test]
+    fn trailing_comma_tolerated_like_legacy_parser() {
+        // A stray trailing comma is a common operator typo and legacy
+        // easylogging++ accepts it silently; match that so a working
+        // spec isn't rejected over a cosmetic issue.
+        let report = translate(None, "net.p2p:INFO,", Level::WARN).unwrap();
+        assert!(report.directive.contains("net::p2p=info"));
+    }
+
+    #[test]
+    fn interstitial_double_comma_tolerated() {
+        let report = translate(None, "net.p2p:INFO,,wallet:WARN", Level::WARN).unwrap();
+        assert!(report.directive.contains("net::p2p=info"));
+        assert!(report.directive.contains("wallet=warn"));
+    }
+
+    #[test]
+    fn all_empty_comma_spec_is_malformed() {
+        // `","`, `",,,"`, and whitespace-only variants must NOT silently
+        // produce an empty `EnvFilter` directive. That path was a
+        // landmine that turned a typoed `SHEKYL_LOG` into a silent
+        // logging blackout. Surface it as `MalformedSpec` so the
+        // operator sees an explicit parse error at init time.
+        for spec in [",", ",,,", "   ,   ,   "] {
+            match translate(None, spec, Level::WARN) {
+                Err(FilterError::MalformedSpec { reason }) => {
+                    assert!(
+                        reason.contains("no non-empty category entries"),
+                        "unexpected reason for {spec:?}: {reason}",
+                    );
+                }
+                other => panic!("spec {spec:?} should be MalformedSpec, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_preset_with_all_empty_tail_is_malformed() {
+        // `"2,,"` looks like "preset 2 plus … nothing valid". The
+        // preset branch forwards the tail into `translate_categories`,
+        // which must reject rather than silently revert to the bare
+        // preset and discard the operator's (malformed) intent.
+        match translate(None, "2,,", Level::WARN) {
+            Err(FilterError::MalformedSpec { .. }) => {}
+            other => panic!("expected MalformedSpec, got {other:?}"),
+        }
     }
 
     #[test]
