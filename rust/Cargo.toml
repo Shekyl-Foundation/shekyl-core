@@ -42,6 +42,9 @@ members = [
 
     # Interactive CLI wallet (replacement for simplewallet)
     "shekyl-cli",
+
+    # Unified tracing-based logger init for all Rust binaries
+    "shekyl-logging",
 ]
 resolver = "2"
 

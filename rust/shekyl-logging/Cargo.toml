@@ -1,0 +1,41 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-logging"
+description = "Unified tracing-based logger initialization for Shekyl Rust binaries"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "shekyl_logging"
+path = "src/lib.rs"
+
+[dependencies]
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
+tracing-appender = "0.2"
+thiserror = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+trybuild = "1"
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
+[features]
+# Off by default. Opting in re-enables RUST_LOG as a secondary env var
+# fallback for `SHEKYL_LOG` at init time. Intended strictly for developer
+# ergonomics in local non-release builds; release binaries never honor
+# RUST_LOG because it has no wallet-privacy-aware discipline around it.
+dev-env-fallback = []
+
+[lints]
+workspace = true
