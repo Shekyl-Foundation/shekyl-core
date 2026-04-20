@@ -19,7 +19,6 @@ pub mod validate;
 mod wallet;
 
 use clap::Parser;
-use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "shekyl-cli", about = "Shekyl interactive CLI wallet", version)]
@@ -65,9 +64,10 @@ pub struct Cli {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("warn".parse()?))
-        .init();
+    // stderr-only, WARN default. CLI never writes a file sink: this is an
+    // interactive TTY tool and surprise `~/.shekyl/logs/` writes would be
+    // a footgun. Users who want a file redirect `2>` themselves.
+    let _guard = shekyl_logging::init(shekyl_logging::Config::stderr_only(tracing::Level::WARN))?;
 
     let cli = Cli::parse();
 

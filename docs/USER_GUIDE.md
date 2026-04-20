@@ -1005,6 +1005,102 @@ Wallet logs are written to the same directory as the wallet file, with a
 
 ---
 
+## Logging and the V4 Migration Preview
+
+Shekyl is mid-migration from the unmaintained C++ `easylogging++`
+library to a unified Rust logger (`shekyl-logging`, built on
+`tracing`). The migration ships in two chores; V3.1 alpha.4 landed
+Chore #1 (Rust-side consolidation). Chore #2 (C++ shim) lands in V4.
+
+This section has two distinct audiences. If you just run Shekyl
+binaries and want to know which env var tunes log verbosity, read
+only "For operators." If you maintain downstream code or script
+`shekyld`-style deployments, read "For integrators" too.
+
+### For operators
+
+Today — during the transition window — Shekyl binaries read *two*
+sets of env vars depending on which language the binary is written
+in:
+
+| Binary | Implementation | Filter env var |
+|--------|----------------|----------------|
+| `shekyl-cli` | Rust | `SHEKYL_LOG` |
+| `shekyl-wallet-rpc` | Rust | `SHEKYL_LOG` |
+| `shekyld` | C++ | `MONERO_LOGS` (plus `--log-level=` / `--log-file=`) |
+
+Setting `SHEKYL_LOG` on the Rust binaries today gives you the same
+knob you'll use across the board in V4. The C++ env var
+`MONERO_LOGS` will be retired in Chore #2 and replaced by
+`SHEKYL_LOG`; for now operators running a mixed fleet need to set
+both if they want uniform output.
+
+`SHEKYL_LOG` accepts standard [`tracing-subscriber`
+`EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
+syntax:
+
+```
+SHEKYL_LOG=warn                                  # bare level: all targets at WARN
+SHEKYL_LOG=info,shekyl_wallet_rpc=debug          # level per target
+SHEKYL_LOG=shekyl_wallet_rpc::scanner=trace      # nested module target
+```
+
+Defaults (when `SHEKYL_LOG` is unset) are per-binary and match the
+pre-migration behavior: `shekyl-cli` defaults to `WARN`,
+`shekyl-wallet-rpc` to `INFO`. `RUST_LOG` is intentionally *not*
+honored in release builds — `SHEKYL_LOG` is the single supported
+knob.
+
+File sinks are opt-in, not default-on:
+
+- `shekyl-cli` writes stderr only. Redirect with `2> path` if you
+  want a file.
+- `shekyl-wallet-rpc` writes stderr only unless you pass
+  `--log-file <PATH>`. When `--log-file` is supplied, the parent
+  directory is created with `0700` perms and the file with `0600`
+  perms on POSIX. No rotation is performed on the opt-in path —
+  the operator owns file lifecycle.
+- `shekyld` today keeps its existing `--log-file=`/`--log-level=`
+  flags. In V4 those will resolve to a `FileSink::daily(...)` under
+  `~/.shekyl/logs/shekyld.log` with `0600` perms, driven by the
+  same `shekyl-logging` crate.
+
+### For integrators
+
+The Rust `shekyl-logging` crate is the hinge. Read
+[`rust/shekyl-logging/README.md`](../rust/shekyl-logging/README.md)
+before writing new Rust binaries; in particular, note the
+`LoggerGuard` footgun (dropping the guard silently loses buffered
+events; the crate uses `#[must_use]` + a workspace-wide
+`clippy::let_underscore_must_use = "deny"` lint to catch the common
+shape).
+
+Chore #2 will introduce a Rust → C++ FFI bridge that lets
+C++ `MINFO` / `MDEBUG` / `MWARNING` / etc. call sites route through
+the same `tracing` subscriber. The legacy easylogging++ category
+grammar (`net.p2p:DEBUG,wallet.wallet2:INFO`, numeric `0..=4`
+presets, `+`/`-` modifiers) is translated by
+[`shekyl_logging::directives_from_legacy_categories`] — already
+shipped in Chore #1 — so configuration flowing through the C++
+shim can continue using its historical syntax during the transition
+window. Suffix globs (e.g. `*y.z:TRACE`) are rejected by the
+translator with a structured error that includes a rewrite
+suggestion where possible; no silent acceptance.
+
+Two caveats for integrators shipping during the transition window:
+
+1. **Output format will change in V4.** `easylogging++` uses a
+   custom format string; `tracing`'s default `fmt::layer` does not
+   match it byte-for-byte. If you have log-scraping tooling that
+   depends on the current format, plan to update it when Chore #2
+   lands.
+2. **`MONERO_*` env var names are retired in V4.** Any scripts or
+   systemd units that set `MONERO_LOGS` / `MONERO_LOG_FORMAT` need
+   to gain a `SHEKYL_LOG` alternative now so a V4 upgrade is a
+   no-op for them.
+
+---
+
 ## Glossary
 
 | Term | Meaning |

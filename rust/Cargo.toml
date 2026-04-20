@@ -42,6 +42,9 @@ members = [
 
     # Interactive CLI wallet (replacement for simplewallet)
     "shekyl-cli",
+
+    # Unified tracing-based logger init for all Rust binaries
+    "shekyl-logging",
 ]
 resolver = "2"
 
@@ -92,6 +95,12 @@ overflow-checks = true
 incompatible_msrv = "allow"
 unwrap_or_default = "allow"
 map_unwrap_or = "allow"
+# Belt-and-braces for the `shekyl-logging::init(...)` footgun. The primary
+# defense is `#[must_use]` on `LoggerGuard`, which fires on the common
+# unbound shape `init(cfg)?;`. This lint catches only the narrower
+# `let _ = init(cfg)?;` shape, which `#[must_use]` does not. See
+# `rust/shekyl-logging/README.md` for the full defense hierarchy.
+let_underscore_must_use = "deny"
 borrow_as_ptr = "deny"
 cast_lossless = "deny"
 cast_possible_truncation = "deny"

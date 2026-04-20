@@ -22,7 +22,7 @@ rpassword = "7"
 dirs = "6"
 ureq = { version = "3", default-features = false, features = ["rustls", "socks-proxy"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+shekyl-logging = { path = "../shekyl-logging" }
 
 [dev-dependencies]
 proptest = "1"

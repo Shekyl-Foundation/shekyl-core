@@ -36,7 +36,7 @@ fn generators(prefix: &'static str, path: &str) {
     serialize(&mut H_str, &generators.H);
 
     let path = Path::new(&env::var("OUT_DIR").expect("cargo didn't set $OUT_DIR")).join(path);
-    let _ = remove_file(&path);
+    drop(remove_file(&path));
     File::create(&path)
         .expect("failed to create file in $OUT_DIR")
         .write_all(
@@ -61,7 +61,7 @@ fn generators(prefix: &'static str, path: &str) {
 #[cfg(not(feature = "compile-time-generators"))]
 fn generators(prefix: &'static str, path: &str) {
     let path = Path::new(&env::var("OUT_DIR").expect("cargo didn't set $OUT_DIR")).join(path);
-    let _ = remove_file(&path);
+    drop(remove_file(&path));
     File::create(&path)
         .expect("failed to create file in $OUT_DIR")
         .write_all(

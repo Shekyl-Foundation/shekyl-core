@@ -81,7 +81,7 @@ where
 
         {
             let path = dir.join(&path);
-            let _ = remove_file(&path);
+            drop(remove_file(&path));
             File::create(&path)
                 .expect("failed to create file in $OUT_DIR")
                 .write_all(&bytes)
@@ -112,7 +112,7 @@ where
     };
 
     let path = dir.join(&path);
-    let _ = remove_file(&path);
+    drop(remove_file(&path));
     // TODO(shekyl): Consider restricting visibility once downstream consumers are audited.
     // Currently `pub` is required because shekyl-fcmp and shekyl-ffi import these generators.
     File::create(&path)
@@ -150,7 +150,7 @@ fn generators() {
     generator_set::<helioselene::Selene>();
     let path =
         Path::new(&env::var("OUT_DIR").expect("cargo didn't set $OUT_DIR")).join("generators.rs");
-    let _ = remove_file(&path);
+    drop(remove_file(&path));
     File::create(&path)
         .expect("failed to create file in $OUT_DIR")
         .write_all(
@@ -166,7 +166,7 @@ fn generators() {
 fn generators() {
     let path =
         Path::new(&env::var("OUT_DIR").expect("cargo didn't set $OUT_DIR")).join("generators.rs");
-    let _ = remove_file(&path);
+    drop(remove_file(&path));
     File::create(&path)
         .expect("failed to create file in $OUT_DIR")
         .write_all(

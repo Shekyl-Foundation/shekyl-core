@@ -64,17 +64,40 @@ explicitly rather than silently returning empty strings.
 
 ### Replace easylogging++ with a maintained logger
 **Priority**: Low — easylogging++ works, but is unmaintained upstream.
-**Target**: V4 (or earlier if a concrete maintenance cost emerges).
+**Target**: V4. **Chore #1 of 2 landed in V3.1 alpha.4** (Rust-side
+`shekyl-logging` crate + `SHEKYL_LOG`); Chore #2 (C++ shim) is the
+remaining V4 work.
 
 All known MSVC issues in the vendored `external/easylogging++/` are
 fixed (see `docs/audit_trail/RESOLVED_260419.md` §"easylogging++
 vendored with no MSVC support"), but the library is unmaintained
 upstream and any future portability issues will require local patches.
-A migration to `spdlog` or another actively maintained logger is a
-V4-scale project: every log call site in `src/` is touched, output
-format compatibility needs to be preserved or explicitly changed, and
-CI log-scraping tests (if any) need review. Track here so the cost of
-not migrating stays visible.
+
+The two-chore split:
+
+- **Chore #1 — Rust-side consolidation (DONE).** Introduced the
+  `rust/shekyl-logging` crate, adopted `tracing` + `tracing-subscriber`
+  + `tracing-appender` under the `SHEKYL_LOG` env var, and migrated
+  every existing Rust binary (`shekyl-cli`, `shekyl-wallet-rpc`,
+  `shekyl-daemon-rpc`) to the shared init path. The crate also ships
+  a translator for the legacy easylogging++ category grammar
+  (`net.p2p:DEBUG,wallet.wallet2:INFO`, numeric `0..=4` presets,
+  `+`/`-` modifiers) so that Chore #2 can route C++-originated
+  config through the same filter engine without a second grammar.
+- **Chore #2 — C++ shim (V4).** Replace the `MINFO`/`MDEBUG`/etc.
+  macros in `src/` and `contrib/` with calls that route through a
+  Rust FFI bridge into `shekyl-logging`, drop
+  `external/easylogging++/` from the build, and retire the
+  `MONERO_LOGS` / `MONERO_LOG_FORMAT` env vars in favor of
+  `SHEKYL_LOG`. The translator landed in Chore #1 is the hinge: C++
+  ships a category string, Rust translates once, the unified logger
+  handles filtering and output.
+
+Output format compatibility is intentionally *not* preserved across
+Chore #2 — `tracing`'s default `fmt::layer` formatter replaces
+easylogging++'s custom format string. CI log-scraping tests (if any
+are introduced between now and Chore #2) need to be reviewed against
+the new format.
 
 ### MSVC warnings in vendored dependencies
 **Priority**: Low — external code, but worth tracking.
@@ -265,4 +288,8 @@ stubbing → V3.2; MSVC vendored-code warnings → V3.2; easylogging++
 replacement → V4; vcpkg manifest-mode → V3.3). Kept the framing note
 at the top; the "cousin, not downstream" posture underpins the V3.2
 revisit of `/FIiso646.h` and the `rct::` rename tracked in
-`docs/FOLLOWUPS.md`.*
+`docs/FOLLOWUPS.md`. Noted that Chore #1 of the easylogging++
+replacement (Rust-side `shekyl-logging` crate under `SHEKYL_LOG`)
+landed in V3.1 alpha.4; Chore #2 (C++ shim, retiring
+`external/easylogging++/` and `MONERO_LOGS` / `MONERO_LOG_FORMAT`)
+is the remaining V4 work.*
