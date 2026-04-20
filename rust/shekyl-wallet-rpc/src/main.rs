@@ -32,9 +32,10 @@
 //! flags used by the GUI wallet: --wallet-dir, --rpc-bind-port, --daemon-address,
 //! --disable-rpc-login, --non-interactive.
 
+use std::path::PathBuf;
+
 use clap::Parser;
 use shekyl_wallet_rpc::ServerConfig;
-use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "shekyl-wallet-rpc", about = "Shekyl wallet RPC server (Rust)")]
@@ -74,15 +75,39 @@ struct Cli {
     /// Network type: mainnet, testnet, stagenet
     #[arg(long = "network", default_value = "mainnet")]
     network: String,
+
+    /// Optional file sink for `tracing` events. When omitted, logs go to
+    /// stderr only. When supplied, events are *also* written (never
+    /// rotated) to this path; the parent directory is created with
+    /// `0700` perms and the file with `0600` perms on POSIX.
+    #[arg(long = "log-file")]
+    log_file: Option<PathBuf>,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?))
-        .init();
-
     let cli = Cli::parse();
+
+    // INFO default, stderr always, file sink only when --log-file is
+    // supplied. Matches the plan: wallet-rpc never creates a default
+    // `~/.shekyl/logs/` file on the user's behalf; operators opt in
+    // explicitly and own the path.
+    let config = if let Some(ref path) = cli.log_file {
+        let directory = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map_or_else(|| PathBuf::from("."), PathBuf::from);
+        let filename_prefix = path
+            .file_name()
+            .ok_or("--log-file must name a file, not a directory")?
+            .to_string_lossy()
+            .into_owned();
+        let sink = shekyl_logging::FileSink::unrotated(directory, filename_prefix);
+        shekyl_logging::Config::with_file_sink(tracing::Level::INFO, sink)
+    } else {
+        shekyl_logging::Config::stderr_only(tracing::Level::INFO)
+    };
+    let _guard = shekyl_logging::init(config)?;
 
     let nettype = match cli.network.as_str() {
         "testnet" => 1u8,

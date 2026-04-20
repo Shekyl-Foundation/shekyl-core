@@ -2982,13 +2982,13 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-fcmp",
+ "shekyl-logging",
  "shekyl-scanner",
  "shekyl-tx-builder",
  "shekyl-wallet-core",
  "tokio",
  "tower-http",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
