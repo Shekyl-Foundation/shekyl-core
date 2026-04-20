@@ -16,18 +16,26 @@ use tracing::Level;
 
 /// Rotation policy for the file sink.
 ///
-/// Mirrors the rotation policies exposed by `tracing_appender`. Rotation
-/// itself is driven entirely by upstream; this crate does not claim to
-/// validate rotation triggering in its test suite (see the `tests/file_sink.rs`
-/// doc-comment).
+/// Four shapes:
+///
+/// - [`Rotation::Never`] — no rotation, `0600` held end-to-end. Intended
+///   for `--log-file` opt-ins where the operator owns file management.
+/// - [`Rotation::Hourly`] / [`Rotation::Daily`] — time-based rotation
+///   driven by `tracing_appender` upstream. See the "`0600` caveat"
+///   section below.
+/// - [`Rotation::Size`] — size-based rotation driven by `shekyl-logging`
+///   itself. Preserves the legacy C++ behavior installed by the
+///   easylogging++ `MaxLogFileSize` + `installPreRollOutCallback` pair
+///   (see `contrib/epee/src/mlog.cpp`). `0600` is re-enforced across
+///   every rename and every newly opened live file.
 ///
 /// # POSIX `0600` discipline and rotation
 ///
 /// `shekyl-logging` enforces mode `0600` on sink files at [`crate::init`]
 /// time by sweeping the directory for anything matching the prefix. For
-/// [`Rotation::Never`] the sink file is also pre-created with mode
-/// `0600` before `tracing_appender` ever opens it, so the mode is
-/// guaranteed end-to-end.
+/// [`Rotation::Never`] and [`Rotation::Size`] the active file is also
+/// pre-created with mode `0600` before any event is written, so the
+/// mode is guaranteed end-to-end.
 ///
 /// For [`Rotation::Hourly`] and [`Rotation::Daily`], the active filename
 /// is chosen by `tracing_appender` at first write with a date/hour
@@ -35,9 +43,8 @@ use tracing::Level;
 /// therefore inherit the process umask (typically `0644`) until another
 /// init, another sweep, or a rotation-aware wrapper runs. **Do not use
 /// these variants when the `0600` discipline must hold for the lifetime
-/// of the process.** A size-rolling variant that owns the rename path
-/// and re-enforces `0600` per new file lands with the daemon default
-/// sink work.
+/// of the process;** prefer [`Rotation::Size`] (which is the variant
+/// the C++ daemon default sink uses) or [`Rotation::Never`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rotation {
     /// No automatic rotation. The file grows unboundedly, and
@@ -50,19 +57,44 @@ pub enum Rotation {
     /// Rotate every day. See the variant-group doc comment for the
     /// caveat about mode `0600` on rotation-created files.
     Daily,
+    /// Size-based rotation. When the active file reaches `max_bytes`
+    /// the writer closes it, renames it to `{filename_prefix}-{UTC}`
+    /// using the `%Y-%m-%d-%H-%M-%S` format (matching the legacy C++
+    /// `generate_log_filename`), re-enforces `0600` on the rotated
+    /// file, and opens a fresh active file (also `0600`).
+    ///
+    /// When `max_files > 0`, the rename step is followed by a prune
+    /// pass that sorts every prefix-matching file (excluding the live
+    /// file itself) by mtime and removes the oldest so that the total
+    /// on-disk count — live file plus rotated siblings — does not
+    /// exceed `max_files`. Steady state: `max_files` total files
+    /// resident in the directory.
+    ///
+    /// `max_bytes == 0` disables the size check entirely and is
+    /// accepted for symmetry with the legacy C++ API; callers that
+    /// want "no cap" should prefer [`Rotation::Never`] which is a
+    /// cheaper code path.
+    Size {
+        /// Byte count at which the writer rolls. `0` disables.
+        max_bytes: u64,
+        /// Maximum total file count (live + rotated). `0` disables
+        /// pruning.
+        max_files: u32,
+    },
 }
 
 /// File-sink configuration.
 ///
 /// When present in a [`Config`], events are written to
-/// `directory / filename_prefix[-YYYY-MM-DD[-HH]]` with a
+/// `directory / filename_prefix[-<rotation-suffix>]` with a
 /// [`tracing_appender`] non-blocking writer.
 ///
 /// On POSIX, the sink file is chmod'd to `0600` at init and, for
-/// [`Rotation::Never`], pre-created with mode `0600` before first
-/// write. For [`Rotation::Hourly`]/[`Rotation::Daily`] the mode is
-/// re-enforced only on files that exist at init time — see the
-/// [`Rotation`] docs for the post-rotation gap.
+/// [`Rotation::Never`] and [`Rotation::Size`], pre-created with mode
+/// `0600` before first write *and* re-enforced on every rotation. For
+/// [`Rotation::Hourly`]/[`Rotation::Daily`] the mode is re-enforced
+/// only on files that exist at init time — see the [`Rotation`] docs
+/// for the post-rotation gap.
 #[derive(Debug, Clone)]
 pub struct FileSink {
     /// Directory the log file lives in. Created with `0700` perms if
@@ -103,6 +135,33 @@ impl FileSink {
             directory: directory.into(),
             filename_prefix: filename_prefix.into(),
             rotation: Rotation::Never,
+        }
+    }
+
+    /// A file sink with size-based rotation. Intended for the C++
+    /// daemon default (100 MB per file, 50 files total) and other
+    /// long-running binaries where the operator wants bounded
+    /// on-disk footprint.
+    ///
+    /// Rotation semantics mirror the legacy easylogging++ behavior:
+    /// when the active file reaches `max_bytes`, it is renamed to
+    /// `{filename_prefix}-{UTC %Y-%m-%d-%H-%M-%S}`, the sibling-count
+    /// is capped at `max_files - 1`, and a fresh active file is
+    /// opened at `{filename_prefix}`. See [`Rotation::Size`] for the
+    /// full contract.
+    pub fn size_rolling(
+        directory: impl Into<PathBuf>,
+        filename_prefix: impl Into<String>,
+        max_bytes: u64,
+        max_files: u32,
+    ) -> Self {
+        Self {
+            directory: directory.into(),
+            filename_prefix: filename_prefix.into(),
+            rotation: Rotation::Size {
+                max_bytes,
+                max_files,
+            },
         }
     }
 }

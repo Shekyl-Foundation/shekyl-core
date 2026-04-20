@@ -19,6 +19,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
 tracing-appender = "0.2"
 thiserror = { workspace = true }
+# `time` is already transitively pulled in by `tracing-appender`; promote it
+# to a direct dep so the size-rolling writer can format UTC rotation suffixes
+# matching the legacy C++ `generate_log_filename` "%Y-%m-%d-%H-%M-%S" format
+# without hand-rolling a civil-from-epoch conversion.
+time = { version = "0.3", default-features = false, features = ["std", "formatting", "macros"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
