@@ -15,7 +15,11 @@
 //!
 //! A doc-comment in `src/filter.rs` reserves these names at the module
 //! level. This test is the enforcement mechanism: CI fails if either
-//! literal shows up in any `rust/**` source file outside this file.
+//! literal shows up in any `rust/**` source file outside this crate.
+//! (The `shekyl-logging` crate itself is exempt because it owns the
+//! reservation, discusses the reserved names in prose, and carries
+//! fixture text that contains them verbatim. The exemption is a whole-
+//! crate path-component check, not a per-file filter.)
 
 use std::fs;
 use std::path::{Path, PathBuf};
