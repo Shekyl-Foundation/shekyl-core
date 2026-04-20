@@ -29,20 +29,43 @@ use shekyl_logging::{init, Config, FileSink};
 use tracing::Level;
 
 #[cfg(unix)]
+struct UmaskGuard(libc::mode_t);
+
+#[cfg(unix)]
+impl UmaskGuard {
+    fn new(mask: libc::mode_t) -> Self {
+        // SAFETY: single integration-test process; no sibling threads
+        // mutate the process umask. The guard's Drop impl restores the
+        // previous value on every exit path (including panics),
+        // avoiding a stray umask leak that could bleed into any future
+        // test added to this integration-test binary.
+        let saved = unsafe { libc::umask(mask) };
+        Self(saved)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for UmaskGuard {
+    fn drop(&mut self) {
+        // SAFETY: see `UmaskGuard::new`.
+        unsafe { libc::umask(self.0) };
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn emit_flush_and_mode_0600_roundtrip() {
     use std::os::unix::fs::PermissionsExt;
 
     // Normalize umask so the mode we observe is the one we set.
-    // SAFETY: single integration-test process; no sibling threads care.
-    let saved_umask = unsafe { libc::umask(0) };
+    let _umask_guard = UmaskGuard::new(0);
 
-    let dir = {
-        let d = tempfile::tempdir().expect("tmpdir");
-        let path = d.path().to_path_buf();
-        std::mem::forget(d);
-        path
-    };
+    // `tempfile::TempDir::keep` turns off the Drop-based cleanup and
+    // returns the concrete path. We want the files to persist past the
+    // guard's own drop so the subscriber's background writer can flush
+    // into them, but the intent is explicit rather than an implicit
+    // `std::mem::forget` leak.
+    let dir = tempfile::tempdir().expect("tmpdir").keep();
     let prefix = "rust-shekyl-logging-filesink.log";
 
     // Make sure no ambient SHEKYL_LOG escalates the level past our
@@ -85,9 +108,9 @@ fn emit_flush_and_mode_0600_roundtrip() {
     let mode = meta.permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "expected 0600, got {mode:o}");
 
-    unsafe { libc::umask(saved_umask) };
     // Best-effort cleanup; a stray tmpfs on test failure is not worth
-    // masking real test failure with a panic here.
+    // masking real test failure with a panic here. The `UmaskGuard`
+    // drops after this statement and restores the saved umask.
     drop(fs::remove_dir_all(&dir));
 }
 
@@ -96,12 +119,11 @@ fn emit_flush_and_mode_0600_roundtrip() {
 fn emit_flush_roundtrip_writes_event_to_disk_nonunix() {
     // On non-Unix we still want to verify that the guard-drop flushes
     // events to disk. We just don't assert on file mode.
-    let dir = {
-        let d = tempfile::tempdir().expect("tmpdir");
-        let path = d.path().to_path_buf();
-        std::mem::forget(d);
-        path
-    };
+    //
+    // `TempDir::keep` replaces `std::mem::forget(tempdir)`: it keeps
+    // the files in place past the binding's scope, explicitly, so the
+    // subscriber's background writer can still flush into them.
+    let dir = tempfile::tempdir().expect("tmpdir").keep();
     let prefix = "rust-shekyl-logging-filesink-nonunix.log";
 
     let cfg = Config::with_file_sink(Level::TRACE, FileSink::unrotated(&dir, prefix));
