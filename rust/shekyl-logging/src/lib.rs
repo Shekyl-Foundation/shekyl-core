@@ -137,6 +137,17 @@ pub enum InitError {
     #[error("failed to parse resolved filter directive: {0}")]
     FilterParse(String),
 
+    /// Installing the global [`tracing`] subscriber failed.
+    ///
+    /// The most common cause is another subscriber already being
+    /// installed in this process (for example, by a test harness or by
+    /// an embedding binary that also calls `try_init` directly).
+    /// Distinguishes "cannot install" from `FilterParse` so operators
+    /// aren't misled by errors that have nothing to do with filter
+    /// directive parsing.
+    #[error("failed to install global tracing subscriber: {0}")]
+    SubscriberInstall(String),
+
     /// The configured file-sink directory path is invalid (empty, not a
     /// directory, etc.).
     #[error("invalid file-sink directory: {0}")]
@@ -183,7 +194,7 @@ fn install_subscriber(config: Config) -> Result<LoggerGuard, InitError> {
             .with(stderr_layer)
             .with(file_layer)
             .try_init()
-            .map_err(|e| InitError::FilterParse(e.to_string()))?;
+            .map_err(|e| InitError::SubscriberInstall(e.to_string()))?;
 
         Ok(LoggerGuard {
             _worker_guard: Some(worker_guard),
@@ -193,7 +204,7 @@ fn install_subscriber(config: Config) -> Result<LoggerGuard, InitError> {
             .with(filter)
             .with(stderr_layer)
             .try_init()
-            .map_err(|e| InitError::FilterParse(e.to_string()))?;
+            .map_err(|e| InitError::SubscriberInstall(e.to_string()))?;
 
         Ok(LoggerGuard {
             _worker_guard: None,
