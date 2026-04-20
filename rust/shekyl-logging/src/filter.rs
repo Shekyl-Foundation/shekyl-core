@@ -146,12 +146,20 @@ fn env_var_non_empty(name: &str) -> Option<String> {
 /// grammar-level textual merge before translation. Process startup
 /// passes `current_spec = None`.
 ///
-/// `fallback_default` is consulted only when both `current_spec` is
-/// `None` and the translation would otherwise produce an empty directive
-/// (empty env var, whitespace-only `new_spec`). This prevents the
-/// "empty directive, everything logs at subscriber baseline" landmine at
-/// startup while preserving the C++ "empty input == no change" semantics
-/// on the RPC-runtime path.
+/// `fallback_default` is consulted only when `current_spec` is `None`
+/// and the translation would otherwise produce an empty directive (for
+/// example, an empty env var or whitespace-only `new_spec`). This
+/// prevents the "empty directive, everything logs at subscriber
+/// baseline" landmine at startup.
+///
+/// When `current_spec` is `Some(..)` and `new_spec` is empty, the
+/// translator emits an `"off"` directive. That matches the legacy C++
+/// contract: `mlog_set_categories("")` at runtime *disables* all logging
+/// (see `TEST(logging, no_logs)` in `tests/unit_tests/logging.cpp`). An
+/// earlier iteration of this function returned an empty directive in
+/// that branch — effectively "no change" — which silently inverted the
+/// legacy behavior and would have planted a landmine for Chore #2's
+/// RPC-driven `set_log_categories` path.
 ///
 /// # Reserved target names
 ///

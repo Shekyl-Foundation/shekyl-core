@@ -93,17 +93,31 @@ pub(crate) fn translate(
     let trimmed = new_spec.trim();
 
     // Empty-spec handling — the whole landmine discussion lives here.
+    //
+    // The startup and runtime paths diverge on purpose, matching the
+    // legacy C++ contract:
+    //
+    // - Startup (`current_spec == None`, empty input): `SHEKYL_LOG` is
+    //   unset or blank, so there is no user intent. Fall back to the
+    //   caller-provided binary default rather than let
+    //   `EnvFilter::try_new("")` silently succeed and leave the
+    //   subscriber effectively disabled.
+    // - Runtime (`current_spec == Some(..)`, empty input): the caller is
+    //   passing through the legacy `mlog_set_categories("")` call, which
+    //   in easylogging++ *disables* all logging (see the C++ unit test
+    //   `TEST(logging, no_logs)` in `tests/unit_tests/logging.cpp`).
+    //   Returning an "off" directive preserves that semantics for the
+    //   RPC/debug-toggle path that Chore #2 will wire in. An empty
+    //   directive here would have been a silent "no change" — the exact
+    //   opposite of what operators and legacy integration tests expect.
     if trimmed.is_empty() {
         return Ok(if current_spec.is_some() {
-            // RPC-runtime path: empty input means "don't change the
-            // current filter." Return an empty directive; caller knows
-            // this is a no-op.
-            TranslationReport::default()
+            TranslationReport {
+                directive: "off".to_owned(),
+                unknown: Vec::new(),
+                warnings: Vec::new(),
+            }
         } else {
-            // Startup path: no prior filter, no input. Fall back to the
-            // caller-provided binary default rather than letting the
-            // subscriber run with an empty directive (which
-            // `EnvFilter::try_new` accepts and silently means "disabled").
             TranslationReport {
                 directive: level_directive(fallback_default),
                 unknown: Vec::new(),
@@ -480,9 +494,27 @@ mod tests {
     }
 
     #[test]
-    fn empty_spec_with_current_is_noop() {
+    fn empty_spec_with_current_disables_all_logs() {
+        // Legacy parity: `mlog_set_categories("")` at runtime means
+        // "disable all logs", not "leave the previous spec alone". The
+        // translator must emit an "off" directive so the eventual
+        // `EnvFilter` reload silences everything, matching the C++
+        // `TEST(logging, no_logs)` contract.
         let report = translate(Some("warn,net=error"), "", Level::INFO).unwrap();
-        assert_eq!(report.directive, "");
+        assert_eq!(report.directive, "off");
+        assert!(report.warnings.is_empty());
+        assert!(report.unknown.is_empty());
+    }
+
+    #[test]
+    fn empty_spec_with_current_off_directive_parses_as_envfilter() {
+        // Guard against future typos in the "off" literal by round-
+        // tripping it through `EnvFilter::try_new`, so a drift in the
+        // directive grammar fails at unit-test time rather than only
+        // at the runtime reload site.
+        let report = translate(Some("warn"), "   ", Level::INFO).unwrap();
+        tracing_subscriber::EnvFilter::try_new(&report.directive)
+            .expect("'off' must be a valid EnvFilter directive");
     }
 
     #[test]

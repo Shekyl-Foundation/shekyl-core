@@ -109,6 +109,16 @@ globs (`*y.z:LEVEL`) are rejected with
 `FilterError::UnsupportedGlob` and, where possible, a suggested
 rewrite.
 
+**Empty-input semantics.** The two call sites diverge on purpose:
+
+- `current == None` + empty `new`: startup fallback. Uses
+  `fallback_default` (e.g. `WARN` for CLI, `INFO` for wallet-rpc).
+- `current == Some(..)` + empty `new`: RPC/runtime toggle. Returns
+  an `"off"` directive so the subsequent `EnvFilter` reload
+  *silences* all logging, matching the legacy C++
+  `mlog_set_categories("")` contract used by
+  `TEST(logging, no_logs)`. This is not "no change".
+
 ### Env vars
 
 | Name | Role | When honored |
