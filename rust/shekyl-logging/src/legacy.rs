@@ -351,13 +351,20 @@ fn translate_one_entry(
         // the `::` boundary. Cleanup is on the user.
         name if name.ends_with('*') => {
             let prefix = name.trim_end_matches('*');
+            let target = prefix.replace('.', "::");
+            // Report the fully-translated target (with `.` rewritten to
+            // `::`) rather than the pre-translation `prefix`, so the
+            // warning text matches the directive we actually emit. If
+            // we printed `{prefix}`, a legacy spec like `wallet.xyz*`
+            // would warn as `wallet.xyz=...` while the emitted directive
+            // was `wallet::xyz=...`, which misleads operators grepping
+            // logs for the string we told them we installed.
             warnings.push(format!(
                 "prefix glob without `.` anchor: {entry:?} translated as \
-                 `{prefix}={level_lower}`; the legacy behavior that matched \
+                 `{target}={level_lower}`; the legacy behavior that matched \
                  any target starting with {prefix:?} is not expressible in \
                  EnvFilter"
             ));
-            let target = prefix.replace('.', "::");
             format!("{target}={level_lower}")
         }
         name => {
