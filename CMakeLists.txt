@@ -836,9 +836,18 @@ else()
     # mingw doesn't support LTO (multiple definition errors at link time)
     set(USE_LTO_DEFAULT false)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,10485760")
-    if(NOT BUILD_64)
-      add_definitions(-DWINVER=0x0600 -D_WIN32_WINNT=0x0600)
-    endif()
+    # Pin the Windows API tier to Vista (0x0600) on both 32- and 64-bit
+    # MinGW. The 32-bit leg has always needed this; the 64-bit leg now
+    # needs it too because `FSCTL_SET_COMPRESSION` (used by
+    # `disable_ntfs_compression` in `src/blockchain_db/lmdb/db_lmdb.cpp`)
+    # is gated on `_WIN32_WINNT` in current MinGW-w64 `<winioctl.h>`
+    # and the MinGW default tier is otherwise too low. This replaces
+    # commit 070447f5b ("cmake: set _WIN32_WINNT=0x0600 for MinGW
+    # x86_64 too") which a subsequent revert removed in error while
+    # chasing an unrelated include-order theory. Dropping the 32-bit
+    # leg in Chore #3 will let this collapse back to the unconditional
+    # single definition, but the tier gate itself stays.
+    add_definitions(-DWINVER=0x0600 -D_WIN32_WINNT=0x0600)
   endif()
   set(C_WARNINGS "-Waggregate-return -Wnested-externs -Wold-style-definition -Wstrict-prototypes")
   set(CXX_WARNINGS "-Wno-reorder -Wno-missing-field-initializers -Woverloaded-virtual -Wsuggest-override")

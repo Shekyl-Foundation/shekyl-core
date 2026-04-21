@@ -37,6 +37,18 @@
 #ifdef __OpenBSD__
 #include <stdio.h>
 #endif
+// Explicit `<windows.h>` pickup on Windows targets. The Win32 input
+// handle path below (`GetStdHandle`, `WaitForSingleObject`,
+// `STD_INPUT_HANDLE`, `DWORD`, `WAIT_FAILED`, `WAIT_OBJECT_0`, ...)
+// used to come in transitively through the retired easylogging++
+// header tree. With `easylogging++.h` gone this translation unit has
+// no other route to `<windows.h>`, so MSVC fails with "GetStdHandle
+// is not a member of ::" and MinGW would regress the moment any
+// upstream header trimmed its own transitive Windows pickup. Keep
+// the include gated on `_WIN32` so it doesn't leak onto POSIX builds.
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <boost/thread.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>

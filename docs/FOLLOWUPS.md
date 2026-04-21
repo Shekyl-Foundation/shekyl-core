@@ -136,6 +136,34 @@ require archaeology to recover.
   §"32-bit targets..." for the governing rubric. Target:
   V4 pre-audit.
 
+- **Stack-trace hook: re-route `ST_LOG` back through the logging subsystem once the FFI boundary is safe mid-throw (V3.2).**
+  `src/common/stack_trace.cpp` emits its `[stacktrace]` lines with
+  a direct `std::fwrite(..., stderr)` rather than through
+  `shekyl_log_emit`. The reason is documented inline: calling
+  into Rust's `tracing` subscriber from inside the `__cxa_throw`
+  hook — per throw, once up-front plus once per unwound frame —
+  exercises subscriber-install ordering, `NonBlocking`
+  worker-thread state, and `OnceLock` callsite interning during
+  the window when a C++ exception is already half-constructed
+  and about to start unwinding. The Ubuntu `unit_tests` subprocess
+  abort at CI run `24723150982` (root-caused while fixing the
+  `FSCTL_SET_COMPRESSION` regression) was one symptom of that
+  hazard class.
+  The stderr-direct path is safe, low-noise, and locked in by
+  `tests/unit_tests/stack_trace.cpp` (see
+  `stack_trace.emits_to_stderr_not_rust_log` for the negative
+  assertions against the Rust tracing formatter's markers). The
+  tradeoff is that stack traces no longer land in the rolling
+  log file, only on stderr — fine for operator-visible crashes,
+  less useful for post-mortem analysis of long-running daemons
+  that only write stderr to a log managed by the init system.
+  The follow-up is to add a dedicated "crash sink" to
+  `shekyl-logging` that the hook can write to without going
+  through the full `tracing::Dispatcher::event` path (a direct
+  append-only writer with no subscribers, no filters, no
+  callsite interning), and re-route `ST_LOG` to that sink so
+  the file log captures crashes too. Target: V3.2.
+
 - **`dalek-ff-group` version isolation enforced via CI gate.**
   The Rust workspace carries two versions: 0.5.x (used directly by Shekyl
   crates) and 0.4.x (pulled transitively by vendored serai/`ciphersuite`

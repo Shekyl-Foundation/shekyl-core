@@ -28,28 +28,6 @@
 #include "db_lmdb.h"
 #include "shekyl/shekyl_ffi.h"
 
-// NOTE: The `#ifdef WIN32` block below MUST precede every other include
-// that could transitively pull `<windows.h>` — most notably
-// `<boost/filesystem.hpp>`, which on MinGW does exactly that. The MinGW
-// build sets `-DWIN32_LEAN_AND_MEAN` project-wide (see root
-// `CMakeLists.txt` `MINGW_FLAG`), which causes `<windows.h>` to *skip*
-// `<winioctl.h>`. Once any translation unit has entered the `_WINDOWS_`
-// include guard without pulling `<winioctl.h>`, a later explicit
-// `#include <winioctl.h>` ends up processed in a context where the
-// expected type/macro forward declarations (DWORD, HANDLE,
-// CTL_CODE, FILE_DEVICE_FILE_SYSTEM, etc.) are only partially visible,
-// and `FSCTL_SET_COMPRESSION` silently fails to define. Including
-// `<windows.h>` + `<winioctl.h>` *first* establishes the full
-// winioctl vocabulary before boost has a chance to pre-open the
-// `<windows.h>` guard with the lean-and-mean subset. The
-// easylogging++ header tree used to hit this same ordering by
-// accident; with it retired, the explicit order here is what keeps
-// `disable_ntfs_compression` compiling on MSYS2.
-#ifdef WIN32
-#include <windows.h>
-#include <winioctl.h>
-#endif
-
 #include <algorithm>
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -59,6 +37,18 @@
 #include <cstring>  // memcpy
 #include <map>
 #include <array>
+
+// `disable_ntfs_compression` below calls `DeviceIoControl` with
+// `FSCTL_SET_COMPRESSION`. On MinGW-w64 that macro lives in
+// `<winioctl.h>`, which `<windows.h>` skips under `WIN32_LEAN_AND_MEAN`
+// (the project-wide flag set for MinGW in the root `CMakeLists.txt`),
+// so we include it explicitly. The accompanying `-D_WIN32_WINNT=0x0600`
+// for 64-bit MinGW is what keeps the FSCTL_* family ungated on the
+// newer MinGW-w64 header tier; see the `if(MINGW)` block in the root
+// `CMakeLists.txt`.
+#ifdef WIN32
+#include <winioctl.h>
+#endif
 
 #include "string_tools.h"
 #include "common/util.h"
