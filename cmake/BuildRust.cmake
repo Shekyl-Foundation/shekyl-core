@@ -213,6 +213,59 @@ else()
     set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;ws2_32;userenv;bcrypt;ntdll" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
 endif()
 
+# ── shekyl-logging (tracing subscriber + C ABI for misc_log_ex.h) ───────────
+#
+# Built from the same workspace as shekyl-ffi, just via `-p shekyl-logging`,
+# so this reuses the same target-triple / cross-env setup resolved above.
+# Every C++ target that includes `src/shekyl/shekyl_log.h` (i.e. every TU
+# that transitively pulls in `contrib/epee/include/misc_log_ex.h`) links
+# against `libshekyl_log.a` — which is effectively the whole project once
+# the easylogging++ shim is retired. We append `shekyl_log` to
+# `SHEKYL_FFI_LINK_LIBS` so existing consumers pick it up transparently;
+# duplicate Rust-runtime symbols across the two archives are resolved by
+# rustc's weak-symbol emission (same pattern that already lets
+# `shekyl_daemon_rpc` coexist with `shekyl_ffi` in the daemon binary).
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT MSVC)
+    set(SHEKYL_LOG_LIBRARY "${RUST_BUILD_DIR}/libshekyl_logging.a")
+elseif(MSVC)
+    set(SHEKYL_LOG_LIBRARY "${RUST_BUILD_DIR}/shekyl_logging.lib")
+else()
+    set(SHEKYL_LOG_LIBRARY "${RUST_BUILD_DIR}/libshekyl_logging.a")
+endif()
+
+add_custom_command(
+    OUTPUT ${SHEKYL_LOG_LIBRARY}
+    COMMAND ${CMAKE_COMMAND} -E env ${_rust_env_clear}
+        ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
+        -p shekyl-logging
+    WORKING_DIRECTORY ${RUST_SOURCE_DIR}
+    COMMENT "${_rust_comment} (shekyl-logging)"
+    VERBATIM
+)
+
+add_custom_target(shekyl_log_rust ALL DEPENDS ${SHEKYL_LOG_LIBRARY})
+
+add_library(shekyl_log STATIC IMPORTED GLOBAL)
+set_target_properties(shekyl_log PROPERTIES
+    IMPORTED_LOCATION ${SHEKYL_LOG_LIBRARY}
+)
+add_dependencies(shekyl_log shekyl_log_rust)
+
+# Fold shekyl_log into the shared FFI link set so every C++ target that
+# pulls in SHEKYL_FFI_LINK_LIBS automatically resolves the new log FFI
+# symbols. Keeping the platform-specific system-library tail (pthread/dl,
+# Security/CoreFoundation, ws2_32/userenv/bcrypt/ntdll) at the end of the
+# list preserves the left-to-right link-order semantics that GNU ld cares
+# about for static archives.
+if(UNIX AND NOT APPLE)
+    set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;shekyl_log;pthread;dl" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
+elseif(APPLE)
+    set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;shekyl_log;-framework Security;-framework CoreFoundation" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
+else()
+    set(SHEKYL_FFI_LINK_LIBS "shekyl_ffi;shekyl_log;ws2_32;userenv;bcrypt;ntdll" CACHE INTERNAL "Rust FFI linker flags for C++ targets" FORCE)
+endif()
+
 # ── shekyl-daemon-rpc (Axum server — linked only by the daemon target) ──────
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT MSVC)
