@@ -62,43 +62,6 @@ ratified. Defer to V3.2 for a design pass; whichever option wins, the
 `#else` stubs should gain a comment that declares the contract
 explicitly rather than silently returning empty strings.
 
-### Replace easylogging++ with a maintained logger
-**Priority**: Low — easylogging++ works, but is unmaintained upstream.
-**Target**: V4. **Chore #1 of 2 landed in V3.1 alpha.4** (Rust-side
-`shekyl-logging` crate + `SHEKYL_LOG`); Chore #2 (C++ shim) is the
-remaining V4 work.
-
-All known MSVC issues in the vendored `external/easylogging++/` are
-fixed (see `docs/audit_trail/RESOLVED_260419.md` §"easylogging++
-vendored with no MSVC support"), but the library is unmaintained
-upstream and any future portability issues will require local patches.
-
-The two-chore split:
-
-- **Chore #1 — Rust-side consolidation (DONE).** Introduced the
-  `rust/shekyl-logging` crate, adopted `tracing` + `tracing-subscriber`
-  + `tracing-appender` under the `SHEKYL_LOG` env var, and migrated
-  every existing Rust binary (`shekyl-cli`, `shekyl-wallet-rpc`,
-  `shekyl-daemon-rpc`) to the shared init path. The crate also ships
-  a translator for the legacy easylogging++ category grammar
-  (`net.p2p:DEBUG,wallet.wallet2:INFO`, numeric `0..=4` presets,
-  `+`/`-` modifiers) so that Chore #2 can route C++-originated
-  config through the same filter engine without a second grammar.
-- **Chore #2 — C++ shim (V4).** Replace the `MINFO`/`MDEBUG`/etc.
-  macros in `src/` and `contrib/` with calls that route through a
-  Rust FFI bridge into `shekyl-logging`, drop
-  `external/easylogging++/` from the build, and retire the
-  `MONERO_LOGS` / `MONERO_LOG_FORMAT` env vars in favor of
-  `SHEKYL_LOG`. The translator landed in Chore #1 is the hinge: C++
-  ships a category string, Rust translates once, the unified logger
-  handles filtering and output.
-
-Output format compatibility is intentionally *not* preserved across
-Chore #2 — `tracing`'s default `fmt::layer` formatter replaces
-easylogging++'s custom format string. CI log-scraping tests (if any
-are introduced between now and Chore #2) need to be reviewed against
-the new format.
-
 ### MSVC warnings in vendored dependencies
 **Priority**: Low — external code, but worth tracking.
 **Target**: V3.2 (address the dangling-pointer case; others are
@@ -112,7 +75,6 @@ MSVC CI reveals several warnings in vendored/external code:
   upstream is unresponsive.
 - **`liblmdb/mdb.c:8417`** — C4333: right shift too large (data loss).
 - **`liblmdb/mdb.c:939,7840`** — C4146: unsigned negation.
-- **`easylogging++.cc:2576`** — C4333: right shift too large.
 - **`randomx/blake2.h:82,84`** — C4804: bool used in division.
 
 None are in hot paths for wallet-core. The `liblmdb` dangling pointer
@@ -571,12 +533,17 @@ section) for full status. See `FCMP_BUILD_PLAN.md` (formerly
 `docs/audit_trail/RESOLVED_260419.md`. Closed the POSIX-header
 consolidation item (migrated to `common/compat.h` + CI lint guard).
 Versioned the remaining undecided structural items (libunbound
-stubbing → V3.2; MSVC vendored-code warnings → V3.2; easylogging++
-replacement → V4; vcpkg manifest-mode → V3.3). Kept the framing note
-at the top; the "cousin, not downstream" posture underpins the V3.2
-revisit of `/FIiso646.h` and the `rct::` rename tracked in
-`docs/FOLLOWUPS.md`. Noted that Chore #1 of the easylogging++
-replacement (Rust-side `shekyl-logging` crate under `SHEKYL_LOG`)
-landed in V3.1 alpha.4; Chore #2 (C++ shim, retiring
-`external/easylogging++/` and `MONERO_LOGS` / `MONERO_LOG_FORMAT`)
-is the remaining V4 work.*
+stubbing → V3.2; MSVC vendored-code warnings → V3.2; vcpkg
+manifest-mode → V3.3). Kept the framing note at the top; the
+"cousin, not downstream" posture underpins the V3.2 revisit of
+`/FIiso646.h` and the `rct::` rename tracked in
+`docs/FOLLOWUPS.md`.*
+
+*Last updated: 2026-04-21 — Closed the easylogging++ replacement
+item. Chore #2 (C++ shim + vendor retirement + `MONERO_LOGS` /
+`MONERO_LOG_FORMAT` retirement) landed on
+`chore/cxx-logging-consolidation`; full closure narrative
+(including the known V3.x alpha.0 format-break and
+`MLOG_SET_THREAD_NAME` no-op regressions) is in
+`docs/audit_trail/RESOLVED_260419.md` under "Replace easylogging++
+with a maintained logger (Chore #1 + Chore #2)".*

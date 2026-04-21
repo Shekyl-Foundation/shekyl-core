@@ -295,13 +295,41 @@ int main(int argc, char const * argv[])
     po::notify(vm);
 
     // log_file_path
-    //   default: <data_dir>/<CRYPTONOTE_NAME>.log
-    //   if log-file argument given:
-    //     absolute path
-    //     relative path: relative to data_dir
-    bf::path log_file_path {data_dir / std::string(CRYPTONOTE_NAME ".log")};
+    //   default: ~/.shekyl/logs/<binary>.log, resolved via
+    //     `mlog_get_default_log_path` so the file lives on the
+    //     Rust-owned logs tree (`<home>/.shekyl/logs/`) rather than
+    //     next to the blockchain data. On testnet / stagenet the
+    //     base name is suffixed so the three networks can run
+    //     side-by-side without clobbering each other's log file.
+    //     This matches the V4 contract promised in
+    //     `docs/USER_GUIDE.md` §"Logging" and is what the Rust FFI
+    //     already returns from `shekyl_log_default_path` when
+    //     shekyl-cli / shekyl-wallet-rpc default their paths.
+    //   if `--log-file` argument given: use it as-is
+    //     (absolute, or relative to data_dir).
+    //
+    // File rotation is driven by `--max-log-file-size` (default 100
+    // MB minus 7.6 KB headroom, see `MAX_LOG_FILE_SIZE` in
+    // `misc_log_ex.h`) and `--max-log-files` (default 50). POSIX
+    // mode `0600` on the live file and every rotated archive is
+    // enforced unconditionally by the Rust side; see the `init_file`
+    // contract in `src/shekyl/shekyl_log.h`.
+    bf::path log_file_path;
     if (!command_line::is_arg_defaulted(vm, daemon_args::arg_log_file))
+    {
       log_file_path = command_line::get_arg(vm, daemon_args::arg_log_file);
+    }
+    else
+    {
+      std::string default_name = CRYPTONOTE_NAME;
+      if (testnet)
+        default_name += "-testnet";
+      else if (stagenet)
+        default_name += "-stagenet";
+      else if (regtest)
+        default_name += "-regtest";
+      log_file_path = mlog_get_default_log_path(default_name.c_str());
+    }
     if (!log_file_path.has_parent_path())
       log_file_path = bf::absolute(log_file_path, relative_path_base);
     mlog_configure(log_file_path.string(), true, command_line::get_arg(vm, daemon_args::arg_max_log_file_size), command_line::get_arg(vm, daemon_args::arg_max_log_files));

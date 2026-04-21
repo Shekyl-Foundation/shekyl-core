@@ -2,7 +2,121 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Logging output format (breaking change, all binaries).**
+  Chore #2 of the `easylogging++` retirement completes the
+  migration started in V3.1 alpha.4: `shekyld`, `shekyl-wallet-rpc`,
+  `shekyl-cli`, and every other in-tree binary now emit through the
+  same Rust `tracing-subscriber` stack. The default formatter is
+  `tracing_subscriber::fmt::layer`, and its line shape is *not*
+  byte-compatible with the vendored `easylogging++` layout it
+  replaces:
+
+  ```
+  # Before (easylogging++ default format string):
+  2026-04-19 14:23:11.042    INFO    global   src/daemon/main.cpp:322    Shekyl 'Codename' (v3.1.0-alpha.3-release)
+
+  # After (tracing-subscriber fmt::layer default):
+  2026-04-19T14:23:11.042123Z  INFO global: Shekyl 'Codename' (v3.1.0-alpha.3-release)
+  ```
+
+  Timestamps are RFC 3339 UTC (not local time with microseconds),
+  level tokens are full words (`ERROR` / `WARN` / `INFO` /
+  `DEBUG` / `TRACE`, not the `E` / `W` / `I` / `D` / `V` single
+  letters), the target appears as a structured `target:` field, and
+  source location (`file:line`) is elided by default.
+  Log-scraping tooling that parsed the prior format byte-for-byte
+  must be updated; `docs/USER_GUIDE.md` §"Logging" documents the
+  new shape for operators.
+
+- **`MONERO_LOGS` → `SHEKYL_LOG` (env-var rename).** Every in-tree
+  consumer of `MONERO_LOGS` now reads `SHEKYL_LOG` instead. This
+  closes the C++-side half of the per-`.cursor/rules/93-legacy-
+  symbol-migration.mdc` rename — Chore #1 (V3.1 alpha.4) already
+  migrated the Rust binaries. `SHEKYL_LOG` accepts the same
+  `tracing-subscriber`-compatible directive grammar as Chore #1
+  (bare levels, per-target overrides, module-qualified targets)
+  *plus* the legacy easylogging++ category grammar
+  (`net.p2p:DEBUG,wallet.wallet2:INFO`, numeric `0..=4` presets,
+  `+`/`-` modifiers) routed through the Rust-side translator. The
+  legacy grammar is preserved on purpose: the ~1,345 `MINFO` /
+  `MDEBUG` / etc. call sites in `src/` and `contrib/` ship
+  category strings in that grammar, and operator runbooks doing
+  `SHEKYL_LOG='*:DEBUG,net.p2p:TRACE'` must keep working with no
+  downstream edits.
+
+  **Operator action required before upgrading past V3.x alpha.0:**
+  scripts, systemd units, Docker/Podman compose files, or launch
+  plists that set `MONERO_LOGS=...` will silently become no-ops.
+  Add a `SHEKYL_LOG=...` line alongside each `MONERO_LOGS=...`
+  line before cutting over (both can coexist on pre-Chore-#2
+  builds so the rollover is safe).
+
+- **Log target separator normalized to `::`.** Targets that used to
+  render in the easylogging++ output as `net.p2p` / `daemon.rpc`
+  now appear as `net::p2p` / `daemon::rpc` in every
+  `tracing-subscriber`-rendered line. The FFI boundary
+  (`shekyl_log_emit` / `shekyl_log_level_enabled` in
+  `rust/shekyl-logging/src/ffi.rs`) rewrites dot-separated category
+  names into Rust-idiomatic module-path form before handing the
+  event to the dispatcher, matching the form the legacy-grammar
+  translator emits into EnvFilter directives
+  (`net::p2p=trace`). Without this, every category-scoped emit
+  from the C++ shim (`MCINFO("net.p2p", …)`,
+  `MCLOG(level, "daemon.rpc", …)`, …) would silently fall through
+  to the bare default clause because EnvFilter compares target
+  strings byte-for-byte. Operator-supplied `SHEKYL_LOG` directives
+  continue to accept both spellings — the legacy-grammar translator
+  rewrites `.` to `::` on the way in, so
+  `SHEKYL_LOG='*:WARNING,net.p2p:TRACE'` and
+  `SHEKYL_LOG='warn,net::p2p=trace'` behave identically. Only the
+  rendered output changes. Log-scraping pipelines that grep for
+  `target=net\.p2p` need to grep for `target=net::p2p` (or, per
+  the format-break entry above, `net::p2p:` at the front of the
+  fields block) instead.
+
+- **`shekyld` default log sink moved to `~/.shekyl/logs/`.**
+  Under `chore/cxx-logging-consolidation`, the daemon's default
+  `--log-file` path changed from `<data_dir>/shekyld.log` (next to
+  the blockchain database) to `~/.shekyl/logs/shekyld.log`,
+  resolved through the Rust FFI's `shekyl_log_default_path`.
+  Testnet/stagenet/regtest runs use the suffixed base names
+  `shekyld-testnet.log` / `shekyld-stagenet.log` /
+  `shekyld-regtest.log` so the three networks can run
+  side-by-side without clobbering each other's log. Rotation
+  defaults to ~100 MB × 50 archives, and the live file plus
+  every rotated archive are forced to POSIX mode `0600` on Unix
+  — operator-tunable permissions are not a supported knob.
+  Operators who want to keep the legacy next-to-data-dir layout
+  can pass `--log-file` explicitly; the override path is
+  unchanged.
+
 ### Removed
+
+- **`MONERO_LOG_FORMAT` env var (no replacement).** The custom
+  format string that `MONERO_LOG_FORMAT` used to seed on the
+  easylogging++ tree is no longer a tunable. Formatting is owned
+  by the Rust subscriber's layer stack (`fmt::layer`,
+  optionally stacked with `tracing-subscriber` feature flags at
+  build time), not by an operator env var. There is no V3.x
+  alpha.0 replacement and no intent to re-add one — if you have
+  a log-format requirement that RFC 3339 UTC does not satisfy,
+  file an issue rather than patching the format string.
+
+- **Vendored `external/easylogging++/` tree.** Deleted in
+  `ded9875b6`. All call sites that reached `el::Logger` /
+  `el::Configurations` / `el::base::Writer` etc. directly have
+  been rewritten to route through the `shekyl_log_emit` /
+  `shekyl_log_level_enabled` FFI in `src/shekyl/shekyl_log.h`.
+  The `el::` namespace survives only as a thin typedef-only
+  compatibility shim in `contrib/epee/include/misc_log_ex.h`
+  (`el::Level`, `el::Color`, `el::base::DispatchAction`) so the
+  existing `MINFO` / `MDEBUG` / `MWARNING` / `MCINFO` macros
+  expand without touching the ~1,345 call sites. Closes the
+  `STRUCTURAL_TODO.md` §"Replace easylogging++ with a maintained
+  logger" item (both chores); swept narrative in
+  `docs/audit_trail/RESOLVED_260419.md`.
 
 - **`src/rpc/rpc_version_str.{h,cpp}` and its unit test
   (`tests/unit_tests/rpc_version_str.cpp`), inherited from Monero.** The
@@ -40,6 +154,26 @@
   shipped with the daemon, wallet, and source archive built cleanly,
   but its tag-push CI ran red on this single unit test; `v3.1.0-alpha.4`
   will be the first alpha whose tag-push CI is green end-to-end.
+
+### Known regressions
+
+- **`MLOG_SET_THREAD_NAME(label)` no longer reaches the log stream.**
+  The macro still compiles and still evaluates its argument (so
+  `-Wunused-value` stays quiet at the call sites), but the label
+  (`[SRV_MAIN]` from `abstract_tcp_server2.inl`, `[miner N]` from
+  `miner.cpp`, `DLN` from `download.cpp`) does not appear in emitted
+  events. easylogging++ used this hook to stamp a semantic label
+  into every subsequent log line; the Rust `tracing-subscriber`
+  formatter reads the OS-level thread name instead (via the
+  platform `pthread_getname_np` / `GetThreadDescription` path), and
+  those names are not being populated in Chore #2. Restoring
+  semantic thread labels — either by teaching the C++ shim to call
+  `pthread_setname_np` + Windows equivalents, or by routing the
+  label through the Rust subscriber as a `span` field — is tracked
+  as a V3.2 follow-up in `docs/FOLLOWUPS.md`. The impact is
+  diagnostic only: thread-scoped log lines now show a generic
+  thread ID instead of the human-readable label the prior format
+  carried.
 
 ## [3.1.0-alpha.3] - 2026-04-19
 

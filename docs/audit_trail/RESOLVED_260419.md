@@ -111,6 +111,72 @@ is unmaintained upstream; any future MSVC issues will require local
 patches. The open question of whether to replace the library wholesale
 with `spdlog` or similar is tracked separately in `docs/FOLLOWUPS.md`.
 
+**Superseded by the full easylogging++ retirement below
+(V3.x alpha.0 / Chore #2).** The local-patches tradeoff never had
+to be exercised: the vendored tree was removed wholesale in
+commit `ded9875b6` and the cross-platform burden now lives on the
+Rust subscriber instead of on a dead upstream.
+
+### Replace easylogging++ with a maintained logger (Chore #1 + Chore #2)
+Two-chore retirement of the unmaintained vendored `easylogging++`
+tree in favor of the Rust `shekyl-logging` crate (`tracing` +
+`tracing-subscriber` + `tracing-appender`). Both chores have
+landed:
+
+- **Chore #1 (V3.1 alpha.4)** — Rust-side consolidation. The
+  `rust/shekyl-logging` crate was introduced, every Rust binary
+  (`shekyl-cli`, `shekyl-wallet-rpc`, `shekyl-daemon-rpc`) was
+  migrated to a shared init path under the `SHEKYL_LOG` env var,
+  and a translator for the legacy easylogging++ category grammar
+  (`net.p2p:DEBUG,wallet.wallet2:INFO`, numeric `0..=4` presets,
+  `+`/`-` modifiers) was shipped so Chore #2 could reuse a single
+  filter engine. Landed on `chore/rust-logging-consolidation`,
+  merged to `dev` in `aefcfb365`.
+
+- **Chore #2 (V3.x alpha.0)** — C++ shim + vendor retirement.
+  `contrib/epee/include/misc_log_ex.h` now routes every `MINFO` /
+  `MDEBUG` / `MWARNING` / `MCINFO` / etc. call through the
+  `shekyl_log_emit` / `shekyl_log_level_enabled` FFI declared in
+  `src/shekyl/shekyl_log.h` (landed on
+  `chore/cxx-logging-consolidation` in `a617ec676`;
+  `contrib/epee/src/mlog.cpp` was rewritten over the same FFI in
+  `0aa8e3919`). The vendored `external/easylogging++/` tree was
+  deleted in `ded9875b6`. `MONERO_LOGS` and `MONERO_LOG_FORMAT`
+  were retired from every in-tree consumer in `4ff1acc5b` + the
+  V3.x alpha.0 CHANGELOG entry; `SHEKYL_LOG` is now the single
+  operator-facing knob. The C++ `el::` namespace survives as a
+  thin typedef-only shim in `misc_log_ex.h` so the ~1,345
+  existing call sites keep compiling without churn; no production
+  code touches `el::Logger` / `el::Configurations` any more. The
+  `shekyld` default file sink resolves to `~/.shekyl/logs/shekyld.log`
+  (suffixed `-testnet` / `-stagenet` / `-regtest` for alternate
+  networks) with POSIX `0600` perms and 100 MB × 50-file rotation,
+  enforced unconditionally by the Rust side.
+
+**Known V3.x alpha.0 regressions (intentional, scope-contained).**
+
+- Output format is not byte-compatible with the prior
+  easylogging++ layout. RFC 3339 UTC timestamps, full-word level
+  tokens, structured target strings. Documented in the V3.x
+  alpha.0 `docs/CHANGELOG.md` entry and in
+  `docs/USER_GUIDE.md` §"Logging".
+- `MLOG_SET_THREAD_NAME(...)` is a no-op. Call sites in
+  `abstract_tcp_server2.inl`, `miner.cpp`, `download.cpp` still
+  compile and pass their argument, but the `[SRV_MAIN]` /
+  `[miner 3]` / `DL12` labels no longer reach the log stream.
+  Restoring semantic labels via `pthread_setname_np` or
+  equivalent is a V3.2 follow-up tracked in
+  `docs/FOLLOWUPS.md`.
+
+**Unit-test coverage.** `tests/unit_tests/logging.cpp` was
+rewritten from driving `el::Logger` / `el::Configurations`
+internals to driving the production macros (`MERROR`, `MWARNING`,
+`MINFO`, `MCINFO`) and asserting observable output via a
+`dup2`-based stderr-capture fixture. Preserves the legacy
+`TEST(logging, no_logs)` parity invariant and adds positive
+controls for level thresholds, category routing, and concurrent
+emission.
+
 ### `boost::iterator_range` constructor regression with Boost 1.90
 `http_auth.cpp` used `boost::iterator_range<const char*>` with
 `boost::as_literal()`, which returns a different iterator type in Boost

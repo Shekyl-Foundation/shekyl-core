@@ -148,6 +148,39 @@ require archaeology to recover.
   §"32-bit targets..." for the governing rubric. Target:
   V4 pre-audit.
 
+- **Restore semantic thread labels in the Rust subscriber (V3.2).**
+  `MLOG_SET_THREAD_NAME(label)` in
+  `contrib/epee/include/misc_log_ex.h` is a `((void)(x))` no-op
+  after Chore #2. Call sites (`abstract_tcp_server2.inl` ~L1399 /
+  L1459, `miner.cpp` ~L529, `download.cpp` ~L62) still compile and
+  still evaluate their argument, but the human-readable label
+  (`[SRV_MAIN]` / `[miner 3]` / `DL12`) no longer reaches the log
+  stream. easylogging++ used this hook to stamp the label into
+  every subsequent emit; `tracing-subscriber`'s `fmt::layer` reads
+  the OS-level thread name instead, and the Chore #2 shim is not
+  populating those names. Impact is diagnostic (thread-scoped log
+  lines show a generic thread ID rather than the semantic role),
+  never correctness.
+
+  Two reasonable implementations, to be picked up together:
+  - Teach `MLOG_SET_THREAD_NAME(x)` to call the platform thread-
+    name API (`pthread_setname_np` on Linux/glibc and musl,
+    `pthread_set_name_np` on *BSD, `pthread_setname_np(self, name)`
+    on Darwin, `SetThreadDescription` on Windows 10+). The label
+    becomes part of the OS process view too, which is the right
+    answer for `perf` / `htop` / `Process Explorer` inspection.
+  - Route the label through the Rust subscriber as a `tracing`
+    `span` field (`tracing::info_span!("worker", name = label)`
+    or equivalent), so the subscriber emits it whether or not the
+    OS-level thread name made it through. Chore #2 already
+    interns per-`(target, level)` callsites in
+    `rust/shekyl-logging/src/ffi.rs::shekyl_log_emit`; a
+    `shekyl_log_set_thread_name` counterpart would slot in next to
+    it.
+
+  Target: V3.2. Cross-linked from the V3.x alpha.0 CHANGELOG
+  entry "Known regressions".
+
 - **Stack-trace hook: re-route `ST_LOG` back through the logging subsystem once the FFI boundary is safe mid-throw (V3.2).**
   `src/common/stack_trace.cpp` emits its `[stacktrace]` lines with
   a direct `std::fwrite(..., stderr)` rather than through

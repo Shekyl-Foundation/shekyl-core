@@ -834,6 +834,33 @@ impl DynCallsite {
 
 type CallsiteKey = (String, Level);
 
+/// Normalize a caller-supplied target string into the
+/// `tracing`-idiomatic `::` module-path form.
+///
+/// The legacy easylogging++ grammar addresses categories with `.`
+/// separators (`net.p2p`, `daemon.rpc.payment`). The translator in
+/// [`crate::legacy`] rewrites those to `::` when producing EnvFilter
+/// directives (`net::p2p=trace`, `daemon::rpc::payment=error`), so
+/// the emit-time target string must use the same convention or
+/// EnvFilter's string-equality comparison silently fails and every
+/// category-scoped emit falls through to the default clause — the
+/// exact regression `TEST(logging, category_filter_routes_emits)`
+/// surfaces when the FFI passes dotted names through untouched.
+///
+/// Normalization is a plain `.` → `::` rewrite; it is idempotent
+/// (already-colon-separated targets round-trip unchanged) and
+/// cheap (allocation-free when the target contains no dots). The
+/// interned callsite pool keys on the normalized form so a single
+/// target sees one `DynCallsite` regardless of which separator the
+/// caller spelled it with.
+fn normalize_target(target: &str) -> std::borrow::Cow<'_, str> {
+    if target.contains('.') {
+        std::borrow::Cow::Owned(target.replace('.', "::"))
+    } else {
+        std::borrow::Cow::Borrowed(target)
+    }
+}
+
 /// Intern pool for `(target, level)` → callsite mappings.
 ///
 /// Reads take the read-lock only; on the rare miss we take the
@@ -843,7 +870,8 @@ fn callsite_for(target: &str, level: Level) -> &'static DynCallsite {
     static CACHE: OnceLock<RwLock<HashMap<CallsiteKey, &'static DynCallsite>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
 
-    let key = (target.to_owned(), level);
+    let normalized = normalize_target(target);
+    let key = (normalized.into_owned(), level);
     {
         let guard = match cache.read() {
             Ok(g) => g,
@@ -861,7 +889,7 @@ fn callsite_for(target: &str, level: Level) -> &'static DynCallsite {
         return cs;
     }
 
-    let target_static: &'static str = Box::leak(target.to_owned().into_boxed_str());
+    let target_static: &'static str = Box::leak(key.0.clone().into_boxed_str());
     // Leak the callsite first so `Identifier` has a stable address.
     let cs: &'static DynCallsite = Box::leak(Box::new(DynCallsite {
         meta: OnceLock::new(),
@@ -888,4 +916,39 @@ fn callsite_for(target: &str, level: Level) -> &'static DynCallsite {
 
     guard.insert(key, cs);
     cs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_target;
+
+    /// Dotted legacy targets (`net.p2p`, `daemon.rpc.payment`) must
+    /// be rewritten into the `::` module-path form the translator
+    /// emits in EnvFilter directives; otherwise every category-
+    /// scoped emit from the C++ shim falls through to the default
+    /// clause. Regression guard for the
+    /// `category_filter_routes_emits` unit test on the C++ side.
+    #[test]
+    fn normalize_target_rewrites_dots_to_double_colons() {
+        assert_eq!(normalize_target("net.p2p"), "net::p2p");
+        assert_eq!(normalize_target("daemon.rpc.payment"), "daemon::rpc::payment");
+    }
+
+    /// Already-colonized targets round-trip unchanged (idempotent).
+    /// Matters because the Rust-side callers in
+    /// `tests/presets.rs` exercise the enablement matrix with
+    /// `net::p2p` directly — we must not re-process it into
+    /// `net::::p2p` or similar.
+    #[test]
+    fn normalize_target_is_idempotent_on_colon_form() {
+        assert_eq!(normalize_target("net::p2p"), "net::p2p");
+        assert_eq!(normalize_target("global"), "global");
+    }
+
+    /// Empty targets survive the rewrite; the FFI treats them as
+    /// "no target scope" (events land under the default clause).
+    #[test]
+    fn normalize_target_accepts_empty() {
+        assert_eq!(normalize_target(""), "");
+    }
 }
