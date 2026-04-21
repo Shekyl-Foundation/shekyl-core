@@ -40,6 +40,13 @@
 #include <atomic>
 #include <boost/filesystem.hpp>
 #include <boost/algorithm/string.hpp>
+// The `mlog_configure` implementation still talks to easylogging++'s
+// runtime (`el::Configurations`, `el::Loggers`, `el::Helpers::installPre
+// RollOutCallback`) until the follow-up `mlog-cpp` commit cuts those
+// bodies over to `shekyl_log_init_file` / `shekyl_log_set_categories`.
+// Include easylogging++.h FIRST so the compatibility shim in
+// misc_log_ex.h (gated on `EASYLOGGINGPP_H`) steps aside for this TU.
+#include "easylogging++.h"
 #include "string_tools.h"
 #include "time_helper.h"
 #include "misc_log_ex.h"
@@ -487,7 +494,13 @@ void reset_console_color() {
 
 }
 
-static bool mlog(el::Level level, const char *category, const char *format, va_list ap) noexcept
+// C-ABI varargs shim for merror/mwarning/minfo/mdebug/mtrace. Routes
+// straight through the shekyl_log FFI rather than the M*/MC* macros
+// because this TU includes easylogging++.h directly (to keep
+// mlog_configure working until the `mlog-cpp` commit), which makes
+// `el::Level` an enum with bitfield values incompatible with the
+// `SHEKYL_LOG_LEVEL_*` numeric contract.
+static bool mlog(uint8_t level, const char *category, const char *format, va_list ap) noexcept
 {
   int size = 0;
   char *p = NULL;
@@ -515,7 +528,18 @@ static bool mlog(el::Level level, const char *category, const char *format, va_l
 
   try
   {
-    MCLOG(level, category, el::Color::Default, p);
+    const size_t msg_len = (size > 0) ? static_cast<size_t>(size) : 0u;
+    const size_t cat_len = category ? std::strlen(category) : 0u;
+    if (shekyl_log_level_enabled(level, category ? category : "", cat_len))
+    {
+      shekyl_log_emit(
+        level,
+        category ? category : "", cat_len,
+        nullptr, 0u,
+        0u,
+        nullptr, 0u,
+        p, msg_len);
+    }
   }
   catch(...)
   {
@@ -527,13 +551,13 @@ static bool mlog(el::Level level, const char *category, const char *format, va_l
 }
 
 #define DEFLOG(fun,lev) \
-  bool m##fun(const char *category, const char *fmt, ...) { va_list ap; va_start(ap, fmt); bool ret = mlog(el::Level::lev, category, fmt, ap); va_end(ap); return ret; }
+  bool m##fun(const char *category, const char *fmt, ...) { va_list ap; va_start(ap, fmt); bool ret = mlog(SHEKYL_LOG_LEVEL_##lev, category, fmt, ap); va_end(ap); return ret; }
 
-DEFLOG(error, Error)
-DEFLOG(warning, Warning)
-DEFLOG(info, Info)
-DEFLOG(debug, Debug)
-DEFLOG(trace, Trace)
+DEFLOG(error, ERROR)
+DEFLOG(warning, WARNING)
+DEFLOG(info, INFO)
+DEFLOG(debug, DEBUG)
+DEFLOG(trace, TRACE)
 
 #undef DEFLOG
 

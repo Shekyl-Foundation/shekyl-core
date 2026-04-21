@@ -199,7 +199,15 @@ TEST(logging, multiline)
   cleanup();
 }
 
-// These operations might segfault
+// The three tests below targeted easylogging++ internals
+// (`el::Logger` copy-ctor / assignment / `configure(el::Configurations)`
+// throw behavior) that have no analogue in the Rust `tracing` subscriber
+// that replaces the vendored C++ logger. They are suppressed here as a
+// bridge between the `misc-log-ex` commit (which removes the
+// easylogging++ include path) and the dedicated `unit-tests-logging`
+// commit that rewrites the entire file against observable stderr
+// behavior.
+#if 0
 TEST(logging, copy_ctor_segfault)
 {
     const el::Logger log1("id1", nullptr);
@@ -219,6 +227,7 @@ TEST(logging, empty_configurations_throws)
     const el::Configurations cfg;
     EXPECT_ANY_THROW(log1.configure(cfg));
 }
+#endif
 
 TEST(logging, deadlock)
 {

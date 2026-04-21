@@ -26,8 +26,10 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <iostream>
 #include <string>
 #include "file_io_utils.h"
+#include "shekyl/shekyl_log.h"
 
 #ifdef OSSFUZZ
 
@@ -66,12 +68,10 @@ extern "C" { \
     catch (const std::exception &e) \
     { \
       fprintf(stderr, "Exception: %s\n", e.what()); \
-      delete el::base::elStorage; \
-      el::base::elStorage = NULL; \
+      shekyl_log_shutdown(); \
       return 0; \
     } \
-    delete el::base::elStorage; \
-    el::base::elStorage = NULL; \
+    shekyl_log_shutdown(); \
     return 0; \
   } \
 }
@@ -126,12 +126,10 @@ int run_fuzzer(int argc, const char **argv, Fuzzer &fuzzer);
       catch (const std::exception &e) \
       { \
         fprintf(stderr, "Exception: %s\n", e.what()); \
-        delete el::base::elStorage; \
-        el::base::elStorage = NULL; \
+        shekyl_log_shutdown(); \
         return 0; \
       } \
-      delete el::base::elStorage; \
-      el::base::elStorage = NULL; \
+      shekyl_log_shutdown(); \
       return 0; \
     } \
   }; \

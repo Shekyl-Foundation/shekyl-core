@@ -26,6 +26,10 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <cstdint>
+#include <cstring>
+#include <sstream>
+#include <string>
 #include <vector>
 #include "time_helper.h"
 #include "perf_timer.h"
@@ -33,11 +37,34 @@
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "perf"
 
-#define PERF_LOG_ALWAYS(level, cat, x) \
-  el::base::Writer(level, el::Color::Default, __FILE__, __LINE__, ELPP_FUNC, el::base::DispatchAction::FileOnlyLog).construct(cat) << x
-#define PERF_LOG(level, cat, x) \
-  do { \
-    if (ELPP->vRegistry()->allowed(level, cat)) PERF_LOG_ALWAYS(level, cat, x); \
+// Perf-timer emission path. Bypasses the generic M*/MC* macros because
+// the historical call sites depended on `el::base::Writer` +
+// `DispatchAction::FileOnlyLog`, which no longer exist after the
+// tracing cut-over (see comment in contrib/epee/include/misc_log_ex.h
+// about the ODR hazard of a compat `el::base::Writer`). The routing
+// distinction between stderr and file is now owned by the subscriber,
+// so `FileOnlyLog` collapses onto the same `shekyl_log_emit` path.
+#define PERF_LOG_ALWAYS(level, cat, x) do { \
+  std::stringstream _perf_ss; \
+  _perf_ss << x; \
+  const std::string _perf_msg = _perf_ss.str(); \
+  const char* _perf_cat = (cat); \
+  shekyl_log_emit( \
+    static_cast<std::uint8_t>(level), \
+    _perf_cat ? _perf_cat : "", \
+    _perf_cat ? std::strlen(_perf_cat) : 0u, \
+    __FILE__, std::strlen(__FILE__), \
+    static_cast<std::uint32_t>(__LINE__), \
+    ELPP_FUNC, std::strlen(ELPP_FUNC), \
+    _perf_msg.data(), _perf_msg.size()); \
+} while(0)
+#define PERF_LOG(level, cat, x) do { \
+    const char* _perf_cat_gate = (cat); \
+    if (shekyl_log_level_enabled( \
+          static_cast<std::uint8_t>(level), \
+          _perf_cat_gate ? _perf_cat_gate : "", \
+          _perf_cat_gate ? std::strlen(_perf_cat_gate) : 0u)) \
+      PERF_LOG_ALWAYS(level, cat, x); \
   } while(0)
 
 namespace tools
@@ -97,7 +124,7 @@ void set_performance_timer_log_level(el::Level level)
   if (level != el::Level::Debug && level != el::Level::Trace && level != el::Level::Info
    && level != el::Level::Warning && level != el::Level::Error && level != el::Level::Fatal)
   {
-    MERROR("Wrong log level: " << el::LevelHelper::convertToString(level) << ", using Info");
+    MERROR("Wrong log level: " << static_cast<unsigned>(level) << ", using Info");
     level = el::Level::Info;
   }
   performance_timer_log_level = level;
