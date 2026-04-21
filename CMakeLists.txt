@@ -836,23 +836,9 @@ else()
     # mingw doesn't support LTO (multiple definition errors at link time)
     set(USE_LTO_DEFAULT false)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,10485760")
-    # Align the MinGW Windows API tier with the MSVC branch (which
-    # already passes `/D_WIN32_WINNT=0x0600` — Windows Vista — via
-    # `add_definitions` above). Historically this `add_definitions`
-    # was gated on `NOT BUILD_64` because 32-bit MinGW's default
-    # `<windows.h>` tier was lower than the 64-bit default's, so only
-    # the 32-bit build needed the nudge. With `WIN32_LEAN_AND_MEAN`
-    # set on MinGW (a few lines up) `<windows.h>` no longer pulls in
-    # `<winioctl.h>` transitively, and the latter requires
-    # `_WIN32_WINNT >= 0x0500` to expose `FSCTL_SET_COMPRESSION` /
-    # `FSCTL_GET_COMPRESSION`. With the `external/easylogging++/`
-    # tree retired (it used to drag `<windows.h>` into the TU via
-    # `misc_log_ex.h`), `src/blockchain_db/lmdb/db_lmdb.cpp` now
-    # includes `<windows.h>` + `<winioctl.h>` itself and fails to
-    # compile on MSYS2 without the API tier set explicitly. Apply
-    # the definitions to both 32-bit and 64-bit MinGW so the
-    # behaviour is uniform and matches MSVC.
-    add_definitions(-DWINVER=0x0600 -D_WIN32_WINNT=0x0600)
+    if(NOT BUILD_64)
+      add_definitions(-DWINVER=0x0600 -D_WIN32_WINNT=0x0600)
+    endif()
   endif()
   set(C_WARNINGS "-Waggregate-return -Wnested-externs -Wold-style-definition -Wstrict-prototypes")
   set(CXX_WARNINGS "-Wno-reorder -Wno-missing-field-initializers -Woverloaded-virtual -Wsuggest-override")

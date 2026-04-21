@@ -28,6 +28,28 @@
 #include "db_lmdb.h"
 #include "shekyl/shekyl_ffi.h"
 
+// NOTE: The `#ifdef WIN32` block below MUST precede every other include
+// that could transitively pull `<windows.h>` — most notably
+// `<boost/filesystem.hpp>`, which on MinGW does exactly that. The MinGW
+// build sets `-DWIN32_LEAN_AND_MEAN` project-wide (see root
+// `CMakeLists.txt` `MINGW_FLAG`), which causes `<windows.h>` to *skip*
+// `<winioctl.h>`. Once any translation unit has entered the `_WINDOWS_`
+// include guard without pulling `<winioctl.h>`, a later explicit
+// `#include <winioctl.h>` ends up processed in a context where the
+// expected type/macro forward declarations (DWORD, HANDLE,
+// CTL_CODE, FILE_DEVICE_FILE_SYSTEM, etc.) are only partially visible,
+// and `FSCTL_SET_COMPRESSION` silently fails to define. Including
+// `<windows.h>` + `<winioctl.h>` *first* establishes the full
+// winioctl vocabulary before boost has a chance to pre-open the
+// `<windows.h>` guard with the lean-and-mean subset. The
+// easylogging++ header tree used to hit this same ordering by
+// accident; with it retired, the explicit order here is what keeps
+// `disable_ntfs_compression` compiling on MSYS2.
+#ifdef WIN32
+#include <windows.h>
+#include <winioctl.h>
+#endif
+
 #include <algorithm>
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -37,19 +59,6 @@
 #include <cstring>  // memcpy
 #include <map>
 #include <array>
-
-#ifdef WIN32
-// `<winioctl.h>` on MinGW-w64 is not self-sufficient: it leans on the
-// type/macro vocabulary (`DWORD`, `HANDLE`, `FSCTL_SET_COMPRESSION`,
-// `DeviceIoControl`, etc.) that only becomes visible after
-// `<windows.h>` is pulled in first. The easylogging++ header tree
-// used to drag `<windows.h>` in as a side effect, so this TU
-// compiled on MSYS2 purely by transitive accident. With
-// `easylogging++` retired we now include `<windows.h>` explicitly
-// so `disable_ntfs_compression` keeps resolving `FSCTL_SET_COMPRESSION`.
-#include <windows.h>
-#include <winioctl.h>
-#endif
 
 #include "string_tools.h"
 #include "common/util.h"
