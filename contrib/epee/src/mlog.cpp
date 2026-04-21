@@ -36,6 +36,7 @@
 #endif
 #endif
 
+#include <cstdarg>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
