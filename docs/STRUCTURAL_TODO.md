@@ -121,6 +121,101 @@ MSVC raises on patterns other compilers accept silently. Patch
 upstream where possible; otherwise, carry a local diff and note it in
 `contrib/` or the relevant `external/` README.
 
+### `i686-w64-mingw32` Windows target is CI-orphaned, and the wider "bit-width carve-out without coverage" pattern
+**Priority**: Medium — dormant code generates real CVE-class bugs when
+its accidental working assumptions shift.
+**Target**: V3.2 (the deletion chore). V3.x alpha.0 covers only the
+awareness entry + the one concrete `NOT BUILD_64` fix that exposed it.
+
+**Observed (April 2026):** During the `chore/cxx-logging-consolidation`
+work, CI run `24720803048` failed on MSYS2 with `error:
+'FSCTL_SET_COMPRESSION' was not declared in this scope`. Root cause: a
+one-line `if(NOT BUILD_64)` guard in root `CMakeLists.txt` restricted
+`-DWINVER=0x0600 -D_WIN32_WINNT=0x0600` to 32-bit MinGW. The 64-bit
+build had been relying on `misc_log_ex.h` → `easylogging++.h`'s
+transitive `#include <windows.h>` to nudge MinGW's Windows API tier
+high enough for `<winioctl.h>` to expose `FSCTL_SET_COMPRESSION`.
+Retiring `easylogging++` removed that accidental prop. Fix (commit
+`070447f5b`): drop the `NOT BUILD_64` guard so both 32- and 64-bit
+MinGW receive the tier definitions, matching what the MSVC branch has
+always done unconditionally.
+
+**The pattern this exposes.** The 32-bit path was an explicit knob.
+The 64-bit path was running on luck, and nobody noticed for years
+because CI only builds 64-bit. This is the same family of problem as
+the `ringct` naming deception a few sections up: dormant branches of
+conditional code that look benign until the invariants they silently
+assumed change underneath them.
+
+The MinGW `_WIN32_WINNT` bug is not isolated. The same antipattern —
+"define a workaround only for the width of system nobody still runs,
+and let the other width happen to work" — shows up in at least eight
+places in the tree, none of which have CI coverage on the narrow side:
+
+| Site | 32-bit branch behavior |
+| --- | --- |
+| `external/db_drivers/liblmdb/CMakeLists.txt:49` | Defines `MDB_VL32` — LMDB's variable-length 32-bit mmap strategy, a materially different storage path. Never exercised by any CI runner. |
+| `src/blockchain_utilities/blockchain_import.cpp:64` | `#if ARCH_WIDTH != 32` branches default `db_batch_size`. 32-bit branch untested. |
+| `CMakeLists.txt:1352` | Pulls `libatomic` on Clang + `ARCH_WIDTH==32` + `!IOS` + `!FREEBSD`. Untested. |
+| `src/crypto/slow-hash.c:374, 421` | CryptonightR AES-NI fast path gated on `__x86_64__ \|\| (_MSC_VER && _WIN64)`; the 32-bit software fallback is **consensus-adjacent PoW code** and is never CI-exercised on x86-32 or ARM-32. |
+| `tests/hash/main.cpp:192, 206` | `sqrt_result` inline-asm path under the same guard. |
+| `contrib/depends/packages/unbound.mk:18` | `_WIN32_WINNT=0x600` (typo: should be `0x0600`) applied only for `mingw32`. Mirror of the bug we just fixed — mingw64 doesn't get the nudge from depends either, and the 32-bit nudge is malformed. Untested. |
+| `contrib/depends/packages/{boost,openssl}.mk` | Separate `i686_mingw32` / `x86_64_mingw32` config variants. |
+| `contrib/gitian/gitian-win.yml:26-30`, `Makefile:{84,159}` (`release-static-win32`, `debug-static-win32`), `cmake/32-bit-toolchain.cmake`, `contrib/depends/README.md:31` | Still advertise a `i686-w64-mingw32` build target that no CI runs and no release workflow ships. |
+
+**Why it's still here.** Inherited from Monero, which inherited it
+from Bitcoin's Gitian tradition. The `i686-linux-gnu` counterpart was
+retired in V3.0 (see `docs/audit_trail/RESOLVED_260419.md` §"Dead
+`i686_linux_*` target in `contrib/depends/hosts/linux.mk`"), but that
+audit entry explicitly left the Windows 32-bit target "independent"
+and in place.
+
+**Reality check (researched April 2026).** Windows 11 is 64-bit only;
+no 32-bit Windows 11 was ever shipped. Windows 10 entered end-of-life
+October 14, 2025. Per Statcounter (March 2026), Windows 11 holds 67.1%
+of desktop Windows share and Windows 10 31.3%. Within the Win10 slice,
+the 32-bit subvariant is 0.01% of Steam Hardware Survey respondents
+(August 2025). Valve drops Steam 32-bit Windows January 1, 2026;
+Mozilla drops Firefox 32-bit Windows in 2026. The `i686-w64-mingw32`
+audience in 2026 is, rounding charitably, zero users.
+
+**Scope of the V3.2 deletion chore.** Retire `i686-w64-mingw32` in the
+same shape the `i686-linux-gnu` retirement took:
+
+- Delete `cmake/32-bit-toolchain.cmake`.
+- Delete `Makefile` targets `release-static-win32`, `debug-static-win32`
+  (any `-v4` variants if introduced later).
+- Delete the `i686-w64-mingw32-*` alternatives block in
+  `contrib/gitian/gitian-win.yml`.
+- Delete `_config_opts_i686_mingw32`, `_config_opts_mingw32` (where it's
+  purely a 32-bit construct), and the `_cflags_mingw32` typo-carrying
+  line in `contrib/depends/packages/*.mk`.
+- Strip the Win32 paragraph from `README.md` §"Building on Windows",
+  `docs/INSTALLATION_GUIDE.md:154`, and `contrib/depends/README.md:31`.
+- Leave `BUILD_64` / `ARCH_WIDTH` as concepts — ARM32 (`armv6zk`,
+  `armv7-a`, Android armv7) still lives in the `Makefile` and
+  `toolchain.cmake.in` and is not dead in the same way. Those
+  carve-outs should be audited separately under the rubric below.
+
+**What this entry does *not* resolve.** The 32-bit ARM targets and the
+consensus-adjacent PoW fallback (`slow-hash.c:374`) stay alive because
+ARM32 deployment (Raspberry Pi Zero / Pi 1, older embedded boards) is
+still a real story — just not a story CI tests. Separately from the
+`i686-w64-mingw32` deletion, the audit-surface question is whether
+Shekyl wants to *commit* to ARM32 as a supported target (in which case
+CI must grow an ARM32 runner, and the currently-commented-out
+`armv7-unknown-linux-gnueabihf` line in `.github/workflows/depends.yml`
+needs to un-comment), or retire the ARM32 `Makefile` targets the same
+way. That is a V4-era decision and should not block the Windows
+retirement.
+
+**Migration-on-touch rubric (for reviewers encountering similar guards
+in future work):** any `if(NOT BUILD_64)`, `#if ARCH_WIDTH != 32`, or
+`#if !defined(__x86_64__) && !defined(_WIN64)` site should be treated
+as a review-time red flag equivalent to a `ringct` sighting — either
+prove it's on a CI-covered path, or document its coverage gap here and
+schedule the retirement.
+
 ### vcpkg builds take 45+ minutes — partially resolved
 **Priority**: Low — CI timing is acceptable with warm caches.
 **Target**: V3.3 (manifest-mode migration, if it happens).
