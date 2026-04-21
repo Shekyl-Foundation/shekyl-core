@@ -42,7 +42,6 @@ monero_add_library(mnemonics
 target_link_libraries(mnemonics
   PUBLIC
     epee
-    easylogging
     ${Boost_SYSTEM_LIBRARY}
   PRIVATE
     ${EXTRA_LIBRARIES})

@@ -52,7 +52,7 @@ function tidy_for_language() {
 
 	make clean 					# Clean up, so that the result can be regenerated from scratch
 	time make -k 2>&1 | tee "$RESULT"		# Build and store the result. -k means: ignore errors
-	#time make -k easylogging 2>&1 | tee "$RESULT"	# Quick testing: build a single target
+	#time make -k ringct 2>&1 | tee "$RESULT"	# Quick testing: build a single target
 	KPI=$(cat "$RESULT" | wc -l)
 	tar -cJvf "$RESULT.txz" "$RESULT"		# Zip the result, because it's huge.
 	rm -v "$RESULT"

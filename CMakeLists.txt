@@ -465,7 +465,7 @@ endif()
 #   set(BSDI TRUE)
 
 include_directories(src contrib/epee/include)
-include_directories(SYSTEM external/rapidjson/include external/easylogging++ external external/supercop/include)
+include_directories(SYSTEM external/rapidjson/include external external/supercop/include)
 
 if(MSVC OR MINGW)
   set(DEFAULT_STATIC true)
@@ -519,16 +519,19 @@ add_definitions("-DBLOCKCHAIN_DB=${BLOCKCHAIN_DB}")
 
 # Can't install hook in static build on OSX, because OSX linker does not support --wrap
 # On ARM, having libunwind package (with .so's only) installed breaks static link.
-# When possible, avoid stack tracing using libunwind in favor of using easylogging++.
+# Historical note: the vendored easylogging++ tree used to supply
+# `el::base::debug::StackTrace()` as a libunwind-free backend for
+# targets like MSVC / MinGW / Android. It was retired in Chore #2 of
+# the shekyl-logging migration (see `docs/CHANGELOG.md`), so those
+# targets no longer install a stack-tracing hook by default;
+# `src/common/stack_trace.cpp` emits a `"<stack trace capture not
+# implemented on this target>"` placeholder instead, and a dedicated
+# Rust unwind-helper crate is the follow-up.
 if (APPLE)
   set(DEFAULT_STACK_TRACE OFF)
   set(LIBUNWIND_LIBRARIES "")
 elseif (DEPENDS AND NOT LINUX)
   set(DEFAULT_STACK_TRACE OFF)
-  set(LIBUNWIND_LIBRARIES "")
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT MINGW)
-  set(DEFAULT_STACK_TRACE ON)
-  set(STACK_TRACE_LIB "easylogging++") # for diag output only
   set(LIBUNWIND_LIBRARIES "")
 elseif (ARM)
   set(DEFAULT_STACK_TRACE OFF)
@@ -539,7 +542,13 @@ else()
     set(DEFAULT_STACK_TRACE ON)
     set(STACK_TRACE_LIB "libunwind") # for diag output only
   else()
-    set(DEFAULT_STACK_TRACE OFF)
+    # No libunwind: still allow enabling the `__cxa_throw` crash hook
+    # so the placeholder path in `src/common/stack_trace.cpp` gets
+    # exercised. The walker itself is short-circuited to a single
+    # "<stack trace capture not implemented on this target>" line
+    # until the Rust unwind-helper crate lands.
+    set(DEFAULT_STACK_TRACE ON)
+    set(STACK_TRACE_LIB "placeholder") # for diag output only
     set(LIBUNWIND_LIBRARIES "")
   endif()
 endif()
@@ -548,6 +557,9 @@ option(STACK_TRACE "Install a hook that dumps stack on exception" ${DEFAULT_STAC
 
 if(STACK_TRACE)
   message(STATUS "Stack trace on exception enabled (using ${STACK_TRACE_LIB})")
+  if(LIBUNWIND_FOUND)
+    add_definitions(-DHAVE_LIBUNWIND=1)
+  endif()
 else()
   message(STATUS "Stack trace on exception disabled")
 endif()
@@ -711,10 +723,6 @@ add_subdirectory(external)
 
 # Final setup for libunbound
 include_directories(${UNBOUND_INCLUDE_DIR})
-
-# Final setup for easylogging++
-include_directories(${EASYLOGGING_INCLUDE})
-link_directories(${EASYLOGGING_LIBRARY_DIRS})
 
 # Final setup for liblmdb
 include_directories(${LMDB_INCLUDE})

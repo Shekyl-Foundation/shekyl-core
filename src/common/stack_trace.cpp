@@ -27,43 +27,70 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#if defined(_MSC_VER)
-#define ELPP_FEATURE_CRASH_LOG 1
-#elif !defined __GNUC__ || defined __MINGW32__ || defined __MINGW64__ || defined __ANDROID__
+// The previous implementation relied on easylogging++'s
+// `ELPP_FEATURE_CRASH_LOG` path (`el::base::debug::StackTrace`) for
+// targets where libunwind wasn't in play (GCC-Linux, MSVC, MinGW,
+// Android). The vendored tree is gone. We now key the libunwind
+// walker entirely off the CMake-provided `HAVE_LIBUNWIND` macro
+// (see the `find_package(Libunwind)` block in the root
+// `CMakeLists.txt`): when it's defined we call `unw_*`, otherwise
+// `log_stack_trace` emits a placeholder line so the build still
+// links and crash-handler smoke tests keep exercising the
+// `__cxa_throw` hook. A dedicated Rust unwind-helper crate is the
+// scheduled follow-up.
+#if defined(HAVE_LIBUNWIND)
 #define USE_UNWIND
-#else
-#define ELPP_FEATURE_CRASH_LOG 1
 #endif
-#include "easylogging++/easylogging++.h"
 
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
 #include <stdexcept>
 #include <iomanip>
 #include <sstream>
+#include <cxxabi.h>
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
 #ifdef USE_UNWIND
 #define UNW_LOCAL_ONLY
 #include <libunwind.h>
-#include <cxxabi.h>
 #endif
 #include "common/compat.h"
-#include <boost/algorithm/string.hpp>
 #include "common/stack_trace.h"
 #include "misc_log_ex.h"
+#include "shekyl/shekyl_log.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "stacktrace"
 
+// Stack traces predate the logging subsystem — the very reason we
+// capture them is because something went catastrophically wrong
+// (typically an uncaught exception or an abort). `ST_LOG` therefore
+// emits directly through the FFI without going through the
+// `stringstream`-wrapping `MCLOG_TYPE` macro: if
+// `shekyl_log_level_enabled` answers false (logger not yet
+// initialized, or the category filter excludes it) we fall through
+// to `std::cerr` so the crash information is never silently lost.
 #define ST_LOG(x) \
   do { \
-    auto elpp = ELPP; \
-    if (elpp) { \
-      std::stringstream ss; \
-      ss << x; \
-      CINFO(el::base::Writer,el::base::DispatchAction::FileOnlyLog,SHEKYL_DEFAULT_LOG_CATEGORY) << ss.str(); \
+    std::stringstream _st_ss; \
+    _st_ss << x; \
+    const std::string _st_msg = _st_ss.str(); \
+    const char *const _st_cat = SHEKYL_DEFAULT_LOG_CATEGORY; \
+    const std::size_t _st_cat_len = std::strlen(_st_cat); \
+    if (::shekyl_log_level_enabled(SHEKYL_LOG_LEVEL_INFO, _st_cat, _st_cat_len)) { \
+      ::shekyl_log_emit( \
+        SHEKYL_LOG_LEVEL_INFO, \
+        _st_cat, _st_cat_len, \
+        __FILE__, std::strlen(__FILE__), \
+        static_cast<std::uint32_t>(__LINE__), \
+        ELPP_FUNC, std::strlen(ELPP_FUNC), \
+        _st_msg.data(), _st_msg.size()); \
+    } else { \
+      std::cerr << _st_msg << std::endl; \
     } \
-    else { \
-      std::cout << x << std::endl; \
-    } \
-  } while(0)
+  } while (0)
 
 // from https://stackoverflow.com/questions/11665829/how-can-i-print-stack-trace-for-caught-exceptions-in-c-code-injection-in-c
 
@@ -165,13 +192,12 @@ void log_stack_trace(const char *msg)
     free(dsym);
   }
 #else
-  std::stringstream ss;
-  ss << el::base::debug::StackTrace();
-  std::vector<std::string> lines;
-  std::string s = ss.str();
-  boost::split(lines, s, boost::is_any_of("\n"));
-  for (const auto &line: lines)
-    ST_LOG(line);
+  // Non-libunwind targets (MSVC / MinGW / Android) no longer have
+  // the vendored easylogging++ stack walker. Emit a placeholder so
+  // operators and crash-handler smoke tests still see the
+  // `log_stack_trace` call site in the stream; the dedicated Rust
+  // unwind-helper crate fills this in.
+  ST_LOG("  <stack trace capture not implemented on this target>");
 #endif
 }
 
