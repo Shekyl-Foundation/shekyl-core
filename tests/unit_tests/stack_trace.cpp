@@ -14,16 +14,22 @@
 //     the hook with no observable output — there was nothing to
 //     assert.
 //   - The `dlsym(RTLD_NEXT, "__cxa_throw")` lookup ran once per
-//     throw, with no caching and no guard against a NULL return.
+//     throw and silently no-op'd on a NULL return, so a failed
+//     resolution would corrupt the in-flight exception without any
+//     operator-visible signal.
 //
 // Chore #2 redirected `ST_LOG` to a direct `std::fwrite(..., stderr)`
-// and hoisted the `dlsym` behind `std::call_once`, with an explicit
-// `std::abort` (plus diagnostic) on a NULL resolution. These tests
-// lock in the resulting invariants so a future refactor can't
-// silently reintroduce either the Rust-FFI call during exception
-// flight (a hazard documented in the `ST_LOG` comment block) or the
-// per-throw `dlsym` call (a performance regression, and a latent
-// correctness issue if `RTLD_NEXT` ever fails mid-run).
+// and added an explicit `std::abort` (plus diagnostic) on a NULL
+// `dlsym` resolution. The per-throw `dlsym` call itself is
+// intentionally preserved: caching it behind `std::call_once` or a
+// function-local `static` triggers the C++ ABI's one-shot guard
+// (`__cxa_guard_acquire` / pthread_once-equivalent), which we can't
+// safely enter from inside the `__cxa_throw` wrapper with an
+// exception half-built. These tests lock in the resulting
+// invariants so a future refactor can't silently reintroduce
+// either the Rust-FFI call during exception flight (a hazard
+// documented in the `ST_LOG` comment block) or a caching scheme
+// that re-enters the C++ ABI's init machinery during a throw.
 //
 // The hook is only installed when the build opted into
 // `-DSTACK_TRACE=ON` (see the `DEFAULT_STACK_TRACE` block in the
@@ -255,16 +261,27 @@ TEST(stack_trace, emits_to_stderr_not_rust_log)
   EXPECT_EQ(out.find(" INFO  stacktrace:"), std::string::npos) << out;
 }
 
-// Exercises the `std::call_once`-backed `dlsym` cache installed
-// in Chore #2. The first throw populates the cache; every
-// subsequent throw has to use the cached pointer. If a future
-// refactor drops the cache and re-enters `dlsym` per throw, this
-// test still *passes* (the resolver would just return the same
-// non-NULL pointer every time) — but a bad refactor that
-// mis-forwarded (NULL return, self-loop) would abort the process,
-// which gtest surfaces as a hard subsuite abort. Running a
-// handful of throws in a tight loop is cheap insurance against
-// that class of regression.
+// Repeated throws must all pass cleanly through the hook, with
+// exactly one `[stacktrace] Exception:` / `Unwound call stack:`
+// pair per throw. This is the main line of defense against two
+// classes of regression:
+//
+//   1. A caching refactor that routes `dlsym` through
+//      `std::call_once` or a function-local `static` — both of
+//      those trigger the C++ ABI's `__cxa_guard_*` init path,
+//      which we can't safely enter from inside the
+//      `__cxa_throw` wrapper. The observable symptom on glibc
+//      is a silent process abort on the first throw with no
+//      diagnostic output, which surfaces here as the subsuite
+//      aborting before the `EXPECT_EQ` below runs.
+//
+//   2. A forwarding regression (NULL `__real___cxa_throw`,
+//      self-loop, mis-cast pointer) that fails to hand the
+//      exception off to libstdc++ — those also abort, again
+//      before the final assertion.
+//
+// A clean run reaches the assertion and observes `kThrows`
+// `[stacktrace]` blocks in the drained stderr.
 TEST(stack_trace, repeated_throws_do_not_crash_and_emit_once_per_throw)
 {
   if (!hook_is_installed())

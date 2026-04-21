@@ -46,7 +46,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
-#include <mutex>
 #include <stdexcept>
 #include <iomanip>
 #include <sstream>
@@ -124,52 +123,6 @@ NORETURN_ATTR
 void (cxa_throw_t)(void *ex, CXA_THROW_INFO_T *info, void (*dest)(void*));
 #endif // !STATICLIB
 
-#ifndef STATICLIB
-// Resolve the real `__cxa_throw` exactly once, then cache it. Per-
-// throw `dlsym(RTLD_NEXT, ...)` calls take an internal libc lock
-// and reallocate a NULL return's error string each time; doing
-// that on every exception adds avoidable overhead and — more
-// importantly — lets a first-throw race silently regress into a
-// NULL deref on subsequent throws. `std::call_once` anchors the
-// lookup to the first throw and keeps later throws on the fast
-// path. A failed lookup aborts the process with a clear
-// `fwrite`-to-stderr diagnostic: that path only fires when
-// something has gone badly wrong with `libdl` / libstdc++
-// resolution anyway, and returning from here without calling the
-// real `__cxa_throw` is not an option since the wrapper is
-// declared `noreturn` and the C++ exception is already built.
-static cxa_throw_t *resolve_real_cxa_throw()
-{
-  static cxa_throw_t *cached = nullptr;
-  static std::once_flag once;
-  std::call_once(once, []() {
-    (void)dlerror();  // clear any pre-existing error
-    void *sym = dlsym(RTLD_NEXT, "__cxa_throw");
-    if (sym == nullptr)
-    {
-      const char *const err = dlerror();
-      const char *const msg =
-        "stack_trace: dlsym(RTLD_NEXT, \"__cxa_throw\") returned NULL; "
-        "the __cxa_throw hook cannot forward to libstdc++'s real "
-        "implementation. This typically means the binary was linked "
-        "without -rdynamic, or libstdc++ was fully statically absorbed. "
-        "Rebuild with -Wl,--export-dynamic, link libstdc++ dynamically, "
-        "or disable the stack-trace hook (-DSTACK_TRACE=OFF).\n";
-      std::fwrite(msg, 1, std::strlen(msg), stderr);
-      if (err != nullptr)
-      {
-        std::fwrite("  dlerror: ", 1, 11, stderr);
-        std::fwrite(err, 1, std::strlen(err), stderr);
-        std::fwrite("\n", 1, 1, stderr);
-      }
-      return;
-    }
-    cached = reinterpret_cast<cxa_throw_t *>(sym);
-  });
-  return cached;
-}
-#endif // !STATICLIB
-
 extern "C"
 NORETURN_ATTR
 void CXA_THROW(void *ex, CXA_THROW_INFO_T *info, void (*dest)(void*))
@@ -181,12 +134,46 @@ void CXA_THROW(void *ex, CXA_THROW_INFO_T *info, void (*dest)(void*))
   free(dsym);
 
 #ifndef STATICLIB
-  cxa_throw_t *const __real___cxa_throw = resolve_real_cxa_throw();
+  // Resolve `__real___cxa_throw` *per throw*, not via
+  // `std::call_once` or a function-local `static` pointer. Both of
+  // those mechanisms trigger the C++ ABI's one-shot initialization
+  // machinery (`__cxa_guard_acquire` / `__cxa_guard_release`,
+  // pthread_once-equivalent paths), and running any of that here —
+  // inside the `__cxa_throw` wrapper, with the exception object
+  // already constructed and the unwinder about to start walking —
+  // corrupts libstdc++'s internal exception state on glibc targets.
+  // The observed failure mode was `unit_tests` aborting silently on
+  // the first throw, with no gtest "[  OK  ]" line and no
+  // diagnostic printed — exactly what you'd expect from a
+  // `std::terminate` triggered by a runtime that couldn't match the
+  // in-flight exception against its handler tables.
+  //
+  // Per-call `dlsym(RTLD_NEXT, ...)` is what the pre-Chore #2
+  // implementation used and it's what we're returning to. The libc
+  // internal lock it takes is the only shared state involved, and
+  // it's safe to hold across the `__cxa_throw` boundary.
+#ifndef __clang__ // GCC doesn't accept the attr inside a typedef
+#ifndef _MSC_VER
+  __attribute__((noreturn))
+#endif
+#endif // !__clang__
+  cxa_throw_t *__real___cxa_throw = (cxa_throw_t*)dlsym(RTLD_NEXT, "__cxa_throw");
   if (__real___cxa_throw == nullptr)
   {
-    // `resolve_real_cxa_throw` already printed a diagnostic.
-    // Abort instead of calling through a NULL pointer — the
-    // failure mode is unambiguous and debuggable.
+    // Emit a diagnostic directly to stderr (no logging FFI) and
+    // abort. A NULL here only happens when the binary was linked
+    // without `-rdynamic` / was fully statically absorbed;
+    // forwarding through a NULL would SIGSEGV at best, and leaking
+    // the in-flight exception would silently `std::terminate` at
+    // worst. `abort` is the clearest signal for operators.
+    const char *const msg =
+      "stack_trace: dlsym(RTLD_NEXT, \"__cxa_throw\") returned NULL; "
+      "the __cxa_throw hook cannot forward to libstdc++'s real "
+      "implementation. This typically means the binary was linked "
+      "without -rdynamic, or libstdc++ was fully statically absorbed. "
+      "Rebuild with -Wl,--export-dynamic, link libstdc++ dynamically, "
+      "or disable the stack-trace hook (-DSTACK_TRACE=OFF).\n";
+    std::fwrite(msg, 1, std::strlen(msg), stderr);
     std::abort();
   }
 #endif // !STATICLIB

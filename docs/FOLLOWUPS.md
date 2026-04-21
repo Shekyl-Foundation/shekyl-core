@@ -64,15 +64,27 @@ require archaeology to recover.
   platform is a tacit lie about the security posture of users on it.**
 
   Discovered during the Chore #2 easylogging++ retirement when
-  MSYS2 CI surfaced a `FSCTL_SET_COMPRESSION` regression (initial
-  diagnosis wrong, see `STRUCTURAL_TODO.md` for the full walk;
-  commits `070447f5b` misdiagnosed → `9284d781d` reverted +
-  include-order-fixed). The mechanics of that bug exposed the
-  broader pattern: the 32-bit path was an explicit knob, the
-  64-bit path was running on accidental transitive-include luck,
-  and the pattern repeats in at least eight sites across the tree
-  (tabulated in `STRUCTURAL_TODO.md` §"32-bit targets cannot
-  safely run Shekyl").
+  MSYS2 CI surfaced a `FSCTL_SET_COMPRESSION` regression. First
+  two diagnoses were both wrong:
+  - "Hoist `<windows.h>` + `<winioctl.h>` ahead of boost"
+    (commit `9284d781d`): reverted. Include order wasn't the
+    primary hazard.
+  - "`_WIN32_WINNT` was dropped below the FSCTL tier on 64-bit
+    MinGW" (commit `a68314e3f`): also wrong. The macro isn't
+    `_WIN32_WINNT`-gated in MinGW-w64's `<winioctl.h>`; it's
+    gated by `#ifndef _FILESYSTEMFSCTL_`, and something
+    upstream in the boost/lmdb chain pre-defines that sentinel
+    on MSYS2 builds. The real fix is a self-contained
+    `#ifndef FSCTL_SET_COMPRESSION` fallback in
+    `src/blockchain_db/lmdb/db_lmdb.cpp` — the FSCTL value
+    hasn't changed since NT 4.0, so re-supplying it from
+    `CTL_CODE` primitives (which aren't guard-gated) is safe.
+  The mechanics of the bug still expose the broader pattern:
+  the 32-bit path was an explicit knob, the 64-bit path was
+  running on accidental transitive-include luck through
+  easylogging++, and the pattern repeats in at least eight
+  sites across the tree (tabulated in `STRUCTURAL_TODO.md`
+  §"32-bit targets cannot safely run Shekyl").
 
   Scope — all in one chore, symmetric across Windows and ARM32
   because the security argument is symmetric:
@@ -149,20 +161,45 @@ require archaeology to recover.
   abort at CI run `24723150982` (root-caused while fixing the
   `FSCTL_SET_COMPRESSION` regression) was one symptom of that
   hazard class.
+
+  A second, independent hazard surfaced at CI run `24728543538`
+  while cleaning up the first: the `__cxa_throw` wrapper itself
+  must not touch the C++ ABI's one-shot init machinery.
+  `std::call_once`-backed `dlsym` caching, and function-local
+  `static cxa_throw_t *` pointers with a `dlsym`-valued
+  initializer, both expand to `__cxa_guard_acquire` /
+  `__cxa_guard_release` / pthread_once-equivalent calls, and
+  re-entering any of those from inside a throw corrupts
+  libstdc++'s in-flight exception state. Symptom: silent
+  `std::terminate` on the first throw after the hook loads, no
+  diagnostic. Fix: keep the `dlsym(RTLD_NEXT, "__cxa_throw")` on
+  the per-throw fast path (matches the pre-Chore-#2
+  implementation), with an explicit `abort` + stderr diagnostic
+  on NULL. The per-throw cost is negligible compared to the
+  libunwind walk that follows it.
+
   The stderr-direct path is safe, low-noise, and locked in by
   `tests/unit_tests/stack_trace.cpp` (see
   `stack_trace.emits_to_stderr_not_rust_log` for the negative
-  assertions against the Rust tracing formatter's markers). The
-  tradeoff is that stack traces no longer land in the rolling
-  log file, only on stderr — fine for operator-visible crashes,
-  less useful for post-mortem analysis of long-running daemons
-  that only write stderr to a log managed by the init system.
+  assertions against the Rust tracing formatter's markers, and
+  `stack_trace.repeated_throws_do_not_crash_and_emit_once_per_throw`
+  for the regression guard against both of the init-machinery
+  hazards above). The tradeoff is that stack traces no longer
+  land in the rolling log file, only on stderr — fine for
+  operator-visible crashes, less useful for post-mortem analysis
+  of long-running daemons that only write stderr to a log
+  managed by the init system.
+
   The follow-up is to add a dedicated "crash sink" to
   `shekyl-logging` that the hook can write to without going
   through the full `tracing::Dispatcher::event` path (a direct
   append-only writer with no subscribers, no filters, no
   callsite interning), and re-route `ST_LOG` to that sink so
-  the file log captures crashes too. Target: V3.2.
+  the file log captures crashes too. Any such sink API must be
+  callable from inside `__cxa_throw` without triggering the
+  C++ ABI's guard init (so: plain globals + atomics, no
+  function-local statics, no `std::call_once`, no lazy
+  `OnceLock` in the consumer crate). Target: V3.2.
 
 - **`dalek-ff-group` version isolation enforced via CI gate.**
   The Rust workspace carries two versions: 0.5.x (used directly by Shekyl

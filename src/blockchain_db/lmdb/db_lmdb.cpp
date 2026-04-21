@@ -39,15 +39,37 @@
 #include <array>
 
 // `disable_ntfs_compression` below calls `DeviceIoControl` with
-// `FSCTL_SET_COMPRESSION`. On MinGW-w64 that macro lives in
-// `<winioctl.h>`, which `<windows.h>` skips under `WIN32_LEAN_AND_MEAN`
-// (the project-wide flag set for MinGW in the root `CMakeLists.txt`),
-// so we include it explicitly. The accompanying `-D_WIN32_WINNT=0x0600`
-// for 64-bit MinGW is what keeps the FSCTL_* family ungated on the
-// newer MinGW-w64 header tier; see the `if(MINGW)` block in the root
-// `CMakeLists.txt`.
-#ifdef WIN32
+// `FSCTL_SET_COMPRESSION`. Pull in the Windows API surface locally on
+// every Windows toolchain we build on:
+//
+//   * MSVC: `<winioctl.h>` depends on `<windows.h>` for its foundation
+//     types (`ULONG`, `BOOLEAN`, `_Field_size_(...)`, ...). Before
+//     Chore #2 those came in transitively through easylogging++; with
+//     that gone we have to establish the base ourselves or the SDK
+//     header explodes with "unknown override specifier" on
+//     `_Field_size_`-style SAL annotations.
+//
+//   * MinGW-w64: `<windows.h>` skips `<winioctl.h>` under
+//     `WIN32_LEAN_AND_MEAN` (the project-wide flag set in the root
+//     `CMakeLists.txt`), so we include it explicitly after.
+//
+// One stubborn case remains: on MSYS2 CI the `<winioctl.h>`
+// `#ifndef _FILESYSTEMFSCTL_` guard is already closed by the time we
+// reach it (some upstream header in the boost/lmdb chain defines the
+// sentinel), so `FSCTL_SET_COMPRESSION` silently goes missing. Its
+// value has been stable since NT 4.0, so we re-supply the definition
+// from the primitives that are declared unconditionally at the top of
+// `<winioctl.h>` (`CTL_CODE`, `FILE_DEVICE_FILE_SYSTEM`,
+// `METHOD_BUFFERED`, `FILE_READ_DATA`, `FILE_WRITE_DATA`). This is a
+// local rescue, not a compatibility shim — if the upstream guard ever
+// clears up, our `#ifndef` simply no-ops.
+#ifdef _WIN32
+#include <windows.h>
 #include <winioctl.h>
+#ifndef FSCTL_SET_COMPRESSION
+#define FSCTL_SET_COMPRESSION \
+  CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 16, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA)
+#endif
 #endif
 
 #include "string_tools.h"
