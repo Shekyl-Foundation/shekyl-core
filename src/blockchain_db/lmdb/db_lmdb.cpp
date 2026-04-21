@@ -39,6 +39,15 @@
 #include <array>
 
 #ifdef WIN32
+// `<winioctl.h>` on MinGW-w64 is not self-sufficient: it leans on the
+// type/macro vocabulary (`DWORD`, `HANDLE`, `FSCTL_SET_COMPRESSION`,
+// `DeviceIoControl`, etc.) that only becomes visible after
+// `<windows.h>` is pulled in first. The easylogging++ header tree
+// used to drag `<windows.h>` in as a side effect, so this TU
+// compiled on MSYS2 purely by transitive accident. With
+// `easylogging++` retired we now include `<windows.h>` explicitly
+// so `disable_ntfs_compression` keeps resolving `FSCTL_SET_COMPRESSION`.
+#include <windows.h>
 #include <winioctl.h>
 #endif
 
