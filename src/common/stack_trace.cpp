@@ -49,13 +49,15 @@
 #include <iomanip>
 #include <sstream>
 #include <cxxabi.h>
-#ifndef _WIN32
-#include <dlfcn.h>
-#endif
 #ifdef USE_UNWIND
 #define UNW_LOCAL_ONLY
 #include <libunwind.h>
 #endif
+// `common/compat.h` provides the POSIX `<dlfcn.h>` (gated on
+// `!STATICLIB && !_WIN32`) that `__cxa_throw` wrapping needs for
+// `dlsym(RTLD_NEXT, ...)`; routing through it keeps the lint rule
+// in `.github/workflows/build.yml` ("reject direct POSIX-header
+// includes in src/") happy.
 #include "common/compat.h"
 #include "common/stack_trace.h"
 #include "misc_log_ex.h"
