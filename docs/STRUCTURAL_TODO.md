@@ -242,6 +242,19 @@ The `rct::` namespace (`src/fcmp/rctTypes.h`, `rctOps.h`, `rctSigs.h`)
 has the same problem — it was renamed from `ringct/` to `fcmp/` at the
 directory level but retains the `rct::` namespace internally.
 
+**Deception observed (April 2026):** during the `chore/cxx-logging-
+consolidation` work we nearly shipped a `make ringct` comment in the
+`utils/health/clang-*-run.sh` smoke recipes as a "quick testing: build
+a single target" example. `ringct` is no longer a real target (the
+directory was renamed to `fcmp/` and the CMake object library is
+`obj_fcmp` / `fcmp`), but the name still reads as current Shekyl
+vocabulary to anyone skimming — exactly the confusion this
+structural-debt entry exists to retire. The recipes now name `common`,
+which is real. Every further `ringct` / `rct::` sighting in fresh
+documentation, comments, or build scaffolding should be treated the
+same way: it is Monero-era deadweight masquerading as current naming
+and needs renaming-on-touch under rule 93.
+
 ---
 
 ## Upstream Techniques to Track

@@ -64,7 +64,7 @@ cmake ../.. \
 
 make clean					# Clean up to generate the full report
 time make -k 2>&1 | tee "$RESULT"		# Run the scan. -k means: ignore errors
-#time make -k ringct 2>&1 | tee $RESULT	# Quick testing: build a single target
+#time make -k common 2>&1 | tee $RESULT	# Quick testing: build a single target
 KPI=$(cat "$RESULT" | wc -l)
 tar -cJvf "$RESULT.txz" "$RESULT"		# Zip the result, because it's huge.
 rm -v "$RESULT"
