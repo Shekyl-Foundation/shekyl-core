@@ -36,70 +36,85 @@
 #endif
 #endif
 
-#include <time.h>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <cstdio>
 #include <atomic>
+#include <iostream>
+#include <string>
 #include <boost/filesystem.hpp>
-#include <boost/algorithm/string.hpp>
-// The `mlog_configure` implementation still talks to easylogging++'s
-// runtime (`el::Configurations`, `el::Loggers`, `el::Helpers::installPre
-// RollOutCallback`) until the follow-up `mlog-cpp` commit cuts those
-// bodies over to `shekyl_log_init_file` / `shekyl_log_set_categories`.
-// Include easylogging++.h FIRST so the compatibility shim in
-// misc_log_ex.h (gated on `EASYLOGGINGPP_H`) steps aside for this TU.
-#include "easylogging++.h"
+// NOTE: easylogging++.h is no longer included. Every piece of state
+// that used to live in easylogging++'s `el::Loggers` / `el::Helpers`
+// singletons now lives in the Rust `shekyl-logging` subscriber, which
+// is reached through `src/shekyl/shekyl_log.h`. `misc_log_ex.h`'s
+// compatibility shim (enabled again for this TU now that
+// `EASYLOGGINGPP_H` is undefined) turns the M*/MC* macros below into
+// direct `shekyl_log_emit` calls.
 #include "string_tools.h"
-#include "time_helper.h"
 #include "misc_log_ex.h"
+#include "shekyl/shekyl_log.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "logging"
 
-#define MLOG_BASE_FORMAT "%datetime{%Y-%M-%d %H:%m:%s.%g}\t%thread\t%level\t%logger\t%loc\t%msg"
-
-#define MLOG_LOG(x) CINFO(el::base::Writer,el::base::DispatchAction::FileOnlyLog,SHEKYL_DEFAULT_LOG_CATEGORY) << x
-
 using namespace epee;
-
-static std::string generate_log_filename(const char *base)
-{
-  std::string filename(base);
-  static unsigned int fallback_counter = 0;
-  char tmp[200];
-  struct tm tm;
-  time_t now = time(NULL);
-  if (!epee::misc_utils::get_gmt_time(now, tm))
-    snprintf(tmp, sizeof(tmp), "part-%u", ++fallback_counter);
-  else
-    strftime(tmp, sizeof(tmp), "%Y-%m-%d-%H-%M-%S", &tm);
-  tmp[sizeof(tmp) - 1] = 0;
-  filename += "-";
-  filename += tmp;
-  return filename;
-}
 
 std::string mlog_get_default_log_path(const char *default_filename)
 {
-  std::string process_name = epee::string_tools::get_current_module_name();
-  std::string default_log_folder = epee::string_tools::get_current_module_folder();
-  std::string default_log_file = process_name;
-  std::string::size_type a = default_log_file.rfind('.');
-  if ( a != std::string::npos )
-    default_log_file.erase( a, default_log_file.size());
-  if ( ! default_log_file.empty() )
-    default_log_file += ".log";
-  else
-    default_log_file = default_filename;
+  // Resolve the binary name exactly as the legacy implementation did
+  // (strip the extension off `argv[0]`, fall back to `default_filename`
+  // when the module name is empty). The directory contract is what
+  // changes: instead of sitting next to the binary
+  // (`<module_folder>/<binary>.log`), the active log file now lives
+  // under `~/.shekyl/logs/<binary>.log`, matching rule 93's
+  // version-symbol migration and `shekyl_log_default_path`'s
+  // `<home>/.shekyl/logs/…` contract in
+  // `src/shekyl/shekyl_log.h`. The operator-visible path is reported
+  // through `--log-file` CLI output and through the `RPC::get_log_
+  // categories` response body; both surfaces are preserved.
+  std::string binary_name = epee::string_tools::get_current_module_name();
+  const std::string::size_type dot = binary_name.rfind('.');
+  if (dot != std::string::npos)
+    binary_name.erase(dot, binary_name.size());
+  if (binary_name.empty())
+    binary_name = default_filename ? default_filename : "";
 
-  return (boost::filesystem::path(default_log_folder) / boost::filesystem::path(default_log_file)).string();
-}
+  // Peel any trailing ".log" from the fallback filename so we never
+  // produce `shekyld.log.log`.
+  if (binary_name.size() > 4 &&
+      binary_name.compare(binary_name.size() - 4, 4, ".log") == 0)
+    binary_name.erase(binary_name.size() - 4, 4);
 
-static void mlog_set_common_prefix()
-{
-  static const char * const expected_filename = "contrib/epee/src/mlog.cpp";
-  const char *path = __FILE__, *expected_ptr = strstr(path, expected_filename);
-  if (!expected_ptr)
-    return;
-  el::Loggers::setFilenameCommonPrefix(std::string(path, expected_ptr - path));
+  // Two-call convention: ask the FFI for the required buffer size,
+  // then re-ask with an exact-fit buffer. `shekyl_log_default_path`
+  // returns the total byte length regardless of truncation (see
+  // `src/shekyl/shekyl_log.h` buffer-sizing convention) and never
+  // writes a NUL.
+  const size_t needed = ::shekyl_log_default_path(
+    binary_name.data(), binary_name.size(),
+    nullptr, 0);
+  if (needed == 0)
+  {
+    // Home directory unresolved or UTF-8 failure. Fall back to the
+    // current directory so `fopen(path, ...)` at the call site still
+    // stands a chance of succeeding — mirrors the legacy behavior of
+    // returning a relative path when `get_current_module_folder()`
+    // resolved to empty.
+    return binary_name.empty() ? std::string() : binary_name + ".log";
+  }
+  std::string out;
+  out.resize(needed);
+  const size_t wrote = ::shekyl_log_default_path(
+    binary_name.data(), binary_name.size(),
+    out.empty() ? nullptr : &out[0], out.size());
+  if (wrote != needed)
+  {
+    // Between the two calls the answer shrank; defensive guard so we
+    // never return uninitialized tail bytes.
+    out.resize(wrote);
+  }
+  return out;
 }
 
 static const char *get_default_categories(int level)
@@ -155,90 +170,98 @@ bool EnableVTMode()
 
 void mlog_configure(const std::string &filename_base, bool console, const std::size_t max_log_file_size, const std::size_t max_log_files)
 {
-  el::Configurations c;
-  c.setGlobally(el::ConfigurationType::Filename, filename_base);
-  c.setGlobally(el::ConfigurationType::ToFile, "true");
-  const char *log_format = getenv("MONERO_LOG_FORMAT");
-  if (!log_format)
-    log_format = MLOG_BASE_FORMAT;
-  c.setGlobally(el::ConfigurationType::Format, log_format);
-  c.setGlobally(el::ConfigurationType::ToStandardOutput, console ? "true" : "false");
-  c.setGlobally(el::ConfigurationType::MaxLogFileSize, std::to_string(max_log_file_size));
-  el::Loggers::setDefaultConfigurations(c, true);
+  // Translate the single-string `filename_base` contract into the
+  // Rust FFI's `(dir, prefix)` shape. Empty filename_base means
+  // "stderr only" (used by `cn_deserialize`, `object_sizes`,
+  // `dns_checks`, `on_startup` -> util.cpp); anything else splits
+  // into (parent, filename) so the live file is
+  // `<parent>/<filename>` and rotated archives become
+  // `<parent>/<filename>-YYYY-MM-DD-HH-MM-SS`, matching the legacy
+  // easylogging++ pre-roll-out callback's naming.
+  //
+  // The `console` flag no longer has a direct counterpart: the
+  // tracing subscriber always emits to stderr, and per
+  // `.cursor/rules/82-failure-mode-ux.mdc` errors must be visible
+  // on stderr at all times. The single in-tree caller that passes
+  // `console=false` is `tests/unit_tests/logging.cpp`, and those
+  // tests are scheduled to be rewritten in the follow-up
+  // `unit-tests-logging` commit to assert against dup2'd stderr
+  // capture instead of the file sink.
+  (void)console;
 
-  el::Loggers::addFlag(el::LoggingFlag::HierarchicalLogging);
-  el::Loggers::addFlag(el::LoggingFlag::CreateLoggerAutomatically);
-  el::Loggers::addFlag(el::LoggingFlag::DisableApplicationAbortOnFatalLog);
-  el::Loggers::addFlag(el::LoggingFlag::ColoredTerminalOutput);
-  el::Loggers::addFlag(el::LoggingFlag::StrictLogFileSizeCheck);
-  el::Helpers::installPreRollOutCallback([filename_base, max_log_files](const char *name, size_t){
-    std::string rname = generate_log_filename(filename_base.c_str());
-    int ret = rename(name, rname.c_str());
-    if (ret < 0)
-    {
-      // can't log a failure, but don't do the file removal below
-      return;
-    }
-    if (max_log_files != 0)
-    {
-      std::vector<boost::filesystem::path> found_files;
-      const boost::filesystem::directory_iterator end_itr;
-      const boost::filesystem::path filename_base_path(filename_base);
-      const std::string filename_base_name = filename_base_path.filename().string();
-      const boost::filesystem::path parent_path = filename_base_path.has_parent_path() ? filename_base_path.parent_path() : ".";
-      for (boost::filesystem::directory_iterator iter(parent_path); iter != end_itr; ++iter)
-      {
-        const std::string filename = iter->path().filename().string();
-        if (filename.size() >= filename_base_name.size() && std::memcmp(filename.data(), filename_base_name.data(), filename_base_name.size()) == 0)
-        {
-          found_files.push_back(iter->path());
-        }
-      }
-      if (found_files.size() >= max_log_files)
-      {
-        std::sort(found_files.begin(), found_files.end(), [](const boost::filesystem::path &a, const boost::filesystem::path &b) {
-          boost::system::error_code ec;
-          std::time_t ta = boost::filesystem::last_write_time(boost::filesystem::path(a), ec);
-          if (ec)
-          {
-            MERROR("Failed to get timestamp from " << a << ": " << ec);
-            ta = std::time(nullptr);
-          }
-          std::time_t tb = boost::filesystem::last_write_time(boost::filesystem::path(b), ec);
-          if (ec)
-          {
-            MERROR("Failed to get timestamp from " << b << ": " << ec);
-            tb = std::time(nullptr);
-          }
-          static_assert(std::is_integral<time_t>(), "bad time_t");
-          return ta < tb;
-        });
-        for (size_t i = 0; i <= found_files.size() - max_log_files; ++i)
-        {
-          try
-          {
-            boost::system::error_code ec;
-            boost::filesystem::remove(found_files[i], ec);
-            if (ec)
-            {
-              MERROR("Failed to remove " << found_files[i] << ": " << ec);
-            }
-          }
-          catch (const std::exception &e)
-          {
-            MERROR("Failed to remove " << found_files[i] << ": " << e.what());
-          }
-        }
-      }
-    }
-  });
-  mlog_set_common_prefix();
-  const char *monero_log = getenv("MONERO_LOGS");
-  if (!monero_log)
+  const uint8_t fallback = SHEKYL_LOG_LEVEL_WARNING;
+
+  int32_t rc = SHEKYL_LOG_OK;
+  if (filename_base.empty())
   {
-    monero_log = get_default_categories(0);
+    rc = ::shekyl_log_init_stderr(fallback);
   }
-  mlog_set_log(monero_log);
+  else
+  {
+    const boost::filesystem::path p(filename_base);
+    const std::string prefix = p.filename().string();
+    const boost::filesystem::path parent =
+      p.has_parent_path() ? p.parent_path() : boost::filesystem::path(".");
+    const std::string dir = parent.string();
+
+    const uint64_t max_bytes = static_cast<uint64_t>(max_log_file_size);
+    // max_log_files == 0 in legacy code meant "unbounded retention"
+    // *and* was also how tests asked for size 0 rotation. The FFI
+    // contract is `max_bytes == 0 => no rotation`, `max_files == 0
+    // => prune off`; we map both 0-sentinels faithfully.
+    const uint32_t max_files = static_cast<uint32_t>(max_log_files);
+
+    rc = ::shekyl_log_init_file(
+      dir.data(), dir.size(),
+      prefix.data(), prefix.size(),
+      fallback,
+      max_bytes,
+      max_files);
+  }
+
+  // `SHEKYL_LOG_ERR_ALREADY_INIT` is expected when a second binary-
+  // entry point (e.g. wallet_args inside a wallet RPC subprocess)
+  // reaches this function after the daemon's own init already ran —
+  // the subscriber is global and first-caller-wins. Other error
+  // codes leave the tree uninitialized and the subsequent
+  // `mlog_set_log` call turns into a no-op; there is no safe
+  // recovery here, so we surface the diagnostic via stderr and keep
+  // moving. The operator will see missing logs and can correlate
+  // with the one-shot stderr line.
+  if (rc != SHEKYL_LOG_OK && rc != SHEKYL_LOG_ERR_ALREADY_INIT)
+  {
+    char errbuf[256] = {0};
+    const size_t en = ::shekyl_log_last_error_message(errbuf, sizeof(errbuf) - 1);
+    std::fprintf(stderr,
+      "mlog_configure: shekyl_log_init_* failed (rc=%d): %.*s\n",
+      static_cast<int>(rc), static_cast<int>(en), errbuf);
+  }
+
+  // Seed the filter. Precedence order, preserved from the legacy
+  // implementation with `MONERO_LOGS` renamed to `SHEKYL_LOG` per
+  // `.cursor/rules/93-legacy-symbol-migration.mdc`:
+  //
+  //   1. If `SHEKYL_LOG` is set, the Rust side has already applied
+  //      it inside `shekyl_log_init_*`; we skip explicit reseeding
+  //      so we don't clobber the operator's directive.
+  //   2. Otherwise, apply the rich level-0 default preset
+  //      (the legacy `*:WARNING,net:FATAL,…` spec from
+  //      `get_default_categories(0)`). Without this, binaries
+  //      built without the `dev-env-fallback` feature flag would
+  //      boot with a bare `*:WARNING` filter and flood the
+  //      `net.*` categories with noise that the legacy preset
+  //      historically silenced.
+  //
+  // `MONERO_LOG_FORMAT` support is retired entirely — format
+  // strings are owned by the Rust subscriber's layer stack and
+  // are not operator-tunable. Documented in `docs/CHANGELOG.md`
+  // under the V3.x alpha.0 format-break entry.
+  const char *env_spec = std::getenv("SHEKYL_LOG");
+  if (!env_spec || !*env_spec)
+  {
+    mlog_set_log(get_default_categories(0));
+  }
+
 #ifdef WIN32
   EnableVTMode();
 #endif
@@ -246,79 +269,104 @@ void mlog_configure(const std::string &filename_base, bool console, const std::s
 
 void mlog_set_categories(const char *categories)
 {
-  std::string new_categories;
-  if (*categories)
+  // The Rust translator keeps its own `current_spec` and handles
+  // `+foo:LEVEL` / `-foo` modifiers internally (see
+  // `rust/shekyl-logging/src/legacy.rs::merge_modifier`), so the
+  // elaborate textual munging the legacy C++ body did against
+  // `el::Loggers::getCategories()` is gone. We just forward the
+  // bytes verbatim.
+  const char *spec = categories ? categories : "";
+  const size_t len = std::strlen(spec);
+  const int32_t rc = ::shekyl_log_set_categories(spec, len, SHEKYL_LOG_LEVEL_WARNING);
+  if (rc != SHEKYL_LOG_OK)
   {
-    if (*categories == '+')
-    {
-      ++categories;
-      new_categories = mlog_get_categories();
-      if (*categories)
-      {
-        if (!new_categories.empty())
-          new_categories += ",";
-        new_categories += categories;
-      }
-    }
-    else if (*categories == '-')
-    {
-      ++categories;
-      new_categories = mlog_get_categories();
-      std::vector<std::string> single_categories;
-      boost::split(single_categories, categories, boost::is_any_of(","), boost::token_compress_on);
-      for (const std::string &s: single_categories)
-      {
-        size_t pos = new_categories.find(s);
-        if (pos != std::string::npos)
-          new_categories = new_categories.erase(pos, s.size());
-      }
-    }
-    else
-    {
-      new_categories = categories;
-    }
+    char errbuf[256] = {0};
+    const size_t en = ::shekyl_log_last_error_message(errbuf, sizeof(errbuf) - 1);
+    MERROR("mlog_set_categories rejected `" << spec
+           << "` (rc=" << rc << "): " << std::string(errbuf, en));
+    return;
   }
-  el::Loggers::setCategories(new_categories.c_str(), true);
-  MLOG_LOG("New log categories: " << el::Loggers::getCategories());
+  MINFO("New log categories: " << mlog_get_categories());
 }
 
 std::string mlog_get_categories()
 {
-  return el::Loggers::getCategories();
+  const size_t needed = ::shekyl_log_get_categories(nullptr, 0);
+  if (needed == 0)
+    return std::string();
+  std::string out;
+  out.resize(needed);
+  const size_t wrote = ::shekyl_log_get_categories(&out[0], out.size());
+  if (wrote != needed)
+    out.resize(wrote);
+  return out;
 }
 
-// maps epee style log level to new logging system
 void mlog_set_log_level(int level)
 {
-  const char *categories = get_default_categories(level);
-  mlog_set_categories(categories);
+  if (level < 0 || level > 4)
+  {
+    MERROR("mlog_set_log_level: level " << level << " outside the 0..=4 preset range");
+    return;
+  }
+  const int32_t rc = ::shekyl_log_set_level(static_cast<uint8_t>(level));
+  if (rc != SHEKYL_LOG_OK)
+  {
+    char errbuf[256] = {0};
+    const size_t en = ::shekyl_log_last_error_message(errbuf, sizeof(errbuf) - 1);
+    MERROR("mlog_set_log_level(" << level << ") failed (rc=" << rc << "): "
+           << std::string(errbuf, en));
+  }
 }
 
 void mlog_set_log(const char *log)
 {
-  long level;
-  char *ptr = NULL;
-
-  if (!*log)
+  // Three accepted shapes, matching the legacy contract so CLI
+  // `--log-level` / daemon-RPC `set_log_categories` callers keep
+  // working without a format flag day:
+  //
+  //   1. ""              => pass through to `mlog_set_categories("")`
+  //                         which the Rust translator interprets as
+  //                         "disable all logging" (see
+  //                         `TEST(logging, no_logs)`).
+  //   2. "<N>"           => bare numeric preset 0..=4 → `shekyl_log_
+  //                         set_level(N)`.
+  //   3. "<N>,<spec>"    => legacy concatenation — preset N plus
+  //                         additional category overrides — resolved
+  //                         here by glueing `get_default_categories(N)`
+  //                         to the tail and forwarding as one spec.
+  //   4. anything else   => raw legacy spec, forwarded verbatim.
+  if (!log || !*log)
   {
-    mlog_set_categories(log);
+    mlog_set_categories("");
     return;
   }
-  level = strtol(log, &ptr, 10);
+
+  char *ptr = nullptr;
+  const long level = std::strtol(log, &ptr, 10);
+
   if (ptr && *ptr)
   {
-    // we can have a default level, eg, 2,foo:ERROR
-    if (*ptr == ',') {
-      std::string new_categories = std::string(get_default_categories(level)) + ptr;
-      mlog_set_categories(new_categories.c_str());
+    if (*ptr == ',')
+    {
+      if (level < 0 || level > 4)
+      {
+        MERROR("mlog_set_log: numeric prefix " << level
+               << " in `" << log << "` outside the 0..=4 preset range");
+        return;
+      }
+      std::string merged(get_default_categories(static_cast<int>(level)));
+      merged += ptr;
+      mlog_set_categories(merged.c_str());
     }
-    else {
+    else
+    {
       mlog_set_categories(log);
     }
   }
   else if (level >= 0 && level <= 4)
   {
-    mlog_set_log_level(level);
+    mlog_set_log_level(static_cast<int>(level));
   }
   else
   {
@@ -496,10 +544,10 @@ void reset_console_color() {
 
 // C-ABI varargs shim for merror/mwarning/minfo/mdebug/mtrace. Routes
 // straight through the shekyl_log FFI rather than the M*/MC* macros
-// because this TU includes easylogging++.h directly (to keep
-// mlog_configure working until the `mlog-cpp` commit), which makes
-// `el::Level` an enum with bitfield values incompatible with the
-// `SHEKYL_LOG_LEVEL_*` numeric contract.
+// because the macros require a streaming `<<` expression at the call
+// site; these legacy printf-style helpers already have a raw
+// `char*` buffer, so going directly to `shekyl_log_emit` skips an
+// unnecessary `stringstream` round-trip.
 static bool mlog(uint8_t level, const char *category, const char *format, va_list ap) noexcept
 {
   int size = 0;

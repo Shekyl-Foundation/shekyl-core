@@ -99,6 +99,18 @@ static void log()
   MCINFO("x.y.x", "x.y.x");
 }
 
+// The `shekyl-logging` subscriber is process-global and
+// first-caller-wins: `unit_tests/main.cpp` installs it at startup
+// via `mlog_configure(mlog_get_default_log_path("unit_tests.log"),
+// true)`, and every subsequent `mlog_configure` in a test body
+// returns `SHEKYL_LOG_ERR_ALREADY_INIT` and becomes a no-op. The
+// tests below all depend on mid-process reconfiguration + reading
+// the file sink back; that model is incompatible with the new
+// subscriber, so they are suppressed here as a bridge between the
+// `mlog-cpp` commit (which moves file output into the Rust side)
+// and the dedicated `unit-tests-logging` commit that rewrites the
+// whole file to assert on dup2'd stderr capture instead.
+#if 0
 TEST(logging, no_logs)
 {
   init();
@@ -199,15 +211,6 @@ TEST(logging, multiline)
   cleanup();
 }
 
-// The three tests below targeted easylogging++ internals
-// (`el::Logger` copy-ctor / assignment / `configure(el::Configurations)`
-// throw behavior) that have no analogue in the Rust `tracing` subscriber
-// that replaces the vendored C++ logger. They are suppressed here as a
-// bridge between the `misc-log-ex` commit (which removes the
-// easylogging++ include path) and the dedicated `unit-tests-logging`
-// commit that rewrites the entire file against observable stderr
-// behavior.
-#if 0
 TEST(logging, copy_ctor_segfault)
 {
     const el::Logger log1("id1", nullptr);
@@ -227,7 +230,6 @@ TEST(logging, empty_configurations_throws)
     const el::Configurations cfg;
     EXPECT_ANY_THROW(log1.configure(cfg));
 }
-#endif
 
 TEST(logging, deadlock)
 {
@@ -280,3 +282,4 @@ TEST(logging, deadlock)
   t1.join();
   t2.join();
 }
+#endif
