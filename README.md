@@ -324,6 +324,24 @@ and build with `USE_SINGLE_BUILDDIR=1 make release`.
 
 #### On Windows:
 
+> **Security advisory — 32-bit Windows is NOT a supported Shekyl target.**
+> The `release-static-win32` / `debug-static-win32` Makefile targets and
+> the `mingw-w64-i686-*` MSYS2 packages below survive in the build
+> system only because this branch has not yet executed the scheduled
+> V3.2 retirement (tracked in `docs/STRUCTURAL_TODO.md` §"32-bit targets
+> cannot safely run Shekyl" and `docs/FOLLOWUPS.md` §"Chore #3"). Do
+> not use them, and do not reintroduce 32-bit support in any form:
+> Shekyl's post-quantum primitives (ML-KEM-768, ML-DSA-65) rely on
+> 64-bit arithmetic for their constant-time guarantees, and on 32-bit
+> ISAs the compiler decomposes every `u64` operation into variable-time
+> 32-bit sequences with operand-dependent carry propagation. That is a
+> published timing-side-channel surface (the Cortex-M4 / Kyber attack
+> line, 2022-2024) against which a 32-bit Shekyl wallet's private key
+> is extractable by anyone who can measure operation timing — which on
+> a network-connected wallet is a very large attacker set. Use
+> `release-static-win64`. If your hardware cannot run 64-bit Windows,
+> Shekyl is not appropriate for your machine.
+
 Binaries for Windows are built on Windows using the MinGW toolchain within
 [MSYS2 environment](https://www.msys2.org). The MSYS2 environment emulates a
 POSIX system. The toolchain runs within the environment and *cross-compiles*
@@ -357,7 +375,11 @@ application.
     pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi mingw-w64-x86_64-unbound
     ```
 
-    To build for 32-bit Windows:
+    **32-bit Windows builds are NOT supported — see the security
+    advisory at the top of this section. The commands below will be
+    removed in V3.2 (Chore #3) and are left in place only because
+    this branch pre-dates that retirement; the resulting binaries
+    are not safe for Shekyl wallet operations.**
 
     ```bash
     pacman -S mingw-w64-i686-toolchain make mingw-w64-i686-cmake mingw-w64-i686-boost mingw-w64-i686-openssl mingw-w64-i686-libsodium mingw-w64-i686-hidapi mingw-w64-i686-unbound
@@ -395,7 +417,10 @@ application.
     make release-static-win64
     ```
 
-* If you are on a 32-bit system, run:
+* **32-bit Windows is not supported.** The `release-static-win32`
+  target below is scheduled for removal in V3.2 (Chore #3) — see the
+  security advisory at the top of this section. If you are on a
+  32-bit-only machine, Shekyl is not appropriate for it.
 
     ```bash
     make release-static-win32
@@ -409,7 +434,8 @@ application.
     make debug-static-win64
     ```
 
-* **Optional**: to build Windows binaries suitable for debugging on a 32-bit system, run:
+* **Unsupported** (scheduled for removal in V3.2 — see the security
+  advisory at the top of this section): `debug-static-win32`.
 
     ```bash
     make debug-static-win32
@@ -468,12 +494,21 @@ Then you can run make as usual.
 By default, in either dynamically or statically linked builds, binaries target the specific host processor on which the build happens and are not portable to other processors. Portable binaries can be built using the following targets:
 
 * ```make release-static-linux-x86_64``` builds binaries on Linux on x86_64 portable across POSIX systems on x86_64 processors
-* ```make release-static-linux-i686``` builds binaries on Linux on x86_64 or i686 portable across POSIX systems on i686 processors
 * ```make release-static-linux-armv8``` builds binaries on Linux portable across POSIX systems on armv8 processors
-* ```make release-static-linux-armv7``` builds binaries on Linux portable across POSIX systems on armv7 processors
-* ```make release-static-linux-armv6``` builds binaries on Linux portable across POSIX systems on armv6 processors
 * ```make release-static-win64``` builds binaries on 64-bit Windows portable across 64-bit Windows systems
-* ```make release-static-win32``` builds binaries on 64-bit or 32-bit Windows portable across 32-bit Windows systems
+
+**The following 32-bit targets are NOT supported and are scheduled
+for removal in V3.2 (Chore #3).** Shekyl's post-quantum primitives
+rely on 64-bit arithmetic for their constant-time guarantees; 32-bit
+builds are a timing-side-channel hazard against wallet private keys.
+See `docs/STRUCTURAL_TODO.md` §"32-bit targets cannot safely run
+Shekyl" for the full analysis. Do not use these targets and do not
+reintroduce them:
+
+* ~~```make release-static-linux-i686```~~ (32-bit x86 — unsupported)
+* ~~```make release-static-linux-armv7```~~ (32-bit ARMv7 — unsupported)
+* ~~```make release-static-linux-armv6```~~ (32-bit ARMv6 — unsupported)
+* ~~```make release-static-win32```~~ (32-bit Windows — unsupported)
 
 ### Cross Compiling
 
@@ -486,18 +521,24 @@ You can also cross-compile static binaries on Linux for Windows and macOS with t
   * Requires: `cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python-dev`
 * ```make depends target=aarch64-apple-darwin``` for Apple Silicon macOS binaries.
   * Requires: `clang`
-* ```make depends target=i686-w64-mingw32``` for 32-bit windows binaries.
-  * Requires: `python3 g++-mingw-w64-i686`
-* ```make depends target=arm-linux-gnueabihf``` for armv7 binaries.
-  * Requires: `g++-arm-linux-gnueabihf`
 * ```make depends target=aarch64-linux-gnu``` for armv8 binaries.
   * Requires: `g++-aarch64-linux-gnu`
 * ```make depends target=riscv64-linux-gnu``` for RISC V 64 bit binaries.
   * Requires: `g++-riscv64-linux-gnu`
 * ```make depends target=x86_64-unknown-freebsd``` for freebsd binaries.
   * Requires: `clang-8`
-* ```make depends target=arm-linux-android``` for 32bit android binaries
 * ```make depends target=aarch64-linux-android``` for 64bit android binaries
+
+**Unsupported 32-bit cross-compile targets (scheduled for removal
+in V3.2 — Chore #3).** 32-bit depends paths remain in
+`contrib/depends/` only because this branch pre-dates the
+retirement chore. They are a timing-side-channel hazard against
+wallet keys (see `docs/STRUCTURAL_TODO.md` §"32-bit targets cannot
+safely run Shekyl") and should not be used:
+
+* ~~```make depends target=i686-w64-mingw32```~~ (32-bit Windows — unsupported)
+* ~~```make depends target=arm-linux-gnueabihf```~~ (32-bit ARMv7 — unsupported)
+* ~~```make depends target=arm-linux-android```~~ (32-bit Android ARM — unsupported)
 
 
 The required packages are the names for each toolchain on apt. Depending on your distro, they may have different names. The `depends` system has been tested on Ubuntu 18.04 and 20.04.

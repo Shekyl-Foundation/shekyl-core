@@ -151,7 +151,19 @@ cd Shekyl
 make release-static-win64
 ```
 
-For 32-bit builds use `make release-static-win32`.
+> **Do not build 32-bit Shekyl.** `make release-static-win32` is
+> still present in the `Makefile` but is scheduled for removal in
+> V3.2 (Chore #3). Shekyl's post-quantum primitives (ML-KEM-768,
+> ML-DSA-65) rely on 64-bit arithmetic for their constant-time
+> guarantees; on 32-bit targets the compiler decomposes every
+> `u64` operation into variable-time 32-bit sequences with
+> operand-dependent carry propagation, opening a published
+> timing-side-channel surface against which a Shekyl wallet's
+> private key is extractable by any attacker who can measure
+> operation timing. See `docs/STRUCTURAL_TODO.md` §"32-bit targets
+> cannot safely run Shekyl" for the full analysis. If your
+> hardware cannot run 64-bit Windows, Shekyl is not appropriate
+> for your machine.
 
 ---
 

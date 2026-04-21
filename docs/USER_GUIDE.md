@@ -47,7 +47,17 @@ Use the CLI tools when you want to:
 
 ### System requirements
 
-- **OS:** Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), Windows (MSYS2)
+- **OS / architecture:** Linux (**x86_64, ARM64 only**), macOS (Intel,
+  Apple Silicon), Windows (**64-bit only**, via MSYS2). **32-bit
+  targets are not supported and must not be used:** Shekyl's
+  post-quantum primitives (ML-KEM-768, ML-DSA-65) require 64-bit
+  arithmetic for their constant-time security property, and running a
+  32-bit Shekyl wallet exposes the wallet private key to a published
+  timing-side-channel attack class (see `docs/STRUCTURAL_TODO.md`
+  §"32-bit targets cannot safely run Shekyl" for the technical
+  analysis). If your hardware is 32-bit-only — older Raspberry Pi Zero
+  / Pi 1, pre-2005 x86 desktops, some embedded boards — Shekyl is not
+  appropriate for it.
 - **Disk:** ~50 GB for a full node; ~10 GB with `--prune-blockchain`
 - **RAM:** 4 GB minimum, 8 GB recommended during initial sync
 - **Network:** Reliable broadband; the initial sync downloads the full chain

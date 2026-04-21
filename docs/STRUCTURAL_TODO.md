@@ -121,100 +121,279 @@ MSVC raises on patterns other compilers accept silently. Patch
 upstream where possible; otherwise, carry a local diff and note it in
 `contrib/` or the relevant `external/` README.
 
-### `i686-w64-mingw32` Windows target is CI-orphaned, and the wider "bit-width carve-out without coverage" pattern
-**Priority**: Medium — dormant code generates real CVE-class bugs when
-its accidental working assumptions shift.
-**Target**: V3.2 (the deletion chore). V3.x alpha.0 covers only the
-awareness entry + the one concrete `NOT BUILD_64` fix that exposed it.
+### 32-bit targets cannot safely run Shekyl, and the wider "bit-width carve-out without coverage" pattern
+**Priority**: **High** — the 32-bit branches of the PQC pair
+(`ml-kem` / `ml-dsa`) and the `slow-hash.c` PoW fallback are both
+security-bearing, and "it compiles" does not imply "the constant-time
+proof still holds." Dormant platform-gated code with no CI coverage
+is the single most-likely source of CI-green shipped regressions in
+this project.
+**Target**: V3.2 (Chore #3 — retire every 32-bit target in one chore).
+V3.x alpha.0 (current Chore #2) covers only the awareness entry and
+the one one-line CI-green repair that exposed it.
 
-**Observed (April 2026):** During the `chore/cxx-logging-consolidation`
-work, CI run `24720803048` failed on MSYS2 with `error:
-'FSCTL_SET_COMPRESSION' was not declared in this scope`. Root cause: a
-one-line `if(NOT BUILD_64)` guard in root `CMakeLists.txt` restricted
-`-DWINVER=0x0600 -D_WIN32_WINNT=0x0600` to 32-bit MinGW. The 64-bit
-build had been relying on `misc_log_ex.h` → `easylogging++.h`'s
-transitive `#include <windows.h>` to nudge MinGW's Windows API tier
-high enough for `<winioctl.h>` to expose `FSCTL_SET_COMPRESSION`.
-Retiring `easylogging++` removed that accidental prop. Fix (commit
-`070447f5b`): drop the `NOT BUILD_64` guard so both 32- and 64-bit
-MinGW receive the tier definitions, matching what the MSVC branch has
-always done unconditionally.
+**The security argument (the real reason, April 2026).** Shekyl's
+wallet and daemon link `fips203` (ML-KEM-768) and a ML-DSA-65
+implementation for the V3.1 PQC-hybrid KEM and post-quantum multisig
+primitives. Both crates achieve their *constant-time* guarantee — the
+property their security proofs actually require — by performing
+polynomial arithmetic in `Z_q` (`q = 3329`) with `u64` operands. That
+is a LLVM/GCC-assumption about the target: on any 64-bit ISA `u64` is
+a single register-width op; on a 32-bit ISA the compiler lowers every
+`u64` operation into a pair of 32-bit ops plus a carry-propagation
+branch, and the carry path is operand-dependent. That's a
+**constant-time violation introduced by the code generator**, not
+the source code. The `fips203` author has no obligation to make the
+32-bit lowering constant-time, and from the crate's structure there
+is no evidence it has been audited for that property.
 
-**The pattern this exposes.** The 32-bit path was an explicit knob.
-The 64-bit path was running on luck, and nobody noticed for years
-because CI only builds 64-bit. This is the same family of problem as
-the `ringct` naming deception a few sections up: dormant branches of
-conditional code that look benign until the invariants they silently
-assumed change underneath them.
+This is not theoretical. The published work on Kyber / ML-KEM timing
+attacks on Cortex-M4 (2022-2024) demonstrates full secret-key
+recovery from the exact kind of variable-time carry propagation that
+the 32-bit lowering introduces. In the concrete Shekyl deployment
+story, "32-bit wallet user" equals "wallet private key is
+potentially extractable by any attacker who can measure operation
+timing." On a network-connected wallet that attacker set is much
+larger than "physical access" — it's anyone who can observe
+request/response timing against the wallet's RPC surface.
 
-The MinGW `_WIN32_WINNT` bug is not isolated. The same antipattern —
-"define a workaround only for the width of system nobody still runs,
-and let the other width happen to work" — shows up in at least eight
-places in the tree, none of which have CI coverage on the narrow side:
+ML-DSA-65 is the same failure mode with a larger timing surface:
+signing is heavier than KEM operations, and the rejection-sampling
+loop adds variable iteration counts that poorly-tuned 32-bit
+implementations handle inconsistently. Bare-metal Cortex-M4 signing
+with hand-tuned assembly sits at 50-200 ms per signature; a Pi Zero
+(ARMv6, no NEON, no hand-tuned ASM) is measured in multiple seconds
+per signature — producing both a user-visible UX failure (a wallet
+nobody can transact with) and a much larger measurement window for
+the timing-side-channel attacker.
 
-| Site | 32-bit branch behavior |
-| --- | --- |
-| `external/db_drivers/liblmdb/CMakeLists.txt:49` | Defines `MDB_VL32` — LMDB's variable-length 32-bit mmap strategy, a materially different storage path. Never exercised by any CI runner. |
-| `src/blockchain_utilities/blockchain_import.cpp:64` | `#if ARCH_WIDTH != 32` branches default `db_batch_size`. 32-bit branch untested. |
-| `CMakeLists.txt:1352` | Pulls `libatomic` on Clang + `ARCH_WIDTH==32` + `!IOS` + `!FREEBSD`. Untested. |
-| `src/crypto/slow-hash.c:374, 421` | CryptonightR AES-NI fast path gated on `__x86_64__ \|\| (_MSC_VER && _WIN64)`; the 32-bit software fallback is **consensus-adjacent PoW code** and is never CI-exercised on x86-32 or ARM-32. |
-| `tests/hash/main.cpp:192, 206` | `sqrt_result` inline-asm path under the same guard. |
-| `contrib/depends/packages/unbound.mk:18` | `_WIN32_WINNT=0x600` (typo: should be `0x0600`) applied only for `mingw32`. Mirror of the bug we just fixed — mingw64 doesn't get the nudge from depends either, and the 32-bit nudge is malformed. Untested. |
-| `contrib/depends/packages/{boost,openssl}.mk` | Separate `i686_mingw32` / `x86_64_mingw32` config variants. |
-| `contrib/gitian/gitian-win.yml:26-30`, `Makefile:{84,159}` (`release-static-win32`, `debug-static-win32`), `cmake/32-bit-toolchain.cmake`, `contrib/depends/README.md:31` | Still advertise a `i686-w64-mingw32` build target that no CI runs and no release workflow ships. |
+**The X25519 half of the hybrid does not save us.** `curve25519-dalek`
+has well-audited 32-bit constant-time implementations, so the
+X25519 branch of the hybrid KEM is correct on 32-bit. The canonical
+"hybrid is secure if either half is secure" framing does *not*
+apply to side-channel breaks: if ML-KEM leaks its secret via timing,
+the attacker recovers the ML-KEM shared secret, captures ciphertext,
+and then has unlimited offline time to attack X25519. Hybrid
+protects against algorithmic-break compromise of one component; it
+does not protect against a side-channel compromise of one component.
+On a 32-bit target, the ML-KEM half is the precise side-channel
+compromise the hybrid construction was not designed to absorb.
 
-**Why it's still here.** Inherited from Monero, which inherited it
-from Bitcoin's Gitian tradition. The `i686-linux-gnu` counterpart was
-retired in V3.0 (see `docs/audit_trail/RESOLVED_260419.md` §"Dead
-`i686_linux_*` target in `contrib/depends/hosts/linux.mk`"), but that
-audit entry explicitly left the Windows 32-bit target "independent"
-and in place.
+**FCMP++ and BP+ on 32-bit are almost certainly also broken.** Proof
+generation involves the prover's secret blinding factors moving
+through curve operations and inner-product arguments; the
+constant-time requirements on that path are real. Verification
+(multi-scalar multiplication on public inputs) is performance-
+sensitive but not directly timing-sensitive. The Rust Bulletproofs
+ecosystem targets 64-bit; 32-bit constant-time guarantees are not
+in any threat model anyone has tested for. Running Shekyl's
+prover on a 32-bit target combines an untested constant-time
+posture with multi-second proof-generation times on the inherited
+PoW fallback path.
 
-**Reality check (researched April 2026).** Windows 11 is 64-bit only;
-no 32-bit Windows 11 was ever shipped. Windows 10 entered end-of-life
-October 14, 2025. Per Statcounter (March 2026), Windows 11 holds 67.1%
-of desktop Windows share and Windows 10 31.3%. Within the Win10 slice,
-the 32-bit subvariant is 0.01% of Steam Hardware Survey respondents
+**Even setting cryptography aside: LMDB storage on 32-bit cannot
+sync the chain safely.** `MDB_VL32` exists because 32-bit address
+spaces cannot memory-map a multi-GB blockchain database. The mode
+pages portions of the database in and out as needed; this is a
+materially different storage path with a different bug profile
+than the 64-bit `mmap-everything` strategy, and no CI runner has
+ever exercised it against a real chain. Paired with multi-second
+PQC verification per block, a 32-bit daemon's sync time from
+genesis is measured in weeks at best. That is not a supported
+posture.
+
+**The right framing is therefore not "ARM32 is a relic, we can
+drop it."** The right framing is: **32-bit Shekyl wallet users
+are at meaningfully elevated risk of key extraction compared to
+64-bit users, and the supported-platform claim on a 32-bit Shekyl
+build is a tacit lie about the security posture of the user.**
+For a privacy coin, that is the precise opposite of the value
+proposition. "We dropped 32-bit because it was insecure for our
+use case" is the CHANGELOG line an external auditor reads and
+respects; "we dropped 32-bit because no one ran it" is the line an
+auditor marks as a user-harm event we shipped and later noticed.
+
+**What happened mechanically during Chore #2 (the CI crumb that
+surfaced this).** CI run
+[`24720803048`](https://github.com/Shekyl-Foundation/shekyl-core/actions/runs/24720803048)
+failed on MSYS2 x86_64 with `error: 'FSCTL_SET_COMPRESSION' was
+not declared in this scope` in `src/blockchain_db/lmdb/db_lmdb.cpp`.
+The initial diagnosis pointed at a `if(NOT BUILD_64)` guard in the
+root `CMakeLists.txt` that restricted `-D_WIN32_WINNT=0x0600` to
+32-bit MinGW; that diagnosis turned out to be wrong.
+`FSCTL_SET_COMPRESSION` is unconditional in mingw-w64's
+`<winioctl.h>` (line 1478 of upstream
+`mingw-w64-headers/include/winioctl.h`), so no `_WIN32_WINNT` tier
+change can affect its visibility. The actual root cause was
+include-order: with `easylogging++` retired, the TU's first
+transitive `<windows.h>` exposure ran through
+`<boost/filesystem.hpp>`; with `WIN32_LEAN_AND_MEAN` set
+project-wide (via `MINGW_FLAG`) boost opens the `_WINDOWS_` guard
+without pulling `<winioctl.h>`, and our subsequent `#include
+<winioctl.h>` then processes in a context where the full
+`<windows.h>` vocabulary isn't staged in the expected order. Commit
+`070447f5b` chased the wrong symbol; commit `9284d781d` reverts it
+and moves the `#ifdef WIN32` / `<windows.h>` / `<winioctl.h>`
+block to the top of `db_lmdb.cpp`'s include list, ahead of
+everything that could pre-open `<windows.h>`. The include-order fix
+is what actually unblocks MSYS2 CI.
+
+**The pattern this exposes (independent of which fix is the real
+one).** The 32-bit path is an explicit knob. The 64-bit path runs
+on luck, and nobody notices for years because CI only builds
+64-bit. Same disease as the `ringct` naming deception a few
+sections up: dormant branches of conditional code that look benign
+until the invariants they silently assumed change underneath them.
+
+This same "carve-out without coverage" antipattern shows up in at
+least eight places in the tree, none of which have CI coverage on
+the narrow side:
+
+| Site | Gated branch | Severity under PQC argument |
+| --- | --- | --- |
+| `external/db_drivers/liblmdb/CMakeLists.txt:49` | `MDB_VL32` when `ARCH_WIDTH == 32` | **Consensus-adjacent storage.** Materially different blockchain-storage path, never exercised by any CI runner. Sync against live block data on any 32-bit target hits this code first. Delete with Chore #3. |
+| `src/crypto/slow-hash.c:374, 421` | CryptonightR AES-NI gated on `__x86_64__ \|\| (_MSC_VER && _WIN64)`; 32-bit software fallback active otherwise | **Consensus-adjacent PoW.** The 32-bit software fallback is PoW verification code. Any 32-bit miner hashing against the network runs an untested consensus-adjacent path against live block hashes. Delete with Chore #3. |
+| `src/blockchain_utilities/blockchain_import.cpp:64` | `#if ARCH_WIDTH != 32` branches default `db_batch_size` | Recoverability UX. 32-bit users bootstrapping hit an untested batch-size path; failure mode is silent (slow import, no crash). Delete with Chore #3. |
+| `CMakeLists.txt:1352` | `libatomic` link pulled on `Clang AND ARCH_WIDTH==32 AND !IOS AND !FREEBSD` | Build-only, untested. Delete with Chore #3 as dead scaffolding. |
+| `tests/hash/main.cpp:192, 206` | `sqrt_result` inline-asm under the same 64-bit guard | Test-only. Hazard is inverted: the test is width-gated away from exercising the production path it should be covering. Delete with Chore #3 (the 32-bit branch) or with `slow-hash.c` retirement. |
+| `contrib/depends/packages/unbound.mk:18` | `cflags_mingw32+="-D_WIN32_WINNT=0x600"` | Inconsistency + uncovered. Note: `0x600` and `0x0600` evaluate to the same integer in preprocessor arithmetic, so it is not a numerical bug — but it is an asymmetry the `mingw64` depends path doesn't mirror, the exact same carve-out-without-coverage shape as the root-CMake bug, mirrored into the depends layer. Delete entire `_cflags_mingw32` line under Chore #3 since the `mingw32` host is going away. |
+| `contrib/depends/packages/{boost,openssl}.mk` | Separate `i686_mingw32` / `x86_64_mingw32` config variants | Build-only; parallel config paths, one CI runner. Delete the `i686_mingw32` variants under Chore #3. |
+| `contrib/gitian/gitian-win.yml:26-30`, `Makefile:{84,159}` (`release-static-win32`, `debug-static-win32`), `cmake/32-bit-toolchain.cmake`, `contrib/depends/README.md:31`, **plus the ARM32 siblings** `release-static-armv7`, `release-static-armv6`, `release-static-android-armv7` | Entire `i686-w64-mingw32` + ARM32 target set | Advertised build targets with no CI runners and no release workflow shipping binaries. Delete with Chore #3. |
+
+Note the pattern within the pattern: the `unbound.mk` line and the
+root-CMake `FSCTL_SET_COMPRESSION` misdirect are the *same* disease
+mirrored into two different build layers — an architecture-
+specific directive defined for one width and silently absent for
+the other, with the "working" side running on whatever transitive
+includes and toolchain defaults happen to hold that week. Both are
+invisible precisely because the gated side has no CI. A workaround
+whose only purpose is to execute on an untested path is, by
+construction, invisible when it breaks.
+
+**Market-reality context (researched April 2026, supporting
+evidence).** Windows 11 is 64-bit only; no 32-bit Windows 11 was
+ever shipped. Windows 10 entered end-of-life October 14, 2025. Per
+Statcounter (March 2026), Windows 11 holds 67.1% of desktop
+Windows share and Windows 10 31.3%. Within the Win10 slice the
+32-bit subvariant is 0.01% of Steam Hardware Survey respondents
 (August 2025). Valve drops Steam 32-bit Windows January 1, 2026;
-Mozilla drops Firefox 32-bit Windows in 2026. The `i686-w64-mingw32`
-audience in 2026 is, rounding charitably, zero users.
+Mozilla drops Firefox 32-bit Windows in 2026. The combined
+`i686-w64-mingw32` + ARM32 user base in 2026 is not the driver of
+this decision, but it closes the "who does this harm by removing"
+question.
 
-**Scope of the V3.2 deletion chore.** Retire `i686-w64-mingw32` in the
-same shape the `i686-linux-gnu` retirement took:
+**Chore sequencing (explicit, to keep blast radii bounded).**
 
-- Delete `cmake/32-bit-toolchain.cmake`.
-- Delete `Makefile` targets `release-static-win32`, `debug-static-win32`
-  (any `-v4` variants if introduced later).
-- Delete the `i686-w64-mingw32-*` alternatives block in
-  `contrib/gitian/gitian-win.yml`.
-- Delete `_config_opts_i686_mingw32`, `_config_opts_mingw32` (where it's
-  purely a 32-bit construct), and the `_cflags_mingw32` typo-carrying
-  line in `contrib/depends/packages/*.mk`.
-- Strip the Win32 paragraph from `README.md` §"Building on Windows",
-  `docs/INSTALLATION_GUIDE.md:154`, and `contrib/depends/README.md:31`.
-- Leave `BUILD_64` / `ARCH_WIDTH` as concepts — ARM32 (`armv6zk`,
-  `armv7-a`, Android armv7) still lives in the `Makefile` and
-  `toolchain.cmake.in` and is not dead in the same way. Those
-  carve-outs should be audited separately under the rubric below.
+- **Chore #2 (V3.x alpha.0 / current branch)** — `easylogging++`
+  retirement + Rust FFI bridge. Includes the include-order fix in
+  `db_lmdb.cpp` (commit `9284d781d`) and the revert of the
+  misdiagnosed CMake change (same commit). *No other platform
+  cleanup is in Chore #2.* Keeping Chore #2 scoped matters: it is
+  already a large diff (FFI, vendor deletion, env-var sweep,
+  format break, daemon default sink), and bolting platform-
+  retirement work onto it makes the diff harder to review and the
+  revert harder if either piece breaks. The discovery happens in
+  Chore #2; the cleanup is Chore #3.
 
-**What this entry does *not* resolve.** The 32-bit ARM targets and the
-consensus-adjacent PoW fallback (`slow-hash.c:374`) stay alive because
-ARM32 deployment (Raspberry Pi Zero / Pi 1, older embedded boards) is
-still a real story — just not a story CI tests. Separately from the
-`i686-w64-mingw32` deletion, the audit-surface question is whether
-Shekyl wants to *commit* to ARM32 as a supported target (in which case
-CI must grow an ARM32 runner, and the currently-commented-out
-`armv7-unknown-linux-gnueabihf` line in `.github/workflows/depends.yml`
-needs to un-comment), or retire the ARM32 `Makefile` targets the same
-way. That is a V4-era decision and should not block the Windows
-retirement.
+- **Chore #3 (V3.2) — retire every 32-bit target.** One combined
+  chore. The PQC security argument makes the Windows and ARM32
+  retirements symmetric and concurrent; there is no principled
+  reason to split them. Concretely:
+  - Delete `cmake/32-bit-toolchain.cmake`.
+  - Delete `Makefile` targets `release-static-win32`,
+    `debug-static-win32`, `release-static-armv7`,
+    `release-static-armv6`, `release-static-android-armv7` (and any
+    `-v4` variants).
+  - Delete the `i686-w64-mingw32-*` alternatives block in
+    `contrib/gitian/gitian-win.yml`.
+  - Delete `_config_opts_i686_mingw32`, `_config_opts_mingw32`
+    (where purely 32-bit), the `_cflags_mingw32` line in
+    `contrib/depends/packages/unbound.mk`, and the `i686_mingw32`
+    variants in the other `contrib/depends/packages/*.mk`.
+  - Delete `MDB_VL32` from `external/db_drivers/liblmdb/CMakeLists.txt`.
+  - Delete the CryptonightR 32-bit software fallback in
+    `src/crypto/slow-hash.c:374, 421` and the paired inline-asm
+    guard in `tests/hash/main.cpp:192, 206`.
+  - Delete the `#if ARCH_WIDTH != 32` default-`db_batch_size`
+    branch in `src/blockchain_utilities/blockchain_import.cpp:64`
+    (collapse to the 64-bit default).
+  - Delete the Clang + `ARCH_WIDTH==32` `libatomic` pull at
+    `CMakeLists.txt:1352`.
+  - Collapse `BUILD_64` / `ARCH_WIDTH` / `BUILD_WIDTH` to
+    unconditionally-true and *remove the conditionals entirely*.
+    This is ~few-hundred lines of mechanical `#if` removal, and
+    doing it in the same chore is essential: leaving dead
+    `#if ARCH_WIDTH == 64` around is itself the same inherited-
+    correctness disease this entry diagnoses — the next person to
+    touch the tree will assume the gated alternative is meaningful
+    and start reasoning about it.
+  - Strip the Win32 and ARM32 paragraphs from `README.md`,
+    `docs/INSTALLATION_GUIDE.md:154`, `contrib/depends/README.md`.
+  - **CHANGELOG lead.** The `docs/CHANGELOG.md` V3.2 entry must
+    lead with the security argument, not the maintenance
+    argument. Suggested first paragraph: *"Shekyl no longer
+    supports 32-bit targets. ML-KEM-768 and ML-DSA-65
+    implementations rely on 64-bit arithmetic for their
+    constant-time guarantees; on 32-bit targets, the compiler
+    decomposes 64-bit operations into variable-time 32-bit
+    sequences, opening a timing-attack surface that can lead to
+    wallet key recovery. This affects all 32-bit ARM, x86, and
+    embedded targets. Users on 32-bit hardware should not run
+    Shekyl wallets. The `i686-w64-mingw32`, `release-static-armv6`,
+    `release-static-armv7`, and `release-static-android-armv7`
+    build targets have been removed. ARM64, x86-64, and Apple
+    Silicon are the supported architectures."*
+  - Precedent: V3.0's `i686-linux-gnu` retirement, see
+    `docs/audit_trail/RESOLVED_260419.md` §"Dead `i686_linux_*`
+    target in `contrib/depends/hosts/linux.mk`".
 
-**Migration-on-touch rubric (for reviewers encountering similar guards
-in future work):** any `if(NOT BUILD_64)`, `#if ARCH_WIDTH != 32`, or
-`#if !defined(__x86_64__) && !defined(_WIN64)` site should be treated
-as a review-time red flag equivalent to a `ringct` sighting — either
-prove it's on a CI-covered path, or document its coverage gap here and
-schedule the retirement.
+- **Chore #4 (V4 pre-audit) — platform-gate audit sweep.** Now
+  smaller in scope because Chore #3 eliminates the worst offenders.
+  A systematic pass over every `#if`, `#ifdef`, CMake `if()`, and
+  Makefile conditional that gates on a platform predicate that
+  *still exists* after Chore #3 — principally `__APPLE__`,
+  `__ANDROID__`, `_MSC_VER`, `__FreeBSD__`, `BSD`, `__linux__`,
+  plus any residual host-triple patterns in `contrib/depends/`.
+  Produces a coverage report with three columns — site, claimed
+  platform, CI-covered y/n — and classifies each row as **delete**
+  (platform not actually claimed), **CI add** (claimed and about
+  to be tested), or **document-as-unverified** (claimed but
+  deliberately unverified, with explicit severity and target
+  version here). Highest-value audit-defensibility deliverable
+  before the V4 external audit; worth doing once, well. Target:
+  V4 pre-audit.
+
+**Migration-on-touch rubric (active immediately, for reviewers
+encountering similar guards):** any of the following sites in a
+PR outside Chore #3's scope is a review-time red flag equivalent
+to a `ringct` sighting:
+
+- `if(NOT BUILD_64)` / `if(BUILD_64)` in CMake.
+- `#if ARCH_WIDTH != 32` / `#if ARCH_WIDTH == 32` / `#if
+  ARCH_WIDTH == 64` in C/C++.
+- `#if !defined(__x86_64__) && !defined(_WIN64)` guarding hot /
+  PoW / consensus-adjacent / cryptographic paths.
+- Any `contrib/depends/packages/*.mk` line containing `_i686_` /
+  `_mingw32` / `_armv7` config variants.
+- Any new `#ifdef` / CMake conditional gating a workaround on a
+  platform that isn't in `.github/workflows/build.yml` or
+  `depends.yml`'s active matrix.
+
+Reviewer default: reject or require the author to either prove
+CI coverage for the gated branch, add coverage, or route the
+change through Chore #3 / #4 with an explicit entry here.
+
+Cross-refs:
+
+- Chore scheduling in `docs/FOLLOWUPS.md`.
+- Precedent: `i686-linux-gnu` retirement in V3.0,
+  `docs/audit_trail/RESOLVED_260419.md` §"Dead `i686_linux_*`
+  target in `contrib/depends/hosts/linux.mk`".
+- User-facing safety callouts pointing here:
+  `README.md` §"Building on Windows", `docs/INSTALLATION_GUIDE.md`,
+  `docs/USER_GUIDE.md` §"System requirements".
+- Commits: `070447f5b` (misdiagnosis, reverted), `9284d781d`
+  (include-order fix + revert — the actual CI repair).
 
 ### vcpkg builds take 45+ minutes — partially resolved
 **Priority**: Low — CI timing is acceptable with warm caches.

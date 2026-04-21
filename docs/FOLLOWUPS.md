@@ -43,6 +43,99 @@ require archaeology to recover.
   but the premise should not quietly remain in force on a basis the
   framing note contradicts.
 
+- **Chore #3: retire every 32-bit target — leading with the security argument (V3.2).**
+  **The reason is security, not maintenance.** Shekyl's PQC primitives
+  (`fips203` / ML-KEM-768, ML-DSA-65) rely on 64-bit arithmetic for
+  their constant-time guarantees; on 32-bit targets the compiler
+  decomposes every `u64` op into variable-time 32-bit sequences with
+  operand-dependent carry propagation, opening a timing-attack surface
+  that has been demonstrated to recover full secret keys on lattice
+  schemes (the Cortex-M4 / Kyber attack line, 2022-2024). The hybrid
+  KEM construction does *not* save us: "hybrid is secure if either
+  half is secure" protects against algorithmic breaks, not
+  side-channel breaks. If ML-KEM leaks via timing on 32-bit, X25519 is
+  offline-attackable against captured ciphertexts with unlimited time.
+  Separately, `MDB_VL32` (LMDB's 32-bit mmap strategy) is an untested
+  consensus-adjacent storage path no CI runner has ever exercised
+  against a real chain, and the CryptonightR 32-bit software fallback
+  in `src/crypto/slow-hash.c:374` is untested consensus-adjacent PoW
+  code. **32-bit Shekyl wallet users are at meaningfully elevated
+  risk of key extraction compared to 64-bit users; supporting the
+  platform is a tacit lie about the security posture of users on it.**
+
+  Discovered during the Chore #2 easylogging++ retirement when
+  MSYS2 CI surfaced a `FSCTL_SET_COMPRESSION` regression (initial
+  diagnosis wrong, see `STRUCTURAL_TODO.md` for the full walk;
+  commits `070447f5b` misdiagnosed → `9284d781d` reverted +
+  include-order-fixed). The mechanics of that bug exposed the
+  broader pattern: the 32-bit path was an explicit knob, the
+  64-bit path was running on accidental transitive-include luck,
+  and the pattern repeats in at least eight sites across the tree
+  (tabulated in `STRUCTURAL_TODO.md` §"32-bit targets cannot
+  safely run Shekyl").
+
+  Scope — all in one chore, symmetric across Windows and ARM32
+  because the security argument is symmetric:
+  - Delete `cmake/32-bit-toolchain.cmake`.
+  - Delete `Makefile` targets `release-static-win32`,
+    `debug-static-win32`, `release-static-armv7`,
+    `release-static-armv6`, `release-static-android-armv7`.
+  - Delete the `i686-w64-mingw32-*` alternatives in
+    `contrib/gitian/gitian-win.yml`.
+  - Delete `_config_opts_i686_mingw32`, `_config_opts_mingw32`
+    (where purely 32-bit), `_cflags_mingw32` line in
+    `contrib/depends/packages/unbound.mk`, and `i686_mingw32`
+    variants in the other `contrib/depends/packages/*.mk`.
+  - Delete `MDB_VL32` from `external/db_drivers/liblmdb/CMakeLists.txt`.
+  - Delete the CryptonightR 32-bit software fallback in
+    `src/crypto/slow-hash.c:374, 421` and the paired inline-asm
+    guard in `tests/hash/main.cpp:192, 206`.
+  - Delete the `#if ARCH_WIDTH != 32` branch in
+    `src/blockchain_utilities/blockchain_import.cpp:64`.
+  - Delete the Clang + `ARCH_WIDTH==32` `libatomic` pull at
+    `CMakeLists.txt:1352`.
+  - **Collapse `BUILD_64` / `ARCH_WIDTH` / `BUILD_WIDTH` to
+    unconditionally-true and delete the conditional guards
+    entirely.** Leaving dead `#if ARCH_WIDTH == 64` around is
+    the same inherited-correctness disease the chore exists to
+    cure — the next person to touch the tree will assume the
+    gated alternative is meaningful. This is the part of the
+    chore it is tempting to skip; do not skip it.
+  - Strip 32-bit paragraphs from `README.md`,
+    `docs/INSTALLATION_GUIDE.md`, `contrib/depends/README.md`,
+    and any daemon/wallet user-facing docs that reference
+    `i686` or `armv7`.
+  - `docs/CHANGELOG.md` V3.2 entry leads with the security
+    argument. Suggested first paragraph in
+    `STRUCTURAL_TODO.md` §"32-bit targets cannot safely run
+    Shekyl" — use it verbatim.
+
+  Precedent: V3.0 `i686-linux-gnu` retirement, see
+  `docs/audit_trail/RESOLVED_260419.md` §"Dead `i686_linux_*`
+  target in `contrib/depends/hosts/linux.mk`". Full motivation
+  in `docs/STRUCTURAL_TODO.md` §"32-bit targets cannot safely
+  run Shekyl, and the wider 'bit-width carve-out without
+  coverage' pattern". Target: V3.2.
+
+- **Chore #4: platform-gate audit sweep — reduced scope after Chore #3 (V4 pre-audit).**
+  Chore #3 eliminates the worst offenders (every bit-width
+  carve-out). Chore #4 is the residual systematic pass over
+  every `#if`, `#ifdef`, CMake `if()`, and Makefile conditional
+  that gates on a platform predicate still in force after Chore
+  #3 — principally `__APPLE__`, `__ANDROID__`, `_MSC_VER`,
+  `__FreeBSD__`, `BSD`, `__linux__`, plus any residual
+  host-triple patterns in `contrib/depends/`. Produces a
+  coverage report with three columns — site, claimed platform,
+  CI-covered y/n — and classifies each row as **delete**
+  (platform not actually claimed), **CI add** (claimed and
+  about to be tested), or **document-as-unverified** (claimed
+  but deliberately unverified, with explicit severity and
+  target version in `STRUCTURAL_TODO.md`). Highest-value
+  audit-defensibility deliverable before the V4 external
+  audit; worth doing once, well. See `STRUCTURAL_TODO.md`
+  §"32-bit targets..." for the governing rubric. Target:
+  V4 pre-audit.
+
 - **`dalek-ff-group` version isolation enforced via CI gate.**
   The Rust workspace carries two versions: 0.5.x (used directly by Shekyl
   crates) and 0.4.x (pulled transitively by vendored serai/`ciphersuite`
