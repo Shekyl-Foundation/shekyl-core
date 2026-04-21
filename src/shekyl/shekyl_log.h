@@ -3,7 +3,7 @@
 // All rights reserved.
 
 /// @file shekyl_log.h
-/// @brief C declarations for the Rust shekyl-logging crate (libshekyl_log.a).
+/// @brief C declarations for the Rust shekyl-logging crate (libshekyl_logging.a).
 ///
 /// This header is the FFI boundary between the C++ logging shim
 /// (`contrib/epee/include/misc_log_ex.h`, `contrib/epee/src/mlog.cpp`)
@@ -13,10 +13,14 @@
 ///
 /// ## Linking
 ///
-/// Link against `libshekyl_log.a` (static archive produced by
-/// `cargo build -p shekyl-logging`). The CMake integration is in
-/// `cmake/BuildRust.cmake`; every C++ target that already links
-/// `shekyl_ffi` also picks up `shekyl_log` transitively.
+/// Link against `libshekyl_logging.a` (static archive produced by
+/// `cargo build -p shekyl-logging`; the `lib<crate_name>.a` naming
+/// is Cargo's default and the crate is `shekyl-logging`, so the
+/// artifact is `libshekyl_logging.a`, not `libshekyl_log.a`). The
+/// CMake integration is in `cmake/BuildRust.cmake`, which wraps
+/// the archive in the IMPORTED target `shekyl_log`; every C++
+/// target that already links `shekyl_ffi` also picks up
+/// `shekyl_log` transitively.
 ///
 /// ## Initialization & shutdown
 ///

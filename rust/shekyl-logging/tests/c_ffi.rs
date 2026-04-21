@@ -196,18 +196,34 @@ fn compile_and_link_harness(
     let mut cmd = Command::new(cc_path);
     cmd.arg(c_src);
     cmd.arg(static_lib);
-    // Linker deps required by Rust std's Linux runtime: pthreads
-    // and libdl for lazy symbol lookup, libm for math ops, libc
-    // last. `-lutil` is harmless if present on the system. `-lrt`
-    // is pulled in by some tracing-subscriber paths.
     cmd.args([
         "-o",
         out_exe.to_str().expect("exe path is valid UTF-8"),
+        // `-lpthread` and `-lm` live in libc on every Unix we ship;
+        // passing them is universally safe (glibc, musl, macOS libSystem,
+        // the BSDs) and matches the flags Cargo would pass for
+        // `crate-type = ["staticlib"]` on those same targets.
         "-lpthread",
-        "-ldl",
         "-lm",
-        "-lrt",
     ]);
+    // `-ldl` and `-lrt` are Linux/Android-specific: glibc/bionic host
+    // `dlopen`/`dlsym` in a standalone `libdl.so` and realtime-clock
+    // primitives in `librt.so`. Other Unixes put those symbols in
+    // libc itself:
+    //   * macOS / iOS  — `libSystem` already covers them; `-ldl` and
+    //     `-lrt` simply do not exist on those SDKs and the linker
+    //     errors with "library not found".
+    //   * FreeBSD / NetBSD / OpenBSD — same story; `-ldl` is a no-op
+    //     shim on some, missing on others, and `-lrt` is absent.
+    //   * Illumos / Solaris — `-lrt` exists but the symbols we rely on
+    //     are also in libc; leaving the flag in is safe but we stay
+    //     on the "Linux/Android only" side of the conditional to
+    //     avoid surprising those platforms later.
+    // Keeping these gated on `target_os = "linux"` / `"android"` lets
+    // CI on the BSD/macOS runners exercise the harness without having
+    // to teach every downstream packager to patch them out.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    cmd.args(["-ldl", "-lrt"]);
     cmd.status()
 }
 

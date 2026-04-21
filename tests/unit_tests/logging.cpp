@@ -83,6 +83,7 @@
 #include "misc_log_ex.h"
 
 #if !defined(_WIN32)
+#include <cerrno>
 #include <chrono>
 #include <fcntl.h>
 #include <unistd.h>
@@ -107,7 +108,7 @@ namespace
       int pipefd[2] = {-1, -1};
       if (::pipe(pipefd) != 0)
       {
-        ADD_FAILURE() << "pipe() failed: " << std::strerror(errno);
+        setup_error_ = std::string("pipe() failed: ") + std::strerror(errno);
         return;
       }
       // Non-blocking read so `drain()` can poll without risk of
@@ -115,7 +116,7 @@ namespace
       const int fl = ::fcntl(pipefd[0], F_GETFL, 0);
       if (fl == -1 || ::fcntl(pipefd[0], F_SETFL, fl | O_NONBLOCK) != 0)
       {
-        ADD_FAILURE() << "fcntl(O_NONBLOCK) failed: " << std::strerror(errno);
+        setup_error_ = std::string("fcntl(O_NONBLOCK) failed: ") + std::strerror(errno);
         ::close(pipefd[0]);
         ::close(pipefd[1]);
         return;
@@ -127,13 +128,15 @@ namespace
       saved_stderr_ = ::dup(STDERR_FILENO);
       if (saved_stderr_ < 0)
       {
-        ADD_FAILURE() << "dup(STDERR_FILENO) failed: " << std::strerror(errno);
+        setup_error_ = std::string("dup(STDERR_FILENO) failed: ") + std::strerror(errno);
         return;
       }
       if (::dup2(write_fd_, STDERR_FILENO) < 0)
       {
-        ADD_FAILURE() << "dup2 failed: " << std::strerror(errno);
+        setup_error_ = std::string("dup2 failed: ") + std::strerror(errno);
+        return;
       }
+      usable_ = true;
     }
 
     ~stderr_capture()
@@ -170,11 +173,18 @@ namespace
           break; // writer-side closed (shouldn't happen here)
         }
         // POSIX permits `EAGAIN` and `EWOULDBLOCK` to be the same value
-        // (true on Linux / glibc / musl); we check only `EAGAIN` to
-        // avoid GCC's `-Wlogical-op` ("logical or of equal
-        // expressions") warning on those platforms while still relying
-        // on POSIX's contract that either value may appear here.
+        // (true on Linux / glibc / musl, both defined to `11`); on
+        // those platforms GCC's `-Wlogical-op` fires on
+        // `errno == EAGAIN || errno == EWOULDBLOCK` because it
+        // resolves to `errno == 11 || errno == 11`. A compile-time
+        // split keeps the behavior correct on platforms where POSIX
+        // permits them to differ (some BSDs) without tripping the
+        // warning on platforms where they don't.
+#if defined(EWOULDBLOCK) && (EAGAIN != EWOULDBLOCK)
+        else if (errno == EAGAIN || errno == EWOULDBLOCK)
+#else
         else if (errno == EAGAIN)
+#endif
         {
           if (++empty_reads >= 2 && !out.empty()) break;
           std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -196,10 +206,24 @@ namespace
       saved_stderr_ = -1;
     }
 
+    /// True iff the pipe / `dup2` plumbing succeeded. Tests that
+    /// assert the *absence* of output (e.g. `TEST(logging, no_logs)`)
+    /// must gate on this — a `stderr_capture` whose setup failed
+    /// silently would leave stderr pointing at the original fd, and
+    /// `drain()` would return an empty string regardless of whether
+    /// the subscriber actually emitted, producing a false negative.
+    /// Hard-asserting with `ASSERT_TRUE(cap.usable())` turns that
+    /// failure into a loud, debuggable test error that surfaces
+    /// `setup_error()` instead of a silently passing no-op test.
+    bool usable() const { return usable_; }
+    const std::string &setup_error() const { return setup_error_; }
+
   private:
     int read_fd_ = -1;
     int write_fd_ = -1;
     int saved_stderr_ = -1;
+    bool usable_ = false;
+    std::string setup_error_;
   };
 #endif // !_WIN32
 } // namespace
@@ -237,6 +261,9 @@ TEST(logging, no_logs)
 {
   mlog_set_categories("");
   stderr_capture cap;
+  ASSERT_TRUE(cap.usable())
+    << "stderr_capture setup failed (" << cap.setup_error()
+    << "); an empty drain below would be a false negative.";
   MFATAL("marker-no-logs-fatal");
   MERROR("marker-no-logs-error");
   MWARNING("marker-no-logs-warn");
@@ -246,9 +273,17 @@ TEST(logging, no_logs)
   const std::string out = cap.drain();
   cap.restore();
 
-  EXPECT_EQ(out.find("marker-no-logs"), std::string::npos)
-    << "captured output unexpectedly contained a silenced marker:\n"
-    << out;
+  // Empty-spec routes through the translator's `"off"` branch (see
+  // `rust/shekyl-logging/src/legacy.rs::translate`); `"off"` disables
+  // every level including error/fatal. Nothing at all should reach
+  // stderr — not even a header line, not a trailing newline. Assert
+  // on `out.empty()` rather than "the marker substring isn't there"
+  // so that a subscriber that somehow emits *any* bytes under the
+  // `"off"` filter surfaces as a loud failure rather than slipping
+  // through on a substring check.
+  EXPECT_TRUE(out.empty())
+    << "captured output under `off` filter was non-empty (" << out.size()
+    << " bytes):\n" << out;
 }
 
 // Positive control for the stderr pipeline: with the filter wide
@@ -262,6 +297,8 @@ TEST(logging, info_reaches_stderr)
 {
   mlog_set_categories("*:INFO");
   stderr_capture cap;
+  ASSERT_TRUE(cap.usable())
+    << "stderr_capture setup failed: " << cap.setup_error();
   MGINFO("marker-info-reaches-stderr");
   const std::string out = cap.drain();
   cap.restore();
@@ -280,6 +317,8 @@ TEST(logging, level_threshold_is_respected)
 {
   mlog_set_categories("*:WARNING");
   stderr_capture cap;
+  ASSERT_TRUE(cap.usable())
+    << "stderr_capture setup failed: " << cap.setup_error();
   MINFO("marker-should-not-appear");
   MWARNING("marker-should-appear");
   const std::string out = cap.drain();
@@ -301,6 +340,8 @@ TEST(logging, category_filter_routes_emits)
 {
   mlog_set_categories("*:WARNING,net.p2p:TRACE");
   stderr_capture cap;
+  ASSERT_TRUE(cap.usable())
+    << "stderr_capture setup failed: " << cap.setup_error();
   MCINFO("net.p2p", "marker-net-p2p-trace");
   MCINFO("wallet.scanner", "marker-wallet-scanner-info");
   const std::string out = cap.drain();
@@ -326,6 +367,8 @@ TEST(logging, concurrent_emits_do_not_deadlock)
 {
   mlog_set_categories("*:INFO");
   stderr_capture cap;
+  ASSERT_TRUE(cap.usable())
+    << "stderr_capture setup failed: " << cap.setup_error();
 
   std::thread t1([] { MGINFO("marker-concurrent-thread-1"); });
   std::thread t2([] { MGINFO("marker-concurrent-thread-2"); });

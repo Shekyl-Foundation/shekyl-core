@@ -838,15 +838,28 @@ else()
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,10485760")
     # Pin the Windows API tier to Vista (0x0600) on both 32- and 64-bit
     # MinGW. The 32-bit leg has always needed this; the 64-bit leg now
-    # needs it too because `FSCTL_SET_COMPRESSION` (used by
-    # `disable_ntfs_compression` in `src/blockchain_db/lmdb/db_lmdb.cpp`)
-    # is gated on `_WIN32_WINNT` in current MinGW-w64 `<winioctl.h>`
-    # and the MinGW default tier is otherwise too low. This replaces
-    # commit 070447f5b ("cmake: set _WIN32_WINNT=0x0600 for MinGW
-    # x86_64 too") which a subsequent revert removed in error while
-    # chasing an unrelated include-order theory. Dropping the 32-bit
-    # leg in Chore #3 will let this collapse back to the unconditional
-    # single definition, but the tier gate itself stays.
+    # needs it too so MinGW-w64's `<winioctl.h>` exposes the Vista+
+    # declarations its own headers gate on `_WIN32_WINNT` (chiefly
+    # `FSCTL_SET_COMPRESSION`, used by `disable_ntfs_compression` in
+    # `src/blockchain_db/lmdb/db_lmdb.cpp`).
+    #
+    # The tier pin is *one* of two independent mechanisms that keep
+    # that symbol visible on MinGW — the other, living in
+    # `src/blockchain_db/lmdb/db_lmdb.cpp`, is a `#ifndef
+    # FSCTL_SET_COMPRESSION` / manual-define fallback that covers the
+    # *separate* case where MinGW's `<winioctl.h>` closes the
+    # `_FILESYSTEMFSCTL_` guard early under certain include orders
+    # (so the symbol isn't declared regardless of the API tier). The
+    # API-tier pin and the source-side fallback cover different root
+    # causes and are both necessary on the toolchain mixes we ship;
+    # keep them in sync and do not collapse one into the other.
+    #
+    # This replaces commit 070447f5b ("cmake: set _WIN32_WINNT=0x0600
+    # for MinGW x86_64 too") which a subsequent revert removed in
+    # error while we were chasing only the include-order half of the
+    # problem. Dropping the 32-bit MinGW leg in Chore #3 lets this
+    # collapse to a single unconditional definition, but the tier
+    # gate (and the source-side fallback) both stay.
     add_definitions(-DWINVER=0x0600 -D_WIN32_WINNT=0x0600)
   endif()
   set(C_WARNINGS "-Waggregate-return -Wnested-externs -Wold-style-definition -Wstrict-prototypes")

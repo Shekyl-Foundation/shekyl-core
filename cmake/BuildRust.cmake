@@ -219,9 +219,12 @@ endif()
 # so this reuses the same target-triple / cross-env setup resolved above.
 # Every C++ target that includes `src/shekyl/shekyl_log.h` (i.e. every TU
 # that transitively pulls in `contrib/epee/include/misc_log_ex.h`) links
-# against `libshekyl_log.a` — which is effectively the whole project once
-# the easylogging++ shim is retired. We append `shekyl_log` to
-# `SHEKYL_FFI_LINK_LIBS` so existing consumers pick it up transparently;
+# against `libshekyl_logging.a` (Cargo's default `lib<crate_name>.a`
+# naming for the `shekyl-logging` crate) — which is effectively the
+# whole project once the easylogging++ shim is retired. We expose it
+# as the CMake IMPORTED target `shekyl_log` (short name, matches the
+# header it mirrors) and append that target to `SHEKYL_FFI_LINK_LIBS`
+# so existing consumers pick it up transparently;
 # duplicate Rust-runtime symbols across the two archives are resolved by
 # rustc's weak-symbol emission (same pattern that already lets
 # `shekyl_daemon_rpc` coexist with `shekyl_ffi` in the daemon binary).
