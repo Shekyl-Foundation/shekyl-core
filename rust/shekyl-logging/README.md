@@ -147,6 +147,55 @@ Release builds never honor `RUST_LOG`. A long-lived shell export
 of `RUST_LOG=debug` from some other Rust project would otherwise
 be a privacy foot-cannon against Shekyl binaries.
 
+## C ABI (Chore #2 only)
+
+`shekyl-logging` also ships a `staticlib` crate-type that exposes a
+stable C ABI in `src/ffi.rs`. The Chore #2 C++ shim — the
+replacement for `external/easylogging++/` — links against
+`libshekyl_logging.a` and routes every `MINFO` / `MDEBUG` / etc.
+call site through the unified Rust subscriber. The header at
+`src/shekyl/shekyl_log.h` (landing in commit 3) mirrors the ABI
+verbatim.
+
+Summary of the C surface:
+
+- `shekyl_log_init_stderr(fallback_level)` /
+  `shekyl_log_init_file(dir, dir_len, prefix, prefix_len,
+  fallback_level, max_bytes, max_files)` — install the global
+  subscriber. `max_bytes = 0` maps to `FileSink::unrotated`; any
+  positive value maps to `FileSink::size_rolling`. First call wins;
+  later calls return `SHEKYL_LOG_ERR_ALREADY_INIT`.
+- `shekyl_log_level_enabled(level, target, target_len)` — hot-path
+  gate the shim calls before building the C++ `std::stringstream`.
+  Short-circuits filtered-out sites before any allocation.
+- `shekyl_log_emit(level, target, ..., msg, msg_len)` — emit one
+  event. Target strings are interned on first use into a leaked
+  `'static` callsite pool so `EnvFilter`'s target-matching lines
+  up with the translator output from
+  `directives_from_legacy_categories`.
+- `shekyl_log_set_categories(spec, spec_len, fallback_level)` /
+  `shekyl_log_set_level(numeric_level)` — runtime filter reload,
+  routed through the stateful translator (`current_spec` = last-
+  applied directive) and a `tracing_subscriber::reload::Layer`.
+- `shekyl_log_get_categories(out, out_cap)` /
+  `shekyl_log_default_path(binary_name, ..., out, out_cap)` /
+  `shekyl_log_last_error_message(out, out_cap)` — read-side
+  helpers. All return the total number of bytes that would have
+  been written, so callers can detect truncation and re-invoke
+  with a larger buffer. Bytes are never NUL-terminated.
+- `shekyl_log_shutdown()` — drop the stashed `LoggerGuard` so the
+  non-blocking writer flushes. Safe to call multiple times.
+
+Thread-safety: the global state is an `OnceLock<Mutex<_>>` and the
+last-error text is per-thread, so concurrent C calls across threads
+never race on diagnostic strings.
+
+Integration coverage: `tests/c_ffi.rs` writes a small C harness to
+a tempdir, compiles it with the system C compiler, links against
+`libshekyl_logging.a`, and asserts the printed output exercising
+init + enabled + emit + set-categories + shutdown. The test skips
+gracefully when no C toolchain is on `PATH`.
+
 ## The `LoggerGuard` footgun
 
 `init` returns a `LoggerGuard` that must be bound to a named local

@@ -13,9 +13,19 @@ license.workspace = true
 [lib]
 name = "shekyl_logging"
 path = "src/lib.rs"
+# `staticlib` exposes the C ABI in `src/ffi.rs` for the C++ shim that
+# replaces `external/easylogging++/`. `lib` (rlib) keeps the crate
+# usable by other Shekyl Rust binaries via the normal `extern crate`
+# path. Both are produced by a single `cargo build -p shekyl-logging`.
+crate-type = ["lib", "staticlib"]
 
 [dependencies]
 tracing = "0.1"
+# `tracing-core` holds the `Metadata` / `Callsite` / `Event::new`
+# primitives the FFI's dynamic-callsite path reaches for. `tracing`
+# re-exports some of them but not all, so depend on core directly
+# to keep the path names stable.
+tracing-core = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
 tracing-appender = "0.2"
 thiserror = { workspace = true }

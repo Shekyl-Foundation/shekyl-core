@@ -2816,6 +2816,7 @@ dependencies = [
  "time",
  "tracing",
  "tracing-appender",
+ "tracing-core",
  "tracing-subscriber",
  "trybuild",
 ]
