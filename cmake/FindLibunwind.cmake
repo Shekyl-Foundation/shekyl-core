@@ -17,11 +17,30 @@ find_path(LIBUNWIND_INCLUDE_DIR libunwind.h
 )
 
 find_library(LIBUNWIND_LIBRARIES NAMES unwind )
-if(NOT LIBUNWIND_LIBRARIES STREQUAL "LIBUNWIND_LIBRARIES-NOTFOUND")
-  if (CMAKE_COMPILER_IS_GNUCC)
-    set(LIBUNWIND_LIBRARIES "gcc_eh;${LIBUNWIND_LIBRARIES}")
-  endif()
-endif()
+# Do *not* prepend `-lgcc_eh` here. That was a legacy Monero carry-over
+# from the era when some libstdc++ builds didn't pull in `libgcc_s`
+# transitively and the C++ exception unwinder genuinely needed the
+# static `libgcc_eh.a` symbols. On modern GCC + glibc the static
+# archive is actively harmful: it bakes an *unversioned* copy of the
+# `_Unwind_*` API (`_Unwind_RaiseException_Phase2`,
+# `_Unwind_GetLanguageSpecificData`, ...) into the main executable,
+# where it interleaves catastrophically with the versioned
+# (`@@GCC_3.0`) copies in `libgcc_s.so.1` *and* with the namespaced
+# (`__libunwind_*`) copies in `libunwind.so.8`. The observed failure
+# mode on Debian 13 / Ubuntu 24.04 with `libunwind-dev` installed is
+# that a `throw` propagates into `__gxx_personality_v0` (libstdc++),
+# which resolves `_Unwind_GetLanguageSpecificData` by global symbol
+# interposition to libunwind's wrapper, which then dereferences an
+# `_Unwind_Context*` whose layout was built by libgcc_eh's
+# `Phase2` — and SIGSEGVs inside libunwind. Observable in CI as
+# `unit_tests (Subprocess aborted)` immediately after any exception
+# that hits the `__cxa_throw` hook. Letting libstdc++ pull in
+# `libgcc_s` on its own keeps the unwinder provider singular and
+# version-matched.
+#
+# If a future target genuinely needs the static archive (embedded /
+# fully-static / pre-C++11 toolchain), re-add it *per target* behind
+# an explicit option; don't restore the global default.
 
 # some versions of libunwind need liblzma, and we don't use pkg-config
 # so we just look whether liblzma is installed, and add it if it is.

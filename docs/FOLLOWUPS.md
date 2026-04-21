@@ -163,28 +163,88 @@ require archaeology to recover.
   hazard class.
 
   A second, independent hazard surfaced at CI run `24728543538`
-  while cleaning up the first: the `__cxa_throw` wrapper itself
-  must not touch the C++ ABI's one-shot init machinery.
-  `std::call_once`-backed `dlsym` caching, and function-local
-  `static cxa_throw_t *` pointers with a `dlsym`-valued
-  initializer, both expand to `__cxa_guard_acquire` /
-  `__cxa_guard_release` / pthread_once-equivalent calls, and
-  re-entering any of those from inside a throw corrupts
-  libstdc++'s in-flight exception state. Symptom: silent
-  `std::terminate` on the first throw after the hook loads, no
-  diagnostic. Fix: keep the `dlsym(RTLD_NEXT, "__cxa_throw")` on
-  the per-throw fast path (matches the pre-Chore-#2
-  implementation), with an explicit `abort` + stderr diagnostic
-  on NULL. The per-throw cost is negligible compared to the
-  libunwind walk that follows it.
+  and was *misdiagnosed twice* before the real root cause landed
+  in the Debian 13 local repro (run 24728543538 + commit
+  `02a02e3c2` successor). The failing test was
+  `apply_permutation.bad_size`, which throws `std::runtime_error`
+  inside a `try` / `catch`. Symptom: gtest emits "Subprocess
+  aborted" and the rest of the suite never runs.
+
+  **Misdiagnosis 1 (commit `a68314e3f`):** I assumed `ST_LOG` was
+  re-entering Rust logging during the throw (real hazard, see
+  above, but not the crashing path here). I re-routed `ST_LOG`
+  through `std::fwrite` and shipped `std::call_once` caching for
+  `dlsym`. The `ST_LOG` reroute was independently correct. The
+  cache introduced a new, unrelated question (see below).
+
+  **Misdiagnosis 2 (commit `02a02e3c2`):** I then assumed
+  `std::call_once` inside `__cxa_throw` was the crash, via the
+  C++ ABI's one-shot guard path (`__cxa_guard_acquire` /
+  `__cxa_guard_release`) re-entering from inside a throw and
+  corrupting libstdc++'s in-flight exception state. Plausible,
+  but not the crashing path either. I reverted to per-call
+  `dlsym(RTLD_NEXT, "__cxa_throw")`. The revert itself is still
+  the right call (see below), just for a different reason than
+  I claimed in the commit message.
+
+  **Actual root cause (found locally on Debian 13 with
+  `libunwind-dev` installed and `-DSTACK_TRACE=ON`):** a linker
+  configuration bug in `cmake/FindLibunwind.cmake` — the module
+  unconditionally prepended `gcc_eh` (the static libgcc_eh
+  archive) to `LIBUNWIND_LIBRARIES` under GCC. That static
+  archive exports the *unversioned* `_Unwind_*` personality-ABI
+  surface (`_Unwind_RaiseException_Phase2`,
+  `_Unwind_GetLanguageSpecificData`, `__gxx_personality_v0`'s
+  dependencies) into the main executable. At runtime, those
+  unversioned copies interleave with (a) the *versioned*
+  (`@@GCC_3.0`) copies in `libgcc_s.so.1` that `libstdc++.so.6`
+  was linked against, and (b) the *namespaced* (`__libunwind_*`)
+  wrapper copies in `libunwind.so.8`. The observed crash path:
+
+    our `__cxa_throw` hook
+      → real `__cxa_throw` in libstdc++
+      → `_Unwind_RaiseException` (resolves to libgcc_eh in our
+        binary)
+      → `_Unwind_RaiseException_Phase2`
+      → `__gxx_personality_v0` (libstdc++.so.6)
+      → `_Unwind_GetLanguageSpecificData` (resolves via global
+        symbol interposition to libunwind.so.8's
+        `__libunwind_Unwind_GetLanguageSpecificData`)
+      → SIGSEGV dereferencing an `_Unwind_Context*` whose
+        layout was built by libgcc_eh, not libunwind
+
+  Fix: drop the `gcc_eh` prepend from `FindLibunwind.cmake` so
+  libstdc++ pulls `libgcc_s.so.1` in on its own and the
+  unwinder provider stays singular and version-matched. We still
+  link `libunwind.so.8` for the `unw_*` local-backtrace API the
+  hook calls via `UNW_LOCAL_ONLY`; libunwind's `_Unwind_*`
+  exports are harmless when there's no competing in-binary copy
+  to race them.
+
+  **Why we keep the per-throw `dlsym` anyway:** the `std::call_once`
+  caching and the function-local `static` pointer alternatives
+  are still the wrong shape for this call site, just for a
+  defensive reason rather than an observed-crash reason. Both
+  expand to `__cxa_guard_acquire` / `__cxa_guard_release` /
+  pthread_once-equivalent paths, and re-entering any of that
+  from inside a throw is the kind of ABI-private plumbing we
+  shouldn't exercise in the pre-throw window even if it doesn't
+  crash on today's glibc. Per-call `dlsym` takes libc's internal
+  `_dlmopen` lock and nothing else. The cost is negligible
+  compared to the libunwind walk that follows it; the explicit
+  `abort` + stderr diagnostic on NULL stays (matters under
+  `-Wl,--no-export-dynamic` or full libstdc++ static absorption).
 
   The stderr-direct path is safe, low-noise, and locked in by
   `tests/unit_tests/stack_trace.cpp` (see
   `stack_trace.emits_to_stderr_not_rust_log` for the negative
   assertions against the Rust tracing formatter's markers, and
   `stack_trace.repeated_throws_do_not_crash_and_emit_once_per_throw`
-  for the regression guard against both of the init-machinery
-  hazards above). The tradeoff is that stack traces no longer
+  for the regression guard — a loop of 16 `throw` / `catch`
+  cycles that fails fast if *either* the unwinder collision
+  returns or the init-machinery hazard above ever becomes a real
+  crash rather than a defensive concern). The tradeoff is that
+  stack traces no longer
   land in the rolling log file, only on stderr — fine for
   operator-visible crashes, less useful for post-mortem analysis
   of long-running daemons that only write stderr to a log

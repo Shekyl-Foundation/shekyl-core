@@ -134,24 +134,21 @@ void CXA_THROW(void *ex, CXA_THROW_INFO_T *info, void (*dest)(void*))
   free(dsym);
 
 #ifndef STATICLIB
-  // Resolve `__real___cxa_throw` *per throw*, not via
-  // `std::call_once` or a function-local `static` pointer. Both of
-  // those mechanisms trigger the C++ ABI's one-shot initialization
-  // machinery (`__cxa_guard_acquire` / `__cxa_guard_release`,
-  // pthread_once-equivalent paths), and running any of that here —
-  // inside the `__cxa_throw` wrapper, with the exception object
-  // already constructed and the unwinder about to start walking —
-  // corrupts libstdc++'s internal exception state on glibc targets.
-  // The observed failure mode was `unit_tests` aborting silently on
-  // the first throw, with no gtest "[  OK  ]" line and no
-  // diagnostic printed — exactly what you'd expect from a
-  // `std::terminate` triggered by a runtime that couldn't match the
-  // in-flight exception against its handler tables.
-  //
-  // Per-call `dlsym(RTLD_NEXT, ...)` is what the pre-Chore #2
-  // implementation used and it's what we're returning to. The libc
-  // internal lock it takes is the only shared state involved, and
-  // it's safe to hold across the `__cxa_throw` boundary.
+  // Resolve `__real___cxa_throw` *per throw*, matching the
+  // pre-Chore-#2 pattern. An earlier attempt at this file cached the
+  // resolution via `std::call_once`; that's not the cause of the
+  // original CI abort (see the unwinder note in `FOLLOWUPS.md`) but
+  // it's still defensively the wrong tool here — `std::call_once`
+  // and function-local `static`s with non-trivial initializers both
+  // expand to the C++ ABI's one-shot guard path
+  // (`__cxa_guard_acquire` / `__cxa_guard_release`,
+  // pthread_once-equivalent), and running any of that from inside
+  // the `__cxa_throw` wrapper — with the exception object already
+  // built and the unwinder about to start — is exactly the kind of
+  // ABI-private machinery we don't want to exercise in the pre-throw
+  // window. Per-call `dlsym(RTLD_NEXT, ...)` only takes libc's
+  // internal `_dlmopen` lock, which is safe to hold across the
+  // throw boundary.
 #ifndef __clang__ // GCC doesn't accept the attr inside a typedef
 #ifndef _MSC_VER
   __attribute__((noreturn))
