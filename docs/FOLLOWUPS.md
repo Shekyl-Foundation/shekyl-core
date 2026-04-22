@@ -294,6 +294,41 @@ require archaeology to recover.
   function-local statics, no `std::call_once`, no lazy
   `OnceLock` in the consumer crate). Target: V3.2.
 
+- **`shekyl-daemon-rpc` staticlib: `tracing::*` calls silently dropped (V3.2).**
+  The Rust `shekyl-daemon-rpc` crate at
+  `rust/shekyl-daemon-rpc` is linked into `shekyld` as a
+  staticlib. It emits structured diagnostics via `tracing::debug!`
+  / `tracing::error!`, but `shekyld` (C++) never installs a
+  `tracing::Subscriber`, so every event from inside the
+  staticlib goes to `tracing`'s no-op global dispatcher and is
+  discarded. The symptom is invisible: the daemon runs, the
+  RPC surface responds, and the absence of diagnostics looks
+  like "nothing interesting happened in the Rust code" rather
+  than "nothing was recorded." Caught during the stressnet
+  logging-reconciliation sweep against shekyl-dev
+  `stressnet/wallet_manager.py`.
+
+  Two reasonable shapes for the fix, pick during V3.2 scoping:
+  - Have the daemon's C++ entry point (after `mlog_configure`
+    runs) call a `shekyl_daemon_rpc_init_logging` FFI export
+    that either installs a `tracing_subscriber` forwarding into
+    `shekyl-logging` or, more cheaply, sets
+    `tracing::subscriber::set_global_default` to the same
+    `shekyl-logging` subscriber the Rust RPC binaries use. The
+    first is cleaner; the second is a two-line change.
+  - Or: drop the staticlib's `tracing` calls in favour of
+    `shekyl_log_emit` (the existing FFI entry `shekyl-cli` and
+    the Rust wallet-rpc already route through), skipping the
+    subscriber question entirely. Matches the discipline of
+    the rest of the core → shekyl-logging boundary.
+
+  Out of scope for the V3.1 alpha stressnet; the exerciser
+  does not read daemon logs for its derivations (state is
+  learned via JSON-RPC), so the gap has no effect on the
+  gate result — but any operator debugging an unexpected
+  RPC response from `shekyld` today will find no Rust-side
+  breadcrumbs to follow. Target: V3.2.
+
 - **`dalek-ff-group` version isolation enforced via CI gate.**
   The Rust workspace carries two versions: 0.5.x (used directly by Shekyl
   crates) and 0.4.x (pulled transitively by vendored serai/`ciphersuite`
