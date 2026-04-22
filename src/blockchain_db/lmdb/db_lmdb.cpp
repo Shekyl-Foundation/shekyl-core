@@ -84,7 +84,7 @@
 #define SHEKYL_DEFAULT_LOG_CATEGORY "blockchain.db.lmdb"
 
 
-#if defined(__i386) || defined(__x86_64)
+#if defined(__x86_64)
 #define MISALIGNED_OK	1
 #endif
 
