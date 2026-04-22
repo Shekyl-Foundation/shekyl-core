@@ -201,95 +201,175 @@ citing in a review.
   specific minor decided when the curve25519-dalek 5.x release window
   becomes visible.
 
----
+- **Chore #3: retire every 32-bit target — leading with the security argument (`v3.1.0-alpha.5`, landed on `chore/retire-32bit-targets`).**
+  **Status: landed.** Closure narrative in
+  `docs/audit_trail/RESOLVED_260419.md` §"Chore #3 (v3.1.0-alpha.5) —
+  32-bit target retirement: security closure"; this entry is retained
+  in place through V3.1.x as the canonical pre-landing design record
+  cross-referenced from the `CHANGELOG` and from all four tripwire
+  comment blocks. Do not delete on "it's done now" grounds — the
+  design record is how a future cleanup-PR author discovers the
+  structural-not-observable rationale for Tripwire B and the
+  node-only-defense pre-emption. **Original framing, preserved:**
 
-## V3.2 — Rust cutover and cleanup
-
-- **Chore #3: retire every 32-bit target — leading with the security argument (V3.2).**
   **The reason is security, not maintenance.** Shekyl's PQC primitives
-  (`fips203` / ML-KEM-768, ML-DSA-65) rely on 64-bit arithmetic for
-  their constant-time guarantees; on 32-bit targets the compiler
-  decomposes every `u64` op into variable-time 32-bit sequences with
-  operand-dependent carry propagation, opening a timing-attack surface
-  that has been demonstrated to recover full secret keys on lattice
-  schemes (the Cortex-M4 / Kyber attack line, 2022-2024). The hybrid
-  KEM construction does *not* save us: "hybrid is secure if either
-  half is secure" protects against algorithmic breaks, not
-  side-channel breaks. If ML-KEM leaks via timing on 32-bit, X25519 is
-  offline-attackable against captured ciphertexts with unlimited time.
-  Separately, `MDB_VL32` (LMDB's 32-bit mmap strategy) is an untested
-  consensus-adjacent storage path no CI runner has ever exercised
-  against a real chain, and the CryptonightR 32-bit software fallback
-  in `src/crypto/slow-hash.c:374` is untested consensus-adjacent PoW
-  code. **32-bit Shekyl wallet users are at meaningfully elevated
-  risk of key extraction compared to 64-bit users; supporting the
-  platform is a tacit lie about the security posture of users on it.**
+  (`fips203` / ML-KEM-768, and the ML-DSA-65 implementation consumed by
+  `shekyl-tx-builder` and `shekyl-crypto-pq`) rely on 64-bit arithmetic
+  for their constant-time guarantees. On 32-bit targets the compiler
+  lowers `u64` operations through **compiler-emitted libgcc helpers
+  (`__muldi3`, `__udivdi3`, `__ashldi3`) with no constant-time
+  guarantee, plus variable-latency `u64` multiply on common 32-bit
+  ARM cores**. That is a CT-violation introduced by the code generator,
+  not the source, and it is the exact class of violation source-level
+  CT audits cannot catch. **KyberSlash (Bernstein et al., 2024)**
+  demonstrates remote-timing key recovery against ostensibly
+  constant-time implementations broken by this shape; the earlier
+  Cortex-M4 Kyber timing-attack line (2022–2024) is supporting
+  context. The **X25519+ML-KEM hybrid does not save us** — the
+  "hybrid is secure if either half is secure" framing protects
+  against algorithmic breaks, not side-channel breaks. If ML-KEM
+  leaks via timing on 32-bit, X25519 is offline-attackable against
+  captured ciphertexts with unlimited time. FCMP++ / Bulletproofs+
+  proof generation **has not been audited for constant-time
+  properties on 32-bit targets, and Shekyl will not take
+  responsibility for that audit across all 32-bit toolchains we
+  would otherwise ship** — policy framing, not speculation. And
+  `MDB_VL32` (LMDB's 32-bit mmap strategy) is an untested storage
+  path no CI runner has ever exercised against a real chain; the
+  CryptonightR 32-bit software fallback in `src/crypto/slow-hash.c`
+  is untested consensus-adjacent PoW code. **32-bit Shekyl wallet
+  users are at meaningfully elevated risk of key extraction compared
+  to 64-bit users; supporting the platform is a tacit lie about the
+  security posture of users on it.**
 
-  Discovered during the Chore #2 easylogging++ retirement when
-  MSYS2 CI surfaced a `FSCTL_SET_COMPRESSION` regression. First
-  two diagnoses were both wrong:
-  - "Hoist `<windows.h>` + `<winioctl.h>` ahead of boost"
-    (commit `9284d781d`): reverted. Include order wasn't the
-    primary hazard.
-  - "`_WIN32_WINNT` was dropped below the FSCTL tier on 64-bit
-    MinGW" (commit `a68314e3f`): also wrong. The macro isn't
-    `_WIN32_WINNT`-gated in MinGW-w64's `<winioctl.h>`; it's
-    gated by `#ifndef _FILESYSTEMFSCTL_`, and something
-    upstream in the boost/lmdb chain pre-defines that sentinel
-    on MSYS2 builds. The real fix is a self-contained
-    `#ifndef FSCTL_SET_COMPRESSION` fallback in
-    `src/blockchain_db/lmdb/db_lmdb.cpp` — the FSCTL value
-    hasn't changed since NT 4.0, so re-supplying it from
-    `CTL_CODE` primitives (which aren't guard-gated) is safe.
-  The mechanics of the bug still expose the broader pattern:
-  the 32-bit path was an explicit knob, the 64-bit path was
-  running on accidental transitive-include luck through
-  easylogging++, and the pattern repeats in at least eight
-  sites across the tree (tabulated in `STRUCTURAL_TODO.md`
-  §"32-bit targets cannot safely run Shekyl").
+  **Node-only defense, pre-empted.** A contributor will argue "I
+  just want to run a 32-bit pruned node on a Pi, I'm not doing
+  wallet operations, the CT argument doesn't apply." That is
+  partially true — node code does not touch secret PQC keys. But
+  (a) `MDB_VL32` paging on a multi-GB chain makes sync time measured
+  in weeks, which is not a supported posture; and (b) shipping a
+  32-bit daemon binary creates a reasonable user expectation that
+  wallet operation is supported, which it is not. The operational
+  complexity of splitting "32-bit daemon supported, 32-bit wallet
+  refused" outweighs any benefit.
 
-  Scope — all in one chore, symmetric across Windows and ARM32
-  because the security argument is symmetric:
+  **Discovered during Chore #2** (easylogging++ retirement) when
+  MSYS2 CI surfaced a `FSCTL_SET_COMPRESSION` regression. The first
+  two diagnoses were both wrong (`9284d781d` include-order hoist,
+  reverted; `a68314e3f` `_WIN32_WINNT` re-tiering, also wrong). The
+  actual fix is a self-contained `#ifndef FSCTL_SET_COMPRESSION`
+  fallback in `src/blockchain_db/lmdb/db_lmdb.cpp` —
+  `FSCTL_SET_COMPRESSION` is gated by `#ifndef _FILESYSTEMFSCTL_`
+  in MinGW-w64's `<winioctl.h>` and something upstream in the
+  boost/lmdb chain pre-defines that sentinel on MSYS2 builds; the
+  FSCTL value hasn't changed since NT 4.0, so re-supplying it from
+  `CTL_CODE` primitives is safe. The pattern the bug exposes is
+  tabulated in `STRUCTURAL_TODO.md` §"32-bit targets cannot safely
+  run Shekyl"; Chore #3 closes the whole pattern, not just the
+  specific symptom.
+
+  **Scope** — all in one chore, symmetric across Windows and
+  ARM32 because the security argument is symmetric:
+
   - Delete `cmake/32-bit-toolchain.cmake`.
-  - Delete `Makefile` targets `release-static-win32`,
-    `debug-static-win32`, `release-static-armv7`,
-    `release-static-armv6`, `release-static-android-armv7`.
+  - Delete the six 32-bit `Makefile` targets that actually exist
+    on `dev`: `debug-static-win32` (L84),
+    `release-static-linux-armv6` (L117),
+    `release-static-linux-armv7` (L121),
+    `release-static-android-armv7` (L125),
+    `release-static-linux-i686` (L151), and
+    `release-static-win32` (L159). Earlier drafts named
+    `release-static-armv7` / `release-static-armv6` *without* the
+    `linux-` prefix; those two identifiers are phantoms and no
+    deletion is needed because they were never present. The
+    landed scope list has been corrected.
   - Delete the `i686-w64-mingw32-*` alternatives in
-    `contrib/gitian/gitian-win.yml`.
+    `contrib/gitian/gitian-win.yml`, the ARMv7 entries in
+    `gitian-linux.yml` and `gitian-android.yml`.
   - Delete `_config_opts_i686_mingw32`, `_config_opts_mingw32`
-    (where purely 32-bit), `_cflags_mingw32` line in
-    `contrib/depends/packages/unbound.mk`, and `i686_mingw32`
-    variants in the other `contrib/depends/packages/*.mk`.
-  - Delete `MDB_VL32` from `external/db_drivers/liblmdb/CMakeLists.txt`.
-  - Delete the CryptonightR 32-bit software fallback in
-    `src/crypto/slow-hash.c:374, 421` and the paired inline-asm
-    guard in `tests/hash/main.cpp:192, 206`.
+    (where purely 32-bit), the `_cflags_mingw32` line in
+    `contrib/depends/packages/unbound.mk` (arch-asymmetric
+    carve-out — deletion target, not a typo), and the
+    `i686_mingw32` variants in the other
+    `contrib/depends/packages/*.mk`.
+  - Delete `MDB_VL32` from
+    `external/db_drivers/liblmdb/CMakeLists.txt`. Vendored-LMDB
+    code paths inside the vendored tree become unreachable
+    without the define; leaving them untouched preserves the
+    upstream-merge posture. `docs/VENDORED_DEPENDENCIES.md`
+    grows a one-beat note to re-verify no new `MDB_VL32`-gated
+    paths have been reached unconditionally by a future vendor
+    refresh.
+  - Delete the CryptonightR 32-bit software-fallback body in
+    `src/crypto/slow-hash.c` (between the L374 x86_64 AES-NI
+    gate and the L1015 ARM gate), and tighten L1015 from
+    `__arm__ || __aarch64__` to `__aarch64__`. Gated by an
+    execution-time `nm` verification on both x86_64 and aarch64
+    builds confirming no 64-bit target links the fallback
+    symbols, per `81-no-protocol-knowledge.mdc`. **The
+    `tests/hash/main.cpp:192, 206` `sqrt_result` inline-asm
+    block is *not* being deleted — those lines are 64-bit SSE
+    gates, not 32-bit gates; the earlier framing that lumped
+    them with the 32-bit retirement was imprecise.**
   - Delete the `#if ARCH_WIDTH != 32` branch in
     `src/blockchain_utilities/blockchain_import.cpp:64`.
-  - Delete the Clang + `ARCH_WIDTH==32` `libatomic` pull at
-    `CMakeLists.txt:1352`.
+  - Delete the Clang + `ARCH_WIDTH==32` `libatomic` pull in
+    `CMakeLists.txt` (around L1357–L1360 on current `dev`;
+    anchor on the condition, not the line).
   - **Collapse `BUILD_64` / `ARCH_WIDTH` / `BUILD_WIDTH` to
     unconditionally-true and delete the conditional guards
     entirely.** Leaving dead `#if ARCH_WIDTH == 64` around is
     the same inherited-correctness disease the chore exists to
-    cure — the next person to touch the tree will assume the
-    gated alternative is meaningful. This is the part of the
-    chore it is tempting to skip; do not skip it.
+    cure. This is the part of the chore it is tempting to skip;
+    do not skip it.
+  - **Add four defense-in-depth tripwires.** Rust `compile_error!`
+    in `rust/shekyl-crypto-pq/src/lib.rs` (Tripwire A, primary),
+    `rust/shekyl-ffi/src/lib.rs` (Tripwire B, structural-not-
+    observable — duplicated-by-design, do not delete on "never
+    fires in CI" grounds), `rust/shekyl-tx-builder/src/lib.rs`
+    (Tripwire C, independent `fips204` consumer); plus
+    `message(FATAL_ERROR …)` at the top of the root
+    `CMakeLists.txt` (Tripwire D, C++-side gate). Each message
+    cross-references the other three and leads with the
+    KyberSlash citation. A new CI job
+    (`.github/workflows/cmake-gate-test.yml` +
+    `tests/cmake-gate-test/run.sh`) asserts Tripwire D fires on
+    a fake 32-bit toolchain before `find_package` runs — a PR
+    that moves the gate below `find_package(...)` fails that
+    test.
   - Strip 32-bit paragraphs from `README.md`,
     `docs/INSTALLATION_GUIDE.md`, `contrib/depends/README.md`,
     and any daemon/wallet user-facing docs that reference
     `i686` or `armv7`.
-  - `docs/CHANGELOG.md` V3.2 entry leads with the security
-    argument. Suggested first paragraph in
-    `STRUCTURAL_TODO.md` §"32-bit targets cannot safely run
-    Shekyl" — use it verbatim.
+  - `docs/CHANGELOG.md v3.1.0-alpha.5` `### Security` entry
+    leads with the tacit-lie framing. Suggested argument chain
+    in `STRUCTURAL_TODO.md` §"32-bit targets cannot safely run
+    Shekyl"; the entry names all four tripwires, cites
+    KyberSlash (2024) as headline, pre-empts the node-only
+    defense, and lists maintenance benefits as secondary.
+
+  **Verification**: independent-failure tests for all four
+  tripwires (each must fire on its own on `i686-unknown-linux-gnu`),
+  `nm`/`objdump` on x86_64 + aarch64 confirming `__divmoddi4` and
+  the `slow-hash.c` fallback symbols absent, an
+  `aarch64-linux-gnu-gcc -dM -E` check that `__arm__` is not
+  defined on aarch64, positive `cargo build`/`cargo test` on
+  x86_64 and aarch64, and an expanded `rg` sweep returning no
+  Shekyl-side 32-bit residue outside `external/`,
+  `docs/audit_trail/`, and `docs/CHANGELOG.md`.
 
   Precedent: V3.0 `i686-linux-gnu` retirement, see
   `docs/audit_trail/RESOLVED_260419.md` §"Dead `i686_linux_*`
   target in `contrib/depends/hosts/linux.mk`". Full motivation
   in `docs/STRUCTURAL_TODO.md` §"32-bit targets cannot safely
   run Shekyl, and the wider 'bit-width carve-out without
-  coverage' pattern". Target: V3.2.
+  coverage' pattern". Target: **`v3.1.0-alpha.5`** — the
+  security closure merits being surfaced in the active alpha
+  cycle rather than deferred to V3.2's Rust-cutover grab-bag.
+
+---
+
+## V3.2 — Rust cutover and cleanup
 
 - **Chore #4: platform-gate audit sweep — reduced scope after Chore #3 (V4 pre-audit).**
   Chore #3 eliminates the worst offenders (every bit-width

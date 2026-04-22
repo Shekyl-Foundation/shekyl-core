@@ -137,11 +137,6 @@ target_link_libraries(blockchain_import
     ${EXTRA_LIBRARIES}
     ${Blocks})
 
-if(ARCH_WIDTH)
-  target_compile_definitions(blockchain_import
-    PUBLIC -DARCH_WIDTH=${ARCH_WIDTH})
-endif()
-
 set_property(TARGET blockchain_import
 	PROPERTY
 	OUTPUT_NAME "shekyl-blockchain-import")

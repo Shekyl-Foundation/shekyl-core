@@ -17,6 +17,38 @@
     non_snake_case
 )]
 
+// ---------------------------------------------------------------------------
+// 64-bit-only gate — Chore #3, v3.1.0-alpha.5 (Tripwire B —
+// structural-not-observable).
+//
+// This tripwire is DUPLICATED BY DESIGN. In the current workspace shape,
+// `shekyl-ffi` always depends (transitively) on `shekyl-crypto-pq` whose
+// Tripwire A would already fire; this gate is NOT expected to be the one
+// that "catches" a 32-bit build in practice. Its job is different:
+//
+//   1. Preserve the refusal under a future refactor that might split
+//      the FFI boundary from the PQC crate.
+//   2. Make the refusal legible at the FFI seam, where downstream C++
+//      consumers discover what Rust will and will not link against.
+//
+// Do NOT delete this gate on the grounds that it "never fires". Its
+// value is structural, not observable. See Tripwire A in
+// rust/shekyl-crypto-pq/src/lib.rs for the primary CT argument; Tripwire C
+// in rust/shekyl-tx-builder/src/lib.rs for the fips204 transaction-signing
+// gate; and Tripwire D at the top of CMakeLists.txt for the C++-side
+// configure-time refusal.
+// ---------------------------------------------------------------------------
+#[cfg(not(target_pointer_width = "64"))]
+compile_error!(
+    "shekyl-ffi refuses to build on non-64-bit targets. This is \
+     Tripwire B (structural-not-observable): duplicated by design to \
+     preserve the 64-bit refusal at the FFI seam under future refactors \
+     that might split this crate from shekyl-crypto-pq. See Tripwire A \
+     in shekyl-crypto-pq for the primary ML-KEM/ML-DSA constant-time \
+     argument; see docs/CHANGELOG.md 'Retired 32-bit build targets' \
+     before attempting to revert this gate."
+);
+
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
 };
