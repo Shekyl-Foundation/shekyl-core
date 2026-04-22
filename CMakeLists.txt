@@ -82,19 +82,24 @@ project(shekyl)
 #       half of the predicate fires.
 #   (b) CMAKE_SYSTEM_PROCESSOR is populated by the toolchain file (or
 #       defaults to the host). A toolchain file that declares a 32-bit
-#       CMAKE_SYSTEM_PROCESSOR — `i[3-6]86`, `armv[67]l?`, `armhf`,
-#       `armel`, `arm` bare, `mips(el)?`, `powerpc`/`ppc` — is
-#       unambiguously targeting a 32-bit architecture, and this half of
-#       the predicate fires regardless of what the compiler probe
-#       reported. This matters operationally (a gate-test CI job on a
-#       64-bit host forcing CMAKE_SYSTEM_PROCESSOR via a fake toolchain
-#       must fire without needing a real 32-bit sysroot;
-#       tests/cmake-gate-test/ exercises exactly this path) and
-#       defensively (a future toolchain bug or misconfigured cross
-#       environment that silently reports `CMAKE_SIZEOF_VOID_P=8` on a
-#       32-bit target would slip past a size-only gate).
+#       CMAKE_SYSTEM_PROCESSOR — `i[3-6]86`, `x86` bare, any
+#       `armv[567].*` variant (covers `armv7`, `armv7l`, `armv7-a`,
+#       `armv7a`, `armv7hf`, `armv7ve`, `armv6kz`, `armv5te`, etc.; all
+#       32-bit ARM profiles use `armv[5-7]` — 64-bit uses `aarch64` /
+#       `arm64`), `armhf`, `armel`, `arm` bare, `mips(el)?`,
+#       `powerpc`/`ppc` (32-bit; `powerpc64(le)?` deliberately excluded
+#       by the `$` anchor) — is unambiguously targeting a 32-bit
+#       architecture, and this half of the predicate fires regardless
+#       of what the compiler probe reported. This matters operationally
+#       (a gate-test CI job on a 64-bit host forcing
+#       CMAKE_SYSTEM_PROCESSOR via a fake toolchain must fire without
+#       needing a real 32-bit sysroot; tests/cmake-gate-test/ exercises
+#       exactly this path) and defensively (a future toolchain bug or
+#       misconfigured cross environment that silently reports
+#       `CMAKE_SIZEOF_VOID_P=8` on a 32-bit target would slip past a
+#       size-only gate).
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR
-   CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86|armv[67]l?|armhf|armel|arm|mips|mipsel|powerpc|ppc)$")
+   CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86|armv[567].*|armhf|armel|arm|mips|mipsel|powerpc|ppc)$")
   message(FATAL_ERROR
     "Shekyl refuses to configure on non-64-bit targets "
     "(CMAKE_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P}, "

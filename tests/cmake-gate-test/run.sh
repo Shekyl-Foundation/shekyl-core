@@ -67,13 +67,28 @@ if ! grep -q 'KyberSlash' "$BUILD_DIR/stderr.log"; then
   exit 1
 fi
 
-# Assertion 3: gate fired BEFORE find_package / compiler probes. Any
-# "Looking for" / "Found " / "Could NOT find" line in either stream
-# means cmake progressed past the gate into probe territory, which is
-# the regression this test catches (e.g. a PR that moves the gate below
+# Assertion 3: gate fired BEFORE any probe module / find_package call.
+# The modules explicitly relocated below the gate in CMakeLists.txt are:
+#   - CheckCCompilerFlag, CheckCXXCompilerFlag, CheckLinkerFlag
+#     → emit `-- Performing Test <sym> - <Success|Failed>`
+#   - CheckLibraryExists, CheckFunctionExists
+#     → emit `-- Looking for <sym>`, `-- Looking for <sym> in <lib>`
+#   - find_package(Python3 ...) (and every subsequent find_package)
+#     → emit `-- Found <Package>: <path>`, `-- Could NOT find <Package>`
+# Any of those lines appearing in either stream means cmake progressed
+# past the gate, which is the regression this test catches (e.g. a PR
+# that moves the gate below include(CheckCCompilerFlag) or
 # find_package(Boost)).
-if grep -qE '^-- (Looking for|Found |Could NOT find)' "$BUILD_DIR/stdout.log" "$BUILD_DIR/stderr.log"; then
-  echo "FAIL: cmake progressed past the gate into find_package / compiler probes." >&2
+#
+# NOT asserted: `-- Detecting C/CXX compiler ABI info`, `-- Check for
+# working C/CXX compiler`, and the handful of other probe lines that
+# `project()` itself emits. `project()` runs BEFORE the gate by
+# construction — the gate's CMAKE_SIZEOF_VOID_P predicate is populated
+# by `project()`'s compiler probe — so those lines are legitimate and
+# inevitable pre-gate chatter.
+if grep -qE '^-- (Looking for|Found |Could NOT find|Performing Test)' \
+     "$BUILD_DIR/stdout.log" "$BUILD_DIR/stderr.log"; then
+  echo "FAIL: cmake progressed past the gate into probe-module / find_package territory." >&2
   echo "--- stdout:" >&2; cat "$BUILD_DIR/stdout.log" >&2
   echo "--- stderr:" >&2; cat "$BUILD_DIR/stderr.log" >&2
   exit 1

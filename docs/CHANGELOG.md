@@ -332,6 +332,27 @@
   but its tag-push CI ran red on this single unit test; `v3.1.0-alpha.4`
   will be the first alpha whose tag-push CI is green end-to-end.
 
+- **Tripwire D processor regex broadened; gate-test probe assertion
+  tightened (Chore #3 fixup).** The `CMAKE_SYSTEM_PROCESSOR` arm of
+  the 64-bit-only gate in `CMakeLists.txt` previously used
+  `armv[67]l?`, which only matches `armv[67]` and `armv[67]l` exactly —
+  real toolchains also emit `armv7-a`, `armv7a`, `armv7ve`, `armv7hf`,
+  `armv6kz`, `armv5te`, etc., which are all 32-bit ARM profiles.
+  Broadened to `armv[567].*` so the "defense-in-depth" half of the
+  predicate (which fires when `CMAKE_SIZEOF_VOID_P` is misreported as 8
+  on a 32-bit target) actually covers those variants. 64-bit names
+  (`aarch64`, `arm64`, `armv8*` in AArch64 mode) remain outside the
+  pattern by construction. Companion tightening in
+  `tests/cmake-gate-test/run.sh`: the probe-chatter assertion now
+  also catches `-- Performing Test ...` (from `CheckCCompilerFlag` /
+  `CheckCXXCompilerFlag` / `CheckLinkerFlag`), matching the set of
+  modules actually relocated below the gate; `-- Detecting C/CXX
+  compiler ABI info` is deliberately NOT caught because those lines
+  come from `project()` itself, which runs before the gate by
+  construction (the gate's `CMAKE_SIZEOF_VOID_P` predicate is
+  populated by `project()`'s own compiler probe). Resolves the
+  second Copilot review on PR #15.
+
 - **`contrib/depends` Win64 unbound build restored (Chore #3 fixup).**
   The `$(package)_cflags_mingw32+=-D_WIN32_WINNT=0x600` line in
   `contrib/depends/packages/unbound.mk` was deleted in the Chore #3
