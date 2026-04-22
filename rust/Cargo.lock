@@ -2813,8 +2813,10 @@ dependencies = [
  "libc",
  "tempfile",
  "thiserror",
+ "time",
  "tracing",
  "tracing-appender",
+ "tracing-core",
  "tracing-subscriber",
  "trybuild",
 ]

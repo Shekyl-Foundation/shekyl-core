@@ -29,12 +29,155 @@
 #ifndef _MISC_LOG_EX_H_
 #define _MISC_LOG_EX_H_
 
+#include "shekyl/shekyl_log.h"
+
 #ifdef __cplusplus
 
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <sstream>
 #include <string>
+// The retired `easylogging++.h` transitively supplied `<memory>`,
+// `<vector>`, `<algorithm>`, `<functional>`, and `<chrono>` to every TU
+// that reached it through misc_log_ex.h. Several production sources
+// (e.g. `contrib/epee/src/wipeable_string.cpp`) relied on that leakage
+// without explicit includes of their own; we preserve the contract here
+// to keep the migration bisection-safe instead of fanning out per-file
+// patch-ups across the codebase.
+#include <algorithm>
+#include <chrono>
+#include <fstream>
+#include <functional>
+#include <memory>
+#include <thread>
+#include <vector>
 
-#include "easylogging++.h"
+// ---------------------------------------------------------------------------
+// easylogging++ compatibility shim
+// ---------------------------------------------------------------------------
+//
+// The M*/MC* logging macros historically accepted `el::Level`, `el::Color`,
+// and `el::base::DispatchAction` arguments — see the 1,345 call sites that
+// pre-date the tracing migration. Rather than touch every call site, we
+// keep the `el::` namespace alive as a thin shim whose Level values match
+// the `SHEKYL_LOG_LEVEL_*` numeric contract in shekyl/shekyl_log.h. Colors
+// and dispatch actions are accepted and ignored — the Rust subscriber
+// handles ANSI coloring for the stderr sink and file persistence itself.
+//
+// The shim is *disabled* when the TU has already pulled in the real
+// easylogging++ header (i.e. the EASYLOGGINGPP_H guard is defined). That
+// escape hatch is used exclusively by `contrib/epee/src/mlog.cpp` during
+// the multi-commit C++ shim integration, and will go away once mlog.cpp
+// has been converted end-to-end in the follow-up `mlog-cpp` commit.
+//
+// Note on ODR: only types that do NOT also exist in easylogging++ (the
+// `el::detail::ElppShim` / `VRegistryShim` helpers that back the `ELPP`
+// macro) live in this shim. We deliberately do NOT redefine
+// `el::base::Writer`, `el::LevelHelper`, or `CINFO` here — those names
+// overlap with easylogging++'s own definitions and a link step that
+// mixes compat-mode and real-mode TUs merges the two versions into a
+// single symbol with mismatched layouts (observed: `munmap_chunk():
+// invalid pointer` during `mlog_set_categories` teardown). Direct users
+// of `el::base::Writer` in production code — perf_timer.cpp,
+// stack_trace.cpp, cryptonote_protocol_handler.inl — are edited to
+// route through `shekyl_log_emit` directly instead.
+#ifndef EASYLOGGINGPP_H
+
+namespace el
+{
+  enum class Level : std::uint8_t
+  {
+    Fatal   = SHEKYL_LOG_LEVEL_FATAL,
+    Error   = SHEKYL_LOG_LEVEL_ERROR,
+    Warning = SHEKYL_LOG_LEVEL_WARNING,
+    Info    = SHEKYL_LOG_LEVEL_INFO,
+    Debug   = SHEKYL_LOG_LEVEL_DEBUG,
+    Trace   = SHEKYL_LOG_LEVEL_TRACE,
+  };
+
+  enum class Color : std::uint8_t
+  {
+    Default = 0,
+    Red,
+    Green,
+    Yellow,
+    Blue,
+    Magenta,
+    Cyan,
+  };
+
+  namespace base
+  {
+    enum class DispatchAction : std::uint8_t
+    {
+      NormalLog = 0,
+      FileOnlyLog,
+    };
+  }
+
+  namespace detail
+  {
+    /// Shim routed by the legacy `ELPP->vRegistry()->allowed(level, cat)`
+    /// call pattern — still used by db_lmdb.cpp, transport.cpp,
+    /// cryptonote_protocol_handler.inl, and perf_timer.cpp after the
+    /// tracing cut-over. The underlying gate is the same
+    /// `shekyl_log_level_enabled` FFI call that `MCLOG_TYPE` uses, so both
+    /// code paths honor the identical filter.
+    struct VRegistryShim
+    {
+      inline bool allowed(Level level, const char* category) const noexcept
+      {
+        const char* c = category ? category : "";
+        return shekyl_log_level_enabled(
+          static_cast<std::uint8_t>(level), c, std::strlen(c));
+      }
+    };
+
+    struct ElppShim
+    {
+      inline VRegistryShim* vRegistry() const noexcept
+      {
+        static VRegistryShim v;
+        return &v;
+      }
+    };
+
+    inline ElppShim* elpp_ptr() noexcept
+    {
+      static ElppShim e;
+      return &e;
+    }
+  } // namespace detail
+} // namespace el
+
+#define ELPP (::el::detail::elpp_ptr())
+
+#endif // !EASYLOGGINGPP_H
+
+// ---------------------------------------------------------------------------
+// Function-name sentinel — historically supplied by easylogging++.
+// ---------------------------------------------------------------------------
+#ifndef ELPP_FUNC
+# if defined(_MSC_VER)
+#   define ELPP_FUNC __FUNCSIG__
+# elif defined(__GNUC__) || defined(__clang__)
+#   define ELPP_FUNC __PRETTY_FUNCTION__
+# else
+#   define ELPP_FUNC __func__
+# endif
+#endif
+
+// Declares an `operator<<(std::ostream&, const ClassType&)` overload so
+// `<< connection_context` etc. keep routing through `MGINFO` / `MERROR`
+// stringification. Historically supplied by easylogging++'s public API
+// (which aliased `el::base::type::ostream_t` to `std::ostream` in the
+// non-unicode build), preserved here so existing ADL lookup continues
+// to bind to the `std::ostream&` overload.
+#ifndef MAKE_LOGGABLE
+#define MAKE_LOGGABLE(ClassType, ClassInstance, OutputStreamInstance) \
+  std::ostream& operator<<(std::ostream& OutputStreamInstance, const ClassType& ClassInstance)
+#endif
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "default"
@@ -47,15 +190,44 @@
     ss << x; \
     const std::string str = ss.str();
 
-#define LOG_TO_STRING(x) \
-    std::stringstream ss; \
-    ss << x; \
-    const std::string str = ss.str();
-
+// ---------------------------------------------------------------------------
+// MCLOG_TYPE: single C++ entry point for every M*/MC* macro. The body gates
+// on `shekyl_log_level_enabled` *before* constructing the stringstream so
+// disabled events never pay the formatting cost, then emits through the
+// Rust FFI. The `color` and `type` parameters are intentionally consumed
+// and discarded — the subscriber owns colorization and file routing.
+//
+// `(cat)` is evaluated exactly once and collapsed to a non-null
+// `_shekyl_cat_str` / `_shekyl_cat_len` pair before either FFI call, so
+// the hot path (gate returns true) pays a single `strlen` and the cold
+// path (gate returns false) pays zero. The null/empty normalization
+// matches the FFI's documented contract: passing `(ptr = "", len = 0)`
+// selects the bare default EnvFilter clause — see the
+// `shekyl_log_level_enabled` docstring in `src/shekyl/shekyl_log.h` and
+// the `normalize_target_accepts_empty` unit test in
+// `rust/shekyl-logging/src/ffi.rs`.
+// ---------------------------------------------------------------------------
 #define MCLOG_TYPE(level, cat, color, type, x) do { \
-    if (el::Loggers::allowed(level, cat)) { \
-      LOG_TO_STRING(x); \
-      el::base::Writer(level, color, __FILE__, __LINE__, ELPP_FUNC, type).construct(cat) << str; \
+    const ::el::Level _shekyl_lvl = (level); \
+    const char* const _shekyl_cat_raw = (cat); \
+    const char* const _shekyl_cat_str = _shekyl_cat_raw ? _shekyl_cat_raw : ""; \
+    const std::size_t _shekyl_cat_len = _shekyl_cat_raw ? std::strlen(_shekyl_cat_raw) : 0u; \
+    if (::shekyl_log_level_enabled( \
+          static_cast<std::uint8_t>(_shekyl_lvl), \
+          _shekyl_cat_str, \
+          _shekyl_cat_len)) { \
+      (void)(color); (void)(type); \
+      std::stringstream _shekyl_ss; \
+      _shekyl_ss << x; \
+      const std::string _shekyl_msg = _shekyl_ss.str(); \
+      ::shekyl_log_emit( \
+        static_cast<std::uint8_t>(_shekyl_lvl), \
+        _shekyl_cat_str, \
+        _shekyl_cat_len, \
+        __FILE__, std::strlen(__FILE__), \
+        static_cast<std::uint32_t>(__LINE__), \
+        ELPP_FUNC, std::strlen(ELPP_FUNC), \
+        _shekyl_msg.data(), _shekyl_msg.size()); \
     } \
   } while (0)
 
@@ -100,12 +272,35 @@
 #define MGINFO_MAGENTA(x) MCLOG_MAGENTA(el::Level::Info, "global",x)
 #define MGINFO_CYAN(x) MCLOG_CYAN(el::Level::Info, "global",x)
 
+// Mirror of `MCLOG_TYPE` with an extra `init;` hook that runs *after* the
+// enabled-gate passes and *before* the message is formatted — used by
+// `MIDEBUG` and similar call sites to hoist one-time setup out of the
+// disabled path. The `_shekyl_cat_{raw,str,len}` caching discipline is
+// identical to `MCLOG_TYPE`; keep the two macros in sync when tweaking
+// either side.
 #define IFLOG(level, cat, color, type, init, x) \
   do { \
-    if (el::Loggers::allowed(level, cat)) { \
+    const ::el::Level _shekyl_lvl = (level); \
+    const char* const _shekyl_cat_raw = (cat); \
+    const char* const _shekyl_cat_str = _shekyl_cat_raw ? _shekyl_cat_raw : ""; \
+    const std::size_t _shekyl_cat_len = _shekyl_cat_raw ? std::strlen(_shekyl_cat_raw) : 0u; \
+    if (::shekyl_log_level_enabled( \
+          static_cast<std::uint8_t>(_shekyl_lvl), \
+          _shekyl_cat_str, \
+          _shekyl_cat_len)) { \
+      (void)(color); (void)(type); \
       init; \
-      LOG_TO_STRING(x); \
-      el::base::Writer(level, color, __FILE__, __LINE__, ELPP_FUNC, type).construct(cat) << str; \
+      std::stringstream _shekyl_ss; \
+      _shekyl_ss << x; \
+      const std::string _shekyl_msg = _shekyl_ss.str(); \
+      ::shekyl_log_emit( \
+        static_cast<std::uint8_t>(_shekyl_lvl), \
+        _shekyl_cat_str, \
+        _shekyl_cat_len, \
+        __FILE__, std::strlen(__FILE__), \
+        static_cast<std::uint32_t>(__LINE__), \
+        ELPP_FUNC, std::strlen(ELPP_FUNC), \
+        _shekyl_msg.data(), _shekyl_msg.size()); \
     } \
   } while(0)
 #define MIDEBUG(init, x) IFLOG(el::Level::Debug, SHEKYL_DEFAULT_LOG_CATEGORY, el::Color::Default, el::base::DispatchAction::NormalLog, init, x)
@@ -128,7 +323,11 @@
 #define _warn(x) MWARNING(x)
 #define _erro(x) MERROR(x)
 
-#define MLOG_SET_THREAD_NAME(x) el::Helpers::setThreadName(x)
+// Retired under the tracing migration: thread naming is handled by the
+// Rust subscriber's formatter (`%thread` equivalent emitted automatically),
+// so the legacy helper becomes a no-op that still swallows its argument
+// to keep `-Wunused-value` quiet at historical call sites.
+#define MLOG_SET_THREAD_NAME(x) ((void)(x))
 
 #ifndef LOCAL_ASSERT
 #include <assert.h>

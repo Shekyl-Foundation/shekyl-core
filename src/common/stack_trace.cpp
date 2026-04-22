@@ -27,43 +27,70 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#if defined(_MSC_VER)
-#define ELPP_FEATURE_CRASH_LOG 1
-#elif !defined __GNUC__ || defined __MINGW32__ || defined __MINGW64__ || defined __ANDROID__
+// The previous implementation relied on easylogging++'s
+// `ELPP_FEATURE_CRASH_LOG` path (`el::base::debug::StackTrace`) for
+// targets where libunwind wasn't in play (GCC-Linux, MSVC, MinGW,
+// Android). The vendored tree is gone. We now key the libunwind
+// walker entirely off the CMake-provided `HAVE_LIBUNWIND` macro
+// (see the `find_package(Libunwind)` block in the root
+// `CMakeLists.txt`): when it's defined we call `unw_*`, otherwise
+// `log_stack_trace` emits a placeholder line so the build still
+// links and crash-handler smoke tests keep exercising the
+// `__cxa_throw` hook. A dedicated Rust unwind-helper crate is the
+// scheduled follow-up.
+#if defined(HAVE_LIBUNWIND)
 #define USE_UNWIND
-#else
-#define ELPP_FEATURE_CRASH_LOG 1
 #endif
-#include "easylogging++/easylogging++.h"
 
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
 #include <stdexcept>
 #include <iomanip>
 #include <sstream>
+#include <cxxabi.h>
 #ifdef USE_UNWIND
 #define UNW_LOCAL_ONLY
 #include <libunwind.h>
-#include <cxxabi.h>
 #endif
+// `common/compat.h` provides the POSIX `<dlfcn.h>` (gated on
+// `!STATICLIB && !_WIN32`) that `__cxa_throw` wrapping needs for
+// `dlsym(RTLD_NEXT, ...)`; routing through it keeps the lint rule
+// in `.github/workflows/build.yml` ("reject direct POSIX-header
+// includes in src/") happy.
 #include "common/compat.h"
-#include <boost/algorithm/string.hpp>
 #include "common/stack_trace.h"
 #include "misc_log_ex.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "stacktrace"
 
+// Stack traces predate the logging subsystem — the very reason we
+// capture them is because something went catastrophically wrong
+// (typically an uncaught exception or an abort). `ST_LOG` therefore
+// writes directly to `stderr` instead of routing through
+// `shekyl_log_emit`. Calling into the Rust `tracing` subscriber from
+// inside the `__cxa_throw` hook (per throw, once up-front plus once
+// per unwound frame) exposes us to subscriber-install ordering,
+// `NonBlocking` worker-thread state, and `OnceLock` callsite
+// interning — none of which are things we want to exercise *while
+// an exception is about to be thrown*. The previous implementation
+// in this file relied on easylogging++'s `FileOnlyLog` action, which
+// was a no-op in targets that never initialized `ELPP` (notably
+// `tests/unit_tests`), so the hook ran without touching any logging
+// machinery. The `stderr` choice here preserves that "do nothing
+// fragile in the pre-throw window" property: CI captures stderr
+// with the rest of the test output, operators still see crash
+// traces on uncaught exceptions, and nothing in the hot throw path
+// can trip on subscriber-lifecycle issues.
 #define ST_LOG(x) \
   do { \
-    auto elpp = ELPP; \
-    if (elpp) { \
-      std::stringstream ss; \
-      ss << x; \
-      CINFO(el::base::Writer,el::base::DispatchAction::FileOnlyLog,SHEKYL_DEFAULT_LOG_CATEGORY) << ss.str(); \
-    } \
-    else { \
-      std::cout << x << std::endl; \
-    } \
-  } while(0)
+    std::stringstream _st_ss; \
+    _st_ss << "[" SHEKYL_DEFAULT_LOG_CATEGORY "] " << x << '\n'; \
+    const std::string _st_msg = _st_ss.str(); \
+    std::fwrite(_st_msg.data(), 1, _st_msg.size(), stderr); \
+  } while (0)
 
 // from https://stackoverflow.com/questions/11665829/how-can-i-print-stack-trace-for-caught-exceptions-in-c-code-injection-in-c
 
@@ -107,12 +134,45 @@ void CXA_THROW(void *ex, CXA_THROW_INFO_T *info, void (*dest)(void*))
   free(dsym);
 
 #ifndef STATICLIB
-#ifndef __clang__ // for GCC the attr can't be applied in typedef like for clang
+  // Resolve `__real___cxa_throw` *per throw*, matching the
+  // pre-Chore-#2 pattern. An earlier attempt at this file cached the
+  // resolution via `std::call_once`; that's not the cause of the
+  // original CI abort (see the unwinder note in `FOLLOWUPS.md`) but
+  // it's still defensively the wrong tool here — `std::call_once`
+  // and function-local `static`s with non-trivial initializers both
+  // expand to the C++ ABI's one-shot guard path
+  // (`__cxa_guard_acquire` / `__cxa_guard_release`,
+  // pthread_once-equivalent), and running any of that from inside
+  // the `__cxa_throw` wrapper — with the exception object already
+  // built and the unwinder about to start — is exactly the kind of
+  // ABI-private machinery we don't want to exercise in the pre-throw
+  // window. Per-call `dlsym(RTLD_NEXT, ...)` only takes libc's
+  // internal `_dlmopen` lock, which is safe to hold across the
+  // throw boundary.
+#ifndef __clang__ // GCC doesn't accept the attr inside a typedef
 #ifndef _MSC_VER
   __attribute__((noreturn))
 #endif
 #endif // !__clang__
-   cxa_throw_t *__real___cxa_throw = (cxa_throw_t*)dlsym(RTLD_NEXT, "__cxa_throw");
+  cxa_throw_t *__real___cxa_throw = (cxa_throw_t*)dlsym(RTLD_NEXT, "__cxa_throw");
+  if (__real___cxa_throw == nullptr)
+  {
+    // Emit a diagnostic directly to stderr (no logging FFI) and
+    // abort. A NULL here only happens when the binary was linked
+    // without `-rdynamic` / was fully statically absorbed;
+    // forwarding through a NULL would SIGSEGV at best, and leaking
+    // the in-flight exception would silently `std::terminate` at
+    // worst. `abort` is the clearest signal for operators.
+    const char *const msg =
+      "stack_trace: dlsym(RTLD_NEXT, \"__cxa_throw\") returned NULL; "
+      "the __cxa_throw hook cannot forward to libstdc++'s real "
+      "implementation. This typically means the binary was linked "
+      "without -rdynamic, or libstdc++ was fully statically absorbed. "
+      "Rebuild with -Wl,--export-dynamic, link libstdc++ dynamically, "
+      "or disable the stack-trace hook (-DSTACK_TRACE=OFF).\n";
+    std::fwrite(msg, 1, std::strlen(msg), stderr);
+    std::abort();
+  }
 #endif // !STATICLIB
   __real___cxa_throw(ex, info, dest);
 }
@@ -165,13 +225,12 @@ void log_stack_trace(const char *msg)
     free(dsym);
   }
 #else
-  std::stringstream ss;
-  ss << el::base::debug::StackTrace();
-  std::vector<std::string> lines;
-  std::string s = ss.str();
-  boost::split(lines, s, boost::is_any_of("\n"));
-  for (const auto &line: lines)
-    ST_LOG(line);
+  // Non-libunwind targets (MSVC / MinGW / Android) no longer have
+  // the vendored easylogging++ stack walker. Emit a placeholder so
+  // operators and crash-handler smoke tests still see the
+  // `log_stack_trace` call site in the stream; the dedicated Rust
+  // unwind-helper crate fills this in.
+  ST_LOG("  <stack trace capture not implemented on this target>");
 #endif
 }
 

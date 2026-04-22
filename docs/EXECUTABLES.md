@@ -61,7 +61,9 @@ shekyld [options] [command]
 | `--testnet` | Run on testnet |
 | `--stagenet` | Run on stagenet |
 | `--log-level <0-4>` | Logging verbosity |
-| `--log-file <path>` | Log output file |
+| `--log-file <path>` | Log output file (default `~/.shekyl/logs/shekyld.log`, suffixed `-testnet` / `-stagenet` / `-regtest` as applicable). The live file and every rotated archive are written with POSIX mode `0600`. |
+| `--max-log-file-size <bytes>` | Rotate the log file at this size (default ~100 MB) |
+| `--max-log-files <n>` | Number of rotated archives to retain (default 50; `0` disables pruning) |
 | `--non-interactive` | Disable interactive console (for use under a service manager) |
 | `--rpc-bind-ip <ip>` | RPC listen address (default `127.0.0.1`) |
 | `--rpc-bind-port <port>` | RPC listen port (default per network, see table above) |

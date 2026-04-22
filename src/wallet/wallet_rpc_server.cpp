@@ -35,6 +35,15 @@
 #include <boost/preprocessor/stringize.hpp>
 #include <cstdint>
 #include <chrono>
+#ifdef _WIN32
+// `_mkdir` lives in `<direct.h>` on both MSVC and MinGW-w64. Prior
+// to the V3.x easylogging++ removal this header reached us
+// transitively through `easylogging++.h`; pull it in explicitly now
+// so the `MKDIR(...)` macro definition below (which resolves to
+// `_mkdir` under `_WIN32`) has a declaration in scope on MSVC as
+// well as MinGW.
+#include <direct.h>
+#endif
 #include "include_base_utils.h"
 using namespace epee;
 
@@ -293,8 +302,17 @@ namespace tools
         return false;
       }
       m_wallet_dir = command_line::get_arg(*m_vm, arg_wallet_dir);
+      // The Windows branch used to rely on bare `mkdir(path)`, which
+      // MinGW-w64 provides via its POSIX compatibility layer but MSVC
+      // does not declare in any standard header. It compiled pre-V3.x
+      // only because `easylogging++.h` transitively pulled in
+      // `<direct.h>`, which on MSVC exposes `mkdir` as a legacy alias
+      // under `_CRT_NONSTDC_NO_DEPRECATE`. With easylogging++ gone,
+      // use `_mkdir` by its portable MSVC/MinGW-w64 name (the
+      // explicit `<direct.h>` include sits at top of file). POSIX
+      // stays on two-arg `mkdir` from `<sys/stat.h>`.
 #ifdef _WIN32
-#define MKDIR(path, mode)    mkdir(path)
+#define MKDIR(path, mode)    _mkdir(path)
 #else
 #define MKDIR(path, mode)    mkdir(path, mode)
 #endif

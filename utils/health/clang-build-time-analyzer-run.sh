@@ -64,7 +64,7 @@ cmake ../.. \
 make clean 				# Clean up, so that the trace can be regenerated from scratch
 $PROG_PATH --start $DIR_MONITORED	# Start monitoring
 time make 				# Build
-#time make easylogging			# Quick testing: build a single target
+#time make common			# Quick testing: build a single target
 $PROG_PATH --stop $DIR_MONITORED $TRACE	# Stop and output to trace file
 $PROG_PATH --analyze $TRACE | tee $RESULT # Analyze the trace, and store it in a readable format
 gzip -f $TRACE # Zip the trace, because it's huge. -f overwrites the previously generated trace

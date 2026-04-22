@@ -20,11 +20,14 @@ chores:
   non-rotating sinks — see the rotation caveat below), and ship a
   stateful translator for the legacy category grammar so Chore #2
   has a hinge.
-- **Chore #2 (V4).** Replace `MINFO` / `MDEBUG` / etc. macros in
-  `src/` and `contrib/` with calls that route through a Rust FFI
-  bridge into this crate. Drop `external/easylogging++/` from the
-  build. Retire `MONERO_LOGS` / `MONERO_LOG_FORMAT` in favor of
-  `SHEKYL_LOG`.
+- **Chore #2 (V3.x, in progress).** Replace `MINFO` / `MDEBUG` /
+  etc. macros in `src/` and `contrib/` with calls that route
+  through a Rust FFI bridge into this crate. Drop
+  `external/easylogging++/` from the build. Retire `MONERO_LOGS` /
+  `MONERO_LOG_FORMAT` in favor of `SHEKYL_LOG`. The `size_rolling`
+  file sink variant lands here as a Chore #2 prerequisite so the
+  C++ daemon's legacy size-based rotation behavior carries over
+  unchanged.
 
 The translator in Chore #1 exists specifically so Chore #2 can
 accept C++-originated category strings (`net.p2p:DEBUG,wallet.wallet2:INFO`,
@@ -66,29 +69,43 @@ subscriber baseline" landmine that plain
 
 ### `FileSink`
 
-Describes a file sink. Two constructors:
+Describes a file sink. Three constructors cover the three shapes
+binaries actually need:
 
 - `FileSink::daily(directory, filename_prefix)` — rotate at UTC
-  midnight. Intended for daemons with a canonical log location.
+  midnight via `tracing_appender`. Intended for daemons with a
+  canonical log location that prefer time-based rollover.
 - `FileSink::unrotated(directory, filename_prefix)` — no rotation.
   Intended for operator-owned `--log-file <PATH>` opt-ins.
+- `FileSink::size_rolling(directory, filename_prefix, max_bytes,
+  max_files)` — size-based rotation owned by `shekyl-logging`
+  itself. Intended for the C++ daemon default sink
+  (`~/.shekyl/logs/shekyld.log`, `100 MB`, `50` files) and other
+  long-running binaries where the operator wants bounded on-disk
+  footprint. `max_bytes = 0` disables the size check; `max_files
+  = 0` disables pruning. When a rollover fires, the live file is
+  renamed to `{filename_prefix}-{UTC %Y-%m-%d-%H-%M-%S}` (matching
+  the legacy C++ `generate_log_filename` format) and a fresh live
+  file is opened at the original path.
 
 On POSIX:
 
 - The sink *directory* is created with `0700` perms when
   `shekyl-logging` creates it. Pre-existing operator-managed
   directories (`--log-file /var/log/...`) are left alone.
-- The `FileSink::unrotated` sink *file* is pre-created with mode
-  `0600` before `tracing_appender` ever opens it, and the mode
-  is re-enforced by the init-time directory sweep.
-- The `FileSink::daily` / `FileSink::hourly` sinks have a gap:
-  `tracing_appender` picks the active filename at first write with
-  a date/hour suffix we can't predict, so files created by
-  *rotation after init* inherit the process umask (typically
-  `0644`) until a later init or sweep runs. The Chore #2
-  size-rolling wrapper closes this hole. Until then, prefer
-  `unrotated` when the `0600` discipline must hold for the process
-  lifetime.
+- `FileSink::unrotated` and `FileSink::size_rolling` sinks pre-
+  create the live file with mode `0600` before any event is
+  written, and the size-rolling variant also re-enforces `0600`
+  on every rotated file plus every newly opened live file. The
+  `0600` discipline is therefore guaranteed end-to-end for both
+  variants.
+- The `FileSink::daily` sink (and the matching `tracing_appender`
+  hourly policy) has a gap: `tracing_appender` picks the active
+  filename at first write with a date/hour suffix we can't
+  predict, so files created by *rotation after init* inherit the
+  process umask (typically `0644`) until a later init or sweep
+  runs. Prefer `size_rolling` or `unrotated` when the `0600`
+  discipline must hold for the process lifetime.
 
 ### `LoggerGuard`
 
@@ -129,6 +146,55 @@ rewrite.
 Release builds never honor `RUST_LOG`. A long-lived shell export
 of `RUST_LOG=debug` from some other Rust project would otherwise
 be a privacy foot-cannon against Shekyl binaries.
+
+## C ABI (Chore #2 only)
+
+`shekyl-logging` also ships a `staticlib` crate-type that exposes a
+stable C ABI in `src/ffi.rs`. The Chore #2 C++ shim — the
+replacement for `external/easylogging++/` — links against
+`libshekyl_logging.a` and routes every `MINFO` / `MDEBUG` / etc.
+call site through the unified Rust subscriber. The header at
+`src/shekyl/shekyl_log.h` (landing in commit 3) mirrors the ABI
+verbatim.
+
+Summary of the C surface:
+
+- `shekyl_log_init_stderr(fallback_level)` /
+  `shekyl_log_init_file(dir, dir_len, prefix, prefix_len,
+  fallback_level, max_bytes, max_files)` — install the global
+  subscriber. `max_bytes = 0` maps to `FileSink::unrotated`; any
+  positive value maps to `FileSink::size_rolling`. First call wins;
+  later calls return `SHEKYL_LOG_ERR_ALREADY_INIT`.
+- `shekyl_log_level_enabled(level, target, target_len)` — hot-path
+  gate the shim calls before building the C++ `std::stringstream`.
+  Short-circuits filtered-out sites before any allocation.
+- `shekyl_log_emit(level, target, ..., msg, msg_len)` — emit one
+  event. Target strings are interned on first use into a leaked
+  `'static` callsite pool so `EnvFilter`'s target-matching lines
+  up with the translator output from
+  `directives_from_legacy_categories`.
+- `shekyl_log_set_categories(spec, spec_len, fallback_level)` /
+  `shekyl_log_set_level(numeric_level)` — runtime filter reload,
+  routed through the stateful translator (`current_spec` = last-
+  applied directive) and a `tracing_subscriber::reload::Layer`.
+- `shekyl_log_get_categories(out, out_cap)` /
+  `shekyl_log_default_path(binary_name, ..., out, out_cap)` /
+  `shekyl_log_last_error_message(out, out_cap)` — read-side
+  helpers. All return the total number of bytes that would have
+  been written, so callers can detect truncation and re-invoke
+  with a larger buffer. Bytes are never NUL-terminated.
+- `shekyl_log_shutdown()` — drop the stashed `LoggerGuard` so the
+  non-blocking writer flushes. Safe to call multiple times.
+
+Thread-safety: the global state is an `OnceLock<Mutex<_>>` and the
+last-error text is per-thread, so concurrent C calls across threads
+never race on diagnostic strings.
+
+Integration coverage: `tests/c_ffi.rs` writes a small C harness to
+a tempdir, compiles it with the system C compiler, links against
+`libshekyl_logging.a`, and asserts the printed output exercising
+init + enabled + emit + set-categories + shutdown. The test skips
+gracefully when no C toolchain is on `PATH`.
 
 ## The `LoggerGuard` footgun
 

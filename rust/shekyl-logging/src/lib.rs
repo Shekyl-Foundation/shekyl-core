@@ -57,6 +57,7 @@
 #![warn(missing_docs)]
 
 pub mod config;
+pub mod ffi;
 pub mod filter;
 
 mod appender;
@@ -71,9 +72,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use thiserror::Error;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::reload;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Registry;
 
 /// Tracks whether [`init`] has installed a global subscriber.
 ///
@@ -81,7 +85,23 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// `tracing::subscriber::set_global_default` is itself process-global.
 /// Guarding the call prevents the second-init panic path from leaking into
 /// binaries that accidentally call `init` twice.
-static INITIALIZED: AtomicBool = AtomicBool::new(false);
+///
+/// `pub(crate)` so the FFI init path in [`crate::ffi`] can coordinate
+/// against the same flag — only one subscriber per process, whether
+/// it was installed from Rust or from C.
+pub(crate) static INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+/// Handle for the process-global reload layer wrapping the `EnvFilter`.
+///
+/// Needed by the FFI path so `shekyl_log_set_categories` (called from
+/// the C++ RPC `on_set_log_*` handlers via the shim) can swap the
+/// filter at runtime without tearing down the subscriber.
+///
+/// The handle is `Clone` and cheap, so `init` stashes a copy here and
+/// also returns the caller its [`LoggerGuard`]. The FFI module is the
+/// only consumer of this alias; keeping it `pub(crate)` keeps the
+/// Rust public API surface unchanged.
+pub(crate) type FilterReloadHandle = reload::Handle<EnvFilter, Registry>;
 
 /// RAII guard for the non-blocking writer thread(s) spawned by [`init`].
 ///
@@ -117,8 +137,11 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 pub struct LoggerGuard {
     // `Option` because stderr-only configs have no worker thread; the
     // guard is still `#[must_use]` to keep the type-level discipline
-    // uniform regardless of which sinks the caller chose.
-    _worker_guard: Option<WorkerGuard>,
+    // uniform regardless of which sinks the caller chose. `pub(crate)`
+    // so the FFI path in [`crate::ffi`] can build a guard when the C
+    // caller owns the init — it holds the guard in global state and
+    // drops it on `shekyl_log_shutdown`.
+    pub(crate) _worker_guard: Option<WorkerGuard>,
 }
 
 /// Errors returned from [`init`].
@@ -164,6 +187,22 @@ pub enum InitError {
 /// Subsequent calls in the same process return
 /// [`InitError::AlreadyInitialized`].
 pub fn init(config: Config) -> Result<LoggerGuard, InitError> {
+    let (guard, reload_handle) = install_subscriber(config)?;
+    // Rust callers don't currently need the reload handle; stash a
+    // clone for the FFI path in case a C caller wants to drive
+    // `shekyl_log_set_categories` against a subscriber that was
+    // installed from the Rust side (e.g. an integration test that
+    // links both paths).
+    ffi::__register_reload_handle(reload_handle);
+    Ok(guard)
+}
+
+/// Install the subscriber and hand back both the guard *and* the
+/// reload handle. The `INITIALIZED` flag coordination lives here so
+/// both [`init`] and the FFI path stay in lockstep.
+pub(crate) fn install_subscriber(
+    config: Config,
+) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
     if INITIALIZED
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
@@ -171,18 +210,26 @@ pub fn init(config: Config) -> Result<LoggerGuard, InitError> {
         return Err(InitError::AlreadyInitialized);
     }
 
-    // We only release the INITIALIZED flag on hard failure below; on
-    // success the flag stays set for the process lifetime.
-    let result = install_subscriber(config);
+    // Release the flag on hard failure so a follow-up init with a
+    // fixed config can succeed; on success the flag stays set for
+    // the process lifetime.
+    let result = install_subscriber_inner(config);
     if result.is_err() {
         INITIALIZED.store(false, Ordering::SeqCst);
     }
     result
 }
 
-fn install_subscriber(config: Config) -> Result<LoggerGuard, InitError> {
+fn install_subscriber_inner(
+    config: Config,
+) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
     let filter = filter::resolve_env_filter(config.fallback_default)
         .map_err(|e| InitError::FilterParse(e.to_string()))?;
+
+    // Wrap the resolved `EnvFilter` in a reload layer so later
+    // `shekyl_log_set_categories` calls from C (via the FFI) can
+    // swap filters without tearing the subscriber down.
+    let (reloadable_filter, reload_handle) = reload::Layer::new(filter);
 
     let stderr_layer = fmt::layer().with_writer(std::io::stderr);
 
@@ -191,25 +238,31 @@ fn install_subscriber(config: Config) -> Result<LoggerGuard, InitError> {
         let file_layer = fmt::layer().with_writer(non_blocking).with_ansi(false);
 
         tracing_subscriber::registry()
-            .with(filter)
+            .with(reloadable_filter)
             .with(stderr_layer)
             .with(file_layer)
             .try_init()
             .map_err(|e| InitError::SubscriberInstall(e.to_string()))?;
 
-        Ok(LoggerGuard {
-            _worker_guard: Some(worker_guard),
-        })
+        Ok((
+            LoggerGuard {
+                _worker_guard: Some(worker_guard),
+            },
+            reload_handle,
+        ))
     } else {
         tracing_subscriber::registry()
-            .with(filter)
+            .with(reloadable_filter)
             .with(stderr_layer)
             .try_init()
             .map_err(|e| InitError::SubscriberInstall(e.to_string()))?;
 
-        Ok(LoggerGuard {
-            _worker_guard: None,
-        })
+        Ok((
+            LoggerGuard {
+                _worker_guard: None,
+            },
+            reload_handle,
+        ))
     }
 }
 

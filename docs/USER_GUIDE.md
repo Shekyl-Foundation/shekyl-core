@@ -47,7 +47,17 @@ Use the CLI tools when you want to:
 
 ### System requirements
 
-- **OS:** Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), Windows (MSYS2)
+- **OS / architecture:** Linux (**x86_64, ARM64 only**), macOS (Intel,
+  Apple Silicon), Windows (**64-bit only**, via MSYS2). **32-bit
+  targets are not supported and must not be used:** Shekyl's
+  post-quantum primitives (ML-KEM-768, ML-DSA-65) require 64-bit
+  arithmetic for their constant-time security property, and running a
+  32-bit Shekyl wallet exposes the wallet private key to a published
+  timing-side-channel attack class (see `docs/STRUCTURAL_TODO.md`
+  §"32-bit targets cannot safely run Shekyl" for the technical
+  analysis). If your hardware is 32-bit-only — older Raspberry Pi Zero
+  / Pi 1, pre-2005 x86 desktops, some embedded boards — Shekyl is not
+  appropriate for it.
 - **Disk:** ~50 GB for a full node; ~10 GB with `--prune-blockchain`
 - **RAM:** 4 GB minimum, 8 GB recommended during initial sync
 - **Network:** Reliable broadband; the initial sync downloads the full chain
@@ -1005,12 +1015,17 @@ Wallet logs are written to the same directory as the wallet file, with a
 
 ---
 
-## Logging and the V4 Migration Preview
+## Logging
 
-Shekyl is mid-migration from the unmaintained C++ `easylogging++`
-library to a unified Rust logger (`shekyl-logging`, built on
-`tracing`). The migration ships in two chores; V3.1 alpha.4 landed
-Chore #1 (Rust-side consolidation). Chore #2 (C++ shim) lands in V4.
+Shekyl has completed the migration from the unmaintained C++
+`easylogging++` library to a unified Rust logger — the
+`shekyl-logging` crate, built on [`tracing`] and
+[`tracing-subscriber`]. The migration shipped in two chores: V3.1
+alpha.4 landed Chore #1 (Rust-side consolidation) and V3.x alpha.0
+landed Chore #2 (C++ shim + `easylogging++` retirement +
+`MONERO_*` env-var sweep). All binaries — `shekyl-cli`,
+`shekyl-wallet-rpc`, and `shekyld` — now share a single subscriber,
+a single env var, and a single on-disk layout.
 
 This section has two distinct audiences. If you just run Shekyl
 binaries and want to know which env var tunes log verbosity, read
@@ -1019,21 +1034,9 @@ only "For operators." If you maintain downstream code or script
 
 ### For operators
 
-Today — during the transition window — Shekyl binaries read *two*
-sets of env vars depending on which language the binary is written
-in:
-
-| Binary | Implementation | Filter env var |
-|--------|----------------|----------------|
-| `shekyl-cli` | Rust | `SHEKYL_LOG` |
-| `shekyl-wallet-rpc` | Rust | `SHEKYL_LOG` |
-| `shekyld` | C++ | `MONERO_LOGS` (plus `--log-level=` / `--log-file=`) |
-
-Setting `SHEKYL_LOG` on the Rust binaries today gives you the same
-knob you'll use across the board in V4. The C++ env var
-`MONERO_LOGS` will be retired in Chore #2 and replaced by
-`SHEKYL_LOG`; for now operators running a mixed fleet need to set
-both if they want uniform output.
+`SHEKYL_LOG` is the single env var that controls logging across
+every Shekyl binary. Shipping a change to this section of the
+docs is a tell that the knob changed; nothing else is needed.
 
 `SHEKYL_LOG` accepts standard [`tracing-subscriber`
 `EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
@@ -1045,13 +1048,24 @@ SHEKYL_LOG=info,shekyl_wallet_rpc=debug          # level per target
 SHEKYL_LOG=shekyl_wallet_rpc::scanner=trace      # nested module target
 ```
 
+The legacy easylogging++ category grammar is also accepted
+(`net.p2p:DEBUG,wallet.wallet2:INFO`, numeric `0..=4` presets,
+`+`/`-` modifiers) because the C++ shim still round-trips through
+the Rust-side translator. Suffix globs (`*y.z:TRACE`) are rejected
+with a structured error and, where possible, a rewrite suggestion
+— no silent acceptance.
+
 Defaults (when `SHEKYL_LOG` is unset) are per-binary and match the
 pre-migration behavior: `shekyl-cli` defaults to `WARN`,
-`shekyl-wallet-rpc` to `INFO`. `RUST_LOG` is intentionally *not*
-honored in release builds — `SHEKYL_LOG` is the single supported
-knob.
+`shekyl-wallet-rpc` to `INFO`, and `shekyld` applies the rich
+level-0 preset (`*:WARNING,net:FATAL,net.http:FATAL,…,global:INFO`)
+that the daemon has always used. `RUST_LOG` and the historical
+`MONERO_LOGS` / `MONERO_LOG_FORMAT` variables are intentionally
+*not* honored — `SHEKYL_LOG` is the single supported knob. Scripts
+or systemd units that still set the retired `MONERO_*` names must
+be updated before upgrading past V3.x alpha.0.
 
-File sinks are opt-in, not default-on:
+File sinks follow the binary's role:
 
 - `shekyl-cli` writes stderr only. Redirect with `2> path` if you
   want a file.
@@ -1060,10 +1074,15 @@ File sinks are opt-in, not default-on:
   directory is created with `0700` perms and the file with `0600`
   perms on POSIX. No rotation is performed on the opt-in path —
   the operator owns file lifecycle.
-- `shekyld` today keeps its existing `--log-file=`/`--log-level=`
-  flags. In V4 those will resolve to a `FileSink::daily(...)` under
-  `~/.shekyl/logs/shekyld.log` with `0600` perms, driven by the
-  same `shekyl-logging` crate.
+- `shekyld` writes both stderr *and* a rotated file sink. The
+  default file lives at `~/.shekyl/logs/shekyld.log` (suffixed
+  `-testnet` / `-stagenet` / `-regtest` for non-mainnet runs),
+  rotated at ~100 MB with 50 archives retained. The live file and
+  every rotated archive are forced to POSIX mode `0600` by the
+  Rust side before the filename becomes visible. Override the
+  path with `--log-file`, rotation with `--max-log-file-size`
+  and `--max-log-files` (set max-log-files to `0` to disable
+  pruning).
 
 ### For integrators
 
@@ -1075,29 +1094,40 @@ events; the crate uses `#[must_use]` + a workspace-wide
 `clippy::let_underscore_must_use = "deny"` lint to catch the common
 shape).
 
-Chore #2 will introduce a Rust → C++ FFI bridge that lets
-C++ `MINFO` / `MDEBUG` / `MWARNING` / etc. call sites route through
-the same `tracing` subscriber. The legacy easylogging++ category
-grammar (`net.p2p:DEBUG,wallet.wallet2:INFO`, numeric `0..=4`
-presets, `+`/`-` modifiers) is translated by
-[`shekyl_logging::directives_from_legacy_categories`] — already
-shipped in Chore #1 — so configuration flowing through the C++
-shim can continue using its historical syntax during the transition
-window. Suffix globs (e.g. `*y.z:TRACE`) are rejected by the
-translator with a structured error that includes a rewrite
-suggestion where possible; no silent acceptance.
+C++ callers route through the existing `MINFO` / `MDEBUG` /
+`MWARNING` / etc. macros in `contrib/epee/include/misc_log_ex.h`.
+The macros now expand to `shekyl_log_emit` / `shekyl_log_level_enabled`
+via the FFI declared in `src/shekyl/shekyl_log.h`; the vendored
+`external/easylogging++/` tree and the `easylogging++.h` umbrella
+header have been removed. The `el::` namespace survives only as a
+thin compatibility shim (`el::Level`, `el::Color`,
+`el::base::DispatchAction`) to keep existing call sites compiling
+— new code must not rely on it.
 
-Two caveats for integrators shipping during the transition window:
+Behavior changes to be aware of when upgrading:
 
-1. **Output format will change in V4.** `easylogging++` uses a
-   custom format string; `tracing`'s default `fmt::layer` does not
-   match it byte-for-byte. If you have log-scraping tooling that
-   depends on the current format, plan to update it when Chore #2
-   lands.
-2. **`MONERO_*` env var names are retired in V4.** Any scripts or
-   systemd units that set `MONERO_LOGS` / `MONERO_LOG_FORMAT` need
-   to gain a `SHEKYL_LOG` alternative now so a V4 upgrade is a
-   no-op for them.
+1. **Output format.** The default `fmt::layer` from
+   `tracing-subscriber` replaces the custom easylogging++ format
+   string. Timestamps are RFC 3339 UTC (not local time with
+   microseconds), the level token is full words (`ERROR` rather
+   than `E`), and the category appears as a structured target.
+   Log-scraping tooling that parsed the prior format byte-for-byte
+   must be updated.
+2. **`MLOG_SET_THREAD_NAME` is a no-op.** The macro still accepts
+   its argument so existing call sites (`abstract_tcp_server2.inl`,
+   `miner.cpp`, `download.cpp`) keep compiling, but the label
+   (`[SRV_MAIN]`, `[miner 3]`, `DL12`) no longer appears in the log
+   stream. Restoring semantic thread labels via
+   `pthread_setname_np` / equivalent is tracked in
+   `docs/FOLLOWUPS.md` as a minor follow-up.
+3. **`MONERO_LOGS` / `MONERO_LOG_FORMAT` are retired.** The C++
+   shim no longer reads either name; `SHEKYL_LOG` is the single
+   input. `MONERO_LOG_FORMAT` in particular has no replacement
+   — formatting is owned by the subscriber's layer stack and is
+   not operator-tunable.
+
+[`tracing`]: https://docs.rs/tracing
+[`tracing-subscriber`]: https://docs.rs/tracing-subscriber
 
 ---
 

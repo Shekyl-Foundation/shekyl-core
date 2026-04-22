@@ -62,9 +62,14 @@ if (BUILD_GUI_DEPS)
     endif()
 endif()
 
+# NOTE: the legacy `easylogging` link entry used to live alongside
+# the Boost libs here; it was retired with the vendored
+# `external/easylogging++/` tree. Every `misc_log_ex.h` /
+# `mlog.cpp` call now resolves through `${SHEKYL_FFI_LINK_LIBS}`,
+# which appends `shekyl_log` (the staticlib produced by
+# `rust/shekyl-logging/`) — see `cmake/BuildRust.cmake`.
 target_link_libraries(epee
   PUBLIC
-    easylogging
     ${Boost_CHRONO_LIBRARY}
     ${Boost_FILESYSTEM_LIBRARY}
     ${Boost_THREAD_LIBRARY}
@@ -79,8 +84,8 @@ target_link_libraries(epee
 if (USE_READLINE AND (GNU_READLINE_FOUND OR (DEPENDS AND NOT MINGW)))
   target_link_libraries(epee_readline
     PUBLIC
-      easylogging
       ${Boost_SYSTEM_LIBRARY}
+      ${SHEKYL_FFI_LINK_LIBS}
     PRIVATE
     ${GNU_READLINE_LIBRARY})
 endif()
