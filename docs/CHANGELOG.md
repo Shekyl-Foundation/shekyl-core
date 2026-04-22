@@ -2,6 +2,165 @@
 
 ## [Unreleased]
 
+### Security
+
+- **Retired 32-bit build targets (`v3.1.0-alpha.5`, Chore #3). Shekyl is
+  now 64-bit only, on security grounds — not on maintenance grounds.**
+  Shekyl's Post-Quantum primitives — `fips203` (ML-KEM-768) and
+  `fips204` (ML-DSA-65), consumed on the hot path by `shekyl-crypto-pq`
+  and `shekyl-tx-builder` — state their constant-time guarantees
+  against native 64-bit arithmetic. On 32-bit targets the compiler
+  lowers `u64` operations through compiler-emitted libgcc helpers
+  (`__muldi3`, `__udivdi3`, `__ashldi3`) with no constant-time
+  guarantee, plus variable-latency `u64` multiply on common 32-bit ARM
+  cores (Cortex-A series). That is a CT violation introduced by the
+  code generator, not the source — exactly the class source-level CT
+  audits cannot catch. **KyberSlash (Bernstein et al., 2024)**
+  demonstrates remote-timing key recovery against ostensibly
+  constant-time Kyber implementations broken by non-CT division; the
+  Cortex-M4 Kyber timing-attack line (2022–2024) is supporting
+  context. **The X25519+ML-KEM hybrid does not save us**: "hybrid is
+  secure if either half is secure" protects against algorithmic
+  breaks, not side-channel breaks — if ML-KEM leaks its secret via
+  timing on 32-bit, X25519 is offline-attackable against captured
+  ciphertexts with unlimited attacker time. **FCMP++ proof generation
+  has not been audited for constant-time properties on 32-bit
+  targets, and Shekyl will not take responsibility for that audit
+  across all 32-bit toolchains we would otherwise ship** (policy
+  framing, not speculation). `MDB_VL32` (LMDB's 32-bit paged-mmap
+  mode) and the `src/crypto/slow-hash.c` 32-bit software fallback are
+  untested consensus-adjacent storage and PoW paths respectively.
+
+  **32-bit Shekyl wallet users were at meaningfully elevated risk of
+  key extraction compared to 64-bit users; supporting the platform
+  was a tacit lie about the security posture of users on it.** This
+  is the correction.
+
+  **Node-only operation is also retired.** A future contributor will
+  argue "I just want to run a 32-bit pruned node on a Pi, I'm not
+  doing wallet operations, the CT argument doesn't apply." That is
+  partially true — node code does not touch secret PQC keys. But
+  `MDB_VL32` paging against a multi-GB chain makes sync time measured
+  in weeks (not a supported posture), and shipping a 32-bit daemon
+  binary creates a reasonable user expectation that wallet operation
+  is supported, which it is not. The operational complexity of
+  splitting "32-bit daemon supported, 32-bit wallet refused"
+  outweighs any benefit.
+
+  **Four independent tripwires (defense-in-depth):**
+
+  1. **Tripwire D — `CMakeLists.txt`.** C++-side configure gate:
+     `message(FATAL_ERROR …)` on `NOT CMAKE_SIZEOF_VOID_P EQUAL 8`,
+     placed before any `find_package` / `include` /
+     `add_subdirectory` so configure fails early with the CT
+     argument in the message. Exercised on every PR to `dev` by
+     `.github/workflows/cmake-gate-test.yml` + `tests/cmake-gate-test/`,
+     which drives CMake with a fake 32-bit toolchain and asserts
+     non-zero exit, gate message + KyberSlash citation in stderr,
+     and no `find_package` chatter (so a PR that moves the gate
+     below a probe also fails the test).
+  2. **Tripwire A — `rust/shekyl-crypto-pq/src/lib.rs`.** Primary
+     `compile_error!` on `not(target_pointer_width = "64")`, since
+     this crate is the ML-KEM-768 / ML-DSA-65 consumer. The gate
+     that fires in practice on a 32-bit Rust build.
+  3. **Tripwire B — `rust/shekyl-ffi/src/lib.rs`.**
+     Structural-not-observable: duplicated by design to preserve
+     the refusal at the FFI seam under a future refactor that
+     might split this crate from `shekyl-crypto-pq`. **Do not
+     delete this gate on the grounds that it "never fires" — its
+     value is structural, not observable**; see the comment block
+     on the tripwire and `docs/audit_trail/RESOLVED_260419.md`
+     §"Chore #3".
+  4. **Tripwire C — `rust/shekyl-tx-builder/src/lib.rs`.** Direct
+     `fips204` (ML-DSA-65) consumer on the transaction-signing hot
+     path; independent of Tripwire A so a future refactor that
+     narrows the dependency shape cannot silently drop the
+     refusal.
+
+  **Deleted, not `#if 1`-ed out.** Every 32-bit-conditional block
+  removed in this chore was deleted outright. Dead
+  `#if ARCH_WIDTH == 64` / `#ifdef __i386__` / `#ifdef __arm__`
+  scaffolding invites future contributors to assume a meaningful
+  32-bit alternative exists somewhere and reason about it; the
+  whole point of the retirement is to foreclose that reasoning.
+
+  **What went away.** Build system:
+  `cmake/32-bit-toolchain.cmake`; the six 32-bit `Makefile` targets
+  that actually existed on `dev` (`release-static-win32`,
+  `debug-static-win32`, `release-static-linux-i686`,
+  `release-static-linux-armv6`, `release-static-linux-armv7`,
+  `release-static-android-armv7`); `BUILD_64` / `DEFAULT_BUILD_64` /
+  `ARCH_WIDTH` / `ARM_TEST` / `ARM6` / `ARM7` machinery and the
+  Clang+32 `libatomic` workaround in the root `CMakeLists.txt`; the
+  `-D BUILD_64=ON` argument on all remaining 64-bit `Makefile`
+  targets; `ARCH_WIDTH != 32` conditional in
+  `src/blockchain_utilities/blockchain_import.cpp` (body retained,
+  guard deleted); `-D MDB_VL32` in
+  `external/db_drivers/liblmdb/CMakeLists.txt` (vendored `mdb.c`
+  `MDB_VL32` code paths are now unreachable in Shekyl builds and
+  deliberately left unpatched in-tree — see
+  `docs/VENDORED_DEPENDENCIES.md` §"`MDB_VL32` — 32-bit retirement
+  note" for the future-update drill); `contrib/depends/` toolchain
+  template `i686` / `armv7` / `BUILD_64` / `LINUX_32` branches,
+  package recipes for `boost` / `openssl` / `android_ndk` / the
+  arch-asymmetric `_cflags_mingw32+="-D_WIN32_WINNT=0x600"` line in
+  `unbound.mk`, `README.md` host list, `.gitignore` `i686*` / `arm*`
+  entries, `packages.md` example; `cmake/BuildRust.cmake` all
+  non-64-bit `CMAKE_SYSTEM_PROCESSOR` branches; gitian configs
+  (`gitian-linux.yml`, `gitian-android.yml`, `gitian-win.yml`)
+  32-bit hosts and MinGW alternatives.
+
+  C/C++ conditionals: `src/common/compat/glibc_compat.cpp`
+  `__wrap___divmoddi4` block and `__i386__`/`__arm__` glob symver
+  arms (plus the corresponding `-Wl,--wrap=__divmoddi4` linker flag
+  in the root `CMakeLists.txt`); `src/crypto/slow-hash.c` outer
+  guard narrowed from `__arm__ || __aarch64__` to `__aarch64__` and
+  the 32-bit fallback `cn_slow_hash_{allocate,free}_state` stubs
+  removed; `src/crypto/CryptonightR_JIT.{c,h}`,
+  `src/crypto/CryptonightR_template.h` x86 gates narrowed from
+  `__i386 || __x86_64__` to `__x86_64__`;
+  `src/cryptonote_basic/miner.cpp` FreeBSD APM gates narrowed from
+  `__amd64__ || __i386__ || __x86_64__` to
+  `__amd64__ || __x86_64__`;
+  `src/blockchain_db/lmdb/db_lmdb.h` `__arm__` `DEFAULT_MAPSIZE`
+  branch removed; `src/blockchain_db/lmdb/db_lmdb.cpp`
+  `MISALIGNED_OK` gate narrowed to `__x86_64` only.
+  **Disambiguation:** `tests/hash/main.cpp:192,206`
+  `<emmintrin.h>` SSE-intrinsic gates are x86_64 arch gates, not
+  32-bit gates, and are **not** deleted — an earlier draft of
+  `STRUCTURAL_TODO.md` lumped them with the 32-bit retirement
+  imprecisely.
+
+  Rust: three `compile_error!` tripwires (A/B/C, above);
+  `rust/shekyl-oxide/crypto/helioselene/benches/helioselene.rs`
+  `target_arch = "x86"` branches collapsed to `x86_64` only.
+
+  CI: `.github/workflows/depends.yml` ARM v7 stub replaced with a
+  pointer to this chore; new `.github/workflows/cmake-gate-test.yml`
+  + `tests/cmake-gate-test/` enforcing Tripwire D placement.
+
+  Docs: `README.md`, `docs/INSTALLATION_GUIDE.md`,
+  `docs/RELEASING.md`, and `docs/COMPILING_DEBUGGING_TESTING.md`
+  are now 64-bit-only; `docs/VENDORED_DEPENDENCIES.md` carries the
+  `MDB_VL32` future-update note; `docs/STRUCTURAL_TODO.md` §"32-bit
+  targets cannot safely run Shekyl" is the canonical reviewer-facing
+  copy; `docs/audit_trail/RESOLVED_260419.md` §"Chore #3
+  (v3.1.0-alpha.5) — 32-bit target retirement: security closure"
+  carries the closure narrative.
+
+  **Supported architectures going forward:** `x86_64`, `aarch64`
+  (Linux and Apple Silicon), `riscv64` (Gitian). `armhf`, `armv7`,
+  `armv6`, `i686`, `i386` are out of scope — not deferred, not
+  "maybe later," out of scope. Users on 32-bit hardware must not
+  run Shekyl wallets; node operation on 32-bit hardware is not
+  supported either. Operators on ARM32 / i686 hardware should plan
+  a migration to 64-bit before upgrading past `v3.1.0-alpha.5`.
+
+  *Maintenance benefits are real but secondary:* every 32-bit
+  carve-out in `STRUCTURAL_TODO.md` §"bit-width carve-out without
+  coverage" is eliminated in one chore, closing the dead-scaffolding
+  pattern that motivated the §.
+
 ### Changed
 
 - **Logging output format (breaking change, all binaries).**

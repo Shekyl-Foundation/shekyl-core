@@ -68,6 +68,29 @@ No other CVEs have been filed against LMDB core (`mdb.c`, `lmdb.h`) as of April 
 5. Update this document with the new commit and ITS references.
 6. Commit with the upstream ITS reference in the message (e.g., `ITS#XXXX description`).
 
+### `MDB_VL32` — 32-bit retirement note
+
+Shekyl is 64-bit only as of v3.1.0-alpha.5 (Chore #3). The LMDB
+`MDB_VL32` variable-length-32-bit paged-mmap mode is never enabled by
+Shekyl's build system — the `-DMDB_VL32` define site in
+`external/db_drivers/liblmdb/CMakeLists.txt` was removed in that chore,
+and the top-level `CMakeLists.txt` Tripwire D refuses any
+`CMAKE_SIZEOF_VOID_P != 8` configure. The `MDB_VL32` code paths in
+vendored `mdb.c` are therefore **unreachable in Shekyl builds** and are
+deliberately left unpatched in-tree (patching vendored code to remove
+them would be worse than the dead-code problem).
+
+When updating the vendored LMDB copy, verify that no newly added upstream
+code path reaches `MDB_VL32`-guarded logic unconditionally — in
+particular, a future upstream refactor that lifts `MDB_VL32` state into
+the always-compiled path would silently re-introduce the 32-bit paging
+code to Shekyl's build surface. `grep -n MDB_VL32 external/db_drivers/
+liblmdb/mdb.c` on the incoming patch, plus a diff review of any touched
+`#ifdef MDB_VL32` blocks, is the minimum due diligence. If upstream ever
+makes the VL32 path unconditional, the correct response is to patch it
+out on our side with a pointer to this note and the Chore #3 tripwires,
+not to re-enable 32-bit builds.
+
 ### Compilation
 
 LMDB is compiled via `external/db_drivers/liblmdb/CMakeLists.txt`. It is statically linked into all Shekyl executables that use `BlockchainLMDB`. No external LMDB shared library is used.

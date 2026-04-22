@@ -96,7 +96,6 @@ Each release produces these files (all binaries are Gitian reproducible builds):
 |------|-------------|
 | `shekyl-x86_64-linux-gnu-vX.Y.Z.tar.bz2` | Linux x86_64 binaries |
 | `shekyl-aarch64-linux-gnu-vX.Y.Z.tar.bz2` | Linux ARM64 binaries |
-| `shekyl-arm-linux-gnueabihf-vX.Y.Z.tar.bz2` | Linux ARMv7 binaries |
 | `shekyl-riscv64-linux-gnu-vX.Y.Z.tar.bz2` | Linux RISC-V 64-bit binaries |
 | `shekyl_X.Y.Z_amd64.deb` | Debian/Ubuntu x86_64 package with systemd unit |
 | `shekyl_X.Y.Z_arm64.deb` | Debian/Ubuntu ARM64 package with systemd unit |
@@ -144,8 +143,10 @@ The pipeline has two phases:
    publishes the GitHub Release.
 
 Each Gitian build descriptor installs the Rust toolchain via `rustup` with
-the appropriate cross-compilation targets (ARM, aarch64, RISC-V for Linux;
-MinGW targets for Windows; Darwin targets for macOS).
+the appropriate cross-compilation targets (aarch64, RISC-V for Linux;
+64-bit MinGW for Windows; Darwin targets for macOS). 32-bit targets were
+permanently retired in v3.1.0-alpha.5 (Chore #3) on PQC constant-time
+grounds — see `docs/CHANGELOG.md` entry "Retired 32-bit build targets".
 
 ### Re-running a Failed Gitian Build
 
@@ -172,5 +173,7 @@ Or trigger manually from the Actions tab without retagging.
 
 - **macOS `.dmg` installer** -- native disk image with drag-to-Applications UX.
 - **Linux AppImage** -- single-file portable binary for desktop distributions.
-- Additional architectures (armhf, RISC-V, i686) are available via Gitian
-  deterministic builds and may be promoted to the main release if demand warrants.
+- **RISC-V 64-bit** is available via Gitian deterministic builds and may be
+  promoted to the main release if demand warrants. 32-bit platforms are
+  permanently out of scope on security grounds — see `docs/CHANGELOG.md`
+  entry "Retired 32-bit build targets".

@@ -324,23 +324,19 @@ and build with `USE_SINGLE_BUILDDIR=1 make release`.
 
 #### On Windows:
 
-> **Security advisory — 32-bit Windows is NOT a supported Shekyl target.**
-> The `release-static-win32` / `debug-static-win32` Makefile targets and
-> the `mingw-w64-i686-*` MSYS2 packages below survive in the build
-> system only because this branch has not yet executed the scheduled
-> V3.2 retirement (tracked in `docs/STRUCTURAL_TODO.md` §"32-bit targets
-> cannot safely run Shekyl" and `docs/FOLLOWUPS.md` §"Chore #3"). Do
-> not use them, and do not reintroduce 32-bit support in any form:
-> Shekyl's post-quantum primitives (ML-KEM-768, ML-DSA-65) rely on
-> 64-bit arithmetic for their constant-time guarantees, and on 32-bit
-> ISAs the compiler decomposes every `u64` operation into variable-time
-> 32-bit sequences with operand-dependent carry propagation. That is a
-> published timing-side-channel surface (the Cortex-M4 / Kyber attack
-> line, 2022-2024) against which a 32-bit Shekyl wallet's private key
-> is extractable by anyone who can measure operation timing — which on
-> a network-connected wallet is a very large attacker set. Use
-> `release-static-win64`. If your hardware cannot run 64-bit Windows,
-> Shekyl is not appropriate for your machine.
+> **Shekyl supports 64-bit Windows only.** Shekyl's post-quantum
+> primitives (ML-KEM-768 via `fips203`, ML-DSA-65 via `fips204`) state
+> their constant-time guarantees against native 64-bit arithmetic. On
+> 32-bit targets the compiler decomposes `u64` operations into libgcc
+> helpers (`__muldi3`, `__udivdi3`, `__ashldi3`) with no constant-time
+> guarantee, plus variable-latency `u64` multiply on common 32-bit
+> cores — the exact threat model exploited by KyberSlash (Bernstein
+> et al., 2024) against fielded "CT" lattice KEM implementations. The
+> hybrid X25519+ML-KEM construction does not rescue the ML-KEM secret
+> once it leaks via timing. 32-bit build targets were permanently
+> retired in v3.1.0-alpha.5 (Chore #3) and the C++-side configure
+> refuses non-64-bit hosts. See `docs/CHANGELOG.md` entry "Retired
+> 32-bit build targets" and the audit-trail closure for full context.
 
 Binaries for Windows are built on Windows using the MinGW toolchain within
 [MSYS2 environment](https://www.msys2.org). The MSYS2 environment emulates a
@@ -350,7 +346,7 @@ application.
 
 **Preparing the build environment**
 
-* Download and install the [MSYS2 installer](https://www.msys2.org), either the 64-bit or the 32-bit package, depending on your system.
+* Download and install the 64-bit [MSYS2 installer](https://www.msys2.org).
 * Open the MSYS shell via the `MSYS2 Shell` shortcut
 * Update packages using pacman:
 
@@ -359,7 +355,7 @@ application.
     ```
 
 * Exit the MSYS shell using Alt+F4
-* Edit the properties for the `MSYS2 Shell` shortcut changing "msys2_shell.bat" to "msys2_shell.cmd -mingw64" for 64-bit builds or "msys2_shell.cmd -mingw32" for 32-bit builds
+* Edit the properties for the `MSYS2 Shell` shortcut changing "msys2_shell.bat" to "msys2_shell.cmd -mingw64".
 * Restart MSYS shell via modified shortcut and update packages again using pacman:
 
     ```bash
@@ -367,27 +363,13 @@ application.
     ```
 
 
-* Install dependencies:
-
-    To build for 64-bit Windows:
+* Install dependencies for 64-bit Windows:
 
     ```bash
     pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium mingw-w64-x86_64-hidapi mingw-w64-x86_64-unbound
     ```
 
-    **32-bit Windows builds are NOT supported — see the security
-    advisory at the top of this section. The commands below will be
-    removed in V3.2 (Chore #3) and are left in place only because
-    this branch pre-dates that retirement; the resulting binaries
-    are not safe for Shekyl wallet operations.**
-
-    ```bash
-    pacman -S mingw-w64-i686-toolchain make mingw-w64-i686-cmake mingw-w64-i686-boost mingw-w64-i686-openssl mingw-w64-i686-libsodium mingw-w64-i686-hidapi mingw-w64-i686-unbound
-    ```
-
-* Open the MingW shell via `MinGW-w64-Win64 Shell` shortcut on 64-bit Windows
-  or `MinGW-w64-Win64 Shell` shortcut on 32-bit Windows. Note that if you are
-  running 64-bit Windows, you will have both 64-bit and 32-bit MinGW shells.
+* Open the MingW shell via the `MinGW-w64-Win64 Shell` shortcut.
 
 **Cloning**
 
@@ -411,19 +393,10 @@ application.
     git checkout <tag>
     ```
 
-* If you are on a 64-bit system, run:
+* Build the 64-bit release binaries:
 
     ```bash
     make release-static-win64
-    ```
-
-* **32-bit Windows is not supported.** The `release-static-win32`
-  target below is scheduled for removal in V3.2 (Chore #3) — see the
-  security advisory at the top of this section. If you are on a
-  32-bit-only machine, Shekyl is not appropriate for it.
-
-    ```bash
-    make release-static-win32
     ```
 
 * The resulting executables can be found in `build/release/bin`
@@ -432,13 +405,6 @@ application.
 
     ```bash
     make debug-static-win64
-    ```
-
-* **Unsupported** (scheduled for removal in V3.2 — see the security
-  advisory at the top of this section): `debug-static-win32`.
-
-    ```bash
-    make debug-static-win32
     ```
 
 * The resulting executables can be found in `build/debug/bin`
@@ -497,18 +463,12 @@ By default, in either dynamically or statically linked builds, binaries target t
 * ```make release-static-linux-armv8``` builds binaries on Linux portable across POSIX systems on armv8 processors
 * ```make release-static-win64``` builds binaries on 64-bit Windows portable across 64-bit Windows systems
 
-**The following 32-bit targets are NOT supported and are scheduled
-for removal in V3.2 (Chore #3).** Shekyl's post-quantum primitives
-rely on 64-bit arithmetic for their constant-time guarantees; 32-bit
-builds are a timing-side-channel hazard against wallet private keys.
-See `docs/STRUCTURAL_TODO.md` §"32-bit targets cannot safely run
-Shekyl" for the full analysis. Do not use these targets and do not
-reintroduce them:
-
-* ~~```make release-static-linux-i686```~~ (32-bit x86 — unsupported)
-* ~~```make release-static-linux-armv7```~~ (32-bit ARMv7 — unsupported)
-* ~~```make release-static-linux-armv6```~~ (32-bit ARMv6 — unsupported)
-* ~~```make release-static-win32```~~ (32-bit Windows — unsupported)
+32-bit portable targets (`release-static-linux-i686`, `release-static-win32`)
+were permanently retired in v3.1.0-alpha.5 (Chore #3) on PQC constant-time
+grounds — see `docs/CHANGELOG.md` entry "Retired 32-bit build targets".
+The C++-side configure refuses non-64-bit hosts, and the Rust workspace
+carries three independent `compile_error!` tripwires against
+`target_pointer_width != 64`.
 
 ### Cross Compiling
 
@@ -529,17 +489,10 @@ You can also cross-compile static binaries on Linux for Windows and macOS with t
   * Requires: `clang-8`
 * ```make depends target=aarch64-linux-android``` for 64bit android binaries
 
-**Unsupported 32-bit cross-compile targets (scheduled for removal
-in V3.2 — Chore #3).** 32-bit depends paths remain in
-`contrib/depends/` only because this branch pre-dates the
-retirement chore. They are a timing-side-channel hazard against
-wallet keys (see `docs/STRUCTURAL_TODO.md` §"32-bit targets cannot
-safely run Shekyl") and should not be used:
-
-* ~~```make depends target=i686-w64-mingw32```~~ (32-bit Windows — unsupported)
-* ~~```make depends target=arm-linux-gnueabihf```~~ (32-bit ARMv7 — unsupported)
-* ~~```make depends target=arm-linux-android```~~ (32-bit Android ARM — unsupported)
-
+32-bit depends targets (`i686-w64-mingw32`, `arm-linux-gnueabihf`,
+`arm-linux-android`) were permanently retired in v3.1.0-alpha.5
+(Chore #3) on PQC constant-time grounds. See `docs/CHANGELOG.md`
+entry "Retired 32-bit build targets".
 
 The required packages are the names for each toolchain on apt. Depending on your distro, they may have different names. The `depends` system has been tested on Ubuntu 18.04 and 20.04.
 
