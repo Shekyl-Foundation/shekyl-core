@@ -28,14 +28,19 @@ cmake -DCMAKE_TOOLCHAIN=`pwd`/contrib/depends/x86_64-w64-mingw32
 
 Common `host-platform-triplets` for cross compilation are:
 
-- `i686-w64-mingw32` for Win32
 - `x86_64-w64-mingw32` for Win64
 - `x86_64-apple-darwin11` for MacOSX x86_64
-- `arm-linux-gnueabihf` for Linux ARM 32 bit
 - `aarch64-linux-gnu` for Linux ARM 64 bit
 - `riscv64-linux-gnu` for Linux RISCV 64 bit
 
 No other options are needed, the paths are automatically configured.
+
+Note: 32-bit targets (`i686-w64-mingw32`, `arm-linux-gnueabihf`,
+`i686-linux-gnu`, and their Android equivalents) were retired in
+Chore #3 (`v3.1.0-alpha.5`). The root `CMakeLists.txt` refuses to
+configure for any target where `CMAKE_SIZEOF_VOID_P != 8`; see
+`docs/CHANGELOG.md` and `docs/STRUCTURAL_TODO.md` for the PQC
+constant-time security argument.
 
 Dependency Options:
 The following can be set when running make: make FOO=bar
@@ -60,7 +65,7 @@ download-linux: run 'make download-linux' to fetch all sources needed for linux 
 
 #Mingw builds
 
-Building for 32/64bit mingw requires switching alternatives to a posix mode
+Building for 64-bit mingw requires switching alternatives to a posix mode:
 
 ```bash
 update-alternatives --set x86_64-w64-mingw32-g++ x86_64-w64-mingw32-g++-posix

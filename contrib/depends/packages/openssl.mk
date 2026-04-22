@@ -31,18 +31,12 @@ $(package)_config_opts+=$($(package)_cflags) $($(package)_cppflags)
 $(package)_config_opts_linux=-fPIC -Wa,--noexecstack
 $(package)_config_opts_freebsd=-fPIC -Wa,--noexecstack
 $(package)_config_opts_x86_64_linux=linux-x86_64
-$(package)_config_opts_arm_linux=linux-generic32
 $(package)_config_opts_aarch64_linux=linux-generic64
-$(package)_config_opts_arm_android=--static android-arm
 $(package)_config_opts_aarch64_android=--static android-arm64
 $(package)_config_opts_aarch64_darwin=darwin64-arm64-cc
 $(package)_config_opts_riscv64_linux=linux-generic64
-$(package)_config_opts_mipsel_linux=linux-generic32
-$(package)_config_opts_mips_linux=linux-generic32
-$(package)_config_opts_powerpc_linux=linux-generic32
 $(package)_config_opts_x86_64_darwin=darwin64-x86_64-cc
 $(package)_config_opts_x86_64_mingw32=mingw64
-$(package)_config_opts_i686_mingw32=mingw
 $(package)_config_opts_x86_64_freebsd=BSD-x86_64
 endef
 

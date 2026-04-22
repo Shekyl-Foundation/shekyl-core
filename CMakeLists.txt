@@ -32,12 +32,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 list(INSERT CMAKE_MODULE_PATH 0
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-include(CheckCCompilerFlag)
-include(CheckCXXCompilerFlag)
-include(CheckLinkerFlag)
-include(CheckLibraryExists)
-include(CheckFunctionExists)
-include(FindPythonInterp)
 
 if (IOS)
     INCLUDE(CmakeLists_IOS.txt)
@@ -55,6 +49,78 @@ if(POLICY CMP0167)
 endif()
 
 project(shekyl)
+
+# ---------------------------------------------------------------------------
+# 64-bit-only gate — Chore #3, v3.1.0-alpha.5 (Tripwire D).
+#
+# Matching Rust gates (defense-in-depth; all four must be defeated to ship a
+# 32-bit build):
+#   - rust/shekyl-crypto-pq/src/lib.rs   (Tripwire A, primary ML-KEM/ML-DSA consumer)
+#   - rust/shekyl-ffi/src/lib.rs         (Tripwire B, structural-not-observable)
+#   - rust/shekyl-tx-builder/src/lib.rs  (Tripwire C, direct fips204 consumer)
+#
+# This gate MUST stay above any find_package / add_subdirectory / include()
+# so no probe can pre-empt it. The CI test at
+# tests/cmake-gate-test/run.sh (wired from
+# .github/workflows/cmake-gate-test.yml) exercises exactly that ordering
+# invariant against a fake 32-bit toolchain on every PR to dev — a PR that
+# moves this block below find_package(...) will fail that test.
+#
+# See docs/CHANGELOG.md "Retired 32-bit build targets" and
+# docs/audit_trail/ "Chore #3" before touching any of these gates.
+# ---------------------------------------------------------------------------
+# Two checks, OR'd together, because `CMAKE_SIZEOF_VOID_P` alone is not
+# sufficient as a gate predicate:
+#   (a) CMAKE_SIZEOF_VOID_P is populated by the compiler probe that
+#       `project(shekyl)` above just triggered. On a real 32-bit target
+#       with a real 32-bit cross-compiler, the probe reports 4, so this
+#       half of the predicate fires.
+#   (b) CMAKE_SYSTEM_PROCESSOR is populated by the toolchain file (or
+#       defaults to the host). A toolchain file that declares a 32-bit
+#       CMAKE_SYSTEM_PROCESSOR — `i[3-6]86`, `armv[67]l?`, `armhf`,
+#       `armel`, `arm` bare, `mips(el)?`, `powerpc`/`ppc` — is
+#       unambiguously targeting a 32-bit architecture, and this half of
+#       the predicate fires regardless of what the compiler probe
+#       reported. This matters operationally (a gate-test CI job on a
+#       64-bit host forcing CMAKE_SYSTEM_PROCESSOR via a fake toolchain
+#       must fire without needing a real 32-bit sysroot;
+#       tests/cmake-gate-test/ exercises exactly this path) and
+#       defensively (a future toolchain bug or misconfigured cross
+#       environment that silently reports `CMAKE_SIZEOF_VOID_P=8` on a
+#       32-bit target would slip past a size-only gate).
+if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR
+   CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86|armv[67]l?|armhf|armel|arm|mips|mipsel|powerpc|ppc)$")
+  message(FATAL_ERROR
+    "Shekyl refuses to configure on non-64-bit targets "
+    "(CMAKE_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P}, "
+    "CMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}). "
+    "ML-KEM-768 (fips203) and ML-DSA-65 (fips204) constant-time "
+    "guarantees are stated against native 64-bit arithmetic; on 32-bit "
+    "targets the compiler emits libgcc helpers (__muldi3, __udivdi3, "
+    "__ashldi3) with no constant-time guarantee, plus variable-latency "
+    "u64 multiply on common 32-bit ARM cores. This is the threat model "
+    "exploited by KyberSlash (Bernstein et al., 2024) against fielded "
+    "CT implementations. The hybrid X25519+ML-KEM construction does not "
+    "rescue the ML-KEM secret once it leaks via timing. Matching gates "
+    "live in rust/shekyl-crypto-pq/src/lib.rs, rust/shekyl-ffi/src/lib.rs, "
+    "and rust/shekyl-tx-builder/src/lib.rs. See docs/CHANGELOG.md entry "
+    "'Retired 32-bit build targets' before attempting to revert this gate.")
+endif()
+
+# Compiler-flag / function / library helpers and FindPythonInterp are
+# loaded AFTER the 64-bit gate above so the gate-test CI job at
+# `tests/cmake-gate-test/run.sh` can assert that no find_package /
+# compiler probe chatter reaches stdout ahead of the gate firing (a PR
+# that moves any of these five includes back above the gate fails that
+# job). These modules do not depend on `project()` state beyond what
+# the gate's own CMAKE_SYSTEM_PROCESSOR / CMAKE_SIZEOF_VOID_P predicate
+# already consumed, so the relocation is safe.
+include(CheckCCompilerFlag)
+include(CheckCXXCompilerFlag)
+include(CheckLinkerFlag)
+include(CheckLibraryExists)
+include(CheckFunctionExists)
+include(FindPythonInterp)
 
 option (USE_CCACHE "Use ccache if a usable instance is found" ON)
 if (USE_CCACHE)
@@ -294,17 +360,6 @@ endif()
 endif()
 string(TOLOWER "${ARCH_ID}" ARCH_ID)
 string(TOLOWER "${ARCH_ID}" ARM_ID)
-string(SUBSTRING "${ARM_ID}" 0 3 ARM_TEST)
-if (ARM_TEST STREQUAL "arm")
-  set(ARM 1)
-  string(SUBSTRING "${ARM_ID}" 0 5 ARM_TEST)
-  if (ARM_TEST STREQUAL "armv6")
-    set(ARM6 1)
-  endif()
-  if (ARM_TEST STREQUAL "armv7")
-    set(ARM7 1)
-  endif()
-endif()
 
 if (ARM_ID STREQUAL "aarch64" OR ARM_ID STREQUAL "arm64" OR ARM_ID STREQUAL "armv8-a")
   set(ARM 1)
@@ -425,21 +480,6 @@ if(OSSFUZZ)
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DOSSFUZZ")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DOSSFUZZ")
 endif()
-
-# Check whether we're on a 32-bit or 64-bit system
-if(CMAKE_SIZEOF_VOID_P EQUAL "8")
-  set(DEFAULT_BUILD_64 ON)
-else()
-  set(DEFAULT_BUILD_64 OFF)
-endif()
-option(BUILD_64 "Build for 64-bit? 'OFF' builds for 32-bit." ${DEFAULT_BUILD_64})
-
-if(BUILD_64)
-  set(ARCH_WIDTH "64")
-else()
-  set(ARCH_WIDTH "32")
-endif()
-message(STATUS "Building for a ${ARCH_WIDTH}-bit system")
 
 # Check if we're on FreeBSD so we can exclude the local miniupnpc (it should be installed from ports instead)
 # CMAKE_SYSTEM_NAME checks are commonly known, but specifically taken from libsdl's CMakeLists
@@ -800,10 +840,6 @@ else()
     message(STATUS "AES support not available on s390x")
   elseif(RISCV)
     message(STATUS "AES support not available on RISC-V")
-  elseif(ARM6)
-    message(STATUS "AES support not available on ARMv6")
-  elseif(ARM7)
-    message(STATUS "AES support not available on ARMv7")
   elseif(ARM8)
     CHECK_CXX_ACCEPTS_FLAG("-march=${ARCH}+crypto" ARCH_PLUS_CRYPTO)
     if(ARCH_PLUS_CRYPTO)
@@ -836,12 +872,13 @@ else()
     # mingw doesn't support LTO (multiple definition errors at link time)
     set(USE_LTO_DEFAULT false)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,10485760")
-    # Pin the Windows API tier to Vista (0x0600) on both 32- and 64-bit
-    # MinGW. The 32-bit leg has always needed this; the 64-bit leg now
-    # needs it too so MinGW-w64's `<winioctl.h>` exposes the Vista+
-    # declarations its own headers gate on `_WIN32_WINNT` (chiefly
+    # Pin the Windows API tier to Vista (0x0600) on 64-bit MinGW so
+    # MinGW-w64's `<winioctl.h>` exposes the Vista+ declarations its
+    # own headers gate on `_WIN32_WINNT` (chiefly
     # `FSCTL_SET_COMPRESSION`, used by `disable_ntfs_compression` in
-    # `src/blockchain_db/lmdb/db_lmdb.cpp`).
+    # `src/blockchain_db/lmdb/db_lmdb.cpp`). 32-bit MinGW was retired
+    # in Chore #3 (v3.1.0-alpha.5) — the root `CMakeLists.txt`
+    # `CMAKE_SIZEOF_VOID_P` gate above refuses any i686 configure.
     #
     # The tier pin is *one* of two independent mechanisms that keep
     # that symbol visible on MinGW — the other, living in
@@ -853,13 +890,6 @@ else()
     # API-tier pin and the source-side fallback cover different root
     # causes and are both necessary on the toolchain mixes we ship;
     # keep them in sync and do not collapse one into the other.
-    #
-    # This replaces commit 070447f5b ("cmake: set _WIN32_WINNT=0x0600
-    # for MinGW x86_64 too") which a subsequent revert removed in
-    # error while we were chasing only the include-order half of the
-    # problem. Dropping the 32-bit MinGW leg in Chore #3 lets this
-    # collapse to a single unconditional definition, but the tier
-    # gate (and the source-side fallback) both stay.
     add_definitions(-DWINVER=0x0600 -D_WIN32_WINNT=0x0600)
   endif()
   set(C_WARNINGS "-Waggregate-return -Wnested-externs -Wold-style-definition -Wstrict-prototypes")
@@ -978,7 +1008,6 @@ else()
   endif()
 
   if(BACKCOMPAT)
-      add_linker_flag_if_supported(-Wl,--wrap=__divmoddi4 LD_BACKCOMPAT_FLAGS)
       add_linker_flag_if_supported(-Wl,--wrap=glob LD_BACKCOMPAT_FLAGS)
       message(STATUS "Using Lib C back compat flags: ${LD_BACKCOMPAT_FLAGS}")
   endif()
@@ -1027,67 +1056,20 @@ else()
     #0xd08 - Cortex-A72
     #0xd03 - Cortex-A73
 
-    if(NOT ARM8)
-      CHECK_CXX_ACCEPTS_FLAG(-mfpu=vfp3-d16 CXX_ACCEPTS_VFP3_D16)
-      CHECK_CXX_ACCEPTS_FLAG(-mfpu=vfp4 CXX_ACCEPTS_VFP4)
-      CHECK_CXX_ACCEPTS_FLAG(-mfloat-abi=hard CXX_ACCEPTS_MFLOAT_HARD)
-      CHECK_CXX_ACCEPTS_FLAG(-mfloat-abi=softfp CXX_ACCEPTS_MFLOAT_SOFTFP)
+    CHECK_CXX_ACCEPTS_FLAG(-mfix-cortex-a53-835769 CXX_ACCEPTS_MFIX_CORTEX_A53_835769)
+    CHECK_CXX_ACCEPTS_FLAG(-mfix-cortex-a53-843419 CXX_ACCEPTS_MFIX_CORTEX_A53_843419)
+
+    if(CXX_ACCEPTS_MFIX_CORTEX_A53_835769)
+      message(STATUS "Enabling Cortex-A53 workaround 835769")
+      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfix-cortex-a53-835769")
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfix-cortex-a53-835769")
     endif()
 
-    if(ARM8)
-      CHECK_CXX_ACCEPTS_FLAG(-mfix-cortex-a53-835769 CXX_ACCEPTS_MFIX_CORTEX_A53_835769)
-      CHECK_CXX_ACCEPTS_FLAG(-mfix-cortex-a53-843419 CXX_ACCEPTS_MFIX_CORTEX_A53_843419)
+    if(CXX_ACCEPTS_MFIX_CORTEX_A53_843419)
+      message(STATUS "Enabling Cortex-A53 workaround 843419")
+      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfix-cortex-a53-843419")
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfix-cortex-a53-843419")
     endif()
-
-    if(ARM6)
-      message(STATUS "Selecting VFP for ARMv6")
-      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfpu=vfp")
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpu=vfp")
-      if(DEPENDS)
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -marm")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -marm")
-      endif()
-    endif(ARM6)
-
-    if(ARM7)
-      if(CXX_ACCEPTS_VFP3_D16 AND NOT CXX_ACCEPTS_VFP4)
-        message(STATUS "Selecting VFP3 for ARMv7")
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfpu=vfp3-d16")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpu=vfp3-d16")
-      endif()
-
-      if(CXX_ACCEPTS_VFP4)
-        message(STATUS "Selecting VFP4 for ARMv7")
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfpu=vfp4")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpu=vfp4")
-      endif()
-
-      if(CXX_ACCEPTS_MFLOAT_HARD)
-        message(STATUS "Setting Hardware ABI for Floating Point")
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfloat-abi=hard")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfloat-abi=hard")
-      endif()
-
-      if(CXX_ACCEPTS_MFLOAT_SOFTFP AND NOT CXX_ACCEPTS_MFLOAT_HARD)
-        message(STATUS "Setting Software ABI for Floating Point")
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfloat-abi=softfp")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfloat-abi=softfp")
-      endif()
-    endif(ARM7)
-
-    if(ARM8)
-      if(CXX_ACCEPTS_MFIX_CORTEX_A53_835769)
-        message(STATUS "Enabling Cortex-A53 workaround 835769")
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfix-cortex-a53-835769")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfix-cortex-a53-835769")
-      endif()
-
-      if(CXX_ACCEPTS_MFIX_CORTEX_A53_843419)
-        message(STATUS "Enabling Cortex-A53 workaround 843419")
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mfix-cortex-a53-843419")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfix-cortex-a53-843419")
-      endif()
-    endif(ARM8)
 
   endif(ARM)
 
@@ -1356,12 +1338,6 @@ endif()
 if(ANDROID)
   set(ATOMIC libatomic.a)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=user-defined-warnings")
-endif()
-if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND ARCH_WIDTH EQUAL "32" AND NOT IOS AND NOT FREEBSD)
-  find_library(ATOMIC atomic)
-  if (ATOMIC_FOUND)
-    list(APPEND EXTRA_LIBRARIES ${ATOMIC})
-  endif()
 endif()
 
 find_library(SODIUM_LIBRARY NAMES sodium libsodium)

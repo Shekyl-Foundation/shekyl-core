@@ -23,12 +23,6 @@ packages:
 - "cmake"
 alternatives:
 -
-  package: "i686-w64-mingw32-g++"
-  path: "/usr/bin/i686-w64-mingw32-g++-posix"
--
-  package: "i686-w64-mingw32-gcc"
-  path: "/usr/bin/i686-w64-mingw32-gcc-posix"
--
   package: "x86_64-w64-mingw32-g++"
   path: "/usr/bin/x86_64-w64-mingw32-g++-posix"
 -
