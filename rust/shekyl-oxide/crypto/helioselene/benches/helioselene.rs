@@ -9,20 +9,16 @@ use rand_core::OsRng;
 macro_rules! run_bench {
     ($name: literal, $op:expr, $n_iters:expr) => {{
         let start_time = std::time::Instant::now();
-        #[cfg(target_arch = "x86")]
-        let start = unsafe { core::arch::x86::_rdtsc() };
         #[cfg(target_arch = "x86_64")]
         let start = unsafe { core::arch::x86_64::_rdtsc() };
         for _ in 0..$n_iters {
             let _ = core::hint::black_box($op);
         }
-        #[cfg(target_arch = "x86")]
-        let ticks_to_run = unsafe { core::arch::x86::_rdtsc() } - start;
         #[cfg(target_arch = "x86_64")]
         let ticks_to_run = unsafe { core::arch::x86_64::_rdtsc() } - start;
         let time_to_run = start_time.elapsed().as_millis();
 
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(target_arch = "x86_64")]
         println!("{:<23} took {:>12} ticks", $name, ticks_to_run);
         println!("{:<23} took {:>12} milliseconds", $name, time_to_run);
     }};
