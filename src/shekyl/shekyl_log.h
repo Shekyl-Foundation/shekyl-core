@@ -158,8 +158,17 @@ void shekyl_log_shutdown(void);
 /// given level and target would pass the current filter.
 ///
 /// `target_ptr/target_len` is the legacy easylogging++ "category"
-/// string (e.g. `"net.p2p"`). Passing `(NULL, 0)` is allowed and
-/// matches the global default target.
+/// string (e.g. `"net.p2p"`). Passing `(NULL, 0)` is allowed and is
+/// treated as *no target scope*: the event is matched against the
+/// bare default clause of the active `EnvFilter` directive (the one
+/// without a `target=` prefix), not against any named category.
+/// This is distinct from passing `"global"` as the target — the
+/// C++ shim (`contrib/epee/include/misc_log_ex.h`) explicitly
+/// supplies `"global"` for the un-categorized `MINFO`/`MGINFO`/…
+/// macros, so callers who mean the `global` category must pass
+/// that string literally; `(NULL, 0)` does not remap to it. See
+/// `normalize_target_accepts_empty` in
+/// `rust/shekyl-logging/src/ffi.rs` for the matching unit test.
 ///
 /// Returns `false` when the logger is not yet initialized or the
 /// target bytes are not valid UTF-8.
