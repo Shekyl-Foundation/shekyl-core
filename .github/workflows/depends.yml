@@ -39,10 +39,11 @@ jobs:
           #   host: "riscv64-linux-gnu"
           #   packages: "python3 gperf g++-riscv64-linux-gnu"
           #   rust_target: "riscv64gc-unknown-linux-gnu"
-          # - name: "ARM v7"
-          #   host: "arm-linux-gnueabihf"
-          #   packages: "python3 gperf g++-arm-linux-gnueabihf"
-          #   rust_target: "armv7-unknown-linux-gnueabihf"
+          #
+          # 32-bit targets (armv7, i686) permanently retired in v3.1.0-alpha.5
+          # (Chore #3). See docs/CHANGELOG.md "Retired 32-bit build targets"
+          # for the PQC constant-time security argument that makes this
+          # retirement load-bearing rather than cosmetic.
           - name: "ARM v8"
             host: "aarch64-linux-gnu"
             packages: "python3 gperf g++-aarch64-linux-gnu"
