@@ -251,6 +251,24 @@
   can pass `--log-file` explicitly; the override path is
   unchanged.
 
+- **CMake Python discovery modernized (Chore #3 follow-up).**
+  `include(FindPythonInterp)` at the top of `CMakeLists.txt` is
+  replaced with `find_package(Python3 COMPONENTS Interpreter REQUIRED)`
+  as a single, early, authoritative discovery pass; two downstream
+  shadowing call sites (`find_package(Python3 ...)` before the
+  economics-params generator and `find_package(PythonInterp)` before
+  the tests subdir) are deleted. The legacy `PYTHON_EXECUTABLE` and
+  `PYTHONINTERP_FOUND` variables are aliased post-discovery so
+  consumers under `tests/difficulty/CMakeLists.txt`,
+  `tests/block_weight/CMakeLists.txt`, and the `cmake/CheckTrezor.cmake`
+  fallback arm continue to work without a cascading migration. The
+  `cmake_policy(SET CMP0148 OLD)` migration-debt carve-out that
+  preserved the deprecated module on CMake ≥ 3.27 is removed in the
+  same commit — there is no legacy module left to un-deprecate.
+  Resolves the Copilot review comment on PR #15; addresses
+  `docs/CHANGELOG.md` V3.1.0-alpha.3 entry's own callout of the
+  same migration debt.
+
 ### Removed
 
 - **`MONERO_LOG_FORMAT` env var (no replacement).** The custom
@@ -313,6 +331,23 @@
   shipped with the daemon, wallet, and source archive built cleanly,
   but its tag-push CI ran red on this single unit test; `v3.1.0-alpha.4`
   will be the first alpha whose tag-push CI is green end-to-end.
+
+- **`contrib/depends` Win64 unbound build restored (Chore #3 fixup).**
+  The `$(package)_cflags_mingw32+=-D_WIN32_WINNT=0x600` line in
+  `contrib/depends/packages/unbound.mk` was deleted in the Chore #3
+  build-system commit under the mistaken framing of "arch-asymmetric
+  32-bit MinGW carve-out." The `_mingw32` suffix in `contrib/depends`
+  is the OS segment of the host triple, not an architecture gate: it
+  matches every `*-w64-mingw32` host including `x86_64-w64-mingw32`.
+  Unbound 1.19.1's `util/netevent.c` uses `WSAPoll` / `POLLOUT` /
+  `POLLERR` / `POLLHUP` unconditionally and requires
+  `_WIN32_WINNT >= 0x0600` to be defined before `<winsock2.h>` is
+  included; the vendored `x86_64-w64-mingw32` toolchain does not
+  default this the way MSYS2 pacman toolchains do, so the deletion
+  broke the `depends.yml` Win64 lane (the `build.yml` MSYS2 and MSVC
+  lanes use different toolchain pathways and stayed green). Line
+  restored with the scope unchanged — only one MinGW host remains
+  after Chore #3, and the flag belongs on it.
 
 ### Known regressions
 

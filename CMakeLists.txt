@@ -42,7 +42,12 @@ message(STATUS "CMake version ${CMAKE_VERSION}")
 
 # CMake 4.x compatibility
 if(POLICY CMP0148)
-  cmake_policy(SET CMP0148 OLD)  # keep FindPythonInterp until migrated
+  # Modern path: FindPythonInterp / FindPythonLibs are removed in CMake 4+;
+  # Chore #3 follow-up migrated the top-level CMakeLists.txt to
+  # find_package(Python3 COMPONENTS Interpreter), so there is no legacy
+  # module left to un-deprecate. NEW explicitly opts into the modern
+  # behavior and silences the "policy not set" dev warning on CMake ≥ 3.27.
+  cmake_policy(SET CMP0148 NEW)
 endif()
 if(POLICY CMP0167)
   cmake_policy(SET CMP0167 NEW)  # use Boost's own cmake config instead of deprecated FindBoost
@@ -107,20 +112,32 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR
     "'Retired 32-bit build targets' before attempting to revert this gate.")
 endif()
 
-# Compiler-flag / function / library helpers and FindPythonInterp are
-# loaded AFTER the 64-bit gate above so the gate-test CI job at
-# `tests/cmake-gate-test/run.sh` can assert that no find_package /
+# Compiler-flag / function / library helpers and the Python3 interpreter
+# discovery are loaded AFTER the 64-bit gate above so the gate-test CI job
+# at `tests/cmake-gate-test/run.sh` can assert that no find_package /
 # compiler probe chatter reaches stdout ahead of the gate firing (a PR
-# that moves any of these five includes back above the gate fails that
-# job). These modules do not depend on `project()` state beyond what
-# the gate's own CMAKE_SYSTEM_PROCESSOR / CMAKE_SIZEOF_VOID_P predicate
-# already consumed, so the relocation is safe.
+# that moves any of these includes back above the gate fails that job).
+# These modules do not depend on `project()` state beyond what the gate's
+# own CMAKE_SYSTEM_PROCESSOR / CMAKE_SIZEOF_VOID_P predicate already
+# consumed, so the relocation is safe.
 include(CheckCCompilerFlag)
 include(CheckCXXCompilerFlag)
 include(CheckLinkerFlag)
 include(CheckLibraryExists)
 include(CheckFunctionExists)
-include(FindPythonInterp)
+
+# Python3 interpreter — canonical, single source of truth for every consumer
+# in the tree. Migrated from the deprecated include(FindPythonInterp) in
+# Chore #3 follow-up (v3.1.0-alpha.5); FindPythonInterp entered maintenance-
+# only mode in CMake 3.12 and is slated for removal under CMP0148 in 3.27+.
+# The modern find_package(Python3 ...) sets Python3_EXECUTABLE and
+# Python3_Interpreter_FOUND; we alias the legacy PYTHON_EXECUTABLE and
+# PYTHONINTERP_FOUND names for backward compatibility with consumers that
+# have not yet been migrated (tests/difficulty/CMakeLists.txt,
+# tests/block_weight/CMakeLists.txt, cmake/CheckTrezor.cmake fallback arm).
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
+set(PYTHONINTERP_FOUND "${Python3_Interpreter_FOUND}")
 
 option (USE_CCACHE "Use ccache if a usable instance is found" ON)
 if (USE_CCACHE)
@@ -686,7 +703,8 @@ file(MAKE_DIRECTORY "${MONERO_GENERATED_HEADERS_DIR}/shekyl")
 set(SHEKYL_ECONOMICS_CONFIG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/config/economics_params.json")
 set(SHEKYL_ECONOMICS_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_economics_params.py")
 set(SHEKYL_ECONOMICS_GENERATED_HEADER "${MONERO_GENERATED_HEADERS_DIR}/shekyl/economics_params_generated.h")
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
+# Python3 was discovered once, early, above the 64-bit gate's downstream
+# includes — Python3_EXECUTABLE is set for the whole configure pass.
 execute_process(
   COMMAND ${Python3_EXECUTABLE} "${SHEKYL_ECONOMICS_GENERATOR}" "${SHEKYL_ECONOMICS_CONFIG_JSON}" "${SHEKYL_ECONOMICS_GENERATED_HEADER}"
   RESULT_VARIABLE SHEKYL_ECONOMICS_GEN_RESULT
@@ -1356,7 +1374,9 @@ include(BuildRust) # Build Shekyl Rust workspace (PQ crypto, modular consensus, 
 add_subdirectory(contrib)
 add_subdirectory(src)
 
-find_package(PythonInterp)
+# Python3 was discovered once, early, above; PYTHON_EXECUTABLE is aliased
+# for legacy consumers under tests/ that have not been migrated from
+# FindPythonInterp to Python3 yet. No shadowing find_package needed here.
 if(BUILD_TESTS)
   message(STATUS "Building tests")
   add_subdirectory(tests)
