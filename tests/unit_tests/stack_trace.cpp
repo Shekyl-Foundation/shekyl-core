@@ -50,15 +50,21 @@
 #if defined(_WIN32)
 
 // The `dup2` + `pipe` stderr-capture path below isn't implemented
-// against Win32 `_pipe` / `_dup2`, and the `STACK_TRACE` default
-// is off on every Windows target we currently ship (see the
-// `DEFAULT_STACK_TRACE` selector in the root `CMakeLists.txt`).
-// Skip rather than rewrite; the Linux legs exercise the same
-// hook source.
+// against Win32 `_pipe` / `_dup2`, so we skip unconditionally on
+// Windows regardless of whether `STACK_TRACE` happens to be enabled
+// for the current toolchain. The Linux legs exercise the same hook
+// source.
+//
+// Note on `STACK_TRACE` defaults: the root `CMakeLists.txt` selector
+// (`DEFAULT_STACK_TRACE`) is *not* uniformly `OFF` on Windows — on
+// MSYS2/MSVC it probes for libunwind and defaults to `ON` when found,
+// so we deliberately do not predicate this skip on the STACK_TRACE
+// value. The stderr-capture gap is the binding constraint.
 TEST(stack_trace, not_covered_on_windows)
 {
-  GTEST_SKIP() << "stderr capture not wired for Win32 in this test file; "
-                  "STACK_TRACE is disabled by default on Windows targets.";
+  GTEST_SKIP() << "stderr capture via dup2/pipe is not wired for Win32 "
+                  "in this test file; the Linux legs exercise the same "
+                  "hook source.";
 }
 
 #else

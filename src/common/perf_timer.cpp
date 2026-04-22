@@ -119,12 +119,44 @@ el::Level performance_timer_log_level = el::Level::Info;
 
 static thread_local std::vector<LoggingPerformanceTimer*> *performance_timers = NULL;
 
+namespace
+{
+  // Small local renderer to keep the diagnostic in
+  // `set_performance_timer_log_level` operator-readable without pulling
+  // a helper across the FFI for a single error path. Pre-Chore #2 this
+  // lived in easylogging++'s `el::LevelHelper::convertToString`; the
+  // retirement of that header turned the diagnostic into a raw numeric
+  // byte, which is unhelpful for operators inspecting `--log-level`
+  // typos. Returning "unknown" for out-of-range inputs matches the
+  // legacy behavior and keeps the message honest when the caller
+  // passes a byte that doesn't map to any `el::Level` we recognize —
+  // the numeric value is appended alongside so the diagnostic also
+  // survives enum-layout drift between the C++ shim and the Rust
+  // staticlib (they must match by contract, but printing both means a
+  // mismatch shows up as `"unknown(<byte>)"` rather than a silent
+  // misattribution).
+  const char *level_name(el::Level level)
+  {
+    switch (level)
+    {
+      case el::Level::Fatal:   return "Fatal";
+      case el::Level::Error:   return "Error";
+      case el::Level::Warning: return "Warning";
+      case el::Level::Info:    return "Info";
+      case el::Level::Debug:   return "Debug";
+      case el::Level::Trace:   return "Trace";
+    }
+    return "unknown";
+  }
+}
+
 void set_performance_timer_log_level(el::Level level)
 {
   if (level != el::Level::Debug && level != el::Level::Trace && level != el::Level::Info
    && level != el::Level::Warning && level != el::Level::Error && level != el::Level::Fatal)
   {
-    MERROR("Wrong log level: " << static_cast<unsigned>(level) << ", using Info");
+    MERROR("Wrong log level: " << level_name(level)
+        << " (" << static_cast<unsigned>(level) << "), using Info");
     level = el::Level::Info;
   }
   performance_timer_log_level = level;

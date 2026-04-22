@@ -196,22 +196,34 @@ namespace el
 // disabled events never pay the formatting cost, then emits through the
 // Rust FFI. The `color` and `type` parameters are intentionally consumed
 // and discarded — the subscriber owns colorization and file routing.
+//
+// `(cat)` is evaluated exactly once and collapsed to a non-null
+// `_shekyl_cat_str` / `_shekyl_cat_len` pair before either FFI call, so
+// the hot path (gate returns true) pays a single `strlen` and the cold
+// path (gate returns false) pays zero. The null/empty normalization
+// matches the FFI's documented contract: passing `(ptr = "", len = 0)`
+// selects the bare default EnvFilter clause — see the
+// `shekyl_log_level_enabled` docstring in `src/shekyl/shekyl_log.h` and
+// the `normalize_target_accepts_empty` unit test in
+// `rust/shekyl-logging/src/ffi.rs`.
 // ---------------------------------------------------------------------------
 #define MCLOG_TYPE(level, cat, color, type, x) do { \
     const ::el::Level _shekyl_lvl = (level); \
-    const char* _shekyl_cat = (cat); \
+    const char* const _shekyl_cat_raw = (cat); \
+    const char* const _shekyl_cat_str = _shekyl_cat_raw ? _shekyl_cat_raw : ""; \
+    const std::size_t _shekyl_cat_len = _shekyl_cat_raw ? std::strlen(_shekyl_cat_raw) : 0u; \
     if (::shekyl_log_level_enabled( \
           static_cast<std::uint8_t>(_shekyl_lvl), \
-          _shekyl_cat ? _shekyl_cat : "", \
-          _shekyl_cat ? std::strlen(_shekyl_cat) : 0u)) { \
+          _shekyl_cat_str, \
+          _shekyl_cat_len)) { \
       (void)(color); (void)(type); \
       std::stringstream _shekyl_ss; \
       _shekyl_ss << x; \
       const std::string _shekyl_msg = _shekyl_ss.str(); \
       ::shekyl_log_emit( \
         static_cast<std::uint8_t>(_shekyl_lvl), \
-        _shekyl_cat ? _shekyl_cat : "", \
-        _shekyl_cat ? std::strlen(_shekyl_cat) : 0u, \
+        _shekyl_cat_str, \
+        _shekyl_cat_len, \
         __FILE__, std::strlen(__FILE__), \
         static_cast<std::uint32_t>(__LINE__), \
         ELPP_FUNC, std::strlen(ELPP_FUNC), \
@@ -260,14 +272,22 @@ namespace el
 #define MGINFO_MAGENTA(x) MCLOG_MAGENTA(el::Level::Info, "global",x)
 #define MGINFO_CYAN(x) MCLOG_CYAN(el::Level::Info, "global",x)
 
+// Mirror of `MCLOG_TYPE` with an extra `init;` hook that runs *after* the
+// enabled-gate passes and *before* the message is formatted — used by
+// `MIDEBUG` and similar call sites to hoist one-time setup out of the
+// disabled path. The `_shekyl_cat_{raw,str,len}` caching discipline is
+// identical to `MCLOG_TYPE`; keep the two macros in sync when tweaking
+// either side.
 #define IFLOG(level, cat, color, type, init, x) \
   do { \
     const ::el::Level _shekyl_lvl = (level); \
-    const char* _shekyl_cat = (cat); \
+    const char* const _shekyl_cat_raw = (cat); \
+    const char* const _shekyl_cat_str = _shekyl_cat_raw ? _shekyl_cat_raw : ""; \
+    const std::size_t _shekyl_cat_len = _shekyl_cat_raw ? std::strlen(_shekyl_cat_raw) : 0u; \
     if (::shekyl_log_level_enabled( \
           static_cast<std::uint8_t>(_shekyl_lvl), \
-          _shekyl_cat ? _shekyl_cat : "", \
-          _shekyl_cat ? std::strlen(_shekyl_cat) : 0u)) { \
+          _shekyl_cat_str, \
+          _shekyl_cat_len)) { \
       (void)(color); (void)(type); \
       init; \
       std::stringstream _shekyl_ss; \
@@ -275,8 +295,8 @@ namespace el
       const std::string _shekyl_msg = _shekyl_ss.str(); \
       ::shekyl_log_emit( \
         static_cast<std::uint8_t>(_shekyl_lvl), \
-        _shekyl_cat ? _shekyl_cat : "", \
-        _shekyl_cat ? std::strlen(_shekyl_cat) : 0u, \
+        _shekyl_cat_str, \
+        _shekyl_cat_len, \
         __FILE__, std::strlen(__FILE__), \
         static_cast<std::uint32_t>(__LINE__), \
         ELPP_FUNC, std::strlen(ELPP_FUNC), \

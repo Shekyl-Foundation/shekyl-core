@@ -182,10 +182,25 @@ pub struct Config {
 
     /// Optional file sink.
     ///
-    /// `None` means stderr-only. Wallet-rpc defaults to `None` and only
-    /// populates this when the user passes `--log-file`. Daemon defaults
-    /// to `Some(FileSink::daily(...))` with a default path under
-    /// `~/.shekyl/logs/`.
+    /// `None` means stderr-only. This struct is consumed by the Rust
+    /// binary crates that call [`crate::init`] directly:
+    ///
+    /// * `shekyl-cli` — always `None` (stderr-only).
+    /// * `shekyl-wallet-rpc` (Rust variant) — `None` by default;
+    ///   populated with `Some(FileSink::unrotated(...))` when the user
+    ///   passes `--log-file <path>`. See
+    ///   `rust/shekyl-wallet-rpc/src/main.rs` for the exact mapping.
+    ///
+    /// The C++ daemon (`shekyld`) does **not** consume this struct. It
+    /// routes through the raw FFI entry point `shekyl_log_init_file`
+    /// (see `rust/shekyl-logging/src/ffi.rs`), which constructs a
+    /// [`FileSink::size_rolling`] sink from the `MAX_LOG_FILE_SIZE` /
+    /// `MAX_LOG_FILES` constants in `contrib/epee/include/misc_log_ex.h`
+    /// — not a [`FileSink::daily`]. Integrators mirroring the daemon's
+    /// defaults should therefore construct
+    /// `FileSink::size_rolling(directory, filename_prefix, max_bytes,
+    /// max_files)` with a directory under `~/.shekyl/logs/` rather than
+    /// reaching for `FileSink::daily`.
     pub file_sink: Option<FileSink>,
 }
 
