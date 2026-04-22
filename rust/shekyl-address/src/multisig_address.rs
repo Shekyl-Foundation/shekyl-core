@@ -450,16 +450,16 @@ mod tests {
     #[test]
     fn file_roundtrip() {
         let payload = make_test_payload(2, 2);
-        let dir = std::env::temp_dir().join("shekyl_test_multisig_addr");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("test_addr.bin");
+        // `tempfile::tempdir()` gives each test invocation a unique
+        // directory and handles cleanup on Drop, so concurrent `cargo
+        // test` runs and leftover state from previous crashes can't
+        // collide the way a fixed `temp_dir().join(...)` name could.
+        let dir = tempfile::tempdir().expect("create test tempdir");
+        let path = dir.path().join("test_addr.bin");
 
         payload.write_to_file(&path).unwrap();
         let loaded = MultisigAddressPayload::read_from_file(&path).unwrap();
         assert_eq!(payload, loaded);
-
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]

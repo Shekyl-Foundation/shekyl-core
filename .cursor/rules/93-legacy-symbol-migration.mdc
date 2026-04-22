@@ -1,0 +1,84 @@
+---
+description: Rename legacy MONERO_* identifiers to SHEKYL_* when rebuilding or introducing code.
+globs:
+  - "src/**"
+  - "contrib/**"
+  - "rust/**"
+  - "cmake/**"
+  - "CMakeLists.txt"
+---
+
+# Legacy symbol migration
+
+Shekyl has diverged from Monero. Every `MONERO_*` identifier in the tree is
+either a deliberately-preserved compatibility alias or a piece of legacy
+surface we have not yet rebuilt. This rule governs how we rename legacy
+identifiers as their behavior is rebuilt, and how we prevent new `MONERO_*`
+identifiers from being introduced.
+
+It applies to env vars, preprocessor macros, build flags, CMake variables,
+and any other identifier form that could otherwise drift.
+
+## Two rules, stated separately
+
+These two rules tell two different reviewers two different things. Don't
+collapse them into one sentence.
+
+### 1. Existing identifiers — migrate-on-touch
+
+If your edit touches a file containing a `MONERO_*` identifier, rename that
+identifier to `SHEKYL_*` in the same commit.
+
+- Don't sweep files you aren't otherwise editing. Bulk renames turn into
+  merge-conflict generators and land as separate cleanup PRs.
+- Refactor-PR reviewers flag un-migrated `MONERO_*` in touched files.
+- If the identifier has a deliberate compatibility alias (see non-rule
+  below), migrate the *caller* to the `SHEKYL_*` name; leave the alias.
+
+### 2. New code — never `MONERO_*`
+
+Any new identifier introduced by a PR uses `SHEKYL_*` from the start.
+
+- Shekyl has diverged from upstream Monero; there is no cherry-picking path
+  that justifies a new `MONERO_*` name.
+- New-feature-PR reviewers flag any new `MONERO_*` regardless of context.
+- This applies to env vars a contributor is tempted to match against a
+  Monero convention ("`MONERO_LOGS` syntax is familiar") just as much as to
+  new macros or build flags.
+
+## Non-rule: deliberate compatibility aliases
+
+Some `MONERO_*` identifiers exist as intentional aliases during a
+transitional window. Do **not** touch them:
+
+- The `MONERO_VERSION*` macro aliases in [`src/version.h`](src/version.h)
+  exist so un-migrated files and upstream cherry-picks keep compiling.
+- Any future alias that is documented in a `docs/STRUCTURAL_TODO.md` entry
+  with an explicit retirement PR queued.
+
+These aliases are removed in a single cleanup PR per alias after their
+retirement conditions are met (typically after a hard-fork stabilizes or a
+subsystem rewrite lands).
+
+## Named examples
+
+- **Version macros** (`MONERO_VERSION`, `MONERO_VERSION_TAG`,
+  `MONERO_RELEASE_NAME`, `MONERO_VERSION_FULL`,
+  `MONERO_VERSION_IS_RELEASE`) — aliased in
+  [`src/version.h`](src/version.h); migrate callers in-place per rule 1.
+- **Logging env vars** (`MONERO_LOGS`, `MONERO_LOG_FORMAT`) — read in
+  [`contrib/epee/src/mlog.cpp`](contrib/epee/src/mlog.cpp) today; deleted
+  wholesale in the `chore/cxx-logging-replacement` chore when
+  `easylogging++` is removed. Their successor is `SHEKYL_LOG` (Rust-side
+  env var, owned by the `shekyl-logging` crate).
+- **Default log category** (`MONERO_DEFAULT_LOG_CATEGORY` →
+  `SHEKYL_DEFAULT_LOG_CATEGORY`) — already swept in the Tier 4 rename.
+  Cited here as the precedent for what a full-sweep cleanup PR looks like.
+
+## Lifecycle
+
+The naming invariant is permanent. The specific `MONERO_*` aliases it
+governs have finite lives — each dies in its own cleanup PR — but the rule
+survives every one of those retirements. The rule also survives the final
+sweep: once no `MONERO_*` identifiers exist in the tree, rule 2 still
+prevents anyone from introducing one.

@@ -1,0 +1,1 @@
+warn,net=error,net::http=error,net::ssl=error,net::p2p=error,net::cn=error,daemon::rpc=error,global=info,verify=error,serialization=error,daemon::rpc::payment=error,stacktrace=info,logging=info,msgwriter=info

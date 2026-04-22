@@ -82,6 +82,7 @@ set(unit_tests_sources
   serialization.cpp
   sha256.cpp
   slow_memmem.cpp
+  stack_trace.cpp
   subaddress.cpp
   test_tx_utils.cpp
   test_peerlist.cpp

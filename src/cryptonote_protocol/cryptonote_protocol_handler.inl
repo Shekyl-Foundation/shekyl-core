@@ -53,13 +53,19 @@
 #define MLOG_P2P_MESSAGE(x) MCINFO("net.p2p.msg", context << x)
 #define MLOGIF_P2P_MESSAGE(init, test, x) \
   do { \
-    const auto level = el::Level::Info; \
+    const std::uint8_t _p2p_level = SHEKYL_LOG_LEVEL_INFO; \
     const char *cat = "net.p2p.msg"; \
-    if (ELPP->vRegistry()->allowed(level, cat)) { \
+    if (::shekyl_log_level_enabled(_p2p_level, cat, std::strlen(cat))) { \
       init; \
       if (test) { \
         LOG_TO_STRING(x); \
-        el::base::Writer(level, el::Color::Default, __FILE__, __LINE__, ELPP_FUNC, el::base::DispatchAction::NormalLog).construct(cat) << str; \
+        ::shekyl_log_emit( \
+          _p2p_level, \
+          cat, std::strlen(cat), \
+          __FILE__, std::strlen(__FILE__), \
+          static_cast<std::uint32_t>(__LINE__), \
+          ELPP_FUNC, std::strlen(ELPP_FUNC), \
+          str.data(), str.size()); \
       } \
     } \
   } while(0)

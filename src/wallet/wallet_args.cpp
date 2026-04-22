@@ -224,13 +224,18 @@ namespace wallet_args
     if (!command_line::is_arg_defaulted(vm, arg_max_concurrency))
       tools::set_max_concurrency(command_line::get_arg(vm, arg_max_concurrency));
 
-    Print(print) << "Shekyl '" << MONERO_RELEASE_NAME << "' (v" << MONERO_VERSION_FULL << ")";
+    Print(print) << "Shekyl '" << SHEKYL_RELEASE_NAME << "' (v" << SHEKYL_VERSION_FULL << ")";
 
     if (!command_line::is_arg_defaulted(vm, arg_log_level))
       MINFO("Setting log level = " << command_line::get_arg(vm, arg_log_level));
     else
     {
-      const char *logs = getenv("MONERO_LOGS");
+      // `MONERO_LOGS` was retired in Chore #2 of the shekyl-logging
+      // migration; the `shekyl-logging` Rust subscriber owns the
+      // `SHEKYL_LOG` env var directly, and `mlog_configure` picks it
+      // up without wallet_args needing to touch it. The fallback read
+      // here is purely for the user-facing startup banner.
+      const char *logs = getenv("SHEKYL_LOG");
       MINFO("Setting log levels = " << (logs ? logs : "<default>"));
     }
     MINFO(wallet_args::tr("Logging to: ") << log_path);
@@ -240,7 +245,11 @@ namespace wallet_args
     const ssize_t lockable_memory = tools::get_lockable_memory();
     if (lockable_memory >= 0 && lockable_memory < 256 * 4096) // 256 pages -> at least 256 secret keys and other such small/medium objects
       Print(print) << tr("WARNING: You may not have a high enough lockable memory limit")
-#ifdef ELPP_OS_UNIX
+#if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__))
+        // Was gated on easylogging++'s `ELPP_OS_UNIX`; that macro
+        // disappeared with the vendored tree. Use the standard POSIX
+        // compile-time predicates so the `ulimit -l` hint keeps
+        // surfacing on Linux / macOS / the BSDs.
         << ", " << tr("see ulimit -l")
 #endif
         ;

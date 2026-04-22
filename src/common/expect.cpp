@@ -27,7 +27,6 @@
 
 #include "expect.h"
 
-#include <easylogging++.h>
 #include <string>
 
 namespace detail
@@ -47,10 +46,20 @@ namespace detail
             {
                 error_msg.append("thrown at ");
 
-                // remove path, get just filename + extension
-                char buff[256] = {0};
-                el::base::utils::File::buildBaseFilename(file, buff, sizeof(buff) - 1);
-                error_msg.append(buff);
+                // Strip any directory component from `file` so the
+                // appended location is `basename.ext:line`. Previously
+                // this went through
+                // `el::base::utils::File::buildBaseFilename`, which the
+                // retired `external/easylogging++/` tree supplied; the
+                // behavior is trivially reproducible with a reverse
+                // search for the last path separator.
+                const char *base = file;
+                for (const char *p = file; *p; ++p)
+                {
+                    if (*p == '/' || *p == '\\')
+                        base = p + 1;
+                }
+                error_msg.append(base);
 
                 error_msg.push_back(':');
                 error_msg.append(std::to_string(line));

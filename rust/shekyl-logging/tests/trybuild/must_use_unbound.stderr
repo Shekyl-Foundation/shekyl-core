@@ -1,0 +1,16 @@
+error: unused `LoggerGuard` that must be used
+  --> tests/trybuild/must_use_unbound.rs:18:5
+   |
+18 |     init(Config::stderr_only(tracing::Level::WARN)).unwrap();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: dropping LoggerGuard without binding flushes buffered events and may silently lose logs; bind to a named local such as `_guard`
+note: the lint level is defined here
+  --> tests/trybuild/must_use_unbound.rs:6:9
+   |
+ 6 | #![deny(unused_must_use)]
+   |         ^^^^^^^^^^^^^^^
+help: use `let _ = ...` to ignore the resulting value
+   |
+18 |     let _ = init(Config::stderr_only(tracing::Level::WARN)).unwrap();
+   |     +++++++

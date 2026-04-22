@@ -465,7 +465,7 @@ endif()
 #   set(BSDI TRUE)
 
 include_directories(src contrib/epee/include)
-include_directories(SYSTEM external/rapidjson/include external/easylogging++ external external/supercop/include)
+include_directories(SYSTEM external/rapidjson/include external external/supercop/include)
 
 if(MSVC OR MINGW)
   set(DEFAULT_STATIC true)
@@ -519,16 +519,19 @@ add_definitions("-DBLOCKCHAIN_DB=${BLOCKCHAIN_DB}")
 
 # Can't install hook in static build on OSX, because OSX linker does not support --wrap
 # On ARM, having libunwind package (with .so's only) installed breaks static link.
-# When possible, avoid stack tracing using libunwind in favor of using easylogging++.
+# Historical note: the vendored easylogging++ tree used to supply
+# `el::base::debug::StackTrace()` as a libunwind-free backend for
+# targets like MSVC / MinGW / Android. It was retired in Chore #2 of
+# the shekyl-logging migration (see `docs/CHANGELOG.md`), so those
+# targets no longer install a stack-tracing hook by default;
+# `src/common/stack_trace.cpp` emits a `"<stack trace capture not
+# implemented on this target>"` placeholder instead, and a dedicated
+# Rust unwind-helper crate is the follow-up.
 if (APPLE)
   set(DEFAULT_STACK_TRACE OFF)
   set(LIBUNWIND_LIBRARIES "")
 elseif (DEPENDS AND NOT LINUX)
   set(DEFAULT_STACK_TRACE OFF)
-  set(LIBUNWIND_LIBRARIES "")
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT MINGW)
-  set(DEFAULT_STACK_TRACE ON)
-  set(STACK_TRACE_LIB "easylogging++") # for diag output only
   set(LIBUNWIND_LIBRARIES "")
 elseif (ARM)
   set(DEFAULT_STACK_TRACE OFF)
@@ -539,7 +542,13 @@ else()
     set(DEFAULT_STACK_TRACE ON)
     set(STACK_TRACE_LIB "libunwind") # for diag output only
   else()
-    set(DEFAULT_STACK_TRACE OFF)
+    # No libunwind: still allow enabling the `__cxa_throw` crash hook
+    # so the placeholder path in `src/common/stack_trace.cpp` gets
+    # exercised. The walker itself is short-circuited to a single
+    # "<stack trace capture not implemented on this target>" line
+    # until the Rust unwind-helper crate lands.
+    set(DEFAULT_STACK_TRACE ON)
+    set(STACK_TRACE_LIB "placeholder") # for diag output only
     set(LIBUNWIND_LIBRARIES "")
   endif()
 endif()
@@ -548,6 +557,9 @@ option(STACK_TRACE "Install a hook that dumps stack on exception" ${DEFAULT_STAC
 
 if(STACK_TRACE)
   message(STATUS "Stack trace on exception enabled (using ${STACK_TRACE_LIB})")
+  if(LIBUNWIND_FOUND)
+    add_definitions(-DHAVE_LIBUNWIND=1)
+  endif()
 else()
   message(STATUS "Stack trace on exception disabled")
 endif()
@@ -712,10 +724,6 @@ add_subdirectory(external)
 # Final setup for libunbound
 include_directories(${UNBOUND_INCLUDE_DIR})
 
-# Final setup for easylogging++
-include_directories(${EASYLOGGING_INCLUDE})
-link_directories(${EASYLOGGING_LIBRARY_DIRS})
-
 # Final setup for liblmdb
 include_directories(${LMDB_INCLUDE})
 
@@ -828,9 +836,31 @@ else()
     # mingw doesn't support LTO (multiple definition errors at link time)
     set(USE_LTO_DEFAULT false)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--stack,10485760")
-    if(NOT BUILD_64)
-      add_definitions(-DWINVER=0x0600 -D_WIN32_WINNT=0x0600)
-    endif()
+    # Pin the Windows API tier to Vista (0x0600) on both 32- and 64-bit
+    # MinGW. The 32-bit leg has always needed this; the 64-bit leg now
+    # needs it too so MinGW-w64's `<winioctl.h>` exposes the Vista+
+    # declarations its own headers gate on `_WIN32_WINNT` (chiefly
+    # `FSCTL_SET_COMPRESSION`, used by `disable_ntfs_compression` in
+    # `src/blockchain_db/lmdb/db_lmdb.cpp`).
+    #
+    # The tier pin is *one* of two independent mechanisms that keep
+    # that symbol visible on MinGW — the other, living in
+    # `src/blockchain_db/lmdb/db_lmdb.cpp`, is a `#ifndef
+    # FSCTL_SET_COMPRESSION` / manual-define fallback that covers the
+    # *separate* case where MinGW's `<winioctl.h>` closes the
+    # `_FILESYSTEMFSCTL_` guard early under certain include orders
+    # (so the symbol isn't declared regardless of the API tier). The
+    # API-tier pin and the source-side fallback cover different root
+    # causes and are both necessary on the toolchain mixes we ship;
+    # keep them in sync and do not collapse one into the other.
+    #
+    # This replaces commit 070447f5b ("cmake: set _WIN32_WINNT=0x0600
+    # for MinGW x86_64 too") which a subsequent revert removed in
+    # error while we were chasing only the include-order half of the
+    # problem. Dropping the 32-bit MinGW leg in Chore #3 lets this
+    # collapse to a single unconditional definition, but the tier
+    # gate (and the source-side fallback) both stay.
+    add_definitions(-DWINVER=0x0600 -D_WIN32_WINNT=0x0600)
   endif()
   set(C_WARNINGS "-Waggregate-return -Wnested-externs -Wold-style-definition -Wstrict-prototypes")
   set(CXX_WARNINGS "-Wno-reorder -Wno-missing-field-initializers -Woverloaded-virtual -Wsuggest-override")

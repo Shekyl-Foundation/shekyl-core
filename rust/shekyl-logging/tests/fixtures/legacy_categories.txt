@@ -1,0 +1,77 @@
+# Legacy `log-levels=` grammar corpus.
+#
+# One fixture per non-blank line. Format:
+#
+#   <expect> | <spec>
+#
+# where <expect> is:
+#
+#   ok:<expected directive>          exact directive equality required
+#   ok-contains:<substring>          loose substring check for complex cases
+#   err:<FilterError variant name>   expect this error variant
+#
+# The expected outputs are written by hand against the C++ easylogging++
+# source (contrib/epee/src/mlog.cpp) and the test suite
+# (tests/unit_tests/logging.cpp). DO NOT regenerate them by running the
+# translator and capturing output.
+#
+# current_spec is always None for these cases; modifier (+/-) fixtures
+# are covered by unit tests in src/legacy.rs because they require a
+# current_spec argument.
+
+# Empty / whitespace (current_spec=None path, so falls back to
+# fallback_default which the test driver passes as WARN).
+ok:warn|
+ok:warn|   
+ok:warn|	
+
+# Numeric presets (match the golden files 1:1)
+ok:warn,net=error,net::http=error,net::ssl=error,net::p2p=error,net::cn=error,daemon::rpc=error,global=info,verify=error,serialization=error,daemon::rpc::payment=error,stacktrace=info,logging=info,msgwriter=info|0
+ok:info,global=info,stacktrace=info,logging=info,msgwriter=info,perf=debug|1
+ok:debug|2
+ok:trace|3
+ok:trace|4
+
+# Numeric + trailing categories (2 preset + one literal override)
+ok:debug,foo=error|2,foo:ERROR
+
+# Numeric out of range
+err:NumericLevelOutOfRange|5
+err:NumericLevelOutOfRange|99
+err:NumericLevelOutOfRange|-1
+
+# Star levels
+ok:warn|*:WARNING
+ok:debug|*:DEBUG
+ok:trace|*:TRACE
+
+# Prefix glob (dot-anchored, translates cleanly)
+ok:perf=debug|perf.*:DEBUG
+ok:net=error|net.*:FATAL
+
+# Dotted names translate to `::` targets
+ok:net::http=error|net.http:FATAL
+ok:daemon::rpc::payment=error|daemon.rpc.payment:ERROR
+
+# Suffix globs (rejected; first has no clean rewrite, second does)
+err:UnsupportedGlob|*y.z:TRACE
+err:UnsupportedGlob|*.dump:DEBUG
+
+# Lowercase level accepted with a warning (substring match only because
+# the warning text is not part of the grammar contract)
+ok-contains:foo=debug|foo:debug
+
+# Malformed
+err:MalformedSpec|foo
+err:UnknownLevel|foo:SHOUT
+
+# Last-wins via two literal overlaps
+ok:foo=warn,foo=debug|foo:WARNING,foo:DEBUG
+
+# Unknown category passes through
+ok:nonexistent_category=debug|nonexistent_category:DEBUG
+
+# Real-world shapes found in USER_GUIDE.md and stressnet config examples
+ok-contains:wallet::wallet2=trace|wallet.wallet2:TRACE
+ok-contains:daemon=info|daemon:INFO
+ok-contains:bcutil=warn|bcutil:WARNING
