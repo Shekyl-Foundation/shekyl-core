@@ -478,7 +478,7 @@ static bool try_v3_scan_output(const cryptonote::account_base& from, const trans
     crypto::secret_key* ho_out = nullptr)
 {
     const auto& keys = from.get_keys();
-    if (keys.m_pqc_secret_key.empty()) return false;
+    if (keys.m_ml_kem_decap_key.empty()) return false;
     if (tx.version < 3) return false;
     if (j >= tx.rct_signatures.outPk.size()) return false;
     if (j >= tx.rct_signatures.enc_amounts.size()) return false;
@@ -489,7 +489,6 @@ static bool try_v3_scan_output(const cryptonote::account_base& from, const trans
     if (!find_tx_extra_field_by_type(extra_fields, kem_ct_field)) return false;
 
     static constexpr size_t HYBRID_KEM_CT_BYTES = 1120;
-    static constexpr size_t X25519_SK_BYTES = 32;
     static constexpr size_t X25519_CT_BYTES = 32;
     static constexpr size_t ML_KEM_CT_BYTES = 1088;
     if (kem_ct_field.blob.size() < (j + 1) * HYBRID_KEM_CT_BYTES) return false;
@@ -508,9 +507,9 @@ static bool try_v3_scan_output(const cryptonote::account_base& from, const trans
     uint8_t h_pqc_buf[32];
 
     bool ok = shekyl_scan_output_recover(
-        keys.m_pqc_secret_key.data(),
-        keys.m_pqc_secret_key.data() + X25519_SK_BYTES,
-        keys.m_pqc_secret_key.size() - X25519_SK_BYTES,
+        reinterpret_cast<const uint8_t*>(&keys.m_view_secret_key),
+        keys.m_ml_kem_decap_key.data(),
+        keys.m_ml_kem_decap_key.size(),
         ct_ptr, ct_ptr + X25519_CT_BYTES, ML_KEM_CT_BYTES,
         reinterpret_cast<const uint8_t*>(&output_public_key),
         tx.rct_signatures.outPk[j].mask.bytes,
@@ -603,7 +602,7 @@ static bool compute_v3_key_image(const cryptonote::account_base& from,
     const transaction& tx, size_t out_no, crypto::key_image& img_out)
 {
     const auto& keys = from.get_keys();
-    if (keys.m_pqc_secret_key.empty() || tx.version < 3) return false;
+    if (keys.m_ml_kem_decap_key.empty() || tx.version < 3) return false;
     if (out_no >= tx.rct_signatures.outPk.size()) return false;
     if (out_no >= tx.rct_signatures.enc_amounts.size()) return false;
 
@@ -613,7 +612,6 @@ static bool compute_v3_key_image(const cryptonote::account_base& from,
     if (!find_tx_extra_field_by_type(extra_fields, kem_ct_field)) return false;
 
     static constexpr size_t HYBRID_KEM_CT_BYTES = 1120;
-    static constexpr size_t X25519_SK_BYTES = 32;
     static constexpr size_t X25519_CT_BYTES = 32;
     static constexpr size_t ML_KEM_CT_BYTES = 1088;
     if (kem_ct_field.blob.size() < (out_no + 1) * HYBRID_KEM_CT_BYTES) return false;
@@ -632,9 +630,9 @@ static bool compute_v3_key_image(const cryptonote::account_base& from,
     uint8_t h_pqc_buf[32];
 
     bool ok = shekyl_scan_output_recover(
-        keys.m_pqc_secret_key.data(),
-        keys.m_pqc_secret_key.data() + X25519_SK_BYTES,
-        keys.m_pqc_secret_key.size() - X25519_SK_BYTES,
+        reinterpret_cast<const uint8_t*>(&keys.m_view_secret_key),
+        keys.m_ml_kem_decap_key.data(),
+        keys.m_ml_kem_decap_key.size(),
         ct_ptr, ct_ptr + X25519_CT_BYTES, ML_KEM_CT_BYTES,
         reinterpret_cast<const uint8_t*>(&output_public_key),
         tx.rct_signatures.outPk[out_no].mask.bytes,
@@ -1769,7 +1767,6 @@ static bool apply_fcmp_pipeline(
     << " curve_tree_root=" << epee::string_tools::pod_to_hex(curve_tree_root));
 
   static constexpr size_t HYBRID_KEM_CT_BYTES = 1120;
-  static constexpr size_t X25519_SK_BYTES = 32;
   static constexpr size_t X25519_CT_BYTES = 32;
   static constexpr size_t ML_KEM_CT_BYTES = 1088;
 
@@ -1839,8 +1836,9 @@ static bool apply_fcmp_pipeline(
 
     const uint8_t* ct_ptr = reinterpret_cast<const uint8_t*>(kem_ct_field.blob.data()) + output_in_tx * HYBRID_KEM_CT_BYTES;
     const auto& sender_keys = from.get_keys();
-    CHECK_AND_ASSERT_MES(sender_keys.m_pqc_secret_key.size() > X25519_SK_BYTES, false,
-      "construct_fcmp_tx: sender PQC secret key too short");
+    CHECK_AND_ASSERT_MES(!sender_keys.m_ml_kem_decap_key.empty(), false,
+      "construct_fcmp_tx: sender has no ML-KEM decapsulation key; wallet is "
+      "classical-signing-only and cannot construct v3 inputs");
 
     CHECK_AND_ASSERT_MES(output_in_tx < src_tx_data.rct_signatures.outPk.size(), false,
       "construct_fcmp_tx: outPk index out of range");
@@ -1857,9 +1855,9 @@ static bool apply_fcmp_pipeline(
     uint8_t h_pqc_buf[32];
 
     bool scan_ok = shekyl_scan_output_recover(
-        sender_keys.m_pqc_secret_key.data(),
-        sender_keys.m_pqc_secret_key.data() + X25519_SK_BYTES,
-        sender_keys.m_pqc_secret_key.size() - X25519_SK_BYTES,
+        reinterpret_cast<const uint8_t*>(&sender_keys.m_view_secret_key),
+        sender_keys.m_ml_kem_decap_key.data(),
+        sender_keys.m_ml_kem_decap_key.size(),
         ct_ptr, ct_ptr + X25519_CT_BYTES, ML_KEM_CT_BYTES,
         reinterpret_cast<const uint8_t*>(&out_key),
         src_tx_data.rct_signatures.outPk[output_in_tx].mask.bytes,
@@ -1882,9 +1880,9 @@ static bool apply_fcmp_pipeline(
     // Derive combined_ss for PQC signing via shekyl_sign_pqc_auth later.
     // ML-DSA secret key stays inside Rust — never materialized in C++.
     bool decap_ok = shekyl_kem_decapsulate(
-        sender_keys.m_pqc_secret_key.data(),
-        sender_keys.m_pqc_secret_key.data() + X25519_SK_BYTES,
-        sender_keys.m_pqc_secret_key.size() - X25519_SK_BYTES,
+        reinterpret_cast<const uint8_t*>(&sender_keys.m_view_secret_key),
+        sender_keys.m_ml_kem_decap_key.data(),
+        sender_keys.m_ml_kem_decap_key.size(),
         ct_ptr, ct_ptr + X25519_CT_BYTES, ML_KEM_CT_BYTES,
         pqc_sign_data[i].combined_ss);
     CHECK_AND_ASSERT_MES(decap_ok, false, "construct_fcmp_tx: KEM decapsulate failed for vin " << i);
