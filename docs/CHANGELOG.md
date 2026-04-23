@@ -4,6 +4,66 @@
 
 ### Added
 
+- **Rust wallet-state benchmark harness — criterion + iai-callgrind
+  (commit 2 of the mid-rewire hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.2).**
+  Five hot paths from the §3.1 list, each shipped with a
+  `criterion` binary (wall-clock, Tier-2 metric) and an
+  `iai-callgrind` sibling (deterministic instruction-count + cache-
+  miss metrics, Tier-1 metric that CI will gate on in commit 3):
+  `shekyl-wallet-state::{ledger, balance}`,
+  `shekyl-wallet-file::open`, `shekyl-scanner::scan_block`,
+  `shekyl-tx-builder::transfer_e2e`. Naming convention enforced:
+  `crypto_bench_*` (bidirectional ±5% warn / ±15% fail) for
+  anything touching curve25519, ML-DSA-65, Argon2id, or ChaCha20-
+  Poly1305; `hot_path_bench_*` (slowdown-only) for postcard serde,
+  balance compute, and scanner bookkeeping. All ten harnesses
+  compile under `cargo check --benches`, run locally under
+  `cargo bench -p <crate> --bench <name>`, and — on a host with
+  `valgrind` + `iai-callgrind-runner` on `PATH` — produce
+  byte-identical instruction counts across back-to-back runs
+  (§3.2 exit criterion). One deliberate deviation from production
+  code is documented: the `transfer_e2e_iai` bench bypasses
+  `HybridEd25519MlDsa::sign` and inlines the two sign steps with
+  `fips204::ml_dsa_65::try_sign_with_seed` +
+  `try_keygen_with_rng(seeded)` because the production wrapper's
+  `OsRng` draws inside ML-DSA-65 keygen + rejection-sampling loop
+  produced ~16% instruction-count variance on the sign call and
+  ~66% variance once keygen was accounted for, both violating the
+  determinism criterion. The FIPS-204 deterministic variant
+  exercises the identical signing primitives (same NTT, same
+  rejection predicates, same packing); the criterion sibling
+  preserves the randomized production path so the human-facing
+  wall-clock number is honest. Known gap: the full
+  `sign_transaction` call including the FCMP++ membership proof is
+  **not** benched, because a deterministic curve-tree path fixture
+  keyed to a synthetic tree root is its own scope of work; the
+  manifest §6.1 tracks this and names the un-gap conditions for a
+  future `shekyl_rust_v1` schema bump. Companion artifacts:
+  [`docs/benchmarks/shekyl_rust_v0.manifest.md`](benchmarks/shekyl_rust_v0.manifest.md)
+  (per-bench operation lists, fixture shapes, six documented known
+  gaps, apples-to-oranges notes against the C++ baseline),
+  [`scripts/bench/capture_rust_baseline.sh`](../scripts/bench/capture_rust_baseline.sh)
+  (reference-machine capture wrapper — sibling of
+  `capture_cpp_baseline.sh` from commit 1 — emits a schema-versioned
+  `shekyl_rust_v0.json` envelope with toolchain + host CPU +
+  git-rev metadata alongside a raw `shekyl_rust_v0.iai.snapshot`
+  text artifact),
+  [`docs/benchmarks/README.md`](benchmarks/README.md) updated with
+  a "Capturing the Rust baseline" section and the shipped
+  file-layout listing. Workspace impact is dev-dep-only:
+  `criterion` + `iai-callgrind` land as `[dev-dependencies]` on
+  the four crates that own a bench (`shekyl-wallet-state`,
+  `shekyl-wallet-file`, `shekyl-scanner`, `shekyl-tx-builder`);
+  the `shekyl-scanner` bench gains a self-referential
+  `shekyl-scanner = { path = ".", features = ["test-utils"] }`
+  dev-dep so `WalletOutput::new_for_test` +
+  `RecoveredWalletOutput::new_for_test` are available in the
+  bench without exposing them to downstream consumers. The frozen
+  `shekyl_rust_v0.json` is captured on a reference machine by the
+  commit author and landed as a follow-up — this commit ships the
+  harness, not the numbers, because the reference machine is part
+  of the measurement (same discipline as commit 1).
 - **Wallet2 C++ baseline benchmark harness
   (`tests/wallet_bench/`, commit 1 of the mid-rewire hardening pass,
   [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.1).**

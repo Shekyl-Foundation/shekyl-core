@@ -30,6 +30,25 @@ windows-sys = { version = "0.60", features = [
 ] }
 
 [dev-dependencies]
+tempfile = "3"
+
+# Hardening-pass commit 2 (`docs/MID_REWIRE_HARDENING.md` §3.2):
+# criterion + iai-callgrind harness for the `open_cold` path. The
+# bench measures `WalletFileHandle::create` → drop → `::open` under
+# production `KdfParams::default()` (Argon2id 64 MiB, t=3), mirroring
+# the C++ `BM_open_cold` bench (currently skipped; see
+# §3.1 known-gaps note). Named `crypto_bench_*` because Argon2id drift
+# is itself a bidirectional regression signal.
+criterion = { version = "0.5", features = ["html_reports"] }
+iai-callgrind = "0.16"
+
+[[bench]]
+name = "open"
+harness = false
+
+[[bench]]
+name = "open_iai"
+harness = false
 
 [lints]
 workspace = true

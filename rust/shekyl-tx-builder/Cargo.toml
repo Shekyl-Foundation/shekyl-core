@@ -31,5 +31,28 @@ hex = { version = "0.4", features = ["serde"] }
 [dev-dependencies]
 rand = "0.8"
 
+# Hardening-pass commit 2 (`docs/MID_REWIRE_HARDENING.md` §3.2):
+# criterion + iai-callgrind harness for `transfer_e2e_1in_2out`. The
+# bench composes the two crypto pieces we can exercise without a
+# synthetic FCMP++ curve-tree fixture — BP+ range proof over 2 output
+# commitments and one ML-DSA-65 hybrid signature. The manifest
+# (`docs/benchmarks/shekyl_rust_v0.manifest.md`) documents this
+# explicitly as a *components* bench; adding the full
+# `sign_transaction` call with a valid tree fixture is tracked as a
+# known gap for a future commit (see §3.2 "Known gaps").
+criterion = { version = "0.5", features = ["html_reports"] }
+iai-callgrind = "0.16"
+shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+rand_core = { version = "0.6", features = ["std"] }
+
+[[bench]]
+name = "transfer_e2e"
+harness = false
+
+[[bench]]
+name = "transfer_e2e_iai"
+harness = false
+
 [lints]
 workspace = true

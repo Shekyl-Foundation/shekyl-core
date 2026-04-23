@@ -260,9 +260,14 @@ Rust stack, mirroring the Five from commit 1. No CI integration yet
 - `rust/shekyl-wallet-file/benches/open.rs` — cold open.
 - `rust/shekyl-scanner/benches/scan_block.rs` — scan-block.
 - `rust/shekyl-tx-builder/benches/transfer_e2e.rs` — transfer E2E.
-- `rust/xtask/src/bench.rs` (or equivalent) — convenience runner
-  that invokes all five and emits a single JSON with the same schema
-  as `wallet2_baseline_v0.json`.
+- `scripts/bench/capture_rust_baseline.sh` — convenience runner
+  (sibling of `capture_cpp_baseline.sh`; shell + python3 rather than
+  an `xtask` binary, matching the commit-1 shape) that invokes all
+  five criterion + all five iai-callgrind benches and emits a single
+  JSON envelope (`schema_version: "shekyl_rust_v0"`, toolchain + host
+  CPU + git-rev manifest, per-bench criterion estimates + parsed
+  iai-callgrind metrics) alongside a raw `shekyl_rust_v0.iai.snapshot`
+  text artifact for human review.
 - `docs/benchmarks/shekyl_rust_v0.json` — initial snapshot, captured
   at this commit, becomes the rolling baseline in commit 3.
 - `docs/benchmarks/shekyl_rust_v0.manifest.md` — Rust-side

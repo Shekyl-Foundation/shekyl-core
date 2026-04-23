@@ -28,5 +28,38 @@ shekyl-staking = { path = "../shekyl-staking" }
 serde_json = "1"
 proptest = "1"
 
+# Hardening-pass commit 2 (`docs/MID_REWIRE_HARDENING.md` §3.2): criterion for
+# wall-clock metrics on the two wallet-state hot paths (`ledger`, `balance`),
+# and iai-callgrind for deterministic instruction-count metrics mirroring the
+# same hot paths (suffix `_iai`). The criterion harness runs on any host;
+# iai-callgrind requires Valgrind plus `cargo install iai-callgrind-runner`
+# and is the metric the §3.3 CI gate enforces against.
+criterion = { version = "0.5", features = ["html_reports"] }
+iai-callgrind = "0.16"
+
+# Used only by `benches/balance.rs` — the canonical `BalanceSummary::compute`
+# lives in the scanner crate; the bench lives in `shekyl-wallet-state` because
+# that is where the `TransferDetails` input type is defined. Dev-only, does
+# not widen the crate's runtime dep graph.
+shekyl-scanner = { path = "../shekyl-scanner" }
+shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
+
+[[bench]]
+name = "ledger"
+harness = false
+
+[[bench]]
+name = "ledger_iai"
+harness = false
+
+[[bench]]
+name = "balance"
+harness = false
+
+[[bench]]
+name = "balance_iai"
+harness = false
+
 [lints]
 workspace = true
