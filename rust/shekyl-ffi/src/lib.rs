@@ -77,6 +77,14 @@ pub mod account_ffi;
 // wallet2.cpp in the commit 2 slice.
 pub mod wallet_envelope_ffi;
 
+// Opaque high-level `ShekylWallet` handle wrapping `WalletFileHandle` and
+// the loaded `WalletLedger`. Where `wallet_envelope_ffi` exposes the raw
+// envelope primitives so C++ can compose its own orchestration, this
+// module exposes a single lifecycle surface (create / open / save /
+// rotate / free) plus a non-secret metadata getter and a postcard ledger
+// export. Consumed by wallet2.cpp in the 2k/2l rewire slices.
+pub mod wallet_file_ffi;
+
 static CONSENSUS_REGISTRY: Mutex<Option<shekyl_consensus::ConsensusRegistry>> = Mutex::new(None);
 
 /// Fixed-size witness header per input in the FCMP++ prove/verify FFI.

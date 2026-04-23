@@ -36,10 +36,8 @@
 //!   C++ side can render precise user messages (e.g. "requires multisig
 //!   build" vs "wrong password") without string matching.
 
-use shekyl_crypto_pq::wallet_envelope::{
-    self, CapabilityContent, KdfParams, WalletEnvelopeError,
-};
 use shekyl_crypto_pq::kem::{ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN};
+use shekyl_crypto_pq::wallet_envelope::{self, CapabilityContent, KdfParams, WalletEnvelopeError};
 
 // ---------------------------------------------------------------------------
 // Constants mirrored by the C++ header (shekyl_ffi.h)
@@ -85,7 +83,7 @@ pub const SHEKYL_WALLET_ERR_INTERNAL: u32 = 12;
 pub const SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL: u32 = 13;
 pub const SHEKYL_WALLET_ERR_NULL_POINTER: u32 = 14;
 
-fn map_err(e: &WalletEnvelopeError) -> u32 {
+pub(crate) fn map_err(e: &WalletEnvelopeError) -> u32 {
     match e {
         WalletEnvelopeError::TooShort => SHEKYL_WALLET_ERR_TOO_SHORT,
         WalletEnvelopeError::BadMagic => SHEKYL_WALLET_ERR_BAD_MAGIC,
@@ -347,7 +345,11 @@ pub unsafe extern "C" fn shekyl_wallet_keys_seal(
         return false;
     };
 
-    let kdf = KdfParams { m_log2: kdf_m_log2, t: kdf_t, p: kdf_p };
+    let kdf = KdfParams {
+        m_log2: kdf_m_log2,
+        t: kdf_t,
+        p: kdf_p,
+    };
 
     match wallet_envelope::seal_keys_file(
         password,
@@ -374,7 +376,9 @@ fn parse_cap_content(mode: u8, bytes: &[u8]) -> Option<CapabilityContent<'_>> {
                 return None;
             }
             let seed: &[u8; 64] = bytes.try_into().ok()?;
-            Some(CapabilityContent::Full { master_seed_64: seed })
+            Some(CapabilityContent::Full {
+                master_seed_64: seed,
+            })
         }
         wallet_envelope::CAPABILITY_VIEW_ONLY => {
             let need = 32 + ML_KEM_768_DK_LEN + 32;
@@ -382,10 +386,13 @@ fn parse_cap_content(mode: u8, bytes: &[u8]) -> Option<CapabilityContent<'_>> {
                 return None;
             }
             let view_sk: &[u8; 32] = bytes[..32].try_into().ok()?;
-            let dk: &[u8; ML_KEM_768_DK_LEN] =
-                bytes[32..32 + ML_KEM_768_DK_LEN].try_into().ok()?;
+            let dk: &[u8; ML_KEM_768_DK_LEN] = bytes[32..32 + ML_KEM_768_DK_LEN].try_into().ok()?;
             let spend_pk: &[u8; 32] = bytes[32 + ML_KEM_768_DK_LEN..].try_into().ok()?;
-            Some(CapabilityContent::ViewOnly { view_sk, ml_kem_dk: dk, spend_pk })
+            Some(CapabilityContent::ViewOnly {
+                view_sk,
+                ml_kem_dk: dk,
+                spend_pk,
+            })
         }
         wallet_envelope::CAPABILITY_HARDWARE_OFFLOAD => {
             let head = 32 + ML_KEM_768_DK_LEN + 32;
@@ -393,11 +400,9 @@ fn parse_cap_content(mode: u8, bytes: &[u8]) -> Option<CapabilityContent<'_>> {
                 return None;
             }
             let view_sk: &[u8; 32] = bytes[..32].try_into().ok()?;
-            let dk: &[u8; ML_KEM_768_DK_LEN] =
-                bytes[32..32 + ML_KEM_768_DK_LEN].try_into().ok()?;
+            let dk: &[u8; ML_KEM_768_DK_LEN] = bytes[32..32 + ML_KEM_768_DK_LEN].try_into().ok()?;
             let spend_pk: &[u8; 32] = bytes[32 + ML_KEM_768_DK_LEN..head].try_into().ok()?;
-            let dev_len =
-                u16::from_le_bytes([bytes[head], bytes[head + 1]]) as usize;
+            let dev_len = u16::from_le_bytes([bytes[head], bytes[head + 1]]) as usize;
             if bytes.len() != head + 2 + dev_len {
                 return None;
             }
@@ -528,7 +533,11 @@ pub unsafe extern "C" fn shekyl_wallet_keys_rewrap_password(
     };
 
     let new_kdf = if new_kdf_present != 0 {
-        Some(KdfParams { m_log2: new_kdf_m_log2, t: new_kdf_t, p: new_kdf_p })
+        Some(KdfParams {
+            m_log2: new_kdf_m_log2,
+            t: new_kdf_t,
+            p: new_kdf_p,
+        })
     } else {
         None
     };
@@ -711,12 +720,7 @@ mod tests {
         // Inspect.
         let mut view = unsafe { std::mem::zeroed::<ShekylKeysFileHeaderView>() };
         let ok = unsafe {
-            shekyl_wallet_keys_inspect(
-                out.as_ptr(),
-                out.len(),
-                &raw mut view,
-                &raw mut err,
-            )
+            shekyl_wallet_keys_inspect(out.as_ptr(), out.len(), &raw mut view, &raw mut err)
         };
         assert!(ok);
         assert_eq!(view.format_version, SHEKYL_WALLET_FORMAT_VERSION);
@@ -768,12 +772,7 @@ mod tests {
         let mut err: u32 = 0;
         let fake = [0u8; 200];
         let ok = unsafe {
-            shekyl_wallet_keys_inspect(
-                fake.as_ptr(),
-                fake.len(),
-                &raw mut view,
-                &raw mut err,
-            )
+            shekyl_wallet_keys_inspect(fake.as_ptr(), fake.len(), &raw mut view, &raw mut err)
         };
         assert!(!ok);
         assert_eq!(err, SHEKYL_WALLET_ERR_BAD_MAGIC);

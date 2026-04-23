@@ -1187,6 +1187,21 @@ void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
 #define SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL 13
 #define SHEKYL_WALLET_ERR_NULL_POINTER 14
 
+/* Error codes emitted by the high-level orchestrator FFI
+ * (shekyl_wallet_create / shekyl_wallet_open / shekyl_wallet_save_state /
+ * shekyl_wallet_rotate_password). The envelope-only codes above are
+ * reused where the underlying failure is an envelope failure, so
+ * wallet2.cpp only needs one taxonomy. */
+#define SHEKYL_WALLET_ERR_IO                              15
+#define SHEKYL_WALLET_ERR_PAYLOAD                         16
+#define SHEKYL_WALLET_ERR_LEDGER                          17
+#define SHEKYL_WALLET_ERR_KEYS_FILE_ALREADY_EXISTS        18
+#define SHEKYL_WALLET_ERR_ALREADY_LOCKED                  19
+#define SHEKYL_WALLET_ERR_ATOMIC_WRITE_RENAME             20
+#define SHEKYL_WALLET_ERR_UNKNOWN_NETWORK                 21
+#define SHEKYL_WALLET_ERR_NETWORK_MISMATCH                22
+#define SHEKYL_WALLET_ERR_KEYS_FILE_WRITE_ONCE_VIOLATION  23
+
 /// AAD-readable header view of a `.wallet.keys` file. Layout pinned by
 /// `static_assert` below; any change in Rust flow-checks against the
 /// `#[repr(C)]` struct in `rust/shekyl-ffi/src/wallet_envelope_ffi.rs`.
@@ -1298,6 +1313,136 @@ bool shekyl_wallet_state_open(
     const uint8_t* keys_file_ptr, size_t keys_file_len,
     const uint8_t* state_file_ptr, size_t state_file_len,
     uint8_t* out_buf, size_t out_cap, size_t* out_len_required,
+    uint32_t* out_error);
+
+/* ----------------------------------------------------------------------
+ * High-level wallet-file orchestrator (opaque handle)
+ * ----------------------------------------------------------------------
+ *
+ * `ShekylWallet` is an opaque handle produced by `shekyl_wallet_create`
+ * and `shekyl_wallet_open`, consumed by every other function in this
+ * block, and destroyed exclusively by `shekyl_wallet_free`. Internally
+ * it owns the Rust `WalletFileHandle` (which holds the advisory file
+ * lock, cached keys-file bytes, and decoded non-secret metadata) plus
+ * the loaded `WalletLedger`.
+ *
+ * Before this surface, wallet2.cpp re-implemented companion-path
+ * derivation, atomic writes, advisory locking, and write-once
+ * enforcement in C++. This surface moves all of that into Rust; C++
+ * only calls the lifecycle operations and reads non-secret metadata.
+ *
+ * Thread-safety: C++ must not call two mutating operations on the same
+ * handle concurrently. Read-only getters may overlap with each other
+ * but not with writers. The handle itself is `!Send` on the Rust side.
+ */
+
+/* Opaque forward declaration; the layout of `ShekylWallet` is private
+ * to Rust. C++ consumers hold `ShekylWallet*` and pass it unchanged. */
+struct ShekylWallet;
+
+/* Non-secret wallet metadata view. Populated by
+ * `shekyl_wallet_get_metadata`; fields mirror the Rust `#[repr(C)]`
+ * struct in `rust/shekyl-ffi/src/wallet_file_ffi.rs`. Layout pinned by
+ * the `static_assert` below. */
+struct ShekylWalletMetadata {
+    uint8_t network;          /* 0 = Mainnet, 1 = Testnet, 2 = Stagenet */
+    uint8_t capability_mode;  /* SHEKYL_WALLET_CAPABILITY_* */
+    uint8_t seed_format;      /* 0x00 = BIP-39, 0x01 = raw hex */
+    uint8_t _reserved[5];     /* aligns the u64 below */
+    uint64_t creation_timestamp;
+    uint32_t restore_height_hint;
+    uint8_t _reserved_align[4];
+    uint8_t expected_classical_address[SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES];
+    uint8_t _tail_pad[7];     /* pads the struct to its 8-byte-aligned size */
+};
+static_assert(sizeof(ShekylWalletMetadata) ==
+    8 + 8 + 4 + 4 + SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES + 7,
+    "ShekylWalletMetadata layout must match Rust #[repr(C)] in wallet_file_ffi.rs");
+
+/* Create a fresh wallet pair (`.wallet.keys` + `.wallet`) at
+ * `base_path_ptr/len` (UTF-8) and return an owning handle via
+ * `*out_handle`. On failure, `*out_handle` is left NULL.
+ *
+ * `initial_ledger_postcard_*` may be `(NULL, 0)`; an empty
+ * `WalletLedger` is synthesized. Non-empty bytes must decode as a
+ * valid ledger, otherwise this function returns
+ * SHEKYL_WALLET_ERR_LEDGER without touching disk. */
+bool shekyl_wallet_create(
+    const char* base_path_ptr, size_t base_path_len,
+    const uint8_t* password_ptr, size_t password_len,
+    uint8_t network,
+    uint8_t seed_format,
+    uint8_t capability_mode,
+    const uint8_t* cap_content_ptr, size_t cap_content_len,
+    uint64_t creation_timestamp,
+    uint32_t restore_height_hint,
+    const uint8_t* expected_classical_address_ptr,
+    uint8_t kdf_m_log2, uint8_t kdf_t, uint8_t kdf_p,
+    const uint8_t* initial_ledger_postcard_ptr, size_t initial_ledger_postcard_len,
+    ShekylWallet** out_handle,
+    uint32_t* out_error);
+
+/* Open an existing wallet pair. On success populates `*out_handle`,
+ * `*out_state_lost`, and `*out_restore_from_height`.
+ *
+ * When `*out_state_lost` is true, `.wallet` was absent on disk and the
+ * orchestrator synthesized a fresh ledger seeded with the keys-file's
+ * `restore_height_hint`. The caller MUST drive a rescan starting at
+ * `*out_restore_from_height` and then call `shekyl_wallet_save_state`
+ * with the rebuilt ledger before closing. */
+bool shekyl_wallet_open(
+    const char* base_path_ptr, size_t base_path_len,
+    const uint8_t* password_ptr, size_t password_len,
+    uint8_t expected_network,
+    ShekylWallet** out_handle,
+    bool* out_state_lost,
+    uint64_t* out_restore_from_height,
+    uint32_t* out_error);
+
+/* Destroy a handle returned by `shekyl_wallet_create` or
+ * `shekyl_wallet_open`. Calling with NULL is a no-op so C++ RAII
+ * wrappers can be branchless. Passing the same non-null pointer twice
+ * is undefined behavior. */
+void shekyl_wallet_free(ShekylWallet* h);
+
+/* Populate `*out` with the non-secret wallet metadata. Returns false
+ * only on null-pointer arguments; the metadata itself cannot fail to
+ * read because it was fully decoded at create/open time. */
+bool shekyl_wallet_get_metadata(
+    ShekylWallet* h,
+    ShekylWalletMetadata* out,
+    uint32_t* out_error);
+
+/* Serialize the handle's in-memory `WalletLedger` to postcard bytes
+ * using the standard two-call sizing convention. The emitted bytes
+ * contain secrets (TxSecretKey fields); callers must zeroize before
+ * free and never log. */
+bool shekyl_wallet_export_ledger_postcard(
+    ShekylWallet* h,
+    uint8_t* out_buf, size_t out_cap, size_t* out_len_required,
+    uint32_t* out_error);
+
+/* Seal a new `.wallet` from the given ledger postcard bytes. The bytes
+ * are re-parsed before Argon2id runs so malformed input is rejected
+ * cheaply. On success the handle's in-memory ledger is replaced so
+ * subsequent `shekyl_wallet_export_ledger_postcard` calls reflect the
+ * save. */
+bool shekyl_wallet_save_state(
+    ShekylWallet* h,
+    const uint8_t* password_ptr, size_t password_len,
+    const uint8_t* ledger_postcard_ptr, size_t ledger_postcard_len,
+    uint32_t* out_error);
+
+/* Rotate the wallet password. `use_new_kdf = 0` preserves the existing
+ * KDF parameters; non-zero picks up `new_kdf_{m_log2,t,p}`. Region 1 of
+ * `.wallet.keys` and every byte of `.wallet` are byte-identical after
+ * the rotation — only the wrap layer changes. */
+bool shekyl_wallet_rotate_password(
+    ShekylWallet* h,
+    const uint8_t* old_password_ptr, size_t old_password_len,
+    const uint8_t* new_password_ptr, size_t new_password_len,
+    uint8_t use_new_kdf,
+    uint8_t new_kdf_m_log2, uint8_t new_kdf_t, uint8_t new_kdf_p,
     uint32_t* out_error);
 
 } // extern "C"

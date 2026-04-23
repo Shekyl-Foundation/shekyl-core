@@ -26,6 +26,8 @@ shekyl-economics = { path = "../shekyl-economics" }
 shekyl-staking = { path = "../shekyl-staking" }
 shekyl-proofs = { path = "../shekyl-proofs" }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+shekyl-wallet-file = { path = "../shekyl-wallet-file" }
+shekyl-wallet-state = { path = "../shekyl-wallet-state" }
 curve25519-dalek = "4"
 # OsRng for the testnet/fakechain raw-seed generation FFI. The feature set is
 # minimal; we do not enable any of rand's derive or integration machinery.
@@ -42,6 +44,7 @@ modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
 
 [dev-dependencies]
 hex = "0.4"
+tempfile = "3"
 rand_core = { version = "0.6", features = ["std"] }
 ec-divisors = { path = "../shekyl-oxide/crypto/divisors" }
 multiexp = "0.4"

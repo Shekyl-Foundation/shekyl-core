@@ -2917,6 +2917,9 @@ dependencies = [
  "shekyl-proofs",
  "shekyl-staking",
  "shekyl-tx-builder",
+ "shekyl-wallet-file",
+ "shekyl-wallet-state",
+ "tempfile",
  "tracing",
  "zeroize",
 ]
