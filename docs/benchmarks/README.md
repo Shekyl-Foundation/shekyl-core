@@ -86,9 +86,25 @@ This script:
 6. Atomically writes `docs/benchmarks/shekyl_rust_v0.json` and
    `docs/benchmarks/shekyl_rust_v0.iai.snapshot`.
 
-The same "do not commit laptop-captured baselines" discipline as the
-C++ script applies — the reference machine is part of the
-measurement.
+### Provisional laptop baseline
+
+Until a reference machine is provisioned, the committed
+`shekyl_rust_v0.json` + `shekyl_rust_v0.iai.snapshot` are a **laptop
+capture** (`captured_on.cpu_model` + `captured_on.kernel` in the
+envelope name the exact host). Treat the iai-callgrind instruction
+counts as stable across runs on that host (the determinism criterion
+from §3.2 is met) and therefore useful as a slowdown detector for
+re-captures on the same host. Do **not** treat the criterion
+wall-clock numbers as ground truth — they will drift with CPU
+frequency scaling and background load, and the reference-machine
+re-capture will replace them. The envelope is schema-stable across
+the swap.
+
+When the reference machine lands, the re-capture overwrites both
+files in a single commit and the provisional-baseline note in this
+section is removed. Until then, the C++ script's stricter "do not
+commit laptop-captured baselines" discipline is relaxed for
+`shekyl_rust_v0` only.
 
 ## Baseline-update policy
 

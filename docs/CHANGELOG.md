@@ -4,6 +4,31 @@
 
 ### Added
 
+- **Provisional laptop-captured `shekyl_rust_v0` baseline
+  (follow-up to hardening-pass commit 2).** The harness commit's
+  CHANGELOG entry deferred the frozen `shekyl_rust_v0.json` +
+  `shekyl_rust_v0.iai.snapshot` to a reference-machine capture. To
+  unblock commit 3 (CI threshold gate), those two files are landed
+  here as a **laptop capture** on the commit author's host; the
+  envelope records the exact CPU model, kernel, and toolchain
+  (`captured_on.*` fields) so the "provisional" status is
+  self-documenting. The iai-callgrind instruction-count columns are
+  stable across back-to-back runs on that host (the §3.2 determinism
+  criterion is met), so the baseline is a valid slowdown detector
+  for same-host re-captures; the criterion wall-clock columns are
+  soft numbers that CPU frequency scaling and background load will
+  drift, and the reference-machine re-capture will overwrite them.
+  Schema is stable across the swap (`shekyl_rust_v0`), so commit 3's
+  comparison script does not need to branch. The capture-script
+  probe for `iai-callgrind-runner` is also fixed in the same
+  landing: the tool's `--version` flag exits 1 outside the
+  cargo-bench handshake protocol, so the envelope's
+  `iai_callgrind_runner_version` field was previously `"unknown"`;
+  it now resolves via `cargo install --list` with a fallback through
+  the runner's own error banner.
+  [`docs/benchmarks/README.md`](benchmarks/README.md) gains a
+  "Provisional laptop baseline" subsection naming the policy
+  relaxation and the exit condition for it.
 - **Rust wallet-state benchmark harness — criterion + iai-callgrind
   (commit 2 of the mid-rewire hardening pass,
   [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.2).**
