@@ -1,0 +1,33 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-wallet-file"
+description = "On-disk orchestrator for the Shekyl v1 two-file wallet envelope (.wallet.keys + .wallet): SWSP payload framing, advisory locking, atomic writes, and write-once enforcement."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tracing = "0.1"
+zeroize = { version = "^1.5", features = ["zeroize_derive"] }
+tempfile = "3"
+rustix = { version = "1", features = ["fs"] }
+
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-wallet-state = { path = "../shekyl-wallet-state" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+] }
+
+[dev-dependencies]
+
+[lints]
+workspace = true

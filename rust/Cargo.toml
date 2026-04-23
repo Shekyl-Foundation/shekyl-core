@@ -37,6 +37,9 @@ members = [
     # Canonical wallet state types (transfers, runtime state, staker pool)
     "shekyl-wallet-state",
 
+    # v1 two-file wallet envelope orchestrator (.wallet.keys + .wallet)
+    "shekyl-wallet-file",
+
     # V3 proof protocol (tx_proof, reserve_proof)
     "shekyl-proofs",
 
