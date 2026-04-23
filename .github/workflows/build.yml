@@ -516,7 +516,25 @@ jobs:
           restore-keys: rust-
       - name: cargo audit
         working-directory: rust
-        run: cargo audit
+        run: |
+          # Retry wrapper: `cargo audit` fetches the RustSec advisory DB
+          # from https://github.com/RustSec/advisory-db.git on every run.
+          # That endpoint occasionally returns HTTP 500 under load; the
+          # failure is transient and unrelated to our Cargo.lock.
+          # Three attempts with backoff cover the common infra-flake window.
+          # A genuine advisory hit will still fail every attempt (the audit
+          # logic is deterministic given a successful DB fetch), so this
+          # does not mask real findings — it only burns ~30s extra CI time
+          # before re-reporting the hit on a permanent fail.
+          for attempt in 1 2 3; do
+            if cargo audit; then
+              exit 0
+            fi
+            echo "cargo audit attempt ${attempt} failed; retrying in $((attempt * 10))s" >&2
+            sleep $((attempt * 10))
+          done
+          echo "cargo audit failed after 3 attempts" >&2
+          exit 1
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp
