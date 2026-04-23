@@ -717,17 +717,21 @@ char* wallet2_ffi_get_scanner_keys(wallet2_handle* w)
         std::string view_pub_hex = epee::string_tools::pod_to_hex(
             keys.m_account_address.m_view_public_key);
 
-        // m_pqc_secret_key layout: x25519_sk[32] || ml_kem_dk[2400]
-        if (keys.m_pqc_secret_key.size() <= SHEKYL_X25519_PK_BYTES) {
+        // The X25519 scan secret IS the view secret (unclamped, per the
+        // Edwards→Montgomery birational map). The ML-KEM decapsulation key
+        // lives in the dedicated m_ml_kem_decap_key buffer, rederived on
+        // wallet open from m_master_seed_64 and not persisted.
+        if (keys.m_ml_kem_decap_key.empty()) {
             w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
-                         "PQC secret key is missing or truncated");
+                         "PQC scanner material unavailable (wallet has no master seed "
+                         "or was not yet rederived)");
             return nullptr;
         }
         std::string x25519_sk_hex = epee::to_hex::string(
-            {keys.m_pqc_secret_key.data(), SHEKYL_X25519_PK_BYTES});
+            {reinterpret_cast<const uint8_t*>(&keys.m_view_secret_key),
+             SHEKYL_X25519_PK_BYTES});
         std::string ml_kem_dk_hex = epee::to_hex::string(
-            {keys.m_pqc_secret_key.data() + SHEKYL_X25519_PK_BYTES,
-             keys.m_pqc_secret_key.size() - SHEKYL_X25519_PK_BYTES});
+            {keys.m_ml_kem_decap_key.data(), keys.m_ml_kem_decap_key.size()});
 
         rj::Document doc;
         doc.SetObject();

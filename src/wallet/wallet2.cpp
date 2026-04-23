@@ -2177,18 +2177,21 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
     {
       // assume coinbase isn't for us
     }
-    else if (tx.version >= 3 && !m_account.get_keys().m_pqc_secret_key.empty())
+    else if (tx.version >= 3 && !m_account.get_keys().m_ml_kem_decap_key.empty())
     {
       // v3 scan: use Rust scan_output_recover for subaddress-aware HKDF scanning.
+      // The X25519 secret is literally m_view_secret_key (unclamped, per the
+      // Edwards→Montgomery birational map from view_pub to x25519_pub); the
+      // ML-KEM decapsulation key lives in the dedicated m_ml_kem_decap_key
+      // buffer that rederive_from_master_seed populates on wallet open.
       cryptonote::tx_extra_pqc_kem_ciphertext kem_ct_field;
       bool has_kem = find_tx_extra_field_by_type(tx_extra_fields, kem_ct_field);
       if (has_kem)
       {
-        static constexpr size_t X25519_SK_BYTES = 32;
-        const auto& pqc_sk = m_account.get_keys().m_pqc_secret_key;
-        const uint8_t* sk_x25519 = pqc_sk.data();
-        const uint8_t* sk_ml_kem = pqc_sk.data() + X25519_SK_BYTES;
-        const size_t sk_ml_kem_len = pqc_sk.size() - X25519_SK_BYTES;
+        const auto& acct_keys = m_account.get_keys();
+        const uint8_t* sk_x25519 = reinterpret_cast<const uint8_t*>(&acct_keys.m_view_secret_key);
+        const uint8_t* sk_ml_kem = acct_keys.m_ml_kem_decap_key.data();
+        const size_t   sk_ml_kem_len = acct_keys.m_ml_kem_decap_key.size();
 
         for (size_t i = 0; i < tx.vout.size(); ++i)
         {
@@ -5693,15 +5696,20 @@ void wallet2::generate(const std::string& wallet_, const epee::wipeable_string& 
   }
 
   m_account.create_from_keys(account_public_address, spendkey, viewkey);
-  // Legacy restore paths can provide key material without PQC components.
-  // Generate PQC keys so post-HF17 v3 tx construction can succeed.
-  if (m_account.get_keys().m_account_address.m_pqc_public_key.empty() &&
-      m_account.get_keys().m_pqc_secret_key.empty())
+  // In v1 there is no way to rebuild the ML-KEM decapsulation key from
+  // spend+view keys alone; the full master seed is required. A wallet
+  // created via create_from_keys is therefore genuinely view-only-with-
+  // signing: it can construct classical transaction inputs but cannot
+  // decapsulate scan keys for v3 output recovery. Users who want full
+  // capability must restore via the BIP-39 (mainnet/stagenet) or raw-seed
+  // (testnet/fakechain) flows, which run derivation end-to-end through
+  // the shekyl_account_* FFIs. The old generate_pqc_for_restored_address
+  // helper that attempted to synthesize PQC material post-hoc has been
+  // removed because it produced non-reproducible ML-KEM keys.
+  if (m_account.get_keys().m_account_address.m_pqc_public_key.empty())
   {
-    THROW_WALLET_EXCEPTION_IF(
-      !m_account.generate_pqc_for_restored_address(),
-      error::wallet_internal_error,
-      "Failed to generate PQC key material for restored wallet");
+    MWARNING("Wallet restored from keys without PQC material; v3 transaction "
+             "sending will be unavailable. Restore from seed to enable PQC.");
   }
   init_type(hw::device::device_type::SOFTWARE);
   m_account_public_address = account_public_address;
@@ -6067,18 +6075,28 @@ void wallet2::load(const std::string& wallet_, const epee::wipeable_string& pass
 
   wallet_keys_unlocker unlocker(*this, m_ask_password == AskPasswordToDecrypt && !m_unattended && !m_watch_only && !m_is_background_wallet, password);
 
-  //keys loaded ok!
-  // Post-load invariant: m_pqc_secret_key[0..32] must equal m_view_secret_key.
-  // After the X25519-from-view-key derivation change, these are the same bytes.
-  // A mismatch indicates a corrupted or pre-derivation-era wallet file.
-  if (!m_watch_only && m_account.get_keys().m_pqc_secret_key.size() >= SHEKYL_X25519_PK_BYTES)
+  // Keys loaded ok. For v1 wallets (m_master_seed_present), rebuild every
+  // transient derivation output in-place from the decrypted master seed so
+  // that m_ml_kem_decap_key is populated for downstream v3-scan paths. This
+  // is the wallet-open hot path the address-derivation audit called out;
+  // shekyl_account_rederive internally re-runs the whole pipeline and
+  // throws on any inconsistency (FFI-level KAT tripwire).
+  //
+  // Pre-v1 wallets (legacy 25-word Electrum seed, or keys-only restore) do
+  // not carry a master seed, so there's nothing to rederive; they simply
+  // operate with m_ml_kem_decap_key empty and v3 send disabled until the
+  // user restores from a BIP-39 mnemonic or raw seed on this version.
+  if (!m_watch_only && m_account.get_keys().m_master_seed_present)
   {
+    const cryptonote::account_public_address on_disk_address =
+        m_account.get_keys().m_account_address;
+    m_account.rederive_from_master_seed(m_nettype);
     THROW_WALLET_EXCEPTION_IF(
-      memcmp(m_account.get_keys().m_pqc_secret_key.data(),
-             &m_account.get_keys().m_view_secret_key, SHEKYL_X25519_PK_BYTES) != 0,
-      error::wallet_internal_error,
-      "Wallet PQC secret key X25519 prefix does not match view secret key. "
-      "Wallet file may be corrupted or from a pre-derivation version.");
+        !(m_account.get_keys().m_account_address == on_disk_address),
+        error::wallet_internal_error,
+        "Wallet master seed does not rederive to the stored account address; "
+        "refusing to open. File may be corrupted or a seed-format / network "
+        "mismatch has been introduced.");
   }
 
   //try to load wallet cache. but even if we failed, it is not big problem
