@@ -13,7 +13,12 @@ use serde::{Deserialize, Deserializer, Serialize};
 use zeroize::Zeroize;
 
 /// A subaddress index identifying a derived address within a wallet.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Zeroize, Serialize)]
+///
+/// The derived ordering (`PartialOrd`/`Ord`) is lexicographic on
+/// `(account, address)` — used by [`BTreeMap`](std::collections::BTreeMap)
+/// keying in the bookkeeping block so that postcard serialization is
+/// byte-stable across runs.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Zeroize, Serialize)]
 pub struct SubaddressIndex {
     account: u32,
     address: u32,

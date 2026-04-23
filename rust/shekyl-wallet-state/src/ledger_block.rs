@@ -293,7 +293,11 @@ mod tests {
     #[test]
     fn populated_block_transfers_roundtrip_field_by_field() {
         let transfers = vec![sample_transfer(7), sample_transfer(8)];
-        let block = LedgerBlock::new(transfers, BlockchainTip::new(10, [1u8; 32]), ReorgBlocks::default());
+        let block = LedgerBlock::new(
+            transfers,
+            BlockchainTip::new(10, [1u8; 32]),
+            ReorgBlocks::default(),
+        );
 
         // Snapshot representative fields *before* round-tripping. The
         // originals are then consumed by `to_postcard_bytes`.
