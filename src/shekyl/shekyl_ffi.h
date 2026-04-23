@@ -48,6 +48,43 @@
 #define SHEKYL_PQC_PUBLIC_KEY_BYTES 1216
 #define SHEKYL_X25519_PK_BYTES 32
 #define SHEKYL_ML_KEM_768_EK_BYTES 1184
+#define SHEKYL_ML_KEM_768_DK_BYTES 2400
+
+/// Uniform master seed produced by `shekyl_seed_normalize`.
+#define SHEKYL_MASTER_SEED_BYTES 64
+/// Raw 32-byte seed accepted by testnet/fakechain generate flows.
+#define SHEKYL_RAW_SEED_BYTES 32
+/// Canonical 64-byte classical address body used by wallet-file AAD and
+/// by `shekyl_account_public_address_build` / `_check`.
+#define SHEKYL_CLASSICAL_ADDRESS_BYTES 64
+
+/// BIP-39 inputs: 32-byte entropy, 24 words, 64-byte PBKDF2-HMAC-SHA512 output,
+/// max mnemonic string length (24 × longest English word "mountain"=8 + 23
+/// spaces + trailing NUL slack, rounded up to 256 to simplify stack buffers).
+#define SHEKYL_BIP39_ENTROPY_BYTES 32
+#define SHEKYL_BIP39_WORD_COUNT 24
+#define SHEKYL_BIP39_PBKDF2_OUTPUT_BYTES 64
+#define SHEKYL_BIP39_MNEMONIC_MAX_BYTES 256
+
+/// Bind symbolic `DerivationNetwork` values to their u8 wire representation
+/// used by every account-derivation FFI. Matches Rust `account::DerivationNetwork`.
+#define SHEKYL_DERIVATION_NETWORK_MAINNET   0
+#define SHEKYL_DERIVATION_NETWORK_TESTNET   1
+#define SHEKYL_DERIVATION_NETWORK_STAGENET  2
+#define SHEKYL_DERIVATION_NETWORK_FAKECHAIN 3
+
+/// Bind symbolic `SeedFormat` values to their u8 wire representation. Matches
+/// Rust `account::SeedFormat`.
+#define SHEKYL_SEED_FORMAT_BIP39 0
+#define SHEKYL_SEED_FORMAT_RAW32 1
+
+// Pin the address invariant shared with Rust `account::PQC_PUBLIC_KEY_BYTES`.
+// If these constants ever drift, the freeze is broken and the assembler in
+// get_account_address_from_str must be audited before touching anything else.
+// This is a compile-time tripwire; there is no runtime fallback path.
+static_assert(
+    SHEKYL_PQC_PUBLIC_KEY_BYTES == SHEKYL_X25519_PK_BYTES + SHEKYL_ML_KEM_768_EK_BYTES,
+    "SHEKYL_PQC_PUBLIC_KEY_BYTES must equal X25519_pub || ML-KEM-768_ek (32 + 1184)");
 
 extern "C" {
 
@@ -760,7 +797,12 @@ ShekylPqcAuthResult shekyl_sign_pqc_auth(
 /// Free a ShekylPqcAuthResult. Wipes signature and key material before deallocation.
 void shekyl_pqc_auth_result_free(ShekylPqcAuthResult* result);
 
-// ─── FCMP++: Seed derivation ────────────────────────────────────────────────
+// ─── FCMP++: Seed derivation (legacy, pending wallet-account-rewire) ───────
+//
+// These three primitives are the pre-stabilization derivation path kept alive
+// only so the in-tree account.cpp can continue to build while the C++ side is
+// migrated to the v1 `shekyl_account_*` flows below. All three will be removed
+// once the wallet-account-rewire slice lands. Do not introduce new callers.
 
 /// Derive Ed25519 spend key from 32-byte master seed. Writes 32 bytes.
 bool shekyl_seed_derive_spend(const uint8_t* seed_ptr, uint8_t* out_ptr);
@@ -770,6 +812,159 @@ bool shekyl_seed_derive_view(const uint8_t* seed_ptr, uint8_t* out_ptr);
 
 /// Derive ML-KEM-768 seed material from 32-byte master seed. Writes 64 bytes.
 bool shekyl_seed_derive_ml_kem(const uint8_t* seed_ptr, uint8_t* out_ptr);
+
+// ─── Account derivation (v1, stabilized) ───────────────────────────────────
+//
+// All functions in this section follow the FFI-discipline pattern:
+//   * Out-pointer, caller-allocated buffers (the C++ wallet owns the
+//     `mlock`'d region; Rust never keeps a heap copy of secret material).
+//   * Fail-closed: every out-pointer buffer is explicitly zeroed before the
+//     function returns `false`. Read patterns are therefore identical whether
+//     the call succeeded or not — constant-time at the ABI boundary.
+//   * Pinned sizes: every variable-length concept has a `#define` above that
+//     can be consumed by `static_assert` on the C++ side.
+// See rust/shekyl-ffi/src/account_ffi.rs for the authoritative contract.
+
+/// Validate a candidate 24-word English BIP-39 mnemonic. The input is *not*
+/// copied; after this call returns, the caller's buffer can be wiped.
+bool shekyl_bip39_validate(const uint8_t* words_ptr, size_t words_len);
+
+/// Build the English 24-word BIP-39 mnemonic for 32 bytes of entropy.
+/// `out_words_ptr` is an externally-allocated buffer of capacity
+/// `out_words_cap` (at least `SHEKYL_BIP39_MNEMONIC_MAX_BYTES` is sufficient);
+/// `*out_words_len` receives the number of bytes written on success.
+/// The entropy is copied into a `Zeroizing` container on the Rust side and
+/// wiped before return.
+bool shekyl_bip39_mnemonic_from_entropy(
+    const uint8_t* entropy32_ptr,
+    uint8_t* out_words_ptr,
+    size_t out_words_cap,
+    size_t* out_words_len);
+
+/// Run BIP-39 PBKDF2-HMAC-SHA512 (2048 iterations) over the NFKD form of the
+/// mnemonic + "mnemonic"||passphrase salt. Writes 64 bytes to `out64_ptr`.
+/// The passphrase is optional; pass `pass_ptr=nullptr, pass_len=0` for none.
+bool shekyl_bip39_mnemonic_to_pbkdf2_seed(
+    const uint8_t* words_ptr,
+    size_t words_len,
+    const uint8_t* pass_ptr,
+    size_t pass_len,
+    uint8_t* out64_ptr);
+
+/// Generate 32 bytes of fresh entropy via OS CSPRNG. Used for
+/// testnet/fakechain raw-seed generation only; mainnet/stagenet flows go
+/// through BIP-39.
+bool shekyl_raw_seed_generate(uint8_t* out32_ptr);
+
+/// HKDF-SHA-512 extract+expand a variable-length input into a uniform
+/// 64-byte `master_seed` under the label `"shekyl-seed-normalize-v1"`.
+/// Caller-allocated `out64_ptr` receives the result.
+bool shekyl_seed_normalize(
+    const uint8_t* ikm_ptr,
+    size_t ikm_len,
+    uint8_t* out64_ptr);
+
+/// Network-bound 64-byte HKDF-Expand for the Ed25519 spend branch. Output is
+/// secret and must be fed to `shekyl_ed25519_scalar_wide_reduce`.
+bool shekyl_seed_derive_spend_wide(
+    const uint8_t* master_seed64_ptr,
+    uint8_t network,
+    uint8_t seed_format,
+    uint8_t* out64_ptr);
+
+/// Network-bound 64-byte HKDF-Expand for the Ed25519 view branch. Output is
+/// secret and must be fed to `shekyl_ed25519_scalar_wide_reduce`.
+bool shekyl_seed_derive_view_wide(
+    const uint8_t* master_seed64_ptr,
+    uint8_t network,
+    uint8_t seed_format,
+    uint8_t* out64_ptr);
+
+/// Wide-reduce a 64-byte secret into a canonical Ed25519 scalar (mod ℓ).
+/// This is the single collapse point for all 64-byte HKDF sub-derivations.
+bool shekyl_ed25519_scalar_wide_reduce(
+    const uint8_t* in64_ptr,
+    uint8_t* out32_ptr);
+
+/// Deterministically derive an ML-KEM-768 keypair from the master seed.
+/// `ek_out_ptr` receives SHEKYL_ML_KEM_768_EK_BYTES; `dk_out_ptr` receives
+/// SHEKYL_ML_KEM_768_DK_BYTES. The decapsulation key is highly sensitive and
+/// must be mlock'd by the caller *before* the call.
+bool shekyl_kem_keypair_from_master_seed(
+    const uint8_t* master_seed64_ptr,
+    uint8_t network,
+    uint8_t seed_format,
+    uint8_t* ek_out_ptr,
+    uint8_t* dk_out_ptr);
+
+/// `#[repr(C)]` bundle of every byte in an account. Public-side fields are
+/// mirrored verbatim into `account_public_address` and into the bech32m
+/// assembler; secret-side fields are copied into `account_keys` and wiped.
+/// The caller owns the allocation; Rust zeroizes the whole struct on failure.
+struct ShekylAllKeysBlob {
+    // public ------------------------------------------------------------------
+    uint8_t spend_pk[32];
+    uint8_t view_pk[32];
+    uint8_t ml_kem_ek[SHEKYL_ML_KEM_768_EK_BYTES];
+    uint8_t x25519_pk[32];
+    uint8_t pqc_public_key[SHEKYL_PQC_PUBLIC_KEY_BYTES];
+    uint8_t classical_address_bytes[SHEKYL_CLASSICAL_ADDRESS_BYTES];
+    // secret ------------------------------------------------------------------
+    uint8_t spend_sk[32];
+    uint8_t view_sk[32];
+    uint8_t ml_kem_dk[SHEKYL_ML_KEM_768_DK_BYTES];
+};
+
+static_assert(sizeof(ShekylAllKeysBlob) ==
+    32 + 32 + SHEKYL_ML_KEM_768_EK_BYTES + 32 + SHEKYL_PQC_PUBLIC_KEY_BYTES
+        + SHEKYL_CLASSICAL_ADDRESS_BYTES + 32 + 32 + SHEKYL_ML_KEM_768_DK_BYTES,
+    "ShekylAllKeysBlob layout must exactly match Rust account::AllKeysBlob");
+
+/// End-to-end mainnet/stagenet account generation from a BIP-39 mnemonic.
+/// Outputs the 64-byte master seed (so the caller can persist it) and a fully
+/// populated ShekylAllKeysBlob. `pass_ptr=nullptr, pass_len=0` for no
+/// passphrase.
+bool shekyl_account_generate_from_bip39(
+    const uint8_t* words_ptr,
+    size_t words_len,
+    const uint8_t* pass_ptr,
+    size_t pass_len,
+    uint8_t network,
+    uint8_t* master_seed_out64,
+    ShekylAllKeysBlob* blob_out);
+
+/// End-to-end testnet/fakechain account generation from a 32-byte raw seed.
+bool shekyl_account_generate_from_raw_seed(
+    const uint8_t* raw_seed32_ptr,
+    uint8_t network,
+    uint8_t* master_seed_out64,
+    ShekylAllKeysBlob* blob_out);
+
+/// Rederive every byte of an account from a persisted `master_seed_64` plus
+/// the recorded `seed_format`. Returns `false` without writing if the
+/// network/format pair is not permitted. This is the wallet-open hot path.
+bool shekyl_account_rederive(
+    const uint8_t* master_seed64_ptr,
+    uint8_t network,
+    uint8_t seed_format,
+    ShekylAllKeysBlob* blob_out);
+
+/// Assemble the canonical m_pqc_public_key = X25519_pub || ML-KEM_ek given
+/// its two components. Writes SHEKYL_PQC_PUBLIC_KEY_BYTES. Does not touch
+/// secret material.
+bool shekyl_account_public_address_build(
+    const uint8_t* x25519_pk_ptr,
+    const uint8_t* ml_kem_ek_ptr,
+    uint8_t* pqc_public_key_out);
+
+/// Verify that a `pqc_public_key` is internally consistent: its X25519 prefix
+/// is the Edwards→Montgomery image of the accompanying Ed25519 view public
+/// key, and the ML-KEM encapsulation key is a well-formed fixed-length
+/// suffix. Returns true iff the triple (view_pub, pqc_public_key) is a legal
+/// canonical address. Used by every decoder as a post-assembly tripwire.
+bool shekyl_account_public_address_check(
+    const uint8_t* view_pub_ptr,
+    const uint8_t* pqc_public_key_ptr);
 
 // ─── FCMP++: Curve tree hash operations ─────────────────────────────────────
 
