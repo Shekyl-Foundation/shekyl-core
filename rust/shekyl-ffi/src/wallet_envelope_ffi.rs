@@ -129,6 +129,13 @@ pub struct ShekylKeysFileHeaderView {
 /// actual `cap_content` bytes are written by the caller-provided
 /// `cap_content_buf`; this struct carries the fixed-size metadata and the
 /// length of the bytes written.
+///
+/// Padding is spelled out explicitly so the layout does not depend on the
+/// compiler's implicit alignment rules. `_reserved_align` is the 7-byte
+/// pad between `expected_classical_address` (odd 65-byte length) and the
+/// 8-byte-aligned `creation_timestamp`. The C++ `#[repr(C)]` counterpart
+/// in `src/shekyl/shekyl_ffi.h` carries the same explicit field so both
+/// sides agree at sizeof = 112 bytes — and both sides `static_assert` it.
 #[repr(C)]
 pub struct ShekylOpenedKeysInfo {
     pub format_version: u8,
@@ -137,11 +144,27 @@ pub struct ShekylOpenedKeysInfo {
     pub seed_format: u8,
     pub _reserved: [u8; 4],
     pub expected_classical_address: [u8; SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES],
+    pub _reserved_align: [u8; 7],
     pub creation_timestamp: u64,
     pub restore_height_hint: u32,
     pub cap_content_len: u32,
     pub seed_block_tag: [u8; SHEKYL_WALLET_SEED_BLOCK_TAG_BYTES],
 }
+
+// Pin the sizeof contract on the Rust side too. Mirrors the C++
+// static_assert in `src/shekyl/shekyl_ffi.h`: if a future refactor
+// adds or reorders fields in a way that changes the byte layout, this
+// fails at compile time instead of at the first FFI call.
+const _: () = assert!(
+    core::mem::size_of::<ShekylOpenedKeysInfo>()
+        == 8 + SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES
+            + 7
+            + 8
+            + 4
+            + 4
+            + SHEKYL_WALLET_SEED_BLOCK_TAG_BYTES,
+    "ShekylOpenedKeysInfo layout must match C++ static_assert in shekyl_ffi.h",
+);
 
 // ---------------------------------------------------------------------------
 // Internal helpers

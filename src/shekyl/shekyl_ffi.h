@@ -1206,6 +1206,13 @@ static_assert(sizeof(ShekylKeysFileHeaderView) == 8 + SHEKYL_WALLET_KEYS_WRAP_SA
 /// Full post-decryption view of a `.wallet.keys` file (fixed-size metadata).
 /// The variable-length `cap_content` bytes are written into a caller-
 /// provided buffer by `shekyl_wallet_keys_open`.
+///
+/// Padding is spelled out explicitly so the layout does not depend on the
+/// compiler's implicit alignment rules for `uint64_t`. `_reserved_align[7]`
+/// is the pad between `expected_classical_address` (odd 65-byte length)
+/// and `creation_timestamp` (8-byte aligned). The Rust `#[repr(C)]`
+/// counterpart in `rust/shekyl-ffi/src/wallet_envelope_ffi.rs` carries the
+/// same explicit field so both sides agree at sizeof = 112 bytes.
 struct ShekylOpenedKeysInfo {
     uint8_t format_version;
     uint8_t capability_mode;
@@ -1213,17 +1220,16 @@ struct ShekylOpenedKeysInfo {
     uint8_t seed_format;
     uint8_t _reserved[4];
     uint8_t expected_classical_address[SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES];
+    uint8_t _reserved_align[7];
     uint64_t creation_timestamp;
     uint32_t restore_height_hint;
     uint32_t cap_content_len;
     uint8_t seed_block_tag[SHEKYL_WALLET_SEED_BLOCK_TAG_BYTES];
 };
 static_assert(sizeof(ShekylOpenedKeysInfo) ==
-    8 + SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES + 8 + 4 + 4
+    8 + SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES + 7 + 8 + 4 + 4
         + SHEKYL_WALLET_SEED_BLOCK_TAG_BYTES,
     "ShekylOpenedKeysInfo layout must match Rust #[repr(C)]");
-
-extern "C" {
 
 /// Parse only the AAD-readable header of a `.wallet.keys` file. Cheap;
 /// does not touch the password. Returns false with BAD_MAGIC for pre-v1
