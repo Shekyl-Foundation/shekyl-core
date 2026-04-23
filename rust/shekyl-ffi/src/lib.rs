@@ -64,6 +64,19 @@ use std::sync::Mutex;
 // them.
 pub mod account_ffi;
 
+// Wallet-file envelope (WALLET_FILE_FORMAT_V1) FFI surface. Six entry points
+// matching `shekyl_crypto_pq::wallet_envelope`:
+//   - shekyl_wallet_keys_inspect    (AAD-only header view)
+//   - shekyl_wallet_keys_seal       (create .wallet.keys)
+//   - shekyl_wallet_keys_open       (decrypt .wallet.keys)
+//   - shekyl_wallet_keys_rewrap_password (rotate wrapping password)
+//   - shekyl_wallet_state_seal      (seal .wallet)
+//   - shekyl_wallet_state_open      (open .wallet)
+// Each function follows the two-call sizing + zeroize-on-failure + narrow
+// error-code discipline documented in the module header. Consumed by
+// wallet2.cpp in the commit 2 slice.
+pub mod wallet_envelope_ffi;
+
 static CONSENSUS_REGISTRY: Mutex<Option<shekyl_consensus::ConsensusRegistry>> = Mutex::new(None);
 
 /// Fixed-size witness header per input in the FCMP++ prove/verify FFI.

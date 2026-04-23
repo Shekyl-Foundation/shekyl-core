@@ -57,6 +57,7 @@ pub mod multisig;
 pub mod multisig_receiving;
 pub mod output;
 pub mod signature;
+pub mod wallet_envelope;
 
 pub use error::CryptoError;
 pub use shekyl_address as address;

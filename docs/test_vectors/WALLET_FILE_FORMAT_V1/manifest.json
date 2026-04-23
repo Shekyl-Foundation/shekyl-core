@@ -1,0 +1,62 @@
+{
+  "_comment": [
+    "Tier-3 Known Answer Test fixtures for WALLET_FILE_FORMAT_V1.",
+    "Each fixture is the output of seal_keys_file_with_entropy (or, for",
+    "state_for_full.hex, seal_state_file_with_entropy) called with the inputs",
+    "below. The fixtures are regenerated only when a deliberate, documented",
+    "format change lands; see `cargo test -p shekyl-crypto-pq wallet_envelope::",
+    "tests::kat_regenerate_fixtures -- --ignored`.",
+    "",
+    "Argon2id runs at m_log2=0x08 (256 KiB) here — KAT-only relaxation so the",
+    "cargo-test cycle stays fast. Production wallets always use DEFAULT_KDF_*",
+    "(m_log2=0x10, t=3, p=1)."
+  ],
+  "format_version": "0x01",
+  "kdf": {
+    "algo": "Argon2id",
+    "m_log2": "0x08",
+    "t": 1,
+    "p": 1
+  },
+  "password_ascii": "shekyl-kat-pw-v1",
+  "fixed_entropy": {
+    "wrap_salt_hex": "000102030405060708090a0b0c0d0e0f",
+    "wrap_nonce_hex": "101112131415161718191a1b1c1d1e1f2021222324252627",
+    "region1_nonce_hex": "303132333435363738393a3b3c3d3e3f4041424344454647",
+    "file_kek_seed_hex": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f",
+    "state_nonce_hex": "707172737475767778797a7b7c7d7e7f8081828384858687"
+  },
+  "common_region1_inputs": {
+    "creation_timestamp": 1700000000,
+    "restore_height_hint": 2500000,
+    "expected_classical_address_hex": "01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "fixtures": {
+    "full.hex": {
+      "mode": "FULL (0x01)",
+      "network": 0,
+      "seed_format": 0,
+      "cap_content_description": "master_seed[64] with byte i set to 0x80 | (i & 0x7f)",
+      "sealed_bytes": 288
+    },
+    "view_only.hex": {
+      "mode": "VIEW_ONLY (0x02)",
+      "network": 1,
+      "seed_format": 0,
+      "cap_content_description": "view_sk[32]=0x11.., ml_kem_dk[2400] with byte i = i & 0xff, spend_pk[32]=0x22..",
+      "sealed_bytes": 2688
+    },
+    "hardware_offload.hex": {
+      "mode": "HARDWARE_OFFLOAD (0x03)",
+      "network": 2,
+      "seed_format": 0,
+      "cap_content_description": "same as view_only + device_desc = \"ledger-nano-s:kat-serial-001\" (28 bytes)",
+      "sealed_bytes": 2718
+    },
+    "state_for_full.hex": {
+      "companion_keys_file": "full.hex",
+      "state_payload_ascii": "shekyl-kat-state-v1",
+      "sealed_bytes": 68
+    }
+  }
+}

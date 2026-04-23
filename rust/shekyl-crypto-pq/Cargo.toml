@@ -36,6 +36,25 @@ blake2 = "0.10"
 bip39 = { version = "2.2.2", default-features = false, features = ["std"] }
 shekyl-address = { path = "../shekyl-address" }
 sha3 = "0.10"
+# Wallet-file envelope (WALLET_FILE_FORMAT_V1).
+#
+# Argon2id is the OWASP 2024 recommended password-stretching primitive; we
+# use it for the wrapped_kek layer so an attacker with a stolen .wallet.keys
+# file must pay Argon2id's memory-hardness to brute-force the wrapping
+# password. Features `alloc` enables the `Vec<u8>`-returning helpers; we
+# don't use `password-hash` (PHC string format) because we embed our own
+# KDF parameters in the wallet file header rather than in an external
+# phc-string.
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+# XChaCha20-Poly1305 AEAD with a 192-bit nonce (chosen so per-write random
+# nonces are collision-safe for the entire lifetime of a wallet file).
+# Used for:
+#   - the wrap AEAD that encrypts file_kek under the Argon2id-derived wrap_key
+#   - the region 1 AEAD that encrypts the seed / capability content under file_kek
+#   - the region 2 AEAD that encrypts the state JSON under file_kek
+# All three AEADs use the same primitive; the distinctions are (key, nonce,
+# AAD) tuples, never the cipher.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
 

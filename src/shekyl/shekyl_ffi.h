@@ -1136,6 +1136,164 @@ ShekylDaemonRpcHandle* shekyl_daemon_rpc_start(
 /// Gracefully stop the Axum daemon RPC server and free the handle.
 void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
 
+// ─── Wallet file format v1 (WALLET_FILE_FORMAT_V1) ──────────────────────────
+//
+// Two-file envelope: `.wallet.keys` (seed block, write-once) + `.wallet`
+// (state block, frequently rewritten). Password-stretched via Argon2id;
+// content encrypted under XChaCha20-Poly1305 with a minimum-leak AAD model
+// (see docs/WALLET_FILE_FORMAT_V1.md for the byte-level spec). Every
+// variable-length output uses the probe-and-retry pattern:
+//   1. call with out_buf = nullptr, out_cap = 0 → out_len_required is set
+//      and the function returns false with out_error =
+//      SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL;
+//   2. allocate a buffer of at least out_len_required bytes; call again.
+// On real errors (wrong password, tampered file, unsupported mode) the
+// function returns false and out_error is set to a specific code;
+// out_buf is zeroed (to the extent it was touched) so observers see the
+// same write pattern on every failure path.
+
+#define SHEKYL_WALLET_FILE_FORMAT_VERSION 0x01
+#define SHEKYL_WALLET_STATE_FILE_FORMAT_VERSION 0x01
+
+#define SHEKYL_WALLET_KDF_ALGO_ARGON2ID 0x01
+#define SHEKYL_WALLET_KDF_DEFAULT_M_LOG2 0x10 /* 64 MiB */
+#define SHEKYL_WALLET_KDF_DEFAULT_T 0x03
+#define SHEKYL_WALLET_KDF_DEFAULT_P 0x01
+
+#define SHEKYL_WALLET_CAPABILITY_FULL             0x01
+#define SHEKYL_WALLET_CAPABILITY_VIEW_ONLY        0x02
+#define SHEKYL_WALLET_CAPABILITY_HARDWARE_OFFLOAD 0x03
+#define SHEKYL_WALLET_CAPABILITY_RESERVED_MULTISIG 0x04
+
+#define SHEKYL_WALLET_KEYS_WRAP_SALT_BYTES 16
+#define SHEKYL_WALLET_SEED_BLOCK_TAG_BYTES 16
+/// Canonical classical-address layout used by the wallet envelope.
+/// version(1) || spend_pk(32) || view_pk(32).
+#define SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES 65
+
+#define SHEKYL_WALLET_ERR_OK 0
+#define SHEKYL_WALLET_ERR_TOO_SHORT 1
+#define SHEKYL_WALLET_ERR_BAD_MAGIC 2
+#define SHEKYL_WALLET_ERR_VERSION_TOO_NEW 3
+#define SHEKYL_WALLET_ERR_UNSUPPORTED_KDF_ALGO 4
+#define SHEKYL_WALLET_ERR_KDF_PARAMS_OUT_OF_RANGE 5
+#define SHEKYL_WALLET_ERR_UNSUPPORTED_WRAP_COUNT 6
+#define SHEKYL_WALLET_ERR_CAP_CONTENT_LEN_MISMATCH 7
+#define SHEKYL_WALLET_ERR_UNKNOWN_CAPABILITY_MODE 8
+#define SHEKYL_WALLET_ERR_REQUIRES_MULTISIG 9
+#define SHEKYL_WALLET_ERR_INVALID_PASSWORD_OR_CORRUPT 10
+#define SHEKYL_WALLET_ERR_STATE_SEED_BLOCK_MISMATCH 11
+#define SHEKYL_WALLET_ERR_INTERNAL 12
+#define SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL 13
+#define SHEKYL_WALLET_ERR_NULL_POINTER 14
+
+/// AAD-readable header view of a `.wallet.keys` file. Layout pinned by
+/// `static_assert` below; any change in Rust flow-checks against the
+/// `#[repr(C)]` struct in `rust/shekyl-ffi/src/wallet_envelope_ffi.rs`.
+struct ShekylKeysFileHeaderView {
+    uint8_t format_version;
+    uint8_t kdf_algo;
+    uint8_t kdf_m_log2;
+    uint8_t kdf_t;
+    uint8_t kdf_p;
+    uint8_t wrap_count;
+    uint8_t _reserved[2];
+    uint8_t wrap_salt[SHEKYL_WALLET_KEYS_WRAP_SALT_BYTES];
+};
+static_assert(sizeof(ShekylKeysFileHeaderView) == 8 + SHEKYL_WALLET_KEYS_WRAP_SALT_BYTES,
+    "ShekylKeysFileHeaderView layout must match Rust #[repr(C)] (padding pinned by _reserved[2])");
+
+/// Full post-decryption view of a `.wallet.keys` file (fixed-size metadata).
+/// The variable-length `cap_content` bytes are written into a caller-
+/// provided buffer by `shekyl_wallet_keys_open`.
+struct ShekylOpenedKeysInfo {
+    uint8_t format_version;
+    uint8_t capability_mode;
+    uint8_t network;
+    uint8_t seed_format;
+    uint8_t _reserved[4];
+    uint8_t expected_classical_address[SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES];
+    uint64_t creation_timestamp;
+    uint32_t restore_height_hint;
+    uint32_t cap_content_len;
+    uint8_t seed_block_tag[SHEKYL_WALLET_SEED_BLOCK_TAG_BYTES];
+};
+static_assert(sizeof(ShekylOpenedKeysInfo) ==
+    8 + SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES + 8 + 4 + 4
+        + SHEKYL_WALLET_SEED_BLOCK_TAG_BYTES,
+    "ShekylOpenedKeysInfo layout must match Rust #[repr(C)]");
+
+extern "C" {
+
+/// Parse only the AAD-readable header of a `.wallet.keys` file. Cheap;
+/// does not touch the password. Returns false with BAD_MAGIC for pre-v1
+/// files so wallet2.cpp can surface the dedicated "restore from seed"
+/// upgrade message.
+bool shekyl_wallet_keys_inspect(
+    const uint8_t* bytes_ptr, size_t bytes_len,
+    ShekylKeysFileHeaderView* out_view,
+    uint32_t* out_error);
+
+/// Seal a fresh `.wallet.keys` file. See header comment for the two-call
+/// sizing pattern. `cap_content_ptr/len` carries the capability-mode bytes
+/// with the layout documented in docs/WALLET_FILE_FORMAT_V1.md.
+bool shekyl_wallet_keys_seal(
+    const uint8_t* password_ptr, size_t password_len,
+    uint8_t network,
+    uint8_t seed_format,
+    uint8_t capability_mode,
+    const uint8_t* cap_content_ptr, size_t cap_content_len,
+    uint64_t creation_timestamp,
+    uint32_t restore_height_hint,
+    const uint8_t* expected_classical_address_ptr,
+    uint8_t kdf_m_log2, uint8_t kdf_t, uint8_t kdf_p,
+    uint8_t* out_buf, size_t out_cap, size_t* out_len_required,
+    uint32_t* out_error);
+
+/// Decrypt a `.wallet.keys` file and populate `out_info` plus the
+/// `cap_content_buf`. Two-call sizing: call once with
+/// `cap_content_buf = nullptr, cap_content_cap = 0` to discover
+/// `out_info->cap_content_len`, then retry with a sufficient buffer.
+bool shekyl_wallet_keys_open(
+    const uint8_t* password_ptr, size_t password_len,
+    const uint8_t* bytes_ptr, size_t bytes_len,
+    ShekylOpenedKeysInfo* out_info,
+    uint8_t* cap_content_buf, size_t cap_content_cap,
+    uint32_t* out_error);
+
+/// Rotate the wrapping password on a `.wallet.keys` file. The output has
+/// the same byte length as the input; region 1 bytes are byte-identical
+/// across the rotation (enforced by debug_assert on the Rust side).
+/// Pass `new_kdf_present = 0` to preserve the existing KDF parameters.
+bool shekyl_wallet_keys_rewrap_password(
+    const uint8_t* old_password_ptr, size_t old_password_len,
+    const uint8_t* new_password_ptr, size_t new_password_len,
+    const uint8_t* bytes_ptr, size_t bytes_len,
+    uint8_t new_kdf_present,
+    uint8_t new_kdf_m_log2, uint8_t new_kdf_t, uint8_t new_kdf_p,
+    uint8_t* out_buf, size_t out_cap, size_t* out_len_required,
+    uint32_t* out_error);
+
+/// Seal a `.wallet` state file. Each call re-runs the Argon2id wrap to
+/// recover `file_kek` (no file_kek is cached across FFI calls).
+bool shekyl_wallet_state_seal(
+    const uint8_t* password_ptr, size_t password_len,
+    const uint8_t* keys_file_ptr, size_t keys_file_len,
+    const uint8_t* state_plain_ptr, size_t state_plain_len,
+    uint8_t* out_buf, size_t out_cap, size_t* out_len_required,
+    uint32_t* out_error);
+
+/// Open a `.wallet` state file. Cross-checks the seed_block_tag with the
+/// companion `.wallet.keys`; returns
+/// SHEKYL_WALLET_ERR_STATE_SEED_BLOCK_MISMATCH if the two do not belong
+/// together (swap-detection).
+bool shekyl_wallet_state_open(
+    const uint8_t* password_ptr, size_t password_len,
+    const uint8_t* keys_file_ptr, size_t keys_file_len,
+    const uint8_t* state_file_ptr, size_t state_file_len,
+    uint8_t* out_buf, size_t out_cap, size_t* out_len_required,
+    uint32_t* out_error);
+
 } // extern "C"
 
 /// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h
