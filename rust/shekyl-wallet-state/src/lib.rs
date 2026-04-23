@@ -25,6 +25,8 @@
 //! defined here use `postcard` for on-disk storage; metadata (identity + settings) lives
 //! in [`shekyl_crypto_pq::wallet_state`] and uses JSON.
 
+pub mod error;
+pub mod ledger_block;
 pub mod payment_id;
 pub mod runtime_state;
 pub mod serde_helpers;
@@ -32,6 +34,10 @@ pub mod staker_pool;
 pub mod subaddress;
 pub mod transfer;
 
+pub use error::WalletLedgerError;
+pub use ledger_block::{
+    BlockchainTip, LedgerBlock, ReorgBlocks, DEFAULT_REORG_BLOCKS_CAPACITY, LEDGER_BLOCK_VERSION,
+};
 pub use payment_id::PaymentId;
 pub use runtime_state::RuntimeWalletState;
 pub use staker_pool::{AccrualRecord, ConservationCheck, StakerPoolState};
