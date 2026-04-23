@@ -109,7 +109,19 @@ CPU_MODEL="$(awk -F': ' '/^model name/ {print $2; exit}' /proc/cpuinfo 2>/dev/nu
 RUSTC_VER="$(rustc --version 2>/dev/null || echo 'unknown')"
 CARGO_VER="$(cargo --version 2>/dev/null || echo 'unknown')"
 VALGRIND_VER="$(valgrind --version 2>/dev/null || echo 'unknown')"
-IAI_RUNNER_VER="$(iai-callgrind-runner --version 2>/dev/null || echo 'unknown')"
+# `iai-callgrind-runner --version` exits 1 when the lib-side version is
+# not embedded as a protocol handshake (see iai-callgrind CLI entry), so
+# we use `cargo install --list` as the authoritative source for the
+# installed runner version. Fall back to the runner's own error line
+# (which does spell out its version) and finally to "unknown".
+IAI_RUNNER_VER="$(cargo install --list 2>/dev/null \
+    | awk '/^iai-callgrind-runner / {sub(/:$/, "", $2); print $2; exit}')"
+if [[ -z "${IAI_RUNNER_VER}" ]]; then
+    IAI_RUNNER_VER="$(iai-callgrind-runner --version 2>&1 \
+        | sed -n 's/.*iai-callgrind-runner (\([^)]*\)).*/\1/p' \
+        | head -n1)"
+fi
+IAI_RUNNER_VER="${IAI_RUNNER_VER:-unknown}"
 
 # Commit the raw iai snapshot before JSON assembly so a downstream
 # failure still leaves a useful text artifact on disk.
