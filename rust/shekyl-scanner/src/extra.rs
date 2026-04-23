@@ -10,8 +10,7 @@
 //! - 0x06: PQC KEM ciphertext (hybrid X25519 + ML-KEM-768)
 //! - 0x07: PQC leaf hash commitments (for FCMP++ binding)
 
-use core::ops::BitXor;
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufRead, Write};
 
 use zeroize::Zeroize;
 
@@ -19,11 +18,13 @@ use curve25519_dalek::edwards::EdwardsPoint;
 
 use shekyl_oxide::io::*;
 
+// PaymentId moved to `shekyl-wallet-state`; re-exported here so `crate::extra::PaymentId`
+// and `use crate::extra::PaymentId` continue to resolve while the migration is in flight.
+pub use shekyl_wallet_state::PaymentId;
+
 pub(crate) const MAX_TX_EXTRA_PADDING_COUNT: usize = 255;
 const MAX_TX_EXTRA_NONCE_SIZE: usize = 255;
 
-const PAYMENT_ID_MARKER: u8 = 0;
-const ENCRYPTED_PAYMENT_ID_MARKER: u8 = 1;
 pub(crate) const ARBITRARY_DATA_MARKER: u8 = 127;
 
 /// The maximum length for data within an arbitrary-data nonce.
@@ -37,62 +38,6 @@ pub const TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT: u8 = 0x06;
 
 /// Shekyl tx_extra tag for PQC leaf hash commitments.
 pub const TX_EXTRA_TAG_PQC_LEAF_HASHES: u8 = 0x07;
-
-/// A Payment ID.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize)]
-pub enum PaymentId {
-    /// A deprecated unencrypted payment ID.
-    Unencrypted([u8; 32]),
-    /// An encrypted payment ID.
-    Encrypted([u8; 8]),
-}
-
-impl BitXor<[u8; 8]> for PaymentId {
-    type Output = PaymentId;
-
-    fn bitxor(self, bytes: [u8; 8]) -> PaymentId {
-        match self {
-            PaymentId::Unencrypted(_) => self,
-            PaymentId::Encrypted(id) => PaymentId::Encrypted(
-                (u64::from_le_bytes(id) ^ u64::from_le_bytes(bytes)).to_le_bytes(),
-            ),
-        }
-    }
-}
-
-impl PaymentId {
-    /// Write the PaymentId.
-    pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        match self {
-            PaymentId::Unencrypted(id) => {
-                w.write_all(&[PAYMENT_ID_MARKER])?;
-                w.write_all(id)?;
-            }
-            PaymentId::Encrypted(id) => {
-                w.write_all(&[ENCRYPTED_PAYMENT_ID_MARKER])?;
-                w.write_all(id)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Serialize the PaymentId to a `Vec<u8>`.
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut res = Vec::with_capacity(1 + 8);
-        self.write(&mut res)
-            .expect("write failed but <Vec as io::Write> doesn't fail");
-        res
-    }
-
-    /// Read a PaymentId.
-    pub fn read<R: Read>(r: &mut R) -> io::Result<PaymentId> {
-        Ok(match read_byte(r)? {
-            0 => PaymentId::Unencrypted(read_bytes(r)?),
-            1 => PaymentId::Encrypted(read_bytes(r)?),
-            _ => Err(io::Error::other("unknown payment ID type"))?,
-        })
-    }
-}
 
 /// A field within the TX extra.
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize)]

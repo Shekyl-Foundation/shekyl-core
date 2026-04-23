@@ -173,6 +173,7 @@ pub fn select_outputs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime_ext::TransferDetailsExt;
     use crate::tests::staking::make_wallet_output;
     use crate::transfer::TransferDetails;
 

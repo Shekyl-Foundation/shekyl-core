@@ -34,6 +34,9 @@ members = [
     # Shekyl-native scanner crate
     "shekyl-scanner",
 
+    # Canonical wallet state types (transfers, runtime state, staker pool)
+    "shekyl-wallet-state",
+
     # V3 proof protocol (tx_proof, reserve_proof)
     "shekyl-proofs",
 

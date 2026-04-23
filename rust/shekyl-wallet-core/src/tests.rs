@@ -6,7 +6,7 @@
 #[cfg(test)]
 mod lifecycle {
     use shekyl_oxide::transaction::StakingMeta;
-    use shekyl_scanner::{staker_pool::AccrualRecord, WalletState};
+    use shekyl_scanner::{staker_pool::AccrualRecord, WalletState, WalletStateExt};
 
     use crate::{
         claim_builder::ClaimTxBuilder, error::WalletCoreError, workflow::plan_claim_and_unstake,

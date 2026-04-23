@@ -31,11 +31,7 @@ use shekyl_crypto_pq::{
 };
 use shekyl_generators::hash_to_point;
 
-use crate::{
-    extra::{Extra, PaymentId},
-    output::*,
-    GuaranteedViewPair, SubaddressIndex, ViewPair,
-};
+use crate::{extra::Extra, output::*, GuaranteedViewPair, SubaddressIndex, ViewPair};
 
 const X25519_CT_BYTES: usize = 32;
 const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
@@ -400,15 +396,10 @@ impl InternalScanner {
             }
         }
 
-        // Shekyl never supports unencrypted payment IDs — strip them.
-        for output in &mut res.0 {
-            if matches!(
-                output.base.metadata.payment_id,
-                Some(PaymentId::Unencrypted(_))
-            ) {
-                output.base.metadata.payment_id = None;
-            }
-        }
+        // Note: Shekyl V3 dropped the legacy unencrypted PaymentId variant outright.
+        // `PaymentId::read` refuses marker byte 0 at parse time, so `output.metadata.payment_id`
+        // is guaranteed to be either `None` or `Some(encrypted_8_bytes)` — no runtime strip
+        // pass is needed here.
 
         Ok(res)
     }

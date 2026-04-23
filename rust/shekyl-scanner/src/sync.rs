@@ -24,6 +24,7 @@ mod inner {
     use shekyl_rpc::{Rpc, RpcError};
 
     use crate::{
+        runtime_ext::WalletStateExt,
         scan::{ScanError, Scanner},
         wallet_state::WalletState,
     };

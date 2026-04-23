@@ -16,6 +16,11 @@ use tracing::debug;
 
 #[cfg(feature = "rust-scanner")]
 use crate::scanner_state::ScannerState;
+// Scanner-side extension traits for `state.balance(…)` and friends must be in
+// scope at the call site since the canonical types now live in
+// `shekyl-wallet-state` while these methods live in `shekyl-scanner::runtime_ext`.
+#[cfg(feature = "rust-scanner")]
+use shekyl_scanner::WalletStateExt;
 
 /// Methods handled by the Rust scanner when the `rust-scanner` feature is active.
 #[cfg(feature = "rust-scanner")]

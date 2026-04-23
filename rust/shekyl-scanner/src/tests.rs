@@ -14,6 +14,7 @@ pub(crate) mod staking {
     use crate::{
         claim::ClaimableInfo,
         output::*,
+        runtime_ext::{TransferDetailsExt, WalletStateExt},
         scan::{RecoveredWalletOutput, Timelocked},
         transfer::TransferDetails,
         wallet_state::WalletState,
@@ -779,6 +780,7 @@ mod wallet_state_proptest {
 
     use crate::{
         output::*,
+        runtime_ext::WalletStateExt,
         scan::{RecoveredWalletOutput, Timelocked},
         wallet_state::WalletState,
     };
@@ -955,6 +957,7 @@ mod sync_bookkeeping {
 
     use crate::{
         output::*,
+        runtime_ext::WalletStateExt,
         scan::{RecoveredWalletOutput, Timelocked},
         wallet_state::WalletState,
     };

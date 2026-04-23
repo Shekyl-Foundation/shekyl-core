@@ -1,0 +1,31 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-wallet-state"
+description = "Canonical Shekyl wallet state types: TransferDetails, RuntimeWalletState, StakerPoolState, and the blocks persisted to the wallet file ledger section."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zeroize = { version = "^1.5", features = ["zeroize_derive"] }
+curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
+hex = { version = "0.4", features = ["alloc"] }
+serde.workspace = true
+serde_bytes = "0.11"
+thiserror.workspace = true
+tracing = "0.1"
+
+shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-staking = { path = "../shekyl-staking" }
+
+[dev-dependencies]
+serde_json = "1"
+postcard = { version = "1", features = ["alloc"] }
+proptest = "1"
+
+[lints]
+workspace = true

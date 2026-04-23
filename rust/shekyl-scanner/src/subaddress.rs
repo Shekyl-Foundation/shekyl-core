@@ -3,36 +3,12 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Subaddress index type for the scanner.
+//! Re-export shim for the canonical `SubaddressIndex` type.
 //!
-//! Subaddresses are derived from a root keypair using an `(account, address)` tuple.
-//! The `(0, 0)` index is reserved for the primary address and cannot be constructed.
+//! The type was promoted to [`shekyl_wallet_state::subaddress`] so it can be shared
+//! between the scanner (runtime state) and the wallet-file orchestrator (persisted
+//! ledger blocks). This module exists only to keep the old `crate::subaddress::…`
+//! import paths working during the migration; the transitional alias is removed in
+//! Commit 2n together with any remaining `use crate::subaddress::…` call sites.
 
-use zeroize::Zeroize;
-
-/// A subaddress index identifying a derived address within a wallet.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Zeroize)]
-pub struct SubaddressIndex {
-    account: u32,
-    address: u32,
-}
-
-impl SubaddressIndex {
-    /// Create a new SubaddressIndex. Returns `None` for the primary address `(0, 0)`.
-    pub const fn new(account: u32, address: u32) -> Option<SubaddressIndex> {
-        if (account == 0) && (address == 0) {
-            return None;
-        }
-        Some(SubaddressIndex { account, address })
-    }
-
-    /// The account this subaddress belongs to.
-    pub const fn account(&self) -> u32 {
-        self.account
-    }
-
-    /// The address index within its account.
-    pub const fn address(&self) -> u32 {
-        self.address
-    }
-}
+pub use shekyl_wallet_state::subaddress::SubaddressIndex;
