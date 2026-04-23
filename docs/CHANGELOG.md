@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- **Mid-rewire hardening plan (`docs/MID_REWIRE_HARDENING.md`).**
+  New design spec pinning the eight-commit instrumentation pass
+  that lands between the Rust-side wallet-file FFI (commits
+  `2a`…`2k.4`, merged) and the C++ consumer rewire (commits
+  `2k.5a` onward, deferred). Covers: Google Benchmark C++ baseline
+  capture against the existing `wallet2.cpp` hot paths;
+  criterion + iai-callgrind Rust benchmark harness mirroring the
+  same five paths; GitHub Actions CI integration with
+  bidirectional thresholds for `crypto_bench_*` (any drift is
+  suspicious — constant-time property defense) and slowdown-only
+  thresholds for `hot_path_bench_*`; rolling baseline on a
+  dedicated `bench-baseline` branch; `postcard-schema` snapshot
+  files with CI-enforced `block_version` bump on every drift;
+  ripgrep + allowlist secret-wipe discipline for
+  `shekyl-wallet-state` blocks; `WalletLedger::check_invariants()`
+  with five cross-block tripwires and a new
+  `WalletFileError::InvariantFailed { invariant, detail }` variant;
+  adversarial wallet-file corpus covering the three capability-
+  mode attack shapes (tamper-in-place, declared-FULL-with-VIEW_ONLY-
+  shape, declared-VIEW_ONLY-with-trailing-bytes); proptest fuzz
+  harness on stable plus checked-in (non-CI) `cargo-fuzz` targets.
+  Also captures the dual-path output-equivalence requirement for
+  `2k.5b`…`2l` as a structural commit-message template line, not a
+  reviewer convention. No code or CI changes in this commit — spec
+  only; the eight follow-up commits each cite a section.
+
 ## [3.1.0-alpha.5] - 2026-04-22
 
 ### Security
