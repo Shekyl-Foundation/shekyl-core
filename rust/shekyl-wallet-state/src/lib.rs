@@ -30,6 +30,7 @@ pub mod error;
 pub mod ledger_block;
 pub mod payment_id;
 pub mod runtime_state;
+pub mod safety_constants;
 pub mod serde_helpers;
 pub mod staker_pool;
 pub mod subaddress;
@@ -47,6 +48,7 @@ pub use ledger_block::{
 };
 pub use payment_id::PaymentId;
 pub use runtime_state::RuntimeWalletState;
+pub use safety_constants::NetworkSafetyConstants;
 pub use staker_pool::{AccrualRecord, ConservationCheck, StakerPoolState};
 pub use subaddress::SubaddressIndex;
 pub use sync_state_block::{SyncStateBlock, SYNC_STATE_BLOCK_VERSION};

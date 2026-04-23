@@ -50,7 +50,7 @@ Every setting lands in exactly one of three layers:
 
 | Layer                  | Where                                       | Who modifies         | Integrity                     | Evolution policy                                    |
 |------------------------|---------------------------------------------|----------------------|-------------------------------|-----------------------------------------------------|
-| **Hardcoded**          | `shekyl-consensus::safety_constants`        | Rust source, per network | Compile-time                  | Changed by release; never by a user or a data file. |
+| **Hardcoded**          | `shekyl_wallet_state::safety_constants`     | Rust source, per network | Compile-time                  | Changed by release; never by a user or a data file. |
 | **Plaintext TOML**     | `<base>.prefs.toml` + `<base>.prefs.toml.hmac` | GUI, CLI, or text editor | HMAC-SHA256 over file bytes   | Add/remove fields freely; missing fields use defaults. |
 | **CLI-ephemeral override** | `shekyl-cli` command-line flags         | User at invocation time  | None (never persisted)        | N/A — not stored.                                   |
 
@@ -132,13 +132,23 @@ in. Rows are grouped by layer for readability.
 
 ### 3.1 Hardcoded constants
 
-| Field                   | Network defaults                                              | Rationale |
-|-------------------------|---------------------------------------------------------------|-----------|
-| `key_reuse_mitigation2` | `true`                                                        | Defense against view-key-reuse linkability; always on. No legitimate reason to disable in normal operation. Research use cases run debug builds with a source-level flag. |
-| `segregation_pre_fork_outputs` | `true` (network default policy)                        | Privacy footgun with no legitimate user-facing override. |
-| `segregation_height`    | hardcoded fork height per network                             | Consensus-adjacent; users do not pick fork heights. |
+Implemented in `shekyl_wallet_state::safety_constants::NetworkSafetyConstants`
+(commit 2k.1). Fields marked **invariant** admit no CLI override at any
+layer; fields marked **base** supply the per-network default that the
+`SafetyOverrides` struct from §3.3 overlays on at wallet open.
 
-**No CLI override** for any of these. They are invariants.
+| Field                              | Mainnet | Testnet | Stagenet | Kind      | Rationale |
+|------------------------------------|---------|---------|----------|-----------|-----------|
+| `key_reuse_mitigation2`            | `true`  | `true`  | `true`   | invariant | Defense against view-key-reuse linkability; always on. No legitimate reason to disable in normal operation. Research use cases run debug builds with a source-level flag. |
+| `max_reorg_depth`                  | `10`    | `6`     | `10`     | base      | Minimum confirmations before a transfer is final. Testnet is tuned for fast iteration; stagenet mirrors mainnet because its purpose is to exercise mainnet parameters. CLI override: see §3.3. |
+| `default_skip_to_height`           | `0`     | `0`     | `0`      | base      | One-shot import hint (starting height for the first scan). CLI override: see §3.3. Once a `SyncStateBlock` exists its stored `restore_from_height` supersedes this default. |
+| `default_refresh_from_block_height`| `0`     | `0`     | `0`      | base      | Refresh cursor used when the wallet opens without a `SyncStateBlock` (lost-`.wallet` recovery path). CLI override: see §3.3. |
+
+**Monero-lineage fields deliberately absent.** `segregation_pre_fork_outputs`
+and `segregation_height` reflect Monero's post-key-reuse-mitigation fork
+segregation — a concept that does not apply to a V3 fresh-start wallet
+where no pre-fork output set exists. Per rule
+`60-no-monero-legacy.mdc`, these fields are not carried forward.
 
 ### 3.2 Plaintext TOML (HMAC-integrity)
 
@@ -380,7 +390,11 @@ open-time `WARN` lines still give the user a chance to notice.
 
 ## 8. Reference implementation pointer
 
-- `shekyl-consensus::safety_constants` — §2.1 constants (`2k.1`).
+- `shekyl_wallet_state::safety_constants::NetworkSafetyConstants` —
+  §2.1 / §3.1 constants (`2k.1`). Landed in `shekyl-wallet-state`
+  rather than `shekyl-consensus` because
+  `70-modular-consensus.mdc` scopes the latter to PoW proof validation;
+  per-network wallet safety policy is wallet-state concern.
 - `shekyl_wallet_file::SafetyOverrides` — §2.3 runtime type (`2k.2`).
 - `shekyl-wallet-prefs` crate — §2.2 TOML types, HMAC, parser (`2k.3`).
 - `shekyl_ffi::wallet_prefs_ffi` — C ABI for the TOML layer (`2k.4`).

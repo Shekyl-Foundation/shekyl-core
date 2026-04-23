@@ -20,6 +20,7 @@ thiserror.workspace = true
 tracing = "0.1"
 postcard = { version = "1", features = ["alloc"] }
 
+shekyl-address = { path = "../shekyl-address" }
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-staking = { path = "../shekyl-staking" }
 
