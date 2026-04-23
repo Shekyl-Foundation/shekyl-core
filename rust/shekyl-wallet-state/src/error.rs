@@ -18,6 +18,19 @@
 /// the other `.wallet`-side typed blocks in this crate.
 #[derive(Debug, thiserror::Error)]
 pub enum WalletLedgerError {
+    /// The bundle-level `format_version` of the [`WalletLedger`] aggregator
+    /// does not match the version this binary knows how to read. Bundle
+    /// version is independent of the per-block `block_version` values and
+    /// bumps only when the aggregator layout itself changes (e.g. a new
+    /// top-level block is added or removed).
+    ///
+    /// [`WalletLedger`]: crate::wallet_ledger::WalletLedger
+    #[error(
+        "unsupported wallet-ledger format version: file = {file}, binary = {binary}; \
+         no migration path exists in this binary"
+    )]
+    UnsupportedFormatVersion { file: u32, binary: u32 },
+
     /// A block's own `block_version` does not match the version this binary
     /// knows how to read for that block. Each block evolves independently;
     /// a mismatch on any block aborts the whole load per the rule-81 "no

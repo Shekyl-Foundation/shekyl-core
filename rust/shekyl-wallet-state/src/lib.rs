@@ -33,8 +33,10 @@ pub mod runtime_state;
 pub mod serde_helpers;
 pub mod staker_pool;
 pub mod subaddress;
+pub mod sync_state_block;
 pub mod transfer;
 pub mod tx_meta_block;
+pub mod wallet_ledger;
 
 pub use bookkeeping_block::{
     AccountTags, AddressBookEntry, BookkeepingBlock, SubaddressLabels, BOOKKEEPING_BLOCK_VERSION,
@@ -47,7 +49,9 @@ pub use payment_id::PaymentId;
 pub use runtime_state::RuntimeWalletState;
 pub use staker_pool::{AccrualRecord, ConservationCheck, StakerPoolState};
 pub use subaddress::SubaddressIndex;
+pub use sync_state_block::{SyncStateBlock, SYNC_STATE_BLOCK_VERSION};
 pub use transfer::{FcmpPrecomputedPath, TransferDetails, SPENDABLE_AGE};
 pub use tx_meta_block::{
     ScannedPoolTx, TxMetaBlock, TxSecretKey, TxSecretKeys, TX_META_BLOCK_VERSION,
 };
+pub use wallet_ledger::{WalletLedger, WALLET_LEDGER_FORMAT_VERSION};
