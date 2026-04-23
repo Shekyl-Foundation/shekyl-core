@@ -19,6 +19,7 @@ rustix = { version = "1", features = ["fs"] }
 
 shekyl-address = { path = "../shekyl-address" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-wallet-prefs = { path = "../shekyl-wallet-prefs" }
 shekyl-wallet-state = { path = "../shekyl-wallet-state" }
 
 [target.'cfg(windows)'.dependencies]

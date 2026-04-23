@@ -38,6 +38,7 @@
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
+use shekyl_wallet_prefs::PrefsError;
 use shekyl_wallet_state::WalletLedgerError;
 use std::io;
 use std::path::PathBuf;
@@ -141,6 +142,21 @@ pub enum WalletFileError {
     /// would be unsafe.
     #[error("multisig wallets are not supported by this envelope version")]
     MultisigNotSupported,
+
+    /// A preferences-layer operation failed (HMAC mismatch on save,
+    /// Bucket-3 field slipped through a save path, oversize body,
+    /// TOML serialization failure, …). Surfaces
+    /// [`PrefsError`](shekyl_wallet_prefs::PrefsError) verbatim so
+    /// the FFI can map each variant to an actionable user message
+    /// without this crate having to mirror the prefs taxonomy.
+    ///
+    /// Note: tamper events on **load** do not surface here; they are
+    /// signalled via [`shekyl_wallet_prefs::LoadOutcome::Tampered`]
+    /// and folded into defaults per the advisory-failure-mode policy
+    /// in `docs/WALLET_PREFS.md §5`. This variant only fires on
+    /// paths that must refuse (save failures and hard errors).
+    #[error("preferences error: {0}")]
+    Prefs(#[from] PrefsError),
 }
 
 impl WalletFileError {

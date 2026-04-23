@@ -392,6 +392,28 @@ pub struct OpenedKeysFile {
     /// Poly1305 tag of region 1 — used as AAD when sealing / opening
     /// `.wallet`. Stable across password rotation.
     pub seed_block_tag: [u8; AEAD_TAG_BYTES],
+    /// The recovered 32-byte `file_kek` that decrypted region 1 — the
+    /// same value that is stored re-encrypted under the wrap key on
+    /// disk. Exposed so higher layers (notably
+    /// [`shekyl_wallet_prefs`](https://docs.rs/shekyl-wallet-prefs))
+    /// can derive per-wallet subkeys under HKDF-Expand without a
+    /// second Argon2id run, and without this crate having to know
+    /// about their key-schedule labels.
+    ///
+    /// # Security
+    ///
+    /// `file_kek` protects region 1 of `.wallet.keys` and all of
+    /// `.wallet`. A caller who holds it has the same key-material
+    /// surface that any in-memory handle of the opened wallet
+    /// already has (cached keys-file bytes + password would let you
+    /// re-derive this in any case, so exposing it does not widen
+    /// the already-committed trust boundary — but it DOES skip the
+    /// Argon2id bottleneck, so it must not leave the process).
+    /// The field is `Zeroizing`; drop wipes it. Do **not** copy it
+    /// into a non-zeroizing buffer, do **not** log it, do **not**
+    /// cross the FFI boundary with it. The only legitimate use is
+    /// as the `prk` input to HKDF-Expand on a derived subkey.
+    pub file_kek: Zeroizing<[u8; FILE_KEK_BYTES]>,
 }
 
 impl std::fmt::Debug for OpenedKeysFile {
@@ -405,6 +427,7 @@ impl std::fmt::Debug for OpenedKeysFile {
             .field("restore_height_hint", &self.restore_height_hint)
             .field("cap_content", &"[REDACTED]")
             .field("seed_block_tag", &"[..16 bytes..]")
+            .field("file_kek", &"[REDACTED]")
             .finish()
     }
 }
@@ -791,6 +814,12 @@ pub fn open_keys_file(
         restore_height_hint,
         cap_content: cap_content_buf,
         seed_block_tag: region1_tag,
+        // Hand the caller the recovered `file_kek` so it can derive
+        // per-wallet subkeys (e.g. `shekyl-wallet-prefs`' HMAC key)
+        // without a second Argon2id run. `file_kek_z` was already a
+        // `Zeroizing` container above; we move it straight into the
+        // struct so the wipe semantics are preserved end-to-end.
+        file_kek: file_kek_z,
     })
 }
 

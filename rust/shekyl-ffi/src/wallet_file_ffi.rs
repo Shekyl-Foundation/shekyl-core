@@ -80,6 +80,7 @@ use shekyl_address::Network;
 use shekyl_wallet_file::{
     Capability, CreateParams, OpenOutcome, SafetyOverrides, WalletFileError, WalletFileHandle,
 };
+use shekyl_wallet_prefs::WalletPrefs;
 use shekyl_wallet_state::WalletLedger;
 use zeroize::Zeroizing;
 
@@ -129,6 +130,20 @@ pub const SHEKYL_WALLET_ERR_NETWORK_MISMATCH: u32 = 22;
 /// `.wallet.keys`. Should be unreachable by construction. Surfaces as
 /// [`SHEKYL_WALLET_ERR_INTERNAL`] plus a tracing log entry.
 pub const SHEKYL_WALLET_ERR_KEYS_FILE_WRITE_ONCE_VIOLATION: u32 = 23;
+
+/// Preferences-layer failure. Covers every
+/// [`shekyl_wallet_prefs::PrefsError`] variant plus JSON
+/// serialization/deserialization failures at the FFI boundary
+/// (caller-supplied JSON for `shekyl_wallet_prefs_set_json` did not
+/// round-trip into [`WalletPrefs`], or a Bucket-3 override field name
+/// was smuggled through the JSON path).
+///
+/// Tamper-on-load events do **not** surface via this code: per
+/// `docs/WALLET_PREFS.md §5` the prefs system is advisory, so a
+/// corrupted on-disk pair folds into defaults and the tamper event is
+/// reported through the `out_was_tampered` out-parameter of
+/// [`shekyl_wallet_prefs_get_json`].
+pub const SHEKYL_WALLET_ERR_PREFS: u32 = 24;
 
 // ---------------------------------------------------------------------------
 // Metadata view struct
@@ -300,6 +315,7 @@ fn map_wallet_file_err(e: &WalletFileError) -> u32 {
         WalletFileError::NetworkMismatch { .. } => SHEKYL_WALLET_ERR_NETWORK_MISMATCH,
         WalletFileError::UnknownCapability(_) => SHEKYL_WALLET_ERR_UNKNOWN_CAPABILITY_MODE,
         WalletFileError::MultisigNotSupported => SHEKYL_WALLET_ERR_REQUIRES_MULTISIG,
+        WalletFileError::Prefs(_) => SHEKYL_WALLET_ERR_PREFS,
     }
 }
 
@@ -903,6 +919,191 @@ pub unsafe extern "C" fn shekyl_wallet_rotate_password(
 }
 
 // ---------------------------------------------------------------------------
+// Preferences (Layer 2: plaintext TOML + HMAC)
+// ---------------------------------------------------------------------------
+//
+// The FFI surface for `shekyl-wallet-prefs` uses JSON as the wire
+// format across the boundary even though the on-disk representation is
+// TOML with an HMAC companion. Rationale:
+//
+//   * wallet2.cpp already links rapidjson and uses it for every other
+//     JSON-view FFI (e.g. `shekyl_sign_transaction`). Adding a TOML
+//     parser to C++ just for prefs would be a cost with no benefit.
+//   * Rust parses TOML → `WalletPrefs` once inside the orchestrator,
+//     then serializes `WalletPrefs` → JSON for C++ and parses
+//     caller-supplied JSON → `WalletPrefs` on the way back. Both
+//     directions go through the same `#[serde(deny_unknown_fields)]`
+//     schema, so a Bucket-3 field smuggled through JSON is rejected
+//     identically to one smuggled through TOML.
+//   * Atomic persistence, HMAC generation, and quarantine-on-tamper
+//     happen entirely in Rust. C++ never touches the key material.
+//
+// The get/set pair is minimal on purpose: no per-field setters, no
+// incremental updates. wallet2.cpp reads the full blob, mutates its
+// in-memory representation, and writes the full blob back. This
+// matches the "full document" pattern of the existing save_state
+// path and keeps the HMAC model trivially correct (every save
+// HMACs over the canonical TOML body the user intended).
+
+/// Serialize the wallet's preferences as a UTF-8 JSON document and
+/// write them into `out_buf`. Uses the standard two-call sizing
+/// discipline: call once with `out_buf = null, out_cap = 0` to
+/// discover the required length (written to `*out_len_required`,
+/// return value is `false` with `*out_error = BUFFER_TOO_SMALL`),
+/// then allocate and retry.
+///
+/// On the advisory tamper path (HMAC mismatch, parse failure,
+/// oversize body, Bucket-3 collision), this function still returns
+/// the default preferences — the tamper is signalled via
+/// `*out_was_tampered = true` and the underlying files have been
+/// moved into quarantine by the Rust layer. wallet2.cpp should
+/// surface this in the UI but MUST NOT treat it as a refuse-to-open,
+/// per the advisory failure-mode policy in
+/// `docs/WALLET_PREFS.md §5`.
+///
+/// # Parameters
+/// - `h`: opaque wallet handle.
+/// - `out_buf`, `out_cap`: destination buffer, possibly null for
+///   sizing. The emitted JSON is UTF-8, not NUL-terminated.
+/// - `out_len_required`: receives the JSON byte length on every
+///   non-null-pointer return (success AND BUFFER_TOO_SMALL).
+/// - `out_was_tampered`: receives `true` iff the on-disk files were
+///   corrupt and have been quarantined. The JSON still represents
+///   valid defaults; the caller may surface a banner.
+/// - `out_error`: receives a wire-stable `SHEKYL_WALLET_ERR_*` code.
+///
+/// # Errors
+/// - `SHEKYL_WALLET_ERR_NULL_POINTER`: `h`, `out_len_required`, or
+///   `out_error` are null.
+/// - `SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL`: sizing probe, or too-small
+///   buffer.
+/// - `SHEKYL_WALLET_ERR_IO`: filesystem failure on load or quarantine
+///   (not the file-missing path — missing is not an error).
+/// - `SHEKYL_WALLET_ERR_PREFS`: HMAC-length wrong in an internal
+///   invariant, or JSON serialization failure (should not happen for
+///   `WalletPrefs`'s in-tree schema but is surfaced rather than
+///   panicking).
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_wallet_prefs_get_json(
+    h: *mut ShekylWallet,
+    out_buf: *mut u8,
+    out_cap: usize,
+    out_len_required: *mut usize,
+    out_was_tampered: *mut bool,
+    out_error: *mut u32,
+) -> bool {
+    if h.is_null() || out_len_required.is_null() {
+        set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
+        return false;
+    }
+
+    let w = &mut *h;
+
+    let outcome = match w.inner.load_prefs() {
+        Ok(o) => o,
+        Err(e) => {
+            set_err(out_error, map_wallet_file_err(&e));
+            return false;
+        }
+    };
+
+    set_bool(out_was_tampered, outcome.is_tampered());
+
+    let prefs: &WalletPrefs = outcome.prefs();
+    let json = match serde_json::to_vec(prefs) {
+        Ok(v) => v,
+        Err(_) => {
+            // In-tree `WalletPrefs` round-trips through serde_json
+            // cleanly today; a future field addition that isn't
+            // JSON-compatible (raw bytes, NaN, …) would land here.
+            // We surface it loudly rather than panicking so the
+            // regression shows up in CI.
+            set_err(out_error, SHEKYL_WALLET_ERR_PREFS);
+            return false;
+        }
+    };
+
+    set_len(out_len_required, json.len());
+
+    if out_buf.is_null() || out_cap < json.len() {
+        set_err(out_error, SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL);
+        return false;
+    }
+
+    std::ptr::copy_nonoverlapping(json.as_ptr(), out_buf, json.len());
+    set_err(out_error, SHEKYL_WALLET_ERR_OK);
+    true
+}
+
+/// Parse caller-supplied UTF-8 JSON into [`WalletPrefs`] and persist
+/// it via the orchestrator's atomic-write + HMAC path. On success,
+/// both `<base>.prefs.toml` and `<base>.prefs.toml.hmac` have been
+/// rewritten.
+///
+/// The JSON document must match the `WalletPrefs` schema exactly.
+/// Any unknown field — including the three Bucket-3 CLI overrides
+/// (`max_reorg_depth`, `skip_to_height`, `refresh_from_block_height`)
+/// — is rejected by `#[serde(deny_unknown_fields)]` on the nested
+/// structs. Callers that need session-only Bucket-3 overrides must
+/// use [`shekyl_wallet_open`]'s `overrides` parameter instead.
+///
+/// # Errors
+/// - `SHEKYL_WALLET_ERR_NULL_POINTER`: `h` or `json_ptr` null with
+///   non-zero length.
+/// - `SHEKYL_WALLET_ERR_PREFS`: JSON parse failure (including Bucket-3
+///   collision, unknown field, enum typo, oversize body after
+///   re-serialization). The error code is deliberately coarse: the
+///   FFI does not surface per-field error positions because the C++
+///   side has no way to render them usefully, and Rust's own tests
+///   cover the specific failure paths.
+/// - `SHEKYL_WALLET_ERR_IO` / `SHEKYL_WALLET_ERR_ATOMIC_WRITE_RENAME`:
+///   filesystem failures on write.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_wallet_prefs_set_json(
+    h: *mut ShekylWallet,
+    json_ptr: *const u8,
+    json_len: usize,
+    out_error: *mut u32,
+) -> bool {
+    if h.is_null() {
+        set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
+        return false;
+    }
+    let json = match make_slice(json_ptr, json_len) {
+        Some(s) => s,
+        None => {
+            set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
+            return false;
+        }
+    };
+
+    // Parse JSON into the typed schema. `deny_unknown_fields` on
+    // every nested struct in `shekyl-wallet-prefs::schema` ensures
+    // that a user pasting `{ "max_reorg_depth": 0 }` into a
+    // settings dialog gets a parse failure rather than silently
+    // shadowing the safety constant.
+    let prefs: WalletPrefs = match serde_json::from_slice(json) {
+        Ok(p) => p,
+        Err(_) => {
+            set_err(out_error, SHEKYL_WALLET_ERR_PREFS);
+            return false;
+        }
+    };
+
+    let w = &*h;
+    match w.inner.save_prefs(&prefs) {
+        Ok(()) => {
+            set_err(out_error, SHEKYL_WALLET_ERR_OK);
+            true
+        }
+        Err(e) => {
+            set_err(out_error, map_wallet_file_err(&e));
+            false
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1302,5 +1503,231 @@ mod tests {
                 refresh_from_block_height: Some(99),
             }
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // 2k.4: preferences FFI
+    // -----------------------------------------------------------------------
+
+    /// Call `shekyl_wallet_prefs_get_json` with the two-call sizing
+    /// discipline and return (json_bytes, tampered_flag).
+    fn get_prefs_json(h: *mut ShekylWallet) -> (Vec<u8>, bool) {
+        unsafe {
+            let mut need = 0usize;
+            let mut tampered = false;
+            let mut err = 0u32;
+            let ok = shekyl_wallet_prefs_get_json(
+                h,
+                std::ptr::null_mut(),
+                0,
+                &raw mut need,
+                &raw mut tampered,
+                &raw mut err,
+            );
+            assert!(!ok);
+            assert_eq!(err, SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL);
+            assert!(need > 0, "prefs JSON must have non-zero length");
+
+            let mut buf = vec![0u8; need];
+            let mut got = 0usize;
+            let mut tampered2 = false;
+            let mut err2 = 0u32;
+            let ok2 = shekyl_wallet_prefs_get_json(
+                h,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &raw mut got,
+                &raw mut tampered2,
+                &raw mut err2,
+            );
+            assert!(ok2, "prefs_get_json second call failed: {err2}");
+            assert_eq!(err2, SHEKYL_WALLET_ERR_OK);
+            assert_eq!(got, need);
+            assert_eq!(
+                tampered, tampered2,
+                "tamper flag must be stable across probe + read"
+            );
+            (buf, tampered2)
+        }
+    }
+
+    /// On a freshly-created wallet there are no `prefs.toml` files on
+    /// disk yet, so the get path MUST synthesize defaults. Tamper flag
+    /// MUST be false.
+    #[test]
+    fn prefs_get_on_fresh_wallet_returns_defaults_untampered() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("prefs_fresh.wallet");
+        let h = create_with_path(&base);
+
+        let (json, tampered) = get_prefs_json(h);
+        assert!(!tampered);
+
+        // Round-trips through the typed schema.
+        let parsed: WalletPrefs = serde_json::from_slice(&json).expect("valid JSON for defaults");
+        assert_eq!(parsed, WalletPrefs::default());
+
+        unsafe { shekyl_wallet_free(h) };
+    }
+
+    /// Set a mutated prefs blob, verify the get path round-trips it
+    /// byte-identically (after schema round-trip) and that the on-disk
+    /// `.prefs.toml` + `.prefs.toml.hmac` pair now exists.
+    #[test]
+    fn prefs_set_then_get_round_trips_through_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("prefs_rt.wallet");
+        let h = create_with_path(&base);
+
+        // Mutate a single cosmetic field so we can detect persistence
+        // without caring about every default's exact value.
+        let mut prefs = WalletPrefs::default();
+        prefs.cosmetic.always_confirm_transfers = !prefs.cosmetic.always_confirm_transfers;
+        let json = serde_json::to_vec(&prefs).expect("serialize WalletPrefs");
+
+        unsafe {
+            let mut err = 0u32;
+            let ok = shekyl_wallet_prefs_set_json(h, json.as_ptr(), json.len(), &raw mut err);
+            assert!(ok, "prefs_set_json failed: {err}");
+            assert_eq!(err, SHEKYL_WALLET_ERR_OK);
+        }
+
+        // Both companion files MUST exist after save.
+        let toml_path = dir.path().join("prefs_rt.prefs.toml");
+        let hmac_path = dir.path().join("prefs_rt.prefs.toml.hmac");
+        assert!(toml_path.exists(), "{toml_path:?} must exist");
+        assert!(hmac_path.exists(), "{hmac_path:?} must exist");
+
+        let (roundtripped, tampered) = get_prefs_json(h);
+        assert!(!tampered);
+        let got: WalletPrefs = serde_json::from_slice(&roundtripped).unwrap();
+        assert_eq!(got, prefs);
+
+        unsafe { shekyl_wallet_free(h) };
+    }
+
+    /// A Bucket-3 field smuggled through the JSON surface MUST land as
+    /// `SHEKYL_WALLET_ERR_PREFS`. This is the FFI-side guarantee that
+    /// mirrors the TOML-side `deny_unknown_fields` check.
+    #[test]
+    fn prefs_set_rejects_bucket3_field_in_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("prefs_bucket3.wallet");
+        let h = create_with_path(&base);
+
+        // Top-level unknown key; serde_json with deny_unknown_fields
+        // on WalletPrefs must reject this.
+        let json = br#"{"max_reorg_depth":0}"#;
+
+        unsafe {
+            let mut err = 0u32;
+            let ok = shekyl_wallet_prefs_set_json(h, json.as_ptr(), json.len(), &raw mut err);
+            assert!(!ok);
+            assert_eq!(err, SHEKYL_WALLET_ERR_PREFS);
+        }
+
+        unsafe { shekyl_wallet_free(h) };
+    }
+
+    /// Corrupt the on-disk `.prefs.toml.hmac` and confirm the get path
+    /// advisory-fails with `out_was_tampered = true`, returns defaults,
+    /// and quarantines the bad files. A second get call after the
+    /// first one MUST NOT re-report tamper, because the corrupt pair
+    /// has already been moved aside — the UI reports a tamper event
+    /// once, not every subsequent open.
+    #[test]
+    fn prefs_get_surfaces_tamper_and_quarantines() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("prefs_tamper.wallet");
+        let h = create_with_path(&base);
+
+        // First write a legitimate prefs blob so the on-disk files
+        // exist.
+        let prefs = WalletPrefs::default();
+        let json = serde_json::to_vec(&prefs).unwrap();
+        unsafe {
+            let mut err = 0u32;
+            assert!(shekyl_wallet_prefs_set_json(
+                h,
+                json.as_ptr(),
+                json.len(),
+                &raw mut err,
+            ));
+        }
+
+        let hmac_path = dir.path().join("prefs_tamper.prefs.toml.hmac");
+        assert!(hmac_path.exists());
+
+        // Flip a byte in the HMAC so verification fails but the file
+        // is still the correct length.
+        let mut hmac_bytes = std::fs::read(&hmac_path).unwrap();
+        hmac_bytes[0] ^= 0xFF;
+        std::fs::write(&hmac_path, &hmac_bytes).unwrap();
+
+        // First read: sizing probe — must already surface tamper and
+        // quarantine synchronously, because `load_prefs` is called
+        // once per FFI invocation.
+        let (need, tampered_probe) = unsafe {
+            let mut n = 0usize;
+            let mut tampered = false;
+            let mut err = 0u32;
+            let ok = shekyl_wallet_prefs_get_json(
+                h,
+                std::ptr::null_mut(),
+                0,
+                &raw mut n,
+                &raw mut tampered,
+                &raw mut err,
+            );
+            assert!(!ok);
+            // BUFFER_TOO_SMALL is emitted even on the tamper path,
+            // because the advisory-failure semantics synthesize
+            // defaults first and then fall into the standard sizing
+            // probe discipline.
+            assert_eq!(err, SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL);
+            (n, tampered)
+        };
+        assert!(tampered_probe, "mutated HMAC must surface as tamper");
+
+        // The corrupt pair should have been moved aside after that
+        // first probe call (every `load_prefs` triggers quarantine on
+        // failure, even if the caller didn't provide a buffer).
+        assert!(
+            !hmac_path.exists(),
+            "tampered HMAC file must be quarantined",
+        );
+
+        // Second read: fresh buffer. Since the on-disk pair is gone,
+        // the advisory path folds into `Missing` → defaults, with
+        // `tampered = false`. This is the intended UX: report once,
+        // then be quiet.
+        let mut buf = vec![0u8; need];
+        let (returned, tampered_after) = unsafe {
+            let mut got = 0usize;
+            let mut tampered = false;
+            let mut err = 0u32;
+            let ok = shekyl_wallet_prefs_get_json(
+                h,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &raw mut got,
+                &raw mut tampered,
+                &raw mut err,
+            );
+            assert!(ok, "second prefs_get_json failed: {err}");
+            assert_eq!(err, SHEKYL_WALLET_ERR_OK);
+            buf.truncate(got);
+            (buf, tampered)
+        };
+        assert!(
+            !tampered_after,
+            "tamper must not be re-reported after quarantine",
+        );
+
+        // Returned JSON is a valid defaults document.
+        let parsed: WalletPrefs = serde_json::from_slice(&returned).unwrap();
+        assert_eq!(parsed, WalletPrefs::default());
+
+        unsafe { shekyl_wallet_free(h) };
     }
 }

@@ -63,6 +63,10 @@ use shekyl_crypto_pq::wallet_envelope::{
     open_keys_file, open_state_file, rewrap_keys_file_password, seal_keys_file, seal_state_file,
     CapabilityContent, KdfParams, OpenedKeysFile, EXPECTED_CLASSICAL_ADDRESS_BYTES,
 };
+use shekyl_wallet_prefs::{
+    load_prefs as prefs_load_prefs, save_prefs as prefs_save_prefs,
+    LoadOutcome as PrefsLoadOutcome, PrefsHmacKey, WalletPrefs,
+};
 use shekyl_wallet_state::{
     BookkeepingBlock, LedgerBlock, SyncStateBlock, TxMetaBlock, WalletLedger,
 };
@@ -208,6 +212,14 @@ pub struct WalletFileHandle {
     /// [`SafetyOverrides::none`] because `create` is a provisioning
     /// operation, not a user-facing session start.
     overrides: SafetyOverrides,
+    /// HMAC key for the per-wallet `prefs.toml.hmac` companion file,
+    /// derived once at open/create time from `file_kek` and
+    /// `expected_classical_address` under HKDF-Expand per
+    /// `docs/WALLET_PREFS.md §2.2`. Cached for the session so each
+    /// `load_prefs` / `save_prefs` avoids a second Argon2id run.
+    /// Zeroized on drop via [`PrefsHmacKey`]'s `Zeroizing<[u8; 32]>`
+    /// interior; callers never see the raw bytes.
+    prefs_hmac_key: PrefsHmacKey,
     /// Held for Drop semantics; not read after construction.
     _lock: KeysFileLock,
 }
@@ -222,6 +234,7 @@ impl std::fmt::Debug for WalletFileHandle {
             .field("network", &self.network)
             .field("capability", &self.capability)
             .field("overrides", &self.overrides)
+            .field("prefs_hmac_key", &self.prefs_hmac_key)
             .field("_lock", &self._lock)
             .finish()
     }
@@ -246,6 +259,13 @@ impl zeroize::Zeroize for OpenedKeysFileOwned {
         self.0.restore_height_hint = 0;
         self.0.expected_classical_address.zeroize();
         self.0.seed_block_tag.zeroize();
+        // `file_kek` is the 32-byte key that decrypts region 1 and
+        // every `.wallet`. Its `Zeroizing<[u8; 32]>` container already
+        // wipes on drop; this extra call zeroes the bytes eagerly so
+        // they do not linger between the "we're done with the handle"
+        // signal and the actual struct drop. Belt-and-braces, matches
+        // `cap_content` above.
+        self.0.file_kek.zeroize();
     }
 }
 
@@ -303,6 +323,13 @@ impl WalletFileHandle {
         let state_bytes = seal_state_file(params.password, &keys_bytes, &framed)?;
         atomic_write_file(&state_path, &state_bytes)?;
 
+        // Derive the prefs HMAC key once so every subsequent
+        // `load_prefs`/`save_prefs` on this handle avoids re-running
+        // the envelope's Argon2id wrap. See `docs/WALLET_PREFS.md §2.2`
+        // for the derivation formula and security argument.
+        let prefs_hmac_key =
+            PrefsHmacKey::derive(&opened.file_kek, &opened.expected_classical_address);
+
         Ok(Self {
             keys_path,
             state_path,
@@ -312,6 +339,7 @@ impl WalletFileHandle {
             capability,
             // Provisioning path: no user session → no overrides.
             overrides: SafetyOverrides::none(),
+            prefs_hmac_key,
             _lock: lock,
         })
     }
@@ -421,6 +449,12 @@ impl WalletFileHandle {
         // regardless of what the caller does next.
         overrides.log_warn_if_active(network);
 
+        // Derive the prefs HMAC key once from the envelope's
+        // `file_kek` and `expected_classical_address`; cache for the
+        // session so prefs I/O does not pay Argon2id per call.
+        let prefs_hmac_key =
+            PrefsHmacKey::derive(&opened.file_kek, &opened.expected_classical_address);
+
         let handle = Self {
             keys_path,
             state_path,
@@ -429,6 +463,7 @@ impl WalletFileHandle {
             network,
             capability,
             overrides,
+            prefs_hmac_key,
             _lock: lock,
         };
         Ok((handle, outcome))
@@ -473,6 +508,52 @@ impl WalletFileHandle {
             rewrap_keys_file_password(old_password, new_password, &self.keys_file_bytes, new_kdf)?;
         atomic_write_file(&self.keys_path, &new_keys_bytes)?;
         self.keys_file_bytes = new_keys_bytes;
+        Ok(())
+    }
+
+    /// Load the wallet's user preferences from the co-located
+    /// `<base>.prefs.toml` / `<base>.prefs.toml.hmac` pair, verifying
+    /// the HMAC with the session-cached [`PrefsHmacKey`]. The
+    /// advisory failure policy in `docs/WALLET_PREFS.md §5` applies:
+    ///
+    /// * Files absent → [`PrefsLoadOutcome::Missing`] + defaults.
+    /// * Files present & verified → [`PrefsLoadOutcome::Loaded`] with
+    ///   the parsed [`WalletPrefs`].
+    /// * HMAC mismatch, oversize body, parse failure, Bucket-3
+    ///   collision → offenders are quarantined to
+    ///   `<orig>.tampered-<unix_secs>[.N]`, a `WARN` line is logged,
+    ///   and [`PrefsLoadOutcome::Tampered`] is returned carrying
+    ///   defaults. Callers can surface the tamper event in the UI
+    ///   without treating it as a refuse-to-open.
+    ///
+    /// Only hard errors (I/O failure, internal HMAC-length bug) are
+    /// surfaced as [`WalletFileError`]; every advisory tamper
+    /// signal folds into the `LoadOutcome::Tampered` arm so the
+    /// wallet still opens.
+    pub fn load_prefs(&self) -> Result<PrefsLoadOutcome, WalletFileError> {
+        let outcome = prefs_load_prefs(&self.state_path, &self.prefs_hmac_key)?;
+        Ok(outcome)
+    }
+
+    /// Persist `prefs` to `<base>.prefs.toml` + `<base>.prefs.toml.hmac`.
+    /// Both files are written atomically (tmp → fsync → rename →
+    /// fsync(parent)); the TOML body is HMACed with the
+    /// session-cached key. A crash between the two renames leaves a
+    /// body-without-matching-HMAC which the next `load_prefs` treats
+    /// as a tamper event and quarantines — the same code path as an
+    /// attacker-tampered file.
+    ///
+    /// # Errors
+    ///
+    /// * [`WalletFileError::Prefs`] — serialization failure (shouldn't
+    ///   happen for `WalletPrefs`'s built-in schema), HMAC-length bug,
+    ///   or Bucket-3 field slipped through an earlier parser.
+    /// * [`WalletFileError::Io`] / [`WalletFileError::AtomicWriteRename`]
+    ///   — filesystem failures are currently surfaced via the
+    ///   prefs crate's own `PrefsError::Io`; callers should treat
+    ///   both variants as "try again later / check disk".
+    pub fn save_prefs(&self, prefs: &WalletPrefs) -> Result<(), WalletFileError> {
+        prefs_save_prefs(&self.state_path, &self.prefs_hmac_key, prefs)?;
         Ok(())
     }
 
