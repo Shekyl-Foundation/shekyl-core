@@ -85,6 +85,7 @@ target_link_libraries(common
     ${Boost_CHRONO_LIBRARY}
   PRIVATE
     ${OPENSSL_LIBRARIES}
+    ${Boost_PROGRAM_OPTIONS_LIBRARY}
     ${EXTRA_LIBRARIES})
 
 #monero_install_headers(common
