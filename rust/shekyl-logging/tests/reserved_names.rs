@@ -64,8 +64,7 @@ fn line_uses_reserved_target(line: &str, reserved: &[&str]) -> bool {
             if i >= TARGET.len() && &bytes[i - TARGET.len()..i] == TARGET {
                 let before = i - TARGET.len();
                 let prev_is_ident = before > 0
-                    && (bytes[before - 1].is_ascii_alphanumeric()
-                        || bytes[before - 1] == b'_');
+                    && (bytes[before - 1].is_ascii_alphanumeric() || bytes[before - 1] == b'_');
                 if !prev_is_ident {
                     return true;
                 }
@@ -114,10 +113,7 @@ fn visit(dir: &Path, offenders: &mut Vec<(PathBuf, usize, String)>) {
         // The reservation binds callers; we're looking for them, not
         // ourselves. Match on `Path` components so the skip works on
         // Windows (where separators are `\`) and on Unix alike.
-        if path
-            .components()
-            .any(|c| c.as_os_str() == "shekyl-logging")
-        {
+        if path.components().any(|c| c.as_os_str() == "shekyl-logging") {
             continue;
         }
         let Ok(contents) = fs::read_to_string(&path) else {

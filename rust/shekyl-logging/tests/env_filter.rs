@@ -8,7 +8,7 @@
 use tracing::Level;
 
 use shekyl_logging::{
-    directives_from_legacy_categories, FilterError, SHEKYL_LOG_ENV, TranslationReport,
+    directives_from_legacy_categories, FilterError, TranslationReport, SHEKYL_LOG_ENV,
 };
 
 // -----------------------------------------------------------------------
@@ -61,12 +61,12 @@ fn legacy_categories_fixture_passes() {
         let Some((expect, spec)) = parse_line(raw) else {
             continue;
         };
-        let result =
-            directives_from_legacy_categories(None, &spec, Level::WARN);
+        let result = directives_from_legacy_categories(None, &spec, Level::WARN);
         match (expect, result) {
             (Expect::Ok(expected), Ok(report)) => {
                 assert_eq!(
-                    report.directive, expected,
+                    report.directive,
+                    expected,
                     "line {} spec {:?}: expected directive {:?}, got {:?}",
                     lineno + 1,
                     spec,
@@ -152,10 +152,7 @@ struct EnvGuard<'a> {
 }
 
 impl<'a> EnvGuard<'a> {
-    fn apply(
-        lock: std::sync::MutexGuard<'a, ()>,
-        vars: &[(&str, Option<&str>)],
-    ) -> Self {
+    fn apply(lock: std::sync::MutexGuard<'a, ()>, vars: &[(&str, Option<&str>)]) -> Self {
         let saved: Vec<(String, Option<String>)> = vars
             .iter()
             .map(|(k, _)| ((*k).to_owned(), std::env::var(*k).ok()))
@@ -204,8 +201,7 @@ fn unset_shekyl_log_uses_fallback_default() {
         // resolve_env_filter is crate-internal; we exercise it via init
         // indirectly in defaults.rs. Here, verify the translator
         // fallback at least does what we promise when called manually.
-        let report =
-            directives_from_legacy_categories(None, "", Level::INFO).unwrap();
+        let report = directives_from_legacy_categories(None, "", Level::INFO).unwrap();
         assert_eq!(report.directive, "info");
     });
 }

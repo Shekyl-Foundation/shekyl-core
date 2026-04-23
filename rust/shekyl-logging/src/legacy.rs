@@ -728,12 +728,7 @@ mod tests {
 
     #[test]
     fn remove_modifier_against_current() {
-        let report = translate(
-            Some("*:WARNING,net:ERROR,foo:INFO"),
-            "-foo",
-            DEFAULT,
-        )
-        .unwrap();
+        let report = translate(Some("*:WARNING,net:ERROR,foo:INFO"), "-foo", DEFAULT).unwrap();
         assert_eq!(report.directive, "warn,net=error");
     }
 

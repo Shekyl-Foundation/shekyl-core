@@ -162,7 +162,9 @@ fn chmod_matching_files_0600(dir: &Path, prefix: &str) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let name = entry.file_name();
-        let Some(name_str) = name.to_str() else { continue };
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
         if !name_str.starts_with(prefix) {
             continue;
         }
@@ -346,7 +348,9 @@ impl SizeRollingWriter {
         for entry in fs::read_dir(&self.dir)? {
             let entry = entry?;
             let name = entry.file_name();
-            let Some(name_str) = name.to_str() else { continue };
+            let Some(name_str) = name.to_str() else {
+                continue;
+            };
             // Rotated files all start with `{prefix}-`. Using the
             // exact `{prefix}-` separator instead of a bare
             // `starts_with(prefix)` avoids matching the live file
@@ -460,11 +464,7 @@ fn utc_rotation_suffix() -> String {
 /// when two rollovers landed in the same UTC second. We append a `.N`
 /// disambiguator instead. Bounded to 1024 attempts so a pathological
 /// state can't spin forever.
-fn pick_nonexistent_rotated_path(
-    dir: &Path,
-    prefix: &str,
-    suffix: &str,
-) -> io::Result<PathBuf> {
+fn pick_nonexistent_rotated_path(dir: &Path, prefix: &str, suffix: &str) -> io::Result<PathBuf> {
     let base = dir.join(format!("{prefix}-{suffix}"));
     if !base.exists() {
         return Ok(base);
@@ -599,7 +599,10 @@ mod size_rolling_tests {
         // Live file must be 0600.
         let live = dir.path().join(prefix);
         let live_mode = fs::metadata(&live).unwrap().permissions().mode() & 0o777;
-        assert_eq!(live_mode, 0o600, "live file mode must be 0600, got {live_mode:o}");
+        assert_eq!(
+            live_mode, 0o600,
+            "live file mode must be 0600, got {live_mode:o}"
+        );
 
         // Rotated sibling must be 0600.
         let rotated = fs::read_dir(dir.path())
@@ -639,7 +642,9 @@ mod size_rolling_tests {
         // the prune path; the total runtime stays under a couple
         // seconds.
         for i in 0..6 {
-            writer.write_all(format!("roll{i}AAAA").as_bytes()).expect("write");
+            writer
+                .write_all(format!("roll{i}AAAA").as_bytes())
+                .expect("write");
             writer.flush().expect("flush");
             std::thread::sleep(std::time::Duration::from_millis(1100));
         }
@@ -663,8 +668,8 @@ mod size_rolling_tests {
         // First "session": write 10 bytes into a writer with a 1-MB
         // cap. No rollover happens; the file ends with 10 bytes.
         {
-            let mut w = SizeRollingWriter::new(dir.path(), prefix, 1024 * 1024, 0)
-                .expect("first open");
+            let mut w =
+                SizeRollingWriter::new(dir.path(), prefix, 1024 * 1024, 0).expect("first open");
             w.write_all(b"session-01").expect("write");
             w.flush().expect("flush");
             drop(w);
@@ -675,8 +680,8 @@ mod size_rolling_tests {
         // size so the next write doesn't silently reset the counter
         // and overshoot `max_bytes`.
         {
-            let mut w = SizeRollingWriter::new(dir.path(), prefix, 1024 * 1024, 0)
-                .expect("second open");
+            let mut w =
+                SizeRollingWriter::new(dir.path(), prefix, 1024 * 1024, 0).expect("second open");
             w.write_all(b"-02").expect("write");
             w.flush().expect("flush");
             drop(w);
@@ -697,7 +702,9 @@ mod size_rolling_tests {
         let mut writer =
             SizeRollingWriter::new(dir.path(), prefix, 4, 0).expect("construct writer");
         for i in 0..5 {
-            writer.write_all(format!("roll{i}").as_bytes()).expect("write");
+            writer
+                .write_all(format!("roll{i}").as_bytes())
+                .expect("write");
             writer.flush().expect("flush");
             // Sleep so each rotation lands in a distinct UTC second
             // and the rename collision path isn't exercised.

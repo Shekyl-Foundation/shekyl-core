@@ -313,7 +313,9 @@ fn install_for_ffi(config: Config) -> i32 {
             // only reachable when `__register_reload_handle` ran
             // first — which means `install_subscriber` above has
             // already bumped `INITIALIZED`, so we're the real init.
-            let fresh = mutex_with_state.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let fresh = mutex_with_state
+                .into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(cell) = FFI_STATE.get() {
                 let mut existing = match cell.lock() {
                     Ok(g) => g,
@@ -432,16 +434,25 @@ pub unsafe extern "C" fn shekyl_log_emit(
         }
         let fields = meta.fields();
         let message_field = fields.field("message").expect("'message' field registered");
-        let file_field = fields.field("log.file").expect("'log.file' field registered");
-        let line_field = fields.field("log.line").expect("'log.line' field registered");
-        let func_field = fields.field("log.func").expect("'log.func' field registered");
+        let file_field = fields
+            .field("log.file")
+            .expect("'log.file' field registered");
+        let line_field = fields
+            .field("log.line")
+            .expect("'log.line' field registered");
+        let func_field = fields
+            .field("log.func")
+            .expect("'log.func' field registered");
 
         let line_u64 = u64::from(line);
         let values: [(
             &tracing_core::field::Field,
             Option<&dyn tracing_core::field::Value>,
         ); 4] = [
-            (&message_field, Some(&msg as &dyn tracing_core::field::Value)),
+            (
+                &message_field,
+                Some(&msg as &dyn tracing_core::field::Value),
+            ),
             (&file_field, Some(&file as &dyn tracing_core::field::Value)),
             (
                 &line_field,
@@ -495,24 +506,23 @@ pub unsafe extern "C" fn shekyl_log_set_categories(
         set_last_error("shekyl_log_set_categories: logger not initialized");
         return SHEKYL_LOG_ERR_NOT_INITIALIZED;
     };
-    let mut state = cell.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut state = cell
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let current_spec = if state.current_directive.is_empty() {
         None
     } else {
         Some(state.current_directive.as_str())
     };
-    let translation = match legacy_filter::directives_from_legacy_categories(
-        current_spec,
-        spec,
-        fallback,
-    ) {
-        Ok(t) => t,
-        Err(e) => {
-            let code = filter_error_to_code(&e);
-            set_last_error(e.to_string());
-            return code;
-        }
-    };
+    let translation =
+        match legacy_filter::directives_from_legacy_categories(current_spec, spec, fallback) {
+            Ok(t) => t,
+            Err(e) => {
+                let code = filter_error_to_code(&e);
+                set_last_error(e.to_string());
+                return code;
+            }
+        };
 
     let new_filter = match EnvFilter::try_new(&translation.directive) {
         Ok(f) => f,
@@ -578,10 +588,7 @@ pub unsafe extern "C" fn shekyl_log_set_level(numeric_level: u8) -> i32 {
 /// If `out_cap > 0`, `out_ptr` must be non-null and point at a
 /// writable byte region of at least `out_cap` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_log_get_categories(
-    out_ptr: *mut c_char,
-    out_cap: usize,
-) -> usize {
+pub unsafe extern "C" fn shekyl_log_get_categories(out_ptr: *mut c_char, out_cap: usize) -> usize {
     let Some(cell) = FFI_STATE.get() else {
         return 0;
     };
@@ -931,7 +938,10 @@ mod tests {
     #[test]
     fn normalize_target_rewrites_dots_to_double_colons() {
         assert_eq!(normalize_target("net.p2p"), "net::p2p");
-        assert_eq!(normalize_target("daemon.rpc.payment"), "daemon::rpc::payment");
+        assert_eq!(
+            normalize_target("daemon.rpc.payment"),
+            "daemon::rpc::payment"
+        );
     }
 
     /// Already-colonized targets round-trip unchanged (idempotent).
