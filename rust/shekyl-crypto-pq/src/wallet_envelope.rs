@@ -257,7 +257,11 @@ pub struct KdfParams {
 
 impl Default for KdfParams {
     fn default() -> Self {
-        Self { m_log2: DEFAULT_KDF_M_LOG2, t: DEFAULT_KDF_T, p: DEFAULT_KDF_P }
+        Self {
+            m_log2: DEFAULT_KDF_M_LOG2,
+            t: DEFAULT_KDF_T,
+            p: DEFAULT_KDF_P,
+        }
     }
 }
 
@@ -332,12 +336,21 @@ impl CapabilityContent<'_> {
     fn write_into(&self, out: &mut Vec<u8>) {
         match self {
             Self::Full { master_seed_64 } => out.extend_from_slice(master_seed_64.as_slice()),
-            Self::ViewOnly { view_sk, ml_kem_dk, spend_pk } => {
+            Self::ViewOnly {
+                view_sk,
+                ml_kem_dk,
+                spend_pk,
+            } => {
                 out.extend_from_slice(view_sk.as_slice());
                 out.extend_from_slice(ml_kem_dk.as_slice());
                 out.extend_from_slice(spend_pk.as_slice());
             }
-            Self::HardwareOffload { view_sk, ml_kem_dk, spend_pk, device_desc } => {
+            Self::HardwareOffload {
+                view_sk,
+                ml_kem_dk,
+                spend_pk,
+                device_desc,
+            } => {
                 out.extend_from_slice(view_sk.as_slice());
                 out.extend_from_slice(ml_kem_dk.as_slice());
                 out.extend_from_slice(spend_pk.as_slice());
@@ -408,15 +421,20 @@ fn derive_wrap_key(
     kdf: KdfParams,
 ) -> Result<Zeroizing<[u8; WRAP_KEY_BYTES]>, WalletEnvelopeError> {
     kdf.validate()?;
-    let m_cost_kib: u32 = 1u32
-        .checked_shl(u32::from(kdf.m_log2))
-        .ok_or(WalletEnvelopeError::KdfParamsOutOfRange {
+    let m_cost_kib: u32 = 1u32.checked_shl(u32::from(kdf.m_log2)).ok_or(
+        WalletEnvelopeError::KdfParamsOutOfRange {
             m_log2: kdf.m_log2,
             t: kdf.t,
             p: kdf.p,
-        })?;
-    let params = Params::new(m_cost_kib, u32::from(kdf.t), u32::from(kdf.p), Some(WRAP_KEY_BYTES))
-        .map_err(|e| WalletEnvelopeError::Internal(format!("Argon2 params: {e}")))?;
+        },
+    )?;
+    let params = Params::new(
+        m_cost_kib,
+        u32::from(kdf.t),
+        u32::from(kdf.p),
+        Some(WRAP_KEY_BYTES),
+    )
+    .map_err(|e| WalletEnvelopeError::Internal(format!("Argon2 params: {e}")))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut out = Zeroizing::new([0u8; WRAP_KEY_BYTES]);
     argon2
@@ -514,14 +532,15 @@ fn parse_header_view(bytes: &[u8]) -> Result<KeysFileHeaderView, WalletEnvelopeE
     }
     let mut wrap_salt = [0u8; WRAP_SALT_BYTES];
     wrap_salt.copy_from_slice(&bytes[OFF_WRAP_SALT..OFF_WRAP_COUNT]);
-    Ok(KeysFileHeaderView { format_version: ver, kdf, wrap_salt, wrap_count })
+    Ok(KeysFileHeaderView {
+        format_version: ver,
+        kdf,
+        wrap_salt,
+        wrap_count,
+    })
 }
 
-fn write_keys_file_header(
-    out: &mut Vec<u8>,
-    kdf: KdfParams,
-    wrap_salt: &[u8; WRAP_SALT_BYTES],
-) {
+fn write_keys_file_header(out: &mut Vec<u8>, kdf: KdfParams, wrap_salt: &[u8; WRAP_SALT_BYTES]) {
     out.extend_from_slice(KEYS_FILE_MAGIC);
     out.push(WALLET_FILE_FORMAT_VERSION);
     out.push(KDF_ALGO_ARGON2ID);
@@ -541,9 +560,7 @@ fn validate_cap_content(mode: u8, cap_len: u16) -> Result<(), WalletEnvelopeErro
         CAPABILITY_FULL => 64,
         CAPABILITY_VIEW_ONLY => 32 + ML_KEM_768_DK_LEN + 32,
         CAPABILITY_HARDWARE_OFFLOAD => 32 + ML_KEM_768_DK_LEN + 32 + 2, // u16 device_len prefix
-        CAPABILITY_RESERVED_MULTISIG => {
-            return Err(WalletEnvelopeError::RequiresMultisigSupport)
-        }
+        CAPABILITY_RESERVED_MULTISIG => return Err(WalletEnvelopeError::RequiresMultisigSupport),
         other => return Err(WalletEnvelopeError::UnknownCapabilityMode(other)),
     };
     let cap_len_usize = usize::from(cap_len);
@@ -627,10 +644,7 @@ pub(crate) fn seal_keys_file_with_entropy(
         .map_err(|_| WalletEnvelopeError::Internal("cap_content exceeds u16::MAX".into()))?;
 
     let mut out = Vec::with_capacity(
-        OFF_REGION1_CT
-            + R1_MIN_PLAINTEXT_BYTES
-            + usize::from(cap_len)
-            + AEAD_TAG_BYTES,
+        OFF_REGION1_CT + R1_MIN_PLAINTEXT_BYTES + usize::from(cap_len) + AEAD_TAG_BYTES,
     );
     write_keys_file_header(&mut out, kdf, wrap_salt);
     out.extend_from_slice(wrap_nonce);
@@ -647,8 +661,9 @@ pub(crate) fn seal_keys_file_with_entropy(
 
     out.extend_from_slice(region1_nonce);
 
-    let mut region1_plain: Zeroizing<Vec<u8>> =
-        Zeroizing::new(Vec::with_capacity(R1_MIN_PLAINTEXT_BYTES + usize::from(cap_len)));
+    let mut region1_plain: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(
+        R1_MIN_PLAINTEXT_BYTES + usize::from(cap_len),
+    ));
     region1_plain.push(capability.mode_byte());
     region1_plain.push(network);
     region1_plain.push(seed_format);
@@ -692,8 +707,7 @@ pub fn open_keys_file(
         .expect("slice length pinned by constants");
     let mut file_kek_buf: Zeroizing<Vec<u8>> =
         Zeroizing::new(bytes[OFF_WRAP_CT..OFF_WRAP_CT + FILE_KEK_BYTES].to_vec());
-    let wrap_tag: [u8; AEAD_TAG_BYTES] = bytes
-        [OFF_WRAP_CT + FILE_KEK_BYTES..OFF_WRAP_CT_END]
+    let wrap_tag: [u8; AEAD_TAG_BYTES] = bytes[OFF_WRAP_CT + FILE_KEK_BYTES..OFF_WRAP_CT_END]
         .try_into()
         .expect("slice length pinned by constants");
     let wrap_aad: &[u8] = &bytes[OFF_MAGIC..OFF_WRAP_COUNT];
@@ -741,7 +755,8 @@ pub fn open_keys_file(
     let seed_format = region1_plain[R1_OFF_SEED_FORMAT];
     let mut expected_addr = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
     expected_addr.copy_from_slice(
-        &region1_plain[R1_OFF_EXPECTED_ADDR..R1_OFF_EXPECTED_ADDR + EXPECTED_CLASSICAL_ADDRESS_BYTES],
+        &region1_plain
+            [R1_OFF_EXPECTED_ADDR..R1_OFF_EXPECTED_ADDR + EXPECTED_CLASSICAL_ADDRESS_BYTES],
     );
     let cap_len = u16::from_le_bytes(
         region1_plain[R1_OFF_CAP_LEN..R1_OFF_CAP_LEN + 2]
@@ -790,16 +805,19 @@ pub fn rewrap_keys_file_password(
     new_kdf: Option<KdfParams>,
 ) -> Result<Vec<u8>, WalletEnvelopeError> {
     let view = parse_header_view(bytes)?;
-    expect_at_least(bytes, OFF_REGION1_CT + AEAD_TAG_BYTES + R1_MIN_PLAINTEXT_BYTES)?;
+    expect_at_least(
+        bytes,
+        OFF_REGION1_CT + AEAD_TAG_BYTES + R1_MIN_PLAINTEXT_BYTES,
+    )?;
 
     // Recover file_kek under the old password, identically to open_keys_file.
     let old_wrap_key = derive_wrap_key(old_password, &view.wrap_salt, view.kdf)?;
-    let wrap_nonce_old: [u8; AEAD_NONCE_BYTES] =
-        bytes[OFF_WRAP_NONCE..OFF_WRAP_CT].try_into().expect("pinned");
+    let wrap_nonce_old: [u8; AEAD_NONCE_BYTES] = bytes[OFF_WRAP_NONCE..OFF_WRAP_CT]
+        .try_into()
+        .expect("pinned");
     let mut file_kek_buf: Zeroizing<Vec<u8>> =
         Zeroizing::new(bytes[OFF_WRAP_CT..OFF_WRAP_CT + FILE_KEK_BYTES].to_vec());
-    let wrap_tag_old: [u8; AEAD_TAG_BYTES] = bytes
-        [OFF_WRAP_CT + FILE_KEK_BYTES..OFF_WRAP_CT_END]
+    let wrap_tag_old: [u8; AEAD_TAG_BYTES] = bytes[OFF_WRAP_CT + FILE_KEK_BYTES..OFF_WRAP_CT_END]
         .try_into()
         .expect("pinned");
     let wrap_aad_old: &[u8] = &bytes[OFF_MAGIC..OFF_WRAP_COUNT];
@@ -826,8 +844,12 @@ pub fn rewrap_keys_file_password(
     let wrap_aad_new: &[u8] = &out[OFF_MAGIC..OFF_WRAP_COUNT];
     let new_wrap_key = derive_wrap_key(new_password, &wrap_salt_new, new_kdf)?;
     let mut file_kek_ct_new: Vec<u8> = file_kek_buf.to_vec();
-    let wrap_tag_new =
-        aead_encrypt(&new_wrap_key, &wrap_nonce_new, wrap_aad_new, &mut file_kek_ct_new)?;
+    let wrap_tag_new = aead_encrypt(
+        &new_wrap_key,
+        &wrap_nonce_new,
+        wrap_aad_new,
+        &mut file_kek_ct_new,
+    )?;
     out.extend_from_slice(&file_kek_ct_new);
     out.extend_from_slice(&wrap_tag_new);
 
@@ -874,12 +896,7 @@ pub fn seal_state_file(
     state_plaintext: &[u8],
 ) -> Result<Vec<u8>, WalletEnvelopeError> {
     let region2_nonce: [u8; AEAD_NONCE_BYTES] = fresh_random_bytes();
-    seal_state_file_with_entropy(
-        password,
-        keys_file_bytes,
-        state_plaintext,
-        &region2_nonce,
-    )
+    seal_state_file_with_entropy(password, keys_file_bytes, state_plaintext, &region2_nonce)
 }
 
 /// Deterministic state-seal helper. Used by [`seal_state_file`] (with
@@ -897,14 +914,15 @@ pub(crate) fn seal_state_file_with_entropy(
     expect_at_least(keys_file_bytes, OFF_REGION1_CT + AEAD_TAG_BYTES)?;
 
     let wrap_key = derive_wrap_key(password, &view.wrap_salt, view.kdf)?;
-    let wrap_nonce: [u8; AEAD_NONCE_BYTES] =
-        keys_file_bytes[OFF_WRAP_NONCE..OFF_WRAP_CT].try_into().expect("pinned");
+    let wrap_nonce: [u8; AEAD_NONCE_BYTES] = keys_file_bytes[OFF_WRAP_NONCE..OFF_WRAP_CT]
+        .try_into()
+        .expect("pinned");
     let mut file_kek_buf: Zeroizing<Vec<u8>> =
         Zeroizing::new(keys_file_bytes[OFF_WRAP_CT..OFF_WRAP_CT + FILE_KEK_BYTES].to_vec());
-    let wrap_tag: [u8; AEAD_TAG_BYTES] =
-        keys_file_bytes[OFF_WRAP_CT + FILE_KEK_BYTES..OFF_WRAP_CT_END]
-            .try_into()
-            .expect("pinned");
+    let wrap_tag: [u8; AEAD_TAG_BYTES] = keys_file_bytes
+        [OFF_WRAP_CT + FILE_KEK_BYTES..OFF_WRAP_CT_END]
+        .try_into()
+        .expect("pinned");
     let wrap_aad: &[u8] = &keys_file_bytes[OFF_MAGIC..OFF_WRAP_COUNT];
     aead_decrypt(
         &wrap_key,
@@ -960,14 +978,15 @@ pub fn open_state_file(
     let view = parse_header_view(keys_file_bytes)?;
     expect_at_least(keys_file_bytes, OFF_REGION1_CT + AEAD_TAG_BYTES)?;
     let wrap_key = derive_wrap_key(password, &view.wrap_salt, view.kdf)?;
-    let wrap_nonce: [u8; AEAD_NONCE_BYTES] =
-        keys_file_bytes[OFF_WRAP_NONCE..OFF_WRAP_CT].try_into().expect("pinned");
+    let wrap_nonce: [u8; AEAD_NONCE_BYTES] = keys_file_bytes[OFF_WRAP_NONCE..OFF_WRAP_CT]
+        .try_into()
+        .expect("pinned");
     let mut file_kek_buf: Zeroizing<Vec<u8>> =
         Zeroizing::new(keys_file_bytes[OFF_WRAP_CT..OFF_WRAP_CT + FILE_KEK_BYTES].to_vec());
-    let wrap_tag: [u8; AEAD_TAG_BYTES] =
-        keys_file_bytes[OFF_WRAP_CT + FILE_KEK_BYTES..OFF_WRAP_CT_END]
-            .try_into()
-            .expect("pinned");
+    let wrap_tag: [u8; AEAD_TAG_BYTES] = keys_file_bytes
+        [OFF_WRAP_CT + FILE_KEK_BYTES..OFF_WRAP_CT_END]
+        .try_into()
+        .expect("pinned");
     let wrap_aad: &[u8] = &keys_file_bytes[OFF_MAGIC..OFF_WRAP_COUNT];
     aead_decrypt(
         &wrap_key,
@@ -984,8 +1003,9 @@ pub fn open_state_file(
     let mut seed_block_tag = [0u8; AEAD_TAG_BYTES];
     seed_block_tag.copy_from_slice(&keys_file_bytes[keys_file_bytes.len() - AEAD_TAG_BYTES..]);
 
-    let region2_nonce: [u8; AEAD_NONCE_BYTES] =
-        state_file_bytes[S_OFF_NONCE..S_OFF_CT].try_into().expect("pinned");
+    let region2_nonce: [u8; AEAD_NONCE_BYTES] = state_file_bytes[S_OFF_NONCE..S_OFF_CT]
+        .try_into()
+        .expect("pinned");
     let region2_ct_end = state_file_bytes.len() - AEAD_TAG_BYTES;
     let mut region2_plain: Zeroizing<Vec<u8>> =
         Zeroizing::new(state_file_bytes[S_OFF_CT..region2_ct_end].to_vec());
@@ -1029,7 +1049,11 @@ mod tests {
     // test suite runs in seconds on a commodity laptop. Production wallets
     // use DEFAULT_KDF_* (64 MiB, t=3, p=1).
     fn kat_kdf() -> KdfParams {
-        KdfParams { m_log2: 8, t: 1, p: 1 }
+        KdfParams {
+            m_log2: 8,
+            t: 1,
+            p: 1,
+        }
     }
 
     fn dummy_address() -> [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES] {
@@ -1044,7 +1068,9 @@ mod tests {
     fn roundtrip_full_mainnet() {
         let seed = [0x11u8; 64];
         let pw = b"correct horse battery staple";
-        let cap = CapabilityContent::Full { master_seed_64: &seed };
+        let cap = CapabilityContent::Full {
+            master_seed_64: &seed,
+        };
         let addr = dummy_address();
         let bytes = seal_keys_file(pw, 0, 0, &cap, 1_700_000_000, 2_500_000, &addr, kat_kdf())
             .expect("seal");
@@ -1101,9 +1127,13 @@ mod tests {
         assert_eq!(opened.capability_mode, CAPABILITY_HARDWARE_OFFLOAD);
         // Skip over the fixed prefix and check device descriptor.
         let dd_off = 32 + ML_KEM_768_DK_LEN + 32;
-        let dev_len = u16::from_le_bytes([opened.cap_content[dd_off], opened.cap_content[dd_off + 1]]);
+        let dev_len =
+            u16::from_le_bytes([opened.cap_content[dd_off], opened.cap_content[dd_off + 1]]);
         assert_eq!(usize::from(dev_len), device_desc.len());
-        assert_eq!(&opened.cap_content[dd_off + 2..dd_off + 2 + device_desc.len()], device_desc);
+        assert_eq!(
+            &opened.cap_content[dd_off + 2..dd_off + 2 + device_desc.len()],
+            device_desc
+        );
     }
 
     #[test]
@@ -1111,12 +1141,14 @@ mod tests {
         let seed = [0x77u8; 64];
         let pw_old = b"old pw";
         let pw_new = b"new pw";
-        let cap = CapabilityContent::Full { master_seed_64: &seed };
+        let cap = CapabilityContent::Full {
+            master_seed_64: &seed,
+        };
         let addr = dummy_address();
         let bytes_before =
             seal_keys_file(pw_old, 0, 0, &cap, 0, 0, &addr, kat_kdf()).expect("seal");
-        let bytes_after = rewrap_keys_file_password(pw_old, pw_new, &bytes_before, None)
-            .expect("rewrap");
+        let bytes_after =
+            rewrap_keys_file_password(pw_old, pw_new, &bytes_before, None).expect("rewrap");
 
         // Seed region runs from OFF_REGION1_NONCE to end of file.
         assert_eq!(
@@ -1143,7 +1175,9 @@ mod tests {
     #[test]
     fn wrong_password_rejected() {
         let seed = [0u8; 64];
-        let cap = CapabilityContent::Full { master_seed_64: &seed };
+        let cap = CapabilityContent::Full {
+            master_seed_64: &seed,
+        };
         let bytes =
             seal_keys_file(b"right", 0, 0, &cap, 0, 0, &dummy_address(), kat_kdf()).unwrap();
         let err = open_keys_file(b"wrong", &bytes).unwrap_err();
@@ -1152,28 +1186,37 @@ mod tests {
 
     #[test]
     fn tamper_magic_fails() {
-        let cap = CapabilityContent::Full { master_seed_64: &[0u8; 64] };
+        let cap = CapabilityContent::Full {
+            master_seed_64: &[0u8; 64],
+        };
         let mut bytes =
             seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), kat_kdf()).unwrap();
         bytes[0] ^= 0x80;
-        assert!(matches!(inspect_keys_file(&bytes), Err(WalletEnvelopeError::BadMagic)));
+        assert!(matches!(
+            inspect_keys_file(&bytes),
+            Err(WalletEnvelopeError::BadMagic)
+        ));
     }
 
     #[test]
     fn tamper_kdf_params_fails_authentication() {
-        let cap = CapabilityContent::Full { master_seed_64: &[0u8; 64] };
+        let cap = CapabilityContent::Full {
+            master_seed_64: &[0u8; 64],
+        };
         let mut bytes =
             seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), kat_kdf()).unwrap();
         bytes[OFF_KDF_T] = 0x05; // legitimate value, but not the one sealed with
-        // parse_header_view now uses the wrong kdf_t; Argon2id derives a
-        // different wrap_key; wrap AEAD fails; we see InvalidPasswordOrCorrupt.
+                                 // parse_header_view now uses the wrong kdf_t; Argon2id derives a
+                                 // different wrap_key; wrap AEAD fails; we see InvalidPasswordOrCorrupt.
         let err = open_keys_file(b"pw", &bytes).unwrap_err();
         assert!(matches!(err, WalletEnvelopeError::InvalidPasswordOrCorrupt));
     }
 
     #[test]
     fn tamper_region1_ciphertext_fails() {
-        let cap = CapabilityContent::Full { master_seed_64: &[0u8; 64] };
+        let cap = CapabilityContent::Full {
+            master_seed_64: &[0u8; 64],
+        };
         let mut bytes =
             seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), kat_kdf()).unwrap();
         // Flip a bit somewhere inside region 1 ciphertext.
@@ -1197,18 +1240,26 @@ mod tests {
     #[test]
     fn reject_unknown_capability_mode() {
         let err = validate_cap_content(0x07, 0).unwrap_err();
-        assert!(matches!(err, WalletEnvelopeError::UnknownCapabilityMode(0x07)));
+        assert!(matches!(
+            err,
+            WalletEnvelopeError::UnknownCapabilityMode(0x07)
+        ));
     }
 
     #[test]
     fn reject_format_version_too_new() {
-        let cap = CapabilityContent::Full { master_seed_64: &[0u8; 64] };
+        let cap = CapabilityContent::Full {
+            master_seed_64: &[0u8; 64],
+        };
         let mut bytes =
             seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &dummy_address(), kat_kdf()).unwrap();
         bytes[OFF_FILE_VERSION] = 0xFF;
         assert!(matches!(
             inspect_keys_file(&bytes),
-            Err(WalletEnvelopeError::FormatVersionTooNew { got: 0xFF, max: 0x01 })
+            Err(WalletEnvelopeError::FormatVersionTooNew {
+                got: 0xFF,
+                max: 0x01
+            })
         ));
     }
 
@@ -1217,8 +1268,12 @@ mod tests {
         let seed_a = [0xAAu8; 64];
         let seed_b = [0xBBu8; 64];
         let pw = b"shared pw";
-        let cap_a = CapabilityContent::Full { master_seed_64: &seed_a };
-        let cap_b = CapabilityContent::Full { master_seed_64: &seed_b };
+        let cap_a = CapabilityContent::Full {
+            master_seed_64: &seed_a,
+        };
+        let cap_b = CapabilityContent::Full {
+            master_seed_64: &seed_b,
+        };
         let addr = dummy_address();
         let keys_a = seal_keys_file(pw, 0, 0, &cap_a, 0, 0, &addr, kat_kdf()).unwrap();
         let keys_b = seal_keys_file(pw, 0, 0, &cap_b, 0, 0, &addr, kat_kdf()).unwrap();
@@ -1241,7 +1296,9 @@ mod tests {
         let seed = [0xCCu8; 64];
         let pw_old = b"old";
         let pw_new = b"new";
-        let cap = CapabilityContent::Full { master_seed_64: &seed };
+        let cap = CapabilityContent::Full {
+            master_seed_64: &seed,
+        };
         let addr = dummy_address();
         let keys_v1 = seal_keys_file(pw_old, 0, 0, &cap, 0, 0, &addr, kat_kdf()).unwrap();
         let state_plain = b"state across rotation";
@@ -1259,14 +1316,19 @@ mod tests {
         let ek_direct: [u8; ML_KEM_768_EK_LEN] = ek.into_bytes();
         let dk_bytes: [u8; ML_KEM_768_DK_LEN] = dk.into_bytes();
         let ek_extracted = ek_from_dk(&dk_bytes);
-        assert_eq!(ek_extracted, ek_direct, "FIPS 203 ek offset in dk layout drifted");
+        assert_eq!(
+            ek_extracted, ek_direct,
+            "FIPS 203 ek offset in dk layout drifted"
+        );
     }
 
     #[test]
     fn auto_save_state_file_has_fresh_nonce() {
         let seed = [0xDDu8; 64];
         let pw = b"pw";
-        let cap = CapabilityContent::Full { master_seed_64: &seed };
+        let cap = CapabilityContent::Full {
+            master_seed_64: &seed,
+        };
         let keys = seal_keys_file(pw, 0, 0, &cap, 0, 0, &dummy_address(), kat_kdf()).unwrap();
         let s1 = seal_state_file(pw, &keys, b"payload").unwrap();
         let s2 = seal_state_file(pw, &keys, b"payload").unwrap();
@@ -1281,7 +1343,10 @@ mod tests {
         // produce BadMagic so wallet2.cpp can show the "restore from seed"
         // message.
         let fake = [0u8; 200];
-        assert!(matches!(inspect_keys_file(&fake), Err(WalletEnvelopeError::BadMagic)));
+        assert!(matches!(
+            inspect_keys_file(&fake),
+            Err(WalletEnvelopeError::BadMagic)
+        ));
     }
 
     #[test]
@@ -1293,23 +1358,25 @@ mod tests {
         // bytes invalidate the wrap AEAD).
         let seed = [0x99u8; 64];
         let pw: &[u8] = b"tamper-pw";
-        let cap = CapabilityContent::Full { master_seed_64: &seed };
+        let cap = CapabilityContent::Full {
+            master_seed_64: &seed,
+        };
         let bytes = seal_keys_file(pw, 0, 0, &cap, 1, 2, &dummy_address(), kat_kdf()).unwrap();
 
         // Check a representative byte in each region rather than every byte
         // (would bloat test time with many Argon2 calls). One byte per region
         // is enough to pin down "every section is authenticated".
         let offsets = [
-            OFF_MAGIC,              // magic
-            OFF_FILE_VERSION,       // file_version
-            OFF_KDF_ALGO,           // wrap-AAD kdf
-            OFF_WRAP_SALT,          // wrap_salt
-            OFF_WRAP_NONCE,         // wrap_nonce
-            OFF_WRAP_CT,            // wrap ciphertext
+            OFF_MAGIC,                    // magic
+            OFF_FILE_VERSION,             // file_version
+            OFF_KDF_ALGO,                 // wrap-AAD kdf
+            OFF_WRAP_SALT,                // wrap_salt
+            OFF_WRAP_NONCE,               // wrap_nonce
+            OFF_WRAP_CT,                  // wrap ciphertext
             OFF_WRAP_CT + FILE_KEK_BYTES, // wrap tag
-            OFF_REGION1_NONCE,      // region1 nonce
-            OFF_REGION1_CT,         // region1 ciphertext
-            bytes.len() - 1,        // region1 tag trailing byte
+            OFF_REGION1_NONCE,            // region1 nonce
+            OFF_REGION1_CT,               // region1 ciphertext
+            bytes.len() - 1,              // region1 tag trailing byte
         ];
         for off in offsets {
             let mut b = bytes.clone();
@@ -1340,9 +1407,10 @@ mod tests {
             a[33..65].copy_from_slice(&[0xBB; 32]); // view_pk
             a
         };
-        let cap = CapabilityContent::Full { master_seed_64: &seed };
-        let bytes =
-            seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &expected_addr, kat_kdf()).unwrap();
+        let cap = CapabilityContent::Full {
+            master_seed_64: &seed,
+        };
+        let bytes = seal_keys_file(b"pw", 0, 0, &cap, 0, 0, &expected_addr, kat_kdf()).unwrap();
         let opened = open_keys_file(b"pw", &bytes).unwrap();
         assert_eq!(opened.expected_classical_address, expected_addr);
         assert_eq!(opened.cap_content.as_slice(), &seed);
@@ -1367,8 +1435,7 @@ mod tests {
             ml_kem_dk: &dk,
             spend_pk: &spend_pk,
         };
-        let bytes =
-            seal_keys_file(b"pw", 1, 0, &cap, 0, 0, &expected_addr, kat_kdf()).unwrap();
+        let bytes = seal_keys_file(b"pw", 1, 0, &cap, 0, 0, &expected_addr, kat_kdf()).unwrap();
         let opened = open_keys_file(b"pw", &bytes).unwrap();
         assert_eq!(opened.capability_mode, CAPABILITY_VIEW_ONLY);
         assert_eq!(opened.expected_classical_address, expected_addr);
@@ -1395,24 +1462,21 @@ mod tests {
     // ------------------------------------------------------------------
 
     const KAT_WRAP_SALT_FULL: [u8; WRAP_SALT_BYTES] = [
-        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-        0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
+        0x0F,
     ];
     const KAT_WRAP_NONCE_FULL: [u8; AEAD_NONCE_BYTES] = [
-        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-        0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
-        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
+        0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
     ];
     const KAT_REGION1_NONCE_FULL: [u8; AEAD_NONCE_BYTES] = [
-        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
-        0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F,
-        0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
+        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E,
+        0x3F, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
     ];
     const KAT_FILE_KEK_SEED: [u8; FILE_KEK_BYTES] = [
-        0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,
-        0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F,
-        0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67,
-        0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F,
+        0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E,
+        0x5F, 0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D,
+        0x6E, 0x6F,
     ];
     const KAT_PASSWORD: &[u8] = b"shekyl-kat-pw-v1";
     const KAT_EXPECTED_ADDRESS: [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES] = {
@@ -1432,9 +1496,8 @@ mod tests {
     const KAT_CREATION_TIMESTAMP: u64 = 1_700_000_000;
     const KAT_RESTORE_HEIGHT: u32 = 2_500_000;
     const KAT_STATE_NONCE: [u8; AEAD_NONCE_BYTES] = [
-        0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
-        0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x7D, 0x7E, 0x7F,
-        0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+        0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x7D, 0x7E,
+        0x7F, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
     ];
     const KAT_STATE_PAYLOAD: &[u8] = b"shekyl-kat-state-v1";
 
@@ -1458,10 +1521,13 @@ mod tests {
 
     fn seal_kat_full() -> Vec<u8> {
         let seed = kat_full_seed();
-        let cap = CapabilityContent::Full { master_seed_64: &seed };
+        let cap = CapabilityContent::Full {
+            master_seed_64: &seed,
+        };
         seal_keys_file_with_entropy(
             KAT_PASSWORD,
-            0, 0,
+            0,
+            0,
             &cap,
             KAT_CREATION_TIMESTAMP,
             KAT_RESTORE_HEIGHT,
@@ -1484,7 +1550,8 @@ mod tests {
         };
         seal_keys_file_with_entropy(
             KAT_PASSWORD,
-            1, 0,
+            1,
+            0,
             &cap,
             KAT_CREATION_TIMESTAMP,
             KAT_RESTORE_HEIGHT,
@@ -1509,7 +1576,8 @@ mod tests {
         };
         seal_keys_file_with_entropy(
             KAT_PASSWORD,
-            2, 0,
+            2,
+            0,
             &cap,
             KAT_CREATION_TIMESTAMP,
             KAT_RESTORE_HEIGHT,
@@ -1524,8 +1592,13 @@ mod tests {
     }
 
     fn seal_kat_state(keys_bytes: &[u8]) -> Vec<u8> {
-        seal_state_file_with_entropy(KAT_PASSWORD, keys_bytes, KAT_STATE_PAYLOAD, &KAT_STATE_NONCE)
-            .expect("KAT state seal")
+        seal_state_file_with_entropy(
+            KAT_PASSWORD,
+            keys_bytes,
+            KAT_STATE_PAYLOAD,
+            &KAT_STATE_NONCE,
+        )
+        .expect("KAT state seal")
     }
 
     // Frozen fixture bytes. See docs/test_vectors/WALLET_FILE_FORMAT_V1/.
