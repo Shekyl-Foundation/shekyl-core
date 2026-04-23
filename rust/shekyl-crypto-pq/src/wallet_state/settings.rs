@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The **settings block** of [`WalletState`](super::WalletState).
+//! The **settings block** of [`WalletMetadata`](super::WalletMetadata).
 //!
 //! User-facing knobs: scan policy, UX preferences, spending policy,
 //! scan-safety margins, the subaddress lookahead window, hardware-device
@@ -401,8 +401,8 @@ mod bg_key_as_hex {
 // SettingsBlock
 // ---------------------------------------------------------------------------
 
-/// The settings block of a [`WalletState`](super::WalletState). See the
-/// module docs for scope, versioning, and design rationale.
+/// The settings block of a [`WalletMetadata`](super::WalletMetadata). See
+/// the module docs for scope, versioning, and design rationale.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SettingsBlock {
     /// Per-block schema version. Always [`SETTINGS_BLOCK_VERSION`] on

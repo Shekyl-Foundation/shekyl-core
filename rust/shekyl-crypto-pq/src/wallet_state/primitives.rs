@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Shared infrastructure for [`WalletState`](super::WalletState) blocks:
+//! Shared infrastructure for [`WalletMetadata`](super::WalletMetadata) blocks:
 //! error type, `u8`-repr enum macro, `Network`-as-u8 serde, and the
 //! 32-byte hex helpers used by secret fields across blocks.
 
@@ -13,13 +13,13 @@ pub use shekyl_address::network::Network;
 // Error type
 // ---------------------------------------------------------------------------
 
-/// Errors produced by [`WalletState`](super::WalletState) (de)serialization.
+/// Errors produced by [`WalletMetadata`](super::WalletMetadata) (de)serialization.
 #[derive(Debug, thiserror::Error)]
 pub enum WalletStateError {
     /// The on-disk `format_version` does not match the version this
     /// binary knows how to read. `format_version` is the bundle-shape
-    /// version (which blocks exist in the top-level `WalletState`); it
-    /// bumps only when blocks are added or removed. Per the rule-81
+    /// version (which blocks exist in the top-level `WalletMetadata`);
+    /// it bumps only when blocks are added or removed. Per the rule-81
     /// "no silent migration" stance we refuse rather than migrate.
     #[error(
         "unsupported wallet-state format version: file = {file}, binary = {binary}; \

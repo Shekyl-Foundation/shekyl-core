@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The **identity block** of [`WalletState`](super::WalletState).
+//! The **identity block** of [`WalletMetadata`](super::WalletMetadata).
 //!
 //! Holds the fields that identify the wallet itself — which chain it was
 //! created on, what kind of keystore backs it, how it interacts with
@@ -57,7 +57,7 @@ repr_u8_enum! {
     }
 }
 
-/// The identity block of a [`WalletState`](super::WalletState). See
+/// The identity block of a [`WalletMetadata`](super::WalletMetadata). See
 /// module docs for scope and versioning.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IdentityBlock {

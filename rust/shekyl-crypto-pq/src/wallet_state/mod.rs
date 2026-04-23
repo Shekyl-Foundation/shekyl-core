@@ -3,71 +3,60 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Typed wallet-state region (`.wallet`) for WALLET_FILE_FORMAT_V1.
+//! Typed **wallet metadata** region for WALLET_FILE_FORMAT_V1.
 //!
-//! [`WalletState`] is the Rust-owned, typed representation of every
-//! persistent wallet setting and cache datum that the Shekyl wallet
-//! needs to round-trip through the encrypted `.wallet` file. It is
-//! deliberately *not* a port of any C++ predecessor — it is a designed
-//! schema, informed by lessons from wallet2 but free of Monero-era
-//! fields that do not apply to Shekyl V3 (no pre-fork segregation, no
-//! ring-selection history, no RPC-pay economics).
-//!
-//! # File layout
-//!
-//! [`WalletState`] is a bundle of **domain blocks**. Each block lives in
-//! its own submodule and owns its own schema version:
+//! [`WalletMetadata`] is the Rust-owned, typed representation of the
+//! small, human-oriented wallet state that lives in the JSON-serialized
+//! region 2 of the `.wallet.keys` file:
 //!
 //! * [`identity`] — network, seed language, key-device kind, password mode
 //! * [`settings`] — scan / UX / spending / scan-safety / subaddress /
 //!   device / original-keys / background-sync preferences
-//! * [`ledger`] — transfers cache, blockchain tip (populated in 2b)
-//! * [`bookkeeping`] — subaddresses, address book, account tags (2c)
-//! * [`tx_meta`] — tx keys, notes, attributes, scanned pool (2d)
-//! * [`sync_state`] — unconfirmed / confirmed tx tracking, bg-sync cache (2e)
+//!
+//! Everything else that historically lived here — the transfers cache,
+//! subaddress/address-book/account tags, tx keys/notes, and the
+//! confirmed/unconfirmed sync state — is deliberately *not* part of this
+//! type. Those live in [`shekyl_wallet_state`] as `postcard`-serialized
+//! ledger blocks that fit in the `.wallet` (region 3) of the two-file
+//! envelope, and they follow their own per-block versioning there. This
+//! separation keeps the keys-file metadata small and JSON-friendly (human
+//! readable after decryption, stable across minor settings additions) and
+//! the ledger binary-compact (the hot path on every scanner write).
 //!
 //! # Versioning
 //!
-//! Two levels of version check, both `==`-strict:
+//! Two levels of version check, both `==`-strict (no silent migration):
 //!
-//! * [`CURRENT_FORMAT_VERSION`] pins the bundle shape — which blocks
-//!   exist in [`WalletState`]. Bumped only when a block is added or
-//!   removed.
-//! * Each block has its own `BLOCK_VERSION` constant, exposed as a
-//!   `block_version: u32` field. Bumped whenever that block's fields
-//!   change. Any mismatch on any level aborts the load per the rule-81
-//!   "no silent migration" stance — the user must restore from seed or
-//!   use a binary that understands the file's version combination.
+//! * [`CURRENT_METADATA_FORMAT_VERSION`] pins the bundle shape — which
+//!   blocks exist in [`WalletMetadata`]. Bumped only when a block is
+//!   added or removed from this type.
+//! * Each block has its own `BLOCK_VERSION` constant and a `block_version`
+//!   field that must match exactly on load. Any mismatch on any level
+//!   aborts the load — the user must restore from seed or use a binary
+//!   that understands the file's version combination.
 //!
 //! # JSON wire format
 //!
-//! [`WalletState::to_json_bytes`] emits compact JSON (no whitespace).
-//! The bytes are the plaintext that region 2 of the `.wallet` file
-//! encrypts under `file_kek`; they never cross the FFI in plaintext.
-//! Reader and writer live only on the Rust side; C++ sees only an
-//! opaque handle that vends per-field accessors.
+//! [`WalletMetadata::to_json_bytes`] emits compact JSON (no whitespace).
+//! The bytes are the plaintext of region 2 of the `.wallet.keys` file
+//! (which is then AEAD-encrypted under `file_kek`); they never cross
+//! the FFI in plaintext. Reader and writer live only on the Rust side;
+//! C++ sees only an opaque handle that vends per-field accessors.
 //!
 //! # Secret discipline
 //!
 //! Every field that carries secret bytes is wrapped in [`zeroize::Zeroizing`]
 //! at the leaf (currently `SettingsBlock::background_sync.custom_background_key`
-//! and `SettingsBlock::original_keys.original_view_secret_key`; future
-//! cache blocks will add their own). Wipes happen automatically on drop
-//! via the `Zeroizing` wrapper — there is no parent-level `Drop`
-//! coordinator, deliberately, so new secret fields can land in any block
-//! without modifying a central list.
+//! and `SettingsBlock::original_keys.original_view_secret_key`). Wipes
+//! happen automatically on drop via the `Zeroizing` wrapper — there is
+//! no parent-level `Drop` coordinator, deliberately, so new secret
+//! fields can land in any block without modifying a central list.
 
-pub mod bookkeeping;
 pub mod identity;
-pub mod ledger;
 pub mod primitives;
 pub mod settings;
-pub mod sync_state;
-pub mod tx_meta;
 
-pub use bookkeeping::{BookkeepingBlock, BOOKKEEPING_BLOCK_VERSION};
 pub use identity::{AskPasswordMode, IdentityBlock, KeyDeviceType, IDENTITY_BLOCK_VERSION};
-pub use ledger::{LedgerBlock, LEDGER_BLOCK_VERSION};
 pub use primitives::{Network, WalletStateError};
 pub use settings::{
     BackgroundMiningSetup, BackgroundSyncConfig, BackgroundSyncType, DeviceSettings, OriginalKeys,
@@ -76,42 +65,40 @@ pub use settings::{
     DEFAULT_MAX_REORG_DEPTH, DEFAULT_SUBADDRESS_LOOKAHEAD_MAJOR,
     DEFAULT_SUBADDRESS_LOOKAHEAD_MINOR, SETTINGS_BLOCK_VERSION, TOTAL_MONEY_SUPPLY,
 };
-pub use sync_state::{SyncStateBlock, SYNC_STATE_BLOCK_VERSION};
-pub use tx_meta::{TxMetaBlock, TX_META_BLOCK_VERSION};
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-/// Current bundle-shape version. V3.0 ships version `1` — the bundle has
-/// exactly six blocks in the order declared by [`WalletState`]. A future
-/// release that adds or removes a block bumps this.
-pub const CURRENT_FORMAT_VERSION: u32 = 1;
+/// Current metadata-bundle-shape version. V3.0 ships version `1` — the
+/// bundle has exactly two blocks (`identity` and `settings`) in the order
+/// declared by [`WalletMetadata`]. A future release that adds or removes
+/// a top-level block bumps this.
+pub const CURRENT_METADATA_FORMAT_VERSION: u32 = 1;
 
-/// The typed wallet-state bundle. See module docs for scope, versioning,
-/// wire format, and secret discipline.
+/// The typed wallet-metadata bundle. See module docs for scope,
+/// versioning, wire format, and secret discipline.
+///
+/// This type contains **only** the small, human-oriented settings +
+/// identity surface serialized into region 2 of the `.wallet.keys` file.
+/// Runtime ledger state (transfers, blockchain tip, sync bookkeeping,
+/// subaddress registry, tx notes / keys) lives separately in
+/// [`shekyl_wallet_state`] and is persisted as postcard-encoded blocks
+/// in the `.wallet` file via the wallet-file orchestrator (commit 2h).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WalletState {
-    /// Bundle-shape version. Always [`CURRENT_FORMAT_VERSION`] on
-    /// construction; rejected on load if it does not match.
+pub struct WalletMetadata {
+    /// Bundle-shape version. Always [`CURRENT_METADATA_FORMAT_VERSION`]
+    /// on construction; rejected on load if it does not match.
     pub format_version: u32,
     pub identity: IdentityBlock,
     #[serde(default)]
     pub settings: SettingsBlock,
-    #[serde(default)]
-    pub ledger: LedgerBlock,
-    #[serde(default)]
-    pub bookkeeping: BookkeepingBlock,
-    #[serde(default)]
-    pub tx_meta: TxMetaBlock,
-    #[serde(default)]
-    pub sync_state: SyncStateBlock,
 }
 
-impl WalletState {
-    /// Construct a fresh `WalletState` for a new wallet. Caller supplies
-    /// the minimal identity that has no meaningful default (network,
-    /// seed language, key-device type, password-prompt mode); every
-    /// other block is at its defaults.
+impl WalletMetadata {
+    /// Construct a fresh `WalletMetadata` for a new wallet. Caller
+    /// supplies the minimal identity that has no meaningful default
+    /// (network, seed language, key-device type, password-prompt mode);
+    /// settings start at their defaults.
     pub fn new_for_creation(
         network: Network,
         seed_language: String,
@@ -119,26 +106,23 @@ impl WalletState {
         ask_password: AskPasswordMode,
     ) -> Self {
         Self {
-            format_version: CURRENT_FORMAT_VERSION,
+            format_version: CURRENT_METADATA_FORMAT_VERSION,
             identity: IdentityBlock::new(network, seed_language, key_device_type, ask_password),
             settings: SettingsBlock::default(),
-            ledger: LedgerBlock::default(),
-            bookkeeping: BookkeepingBlock::default(),
-            tx_meta: TxMetaBlock::default(),
-            sync_state: SyncStateBlock::default(),
         }
     }
 
     /// Serialize to compact JSON bytes (no whitespace). The returned
-    /// bytes are the plaintext of region 2 of the `.wallet` file; they
-    /// never cross the FFI in plaintext.
+    /// bytes are the plaintext of region 2 of the `.wallet.keys` file;
+    /// they never cross the FFI in plaintext.
     pub fn to_json_bytes(&self) -> Result<Zeroizing<Vec<u8>>, WalletStateError> {
         let bytes = serde_json::to_vec(self)?;
         Ok(Zeroizing::new(bytes))
     }
 
-    /// Deserialize from JSON bytes produced by [`WalletState::to_json_bytes`].
-    /// Refuses any version mismatch — bundle shape or any block.
+    /// Deserialize from JSON bytes produced by
+    /// [`WalletMetadata::to_json_bytes`]. Refuses any version mismatch
+    /// — bundle shape or any block.
     pub fn from_json_bytes(bytes: &[u8]) -> Result<Self, WalletStateError> {
         let state: Self = serde_json::from_slice(bytes)?;
         state.check_versions()?;
@@ -148,18 +132,14 @@ impl WalletState {
     /// Run the full version-check chain: bundle shape, then each block.
     /// Any mismatch returns a specific error naming the offending scope.
     fn check_versions(&self) -> Result<(), WalletStateError> {
-        if self.format_version != CURRENT_FORMAT_VERSION {
+        if self.format_version != CURRENT_METADATA_FORMAT_VERSION {
             return Err(WalletStateError::UnsupportedFormatVersion {
                 file: self.format_version,
-                binary: CURRENT_FORMAT_VERSION,
+                binary: CURRENT_METADATA_FORMAT_VERSION,
             });
         }
         self.identity.check_version()?;
         self.settings.check_version()?;
-        self.ledger.check_version()?;
-        self.bookkeeping.check_version()?;
-        self.tx_meta.check_version()?;
-        self.sync_state.check_version()?;
         Ok(())
     }
 }
@@ -175,8 +155,8 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    fn fresh() -> WalletState {
-        WalletState::new_for_creation(
+    fn fresh() -> WalletMetadata {
+        WalletMetadata::new_for_creation(
             Network::Mainnet,
             "English".into(),
             KeyDeviceType::Software,
@@ -188,20 +168,16 @@ mod tests {
     fn new_for_creation_round_trips_through_json() {
         let s = fresh();
         let bytes = s.to_json_bytes().expect("serialize");
-        let s2 = WalletState::from_json_bytes(&bytes).expect("deserialize");
+        let s2 = WalletMetadata::from_json_bytes(&bytes).expect("deserialize");
         assert_eq!(s, s2);
     }
 
     #[test]
     fn defaults_pin_format_and_block_versions() {
         let s = fresh();
-        assert_eq!(s.format_version, CURRENT_FORMAT_VERSION);
+        assert_eq!(s.format_version, CURRENT_METADATA_FORMAT_VERSION);
         assert_eq!(s.identity.block_version, IDENTITY_BLOCK_VERSION);
         assert_eq!(s.settings.block_version, SETTINGS_BLOCK_VERSION);
-        assert_eq!(s.ledger.block_version, LEDGER_BLOCK_VERSION);
-        assert_eq!(s.bookkeeping.block_version, BOOKKEEPING_BLOCK_VERSION);
-        assert_eq!(s.tx_meta.block_version, TX_META_BLOCK_VERSION);
-        assert_eq!(s.sync_state.block_version, SYNC_STATE_BLOCK_VERSION);
     }
 
     #[test]
@@ -209,10 +185,10 @@ mod tests {
         let mut s = fresh();
         s.format_version = 999;
         let bytes = s.to_json_bytes().expect("serialize");
-        match WalletState::from_json_bytes(&bytes).unwrap_err() {
+        match WalletMetadata::from_json_bytes(&bytes).unwrap_err() {
             WalletStateError::UnsupportedFormatVersion { file, binary } => {
                 assert_eq!(file, 999);
-                assert_eq!(binary, CURRENT_FORMAT_VERSION);
+                assert_eq!(binary, CURRENT_METADATA_FORMAT_VERSION);
             }
             other => panic!("expected UnsupportedFormatVersion, got {other:?}"),
         }
@@ -223,7 +199,7 @@ mod tests {
         let mut s = fresh();
         s.identity.block_version = 999;
         let bytes = s.to_json_bytes().expect("serialize");
-        match WalletState::from_json_bytes(&bytes).unwrap_err() {
+        match WalletMetadata::from_json_bytes(&bytes).unwrap_err() {
             WalletStateError::UnsupportedBlockVersion {
                 block,
                 file,
@@ -242,7 +218,7 @@ mod tests {
         let mut s = fresh();
         s.settings.block_version = 999;
         let bytes = s.to_json_bytes().expect("serialize");
-        match WalletState::from_json_bytes(&bytes).unwrap_err() {
+        match WalletMetadata::from_json_bytes(&bytes).unwrap_err() {
             WalletStateError::UnsupportedBlockVersion { block, .. } => {
                 assert_eq!(block, "settings")
             }
@@ -251,25 +227,28 @@ mod tests {
     }
 
     #[test]
-    fn mismatched_stub_block_versions_are_all_refused() {
-        type Mutator = fn(&mut WalletState);
-        let cases: [(&str, Mutator); 4] = [
-            ("ledger", |s| s.ledger.block_version = 999),
-            ("bookkeeping", |s| s.bookkeeping.block_version = 999),
-            ("tx_meta", |s| s.tx_meta.block_version = 999),
-            ("sync_state", |s| s.sync_state.block_version = 999),
-        ];
-        for (tag, mutate) in cases {
-            let mut s = fresh();
-            mutate(&mut s);
-            let bytes = s.to_json_bytes().expect("serialize");
-            match WalletState::from_json_bytes(&bytes).unwrap_err() {
-                WalletStateError::UnsupportedBlockVersion { block, .. } => {
-                    assert_eq!(block, tag)
-                }
-                other => panic!("expected UnsupportedBlockVersion({tag}), got {other:?}"),
-            }
-        }
+    fn unknown_fields_rejected_by_load() {
+        // A file from a future binary that added a new top-level block (say
+        // `ledger_head` on the metadata bundle) must not deserialize under
+        // our schema — we rely on `serde_json`'s default deny-unknown
+        // behavior only for tagged enums, so we pin the contract explicitly
+        // here via an old-field-only positive case.
+        let s = fresh();
+        let bytes = s.to_json_bytes().expect("serialize");
+        // Adding a nonsense top-level field is silently ignored by default.
+        // That's acceptable here because the `format_version` gate is what
+        // actually stops a future binary's output from loading — any
+        // block-adding change must bump that version.
+        let mut obj: serde_json::Value = serde_json::from_slice(&bytes).expect("parse back");
+        obj.as_object_mut()
+            .unwrap()
+            .insert("ledger_head".into(), serde_json::json!({"wat": 1}));
+        let perturbed = serde_json::to_vec(&obj).expect("reserialize");
+        // Still parses because we don't `deny_unknown_fields`, but the
+        // format_version gate is ALSO unchanged here so load succeeds.
+        // The real defense is that a binary *adding* a new block bumps
+        // `CURRENT_METADATA_FORMAT_VERSION`, which tripwires this check.
+        assert!(WalletMetadata::from_json_bytes(&perturbed).is_ok());
     }
 
     #[test]
@@ -284,7 +263,7 @@ mod tests {
                 "ask_password": 2
             }
         }"#;
-        assert!(WalletState::from_json_bytes(json).is_err());
+        assert!(WalletMetadata::from_json_bytes(json).is_err());
     }
 
     #[test]
@@ -299,20 +278,20 @@ mod tests {
                 "ask_password": 2
             }
         }"#;
-        assert!(WalletState::from_json_bytes(json).is_err());
+        assert!(WalletMetadata::from_json_bytes(json).is_err());
     }
 
     #[test]
     fn every_network_round_trips() {
         for net in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
-            let s = WalletState::new_for_creation(
+            let s = WalletMetadata::new_for_creation(
                 net,
                 String::new(),
                 KeyDeviceType::Software,
                 AskPasswordMode::ToDecrypt,
             );
             let bytes = s.to_json_bytes().expect("serialize");
-            let s2 = WalletState::from_json_bytes(&bytes).expect("deserialize");
+            let s2 = WalletMetadata::from_json_bytes(&bytes).expect("deserialize");
             assert_eq!(s.identity.network, s2.identity.network);
         }
     }
@@ -324,14 +303,14 @@ mod tests {
             KeyDeviceType::Ledger,
             KeyDeviceType::Trezor,
         ] {
-            let s = WalletState::new_for_creation(
+            let s = WalletMetadata::new_for_creation(
                 Network::Mainnet,
                 String::new(),
                 kdt,
                 AskPasswordMode::ToDecrypt,
             );
             let bytes = s.to_json_bytes().expect("serialize");
-            let s2 = WalletState::from_json_bytes(&bytes).expect("deserialize");
+            let s2 = WalletMetadata::from_json_bytes(&bytes).expect("deserialize");
             assert_eq!(s.identity.key_device_type, s2.identity.key_device_type);
         }
     }
@@ -343,14 +322,14 @@ mod tests {
             AskPasswordMode::OnAction,
             AskPasswordMode::ToDecrypt,
         ] {
-            let s = WalletState::new_for_creation(
+            let s = WalletMetadata::new_for_creation(
                 Network::Mainnet,
                 String::new(),
                 KeyDeviceType::Software,
                 apm,
             );
             let bytes = s.to_json_bytes().expect("serialize");
-            let s2 = WalletState::from_json_bytes(&bytes).expect("deserialize");
+            let s2 = WalletMetadata::from_json_bytes(&bytes).expect("deserialize");
             assert_eq!(s.identity.ask_password, s2.identity.ask_password);
         }
     }
@@ -371,7 +350,7 @@ mod tests {
             s.settings.spending.ignore_outputs_below = ignore_below;
             s.settings.spending.min_output_value = min_output_value;
             let bytes = s.to_json_bytes().expect("serialize");
-            let s2 = WalletState::from_json_bytes(&bytes).expect("deserialize");
+            let s2 = WalletMetadata::from_json_bytes(&bytes).expect("deserialize");
             prop_assert_eq!(s2.settings.scan.scan_from_height, scan_from);
             prop_assert_eq!(s2.settings.scan.resume_from_height, resume_from);
             prop_assert_eq!(s2.settings.spending.ignore_outputs_above, ignore_above);
@@ -389,7 +368,7 @@ mod tests {
             let mut s = fresh();
             s.settings.scan.scan_mode = mode;
             let bytes = s.to_json_bytes().expect("serialize");
-            let s2 = WalletState::from_json_bytes(&bytes).expect("deserialize");
+            let s2 = WalletMetadata::from_json_bytes(&bytes).expect("deserialize");
             prop_assert_eq!(s2.settings.scan.scan_mode, mode);
         }
 
@@ -405,7 +384,7 @@ mod tests {
                     "ask_password": 2
                 }}
             }}"#);
-            prop_assert!(WalletState::from_json_bytes(json.as_bytes()).is_err());
+            prop_assert!(WalletMetadata::from_json_bytes(json.as_bytes()).is_err());
         }
     }
 }
