@@ -103,12 +103,14 @@ is too large; break it down.
    acceptable merge strategy for `dev → main`. Rebase-and-merge and
    squash-and-merge are disabled or must not be used.
 4. A **signed annotated tag** is placed on the resulting merge commit
-   on `main`: `git tag -a -s vX.Y.Z -m "Shekyl vX.Y.Z"`. The tag
-   signature is the cryptographic release marker; the merge commit is
-   the branch-topology release marker. Both are required. The signing
-   key must be one of the maintainer keys listed in
-   [`docs/SIGNING.md`](../../docs/SIGNING.md); that file also documents
-   how downstream users verify the tag with `git verify-tag`.
+   on `main`. The tag signature is the cryptographic release marker;
+   the merge commit is the branch-topology release marker. Both are
+   required. The preferred signer from `v3.1.0-alpha.5` onward is the
+   Shekyl Foundation institutional signing key; maintainer keys remain
+   a documented additive fallback. Full key material, the command
+   sequence (`git tag -u <key> -a -s …`), the hardware-token ceremony,
+   and the downstream `git verify-tag` procedure are all in
+   [`docs/SIGNING.md`](../../docs/SIGNING.md).
 5. The tag is pushed: `git push origin vX.Y.Z`. The release artifact is
    built from `main` at the tag, reproducibly (Guix).
 6. `dev` is not rebased onto `main` after release. Because the merge is

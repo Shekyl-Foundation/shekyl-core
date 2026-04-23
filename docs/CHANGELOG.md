@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.1.0-alpha.5] - 2026-04-22
+
 ### Security
 
 - **Retired 32-bit build targets (`v3.1.0-alpha.5`, Chore #3). Shekyl is
@@ -162,6 +164,38 @@
   pattern that motivated the §.
 
 ### Changed
+
+- **Shekyl Foundation institutional release-signing key adopted.**
+  `v3.1.0-alpha.5` is the first release signed by the Shekyl Foundation
+  institutional signing key (subkey fingerprint `3778 B4C8 63C6 1512
+  B5FC 2203 6914 D748 23DD A8DC`, long ID `6914D74823DDA8DC`; primary
+  fingerprint `F5F7 5A47 70C9 4FE1 D5A5 AE59 844E 424F 9866 4F44`,
+  long ID `844E424F98664F44`). The primary certification key is held
+  offline; the signing subkey is hardware-backed (OpenPGP applet) with
+  a two-year expiry (2028-04-18) enforcing a rotation cadence.
+
+  Previous alphas (`v3.1.0-alpha.3`, `v3.1.0-alpha.4`) were signed with
+  Rick Dawson's personal maintainer key and remain verifiable against
+  that key — prior signatures are not invalidated. Going forward,
+  maintainer keys remain a valid *additive* fallback for release-tag
+  signing when the institutional key is unavailable (documented
+  exception, not default path); they continue to be the right tool for
+  commit signing, where authorship-attribution is the question.
+
+  `docs/SIGNING.md` is rewritten as the canonical, self-contained
+  reference: both key blocks inline (no loose `.asc` files), an
+  explicit step-by-step release-tag signing ceremony with pre-flight
+  checks, expected-output annotations, a failure-mode table, and a
+  separate downstream-verification path. `docs/RELEASING.md` §3
+  (tag creation) now points at the SIGNING.md ceremony and captures
+  the minimum command sequence (`gpg --card-status` → `git tag -u
+  6914D74823DDA8DC -a -s …` → `git verify-tag` before push) as a
+  summary, not a replacement. Resolves the `docs/SIGNING.md`
+  §"Future: Foundation institutional signing key" deferral that had
+  been carried forward from V3.1 on the premise that institutional
+  signing required ceremony (offline primary, hardware-backed subkey,
+  bounded expiry) before it added value over a plain personal-key
+  setup; those prerequisites are now in place.
 
 - **Logging output format (breaking change, all binaries).**
   Chore #2 of the `easylogging++` retirement completes the
