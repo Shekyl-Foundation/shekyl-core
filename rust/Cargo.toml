@@ -40,6 +40,9 @@ members = [
     # v1 two-file wallet envelope orchestrator (.wallet.keys + .wallet)
     "shekyl-wallet-file",
 
+    # Plaintext-with-HMAC user preferences (layer 2 of WALLET_PREFS.md)
+    "shekyl-wallet-prefs",
+
     # V3 proof protocol (tx_proof, reserve_proof)
     "shekyl-proofs",
 
