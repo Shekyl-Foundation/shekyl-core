@@ -44,15 +44,6 @@ namespace cryptonote
     crypto::secret_key   m_spend_secret_key;
     crypto::secret_key   m_view_secret_key;
 
-    // LEGACY view-prefixed PQC secret buffer: view_secret[32] || ML-KEM_dk[2400].
-    // Still populated on every successful (re)derivation so unmigrated
-    // consumers in wallet2.cpp / wallet2_ffi.cpp / chaingen.cpp keep building
-    // during the wallet-account-rewire commit sequence. Slated for removal in
-    // the third commit of this branch once all callers read from
-    // m_view_secret_key (for the X25519 prefix) and m_ml_kem_decap_key
-    // (for the ML-KEM suffix) directly.
-    std::vector<uint8_t> m_pqc_secret_key;
-
     // --- v1 stabilized state (see rust/shekyl-crypto-pq/src/account.rs) -----
     //
     // m_master_seed_64 is the only byte sequence that is *persisted* as a
@@ -94,7 +85,6 @@ namespace cryptonote
       KV_SERIALIZE(m_account_address)
       KV_SERIALIZE_VAL_POD_AS_BLOB_FORCE(m_spend_secret_key)
       KV_SERIALIZE_VAL_POD_AS_BLOB_FORCE(m_view_secret_key)
-      KV_SERIALIZE_OPT(m_pqc_secret_key, std::vector<uint8_t>())
       KV_SERIALIZE_OPT(m_master_seed_64, std::vector<uint8_t>())
       KV_SERIALIZE_OPT(m_seed_format, (uint8_t)SHEKYL_SEED_FORMAT_RAW32)
       const crypto::chacha_iv default_iv{{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}};

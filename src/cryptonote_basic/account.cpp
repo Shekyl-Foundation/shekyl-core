@@ -80,9 +80,11 @@ DISABLE_VS_WARNINGS(4244 4345)
     // has already been populated by a successful FFI call; on exit the blob
     // is zeroized so that no stray secret bytes remain on the C++ stack.
     //
-    // The view-prefixed legacy m_pqc_secret_key buffer is maintained as a
-    // courtesy for unmigrated consumers (see the account.h field comment);
-    // commit 3 of this branch will delete both the field and this fill-in.
+    // The X25519 scan secret is not stored separately: wallet2.cpp and
+    // chaingen.cpp obtain it by reinterpret-casting &m_view_secret_key,
+    // which is identical by the Edwards→Montgomery birational map. The
+    // ML-KEM decapsulation key is stored in m_ml_kem_decap_key under
+    // mlock + madvise(DONTDUMP); it is rederived, never persisted.
     void populate_account_from_blob(account_keys &keys, ShekylAllKeysBlob &blob)
     {
       // --- public side ------------------------------------------------------
@@ -109,22 +111,6 @@ DISABLE_VS_WARNINGS(4244 4345)
         shekyl_mlock(keys.m_ml_kem_decap_key.data(), keys.m_ml_kem_decap_key.size());
         shekyl_madvise_dontdump(keys.m_ml_kem_decap_key.data(), keys.m_ml_kem_decap_key.size());
       }
-
-      // --- LEGACY view-prefixed PQC secret buffer --------------------------
-      // view_secret[32] || ML-KEM_dk[2400]. Every consumer that still reads
-      // this field is flagged in the summary attached to commit 1 of
-      // feat/wallet-account-rewire; commit 2 of the same branch migrates
-      // them; commit 3 deletes the field altogether.
-      keys.m_pqc_secret_key.clear();
-      keys.m_pqc_secret_key.reserve(32 + SHEKYL_ML_KEM_768_DK_BYTES);
-      keys.m_pqc_secret_key.insert(
-          keys.m_pqc_secret_key.end(),
-          blob.view_sk, blob.view_sk + 32);
-      keys.m_pqc_secret_key.insert(
-          keys.m_pqc_secret_key.end(),
-          blob.ml_kem_dk, blob.ml_kem_dk + SHEKYL_ML_KEM_768_DK_BYTES);
-      shekyl_mlock(keys.m_pqc_secret_key.data(), keys.m_pqc_secret_key.size());
-      shekyl_madvise_dontdump(keys.m_pqc_secret_key.data(), keys.m_pqc_secret_key.size());
 
       // The caller is expected to set m_master_seed_64, m_seed_format, and
       // m_master_seed_present itself, because those values are the *input*
@@ -153,10 +139,6 @@ DISABLE_VS_WARNINGS(4244 4345)
   {
     memwipe(&m_spend_secret_key, sizeof(m_spend_secret_key));
     memwipe(&m_view_secret_key, sizeof(m_view_secret_key));
-    if (!m_pqc_secret_key.empty()) {
-      shekyl_memwipe(m_pqc_secret_key.data(), m_pqc_secret_key.size());
-      shekyl_munlock(m_pqc_secret_key.data(), m_pqc_secret_key.size());
-    }
     if (!m_ml_kem_decap_key.empty()) {
       shekyl_memwipe(m_ml_kem_decap_key.data(), m_ml_kem_decap_key.size());
       shekyl_munlock(m_ml_kem_decap_key.data(), m_ml_kem_decap_key.size());
@@ -201,25 +183,20 @@ DISABLE_VS_WARNINGS(4244 4345)
   //-----------------------------------------------------------------
   void account_keys::xor_with_key_stream(const crypto::chacha_key &key)
   {
-    // Encrypt both the legacy pqc-secret buffer AND the master seed in-place.
-    // Each contributes its own byte span to the keystream length so that
-    // zero-length fields (e.g. a pre-v1 wallet without m_master_seed_64, or a
-    // device wallet without m_pqc_secret_key) don't shift the byte offsets of
-    // the other fields. Ordering here is load-bearing: it is the on-disk XOR
-    // layout for every wallet that has ever been written with this code.
-    //   spend_sk[32] || view_sk[32] || pqc_sk[0 or 2432] || master_seed[0 or 64]
-    const size_t pq_bytes = m_pqc_secret_key.size();
+    // Encrypt spend_sk, view_sk, and (if present) the master seed in-place.
+    // master_seed contributes its own byte span so a wallet without one
+    // (a view-only wallet or a device wallet) doesn't shift the offsets of
+    // spend_sk / view_sk. Ordering:
+    //   spend_sk[32] || view_sk[32] || master_seed[0 or 64]
     const size_t ms_bytes = m_master_seed_64.size();
     epee::wipeable_string key_stream = get_key_stream(
         key, m_encryption_iv,
-        sizeof(crypto::secret_key) * 2 + pq_bytes + ms_bytes);
+        sizeof(crypto::secret_key) * 2 + ms_bytes);
     const char *ptr = key_stream.data();
     for (size_t i = 0; i < sizeof(crypto::secret_key); ++i)
       m_spend_secret_key.data[i] ^= *ptr++;
     for (size_t i = 0; i < sizeof(crypto::secret_key); ++i)
       m_view_secret_key.data[i] ^= *ptr++;
-    for (size_t i = 0; i < pq_bytes; ++i)
-      m_pqc_secret_key[i] ^= static_cast<uint8_t>(*ptr++);
     for (size_t i = 0; i < ms_bytes; ++i)
       m_master_seed_64[i] ^= static_cast<uint8_t>(*ptr++);
   }
@@ -233,10 +210,6 @@ DISABLE_VS_WARNINGS(4244 4345)
   void account_keys::decrypt(const crypto::chacha_key &key)
   {
     xor_with_key_stream(key);
-    if (!m_pqc_secret_key.empty()) {
-      shekyl_mlock(m_pqc_secret_key.data(), m_pqc_secret_key.size());
-      shekyl_madvise_dontdump(m_pqc_secret_key.data(), m_pqc_secret_key.size());
-    }
     if (!m_master_seed_64.empty()) {
       shekyl_mlock(m_master_seed_64.data(), m_master_seed_64.size());
       shekyl_madvise_dontdump(m_master_seed_64.data(), m_master_seed_64.size());
@@ -267,10 +240,6 @@ DISABLE_VS_WARNINGS(4244 4345)
   {
     memwipe(&m_keys.m_spend_secret_key, sizeof(m_keys.m_spend_secret_key));
     memwipe(&m_keys.m_view_secret_key, sizeof(m_keys.m_view_secret_key));
-    if (!m_keys.m_pqc_secret_key.empty()) {
-      shekyl_memwipe(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
-      shekyl_munlock(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
-    }
     if (!m_keys.m_ml_kem_decap_key.empty()) {
       shekyl_memwipe(m_keys.m_ml_kem_decap_key.data(), m_keys.m_ml_kem_decap_key.size());
       shekyl_munlock(m_keys.m_ml_kem_decap_key.data(), m_keys.m_ml_kem_decap_key.size());
@@ -298,15 +267,8 @@ DISABLE_VS_WARNINGS(4244 4345)
     // from which the spend key could be rederived. In v1 that is the entire
     // master seed; without it the wallet becomes a genuine view-only wallet
     // that retains m_view_secret_key + m_ml_kem_decap_key for incoming-tx
-    // decapsulation but cannot sign outgoing transactions. m_pqc_secret_key
-    // is cleared because its view_secret prefix is useless in isolation and
-    // its ML-KEM decap suffix is preserved in m_ml_kem_decap_key.
+    // decapsulation but cannot sign outgoing transactions.
     m_keys.m_spend_secret_key = crypto::secret_key();
-    if (!m_keys.m_pqc_secret_key.empty()) {
-      shekyl_memwipe(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
-      shekyl_munlock(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
-    }
-    m_keys.m_pqc_secret_key.clear();
     if (!m_keys.m_master_seed_64.empty()) {
       shekyl_memwipe(m_keys.m_master_seed_64.data(), m_keys.m_master_seed_64.size());
       shekyl_munlock(m_keys.m_master_seed_64.data(), m_keys.m_master_seed_64.size());
@@ -461,11 +423,6 @@ DISABLE_VS_WARNINGS(4244 4345)
     // capability: there is no way to recover the ML-KEM decap key from the
     // Ed25519 scalars alone. We therefore leave every PQC-related buffer
     // empty. wallet2.cpp will surface the "cannot sign v3" state to the user.
-    if (!m_keys.m_pqc_secret_key.empty()) {
-      shekyl_memwipe(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
-      shekyl_munlock(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
-    }
-    m_keys.m_pqc_secret_key.clear();
     if (!m_keys.m_ml_kem_decap_key.empty()) {
       shekyl_memwipe(m_keys.m_ml_kem_decap_key.data(), m_keys.m_ml_kem_decap_key.size());
       shekyl_munlock(m_keys.m_ml_kem_decap_key.data(), m_keys.m_ml_kem_decap_key.size());
