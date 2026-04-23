@@ -31,7 +31,7 @@ Portions Copyright (c) 2012-2013 The Cryptonote developers.
 
 - Web: [shekyl.org](https://shekyl.org)
 - Mail: [dev@shekyl.org](mailto:dev@shekyl.org)
-- GitHub: [https://github.com/Shekyl/Shekyl](https://github.com/Shekyl/Shekyl)
+- GitHub: [https://github.com/Shekyl-Foundation](https://github.com/Shekyl-Foundation)
 - Docs: [docs/](docs/)
 
 ## Vulnerability response
