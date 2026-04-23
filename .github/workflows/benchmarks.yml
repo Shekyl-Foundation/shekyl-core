@@ -1,0 +1,431 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Per-PR benchmark gate + rolling baseline updater — commit 3 of the
+# mid-rewire hardening pass (`docs/MID_REWIRE_HARDENING.md` §3.3).
+#
+# Two triggers, three jobs:
+#
+#   pull_request → dev
+#     - capture-pr:       runs the Rust iai-callgrind harness on the PR
+#                         head, uploads `shekyl_rust_v0.json` as an
+#                         artifact.
+#     - compare:          fetches `bench-baseline/baseline.json`, runs
+#                         `scripts/bench/compare.py`, renders a Markdown
+#                         comment via `scripts/bench/post_comment.py`,
+#                         upserts it on the PR, and fails the job if
+#                         any entry trips the `crypto_bench_*` /
+#                         `hot_path_bench_*` threshold (§3.3 table).
+#                         If `bench-baseline` does not exist yet
+#                         (first-time bootstrap), posts a
+#                         "baseline not yet seeded" comment and passes.
+#     - profile-on-fail:  on any fail verdict, re-runs the tripped
+#                         bench under `samply` and uploads the
+#                         resulting `profile.json` as a PR artifact
+#                         (linked from the comment on the next
+#                         `compare` run after seeding lands).
+#
+#   push → dev
+#     - update-baseline:  runs the same harness, writes the result to
+#                         `bench-baseline/baseline.json`, commits as
+#                         the CI bot. Creates the branch (orphan) if
+#                         it does not yet exist. Never merges into
+#                         `dev` or `main`.
+#
+# Implementation scope: **Rust + iai-callgrind only** (Tier 1).
+# C++ Google Benchmark + Rust criterion wall-clock are Tier-2 and
+# deferred per `docs/MID_REWIRE_HARDENING.md` §3.3 implementation
+# notes / §6.1 upgrade path. Criterion numbers are still captured
+# into the same envelope (by `scripts/bench/capture_rust_baseline.sh`)
+# and rendered as informational rows in the PR comment, but the gate
+# only trips on iai `instructions`.
+
+name: ci/benchmarks
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "rust/shekyl-wallet-state/**"
+      - "rust/shekyl-wallet-file/**"
+      - "rust/shekyl-scanner/**"
+      - "rust/shekyl-tx-builder/**"
+      - "rust/shekyl-oxide/**"
+      - "rust/shekyl-crypto-pq/**"
+      - "rust/Cargo.lock"
+      - "rust/Cargo.toml"
+      - "scripts/bench/**"
+      - ".github/workflows/benchmarks.yml"
+  push:
+    branches: [dev]
+    paths:
+      - "rust/shekyl-wallet-state/**"
+      - "rust/shekyl-wallet-file/**"
+      - "rust/shekyl-scanner/**"
+      - "rust/shekyl-tx-builder/**"
+      - "rust/shekyl-oxide/**"
+      - "rust/shekyl-crypto-pq/**"
+      - "rust/Cargo.lock"
+      - "rust/Cargo.toml"
+      - "scripts/bench/**"
+      - ".github/workflows/benchmarks.yml"
+  workflow_dispatch:
+
+# Top-level defaults: read-only. Per-job overrides upgrade to write
+# only where strictly necessary (PR comment; bench-baseline push).
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  capture-pr:
+    name: capture shekyl_rust_v0 (PR head)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: install apt deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            valgrind build-essential pkg-config libssl-dev python3 jq
+
+      - name: install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: bench-rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: bench-rust-${{ runner.os }}-
+
+      - name: install iai-callgrind-runner
+        run: |
+          # Pin to the lib-side version declared in the bench crates'
+          # Cargo.toml (0.16.x today); SemVer-compatible patch drift
+          # is fine, but we do not want a surprise 0.17 slipping in
+          # and breaking the handshake protocol.
+          cargo install iai-callgrind-runner --version '^0.16' --locked
+
+      - name: capture baseline
+        run: ./scripts/bench/capture_rust_baseline.sh
+
+      - name: upload PR baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: shekyl_rust_v0-pr
+          path: |
+            docs/benchmarks/shekyl_rust_v0.json
+            docs/benchmarks/shekyl_rust_v0.iai.snapshot
+          retention-days: 14
+
+  compare:
+    name: compare & post PR comment
+    if: github.event_name == 'pull_request'
+    needs: capture-pr
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    outputs:
+      has_fail: ${{ steps.compare.outputs.has_fail }}
+      fail_full_id: ${{ steps.compare.outputs.fail_full_id }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: download PR baseline
+        uses: actions/download-artifact@v4
+        with:
+          name: shekyl_rust_v0-pr
+          path: pr-baseline/
+
+      - name: fetch bench-baseline branch
+        id: baseline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin bench-baseline >/dev/null 2>&1; then
+            git fetch origin bench-baseline:bench-baseline
+            git show bench-baseline:baseline.json > /tmp/baseline.json
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: bootstrap-pending comment (no baseline yet)
+        if: steps.baseline.outputs.present == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Keep the same `<!-- shekyl-benchmarks-comment -->` marker
+          # as post_comment.py so the first real compare-run upserts
+          # (replaces) this bootstrap message instead of stacking.
+          BODY=$(cat <<'MD'
+          <!-- shekyl-benchmarks-comment -->
+          ## shekyl benchmarks — `bootstrap-pending`
+
+          The `bench-baseline` branch does not yet exist on this
+          repository, so there are no prior numbers to diff against.
+          This PR's captured `shekyl_rust_v0.json` was uploaded as
+          the `shekyl_rust_v0-pr` artifact and can be inspected
+          manually.
+
+          The first push to `dev` that this workflow sees will seed
+          `bench-baseline/baseline.json` from the `ubuntu-latest`
+          runner; subsequent PRs will see a real threshold gate. See
+          [`docs/benchmarks/README.md`](../../blob/dev/docs/benchmarks/README.md)
+          "Bootstrap" subsection for details.
+          MD
+          )
+          # Upsert: match by marker, replace if found, else create.
+          EXISTING=$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
+            | jq -r --arg marker "<!-- shekyl-benchmarks-comment -->" \
+                '.[] | select((.body // "") | startswith($marker)) | .id' \
+            | head -n1)
+          if [[ -n "${EXISTING}" ]]; then
+            jq -n --arg body "$BODY" '{body: $body}' \
+              | gh api --method PATCH "repos/${REPO}/issues/comments/${EXISTING}" --input -
+          else
+            jq -n --arg body "$BODY" '{body: $body}' \
+              | gh api --method POST "repos/${REPO}/issues/${PR}/comments" --input -
+          fi
+          # Deliberately exit 0: bootstrap-pending is a transitional
+          # condition, not a regression.
+
+      - name: run compare.py
+        id: compare
+        if: steps.baseline.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          python3 scripts/bench/compare.py \
+            --baseline /tmp/baseline.json \
+            --pr pr-baseline/shekyl_rust_v0.json \
+            --out /tmp/report.json \
+            || COMPARE_RC=$?
+          COMPARE_RC=${COMPARE_RC:-0}
+          if [[ "${COMPARE_RC}" == "1" ]]; then
+            echo "has_fail=true" >> "$GITHUB_OUTPUT"
+            # Surface the first fail's full_id so the profile job
+            # can target it without re-parsing the whole report.
+            FAIL_ID=$(jq -r '[.entries[] | select(.verdict=="fail") | .full_id][0] // ""' /tmp/report.json)
+            echo "fail_full_id=${FAIL_ID}" >> "$GITHUB_OUTPUT"
+          elif [[ "${COMPARE_RC}" != "0" ]]; then
+            echo "[compare] unexpected exit ${COMPARE_RC}"
+            exit "${COMPARE_RC}"
+          fi
+          # Upload the report so profile-on-fail can read it without
+          # re-running compare.py.
+          mkdir -p /tmp/report-artifact
+          cp /tmp/report.json /tmp/report-artifact/
+
+      - name: upload compare report
+        if: steps.baseline.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: shekyl_rust_v0-report
+          path: /tmp/report-artifact/report.json
+          retention-days: 14
+
+      - name: post PR comment
+        if: steps.baseline.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          python3 scripts/bench/post_comment.py \
+            --report /tmp/report.json \
+            --repo "$REPO" --pr "$PR"
+
+      - name: fail job on threshold trip
+        if: steps.baseline.outputs.present == 'true' && steps.compare.outputs.has_fail == 'true'
+        run: |
+          echo "::error::One or more benchmarks tripped the §3.3 fail threshold."
+          exit 1
+
+  profile-on-fail:
+    name: samply profile (fail only)
+    if: github.event_name == 'pull_request' && needs.compare.outputs.has_fail == 'true'
+    needs: compare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: install apt deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev
+
+      - name: install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: bench-rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: bench-rust-${{ runner.os }}-
+
+      - name: install samply
+        run: cargo install samply --locked
+
+      - name: profile the tripped bench
+        env:
+          FAIL_FULL_ID: ${{ needs.compare.outputs.fail_full_id }}
+        working-directory: rust
+        run: |
+          set -euo pipefail
+          # full_id shape: <crate>/<bench_target>/<group>/<function>/<run_id>
+          CRATE=$(echo "$FAIL_FULL_ID" | cut -d/ -f1)
+          TARGET=$(echo "$FAIL_FULL_ID" | cut -d/ -f2)
+          # Build the bench binary as an ordinary `--release` binary
+          # (not under valgrind) so samply can sample it. The bench
+          # harness defines `#[library_benchmark]` entry points; the
+          # resulting binary, when run without the iai-callgrind
+          # protocol env, exits after a trivial handshake. That's
+          # enough for samply to attach; for deeper profiles we
+          # invoke it with cargo criterion instead.
+          cargo bench --no-run -p "$CRATE" --bench "${TARGET%_iai}" 2>&1 | tail -5
+          BENCH_BIN=$(ls -t target/release/deps/${TARGET%_iai}-* \
+                      | grep -v '\.d$' | head -1)
+          samply record --output /tmp/profile.json --no-open \
+            "$BENCH_BIN" --bench --profile-time 10 || true
+          ls -la /tmp/profile.json || echo "samply produced no profile"
+
+      - name: upload samply profile
+        uses: actions/upload-artifact@v4
+        with:
+          name: samply-profile-${{ github.event.pull_request.number }}
+          path: /tmp/profile.json
+          retention-days: 30
+          if-no-files-found: warn
+
+  update-baseline:
+    name: update bench-baseline branch
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: install apt deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            valgrind build-essential pkg-config libssl-dev python3 jq
+
+      - name: install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: bench-rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: bench-rust-${{ runner.os }}-
+
+      - name: install iai-callgrind-runner
+        run: cargo install iai-callgrind-runner --version '^0.16' --locked
+
+      - name: capture baseline
+        run: ./scripts/bench/capture_rust_baseline.sh
+
+      - name: push updated baseline to bench-baseline branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CAPTURE_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Stage-out the envelope + snapshot from the dev checkout
+          # so we do not drag any other tree state into bench-baseline.
+          mkdir -p /tmp/baseline-out
+          cp docs/benchmarks/shekyl_rust_v0.json /tmp/baseline-out/baseline.json
+          cp docs/benchmarks/shekyl_rust_v0.iai.snapshot /tmp/baseline-out/baseline.iai.snapshot
+          cat > /tmp/baseline-out/README.md <<MD
+          # bench-baseline branch
+
+          **Do not merge this branch.** It is a rolling data branch
+          holding the current CI benchmark baseline — one file at tip,
+          updated by the \`ci/benchmarks\` workflow on every push to
+          \`dev\`. See
+          [\`docs/benchmarks/README.md\`](../dev/docs/benchmarks/README.md)
+          "CI integration" section for the full protocol.
+
+          **Tip file:**
+          - \`baseline.json\` — \`shekyl_rust_v0\`-schema envelope
+            captured on a GitHub-hosted \`ubuntu-latest\` runner.
+          - \`baseline.iai.snapshot\` — raw iai-callgrind stdout
+            corresponding to the same capture.
+
+          Current source commit: \`${CAPTURE_SOURCE_SHA}\`.
+          MD
+
+          # Work in a clean worktree so the main tree is not disturbed.
+          WORK=$(mktemp -d)
+          git -C "$WORK" init -q
+          git -C "$WORK" config user.name "shekyl-ci-bot"
+          git -C "$WORK" config user.email "ci-bot@shekyl.foundation"
+          git -C "$WORK" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          if git -C "$WORK" ls-remote --exit-code --heads origin bench-baseline >/dev/null 2>&1; then
+            git -C "$WORK" fetch origin bench-baseline
+            git -C "$WORK" checkout -b bench-baseline FETCH_HEAD
+          else
+            # Orphan seed.
+            git -C "$WORK" checkout --orphan bench-baseline
+            git -C "$WORK" rm -rf . >/dev/null 2>&1 || true
+          fi
+
+          cp /tmp/baseline-out/* "$WORK/"
+          git -C "$WORK" add baseline.json baseline.iai.snapshot README.md
+
+          if git -C "$WORK" diff --cached --quiet; then
+            echo "[update-baseline] no change since previous tip; skipping commit."
+            exit 0
+          fi
+
+          git -C "$WORK" commit -m "bench-baseline: refresh from ${CAPTURE_SOURCE_SHA:0:12}"
+          git -C "$WORK" push origin bench-baseline

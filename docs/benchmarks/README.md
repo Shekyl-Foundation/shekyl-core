@@ -106,11 +106,115 @@ section is removed. Until then, the C++ script's stricter "do not
 commit laptop-captured baselines" discipline is relaxed for
 `shekyl_rust_v0` only.
 
+## CI integration
+
+The `ci/benchmarks` workflow
+([`.github/workflows/benchmarks.yml`](../../.github/workflows/benchmarks.yml))
+is the per-PR gate, wired in commit 3 of the hardening pass.
+
+### Per-PR gate
+
+On a pull request targeting `dev` that touches any benched crate,
+`scripts/bench/**`, or the workflow itself:
+
+1. A fresh `ubuntu-latest` runner captures the full
+   `shekyl_rust_v0.json` envelope against the PR head via
+   `scripts/bench/capture_rust_baseline.sh` (~8-10 min).
+2. The runner fetches `bench-baseline/baseline.json` and runs
+   [`scripts/bench/compare.py`](../../scripts/bench/compare.py),
+   which diffs the PR's iai-callgrind `instructions` column against
+   the baseline and routes each entry through the threshold table
+   below.
+3. [`scripts/bench/post_comment.py`](../../scripts/bench/post_comment.py)
+   upserts a PR comment — marker-keyed to
+   `<!-- shekyl-benchmarks-comment -->` so re-runs replace the prior
+   comment rather than stacking — with per-bench verdicts, deltas,
+   criterion wall-clock numbers for context, and provenance.
+4. On any `fail`, the workflow fails the job (blocking merge) and a
+   second job re-runs the criterion sibling of the tripped bench
+   under `samply record` and uploads the resulting `profile.json`
+   as the `samply-profile-<PR>` artifact.
+
+### Threshold routing
+
+| Benchmark class     | Warn      | Fail       | Direction         |
+|---------------------|-----------|------------|-------------------|
+| `crypto_bench_*`    | ±5%       | ±15%       | **bidirectional** |
+| `hot_path_bench_*`  | +5%       | +15%       | slowdown-only     |
+
+- `crypto_bench_*` is bidirectional because a large speed-up on a
+  constant-time path is just as suspicious as a slow-down: it
+  usually indicates a rejection-loop shortcut, a dropped-round
+  fast-path, or a KDF parameter drop. Any `crypto_bench_*` change
+  ≥ ±5% requires a one-line rationale on the merge commit before
+  the baseline absorbs it.
+- `hot_path_bench_*` is slowdown-only because faster postcard
+  serde, balance compute, or scanner bookkeeping is unambiguously
+  better; speed-ups refresh the baseline without commentary.
+- An iai-callgrind entry **missing** from the PR's envelope is
+  treated as `fail` (a deleted bench is the most dangerous
+  regression — a "regression" that no longer exists to be caught).
+- An entry present in the PR but not the baseline is
+  informational; the first merge to `dev` seeds it into the
+  rolling baseline.
+
+Criterion wall-clock numbers are rendered in the PR comment as an
+informational table (median_ns delta, no gate). They drift with
+runner load and frequency scaling. The Tier-2 upgrade that makes
+criterion gate-worthy (dedicated runner + pinned CPU + warm-up
+discipline) is tracked in
+[`docs/MID_REWIRE_HARDENING.md`](../MID_REWIRE_HARDENING.md) §6.1.
+
+### Rolling baseline (bench-baseline branch)
+
+The authoritative CI baseline lives on an **orphan
+`bench-baseline` branch**, never merged into `dev` or `main`, with
+a single `baseline.json` at its tip (plus a
+`baseline.iai.snapshot` and a `README.md` explaining the branch's
+purpose). It is the only place in the repository where captured
+numbers live that the gate reads.
+
+- Updated by the `update-baseline` job of the workflow on every
+  push to `dev` that touches a benched path. A bot-authored commit
+  replaces the tip with the fresh capture.
+- If the branch does not exist (first-time bootstrap), the gate
+  posts a `bootstrap-pending` comment on the PR and passes. The
+  first subsequent push to `dev` that the workflow sees creates
+  the branch.
+- `docs/benchmarks/shekyl_rust_v0.json` and
+  `shekyl_rust_v0.iai.snapshot` in `dev` are **human-readable
+  snapshots**, not the gate's source of truth. They are updated by
+  hand on schema bumps and reference-machine swaps; the gate
+  ignores them.
+
+### When a gate trips
+
+A failing PR comment lists every bench that crossed the fail line,
+sorted largest delta first. Next steps:
+
+1. Open the linked `samply-profile-<PR>` artifact in
+   [`profiler.firefox.com`](https://profiler.firefox.com) for the
+   flamegraph.
+2. Cross-reference the failing bench's entry in
+   [`shekyl_rust_v0.manifest.md`](shekyl_rust_v0.manifest.md) —
+   the manifest names every operation in the hot loop, so a
+   regression can usually be localized to one operation by
+   elimination.
+3. If the regression is intentional (deliberate algorithm change,
+   security-motivated slowdown), state it in the PR description
+   and land a follow-up commit to the bench itself (fixture change
+   or manifest §6.x "known gap" entry) **in the same PR**. Ad-hoc
+   override of the gate is not supported by design.
+4. For a `crypto_bench_*` speed-up that is real and intentional,
+   the merge commit body must spell out why — see "Baseline-update
+   policy" below.
+
 ## Baseline-update policy
 
-The `bench-baseline` branch workflow (commit 3.3) advances the
-baseline automatically when a merge to `dev` produces new numbers.
-Two exceptions require a human in the loop:
+The `bench-baseline` branch workflow advances the baseline
+automatically when a push to `dev` produces new numbers (see
+"Rolling baseline" above). Two exceptions require a human in the
+loop:
 
 - **Crypto benchmark drift.** Any change ≥ ±5% in a `crypto_bench_*`
   line is inquiry-worthy (constant-time property defense). The merge

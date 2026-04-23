@@ -343,16 +343,22 @@ any fail-level regression.
 
 **Deliverable artifacts.**
 
-- `.github/workflows/benchmarks.yml` — the per-PR and post-merge
-  workflows.
-- `scripts/bench/compare.py` — schema normalization between the C++
-  Google Benchmark output and the Rust criterion/iai JSON. Emits
-  the delta table and the threshold routing. Kept in Python because
-  the workflow already uses Python for several other jobs; ~200
-  lines, includes the naming-convention router.
-- `scripts/bench/post_comment.py` — PR comment formatter.
-- `docs/benchmarks/README.md` — how to reproduce locally, how
-  baselines are updated, what to do when a threshold trips.
+- `.github/workflows/benchmarks.yml` — the per-PR gate + the
+  post-merge `update-baseline` job + the on-fail samply profile
+  job.
+- `scripts/bench/compare.py` — ingests two `shekyl_rust_v0`
+  envelopes (baseline vs PR), routes each iai-callgrind entry
+  through the `crypto_bench_*` / `hot_path_bench_*` threshold
+  table, emits a structured
+  `shekyl_rust_v0_compare_v1` report on stdout, and exits 1 if any
+  entry fails so the workflow step fails the PR gate.
+- `scripts/bench/post_comment.py` — ingests a
+  `shekyl_rust_v0_compare_v1` report and renders it as a Markdown
+  PR comment, upserted by marker
+  (`<!-- shekyl-benchmarks-comment -->`) so re-runs replace the
+  previous comment instead of stacking.
+- `docs/benchmarks/README.md` — "CI integration", "Threshold
+  routing", "Rolling baseline", and "When a gate trips" sections.
 
 **Implementation notes.**
 
@@ -360,8 +366,25 @@ any fail-level regression.
   is what the gate enforces. criterion wall-clock numbers are emitted
   as informational rows in the PR comment but **do not trip
   thresholds**; documented as such in the README.
-- Dedicated-runner upgrade (Tier 2, criterion wall-clock enforced) is
-  deferred. See §6 for the upgrade path and its deadline.
+- C++ Google Benchmark is **not** wired to the gate in this commit.
+  Of the five hot paths, only `BM_balance_compute` ships live on
+  the C++ side (per §3.1), and it is a wall-clock metric — which
+  places it in the same Tier-2 bucket as criterion. A follow-up
+  commit will add a C++ informational row to the PR comment once
+  the Tier-2 runner lands.
+- Dedicated-runner upgrade (Tier 2, criterion wall-clock + C++
+  Google Benchmark wall-clock enforced) is deferred. See §6 for
+  the upgrade path and its deadline.
+- The per-PR gate does **not** re-run the bench on the baseline
+  commit to pair with the PR run. §3.3's original framing called
+  for this, but iai-callgrind's instruction count is
+  machine-independent for deterministic code (Valgrind's VEX IR,
+  not native CPU cycles) — two successive `ubuntu-latest` runs
+  on the same source produce identical `instructions` columns. The
+  rolling baseline stored on `bench-baseline` is therefore trusted
+  directly, saving ~8 minutes of CI time per PR. If cross-runner
+  drift shows up in practice, promoting the gate to a paired
+  re-run is a single-job workflow change.
 - Self-hosted runner security: not a concern for this pass because
   we are on GitHub-hosted ubuntu-latest throughout. Becomes a
   concern when Tier 2 lands; mitigation spelled out in §6.

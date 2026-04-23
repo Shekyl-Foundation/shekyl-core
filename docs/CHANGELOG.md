@@ -4,6 +4,55 @@
 
 ### Added
 
+- **CI benchmark gate — iai-callgrind per-PR + rolling baseline on
+  `bench-baseline` (commit 3 of the mid-rewire hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.3).**
+  New `ci/benchmarks` workflow
+  ([`.github/workflows/benchmarks.yml`](../.github/workflows/benchmarks.yml))
+  running on PRs into `dev` (the gate) and pushes to `dev` (the
+  rolling-baseline updater). On a PR: `ubuntu-latest` runs the
+  full five-bench iai-callgrind harness via
+  `scripts/bench/capture_rust_baseline.sh` (~8-10 min, cached
+  cargo registry + target dir), diffs the resulting
+  `shekyl_rust_v0.json` against the tip of the orphan
+  `bench-baseline` branch's `baseline.json` via
+  [`scripts/bench/compare.py`](../scripts/bench/compare.py), and
+  upserts a Markdown PR comment via
+  [`scripts/bench/post_comment.py`](../scripts/bench/post_comment.py).
+  Threshold table enforced mechanically: `crypto_bench_*` ±5% warn
+  / ±15% fail (bidirectional — speed-ups are suspicious on
+  constant-time paths too), `hot_path_bench_*` +5% warn / +15%
+  fail (slowdown-only), missing-bench-in-PR = fail. On any fail a
+  second job re-runs the criterion sibling of the tripped bench
+  under `samply record` and uploads a `profile.json` artifact for
+  flamegraph review. Bootstrap: the first PR before the
+  `bench-baseline` branch exists gets a `bootstrap-pending`
+  comment and the gate passes; the first subsequent push to `dev`
+  creates the branch with a bot-authored orphan commit. Design
+  choices documented in §3.3 "Implementation notes": (a) Tier 1
+  only — criterion wall-clock numbers are rendered in the comment
+  as an informational table but do not trip the gate (the Tier 2
+  upgrade to dedicated-runner wall-clock is tracked in §6.1);
+  (b) C++ Google Benchmark is **not** wired in this commit
+  because only `BM_balance_compute` ships live on the C++ side and
+  it is wall-clock (same Tier-2 bucket as criterion); (c) the gate
+  diffs against `bench-baseline/baseline.json` directly rather
+  than re-running the bench on the baseline commit, because
+  iai-callgrind instruction counts are machine-independent for
+  deterministic code (Valgrind VEX IR, not native cycles) — saves
+  ~8 min of CI per PR and the rolling baseline is always at most
+  one dev-merge cycle stale. The compare report schema
+  (`shekyl_rust_v0_compare_v1`) is its own versioned envelope so a
+  future schema bump on the capture side does not silently drift
+  the comparator. Companion documentation:
+  [`docs/benchmarks/README.md`](benchmarks/README.md) gains a
+  full "CI integration" section with per-PR flow, threshold
+  routing, rolling-baseline semantics, and a "When a gate trips"
+  triage runbook. Permissions are scoped per-job (read-only at
+  top level; `pull-requests: write` only on the comment-posting
+  job; `contents: write` only on the baseline-updater job), using
+  the default `GITHUB_TOKEN` — no PAT, no self-hosted runner, no
+  secret provisioning required.
 - **Provisional laptop-captured `shekyl_rust_v0` baseline
   (follow-up to hardening-pass commit 2).** The harness commit's
   CHANGELOG entry deferred the frozen `shekyl_rust_v0.json` +
