@@ -59,7 +59,7 @@ pub mod paths;
 pub mod payload;
 
 pub use error::WalletFileError;
-pub use handle::{CreateParams, WalletFileHandle};
+pub use handle::{CreateParams, OpenOutcome, WalletFileHandle};
 pub use payload::{
     decode_payload, encode_payload, DecodedPayload, PayloadError, PayloadKind,
     CURRENT_PAYLOAD_VERSION, PAYLOAD_BODY_MAX, PAYLOAD_HEADER_LEN, PAYLOAD_MAGIC,

@@ -12,7 +12,7 @@
 //!
 //! ```text
 //! WalletFileHandle::create(base, password, …, initial_ledger) → Handle
-//! WalletFileHandle::open  (base, password)                    → (Handle, WalletLedger)
+//! WalletFileHandle::open  (base, password)                    → (Handle, OpenOutcome)
 //! handle.save_state     (&ledger)                             → ()
 //! handle.rotate_password(old, new, new_kdf_opt)               → ()
 //! ```
@@ -54,6 +54,7 @@
 //! opens (lost-`.wallet` rescan recovery, pre-v1 refusal, network
 //! mismatch, capability dispatch) live in 2i.
 
+use std::io;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
@@ -61,13 +62,87 @@ use shekyl_crypto_pq::wallet_envelope::{
     open_keys_file, open_state_file, rewrap_keys_file_password, seal_keys_file, seal_state_file,
     CapabilityContent, KdfParams, OpenedKeysFile, EXPECTED_CLASSICAL_ADDRESS_BYTES,
 };
-use shekyl_wallet_state::WalletLedger;
+use shekyl_wallet_state::{
+    BookkeepingBlock, LedgerBlock, SyncStateBlock, TxMetaBlock, WalletLedger,
+};
 
 use crate::atomic::atomic_write_file;
 use crate::error::WalletFileError;
 use crate::lock::KeysFileLock;
 use crate::paths::{keys_path_from, state_path_from};
 use crate::payload::{decode_payload, encode_payload, PayloadKind};
+
+/// Outcome of a successful [`WalletFileHandle::open`]. The happy path
+/// returns [`Self::StateLoaded`] with the ledger decoded from `.wallet`.
+/// The lost-state recovery path ([`Self::StateLost`]) is returned when
+/// `.wallet` is missing (`io::ErrorKind::NotFound`) but `.wallet.keys`
+/// is intact; the caller receives a fresh empty ledger pre-seeded with
+/// the rescan floor from the keys file, and is expected to drive a
+/// full-history refresh and then `save_state` the rebuilt ledger.
+///
+/// # Recovery policy (2i-happy)
+///
+/// We trigger the rescan path **only** on `NotFound`. Other failure
+/// modes (truncation, bad magic, AEAD-auth failure, seed-block
+/// mismatch) refuse loudly — they indicate either tampering, a
+/// corrupt disk, or a paired-with-wrong-keys scenario, and silently
+/// discarding the state would mask the signal. 2i-errors will refine
+/// this policy if we decide mid-write-crash truncation should also be
+/// recoverable (see spec §4.4).
+///
+/// # Why not merge into `WalletLedger`?
+///
+/// We could overload by returning just `WalletLedger` and letting the
+/// caller check `sync_state.scan_completed == false`. We don't,
+/// because "scan_completed == false on a fresh empty ledger" is
+/// indistinguishable from "scan_completed == false because this wallet
+/// is still doing its initial sync". The discriminator here is
+/// structural (did we load state from disk, or seed it?), not
+/// state-derived.
+#[derive(Debug)]
+pub enum OpenOutcome {
+    /// `.wallet` was present and decoded successfully. The ledger is
+    /// the caller's persisted state.
+    StateLoaded(WalletLedger),
+
+    /// `.wallet` was missing. A fresh ledger has been constructed with
+    /// `sync_state.restore_from_height` set from the keys file's
+    /// `restore_height_hint`. The caller should:
+    ///
+    /// 1. Treat in-memory state as empty (no transfers, no
+    ///    bookkeeping).
+    /// 2. Start a rescan from `restore_from_height`.
+    /// 3. Persist the rebuilt ledger via [`WalletFileHandle::save_state`].
+    StateLost {
+        ledger: WalletLedger,
+        restore_from_height: u64,
+    },
+}
+
+impl OpenOutcome {
+    /// Borrow the ledger regardless of which branch fired. Convenient
+    /// for call sites that only want the state and will separately
+    /// check [`Self::is_lost`] to decide whether to kick off a rescan.
+    pub fn ledger(&self) -> &WalletLedger {
+        match self {
+            Self::StateLoaded(l) | Self::StateLost { ledger: l, .. } => l,
+        }
+    }
+
+    /// Consume the outcome and return the ledger, discarding the
+    /// recovery-path signal. Use only if you really don't need to
+    /// distinguish the two cases.
+    pub fn into_ledger(self) -> WalletLedger {
+        match self {
+            Self::StateLoaded(l) | Self::StateLost { ledger: l, .. } => l,
+        }
+    }
+
+    /// True when the state file was missing and a rescan is required.
+    pub fn is_lost(&self) -> bool {
+        matches!(self, Self::StateLost { .. })
+    }
+}
 
 /// Parameters for creating a fresh wallet. Grouped into a struct so the
 /// constructor signature stays readable and so fields can be extended
@@ -211,17 +286,27 @@ impl WalletFileHandle {
         })
     }
 
-    /// Open an existing wallet pair. Returns the handle plus the
-    /// current ledger snapshot.
+    /// Open an existing wallet pair. Returns the handle plus an
+    /// [`OpenOutcome`] that tells the caller whether the state file
+    /// was loaded from disk or synthesized because `.wallet` was
+    /// missing.
     ///
-    /// This commit implements the **happy path** only: both files
-    /// present, envelope opens cleanly, SWSP frame valid, ledger
-    /// decodes. Error branches (lost-`.wallet`, pre-v1 refusal,
-    /// network mismatch, capability dispatch) are 2i's scope.
-    pub fn open(
-        base_path: &Path,
-        password: &[u8],
-    ) -> Result<(Self, WalletLedger), WalletFileError> {
+    /// # Recovery scope (2i-happy)
+    ///
+    /// The only recovery trigger in this commit is `.wallet` returning
+    /// `io::ErrorKind::NotFound`. That one case is handled by
+    /// constructing a fresh [`WalletLedger`] whose sync-state block
+    /// has `restore_from_height` populated from the keys-file's
+    /// `restore_height_hint` (widened from `u32` to `u64` because the
+    /// sync-state block uses the wider type for long-term chain-height
+    /// headroom).
+    ///
+    /// Other failure modes — truncated `.wallet`, bad magic,
+    /// AEAD-auth failure, seed-block mismatch — still refuse loudly
+    /// and will be triaged in 2i-errors. A silent rescan on
+    /// AEAD-auth-failed bytes would mask tampering; a silent rescan
+    /// on bad magic would mask a misfiled companion file.
+    pub fn open(base_path: &Path, password: &[u8]) -> Result<(Self, OpenOutcome), WalletFileError> {
         let keys_path = keys_path_from(base_path);
         let state_path = state_path_from(base_path);
 
@@ -230,14 +315,39 @@ impl WalletFileHandle {
         let keys_bytes = std::fs::read(&keys_path)?;
         let opened = open_keys_file(password, &keys_bytes)?;
 
-        let state_bytes = std::fs::read(&state_path)?;
-        let plaintext: Zeroizing<Vec<u8>> = open_state_file(password, &keys_bytes, &state_bytes)?;
-
-        let framed = decode_payload(&plaintext)?;
-        // Currently only one kind; `from_byte` has already rejected
-        // anything else, so a `match` here would be a single arm. When
-        // V3.1 introduces a second kind the dispatch will live here.
-        let ledger = WalletLedger::from_postcard_bytes(framed.body)?;
+        let outcome = match std::fs::read(&state_path) {
+            Ok(state_bytes) => {
+                let plaintext: Zeroizing<Vec<u8>> =
+                    open_state_file(password, &keys_bytes, &state_bytes)?;
+                let framed = decode_payload(&plaintext)?;
+                // Currently only one kind; `from_byte` has already rejected
+                // anything else, so a `match` here would be a single arm.
+                // When V3.1 introduces a second kind the dispatch will
+                // live here.
+                let ledger = WalletLedger::from_postcard_bytes(framed.body)?;
+                OpenOutcome::StateLoaded(ledger)
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                let restore_from_height = u64::from(opened.restore_height_hint);
+                tracing::warn!(
+                    target: "shekyl_wallet_file",
+                    state_path = %state_path.display(),
+                    restore_from_height,
+                    "state cache missing; rebuilding ledger from chain from restore_height_hint"
+                );
+                let ledger = WalletLedger::new(
+                    LedgerBlock::empty(),
+                    BookkeepingBlock::empty(),
+                    TxMetaBlock::empty(),
+                    SyncStateBlock::new(restore_from_height, None),
+                );
+                OpenOutcome::StateLost {
+                    ledger,
+                    restore_from_height,
+                }
+            }
+            Err(e) => return Err(WalletFileError::Io(e)),
+        };
 
         let handle = Self {
             keys_path,
@@ -246,7 +356,7 @@ impl WalletFileHandle {
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
             _lock: lock,
         };
-        Ok((handle, ledger))
+        Ok((handle, outcome))
     }
 
     /// Rewrite `.wallet` with the given ledger state. Does **not**
@@ -395,10 +505,15 @@ mod tests {
         // Drop the handle so the advisory lock is released for open.
         drop(handle);
 
-        let (handle2, ledger2) =
+        let (handle2, outcome) =
             WalletFileHandle::open(&base, b"correct horse battery staple").expect("open");
         assert_eq!(handle2.keys_path(), keys_path_from(&base));
         assert_eq!(handle2.state_path(), state_path_from(&base));
+        assert!(
+            !outcome.is_lost(),
+            "fresh create→open must go through StateLoaded"
+        );
+        let ledger2 = outcome.into_ledger();
         assert_eq!(ledger2.format_version, ledger.format_version);
         assert_eq!(ledger2.ledger.block_version, ledger.ledger.block_version);
     }
@@ -419,7 +534,8 @@ mod tests {
         handle.save_state(b"pw", &ledger).expect("save2");
         drop(handle);
 
-        let (_, ledger_back) = WalletFileHandle::open(&base, b"pw").expect("open");
+        let (_, outcome) = WalletFileHandle::open(&base, b"pw").expect("open");
+        let ledger_back = outcome.into_ledger();
         assert_eq!(ledger_back.format_version, ledger.format_version);
     }
 
@@ -550,6 +666,118 @@ mod tests {
                 assert_eq!(path, keys_path_from(&base));
             }
             other => panic!("expected AlreadyLocked, got {other:?}"),
+        }
+    }
+
+    /// Recovery path per spec §4.5: `.wallet.keys` is intact but
+    /// `.wallet` is missing. We should return `StateLost` with a
+    /// fresh empty ledger whose `restore_from_height` matches the
+    /// keys-file's `restore_height_hint` (widened u32→u64).
+    #[test]
+    fn open_with_missing_state_returns_lost() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+
+        const RESTORE_HINT: u32 = 1_234_567;
+        {
+            let mut params = make_params(&fx, &base, b"pw", &ledger, &cap);
+            params.restore_height_hint = RESTORE_HINT;
+            let _h = WalletFileHandle::create(&params).expect("create");
+        }
+        // Kill the state file; keys file remains.
+        let state_path = state_path_from(&base);
+        std::fs::remove_file(&state_path).expect("remove .wallet");
+        assert!(keys_path_from(&base).exists(), "keys file must still exist");
+        assert!(!state_path.exists(), ".wallet must be gone");
+
+        let (_handle, outcome) = WalletFileHandle::open(&base, b"pw").expect("open");
+        match outcome {
+            OpenOutcome::StateLost {
+                ledger,
+                restore_from_height,
+            } => {
+                assert_eq!(restore_from_height, u64::from(RESTORE_HINT));
+                assert_eq!(
+                    ledger.sync_state.restore_from_height,
+                    u64::from(RESTORE_HINT),
+                    "fresh ledger must inherit restore_height_hint from keys file"
+                );
+                // Fresh ledger: no transfers, no tx_meta, no bookkeeping.
+                assert!(ledger.ledger.transfers.is_empty());
+                assert!(ledger.tx_meta.tx_keys.is_empty());
+                assert!(ledger.bookkeeping.subaddress_labels.per_index.is_empty());
+                assert!(ledger.bookkeeping.subaddress_labels.primary.is_empty());
+                assert!(!ledger.sync_state.scan_completed);
+            }
+            OpenOutcome::StateLoaded(_) => panic!("expected StateLost for missing .wallet"),
+        }
+    }
+
+    /// After a rescan-recovery open, calling `save_state` must
+    /// successfully write a fresh `.wallet`, which is then readable on
+    /// the next open as a normal `StateLoaded`.
+    #[test]
+    fn save_after_state_lost_persists_and_reopens_as_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+
+        {
+            let params = make_params(&fx, &base, b"pw", &ledger, &cap);
+            let _h = WalletFileHandle::create(&params).expect("create");
+        }
+        std::fs::remove_file(state_path_from(&base)).expect("remove .wallet");
+
+        let rebuilt = {
+            let (handle, outcome) = WalletFileHandle::open(&base, b"pw").expect("open-lost");
+            assert!(outcome.is_lost());
+            let ledger = outcome.into_ledger();
+            handle.save_state(b"pw", &ledger).expect("save");
+            ledger
+        };
+
+        let (_handle, outcome) = WalletFileHandle::open(&base, b"pw").expect("open-loaded");
+        assert!(!outcome.is_lost(), "after save, open must see StateLoaded");
+        let reloaded = outcome.into_ledger();
+        assert_eq!(reloaded.format_version, rebuilt.format_version);
+        assert_eq!(
+            reloaded.sync_state.restore_from_height,
+            rebuilt.sync_state.restore_from_height,
+        );
+    }
+
+    /// A truncated `.wallet` (exists but too short for the envelope
+    /// header) is **not** treated as a recovery trigger in 2i-happy.
+    /// The envelope's `TooShort` error is surfaced loudly so the user
+    /// can decide whether this is a mid-write crash (spec §4.4, which
+    /// 2i-errors may decide to auto-recover) or disk corruption. This
+    /// test pins the current conservative policy.
+    #[test]
+    fn truncated_state_file_refuses_not_recovers() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+
+        {
+            let params = make_params(&fx, &base, b"pw", &ledger, &cap);
+            let _h = WalletFileHandle::create(&params).expect("create");
+        }
+        std::fs::write(state_path_from(&base), b"\x00\x00\x00").expect("truncate .wallet");
+
+        let err = WalletFileHandle::open(&base, b"pw").expect_err("must refuse");
+        match err {
+            WalletFileError::Envelope(_) => { /* expected: TooShort / BadMagic surfaced */ }
+            other => panic!(
+                "expected Envelope refusal on truncated .wallet, got {other:?} \
+                 (recovery policy must not silently swallow tampered/corrupt bytes)"
+            ),
         }
     }
 }
