@@ -55,6 +55,15 @@ use shekyl_crypto_pq::signature::{
 use std::os::raw::c_char;
 use std::sync::Mutex;
 
+// Stabilized v1 account-derivation FFI surface. See `account_ffi.rs` for
+// per-function docs and the fail-closed / out-pointer / pinned-size
+// disciplines. The legacy `shekyl_kem_keypair_generate` and
+// `shekyl_seed_derive_{spend,view,ml_kem}` FFIs in this file remain for
+// the duration of the wallet-account-rewire slice; they are replaced by
+// `shekyl_account_*` callers and removed once C++ no longer references
+// them.
+pub mod account_ffi;
+
 static CONSENSUS_REGISTRY: Mutex<Option<shekyl_consensus::ConsensusRegistry>> = Mutex::new(None);
 
 /// Fixed-size witness header per input in the FCMP++ prove/verify FFI.

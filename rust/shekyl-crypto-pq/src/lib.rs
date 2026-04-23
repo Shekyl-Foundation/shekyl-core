@@ -47,6 +47,8 @@ compile_error!(
      attempting to revert this gate."
 );
 
+pub mod account;
+pub mod bip39;
 pub mod derivation;
 pub mod error;
 pub mod kem;

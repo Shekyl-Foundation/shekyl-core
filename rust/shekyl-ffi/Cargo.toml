@@ -27,6 +27,9 @@ shekyl-staking = { path = "../shekyl-staking" }
 shekyl-proofs = { path = "../shekyl-proofs" }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 curve25519-dalek = "4"
+# OsRng for the testnet/fakechain raw-seed generation FFI. The feature set is
+# minimal; we do not enable any of rand's derive or integration machinery.
+rand = "0.8"
 rcgen = "0.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

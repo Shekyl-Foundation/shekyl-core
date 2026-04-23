@@ -24,6 +24,16 @@ fips203 = "=0.4.3"
 hkdf = "0.12"
 sha2 = "0.10"
 blake2 = "0.10"
+# BIP-39 (English) mnemonic <-> entropy conversion and PBKDF2-HMAC-SHA512 seed
+# derivation. We depend on rust-bitcoin's crate for its battle-tested handling
+# of NFKD, checksum, and PBKDF2; the canonical English wordlist is additionally
+# pinned by a KAT (see tests::bip39_english_wordlist_sha256_matches_canonical)
+# which fails closed on any upstream drift.
+#
+# The `rand` feature would pull a transitive `rand` dependency; we do not use
+# random-mnemonic generation (all entropy flows through OsRng in our own FFI)
+# so we keep the feature set minimal.
+bip39 = { version = "2.2.2", default-features = false, features = ["std"] }
 shekyl-address = { path = "../shekyl-address" }
 sha3 = "0.10"
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
