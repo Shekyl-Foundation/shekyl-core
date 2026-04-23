@@ -34,6 +34,7 @@ pub mod serde_helpers;
 pub mod staker_pool;
 pub mod subaddress;
 pub mod transfer;
+pub mod tx_meta_block;
 
 pub use bookkeeping_block::{
     AccountTags, AddressBookEntry, BookkeepingBlock, SubaddressLabels, BOOKKEEPING_BLOCK_VERSION,
@@ -47,3 +48,6 @@ pub use runtime_state::RuntimeWalletState;
 pub use staker_pool::{AccrualRecord, ConservationCheck, StakerPoolState};
 pub use subaddress::SubaddressIndex;
 pub use transfer::{FcmpPrecomputedPath, TransferDetails, SPENDABLE_AGE};
+pub use tx_meta_block::{
+    ScannedPoolTx, TxMetaBlock, TxSecretKey, TxSecretKeys, TX_META_BLOCK_VERSION,
+};
