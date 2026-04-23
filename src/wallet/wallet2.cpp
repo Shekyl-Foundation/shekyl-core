@@ -5693,15 +5693,20 @@ void wallet2::generate(const std::string& wallet_, const epee::wipeable_string& 
   }
 
   m_account.create_from_keys(account_public_address, spendkey, viewkey);
-  // Legacy restore paths can provide key material without PQC components.
-  // Generate PQC keys so post-HF17 v3 tx construction can succeed.
-  if (m_account.get_keys().m_account_address.m_pqc_public_key.empty() &&
-      m_account.get_keys().m_pqc_secret_key.empty())
+  // In v1 there is no way to rebuild the ML-KEM decapsulation key from
+  // spend+view keys alone; the full master seed is required. A wallet
+  // created via create_from_keys is therefore genuinely view-only-with-
+  // signing: it can construct classical transaction inputs but cannot
+  // decapsulate scan keys for v3 output recovery. Users who want full
+  // capability must restore via the BIP-39 (mainnet/stagenet) or raw-seed
+  // (testnet/fakechain) flows, which run derivation end-to-end through
+  // the shekyl_account_* FFIs. The old generate_pqc_for_restored_address
+  // helper that attempted to synthesize PQC material post-hoc has been
+  // removed because it produced non-reproducible ML-KEM keys.
+  if (m_account.get_keys().m_account_address.m_pqc_public_key.empty())
   {
-    THROW_WALLET_EXCEPTION_IF(
-      !m_account.generate_pqc_for_restored_address(),
-      error::wallet_internal_error,
-      "Failed to generate PQC key material for restored wallet");
+    MWARNING("Wallet restored from keys without PQC material; v3 transaction "
+             "sending will be unavailable. Restore from seed to enable PQC.");
   }
   init_type(hw::device::device_type::SOFTWARE);
   m_account_public_address = account_public_address;

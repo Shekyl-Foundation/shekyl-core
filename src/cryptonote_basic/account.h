@@ -33,6 +33,7 @@
 #include "cryptonote_basic.h"
 #include "crypto/crypto.h"
 #include "serialization/keyvalue_serialization.h"
+#include "shekyl/shekyl_ffi.h"
 
 namespace cryptonote
 {
@@ -42,7 +43,43 @@ namespace cryptonote
     account_public_address m_account_address;
     crypto::secret_key   m_spend_secret_key;
     crypto::secret_key   m_view_secret_key;
+
+    // LEGACY view-prefixed PQC secret buffer: view_secret[32] || ML-KEM_dk[2400].
+    // Still populated on every successful (re)derivation so unmigrated
+    // consumers in wallet2.cpp / wallet2_ffi.cpp / chaingen.cpp keep building
+    // during the wallet-account-rewire commit sequence. Slated for removal in
+    // the third commit of this branch once all callers read from
+    // m_view_secret_key (for the X25519 prefix) and m_ml_kem_decap_key
+    // (for the ML-KEM suffix) directly.
     std::vector<uint8_t> m_pqc_secret_key;
+
+    // --- v1 stabilized state (see rust/shekyl-crypto-pq/src/account.rs) -----
+    //
+    // m_master_seed_64 is the only byte sequence that is *persisted* as a
+    // secret; every other secret below is rederived on wallet open via
+    // shekyl_account_rederive. Its in-memory copy is XOR-encrypted at rest
+    // with the same chacha keystream as m_spend_secret_key / m_view_secret_key
+    // and is wiped on destruction.
+    //
+    // m_seed_format records whether the master seed originated from a
+    // BIP-39 mnemonic (mainnet/stagenet) or from a 32-byte raw seed
+    // (testnet/fakechain); it is *not* encrypted because its value is
+    // bound into the HKDF salt and therefore must survive a keyfile
+    // decryption failure so the wallet can tell the user whether the
+    // mismatch was password vs network.
+    //
+    // m_ml_kem_decap_key is never persisted. It is recomputed on every
+    // open; see POST_QUANTUM_CRYPTOGRAPHY.md for the rationale (ML-KEM-768
+    // decap key size > 2 KiB and the underlying library's encoding can
+    // change without breaking FIPS-203 consumers).
+    //
+    // m_master_seed_present distinguishes "v1 wallet, seed in memory"
+    // from "legacy / view-only wallet, no seed available" at runtime.
+    std::vector<uint8_t> m_master_seed_64;
+    uint8_t              m_seed_format = SHEKYL_SEED_FORMAT_RAW32;
+    bool                 m_master_seed_present = false;
+    std::vector<uint8_t> m_ml_kem_decap_key;
+
     hw::device *m_device = &hw::get_device("default");
     crypto::chacha_iv m_encryption_iv;
 
@@ -58,6 +95,8 @@ namespace cryptonote
       KV_SERIALIZE_VAL_POD_AS_BLOB_FORCE(m_spend_secret_key)
       KV_SERIALIZE_VAL_POD_AS_BLOB_FORCE(m_view_secret_key)
       KV_SERIALIZE_OPT(m_pqc_secret_key, std::vector<uint8_t>())
+      KV_SERIALIZE_OPT(m_master_seed_64, std::vector<uint8_t>())
+      KV_SERIALIZE_OPT(m_seed_format, (uint8_t)SHEKYL_SEED_FORMAT_RAW32)
       const crypto::chacha_iv default_iv{{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}};
       KV_SERIALIZE_VAL_POD_AS_BLOB_OPT(m_encryption_iv, default_iv)
     END_KV_SERIALIZE_MAP()
@@ -81,13 +120,56 @@ namespace cryptonote
   {
   public:
     account_base();
-    crypto::secret_key generate(const crypto::secret_key& recovery_key = crypto::secret_key(), bool recover = false, bool two_random = false);
+
+    // --- v1 canonical entry points ------------------------------------------
+    //
+    // Every production code path should go through one of these three calls.
+    // They dispatch to the Rust `shekyl_account_*` FFIs, which own all secret
+    // material; this class only receives a fully-formed `ShekylAllKeysBlob`
+    // whose public side is copied into `m_account_address`, and whose secret
+    // side is copied into the mlock'd region owned by `account_keys`.
+    //
+    // The `nettype` argument is required because the HKDF salt is network-
+    // bound; calling generate_from_raw_seed with the wrong network does not
+    // produce the right addresses.
+
+    /// Mainnet / stagenet production path. 24 English BIP-39 words + optional
+    /// passphrase. Throws on invalid mnemonic or disallowed (nettype,format)
+    /// pair. `passphrase` may be empty.
+    void generate_from_bip39(
+        const std::string &mnemonic_words,
+        const std::string &passphrase,
+        cryptonote::network_type nettype);
+
+    /// Testnet / fakechain path. 32 bytes of input entropy that are also the
+    /// wallet's source of truth on restore. Throws on disallowed
+    /// (nettype,format) pair.
+    void generate_from_raw_seed(
+        const uint8_t raw_seed[SHEKYL_RAW_SEED_BYTES],
+        cryptonote::network_type nettype);
+
+    /// Rederive every in-memory key from an already-populated
+    /// `m_master_seed_64` + `m_seed_format` (wallet-open hot path). Throws on
+    /// FFI failure.
+    void rederive_from_master_seed(cryptonote::network_type nettype);
+
+    // --- compatibility / transitional entry points --------------------------
+    //
+    // These wrappers retain the original Monero-lineage signatures so the
+    // ~20 existing test callers continue to build while commit 2+ migrate
+    // production consumers. They internally route through
+    // generate_from_raw_seed on `DerivationNetwork::Fakechain` and therefore
+    // are **not** safe for mainnet restore: the Electrum 25-word flow is
+    // gone and there is no equivalent in v1. Mainnet / stagenet restore
+    // MUST use generate_from_bip39.
+    crypto::secret_key generate(
+        const crypto::secret_key& recovery_key = crypto::secret_key(),
+        bool recover = false,
+        bool two_random = false);
+
     void create_from_device(const std::string &device_name);
     void create_from_device(hw::device &hwdev);
     void create_from_keys(const cryptonote::account_public_address& address, const crypto::secret_key& spendkey, const crypto::secret_key& viewkey);
-    /// Generate PQC keys for a restored address that lacks them. Enables v3 sending capability.
-    /// Returns true if keys were generated; false if address already has PQC keys or generation failed.
-    bool generate_pqc_for_restored_address();
     void create_from_viewkey(const cryptonote::account_public_address& address, const crypto::secret_key& viewkey);
     const account_keys& get_keys() const;
     std::string get_public_address_str(network_type nettype) const;

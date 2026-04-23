@@ -45,6 +45,13 @@ namespace boost
       a & x.m_spend_secret_key;
       a & x.m_view_secret_key;
       a & x.m_pqc_secret_key;
+      // v1 persistent derivation state. Appended to the end of the archive
+      // so pre-v1 wallets still deserialize up to m_pqc_secret_key; a
+      // pre-v1 record simply ends without these fields and the default-
+      // constructed account_keys leaves them empty with
+      // m_master_seed_present == false.
+      a & x.m_master_seed_64;
+      a & x.m_seed_format;
     }
 
     template <class Archive>

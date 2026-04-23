@@ -69,27 +69,35 @@ TEST(account, encrypt_keys)
   ASSERT_EQ(account.get_keys().m_view_secret_key, keys.m_view_secret_key);
 }
 
-TEST(account, generate_pqc_for_restored_address)
+// The legacy `generate_pqc_for_restored_address` helper has been removed
+// because it produced non-reproducible ML-KEM decap keys. Its replacement is
+// the raw-seed / BIP-39 restore path, which runs the whole derivation through
+// Rust; the test below exercises the "restore-from-raw-seed yields the same
+// account as the original generate-from-raw-seed call" invariant that this
+// new path is meant to provide.
+TEST(account, rederive_from_raw_seed_reproduces_account)
 {
-  cryptonote::account_base generated;
-  generated.generate();
-  const auto generated_keys = generated.get_keys();
-  cryptonote::account_public_address legacy_address = generated_keys.m_account_address;
-  legacy_address.m_pqc_public_key.clear();
+  uint8_t raw_seed[SHEKYL_RAW_SEED_BYTES] = {
+      0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+      0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+      0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+      0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+  };
 
-  cryptonote::account_base restored;
-  restored.create_from_keys(
-    legacy_address,
-    generated_keys.m_spend_secret_key,
-    generated_keys.m_view_secret_key);
+  cryptonote::account_base first;
+  first.generate_from_raw_seed(raw_seed, cryptonote::FAKECHAIN);
+  const auto first_keys = first.get_keys();
 
-  ASSERT_TRUE(restored.get_keys().m_pqc_secret_key.empty());
-  ASSERT_TRUE(restored.get_keys().m_account_address.m_pqc_public_key.empty());
+  cryptonote::account_base second;
+  second.generate_from_raw_seed(raw_seed, cryptonote::FAKECHAIN);
+  const auto second_keys = second.get_keys();
 
-  ASSERT_TRUE(restored.generate_pqc_for_restored_address());
-  ASSERT_FALSE(restored.get_keys().m_pqc_secret_key.empty());
-  ASSERT_FALSE(restored.get_keys().m_account_address.m_pqc_public_key.empty());
-
-  // The helper is one-shot and should not overwrite existing PQC material.
-  ASSERT_FALSE(restored.generate_pqc_for_restored_address());
+  ASSERT_EQ(first_keys.m_account_address, second_keys.m_account_address);
+  ASSERT_EQ(first_keys.m_spend_secret_key, second_keys.m_spend_secret_key);
+  ASSERT_EQ(first_keys.m_view_secret_key,  second_keys.m_view_secret_key);
+  ASSERT_EQ(first_keys.m_ml_kem_decap_key, second_keys.m_ml_kem_decap_key);
+  ASSERT_EQ(first_keys.m_master_seed_64,   second_keys.m_master_seed_64);
+  ASSERT_EQ(first_keys.m_seed_format,      second_keys.m_seed_format);
+  ASSERT_EQ(first_keys.m_account_address.m_pqc_public_key.size(),
+            static_cast<size_t>(SHEKYL_PQC_PUBLIC_KEY_BYTES));
 }

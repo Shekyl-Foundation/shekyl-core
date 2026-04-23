@@ -28,16 +28,14 @@
 // 
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
+#include <array>
+#include <cstring>
 #include <fstream>
 
 #include "include_base_utils.h"
 #include "account.h"
 #include "warnings.h"
 #include "crypto/crypto.h"
-extern "C"
-{
-#include "crypto/keccak.h"
-}
 #include "cryptonote_basic_impl.h"
 #include "cryptonote_format_utils.h"
 #include "cryptonote_config.h"
@@ -56,73 +54,97 @@ DISABLE_VS_WARNINGS(4244 4345)
 {
   namespace
   {
-    void copy_rust_buffer(std::vector<uint8_t> &out, const ShekylBuffer &buffer)
+    // Map a wallet-level network enum to the u8 that every
+    // shekyl_account_* FFI expects as its `network` argument. Distinct from
+    // nettype_to_ffi_network in cryptonote_basic_impl.cpp, which encodes
+    // *bech32m* network prefixes — there MAINNET and FAKECHAIN share a byte
+    // so fakechain wallets can round-trip a real mainnet address in tests.
+    // Derivation, by contrast, requires FAKECHAIN to have its own HKDF salt
+    // so a mainnet seed and a fakechain seed of the same bytes produce
+    // different addresses. This is the invariant that protects against a
+    // fakechain-regression test accidentally publishing a real mainnet key.
+    uint8_t derivation_network_from_nettype(network_type nettype)
     {
-      out.assign(buffer.ptr, buffer.ptr + buffer.len);
+      switch (nettype)
+      {
+        case MAINNET:   return SHEKYL_DERIVATION_NETWORK_MAINNET;
+        case TESTNET:   return SHEKYL_DERIVATION_NETWORK_TESTNET;
+        case STAGENET:  return SHEKYL_DERIVATION_NETWORK_STAGENET;
+        case FAKECHAIN: return SHEKYL_DERIVATION_NETWORK_FAKECHAIN;
+        default:        return SHEKYL_DERIVATION_NETWORK_FAKECHAIN;
+      }
     }
 
-    bool generate_pqc_key_material(account_keys &keys)
+    // Copy the public half of a blob into the caller's account_public_address
+    // and the secret half into the caller's account_keys. On entry the blob
+    // has already been populated by a successful FFI call; on exit the blob
+    // is zeroized so that no stray secret bytes remain on the C++ stack.
+    //
+    // The view-prefixed legacy m_pqc_secret_key buffer is maintained as a
+    // courtesy for unmigrated consumers (see the account.h field comment);
+    // commit 3 of this branch will delete both the field and this fill-in.
+    void populate_account_from_blob(account_keys &keys, ShekylAllKeysBlob &blob)
     {
-      // Generate ML-KEM-768 keypair via the existing FFI, then replace the
-      // X25519 portion with view-key-derived material. After this:
-      //   m_pqc_public_key = X25519_pub[32] || ML-KEM_ek[1184]  (1216 bytes)
-      //   m_pqc_secret_key = view_secret[32] || ML-KEM_dk[2400]  (2432 bytes)
-      // X25519_pub is derived from m_view_public_key via Edwards→Montgomery.
-      // The X25519 secret IS the view secret (used unclamped).
-      ShekylPqcKeypair keypair = shekyl_kem_keypair_generate();
-      if (!keypair.success || keypair.public_key.ptr == nullptr || keypair.secret_key.ptr == nullptr)
+      // --- public side ------------------------------------------------------
+      std::memcpy(&keys.m_account_address.m_spend_public_key, blob.spend_pk, 32);
+      std::memcpy(&keys.m_account_address.m_view_public_key,  blob.view_pk,  32);
+
+      keys.m_account_address.m_pqc_public_key.assign(
+          blob.pqc_public_key,
+          blob.pqc_public_key + SHEKYL_PQC_PUBLIC_KEY_BYTES);
+
+      // --- classical scalar secrets ----------------------------------------
+      // Write through the `data` array rather than the mlocked wrapper so we
+      // don't trip -Wclass-memaccess; this matches the xor_with_key_stream
+      // access pattern above.
+      std::memcpy(keys.m_spend_secret_key.data, blob.spend_sk, 32);
+      std::memcpy(keys.m_view_secret_key.data,  blob.view_sk,  32);
+
+      // --- ML-KEM decap key (rederived, never persisted) -------------------
+      keys.m_ml_kem_decap_key.assign(
+          blob.ml_kem_dk,
+          blob.ml_kem_dk + SHEKYL_ML_KEM_768_DK_BYTES);
+      if (!keys.m_ml_kem_decap_key.empty())
       {
-        if (keypair.public_key.ptr != nullptr)
-          shekyl_buffer_free(keypair.public_key.ptr, keypair.public_key.len);
-        if (keypair.secret_key.ptr != nullptr)
-          shekyl_buffer_free(keypair.secret_key.ptr, keypair.secret_key.len);
-        return false;
+        shekyl_mlock(keys.m_ml_kem_decap_key.data(), keys.m_ml_kem_decap_key.size());
+        shekyl_madvise_dontdump(keys.m_ml_kem_decap_key.data(), keys.m_ml_kem_decap_key.size());
       }
 
-      // Derive X25519 public key from the Ed25519 view public key
-      uint8_t x25519_pk[SHEKYL_X25519_PK_BYTES];
-      if (!shekyl_view_pub_to_x25519_pub(
-              reinterpret_cast<const uint8_t*>(&keys.m_account_address.m_view_public_key),
-              x25519_pk))
-      {
-        shekyl_buffer_free(keypair.public_key.ptr, keypair.public_key.len);
-        shekyl_buffer_free(keypair.secret_key.ptr, keypair.secret_key.len);
-        return false;
-      }
-
-      // Assemble m_pqc_public_key: X25519_pub[32] || ML-KEM_ek[1184]
-      // The FFI returns x25519[32] || ml_kem[1184]; replace the first 32 bytes.
-      keys.m_account_address.m_pqc_public_key.clear();
-      keys.m_account_address.m_pqc_public_key.reserve(SHEKYL_PQC_PUBLIC_KEY_BYTES);
-      keys.m_account_address.m_pqc_public_key.insert(
-          keys.m_account_address.m_pqc_public_key.end(),
-          x25519_pk, x25519_pk + SHEKYL_X25519_PK_BYTES);
-      keys.m_account_address.m_pqc_public_key.insert(
-          keys.m_account_address.m_pqc_public_key.end(),
-          keypair.public_key.ptr + SHEKYL_X25519_PK_BYTES,
-          keypair.public_key.ptr + keypair.public_key.len);
-
-      // Assemble m_pqc_secret_key: view_secret[32] || ML-KEM_dk[2400]
-      // Use the raw view secret bytes as the X25519 secret (unclamped).
+      // --- LEGACY view-prefixed PQC secret buffer --------------------------
+      // view_secret[32] || ML-KEM_dk[2400]. Every consumer that still reads
+      // this field is flagged in the summary attached to commit 1 of
+      // feat/wallet-account-rewire; commit 2 of the same branch migrates
+      // them; commit 3 deletes the field altogether.
       keys.m_pqc_secret_key.clear();
-      keys.m_pqc_secret_key.reserve(SHEKYL_X25519_PK_BYTES + (keypair.secret_key.len - SHEKYL_X25519_PK_BYTES));
-      const uint8_t* view_sec = reinterpret_cast<const uint8_t*>(&keys.m_view_secret_key);
+      keys.m_pqc_secret_key.reserve(32 + SHEKYL_ML_KEM_768_DK_BYTES);
       keys.m_pqc_secret_key.insert(
           keys.m_pqc_secret_key.end(),
-          view_sec, view_sec + SHEKYL_X25519_PK_BYTES);
+          blob.view_sk, blob.view_sk + 32);
       keys.m_pqc_secret_key.insert(
           keys.m_pqc_secret_key.end(),
-          keypair.secret_key.ptr + SHEKYL_X25519_PK_BYTES,
-          keypair.secret_key.ptr + keypair.secret_key.len);
+          blob.ml_kem_dk, blob.ml_kem_dk + SHEKYL_ML_KEM_768_DK_BYTES);
+      shekyl_mlock(keys.m_pqc_secret_key.data(), keys.m_pqc_secret_key.size());
+      shekyl_madvise_dontdump(keys.m_pqc_secret_key.data(), keys.m_pqc_secret_key.size());
 
-      shekyl_buffer_free(keypair.public_key.ptr, keypair.public_key.len);
-      shekyl_buffer_free(keypair.secret_key.ptr, keypair.secret_key.len);
+      // The caller is expected to set m_master_seed_64, m_seed_format, and
+      // m_master_seed_present itself, because those values are the *input*
+      // to derivation rather than an output of it. We wipe the blob now to
+      // minimize the window during which a second copy of the secret
+      // material lives in caller-controlled stack memory.
+      shekyl_memwipe(&blob, sizeof(blob));
+    }
 
-      if (!keys.m_pqc_secret_key.empty()) {
-        shekyl_mlock(keys.m_pqc_secret_key.data(), keys.m_pqc_secret_key.size());
-        shekyl_madvise_dontdump(keys.m_pqc_secret_key.data(), keys.m_pqc_secret_key.size());
-      }
-      return true;
+    // Helper used by every path that populates m_master_seed_64 + flags.
+    void install_master_seed(
+        account_keys &keys,
+        const uint8_t *seed64,
+        uint8_t seed_format)
+    {
+      keys.m_master_seed_64.assign(seed64, seed64 + SHEKYL_MASTER_SEED_BYTES);
+      shekyl_mlock(keys.m_master_seed_64.data(), keys.m_master_seed_64.size());
+      shekyl_madvise_dontdump(keys.m_master_seed_64.data(), keys.m_master_seed_64.size());
+      keys.m_seed_format = seed_format;
+      keys.m_master_seed_present = true;
     }
   }
 
@@ -135,6 +157,15 @@ DISABLE_VS_WARNINGS(4244 4345)
       shekyl_memwipe(m_pqc_secret_key.data(), m_pqc_secret_key.size());
       shekyl_munlock(m_pqc_secret_key.data(), m_pqc_secret_key.size());
     }
+    if (!m_ml_kem_decap_key.empty()) {
+      shekyl_memwipe(m_ml_kem_decap_key.data(), m_ml_kem_decap_key.size());
+      shekyl_munlock(m_ml_kem_decap_key.data(), m_ml_kem_decap_key.size());
+    }
+    if (!m_master_seed_64.empty()) {
+      shekyl_memwipe(m_master_seed_64.data(), m_master_seed_64.size());
+      shekyl_munlock(m_master_seed_64.data(), m_master_seed_64.size());
+    }
+    m_master_seed_present = false;
   }
   //-----------------------------------------------------------------
   hw::device& account_keys::get_device() const  {
@@ -170,15 +201,27 @@ DISABLE_VS_WARNINGS(4244 4345)
   //-----------------------------------------------------------------
   void account_keys::xor_with_key_stream(const crypto::chacha_key &key)
   {
+    // Encrypt both the legacy pqc-secret buffer AND the master seed in-place.
+    // Each contributes its own byte span to the keystream length so that
+    // zero-length fields (e.g. a pre-v1 wallet without m_master_seed_64, or a
+    // device wallet without m_pqc_secret_key) don't shift the byte offsets of
+    // the other fields. Ordering here is load-bearing: it is the on-disk XOR
+    // layout for every wallet that has ever been written with this code.
+    //   spend_sk[32] || view_sk[32] || pqc_sk[0 or 2432] || master_seed[0 or 64]
     const size_t pq_bytes = m_pqc_secret_key.size();
-    epee::wipeable_string key_stream = get_key_stream(key, m_encryption_iv, sizeof(crypto::secret_key) * 2 + pq_bytes);
+    const size_t ms_bytes = m_master_seed_64.size();
+    epee::wipeable_string key_stream = get_key_stream(
+        key, m_encryption_iv,
+        sizeof(crypto::secret_key) * 2 + pq_bytes + ms_bytes);
     const char *ptr = key_stream.data();
     for (size_t i = 0; i < sizeof(crypto::secret_key); ++i)
       m_spend_secret_key.data[i] ^= *ptr++;
     for (size_t i = 0; i < sizeof(crypto::secret_key); ++i)
       m_view_secret_key.data[i] ^= *ptr++;
-    for (size_t i = 0; i < m_pqc_secret_key.size(); ++i)
+    for (size_t i = 0; i < pq_bytes; ++i)
       m_pqc_secret_key[i] ^= static_cast<uint8_t>(*ptr++);
+    for (size_t i = 0; i < ms_bytes; ++i)
+      m_master_seed_64[i] ^= static_cast<uint8_t>(*ptr++);
   }
   //-----------------------------------------------------------------
   void account_keys::encrypt(const crypto::chacha_key &key)
@@ -193,6 +236,11 @@ DISABLE_VS_WARNINGS(4244 4345)
     if (!m_pqc_secret_key.empty()) {
       shekyl_mlock(m_pqc_secret_key.data(), m_pqc_secret_key.size());
       shekyl_madvise_dontdump(m_pqc_secret_key.data(), m_pqc_secret_key.size());
+    }
+    if (!m_master_seed_64.empty()) {
+      shekyl_mlock(m_master_seed_64.data(), m_master_seed_64.size());
+      shekyl_madvise_dontdump(m_master_seed_64.data(), m_master_seed_64.size());
+      m_master_seed_present = true;
     }
   }
   //-----------------------------------------------------------------
@@ -223,6 +271,14 @@ DISABLE_VS_WARNINGS(4244 4345)
       shekyl_memwipe(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
       shekyl_munlock(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
     }
+    if (!m_keys.m_ml_kem_decap_key.empty()) {
+      shekyl_memwipe(m_keys.m_ml_kem_decap_key.data(), m_keys.m_ml_kem_decap_key.size());
+      shekyl_munlock(m_keys.m_ml_kem_decap_key.data(), m_keys.m_ml_kem_decap_key.size());
+    }
+    if (!m_keys.m_master_seed_64.empty()) {
+      shekyl_memwipe(m_keys.m_master_seed_64.data(), m_keys.m_master_seed_64.size());
+      shekyl_munlock(m_keys.m_master_seed_64.data(), m_keys.m_master_seed_64.size());
+    }
     m_keys = account_keys();
     m_creation_timestamp = 0;
   }
@@ -238,12 +294,25 @@ DISABLE_VS_WARNINGS(4244 4345)
   //-----------------------------------------------------------------
   void account_base::forget_spend_key()
   {
+    // Forgetting the spend key is only honest if we also destroy every byte
+    // from which the spend key could be rederived. In v1 that is the entire
+    // master seed; without it the wallet becomes a genuine view-only wallet
+    // that retains m_view_secret_key + m_ml_kem_decap_key for incoming-tx
+    // decapsulation but cannot sign outgoing transactions. m_pqc_secret_key
+    // is cleared because its view_secret prefix is useless in isolation and
+    // its ML-KEM decap suffix is preserved in m_ml_kem_decap_key.
     m_keys.m_spend_secret_key = crypto::secret_key();
     if (!m_keys.m_pqc_secret_key.empty()) {
       shekyl_memwipe(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
       shekyl_munlock(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
     }
     m_keys.m_pqc_secret_key.clear();
+    if (!m_keys.m_master_seed_64.empty()) {
+      shekyl_memwipe(m_keys.m_master_seed_64.data(), m_keys.m_master_seed_64.size());
+      shekyl_munlock(m_keys.m_master_seed_64.data(), m_keys.m_master_seed_64.size());
+    }
+    m_keys.m_master_seed_64.clear();
+    m_keys.m_master_seed_present = false;
   }
   //-----------------------------------------------------------------
   void account_base::set_spend_key(const crypto::secret_key& spend_secret_key)
@@ -257,35 +326,129 @@ DISABLE_VS_WARNINGS(4244 4345)
     m_keys.m_spend_secret_key = spend_secret_key;
   }
   //-----------------------------------------------------------------
-  crypto::secret_key account_base::generate(const crypto::secret_key& recovery_key, bool recover, bool two_random)
+  void account_base::generate_from_raw_seed(
+      const uint8_t raw_seed[SHEKYL_RAW_SEED_BYTES],
+      network_type nettype)
   {
-    crypto::secret_key first = generate_keys(m_keys.m_account_address.m_spend_public_key, m_keys.m_spend_secret_key, recovery_key, recover);
+    set_null();
 
-    // rng for generating second set of keys is hash of first rng.  means only one set of electrum-style words needed for recovery
-    crypto::secret_key second;
-    keccak((uint8_t *)&m_keys.m_spend_secret_key, sizeof(crypto::secret_key), (uint8_t *)&second, sizeof(crypto::secret_key));
+    uint8_t master_seed_out[SHEKYL_MASTER_SEED_BYTES];
+    ShekylAllKeysBlob blob{};
+    const bool ok = shekyl_account_generate_from_raw_seed(
+        raw_seed,
+        derivation_network_from_nettype(nettype),
+        master_seed_out,
+        &blob);
+    CHECK_AND_ASSERT_THROW_MES(
+        ok,
+        "shekyl_account_generate_from_raw_seed rejected input "
+        "(disallowed (network, raw) pair or FFI failure)");
 
-    generate_keys(m_keys.m_account_address.m_view_public_key, m_keys.m_view_secret_key, second, two_random ? false : true);
-    CHECK_AND_ASSERT_THROW_MES(generate_pqc_key_material(m_keys), "Failed to generate hybrid PQ account keys");
+    populate_account_from_blob(m_keys, blob);
+    install_master_seed(m_keys, master_seed_out, SHEKYL_SEED_FORMAT_RAW32);
+    // We are done with the stack-resident copy of the master seed; wipe it.
+    shekyl_memwipe(master_seed_out, sizeof(master_seed_out));
 
-    struct tm timestamp = {0};
-    timestamp.tm_year = 2014 - 1900;  // year 2014
-    timestamp.tm_mon = 6 - 1;  // month june
-    timestamp.tm_mday = 8;  // 8th of june
-    timestamp.tm_hour = 0;
-    timestamp.tm_min = 0;
-    timestamp.tm_sec = 0;
+    m_creation_timestamp = time(NULL);
+  }
+  //-----------------------------------------------------------------
+  void account_base::generate_from_bip39(
+      const std::string &mnemonic_words,
+      const std::string &passphrase,
+      network_type nettype)
+  {
+    set_null();
 
+    uint8_t master_seed_out[SHEKYL_MASTER_SEED_BYTES];
+    ShekylAllKeysBlob blob{};
+    const bool ok = shekyl_account_generate_from_bip39(
+        reinterpret_cast<const uint8_t*>(mnemonic_words.data()),
+        mnemonic_words.size(),
+        passphrase.empty() ? nullptr : reinterpret_cast<const uint8_t*>(passphrase.data()),
+        passphrase.size(),
+        derivation_network_from_nettype(nettype),
+        master_seed_out,
+        &blob);
+    CHECK_AND_ASSERT_THROW_MES(
+        ok,
+        "shekyl_account_generate_from_bip39 rejected input "
+        "(invalid mnemonic or disallowed (network, BIP-39) pair)");
+
+    populate_account_from_blob(m_keys, blob);
+    install_master_seed(m_keys, master_seed_out, SHEKYL_SEED_FORMAT_BIP39);
+    shekyl_memwipe(master_seed_out, sizeof(master_seed_out));
+
+    m_creation_timestamp = time(NULL);
+  }
+  //-----------------------------------------------------------------
+  void account_base::rederive_from_master_seed(network_type nettype)
+  {
+    CHECK_AND_ASSERT_THROW_MES(
+        m_keys.m_master_seed_present &&
+            m_keys.m_master_seed_64.size() == SHEKYL_MASTER_SEED_BYTES,
+        "account_base::rederive_from_master_seed: no master seed in memory "
+        "(v1 wallet not yet opened or legacy wallet with no seed)");
+    CHECK_AND_ASSERT_THROW_MES(
+        m_keys.m_seed_format == SHEKYL_SEED_FORMAT_BIP39 ||
+            m_keys.m_seed_format == SHEKYL_SEED_FORMAT_RAW32,
+        "account_base::rederive_from_master_seed: unknown seed format "
+            << static_cast<int>(m_keys.m_seed_format));
+
+    ShekylAllKeysBlob blob{};
+    const bool ok = shekyl_account_rederive(
+        m_keys.m_master_seed_64.data(),
+        derivation_network_from_nettype(nettype),
+        m_keys.m_seed_format,
+        &blob);
+    CHECK_AND_ASSERT_THROW_MES(
+        ok,
+        "shekyl_account_rederive failed: (network, seed_format) pair "
+        "disallowed or derivation inconsistent");
+
+    populate_account_from_blob(m_keys, blob);
+    // m_master_seed_64 / m_seed_format / m_master_seed_present stay as they
+    // were — rederivation is a read-only operation on the seed.
+  }
+  //-----------------------------------------------------------------
+  crypto::secret_key account_base::generate(
+      const crypto::secret_key& recovery_key,
+      bool recover,
+      bool two_random)
+  {
+    // The Electrum-style 25-word / keccak-chain recovery path is gone; see
+    // .cursor/rules/36-secret-locality.mdc and the wallet-account-rewire
+    // commit on feat/wallet-account-rewire. This wrapper exists only so
+    // unit / integration tests that historically called
+    //   account.generate()
+    //   account.generate(recovery_key, true, false)
+    // keep building. It treats `recovery_key.data` as a 32-byte raw seed
+    // on DerivationNetwork::Fakechain (not mainnet, not testnet). The bool
+    // `two_random` is ignored; it was never true in the wallet path.
+    (void)two_random;
+
+    std::array<uint8_t, SHEKYL_RAW_SEED_BYTES> raw_seed{};
     if (recover)
     {
-      m_creation_timestamp = mktime(&timestamp);
-      if (m_creation_timestamp == (uint64_t)-1) // failure
-        m_creation_timestamp = 0; // lowest value
+      std::memcpy(raw_seed.data(), recovery_key.data, SHEKYL_RAW_SEED_BYTES);
     }
     else
     {
-      m_creation_timestamp = time(NULL);
+      CHECK_AND_ASSERT_THROW_MES(
+          shekyl_raw_seed_generate(raw_seed.data()),
+          "shekyl_raw_seed_generate failed (OS CSPRNG unavailable)");
     }
+
+    generate_from_raw_seed(raw_seed.data(), FAKECHAIN);
+    // Wipe the local copy of the seed before returning; the authoritative
+    // copy lives in m_keys.m_master_seed_64 under mlock.
+    shekyl_memwipe(raw_seed.data(), raw_seed.size());
+
+    // Legacy callers expect the spend secret key back so they can re-encode
+    // it as a "recovery key" elsewhere. In the v1 model this is a degraded
+    // capability (it can reconstruct the spend side of the account but not
+    // the ML-KEM decap key), but returning it keeps the existing test
+    // expectations meaningful.
+    crypto::secret_key first = m_keys.m_spend_secret_key;
     return first;
   }
   //-----------------------------------------------------------------
@@ -294,11 +457,26 @@ DISABLE_VS_WARNINGS(4244 4345)
     m_keys.m_account_address = address;
     m_keys.m_spend_secret_key = spendkey;
     m_keys.m_view_secret_key = viewkey;
+    // Restoring from spend+view keys in v1 is a genuine view-only / limited
+    // capability: there is no way to recover the ML-KEM decap key from the
+    // Ed25519 scalars alone. We therefore leave every PQC-related buffer
+    // empty. wallet2.cpp will surface the "cannot sign v3" state to the user.
     if (!m_keys.m_pqc_secret_key.empty()) {
       shekyl_memwipe(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
       shekyl_munlock(m_keys.m_pqc_secret_key.data(), m_keys.m_pqc_secret_key.size());
     }
     m_keys.m_pqc_secret_key.clear();
+    if (!m_keys.m_ml_kem_decap_key.empty()) {
+      shekyl_memwipe(m_keys.m_ml_kem_decap_key.data(), m_keys.m_ml_kem_decap_key.size());
+      shekyl_munlock(m_keys.m_ml_kem_decap_key.data(), m_keys.m_ml_kem_decap_key.size());
+    }
+    m_keys.m_ml_kem_decap_key.clear();
+    if (!m_keys.m_master_seed_64.empty()) {
+      shekyl_memwipe(m_keys.m_master_seed_64.data(), m_keys.m_master_seed_64.size());
+      shekyl_munlock(m_keys.m_master_seed_64.data(), m_keys.m_master_seed_64.size());
+    }
+    m_keys.m_master_seed_64.clear();
+    m_keys.m_master_seed_present = false;
 
     struct tm timestamp = {0};
     timestamp.tm_year = 2014 - 1900;  // year 2014
@@ -330,7 +508,12 @@ DISABLE_VS_WARNINGS(4244 4345)
     try {
       CHECK_AND_ASSERT_THROW_MES(hwdev.get_public_address(m_keys.m_account_address), "Cannot get a device address");
       CHECK_AND_ASSERT_THROW_MES(hwdev.get_secret_keys(m_keys.m_view_secret_key, m_keys.m_spend_secret_key), "Cannot get device secret");
-      CHECK_AND_ASSERT_THROW_MES(generate_pqc_key_material(m_keys), "Failed to generate hybrid PQ account keys");
+      // Hardware-wallet integration for PQC is tracked separately; the
+      // device FFI currently returns only Ed25519 scalars so we can't
+      // materialize an ML-KEM keypair deterministically without the seed.
+      // For v1 we ship with device wallets as "classical signing only" and
+      // will teach device_ledger.cpp the master-seed export path in a
+      // follow-up (see docs/POST_QUANTUM_CRYPTOGRAPHY.md §Hardware).
     } catch (const std::exception &e){
       hwdev.disconnect();
       throw;
@@ -346,14 +529,6 @@ DISABLE_VS_WARNINGS(4244 4345)
     m_creation_timestamp = mktime(&timestamp);
     if (m_creation_timestamp == (uint64_t)-1) // failure
       m_creation_timestamp = 0; // lowest value
-  }
-
-  //-----------------------------------------------------------------
-  bool account_base::generate_pqc_for_restored_address()
-  {
-    if (!m_keys.m_account_address.m_pqc_public_key.empty() || !m_keys.m_pqc_secret_key.empty())
-      return false;
-    return generate_pqc_key_material(m_keys);
   }
   //-----------------------------------------------------------------
   void account_base::create_from_viewkey(const cryptonote::account_public_address& address, const crypto::secret_key& viewkey)
