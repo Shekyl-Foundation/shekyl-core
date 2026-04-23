@@ -78,7 +78,7 @@ use std::path::PathBuf;
 
 use shekyl_address::Network;
 use shekyl_wallet_file::{
-    Capability, CreateParams, OpenOutcome, WalletFileError, WalletFileHandle,
+    Capability, CreateParams, OpenOutcome, SafetyOverrides, WalletFileError, WalletFileHandle,
 };
 use shekyl_wallet_state::WalletLedger;
 use zeroize::Zeroizing;
@@ -181,6 +181,67 @@ const _: () = assert!(
         == 8 + 8 + 4 + 4 + SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES + 7,
     "ShekylWalletMetadata layout must match the C++ static_assert in shekyl_ffi.h",
 );
+
+// ---------------------------------------------------------------------------
+// Safety overrides (2k.2)
+// ---------------------------------------------------------------------------
+
+/// CLI-ephemeral safety overrides in their C-ABI form.
+///
+/// Implements the "CLI-ephemeral overrides" layer of the three-layer
+/// preference model (see `docs/WALLET_PREFS.md` §2.3, §3.3). Each field is
+/// an explicit `(has_<name>, <name>)` pair so there is no sentinel-value
+/// accident where a legitimate u64 happens to mean "no override". The
+/// `_pad*` fields exist to anchor the `u64` members on their natural
+/// 8-byte alignment without relying on implicit padding rules.
+///
+/// Pass `*const ShekylSafetyOverrides = null` to
+/// [`shekyl_wallet_open`] to mean "no overrides" (the GUI path).
+#[repr(C)]
+pub struct ShekylSafetyOverrides {
+    pub has_max_reorg_depth: u8,
+    pub _pad0: [u8; 7],
+    pub max_reorg_depth: u64,
+    pub has_skip_to_height: u8,
+    pub _pad1: [u8; 7],
+    pub skip_to_height: u64,
+    pub has_refresh_from_block_height: u8,
+    pub _pad2: [u8; 7],
+    pub refresh_from_block_height: u64,
+}
+
+// Pin the layout: three `(u8 + [u8; 7] + u64)` tuples = 3 * 16 = 48 bytes.
+// Mirrors the C++ `static_assert` in `src/shekyl/shekyl_ffi.h`.
+const _: () = assert!(
+    core::mem::size_of::<ShekylSafetyOverrides>() == 48,
+    "ShekylSafetyOverrides layout must match the C++ static_assert in shekyl_ffi.h",
+);
+
+impl ShekylSafetyOverrides {
+    /// Decode a caller-supplied C struct into the typed Rust
+    /// [`SafetyOverrides`]. A null pointer means "no overrides", which
+    /// maps to [`SafetyOverrides::none`]. The `_pad*` fields are not
+    /// validated: they are present purely to pin alignment, and any
+    /// future tampering-protection check would go here.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must either be null or point to a valid, aligned, fully
+    /// initialised [`ShekylSafetyOverrides`] for the duration of this
+    /// call.
+    unsafe fn decode(ptr: *const Self) -> SafetyOverrides {
+        if ptr.is_null() {
+            return SafetyOverrides::none();
+        }
+        let s = &*ptr;
+        SafetyOverrides {
+            max_reorg_depth: (s.has_max_reorg_depth != 0).then_some(s.max_reorg_depth),
+            skip_to_height: (s.has_skip_to_height != 0).then_some(s.skip_to_height),
+            refresh_from_block_height: (s.has_refresh_from_block_height != 0)
+                .then_some(s.refresh_from_block_height),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Opaque handle
@@ -524,18 +585,25 @@ pub unsafe extern "C" fn shekyl_wallet_create(
 /// orchestrator's recovery-path signal, and writes the rescan floor
 /// into `*out_restore_from_height`.
 ///
+/// `overrides` may be NULL, meaning "no CLI overrides active" — the
+/// GUI path. A non-NULL pointer passes the CLI-ephemeral safety layer
+/// through to the orchestrator, which stores it on the handle and
+/// emits `tracing::warn!` lines for each active field.
+///
 /// When `*out_state_lost` is `true`, the caller MUST drive a rescan
 /// starting at `*out_restore_from_height` and then call
 /// [`shekyl_wallet_save_state`] with the rebuilt ledger before
 /// closing. Closing without saving leaves the `.wallet` absent on
 /// disk, and the next open will again see `state_lost = true`.
 #[no_mangle]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn shekyl_wallet_open(
     base_path_ptr: *const c_char,
     base_path_len: usize,
     password_ptr: *const u8,
     password_len: usize,
     expected_network: u8,
+    overrides: *const ShekylSafetyOverrides,
     out_handle: *mut *mut ShekylWallet,
     out_state_lost: *mut bool,
     out_restore_from_height: *mut u64,
@@ -570,8 +638,9 @@ pub unsafe extern "C" fn shekyl_wallet_open(
             return false;
         }
     };
+    let overrides = ShekylSafetyOverrides::decode(overrides);
 
-    match WalletFileHandle::open(&base_path, password, expected_network) {
+    match WalletFileHandle::open(&base_path, password, expected_network, overrides) {
         Ok((inner, outcome)) => {
             let (ledger, state_lost, restore_from_height) = match outcome {
                 OpenOutcome::StateLoaded(l) => (l, false, 0u64),
@@ -983,6 +1052,7 @@ mod tests {
                 b"pw".as_ptr(),
                 2,
                 Network::Testnet.as_u8(),
+                std::ptr::null(),
                 &raw mut h2,
                 &raw mut lost,
                 &raw mut floor,
@@ -1018,6 +1088,7 @@ mod tests {
                 b"pw".as_ptr(),
                 2,
                 Network::Testnet.as_u8(),
+                std::ptr::null(),
                 &raw mut h2,
                 &raw mut lost,
                 &raw mut floor,
@@ -1050,6 +1121,7 @@ mod tests {
                 b"pw".as_ptr(),
                 2,
                 Network::Mainnet.as_u8(),
+                std::ptr::null(),
                 &raw mut h2,
                 &raw mut lost,
                 &raw mut floor,
@@ -1128,6 +1200,7 @@ mod tests {
                 b"pw".as_ptr(),
                 2,
                 0xEF, // not a valid Network discriminant
+                std::ptr::null(),
                 &raw mut h2,
                 &raw mut lost,
                 &raw mut floor,
@@ -1136,5 +1209,98 @@ mod tests {
             assert_eq!(err, SHEKYL_WALLET_ERR_UNKNOWN_NETWORK);
             assert!(h2.is_null());
         }
+    }
+
+    /// 2k.2: passing a non-NULL `ShekylSafetyOverrides` must produce a
+    /// successful open with identical observable behavior to the NULL
+    /// path. This pins the FFI contract: the C struct is the transport,
+    /// and once it has been decoded into [`SafetyOverrides`] the
+    /// orchestrator handles it exactly as any Rust caller would.
+    ///
+    /// We cannot easily observe the `tracing::warn!` emission from an
+    /// FFI test (no subscriber is attached), but the `effective_*`
+    /// path is covered in `shekyl-wallet-file`'s own tests, and here
+    /// we confirm that the FFI boundary does not itself corrupt the
+    /// override values.
+    #[test]
+    fn open_with_non_null_overrides_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let h = create_with_path(&base);
+        unsafe {
+            shekyl_wallet_free(h);
+        }
+        let base_str = base.to_str().unwrap();
+        let overrides = ShekylSafetyOverrides {
+            has_max_reorg_depth: 1,
+            _pad0: [0; 7],
+            max_reorg_depth: 0,
+            has_skip_to_height: 1,
+            _pad1: [0; 7],
+            skip_to_height: 42,
+            has_refresh_from_block_height: 0,
+            _pad2: [0; 7],
+            refresh_from_block_height: 0,
+        };
+        unsafe {
+            let mut h2: *mut ShekylWallet = std::ptr::null_mut();
+            let mut lost = false;
+            let mut floor = 0u64;
+            let mut err = 0u32;
+            assert!(shekyl_wallet_open(
+                base_str.as_ptr().cast(),
+                base_str.len(),
+                b"pw".as_ptr(),
+                2,
+                Network::Testnet.as_u8(),
+                &raw const overrides,
+                &raw mut h2,
+                &raw mut lost,
+                &raw mut floor,
+                &raw mut err,
+            ));
+            assert_eq!(err, SHEKYL_WALLET_ERR_OK);
+            assert!(!h2.is_null(), "open with overrides must succeed");
+            shekyl_wallet_free(h2);
+        }
+    }
+
+    /// 2k.2: the NULL overrides pointer decodes to
+    /// [`SafetyOverrides::none`]. Kept as a focused Rust test so a
+    /// future regression in [`ShekylSafetyOverrides::decode`] fails
+    /// loudly at unit-test time rather than silently behind the
+    /// envelope layer.
+    #[test]
+    fn decode_null_overrides_is_none() {
+        unsafe {
+            let o = ShekylSafetyOverrides::decode(std::ptr::null());
+            assert_eq!(o, SafetyOverrides::none());
+        }
+    }
+
+    /// 2k.2: a populated `ShekylSafetyOverrides` round-trips through
+    /// `decode` to a matching Rust [`SafetyOverrides`].
+    #[test]
+    fn decode_populated_overrides_matches() {
+        let c_struct = ShekylSafetyOverrides {
+            has_max_reorg_depth: 1,
+            _pad0: [0; 7],
+            max_reorg_depth: 7,
+            has_skip_to_height: 0,
+            _pad1: [0; 7],
+            skip_to_height: u64::MAX,
+            has_refresh_from_block_height: 1,
+            _pad2: [0; 7],
+            refresh_from_block_height: 99,
+        };
+        let decoded = unsafe { ShekylSafetyOverrides::decode(&raw const c_struct) };
+        assert_eq!(
+            decoded,
+            SafetyOverrides {
+                max_reorg_depth: Some(7),
+                skip_to_height: None,
+                refresh_from_block_height: Some(99),
+            }
+        );
     }
 }

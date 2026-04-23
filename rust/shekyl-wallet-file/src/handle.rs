@@ -71,6 +71,7 @@ use crate::atomic::atomic_write_file;
 use crate::capability::Capability;
 use crate::error::WalletFileError;
 use crate::lock::KeysFileLock;
+use crate::overrides::SafetyOverrides;
 use crate::paths::{keys_path_from, state_path_from};
 use crate::payload::{decode_payload, encode_payload, PayloadKind};
 
@@ -202,6 +203,11 @@ pub struct WalletFileHandle {
     /// `capability()` accessors can be infallible.
     network: Network,
     capability: Capability,
+    /// CLI-ephemeral overrides applied at this `open`. Die with the
+    /// handle; never persisted. `create` seeds this with
+    /// [`SafetyOverrides::none`] because `create` is a provisioning
+    /// operation, not a user-facing session start.
+    overrides: SafetyOverrides,
     /// Held for Drop semantics; not read after construction.
     _lock: KeysFileLock,
 }
@@ -215,6 +221,7 @@ impl std::fmt::Debug for WalletFileHandle {
             .field("opened_keys", &"<redacted>")
             .field("network", &self.network)
             .field("capability", &self.capability)
+            .field("overrides", &self.overrides)
             .field("_lock", &self._lock)
             .finish()
     }
@@ -303,6 +310,8 @@ impl WalletFileHandle {
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
             network,
             capability,
+            // Provisioning path: no user session → no overrides.
+            overrides: SafetyOverrides::none(),
             _lock: lock,
         })
     }
@@ -335,10 +344,22 @@ impl WalletFileHandle {
     /// silent rescan on AEAD-auth-failed bytes would mask tampering;
     /// a silent rescan on bad magic would mask a misfiled companion
     /// file.
+    ///
+    /// # Safety overrides
+    ///
+    /// `overrides` supplies the CLI-ephemeral layer of the three-layer
+    /// preference model (see `docs/WALLET_PREFS.md` §2.3). The struct
+    /// is `Copy` and stored on the handle for the session. GUI callers
+    /// pass [`SafetyOverrides::none`]. CLI callers may pass a
+    /// non-empty struct; on open, every active field produces a
+    /// `tracing::warn!` line naming the field, the override value,
+    /// and the network default, so operators running under any
+    /// subscriber see the deviation loudly.
     pub fn open(
         base_path: &Path,
         password: &[u8],
         expected_network: Network,
+        overrides: SafetyOverrides,
     ) -> Result<(Self, OpenOutcome), WalletFileError> {
         let keys_path = keys_path_from(base_path);
         let state_path = state_path_from(base_path);
@@ -395,6 +416,11 @@ impl WalletFileHandle {
             Err(e) => return Err(WalletFileError::Io(e)),
         };
 
+        // Emit WARN lines for any active override before returning
+        // so the session log unambiguously records the deviation
+        // regardless of what the caller does next.
+        overrides.log_warn_if_active(network);
+
         let handle = Self {
             keys_path,
             state_path,
@@ -402,6 +428,7 @@ impl WalletFileHandle {
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
             network,
             capability,
+            overrides,
             _lock: lock,
         };
         Ok((handle, outcome))
@@ -500,6 +527,41 @@ impl WalletFileHandle {
     /// on the lost-`.wallet` recovery path.
     pub fn restore_height_hint(&self) -> u32 {
         self.opened_keys.0.restore_height_hint
+    }
+
+    /// Raw CLI-ephemeral overrides captured at `open` time. Callers
+    /// typically do not need this — prefer the `effective_*`
+    /// accessors below, which already overlay the overrides on the
+    /// per-network defaults. Exposed for diagnostics, dry-run tools,
+    /// and for the FFI layer to surface "any override active?" to C++.
+    pub fn overrides(&self) -> SafetyOverrides {
+        self.overrides
+    }
+
+    /// Minimum confirmations before a transfer is treated as final.
+    /// Equals [`NetworkSafetyConstants::max_reorg_depth`] for the
+    /// handle's network unless a CLI override replaced it for this
+    /// session.
+    ///
+    /// [`NetworkSafetyConstants::max_reorg_depth`]: shekyl_wallet_state::NetworkSafetyConstants::max_reorg_depth
+    pub fn effective_max_reorg_depth(&self) -> u64 {
+        self.overrides.effective_max_reorg_depth(self.network)
+    }
+
+    /// Starting height for a from-scratch scan. Applies only on paths
+    /// that do not have a persisted `SyncStateBlock` to anchor them
+    /// (fresh wallet, lost-`.wallet` recovery, explicit rescan).
+    /// See `docs/WALLET_PREFS.md` §3.3.
+    pub fn effective_skip_to_height(&self) -> u64 {
+        self.overrides.effective_skip_to_height(self.network)
+    }
+
+    /// Refresh cursor used when the wallet opens without a
+    /// `SyncStateBlock`. Mirrors `effective_skip_to_height` but
+    /// scoped to the recovery path per the audit doc §3.3.
+    pub fn effective_refresh_from_block_height(&self) -> u64 {
+        self.overrides
+            .effective_refresh_from_block_height(self.network)
     }
 }
 
@@ -607,9 +669,13 @@ mod tests {
         // Drop the handle so the advisory lock is released for open.
         drop(handle);
 
-        let (handle2, outcome) =
-            WalletFileHandle::open(&base, b"correct horse battery staple", TEST_NETWORK)
-                .expect("open");
+        let (handle2, outcome) = WalletFileHandle::open(
+            &base,
+            b"correct horse battery staple",
+            TEST_NETWORK,
+            SafetyOverrides::none(),
+        )
+        .expect("open");
         assert_eq!(handle2.keys_path(), keys_path_from(&base));
         assert_eq!(handle2.state_path(), state_path_from(&base));
         assert!(
@@ -637,7 +703,9 @@ mod tests {
         handle.save_state(b"pw", &ledger).expect("save2");
         drop(handle);
 
-        let (_, outcome) = WalletFileHandle::open(&base, b"pw", TEST_NETWORK).expect("open");
+        let (_, outcome) =
+            WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
+                .expect("open");
         let ledger_back = outcome.into_ledger();
         assert_eq!(ledger_back.format_version, ledger.format_version);
     }
@@ -708,9 +776,12 @@ mod tests {
         // Drop the write-holding handle before re-opening.
         drop(handle);
         // Old password now rejected.
-        assert!(WalletFileHandle::open(&base, b"old", TEST_NETWORK).is_err());
+        assert!(
+            WalletFileHandle::open(&base, b"old", TEST_NETWORK, SafetyOverrides::none()).is_err()
+        );
         // New password works.
-        let (_, _) = WalletFileHandle::open(&base, b"new", TEST_NETWORK).expect("open-with-new-pw");
+        let (_, _) = WalletFileHandle::open(&base, b"new", TEST_NETWORK, SafetyOverrides::none())
+            .expect("open-with-new-pw");
     }
 
     #[test]
@@ -748,7 +819,8 @@ mod tests {
             let _h = WalletFileHandle::create(&params).expect("create");
         }
         // Handle dropped; lock released. Re-open must succeed.
-        let (_, _) = WalletFileHandle::open(&base, b"pw", TEST_NETWORK).expect("reopen");
+        let (_, _) = WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
+            .expect("reopen");
     }
 
     #[test]
@@ -763,8 +835,8 @@ mod tests {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
             WalletFileHandle::create(&params).expect("create")
         };
-        let err =
-            WalletFileHandle::open(&base, b"pw", TEST_NETWORK).expect_err("second open must fail");
+        let err = WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
+            .expect_err("second open must fail");
         match err {
             WalletFileError::AlreadyLocked { path } => {
                 assert_eq!(path, keys_path_from(&base));
@@ -797,7 +869,9 @@ mod tests {
         assert!(keys_path_from(&base).exists(), "keys file must still exist");
         assert!(!state_path.exists(), ".wallet must be gone");
 
-        let (_handle, outcome) = WalletFileHandle::open(&base, b"pw", TEST_NETWORK).expect("open");
+        let (_handle, outcome) =
+            WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
+                .expect("open");
         match outcome {
             OpenOutcome::StateLost {
                 ledger,
@@ -839,7 +913,8 @@ mod tests {
 
         let rebuilt = {
             let (handle, outcome) =
-                WalletFileHandle::open(&base, b"pw", TEST_NETWORK).expect("open-lost");
+                WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
+                    .expect("open-lost");
             assert!(outcome.is_lost());
             let ledger = outcome.into_ledger();
             handle.save_state(b"pw", &ledger).expect("save");
@@ -847,7 +922,8 @@ mod tests {
         };
 
         let (_handle, outcome) =
-            WalletFileHandle::open(&base, b"pw", TEST_NETWORK).expect("open-loaded");
+            WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
+                .expect("open-loaded");
         assert!(!outcome.is_lost(), "after save, open must see StateLoaded");
         let reloaded = outcome.into_ledger();
         assert_eq!(reloaded.format_version, rebuilt.format_version);
@@ -877,7 +953,8 @@ mod tests {
         }
         std::fs::write(state_path_from(&base), b"\x00\x00\x00").expect("truncate .wallet");
 
-        let err = WalletFileHandle::open(&base, b"pw", TEST_NETWORK).expect_err("must refuse");
+        let err = WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
+            .expect_err("must refuse");
         match err {
             WalletFileError::Envelope(_) => { /* expected: TooShort / BadMagic surfaced */ }
             other => panic!(
@@ -908,7 +985,7 @@ mod tests {
         garbage[..8].copy_from_slice(b"NOTSHEKY");
         std::fs::write(keys_path_from(&base), &garbage).expect("write garbage keys file");
 
-        let err = WalletFileHandle::open(&base, b"pw", TEST_NETWORK)
+        let err = WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
             .expect_err("non-Shekyl magic must be refused");
         match err {
             WalletFileError::Envelope(e) => {
@@ -946,7 +1023,7 @@ mod tests {
             assert_eq!(params.network, Network::Testnet, "fixture precondition");
             let _h = WalletFileHandle::create(&params).expect("create");
         }
-        let err = WalletFileHandle::open(&base, b"pw", Network::Mainnet)
+        let err = WalletFileHandle::open(&base, b"pw", Network::Mainnet, SafetyOverrides::none())
             .expect_err("mainnet open of testnet wallet must refuse");
         match err {
             WalletFileError::NetworkMismatch { expected, found } => {
@@ -993,5 +1070,74 @@ mod tests {
         assert!(Capability::Full.can_spend_locally());
         assert!(!Capability::ViewOnly.can_spend_locally());
         assert!(!Capability::HardwareOffload.can_spend_locally());
+    }
+
+    /// 2k.2 contract: when `open` receives `SafetyOverrides::none()`
+    /// the handle's `effective_*` accessors must return the network's
+    /// hardcoded defaults — i.e. the no-override path is transparent.
+    #[test]
+    fn open_without_overrides_exposes_network_defaults() {
+        use shekyl_wallet_state::NetworkSafetyConstants;
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+        {
+            let params = make_params(&fx, &base, b"pw", &ledger, &cap);
+            let _h = WalletFileHandle::create(&params).expect("create");
+        }
+        let (handle, _outcome) =
+            WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
+                .expect("open");
+
+        assert_eq!(handle.overrides(), SafetyOverrides::none());
+        let k = NetworkSafetyConstants::for_network(TEST_NETWORK);
+        assert_eq!(handle.effective_max_reorg_depth(), k.max_reorg_depth);
+        assert_eq!(handle.effective_skip_to_height(), k.default_skip_to_height);
+        assert_eq!(
+            handle.effective_refresh_from_block_height(),
+            k.default_refresh_from_block_height,
+        );
+    }
+
+    /// 2k.2 contract: an active override must flow through to the
+    /// `effective_*` accessors without affecting any other field, and
+    /// must survive beyond the `open` call on the handle. This pins
+    /// the "request-scoped but handle-lifetimed" policy documented in
+    /// `docs/WALLET_PREFS.md` §3.3 and in the `overrides` module
+    /// header.
+    #[test]
+    fn open_with_overrides_propagates_to_effective_accessors() {
+        use shekyl_wallet_state::NetworkSafetyConstants;
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+        {
+            let params = make_params(&fx, &base, b"pw", &ledger, &cap);
+            let _h = WalletFileHandle::create(&params).expect("create");
+        }
+
+        let overrides = SafetyOverrides {
+            max_reorg_depth: Some(2),
+            skip_to_height: Some(12_345),
+            refresh_from_block_height: None,
+        };
+        let (handle, _outcome) =
+            WalletFileHandle::open(&base, b"pw", TEST_NETWORK, overrides).expect("open");
+
+        // Overrides survive on the handle.
+        assert_eq!(handle.overrides(), overrides);
+        // Overridden fields take the override's value.
+        assert_eq!(handle.effective_max_reorg_depth(), 2);
+        assert_eq!(handle.effective_skip_to_height(), 12_345);
+        // Non-overridden field still reads the network default.
+        let k = NetworkSafetyConstants::for_network(TEST_NETWORK);
+        assert_eq!(
+            handle.effective_refresh_from_block_height(),
+            k.default_refresh_from_block_height,
+        );
     }
 }

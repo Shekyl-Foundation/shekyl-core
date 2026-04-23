@@ -1382,8 +1382,48 @@ bool shekyl_wallet_create(
     ShekylWallet** out_handle,
     uint32_t* out_error);
 
+/* CLI-ephemeral safety overrides for the current wallet session. Mirrors
+ * the Rust `#[repr(C)]` `ShekylSafetyOverrides` and the in-tree
+ * `shekyl_wallet_file::SafetyOverrides`. Implements the
+ * "CLI-ephemeral overrides" layer of the three-layer preference model
+ * pinned in docs/WALLET_PREFS.md §2.3 and §3.3.
+ *
+ * Each field is a `(has_<name>, <name>)` pair:
+ *   * `has_<name> == 0` → honor the network default
+ *     (`NetworkSafetyConstants::for_network(network).<default>`).
+ *   * `has_<name> != 0` → use `<name>` for this session only. The
+ *     value is NOT persisted; the orchestrator emits a `tracing::warn!`
+ *     line at open time naming the field, the value, and the default.
+ *
+ * The `_pad*` fields are explicit 7-byte pads so the `uint64_t` members
+ * start on their natural 8-byte alignment regardless of compiler rules.
+ * They MUST be zero; the Rust side does not currently check this, but
+ * future versions may, so do not smuggle side-channel data through them.
+ *
+ * Pass a NULL `ShekylSafetyOverrides*` to `shekyl_wallet_open` to mean
+ * "no overrides" (equivalent to a zeroed struct). The GUI path always
+ * passes NULL; only the shekyl-cli --advanced flags produce a non-NULL
+ * pointer. */
+struct ShekylSafetyOverrides {
+    uint8_t has_max_reorg_depth;
+    uint8_t _pad0[7];
+    uint64_t max_reorg_depth;
+    uint8_t has_skip_to_height;
+    uint8_t _pad1[7];
+    uint64_t skip_to_height;
+    uint8_t has_refresh_from_block_height;
+    uint8_t _pad2[7];
+    uint64_t refresh_from_block_height;
+};
+static_assert(sizeof(ShekylSafetyOverrides) == 48,
+    "ShekylSafetyOverrides layout must match Rust #[repr(C)] in wallet_file_ffi.rs");
+
 /* Open an existing wallet pair. On success populates `*out_handle`,
  * `*out_state_lost`, and `*out_restore_from_height`.
+ *
+ * `overrides` may be NULL, meaning "no CLI overrides active" (the GUI
+ * path). A non-NULL pointer supplies the CLI-ephemeral layer; see
+ * `ShekylSafetyOverrides` above.
  *
  * When `*out_state_lost` is true, `.wallet` was absent on disk and the
  * orchestrator synthesized a fresh ledger seeded with the keys-file's
@@ -1394,6 +1434,7 @@ bool shekyl_wallet_open(
     const char* base_path_ptr, size_t base_path_len,
     const uint8_t* password_ptr, size_t password_len,
     uint8_t expected_network,
+    const struct ShekylSafetyOverrides* overrides,
     ShekylWallet** out_handle,
     bool* out_state_lost,
     uint64_t* out_restore_from_height,
