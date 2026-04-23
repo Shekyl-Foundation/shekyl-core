@@ -104,59 +104,136 @@ non-derivable types.
 
 ### 3.1 `bench(wallet2)`: C++ baseline capture
 
-**Scope.** A Google Benchmark harness exercising the five hot paths
-below against the existing wallet2 code, while it still exists.
-Pure measurement — no wallet2 code modified, no new runtime
-dependencies in the wallet2 build, no CI integration yet.
+**Scope.** A Google Benchmark harness exercising the hot paths that
+are hermetically testable against the existing wallet2 code, while
+it still exists. Pure measurement — no wallet2 code modified, no
+new runtime dependencies in the wallet2 build, no CI integration
+yet.
 
-**Hot paths measured (the Five).** These five generalize across the
-pass; all later benchmarks in commit 2 mirror them against the
-Rust stack.
+**Hot paths measured.** Three of the Five ship with C++ baselines
+this commit. The remaining two are Rust-only in commit 3.2; the
+rationale is documented below and called out in §4.3.
 
-| Bench                                    | What it measures                                                     | Why                                    |
-|------------------------------------------|----------------------------------------------------------------------|----------------------------------------|
-| `open_cold`                              | Argon2id + keys parse + cache deserialize, from cold cache           | The wait the user actually sees        |
-| `balance_compute_N` (N=100, 1000, 10000) | Sum-unspent over N transfers                                         | O(n) vs O(n²) drift, FFI batching cost |
-| `scan_block_K` (K=0, 5, 50)              | Scanner processes a synthetic block with K owned outputs             | Scanner hot path; FFI marshal cost     |
-| `transfer_e2e_1in_2out`                  | One full transfer including FCMP++ proof + PQC sign                  | Crypto-path regression canary          |
-| `ledger_postcard_roundtrip_10k`          | Serialize + deserialize a representative 10k-transfer `WalletLedger` | Format-layer regression canary         |
+| Bench                                     | What it measures                                                     | Why                                    | C++               | Rust (3.2)     |
+|-------------------------------------------|----------------------------------------------------------------------|----------------------------------------|-------------------|----------------|
+| `open_cold`                               | Argon2id + keys parse + cache deserialize, from cold cache           | The wait the user actually sees        | **no (blocked)**  | yes            |
+| `balance_compute_N` (N=100, 1000, 10000)  | Sum-unspent over N transfers                                         | O(n) vs O(n²) drift, FFI batching cost | yes               | yes            |
+| `cache_serialize_roundtrip_N` (N=1k, 10k) | Boost serialize + deserialize of a representative cache blob         | Format-layer regression canary         | **no (blocked)**  | yes (postcard) |
+| `scan_block_K` (K=0, 5, 50)               | Scanner processes a synthetic block with K owned outputs             | Scanner hot path; FFI marshal cost     | **no**            | yes            |
+| `transfer_e2e_1in_2out`                   | One full transfer including FCMP++ proof + PQC sign                  | Crypto-path regression canary          | **no**            | yes            |
+
+**Why `open_cold` and `cache_serialize_roundtrip_N` are blocked on this
+tree.** Both paths require a freshly generated wallet to round-trip
+through `wallet2::generate` → `wallet2::store_to` → `wallet2::load`.
+On the current tree that round-trip is broken: `load_keys_buf` raises
+`tools::error::wallet_files_doesnt_correspond` because the final
+`hwdev.verify_keys(spend_secret, spend_public)` returns false against
+what `generate` just persisted. The regression is reproduced one-for-one
+by the already-failing unit test
+`wallet_storage.store_to_mem2file` in
+`tests/unit_tests/wallet_storage.cpp` (the sibling tests
+`change_password_*` were already guarded with `GTEST_SKIP` referencing
+the same missing-fixture dance). Root-causing the regression is
+precisely the work scope of hardening-pass commits `2l` (cache rewire)
+and `2m-keys` / `2m-cache` (keys + cache deletion). Shoving a fix in
+here would collide with that scope and violate the "clear separations"
+invariant the hardening pass is built on. The benches are therefore
+scaffolded in full — fixture builders, `wallet_accessor_test` hooks,
+Google Benchmark registration, manifest entries — and gated with
+`state.SkipWithError(...)` carrying a message that names the blocking
+issue and points at the un-skip commit. When `2l` / `2m` land, removing
+the `SkipWithError` call and flipping this table row from
+`**no (blocked)**` to `yes` is a one-line change.
+
+**Why `scan_block_K` and `transfer_e2e_1in_2out` are Rust-only.**
+Both depend on daemon-sourced state that wallet2 has no hermetic
+provisioning path for:
+
+- **`scan_block_K`**: wallet2's scanner consumes blocks from
+  `get_blocks.bin` RPC responses including tx-pubkey-bearing
+  outputs; synthesizing ECDH-addressable outputs against a
+  specific wallet view key requires ~300–500 lines of chaingen-
+  derived fixture code (mutually referencing `src/cryptonote_core`),
+  all of which gets deleted in 2m-cache.
+- **`transfer_e2e_1in_2out`**: `transfer_selected_rct` requires
+  `m_fcmp_precomputed_paths` populated from an RPC `get_tree_paths`
+  response (128-byte leaf entries, interior nodes, commitments,
+  key-image generators, PQC-key hashes). Populating it hermetically
+  means reimplementing the daemon's FCMP++ tree builder in the
+  test harness — cryptographically load-bearing, ~500–1000 lines,
+  and the resulting benchmark would exercise our reimplementation's
+  idea of a valid tree driving the real proof generator rather than
+  the real daemon → wallet2 path. That is a proxy measurement,
+  not a real one.
+
+These paths are hermetically benchmarkable in the Rust stack
+because the Rust stack was designed to be. The C++ gap is a
+consequence of the architectural debt we are removing, not a gap
+in the plan. §4.3's apples-to-oranges manifest discipline carries
+the asymmetry honestly; the 2m-cache PR compares against the
+captured C++ baseline only for the three benchmarks where both
+sides exist.
 
 **Deliverable artifacts.**
 
-- `src/wallet/bench/bench_wallet2.cpp` — Google Benchmark harness
+- `tests/wallet_bench/CMakeLists.txt` — `shekyl-wallet-bench`
+  target, behind `BUILD_SHEKYL_WALLET_BENCH` option (OFF by default),
+  FetchContent of Google Benchmark v1.9.1 mirroring the existing
+  GoogleTest pattern in `tests/CMakeLists.txt`.
+- `tests/wallet_bench/bench_wallet2.cpp` — Google Benchmark harness
   producing JSON output with median, p95, mean, and cost-per-unit
-  (per-output, per-block) where meaningful.
-- `docs/benchmarks/wallet2_baseline_v0.json` — frozen baseline,
-  committed to the repo, carrying a schema version and the exact
-  toolchain + host CPU manifest that produced it.
+  (per-output, per-transfer) where meaningful.
+- `tests/wallet_bench/bench_fixtures.{h,cpp}` — seeded fixture
+  builders: synthetic transfer_details (for balance_compute_N),
+  wallet on-disk fixture (for open_cold), representative cache
+  blob (for cache_serialize_roundtrip_N). `wallet_accessor_test`
+  reused for friend access to `m_transfers`.
+- `tests/wallet_bench/README.md` — build + run instructions,
+  documented gaps for scan_block and transfer_e2e.
 - `docs/benchmarks/wallet2_baseline_v0.manifest.md` — prose
   description of what each C++ benchmark actually measures: every
   step of the operation, every I/O boundary, every validation check.
   **Load-bearing against the apples-to-oranges failure mode** (see
   §4.3).
+- `docs/benchmarks/wallet2_baseline_v0.json` — frozen baseline,
+  captured on a reference machine by the commit author and
+  committed as a follow-up to this PR (see `capture_cpp_baseline.sh`);
+  carries a schema version and the exact toolchain + host CPU
+  manifest that produced it.
+- `scripts/bench/capture_cpp_baseline.sh` — wrapper that builds
+  the target, runs the harness with the right flags
+  (`--benchmark_format=json`, repetitions, min-time), captures
+  toolchain + host CPU metadata, emits `wallet2_baseline_v0.json`.
+- `docs/benchmarks/README.md` — capture procedure, baseline
+  update policy, cross-reference to §3.3's rolling-baseline rules.
 
 **Implementation notes.**
 
 - Google Benchmark (`benchmark/benchmark.h`) chosen because it is the
   C++ counterpart to criterion, produces JSON in a schema close
   enough to criterion's for trivial normalization.
-- Fixtures generated by a seedable RNG with a pinned seed; wallet
-  files for `open_cold` generated once, checksummed, cached under
-  `tests/fixtures/bench/` (gitignored with a `README.md` describing
-  the regeneration command).
-- `scan_block_K`: synthetic block constructed with the same
-  primitives the scanner already ingests. Not a real daemon pull.
-- `transfer_e2e_1in_2out` requires a sealed wallet with at least
-  one spendable output; fixture produced by the same seeded
-  generator.
+- Fixtures generated by a seeded `std::mt19937_64` with a pinned
+  seed (`0xBEEFF00DCAFEBABE`); wallet files for `open_cold`
+  generated in-harness each run (fast enough that a cached fixture
+  adds fragility without saving time).
+- Google Benchmark is linked only when `BUILD_SHEKYL_WALLET_BENCH=ON`,
+  which defaults OFF. The benchmark harness is opt-in because the
+  FetchContent step pulls in its own googletest and is a cold-build
+  cost that normal contributors should not pay.
+- `wallet_accessor_test` is reused verbatim as the friend-class hook
+  for populating `m_transfers`. No new friend classes; no wallet2.h
+  changes.
 
 **Dependencies.** None. Can land standalone.
 
-**Exit criteria.** JSON artifact exists; a human has eyeballed the
-numbers for plausibility (open_cold > 1s on any reasonable hardware
-because Argon2id is deliberately slow; scan_block_0 < 1 ms because
-there's no work to do; transfer_e2e has a non-zero FCMP++ component);
-manifest document enumerates each benchmark's operation list.
+**Exit criteria.** `cmake -DBUILD_SHEKYL_WALLET_BENCH=ON` configures
+without error; `make shekyl-wallet-bench` builds the target; running
+the built binary with `--benchmark_format=console` produces output
+for the three benchmark families; `scripts/bench/capture_cpp_baseline.sh`
+exits 0 and produces a valid-schema JSON. The baseline JSON is
+captured by the commit author on their reference machine and
+committed as a follow-up; this commit ships the harness, not the
+numbers.
 
 ### 3.2 `bench(wallet-state)`: Rust benchmark harness
 
@@ -676,6 +753,19 @@ This is the specific defense against both failure modes:
 - **False-negative speedup.** "Rust is 20% faster" interpreted
   against "Rust skips the validation step C++ did" is a silent
   correctness regression hiding as a performance win.
+
+**Benchmarks Rust-only by necessity.** Two of the Five
+(`scan_block_K`, `transfer_e2e_1in_2out`) ship only in the Rust
+harness because wallet2 has no hermetic provisioning for the
+daemon-sourced state they require (see §3.1 for the specifics).
+The manifest marks these explicitly `RUST_ONLY: no pre-deletion
+C++ baseline, see §3.1 rationale`. For these two benchmarks, the
+bench-comparison script in §3.3 does not attempt a C++ delta; the
+PR comment prints Rust-only numbers alongside a one-line reminder
+that no comparison exists. Regression detection across the rewire
+for these paths relies on the Rust rolling baseline (§3.3) plus
+human sanity-check on order of magnitude, not on a pre-deletion
+comparator. This is an acknowledged gap, not a defect.
 
 ### 4.4 Zeroizing allowlist maintenance
 

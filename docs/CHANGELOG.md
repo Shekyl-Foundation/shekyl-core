@@ -2,7 +2,86 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Wallet2 C++ baseline benchmark harness
+  (`tests/wallet_bench/`, commit 1 of the mid-rewire hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.1).**
+  Google Benchmark v1.9.1 harness fetched via `FetchContent`,
+  opt-in behind `-DBUILD_SHEKYL_WALLET_BENCH=ON` (OFF by default so
+  normal contributors do not pay the cold-build cost). Of the five
+  hot paths identified in §3.1, **one ships live on this tree**
+  (`BM_balance_compute`, N ∈ {100, 1000, 10000}, O(n) `balance()`
+  iteration over a seeded synthetic transfer set) and **two are
+  scaffolded-but-gated** with `state.SkipWithError(...)`
+  (`BM_open_cold`, `BM_cache_roundtrip`): those two depend on
+  `wallet2::generate` → `store_to` → `load` round-tripping, which
+  is broken on this tree and reproduced by the already-failing unit
+  test `wallet_storage.store_to_mem2file`. Root-causing the
+  wallet2 regression is the work scope of hardening-pass commits
+  `2l` / `2m-keys` / `2m-cache`; patching it here would violate the
+  "clear separations" invariant. Un-skipping is a one-line change
+  in each bench function when those commits land. Fixtures use a
+  pinned seed (`0xBEEFF00DCAFEBABE`) so two runs produce
+  byte-identical inputs; the bench defines its own
+  `wallet_accessor_test` in `tests/wallet_bench/bench_fixtures.h`
+  (matching the existing friend declaration in `src/wallet/wallet2.h`,
+  disjoint from the same-named class in `tests/core_tests/wallet_tools.h`
+  — the two headers are never included in the same TU) with a minimal
+  surface: `m_transfers` get, `get_cache_file_data`, `load_wallet_cache`. Two of the Five (`scan_block_K`,
+  `transfer_e2e_1in_2out`) ship only in the Rust harness from
+  commit 3.2: wallet2's scanner and FCMP++ proof paths are
+  daemon-coupled and have no hermetic provisioning path; the
+  architecturally honest move is to acknowledge the gap in
+  `docs/MID_REWIRE_HARDENING.md` §3.1 and §4.3 rather than
+  reimplement daemon-side synthetic-tree logic in code that is
+  deleted in 2m-cache.
+  Companion artifacts:
+  [`docs/benchmarks/wallet2_baseline_v0.manifest.md`](benchmarks/wallet2_baseline_v0.manifest.md)
+  (prose manifest: every operation in each live bench's hot loop,
+  every I/O boundary, apples-to-oranges notes against Rust, and the
+  un-skip criteria for the two gated paths),
+  [`docs/benchmarks/README.md`](benchmarks/README.md) (capture
+  procedure + baseline-update policy),
+  [`scripts/bench/capture_cpp_baseline.sh`](../scripts/bench/capture_cpp_baseline.sh)
+  (reference-machine capture wrapper emitting a schema-versioned
+  JSON envelope with toolchain + host CPU + git-rev metadata),
+  [`tests/wallet_bench/README.md`](../tests/wallet_bench/README.md)
+  (local build + run instructions + known gaps). The frozen
+  `wallet2_baseline_v0.json` is captured on a reference machine by
+  the commit author and landed as a follow-up — this commit ships
+  the harness, not the numbers, because the reference machine is
+  part of the measurement.
+- **Boost `program_options` link-time dep on `libcommon`
+  (`src/common/CMakeLists.txt`).** `removed_flags.cpp` calls
+  `boost::program_options::error_with_option_name::get_option_name()`,
+  which inlines `get_canonical_option_name` and therefore requires
+  the `libboost_program_options` symbol to resolve at link time
+  (`libcommon.so` is linked with `-Wl,--no-undefined`). The dep was
+  missing since `removed_flags` landed and only surfaced during a
+  clean rebuild triggered by the benchmark harness above. Fix is a
+  one-line `PRIVATE ${Boost_PROGRAM_OPTIONS_LIBRARY}` in
+  `src/common/CMakeLists.txt`. No behavior change outside CMake.
+
 ### Documentation
+
+- **Mid-rewire hardening plan (`docs/MID_REWIRE_HARDENING.md`)
+  amended in §3.1 and §4.3.** §3.1 updated to reflect the
+  architecturally honest scope for the C++ baseline capture: path
+  relocated to `tests/wallet_bench/` (repo convention for
+  benchmarks; `src/` is product code), coverage reduced to three
+  of the Five with explicit per-benchmark C++/Rust availability
+  table and the daemon-coupling rationale spelled out for the two
+  Rust-only paths (`scan_block_K`, `transfer_e2e_1in_2out`). §4.3
+  gained a "Benchmarks Rust-only by necessity" subsection
+  capturing the asymmetry so the bench-comparison script (§3.3)
+  and the PR-comment format can handle it deterministically rather
+  than treating missing C++ numbers as a regression. The
+  acknowledgment is explicit: two paths have no pre-deletion C++
+  baseline and will never have one; regression detection across
+  the rewire for those paths relies on the Rust rolling baseline
+  plus human order-of-magnitude sanity, not on a pre-deletion
+  comparator.
 
 - **Mid-rewire hardening plan (`docs/MID_REWIRE_HARDENING.md`).**
   New design spec pinning the eight-commit instrumentation pass
