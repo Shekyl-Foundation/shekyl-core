@@ -36,6 +36,7 @@
 //!   `rename(2)` step specifically, so callers can distinguish "wrote the
 //!   tmp OK but could not atomically swap it in" from generic I/O.
 
+use shekyl_address::Network;
 use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
 use shekyl_wallet_state::WalletLedgerError;
 use std::io;
@@ -106,6 +107,40 @@ pub enum WalletFileError {
         #[source]
         source: io::Error,
     },
+
+    /// The keys file decoded cleanly but declared a `network` byte that
+    /// does not map to any known [`Network`]. Envelope-level validation
+    /// does not currently vet this field, so the orchestrator is the
+    /// first layer to notice. Treated as corruption rather than a
+    /// caller bug.
+    #[error("unknown network discriminant {0:#04x} in keys file")]
+    UnknownNetwork(u8),
+
+    /// The keys file opened cleanly but is bound to a different network
+    /// than the caller requested. Refusing loudly here prevents the
+    /// scanner, RPC wiring, or address-rendering layer from silently
+    /// talking to the wrong chain — a confusion that would otherwise
+    /// only surface as "no transactions ever show up" or, worse, as a
+    /// mainnet address rendered with testnet HRPs.
+    #[error("network mismatch: keys file is {found}, but {expected} was requested")]
+    NetworkMismatch { expected: Network, found: Network },
+
+    /// The keys file's `capability_mode` byte is neither FULL /
+    /// VIEW_ONLY / HARDWARE_OFFLOAD nor the RESERVED_MULTISIG
+    /// placeholder. The envelope layer already rejects unknown bytes at
+    /// seal/open time, so this variant is a belt-and-braces guard for
+    /// test helpers or future refactors that synthesize an
+    /// `OpenedKeysFile` outside the envelope's validation path.
+    #[error("unknown capability-mode discriminant {0:#04x} in keys file")]
+    UnknownCapability(u8),
+
+    /// The keys file carries the reserved multisig placeholder
+    /// (`CAPABILITY_RESERVED_MULTISIG`). Multisig is scoped out of the
+    /// v1 envelope on purpose (see `PQC_MULTISIG.md`), and silently
+    /// treating such a file as one of the three supported capabilities
+    /// would be unsafe.
+    #[error("multisig wallets are not supported by this envelope version")]
+    MultisigNotSupported,
 }
 
 impl WalletFileError {

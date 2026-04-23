@@ -17,6 +17,7 @@ zeroize = { version = "^1.5", features = ["zeroize_derive"] }
 tempfile = "3"
 rustix = { version = "1", features = ["fs"] }
 
+shekyl-address = { path = "../shekyl-address" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-wallet-state = { path = "../shekyl-wallet-state" }
 

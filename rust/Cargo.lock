@@ -3124,6 +3124,7 @@ name = "shekyl-wallet-file"
 version = "3.1.0"
 dependencies = [
  "rustix",
+ "shekyl-address",
  "shekyl-crypto-pq",
  "shekyl-wallet-state",
  "tempfile",

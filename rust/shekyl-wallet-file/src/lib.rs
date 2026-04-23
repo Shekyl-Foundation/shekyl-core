@@ -52,15 +52,21 @@
 //! [`Zeroizing`]: zeroize::Zeroizing
 
 mod atomic;
+pub mod capability;
 pub mod error;
 mod handle;
 mod lock;
 pub mod paths;
 pub mod payload;
 
+pub use capability::Capability;
 pub use error::WalletFileError;
 pub use handle::{CreateParams, OpenOutcome, WalletFileHandle};
 pub use payload::{
     decode_payload, encode_payload, DecodedPayload, PayloadError, PayloadKind,
     CURRENT_PAYLOAD_VERSION, PAYLOAD_BODY_MAX, PAYLOAD_HEADER_LEN, PAYLOAD_MAGIC,
 };
+
+// Re-export `Network` so consumers do not have to depend on
+// `shekyl-address` directly just to satisfy `open`'s signature.
+pub use shekyl_address::Network;

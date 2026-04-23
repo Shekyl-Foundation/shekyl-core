@@ -58,6 +58,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
+use shekyl_address::Network;
 use shekyl_crypto_pq::wallet_envelope::{
     open_keys_file, open_state_file, rewrap_keys_file_password, seal_keys_file, seal_state_file,
     CapabilityContent, KdfParams, OpenedKeysFile, EXPECTED_CLASSICAL_ADDRESS_BYTES,
@@ -67,6 +68,7 @@ use shekyl_wallet_state::{
 };
 
 use crate::atomic::atomic_write_file;
+use crate::capability::Capability;
 use crate::error::WalletFileError;
 use crate::lock::KeysFileLock;
 use crate::paths::{keys_path_from, state_path_from};
@@ -155,10 +157,11 @@ pub struct CreateParams<'a> {
     pub base_path: &'a Path,
     /// User-supplied password. Stretched to `wrap_key` via Argon2id.
     pub password: &'a [u8],
-    /// `0x00 = Mainnet`, `0x01 = Testnet`, `0x02 = Stagenet`,
-    /// `0x03 = Fakechain`. Enum-equivalent; the envelope does not
-    /// interpret values beyond the registered set.
-    pub network: u8,
+    /// Network binding for the wallet. Persisted in the envelope's
+    /// AAD and cross-checked by [`WalletFileHandle::open`] against the
+    /// caller-supplied `expected_network`, so a wallet bound to one
+    /// chain can never be silently opened as another.
+    pub network: Network,
     /// `0x00 = BIP-39 mnemonic`, `0x01 = raw 32-byte hex`. Stored for
     /// UX ("offer the same restore UI we used at creation").
     pub seed_format: u8,
@@ -195,6 +198,10 @@ pub struct WalletFileHandle {
     state_path: PathBuf,
     keys_file_bytes: Vec<u8>,
     opened_keys: Zeroizing<OpenedKeysFileOwned>,
+    /// Decoded once at open/create time so the public `network()` and
+    /// `capability()` accessors can be infallible.
+    network: Network,
+    capability: Capability,
     /// Held for Drop semantics; not read after construction.
     _lock: KeysFileLock,
 }
@@ -206,6 +213,8 @@ impl std::fmt::Debug for WalletFileHandle {
             .field("state_path", &self.state_path)
             .field("keys_file_bytes", &"<redacted>")
             .field("opened_keys", &"<redacted>")
+            .field("network", &self.network)
+            .field("capability", &self.capability)
             .field("_lock", &self._lock)
             .finish()
     }
@@ -257,7 +266,7 @@ impl WalletFileHandle {
 
         let keys_bytes = seal_keys_file(
             params.password,
-            params.network,
+            params.network.as_u8(),
             params.seed_format,
             params.capability,
             params.creation_timestamp,
@@ -271,6 +280,16 @@ impl WalletFileHandle {
         let lock = KeysFileLock::acquire(&keys_path)?;
 
         let opened = open_keys_file(params.password, &keys_bytes)?;
+        // Re-decode from `opened` rather than trusting `params.network`
+        // so the handle reflects exactly what the AAD says — if the
+        // envelope ever silently drops the byte, we find out here
+        // instead of when a cross-chain bug lands in production.
+        let network = decode_network(opened.network)?;
+        let capability = Capability::from_envelope_byte(opened.capability_mode)?;
+        debug_assert_eq!(
+            network, params.network,
+            "envelope round-trip must preserve the network byte"
+        );
 
         let body = params.initial_ledger.to_postcard_bytes()?;
         let framed = encode_payload(PayloadKind::WalletLedgerPostcard, &body)?;
@@ -282,6 +301,8 @@ impl WalletFileHandle {
             state_path,
             keys_file_bytes: keys_bytes,
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
+            network,
+            capability,
             _lock: lock,
         })
     }
@@ -290,6 +311,14 @@ impl WalletFileHandle {
     /// [`OpenOutcome`] that tells the caller whether the state file
     /// was loaded from disk or synthesized because `.wallet` was
     /// missing.
+    ///
+    /// # Network binding
+    ///
+    /// `expected_network` is enforced against the AAD-committed network
+    /// byte in the keys file. A mismatch returns
+    /// [`WalletFileError::NetworkMismatch`] **before** `.wallet` is
+    /// read, so a misfiled testnet wallet can never be accidentally
+    /// served as mainnet (or vice versa).
     ///
     /// # Recovery scope (2i-happy)
     ///
@@ -302,11 +331,15 @@ impl WalletFileHandle {
     /// headroom).
     ///
     /// Other failure modes — truncated `.wallet`, bad magic,
-    /// AEAD-auth failure, seed-block mismatch — still refuse loudly
-    /// and will be triaged in 2i-errors. A silent rescan on
-    /// AEAD-auth-failed bytes would mask tampering; a silent rescan
-    /// on bad magic would mask a misfiled companion file.
-    pub fn open(base_path: &Path, password: &[u8]) -> Result<(Self, OpenOutcome), WalletFileError> {
+    /// AEAD-auth failure, seed-block mismatch — refuse loudly. A
+    /// silent rescan on AEAD-auth-failed bytes would mask tampering;
+    /// a silent rescan on bad magic would mask a misfiled companion
+    /// file.
+    pub fn open(
+        base_path: &Path,
+        password: &[u8],
+        expected_network: Network,
+    ) -> Result<(Self, OpenOutcome), WalletFileError> {
         let keys_path = keys_path_from(base_path);
         let state_path = state_path_from(base_path);
 
@@ -314,6 +347,19 @@ impl WalletFileHandle {
 
         let keys_bytes = std::fs::read(&keys_path)?;
         let opened = open_keys_file(password, &keys_bytes)?;
+
+        // Network-mismatch refusal happens BEFORE `.wallet` is touched
+        // so we don't spend an Argon2id derivation on a wallet we
+        // already know we will refuse. Also avoids any possibility of
+        // a cross-chain `.wallet` being even speculatively considered.
+        let network = decode_network(opened.network)?;
+        if network != expected_network {
+            return Err(WalletFileError::NetworkMismatch {
+                expected: expected_network,
+                found: network,
+            });
+        }
+        let capability = Capability::from_envelope_byte(opened.capability_mode)?;
 
         let outcome = match std::fs::read(&state_path) {
             Ok(state_bytes) => {
@@ -354,6 +400,8 @@ impl WalletFileHandle {
             state_path,
             keys_file_bytes: keys_bytes,
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
+            network,
+            capability,
             _lock: lock,
         };
         Ok((handle, outcome))
@@ -415,6 +463,54 @@ impl WalletFileHandle {
     pub fn opened_keys(&self) -> &OpenedKeysFile {
         &self.opened_keys.0
     }
+
+    /// Network this wallet is bound to. Decoded once at open/create
+    /// time; never fails. Callers should branch on this value (rather
+    /// than re-decoding `opened_keys().network`) so the dependency on
+    /// the envelope's byte layout stays contained in one place.
+    pub fn network(&self) -> Network {
+        self.network
+    }
+
+    /// Capability profile of this wallet (`Full` / `ViewOnly` /
+    /// `HardwareOffload`). Decoded once at open/create time. Callers
+    /// driving UX should use [`Capability::can_spend_locally`] instead
+    /// of matching against `Capability::Full` directly, so future
+    /// capability variants do not silently disable the spend path.
+    pub fn capability(&self) -> Capability {
+        self.capability
+    }
+
+    /// Canonical 65-byte classical address committed in the keys
+    /// file's AAD (`version(1) || spend_pk(32) || view_pk(32)`).
+    /// Stable for the wallet's lifetime.
+    pub fn expected_classical_address(&self) -> &[u8; EXPECTED_CLASSICAL_ADDRESS_BYTES] {
+        &self.opened_keys.0.expected_classical_address
+    }
+
+    /// Unix-epoch seconds at wallet creation. Persisted in the AAD so
+    /// the UX can display "Wallet created on …" without trusting the
+    /// state file.
+    pub fn creation_timestamp(&self) -> u64 {
+        self.opened_keys.0.creation_timestamp
+    }
+
+    /// Block-height floor for full-history rescans. Also the value
+    /// seeded into [`crate::OpenOutcome::StateLost::restore_from_height`]
+    /// on the lost-`.wallet` recovery path.
+    pub fn restore_height_hint(&self) -> u32 {
+        self.opened_keys.0.restore_height_hint
+    }
+}
+
+/// Decode the envelope's raw network byte into a typed [`Network`].
+///
+/// Extracted as a free function so both `create` (which re-validates
+/// the byte that just went through `seal_keys_file`) and `open` (which
+/// vets a byte read from disk) share one implementation, keeping the
+/// defensive-decode path auditable in a single place.
+fn decode_network(v: u8) -> Result<Network, WalletFileError> {
+    Network::from_u8(v).ok_or(WalletFileError::UnknownNetwork(v))
 }
 
 #[cfg(test)]
@@ -469,6 +565,12 @@ mod tests {
         }
     }
 
+    /// Default network used by every test that does not exercise the
+    /// network-binding logic directly. Kept as a module-level `const`
+    /// so a sweep over all tests reveals exactly which ones care about
+    /// the value (grep for `TEST_NETWORK`).
+    const TEST_NETWORK: Network = Network::Testnet;
+
     fn make_params<'a>(
         fx: &'a Fixture,
         base: &'a Path,
@@ -479,7 +581,7 @@ mod tests {
         CreateParams {
             base_path: base,
             password,
-            network: 0x01, // Testnet
+            network: TEST_NETWORK,
             seed_format: 0x00,
             capability: cap,
             creation_timestamp: 0x6000_0000,
@@ -506,7 +608,8 @@ mod tests {
         drop(handle);
 
         let (handle2, outcome) =
-            WalletFileHandle::open(&base, b"correct horse battery staple").expect("open");
+            WalletFileHandle::open(&base, b"correct horse battery staple", TEST_NETWORK)
+                .expect("open");
         assert_eq!(handle2.keys_path(), keys_path_from(&base));
         assert_eq!(handle2.state_path(), state_path_from(&base));
         assert!(
@@ -534,7 +637,7 @@ mod tests {
         handle.save_state(b"pw", &ledger).expect("save2");
         drop(handle);
 
-        let (_, outcome) = WalletFileHandle::open(&base, b"pw").expect("open");
+        let (_, outcome) = WalletFileHandle::open(&base, b"pw", TEST_NETWORK).expect("open");
         let ledger_back = outcome.into_ledger();
         assert_eq!(ledger_back.format_version, ledger.format_version);
     }
@@ -605,9 +708,9 @@ mod tests {
         // Drop the write-holding handle before re-opening.
         drop(handle);
         // Old password now rejected.
-        assert!(WalletFileHandle::open(&base, b"old").is_err());
+        assert!(WalletFileHandle::open(&base, b"old", TEST_NETWORK).is_err());
         // New password works.
-        let (_, _) = WalletFileHandle::open(&base, b"new").expect("open-with-new-pw");
+        let (_, _) = WalletFileHandle::open(&base, b"new", TEST_NETWORK).expect("open-with-new-pw");
     }
 
     #[test]
@@ -645,7 +748,7 @@ mod tests {
             let _h = WalletFileHandle::create(&params).expect("create");
         }
         // Handle dropped; lock released. Re-open must succeed.
-        let (_, _) = WalletFileHandle::open(&base, b"pw").expect("reopen");
+        let (_, _) = WalletFileHandle::open(&base, b"pw", TEST_NETWORK).expect("reopen");
     }
 
     #[test]
@@ -660,7 +763,8 @@ mod tests {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
             WalletFileHandle::create(&params).expect("create")
         };
-        let err = WalletFileHandle::open(&base, b"pw").expect_err("second open must fail");
+        let err =
+            WalletFileHandle::open(&base, b"pw", TEST_NETWORK).expect_err("second open must fail");
         match err {
             WalletFileError::AlreadyLocked { path } => {
                 assert_eq!(path, keys_path_from(&base));
@@ -693,7 +797,7 @@ mod tests {
         assert!(keys_path_from(&base).exists(), "keys file must still exist");
         assert!(!state_path.exists(), ".wallet must be gone");
 
-        let (_handle, outcome) = WalletFileHandle::open(&base, b"pw").expect("open");
+        let (_handle, outcome) = WalletFileHandle::open(&base, b"pw", TEST_NETWORK).expect("open");
         match outcome {
             OpenOutcome::StateLost {
                 ledger,
@@ -734,14 +838,16 @@ mod tests {
         std::fs::remove_file(state_path_from(&base)).expect("remove .wallet");
 
         let rebuilt = {
-            let (handle, outcome) = WalletFileHandle::open(&base, b"pw").expect("open-lost");
+            let (handle, outcome) =
+                WalletFileHandle::open(&base, b"pw", TEST_NETWORK).expect("open-lost");
             assert!(outcome.is_lost());
             let ledger = outcome.into_ledger();
             handle.save_state(b"pw", &ledger).expect("save");
             ledger
         };
 
-        let (_handle, outcome) = WalletFileHandle::open(&base, b"pw").expect("open-loaded");
+        let (_handle, outcome) =
+            WalletFileHandle::open(&base, b"pw", TEST_NETWORK).expect("open-loaded");
         assert!(!outcome.is_lost(), "after save, open must see StateLoaded");
         let reloaded = outcome.into_ledger();
         assert_eq!(reloaded.format_version, rebuilt.format_version);
@@ -771,7 +877,7 @@ mod tests {
         }
         std::fs::write(state_path_from(&base), b"\x00\x00\x00").expect("truncate .wallet");
 
-        let err = WalletFileHandle::open(&base, b"pw").expect_err("must refuse");
+        let err = WalletFileHandle::open(&base, b"pw", TEST_NETWORK).expect_err("must refuse");
         match err {
             WalletFileError::Envelope(_) => { /* expected: TooShort / BadMagic surfaced */ }
             other => panic!(
@@ -779,5 +885,113 @@ mod tests {
                  (recovery policy must not silently swallow tampered/corrupt bytes)"
             ),
         }
+    }
+
+    /// 2i-errors / pre-v1 refusal: a file at the keys path whose bytes
+    /// don't start with `SHEKYLWT` must surface the envelope's
+    /// `BadMagic` unchanged. Callers below the handle (FFI, C++ glue)
+    /// rely on this one-to-one mapping to render a "this is not a
+    /// Shekyl v1 wallet" message rather than masking it as a generic
+    /// I/O error.
+    #[test]
+    fn open_refuses_non_shekyl_magic() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("garbage.wallet");
+        // Write a wrong-magic file at the keys path long enough to
+        // clear the envelope's `expect_at_least(OFF_REGION1_CT)`
+        // length-floor check, so the failure path we exercise here is
+        // specifically the magic check ("this file is well-sized but
+        // is not a Shekyl v1 wallet") and not a generic TooShort on
+        // an obviously-truncated input. 512 bytes is well past
+        // `OFF_REGION1_CT`.
+        let mut garbage = vec![0u8; 512];
+        garbage[..8].copy_from_slice(b"NOTSHEKY");
+        std::fs::write(keys_path_from(&base), &garbage).expect("write garbage keys file");
+
+        let err = WalletFileHandle::open(&base, b"pw", TEST_NETWORK)
+            .expect_err("non-Shekyl magic must be refused");
+        match err {
+            WalletFileError::Envelope(e) => {
+                // Envelope crate's error taxonomy: `BadMagic` is the
+                // canonical "this is not a Shekyl v1 wallet" signal.
+                // We match on the Display string rather than the enum
+                // to avoid coupling this crate's tests to every
+                // future variant of `WalletEnvelopeError`.
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("magic"),
+                    "expected envelope error to mention magic mismatch, got: {msg}"
+                );
+            }
+            other => panic!("expected Envelope(BadMagic), got {other:?}"),
+        }
+    }
+
+    /// 2i-errors / network-mismatch: a keys file created on one
+    /// network must be refused when `open` is called with any other
+    /// network, **before** `.wallet` is touched (so a cross-chain
+    /// `.wallet` cannot be even speculatively considered).
+    #[test]
+    fn open_refuses_network_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+
+        // Create bound to Testnet (via `make_params`), then try to
+        // open it as Mainnet.
+        {
+            let params = make_params(&fx, &base, b"pw", &ledger, &cap);
+            assert_eq!(params.network, Network::Testnet, "fixture precondition");
+            let _h = WalletFileHandle::create(&params).expect("create");
+        }
+        let err = WalletFileHandle::open(&base, b"pw", Network::Mainnet)
+            .expect_err("mainnet open of testnet wallet must refuse");
+        match err {
+            WalletFileError::NetworkMismatch { expected, found } => {
+                assert_eq!(expected, Network::Mainnet);
+                assert_eq!(found, Network::Testnet);
+            }
+            other => panic!("expected NetworkMismatch, got {other:?}"),
+        }
+    }
+
+    /// 2i-errors / capability dispatch: a `ViewOnly` wallet (the
+    /// default fixture) must expose `Capability::ViewOnly` via the
+    /// accessor, and `can_spend_locally()` must return `false`. This
+    /// pins the contract that the FFI "should I show a send button?"
+    /// predicate relies on.
+    #[test]
+    fn handle_exposes_view_only_capability_and_network() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let fx = Fixture::new();
+        let cap = fx.capability();
+        let ledger = WalletLedger::empty();
+
+        let handle = {
+            let params = make_params(&fx, &base, b"pw", &ledger, &cap);
+            WalletFileHandle::create(&params).expect("create")
+        };
+        assert_eq!(handle.capability(), Capability::ViewOnly);
+        assert!(!handle.capability().can_spend_locally());
+        assert_eq!(handle.network(), TEST_NETWORK);
+        assert_eq!(handle.creation_timestamp(), 0x6000_0000);
+        assert_eq!(handle.restore_height_hint(), 0);
+        assert_eq!(handle.expected_classical_address()[0], 0x01);
+    }
+
+    /// Capability dispatch entry point: `can_spend_locally` must be
+    /// the single source of truth for "is this wallet allowed to
+    /// produce a signature on-device?" Future capability variants
+    /// (multisig quorum, offload devices, hardware signers) must
+    /// extend this predicate instead of forcing every call site to
+    /// pattern-match raw variants.
+    #[test]
+    fn can_spend_locally_is_the_dispatch_predicate() {
+        assert!(Capability::Full.can_spend_locally());
+        assert!(!Capability::ViewOnly.can_spend_locally());
+        assert!(!Capability::HardwareOffload.can_spend_locally());
     }
 }
