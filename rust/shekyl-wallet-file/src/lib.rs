@@ -59,11 +59,13 @@ mod lock;
 pub mod overrides;
 pub mod paths;
 pub mod payload;
+pub mod secrets_transitional;
 
 pub use capability::Capability;
 pub use error::WalletFileError;
 pub use handle::{CreateParams, OpenOutcome, WalletFileHandle};
 pub use overrides::SafetyOverrides;
+pub use secrets_transitional::{ClassicalSecretKeys, ExtractClassicalSecretsError};
 pub use payload::{
     decode_payload, encode_payload, DecodedPayload, PayloadError, PayloadKind,
     CURRENT_PAYLOAD_VERSION, PAYLOAD_BODY_MAX, PAYLOAD_HEADER_LEN, PAYLOAD_MAGIC,
