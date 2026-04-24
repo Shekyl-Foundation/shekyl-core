@@ -994,6 +994,19 @@ namespace tools
 constexpr const std::chrono::seconds wallet2::rpc_timeout;
 const char* wallet2::tr(const char* str) { return i18n_translate(str, "tools::wallet2"); }
 
+// ShekylWallet handle deleter (2k.a). Out-of-line so the
+// `shekyl_wallet_free` symbol stays confined to this translation unit;
+// every other TU that includes `wallet2.h` sees only the forward
+// declaration. Null-tolerant per the FFI contract, noexcept per the
+// standard `unique_ptr` deleter requirement.
+void shekyl_wallet_deleter::operator()(::ShekylWallet *h) const noexcept
+{
+  if (h != nullptr)
+  {
+    ::shekyl_wallet_free(h);
+  }
+}
+
 boost::mutex wallet_keys_unlocker::lockers_lock;
 unsigned int wallet_keys_unlocker::lockers = 0;
 wallet_keys_unlocker::wallet_keys_unlocker(wallet2 &w, const std::optional<tools::password_container> &password):

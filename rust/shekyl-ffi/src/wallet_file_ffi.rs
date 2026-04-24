@@ -145,28 +145,37 @@ pub const SHEKYL_WALLET_ERR_KEYS_FILE_WRITE_ONCE_VIOLATION: u32 = 23;
 /// [`shekyl_wallet_prefs_get_json`].
 pub const SHEKYL_WALLET_ERR_PREFS: u32 = 24;
 
-// --- Transitional (2k → 2m-keys) secret-extraction error codes -------------
+// --- Transitional (2k.a → 2m-keys) master-seed-extraction error codes ------
 //
 // These two variants exist because
-// [`shekyl_wallet_extract_classical_secret_keys`] distinguishes
+// [`shekyl_wallet_extract_rederivation_inputs`] distinguishes
 // "this wallet is FULL, extraction succeeded" from "this wallet is
-// VIEW_ONLY / HARDWARE_OFFLOAD and the spend scalar is structurally
+// VIEW_ONLY / HARDWARE_OFFLOAD and the master seed is structurally
 // absent" at the wire edge. The user's 2k review pinned this:
 // returning zero bytes plus a generic failure would lose the
 // capability-mode signal the C++ call site needs. Distinct codes,
 // not a fold-down into `SHEKYL_WALLET_ERR_UNKNOWN_CAPABILITY_MODE`.
 //
-// Rule 40 (zero-on-failure) still applies — the out-pointers are
+// Rule 40 (zero-on-failure) still applies — the out-pointer is
 // zero-filled on *either* refusal — but the wire code is specific.
 // Both codes are slated for deletion alongside the FFI in 2m-keys.
+//
+// Naming-stability note: the symbols still read `_NO_SPEND` even
+// though the FFI now emits the 64-byte master seed instead of the
+// 32-byte spend scalar. The suffix refers to the capability-mode
+// refusal category ("this wallet has no spend-capability") rather
+// than to any specific byte count. Renaming them would churn every
+// C++ call site for a purely cosmetic gain, and the comment below
+// documents the actual wire meaning clearly enough. Both constants
+// are retired in 2m-keys alongside the FFI.
 
-/// The handle's wallet is VIEW_ONLY, so the spend scalar was never
+/// The handle's wallet is VIEW_ONLY, so the master seed was never
 /// written to `cap_content` at seal time (VIEW_ONLY's layout is
 /// `view_sk || ml_kem_dk || spend_pk`). Callers must not treat this
 /// as a transient failure; there is no fallback derivation.
 pub const SHEKYL_WALLET_ERR_CAPABILITY_VIEW_ONLY_NO_SPEND: u32 = 25;
 
-/// The handle's wallet is HARDWARE_OFFLOAD, so the spend scalar lives
+/// The handle's wallet is HARDWARE_OFFLOAD, so the master seed lives
 /// on a paired hardware device. Host-side extraction is a category
 /// error; callers must dispatch to the hardware signing flow.
 pub const SHEKYL_WALLET_ERR_CAPABILITY_HARDWARE_OFFLOAD_NO_SPEND: u32 = 26;
@@ -1130,98 +1139,114 @@ pub unsafe extern "C" fn shekyl_wallet_prefs_set_json(
 }
 
 // ---------------------------------------------------------------------------
-// Transitional: extract classical spend + view secret keys (2k → 2m-keys)
+// Transitional: extract the 64-byte master seed (2k.a → 2m-keys)
 // ---------------------------------------------------------------------------
 
-/// Extract the Ed25519 spend + view secret scalars from a FULL-mode
-/// wallet into caller-owned 32-byte buffers.
+/// Extract the 64-byte master seed from a FULL-mode wallet into a
+/// caller-owned 64-byte buffer. The master seed is the single piece
+/// of key material the C++ `wallet2::load_keys` shim needs to drive
+/// the existing, non-transitional `shekyl_account_rederive` FFI,
+/// which rebuilds `m_spend_secret_key`, `m_view_secret_key`, and
+/// `m_ml_kem_decap_key` locally on the C++ side. No HKDF runs inside
+/// this function: the seed is already in `cap_content` under the
+/// FULL layout, authenticated at `open` by the envelope AAD, and this
+/// call simply copies it out under the capability gate.
 ///
-/// **TRANSITIONAL FFI — scheduled for deletion in commit 2m-keys.**
+/// **TRANSITIONAL FFI — scheduled for deletion in commit 2m-keys**,
+/// at which point `ShekylWallet` owns `m_ml_kem_decap_key` itself and
+/// the C++ side no longer needs to rederive anything.
 ///
-/// This function is called exactly once per wallet load from the C++
-/// `wallet2::load_keys_buf` shim to populate the legacy
-/// `m_account.m_spend_secret_key` and `m_account.m_view_secret_key`
-/// fields while wallet2 still holds plaintext scalars. The derivation
-/// policy (per-network HKDF salt
-/// `b"shekyl-master-derive-v1-<network>-<format>"`) stays entirely in
-/// Rust — C++ does not re-implement HKDF.
+/// # Why a single master-seed out-parameter (Option A')
+///
+/// The classical spend/view scalars and the ML-KEM-768 decap key are
+/// *outputs* of `shekyl_account_rederive`, not independent secrets.
+/// Returning them through this FFI would create the fiction that they
+/// are separable pieces of key material. The 2k.a design (see
+/// `docs/wallet-state-promotion_ab273bfe.plan.md` pin 11) pins this
+/// function to 64 bytes exactly so:
+///
+/// 1. Derivation stays in one place (`shekyl_crypto_pq::account`).
+/// 2. There is no intermediate state in which C++ holds the classical
+///    scalars without the seed (or vice versa), which would have
+///    fragmented the v3 ML-KEM-768 decap-key rederivation.
+/// 3. The deletion surface in 2m-keys is one pointer argument and one
+///    error code group.
 ///
 /// # Capability-mode policy
 ///
-/// * `FULL` — writes both 32-byte scalars, returns `true` with
-///   `*out_error = SHEKYL_WALLET_ERR_OK`.
-/// * `VIEW_ONLY` — zero-fills both out-buffers, returns `false` with
+/// * `FULL` — writes all 64 bytes of the master seed, returns `true`
+///   with `*out_error = SHEKYL_WALLET_ERR_OK`.
+/// * `VIEW_ONLY` — zero-fills the out-buffer, returns `false` with
 ///   `*out_error = SHEKYL_WALLET_ERR_CAPABILITY_VIEW_ONLY_NO_SPEND`.
-/// * `HARDWARE_OFFLOAD` — zero-fills both out-buffers, returns `false`
+///   The master seed was never written to `cap_content` at seal time
+///   for VIEW_ONLY layouts (`view_sk || ml_kem_dk || spend_pk`).
+/// * `HARDWARE_OFFLOAD` — zero-fills the out-buffer, returns `false`
 ///   with `*out_error = SHEKYL_WALLET_ERR_CAPABILITY_HARDWARE_OFFLOAD_NO_SPEND`.
+///   The master seed lives on the paired device; callers must
+///   dispatch to the hardware signing flow.
 ///
 /// # Rule 40 — zero-on-failure
 ///
-/// Both `out_spend_sk_32` and `out_view_sk_32` are unconditionally
-/// zero-filled on function entry. If the capability-mode check or any
-/// later step fails, the buffers stay zero. On success they hold the
-/// freshly-derived scalar bytes.
+/// `out_master_seed_64` is unconditionally zero-filled on function
+/// entry. Every early-return path (null-pointer, capability refusal,
+/// internal failure) leaves the buffer at zero. On success, it holds
+/// the 64 seed bytes and the caller owns the responsibility of
+/// wiping them once C++ has finished its local rederivation.
 ///
 /// # Leak-on-success defense (caller contract)
 ///
 /// The C++ call site **must** receive these bytes into auto-wiping
-/// storage (`crypto::secret_key` / `scrubbed<ec_scalar>`), not raw
-/// `uint8_t[32]` stack locals. See `src/wallet/wallet2.cpp`'s
-/// `TransitionalSecretKeys` RAII struct for the canonical pattern.
+/// storage (`epee::mlocked<tools::scrubbed_arr<uint8_t, 64>>` or a
+/// RAII struct that wraps it), never a raw `uint8_t[64]` stack local.
+/// See `src/wallet/wallet2.cpp`'s `TransitionalSecretKeys` RAII
+/// struct for the canonical pattern, and
+/// `cryptonote::account_base::forget_master_seed()` for the C++-side
+/// post-rederive scrub that keeps the handle as the single
+/// in-memory source of truth (2k.a design pin 12 — Option β).
 ///
 /// # Safety
 ///
 /// * `h` must be a valid handle previously returned by
 ///   [`shekyl_wallet_create`] or [`shekyl_wallet_open`] and not yet
 ///   freed.
-/// * `out_spend_sk_32` and `out_view_sk_32` must each be valid for
-///   32 bytes of writes.
+/// * `out_master_seed_64` must be valid for 64 bytes of writes.
 /// * `out_error` may be null (the call still sets the return bool).
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_wallet_extract_classical_secret_keys(
+pub unsafe extern "C" fn shekyl_wallet_extract_rederivation_inputs(
     h: *mut ShekylWallet,
-    out_spend_sk_32: *mut u8,
-    out_view_sk_32: *mut u8,
+    out_master_seed_64: *mut u8,
     out_error: *mut u32,
 ) -> bool {
     // Zero-on-failure first — every early-return path from here keeps
-    // the buffers at zero. Pointer-null checks come after so the caller
+    // the buffer at zero. Pointer-null checks come after so the caller
     // sees zero bytes even on misuse.
-    if !out_spend_sk_32.is_null() {
-        std::ptr::write_bytes(out_spend_sk_32, 0u8, 32);
-    }
-    if !out_view_sk_32.is_null() {
-        std::ptr::write_bytes(out_view_sk_32, 0u8, 32);
+    if !out_master_seed_64.is_null() {
+        std::ptr::write_bytes(out_master_seed_64, 0u8, 64);
     }
 
-    if h.is_null() || out_spend_sk_32.is_null() || out_view_sk_32.is_null() {
+    if h.is_null() || out_master_seed_64.is_null() {
         set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
         return false;
     }
 
     let w = &*h;
-    match w.inner.extract_classical_secret_keys() {
-        Ok(secrets) => {
+    match w.inner.extract_rederivation_inputs() {
+        Ok(inputs) => {
             std::ptr::copy_nonoverlapping(
-                secrets.spend_secret_key.as_ptr(),
-                out_spend_sk_32,
-                32,
+                inputs.master_seed_64.as_ptr(),
+                out_master_seed_64,
+                64,
             );
-            std::ptr::copy_nonoverlapping(
-                secrets.view_secret_key.as_ptr(),
-                out_view_sk_32,
-                32,
-            );
-            // `secrets` drops at end-of-scope; its `Zeroizing<[u8; 32]>`
-            // fields auto-wipe after the copy has completed.
+            // `inputs` drops at end-of-scope; its
+            // `Zeroizing<[u8; 64]>` field auto-wipes after the copy.
             set_err(out_error, SHEKYL_WALLET_ERR_OK);
             true
         }
-        Err(shekyl_wallet_file::ExtractClassicalSecretsError::ViewOnly) => {
+        Err(shekyl_wallet_file::ExtractRederivationInputsError::ViewOnly) => {
             set_err(out_error, SHEKYL_WALLET_ERR_CAPABILITY_VIEW_ONLY_NO_SPEND);
             false
         }
-        Err(shekyl_wallet_file::ExtractClassicalSecretsError::HardwareOffload) => {
+        Err(shekyl_wallet_file::ExtractRederivationInputsError::HardwareOffload) => {
             set_err(
                 out_error,
                 SHEKYL_WALLET_ERR_CAPABILITY_HARDWARE_OFFLOAD_NO_SPEND,
@@ -1860,7 +1885,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Transitional: shekyl_wallet_extract_classical_secret_keys
+    // Transitional: shekyl_wallet_extract_rederivation_inputs (2k.a)
     // -----------------------------------------------------------------
 
     /// Helper: create a FULL-mode wallet under `base`, return handle.
@@ -1901,39 +1926,29 @@ mod tests {
     }
 
     #[test]
-    fn extract_full_success_writes_both_scalars_ok_code() {
+    fn extract_full_success_writes_seed_ok_code() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().join("x.wallet");
         let seed = [0x42u8; 64];
         let h = create_full_at(&base, &seed);
 
-        let mut spend = [0u8; 32];
-        let mut view = [0u8; 32];
+        let mut out_seed = [0u8; 64];
         let mut err: u32 = 0xdead_beef;
         let ok = unsafe {
-            shekyl_wallet_extract_classical_secret_keys(
+            shekyl_wallet_extract_rederivation_inputs(
                 h,
-                spend.as_mut_ptr(),
-                view.as_mut_ptr(),
+                out_seed.as_mut_ptr(),
                 &raw mut err,
             )
         };
         assert!(ok, "FULL extract must return true; code={err}");
         assert_eq!(err, SHEKYL_WALLET_ERR_OK);
 
-        // At least one byte must be non-zero in each scalar — a
-        // deterministic derivation of a non-zero master seed cannot
-        // produce all-zero scalars with cryptographically-meaningful
-        // probability.
-        assert!(
-            spend.iter().any(|b| *b != 0),
-            "spend scalar must be non-zero after successful FULL extract"
-        );
-        assert!(
-            view.iter().any(|b| *b != 0),
-            "view scalar must be non-zero after successful FULL extract"
-        );
-        assert_ne!(spend, view, "spend and view scalars must differ");
+        // Byte-for-byte equality against the seed we fed into
+        // `shekyl_wallet_create`. The envelope stores `cap_content`
+        // verbatim for the FULL layout, so this is a round-trip
+        // assertion, not a derivation assertion.
+        assert_eq!(out_seed, seed);
 
         unsafe { shekyl_wallet_free(h) };
     }
@@ -1945,50 +1960,44 @@ mod tests {
         // `create_with_path` builds a VIEW_ONLY wallet.
         let h = create_with_path(&base);
 
-        // Seed the out-buffers with a sentinel pattern to prove the
+        // Seed the out-buffer with a sentinel pattern to prove the
         // function zero-fills even on refusal.
-        let mut spend = [0xAAu8; 32];
-        let mut view = [0xAAu8; 32];
+        let mut out_seed = [0xAAu8; 64];
         let mut err: u32 = SHEKYL_WALLET_ERR_OK;
         let ok = unsafe {
-            shekyl_wallet_extract_classical_secret_keys(
+            shekyl_wallet_extract_rederivation_inputs(
                 h,
-                spend.as_mut_ptr(),
-                view.as_mut_ptr(),
+                out_seed.as_mut_ptr(),
                 &raw mut err,
             )
         };
         assert!(!ok, "VIEW_ONLY extract must return false");
         assert_eq!(err, SHEKYL_WALLET_ERR_CAPABILITY_VIEW_ONLY_NO_SPEND);
-        assert_eq!(spend, [0u8; 32], "out_spend must be zero-filled on refusal");
-        assert_eq!(view, [0u8; 32], "out_view must be zero-filled on refusal");
+        assert_eq!(
+            out_seed, [0u8; 64],
+            "out_master_seed_64 must be zero-filled on refusal"
+        );
 
         unsafe { shekyl_wallet_free(h) };
     }
 
     #[test]
-    fn extract_null_ptrs_set_null_pointer_err_and_zero_out() {
+    fn extract_null_seed_ptr_sets_null_pointer_err() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().join("x.wallet");
         let seed = [0x77u8; 64];
         let h = create_full_at(&base, &seed);
 
-        let mut spend = [0xAAu8; 32];
         let mut err: u32 = SHEKYL_WALLET_ERR_OK;
         let ok = unsafe {
-            shekyl_wallet_extract_classical_secret_keys(
+            shekyl_wallet_extract_rederivation_inputs(
                 h,
-                spend.as_mut_ptr(),
-                std::ptr::null_mut(), // view ptr null
+                std::ptr::null_mut(), // master-seed out-ptr null
                 &raw mut err,
             )
         };
         assert!(!ok);
         assert_eq!(err, SHEKYL_WALLET_ERR_NULL_POINTER);
-        assert_eq!(
-            spend, [0u8; 32],
-            "out_spend must be zero-filled even on null view-ptr"
-        );
 
         unsafe { shekyl_wallet_free(h) };
     }

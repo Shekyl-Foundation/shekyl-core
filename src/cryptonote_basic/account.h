@@ -143,6 +143,47 @@ namespace cryptonote
     /// FFI failure.
     void rederive_from_master_seed(cryptonote::network_type nettype);
 
+    /// SHKW1 wallet-open hot path (transitional 2k.a -> 2m-keys).
+    ///
+    /// Atomic populate from the 64-byte master seed extracted out of a
+    /// `ShekylWallet` handle via `shekyl_wallet_extract_rederivation_inputs`:
+    /// clears prior state (set_null), installs the master seed under
+    /// mlock, then drives `shekyl_account_rederive` to rebuild
+    /// `m_spend_secret_key`, `m_view_secret_key`, `m_ml_kem_decap_key`,
+    /// and `m_account_address`. The caller is expected to scrub its
+    /// copy of the master seed bytes immediately after return, and to
+    /// call `forget_master_seed()` once the ML-KEM decap key has been
+    /// built (see 2k.a design pin 12 -- Option β) so the
+    /// `ShekylWallet` handle remains the single in-memory source of
+    /// truth for the master seed.
+    ///
+    /// Does NOT set `m_creation_timestamp`; the SHKW1 envelope carries
+    /// its own authoritative creation timestamp in the AAD, and the
+    /// caller threads it through `set_createtime()`.
+    ///
+    /// Throws on disallowed (nettype, seed_format) pair or FFI failure.
+    void load_from_shkw1(
+        const uint8_t master_seed_64[SHEKYL_MASTER_SEED_BYTES],
+        uint8_t seed_format,
+        cryptonote::network_type nettype);
+
+    /// Scrub the in-memory master seed while keeping every derived key
+    /// (spend_sk, view_sk, ml_kem_dk, account_address) intact.
+    ///
+    /// Called by `wallet2::load_keys` immediately after
+    /// `load_from_shkw1` has populated the account, so the master seed
+    /// exists in memory for exactly the interval needed to rebuild
+    /// `m_ml_kem_decap_key`. Once the decap key is built the seed is
+    /// dormant for the remainder of the wallet's lifetime (audit of
+    /// `src/wallet/wallet2.cpp` confirms no post-rederive read), and
+    /// scrubbing it here halves the memory-disclosure surface (Option
+    /// β, 2k.a design pin 12).
+    ///
+    /// Distinct from `forget_spend_key()` which also scrubs the spend
+    /// scalar -- this function preserves every signing capability and
+    /// only wipes the pre-derivation input.
+    void forget_master_seed();
+
     // --- compatibility / transitional entry points --------------------------
     //
     // These wrappers retain the original Monero-lineage signatures so the

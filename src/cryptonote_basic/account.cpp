@@ -372,6 +372,65 @@ DISABLE_VS_WARNINGS(4244 4345)
     // were — rederivation is a read-only operation on the seed.
   }
   //-----------------------------------------------------------------
+  void account_base::load_from_shkw1(
+      const uint8_t master_seed_64[SHEKYL_MASTER_SEED_BYTES],
+      uint8_t seed_format,
+      network_type nettype)
+  {
+    CHECK_AND_ASSERT_THROW_MES(master_seed_64 != nullptr,
+        "account_base::load_from_shkw1: null master_seed_64 pointer");
+    CHECK_AND_ASSERT_THROW_MES(
+        seed_format == SHEKYL_SEED_FORMAT_BIP39 ||
+            seed_format == SHEKYL_SEED_FORMAT_RAW32,
+        "account_base::load_from_shkw1: unknown seed_format "
+            << static_cast<int>(seed_format));
+
+    // Clear every prior secret before installing the new master seed, so a
+    // failed rederive leaves the account in set_null() state rather than a
+    // half-populated one. set_null() already scrubs m_master_seed_64 /
+    // m_ml_kem_decap_key / spend_sk / view_sk under mlock.
+    set_null();
+
+    install_master_seed(m_keys, master_seed_64, seed_format);
+
+    // Rederive the full account (spend_sk, view_sk, ml_kem_dk,
+    // account_address) from the just-installed master seed. On failure
+    // rethrow -- the caller is expected to propagate to its FFI error
+    // path, which returns a typed refusal to wallet2.
+    try {
+      rederive_from_master_seed(nettype);
+    } catch (...) {
+      // Do not leave a half-populated account on exception; set_null()
+      // wipes m_master_seed_64 + every derived field under mlock.
+      set_null();
+      throw;
+    }
+
+    // NB: m_creation_timestamp intentionally untouched -- SHKW1 carries
+    // its own authoritative value in the AAD and wallet2::load_keys
+    // threads it through set_createtime() separately.
+  }
+  //-----------------------------------------------------------------
+  void account_base::forget_master_seed()
+  {
+    // Option β (2k.a design pin 12): scrub the pre-derivation input so
+    // the ShekylWallet handle remains the single in-memory source of
+    // truth for the master seed. Every derived key (spend_sk, view_sk,
+    // ml_kem_dk, account_address) stays intact; this function is a
+    // strict subset of forget_spend_key() (which would additionally
+    // wipe the spend scalar).
+    if (!m_keys.m_master_seed_64.empty()) {
+      shekyl_memwipe(m_keys.m_master_seed_64.data(), m_keys.m_master_seed_64.size());
+      shekyl_munlock(m_keys.m_master_seed_64.data(), m_keys.m_master_seed_64.size());
+    }
+    m_keys.m_master_seed_64.clear();
+    m_keys.m_master_seed_present = false;
+    // m_keys.m_seed_format stays; it is a metadata bit (BIP-39 vs raw-32)
+    // consumed by UX code that displays the seed-type to the user, not a
+    // pre-derivation input. Rederivation is no longer possible from this
+    // account instance by design.
+  }
+  //-----------------------------------------------------------------
   crypto::secret_key account_base::generate(
       const crypto::secret_key& recovery_key,
       bool recover,

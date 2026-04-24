@@ -1203,13 +1203,20 @@ void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
 #define SHEKYL_WALLET_ERR_KEYS_FILE_WRITE_ONCE_VIOLATION  23
 #define SHEKYL_WALLET_ERR_PREFS                           24
 
-/* Transitional (2k -> 2m-keys) capability-refusal codes emitted by
- * shekyl_wallet_extract_classical_secret_keys. Distinct codes per
+/* Transitional (2k.a -> 2m-keys) capability-refusal codes emitted by
+ * shekyl_wallet_extract_rederivation_inputs. Distinct codes per
  * capability so the C++ wallet2 shim can translate each to its own
  * capability-mode branch rather than collapsing them into a generic
  * "not FULL" failure. Both codes are slated for deletion alongside
  * the extract FFI in 2m-keys. Rule 40 (zero-on-failure) still applies:
- * the 32-byte out-buffers are zero-filled on either refusal. */
+ * the 64-byte master-seed out-buffer is zero-filled on either refusal.
+ *
+ * Naming-stability note: the symbol suffix reads `_NO_SPEND` even
+ * though the FFI now returns the 64-byte master seed rather than a
+ * 32-byte spend scalar. The suffix refers to the capability-mode
+ * refusal category ("this wallet has no spend capability"), not to
+ * any specific byte count. Renaming would churn every C++ call site
+ * for a cosmetic gain; the constants retire in 2m-keys regardless. */
 #define SHEKYL_WALLET_ERR_CAPABILITY_VIEW_ONLY_NO_SPEND         25
 #define SHEKYL_WALLET_ERR_CAPABILITY_HARDWARE_OFFLOAD_NO_SPEND  26
 
@@ -1498,36 +1505,50 @@ bool shekyl_wallet_rotate_password(
     uint32_t* out_error);
 
 /* ---------------------------------------------------------------------------
- * Transitional: classical spend + view secret-key extraction (2k -> 2m-keys).
+ * Transitional: 64-byte master-seed extraction (2k.a -> 2m-keys).
  *
- * Extracts the Ed25519 spend and view secret scalars from a FULL-mode
- * wallet's master seed via the canonical per-network HKDF pipeline
- * (`shekyl-master-derive-v1-<network>-<format>`). The derivation stays
- * entirely in Rust; C++ never sees the master seed or HKDF policy.
+ * Extracts the 64-byte master seed from a FULL-mode wallet handle so
+ * the C++ `wallet2::load_keys` shim can drive the existing
+ * (non-transitional) shekyl_account_rederive FFI, which rebuilds
+ * `m_spend_secret_key`, `m_view_secret_key`, and `m_ml_kem_decap_key`
+ * locally in C++. No HKDF runs inside this function: the seed is
+ * already in `cap_content` under the FULL layout, authenticated at
+ * open time by the envelope AAD, and this call just copies the bytes
+ * out under the capability gate.
  *
- * Called by `wallet2::load_keys_buf` during the SHKW1-format load to
- * populate `m_account.m_spend_secret_key` and `m_account.m_view_secret_key`
- * while wallet2 still carries plaintext scalars. Scheduled for
- * deletion in 2m-keys alongside every wallet2 code path that reads
- * those fields directly.
+ * Design rationale (Option A'):
+ *   The classical spend/view scalars and m_ml_kem_decap_key are
+ *   OUTPUTS of shekyl_account_rederive, not independent secrets. The
+ *   2k.a design pins this FFI to the master seed alone so (1)
+ *   derivation lives in one place on the Rust side, (2) there is no
+ *   intermediate state in which C++ holds classical scalars without
+ *   the seed (or vice versa), and (3) the deletion surface in
+ *   2m-keys is one pointer argument and one error-code group.
  *
  * Capability-mode policy:
- *   FULL             -> writes both scalars, returns true, OK.
+ *   FULL             -> writes all 64 bytes, returns true, OK.
  *   VIEW_ONLY        -> writes zeros, returns false,
  *                       SHEKYL_WALLET_ERR_CAPABILITY_VIEW_ONLY_NO_SPEND.
  *   HARDWARE_OFFLOAD -> writes zeros, returns false,
  *                       SHEKYL_WALLET_ERR_CAPABILITY_HARDWARE_OFFLOAD_NO_SPEND.
  *
- * Rule 40 (zero-on-failure): `out_spend_sk_32` and `out_view_sk_32`
- * are unconditionally zero-filled on function entry; only on success
- * do they hold the freshly-derived scalar bytes. Callers MUST receive
- * these bytes into auto-wiping storage (`crypto::secret_key`, i.e.
- * `scrubbed<ec_scalar>`), not raw uint8_t[32] stack locals -- see
- * `wallet2::TransitionalSecretKeys` for the RAII pattern. */
-bool shekyl_wallet_extract_classical_secret_keys(
+ * Rule 40 (zero-on-failure): `out_master_seed_64` is unconditionally
+ * zero-filled on function entry; only on success does it hold the
+ * 64 seed bytes.
+ *
+ * Leak-on-success defense (caller contract): the C++ call site MUST
+ * receive these bytes into auto-wiping storage -- the canonical
+ * pattern is an `epee::mlocked<tools::scrubbed_arr<uint8_t, 64>>`
+ * member inside the `wallet2::TransitionalSecretKeys` RAII struct,
+ * never a raw `uint8_t[64]` stack local. After the C++ side has
+ * driven shekyl_account_rederive and rebuilt m_ml_kem_decap_key,
+ * it MUST also scrub `m_account.m_keys.m_master_seed_64` via
+ * `cryptonote::account_base::forget_master_seed()` so the
+ * ShekylWallet handle remains the single in-memory source of truth
+ * for the master seed (Option β, 2k.a design pin 12). */
+bool shekyl_wallet_extract_rederivation_inputs(
     ShekylWallet* h,
-    uint8_t* out_spend_sk_32,
-    uint8_t* out_view_sk_32,
+    uint8_t* out_master_seed_64,
     uint32_t* out_error);
 
 /* ---------------------------------------------------------------------------

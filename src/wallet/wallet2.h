@@ -89,10 +89,28 @@
 class Serialization_portability_wallet_Test;
 class wallet_accessor_test;
 
+// Forward declaration of the opaque Rust-owned wallet handle. The full
+// definition is an `#[repr(C)]` struct inside the Rust shekyl-ffi crate
+// exposed to C++ through `src/shekyl/shekyl_ffi.h`. Forward-declaring
+// here avoids transitively pulling that C header into every translation
+// unit that includes `wallet2.h`; the concrete `shekyl_wallet_free`
+// symbol is referenced only from the out-of-line deleter definition in
+// `wallet2.cpp`, which does include the FFI header directly.
+struct ShekylWallet;
+
 namespace tools
 {
   class wallet2;
   class Notify;
+
+  // Custom deleter for `std::unique_ptr<::ShekylWallet, ...>`. Defined
+  // out-of-line in `wallet2.cpp` so `shekyl_wallet_free` stays confined
+  // to the .cpp translation unit. The deleter is a no-throw functor per
+  // the standard `unique_ptr` contract.
+  struct shekyl_wallet_deleter
+  {
+    void operator()(::ShekylWallet *h) const noexcept;
+  };
 
   class wallet_keys_unlocker
   {
@@ -1861,6 +1879,23 @@ namespace tools
     crypto::hash m_pqc_multisig_group_id;
     uint8_t m_pqc_multisig_n = 0;
     uint8_t m_pqc_multisig_m = 0;
+
+    // Rust-owned wallet handle (transitional 2k.a -> 2m-keys). Opened
+    // lazily by `load_keys` when the on-disk file has the SHKW1 magic;
+    // null for legacy wallets still being opened via the JSON path.
+    // The 2k.a design treats this member as a write-target (populated
+    // from `load_keys`, consumed by `verify_password` / `rewrite` /
+    // the transitional secret-extraction FFI); it becomes a read
+    // source for `m_account` fields in 2l alongside the cache rewire.
+    //
+    // Declared last in the private block so reverse member-destruction
+    // order drops the handle BEFORE any wallet2 state that might
+    // legitimately want to touch it during its own destructor. The
+    // explicit `m_shekyl_wallet.reset()` in `deinit()` makes the drop
+    // order deterministic regardless of whether `deinit()` is invoked
+    // by the caller or implicitly by `~wallet2()`. See 2k.a design
+    // pin 10 in docs/wallet-state-promotion_ab273bfe.plan.md.
+    std::unique_ptr<::ShekylWallet, shekyl_wallet_deleter> m_shekyl_wallet;
   };
 }
 BOOST_CLASS_VERSION(tools::wallet2, 3)
