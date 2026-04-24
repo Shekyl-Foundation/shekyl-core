@@ -806,8 +806,56 @@ patterns in the capability-decode path.
 
 ### 3.8 `test(wallet-state): fuzz harness`
 
+**Status: Landed.** Two harnesses exercising
+[`WalletLedger::from_postcard_bytes`](../rust/shekyl-wallet-state/src/wallet_ledger.rs)
+(the canonical name for what the plan called
+`deserialize_postcard`). The stable-Rust proptest harness at
+[`rust/shekyl-wallet-state/tests/fuzz_region2.rs`](../rust/shekyl-wallet-state/tests/fuzz_region2.rs)
+runs on every PR via `cargo test -p shekyl-wallet-state`; the
+cargo-fuzz harness at
+[`rust/shekyl-wallet-state/fuzz/`](../rust/shekyl-wallet-state/fuzz/)
+ships as a checked-in local-only tool excluded from the workspace
+(see the new `exclude = ["shekyl-wallet-state/fuzz"]` entry in
+[`rust/Cargo.toml`](../rust/Cargo.toml)). The proptest harness
+runs five strategies at 128 cases each (640 cases total —
+comfortably inside the plan's ~500-iteration budget): point
+mutation of a valid empty bundle, truncation, random byte
+insertion, random byte deletion, and entirely-random bytes.
+Wall-clock on the author's machine is ≈0.06 s per run, three
+orders of magnitude under the 30 s-per-PR exit criterion. The
+single invariant asserted across all five is
+**panic-freedom**: every byte input must terminate in `Ok` or in
+one of the four enumerated `WalletLedgerError` variants, never a
+panic or abort. The error-classification match in
+`assert_typed_or_ok` is deliberately exhaustive (distinct
+classification tags per arm) so that adding a new
+`WalletLedgerError` variant without updating the fuzz harness is
+a compile-time error — the harness stays in lockstep with the
+error taxonomy mechanically, not culturally. The cargo-fuzz
+harness is minimal by design (a single `fuzz_target!` wrapping
+`let _ = WalletLedger::from_postcard_bytes(data)`) because the
+interesting content is libFuzzer's corpus evolution, not the
+wrapper; keeping it trivial prevents the harness from masking a
+parser regression by panicking itself. Its `README.md`
+documents the `cargo +nightly fuzz run region2_parser`
+invocation, the two-condition graduation plan (nightly
+stabilisation OR mainnet-freeze proximity), and why nightly is
+not in CI today. Verified locally: all 96 existing
+`shekyl-wallet-state` unit tests remain green; the new 5-test
+proptest harness passes in 0.06 s wall-clock; `cargo check
+--workspace --tests` on stable ignores the fuzz crate entirely
+(the `exclude` entry works); clippy is clean with `-D warnings`;
+fmt is clean. Not verified from this host (no nightly toolchain
+installed): `cargo +nightly fuzz build region2_parser` — the
+harness is structurally identical to the cargo-fuzz template and
+will be exercised on an author's local nightly install before
+any parser-level change lands.
+
 **Scope.** Two harnesses exercising the region-2 payload parser
-(`WalletLedger::deserialize_postcard`) with randomized input.
+(`WalletLedger::from_postcard_bytes`, listed as
+`WalletLedger::deserialize_postcard` in the original plan; the
+canonical name landed differently in commit 2n) with randomized
+input.
 
 **Tooling.**
 

@@ -4,6 +4,49 @@
 
 ### Added
 
+- **Region-2 parser fuzz harnesses (commit 8 of the mid-rewire
+  hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.8).**
+  Closes the gap the adversarial corpus (commit 7) structurally
+  cannot cover: the corpus pins *specific* typed refusals against
+  *specific* malformations it was written to check, which says
+  nothing about byte patterns nobody thought to enumerate. New
+  [`rust/shekyl-wallet-state/tests/fuzz_region2.rs`](../rust/shekyl-wallet-state/tests/fuzz_region2.rs)
+  is a stable-Rust proptest harness that drives randomized input
+  into `WalletLedger::from_postcard_bytes` — the canonical region-2
+  decoder used by the wallet-file orchestrator — and asserts the
+  single load-bearing property: **the parser never panics and
+  always terminates with a typed result** (either `Ok`, or one of
+  the four enumerated `WalletLedgerError` variants). Five
+  strategies at 128 cases each cover every relevant mutation
+  shape: point mutation of a valid empty bundle, truncation,
+  random byte insertion, random byte deletion, and entirely-random
+  bytes up to 4 KiB. The error-classification match in
+  `assert_typed_or_ok` is deliberately exhaustive with distinct
+  classification tags per arm, so adding a new `WalletLedgerError`
+  variant without updating the harness is a compile-time error —
+  the harness stays in lockstep with the error taxonomy
+  mechanically rather than culturally. Total wall-clock is ≈0.06 s
+  per run (three orders of magnitude under the plan's 30 s-per-PR
+  exit criterion); cases = 640 total (128 × 5), comfortably inside
+  the plan's ~500-iteration budget. Companion local-only
+  coverage-guided harness at
+  [`rust/shekyl-wallet-state/fuzz/`](../rust/shekyl-wallet-state/fuzz/):
+  a minimal `fuzz_target!` wrapping
+  `let _ = WalletLedger::from_postcard_bytes(data)`, excluded from
+  the workspace via new `exclude = ["shekyl-wallet-state/fuzz"]`
+  in [`rust/Cargo.toml`](../rust/Cargo.toml) so stable CI never
+  tries to resolve `libfuzzer-sys`. Runnable locally with
+  `cargo +nightly fuzz run region2_parser`; its README documents
+  the two-condition graduation plan (nightly stabilisation OR
+  mainnet-freeze proximity) and why nightly is not in CI today.
+  The harness is kept trivial by design so that it cannot itself
+  panic and mask a parser regression. Verified locally: 96
+  existing `shekyl-wallet-state` unit tests remain green; 5-test
+  proptest harness passes in 0.06 s; `cargo check --workspace
+  --tests` on stable ignores the fuzz crate entirely; clippy is
+  clean with `-D warnings`; fmt is clean.
+
 - **Adversarial wallet-file corpus (commit 7 of the mid-rewire
   hardening pass,
   [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.7).**

@@ -55,6 +55,15 @@ members = [
     # Unified tracing-based logger init for all Rust binaries
     "shekyl-logging",
 ]
+# Local-only harnesses that must not participate in the parent
+# workspace. Excluded here (rather than relying on the nested
+# `[workspace]` table inside each one) so that `cargo check
+# --workspace` on stable never tries to resolve libfuzzer-sys, which
+# only builds under `cargo +nightly fuzz build`. Hardening-pass
+# commit 8 (`docs/MID_REWIRE_HARDENING.md` §3.8).
+exclude = [
+    "shekyl-wallet-state/fuzz",
+]
 resolver = "2"
 
 [workspace.package]

@@ -1,0 +1,38 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+# Local-only cargo-fuzz harness for the region-2 payload parser.
+# Intentionally excluded from the parent workspace (see
+# `rust/Cargo.toml`'s `[workspace].exclude`) so that stable-Rust CI
+# never attempts to resolve `libfuzzer-sys`. Builds and runs only
+# under nightly Rust via `cargo +nightly fuzz run region2_parser`.
+# See `README.md` in this directory for the full invocation and the
+# rationale for keeping this off CI for now (hardening-pass
+# commit 8 — `docs/MID_REWIRE_HARDENING.md` §3.8).
+
+[package]
+name = "shekyl-wallet-state-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "BSD-3-Clause"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Isolate this package from the parent workspace on the off chance
+# cargo auto-discovers it despite the `exclude` entry upstream.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+shekyl-wallet-state = { path = ".." }
+
+[[bin]]
+name = "region2_parser"
+path = "fuzz_targets/region2_parser.rs"
+test = false
+doc = false
+bench = false
