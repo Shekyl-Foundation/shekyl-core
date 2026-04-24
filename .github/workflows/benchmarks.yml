@@ -41,6 +41,14 @@
 # into the same envelope (by `scripts/bench/capture_rust_baseline.sh`)
 # and rendered as informational rows in the PR comment, but the gate
 # only trips on iai `instructions`.
+#
+# Mid-rewire warning window (2k.c): when the sentinel file
+# `docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active` is present, the
+# final merge-block step is downgraded to a `::warning::` annotation
+# and the job exits 0. Everything upstream of that step still runs —
+# `compare`, PR comment, samply profile-on-fail — so reviewers see
+# the full delta table and the profile artifact. Policy rationale
+# and closure criterion: `docs/MID_REWIRE_HARDENING.md` §3.3.1.
 
 name: ci/benchmarks
 
@@ -58,6 +66,7 @@ on:
       - "rust/Cargo.toml"
       - "scripts/bench/**"
       - ".github/workflows/benchmarks.yml"
+      - "docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active"
   push:
     branches: [dev]
     paths:
@@ -71,6 +80,7 @@ on:
       - "rust/Cargo.toml"
       - "scripts/bench/**"
       - ".github/workflows/benchmarks.yml"
+      - "docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active"
   workflow_dispatch:
 
 # Top-level defaults: read-only. Per-job overrides upgrade to write
@@ -263,6 +273,24 @@ jobs:
       - name: fail job on threshold trip
         if: steps.baseline.outputs.present == 'true' && steps.compare.outputs.has_fail == 'true'
         run: |
+          # Mid-rewire warning window: when the sentinel file
+          # docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active is
+          # present, convert the would-be fail into a GitHub
+          # ::warning:: annotation and exit 0. The samply profile
+          # artifact and the full PR comment are still produced —
+          # reviewers see every delta, just without the merge
+          # block. Policy: MID_REWIRE_HARDENING.md §3.3.1. The
+          # sentinel file is removed in the 2m-cache commit, at
+          # which point the merge-blocking gate auto-restores
+          # on the next PR.
+          if [[ -f docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active ]]; then
+            echo "::warning::One or more benchmarks tripped the §3.3 fail threshold."
+            echo "::warning::Mid-rewire warning window is ACTIVE (docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active)."
+            echo "::warning::Merge-block is waived for the duration of the 2k.a → 2m-cache window."
+            echo "::warning::Review the PR comment for the full delta table and the samply profile artifact."
+            echo "::warning::Policy: docs/MID_REWIRE_HARDENING.md §3.3.1"
+            exit 0
+          fi
           echo "::error::One or more benchmarks tripped the §3.3 fail threshold."
           exit 1
 

@@ -4,6 +4,133 @@
 
 ### Added
 
+- **Mid-rewire benchmark warning window (commit 2k.c of the
+  wallet-state-promotion plan,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.3.1).**
+  Closes the structural-noise loophole that the 2k.a / 2k.b
+  dual-stack rewire would otherwise punch through the
+  `ci/benchmarks` gate. New sentinel file
+  [`docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active`](benchmarks/MID_REWIRE_WARNING_WINDOW.active)
+  toggles warning-only mode — when present, the `fail job on
+  threshold trip` step in
+  [`.github/workflows/benchmarks.yml`](../.github/workflows/benchmarks.yml)
+  downgrades the would-be `::error::` annotation to a
+  `::warning::` and exits 0, preserving the upstream
+  `compare` / PR comment / `profile-on-fail` observability
+  chain without blocking merges. Policy paragraph in
+  `MID_REWIRE_HARDENING.md` §3.3.1 pins *why* the window is
+  needed (pre-rewire baseline vs. post-rewire gate calibration
+  vs. structurally-slower-during-dual-stack middle state),
+  *how* the sentinel beats workflow-level flags / Actions
+  secrets / branch-name matching on grep discoverability and
+  git-authored toggle trail, and *when* it must close (2m-cache
+  commit, with a mandatory post-rotation of `bench-baseline`).
+  The sentinel path is included in the workflow's `paths:`
+  filters for both `pull_request` and `push` triggers, so
+  opening and closing the window self-triggers the gate.
+  Reviewers still see every delta and every samply profile
+  during the window; what they lose is the automated merge
+  block, which would otherwise fire on structural noise the
+  rewire *is* expected to produce.
+
+- **2k.b — refuse legacy `store_keys` writes on SHKW1 wallets
+  (commit 2k.b of the wallet-state-promotion plan,
+  [`.cursor/plans/wallet-state-promotion_ab273bfe.plan.md`](../.cursor/plans/wallet-state-promotion_ab273bfe.plan.md)
+  §2k.b).** Installs the keys-layer fault line in
+  `wallet2::store_to` so SHKW1-backed wallets cannot silently
+  corrupt their on-disk file by falling back to the legacy
+  `store_keys` JSON path. The two triggers that would otherwise
+  reach the legacy save branch — save-as (`path` differs from
+  the current `m_wallet_file`) and password change
+  (`force_rewrite_keys=true`, as routed from
+  `wallet2::change_password`) — now throw a typed
+  [`tools::error::wallet_shkw1_operation_unsupported`](../src/wallet/wallet_errors.h)
+  before any wallet-state mutation (no `trim_hashchain` cache
+  touch, no `prepare_file_names` path rewrite, no cache
+  serialization). Both flows require FFI that doesn't exist
+  yet (`shekyl_wallet_save_as`, `shekyl_wallet_rotate_password`)
+  and land in 2l alongside the cache-side rewire. The common
+  `store()` → `store_to("", "")` path (same file, no forced
+  keys rewrite) is *not* refused — it never touches the keys
+  file, and its cache save still works through the legacy
+  `shekyl_encrypt_wallet_cache` path until 2l. Callers audited:
+  `wallet2::change_password` (exposed via `wallet2_ffi.cpp`
+  and `wallet_rpc_server.cpp`) and direct `store_to(path, pw)`
+  invocations in `tests/wallet_bench/` and
+  `tests/unit_tests/wallet_storage.cpp` — all refused for
+  SHKW1-backed wallets during the 2k.a → 2l window, revalidated
+  in the rewrite-testing phase. `wallet_errors.h` hierarchy
+  extended with the new `wallet_logic_error` subclass carrying
+  both the operation name and the keys file path for UX
+  rendering. Verified locally: full shekyl-core C++ rebuild
+  clean across `wallet`, `daemon`, `shekyl-wallet-rpc`,
+  `unit_tests`, `core_tests`, `functional_tests`; no new
+  lints introduced.
+
+- **2k.a — rewire `wallet2` load/verify/rewrite onto the SHKW1
+  handle (commit 2k.a of the wallet-state-promotion plan,
+  [`.cursor/plans/wallet-state-promotion_ab273bfe.plan.md`](../.cursor/plans/wallet-state-promotion_ab273bfe.plan.md)
+  §2k.a).** The keys-side half of the wallet2 → Rust rewire.
+  `wallet2::load_keys` now magic-sniffs via
+  `shekyl_wallet_keys_inspect`; on an SHKW1 match it routes
+  through `shekyl_wallet_open`, gates **before** any secret
+  material leaves Rust on capability
+  (`tools::error::wallet_keys_unsupported_capability`) and
+  derivation network
+  (`tools::error::wallet_keys_wrong_network`), then extracts
+  only the 64-byte master seed into a scrubbing file-local
+  `TransitionalRederivationInputs` RAII wrapper
+  (`epee::mlocked<tools::scrubbed_arr<uint8_t, 64>>`).
+  `m_account.load_from_shkw1` rebuilds every derived field
+  (classical SK/PK, view SK/PK, ML-KEM decap key, account
+  address) from the seed; `m_account.forget_master_seed`
+  immediately scrubs the C++ copy (Option β — the
+  `ShekylWallet` handle is the single in-memory source of
+  truth for the master seed post-load). An AAD-bound
+  address-match sanity check against
+  `ShekylWalletMetadata::expected_classical_address` catches
+  corruption, HKDF policy drift, and handle-repoint bugs
+  via a distinct
+  `tools::error::wallet_keys_aad_address_mismatch`; `init_type`
+  and `set_createtime` land atomically with the handle-stash
+  on `m_shekyl_wallet`. `wallet2::load_keys_buf` refuses SHKW1
+  inputs with `error::wallet_internal_error` — the envelope
+  requires the file-lock path and cannot be driven through a
+  raw buffer. Both `verify_password` overloads route SHKW1
+  verification through `shekyl_wallet_keys_open` with a sizing
+  probe for the capability payload; the instance overload runs
+  the same address-match sanity check against the opened
+  handle's metadata so a future migration tool that repoints
+  `m_keys_file` without re-opening the handle surfaces as a
+  typed error rather than silently returning keys from the
+  wrong handle. The static overload logs an L1 warning if a
+  caller passes `no_spend_key=false` (no in-tree caller does
+  today; the log guarantees any future regression trips test
+  output). `wallet2::rewrite` becomes a logged L1 no-op for
+  SHKW1 wallets — settings writes land in 2k.b's `store_to`
+  rewire. `wallet2::deinit` resets `m_shekyl_wallet` *before*
+  `m_account.deinit()` so the Rust handle's final state write
+  runs while C++ secrets are still live, and the C++ wipe
+  happens after the handle drops. Three new typed refusals
+  in
+  [`src/wallet/wallet_errors.h`](../src/wallet/wallet_errors.h)
+  discriminate structural failure modes (wrong network vs.
+  AAD-bound cryptographic inconsistency vs. unsupported
+  capability) so CLI, wallet RPC, and tests can render
+  targeted messages without parsing log strings. Security
+  invariants: the 64-byte master seed lives in C++ only for
+  the duration of `load_from_shkw1`, under `mlock`; the
+  address-match check fires before any scalar is materialized
+  in C++; `xor_with_key_stream` / `rederive_from_master_seed`
+  / `decrypt` are all length-gated, so the post-scrub empty
+  vector state is a no-op everywhere it's read. Verified
+  locally: full shekyl-core C++ rebuild clean across `wallet`,
+  `daemon`, `shekyl-wallet-rpc`, `unit_tests`, `core_tests`,
+  `functional_tests`; `cargo check -p shekyl-wallet-file -p
+  shekyl-ffi` clean. Test regeneration / wallet2 fixture
+  migration deferred to the rewrite-testing phase per the
+  user-approved scope split.
+
 - **Region-2 parser fuzz harnesses (commit 8 of the mid-rewire
   hardening pass,
   [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.8).**

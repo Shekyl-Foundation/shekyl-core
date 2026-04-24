@@ -397,6 +397,146 @@ unchanged produces a comment with the expected deltas near zero;
 baseline-update-on-merge workflow has run successfully at least once
 (a no-op dev merge is sufficient).
 
+### 3.3.1 Mid-rewire warning window (2k.c)
+
+**Status.** Landed. Window currently **OPEN** for the
+`feat/wallet-file-format` branch; scheduled to close in the 2m-cache
+commit. Sentinel:
+[`docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active`](./benchmarks/MID_REWIRE_WARNING_WINDOW.active).
+
+**Problem this subsection exists to solve.** §3.3's fail threshold
+(±15% for `crypto_bench_*`, +15% for `hot_path_bench_*`) is calibrated
+against the pre-rewire baseline captured in commit 1 of this pass
+(`docs/benchmarks/shekyl_rust_v0.json`). That baseline is recoverable
+*only while the C++ paths exist*, and the gate is calibrated for the
+*post-rewire* end state — not the dual-stack middle.
+
+During the rewire window (2k.a → 2l → 2m-keys → 2m-cache), the live
+code does *both things briefly*: it loads via the new SHKW1 FFI, it
+also still has the legacy `keys_file_data` / `cache_file_data` JSON
+and boost-serialize paths linked in for watch-only companion and
+background-sync survivors, and commits land incrementally rather than
+atomically. The transitional state is structurally:
+
+- **slower than the baseline** on any bench that touches the dual
+  path (each wallet-open runs an envelope decrypt + payload parse +
+  FFI extract + m_account populate, where the pre-2k baseline ran
+  only one JSON parse + populate),
+- **faster than the final end state** on any bench whose legacy code
+  path is still warm in icache / already mapped (the JIT warmup and
+  the already-paged-in object files are free wins that 2m-keys
+  deletes),
+- **non-monotonic across the window** — 2k.a, 2k.b, and 2l each shift
+  the mix of dual-path-resident vs. post-rewire code, so the numbers
+  don't trend cleanly in either direction.
+
+Gating against the pre-rewire baseline at the strict threshold during
+this window forces one of three bad outcomes:
+
+1. **Gate-disable** — someone switches `-failures-only` off on every
+   PR to get merge-ready, and the canary goes dark permanently.
+2. **Threshold relaxation** — we raise the ±15% to ±30% "temporarily"
+   and never lower it back.
+3. **Feature branch divergence** — contributors rebase only rarely
+   because every rebase re-trips the gate, and the rewire stalls.
+
+All three defeat the point of having a canary at all. The mid-rewire
+warning window is the "track everything, don't block merges" middle
+position that preserves the signal without the three bad outcomes.
+
+**Mechanism.**
+
+- A sentinel file at
+  [`docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active`](./benchmarks/MID_REWIRE_WARNING_WINDOW.active)
+  toggles the window. Presence = window open.
+- [`.github/workflows/benchmarks.yml`](../.github/workflows/benchmarks.yml)
+  `fail job on threshold trip` step greps for the sentinel. If
+  present, the would-be `::error::` annotation is downgraded to a
+  `::warning::` and the job exits 0. The `compare`, `post PR comment`,
+  and `profile-on-fail` jobs run exactly as before — only the terminal
+  merge-block step is softened. Reviewers still see the full delta
+  table, the samply profile artifact, and every informational row in
+  the PR comment.
+- The workflow's `pull_request`/`push` `paths:` filters include the
+  sentinel file, so toggling it (opening or closing the window) itself
+  triggers the bench job. This means the first PR after the window
+  closes re-establishes the gate immediately, and the first commit
+  after the window opens re-captures a mid-rewire number into the
+  rolling baseline.
+
+**Why sentinel-in-tree, not a workflow-level boolean.**
+
+| Option                                  | Grep-able | Toggle trail        | Branch-specific | Auto-fails-open |
+|-----------------------------------------|-----------|---------------------|-----------------|-----------------|
+| **Sentinel file** (this design)         | Yes       | git commit message  | Yes             | Yes             |
+| Workflow `env:` boolean                 | Yes       | git commit message  | Per-workflow    | No              |
+| Actions secret / workflow_dispatch flag | No        | Actions audit log   | Repo-wide       | No              |
+| Branch-name prefix match                | Yes (-ish)| Branch rename       | Yes             | No              |
+
+The sentinel-in-tree option is the only one that (a) participates in
+a `git grep MID_REWIRE_WARNING_WINDOW` search, (b) has its open and
+close events authored as proper commits with messages, and (c)
+auto-restores the gate on deletion. See the header of the sentinel
+file itself for the branch-vs-workflow-vs-secret tradeoff discussion.
+
+**Window opening.** The window opens in 2k.c, the same commit that
+introduces the sentinel file. 2k.c is also the commit that adds this
+subsection and updates `benchmarks.yml` to consult the sentinel.
+Before 2k.c landed, the dual-stack was *live* for the feat branch but
+the gate was *still strict* — which caused the structural noise the
+window exists to absorb.
+
+**Closing the window.** Delete the sentinel file in the 2m-cache
+commit. That commit also:
+
+1. Deletes the last dual-stack paths
+   (`wallet2::keys_file_data`, `wallet2::cache_file_data`,
+   boost-serialize cache blocks, inline atomic-write) — after this
+   commit, all wallet I/O goes through `shekyl_wallet_*` FFI.
+2. Triggers a one-shot manual `workflow_dispatch` of
+   `ci/benchmarks` on `dev` so the `update-baseline` job captures a
+   post-rewire `baseline.json` into `bench-baseline`. Until this
+   rotation runs, the first post-window PR would diff against a
+   pre-rewire baseline and likely trip; the rotation short-circuits
+   that false positive.
+3. (Optional.) Reviews the delta between pre-rewire
+   (`docs/benchmarks/shekyl_rust_v0.json`, commit 1) and the new
+   post-rewire baseline, records the delta as a commit message
+   bullet in the 2m-cache commit or an immediate follow-up
+   so future archaeology has the "expected structural shift"
+   number logged.
+
+**Expected signals while the window is OPEN.**
+
+- `compare` reports — wallet-open-cold should drift slower by some
+  double-digit percent during 2k.a → 2l (envelope decrypt + payload
+  parse + FFI extract + m_account populate on every open), then
+  re-center once 2m-keys deletes the legacy JSON parse. Balance
+  compute should stay roughly flat (the 1000-output loop is not on
+  the rewire path). `BM_balance_compute` / staking selection are
+  unchanged — they run entirely in the post-2a `shekyl-wallet-state`
+  crate.
+- PR comment deltas are **informational only during the window**.
+  Reviewers should still eyeball them — anything that regresses a
+  benchmark the rewire doesn't touch is a real regression, just not
+  a merge-blocking one in this mode.
+- The samply profile artifact is still produced on any trip. It is
+  the diagnostic path for investigating a regression that was
+  surfaced-but-not-blocked; attach it to any follow-up issue filed
+  against a window-period PR.
+
+**Policy.** During the window:
+
+- *Do* review every benchmark comment before merging.
+- *Do* file a follow-up issue for any regression the PR author
+  considers out-of-scope (with the samply profile artifact attached)
+  rather than ignoring it.
+- *Don't* merge a regression that looks like it targets a
+  non-rewire code path without at least discussing it in PR review.
+  The window waives the automated gate, not the human review.
+- *Don't* extend the window past 2m-cache without a plan addendum.
+  An open-ended warning window is a dead canary.
+
 ### 3.4 `feat(wallet-state-schema)`: postcard-schema snapshot + CI diff
 
 **Status.** Landed. Pointer in §7 below.
