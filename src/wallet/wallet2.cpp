@@ -6814,6 +6814,28 @@ void wallet2::store_to(const std::string &path, const epee::wipeable_string &pas
   THROW_WALLET_EXCEPTION_IF(m_is_background_wallet && !same_file, error::wallet_internal_error,
     "Cannot save background wallet files to a different location");
 
+  // 2k.b: the keys-save branch below (line ~"if (!same_file || force_rewrite_keys)")
+  // is the legacy store_keys JSON path. For SHKW1-backed wallets we cannot route
+  // through it — it would produce a non-SHKW1 file under a valid SHKW1 filename,
+  // permanently corrupting the on-disk wallet. The two triggers that would reach
+  // that branch are save-as (path != current) and password-change (reached from
+  // wallet2::change_password via force_rewrite_keys=true). Both require FFI that
+  // has not landed yet (shekyl_wallet_save_as, shekyl_wallet_rotate_password) —
+  // scheduled for 2l alongside the cache-side rewire. Refuse *before* touching
+  // prepare_file_names / directory creation / cache serialization so the wallet
+  // state stays untouched on the throw. Same-file cache-only saves (the common
+  // wallet2::store() path during sync) continue through the legacy cache path;
+  // that rewire is 2l territory.
+  if (m_shekyl_wallet && (!same_file || force_rewrite_keys))
+  {
+    const std::string operation = !same_file
+      ? std::string("save-as (path change)")
+      : std::string("password change (force_rewrite_keys)");
+    THROW_WALLET_EXCEPTION(error::wallet_shkw1_operation_unsupported,
+                           operation,
+                           m_keys_file);
+  }
+
   if (!same_file)
   {
     // check if we want to store to directory which doesn't exists yet

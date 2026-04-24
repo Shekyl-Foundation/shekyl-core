@@ -947,6 +947,48 @@ namespace tools
       uint8_t m_capability;
     };
     //----------------------------------------------------------------------------------------------------
+    // Raised by wallet2::store_to (and anything that routes through it) when a
+    // SHKW1-backed wallet is asked to do a keys-level rewrite that the in-tree
+    // C++ path cannot yet express through the shekyl_wallet_* FFI. The two
+    // triggers, both surfaced via store_to:
+    //
+    //   * save-as (store_to called with path != current m_wallet_file)
+    //   * password-change (store_to called with force_rewrite_keys=true,
+    //     which is how wallet2::change_password persists the new password)
+    //
+    // Both require FFI that doesn't exist yet: shekyl_wallet_save_as and
+    // shekyl_wallet_rotate_password. They land in 2l alongside the cache-side
+    // rewire. 2k.b explicitly refuses rather than silently falling back to the
+    // legacy store_keys JSON path, because that path cannot produce a valid
+    // SHKW1 envelope and would leave the on-disk keys file in a corrupt
+    // mixed-format state. See wallet-state-promotion_ab273bfe.plan.md §2k.b.
+    struct wallet_shkw1_operation_unsupported : public wallet_logic_error
+    {
+      explicit wallet_shkw1_operation_unsupported(std::string&& loc,
+                                                  const std::string& operation,
+                                                  const std::string& keys_file)
+        : wallet_logic_error(std::move(loc),
+            "SHKW1 wallet " + keys_file + ": " + operation + " is not yet"
+            " supported. This flow will be wired through the shekyl_wallet_*"
+            " FFI in a follow-up commit (save-as and password change land in"
+            " 2l). The legacy store_keys JSON path is intentionally refused"
+            " for SHKW1-backed wallets so the on-disk file cannot silently"
+            " revert to the pre-freeze format")
+        , m_operation(operation)
+        , m_keys_file(keys_file)
+      {
+      }
+
+      const std::string& operation() const { return m_operation; }
+      const std::string& keys_file() const { return m_keys_file; }
+
+      std::string to_string() const { return wallet_logic_error::to_string(); }
+
+    private:
+      std::string m_operation;
+      std::string m_keys_file;
+    };
+    //----------------------------------------------------------------------------------------------------
     struct scan_tx_error : public wallet_logic_error
     {
     protected:
