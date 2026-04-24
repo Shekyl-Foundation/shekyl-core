@@ -1007,6 +1007,46 @@ void shekyl_wallet_deleter::operator()(::ShekylWallet *h) const noexcept
   }
 }
 
+namespace
+{
+  // 2k.a RAII container for the transitional rederivation inputs
+  // returned by `shekyl_wallet_extract_rederivation_inputs`. Option A'
+  // collapsed the payload to a single 64-byte master seed; we wrap it
+  // in `epee::mlocked` (pages locked against swap-out) + the
+  // `scrubbed_arr` self-wiping container so the seed is zeroed at
+  // destructor time even on unwind between the FFI call and the
+  // `account_base::load_from_shkw1` hand-off.
+  //
+  // Slated for deletion alongside `shekyl_wallet_extract_rederivation_inputs`
+  // in 2m-keys once wallet2 reads classical scalars directly from the
+  // handle instead of mirroring them inside `m_account`.
+  struct TransitionalRederivationInputs
+  {
+    epee::mlocked<::tools::scrubbed_arr<uint8_t, 64>> master_seed_64;
+  };
+
+  // Address layout version byte emitted by `ShekylWalletMetadata`
+  // and `ShekylOpenedKeysInfo`. Mirrors the Rust constant pinned by
+  // `handle.rs` (`handle.expected_classical_address()[0] == 0x01`).
+  // Not a network-address byte — the network byte lives in
+  // `ShekylOpenedKeysInfo::network` / `::ShekylWalletMetadata::network`.
+  constexpr uint8_t SHKW1_CLASSICAL_ADDRESS_LAYOUT_V1 = 0x01;
+
+  // Encode `m_account.m_account_address` into the 65-byte
+  // `version(1) || spend_pk(32) || view_pk(32)` layout so it can be
+  // compared against the envelope's AAD-authenticated
+  // `expected_classical_address`. Used by both `load_keys` (post-
+  // rederive) and the instance `verify_password` overload (handle-
+  // repoint defense).
+  void encode_classical_address(const cryptonote::account_public_address &addr,
+                                uint8_t out[SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES])
+  {
+    out[0] = SHKW1_CLASSICAL_ADDRESS_LAYOUT_V1;
+    std::memcpy(out + 1,  addr.m_spend_public_key.data, 32);
+    std::memcpy(out + 33, addr.m_view_public_key.data,  32);
+  }
+} // anonymous namespace
+
 boost::mutex wallet_keys_unlocker::lockers_lock;
 unsigned int wallet_keys_unlocker::lockers = 0;
 wallet_keys_unlocker::wallet_keys_unlocker(wallet2 &w, const std::optional<tools::password_container> &password):
@@ -4595,6 +4635,16 @@ bool wallet2::deinit()
     m_is_initialized = false;
     unlock_keys_file();
     unlock_background_keys_file();
+    // 2k.a: drop the Rust handle BEFORE `m_account.deinit()`. The
+    // handle's `shekyl_wallet_free` destructor does not read from
+    // `m_account`, so either order is correct on its own — but
+    // matching the reverse-member-destruction order that ~wallet2()
+    // will apply implicitly keeps the explicit and implicit shutdown
+    // paths behaviorally identical. The `m_account` wipe runs next,
+    // scrubbing spend/view scalars and m_ml_kem_decap_key on the C++
+    // side; the master seed was already scrubbed at load time
+    // (Option β, see `load_keys`).
+    m_shekyl_wallet.reset();
     m_account.deinit();
   }
   return true;
@@ -5011,7 +5061,182 @@ bool wallet2::load_keys(const std::string& keys_file_name, const epee::wipeable_
   bool r = load_from_file(keys_file_name, keys_file_buf);
   THROW_WALLET_EXCEPTION_IF(!r, error::file_read_error, keys_file_name);
 
-  // Load keys from buffer
+  // 2k.a: magic-sniff for SHKW1. Cheap (header memcmp on the
+  // Rust side, no password touch, no key derivation). When the
+  // magic matches we take the handle-based load path; otherwise we
+  // fall through to the legacy JSON body in `load_keys_buf`.
+  ShekylKeysFileHeaderView header_view{};
+  uint32_t inspect_err = SHEKYL_WALLET_ERR_OK;
+  const bool is_shkw1 = ::shekyl_wallet_keys_inspect(
+      reinterpret_cast<const uint8_t*>(keys_file_buf.data()), keys_file_buf.size(),
+      &header_view, &inspect_err);
+
+  if (is_shkw1)
+  {
+    // Handle-based SHKW1 load. Collapses the Monero-era binary-
+    // serialization + manual `m_account` population into:
+    //
+    //   1. shekyl_wallet_open         file lock + envelope decrypt
+    //   2. metadata consistency gates capability, network
+    //   3. extract_rederivation_inputs 64-byte master seed (Option A')
+    //   4. account_base::load_from_shkw1 atomic rederive + install
+    //   5. account_base::forget_master_seed  Option β: scrub C++ copy
+    //   6. init_type + set_createtime        header-driven metadata
+    //   7. address-match sanity check        AAD <-> rederived address
+    //   8. setup_keys(password)              populate m_cache_key
+    //   9. stash handle in m_shekyl_wallet   (write target in 2k.a;
+    //                                         becomes read source in 2l)
+    ::ShekylWallet *raw_handle = nullptr;
+    bool state_lost = false;
+    uint64_t restore_from_height = 0;
+    uint32_t open_err = SHEKYL_WALLET_ERR_OK;
+    const bool opened = ::shekyl_wallet_open(
+        m_wallet_file.data(), m_wallet_file.size(),
+        reinterpret_cast<const uint8_t*>(password.data()), password.size(),
+        static_cast<uint8_t>(m_nettype),
+        nullptr /* SafetyOverrides: GUI default */,
+        &raw_handle,
+        &state_lost,
+        &restore_from_height,
+        &open_err);
+    std::unique_ptr<::ShekylWallet, shekyl_wallet_deleter> handle(raw_handle);
+
+    if (!opened)
+    {
+      LOG_ERROR("shekyl_wallet_open failed for SHKW1 wallet "
+                << keys_file_name << ": err=" << open_err);
+      return false;
+    }
+
+    ShekylWalletMetadata meta{};
+    uint32_t meta_err = SHEKYL_WALLET_ERR_OK;
+    THROW_WALLET_EXCEPTION_IF(
+        !::shekyl_wallet_get_metadata(handle.get(), &meta, &meta_err),
+        error::wallet_internal_error,
+        "shekyl_wallet_get_metadata failed with err="
+        + std::to_string(meta_err));
+
+    // Structural gates fire BEFORE any secret-material extraction so a
+    // configuration mismatch (wrong --mainnet/--testnet flag, stale
+    // capability wiring) can never reach the derivation path. Each gate
+    // throws a distinguishable typed exception — see wallet_errors.h —
+    // so callers can tell "user picked the wrong CLI" apart from
+    // "wallet file is corrupt or HKDF policy drifted" apart from
+    // "capability is valid but not yet wired in 2k.a".
+
+    // Gate 1: capability. 2k.a is FULL-only. VIEW_ONLY needs a
+    // view-secret-only population path; HARDWARE_OFFLOAD needs the
+    // device-init loop. Both land in follow-up commits.
+    THROW_WALLET_EXCEPTION_IF(
+        meta.capability_mode != SHEKYL_WALLET_CAPABILITY_FULL,
+        error::wallet_keys_unsupported_capability,
+        meta.capability_mode);
+
+    // Gate 2: network. `shekyl_wallet_open` already verifies this
+    // against its `expected_network` argument; we re-assert against
+    // the metadata so the refusal is still typed and distinguishable
+    // at the wallet2 layer in the (unexpected) event the FFI gate is
+    // bypassed by a future caller. ALWAYS a runtime check; never an
+    // `assert()` (which would compile out under NDEBUG).
+    THROW_WALLET_EXCEPTION_IF(
+        meta.network != static_cast<uint8_t>(m_nettype),
+        error::wallet_keys_wrong_network,
+        static_cast<uint8_t>(m_nettype),
+        meta.network);
+
+    // Past this point we touch the master seed. Every refusal below
+    // this line is a cryptographic-inconsistency event (not a config
+    // mismatch); the distinction lets operators triage quickly.
+
+    // Extract the 64-byte master seed into an auto-scrubbing RAII
+    // container. Per Rule 40 the Rust side zeroes the output buffer on
+    // failure; the RAII wipe on success happens at the end of this
+    // scope regardless of success/failure path.
+    TransitionalRederivationInputs inputs{};
+    uint32_t extract_err = SHEKYL_WALLET_ERR_OK;
+    THROW_WALLET_EXCEPTION_IF(
+        !::shekyl_wallet_extract_rederivation_inputs(
+            handle.get(), inputs.master_seed_64.data(), &extract_err),
+        error::wallet_internal_error,
+        "shekyl_wallet_extract_rederivation_inputs failed with err="
+        + std::to_string(extract_err));
+
+    // Atomic population: set_null -> install_master_seed -> rederive.
+    // `load_from_shkw1` internally calls `set_null` on any thrown
+    // exception so partial-population cannot leak.
+    m_account.load_from_shkw1(
+        inputs.master_seed_64.data(),
+        meta.seed_format,
+        m_nettype);
+
+    // Option β (2k.a design pin 12): the master seed's job ends once
+    // `rederive_from_master_seed` has built `m_ml_kem_decap_key` and
+    // the classical scalars. Scrub the C++ copy immediately; the
+    // Rust handle retains its Zeroizing copy as the single source of
+    // truth for any future re-derivation.
+    m_account.forget_master_seed();
+
+    // Cryptographic sanity: the envelope's AAD-authenticated
+    // `expected_classical_address` must equal the address that the
+    // rederived keys land on. A mismatch means either the AAD was
+    // signed against a different address (file corruption past the
+    // envelope), the derivation pipeline has drifted from the sealer's
+    // (HKDF salt change unmatched between sealer and opener), or the
+    // keys file was swapped under a live handle. Any of these is a
+    // distinct class of failure from the config-mismatch gates above.
+    {
+      uint8_t derived[SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES];
+      encode_classical_address(m_account.get_keys().m_account_address, derived);
+      if (std::memcmp(derived, meta.expected_classical_address,
+              SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES) != 0)
+      {
+        // Scrub the partially-populated account state before surfacing
+        // the error; the unwind path should not leave classical
+        // scalars live in m_account for a file we refuse to load.
+        m_account.deinit();
+        THROW_WALLET_EXCEPTION(error::wallet_keys_aad_address_mismatch,
+                               keys_file_name);
+      }
+    }
+
+    // `init_type` sets m_account_public_address, m_watch_only=false,
+    // m_original_keys_available=false, and m_key_device_type in one
+    // atomic write. 2k.a is FULL-only → SOFTWARE.
+    init_type(hw::device::device_type::SOFTWARE);
+    m_account.set_createtime(meta.creation_timestamp);
+
+    if (state_lost)
+    {
+      // The ledger/state side still lives on the legacy cache path in
+      // 2k.a; 2l moves it under the handle. For now surface the
+      // state-loss event at L0 so CLI/GUI can drive a rescan.
+      LOG_PRINT_L0("SHKW1 open reported state_lost=true; restore_from_height="
+                   << restore_from_height);
+    }
+
+    // Populate `m_cache_key` via the existing Argon2-derived chacha
+    // key. Cache encryption stays on the legacy path in 2k.a;
+    // `setup_keys` already no-ops the re-encrypt branch for
+    // `m_watch_only=false, m_unattended`-dependent cases.
+    if (!m_is_background_wallet)
+      setup_keys(password);
+
+    // Stash the handle last so a failure above leaves `m_shekyl_wallet`
+    // null (the caller can retry with a different password without a
+    // dangling half-populated state). After assignment, reverse
+    // member destruction order + our explicit `deinit()` ordering
+    // guarantee the handle drops before `m_account` gets wiped.
+    m_shekyl_wallet = std::move(handle);
+    return true;
+  }
+
+  // ---- Legacy JSON path ----
+  // SHKW1 is the target format; the legacy branch below exists
+  // transitionally so in-tree wallet2 tests whose fixtures have not
+  // yet been regenerated to SHKW1 continue to load. The re-encryption
+  // dance has the same semantics as before 2k.a and is slated for
+  // deletion in 2m-keys along with the rest of the legacy JSON body
+  // in `load_keys_buf`.
   std::optional<crypto::chacha_key> keys_to_encrypt;
   r = wallet2::load_keys_buf(keys_file_buf, password, keys_to_encrypt);
 
@@ -5039,6 +5264,30 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
 }
 //----------------------------------------------------------------------------------------------------
 bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_string& password, std::optional<crypto::chacha_key>& keys_to_encrypt) {
+
+  // 2k.a: SHKW1-format files cannot be loaded via the detached-buffer
+  // path. SHKW1 requires filesystem access for advisory locking (via
+  // `fd-lock`) and for atomic state-loss recovery (the orchestrator
+  // synthesizes a fresh `.wallet` ledger when the state file is
+  // missing). A caller reaching here with SHKW1 bytes is almost
+  // certainly a test harness that has not been migrated to the
+  // `load_keys`-with-path entry point; refuse loudly rather than
+  // attempt a silent incomplete parse.
+  {
+    ShekylKeysFileHeaderView header_view{};
+    uint32_t inspect_err = SHEKYL_WALLET_ERR_OK;
+    const bool is_shkw1 = ::shekyl_wallet_keys_inspect(
+        reinterpret_cast<const uint8_t*>(keys_buf.data()), keys_buf.size(),
+        &header_view, &inspect_err);
+    if (is_shkw1)
+    {
+      LOG_ERROR("wallet2::load_keys_buf refuses SHKW1-format input; "
+                "use wallet2::load_keys with a filesystem path so the "
+                "handle-based load path can apply advisory locking and "
+                "atomic state-loss recovery");
+      return false;
+    }
+  }
 
   // Decrypt the contents
   rapidjson::Document json;
@@ -5372,7 +5621,73 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
  */
 bool wallet2::verify_password(const epee::wipeable_string& password, crypto::secret_key &spend_key_out)
 {
-  // this temporary unlocking is necessary for Windows (otherwise the file couldn't be loaded).
+  // 2k.a: handle-based verification when the wallet was loaded as
+  // SHKW1. We do NOT run the legacy binary-struct deserializer for
+  // these wallets — a successful envelope decrypt (via
+  // `shekyl_wallet_keys_open`) is definitional proof of password
+  // correctness. `spend_key_out` is deliberately set to
+  // `crypto::null_skey`: the 2k.a call-site survey confirmed that
+  // no in-tree caller of this overload consumes the spend key (the
+  // returned value is either ignored or flows into
+  // `update_pool_state`'s cold-wallet branch which re-queries
+  // on-demand). Wiring spend-key extraction here would
+  // (a) re-run Argon2 twice for no caller-visible benefit and
+  // (b) duplicate the transitional scrubbing logic from `load_keys`.
+  if (m_shekyl_wallet)
+  {
+    std::string keys_file_buf;
+    if (!load_from_file(m_keys_file, keys_file_buf))
+    {
+      spend_key_out = crypto::null_skey;
+      return false;
+    }
+
+    // First-pass sizing call. We do not need the cap payload for
+    // verification, so we pass `cap_content_cap=0`: the envelope is
+    // still fully decrypted and `info` is populated; the FFI just
+    // reports `BUFFER_TOO_SMALL` for the missing buffer. Either
+    // `OK` or `BUFFER_TOO_SMALL` proves the envelope decrypted under
+    // the candidate password.
+    ShekylOpenedKeysInfo info{};
+    uint32_t err = SHEKYL_WALLET_ERR_OK;
+    ::shekyl_wallet_keys_open(
+        reinterpret_cast<const uint8_t*>(password.data()), password.size(),
+        reinterpret_cast<const uint8_t*>(keys_file_buf.data()), keys_file_buf.size(),
+        &info,
+        nullptr, 0,
+        &err);
+    const bool password_ok =
+        (err == SHEKYL_WALLET_ERR_OK) ||
+        (err == SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL);
+    if (!password_ok)
+    {
+      spend_key_out = crypto::null_skey;
+      return false;
+    }
+
+    // Handle-repoint defense (2k.a design pin — belt-and-suspenders).
+    // If `prepare_file_names` or similar was called to repoint
+    // `m_keys_file` at a different wallet without reopening
+    // `m_shekyl_wallet`, the decrypted `info` now describes a
+    // DIFFERENT wallet than the keys currently installed in
+    // `m_account`. Throw `wallet_keys_aad_address_mismatch` (not a
+    // bool false) so the caller sees the same distinguished error
+    // it would get from `load_keys` for an AAD/derivation drift —
+    // the two conditions look identical from the defender's side.
+    spend_key_out = crypto::null_skey;
+    uint8_t derived[SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES];
+    encode_classical_address(m_account.get_keys().m_account_address, derived);
+    THROW_WALLET_EXCEPTION_IF(
+        std::memcmp(derived, info.expected_classical_address,
+            SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES) != 0,
+        error::wallet_keys_aad_address_mismatch,
+        m_keys_file);
+    return true;
+  }
+
+  // Legacy JSON path.
+  // The temporary unlock is necessary on Windows (otherwise the file
+  // couldn't be re-opened by the static overload below).
   unlock_keys_file();
   const bool no_spend_key = m_account.get_device().device_protocol() == hw::device::PROTOCOL_COLD || m_watch_only || m_is_background_wallet;
   bool r = verify_password(m_keys_file, password, no_spend_key, m_account.get_device(), m_kdf_rounds, spend_key_out);
@@ -5401,6 +5716,47 @@ bool wallet2::verify_password(const std::string& keys_file_name, const epee::wip
   bool encrypted_secret_keys = false;
   bool r = load_from_file(keys_file_name, buf);
   THROW_WALLET_EXCEPTION_IF(!r, error::file_read_error, keys_file_name);
+
+  // 2k.a: magic-sniff for SHKW1. This static overload has no instance
+  // state, so there's no in-memory account for an address-match
+  // cross-check; the 2k.a call-site survey confirmed that every
+  // in-tree caller either passes `no_spend_key=true` or discards
+  // `spend_key_out`. We return `null_skey` unconditionally and emit
+  // an L1 diagnostic when a caller requested the spend key so a
+  // future regression (a new caller that actually depends on the
+  // output) trips in test output rather than silently receiving
+  // zeros.
+  {
+    ShekylKeysFileHeaderView header_view{};
+    uint32_t inspect_err = SHEKYL_WALLET_ERR_OK;
+    const bool is_shkw1 = ::shekyl_wallet_keys_inspect(
+        reinterpret_cast<const uint8_t*>(buf.data()), buf.size(),
+        &header_view, &inspect_err);
+    if (is_shkw1)
+    {
+      if (!no_spend_key)
+      {
+        LOG_PRINT_L1("wallet2::verify_password(static): SHKW1 wallet at "
+                     << keys_file_name << "; no_spend_key=false but the "
+                     "transitional FFI does not thread the spend key through "
+                     "this overload. Returning null_skey; any caller that "
+                     "genuinely needs the spend key must migrate to the "
+                     "instance overload on a live m_shekyl_wallet handle.");
+      }
+
+      ShekylOpenedKeysInfo info{};
+      uint32_t err = SHEKYL_WALLET_ERR_OK;
+      ::shekyl_wallet_keys_open(
+          reinterpret_cast<const uint8_t*>(password.data()), password.size(),
+          reinterpret_cast<const uint8_t*>(buf.data()), buf.size(),
+          &info,
+          nullptr, 0,
+          &err);
+      spend_key_out = crypto::null_skey;
+      return (err == SHEKYL_WALLET_ERR_OK) ||
+             (err == SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL);
+    }
+  }
 
   // Decrypt the contents
   r = ::serialization::parse_binary(buf, keys_file_data);
@@ -5797,6 +6153,26 @@ void wallet2::rewrite(const std::string& wallet_name, const epee::wipeable_strin
   THROW_WALLET_EXCEPTION_IF(m_background_syncing || m_is_background_wallet, error::wallet_internal_error,
     "cannot change wallet settings from background wallet");
   prepare_file_names(wallet_name);
+
+  // 2k.a: `rewrite` is a no-op for SHKW1 wallets. SHKW1 keys files are
+  // cryptographically append-only from wallet2's perspective:
+  //   - Preference changes land via `shekyl_wallet_prefs_set_json`
+  //     (handled by the prefs subsystem, separate from the keys file).
+  //   - Password rotation goes through `change_password`, which is
+  //     rewired to `shekyl_wallet_keys_rewrap_password` independently.
+  // A caller reaching here for an SHKW1 wallet is issuing a legacy
+  // "rewrite the settings blob into the keys file" request that has
+  // no analogue in SHKW1 and collapses to a no-op. Log at L1 so the
+  // no-op doesn't silently hide behavior drift during the 2k.a → 2l
+  // transition window.
+  if (m_shekyl_wallet)
+  {
+    LOG_PRINT_L1("wallet2::rewrite: no-op for SHKW1 wallet "
+                 << m_keys_file << " (settings persist via WalletPrefs; "
+                 "password via change_password)");
+    return;
+  }
+
   boost::system::error_code ignored_ec;
   THROW_WALLET_EXCEPTION_IF(!boost::filesystem::exists(m_keys_file, ignored_ec), error::file_not_found, m_keys_file);
   bool r = store_keys(m_keys_file, password, m_watch_only);

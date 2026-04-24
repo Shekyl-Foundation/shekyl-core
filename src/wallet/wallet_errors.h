@@ -866,6 +866,87 @@ namespace tools
       std::string m_wallet_file;
     };
     //----------------------------------------------------------------------------------------------------
+    // 2k.a SHKW1 load/verify failures. These are logic-class errors (the
+    // caller is asking wallet2 to load a file that cannot be loaded in the
+    // current configuration) and are distinguishable by type so callers
+    // — CLI, wallet RPC, tests — can tell "user picked the wrong
+    // --mainnet/--testnet flag" apart from "file is corrupt or the
+    // derivation policy drifted" apart from "capability mode is not yet
+    // wired through wallet2::load_keys in 2k.a". See
+    // wallet-state-promotion_ab273bfe.plan.md §2k.a design pin 13.
+    //----------------------------------------------------------------------------------------------------
+    struct wallet_keys_wrong_network : public wallet_logic_error
+    {
+      explicit wallet_keys_wrong_network(std::string&& loc,
+                                         uint8_t expected_network,
+                                         uint8_t got_network)
+        : wallet_logic_error(std::move(loc),
+            "SHKW1 wallet file network=" + std::to_string(static_cast<int>(got_network))
+            + " does not match expected network=" + std::to_string(static_cast<int>(expected_network))
+            + " (the wallet was opened with the wrong CLI or config; pick the"
+              " right --mainnet/--testnet/--stagenet flag for this file)")
+        , m_expected(expected_network)
+        , m_got(got_network)
+      {
+      }
+
+      uint8_t expected_network() const { return m_expected; }
+      uint8_t got_network() const { return m_got; }
+
+      std::string to_string() const { return wallet_logic_error::to_string(); }
+
+    private:
+      uint8_t m_expected;
+      uint8_t m_got;
+    };
+    //----------------------------------------------------------------------------------------------------
+    struct wallet_keys_aad_address_mismatch : public wallet_logic_error
+    {
+      explicit wallet_keys_aad_address_mismatch(std::string&& loc,
+                                                const std::string& keys_file)
+        : wallet_logic_error(std::move(loc),
+            "SHKW1 wallet file " + keys_file + ": the envelope's"
+            " AAD-authenticated classical address does not match the address"
+            " derived from the rederived keys. The file is corrupt, a future"
+            " HKDF/derivation policy change landed without matching sealer"
+            " logic, or the in-memory wallet2 state has been repointed at a"
+            " different keys file than the one its m_shekyl_wallet handle"
+            " was opened on")
+        , m_keys_file(keys_file)
+      {
+      }
+
+      const std::string& keys_file() const { return m_keys_file; }
+
+      std::string to_string() const { return wallet_logic_error::to_string(); }
+
+    private:
+      std::string m_keys_file;
+    };
+    //----------------------------------------------------------------------------------------------------
+    struct wallet_keys_unsupported_capability : public wallet_logic_error
+    {
+      explicit wallet_keys_unsupported_capability(std::string&& loc,
+                                                  uint8_t capability_mode)
+        : wallet_logic_error(std::move(loc),
+            "SHKW1 capability mode " + std::to_string(static_cast<int>(capability_mode))
+            + " is not yet wired through wallet2::load_keys. 2k.a lands FULL"
+              " only; VIEW_ONLY and HARDWARE_OFFLOAD come in a follow-up"
+              " 2k.a* commit. This is a transitional refusal — the file is"
+              " valid, but the in-tree C++ wallet2 path cannot populate"
+              " m_account for this capability yet")
+        , m_capability(capability_mode)
+      {
+      }
+
+      uint8_t capability_mode() const { return m_capability; }
+
+      std::string to_string() const { return wallet_logic_error::to_string(); }
+
+    private:
+      uint8_t m_capability;
+    };
+    //----------------------------------------------------------------------------------------------------
     struct scan_tx_error : public wallet_logic_error
     {
     protected:
