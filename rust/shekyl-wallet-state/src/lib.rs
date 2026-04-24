@@ -27,6 +27,7 @@
 
 pub mod bookkeeping_block;
 pub mod error;
+pub mod invariants;
 pub mod ledger_block;
 pub mod payment_id;
 pub mod runtime_state;

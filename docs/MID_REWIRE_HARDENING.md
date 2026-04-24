@@ -570,25 +570,49 @@ public-bytes entries across six files with per-entry rationale.
 
 ### 3.6 `feat(wallet-state): WalletLedger::check_invariants()`
 
+**Status: Landed.** Module
+[`rust/shekyl-wallet-state/src/invariants.rs`](../rust/shekyl-wallet-state/src/invariants.rs)
+owns the closed set of five cross-block invariants, each with a
+stable machine-readable name constant
+(`INV_TIP_NOT_BELOW_TRANSFER`, `INV_TX_KEYS_NO_ORPHANS`,
+`INV_SUBADDRESS_REGISTRY_DENSE`, `INV_REORG_TRAIL_MONOTONIC`,
+`INV_SPENT_STATE_CONSISTENT`). `WalletLedgerError::InvariantFailed
+{ invariant: &'static str, detail: String }` is the new error
+variant; `WalletLedger::check_invariants` runs on the load path
+(inside `from_postcard_bytes`, after the version gates) and
+`WalletLedger::preflight_save` runs on the save path (called from
+`shekyl_wallet_file::handle::WalletHandle::save_state` before the
+Argon2id-backed seal). Two of the plan's rows below are adjusted to
+match actual block shapes, as the plan explicitly sanctioned:
+there is no `BookkeepingBlock::spent_images` set (spend state lives
+on `TransferDetails`) and no `TxMetaBlock::entries[*].transfer_index`
+(the tx-meta block keys by tx-hash, so the cross-check is
+"tx-hash exists in a live reference" rather than a transfer-index
+dereference). Reorg-trail shape likewise lives on `LedgerBlock`
+rather than `SyncStateBlock`, so I-4's wording is "monotonic and
+bounded by the tip" rather than "greater than transfer heights".
+
 **Scope.** Aggregator-level invariants that cannot be enforced by any
 single block's schema or version alone. Called once in
-`WalletLedger::deserialize_postcard` after successful decode, and
-once in every `save_state` path before atomic write.
+`WalletLedger::from_postcard_bytes` after successful decode plus
+version gates, and once in every `save_state` path before atomic write.
 
-**Invariants.**
+**Invariants (as landed).**
 
-| #   | Invariant                                                                                                                                         | Why it matters                                                               |
-|-----|---------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
-| I-1 | `SyncStateBlock::scan_height >= max(LedgerBlock::transfers[*].block_height)`                                                                      | Scanner height must not regress below observed outputs                       |
-| I-2 | Every `TxMetaBlock::entries[*].transfer_index` points at a live `LedgerBlock::transfers[i]`                                                       | No orphan tx metadata                                                        |
-| I-3 | Every `BookkeepingBlock::subaddress_registry` index set covers `[0, max_index]` densely per account                                               | Holes mean the design invariant "subaddresses are not deleted" was violated  |
-| I-4 | `SyncStateBlock::reorg_trail` heights are all strictly greater than `max(transfers[*].effective_height)`                                          | Every reorg that should have rolled back a transfer did                      |
-| I-5 | Every key image appearing in `BookkeepingBlock::spent_images` appears in exactly one `LedgerBlock::transfers[i].key_image` with `spent = true`    | Cross-block spent-state consistency                                          |
+| #   | Stable name                          | Check                                                                                                                                                                                               | Why it matters                                                               |
+|-----|--------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| I-1 | `tip-height-not-below-transfer`      | `ledger.tip.synced_height >= max(ledger.transfers[*].block_height)` (the scan pointer lives on `LedgerBlock`, not `SyncStateBlock`)                                                                 | Scanner height must not regress below observed outputs                       |
+| I-2 | `tx-keys-no-orphans`                 | Every tx-hash key in `tx_meta.tx_keys` must appear in `ledger.transfers[*].tx_hash`, `tx_meta.scanned_pool_txs`, or `sync_state.pending_tx_hashes` (tx-meta is keyed by tx-hash, not transfer index) | No orphan per-tx secret keys                                                 |
+| I-3 | `subaddress-registry-dense`          | For every major account `m` present in `bookkeeping.subaddress_registry`, the minor set is contiguous between its observed min and max (no holes)                                                   | Holes mean the design invariant "subaddresses are not deleted" was violated  |
+| I-4 | `reorg-trail-monotonic`              | `ledger.reorg_blocks.blocks` is strictly ascending by height, no duplicate heights, and the tail height is ≤ `ledger.tip.synced_height` (reorg trail lives on `LedgerBlock`)                        | Reorg window cannot run past the tip nor be internally inconsistent          |
+| I-5 | `spent-state-consistent`             | Per transfer: `spent ⇔ spent_height.is_some() ∧ key_image.is_some()`; `!spent ⇒ spent_height.is_none()`; no two transfers share the same `Some(key_image)`                                          | Cross-transfer spent-state consistency without a separate `spent_images` set |
 
-I-3 and I-5 are shape-dependent on the actual block definitions
-at implementation time; if the persisted representation differs
-from the assumed shape, the invariant set is adjusted in the
-commit and the change is called out in the commit message.
+I-2 and I-5 differ in shape from the plan's initial wording because
+the actual blocks keep per-txid secrets in `TxMetaBlock::tx_keys`
+(keyed by tx-hash, no `transfer_index`) and track spend state on
+`TransferDetails` directly (no `BookkeepingBlock::spent_images`
+set). The machine-readable names above are stable and outlive any
+future shape refactor.
 
 **Failure mode.**
 
@@ -630,6 +654,18 @@ message) but does not require it.
 fixture; each of five negative tests produces the expected error;
 benchmark 3.2's `ledger_postcard_roundtrip_10k` shows `check_invariants`
 in the profile but under 100 µs for that size.
+
+**Verification (at landing).** 16 unit tests in `invariants::tests`
+cover: one positive case on `WalletLedger::empty()`, one positive
+case on a populated 3-transfer / 3-block reorg-trail ledger, and at
+least one negative case per invariant plus alternate reference paths
+for I-2 (pending-tx-hash and scanned-pool references both satisfy the
+check). The pre-existing 96-test `shekyl-wallet-state` suite and
+51-test `shekyl-wallet-file` suite both remain green; clippy is
+clean with `-D warnings`; fmt is clean. The release-build preflight
+path is exercised by a `#[cfg(not(debug_assertions))]`-gated
+assertion in `preflight_save_returns_typed_error_without_panicking`
+so the same test drives both profiles.
 
 ### 3.7 `test(wallet-file): adversarial corpus`
 

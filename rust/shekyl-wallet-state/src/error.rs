@@ -49,4 +49,24 @@ pub enum WalletLedgerError {
     /// Forwarded verbatim from the postcard error for diagnostics.
     #[error("postcard decode failed: {0}")]
     Postcard(#[from] postcard::Error),
+
+    /// An aggregator-level invariant on the [`WalletLedger`] bundle
+    /// failed. Unlike a version mismatch or a postcard decode error,
+    /// this fires *after* every block decoded individually — the bytes
+    /// on disk are internally consistent at the postcard layer but the
+    /// *relationship* between blocks violates an invariant the runtime
+    /// relies on (see `invariants` module for the closed set).
+    ///
+    /// The `invariant` field is a stable, machine-readable name (e.g.
+    /// `"tip-height-not-below-transfer"`); the `detail` carries the
+    /// specific shape that tripped the check. On the load path this is
+    /// a typed refusal; on the save path it is the release-build
+    /// fallback after a `debug_assert!` would have fired in debug.
+    ///
+    /// [`WalletLedger`]: crate::wallet_ledger::WalletLedger
+    #[error("wallet ledger invariant failed ({invariant}): {detail}")]
+    InvariantFailed {
+        invariant: &'static str,
+        detail: String,
+    },
 }

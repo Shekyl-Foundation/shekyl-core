@@ -130,13 +130,17 @@ impl WalletLedger {
     }
 
     /// Deserialize a full bundle from postcard bytes produced by
-    /// [`Self::to_postcard_bytes`]. Enforces both the bundle
-    /// `format_version` gate and every inner block's `block_version`
-    /// gate. Fails fast on the first mismatch.
+    /// [`Self::to_postcard_bytes`]. Enforces the bundle
+    /// `format_version` gate, every inner block's `block_version`
+    /// gate, and the aggregator-level invariants owned by
+    /// [`crate::invariants`]. Fails fast on the first mismatch so the
+    /// diagnostic points at the earliest failure rather than a
+    /// downstream symptom.
     pub fn from_postcard_bytes(bytes: &[u8]) -> Result<Self, WalletLedgerError> {
         let ledger: Self = postcard::from_bytes(bytes)?;
         ledger.check_format_version()?;
         ledger.check_all_block_versions()?;
+        ledger.check_invariants()?;
         Ok(ledger)
     }
 

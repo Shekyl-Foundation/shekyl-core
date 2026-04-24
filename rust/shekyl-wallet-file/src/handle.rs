@@ -482,6 +482,12 @@ impl WalletFileHandle {
         password: &[u8],
         ledger: &WalletLedger,
     ) -> Result<(), WalletFileError> {
+        // Aggregator-level invariants fire BEFORE we spend an
+        // Argon2id derivation on the write path. Debug builds route
+        // through `debug_assert!` so test runs abort loudly with the
+        // full panic message; release builds return the typed error
+        // so a live-user save cannot panic.
+        ledger.preflight_save()?;
         let body = ledger.to_postcard_bytes()?;
         let framed = encode_payload(PayloadKind::WalletLedgerPostcard, &body)?;
         let state_bytes = seal_state_file(password, &self.keys_file_bytes, &framed)?;

@@ -4,6 +4,46 @@
 
 ### Added
 
+- **`WalletLedger::check_invariants()` aggregator-level gate (commit 6
+  of the mid-rewire hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.6).**
+  Closes the gap that neither single-block schemas (commit 4) nor the
+  zeroizing-field grep (commit 5) structurally cover: a `.wallet`
+  bundle whose every block decoded cleanly and whose every field is
+  correctly wrapped can still be *semantically* impossible (a scanner
+  tip below a recorded transfer; a key image shared between two
+  transfers; an orphan per-tx secret whose transaction has been
+  garbage-collected from every live reference). New
+  [`rust/shekyl-wallet-state/src/invariants.rs`](../rust/shekyl-wallet-state/src/invariants.rs)
+  owns the closed set of five cross-block invariants with stable
+  machine-readable names: `tip-height-not-below-transfer`,
+  `tx-keys-no-orphans`, `subaddress-registry-dense`,
+  `reorg-trail-monotonic`, `spent-state-consistent`. Each check is
+  O(n) in the number of transfers or map keys with a single
+  `HashSet<[u8; 32]>` allocation, well under 100 µs for a 10 k-transfer
+  bundle. New
+  [`WalletLedgerError::InvariantFailed { invariant, detail }`](../rust/shekyl-wallet-state/src/error.rs)
+  variant carries the stable name plus a pointed diagnostic ("missing
+  minor index 3 in [1, 4]" rather than "file is corrupt"), which flows
+  through `shekyl-wallet-file`'s `WalletFileError::Ledger` by existing
+  `#[from]`. Two call sites wire the checks in: `WalletLedger::from_postcard_bytes`
+  runs them after the per-block version gates pass (typed refusal on
+  load), and `WalletLedger::preflight_save` runs them ahead of every
+  `save_state` in `shekyl-wallet-file/src/handle.rs` — `debug_assert!`
+  in debug so a runtime-induced invariant break aborts tests loudly,
+  typed `Err` in release so a user save never panics mid-write. Two
+  invariants (subaddress density, key-image uniqueness) replace the
+  plan's §3.6 `spent_images` and `transfer_index` proposals with shapes
+  that match the actual blocks (`BookkeepingBlock::subaddress_registry`
+  and `TransferDetails::key_image` — there is no separate spent-image
+  set and no transfer-index join); the plan explicitly sanctions such
+  adjustment on landing, and the machine-readable names are chosen to
+  outlive any future shape refactor. Verified locally: 16 unit tests
+  (one positive + at least one negative per invariant, plus alternate
+  reference paths for I-2 proving a pool- or pending-referenced tx
+  passes) all pass; the pre-existing 96-test `shekyl-wallet-state`
+  suite and 51-test `shekyl-wallet-file` suite remain green; clippy
+  clean with `-D warnings`; fmt clean.
 - **Zeroizing-field grep + allowlist CI guard (commit 5 of the
   mid-rewire hardening pass,
   [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.5).**
