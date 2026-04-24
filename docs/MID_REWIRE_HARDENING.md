@@ -504,6 +504,8 @@ line untouched.
 
 ### 3.5 `ci(wallet-state)`: Zeroizing-field grep + allowlist
 
+**Status.** Landed. Pointer in §7 below.
+
 **Scope.** Last-line-of-defense check that secret-bearing fields in
 `shekyl-wallet-state` are wrapped in `Zeroizing<...>` or a typed
 secret wrapper. Mechanical, opt-out via allowlist.
@@ -555,7 +557,16 @@ cost), cutting it is hard to justify.
 
 **Exit criteria.** Script passes on clean `dev`; a deliberate
 `Zeroizing` unwrap in a test branch produces a failing CI run with
-the expected error message.
+the expected error message. Both met at landing: the script exits 0
+against the current tree ("33 candidate field(s) scanned, all wrapped
+or allowlisted"), and the three failure modes were verified locally
+— (a) adding an unwrapped `scratch_field: [u8; 32]` produces `FATAL:
+unwrapped byte-shaped field(s) without allowlist entry`, (b) adding a
+stale allowlist line produces `FATAL: stale allowlist entry — field
+no longer exists`, (c) unwrapping `Option<Zeroizing<[u8; 32]>>` →
+`Option<[u8; 32]>` produces the "missing allowlist entry" failure on
+the now-unwrapped field. Initial allowlist encodes 27 deliberate
+public-bytes entries across six files with per-entry rationale.
 
 ### 3.6 `feat(wallet-state): WalletLedger::check_invariants()`
 

@@ -77,7 +77,14 @@ These are **not** wire-format changes and do not require a bump:
 
 ## Mechanical enforcement
 
-Two tests + one CI job, all landed in commit 4 of the hardening pass:
+Two tests + two CI jobs enforce this policy, landed in commits 4 and
+5 of the hardening pass. The two halves cover complementary failure
+modes: the schema snapshot catches wire-format drift, and the
+zeroize-field grep catches in-memory secret-wipe drift that the
+snapshot structurally cannot see (since `Zeroizing<[u8; 32]>` and
+`[u8; 32]` produce byte-identical postcard output).
+
+### Schema snapshot (commit 4 — §3.4)
 
 1. `cargo test -p shekyl-wallet-state schema_snapshot` — asserts the
    derived `postcard_schema::Schema` of every persisted block matches
@@ -95,6 +102,29 @@ Two tests + one CI job, all landed in commit 4 of the hardening pass:
    either side of that file's unified diff. PRs that change a `.snap`
    without bumping the paired constant fail the workflow with a
    GitHub annotation on the offending file.
+
+### Zeroizing-field grep (commit 5 — §3.5)
+
+4. `scripts/ci/check_zeroize.sh` — walks `shekyl-wallet-state/src/`
+   (production code only; `#[cfg(test)]` modules and multi-line
+   function-signature parameters are excluded via paren-depth
+   tracking) and emits every `[u8; N]` or `Vec<u8>` field
+   declaration. Each hit must either (a) carry a `Zeroizing<...>` /
+   `SecretKey<...>` wrapper on the same line, or (b) appear verbatim
+   in `rust/shekyl-wallet-state/.zeroize-allowlist`.
+5. `.github/workflows/zeroize-check.yml` — runs the script on PRs
+   that touch the wallet-state source tree, the allowlist, the
+   script, or the workflow. Missing entries (new unwrapped field)
+   and stale entries (allowlisted field removed without also
+   removing the line) both fail with pinpoint messages — the file
+   cannot rot with ghost entries that would silently re-admit a
+   future field of the same spelling.
+
+The two checks together: commit 4 ensures the wire shape doesn't
+change without a version bump; commit 5 ensures the in-memory
+secret-wipe contract doesn't regress while the wire shape stays
+stable. Either alone is insufficient; together they cover the two
+distinct migration hazards.
 
 ## Procedure for an intentional schema change
 

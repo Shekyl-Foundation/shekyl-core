@@ -1,0 +1,131 @@
+# `shekyl-wallet-state` zeroize-field allowlist
+#
+# Format: `<relative-path>|<normalized field decl>`, one entry per line.
+# Comments start with `#`; blank lines are ignored. `<normalized field
+# decl>` is the source line with leading whitespace and a trailing
+# comma stripped (matching what `scripts/ci/check_zeroize.sh`
+# produces). Entry order is file-alphabetic, declaration-order within
+# each file, so diffs against the allowlist read naturally.
+#
+# Every entry below is a **deliberate public-bytes** field. Either the
+# bytes carry no secret material (block hashes, tx hashes, key images,
+# published public keys), or the field is a mirror-struct shadow that
+# exists only to drive `postcard_schema::Schema` derivation and never
+# allocates at runtime, or the field lives in `runtime_state.rs` which
+# is rebuilt in memory on every load and never persisted.
+#
+# If you are **adding** a new unwrapped field, stop and decide:
+#
+#   - Is it a secret? If yes, wrap it in `Zeroizing<...>` (or a typed
+#     secret wrapper over `Zeroizing<T>`). No allowlist entry needed.
+#   - Is it genuinely public bytes? Add an entry here with a
+#     justification in the preceding `#` comment.
+#
+# If you are **removing** a field whose entry appears below, also
+# remove the allowlist line in the same commit. A stale entry is a
+# CI-blocking error — it would silently permit a future field with
+# the same spelling to land unwrapped.
+#
+# Policy:
+#   .cursor/rules/42-serialization-policy.mdc
+#   docs/MID_REWIRE_HARDENING.md §3.5
+
+# ── bookkeeping_block.rs ──────────────────────────────────────────────
+#
+# Subaddress registry keys its entries by the 32-byte pubkey hash that
+# the address-derivation pipeline emits for a given subaddress. Public
+# by construction — the wallet file's bookkeeping block is the index of
+# how pubkey-hash → (major, minor) subaddress index. No secret.
+rust/shekyl-wallet-state/src/bookkeeping_block.rs|pub subaddress_registry: BTreeMap<[u8; 32], SubaddressIndex>
+
+# ── ledger_block.rs ───────────────────────────────────────────────────
+#
+# Blockchain tip hash is the 32-byte block hash the wallet last saw.
+# Published in every mined block header; no secret.
+rust/shekyl-wallet-state/src/ledger_block.rs|pub tip_hash: Option<[u8; 32]>
+# Reorg trail is the height-plus-block-hash tuple sequence used to
+# detect reorgs at scan time. Block hashes are public network state.
+rust/shekyl-wallet-state/src/ledger_block.rs|pub blocks: Vec<(u64, [u8; 32])>
+
+# ── payment_id.rs ─────────────────────────────────────────────────────
+#
+# Clear payment ID bytes. The on-wire form is XOR-obfuscated against a
+# shared secret before it lands in a tx, but the `PaymentId` type
+# itself holds the 8-byte clear value as a public handle — the obfu-
+# scation is applied separately by the tx-builder.
+rust/shekyl-wallet-state/src/payment_id.rs|pub struct PaymentId(pub [u8; 8]);
+
+# ── runtime_state.rs ──────────────────────────────────────────────────
+#
+# Runtime indexes are rebuilt from `LedgerBlock::transfers` on every
+# wallet load; they are never serialized to disk. Map-key types here
+# (`[u8; 32]` key-image bytes, `[u8; 32]` output-pubkey bytes) are all
+# public by construction: key images are the public spent-marker
+# primitives, output pubkeys are what appears in tx outputs on-chain.
+# The `blockchain` vec mirrors the `ledger_block.rs` reorg trail and
+# has the same public-hash rationale.
+rust/shekyl-wallet-state/src/runtime_state.rs|pub(crate) key_images: HashMap<[u8; 32], usize>
+rust/shekyl-wallet-state/src/runtime_state.rs|pub(crate) pub_keys: HashMap<[u8; 32], usize>
+rust/shekyl-wallet-state/src/runtime_state.rs|pub(crate) blockchain: Vec<(u64, [u8; 32])>
+
+# ── sync_state_block.rs ───────────────────────────────────────────────
+#
+# Creation-anchor hash is the 32-byte block hash at wallet creation
+# time — published chain state, public.
+rust/shekyl-wallet-state/src/sync_state_block.rs|pub creation_anchor_hash: Option<[u8; 32]>
+# Pending tx hashes are 32-byte identifiers of txs the wallet has
+# published but not yet seen mined. Tx hashes are public by design
+# (they are the primary lookup key into the mempool + chain).
+rust/shekyl-wallet-state/src/sync_state_block.rs|pub pending_tx_hashes: Vec<[u8; 32]>
+
+# ── transfer.rs ───────────────────────────────────────────────────────
+#
+# FCMP++ precomputed-path reference block is the block hash the path
+# was computed against — public chain state.
+rust/shekyl-wallet-state/src/transfer.rs|pub reference_block: [u8; 32]
+# `path_blob` holds the serialized FCMP++ precomputed path (opaque
+# merkle-proof bytes). The proof is a public-input artifact of the
+# full-chain-membership argument; it does not carry private scalar
+# material. Leaks the chosen anonymity-set positions but not the
+# spender's secrets.
+rust/shekyl-wallet-state/src/transfer.rs|pub path_blob: Vec<u8>
+# TransferDetails.tx_hash is the 32-byte hash of the tx this output
+# lives in. Public network-level identifier.
+rust/shekyl-wallet-state/src/transfer.rs|pub tx_hash: [u8; 32]
+# TransferDetails.key_image is the published spent-marker when this
+# output has been spent. Key images are public by design — that is
+# what makes double-spend detection possible.
+rust/shekyl-wallet-state/src/transfer.rs|pub key_image: Option<[u8; 32]>
+
+# Mirror-struct `TransferDetailsSchema` — compile-only shadow that
+# drives `postcard_schema::Schema` derivation for `TransferDetails`
+# (see docs/MID_REWIRE_HARDENING.md §3.4 on the mirror-struct pattern
+# and transfer.rs:SCHEMA impl). The struct is marked `#[allow(dead_
+# code)]`, never instantiated at runtime, and never allocates. Its
+# `Vec<u8>` fields are wire-shape placeholders (length-prefixed byte
+# sequences) for the original types' secret / public fields; the
+# actual zeroizing memory lives on the real `TransferDetails`.
+rust/shekyl-wallet-state/src/transfer.rs|tx_hash: [u8; 32]
+rust/shekyl-wallet-state/src/transfer.rs|key: Vec<u8>
+rust/shekyl-wallet-state/src/transfer.rs|key_offset: Vec<u8>
+rust/shekyl-wallet-state/src/transfer.rs|commitment: Vec<u8>
+rust/shekyl-wallet-state/src/transfer.rs|key_image: Option<[u8; 32]>
+rust/shekyl-wallet-state/src/transfer.rs|combined_shared_secret: Option<Vec<u8>>
+rust/shekyl-wallet-state/src/transfer.rs|ho: Option<Vec<u8>>
+rust/shekyl-wallet-state/src/transfer.rs|y: Option<Vec<u8>>
+rust/shekyl-wallet-state/src/transfer.rs|z: Option<Vec<u8>>
+rust/shekyl-wallet-state/src/transfer.rs|k_amount: Option<Vec<u8>>
+
+# ── tx_meta_block.rs ──────────────────────────────────────────────────
+#
+# Mirror-struct `TxSecretKeySchema` — compile-only shadow driving the
+# `postcard_schema::Schema` impl for `TxSecretKey`. Same rationale as
+# the `TransferDetailsSchema` block above.
+rust/shekyl-wallet-state/src/tx_meta_block.rs|struct TxSecretKeySchema(Vec<u8>);
+# Map keys below are 32-byte tx-hashes used to key per-tx metadata
+# (secret keys, user notes, pool scan state). The tx-hash itself is
+# public; the *values* carry any secret material and are wrapped
+# separately (e.g. `TxSecretKey` wraps `Zeroizing<[u8; 32]>`).
+rust/shekyl-wallet-state/src/tx_meta_block.rs|pub tx_keys: BTreeMap<[u8; 32], TxSecretKeys>
+rust/shekyl-wallet-state/src/tx_meta_block.rs|pub tx_notes: BTreeMap<[u8; 32], String>
+rust/shekyl-wallet-state/src/tx_meta_block.rs|pub scanned_pool_txs: BTreeMap<[u8; 32], ScannedPoolTx>

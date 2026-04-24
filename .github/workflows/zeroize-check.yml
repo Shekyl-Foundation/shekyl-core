@@ -1,0 +1,53 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Zeroizing-field grep + allowlist — commit 5 of the mid-rewire
+# hardening pass (`docs/MID_REWIRE_HARDENING.md` §3.5).
+#
+# Runs `scripts/ci/check_zeroize.sh` on every PR that touches the
+# wallet-state source tree, the allowlist, or this workflow itself.
+# The script:
+#
+#   - scans `rust/shekyl-wallet-state/src/**/*.rs` for `[u8; N]` and
+#     `Vec<u8>` field declarations (production code; `#[cfg(test)]`
+#     modules and multi-line function-signature parameters are
+#     excluded via paren-depth tracking);
+#   - treats any hit wrapped in `Zeroizing<...>` / `SecretKey<...>`
+#     as auto-passing;
+#   - requires every remaining hit to be enumerated in
+#     `rust/shekyl-wallet-state/.zeroize-allowlist`;
+#   - fails with a pinpoint message on either a missing entry (new
+#     unwrapped field) or a stale entry (allowlisted field removed
+#     without also removing the line).
+#
+# This closes a gap the `ci/schema-snapshot` workflow cannot cover:
+# unwrapping `Zeroizing<[u8; 32]>` to `[u8; 32]` is byte-for-byte
+# identical on the postcard wire, so the schema snapshot stays green
+# while the in-memory secret-wipe discipline silently breaks. See
+# §3.5 "Why this is a separate check from 3.4" for the rationale.
+
+name: ci/zeroize-check
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "rust/shekyl-wallet-state/src/**"
+      - "rust/shekyl-wallet-state/.zeroize-allowlist"
+      - "scripts/ci/check_zeroize.sh"
+      - ".github/workflows/zeroize-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check-zeroize:
+    name: "Zeroizing-field grep + allowlist"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run zeroize check
+        run: scripts/ci/check_zeroize.sh

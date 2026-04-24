@@ -4,6 +4,63 @@
 
 ### Added
 
+- **Zeroizing-field grep + allowlist CI guard (commit 5 of the
+  mid-rewire hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.5).**
+  Closes the gap that the wire-schema snapshot from commit 4
+  structurally cannot cover: `Zeroizing<[u8; 32]>` and `[u8; 32]`
+  produce byte-identical postcard output, so unwrapping a zeroize
+  wrapper leaves the snapshot green while silently breaking the
+  runtime secret-wipe contract. New
+  [`scripts/ci/check_zeroize.sh`](../scripts/ci/check_zeroize.sh)
+  walks `rust/shekyl-wallet-state/src/**/*.rs` and emits every
+  `[u8; N]` or `Vec<u8>` field declaration: production code only
+  (`#[cfg(test)]` modules and everything past the first
+  `#[cfg(test)]` in a file are elided), with paren-depth tracking
+  across multi-line `fn` signatures so `pub fn new(x: [u8; 32], …)`
+  parameters are not mistaken for struct fields, and with standard
+  filters on `//`, `///`, `use`, `type`, `impl`, `let`, `for`,
+  `match`, `->` , and `assert` lines. Every hit must either carry a
+  `Zeroizing<...>` / `SecretKey<...>` wrapper on the same line
+  (auto-pass, no allowlist entry needed) or be enumerated verbatim —
+  `<relative-path>|<normalized decl>` — in
+  [`rust/shekyl-wallet-state/.zeroize-allowlist`](../rust/shekyl-wallet-state/.zeroize-allowlist).
+  The allowlist is bi-directional: a new unwrapped field with no
+  entry fails with `FATAL: unwrapped byte-shaped field(s) without
+  allowlist entry`, and an allowlist line whose field no longer
+  exists fails with `FATAL: stale allowlist entry — field no longer
+  exists`, so the file cannot rot with ghost entries that would
+  silently re-admit a future field of the same spelling. Initial
+  allowlist encodes 27 deliberate public-bytes entries across six
+  files (`bookkeeping_block`, `ledger_block`, `payment_id`,
+  `runtime_state`, `sync_state_block`, `transfer`, `tx_meta_block`),
+  grouped by category with per-entry comments: (a) public chain
+  hashes (tip/reorg/creation-anchor/pending-tx/reference-block),
+  (b) public key-image markers on `TransferDetails`, (c) 32-byte
+  map keys keying per-tx metadata (tx hashes are public lookup
+  handles; values that carry secrets, like `TxSecretKey`, are wrapped
+  on their own line), (d) the clear `PaymentId([u8; 8])` handle
+  (obfuscation is applied by the tx-builder, not the storage type),
+  (e) FCMP++ `path_blob: Vec<u8>` (public-input proof bytes; leaks
+  anonymity-set choice but not spender secrets), (f) mirror-struct
+  schema fields on `TransferDetailsSchema` / `TxSecretKeySchema` that
+  exist only to drive the `postcard_schema::Schema` derive and never
+  allocate at runtime, (g) `runtime_state.rs` in-memory indexes
+  that are rebuilt from `LedgerBlock` on every load and never
+  persisted. New
+  [`.github/workflows/zeroize-check.yml`](../.github/workflows/zeroize-check.yml)
+  runs the script on PRs into `dev` that touch the wallet-state
+  source tree, the allowlist, the script itself, or this workflow.
+  Policy captured in
+  [`.cursor/rules/42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc)'s
+  enforcement section (§3.4 schema snapshot + §3.5 zeroize grep
+  together form the mechanical half of the wire-format and
+  secret-wipe discipline). Verified locally: script exits 0 on
+  the current tree ("33 candidate field(s) scanned, all wrapped or
+  allowlisted"); the three failure modes — adding an unwrapped
+  `scratch_field: [u8; 32]`, adding a stale allowlist entry,
+  unwrapping an `Option<Zeroizing<[u8; 32]>>` to `Option<[u8; 32]>`
+  — each produce the expected pinpoint error.
 - **Wire-schema snapshot + paired `block_version` CI guard (commit 4 of
   the mid-rewire hardening pass,
   [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.4).**
