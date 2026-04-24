@@ -72,7 +72,7 @@ pub const DEFAULT_REORG_BLOCKS_CAPACITY: usize = 32;
 /// wallet-relevant outputs or not. On reload, it is cross-checked
 /// against `reorg_blocks.last()` for consistency (a mismatch indicates
 /// disk corruption, not a reorg, and is handled by the orchestrator).
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct BlockchainTip {
     /// Highest block height the scanner has processed.
     pub synced_height: u64,
@@ -109,7 +109,7 @@ impl BlockchainTip {
 /// is likewise the scanner's invariant — `LedgerBlock::check_version`
 /// verifies only the version field, so a corrupt or non-monotonic
 /// sequence will be caught by the runtime's `check_invariants`.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct ReorgBlocks {
     /// The `(height, block_hash)` pairs. Strictly ascending by height.
     pub blocks: Vec<(u64, [u8; 32])>,
@@ -135,7 +135,7 @@ impl ReorgBlocks {
 /// The ledger block. Scanner-derived on-chain state that persists to
 /// the `.wallet` file. See module docs for scope, versioning, wire
 /// format, and secret discipline.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, postcard_schema::Schema)]
 pub struct LedgerBlock {
     /// Per-block schema version. Always [`LEDGER_BLOCK_VERSION`] on
     /// construction; rejected on load if it does not match.

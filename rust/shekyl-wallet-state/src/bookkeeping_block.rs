@@ -65,7 +65,7 @@ pub const BOOKKEEPING_BLOCK_VERSION: u32 = 1;
 /// to construct `(0, 0)` — the primary lives outside the map, in
 /// [`SubaddressLabels::primary`]. Every other `(account, address)` with
 /// `(account, address) != (0, 0)` is eligible for a `per_index` entry.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct SubaddressLabels {
     /// Label for the primary address `(0, 0)`. Empty string = no label.
     #[serde(default)]
@@ -87,7 +87,7 @@ pub struct SubaddressLabels {
 /// responsible for parsing it (and its optional payment-id) against the
 /// wallet's declared [`Network`](shekyl_crypto_pq::wallet_state::Network)
 /// on display / send.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct AddressBookEntry {
     /// Shekyl-encoded address (standard or integrated).
     pub address: String,
@@ -116,7 +116,7 @@ pub struct AddressBookEntry {
 ///    human-readable description per tag.
 /// 2. The current assignment of (at most) one tag to each tagged
 ///    account. Accounts not present in the map have no tag.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct AccountTags {
     /// Declared tag names mapped to their descriptions. Empty string =
     /// known tag with no description. Using a `BTreeMap` so the wire
@@ -137,7 +137,7 @@ pub struct AccountTags {
 
 /// The bookkeeping block. See module docs for scope, versioning, and
 /// design rationale.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct BookkeepingBlock {
     /// Per-block schema version. Always [`BOOKKEEPING_BLOCK_VERSION`]
     /// on construction; rejected on load if it does not match.

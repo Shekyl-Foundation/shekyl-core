@@ -399,6 +399,8 @@ baseline-update-on-merge workflow has run successfully at least once
 
 ### 3.4 `feat(wallet-state-schema)`: postcard-schema snapshot + CI diff
 
+**Status.** Landed. Pointer in §7 below.
+
 **Scope.** Convert the `block_version` discipline from cultural
 invariant (currently pinned only in
 [`42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc))
@@ -439,6 +441,20 @@ trait-object serialization and solves a different problem.
 
 - Primitives (`u8`, `u64`, `[u8; N]`, `Vec<u8>`, `Option<T>`,
   `String`) have derives upstream. Free.
+- Fields using `#[serde(with = "…")]` helpers (seen on
+  `TransferDetails.*` and `TxSecretKey.0`) cannot be introspected by
+  the `postcard_schema::Schema` derive, because the derive reads the
+  declared Rust type, not the serde-helper-rewritten wire type.
+  Resolved with the **mirror-struct** pattern: declare a compile-only
+  `…Schema` shadow struct whose fields use wire-native types
+  (`Vec<u8>` for length-prefixed byte sequences, `Option<Vec<u8>>` for
+  optional byte sequences), derive `Schema` on the shadow, and lift
+  `NamedType.ty` into a manual `impl Schema` on the domain type under
+  its real `&'static str` name. Wire-identical, local to the crate, no
+  upstream patch required. `Vec<u8>` and `serde_bytes::ByteBuf` are
+  both length-prefixed on the postcard wire; we use `Vec<u8>` in
+  mirror structs because `ByteBuf` does **not** carry an upstream
+  `Schema` impl and `Vec<u8>` does.
 - `Zeroizing<T>` delegates to `T`'s schema via a manual impl
   (`Zeroizing<T>` is wire-identical to `T`). This preserves the
   "Zeroizing does not change the wire" property, which is exactly
@@ -446,9 +462,10 @@ trait-object serialization and solves a different problem.
   commit 3.5.
 - Third-party types without upstream `Schema` impls
   (`curve25519_dalek::EdwardsPoint`, FCMP++ proof types,
-  ML-KEM-768 ciphertexts where applicable): newtype bridge in
-  `shekyl-wallet-state` with a manual `Schema` impl. Estimated
-  20–30 manual impls; each is a few lines.
+  ML-KEM-768 ciphertexts where applicable) are reached through the
+  same mirror-struct pattern at the leaf that uses them (today:
+  `TransferDetailsSchema`). As new leaves grow, each one is a few
+  lines at the site that already owns the serde helpers.
 - Missing impls surface as compile errors, not silent holes. This
   is why `postcard::Schema` is safe to rely on as the enforcement
   mechanism.
@@ -458,10 +475,16 @@ trait-object serialization and solves a different problem.
 - Snapshot format is pretty JSON, not postcard bytes — the snapshot
   is a human-readable representation of the schema tree, not a wire
   sample.
+- JSON is emitted via the indirection
+  `NamedType → OwnedNamedType → serde_json::to_string_pretty`.
+  `NamedType` holds `&'static` references that `serde_json` cannot
+  roundtrip through; `OwnedNamedType` owns its children and
+  serializes cleanly. A trailing newline is appended to match the
+  repo's `.gitattributes` convention.
 - Schema stability across `postcard` minor versions is an upstream
-  guarantee; we pin `postcard` in the workspace `Cargo.toml` with a
-  caret that matches the schema version used to generate the
-  baseline, and bump deliberately.
+  guarantee; we pin `postcard-schema = "0.2"` in the wallet-state
+  `Cargo.toml` with a caret that matches the schema version used to
+  generate the baseline, and bump deliberately.
 
 **Dependencies.** None on 3.1–3.3. Can land in parallel with 3.2.
 
@@ -470,6 +493,14 @@ snapshot-assertion test passes on a clean checkout; a deliberate
 field rename in a block produces a failing test with a diff pointing
 at the changed node; the CI workflow fails on a PR that edits a
 `.snap` file without touching the corresponding version constant.
+All four conditions met at landing: `rust/shekyl-wallet-state/schemas/`
+holds the five files; `cargo test -p shekyl-wallet-state schema_snapshot`
+is green; a scratch `#[serde(rename = "restore_height")]` on
+`SyncStateBlock::restore_from_height` produced the expected unified
+diff (`- "name": "restore_from_height"` / `+ "name": "restore_height"`);
+and the workflow's `grep -E '^[-+]pub const <NAME>\s*:'` dry-run matches
+a `1 → 2` bump while rejecting source edits that leave the declaration
+line untouched.
 
 ### 3.5 `ci(wallet-state)`: Zeroizing-field grep + allowlist
 

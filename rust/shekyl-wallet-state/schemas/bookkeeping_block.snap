@@ -1,0 +1,366 @@
+{
+  "name": "BookkeepingBlock",
+  "ty": {
+    "Struct": [
+      {
+        "name": "block_version",
+        "ty": {
+          "name": "u32",
+          "ty": "U32"
+        }
+      },
+      {
+        "name": "subaddress_registry",
+        "ty": {
+          "name": "BTreeMap<K, V>",
+          "ty": {
+            "Map": {
+              "key": {
+                "name": "[T; N]",
+                "ty": {
+                  "Tuple": [
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    },
+                    {
+                      "name": "u8",
+                      "ty": "U8"
+                    }
+                  ]
+                }
+              },
+              "val": {
+                "name": "SubaddressIndex",
+                "ty": {
+                  "Struct": [
+                    {
+                      "name": "account",
+                      "ty": {
+                        "name": "u32",
+                        "ty": "U32"
+                      }
+                    },
+                    {
+                      "name": "address",
+                      "ty": {
+                        "name": "u32",
+                        "ty": "U32"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "subaddress_labels",
+        "ty": {
+          "name": "SubaddressLabels",
+          "ty": {
+            "Struct": [
+              {
+                "name": "primary",
+                "ty": {
+                  "name": "String",
+                  "ty": "String"
+                }
+              },
+              {
+                "name": "per_index",
+                "ty": {
+                  "name": "BTreeMap<K, V>",
+                  "ty": {
+                    "Map": {
+                      "key": {
+                        "name": "SubaddressIndex",
+                        "ty": {
+                          "Struct": [
+                            {
+                              "name": "account",
+                              "ty": {
+                                "name": "u32",
+                                "ty": "U32"
+                              }
+                            },
+                            {
+                              "name": "address",
+                              "ty": {
+                                "name": "u32",
+                                "ty": "U32"
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "val": {
+                        "name": "String",
+                        "ty": "String"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "address_book",
+        "ty": {
+          "name": "Vec<T>",
+          "ty": {
+            "Seq": {
+              "name": "AddressBookEntry",
+              "ty": {
+                "Struct": [
+                  {
+                    "name": "address",
+                    "ty": {
+                      "name": "String",
+                      "ty": "String"
+                    }
+                  },
+                  {
+                    "name": "description",
+                    "ty": {
+                      "name": "String",
+                      "ty": "String"
+                    }
+                  },
+                  {
+                    "name": "payment_id",
+                    "ty": {
+                      "name": "Option<T>",
+                      "ty": {
+                        "Option": {
+                          "name": "PaymentId",
+                          "ty": {
+                            "NewtypeStruct": {
+                              "name": "[T; N]",
+                              "ty": {
+                                "Tuple": [
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  },
+                                  {
+                                    "name": "u8",
+                                    "ty": "U8"
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "is_subaddress",
+                    "ty": {
+                      "name": "bool",
+                      "ty": "Bool"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "account_tags",
+        "ty": {
+          "name": "AccountTags",
+          "ty": {
+            "Struct": [
+              {
+                "name": "tag_descriptions",
+                "ty": {
+                  "name": "BTreeMap<K, V>",
+                  "ty": {
+                    "Map": {
+                      "key": {
+                        "name": "String",
+                        "ty": "String"
+                      },
+                      "val": {
+                        "name": "String",
+                        "ty": "String"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "name": "per_account_tag",
+                "ty": {
+                  "name": "BTreeMap<K, V>",
+                  "ty": {
+                    "Map": {
+                      "key": {
+                        "name": "u32",
+                        "ty": "U32"
+                      },
+                      "val": {
+                        "name": "String",
+                        "ty": "String"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

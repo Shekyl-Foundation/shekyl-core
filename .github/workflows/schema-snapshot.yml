@@ -1,0 +1,182 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Wire-schema guard — commit 3.4 of the mid-rewire hardening pass
+# (`docs/MID_REWIRE_HARDENING.md` §3.4).
+#
+# Converts the `block_version` discipline from cultural invariant to
+# mechanical check. Two jobs, one trigger:
+#
+#   pull_request → dev
+#     - assert-snapshots:       runs the `schema_snapshot` tests in
+#                               `shekyl-wallet-state`. Fails with a
+#                               unified diff if any persisted block's
+#                               postcard wire schema drifts from its
+#                               committed `.snap`.
+#     - enforce-version-bump:   cross-checks the PR diff: if any
+#                               `.snap` under `rust/shekyl-wallet-state/
+#                               schemas/` changed, the matching version
+#                               constant in the paired source file
+#                               (`WALLET_LEDGER_FORMAT_VERSION`,
+#                               `LEDGER_BLOCK_VERSION`, …) must have
+#                               changed in the same PR. Fails otherwise.
+#
+# Rationale: a `.snap` change means the on-disk wire format changed.
+# Consumers depend on the version constant to recognize incompatible
+# bundles — letting a schema drift land without a version bump is a
+# silent data corruption risk (see `docs/MID_REWIRE_HARDENING.md` §3.4
+# and `.cursor/rules/42-serialization-policy.mdc`).
+
+name: ci/schema-snapshot
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "rust/shekyl-wallet-state/**"
+      - "rust/Cargo.lock"
+      - "rust/Cargo.toml"
+      - ".github/workflows/schema-snapshot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  assert-snapshots:
+    name: "Assert committed schema snapshots"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain stable --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-schema-snapshot-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-schema-snapshot-
+
+      - name: Run schema_snapshot tests
+        working-directory: rust
+        run: |
+          # The snapshot test machinery lives in
+          # `shekyl-wallet-state/src/schema_snapshot.rs`. Filtering by
+          # module name keeps this job fast and isolates the failure
+          # signal from unrelated unit tests.
+          cargo test -p shekyl-wallet-state schema_snapshot --no-fail-fast
+
+  enforce-version-bump:
+    name: "Enforce paired block_version bump"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Need full history so we can diff against the merge base of
+          # the PR against `dev`. `fetch-depth: 0` is the idiomatic
+          # GitHub Actions way to get that.
+          fetch-depth: 0
+
+      - name: Compute paired-change verdict
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Snapshot → source-file + version-constant pairing. Must
+          # match `docs/MID_REWIRE_HARDENING.md` §3.4 and the doc-link
+          # table in `rust/shekyl-wallet-state/src/schema_snapshot.rs`.
+          #
+          # Each entry: <snap-stem>|<source-file>|<version-constant>
+          PAIRS=(
+            "wallet_ledger|rust/shekyl-wallet-state/src/wallet_ledger.rs|WALLET_LEDGER_FORMAT_VERSION"
+            "ledger_block|rust/shekyl-wallet-state/src/ledger_block.rs|LEDGER_BLOCK_VERSION"
+            "bookkeeping_block|rust/shekyl-wallet-state/src/bookkeeping_block.rs|BOOKKEEPING_BLOCK_VERSION"
+            "tx_meta_block|rust/shekyl-wallet-state/src/tx_meta_block.rs|TX_META_BLOCK_VERSION"
+            "sync_state_block|rust/shekyl-wallet-state/src/sync_state_block.rs|SYNC_STATE_BLOCK_VERSION"
+          )
+
+          # The PR's full diff, source-relative. `git diff --name-only
+          # A...B` gives changes on the PR branch since it forked from
+          # base, which is what we want for "did this PR touch X?".
+          CHANGED=$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}")
+          echo "Files changed in this PR:"
+          echo "${CHANGED}" | sed 's/^/  /'
+          echo
+
+          FAIL=0
+          for entry in "${PAIRS[@]}"; do
+            IFS='|' read -r stem src const <<< "${entry}"
+            snap="rust/shekyl-wallet-state/schemas/${stem}.snap"
+
+            if echo "${CHANGED}" | grep -Fxq "${snap}"; then
+              echo "::group::${stem}: snapshot changed, checking paired version bump"
+              echo "  snapshot:  ${snap}"
+              echo "  source:    ${src}"
+              echo "  constant:  ${const}"
+
+              if ! echo "${CHANGED}" | grep -Fxq "${src}"; then
+                echo "::error file=${snap}::${snap} changed but ${src} was not touched"
+                echo "  FATAL: snapshot drift without a paired change to the"
+                echo "  source file that owns ${const}."
+                FAIL=1
+                echo "::endgroup::"
+                continue
+              fi
+
+              # The source file is touched — confirm the version constant's
+              # line actually moved. We look at the unified diff, filtered
+              # to lines that declare the constant (`pub const <NAME>: …`).
+              # A bump produces matched `-` / `+` lines; if the only hunks
+              # touching this file leave the constant-declaration line
+              # unchanged, we reject.
+              DIFF=$(git diff "${BASE_SHA}...${HEAD_SHA}" -- "${src}")
+              if ! echo "${DIFF}" \
+                   | grep -E "^[-+]pub const ${const}\s*:" \
+                   > /dev/null; then
+                echo "::error file=${src}::${const} constant not bumped alongside ${snap}"
+                echo "  FATAL: ${src} changed but the declaration line of"
+                echo "  ${const} is untouched. A snapshot change is a wire"
+                echo "  format change; bump the constant in the same commit."
+                FAIL=1
+                echo "::endgroup::"
+                continue
+              fi
+
+              echo "  OK: ${const} declaration line is part of the diff."
+              echo "::endgroup::"
+            fi
+          done
+
+          if [ "${FAIL}" -ne 0 ]; then
+            cat <<'EOF'
+
+          One or more persisted-block schema changes landed without a
+          matching version-constant bump. See
+          `docs/MID_REWIRE_HARDENING.md` §3.4 for the required pairing,
+          and `.cursor/rules/42-serialization-policy.mdc` for the policy
+          rationale. To fix:
+
+            1. Decide whether the schema change is intentional.
+            2. If yes, bump the paired `*_VERSION` / `*_FORMAT_VERSION`
+               constant in the same PR and regenerate the snapshot:
+                 UPDATE_SNAPSHOTS=1 cargo test -p shekyl-wallet-state \
+                   schema_snapshot
+            3. If no, revert the change to the block struct.
+
+          EOF
+            exit 1
+          fi
+
+          echo "All touched schemas are paired with their version-constant bumps."

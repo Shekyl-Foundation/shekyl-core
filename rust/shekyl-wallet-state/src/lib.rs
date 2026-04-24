@@ -31,6 +31,7 @@ pub mod ledger_block;
 pub mod payment_id;
 pub mod runtime_state;
 pub mod safety_constants;
+pub mod schema_snapshot;
 pub mod serde_helpers;
 pub mod staker_pool;
 pub mod subaddress;

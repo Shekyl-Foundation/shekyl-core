@@ -29,9 +29,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 use curve25519_dalek::Scalar;
 
 use shekyl_oxide::primitives::Commitment;
-use shekyl_wallet_state::{
-    transfer::SPENDABLE_AGE, LedgerBlock, TransferDetails, WalletLedger,
-};
+use shekyl_wallet_state::{transfer::SPENDABLE_AGE, LedgerBlock, TransferDetails, WalletLedger};
 
 /// Build a deterministic synthetic `TransferDetails` at `(seed, height)`.
 ///

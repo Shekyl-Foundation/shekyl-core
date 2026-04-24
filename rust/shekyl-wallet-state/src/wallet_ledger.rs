@@ -70,7 +70,7 @@ pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 1;
 ///
 /// [`LedgerBlock`]: crate::ledger_block::LedgerBlock
 /// [`TxMetaBlock`]: crate::tx_meta_block::TxMetaBlock
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, postcard_schema::Schema)]
 pub struct WalletLedger {
     /// Bundle-level schema version. Always
     /// [`WALLET_LEDGER_FORMAT_VERSION`] on construction; rejected on

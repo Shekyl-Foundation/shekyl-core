@@ -20,6 +20,14 @@ thiserror.workspace = true
 tracing = "0.1"
 postcard = { version = "1", features = ["alloc"] }
 
+# Hardening-pass commit 3.4 (`docs/MID_REWIRE_HARDENING.md` §3.4):
+# `postcard-schema` turns the `block_version` discipline from cultural
+# invariant into a mechanical check. Every persisted block derives
+# `Schema`; `src/schema_snapshot.rs` snapshots the resulting `NamedType`
+# tree to JSON and CI diffs that snapshot on every PR. Pinned at
+# `0.2` (same major as `postcard = "1"`, stable schema representation).
+postcard-schema = { version = "0.2", default-features = false, features = ["derive", "use-std"] }
+
 shekyl-address = { path = "../shekyl-address" }
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-staking = { path = "../shekyl-staking" }

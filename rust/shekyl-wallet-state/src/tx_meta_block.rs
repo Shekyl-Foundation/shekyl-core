@@ -75,6 +75,25 @@ pub const TX_META_BLOCK_VERSION: u32 = 1;
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
 pub struct TxSecretKey(#[serde(with = "zeroizing_bytes_32")] pub Zeroizing<[u8; 32]>);
 
+// ── `postcard-schema` support (see transfer.rs for the broader design). ──
+//
+// `#[serde(with = "zeroizing_bytes_32")]` makes the wire `NewtypeStruct(
+// length-prefixed-bytes)`; postcard-schema's derive cannot see through
+// `serde(with)`, so we delegate via a mirror newtype whose field is
+// `Vec<u8>` (wire-identical to what `zeroizing_bytes_32` emits). The outer
+// name is restored to `TxSecretKey` so the snapshot matches the public API.
+#[derive(postcard_schema::Schema)]
+#[allow(dead_code)]
+struct TxSecretKeySchema(Vec<u8>);
+
+impl postcard_schema::Schema for TxSecretKey {
+    const SCHEMA: &'static postcard_schema::schema::NamedType =
+        &postcard_schema::schema::NamedType {
+            name: "TxSecretKey",
+            ty: <TxSecretKeySchema as postcard_schema::Schema>::SCHEMA.ty,
+        };
+}
+
 impl TxSecretKey {
     /// Construct from a freshly-allocated `Zeroizing` buffer.
     pub fn new(bytes: Zeroizing<[u8; 32]>) -> Self {
@@ -107,7 +126,7 @@ impl Zeroize for TxSecretKey {
 /// (e.g. a tx with multiple outputs destined to different subaddresses
 /// derives a dedicated per-output key for each). The shape mirrors that
 /// invariant: one required `primary`, zero or more `additional`.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct TxSecretKeys {
     /// Primary tx secret key — always present.
     pub primary: TxSecretKey,
@@ -126,7 +145,7 @@ pub struct TxSecretKeys {
 /// emitted any relevant `TransferDetails` into the `LedgerBlock`. This
 /// record exists so that a restart restores the user-visible "pending"
 /// state without having to re-scan the pool from scratch.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct ScannedPoolTx {
     /// Unix timestamp (seconds) when the wallet first saw this tx in the
     /// pool. Used by the orchestrator's pruning policy (TTL-based) and by
@@ -144,7 +163,7 @@ pub struct ScannedPoolTx {
 ///
 /// Deliberately NOT [`Clone`] at the block level because [`TxSecretKey`]
 /// refuses to be cloned. Callers that need a snapshot should re-serialize.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct TxMetaBlock {
     /// Per-block schema version. Always [`TX_META_BLOCK_VERSION`] on
     /// construction; rejected on load if it does not match.

@@ -24,7 +24,9 @@ const ENCRYPTED_PAYMENT_ID_MARKER: u8 = 1;
 ///
 /// Wire form: marker byte `0x01` followed by 8 bytes of ciphertext. The previous
 /// Monero-era 32-byte unencrypted form (marker `0x00`) is REJECTED at parse time.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Debug, Zeroize, Serialize, Deserialize, postcard_schema::Schema,
+)]
 pub struct PaymentId(pub [u8; 8]);
 
 impl BitXor<[u8; 8]> for PaymentId {

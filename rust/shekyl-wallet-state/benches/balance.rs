@@ -83,9 +83,18 @@ fn hot_path_bench_balance_compute(c: &mut Criterion) {
         // matching the C++ fixture's "balanced" classification spread.
         let current_height = 1_000 + (n as u64) / 2;
         group.throughput(Throughput::Elements(n as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(n), &transfers, |b, transfers| {
-            b.iter(|| black_box(BalanceSummary::compute(black_box(transfers), current_height)));
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(n),
+            &transfers,
+            |b, transfers| {
+                b.iter(|| {
+                    black_box(BalanceSummary::compute(
+                        black_box(transfers),
+                        current_height,
+                    ))
+                });
+            },
+        );
     }
     group.finish();
 }

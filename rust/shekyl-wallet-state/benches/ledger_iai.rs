@@ -20,9 +20,7 @@ use iai_callgrind::{library_benchmark, library_benchmark_group, main};
 use std::hint::black_box;
 
 use shekyl_oxide::primitives::Commitment;
-use shekyl_wallet_state::{
-    transfer::SPENDABLE_AGE, LedgerBlock, TransferDetails, WalletLedger,
-};
+use shekyl_wallet_state::{transfer::SPENDABLE_AGE, LedgerBlock, TransferDetails, WalletLedger};
 
 fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
     let mut tx_hash = [0u8; 32];

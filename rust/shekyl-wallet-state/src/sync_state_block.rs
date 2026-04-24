@@ -56,7 +56,7 @@ pub const SYNC_STATE_BLOCK_VERSION: u32 = 1;
 
 /// The sync-state block. See module docs for scope, versioning, and
 /// design rationale.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct SyncStateBlock {
     /// Per-block schema version. Always [`SYNC_STATE_BLOCK_VERSION`]
     /// on construction; rejected on load if it does not match.

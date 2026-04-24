@@ -1,0 +1,156 @@
+---
+description: Every on-disk wire-format change to a persisted Rust block must be paired with a version-constant bump in the same commit. The schema snapshot CI enforces this mechanically.
+globs:
+  - rust/shekyl-wallet-state/**
+  - rust/shekyl-wallet-file/**
+---
+
+# Serialization policy
+
+Persisted blocks in Rust — today the five inside
+`rust/shekyl-wallet-state/` (`WalletLedger`, `LedgerBlock`,
+`BookkeepingBlock`, `TxMetaBlock`, `SyncStateBlock`), and any future
+block type that lands on disk — carry an explicit **version constant**
+whose sole job is to let a binary reject a file whose wire format it
+cannot read. Changing the wire format without bumping the constant is
+a silent data-corruption hazard: an older binary can accept a newer
+file, decode fields into the wrong slots, and produce wrong balances,
+wrong subaddresses, or wrong sync state with no error reported.
+
+The mid-rewire hardening pass (commit 4, see
+[`docs/MID_REWIRE_HARDENING.md`](../../docs/MID_REWIRE_HARDENING.md)
+§3.4) converts this discipline from cultural invariant into mechanical
+check via `postcard-schema` snapshots. This rule is the prose
+counterpart: a reviewer looking at a PR diff can check it by eye, and
+the CI enforces it on every landing.
+
+## The pairing
+
+Each persisted block owns exactly one version constant. A PR that
+changes a block's **on-disk wire format** must also change that
+constant's declaration line. The pairings are:
+
+| Block                    | Version constant                  | Source file                                             |
+|--------------------------|-----------------------------------|---------------------------------------------------------|
+| `WalletLedger`           | `WALLET_LEDGER_FORMAT_VERSION`    | `rust/shekyl-wallet-state/src/wallet_ledger.rs`         |
+| `LedgerBlock`            | `LEDGER_BLOCK_VERSION`            | `rust/shekyl-wallet-state/src/ledger_block.rs`          |
+| `BookkeepingBlock`       | `BOOKKEEPING_BLOCK_VERSION`       | `rust/shekyl-wallet-state/src/bookkeeping_block.rs`     |
+| `TxMetaBlock`            | `TX_META_BLOCK_VERSION`           | `rust/shekyl-wallet-state/src/tx_meta_block.rs`         |
+| `SyncStateBlock`         | `SYNC_STATE_BLOCK_VERSION`        | `rust/shekyl-wallet-state/src/sync_state_block.rs`      |
+
+`WalletLedger` carries both the bundle-level `format_version` **and**
+every inner block's `block_version`. A change that only affects one
+inner block bumps that block's constant; a change that restructures
+the bundle envelope bumps `WALLET_LEDGER_FORMAT_VERSION`; a change
+that does both bumps both.
+
+## What counts as a wire-format change
+
+Any of these, on any persisted block, requires a constant bump:
+
+1. **Adding a field.**
+2. **Removing a field.**
+3. **Renaming a field** (including via `#[serde(rename = "…")]`).
+4. **Reordering fields.** Postcard is positional at the wire; two
+   fields of the same type can swap places on the disk without a Rust
+   type error, which is exactly the failure mode this rule exists to
+   catch.
+5. **Changing a field's type** to one that produces different wire
+   bytes. Examples: `u32` → `u64`, `[u8; 32]` → `Vec<u8>`, `Option<T>`
+   → `T` (drops the `0x00 | 0x01` tag byte).
+6. **Changing a `#[serde(with = "…")]` helper** to one that emits a
+   different wire representation.
+
+These are **not** wire-format changes and do not require a bump:
+
+- Doc-comment edits.
+- Adding or removing `#[derive(Debug)]`, `#[derive(Clone)]`, or any
+  other non-serde derive.
+- Refactoring the in-memory representation in a way that the serde
+  impl compensates for (but if `#[serde(with = "…")]` changes as part
+  of the refactor, see point 6 above).
+- Adding a `#[serde(skip)]` annotation **only** if the field was never
+  serialized in a released version. Adding `#[serde(skip)]` to a
+  previously-serialized field **is** a wire-format change: older files
+  still contain the bytes, and the new binary would misalign while
+  reading them.
+
+## Mechanical enforcement
+
+Two tests + one CI job, all landed in commit 4 of the hardening pass:
+
+1. `cargo test -p shekyl-wallet-state schema_snapshot` — asserts the
+   derived `postcard_schema::Schema` of every persisted block matches
+   the committed `.snap` under
+   `rust/shekyl-wallet-state/schemas/`. Any drift — add, remove,
+   rename, reorder, type change — fails with a unified diff naming
+   the offending field.
+2. `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-wallet-state schema_snapshot`
+   — the intentional regeneration path. Run this after a deliberate
+   schema change.
+3. `.github/workflows/schema-snapshot.yml` — on every PR into `dev`,
+   asserts (1) and additionally cross-checks the PR diff: if any
+   `.snap` file changed, the paired source file must be in the diff
+   **and** the `pub const <NAME>:` declaration line must appear on
+   either side of that file's unified diff. PRs that change a `.snap`
+   without bumping the paired constant fail the workflow with a
+   GitHub annotation on the offending file.
+
+## Procedure for an intentional schema change
+
+1. Edit the Rust struct(s) in the normal way.
+2. Run `cargo test -p shekyl-wallet-state schema_snapshot` and
+   observe the failure diff. Confirm the diff is what you meant.
+3. Run `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-wallet-state schema_snapshot`
+   to regenerate the `.snap` files for the affected blocks.
+4. Bump the paired version constant(s) in the same commit. A one-step
+   bump (`N` → `N+1`) is normally sufficient; larger jumps are
+   reserved for coordinated multi-field migrations and must be
+   justified in the commit message.
+5. If the block is read back in by an older code path (e.g. a
+   migration loader), update that path to handle the old version
+   alongside the new one. This is the actual work; the snapshot just
+   keeps you honest.
+6. Commit. CI will re-run the snapshot assertion and the pairing
+   check; both should pass.
+
+## Why a mirror-struct pattern appears in two places
+
+`TransferDetails` (in `src/transfer.rs`) and `TxSecretKey` (in
+`src/tx_meta_block.rs`) have fields that use `#[serde(with = "…")]`
+helpers the `postcard_schema::Schema` derive cannot introspect: the
+derive reads the declared Rust type, not the serde-helper-rewritten
+wire type. Both types implement `Schema` via a compile-only mirror
+struct (`TransferDetailsSchema`, `TxSecretKeySchema`) whose fields use
+wire-native types (`Vec<u8>` for length-prefixed byte sequences) —
+wire-identical to the originals, but with a derivable schema. The
+pattern is local to each file, reviewable at the call site, and keeps
+the snapshot mechanism honest without coupling us to an upstream
+`postcard-schema` release cadence.
+
+If you add a new persisted field whose type is not natively
+`Schema`-able (e.g. an FCMP++ proof type, a curve25519-dalek
+`EdwardsPoint`, a ML-KEM ciphertext), extend the enclosing block's
+mirror struct the same way — add a matching field of wire-native type
+— rather than patching the derive.
+
+## Escape hatch
+
+None. There is no allowlist and no override. A persisted block that
+does not carry a version constant does not exist in Shekyl
+wallet-state; a wire-format change without a bump does not land.
+Policy deviations require an amendment to
+[`docs/MID_REWIRE_HARDENING.md`](../../docs/MID_REWIRE_HARDENING.md)
+§3.4 landing as a prerequisite PR.
+
+## Rationale
+
+- Wallets live for years. A one-off wire change that slips past
+  review will be read by a binary from three years ago running on
+  someone's cold-storage laptop, and there is no recall.
+- The cost of the check is ~70 lines of Rust (the snapshot module)
+  plus a ~170-line workflow. The cost of a missed change is a user
+  opening a wallet into corrupted balances with no error message.
+- Mechanical checks outlive the humans who wrote them. "Remember to
+  bump the constant" is a cultural invariant that erodes; "CI rejects
+  your PR" is one that does not.

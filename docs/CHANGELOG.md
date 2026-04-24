@@ -4,6 +4,75 @@
 
 ### Added
 
+- **Wire-schema snapshot + paired `block_version` CI guard (commit 4 of
+  the mid-rewire hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.4).**
+  Converts the `block_version` discipline from cultural invariant
+  (previously policed only by reviewer attention and the prose rule in
+  `.cursor/rules/42-serialization-policy.mdc`) into a mechanical check
+  that fires on every PR. Adds a `postcard-schema = "0.2"` dependency
+  to `shekyl-wallet-state` (pinned at the same major as the on-disk
+  `postcard = "1"` wire-format crate, stable schema representation),
+  derives `postcard_schema::Schema` on every persisted block
+  (`WalletLedger`, `LedgerBlock`, `BookkeepingBlock`, `TxMetaBlock`,
+  `SyncStateBlock`, plus the nested `BlockchainTip`, `ReorgBlocks`,
+  `FcmpPrecomputedPath`, `SubaddressLabels`, `AddressBookEntry`,
+  `AccountTags`, `TxSecretKeys`, `ScannedPoolTx`, `SubaddressIndex`,
+  `PaymentId` types), and hand-rolls `Schema` for the two leaf types
+  whose fields use `#[serde(with = "…")]` helpers the derive macro
+  cannot introspect (`TransferDetails`, `TxSecretKey`). The hand-rolled
+  impls use the mirror-struct pattern: a compile-only
+  `TransferDetailsSchema` / `TxSecretKeySchema` that mirrors the wire
+  layout with `Vec<u8>` for byte sequences, then lifts
+  `NamedType.ty` out of its derived `Schema` impl under the
+  domain-facing type name. This is wire-identical to the original types
+  (both produce length-prefixed byte sequences under postcard) but
+  participates in `postcard-schema`'s `NamedType` tree, which is the
+  load-bearing part of the check.
+  [`rust/shekyl-wallet-state/src/schema_snapshot.rs`](../rust/shekyl-wallet-state/src/schema_snapshot.rs)
+  is a new test module that renders each block's `NamedType` tree as
+  pretty JSON (via `OwnedNamedType` — `NamedType` holds `&'static`
+  references that `serde_json` cannot roundtrip through) and
+  diff-compares against a committed `.snap` file under
+  [`rust/shekyl-wallet-state/schemas/`](../rust/shekyl-wallet-state/schemas/).
+  Seven tests: one per block (5) plus a self-parseability roundtrip
+  guard and a canonicality check on the schemas-dir path. Running
+  `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-wallet-state schema_snapshot`
+  regenerates; running without the env var asserts. Mismatches print a
+  line-oriented unified diff, name the file that moved, and spell out
+  the three-step fix (bump the constant, regenerate, review).
+  [`.github/workflows/schema-snapshot.yml`](../.github/workflows/schema-snapshot.yml)
+  wires two jobs. The first runs
+  `cargo test -p shekyl-wallet-state schema_snapshot --no-fail-fast`
+  against the PR head. The second diffs the PR against the `dev`
+  merge-base and, for every `.snap` that changed, insists that both
+  (a) the paired source file was touched, and (b) the `pub const` line
+  that declares the matching version constant appears on either side of
+  the file's unified diff. Pairing is canonical in both the workflow
+  (`PAIRS` array) and the `schema_snapshot.rs` module docs:
+  `wallet_ledger.snap ↔ WALLET_LEDGER_FORMAT_VERSION`,
+  `ledger_block.snap ↔ LEDGER_BLOCK_VERSION`,
+  `bookkeeping_block.snap ↔ BOOKKEEPING_BLOCK_VERSION`,
+  `tx_meta_block.snap ↔ TX_META_BLOCK_VERSION`,
+  `sync_state_block.snap ↔ SYNC_STATE_BLOCK_VERSION`. Workflow paths
+  filter is scoped to the wallet-state crate plus the workflow file
+  itself, so unrelated PRs skip the job entirely. Design choices
+  surfaced in §3.4: (a) the snapshot is schema JSON, not postcard
+  bytes — a hex diff is opaque to a reviewer, whereas a `NamedType`
+  diff names every field and spells out its `DataModelType`; (b) the
+  schema-stability contract leans on `postcard-schema`'s SemVer
+  (pinned `0.2`), because the `NamedType` representation is part of
+  the crate's public API; (c) the mirror-struct pattern is preferred
+  over upstream-patching `postcard_schema` to understand
+  `#[serde(with)]` because it is local, reviewable, and does not couple
+  us to an upstream release cadence. Exit criteria met: five snapshot
+  files exist, the assert-test passes on a clean checkout, a deliberate
+  field rename produced a unified diff pointing at the exact node
+  (verified locally against a scratch `#[serde(rename = "restore_height")]`
+  on `SyncStateBlock::restore_from_height`), and the workflow's
+  grep-logic dry-run correctly accepts a `pub const … = N → N+1` diff
+  and rejects source-file edits that leave the declaration line
+  untouched.
 - **CI benchmark gate — iai-callgrind per-PR + rolling baseline on
   `bench-baseline` (commit 3 of the mid-rewire hardening pass,
   [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.3).**

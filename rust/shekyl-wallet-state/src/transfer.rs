@@ -26,7 +26,7 @@ use crate::{
 pub const SPENDABLE_AGE: u64 = 10;
 
 /// A precomputed FCMP++ curve-tree path for an output.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct FcmpPrecomputedPath {
     /// The reference block hash used when computing this path.
     pub reference_block: [u8; 32],
@@ -150,6 +150,72 @@ impl TransferDetails {
     pub fn is_matured_stake(&self, current_height: u64) -> bool {
         self.staked && self.stake_lock_until <= current_height
     }
+}
+
+// ---------------------------------------------------------------------------
+// `postcard-schema` support — delegated to a mirror struct whose Rust field
+// types match the *wire* layout produced by the `#[serde(with = "...")]`
+// helpers in `serde_helpers`. `postcard_schema`'s derive only respects
+// `#[serde(rename)]`; it does NOT see `#[serde(with)]`, so a naive derive on
+// `TransferDetails` would emit a schema that calls `<EdwardsPoint as Schema>`
+// — a type that deliberately has no `Schema` impl (curve crates are
+// no-std-first and do not depend on postcard-schema). The mirror approach
+// produces a schema that is *wire-accurate* (every curve/scalar/commitment
+// field appears as a length-prefixed byte sequence, matching what
+// `serde_bytes::Bytes::new(&[u8; N])` produces on the wire) and keeps
+// `TransferDetails` itself free of schema-compatibility concerns.
+//
+// The mirror is private, never instantiated: only its associated `SCHEMA`
+// constant is read (once, by the snapshot-assertion test). Fields are
+// `Vec<u8>` rather than `serde_bytes::ByteBuf` because `Vec<u8>` has an
+// upstream `Schema` impl and is wire-identical to `serde_bytes::Bytes` in
+// postcard (both emit `varint(len) || bytes`).
+
+#[derive(postcard_schema::Schema)]
+#[allow(dead_code)]
+struct TransferDetailsSchema {
+    tx_hash: [u8; 32],
+    internal_output_index: u64,
+    global_output_index: u64,
+    block_height: u64,
+    // EdwardsPoint via `edwards_point_bytes` — compressed-Y 32 bytes.
+    key: Vec<u8>,
+    // Scalar via `scalar_bytes` — canonical LE 32 bytes.
+    key_offset: Vec<u8>,
+    // Commitment via `commitment_bytes` — 32-byte mask || 8-byte LE amount.
+    commitment: Vec<u8>,
+    subaddress: Option<crate::subaddress::SubaddressIndex>,
+    payment_id: Option<crate::payment_id::PaymentId>,
+    spent: bool,
+    spent_height: Option<u64>,
+    key_image: Option<[u8; 32]>,
+    staked: bool,
+    stake_tier: u8,
+    stake_lock_until: u64,
+    last_claimed_height: u64,
+    // Each of the five secret fields is `Option<Zeroizing<[u8; N]>>`
+    // serialized as `Option<bytes>` via the `opt_zeroizing_bytes_*`
+    // helpers. The `Zeroizing` wrapper is a zero-cost in-memory decoration;
+    // it does NOT change the wire format, so it does not appear in the
+    // schema.
+    combined_shared_secret: Option<Vec<u8>>,
+    ho: Option<Vec<u8>>,
+    y: Option<Vec<u8>>,
+    z: Option<Vec<u8>>,
+    k_amount: Option<Vec<u8>>,
+    eligible_height: u64,
+    frozen: bool,
+    fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
+}
+
+impl postcard_schema::Schema for TransferDetails {
+    // Delegate to the wire-accurate mirror but rename the top-level type
+    // back to `TransferDetails` so the snapshot reads naturally.
+    const SCHEMA: &'static postcard_schema::schema::NamedType =
+        &postcard_schema::schema::NamedType {
+            name: "TransferDetails",
+            ty: <TransferDetailsSchema as postcard_schema::Schema>::SCHEMA.ty,
+        };
 }
 
 impl Zeroize for TransferDetails {
