@@ -208,10 +208,7 @@ mod tests {
     /// `expected_classical_address` byte-for-byte without a FULL-mode
     /// derivation cross-check (see `wallet_envelope.rs` §1426 comment),
     /// so a dummy address is sufficient for this unit's scope.
-    fn open_full_fixture(
-        tmp: &tempfile::TempDir,
-        master_seed_64: &[u8; 64],
-    ) -> WalletFileHandle {
+    fn open_full_fixture(tmp: &tempfile::TempDir, master_seed_64: &[u8; 64]) -> WalletFileHandle {
         let base = tmp.path().join("w");
         let password: &[u8] = b"test-password";
 
@@ -250,7 +247,10 @@ mod tests {
         let expected_spend = wide_reduce_to_scalar(&spend_wide);
         let expected_view = wide_reduce_to_scalar(&view_wide);
 
-        assert_eq!(secrets.spend_secret_key.as_slice(), expected_spend.as_bytes());
+        assert_eq!(
+            secrets.spend_secret_key.as_slice(),
+            expected_spend.as_bytes()
+        );
         assert_eq!(secrets.view_secret_key.as_slice(), expected_view.as_bytes());
     }
 

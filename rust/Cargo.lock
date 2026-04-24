@@ -3251,8 +3251,8 @@ name = "shekyl-wallet-file"
 version = "3.1.0"
 dependencies = [
  "criterion",
+ "fd-lock",
  "iai-callgrind",
- "rustix",
  "shekyl-address",
  "shekyl-crypto-pq",
  "shekyl-wallet-prefs",
@@ -3260,7 +3260,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tracing",
- "windows-sys 0.60.2",
  "zeroize",
 ]
 

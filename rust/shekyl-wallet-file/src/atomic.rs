@@ -41,8 +41,9 @@
 //!
 //! # Platform notes
 //!
-//! - On POSIX we `fsync(2)` both the file and the opened-by-rustix
-//!   parent directory FD. On Windows there is no directory-fsync;
+//! - On POSIX we `fsync(2)` both the file and the parent directory FD
+//!   (the latter opened via `std::fs::File::open` and synced with
+//!   `sync_all`). On Windows there is no directory-fsync;
 //!   [`std::fs::File::sync_all`] on the file is sufficient per Windows'
 //!   durability model. The parent fsync is therefore a no-op on
 //!   Windows (implemented as a `#[cfg]`-gated helper).

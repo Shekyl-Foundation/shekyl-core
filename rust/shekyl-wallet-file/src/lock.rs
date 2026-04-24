@@ -39,53 +39,77 @@
 //!
 //! # Why non-blocking
 //!
-//! We use non-blocking lock flavors (`LOCK_NB` on POSIX,
-//! `LOCKFILE_FAIL_IMMEDIATELY` on Windows). A GUI hanging silently on a
-//! lock wait is worse than an immediate, explicit error — the user can
-//! then resolve the conflict (close the other wallet, or kill a stale
-//! process) and retry.
+//! A GUI hanging silently on a lock wait is worse than an immediate,
+//! explicit error — the user can then resolve the conflict (close the
+//! other wallet, or kill a stale process) and retry.
 //!
-//! # Lock release
+//! # Implementation: `fd-lock`
 //!
-//! The lock is released automatically when the `KeysFileLock` is
-//! dropped (POSIX: `flock(2)` locks are attached to the open-file-
-//! description and are released when the last reference to that OFD
-//! closes; Windows: Drop-time unlock is explicit via
-//! [`windows_sys::Win32::Storage::FileSystem::UnlockFileEx`]). Rust's
-//! `Drop` guarantees this happens on all exit paths including panic-
-//! unwind.
+//! We delegate the per-platform syscall to the [`fd_lock`] crate, which
+//! wraps `flock(2)` on POSIX and `LockFileEx` on Windows behind a
+//! `#![forbid(unsafe_code)]`-compatible safe API. This keeps
+//! `shekyl-wallet-file` itself `#![deny(unsafe_code)]` with zero
+//! exceptions, per the workspace rule that only `shekyl-ffi` may relax
+//! that lint (see `rust/25-rust-architecture.mdc`).
+//!
+//! The acquisition path:
+//!
+//! 1. Open the keys file read-write.
+//! 2. Wrap it in [`fd_lock::RwLock`] and call `try_write()` for a
+//!    non-blocking exclusive lock. Contention surfaces as
+//!    [`std::io::ErrorKind::WouldBlock`], which we translate to
+//!    [`WalletFileError::AlreadyLocked`].
+//! 3. Leak the returned write-guard via [`std::mem::forget`] so the
+//!    lock stays held until the owning [`KeysFileLock`] drops. Storing
+//!    the guard directly inside the struct would require a self-
+//!    referential borrow (guard borrows from the `RwLock` in the same
+//!    struct); `mem::forget` is the safe Rust alternative.
+//!
+//! Lock release on `Drop` is guaranteed without an explicit
+//! `UnlockFileEx`/`flock(LOCK_UN)` call: dropping the inner `File`
+//! closes the underlying OS handle, and both POSIX (open-file-
+//! description close releases `flock(2)`) and Windows (handle close
+//! releases `LockFileEx`) treat handle-close as an authoritative lock-
+//! release signal. `fd_lock`'s guard `Drop` would normally call the
+//! explicit unlock, but since we `mem::forget` it, we rely on the
+//! close-on-drop path instead. Rust's `Drop` semantics guarantee this
+//! runs on all exit paths including panic-unwind.
 //!
 //! # Platform coverage
 //!
-//! POSIX: `rustix::fs::flock` with `LOCK_EX | LOCK_NB`. We deliberately
-//! choose `flock(2)` over `fcntl(F_SETLK)` record locks because
-//! `flock(2)` is per-open-file-description, meaning the in-process
-//! contention path (two handles, same wallet) fires loudly in tests and
-//! in production; fcntl record locks are per-process and would
-//! silently succeed on a same-process second open. The trade-off is
-//! that `flock(2)` does not work over NFS pre-2.6.12 — which the V3
-//! README documents as an unsupported storage backend for the wallet
-//! pair (use a local filesystem).
-//!
-//! Windows: `LockFileEx` with `LOCKFILE_EXCLUSIVE_LOCK |
-//! LOCKFILE_FAIL_IMMEDIATELY` over the first byte of the file. Per-
-//! handle semantics match POSIX `flock`, so in-process contention
-//! tests work identically.
+//! `fd_lock` internally uses per-open-file-description `flock(2)` on
+//! POSIX, meaning the in-process contention path (two handles, same
+//! wallet) fires loudly in tests and in production. On Windows,
+//! `LockFileEx` is per-handle with matching semantics. NFS pre-2.6.12
+//! is unsupported as a wallet storage backend (documented in the V3
+//! README).
 
 use std::fs::{File, OpenOptions};
+use std::io;
 use std::path::{Path, PathBuf};
+
+use fd_lock::RwLock;
 
 use crate::error::WalletFileError;
 
 /// Advisory exclusive lock held on a `.wallet.keys` file for the lifetime
-/// of a wallet handle. The underlying `File` is kept open so that the
-/// lock is released on `Drop` (close-of-open-file-description semantics
-/// on POSIX; explicit unlock on Windows).
-#[derive(Debug)]
+/// of a wallet handle. The underlying `File` is kept open inside the
+/// [`fd_lock::RwLock`] so that on `Drop` the handle closes and the OS
+/// releases the lock.
 pub(crate) struct KeysFileLock {
-    #[allow(dead_code)] // held for Drop-semantics lock release
-    file: File,
+    // Order matters: `_lock` drops *after* `path`, which is irrelevant
+    // for correctness but preserves the natural "release-as-late-as-
+    // possible" semantic.
+    _lock: RwLock<File>,
     path: PathBuf,
+}
+
+impl std::fmt::Debug for KeysFileLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeysFileLock")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
 }
 
 impl KeysFileLock {
@@ -103,75 +127,39 @@ impl KeysFileLock {
             .open(path)
             .map_err(WalletFileError::Io)?;
 
-        platform::try_lock_exclusive(&file, path)?;
-        Ok(Self {
-            file,
-            path: path.to_path_buf(),
-        })
+        let mut lock = RwLock::new(file);
+
+        // Scope the acquire so the `Result<Guard, _>` temporary (which
+        // holds `lock` borrowed) is dropped before we try to move
+        // `lock` into `Self`. `mem::forget` on the guard ends the
+        // guard's lifetime without unlocking; the lock stays held
+        // until the inner `File` closes on `KeysFileLock` drop.
+        let acquire: Result<(), io::Error> = match lock.try_write() {
+            Ok(guard) => {
+                std::mem::forget(guard);
+                Ok(())
+            }
+            Err(e) => Err(e),
+        };
+
+        match acquire {
+            Ok(()) => Ok(Self {
+                _lock: lock,
+                path: path.to_path_buf(),
+            }),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                Err(WalletFileError::AlreadyLocked {
+                    path: path.to_path_buf(),
+                })
+            }
+            Err(e) => Err(WalletFileError::Io(e)),
+        }
     }
 
     /// Path this lock is bound to; used by error-path reporting.
     #[allow(dead_code)]
     pub(crate) fn path(&self) -> &Path {
         &self.path
-    }
-}
-
-#[cfg(unix)]
-mod platform {
-    use super::*;
-    use rustix::fs::{flock, FlockOperation};
-
-    pub(super) fn try_lock_exclusive(file: &File, path: &Path) -> Result<(), WalletFileError> {
-        match flock(file, FlockOperation::NonBlockingLockExclusive) {
-            Ok(()) => Ok(()),
-            Err(e) if e == rustix::io::Errno::WOULDBLOCK || e == rustix::io::Errno::AGAIN => {
-                Err(WalletFileError::AlreadyLocked {
-                    path: path.to_path_buf(),
-                })
-            }
-            Err(e) => Err(WalletFileError::Io(std::io::Error::from_raw_os_error(
-                e.raw_os_error(),
-            ))),
-        }
-    }
-}
-
-#[cfg(windows)]
-mod platform {
-    use super::*;
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Foundation::{ERROR_IO_PENDING, ERROR_LOCK_VIOLATION};
-    use windows_sys::Win32::Storage::FileSystem::{
-        LockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
-    };
-    use windows_sys::Win32::System::IO::OVERLAPPED;
-
-    pub(super) fn try_lock_exclusive(file: &File, path: &Path) -> Result<(), WalletFileError> {
-        let handle = file.as_raw_handle() as _;
-        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
-        let ok = unsafe {
-            LockFileEx(
-                handle,
-                LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
-                0,
-                1,
-                0,
-                &mut overlapped,
-            )
-        };
-        if ok != 0 {
-            return Ok(());
-        }
-        let last = std::io::Error::last_os_error();
-        let code = last.raw_os_error().unwrap_or(0) as u32;
-        if code == ERROR_LOCK_VIOLATION || code == ERROR_IO_PENDING {
-            Err(WalletFileError::AlreadyLocked {
-                path: path.to_path_buf(),
-            })
-        } else {
-            Err(WalletFileError::Io(last))
-        }
     }
 }
 
@@ -188,17 +176,18 @@ mod tests {
         {
             let _lock = KeysFileLock::acquire(&path).expect("first acquire");
         }
-        // On drop, the lock should have been released.
+        // On drop, the lock should have been released (via close-on-drop
+        // of the inner `File`).
         let _lock2 = KeysFileLock::acquire(&path).expect("re-acquire after drop");
     }
 
     #[test]
     fn second_acquire_on_same_file_fails_in_process() {
-        // flock(2) is per-open-file-description on Linux/BSD (and
-        // LockFileEx is per-handle on Windows), so opening the same
-        // path twice in-process gives us two independent lock holders
-        // and the second must fail — exactly the semantic we want for
-        // catching accidental double-open.
+        // `fd_lock` uses per-OFD `flock(2)` on POSIX (and per-handle
+        // `LockFileEx` on Windows), so opening the same path twice in-
+        // process gives us two independent lock holders and the second
+        // must fail — exactly the semantic we want for catching
+        // accidental double-open.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("x.keys");
         std::fs::write(&path, b"placeholder").unwrap();
