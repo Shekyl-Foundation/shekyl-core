@@ -669,6 +669,69 @@ so the same test drives both profiles.
 
 ### 3.7 `test(wallet-file): adversarial corpus`
 
+**Status: Landed.** New
+[`rust/shekyl-wallet-file/tests/adversarial_corpus.rs`](../rust/shekyl-wallet-file/tests/adversarial_corpus.rs)
+drives 16 programmatic attack shapes through the orchestrator's
+`WalletFileHandle::open` entry point. Each test assembles its
+adversarial input in-process from a real `WalletFileHandle::create`
+call followed by narrow byte surgery (on ciphertext-protected regions
+via the public
+[`shekyl_crypto_pq::wallet_envelope::seal_state_file`](../rust/shekyl-crypto-pq/src/wallet_envelope.rs)
+helper), so the corpus stays green across future format-field
+renames and AEAD-parameter changes without needing a
+deterministic-seal escape hatch in the crypto crate. Per-attack
+narrative and reproduction notes live under
+[`rust/shekyl-wallet-file/tests/fixtures/adversarial/`](../rust/shekyl-wallet-file/tests/fixtures/adversarial/)
+(README + one `.md` per row). The code-posture rule called for
+below now lives in
+[`docs/WALLET_FILE_FORMAT_V1.md`](WALLET_FILE_FORMAT_V1.md) §2.5
+("Capability decode posture"). Deviations from the planned attack
+matrix, with rationale:
+
+- **A (capability-byte flip on an existing sealed file)** is
+  subsumed into `keys_file_region1_bit_flip_is_refused`, which flips
+  an arbitrary byte inside region 1 ciphertext. The capability byte
+  is part of region 1's AAD+plaintext and the AEAD cannot
+  distinguish which byte was flipped, so a dedicated row would
+  assert the same refusal (`InvalidPasswordOrCorrupt`) as the
+  general region-1 bit-flip row. One test, not two.
+- **B and C (capability-shape mismatches)** are refused by the
+  existing
+  [`WalletEnvelopeError::CapContentLenMismatch { mode, len }`](../rust/shekyl-crypto-pq/src/wallet_envelope.rs)
+  variant. The plan's proposed
+  `WalletFileError::CapabilityPayloadMismatch` was dropped on
+  review — `validate_cap_content` already enforces the entire
+  intended `(mode, cap_content_len)` shape, and adding a second
+  variant would duplicate the gate. The wiring test
+  `capability_payload_mismatch_is_covered_by_envelope_tests`
+  asserts the envelope-layer refusal flows through
+  `WalletFileError::Envelope` unchanged. `WALLET_FILE_FORMAT_V1.md`
+  §2.5 writes up the posture; a dedicated fixture row
+  (`16-capability-payload-mismatch.md`) documents why there is no
+  second variant.
+- **F / G (header-length lies)** collapse into the SWSP
+  `body_len` row (`swsp_body_len_mismatch_is_refused`). The
+  hardening-pass wallet format does not carry a top-level
+  `metadata_len + ledger_len` header — region 2 is a single
+  length-prefixed SWSP frame, so the failure mode the plan
+  described surfaces as `PayloadError::BodyLenMismatch`, not a new
+  `TruncatedRegion2` variant. Same refusal semantics, one typed
+  error instead of two.
+- **Deliberate refusal collapse.** A single-bit flip inside region
+  2 ciphertext currently surfaces as `StateSeedBlockMismatch`
+  rather than `InvalidPasswordOrCorrupt` because the opener
+  cannot distinguish a ciphertext mutation from a
+  `seed_block_tag` mismatch without running the full region-2
+  verification twice against two different AADs. The test
+  `state_file_region2_bit_flip_is_refused` locks this mapping in
+  and the rationale is documented in `07-state-region2-bit-flip.md`
+  so any future variant split is caught in review.
+
+All other planned rows (D / E / H / I and the new invariant-gate
+attack from commit 6) land with the expected typed refusals. The
+16 corpus tests pass; the rest of the `shekyl-wallet-file` suite
+remains green; clippy is clean with `-D warnings`; fmt is clean.
+
 **Scope.** A corpus of hand-crafted malformed wallet files exercising
 specific attack shapes, each expected to produce a typed error and
 not a panic, not a silent fallback, not an incomplete parse.

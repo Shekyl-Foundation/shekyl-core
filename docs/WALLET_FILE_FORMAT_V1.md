@@ -177,6 +177,64 @@ These produce ≈1 s derivation on a 2024-era laptop. The KAT profile
 clamps `m_log2 = 0x08` (256 KiB) so the test suite runs in seconds; KATs
 explicitly flag this relaxation as KAT-only.
 
+### 2.5 Capability decode posture
+
+The `(mode_byte, cap_content_len, cap_content)` triple inside region 1
+is read in this order, with each step refusing in a typed way rather
+than falling back:
+
+1. **Successful AEAD.** Region 1's Poly1305 tag verifies against
+   `file_kek` and the `[magic || file_version]` AAD. Any byte tamper
+   on the AAD, the ciphertext, or the tag surfaces as
+   `InvalidPasswordOrCorrupt` — deliberately indistinguishable from a
+   wrong-password guess so the decryption path cannot be used as an
+   oracle.
+2. **`mode_byte` is decoded first.** Before a single byte of
+   `cap_content` is interpreted, the mode byte is mapped through
+   `from_envelope_byte` (FULL / VIEW_ONLY / HARDWARE_OFFLOAD /
+   reserved-multisig / unknown). Unknown bytes fail with
+   `UnknownCapabilityMode`; the reserved-multisig placeholder fails
+   with `RequiresMultisigSupport`. No other capability's decoder runs
+   on a byte it was not handed.
+3. **`cap_content_len` is validated against the declared mode.**
+   `validate_cap_content` enforces:
+   - FULL: `cap_len == 64` exactly.
+   - VIEW_ONLY: `cap_len == 32 + ML_KEM_768_DK_LEN + 32 = 2464`
+     exactly (no trailing bytes, no truncation).
+   - HARDWARE_OFFLOAD: `cap_len >= 32 + ML_KEM_768_DK_LEN + 32 + 2 =
+     2466` (the `+2` is the u16 `device_desc_len` prefix; the device
+     descriptor itself is length-prefixed and consumed by the
+     dispatched decoder, not skipped).
+   Any mismatch fails with `CapContentLenMismatch { mode, len }`
+   which is the typed equivalent of the audit plan's
+   "CapabilityPayloadMismatch" refusal. No capability-shape fallback
+   runs on a length-check failure.
+4. **Per-capability interpretation happens above the envelope.** The
+   `OpenedKeysFile` produced by `open_keys_file` hands `cap_content`
+   out as opaque bytes tagged with `capability_mode`. The caller
+   (for FULL, the key-tree rederivation in `shekyl-account`; for
+   VIEW_ONLY / HARDWARE_OFFLOAD, the scanner's session-key layer)
+   owns the mode-specific parse. That parse runs against bytes whose
+   `(mode, len)` pair is already known to be consistent with the
+   declared capability — it does not re-check the mode, because the
+   envelope has already refused every `(mode, len)` shape that is
+   not a member of the closed set above.
+
+**Review rule.** Any code path in this layer that uses `read_to_end`,
+`take_while`, or similar unbounded patterns against `cap_content` —
+or that silently truncates/pads a mode's content region — is a
+deviation from this posture and must be called out in review. The
+length check is the authoritative gate; no decoder is permitted to
+"tolerate" trailing bytes or short content, because tolerating them
+reopens the very attack shape the length check was written to
+close.
+
+The adversarial corpus in
+`rust/shekyl-wallet-file/tests/adversarial_corpus.rs` locks this
+posture in at the integration layer: every `(mode, len)` shape
+outside the closed set is expected to surface a typed refusal, not a
+fallback.
+
 ## 3. `<name>.wallet` layout
 
 | Range       | Bytes | Field                 | Visibility          |

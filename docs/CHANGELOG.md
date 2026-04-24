@@ -4,6 +4,60 @@
 
 ### Added
 
+- **Adversarial wallet-file corpus (commit 7 of the mid-rewire
+  hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.7).**
+  Locks in the "every layer refuses with a typed error, not a panic
+  or a silent fallback" posture at the integration boundary. New
+  [`rust/shekyl-wallet-file/tests/adversarial_corpus.rs`](../rust/shekyl-wallet-file/tests/adversarial_corpus.rs)
+  drives 16 programmatic attack shapes through
+  `WalletFileHandle::open` and asserts the exact `WalletFileError`
+  variant each one must surface: envelope header attacks on
+  `.wallet.keys` (wrong magic → `UnknownMagic`, truncated header
+  → `FileTooShort`, `file_version = 0xFF` → `FormatVersionTooNew`,
+  region-1 ciphertext bit flip → `InvalidPasswordOrCorrupt`);
+  envelope header attacks on `.wallet` (wrong magic, future
+  `state_version`, region-2 ciphertext bit flip →
+  `StateSeedBlockMismatch` as currently mapped, cross-wallet
+  companion swap → `StateSeedBlockMismatch`); SWSP frame attacks
+  (`BadMagic`, `UnsupportedPayloadVersion`, `BodyLenMismatch`);
+  `WalletLedger` body attacks (bundle `format_version` bump →
+  `UnsupportedFormatVersion`, per-block `block_version` bump →
+  `UnsupportedBlockVersion`, truncated postcard → `Postcard`);
+  the cross-block invariant gate from commit 6
+  (`INV_TX_KEYS_NO_ORPHANS` → `InvariantFailed`); and a wiring
+  assertion that capability-shape mismatches (plan rows B / C) flow
+  through the existing envelope-level
+  `CapContentLenMismatch { mode, len }` variant unchanged — the
+  plan's proposed new `CapabilityPayloadMismatch` was dropped on
+  review because `validate_cap_content` in
+  `shekyl-crypto-pq::wallet_envelope` already enforces the entire
+  intended `(mode, cap_content_len)` shape, and adding a second
+  variant with identical semantics would duplicate the gate. The
+  corpus is programmatic rather than binary-pinned: each test
+  builds a real wallet pair via `WalletFileHandle::create(...)`,
+  then performs narrow byte surgery (on ciphertext-protected
+  regions via the public
+  `shekyl_crypto_pq::wallet_envelope::seal_state_file` helper) so
+  it stays green across future format-field renames and AEAD
+  parameter changes. New
+  [`docs/WALLET_FILE_FORMAT_V1.md`](WALLET_FILE_FORMAT_V1.md) §2.5
+  writes up the capability decode posture the corpus enforces —
+  mode first, then `cap_content_len`, then per-capability
+  interpretation, each step refusing rather than tolerating — so
+  reviewers encountering a "why no new variant?" test can follow
+  the trail. New
+  [`rust/shekyl-wallet-file/tests/fixtures/adversarial/`](../rust/shekyl-wallet-file/tests/fixtures/adversarial/)
+  holds a README + one `.md` per attack row documenting the
+  construction and the rationale behind each typed refusal
+  (including the deliberate
+  `region-2-bit-flip → StateSeedBlockMismatch` collapse rather than
+  `InvalidPasswordOrCorrupt`, which the envelope cannot
+  distinguish from a seed-block-tag mismatch without running the
+  full region-2 verification twice). Verified locally: all 16
+  corpus tests pass; the rest of the `shekyl-wallet-file` suite
+  remains green; clippy clean with `-D warnings`; fmt clean.
+
 - **`WalletLedger::check_invariants()` aggregator-level gate (commit 6
   of the mid-rewire hardening pass,
   [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.6).**
