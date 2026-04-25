@@ -434,6 +434,54 @@ its wake.
   the same V3.1 cycle since the audit-defensibility argument is
   identical.**
 
+- **`shekyld` `fee_policy_version` daemon-side exposure.** Surfaced
+  by the Phase 0 `shekyld` prerequisites audit (PR 0.3 of the wallet
+  rewrite plan,
+  [`docs/SHEKYLD_PREREQUISITES.md`](SHEKYLD_PREREQUISITES.md) §3).
+  The daemon's `get_fee_estimate` RPC (and its sibling RPCs `get_info`,
+  `get_block_template_backlog`, etc.) does **not** advertise a
+  versioned identifier for the fee policy / fee-rules-set in force —
+  no `fee_version` field on the response, no `fee_policy_id` on
+  `get_info`, no separate `get_fee_policy` RPC. A wallet that queried
+  fee estimates yesterday cannot detect, from RPC alone, whether the
+  consensus rules governing those estimates have shifted via hard fork
+  today; today the only detection mechanism is the wallet's own
+  hardcoded knowledge of which `hf_version` runs which fee policy.
+
+  Why this matters now: the V3 wallet rewrite's Phase 2a builds a
+  forward-compatible client (`Option<u32> fee_policy_version`) so that
+  a future daemon supplying the field is consumed gracefully without a
+  client-side change — but the daemon side, where the field is
+  _missing_, is the actual gap.
+
+  Scope of the daemon work:
+  1. Decide whether `fee_policy_version` rides on `get_fee_estimate`
+     (most natural — same response, scoped to the same query) or on
+     `get_info` (broader — every wallet queries `get_info` at startup,
+     so the field becomes self-advertising for clients that never
+     request fees explicitly). The audit recommends the former; the
+     decision is daemon-team's.
+  2. Define the version-numbering scheme: monotonic `u32` keyed off
+     `hf_version` (so V3.0 = 1, V3.1 fee-rule shift = 2, …) is the
+     simplest stable shape. Document the canonical mapping in a
+     daemon-side `docs/FEE_POLICY_VERSIONS.md` so client-side hardcoded
+     knowledge stays auditable.
+  3. Wire the field into the existing `get_fee_estimate` /
+     `get_info` epee-RPC response handlers; no consensus rule change
+     and no breaking RPC change is required (the field is additive).
+  4. Land before any V3.x hard fork that touches fee rules — the
+     entire point of the field is to give the wallet observability
+     across the fork boundary.
+
+  This is **not a Phase 0 blocker** for the wallet rewrite. The
+  rewrite ships against the existing daemon surface; the wallet
+  consumes the field if/when the daemon supplies it. **Target: V3.1
+  daemon release. Cross-link: PR 0.3 audit
+  ([`docs/SHEKYLD_PREREQUISITES.md`](SHEKYLD_PREREQUISITES.md) §3),
+  V3 wallet decision log entry "shekyld fee policy version absence"
+  ([`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md),
+  2026-04-25).**
+
 - **`monero-oxide` un-pin / fork-and-attribute / drop-unused-crates.**
   The Phase 0 `monero-oxide` audit (PR 0.4 of the wallet rewrite
   plan) establishes a `docs/MONERO_OXIDE_VENDOR_STATUS.md` baseline

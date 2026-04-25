@@ -874,6 +874,11 @@ daemon policies until the wallet binary catches up. The
 `Option<u32>` shape persists indefinitely as the forward-compat
 buffer for any future field-removal scenario.
 
+**Cross-link.** Daemon-side V3.1 follow-up filed in
+[`docs/FOLLOWUPS.md`](FOLLOWUPS.md) §"V3.1+ — Legacy C++ → Rust
+rewrite scope" → `shekyld fee_policy_version daemon-side exposure`
+(2026-04-25, post-Phase-0 land).
+
 ---
 
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->
