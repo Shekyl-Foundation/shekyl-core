@@ -719,6 +719,64 @@
   use today), so unconditional `cargo fmt --all` is the correct fix —
   no `#[rustfmt::skip]` warranted.
 
+- **Phase 0 PR 0.6 planning + FOLLOWUPS scope adjustments
+  (`chore/phase0-pr06-vendor-bump-planning`).** Split the
+  `monero-oxide` re-pin question into two distinct operations and
+  scoped them differently:
+  - **Operation A — vendor-bump `87acb57` → `3933664` (fork tip).**
+    Mechanical, cheap, none crypto-substantive except `182b648`'s
+    base58 decoder hardening. **Added as PR 0.6 to Phase 0 of the V3
+    wallet rewrite plan.** Total Phase 0 grows from five PRs to six.
+  - **Operation B — un-pin / 40-commit upstream merge.** Stays as a
+    V3.1.x peer plan, **not** scoped to Phase 0. The active correctness
+    bug `00bafcf` (`HelioseleneField::invert` Veridise edge case) does
+    not change this assessment: the bug exists today on `dev`, it is
+    below the wallet stack's API surface, and the rewrite's Phase 1
+    API shape does not depend on it. The un-pin runs in parallel with
+    rewrite Phases 1–3 if bandwidth allows.
+
+  Plan adjustments
+  ([`.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)):
+  (1) new PR 0.6 section with cost-ceiling discipline (bail out if
+  base58 review or workspace verification surfaces concerns); (2)
+  half-day review gate expanded from one item to five (PR 0.4 vendor
+  status, PR 0.3 daemon-side findings, FOLLOWUPS V3.1+ section,
+  cross-cutting locks confirmation, and **new item 5** confirming
+  whether un-merged-upstream commits affect Phase 1 Wallet API shape);
+  (3) Phase 1 logging deliverable now absorbs the daemon-side
+  staticlib `tracing` silently-dropped follow-up — the same subscriber
+  init solves both the wallet stack and the daemon staticlib in one
+  deliverable; (4) Phase 5 commit message inventory now explicitly
+  closes two V3.2 follow-ups (`shekyl-cli` key image binary format —
+  no Monero binary-format port; `wallet_tools.cpp` mixin/decoy — swept
+  with `tests/unit_tests/wallet*.cpp`); (5) Phase 3b deliverables
+  flag an optional `--format=qr-chunks` on the typed bundles for
+  air-gapped UX, replacing the V3.2 hex-blob QR follow-up;
+  (6) bumped Phase 0 PR count in the Branching cadence section.
+
+  FOLLOWUPS adjustments ([`docs/FOLLOWUPS.md`](FOLLOWUPS.md)): the
+  V3.1+ section gains an at-a-glance index table (absorbed /
+  closed-by-Phase-5 / cross-linked / independent) used by review-gate
+  item 3; the `monero-oxide` un-pin entry rewritten to describe
+  Operation A vs Operation B with cross-links in both directions; the
+  three V3.2 entries that get explicit closure (shekyl-cli key image
+  binary, `wallet_tools.cpp` mixin, daemon staticlib `tracing`) carry
+  inline closure notes pointing to the rewrite phase that absorbs or
+  closes them; the V3.2 hex-blob QR entry annotated to die with the
+  hex format in favour of the typed bundles.
+
+  Decision-log entry
+  ([`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)):
+  new entry "monero-oxide re-pin: split into Operation A (Phase 0)
+  and Operation B (un-pin V3.1.x plan)" pinning the rationale for why
+  the active correctness bug doesn't force Operation B into Phase 0,
+  and naming the alternatives considered (fold both into Phase 0,
+  defer both to V3.1.x, fold Operation A into PR 0.4) and why each
+  was rejected.
+
+  No code changes in this PR — planning + cross-link maintenance
+  only. PR 0.6 (the actual vendor-bump) lands in a subsequent PR.
+
 - **Phase 0 audit cleanup (`chore/phase0-audit-cleanup`).** Three
   small follow-ups surfaced by the post-merge comprehensive audit of
   `dev` against the V3 wallet rewrite plan's Phase 0 expectations:

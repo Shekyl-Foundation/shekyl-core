@@ -881,4 +881,98 @@ rewrite scope" → `shekyld fee_policy_version daemon-side exposure`
 
 ---
 
+## 2026-04-25 — `monero-oxide` re-pin: split into Operation A (Phase 0) and Operation B (un-pin V3.1.x plan)
+
+**Decision.** The vendor work on `monero-oxide` splits into two distinct
+operations with different risk/value profiles, each scoped to a different
+plan/phase:
+
+- **Operation A — vendor-bump to fork tip.** Sync vendored
+  `rust/shekyl-oxide/` from the current snapshot at `87acb57` to
+  `Shekyl-Foundation/monero-oxide` `fcmp++` HEAD `3933664`. Five commits,
+  none crypto-substantive except `182b648`'s base58 decoder hardening.
+  Mechanical, cheap, unblocked. **Scoped into Phase 0 of the wallet
+  rewrite plan as PR 0.6.**
+- **Operation B — un-pin / fork-rebase against upstream.** Pick up the 40
+  upstream commits since the 2025-11-22 merge base (cypherstack
+  `cba7117`, Veridise `HelioseleneField::invert` cluster
+  `00bafcf`/`af44fb4`/`f58f2a9`/`e5d533c`, missing
+  `ConditionallySelectable` bound `0d6f5e8`, WCG library invariant fix
+  `1ac294e`, plus the upstream restructure that split `rpc` into
+  `interface`+`/daemon` and moved `fcmp++` into `ringct/`); decide which
+  crates the Shekyl fork attributes, which return to upstream, which are
+  dropped. **Scoped to a separate V3.1.x un-pin plan, NOT Phase 0 of the
+  wallet rewrite.**
+
+**Rationale.** The audit report
+([`docs/MONERO_OXIDE_VENDOR_STATUS.md`](MONERO_OXIDE_VENDOR_STATUS.md))
+identifies these as different operations and explicitly recommends
+treating them differently. Conflating them is the trap.
+
+The vendor-bump (Operation A) is mechanical, the audit calls it out as
+"available and cheap," and doing the audit but not landing the available
+bump leaves the vendored tree in a known-stale state for the duration of
+Phase 1+ — exactly what Phase 0 exists to prevent. The only content
+review needed is `182b648`'s base58 decoder change, which gets verified
+against `shekyl-address`'s round-trip semantics. Half-day PR, single
+commit, hard cost ceiling: if verification goes red, bail out and let
+Phase 1 begin against the existing vendored tree.
+
+The un-pin (Operation B) is genuinely a separate plan. The 40-commit
+delta includes a path restructure that forces architectural decisions
+about whether the Shekyl fork tracks upstream's layout going forward —
+exactly the decision the un-pin plan exists to make. Picking up
+substantive commits without picking up the restructure means
+cherry-picking, conflict resolution, and per-commit review burden;
+folding it into Phase 0 of the wallet rewrite breaks the "single
+coherent thing per phase" principle and adds a separate failure mode the
+rewrite doesn't need.
+
+**The active correctness bug `00bafcf` (`HelioseleneField::invert`
+Veridise edge case) does not change this assessment.** The bug exists
+today on `dev`; Operation A doesn't fix it (only Operation B does); and
+the wallet rewrite's Phase 1 API shape doesn't depend on which version
+of `HelioseleneField::invert` is correct (the bug is below the wallet
+stack's API surface). Phase 0 closing without picking up Operation B
+leaves the world exactly as it currently is on this dimension. The fix
+needs to land, but it needs to land in the un-pin plan, not in Phase 0
+of the rewrite.
+
+**Alternatives considered.**
+
+- *Fold both operations into Phase 0.* Rejected: 40-commit upstream
+  merge with substantive crypto changes adds review burden and
+  failure-mode surface that the rewrite doesn't need; if the upstream
+  merge goes wrong, Phase 1 is blocked on resolving that, not on Phase
+  0's actual goals.
+- *Defer both operations to V3.1.x.* Rejected: the vendor-bump is
+  mechanical and cheap; deferring it leaves the vendored tree
+  known-stale for the entire duration of Phase 1+. The point of doing
+  the audit is to act on it where action is cheap.
+- *Fold Operation A into PR 0.4 (the audit PR).* Rejected for review
+  hygiene: the audit produces the recommendation; the bump executes it.
+  Mixing recommendation and execution makes review harder and creates
+  the wrong precedent for future audit-and-act cycles.
+
+**Lifecycle.** Operation A's PR (0.6) lands as part of Phase 0. Once it
+lands, this entry stands as the rationale for why a 40-commit upstream
+delta did not also land. Operation B's un-pin plan, when it kicks off,
+references this entry and the audit report as its input queue. The
+half-day review gate's item 5 — "confirm whether un-merged-upstream
+commits affect Phase 1 Wallet API shape" — is the explicit checkpoint
+that determines whether Operation B can run in parallel with rewrite
+Phases 1–3 (expected) or must precede Phase 1 (only if a public type
+signature changes in a way the wallet would compose against).
+
+**Cross-link.** PR 0.4 audit
+[`docs/MONERO_OXIDE_VENDOR_STATUS.md`](MONERO_OXIDE_VENDOR_STATUS.md);
+PR 0.6 vendor-bump in the rewrite plan
+[`.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md);
+un-pin follow-up
+[`docs/FOLLOWUPS.md`](FOLLOWUPS.md) §"V3.1+ — Legacy C++ → Rust rewrite
+scope" → `monero-oxide un-pin / fork-and-attribute / drop-unused-crates
+(Operation B)`.
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

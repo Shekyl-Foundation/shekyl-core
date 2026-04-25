@@ -380,6 +380,34 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
 
+**Index of how each follow-up interacts with the rewrite** (entries
+themselves carry the detail; this table is the at-a-glance view used
+by the rewrite plan's half-day review gate, item 3):
+
+| Status | Entry | Closure point |
+| --- | --- | --- |
+| Absorbed (already by rewrite plan) | `wallet2.cpp` absorption (2l/2m/2n) | Phase 5 deletion |
+| Absorbed | `WalletPrefs` round-trip property test (2k.a2) | Phase 1 (`RuntimeWalletState` audit) |
+| Absorbed | `shekyl-daemon-rpc` staticlib `tracing` silently dropped (V3.2 below) | Phase 1 (logging deliverable, re-targeted from V3.2) |
+| Closed by Phase 5 | `shekyl-cli` key image export binary format (V3.2 below) | Phase 5 — Monero binary format dies with `wallet2.cpp`; air-gapped flow uses `UnsignedTxBundle`/`SignedTxBundle` |
+| Closed by Phase 5 | `wallet_tools.cpp` mixin/decoy infrastructure (V3.2 below) | Phase 5 — swept with `tests/unit_tests/wallet*.cpp` |
+| Closed (Operation A) | `monero-oxide` vendor-bump `87acb57` → `3933664` | Phase 0 PR 0.6 (mechanical, fork-tip only) |
+| Cross-linked, not absorbed | `shekyld` `fee_policy_version` daemon-side exposure | V3.1 daemon release (wallet uses `Option<u32>` forward-compat) |
+| Cross-linked, not absorbed | `tx_pool` / `blockchain_db` LMDB transactional wrapper | V3.1.x peer plan (separate from rewrite) |
+| Cross-linked, not absorbed | `monero-oxide` un-pin Operation B (40 upstream commits) | V3.1.x un-pin plan (peer to rewrite, parallelizable) |
+| Cross-linked, not absorbed | Workspace clippy `-D warnings` cleanup | V3.1.x dedicated pass (after rewrite stabilizes) |
+| Cross-linked, optional | `shekyl-cli` offline signing QR-chunked transfer (V3.2 below) | Phase 3b (optional `--format=qr-chunks` on bundles) |
+| Independent of rewrite | `removed_flags` shim sunset (V3.2 below) | V3.2 cleanup pass — naturally retires when `shekyl-wallet-rpc` Rust cutover lands |
+| Independent of rewrite | Chore #4 platform-gate audit (V3.2 below) | V4 pre-audit |
+| Independent of rewrite | Restore semantic thread labels (V3.2 below) | V3.2 |
+| Independent of rewrite | `rand` 0.9 / `curve25519-dalek` 5.x migration (V3.1.x above) | Gated on upstream releases |
+| Independent of rewrite | Stack trace / unwinder LibUnwind (V3.1.x above) | Daemon-side diagnostics |
+
+The PQC Multisig V3.1 hardware wallet integration (TBD section) and
+the tx-pool / monero-oxide / clippy items keep their existing target
+versions; they are listed here only so the rewrite's review gate has
+one place to confirm each item's relationship to the wallet stack.
+
 - **`wallet2.cpp` absorption — sub-commits 2l/2m/2n.** The
   `wallet-state-promotion` plan's
   [2l cache rewire](../.cursor/plans/2l-cache-rewire_80a08559.plan.md)
@@ -501,15 +529,47 @@ its wake.
   stabilizes; doing it earlier conflicts with the rewrite's own
   churn).**
 
-- **`monero-oxide` un-pin / fork-and-attribute / drop-unused-crates.**
-  The Phase 0 `monero-oxide` audit (PR 0.4 of the wallet rewrite
-  plan) establishes a `docs/MONERO_OXIDE_VENDOR_STATUS.md` baseline
-  but does **not** un-pin. The actual un-pin work — which crates
-  are forked under Shekyl-Foundation attribution, which are
-  upstreamed back to `kayabaNerve/monero-oxide`, which are dropped
-  from the workspace — belongs to a separate plan. **Target: V3.1.x
-  (after the wallet rewrite stabilizes; lattice-only V4 transition
-  may force re-evaluation regardless).**
+- **`monero-oxide` un-pin / fork-and-attribute / drop-unused-crates
+  (Operation B).** The vendor work splits into two distinct
+  operations with different risk/value profiles, and the rewrite
+  plan deliberately keeps them separate.
+  - **Operation A — vendor-bump to fork tip.** Sync vendored
+    `rust/shekyl-oxide/` from `87acb57` to
+    `Shekyl-Foundation/monero-oxide` `fcmp++` HEAD `3933664`. Five
+    commits, none crypto-substantive except `182b648`'s base58
+    decoder hardening. **Mechanical, cheap, unblocked.** Scoped
+    into Phase 0 of the wallet rewrite plan as **PR 0.6** —
+    *not* this follow-up. The audit produces the operation; the
+    plan executes it.
+  - **Operation B — un-pin / fork-rebase against upstream.** The
+    actual un-pin work this entry describes: pick up the 40
+    upstream commits since the 2025-11-22 merge base
+    (cypherstack `cba7117`, Veridise `HelioseleneField::invert`
+    cluster `00bafcf`/`af44fb4`/`f58f2a9`/`e5d533c`, missing
+    `ConditionallySelectable` bound `0d6f5e8`, WCG library
+    invariant fix `1ac294e`, the upstream restructure that split
+    `rpc` into `interface`+`/daemon` and moved `fcmp++` into
+    `ringct/`); decide which crates are forked under
+    Shekyl-Foundation attribution, which are upstreamed back to
+    `kayabaNerve/monero-oxide`, which are dropped from the
+    workspace. The `00bafcf` field-inversion bug is **active in
+    the vendored code** (Operation A doesn't fix it — only
+    Operation B does), but the bug exists today on `dev` and
+    would continue to exist if this plan didn't touch it; folding
+    a 40-commit upstream merge across an architectural restructure
+    into Phase 0 of the wallet rewrite breaks the "single coherent
+    thing per phase" principle. The wallet rewrite's Phase 1 API
+    shape is determined by what the wallet stack does, not by which
+    version of `HelioseleneField::invert` is correct (the bug fix
+    is below the wallet stack's API surface — confirmed during the
+    rewrite plan's half-day review gate, item 5). Operation B runs
+    in parallel with rewrite Phases 1–3 if bandwidth allows; not
+    sequentially blocking. **Target: V3.1.x (after the wallet
+    rewrite stabilizes; lattice-only V4 transition may force
+    re-evaluation regardless). Cross-links: PR 0.4 audit
+    [`docs/MONERO_OXIDE_VENDOR_STATUS.md`](MONERO_OXIDE_VENDOR_STATUS.md);
+    PR 0.6 vendor-bump in the rewrite plan
+    [`.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md).**
 
 ---
 
@@ -685,25 +745,51 @@ its wake.
   for air-gapped signing (e.g. `--qr` flag that splits into scannable
   chunks). Currently, unsigned/signed transaction sets are passed as
   hex strings which can be very long for multi-output transactions.
-  Target: V3.2 (coordinates with the broader wallet RPC Rust cutover).
+
+  **Hex-blob format dies with the wallet rewrite; QR is a UX surface
+  on the new typed bundles.** Phase 2d of the wallet rewrite replaces
+  the hex blob with `UnsignedTxBundle` / `SignedTxBundle` (typed
+  byte-format, single file per stage). QR-chunked transfer becomes a
+  serialization channel — `--format=qr-chunks` on `export_unsigned` /
+  `submit_signed` — flagged in the Phase 3b deliverables as an
+  optional UX add-on. If it lands alongside Phase 3b, this entry
+  closes there. If it's deferred for cost reasons, this entry
+  re-targets to a post-rewrite UX pass — but with the bundle format
+  as the persisted shape, not hex. **Target: V3.2 → Phase 3b of
+  wallet rewrite (optional) or post-rewrite UX pass.**
 
 - **`shekyl-cli` key image export uses JSON-RPC format, not C++ binary.**
-  The current implementation exports key images via the
+  ~~The current implementation exports key images via the
   `export_key_images` JSON-RPC method and writes JSON. For byte-identical
   interop with the C++ binary format
   (`"Shekyl key image export\003"` magic + view-key encrypted), add FFI
   functions `wallet2_ffi_export_key_images_to_file` and
   `wallet2_ffi_import_key_images_from_file` that call the underlying C++
   file-based export/import. This preserves interop with hardware-wallet
-  and cold-spend workflows built on the binary format.
-  Target: V3.2.
+  and cold-spend workflows built on the binary format.~~
+
+  **Closed by the wallet rewrite, not deferred.** The C++ binary format
+  dies with `wallet2.cpp` at Phase 5 of the wallet rewrite plan. The
+  air-gapped flow is replaced by `UnsignedTxBundle` / `SignedTxBundle`
+  (Phase 2d), which is a Shekyl-native typed shape, not a Monero
+  binary-format port. Adding `wallet2_ffi_*` FFI exports for byte-identical
+  Monero interop conflicts with [.cursor/rules/60-no-monero-legacy.mdc](
+  ../.cursor/rules/60-no-monero-legacy.mdc) — no Monero-shaped APIs because
+  they exist upstream. The Phase 5 commit message names this closure in
+  its inventory. **Target: closed at Phase 5 of the wallet rewrite.**
 
 - **Test code `wallet_tools.cpp` still uses mixin/decoy infrastructure.**
   The `gen_tx_src` function constructs fake outputs for ring-style
   source entries. This is legacy test infrastructure that works but is
-  conceptually dead for Shekyl (no rings). Replace `gen_tx_src` with a
-  direct FCMP++-style source entry constructor.
-  Target: V3.2 (lands with the `transfer_details` Rust migration).
+  conceptually dead for Shekyl (no rings).
+
+  **Naturally swept by the wallet rewrite's Phase 5 deletion.**
+  `wallet_tools.cpp` is `wallet2`-adjacent test code; it gets deleted
+  alongside `tests/unit_tests/wallet*.cpp` at Phase 5 of the wallet
+  rewrite plan. The Rust port writes per-crate tests against the typed
+  source-entry constructor in `shekyl-tx-builder`, not a `gen_tx_src`
+  shim. The Phase 5 commit message names this closure in its inventory.
+  **Target: closed at Phase 5 of the wallet rewrite.**
 
 - **`removed_flags` shim sunset.**
   `src/common/removed_flags.{h,cpp}` is a transitional utility
@@ -746,7 +832,19 @@ its wake.
   read daemon logs for its derivations (state is learned via
   JSON-RPC), so the gap has no effect on the gate result — but any
   operator debugging an unexpected RPC response from `shekyld` today
-  will find no Rust-side breadcrumbs to follow. Target: V3.2.
+  will find no Rust-side breadcrumbs to follow.
+
+  **Absorbed into Phase 1 of the wallet rewrite.** Phase 1 ships the
+  `tracing` subscriber + per-crate spans for the wallet stack; the
+  daemon-side fix (a `shekyl_daemon_rpc_init_logging` FFI export, or
+  the equivalent shared-subscriber install path) lands in the same
+  deliverable. Solving the subscriber question once for the whole
+  codebase is cleaner than solving it for the wallet rewrite and
+  re-solving it for the daemon. **Re-target: V3.1 / Phase 1 of wallet
+  rewrite (was V3.2). Cross-link: rewrite plan
+  [`.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`](
+  ../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)
+  Phase 1 deliverables.**
 
 ---
 
