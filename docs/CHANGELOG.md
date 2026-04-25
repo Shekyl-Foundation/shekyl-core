@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- **`shekyld` Phase 0 prerequisites audit (PR 0.3 of the
+  [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)).**
+  New file [`docs/SHEKYLD_PREREQUISITES.md`](SHEKYLD_PREREQUISITES.md)
+  consolidating the audit of three daemon-side prerequisites against
+  the rewrite plan's later phases:
+
+  1. **Instant-mining regtest mode** (Phase 6 prereq):
+     PRESENT — `--regtest --offline --fixed-difficulty 1` +
+     `generateblocks` JSON-RPC works as inherited from Monero;
+     V3-specific caveats documented (FCMP++ tx-type and
+     `curve_tree_root` header checks bypassed on `FAKECHAIN`,
+     reference-block age rules still enforced). No daemon change
+     required.
+  2. **`get_fee_estimate(s)` RPC** (Phase 2a prereq):
+     PRESENT as singular `get_fee_estimate` returning a positional
+     4-element `fees` vector matching HF 2021-scaling tiers; no
+     name-keyed buckets on the wire — priority-name binding is
+     wallet-side. Decision-log entry adjusted: wallet supplies the
+     names, daemon supplies the numbers. No daemon change required.
+  3. **Fee policy / rules version exposure**:
+     ABSENT entirely — no `fee_version` / `fee_policy_id` on
+     `get_fee_estimate`, on `get_info`, or as a separate RPC. Filed
+     as a V3.1 daemon-side follow-up; not a Phase 0 blocker. The
+     rewrite's Phase 2a builds a forward-compatible client that
+     consumes the field gracefully if it appears later.
+
+  Phase 6 and Phase 2a unblocked against the existing daemon
+  surface.
+
 ### Added
 
 - **Mid-rewire benchmark warning window (commit 2k.c of the
