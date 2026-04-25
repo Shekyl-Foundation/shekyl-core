@@ -20,6 +20,15 @@ exists on `dev` at this date. Wallet-side code (`wallet2.cpp`,
 the daemon currently exposes; wallet-side rework belongs to the
 Phase 1+ rewrite, not to this audit.
 
+**Cross-links.** Wallet-side decisions that consume this audit live in
+[`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md):
+"`shekyld` fee estimate priority bucket positional mapping" and
+"`shekyld` fee policy version is absent; wallet uses `Option<u32>` for
+forward compat" (both 2026-04-25). The daemon-side V3.1 follow-up that
+addresses §3 of this audit lives in [`docs/FOLLOWUPS.md`](FOLLOWUPS.md)
+under "V3.1+ — Legacy C++ → Rust rewrite scope" → `shekyld
+fee_policy_version daemon-side exposure`.
+
 ---
 
 ## 1. Instant-mining regtest mode (Phase 6 prerequisite)

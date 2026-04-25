@@ -482,6 +482,25 @@ its wake.
   ([`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md),
   2026-04-25).**
 
+- **Workspace clippy `-D warnings` cleanup.** Surfaced by the Phase 0
+  comprehensive audit (2026-04-25). The Rust workspace is **not**
+  `cargo clippy --workspace --all-targets --no-deps -- -D warnings`
+  clean, and CI does not currently enforce that gate. `shekyl-ffi`
+  carries roughly a dozen pre-existing warnings (bool-to-u8 casts,
+  `clippy::too_many_arguments`, unnecessary closures, etc.) inherited
+  from its FFI shape; none are introduced by Phase 0. The
+  `chore/phase0-audit-cleanup` PR fixes one isolated
+  `clippy::needless_return` in `rust/shekyl-wallet-file/src/handle.rs`
+  for readability but explicitly does not chase the rest, since each
+  `shekyl-ffi` warning is its own scoped decision (silence with
+  `#[allow]` and a comment, restructure the FFI signature, or accept
+  the lint). Scope of the work: a dedicated pass that either makes
+  the workspace `-D warnings` clean or documents per-crate exemptions
+  with rationale, then turns on the CI gate so future drift is
+  caught at PR time. **Target: V3.1.x (after the wallet rewrite
+  stabilizes; doing it earlier conflicts with the rewrite's own
+  churn).**
+
 - **`monero-oxide` un-pin / fork-and-attribute / drop-unused-crates.**
   The Phase 0 `monero-oxide` audit (PR 0.4 of the wallet rewrite
   plan) establishes a `docs/MONERO_OXIDE_VENDOR_STATUS.md` baseline

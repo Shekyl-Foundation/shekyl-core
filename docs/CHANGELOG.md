@@ -48,6 +48,72 @@
   Phase 6 and Phase 2a unblocked against the existing daemon
   surface.
 
+- **`monero-oxide` vendor freshness audit (PR 0.4 of the V3 wallet
+  rewrite plan,
+  [`docs/MONERO_OXIDE_VENDOR_STATUS.md`](MONERO_OXIDE_VENDOR_STATUS.md)).**
+  Point-in-time (2026-04-25) record of where the vendored
+  `shekyl-oxide` snapshot (`87acb57e`) sits relative to the Shekyl
+  fork tip (`Shekyl-Foundation/monero-oxide` `fcmp++` `3933664d`,
+  +5 commits, all non-crypto) and the original upstream
+  (`monero-oxide/monero-oxide` `fcmp++` `0e438ae`, +40 commits since
+  the 2025-11-22 merge base, including the cypherstack
+  `generalized-bulletproofs-fix` audit response, the Veridise
+  `HelioseleneField::invert` correctness cluster, and a major
+  upstream restructure that the fork has not adopted). The doc is a
+  freshness audit only — it does not re-vendor or un-pin. The actual
+  un-pin / merge-from-upstream operation is a separate plan; this
+  audit produces its input queue (substantive upstream commits the
+  fork is missing) and baseline (the eight Shekyl-only fork commits,
+  of which only `416d8d1` rename and `87acb57` extra leaf scalars
+  are crypto-substantive). Audit lifecycle: append-only — refresh
+  runs add a new dated section rather than editing in place, so the
+  rewrite plan's Phase 0 record stays intelligible after the un-pin
+  lands.
+
+- **Mid-rewire hardening plan (`docs/MID_REWIRE_HARDENING.md`)
+  amended in §3.1 and §4.3.** §3.1 updated to reflect the
+  architecturally honest scope for the C++ baseline capture: path
+  relocated to `tests/wallet_bench/` (repo convention for
+  benchmarks; `src/` is product code), coverage reduced to three
+  of the Five with explicit per-benchmark C++/Rust availability
+  table and the daemon-coupling rationale spelled out for the two
+  Rust-only paths (`scan_block_K`, `transfer_e2e_1in_2out`). §4.3
+  gained a "Benchmarks Rust-only by necessity" subsection
+  capturing the asymmetry so the bench-comparison script (§3.3)
+  and the PR-comment format can handle it deterministically rather
+  than treating missing C++ numbers as a regression. The
+  acknowledgment is explicit: two paths have no pre-deletion C++
+  baseline and will never have one; regression detection across
+  the rewire for those paths relies on the Rust rolling baseline
+  plus human order-of-magnitude sanity, not on a pre-deletion
+  comparator.
+
+- **Mid-rewire hardening plan (`docs/MID_REWIRE_HARDENING.md`).**
+  New design spec pinning the eight-commit instrumentation pass
+  that lands between the Rust-side wallet-file FFI (commits
+  `2a`…`2k.4`, merged) and the C++ consumer rewire (commits
+  `2k.5a` onward, deferred). Covers: Google Benchmark C++ baseline
+  capture against the existing `wallet2.cpp` hot paths;
+  criterion + iai-callgrind Rust benchmark harness mirroring the
+  same five paths; GitHub Actions CI integration with
+  bidirectional thresholds for `crypto_bench_*` (any drift is
+  suspicious — constant-time property defense) and slowdown-only
+  thresholds for `hot_path_bench_*`; rolling baseline on a
+  dedicated `bench-baseline` branch; `postcard-schema` snapshot
+  files with CI-enforced `block_version` bump on every drift;
+  ripgrep + allowlist secret-wipe discipline for
+  `shekyl-wallet-state` blocks; `WalletLedger::check_invariants()`
+  with five cross-block tripwires and a new
+  `WalletFileError::InvariantFailed { invariant, detail }` variant;
+  adversarial wallet-file corpus covering the three capability-
+  mode attack shapes (tamper-in-place, declared-FULL-with-VIEW_ONLY-
+  shape, declared-VIEW_ONLY-with-trailing-bytes); proptest fuzz
+  harness on stable plus checked-in (non-CI) `cargo-fuzz` targets.
+  Also captures the dual-path output-equivalence requirement for
+  `2k.5b`…`2l` as a structural commit-message template line, not a
+  reviewer convention. No code or CI changes in this commit — spec
+  only; the eight follow-up commits each cite a section.
+
 ### Added
 
 - **Mid-rewire benchmark warning window (commit 2k.c of the
@@ -653,73 +719,28 @@
   use today), so unconditional `cargo fmt --all` is the correct fix —
   no `#[rustfmt::skip]` warranted.
 
-### Documentation
-
-- **`monero-oxide` vendor freshness audit (PR 0.4 of the V3 wallet
-  rewrite plan,
-  [`docs/MONERO_OXIDE_VENDOR_STATUS.md`](MONERO_OXIDE_VENDOR_STATUS.md)).**
-  Point-in-time (2026-04-25) record of where the vendored
-  `shekyl-oxide` snapshot (`87acb57e`) sits relative to the Shekyl
-  fork tip (`Shekyl-Foundation/monero-oxide` `fcmp++` `3933664d`,
-  +5 commits, all non-crypto) and the original upstream
-  (`monero-oxide/monero-oxide` `fcmp++` `0e438ae`, +40 commits since
-  the 2025-11-22 merge base, including the cypherstack
-  `generalized-bulletproofs-fix` audit response, the Veridise
-  `HelioseleneField::invert` correctness cluster, and a major
-  upstream restructure that the fork has not adopted). The doc is a
-  freshness audit only — it does not re-vendor or un-pin. The actual
-  un-pin / merge-from-upstream operation is a separate plan; this
-  audit produces its input queue (substantive upstream commits the
-  fork is missing) and baseline (the eight Shekyl-only fork commits,
-  of which only `416d8d1` rename and `87acb57` extra leaf scalars
-  are crypto-substantive). Audit lifecycle: append-only — refresh
-  runs add a new dated section rather than editing in place, so the
-  rewrite plan's Phase 0 record stays intelligible after the un-pin
-  lands.
-
-- **Mid-rewire hardening plan (`docs/MID_REWIRE_HARDENING.md`)
-  amended in §3.1 and §4.3.** §3.1 updated to reflect the
-  architecturally honest scope for the C++ baseline capture: path
-  relocated to `tests/wallet_bench/` (repo convention for
-  benchmarks; `src/` is product code), coverage reduced to three
-  of the Five with explicit per-benchmark C++/Rust availability
-  table and the daemon-coupling rationale spelled out for the two
-  Rust-only paths (`scan_block_K`, `transfer_e2e_1in_2out`). §4.3
-  gained a "Benchmarks Rust-only by necessity" subsection
-  capturing the asymmetry so the bench-comparison script (§3.3)
-  and the PR-comment format can handle it deterministically rather
-  than treating missing C++ numbers as a regression. The
-  acknowledgment is explicit: two paths have no pre-deletion C++
-  baseline and will never have one; regression detection across
-  the rewire for those paths relies on the Rust rolling baseline
-  plus human order-of-magnitude sanity, not on a pre-deletion
-  comparator.
-
-- **Mid-rewire hardening plan (`docs/MID_REWIRE_HARDENING.md`).**
-  New design spec pinning the eight-commit instrumentation pass
-  that lands between the Rust-side wallet-file FFI (commits
-  `2a`…`2k.4`, merged) and the C++ consumer rewire (commits
-  `2k.5a` onward, deferred). Covers: Google Benchmark C++ baseline
-  capture against the existing `wallet2.cpp` hot paths;
-  criterion + iai-callgrind Rust benchmark harness mirroring the
-  same five paths; GitHub Actions CI integration with
-  bidirectional thresholds for `crypto_bench_*` (any drift is
-  suspicious — constant-time property defense) and slowdown-only
-  thresholds for `hot_path_bench_*`; rolling baseline on a
-  dedicated `bench-baseline` branch; `postcard-schema` snapshot
-  files with CI-enforced `block_version` bump on every drift;
-  ripgrep + allowlist secret-wipe discipline for
-  `shekyl-wallet-state` blocks; `WalletLedger::check_invariants()`
-  with five cross-block tripwires and a new
-  `WalletFileError::InvariantFailed { invariant, detail }` variant;
-  adversarial wallet-file corpus covering the three capability-
-  mode attack shapes (tamper-in-place, declared-FULL-with-VIEW_ONLY-
-  shape, declared-VIEW_ONLY-with-trailing-bytes); proptest fuzz
-  harness on stable plus checked-in (non-CI) `cargo-fuzz` targets.
-  Also captures the dual-path output-equivalence requirement for
-  `2k.5b`…`2l` as a structural commit-message template line, not a
-  reviewer convention. No code or CI changes in this commit — spec
-  only; the eight follow-up commits each cite a section.
+- **Phase 0 audit cleanup (`chore/phase0-audit-cleanup`).** Three
+  small follow-ups surfaced by the post-merge comprehensive audit of
+  `dev` against the V3 wallet rewrite plan's Phase 0 expectations:
+  (1) consolidated the duplicate `### Documentation` heading under
+  `[Unreleased]` that was a rebase artefact across PR 0.2 / PR 0.3 /
+  PR 0.4 — three entries moved up into the canonical section, no
+  content lost; (2) added a back-link in
+  [`docs/SHEKYLD_PREREQUISITES.md`](SHEKYLD_PREREQUISITES.md)
+  pointing forward to the two consuming
+  [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
+  entries (positional fee mapping, `fee_policy_version` absence) and
+  the daemon-side V3.1 follow-up in
+  [`docs/FOLLOWUPS.md`](FOLLOWUPS.md), so the audit's downstream
+  consumers are reachable from the audit doc itself; (3) fixed a
+  pre-existing `clippy::needless_return` lint in
+  `rust/shekyl-wallet-file/src/handle.rs::is_cross_device_error`
+  (introduced under commit `2l.a`, not by Phase 0) for readability.
+  Recorded a follow-up in
+  [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) noting that the workspace as a
+  whole is **not** `clippy --workspace -- -D warnings` clean
+  (`shekyl-ffi` carries ~12 inherited warnings from its FFI shape)
+  and that a dedicated cleanup pass + CI gate belongs to V3.1.x.
 
 ## [3.1.0-alpha.5] - 2026-04-22
 

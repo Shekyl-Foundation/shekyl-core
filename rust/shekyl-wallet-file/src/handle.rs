@@ -874,12 +874,12 @@ fn is_cross_device_error(e: &io::Error) -> bool {
     #[cfg(unix)]
     {
         // `EXDEV = 18` on every Unix we support (Linux, macOS, FreeBSD).
-        return e.raw_os_error() == Some(18);
+        e.raw_os_error() == Some(18)
     }
     #[cfg(windows)]
     {
         // `ERROR_NOT_SAME_DEVICE = 17`.
-        return e.raw_os_error() == Some(17);
+        e.raw_os_error() == Some(17)
     }
     #[cfg(not(any(unix, windows)))]
     {
