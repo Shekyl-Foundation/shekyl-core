@@ -1160,4 +1160,78 @@ new module `rust/shekyl-wallet-state/src/local_label.rs`; new adapter
 
 ---
 
+## 2026-04-25 — Per-domain `Wallet` error enums + sealed `WalletSignerKind`
+
+**Decision.** Phase 1 lands the type-layer foundations of the
+`shekyl-wallet-core::wallet` orchestrator without yet introducing the
+`Wallet` struct. Three pieces ship in this commit:
+
+1. **Per-domain error enums** in
+   `rust/shekyl-wallet-core/src/wallet/error.rs`: `OpenError`,
+   `RefreshError`, `SendError`, `PendingTxError`, `KeyError`,
+   `IoError`, `TxError`. Each is closed (no `Other(String)` catch-all).
+   The plan-locked variants are pinned by name:
+   `OpenError::NetworkMismatch`,
+   `OpenError::CapabilityMismatch`,
+   `OpenError::OutstandingPendingTx`,
+   `RefreshError::ConcurrentMutation`,
+   `RefreshError::AlreadyRunning`,
+   `RefreshError::Cancelled`,
+   `PendingTxError::TooOld`,
+   `PendingTxError::ChainStateChanged`,
+   `PendingTxError::UnknownHandle`,
+   `TxError::DaemonFeeUnreasonable`.
+   `IoError` is intentionally distinct from `std::io::Error` because the
+   wallet's IO surface includes daemon RPC, scanner, and ledger
+   serialization — not just filesystem syscalls.
+2. **`Network` re-export** from `shekyl_address::Network`. The plan's
+   fourth variant (`Fakechain`) is **not** added in this commit; it
+   requires a workspace-wide change (HRP tables, `NetworkSafetyConstants`,
+   `DerivationNetwork`, wallet-file region-1 byte parse) that lands in a
+   separate scoped commit on the same Phase 1 branch.
+3. **`Capability` re-export** from `shekyl_wallet_file::Capability`.
+   The plan refers to this concept as "`CapabilityMode`"; the canonical
+   spelling already established in the wallet-file crate is the shorter
+   `Capability`. One canonical name across the workspace, not an alias.
+4. **Sealed `WalletSignerKind` trait** with `SoloSigner` ZST as the
+   only implementer. V3.1 multisig will add `MultisigSigner<N, K>`
+   behind the existing `multisig` Cargo feature.
+
+**Rationale.** Cross-cutting lock 2 binds the per-domain error shape;
+this commit is the type-system realization. Defining the variants now,
+without method bodies, lets reviewers see the failure surface a
+`Wallet` consumer will face before the lifecycle methods land. Closed
+enums (no `Other(String)`) make the JSON-RPC error-code allocation in
+`shekyl-wallet-rpc` a finite mapping rather than an open-ended one.
+
+**`#[from]` deferred per-call-site.** This commit does not wire
+`#[from]` impls for `shekyl_wallet_file::WalletFileError`,
+`shekyl_crypto_pq::CryptoError`,
+`shekyl_wallet_state::WalletLedgerError`, or
+`shekyl_wallet_prefs::PrefsError`. Each `#[from]` lands alongside the
+lifecycle / refresh / send commit whose `?` operator needs the
+conversion, so an `#[from]` impl never exists without a caller. The
+wallet-core crate's transitive dependency on
+`shekyl-wallet-state` / `-prefs` / `-crypto-pq` is added when that
+commit lands (this commit only adds `shekyl-address` and
+`shekyl-wallet-file` for the re-exports above).
+
+**Why a sealed trait, not an enum, for the signer dispatch.** An enum
+forces every method that depends on signer kind to `match` at runtime,
+producing unreachable arms in V3.0 (where only `SoloSigner` exists)
+and reintroducing the runtime-mode-flag pattern the rewrite explicitly
+rejects. A trait with associated items lets each kind name its own
+associated types (e.g., the eventual `SignaturePayload`,
+`SigningCeremony`) and lets the type system statically prove that solo
+and multisig code paths never share a runtime branch. Sealing the
+trait preserves the audit guarantee that no third signer kind appears
+without a Decision Log entry.
+
+**Cross-references.** Cross-cutting locks 2, 4, 5, 6, 7, 8 (this file,
+"Wallet stack: cross-cutting locks (Phase 0 review-gate decisions)");
+[plan §"Phase 1 deliverables"](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md);
+new module `rust/shekyl-wallet-core/src/wallet/`.
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

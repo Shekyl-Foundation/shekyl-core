@@ -17,10 +17,15 @@ pub mod claim_builder;
 pub mod error;
 #[cfg(feature = "multisig")]
 pub mod multisig;
+pub mod wallet;
 pub mod workflow;
 
 pub use claim_builder::{ClaimTxBuilder, ClaimTxPlan};
 pub use error::WalletCoreError;
+pub use wallet::{
+    Capability, IoError, KeyError, Network, OpenError, PendingTxError, RefreshError, SendError,
+    SoloSigner, TxError, WalletSignerKind,
+};
 pub use workflow::ClaimAndUnstakePlan;
 
 #[cfg(test)]

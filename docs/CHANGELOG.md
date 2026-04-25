@@ -4,6 +4,31 @@
 
 ### Added
 
+- **`shekyl-wallet-core::wallet` module skeleton (Phase 1 of the
+  [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
+  cross-cutting locks 2, 4, 5, 6, 7, 8 type-layer realization).** New
+  module `rust/shekyl-wallet-core/src/wallet/` ships the type-layer
+  foundations of the V3 wallet orchestrator without yet introducing the
+  `Wallet` struct itself: per-domain error enums (`OpenError`,
+  `RefreshError`, `SendError`, `PendingTxError`, `KeyError`, `IoError`,
+  `TxError`) with the plan-locked variants pinned by name
+  (`OpenError::NetworkMismatch`, `RefreshError::ConcurrentMutation`,
+  `PendingTxError::TooOld`, `PendingTxError::ChainStateChanged`,
+  `TxError::DaemonFeeUnreasonable`, etc.); a re-export of
+  `shekyl_address::Network` (the fourth `Fakechain` variant lands in a
+  separate scoped commit on the same branch); a re-export of
+  `shekyl_wallet_file::Capability` (canonical spelling — the plan's
+  "`CapabilityMode`" reference is satisfied); and a sealed
+  `WalletSignerKind` trait with `SoloSigner` ZST as the V3.0 default.
+  V3.1's `MultisigSigner<N, K>` will join behind the existing `multisig`
+  Cargo feature without changing call sites. `#[from]` impls for upstream
+  errors (`WalletFileError`, `CryptoError`, `WalletLedgerError`, etc.)
+  are deliberately deferred to the lifecycle / refresh / send commits
+  that introduce the call sites needing them, so an `#[from]` impl never
+  exists without a caller. Full rationale recorded in
+  [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
+  §"Per-domain `Wallet` error enums + sealed `WalletSignerKind`".
+
 - **`shekyl-wallet-state::LocalLabel` and `SecretStr<'a>` (Phase 1 of the
   [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
   cross-cutting lock 9 type-layer realization).** Locally-sensitive

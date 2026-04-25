@@ -9,6 +9,8 @@ description = "Shekyl wallet core: transaction builders for stake, unstake, and 
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-scanner = { path = "../shekyl-scanner" }
 shekyl-staking = { path = "../shekyl-staking" }
+shekyl-address = { path = "../shekyl-address" }
+shekyl-wallet-file = { path = "../shekyl-wallet-file" }
 shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq", optional = true }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
