@@ -369,6 +369,83 @@ citing in a review.
 
 ---
 
+## V3.1+ — Legacy C++ → Rust rewrite scope
+
+Items captured from the
+[shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)
+(2026-04-25) when the `wallet-state-promotion` plan halted at 2k.c
+on the basis that further `wallet2.cpp` rewires generate audit
+surface for a file scheduled for deletion. The rewrite plan deletes
+`wallet2.cpp` wholesale at its Phase 5 — these items name the
+scoped follow-ups that ride alongside that deletion or land in
+its wake.
+
+- **`wallet2.cpp` absorption — sub-commits 2l/2m/2n.** The
+  `wallet-state-promotion` plan's
+  [2l cache rewire](../.cursor/plans/2l-cache-rewire_80a08559.plan.md)
+  (sub-commits 2l.b, 2l.c, 2l.d, 2l.e), 2m-keys (legacy keys-side
+  ser/des deletion), 2m-cache (legacy boost-cache deletion), and 2n
+  (transitional `pub use ... as WalletState` alias deletion) are
+  **deferred and absorbed**. They are replaced by:
+  - The native Rust cache-load and cache-emit path on
+    `shekyl-wallet-core::Wallet` (Phase 1–2 of the rewrite plan).
+  - The single-commit C++ deletion at Phase 5 of the rewrite plan,
+    which removes `wallet2.cpp`, `wallet2_ffi.cpp`,
+    `src/wallet/api/`, `src/simplewallet/`,
+    `wallet_rpc_server*.cpp`, and the `shekyl_wallet_*` C-ABI
+    surface that existed only because `wallet2.cpp` consumed it.
+  No incremental in-`wallet2.cpp` work is planned between now and
+  Phase 5. **Target: V3.1.x (Rust wallet stack feature parity →
+  C++ deletion).**
+
+- **Hardening-pass commit 8 follow-up: WalletPrefs round-trip
+  property test (`2k.a2` deferred test).** The wallet-prefs round-trip
+  proptest mentioned in the 2l.a / 2l.e design pin land list was
+  deferred during the wallet-state-promotion plan and was scheduled
+  to land in 2l.e. With 2l.e absorbed, the test now lands wherever
+  the `shekyl-wallet-prefs` crate-level test surface ships next —
+  most naturally as part of the rewrite plan's Phase 1 `RuntimeWalletState`
+  audit when `WalletPrefs` integration is exercised. Track in the
+  rewrite plan, not here. **Target: V3.1.x (Phase 1 of rewrite).**
+
+- **`tx_pool` / `blockchain_db` LMDB transactional wrapper — typed
+  commit-or-abort.** Lesson surfaced by the Dandelion++ relay
+  timestamp finding (silent rollback in `tx_pool.cpp::get_relayable_transactions`
+  via `LockedTXN` destructor abort-on-drop without an explicit
+  `lock.commit()`). The fix that landed in the C++ daemon was a
+  one-line `lock.commit()` add. The **structural fix** is a Rust
+  wrapper for the LMDB transaction pattern where forgetting to
+  commit is a compile error: the wrapper's `Drop` impl aborts (so
+  unwind safety is preserved), but the type-level API requires
+  consuming the transaction with an explicit `commit()` to signal
+  success — `?`-propagation on a `Result` automatically routes to
+  abort-via-Drop, while the success path consumes the transaction.
+  This eliminates the entire bug class rather than fixing the one
+  symptom; Monero's `LockedTXN` callers all have the same shape and
+  the upstream-inheritance audit surface is non-trivial.
+
+  Scope of the work: redesign the LMDB transactional wrapper as a
+  Rust crate (under `rust/shekyl-lmdb-tx/` or similar), audit every
+  `LockedTXN` call site in `tx_pool.cpp`, `blockchain_db.cpp`,
+  and adjacent daemon code, port them to the new wrapper, and
+  delete `LockedTXN` from C++. Same shape as the wallet rewrite (a
+  separate plan, separate review cycle, separate PR). **Target:
+  V3.1.x — does not block the wallet rewrite, but should land in
+  the same V3.1 cycle since the audit-defensibility argument is
+  identical.**
+
+- **`monero-oxide` un-pin / fork-and-attribute / drop-unused-crates.**
+  The Phase 0 `monero-oxide` audit (PR 0.4 of the wallet rewrite
+  plan) establishes a `docs/MONERO_OXIDE_VENDOR_STATUS.md` baseline
+  but does **not** un-pin. The actual un-pin work — which crates
+  are forked under Shekyl-Foundation attribution, which are
+  upstreamed back to `kayabaNerve/monero-oxide`, which are dropped
+  from the workspace — belongs to a separate plan. **Target: V3.1.x
+  (after the wallet rewrite stabilizes; lattice-only V4 transition
+  may force re-evaluation regardless).**
+
+---
+
 ## V3.2 — Rust cutover and cleanup
 
 - **Chore #4: platform-gate audit sweep — reduced scope after Chore #3 (V4 pre-audit).**

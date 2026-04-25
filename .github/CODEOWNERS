@@ -1,0 +1,49 @@
+# CODEOWNERS for shekyl-core
+#
+# Path-based mandatory review. GitHub uses the LAST matching pattern,
+# so order specific paths AFTER general ones.
+#
+# Authority for this file: docs/V3_WALLET_DECISION_LOG.md
+# (decision: "KAT regression CI: plain tests, dedicated files,
+# CODEOWNERS + branch protection", 2026-04-25).
+#
+# Branch protection on `dev` requires PR review; PR review for paths
+# below requires the listed maintainers as approvers, regardless of
+# any other approving reviews.
+
+# -----------------------------------------------------------------
+# Test-vector corpus (KAT regression).
+#
+# Any change to a published test vector is a freeze-relevant action.
+# Two-maintainer review per the freeze plan.
+# -----------------------------------------------------------------
+docs/test_vectors/**                   @Shekyl-Foundation/maintainers
+docs/test_vectors/WALLET_FILE_FORMAT_V1/**  @Shekyl-Foundation/maintainers
+/tests/kat_*.rs                        @Shekyl-Foundation/maintainers
+/rust/**/tests/kat_*.rs                @Shekyl-Foundation/maintainers
+
+# -----------------------------------------------------------------
+# Freeze-relevant specs and design documents.
+#
+# Touching these implies a wire-format or algorithm-stability
+# decision that needs maintainer review.
+# -----------------------------------------------------------------
+docs/POST_QUANTUM_CRYPTOGRAPHY.md      @Shekyl-Foundation/maintainers
+docs/FCMP_PLUS_PLUS.md                 @Shekyl-Foundation/maintainers
+docs/WALLET_FILE_FORMAT.md             @Shekyl-Foundation/maintainers
+docs/SIGNING.md                        @Shekyl-Foundation/maintainers
+
+# -----------------------------------------------------------------
+# Decision log (append-only).
+#
+# Entries here are binding for new code. Maintainer review on every
+# addition keeps the log from drifting into per-author opinions.
+# -----------------------------------------------------------------
+docs/V3_WALLET_DECISION_LOG.md         @Shekyl-Foundation/maintainers
+
+# -----------------------------------------------------------------
+# Release-machinery and CI policy files.
+# -----------------------------------------------------------------
+.github/CODEOWNERS                     @Shekyl-Foundation/maintainers
+.github/workflows/**                   @Shekyl-Foundation/maintainers
+.cursor/rules/**                       @Shekyl-Foundation/maintainers

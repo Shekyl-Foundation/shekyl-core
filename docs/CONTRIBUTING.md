@@ -51,6 +51,44 @@ are conflicts (even trivially resolvable ones).
 PGP signing commits is strongly encouraged. That should explain why
 the previous paragraph is here.
 
+## Branch protection on `dev`
+
+The `dev` branch is the integration branch for all work. It is
+protected with the following GitHub branch-protection rules:
+
+* **Pull request required** before merging. No direct pushes from any
+  contributor, including maintainers.
+* **At least one approving review** from a maintainer. Where the change
+  touches a path covered by [`.github/CODEOWNERS`](../.github/CODEOWNERS),
+  that file's review requirement applies on top.
+* **Status checks must pass** before merge: at minimum, the full
+  `cargo test --workspace --include-ignored` suite (which runs the
+  KAT regression corpus, including `#[ignore]`-gated slow KATs), the
+  benchmark gate (see
+  [`docs/MID_REWIRE_HARDENING.md`](./MID_REWIRE_HARDENING.md) §3.3),
+  and any other CI jobs configured at the time.
+* **No force-push, no history rewrite.** Per the branch policy
+  (`.cursor/rules/06-branching.mdc` rule 6 in `shekyl-core`,
+  enforced by GitHub branch protection).
+* **Linear history not required.** PRs may merge with a merge commit
+  if a maintainer judges the topology useful (rare, mostly for `dev →
+  main` releases per the release flow). The default is squash or
+  rebase to keep `dev` history readable.
+
+The branch-protection settings are owned by the `Shekyl-Foundation`
+GitHub org admins. If you are setting up a fresh fork or test
+environment, mirror the settings above; a fork that is missing them
+is not "lighter-touch" — it is "broken in a way that does not show up
+in CI." See
+[`docs/V3_WALLET_DECISION_LOG.md`](./V3_WALLET_DECISION_LOG.md)
+("KAT regression CI: plain tests, dedicated files, CODEOWNERS +
+branch protection", 2026-04-25) for the rationale.
+
+The `main` branch has stricter protection: see
+[`docs/SIGNING.md`](./SIGNING.md) for the signed-tag-on-merge-commit
+release flow and the `.cursor/rules/06-branching.mdc` hard rules
+that the AI assistants in this repository follow.
+
 # [Code of Conduct (22/C4.1)](http://rfc.zeromq.org/spec:22)
 
 ## License

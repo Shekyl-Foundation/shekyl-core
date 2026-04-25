@@ -397,12 +397,43 @@ unchanged produces a comment with the expected deltas near zero;
 baseline-update-on-merge workflow has run successfully at least once
 (a no-op dev merge is sufficient).
 
-### 3.3.1 Mid-rewire warning window (2k.c)
+### 3.3.1 Mid-rewire warning window (2k.c) — CLOSED 2026-04-25
 
-**Status.** Landed. Window currently **OPEN** for the
-`feat/wallet-file-format` branch; scheduled to close in the 2m-cache
-commit. Sentinel:
-[`docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active`](./benchmarks/MID_REWIRE_WARNING_WINDOW.active).
+**Status.** **CLOSED** as of 2026-04-25. Sentinel
+`docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active` deleted in PR 0.1
+of the
+[shekyl-v3-wallet-rust-rewrite plan](../../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md).
+The original closure trigger was the 2m-cache commit; that commit is
+no longer scheduled because 2l/2m/2n were absorbed into the Rust
+rewrite (which deletes `wallet2.cpp` wholesale at Phase 5 instead of
+incrementally rewiring it). The window's exit criterion is therefore
+"the file scheduled to be benched against has been declared dead and
+the bench gate's reference baseline must rotate against the new
+steady state (post-2k.c, pre-rewrite)" rather than "2m-cache lands."
+
+The baseline rotation is **a remaining manual step** belonging to
+this PR's reviewer / merger:
+
+1. After PR 0.1 merges to `dev`, manually trigger
+   `workflow_dispatch` of `ci/benchmarks` on `dev`.
+2. The `update-baseline` job captures a fresh `baseline.json` into
+   `bench-baseline` from the post-2k.c steady-state code.
+3. Verify the next PR sees the rotated baseline (delta ≈ 0 against
+   itself).
+
+If the rotation is not performed, the first post-window PR will diff
+against the pre-rewire baseline and likely trip — that is the
+expected fail-loud-on-skipped-rotation behavior, not a broken gate.
+
+The text below documents the window as it operated; retained for
+historical reference only. **Do not re-open the window** without a
+plan addendum (see "extending the window past 2m-cache without a
+plan addendum" guidance below — same rule applies to re-opening).
+
+Sentinel (deleted):
+`docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active` (no longer
+exists; `git log -- docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active`
+recovers the file's body).
 
 **Problem this subsection exists to solve.** §3.3's fail threshold
 (±15% for `crypto_bench_*`, +15% for `hot_path_bench_*`) is calibrated
