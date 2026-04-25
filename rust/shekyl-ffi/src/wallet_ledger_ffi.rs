@@ -462,15 +462,30 @@ struct TransferDetailsOpaque {
     /// what `TransferDetails`'s own postcard form would produce — a
     /// reviewer comparing the blob to a fully-postcard-encoded
     /// transfer sees byte-for-byte identical secret regions.
-    #[serde(with = "shekyl_wallet_state::serde_helpers::opt_zeroizing_bytes_64", default)]
+    #[serde(
+        with = "shekyl_wallet_state::serde_helpers::opt_zeroizing_bytes_64",
+        default
+    )]
     combined_shared_secret: Option<Zeroizing<[u8; 64]>>,
-    #[serde(with = "shekyl_wallet_state::serde_helpers::opt_zeroizing_bytes_32", default)]
+    #[serde(
+        with = "shekyl_wallet_state::serde_helpers::opt_zeroizing_bytes_32",
+        default
+    )]
     ho: Option<Zeroizing<[u8; 32]>>,
-    #[serde(with = "shekyl_wallet_state::serde_helpers::opt_zeroizing_bytes_32", default)]
+    #[serde(
+        with = "shekyl_wallet_state::serde_helpers::opt_zeroizing_bytes_32",
+        default
+    )]
     y: Option<Zeroizing<[u8; 32]>>,
-    #[serde(with = "shekyl_wallet_state::serde_helpers::opt_zeroizing_bytes_32", default)]
+    #[serde(
+        with = "shekyl_wallet_state::serde_helpers::opt_zeroizing_bytes_32",
+        default
+    )]
     z: Option<Zeroizing<[u8; 32]>>,
-    #[serde(with = "shekyl_wallet_state::serde_helpers::opt_zeroizing_bytes_32", default)]
+    #[serde(
+        with = "shekyl_wallet_state::serde_helpers::opt_zeroizing_bytes_32",
+        default
+    )]
     k_amount: Option<Zeroizing<[u8; 32]>>,
     fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
 }
@@ -890,11 +905,13 @@ pub unsafe extern "C" fn shekyl_wallet_get_subaddress_registry(
         .bookkeeping
         .subaddress_registry
         .iter()
-        .map(|(pk_bytes, idx): (&[u8; 32], &SubaddressIndex)| ShekylSubaddressRegistryEntryC {
-            spend_pk_bytes: *pk_bytes,
-            major: idx.account(),
-            minor: idx.address(),
-        })
+        .map(
+            |(pk_bytes, idx): (&[u8; 32], &SubaddressIndex)| ShekylSubaddressRegistryEntryC {
+                spend_pk_bytes: *pk_bytes,
+                major: idx.account(),
+                minor: idx.address(),
+            },
+        )
         .collect();
     let (ptr, count) = boxed_slice_into_raw(entries);
     *out_ptr = ptr;
@@ -1499,10 +1516,7 @@ pub unsafe extern "C" fn shekyl_wallet_set_tx_keys(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_wallet_free_tx_keys(
-    ptr: *mut ShekylTxKeyEntryC,
-    count: usize,
-) {
+pub unsafe extern "C" fn shekyl_wallet_free_tx_keys(ptr: *mut ShekylTxKeyEntryC, count: usize) {
     if ptr.is_null() || count == 0 {
         return;
     }
@@ -1909,10 +1923,7 @@ pub unsafe extern "C" fn shekyl_wallet_set_pending_tx_hashes(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_wallet_free_pending_tx_hashes(
-    ptr: *mut [u8; 32],
-    count: usize,
-) {
+pub unsafe extern "C" fn shekyl_wallet_free_pending_tx_hashes(ptr: *mut [u8; 32], count: usize) {
     drop_boxed_slice(ptr, count);
 }
 

@@ -633,6 +633,26 @@
   one-line `PRIVATE ${Boost_PROGRAM_OPTIONS_LIBRARY}` in
   `src/common/CMakeLists.txt`. No behavior change outside CMake.
 
+### Chore
+
+- **Workspace `cargo fmt --all` baseline (PR 0.5 of the V3 wallet
+  rewrite plan,
+  [`.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)
+  Phase 0).** Five files (`rust/shekyl-ffi/src/wallet_file_ffi.rs`,
+  `rust/shekyl-ffi/src/wallet_ledger_ffi.rs`,
+  `rust/shekyl-scanner/benches/scan_block.rs`,
+  `rust/shekyl-tx-builder/benches/transfer_e2e.rs`,
+  `rust/shekyl-wallet-file/src/handle.rs`) had accumulated hand-edited
+  formatting drift before this plan started; `cargo fmt --all --check`
+  flagged them on `dev`. Mechanical, fmt-only run; no logic, behaviour,
+  or API change. Lands before Phase 1 begins so subsequent rewrite PRs
+  can use `cargo fmt --all --check` as a cheap branch-hygiene signal
+  without wading through pre-existing drift. Drift cause was hand-edits
+  bypassing fmt (verified: `git log --follow` on each file shows the
+  drifting hunks were introduced under the same `rustfmt` toolchain in
+  use today), so unconditional `cargo fmt --all` is the correct fix —
+  no `#[rustfmt::skip]` warranted.
+
 ### Documentation
 
 - **`monero-oxide` vendor freshness audit (PR 0.4 of the V3 wallet

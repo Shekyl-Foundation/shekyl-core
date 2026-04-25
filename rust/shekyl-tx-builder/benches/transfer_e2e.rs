@@ -68,8 +68,8 @@ fn crypto_bench_transfer_e2e_components(c: &mut Criterion) {
         b.iter_batched(
             fresh_2out_commitments,
             |commitments| {
-                let bp = Bulletproof::prove_plus(&mut OsRng, black_box(commitments))
-                    .expect("bp prove");
+                let bp =
+                    Bulletproof::prove_plus(&mut OsRng, black_box(commitments)).expect("bp prove");
                 black_box(bp);
             },
             criterion::BatchSize::SmallInput,

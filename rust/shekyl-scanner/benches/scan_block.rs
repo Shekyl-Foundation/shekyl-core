@@ -28,8 +28,8 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
 
 use shekyl_oxide::primitives::Commitment;
 use shekyl_scanner::{
-    runtime_ext::WalletStateExt,
     output::WalletOutput,
+    runtime_ext::WalletStateExt,
     scan::{RecoveredWalletOutput, Timelocked},
     RuntimeWalletState,
 };
@@ -65,20 +65,24 @@ fn hot_path_bench_scan_block(c: &mut Criterion) {
     let mut group = c.benchmark_group("hot_path_bench_scan_block");
     for &k in OWNED_COUNTS {
         group.throughput(Throughput::Elements(k.max(1) as u64));
-        group.bench_with_input(BenchmarkId::new("process_scanned_outputs", k), &k, |b, &k| {
-            b.iter_batched(
-                || (RuntimeWalletState::new(), build_owned_outputs(k)),
-                |(mut ws, outputs)| {
-                    let added = ws.process_scanned_outputs(
-                        black_box(2_000),
-                        black_box([0xAAu8; 32]),
-                        outputs,
-                    );
-                    black_box((ws, added));
-                },
-                criterion::BatchSize::SmallInput,
-            );
-        });
+        group.bench_with_input(
+            BenchmarkId::new("process_scanned_outputs", k),
+            &k,
+            |b, &k| {
+                b.iter_batched(
+                    || (RuntimeWalletState::new(), build_owned_outputs(k)),
+                    |(mut ws, outputs)| {
+                        let added = ws.process_scanned_outputs(
+                            black_box(2_000),
+                            black_box([0xAAu8; 32]),
+                            outputs,
+                        );
+                        black_box((ws, added));
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
     }
     group.finish();
 }
