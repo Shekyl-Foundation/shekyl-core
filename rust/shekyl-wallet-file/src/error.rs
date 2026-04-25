@@ -143,6 +143,31 @@ pub enum WalletFileError {
     #[error("multisig wallets are not supported by this envelope version")]
     MultisigNotSupported,
 
+    /// `save_as` was asked to relocate the wallet pair across a
+    /// filesystem boundary. `rename(2)` is atomic only within a single
+    /// filesystem; cross-fs moves would have to fall back to copy +
+    /// fsync + unlink, with a window where the file exists at both
+    /// locations or neither. The orchestrator refuses to perform that
+    /// dance silently — the caller (typically the GUI) gets this
+    /// error and can fall back to an explicit "export to new path,
+    /// verify, delete old" flow that the user confirms is non-atomic.
+    ///
+    /// Detected by either pre-flight `statvfs` comparison or by the
+    /// `EXDEV` errno on the rename attempt itself.
+    #[error(
+        "save_as refusing cross-filesystem rename from {from_path} to {target}: \
+         use a non-atomic export flow instead"
+    )]
+    SaveAsCrossFilesystem { from_path: PathBuf, target: PathBuf },
+
+    /// `save_as` was asked to relocate onto a path that already exists.
+    /// We refuse rather than silently overwriting, mirroring the
+    /// write-once posture of [`Self::KeysFileAlreadyExists`] at create
+    /// time. The caller (GUI / RPC) typically surfaces this as a
+    /// "file already exists at the target — pick a different name".
+    #[error("save_as refusing to overwrite existing file at {path}")]
+    SaveAsTargetExists { path: PathBuf },
+
     /// A preferences-layer operation failed (HMAC mismatch on save,
     /// Bucket-3 field slipped through a save path, oversize body,
     /// TOML serialization failure, …). Surfaces

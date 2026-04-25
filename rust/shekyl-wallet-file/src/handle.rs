@@ -517,6 +517,146 @@ impl WalletFileHandle {
         Ok(())
     }
 
+    /// Relocate the wallet pair to a new base path, atomically within
+    /// a single filesystem.
+    ///
+    /// # Operation
+    ///
+    /// 1. Refuse if either target path (`<new_base>.keys` or
+    ///    `<new_base>`) already exists. Mirrors the write-once posture
+    ///    of [`Self::create`]; the caller (CLI / GUI) is expected to
+    ///    confirm overwrite-intent before reaching this layer.
+    /// 2. Pre-flight cross-filesystem check (POSIX `st_dev`
+    ///    comparison): if the target's parent directory lives on a
+    ///    different filesystem from the current keys file, return
+    ///    [`WalletFileError::SaveAsCrossFilesystem`] **before** any
+    ///    on-disk mutation. `rename(2)` is atomic only within a single
+    ///    filesystem, and a fallback copy + fsync + unlink dance would
+    ///    have an observable window where the file exists at both
+    ///    locations or neither — we refuse that silently.
+    /// 3. Pre-encode the state file (preflight invariants + postcard +
+    ///    SWSP frame + AEAD seal) so a failure here leaves the original
+    ///    pair untouched.
+    /// 4. `rename(self.keys_path, new_keys_path)`. Atomic. The advisory
+    ///    lock follows the open file description through the rename
+    ///    (POSIX `flock(2)` is per-OFD, Windows `LockFileEx` is per-
+    ///    handle), so we do **not** need to release-and-reacquire.
+    ///    `EXDEV` is converted to
+    ///    [`WalletFileError::SaveAsCrossFilesystem`] defensively; a
+    ///    well-behaved pre-flight should have caught it already, but
+    ///    layered filesystems (overlayfs, bind mounts) can fool the
+    ///    `st_dev` comparison.
+    /// 5. Atomically write the new state file at `new_state_path`.
+    /// 6. Best-effort delete the original state file. A failure here is
+    ///    surfaced as a `tracing::warn!` (the wallet is correctly
+    ///    relocated; the old file is just stranded clutter).
+    /// 7. Update `self.keys_path` and `self.state_path` to the new
+    ///    locations.
+    ///
+    /// On any failure between steps 4 and 5 the wallet is partially
+    /// relocated: keys at new path, state at old path. The next open
+    /// from the new base path triggers the lost-`.wallet` recovery
+    /// flow (2i-happy), which rebuilds state from a rescan; the next
+    /// open from the old base path fails with "keys file missing"
+    /// because the file was in fact renamed. Both outcomes are safe.
+    ///
+    /// # Password
+    ///
+    /// `password` is the wallet's *current* password. It is required
+    /// because `seal_state_file` runs Argon2id on every save and the
+    /// handle does not cache the password (see §4.3 of the spec). Use
+    /// [`Self::rotate_password`] separately if you also want to change
+    /// the password — `save_as` does not couple the two.
+    ///
+    /// # Companion files
+    ///
+    /// `<base>.address.txt` and `<base>.prefs.toml` are **not**
+    /// relocated by this method. The address file is a UX cosmetic
+    /// regenerated on demand by the caller; the prefs file is the
+    /// caller's responsibility to copy or rewrite. We deliberately
+    /// keep `save_as` tightly scoped to the canonical wallet pair so
+    /// the atomicity guarantee is precise.
+    pub fn save_as(
+        &mut self,
+        new_base_path: &Path,
+        password: &[u8],
+        ledger: &WalletLedger,
+    ) -> Result<(), WalletFileError> {
+        let new_keys_path = keys_path_from(new_base_path);
+        let new_state_path = state_path_from(new_base_path);
+
+        if new_keys_path.exists() {
+            return Err(WalletFileError::SaveAsTargetExists {
+                path: new_keys_path,
+            });
+        }
+        if new_state_path.exists() {
+            return Err(WalletFileError::SaveAsTargetExists {
+                path: new_state_path,
+            });
+        }
+
+        // Pre-flight cross-fs detection. Returns `Ok(())` on POSIX when
+        // the source and target's parent live on the same `st_dev`;
+        // returns `Ok(())` on Windows after a best-effort drive-letter
+        // comparison (the `EXDEV` translation in step 4 is the safety
+        // net for cases the pre-flight cannot catch).
+        cross_fs_preflight(&self.keys_path, &new_keys_path)?;
+
+        // Pre-encode so a failure during postcard/seal does NOT leave
+        // the pair half-relocated.
+        ledger.preflight_save()?;
+        let body = ledger.to_postcard_bytes()?;
+        let framed = encode_payload(PayloadKind::WalletLedgerPostcard, &body)?;
+        let state_bytes = seal_state_file(password, &self.keys_file_bytes, &framed)?;
+
+        // Step 4: rename keys file. Atomic within a filesystem; the
+        // advisory lock survives the rename (per-OFD on POSIX, per-
+        // handle on Windows). `EXDEV` translation is the belt-and-
+        // suspenders for layered filesystems whose `st_dev` lies.
+        match std::fs::rename(&self.keys_path, &new_keys_path) {
+            Ok(()) => {}
+            Err(e) if is_cross_device_error(&e) => {
+                return Err(WalletFileError::SaveAsCrossFilesystem {
+                    from_path: self.keys_path.clone(),
+                    target: new_keys_path,
+                });
+            }
+            Err(e) => {
+                return Err(WalletFileError::AtomicWriteRename {
+                    target: new_keys_path,
+                    source: e,
+                });
+            }
+        }
+
+        // Step 5: write new state file atomically.
+        atomic_write_file(&new_state_path, &state_bytes)?;
+
+        // Step 6: best-effort cleanup of stranded old state file.
+        match std::fs::remove_file(&self.state_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::warn!(
+                    target: "shekyl_wallet_file",
+                    old_state_path = %self.state_path.display(),
+                    error = %e,
+                    "save_as: failed to remove stranded old state file; safe to delete manually",
+                );
+            }
+        }
+
+        // Step 7: update internal bookkeeping. The lock's stored path
+        // still references the old location for diagnostics — that is
+        // intentional clutter; the OFD itself is the authoritative
+        // lock holder.
+        self.keys_path = new_keys_path;
+        self.state_path = new_state_path;
+
+        Ok(())
+    }
+
     /// Load the wallet's user preferences from the co-located
     /// `<base>.prefs.toml` / `<base>.prefs.toml.hmac` pair, verifying
     /// the HMAC with the session-cached [`PrefsHmacKey`]. The
@@ -660,6 +800,89 @@ impl WalletFileHandle {
 /// defensive-decode path auditable in a single place.
 fn decode_network(v: u8) -> Result<Network, WalletFileError> {
     Network::from_u8(v).ok_or(WalletFileError::UnknownNetwork(v))
+}
+
+/// Best-effort pre-flight detection of a cross-filesystem `save_as`
+/// before any on-disk mutation. POSIX uses `st_dev` comparison via the
+/// safe [`std::os::unix::fs::MetadataExt`] trait. Windows compares the
+/// path roots (drive letter / UNC prefix) as a coarse approximation —
+/// the rename's `EXDEV` translation in `save_as` is the safety net for
+/// cases this approximation cannot detect.
+///
+/// Returns `Ok(())` when the source and target are believed to live on
+/// the same filesystem. Returns
+/// [`WalletFileError::SaveAsCrossFilesystem`] when they are known to
+/// differ. I/O failures (e.g. parent directory missing) are surfaced as
+/// [`WalletFileError::Io`].
+fn cross_fs_preflight(source: &Path, target: &Path) -> Result<(), WalletFileError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let target_parent = target.parent().ok_or_else(|| {
+            WalletFileError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("save_as target has no parent directory: {}", target.display()),
+            ))
+        })?;
+        let src_dev = std::fs::metadata(source)?.dev();
+        let dst_dev = std::fs::metadata(target_parent)?.dev();
+        if src_dev != dst_dev {
+            return Err(WalletFileError::SaveAsCrossFilesystem {
+                from_path: source.to_path_buf(),
+                target: target.to_path_buf(),
+            });
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    {
+        // Windows: compare the first path component (drive letter or
+        // UNC server share). This is a deliberately coarse check; the
+        // safety net is the rename's `ERROR_NOT_SAME_DEVICE` (17)
+        // translation in `is_cross_device_error`.
+        let src_root = source.components().next();
+        let dst_root = target.components().next();
+        if src_root != dst_root {
+            return Err(WalletFileError::SaveAsCrossFilesystem {
+                from_path: source.to_path_buf(),
+                target: target.to_path_buf(),
+            });
+        }
+        Ok(())
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        // Unknown platform: skip pre-flight; rely on the `EXDEV`
+        // translation in `is_cross_device_error` after the rename
+        // attempt.
+        let _ = (source, target);
+        Ok(())
+    }
+}
+
+/// Translate a `rename(2)` `io::Error` into the cross-filesystem
+/// signal. POSIX `EXDEV` is `18` on Linux/macOS/FreeBSD; Windows
+/// `ERROR_NOT_SAME_DEVICE` is `17`. The standard library does not yet
+/// stabilize a portable `io::ErrorKind::CrossesDevices`, so we match
+/// `raw_os_error()` directly.
+fn is_cross_device_error(e: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        // `EXDEV = 18` on every Unix we support (Linux, macOS, FreeBSD).
+        return e.raw_os_error() == Some(18);
+    }
+    #[cfg(windows)]
+    {
+        // `ERROR_NOT_SAME_DEVICE = 17`.
+        return e.raw_os_error() == Some(17);
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = e;
+        false
+    }
 }
 
 #[cfg(test)]

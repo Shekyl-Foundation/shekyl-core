@@ -180,6 +180,38 @@ pub const SHEKYL_WALLET_ERR_CAPABILITY_VIEW_ONLY_NO_SPEND: u32 = 25;
 /// error; callers must dispatch to the hardware signing flow.
 pub const SHEKYL_WALLET_ERR_CAPABILITY_HARDWARE_OFFLOAD_NO_SPEND: u32 = 26;
 
+// --- 2l.a: save_as + typed-ledger FFI surface error codes ------------------
+//
+// `save_as` is atomic only within a single filesystem; see
+// `docs/wallet-state-promotion_ab273bfe.plan.md` design pin #10 (2l Q2.A)
+// for the rationale. The typed-ledger FFI surface (per-block get/set/free
+// in `crate::wallet_ledger_ffi`) can refuse a write attempt against a
+// block it has never hydrated — also mapped here so the C++ side does not
+// have to grow a separate error enumeration.
+
+/// `save_as` refused a cross-filesystem rename. `rename(2)` is atomic
+/// only within a single filesystem, and a fallback copy-fsync-unlink
+/// dance would have an observable window where the file exists at
+/// both locations or neither. Callers (typically the GUI) fall back
+/// to a non-atomic export flow that they explicitly confirm with the
+/// user.
+pub const SHEKYL_WALLET_ERR_SAVE_AS_CROSS_FILESYSTEM: u32 = 27;
+
+/// `save_as` refused because the target path already exists on disk.
+/// Mirrors the write-once posture of
+/// [`SHEKYL_WALLET_ERR_KEYS_FILE_ALREADY_EXISTS`] at create time: the
+/// orchestrator never silently overwrites a wallet file; the caller
+/// picks a different target or removes the existing file first.
+pub const SHEKYL_WALLET_ERR_SAVE_AS_TARGET_EXISTS: u32 = 28;
+
+/// A typed-ledger setter was called for a block whose getter had not
+/// been called first during this handle's lifetime. The orchestrator
+/// refuses partial hydrates: a save path must either pass through all
+/// blocks (hydrate-then-emit) or skip the FFI and use the postcard
+/// ledger export path. This code typically signals a C++-side bug in
+/// the save-emit helper.
+pub const SHEKYL_WALLET_ERR_BLOCK_NOT_HYDRATED: u32 = 29;
+
 // ---------------------------------------------------------------------------
 // Metadata view struct
 // ---------------------------------------------------------------------------
@@ -321,8 +353,13 @@ impl ShekylSafetyOverrides {
 /// Zeroizing master seed, etc.) zero on drop; the handle releases the
 /// advisory lock on drop.
 pub struct ShekylWallet {
-    inner: WalletFileHandle,
-    ledger: WalletLedger,
+    // `pub(crate)` so the typed-ledger FFI surface in
+    // `crate::wallet_ledger_ffi` can read and replace the in-memory
+    // ledger directly. The handle remains opaque across the C ABI;
+    // C++ code reaches the ledger only through the typed
+    // `shekyl_wallet_*` getters / setters defined in that module.
+    pub(crate) inner: WalletFileHandle,
+    pub(crate) ledger: WalletLedger,
 }
 
 // ---------------------------------------------------------------------------
@@ -351,6 +388,10 @@ fn map_wallet_file_err(e: &WalletFileError) -> u32 {
         WalletFileError::UnknownCapability(_) => SHEKYL_WALLET_ERR_UNKNOWN_CAPABILITY_MODE,
         WalletFileError::MultisigNotSupported => SHEKYL_WALLET_ERR_REQUIRES_MULTISIG,
         WalletFileError::Prefs(_) => SHEKYL_WALLET_ERR_PREFS,
+        WalletFileError::SaveAsCrossFilesystem { .. } => {
+            SHEKYL_WALLET_ERR_SAVE_AS_CROSS_FILESYSTEM
+        }
+        WalletFileError::SaveAsTargetExists { .. } => SHEKYL_WALLET_ERR_SAVE_AS_TARGET_EXISTS,
     }
 }
 
@@ -951,6 +992,95 @@ pub unsafe extern "C" fn shekyl_wallet_rotate_password(
             false
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Save-as (2l.a, design pin #10 / Q2.A — atomic within filesystem only)
+// ---------------------------------------------------------------------------
+
+/// Relocate the wallet pair to a new base path, atomically within a
+/// single filesystem. Reseals the state file with the currently
+/// in-memory ledger under `password` and renames the keys file onto
+/// the new base path.
+///
+/// # Atomicity contract
+///
+/// - Atomic within a filesystem (`rename(2)` is POSIX-atomic).
+/// - Cross-filesystem rename is refused with
+///   [`SHEKYL_WALLET_ERR_SAVE_AS_CROSS_FILESYSTEM`] before any
+///   on-disk mutation. Callers fall back to a non-atomic
+///   export flow that they explicitly confirm with the user.
+/// - Target paths already existing is refused with
+///   [`SHEKYL_WALLET_ERR_SAVE_AS_TARGET_EXISTS`].
+///
+/// # Companion files
+///
+/// `<new_base>.address.txt` and `<new_base>.prefs.toml` are **not**
+/// relocated. The address file is a UX cosmetic regenerated on
+/// demand; the prefs file is the caller's responsibility. We keep
+/// `save_as` tightly scoped to `(.wallet.keys, .wallet)` so the
+/// atomicity guarantee stays precise.
+///
+/// # Parameters
+/// - `h`: opaque wallet handle.
+/// - `new_base_path_ptr`, `new_base_path_len`: UTF-8 target base path.
+/// - `password_ptr`, `password_len`: the wallet's *current* password,
+///   required because the state file's AEAD seal runs Argon2id on
+///   every save (§4.3 of the spec).
+/// - `out_error`: receives a wire-stable `SHEKYL_WALLET_ERR_*` code.
+///
+/// # Errors
+/// - `SHEKYL_WALLET_ERR_NULL_POINTER`: any required pointer is null.
+/// - `SHEKYL_WALLET_ERR_SAVE_AS_CROSS_FILESYSTEM`: target lives on
+///   a different filesystem than the source.
+/// - `SHEKYL_WALLET_ERR_SAVE_AS_TARGET_EXISTS`: either
+///   `<new_base>.keys` or `<new_base>` already exists.
+/// - `SHEKYL_WALLET_ERR_IO` / `SHEKYL_WALLET_ERR_ATOMIC_WRITE_RENAME`:
+///   underlying filesystem failures.
+/// - Envelope errors (`BAD_MAGIC`, `AEAD_AUTH_FAILURE`, …) surface
+///   unchanged from the seal path.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_wallet_save_as(
+    h: *mut ShekylWallet,
+    new_base_path_ptr: *const c_char,
+    new_base_path_len: usize,
+    password_ptr: *const u8,
+    password_len: usize,
+    out_error: *mut u32,
+) -> bool {
+    if h.is_null() {
+        set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
+        return false;
+    }
+    let new_base = match path_from_utf8(new_base_path_ptr, new_base_path_len) {
+        Some(p) => p,
+        None => {
+            set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
+            return false;
+        }
+    };
+    let password = match make_slice(password_ptr, password_len) {
+        Some(s) => s,
+        None => {
+            set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
+            return false;
+        }
+    };
+
+    let w = &mut *h;
+    // Clone the ledger before the &mut inner borrow to avoid overlapping
+    // borrows. The ledger is a typed struct that borrows nothing from
+    // the handle; a shallow clone is safe here. The ledger types that
+    // are not `Clone` (e.g. `TransferDetails`) require serializing
+    // through postcard for a snapshot — which is exactly what
+    // `save_state`/`save_as` do internally. We pass a reference to the
+    // live ledger instead.
+    if let Err(e) = w.inner.save_as(&new_base, password, &w.ledger) {
+        set_err(out_error, map_wallet_file_err(&e));
+        return false;
+    }
+    set_err(out_error, SHEKYL_WALLET_ERR_OK);
+    true
 }
 
 // ---------------------------------------------------------------------------
