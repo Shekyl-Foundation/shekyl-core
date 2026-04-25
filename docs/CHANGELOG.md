@@ -4,6 +4,56 @@
 
 ### Changed
 
+- **`monero-oxide` vendor-bump `87acb57` → `3933664` (PR 0.6 of the
+  [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
+  closing Operation A of the `monero-oxide` un-pin question).**
+  Updated [`rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT`](../rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT)
+  from `87acb57e0c3935c8834c8a270bd3bdcbbe36bcde` (sync_date 2026-04-06)
+  to `3933664d0851871c976f07298b862373d1c6fec0` (sync_date 2026-04-25),
+  the current Shekyl fork tip on `Shekyl-Foundation/monero-oxide`
+  `fcmp++`. **No vendored source files changed.** Of the five fork
+  commits between the two pins, the only ones with code-content deltas
+  (`182b648` Cargo profiles + base58 decoder hardening) touched
+  `shekyl-oxide/wallet/base58/`, a Monero-shaped wallet path that is
+  not vendored in shekyl-core per `60-no-monero-legacy.mdc` — Shekyl
+  uses native Bech32m via `shekyl-address` instead. The umbrella
+  `shekyl-oxide/Cargo.toml` is byte-identical between the vendored
+  copy and fork tip; `182b648`'s Cargo profile changes live in the
+  fork's workspace-root `Cargo.toml`, which we do not vendor either.
+  Workspace grep for `monero_base58 | shekyl-oxide.*base58 |
+  ::base58::` returns zero matches across `rust/`, confirming that
+  `shekyl-address` (Bech32m via the `bech32` crate) and no other
+  Shekyl crate imports the fork's base58 module. The hardening itself
+  is strictly more restrictive — `checked_add` overflow detection plus
+  non-canonical-encoding rejection — so even a hypothetical downstream
+  consumer would only see additional `None` returns, never different
+  `Some(_)` payloads. Verification per
+  [`docs/SHEKYL_OXIDE_VENDORING.md`](SHEKYL_OXIDE_VENDORING.md):
+  `cd rust && cargo build --locked -p shekyl-fcmp` clean, `cd rust &&
+  cargo test --locked --workspace` **900 passed, 0 failed, 6 ignored**
+  (exit 0). `ninja shekyld` skipped because PR 0.6 does not touch the
+  C++ side and `docs/SHEKYLD_PREREQUISITES.md` already certifies the
+  C++ daemon as ready. The `.github/workflows/shekyl-oxide-divergence.yml`
+  CI guard now compares against the new pin and reports zero divergence
+  until the fork advances again. Operation B (40-commit fork ↔ upstream
+  merge, including the cypherstack `generalized-bulletproofs-fix`
+  audit response and the Veridise `HelioseleneField::invert`
+  correctness cluster) remains a separate V3.1.x follow-up per
+  [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) § "V3.1+ — Legacy C++ → Rust
+  rewrite scope" and is unaffected by this PR. Half-day review gate
+  (PR 0.4 / 0.5 findings, FOLLOWUPS V3.1+ rewrite interactions,
+  cross-cutting locks confirmation, un-merged-upstream impact on
+  Phase 1 Wallet API shape) cleared cleanly before this PR;
+  conclusions recorded in
+  [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md). With
+  PR 0.6 merged, Phase 0 of the V3 wallet rewrite is complete (six PRs
+  for six PRs); Phase 1 (Wallet API + cross-cutting locks) is now
+  unblocked. Audit doc
+  [`docs/MONERO_OXIDE_VENDOR_STATUS.md`](MONERO_OXIDE_VENDOR_STATUS.md)
+  amended with a "PR 0.6 vendor-bump execution (2026-04-25)" section
+  recording the metadata-only finding so future readers don't replay
+  the base58-content review against vendored paths that don't have it.
+
 - **`shekyl-wallet-file::WalletFileHandle` → `WalletFile`** (PR 0.2 of
   the [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)).
   Mechanical rename across all call sites in `shekyl-wallet-file`,

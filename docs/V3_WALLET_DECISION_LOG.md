@@ -975,4 +975,115 @@ scope" → `monero-oxide un-pin / fork-and-attribute / drop-unused-crates
 
 ---
 
+## 2026-04-25 — Phase 0 review-gate findings + PR 0.6 vendor-bump execution
+
+**Decision.** Phase 0 of the V3 wallet rewrite is complete after PR 0.6.
+The half-day review gate cleared all five items cleanly, no cross-cutting
+locks were superseded, no un-merged upstream commit was found to affect
+Phase 1's Wallet API shape, and the `87acb57` → `3933664` vendor-bump
+turned out to be strictly metadata-only at the shekyl-core level. Phase 1
+(Wallet API + cross-cutting locks codification) is unblocked.
+
+**Review-gate findings (per the five-item checklist in the rewrite plan).**
+
+1. **PR 0.4 vendor-status (`docs/MONERO_OXIDE_VENDOR_STATUS.md`).**
+   Confirmed the Operation A / Operation B split is the correct
+   decomposition. Operation A (5 commits, only `182b648` carries content
+   delta) is cheap; Operation B (40 commits including the cypherstack
+   audit response and the Veridise `HelioseleneField::invert` cluster) is
+   genuinely a separate plan because of the upstream restructure
+   decision it forces.
+
+2. **PR 0.3 / 0.5 daemon-side findings
+   (`docs/SHEKYLD_PREREQUISITES.md`).** Confirmed (a) regtest
+   `--regtest --offline --fixed-difficulty 1 + generateblocks` is usable
+   for Phase 6; (b) `get_fee_estimate` returns a positional 4-slot
+   `fees` vector (no name-keyed buckets on the wire — wallet maps names
+   to positions, see the "Fee priority on the daemon RPC" entry above);
+   (c) `fee_policy_version` is absent on the daemon today and that's a
+   V3.1 daemon follow-up, not a Phase 0 blocker — Phase 2a's wallet
+   client treats the field as an `Option<u32>` so it absorbs the field
+   gracefully when the daemon eventually carries it.
+
+3. **`docs/FOLLOWUPS.md` V3.1+ rewrite interactions.** Confirmed the
+   rewrite-interaction index table at the head of the section and the
+   per-entry annotations. `wallet2.cpp` absorption, the `WalletPrefs`
+   round-trip property test, and PQC Multisig V3.1 hardware-wallet
+   integration are absorbed by the rewrite phases. `shekyl-cli`
+   key-image binary export and `wallet_tools.cpp` mixin/decoy
+   infrastructure close at Phase 5 (deletion). The
+   `shekyl-daemon-rpc` staticlib `tracing::*` drop closes via Phase 1's
+   logging deliverable picking up daemon-side `tracing-subscriber`
+   initialization. Operation A closes here (PR 0.6); Operation B stays
+   open as a V3.1.x peer plan.
+
+4. **Cross-cutting locks confirmation.** All eleven locks (Tokio runtime,
+   `thiserror` + typed enums, `tokio::sync::RwLock` discipline,
+   `PendingTx` lifetime, network enum + safety constants, `{account,
+   address}` subaddress hierarchy, refresh handle semantics, fee
+   priority, structured `tracing::*` logging, KAT testing budget, and
+   the decision-log itself) stand. The PR 0.3/0.5 audit findings refine
+   the fee-priority lock — wallet-side mapping of name → position — but
+   do not supersede it.
+
+5. **Un-merged upstream commits and Phase 1 Wallet API shape.**
+   Substantive upstream commits the fork is missing
+   (`cba7117` cypherstack response, `00bafcf` HelioseleneField::invert,
+   `0d6f5e8` ConditionallySelectable bound, `1ac294e` WCG invariant fix,
+   `a5cc436` WCG sparse-BTreeMap representation, `7568518` lazy
+   deserialization in SA+L proof, `8ff1f90` GBP optimization) all
+   modify internal cryptographic primitives in `shekyl-oxide`'s
+   `crypto/*` and `shekyl-oxide/fcmp/*` subtrees. None changes a public
+   type signature in a way the wallet would compose against — `PendingTx`
+   is a process-local opaque value, the SA+L proof bytes are an
+   already-constructed wire payload, and FCMP++ membership-proof
+   construction lives behind `shekyl-tx-builder`/`shekyl-proofs` not
+   directly on the wallet API. Operation B can therefore proceed in
+   parallel with rewrite Phases 1–3 rather than blocking them.
+
+**PR 0.6 vendor-bump execution (Operation A).** The audit predicted the
+bump would be "trivial" with one base58-content review. Execution made it
+even simpler:
+
+- The only files that changed in vendored path globs (`crypto/**` and
+  `shekyl-oxide/**`) between `87acb57` and `3933664` are
+  `shekyl-oxide/wallet/base58/src/{lib,tests}.rs`. The fork's
+  `shekyl-oxide/wallet/` subtree is **not** vendored in
+  `rust/shekyl-oxide/` of shekyl-core (per `60-no-monero-legacy.mdc`,
+  Shekyl uses native Bech32m via `shekyl-address`, not the Monero-shaped
+  `wallet/{address, base58}`).
+- The umbrella `shekyl-oxide/Cargo.toml` is byte-identical between
+  vendored and fork tip; `182b648`'s Cargo profile changes live in the
+  fork's workspace-root `Cargo.toml`, which is also not vendored.
+- Workspace grep for fork-base58 references
+  (`monero_base58 | shekyl-oxide.*base58 | ::base58::`) finds zero
+  matches across `rust/`. The base58 hardening is strictly more
+  restrictive (`checked_add` + non-canonical encoding rejection) and
+  would only ever return additional `None` values to a downstream
+  consumer, never different `Some(_)` payloads.
+
+**Net result.** PR 0.6 is metadata-only — it updates
+`rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT` from
+`87acb57e0c3935c8834c8a270bd3bdcbbe36bcde` to
+`3933664d0851871c976f07298b862373d1c6fec0` and updates documentation. No
+vendored source files change. Workspace verification per
+`docs/SHEKYL_OXIDE_VENDORING.md`: `cargo build --locked -p shekyl-fcmp`
+clean; `cargo test --locked --workspace` 900 passed, 0 failed, 6 ignored.
+
+**Implication for future bumps.** The fork's `shekyl-oxide/wallet/`
+subtree being non-vendored means a future bump that contains *only*
+wallet-subtree changes is also metadata-only at the shekyl-core level
+and can be turned around in minutes once the audit confirms which paths
+actually changed.
+
+**Cross-link.**
+[`docs/MONERO_OXIDE_VENDOR_STATUS.md`](MONERO_OXIDE_VENDOR_STATUS.md)
+§"PR 0.6 vendor-bump execution (2026-04-25)";
+[`docs/CHANGELOG.md`](CHANGELOG.md) `[Unreleased]`/Changed entry for
+PR 0.6;
+[`.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)
+Phase 0 PR 0.6 deliverable.
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

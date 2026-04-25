@@ -2,6 +2,8 @@
 
 Audit produced for **PR 0.4** of the `shekyl_v3_wallet_rust_rewrite` plan
 (see `.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md` Phase 0).
+Vendor-bump portion executed by **PR 0.6** on the same day; see
+"PR 0.6 vendor-bump execution" below.
 
 ## Scope
 
@@ -105,6 +107,57 @@ depends on.
 This bump is **not** scheduled by this audit. The un-pin plan or a
 follow-up vendor-refresh PR will schedule it; this audit just records
 that it's available and cheap.
+
+## PR 0.6 vendor-bump execution (2026-04-25)
+
+PR 0.6 (`chore/phase0-pr06-oxide-vendor-bump`) executed the `87acb57` →
+`3933664` vendor-bump on the same audit date. Three findings emerged
+during execution that refine the audit's "trivial" classification to
+"strictly metadata-only":
+
+1. **No vendored file content actually changed.** Running
+   `git diff --name-only 87acb57..3933664 -- 'crypto/**' 'shekyl-oxide/**'`
+   on the fork repo lists exactly two files:
+   `shekyl-oxide/wallet/base58/src/lib.rs` and
+   `shekyl-oxide/wallet/base58/src/tests.rs`. **Neither is vendored** in
+   `rust/shekyl-oxide/` — the fork's `shekyl-oxide/wallet/` subtree
+   (Monero-shaped wallet code) is excluded per `60-no-monero-legacy.mdc`,
+   and Shekyl uses native `shekyl-address` (Bech32m) instead.
+2. **The umbrella `Cargo.toml` is byte-identical** between the vendored
+   copy (`rust/shekyl-oxide/shekyl-oxide/Cargo.toml`) and the fork tip.
+   The "Cargo.toml profiles" portion of `182b648` lives in the fork's
+   *workspace-root* `Cargo.toml`, which we do not vendor.
+3. **The `182b648` base58 review is moot for shekyl-core.** Workspace
+   grep for `monero_base58 | shekyl-oxide.*base58 | ::base58::` returns
+   zero matches; `shekyl-address` depends only on the `bech32` crate and
+   `shekyl-encoding`/`shekyl-crypto-hash`. The hardening itself is
+   strictly more restrictive (rejects more inputs via `checked_add` +
+   non-canonical-encoding check, accepts no new inputs), so even a
+   hypothetical downstream consumer would only see additional `None`
+   returns, never different `Some(_)` payloads.
+
+PR 0.6 therefore consisted of:
+
+- Updating `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT` from
+  `87acb57e0c3935c8834c8a270bd3bdcbbe36bcde` (sync_date 2026-04-06) to
+  `3933664d0851871c976f07298b862373d1c6fec0` (sync_date 2026-04-25).
+- Running the workspace verification suite per
+  `docs/SHEKYL_OXIDE_VENDORING.md`:
+  `cargo build --locked -p shekyl-fcmp` (clean) and
+  `cargo test --locked --workspace` (**900 passed, 0 failed, 6
+  ignored**, exit 0). `ninja shekyld` was skipped because PR 0.6 does
+  not touch the C++ side and `docs/SHEKYLD_PREREQUISITES.md` already
+  certifies the C++ daemon as ready.
+- Documentation updates (this section, `docs/CHANGELOG.md`,
+  `docs/V3_WALLET_DECISION_LOG.md`).
+
+The `.github/workflows/shekyl-oxide-divergence.yml` CI guard (per
+`docs/SHEKYL_OXIDE_VENDORING.md`) now compares against the new pin and
+will report zero divergence until the fork advances again.
+
+**Operation B remains unchanged.** The 40-commit fork ↔ upstream delta
+(below) is unaffected by PR 0.6 and remains scoped to a separate V3.1.x
+follow-up per `docs/FOLLOWUPS.md`.
 
 ## Fork-only commits (8 commits since merge base, oldest first)
 
@@ -265,8 +318,12 @@ layout stays and upstream paths are translated at vendor time.
 
 1. **Vendored is fresh against the fork.** Five commits behind, all
    non-crypto except the `182b648` base58 hardening. A vendor-bump
-   from `87acb57` → `3933664` is mechanical and is **not blocked by
-   anything in this audit**. It can be scheduled independently.
+   from `87acb57` → `3933664` is mechanical and was **not blocked by
+   anything in this audit**. **Executed by PR 0.6** on the same
+   calendar day — turned out to be strictly metadata-only because the
+   sole content delta lives in `shekyl-oxide/wallet/base58/`, which is
+   not vendored in shekyl-core. See "PR 0.6 vendor-bump execution"
+   above.
 
 2. **The fork is 40 commits behind upstream**, including:
    - One security-relevant audit response (`cba7117` cypherstack-fix —
