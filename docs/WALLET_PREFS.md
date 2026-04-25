@@ -118,7 +118,7 @@ GUI.
   attacker-seeded overrides.
 - **Storage:** none. `SafetyOverrides` is a request-scoped struct,
   `#[derive(Debug)]` but not `Serialize`, passed by value into
-  `WalletFileHandle::open`.
+  `WalletFile::open`.
 - **Logging:** every active override emits a `WARN`-level log line at
   open time naming the field, the override value, and the network
   default. Loud by construction.

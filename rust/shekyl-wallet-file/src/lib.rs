@@ -21,7 +21,7 @@
 //!    write-once enforcement on `.wallet.keys`.
 //!
 //! The public surface is deliberately small: one struct
-//! ([`WalletFileHandle`]), four methods (`create`, `open`, `save_state`,
+//! ([`WalletFile`]), four methods (`create`, `open`, `save_state`,
 //! `rotate_password`), and a dedicated error type
 //! ([`WalletFileError`]).
 //!
@@ -33,7 +33,7 @@
 //! | Atomic write with parent-dir fsync             | [`atomic`] (private)      |
 //! | Advisory lock (`flock` / `LockFileEx`)         | [`lock`] (private)        |
 //! | Companion-path rules (`.wallet` ↔ `.wallet.keys`) | [`paths`]              |
-//! | `WalletFileHandle` lifecycle                   | [`handle`]                |
+//! | `WalletFile` lifecycle                   | [`handle`]                |
 //! | Error type & `From` impls                      | [`error`]                 |
 //!
 //! # Rule compliance
@@ -63,7 +63,7 @@ pub mod secrets_transitional;
 
 pub use capability::Capability;
 pub use error::WalletFileError;
-pub use handle::{CreateParams, OpenOutcome, WalletFileHandle};
+pub use handle::{CreateParams, OpenOutcome, WalletFile};
 pub use overrides::SafetyOverrides;
 pub use payload::{
     decode_payload, encode_payload, DecodedPayload, PayloadError, PayloadKind,

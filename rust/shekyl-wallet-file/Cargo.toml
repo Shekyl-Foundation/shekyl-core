@@ -31,7 +31,7 @@ tempfile = "3"
 
 # Hardening-pass commit 2 (`docs/MID_REWIRE_HARDENING.md` §3.2):
 # criterion + iai-callgrind harness for the `open_cold` path. The
-# bench measures `WalletFileHandle::create` → drop → `::open` under
+# bench measures `WalletFile::create` → drop → `::open` under
 # production `KdfParams::default()` (Argon2id 64 MiB, t=3), mirroring
 # the C++ `BM_open_cold` bench (currently skipped; see
 # §3.1 known-gaps note). Named `crypto_bench_*` because Argon2id drift

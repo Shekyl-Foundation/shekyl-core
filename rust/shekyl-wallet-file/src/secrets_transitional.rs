@@ -63,7 +63,7 @@ use zeroize::Zeroizing;
 use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
 
 use crate::capability::Capability;
-use crate::handle::WalletFileHandle;
+use crate::handle::WalletFile;
 
 /// Refusal to extract the master seed from a wallet that is not
 /// FULL-capable. Distinct variants per capability so the C++ call site
@@ -103,7 +103,7 @@ pub struct RederivationInputs {
     pub master_seed_64: Zeroizing<[u8; MASTER_SEED_BYTES]>,
 }
 
-impl WalletFileHandle {
+impl WalletFile {
     /// Extract the 64-byte master seed needed to drive
     /// `shekyl_account_rederive` on the C++ side.
     ///
@@ -160,7 +160,7 @@ mod tests {
     use super::*;
     use crate::handle::CreateParams;
     use crate::overrides::SafetyOverrides;
-    use crate::WalletFileHandle;
+    use crate::WalletFile;
     use shekyl_address::Network;
     use shekyl_crypto_pq::kem::ML_KEM_768_DK_LEN;
     use shekyl_crypto_pq::wallet_envelope::{
@@ -180,7 +180,7 @@ mod tests {
 
     /// Build a FULL wallet under `tmp` with a known 64-byte master
     /// seed and return the opened handle.
-    fn open_full_fixture(tmp: &tempfile::TempDir, master_seed_64: &[u8; 64]) -> WalletFileHandle {
+    fn open_full_fixture(tmp: &tempfile::TempDir, master_seed_64: &[u8; 64]) -> WalletFile {
         let base = tmp.path().join("w");
         let password: &[u8] = b"test-password";
 
@@ -201,7 +201,7 @@ mod tests {
             kdf: fast_kdf(),
             initial_ledger: &WalletLedger::empty(),
         };
-        WalletFileHandle::create(&params).expect("create FULL fixture")
+        WalletFile::create(&params).expect("create FULL fixture")
     }
 
     #[test]
@@ -259,7 +259,7 @@ mod tests {
             kdf: fast_kdf(),
             initial_ledger: &WalletLedger::empty(),
         };
-        let h = WalletFileHandle::create(&params).expect("create VIEW_ONLY fixture");
+        let h = WalletFile::create(&params).expect("create VIEW_ONLY fixture");
 
         match h.extract_rederivation_inputs() {
             Err(ExtractRederivationInputsError::ViewOnly) => {}

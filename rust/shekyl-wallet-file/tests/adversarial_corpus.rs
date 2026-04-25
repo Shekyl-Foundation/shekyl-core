@@ -7,7 +7,7 @@
 //!
 //! Each test below constructs a wallet-file pair in a shape that a
 //! malicious or corrupt producer could plausibly emit, then opens it
-//! through the public [`shekyl_wallet_file::WalletFileHandle::open`]
+//! through the public [`shekyl_wallet_file::WalletFile::open`]
 //! API and asserts a specific typed refusal. Collectively the tests
 //! lock in the posture that every layer of the on-disk format —
 //! envelope magic / version / AEAD tag, SWSP payload frame, postcard
@@ -23,7 +23,7 @@
 //! and a fresh region-2 nonce; pinning byte-for-byte binary fixtures
 //! to disk would require a deterministic-seal escape hatch just for
 //! this corpus. Instead each test generates its adversarial input
-//! in-process from a real [`WalletFileHandle::create`] call followed
+//! in-process from a real [`WalletFile::create`] call followed
 //! by explicit byte-level surgery (via
 //! [`shekyl_crypto_pq::wallet_envelope::seal_state_file`] where the
 //! attack reaches inside region 2). The shape of each attack is
@@ -76,7 +76,7 @@ use shekyl_wallet_file::payload::{
     encode_payload, PayloadError, PayloadKind, CURRENT_PAYLOAD_VERSION, PAYLOAD_HEADER_LEN,
     PAYLOAD_MAGIC,
 };
-use shekyl_wallet_file::{CreateParams, SafetyOverrides, WalletFileError, WalletFileHandle};
+use shekyl_wallet_file::{CreateParams, SafetyOverrides, WalletFile, WalletFileError};
 use shekyl_wallet_state::{
     TxMetaBlock, TxSecretKey, TxSecretKeys, WalletLedger, WalletLedgerError,
     WALLET_LEDGER_FORMAT_VERSION,
@@ -192,14 +192,14 @@ fn make_valid_wallet(tmp: &tempfile::TempDir, password: &[u8]) -> PathBuf {
     };
     // Drop the handle before returning so the advisory lock is released
     // and the subsequent `open` (in the test) can acquire it cleanly.
-    drop(WalletFileHandle::create(&params).expect("create baseline wallet"));
+    drop(WalletFile::create(&params).expect("create baseline wallet"));
     base
 }
 
 /// Shorthand for the open call used by every test; returns the error
 /// variant so each test can assert on its specific shape.
 fn open_and_capture_error(base: &Path, password: &[u8]) -> WalletFileError {
-    WalletFileHandle::open(base, password, TEST_NETWORK, SafetyOverrides::none())
+    WalletFile::open(base, password, TEST_NETWORK, SafetyOverrides::none())
         .expect_err("adversarial fixture must be refused, but open() returned Ok")
 }
 
@@ -406,7 +406,7 @@ fn state_file_swapped_from_another_wallet_is_refused() {
             kdf: Fixture::fast_kdf(),
             initial_ledger: &ledger,
         };
-        drop(WalletFileHandle::create(&params).expect("create wallet"));
+        drop(WalletFile::create(&params).expect("create wallet"));
     }
 
     // Overwrite A's `.wallet` with B's `.wallet` bytes; keep A's

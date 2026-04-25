@@ -19,12 +19,12 @@ so pinning byte-for-byte ciphertexts would require a deterministic-seal
 escape hatch in `shekyl-crypto-pq` that exists only for this test.
 Instead every test:
 
-1. Calls `WalletFileHandle::create(...)` to produce a real,
+1. Calls `WalletFile::create(...)` to produce a real,
    properly-sealed pair of files on disk.
 2. Performs narrow byte-level surgery on one of those files, or
    re-seals region 2 against a synthetic plaintext through the public
    `shekyl_crypto_pq::wallet_envelope::seal_state_file` helper.
-3. Calls `WalletFileHandle::open(...)` and matches the returned
+3. Calls `WalletFile::open(...)` and matches the returned
    `WalletFileError` against the expected variant.
 
 This keeps the corpus robust to future format-field renames and AEAD

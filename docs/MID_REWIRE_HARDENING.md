@@ -812,8 +812,8 @@ so the same test drives both profiles.
 **Status: Landed.** New
 [`rust/shekyl-wallet-file/tests/adversarial_corpus.rs`](../rust/shekyl-wallet-file/tests/adversarial_corpus.rs)
 drives 16 programmatic attack shapes through the orchestrator's
-`WalletFileHandle::open` entry point. Each test assembles its
-adversarial input in-process from a real `WalletFileHandle::create`
+`WalletFile::open` entry point. Each test assembles its
+adversarial input in-process from a real `WalletFile::create`
 call followed by narrow byte surgery (on ciphertext-protected regions
 via the public
 [`shekyl_crypto_pq::wallet_envelope::seal_state_file`](../rust/shekyl-crypto-pq/src/wallet_envelope.rs)

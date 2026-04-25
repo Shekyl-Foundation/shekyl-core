@@ -10,7 +10,7 @@
 //! boundaries and forward-compatible with capabilities we have not yet
 //! specified. Callers at the orchestrator level should never pattern-match
 //! on those raw bytes — they are a transport concern. [`Capability`] is the
-//! typed surface we expose on [`crate::WalletFileHandle`] and through the
+//! typed surface we expose on [`crate::WalletFile`] and through the
 //! eventual FFI opaque-handle getter.
 //!
 //! # Defensive decoding

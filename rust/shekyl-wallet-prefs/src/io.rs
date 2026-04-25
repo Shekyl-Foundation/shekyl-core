@@ -156,7 +156,7 @@ impl LoadOutcome {
 /// failure-policy table that this function implements.
 ///
 /// `base_path` must be the wallet's `.wallet` state-file path (the
-/// same value a caller passes to `WalletFileHandle::open`). The
+/// same value a caller passes to `WalletFile::open`). The
 /// companion `.prefs.toml` and `.prefs.toml.hmac` paths are derived
 /// via [`crate::paths`].
 pub fn load_prefs(base_path: &Path, hmac_key: &PrefsHmacKey) -> Result<LoadOutcome, PrefsError> {
@@ -220,7 +220,7 @@ pub fn load_prefs(base_path: &Path, hmac_key: &PrefsHmacKey) -> Result<LoadOutco
 /// Serialize `prefs` to TOML, atomically write the body, compute
 /// HMAC-SHA256 over the exact bytes written, and atomically write
 /// the HMAC file. Callers should hold any higher-level session lock
-/// (`WalletFileHandle`'s advisory lock is enough in practice).
+/// (`WalletFile`'s advisory lock is enough in practice).
 pub fn save_prefs(
     base_path: &Path,
     hmac_key: &PrefsHmacKey,

@@ -200,7 +200,7 @@ over the same logical transfer shape. **Documented asymmetries:**
 **Binaries.** `benches/open.rs` (criterion, production KDF),
 `benches/open_iai.rs` (iai-callgrind, KAT KDF).
 
-**What it measures.** `WalletFileHandle::open(base_path, password,
+**What it measures.** `WalletFile::open(base_path, password,
 network, SafetyOverrides::none())` of a freshly created wallet pair.
 This is the UI-visible wait the user experiences between "clicked
 Open" and "ledger is ready": Argon2id password wrap → keys-file AEAD
@@ -264,7 +264,7 @@ per iteration.
   bench-comparison cannot accidentally compare KAT numbers against a
   production-profile baseline on the same machine.
 
-**Measurement boundary.** Criterion wraps `WalletFileHandle::open(..)`
+**Measurement boundary.** Criterion wraps `WalletFile::open(..)`
 in `black_box(..)` at both the argument and return-value boundary.
 iai-callgrind's `#[library_benchmark]` has the annotated function
 body contain the `::open` call only; `prepared_wallet(kdf)` is the

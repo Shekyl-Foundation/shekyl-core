@@ -9,7 +9,7 @@
 //! preference model pinned in
 //! [`docs/WALLET_PREFS.md`](../../../../docs/WALLET_PREFS.md) §2.3 and
 //! §3.3. These values are request-scoped: they are not persisted
-//! anywhere and die with the `WalletFileHandle` that carries them.
+//! anywhere and die with the `WalletFile` that carries them.
 //!
 //! Layering policy:
 //!
@@ -21,7 +21,7 @@
 //!    audit doc lists as override-admissible are represented here;
 //!    adding a new field requires amending the audit doc first.
 //! 3. Call sites resolve the effective value at point of use via
-//!    [`crate::WalletFileHandle::effective_max_reorg_depth`] and
+//!    [`crate::WalletFile::effective_max_reorg_depth`] and
 //!    friends, so there is no way to accidentally read the raw default
 //!    and miss an override.
 //!
@@ -40,10 +40,10 @@ use shekyl_wallet_state::NetworkSafetyConstants;
 /// `Some(v)` means "use `v` for this session only, and log a `WARN`
 /// line at open time naming the field, the value, and the default."
 ///
-/// The struct is `Copy` so it can be stored on a [`WalletFileHandle`]
+/// The struct is `Copy` so it can be stored on a [`WalletFile`]
 /// without giving up the ability to call handle methods mutably.
 ///
-/// [`WalletFileHandle`]: crate::WalletFileHandle
+/// [`WalletFile`]: crate::WalletFile
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct SafetyOverrides {
     /// Override for [`NetworkSafetyConstants::max_reorg_depth`]. CLI
