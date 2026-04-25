@@ -647,4 +647,34 @@ into one method (`apply_scan_result`), which has three benefits:
 
 ---
 
+## 2026-04-25 — `WalletFileHandle` renamed to `WalletFile`
+
+**Decision.** The `shekyl-wallet-file` crate's primary type
+`WalletFileHandle` is renamed to `WalletFile` in
+[PR 0.2 of the rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md).
+Mechanical rename across all call sites (`shekyl-wallet-file`,
+`shekyl-wallet-prefs`, `shekyl-ffi`, `src/shekyl/shekyl_ffi.h`
+doc-comment); no ABI change (the C-ABI symbols use the
+`shekyl_wallet_*` prefix, not the Rust type name).
+
+**Rationale.** Two reasons:
+
+- The Phase 1 orchestrator type in `shekyl-wallet-core` is `Wallet`.
+  The plan's "Wallet → WalletFile" phrasing was loose plan-text — the
+  intent was to free `Wallet` for the orchestrator and rename whatever
+  the file-orchestrator type was actually called to `WalletFile`. The
+  realization (`WalletFileHandle` → `WalletFile`) matches the intent.
+- The `Handle` suffix was inherited cruft suggesting "this is a handle
+  to something" without specifying what. `WalletFile` describes the
+  actual abstraction (a wallet file, with envelope, atomic IO,
+  advisory locking, payload framing). The shorter name also reads
+  better as a field type in the Phase 1 composition pattern
+  (`pub struct Wallet { file: WalletFile, .. }` vs
+  `file: WalletFileHandle`).
+
+**Scope.** Type rename only. The C-ABI symbols and the on-disk
+envelope format are untouched.
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->
