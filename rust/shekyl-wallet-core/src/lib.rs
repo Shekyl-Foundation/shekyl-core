@@ -23,8 +23,8 @@ pub mod workflow;
 pub use claim_builder::{ClaimTxBuilder, ClaimTxPlan};
 pub use error::WalletCoreError;
 pub use wallet::{
-    Capability, IoError, KeyError, Network, OpenError, PendingTxError, RefreshError, SendError,
-    SoloSigner, TxError, WalletSignerKind,
+    Capability, DaemonClient, IoError, KeyError, Network, OpenError, PendingTxError, RefreshError,
+    SendError, SoloSigner, TxError, Wallet, WalletSignerKind,
 };
 pub use workflow::ClaimAndUnstakePlan;
 

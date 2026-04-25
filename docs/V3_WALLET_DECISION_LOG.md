@@ -1234,4 +1234,106 @@ new module `rust/shekyl-wallet-core/src/wallet/`.
 
 ---
 
+## 2026-04-25 — `Wallet<S>` struct shape and accessor surface
+
+**Decision.** The Phase 1 follow-up commit lands the `Wallet<S:
+WalletSignerKind>` struct itself with its full dependency graph,
+read-only accessor surface, and a thin `DaemonClient` wrapper around
+`shekyl_simple_request_rpc::SimpleRequestRpc`. Six concrete sub-decisions
+ship together, each binding for downstream code:
+
+1. **Field set fixed at eight members.** `file: WalletFile`, `keys:
+   AllKeysBlob`, `ledger: WalletLedger`, `prefs: WalletPrefs`, `daemon:
+   DaemonClient`, `network: Network`, `capability: Capability`, plus
+   `_signer: PhantomData<S>` for compile-time signer dispatch. No
+   "miscellaneous state" bag, no `runtime_state: RuntimeWalletState`
+   (the `RuntimeWalletState` audit decision lands in its own commit and
+   currently leans toward folding into `WalletLedger`).
+2. **`network` and `capability` are cached on the struct, not delegated
+   to `WalletFile`.** The plan explicitly lists both as fields. The
+   correctness argument is that `WalletFile`'s region 1 is write-once
+   after `create` (only `change_password` rewraps the file_kek without
+   touching the AAD bytes), so the cache cannot drift. The
+   accessor-speed argument is that a `Wallet::network()` call on an
+   `Arc<RwLock<Wallet>>` should not have to traverse the file handle's
+   accessor chain.
+3. **`Wallet<S>` does not implement `Drop`.** The two secret-bearing
+   composed types — `AllKeysBlob` and `WalletFile` — each ship their
+   own `Drop` that wipes the relevant material (Ed25519 / view scalars,
+   ML-KEM-DK, `file_kek`, advisory lock release). A wrapper `Drop` here
+   would risk shadowing the inner ones at compile time without changing
+   behavior at run time, and adds an audit point with no security
+   value. Composing types that already wipe correctly is sound; this
+   commit relies on that contract being upheld by the inner types
+   (which it is, per their own audit-log entries).
+4. **`Wallet::keys()` is `pub(crate)`, not `pub`.** Phase 2 sign /
+   proof code paths inside `shekyl-wallet-core` go through this
+   accessor; the returned `&AllKeysBlob` reference must not escape the
+   crate. Phase 2 will add dedicated method-level surfaces
+   (`sign_transfer`, `tx_proof`, `reserve_proof`) that take borrowed
+   inputs and return finished artifacts, so external call sites
+   (`shekyl-cli`, `shekyl-wallet-rpc`) never need to borrow the keys
+   directly. Allowing `pub` access would re-introduce the
+   wallet2-shaped pattern of "give me the keys and I'll do the math
+   myself" that the rewrite explicitly rejects.
+5. **`DaemonClient` is a thin `pub struct` wrapper, not a `pub use`
+   re-export.** Three independently sufficient reasons:
+   (a) insulates `Wallet`'s public API from the transport choice — the
+   `Wallet::daemon()` accessor returns a stable type, so a future
+   transport swap (UDS, gRPC, in-process test fake) does not change
+   the wallet-level signature; (b) gives Phase 2a a single audited
+   site for the `get_info` network-mismatch check, the
+   `get_fee_estimates` fee-priority resolution, and the daemon-bound
+   tracing spans — adding these to a `pub use` re-export is impossible;
+   (c) keeps the cross-cutting lock 1 contract (caller-provided
+   multi-threaded `tokio` runtime) localized to one wrapper rather
+   than radiating through the wallet API.
+6. **`shekyl-crypto-pq` becomes a non-optional dependency of
+   `shekyl-wallet-core`.** Previously the dep was gated behind the
+   `multisig` feature flag (which still exists for the FROST scaffold);
+   with `keys: AllKeysBlob` now on the struct, the dep is required
+   regardless of feature. The `multisig` feature retains its remaining
+   gates (`shekyl-fcmp/multisig`, `modular-frost`, `chacha20poly1305`,
+   `hkdf`, `sha2`, `serde`, `serde_json`, `zeroize`, `hex`).
+
+**Rationale.** This commit operationalizes the cross-cutting locks
+that bind on the *type shape* of the orchestrator (lock 1 caller-async,
+lock 3 `&self` / `&mut self` discipline, lock 4 `PendingTx` lifetime
+through ledger-resident reservations) without yet committing to the
+behavioral shape of the lifecycle methods (`create`, `open_full`,
+`open_view_only`, `open_hardware_offload`, `change_password`, `close`).
+Reviewers see the failure-surface (per-domain error enums, previous
+commit) and the success-shape (this commit, struct fields and
+accessors) before the methods land that connect the two.
+
+**What does *not* live on `Wallet`.** Cross-cutting lock 4 says the
+in-flight transaction reservation ledger lives in `WalletLedger`'s
+bookkeeping block, not on `Wallet`. The lifecycle commit will add
+`outstanding_pending_txs()` that delegates to the ledger; the
+`PendingTx` handles themselves are caller-owned and short-lived. Cross-
+cutting lock 7 says the cancel-on-drop refresh handle is *returned by*
+`Wallet::refresh`, not stored *on* `Wallet` — a `Wallet`-internal
+handle would defeat the single-flight `&mut self` borrow that enforces
+no concurrent refresh. Both of these constraints are now type-enforced:
+the struct simply has no field where they could go.
+
+**Why `PhantomData<S>` and not a trait-object signer.** The compile-
+time dispatch promised by `Wallet<S: WalletSignerKind>` requires that
+`S` appear in the type and method signatures, but the actual signer
+*state* (for `SoloSigner`, the spend secret) is already on `keys:
+AllKeysBlob`. A `PhantomData<S>` field carries the type parameter
+without storing duplicate signer-kind state. V3.1's `MultisigSigner<N,
+K>` will add a sibling field (`multisig_state: MultisigContext<N, K>`)
+gated on the `multisig` Cargo feature; existing `SoloSigner` call sites
+will not need source changes.
+
+**Cross-references.** Cross-cutting locks 1, 3, 4 (this file, "Wallet
+stack: cross-cutting locks");
+[plan §"Phase 1 — Wallet domain model" → "What's a `Wallet`?"](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md);
+prior entry "Per-domain `Wallet` error enums + sealed
+`WalletSignerKind`" (immediately above) for the type-layer foundations
+this builds on.
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

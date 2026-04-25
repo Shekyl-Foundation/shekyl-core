@@ -3243,8 +3243,11 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-oxide",
  "shekyl-scanner",
+ "shekyl-simple-request-rpc",
  "shekyl-staking",
  "shekyl-wallet-file",
+ "shekyl-wallet-prefs",
+ "shekyl-wallet-state",
  "thiserror",
  "zeroize",
 ]

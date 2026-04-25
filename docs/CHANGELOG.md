@@ -4,6 +4,43 @@
 
 ### Added
 
+- **`shekyl-wallet-core::Wallet<S>` struct + `DaemonClient` thin wrapper
+  (Phase 1 of the [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
+  cross-cutting locks 1, 3, 4 type-layer realization).** Lands the
+  `Wallet<S: WalletSignerKind>` struct itself with its full dependency
+  graph wired in: `file: shekyl_wallet_file::WalletFile`, `keys:
+  shekyl_crypto_pq::account::AllKeysBlob`, `ledger:
+  shekyl_wallet_state::WalletLedger`, `prefs:
+  shekyl_wallet_prefs::WalletPrefs`, `daemon: DaemonClient`, `network:
+  Network`, `capability: Capability`, plus `_signer: PhantomData<S>`
+  for compile-time signer-kind dispatch. `network` and `capability` are
+  cached from `WalletFile`'s region 1 (which is write-once after
+  `create`) so the hot accessors are infallible and O(1). Read-only
+  accessors (`network()`, `capability()`, `file()`, `ledger()`,
+  `prefs()`, `daemon()`) plus a `pub(crate) keys()` for in-crate sign /
+  proof code paths. Redacted `Debug` impl: `keys` prints as
+  `<redacted: AllKeysBlob>`, `ledger` / `prefs` print as `<…>`, `file`
+  and `daemon` delegate to their own already-redacting impls. No
+  `Drop` impl on `Wallet<S>` itself: `AllKeysBlob` and `WalletFile`
+  each ship their own `Drop` for the secret bytes / KEK / advisory
+  lock; composing types that already wipe correctly is sound, and a
+  wrapper `Drop` would risk shadowing the inner ones. New
+  `DaemonClient` thin wrapper around
+  `shekyl_simple_request_rpc::SimpleRequestRpc` insulates `Wallet`'s
+  public API from the transport choice and gives Phase 2a a single
+  audited site for `get_info` network verification, `get_fee_estimates`
+  fee-priority resolution, and tx submission. The six lifecycle methods
+  (`create`, `open_full`, `open_view_only`, `open_hardware_offload`,
+  `change_password`, `close`), `RefreshHandle`, `PendingTx`, and
+  `ScanResult` each land in their own follow-up commits on this same
+  Phase 1 branch. Cargo dependency graph: `shekyl-crypto-pq` is now a
+  non-optional dependency of `shekyl-wallet-core` (the `multisig`
+  feature flag previously gated it; with `keys: AllKeysBlob` on the
+  struct it is mandatory regardless of feature). Full rationale and
+  field-by-field justification recorded in
+  [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
+  §"`Wallet<S>` struct shape and accessor surface".
+
 - **`shekyl-wallet-core::wallet` module skeleton (Phase 1 of the
   [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
   cross-cutting locks 2, 4, 5, 6, 7, 8 type-layer realization).** New
