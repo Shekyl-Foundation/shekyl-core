@@ -29,6 +29,7 @@ pub mod bookkeeping_block;
 pub mod error;
 pub mod invariants;
 pub mod ledger_block;
+pub mod local_label;
 pub mod payment_id;
 pub mod runtime_state;
 pub mod safety_constants;
@@ -48,6 +49,7 @@ pub use error::WalletLedgerError;
 pub use ledger_block::{
     BlockchainTip, LedgerBlock, ReorgBlocks, DEFAULT_REORG_BLOCKS_CAPACITY, LEDGER_BLOCK_VERSION,
 };
+pub use local_label::{LocalLabel, SecretStr};
 pub use payment_id::PaymentId;
 pub use runtime_state::RuntimeWalletState;
 pub use safety_constants::NetworkSafetyConstants;

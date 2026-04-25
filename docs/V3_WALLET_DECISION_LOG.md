@@ -1086,4 +1086,78 @@ Phase 0 PR 0.6 deliverable.
 
 ---
 
+## 2026-04-25 — `LocalLabel` / `SecretStr` typing for locally-sensitive UTF-8
+
+**Decision.** Phase 1 (`shekyl-wallet-core` rewrite) introduces two
+types in `shekyl-wallet-state` for every user-supplied UTF-8 string the
+wallet *persists but never transmits* — address-book descriptions,
+subaddress labels, transaction notes:
+
+- **`LocalLabel(Zeroizing<String>)`** — owned wrapper. `Clone` and
+  `Default` (the containing bookkeeping / tx-metadata blocks derive
+  `Default`). **Not** `Copy`, **not** `Serialize`, **not**
+  `Deserialize`. `Debug` and `Display` redact to
+  `"<redacted N bytes>"` — length is leaked deliberately (it is
+  always observable from the on-disk envelope's framing), bytes are
+  not.
+- **`SecretStr<'a>(&'a str)`** — borrowed, lifetime-tagged view
+  returned by `LocalLabel::expose()`. Same redacting `Debug` /
+  `Display`. Callers that genuinely need the underlying `&str` (e.g.
+  to render in a TUI) call `SecretStr::as_str()` explicitly; the call
+  site is the audit point.
+
+Persistence goes through the explicit `serde_helpers::local_label`
+adapter (`#[serde(with = "local_label")]`), which routes through
+`LocalLabel::expose_for_disk()` — the only named, named accessor that
+hands raw bytes to a serializer. Wire format is byte-identical to a
+plain `String` (test
+`serde_helpers::tests::local_label_postcard_wire_matches_plain_string`
+pins this), so retyping a `String` field to `LocalLabel` does **not**
+bump any block version.
+
+**Rationale.** This is the type-layer realization of cross-cutting
+lock 9 (logging — `tracing` with two-layer secret redaction). Locality
+of UI metadata is a property the type system can enforce at compile
+time rather than rely on developer discipline at every log statement.
+The wallet2 lineage treated tx_notes / address-book descriptions /
+subaddress labels as ordinary `String`, which meant any future
+`info!(?wallet)` would leak them; the V3 wallet treats them as opaque
+locally-zeroizing wrappers, and the only opt-out is a named accessor
+the auditor can grep.
+
+**Why value-typed `SecretStr<'a>` rather than the literal `&SecretStr`
+shorthand the lock uses.** A DST newtype around `str` (the only way
+to make `&SecretStr` work) requires a `unsafe { &*(s as *const str as
+*const SecretStr) }` cast. The workspace forbids `unsafe_code` per
+`#![deny(unsafe_code)]` on every crate and per the workspace's
+top-level Rust policy. Both shapes deliver the same property
+(callers cannot `format!("{secret}")` without redaction; callers
+must explicitly call `as_str()` to inspect bytes); the value-typed
+form is the safe-Rust-compatible realization.
+
+**Why `Default` despite the construction-grep argument.** The
+containing bookkeeping / tx-metadata blocks derive `Default` so the
+orchestrator can build empty instances at create time without naming
+every field; if `LocalLabel: !Default`, those derives break and every
+field needs an explicit initializer. The doc-comment grep for "where
+does an empty label appear?" routes through `LocalLabel::empty()` (an
+explicit named constructor); `LocalLabel::default()` is a transparent
+synonym.
+
+**What this does NOT cover.** The retype of bookkeeping_block fields
+(`SubaddressLabels::primary`, `SubaddressLabels::per_index`,
+`AddressBookEntry::description`) and tx_meta_block fields
+(`TxMetaBlock::tx_notes`) lands in subsequent commits. This entry pins
+the type's shape so those retypes are mechanical. `TxMetaBlock::attributes`
+(JSON-shaped UI prefs, e.g. `"display.theme" = "dark"`) is **not**
+locally sensitive and stays `String` keyed → `String` valued.
+
+**Cross-references.** Cross-cutting lock 9 (this file, "Wallet stack:
+cross-cutting locks (Phase 0 review-gate decisions)" §9);
+[plan §"Phase 1 deliverables"](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md);
+new module `rust/shekyl-wallet-state/src/local_label.rs`; new adapter
+`rust/shekyl-wallet-state/src/serde_helpers.rs::local_label`.
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

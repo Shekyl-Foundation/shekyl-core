@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`shekyl-wallet-state::LocalLabel` and `SecretStr<'a>` (Phase 1 of the
+  [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
+  cross-cutting lock 9 type-layer realization).** Locally-sensitive
+  UTF-8 wrappers for every user-supplied string the wallet persists
+  but never transmits — address-book descriptions, subaddress labels,
+  transaction notes. `LocalLabel` is `Zeroizing<String>` with redacting
+  `Debug` / `Display` (`"<redacted N bytes>"`); no derived
+  `Serialize` / `Deserialize`. Persistence routes through the explicit
+  `serde_helpers::local_label` adapter, which is wire-byte-identical
+  to a plain `String` (test
+  `serde_helpers::tests::local_label_postcard_wire_matches_plain_string`
+  pins this), so the upcoming bookkeeping_block / tx_meta_block retypes
+  will not bump `BOOKKEEPING_BLOCK_VERSION` or
+  `TX_META_BLOCK_VERSION`. Borrowed in-process inspection goes through
+  `LocalLabel::expose() -> SecretStr<'_>`, whose only `Display` /
+  `Debug` output is the redaction marker; callers that need raw bytes
+  call `SecretStr::as_str()` explicitly so the call site is the audit
+  point. Full rationale (including why the value-typed `SecretStr<'a>`
+  shape rather than the literal `&SecretStr` shorthand from the
+  decision log — `unsafe_code` is forbidden workspace-wide) recorded
+  in
+  [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
+  §"`LocalLabel` / `SecretStr` typing for locally-sensitive UTF-8".
+
 ### Changed
 
 - **`monero-oxide` vendor-bump `87acb57` → `3933664` (PR 0.6 of the
