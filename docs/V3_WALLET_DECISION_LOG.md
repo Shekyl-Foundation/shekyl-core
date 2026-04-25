@@ -677,4 +677,203 @@ envelope format are untouched.
 
 ---
 
+## 2026-04-25 — Fee priority positional mapping (implementation realization of Decision 6)
+
+**Decision.** The Shekyl V3 wallet's three-level priority taxonomy
+(`Economy | Standard | Priority`, plus `Custom(u64)`) maps to the
+`shekyld` `get_fee_estimate` response's positional `fees[]` vector
+as follows:
+
+- `Economy` → `fees[0]` (= the 2021-scaling `Fl` floor tier).
+- `Standard` → `fees[1]` (= `Fn`, normal-load tier).
+- `Priority` → `fees[3]` (= `Fh`, high-load tier).
+- `Custom(u64)` → caller-supplied per-byte atomic-units value, bypassing
+  the daemon estimate but still subject to the wallet-side sanity
+  ceiling (`TxError::DaemonFeeUnreasonable`-equivalent).
+
+**Index `fees[2]` (= `Fm`, medium-load tier) is intentionally
+unmapped** in the V3.0 wallet UX. See "Why skip `fees[2]`" below.
+
+**Rationale.** This is an implementation realization of
+[Decision 6 — Fee priority: simplified taxonomy, daemon-supplied named estimates](#fee-priority-simplified-taxonomy-daemon-supplied-named-estimates),
+not a new policy. The PR 0.3 audit
+([`docs/SHEKYLD_PREREQUISITES.md`](SHEKYLD_PREREQUISITES.md) §2)
+established that `shekyld`'s `get_fee_estimate` response carries a
+4-element positional `fees[]` vector, not a name-keyed map. The plan-
+text language "daemon-supplied named per-bucket estimates" was loose;
+on the wire the daemon supplies numbers, the wallet supplies names.
+This entry pins which positional indices carry which wallet-facing
+names so the binding is explicit and reviewable rather than buried in
+implementation code.
+
+**Why this mapping, in three timeframes.**
+
+- **Now (V3.0).** Without post-launch fee-market data, the
+  conservative reading of the four 2021-scaling tiers is:
+  `Fl`/`fees[0]` is the floor — txs always confirm eventually but with
+  no urgency guarantee; `Fn`/`fees[1]` is the typical-conditions fee
+  that should confirm within a normal window; `Fh`/`fees[3]` is the
+  guaranteed-confirm-under-congestion fee. Mapping `Standard` to
+  `fees[1]` (rather than `fees[2]`) optimizes for the typical case at
+  the cost of occasional under-payment during congestion. The
+  occasional under-payment is recoverable (the user can rebuild the
+  same `TxRequest` with `Priority` or `Custom`); systematic
+  over-payment is not.
+- **Mining era end (~30 years).** The four 2021-scaling tiers are
+  consensus-shaped (block weight scaling, dynamic base fee derivation
+  from Fl–Fh). The mapping is wallet-side policy and can be retuned
+  per release without touching the daemon or the wire format. Mining-
+  era fee dynamics — where transaction fees become the primary block
+  reward — may shift the typical-vs-congested boundary, in which case
+  retuning to `Standard → fees[2]` is a wallet-config change with no
+  consensus impact.
+- **Post-quantum era (V4).** Lattice signatures change tx size
+  significantly; the four-tier daemon vector continues to express
+  per-byte fees regardless of signature scheme. The mapping is
+  invariant to V4.
+
+**Why skip `fees[2]`.** The four-tier daemon vector exposes the
+2021-scaling document's full graduation (Fl, Fn, Fm, Fh). A
+three-tier wallet UI compresses this. The compression options are:
+
+- `Economy=fees[0], Standard=fees[1], Priority=fees[3]` (chosen).
+  Skips `fees[2]` (Fm). Standard is conservative for typical
+  conditions; Priority overpays under typical conditions but
+  guarantees confirm under congestion.
+- `Economy=fees[0], Standard=fees[2], Priority=fees[3]`. Skips
+  `fees[1]` (Fn). Standard is more aggressive — overpays under
+  typical conditions but reduces stuck-tx incidence under moderate
+  congestion. More expensive in the typical case.
+- `Economy=fees[1], Standard=fees[2], Priority=fees[3]`. Skips
+  `fees[0]`. The "I don't care when this confirms" floor is unavailable;
+  every transfer pays at least `Fn`. Removes a legitimate use case
+  (e.g., automated batched payouts where confirmation latency is
+  not a concern).
+
+The chosen mapping (`fees[0], fees[1], fees[3]`) preserves both ends
+of the range (lowest cost, highest guarantee) and uses `fees[1]` for
+the typical case. The "Standard might fall short under congestion"
+risk is mitigated by typed retry: `TxError::TxStuckRebuild` (or
+equivalent) prompts a wallet-side rebuild at higher priority. The
+alternative "Standard always overpays for safety" failure mode has no
+in-band recovery — the user has no signal that they overpaid.
+
+**Revisit conditions.** This mapping is wallet-side policy, deliberately
+captured here so future revision is informed rather than ad-hoc. Revisit
+when **any** of the following hold:
+
+- Post-launch fee data shows >10% of `Standard`-priority txs reach the
+  mempool eviction window without confirming. Indicates `Standard →
+  fees[1]` is too low for typical conditions; consider `Standard →
+  fees[2]`.
+- Post-launch fee data shows `Standard` and `Priority` confirm in
+  indistinguishable median windows. Indicates `Priority → fees[3]`
+  overpays without delivering perceptible benefit; consider
+  `Priority → fees[2]` (with `Custom` still available for guaranteed-
+  confirm cases).
+- The 2021-scaling document is amended or superseded such that
+  `fees[1]` and `fees[2]` no longer correspond to "normal-load" and
+  "medium-load" tiers as currently defined. Indicates the daemon-side
+  semantics have shifted; wallet mapping must be re-derived from the
+  new document.
+
+**Wallet-side sanity ceiling unchanged.** Per Decision 6, any `fees[i]`
+that exceeds a wallet-configured per-byte maximum (default: 5x the
+historical median of `fees[3]` over the last 1000 blocks observed by
+the wallet, with a hard cap at 100,000 atomic units / byte to defend
+against a compromised daemon returning absurd values) causes the
+wallet to refuse the build with a typed error. The ceiling is
+wallet-config, not daemon-config, and applies regardless of which
+positional index the user-selected priority maps to.
+
+**Rejected alternatives.** Already covered by Decision 6's rejected
+alternatives (hardcoded multipliers, per-network static fees,
+no-priority-at-all). The implementation-level rejection of
+"parse name-keyed buckets from the daemon response" is now moot —
+the daemon does not supply names; this entry establishes that the
+wallet supplies them.
+
+---
+
+## 2026-04-25 — `shekyld` fee policy version is absent; wallet uses `Option<u32>` for forward compat
+
+**Decision.** The Shekyl V3 wallet's representation of "what fee
+policy version does the daemon claim to be running" is
+`Option<u32>`. As of the PR 0.3 audit (2026-04-25), `shekyld` exposes
+no fee policy version field anywhere — not on `get_fee_estimate`'s
+response, not on `get_info`'s response, not as a separate RPC. The
+wallet treats absence as `None` and accepts whatever fee numbers the
+daemon supplies, subject to the sanity ceiling. If `shekyld` later
+adds a `fee_policy_version` field (recommended target: V3.1 daemon-side
+follow-up; see [`docs/SHEKYLD_PREREQUISITES.md`](SHEKYLD_PREREQUISITES.md) §3),
+the wallet starts honoring it without a wire-format break: the value
+is decoded into the `Option`, and the wallet refuses transaction
+construction if the value strictly exceeds the wallet's
+`known_max_fee_policy_version` constant (compile-time configured per
+wallet release).
+
+**Rationale.** The fee policy is what the wallet uses to convert a
+priority-and-tx-shape into a per-byte fee. If the daemon's fee math
+changes (different base-fee formula, different per-bucket scaling
+rules, different priority-to-bucket mapping at a hard fork), the
+wallet needs an in-band signal that its assumptions are stale.
+Without that signal, the wallet either silently builds against
+out-of-date assumptions (potentially over- or under-paying) or has to
+hand-crank a binary-version-equality check between wallet and daemon
+(a deployment constraint that is fine for the CLI but awkward for
+GUI/mobile wallets that ship on slower update cycles).
+
+For V3.0 launch, the absence is **not blocking**. V3.0 launches with
+whatever fee policy `shekyld` has at that moment, and any subsequent
+fee-policy change happens via hard fork; the wallet binary is rebuilt
+and redeployed against the new `shekyld` at fork time. The wallet
+binary version is implicitly the fee policy version for that launch
+cycle.
+
+After V3.0, when fee policy is potentially upgraded mid-version-cycle
+(e.g., a fee-market parameter retuning at a future hard fork), the
+absence of an explicit `fee_policy_version` becomes load-bearing.
+The V3.1 daemon-side follow-up addresses this by adding a typed
+version field. The wallet's forward-compatible shape (`Option<u32>`)
+ensures the wire format stays backward-compatible whether or not the
+daemon ever ships the field.
+
+**Why `Option<u32>` rather than `u32` with a sentinel.** Sentinels
+(e.g., `u32::MAX = "unknown"`) conflate "no version concept exists"
+with "version concept exists but is unrecognized." `Option` is the
+right Rust idiom: `None` is the unambiguous "field absent on the
+wire," and the wallet's matching is exhaustive at compile time. A
+sentinel-based encoding would produce silent fallthrough when the
+sentinel value collides with a future legitimate version (e.g., if
+the field is later introduced and reaches `u32::MAX`).
+
+**Rejected alternatives.**
+
+- "Hardcode wallet binary version equality with daemon binary
+  version, refuse to operate against any other daemon." Too coarse:
+  patch releases that touch logging or RPC unrelated to fee policy
+  would unnecessarily refuse to operate. The fee policy version is a
+  separate concept from the daemon binary version and deserves its
+  own field.
+- "Infer fee policy version from `hard_fork_info` (the consensus
+  hard-fork version)." Conflates two semantic axes: a hard fork can
+  change consensus rules without changing fee math, and fee math can
+  be tuned without a hard fork (e.g., adjusting `FEE_ESTIMATE_GRACE_BLOCKS`
+  default). The two concepts must be independently versionable.
+- "Refuse to build any transaction until the daemon supplies a fee
+  policy version." Breaks against current `shekyld` and any future
+  daemon that hasn't shipped the V3.1 follow-up. The wallet must work
+  against today's `shekyld`; the strict mode is wrong for V3.0.
+
+**Lifecycle.** This decision is V3.0-pinned and expected to evolve.
+When the V3.1 daemon-side follow-up lands, this entry gets a
+companion entry (not an edit) noting that `shekyld` now supplies the
+field, the wallet's `known_max_fee_policy_version` is set to the
+launch value, and the wallet now refuses transactions against newer
+daemon policies until the wallet binary catches up. The
+`Option<u32>` shape persists indefinitely as the forward-compat
+buffer for any future field-removal scenario.
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->
