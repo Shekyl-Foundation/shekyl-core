@@ -13,11 +13,11 @@ BSD-3-Clause
 
 ## Construction
 
-1. Call `WalletFileHandle::create(...)` on a temp path, producing a
+1. Call `WalletFile::create(...)` on a temp path, producing a
    valid `.wallet.keys` + `.wallet` pair.
 2. Overwrite byte `0` of `.wallet.keys` with `0x00`, corrupting the
    7-byte magic `SHKW1\0K`.
-3. Call `WalletFileHandle::open(...)`.
+3. Call `WalletFile::open(...)`.
 
 ## Rationale
 

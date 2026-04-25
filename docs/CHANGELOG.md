@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`shekyl-wallet-file::WalletFileHandle` → `WalletFile`** (PR 0.2 of
+  the [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)).
+  Mechanical rename across all call sites in `shekyl-wallet-file`,
+  `shekyl-wallet-prefs`, `shekyl-ffi`, and the C FFI doc-comment in
+  `src/shekyl/shekyl_ffi.h`. No ABI change (the C-ABI symbols use the
+  `shekyl_wallet_*` prefix, not the Rust type name). Frees the
+  `Wallet` identifier for the Phase 1 `shekyl-wallet-core::Wallet`
+  orchestrator and aligns the file-orchestrator type name with what it
+  actually is — envelope, atomic IO, advisory locking, payload
+  framing. Rationale and decision archive in
+  [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
+  ("Wallet stack greenfield Rust rewrite", 2026-04-25).
+
 ### Added
 
 - **Mid-rewire benchmark warning window (commit 2k.c of the
@@ -181,7 +196,7 @@
   or a silent fallback" posture at the integration boundary. New
   [`rust/shekyl-wallet-file/tests/adversarial_corpus.rs`](../rust/shekyl-wallet-file/tests/adversarial_corpus.rs)
   drives 16 programmatic attack shapes through
-  `WalletFileHandle::open` and asserts the exact `WalletFileError`
+  `WalletFile::open` and asserts the exact `WalletFileError`
   variant each one must surface: envelope header attacks on
   `.wallet.keys` (wrong magic → `UnknownMagic`, truncated header
   → `FileTooShort`, `file_version = 0xFF` → `FormatVersionTooNew`,
@@ -205,7 +220,7 @@
   intended `(mode, cap_content_len)` shape, and adding a second
   variant with identical semantics would duplicate the gate. The
   corpus is programmatic rather than binary-pinned: each test
-  builds a real wallet pair via `WalletFileHandle::create(...)`,
+  builds a real wallet pair via `WalletFile::create(...)`,
   then performs narrow byte surgery (on ciphertext-protected
   regions via the public
   `shekyl_crypto_pq::wallet_envelope::seal_state_file` helper) so

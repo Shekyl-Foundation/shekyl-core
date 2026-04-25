@@ -1353,7 +1353,7 @@ bool shekyl_wallet_state_open(
  * `ShekylWallet` is an opaque handle produced by `shekyl_wallet_create`
  * and `shekyl_wallet_open`, consumed by every other function in this
  * block, and destroyed exclusively by `shekyl_wallet_free`. Internally
- * it owns the Rust `WalletFileHandle` (which holds the advisory file
+ * it owns the Rust `WalletFile` (which holds the advisory file
  * lock, cached keys-file bytes, and decoded non-secret metadata) plus
  * the loaded `WalletLedger`.
  *

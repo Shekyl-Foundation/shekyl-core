@@ -41,7 +41,7 @@ use shekyl_crypto_pq::kem::ML_KEM_768_DK_LEN;
 use shekyl_crypto_pq::wallet_envelope::{
     CapabilityContent, KdfParams, EXPECTED_CLASSICAL_ADDRESS_BYTES,
 };
-use shekyl_wallet_file::{CreateParams, SafetyOverrides, WalletFileHandle};
+use shekyl_wallet_file::{CreateParams, SafetyOverrides, WalletFile};
 use shekyl_wallet_state::WalletLedger;
 
 const BENCH_NETWORK: Network = Network::Testnet;
@@ -103,7 +103,7 @@ fn prepared_wallet(kdf: KdfParams) -> (TempDir, PathBuf) {
         initial_ledger: &ledger,
     };
     {
-        let _handle = WalletFileHandle::create(&params).expect("create");
+        let _handle = WalletFile::create(&params).expect("create");
         // Handle drops here, releasing the advisory lock so the bench
         // body's `::open` call can reacquire it.
     }
@@ -124,7 +124,7 @@ fn crypto_bench_wallet_open_cold(c: &mut Criterion) {
         b.iter_batched(
             || prepared_wallet(kdf),
             |(_dir, base)| {
-                let (handle, outcome) = WalletFileHandle::open(
+                let (handle, outcome) = WalletFile::open(
                     black_box(&base),
                     black_box(BENCH_PASSWORD),
                     BENCH_NETWORK,

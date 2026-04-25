@@ -5,7 +5,7 @@
 
 //! iai-callgrind companion to `benches/open.rs`.
 //!
-//! Runs a cold `WalletFileHandle::open` under Valgrind's Callgrind
+//! Runs a cold `WalletFile::open` under Valgrind's Callgrind
 //! with the KAT Argon2 profile (`m_log2 = 0x08` = 256 KiB, t=1, p=1).
 //! Production `KdfParams::default()` (64 MiB, t=3) would make each
 //! Valgrind-instrumented iteration take tens of minutes; this profile
@@ -25,7 +25,7 @@ use shekyl_crypto_pq::kem::ML_KEM_768_DK_LEN;
 use shekyl_crypto_pq::wallet_envelope::{
     CapabilityContent, KdfParams, EXPECTED_CLASSICAL_ADDRESS_BYTES,
 };
-use shekyl_wallet_file::{CreateParams, SafetyOverrides, WalletFileHandle};
+use shekyl_wallet_file::{CreateParams, SafetyOverrides, WalletFile};
 use shekyl_wallet_state::WalletLedger;
 
 const BENCH_NETWORK: Network = Network::Testnet;
@@ -63,7 +63,7 @@ fn prepared_wallet() -> (TempDir, PathBuf) {
         initial_ledger: &ledger,
     };
     {
-        let _handle = WalletFileHandle::create(&params).expect("create");
+        let _handle = WalletFile::create(&params).expect("create");
     }
     (dir, base)
 }
@@ -72,7 +72,7 @@ fn prepared_wallet() -> (TempDir, PathBuf) {
 #[bench::kat_kdf(setup = prepared_wallet)]
 fn crypto_bench_wallet_open_cold(prepared: (TempDir, PathBuf)) {
     let (dir, base) = prepared;
-    let (handle, outcome) = WalletFileHandle::open(
+    let (handle, outcome) = WalletFile::open(
         black_box(&base),
         black_box(BENCH_PASSWORD),
         BENCH_NETWORK,

@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `WalletFileHandle`: high-level lifecycle for a Shekyl v1 wallet pair.
+//! `WalletFile`: high-level lifecycle for a Shekyl v1 wallet pair.
 //!
 //! This module assembles the primitives from [`crate::atomic`],
 //! [`crate::lock`], [`crate::payload`], [`crate::paths`], and the
@@ -11,8 +11,8 @@
 //! single opinionated API:
 //!
 //! ```text
-//! WalletFileHandle::create(base, password, …, initial_ledger) → Handle
-//! WalletFileHandle::open  (base, password)                    → (Handle, OpenOutcome)
+//! WalletFile::create(base, password, …, initial_ledger) → Handle
+//! WalletFile::open  (base, password)                    → (Handle, OpenOutcome)
 //! handle.save_state     (&ledger)                             → ()
 //! handle.rotate_password(old, new, new_kdf_opt)               → ()
 //! ```
@@ -79,7 +79,7 @@ use crate::overrides::SafetyOverrides;
 use crate::paths::{keys_path_from, state_path_from};
 use crate::payload::{decode_payload, encode_payload, PayloadKind};
 
-/// Outcome of a successful [`WalletFileHandle::open`]. The happy path
+/// Outcome of a successful [`WalletFile::open`]. The happy path
 /// returns [`Self::StateLoaded`] with the ledger decoded from `.wallet`.
 /// The lost-state recovery path ([`Self::StateLost`]) is returned when
 /// `.wallet` is missing (`io::ErrorKind::NotFound`) but `.wallet.keys`
@@ -119,7 +119,7 @@ pub enum OpenOutcome {
     /// 1. Treat in-memory state as empty (no transfers, no
     ///    bookkeeping).
     /// 2. Start a rescan from `restore_from_height`.
-    /// 3. Persist the rebuilt ledger via [`WalletFileHandle::save_state`].
+    /// 3. Persist the rebuilt ledger via [`WalletFile::save_state`].
     StateLost {
         ledger: WalletLedger,
         restore_from_height: u64,
@@ -163,7 +163,7 @@ pub struct CreateParams<'a> {
     /// User-supplied password. Stretched to `wrap_key` via Argon2id.
     pub password: &'a [u8],
     /// Network binding for the wallet. Persisted in the envelope's
-    /// AAD and cross-checked by [`WalletFileHandle::open`] against the
+    /// AAD and cross-checked by [`WalletFile::open`] against the
     /// caller-supplied `expected_network`, so a wallet bound to one
     /// chain can never be silently opened as another.
     pub network: Network,
@@ -198,7 +198,7 @@ pub struct CreateParams<'a> {
 ///
 /// `Debug` is hand-rolled to redact the cached keys-file bytes so the
 /// sealed-but-AAD-visible fields never land in a panic message.
-pub struct WalletFileHandle {
+pub struct WalletFile {
     keys_path: PathBuf,
     state_path: PathBuf,
     keys_file_bytes: Vec<u8>,
@@ -224,9 +224,9 @@ pub struct WalletFileHandle {
     _lock: KeysFileLock,
 }
 
-impl std::fmt::Debug for WalletFileHandle {
+impl std::fmt::Debug for WalletFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WalletFileHandle")
+        f.debug_struct("WalletFile")
             .field("keys_path", &self.keys_path)
             .field("state_path", &self.state_path)
             .field("keys_file_bytes", &"<redacted>")
@@ -269,7 +269,7 @@ impl zeroize::Zeroize for OpenedKeysFileOwned {
     }
 }
 
-impl WalletFileHandle {
+impl WalletFile {
     /// Create a fresh wallet pair on disk.
     ///
     /// 1. Refuse if the keys file already exists.
@@ -821,7 +821,10 @@ fn cross_fs_preflight(source: &Path, target: &Path) -> Result<(), WalletFileErro
         let target_parent = target.parent().ok_or_else(|| {
             WalletFileError::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("save_as target has no parent directory: {}", target.display()),
+                format!(
+                    "save_as target has no parent directory: {}",
+                    target.display()
+                ),
             ))
         })?;
         let src_dev = std::fs::metadata(source)?.dev();
@@ -974,12 +977,12 @@ mod tests {
 
         let handle = {
             let params = make_params(&fx, &base, b"correct horse battery staple", &ledger, &cap);
-            WalletFileHandle::create(&params).expect("create")
+            WalletFile::create(&params).expect("create")
         };
         // Drop the handle so the advisory lock is released for open.
         drop(handle);
 
-        let (handle2, outcome) = WalletFileHandle::open(
+        let (handle2, outcome) = WalletFile::open(
             &base,
             b"correct horse battery staple",
             TEST_NETWORK,
@@ -1007,15 +1010,14 @@ mod tests {
 
         let handle = {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
-            WalletFileHandle::create(&params).expect("create")
+            WalletFile::create(&params).expect("create")
         };
         handle.save_state(b"pw", &ledger).expect("save1");
         handle.save_state(b"pw", &ledger).expect("save2");
         drop(handle);
 
         let (_, outcome) =
-            WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
-                .expect("open");
+            WalletFile::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none()).expect("open");
         let ledger_back = outcome.into_ledger();
         assert_eq!(ledger_back.format_version, ledger.format_version);
     }
@@ -1030,7 +1032,7 @@ mod tests {
 
         let handle = {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
-            WalletFileHandle::create(&params).expect("create")
+            WalletFile::create(&params).expect("create")
         };
 
         let keys_before = std::fs::read(handle.keys_path()).unwrap();
@@ -1054,7 +1056,7 @@ mod tests {
 
         let mut handle = {
             let params = make_params(&fx, &base, b"old", &ledger, &cap);
-            WalletFileHandle::create(&params).expect("create")
+            WalletFile::create(&params).expect("create")
         };
 
         let state_before = std::fs::read(handle.state_path()).unwrap();
@@ -1086,11 +1088,9 @@ mod tests {
         // Drop the write-holding handle before re-opening.
         drop(handle);
         // Old password now rejected.
-        assert!(
-            WalletFileHandle::open(&base, b"old", TEST_NETWORK, SafetyOverrides::none()).is_err()
-        );
+        assert!(WalletFile::open(&base, b"old", TEST_NETWORK, SafetyOverrides::none()).is_err());
         // New password works.
-        let (_, _) = WalletFileHandle::open(&base, b"new", TEST_NETWORK, SafetyOverrides::none())
+        let (_, _) = WalletFile::open(&base, b"new", TEST_NETWORK, SafetyOverrides::none())
             .expect("open-with-new-pw");
     }
 
@@ -1104,10 +1104,10 @@ mod tests {
 
         {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
-            WalletFileHandle::create(&params).expect("create1");
+            WalletFile::create(&params).expect("create1");
         }
         let params = make_params(&fx, &base, b"pw", &ledger, &cap);
-        let err = WalletFileHandle::create(&params).expect_err("create2 must refuse");
+        let err = WalletFile::create(&params).expect_err("create2 must refuse");
         match err {
             WalletFileError::KeysFileAlreadyExists { path } => {
                 assert_eq!(path, keys_path_from(&base));
@@ -1126,11 +1126,11 @@ mod tests {
 
         {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
-            let _h = WalletFileHandle::create(&params).expect("create");
+            let _h = WalletFile::create(&params).expect("create");
         }
         // Handle dropped; lock released. Re-open must succeed.
-        let (_, _) = WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
-            .expect("reopen");
+        let (_, _) =
+            WalletFile::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none()).expect("reopen");
     }
 
     #[test]
@@ -1143,9 +1143,9 @@ mod tests {
 
         let _first = {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
-            WalletFileHandle::create(&params).expect("create")
+            WalletFile::create(&params).expect("create")
         };
-        let err = WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
+        let err = WalletFile::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
             .expect_err("second open must fail");
         match err {
             WalletFileError::AlreadyLocked { path } => {
@@ -1171,7 +1171,7 @@ mod tests {
         {
             let mut params = make_params(&fx, &base, b"pw", &ledger, &cap);
             params.restore_height_hint = RESTORE_HINT;
-            let _h = WalletFileHandle::create(&params).expect("create");
+            let _h = WalletFile::create(&params).expect("create");
         }
         // Kill the state file; keys file remains.
         let state_path = state_path_from(&base);
@@ -1180,8 +1180,7 @@ mod tests {
         assert!(!state_path.exists(), ".wallet must be gone");
 
         let (_handle, outcome) =
-            WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
-                .expect("open");
+            WalletFile::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none()).expect("open");
         match outcome {
             OpenOutcome::StateLost {
                 ledger,
@@ -1217,13 +1216,13 @@ mod tests {
 
         {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
-            let _h = WalletFileHandle::create(&params).expect("create");
+            let _h = WalletFile::create(&params).expect("create");
         }
         std::fs::remove_file(state_path_from(&base)).expect("remove .wallet");
 
         let rebuilt = {
             let (handle, outcome) =
-                WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
+                WalletFile::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
                     .expect("open-lost");
             assert!(outcome.is_lost());
             let ledger = outcome.into_ledger();
@@ -1232,7 +1231,7 @@ mod tests {
         };
 
         let (_handle, outcome) =
-            WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
+            WalletFile::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
                 .expect("open-loaded");
         assert!(!outcome.is_lost(), "after save, open must see StateLoaded");
         let reloaded = outcome.into_ledger();
@@ -1259,11 +1258,11 @@ mod tests {
 
         {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
-            let _h = WalletFileHandle::create(&params).expect("create");
+            let _h = WalletFile::create(&params).expect("create");
         }
         std::fs::write(state_path_from(&base), b"\x00\x00\x00").expect("truncate .wallet");
 
-        let err = WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
+        let err = WalletFile::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
             .expect_err("must refuse");
         match err {
             WalletFileError::Envelope(_) => { /* expected: TooShort / BadMagic surfaced */ }
@@ -1295,7 +1294,7 @@ mod tests {
         garbage[..8].copy_from_slice(b"NOTSHEKY");
         std::fs::write(keys_path_from(&base), &garbage).expect("write garbage keys file");
 
-        let err = WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
+        let err = WalletFile::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
             .expect_err("non-Shekyl magic must be refused");
         match err {
             WalletFileError::Envelope(e) => {
@@ -1331,9 +1330,9 @@ mod tests {
         {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
             assert_eq!(params.network, Network::Testnet, "fixture precondition");
-            let _h = WalletFileHandle::create(&params).expect("create");
+            let _h = WalletFile::create(&params).expect("create");
         }
-        let err = WalletFileHandle::open(&base, b"pw", Network::Mainnet, SafetyOverrides::none())
+        let err = WalletFile::open(&base, b"pw", Network::Mainnet, SafetyOverrides::none())
             .expect_err("mainnet open of testnet wallet must refuse");
         match err {
             WalletFileError::NetworkMismatch { expected, found } => {
@@ -1359,7 +1358,7 @@ mod tests {
 
         let handle = {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
-            WalletFileHandle::create(&params).expect("create")
+            WalletFile::create(&params).expect("create")
         };
         assert_eq!(handle.capability(), Capability::ViewOnly);
         assert!(!handle.capability().can_spend_locally());
@@ -1395,11 +1394,10 @@ mod tests {
         let ledger = WalletLedger::empty();
         {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
-            let _h = WalletFileHandle::create(&params).expect("create");
+            let _h = WalletFile::create(&params).expect("create");
         }
         let (handle, _outcome) =
-            WalletFileHandle::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none())
-                .expect("open");
+            WalletFile::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none()).expect("open");
 
         assert_eq!(handle.overrides(), SafetyOverrides::none());
         let k = NetworkSafetyConstants::for_network(TEST_NETWORK);
@@ -1427,7 +1425,7 @@ mod tests {
         let ledger = WalletLedger::empty();
         {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
-            let _h = WalletFileHandle::create(&params).expect("create");
+            let _h = WalletFile::create(&params).expect("create");
         }
 
         let overrides = SafetyOverrides {
@@ -1436,7 +1434,7 @@ mod tests {
             refresh_from_block_height: None,
         };
         let (handle, _outcome) =
-            WalletFileHandle::open(&base, b"pw", TEST_NETWORK, overrides).expect("open");
+            WalletFile::open(&base, b"pw", TEST_NETWORK, overrides).expect("open");
 
         // Overrides survive on the handle.
         assert_eq!(handle.overrides(), overrides);

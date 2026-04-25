@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! Advisory lock on the keys file, held across the lifetime of a
-//! `WalletFileHandle`.
+//! `WalletFile`.
 //!
 //! # Why advisory, and why on the keys file
 //!

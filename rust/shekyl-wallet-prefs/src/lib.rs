@@ -85,7 +85,7 @@
 //!   relationship to them is to reject any attempt to write them to
 //!   `prefs.toml`.
 //! * It does **not** open wallets. Callers integrate load/save into the
-//!   `WalletFileHandle::open` and `save_state` sequences in 2k.4 and
+//!   `WalletFile::open` and `save_state` sequences in 2k.4 and
 //!   2k.5; this crate is a leaf.
 //!
 //! [`shekyl_wallet_file::SafetyOverrides`]: https://docs.rs/shekyl-wallet-file

@@ -8,7 +8,7 @@
 //! Where [`crate::wallet_envelope_ffi`] exposes the raw envelope primitives
 //! (seal/open/rewrap/inspect/state-seal/state-open) so callers can compose
 //! their own on-disk orchestration, this module exposes a **single opaque
-//! handle** (`ShekylWallet`) that wraps a [`WalletFileHandle`] plus the
+//! handle** (`ShekylWallet`) that wraps a [`WalletFile`] plus the
 //! [`WalletLedger`] loaded at open time. The C++ core calls into this
 //! surface for every wallet lifecycle operation (create / open /
 //! save-state / rotate-password / close) and for read-only metadata
@@ -31,7 +31,7 @@
 //!
 //! ```text
 //! create(base, pw, …) ─┐
-//!                      ├─► ShekylWallet*    (owns WalletFileHandle + WalletLedger)
+//!                      ├─► ShekylWallet*    (owns WalletFile + WalletLedger)
 //! open(base, pw, net) ─┘                     (advisory lock held for lifetime)
 //!
 //! save_state(h, pw, new_ledger_postcard)
@@ -39,7 +39,7 @@
 //! export_ledger_postcard(h, buf, cap, len_required)
 //! get_metadata(h, out)
 //!
-//! free(h)  ───► drops WalletFileHandle (releases lock) and zeroes
+//! free(h)  ───► drops WalletFile (releases lock) and zeroes
 //!               the owned WalletLedger (TxSecretKey fields wipe on drop).
 //! ```
 //!
@@ -78,7 +78,7 @@ use std::path::PathBuf;
 
 use shekyl_address::Network;
 use shekyl_wallet_file::{
-    Capability, CreateParams, OpenOutcome, SafetyOverrides, WalletFileError, WalletFileHandle,
+    Capability, CreateParams, OpenOutcome, SafetyOverrides, WalletFile, WalletFileError,
 };
 use shekyl_wallet_prefs::WalletPrefs;
 use shekyl_wallet_state::WalletLedger;
@@ -334,7 +334,7 @@ impl ShekylSafetyOverrides {
 ///
 /// Internally, this owns:
 ///
-/// - the orchestrator [`WalletFileHandle`] (which holds the advisory
+/// - the orchestrator [`WalletFile`] (which holds the advisory
 ///   lock, cached keys-file bytes, and decoded non-secret metadata), and
 /// - a [`WalletLedger`] loaded from `.wallet` (or synthesized on the
 ///   state-lost recovery path).
@@ -358,7 +358,7 @@ pub struct ShekylWallet {
     // ledger directly. The handle remains opaque across the C ABI;
     // C++ code reaches the ledger only through the typed
     // `shekyl_wallet_*` getters / setters defined in that module.
-    pub(crate) inner: WalletFileHandle,
+    pub(crate) inner: WalletFile,
     pub(crate) ledger: WalletLedger,
 }
 
@@ -388,9 +388,7 @@ fn map_wallet_file_err(e: &WalletFileError) -> u32 {
         WalletFileError::UnknownCapability(_) => SHEKYL_WALLET_ERR_UNKNOWN_CAPABILITY_MODE,
         WalletFileError::MultisigNotSupported => SHEKYL_WALLET_ERR_REQUIRES_MULTISIG,
         WalletFileError::Prefs(_) => SHEKYL_WALLET_ERR_PREFS,
-        WalletFileError::SaveAsCrossFilesystem { .. } => {
-            SHEKYL_WALLET_ERR_SAVE_AS_CROSS_FILESYSTEM
-        }
+        WalletFileError::SaveAsCrossFilesystem { .. } => SHEKYL_WALLET_ERR_SAVE_AS_CROSS_FILESYSTEM,
         WalletFileError::SaveAsTargetExists { .. } => SHEKYL_WALLET_ERR_SAVE_AS_TARGET_EXISTS,
     }
 }
@@ -650,7 +648,7 @@ pub unsafe extern "C" fn shekyl_wallet_create(
         initial_ledger: &initial_ledger,
     };
 
-    match WalletFileHandle::create(&params) {
+    match WalletFile::create(&params) {
         Ok(inner) => {
             let boxed = Box::new(ShekylWallet {
                 inner,
@@ -732,7 +730,7 @@ pub unsafe extern "C" fn shekyl_wallet_open(
     };
     let overrides = ShekylSafetyOverrides::decode(overrides);
 
-    match WalletFileHandle::open(&base_path, password, expected_network, overrides) {
+    match WalletFile::open(&base_path, password, expected_network, overrides) {
         Ok((inner, outcome)) => {
             let (ledger, state_lost, restore_from_height) = match outcome {
                 OpenOutcome::StateLoaded(l) => (l, false, 0u64),
@@ -774,7 +772,7 @@ pub unsafe extern "C" fn shekyl_wallet_free(h: *mut ShekylWallet) {
         return;
     }
     // Reconstitute the Box and drop. The `Box` drop runs
-    // `WalletFileHandle`'s Drop (releases the advisory lock) and the
+    // `WalletFile`'s Drop (releases the advisory lock) and the
     // `WalletLedger`'s drop (zeroes TxSecretKey fields).
     drop(Box::from_raw(h));
 }
@@ -1362,11 +1360,7 @@ pub unsafe extern "C" fn shekyl_wallet_extract_rederivation_inputs(
     let w = &*h;
     match w.inner.extract_rederivation_inputs() {
         Ok(inputs) => {
-            std::ptr::copy_nonoverlapping(
-                inputs.master_seed_64.as_ptr(),
-                out_master_seed_64,
-                64,
-            );
+            std::ptr::copy_nonoverlapping(inputs.master_seed_64.as_ptr(), out_master_seed_64, 64);
             // `inputs` drops at end-of-scope; its
             // `Zeroizing<[u8; 64]>` field auto-wipes after the copy.
             set_err(out_error, SHEKYL_WALLET_ERR_OK);
@@ -2065,11 +2059,7 @@ mod tests {
         let mut out_seed = [0u8; 64];
         let mut err: u32 = 0xdead_beef;
         let ok = unsafe {
-            shekyl_wallet_extract_rederivation_inputs(
-                h,
-                out_seed.as_mut_ptr(),
-                &raw mut err,
-            )
+            shekyl_wallet_extract_rederivation_inputs(h, out_seed.as_mut_ptr(), &raw mut err)
         };
         assert!(ok, "FULL extract must return true; code={err}");
         assert_eq!(err, SHEKYL_WALLET_ERR_OK);
@@ -2095,11 +2085,7 @@ mod tests {
         let mut out_seed = [0xAAu8; 64];
         let mut err: u32 = SHEKYL_WALLET_ERR_OK;
         let ok = unsafe {
-            shekyl_wallet_extract_rederivation_inputs(
-                h,
-                out_seed.as_mut_ptr(),
-                &raw mut err,
-            )
+            shekyl_wallet_extract_rederivation_inputs(h, out_seed.as_mut_ptr(), &raw mut err)
         };
         assert!(!ok, "VIEW_ONLY extract must return false");
         assert_eq!(err, SHEKYL_WALLET_ERR_CAPABILITY_VIEW_ONLY_NO_SPEND);
