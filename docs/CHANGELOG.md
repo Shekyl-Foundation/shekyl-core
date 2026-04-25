@@ -635,6 +635,28 @@
 
 ### Documentation
 
+- **`monero-oxide` vendor freshness audit (PR 0.4 of the V3 wallet
+  rewrite plan,
+  [`docs/MONERO_OXIDE_VENDOR_STATUS.md`](MONERO_OXIDE_VENDOR_STATUS.md)).**
+  Point-in-time (2026-04-25) record of where the vendored
+  `shekyl-oxide` snapshot (`87acb57e`) sits relative to the Shekyl
+  fork tip (`Shekyl-Foundation/monero-oxide` `fcmp++` `3933664d`,
+  +5 commits, all non-crypto) and the original upstream
+  (`monero-oxide/monero-oxide` `fcmp++` `0e438ae`, +40 commits since
+  the 2025-11-22 merge base, including the cypherstack
+  `generalized-bulletproofs-fix` audit response, the Veridise
+  `HelioseleneField::invert` correctness cluster, and a major
+  upstream restructure that the fork has not adopted). The doc is a
+  freshness audit only — it does not re-vendor or un-pin. The actual
+  un-pin / merge-from-upstream operation is a separate plan; this
+  audit produces its input queue (substantive upstream commits the
+  fork is missing) and baseline (the eight Shekyl-only fork commits,
+  of which only `416d8d1` rename and `87acb57` extra leaf scalars
+  are crypto-substantive). Audit lifecycle: append-only — refresh
+  runs add a new dated section rather than editing in place, so the
+  rewrite plan's Phase 0 record stays intelligible after the un-pin
+  lands.
+
 - **Mid-rewire hardening plan (`docs/MID_REWIRE_HARDENING.md`)
   amended in §3.1 and §4.3.** §3.1 updated to reflect the
   architecturally honest scope for the C++ baseline capture: path
