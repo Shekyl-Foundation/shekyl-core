@@ -1393,6 +1393,322 @@ this builds on.
 
 ---
 
+## 2026-04-25 — `RuntimeWalletState` audit: full fold, derived indexes rebuilt at open
+
+**Decision.** `RuntimeWalletState` (`rust/shekyl-wallet-state/src/runtime_state.rs`)
+ceases to exist as a named type. Its only structural content beyond
+the persisted `WalletLedger` is two derived indexes:
+
+- `key_images: HashMap<[u8; 32], usize>` — maps each spent key image
+  to the `transfers` index of the enote it belongs to.
+- `pub_keys: HashMap<[u8; 32], usize>` — maps each known one-time
+  output public key to its `transfers` index.
+
+Both are derivable from the authoritative ledger state (each enote in
+`transfers` already carries its `pub_key` and, for spent enotes, the
+`key_image`). They exist solely to make `process_block` / `unmark_spent`
+/ `detect_spends` lookups O(1) instead of O(n).
+
+The fold:
+
+1. Promote both indexes into a new `pub(crate) struct LedgerIndexes`
+   (or `RuntimeIndexes`; final naming is implementation-trivial)
+   that **lives on `Wallet`**, not on `WalletLedger`. The struct is
+   not `Serialize` / `Deserialize`. It is rebuilt from
+   `WalletLedger.bookkeeping.transfers` at `Wallet::open*` time, and
+   maintained in lock-step with mutations through a `Wallet`-private
+   helper that wraps every ledger write.
+2. The block-processing methods (`process_block`, `unmark_spent`,
+   `detect_spends`, `pop_block`) move from `RuntimeWalletState` to
+   `Wallet` (or to a `pub(crate)` ledger-mutation helper that takes
+   `&mut WalletLedger` plus `&mut LedgerIndexes` and updates both in
+   the same call).
+3. The `pub use crate::runtime_state::RuntimeWalletState as WalletState`
+   transitional alias is deleted; nothing outside the crate depends
+   on the old name.
+4. `runtime_state.rs` is deleted as a module; its tests are absorbed
+   into the new mutation-helper's test module under `wallet/`.
+
+**Rationale.** Two principles converge on this shape:
+
+- **Indexes are derivable from authoritative state, so derived state
+  shouldn't be persisted.** Putting `key_images` / `pub_keys` into
+  `LedgerBlock` would require a schema bump every time the index
+  type changed (e.g., switching `HashMap` to `IntMap`, adding a
+  secondary index from `block_height` to `transfer_idx`). Rebuilding
+  at open keeps the indexes a private implementation detail of
+  `Wallet` rather than part of the on-disk contract that
+  `BOOKKEEPING_BLOCK_VERSION` has to defend.
+- **`Wallet`'s `&self` / `&mut self` discipline (cross-cutting lock
+  3) is harder to honor when the ledger and its indexes are
+  separable.** With a `RuntimeWalletState` value that wraps both,
+  callers have to choose whether `process_block` takes
+  `&mut RuntimeWalletState` or two `&mut` parameters; the former
+  hides the fact that the ledger is mutating, and the latter
+  splatters the borrow across signatures. Folding both into a single
+  `Wallet`-owned representation pushes the locking decision to one
+  site — `Wallet`'s outer `&mut self` — and the mutation helpers
+  become free of locking concerns.
+
+**Rejected alternatives.**
+
+- "Promote the indexes into `LedgerBlock` so they round-trip through
+  serialization." Makes deserialization quadratic in the number of
+  enotes (every load reads the ledger then reads the indexes built
+  from it, forcing the deserializer to either re-derive and verify
+  the persisted indexes match — quadratic — or trust the on-disk
+  bytes blindly — corruption surface). Open-time rebuild is linear,
+  cache-friendly, and verifies the ledger is internally consistent
+  as a side effect.
+- "Keep `RuntimeWalletState` as a separate value owned by `Wallet`,
+  passed `&mut` into block-processing methods." Leaks the
+  index-rebuilding contract into `Wallet`'s public surface (callers
+  would see the type in error messages, in `Debug`-printed
+  `Wallet` output, in stack traces). A `pub(crate)` struct that
+  never escapes the crate is the right scope.
+- "Put both `WalletLedger` and the runtime indexes inside a single
+  `pub struct WalletState` that `Wallet` owns." Re-introduces the
+  exact shape we're folding away, just renamed. The fold's value is
+  in the elimination of the wrapper, not in its renaming.
+
+**Consequence.**
+
+- `shekyl-wallet-state` no longer exposes a "current state of the
+  wallet" type — it exposes the on-disk `WalletLedger` plus its
+  block / sub-block types. `Wallet` (in `shekyl-wallet-core`) is the
+  only owner of the runtime indexes that wrap the ledger.
+- `runtime_state::tests::*` and any external doctests that named
+  `RuntimeWalletState` are migrated to `wallet/` and renamed before
+  this entry's commit lands; the rename is a hard break, not a
+  deprecation, because there are no users.
+- The `WalletLedger`'s schema is unchanged by this fold —
+  `BOOKKEEPING_BLOCK_VERSION` does not bump. Schema fixtures stay
+  byte-identical.
+- The `network` field on `RuntimeWalletState` (currently used by
+  `runtime_state::filter`) moves to `Wallet`'s already-cached
+  `network: Network` accessor (Decision Log entry "Wallet<S> struct
+  shape and accessor surface" sub-decision 2). Filter helpers that
+  needed `network` re-fetch it from `&Wallet` instead of from a
+  ledger-attached field.
+
+**Reference.** Cross-cutting locks 3 (writer-preferred `&mut self`
+mutation discipline) and 4 (ledger-resident reservations);
+`Wallet<S>` struct entry sub-decision 1 (no `runtime_state` field on
+`Wallet`); todo `runtime_state_audit` in the Phase 1 task list.
+
+---
+
+## 2026-04-25 — `tx_keys` storage: persist in `TxMetaBlock`, never re-derived
+
+**Decision.** Per-transaction secret keys (the spend-randomness
+scalar `r` and any per-output additional keys) are persisted by the
+wallet, keyed by transaction hash, in
+`TxMetaBlock::tx_keys: BTreeMap<[u8; 32], TxSecretKeys>` where
+`TxSecretKeys { primary: TxSecretKey, additional: Vec<TxSecretKey> }`.
+The schema is already shipped (`tx_meta_block.rs::TxMetaBlock` line
+174 at the time of this entry); this Decision Log entry locks the
+shape and the rule that no `Wallet` operation re-derives `tx_keys`
+from any other state.
+
+**Rationale.** Three independent properties argue for persistence:
+
+1. **`tx_proof` and `reserve_proof` regeneration require the
+   per-tx randomness.** A user proving "I sent this transaction" or
+   "I control these enotes" against a recipient or auditor weeks
+   later must reconstruct the same Schnorr-style proof the original
+   transaction emitted. The proof binds to the per-tx secret, which
+   was generated at build time and committed into the transaction
+   bytes only as a public commitment. Without the secret, the proof
+   cannot be re-emitted; without re-emitting, the user cannot prove
+   anything about the transaction post-hoc.
+2. **The secret cannot be re-derived from ledger state.** Unlike
+   `key_images` or output `pub_keys`, the per-tx randomness is
+   sampled at build time from the OS RNG; there is no
+   wallet-key-plus-tx-input relation that recovers it. Persistence
+   is the only mechanism.
+3. **The size cost is negligible.** Each `TxSecretKey` is 32 bytes;
+   `TxSecretKeys` adds a `Vec` length plus per-output entries (one
+   per non-change output, capped by transaction-size limits at a
+   few hundred outputs in pathological cases). Even a heavy power
+   user with thousands of sent transactions accrues a few megabytes
+   of `tx_keys` storage over a wallet's lifetime — orders of
+   magnitude less than the `transfers` table itself.
+
+**Rejected alternatives.**
+
+- "Don't persist; require the user to re-key the transaction from
+  recipient-supplied data when they need a proof." Recipient
+  cooperation is exactly what `tx_proof` exists to remove — the
+  proof is the wallet's unilateral attestation. Re-keying defeats
+  the feature.
+- "Persist only the primary key, derive `additional` from the
+  recipient address list." `additional` keys are emitted on a
+  per-output basis with values that depend on per-output randomness;
+  there is no closed-form derivation from the recipient list alone.
+  The `additional: Vec<TxSecretKey>` shape is load-bearing.
+- "Encrypt the `tx_keys` map with a key separate from the file_kek
+  so a memory dump of the open wallet doesn't expose them." The
+  whole `WalletLedger` is encrypted at rest under the file_kek
+  already; in-memory exposure of `tx_keys` while the wallet is open
+  is the same threat surface as in-memory exposure of every other
+  ledger field. A second layer adds complexity without changing the
+  threat model.
+
+**Consequence.**
+
+- `Wallet::tx_proof(txid, ...)` and `Wallet::reserve_proof(...)`
+  (Phase 2 deliverables) read `tx_keys` from the in-memory ledger
+  by `txid` lookup; missing-entry is a typed
+  `ProofError::TxKeyNotPersisted { txid }` rather than a re-derive
+  attempt.
+- The `Wallet::send` / `submit_pending_tx` path writes `tx_keys`
+  into `TxMetaBlock` at submit time, before returning the
+  `TxHash` to the caller. A submit that fails before write is a
+  visible failure (the tx is not in the wallet's record), not a
+  silent loss.
+- The `BookkeepingBlock` / `TxMetaBlock` separation already in
+  schema means `tx_keys` does not bloat the hot bookkeeping read
+  path — only operations that explicitly touch tx-meta state
+  (proof emission, note display) deserialize this block.
+- `tx_keys` are `LocalLabel`-class secret-bearing values for
+  `Debug` purposes (32-byte scalar bytes, not free-form UTF-8) but
+  use the existing `TxSecretKey` type's redacting `Debug` impl
+  (already in place at the time of this entry). This entry does
+  not mandate further redaction work.
+
+**Reference.** `rust/shekyl-wallet-state/src/tx_meta_block.rs`
+(`TxMetaBlock::tx_keys` field, `TxSecretKeys` definition);
+`rust/shekyl-wallet-state/src/invariants.rs` (`tx_keys` invariants);
+Phase 2 deliverables for `tx_proof` / `reserve_proof` will close
+this entry by realization.
+
+---
+
+## 2026-04-25 — Daemon-side `tracing` install: `shekyl_log_install_tracing_forwarder` under `shekyl-logging::ffi`
+
+**Decision.** The Phase 1 logging deliverable closes the V3.2
+follow-up *"`shekyl-daemon-rpc` staticlib: `tracing::*` calls
+silently dropped"* (`docs/FOLLOWUPS.md`) by absorption, with the
+following concrete shape:
+
+- A new C-ABI export ships under `shekyl-logging::ffi`, **not**
+  under `shekyl-daemon-rpc::ffi` and **not** as a fresh
+  `shekyl_daemon_rpc_*` symbol. Name and signature:
+
+  ```rust
+  /// Install a `tracing::Subscriber` that forwards every event
+  /// emitted from Rust staticlibs (currently `shekyl-daemon-rpc`,
+  /// future Rust crates linked into C/C++ binaries) into the
+  /// `shekyl-logging` subscriber configured by the most recent
+  /// `shekyl_log_init_*` call. Idempotent: a second call after a
+  /// successful first returns `SHEKYL_LOG_ERR_ALREADY_INSTALLED`.
+  ///
+  /// # Returns
+  /// - `0` on first successful install.
+  /// - non-zero `shekyl-logging` error code otherwise (see
+  ///   `shekyl_log.h` for the table).
+  ///
+  /// # Safety
+  /// Must be called after `shekyl_log_init_stderr` /
+  /// `shekyl_log_init_file` has succeeded; calling before yields
+  /// `SHEKYL_LOG_ERR_NOT_INITIALIZED`.
+  #[no_mangle]
+  pub unsafe extern "C" fn shekyl_log_install_tracing_forwarder() -> i32;
+  ```
+
+- The C++ daemon entry point (`src/daemon/main.cpp` /
+  `src/shekyld_main.cpp` — exact site is implementation, not
+  decision) calls this after `mlog_configure` and after
+  `shekyl_log_init_*` has run. The C++ binary owns the call
+  ordering; the Rust side is purely the forwarder install.
+- `shekyl-daemon-rpc` keeps its existing `tracing::debug!` /
+  `tracing::error!` / `tracing::span!` call sites — no
+  rewrite to `shekyl_log_emit`. The forwarder makes them route
+  through `shekyl-logging` automatically.
+
+**Rationale.** Five constraints land this shape:
+
+1. **The export lives in `shekyl-logging` because the
+   subscriber it installs forwards into `shekyl-logging`.** The
+   logging bridge is the right home for the symbol that bridges.
+   A `shekyl_daemon_rpc_*` name in the same C namespace as
+   `shekyl_log_*` is a smell — both prefixes claim to own
+   logging, when only one does.
+2. **The `shekyl_log_*` prefix matches the existing init pattern.**
+   `shekyl_log_init_stderr` / `shekyl_log_init_file` /
+   `shekyl_log_shutdown` / `shekyl_log_set_level` /
+   `shekyl_log_emit` already form the surface; this is one more
+   verb in the same family.
+3. **The daemon-rpc crate is not the only consumer.** Future
+   Rust crates linked as C-callable staticlibs into C/C++ binaries
+   (e.g., a Rust scanner staticlib for the C++ wallet1 archive
+   tooling that is being deleted in Phase 5 and may be re-introduced
+   in C++-on-the-cli mode for V3.2) will need the same
+   forwarder. A daemon-rpc-named symbol fits one consumer; a
+   logging-named symbol fits all of them.
+4. **Tracing-call rewrite is more invasive than subscriber
+   install.** Rewriting `tracing::debug!(?response, "rpc");` into
+   `shekyl_log_emit(level, target, format!(...).as_ptr(), ...)`
+   is per-call-site work, loses structured-field metadata, and
+   violates the cross-cutting lock that names `tracing` (not
+   `shekyl_log_emit`) as the substrate inside Rust crates. The
+   forwarder install is one C-callable function and zero call-site
+   changes.
+5. **Idempotence is required for daemon hot-reload.** `shekyld`
+   may re-run `mlog_configure` on `SIGHUP`-style signal handling;
+   the forwarder must not double-install (which would either panic
+   on the global subscriber slot or silently leave the previous
+   forwarder in place). A typed `ALREADY_INSTALLED` return lets
+   the C++ side decide whether to treat that as success or as a
+   reconfigure error.
+
+**Rejected alternatives.**
+
+- **Drop `shekyl-daemon-rpc`'s `tracing::*` calls entirely.**
+  FOLLOWUPS Option 2 from the original V3.2 entry. Rejected per
+  rationale #4 above: per-call-site rewrite, loss of structured
+  fields, violation of the cross-cutting `tracing`-substrate lock.
+- **Ship the export as `shekyl_daemon_rpc_init_logging` under
+  `shekyl-daemon-rpc::ffi`.** FOLLOWUPS Option 1 (literal). Naming
+  ties the symbol to one consumer; locality (the install lives
+  next to the daemon-rpc crate) is offset by the symbol-namespace
+  clash with `shekyl_log_*`.
+- **Wire `tracing-subscriber::set_global_default` from inside
+  the daemon-rpc staticlib's `lib.rs` constructor.** Constructors
+  in static-lib Rust code don't reliably run before the C++
+  binary's `main`; some platforms order them, some don't. Explicit
+  C-callable install eliminates the ordering question.
+
+**Consequence.**
+
+- The FOLLOWUPS V3.2 entry *"`shekyl-daemon-rpc` staticlib:
+  `tracing::*` calls silently dropped"* closes by absorption
+  when this commit lands, the same way that earlier entries
+  closed by absorption into Phase 1 (line 391 of
+  `docs/FOLLOWUPS.md`'s status table marks it absorbed already;
+  the substantive close is in this Decision Log entry).
+- The `shekyl-logging` crate gains a new error code
+  `SHEKYL_LOG_ERR_ALREADY_INSTALLED` (or analogous; final naming
+  is implementation-trivial) and a new error code
+  `SHEKYL_LOG_ERR_NOT_INITIALIZED`. Both land in
+  `rust/shekyl-logging/src/ffi.rs`'s error-code table alongside
+  the existing entries.
+- The `shekyld` C++ build gains one new call site post-
+  `mlog_configure`. No other C++ change is required.
+- Rust binaries (`shekyl-cli`, `shekyl-wallet-rpc`, `shekyld-rust`
+  if it ever exists) **do not** call this export — they call
+  `shekyl-logging`'s native Rust subscriber-install API, which
+  already configures the `tracing` global default. The export is
+  exclusively for C/C++ binaries linking Rust staticlibs.
+
+**Reference.** `docs/FOLLOWUPS.md` *"`shekyl-daemon-rpc` staticlib"*
+entry (V3.2 → Phase 1 absorbed); `rust/shekyl-logging/src/ffi.rs`
+(home for the new export); `rust/shekyl-daemon-rpc/src/`'s existing
+`tracing::*` call sites (zero changes required); cross-cutting
+lock 9 (logging substrate is `tracing`).
+
+---
+
 ## 2026-04-25 — Phase 5 pre-emption rule + first application (`wallet_ledger_ffi.rs`)
 
 **Decision.** Individual items from the Phase 5 deletion inventory may

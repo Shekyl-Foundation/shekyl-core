@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- **Phase 1 sub-decision log entries appended (Phase 1
+  `decision_log_entries` task).** Three new dated entries land in
+  `docs/V3_WALLET_DECISION_LOG.md` to lock the Phase 1 surface
+  decisions whose defaults were taken from the Phase 0
+  `surface_decisions` review:
+
+  - *"`RuntimeWalletState` audit: full fold, derived indexes
+    rebuilt at open"* — `RuntimeWalletState` ceases to exist;
+    `key_images` / `pub_keys` indexes promote into a `pub(crate)
+    LedgerIndexes` owned by `Wallet`, rebuilt from the
+    authoritative ledger at open time, never persisted. Schema
+    unchanged. Closes the `runtime_state_audit` Phase 1 task and
+    the `pub use ... as WalletState` transitional alias deletion.
+  - *"`tx_keys` storage: persist in `TxMetaBlock`, never
+    re-derived"* — pins the rule that per-tx randomness lives in
+    `TxMetaBlock::tx_keys: BTreeMap<TxHash, TxSecretKeys>`
+    (already shipped in schema), is never reconstructed from any
+    other state, and that `Wallet::tx_proof` /
+    `Wallet::reserve_proof` (Phase 2) read it by `txid` lookup
+    with a typed `ProofError::TxKeyNotPersisted` on miss.
+  - *"Daemon-side `tracing` install:
+    `shekyl_log_install_tracing_forwarder` under
+    `shekyl-logging::ffi`"* — locks the FFI export name, signature
+    (`pub unsafe extern "C" fn() -> i32`, idempotent, returns
+    typed `ALREADY_INSTALLED` / `NOT_INITIALIZED`), home
+    (`shekyl-logging::ffi`, **not** `shekyl-daemon-rpc::ffi`), and
+    the rule that `shekyl-daemon-rpc`'s `tracing::*` call sites
+    are kept verbatim — the forwarder routes them through
+    `shekyl-logging` automatically. Closes the `docs/FOLLOWUPS.md`
+    V3.2 entry *"`shekyl-daemon-rpc` staticlib: `tracing::*` calls
+    silently dropped"* by absorption into the Phase 1 logging
+    deliverable.
+
+  No code changes ship in this entry; each decision is realized
+  by a subsequent Phase 1 commit (the `RuntimeWalletState` fold
+  is the next task in line per the todo list).
+
 ### Removed
 
 - **`rust/shekyl-ffi/src/wallet_ledger_ffi.rs` deleted as a Phase 5
