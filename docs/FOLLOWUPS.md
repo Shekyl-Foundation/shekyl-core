@@ -42,6 +42,26 @@ citing in a review.
   This pins the full I/O ↔ KDF ↔ AEAD chain at the orchestrator layer.
   Target: V3.0.
 
+- **Phase 1 bench harness rewire post-`RuntimeWalletState` fold.**
+  Cross-cutting lock 5 (commit `5ee692691`, "wallet: fold
+  `RuntimeWalletState` into `LedgerBlock` + `LedgerIndexes`") split
+  the legacy combined struct, deleted
+  `rust/shekyl-wallet-state/src/runtime_state.rs`, and renamed
+  `shekyl-scanner/src/runtime_ext.rs` → `ledger_ext.rs`. Four of the
+  five iai-callgrind targets in `scripts/bench/capture_rust_baseline.sh`
+  no longer compile against the post-fold APIs:
+  `shekyl-wallet-state::ledger`, `shekyl-wallet-state::balance`,
+  `shekyl-scanner::scan_block`, and `shekyl-tx-builder::transfer_e2e`.
+  Surfaced first as the PR #16 `benchmarks.yml` `capture-pr` job
+  failing with cargo exit code 101 (compile-time, not threshold). The
+  fifth target (`shekyl-wallet-file::open`) is unaffected. Rewire on
+  a `chore/bench-rewire-phase1` branch off `dev` after PR #16 merges,
+  single-concern commit, no review surface beyond the bench files;
+  re-seed `bench-baseline/baseline.json` from a clean run on the
+  reference machine once the harnesses build. Blocks the
+  per-PR perf-regression gate from producing a real verdict on
+  `shekyl-wallet-state`-touching PRs until cleared. Target: V3.0.
+
 ---
 
 ## V3.1 — audit response and stressnet gates
