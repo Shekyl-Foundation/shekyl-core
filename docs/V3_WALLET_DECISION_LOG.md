@@ -653,8 +653,8 @@ the freeze plan; this entry is its consumer.
 
 ## 2026-04-25 — `ScanResult` type: typed scanner output, additive merge into `WalletLedger`
 
-**Decision.** `shekyl-scanner::ScanResult` is the typed value that
-the scanner produces and `Wallet::apply_scan_result` consumes. It
+**Decision.** `shekyl_wallet_core::scan::ScanResult` is the typed
+value that `Wallet::apply_scan_result` consumes during refresh. It
 is an **additive-only** structure: every variant represents an
 event the ledger learned about (new transfer detected, key image
 observed, stake reward accrued, reorg-rewind needed up to height
@@ -665,13 +665,35 @@ changes during refresh.
 ```rust
 pub struct ScanResult {
     pub processed_height_range: Range<u64>,
+    pub parent_hash: Option<[u8; 32]>,
+    pub block_hashes: Vec<(u64, [u8; 32])>,
     pub new_transfers: Vec<DetectedTransfer>,
     pub spent_key_images: Vec<KeyImageObserved>,
     pub stake_events: Vec<StakeEvent>,
     pub reorg_rewind: Option<ReorgRewind>,
-    // ... typed event vocabulary
 }
 ```
+
+`block_hashes` carries one entry per height in
+`processed_height_range`, not just one per block that produced
+events: the persisted ledger advances `synced_height` exactly once
+per scanned block and the merge needs the block hash for every
+height to drive `LedgerIndexes::ingest_block`. This is the smallest
+shape that supports an "every block in range is fully ingested"
+contract; a per-event-only sketch was rejected because it loses
+the per-height advance for empty blocks.
+
+**Crate location.** The type lives in `shekyl-wallet-core::scan`,
+not in `shekyl-scanner`. `ScanResult` is a *wallet-domain event
+vocabulary* (the merge contract `apply_scan_result` consumes); the
+scanner produces it but does not own its semantics, exactly as
+`RefreshError` lives in `shekyl-wallet-core` even though the
+scanner can drive a refresh. Pinning the home in the consumer
+crate keeps `shekyl-scanner` import-free of wallet-orchestrator
+concerns and lets the producer surface evolve in Phase 2a without
+touching the consumer contract. (An earlier draft of this entry
+named `shekyl-scanner::ScanResult`; corrected here per the
+"consumer contract pinned, producer side left to evolve" rule.)
 
 **Rationale.** Wallet2 mutates `WalletLedger` (well, its C++
 equivalents) directly during scan, with locking discipline scattered
@@ -701,6 +723,84 @@ into one method (`apply_scan_result`), which has three benefits:
 - "`ScanResult` is just a typedef for `WalletLedger`." Loses the
   additive-only constraint and the typed event vocabulary; the
   merge becomes "overwrite," which is wrong on reorg.
+
+---
+
+## 2026-04-26 — `Wallet::apply_scan_result` invariants and Wallet-side `LedgerIndexes`
+
+**Decision.** `Wallet::apply_scan_result(&mut self, result: ScanResult)
+-> Result<(), RefreshError>` enforces two invariants before applying
+any event from the result. Both failures map to
+`RefreshError::ConcurrentMutation`, which is the typed retry signal
+to a polling caller.
+
+1. **Start-height equality.** When `result.reorg_rewind` is `None`,
+   `result.processed_height_range.start == self.synced_height() + 1`.
+   When `result.reorg_rewind` is `Some(rewind)`, the scanner replays
+   from the fork point, so the expected start is `rewind.fork_height`
+   instead (the rewind step sets `synced_height` to `fork_height - 1`
+   before any per-height events apply). Catches the case where a
+   second refresh raced ahead between the snapshot the scanner saw
+   and the write-lock window the merge takes.
+
+2. **Parent-hash chain.** When `start > 1`, `result.parent_hash` is
+   `Some(h)` where `h == self.ledger.ledger.block_hash_at(start - 1)`.
+   When `start == 1` (genesis), `result.parent_hash` must be `None`.
+   Heights below `fork_height` survive a reorg rewind unchanged, so
+   this check applies in both the rewind-present and rewind-absent
+   branches without needing a special case. Catches the case where
+   the wallet's recorded chain at the start point shifted under the
+   scanner — e.g., an unrelated reorg-rewind landed between snapshot
+   and merge — without surfacing as a height mismatch.
+
+3. **Per-height block-hash record.** `result.block_hashes` carries
+   one entry per height in `processed_height_range` (ascending,
+   exactly once). The merge requires every height's hash because
+   `LedgerIndexes::ingest_block` advances `synced_height` and
+   appends to `reorg_blocks` exactly once per scanned block — even
+   when the block had zero events for this wallet. A missing entry
+   for a height inside `processed_height_range` is itself a
+   snapshot-disagreement signal and rejects with
+   `ConcurrentMutation`.
+
+A "full-range hash chain check" alternative (every block hash in
+`processed_height_range` re-verified against a per-height list
+carried by the result) was considered and rejected: it doubles the
+in-memory size of `ScanResult` for an attack the parent-hash + the
+write-lock-during-merge already preclude. The parent of `start`
+plus the lock window is sufficient because: the scanner produced
+its result against a `synced_height` snapshot, the merge sees the
+same wallet under a write lock, and the wallet's own
+`block_hash_at(synced_height)` did not move out from under it
+during the lock window.
+
+**`Wallet<S>` carries `LedgerIndexes` directly.** Per the
+`RuntimeWalletState audit` entry above, the runtime indexes
+(`key_images`, `pub_keys`, `staker_pool`) are reconstructible from
+`LedgerBlock` + scanner replay and are never persisted. Holding
+them on `Wallet<S>` (rather than passing them through every
+`apply_scan_result` call site or guarding them behind a separate
+`Mutex`) matches the `&self` queries / `&mut self` mutations
+discipline already established for `WalletLedger`: a single `&mut
+self` borrow on `apply_scan_result` mutates both the persisted and
+the runtime sides atomically. The bg-sync loop's
+`Arc<Mutex<LiveLedger>>` shape is a separate concern — it serves
+the standalone `shekyl-scanner::sync` module that does not see a
+`Wallet<S>`. `Wallet`-driven refresh (Phase 2a) goes through
+`apply_scan_result` and inherits the `&mut self` guarantee.
+
+**Rejected alternatives.**
+
+- "Pass `&mut LedgerIndexes` through every `apply_scan_result`
+  call site." Reasonable for Phase 1 testing, but every Phase 2
+  caller would have to thread the parameter, and the natural
+  reading of "additive merge into `WalletLedger`" gets diluted.
+- "Wrap `LedgerIndexes` in `tokio::sync::Mutex`." Adds an async
+  lock for state already serialized by `&mut self`. The bg-sync
+  loop holds `Arc<Mutex<LiveLedger>>` because that loop does not
+  see a `Wallet<S>`; once `Wallet::refresh()` lands in Phase 2a,
+  the `Wallet<S>`-mediated path runs under writer-preferred
+  `RwLock<Wallet<S>>` and pays no extra lock per-event.
 
 ---
 

@@ -2,6 +2,64 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`shekyl_wallet_core::scan::ScanResult` typed scanner-output value
+  and `Wallet::apply_scan_result` merge surface (Phase 1 `scan_result`
+  task).** A new
+  [`shekyl_wallet_core::scan`](../rust/shekyl-wallet-core/src/scan.rs)
+  module defines the additive event vocabulary the Phase 2a
+  `Wallet::refresh()` pipeline produces from a scanner pass:
+
+  - `ScanResult { processed_height_range, parent_hash, block_hashes,
+    new_transfers, spent_key_images, stake_events, reorg_rewind }`.
+  - `DetectedTransfer { block_height, output: RecoveredWalletOutput }`
+    — the secret-bearing variant; `RecoveredWalletOutput` already
+    `ZeroizeOnDrop`, so dropping the enclosing `ScanResult` wipes
+    PQC re-derivation material in place.
+  - `KeyImageObserved { block_height, key_image }` — drives
+    `LedgerIndexes::detect_spends` per height.
+  - `StakeEvent::Accrual { height, record }`, `#[non_exhaustive]` so
+    Phase 2b `StakeInstance` variants can land additively.
+  - `ReorgRewind { fork_height }` — drives
+    `LedgerIndexes::handle_reorg` before per-height events.
+  - `ScanResult::empty_at(start, parent_hash)` for the
+    nothing-changed-at-tip case and tests.
+
+  The companion `Wallet::apply_scan_result(&mut self, ScanResult) ->
+  Result<(), RefreshError>` lives in
+  [`wallet::merge`](../rust/shekyl-wallet-core/src/wallet/merge.rs) and
+  is the only audited code path that mutates the scanner-derived slice
+  of `WalletLedger` plus `LedgerIndexes` during refresh. It enforces
+  two snapshot-consistency invariants before applying any events,
+  rejecting with `RefreshError::ConcurrentMutation` on either failure:
+
+  1. **Start-height equality.** `processed_height_range.start` must
+     equal `synced_height + 1` (or `fork_height` when `reorg_rewind`
+     is present, since the rewind sets `synced_height` to
+     `fork_height - 1` first).
+  2. **Parent-hash chain.** `parent_hash` must match
+     `LedgerBlock::block_hash_at(start - 1)`, with `None` matching
+     `None` at genesis (`start == 1`).
+
+  The merge runs in a fixed order: optional reorg rewind first, then
+  per-height ingest (`process_scanned_outputs` + `detect_spends`)
+  driven by `block_hashes` so `synced_height` advances exactly once
+  per scanned block — even when the block had no events — then
+  staker-pool aggregate events. `Wallet<S>` now carries
+  `indexes: LedgerIndexes` as a direct field so the merge can mutate
+  both the persisted `LedgerBlock` (via `WalletLedger.ledger`) and
+  the runtime indexes under a single `&mut self` borrow without
+  needing an inner lock. The full merge body is exposed `pub(crate)`
+  as `apply_scan_result_to_state(&mut LedgerBlock, &mut LedgerIndexes,
+  ScanResult)` so tests can drive it without standing up a full
+  `Wallet<S>` (whose lifecycle methods land in a follow-up commit).
+
+  See `docs/V3_WALLET_DECISION_LOG.md` *"`ScanResult` type"*
+  (2026-04-25, **crate location: `shekyl-wallet-core::scan`**) and
+  *"`Wallet::apply_scan_result` invariants and Wallet-side
+  `LedgerIndexes`"* (2026-04-26).
+
 ### Changed
 
 - **`RuntimeWalletState` folded into `LedgerBlock` + `LedgerIndexes`

@@ -126,6 +126,7 @@
 pub mod capability;
 pub mod daemon;
 pub mod error;
+pub mod merge;
 pub mod network;
 pub mod signer;
 
@@ -140,7 +141,7 @@ use std::marker::PhantomData;
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_wallet_file::WalletFile;
 use shekyl_wallet_prefs::WalletPrefs;
-use shekyl_wallet_state::WalletLedger;
+use shekyl_wallet_state::{LedgerIndexes, WalletLedger};
 
 /// The Shekyl V3 wallet domain orchestrator.
 ///
@@ -224,6 +225,16 @@ pub struct Wallet<S: WalletSignerKind> {
     /// `Wallet<S>` that the lifecycle / refresh / send commits add.
     ledger: WalletLedger,
 
+    /// Runtime-only indexes derived from chain replay: key-image
+    /// and pubkey lookup maps, plus the staker-pool accrual
+    /// aggregate. Per the `RuntimeWalletState audit` Decision Log
+    /// entry (2026-04-25), these fields are reconstructible from
+    /// `self.ledger.ledger` plus daemon block replay and are never
+    /// persisted. Rebuilt at every `Wallet::open*` and mutated
+    /// alongside `self.ledger.ledger` by `apply_scan_result` under
+    /// the same `&mut self` borrow.
+    indexes: LedgerIndexes,
+
     /// User preferences per the layer-2 plaintext+HMAC contract in
     /// [`docs/WALLET_PREFS.md`]. Loaded at open, saved on
     /// [`Wallet::change_password`] / [`Wallet::close`].
@@ -283,6 +294,7 @@ impl<S: WalletSignerKind> std::fmt::Debug for Wallet<S> {
             .field("file", &self.file)
             .field("keys", &"<redacted: AllKeysBlob>")
             .field("ledger", &"<…>")
+            .field("indexes", &"<…>")
             .field("prefs", &"<…>")
             .field("daemon", &self.daemon)
             .field("network", &self.network)
