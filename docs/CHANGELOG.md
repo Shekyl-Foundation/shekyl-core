@@ -437,13 +437,29 @@
   `wallet_ledger_ffi::tests::registry_set_rejects_index_zero` pins
   the contract.
 
-  **On-disk schema.** `BOOKKEEPING_BLOCK_VERSION` is bumped (legacy v1
-  ledgers have no live readers — pre-V3 launch, `rm -rf ~/.shekyl` is
-  the migration path per `15-deletion-and-debt.mdc`). The
-  `bookkeeping_block.snap` / `ledger_block.snap` / `wallet_ledger.snap`
-  schema fixtures are regenerated; the `SubaddressIndex` shape went
-  from a two-field struct to a `NewtypeStruct(u32)`, and
-  `BookkeepingBlock::account_tags` is gone.
+  **On-disk schema.** All three persisted-block version constants are
+  bumped from `1` to `2`: `BOOKKEEPING_BLOCK_VERSION` (the direct
+  field-shape changes — `subaddress_registry` /
+  `subaddress_labels.per_index` flatten and `account_tags` removal),
+  `LEDGER_BLOCK_VERSION` (transitive — every `TransferDetails` in
+  `LedgerBlock::transfers` now carries the flattened newtype), and
+  `WALLET_LEDGER_FORMAT_VERSION` (transitive — the bundle's serialized
+  bytes shift wherever any nested `SubaddressIndex` or
+  `SubaddressLabels` appears). The strict pairing of "snap drift ↔
+  paired version-constant bump" is enforced by the
+  `ci/schema-snapshot` workflow per
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.4 and
+  [`.cursor/rules/42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc);
+  the gate caught the original commit shipping only the bookkeeping
+  bump, and the missing two were folded in atop the existing branch
+  rather than rewriting history. Legacy v1 ledgers have no live
+  readers — pre-V3 launch, `rm -rf ~/.shekyl` is the migration path
+  per
+  [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc).
+  The `bookkeeping_block.snap` / `ledger_block.snap` /
+  `wallet_ledger.snap` schema fixtures are regenerated; the
+  `SubaddressIndex` shape went from a two-field struct to a
+  `NewtypeStruct(u32)`, and `BookkeepingBlock::account_tags` is gone.
 
   **JSON shape factoring.** Transfer records expose subaddress
   indices as `{"index": u32}` (bare form, no label); address-list

@@ -54,11 +54,23 @@ use crate::{
     sync_state_block::SyncStateBlock, tx_meta_block::TxMetaBlock,
 };
 
-/// Bundle-level `format_version`. V3.0 ships `1`. Bumps only when the
-/// aggregator layout itself changes (new top-level block, removed
-/// block, reordering). Per-block schema changes bump the block's own
-/// `block_version`, not this constant.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 1;
+/// Bundle-level `format_version`.
+///
+/// V3.0 ships `2`. Version `1` (pre-flat-namespace) carried a
+/// two-field `SubaddressIndex { account, address }`, a separate
+/// `SubaddressLabels::primary` slot, and an `account_tags` map inside
+/// `BookkeepingBlock`. Each per-block bump (`LEDGER_BLOCK_VERSION`,
+/// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
+/// incompatible at load time; the bundle-level bump exists because
+/// the on-disk bundle *bytes* themselves shift whenever any nested
+/// type's serialized shape changes — even if the aggregator's
+/// top-level layout (number of blocks, their order) is untouched.
+/// `.cursor/rules/42-serialization-policy.mdc` and
+/// `docs/MID_REWIRE_HARDENING.md §3.4` make the pairing strict: a
+/// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
+/// bump in the same PR, regardless of whether any direct field of
+/// `WalletLedger` was touched.
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 2;
 
 /// The `.wallet`-side ledger bundle: the four typed blocks + a
 /// bundle-level `format_version`.

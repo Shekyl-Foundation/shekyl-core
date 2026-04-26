@@ -49,10 +49,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::{error::WalletLedgerError, subaddress::SubaddressIndex, transfer::TransferDetails};
 
-/// Schema version of the ledger block. V3.0 ships version `1`. Any
-/// field addition / removal / renaming inside the block bumps this;
-/// loads that see a different version refuse rather than migrate.
-pub const LEDGER_BLOCK_VERSION: u32 = 1;
+/// Schema version of the ledger block.
+///
+/// V3.0 ships version `2`. Version `1` (pre-flat-namespace) carried a
+/// two-field `SubaddressIndex { account, address }` inside every
+/// `TransferDetails`; the flatten to `SubaddressIndex(u32)` reaches
+/// `LedgerBlock`'s on-disk bytes through the `transfers` vec, so the
+/// bump catches stale fixtures even though no on-disk ledgers exist
+/// yet (Shekyl is pre-genesis — `rm -rf ~/.shekyl` is the migration
+/// path per `.cursor/rules/15-deletion-and-debt.mdc`). Any field
+/// addition / removal / renaming inside the block, or any transitive
+/// change in a nested type's serialized shape, bumps this; loads that
+/// see a different version refuse rather than migrate.
+pub const LEDGER_BLOCK_VERSION: u32 = 2;
 
 /// Maximum number of `(height, hash)` pairs the scanner should keep in
 /// [`ReorgBlocks`]. The value is informational — the persistence layer
