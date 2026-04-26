@@ -82,6 +82,33 @@ citing in a review.
   per-PR perf-regression gate from producing a real verdict on
   `shekyl-wallet-state`-touching PRs until cleared. Target: V3.0.
 
+- **Revisit `rust/hard-coded-cryptographic-value` CodeQL suppression
+  when the Rust extractor gains `cfg(test)` awareness.** The repo-wide
+  suppression added in `.github/codeql/config.yml` (commit
+  `fb53977b9`) is the pragmatic answer to the CodeQL Rust extractor
+  not distinguishing `#[cfg(test)]` items from production code. In
+  shekyl-core, test fixtures (test vectors, password literals) live
+  in production source files — e.g. the bottom ~380 lines of
+  `rust/shekyl-wallet-core/src/wallet/lifecycle.rs` are inside
+  `#[cfg(test)] mod tests { ... }` — so workflow-level
+  `paths-ignore` cannot carve them out at file granularity (the
+  alternative Copilot suggested in the PR #16 review). The
+  defense-in-depth that backs the suppression — `Credentials::password_only`
+  as the only constructor for authentication material,
+  `.zeroize-allowlist` + the `zeroize-check.yml` workflow audit, and
+  the wallet-file Argon2id → SHA3-256 → ChaCha20-Poly1305 envelope
+  — catches hard-coded production credentials at three stronger
+  layers than a single string-literal lint. **Revisit condition**: a
+  CodeQL release whose Rust extractor distinguishes `cfg(test)`
+  items, at which point the repo-wide `exclude:` in
+  `.github/codeql/config.yml` is replaced with a precise
+  `cfg(test)`-aware filter and production coverage is restored.
+  Track CodeQL release notes for "Rust" + "test" extractor
+  capabilities; this rule is also visible at
+  `https://codeql.github.com/codeql-query-help/rust/rust-hard-coded-cryptographic-value/`.
+  Target: V3.0 if the upstream change lands in time, otherwise
+  rolled into the V3.1 audit-response cleanup batch.
+
 ---
 
 ## V3.1 — audit response and stressnet gates
