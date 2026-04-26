@@ -423,7 +423,15 @@ jobs:
       - name: archive
         run: |
           pip install git-archive-all
-          export VERSION="shekyl-$(git describe)"
+          # Restrict `git describe` to release tags (`v*`). Otherwise the
+          # `archive/<branch>-<date>` annotated tags created by the
+          # branch-archival policy in `.cursor/rules/06-branching.mdc` rule 5
+          # become the closest reachable tag once they land on a commit
+          # ancestor of the branch under test, and `VERSION` ends up
+          # containing a `/` (e.g. `shekyl-archive/<branch>-<date>`), which
+          # makes `git-archive-all` write to a non-existent directory and
+          # fails the job with `[Errno 2] No such file or directory`.
+          export VERSION="shekyl-$(git describe --match 'v*')"
           export OUTPUT="$VERSION.tar"
           echo "OUTPUT=$OUTPUT" >> $GITHUB_ENV
           git-archive-all --prefix "$VERSION/" --force-submodules "$OUTPUT"

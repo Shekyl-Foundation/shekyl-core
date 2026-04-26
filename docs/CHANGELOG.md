@@ -850,6 +850,33 @@
   (`shekyl-ffi` carries ~12 inherited warnings from its FFI shape)
   and that a dedicated cleanup pass + CI gate belongs to V3.1.x.
 
+### Fixed
+
+- **`source archive` CI job: pin `git describe` to release tags
+  (`v*`).** The branch-archival policy in
+  [`.cursor/rules/06-branching.mdc`](../.cursor/rules/06-branching.mdc)
+  rule 5 has accumulated seven `archive/<branch>-<date>` annotated
+  tags since 2026-04-13 (four of them on 2026-04-25, on commits that
+  are merge-ancestors of `dev`). The `source-archive` job in
+  [`.github/workflows/build.yml`](../.github/workflows/build.yml)
+  was calling plain `git describe`, which returns the *closest
+  reachable tag*. Once an `archive/*` tag became the closest tag to
+  `dev`, `VERSION="shekyl-$(git describe)"` started resolving to
+  e.g. `shekyl-archive/phase0-pr06-oxide-vendor-bump-2026-04-25`,
+  whose `/` was interpreted as a directory by `git-archive-all`,
+  failing with `[Errno 2] No such file or directory:
+  '…/shekyl-archive/<branch>-<date>.tar'`. The job had failed on
+  every push for ~2 hours before this fix, including PR #16's
+  source-archive run. Fix is a one-line filter
+  (`git describe --match 'v*'`) that ignores branch-archival tags
+  and keeps `VERSION` shaped like `shekyl-vX.Y.Z-N-gSHA`. Verified
+  locally: `git describe origin/dev` returns
+  `archive/phase0-pr06-oxide-vendor-bump-2026-04-25` (broken),
+  `git describe --match 'v*' origin/dev` returns
+  `v3.1.0-alpha.3-135-g39981643f` (correct). No behavior change for
+  branches with a `v*` tag in their ancestry, which is every branch
+  off `dev` since the first release tag.
+
 ## [3.1.0-alpha.5] - 2026-04-22
 
 ### Security
