@@ -43,7 +43,7 @@ pub mod tx_meta_block;
 pub mod wallet_ledger;
 
 pub use bookkeeping_block::{
-    AccountTags, AddressBookEntry, BookkeepingBlock, SubaddressLabels, BOOKKEEPING_BLOCK_VERSION,
+    AddressBookEntry, BookkeepingBlock, SubaddressLabels, BOOKKEEPING_BLOCK_VERSION,
 };
 pub use error::WalletLedgerError;
 pub use ledger_block::{

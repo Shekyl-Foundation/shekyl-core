@@ -4,12 +4,12 @@
 // BSD-3-Clause
 
 //! Bookkeeping block — subaddress registry + labels + external address
-//! book + account-tag index.
+//! book.
 //!
 //! Companion to [`LedgerBlock`](crate::ledger_block::LedgerBlock). The
 //! bookkeeping block holds the purely-UX state the wallet needs to
 //! decide which outputs belong to which subaddress and how to render
-//! addresses / accounts to the user. None of its fields affect consensus.
+//! addresses to the user. None of its fields affect consensus.
 //!
 //! # Wire format
 //!
@@ -31,21 +31,23 @@
 //!   keyed by the compressed-Edwards subaddress public spend key. In
 //!   wallet2 this was a `serializable_unordered_map<public_key,
 //!   subaddress_index>` — we normalize to the byte-stable sorted map.
-//! * `subaddress_labels` splits the primary-address label into its own
-//!   field (`primary_label: String`) and uses a sparse
-//!   `BTreeMap<SubaddressIndex, String>` for everything else. This is
-//!   forced by the Shekyl-native [`SubaddressIndex`] invariant that
-//!   refuses to construct `(0, 0)` — the primary needs a home, but the
-//!   map cannot carry it.
+//! * `subaddress_labels` is a single sparse
+//!   `BTreeMap<SubaddressIndex, String>` covering both the primary
+//!   address ([`SubaddressIndex::PRIMARY`]) and every derived
+//!   subaddress. The flat-namespace decision (see
+//!   `docs/V3_WALLET_DECISION_LOG.md`, "Subaddress hierarchy") removes
+//!   the need for a special primary-address slot.
 //! * `address_book` stays a `Vec<AddressBookEntry>` to preserve the
 //!   user-controlled insertion order that GUIs render. Each entry
 //!   carries an optional encrypted [`PaymentId`]; the legacy
 //!   unencrypted form is rejected at parse time per the `PaymentId`
 //!   module.
-//! * `account_tags` becomes two fields — the set of known tag names
-//!   with descriptions, and the assignment of a tag to each tagged
-//!   account. The wallet2 `std::pair<map, vector>` positional encoding
-//!   is replaced by explicit map-based accounting.
+//!
+//! Account-level tagging (the wallet2 `account_tags` field) is dropped
+//! entirely: with no account hierarchy in Shekyl V3, per-account UX
+//! grouping has no anchor. Subaddress-level grouping, if it surfaces as
+//! a real user need, is a separate post-V3.0 feature with its own
+//! design pass.
 
 use std::collections::BTreeMap;
 
@@ -53,28 +55,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::{error::WalletLedgerError, payment_id::PaymentId, subaddress::SubaddressIndex};
 
-/// Schema version of the bookkeeping block. V3.0 ships version `1`.
-/// Any field addition / removal / renaming inside the block bumps
-/// this; loads that see a different version refuse rather than migrate.
-pub const BOOKKEEPING_BLOCK_VERSION: u32 = 1;
-
-/// Labels covering every address the wallet can generate: the primary
-/// and all derived subaddresses.
+/// Schema version of the bookkeeping block.
 ///
-/// Split into two fields because Shekyl's [`SubaddressIndex`] refuses
-/// to construct `(0, 0)` — the primary lives outside the map, in
-/// [`SubaddressLabels::primary`]. Every other `(account, address)` with
-/// `(account, address) != (0, 0)` is eligible for a `per_index` entry.
+/// V3.0 ships version `2`. Version `1` (pre-flat-namespace) carried a
+/// two-field `SubaddressIndex { account, address }`, a primary-label
+/// split-out field, and an `account_tags` map; none of those exist on
+/// disk yet (Shekyl is pre-genesis), so the bump is for in-source
+/// hygiene rather than migration handling. Loads that see any other
+/// version refuse rather than migrate.
+pub const BOOKKEEPING_BLOCK_VERSION: u32 = 2;
+
+/// Labels covering every address the wallet can generate.
+///
+/// Single sparse map keyed by [`SubaddressIndex`]; missing entries mean
+/// "no label". The primary address ([`SubaddressIndex::PRIMARY`]) is a
+/// regular key in this map — there is no carved-out primary slot, in
+/// keeping with the flat-namespace decision (see crate docs).
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct SubaddressLabels {
-    /// Label for the primary address `(0, 0)`. Empty string = no label.
-    #[serde(default)]
-    pub primary: String,
-
-    /// Labels for non-primary subaddresses, keyed by `(account, address)`.
-    /// Missing entries mean "no label" — the caller should not treat an
-    /// absent key differently from an entry whose value is the empty
-    /// string, but both are representable and round-trip faithfully.
+    /// Labels for every labeled address, primary or derived. Missing
+    /// entries mean "no label" — callers should not treat an absent
+    /// key differently from an entry whose value is the empty string,
+    /// but both are representable and round-trip faithfully.
     #[serde(default)]
     pub per_index: BTreeMap<SubaddressIndex, String>,
 }
@@ -107,34 +109,6 @@ pub struct AddressBookEntry {
     pub is_subaddress: bool,
 }
 
-/// Per-account tagging for UX filtering (e.g. "business", "personal").
-///
-/// Tags are entirely user-facing: they never leave the wallet and have
-/// no consensus effect. Two pieces of state:
-///
-/// 1. The set of tag names the user has declared, with an optional
-///    human-readable description per tag.
-/// 2. The current assignment of (at most) one tag to each tagged
-///    account. Accounts not present in the map have no tag.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
-pub struct AccountTags {
-    /// Declared tag names mapped to their descriptions. Empty string =
-    /// known tag with no description. Using a `BTreeMap` so the wire
-    /// format is deterministic regardless of insertion order.
-    #[serde(default)]
-    pub tag_descriptions: BTreeMap<String, String>,
-
-    /// Per-account tag assignment keyed by account major index. A tag
-    /// referenced here **must** be a key in `tag_descriptions` for the
-    /// block to make semantic sense; this invariant is the orchestrator's
-    /// responsibility (the deserializer does not enforce it, so wallets
-    /// that drop a tag description without clearing assignments still
-    /// load — the rendering layer falls back to showing the raw tag
-    /// name).
-    #[serde(default)]
-    pub per_account_tag: BTreeMap<u32, String>,
-}
-
 /// The bookkeeping block. See module docs for scope, versioning, and
 /// design rationale.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
@@ -144,9 +118,9 @@ pub struct BookkeepingBlock {
     pub block_version: u32,
 
     /// Reverse lookup from the compressed-Edwards public spend key of
-    /// a subaddress to its `(account, address)` index. Populated
-    /// incrementally by the subaddress-generation code as the user
-    /// creates new addresses or walks the lookahead window.
+    /// a subaddress to its [`SubaddressIndex`]. Populated incrementally
+    /// by the subaddress-generation code as the user creates new
+    /// addresses or walks the lookahead window.
     ///
     /// Keyed by raw 32-byte compressed-Edwards bytes (rather than a
     /// `curve25519_dalek::EdwardsPoint`) so that the `BTreeMap` order
@@ -164,10 +138,6 @@ pub struct BookkeepingBlock {
     /// preserves that order verbatim.
     #[serde(default)]
     pub address_book: Vec<AddressBookEntry>,
-
-    /// Per-account tag state.
-    #[serde(default)]
-    pub account_tags: AccountTags,
 }
 
 impl BookkeepingBlock {
@@ -186,14 +156,12 @@ impl BookkeepingBlock {
         subaddress_registry: BTreeMap<[u8; 32], SubaddressIndex>,
         subaddress_labels: SubaddressLabels,
         address_book: Vec<AddressBookEntry>,
-        account_tags: AccountTags,
     ) -> Self {
         Self {
             block_version: BOOKKEEPING_BLOCK_VERSION,
             subaddress_registry,
             subaddress_labels,
             address_book,
-            account_tags,
         }
     }
 
@@ -235,10 +203,7 @@ mod tests {
     use proptest::prelude::*;
 
     fn sample_subaddress_index(seed: u32) -> SubaddressIndex {
-        // Force a non-(0, 0) index: `(seed + 1, seed)` always has a
-        // nonzero account, so the `SubaddressIndex::new` invariant is
-        // always satisfied for any `seed`.
-        SubaddressIndex::new(seed + 1, seed).expect("non-(0,0)")
+        SubaddressIndex::new(seed)
     }
 
     fn populated() -> BookkeepingBlock {
@@ -247,23 +212,13 @@ mod tests {
         registry.insert([0x22; 32], sample_subaddress_index(2));
 
         let mut per_index = BTreeMap::new();
+        per_index.insert(SubaddressIndex::PRIMARY, "Main".into());
         per_index.insert(sample_subaddress_index(1), "savings".into());
         per_index.insert(sample_subaddress_index(2), "hot".into());
 
-        let mut tag_descriptions = BTreeMap::new();
-        tag_descriptions.insert("business".into(), "work-related".into());
-        tag_descriptions.insert("personal".into(), String::new());
-
-        let mut per_account_tag = BTreeMap::new();
-        per_account_tag.insert(0u32, "personal".into());
-        per_account_tag.insert(3u32, "business".into());
-
         BookkeepingBlock::new(
             registry,
-            SubaddressLabels {
-                primary: "Main".into(),
-                per_index,
-            },
+            SubaddressLabels { per_index },
             vec![
                 AddressBookEntry {
                     address: "Shk1example".into(),
@@ -278,10 +233,6 @@ mod tests {
                     is_subaddress: true,
                 },
             ],
-            AccountTags {
-                tag_descriptions,
-                per_account_tag,
-            },
         )
     }
 
@@ -346,13 +297,12 @@ mod tests {
     }
 
     proptest! {
-        // Arbitrary labels + address book + tags — exercises the block
+        // Arbitrary labels + address book — exercises the block
         // end-to-end with wide coverage of map/Vec shapes.
         #[test]
         fn populated_block_round_trip_proptest(
-            primary in "[a-zA-Z0-9 ]{0,16}",
             labels in proptest::collection::btree_map(
-                (1u32..8, 0u32..8).prop_map(|(a, b)| SubaddressIndex::new(a, b).unwrap()),
+                (0u32..64).prop_map(SubaddressIndex::new),
                 "[a-z]{0,8}",
                 0..8,
             ),
@@ -364,16 +314,6 @@ mod tests {
                     any::<Option<[u8; 8]>>(),
                 ),
                 0..5,
-            ),
-            tag_names in proptest::collection::btree_map(
-                "[a-z]{1,8}",
-                "[a-z ]{0,8}",
-                0..4,
-            ),
-            tag_assign in proptest::collection::btree_map(
-                0u32..32,
-                "[a-z]{1,8}",
-                0..4,
             ),
         ) {
             let registry = BTreeMap::new();
@@ -389,17 +329,12 @@ mod tests {
                 .collect();
             let b = BookkeepingBlock::new(
                 registry,
-                SubaddressLabels { primary, per_index },
+                SubaddressLabels { per_index },
                 address_book,
-                AccountTags {
-                    tag_descriptions: tag_names,
-                    per_account_tag: tag_assign,
-                },
             );
             let bytes = b.to_postcard_bytes().expect("serialize");
             let back = BookkeepingBlock::from_postcard_bytes(&bytes).expect("deserialize");
             prop_assert_eq!(&back, &b);
-            // and byte-stable under a second round-trip
             let bytes2 = back.to_postcard_bytes().expect("serialize2");
             prop_assert_eq!(bytes, bytes2);
         }

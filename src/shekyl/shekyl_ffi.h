@@ -1703,17 +1703,23 @@ static_assert(sizeof(ShekylReorgBlockEntryC) == 40,
 
 /* --- BookkeepingBlock leaves ------------------------------------------- */
 
+/* Flat subaddress namespace: `index` is the bare 32-bit index, with
+ * `index == 0` reserved for the primary address. The primary address
+ * is reconstructed from the wallet keys at every load and is NOT
+ * stored in the registry; an attempt to set an entry with `index == 0`
+ * returns SHEKYL_WALLET_ERR_LEDGER. */
 typedef struct ShekylSubaddressRegistryEntryC {
     uint8_t  spend_pk_bytes[32];
-    uint32_t major;
-    uint32_t minor;
+    uint32_t index;
 } ShekylSubaddressRegistryEntryC;
-static_assert(sizeof(ShekylSubaddressRegistryEntryC) == 40,
+static_assert(sizeof(ShekylSubaddressRegistryEntryC) == 36,
     "ShekylSubaddressRegistryEntryC layout must match the Rust const-assert");
 
+/* Per-index subaddress label. The flat-namespace migration removed
+ * `SubaddressLabels::primary`; the primary slot is the `index == 0`
+ * entry of this map like every other index. */
 typedef struct ShekylSubaddressLabelEntryC {
-    uint32_t major;
-    uint32_t minor;
+    uint32_t index;
     uint8_t* label_ptr;
     size_t   label_len;
 } ShekylSubaddressLabelEntryC;
@@ -1732,24 +1738,6 @@ typedef struct ShekylAddressBookEntryC {
 } ShekylAddressBookEntryC;
 static_assert(sizeof(ShekylAddressBookEntryC) == 48,
     "ShekylAddressBookEntryC layout must match the Rust const-assert");
-
-typedef struct ShekylTagDescriptionEntryC {
-    uint8_t* tag_ptr;
-    size_t   tag_len;
-    uint8_t* description_ptr;
-    size_t   description_len;
-} ShekylTagDescriptionEntryC;
-static_assert(sizeof(ShekylTagDescriptionEntryC) == 32,
-    "ShekylTagDescriptionEntryC layout must match the Rust const-assert");
-
-typedef struct ShekylAccountTagAssignmentEntryC {
-    uint32_t account;
-    uint8_t  _pad0[4];
-    uint8_t* tag_ptr;
-    size_t   tag_len;
-} ShekylAccountTagAssignmentEntryC;
-static_assert(sizeof(ShekylAccountTagAssignmentEntryC) == 24,
-    "ShekylAccountTagAssignmentEntryC layout must match the Rust const-assert");
 
 /* --- TxMetaBlock leaves ------------------------------------------------ */
 
@@ -1869,18 +1857,9 @@ bool shekyl_wallet_set_subaddress_registry(
 void shekyl_wallet_free_subaddress_registry(
     ShekylSubaddressRegistryEntryC* ptr, size_t count);
 
-/* The primary subaddress label is round-tripped as a single string
- * since SubaddressLabels models it separately from per_index. */
-bool shekyl_wallet_get_primary_label(
-    ShekylWallet* h,
-    uint8_t** out_ptr, size_t* out_len,
-    uint32_t* out_error);
-bool shekyl_wallet_set_primary_label(
-    ShekylWallet* h,
-    const uint8_t* in_ptr, size_t in_len,
-    uint32_t* out_error);
-void shekyl_wallet_free_primary_label(uint8_t* ptr, size_t len);
-
+/* The flat-namespace `subaddress_labels` map covers every labeled
+ * address, including the primary slot (`index == 0`). The dedicated
+ * primary-label trio that pre-flat-namespace layouts carried is gone. */
 bool shekyl_wallet_get_subaddress_labels(
     ShekylWallet* h,
     ShekylSubaddressLabelEntryC** out_ptr, size_t* out_count,
@@ -1902,28 +1881,6 @@ bool shekyl_wallet_set_address_book(
     uint32_t* out_error);
 void shekyl_wallet_free_address_book(
     ShekylAddressBookEntryC* ptr, size_t count);
-
-bool shekyl_wallet_get_tag_descriptions(
-    ShekylWallet* h,
-    ShekylTagDescriptionEntryC** out_ptr, size_t* out_count,
-    uint32_t* out_error);
-bool shekyl_wallet_set_tag_descriptions(
-    ShekylWallet* h,
-    const ShekylTagDescriptionEntryC* in_ptr, size_t in_count,
-    uint32_t* out_error);
-void shekyl_wallet_free_tag_descriptions(
-    ShekylTagDescriptionEntryC* ptr, size_t count);
-
-bool shekyl_wallet_get_account_tags(
-    ShekylWallet* h,
-    ShekylAccountTagAssignmentEntryC** out_ptr, size_t* out_count,
-    uint32_t* out_error);
-bool shekyl_wallet_set_account_tags(
-    ShekylWallet* h,
-    const ShekylAccountTagAssignmentEntryC* in_ptr, size_t in_count,
-    uint32_t* out_error);
-void shekyl_wallet_free_account_tags(
-    ShekylAccountTagAssignmentEntryC* ptr, size_t count);
 
 bool shekyl_wallet_get_bookkeeping_block_version(
     ShekylWallet* h, uint32_t* out, uint32_t* out_error);

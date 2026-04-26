@@ -312,7 +312,7 @@ impl RuntimeWalletState {
         );
     }
 
-    /// Get spendable outputs with optional account/subaddress/amount filters.
+    /// Get spendable outputs with optional subaddress/amount filters.
     ///
     /// Only returns outputs where `current_height >= eligible_height` — the
     /// daemon has no curve-tree path for immature outputs, so attempting to
@@ -320,7 +320,6 @@ impl RuntimeWalletState {
     pub fn spendable_outputs(
         &self,
         current_height: u64,
-        account: Option<u32>,
         subaddress: Option<SubaddressIndex>,
         min_amount: Option<u64>,
     ) -> Vec<(usize, &TransferDetails)> {
@@ -330,13 +329,6 @@ impl RuntimeWalletState {
             .filter(|(_, td)| {
                 if !td.is_spendable(current_height) {
                     return false;
-                }
-                if let Some(acct) = account {
-                    match td.subaddress {
-                        Some(sa) if sa.account() == acct => {}
-                        None if acct == 0 => {}
-                        _ => return false,
-                    }
                 }
                 if let Some(sub) = subaddress {
                     if td.subaddress != Some(sub) {

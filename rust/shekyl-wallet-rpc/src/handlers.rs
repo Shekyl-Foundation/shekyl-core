@@ -353,7 +353,7 @@ fn transfer_to_json(td: &shekyl_scanner::TransferDetails) -> Value {
         "frozen": td.frozen,
         "global_index": td.global_output_index,
         "subaddr_index": td.subaddress.map(|s| {
-            serde_json::json!({ "major": s.account(), "minor": s.address() })
+            serde_json::json!({ "index": s.get() })
         }),
     })
 }

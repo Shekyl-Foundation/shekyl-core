@@ -1196,7 +1196,6 @@ mod tests {
                 assert!(ledger.ledger.transfers.is_empty());
                 assert!(ledger.tx_meta.tx_keys.is_empty());
                 assert!(ledger.bookkeeping.subaddress_labels.per_index.is_empty());
-                assert!(ledger.bookkeeping.subaddress_labels.primary.is_empty());
                 assert!(!ledger.sync_state.scan_completed);
             }
             OpenOutcome::StateLoaded(_) => panic!("expected StateLost for missing .wallet"),

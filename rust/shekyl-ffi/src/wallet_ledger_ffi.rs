@@ -72,8 +72,7 @@ use zeroize::Zeroizing;
 
 use shekyl_wallet_state::{
     bookkeeping_block::{
-        AccountTags, AddressBookEntry, BookkeepingBlock, SubaddressLabels,
-        BOOKKEEPING_BLOCK_VERSION,
+        AddressBookEntry, BookkeepingBlock, SubaddressLabels, BOOKKEEPING_BLOCK_VERSION,
     },
     ledger_block::{BlockchainTip, LedgerBlock, ReorgBlocks, LEDGER_BLOCK_VERSION},
     payment_id::PaymentId,
@@ -270,26 +269,38 @@ const _: () = assert!(
 /// Entry in the reverse lookup from compressed-Edwards public spend
 /// key to subaddress index. Scanner produces one of these per
 /// subaddress the user has materialized.
+///
+/// The `index` field is the flat 32-bit [`SubaddressIndex`]. There
+/// is no trailing pad: with zero `.cpp` callers in the tree at the
+/// time of the flat-namespace migration, preserving the legacy
+/// 40-byte stride for hypothetical future callers would be a
+/// defensive measure for nobody. If a new C++ caller ever appears
+/// it matches whatever the struct says at that point.
 #[repr(C)]
 pub struct ShekylSubaddressRegistryEntryC {
     pub spend_pk_bytes: [u8; 32],
-    pub major: u32,
-    pub minor: u32,
+    pub index: u32,
 }
 
 const _: () = assert!(
-    core::mem::size_of::<ShekylSubaddressRegistryEntryC>() == 40,
+    core::mem::size_of::<ShekylSubaddressRegistryEntryC>() == 36,
     "ShekylSubaddressRegistryEntryC layout must match the C++ static_assert in shekyl_ffi.h"
 );
 
 /// One `(subaddress_index, label)` entry from
-/// [`SubaddressLabels::per_index`]. The primary-address label is not
-/// in this array — it is round-tripped as a dedicated struct field in
-/// [`ShekylSubaddressLabelsC`].
+/// [`SubaddressLabels::per_index`]. Covers every labeled address —
+/// the primary slot (`SubaddressIndex(0)`) and every derived index —
+/// since the flat-namespace decision removed the carved-out primary
+/// label field.
+///
+/// As with [`ShekylSubaddressRegistryEntryC`], no padding: the only
+/// declarer of this struct is `src/shekyl/shekyl_ffi.h` and there
+/// are zero `.cpp` callers. Stride compatibility with the
+/// pre-flat-namespace `(major, minor, label_ptr, label_len)` layout
+/// would defend an empty caller set.
 #[repr(C)]
 pub struct ShekylSubaddressLabelEntryC {
-    pub major: u32,
-    pub minor: u32,
+    pub index: u32,
     pub label_ptr: *mut u8,
     pub label_len: usize,
 }
@@ -318,35 +329,6 @@ pub struct ShekylAddressBookEntryC {
 const _: () = assert!(
     core::mem::size_of::<ShekylAddressBookEntryC>() == 48,
     "ShekylAddressBookEntryC layout must match the C++ static_assert in shekyl_ffi.h"
-);
-
-/// One entry in the account-tag description map.
-#[repr(C)]
-pub struct ShekylTagDescriptionEntryC {
-    pub tag_ptr: *mut u8,
-    pub tag_len: usize,
-    pub description_ptr: *mut u8,
-    pub description_len: usize,
-}
-
-const _: () = assert!(
-    core::mem::size_of::<ShekylTagDescriptionEntryC>() == 32,
-    "ShekylTagDescriptionEntryC layout must match the C++ static_assert in shekyl_ffi.h"
-);
-
-/// One `(account_index, tag_name)` entry in the per-account tag
-/// assignment map.
-#[repr(C)]
-pub struct ShekylAccountTagAssignmentEntryC {
-    pub account: u32,
-    pub _pad0: [u8; 4],
-    pub tag_ptr: *mut u8,
-    pub tag_len: usize,
-}
-
-const _: () = assert!(
-    core::mem::size_of::<ShekylAccountTagAssignmentEntryC>() == 24,
-    "ShekylAccountTagAssignmentEntryC layout must match the C++ static_assert in shekyl_ffi.h"
 );
 
 // ---------------------------------------------------------------------------
@@ -908,8 +890,7 @@ pub unsafe extern "C" fn shekyl_wallet_get_subaddress_registry(
         .map(
             |(pk_bytes, idx): (&[u8; 32], &SubaddressIndex)| ShekylSubaddressRegistryEntryC {
                 spend_pk_bytes: *pk_bytes,
-                major: idx.account(),
-                minor: idx.address(),
+                index: idx.get(),
             },
         )
         .collect();
@@ -938,18 +919,15 @@ pub unsafe extern "C" fn shekyl_wallet_set_subaddress_registry(
     let slice = std::slice::from_raw_parts(in_ptr, in_count);
     let mut registry = std::collections::BTreeMap::new();
     for e in slice {
-        let idx = match SubaddressIndex::new(e.major, e.minor) {
-            Some(i) => i,
-            // (0,0) is a valid spend-pk entry for the primary address
-            // in the registry context? No — the registry exists for
-            // non-primary subaddresses. If C++ ever tries to insert
-            // (0,0) it is a bug.
-            None => {
-                set_err(out_error, SHEKYL_WALLET_ERR_LEDGER);
-                return false;
-            }
-        };
-        registry.insert(e.spend_pk_bytes, idx);
+        if e.index == 0 {
+            // The registry exists for non-primary subaddresses; the
+            // primary address (`SubaddressIndex(0)`) is reconstructed
+            // from the wallet keys, not stored. If C++ ever tries to
+            // insert index 0 it is a bug.
+            set_err(out_error, SHEKYL_WALLET_ERR_LEDGER);
+            return false;
+        }
+        registry.insert(e.spend_pk_bytes, SubaddressIndex::new(e.index));
     }
     let w = &mut *h;
     w.ledger.bookkeeping.subaddress_registry = registry;
@@ -966,60 +944,13 @@ pub unsafe extern "C" fn shekyl_wallet_free_subaddress_registry(
 }
 
 // ---------------------------------------------------------------------------
-// BookkeepingBlock — subaddress labels (primary + per-index trio)
+// BookkeepingBlock — subaddress labels (per-index trio)
 // ---------------------------------------------------------------------------
-
-/// Read the primary-address label (single string; not in the labels
-/// array). Two-call sizing is not needed: the FFI allocates a
-/// Rust-owned copy of the current primary label and C++ must free it
-/// via [`shekyl_wallet_free_primary_label`] after reading.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_wallet_get_primary_label(
-    h: *mut ShekylWallet,
-    out_ptr: *mut *mut u8,
-    out_len: *mut usize,
-    out_error: *mut u32,
-) -> bool {
-    if h.is_null() || out_ptr.is_null() || out_len.is_null() {
-        set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
-        return false;
-    }
-    let w = &*h;
-    let (ptr, len) = string_into_raw(&w.ledger.bookkeeping.subaddress_labels.primary);
-    *out_ptr = ptr;
-    set_usize(out_len, len);
-    set_err(out_error, SHEKYL_WALLET_ERR_OK);
-    true
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_wallet_set_primary_label(
-    h: *mut ShekylWallet,
-    in_ptr: *const u8,
-    in_len: usize,
-    out_error: *mut u32,
-) -> bool {
-    if h.is_null() {
-        set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
-        return false;
-    }
-    let s = match borrow_str(in_ptr, in_len) {
-        Some(s) => s,
-        None => {
-            set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
-            return false;
-        }
-    };
-    let w = &mut *h;
-    w.ledger.bookkeeping.subaddress_labels.primary = s.to_owned();
-    set_err(out_error, SHEKYL_WALLET_ERR_OK);
-    true
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_wallet_free_primary_label(ptr: *mut u8, len: usize) {
-    drop_string(ptr, len);
-}
+//
+// Under the flat `SubaddressIndex(u32)` namespace the "primary" label is
+// just the entry at index 0; there is no separate primary-label slot,
+// and consumers wanting the primary label read/write index 0 through
+// the per-index FFI below.
 
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_wallet_get_subaddress_labels(
@@ -1038,8 +969,7 @@ pub unsafe extern "C" fn shekyl_wallet_get_subaddress_labels(
     for (idx, label) in labels {
         let (label_ptr, label_len) = string_into_raw(label);
         out.push(ShekylSubaddressLabelEntryC {
-            major: idx.account(),
-            minor: idx.address(),
+            index: idx.get(),
             label_ptr,
             label_len,
         });
@@ -1069,13 +999,6 @@ pub unsafe extern "C" fn shekyl_wallet_set_subaddress_labels(
     let slice = std::slice::from_raw_parts(in_ptr, in_count);
     let mut map = std::collections::BTreeMap::new();
     for e in slice {
-        let idx = match SubaddressIndex::new(e.major, e.minor) {
-            Some(i) => i,
-            None => {
-                set_err(out_error, SHEKYL_WALLET_ERR_LEDGER);
-                return false;
-            }
-        };
         let s = match borrow_str(e.label_ptr, e.label_len) {
             Some(s) => s,
             None => {
@@ -1083,7 +1006,7 @@ pub unsafe extern "C" fn shekyl_wallet_set_subaddress_labels(
                 return false;
             }
         };
-        map.insert(idx, s.to_owned());
+        map.insert(SubaddressIndex::new(e.index), s.to_owned());
     }
     let w = &mut *h;
     w.ledger.bookkeeping.subaddress_labels.per_index = map;
@@ -1207,179 +1130,6 @@ pub unsafe extern "C" fn shekyl_wallet_free_address_book(
     for e in slice {
         drop_string(e.address_ptr, e.address_len);
         drop_string(e.description_ptr, e.description_len);
-    }
-    drop_boxed_slice(ptr, count);
-}
-
-// ---------------------------------------------------------------------------
-// BookkeepingBlock — account tag descriptions (get / set / free)
-// ---------------------------------------------------------------------------
-
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_wallet_get_tag_descriptions(
-    h: *mut ShekylWallet,
-    out_ptr: *mut *mut ShekylTagDescriptionEntryC,
-    out_count: *mut usize,
-    out_error: *mut u32,
-) -> bool {
-    if h.is_null() || out_ptr.is_null() || out_count.is_null() {
-        set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
-        return false;
-    }
-    let w = &*h;
-    let descs = &w.ledger.bookkeeping.account_tags.tag_descriptions;
-    let mut out = Vec::with_capacity(descs.len());
-    for (tag, desc) in descs {
-        let (tag_ptr, tag_len) = string_into_raw(tag);
-        let (desc_ptr, desc_len) = string_into_raw(desc);
-        out.push(ShekylTagDescriptionEntryC {
-            tag_ptr,
-            tag_len,
-            description_ptr: desc_ptr,
-            description_len: desc_len,
-        });
-    }
-    let (ptr, count) = boxed_slice_into_raw(out);
-    *out_ptr = ptr;
-    set_usize(out_count, count);
-    set_err(out_error, SHEKYL_WALLET_ERR_OK);
-    true
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_wallet_set_tag_descriptions(
-    h: *mut ShekylWallet,
-    in_ptr: *const ShekylTagDescriptionEntryC,
-    in_count: usize,
-    out_error: *mut u32,
-) -> bool {
-    if h.is_null() {
-        set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
-        return false;
-    }
-    if in_count != 0 && in_ptr.is_null() {
-        set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
-        return false;
-    }
-    let slice = std::slice::from_raw_parts(in_ptr, in_count);
-    let mut map = std::collections::BTreeMap::new();
-    for e in slice {
-        let tag = match borrow_str(e.tag_ptr, e.tag_len) {
-            Some(s) => s.to_owned(),
-            None => {
-                set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
-                return false;
-            }
-        };
-        let desc = match borrow_str(e.description_ptr, e.description_len) {
-            Some(s) => s.to_owned(),
-            None => {
-                set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
-                return false;
-            }
-        };
-        map.insert(tag, desc);
-    }
-    let w = &mut *h;
-    w.ledger.bookkeeping.account_tags.tag_descriptions = map;
-    set_err(out_error, SHEKYL_WALLET_ERR_OK);
-    true
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_wallet_free_tag_descriptions(
-    ptr: *mut ShekylTagDescriptionEntryC,
-    count: usize,
-) {
-    if ptr.is_null() || count == 0 {
-        return;
-    }
-    let slice = std::slice::from_raw_parts(ptr, count);
-    for e in slice {
-        drop_string(e.tag_ptr, e.tag_len);
-        drop_string(e.description_ptr, e.description_len);
-    }
-    drop_boxed_slice(ptr, count);
-}
-
-// ---------------------------------------------------------------------------
-// BookkeepingBlock — per-account tag assignments (get / set / free)
-// ---------------------------------------------------------------------------
-
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_wallet_get_account_tags(
-    h: *mut ShekylWallet,
-    out_ptr: *mut *mut ShekylAccountTagAssignmentEntryC,
-    out_count: *mut usize,
-    out_error: *mut u32,
-) -> bool {
-    if h.is_null() || out_ptr.is_null() || out_count.is_null() {
-        set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
-        return false;
-    }
-    let w = &*h;
-    let assignments = &w.ledger.bookkeeping.account_tags.per_account_tag;
-    let mut out = Vec::with_capacity(assignments.len());
-    for (account, tag) in assignments {
-        let (tag_ptr, tag_len) = string_into_raw(tag);
-        out.push(ShekylAccountTagAssignmentEntryC {
-            account: *account,
-            _pad0: [0; 4],
-            tag_ptr,
-            tag_len,
-        });
-    }
-    let (ptr, count) = boxed_slice_into_raw(out);
-    *out_ptr = ptr;
-    set_usize(out_count, count);
-    set_err(out_error, SHEKYL_WALLET_ERR_OK);
-    true
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_wallet_set_account_tags(
-    h: *mut ShekylWallet,
-    in_ptr: *const ShekylAccountTagAssignmentEntryC,
-    in_count: usize,
-    out_error: *mut u32,
-) -> bool {
-    if h.is_null() {
-        set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
-        return false;
-    }
-    if in_count != 0 && in_ptr.is_null() {
-        set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
-        return false;
-    }
-    let slice = std::slice::from_raw_parts(in_ptr, in_count);
-    let mut map = std::collections::BTreeMap::new();
-    for e in slice {
-        let tag = match borrow_str(e.tag_ptr, e.tag_len) {
-            Some(s) => s.to_owned(),
-            None => {
-                set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
-                return false;
-            }
-        };
-        map.insert(e.account, tag);
-    }
-    let w = &mut *h;
-    w.ledger.bookkeeping.account_tags.per_account_tag = map;
-    set_err(out_error, SHEKYL_WALLET_ERR_OK);
-    true
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_wallet_free_account_tags(
-    ptr: *mut ShekylAccountTagAssignmentEntryC,
-    count: usize,
-) {
-    if ptr.is_null() || count == 0 {
-        return;
-    }
-    let slice = std::slice::from_raw_parts(ptr, count);
-    for e in slice {
-        drop_string(e.tag_ptr, e.tag_len);
     }
     drop_boxed_slice(ptr, count);
 }
@@ -1968,11 +1718,154 @@ fn _keep_imports(
     _: TxMetaBlock,
     _: SyncStateBlock,
     _: SubaddressLabels,
-    _: AccountTags,
     _: AddressBookEntry,
     _: ScannedPoolTx,
     _: ReorgBlocks,
     _: BlockchainTip,
     _: c_char,
 ) {
+}
+
+#[cfg(test)]
+mod tests {
+    //! Behavioral tests for the typed-ledger FFI surface.
+    //!
+    //! These currently focus on flat-namespace invariants that are
+    //! easy to express without standing up a full opaque-handle
+    //! fixture; lifecycle and round-trip coverage lives next to the
+    //! wallet-file FFI in `wallet_file_ffi::tests`.
+    use super::*;
+    use crate::wallet_envelope_ffi::{SHEKYL_WALLET_CAPABILITY_VIEW_ONLY, SHEKYL_WALLET_ERR_OK};
+    use crate::wallet_file_ffi::{shekyl_wallet_create, ShekylWallet, SHEKYL_WALLET_ERR_LEDGER};
+    use shekyl_crypto_pq::kem::ML_KEM_768_DK_LEN;
+    use shekyl_crypto_pq::wallet_envelope::EXPECTED_CLASSICAL_ADDRESS_BYTES;
+    use shekyl_wallet_file::Network;
+
+    fn fixture_view_only_cap_content() -> Vec<u8> {
+        let mut v = Vec::with_capacity(32 + ML_KEM_768_DK_LEN + 32);
+        v.extend_from_slice(&[0x11u8; 32]);
+        v.extend_from_slice(&[0x22u8; ML_KEM_768_DK_LEN]);
+        v.extend_from_slice(&[0x33u8; 32]);
+        v
+    }
+
+    fn fixture_address() -> [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES] {
+        let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
+        a[0] = 0x01;
+        a
+    }
+
+    fn make_test_wallet(base: &std::path::Path) -> *mut ShekylWallet {
+        let cap = fixture_view_only_cap_content();
+        let addr = fixture_address();
+        let base_str = base.to_str().unwrap();
+        let mut h: *mut ShekylWallet = std::ptr::null_mut();
+        let mut err: u32 = 0;
+        unsafe {
+            let ok = shekyl_wallet_create(
+                base_str.as_ptr().cast(),
+                base_str.len(),
+                b"pw".as_ptr(),
+                2,
+                Network::Testnet.as_u8(),
+                0x00,
+                SHEKYL_WALLET_CAPABILITY_VIEW_ONLY,
+                cap.as_ptr(),
+                cap.len(),
+                0x6000_0000,
+                0,
+                addr.as_ptr(),
+                0x08,
+                1,
+                1,
+                std::ptr::null(),
+                0,
+                &raw mut h,
+                &raw mut err,
+            );
+            assert!(ok, "create failed: code={err}");
+            assert!(!h.is_null());
+            assert_eq!(err, SHEKYL_WALLET_ERR_OK);
+        }
+        h
+    }
+
+    /// The flat subaddress namespace has no separate "primary" slot:
+    /// `SubaddressIndex(0)` is the primary address, derived from the
+    /// wallet keys at every load. The registry is therefore strictly
+    /// for *non-primary* subaddresses, and an attempt to insert
+    /// `index == 0` is a structural error rather than a benign
+    /// overwrite. wallet2 silently accepted such inserts; the V3 FFI
+    /// returns `SHEKYL_WALLET_ERR_LEDGER` so the bug surfaces at
+    /// the call site instead of producing inconsistent ledger state.
+    #[test]
+    fn registry_set_rejects_index_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("x.wallet");
+        let h = make_test_wallet(&base);
+
+        let entries = [ShekylSubaddressRegistryEntryC {
+            spend_pk_bytes: [0x44u8; 32],
+            index: 0,
+        }];
+        let mut err: u32 = 0;
+        unsafe {
+            let ok = shekyl_wallet_set_subaddress_registry(
+                h,
+                entries.as_ptr(),
+                entries.len(),
+                &raw mut err,
+            );
+            assert!(!ok, "set with index==0 must fail");
+            assert_eq!(
+                err, SHEKYL_WALLET_ERR_LEDGER,
+                "primary address is reconstructed from keys, not registered"
+            );
+            // Registry must be untouched on rejection — no partial write.
+            let w = &*h;
+            assert!(w.ledger.bookkeeping.subaddress_registry.is_empty());
+        }
+        unsafe { crate::wallet_file_ffi::shekyl_wallet_free(h) };
+    }
+
+    /// Counterpart to `registry_set_rejects_index_zero`: a valid
+    /// non-primary insert succeeds and round-trips through the
+    /// getter with the flat-namespace `index` field intact.
+    #[test]
+    fn registry_set_accepts_nonzero_index_and_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("y.wallet");
+        let h = make_test_wallet(&base);
+
+        let entries = [ShekylSubaddressRegistryEntryC {
+            spend_pk_bytes: [0x55u8; 32],
+            index: 7,
+        }];
+        let mut err: u32 = 0;
+        unsafe {
+            assert!(shekyl_wallet_set_subaddress_registry(
+                h,
+                entries.as_ptr(),
+                entries.len(),
+                &raw mut err,
+            ));
+            assert_eq!(err, SHEKYL_WALLET_ERR_OK);
+
+            let mut out_ptr: *mut ShekylSubaddressRegistryEntryC = std::ptr::null_mut();
+            let mut out_count: usize = 0;
+            assert!(shekyl_wallet_get_subaddress_registry(
+                h,
+                &raw mut out_ptr,
+                &raw mut out_count,
+                &raw mut err,
+            ));
+            assert_eq!(err, SHEKYL_WALLET_ERR_OK);
+            assert_eq!(out_count, 1);
+            let got = &*out_ptr;
+            assert_eq!(got.spend_pk_bytes, [0x55u8; 32]);
+            assert_eq!(got.index, 7);
+            shekyl_wallet_free_subaddress_registry(out_ptr, out_count);
+            crate::wallet_file_ffi::shekyl_wallet_free(h);
+        }
+    }
 }

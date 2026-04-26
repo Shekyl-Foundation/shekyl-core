@@ -501,6 +501,59 @@ one; the default contract is Shekyl-native.
 
 ---
 
+## 2026-04-25 — Subaddress JSON shapes: two schemas, no label join in transfer records
+
+**Decision.** The `shekyl-wallet-rpc` JSON contract carries
+subaddress indices in **two distinct shapes** depending on whether
+the response is chain-state or display-state:
+
+- **Bare form.** `{"index": u32}`. Used by every response that is a
+  projection of chain-state — transfer records, pending-tx
+  descriptors, scanner outputs. Labels are wallet-state, not
+  chain-state, and joining them into chain-state shapes conflates
+  layers that need to stay separate (a label rename is not a
+  ledger event).
+- **Joined form.** `{"index": u32, "label": Option<String>}`. Used
+  by the address-list / "list addresses" endpoints and similar
+  display-oriented surfaces that exist to render addresses for the
+  user. The label is joined from
+  `BookkeepingBlock::subaddress_labels.per_index` at handler time;
+  if no label is set, `null` is returned.
+
+The Phase 4b OpenAPI spec lands these as two named schemas
+(`SubaddressIndexRef` for the bare form, `SubaddressLabeled` or
+similar for the joined form) so reviewers and integrators can see
+the distinction at the schema level.
+
+**Rationale.** Without the factoring, every JSON shape that
+mentions a subaddress index drifts toward also carrying the label
+"because the GUI wants it." That couples chain-state shapes to
+wallet-state, makes transfer records bigger than they need to be,
+and forces the daemon-RPC-only consumer (block explorers, indexer
+services) to receive labels they have no business seeing. Forcing
+the label join to happen only at handler boundaries — and only for
+endpoints whose explicit purpose is rendering — keeps internal
+shapes clean and the join site auditable.
+
+The flat-namespace decision (above) already locked `index` as the
+single field name; this entry locks where labels do and do not
+travel with it.
+
+**Rejected alternatives.**
+
+- Always include the label. Couples chain-state to wallet-state and
+  forces the join into every handler.
+- Always exclude the label, render it client-side. Pushes wallet
+  state through every consumer that wants to display addresses;
+  defeats the point of the RPC.
+
+**Consequence.** Phase 4b ships `SubaddressIndexRef` and a
+labeled-variant schema; transfer-record responses use the bare
+form, address-list responses use the joined form. Future endpoints
+choose one factoring and document why.
+
+---
+
 ## 2026-04-25 — Phase 5 deletion scope: includes Rust FFI surfaces consumed only by C++
 
 **Decision.** The single-commit Phase 5 deletion of `wallet2.cpp` and

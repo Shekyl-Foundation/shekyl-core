@@ -141,8 +141,7 @@ impl Metadata {
 
         if let Some(subaddress) = self.subaddress {
             w.write_all(&[1])?;
-            w.write_all(&subaddress.account().to_le_bytes())?;
-            w.write_all(&subaddress.address().to_le_bytes())?;
+            w.write_all(&subaddress.get().to_le_bytes())?;
         } else {
             w.write_all(&[0])?;
         }
@@ -170,10 +169,7 @@ impl Metadata {
 
         let subaddress = match read_byte(r)? {
             0 => None,
-            1 => Some(
-                SubaddressIndex::new(read_u32(r)?, read_u32(r)?)
-                    .ok_or_else(|| io::Error::other("invalid subaddress in metadata"))?,
-            ),
+            1 => Some(SubaddressIndex::new(read_u32(r)?)),
             _ => Err(io::Error::other(
                 "invalid subaddress is_some boolean in metadata",
             ))?,

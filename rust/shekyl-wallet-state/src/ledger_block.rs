@@ -239,7 +239,7 @@ mod tests {
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000_000 + u64::from(seed)),
-            subaddress: SubaddressIndex::new(0, u32::from(seed)),
+            subaddress: Some(SubaddressIndex::new(u32::from(seed))),
             payment_id: Some(PaymentId([seed; 8])),
             spent: false,
             spent_height: None,

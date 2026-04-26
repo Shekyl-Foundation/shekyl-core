@@ -668,13 +668,13 @@ pub(crate) mod staking {
         )];
         ws.process_scanned_outputs(100, [0xA5; 32], make_timelocked(outputs));
 
-        let spendable = ws.spendable_outputs(105, None, None, None);
+        let spendable = ws.spendable_outputs(105, None, None);
         assert!(
             spendable.is_empty(),
             "output mined at 100 should NOT be spendable at 105"
         );
 
-        let spendable = ws.spendable_outputs(110, None, None, None);
+        let spendable = ws.spendable_outputs(110, None, None);
         assert_eq!(
             spendable.len(),
             1,

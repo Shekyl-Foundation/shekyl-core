@@ -2,6 +2,68 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Subaddress namespace flattened to `SubaddressIndex(u32)` across the
+  wallet stack and the typed-ledger FFI surface (Phase 1 of the
+  [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
+  `primitives` task).** `SubaddressIndex` is now a `u32` newtype with
+  `index == 0` reserved for the primary address; the legacy
+  `{account, address}` pair is gone everywhere — `WalletLedger`,
+  `BookkeepingBlock::subaddress_registry` /
+  `subaddress_labels.per_index`, scanner outputs, transfer records,
+  `RuntimeWalletState::filter`, and the typed-ledger FFI in
+  `rust/shekyl-ffi/src/wallet_ledger_ffi.rs`. Account-level concepts
+  inherited from wallet2 (`AccountTags`, the `tag_descriptions` /
+  `account_tags` FFI trios) are removed wholesale; the Decision Log
+  entry "Subaddress hierarchy: flat, no account level" pins the
+  rationale (most users use one account; account-level tags were
+  wallet2 baggage; multi-wallet-file isolation is genuinely stronger
+  than account-level subaddresses). A separate
+  `SubaddressLabels::primary` slot is gone too — the primary label is
+  the `index == 0` entry of `per_index` like every other label.
+
+  **FFI surface delta (this commit).** `shekyl_ffi.h` mirrors the Rust:
+  `ShekylSubaddressRegistryEntryC` and `ShekylSubaddressLabelEntryC`
+  carry a single `index: u32` field (sizes 36 and 24 respectively, no
+  trailing pad — there are zero `.cpp` callers in tree, so preserving
+  the legacy stride for hypothetical future callers would be a
+  defensive measure for nobody); the
+  `ShekylTagDescriptionEntryC` /
+  `ShekylAccountTagAssignmentEntryC` typedefs and their
+  `static_assert`s, plus the
+  `shekyl_wallet_{get,set,free}_{tag_descriptions,account_tags,primary_label}`
+  prototypes, are removed. The FFI file
+  `wallet_ledger_ffi.rs` itself is scheduled for outright deletion in
+  the immediate follow-up commit (Phase 5 pre-emption); this commit
+  lands the field-rename half of the migration so the deletion commit
+  is a one-concern review.
+
+  **Behavioral delta.** `shekyl_wallet_set_subaddress_registry` now
+  rejects an entry with `index == 0` by returning
+  `SHEKYL_WALLET_ERR_LEDGER`. The primary address is reconstructed
+  from the wallet keys at every load and is not registry-managed; an
+  attempted insert at index 0 is structurally impossible rather than
+  benign overwrite. wallet2 silently accepted such inserts; the V3
+  surface fails loudly. Belt-and-suspenders unit test
+  `wallet_ledger_ffi::tests::registry_set_rejects_index_zero` pins
+  the contract.
+
+  **On-disk schema.** `BOOKKEEPING_BLOCK_VERSION` is bumped (legacy v1
+  ledgers have no live readers — pre-V3 launch, `rm -rf ~/.shekyl` is
+  the migration path per `15-deletion-and-debt.mdc`). The
+  `bookkeeping_block.snap` / `ledger_block.snap` / `wallet_ledger.snap`
+  schema fixtures are regenerated; the `SubaddressIndex` shape went
+  from a two-field struct to a `NewtypeStruct(u32)`, and
+  `BookkeepingBlock::account_tags` is gone.
+
+  **JSON shape factoring.** Transfer records expose subaddress
+  indices as `{"index": u32}` (bare form, no label); address-list
+  responses expose them as `{"index": u32, "label": Option<String>}`
+  (joined form, label looked up at handler time). Decision Log entry
+  "Subaddress JSON shapes: two schemas, no label join in transfer
+  records" pins the factoring for Phase 4b OpenAPI work.
+
 ### Added
 
 - **`shekyl-wallet-core::Wallet<S>` struct + `DaemonClient` thin wrapper
