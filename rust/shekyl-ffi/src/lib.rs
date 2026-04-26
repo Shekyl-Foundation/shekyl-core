@@ -85,14 +85,6 @@ pub mod wallet_envelope_ffi;
 // export. Consumed by wallet2.cpp in the 2k/2l rewire slices.
 pub mod wallet_file_ffi;
 
-// 2l.a: typed per-block FFI on top of `wallet_file_ffi`'s `ShekylWallet`
-// handle. Implements the Option α-Shape-2 design (per-element repr(C)
-// structs with promoted hot fields and an opaque blob for variable-length
-// secret-bearing parts) so wallet2.cpp's cache hydrate / emit paths can
-// avoid round-tripping through a hand-rolled C++ postcard reader. See the
-// module-level docs for the layout contract.
-pub mod wallet_ledger_ffi;
-
 static CONSENSUS_REGISTRY: Mutex<Option<shekyl_consensus::ConsensusRegistry>> = Mutex::new(None);
 
 /// Fixed-size witness header per input in the FCMP++ prove/verify FFI.

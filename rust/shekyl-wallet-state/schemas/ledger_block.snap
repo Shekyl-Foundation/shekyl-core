@@ -221,22 +221,10 @@
                         "Option": {
                           "name": "SubaddressIndex",
                           "ty": {
-                            "Struct": [
-                              {
-                                "name": "account",
-                                "ty": {
-                                  "name": "u32",
-                                  "ty": "U32"
-                                }
-                              },
-                              {
-                                "name": "address",
-                                "ty": {
-                                  "name": "u32",
-                                  "ty": "U32"
-                                }
-                              }
-                            ]
+                            "NewtypeStruct": {
+                              "name": "u32",
+                              "ty": "U32"
+                            }
                           }
                         }
                       }

@@ -9,8 +9,14 @@
 //! assembly (PQC signing, RCT proofs) is deferred to the FFI layer or
 //! the tx-builder crate, but this module computes the correct claim
 //! parameters: from_height, to_height, estimated reward, and splitting.
+//!
+//! The builder reads from the live `(LedgerBlock, LedgerIndexes)` pair:
+//! `LedgerBlock` provides the persisted transfers + claim watermarks,
+//! `LedgerIndexes` provides the runtime-only `staker_pool` accrual
+//! aggregate. See `docs/V3_WALLET_DECISION_LOG.md` ("`RuntimeWalletState`
+//! audit", 2026-04-25) for why the split exists.
 
-use shekyl_scanner::{ClaimableInfo, WalletState};
+use shekyl_scanner::{ClaimableInfo, LedgerBlock, LedgerIndexes};
 
 use crate::error::WalletCoreError;
 
@@ -55,24 +61,25 @@ impl ClaimTxBuilder {
     /// Build a claim plan for all claimable outputs in the wallet.
     pub fn plan_all<F>(
         &self,
-        wallet: &WalletState,
+        ledger: &LedgerBlock,
+        indexes: &LedgerIndexes,
         current_height: u64,
         weight_fn: F,
     ) -> Result<ClaimTxPlan, WalletCoreError>
     where
         F: Fn(u64, u8) -> u64,
     {
-        let claimable = wallet.claimable_outputs(current_height);
+        let claimable = ledger.claimable_outputs(current_height);
         if claimable.is_empty() {
             return Err(WalletCoreError::NoClaimableOutputs);
         }
 
-        let pool = wallet.staker_pool();
+        let pool = indexes.staker_pool();
         let mut claims = Vec::new();
         let mut total_reward = 0u64;
 
         for td in &claimable {
-            let Some(idx) = wallet
+            let Some(idx) = ledger
                 .transfers()
                 .iter()
                 .position(|t| t.global_output_index == td.global_output_index)
@@ -83,7 +90,6 @@ impl ClaimTxBuilder {
             if let Some(info) = ClaimableInfo::from_transfer(td, idx, current_height) {
                 let weight = weight_fn(td.amount(), td.stake_tier);
 
-                // Split if range exceeds max
                 let mut cursor = info.from_height;
                 while cursor < info.to_height {
                     let chunk_end = std::cmp::min(cursor + self.max_claim_range, info.to_height);
@@ -116,7 +122,8 @@ impl ClaimTxBuilder {
     /// Build a claim plan for a specific set of transfer indices.
     pub fn plan_specific<F>(
         &self,
-        wallet: &WalletState,
+        ledger: &LedgerBlock,
+        indexes: &LedgerIndexes,
         indices: &[usize],
         current_height: u64,
         weight_fn: F,
@@ -124,8 +131,8 @@ impl ClaimTxBuilder {
     where
         F: Fn(u64, u8) -> u64,
     {
-        let transfers = wallet.transfers();
-        let pool = wallet.staker_pool();
+        let transfers = ledger.transfers();
+        let pool = indexes.staker_pool();
         let mut claims = Vec::new();
         let mut total_reward = 0u64;
 

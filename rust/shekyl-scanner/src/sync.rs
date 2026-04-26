@@ -6,11 +6,14 @@
 //! Background blockchain sync loop.
 //!
 //! Polls the daemon RPC for new blocks, feeds them through the scanner,
-//! detects spent outputs via key-image matching, and updates `WalletState`.
+//! detects spent outputs via key-image matching, and updates the live
+//! `(LedgerBlock, LedgerIndexes)` pair held behind a `tokio::sync::Mutex`.
 //!
 //! The loop is cancellation-safe: stopping the `CancellationToken` causes a
-//! clean shutdown, after which the caller can persist `WalletState` at the
-//! last successfully processed height.
+//! clean shutdown, after which the caller can persist `LedgerBlock` at the
+//! last successfully processed height. (`LedgerIndexes` is rebuilt from
+//! `LedgerBlock::transfers` + scanner replay on every wallet open and is
+//! not persisted.)
 
 #[cfg(feature = "rust-scanner")]
 mod inner {
@@ -22,12 +25,16 @@ mod inner {
 
     use shekyl_oxide::transaction::Input;
     use shekyl_rpc::{Rpc, RpcError};
+    use shekyl_wallet_state::{LedgerBlock, LedgerIndexes};
 
     use crate::{
-        runtime_ext::WalletStateExt,
+        ledger_ext::LedgerIndexesExt,
         scan::{ScanError, Scanner},
-        wallet_state::WalletState,
     };
+
+    /// Live wallet state under the sync loop's lock: the persisted ledger
+    /// plus the runtime-only indexes maintained alongside it.
+    pub type LiveLedger = (LedgerBlock, LedgerIndexes);
 
     /// Progress event emitted by the sync loop after each block.
     #[derive(Clone, Debug)]
@@ -61,22 +68,26 @@ mod inner {
 
     /// Run the background sync loop.
     ///
-    /// Fetches blocks from `wallet_state.height() + 1` up to the daemon tip,
-    /// then polls every `poll_interval` for new blocks. Stops when `cancel` is
+    /// Fetches blocks from `ledger.height() + 1` up to the daemon tip, then
+    /// polls every `poll_interval` for new blocks. Stops when `cancel` is
     /// triggered.
     ///
     /// Detects chain reorganizations by comparing each block's `previous` hash
-    /// against the hash stored in `WalletState` for the prior height. On reorg,
-    /// `handle_reorg` is called to roll back affected transfers before resuming.
+    /// against the hash stored in `LedgerBlock` for the prior height. On
+    /// reorg, [`LedgerIndexes::handle_reorg`] is called to roll back affected
+    /// transfers before resuming.
     ///
     /// `on_progress` is called after every successfully processed block.
     /// `on_flush` is called every `DESKTOP_FLUSH_INTERVAL` blocks (or every
     /// block if `flush_every_block` is set — use this on mobile where the OS
-    /// can kill the process without warning).
+    /// can kill the process without warning). Only the persisted half
+    /// (`LedgerBlock`) is exposed to the flush callback; `LedgerIndexes` is
+    /// always reconstructible from the persisted ledger and need not be
+    /// snapshotted.
     pub async fn run_sync_loop<R, P, F>(
         rpc: R,
         scanner: Arc<Mutex<Scanner>>,
-        state: Arc<Mutex<WalletState>>,
+        state: Arc<Mutex<LiveLedger>>,
         cancel: CancellationToken,
         poll_interval: std::time::Duration,
         flush_every_block: bool,
@@ -86,7 +97,7 @@ mod inner {
     where
         R: Rpc + Send + 'static,
         P: FnMut(SyncProgress) + Send,
-        F: FnMut(&WalletState) + Send,
+        F: FnMut(&LedgerBlock) + Send,
     {
         info!("sync loop started");
 
@@ -107,7 +118,7 @@ mod inner {
                 }
             };
 
-            let wallet_height = state.lock().await.height();
+            let wallet_height = state.lock().await.0.height();
 
             if wallet_height >= daemon_height {
                 debug!(wallet_height, daemon_height, "wallet is synced, sleeping");
@@ -132,7 +143,7 @@ mod inner {
                 if h > 1 {
                     let parent_hash = scannable.block.header.previous;
                     let state_guard = state.lock().await;
-                    let expected = state_guard.block_hash_at(h - 1).copied();
+                    let expected = state_guard.0.block_hash_at(h - 1).copied();
                     drop(state_guard);
 
                     if let Some(stored_hash) = expected {
@@ -147,8 +158,9 @@ mod inner {
                             let fork_height = find_fork_point(&rpc, &state, h - 1, &cancel).await?;
 
                             let mut state_guard = state.lock().await;
-                            state_guard.handle_reorg(fork_height);
-                            on_flush(&state_guard);
+                            let (ledger, indexes) = &mut *state_guard;
+                            indexes.handle_reorg(ledger, fork_height);
+                            on_flush(ledger);
                             drop(state_guard);
 
                             info!(
@@ -195,9 +207,10 @@ mod inner {
                 }
 
                 let mut state_guard = state.lock().await;
+                let (ledger, indexes) = &mut *state_guard;
 
-                let outputs_found = state_guard.process_scanned_outputs(h, block_hash, outputs);
-                let spends_detected = state_guard.detect_spends(h, &block_key_images);
+                let outputs_found = indexes.process_scanned_outputs(ledger, h, block_hash, outputs);
+                let spends_detected = indexes.detect_spends(ledger, h, &block_key_images);
 
                 let progress = SyncProgress {
                     height: h,
@@ -217,7 +230,7 @@ mod inner {
                     flush_every_block || (h % DESKTOP_FLUSH_INTERVAL == 0) || h == daemon_height;
 
                 if should_flush {
-                    on_flush(&state_guard);
+                    on_flush(ledger);
                 }
 
                 drop(state_guard);
@@ -226,9 +239,9 @@ mod inner {
         }
 
         let guard = state.lock().await;
-        on_flush(&guard);
+        on_flush(&guard.0);
         info!(
-            final_height = guard.height(),
+            final_height = guard.0.height(),
             "sync loop stopped, final flush done"
         );
 
@@ -277,7 +290,7 @@ mod inner {
     /// wallet's stored block hash matches the daemon's chain.
     async fn find_fork_point<R: Rpc>(
         rpc: &R,
-        state: &Arc<Mutex<WalletState>>,
+        state: &Arc<Mutex<LiveLedger>>,
         from_height: u64,
         cancel: &CancellationToken,
     ) -> Result<u64, SyncError> {
@@ -291,7 +304,7 @@ mod inner {
             }
 
             let state_guard = state.lock().await;
-            let stored = state_guard.block_hash_at(h).copied();
+            let stored = state_guard.0.block_hash_at(h).copied();
             drop(state_guard);
 
             let Some(stored_hash) = stored else {

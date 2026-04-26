@@ -84,13 +84,32 @@ impl ViewPair {
         &self.ml_kem_dk
     }
 
+    /// Subaddress key-derivation scalar `m_i`.
+    ///
+    /// **Genesis-locked.** Defined as
+    ///
+    /// ```text
+    /// m_i = keccak256_to_scalar( "shekyl-subaddr-v1\0" || view_scalar_le32 || idx_le32 )
+    /// ```
+    ///
+    /// where `view_scalar_le32` is the 32-byte little-endian canonical
+    /// encoding of the private view scalar, and `idx_le32` is the
+    /// 32-bit little-endian encoding of the flat subaddress index.
+    /// Applied symmetrically for every index, including the primary
+    /// (`idx == 0`); there is no special-case primary derivation,
+    /// matching the flat-namespace decision (see
+    /// `docs/V3_WALLET_DECISION_LOG.md`, "Subaddress hierarchy").
+    ///
+    /// The domain-separation tag is the project-consistent
+    /// `b"shekyl-…"` prefix used throughout `shekyl-oxide`; the `-v1`
+    /// suffix is reserved for a future post-genesis derivation change
+    /// (gated on a hard fork) and is not a backward-compat dial.
     pub(crate) fn subaddress_derivation(&self, index: SubaddressIndex) -> Scalar {
         keccak256_to_scalar(Zeroizing::new(
             [
-                b"SubAddr\0".as_slice(),
+                b"shekyl-subaddr-v1\0".as_slice(),
                 Zeroizing::new(self.view.to_bytes()).as_slice(),
-                &index.account().to_le_bytes(),
-                &index.address().to_le_bytes(),
+                &index.get().to_le_bytes(),
             ]
             .concat(),
         ))

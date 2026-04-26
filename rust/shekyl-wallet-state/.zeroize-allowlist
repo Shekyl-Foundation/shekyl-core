@@ -11,7 +11,7 @@
 # bytes carry no secret material (block hashes, tx hashes, key images,
 # published public keys), or the field is a mirror-struct shadow that
 # exists only to drive `postcard_schema::Schema` derivation and never
-# allocates at runtime, or the field lives in `runtime_state.rs` which
+# allocates at runtime, or the field lives in `ledger_indexes.rs` which
 # is rebuilt in memory on every load and never persisted.
 #
 # If you are **adding** a new unwrapped field, stop and decide:
@@ -55,18 +55,18 @@ rust/shekyl-wallet-state/src/ledger_block.rs|pub blocks: Vec<(u64, [u8; 32])>
 # scation is applied separately by the tx-builder.
 rust/shekyl-wallet-state/src/payment_id.rs|pub struct PaymentId(pub [u8; 8]);
 
-# ── runtime_state.rs ──────────────────────────────────────────────────
+# ── ledger_indexes.rs ────────────────────────────────────────────────
 #
 # Runtime indexes are rebuilt from `LedgerBlock::transfers` on every
-# wallet load; they are never serialized to disk. Map-key types here
-# (`[u8; 32]` key-image bytes, `[u8; 32]` output-pubkey bytes) are all
-# public by construction: key images are the public spent-marker
-# primitives, output pubkeys are what appears in tx outputs on-chain.
-# The `blockchain` vec mirrors the `ledger_block.rs` reorg trail and
-# has the same public-hash rationale.
-rust/shekyl-wallet-state/src/runtime_state.rs|pub(crate) key_images: HashMap<[u8; 32], usize>
-rust/shekyl-wallet-state/src/runtime_state.rs|pub(crate) pub_keys: HashMap<[u8; 32], usize>
-rust/shekyl-wallet-state/src/runtime_state.rs|pub(crate) blockchain: Vec<(u64, [u8; 32])>
+# wallet load; they are never serialized to disk (`LedgerIndexes` has
+# no `Serialize` / `Deserialize` derive). Map-key types here (`[u8; 32]`
+# key-image bytes, `[u8; 32]` output-pubkey bytes) are all public by
+# construction: key images are the public spent-marker primitives,
+# output pubkeys are what appears in tx outputs on-chain. See
+# `docs/V3_WALLET_DECISION_LOG.md` *"`RuntimeWalletState` audit"*
+# (2026-04-25) for the runtime-only invariant rationale.
+rust/shekyl-wallet-state/src/ledger_indexes.rs|pub(crate) key_images: HashMap<[u8; 32], usize>
+rust/shekyl-wallet-state/src/ledger_indexes.rs|pub(crate) pub_keys: HashMap<[u8; 32], usize>
 
 # ── sync_state_block.rs ───────────────────────────────────────────────
 #

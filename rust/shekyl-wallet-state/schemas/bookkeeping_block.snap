@@ -153,22 +153,10 @@
               "val": {
                 "name": "SubaddressIndex",
                 "ty": {
-                  "Struct": [
-                    {
-                      "name": "account",
-                      "ty": {
-                        "name": "u32",
-                        "ty": "U32"
-                      }
-                    },
-                    {
-                      "name": "address",
-                      "ty": {
-                        "name": "u32",
-                        "ty": "U32"
-                      }
-                    }
-                  ]
+                  "NewtypeStruct": {
+                    "name": "u32",
+                    "ty": "U32"
+                  }
                 }
               }
             }
@@ -182,13 +170,6 @@
           "ty": {
             "Struct": [
               {
-                "name": "primary",
-                "ty": {
-                  "name": "String",
-                  "ty": "String"
-                }
-              },
-              {
                 "name": "per_index",
                 "ty": {
                   "name": "BTreeMap<K, V>",
@@ -197,22 +178,10 @@
                       "key": {
                         "name": "SubaddressIndex",
                         "ty": {
-                          "Struct": [
-                            {
-                              "name": "account",
-                              "ty": {
-                                "name": "u32",
-                                "ty": "U32"
-                              }
-                            },
-                            {
-                              "name": "address",
-                              "ty": {
-                                "name": "u32",
-                                "ty": "U32"
-                              }
-                            }
-                          ]
+                          "NewtypeStruct": {
+                            "name": "u32",
+                            "ty": "U32"
+                          }
                         }
                       },
                       "val": {
@@ -312,52 +281,6 @@
                 ]
               }
             }
-          }
-        }
-      },
-      {
-        "name": "account_tags",
-        "ty": {
-          "name": "AccountTags",
-          "ty": {
-            "Struct": [
-              {
-                "name": "tag_descriptions",
-                "ty": {
-                  "name": "BTreeMap<K, V>",
-                  "ty": {
-                    "Map": {
-                      "key": {
-                        "name": "String",
-                        "ty": "String"
-                      },
-                      "val": {
-                        "name": "String",
-                        "ty": "String"
-                      }
-                    }
-                  }
-                }
-              },
-              {
-                "name": "per_account_tag",
-                "ty": {
-                  "name": "BTreeMap<K, V>",
-                  "ty": {
-                    "Map": {
-                      "key": {
-                        "name": "u32",
-                        "ty": "U32"
-                      },
-                      "val": {
-                        "name": "String",
-                        "ty": "String"
-                      }
-                    }
-                  }
-                }
-              }
-            ]
           }
         }
       }

@@ -17,8 +17,13 @@
 //! - [`TransferDetails`] — extended transfer record with PQC/HKDF-derived secrets.
 //! - [`StakerPoolState`] / [`AccrualRecord`] — local per-block accrual data for reward
 //!   estimation.
-//! - [`RuntimeWalletState`] — the scanner's live, mutating wallet state. Serializable
-//!   via typed blocks (ledger, bookkeeping, tx_meta, sync_state), added in later commits.
+//! - [`LedgerBlock`] — the persisted scanner-derived ledger (transfers, tip, reorg
+//!   window). Inherent methods supply read-only queries plus the small set of
+//!   mutators that touch only transfer state.
+//! - [`LedgerIndexes`] — runtime-only lookup indexes plus the staker-pool aggregate.
+//!   Rebuilt at wallet open from `LedgerBlock` + scanner replay; never persisted.
+//!   See [`ledger_indexes`] for the full surface and the invariant that pins it
+//!   there.
 //!
 //! The serialization-format policy for this crate is pinned by
 //! `.cursor/rules/42-serialization-policy.mdc` (added in Commit 2n): the ledger blocks
@@ -29,8 +34,9 @@ pub mod bookkeeping_block;
 pub mod error;
 pub mod invariants;
 pub mod ledger_block;
+pub mod ledger_indexes;
+pub mod local_label;
 pub mod payment_id;
-pub mod runtime_state;
 pub mod safety_constants;
 pub mod schema_snapshot;
 pub mod serde_helpers;
@@ -42,14 +48,15 @@ pub mod tx_meta_block;
 pub mod wallet_ledger;
 
 pub use bookkeeping_block::{
-    AccountTags, AddressBookEntry, BookkeepingBlock, SubaddressLabels, BOOKKEEPING_BLOCK_VERSION,
+    AddressBookEntry, BookkeepingBlock, SubaddressLabels, BOOKKEEPING_BLOCK_VERSION,
 };
 pub use error::WalletLedgerError;
 pub use ledger_block::{
     BlockchainTip, LedgerBlock, ReorgBlocks, DEFAULT_REORG_BLOCKS_CAPACITY, LEDGER_BLOCK_VERSION,
 };
+pub use ledger_indexes::LedgerIndexes;
+pub use local_label::{LocalLabel, SecretStr};
 pub use payment_id::PaymentId;
-pub use runtime_state::RuntimeWalletState;
 pub use safety_constants::NetworkSafetyConstants;
 pub use staker_pool::{AccrualRecord, ConservationCheck, StakerPoolState};
 pub use subaddress::SubaddressIndex;

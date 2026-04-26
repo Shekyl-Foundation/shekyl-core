@@ -3,7 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Unit tests for scanner staking detection, claim tracking, and wallet state.
+//! Unit tests for scanner staking detection, claim tracking, and the
+//! `(LedgerBlock, LedgerIndexes)` runtime pair.
 
 #[cfg(test)]
 pub(crate) mod staking {
@@ -13,18 +14,17 @@ pub(crate) mod staking {
 
     use crate::{
         claim::ClaimableInfo,
+        ledger_ext::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt},
         output::*,
-        runtime_ext::{TransferDetailsExt, WalletStateExt},
         scan::{RecoveredWalletOutput, Timelocked},
         transfer::TransferDetails,
-        wallet_state::WalletState,
     };
+    use shekyl_wallet_state::{LedgerBlock, LedgerIndexes};
 
     fn tier_lock(tier: u8) -> u64 {
         shekyl_staking::tiers::tier_by_id(tier).unwrap().lock_blocks
     }
 
-    /// Generate a unique EdwardsPoint from a u64 seed (deterministic, distinct per seed).
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
         let mut bytes = [0u8; 32];
         bytes[..8].copy_from_slice(&seed.to_le_bytes());
@@ -65,8 +65,6 @@ pub(crate) mod staking {
         }
     }
 
-    /// Wrap a plain WalletOutput in a RecoveredWalletOutput with dummy KEM secrets.
-    /// For testing wallet state management only — the secrets are all zeroes.
     fn wrap_recovered(output: WalletOutput, amount: u64) -> RecoveredWalletOutput {
         let mut ki = [0u8; 32];
         ki[..8].copy_from_slice(&output.index_on_blockchain().to_le_bytes());
@@ -89,6 +87,13 @@ pub(crate) mod staking {
                 .map(|(o, a)| wrap_recovered(o, a))
                 .collect(),
         )
+    }
+
+    /// Fresh `(ledger, indexes)` pair — the post-fold replacement for
+    /// `WalletState::new()`. See `docs/V3_WALLET_DECISION_LOG.md`
+    /// ("`RuntimeWalletState` audit", 2026-04-25).
+    fn fresh_state() -> (LedgerBlock, LedgerIndexes) {
+        (LedgerBlock::empty(), LedgerIndexes::empty())
     }
 
     // ── Staking detection ──
@@ -184,8 +189,6 @@ pub(crate) mod staking {
             Some(StakingMeta { lock_tier: 2 }),
         );
         let td = TransferDetails::from_wallet_output(&output, 1000);
-
-        // At height 5000, accrual_cap = min(5000, lock_until) = 5000, watermark = 1000
         assert!(td.has_claimable_rewards(5000));
     }
 
@@ -303,11 +306,11 @@ pub(crate) mod staking {
         assert!(ClaimableInfo::from_transfer(&td, 0, 1000 + tier_lock(0) + 1000).is_none());
     }
 
-    // ── WalletState integration ──
+    // ── (LedgerBlock, LedgerIndexes) integration ──
 
     #[test]
-    fn wallet_state_auto_detects_staked_outputs() {
-        let mut ws = WalletState::new();
+    fn ledger_auto_detects_staked_outputs() {
+        let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (
                 make_wallet_output([20; 32], 0, 200, 1_000_000_000, None),
@@ -325,10 +328,10 @@ pub(crate) mod staking {
             ),
         ];
 
-        ws.process_scanned_outputs(1000, [0xAA; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(&mut ledger, 1000, [0xAA; 32], make_timelocked(outputs));
 
-        assert_eq!(ws.transfer_count(), 2);
-        let transfers = ws.transfers();
+        assert_eq!(ledger.transfers().len(), 2);
+        let transfers = ledger.transfers();
         assert!(!transfers[0].staked);
         assert!(transfers[1].staked);
         assert_eq!(transfers[1].stake_tier, 2);
@@ -336,8 +339,8 @@ pub(crate) mod staking {
     }
 
     #[test]
-    fn wallet_state_claimable_outputs() {
-        let mut ws = WalletState::new();
+    fn ledger_claimable_outputs() {
+        let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (
                 make_wallet_output(
@@ -361,19 +364,19 @@ pub(crate) mod staking {
             ),
         ];
 
-        ws.process_scanned_outputs(1000, [0xBB; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(&mut ledger, 1000, [0xBB; 32], make_timelocked(outputs));
 
-        let claimable = ws.claimable_outputs(5000);
+        let claimable = ledger.claimable_outputs(5000);
         assert_eq!(claimable.len(), 2);
 
-        ws.update_claim_watermark(301, 1000 + tier_lock(0));
-        let claimable = ws.claimable_outputs(1000 + tier_lock(0) + 1000);
+        ledger.update_claim_watermark(301, 1000 + tier_lock(0));
+        let claimable = ledger.claimable_outputs(1000 + tier_lock(0) + 1000);
         assert_eq!(claimable.len(), 1);
     }
 
     #[test]
-    fn wallet_state_unstakeable_outputs() {
-        let mut ws = WalletState::new();
+    fn ledger_unstakeable_outputs() {
+        let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (
                 make_wallet_output(
@@ -397,20 +400,21 @@ pub(crate) mod staking {
             ),
         ];
 
-        ws.process_scanned_outputs(1000, [0xCC; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(&mut ledger, 1000, [0xCC; 32], make_timelocked(outputs));
 
-        assert_eq!(ws.unstakeable_outputs(1000 + tier_lock(0) - 1).len(), 0);
-        assert_eq!(ws.unstakeable_outputs(1000 + tier_lock(0)).len(), 1);
-        assert_eq!(ws.unstakeable_outputs(1000 + tier_lock(2)).len(), 2);
+        assert_eq!(ledger.unstakeable_outputs(1000 + tier_lock(0) - 1).len(), 0);
+        assert_eq!(ledger.unstakeable_outputs(1000 + tier_lock(0)).len(), 1);
+        assert_eq!(ledger.unstakeable_outputs(1000 + tier_lock(2)).len(), 2);
     }
 
     // ── Reorg handling ──
 
     #[test]
-    fn wallet_state_reorg_removes_staked_outputs() {
-        let mut ws = WalletState::new();
+    fn reorg_removes_staked_outputs() {
+        let (mut ledger, mut indexes) = fresh_state();
 
-        ws.process_scanned_outputs(
+        indexes.process_scanned_outputs(
+            &mut ledger,
             1000,
             [0xD0; 32],
             make_timelocked(vec![(
@@ -425,7 +429,8 @@ pub(crate) mod staking {
             )]),
         );
 
-        ws.process_scanned_outputs(
+        indexes.process_scanned_outputs(
+            &mut ledger,
             2000,
             [0xD1; 32],
             make_timelocked(vec![(
@@ -440,20 +445,19 @@ pub(crate) mod staking {
             )]),
         );
 
-        assert_eq!(ws.transfer_count(), 2);
+        assert_eq!(ledger.transfers().len(), 2);
 
-        // Reorg at height 2000 removes the second output
-        ws.handle_reorg(2000);
-        assert_eq!(ws.transfer_count(), 1);
-        assert!(ws.transfers()[0].staked);
-        assert_eq!(ws.transfers()[0].stake_tier, 1);
+        indexes.handle_reorg(&mut ledger, 2000);
+        assert_eq!(ledger.transfers().len(), 1);
+        assert!(ledger.transfers()[0].staked);
+        assert_eq!(ledger.transfers()[0].stake_tier, 1);
     }
 
     // ── Spend detection with claim inputs ──
 
     #[test]
     fn detect_spends_marks_staked_output_spent() {
-        let mut ws = WalletState::new();
+        let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![(
             make_wallet_output(
                 [40; 32],
@@ -465,27 +469,27 @@ pub(crate) mod staking {
             2_000_000_000,
         )];
 
-        ws.process_scanned_outputs(1000, [0xE0; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(&mut ledger, 1000, [0xE0; 32], make_timelocked(outputs));
 
         let past_maturity = 1000 + tier_lock(0) + 1000;
-        assert!(ws.transfers()[0].staked);
-        assert!(!ws.transfers()[0].spent);
-        assert!(ws.transfers()[0].is_unstakeable(past_maturity));
+        assert!(ledger.transfers()[0].staked);
+        assert!(!ledger.transfers()[0].spent);
+        assert!(ledger.transfers()[0].is_unstakeable(past_maturity));
 
-        let ki = ws.transfers()[0]
+        let ki = ledger.transfers()[0]
             .key_image
             .expect("key image should be set by process_scanned_outputs");
-        ws.detect_spends(past_maturity, &[ki]);
-        assert!(ws.transfers()[0].spent);
-        assert!(!ws.transfers()[0].is_unstakeable(past_maturity));
-        assert!(!ws.transfers()[0].has_claimable_rewards(past_maturity));
+        indexes.detect_spends(&mut ledger, past_maturity, &[ki]);
+        assert!(ledger.transfers()[0].spent);
+        assert!(!ledger.transfers()[0].is_unstakeable(past_maturity));
+        assert!(!ledger.transfers()[0].has_claimable_rewards(past_maturity));
     }
 
     // ── Watermark update ──
 
     #[test]
     fn watermark_update_advances_claim_range() {
-        let mut ws = WalletState::new();
+        let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![(
             make_wallet_output(
                 [50; 32],
@@ -497,17 +501,17 @@ pub(crate) mod staking {
             5_000_000_000,
         )];
 
-        ws.process_scanned_outputs(1000, [0xF0; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(&mut ledger, 1000, [0xF0; 32], make_timelocked(outputs));
 
-        let td = &ws.transfers()[0];
+        let td = &ledger.transfers()[0];
         assert_eq!(td.last_claimed_height, 0);
 
         let info = ClaimableInfo::from_transfer(td, 0, 5000).unwrap();
         assert_eq!(info.from_height, 1000);
 
-        ws.update_claim_watermark(700, 5000);
+        ledger.update_claim_watermark(700, 5000);
 
-        let td = &ws.transfers()[0];
+        let td = &ledger.transfers()[0];
         assert_eq!(td.last_claimed_height, 5000);
 
         let info = ClaimableInfo::from_transfer(td, 0, 10000).unwrap();
@@ -519,7 +523,7 @@ pub(crate) mod staking {
 
     #[test]
     fn unmark_spent_returns_output_to_spendable_pool() {
-        let mut ws = WalletState::new();
+        let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (
                 make_wallet_output([60; 32], 0, 800, 1_000_000_000, None),
@@ -530,63 +534,63 @@ pub(crate) mod staking {
                 2_000_000_000,
             ),
         ];
-        ws.process_scanned_outputs(100, [0xA0; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(&mut ledger, 100, [0xA0; 32], make_timelocked(outputs));
 
-        let ki_0 = ws.transfers()[0].key_image.unwrap();
-        let ki_1 = ws.transfers()[1].key_image.unwrap();
+        let ki_0 = ledger.transfers()[0].key_image.unwrap();
+        let ki_1 = ledger.transfers()[1].key_image.unwrap();
 
-        assert!(ws.mark_spent(&ki_0, 200));
-        assert!(ws.mark_spent(&ki_1, 200));
-        assert!(ws.transfers()[0].spent);
-        assert!(ws.transfers()[1].spent);
+        assert!(indexes.mark_spent(&mut ledger, &ki_0, 200));
+        assert!(indexes.mark_spent(&mut ledger, &ki_1, 200));
+        assert!(ledger.transfers()[0].spent);
+        assert!(ledger.transfers()[1].spent);
 
-        let balance_before = ws.balance(1000);
+        let balance_before = ledger.balance(1000);
         assert_eq!(balance_before.total, 0, "both spent → zero total");
 
-        let unmarked = ws.unmark_spent(&[ki_0, ki_1]);
+        let unmarked = indexes.unmark_spent(&mut ledger, &[ki_0, ki_1]);
         assert_eq!(unmarked, 2);
-        assert!(!ws.transfers()[0].spent);
-        assert!(!ws.transfers()[1].spent);
-        assert!(ws.transfers()[0].spent_height.is_none());
-        assert!(ws.transfers()[1].spent_height.is_none());
+        assert!(!ledger.transfers()[0].spent);
+        assert!(!ledger.transfers()[1].spent);
+        assert!(ledger.transfers()[0].spent_height.is_none());
+        assert!(ledger.transfers()[1].spent_height.is_none());
 
-        let balance_after = ws.balance(1000);
+        let balance_after = ledger.balance(1000);
         assert_eq!(balance_after.total, 3_000_000_000);
         assert_eq!(balance_after.unlocked, 3_000_000_000);
     }
 
     #[test]
     fn unmark_spent_unknown_key_image_is_noop() {
-        let mut ws = WalletState::new();
+        let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![(
             make_wallet_output([61; 32], 0, 810, 1_000_000_000, None),
             1_000_000_000,
         )];
-        ws.process_scanned_outputs(100, [0xA1; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(&mut ledger, 100, [0xA1; 32], make_timelocked(outputs));
 
         let bogus_ki = [0xFFu8; 32];
-        let unmarked = ws.unmark_spent(&[bogus_ki]);
+        let unmarked = indexes.unmark_spent(&mut ledger, &[bogus_ki]);
         assert_eq!(unmarked, 0);
-        assert!(!ws.transfers()[0].spent);
+        assert!(!ledger.transfers()[0].spent);
     }
 
     #[test]
     fn unmark_spent_idempotent_on_already_unspent() {
-        let mut ws = WalletState::new();
+        let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![(
             make_wallet_output([62; 32], 0, 820, 1_000_000_000, None),
             1_000_000_000,
         )];
-        ws.process_scanned_outputs(100, [0xA2; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(&mut ledger, 100, [0xA2; 32], make_timelocked(outputs));
 
-        let ki = ws.transfers()[0].key_image.unwrap();
-        let unmarked = ws.unmark_spent(&[ki]);
+        let ki = ledger.transfers()[0].key_image.unwrap();
+        let unmarked = indexes.unmark_spent(&mut ledger, &[ki]);
         assert_eq!(unmarked, 0, "already unspent → no change");
     }
 
     #[test]
     fn unmark_spent_partial_set() {
-        let mut ws = WalletState::new();
+        let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (
                 make_wallet_output([63; 32], 0, 830, 1_000_000_000, None),
@@ -601,30 +605,30 @@ pub(crate) mod staking {
                 3_000_000_000,
             ),
         ];
-        ws.process_scanned_outputs(100, [0xA3; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(&mut ledger, 100, [0xA3; 32], make_timelocked(outputs));
 
-        let ki_0 = ws.transfers()[0].key_image.unwrap();
-        let ki_1 = ws.transfers()[1].key_image.unwrap();
-        let ki_2 = ws.transfers()[2].key_image.unwrap();
+        let ki_0 = ledger.transfers()[0].key_image.unwrap();
+        let ki_1 = ledger.transfers()[1].key_image.unwrap();
+        let ki_2 = ledger.transfers()[2].key_image.unwrap();
 
-        ws.mark_spent(&ki_0, 200);
-        ws.mark_spent(&ki_1, 200);
-        ws.mark_spent(&ki_2, 200);
+        indexes.mark_spent(&mut ledger, &ki_0, 200);
+        indexes.mark_spent(&mut ledger, &ki_1, 200);
+        indexes.mark_spent(&mut ledger, &ki_2, 200);
 
-        let unmarked = ws.unmark_spent(&[ki_1]);
+        let unmarked = indexes.unmark_spent(&mut ledger, &[ki_1]);
         assert_eq!(unmarked, 1);
-        assert!(ws.transfers()[0].spent);
-        assert!(!ws.transfers()[1].spent);
-        assert!(ws.transfers()[2].spent);
+        assert!(ledger.transfers()[0].spent);
+        assert!(!ledger.transfers()[1].spent);
+        assert!(ledger.transfers()[2].spent);
 
-        let balance = ws.balance(1000);
+        let balance = ledger.balance(1000);
         assert_eq!(balance.total, 2_000_000_000);
         assert_eq!(balance.unlocked, 2_000_000_000);
     }
 
     #[test]
     fn unmark_spent_preserves_invariants() {
-        let mut ws = WalletState::new();
+        let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (
                 make_wallet_output([64; 32], 0, 840, 500_000_000, None),
@@ -641,40 +645,43 @@ pub(crate) mod staking {
                 1_000_000_000,
             ),
         ];
-        ws.process_scanned_outputs(100, [0xA4; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(&mut ledger, 100, [0xA4; 32], make_timelocked(outputs));
 
-        let ki_0 = ws.transfers()[0].key_image.unwrap();
-        let ki_1 = ws.transfers()[1].key_image.unwrap();
+        let ki_0 = ledger.transfers()[0].key_image.unwrap();
+        let ki_1 = ledger.transfers()[1].key_image.unwrap();
 
-        ws.mark_spent(&ki_0, 200);
-        ws.mark_spent(&ki_1, 200);
-        ws.check_invariants().expect("invariants after mark_spent");
+        indexes.mark_spent(&mut ledger, &ki_0, 200);
+        indexes.mark_spent(&mut ledger, &ki_1, 200);
+        indexes
+            .check_invariants(&ledger)
+            .expect("invariants after mark_spent");
 
-        ws.unmark_spent(&[ki_0, ki_1]);
-        ws.check_invariants()
+        indexes.unmark_spent(&mut ledger, &[ki_0, ki_1]);
+        indexes
+            .check_invariants(&ledger)
             .expect("invariants after unmark_spent");
 
-        assert_eq!(ws.balance(1000).total, 1_500_000_000);
+        assert_eq!(ledger.balance(1000).total, 1_500_000_000);
     }
 
     // ── Gate 5a: immature output rejection (regression) ──
 
     #[test]
     fn immature_output_not_spendable() {
-        let mut ws = WalletState::new();
+        let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![(
             make_wallet_output([65; 32], 0, 850, 1_000_000_000, None),
             1_000_000_000,
         )];
-        ws.process_scanned_outputs(100, [0xA5; 32], make_timelocked(outputs));
+        indexes.process_scanned_outputs(&mut ledger, 100, [0xA5; 32], make_timelocked(outputs));
 
-        let spendable = ws.spendable_outputs(105, None, None, None);
+        let spendable = ledger.spendable_outputs(105, None, None);
         assert!(
             spendable.is_empty(),
             "output mined at 100 should NOT be spendable at 105"
         );
 
-        let spendable = ws.spendable_outputs(110, None, None, None);
+        let spendable = ledger.spendable_outputs(110, None, None);
         assert_eq!(
             spendable.len(),
             1,
@@ -686,47 +693,55 @@ pub(crate) mod staking {
 
     #[test]
     fn invariants_hold_on_fresh_state() {
-        let ws = WalletState::new();
-        ws.check_invariants().expect("fresh state invariants");
+        let (ledger, indexes) = fresh_state();
+        indexes
+            .check_invariants(&ledger)
+            .expect("fresh state invariants");
     }
 
     #[test]
     fn invariants_hold_after_process_and_spend_cycle() {
-        let mut ws = WalletState::new();
+        let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (make_wallet_output([66; 32], 0, 860, 1_000, None), 1_000),
             (make_wallet_output([66; 32], 1, 861, 2_000, None), 2_000),
         ];
-        ws.process_scanned_outputs(100, [0xB0; 32], make_timelocked(outputs));
-        ws.check_invariants().expect("after process");
+        indexes.process_scanned_outputs(&mut ledger, 100, [0xB0; 32], make_timelocked(outputs));
+        indexes.check_invariants(&ledger).expect("after process");
 
-        let ki = ws.transfers()[0].key_image.unwrap();
-        ws.mark_spent(&ki, 200);
-        ws.check_invariants().expect("after mark_spent");
+        let ki = ledger.transfers()[0].key_image.unwrap();
+        indexes.mark_spent(&mut ledger, &ki, 200);
+        indexes.check_invariants(&ledger).expect("after mark_spent");
 
-        ws.unmark_spent(&[ki]);
-        ws.check_invariants().expect("after unmark_spent");
+        indexes.unmark_spent(&mut ledger, &[ki]);
+        indexes
+            .check_invariants(&ledger)
+            .expect("after unmark_spent");
 
-        ws.freeze(0);
-        ws.check_invariants().expect("after freeze");
+        ledger.freeze(0);
+        indexes.check_invariants(&ledger).expect("after freeze");
 
-        ws.thaw(0);
-        ws.check_invariants().expect("after thaw");
+        ledger.thaw(0);
+        indexes.check_invariants(&ledger).expect("after thaw");
 
-        ws.handle_reorg(200);
-        ws.check_invariants()
+        indexes.handle_reorg(&mut ledger, 200);
+        indexes
+            .check_invariants(&ledger)
             .expect("after reorg (noop — no blocks at 200)");
 
-        ws.handle_reorg(50);
-        ws.check_invariants().expect("after reorg removing all");
-        assert_eq!(ws.transfer_count(), 0);
+        indexes.handle_reorg(&mut ledger, 50);
+        indexes
+            .check_invariants(&ledger)
+            .expect("after reorg removing all");
+        assert_eq!(ledger.transfers().len(), 0);
     }
 
     #[test]
     fn invariants_hold_after_reorg_with_multiple_blocks() {
-        let mut ws = WalletState::new();
+        let (mut ledger, mut indexes) = fresh_state();
 
-        ws.process_scanned_outputs(
+        indexes.process_scanned_outputs(
+            &mut ledger,
             100,
             [0xC0; 32],
             make_timelocked(vec![(
@@ -734,7 +749,8 @@ pub(crate) mod staking {
                 1_000,
             )]),
         );
-        ws.process_scanned_outputs(
+        indexes.process_scanned_outputs(
+            &mut ledger,
             200,
             [0xC1; 32],
             make_timelocked(vec![(
@@ -742,7 +758,8 @@ pub(crate) mod staking {
                 2_000,
             )]),
         );
-        ws.process_scanned_outputs(
+        indexes.process_scanned_outputs(
+            &mut ledger,
             300,
             [0xC2; 32],
             make_timelocked(vec![(
@@ -750,27 +767,30 @@ pub(crate) mod staking {
                 3_000,
             )]),
         );
-        ws.check_invariants().expect("3 blocks");
+        indexes.check_invariants(&ledger).expect("3 blocks");
 
-        ws.handle_reorg(200);
-        ws.check_invariants().expect("after reorg at 200");
-        assert_eq!(ws.transfer_count(), 1);
-        assert_eq!(ws.height(), 100);
+        indexes.handle_reorg(&mut ledger, 200);
+        indexes
+            .check_invariants(&ledger)
+            .expect("after reorg at 200");
+        assert_eq!(ledger.transfers().len(), 1);
+        assert_eq!(ledger.height(), 100);
     }
 }
 
-/// Gate 5c: Property tests for WalletState invariants under random operation sequences.
+/// Gate 5c: Property tests for the `(LedgerBlock, LedgerIndexes)` invariants
+/// under random operation sequences.
 ///
-/// Uses proptest to generate random interleaving of process_scanned_outputs,
-/// mark_spent, unmark_spent, freeze, thaw, and handle_reorg, then asserts
-/// `check_invariants()` holds after every operation.
+/// Uses proptest to generate random interleavings of `process_scanned_outputs`,
+/// `mark_spent`, `unmark_spent`, `freeze`, `thaw`, and `handle_reorg`, then
+/// asserts `LedgerIndexes::check_invariants(&ledger)` holds after every operation.
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::cast_precision_loss
 )]
-mod wallet_state_proptest {
+mod ledger_proptest {
     use proptest::collection::vec as prop_vec;
     use proptest::prelude::*;
 
@@ -779,11 +799,11 @@ mod wallet_state_proptest {
     use zeroize::Zeroizing;
 
     use crate::{
+        ledger_ext::LedgerIndexesExt,
         output::*,
-        runtime_ext::WalletStateExt,
         scan::{RecoveredWalletOutput, Timelocked},
-        wallet_state::WalletState,
     };
+    use shekyl_wallet_state::{LedgerBlock, LedgerIndexes};
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
         let mut bytes = [0u8; 32];
@@ -863,7 +883,8 @@ mod wallet_state_proptest {
         #![proptest_config(ProptestConfig::with_cases(500))]
         #[test]
         fn invariants_hold_under_random_operations(ops in prop_vec(op_strategy(), 1..40)) {
-            let mut ws = WalletState::new();
+            let mut ledger = LedgerBlock::empty();
+            let mut indexes = LedgerIndexes::empty();
             let mut next_global_index: u64 = 0;
             let mut next_height: u64 = 100;
 
@@ -876,7 +897,8 @@ mod wallet_state_proptest {
                             let o = make_output(gi, base_amount + i as u64);
                             wrap_recovered(o, base_amount + i as u64)
                         }).collect();
-                        ws.process_scanned_outputs(
+                        indexes.process_scanned_outputs(
+                            &mut ledger,
                             next_height,
                             {
                                 let mut h = [0u8; 32];
@@ -888,50 +910,50 @@ mod wallet_state_proptest {
                         next_height += 10;
                     }
                     Op::MarkSpent { frac } => {
-                        let count = ws.transfer_count();
+                        let count = ledger.transfers().len();
                         if count > 0 {
                             let idx = ((*frac * count as f64) as usize).min(count - 1);
-                            if let Some(ki) = ws.transfers()[idx].key_image {
-                                ws.mark_spent(&ki, next_height);
+                            if let Some(ki) = ledger.transfers()[idx].key_image {
+                                indexes.mark_spent(&mut ledger, &ki, next_height);
                             }
                         }
                     }
                     Op::UnmarkSpent { frac } => {
-                        let count = ws.transfer_count();
+                        let count = ledger.transfers().len();
                         if count > 0 {
                             let idx = ((*frac * count as f64) as usize).min(count - 1);
-                            if let Some(ki) = ws.transfers()[idx].key_image {
-                                ws.unmark_spent(&[ki]);
+                            if let Some(ki) = ledger.transfers()[idx].key_image {
+                                indexes.unmark_spent(&mut ledger, &[ki]);
                             }
                         }
                     }
                     Op::Freeze { frac } => {
-                        let count = ws.transfer_count();
+                        let count = ledger.transfers().len();
                         if count > 0 {
                             let idx = ((*frac * count as f64) as usize).min(count - 1);
-                            ws.freeze(idx);
+                            ledger.freeze(idx);
                         }
                     }
                     Op::Thaw { frac } => {
-                        let count = ws.transfer_count();
+                        let count = ledger.transfers().len();
                         if count > 0 {
                             let idx = ((*frac * count as f64) as usize).min(count - 1);
-                            ws.thaw(idx);
+                            ledger.thaw(idx);
                         }
                     }
                     Op::Reorg { frac } => {
-                        if ws.height() > 0 {
-                            let fork_at = ((ws.height() as f64 * frac) as u64).max(1);
-                            ws.handle_reorg(fork_at);
-                            next_height = ws.height() + 10;
+                        if ledger.height() > 0 {
+                            let fork_at = ((ledger.height() as f64 * frac) as u64).max(1);
+                            indexes.handle_reorg(&mut ledger, fork_at);
+                            next_height = ledger.height() + 10;
                         }
                     }
                 }
 
-                ws.check_invariants().unwrap_or_else(|e| {
+                indexes.check_invariants(&ledger).unwrap_or_else(|e| {
                     panic!(
                         "invariant violated after {:?} (transfers={}, height={}): {}",
-                        op, ws.transfer_count(), ws.height(), e
+                        op, ledger.transfers().len(), ledger.height(), e
                     );
                 });
             }
@@ -944,11 +966,12 @@ mod wallet_state_proptest {
 /// **Bookkeeping test only.** This module exercises the sync loop's
 /// state-management behavior (progress monotonicity, reorg handling,
 /// spend detection tracking) using manually constructed blocks fed
-/// directly into WalletState. It does NOT test the RPC layer, the
-/// daemon's block format, or the scanner's KEM/HKDF pipeline. A
-/// green Gate 7 means the sync loop's bookkeeping is correct against
-/// a cooperative mock — it does NOT mean the scanner works against a
-/// real daemon. Real-daemon coverage belongs in the stressnet gate.
+/// directly into the `(LedgerBlock, LedgerIndexes)` pair. It does NOT
+/// test the RPC layer, the daemon's block format, or the scanner's
+/// KEM/HKDF pipeline. A green Gate 7 means the sync loop's bookkeeping
+/// is correct against a cooperative mock — it does NOT mean the scanner
+/// works against a real daemon. Real-daemon coverage belongs in the
+/// stressnet gate.
 #[cfg(test)]
 mod sync_bookkeeping {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
@@ -956,11 +979,11 @@ mod sync_bookkeeping {
     use zeroize::Zeroizing;
 
     use crate::{
+        ledger_ext::{LedgerBlockExt, LedgerIndexesExt},
         output::*,
-        runtime_ext::WalletStateExt,
         scan::{RecoveredWalletOutput, Timelocked},
-        wallet_state::WalletState,
     };
+    use shekyl_wallet_state::{LedgerBlock, LedgerIndexes};
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
         let mut bytes = [0u8; 32];
@@ -1018,7 +1041,6 @@ mod sync_bookkeeping {
         h
     }
 
-    /// Simulate a mock block source: each block has N outputs with given amounts.
     struct MockBlockSource {
         blocks: Vec<(u64, Vec<(u64, u64)>)>,
         next_global: u64,
@@ -1053,7 +1075,8 @@ mod sync_bookkeeping {
         source.add_block(3, &[]);
         source.add_block(4, &[5000]);
 
-        let mut ws = WalletState::new();
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
         let mut heights: Vec<u64> = Vec::new();
 
         for (height, outputs) in &source.blocks {
@@ -1062,8 +1085,13 @@ mod sync_bookkeeping {
                 .map(|&(gi, amount)| mock_output(gi, amount))
                 .collect();
 
-            ws.process_scanned_outputs(*height, block_hash(*height), Timelocked(recovered));
-            heights.push(ws.height());
+            indexes.process_scanned_outputs(
+                &mut ledger,
+                *height,
+                block_hash(*height),
+                Timelocked(recovered),
+            );
+            heights.push(ledger.height());
         }
 
         for window in heights.windows(2) {
@@ -1075,82 +1103,114 @@ mod sync_bookkeeping {
             );
         }
         assert_eq!(*heights.last().unwrap(), 4);
-        ws.check_invariants().expect("final invariants");
+        indexes.check_invariants(&ledger).expect("final invariants");
     }
 
     #[test]
     fn spend_detection_through_mock_blocks() {
-        let mut ws = WalletState::new();
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
 
         let o1 = mock_output(100, 5000);
         let ki_100 = o1.key_image;
         let o2 = mock_output(101, 3000);
-        ws.process_scanned_outputs(10, block_hash(10), Timelocked(vec![o1, o2]));
+        indexes.process_scanned_outputs(&mut ledger, 10, block_hash(10), Timelocked(vec![o1, o2]));
 
-        assert_eq!(ws.transfer_count(), 2);
-        assert_eq!(ws.balance(100).total, 8000);
+        assert_eq!(ledger.transfers().len(), 2);
+        assert_eq!(ledger.balance(100).total, 8000);
 
-        ws.detect_spends(20, &[ki_100]);
-        assert!(ws.transfers()[0].spent);
-        assert!(!ws.transfers()[1].spent);
-        assert_eq!(ws.balance(100).total, 3000);
-        ws.check_invariants().expect("after spend detection");
+        indexes.detect_spends(&mut ledger, 20, &[ki_100]);
+        assert!(ledger.transfers()[0].spent);
+        assert!(!ledger.transfers()[1].spent);
+        assert_eq!(ledger.balance(100).total, 3000);
+        indexes
+            .check_invariants(&ledger)
+            .expect("after spend detection");
     }
 
     #[test]
     fn reorg_restores_state_correctly() {
-        let mut ws = WalletState::new();
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
 
-        ws.process_scanned_outputs(10, block_hash(10), Timelocked(vec![mock_output(200, 1000)]));
-        ws.process_scanned_outputs(20, block_hash(20), Timelocked(vec![mock_output(201, 2000)]));
-        ws.process_scanned_outputs(30, block_hash(30), Timelocked(vec![mock_output(202, 3000)]));
+        indexes.process_scanned_outputs(
+            &mut ledger,
+            10,
+            block_hash(10),
+            Timelocked(vec![mock_output(200, 1000)]),
+        );
+        indexes.process_scanned_outputs(
+            &mut ledger,
+            20,
+            block_hash(20),
+            Timelocked(vec![mock_output(201, 2000)]),
+        );
+        indexes.process_scanned_outputs(
+            &mut ledger,
+            30,
+            block_hash(30),
+            Timelocked(vec![mock_output(202, 3000)]),
+        );
 
-        assert_eq!(ws.transfer_count(), 3);
-        assert_eq!(ws.balance(100).total, 6000);
+        assert_eq!(ledger.transfers().len(), 3);
+        assert_eq!(ledger.balance(100).total, 6000);
 
-        ws.handle_reorg(20);
+        indexes.handle_reorg(&mut ledger, 20);
 
-        assert_eq!(ws.transfer_count(), 1);
-        assert_eq!(ws.height(), 10);
-        assert_eq!(ws.balance(100).total, 1000);
-        ws.check_invariants().expect("after reorg");
+        assert_eq!(ledger.transfers().len(), 1);
+        assert_eq!(ledger.height(), 10);
+        assert_eq!(ledger.balance(100).total, 1000);
+        indexes.check_invariants(&ledger).expect("after reorg");
 
-        ws.process_scanned_outputs(20, block_hash(20), Timelocked(vec![mock_output(301, 7000)]));
+        indexes.process_scanned_outputs(
+            &mut ledger,
+            20,
+            block_hash(20),
+            Timelocked(vec![mock_output(301, 7000)]),
+        );
 
-        assert_eq!(ws.transfer_count(), 2);
-        assert_eq!(ws.balance(100).total, 8000);
-        ws.check_invariants().expect("after re-scan post-reorg");
+        assert_eq!(ledger.transfers().len(), 2);
+        assert_eq!(ledger.balance(100).total, 8000);
+        indexes
+            .check_invariants(&ledger)
+            .expect("after re-scan post-reorg");
     }
 
     #[test]
     fn empty_blocks_advance_height() {
-        let mut ws = WalletState::new();
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
 
         for h in 1..=10 {
-            ws.process_scanned_outputs(h, block_hash(h), Timelocked(vec![]));
+            indexes.process_scanned_outputs(&mut ledger, h, block_hash(h), Timelocked(vec![]));
         }
 
-        assert_eq!(ws.height(), 10);
-        assert_eq!(ws.transfer_count(), 0);
-        ws.check_invariants().expect("empty blocks invariants");
+        assert_eq!(ledger.height(), 10);
+        assert_eq!(ledger.transfers().len(), 0);
+        indexes
+            .check_invariants(&ledger)
+            .expect("empty blocks invariants");
     }
 
     #[test]
     fn detect_spends_then_unmark_round_trip() {
-        let mut ws = WalletState::new();
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
 
         let o = mock_output(500, 10_000);
         let ki = o.key_image;
-        ws.process_scanned_outputs(10, block_hash(10), Timelocked(vec![o]));
+        indexes.process_scanned_outputs(&mut ledger, 10, block_hash(10), Timelocked(vec![o]));
 
-        let spent = ws.detect_spends(20, &[ki]);
+        let spent = indexes.detect_spends(&mut ledger, 20, &[ki]);
         assert_eq!(spent, 1);
-        assert_eq!(ws.balance(100).total, 0);
+        assert_eq!(ledger.balance(100).total, 0);
 
-        let unmarked = ws.unmark_spent(&[ki]);
+        let unmarked = indexes.unmark_spent(&mut ledger, &[ki]);
         assert_eq!(unmarked, 1);
-        assert_eq!(ws.balance(100).total, 10_000);
+        assert_eq!(ledger.balance(100).total, 10_000);
 
-        ws.check_invariants().expect("round-trip invariants");
+        indexes
+            .check_invariants(&ledger)
+            .expect("round-trip invariants");
     }
 }

@@ -10,7 +10,7 @@
 //! 1. Claim transaction(s) to drain the backlog up to lock_until
 //! 2. Unstake transaction to spend the matured staked output
 
-use shekyl_scanner::WalletState;
+use shekyl_scanner::{LedgerBlock, LedgerIndexes};
 
 use crate::{
     claim_builder::{ClaimTxBuilder, ClaimTxPlan},
@@ -33,7 +33,8 @@ pub struct ClaimAndUnstakePlan {
 /// Each index must refer to a staked, unspent, matured output.
 /// If any output still has unclaimed backlog, the claim step is populated.
 pub fn plan_claim_and_unstake<F>(
-    wallet: &WalletState,
+    ledger: &LedgerBlock,
+    indexes: &LedgerIndexes,
     indices: &[usize],
     current_height: u64,
     max_claim_range: u64,
@@ -42,7 +43,7 @@ pub fn plan_claim_and_unstake<F>(
 where
     F: Fn(u64, u8) -> u64,
 {
-    let transfers = wallet.transfers();
+    let transfers = ledger.transfers();
     let mut needs_claim = Vec::new();
     let mut total_unstake = 0u64;
 
@@ -74,7 +75,7 @@ where
 
     let claim_plan = if !needs_claim.is_empty() {
         let builder = ClaimTxBuilder::new(max_claim_range);
-        Some(builder.plan_specific(wallet, &needs_claim, current_height, weight_fn)?)
+        Some(builder.plan_specific(ledger, indexes, &needs_claim, current_height, weight_fn)?)
     } else {
         None
     };

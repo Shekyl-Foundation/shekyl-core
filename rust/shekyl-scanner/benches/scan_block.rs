@@ -6,12 +6,13 @@
 //! Hardening-pass commit 2 (§3.2): scanner ingestion per block.
 //!
 //! Measures the non-crypto bookkeeping half of the scanner pipeline:
-//! `RuntimeWalletState::process_scanned_outputs` ingesting `K`
-//! synthetic `RecoveredWalletOutput`s for a single block. The
-//! cryptographic half — `scan_output_recover` (X25519 view-tag
-//! pre-filter + ML-KEM-768 decap + HKDF + leaf-hash rederivation) —
-//! lives in `shekyl-crypto-pq/benches/pqc_rederivation.rs`; the two
-//! together span the "owned output lands in wallet state" pipeline.
+//! `LedgerIndexes::process_scanned_outputs` ingesting `K` synthetic
+//! `RecoveredWalletOutput`s for a single block into a fresh
+//! `(LedgerBlock, LedgerIndexes)` pair. The cryptographic half —
+//! `scan_output_recover` (X25519 view-tag pre-filter + ML-KEM-768 decap +
+//! HKDF + leaf-hash rederivation) — lives in
+//! `shekyl-crypto-pq/benches/pqc_rederivation.rs`; the two together span
+//! the "owned output lands in wallet state" pipeline.
 //!
 //! K values (0, 5, 50) match the C++ spec's intended sweep (see
 //! `tests/wallet_bench/bench_wallet2.cpp` — currently not wired for
@@ -20,6 +21,13 @@
 //!
 //! Naming convention: `hot_path_bench_*` — slowdown-only threshold.
 //! No crypto primitives in the measured region.
+//!
+//! Post-fold note: the measured region is only
+//! `indexes.process_scanned_outputs(&mut ledger, …)`. The setup
+//! constructs the `(LedgerBlock, LedgerIndexes)` pair via
+//! `BatchSize::SmallInput` so the per-iteration cost of constructing
+//! empty containers is excluded from the measurement, exactly as it
+//! was when the type was `RuntimeWalletState`.
 
 use std::hint::black_box;
 
@@ -29,9 +37,8 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
 use shekyl_oxide::primitives::Commitment;
 use shekyl_scanner::{
     output::WalletOutput,
-    runtime_ext::WalletStateExt,
     scan::{RecoveredWalletOutput, Timelocked},
-    RuntimeWalletState,
+    LedgerBlock, LedgerIndexes, LedgerIndexesExt,
 };
 
 fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
@@ -70,14 +77,21 @@ fn hot_path_bench_scan_block(c: &mut Criterion) {
             &k,
             |b, &k| {
                 b.iter_batched(
-                    || (RuntimeWalletState::new(), build_owned_outputs(k)),
-                    |(mut ws, outputs)| {
-                        let added = ws.process_scanned_outputs(
+                    || {
+                        (
+                            LedgerBlock::empty(),
+                            LedgerIndexes::empty(),
+                            build_owned_outputs(k),
+                        )
+                    },
+                    |(mut ledger, mut indexes, outputs)| {
+                        let added = indexes.process_scanned_outputs(
+                            &mut ledger,
                             black_box(2_000),
                             black_box([0xAAu8; 32]),
                             outputs,
                         );
-                        black_box((ws, added));
+                        black_box((ledger, indexes, added));
                     },
                     criterion::BatchSize::SmallInput,
                 );

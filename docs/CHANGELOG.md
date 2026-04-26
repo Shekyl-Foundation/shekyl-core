@@ -2,6 +2,560 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`Wallet::create` / `Wallet::open_full` / `Wallet::change_password` /
+  `Wallet::close` lifecycle methods on `shekyl-wallet-core` (Phase 1
+  `lifecycle` task).** The new
+  [`shekyl_wallet_core::wallet::lifecycle`](../rust/shekyl-wallet-core/src/wallet/lifecycle.rs)
+  module composes
+  [`shekyl-wallet-file`](../rust/shekyl-wallet-file/src/),
+  [`shekyl-crypto-pq::account::rederive_account`](../rust/shekyl-crypto-pq/src/account.rs),
+  [`shekyl-wallet-prefs`](../rust/shekyl-wallet-prefs/src/),
+  [`shekyl-wallet-state::WalletLedger`](../rust/shekyl-wallet-state/src/wallet_ledger.rs),
+  and
+  [`shekyl-wallet-state::LedgerIndexes`](../rust/shekyl-wallet-state/src/ledger_indexes.rs)
+  into the `Wallet<S>` orchestrator's open / create / rotate / close
+  surface. Public API:
+
+  - `Credentials<'a>` — forward-compatible authentication parameter.
+    V3.0 has a private `password: &'a [u8]` field reachable through
+    `Credentials::password_only(&[u8])` and `Credentials::password()`;
+    V3.1 adds `authenticator: Option<AuthenticatorRequest<'a>>` and
+    `Credentials::password_with_authenticator(pwd, auth)` without
+    breaking existing call sites. See `docs/V3_WALLET_DECISION_LOG.md`
+    *"Wallet authentication: V3.0 password-only; MFA is V3.1 via
+    format-version bump"* (2026-04-26) for the API shape rationale.
+  - `OpenedWallet<S>` typed-sum return for `open_full`.
+    `Loaded(Wallet<S>)` indicates the persisted ledger file decoded
+    cleanly; `Restored { wallet, from_height }` indicates the keys
+    file was intact but the ledger file was missing or unreadable —
+    the wallet was reconstructed against an empty ledger anchored at
+    `from_height = restore_height_hint` and the caller must drive a
+    refresh to rebuild state. See `docs/V3_WALLET_DECISION_LOG.md`
+    *"`Wallet::open_full`: lost-state surfacing via typed
+    `OpenedWallet` sum"* (2026-04-26).
+  - `WalletCreateParams<'a>` (9 public fields) and
+    `CapabilityInput<'a>::Full { master_seed_64, seed_format }` for
+    `Wallet::create`. ViewOnly / HardwareOffload `CapabilityInput`
+    variants are deferred alongside the matching `open_*` bodies;
+    the FULL variant ships end-to-end. A `#[cfg(test)]
+    WalletCreateParams::for_test_full(base_path, password,
+    master_seed_64)` helper pins all eight non-essential fields to
+    known-good defaults for unit-test fixtures; production callers
+    (CLI / RPC) construct the struct literal so the field set is
+    explicit at every call site.
+  - `Wallet::create(params) -> Result<Wallet<SoloSigner>, OpenError>` —
+    delegates to `WalletFile::create` with derived
+    `DerivationNetwork` / `SeedFormat`, runs `rederive_account` to
+    populate `AllKeysBlob`, cross-checks
+    `blob.classical_address_bytes` against the envelope's
+    `expected_classical_address` (failure → `KeyError::PublicBytesMismatch`),
+    initializes `WalletLedger::empty()` and `LedgerIndexes::empty()`,
+    persists initial prefs via `WalletFile::save_prefs`, and assembles
+    the `Wallet<SoloSigner>` instance.
+  - `Wallet::open_full(base_path, &credentials, network, daemon,
+    overrides) -> Result<OpenedWallet<SoloSigner>, OpenError>` — opens
+    the envelope (mapping `WalletEnvelopeError::InvalidPasswordOrCorrupt`
+    to `OpenError::IncorrectPassword`,
+    `RequiresMultisigSupport` to `OpenError::RequiresMultisig`, and
+    capability / network mismatches to the corresponding typed
+    variants), enforces FULL-only on this entry point
+    (`OpenError::CapabilityMismatch` if the disk envelope is
+    ViewOnly or HardwareOffload), runs the same rederive +
+    public-bytes-cross-check sequence as `create`, surfaces tampered
+    prefs as a structured `tracing::warn!` and falls back to defaults
+    per `docs/WALLET_PREFS.md §5`'s advisory failure policy, rebuilds
+    `LedgerIndexes` from the persisted `LedgerBlock`, and returns
+    `Loaded` or `Restored { from_height }` based on the
+    `WalletFile::open` outcome.
+  - `Wallet::open_view_only(...)` / `Wallet::open_hardware_offload(...)`
+    — signature-only stubs that return
+    `OpenError::CapabilityNotYetImplemented { capability }` pending
+    the matching `shekyl-crypto-pq` `AllKeysBlob` constructors. The
+    error variant is deletion-tracked at the code site and in
+    `docs/FOLLOWUPS.md` *V3.0 → "View/HW lifecycle bodies in
+    `shekyl-wallet-core`"*. See `docs/V3_WALLET_DECISION_LOG.md`
+    *"`Wallet<S>` lifecycle: capability scoping for V3.0"* (2026-04-26)
+    for the stub-shape rationale.
+  - `Wallet::change_password(&old, &new, new_kdf) -> Result<(), OpenError>`
+    — delegates to `WalletFile::rotate_password`, mapping
+    `WalletEnvelopeError::InvalidPasswordOrCorrupt` to
+    `OpenError::IncorrectPassword`. Available on every signer kind
+    (FULL / ViewOnly / HardwareOffload / multisig) since the
+    underlying envelope rewrap is capability-agnostic.
+  - `Wallet::close(self, &credentials) -> Result<(), OpenError>` —
+    refuses with `OpenError::OutstandingPendingTx { count }` when
+    `outstanding_pending_txs() > 0` (drives cross-cutting lock 4's
+    "no clean close while reservations are live" invariant).
+    Otherwise saves state via `WalletFile::save_state`, saves prefs
+    via `WalletFile::save_prefs`, and consumes `self`. The
+    method's doc comment names the zeroization chain explicitly:
+    `WalletFile::Drop` releases the advisory lock on `<base>.keys`;
+    `AllKeysBlob::Drop` zeroizes `spend_sk` / `view_sk` /
+    `ml_kem_dk` and the public-key fields. The chain is
+    single-level (`Wallet<S>.keys: AllKeysBlob` directly, no
+    wrapper), and the underlying `Drop` semantics are tested in
+    `shekyl-crypto-pq`'s own unit tests.
+
+  Eleven unit tests cover the round-trip create / open path, password
+  rotation followed by reopen-with-new-password and refusal of the
+  old, `OpenError::IncorrectPassword`, `OpenError::NetworkMismatch`,
+  the `Restored { from_height }` lost-state path (state file deleted
+  between create and open), `OpenError::OutstandingPendingTx` (close
+  refused while a synthetic reservation is in `Wallet::reservations`),
+  the structured `tracing::warn!` on prefs HMAC tamper events, and
+  the typed `OpenError::CapabilityNotYetImplemented` returns from
+  the view-only and hardware-offload stubs. The
+  `apply_scan_result_post_open_works` lifecycle ↔ scan-result
+  composition test is deferred to the Phase 2a `refresh` commit
+  where it can exercise a real `ScanResult` against the lifecycle's
+  `LedgerIndexes::rebuild_from_ledger` output.
+
+  The lifecycle commit ships `tracing = "0.1"` as a runtime
+  dependency on `shekyl-wallet-core` (used for the prefs-tamper
+  warn log only) and `tempfile = "3"` plus `tokio = { version = "1",
+  features = ["macros", "rt"] }` as dev-dependencies (lifecycle
+  tests construct on-disk fixtures and instantiate a
+  `SimpleRequestRpc` against an unreachable URL for the dummy
+  `DaemonClient`).
+
+- **`Wallet::build_pending_tx` / `submit_pending_tx` / `discard_pending_tx`
+  three-method `PendingTx` lifecycle (Phase 1 `pending_tx` task).** The
+  new
+  [`shekyl_wallet_core::wallet::pending`](../rust/shekyl-wallet-core/src/wallet/pending.rs)
+  module lands the runtime-only side of cross-cutting lock 4. Public
+  surface:
+
+  - `PendingTx { id, built_at_height, built_at_tip_hash, fee_atomic_units,
+    tx_bytes, recipients }` — the chain-state-tagged handle returned by
+    `build_pending_tx`. `tx_bytes` is `Vec::new()` in Phase 1 and is
+    explicitly documented as Phase-2a's integration point for
+    `shekyl-tx-builder`.
+  - `TxRequest { recipients, priority, from_subaddress }`,
+    `TxRecipient { address, amount_atomic_units }`,
+    `FeePriority { Economy, Standard, Priority, Custom(NonZeroU64) }`,
+    `TxRecipientSummary`, `ReservationId(u64)`, `TxHash([u8; 32])` —
+    the strongly-typed input/handle/summary newtypes.
+  - `Wallet::build_pending_tx(&request) -> Result<PendingTx, SendError>` —
+    selects largest-amount-first spendable outputs from
+    `LedgerIndexes`/`LedgerBlock` (excluding outputs already reserved
+    by another in-flight `PendingTx`), captures real chain state
+    (`synced_height` + `block_hash_at(synced_height)`), bumps a
+    monotonic `next_reservation_id`, and inserts a `Reservation` into
+    `Wallet::reservations`. Phase 1 uses a fixed
+    `STUB_FEE_ATOMIC_UNITS = 1_000` stub fee; Phase 2a will replace
+    it with a `daemon.get_fee_estimates()` call.
+  - `Wallet::submit_pending_tx(id) -> Result<TxHash, PendingTxError>` —
+    runs the cross-cutting-lock-4 invariants
+    (`PendingTxError::TooOld { built, current, max_reorg }` against
+    `NetworkSafetyConstants::for_network(network).max_reorg_depth`,
+    `PendingTxError::ChainStateChanged { height }` against the stored
+    `built_at_tip_hash`, `PendingTxError::UnknownHandle` for unknown
+    `id`s), and on success removes the reservation, marks each
+    selected `TransferDetails` as `spent = true` with
+    `spent_height = None` (the "unconfirmed-spent" Phase-1 state, made
+    proper in Phase 2a once daemon broadcast confirmation arrives),
+    and returns a stub `TxHash` whose first 8 bytes encode the
+    `ReservationId`.
+  - `Wallet::discard_pending_tx(id) -> Result<(), PendingTxError>` —
+    idempotent: returns `Ok(())` regardless of whether `id` is
+    currently recognized, releases the reservation entry so the
+    referenced outputs become selectable by a subsequent build.
+  - `Wallet::outstanding_pending_txs() -> usize` — count accessor used
+    by `Wallet::close` (lifecycle commit) to refuse closing while any
+    reservation is active.
+
+  Reservations live exclusively on `Wallet<S>` as a runtime-only
+  `BTreeMap<ReservationId, Reservation>` field alongside the
+  existing runtime-only `indexes: LedgerIndexes`. They are not
+  persisted in `WalletLedger.bookkeeping`; `BOOKKEEPING_BLOCK_VERSION`
+  does not change. Process crash between build and submit/discard
+  drops reservations along with the in-memory `PendingTx` handle —
+  which is the correct behavior, since the tx never broadcast and the
+  outputs are correctly spendable again on next open.
+
+  The full lifecycle body is exposed as `pub(crate)`
+  free helpers (`build_pending_tx_in_state`,
+  `submit_pending_tx_in_state`, `discard_pending_tx_in_state`)
+  operating on `(&LedgerBlock, &mut BTreeMap<ReservationId,
+  Reservation>, ...)` so unit tests can drive the full lifecycle
+  without standing up a `Wallet<S>` (whose constructors land in the
+  lifecycle commit). Twelve unit tests cover output reservation, the
+  reserved-output filter, insufficient-funds, the no-block-yet
+  `SendError::CannotSign`, all three `PendingTxError` paths, the
+  spent-state mutation on submit, the rebuild-after-discard path,
+  discard idempotency on unknown handles, and `FeePriority::Custom`
+  preservation.
+
+  See `docs/V3_WALLET_DECISION_LOG.md` *"Reservation tracker:
+  runtime-only on `Wallet`, never persisted"* (2026-04-26 sub-section
+  of the `Wallet<S>` struct entry) for the runtime-vs-persisted
+  decision and the supersession of the original cross-cutting-lock-4
+  draft phrasing.
+
+- **`shekyl_wallet_core::scan::ScanResult` typed scanner-output value
+  and `Wallet::apply_scan_result` merge surface (Phase 1 `scan_result`
+  task).** A new
+  [`shekyl_wallet_core::scan`](../rust/shekyl-wallet-core/src/scan.rs)
+  module defines the additive event vocabulary the Phase 2a
+  `Wallet::refresh()` pipeline produces from a scanner pass:
+
+  - `ScanResult { processed_height_range, parent_hash, block_hashes,
+    new_transfers, spent_key_images, stake_events, reorg_rewind }`.
+  - `DetectedTransfer { block_height, output: RecoveredWalletOutput }`
+    — the secret-bearing variant; `RecoveredWalletOutput` already
+    `ZeroizeOnDrop`, so dropping the enclosing `ScanResult` wipes
+    PQC re-derivation material in place.
+  - `KeyImageObserved { block_height, key_image }` — drives
+    `LedgerIndexes::detect_spends` per height.
+  - `StakeEvent::Accrual { height, record }`, `#[non_exhaustive]` so
+    Phase 2b `StakeInstance` variants can land additively.
+  - `ReorgRewind { fork_height }` — drives
+    `LedgerIndexes::handle_reorg` before per-height events.
+  - `ScanResult::empty_at(start, parent_hash)` for the
+    nothing-changed-at-tip case and tests.
+
+  The companion `Wallet::apply_scan_result(&mut self, ScanResult) ->
+  Result<(), RefreshError>` lives in
+  [`wallet::merge`](../rust/shekyl-wallet-core/src/wallet/merge.rs) and
+  is the only audited code path that mutates the scanner-derived slice
+  of `WalletLedger` plus `LedgerIndexes` during refresh. It enforces
+  two snapshot-consistency invariants before applying any events,
+  rejecting with `RefreshError::ConcurrentMutation` on either failure:
+
+  1. **Start-height equality.** `processed_height_range.start` must
+     equal `synced_height + 1` (or `fork_height` when `reorg_rewind`
+     is present, since the rewind sets `synced_height` to
+     `fork_height - 1` first).
+  2. **Parent-hash chain.** `parent_hash` must match
+     `LedgerBlock::block_hash_at(start - 1)`, with `None` matching
+     `None` at genesis (`start == 1`).
+
+  The merge runs in a fixed order: optional reorg rewind first, then
+  per-height ingest (`process_scanned_outputs` + `detect_spends`)
+  driven by `block_hashes` so `synced_height` advances exactly once
+  per scanned block — even when the block had no events — then
+  staker-pool aggregate events. `Wallet<S>` now carries
+  `indexes: LedgerIndexes` as a direct field so the merge can mutate
+  both the persisted `LedgerBlock` (via `WalletLedger.ledger`) and
+  the runtime indexes under a single `&mut self` borrow without
+  needing an inner lock. The full merge body is exposed `pub(crate)`
+  as `apply_scan_result_to_state(&mut LedgerBlock, &mut LedgerIndexes,
+  ScanResult)` so tests can drive it without standing up a full
+  `Wallet<S>` (whose lifecycle methods land in a follow-up commit).
+
+  See `docs/V3_WALLET_DECISION_LOG.md` *"`ScanResult` type"*
+  (2026-04-25, **crate location: `shekyl-wallet-core::scan`**) and
+  *"`Wallet::apply_scan_result` invariants and Wallet-side
+  `LedgerIndexes`"* (2026-04-26).
+
+### Changed
+
+- **`RuntimeWalletState` folded into `LedgerBlock` + `LedgerIndexes`
+  (Phase 1 `runtime_state_audit` task).** The `RuntimeWalletState`
+  type and the transitional `pub use ... as WalletState` re-export
+  are deleted. Its responsibilities split along the persistence
+  boundary:
+
+  - **Persisted, on-disk state** — `transfers`, `synced_height`,
+    `reorg_blocks`, claim watermarks — was already covered by
+    `WalletLedger.ledger` (`LedgerBlock`). Read-only queries
+    (`height`, `transfers`, `unspent_transfers`, `staked_outputs`,
+    `matured_staked_outputs`, `locked_staked_outputs`,
+    `claimable_outputs`, `unstakeable_outputs`, `spendable_outputs`,
+    `block_hash_at`) and transfer-only mutators (`set_staking_info`,
+    `update_claim_watermark`, `freeze`, `thaw`, `transfer_mut`) move
+    to inherent methods on `LedgerBlock`.
+  - **Runtime-only derived state** — the `key_images` and `pub_keys`
+    lookup maps plus the `staker_pool` accrual aggregate — moves to
+    a new `pub struct LedgerIndexes` in
+    `rust/shekyl-wallet-state/src/ledger_indexes.rs`. `LedgerIndexes`
+    is **never serialized**, has no `Serialize` / `Deserialize`
+    derives, and is rebuilt by scanner replay at every wallet open
+    via `LedgerIndexes::rebuild_from_ledger`. Cross-cutting
+    mutations (`ingest_block`, `mark_spent`, `unmark_spent`,
+    `detect_spends`, `set_key_image`, `freeze_by_key_image`,
+    `thaw_by_key_image`, `handle_reorg`, `insert_accrual`) take
+    `&mut self, ledger: &mut LedgerBlock, …` so a single call
+    updates ledger and indexes atomically. Invariant:
+    `LedgerIndexes` is reconstructible from `LedgerBlock` plus
+    daemon block replay; this is enforced by convention (struct
+    doc-comment) rather than by the type system.
+
+  Live wallet state behind a single mutex is the tuple
+  `pub type LiveLedger = (LedgerBlock, LedgerIndexes)` in both
+  `shekyl-wallet-rpc::scanner_state` and the (cfg `rust-scanner`)
+  `shekyl-scanner::sync` background loop. Scanner-specific behavior
+  that needs `Timelocked` / `RecoveredWalletOutput` /
+  `BalanceSummary` / `ClaimableInfo` lives in extension traits in
+  `shekyl-scanner::ledger_ext` (`TransferDetailsExt`,
+  `LedgerIndexesExt`, `LedgerBlockExt`); the canonical
+  `shekyl-wallet-state` crate stays scanner-free. The old
+  `shekyl-scanner::runtime_ext` and `shekyl-scanner::wallet_state`
+  modules are deleted.
+
+  See `docs/V3_WALLET_DECISION_LOG.md` *"`RuntimeWalletState` audit:
+  full fold, derived indexes rebuilt at open"* (2026-04-25); the
+  same commit also corrects two errata in that entry: the persisted
+  transfer path is `WalletLedger.ledger.transfers` (not
+  `bookkeeping.transfers`), and `staker_pool`'s home on
+  `LedgerIndexes` is now pinned explicitly.
+
+### Documentation
+
+- **Phase 1 sub-decision log entries appended (Phase 1
+  `decision_log_entries` task).** Three new dated entries land in
+  `docs/V3_WALLET_DECISION_LOG.md` to lock the Phase 1 surface
+  decisions whose defaults were taken from the Phase 0
+  `surface_decisions` review:
+
+  - *"`RuntimeWalletState` audit: full fold, derived indexes
+    rebuilt at open"* — `RuntimeWalletState` ceases to exist;
+    `key_images` / `pub_keys` indexes promote into a `pub(crate)
+    LedgerIndexes` owned by `Wallet`, rebuilt from the
+    authoritative ledger at open time, never persisted. Schema
+    unchanged. Closes the `runtime_state_audit` Phase 1 task and
+    the `pub use ... as WalletState` transitional alias deletion.
+  - *"`tx_keys` storage: persist in `TxMetaBlock`, never
+    re-derived"* — pins the rule that per-tx randomness lives in
+    `TxMetaBlock::tx_keys: BTreeMap<TxHash, TxSecretKeys>`
+    (already shipped in schema), is never reconstructed from any
+    other state, and that `Wallet::tx_proof` /
+    `Wallet::reserve_proof` (Phase 2) read it by `txid` lookup
+    with a typed `ProofError::TxKeyNotPersisted` on miss.
+  - *"Daemon-side `tracing` install:
+    `shekyl_log_install_tracing_forwarder` under
+    `shekyl-logging::ffi`"* — locks the FFI export name, signature
+    (`pub unsafe extern "C" fn() -> i32`, idempotent, returns
+    typed `ALREADY_INSTALLED` / `NOT_INITIALIZED`), home
+    (`shekyl-logging::ffi`, **not** `shekyl-daemon-rpc::ffi`), and
+    the rule that `shekyl-daemon-rpc`'s `tracing::*` call sites
+    are kept verbatim — the forwarder routes them through
+    `shekyl-logging` automatically. Closes the `docs/FOLLOWUPS.md`
+    V3.2 entry *"`shekyl-daemon-rpc` staticlib: `tracing::*` calls
+    silently dropped"* by absorption into the Phase 1 logging
+    deliverable.
+
+  No code changes ship in this entry; each decision is realized
+  by a subsequent Phase 1 commit (the `RuntimeWalletState` fold
+  is the next task in line per the todo list).
+
+### Removed
+
+- **`rust/shekyl-ffi/src/wallet_ledger_ffi.rs` deleted as a Phase 5
+  pre-emption.** The typed cache-handle FFI surface from sub-commit
+  2l.a — `ShekylTransferDetailsC` / `ShekylBlockchainTipC` /
+  `ShekylReorgBlockEntryC` / `ShekylSubaddressRegistryEntryC` /
+  `ShekylSubaddressLabelEntryC` / `ShekylAddressBookEntryC` /
+  `ShekylTxKeyEntryC` / `ShekylTxNoteEntryC` /
+  `ShekylTxAttributeEntryC` / `ShekylScannedPoolTxEntryC` /
+  `ShekylSyncStateScalarsC` and their
+  `shekyl_wallet_{get,set,free}_*` trios plus
+  `shekyl_wallet_ledger_preflight` — is gone. The corresponding
+  declarations in `src/shekyl/shekyl_ffi.h` are stripped; the
+  reserved `SHEKYL_WALLET_ERR_BLOCK_NOT_HYDRATED` (codepoint 29)
+  retires alongside the surface that produced it. `save_as`
+  (the in-scope C-ABI export from `wallet_file_ffi.rs`) and its
+  refusal codes (`SAVE_AS_CROSS_FILESYSTEM` / `SAVE_AS_TARGET_EXISTS`)
+  remain unchanged. The `shekyl-primitives` main- and dev-dep are
+  also removed from `rust/shekyl-ffi/Cargo.toml`; the only consumer
+  was the deleted file's `Commitment` reconstruction path.
+
+  **Caller evidence (commit message body).** Pre-flight `git grep`
+  against `*.cpp` / `*.cc` / `*.h` / `*.hpp` for every export of the
+  deleted surface returned only `src/shekyl/shekyl_ffi.h` itself
+  (the prototypes that this commit removes). Zero `.cpp` consumers
+  ever materialized — the original consumer
+  (`wallet2_handle_views.h/.cpp`) was scheduled but never written,
+  and Phase 5 will delete the enclosing `wallet2.cpp` shim
+  wholesale. Full `git grep` transcript pinned in the deletion
+  commit's message body for reproducibility.
+
+  **Decision rule.** This deletion establishes the *Phase 5
+  pre-emption rule* in `docs/V3_WALLET_DECISION_LOG.md`: an
+  individual Phase 5 inventory item may be deleted early when (1)
+  zero current `.cpp` callers, (2) grep evidence in the deletion
+  commit's message body, and (3) atomic update of
+  `docs/FOLLOWUPS.md` / Phase-5-inventory metadata in the same
+  commit. Pre-empting items with surviving callers is
+  not acceptable. The Decision Log entry locks the rule so future
+  pre-emptions follow a precedent rather than an ad-hoc precedent.
+
+  **Inventory hygiene.** `docs/FOLLOWUPS.md` (sub-bullet *"Phase 5
+  inventory pre-emptions"* under the *wallet2.cpp absorption*
+  entry) records this file as already pre-empted; the eventual
+  Phase 5 commit's deletion list excludes it. The pre-existing
+  clippy lints in the now-deleted file (`as u8` casts, explicit
+  `iter()` loop, `_keep_imports` arg count) close by absorption —
+  the file holding them no longer exists.
+
+### Changed
+
+- **Subaddress namespace flattened to `SubaddressIndex(u32)` across the
+  wallet stack and the typed-ledger FFI surface (Phase 1 of the
+  [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
+  `primitives` task).** `SubaddressIndex` is now a `u32` newtype with
+  `index == 0` reserved for the primary address; the legacy
+  `{account, address}` pair is gone everywhere — `WalletLedger`,
+  `BookkeepingBlock::subaddress_registry` /
+  `subaddress_labels.per_index`, scanner outputs, transfer records,
+  `RuntimeWalletState::filter`, and the typed-ledger FFI in
+  `rust/shekyl-ffi/src/wallet_ledger_ffi.rs`. Account-level concepts
+  inherited from wallet2 (`AccountTags`, the `tag_descriptions` /
+  `account_tags` FFI trios) are removed wholesale; the Decision Log
+  entry "Subaddress hierarchy: flat, no account level" pins the
+  rationale (most users use one account; account-level tags were
+  wallet2 baggage; multi-wallet-file isolation is genuinely stronger
+  than account-level subaddresses). A separate
+  `SubaddressLabels::primary` slot is gone too — the primary label is
+  the `index == 0` entry of `per_index` like every other label.
+
+  **FFI surface delta (this commit).** `shekyl_ffi.h` mirrors the Rust:
+  `ShekylSubaddressRegistryEntryC` and `ShekylSubaddressLabelEntryC`
+  carry a single `index: u32` field (sizes 36 and 24 respectively, no
+  trailing pad — there are zero `.cpp` callers in tree, so preserving
+  the legacy stride for hypothetical future callers would be a
+  defensive measure for nobody); the
+  `ShekylTagDescriptionEntryC` /
+  `ShekylAccountTagAssignmentEntryC` typedefs and their
+  `static_assert`s, plus the
+  `shekyl_wallet_{get,set,free}_{tag_descriptions,account_tags,primary_label}`
+  prototypes, are removed. The FFI file
+  `wallet_ledger_ffi.rs` itself is scheduled for outright deletion in
+  the immediate follow-up commit (Phase 5 pre-emption); this commit
+  lands the field-rename half of the migration so the deletion commit
+  is a one-concern review.
+
+  **Behavioral delta.** `shekyl_wallet_set_subaddress_registry` now
+  rejects an entry with `index == 0` by returning
+  `SHEKYL_WALLET_ERR_LEDGER`. The primary address is reconstructed
+  from the wallet keys at every load and is not registry-managed; an
+  attempted insert at index 0 is structurally impossible rather than
+  benign overwrite. wallet2 silently accepted such inserts; the V3
+  surface fails loudly. Belt-and-suspenders unit test
+  `wallet_ledger_ffi::tests::registry_set_rejects_index_zero` pins
+  the contract.
+
+  **On-disk schema.** All three persisted-block version constants are
+  bumped from `1` to `2`: `BOOKKEEPING_BLOCK_VERSION` (the direct
+  field-shape changes — `subaddress_registry` /
+  `subaddress_labels.per_index` flatten and `account_tags` removal),
+  `LEDGER_BLOCK_VERSION` (transitive — every `TransferDetails` in
+  `LedgerBlock::transfers` now carries the flattened newtype), and
+  `WALLET_LEDGER_FORMAT_VERSION` (transitive — the bundle's serialized
+  bytes shift wherever any nested `SubaddressIndex` or
+  `SubaddressLabels` appears). The strict pairing of "snap drift ↔
+  paired version-constant bump" is enforced by the
+  `ci/schema-snapshot` workflow per
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.4 and
+  [`.cursor/rules/42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc);
+  the gate caught the original commit shipping only the bookkeeping
+  bump, and the missing two were folded in atop the existing branch
+  rather than rewriting history. Legacy v1 ledgers have no live
+  readers — pre-V3 launch, `rm -rf ~/.shekyl` is the migration path
+  per
+  [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc).
+  The `bookkeeping_block.snap` / `ledger_block.snap` /
+  `wallet_ledger.snap` schema fixtures are regenerated; the
+  `SubaddressIndex` shape went from a two-field struct to a
+  `NewtypeStruct(u32)`, and `BookkeepingBlock::account_tags` is gone.
+
+  **JSON shape factoring.** Transfer records expose subaddress
+  indices as `{"index": u32}` (bare form, no label); address-list
+  responses expose them as `{"index": u32, "label": Option<String>}`
+  (joined form, label looked up at handler time). Decision Log entry
+  "Subaddress JSON shapes: two schemas, no label join in transfer
+  records" pins the factoring for Phase 4b OpenAPI work.
+
+### Added
+
+- **`shekyl-wallet-core::Wallet<S>` struct + `DaemonClient` thin wrapper
+  (Phase 1 of the [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
+  cross-cutting locks 1, 3, 4 type-layer realization).** Lands the
+  `Wallet<S: WalletSignerKind>` struct itself with its full dependency
+  graph wired in: `file: shekyl_wallet_file::WalletFile`, `keys:
+  shekyl_crypto_pq::account::AllKeysBlob`, `ledger:
+  shekyl_wallet_state::WalletLedger`, `prefs:
+  shekyl_wallet_prefs::WalletPrefs`, `daemon: DaemonClient`, `network:
+  Network`, `capability: Capability`, plus `_signer: PhantomData<S>`
+  for compile-time signer-kind dispatch. `network` and `capability` are
+  cached from `WalletFile`'s region 1 (which is write-once after
+  `create`) so the hot accessors are infallible and O(1). Read-only
+  accessors (`network()`, `capability()`, `file()`, `ledger()`,
+  `prefs()`, `daemon()`) plus a `pub(crate) keys()` for in-crate sign /
+  proof code paths. Redacted `Debug` impl: `keys` prints as
+  `<redacted: AllKeysBlob>`, `ledger` / `prefs` print as `<…>`, `file`
+  and `daemon` delegate to their own already-redacting impls. No
+  `Drop` impl on `Wallet<S>` itself: `AllKeysBlob` and `WalletFile`
+  each ship their own `Drop` for the secret bytes / KEK / advisory
+  lock; composing types that already wipe correctly is sound, and a
+  wrapper `Drop` would risk shadowing the inner ones. New
+  `DaemonClient` thin wrapper around
+  `shekyl_simple_request_rpc::SimpleRequestRpc` insulates `Wallet`'s
+  public API from the transport choice and gives Phase 2a a single
+  audited site for `get_info` network verification, `get_fee_estimates`
+  fee-priority resolution, and tx submission. The six lifecycle methods
+  (`create`, `open_full`, `open_view_only`, `open_hardware_offload`,
+  `change_password`, `close`), `RefreshHandle`, `PendingTx`, and
+  `ScanResult` each land in their own follow-up commits on this same
+  Phase 1 branch. Cargo dependency graph: `shekyl-crypto-pq` is now a
+  non-optional dependency of `shekyl-wallet-core` (the `multisig`
+  feature flag previously gated it; with `keys: AllKeysBlob` on the
+  struct it is mandatory regardless of feature). Full rationale and
+  field-by-field justification recorded in
+  [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
+  §"`Wallet<S>` struct shape and accessor surface".
+
+- **`shekyl-wallet-core::wallet` module skeleton (Phase 1 of the
+  [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
+  cross-cutting locks 2, 4, 5, 6, 7, 8 type-layer realization).** New
+  module `rust/shekyl-wallet-core/src/wallet/` ships the type-layer
+  foundations of the V3 wallet orchestrator without yet introducing the
+  `Wallet` struct itself: per-domain error enums (`OpenError`,
+  `RefreshError`, `SendError`, `PendingTxError`, `KeyError`, `IoError`,
+  `TxError`) with the plan-locked variants pinned by name
+  (`OpenError::NetworkMismatch`, `RefreshError::ConcurrentMutation`,
+  `PendingTxError::TooOld`, `PendingTxError::ChainStateChanged`,
+  `TxError::DaemonFeeUnreasonable`, etc.); a re-export of
+  `shekyl_address::Network` (the fourth `Fakechain` variant lands in a
+  separate scoped commit on the same branch); a re-export of
+  `shekyl_wallet_file::Capability` (canonical spelling — the plan's
+  "`CapabilityMode`" reference is satisfied); and a sealed
+  `WalletSignerKind` trait with `SoloSigner` ZST as the V3.0 default.
+  V3.1's `MultisigSigner<N, K>` will join behind the existing `multisig`
+  Cargo feature without changing call sites. `#[from]` impls for upstream
+  errors (`WalletFileError`, `CryptoError`, `WalletLedgerError`, etc.)
+  are deliberately deferred to the lifecycle / refresh / send commits
+  that introduce the call sites needing them, so an `#[from]` impl never
+  exists without a caller. Full rationale recorded in
+  [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
+  §"Per-domain `Wallet` error enums + sealed `WalletSignerKind`".
+
+- **`shekyl-wallet-state::LocalLabel` and `SecretStr<'a>` (Phase 1 of the
+  [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
+  cross-cutting lock 9 type-layer realization).** Locally-sensitive
+  UTF-8 wrappers for every user-supplied string the wallet persists
+  but never transmits — address-book descriptions, subaddress labels,
+  transaction notes. `LocalLabel` is `Zeroizing<String>` with redacting
+  `Debug` / `Display` (`"<redacted N bytes>"`); no derived
+  `Serialize` / `Deserialize`. Persistence routes through the explicit
+  `serde_helpers::local_label` adapter, which is wire-byte-identical
+  to a plain `String` (test
+  `serde_helpers::tests::local_label_postcard_wire_matches_plain_string`
+  pins this), so the upcoming bookkeeping_block / tx_meta_block retypes
+  will not bump `BOOKKEEPING_BLOCK_VERSION` or
+  `TX_META_BLOCK_VERSION`. Borrowed in-process inspection goes through
+  `LocalLabel::expose() -> SecretStr<'_>`, whose only `Display` /
+  `Debug` output is the redaction marker; callers that need raw bytes
+  call `SecretStr::as_str()` explicitly so the call site is the audit
+  point. Full rationale (including why the value-typed `SecretStr<'a>`
+  shape rather than the literal `&SecretStr` shorthand from the
+  decision log — `unsafe_code` is forbidden workspace-wide) recorded
+  in
+  [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
+  §"`LocalLabel` / `SecretStr` typing for locally-sensitive UTF-8".
+
 ### Changed
 
 - **`monero-oxide` vendor-bump `87acb57` → `3933664` (PR 0.6 of the

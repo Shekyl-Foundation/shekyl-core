@@ -17,10 +17,19 @@ pub mod claim_builder;
 pub mod error;
 #[cfg(feature = "multisig")]
 pub mod multisig;
+pub mod scan;
+pub mod wallet;
 pub mod workflow;
 
 pub use claim_builder::{ClaimTxBuilder, ClaimTxPlan};
 pub use error::WalletCoreError;
+pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
+pub use wallet::{
+    Capability, CapabilityInput, Credentials, DaemonClient, FeePriority, IoError, KeyError,
+    Network, OpenError, OpenedWallet, PendingTx, PendingTxError, RefreshError, ReservationId,
+    SendError, SoloSigner, TxError, TxHash, TxRecipient, TxRecipientSummary, TxRequest, Wallet,
+    WalletCreateParams, WalletSignerKind,
+};
 pub use workflow::ClaimAndUnstakePlan;
 
 #[cfg(test)]

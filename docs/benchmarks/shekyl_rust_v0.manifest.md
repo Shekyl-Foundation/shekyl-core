@@ -295,10 +295,11 @@ asymmetries** to emit in the PR comment once the C++ side un-skips:
 **Binaries.** `benches/scan_block.rs`, `benches/scan_block_iai.rs`.
 
 **What it measures.**
-`RuntimeWalletState::process_scanned_outputs(block_height,
-block_hash, outputs)` for `K ∈ {0, 5, 50}` owned
+`LedgerIndexes::process_scanned_outputs(&mut LedgerBlock,
+block_height, block_hash, outputs)` for `K ∈ {0, 5, 50}` owned
 `RecoveredWalletOutput`s per block. This is the non-crypto
-bookkeeping half of the scanner pipeline. The cryptographic half —
+bookkeeping half of the scanner pipeline (the bench operates on a
+fresh `(LedgerBlock, LedgerIndexes)` pair). The cryptographic half —
 `scan_output_recover` (X25519 view-tag pre-filter, ML-KEM-768 decap,
 HKDF, leaf-hash rederivation) — lives in
 `shekyl-crypto-pq/benches/pqc_rederivation.rs` and is **explicitly
@@ -308,17 +309,19 @@ regression in one half be attributed correctly.
 
 **Operation list — every step exercised in the measured region.**
 
-- Locate the scanner's `tip` metadata and update
-  `block_height`/`block_hash`.
+- Update `ledger.tip` (height + hash) to the new block.
 - For each `RecoveredWalletOutput` in the input `Timelocked`:
   - Consume the wrapper, extract the inner `WalletOutput` and its
     `eligible_height`.
-  - Convert the `WalletOutput` into a `TransferDetails` via the
-    scanner's canonical `into_transfer` path.
-  - Push into `runtime.state.ledger.transfers`.
+  - Convert the `WalletOutput` into a `TransferDetails` via
+    `TransferDetailsExt::from_wallet_output`.
+  - Burning-bug guard: skip if `pub_keys` already maps the output
+    public key.
+  - Push into `ledger.transfers`; update `indexes.pub_keys` (and
+    `indexes.key_images` when the transfer carries one).
   - Update the per-subaddress running totals in
-    `runtime.state.bookkeeping`.
-- Update `runtime.state.sync_state.tip` to the new height.
+    `ledger.bookkeeping`.
+- Append `(block_height, block_hash)` to `ledger.reorg_blocks`.
 
 **Fixture shape.** `build_owned_outputs(K)` synthesizes:
 
@@ -342,8 +345,8 @@ deterministic zeros; the measured path does not depend on the values.
 
 **Measurement boundary.** Criterion wraps `process_scanned_outputs(..)`
 in `black_box(..)` and swallows the return value. The inputs
-(`RuntimeWalletState::new()` + `build_owned_outputs(K)`) are built
-per-iteration via `iter_batched(.., BatchSize::SmallInput)`.
+(`(LedgerBlock::empty(), LedgerIndexes::empty())` + `build_owned_outputs(K)`)
+are built per-iteration via `iter_batched(.., BatchSize::SmallInput)`.
 iai-callgrind sets the same call as the annotated region with
 `with_setup_K:build_state_and_outputs(K)` as the setup label.
 

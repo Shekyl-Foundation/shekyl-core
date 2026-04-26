@@ -8,7 +8,7 @@
 //! The canonical type now lives in [`shekyl_wallet_state::transfer`] so that the
 //! wallet-file orchestrator can persist ledger blocks without pulling in the scanner.
 //! The scanner-specific constructor `TransferDetails::from_wallet_output` is provided
-//! by the [`TransferDetailsExt`] extension trait in [`crate::runtime_ext`], which
+//! by the [`TransferDetailsExt`] extension trait in [`crate::ledger_ext`], which
 //! must be in scope for `TransferDetails::from_wallet_output(&out, h)` to resolve.
 
 pub use shekyl_wallet_state::transfer::{FcmpPrecomputedPath, TransferDetails, SPENDABLE_AGE};

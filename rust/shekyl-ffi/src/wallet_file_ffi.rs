@@ -180,14 +180,14 @@ pub const SHEKYL_WALLET_ERR_CAPABILITY_VIEW_ONLY_NO_SPEND: u32 = 25;
 /// error; callers must dispatch to the hardware signing flow.
 pub const SHEKYL_WALLET_ERR_CAPABILITY_HARDWARE_OFFLOAD_NO_SPEND: u32 = 26;
 
-// --- 2l.a: save_as + typed-ledger FFI surface error codes ------------------
+// --- save_as error codes ---------------------------------------------------
 //
 // `save_as` is atomic only within a single filesystem; see
 // `docs/wallet-state-promotion_ab273bfe.plan.md` design pin #10 (2l Q2.A)
-// for the rationale. The typed-ledger FFI surface (per-block get/set/free
-// in `crate::wallet_ledger_ffi`) can refuse a write attempt against a
-// block it has never hydrated — also mapped here so the C++ side does not
-// have to grow a separate error enumeration.
+// for the rationale. The companion typed-ledger FFI surface and its
+// `BLOCK_NOT_HYDRATED` codepoint were deleted as a Phase 5 pre-emption
+// (see `docs/V3_WALLET_DECISION_LOG.md` -- "Phase 5 pre-emption rule");
+// the surviving codes here cover only the `save_as` refusal categories.
 
 /// `save_as` refused a cross-filesystem rename. `rename(2)` is atomic
 /// only within a single filesystem, and a fallback copy-fsync-unlink
@@ -203,14 +203,6 @@ pub const SHEKYL_WALLET_ERR_SAVE_AS_CROSS_FILESYSTEM: u32 = 27;
 /// orchestrator never silently overwrites a wallet file; the caller
 /// picks a different target or removes the existing file first.
 pub const SHEKYL_WALLET_ERR_SAVE_AS_TARGET_EXISTS: u32 = 28;
-
-/// A typed-ledger setter was called for a block whose getter had not
-/// been called first during this handle's lifetime. The orchestrator
-/// refuses partial hydrates: a save path must either pass through all
-/// blocks (hydrate-then-emit) or skip the FFI and use the postcard
-/// ledger export path. This code typically signals a C++-side bug in
-/// the save-emit helper.
-pub const SHEKYL_WALLET_ERR_BLOCK_NOT_HYDRATED: u32 = 29;
 
 // ---------------------------------------------------------------------------
 // Metadata view struct
@@ -353,11 +345,11 @@ impl ShekylSafetyOverrides {
 /// Zeroizing master seed, etc.) zero on drop; the handle releases the
 /// advisory lock on drop.
 pub struct ShekylWallet {
-    // `pub(crate)` so the typed-ledger FFI surface in
-    // `crate::wallet_ledger_ffi` can read and replace the in-memory
-    // ledger directly. The handle remains opaque across the C ABI;
-    // C++ code reaches the ledger only through the typed
-    // `shekyl_wallet_*` getters / setters defined in that module.
+    // `pub(crate)` because the in-process Rust wallet stack composes
+    // these directly. The handle remains opaque across the C ABI;
+    // the only externally exported wallet operations are the
+    // `wallet_file_ffi` lifecycle entry points (open / save / close /
+    // rotate-password / save_as).
     pub(crate) inner: WalletFile,
     pub(crate) ledger: WalletLedger,
 }

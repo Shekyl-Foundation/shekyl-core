@@ -29,12 +29,6 @@ shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 shekyl-wallet-file = { path = "../shekyl-wallet-file" }
 shekyl-wallet-prefs = { path = "../shekyl-wallet-prefs" }
 shekyl-wallet-state = { path = "../shekyl-wallet-state" }
-# Needed for typed reconstruction of `TransferDetails::commitment` in
-# the per-element wallet-ledger FFI (2l.a). Already a dev-dependency
-# for the FCMP test fixtures; promoted to main deps because the
-# wallet_ledger_ffi setter path constructs a `Commitment` from
-# C++-supplied scalar / amount inputs.
-shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }
 # OsRng for the testnet/fakechain raw-seed generation FFI. The feature set is
@@ -59,7 +53,6 @@ multiexp = "0.4"
 ciphersuite = "0.4"
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++" }
-shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
 
 [lints]
 workspace = true

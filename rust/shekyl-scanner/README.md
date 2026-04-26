@@ -32,10 +32,11 @@ shekyl-scanner
 ├── extra.rs         # Transaction extra field parsing (extended with PQC tags)
 ├── view_pair.rs     # ViewPair with X25519 + ML-KEM decapsulation keys
 ├── output.rs        # WalletOutput representation
-├── transfer.rs      # TransferDetails with staking + PQC + FCMP++ fields
-│                    # Zeroize + ZeroizeOnDrop for all secrets
-├── wallet_state.rs  # In-memory state management (key images, spend tracking,
-│                    # reorg rollback, block hash chain). Wipes secrets on drop.
+├── transfer.rs      # Re-export shim for shekyl_wallet_state::TransferDetails
+│                    # (canonical type, with staking + PQC + FCMP++ fields)
+├── ledger_ext.rs    # Scanner-side extension traits for LedgerBlock + LedgerIndexes
+│                    # (TransferDetailsExt, LedgerIndexesExt, LedgerBlockExt). The
+│                    # canonical persisted/runtime split lives in shekyl-wallet-state.
 ├── balance.rs       # Balance computation with staking categories
 ├── coin_select.rs   # Coin selection for transaction building
 ├── staker_pool.rs   # Staker pool accrual data for reward estimation
@@ -60,7 +61,10 @@ feature flag) and the GUI wallet's `wallet_bridge.rs`. It is not intended
 to be used directly by end users.
 
 ```rust
-use shekyl_scanner::{Scanner, ViewPair, WalletState};
+use shekyl_scanner::{
+    LedgerBlock, LedgerBlockExt, LedgerIndexes, LedgerIndexesExt,
+    Scanner, ViewPair,
+};
 
 // Create a scanner from wallet keys (includes KEM secret keys for hybrid scanning)
 let view_pair = ViewPair::new(
@@ -72,15 +76,17 @@ let scanner = Scanner::new(view_pair, spend_secret);
 // Scan a block (from daemon RPC)
 let outputs = scanner.scan(scannable_block)?;
 
-// Track outputs in wallet state
-let mut state = WalletState::new();
-state.process_scanned_outputs(block_height, block_hash, outputs);
+// Track outputs in the (LedgerBlock, LedgerIndexes) pair: persisted state
+// in `ledger`, runtime-only derived indexes in `indexes`.
+let mut ledger = LedgerBlock::empty();
+let mut indexes = LedgerIndexes::empty();
+indexes.process_scanned_outputs(&mut ledger, block_height, block_hash, outputs);
 
 // Detect spends from block inputs
-state.detect_spends(block_height, &key_images_from_block);
+indexes.detect_spends(&mut ledger, block_height, &key_images_from_block);
 
-// Query balance
-let balance = state.balance(current_height);
+// Query balance (read-only against the persisted ledger)
+let balance = ledger.balance(current_height);
 ```
 
 ### Background sync loop
@@ -88,8 +94,10 @@ let balance = state.balance(current_height);
 With the `rust-scanner` feature, a full background sync loop is available:
 
 ```rust
-use shekyl_scanner::sync::run_sync_loop;
+use shekyl_scanner::sync::{run_sync_loop, LiveLedger};
 
+// `state` is `Arc<Mutex<LiveLedger>>`, where
+// `pub type LiveLedger = (LedgerBlock, LedgerIndexes);`
 run_sync_loop(
     rpc,
     scanner,
@@ -98,7 +106,7 @@ run_sync_loop(
     poll_interval,
     flush_every_block,   // true on mobile, false on desktop
     |progress| { /* update UI */ },
-    |state| { /* persist to disk */ },
+    |state| { /* persist `state.0` (LedgerBlock) to disk */ },
 ).await?;
 ```
 

@@ -47,12 +47,21 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{error::WalletLedgerError, transfer::TransferDetails};
+use crate::{error::WalletLedgerError, subaddress::SubaddressIndex, transfer::TransferDetails};
 
-/// Schema version of the ledger block. V3.0 ships version `1`. Any
-/// field addition / removal / renaming inside the block bumps this;
-/// loads that see a different version refuse rather than migrate.
-pub const LEDGER_BLOCK_VERSION: u32 = 1;
+/// Schema version of the ledger block.
+///
+/// V3.0 ships version `2`. Version `1` (pre-flat-namespace) carried a
+/// two-field `SubaddressIndex { account, address }` inside every
+/// `TransferDetails`; the flatten to `SubaddressIndex(u32)` reaches
+/// `LedgerBlock`'s on-disk bytes through the `transfers` vec, so the
+/// bump catches stale fixtures even though no on-disk ledgers exist
+/// yet (Shekyl is pre-genesis — `rm -rf ~/.shekyl` is the migration
+/// path per `.cursor/rules/15-deletion-and-debt.mdc`). Any field
+/// addition / removal / renaming inside the block, or any transitive
+/// change in a nested type's serialized shape, bumps this; loads that
+/// see a different version refuse rather than migrate.
+pub const LEDGER_BLOCK_VERSION: u32 = 2;
 
 /// Maximum number of `(height, hash)` pairs the scanner should keep in
 /// [`ReorgBlocks`]. The value is informational — the persistence layer
@@ -210,6 +219,171 @@ impl LedgerBlock {
         }
         Ok(())
     }
+
+    // -- Read-only queries (moved from RuntimeWalletState) -----------------
+
+    /// The current synced height (== `tip.synced_height`).
+    pub fn height(&self) -> u64 {
+        self.tip.synced_height
+    }
+
+    /// All tracked transfers as a slice.
+    pub fn transfers(&self) -> &[TransferDetails] {
+        &self.transfers
+    }
+
+    /// Number of tracked transfers.
+    pub fn transfer_count(&self) -> usize {
+        self.transfers.len()
+    }
+
+    /// Get the stored block hash for the given height, if it is
+    /// inside the reorg window.
+    pub fn block_hash_at(&self, height: u64) -> Option<&[u8; 32]> {
+        self.reorg_blocks
+            .blocks
+            .iter()
+            .rev()
+            .find(|(h, _)| *h == height)
+            .map(|(_, hash)| hash)
+    }
+
+    /// Get staked outputs that have unclaimed reward backlog.
+    pub fn claimable_outputs(&self, current_height: u64) -> Vec<&TransferDetails> {
+        self.transfers
+            .iter()
+            .filter(|td| td.has_claimable_rewards(current_height))
+            .collect()
+    }
+
+    /// Get staked outputs that are eligible for unstaking (matured,
+    /// unspent).
+    pub fn unstakeable_outputs(&self, current_height: u64) -> Vec<&TransferDetails> {
+        self.transfers
+            .iter()
+            .filter(|td| td.is_unstakeable(current_height))
+            .collect()
+    }
+
+    /// Get unspent, unfrozen transfers.
+    pub fn unspent_transfers(&self) -> Vec<&TransferDetails> {
+        self.transfers
+            .iter()
+            .filter(|td| !td.spent && !td.frozen)
+            .collect()
+    }
+
+    /// Get staked outputs (all states).
+    pub fn staked_outputs(&self) -> Vec<&TransferDetails> {
+        self.transfers
+            .iter()
+            .filter(|td| td.staked && !td.spent)
+            .collect()
+    }
+
+    /// Get matured staked outputs (lock period expired, still
+    /// unspent).
+    pub fn matured_staked_outputs(&self, current_height: u64) -> Vec<&TransferDetails> {
+        self.transfers
+            .iter()
+            .filter(|td| td.is_matured_stake(current_height) && !td.spent)
+            .collect()
+    }
+
+    /// Get locked staked outputs (still within lock period).
+    pub fn locked_staked_outputs(&self, current_height: u64) -> Vec<&TransferDetails> {
+        self.transfers
+            .iter()
+            .filter(|td| td.is_locked_stake(current_height) && !td.spent)
+            .collect()
+    }
+
+    /// Get spendable outputs with optional subaddress / amount
+    /// filters.
+    ///
+    /// Only returns outputs where `current_height >= eligible_height`
+    /// — the daemon has no curve-tree path for immature outputs, so
+    /// attempting to spend them would fail at FCMP++ proof generation.
+    pub fn spendable_outputs(
+        &self,
+        current_height: u64,
+        subaddress: Option<SubaddressIndex>,
+        min_amount: Option<u64>,
+    ) -> Vec<(usize, &TransferDetails)> {
+        self.transfers
+            .iter()
+            .enumerate()
+            .filter(|(_, td)| {
+                if !td.is_spendable(current_height) {
+                    return false;
+                }
+                if let Some(sub) = subaddress {
+                    if td.subaddress != Some(sub) {
+                        return false;
+                    }
+                }
+                if let Some(min) = min_amount {
+                    if td.amount() < min {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect()
+    }
+
+    // -- Mutators on transfer-only state ------------------------------------
+
+    /// Get a mutable reference to a transfer by index. The caller is
+    /// responsible for invoking
+    /// [`crate::ledger_indexes::LedgerIndexes::check_after_mutation`]
+    /// once finished if the mutation could disturb an indexed field
+    /// (`key`, `key_image`).
+    pub fn transfer_mut(&mut self, idx: usize) -> Option<&mut TransferDetails> {
+        self.transfers.get_mut(idx)
+    }
+
+    /// Set staking info for a transfer at the given index.
+    pub fn set_staking_info(&mut self, transfer_idx: usize, tier: u8) {
+        if let Some(td) = self.transfers.get_mut(transfer_idx) {
+            td.staked = true;
+            td.stake_tier = tier;
+            let lock_blocks = shekyl_staking::tiers::tier_by_id(tier)
+                .map(|t| t.lock_blocks)
+                .unwrap_or(0);
+            td.stake_lock_until = td.block_height + lock_blocks;
+        }
+    }
+
+    /// Update the claim watermark for a staked output identified by
+    /// global output index. No-op if no staked output matches.
+    pub fn update_claim_watermark(&mut self, global_output_index: u64, to_height: u64) {
+        for td in &mut self.transfers {
+            if td.staked && td.global_output_index == global_output_index {
+                td.last_claimed_height = to_height;
+                return;
+            }
+        }
+    }
+
+    /// Freeze an output by its [`Self::transfers`] index, preventing
+    /// it from being selected for spending.
+    pub fn freeze(&mut self, transfer_idx: usize) -> bool {
+        if let Some(td) = self.transfers.get_mut(transfer_idx) {
+            td.frozen = true;
+            return true;
+        }
+        false
+    }
+
+    /// Thaw a frozen output by its [`Self::transfers`] index.
+    pub fn thaw(&mut self, transfer_idx: usize) -> bool {
+        if let Some(td) = self.transfers.get_mut(transfer_idx) {
+            td.frozen = false;
+            return true;
+        }
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +413,7 @@ mod tests {
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000_000 + u64::from(seed)),
-            subaddress: SubaddressIndex::new(0, u32::from(seed)),
+            subaddress: Some(SubaddressIndex::new(u32::from(seed))),
             payment_id: Some(PaymentId([seed; 8])),
             spent: false,
             spent_height: None,

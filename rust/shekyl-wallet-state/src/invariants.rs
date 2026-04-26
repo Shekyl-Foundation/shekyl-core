@@ -52,7 +52,7 @@
 //! commit-3.2 benchmark — far below the Argon2id cost already paid on
 //! the open path, and not a concern for any `crypto_bench_*` threshold.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashSet};
 
 use crate::{
     bookkeeping_block::BookkeepingBlock, error::WalletLedgerError, ledger_block::LedgerBlock,
@@ -203,22 +203,20 @@ fn check_tx_keys_no_orphans(
     Ok(())
 }
 
-/// I-3. For every account major index `m` that appears in
-/// `bookkeeping.subaddress_registry`, the set of minor indices
-/// `{n : (m, n) registered}` must be contiguous — no gaps between the
-/// observed minimum and maximum. Shekyl's subaddress generation walks
-/// the minor axis monotonically and never deletes a prior entry; a
-/// hole is therefore evidence that either a registry entry was lost
-/// after generation (corruption) or two processes raced on the same
-/// registry (bug we have not yet written, but would like the
-/// check to catch on sight).
+/// I-3. The set of indices that appears in
+/// `bookkeeping.subaddress_registry` must be contiguous — no gaps
+/// between the observed minimum and maximum. Shekyl's subaddress
+/// generation walks the index axis monotonically and never deletes a
+/// prior entry; a hole is therefore evidence that either a registry
+/// entry was lost after generation (corruption) or two processes
+/// raced on the same registry (bug we have not yet written, but
+/// would like the check to catch on sight).
 ///
-/// The check permits the observed minimum to be anything — account 0
-/// never carries `(0, 0)` because [`crate::subaddress::SubaddressIndex`]
-/// refuses to construct it, and other accounts may legitimately start
-/// their registry at a non-zero minor if the wallet only ever generated
-/// subaddresses beyond the lookahead window. What cannot happen
-/// under normal generation is a hole *inside* the observed range.
+/// The check permits the observed minimum to be anything: a wallet
+/// that has only ever generated subaddresses beyond the lookahead
+/// window may legitimately start its registry at a non-zero index.
+/// What cannot happen under normal generation is a hole *inside* the
+/// observed range.
 fn check_subaddress_registry_dense(
     bookkeeping: &BookkeepingBlock,
 ) -> Result<(), WalletLedgerError> {
@@ -226,48 +224,43 @@ fn check_subaddress_registry_dense(
         return Ok(());
     }
 
-    let mut per_account: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
-    for idx in bookkeeping.subaddress_registry.values() {
-        per_account
-            .entry(idx.account())
-            .or_default()
-            .insert(idx.address());
-    }
+    let indices: BTreeSet<u32> = bookkeeping
+        .subaddress_registry
+        .values()
+        .map(crate::subaddress::SubaddressIndex::get)
+        .collect();
 
-    for (account, minors) in &per_account {
-        // `BTreeSet` iteration is sorted; use first/last as the observed range.
-        let Some(&min) = minors.iter().next() else {
-            continue;
-        };
-        let Some(&max) = minors.iter().next_back() else {
-            continue;
-        };
-        let expected_len = u64::from(max - min) + 1;
-        if (minors.len() as u64) != expected_len {
-            // Find the first gap so the diagnostic is pointed. Walk
-            // the sorted set in lockstep with the expected sequence
-            // `min, min+1, …`; the first mismatch is the hole.
-            let mut expected = min;
-            let gap = minors
-                .iter()
-                .find_map(|&n| {
-                    if n == expected {
-                        expected = expected.saturating_add(1);
-                        None
-                    } else {
-                        Some(expected)
-                    }
-                })
-                .unwrap_or(min);
-            return Err(invariant_error(
-                INV_SUBADDRESS_REGISTRY_DENSE,
-                format!(
-                    "account {account}: subaddress registry is not dense in [{min}, {max}]; \
-                     missing minor index {gap} (observed {count} of expected {expected_len})",
-                    count = minors.len()
-                ),
-            ));
-        }
+    let Some(&min) = indices.iter().next() else {
+        return Ok(());
+    };
+    let Some(&max) = indices.iter().next_back() else {
+        return Ok(());
+    };
+    let expected_len = u64::from(max - min) + 1;
+    if (indices.len() as u64) != expected_len {
+        // Find the first gap so the diagnostic is pointed. Walk
+        // the sorted set in lockstep with the expected sequence
+        // `min, min+1, …`; the first mismatch is the hole.
+        let mut expected = min;
+        let gap = indices
+            .iter()
+            .find_map(|&n| {
+                if n == expected {
+                    expected = expected.saturating_add(1);
+                    None
+                } else {
+                    Some(expected)
+                }
+            })
+            .unwrap_or(min);
+        return Err(invariant_error(
+            INV_SUBADDRESS_REGISTRY_DENSE,
+            format!(
+                "subaddress registry is not dense in [{min}, {max}]; \
+                 missing index {gap} (observed {count} of expected {expected_len})",
+                count = indices.len()
+            ),
+        ));
     }
     Ok(())
 }
@@ -419,7 +412,7 @@ mod tests {
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000),
-            subaddress: SubaddressIndex::new(0, u32::from(seed).saturating_add(1)),
+            subaddress: Some(SubaddressIndex::new(u32::from(seed).saturating_add(1))),
             payment_id: None,
             spent: false,
             spent_height: None,
@@ -566,11 +559,11 @@ mod tests {
 
     #[test]
     fn sparse_subaddress_registry_is_refused() {
-        // Account 0 with minors {1, 2, 4} — missing `3` inside the range.
+        // Indices {1, 2, 4} — missing `3` inside the range.
         let mut registry = BTreeMap::new();
-        registry.insert([1u8; 32], SubaddressIndex::new(0, 1).unwrap());
-        registry.insert([2u8; 32], SubaddressIndex::new(0, 2).unwrap());
-        registry.insert([4u8; 32], SubaddressIndex::new(0, 4).unwrap());
+        registry.insert([1u8; 32], SubaddressIndex::new(1));
+        registry.insert([2u8; 32], SubaddressIndex::new(2));
+        registry.insert([4u8; 32], SubaddressIndex::new(4));
         let bookkeeping = BookkeepingBlock {
             block_version: BookkeepingBlock::empty().block_version,
             subaddress_registry: registry,
@@ -590,14 +583,15 @@ mod tests {
 
     #[test]
     fn dense_subaddress_registry_is_accepted() {
-        // Account 0 starts at minor 1 (the `(0, 0)` slot is reserved).
-        // Account 2 starts at minor 0 (primary subaddress of a non-zero account).
+        // Indices {1, 2, 3, 4, 5} — gap-free across the observed range.
+        // The primary index (0) is permitted as a registry entry but is
+        // not required to be present.
         let mut registry = BTreeMap::new();
-        registry.insert([1u8; 32], SubaddressIndex::new(0, 1).unwrap());
-        registry.insert([2u8; 32], SubaddressIndex::new(0, 2).unwrap());
-        registry.insert([3u8; 32], SubaddressIndex::new(0, 3).unwrap());
-        registry.insert([4u8; 32], SubaddressIndex::new(2, 0).unwrap());
-        registry.insert([5u8; 32], SubaddressIndex::new(2, 1).unwrap());
+        registry.insert([1u8; 32], SubaddressIndex::new(1));
+        registry.insert([2u8; 32], SubaddressIndex::new(2));
+        registry.insert([3u8; 32], SubaddressIndex::new(3));
+        registry.insert([4u8; 32], SubaddressIndex::new(4));
+        registry.insert([5u8; 32], SubaddressIndex::new(5));
         let bookkeeping = BookkeepingBlock {
             block_version: BookkeepingBlock::empty().block_version,
             subaddress_registry: registry,

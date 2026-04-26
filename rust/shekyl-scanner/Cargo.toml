@@ -42,9 +42,10 @@ proptest = "1"
 
 # Hardening-pass commit 2 (`docs/MID_REWIRE_HARDENING.md` §3.2):
 # criterion + iai-callgrind harness for the `scan_block_K` path.
-# Benches exercise `RuntimeWalletState::process_scanned_outputs` — the
+# Benches exercise `LedgerIndexes::process_scanned_outputs` — the
 # scanner's non-crypto bookkeeping path — over K synthetic owned
-# outputs built via the crate's own `test-utils` constructors. The
+# outputs built via the crate's own `test-utils` constructors,
+# operating on a fresh `(LedgerBlock, LedgerIndexes)` pair. The
 # FCMP++/KEM output-recovery portion is separately covered by
 # `shekyl-crypto-pq/benches/pqc_rederivation.rs`; the two together span
 # the "owned output lands in wallet state" pipeline.

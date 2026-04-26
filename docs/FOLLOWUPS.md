@@ -9,6 +9,108 @@ citing in a review.
 
 ---
 
+## V3.0 — wallet stack greenfield Rust rewrite
+
+- **View/HW lifecycle bodies in `shekyl-wallet-core`.**
+  `Wallet::open_view_only` and `Wallet::open_hardware_offload` ship as
+  signature stubs that return `OpenError::CapabilityNotYetImplemented`
+  pending the matching `shekyl-crypto-pq` `AllKeysBlob` constructors
+  (a view-only constructor that omits `spend_sk` and `ml_kem_dk`; a
+  hardware-offload constructor that additionally retains the device
+  descriptor). When those constructors land, the stub bodies are
+  replaced with end-to-end paths mirroring `open_full` (envelope open
+  → rederivation inputs extraction → blob population from the
+  per-capability constructor → public-bytes cross-check against the
+  envelope's expected classical address → prefs load → ledger and
+  indexes assembly), and `OpenError::CapabilityNotYetImplemented` is
+  deleted from `error.rs` in the same commit. The variant carries a
+  doc comment naming this follow-up explicitly so the deletion target
+  is grep-able from the code site, not only from this file. Target:
+  V3.0.
+
+- **`Wallet::change_password` integration tests against
+  `WalletFile::rotate_password`.** The lifecycle commit's unit tests
+  for `change_password` exercise the orchestrator path (rotate, then
+  reopen with the new password and refuse the old one) but rely on
+  `WalletFile::rotate_password`'s own test coverage for the underlying
+  envelope rewrap correctness. A small integration suite in
+  `shekyl-wallet-core` should drive `change_password` against a real
+  on-disk wallet across all three capabilities (FULL today; ViewOnly /
+  HardwareOffload once their `open_*` bodies land), verifying that the
+  rotated envelope round-trips against an independently-constructed
+  `WalletFile::open` call rather than only against `Wallet::open_full`.
+  This pins the full I/O ↔ KDF ↔ AEAD chain at the orchestrator layer.
+  Target: V3.0.
+
+- **`apply_scan_result` strict-contract enforcement (refresh commit).**
+  PR #16 Copilot review surfaced two defensive-coding gaps in
+  `rust/shekyl-wallet-core/src/wallet/merge.rs`:
+  (1) `block_hashes` is collected into a `BTreeMap` via
+  `BTreeMap::insert`, which silently overwrites duplicate height
+  entries instead of rejecting them; (2) `new_transfers` /
+  `spent_key_images` / `block_hashes` entries with heights outside
+  `processed_height_range` are silently dropped at scope end (the
+  per-height `BTreeMap::remove` loop only consumes in-range entries,
+  leaving any out-of-range residue to fall off the stack
+  uninspected). Both cases are scanner-bug signals that should
+  surface as `RefreshError::ConcurrentMutation` rather than mask
+  silently. Fix on the refresh commit (next on the Phase 1 plan
+  after lifecycle): pre-validate `block_hashes` for in-range +
+  no-duplicates, and post-loop assert the per-height maps are empty.
+  The current shape is safe given the in-tree scanner is the only
+  producer, but the audited mutation point is the right place to
+  pin the contract. Tests: duplicate-height rejection, out-of-range
+  transfer rejection, out-of-range key-image rejection. Target: V3.0.
+
+- **Phase 1 bench harness rewire post-`RuntimeWalletState` fold.**
+  Cross-cutting lock 5 (commit `5ee692691`, "wallet: fold
+  `RuntimeWalletState` into `LedgerBlock` + `LedgerIndexes`") split
+  the legacy combined struct, deleted
+  `rust/shekyl-wallet-state/src/runtime_state.rs`, and renamed
+  `shekyl-scanner/src/runtime_ext.rs` → `ledger_ext.rs`. Four of the
+  five iai-callgrind targets in `scripts/bench/capture_rust_baseline.sh`
+  no longer compile against the post-fold APIs:
+  `shekyl-wallet-state::ledger`, `shekyl-wallet-state::balance`,
+  `shekyl-scanner::scan_block`, and `shekyl-tx-builder::transfer_e2e`.
+  Surfaced first as the PR #16 `benchmarks.yml` `capture-pr` job
+  failing with cargo exit code 101 (compile-time, not threshold). The
+  fifth target (`shekyl-wallet-file::open`) is unaffected. Rewire on
+  a `chore/bench-rewire-phase1` branch off `dev` after PR #16 merges,
+  single-concern commit, no review surface beyond the bench files;
+  re-seed `bench-baseline/baseline.json` from a clean run on the
+  reference machine once the harnesses build. Blocks the
+  per-PR perf-regression gate from producing a real verdict on
+  `shekyl-wallet-state`-touching PRs until cleared. Target: V3.0.
+
+- **Revisit `rust/hard-coded-cryptographic-value` CodeQL suppression
+  when the Rust extractor gains `cfg(test)` awareness.** The repo-wide
+  suppression added in `.github/codeql/config.yml` (commit
+  `fb53977b9`) is the pragmatic answer to the CodeQL Rust extractor
+  not distinguishing `#[cfg(test)]` items from production code. In
+  shekyl-core, test fixtures (test vectors, password literals) live
+  in production source files — e.g. the bottom ~380 lines of
+  `rust/shekyl-wallet-core/src/wallet/lifecycle.rs` are inside
+  `#[cfg(test)] mod tests { ... }` — so workflow-level
+  `paths-ignore` cannot carve them out at file granularity (the
+  alternative Copilot suggested in the PR #16 review). The
+  defense-in-depth that backs the suppression — `Credentials::password_only`
+  as the only constructor for authentication material,
+  `.zeroize-allowlist` + the `zeroize-check.yml` workflow audit, and
+  the wallet-file Argon2id → SHA3-256 → ChaCha20-Poly1305 envelope
+  — catches hard-coded production credentials at three stronger
+  layers than a single string-literal lint. **Revisit condition**: a
+  CodeQL release whose Rust extractor distinguishes `cfg(test)`
+  items, at which point the repo-wide `exclude:` in
+  `.github/codeql/config.yml` is replaced with a precise
+  `cfg(test)`-aware filter and production coverage is restored.
+  Track CodeQL release notes for "Rust" + "test" extractor
+  capabilities; this rule is also visible at
+  `https://codeql.github.com/codeql-query-help/rust/rust-hard-coded-cryptographic-value/`.
+  Target: V3.0 if the upstream change lands in time, otherwise
+  rolled into the V3.1 audit-response cleanup batch.
+
+---
+
 ## V3.1 — audit response and stressnet gates
 
 - **PQC Multisig V3.1: external adversarial review (Phase 5).**
@@ -95,6 +197,48 @@ citing in a review.
   `fcmp_verification_hash`) are internal to `tx_pool.cpp` with no RPC
   exposure. The stressnet wallet exerciser (`shekyl-dev/stressnet/`) uses
   block validation p95 as an indirect proxy until this endpoint exists.
+
+- **MFA / hardware-token integration for wallet file decryption.**
+  V3.0 ships with password-only authentication on the wallet file
+  envelope. V3.1 adds an optional FIDO2 / WebAuthn capability where
+  the file's encryption KEK is derived from
+  `KDF(password, fido2_assertion)` rather than `KDF(password)` alone:
+  without the hardware token, the wallet file cannot be decrypted
+  regardless of password. This defends against the threat model that
+  matters most for a privacy-focused wallet — a host compromised by
+  malware capable of keylogging the password — for which plain
+  password-at-open offers zero protection. Specifically: the V3.1
+  design uses the CTAP2 `hmac-secret` extension to bind the KEK to a
+  registered credential.
+
+  **Format.** The V3.0 wallet file format does not reserve fields for
+  MFA. V3.1 introduces them via a format-version bump, mirroring the
+  precedent already encoded in `docs/WALLET_FILE_FORMAT_V1.md` for
+  multisig (`CAPABILITY_RESERVED_MULTISIG = 0x04` and the
+  forward-looking `wrap_count` reserved byte). Two paths are open:
+  V3.1 either re-uses one of those slots (for example, treating the
+  hardware-token requirement as a wrap-count discriminator) or adds a
+  new capability mode behind the same format-version bump. The
+  decision lands when the V3.1 design starts.
+
+  **Recovery model.** Seed-phrase restoration is the canonical
+  recovery path for token loss: lose the FIDO2 token, restore the
+  wallet from BIP-39, pair a new token. Multi-token enrollment (N
+  tokens, any of which can decrypt) is a possible enhancement
+  deferred to V3.2 if the V3.1 single-token UX surfaces sufficient
+  friction. The V3.1 design discussion starts from "single-token +
+  seed-phrase recovery" as the default; do not relitigate.
+
+  **Forward compatibility.** The lifecycle commit ships
+  `Credentials<'_>` as the parameter type for every lifecycle entry
+  point (`Wallet::create`, `open_full`, `open_view_only`,
+  `open_hardware_offload`, `change_password`, `close`). Today the
+  struct has a single private `password` field reachable through
+  `Credentials::password_only(...)` / `.password()`. V3.1 adds an
+  `authenticator: Option<AuthenticatorRequest<'_>>` field and a
+  sibling `Credentials::password_with_authenticator(pwd, auth)`
+  constructor; existing `password_only` call sites compile unchanged.
+  Target: V3.1.
 
 ---
 
@@ -425,6 +569,19 @@ one place to confirm each item's relationship to the wallet stack.
   No incremental in-`wallet2.cpp` work is planned between now and
   Phase 5. **Target: V3.1.x (Rust wallet stack feature parity →
   C++ deletion).**
+
+  **Phase 5 inventory pre-emptions.** Individual items from the
+  Phase 5 deletion inventory may be deleted earlier when their
+  callers are conclusively gone (zero `.cpp` callers per `git grep`,
+  evidence in PR description). The rule and its first application are
+  pinned in `docs/V3_WALLET_DECISION_LOG.md` under
+  *"Phase 5 pre-emption rule"*. Items already pre-empted:
+  - `rust/shekyl-ffi/src/wallet_ledger_ffi.rs` — the typed
+    cache-handle FFI surface from sub-commit 2l.a, deleted as part
+    of the Phase 1 `primitives` task on 2026-04-25 once the
+    `SubaddressIndex` flatten work confirmed zero `.cpp` callers
+    had ever materialized. The Phase 5 commit's deletion list
+    drops this file from its enumeration.
 
 - **Hardening-pass commit 8 follow-up: WalletPrefs round-trip
   property test (`2k.a2` deferred test).** The wallet-prefs round-trip

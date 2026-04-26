@@ -1,0 +1,50 @@
+name: "Shekyl CodeQL config"
+
+# ----------------------------------------------------------------------
+# Query suppression rationale
+# ----------------------------------------------------------------------
+#
+# `rust/hard-coded-cryptographic-value` (CWE-321 / CWE-798).
+#
+# Wallet test fixtures throughout `shekyl-wallet-core`, `shekyl-chacha`,
+# and any future crate that exercises a credential / KDF / KEM path
+# necessarily embed literal byte-strings as test vectors and password
+# fixtures (e.g. `b"correct horse battery staple"` inside
+# `#[cfg(test)] mod tests { ... }` blocks, or named test vectors in
+# AEAD / hash specs). The CodeQL Rust extractor does not currently
+# distinguish `cfg(test)`-gated code from production code, so every
+# wallet-touching PR adds a fresh batch of these alerts that have to
+# be dismissed by hand in the security UI. The signal is dominated
+# by test noise.
+#
+# The production guarantees against hard-coded credentials are
+# enforced elsewhere, by stronger mechanisms than a single-line
+# string-literal lint:
+#
+#   1. The `Credentials<'a>` type (see
+#      `rust/shekyl-wallet-core/src/wallet/lifecycle.rs`) is the only
+#      shape the orchestrator accepts for authentication material.
+#      Every construction goes through `Credentials::password_only`
+#      (or, in V3.1, `password_with_authenticator`); no other path
+#      exists.
+#   2. Wallet secret material lives in `Zeroizing<…>` /
+#      `ZeroizeOnDrop` types from `shekyl-crypto-pq`, and the
+#      `.zeroize-allowlist` files plus `zeroize-check.yml`
+#      independently audit that every secret-bearing field is
+#      wiped on drop. A hard-coded production credential would
+#      either fail that audit or never make it past review.
+#   3. The wallet file format wraps the user's passphrase through
+#      Argon2id → SHA3-256 → ChaCha20-Poly1305 (see
+#      `docs/WALLET_FILE_FORMAT_V1.md`); a hard-coded passphrase
+#      would render the wallet's authenticated encryption inert at
+#      a layer the type system can't catch but code review can.
+#
+# Suppressing the query at the config layer keeps the CodeQL signal
+# focused on findings that aren't already enforced by stronger
+# in-tree mechanisms. If the CodeQL Rust extractor gains
+# `cfg(test)` awareness in a future release, revisit this filter
+# and replace it with a path-precise one.
+
+query-filters:
+  - exclude:
+      id: rust/hard-coded-cryptographic-value

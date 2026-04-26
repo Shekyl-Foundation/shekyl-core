@@ -284,7 +284,7 @@ mod tests {
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000_000),
-            subaddress: SubaddressIndex::new(0, 1),
+            subaddress: Some(SubaddressIndex::new(1)),
             payment_id: None,
             spent: false,
             spent_height: None,
