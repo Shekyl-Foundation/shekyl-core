@@ -42,6 +42,26 @@ citing in a review.
   This pins the full I/O ↔ KDF ↔ AEAD chain at the orchestrator layer.
   Target: V3.0.
 
+- **`apply_scan_result` strict-contract enforcement (refresh commit).**
+  PR #16 Copilot review surfaced two defensive-coding gaps in
+  `rust/shekyl-wallet-core/src/wallet/merge.rs`:
+  (1) `block_hashes` is collected into a `BTreeMap` via
+  `BTreeMap::insert`, which silently overwrites duplicate height
+  entries instead of rejecting them; (2) `new_transfers` /
+  `spent_key_images` / `block_hashes` entries with heights outside
+  `processed_height_range` are silently dropped at scope end (the
+  per-height `BTreeMap::remove` loop only consumes in-range entries,
+  leaving any out-of-range residue to fall off the stack
+  uninspected). Both cases are scanner-bug signals that should
+  surface as `RefreshError::ConcurrentMutation` rather than mask
+  silently. Fix on the refresh commit (next on the Phase 1 plan
+  after lifecycle): pre-validate `block_hashes` for in-range +
+  no-duplicates, and post-loop assert the per-height maps are empty.
+  The current shape is safe given the in-tree scanner is the only
+  producer, but the audited mutation point is the right place to
+  pin the contract. Tests: duplicate-height rejection, out-of-range
+  transfer rejection, out-of-range key-image rejection. Target: V3.0.
+
 - **Phase 1 bench harness rewire post-`RuntimeWalletState` fold.**
   Cross-cutting lock 5 (commit `5ee692691`, "wallet: fold
   `RuntimeWalletState` into `LedgerBlock` + `LedgerIndexes`") split

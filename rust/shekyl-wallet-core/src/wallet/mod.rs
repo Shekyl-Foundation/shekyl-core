@@ -44,9 +44,9 @@
 //!
 //! # Cross-cutting locks honored
 //!
-//! Every lock in the rewrite plan
-//! ([`/home/torvaldsl/.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`])
-//! is enforced at the type layer in this module:
+//! Every cross-cutting lock recorded in the in-tree decision log
+//! ([`docs/V3_WALLET_DECISION_LOG.md`]) is enforced at the type layer
+//! in this module:
 //!
 //! 1. **Async runtime** — caller-provided multi-threaded `tokio`. IO-bound
 //!    methods are `async`; pure compute stays sync.
