@@ -3,34 +3,37 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Scanner-side extension traits for wallet-state types.
+//! Scanner-side extension traits for [`LedgerBlock`] and [`LedgerIndexes`].
 //!
-//! The canonical runtime-state types ([`TransferDetails`],
-//! [`RuntimeWalletState`](shekyl_wallet_state::RuntimeWalletState)) live in
-//! `shekyl-wallet-state` so they can be shared with the wallet-file orchestrator
-//! without pulling in the scanner's `Timelocked` / `RecoveredWalletOutput` /
-//! `BalanceSummary` / `ClaimableInfo` universe.
+//! The canonical [`TransferDetails`], [`LedgerBlock`], and
+//! [`LedgerIndexes`] types live in `shekyl-wallet-state` so they can be
+//! shared with the wallet-file orchestrator without pulling in the
+//! scanner's `Timelocked` / `RecoveredWalletOutput` / `BalanceSummary` /
+//! `ClaimableInfo` universe.
 //!
 //! Everything that *does* require those scanner-only types lives here:
 //!
-//! - [`TransferDetailsExt::from_wallet_output`] — build a `TransferDetails` from the
-//!   scanner's [`WalletOutput`], auto-populating staking metadata.
-//! - [`WalletStateExt::process_scanned_outputs`] — ingest a scanned block's
-//!   `Timelocked<RecoveredWalletOutput>` into the runtime state (equivalent to the
-//!   pre-move inherent method on `WalletState`).
-//! - [`WalletStateExt::balance`] — compute a [`BalanceSummary`] from the tracked
-//!   transfers at a chain height.
-//! - [`WalletStateExt::claimable_rewards_summary`] — compute per-staked-output claim
-//!   estimates using the scanner's [`ClaimableInfo`] type.
+//! - [`TransferDetailsExt::from_wallet_output`] — build a `TransferDetails` from
+//!   the scanner's [`WalletOutput`], auto-populating staking metadata.
+//! - [`LedgerIndexesExt::process_scanned_outputs`] — ingest a scanned block's
+//!   `Timelocked<RecoveredWalletOutput>` into a `(LedgerBlock, LedgerIndexes)`
+//!   pair atomically.
+//! - [`LedgerBlockExt::balance`] — compute a [`BalanceSummary`] from the
+//!   tracked transfers at a chain height.
+//! - [`LedgerBlockExt::claimable_rewards_summary`] — compute per-staked-output
+//!   claim estimates using the scanner's [`ClaimableInfo`] type and the
+//!   accrual aggregate held in `LedgerIndexes::staker_pool`.
 //!
-//! Call sites must have these traits **in scope** for the `TransferDetails::from_…`
-//! and `ws.balance(…)` / `ws.process_scanned_outputs(…)` call syntax to resolve. The
-//! crate re-exports both traits from `lib.rs` so
-//! `use shekyl_scanner::{TransferDetailsExt, WalletStateExt};` is the canonical import.
+//! Call sites must have these traits **in scope** for the
+//! `TransferDetails::from_…` and `ledger.balance(…)` /
+//! `indexes.process_scanned_outputs(&mut ledger, …)` call syntax to resolve.
+//! The crate re-exports all three traits from `lib.rs` so
+//! `use shekyl_scanner::{TransferDetailsExt, LedgerBlockExt, LedgerIndexesExt};`
+//! is the canonical import.
 
 use zeroize::Zeroizing;
 
-use shekyl_wallet_state::{RuntimeWalletState, TransferDetails, SPENDABLE_AGE};
+use shekyl_wallet_state::{LedgerBlock, LedgerIndexes, TransferDetails, SPENDABLE_AGE};
 
 use crate::{
     balance::BalanceSummary, claim::ClaimableInfo, output::WalletOutput, scan::Timelocked,
@@ -87,9 +90,10 @@ impl TransferDetailsExt for TransferDetails {
     }
 }
 
-/// Extension methods for [`RuntimeWalletState`] that depend on scanner-only types.
-pub trait WalletStateExt {
-    /// Process scanned outputs from a block, adding new transfers.
+/// Extension methods for [`LedgerIndexes`] that depend on scanner-only types.
+pub trait LedgerIndexesExt {
+    /// Process scanned outputs from a block, adding new transfers to the
+    /// [`LedgerBlock`] and the lookup indexes maintained here.
     ///
     /// Populates PQC fields (`ho`, `y`, `z`, `k_amount`, `combined_shared_secret`,
     /// `key_image`) from the [`RecoveredWalletOutput`](crate::scan::RecoveredWalletOutput)
@@ -98,31 +102,17 @@ pub trait WalletStateExt {
     /// added (duplicates from the burning-bug guard are dropped).
     fn process_scanned_outputs(
         &mut self,
+        ledger: &mut LedgerBlock,
         block_height: u64,
         block_hash: [u8; 32],
         outputs: Timelocked,
     ) -> usize;
-
-    /// Compute a balance summary at the given chain height.
-    fn balance(&self, current_height: u64) -> BalanceSummary;
-
-    /// Compute a summary of claimable rewards for all staked outputs.
-    ///
-    /// `weight_fn` computes the tier-weighted stake for each output.
-    /// `max_claim_range` is the protocol's `MAX_CLAIM_RANGE` constant.
-    fn claimable_rewards_summary<F>(
-        &self,
-        current_height: u64,
-        weight_fn: F,
-        max_claim_range: u64,
-    ) -> Vec<(ClaimableInfo, u64)>
-    where
-        F: Fn(u64, u8) -> u64;
 }
 
-impl WalletStateExt for RuntimeWalletState {
+impl LedgerIndexesExt for LedgerIndexes {
     fn process_scanned_outputs(
         &mut self,
+        ledger: &mut LedgerBlock,
         block_height: u64,
         block_hash: [u8; 32],
         outputs: Timelocked,
@@ -144,15 +134,42 @@ impl WalletStateExt for RuntimeWalletState {
             batch.push(td);
         }
 
-        self.ingest_block(block_height, block_hash, batch)
+        self.ingest_block(ledger, block_height, block_hash, batch)
     }
+}
 
+/// Extension methods for [`LedgerBlock`] that depend on scanner-only types.
+pub trait LedgerBlockExt {
+    /// Compute a balance summary at the given chain height.
+    fn balance(&self, current_height: u64) -> BalanceSummary;
+
+    /// Compute a summary of claimable rewards for all staked outputs.
+    ///
+    /// `weight_fn` computes the tier-weighted stake for each output.
+    /// `max_claim_range` is the protocol's `MAX_CLAIM_RANGE` constant.
+    /// The accrual aggregate lives on [`LedgerIndexes::staker_pool`] and is
+    /// rebuilt by scanner replay at wallet open — see the module-level
+    /// docs on [`crate::ledger_indexes`](shekyl_wallet_state::ledger_indexes)
+    /// for why it is not persisted.
+    fn claimable_rewards_summary<F>(
+        &self,
+        indexes: &LedgerIndexes,
+        current_height: u64,
+        weight_fn: F,
+        max_claim_range: u64,
+    ) -> Vec<(ClaimableInfo, u64)>
+    where
+        F: Fn(u64, u8) -> u64;
+}
+
+impl LedgerBlockExt for LedgerBlock {
     fn balance(&self, current_height: u64) -> BalanceSummary {
         BalanceSummary::compute(self.transfers(), current_height)
     }
 
     fn claimable_rewards_summary<F>(
         &self,
+        indexes: &LedgerIndexes,
         current_height: u64,
         weight_fn: F,
         max_claim_range: u64,
@@ -164,7 +181,7 @@ impl WalletStateExt for RuntimeWalletState {
         for (idx, td) in self.transfers().iter().enumerate() {
             if let Some(info) = ClaimableInfo::from_transfer(td, idx, current_height) {
                 let weight = weight_fn(td.amount(), td.stake_tier);
-                let (reward, _chunks) = self.staker_pool().estimate_reward_with_splitting(
+                let (reward, _chunks) = indexes.staker_pool().estimate_reward_with_splitting(
                     info.from_height,
                     info.to_height,
                     weight,

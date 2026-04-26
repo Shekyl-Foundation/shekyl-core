@@ -173,9 +173,9 @@ pub fn select_outputs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime_ext::TransferDetailsExt;
+    use crate::ledger_ext::TransferDetailsExt;
     use crate::tests::staking::make_wallet_output;
-    use crate::transfer::TransferDetails;
+    use shekyl_wallet_state::TransferDetails;
 
     fn make_candidate(global_idx: u64, amount: u64, height: u64) -> TransferDetails {
         let mut tx_hash = [0u8; 32];

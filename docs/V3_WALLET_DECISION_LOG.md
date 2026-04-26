@@ -1396,38 +1396,64 @@ this builds on.
 ## 2026-04-25 — `RuntimeWalletState` audit: full fold, derived indexes rebuilt at open
 
 **Decision.** `RuntimeWalletState` (`rust/shekyl-wallet-state/src/runtime_state.rs`)
-ceases to exist as a named type. Its only structural content beyond
-the persisted `WalletLedger` is two derived indexes:
+ceases to exist as a named type. The fields it carries beyond the
+persisted `WalletLedger` split into two groups:
 
-- `key_images: HashMap<[u8; 32], usize>` — maps each spent key image
-  to the `transfers` index of the enote it belongs to.
-- `pub_keys: HashMap<[u8; 32], usize>` — maps each known one-time
-  output public key to its `transfers` index.
+*Already covered by the on-disk bundle* (no change needed; just stop
+duplicating them):
+- `transfers: Vec<TransferDetails>` → `WalletLedger.ledger.transfers`
+- `synced_height: u64` → `WalletLedger.ledger.tip.synced_height`
+- `blockchain: Vec<(u64, [u8; 32])>` → `WalletLedger.ledger.reorg_blocks.blocks`
 
-Both are derivable from the authoritative ledger state (each enote in
-`transfers` already carries its `pub_key` and, for spent enotes, the
-`key_image`). They exist solely to make `process_block` / `unmark_spent`
-/ `detect_spends` lookups O(1) instead of O(n).
+*Runtime-only state derived from chain replay* (the new
+`LedgerIndexes` home):
+- `key_images: HashMap<[u8; 32], usize>` — lookup index from
+  key-image bytes to `LedgerBlock.transfers` index.
+- `pub_keys: HashMap<[u8; 32], usize>` — lookup index from output
+  public-key bytes to `LedgerBlock.transfers` index.
+- `staker_pool: StakerPoolState` — aggregated stake-tier accrual
+  state. `LEDGER_BLOCK_VERSION = 1` deliberately omits its
+  persistence per the staking design notes; it is rebuilt by
+  scanner replay just like the lookup indexes.
+
+The two-group split matters because the unifying principle for
+`LedgerIndexes` is **"computed at scan time, not persisted, rebuilt
+on every open"** — the lookup indexes happen to be hash maps and
+`staker_pool` happens to be aggregated state, but both are
+reconstructible from `LedgerBlock` plus daemon block replay. A
+field that needs persistence is a `LedgerBlock` change (and bumps
+`LEDGER_BLOCK_VERSION`), not a `LedgerIndexes` change.
 
 The fold:
 
-1. Promote both indexes into a new `pub(crate) struct LedgerIndexes`
-   (or `RuntimeIndexes`; final naming is implementation-trivial)
+1. Promote the runtime-only group into a new `pub struct LedgerIndexes`
    that **lives on `Wallet`**, not on `WalletLedger`. The struct is
    not `Serialize` / `Deserialize`. It is rebuilt from
-   `WalletLedger.bookkeeping.transfers` at `Wallet::open*` time, and
-   maintained in lock-step with mutations through a `Wallet`-private
-   helper that wraps every ledger write.
-2. The block-processing methods (`process_block`, `unmark_spent`,
-   `detect_spends`, `pop_block`) move from `RuntimeWalletState` to
-   `Wallet` (or to a `pub(crate)` ledger-mutation helper that takes
-   `&mut WalletLedger` plus `&mut LedgerIndexes` and updates both in
-   the same call).
-3. The `pub use crate::runtime_state::RuntimeWalletState as WalletState`
-   transitional alias is deleted; nothing outside the crate depends
-   on the old name.
-4. `runtime_state.rs` is deleted as a module; its tests are absorbed
-   into the new mutation-helper's test module under `wallet/`.
+   `WalletLedger.ledger.transfers` (plus daemon replay for
+   `staker_pool` accruals) at `Wallet::open*` time, and maintained
+   in lock-step with mutations through a single mutation-helper
+   surface that wraps every ledger write.
+2. The block-processing methods (`ingest_block`, `mark_spent`,
+   `unmark_spent`, `detect_spends`, `set_key_image`, `handle_reorg`,
+   `insert_accrual`, `freeze_by_key_image`, `thaw_by_key_image`)
+   move from `RuntimeWalletState` to `LedgerIndexes`, taking
+   `&mut self, ledger: &mut LedgerBlock, …` so a single call updates
+   both ledger state and indexes atomically. Methods that don't
+   touch indexes (`freeze`, `thaw`, `set_staking_info`,
+   `update_claim_watermark`) move to inherent methods on
+   `LedgerBlock` and don't borrow `LedgerIndexes` at all.
+3. Read-only query methods (`unspent_transfers`, `staked_outputs`,
+   `matured_staked_outputs`, `locked_staked_outputs`,
+   `claimable_outputs`, `unstakeable_outputs`, `spendable_outputs`,
+   `block_hash_at`, `height`, `transfer_count`) move to inherent
+   methods on `LedgerBlock`. The single read-only query that needs
+   indexes (`staker_pool`) is an accessor on `LedgerIndexes`.
+4. The `pub use crate::runtime_state::RuntimeWalletState as WalletState`
+   transitional alias and the `wallet_state` re-export shim in
+   `shekyl-scanner` are deleted; nothing outside the workspace
+   depends on the old name.
+5. `runtime_state.rs` is deleted as a module; its inherent-test
+   coverage is absorbed into `ledger_indexes::tests`.
 
 **Rationale.** Two principles converge on this shape:
 

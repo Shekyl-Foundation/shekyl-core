@@ -16,11 +16,12 @@ use tracing::debug;
 
 #[cfg(feature = "rust-scanner")]
 use crate::scanner_state::ScannerState;
-// Scanner-side extension traits for `state.balance(…)` and friends must be in
-// scope at the call site since the canonical types now live in
-// `shekyl-wallet-state` while these methods live in `shekyl-scanner::runtime_ext`.
+// Scanner-side extension trait for `ledger.balance(…)`. Brings the
+// scanner-only `BalanceSummary` integration into scope; the canonical
+// `LedgerBlock` / `LedgerIndexes` types and their method surface live in
+// `shekyl-wallet-state` and don't need a separate use here.
 #[cfg(feature = "rust-scanner")]
-use shekyl_scanner::WalletStateExt;
+use shekyl_scanner::LedgerBlockExt;
 
 /// Methods handled by the Rust scanner when the `rust-scanner` feature is active.
 #[cfg(feature = "rust-scanner")]
@@ -93,13 +94,21 @@ fn dispatch_scanner_method(
 }
 
 #[cfg(feature = "rust-scanner")]
-fn scanner_get_balance(scanner: &ScannerState, _params: Value) -> Result<Value, WalletError> {
-    let state = scanner.state.lock().map_err(|e| WalletError {
+fn lock_state(
+    scanner: &ScannerState,
+) -> Result<std::sync::MutexGuard<'_, crate::scanner_state::LiveLedger>, WalletError> {
+    scanner.state.lock().map_err(|e| WalletError {
         code: -1,
         message: format!("scanner lock poisoned: {e}"),
-    })?;
-    let height = state.height();
-    let summary = state.balance(height);
+    })
+}
+
+#[cfg(feature = "rust-scanner")]
+fn scanner_get_balance(scanner: &ScannerState, _params: Value) -> Result<Value, WalletError> {
+    let state = lock_state(scanner)?;
+    let (ledger, _indexes) = &*state;
+    let height = ledger.height();
+    let summary = ledger.balance(height);
     serde_json::to_value(&summary).map_err(|e| WalletError {
         code: -1,
         message: format!("JSON serialization error: {e}"),
@@ -108,11 +117,8 @@ fn scanner_get_balance(scanner: &ScannerState, _params: Value) -> Result<Value, 
 
 #[cfg(feature = "rust-scanner")]
 fn scanner_get_height(scanner: &ScannerState) -> Result<Value, WalletError> {
-    let state = scanner.state.lock().map_err(|e| WalletError {
-        code: -1,
-        message: format!("scanner lock poisoned: {e}"),
-    })?;
-    Ok(serde_json::json!({ "height": state.height() }))
+    let state = lock_state(scanner)?;
+    Ok(serde_json::json!({ "height": state.0.height() }))
 }
 
 #[cfg(feature = "rust-scanner")]
@@ -120,15 +126,13 @@ fn scanner_get_transfers(scanner: &ScannerState, params: Value) -> Result<Value,
     let want_in = params.get("in").and_then(|v| v.as_bool()).unwrap_or(false);
     let want_out = params.get("out").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    let state = scanner.state.lock().map_err(|e| WalletError {
-        code: -1,
-        message: format!("scanner lock poisoned: {e}"),
-    })?;
+    let state = lock_state(scanner)?;
+    let (ledger, _indexes) = &*state;
 
     let mut result = serde_json::Map::new();
 
     if want_in {
-        let incoming: Vec<Value> = state
+        let incoming: Vec<Value> = ledger
             .transfers()
             .iter()
             .filter(|td| !td.spent)
@@ -138,7 +142,7 @@ fn scanner_get_transfers(scanner: &ScannerState, params: Value) -> Result<Value,
     }
 
     if want_out {
-        let outgoing: Vec<Value> = state
+        let outgoing: Vec<Value> = ledger
             .transfers()
             .iter()
             .filter(|td| td.spent)
@@ -157,13 +161,11 @@ fn scanner_incoming_transfers(scanner: &ScannerState, params: Value) -> Result<V
         .and_then(|v| v.as_str())
         .unwrap_or("all");
 
-    let state = scanner.state.lock().map_err(|e| WalletError {
-        code: -1,
-        message: format!("scanner lock poisoned: {e}"),
-    })?;
-    let height = state.height();
+    let state = lock_state(scanner)?;
+    let (ledger, _indexes) = &*state;
+    let height = ledger.height();
 
-    let transfers: Vec<Value> = state
+    let transfers: Vec<Value> = ledger
         .transfers()
         .iter()
         .filter(|td| match transfer_type {
@@ -179,12 +181,11 @@ fn scanner_incoming_transfers(scanner: &ScannerState, params: Value) -> Result<V
 
 #[cfg(feature = "rust-scanner")]
 fn scanner_get_staked_outputs(scanner: &ScannerState) -> Result<Value, WalletError> {
-    let state = scanner.state.lock().map_err(|e| WalletError {
-        code: -1,
-        message: format!("scanner lock poisoned: {e}"),
-    })?;
+    let state = lock_state(scanner)?;
+    let (ledger, _indexes) = &*state;
+    let height = ledger.height();
 
-    let staked: Vec<Value> = state
+    let staked: Vec<Value> = ledger
         .staked_outputs()
         .iter()
         .map(|td| {
@@ -194,7 +195,7 @@ fn scanner_get_staked_outputs(scanner: &ScannerState) -> Result<Value, WalletErr
                 "amount": td.amount(),
                 "tier": td.stake_tier,
                 "lock_until": td.stake_lock_until,
-                "matured": td.is_matured_stake(state.height()),
+                "matured": td.is_matured_stake(height),
             })
         })
         .collect();
@@ -204,12 +205,10 @@ fn scanner_get_staked_outputs(scanner: &ScannerState) -> Result<Value, WalletErr
 
 #[cfg(feature = "rust-scanner")]
 fn scanner_get_staked_balance(scanner: &ScannerState) -> Result<Value, WalletError> {
-    let state = scanner.state.lock().map_err(|e| WalletError {
-        code: -1,
-        message: format!("scanner lock poisoned: {e}"),
-    })?;
-    let height = state.height();
-    let summary = state.balance(height);
+    let state = lock_state(scanner)?;
+    let (ledger, _indexes) = &*state;
+    let height = ledger.height();
+    let summary = ledger.balance(height);
 
     Ok(serde_json::json!({
         "staked_total": summary.staked_total,
@@ -220,13 +219,11 @@ fn scanner_get_staked_balance(scanner: &ScannerState) -> Result<Value, WalletErr
 
 #[cfg(feature = "rust-scanner")]
 fn scanner_get_claimable_stakes(scanner: &ScannerState) -> Result<Value, WalletError> {
-    let state = scanner.state.lock().map_err(|e| WalletError {
-        code: -1,
-        message: format!("scanner lock poisoned: {e}"),
-    })?;
-    let height = state.height();
+    let state = lock_state(scanner)?;
+    let (ledger, _indexes) = &*state;
+    let height = ledger.height();
 
-    let claimable: Vec<Value> = state
+    let claimable: Vec<Value> = ledger
         .claimable_outputs(height)
         .iter()
         .map(|td| {
@@ -254,13 +251,11 @@ fn scanner_get_claimable_stakes(scanner: &ScannerState) -> Result<Value, WalletE
 
 #[cfg(feature = "rust-scanner")]
 fn scanner_get_unstakeable_outputs(scanner: &ScannerState) -> Result<Value, WalletError> {
-    let state = scanner.state.lock().map_err(|e| WalletError {
-        code: -1,
-        message: format!("scanner lock poisoned: {e}"),
-    })?;
-    let height = state.height();
+    let state = lock_state(scanner)?;
+    let (ledger, _indexes) = &*state;
+    let height = ledger.height();
 
-    let unstakeable: Vec<Value> = state
+    let unstakeable: Vec<Value> = ledger
         .unstakeable_outputs(height)
         .iter()
         .map(|td| {
@@ -279,7 +274,7 @@ fn scanner_get_unstakeable_outputs(scanner: &ScannerState) -> Result<Value, Wall
 }
 
 #[cfg(feature = "rust-scanner")]
-fn scanner_freeze(scanner: &ScannerState, params: Value) -> Result<Value, WalletError> {
+fn parse_key_image(params: &Value) -> Result<[u8; 32], WalletError> {
     let key_image = params
         .get("key_image")
         .and_then(|v| v.as_str())
@@ -299,44 +294,24 @@ fn scanner_freeze(scanner: &ScannerState, params: Value) -> Result<Value, Wallet
     }
     let mut ki = [0u8; 32];
     ki.copy_from_slice(&ki_bytes);
+    Ok(ki)
+}
 
-    let mut state = scanner.state.lock().map_err(|e| WalletError {
-        code: -1,
-        message: format!("scanner lock poisoned: {e}"),
-    })?;
-
-    let frozen = state.freeze_by_key_image(&ki);
+#[cfg(feature = "rust-scanner")]
+fn scanner_freeze(scanner: &ScannerState, params: Value) -> Result<Value, WalletError> {
+    let ki = parse_key_image(&params)?;
+    let mut state = lock_state(scanner)?;
+    let (ledger, indexes) = &mut *state;
+    let frozen = indexes.freeze_by_key_image(ledger, &ki);
     Ok(serde_json::json!({ "frozen": frozen }))
 }
 
 #[cfg(feature = "rust-scanner")]
 fn scanner_thaw(scanner: &ScannerState, params: Value) -> Result<Value, WalletError> {
-    let key_image = params
-        .get("key_image")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| WalletError {
-            code: -1,
-            message: "missing key_image parameter".to_string(),
-        })?;
-    let ki_bytes = hex::decode(key_image).map_err(|e| WalletError {
-        code: -1,
-        message: format!("invalid key_image hex: {e}"),
-    })?;
-    if ki_bytes.len() != 32 {
-        return Err(WalletError {
-            code: -1,
-            message: "key_image must be 32 bytes".to_string(),
-        });
-    }
-    let mut ki = [0u8; 32];
-    ki.copy_from_slice(&ki_bytes);
-
-    let mut state = scanner.state.lock().map_err(|e| WalletError {
-        code: -1,
-        message: format!("scanner lock poisoned: {e}"),
-    })?;
-
-    let thawed = state.thaw_by_key_image(&ki);
+    let ki = parse_key_image(&params)?;
+    let mut state = lock_state(scanner)?;
+    let (ledger, indexes) = &mut *state;
+    let thawed = indexes.thaw_by_key_image(ledger, &ki);
     Ok(serde_json::json!({ "thawed": thawed }))
 }
 

@@ -2,6 +2,58 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`RuntimeWalletState` folded into `LedgerBlock` + `LedgerIndexes`
+  (Phase 1 `runtime_state_audit` task).** The `RuntimeWalletState`
+  type and the transitional `pub use ... as WalletState` re-export
+  are deleted. Its responsibilities split along the persistence
+  boundary:
+
+  - **Persisted, on-disk state** — `transfers`, `synced_height`,
+    `reorg_blocks`, claim watermarks — was already covered by
+    `WalletLedger.ledger` (`LedgerBlock`). Read-only queries
+    (`height`, `transfers`, `unspent_transfers`, `staked_outputs`,
+    `matured_staked_outputs`, `locked_staked_outputs`,
+    `claimable_outputs`, `unstakeable_outputs`, `spendable_outputs`,
+    `block_hash_at`) and transfer-only mutators (`set_staking_info`,
+    `update_claim_watermark`, `freeze`, `thaw`, `transfer_mut`) move
+    to inherent methods on `LedgerBlock`.
+  - **Runtime-only derived state** — the `key_images` and `pub_keys`
+    lookup maps plus the `staker_pool` accrual aggregate — moves to
+    a new `pub struct LedgerIndexes` in
+    `rust/shekyl-wallet-state/src/ledger_indexes.rs`. `LedgerIndexes`
+    is **never serialized**, has no `Serialize` / `Deserialize`
+    derives, and is rebuilt by scanner replay at every wallet open
+    via `LedgerIndexes::rebuild_from_ledger`. Cross-cutting
+    mutations (`ingest_block`, `mark_spent`, `unmark_spent`,
+    `detect_spends`, `set_key_image`, `freeze_by_key_image`,
+    `thaw_by_key_image`, `handle_reorg`, `insert_accrual`) take
+    `&mut self, ledger: &mut LedgerBlock, …` so a single call
+    updates ledger and indexes atomically. Invariant:
+    `LedgerIndexes` is reconstructible from `LedgerBlock` plus
+    daemon block replay; this is enforced by convention (struct
+    doc-comment) rather than by the type system.
+
+  Live wallet state behind a single mutex is the tuple
+  `pub type LiveLedger = (LedgerBlock, LedgerIndexes)` in both
+  `shekyl-wallet-rpc::scanner_state` and the (cfg `rust-scanner`)
+  `shekyl-scanner::sync` background loop. Scanner-specific behavior
+  that needs `Timelocked` / `RecoveredWalletOutput` /
+  `BalanceSummary` / `ClaimableInfo` lives in extension traits in
+  `shekyl-scanner::ledger_ext` (`TransferDetailsExt`,
+  `LedgerIndexesExt`, `LedgerBlockExt`); the canonical
+  `shekyl-wallet-state` crate stays scanner-free. The old
+  `shekyl-scanner::runtime_ext` and `shekyl-scanner::wallet_state`
+  modules are deleted.
+
+  See `docs/V3_WALLET_DECISION_LOG.md` *"`RuntimeWalletState` audit:
+  full fold, derived indexes rebuilt at open"* (2026-04-25); the
+  same commit also corrects two errata in that entry: the persisted
+  transfer path is `WalletLedger.ledger.transfers` (not
+  `bookkeeping.transfers`), and `staker_pool`'s home on
+  `LedgerIndexes` is now pinned explicitly.
+
 ### Documentation
 
 - **Phase 1 sub-decision log entries appended (Phase 1
