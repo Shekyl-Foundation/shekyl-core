@@ -4,6 +4,80 @@
 
 ### Added
 
+- **`Wallet::build_pending_tx` / `submit_pending_tx` / `discard_pending_tx`
+  three-method `PendingTx` lifecycle (Phase 1 `pending_tx` task).** The
+  new
+  [`shekyl_wallet_core::wallet::pending`](../rust/shekyl-wallet-core/src/wallet/pending.rs)
+  module lands the runtime-only side of cross-cutting lock 4. Public
+  surface:
+
+  - `PendingTx { id, built_at_height, built_at_tip_hash, fee_atomic_units,
+    tx_bytes, recipients }` — the chain-state-tagged handle returned by
+    `build_pending_tx`. `tx_bytes` is `Vec::new()` in Phase 1 and is
+    explicitly documented as Phase-2a's integration point for
+    `shekyl-tx-builder`.
+  - `TxRequest { recipients, priority, from_subaddress }`,
+    `TxRecipient { address, amount_atomic_units }`,
+    `FeePriority { Economy, Standard, Priority, Custom(NonZeroU64) }`,
+    `TxRecipientSummary`, `ReservationId(u64)`, `TxHash([u8; 32])` —
+    the strongly-typed input/handle/summary newtypes.
+  - `Wallet::build_pending_tx(&request) -> Result<PendingTx, SendError>` —
+    selects largest-amount-first spendable outputs from
+    `LedgerIndexes`/`LedgerBlock` (excluding outputs already reserved
+    by another in-flight `PendingTx`), captures real chain state
+    (`synced_height` + `block_hash_at(synced_height)`), bumps a
+    monotonic `next_reservation_id`, and inserts a `Reservation` into
+    `Wallet::reservations`. Phase 1 uses a fixed
+    `STUB_FEE_ATOMIC_UNITS = 1_000` stub fee; Phase 2a will replace
+    it with a `daemon.get_fee_estimates()` call.
+  - `Wallet::submit_pending_tx(id) -> Result<TxHash, PendingTxError>` —
+    runs the cross-cutting-lock-4 invariants
+    (`PendingTxError::TooOld { built, current, max_reorg }` against
+    `NetworkSafetyConstants::for_network(network).max_reorg_depth`,
+    `PendingTxError::ChainStateChanged { height }` against the stored
+    `built_at_tip_hash`, `PendingTxError::UnknownHandle` for unknown
+    `id`s), and on success removes the reservation, marks each
+    selected `TransferDetails` as `spent = true` with
+    `spent_height = None` (the "unconfirmed-spent" Phase-1 state, made
+    proper in Phase 2a once daemon broadcast confirmation arrives),
+    and returns a stub `TxHash` whose first 8 bytes encode the
+    `ReservationId`.
+  - `Wallet::discard_pending_tx(id) -> Result<(), PendingTxError>` —
+    idempotent: returns `Ok(())` regardless of whether `id` is
+    currently recognized, releases the reservation entry so the
+    referenced outputs become selectable by a subsequent build.
+  - `Wallet::outstanding_pending_txs() -> usize` — count accessor used
+    by `Wallet::close` (lifecycle commit) to refuse closing while any
+    reservation is active.
+
+  Reservations live exclusively on `Wallet<S>` as a runtime-only
+  `BTreeMap<ReservationId, Reservation>` field alongside the
+  existing runtime-only `indexes: LedgerIndexes`. They are not
+  persisted in `WalletLedger.bookkeeping`; `BOOKKEEPING_BLOCK_VERSION`
+  does not change. Process crash between build and submit/discard
+  drops reservations along with the in-memory `PendingTx` handle —
+  which is the correct behavior, since the tx never broadcast and the
+  outputs are correctly spendable again on next open.
+
+  The full lifecycle body is exposed as `pub(crate)`
+  free helpers (`build_pending_tx_in_state`,
+  `submit_pending_tx_in_state`, `discard_pending_tx_in_state`)
+  operating on `(&LedgerBlock, &mut BTreeMap<ReservationId,
+  Reservation>, ...)` so unit tests can drive the full lifecycle
+  without standing up a `Wallet<S>` (whose constructors land in the
+  lifecycle commit). Twelve unit tests cover output reservation, the
+  reserved-output filter, insufficient-funds, the no-block-yet
+  `SendError::CannotSign`, all three `PendingTxError` paths, the
+  spent-state mutation on submit, the rebuild-after-discard path,
+  discard idempotency on unknown handles, and `FeePriority::Custom`
+  preservation.
+
+  See `docs/V3_WALLET_DECISION_LOG.md` *"Reservation tracker:
+  runtime-only on `Wallet`, never persisted"* (2026-04-26 sub-section
+  of the `Wallet<S>` struct entry) for the runtime-vs-persisted
+  decision and the supersession of the original cross-cutting-lock-4
+  draft phrasing.
+
 - **`shekyl_wallet_core::scan::ScanResult` typed scanner-output value
   and `Wallet::apply_scan_result` merge surface (Phase 1 `scan_result`
   task).** A new

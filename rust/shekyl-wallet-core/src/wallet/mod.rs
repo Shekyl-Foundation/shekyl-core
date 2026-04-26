@@ -82,16 +82,19 @@
 //! struct is composition over field type — every member's purpose,
 //! mutability discipline, and ownership are explicit:
 //!
-//! | Field            | Type                                        | Provenance                      |
-//! | ---------------- | ------------------------------------------- | ------------------------------- |
-//! | `file`           | [`shekyl_wallet_file::WalletFile`]          | `.wallet.keys` envelope IO      |
-//! | `keys`           | [`shekyl_crypto_pq::account::AllKeysBlob`]  | rederived from master seed      |
-//! | `ledger`         | [`shekyl_wallet_state::WalletLedger`]       | aggregator over the four blocks |
-//! | `prefs`          | [`shekyl_wallet_prefs::WalletPrefs`]        | plaintext-with-HMAC layer 2     |
-//! | `daemon`         | [`DaemonClient`]                            | thin wrapper around `SimpleRequestRpc` |
-//! | `network`        | [`Network`]                                 | cached from `file.network()`    |
-//! | `capability`     | [`Capability`]                              | cached from `file.capability()` |
-//! | `_signer`        | `PhantomData<S>`                            | compile-time signer dispatch    |
+//! | Field                 | Type                                                 | Provenance                              |
+//! | --------------------- | ---------------------------------------------------- | --------------------------------------- |
+//! | `file`                | [`shekyl_wallet_file::WalletFile`]                   | `.wallet.keys` envelope IO              |
+//! | `keys`                | [`shekyl_crypto_pq::account::AllKeysBlob`]           | rederived from master seed              |
+//! | `ledger`              | [`shekyl_wallet_state::WalletLedger`]                | aggregator over the four blocks         |
+//! | `indexes`             | [`shekyl_wallet_state::LedgerIndexes`]               | rebuilt at open from `ledger`           |
+//! | `reservations`        | `BTreeMap<ReservationId, Reservation>`               | runtime-only `PendingTx` tracker        |
+//! | `next_reservation_id` | `u64`                                                | process-local monotonic counter         |
+//! | `prefs`               | [`shekyl_wallet_prefs::WalletPrefs`]                 | plaintext-with-HMAC layer 2             |
+//! | `daemon`              | [`DaemonClient`]                                     | thin wrapper around `SimpleRequestRpc`  |
+//! | `network`             | [`Network`]                                          | cached from `file.network()`            |
+//! | `capability`          | [`Capability`]                                       | cached from `file.capability()`         |
+//! | `_signer`             | `PhantomData<S>`                                     | compile-time signer dispatch            |
 //!
 //! `network` and `capability` are cached on the struct so the hot
 //! `Wallet::network()` / `Wallet::capability()` accessors are infallible
@@ -99,16 +102,24 @@
 //! `WalletFile`'s region 1 is write-once after `create`, and region 1 is
 //! the only place either field is sourced from.
 //!
-//! # What does *not* live on `Wallet`
+//! # Runtime-only state on `Wallet`
 //!
-//! Per cross-cutting lock 4, the in-flight transaction reservation
-//! ledger is **not** a `Wallet` field; it lives inside the wallet's
-//! [`WalletLedger`](shekyl_wallet_state::WalletLedger) bookkeeping
-//! block as audited persistent state. The lifecycle commit will add the
-//! `outstanding_pending_txs()` accessor that delegates to the ledger.
+//! Two fields on `Wallet<S>` are deliberately runtime-only and are
+//! never serialized to disk:
+//!
+//! - [`indexes`](Wallet) (`LedgerIndexes`): key-image / pubkey lookup
+//!   maps and the staker-pool aggregate. Rebuilt at every
+//!   `Wallet::open*` from `self.ledger.ledger`.
+//! - [`reservations`](Wallet) (`BTreeMap<ReservationId, Reservation>`):
+//!   the in-flight transaction reservation tracker. Cross-cutting
+//!   lock 4 binds the *behavioral* shape (build reserves, discard
+//!   releases, submit consumes, close errors with outstanding); the
+//!   2026-04-26 follow-up Decision Log entry refines the storage
+//!   location to a runtime field rather than the persisted
+//!   bookkeeping block. See [`pending`] for the full rationale.
 //!
 //! Per cross-cutting lock 7, the cancel-on-drop refresh handle is
-//! **not** a `Wallet` field either; it is *returned* by `Wallet::refresh`
+//! **not** a `Wallet` field; it is *returned* by `Wallet::refresh`
 //! and held by the caller, so its `Drop` implementation drives the
 //! cancellation token. A `Wallet`-internal handle would defeat the
 //! single-flight `&mut self` borrow that enforces no concurrent
@@ -128,14 +139,19 @@ pub mod daemon;
 pub mod error;
 pub mod merge;
 pub mod network;
+pub mod pending;
 pub mod signer;
 
 pub use capability::Capability;
 pub use daemon::DaemonClient;
 pub use error::{IoError, KeyError, OpenError, PendingTxError, RefreshError, SendError, TxError};
 pub use network::Network;
+pub use pending::{
+    FeePriority, PendingTx, ReservationId, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
+};
 pub use signer::{SoloSigner, WalletSignerKind};
 
+use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
 use shekyl_crypto_pq::account::AllKeysBlob;
@@ -219,10 +235,12 @@ pub struct Wallet<S: WalletSignerKind> {
     keys: AllKeysBlob,
 
     /// Persistent wallet state: scanner-derived transfers, bookkeeping
-    /// (subaddress labels, address book, account tags, in-flight
-    /// reservations), tx metadata (`tx_keys`, scanned pool txs), and
-    /// the sync-cursor block. Mutated only via the methods on
-    /// `Wallet<S>` that the lifecycle / refresh / send commits add.
+    /// (subaddress registry, labels, address book, account tags), tx
+    /// metadata (`tx_keys`, scanned pool txs), and the sync-state
+    /// block. Mutated only via the methods on `Wallet<S>` that the
+    /// lifecycle / refresh / send commits add. **Reservations do not
+    /// live here** — see `reservations` below and the `pending`
+    /// module's docstring.
     ledger: WalletLedger,
 
     /// Runtime-only indexes derived from chain replay: key-image
@@ -234,6 +252,31 @@ pub struct Wallet<S: WalletSignerKind> {
     /// alongside `self.ledger.ledger` by `apply_scan_result` under
     /// the same `&mut self` borrow.
     indexes: LedgerIndexes,
+
+    /// Runtime-only reservation tracker for in-flight
+    /// [`PendingTx`](pending::PendingTx) handles. Cross-cutting lock
+    /// 4 binds the build / submit / discard state machine; the
+    /// 2026-04-26 follow-up Decision Log entry refines storage from
+    /// "persisted in `WalletLedger.bookkeeping`" to "runtime field on
+    /// `Wallet<S>`." See [`pending`] for the full rationale (the
+    /// "why runtime-only" section explains why crash-survival is the
+    /// wrong design).
+    ///
+    /// `Wallet::close` (lifecycle commit) consults
+    /// `outstanding_pending_txs()` and refuses with
+    /// [`OpenError::OutstandingPendingTx`](error::OpenError::OutstandingPendingTx)
+    /// when any reservation is in flight, so the only crash-recovery
+    /// path that could lose data here is one where the user never
+    /// gets to call submit / discard — and on that path the right
+    /// behavior is "the reservation is gone, the outputs become
+    /// spendable again."
+    pub(crate) reservations: BTreeMap<pending::ReservationId, pending::Reservation>,
+
+    /// Monotonic counter that produces [`pending::ReservationId`] values.
+    /// Process-local; resets to zero on every `Wallet::open*`. The
+    /// counter is only exposed through the `pending` helpers, never
+    /// directly to callers.
+    pub(crate) next_reservation_id: u64,
 
     /// User preferences per the layer-2 plaintext+HMAC contract in
     /// [`docs/WALLET_PREFS.md`]. Loaded at open, saved on
@@ -289,12 +332,25 @@ impl<S: WalletSignerKind> std::fmt::Debug for Wallet<S> {
     ///   [`shekyl_simple_request_rpc::SimpleRequestRpc`]).
     /// - `network`, `capability` — printed verbatim; these are cached
     ///   public values from region 1 of the wallet file.
+    /// - `indexes` — printed as opaque `<…>`; the rebuilt-on-open
+    ///   indexes shadow `ledger` and the same redaction argument
+    ///   applies.
+    /// - `reservations` — printed as a count, not contents. The
+    ///   reservations carry recipient addresses and amounts; we expose
+    ///   only the cardinality so a `Debug` dump cannot leak in-flight
+    ///   transaction recipients.
+    /// - `next_reservation_id` — printed verbatim. The counter is a
+    ///   process-local monotonic `u64` with no observable secret
+    ///   content; surfacing it helps debugging without leaking
+    ///   reservation details.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Wallet")
             .field("file", &self.file)
             .field("keys", &"<redacted: AllKeysBlob>")
             .field("ledger", &"<…>")
             .field("indexes", &"<…>")
+            .field("reservations", &self.reservations.len())
+            .field("next_reservation_id", &self.next_reservation_id)
             .field("prefs", &"<…>")
             .field("daemon", &self.daemon)
             .field("network", &self.network)

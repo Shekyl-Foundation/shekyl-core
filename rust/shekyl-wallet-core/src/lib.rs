@@ -25,8 +25,9 @@ pub use claim_builder::{ClaimTxBuilder, ClaimTxPlan};
 pub use error::WalletCoreError;
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
 pub use wallet::{
-    Capability, DaemonClient, IoError, KeyError, Network, OpenError, PendingTxError, RefreshError,
-    SendError, SoloSigner, TxError, Wallet, WalletSignerKind,
+    Capability, DaemonClient, FeePriority, IoError, KeyError, Network, OpenError, PendingTx,
+    PendingTxError, RefreshError, ReservationId, SendError, SoloSigner, TxError, TxHash,
+    TxRecipient, TxRecipientSummary, TxRequest, Wallet, WalletSignerKind,
 };
 pub use workflow::ClaimAndUnstakePlan;
 

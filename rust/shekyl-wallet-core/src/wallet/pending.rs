@@ -1,0 +1,1008 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! `PendingTx` lifecycle: build / submit / discard.
+//!
+//! Cross-cutting lock 4 in the rewrite plan binds the shape of the
+//! in-flight transaction reservation system. Per the
+//! `docs/V3_WALLET_DECISION_LOG.md` follow-up entry (2026-04-26), the
+//! lock is refined to **runtime-only** reservations: the reservation
+//! tracker lives on `Wallet<S>` as a `BTreeMap<ReservationId,
+//! Reservation>` field, *not* inside the persisted bookkeeping block.
+//!
+//! # Why runtime-only
+//!
+//! `Wallet::close` errors with [`OpenError::OutstandingPendingTx`]
+//! when any reservation is in flight, so the only path that could
+//! persist a reservation across a wallet-close boundary is a process
+//! crash between `build_pending_tx` and
+//! `submit_pending_tx`/`discard_pending_tx`. Persisted reservations
+//! on that path would be orphans: there is no in-memory `PendingTx`
+//! handle to surface them through, the `tx_bytes` was process-local,
+//! and the transaction never broadcast. The correct behavior on
+//! crash is "the reservation is gone, the outputs become spendable
+//! again on next open"; that is exactly what runtime-only tracking
+//! gives us, with no reconciliation path.
+//!
+//! `BOOKKEEPING_BLOCK_VERSION` is therefore unchanged by this commit;
+//! the bookkeeping block's scope stays "subaddress registry, labels,
+//! address book."
+//!
+//! # State machine
+//!
+//! ```text
+//! build_pending_tx(req)        ─►  Reservation { selected_outputs,
+//!                                                built_at_height,
+//!                                                built_at_tip_hash,
+//!                                                fee, recipients }
+//!                                  + PendingTx handle
+//!
+//! submit_pending_tx(handle)    ─►  invariants:
+//!                                    - synced - built_at_height ≤ max_reorg_depth
+//!                                      else PendingTxError::TooOld
+//!                                    - block_hash_at(built_at_height) == built_at_tip_hash
+//!                                      else PendingTxError::ChainStateChanged
+//!                                  on pass: reservation is removed,
+//!                                  selected outputs marked spent,
+//!                                  TxHash returned
+//!
+//! discard_pending_tx(handle)   ─►  reservation removed, idempotent
+//!                                  on unknown handles
+//! ```
+//!
+//! # What is stubbed in Phase 1
+//!
+//! Three call sites are deferred to Phase 2a and named here so that
+//! the seam is explicit in code review:
+//!
+//! 1. **`tx_bytes` construction.** [`PendingTx::tx_bytes`] is an
+//!    empty `Vec<u8>` until Phase 2a wires `shekyl-tx-builder`. The
+//!    chain-state tags ([`PendingTx::built_at_height`],
+//!    [`PendingTx::built_at_tip_hash`],
+//!    [`PendingTx::fee_atomic_units`]) are *real* and drive
+//!    [`Wallet::submit_pending_tx`]'s invariant checks.
+//! 2. **Fee-priority resolution.** [`STUB_FEE_ATOMIC_UNITS`] is a
+//!    flat constant. Phase 2a replaces this with a daemon
+//!    `get_fee_estimates` call resolved through [`FeePriority`].
+//! 3. **Daemon broadcast.** [`Wallet::submit_pending_tx`] returns a
+//!    `TxHash` synthesized from the [`ReservationId`]. Phase 2a
+//!    replaces the body with a real broadcast call that returns the
+//!    daemon-reported tx hash.
+//!
+//! # Output selection (Phase 1 placeholder)
+//!
+//! [`build_pending_tx_in_state`] picks the largest-amount unspent
+//! outputs first until the cumulative sum covers `amount + fee`. This
+//! is the simplest correct algorithm and is appropriate as a stub;
+//! the production algorithm (decoy-friendly, change-output-aware,
+//! locked-stake-aware) lands in Phase 2a alongside the real builder
+//! integration. Outputs already cited by an existing reservation are
+//! filtered out so a second concurrent build cannot select them.
+//!
+//! [`OpenError::OutstandingPendingTx`]: super::error::OpenError::OutstandingPendingTx
+//! [`Wallet::submit_pending_tx`]: super::Wallet::submit_pending_tx
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU64;
+
+use shekyl_address::Network;
+use shekyl_wallet_state::{LedgerBlock, NetworkSafetyConstants, SubaddressIndex};
+
+use crate::wallet::{
+    error::{PendingTxError, SendError},
+    Wallet, WalletSignerKind,
+};
+
+/// Stub fee for Phase 1 [`Wallet::build_pending_tx`].
+///
+/// Replaced in Phase 2a by a daemon `get_fee_estimates` call resolved
+/// against the caller's [`FeePriority`]. The constant is non-zero so
+/// that lifecycle tests exercising [`Reservation::fee_atomic_units`]
+/// run against a real value rather than zero-as-special-case.
+pub const STUB_FEE_ATOMIC_UNITS: u64 = 1_000;
+
+/// Process-local identifier for a [`Reservation`] / [`PendingTx`].
+///
+/// Generated by a monotonic `u64` counter on the owning `Wallet<S>`;
+/// the values are unique within a single `Wallet` handle's lifetime
+/// but carry no meaning across processes (reservations themselves are
+/// process-local — see this module's docstring).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ReservationId(u64);
+
+impl ReservationId {
+    /// Underlying counter value. Exposed for diagnostics and tests; not
+    /// part of any wire format.
+    pub fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+/// Result of [`Wallet::submit_pending_tx`].
+///
+/// Phase 1 stub: the bytes encode the [`ReservationId`] in
+/// little-endian at offsets `0..8`, with the remaining bytes left
+/// zero. Phase 2a replaces submit with a real daemon broadcast call
+/// whose response carries the daemon's reported tx hash; callers
+/// compare the field as opaque bytes either way and never rely on the
+/// stub bit pattern.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TxHash(pub [u8; 32]);
+
+/// Caller-supplied fee preference for [`Wallet::build_pending_tx`].
+///
+/// Cross-cutting lock 8 binds this surface; Phase 2a will resolve each
+/// variant against the daemon's `get_fee_estimates`. Phase 1 ignores
+/// the variant and uses [`STUB_FEE_ATOMIC_UNITS`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FeePriority {
+    /// Slowest tier; cheapest. Targets confirmation within a few
+    /// blocks rather than the next block.
+    Economy,
+    /// Default tier; balanced cost vs. confirmation time.
+    Standard,
+    /// Fastest tier short of fee-spiking; targets next-block
+    /// inclusion under normal mempool conditions.
+    Priority,
+    /// Caller-pinned feerate in atomic-units-per-byte. The daemon's
+    /// estimate is bypassed entirely (and so are
+    /// [`TxError::DaemonFeeUnreasonable`](super::error::TxError)
+    /// sanity checks).
+    Custom(NonZeroU64),
+}
+
+/// One transfer destination for [`TxRequest`].
+#[derive(Clone, Debug)]
+pub struct TxRecipient {
+    /// Destination address in canonical Shekyl encoding (parsed and
+    /// network-checked by [`build_pending_tx_in_state`]).
+    pub address: String,
+    /// Amount to send to this address in atomic units (no fee).
+    pub amount_atomic_units: u64,
+}
+
+/// Caller request to [`Wallet::build_pending_tx`].
+#[derive(Clone, Debug)]
+pub struct TxRequest {
+    /// One or more destinations. Empty input is rejected with
+    /// [`SendError::InvalidRecipient`].
+    pub recipients: Vec<TxRecipient>,
+    /// Fee tier; Phase 1 ignores and uses [`STUB_FEE_ATOMIC_UNITS`].
+    pub priority: FeePriority,
+    /// Optional source-subaddress filter. When `Some`, only outputs
+    /// owned by this subaddress are eligible for selection.
+    pub from_subaddress: Option<SubaddressIndex>,
+}
+
+/// Display-friendly recipient summary stored alongside the
+/// reservation so the caller can render "what is in flight" without
+/// parsing transaction bytes.
+#[derive(Clone, Debug)]
+pub struct TxRecipientSummary {
+    /// Destination address, verbatim from the [`TxRecipient`] that
+    /// produced the reservation.
+    pub address: String,
+    /// Amount the caller asked to send to this destination, in atomic
+    /// units, before fee.
+    pub amount_atomic_units: u64,
+}
+
+/// Runtime-only reservation: which transfers are earmarked for the
+/// in-flight build, the chain state at build time, the fee, and the
+/// recipient summary.
+///
+/// `pub(crate)`: callers reach this state through [`PendingTx`] and
+/// the `Wallet::*_pending_tx` methods, never directly. The submit /
+/// discard path consumes the entry by removing it from the
+/// reservation map.
+#[derive(Clone, Debug)]
+pub(crate) struct Reservation {
+    /// Indices into [`LedgerBlock::transfers`] selected to fund the
+    /// build. Sorted ascending so a debug print is deterministic.
+    pub selected_transfer_indices: Vec<usize>,
+    /// Wallet's `synced_height` at the moment of the build.
+    pub built_at_height: u64,
+    /// Wallet's recorded `block_hash_at(built_at_height)` at build
+    /// time. The reorg-rewind invariant in
+    /// [`PendingTxError::ChainStateChanged`] compares this against
+    /// the wallet's current view at submit time.
+    pub built_at_tip_hash: [u8; 32],
+    /// Fee in atomic units. Phase 1: [`STUB_FEE_ATOMIC_UNITS`].
+    ///
+    /// `dead_code` allow: the field is consumed only by the `Debug`
+    /// derive and by tests that read the reservation map directly.
+    /// The submit path on the [`PendingTx`] handle reads the same
+    /// value off the handle, not off the reservation. Phase 2a reads
+    /// this field when reconciling unconfirmed-spend tracking against
+    /// the daemon's broadcast response.
+    #[allow(dead_code)]
+    pub fee_atomic_units: u64,
+    /// Caller's recipient summary. Carried so a UI can describe an
+    /// in-flight tx without reaching into `tx_bytes`. Read only via
+    /// `Debug`; the same data lives on [`PendingTx::recipients`] for
+    /// the caller-facing path.
+    #[allow(dead_code)]
+    pub recipients: Vec<TxRecipientSummary>,
+    /// Caller-supplied fee tier. Stored for diagnostics; the actual
+    /// fee is in [`Self::fee_atomic_units`] (Phase 1 stub). Read only
+    /// via `Debug` and tests; Phase 2a reads it when resolving
+    /// daemon `get_fee_estimates`.
+    #[allow(dead_code)]
+    pub priority: FeePriority,
+}
+
+/// Phase-1 in-flight transaction handle.
+///
+/// `tx_bytes` is empty until Phase 2a wires `shekyl-tx-builder`. Every
+/// other field is real and drives [`Wallet::submit_pending_tx`]'s
+/// invariant checks against the wallet's current state.
+#[derive(Clone, Debug)]
+pub struct PendingTx {
+    /// Reservation identifier; pass back to
+    /// [`Wallet::submit_pending_tx`] / [`Wallet::discard_pending_tx`].
+    pub id: ReservationId,
+    /// Wallet's `synced_height` at build time.
+    pub built_at_height: u64,
+    /// Wallet's recorded block hash at `built_at_height` at build
+    /// time.
+    pub built_at_tip_hash: [u8; 32],
+    /// Fee in atomic units captured at build time (Phase 1 stub).
+    pub fee_atomic_units: u64,
+    /// Constructed transaction bytes. Empty in Phase 1; Phase 2a
+    /// fills this from `shekyl-tx-builder`.
+    pub tx_bytes: Vec<u8>,
+    /// Recipient summary for display.
+    pub recipients: Vec<TxRecipientSummary>,
+}
+
+// ---------------------------------------------------------------------------
+// Free helpers (`pub(crate)`): operate on a free
+// `(LedgerBlock, BTreeMap<ReservationId, Reservation>, u64 counter)`
+// triple so unit tests can drive the lifecycle without standing up a
+// full `Wallet<S>` (whose constructors land in the lifecycle commit).
+// `Wallet::*` methods below are one-line wrappers over these.
+// ---------------------------------------------------------------------------
+
+/// Build a [`PendingTx`] against a free state triple. Inserts the
+/// resulting [`Reservation`] into `reservations` and bumps `next_id`.
+///
+/// See [`Wallet::build_pending_tx`] for the contract; this helper is
+/// the same body, exposed for in-crate tests.
+pub(crate) fn build_pending_tx_in_state(
+    ledger: &LedgerBlock,
+    reservations: &mut BTreeMap<ReservationId, Reservation>,
+    next_id: &mut u64,
+    request: &TxRequest,
+) -> Result<PendingTx, SendError> {
+    if request.recipients.is_empty() {
+        return Err(SendError::InvalidRecipient {
+            reason: "TxRequest must carry at least one recipient",
+        });
+    }
+
+    let synced = ledger.height();
+    let Some(tip_hash) = ledger.block_hash_at(synced).copied() else {
+        return Err(SendError::CannotSign {
+            reason: "wallet has not ingested any block yet",
+        });
+    };
+
+    let mut total_amount: u64 = 0;
+    for r in &request.recipients {
+        total_amount =
+            total_amount
+                .checked_add(r.amount_atomic_units)
+                .ok_or(SendError::InvalidRecipient {
+                    reason: "recipient amount sum overflowed u64",
+                })?;
+    }
+    let fee = STUB_FEE_ATOMIC_UNITS;
+    let needed = total_amount
+        .checked_add(fee)
+        .ok_or(SendError::InvalidRecipient {
+            reason: "amount + fee overflowed u64",
+        })?;
+
+    let reserved: BTreeSet<usize> = reservations
+        .values()
+        .flat_map(|r| r.selected_transfer_indices.iter().copied())
+        .collect();
+
+    let mut candidates: Vec<(usize, u64)> = ledger
+        .spendable_outputs(synced, request.from_subaddress, None)
+        .into_iter()
+        .filter(|(idx, _)| !reserved.contains(idx))
+        .map(|(idx, td)| (idx, td.amount()))
+        .collect();
+    candidates.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+    let mut selected = Vec::new();
+    let mut covered: u64 = 0;
+    for (idx, amount) in candidates.iter().copied() {
+        if covered >= needed {
+            break;
+        }
+        selected.push(idx);
+        covered = covered.saturating_add(amount);
+    }
+    if covered < needed {
+        return Err(SendError::InsufficientFunds {
+            needed,
+            available: covered,
+        });
+    }
+    selected.sort();
+
+    let id = ReservationId(*next_id);
+    *next_id = next_id
+        .checked_add(1)
+        .expect("ReservationId u64 counter overflowed within a single Wallet handle");
+
+    let summary: Vec<TxRecipientSummary> = request
+        .recipients
+        .iter()
+        .map(|r| TxRecipientSummary {
+            address: r.address.clone(),
+            amount_atomic_units: r.amount_atomic_units,
+        })
+        .collect();
+
+    let reservation = Reservation {
+        selected_transfer_indices: selected,
+        built_at_height: synced,
+        built_at_tip_hash: tip_hash,
+        fee_atomic_units: fee,
+        recipients: summary.clone(),
+        priority: request.priority,
+    };
+
+    let pending = PendingTx {
+        id,
+        built_at_height: synced,
+        built_at_tip_hash: tip_hash,
+        fee_atomic_units: fee,
+        tx_bytes: Vec::new(),
+        recipients: summary,
+    };
+
+    reservations.insert(id, reservation);
+
+    Ok(pending)
+}
+
+/// Submit a [`PendingTx`] handle: run invariants, mark its inputs
+/// as locally spent, and return the (Phase-1 stubbed) tx hash.
+///
+/// See [`Wallet::submit_pending_tx`] for the contract.
+pub(crate) fn submit_pending_tx_in_state(
+    ledger: &mut LedgerBlock,
+    reservations: &mut BTreeMap<ReservationId, Reservation>,
+    network: Network,
+    id: ReservationId,
+) -> Result<TxHash, PendingTxError> {
+    let Some(entry) = reservations.get(&id) else {
+        return Err(PendingTxError::UnknownHandle);
+    };
+
+    let safety = NetworkSafetyConstants::for_network(network);
+    let max_reorg = safety.max_reorg_depth;
+    let synced = ledger.height();
+
+    if synced.saturating_sub(entry.built_at_height) > max_reorg {
+        return Err(PendingTxError::TooOld {
+            built: entry.built_at_height,
+            current: synced,
+            max_reorg,
+        });
+    }
+
+    let stored = ledger.block_hash_at(entry.built_at_height).copied();
+    if stored != Some(entry.built_at_tip_hash) {
+        return Err(PendingTxError::ChainStateChanged {
+            height: entry.built_at_height,
+        });
+    }
+
+    let entry = reservations
+        .remove(&id)
+        .expect("reservation existence checked above");
+
+    for &idx in &entry.selected_transfer_indices {
+        if let Some(td) = ledger.transfer_mut(idx) {
+            td.spent = true;
+            // `spent_height` deliberately stays `None` until refresh
+            // confirms the broadcast; this is the "unconfirmed-spent"
+            // half-state the rewrite plan locks in. Phase 2a will
+            // model unconfirmed-vs-confirmed spends explicitly when
+            // the daemon broadcast call lands.
+        }
+    }
+
+    let mut bytes = [0u8; 32];
+    bytes[..8].copy_from_slice(&id.0.to_le_bytes());
+    Ok(TxHash(bytes))
+}
+
+/// Discard a reservation. Returns `true` if the handle was known,
+/// `false` otherwise — the caller-facing `Wallet::discard_pending_tx`
+/// is `Ok(())` in either case (cross-cutting lock 4: discard is
+/// idempotent and silent on unknown handles).
+pub(crate) fn discard_pending_tx_in_state(
+    reservations: &mut BTreeMap<ReservationId, Reservation>,
+    id: ReservationId,
+) -> bool {
+    reservations.remove(&id).is_some()
+}
+
+// ---------------------------------------------------------------------------
+// `Wallet<S>` methods.
+// ---------------------------------------------------------------------------
+
+impl<S: WalletSignerKind> Wallet<S> {
+    /// Number of in-flight reservations on this wallet handle.
+    ///
+    /// `Wallet::close` (lifecycle commit) calls this and refuses with
+    /// [`OpenError::OutstandingPendingTx`](super::error::OpenError::OutstandingPendingTx)
+    /// when the count is non-zero. Tests and callers that want to
+    /// poll the count outside `close` use this accessor.
+    pub fn outstanding_pending_txs(&self) -> usize {
+        self.reservations.len()
+    }
+
+    /// Build a [`PendingTx`] against the wallet's current state.
+    ///
+    /// Phase 1 contract:
+    ///
+    /// - Selects unspent, mature, non-reserved outputs covering
+    ///   `Σ recipient_amount + STUB_FEE_ATOMIC_UNITS`.
+    /// - Captures `synced_height` and the recorded block hash at that
+    ///   height as the reservation's chain-state tags.
+    /// - Records the selection and tags in the wallet's runtime
+    ///   reservation map.
+    /// - Returns a [`PendingTx`] with `tx_bytes = Vec::new()` (Phase
+    ///   2a wires `shekyl-tx-builder`).
+    ///
+    /// # Errors
+    ///
+    /// - [`SendError::InvalidRecipient`] for an empty `recipients`
+    ///   list or amount overflow.
+    /// - [`SendError::CannotSign`] when the wallet has not ingested
+    ///   any block yet (no tip hash to anchor against).
+    /// - [`SendError::InsufficientFunds`] when the available
+    ///   non-reserved spendable balance cannot cover `amount + fee`.
+    pub fn build_pending_tx(&mut self, request: &TxRequest) -> Result<PendingTx, SendError> {
+        build_pending_tx_in_state(
+            &self.ledger.ledger,
+            &mut self.reservations,
+            &mut self.next_reservation_id,
+            request,
+        )
+    }
+
+    /// Submit a [`PendingTx`] handle.
+    ///
+    /// Runs the cross-cutting-lock-4 invariants
+    /// ([`PendingTxError::TooOld`], [`PendingTxError::ChainStateChanged`],
+    /// [`PendingTxError::UnknownHandle`]) and on success removes the
+    /// reservation, marks its inputs locally spent (with
+    /// `spent_height = None` to reflect the still-unconfirmed state),
+    /// and returns a [`TxHash`].
+    ///
+    /// Phase 1 stub: the body does not call the daemon; the returned
+    /// `TxHash` is synthesized from the [`ReservationId`]. Phase 2a
+    /// replaces this body with a real broadcast call. The invariant
+    /// checks themselves are the same in both phases.
+    pub fn submit_pending_tx(&mut self, id: ReservationId) -> Result<TxHash, PendingTxError> {
+        submit_pending_tx_in_state(
+            &mut self.ledger.ledger,
+            &mut self.reservations,
+            self.network,
+            id,
+        )
+    }
+
+    /// Discard a reservation.
+    ///
+    /// Idempotent: `Ok(())` whether or not `id` is currently
+    /// recognized. Per cross-cutting lock 4, `submit_pending_tx`
+    /// raises [`PendingTxError::UnknownHandle`] for an unknown handle
+    /// while `discard_pending_tx` does not.
+    pub fn discard_pending_tx(&mut self, id: ReservationId) -> Result<(), PendingTxError> {
+        let _ = discard_pending_tx_in_state(&mut self.reservations, id);
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests: drive the helpers against a hand-constructed
+// `(LedgerBlock, LedgerIndexes)` pair so the lifecycle is covered
+// without depending on the (not-yet-landed) `Wallet<S>` constructors.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU64;
+
+    use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
+    use shekyl_address::Network;
+    use shekyl_oxide::primitives::Commitment;
+    use shekyl_scanner::{
+        LedgerBlock, LedgerIndexes, LedgerIndexesExt, RecoveredWalletOutput, Timelocked,
+        WalletOutput,
+    };
+
+    use super::{
+        build_pending_tx_in_state, discard_pending_tx_in_state, submit_pending_tx_in_state,
+        FeePriority, PendingTxError, Reservation, ReservationId, SendError, TxRecipient, TxRequest,
+        STUB_FEE_ATOMIC_UNITS,
+    };
+
+    fn make_recovered_output(seed: u8, global_index: u64, amount: u64) -> RecoveredWalletOutput {
+        let mut bytes = [0u8; 32];
+        bytes[..8].copy_from_slice(&global_index.to_le_bytes());
+        bytes[8] = seed;
+        let scalar = Scalar::from_bytes_mod_order(bytes);
+        let key = &scalar * ED25519_BASEPOINT_TABLE;
+        let base = WalletOutput::new_for_test(
+            [seed; 32],
+            0,
+            global_index,
+            key,
+            Scalar::ZERO,
+            Commitment {
+                mask: Scalar::ONE,
+                amount,
+            },
+            None,
+        );
+        RecoveredWalletOutput::new_for_test(base, amount)
+    }
+
+    /// Ingest `outputs` at `block_height` (single-block batch), then
+    /// keep advancing the ledger by empty blocks up to `final_height`.
+    fn populate(
+        ledger: &mut LedgerBlock,
+        indexes: &mut LedgerIndexes,
+        block_height: u64,
+        outputs: Vec<RecoveredWalletOutput>,
+        final_height: u64,
+    ) {
+        let timelocked = Timelocked::from_vec(outputs);
+        let block_hash = [u8::try_from(block_height & 0xFF).unwrap(); 32];
+        let added = indexes.process_scanned_outputs(ledger, block_height, block_hash, timelocked);
+        assert!(added > 0 || ledger.transfer_count() == 0);
+        for h in (block_height + 1)..=final_height {
+            let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
+            let _ =
+                indexes.process_scanned_outputs(ledger, h, hash, Timelocked::from_vec(Vec::new()));
+        }
+    }
+
+    fn standard_request(amount: u64) -> TxRequest {
+        TxRequest {
+            recipients: vec![TxRecipient {
+                address: "test_address".to_string(),
+                amount_atomic_units: amount,
+            }],
+            priority: FeePriority::Standard,
+            from_subaddress: None,
+        }
+    }
+
+    #[test]
+    fn build_reserves_outputs_and_advances_id_counter() {
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
+        populate(
+            &mut ledger,
+            &mut indexes,
+            1,
+            vec![
+                make_recovered_output(1, 100, 10_000),
+                make_recovered_output(2, 101, 5_000),
+            ],
+            20,
+        );
+        assert_eq!(ledger.height(), 20);
+
+        let mut reservations = std::collections::BTreeMap::new();
+        let mut next_id = 0u64;
+
+        let pending = build_pending_tx_in_state(
+            &ledger,
+            &mut reservations,
+            &mut next_id,
+            &standard_request(7_000),
+        )
+        .expect("build ok");
+
+        assert_eq!(pending.id.raw(), 0);
+        assert_eq!(next_id, 1);
+        assert_eq!(pending.fee_atomic_units, STUB_FEE_ATOMIC_UNITS);
+        assert_eq!(pending.built_at_height, 20);
+        assert!(pending.tx_bytes.is_empty(), "Phase 1 leaves tx_bytes empty");
+        assert_eq!(reservations.len(), 1);
+        let r = reservations.get(&pending.id).unwrap();
+        // 10_000 alone covers 7_000 + 1_000 fee, so the algorithm
+        // selects exactly the 10_000 output.
+        assert_eq!(r.selected_transfer_indices.len(), 1);
+    }
+
+    #[test]
+    fn build_filters_outputs_already_reserved_by_another_build() {
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
+        populate(
+            &mut ledger,
+            &mut indexes,
+            1,
+            vec![
+                make_recovered_output(1, 100, 10_000),
+                make_recovered_output(2, 101, 6_000),
+            ],
+            20,
+        );
+
+        let mut reservations = std::collections::BTreeMap::new();
+        let mut next_id = 0u64;
+
+        // First build reserves the 10_000 output.
+        let _first = build_pending_tx_in_state(
+            &ledger,
+            &mut reservations,
+            &mut next_id,
+            &standard_request(7_000),
+        )
+        .expect("first build");
+
+        // Second build needs more than 5_000 (the only remaining
+        // output is 6_000, which can cover 4_000 + fee). Asking for
+        // 5_000 exhausts available because 5_000 + 1_000 fee = 6_000.
+        let second_ok = build_pending_tx_in_state(
+            &ledger,
+            &mut reservations,
+            &mut next_id,
+            &standard_request(5_000),
+        )
+        .expect("second build covers exactly 6_000");
+        let r = reservations.get(&second_ok.id).unwrap();
+        assert_eq!(r.selected_transfer_indices.len(), 1);
+
+        // Third build cannot cover anything — every output is
+        // reserved.
+        let err = build_pending_tx_in_state(
+            &ledger,
+            &mut reservations,
+            &mut next_id,
+            &standard_request(1),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, SendError::InsufficientFunds { available: 0, .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn build_rejects_empty_recipients() {
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
+        populate(
+            &mut ledger,
+            &mut indexes,
+            1,
+            vec![make_recovered_output(1, 100, 10_000)],
+            20,
+        );
+        let mut reservations = std::collections::BTreeMap::new();
+        let mut next_id = 0u64;
+        let req = TxRequest {
+            recipients: Vec::new(),
+            priority: FeePriority::Economy,
+            from_subaddress: None,
+        };
+        let err =
+            build_pending_tx_in_state(&ledger, &mut reservations, &mut next_id, &req).unwrap_err();
+        assert!(matches!(err, SendError::InvalidRecipient { .. }));
+        assert!(reservations.is_empty());
+        assert_eq!(next_id, 0);
+    }
+
+    #[test]
+    fn build_rejects_when_no_block_ingested_yet() {
+        // Empty ledger: synced = 0, no recorded block hash at 0.
+        let ledger = LedgerBlock::empty();
+        let mut reservations = std::collections::BTreeMap::new();
+        let mut next_id = 0u64;
+        let err = build_pending_tx_in_state(
+            &ledger,
+            &mut reservations,
+            &mut next_id,
+            &standard_request(1),
+        )
+        .unwrap_err();
+        assert!(matches!(err, SendError::CannotSign { .. }));
+    }
+
+    #[test]
+    fn build_returns_insufficient_funds_when_balance_short() {
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
+        populate(
+            &mut ledger,
+            &mut indexes,
+            1,
+            vec![make_recovered_output(1, 100, 5_000)],
+            20,
+        );
+        let mut reservations = std::collections::BTreeMap::new();
+        let mut next_id = 0u64;
+        let err = build_pending_tx_in_state(
+            &ledger,
+            &mut reservations,
+            &mut next_id,
+            &standard_request(10_000),
+        )
+        .unwrap_err();
+        match err {
+            SendError::InsufficientFunds { needed, available } => {
+                assert_eq!(needed, 11_000);
+                assert_eq!(available, 5_000);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn submit_unknown_handle_returns_unknown_handle() {
+        let mut ledger = LedgerBlock::empty();
+        let mut reservations: std::collections::BTreeMap<ReservationId, Reservation> =
+            std::collections::BTreeMap::new();
+        let err = submit_pending_tx_in_state(
+            &mut ledger,
+            &mut reservations,
+            Network::Testnet,
+            ReservationId(42),
+        )
+        .unwrap_err();
+        assert!(matches!(err, PendingTxError::UnknownHandle));
+    }
+
+    #[test]
+    fn submit_too_old_when_built_height_outside_reorg_window() {
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
+        populate(
+            &mut ledger,
+            &mut indexes,
+            1,
+            vec![make_recovered_output(1, 100, 10_000)],
+            20,
+        );
+        let mut reservations = std::collections::BTreeMap::new();
+        let mut next_id = 0u64;
+        let pending = build_pending_tx_in_state(
+            &ledger,
+            &mut reservations,
+            &mut next_id,
+            &standard_request(1_000),
+        )
+        .expect("build");
+
+        // Advance ledger so synced - built_at_height > max_reorg_depth.
+        // Testnet's max_reorg_depth = 6.
+        for h in 21..=40 {
+            let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
+            let _ = indexes.process_scanned_outputs(
+                &mut ledger,
+                h,
+                hash,
+                Timelocked::from_vec(Vec::new()),
+            );
+        }
+
+        let err = submit_pending_tx_in_state(
+            &mut ledger,
+            &mut reservations,
+            Network::Testnet,
+            pending.id,
+        )
+        .unwrap_err();
+        match err {
+            PendingTxError::TooOld {
+                built,
+                current,
+                max_reorg,
+            } => {
+                assert_eq!(built, 20);
+                assert_eq!(current, 40);
+                assert_eq!(max_reorg, 6);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        // Reservation is preserved on TooOld so the caller can
+        // discard it explicitly.
+        assert_eq!(reservations.len(), 1);
+    }
+
+    #[test]
+    fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() {
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
+        populate(
+            &mut ledger,
+            &mut indexes,
+            1,
+            vec![make_recovered_output(1, 100, 10_000)],
+            5,
+        );
+        let mut reservations = std::collections::BTreeMap::new();
+        let mut next_id = 0u64;
+
+        // Drive the build at height 5 (well past the spendable_age
+        // cutoff so the output qualifies).
+        for h in 6..=15 {
+            let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
+            let _ = indexes.process_scanned_outputs(
+                &mut ledger,
+                h,
+                hash,
+                Timelocked::from_vec(Vec::new()),
+            );
+        }
+        let pending = build_pending_tx_in_state(
+            &ledger,
+            &mut reservations,
+            &mut next_id,
+            &standard_request(1_000),
+        )
+        .expect("build");
+        assert_eq!(pending.built_at_height, 15);
+
+        // Reorg: rewind to fork height 15, replay 15..=20 with new
+        // hashes. After rewind, `block_hash_at(15)` differs from
+        // `pending.built_at_tip_hash`.
+        indexes.handle_reorg(&mut ledger, 15);
+        for h in 15..=20 {
+            let hash = [u8::try_from(0xA0 ^ (h & 0xFF)).unwrap(); 32];
+            let _ = indexes.process_scanned_outputs(
+                &mut ledger,
+                h,
+                hash,
+                Timelocked::from_vec(Vec::new()),
+            );
+        }
+
+        let err = submit_pending_tx_in_state(
+            &mut ledger,
+            &mut reservations,
+            Network::Testnet,
+            pending.id,
+        )
+        .unwrap_err();
+        match err {
+            PendingTxError::ChainStateChanged { height } => {
+                assert_eq!(height, 15);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert_eq!(reservations.len(), 1, "reservation preserved on error");
+    }
+
+    #[test]
+    fn submit_marks_inputs_spent_and_consumes_reservation() {
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
+        populate(
+            &mut ledger,
+            &mut indexes,
+            1,
+            vec![make_recovered_output(1, 100, 10_000)],
+            20,
+        );
+        let mut reservations = std::collections::BTreeMap::new();
+        let mut next_id = 0u64;
+        let pending = build_pending_tx_in_state(
+            &ledger,
+            &mut reservations,
+            &mut next_id,
+            &standard_request(5_000),
+        )
+        .expect("build");
+
+        let tx_hash = submit_pending_tx_in_state(
+            &mut ledger,
+            &mut reservations,
+            Network::Testnet,
+            pending.id,
+        )
+        .expect("submit");
+
+        assert_eq!(reservations.len(), 0);
+        // Output was marked locally spent (Phase 1 stub).
+        assert!(ledger.transfers()[0].spent);
+        assert_eq!(
+            ledger.transfers()[0].spent_height,
+            None,
+            "Phase 1 leaves spent_height None until refresh confirms"
+        );
+
+        // Stub TxHash encodes the reservation id in the first 8 bytes.
+        assert_eq!(&tx_hash.0[..8], &pending.id.raw().to_le_bytes());
+    }
+
+    #[test]
+    fn discard_releases_reservation_and_outputs_become_selectable_again() {
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
+        populate(
+            &mut ledger,
+            &mut indexes,
+            1,
+            vec![make_recovered_output(1, 100, 10_000)],
+            20,
+        );
+        let mut reservations = std::collections::BTreeMap::new();
+        let mut next_id = 0u64;
+        let pending = build_pending_tx_in_state(
+            &ledger,
+            &mut reservations,
+            &mut next_id,
+            &standard_request(1_000),
+        )
+        .expect("build");
+
+        assert!(discard_pending_tx_in_state(&mut reservations, pending.id));
+        assert_eq!(reservations.len(), 0);
+
+        // Re-build picks up the same output: it is no longer reserved.
+        let again = build_pending_tx_in_state(
+            &ledger,
+            &mut reservations,
+            &mut next_id,
+            &standard_request(1_000),
+        )
+        .expect("rebuild");
+        let r = reservations.get(&again.id).unwrap();
+        assert_eq!(r.selected_transfer_indices, vec![0]);
+    }
+
+    #[test]
+    fn discard_is_idempotent_on_unknown_handle() {
+        let mut reservations: std::collections::BTreeMap<ReservationId, Reservation> =
+            std::collections::BTreeMap::new();
+        let was_present = discard_pending_tx_in_state(&mut reservations, ReservationId(99));
+        assert!(!was_present);
+        // No state change, no panic.
+        assert!(reservations.is_empty());
+    }
+
+    #[test]
+    fn priority_custom_is_accepted_and_preserved() {
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
+        populate(
+            &mut ledger,
+            &mut indexes,
+            1,
+            vec![make_recovered_output(1, 100, 10_000)],
+            20,
+        );
+        let mut reservations = std::collections::BTreeMap::new();
+        let mut next_id = 0u64;
+        let req = TxRequest {
+            recipients: vec![TxRecipient {
+                address: "addr".into(),
+                amount_atomic_units: 1_000,
+            }],
+            priority: FeePriority::Custom(NonZeroU64::new(42).unwrap()),
+            from_subaddress: None,
+        };
+        let pending =
+            build_pending_tx_in_state(&ledger, &mut reservations, &mut next_id, &req).unwrap();
+        let r = reservations.get(&pending.id).unwrap();
+        assert!(matches!(r.priority, FeePriority::Custom(_)));
+    }
+}

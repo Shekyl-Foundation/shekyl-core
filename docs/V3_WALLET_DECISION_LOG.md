@@ -1463,16 +1463,42 @@ Reviewers see the failure-surface (per-domain error enums, previous
 commit) and the success-shape (this commit, struct fields and
 accessors) before the methods land that connect the two.
 
-**What does *not* live on `Wallet`.** Cross-cutting lock 4 says the
-in-flight transaction reservation ledger lives in `WalletLedger`'s
-bookkeeping block, not on `Wallet`. The lifecycle commit will add
-`outstanding_pending_txs()` that delegates to the ledger; the
-`PendingTx` handles themselves are caller-owned and short-lived. Cross-
-cutting lock 7 says the cancel-on-drop refresh handle is *returned by*
-`Wallet::refresh`, not stored *on* `Wallet` — a `Wallet`-internal
-handle would defeat the single-flight `&mut self` borrow that enforces
-no concurrent refresh. Both of these constraints are now type-enforced:
-the struct simply has no field where they could go.
+**Reservation tracker: runtime-only on `Wallet`, never persisted.**
+The `pending_tx` follow-up commit (2026-04-26) refines cross-cutting
+lock 4 from "ledger-resident reservations" to "`Wallet`-resident
+runtime-only reservations." The reasoning: `PendingTx` is already
+process-local (this entry's section "PendingTx lifecycle" above), and
+`Wallet::close` errors with [`OpenError::OutstandingPendingTx`] when
+any reservation is in flight. The only path that would persist a
+reservation across a wallet-close boundary is a process crash between
+`build_pending_tx` and `submit_pending_tx`/`discard_pending_tx` — and
+the correct behavior on that path is "the reservation is gone, the
+outputs are spendable again, the user re-runs build" because the tx
+never broadcast. Persisting reservations would force a reconciliation
+path on next open with no in-memory `PendingTx` handle to surface them
+through, leaking handles whose state machine has no caller.
+
+The reservation tracker therefore lives on `Wallet<S>` as a runtime-
+only `BTreeMap<ReservationId, Reservation>` field alongside
+`indexes: LedgerIndexes` (which is also runtime-only and rebuilt at
+open). `BOOKKEEPING_BLOCK_VERSION` does **not** bump for this commit;
+the bookkeeping block stays scoped to subaddress registry, labels,
+and address book.
+
+**What this entry's earlier paragraph said and why it's wrong.** The
+original wording was "the in-flight transaction reservation ledger
+lives in `WalletLedger`'s bookkeeping block, not on `Wallet`." That
+was inherited from cross-cutting lock 4's draft phrasing, which
+predated the decision to make `Wallet::close` error on outstanding
+pending. Once close errors, the persistence rationale evaporates; the
+present paragraph supersedes it.
+
+**What is still locked.** Cross-cutting lock 4's behavioral shape is
+unchanged: build reserves, discard releases, submit consumes, close
+errors with outstanding. Only the storage location moved from
+"persisted bookkeeping block" to "runtime field on `Wallet`." Cross-
+cutting lock 7 (cancel-on-drop refresh handle returned by `refresh`,
+not stored on `Wallet`) is unaffected.
 
 **Why `PhantomData<S>` and not a trait-object signer.** The compile-
 time dispatch promised by `Wallet<S: WalletSignerKind>` requires that
@@ -1618,9 +1644,13 @@ The fold:
   ledger-attached field.
 
 **Reference.** Cross-cutting locks 3 (writer-preferred `&mut self`
-mutation discipline) and 4 (ledger-resident reservations);
-`Wallet<S>` struct entry sub-decision 1 (no `runtime_state` field on
-`Wallet`); todo `runtime_state_audit` in the Phase 1 task list.
+mutation discipline) and 4 (`Wallet`-resident runtime-only
+reservations; see the "Reservation tracker" sub-section of the
+"Wallet<S> struct shape and accessor surface" entry above for the
+2026-04-26 narrowing of lock 4 from "ledger-resident" to
+"runtime-only");`Wallet<S>` struct entry sub-decision 1 (no
+`runtime_state` field on `Wallet`); todo `runtime_state_audit` in the
+Phase 1 task list.
 
 ---
 
