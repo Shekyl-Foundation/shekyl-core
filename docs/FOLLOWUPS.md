@@ -426,6 +426,19 @@ one place to confirm each item's relationship to the wallet stack.
   Phase 5. **Target: V3.1.x (Rust wallet stack feature parity →
   C++ deletion).**
 
+  **Phase 5 inventory pre-emptions.** Individual items from the
+  Phase 5 deletion inventory may be deleted earlier when their
+  callers are conclusively gone (zero `.cpp` callers per `git grep`,
+  evidence in PR description). The rule and its first application are
+  pinned in `docs/V3_WALLET_DECISION_LOG.md` under
+  *"Phase 5 pre-emption rule"*. Items already pre-empted:
+  - `rust/shekyl-ffi/src/wallet_ledger_ffi.rs` — the typed
+    cache-handle FFI surface from sub-commit 2l.a, deleted as part
+    of the Phase 1 `primitives` task on 2026-04-25 once the
+    `SubaddressIndex` flatten work confirmed zero `.cpp` callers
+    had ever materialized. The Phase 5 commit's deletion list
+    drops this file from its enumeration.
+
 - **Hardening-pass commit 8 follow-up: WalletPrefs round-trip
   property test (`2k.a2` deferred test).** The wallet-prefs round-trip
   proptest mentioned in the 2l.a / 2l.e design pin land list was

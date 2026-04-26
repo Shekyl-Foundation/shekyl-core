@@ -562,7 +562,11 @@ only consumer was C++ `wallet2.cpp`. Specifically:
 
 - `rust/shekyl-ffi/src/wallet_ledger_ffi.rs` (the typed cache-handle
   FFI from sub-commit 2l.a). Its only consumer was the never-written
-  `wallet2_handle_views.h/.cpp`.
+  `wallet2_handle_views.h/.cpp`. **Pre-empted on 2026-04-25** during
+  the Phase 1 `primitives` task once the `SubaddressIndex` flatten
+  work confirmed zero `.cpp` callers; see the *"Phase 5 pre-emption
+  rule + first application"* entry below. The Phase 5 commit's
+  deletion list excludes this file.
 - `rust/shekyl-ffi`'s `shekyl_wallet_*` C-ABI symbols (the open / save
   / save-as / rotate-password / change-password handle surface from
   sub-commits 2j and 2k). With C++ wallet2 deleted, these symbols
@@ -1386,6 +1390,88 @@ stack: cross-cutting locks");
 prior entry "Per-domain `Wallet` error enums + sealed
 `WalletSignerKind`" (immediately above) for the type-layer foundations
 this builds on.
+
+---
+
+## 2026-04-25 — Phase 5 pre-emption rule + first application (`wallet_ledger_ffi.rs`)
+
+**Decision.** Individual items from the Phase 5 deletion inventory may
+be deleted before Phase 5 lands when their callers are conclusively
+gone. The first application: `rust/shekyl-ffi/src/wallet_ledger_ffi.rs`
+and the corresponding `shekyl_ffi.h` typed-per-block ledger section
+were deleted on 2026-04-25 during the Phase 1 `primitives` task,
+immediately after the `SubaddressIndex` flatten commit confirmed zero
+`.cpp` / `.cc` / `.hpp` callers of any export from that file. The
+deletion commit's message body carries the grep evidence; the Phase 5
+commit's deletion inventory drops the now-deleted file from its
+enumeration (`docs/FOLLOWUPS.md` — *wallet2.cpp absorption* entry,
+sub-bullet *"Phase 5 inventory pre-emptions"*).
+
+**The rule.** Pre-empting an individual Phase 5 deletion item is
+acceptable when *all three* hold:
+
+1. **Zero current callers.** `git grep` against `*.cpp`, `*.cc`,
+   `*.h`, `*.hpp` returns no consumers outside the file itself
+   (the Rust file's own definitions and its `shekyl_ffi.h` mirror
+   prototypes do not count as callers).
+2. **Evidence in the commit message body.** The exact grep commands
+   and their (empty or self-only) output appear in the commit message
+   body of the pre-empting commit. "I checked, it's empty" is not
+   enough — reviewers must be able to reproduce the check from the
+   durable git record, not from a PR description that disappears
+   once the PR is merged.
+3. **Atomic FOLLOWUPS / Phase-5-inventory update in the same
+   commit.** The Phase 5 deletion list in `docs/FOLLOWUPS.md` (and
+   any other inventory document) drops the pre-empted item, with a
+   pointer back to the pre-empting commit. Without this step, Phase
+   5 lands and someone tries to delete a file that no longer exists,
+   then has to reconstruct what happened from git archaeology.
+
+**Pre-empting items with surviving callers is not acceptable**, even
+when the deletion looks easy. The Phase 5 mass-deletion exists
+precisely so the audit surface for individual surfaces stays
+predictable; an early deletion that orphans a caller dilutes the
+audit by spreading the failure mode across multiple commits.
+
+**Rationale.** Two pressures argue for pre-emption when the grep is
+conclusive:
+
+- The deleted surface is part of the `shekyl_wallet_*` C-ABI
+  inventory the prior decision-log entry
+  ("Phase 5 deletion scope: includes Rust FFI surfaces consumed
+  only by C++") already binds for deletion. Preserving it for an
+  unbounded period purely for inventory-symmetry trades real
+  maintenance overhead (lint debt, dependency churn, doc references
+  to deleted concepts) for a procedural neatness that does not
+  affect correctness.
+- The "while we're here is the enemy" rule (`15-deletion-and-debt.mdc`)
+  is honored by *splitting* the pre-emption into its own commit, not
+  by deferring the deletion. The first commit ships the in-scope
+  feature work (rename / migration / type change) without the
+  deletion; the immediate follow-up commit ships the deletion alone,
+  one concern per commit, each bisectable.
+
+**Rejected alternatives.**
+
+- "Always wait for Phase 5." Carries dead surface forward for the
+  entire rewrite window; produces a Phase 5 commit whose deletion
+  inventory padding makes review slower, not faster.
+- "Delete the dead surface in the same commit as the in-scope feature
+  change." Conflates concerns; reviewer cannot bisect a regression
+  in one half without unwinding the other. The two-commit shape
+  preserves bisectability without preserving dead code.
+
+**Consequence.** The Phase 5 commit's PR description names the
+pre-empted items explicitly so the cumulative deletion ledger across
+the rewrite is reconstructable from `git log` alone. A reviewer six
+months from now should be able to type
+`git log --grep="Phase 5 pre-emption"` and recover the full set of
+deletions that landed early.
+
+**Reference.** Commit message body of the deletion commit
+immediately following the `SubaddressIndex` flatten commit
+(2026-04-25) for the grep evidence; `docs/CHANGELOG.md`
+`[Unreleased]` *Removed* entry for the human-readable summary.
 
 ---
 

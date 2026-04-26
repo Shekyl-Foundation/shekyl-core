@@ -1220,18 +1220,16 @@ void shekyl_daemon_rpc_stop(ShekylDaemonRpcHandle* handle);
 #define SHEKYL_WALLET_ERR_CAPABILITY_VIEW_ONLY_NO_SPEND         25
 #define SHEKYL_WALLET_ERR_CAPABILITY_HARDWARE_OFFLOAD_NO_SPEND  26
 
-/* 2l.a — save_as + typed-ledger FFI surface (design pin #10 / Q2.A,
- * design pin #2 / Q1.alpha-Shape-2). Save_as is atomic only within a
- * single filesystem; cross-filesystem rename is refused outright so
- * the caller (typically the GUI) can fall back to a non-atomic
- * export flow that the user explicitly confirms. The ledger setters
- * may also refuse with BLOCK_NOT_HYDRATED if the C++ side calls a
- * setter for a block whose getter has not been invoked since open;
- * 2l.a leaves that branch unwired (the codepoint is reserved for
- * 2l.b/c when the hydrate-then-emit dance starts running). */
+/* save_as refusal codes. save_as is atomic only within a single
+ * filesystem (design pin #10 / Q2.A); cross-filesystem rename is
+ * refused outright so the caller (typically the GUI) can fall back
+ * to a non-atomic export flow that the user explicitly confirms.
+ * Pre-existing target files refuse so the orchestrator never
+ * silently overwrites a wallet pair. The companion typed-ledger
+ * FFI surface and its BLOCK_NOT_HYDRATED codepoint were deleted as
+ * a Phase 5 pre-emption; see docs/V3_WALLET_DECISION_LOG.md. */
 #define SHEKYL_WALLET_ERR_SAVE_AS_CROSS_FILESYSTEM        27
 #define SHEKYL_WALLET_ERR_SAVE_AS_TARGET_EXISTS           28
-#define SHEKYL_WALLET_ERR_BLOCK_NOT_HYDRATED              29
 
 /// AAD-readable header view of a `.wallet.keys` file. Layout pinned by
 /// `static_assert` below; any change in Rust flow-checks against the
@@ -1625,177 +1623,18 @@ bool shekyl_wallet_prefs_set_json(
     uint32_t* out_error);
 
 /* ===========================================================================
- * 2l.a -- save_as + typed per-block ledger FFI surface
+ * save_as -- atomic-within-a-filesystem wallet relocate
  * ---------------------------------------------------------------------------
- * Design pin #2 (Option alpha-Shape-2): per-element repr(C) structs whose
- * layout is bit-for-bit pinned by the static_asserts below. Hot scalars and
- * fixed-size byte arrays (txid, key_image, output_public_key, ...) are
- * direct fields; variable-length parts and Phase-6-sensitive secrets
- * (combined_shared_secret, FCMP precomputed path, tx secret-key scalars)
- * live inside an `opaque_blob` that Rust serializes via postcard. C++
- * MUST NOT inspect the opaque blob -- it carries it back unchanged on
- * save. This keeps the wire format under Rust's exclusive ownership and
- * eliminates the need for a hand-rolled C++ postcard reader.
- *
- * Memory ownership:
- *   * `shekyl_wallet_get_*` returns Rust-allocated buffers. Caller
- *     releases each with the paired `shekyl_wallet_free_*`.
- *   * `shekyl_wallet_set_*` takes borrowed pointers; Rust copies every
- *     scalar / array / heap byte before returning. Callers may free
- *     their input buffers immediately after the setter returns.
- *
- * The C++ wallet2 hydrate / emit helpers wrap each block in an RAII
- * view class (added in 2l.b under src/wallet/wallet2_handle_views.h);
- * raw pointer access from wallet2.cpp is forbidden by code review.
+ * The companion typed per-block ledger FFI surface (the per-element
+ * repr(C) structs and `shekyl_wallet_{get,set,free}_*` trios that
+ * shipped under the 2l.a sub-commit) was deleted as a Phase 5
+ * pre-emption: zero `.cpp` callers ever materialized, and waiting
+ * for Phase 5's mass deletion would have left an unused FFI surface
+ * sitting on the maintenance budget. See
+ * `docs/V3_WALLET_DECISION_LOG.md` -- "Phase 5 pre-emption rule" --
+ * for the precedent that gates further individual pre-emptions.
  * ===========================================================================
  */
-
-/* --- LedgerBlock leaves ------------------------------------------------- */
-
-typedef struct ShekylTransferDetailsC {
-    uint8_t  tx_hash[32];
-    uint64_t internal_output_index;
-    uint64_t global_output_index;
-    uint64_t block_height;
-    /* Compressed Edwards encoding of the output public key. */
-    uint8_t  key_compressed[32];
-    /* Canonical 32-byte scalar encoding of the per-output key offset. */
-    uint8_t  key_offset[32];
-    /* Pedersen commitment mask (32-byte scalar) and amount split for
-     * efficient hot-path read; the full Commitment is reconstructed in
-     * Rust on set. */
-    uint8_t  commitment_mask[32];
-    uint64_t commitment_amount;
-    uint8_t  spent;          /* 0 / 1 */
-    uint8_t  has_key_image;  /* 0 / 1 -- gate for `key_image` validity */
-    uint8_t  _pad0[6];
-    uint8_t  key_image[32];
-    uint8_t  staked;         /* 0 / 1 */
-    uint8_t  stake_tier;
-    uint8_t  _pad1[6];
-    uint64_t stake_lock_until;
-    uint64_t last_claimed_height;
-    uint64_t eligible_height;
-    uint8_t  frozen;         /* 0 / 1 */
-    uint8_t  _pad2[7];
-    uint8_t* opaque_blob;
-    size_t   opaque_blob_len;
-} ShekylTransferDetailsC;
-static_assert(sizeof(ShekylTransferDetailsC) == 256,
-    "ShekylTransferDetailsC layout must match the Rust const-assert in "
-    "rust/shekyl-ffi/src/wallet_ledger_ffi.rs");
-
-typedef struct ShekylBlockchainTipC {
-    uint64_t synced_height;
-    uint8_t  has_hash;       /* 0 == None, 1 == Some(tip_hash) */
-    uint8_t  _pad0[7];
-    uint8_t  tip_hash[32];
-} ShekylBlockchainTipC;
-static_assert(sizeof(ShekylBlockchainTipC) == 48,
-    "ShekylBlockchainTipC layout must match the Rust const-assert");
-
-typedef struct ShekylReorgBlockEntryC {
-    uint64_t height;
-    uint8_t  hash[32];
-} ShekylReorgBlockEntryC;
-static_assert(sizeof(ShekylReorgBlockEntryC) == 40,
-    "ShekylReorgBlockEntryC layout must match the Rust const-assert");
-
-/* --- BookkeepingBlock leaves ------------------------------------------- */
-
-/* Flat subaddress namespace: `index` is the bare 32-bit index, with
- * `index == 0` reserved for the primary address. The primary address
- * is reconstructed from the wallet keys at every load and is NOT
- * stored in the registry; an attempt to set an entry with `index == 0`
- * returns SHEKYL_WALLET_ERR_LEDGER. */
-typedef struct ShekylSubaddressRegistryEntryC {
-    uint8_t  spend_pk_bytes[32];
-    uint32_t index;
-} ShekylSubaddressRegistryEntryC;
-static_assert(sizeof(ShekylSubaddressRegistryEntryC) == 36,
-    "ShekylSubaddressRegistryEntryC layout must match the Rust const-assert");
-
-/* Per-index subaddress label. The flat-namespace migration removed
- * `SubaddressLabels::primary`; the primary slot is the `index == 0`
- * entry of this map like every other index. */
-typedef struct ShekylSubaddressLabelEntryC {
-    uint32_t index;
-    uint8_t* label_ptr;
-    size_t   label_len;
-} ShekylSubaddressLabelEntryC;
-static_assert(sizeof(ShekylSubaddressLabelEntryC) == 24,
-    "ShekylSubaddressLabelEntryC layout must match the Rust const-assert");
-
-typedef struct ShekylAddressBookEntryC {
-    uint8_t* address_ptr;
-    size_t   address_len;
-    uint8_t* description_ptr;
-    size_t   description_len;
-    uint8_t  has_payment_id; /* 0 == None */
-    uint8_t  is_subaddress;  /* 0 / 1 */
-    uint8_t  _pad0[6];
-    uint8_t  payment_id_bytes[8];
-} ShekylAddressBookEntryC;
-static_assert(sizeof(ShekylAddressBookEntryC) == 48,
-    "ShekylAddressBookEntryC layout must match the Rust const-assert");
-
-/* --- TxMetaBlock leaves ------------------------------------------------ */
-
-typedef struct ShekylTxKeyEntryC {
-    uint8_t  txid[32];
-    uint32_t additional_count; /* diagnostic; must equal blob's vec len */
-    uint8_t  _pad0[4];
-    /* Postcard-encoded TxSecretKeys (primary + Vec<additional>). Secret
-     * scalar bytes never cross the FFI as plaintext arrays. */
-    uint8_t* opaque_blob;
-    size_t   opaque_blob_len;
-} ShekylTxKeyEntryC;
-static_assert(sizeof(ShekylTxKeyEntryC) == 56,
-    "ShekylTxKeyEntryC layout must match the Rust const-assert");
-
-typedef struct ShekylTxNoteEntryC {
-    uint8_t  txid[32];
-    uint8_t* note_ptr;
-    size_t   note_len;
-} ShekylTxNoteEntryC;
-static_assert(sizeof(ShekylTxNoteEntryC) == 48,
-    "ShekylTxNoteEntryC layout must match the Rust const-assert");
-
-typedef struct ShekylTxAttributeEntryC {
-    uint8_t* key_ptr;
-    size_t   key_len;
-    uint8_t* value_ptr;
-    size_t   value_len;
-} ShekylTxAttributeEntryC;
-static_assert(sizeof(ShekylTxAttributeEntryC) == 32,
-    "ShekylTxAttributeEntryC layout must match the Rust const-assert");
-
-typedef struct ShekylScannedPoolTxEntryC {
-    uint8_t  txid[32];
-    uint64_t first_seen_unix_secs;
-    uint8_t  double_spend_seen;
-    uint8_t  _pad0[7];
-} ShekylScannedPoolTxEntryC;
-static_assert(sizeof(ShekylScannedPoolTxEntryC) == 48,
-    "ShekylScannedPoolTxEntryC layout must match the Rust const-assert");
-
-/* --- SyncStateBlock scalars (variable-length pending_tx_hashes is a
- *     separate array trio below) ----------------------------------------- */
-
-typedef struct ShekylSyncStateScalarsC {
-    uint32_t block_version;
-    uint32_t confirmations_required;
-    uint64_t restore_from_height;
-    uint8_t  has_creation_anchor;
-    uint8_t  scan_completed;
-    uint8_t  trusted_daemon;
-    uint8_t  _pad0[5];
-    uint8_t  creation_anchor_hash[32];
-} ShekylSyncStateScalarsC;
-static_assert(sizeof(ShekylSyncStateScalarsC) == 56,
-    "ShekylSyncStateScalarsC layout must match the Rust const-assert");
-
-/* --- save_as ----------------------------------------------------------- */
 
 /* Atomic-within-a-filesystem relocate of the wallet pair to a new
  * base path. Cross-filesystem rename is refused with
@@ -1809,167 +1648,6 @@ bool shekyl_wallet_save_as(
     const char* new_base_path_ptr, size_t new_base_path_len,
     const uint8_t* password_ptr, size_t password_len,
     uint32_t* out_error);
-
-/* --- LedgerBlock get / set / free trios -------------------------------- */
-
-bool shekyl_wallet_get_transfers(
-    ShekylWallet* h,
-    ShekylTransferDetailsC** out_ptr, size_t* out_count,
-    uint32_t* out_error);
-bool shekyl_wallet_set_transfers(
-    ShekylWallet* h,
-    const ShekylTransferDetailsC* in_ptr, size_t in_count,
-    uint32_t* out_error);
-void shekyl_wallet_free_transfers(
-    ShekylTransferDetailsC* ptr, size_t count);
-
-bool shekyl_wallet_get_blockchain_tip(
-    ShekylWallet* h, ShekylBlockchainTipC* out, uint32_t* out_error);
-bool shekyl_wallet_set_blockchain_tip(
-    ShekylWallet* h, const ShekylBlockchainTipC* in_ptr, uint32_t* out_error);
-
-bool shekyl_wallet_get_reorg_blocks(
-    ShekylWallet* h,
-    ShekylReorgBlockEntryC** out_ptr, size_t* out_count,
-    uint32_t* out_error);
-bool shekyl_wallet_set_reorg_blocks(
-    ShekylWallet* h,
-    const ShekylReorgBlockEntryC* in_ptr, size_t in_count,
-    uint32_t* out_error);
-void shekyl_wallet_free_reorg_blocks(
-    ShekylReorgBlockEntryC* ptr, size_t count);
-
-bool shekyl_wallet_get_ledger_block_version(
-    ShekylWallet* h, uint32_t* out, uint32_t* out_error);
-bool shekyl_wallet_set_ledger_block_version(
-    ShekylWallet* h, uint32_t version, uint32_t* out_error);
-
-/* --- BookkeepingBlock get / set / free trios --------------------------- */
-
-bool shekyl_wallet_get_subaddress_registry(
-    ShekylWallet* h,
-    ShekylSubaddressRegistryEntryC** out_ptr, size_t* out_count,
-    uint32_t* out_error);
-bool shekyl_wallet_set_subaddress_registry(
-    ShekylWallet* h,
-    const ShekylSubaddressRegistryEntryC* in_ptr, size_t in_count,
-    uint32_t* out_error);
-void shekyl_wallet_free_subaddress_registry(
-    ShekylSubaddressRegistryEntryC* ptr, size_t count);
-
-/* The flat-namespace `subaddress_labels` map covers every labeled
- * address, including the primary slot (`index == 0`). The dedicated
- * primary-label trio that pre-flat-namespace layouts carried is gone. */
-bool shekyl_wallet_get_subaddress_labels(
-    ShekylWallet* h,
-    ShekylSubaddressLabelEntryC** out_ptr, size_t* out_count,
-    uint32_t* out_error);
-bool shekyl_wallet_set_subaddress_labels(
-    ShekylWallet* h,
-    const ShekylSubaddressLabelEntryC* in_ptr, size_t in_count,
-    uint32_t* out_error);
-void shekyl_wallet_free_subaddress_labels(
-    ShekylSubaddressLabelEntryC* ptr, size_t count);
-
-bool shekyl_wallet_get_address_book(
-    ShekylWallet* h,
-    ShekylAddressBookEntryC** out_ptr, size_t* out_count,
-    uint32_t* out_error);
-bool shekyl_wallet_set_address_book(
-    ShekylWallet* h,
-    const ShekylAddressBookEntryC* in_ptr, size_t in_count,
-    uint32_t* out_error);
-void shekyl_wallet_free_address_book(
-    ShekylAddressBookEntryC* ptr, size_t count);
-
-bool shekyl_wallet_get_bookkeeping_block_version(
-    ShekylWallet* h, uint32_t* out, uint32_t* out_error);
-bool shekyl_wallet_set_bookkeeping_block_version(
-    ShekylWallet* h, uint32_t version, uint32_t* out_error);
-
-/* --- TxMetaBlock get / set / free trios -------------------------------- */
-
-bool shekyl_wallet_get_tx_keys(
-    ShekylWallet* h,
-    ShekylTxKeyEntryC** out_ptr, size_t* out_count,
-    uint32_t* out_error);
-bool shekyl_wallet_set_tx_keys(
-    ShekylWallet* h,
-    const ShekylTxKeyEntryC* in_ptr, size_t in_count,
-    uint32_t* out_error);
-void shekyl_wallet_free_tx_keys(
-    ShekylTxKeyEntryC* ptr, size_t count);
-
-bool shekyl_wallet_get_tx_notes(
-    ShekylWallet* h,
-    ShekylTxNoteEntryC** out_ptr, size_t* out_count,
-    uint32_t* out_error);
-bool shekyl_wallet_set_tx_notes(
-    ShekylWallet* h,
-    const ShekylTxNoteEntryC* in_ptr, size_t in_count,
-    uint32_t* out_error);
-void shekyl_wallet_free_tx_notes(
-    ShekylTxNoteEntryC* ptr, size_t count);
-
-bool shekyl_wallet_get_tx_attributes(
-    ShekylWallet* h,
-    ShekylTxAttributeEntryC** out_ptr, size_t* out_count,
-    uint32_t* out_error);
-bool shekyl_wallet_set_tx_attributes(
-    ShekylWallet* h,
-    const ShekylTxAttributeEntryC* in_ptr, size_t in_count,
-    uint32_t* out_error);
-void shekyl_wallet_free_tx_attributes(
-    ShekylTxAttributeEntryC* ptr, size_t count);
-
-bool shekyl_wallet_get_scanned_pool_txs(
-    ShekylWallet* h,
-    ShekylScannedPoolTxEntryC** out_ptr, size_t* out_count,
-    uint32_t* out_error);
-bool shekyl_wallet_set_scanned_pool_txs(
-    ShekylWallet* h,
-    const ShekylScannedPoolTxEntryC* in_ptr, size_t in_count,
-    uint32_t* out_error);
-void shekyl_wallet_free_scanned_pool_txs(
-    ShekylScannedPoolTxEntryC* ptr, size_t count);
-
-bool shekyl_wallet_get_tx_meta_block_version(
-    ShekylWallet* h, uint32_t* out, uint32_t* out_error);
-bool shekyl_wallet_set_tx_meta_block_version(
-    ShekylWallet* h, uint32_t version, uint32_t* out_error);
-
-/* --- SyncStateBlock scalar struct + pending_tx_hashes trio ------------- */
-
-bool shekyl_wallet_get_sync_state_scalars(
-    ShekylWallet* h,
-    ShekylSyncStateScalarsC* out,
-    uint32_t* out_error);
-bool shekyl_wallet_set_sync_state_scalars(
-    ShekylWallet* h,
-    const ShekylSyncStateScalarsC* in_ptr,
-    uint32_t* out_error);
-
-/* `out_ptr` points to an array of 32-byte tx hashes. Use the
- * standard Rust-allocated lifetime: free with
- * shekyl_wallet_free_pending_tx_hashes after reading. */
-bool shekyl_wallet_get_pending_tx_hashes(
-    ShekylWallet* h,
-    uint8_t (**out_ptr)[32], size_t* out_count,
-    uint32_t* out_error);
-bool shekyl_wallet_set_pending_tx_hashes(
-    ShekylWallet* h,
-    const uint8_t (*in_ptr)[32], size_t in_count,
-    uint32_t* out_error);
-void shekyl_wallet_free_pending_tx_hashes(
-    uint8_t (*ptr)[32], size_t count);
-
-/* --- Cross-block preflight -------------------------------------------- */
-
-/* Run WalletLedger::preflight_save() against the in-memory ledger.
- * Used by the C++ save path (2l.c) before invoking save_state so a
- * schema-invariant violation surfaces before the AEAD seal runs. */
-bool shekyl_wallet_ledger_preflight(
-    ShekylWallet* h, uint32_t* out_error);
 
 } // extern "C"
 

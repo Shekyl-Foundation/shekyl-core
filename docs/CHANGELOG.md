@@ -2,6 +2,55 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **`rust/shekyl-ffi/src/wallet_ledger_ffi.rs` deleted as a Phase 5
+  pre-emption.** The typed cache-handle FFI surface from sub-commit
+  2l.a — `ShekylTransferDetailsC` / `ShekylBlockchainTipC` /
+  `ShekylReorgBlockEntryC` / `ShekylSubaddressRegistryEntryC` /
+  `ShekylSubaddressLabelEntryC` / `ShekylAddressBookEntryC` /
+  `ShekylTxKeyEntryC` / `ShekylTxNoteEntryC` /
+  `ShekylTxAttributeEntryC` / `ShekylScannedPoolTxEntryC` /
+  `ShekylSyncStateScalarsC` and their
+  `shekyl_wallet_{get,set,free}_*` trios plus
+  `shekyl_wallet_ledger_preflight` — is gone. The corresponding
+  declarations in `src/shekyl/shekyl_ffi.h` are stripped; the
+  reserved `SHEKYL_WALLET_ERR_BLOCK_NOT_HYDRATED` (codepoint 29)
+  retires alongside the surface that produced it. `save_as`
+  (the in-scope C-ABI export from `wallet_file_ffi.rs`) and its
+  refusal codes (`SAVE_AS_CROSS_FILESYSTEM` / `SAVE_AS_TARGET_EXISTS`)
+  remain unchanged. The `shekyl-primitives` main- and dev-dep are
+  also removed from `rust/shekyl-ffi/Cargo.toml`; the only consumer
+  was the deleted file's `Commitment` reconstruction path.
+
+  **Caller evidence (commit message body).** Pre-flight `git grep`
+  against `*.cpp` / `*.cc` / `*.h` / `*.hpp` for every export of the
+  deleted surface returned only `src/shekyl/shekyl_ffi.h` itself
+  (the prototypes that this commit removes). Zero `.cpp` consumers
+  ever materialized — the original consumer
+  (`wallet2_handle_views.h/.cpp`) was scheduled but never written,
+  and Phase 5 will delete the enclosing `wallet2.cpp` shim
+  wholesale. Full `git grep` transcript pinned in the deletion
+  commit's message body for reproducibility.
+
+  **Decision rule.** This deletion establishes the *Phase 5
+  pre-emption rule* in `docs/V3_WALLET_DECISION_LOG.md`: an
+  individual Phase 5 inventory item may be deleted early when (1)
+  zero current `.cpp` callers, (2) grep evidence in the deletion
+  commit's message body, and (3) atomic update of
+  `docs/FOLLOWUPS.md` / Phase-5-inventory metadata in the same
+  commit. Pre-empting items with surviving callers is
+  not acceptable. The Decision Log entry locks the rule so future
+  pre-emptions follow a precedent rather than an ad-hoc precedent.
+
+  **Inventory hygiene.** `docs/FOLLOWUPS.md` (sub-bullet *"Phase 5
+  inventory pre-emptions"* under the *wallet2.cpp absorption*
+  entry) records this file as already pre-empted; the eventual
+  Phase 5 commit's deletion list excludes it. The pre-existing
+  clippy lints in the now-deleted file (`as u8` casts, explicit
+  `iter()` loop, `_keep_imports` arg count) close by absorption —
+  the file holding them no longer exists.
+
 ### Changed
 
 - **Subaddress namespace flattened to `SubaddressIndex(u32)` across the

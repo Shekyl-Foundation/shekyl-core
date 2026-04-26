@@ -3032,7 +3032,6 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-fcmp-plus-plus",
  "shekyl-generators",
- "shekyl-primitives",
  "shekyl-proofs",
  "shekyl-staking",
  "shekyl-tx-builder",
