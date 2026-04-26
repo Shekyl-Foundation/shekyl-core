@@ -3247,7 +3247,10 @@ dependencies = [
  "shekyl-wallet-file",
  "shekyl-wallet-prefs",
  "shekyl-wallet-state",
+ "tempfile",
  "thiserror",
+ "tokio",
+ "tracing",
  "zeroize",
 ]
 

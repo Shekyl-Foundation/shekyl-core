@@ -78,9 +78,19 @@
 //! # Status (as of this commit)
 //!
 //! Type-layer foundations + the [`Wallet<S>`](Wallet) struct itself with
-//! its accessor surface and the [`DaemonClient`] thin wrapper. The
-//! struct is composition over field type — every member's purpose,
-//! mutability discipline, and ownership are explicit:
+//! its accessor surface, the [`DaemonClient`] thin wrapper, and the
+//! lifecycle methods on `Wallet<SoloSigner>`. [`Wallet::create`] and
+//! [`Wallet::open_full`] ship end-to-end against the
+//! [`shekyl_wallet_file::WalletFile`] envelope and the
+//! [`shekyl_crypto_pq::account::AllKeysBlob`] re-derivation path;
+//! [`Wallet::open_view_only`] and [`Wallet::open_hardware_offload`]
+//! ship as signature stubs that return
+//! [`OpenError::CapabilityNotYetImplemented`](error::OpenError::CapabilityNotYetImplemented)
+//! pending the matching `shekyl-crypto-pq` constructors.
+//! [`Wallet::change_password`] and [`Wallet::close`] ship for every
+//! signer kind. The struct is composition over field type — every
+//! member's purpose, mutability discipline, and ownership are
+//! explicit:
 //!
 //! | Field                 | Type                                                 | Provenance                              |
 //! | --------------------- | ---------------------------------------------------- | --------------------------------------- |
@@ -137,6 +147,7 @@
 pub mod capability;
 pub mod daemon;
 pub mod error;
+pub mod lifecycle;
 pub mod merge;
 pub mod network;
 pub mod pending;
@@ -145,6 +156,7 @@ pub mod signer;
 pub use capability::Capability;
 pub use daemon::DaemonClient;
 pub use error::{IoError, KeyError, OpenError, PendingTxError, RefreshError, SendError, TxError};
+pub use lifecycle::{CapabilityInput, Credentials, OpenedWallet, WalletCreateParams};
 pub use network::Network;
 pub use pending::{
     FeePriority, PendingTx, ReservationId, TxHash, TxRecipient, TxRecipientSummary, TxRequest,

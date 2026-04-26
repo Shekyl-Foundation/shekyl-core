@@ -118,6 +118,16 @@ impl ReservationId {
     pub fn raw(self) -> u64 {
         self.0
     }
+
+    /// Construct a [`ReservationId`] from a raw counter value. Crate-
+    /// internal; production code goes through `build_pending_tx` (which
+    /// owns the monotonic counter on `Wallet<S>`). Tests in sibling
+    /// modules use this to synthesize a recognizable id without
+    /// running the full build pipeline.
+    #[cfg(test)]
+    pub(crate) fn new(v: u64) -> Self {
+        Self(v)
+    }
 }
 
 /// Result of [`Wallet::submit_pending_tx`].

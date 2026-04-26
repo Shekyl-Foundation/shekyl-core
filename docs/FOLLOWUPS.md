@@ -9,6 +9,41 @@ citing in a review.
 
 ---
 
+## V3.0 — wallet stack greenfield Rust rewrite
+
+- **View/HW lifecycle bodies in `shekyl-wallet-core`.**
+  `Wallet::open_view_only` and `Wallet::open_hardware_offload` ship as
+  signature stubs that return `OpenError::CapabilityNotYetImplemented`
+  pending the matching `shekyl-crypto-pq` `AllKeysBlob` constructors
+  (a view-only constructor that omits `spend_sk` and `ml_kem_dk`; a
+  hardware-offload constructor that additionally retains the device
+  descriptor). When those constructors land, the stub bodies are
+  replaced with end-to-end paths mirroring `open_full` (envelope open
+  → rederivation inputs extraction → blob population from the
+  per-capability constructor → public-bytes cross-check against the
+  envelope's expected classical address → prefs load → ledger and
+  indexes assembly), and `OpenError::CapabilityNotYetImplemented` is
+  deleted from `error.rs` in the same commit. The variant carries a
+  doc comment naming this follow-up explicitly so the deletion target
+  is grep-able from the code site, not only from this file. Target:
+  V3.0.
+
+- **`Wallet::change_password` integration tests against
+  `WalletFile::rotate_password`.** The lifecycle commit's unit tests
+  for `change_password` exercise the orchestrator path (rotate, then
+  reopen with the new password and refuse the old one) but rely on
+  `WalletFile::rotate_password`'s own test coverage for the underlying
+  envelope rewrap correctness. A small integration suite in
+  `shekyl-wallet-core` should drive `change_password` against a real
+  on-disk wallet across all three capabilities (FULL today; ViewOnly /
+  HardwareOffload once their `open_*` bodies land), verifying that the
+  rotated envelope round-trips against an independently-constructed
+  `WalletFile::open` call rather than only against `Wallet::open_full`.
+  This pins the full I/O ↔ KDF ↔ AEAD chain at the orchestrator layer.
+  Target: V3.0.
+
+---
+
 ## V3.1 — audit response and stressnet gates
 
 - **PQC Multisig V3.1: external adversarial review (Phase 5).**
@@ -95,6 +130,48 @@ citing in a review.
   `fcmp_verification_hash`) are internal to `tx_pool.cpp` with no RPC
   exposure. The stressnet wallet exerciser (`shekyl-dev/stressnet/`) uses
   block validation p95 as an indirect proxy until this endpoint exists.
+
+- **MFA / hardware-token integration for wallet file decryption.**
+  V3.0 ships with password-only authentication on the wallet file
+  envelope. V3.1 adds an optional FIDO2 / WebAuthn capability where
+  the file's encryption KEK is derived from
+  `KDF(password, fido2_assertion)` rather than `KDF(password)` alone:
+  without the hardware token, the wallet file cannot be decrypted
+  regardless of password. This defends against the threat model that
+  matters most for a privacy-focused wallet — a host compromised by
+  malware capable of keylogging the password — for which plain
+  password-at-open offers zero protection. Specifically: the V3.1
+  design uses the CTAP2 `hmac-secret` extension to bind the KEK to a
+  registered credential.
+
+  **Format.** The V3.0 wallet file format does not reserve fields for
+  MFA. V3.1 introduces them via a format-version bump, mirroring the
+  precedent already encoded in `docs/WALLET_FILE_FORMAT_V1.md` for
+  multisig (`CAPABILITY_RESERVED_MULTISIG = 0x04` and the
+  forward-looking `wrap_count` reserved byte). Two paths are open:
+  V3.1 either re-uses one of those slots (for example, treating the
+  hardware-token requirement as a wrap-count discriminator) or adds a
+  new capability mode behind the same format-version bump. The
+  decision lands when the V3.1 design starts.
+
+  **Recovery model.** Seed-phrase restoration is the canonical
+  recovery path for token loss: lose the FIDO2 token, restore the
+  wallet from BIP-39, pair a new token. Multi-token enrollment (N
+  tokens, any of which can decrypt) is a possible enhancement
+  deferred to V3.2 if the V3.1 single-token UX surfaces sufficient
+  friction. The V3.1 design discussion starts from "single-token +
+  seed-phrase recovery" as the default; do not relitigate.
+
+  **Forward compatibility.** The lifecycle commit ships
+  `Credentials<'_>` as the parameter type for every lifecycle entry
+  point (`Wallet::create`, `open_full`, `open_view_only`,
+  `open_hardware_offload`, `change_password`, `close`). Today the
+  struct has a single private `password` field reachable through
+  `Credentials::password_only(...)` / `.password()`. V3.1 adds an
+  `authenticator: Option<AuthenticatorRequest<'_>>` field and a
+  sibling `Credentials::password_with_authenticator(pwd, auth)`
+  constructor; existing `password_only` call sites compile unchanged.
+  Target: V3.1.
 
 ---
 

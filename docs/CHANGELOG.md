@@ -4,6 +4,122 @@
 
 ### Added
 
+- **`Wallet::create` / `Wallet::open_full` / `Wallet::change_password` /
+  `Wallet::close` lifecycle methods on `shekyl-wallet-core` (Phase 1
+  `lifecycle` task).** The new
+  [`shekyl_wallet_core::wallet::lifecycle`](../rust/shekyl-wallet-core/src/wallet/lifecycle.rs)
+  module composes
+  [`shekyl-wallet-file`](../rust/shekyl-wallet-file/src/),
+  [`shekyl-crypto-pq::account::rederive_account`](../rust/shekyl-crypto-pq/src/account.rs),
+  [`shekyl-wallet-prefs`](../rust/shekyl-wallet-prefs/src/),
+  [`shekyl-wallet-state::WalletLedger`](../rust/shekyl-wallet-state/src/wallet_ledger.rs),
+  and
+  [`shekyl-wallet-state::LedgerIndexes`](../rust/shekyl-wallet-state/src/ledger_indexes.rs)
+  into the `Wallet<S>` orchestrator's open / create / rotate / close
+  surface. Public API:
+
+  - `Credentials<'a>` — forward-compatible authentication parameter.
+    V3.0 has a private `password: &'a [u8]` field reachable through
+    `Credentials::password_only(&[u8])` and `Credentials::password()`;
+    V3.1 adds `authenticator: Option<AuthenticatorRequest<'a>>` and
+    `Credentials::password_with_authenticator(pwd, auth)` without
+    breaking existing call sites. See `docs/V3_WALLET_DECISION_LOG.md`
+    *"Wallet authentication: V3.0 password-only; MFA is V3.1 via
+    format-version bump"* (2026-04-26) for the API shape rationale.
+  - `OpenedWallet<S>` typed-sum return for `open_full`.
+    `Loaded(Wallet<S>)` indicates the persisted ledger file decoded
+    cleanly; `Restored { wallet, from_height }` indicates the keys
+    file was intact but the ledger file was missing or unreadable —
+    the wallet was reconstructed against an empty ledger anchored at
+    `from_height = restore_height_hint` and the caller must drive a
+    refresh to rebuild state. See `docs/V3_WALLET_DECISION_LOG.md`
+    *"`Wallet::open_full`: lost-state surfacing via typed
+    `OpenedWallet` sum"* (2026-04-26).
+  - `WalletCreateParams<'a>` (9 public fields) and
+    `CapabilityInput<'a>::Full { master_seed_64, seed_format }` for
+    `Wallet::create`. ViewOnly / HardwareOffload `CapabilityInput`
+    variants are deferred alongside the matching `open_*` bodies;
+    the FULL variant ships end-to-end. A `#[cfg(test)]
+    WalletCreateParams::for_test_full(base_path, password,
+    master_seed_64)` helper pins all eight non-essential fields to
+    known-good defaults for unit-test fixtures; production callers
+    (CLI / RPC) construct the struct literal so the field set is
+    explicit at every call site.
+  - `Wallet::create(params) -> Result<Wallet<SoloSigner>, OpenError>` —
+    delegates to `WalletFile::create` with derived
+    `DerivationNetwork` / `SeedFormat`, runs `rederive_account` to
+    populate `AllKeysBlob`, cross-checks
+    `blob.classical_address_bytes` against the envelope's
+    `expected_classical_address` (failure → `KeyError::PublicBytesMismatch`),
+    initializes `WalletLedger::empty()` and `LedgerIndexes::empty()`,
+    persists initial prefs via `WalletFile::save_prefs`, and assembles
+    the `Wallet<SoloSigner>` instance.
+  - `Wallet::open_full(base_path, &credentials, network, daemon,
+    overrides) -> Result<OpenedWallet<SoloSigner>, OpenError>` — opens
+    the envelope (mapping `WalletEnvelopeError::InvalidPasswordOrCorrupt`
+    to `OpenError::IncorrectPassword`,
+    `RequiresMultisigSupport` to `OpenError::RequiresMultisig`, and
+    capability / network mismatches to the corresponding typed
+    variants), enforces FULL-only on this entry point
+    (`OpenError::CapabilityMismatch` if the disk envelope is
+    ViewOnly or HardwareOffload), runs the same rederive +
+    public-bytes-cross-check sequence as `create`, surfaces tampered
+    prefs as a structured `tracing::warn!` and falls back to defaults
+    per `docs/WALLET_PREFS.md §5`'s advisory failure policy, rebuilds
+    `LedgerIndexes` from the persisted `LedgerBlock`, and returns
+    `Loaded` or `Restored { from_height }` based on the
+    `WalletFile::open` outcome.
+  - `Wallet::open_view_only(...)` / `Wallet::open_hardware_offload(...)`
+    — signature-only stubs that return
+    `OpenError::CapabilityNotYetImplemented { capability }` pending
+    the matching `shekyl-crypto-pq` `AllKeysBlob` constructors. The
+    error variant is deletion-tracked at the code site and in
+    `docs/FOLLOWUPS.md` *V3.0 → "View/HW lifecycle bodies in
+    `shekyl-wallet-core`"*. See `docs/V3_WALLET_DECISION_LOG.md`
+    *"`Wallet<S>` lifecycle: capability scoping for V3.0"* (2026-04-26)
+    for the stub-shape rationale.
+  - `Wallet::change_password(&old, &new, new_kdf) -> Result<(), OpenError>`
+    — delegates to `WalletFile::rotate_password`, mapping
+    `WalletEnvelopeError::InvalidPasswordOrCorrupt` to
+    `OpenError::IncorrectPassword`. Available on every signer kind
+    (FULL / ViewOnly / HardwareOffload / multisig) since the
+    underlying envelope rewrap is capability-agnostic.
+  - `Wallet::close(self, &credentials) -> Result<(), OpenError>` —
+    refuses with `OpenError::OutstandingPendingTx { count }` when
+    `outstanding_pending_txs() > 0` (drives cross-cutting lock 4's
+    "no clean close while reservations are live" invariant).
+    Otherwise saves state via `WalletFile::save_state`, saves prefs
+    via `WalletFile::save_prefs`, and consumes `self`. The
+    method's doc comment names the zeroization chain explicitly:
+    `WalletFile::Drop` releases the advisory lock on `<base>.keys`;
+    `AllKeysBlob::Drop` zeroizes `spend_sk` / `view_sk` /
+    `ml_kem_dk` and the public-key fields. The chain is
+    single-level (`Wallet<S>.keys: AllKeysBlob` directly, no
+    wrapper), and the underlying `Drop` semantics are tested in
+    `shekyl-crypto-pq`'s own unit tests.
+
+  Eleven unit tests cover the round-trip create / open path, password
+  rotation followed by reopen-with-new-password and refusal of the
+  old, `OpenError::IncorrectPassword`, `OpenError::NetworkMismatch`,
+  the `Restored { from_height }` lost-state path (state file deleted
+  between create and open), `OpenError::OutstandingPendingTx` (close
+  refused while a synthetic reservation is in `Wallet::reservations`),
+  the structured `tracing::warn!` on prefs HMAC tamper events, and
+  the typed `OpenError::CapabilityNotYetImplemented` returns from
+  the view-only and hardware-offload stubs. The
+  `apply_scan_result_post_open_works` lifecycle ↔ scan-result
+  composition test is deferred to the Phase 2a `refresh` commit
+  where it can exercise a real `ScanResult` against the lifecycle's
+  `LedgerIndexes::rebuild_from_ledger` output.
+
+  The lifecycle commit ships `tracing = "0.1"` as a runtime
+  dependency on `shekyl-wallet-core` (used for the prefs-tamper
+  warn log only) and `tempfile = "3"` plus `tokio = { version = "1",
+  features = ["macros", "rt"] }` as dev-dependencies (lifecycle
+  tests construct on-disk fixtures and instantiate a
+  `SimpleRequestRpc` against an unreachable URL for the dummy
+  `DaemonClient`).
+
 - **`Wallet::build_pending_tx` / `submit_pending_tx` / `discard_pending_tx`
   three-method `PendingTx` lifecycle (Phase 1 `pending_tx` task).** The
   new

@@ -121,6 +121,22 @@ pub enum OpenError {
         /// How many in-flight reservations the close call observed.
         count: usize,
     },
+
+    /// **TRANSIENT — DELETE WHEN VIEW/HW BODIES LAND.**
+    ///
+    /// Tracked in `docs/FOLLOWUPS.md` § V3.0 → "View/HW lifecycle bodies".
+    /// Blocks on `shekyl-crypto-pq` ViewOnly / HardwareOffload
+    /// `AllKeysBlob` constructors. Once those land, this variant is
+    /// removed and the stub methods get real bodies.
+    ///
+    /// Do not introduce new use sites. The variant exists only so the
+    /// stub signatures can return a typed error rather than
+    /// `unimplemented!()`.
+    #[error("capability {capability:?} is not yet implemented in this build")]
+    CapabilityNotYetImplemented {
+        /// Capability the stub method represents.
+        capability: super::Capability,
+    },
 }
 
 // --- Refresh ---------------------------------------------------------------

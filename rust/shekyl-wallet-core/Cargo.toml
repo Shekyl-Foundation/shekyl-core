@@ -26,12 +26,15 @@ serde_json = { version = "1", optional = true }
 zeroize = { version = "1", features = ["derive"], optional = true }
 hex = { version = "0.4", optional = true }
 thiserror = "2"
+tracing = "0.1"
 
 [dev-dependencies]
 curve25519-dalek = { version = "4", features = ["alloc"] }
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [[bench]]
 name = "multisig_v31"

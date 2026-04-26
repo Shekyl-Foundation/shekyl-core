@@ -1947,4 +1947,197 @@ immediately following the `SubaddressIndex` flatten commit
 
 ---
 
+## 2026-04-26 — `Wallet<S>` lifecycle: capability scoping for V3.0
+
+**Decision.** The `shekyl-wallet-core` `Wallet<S>` lifecycle entry
+points (`Wallet::create`, `Wallet::open_full`, `Wallet::open_view_only`,
+`Wallet::open_hardware_offload`, `Wallet::change_password`,
+`Wallet::close`) ship in V3.0 with full bodies for the FULL capability
+path (`create` / `open_full` / `change_password` / `close`) and as
+**signature-only stubs** for the ViewOnly and HardwareOffload paths
+(`open_view_only` / `open_hardware_offload`). The stubs return a
+single dedicated error variant
+`OpenError::CapabilityNotYetImplemented { capability }`.
+
+**Rationale.** The lifecycle commit's external dependencies are
+asymmetric:
+
+- `Wallet::open_full` composes `WalletFile::open`,
+  `WalletFile::extract_rederivation_inputs`, the existing
+  `shekyl-crypto-pq::account::rederive_account` (which produces a
+  full `AllKeysBlob` with `spend_sk`, `view_sk`, `ml_kem_dk`, and
+  every public-key field), `WalletFile::load_prefs`, and
+  `LedgerIndexes::rebuild_from_ledger`. Every dependency is locked
+  and on-disk-tested.
+- `Wallet::open_view_only` and `Wallet::open_hardware_offload`
+  additionally require `shekyl-crypto-pq` `AllKeysBlob` constructors
+  that omit `spend_sk` / `ml_kem_dk` (view-only) or retain a device
+  descriptor (hardware-offload). Those constructors are not yet
+  written. Implementing them inside the lifecycle commit would fold
+  three crates' worth of new API surface into a single PR.
+
+The signature-only-stub shape keeps the lifecycle commit reviewable
+in one bisectable diff while locking the public API for view-only
+and hardware-offload paths. Call-site code (CLI, RPC, GUI) compiles
+against the V3.0 surface and gets real bodies in a V3.0 follow-up
+commit without any signature change.
+
+**Stub error variant.** `OpenError::CapabilityNotYetImplemented` is
+explicitly transient. It carries a deletion-target prose comment in
+[`rust/shekyl-wallet-core/src/wallet/error.rs`](../rust/shekyl-wallet-core/src/wallet/error.rs)
+naming `docs/FOLLOWUPS.md` *V3.0 → "View/HW lifecycle bodies in
+`shekyl-wallet-core`"* as the deletion gate. When the constructors
+land and the stub bodies are filled in, the variant is removed in
+the same commit. Per `15-deletion-and-debt.mdc` ("Default: delete"),
+the variant has no permanent home.
+
+**Rejected alternatives.**
+
+- *Defer all view-only and hardware-offload signatures to a later
+  commit.* Forces every lifecycle caller (CLI / RPC / GUI / docs) to
+  re-route once the signatures land. The cost of locking three
+  signatures now is nil; the cost of re-routing every caller later
+  is real.
+- *Inline the missing `AllKeysBlob` constructors into the lifecycle
+  commit.* Triples the diff size, mixes
+  `shekyl-crypto-pq` and `shekyl-wallet-core` review concerns, and
+  is the kind of commit that gets reviewed by nobody once it crosses
+  ~800 lines.
+- *Return `unimplemented!()` from the stubs.* Crashes the process
+  rather than returning a typed error; downstream code cannot match
+  on it. The variant is small, typed, and has an explicit deletion
+  gate; an `unimplemented!()` panic is a regression in error
+  posture.
+
+**Reference.** Lifecycle commit (this commit) and the corresponding
+plan `.cursor/plans/scope_211d438b.plan.md`.
+
+---
+
+## 2026-04-26 — `Wallet::open_full`: lost-state surfacing via typed `OpenedWallet` sum
+
+**Decision.** `Wallet::open_full` returns `OpenedWallet<SoloSigner>`
+rather than `Wallet<SoloSigner>`. The enum has two variants:
+
+```rust
+pub enum OpenedWallet<S: WalletSignerKind> {
+    Loaded(Wallet<S>),
+    Restored { wallet: Wallet<S>, from_height: u64 },
+}
+```
+
+`Loaded` indicates the persisted ledger file was present and decoded
+cleanly. `Restored { wallet, from_height }` indicates the keys file
+was intact but the ledger file was missing or unreadable; the wallet
+was reconstructed against an empty ledger anchored at
+`from_height = restore_height_hint` (widened to `u64`), and the
+caller must drive a refresh to restore state and `save_state` the
+rebuilt ledger.
+
+**Rationale.** The "lost-state" path is a real failure mode that
+needs to be surfaced explicitly to the UI: a user whose
+`<base>.wallet` file has been corrupted, deleted, or is on a
+filesystem that lost the file across a crash needs to see "your
+wallet state was rebuilt; resync from height N" rather than silently
+opening a wallet whose balance reads zero. A flat
+`Result<Wallet<S>, OpenError>` cannot carry the recovery signal:
+either every successful return looks identical (silent rebuild,
+worst case) or the recovery hint becomes a side channel (logged-only
+warning, fragile).
+
+A typed sum forces the caller to handle the recovery case at the
+type level. The variant names carry meaning at the call site that
+`(wallet, Option<u64>)` does not: "loaded" and "restored" are the
+two product states, and the call site code reads as the operator
+documentation.
+
+**Rejected alternatives.**
+
+- *`Result<(Wallet<S>, Option<RecoveryNotice>), OpenError>` tuple.*
+  Admits `(wallet, None)` as the success-path representation when
+  the success path is "loaded" specifically. The variant
+  representation is structurally stronger than the tuple-with-Option
+  alternative.
+- *Logged-only signal, flat `Wallet<S>` return.* Loses the signal in
+  any UI flow that doesn't surface log lines. The recovery
+  notification belongs in the type, not in the trace stream.
+- *Unconditional `Restored` variant with `from_height = 0` for the
+  loaded case.* Conflates two distinct states; introduces an
+  invariant ("`from_height = 0` means loaded, otherwise restored")
+  that the type system cannot enforce.
+
+**Reference.** Lifecycle commit (this commit). The pattern is reused
+when `Wallet::refresh()` and `Wallet::apply_scan_result` land — a
+refresh that runs against a `Restored { from_height }` wallet drives
+the resync from `from_height` rather than from `synced_height`,
+which would otherwise be 0.
+
+---
+
+## 2026-04-26 — Wallet authentication: V3.0 password-only; MFA is V3.1 via format-version bump
+
+**Decision.** V3.0 ships the wallet file envelope with **password-only**
+authentication: the file KEK is derived from `Argon2id(password,
+wrap_salt)` and nothing else. MFA / hardware-token integration is
+**V3.1** scope, gated on a wallet file format-version bump. V3.0
+does not reserve fields for MFA. The lifecycle entry points take a
+forward-compatible `Credentials<'_>` parameter so the V3.1 addition
+is non-breaking at the API layer.
+
+**Rationale.** Two pressures argued against folding MFA into V3.0:
+
+- The threat model for hardware-token integration deserves an
+  independent design cycle. Getting recovery right (token loss
+  scenarios, BIP-39 seed-phrase fallback, optional multi-token
+  enrollment) matters more than getting MFA shipped fast. A wallet
+  that requires a hardware token but loses funds when the token is
+  lost is worse than a wallet with no hardware token.
+- The wallet file format already supports forward evolution via the
+  `wrap_count` reserved byte and the
+  `CAPABILITY_RESERVED_MULTISIG = 0x04` placeholder documented in
+  [`docs/WALLET_FILE_FORMAT_V1.md`](WALLET_FILE_FORMAT_V1.md) §1
+  and §3. Multisig is the precedent: V3.0 emits
+  `EnvelopeError::RequiresMultisigSupport` ("this wallet file
+  requires Shekyl V3.1 or later") for capability mode `0x04`. The
+  same forward-compat pattern (V3.1 either reuses the
+  `wrap_count != 1` slot to discriminate hardware-token requirement,
+  or introduces a new capability mode under a format-version bump)
+  applies to MFA without any V3.0 spec change.
+
+The forward-compatible `Credentials<'_>` parameter shape is the
+load-bearing API decision: V3.0 callers construct `Credentials` via
+`Credentials::password_only(&[u8])` and read the password back
+through `Credentials::password()`. V3.1 adds an
+`authenticator: Option<AuthenticatorRequest<'_>>` field and a
+sibling `Credentials::password_with_authenticator(pwd, auth)`
+constructor; existing `password_only` call sites compile unchanged
+across the V3.0 → V3.1 boundary.
+
+**Rejected alternatives.**
+
+- *Reserve MFA fields in the V3.0 wallet file format.* Speculation
+  about a feature whose design isn't locked. Per
+  `15-deletion-and-debt.mdc` ("FOLLOWUPS.md is not a graveyard"),
+  reserving format space for unfrozen designs invites design drift
+  in the reserved space.
+- *Ship MFA in V3.0.* Triples the V3.0 review surface, blocks the
+  V3.0 release on FIDO2 design closure, and does so for a feature
+  whose threat-model improvement is real but additive.
+- *Take `password: &[u8]` directly and break callers at V3.1.*
+  Free V3.0 ergonomics, paid for at V3.1 by every call site. The
+  forward-compat struct shape is cheap insurance that mirrors the
+  same discipline already used elsewhere in the wallet stack
+  (`Option<u32> fee_policy_version`, layered config with future
+  fields, this Decision Log itself).
+
+**Reference.** Lifecycle commit (this commit);
+[`docs/WALLET_FILE_FORMAT_V1.md`](WALLET_FILE_FORMAT_V1.md) §1
+(`wrap_count = 0x01` reserved byte) and §3
+(`CAPABILITY_RESERVED_MULTISIG = 0x04` precedent);
+`docs/FOLLOWUPS.md` *V3.1 → "MFA / hardware-token integration for
+wallet file decryption"* for the recovery-model and design-question
+detail.
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->
