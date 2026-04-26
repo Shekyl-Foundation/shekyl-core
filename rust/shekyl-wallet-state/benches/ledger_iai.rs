@@ -20,7 +20,9 @@ use iai_callgrind::{library_benchmark, library_benchmark_group, main};
 use std::hint::black_box;
 
 use shekyl_oxide::primitives::Commitment;
-use shekyl_wallet_state::{transfer::SPENDABLE_AGE, LedgerBlock, TransferDetails, WalletLedger};
+use shekyl_wallet_state::{
+    transfer::SPENDABLE_AGE, BlockchainTip, LedgerBlock, TransferDetails, WalletLedger,
+};
 
 fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
     let mut tx_hash = [0u8; 32];
@@ -63,10 +65,19 @@ fn build_ledger(n: usize) -> WalletLedger {
     let transfers: Vec<TransferDetails> = (0..n as u64)
         .map(|seed| synthetic_transfer(seed, 1_000 + seed))
         .collect();
+    // See `benches/ledger.rs::build_ledger` for the I-1 invariant
+    // rationale. The criterion sibling and this iai-callgrind harness
+    // share the same tip-pinning requirement; the deserialize bench
+    // below would otherwise panic out of Valgrind with the same
+    // `tip-height-not-below-transfer` shape.
+    let tip_height = transfers.iter().map(|t| t.block_height).max().unwrap_or(0);
     w.ledger = LedgerBlock {
         block_version: w.ledger.block_version,
         transfers,
-        tip: w.ledger.tip.clone(),
+        tip: BlockchainTip {
+            synced_height: tip_height,
+            tip_hash: Some([0xAB; 32]),
+        },
         reorg_blocks: w.ledger.reorg_blocks.clone(),
     };
     w

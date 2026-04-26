@@ -29,7 +29,9 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Through
 use curve25519_dalek::Scalar;
 
 use shekyl_oxide::primitives::Commitment;
-use shekyl_wallet_state::{transfer::SPENDABLE_AGE, LedgerBlock, TransferDetails, WalletLedger};
+use shekyl_wallet_state::{
+    transfer::SPENDABLE_AGE, BlockchainTip, LedgerBlock, TransferDetails, WalletLedger,
+};
 
 /// Build a deterministic synthetic `TransferDetails` at `(seed, height)`.
 ///
@@ -81,10 +83,24 @@ fn build_ledger(n: usize) -> WalletLedger {
     let transfers: Vec<TransferDetails> = (0..n as u64)
         .map(|seed| synthetic_transfer(seed, 1_000 + seed))
         .collect();
+    // Pin `tip.synced_height` to the highest synthetic block referenced
+    // by any transfer. The aggregator's I-1 invariant
+    // (`tip-height-not-below-transfer`, see
+    // `shekyl-wallet-state::invariants`) fires inside
+    // `WalletLedger::from_postcard_bytes`, so a builder that leaves the
+    // empty-wallet default (`synced_height = 0`) here panics the moment
+    // the deserialize half of the round-trip runs. Any tip at or above
+    // the max-block-height satisfies I-1; choosing exactly that
+    // boundary keeps the synthetic fixture minimally over-constrained
+    // and avoids drift if the height range shifts.
+    let tip_height = transfers.iter().map(|t| t.block_height).max().unwrap_or(0);
     w.ledger = LedgerBlock {
         block_version: w.ledger.block_version,
         transfers,
-        tip: w.ledger.tip.clone(),
+        tip: BlockchainTip {
+            synced_height: tip_height,
+            tip_hash: Some([0xAB; 32]),
+        },
         reorg_blocks: w.ledger.reorg_blocks.clone(),
     };
     w

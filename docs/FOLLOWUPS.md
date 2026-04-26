@@ -62,26 +62,6 @@ citing in a review.
   pin the contract. Tests: duplicate-height rejection, out-of-range
   transfer rejection, out-of-range key-image rejection. Target: V3.0.
 
-- **Phase 1 bench harness rewire post-`RuntimeWalletState` fold.**
-  Cross-cutting lock 5 (commit `5ee692691`, "wallet: fold
-  `RuntimeWalletState` into `LedgerBlock` + `LedgerIndexes`") split
-  the legacy combined struct, deleted
-  `rust/shekyl-wallet-state/src/runtime_state.rs`, and renamed
-  `shekyl-scanner/src/runtime_ext.rs` → `ledger_ext.rs`. Four of the
-  five iai-callgrind targets in `scripts/bench/capture_rust_baseline.sh`
-  no longer compile against the post-fold APIs:
-  `shekyl-wallet-state::ledger`, `shekyl-wallet-state::balance`,
-  `shekyl-scanner::scan_block`, and `shekyl-tx-builder::transfer_e2e`.
-  Surfaced first as the PR #16 `benchmarks.yml` `capture-pr` job
-  failing with cargo exit code 101 (compile-time, not threshold). The
-  fifth target (`shekyl-wallet-file::open`) is unaffected. Rewire on
-  a `chore/bench-rewire-phase1` branch off `dev` after PR #16 merges,
-  single-concern commit, no review surface beyond the bench files;
-  re-seed `bench-baseline/baseline.json` from a clean run on the
-  reference machine once the harnesses build. Blocks the
-  per-PR perf-regression gate from producing a real verdict on
-  `shekyl-wallet-state`-touching PRs until cleared. Target: V3.0.
-
 - **Revisit `rust/hard-coded-cryptographic-value` CodeQL suppression
   when the Rust extractor gains `cfg(test)` awareness.** The repo-wide
   suppression added in `.github/codeql/config.yml` (commit
@@ -1078,6 +1058,37 @@ reference.
 ## Recently resolved (audit trail)
 
 Retained for citation in review; each links to the canonical record.
+
+- **Phase 1 bench harness re-review post-`RuntimeWalletState` fold
+  (April 26, 2026).** The original FOLLOWUPS entry claimed four of the
+  five `capture_rust_baseline.sh` iai-callgrind targets failed to
+  compile against the post-fold APIs. A complete review of the bench
+  tree (`rust/shekyl-{wallet-state,wallet-file,scanner,tx-builder}/
+  benches/*.rs`, 10 files counting criterion + iai siblings) found
+  every target builds cleanly with zero warnings: the fold commit
+  `5ee692691` had already updated `scan_block.rs` /
+  `scan_block_iai.rs`, and `ledger`, `balance`, and `transfer_e2e`
+  never depended on `RuntimeWalletState` directly. The actual failure
+  surfaced by smoke-running each criterion target was a runtime panic
+  in `shekyl-wallet-state::ledger` (and its iai sibling) on the
+  postcard-deserialize half of the round-trip:
+  `WalletLedgerError::InvariantFailed { invariant:
+  "tip-height-not-below-transfer", … }`. Hardening-pass commit 6
+  (`def7d3379`, "feat(wallet-state): WalletLedger::check_invariants")
+  wired invariant I-1 into `WalletLedger::from_postcard_bytes` after
+  the bench harness was authored (commit `a9a81a17e`); the bench's
+  `build_ledger` was inheriting `tip.synced_height = 0` from
+  `WalletLedger::empty()` while the synthetic transfers carried
+  `block_height ∈ [1_000, 1_000 + N)`. Fix on
+  `chore/bench-rewire-phase1`: pin `tip.synced_height` to
+  `max(transfers[*].block_height)` and set a non-`None` `tip_hash` in
+  both `ledger.rs` and `ledger_iai.rs` `build_ledger` helpers.
+  Verified: criterion `ledger` smoke runs serialize+deserialize across
+  {100, 1k, 10k} sizes, iai sibling compiles. The other four bench
+  pairs run unchanged. The "rewire" framing was incorrect; the actual
+  finding is that bench-fixture coherence with aggregator invariants
+  is its own discipline and should land alongside any future
+  invariant addition.
 
 - **Branch layer depth formula correction (April 12, 2026).** Commit
   `03d233652`. `shekyl-tx-builder` validation rule corrected from

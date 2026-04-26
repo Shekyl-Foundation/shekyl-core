@@ -1406,6 +1406,32 @@
 
 ### Fixed
 
+- **`shekyl-wallet-state` `ledger` / `ledger_iai` benches: pin
+  `BlockchainTip.synced_height` to the synthetic transfers' max
+  `block_height`.** The benches under
+  [`rust/shekyl-wallet-state/benches/ledger.rs`](../rust/shekyl-wallet-state/benches/ledger.rs)
+  and
+  [`rust/shekyl-wallet-state/benches/ledger_iai.rs`](../rust/shekyl-wallet-state/benches/ledger_iai.rs)
+  were authored against `WalletLedger::empty()` (commit `a9a81a17e`)
+  before invariant I-1 (`tip-height-not-below-transfer`) was wired
+  into `WalletLedger::from_postcard_bytes` by hardening-pass commit 6
+  (`def7d3379`, "feat(wallet-state):
+  WalletLedger::check_invariants"). `build_ledger` was inheriting
+  `tip.synced_height = 0` from the empty constructor while the
+  synthetic transfers carried `block_height ∈ [1_000, 1_000 + N)`,
+  so the deserialize half of the round-trip panicked with
+  `WalletLedgerError::InvariantFailed { invariant:
+  "tip-height-not-below-transfer", … }` on every iteration. The fix
+  reconstructs the `LedgerBlock` with `tip.synced_height =
+  max(transfers[*].block_height)` (and a non-`None` `tip_hash`) so
+  the fixture is invariant-coherent before postcard sees it. The
+  outdated `docs/FOLLOWUPS.md` entry that claimed four iai-callgrind
+  targets failed to *compile* against the post-`RuntimeWalletState`
+  fold has been replaced with a re-review entry capturing the actual
+  finding (see *"Phase 1 bench harness re-review post-`RuntimeWalletState`
+  fold (April 26, 2026)"*). All ten core benches under
+  `capture_rust_baseline.sh` now build and smoke-run cleanly.
+
 - **`source archive` CI job: pin `git describe` to release tags
   (`v*`).** The branch-archival policy in
   [`.cursor/rules/06-branching.mdc`](../.cursor/rules/06-branching.mdc)
