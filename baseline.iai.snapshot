@@ -43,7 +43,7 @@ ledger_iai::ledger::hot_path_bench_ledger_postcard_deserialize with_setup_2:buil
   Total read+write:               605770334|N/A                  (*********)
   Estimated Cycles:               612853168|N/A                  (*********)
 
-Iai-Callgrind result: Ok. 6 without regressions; 0 regressed; 6 benchmarks finished in 60.0028s
+Iai-Callgrind result: Ok. 6 without regressions; 0 regressed; 6 benchmarks finished in 60.0096s
 
 ==== shekyl-wallet-state::balance_iai ====
 balance_iai::balance::hot_path_bench_balance_compute with_setup_0:build_transfers(100)
@@ -68,18 +68,18 @@ balance_iai::balance::hot_path_bench_balance_compute with_setup_2:build_transfer
   Total read+write:                11043932|N/A                  (*********)
   Estimated Cycles:                11565414|N/A                  (*********)
 
-Iai-Callgrind result: Ok. 3 without regressions; 0 regressed; 3 benchmarks finished in 22.0385s
+Iai-Callgrind result: Ok. 3 without regressions; 0 regressed; 3 benchmarks finished in 22.1153s
 
 ==== shekyl-wallet-file::open_iai ====
 open_iai::open_cold::crypto_bench_wallet_open_cold kat_kdf:prepared_wallet()
   Instructions:                     1945930|N/A                  (*********)
-  L1 Hits:                          2450918|N/A                  (*********)
-  LL Hits:                            23309|N/A                  (*********)
+  L1 Hits:                          2450892|N/A                  (*********)
+  LL Hits:                            23335|N/A                  (*********)
   RAM Hits:                             350|N/A                  (*********)
   Total read+write:                 2474577|N/A                  (*********)
-  Estimated Cycles:                 2579713|N/A                  (*********)
+  Estimated Cycles:                 2579817|N/A                  (*********)
 
-Iai-Callgrind result: Ok. 1 without regressions; 0 regressed; 1 benchmarks finished in 0.46461s
+Iai-Callgrind result: Ok. 1 without regressions; 0 regressed; 1 benchmarks finished in 0.46364s
 
 ==== shekyl-scanner::scan_block_iai ====
 scan_block_iai::scan_block::hot_path_bench_scan_block_process_outputs with_setup_0:build_state_and_outputs(0)
@@ -91,11 +91,11 @@ scan_block_iai::scan_block::hot_path_bench_scan_block_process_outputs with_setup
   Estimated Cycles:                    2146|N/A                  (*********)
 scan_block_iai::scan_block::hot_path_bench_scan_block_process_outputs with_setup_1:build_state_and_outputs(5)
   Instructions:                      232722|N/A                  (*********)
-  L1 Hits:                           268850|N/A                  (*********)
+  L1 Hits:                           268851|N/A                  (*********)
   LL Hits:                              150|N/A                  (*********)
-  RAM Hits:                             353|N/A                  (*********)
+  RAM Hits:                             352|N/A                  (*********)
   Total read+write:                  269353|N/A                  (*********)
-  Estimated Cycles:                  281955|N/A                  (*********)
+  Estimated Cycles:                  281921|N/A                  (*********)
 scan_block_iai::scan_block::hot_path_bench_scan_block_process_outputs with_setup_2:build_state_and_outputs(50)
   Instructions:                     2329150|N/A                  (*********)
   L1 Hits:                          2725075|N/A                  (*********)
@@ -104,7 +104,7 @@ scan_block_iai::scan_block::hot_path_bench_scan_block_process_outputs with_setup
   Total read+write:                 2728294|N/A                  (*********)
   Estimated Cycles:                 2779300|N/A                  (*********)
 
-Iai-Callgrind result: Ok. 3 without regressions; 0 regressed; 3 benchmarks finished in 0.95334s
+Iai-Callgrind result: Ok. 3 without regressions; 0 regressed; 3 benchmarks finished in 0.94911s
 
 ==== shekyl-tx-builder::transfer_e2e_iai ====
 transfer_e2e_iai::transfer_e2e::crypto_bench_bulletproofs_plus_2_outputs bp_plus_2_outputs:fresh_2out_commitments()
@@ -122,4 +122,4 @@ transfer_e2e_iai::transfer_e2e::crypto_bench_hybrid_sign_1_input hybrid_sign_1_i
   Total read+write:                15300912|N/A                  (*********)
   Estimated Cycles:                15459504|N/A                  (*********)
 
-Iai-Callgrind result: Ok. 2 without regressions; 0 regressed; 2 benchmarks finished in 4.48138s
+Iai-Callgrind result: Ok. 2 without regressions; 0 regressed; 2 benchmarks finished in 4.44274s
