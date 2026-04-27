@@ -1,15 +1,37 @@
-# V4 Design Notes — Staker Archival as Useful Work
+# V3 Design Notes — Staker Archival as Useful Work
 
-**Status:** Design exploration, V4-scoped. V3 ships without this mechanism;
-V3's design must not foreclose adding it in V4.
+**Status:** V3 ship feature. Originally drafted as V4-scoped; rescoped to
+V3 by the 2026-04-27 actor-architecture decision-log entry, which
+established `ArchivalEngine` as a Stage 5 actor (sibling to
+`StakeEngine`, not a child) shipping in a V3.x dot-release gated on
+simulation evidence. This document is the canonical archival-mechanism
+design home; it is referenced by `docs/FOLLOWUPS.md` (V3.0 RPC boundary
+refinements, V3.1 `assemble_tree_path_for_output` resolution, V3.x
+Stage 5 native build) and by `docs/V3_WALLET_DECISION_LOG.md`
+*2026-04-27 — Engine architecture: actor model with staged migration
+from composition*.
 
-**Author / decision context:** Originated in Phase 1 wallet-rewrite session
-(2026-04-26) as an answer to the long-running question "what useful work do
-stakers actually do for the network?" The framing has been held by Rick
-since approximately 2010 and crystallized when FCMP++'s historical
-reference-block archival need (already in `docs/FOLLOWUPS.md`) was paired
-with BitTorrent-style scarcity-priced commons coverage as the mechanism
-shape.
+The mechanism ships in a V3.x dot-release. The exact dot-version is
+gated on the simulation work described in *Simulation as separate
+project* below — the open design questions (shard granularity, query
+routing protocol, price curve shape, quick-pick portfolio composition,
+unstake-cascade dynamics, privacy-of-queries detailed protocol,
+foundation-node integration) close against simulation evidence rather
+than against speculation. V3.0 ships without this mechanism active;
+V3.0's design surface (RPC boundaries, daemon-selection logic, reward
+disbursement architecture) is built so the V3.x ship is purely
+additive, not a refactor.
+
+**Author / decision context:** Originated in Phase 1 wallet-rewrite
+session (2026-04-26) as an answer to the long-running question "what
+useful work do stakers actually do for the network?" The framing has
+been held by Rick since approximately 2010 and crystallized when
+FCMP++'s historical reference-block archival need (already in
+`docs/FOLLOWUPS.md`) was paired with BitTorrent-style scarcity-priced
+commons coverage as the mechanism shape. Rescoped to V3 ship in the
+2026-04-27 actor-architecture decision; the rescoping does not change
+the design — the actor model makes shipping it cleanly possible
+within V3.x as a sibling actor to `StakeEngine`.
 
 ---
 
@@ -137,15 +159,26 @@ the security model under archival stress.
 
 In V3 economy structure terms:
 
-- **Existing**: `staker_pool_share=25%`, `staker_emission_share=15%`,
+- **V3.0 ships**: `staker_pool_share=25%`, `staker_emission_share=15%`,
   `staker_emission_decay=0.90/year`. Principal bond yield. Unconditional.
-- **New (V4)**: archival reward stream. Conditional on archival
-  performance. Funded from a separate slice (see "Funding" below).
+- **V3.x adds (this mechanism)**: archival reward stream. Conditional on
+  archival performance. Funded from a separate slice (see "Funding"
+  below).
 
 A staker doing both consensus-bonding and archival earns the sum. A staker
 doing only consensus-bonding (archival outage, intentionally passive,
 not opted in) earns only the principal yield. The two yield streams are
 additive and independent.
+
+The actor-architecture decision-log entry locks this property
+structurally as well: `StakeEngine` (Stage 3, principal yield) and
+`ArchivalEngine` (Stage 5, archival yield) are sibling actors with
+independent slashing domains. A bug in archival logic that slashes
+archival-yield cannot be misrouted to slash principal-yield, because
+the actors do not share state — the cross-actor query
+`StakeEngine::is_active_staker(entity_id) -> bool` gates archival
+eligibility, but the response is authoritative and there is no shared
+mutable state for a bug to corrupt.
 
 ### Tier interaction: lock duration as archival commitment depth
 
@@ -179,7 +212,7 @@ reference block H. That's metadata FCMP++ specifically protects against;
 distributing archival to many stakers means many parties have query
 metadata.
 
-**Defense (V4-required):** mandatory Tor / I2P / mixnet routing for
+**Defense (V3 ships):** mandatory Tor / I2P / mixnet routing for
 archival queries. The wallet routes queries through anonymizing
 infrastructure before reaching the staker. This is consistent with
 Shekyl's existing privacy stance (the chain already supports Tor for
@@ -187,14 +220,14 @@ daemon connections per `docs/ANONYMITY_NETWORKS.md`). The cost is
 latency, which is acceptable for archival queries (they're not in the
 transaction-broadcast hot path).
 
-**Stronger defense (post-V4, optional):** wallets query for cover traffic
-in addition to actual queries. The staker can't infer which historical
-block the wallet actually needs. More expensive but stronger.
+**Stronger defense (post-V3-ship, optional):** wallets query for cover
+traffic in addition to actual queries. The staker can't infer which
+historical block the wallet actually needs. More expensive but stronger.
 
-For V4 ship, mandatory Tor/I2P is sufficient. The privacy story for
-distributed archival is *better* than foundation-only archival, because
-trust is distributed across stakers (no single trusted operator) rather
-than concentrated.
+For V3.x ship of the archival mechanism, mandatory Tor/I2P is
+sufficient. The privacy story for distributed archival is *better* than
+foundation-only archival, because trust is distributed across stakers
+(no single trusted operator) rather than concentrated.
 
 ---
 
@@ -241,35 +274,37 @@ state; full retention is trivial; no archival mechanism is needed.
 
 The archival load grows with the chain. Approximately:
 
-- **Months 0–6 post-launch**: chain is small, full retention is cheap
-  for anyone. Foundation nodes carry whatever archival the network needs.
-  Staker archival mechanism *exists* in the protocol but isn't load-
-  bearing. Active stakers playing the market are hunting trivial rewards;
-  quick-pick stakers earn near-zero archival yield. This is fine — the
-  consensus-bond yield is the dominant return.
+- **Months 0–6 post-launch (V3.0 era)**: chain is small, full retention
+  is cheap for anyone. Foundation nodes carry whatever archival the
+  network needs. The staker archival mechanism *exists in design* but
+  has not yet shipped (V3.0 ships without it; the simulation work that
+  gates V3.x ship is in flight). This is fine — the consensus-bond
+  yield is the dominant return.
 
-- **Months 6–18 post-launch**: chain has grown enough that pruning
-  becomes attractive for some operators. Foundation nodes stay full-
-  archival. Active stakers start finding meaningful rare shards as
-  pruning consumers shed deep history. Archival reward stream becomes
-  meaningful.
+- **Months 6–18 post-launch (V3.x era, mechanism shipped)**: chain has
+  grown enough that pruning becomes attractive for some operators.
+  Foundation nodes stay full-archival. Active stakers start finding
+  meaningful rare shards as pruning consumers shed deep history. The
+  archival reward stream becomes meaningful. `ArchivalEngine` (Stage 5)
+  has shipped in a V3.x dot-release; stakers running V3.x clients
+  archive shards as part of staking.
 
 - **Months 18+ post-launch**: archival is a real economic activity.
   Foundation nodes can selectively shed shards that are well-replicated
   by the staker market, becoming more of a coverage-floor than primary-
   archive. Staker archival is load-bearing.
 
-This means the V4 ship can include the mechanism without it being
-immediately load-bearing. The economic structure is in place; the load
-arrives when the chain is large enough to need it. No "the mechanism has
-to work at launch" pressure.
+This means the V3.x dot-release that ships the mechanism doesn't have
+to be load-bearing immediately. The economic structure ships in place;
+the load arrives when the chain is large enough to need it. No "the
+mechanism has to work at launch" pressure — the V3.0 → V3.x window is
+long enough for the mechanism to settle before it carries real weight.
 
 It also means the bootstrap path naturally avoids the cold-start
-allocation problem I worried about in earlier discussion: when the first
-staker joins, *the network doesn't need archival yet*, so it's fine that
-their allocation choices don't cover history uniformly. By the time
-archival load matters, the staker population is large enough for the
-market to converge to good coverage.
+allocation problem: when the first staker joins, *the network doesn't
+need archival yet*, so it's fine that their allocation choices don't
+cover history uniformly. By the time archival load matters, the staker
+population is large enough for the market to converge to good coverage.
 
 This phasing aligns with the V3 economy's existing late-cycle dynamics —
 early-cycle stakers are mostly capital-anchoring (consensus bond
@@ -278,47 +313,64 @@ reward dominant) as chain maturity demands it.
 
 ---
 
-## What V3 must not foreclose
+## V3 architectural requirements
 
-This mechanism is V4-scoped. V3 ships without it. But V3's design
-choices must not foreclose V4's ability to add it. Specifically:
+This mechanism ships in a V3.x dot-release; V3.0 ships without it
+active. V3.0's design choices must be aligned with the mechanism so the
+V3.x ship is purely additive — no refactor of V3.0 surfaces required
+when `ArchivalEngine` lands. Specifically:
 
-**1. Staker reward distribution architecture must support layering an
-archival reward stream.** The existing `staker_pool_share=25%` and
-`staker_emission_share=15%` define the principal yield. V4 needs to add
-an archival reward stream alongside, without modifying principal payout.
-**Status: probably fine** — the existing structure doesn't preclude
-additive streams, but worth confirming during Phase 2b's stake-lifecycle
-work that the disbursement code paths can accommodate a second reward
-type.
+**1. Staker reward distribution architecture supports layering an
+archival reward stream.** The `staker_pool_share=25%` and
+`staker_emission_share=15%` define the principal yield in V3.0. The
+V3.x archival reward stream layers alongside, without modifying
+principal payout. **Status: enforced by Stage 3 / Stage 5 actor
+separation.** `StakeEngine` (Stage 3, principal yield) and
+`ArchivalEngine` (Stage 5, archival yield) produce independent event
+streams (`StakeEvent`, `ArchivalEvent`) that `LedgerEngine` merges. The
+disbursement code paths accommodate two reward types by construction;
+adding the second stream in V3.x is a new actor + a new event variant,
+not a modification of existing disbursement logic.
 
-**2. Tier system's lock-duration semantics must remain consistent with
-using lock duration as an archival commitment indicator.** Lock duration
-is already a governance signal; V4 adds "archival commitment depth" as a
-second meaning. **Status: already fine** — lock duration is structural
-not nominal; nothing prevents adding a second interpretation.
+**2. Tier system's lock-duration semantics remain consistent with using
+lock duration as an archival commitment indicator.** Lock duration is
+already a governance signal; the V3.x archival mechanism adds "archival
+commitment depth" as a second meaning. **Status: already aligned.**
+Lock duration is structural not nominal; nothing prevents adding a
+second interpretation. The Stage 3 `StakeEngine` design pins
+lock-duration semantics; the Stage 5 `ArchivalEngine` consumes those
+semantics via the `is_active_staker(entity_id) -> bool` cross-actor
+query plus a (TBD-by-Stage-5-design) `stake_tier(entity_id) -> Tier`
+query for tier-weighted reward formulas.
 
-**3. Component 3 governance burn redirect must be flexible enough to
-fund a new reward stream.** The burn-rate-to-archival path requires the
+**3. Component 3 governance burn redirect is flexible enough to fund a
+new reward stream.** The burn-rate-to-archival path requires the
 Component 3 mechanism to permit redirecting burn flow to a non-emission
-target. **Status: needs confirmation** — the existing Component 3 spec
-should be reviewed for whether burn-redirect targets are extensible.
+target. **Status: needs confirmation against the Component 3 spec
+before V3.x ship.** Tracked as a Stage 5 design-closure prerequisite;
+if the existing Component 3 spec does not permit non-emission redirect
+targets, the spec extension is itself a Stage 5 deliverable rather
+than a V3.0 surface change.
 
-**4. Daemon RPC surface must permit "query historical state from staker
+**4. Daemon RPC surface permits "query historical state from staker
 peer" alongside "query from foundation node."** Wallets need to be able
-to route archival queries to either source. **Status: open question**
-— this is exactly the kind of thing Phase 2a's daemon RPC discussion
-should be aware of, even if it doesn't directly affect the API. The
-RPC surface for `assemble_tree_path_for_output` (per the existing
-FOLLOWUPS entry on historical reference handling) should not assume
-foundation-node-only.
+to route archival queries to either source. **Status: enforced by
+Stage 4 RPC boundary refinements.** The multi-peer archival routing
+client surface is drafted as part of the V3.0 RPC boundary refinements
+(per `docs/FOLLOWUPS.md` V3.0 entry); activation pairs with Stage 5
+shipping in V3.x. The `assemble_tree_path_for_output` RPC routing is
+designed against a multi-source model from the start, not retrofitted.
 
-**5. The wallet's daemon-selection logic must not foreclose multi-peer
-archival.** Currently wallets connect to a single daemon. Archival
-queries against the staker network might need multi-peer routing.
-**Status: probably needs design work** — V3's single-daemon assumption
-is fine for V3 but might be the binding constraint for V4 archival.
-Worth flagging for the Phase 4b RPC method set work.
+**5. The wallet's daemon-selection logic does not foreclose multi-peer
+archival.** V3.0's daemon-selection logic supports multi-peer routing
+for historical-reference queries (foundation `--no-prune` archival as
+floor; staker peers as the primary path once `ArchivalEngine` ships).
+**Status: enforced by Stage 4 `DaemonEngine` migration** — the actor's
+public message protocol exposes single-daemon and multi-peer routing
+as first-class operations rather than retrofitting multi-peer onto a
+single-daemon assumption. The V3.x ship of `ArchivalEngine` activates
+the multi-peer path; V3.0 ships with the surface present and tested
+against mock multi-source archival oracles.
 
 ---
 
@@ -363,7 +415,9 @@ Decoupling is the unconventional answer.
 
 ## Open design questions
 
-Not blockers; next-steps if this direction proceeds.
+These gate the V3.x ship dot-version. Each closes against simulation
+evidence (per *Simulation as separate project* below) or against design
+review during Stage 5.
 
 **Shard granularity.** Per-block (too small, challenge overhead). Per-
 epoch ~10,000 blocks (probably right). Needs modeling against expected
@@ -396,9 +450,10 @@ unstaking happens on a schedule, but mass unstaking events (price
 crash, foundation policy change) could compress this. Simulation would
 clarify the failure modes.
 
-**Privacy-of-queries detailed protocol.** Mandatory Tor/I2P is the V4
-default; cover-traffic protocols are post-V4. The exact integration with
-existing `ANONYMITY_NETWORKS.md` infrastructure needs design.
+**Privacy-of-queries detailed protocol.** Mandatory Tor/I2P is the V3
+ship default; cover-traffic protocols are post-V3-ship. The exact
+integration with existing `ANONYMITY_NETWORKS.md` infrastructure needs
+design.
 
 **Foundation-node integration.** Foundation `--no-prune` nodes are the
 floor. How do they signal "I'm covering shards X, Y, Z so the staker
@@ -410,9 +465,11 @@ economically efficient. Needs design.
 
 ## Simulation as separate project
 
-This design should be validated via simulation before any V4
-implementation work begins. Treat it as a separate project, parallel
-to (not blocking) the V3 ship.
+This design must be validated via simulation before the V3.x dot-
+release that ships `ArchivalEngine`. Treat the simulation as a separate
+project, parallel to (not blocking) the V3.0 ship. The simulation
+output is the gating evidence for closing the open design questions
+above.
 
 **Scope of simulation:**
 
@@ -444,16 +501,16 @@ is the right starting point. The shape of the simulation is similar
 (parameter sweep, scenario suite, heatmap visualization), just over a
 different state space (shard coverage rather than supply curves).
 
-The simulation project is a useful artifact independent of V4 ship
-decisions: it produces public documentation of how the mechanism would
-behave, which can inform the community discussion that should precede
-any V4 protocol changes.
+The simulation project is a useful artifact independent of the V3.x
+ship dot-version: it produces public documentation of how the mechanism
+would behave, which can inform the community discussion that should
+precede the V3.x activation.
 
 ---
 
 ## Conclusion
 
-This design might be the answer to the long-running "what real work do
+This design is the answer to the long-running "what real work do
 stakers do?" question. The mechanism is:
 
 1. **Stakers archive the chain** as part of the staking protocol, not as
@@ -472,24 +529,45 @@ stakers do?" question. The mechanism is:
 8. **Funding via Component 3 burn redirect**, leveraging existing
    adaptive economic mechanism.
 9. **Bootstrap-aligned**: archival load grows with chain maturity, so
-   the mechanism doesn't need to be load-bearing at V4 ship.
+   the V3.x ship dot-release does not need to be immediately load-
+   bearing.
+10. **Actor-architecture aligned**: `ArchivalEngine` is a Stage 5 actor,
+    sibling to `StakeEngine` (not a child), enforcing slashing-domain
+    integrity, failure isolation, and the Hayekian shard-market
+    property at the architectural level.
 
 The structural innovation: **decoupling consensus-securing work from
 useful work**, paying them from related but distinct streams, letting
 stakers self-select. This pattern doesn't appear in prior PoS, PoW, or
 storage-chain designs.
 
-V3 ships without this. V3's design must not foreclose it. V4's protocol
-addition is purely additive (no consensus-layer hard fork required).
-Simulation work proceeds as a separate project with no dependency on
-V3 ship timing.
+V3.0 ships with the architectural surface in place (Stage 4 RPC
+boundary refinements, multi-peer archival routing client surface,
+`StakeEngine` cross-actor query exposed) but with the mechanism not
+yet active. V3.x ships `ArchivalEngine` itself (Stage 5), gated on
+simulation evidence that closes the open design questions. The V3.x
+activation is purely additive — no consensus-layer hard fork required,
+no V3.0 surface refactor required, no migration code required.
+Simulation work proceeds as a separate project; its conclusions gate
+the dot-version, not the existence of the mechanism.
 
 ---
 
 ## References and cross-cutting concerns
 
-- `docs/FOLLOWUPS.md` — historical reference-block archival need
-  (`assemble_tree_path_for_output`)
+- `docs/V3_WALLET_DECISION_LOG.md` — *2026-04-27 — Engine architecture:
+  actor model with staged migration from composition* (canonical pin
+  of `ArchivalEngine` as Stage 5 sibling actor; the rescoping of this
+  document from V4 to V3 ship)
+- `docs/V3_SHARD_VISUALIZATION.md` — companion shard-surface design
+  (deterministic data art over shard content; shipped via the
+  `shekyl-shard-visual` library crate; companion to this archival
+  mechanism)
+- `docs/FOLLOWUPS.md` — V3.0 RPC boundary refinements (multi-peer
+  archival routing client surface), V3.1 sibling-resolution entry for
+  `assemble_tree_path_for_output` (FCMP++ historical-reference cutover
+  via Stage 5 `ArchivalEngine`), V3.x Stage 5 `ArchivalEngine` native
+  build, V3.x no-tradeability invariant codification
 - `docs/DESIGN_CONCEPTS.md` — V3 economic structure
   (`staker_pool_share`, `staker_emission_share`, lock tiers,
   Component 3 governance)
@@ -497,5 +575,4 @@ V3 ship timing.
 - `docs/SEED_NODE_DEPLOYMENT.md` — foundation `--no-prune` archival
   policy
 - `docs/STAKER_REWARD_DISBURSEMENT.md` — existing reward distribution
-  mechanics that the V4 archival stream layers atop
-- `docs/V3_WALLET_DECISION_LOG.md` — Phase 1 decision context
+  mechanics that the V3.x archival stream layers atop

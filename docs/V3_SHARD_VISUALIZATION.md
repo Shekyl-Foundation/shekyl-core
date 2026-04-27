@@ -1,15 +1,37 @@
-# V4 Design Notes — Shard Visualization (Visual Identity Layer)
+# V3 Design Notes — Shard Visualization (Visual Identity Layer)
 
-**Status:** Design exploration, V4-scoped. Companion to
-`V4_STAKER_ARCHIVAL.md`. The archival mechanism functions without
-this; this layer makes archival legible to humans.
+**Status:** V3 ship feature. Companion to `docs/V3_STAKER_ARCHIVAL.md`.
+The archival mechanism functions without this; this layer makes
+archival legible to humans. Originally drafted as V4-scoped; rescoped
+to V3 by the 2026-04-27 actor-architecture decision-log entry, which
+established `shekyl-shard-visual` as a domain-primitive library crate
+(no actor wrapping; pure-CPU, async-free, deterministic) shipping
+alongside the V3.x `ArchivalEngine` (Stage 5) ship.
 
-**Author / decision context:** Emerged in Phase 1 wallet-rewrite session
-(2026-04-26) while exploring gamification of the shard archival
-mechanism. The Pokemon analogy ("gotta collect 'em all") and the
-Mandelbrot reference led to the realization that *deterministic visual
-identity for chain state* is structurally meaningful, not just eye
-candy.
+This is a library crate, not an actor. The 2026-04-27 actor-
+architecture decision pinned actor-shape as wrong for visualization:
+no state to own (pure function from shard content to deterministic
+image), no privacy boundary that needs actor enforcement (parameters
+derive from public chain data), synchronous nature fights actor model
+(wallet UI wants thumbnails *now* during portfolio rendering), and
+multiple consumers want library access (block explorers, web
+portfolios won't run an actor system).
+
+The crate (`shekyl-shard-visual`) is referenced by:
+`docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 — Engine architecture*
+(domain-primitive library crate, "stays as-is" in the rename scope);
+`docs/V3_STAKER_ARCHIVAL.md` (companion archival design that produces
+the shards); `docs/FOLLOWUPS.md` V3.x no-tradeability invariant
+codification.
+
+**Author / decision context:** Emerged in Phase 1 wallet-rewrite
+session (2026-04-26) while exploring gamification of the shard
+archival mechanism. The Pokemon analogy ("gotta collect 'em all") and
+the Mandelbrot reference led to the realization that *deterministic
+visual identity for chain state* is structurally meaningful, not just
+eye candy. Rescoped to V3 ship in the 2026-04-27 actor-architecture
+decision; the rescoping does not change the design — the crate-shape
+makes shipping it cleanly possible within V3.x as a domain primitive.
 
 ---
 
@@ -62,7 +84,7 @@ nothing more.
 
 **Hard architectural constraint: the wallet does not support trading
 shard visualizations.** This is non-negotiable and the constraint is
-load-bearing for the V3/V4 economic model.
+load-bearing for the V3 economic model.
 
 The reasoning: every parameter in the V3 economy — lock-tier
 multipliers, emission decay, burn rates, claim ranges, archival
@@ -82,7 +104,7 @@ might:
 - Develop a secondary market that prices visuals independently
 
 Any of these distorts the carefully-balanced economy. The simulations
-become invalid. The V3-V4 economic model breaks.
+become invalid. The V3 economic model breaks.
 
 This is the same class of failure mode as Ethereum's "add features
 and figure out consequences later" pattern. Each addition looks
@@ -91,18 +113,28 @@ designed.
 
 **The discipline: visualizations exist because they make archival
 legible, and for no other reason.** Anything that turns them into a
-separate economic asset breaks the model.
+separate economic asset breaks the model. The no-tradeability
+invariant is tracked in `docs/FOLLOWUPS.md` (V3.x — *No-tradeability
+invariant codification*) as a placeholder for the enforcement-point
+inventory that lands when archival/visualization implementation
+begins.
 
 Concrete enforcement:
 
-- Wallet UI has no "trade" button on shard visuals
-- No wire format for transferring shard visual ownership
-- No on-chain registry of who "owns" a visual
+- `shekyl-shard-visual` library API surface has no functions that
+  mint, register, sign, or otherwise endorse an instance of a
+  visualization. Pure
+  `(shard_content) -> deterministic_image` only.
+- Wallet/daemon RPC surface has no methods that "own," "transfer,"
+  "claim," or "register" visualizations.
+- Wallet UI has no "trade" button on shard visuals.
+- No wire format for transferring shard visual ownership.
+- No on-chain registry of who "owns" a visual.
 - Anyone running an archival client can render any shard's visual at
   any time (no scarcity of *rendering*; scarcity is in *active
-  archival*)
+  archival*).
 
-If a community proposal in V4.x or beyond suggests adding tradeability,
+If a community proposal in V3.x or beyond suggests adding tradeability,
 it gets evaluated against the simulation work that validated the
 economy. If the simulation can't show that adding it preserves the
 economic balance, it doesn't ship.
@@ -126,9 +158,9 @@ distinctiveness itself.
 
 A separate public-facing FAQ document should address the inevitable
 "are these NFTs?" / "can I trade them?" / "is this a token?" questions
-with explicit "no, here's why" answers. That FAQ is a Phase 4b or V4
-shipping concern, not a design-doc concern, but worth flagging that
-the communication needs care.
+with explicit "no, here's why" answers. That FAQ is a V3.x shipping
+concern, not a design-doc concern, but worth flagging that the
+communication needs care.
 
 ---
 
@@ -157,7 +189,7 @@ holding the shard):
 
 These are aggregate, public, and chain-derived. None of them leak
 individual transaction information or undermine FCMP++'s privacy
-properties. Worth verifying explicitly during V4 implementation that
+properties. Worth verifying explicitly during V3.x implementation that
 the chosen parameter set doesn't accidentally encode anything sensitive
 — this is a design-review checkpoint.
 
@@ -363,7 +395,7 @@ This means specifying:
 - Coordinate system conventions
 - Rendering order for layered elements
 
-A reference implementation in the wallet codebase serves as the
+A reference implementation in `shekyl-shard-visual` serves as the
 canonical specification. Other implementations target visual
 equivalence to the reference.
 
@@ -414,12 +446,12 @@ that means and the design-review checkpoint.
 
 - Distribution moments of output values: aggregate statistics, but
   could in principle leak macro-information about chain activity
-  patterns. Probably fine for V4 since this information is computable
-  from any node anyway, but worth verifying.
+  patterns. Probably fine for V3.x ship since this information is
+  computable from any node anyway, but worth verifying.
 - Stake event ratios: same shape — aggregate, but encodes
   macro-economic information. Probably fine.
 
-**Design-review checkpoint:** before V4 ships, the chosen parameter
+**Design-review checkpoint:** before V3.x ships, the chosen parameter
 derivation function gets reviewed for "does any of this leak
 information that the chain protects elsewhere?" If yes, that
 parameter is dropped. If no, it ships.
@@ -434,12 +466,25 @@ review. This is safer than starting rich and trimming.
 
 ### Where this lives in the codebase
 
-The rendering layer should be a separate crate (e.g.,
-`shekyl-shard-visual`) so it can be reused outside the wallet (block
+The rendering layer lives in a separate library crate
+(`shekyl-shard-visual`) so it can be reused outside the wallet (block
 explorer, web portfolio views, future visualization-of-other-chain-
-objects use cases — see "Beyond shards" below).
+objects use cases — see "Beyond shards" below). The crate name is
+locked as a domain-primitive crate name in
+`docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 — `Wallet<S>` renamed to
+`Engine<S>`* under "stays as-is" — domain primitives keep their
+descriptive names rather than acquiring an `engine-` prefix.
 
-The crate should be:
+The crate is **a library, not an actor.** Per the 2026-04-27 actor-
+architecture decision-log entry, visualization is pure-CPU, async-
+free, deterministic, and has no state to encapsulate or privacy
+boundary to enforce. Wrapping it in an actor would add latency
+(message-passing overhead on every thumbnail render), prevent reuse
+in environments without a `kameo` runtime (block explorers, WASM web
+portfolios), and conflate domain-primitive concerns with engine-
+boundary concerns.
+
+The crate is:
 
 - **No-`std` compatible** for embedded / WASM use cases (with `std`
   feature for the desktop wallet)
@@ -451,9 +496,9 @@ The crate should be:
 
 Floating-point determinism is the technically hardest of these.
 Different CPUs produce slightly different IEEE 754 results for some
-operations. The rendering pipeline should either use fixed-point
-arithmetic (cleanest) or constrain floating-point operations to
-those with bit-exact cross-platform behavior.
+operations. The rendering pipeline either uses fixed-point arithmetic
+(cleanest) or constrains floating-point operations to those with
+bit-exact cross-platform behavior.
 
 ### Rendering output format
 
@@ -492,8 +537,8 @@ seconds for thumbnails.
 ## Beyond shards: visualization infrastructure as reusable layer
 
 Once the visualization infrastructure exists, it can apply to other
-chain objects. Worth flagging as future possibilities, *not* V4
-scope:
+chain objects. Worth flagging as future possibilities, *not* V3.x
+ship scope:
 
 - **Stake instances** — each stake gets a sigil derived from
   (stake_amount, lock_tier, lock_height, owner_view_tag). Stakers
@@ -504,39 +549,58 @@ scope:
   object can have a visual identity. Block explorers use this for
   visual navigation.
 - **Wallet identities** — derived from public address, displayed in
-  the UI as a "wallet sigil." Privacy concern: the visual must reveal
-  no more than the address itself does. Worth careful design if it
-  ships.
+  the UI as a "engine sigil" (per the rename — internal terminology
+  is "engine"; user-facing language for GUIs is a separate marketing
+  decision, see `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
+  `Wallet<S>` renamed to `Engine<S>`*). Privacy concern: the visual
+  must reveal no more than the address itself does. Worth careful
+  design if it ships.
 
-These are post-V4. Worth keeping the rendering crate clean enough to
-support them — generic enough that "render an X" works for any X with
-a deterministic parameter mapping.
+These are post-V3-ship. The `shekyl-shard-visual` crate stays clean
+enough to support them — generic enough that "render an X" works for
+any X with a deterministic parameter mapping.
 
 ---
 
-## V3 forecloses nothing here
+## V3-ship implications
 
-This feature requires no V3 changes. The mechanism is purely an
-addition layered on top of the V4 archival system. Visualizations are
-computed client-side from public chain data; no consensus involvement,
-no new protocol surface, no new RPC methods.
+This feature ships in V3.x alongside the V3.x `ArchivalEngine` Stage 5
+ship. The mechanism is purely an addition layered on top of the V3.x
+archival system. Visualizations are computed client-side from public
+chain data; no consensus involvement, no new protocol surface, no new
+RPC methods.
 
-The only V4 dependency is on V4 archival itself: visualizations are
-*for shards*, and shards exist because of archival. Without archival,
-there are no shards to visualize. Both ship together in V4.
+The dependencies and timing:
 
-V3 ships without any visualization machinery. V3 wallets render shards
-as plain hash strings or "Shard #4712" text labels. V4 wallets upgrade
-the rendering layer to produce visuals. Existing shards in the V3
-archival mechanism (if any — see V4_STAKER_ARCHIVAL.md bootstrap
-dynamics) get visualizations retroactively when V4 ships, since the
-visualizations are derived from existing public data.
+- **V3.0 ships without visualization machinery.** V3.0 wallets that
+  encounter shards (if any) render shards as plain hash strings or
+  "Shard #4712" text labels. There is no `shekyl-shard-visual` crate
+  surface in V3.0; the crate either doesn't exist yet or exists in
+  unpublished/unintegrated form awaiting V3.x activation.
+- **V3.x ships `ArchivalEngine` (Stage 5) and `shekyl-shard-visual`
+  together.** They are companion features: archival produces the
+  shards; visualization makes them legible. Both gate on the
+  simulation work described in `docs/V3_STAKER_ARCHIVAL.md`. Both
+  ship in the same V3.x dot-release.
+- **Existing shards in any earlier V3.x phase get visualizations
+  retroactively.** Visualizations are derived from existing public
+  data; activating the rendering layer in a later V3.x dot-release
+  produces visuals for shards that already existed.
+
+V3.0's design surface forecloses nothing here. The
+domain-primitive crate name (`shekyl-shard-visual`) is pre-committed
+in the rename entry's "stays as-is" list; the crate has no V3.0
+dependency and is purely additive when V3.x activates it. The
+no-tradeability invariant has a placeholder FOLLOWUPS item (V3.x)
+that codifies the enforcement-point inventory when implementation
+begins.
 
 ---
 
 ## Open design questions
 
-Not blockers; next-steps if this direction proceeds.
+These gate the V3.x ship dot-version. Each closes against design
+review and performance testing during the V3.x implementation cycle.
 
 **Final algorithm palette.** The candidate list above is a starting
 set; the actual palette ships after performance testing and continuity
@@ -563,13 +627,14 @@ native rendering quality or at higher quality? If higher: the
 rendering pipeline supports a "high quality" mode for export. Worth
 designing because it's the most likely user-facing edge case.
 
-**Algorithm versioning.** If V4 ships with palette V1 and V4.1 wants
-to add reaction-diffusion or change a color palette, what happens to
-existing rendered shards? Two paths: (a) shards always render with the
-algorithm version specified at chain time (immutable); (b) shards
-re-render with the latest algorithm (visual changes when wallet
-upgrades). Path (b) is simpler, path (a) is more "true to the data."
-Worth thinking about.
+**Algorithm versioning.** If V3.x ships with palette V1 and a later
+V3.x dot-release wants to add reaction-diffusion or change a color
+palette, what happens to existing rendered shards? Two paths: (a)
+shards always render with the algorithm version specified at chain
+time (immutable); (b) shards re-render with the latest algorithm
+(visual changes when wallet upgrades). Path (b) is simpler, path (a)
+is more "true to the data." Worth thinking about; closes during V3.x
+design review.
 
 ---
 
@@ -587,13 +652,20 @@ The mechanism is:
 3. **Parameters come from public chain properties** — never from
    anything privacy-sensitive.
 4. **Renderings are reproducible** across implementations, with a
-   reference implementation as canonical specification.
+   reference implementation in `shekyl-shard-visual` as canonical
+   specification.
 5. **No tradeability** — visualizations are not tokens, are not
    transferable, exist only as renderings of chain state. This is a
    hard architectural constraint that prevents introducing economic
-   dimensions the V3/V4 simulations didn't validate.
+   dimensions the V3 simulations didn't validate. Codification of the
+   enforcement-point inventory tracked in `docs/FOLLOWUPS.md` (V3.x).
 6. **No NFT framing** in public communication — this is data art, not
    a separate asset class.
+7. **Library crate, not actor.** `shekyl-shard-visual` is a domain-
+   primitive library: pure-CPU, async-free, deterministic, reusable
+   outside the wallet. The 2026-04-27 actor-architecture decision pins
+   library-shape as the correct one for visualization (no state, no
+   privacy boundary, synchronous nature, multiple consumers).
 
 The structural innovation: **deterministic visual identity for chain
 state, decoupled from any tradeable asset.** Prior crypto-art systems
@@ -603,21 +675,31 @@ This is on-chain data with on-chain visualization, with deliberately
 *no* trading mechanism. The visual exists to make data legible, full
 stop.
 
-V4 ships this alongside `V4_STAKER_ARCHIVAL.md`. Together they make
-archival economically incentivized, distributed, and culturally
+V3.x ships this alongside `docs/V3_STAKER_ARCHIVAL.md`. Together they
+make archival economically incentivized, distributed, and culturally
 resonant — the "real work" stakers perform becomes visible, both in
 the metaphorical sense (the network values it) and the literal sense
-(stakers see their portfolios).
+(stakers see their portfolios). V3.0 ships the architectural surface
+that makes V3.x activation purely additive (rename entry pre-commits
+the `shekyl-shard-visual` crate name; FOLLOWUPS V3.x tracks the
+no-tradeability invariant codification).
 
 ---
 
 ## References and cross-cutting concerns
 
-- `V4_STAKER_ARCHIVAL.md` — the archival mechanism this layer
-  visualizes
+- `docs/V3_STAKER_ARCHIVAL.md` — the archival mechanism this layer
+  visualizes (companion document, ships together in V3.x)
+- `docs/V3_WALLET_DECISION_LOG.md` — *2026-04-27 — Engine architecture:
+  actor model with staged migration from composition* (pin of
+  `shekyl-shard-visual` as library crate, not actor); *2026-04-27 —
+  `Wallet<S>` renamed to `Engine<S>`* ("stays as-is" pre-commit of
+  the crate name)
+- `docs/FOLLOWUPS.md` — V3.x *No-tradeability invariant codification*
+  (placeholder for the enforcement-point inventory); V3.x *Stage 5
+  ArchivalEngine native build* (companion archival ship)
 - `docs/DESIGN_CONCEPTS.md` — V3 economic structure (the model this
   must not undermine)
-- `docs/V3_WALLET_DECISION_LOG.md` — Phase 1 decision context
 - Future: `docs/PUBLIC_NARRATIVE_FAQ.md` — should grow a "shard
   visualization FAQ" section addressing the inevitable "are these
   NFTs?" questions
