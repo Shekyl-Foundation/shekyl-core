@@ -153,6 +153,9 @@ pub mod network;
 pub mod pending;
 pub mod signer;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use capability::Capability;
 pub use daemon::DaemonClient;
 pub use error::{IoError, KeyError, OpenError, PendingTxError, RefreshError, SendError, TxError};

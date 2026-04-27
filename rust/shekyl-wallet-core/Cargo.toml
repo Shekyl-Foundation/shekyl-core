@@ -31,6 +31,7 @@ tracing = "0.1"
 [dev-dependencies]
 curve25519-dalek = { version = "4", features = ["alloc"] }
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc", features = ["std"] }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
