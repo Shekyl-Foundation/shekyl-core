@@ -609,6 +609,46 @@ impl RefreshHandle {
             }),
         }
     }
+
+    /// Test-only constructor that injects pre-built channels and a
+    /// stand-in `JoinHandle`.
+    ///
+    /// `RefreshHandle`'s production constructor lives entirely
+    /// inside [`Engine::start_refresh`], which spawns a real
+    /// producer task driving an `Arc<RwLock<Engine<S>>>`. Unit tests
+    /// of the handle's public surface (`progress`, `cancel`,
+    /// `is_running`, `join`, `Drop`) do not need a real engine and
+    /// would not benefit from one — the surface is a thin wrapper
+    /// around the four channel ends. This constructor lets a test
+    /// supply each end directly so it can drive the handle's
+    /// observable state deterministically.
+    ///
+    /// `producer_join` is conventionally either:
+    /// - `tokio::spawn(async move { /* loop on cancel */ })` for
+    ///   tests that need `is_running()` to start `true`, or
+    /// - `tokio::spawn(async {})` (already-finished) for tests that
+    ///   just want to assert on the join's terminal state.
+    ///
+    /// Single-flight semantics are out-of-scope for handle-level
+    /// unit tests: the slot is owned by `Engine<S>`, not the
+    /// handle, and is exercised via the integration tests in
+    /// commit 6 that go through the real `start_refresh`.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        completion_rx: tokio::sync::oneshot::Receiver<Result<RefreshSummary, RefreshError>>,
+        cancel_token: CancellationToken,
+        progress_rx: tokio::sync::watch::Receiver<RefreshProgress>,
+        producer_join: tokio::task::JoinHandle<()>,
+        opts: RefreshOptions,
+    ) -> Self {
+        Self {
+            completion_rx: Some(completion_rx),
+            cancel_token,
+            progress_rx,
+            producer_join,
+            opts,
+        }
+    }
 }
 
 impl std::fmt::Debug for RefreshHandle {
@@ -3024,5 +3064,190 @@ mod refresh_driver_tests {
         assert_eq!(snap.reorg_blocks.blocks.len(), 2);
         assert_eq!(snap.block_hash_at(1234), Some([0xAA; 32]));
         assert_eq!(snap.block_hash_at(1232), None);
+    }
+}
+
+#[cfg(test)]
+mod refresh_handle_tests {
+    //! Unit tests for the [`RefreshHandle`] public surface.
+    //!
+    //! Every test here builds a handle via
+    //! [`RefreshHandle::for_test`] with hand-rolled channel ends
+    //! and a stand-in `JoinHandle`. No real producer task or
+    //! `Engine<S>` is involved — this module exercises the handle
+    //! itself, which is a thin wrapper around four channel ends
+    //! plus the cancel token.
+    //!
+    //! Corner-case tests (cancel-on-drop, concurrent
+    //! `start_refresh`, idempotent cancel, `mem::forget` leak
+    //! semantics) live in commit 5. Integration tests that drive
+    //! the real producer through a `MockRpc` live in commit 6.
+    use super::{
+        RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshSummary,
+    };
+    use tokio_util::sync::CancellationToken;
+
+    /// Build a handle whose channels are entirely caller-owned, so
+    /// the test can fire each one explicitly. Returns a separate
+    /// observation `JoinHandle` (parked on the same cancel token
+    /// as the one inside the handle) for assertions about producer
+    /// wind-down — the handle's own `JoinHandle` is consumed by
+    /// `is_running()` checks and may not be awaited directly
+    /// without breaking the move-out story.
+    fn handle_with(
+        opts: RefreshOptions,
+    ) -> (
+        RefreshHandle,
+        tokio::sync::oneshot::Sender<Result<RefreshSummary, RefreshError>>,
+        tokio::sync::watch::Sender<RefreshProgress>,
+        CancellationToken,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        let (progress_tx, progress_rx) =
+            tokio::sync::watch::channel(RefreshProgress::initial());
+        let cancel = CancellationToken::new();
+
+        // Stand-in producer: park forever on the cancel token, so
+        // `is_running()` reads `true` until the test fires cancel
+        // (or drops the handle, which fires it via `Drop`).
+        let producer_cancel = cancel.clone();
+        let producer = tokio::spawn(async move {
+            producer_cancel.cancelled().await;
+        });
+        let producer_for_assert = tokio::spawn({
+            let observe = cancel.clone();
+            async move { observe.cancelled().await }
+        });
+
+        let handle = RefreshHandle::for_test(
+            completion_rx,
+            cancel.clone(),
+            progress_rx,
+            producer,
+            opts,
+        );
+        (handle, completion_tx, progress_tx, cancel, producer_for_assert)
+    }
+
+    /// `progress()` returns a receiver that observes the seeded
+    /// `RefreshProgress::initial()` baseline before any update is
+    /// published. `borrow()` is non-blocking and always sees the
+    /// latest value.
+    #[tokio::test]
+    async fn progress_returns_seeded_baseline() {
+        let (handle, _completion, _progress, _cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        let rx = handle.progress();
+        let snap = rx.borrow().clone();
+        assert_eq!(snap.height, 0);
+        assert_eq!(snap.blocks_processed, 0);
+        assert_eq!(snap.blocks_total, 0);
+        // `RefreshProgress::initial()` seeds the phase as
+        // `Scanning` so callers don't see `Cancelled` before the
+        // producer has run.
+        assert!(matches!(snap.phase, RefreshPhase::Scanning));
+    }
+
+    /// `progress()` updates land on every cloned receiver.
+    #[tokio::test]
+    async fn progress_updates_propagate_to_subscribers() {
+        let (handle, _completion, progress_tx, _cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        let mut rx = handle.progress();
+        progress_tx
+            .send(RefreshProgress {
+                height: 42,
+                blocks_processed: 7,
+                blocks_total: 100,
+                phase: RefreshPhase::Scanning,
+            })
+            .expect("subscriber alive");
+        rx.changed().await.expect("update delivered");
+        let snap = rx.borrow().clone();
+        assert_eq!(snap.height, 42);
+        assert_eq!(snap.blocks_processed, 7);
+        assert_eq!(snap.blocks_total, 100);
+    }
+
+    /// `cancel()` fires the shared cancel token, which the
+    /// producer task observes. `is_running()` flips to `false`
+    /// once the producer task has exited.
+    #[tokio::test]
+    async fn cancel_fires_token_and_is_running_flips() {
+        let (handle, _completion, _progress, cancel, producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        assert!(handle.is_running(), "producer is parked on cancel; should be running");
+        assert!(!cancel.is_cancelled(), "no cancel observed yet");
+
+        handle.cancel();
+        assert!(cancel.is_cancelled(), "cancel() fires the shared token");
+
+        producer_assert.await.expect("producer wakes on cancel");
+        tokio::task::yield_now().await;
+        assert!(!handle.is_running(), "JoinHandle has finished");
+    }
+
+    /// `join()` consumes the handle and returns the value sent on
+    /// the completion oneshot.
+    #[tokio::test]
+    async fn join_delivers_summary_from_completion_oneshot() {
+        let (handle, completion, _progress, _cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        let summary = RefreshSummary {
+            processed_height_range: 100..105,
+            blocks_processed: 5,
+            transfers_detected: 0,
+            key_images_observed: 0,
+            stake_events: 0,
+            reorg: None,
+            merge_attempts: 1,
+        };
+        completion
+            .send(Ok(summary.clone()))
+            .expect("oneshot receiver still alive on handle");
+
+        let returned = handle.join().await.expect("Ok delivered");
+        assert_eq!(returned.processed_height_range, summary.processed_height_range);
+        assert_eq!(returned.blocks_processed, summary.blocks_processed);
+        assert_eq!(returned.merge_attempts, summary.merge_attempts);
+    }
+
+    /// `join()` propagates a terminal error sent on the
+    /// completion oneshot unchanged.
+    #[tokio::test]
+    async fn join_propagates_terminal_error() {
+        let (handle, completion, _progress, _cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        completion
+            .send(Err(RefreshError::Cancelled))
+            .expect("oneshot receiver still alive on handle");
+
+        let result = handle.join().await;
+        assert!(matches!(result, Err(RefreshError::Cancelled)));
+    }
+
+    /// If the producer task drops its completion sender without
+    /// sending (which would only happen on a panic — a contract
+    /// violation), `join()` surfaces a typed
+    /// `MalformedScanResult` rather than panicking.
+    #[tokio::test]
+    async fn join_maps_dropped_sender_to_malformed_scan_result() {
+        let (handle, completion, _progress, _cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+        drop(completion);
+
+        let result = handle.join().await;
+        match result {
+            Err(RefreshError::MalformedScanResult { reason }) => {
+                assert!(reason.contains("dropped completion sender"), "reason was: {reason}");
+            }
+            other => panic!("expected MalformedScanResult, got {other:?}"),
+        }
     }
 }
