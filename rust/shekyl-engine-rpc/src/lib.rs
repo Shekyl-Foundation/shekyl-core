@@ -7,7 +7,7 @@
 //!
 //! Provides a Rust JSON-RPC server that wraps the C++ wallet2 library via FFI.
 //! Can be used as:
-//! - A standalone binary (drop-in replacement for `shekyl-engine-rpc`)
+//! - A standalone binary (drop-in replacement for `shekyl-wallet-rpc`)
 //! - An embedded library in the Tauri GUI wallet
 //!
 //! With the `rust-scanner` feature enabled, scanner-backed read-only methods
