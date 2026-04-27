@@ -651,6 +651,96 @@ impl Drop for RefreshHandle {
     }
 }
 
+// ── Single-flight slot ─────────────────────────────────────────────
+//
+// The slot is a per-Engine `Arc<AtomicBool>` kept on the engine
+// struct. `start_refresh` claims the flag (CAS false → true) under
+// a brief read borrow of the engine; if the CAS fails, another
+// refresh is in flight and the call returns
+// `RefreshError::AlreadyRunning`. The producer task holds a
+// `SlotGuard` for the duration of the refresh; dropping the guard
+// releases the flag (RAII).
+//
+// Independent of the engine's cross-cutting RwLock — the slot is
+// its own atomic, so `start_refresh` does not need a write borrow
+// of `Engine<S>` to claim it. This keeps the slot-claim path lock-
+// free against the producer task's per-attempt read/write borrows.
+
+/// Per-engine single-flight slot for [`Engine::start_refresh`].
+///
+/// Cloneable; the slot itself is reference-counted, so cloning a
+/// `RefreshSlot` produces another handle to the same underlying
+/// flag. The engine struct owns one; the producer task's
+/// [`SlotGuard`] holds another for its lifetime.
+#[derive(Clone, Debug)]
+pub(crate) struct RefreshSlot {
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl RefreshSlot {
+    /// Build a fresh slot in the released state. Called once at
+    /// `Engine::assemble` time.
+    pub(crate) fn new() -> Self {
+        Self {
+            flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Attempt to claim the slot. Returns `Some(SlotGuard)` on
+    /// success (the slot is now held; `Drop` will release it).
+    /// Returns `None` if the slot is already held by another
+    /// refresh task.
+    ///
+    /// Implemented as a single CAS (Acquire on success, Relaxed on
+    /// failure) so claim and release pair across threads without
+    /// needing a stronger fence.
+    pub(crate) fn try_claim(&self) -> Option<SlotGuard> {
+        match self.flag.compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::Acquire,
+            std::sync::atomic::Ordering::Relaxed,
+        ) {
+            Ok(_) => Some(SlotGuard {
+                flag: self.flag.clone(),
+            }),
+            Err(_) => None,
+        }
+    }
+
+    /// Read the slot's current state without claiming it. Used by
+    /// the redacted `Debug` impl on `Engine<S>` to surface "is a
+    /// refresh in flight" without taking a guard.
+    pub(crate) fn is_claimed(&self) -> bool {
+        self.flag.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// RAII guard for the [`RefreshSlot`] flag. Held by the producer
+/// task; dropping it releases the flag.
+///
+/// Deliberately not `Clone`: the guard's whole purpose is to
+/// uniquely own the claim, so cloning it would defeat single-
+/// flight enforcement. The producer task receives the guard from
+/// [`Engine::start_refresh`] and holds it through `run_refresh_task`'s
+/// full lifetime; the `Drop` releases the slot whether the task
+/// returned successfully, errored, or was cancelled.
+#[derive(Debug)]
+pub(crate) struct SlotGuard {
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        // Release: pair with `Acquire` on the matching `try_claim`.
+        // Idempotent — if the slot was double-released somehow, the
+        // store is a no-op (the second release would still write
+        // `false` to a flag that's already `false`).
+        self.flag
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 // Static asserts: trait bounds the Branch 2 surface depends on.
 // Failure here means a downstream type lost its Send/Sync/Clone
 // invariant; surface the violation at the engine-core build rather
@@ -1045,6 +1135,76 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
     Ok(Scanner::new(view_pair, spend_secret))
 }
 
+/// Producer task entry point.
+///
+/// Spawned by [`Engine::start_refresh`]. Drives the snapshot-merge
+/// loop end-to-end: fetch tip, snapshot, scan (without holding the
+/// engine lock), merge under write lock, retry on
+/// `ConcurrentMutation` until `opts.max_retries` is reached, and
+/// publish a terminal result on `completion`.
+///
+/// ## Parameters
+///
+/// - `engine_arc`: shared handle to the engine. The task holds the
+///   read lock briefly per attempt for the snapshot, drops it
+///   across the network-bound scan, then re-acquires the write
+///   lock for the merge. Stage 4 replaces this with actor message
+///   passing.
+/// - `opts`: the same `RefreshOptions` `start_refresh` was called
+///   with. Carries `max_retries` for the snapshot-race retry
+///   budget.
+/// - `cancel`: cooperative cancel token; observed at every batch
+///   boundary and during retry-backoff `select!`s. Fired by
+///   `RefreshHandle::cancel()` and by `Drop`.
+/// - `progress`: the producer's sole `Sender` for the watch
+///   channel. Published per-batch while scanning; the final
+///   `Cancelled` / terminal phase publish runs before the task
+///   exits.
+/// - `completion`: oneshot the producer sends its terminal result
+///   on. Awaited by `RefreshHandle::join`.
+/// - `_slot_guard`: held by name only — the parameter exists so
+///   the slot stays claimed for the **full lifetime** of this
+///   function, including post-`completion.send(...)` wind-down.
+///   When the function returns (success, error, or cancellation),
+///   the guard drops and releases the engine's `RefreshSlot` flag.
+///   This is the mechanism that ensures single-flight semantics:
+///   the slot stays claimed until the task exits, so a racing
+///   `start_refresh` returns `AlreadyRunning` even during cancel-
+///   then-cleanup wind-down. The `_` prefix is the standard Rust
+///   idiom for "RAII guard, intentionally unused in the function
+///   body but held for `Drop` semantics."
+///
+/// **Stub for commit 2 of Branch 2; full body lands in commit 3.**
+/// Today this immediately publishes `Cancelled` on `progress`,
+/// sends `Err(RefreshError::Cancelled)` on `completion`, and
+/// returns. The signature is fixed so commit 3 can drop in the
+/// real loop without the spawn site changing.
+async fn run_refresh_task<S: EngineSignerKind>(
+    engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S>>>,
+    opts: RefreshOptions,
+    cancel: CancellationToken,
+    progress: tokio::sync::watch::Sender<RefreshProgress>,
+    completion: tokio::sync::oneshot::Sender<Result<RefreshSummary, RefreshError>>,
+    _slot_guard: SlotGuard,
+) where
+    S: Send + Sync + 'static,
+    Engine<S>: Send + Sync,
+{
+    // Reference unused-by-stub parameters so commit 2 emits no
+    // dead-arg warnings; commit 3 replaces the body with the real
+    // drive_refresh_loop dispatch.
+    let _ = (&engine_arc, &opts);
+    let _ = progress.send(RefreshProgress {
+        height: 0,
+        blocks_processed: 0,
+        blocks_total: 0,
+        phase: RefreshPhase::Cancelled,
+    });
+    let _ = cancel; // observed; nothing to do in the stub
+    let _ = completion.send(Err(RefreshError::Cancelled));
+    // _slot_guard drops here, releasing the slot.
+}
+
 /// Build a [`RefreshSummary`] from a producer-emitted [`ScanResult`]
 /// (just before the merge consumes it) and the loop bookkeeping. The
 /// merge takes the value by-move; this helper runs first so the merge
@@ -1116,14 +1276,54 @@ impl<S: EngineSignerKind> Engine<S> {
         S: EngineSignerKind + Send + Sync + 'static,
         Self: Send + Sync,
     {
-        // Reference the Arc and opts so commit 1's stub does not
-        // emit "unused parameter" warnings; commit 2 replaces the
-        // body with the real spawn dance.
-        let _ = (&self_arc, &opts);
-        unimplemented!(
-            "Engine::start_refresh: full body lands in commit 2 of Branch 2 \
-             (feat/phase1-refresh-handle)"
-        )
+        // Brief shared read borrow to clone the slot. The slot is
+        // its own `Arc<AtomicBool>`, independent of the engine's
+        // RwLock, so the read borrow only lives long enough to copy
+        // the Arc out. CAS happens after the borrow drops.
+        let slot = {
+            let engine = self_arc.read().await;
+            engine.refresh_slot.clone()
+        };
+        let slot_guard = slot
+            .try_claim()
+            .ok_or(RefreshError::AlreadyRunning)?;
+
+        // Channels:
+        // - `progress`: watch (latest-only); seeded with the
+        //   `RefreshProgress::initial()` baseline so the first
+        //   `progress().borrow()` returns a usable value before the
+        //   producer publishes its first per-attempt update.
+        // - `completion`: oneshot for the terminal
+        //   `RefreshSummary` / `RefreshError`. `RefreshHandle::join`
+        //   awaits this.
+        let (progress_tx, progress_rx) =
+            tokio::sync::watch::channel(RefreshProgress::initial());
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        let cancel_token = CancellationToken::new();
+
+        let task_arc = self_arc.clone();
+        let task_cancel = cancel_token.clone();
+        // `progress_tx` moves into the task — the producer is the
+        // sole `Sender`. The handle keeps only a `Receiver` clone;
+        // when the task exits, its `Sender` drops, and downstream
+        // `Receiver::changed().await` returns `Err(_)` to signal
+        // "no more progress."
+        let producer_join = tokio::spawn(run_refresh_task(
+            task_arc,
+            opts.clone(),
+            task_cancel,
+            progress_tx,
+            completion_tx,
+            slot_guard,
+        ));
+
+        Ok(RefreshHandle {
+            completion_rx: Some(completion_rx),
+            cancel_token,
+            progress_rx,
+            producer_join,
+            opts,
+        })
     }
 
     /// Drive a refresh against the configured daemon: pull a snapshot

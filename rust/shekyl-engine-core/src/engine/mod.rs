@@ -320,6 +320,21 @@ pub struct Engine<S: EngineSignerKind> {
     /// [`Capability::can_spend_locally`].
     capability: Capability,
 
+    /// Single-flight slot for [`Engine::start_refresh`]. Held by the
+    /// engine for the lifetime of the open wallet; claimed (and
+    /// guarded) by the producer task `run_refresh_task` for the
+    /// duration of one refresh. A racing `start_refresh` finds the
+    /// flag set and returns
+    /// [`RefreshError::AlreadyRunning`](error::RefreshError::AlreadyRunning).
+    ///
+    /// Independent of the cross-cutting RwLock around `Engine<S>`:
+    /// the slot is its own `Arc<AtomicBool>` so the slot-claim path
+    /// only needs a brief shared read of the engine to clone the
+    /// flag, not a write borrow. The producer task holds a
+    /// [`SlotGuard`](refresh::SlotGuard) that releases the flag on
+    /// task exit (RAII).
+    refresh_slot: refresh::RefreshSlot,
+
     /// Compile-time signer-kind dispatch. The actual key material lives
     /// in [`Engine::keys`] (for `SoloSigner`); this marker exists so
     /// the V3.1 multisig type can name distinct method signatures via
@@ -372,6 +387,7 @@ impl<S: EngineSignerKind> std::fmt::Debug for Engine<S> {
             .field("daemon", &self.daemon)
             .field("network", &self.network)
             .field("capability", &self.capability)
+            .field("refresh_running", &self.refresh_slot.is_claimed())
             .field("signer_kind", &std::any::type_name::<S>())
             .finish()
     }
