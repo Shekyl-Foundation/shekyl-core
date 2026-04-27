@@ -46,7 +46,11 @@ shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt"] }
+# `test-util` enables `#[tokio::test(start_paused = true)]` and the
+# in-test `tokio::time` virtualization that `wallet::refresh`'s
+# retry-backoff tests use to make exponential delays instantaneous
+# without sacrificing determinism.
+tokio = { version = "1", features = ["macros", "rt", "test-util"] }
 # Dummy-scanner construction in `wallet::refresh` tests needs
 # `Zeroizing<…>` for view/spend secret containers. Production
 # wallet-core code holds these only behind the `multisig` feature

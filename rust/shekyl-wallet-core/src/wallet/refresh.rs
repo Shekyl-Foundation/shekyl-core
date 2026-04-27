@@ -539,23 +539,70 @@ fn consistent_against_range(
 
 #[cfg(test)]
 mod tests {
+    //! Test suite for [`produce_scan_result`].
+    //!
+    //! Organized by failure-mode class so reviewers can map each test
+    //! to the producer's contract surface:
+    //!
+    //! - **Smoke tests**: empty range, pre-cancellation. The two
+    //!   trivial paths the function must short-circuit before any
+    //!   RPC traffic.
+    //! - **Linear-scan structural tests**: long-range coverage,
+    //!   range-end honouring, key-image accumulation. These exercise
+    //!   the per-block accumulation loop on the no-reorg path.
+    //! - **Reorg detection tests**: parent-hash mismatch,
+    //!   walk-back to fork point, snapshot-window-edge fallback.
+    //! - **RPC-failure tests**: transient-recover-within-budget,
+    //!   persistent-exhaust-budget, daemon-too-short. These exercise
+    //!   `fetch_block_with_retry` and the `MaxRetriesExhausted`
+    //!   surface.
+    //! - **Scanner-failure tests**: malformed `ScannableBlock`
+    //!   triggers `ProduceError::Scan`.
+    //! - **Cancellation tests**: cancel-observed-between-blocks
+    //!   exercises the inter-block check distinct from the
+    //!   pre-call check.
+    //!
+    //! # What this suite does not cover
+    //!
+    //! Real owned-output recovery (a non-empty `Timelocked` from
+    //! `Scanner::scan` accumulating into [`ScanResult::new_transfers`])
+    //! requires a `ViewPair`-aligned fixture (PQC keys, encapsulated
+    //! shared secret, and a real on-chain output). That fixture is
+    //! substantial enough that it belongs to commit 5's full
+    //! [`super::super::Wallet::refresh`]-driven integration tests,
+    //! built on top of the existing `shekyl-scanner::test-utils`
+    //! constructors. The producer's transfer-accumulation logic is
+    //! a single `for output in timelocked.into_inner() { ... }`
+    //! loop; the structural correctness — that every recovered
+    //! output gets a `block_height` matching its source block — is
+    //! self-evident from inspection and exercised end-to-end at the
+    //! refresh-driver level.
+
+    use std::future::Future;
+    use std::sync::{Arc, Mutex};
+
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
+    use shekyl_oxide::block::{Block, BlockHeader};
+    use shekyl_oxide::io::CompressedPoint;
+    use shekyl_oxide::transaction::{Input, Timelock, Transaction, TransactionPrefix};
     use shekyl_scanner::{Scanner, ViewPair};
     use zeroize::Zeroizing;
 
     use super::*;
     use crate::wallet::test_support::{make_synthetic_block, MockRpc};
 
-    /// Build a deterministic [`Scanner`] for tests that never need
-    /// the scanner to actually recover an owned output. The empty-range
-    /// and pre-cancel smoke tests below return before the producer
-    /// reaches [`Scanner::scan`], so the keys are never used in
-    /// anger; they exist only to satisfy the producer's type
-    /// signature.
+    // ── Helpers ────────────────────────────────────────────────
+
+    /// Build a deterministic [`Scanner`] for tests that exercise
+    /// the producer's structural behaviour (block-fetch, reorg
+    /// detection, key-image accumulation, cancellation) without
+    /// triggering real owned-output recovery.
     ///
-    /// The full producer test suite (commit 3) builds a richer
-    /// fixture on top of `shekyl-scanner::test-utils` so it can
-    /// assert on real `RecoveredWalletOutput` shape.
+    /// The synthetic blocks below carry no recoverable outputs
+    /// (`output_index_for_first_ringct_output: None` skips the
+    /// scanner's recovery loop entirely), so the keys here exist
+    /// only to satisfy [`Scanner::new`]'s type signature. End-to-end
+    /// recovery tests live in commit 5 (see module docs above).
     fn dummy_scanner() -> Scanner {
         let view_secret = Zeroizing::new([0xAAu8; 32]);
         let spend_secret = Zeroizing::new([0xBBu8; 32]);
@@ -563,7 +610,8 @@ mod tests {
         let spend_scalar = Scalar::from_bytes_mod_order(*spend_secret);
         let spend_pub = &spend_scalar * ED25519_BASEPOINT_TABLE;
         // ML-KEM-768 dk is 2400 bytes; an all-zero buffer is fine
-        // for the tests below because the scanner is never invoked.
+        // because the scanner's recovery path is unreachable for
+        // every test block in this module.
         let x25519_sk = Zeroizing::new([0u8; 32]);
         let ml_kem_dk = Zeroizing::new(vec![0u8; 2400]);
         let view_pair = ViewPair::new(spend_pub, Zeroizing::new(view_scalar), x25519_sk, ml_kem_dk)
@@ -571,6 +619,8 @@ mod tests {
         Scanner::new(view_pair, spend_secret)
     }
 
+    /// Build a linear chain of `n` synthetic blocks, parented as
+    /// `make_synthetic_block(h, prev_hash)` for `h = 1..=n`.
     fn linear_chain(n: u64) -> Vec<ScannableBlock> {
         let mut chain = Vec::new();
         let mut parent = [0u8; 32];
@@ -582,6 +632,9 @@ mod tests {
         chain
     }
 
+    /// Build a fresh-wallet [`LedgerSnapshot`] (synced_height = 0,
+    /// empty reorg window). Used by tests where the wallet has not
+    /// recorded any blocks yet.
     fn snapshot_at_height_zero() -> LedgerSnapshot {
         LedgerSnapshot {
             synced_height: 0,
@@ -589,9 +642,159 @@ mod tests {
         }
     }
 
-    /// Empty-range smoke test. The full suite (linear scan, reorg,
-    /// retry, cancellation) lands in commit 3 against the same
-    /// `MockRpc` scaffold.
+    /// Build a [`LedgerSnapshot`] whose `reorg_blocks` records every
+    /// `(height, hash)` pair from `chain`. Used by reorg tests where
+    /// the producer needs the full snapshot window to walk back the
+    /// fork point.
+    fn snapshot_recording_chain(chain: &[ScannableBlock]) -> LedgerSnapshot {
+        let blocks: Vec<(u64, [u8; 32])> = chain
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (i as u64 + 1, b.block.hash()))
+            .collect();
+        let synced_height = chain.len() as u64;
+        LedgerSnapshot {
+            synced_height,
+            reorg_blocks: ReorgBlocks { blocks },
+        }
+    }
+
+    /// Build a synthetic block at `height` parented at
+    /// `parent_hash`, with a non-default `timestamp` so its hash
+    /// differs from [`make_synthetic_block`]'s output (which uses
+    /// `timestamp = height`). Reorg tests use this to construct
+    /// "alternate-chain" blocks that share a parent prefix but
+    /// diverge in hash from the original chain.
+    fn make_alt_block(height: u64, parent_hash: [u8; 32]) -> ScannableBlock {
+        let mut sb = make_synthetic_block(height, parent_hash);
+        sb.block.header.timestamp = 9_000 + height;
+        sb
+    }
+
+    /// Build a block at `height` whose miner transaction is
+    /// standard (`Input::Gen`) and whose body contains one
+    /// non-miner V2 transaction with a single `Input::ToKey` whose
+    /// `key_image` is `key_image`. The non-miner tx has no outputs.
+    /// The producer's key-image accumulation walks both miner and
+    /// non-miner inputs; this block exercises the non-miner path.
+    fn make_block_with_spending_tx(
+        height: u64,
+        parent_hash: [u8; 32],
+        key_image: [u8; 32],
+    ) -> ScannableBlock {
+        let header = BlockHeader {
+            hardfork_version: 1,
+            hardfork_signal: 0,
+            timestamp: height,
+            previous: parent_hash,
+            nonce: 0,
+        };
+        let miner_prefix = TransactionPrefix {
+            additional_timelock: Timelock::None,
+            inputs: vec![Input::Gen(
+                usize::try_from(height).expect("height fits in usize"),
+            )],
+            outputs: vec![],
+            extra: vec![],
+        };
+        let miner_tx = Transaction::V2 {
+            prefix: miner_prefix,
+            proofs: None,
+        };
+        let spending_prefix = TransactionPrefix {
+            additional_timelock: Timelock::None,
+            inputs: vec![Input::ToKey {
+                amount: None,
+                key_offsets: vec![],
+                key_image: CompressedPoint(key_image),
+            }],
+            outputs: vec![],
+            extra: vec![],
+        };
+        let spending_tx = Transaction::V2 {
+            prefix: spending_prefix,
+            proofs: None,
+        };
+        let tx_hash = spending_tx.hash();
+        let block = Block::new(header, miner_tx, vec![tx_hash])
+            .expect("Block::new accepts V2 miner-tx + 1 tx-hash");
+        // `ScannableBlock::transactions` holds `Transaction<Pruned>`
+        // (the on-wire view: prefix + pruned proofs). Synthetic
+        // construction starts in `Transaction<NotPruned>` and
+        // demotes via `Into`.
+        ScannableBlock {
+            block,
+            transactions: vec![spending_tx.into()],
+            output_index_for_first_ringct_output: None,
+        }
+    }
+
+    /// Build a [`ScannableBlock`] whose `block.transactions.len()`
+    /// disagrees with `transactions.len()` — the scanner's
+    /// `InvalidScannableBlock` precondition. This is the only way
+    /// to make `Scanner::scan` return [`ScanError`] from a synthetic
+    /// fixture (the alternative paths require malformed PQC
+    /// material that itself requires a real `ViewPair` setup).
+    fn make_malformed_scannable(height: u64, parent_hash: [u8; 32]) -> ScannableBlock {
+        let mut sb = make_synthetic_block(height, parent_hash);
+        // Add a tx hash to the block but no Transaction in the
+        // scannable's `transactions` vec — count mismatch.
+        sb.block.transactions.push([0x42u8; 32]);
+        sb
+    }
+
+    /// `Rpc` wrapper that fires the supplied [`CancellationToken`]
+    /// once `n` block fetches have completed. Lets the
+    /// `cancel_observed_between_blocks` test deterministically check
+    /// the producer's inter-block cancellation gate without racing
+    /// real timing.
+    #[derive(Clone)]
+    struct CancelAfterNFetches {
+        inner: MockRpc,
+        cancel: CancellationToken,
+        counter: Arc<Mutex<u32>>,
+        cancel_after: u32,
+    }
+
+    impl Rpc for CancelAfterNFetches {
+        fn post(
+            &self,
+            _route: &str,
+            _body: Vec<u8>,
+        ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
+            async move { panic!("CancelAfterNFetches::post unreachable") }
+        }
+
+        fn get_height(&self) -> impl Send + Future<Output = Result<usize, RpcError>> {
+            self.inner.get_height()
+        }
+
+        fn get_scannable_block_by_number(
+            &self,
+            number: usize,
+        ) -> impl Send + Future<Output = Result<ScannableBlock, RpcError>> {
+            let inner = self.inner.clone();
+            let cancel = self.cancel.clone();
+            let counter = self.counter.clone();
+            let cancel_after = self.cancel_after;
+            async move {
+                let result = inner.get_scannable_block_by_number(number).await;
+                let mut n = counter
+                    .lock()
+                    .expect("CancelAfterNFetches counter poisoned");
+                *n += 1;
+                if *n >= cancel_after {
+                    cancel.cancel();
+                }
+                result
+            }
+        }
+    }
+
+    // ── Smoke tests ────────────────────────────────────────────
+
+    /// Empty range short-circuits before any RPC traffic, returning
+    /// a typed no-op result.
     #[tokio::test]
     async fn empty_range_returns_typed_noop() {
         let rpc = MockRpc::with_chain(linear_chain(3));
@@ -625,6 +828,372 @@ mod tests {
             Err(ProduceError::Cancelled) => {}
             Err(other) => panic!("expected Cancelled, got {other:?}"),
             Ok(_) => panic!("expected Cancelled, got Ok"),
+        }
+    }
+
+    // ── Linear-scan structural tests ───────────────────────────
+
+    /// 100-block linear scan: every block hash flows through to
+    /// `block_hashes`, no transfers/key-images on synthetic blocks,
+    /// no reorg rewind.
+    #[tokio::test]
+    async fn linear_scan_100_blocks_accumulates_block_hashes() {
+        let chain = linear_chain(100);
+        let expected: Vec<(u64, [u8; 32])> = chain
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (i as u64 + 1, b.block.hash()))
+            .collect();
+
+        let rpc = MockRpc::with_chain(chain);
+        let mut scanner = dummy_scanner();
+        let snapshot = snapshot_at_height_zero();
+        let cancel = CancellationToken::new();
+
+        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..101, &cancel).await
+        {
+            Ok(r) => r,
+            Err(e) => panic!("expected Ok, got {e:?}"),
+        };
+
+        assert_eq!(result.processed_height_range, 1..101);
+        assert_eq!(result.block_hashes, expected);
+        assert!(result.new_transfers.is_empty());
+        assert!(result.spent_key_images.is_empty());
+        assert!(result.reorg_rewind.is_none());
+        assert_eq!(result.parent_hash, None, "start = 1 → genesis parent");
+    }
+
+    /// `height_range.end` is honoured even when the daemon's chain
+    /// extends further. The producer scans `[start, end)` and stops.
+    #[tokio::test]
+    async fn range_truncation_respects_end_bound() {
+        let chain = linear_chain(100);
+        let rpc = MockRpc::with_chain(chain);
+        let mut scanner = dummy_scanner();
+        let snapshot = snapshot_at_height_zero();
+        let cancel = CancellationToken::new();
+
+        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..51, &cancel).await
+        {
+            Ok(r) => r,
+            Err(e) => panic!("expected Ok, got {e:?}"),
+        };
+
+        assert_eq!(result.processed_height_range, 1..51);
+        assert_eq!(result.block_hashes.len(), 50);
+        assert_eq!(result.block_hashes.last().expect("non-empty").0, 50);
+    }
+
+    /// Producer iterates both miner and non-miner inputs, and
+    /// records every `Input::ToKey { key_image, .. }` into
+    /// `spent_key_images`. Verifies the non-miner path with a
+    /// synthetic spending transaction.
+    #[tokio::test]
+    async fn key_image_collected_from_non_miner_input() {
+        let key_image_bytes = [0xAB; 32];
+        let block = make_block_with_spending_tx(1, [0u8; 32], key_image_bytes);
+        let rpc = MockRpc::with_chain(vec![block]);
+        let mut scanner = dummy_scanner();
+        let snapshot = snapshot_at_height_zero();
+        let cancel = CancellationToken::new();
+
+        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..2, &cancel).await {
+            Ok(r) => r,
+            Err(e) => panic!("expected Ok, got {e:?}"),
+        };
+
+        assert_eq!(result.spent_key_images.len(), 1);
+        let observed = &result.spent_key_images[0];
+        assert_eq!(observed.block_height, 1);
+        assert_eq!(observed.key_image, key_image_bytes);
+    }
+
+    // ── Reorg detection tests ──────────────────────────────────
+
+    /// Snapshot recorded an original chain h1..h10; daemon has
+    /// reorged from height 8. Producer asked to scan h11..h13:
+    ///
+    /// 1. Fetches daemon's h=11; its parent (daemon's h=10) does
+    ///    not match the snapshot's h=10.
+    /// 2. Walks back via `find_fork_point` and finds h=7 still
+    ///    matches.
+    /// 3. Sets `reorg_rewind = Some(ReorgRewind { fork_height: 8 })`,
+    ///    restarts scanning from h=8 on the new chain.
+    ///
+    /// Result covers `8..13` (5 blocks of new chain), not the
+    /// originally requested `11..13`.
+    #[tokio::test]
+    async fn reorg_at_depth_3_walks_back_to_fork_point() {
+        // Shared prefix h1..=h7 (identical between original and new).
+        let mut shared = Vec::new();
+        let mut parent = [0u8; 32];
+        for h in 1..=7u64 {
+            let block = make_synthetic_block(h, parent);
+            parent = block.block.hash();
+            shared.push(block);
+        }
+        let h7_hash = parent;
+
+        // Original tail h8..=h10: timestamp = height (default).
+        let mut orig_tail = Vec::new();
+        let mut p = h7_hash;
+        for h in 8..=10u64 {
+            let block = make_synthetic_block(h, p);
+            p = block.block.hash();
+            orig_tail.push(block);
+        }
+        let mut original = shared.clone();
+        original.extend(orig_tail);
+
+        // New tail h8..=h12: timestamp disambiguated → distinct hashes.
+        let mut new_tail = Vec::new();
+        let mut p = h7_hash;
+        for h in 8..=12u64 {
+            let block = make_alt_block(h, p);
+            p = block.block.hash();
+            new_tail.push(block);
+        }
+        let mut new_chain = shared.clone();
+        new_chain.extend(new_tail.clone());
+
+        // Snapshot = wallet's view of the ORIGINAL chain through h=10.
+        let snapshot = snapshot_recording_chain(&original);
+
+        // Daemon serves the NEW chain.
+        let rpc = MockRpc::with_chain(new_chain);
+        let mut scanner = dummy_scanner();
+        let cancel = CancellationToken::new();
+
+        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 11..13, &cancel).await
+        {
+            Ok(r) => r,
+            Err(e) => panic!("expected Ok, got {e:?}"),
+        };
+
+        assert_eq!(
+            result.reorg_rewind,
+            Some(ReorgRewind { fork_height: 8 }),
+            "reorg should walk back to fork height 8 (last shared block)"
+        );
+        assert_eq!(
+            result.processed_height_range,
+            8..13,
+            "rewind extends the scanned range down to fork_height"
+        );
+        assert_eq!(result.block_hashes.len(), 5);
+        assert_eq!(result.block_hashes[0].0, 8);
+        assert_eq!(
+            result.block_hashes[0].1,
+            new_tail[0].block.hash(),
+            "first emitted hash must be the NEW chain's h=8"
+        );
+        // Every per-height entry stays inside the result's range.
+        assert!(result.block_hashes.iter().all(|(h, _)| (8..13).contains(h)));
+    }
+
+    /// When the reorg's fork point lies below the snapshot's
+    /// recorded reorg window, [`find_fork_point`] returns
+    /// `(window_edge + 1)` rather than walking off the end. The
+    /// producer treats this as "rewind to the deepest height we
+    /// still recorded" — the merge surfaces the deep-reorg case
+    /// to the caller in commit 4.
+    #[tokio::test]
+    async fn reorg_below_snapshot_window_rewinds_to_window_edge() {
+        // Snapshot only records h5..=h10 (window length 6).
+        let mut shared_5 = Vec::new();
+        let mut parent = [0u8; 32];
+        for h in 1..=4u64 {
+            let block = make_synthetic_block(h, parent);
+            parent = block.block.hash();
+            shared_5.push(block);
+        }
+        // Original h5..=h10 — but the snapshot disagrees with the
+        // daemon at every recorded height because the daemon serves
+        // the alt chain from h=5 upwards.
+        let mut original_tail = Vec::new();
+        let mut p_orig = parent;
+        for h in 5..=10u64 {
+            let block = make_synthetic_block(h, p_orig);
+            p_orig = block.block.hash();
+            original_tail.push(block);
+        }
+        // The "window only covers h=5..=h=10" snapshot.
+        let snapshot_blocks: Vec<(u64, [u8; 32])> = original_tail
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (5 + i as u64, b.block.hash()))
+            .collect();
+        let snapshot = LedgerSnapshot {
+            synced_height: 10,
+            reorg_blocks: ReorgBlocks {
+                blocks: snapshot_blocks,
+            },
+        };
+
+        // Daemon serves an alt chain h1..=h11 where the divergence
+        // point is at h=2 — far below the snapshot window's earliest
+        // entry (h=5).
+        let mut alt = Vec::new();
+        let mut p_alt = [0u8; 32];
+        for h in 1..=11u64 {
+            let block = make_alt_block(h, p_alt);
+            p_alt = block.block.hash();
+            alt.push(block);
+        }
+        let rpc = MockRpc::with_chain(alt);
+        let mut scanner = dummy_scanner();
+        let cancel = CancellationToken::new();
+
+        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 11..12, &cancel).await
+        {
+            Ok(r) => r,
+            Err(e) => panic!("expected Ok, got {e:?}"),
+        };
+
+        assert_eq!(
+            result.reorg_rewind,
+            Some(ReorgRewind { fork_height: 5 }),
+            "with snapshot window starting at h=5, walk-back exits at h=4 \
+             (`block_hash_at(4)` returns None — past the window's earliest \
+             entry) and yields fork_height = 4+1 = 5: rewind everything \
+             at-or-above h=5"
+        );
+    }
+
+    // ── RPC-failure tests ──────────────────────────────────────
+
+    /// Two transient errors at h=2 followed by a successful fetch
+    /// recover within the [`MAX_BLOCK_FETCH_RETRIES`] budget. Time
+    /// is paused so the exponential backoff is virtual.
+    #[tokio::test(start_paused = true)]
+    async fn transient_rpc_errors_recover_within_budget() {
+        let chain = linear_chain(3);
+        let rpc = MockRpc::with_chain(chain);
+        rpc.inject_block_fetch_failure(2, RpcError::ConnectionError("flake-1".into()));
+        rpc.inject_block_fetch_failure(2, RpcError::ConnectionError("flake-2".into()));
+        let mut scanner = dummy_scanner();
+        let snapshot = snapshot_at_height_zero();
+        let cancel = CancellationToken::new();
+
+        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..4, &cancel).await {
+            Ok(r) => r,
+            Err(e) => panic!("expected Ok after transient recovery, got {e:?}"),
+        };
+
+        assert_eq!(result.processed_height_range, 1..4);
+        assert_eq!(result.block_hashes.len(), 3);
+    }
+
+    /// Five back-to-back transient errors at h=2 exhaust the
+    /// [`MAX_BLOCK_FETCH_RETRIES`] budget, surfacing
+    /// [`ProduceError::MaxRetriesExhausted`] with the final error
+    /// preserved.
+    #[tokio::test(start_paused = true)]
+    async fn persistent_rpc_errors_yield_max_retries_exhausted() {
+        let chain = linear_chain(3);
+        let rpc = MockRpc::with_chain(chain);
+        for i in 0..MAX_BLOCK_FETCH_RETRIES {
+            rpc.inject_block_fetch_failure(2, RpcError::ConnectionError(format!("persist-{i}")));
+        }
+        let mut scanner = dummy_scanner();
+        let snapshot = snapshot_at_height_zero();
+        let cancel = CancellationToken::new();
+
+        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..4, &cancel)
+            .await
+            .err()
+            .expect("expected MaxRetriesExhausted");
+
+        match err {
+            ProduceError::MaxRetriesExhausted { attempts, last } => {
+                assert_eq!(attempts, MAX_BLOCK_FETCH_RETRIES);
+                assert!(matches!(last, RpcError::ConnectionError(_)));
+            }
+            other => panic!("expected MaxRetriesExhausted, got {other:?}"),
+        }
+    }
+
+    /// A daemon whose chain ends below the requested `height_range`
+    /// returns `RpcError::InvalidNode` for every fetch at the
+    /// missing height; the producer surfaces this as
+    /// [`ProduceError::MaxRetriesExhausted`] (transient-class for
+    /// retry, terminal at the budget). Models the
+    /// "daemon-height-shrinks-mid-loop" path.
+    #[tokio::test(start_paused = true)]
+    async fn daemon_chain_too_short_yields_max_retries_exhausted() {
+        let rpc = MockRpc::with_chain(linear_chain(2));
+        let mut scanner = dummy_scanner();
+        let snapshot = snapshot_at_height_zero();
+        let cancel = CancellationToken::new();
+
+        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..4, &cancel)
+            .await
+            .err()
+            .expect("expected MaxRetriesExhausted");
+
+        match err {
+            ProduceError::MaxRetriesExhausted { last, attempts } => {
+                assert_eq!(attempts, MAX_BLOCK_FETCH_RETRIES);
+                assert!(matches!(last, RpcError::InvalidNode(_)));
+            }
+            other => panic!("expected MaxRetriesExhausted, got {other:?}"),
+        }
+    }
+
+    // ── Scanner-failure tests ──────────────────────────────────
+
+    /// A `ScannableBlock` with mismatched
+    /// `block.transactions.len() != transactions.len()` triggers
+    /// `Scanner::scan` → `ScanError::InvalidScannableBlock` →
+    /// `ProduceError::Scan { height, source }`. Unlike RPC errors,
+    /// this is **not retried** — re-fetching returns the same bytes.
+    #[tokio::test]
+    async fn malformed_scannable_yields_scan_error() {
+        let block = make_malformed_scannable(1, [0u8; 32]);
+        let rpc = MockRpc::with_chain(vec![block]);
+        let mut scanner = dummy_scanner();
+        let snapshot = snapshot_at_height_zero();
+        let cancel = CancellationToken::new();
+
+        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..2, &cancel)
+            .await
+            .err()
+            .expect("expected ProduceError::Scan");
+
+        match err {
+            ProduceError::Scan { height, .. } => assert_eq!(height, 1),
+            other => panic!("expected Scan {{ height: 1, .. }}, got {other:?}"),
+        }
+    }
+
+    // ── Cancellation tests ─────────────────────────────────────
+
+    /// Cancellation between blocks: the producer fetches block 1
+    /// successfully, the [`CancelAfterNFetches`] wrapper fires the
+    /// token, and the next iteration's top-of-loop check returns
+    /// [`ProduceError::Cancelled`] before fetching block 2.
+    #[tokio::test]
+    async fn cancel_observed_between_blocks() {
+        let inner = MockRpc::with_chain(linear_chain(5));
+        let cancel = CancellationToken::new();
+        let rpc = CancelAfterNFetches {
+            inner,
+            cancel: cancel.clone(),
+            counter: Arc::new(Mutex::new(0)),
+            cancel_after: 1,
+        };
+        let mut scanner = dummy_scanner();
+        let snapshot = snapshot_at_height_zero();
+
+        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..6, &cancel)
+            .await
+            .err()
+            .expect("expected Cancelled after first block fetch");
+
+        match err {
+            ProduceError::Cancelled => {}
+            other => panic!("expected Cancelled, got {other:?}"),
         }
     }
 }
