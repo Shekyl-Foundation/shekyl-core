@@ -4,6 +4,94 @@
 
 ### Added
 
+- **`Wallet::refresh` driver and `produce_scan_result` producer
+  (Phase 2a `refresh_scan_loop` bundle, Branch 1).** The
+  [`shekyl_wallet_core::wallet::refresh`](../rust/shekyl-wallet-core/src/wallet/refresh.rs)
+  module ships the snapshot-merge-with-retry sync driver that
+  replaces the standalone `shekyl-scanner::sync::run_sync_loop`.
+  Public surface:
+
+  - `Wallet::refresh(&mut self, opts: &RefreshOptions, runtime:
+    &tokio::runtime::Handle) -> Result<RefreshSummary, RefreshError>`
+    — synchronous entry point on `Wallet<S>`. Captures a
+    `LedgerSnapshot` of the wallet's current `(synced_height,
+    reorg_blocks)` under a brief read borrow, drops the borrow,
+    drives the async producer on `runtime`, and merges the result
+    back via `apply_scan_result_to_state` under `&mut self`. On
+    `RefreshError::ConcurrentMutation` the snapshot is re-taken
+    and the call retries up to `RefreshOptions::max_retries`.
+  - `produce_scan_result(rpc, scanner, &LedgerSnapshot,
+    height_range, cancel) -> Result<ScanResult, ProduceError>` —
+    `pub(crate)` async producer that fetches blocks via the `Rpc`
+    trait, scans them with `shekyl_scanner::Scanner`, detects
+    reorgs by comparing `header.previous` against the snapshot's
+    `reorg_blocks` (with a `find_fork_point` walk on mismatch),
+    and returns a typed `ScanResult` envelope rather than mutating
+    wallet state in place. Reorgs surface as
+    `ScanResult::reorg_rewind: Some(_)`; the merge applies the
+    rewind atomically before applying forward-progress events.
+  - `LedgerSnapshot { synced_height: u64, reorg_blocks: ReorgBlocks
+    }` — minimal read-only view of the pieces of
+    `(LedgerBlock, LedgerIndexes)` the producer needs to detect
+    reorgs and resume scanning. Cloned (not `Arc`-wrapped) per the
+    snapshot benchmark in
+    `rust/shekyl-wallet-core/benches/refresh_snapshot.rs`, which
+    measures clone cost across realistic reorg-window sizes so any
+    future `Arc` switch has an empirical baseline.
+  - `RefreshOptions { max_retries: u32 }` — caller-supplied knobs
+    for the snapshot-merge retry loop. Default `8`; rationale on
+    the bound is in the decision-log entry
+    *"Snapshot-merge-with-retry semantics for `Wallet::refresh`"*
+    (2026-04-26). `#[non_exhaustive]` so Branch 2 can add the
+    cancel-token / progress-channel / batch-size knobs without a
+    breaking change.
+  - `RefreshSummary { processed_height_range, blocks_processed,
+    transfers_detected, key_images_observed, stake_events,
+    reorg: Option<RefreshReorgEvent>, merge_attempts }` —
+    caller-visible result of a successful refresh.
+    `#[non_exhaustive]`; `stake_events` is reserved for Phase 2b's
+    richer event vocabulary and is always `0` today.
+  - `RefreshError` — typed failure surface:
+    `ConcurrentMutation { wallet, result }` (snapshot drifted under
+    the producer; safe retry), `AlreadyRunning` (single-flight
+    enforcement at the binary layer; reserved for Branch 2's
+    handle path), `MalformedScanResult { reason }` (producer-bug
+    signal: scan-result invariants violated; not a race),
+    `Cancelled` (cooperative shutdown), `Io` (RPC failure surfaced
+    from `ProduceError::MaxRetriesExhausted`). The variant set is
+    `#[non_exhaustive]`.
+
+  The driver is the snapshot-merge realization of the cross-cutting
+  locking decision: queries take `&self`, mutations take
+  `&mut self`, and refresh threads the long-running scan
+  *between* borrow points so the wallet is never held across an
+  `await`. The contract is locked in
+  `docs/V3_WALLET_DECISION_LOG.md` *"`Wallet::refresh`
+  snapshot-merge-with-retry"* (2026-04-26),
+  *"`MalformedScanResult`: producer-bug signal vs.
+  `ConcurrentMutation`"* (2026-04-26), and *"Retire
+  `shekyl-scanner::sync::run_sync_loop` (Phase 2a/4b boundary)"*
+  (2026-04-27).
+
+  The `RefreshHandle` async surface (cancel-on-drop, watch-based
+  `SyncProgress`, `AlreadyRunning` enforcement, `start_refresh`
+  spawning) lands in Branch 2 of the bundle; this branch is the
+  synchronous entry point and the producer / merge contract that
+  the handle wraps.
+
+  Test coverage lives in `rust/shekyl-wallet-core/src/wallet/refresh.rs`'s
+  `mod tests` (producer-side: smoke / linear-scan / reorg-shallow /
+  reorg-deep / reorg-at-tip / RPC-failure-fetch / RPC-failure-tip /
+  scanner-failure / cancellation-mid-scan /
+  cancellation-between-blocks / empty-range / range-validation;
+  driver-side: round-trip, reorg-merge, retry-on-concurrent-mutation,
+  retry-budget-exhausted, malformed-scan-result-bypass-retry,
+  cancellation-end-to-end, no-progress-when-tip-equal,
+  reorg-rewind-then-apply). The `MockRpc` test scaffold and
+  `make_synthetic_block` helper live in
+  `rust/shekyl-wallet-core/src/wallet/test_support.rs` for
+  deterministic fault injection across producer and driver suites.
+
 - **`Wallet::create` / `Wallet::open_full` / `Wallet::change_password` /
   `Wallet::close` lifecycle methods on `shekyl-wallet-core` (Phase 1
   `lifecycle` task).** The new
@@ -342,6 +430,31 @@
   is the next task in line per the todo list).
 
 ### Removed
+
+- **`shekyl-scanner::sync` module and `shekyl-scanner::rust-scanner`
+  Cargo feature retired (Phase 2a `refresh_scan_loop` bundle,
+  Branch 1).** The standalone background-sync surface
+  (`run_sync_loop`, `LiveLedger`, `SyncProgress`, `SyncError`) and
+  its feature flag are deleted in favor of the
+  `shekyl-wallet-core::Wallet::refresh` driver. `shekyl-scanner`
+  becomes a pure scanning library — `Scanner`, extra-field parsing,
+  KEM rederivation, the `LedgerBlock` / `LedgerIndexes` extension
+  traits, balance, and coin selection — and drops its `tokio` /
+  `tokio-util` optional dependencies along with the feature.
+  `shekyl-wallet-rpc::rust-scanner` is **not** affected by this
+  change; that feature gates a JSON-RPC-side
+  `(LedgerBlock, LedgerIndexes)` cache (`scanner_state::LiveLedger`,
+  a *local* type alias unrelated to the deleted scanner-side
+  alias) which retires in Phase 4b alongside `shekyl-wallet-rpc`'s
+  Rust cutover. See `docs/V3_WALLET_DECISION_LOG.md`
+  *"Retire `shekyl-scanner::sync::run_sync_loop` (Phase 2a/4b
+  boundary)"* (2026-04-27) for the rationale and Phase boundary.
+  The `sync_bookkeeping` test module in `shekyl-scanner` is
+  retained: it exercises the `(LedgerBlock, LedgerIndexes)`
+  state-management primitives (progress monotonicity, reorg
+  handling, spend-detection tracking) that the producer side of
+  `Wallet::refresh` now drives, and remains load-bearing
+  regardless of who owns the outer loop.
 
 - **`rust/shekyl-ffi/src/wallet_ledger_ffi.rs` deleted as a Phase 5
   pre-emption.** The typed cache-handle FFI surface from sub-commit
@@ -1405,6 +1518,41 @@
   and that a dedicated cleanup pass + CI gate belongs to V3.1.x.
 
 ### Fixed
+
+- **`apply_scan_result_to_state` strict-contract enforcement (Phase
+  2a `refresh_scan_loop` bundle, Branch 1).** Closes the PR #16
+  Copilot-review finding tracked in `docs/FOLLOWUPS.md` *V3.0 →
+  "`apply_scan_result` strict-contract enforcement (refresh
+  commit)"* (now retired to *Recently resolved*). The merge in
+  [`rust/shekyl-wallet-core/src/wallet/merge.rs`](../rust/shekyl-wallet-core/src/wallet/merge.rs)
+  previously had two defensive-coding gaps:
+  1. `block_hashes` was collected via `BTreeMap::insert`, silently
+     overwriting duplicate height entries instead of rejecting them.
+  2. `new_transfers` / `spent_key_images` / `block_hashes` entries
+     with heights outside `processed_height_range` were silently
+     dropped at scope end (the per-height `BTreeMap::remove` loop
+     consumed only in-range entries; out-of-range residue fell off
+     the stack uninspected).
+
+  Both are producer-bug signals, not concurrent-mutation races.
+  `apply_scan_result_to_state` now pre-validates `block_hashes`
+  for length-matches-range, in-range, no-duplicates, every covered
+  height present, and post-loop drains the per-height per-hash
+  maps to assert no out-of-range residue remains. Contract
+  violations surface as the new
+  `RefreshError::MalformedScanResult { reason: &'static str }`
+  variant; this is distinct from
+  `RefreshError::ConcurrentMutation` (which signals "the wallet
+  moved under the producer; safe to retry") because a malformed
+  scan result indicates the producer itself is broken and retry
+  cannot help. Decision Log entry
+  *"`MalformedScanResult`: producer-bug signal vs.
+  `ConcurrentMutation`"* (2026-04-26) pins the boundary. New
+  tests: `block_hashes_length_mismatch`,
+  `block_hashes_duplicate_height`, `block_hashes_out_of_range`,
+  `block_hashes_missing_height`,
+  `transfer_out_of_range_block_height`,
+  `key_image_out_of_range_block_height`.
 
 - **`shekyl-wallet-state` `ledger` / `ledger_iai` benches: pin
   `BlockchainTip.synced_height` to the synthetic transfers' max

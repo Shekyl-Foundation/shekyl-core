@@ -42,26 +42,6 @@ citing in a review.
   This pins the full I/O ↔ KDF ↔ AEAD chain at the orchestrator layer.
   Target: V3.0.
 
-- **`apply_scan_result` strict-contract enforcement (refresh commit).**
-  PR #16 Copilot review surfaced two defensive-coding gaps in
-  `rust/shekyl-wallet-core/src/wallet/merge.rs`:
-  (1) `block_hashes` is collected into a `BTreeMap` via
-  `BTreeMap::insert`, which silently overwrites duplicate height
-  entries instead of rejecting them; (2) `new_transfers` /
-  `spent_key_images` / `block_hashes` entries with heights outside
-  `processed_height_range` are silently dropped at scope end (the
-  per-height `BTreeMap::remove` loop only consumes in-range entries,
-  leaving any out-of-range residue to fall off the stack
-  uninspected). Both cases are scanner-bug signals that should
-  surface as `RefreshError::ConcurrentMutation` rather than mask
-  silently. Fix on the refresh commit (next on the Phase 1 plan
-  after lifecycle): pre-validate `block_hashes` for in-range +
-  no-duplicates, and post-loop assert the per-height maps are empty.
-  The current shape is safe given the in-tree scanner is the only
-  producer, but the audited mutation point is the right place to
-  pin the contract. Tests: duplicate-height rejection, out-of-range
-  transfer rejection, out-of-range key-image rejection. Target: V3.0.
-
 - **Revisit `rust/hard-coded-cryptographic-value` CodeQL suppression
   when the Rust extractor gains `cfg(test)` awareness.** The repo-wide
   suppression added in `.github/codeql/config.yml` (commit
@@ -712,6 +692,32 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.2 — Rust cutover and cleanup
 
+- **Retire `shekyl-wallet-rpc::rust-scanner` Cargo feature (Phase 4b).**
+  The `rust-scanner` feature on `shekyl-wallet-rpc` gates a JSON-RPC-side
+  `(LedgerBlock, LedgerIndexes)` cache (`scanner_state::LiveLedger`,
+  the `scanner_*` JSON-RPC handlers) that the daemon RPC server reads
+  from while the underlying crate is still routed through `wallet2.cpp`
+  FFI for mutation. It is a *read-side* cache, distinct from the
+  `shekyl-scanner::rust-scanner` feature retired in the Phase 2a
+  refresh driver landing — that feature gated the standalone
+  `shekyl-scanner::sync::run_sync_loop` driver, which was deleted
+  outright once `shekyl-wallet-core::Wallet::refresh` became the
+  single producer of ledger mutations. The two features happen to
+  share a name and a `LiveLedger` type alias by historical
+  coincidence, but `shekyl-wallet-rpc::scanner_state::LiveLedger` is
+  a local definition inside that crate and is not affected by the
+  Phase 2a deletion.
+
+  When `shekyl-wallet-rpc` migrates off `wallet2.cpp` FFI in Phase 4b
+  (target: V3.2) the JSON-RPC server reads directly from
+  `Wallet<S>` rather than from a side-cache, the
+  `scanner_state` module is deleted along with its handlers, and the
+  `rust-scanner` feature on `shekyl-wallet-rpc` retires alongside.
+  See `docs/V3_WALLET_DECISION_LOG.md` *"Retire
+  `shekyl-scanner::sync::run_sync_loop` (Phase 2a/4b boundary)"*
+  (2026-04-27) for the rationale that pins the boundary. Target:
+  V3.2 (Phase 4b of the wallet rewrite plan).
+
 - **Chore #4: platform-gate audit sweep — reduced scope after Chore #3 (V4 pre-audit).**
   Chore #3 eliminates the worst offenders (every bit-width
   carve-out). Chore #4 is the residual systematic pass over
@@ -1058,6 +1064,33 @@ reference.
 ## Recently resolved (audit trail)
 
 Retained for citation in review; each links to the canonical record.
+
+- **`apply_scan_result` strict-contract enforcement (April 27, 2026).**
+  PR #16 Copilot review surfaced two defensive-coding gaps in
+  `rust/shekyl-wallet-core/src/wallet/merge.rs`: (1) `block_hashes`
+  was collected into a `BTreeMap` via `BTreeMap::insert`, silently
+  overwriting duplicate height entries instead of rejecting them;
+  (2) `new_transfers` / `spent_key_images` / `block_hashes` entries
+  with heights outside `processed_height_range` were silently
+  dropped at scope end. Both are scanner / producer-bug signals
+  that must surface rather than mask. Closed by the Phase 2a
+  refresh-driver landing (commit `f9adfc195`,
+  `feat/phase1-refresh-driver`): `apply_scan_result_to_state` now
+  pre-validates `block_hashes` (length matches the range,
+  in-range, no duplicates, every covered height present) and
+  post-loop drains the per-height per-hash maps to assert no
+  out-of-range residue, surfacing
+  `RefreshError::MalformedScanResult { reason }` on any contract
+  violation. New variant `RefreshError::MalformedScanResult` is
+  reserved for producer bugs (a real `produce_scan_result` is the
+  only producer in-tree; the contract is the boundary against
+  future producers). Tests: `block_hashes_length_mismatch`,
+  `block_hashes_duplicate_height`, `block_hashes_out_of_range`,
+  `block_hashes_missing_height`, `transfer_out_of_range_block_height`,
+  `key_image_out_of_range_block_height`, plus the existing
+  `apply_scan_result_to_state` round-trip suite. Decision Log
+  entry *"`MalformedScanResult`: producer-bug signal vs.
+  `ConcurrentMutation`"* (2026-04-26).
 
 - **Phase 1 bench harness re-review post-`RuntimeWalletState` fold
   (April 26, 2026).** The original FOLLOWUPS entry claimed four of the
