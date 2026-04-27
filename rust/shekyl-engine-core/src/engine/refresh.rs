@@ -404,10 +404,15 @@ pub enum RefreshPhase {
 /// - `blocks_processed`: count of blocks the producer has fed to
 ///   the scanner during the **current attempt**. Resets to `0` on
 ///   `RefreshPhase::Retrying`.
-/// - `blocks_total`: the per-attempt scan range size, i.e.
-///   `daemon_tip - synced_height` at attempt start. Updates on
-///   retry boundaries because each attempt re-fetches the tip.
-///   Static within an attempt.
+/// - `blocks_total`: the per-attempt scan range size — the count
+///   of blocks the producer plans to fetch and scan during this
+///   attempt. Concretely, `blocks_total =
+///   daemon.get_height().saturating_sub(synced_height + 1)` at
+///   attempt start, where `daemon.get_height()` returns the count
+///   of blocks (one past the tip-block index). Saturates to `0`
+///   when the wallet is at-or-above the daemon tip. Updates on
+///   retry boundaries because each attempt re-fetches the tip;
+///   static within an attempt.
 /// - `phase`: see [`RefreshPhase`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -848,11 +853,17 @@ impl<'a> ProgressEmitter<'a> {
     /// reorg-rewind discard, never exceeds `blocks_total` outside
     /// reorg transients).
     ///
-    /// Best-effort: if the watch channel has no subscribers other
-    /// than the receiver retained on the handle (the common case
-    /// — UI hasn't subscribed), `send` returns `Err(_)` and we
-    /// silently drop the update. This is the right behavior:
-    /// progress is observational, not load-bearing.
+    /// Best-effort: [`tokio::sync::watch::Sender::send`] returns
+    /// `Err(_)` only when **every** receiver — including the one
+    /// retained on [`RefreshHandle`] — has been dropped. In
+    /// practice that means the handle was dropped without any
+    /// `progress()` clones surviving; the producer's
+    /// cancel-on-drop discipline is already tearing the task down
+    /// in that case, so silently dropping the publish is correct.
+    /// While the handle is alive the watch channel always has at
+    /// least one receiver, so `send` cannot fail for the common
+    /// "UI hasn't subscribed" case. Progress is observational, not
+    /// load-bearing.
     fn publish(&self, height: u64, blocks_processed: u64, phase: RefreshPhase) {
         if let Some(s) = self.sender {
             let _ = s.send(RefreshProgress {
@@ -1348,11 +1359,24 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
 ///
 /// # Cancellation
 ///
-/// The cancellation token is checked at two points: at the top of
-/// each attempt loop iteration (covers the boundary between attempts,
-/// including the gap between a `Retrying` publish and the next
-/// snapshot) and inside [`produce_scan_result`] (covers between
-/// blocks during the long scan). On observation, a final `Cancelled`
+/// The cancellation token is checked at three points:
+///
+/// 1. **Top of each attempt** — covers the boundary between attempts,
+///    including the gap between a `Retrying` publish and the next
+///    snapshot.
+/// 2. **Mid-scan**, inside [`produce_scan_result`] — covers between
+///    blocks during the long scan, which is where the bulk of the
+///    elapsed time lives.
+/// 3. **Pre-merge**, between [`produce_scan_result`] returning `Ok`
+///    and the write-lock acquisition for [`Engine::apply_scan_result`]
+///    — covers the post-scan window where the producer holds a
+///    valid `ScanResult` but has not yet mutated wallet state. A
+///    cancel observed here is honoured because the merge has not
+///    committed; the in-flight `ScanResult` is discarded along with
+///    the work that produced it. This is the trade-off cancellation
+///    asks us to make.
+///
+/// On observation at any of the three points, a final `Cancelled`
 /// progress update is best-effort emitted — preserving the last
 /// published `height` / `blocks_processed` / `blocks_total` so
 /// subscribers don't observe a misleading rollback to zero — and
@@ -1487,7 +1511,7 @@ async fn run_refresh_task<S: EngineSignerKind>(
                 // published baseline (which the per-block
                 // `ProgressEmitter` advanced as the scan ran) and
                 // override only `phase`. This is the second of the
-                // two cancel checkpoints documented on this
+                // three cancel checkpoints documented on this
                 // function.
                 let mut terminal = progress.borrow().clone();
                 terminal.phase = RefreshPhase::Cancelled;
@@ -1502,6 +1526,22 @@ async fn run_refresh_task<S: EngineSignerKind>(
         };
 
         let summary = summarize(&result, attempt);
+
+        // Pre-merge cancel checkpoint (the third of three documented
+        // on this function). The producer returned a valid
+        // `ScanResult`, but the user fired `cancel` between the last
+        // per-block check inside `produce_scan_result` and now. The
+        // merge has not yet acquired the write lock, so wallet state
+        // is unmutated and we can still honour the cancellation
+        // without rolling anything back. After this point the merge
+        // is authoritative — see the function docstring.
+        if cancel.is_cancelled() {
+            let mut terminal = progress.borrow().clone();
+            terminal.phase = RefreshPhase::Cancelled;
+            let _ = progress.send(terminal);
+            let _ = completion.send(Err(RefreshError::Cancelled));
+            return;
+        }
 
         // Best-effort `Merging` ping right before the write-lock. The
         // merge is bounded by compute (no I/O), so subscribers
