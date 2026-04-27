@@ -470,9 +470,10 @@ pub(crate) async fn produce_scan_result<R: Rpc>(
             }
         }
 
-        // The scanner takes ownership of the scannable; pass a clone
-        // so we can keep the original around for `block.hash()` /
-        // input traversal above. (`ScannableBlock: Clone`.)
+        // The scanner takes ownership of the scannable. `block_hash`
+        // and the input-key-image traversal above borrowed
+        // `&scannable`, so we are free to move it into `scan` here —
+        // no clone is required.
         let timelocked = scanner
             .scan(scannable)
             .map_err(|source| ProduceError::Scan { height: h, source })?;
@@ -782,15 +783,16 @@ impl<S: WalletSignerKind> Wallet<S> {
         // Production producer closure: capture the daemon, scanner,
         // runtime, and a fresh cancellation token, then map
         // `ProduceError` into `RefreshError` so `refresh_with` only
-        // sees one error type. The scanner is rebuilt per attempt to
-        // pick up any in-place key reload (none today; future-proof
-        // against capability flips landing inside a refresh window).
+        // sees one error type. The scanner is constructed once per
+        // refresh call and reused across retry attempts: wallet key
+        // material is immutable for the lifetime of the handle, so
+        // rebuilding it per attempt would only repeat `EdwardsPoint`
+        // decompression for no behavioural gain. If a future capability
+        // flip ever needs to land mid-refresh, the rebuild moves into
+        // the per-attempt closure as a deliberate change, not a
+        // silent one.
         let cancel = CancellationToken::new();
         let daemon = self.daemon.clone();
-        // Build the scanner once outside the closure to avoid repeated
-        // `EdwardsPoint` decompression on every retry; key material is
-        // immutable for the lifetime of the wallet handle, so a single
-        // construction is correct.
         let scanner = build_scanner_from_keys(self.keys())?;
         let scanner_cell = std::cell::RefCell::new(scanner);
 
