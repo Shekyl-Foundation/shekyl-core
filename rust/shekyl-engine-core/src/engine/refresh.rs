@@ -3378,3 +3378,195 @@ mod refresh_slot_tests {
         assert!(slot_b.try_claim().is_none(), "clone cannot re-claim");
     }
 }
+
+#[cfg(test)]
+mod start_refresh_integration_tests {
+    //! End-to-end tests for [`Engine::start_refresh`] that drive the
+    //! real producer task against a real [`Engine<SoloSigner>`].
+    //!
+    //! Note on RPC fixturing: [`DaemonClient`] currently wraps a
+    //! concrete [`SimpleRequestRpc`], not a generic `Rpc` trait, so
+    //! the integration surface available to us is the unreachable-
+    //! URL daemon (`get_height` fails fast with [`IoError::Daemon`])
+    //! rather than a [`MockRpc`]-driven scenario. Producer-side
+    //! retry / classification behaviour is already pinned at the
+    //! synchronous-driver layer in [`refresh_driver_tests`]; what
+    //! these tests pin is the *handle* layer:
+    //!
+    //! - completion delivery on `get_height` failure,
+    //! - `RefreshError::AlreadyRunning` on concurrent claim,
+    //! - slot-release after the producer task winds down.
+    //!
+    //! Wider scenario coverage (synthetic block batches, scanner
+    //! transitions, reorg events) lives in the synchronous-driver
+    //! tests; making `DaemonClient` generic so `MockRpc` can drive
+    //! `start_refresh` directly is tracked separately and does not
+    //! gate Branch 2.
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+    use shekyl_simple_request_rpc::SimpleRequestRpc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
+
+    use crate::engine::lifecycle::EngineCreateParams;
+    use crate::engine::{
+        Credentials, DaemonClient, Engine, IoError, RefreshError, RefreshOptions, SoloSigner,
+    };
+
+    /// Build a `DaemonClient` whose underlying RPC points at an
+    /// unreachable URL, on the *current* tokio runtime. Async
+    /// because [`SimpleRequestRpc::new`] is async; safe to call
+    /// from inside `#[tokio::test]` because we await it directly
+    /// rather than driving a separate runtime via `block_on`.
+    /// Hyper's connection-pool background tasks live on the test's
+    /// runtime; the test awaits all work before returning so
+    /// nothing is orphaned at runtime drop.
+    async fn unreachable_daemon() -> DaemonClient {
+        let rpc = SimpleRequestRpc::new("http://127.0.0.1:1".to_string())
+            .await
+            .expect("construct SimpleRequestRpc against unreachable URL (no connect attempt yet)");
+        DaemonClient::new(rpc)
+    }
+
+    /// Build a fresh `Engine<SoloSigner>` wrapped in
+    /// `Arc<RwLock<…>>` so the shape matches
+    /// `Engine::start_refresh`'s receiver. Returns the `TempDir`
+    /// alongside so the caller keeps the wallet file alive for the
+    /// test's scope.
+    async fn make_engine_arc() -> (Arc<RwLock<Engine<SoloSigner>>>, TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_path = tmp.path().join("wallet");
+        let creds = Credentials::password_only(b"start-refresh integration tests");
+        let mut seed = [0u8; MASTER_SEED_BYTES];
+        for (i, b) in seed.iter_mut().enumerate() {
+            *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(13);
+        }
+        let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
+        let daemon = unreachable_daemon().await;
+        let wallet = Engine::<SoloSigner>::create(params, daemon)
+            .expect("create FULL wallet for start_refresh integration tests");
+        (Arc::new(RwLock::new(wallet)), tmp)
+    }
+
+    /// `start_refresh` against the unreachable dummy daemon
+    /// produces a runnable handle; the producer's `get_height`
+    /// call fails fast, and the failure surfaces through
+    /// `join().await` as `RefreshError::Io(IoError::Daemon)`.
+    /// The slot is released once the producer task exits.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn start_refresh_propagates_daemon_io_error_via_join() {
+        let (arc, _tmp) = make_engine_arc().await;
+
+        let handle = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("first start_refresh claims the slot");
+
+        let result = handle.join().await;
+        match result {
+            Err(RefreshError::Io(IoError::Daemon { detail })) => {
+                assert!(
+                    !detail.is_empty(),
+                    "Daemon error carries a non-empty detail string"
+                );
+            }
+            other => panic!("expected Io(Daemon), got {other:?}"),
+        }
+
+        // The completion oneshot resolves before the producer
+        // task's `_slot_guard` drops (sender is fired inside the
+        // task, slot guard drops as the function returns). Poll
+        // briefly for slot release; bounded so a regression does
+        // not hang the suite.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            tokio::task::yield_now().await;
+            let g = arc.read().await;
+            if !g.refresh_slot.is_claimed() {
+                break;
+            }
+            drop(g);
+            if Instant::now() > deadline {
+                panic!("slot still claimed 5s after join() resolved");
+            }
+        }
+    }
+
+    /// A second `start_refresh` while the first handle is alive
+    /// returns `RefreshError::AlreadyRunning`. Uses the
+    /// `current_thread` flavour so the first producer task does
+    /// not run until we explicitly await — guaranteeing the slot
+    /// is still claimed at the time of the second call without
+    /// relying on RPC timing.
+    #[tokio::test(flavor = "current_thread")]
+    async fn concurrent_start_refresh_returns_already_running() {
+        let (arc, _tmp) = make_engine_arc().await;
+
+        let h1 = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("first claim succeeds");
+        // Producer for h1 is queued but not yet polled (single-
+        // threaded runtime, no intervening yield).
+        let h2 = Engine::start_refresh(arc.clone(), RefreshOptions::default()).await;
+        assert!(
+            matches!(h2, Err(RefreshError::AlreadyRunning)),
+            "second claim returns AlreadyRunning, got {h2:?}"
+        );
+
+        // Cleanup: drop h1 so the producer wakes on cancel and
+        // releases the slot before the test ends.
+        drop(h1);
+        // Yield until the producer task has actually run and exited;
+        // bounded so a regression doesn't hang the suite.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            tokio::task::yield_now().await;
+            let g = arc.read().await;
+            if !g.refresh_slot.is_claimed() {
+                break;
+            }
+            drop(g);
+            if Instant::now() > deadline {
+                panic!("producer task did not exit within 5s of handle drop");
+            }
+        }
+    }
+
+    /// Dropping the handle fires the cancel token; the producer
+    /// task winds down and releases the slot. After the slot is
+    /// observably free, a fresh `start_refresh` succeeds — i.e.
+    /// the slot really is reusable, not merely "not held by *this*
+    /// reference".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drop_releases_slot_for_subsequent_start_refresh() {
+        let (arc, _tmp) = make_engine_arc().await;
+
+        let h1 = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("first claim succeeds");
+        drop(h1);
+
+        // Spin briefly until the slot is released. Bounded so a
+        // regression does not hang the suite.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            tokio::task::yield_now().await;
+            let g = arc.read().await;
+            if !g.refresh_slot.is_claimed() {
+                break;
+            }
+            drop(g);
+            if Instant::now() > deadline {
+                panic!("slot still claimed 5s after handle drop");
+            }
+        }
+
+        // Slot is free; a second `start_refresh` reclaims it.
+        let h2 = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("slot is reusable after producer wind-down");
+        // Drain the second handle to keep the suite clean.
+        let _ = h2.join().await;
+    }
+}

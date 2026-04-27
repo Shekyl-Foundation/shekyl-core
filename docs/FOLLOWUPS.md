@@ -478,6 +478,20 @@ citing in a review.
   constructor; existing `password_only` call sites compile unchanged.
   Target: V3.1.
 
+- **Generic `DaemonClient` so `MockRpc` can drive
+  `start_refresh`.** `DaemonClient` currently wraps a concrete
+  `SimpleRequestRpc`, so `Engine::start_refresh` integration tests
+  cover only the unreachable-daemon scenario. The producer-layer
+  retry / classification behaviour is already pinned by
+  `refresh_driver_tests` (Branch 1) using `MockRpc` against
+  `Engine::refresh_with`'s scripted-producer entry point, so the
+  coverage gap is bounded — but the handle layer would benefit
+  from end-to-end scenarios (synthetic block batches, scanner
+  transitions, reorg events flowing through `RefreshProgress`).
+  Make `DaemonClient` generic (or add a `pub(crate) trait DaemonRpc`
+  it implements) so `MockRpc` can be substituted for
+  `SimpleRequestRpc` in tests of `start_refresh`. Target: V3.1.
+
 ---
 
 ## V3.1.x — dependency migrations
