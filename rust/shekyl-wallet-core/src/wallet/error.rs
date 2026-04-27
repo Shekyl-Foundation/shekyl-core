@@ -172,6 +172,34 @@ pub enum RefreshError {
     #[error("refresh already running")]
     AlreadyRunning,
 
+    /// The scanner produced a [`crate::scan::ScanResult`] that violates
+    /// the merge contract. Distinct from
+    /// [`Self::ConcurrentMutation`] in that it is a **producer-side
+    /// defect**, not a snapshot-disagreement: re-running the scan
+    /// against the same daemon will produce the same contract
+    /// violation, so the [`super::Wallet::refresh`] retry loop does
+    /// **not** retry on this variant — it surfaces immediately.
+    ///
+    /// `ConcurrentMutation` and `MalformedScanResult` together close
+    /// the strict-contract gap surfaced by the PR #16 Copilot review:
+    /// the former is the retry signal for races against `Wallet<S>`,
+    /// the latter is the audit signal for a producer that emitted a
+    /// `ScanResult` whose internal shape disagrees with itself
+    /// (out-of-range entries, duplicate heights, missing per-height
+    /// block-hash record, residual entries left behind after the
+    /// per-height apply loop).
+    ///
+    /// See `docs/V3_WALLET_DECISION_LOG.md`
+    /// (`MalformedScanResult: producer-bug signal vs. ConcurrentMutation`,
+    /// 2026-04-26) for the rationale.
+    #[error("malformed ScanResult: {reason}")]
+    MalformedScanResult {
+        /// Static description of the contract violation, named at the
+        /// call site so audit can read every distinguishable defect
+        /// class from source.
+        reason: &'static str,
+    },
+
     /// The refresh task was cancelled before completing a block boundary.
     /// `RefreshHandle` checkpoints between blocks, so a cancellation is
     /// always reported back to the caller as this variant rather than

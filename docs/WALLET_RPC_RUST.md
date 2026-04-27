@@ -238,19 +238,34 @@ FROST multisig is handled by native Rust handlers, see below):
 When `shekyl-wallet-rpc` is compiled with `--features rust-scanner`, the RPC
 server uses split routing:
 
-- **Scanner-backed methods** are handled natively in Rust via `shekyl-scanner`:
-  `get_balance`, `get_transfers`, `incoming_transfers`, `get_transfer_by_txid`,
-  `get_payments`, `get_bulk_payments`, `get_height`, `get_staked_outputs`,
-  `get_staked_balance`
+- **Scanner-backed methods** are handled natively in Rust against the
+  `(LedgerBlock, LedgerIndexes)` pair that `shekyl-wallet-state`
+  exposes:
+  `get_balance`, `get_transfers`, `incoming_transfers`,
+  `get_transfer_by_txid`, `get_payments`, `get_bulk_payments`,
+  `get_height`, `get_staked_outputs`, `get_staked_balance`
 - **All other methods** continue routing through the C++ FFI
+
+> **Note on the feature name.** `shekyl-wallet-rpc::rust-scanner` is a
+> *read-side* JSON-RPC cache feature distinct from the now-retired
+> `shekyl-scanner::rust-scanner` feature (which gated the standalone
+> `run_sync_loop` driver, deleted with the Phase 2a refresh-driver
+> landing). The two features happen to share a name by historical
+> coincidence; the JSON-RPC cache stays alive until Phase 4b cuts
+> `shekyl-wallet-rpc` over to a `Wallet<S>` handle and the
+> `scanner_state` module is deleted. See
+> [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
+> *"Retire `shekyl-scanner::sync::run_sync_loop` (Phase 2a/4b
+> boundary)"* (2026-04-27).
 
 ### Architecture with Scanner
 
 ```
 HTTP POST /json_rpc → handlers::dispatch_with_scanner(method)
   │
-  ├── scanner-backed methods → shekyl-scanner (native Rust)
-  │     WalletState, BalanceSummary, TransferDetails
+  ├── scanner-backed methods → shekyl-wallet-state (native Rust)
+  │     LedgerBlock + LedgerIndexes via shekyl-scanner extension traits
+  │     (BalanceSummary, TransferDetailsExt)
   │
   ├── multisig_* methods → multisig_handlers (native Rust, "multisig" feature)
   │     MultisigState, MultisigSigningSession, MultisigGroup
@@ -265,19 +280,21 @@ HTTP POST /json_rpc → handlers::dispatch_with_scanner(method)
 |--------|------|---------|
 | `shekyl-scanner` | `Scanner` | Hybrid PQC KEM block/tx/output scan pipeline |
 | `shekyl-scanner` | `RecoveredWalletOutput` | Scan result with all KEM-derived secrets + key image |
-| `shekyl-scanner` | `TransferDetails` | Extended output with staking + PQC fields + `eligible_height` |
-| `shekyl-scanner` | `WalletState` | In-memory transfer tracking, key image dedup, spend detection |
-| `shekyl-scanner` | `BalanceSummary` | Staking-aware balance breakdown (uses `eligible_height`) |
-| `shekyl-scanner::sync` | `run_sync_loop` | Background daemon polling + scan + spend detection loop |
-| `shekyl-scanner::sync` | `SyncProgress` | Per-block progress event (height, outputs found, spends) |
-| `shekyl-wallet-rpc` | `ScannerState` | Thread-safe wrapper around `WalletState` |
+| `shekyl-wallet-state` | `LedgerBlock` | Persisted on-disk wallet state (transfers, claim watermarks, block hashes) |
+| `shekyl-wallet-state` | `LedgerIndexes` | Runtime-derived indexes (`key_images`, `pub_keys`, `staker_pool`); rebuilt at open |
+| `shekyl-scanner::ledger_ext` | `TransferDetailsExt`, `LedgerBlockExt`, `LedgerIndexesExt` | Scanner-flavored extension methods (staking, PQC fields, `eligible_height`) |
+| `shekyl-scanner::balance` | `BalanceSummary` | Staking-aware balance breakdown over `(LedgerBlock, LedgerIndexes)` |
+| `shekyl-wallet-rpc` | `LiveLedger` | Local alias for `(LedgerBlock, LedgerIndexes)` |
+| `shekyl-wallet-rpc` | `ScannerState` | Thread-safe wrapper around `LiveLedger` (Phase 4b deletion target) |
 
 ### GUI Integration
 
 The Tauri GUI wallet's `wallet_bridge.rs` now includes a `ScannerState`
 alongside the `Wallet2` handle. Query methods (`get_scanner_balance`,
-`get_scanner_staked_outputs`, `get_scanner_height`) read from the Rust scanner
-state. Mutation methods continue to use the C++ FFI.
+`get_scanner_staked_outputs`, `get_scanner_height`) read from the
+Rust-side `(LedgerBlock, LedgerIndexes)` cache. Mutation methods
+continue to use the C++ FFI; the cache is repopulated by Phase 2a's
+`Wallet::refresh` driver as the wallet stack migrates off `wallet2.cpp`.
 
 ## FROST Multisig RPC (`multisig` feature)
 
@@ -311,46 +328,29 @@ for the DKG ceremony flow.
 
 All byte fields are hex-encoded in request/response JSON.
 
-## Sync Loop
+## Sync Driver
 
-The `shekyl-scanner::sync` module (feature-gated behind `rust-scanner`)
-implements the background sync loop:
+Background sync is driven by `shekyl-wallet-core::Wallet::refresh`, which
+runs the snapshot-merge-with-retry pattern: a snapshot of `(LedgerBlock,
+LedgerIndexes)` is taken under a brief read borrow, the long-running
+`produce_scan_result` async function fetches blocks and scans them
+against the snapshot without holding any wallet borrow, and the
+resulting [`ScanResult`](../rust/shekyl-wallet-core/src/scan.rs) is
+merged back into the wallet under `&mut self` via
+`apply_scan_result_to_state`. Reorg detection (parent-hash compare,
+`find_fork_point` walk) lives inside `produce_scan_result`; the
+ledger-mutating rewind-then-apply runs atomically inside the merge.
 
-```rust
-pub async fn run_sync_loop<R, P, F>(
-    rpc: R,                            // Rpc trait implementor
-    scanner: Arc<Mutex<Scanner>>,      // Hybrid PQC KEM scanner
-    state: Arc<Mutex<WalletState>>,    // In-memory wallet state
-    cancel: CancellationToken,         // Graceful shutdown signal
-    poll_interval: Duration,           // Sleep between tip polls
-    flush_every_block: bool,           // Mobile: true; Desktop: false
-    on_progress: P,                    // SyncProgress callback
-    on_flush: F,                       // Persistence callback
-) -> Result<(), SyncError>
-```
-
-The loop fetches blocks from `wallet_state.height() + 1` up to the daemon
-tip via `get_scannable_block_by_number`, scans each block for wallet outputs,
-extracts key images from all block transactions for spend detection, and
-emits a `SyncProgress` event per block.
-
-**Reorg detection:** Before processing each block, the loop compares
-the block's `header.previous` hash against the hash stored in `WalletState`
-for the prior height. On mismatch, it walks backwards (via `find_fork_point`)
-to locate the common ancestor, calls `WalletState::handle_reorg` to roll
-back affected transfers, flushes, and restarts scanning from the fork point.
-
-**Block fetch retries:** Individual `get_scannable_block_by_number` calls
-retry up to 5 times with exponential backoff (500ms initial, 30s cap)
-before aborting. `get_height` retries indefinitely on each poll cycle.
-
-**Flush strategy:**
-- Desktop: flush every 100 blocks plus at the tip.
-- Mobile: flush every block (OS can kill without warning).
-- Always flushes on reorg rollback and on cancellation before returning.
-
-**Cancellation:** Dropping the `CancellationToken` or calling `.cancel()`
-causes the loop to finish the current block and return cleanly.
+The standalone `shekyl-scanner::sync::run_sync_loop` driver and its
+`shekyl-scanner::rust-scanner` feature were retired in the Phase 2a
+landing. JSON-RPC server reads continue to flow through
+`shekyl-wallet-rpc::scanner_state` until Phase 4b cuts the crate over
+to `Wallet<S>` directly. See
+[`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
+*"Retire `shekyl-scanner::sync::run_sync_loop` (Phase 2a/4b
+boundary)"* (2026-04-27) for the rationale and
+*"`Wallet::refresh` snapshot-merge-with-retry"* (2026-04-26) for the
+driver contract.
 
 ## Future Work
 

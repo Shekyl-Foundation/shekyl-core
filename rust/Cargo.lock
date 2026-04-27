@@ -3171,7 +3171,6 @@ dependencies = [
  "shekyl-wallet-state",
  "thiserror",
  "tokio",
- "tokio-util",
  "tracing",
  "zeroize",
 ]
@@ -3241,6 +3240,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-fcmp",
  "shekyl-oxide",
+ "shekyl-rpc",
  "shekyl-scanner",
  "shekyl-simple-request-rpc",
  "shekyl-staking",
@@ -3250,6 +3250,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
  "zeroize",
 ]

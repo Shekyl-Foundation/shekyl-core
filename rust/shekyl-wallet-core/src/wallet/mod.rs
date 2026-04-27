@@ -151,7 +151,11 @@ pub mod lifecycle;
 pub mod merge;
 pub mod network;
 pub mod pending;
+pub mod refresh;
 pub mod signer;
+
+#[cfg(test)]
+pub(crate) mod test_support;
 
 pub use capability::Capability;
 pub use daemon::DaemonClient;
@@ -161,6 +165,7 @@ pub use network::Network;
 pub use pending::{
     FeePriority, PendingTx, ReservationId, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
 };
+pub use refresh::{RefreshOptions, RefreshReorgEvent, RefreshSummary};
 pub use signer::{SoloSigner, WalletSignerKind};
 
 use std::collections::BTreeMap;
@@ -240,10 +245,8 @@ pub struct Wallet<S: WalletSignerKind> {
     /// in region 1 of the wallet file.
     ///
     /// Read by [`Wallet::keys`]; that accessor is `pub(crate)` and used
-    /// only by Phase 2 sign / proof code paths inside this crate. The
-    /// `dead_code` allow stays until the lifecycle commit lands the
-    /// constructor that fills this field at open time.
-    #[allow(dead_code)]
+    /// by `Wallet::refresh` (to assemble a `Scanner` per attempt) and
+    /// by Phase 2 sign / proof code paths inside this crate.
     keys: AllKeysBlob,
 
     /// Persistent wallet state: scanner-derived transfers, bookkeeping
@@ -426,7 +429,6 @@ impl<S: WalletSignerKind> Wallet<S> {
     /// `reserve_proof`) that take borrowed inputs and return finished
     /// artifacts, so call sites elsewhere never need a borrow on
     /// [`AllKeysBlob`] directly.
-    #[allow(dead_code)]
     pub(crate) fn keys(&self) -> &AllKeysBlob {
         &self.keys
     }
