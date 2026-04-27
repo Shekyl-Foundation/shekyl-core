@@ -149,6 +149,17 @@ lands). Actor migration replaces this discipline from Stage 2 onward
 isolation, and the `RwLock<Engine>` model retires for that
 subsystem at that point.
 
+**Update (2026-04-27, chain pointer):** Further superseded by
+*2026-04-27 — Engine binary boundary: pure message-passing over
+shared handle*. Post-Stage-4, the `Arc<RwLock<Engine>>` wrapper at
+the binary boundary is removed entirely (not just for the
+already-migrated subsystem): the RPC server's registry shape is
+`HashMap<EngineId, ActorRef<EngineActor>>`, and per-engine
+concurrency control is the kameo mailbox rather than a shared
+reader-writer lock. The composition-era reasoning above remains
+accurate as a historical record; the writer-preferred-`RwLock`
+boundary model does not appear post-Stage-4.
+
 ### `PendingTx` lifecycle: chain-state-tagged, reservation-bearing, three-method API
 
 `Wallet` exposes three methods for transaction sending:
@@ -2710,6 +2721,26 @@ when"):**
    `RefreshEngine`, `PendingTxEngine`, `DaemonEngine`,
    `PersistenceEngine`), one at a time, each in a focused commit.
    The `Engine<S>` type becomes a thin coordinator over actors.
+   **Per the Path B decision** (*2026-04-27 — Engine binary
+   boundary: pure message-passing over shared handle*, below in
+   this log), Stage 4 also removes the outer `Arc<RwLock<Engine>>`
+   wrapper at the `shekyl-engine-rpc` binary boundary: the
+   server's registry shape becomes
+   `HashMap<EngineId, ActorRef<EngineActor>>`, per-engine
+   concurrency control is the mailbox, and there is no shared
+   lock around the engine. Stage 4 implementation requirements
+   tied to this scope expansion: enforce the no-cycle DAG
+   topology (`RpcActor → EngineActor → leaf actors`; lower-tier
+   actors never `ask` upward); avoid multi-hop
+   `ctx.forward(A → B → C)` chains (kameo issue #306); use bounded
+   mailboxes with backpressure, sized per-actor and documented in
+   each actor's module-level rustdoc; verify Shekyl workspace MSRV
+   alignment with kameo (`>= 1.88`) before pinning the dependency
+   in Stage 2. The cross-leaf immutable-data pattern (view keys,
+   spend public keys, network parameters, capability mode, signer
+   kind, engine ID, file-format version metadata passed to leaf
+   actors at spawn-time, not via `ask`) is mandatory for any leaf
+   that needs cross-actor immutable state.
 10. **V3.x window opens.**
 11. **Stage 5 — `ArchivalEngine` native build, sibling to
     `StakeEngine`.** Activation gated on simulation closure of open
@@ -2953,6 +2984,26 @@ model with the refinements above captures most security benefits of
 per-request (bounded secret residency via idle eviction; zero
 residency via explicit lock) while preserving performance.
 
+**Update (2026-04-27):** Superseded by *2026-04-27 — Engine binary
+boundary: pure message-passing over shared handle* (above in this
+log). The "shared-handle model is preserved" framing in the
+preceding two paragraphs was based on an `Arc<RwLock<Engine>>`
+wrapper that the Shape B decision (*2026-04-25 — `shekyl-cli` as
+thin client to `shekyl-engine-rpc`, not embedded engine*) retired
+the load-bearing constituency for. Post-Path-B, the engine's
+binary-boundary shape is `HashMap<EngineId, ActorRef<EngineActor>>`
+— a kameo-native registry of actor handles, not a registry of
+`Arc<RwLock<Engine>>` wrappers. Per-engine concurrency control is
+the mailbox; the `RwLock` does not appear at the boundary at all.
+The substantive refinements in the bullet list above (idle eviction,
+explicit `engine_lock`, multi-engine registry, snapshot reads,
+multi-peer routing) carry forward unchanged: each is now a property
+of the registry or of the engine actor's API, not of an outer
+wrapper. The "snapshot reads bypassing the actor message queue"
+refinement specifically lands as accessor methods on the engine
+actor (returning cloned immutable state), not as a side-channel
+through a shared lock.
+
 The staged-migration approach is chosen over single-cutover because:
 
 - The Phase 2a refresh-driver work just merged. Tearing down the
@@ -3169,6 +3220,278 @@ the rejection of the alternative single-phase callback model
 surfaced during the actor architecture decision. Preceding entry
 *2026-04-27 — Engine architecture: actor model with staged
 migration from composition*.
+
+---
+
+## 2026-04-27 — Engine binary boundary: pure message-passing over shared handle
+
+**Decision.** The engine is accessed only via its actor mailbox.
+`Arc<RwLock<Engine>>` does not appear at the binary boundary post-Stage-4.
+The `shekyl-engine-rpc` server holds a multi-engine registry whose canonical
+shape is `HashMap<EngineId, ActorRef<EngineActor>>` (kameo-native), or an
+equivalent `Sender<EngineMessage>` for non-kameo callers. Per-engine
+concurrency control is the mailbox; cross-engine isolation is the registry.
+There is no shared-state wrapper around the engine.
+
+**Why now.** Branch 2 (`feat/phase1-refresh-handle`) is the next code
+work and commits a `RefreshHandle` Stage-4-invariance docstring. Pinning
+Path B before Branch 2 cuts means that docstring is concrete (not
+hedged): the post-Stage-4 plumbing is `ActorRef<RefreshActor>` /
+mailbox-cancel-message / actor-published `watch::Receiver`, not "either
+this or some shared-handle variant TBD." Settling later relocates the
+ambiguity rather than reducing it.
+
+**Rationale.** The prior `Arc<RwLock<Engine>>` pin (recorded above in
+this log under *2026-04-25 — Locking discipline: `RwLock<Wallet>`,
+writer-preferred, `&mut self` for mutators*, with a partial supersession
+note added 2026-04-27) was load-bearing under composition: the lock was
+the mechanism that allowed many concurrent readers while serializing
+writes, since `&mut self` on the orchestrator otherwise blocked
+everything. Three things changed since:
+
+- **Shape B retired the synchronous-CLI use case.** The 2026-04-25 entry
+  *"`shekyl-cli` as thin client to `shekyl-engine-rpc`, not embedded
+  engine"* establishes that all user-facing surfaces are RPC-mediated
+  and async-by-construction. The synchronous-blocking caller that
+  benefited from the `RwLock`'s reader-writer semantics no longer
+  exists in the V3 design. The remaining non-RPC Rust callers (tests,
+  benches, fuzz) are non-blocking under `block_on` / `tokio::test`.
+- **The actor architecture moved per-actor concurrency inside the
+  actor.** Each actor processes its own message queue sequentially; a
+  reader and a writer routing through the same actor are already
+  serialized by the mailbox without any external lock. Wrapping the
+  actor in an `RwLock` adds a second serialization layer that
+  duplicates work the framework already does.
+- **kameo's API explicitly targets the wrapper-free model.** `ask` /
+  `tell` against `ActorRef<T>` is the documented entry point;
+  per-actor sequential message processing is the documented
+  guarantee; bounded mailboxes provide backpressure. Wrapping
+  `ActorRef<T>` in `Arc<RwLock<…>>` fights the framework rather than
+  using it.
+
+What pure message-passing buys, beyond the audit-surface shrink: zero
+lock contention by construction; the mailbox is the only serialization
+point per engine; no `Arc<RwLock<…>>` boilerplate at every call site;
+multi-engine support is many actors with many mailboxes (the registry
+`HashMap` already supports this without a lock-per-engine); future
+distribution across processes or machines is mechanical (the message
+protocol is the wire protocol).
+
+**Trade-offs (honest cost ledger).** Three real costs, none a structural
+blocker:
+
+1. **Test ergonomics.** Branch 1's integration tests in
+   [`rust/shekyl-engine-core/src/engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+   (around line 1587+) hold the engine directly and call `refresh`
+   synchronously. Stage 4 rewrites these to spawn the actor topology,
+   send messages, and `await` results — roughly 2× boilerplate per test.
+   The cost is real but bounded; tests written against the actor model
+   from the start (Stages 2, 3, 5) avoid it entirely.
+2. **Re-entrancy discipline burden.** Cross-leaf data flow that needs
+   information from a sibling actor (the canonical case: `LedgerEngine`
+   needing view-key access from `KeyEngine` to recognize incoming
+   outputs during `apply_scan_result`) cannot use `ask` upward without
+   risking deadlock if the caller already holds an `ask` waiting on the
+   target. Resolution: the cross-leaf immutable-data pattern below.
+3. **Pure-CPU operations paying actor-dispatch latency for nothing.**
+   Operations like `validate_address`, `derive_subaddress`,
+   `encode_address` are pure functions of their arguments and do not
+   benefit from actor encapsulation. Resolution: the free-function vs
+   message boundary below; these stay free functions, not actor
+   messages.
+
+**Free-function vs message boundary.** Without an explicit criterion,
+every future operation prompts the question "is this an actor message or
+a free function?" and the answer drifts. The criterion is mechanical and
+observable from the code surface:
+
+> A function is a free function if and only if it neither reads nor
+> mutates engine state. Otherwise it is an actor message.
+
+Free functions live at module level in `shekyl-engine-core` (or the
+appropriate domain crate — `shekyl-crypto-pq`, `shekyl-address`,
+`shekyl-tx-builder`, etc.) and are callable without spawning or
+addressing the actor. Actor messages are dispatched via `ask` / `tell`
+against `ActorRef<EngineActor>` (or the relevant sub-actor) and run
+inside that actor's `Message::handle` method.
+
+Examples on each side of the line:
+
+- **Free functions** (no engine state required):
+  - `validate_address(addr: &str) -> Result<…>`
+  - `derive_subaddress_pubkey(view_pub, spend_pub, idx) -> SubaddressPub`
+  - `encode_address_bytes(parts) -> Vec<u8>` / `decode_address(s) -> Address`
+  - `parse_payment_id(s) -> Result<PaymentId, _>`
+  - Pure crypto-PQ helpers (key-blob construction, AEAD wrap/unwrap of
+    caller-provided keys, signature verification of caller-provided
+    payloads)
+- **Actor messages** (engine state required):
+  - `get_balance(...)`, `list_transfers(filter)`, `refresh_status()`
+    — read-side, query the actor's owned state
+  - `build_pending_tx(...)`, `submit_pending_tx(id)`,
+    `discard_pending_tx(id)` — write-side, mutate pending-tx pool
+  - `start_refresh(opts)` — write-side, claims the refresh slot and
+    spawns the producer
+  - `engine_lock()` — write-side, transitions capability and zeroes
+    secrets
+  - Anything that returns the engine's height, block hash, transfer
+    history, or pending state
+
+The line is enforced by the type system. A free function takes its
+inputs as parameters and returns outputs; it has no reference to engine
+state and cannot accidentally read it. An actor handler runs only inside
+`Message::handle` on the actor type and cannot accidentally bypass the
+mailbox. A future architect adding an operation answers one question:
+*does this operation need engine state?* If no, free function. If yes,
+message.
+
+**Re-entrancy discipline.** The actor topology is a directed acyclic
+graph rooted at the RPC entry point:
+
+```
+RpcActor → EngineActor → { KeyEngine, LedgerEngine, RefreshEngine,
+                           PendingTxEngine, DaemonEngine,
+                           PersistenceEngine, StakeEngine,
+                           ArchivalEngine (Stage 5) }
+```
+
+Rules:
+
+- **`ask` is restricted to DAG-downward calls.** A higher-tier actor
+  may `ask` a lower-tier actor; the reverse is forbidden. Lower-tier
+  actors never block waiting for higher-tier actors to respond.
+- **`tell` is safe in any direction**, including notifications from
+  leaves back to the engine actor (e.g., scanner-progress publishes,
+  daemon-disconnect notifications). `tell` does not block the sender
+  on the receiver's processing.
+- **Forward chains (`ctx.forward(A → B → C)`) are forbidden.** Per
+  kameo issue #306, nested `ForwardedReply` panics on error
+  propagation. Cross-actor delegation uses direct `ask`, never
+  multi-hop forward.
+- **Test fixtures install a tracing-based watchdog** that fires when an
+  `ask` call exceeds a configured timeout, surfacing potential
+  deadlocks in CI rather than at runtime.
+- **Code review enforces the no-cycle invariant.** A new `ask` call
+  whose target is upstream of the caller in the DAG is rejected.
+
+**Cross-leaf immutable-data pattern.** The DAG topology works only
+because cross-leaf dependencies on **immutable** engine state are
+resolved at construction-time, not at message-send-time. The discipline:
+
+> Immutable engine state is passed to leaf actors at spawn-time as
+> constructor parameters. There is no `ask` path to fetch it. Mutable
+> engine state is queried via per-operation messages on the actor that
+> owns it.
+
+This is compiler-enforced: a leaf actor's `new(...)` signature pins
+which immutable fields it requires; the mailbox protocol contains no
+message variant for "fetch view key from `KeyEngine`" because every
+`LedgerEngine` instance was constructed with the view key it needs.
+There is no `ask` path to add later, because no message exists.
+
+**Construction-time-passed (immutable for the engine's lifetime epoch):**
+
+- View keys (private and public)
+- Spend public keys
+- Network parameters (mainnet / testnet / stagenet, hard-fork floor)
+- Capability mode (`Full`, `ViewOnly`, `HardwareOffload`)
+- Signer kind (`EngineSignerKind`: software / hardware / multisig)
+- Engine ID (stable across the engine's lifetime)
+- File-format version metadata
+
+**Per-operation message (mutable, may change across calls):**
+
+- Synced height, last-block hash
+- Balance (per subaddress, per asset)
+- Transfer history
+- Pending-tx pool state
+- Refresh status / progress
+- Mempool view (when relevant)
+- Multisig negotiation state
+
+A capability-mode *change* (e.g., `engine_lock` transitioning the engine
+from `Full` to a zeroed-secrets state) is itself a message, but the
+*resulting* capability is then immutable for the new lifetime epoch
+which begins when the engine is next opened. Re-spawn at that boundary;
+the new leaves get the new immutable state at construction.
+
+The dividing line is "set once at spawn, never changes within this
+lifetime epoch" vs "set or mutated by message handlers." A future field
+addition asks the same mechanical question: *is this set once and
+immutable?* Constructor parameter. Otherwise: actor field, accessed via
+message handler.
+
+**kameo-specific constraints.**
+
+- **Pin `kameo >= 0.20.0`** in `Cargo.toml`. Supervision support shipped
+  2026-04-07; recent deadlock fixes landed in v0.19.x and v0.20.0. The
+  exact version pin and any necessary patch-level cap land with Stage 2
+  (the first commit that adds `kameo` as a dependency) per the
+  FOLLOWUPS entry below.
+- **Avoid multi-hop `ctx.forward(A → B → C)` chains.** kameo issue #306
+  is an acknowledged unresolved limitation: nested `ForwardedReply`
+  panics on error propagation. Use direct `ask` between actors,
+  never forward chains. This aligns naturally with the no-cycle DAG.
+- **Use bounded mailboxes with backpressure**, not unbounded. Memory
+  pressure under producer storms otherwise. Default sizing is chosen
+  per-actor at implementation time and documented in the actor's
+  module-level rustdoc.
+- **MSRV verification.** kameo requires Rust ≥ 1.88. Verify the Shekyl
+  workspace MSRV alignment before pinning kameo (FOLLOWUPS entry below
+  tracks this gate).
+
+**Rejected alternatives.**
+
+- **Path A — preserve the shared-handle wrapper alongside the actor.**
+  Rejected: forecloses the cleanliness benefit; requires
+  `Arc<RwLock<Engine>>` boilerplate that the actor framework explicitly
+  makes unnecessary; duplicates per-actor serialization that the
+  mailbox already provides; was the original framing in the
+  *Engine architecture: actor model with staged migration from
+  composition* entry above, superseded by this entry under Shape B
+  reasoning.
+- **Hybrid — snapshot reads bypass the mailbox via a shared-handle
+  side-channel.** Pragmatic compromise that keeps a shared handle for
+  read-side concurrency. Rejected for V3: at our scale the
+  read-concurrency benefit is invisible against a sequential-mailbox
+  baseline; if profiling later reveals contention, snapshot reads can
+  be added as accessor methods on the engine actor without a wrapper
+  (`fn snapshot(&self) -> EngineSnapshot { … }` returning a clone of
+  the immutable bits the read needs). Adding it under message-passing
+  later is mechanical; removing the wrapper after callers depend on it
+  is not.
+- **Per-request engine open.** Already rejected in the actor-architecture
+  entry above on different grounds (KDF cost, ledger reconstruction
+  cost, cache-key-includes-password attack surface, stateful pending-tx
+  fights per-request model). Reaffirmed here: per-request open does not
+  solve the wrapper question; it deletes the engine entirely between
+  requests, which has separate problems.
+
+**Verification.** kameo v0.20.0 is documented to support per-actor
+sequential message processing via `ask` / `tell` against `ActorRef<T>`,
+with bounded mailboxes and tower-style middleware. Framework
+documentation: <https://docs.rs/kameo/latest/kameo/>. Source repository:
+<https://github.com/tqwewe/kameo>. Issue #306 (multi-hop forward
+limitation) is the known constraint that shapes the no-forward-chain
+discipline above.
+
+**Cross-references.**
+
+- *2026-04-25 — `shekyl-cli` as thin client to `shekyl-engine-rpc`,
+  not embedded engine* (Shape B): the load-bearing premise that
+  retired the synchronous-blocking caller.
+- *2026-04-27 — Engine architecture: actor model with staged
+  migration from composition* (above): amended in this same commit
+  to reflect Path B's narrowing of Stage 4 scope and removal of the
+  outer shared-handle wrapper.
+- *2026-04-25 — Locking discipline: `RwLock<Wallet>`,
+  writer-preferred, `&mut self` for mutators*: forward-pointer chain
+  through the 2026-04-27 actor-architecture supersession, now also
+  superseded by this entry for the post-Stage-4 boundary specifically.
+- `docs/FOLLOWUPS.md` — kameo version pin / MSRV alignment / bounded
+  mailbox sizing entry under V3.0 (added in this same commit).
+- `docs/FOLLOWUPS.md` — engine-actor snapshot-read accessor entry
+  (deferred; lands when profiling justifies it).
 
 ---
 

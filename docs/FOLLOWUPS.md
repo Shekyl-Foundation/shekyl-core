@@ -11,6 +11,33 @@ citing in a review.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **`kameo` dependency pin and MSRV alignment before Stage 2 cuts.**
+  The Path B boundary decision (*2026-04-27 — Engine binary boundary:
+  pure message-passing over shared handle* in
+  `docs/V3_WALLET_DECISION_LOG.md`) commits the engine to the `kameo`
+  actor framework. Before Stage 2 (`KeyEngine` migration) cuts, three
+  preconditions must be verified and the verification commit must land
+  on `dev`:
+
+  1. **Version pin.** `kameo >= 0.20.0` is added to the workspace
+     `Cargo.toml` with an exact patch-level cap chosen at the time of
+     pinning. Rationale: supervision support shipped in v0.20.0
+     (2026-04-07); v0.19.x and v0.20.0 included deadlock fixes
+     relevant to the no-cycle DAG topology this project commits to.
+  2. **MSRV alignment.** kameo requires Rust `>= 1.88`. Confirm the
+     Shekyl workspace MSRV is at or above 1.88 (or raise it explicitly
+     in the same commit, with a `rust-toolchain.toml` update and a
+     CHANGELOG entry under "Changed").
+  3. **Bounded-mailbox sizing default.** Choose a workspace-wide
+     bounded-mailbox default (e.g., `mailbox(64)`) with documented
+     rationale, and capture the per-actor override convention. Pure
+     unbounded mailboxes are forbidden under Path B for memory-pressure
+     reasons.
+
+  This entry is the gate on Stage 2; Stage 2's first commit is the
+  one that adds the `kameo` dependency, and that commit references
+  this follow-up by closure. Target: V3.0, pre-Stage-2.
+
 - **View/HW lifecycle bodies in `shekyl-wallet-core`.**
   `Wallet::open_view_only` and `Wallet::open_hardware_offload` ship as
   signature stubs that return `OpenError::CapabilityNotYetImplemented`

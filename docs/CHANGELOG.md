@@ -455,6 +455,32 @@
 
 ### Documentation
 
+- **Engine binary boundary pinned as pure message-passing
+  (decision log *"Engine binary boundary: pure message-passing
+  over shared handle"*, 2026-04-27).** The post-Stage-4 binary
+  boundary in `shekyl-engine-rpc` is settled as
+  `HashMap<EngineId, ActorRef<EngineActor>>`, not
+  `Arc<RwLock<Engine>>`. Per-engine concurrency control is the
+  `kameo` mailbox; the registry holds actor handles directly. The
+  new entry documents the rationale (Shape B retired the
+  synchronous-blocking caller; actors handle concurrency
+  internally; kameo's API targets the wrapper-free model), the
+  three honest costs (test ergonomics, re-entrancy discipline,
+  pure-CPU operations on the actor-dispatch path), and the
+  resolutions (free-function vs message boundary criterion;
+  cross-leaf immutable-data construction-time pattern with an
+  enumerated immutable-fields list; no-cycle DAG topology;
+  kameo-specific constraints including issue #306 forward-chain
+  avoidance and bounded mailboxes). The same commit amends the
+  prior 2026-04-27 *"Engine architecture: actor model with staged
+  migration from composition"* entry: the RPC boundary paragraph
+  gains an `Update (2026-04-27):` supersession block, and Stage 4's
+  description picks up the wrapper removal and the no-cycle-DAG /
+  kameo-constraints / cross-leaf-immutable-data implementation
+  requirements. A FOLLOWUPS entry under V3.0 gates Stage 2 on
+  `kameo >= 0.20.0` version pin, MSRV `>= 1.88` verification, and
+  a workspace-wide bounded-mailbox default.
+
 - **Phase 1 sub-decision log entries appended (Phase 1
   `decision_log_entries` task).** Three new dated entries land in
   `docs/V3_WALLET_DECISION_LOG.md` to lock the Phase 1 surface
