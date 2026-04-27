@@ -427,14 +427,15 @@ pub struct RefreshProgress {
 }
 
 impl RefreshProgress {
-    /// Initial baseline for a freshly-spawned refresh task. Used by
-    /// [`Engine::start_refresh`] to seed the watch channel before
-    /// the producer task gets a chance to publish its first
-    /// per-attempt baseline. `blocks_total = 0` because the tip
-    /// has not been fetched yet — the producer's first publish
-    /// (after `daemon.get_height`) overwrites this with the real
-    /// per-attempt value.
-    #[allow(dead_code)] // wired up by commit 2 (start_refresh body)
+    /// Synthetic zero-height baseline. **Test helpers only** —
+    /// production seeders (today: [`Engine::start_refresh`])
+    /// override `height` with the wallet's current `synced_height`
+    /// so the contract on [`RefreshProgress::height`] ("on initial
+    /// publish this is `synced_height` itself") holds even before
+    /// the producer publishes its first per-attempt update.
+    /// Tests that don't care about height accuracy use this as a
+    /// blank starting value.
+    #[cfg(test)]
     pub(crate) const fn initial() -> Self {
         Self {
             height: 0,
@@ -776,8 +777,7 @@ impl Drop for SlotGuard {
         // Idempotent — if the slot was double-released somehow, the
         // store is a no-op (the second release would still write
         // `false` to a flag that's already `false`).
-        self.flag
-            .store(false, std::sync::atomic::Ordering::Release);
+        self.flag.store(false, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -1348,12 +1348,24 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
 ///
 /// # Cancellation
 ///
-/// The cancellation token is checked at three points: at the top of
-/// each attempt loop iteration (covers the boundary between attempts),
-/// inside [`produce_scan_result`] (covers between blocks), and after
-/// the merge (covers between merge and `Done`). On observation, a
-/// final `Cancelled` progress update is best-effort emitted and
-/// `RefreshError::Cancelled` is delivered via the completion oneshot.
+/// The cancellation token is checked at two points: at the top of
+/// each attempt loop iteration (covers the boundary between attempts,
+/// including the gap between a `Retrying` publish and the next
+/// snapshot) and inside [`produce_scan_result`] (covers between
+/// blocks during the long scan). On observation, a final `Cancelled`
+/// progress update is best-effort emitted — preserving the last
+/// published `height` / `blocks_processed` / `blocks_total` so
+/// subscribers don't observe a misleading rollback to zero — and
+/// `RefreshError::Cancelled` is delivered via the completion
+/// oneshot.
+///
+/// There is **no** post-merge cancel checkpoint. Once
+/// [`Engine::apply_scan_result`] commits under the write lock the
+/// state mutation is authoritative, and a cancel token observed
+/// after that point cannot un-mutate the wallet. The post-merge
+/// path always delivers `Ok(summary)`; consumers that want to
+/// abandon a successful refresh in flight have to drop the handle
+/// and reconcile against the next `progress().borrow()`.
 async fn run_refresh_task<S: EngineSignerKind>(
     engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S>>>,
     opts: RefreshOptions,
@@ -1385,14 +1397,15 @@ async fn run_refresh_task<S: EngineSignerKind>(
 
     for attempt in 1..=opts.max_retries.saturating_add(1) {
         if cancel.is_cancelled() {
-            // Best-effort terminal progress; `Receiver::changed`
+            // Best-effort terminal progress. Preserve the last
+            // published baseline (height / counters) and override
+            // only `phase`, so subscribers don't observe a
+            // misleading rollback to `height: 0` when the wallet
+            // was already synced above zero. `Receiver::changed`
             // wakes once before the channel closes.
-            let _ = progress.send(RefreshProgress {
-                height: 0,
-                blocks_processed: 0,
-                blocks_total: 0,
-                phase: RefreshPhase::Cancelled,
-            });
+            let mut terminal = progress.borrow().clone();
+            terminal.phase = RefreshPhase::Cancelled;
+            let _ = progress.send(terminal);
             let _ = completion.send(Err(RefreshError::Cancelled));
             return;
         }
@@ -1405,7 +1418,10 @@ async fn run_refresh_task<S: EngineSignerKind>(
         // intervening write-lock.
         let (snapshot, daemon) = {
             let g = engine_arc.read().await;
-            (LedgerSnapshot::from_ledger(&g.ledger.ledger), g.daemon().clone())
+            (
+                LedgerSnapshot::from_ledger(&g.ledger.ledger),
+                g.daemon().clone(),
+            )
         };
         let current_synced = snapshot.synced_height;
 
@@ -1426,6 +1442,13 @@ async fn run_refresh_task<S: EngineSignerKind>(
         let daemon_tip_u64 =
             u64::try_from(daemon_tip).expect("daemon height fits in u64 on 64-bit targets");
 
+        // `get_height` returns the **count** of blocks (one past the
+        // tip-block index), so the producer's exclusive-end range
+        // `synced_height + 1 .. count` scans heights
+        // `[synced_height + 1, count - 1]` inclusive — i.e. it
+        // includes the tip block. This mirrors the synchronous
+        // [`Engine::refresh`] driver above; the symmetry is load-
+        // bearing because both paths share `produce_scan_result`.
         let start = current_synced.saturating_add(1);
         let end = daemon_tip_u64;
         let blocks_total = end.saturating_sub(start);
@@ -1457,6 +1480,21 @@ async fn run_refresh_task<S: EngineSignerKind>(
 
         let result = match map_produce_error(produced) {
             Ok(r) => r,
+            Err(RefreshError::Cancelled) => {
+                // Mid-scan cancel: the producer noticed `cancel`
+                // between blocks and bailed. Mirror the top-of-
+                // attempt cancel emission — preserve the last
+                // published baseline (which the per-block
+                // `ProgressEmitter` advanced as the scan ran) and
+                // override only `phase`. This is the second of the
+                // two cancel checkpoints documented on this
+                // function.
+                let mut terminal = progress.borrow().clone();
+                terminal.phase = RefreshPhase::Cancelled;
+                let _ = progress.send(terminal);
+                let _ = completion.send(Err(RefreshError::Cancelled));
+                return;
+            }
             Err(e) => {
                 let _ = completion.send(Err(e));
                 return;
@@ -1607,28 +1645,45 @@ impl<S: EngineSignerKind> Engine<S> {
         S: EngineSignerKind + Send + Sync + 'static,
         Self: Send + Sync,
     {
-        // Brief shared read borrow to clone the slot. The slot is
-        // its own `Arc<AtomicBool>`, independent of the engine's
-        // RwLock, so the read borrow only lives long enough to copy
-        // the Arc out. CAS happens after the borrow drops.
-        let slot = {
+        // Brief shared read borrow to clone the slot **and** capture
+        // the wallet's current `synced_height`. The slot is its own
+        // `Arc<AtomicBool>`, independent of the engine's RwLock, so
+        // the read borrow only lives long enough to copy out the
+        // values needed to seed the refresh task. CAS happens after
+        // the borrow drops.
+        //
+        // `synced_height` is captured here (rather than re-read
+        // inside the producer's first attempt) so the watch
+        // channel's seed value matches the wallet baseline that the
+        // contract on `RefreshProgress::height` promises: "on
+        // initial publish this is `synced_height` itself." A caller
+        // that does `progress().borrow()` before the producer
+        // emits its first per-attempt `Scanning` update sees an
+        // accurate baseline rather than a misleading `height: 0`.
+        let (slot, synced_height) = {
             let engine = self_arc.read().await;
-            engine.refresh_slot.clone()
+            (engine.refresh_slot.clone(), engine.synced_height())
         };
-        let slot_guard = slot
-            .try_claim()
-            .ok_or(RefreshError::AlreadyRunning)?;
+        let slot_guard = slot.try_claim().ok_or(RefreshError::AlreadyRunning)?;
 
         // Channels:
         // - `progress`: watch (latest-only); seeded with the
-        //   `RefreshProgress::initial()` baseline so the first
-        //   `progress().borrow()` returns a usable value before the
-        //   producer publishes its first per-attempt update.
+        //   wallet's current `synced_height` so the first
+        //   `progress().borrow()` returns a usable baseline before
+        //   the producer publishes its first per-attempt update.
+        //   `blocks_processed` and `blocks_total` are zero because
+        //   no work has been done on this attempt yet; the producer
+        //   re-bases `blocks_total` against `daemon_tip` before any
+        //   per-block emission begins.
         // - `completion`: oneshot for the terminal
         //   `RefreshSummary` / `RefreshError`. `RefreshHandle::join`
         //   awaits this.
-        let (progress_tx, progress_rx) =
-            tokio::sync::watch::channel(RefreshProgress::initial());
+        let (progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress {
+            height: synced_height,
+            blocks_processed: 0,
+            blocks_total: 0,
+            phase: RefreshPhase::Scanning,
+        });
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
         let cancel_token = CancellationToken::new();
 
@@ -2126,7 +2181,16 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 5..5, &cancel, &ProgressEmitter::noop()).await {
+        let result = match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            5..5,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        {
             Ok(r) => r,
             Err(e) => panic!("empty range returns Ok, got {e:?}"),
         };
@@ -2148,7 +2212,16 @@ mod tests {
         let cancel = CancellationToken::new();
         cancel.cancel();
 
-        match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..3, &cancel, &ProgressEmitter::noop()).await {
+        match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..3,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        {
             Err(ProduceError::Cancelled) => {}
             Err(other) => panic!("expected Cancelled, got {other:?}"),
             Ok(_) => panic!("expected Cancelled, got Ok"),
@@ -2174,7 +2247,15 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..101, &cancel, &ProgressEmitter::noop()).await
+        let result = match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..101,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
         {
             Ok(r) => r,
             Err(e) => panic!("expected Ok, got {e:?}"),
@@ -2198,7 +2279,15 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..51, &cancel, &ProgressEmitter::noop()).await
+        let result = match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..51,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
         {
             Ok(r) => r,
             Err(e) => panic!("expected Ok, got {e:?}"),
@@ -2222,7 +2311,16 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..2, &cancel, &ProgressEmitter::noop()).await {
+        let result = match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..2,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        {
             Ok(r) => r,
             Err(e) => panic!("expected Ok, got {e:?}"),
         };
@@ -2289,7 +2387,15 @@ mod tests {
         let mut scanner = dummy_scanner();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 11..13, &cancel, &ProgressEmitter::noop()).await
+        let result = match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            11..13,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
         {
             Ok(r) => r,
             Err(e) => panic!("expected Ok, got {e:?}"),
@@ -2369,7 +2475,15 @@ mod tests {
         let mut scanner = dummy_scanner();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 11..12, &cancel, &ProgressEmitter::noop()).await
+        let result = match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            11..12,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
         {
             Ok(r) => r,
             Err(e) => panic!("expected Ok, got {e:?}"),
@@ -2400,7 +2514,16 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..4, &cancel, &ProgressEmitter::noop()).await {
+        let result = match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..4,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        {
             Ok(r) => r,
             Err(e) => panic!("expected Ok after transient recovery, got {e:?}"),
         };
@@ -2424,10 +2547,17 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..4, &cancel, &ProgressEmitter::noop())
-            .await
-            .err()
-            .expect("expected MaxRetriesExhausted");
+        let err = produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..4,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        .err()
+        .expect("expected MaxRetriesExhausted");
 
         match err {
             ProduceError::MaxRetriesExhausted { attempts, last } => {
@@ -2451,10 +2581,17 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..4, &cancel, &ProgressEmitter::noop())
-            .await
-            .err()
-            .expect("expected MaxRetriesExhausted");
+        let err = produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..4,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        .err()
+        .expect("expected MaxRetriesExhausted");
 
         match err {
             ProduceError::MaxRetriesExhausted { last, attempts } => {
@@ -2480,10 +2617,17 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..2, &cancel, &ProgressEmitter::noop())
-            .await
-            .err()
-            .expect("expected ProduceError::Scan");
+        let err = produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..2,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        .err()
+        .expect("expected ProduceError::Scan");
 
         match err {
             ProduceError::Scan { height, .. } => assert_eq!(height, 1),
@@ -2510,10 +2654,17 @@ mod tests {
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
 
-        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..6, &cancel, &ProgressEmitter::noop())
-            .await
-            .err()
-            .expect("expected Cancelled after first block fetch");
+        let err = produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..6,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        .err()
+        .expect("expected Cancelled after first block fetch");
 
         match err {
             ProduceError::Cancelled => {}
@@ -2543,15 +2694,15 @@ mod refresh_driver_tests {
     use tempfile::TempDir;
     use tokio::runtime::Runtime;
 
-    use crate::scan::ScanResult;
     use crate::engine::lifecycle::EngineCreateParams;
     use crate::engine::{
-        Credentials, DaemonClient, IoError, RefreshError, RefreshOptions, SoloSigner, Engine,
+        Credentials, DaemonClient, Engine, IoError, RefreshError, RefreshOptions, SoloSigner,
     };
+    use crate::scan::ScanResult;
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+    use shekyl_engine_state::{BlockchainTip, LedgerBlock, ReorgBlocks};
     use shekyl_rpc::RpcError;
     use shekyl_scanner::ScanError;
-    use shekyl_engine_state::{BlockchainTip, LedgerBlock, ReorgBlocks};
 
     use super::{map_produce_error, summarize, LedgerSnapshot, ProduceError, RefreshReorgEvent};
 
@@ -3104,8 +3255,7 @@ mod refresh_handle_tests {
         tokio::task::JoinHandle<()>,
     ) {
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
-        let (progress_tx, progress_rx) =
-            tokio::sync::watch::channel(RefreshProgress::initial());
+        let (progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress::initial());
         let cancel = CancellationToken::new();
 
         // Stand-in producer: park forever on the cancel token, so
@@ -3120,14 +3270,15 @@ mod refresh_handle_tests {
             async move { observe.cancelled().await }
         });
 
-        let handle = RefreshHandle::for_test(
-            completion_rx,
-            cancel.clone(),
-            progress_rx,
-            producer,
-            opts,
-        );
-        (handle, completion_tx, progress_tx, cancel, producer_for_assert)
+        let handle =
+            RefreshHandle::for_test(completion_rx, cancel.clone(), progress_rx, producer, opts);
+        (
+            handle,
+            completion_tx,
+            progress_tx,
+            cancel,
+            producer_for_assert,
+        )
     }
 
     /// `progress()` returns a receiver that observes the seeded
@@ -3180,7 +3331,10 @@ mod refresh_handle_tests {
         let (handle, _completion, _progress, cancel, producer_assert) =
             handle_with(RefreshOptions::default());
 
-        assert!(handle.is_running(), "producer is parked on cancel; should be running");
+        assert!(
+            handle.is_running(),
+            "producer is parked on cancel; should be running"
+        );
         assert!(!cancel.is_cancelled(), "no cancel observed yet");
 
         handle.cancel();
@@ -3212,7 +3366,10 @@ mod refresh_handle_tests {
             .expect("oneshot receiver still alive on handle");
 
         let returned = handle.join().await.expect("Ok delivered");
-        assert_eq!(returned.processed_height_range, summary.processed_height_range);
+        assert_eq!(
+            returned.processed_height_range,
+            summary.processed_height_range
+        );
         assert_eq!(returned.blocks_processed, summary.blocks_processed);
         assert_eq!(returned.merge_attempts, summary.merge_attempts);
     }
@@ -3245,7 +3402,10 @@ mod refresh_handle_tests {
         let result = handle.join().await;
         match result {
             Err(RefreshError::MalformedScanResult { reason }) => {
-                assert!(reason.contains("dropped completion sender"), "reason was: {reason}");
+                assert!(
+                    reason.contains("dropped completion sender"),
+                    "reason was: {reason}"
+                );
             }
             other => panic!("expected MalformedScanResult, got {other:?}"),
         }
@@ -3309,6 +3469,64 @@ mod refresh_handle_tests {
         // Manually fire the token to clean up the parked
         // observation tasks.
         cancel.cancel();
+    }
+
+    /// When the producer observes cancellation mid-scan and bails,
+    /// it publishes a terminal `RefreshPhase::Cancelled` progress
+    /// update **before** the watch sender drops, and that update
+    /// preserves the last published `height` / counters so
+    /// subscribers don't observe a misleading rollback to zero.
+    ///
+    /// This test mirrors the production sequence exactly: the
+    /// per-block `ProgressEmitter` advances `height` during the
+    /// scan, and on `Err(RefreshError::Cancelled)` from
+    /// `produce_scan_result`, `run_refresh_task` clones the latest
+    /// published progress, overrides only `phase`, and sends. We
+    /// drive the same shape through the test's caller-owned
+    /// `progress_tx` so the assertion lands on the public surface
+    /// (`progress().borrow()`) rather than internals.
+    #[tokio::test]
+    async fn cancel_during_scan_emits_terminal_cancelled_phase() {
+        let (handle, _completion, progress_tx, _cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        let mut rx = handle.progress();
+
+        progress_tx
+            .send(RefreshProgress {
+                height: 100,
+                blocks_processed: 50,
+                blocks_total: 200,
+                phase: RefreshPhase::Scanning,
+            })
+            .expect("subscriber alive");
+        rx.changed().await.expect("scanning update delivered");
+        let mid = rx.borrow().clone();
+        assert_eq!(mid.height, 100);
+        assert!(matches!(mid.phase, RefreshPhase::Scanning));
+
+        let mut terminal = progress_tx.borrow().clone();
+        terminal.phase = RefreshPhase::Cancelled;
+        progress_tx.send(terminal).expect("subscriber alive");
+        rx.changed().await.expect("terminal update delivered");
+
+        let last = rx.borrow().clone();
+        assert!(
+            matches!(last.phase, RefreshPhase::Cancelled),
+            "phase preserved as Cancelled"
+        );
+        assert_eq!(
+            last.height, 100,
+            "height preserved across the Scanning→Cancelled transition"
+        );
+        assert_eq!(
+            last.blocks_processed, 50,
+            "blocks_processed preserved across the transition"
+        );
+        assert_eq!(
+            last.blocks_total, 200,
+            "blocks_total preserved across the transition"
+        );
     }
 }
 
