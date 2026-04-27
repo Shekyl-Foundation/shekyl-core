@@ -24,7 +24,6 @@ hkdf = { version = "0.12", optional = true }
 sha2 = { version = "0.10", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
-zeroize = { version = "1", features = ["derive"], optional = true }
 hex = { version = "0.4", optional = true }
 thiserror = "2"
 tracing = "0.1"
@@ -39,9 +38,24 @@ tokio = { version = "1", features = ["time", "macros"] }
 # blocks. Same dep the legacy `shekyl-scanner::sync` loop uses; the
 # producer reuses the type so callers can pass the same token through.
 tokio-util = { version = "0.7" }
+# `Wallet::refresh` constructs a `shekyl_scanner::Scanner` from
+# `AllKeysBlob`, which requires assembling a `ViewPair` over
+# `(EdwardsPoint, Scalar, [u8; 32], Vec<u8>)`. Decompressing the
+# stored 32-byte spend public key into an `EdwardsPoint` and
+# parsing the view secret as a `Scalar` are the only direct uses;
+# the rest of curve arithmetic stays inside the scanner / fcmp
+# crates. `curve25519-dalek` is transitively present through
+# `shekyl-scanner` already, so promoting it to a direct dep adds no
+# new crate to the build graph.
+curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
+# `Wallet::refresh` wraps spend / view / KEM secret material in
+# `Zeroizing<…>` for the brief window between unpacking from
+# `AllKeysBlob` and handing ownership to `Scanner` / `ViewPair`.
+# `AllKeysBlob` already wipes its own copy on `Drop`; the wrapper
+# ensures the scanner's local copies do the same.
+zeroize = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-curve25519-dalek = { version = "4", features = ["alloc"] }
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -51,12 +65,6 @@ tempfile = "3"
 # retry-backoff tests use to make exponential delays instantaneous
 # without sacrificing determinism.
 tokio = { version = "1", features = ["macros", "rt", "test-util"] }
-# Dummy-scanner construction in `wallet::refresh` tests needs
-# `Zeroizing<…>` for view/spend secret containers. Production
-# wallet-core code holds these only behind the `multisig` feature
-# (which already enables `zeroize`); test code reaches the same
-# helpers unconditionally.
-zeroize = { version = "1", features = ["derive"] }
 
 [[bench]]
 name = "multisig_v31"
@@ -65,7 +73,7 @@ required-features = ["multisig"]
 
 [features]
 default = []
-multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "serde_json", "zeroize", "hex", "chacha20poly1305", "hkdf", "sha2"]
+multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "serde_json", "hex", "chacha20poly1305", "hkdf", "sha2"]
 
 [lints]
 workspace = true

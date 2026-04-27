@@ -56,27 +56,31 @@
 //!
 //! # Status
 //!
-//! This commit (Branch 1, commit 2) lands the producer in isolation:
-//! the function is `pub(crate)` and is called only from the
-//! producer's own tests. The `Wallet::refresh` caller and its retry
-//! loop ship in commit 4, after the producer's full failure-mode
-//! test suite (commit 3). The `dead_code` allows below cover the
-//! gap between "producer compiles and tests pass" and "first non-test
-//! call site exists."
-
-#![allow(dead_code)]
+//! Branch 1 commit 4 wired [`Wallet::refresh`] as the production
+//! caller. The producer ([`produce_scan_result`]) remains
+//! `pub(crate)`: callers outside `shekyl-wallet-core` go through the
+//! `Wallet::refresh` entry point, which owns the snapshot-take +
+//! merge-with-retry loop. The `RefreshHandle` async-driver path
+//! (cancel-on-drop, single-flight enforcement, progress watch
+//! channel) ships in branch 2 on top of this synchronous baseline.
 
 use std::collections::HashSet;
 use std::ops::Range;
 use std::time::Duration;
 
+use curve25519_dalek::{edwards::CompressedEdwardsY, scalar::Scalar};
+use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_oxide::transaction::Input;
 use shekyl_rpc::{Rpc, RpcError, ScannableBlock};
-use shekyl_scanner::{ScanError, Scanner};
+use shekyl_scanner::{ScanError, Scanner, ViewPair};
 use shekyl_wallet_state::{LedgerBlock, ReorgBlocks};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
+use zeroize::Zeroizing;
 
+use super::error::{IoError, RefreshError};
+use super::signer::WalletSignerKind;
+use super::Wallet;
 use crate::scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
 
 /// Maximum retries for transient per-block RPC failures. Mirrors the
@@ -214,6 +218,108 @@ pub(crate) enum ProduceError {
     /// inter-block checkpoint without inspecting further heights.
     #[error("scan cancelled before completing the requested range")]
     Cancelled,
+}
+
+/// Configuration for [`Wallet::refresh`].
+///
+/// The retry budget is the only knob today; future settings (per-call
+/// height ceiling, custom cancellation token, progress hook) live on
+/// [`RefreshHandle`](super::Wallet)'s upcoming branch-2 surface, not
+/// here. Keeping this struct `#[non_exhaustive]` reserves the right
+/// to add fields without breaking callers that built it
+/// field-by-field.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct RefreshOptions {
+    /// Maximum number of times the snapshot-merge loop is re-driven
+    /// after [`RefreshError::ConcurrentMutation`]. Once exhausted, the
+    /// last `ConcurrentMutation` is surfaced to the caller.
+    ///
+    /// Default: `8`. The decision-log entry
+    /// `Snapshot-merge-with-retry semantics for Wallet::refresh`
+    /// (2026-04-26) records the rationale: high enough that the
+    /// realistic case (a sibling refresh that completed once during a
+    /// long scan) clears on the second attempt; low enough that a
+    /// pathological livelock surfaces in bounded wall-clock instead of
+    /// hanging the call indefinitely.
+    pub max_retries: u32,
+}
+
+impl Default for RefreshOptions {
+    fn default() -> Self {
+        Self { max_retries: 8 }
+    }
+}
+
+/// Outcome of a successful [`Wallet::refresh`] call.
+///
+/// Built from the merged [`ScanResult`] and the loop bookkeeping
+/// (number of merge attempts spent on the snapshot-race retry path).
+/// Counts are computed on the producer-emitted result before the
+/// merge consumes it; they describe what the producer observed, not
+/// what the merge ingested. The two are equal on the success path
+/// (`apply_scan_result` returns `Ok`); on a malformed result the
+/// merge surfaces [`RefreshError::MalformedScanResult`] before this
+/// summary is constructed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RefreshSummary {
+    /// Inclusive-exclusive range of heights scanned by the producer
+    /// (after any reorg-rewind adjustment). When the wallet is at the
+    /// daemon's tip and no new blocks were available, this is
+    /// `synced_height + 1 .. synced_height + 1` (an empty range with
+    /// `blocks_processed == 0`).
+    pub processed_height_range: Range<u64>,
+
+    /// Count of distinct heights for which the producer recorded a
+    /// `(height, block_hash)` entry. On the no-reorg path this equals
+    /// `processed_height_range.len()`; on a reorg path some heights at
+    /// the top of the original range are discarded and re-scanned
+    /// from the fork point, so the count reflects post-rewind work.
+    pub blocks_processed: u64,
+
+    /// Number of [`DetectedTransfer`] entries the producer recovered.
+    /// These are the per-output recoveries the scanner returned; the
+    /// merge ingests every entry into [`shekyl_wallet_state::LedgerIndexes`].
+    pub transfers_detected: usize,
+
+    /// Number of input key images the producer collected, unfiltered,
+    /// from the scanned blocks. The merge filters this against the
+    /// wallet's owned-output set; this count is the producer-side
+    /// observation, not the merge's spend count.
+    pub key_images_observed: usize,
+
+    /// Count of per-block stake-lifecycle events recorded by the
+    /// producer. Phase 2b grows this to a richer per-event vocabulary;
+    /// today it is always `0` and exists in the summary so the field
+    /// set is stable across the V3.x lifetime.
+    pub stake_events: usize,
+
+    /// `Some(_)` when the producer detected a reorg during this
+    /// refresh attempt and rewound the scan to the recorded fork
+    /// height. `None` on a clean linear scan.
+    pub reorg: Option<RefreshReorgEvent>,
+
+    /// Number of merge attempts the snapshot-race retry loop spent.
+    /// `1` on the common path (merge succeeds first try); `>1` only
+    /// when at least one [`RefreshError::ConcurrentMutation`] was
+    /// observed and a fresh snapshot drove a re-attempt. Always `>=1`.
+    pub merge_attempts: u32,
+}
+
+/// Detail of a reorg detected during a single [`Wallet::refresh`]
+/// call. The producer records at most one reorg per call; subsequent
+/// reorgs landing while the new chain is being scanned are surfaced as
+/// [`RefreshError::ConcurrentMutation`] on the next merge attempt and
+/// the retry loop pulls a fresh snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RefreshReorgEvent {
+    /// Height the wallet rewound to before continuing the forward
+    /// scan. Heights `>= fork_height` from the wallet's pre-refresh
+    /// state were discarded; heights `< fork_height` survive the merge
+    /// unchanged.
+    pub fork_height: u64,
 }
 
 /// Walk the requested height range, scanning each block and
@@ -535,6 +641,216 @@ fn consistent_against_range(
     block_hashes.iter().all(|(h, _)| in_range(*h))
         && new_transfers.iter().all(|t| in_range(t.block_height))
         && spent_key_images.iter().all(|k| in_range(k.block_height))
+}
+
+/// Build a [`Scanner`] from the wallet's [`AllKeysBlob`]. Each refresh
+/// attempt builds a fresh scanner so the snapshot-merge retry loop
+/// holds no scanner state across retries.
+///
+/// The scanner takes ownership of the spend secret (boxed in a
+/// `Zeroizing`) and a `ViewPair` over `(spend_pub, view_secret,
+/// x25519_sk, ml_kem_dk)`. `x25519_sk` and `view_sk` are the same
+/// 32-byte material — the wallet's view secret double-duties as the
+/// X25519 private scalar — so we only carry one copy through.
+///
+/// `AllKeysBlob` already wipes its own copy on drop; the
+/// `Zeroizing<…>` wrappers we hand to `Scanner` / `ViewPair` ensure
+/// the scanner's local copies do the same when this `Scanner` is
+/// dropped at the end of the refresh attempt.
+fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> {
+    let spend_pub = CompressedEdwardsY::from_slice(&keys.spend_pk)
+        .map_err(|e| {
+            RefreshError::Io(IoError::Scanner {
+                detail: format!("AllKeysBlob.spend_pk is not a valid CompressedEdwardsY: {e}"),
+            })
+        })?
+        .decompress()
+        .ok_or_else(|| {
+            RefreshError::Io(IoError::Scanner {
+                detail: "AllKeysBlob.spend_pk does not decompress to a curve point".to_string(),
+            })
+        })?;
+
+    // `view_sk` and `spend_sk` are stored as canonical 32-byte
+    // little-endian scalars (`Scalar::as_bytes`); reduction is a
+    // no-op on canonical input but `from_bytes_mod_order` is
+    // documented as the safe choice for round-tripping serialized
+    // scalars and it costs nothing on the canonical path.
+    let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(keys.view_sk));
+    let x25519_sk: Zeroizing<[u8; 32]> = Zeroizing::new(keys.view_sk);
+    let ml_kem_dk: Zeroizing<Vec<u8>> = Zeroizing::new(keys.ml_kem_dk.to_vec());
+
+    let view_pair = ViewPair::new(spend_pub, view_scalar, x25519_sk, ml_kem_dk).map_err(|e| {
+        RefreshError::Io(IoError::Scanner {
+            detail: format!("ViewPair construction failed: {e}"),
+        })
+    })?;
+
+    let spend_secret: Zeroizing<[u8; 32]> = Zeroizing::new(keys.spend_sk);
+    Ok(Scanner::new(view_pair, spend_secret))
+}
+
+/// Build a [`RefreshSummary`] from a producer-emitted [`ScanResult`]
+/// (just before the merge consumes it) and the loop bookkeeping. The
+/// merge takes the value by-move; this helper runs first so the merge
+/// never has to clone the result for summary purposes.
+fn summarize(result: &ScanResult, merge_attempts: u32) -> RefreshSummary {
+    RefreshSummary {
+        processed_height_range: result.processed_height_range.clone(),
+        blocks_processed: result.block_hashes.len() as u64,
+        transfers_detected: result.new_transfers.len(),
+        key_images_observed: result.spent_key_images.len(),
+        stake_events: result.stake_events.len(),
+        reorg: result.reorg_rewind.as_ref().map(|r| RefreshReorgEvent {
+            fork_height: r.fork_height,
+        }),
+        merge_attempts,
+    }
+}
+
+impl<S: WalletSignerKind> Wallet<S> {
+    /// Drive a refresh against the configured daemon: pull a snapshot
+    /// of the wallet's ledger, ask the producer to scan
+    /// `synced_height + 1 .. daemon_tip + 1`, and merge the result
+    /// back under `&mut self`. Retries on snapshot-race
+    /// (`RefreshError::ConcurrentMutation`) up to `opts.max_retries`
+    /// times before surfacing the last race. `MalformedScanResult` is
+    /// terminal — re-running the scan would re-encounter the same
+    /// producer-contract violation, so the caller is informed
+    /// immediately.
+    ///
+    /// # Why synchronous, why a runtime handle
+    ///
+    /// `Wallet::refresh` is `&mut self` because the merge mutates
+    /// wallet state under the cross-cutting locking discipline (lock
+    /// 3): mutators take `&mut self`, queries take `&self`. An
+    /// `async fn refresh(&mut self, …)` would mean callers could
+    /// `await` other futures while the borrow is held — including
+    /// futures that already hold the wallet lock — which trivially
+    /// deadlocks `Arc<RwLock<Wallet<S>>>` topologies.
+    ///
+    /// Instead, the synchronous entry point takes a
+    /// [`tokio::runtime::Handle`] and runs the producer's async work
+    /// via [`Handle::block_on`]. This means **`refresh` must not be
+    /// called from inside an async context on the same runtime** —
+    /// `block_on` panics in that case. Async callers
+    /// (`tokio::spawn_blocking`, dedicated worker thread,
+    /// branch-2's `RefreshHandle`) drive `refresh` from a sync
+    /// context; the JSON-RPC server's RPC handler is the typical
+    /// example via `spawn_blocking`.
+    ///
+    /// Branch 2 lands `RefreshHandle`, which spawns a producer-driven
+    /// loop on the caller's runtime and exposes cancellation +
+    /// progress channels. `Wallet::refresh` (this method) remains the
+    /// underlying primitive.
+    ///
+    /// # Errors
+    ///
+    /// - [`RefreshError::ConcurrentMutation`] — `opts.max_retries`
+    ///   exhausted on snapshot races.
+    /// - [`RefreshError::MalformedScanResult`] — producer-contract
+    ///   violation; not retried.
+    /// - [`RefreshError::Cancelled`] — the cancellation token fired.
+    ///   This signature does not yet expose a token argument; the
+    ///   variant exists for branch 2's `RefreshHandle`. In branch 1,
+    ///   this method always uses an internal token that never fires.
+    /// - [`RefreshError::Io`] — daemon RPC budget exhausted, or
+    ///   scanner rejected a block as structurally invalid.
+    ///
+    /// # Cancellation (branch 2)
+    ///
+    /// This synchronous signature does not take a cancellation token.
+    /// The internal token is created fresh per call and never fires;
+    /// callers that need cooperative cancellation will use
+    /// `RefreshHandle::start_refresh` from branch 2, which threads a
+    /// caller-provided token through the producer.
+    pub fn refresh(
+        &mut self,
+        opts: &RefreshOptions,
+        runtime: &tokio::runtime::Handle,
+    ) -> Result<RefreshSummary, RefreshError> {
+        let cancel = CancellationToken::new();
+        let mut last_concurrent_mutation: Option<RefreshError> = None;
+
+        // Attempts are 1-indexed in the summary; the loop allows
+        // `1 + max_retries` total tries (the initial attempt plus
+        // `max_retries` retries on `ConcurrentMutation`).
+        for attempt in 1..=opts.max_retries.saturating_add(1) {
+            let snapshot = LedgerSnapshot::from_ledger(&self.ledger.ledger);
+
+            let daemon_tip = runtime
+                .block_on(self.daemon.inner().get_height())
+                .map_err(|e| {
+                    RefreshError::Io(IoError::Daemon {
+                        detail: format!("get_height failed: {e}"),
+                    })
+                })?;
+            let daemon_tip_u64 =
+                u64::try_from(daemon_tip).expect("daemon height fits in u64 on 64-bit targets");
+
+            // `get_height` is the count of blocks; tip height is
+            // `count - 1` for a non-empty chain, else 0. The producer
+            // range is exclusive-end, so we scan
+            // `synced_height + 1 .. daemon_tip_count`.
+            let start = snapshot.synced_height.saturating_add(1);
+            let end = daemon_tip_u64;
+            let height_range = start..end;
+
+            let mut scanner = build_scanner_from_keys(self.keys())?;
+
+            let result = match runtime.block_on(produce_scan_result(
+                self.daemon.inner(),
+                &mut scanner,
+                &snapshot,
+                height_range,
+                &cancel,
+            )) {
+                Ok(r) => r,
+                Err(ProduceError::Cancelled) => return Err(RefreshError::Cancelled),
+                Err(ProduceError::MaxRetriesExhausted { last, attempts }) => {
+                    return Err(RefreshError::Io(IoError::Daemon {
+                        detail: format!("block fetch exhausted {attempts} retries: {last}"),
+                    }));
+                }
+                Err(ProduceError::Scan { height, source }) => {
+                    return Err(RefreshError::Io(IoError::Scanner {
+                        detail: format!("scanner rejected block at height {height}: {source}"),
+                    }));
+                }
+            };
+
+            let summary = summarize(&result, attempt);
+
+            match self.apply_scan_result(result) {
+                Ok(()) => return Ok(summary),
+                Err(RefreshError::ConcurrentMutation { wallet, result }) => {
+                    debug!(
+                        attempt,
+                        max_retries = opts.max_retries,
+                        wallet,
+                        result,
+                        "Wallet::refresh: snapshot race, retrying with fresh snapshot",
+                    );
+                    last_concurrent_mutation =
+                        Some(RefreshError::ConcurrentMutation { wallet, result });
+                    continue;
+                }
+                Err(other) => return Err(other),
+            }
+        }
+
+        // Retry budget exhausted on `ConcurrentMutation`. Surface the
+        // last race we observed so the caller can see *which* heights
+        // disagreed; falling through without observing one would mean
+        // the loop body itself is broken, which we surface as a
+        // `MalformedScanResult` so audit reads a typed contract
+        // failure rather than a silent retry exhaustion.
+        Err(
+            last_concurrent_mutation.unwrap_or(RefreshError::MalformedScanResult {
+                reason: "Wallet::refresh retry loop exited without an observed ConcurrentMutation",
+            }),
+        )
+    }
 }
 
 #[cfg(test)]
