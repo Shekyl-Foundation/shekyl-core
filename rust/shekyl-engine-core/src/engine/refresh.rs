@@ -741,6 +741,90 @@ impl Drop for SlotGuard {
     }
 }
 
+/// Per-block progress emitter handed to [`produce_scan_result`].
+///
+/// The producer publishes a [`RefreshProgress`] update after every
+/// successfully scanned block so the watch-channel subscribers see
+/// monotonic per-block progress within an attempt. The wrapping
+/// `drive_refresh_loop` (above the producer) handles the
+/// per-attempt baseline (`Scanning` / `Retrying` phase transitions
+/// and the `blocks_total` reset on retry).
+///
+/// # Two construction paths
+///
+/// - [`ProgressEmitter::noop`] — used by the synchronous
+///   [`Engine::refresh`] entry point (no progress channel exists
+///   on that path; the watch-channel surface is a Branch 2-only
+///   feature).
+/// - [`ProgressEmitter::new`] — used by `drive_refresh_loop`,
+///   wired to the producer task's sole `watch::Sender`.
+///
+/// # Lifetime
+///
+/// Borrows the `Sender` for at most a single
+/// `produce_scan_result` call (per-attempt). The wrapping loop
+/// owns the `Sender` and re-builds the emitter per attempt with
+/// the new `blocks_total`.
+pub(crate) struct ProgressEmitter<'a> {
+    sender: Option<&'a tokio::sync::watch::Sender<RefreshProgress>>,
+    /// `daemon_tip - synced_height` for this attempt. Static for
+    /// the duration of one `produce_scan_result` call; updated by
+    /// the loop on retry boundaries before constructing a new
+    /// emitter.
+    blocks_total: u64,
+}
+
+impl<'a> ProgressEmitter<'a> {
+    /// No-op emitter: per-block calls are silently dropped.
+    /// Used by the synchronous `Engine::refresh` path and by every
+    /// test that exercises `produce_scan_result` directly without
+    /// asserting on progress channel content.
+    pub(crate) const fn noop() -> Self {
+        Self {
+            sender: None,
+            blocks_total: 0,
+        }
+    }
+
+    /// Construct an emitter wired to a real watch sender. Used by
+    /// the async producer task (`drive_refresh_loop` →
+    /// `produce_scan_result`).
+    pub(crate) const fn new(
+        sender: &'a tokio::sync::watch::Sender<RefreshProgress>,
+        blocks_total: u64,
+    ) -> Self {
+        Self {
+            sender: Some(sender),
+            blocks_total,
+        }
+    }
+
+    /// Publish a per-block progress snapshot.
+    ///
+    /// `height` is the height the producer most recently completed
+    /// scanning; `blocks_processed` is the count of blocks
+    /// successfully fed to the scanner during the **current
+    /// attempt** (starts at 0, increments per block, drops back on
+    /// reorg-rewind discard, never exceeds `blocks_total` outside
+    /// reorg transients).
+    ///
+    /// Best-effort: if the watch channel has no subscribers other
+    /// than the receiver retained on the handle (the common case
+    /// — UI hasn't subscribed), `send` returns `Err(_)` and we
+    /// silently drop the update. This is the right behavior:
+    /// progress is observational, not load-bearing.
+    fn publish(&self, height: u64, blocks_processed: u64, phase: RefreshPhase) {
+        if let Some(s) = self.sender {
+            let _ = s.send(RefreshProgress {
+                height,
+                blocks_processed,
+                blocks_total: self.blocks_total,
+                phase,
+            });
+        }
+    }
+}
+
 // Static asserts: trait bounds the Branch 2 surface depends on.
 // Failure here means a downstream type lost its Send/Sync/Clone
 // invariant; surface the violation at the engine-core build rather
@@ -814,6 +898,7 @@ pub(crate) async fn produce_scan_result<R: Rpc>(
     snapshot: &LedgerSnapshot,
     height_range: Range<u64>,
     cancel: &CancellationToken,
+    progress: &ProgressEmitter<'_>,
 ) -> Result<ScanResult, ProduceError> {
     let original_start = height_range.start;
     let end = height_range.end;
@@ -917,6 +1002,13 @@ pub(crate) async fn produce_scan_result<R: Rpc>(
                 output,
             });
         }
+
+        // Publish per-block progress for the watch-channel
+        // subscribers. `block_hashes.len()` is the count of blocks
+        // successfully fed to the scanner this attempt — drops on
+        // reorg-rewind because the rewind path retains-by-height
+        // truncates the vec before the next iteration.
+        progress.publish(h, block_hashes.len() as u64, RefreshPhase::Scanning);
 
         h += 1;
     }
@@ -1179,6 +1271,49 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
 /// sends `Err(RefreshError::Cancelled)` on `completion`, and
 /// returns. The signature is fixed so commit 3 can drop in the
 /// real loop without the spawn site changing.
+/// Drive the asynchronous snapshot–scan–merge–retry loop on behalf of
+/// [`Engine::start_refresh`].
+///
+/// # Locking topology
+///
+/// Per attempt:
+/// 1. **Read lock** — acquired briefly to clone [`DaemonClient`] (for the
+///    network calls below) and to take a fresh [`LedgerSnapshot`]. The
+///    lock is released before any I/O.
+/// 2. **No lock** — daemon `get_height`, scanner construction (first
+///    attempt only), and [`produce_scan_result`] run with no engine
+///    borrow held. This is the long phase, on the order of network
+///    round-trips per block, and is exactly why the function exists in
+///    the first place.
+/// 3. **Write lock** — acquired briefly to call
+///    [`Engine::apply_scan_result`]. The merge fails with
+///    [`RefreshError::ConcurrentMutation`] iff another writer
+///    interleaved between the snapshot and the merge; that variant
+///    is the loop's signal to retry, not a terminal error.
+///
+/// # `_slot_guard`
+///
+/// The [`SlotGuard`] returned by [`RefreshSlot::try_claim`] in
+/// [`Engine::start_refresh`] is moved into this task and held by name
+/// for the task's entire body. Its [`Drop`] impl flips the
+/// `refresh_slot` flag back to `false`, releasing single-flight
+/// exclusion. Releasing on task exit (rather than on
+/// [`RefreshHandle::drop`]) is what guarantees a fresh
+/// [`Engine::start_refresh`] cannot observe `AlreadyRunning` after a
+/// cancelled handle is dropped but before the producer task has
+/// actually noticed the cancellation and unwound — which would race
+/// the task against the next refresh on the same engine. The
+/// underscore prefix is a deliberate signal that the binding is held
+/// for its `Drop` side-effect, not read.
+///
+/// # Cancellation
+///
+/// The cancellation token is checked at three points: at the top of
+/// each attempt loop iteration (covers the boundary between attempts),
+/// inside [`produce_scan_result`] (covers between blocks), and after
+/// the merge (covers between merge and `Done`). On observation, a
+/// final `Cancelled` progress update is best-effort emitted and
+/// `RefreshError::Cancelled` is delivered via the completion oneshot.
 async fn run_refresh_task<S: EngineSignerKind>(
     engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S>>>,
     opts: RefreshOptions,
@@ -1190,18 +1325,174 @@ async fn run_refresh_task<S: EngineSignerKind>(
     S: Send + Sync + 'static,
     Engine<S>: Send + Sync,
 {
-    // Reference unused-by-stub parameters so commit 2 emits no
-    // dead-arg warnings; commit 3 replaces the body with the real
-    // drive_refresh_loop dispatch.
-    let _ = (&engine_arc, &opts);
-    let _ = progress.send(RefreshProgress {
-        height: 0,
-        blocks_processed: 0,
-        blocks_total: 0,
-        phase: RefreshPhase::Cancelled,
+    // Build the scanner once (keys are immutable for the lifetime of
+    // the open engine; rebuilding per attempt would only repeat
+    // EdwardsPoint decompression). Briefly take the read lock to
+    // borrow `keys()`.
+    let scanner_init = {
+        let g = engine_arc.read().await;
+        build_scanner_from_keys(g.keys())
+    };
+    let mut scanner = match scanner_init {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = completion.send(Err(e));
+            return;
+        }
+    };
+
+    let mut last_concurrent_mutation: Option<RefreshError> = None;
+
+    for attempt in 1..=opts.max_retries.saturating_add(1) {
+        if cancel.is_cancelled() {
+            // Best-effort terminal progress; `Receiver::changed`
+            // wakes once before the channel closes.
+            let _ = progress.send(RefreshProgress {
+                height: 0,
+                blocks_processed: 0,
+                blocks_total: 0,
+                phase: RefreshPhase::Cancelled,
+            });
+            let _ = completion.send(Err(RefreshError::Cancelled));
+            return;
+        }
+
+        // Snapshot + daemon clone. The producer does not hold the
+        // daemon between attempts: the engine state — including the
+        // live daemon reference — is re-snapshotted at the start of
+        // every attempt, so re-cloning is the same cost as
+        // re-borrowing and avoids leaking the borrow across the
+        // intervening write-lock.
+        let (snapshot, daemon) = {
+            let g = engine_arc.read().await;
+            (LedgerSnapshot::from_ledger(&g.ledger.ledger), g.daemon().clone())
+        };
+        let current_synced = snapshot.synced_height;
+
+        // First network call. Cancellation observed here surfaces as
+        // a daemon error from the underlying RPC; we don't have a
+        // selectable cancel-aware variant on `get_height`, so we map
+        // a cancel-during-tip-fetch to `Cancelled` post-hoc once the
+        // call returns.
+        let daemon_tip = match daemon.inner().get_height().await {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = completion.send(Err(RefreshError::Io(IoError::Daemon {
+                    detail: format!("get_height failed: {e}"),
+                })));
+                return;
+            }
+        };
+        let daemon_tip_u64 =
+            u64::try_from(daemon_tip).expect("daemon height fits in u64 on 64-bit targets");
+
+        let start = current_synced.saturating_add(1);
+        let end = daemon_tip_u64;
+        let blocks_total = end.saturating_sub(start);
+        let height_range = start..end;
+
+        // Re-baseline `blocks_total` for this attempt before the per-
+        // block emitter starts publishing `Scanning` updates. Reorg
+        // rewinds inside `produce_scan_result` may transiently push
+        // `blocks_processed` down; the watch channel preserves
+        // latest-only semantics so subscribers see the restated
+        // total.
+        let _ = progress.send(RefreshProgress {
+            height: current_synced,
+            blocks_processed: 0,
+            blocks_total,
+            phase: RefreshPhase::Scanning,
+        });
+
+        let emitter = ProgressEmitter::new(&progress, blocks_total);
+        let produced = produce_scan_result(
+            daemon.inner(),
+            &mut scanner,
+            &snapshot,
+            height_range,
+            &cancel,
+            &emitter,
+        )
+        .await;
+
+        let result = match map_produce_error(produced) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = completion.send(Err(e));
+                return;
+            }
+        };
+
+        let summary = summarize(&result, attempt);
+
+        // Best-effort `Merging` ping right before the write-lock. The
+        // merge is bounded by compute (no I/O), so subscribers
+        // observing this phase are usually about to immediately
+        // observe success or a retry.
+        let _ = progress.send(RefreshProgress {
+            height: summary
+                .processed_height_range
+                .end
+                .saturating_sub(1)
+                .max(current_synced),
+            blocks_processed: summary.blocks_processed,
+            blocks_total,
+            phase: RefreshPhase::Merging,
+        });
+
+        // Merge under the write lock. The merge is the single audited
+        // mutation point; on `ConcurrentMutation` we loop with a fresh
+        // snapshot.
+        let merge = {
+            let mut g = engine_arc.write().await;
+            g.apply_scan_result(result)
+        };
+
+        match merge {
+            Ok(()) => {
+                // No terminal `Done` progress phase: the completion
+                // oneshot is the authoritative success signal. Once
+                // we drop `progress` on return, the receiver's next
+                // `changed().await` returns `RecvError`, which is
+                // the watch-channel idiom for "no further updates."
+                let _ = completion.send(Ok(summary));
+                return;
+            }
+            Err(RefreshError::ConcurrentMutation { wallet, result }) => {
+                debug!(
+                    attempt,
+                    max_retries = opts.max_retries,
+                    wallet,
+                    result,
+                    "run_refresh_task: snapshot race, retrying with fresh snapshot",
+                );
+                let _ = progress.send(RefreshProgress {
+                    height: current_synced,
+                    blocks_processed: 0,
+                    blocks_total,
+                    phase: RefreshPhase::Retrying,
+                });
+                last_concurrent_mutation =
+                    Some(RefreshError::ConcurrentMutation { wallet, result });
+                continue;
+            }
+            Err(other) => {
+                let _ = completion.send(Err(other));
+                return;
+            }
+        }
+    }
+
+    // Retry budget exhausted on `ConcurrentMutation`. Mirror
+    // `Engine::refresh_with`: surface the last observed race;
+    // falling through with `None` would mean the loop body itself is
+    // broken, which we surface as `MalformedScanResult` so audit
+    // reads a typed contract failure rather than silent retry
+    // exhaustion.
+    let terminal = last_concurrent_mutation.unwrap_or(RefreshError::MalformedScanResult {
+        reason: "run_refresh_task retry loop exited without an observed ConcurrentMutation",
     });
-    let _ = cancel; // observed; nothing to do in the stub
-    let _ = completion.send(Err(RefreshError::Cancelled));
+    let _ = completion.send(Err(terminal));
     // _slot_guard drops here, releasing the slot.
 }
 
@@ -1425,6 +1716,7 @@ impl<S: EngineSignerKind> Engine<S> {
                 snapshot,
                 height_range,
                 &cancel,
+                &ProgressEmitter::noop(),
             ));
             map_produce_error(produced)
         })
@@ -1794,7 +2086,7 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 5..5, &cancel).await {
+        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 5..5, &cancel, &ProgressEmitter::noop()).await {
             Ok(r) => r,
             Err(e) => panic!("empty range returns Ok, got {e:?}"),
         };
@@ -1816,7 +2108,7 @@ mod tests {
         let cancel = CancellationToken::new();
         cancel.cancel();
 
-        match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..3, &cancel).await {
+        match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..3, &cancel, &ProgressEmitter::noop()).await {
             Err(ProduceError::Cancelled) => {}
             Err(other) => panic!("expected Cancelled, got {other:?}"),
             Ok(_) => panic!("expected Cancelled, got Ok"),
@@ -1842,7 +2134,7 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..101, &cancel).await
+        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..101, &cancel, &ProgressEmitter::noop()).await
         {
             Ok(r) => r,
             Err(e) => panic!("expected Ok, got {e:?}"),
@@ -1866,7 +2158,7 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..51, &cancel).await
+        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..51, &cancel, &ProgressEmitter::noop()).await
         {
             Ok(r) => r,
             Err(e) => panic!("expected Ok, got {e:?}"),
@@ -1890,7 +2182,7 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..2, &cancel).await {
+        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..2, &cancel, &ProgressEmitter::noop()).await {
             Ok(r) => r,
             Err(e) => panic!("expected Ok, got {e:?}"),
         };
@@ -1957,7 +2249,7 @@ mod tests {
         let mut scanner = dummy_scanner();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 11..13, &cancel).await
+        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 11..13, &cancel, &ProgressEmitter::noop()).await
         {
             Ok(r) => r,
             Err(e) => panic!("expected Ok, got {e:?}"),
@@ -2037,7 +2329,7 @@ mod tests {
         let mut scanner = dummy_scanner();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 11..12, &cancel).await
+        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 11..12, &cancel, &ProgressEmitter::noop()).await
         {
             Ok(r) => r,
             Err(e) => panic!("expected Ok, got {e:?}"),
@@ -2068,7 +2360,7 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..4, &cancel).await {
+        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..4, &cancel, &ProgressEmitter::noop()).await {
             Ok(r) => r,
             Err(e) => panic!("expected Ok after transient recovery, got {e:?}"),
         };
@@ -2092,7 +2384,7 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..4, &cancel)
+        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..4, &cancel, &ProgressEmitter::noop())
             .await
             .err()
             .expect("expected MaxRetriesExhausted");
@@ -2119,7 +2411,7 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..4, &cancel)
+        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..4, &cancel, &ProgressEmitter::noop())
             .await
             .err()
             .expect("expected MaxRetriesExhausted");
@@ -2148,7 +2440,7 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..2, &cancel)
+        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..2, &cancel, &ProgressEmitter::noop())
             .await
             .err()
             .expect("expected ProduceError::Scan");
@@ -2178,7 +2470,7 @@ mod tests {
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
 
-        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..6, &cancel)
+        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..6, &cancel, &ProgressEmitter::noop())
             .await
             .err()
             .expect("expected Cancelled after first block fetch");
