@@ -64,16 +64,26 @@ tempfile = "3"
 # in-test `tokio::time` virtualization that `wallet::refresh`'s
 # retry-backoff tests use to make exponential delays instantaneous
 # without sacrificing determinism.
-tokio = { version = "1", features = ["macros", "rt", "test-util"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 
 [[bench]]
 name = "multisig_v31"
 harness = false
 required-features = ["multisig"]
 
+[[bench]]
+name = "refresh_snapshot"
+harness = false
+required-features = ["bench-internals"]
+
 [features]
 default = []
 multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "serde_json", "hex", "chacha20poly1305", "hkdf", "sha2"]
+# Internal feature: re-exports otherwise-`pub(crate)` types under a
+# `__bench_internals` module so external Criterion harnesses can
+# measure them. Not part of the public API; consumers must not depend
+# on this feature.
+bench-internals = []
 
 [lints]
 workspace = true
