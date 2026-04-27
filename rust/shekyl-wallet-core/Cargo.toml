@@ -27,16 +27,15 @@ serde_json = { version = "1", optional = true }
 hex = { version = "0.4", optional = true }
 thiserror = "2"
 tracing = "0.1"
-# `produce_scan_result` (the snapshot-merge producer that replaces the
-# legacy `run_sync_loop`) is async and uses `tokio::time::sleep` for
-# retry backoff and `tokio::select!` for cancel-or-sleep races. The
-# producer is the production refresh path (not feature-gated): refresh
-# is inherently async because it polls the daemon, so tokio is an
-# unconditional wallet-core dep.
+# `produce_scan_result` (the snapshot-merge producer driving
+# `Wallet::refresh`) is async and uses `tokio::time::sleep` for retry
+# backoff and `tokio::select!` for cancel-or-sleep races. Refresh is
+# inherently async because it polls the daemon, so tokio is an
+# unconditional wallet-core dep (not feature-gated).
 tokio = { version = "1", features = ["time", "macros"] }
 # Cancellation token for cooperative shutdown of the producer between
-# blocks. Same dep the legacy `shekyl-scanner::sync` loop uses; the
-# producer reuses the type so callers can pass the same token through.
+# blocks. Callers pass the token through `RefreshOptions` so a single
+# token can govern the whole driver from the binary boundary down.
 tokio-util = { version = "0.7" }
 # `Wallet::refresh` constructs a `shekyl_scanner::Scanner` from
 # `AllKeysBlob`, which requires assembling a `ViewPair` over

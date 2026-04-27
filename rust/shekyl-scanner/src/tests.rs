@@ -961,17 +961,23 @@ mod ledger_proptest {
     }
 }
 
-/// Gate 7: Sync-loop bookkeeping tests using a mock block source.
+/// Gate 7: Ledger bookkeeping tests using a mock block source.
 ///
-/// **Bookkeeping test only.** This module exercises the sync loop's
-/// state-management behavior (progress monotonicity, reorg handling,
-/// spend detection tracking) using manually constructed blocks fed
-/// directly into the `(LedgerBlock, LedgerIndexes)` pair. It does NOT
-/// test the RPC layer, the daemon's block format, or the scanner's
-/// KEM/HKDF pipeline. A green Gate 7 means the sync loop's bookkeeping
-/// is correct against a cooperative mock — it does NOT mean the scanner
-/// works against a real daemon. Real-daemon coverage belongs in the
-/// stressnet gate.
+/// **Bookkeeping test only.** This module exercises the
+/// `(LedgerBlock, LedgerIndexes)` state-management primitives
+/// (progress monotonicity, reorg handling, spend-detection tracking)
+/// using manually constructed blocks fed directly into the pair. It
+/// does NOT test the RPC layer, the daemon's block format, or the
+/// scanner's KEM/HKDF pipeline. A green Gate 7 means the bookkeeping
+/// primitives are correct against a cooperative mock — it does NOT
+/// mean the scanner works against a real daemon. Real-daemon coverage
+/// belongs in the stressnet gate.
+///
+/// Originally written against `shekyl-scanner::sync::run_sync_loop`
+/// (retired 2026-04 with the Phase 2a refresh-driver landing); the
+/// tests target the ledger-mutation primitives that the producer side
+/// of `Wallet::refresh` now drives, so they remain load-bearing
+/// regardless of who owns the outer loop.
 #[cfg(test)]
 mod sync_bookkeeping {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};

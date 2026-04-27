@@ -2320,4 +2320,106 @@ the `ScanResult` typed-merge-surface entry (2026-04-25) above; the
 
 ---
 
+## 2026-04-27 — Retire `shekyl-scanner::sync::run_sync_loop` (Phase 2a/4b boundary)
+
+**Decision.** The standalone `shekyl-scanner::sync` module —
+`run_sync_loop`, `LiveLedger`, `SyncProgress`, `SyncError` — and the
+crate-level `rust-scanner` feature flag (with its `tokio` /
+`tokio-util` optional deps) are deleted in Phase 2a, commit 6. The
+`shekyl-scanner` crate becomes a pure scanning library: `Scanner`,
+extra-field parsing, KEM rederivation, `LedgerBlock` /
+`LedgerIndexes` extension traits, balance, coin selection. Block
+fetching, daemon polling, reorg detection, retry-with-backoff, and
+wallet-state mutation are owned exclusively by
+`shekyl-wallet-core::Wallet::refresh` via the snapshot-merge-with-retry
+pattern (entries 2026-04-26).
+
+The `shekyl-wallet-rpc::rust-scanner` Cargo feature is **not** affected
+by this commit. It enables the Phase 4b `(LedgerBlock, LedgerIndexes)`
+state space the JSON-RPC server reads from while the underlying
+`shekyl-wallet-rpc` crate is migrated off `wallet2.cpp` FFI. That
+state space is a JSON-RPC-side cache, not a parallel sync driver:
+`shekyl-wallet-rpc::scanner_state::LiveLedger` is a local type
+(unrelated to the deleted `shekyl-scanner::sync::LiveLedger` despite
+the shared name). Phase 4b deletes that surface as part of
+`shekyl-wallet-rpc`'s Rust-native cutover; until then it stays as the
+JSON-RPC server's read-side scaffolding.
+
+**Rationale.** The two sync drivers pre-Phase-2a were a structural
+contradiction:
+
+- `shekyl-scanner::sync::run_sync_loop` held an
+  `Arc<Mutex<LiveLedger>>` continuously across daemon polls and
+  mutated `(LedgerBlock, LedgerIndexes)` in place. This is the
+  separate-state-space pattern that the `RuntimeWalletState` audit
+  (2026-04-25) committed to eliminating: "one state, owned by
+  `Wallet`, no separate scanner-owned state space."
+- `Wallet::refresh` (Phase 2a) is the canonical driver. It uses the
+  snapshot-merge pattern, holds `&mut self` only briefly per merge,
+  validates `apply_scan_result` invariants on every batch, and
+  composes with the `&self`-queries / `&mut self`-mutations
+  cross-cutting locks decision (2026-04-25).
+
+Keeping both alive would have meant two writers for the same logical
+state, with the question "are they consistent?" reopening every time
+an integrator picks one over the other. One reader (the JSON-RPC
+cache surface, retired in Phase 4b) plus one writer (`Wallet::refresh`,
+the production driver) is coherent; two writers is the
+`wallet2.cpp` anti-pattern in miniature.
+
+**Rejected alternatives.**
+
+- *Keep `run_sync_loop` as a "bg-sync for mobile/desktop background
+  indexing" path alongside `Wallet::refresh`.* The use case is
+  already covered by α: a binary that wants continuous sync loops
+  `Wallet::refresh()` on a timer. The structured-concurrency
+  decision (2026-04-25, "tokio::spawn against `Wallet`, not against
+  a separate state space") already pinned that. If a future use
+  case genuinely needs a separate state space, it can be built then
+  against a current `Wallet`-aware contract; the pre-2a prototype
+  shouldn't survive on speculation.
+- *Delete `shekyl-wallet-rpc::rust-scanner` in the same commit.*
+  The JSON-RPC server's `(LedgerBlock, LedgerIndexes)` cache
+  serves a real consumer (the JSON-RPC handler set) until Phase 4b
+  rewires it through `Wallet`. Deleting it now means either taking
+  the RPC server offline or shipping a half-rewired hybrid; both
+  violate `15-deletion-and-debt.mdc`'s "every PR has a stated
+  scope." The retirement is filed in `docs/FOLLOWUPS.md` against
+  Phase 4b.
+- *Keep the `rust-scanner` feature on `shekyl-scanner` as a no-op
+  for one release cycle to soften the deletion.* No external
+  consumer exists — `shekyl-wallet-rpc::rust-scanner` activates the
+  optional `shekyl-scanner` dep but never the scanner crate's own
+  `rust-scanner` feature. A no-op feature is dead surface that
+  eventually grows zombie code, per `15-deletion-and-debt.mdc`.
+
+**Consequence.**
+
+- `shekyl-scanner` no longer depends on `tokio` or `tokio-util`. The
+  crate is `no_std`-compatible (subject to its existing `std`
+  feature) for the scanning core. `tokio` lives only in
+  `shekyl-wallet-core` (for `Wallet::refresh`'s producer) and the
+  binaries that consume it.
+- The Phase 1 `sync_bookkeeping` test module in
+  `shekyl-scanner/src/tests.rs` keeps its name but loses its
+  framing as a sync-loop test. It now exercises the
+  `LedgerBlock` / `LedgerIndexes` mutation primitives that the
+  producer side of `Wallet::refresh` drives, so the coverage
+  remains load-bearing regardless of who owns the outer loop.
+- Documentation cross-references to `shekyl-scanner::sync` remain
+  in earlier entries of this log (e.g., the cross-cutting-locks
+  entry's "the bg-sync loop holds `Arc<Mutex<LiveLedger>>`
+  because that loop does not see a `Wallet<S>`"). Per the
+  append-only discipline they are not edited; this entry is the
+  forward-pointer.
+
+**Reference.** Phase 2a refresh-driver branch, commit 6
+(`scanner: retire run_sync_loop and shekyl-scanner::rust-scanner
+feature`); the snapshot-merge-with-retry entry (2026-04-26) above;
+the `RuntimeWalletState` audit entry (2026-04-25) earlier in this
+log; `docs/FOLLOWUPS.md` ("`shekyl-wallet-rpc::rust-scanner`
+retirement", filed against Phase 4b in commit 7).
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

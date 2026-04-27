@@ -55,7 +55,6 @@ pub mod scan;
 pub mod shared_key;
 pub mod staker_pool;
 pub mod subaddress;
-pub mod sync;
 pub mod transfer;
 pub mod view_pair;
 

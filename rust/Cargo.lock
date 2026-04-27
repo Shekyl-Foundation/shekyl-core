@@ -3171,7 +3171,6 @@ dependencies = [
  "shekyl-wallet-state",
  "thiserror",
  "tokio",
- "tokio-util",
  "tracing",
  "zeroize",
 ]
