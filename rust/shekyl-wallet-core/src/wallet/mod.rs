@@ -151,6 +151,7 @@ pub mod lifecycle;
 pub mod merge;
 pub mod network;
 pub mod pending;
+pub mod refresh;
 pub mod signer;
 
 #[cfg(test)]

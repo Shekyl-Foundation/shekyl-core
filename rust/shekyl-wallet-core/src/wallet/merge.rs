@@ -13,9 +13,9 @@
 //! enforcement; the JSON-RPC binary additionally wraps `Wallet<S>`
 //! in `Arc<RwLock<…>>` for cross-thread access).
 //!
-//! # Two-stage merge
+//! # Three-stage merge
 //!
-//! 1. **Invariants.** Reject with
+//! 1. **Snapshot invariants.** Reject with
 //!    [`RefreshError::ConcurrentMutation`] if the scan result was
 //!    produced against a wallet snapshot that no longer matches the
 //!    current `Wallet<S>` state. Two checks fire:
@@ -30,8 +30,24 @@
 //!    (`Wallet::apply_scan_result invariants`, 2026-04-26) for the
 //!    full rationale.
 //!
-//! 2. **Apply.** With invariants satisfied, the merge runs in a
-//!    fixed order so reorg-rewind always precedes per-height
+//! 2. **Producer-contract invariants.** Reject with
+//!    [`RefreshError::MalformedScanResult`] if the result's internal
+//!    shape disagrees with itself: `block_hashes` carries an
+//!    out-of-range height, a duplicate height, or a height count that
+//!    does not match the range length; or `new_transfers` /
+//!    `spent_key_images` carry a height outside
+//!    `processed_height_range`. These are scanner-bug signals, not
+//!    races; the [`super::Wallet::refresh`] retry loop does not retry
+//!    on them. The post-loop assertion that the per-height transfer
+//!    and key-image maps are empty is the audit witness for "every
+//!    in-range entry was consumed exactly once."
+//!
+//!    See `docs/V3_WALLET_DECISION_LOG.md`
+//!    (`MalformedScanResult: producer-bug signal vs. ConcurrentMutation`,
+//!    2026-04-26) for the rationale.
+//!
+//! 3. **Apply.** With both invariant gates satisfied, the merge runs
+//!    in a fixed order so reorg-rewind always precedes per-height
 //!    additive events:
 //!
 //!    a. If `reorg_rewind` is `Some`, drop wallet state at and
@@ -87,13 +103,22 @@ impl<S: WalletSignerKind> Wallet<S> {
     /// the wallet's recorded state moved between the snapshot the
     /// scanner saw and the merge.
     ///
+    /// Returns [`RefreshError::MalformedScanResult`] when the result's
+    /// internal shape disagrees with itself (out-of-range or
+    /// duplicate heights, missing per-height block hash, residual
+    /// per-height entries after the apply loop). This is a
+    /// scanner-bug signal; the caller should **not** retry the
+    /// refresh, because re-running the scan against the same daemon
+    /// will produce the same contract violation. [`super::Wallet::refresh`]'s
+    /// retry loop honours this distinction.
+    ///
     /// # Atomicity
     ///
     /// The merge is all-or-nothing only against the invariant
-    /// gate: if invariants pass, the merge proceeds and applies
+    /// gates: if both gates pass, the merge proceeds and applies
     /// every event. Per-event errors do not currently exist —
     /// every `LedgerIndexes` mutator the merge calls is infallible
-    /// once the invariant has been verified.
+    /// once both invariants have been verified.
     pub fn apply_scan_result(&mut self, result: ScanResult) -> Result<(), RefreshError> {
         apply_scan_result_to_state(&mut self.ledger.ledger, &mut self.indexes, result)
     }
@@ -173,18 +198,75 @@ pub(crate) fn apply_scan_result_to_state(
     }
 
     if processed_height_range.start == processed_height_range.end {
-        // Empty range — apply stake_events only and return.
+        // Empty range — every per-height vector must also be empty;
+        // a non-empty vector against a zero-length range is a
+        // producer-contract violation, not a no-op.
+        if !block_hashes.is_empty() {
+            return Err(RefreshError::MalformedScanResult {
+                reason: "block_hashes non-empty for empty processed_height_range",
+            });
+        }
+        if !new_transfers.is_empty() {
+            return Err(RefreshError::MalformedScanResult {
+                reason: "new_transfers non-empty for empty processed_height_range",
+            });
+        }
+        if !spent_key_images.is_empty() {
+            return Err(RefreshError::MalformedScanResult {
+                reason: "spent_key_images non-empty for empty processed_height_range",
+            });
+        }
         apply_stake_events(indexes, stake_events);
         return Ok(());
     }
 
+    // --- Producer-contract gate ----------------------------------------
+    //
+    // The remaining checks ensure the result's internal shape is
+    // self-consistent. Failures are
+    // `RefreshError::MalformedScanResult` (producer bug, not race),
+    // distinct from the snapshot-disagreement gate above.
+
+    // `block_hashes` length must match the range length, every entry
+    // must lie inside the range, and no height may repeat. Together
+    // with len-equality these three rules pigeonhole into "exactly one
+    // entry per height in range," which is what the per-height apply
+    // loop relies on.
+    let range_len_u64 = processed_height_range
+        .end
+        .checked_sub(processed_height_range.start)
+        .expect("start <= end checked above");
+    let expected_len =
+        usize::try_from(range_len_u64).map_err(|_| RefreshError::MalformedScanResult {
+            reason: "processed_height_range length exceeds usize",
+        })?;
+    if block_hashes.len() != expected_len {
+        return Err(RefreshError::MalformedScanResult {
+            reason: "block_hashes length does not match processed_height_range length",
+        });
+    }
+
     let mut hash_at: BTreeMap<u64, [u8; 32]> = BTreeMap::new();
-    for (h, hash) in &block_hashes {
-        hash_at.insert(*h, *hash);
+    for (h, hash) in block_hashes {
+        if !processed_height_range.contains(&h) {
+            return Err(RefreshError::MalformedScanResult {
+                reason: "block_hashes entry outside processed_height_range",
+            });
+        }
+        if hash_at.insert(h, hash).is_some() {
+            return Err(RefreshError::MalformedScanResult {
+                reason: "block_hashes contains duplicate height",
+            });
+        }
     }
 
     let mut transfers_by_height: BTreeMap<u64, Vec<RecoveredWalletOutput>> = BTreeMap::new();
     for dt in new_transfers {
+        if !processed_height_range.contains(&dt.block_height) {
+            return Err(RefreshError::MalformedScanResult {
+                reason: "new_transfers entry outside processed_height_range",
+            });
+        }
         transfers_by_height
             .entry(dt.block_height)
             .or_default()
@@ -193,21 +275,28 @@ pub(crate) fn apply_scan_result_to_state(
 
     let mut key_images_by_height: BTreeMap<u64, Vec<[u8; 32]>> = BTreeMap::new();
     for ki in spent_key_images {
+        if !processed_height_range.contains(&ki.block_height) {
+            return Err(RefreshError::MalformedScanResult {
+                reason: "spent_key_images entry outside processed_height_range",
+            });
+        }
         key_images_by_height
             .entry(ki.block_height)
             .or_default()
             .push(ki.key_image);
     }
 
+    // --- Apply phase ---------------------------------------------------
+
     for h in processed_height_range.start..processed_height_range.end {
-        let Some(block_hash) = hash_at.get(&h).copied() else {
-            // Per-height block-hash record is required by the
-            // ScanResult contract. Treat a missing entry as a
-            // snapshot-disagreement: the producer did not provide
-            // the per-height hash needed to advance synced_height.
-            return Err(RefreshError::ConcurrentMutation {
-                wallet: ledger.height(),
-                result: h,
+        let Some(block_hash) = hash_at.remove(&h) else {
+            // Defensive: pre-validation (length match + in-range +
+            // no-duplicates) makes this branch unreachable. We keep it
+            // and surface as `MalformedScanResult` so audit can read a
+            // typed contract failure rather than a panic if the
+            // pre-validation logic ever drifts.
+            return Err(RefreshError::MalformedScanResult {
+                reason: "block_hashes missing entry for processed height",
             });
         };
 
@@ -218,6 +307,26 @@ pub(crate) fn apply_scan_result_to_state(
         if let Some(kis) = key_images_by_height.remove(&h) {
             let _spent = indexes.detect_spends(ledger, h, &kis);
         }
+    }
+
+    // Post-loop residue check: pre-validation rejects out-of-range
+    // entries, and the loop consumes every in-range one, so all three
+    // maps must be empty here. The audit witness for "every entry was
+    // consumed exactly once."
+    if !hash_at.is_empty() {
+        return Err(RefreshError::MalformedScanResult {
+            reason: "block_hashes had residual entries after per-height apply loop",
+        });
+    }
+    if !transfers_by_height.is_empty() {
+        return Err(RefreshError::MalformedScanResult {
+            reason: "new_transfers had residual entries after per-height apply loop",
+        });
+    }
+    if !key_images_by_height.is_empty() {
+        return Err(RefreshError::MalformedScanResult {
+            reason: "spent_key_images had residual entries after per-height apply loop",
+        });
     }
 
     apply_stake_events(indexes, stake_events);
@@ -501,7 +610,8 @@ mod tests {
     }
 
     #[test]
-    fn apply_rejects_missing_block_hash_for_processed_height() {
+    fn apply_rejects_short_block_hashes_as_malformed() {
+        // Range [1..3) demands two entries; only one supplied.
         let (mut ledger, mut indexes) = empty_state();
         let result = ScanResult {
             processed_height_range: 1..3,
@@ -513,6 +623,108 @@ mod tests {
             reorg_rewind: None,
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
-        assert!(matches!(err, RefreshError::ConcurrentMutation { .. }));
+        assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
+    }
+
+    #[test]
+    fn apply_rejects_duplicate_block_hash_height() {
+        // Two entries at the same height; second `BTreeMap::insert`
+        // would silently overwrite without the duplicate check.
+        let (mut ledger, mut indexes) = empty_state();
+        let result = ScanResult {
+            processed_height_range: 1..3,
+            parent_hash: None,
+            block_hashes: vec![(1, [0x11; 32]), (1, [0x99; 32])],
+            new_transfers: Vec::new(),
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
+        match err {
+            RefreshError::MalformedScanResult { reason } => {
+                assert!(
+                    reason.contains("duplicate"),
+                    "expected duplicate-height reason, got {reason}",
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_rejects_out_of_range_block_hash() {
+        // Range [1..3) but a block_hashes entry is at height 5.
+        let (mut ledger, mut indexes) = empty_state();
+        let result = ScanResult {
+            processed_height_range: 1..3,
+            parent_hash: None,
+            block_hashes: vec![(1, [0x11; 32]), (5, [0x55; 32])],
+            new_transfers: Vec::new(),
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
+        assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
+    }
+
+    #[test]
+    fn apply_rejects_out_of_range_transfer() {
+        // Range [1..3) but a transfer claims height 7.
+        let (mut ledger, mut indexes) = empty_state();
+        let output = make_recovered_output(4, 400);
+        let result = ScanResult {
+            processed_height_range: 1..3,
+            parent_hash: None,
+            block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32])],
+            new_transfers: vec![DetectedTransfer {
+                block_height: 7,
+                output,
+            }],
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
+        assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
+    }
+
+    #[test]
+    fn apply_rejects_out_of_range_key_image() {
+        // Range [1..3) but a key image claims height 9.
+        let (mut ledger, mut indexes) = empty_state();
+        let result = ScanResult {
+            processed_height_range: 1..3,
+            parent_hash: None,
+            block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32])],
+            new_transfers: Vec::new(),
+            spent_key_images: vec![KeyImageObserved {
+                block_height: 9,
+                key_image: [0xCC; 32],
+            }],
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
+        assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
+    }
+
+    #[test]
+    fn apply_rejects_events_against_empty_range() {
+        // start == end but events are present — producer contract
+        // says an empty range carries no events.
+        let (mut ledger, mut indexes) = empty_state();
+        let result = ScanResult {
+            processed_height_range: 1..1,
+            parent_hash: None,
+            block_hashes: vec![(1, [0x11; 32])],
+            new_transfers: Vec::new(),
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
+        assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
     }
 }

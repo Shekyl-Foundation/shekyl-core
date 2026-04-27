@@ -17,6 +17,7 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-simple-request-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc/simple-request" }
 shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+shekyl-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc", features = ["std"] }
 modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
 hkdf = { version = "0.12", optional = true }
@@ -27,15 +28,31 @@ zeroize = { version = "1", features = ["derive"], optional = true }
 hex = { version = "0.4", optional = true }
 thiserror = "2"
 tracing = "0.1"
+# `produce_scan_result` (the snapshot-merge producer that replaces the
+# legacy `run_sync_loop`) is async and uses `tokio::time::sleep` for
+# retry backoff and `tokio::select!` for cancel-or-sleep races. The
+# producer is the production refresh path (not feature-gated): refresh
+# is inherently async because it polls the daemon, so tokio is an
+# unconditional wallet-core dep.
+tokio = { version = "1", features = ["time", "macros"] }
+# Cancellation token for cooperative shutdown of the producer between
+# blocks. Same dep the legacy `shekyl-scanner::sync` loop uses; the
+# producer reuses the type so callers can pass the same token through.
+tokio-util = { version = "0.7" }
 
 [dev-dependencies]
 curve25519-dalek = { version = "4", features = ["alloc"] }
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
-shekyl-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc", features = ["std"] }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt"] }
+# Dummy-scanner construction in `wallet::refresh` tests needs
+# `Zeroizing<…>` for view/spend secret containers. Production
+# wallet-core code holds these only behind the `multisig` feature
+# (which already enables `zeroize`); test code reaches the same
+# helpers unconditionally.
+zeroize = { version = "1", features = ["derive"] }
 
 [[bench]]
 name = "multisig_v31"
