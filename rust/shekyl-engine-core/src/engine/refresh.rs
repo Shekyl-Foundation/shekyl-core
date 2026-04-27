@@ -3250,4 +3250,131 @@ mod refresh_handle_tests {
             other => panic!("expected MalformedScanResult, got {other:?}"),
         }
     }
+
+    // ── Corner-case tests (commit 5) ────────────────────────────
+
+    /// Dropping the handle fires the shared cancel token. The
+    /// `Drop` impl is the cancel-on-drop contract: anyone holding
+    /// a clone of the token (the producer task in production)
+    /// observes it and unwinds.
+    #[tokio::test]
+    async fn drop_fires_cancel_token() {
+        let (handle, _completion, _progress, cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+        assert!(!cancel.is_cancelled(), "no cancel observed pre-drop");
+
+        drop(handle);
+        assert!(cancel.is_cancelled(), "Drop fires cancel token");
+    }
+
+    /// Calling `cancel()` twice is a no-op after the first.
+    /// `CancellationToken::cancel` is documented as idempotent;
+    /// this test pins the contract at the [`RefreshHandle`]
+    /// surface so a future internal change cannot regress it
+    /// silently.
+    #[tokio::test]
+    async fn idempotent_cancel_is_no_op() {
+        let (handle, _completion, _progress, cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        handle.cancel();
+        assert!(cancel.is_cancelled());
+        // Second call returns without panicking and without
+        // re-firing (the token tracks its own state internally).
+        handle.cancel();
+        assert!(cancel.is_cancelled());
+    }
+
+    /// `mem::forget` skips the `Drop` impl entirely. The cancel
+    /// token does not fire and the producer task continues running
+    /// — exactly the leak semantics any Rust handle has under
+    /// `forget`. The test pins this so a reviewer reading the
+    /// code can confirm the cancel-on-drop contract is `Drop`-
+    /// scoped, not embedded in another method that runs
+    /// implicitly.
+    ///
+    /// Operational note: in production this would leak the
+    /// `_slot_guard` held by the producer task too — `forget` is
+    /// a programmer error, not a supported flow. We test the
+    /// behaviour to make the leak surface explicit, not to
+    /// endorse it.
+    #[tokio::test]
+    async fn mem_forget_does_not_fire_cancel() {
+        let (handle, _completion, _progress, cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        std::mem::forget(handle);
+        assert!(!cancel.is_cancelled(), "Drop did not run; token unfired");
+
+        // Manually fire the token to clean up the parked
+        // observation tasks.
+        cancel.cancel();
+    }
+}
+
+#[cfg(test)]
+mod refresh_slot_tests {
+    //! Unit tests for [`RefreshSlot`] — the single-flight
+    //! primitive [`Engine::start_refresh`] uses to gate concurrent
+    //! refreshes.
+    //!
+    //! These tests exercise the slot in isolation; concurrent
+    //! `start_refresh` against a real `Engine<S>` (the integration
+    //! surface that surfaces `RefreshError::AlreadyRunning`) is
+    //! covered by commit 6.
+    use super::RefreshSlot;
+
+    /// Fresh slot is unclaimed; `try_claim` succeeds and returns
+    /// a guard.
+    #[test]
+    fn claim_succeeds_when_unheld() {
+        let slot = RefreshSlot::new();
+        assert!(!slot.is_claimed());
+        let guard = slot.try_claim().expect("fresh slot is claimable");
+        assert!(slot.is_claimed());
+        drop(guard);
+    }
+
+    /// A second `try_claim` returns `None` while the first guard
+    /// is alive. This is the surface that surfaces
+    /// `RefreshError::AlreadyRunning` at the `start_refresh`
+    /// layer.
+    #[test]
+    fn claim_fails_when_held() {
+        let slot = RefreshSlot::new();
+        let _guard = slot.try_claim().expect("first claim succeeds");
+        assert!(slot.try_claim().is_none(), "second claim fails");
+        assert!(slot.is_claimed());
+    }
+
+    /// Dropping the guard releases the slot; a subsequent claim
+    /// then succeeds. This is the contract that makes the
+    /// `_slot_guard` discipline in `run_refresh_task` self-
+    /// healing across success / error / cancellation exits.
+    #[test]
+    fn release_on_guard_drop() {
+        let slot = RefreshSlot::new();
+        {
+            let _guard = slot.try_claim().expect("first claim succeeds");
+            assert!(slot.is_claimed());
+        }
+        assert!(!slot.is_claimed(), "guard drop released the flag");
+        let _second = slot
+            .try_claim()
+            .expect("slot reclaimable after first guard dropped");
+    }
+
+    /// Cloning the slot returns another handle to the same flag —
+    /// so the engine's stored slot and the producer task's clone
+    /// observe the same state. This is the property that makes
+    /// the slot-claim path lock-free against the producer's read/
+    /// write borrows of the engine.
+    #[test]
+    fn clone_shares_underlying_flag() {
+        let slot_a = RefreshSlot::new();
+        let slot_b = slot_a.clone();
+        let _guard = slot_a.try_claim().expect("first claim succeeds");
+        assert!(slot_b.is_claimed(), "clone observes the same flag");
+        assert!(slot_b.try_claim().is_none(), "clone cannot re-claim");
+    }
 }
