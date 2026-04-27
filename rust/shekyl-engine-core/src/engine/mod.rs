@@ -165,7 +165,9 @@ pub use network::Network;
 pub use pending::{
     FeePriority, PendingTx, ReservationId, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
 };
-pub use refresh::{RefreshOptions, RefreshReorgEvent, RefreshSummary};
+pub use refresh::{
+    RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
+};
 pub use signer::{SoloSigner, EngineSignerKind};
 
 use std::collections::BTreeMap;
