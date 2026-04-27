@@ -140,6 +140,15 @@ fetch. Splitting refresh into "scan against a read snapshot, produce a
 `ScanResult`, take the write lock to apply the result, drop" bounds
 write-lock duration to milliseconds even on long syncs.
 
+**Update (2026-04-27):** Partially superseded by *2026-04-27 — Engine
+architecture: actor model with staged migration from composition*.
+The lock-discipline reasoning still applies during Phase 2b
+composition (the orchestrator remains a composed type until Stage 2
+lands). Actor migration replaces this discipline from Stage 2 onward
+— `KeyEngine` becomes a `kameo` actor with message-passing
+isolation, and the `RwLock<Engine>` model retires for that
+subsystem at that point.
+
 ### `PendingTx` lifecycle: chain-state-tagged, reservation-bearing, three-method API
 
 `Wallet` exposes three methods for transaction sending:
@@ -2419,6 +2428,747 @@ feature`); the snapshot-merge-with-retry entry (2026-04-26) above;
 the `RuntimeWalletState` audit entry (2026-04-25) earlier in this
 log; `docs/FOLLOWUPS.md` ("`shekyl-wallet-rpc::rust-scanner`
 retirement", filed against Phase 4b in commit 7).
+## 2026-04-27 — `Wallet<S>` renamed to `Engine<S>`: privacy-correct framing for the local artifact
+
+**Decision.** The orchestrator type currently named `Wallet<S:
+WalletSignerKind>` is renamed to `Engine<S: EngineSignerKind>`. All
+related types follow: `WalletFile` → `EngineFile`, `WalletLedger` →
+`EngineLedger`, `WalletPrefs` → `EnginePrefs`, `WalletSignerKind` →
+`EngineSignerKind`, `OpenedWallet` → `OpenedEngine`,
+`WalletCreateParams` → `EngineCreateParams`, `WalletFileError` →
+`EngineFileError`, etc. Module paths follow: `shekyl-wallet-core` →
+`shekyl-engine-core`, `shekyl-wallet-file` → `shekyl-engine-file`,
+`shekyl-wallet-state` → `shekyl-engine-state`, `shekyl-wallet-rpc` →
+`shekyl-engine-rpc`, `shekyl-wallet-prefs` → `shekyl-engine-prefs`.
+
+The rename lands as a single mechanical commit following the
+discipline established by the
+[`WalletFileHandle` → `WalletFile` rename](#2026-04-25--walletfilehandle-renamed-to-walletfile),
+scoped to crate-internal renames plus their external consumers
+(`shekyl-cli` for help text, subcommand names, on-disk paths;
+`shekyl-ffi` for `Wallet*` re-exports renamed to `Engine*`).
+
+**Crate rename scope.** Every wallet-prefixed crate that exists as
+part of the wallet stack renames to `shekyl-engine-*`:
+
+- `shekyl-wallet-core` → `shekyl-engine-core`
+- `shekyl-wallet-file` → `shekyl-engine-file`
+- `shekyl-wallet-state` → `shekyl-engine-state`
+- `shekyl-wallet-rpc` → `shekyl-engine-rpc`
+- `shekyl-wallet-prefs` → `shekyl-engine-prefs` (purely wallet-side
+  preferences; no non-wallet consumers exist that would justify a
+  generic `shekyl-prefs` name)
+
+**Crates that explicitly stay as-is** (not renamed; their names
+reflect domain primitives or product surfaces, not wallet-stack
+composition):
+
+- Binaries with user-facing surfaces: `shekyl-cli`,
+  `shekyl-gui-wallet`, `shekyl-mobile-wallet` (binary names;
+  user-facing language handled per the next paragraphs).
+- Domain-primitive libraries: `shekyl-staking`, `shekyl-tx-builder`,
+  `shekyl-scanner`, `shekyl-proofs`, `shekyl-fcmp`, `shekyl-crypto-pq`,
+  `shekyl-crypto-hash`, `shekyl-encoding`, `shekyl-address`,
+  `shekyl-chacha`, `shekyl-consensus`, `shekyl-economics`,
+  `shekyl-economics-sim`, `shekyl-daemon-rpc`, `shekyl-logging`,
+  `shekyl-oxide`. These do not reference "wallet" in their crate
+  names; their internal types and modules adopt `Engine` terminology
+  only where they touched the renamed types.
+- `shekyl-ffi`: crate name retained (it is the FFI surface, not the
+  wallet); the `Wallet*` re-exports rename to `Engine*` to match the
+  underlying types.
+- `shekyl-shard-visual`: planned domain-primitive library crate
+  (deterministic shard rendering; see `docs/V3_SHARD_VISUALIZATION.md`).
+  Does not yet exist; pre-committed here to the stays-as-is list
+  because shard visualization is a chain-derived primitive consumed by
+  wallet, block explorer, and future tooling — it is not a wallet-stack
+  composition member and will not adopt the engine prefix when it is
+  created.
+
+**CLI user-facing language: locked to "engine" throughout.** From the
+rename PR forward, `shekyl-cli` adopts "engine" in help text, error
+messages, log targets, on-disk path conventions
+(`~/.shekyl/engines/`), subcommand names, and configuration keys.
+Examples: `shekyl-cli engine create`, `shekyl-cli engine refresh`,
+"Manage your Shekyl engine", engine file at
+`~/.shekyl/engines/<name>.engine`. Rationale: internal consistency
+reduces archaeology cost ("why are both terms live?"), matches the
+JSON-RPC method-name convention (`engine_get_balance` and similar)
+locked in this same rename, and is honest about what the tool
+manages (an engine that interprets the chain through your keys, not
+a container that holds your money). Users do not read CLI help
+frequently enough for early lock-in to be a usability cost; revision
+later (if user-interaction testing post-V3 ship surfaces friction)
+is bounded — one CHANGELOG entry plus a tracked CLI-flag deprecation.
+
+Two alternatives were considered and rejected:
+
+- *Split vocabularies — "wallet" user-facing, "engine" internal.*
+  Rejected on the same archaeology-cost grounds as the rejected
+  `wallet_*` JSON-RPC aliases below. Two vocabularies in the project
+  create permanent "I wonder why both terms exist" cost for every
+  future reader, in exchange for a familiarity benefit that is small
+  for CLI-only users and zero for everyone reading the code.
+- *Avoid both — "Manage your Shekyl account", "Manage your Shekyl
+  identity".* Replaces one ambiguity (wallet-vs-engine) with a
+  different one (what does "account" or "identity" mean?). "Account"
+  carries banking-system framing the rename specifically rejects;
+  "identity" carries KYC and AI-systems framing equally
+  inappropriate.
+
+**GUI / mobile user-facing language: deferred** to a separate
+marketing decision, resolved by user-interaction testing post-V3
+ship. GUI and mobile apps have a more user-visible surface (app
+store listings, splash screens, onboarding flows, in-app vocabulary
+the user sees daily) where the cost of early lock-in is larger than
+the CLI's. Locked to "wallet" in `shekyl-gui-wallet` and
+`shekyl-mobile-wallet` user-facing strings until that decision
+converges; the binary names (`shekyl-gui-wallet`,
+`shekyl-mobile-wallet`) stay as-is regardless because they are the
+product names, not wallet-stack composition members.
+
+**Downstream impact.** The rename's effect on the three downstream
+repos that consume `shekyl-engine-core` (the post-rename name):
+
+- `shekyl-gui-wallet`: internal types, module paths, and import
+  statements adopt the renames in a coordinated PR on the GUI repo's
+  `dev` branch. User-facing GUI strings stay "wallet" pending the
+  marketing decision. Binary name `shekyl-gui-wallet` stays as-is.
+- `shekyl-mobile-wallet`: same shape. Internal types/modules rename;
+  user-facing strings stay "wallet"; binary name stays as-is.
+- `monero-oxide`: vendors `shekyl-engine-core` (post-rename) per the
+  shekyl-first rule. Internal type/module references adopt the
+  renames in a coordinated PR on the fork's `dev` branch. The fork's
+  `monero-oxide` name stays — it is an upstream-tracking convenience,
+  not a wallet-stack member.
+
+The downstream PRs are not part of this commit; each downstream repo
+lands its rename in its own PR after the `shekyl-core` rename is in.
+
+**Rationale.** "Wallet" is a metaphor inherited from Bitcoin's
+branding where it was already structurally inaccurate — Bitcoin
+wallets do not hold coins; the chain holds the UTXO set, the wallet
+holds keys and local interpretation. For Shekyl the inaccuracy is
+*worse* because FCMP++ + per-output PQC keys make it a design
+property that no party (including the wallet's owner) has
+authoritative knowledge of "what they own" outside of the chain
+state plus key material. The local artifact does not store balances;
+it derives them. It does not hold transactions; it interprets them.
+It does not own outputs; it recognizes which outputs on the chain
+are spendable by its keys.
+
+The operative metaphor is **engine**: an active component that
+processes inputs (chain state, keys, user intent) into outputs
+(balances, transfers, signed transactions, archival service from
+V3.x onward). This framing is honest about what the code does and
+how the code relates to the chain.
+
+Three additional reasons make this rename worth doing now rather
+than later:
+
+- **The longer "Wallet" persists, the more it calcifies.** Each
+  subsequent commit's grep surface, doc cross-reference, and
+  reviewer mental model carries the framing forward. Phase 2a part 1
+  (refresh driver) just merged; Phase 2b has not yet started. This
+  is the cheapest moment to rename the orchestrator until the next
+  architectural inflection (which would itself be more expensive).
+- **The actor-architecture decision in the next entry interacts
+  with naming.** `Wallet` as a coordinator over actors is
+  grammatically awkward; `Engine` as a coordinator over actors is
+  grammatically natural. The rename is also a load-bearing
+  precondition for the actor-migration work to read cleanly.
+- **The CLI user-facing identity** ("manage your Shekyl engine") is
+  structurally more honest than ("manage your Shekyl wallet") — the
+  user does not have a wallet in any meaningful sense; they have a
+  tool that interprets a chain through their keys. Locking it now in
+  the CLI means the CLI-facing language is correct from the first
+  release; GUI/mobile follow when their marketing decision
+  converges.
+
+**Rejected alternatives.**
+
+- *Keep `Wallet`.* Carries Bitcoin's structural inaccuracy. The
+  "users expect the word wallet" argument is real for GUI/mobile and
+  is handled by the deferred-marketing-decision carve-out above; for
+  CLI, internal types, JSON-RPC, file paths, and code, the
+  design-integrity argument wins.
+- *Rename in V4.* Defers a known correctness issue into a future
+  release where it would be both more expensive (more code touching
+  it) and harder to justify (existing users would experience the
+  rename as churn). The cost-of-change curve is monotonically
+  rising; do it now.
+- *`Account`.* Banking-system framing. Implies balances are facts,
+  account holders exist as identities, etc. Fights the FCMP++
+  privacy story.
+- *`Identity`.* Loaded with both KYC connotations (identity
+  verification in financial services) and AI-systems connotations.
+  Wrong frame for a privacy currency.
+- *`Hub`.* Mechanical/networking-flavored ("USB hub"). Accurate in
+  the actor-coordinator sense but feels less personal than `Engine`
+  for a tool the user identifies with.
+- *`Lens`.* Captures the "perspective on chain state" framing
+  accurately but undersells the active processing the type performs
+  (signing, building, scanning, coordinating). The type is not just
+  a viewport.
+- *`Vault`.* Implies storage. The local artifact is not primarily a
+  storage container; it is an active processor.
+- *`Node`.* Already overloaded in blockchain contexts (a "node"
+  runs consensus). Naming collision rejected.
+- *Ship `wallet_*` aliases alongside `engine_*` for a deprecation
+  cycle.* Standard library-evolution practice for stable releases
+  with external consumers. Inapplicable here: chain block 0, no
+  testnet, no released binaries, no external integrators. Aliases
+  would create permanent "why are both names live?" archaeology
+  cost for every future reader, in exchange for a compatibility
+  window that benefits no actual user. The window for clean breaks
+  is now; deprecation cycles cost forever.
+
+**Scope: complete rename, no aliases, no compatibility shims.** The
+rename covers every `wallet`-named surface in the project except the
+explicit carve-outs (binary names, deferred-marketing GUI/mobile
+user-facing strings, domain-primitive crate names listed above):
+
+- All renamed crate names per the list above
+- All type names (`Wallet<S>`, `WalletFile`, `WalletLedger`,
+  `WalletPrefs`, `WalletSignerKind`, `OpenedWallet`,
+  `WalletCreateParams`, all `Wallet*Error` variants, etc.)
+- All module paths and import paths within the renamed crates and
+  their consumers
+- All JSON-RPC method names (`wallet_get_balance` →
+  `engine_get_balance`, etc.), parameter names, response field
+  names
+- All daemon-side identifiers in `shekyl-daemon-rpc` that reference
+  wallet-shaped concepts
+- All FFI identifiers exposed to C++ consumers through `cbindgen`
+  (re-exports in `shekyl-ffi` rename even though the crate itself
+  does not)
+- All CLI subcommand names, flag names, and user-facing strings in
+  `shekyl-cli` (per the locked CLI language above)
+- All log target names, tracing span names, metric names
+- All file-system path conventions (`~/.shekyl/wallets/` →
+  `~/.shekyl/engines/`)
+- All documentation, including the decision log itself going forward
+  (existing decision log entries are historical artifacts and stay
+  as written; new entries use `Engine` terminology)
+- GUI/mobile internal types and modules (in their own coordinated
+  PRs); GUI/mobile user-facing strings stay "wallet" pending the
+  marketing decision
+
+Any developer running pre-release dev builds with an existing
+`~/.shekyl/wallets/` directory moves it manually. Migration tooling
+for this case is unwarranted given the pre-release status.
+
+**Reference.** Rename commit (next commit on `dev`, single
+mechanical commit following the discipline of the
+[`WalletFileHandle` → `WalletFile` rename](#2026-04-25--walletfilehandle-renamed-to-walletfile));
+[`docs/CHANGELOG.md`](CHANGELOG.md) under
+`[Unreleased] / Documentation` documents this decision and the
+planned rename PR.
+
+---
+
+## 2026-04-27 — Engine architecture: actor model with staged migration from composition
+
+**Decision.** The `Engine<S>` orchestrator migrates from a
+composition shape (one struct, fixed field set, `&mut self`
+discipline serializing all mutations) to an **actor model**
+(independent subsystems with private state, communicating via typed
+message channels). The migration is **staged**, not single-cutover.
+
+**Locked stage sequence (end-to-end, this resolves "what comes
+when"):**
+
+1. **This docs commit** lands on `shekyl-core` `dev` (the entry you
+   are reading and its companions).
+2. **Mechanical rename commit** lands on `shekyl-core` `dev` (per
+   the preceding entry).
+3. **Branch 2 — `feat/phase1-refresh-handle`** lands on `dev`.
+   `RefreshHandle` / cancel-on-drop / progress channel against
+   renamed code. This closes Phase 2a.
+4. **Stage 1 — framework-agnostic trait abstractions.** `KeyEngine`,
+   `LedgerEngine`, `RefreshEngine`, `PendingTxEngine`,
+   `DaemonEngine`, `PersistenceEngine` defined as trait boundaries
+   with owned-or-borrowed inputs and owned returns; cross-subsystem
+   state access routes through trait calls rather than direct field
+   access. The composition shape persists; the trait abstractions
+   make Stage 2+ migrations mechanical. **No actor framework
+   dependency yet.** Lands as one or more commits on `dev` between
+   Branch 2 closing and Phase 2b cutting.
+5. **Stage 2 — `KeyEngine` migration.** Introduces the `kameo`
+   actor framework dependency (this is the first commit that adds
+   `kameo`). `KeyEngine` becomes a true actor with its own task and
+   message protocol; remaining subsystems continue as composition.
+   **Stage 2 must complete before Phase 2b cuts** because Phase
+   2b's StakeEngine work (Stage 3) depends on the actor framework
+   being present.
+6. **Phase 2b begins.**
+7. **Stage 3 — `StakeEngine` native-as-actor**, lands within Phase
+   2b. Built actor-shaped from inception (not
+   composition-then-migrate). Consensus-bond responsibilities only.
+8. **Phase 2b ships.**
+9. **Stage 4 — remaining subsystem migrations** (`LedgerEngine`,
+   `RefreshEngine`, `PendingTxEngine`, `DaemonEngine`,
+   `PersistenceEngine`), one at a time, each in a focused commit.
+   The `Engine<S>` type becomes a thin coordinator over actors.
+10. **V3.x window opens.**
+11. **Stage 5 — `ArchivalEngine` native build, sibling to
+    `StakeEngine`.** Activation gated on simulation closure of open
+    design questions per `docs/V3_STAKER_ARCHIVAL.md`.
+
+The end-state architecture (Stage 4 complete, Stage 5 active) has
+the following actors:
+
+- **`KeyEngine`** — owns key material; exposes
+  `sign(payload) -> Signature`,
+  `derive_subaddress(idx) -> Subaddress`, scan-time view-key
+  operations. Never reveals raw keys outside its own task.
+- **`LedgerEngine`** — owns the canonical chain interpretation
+  (`LedgerBlock`, `LedgerIndexes`); exposes
+  `apply_scan_result(result)`, `query_balance() -> Balance`,
+  `query_transfers(filter) -> Vec<Transfer>`, snapshot read for scan
+  production.
+- **`RefreshEngine`** — drives the scan loop; receives
+  `start_refresh(opts)`, internally orchestrates `KeyEngine`
+  (key-image generation, view-key scan) and `LedgerEngine`
+  (snapshot read, merge).
+- **`PendingTxEngine`** — owns pending-transaction state per the
+  two-phase protocol pinned in the *Pending-tx protocol* entry
+  below.
+- **`StakeEngine`** (Phase 2b) — owns the **consensus-bond
+  responsibilities only**: principal lock, lock-tier yield, unstake
+  schedule, principal-yield disbursement. Receives stake
+  registration / claim / unstake messages; produces `StakeEvent`
+  values consumed by `LedgerEngine` via the merge protocol.
+  **Archival service responsibilities are deliberately out of scope
+  for `StakeEngine`**; they live in the sibling `ArchivalEngine`
+  per below.
+- **`ArchivalEngine`** (V3.x, Stage 5) — owns the staker archival
+  mechanism per `docs/V3_STAKER_ARCHIVAL.md`: shard registration,
+  query routing, challenge response, archival-yield disbursement,
+  mandatory Tor/I2P routing for archival queries. **Sibling to
+  `StakeEngine`, not parent or child**, on three grounds:
+
+  - **Slashing-boundary integrity.** Archival failures slash the
+    archival reward stream only; principal stake's consensus-bond
+    yield is unaffected. Sibling actors with separate slashing
+    domains cannot cross-contaminate by construction; a
+    parent/child relationship would force them to share state and
+    create a structural risk that an archival-logic bug misroutes
+    a slash to principal.
+  - **Failure isolation.** `ArchivalEngine` has more failure modes
+    than `StakeEngine` (network partitions on archival queries,
+    shard storage corruption, challenge-response timeouts). A
+    failing `ArchivalEngine` must not bring down stake state.
+    Independent supervision lets each fail in isolation.
+  - **Hayekian shard market separation.** The shard market (priced
+    by scarcity per `docs/V3_STAKER_ARCHIVAL.md`) is conceptually
+    distinct from stake lifecycle. Modeling them as one actor
+    forces them to share an internal clock and message ordering
+    when they do not need to and should not.
+
+  Eligibility is gated by a clean cross-actor query:
+  `ArchivalEngine` asks
+  `StakeEngine::is_active_staker(entity_id) -> bool` before
+  accepting archival-shard claims. The gate is the message; the
+  response is authoritative; no shared state.
+
+- **`DaemonEngine`** — owns the RPC client; exposes
+  `get_height() -> u64`, `get_block(h) -> ScannableBlock`, etc.
+  Wraps connection state and retry policy.
+- **`PersistenceEngine`** — owns the engine file handle; exposes
+  `load_state() -> EngineLedger`, `save_state(ledger)`,
+  `rotate_password(old, new)`. Consolidates the `EngineFile` ↔ disk
+  boundary.
+
+`Engine<S>` becomes a thin coordinator type holding handles to the
+above actors plus runtime configuration (network, capability,
+signer phantom). External requests (CLI commands, JSON-RPC method
+calls) route through the coordinator to one or more actors and
+compose responses.
+
+A useful classification of the topology, relevant to the
+horizontal-scaling rationale below: actors that own canonical state
+(`KeyEngine`, `LedgerEngine`, `PendingTxEngine`, `StakeEngine`,
+`ArchivalEngine`, `PersistenceEngine`) run as single instances by
+design — multiple copies would either race on writes or duplicate
+secrets. Actors that transform inputs to outputs without owning
+persistent state (`RpcActor` and future stateless workers like
+`BlockScannerActor`, `ProofConstructorActor`, `ArchivalServerActor`)
+are horizontally scalable: a worker pool can serve concurrent
+requests in parallel against the single-instance stateful actors.
+V3 ships single-instance actors throughout; pool implementations
+are V4+ and gated on observed need.
+
+**Stage 2 first-actor choice — `KeyEngine`.** Among the stateful
+actors, `KeyEngine` is the right Stage-2 first migration on three
+grounds:
+
+- **Smallest internal state surface.** `KeyEngine` owns
+  `AllKeysBlob` and a small set of derivation cursors. Scope is
+  bounded; the migration footprint is small enough that the diff is
+  reviewable end-to-end.
+- **Cleanest privacy boundary.** The actor-architecture rationale
+  (below) lists privacy as the first-class motivation for the
+  migration. `KeyEngine` is where the privacy boundary is most
+  load-bearing — making `LedgerEngine` *unable* to read keys (only
+  request signatures) is the architecture's signature property.
+  Validating the pattern on the actor where it matters most is the
+  right ordering.
+- **Framework-friction surfaces against tests, with bounded blast
+  radius.** If `kameo` (or whatever framework Stage 2 adopts) has
+  unexpected friction (lifetime, `Send`/`Sync`, panic semantics,
+  supervision shape), it surfaces against `KeyEngine` first where
+  the cost of switching frameworks (or building in-house) is
+  bounded — only one actor exists, the rest of the codebase is
+  still composition.
+
+**Rationale.** The composition shape was chosen earlier in the
+rewrite on the implicit framing that "we should ship V3 quickly
+under external pressure." That framing is incorrect: this is a
+single-developer project with no released version, no community
+deadline, no users waiting on a specific shipping window.
+Architectural quality has time to develop. The decision to revisit
+composition is a direct consequence of acknowledging this.
+
+The actor model is structurally better-fit for what the engine does
+than composition, on six dimensions:
+
+- **Privacy architecture.** Composition has the `KeyEngine` and
+  `LedgerEngine` in the same struct, sharing an address space and
+  enforced separation only by code-review convention. Actor model
+  enforces the boundary at the protocol layer: the `LedgerEngine`
+  *cannot* read keys; it can only request signatures. View-key vs
+  spend-key separation across actors gives partial-compromise
+  isolation that composition cannot. A bug in chain interpretation
+  cannot leak spend authority. This is the right architecture for a
+  privacy currency.
+- **Process-isolation path.** The actor pattern is the prerequisite
+  for moving the `KeyEngine` to a separate process or device
+  eventually. Hardware-offload signing today is a special case
+  bolted onto composition; with actors it becomes "the
+  `KeyEngine`'s message channel happens to cross a process
+  boundary," which is mechanically the same code path as in-process
+  signing. The same pattern generalizes to multisig coordination
+  ("the `KeyEngine` talks to remote `KeyEngine`s over the network")
+  and future hardware-only variants.
+- **Long-tier staker upgradability.** Stakers locked into tier-3
+  (150,000 blocks ≈ 8-12 months) are not actively maintaining their
+  wallet binary. The set-and-forget design target requires that the
+  network can ship security patches and protocol updates that
+  long-tier stakers absorb without active intervention. **The actor
+  architecture *enables* the long-term path to per-actor upgrades,
+  hot replacement of individual subsystems, and (V5+) signed-actor-
+  patch distribution over the staker P2P network. V3 and V4 ship
+  restart-based upgrades**; the actor pattern does not deliver
+  hot-replacement automatically (Rust lacks Erlang-style hot
+  loading; see Rust-specific considerations below). What it
+  delivers is the architectural prerequisite — once V5+
+  infrastructure (foundation signing keys, supply-chain
+  verification, rollback semantics) exists, the actor topology is
+  ready to consume signed patches without rearchitecture.
+- **V3.x archival composability.** The staker archival mechanism
+  (per [`docs/V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md))
+  introduces new subsystems (archival serving, shard selection,
+  query routing) that ship as the `ArchivalEngine` actor in
+  Stage 5. Composition would force these into the existing struct
+  shape; actor model adds them as a new sibling actor with its own
+  protocols. The architecture grows naturally rather than requiring
+  the orchestrator to absorb them.
+- **Concurrency on read paths.** Composition's `&mut self`
+  discipline serializes all mutations, including blocking
+  concurrent reads during writes. Actor model lets reads run
+  concurrently with batched writes (snapshot-read pattern with
+  concurrent processing). This matters more for V3.x and beyond
+  (multiple concurrent JSON-RPC clients, archival queries from the
+  staker network) than for V3.0, but the architecture should
+  support those use cases without rework.
+- **Horizontal scaling within a process.** The actor pattern
+  naturally separates stateful from stateless components (per the
+  topology classification above): single-instance actors own
+  canonical state; worker-pool actors transform inputs to outputs
+  without owning state. This is the in-process equivalent of
+  Kubernetes-style horizontal scaling for stateless services —
+  bounded by configuration, with adaptive sizing based on observed
+  load. The first scale-out candidate is `RpcActor` (handling many
+  concurrent JSON-RPC clients); future candidates include
+  `BlockScannerActor` (parallel block scanning during initial
+  sync), `ProofConstructorActor` (high-volume signing), and
+  `ArchivalServerActor` (concurrent archival queries from many
+  wallets, ships with `ArchivalEngine` in V3.x). Composition cannot
+  express this cleanly because RPC handler logic and engine state
+  are entangled in the same struct; actors decouple them naturally.
+  V3 ships with single-instance actors throughout (no scale-out
+  implementation); the architecture enables pool support in V4+
+  when load patterns justify it.
+
+**RPC boundary model under actor architecture.** A prior decision
+pinned `Arc<RwLock<Wallet>>` at the binary boundary as the model for
+the `shekyl-engine-rpc` server (post-rename name) holding an engine
+handle, with reader-writer semantics serializing mutations. Under
+composition that framing was load-bearing: the `RwLock` was the
+mechanism that allowed many concurrent readers while serializing
+writes, since `&mut self` on the orchestrator otherwise blocked
+everything. Under actor architecture the framing partially
+supersedes itself: the `RwLock` becomes vestigial because actors
+handle their own concurrency internally (each actor processes its
+own message queue; readers and writers route through actor
+protocols, not through a shared `&mut self`). The shared-handle
+model itself is preserved — the server holds a registry of `Engine`
+instances, each instance is an actor topology, and RPC requests
+dispatch to the appropriate registry entry. Refinements that the
+actor architecture enables (each scheduled as a FOLLOWUPS item):
+
+- **Idle eviction.** An `Engine` that has not received requests in
+  some configured-at-implementation interval is torn down, zeroing
+  secrets, with subsequent requests re-opening from the file. The
+  interval default is intentionally not pinned here; it is chosen
+  at implementation time with documented rationale rather than
+  fixed by speculation.
+- **Explicit `engine_lock` operation.** Immediate teardown for
+  security-sensitive contexts.
+- **Multi-engine registry from day one.** The server holds a
+  `HashMap<EngineId, EngineHandle>` rather than a single shared
+  handle.
+- **Snapshot reads bypassing the actor message queue where safe.**
+  Read-only operations from `LedgerEngine` (balance and transfer
+  queries) serve concurrent requests without queue contention.
+- **Multi-peer routing for archival queries** (Stage 5). The
+  wallet's daemon-selection logic supports multi-peer archival
+  routing alongside single-daemon for non-archival use. Foundation
+  `--no-prune` archival nodes are the floor; staker peers
+  (`ArchivalEngine` instances) are the primary path. The
+  `assemble_tree_path_for_output` RPC path is designed against this
+  multi-source model from the start.
+
+The alternative considered was per-request engine open: each RPC
+request opens the engine file, performs its operation, closes the
+file, with an in-process cache to amortize KDF cost. Rejected
+because under actor architecture the cost of spawning the entire
+actor topology per request is substantial (file open, KDF, key
+derivation, ledger reconstruction, indexes rebuild, prefs decryption
+plus actor topology spin-up), the cache-key-includes-password
+attack surface is real, and stateful operations like pending-tx
+build-then-submit fight the per-request model. The shared-handle
+model with the refinements above captures most security benefits of
+per-request (bounded secret residency via idle eviction; zero
+residency via explicit lock) while preserving performance.
+
+The staged-migration approach is chosen over single-cutover because:
+
+- The Phase 2a refresh-driver work just merged. Tearing down the
+  composition to rebuild as actors immediately would discard recent
+  work whose correctness has been validated. Staged migration keeps
+  the validated work and adds actor structure incrementally.
+- Each stage produces a working `Engine`. The mid-state (some
+  actors, some composition) is awkward but bounded; each migration
+  is a focused, reviewable commit.
+- Stage 2 (`KeyEngine` migration) tests the actor pattern on the
+  smallest, cleanest subsystem (per the three-grounds defense
+  above) before committing to migrate the more complex ones. If
+  the migration reveals that Rust's actor ergonomics have
+  unexpected friction (covered below), we learn that for low cost
+  rather than after rebuilding everything.
+- Stage 3 (Phase 2b building `StakeEngine` natively) is the
+  cheapest way to validate "actor-from-inception" against
+  "composition-then-migrate." If actor-from-inception is harder
+  than expected, we have data to inform Stage 4 sequencing.
+
+**Rust-specific considerations.** Erlang/Elixir provide actor
+primitives at the language and runtime level (lightweight processes,
+preemptive scheduling, supervision trees, message passing as syntax,
+hot code loading). Rust does not. Specifically:
+
+- **No language-level supervision.** Supervision trees must be
+  built via crates (`actix`, `kameo`, `ractor`) or in-house.
+  Stage 1 is **framework-agnostic**: trait abstractions land with
+  no actor-framework dependency. Stage 2 picks `kameo` as the
+  working framework and is the validation point. The framework
+  choice is itself revisable; if Stage 2 surfaces dealbreaker
+  friction, the cost of switching frameworks is bounded because
+  only one actor exists.
+- **No hot code loading.** Erlang can replace a module's code while
+  processes run; Rust cannot. **Upgrade-via-restart is the V3/V4
+  model.** WASM-based actor implementation is a candidate post-V4
+  path for Erlang-style hot loading, considered architecturally
+  but not committed to.
+- **Cooperative scheduling.** tokio tasks yield at `await` points;
+  a CPU-bound loop without explicit `yield_now()` blocks the
+  executor. Discipline: long-running CPU work (FCMP++ proof
+  construction, scanning) yields explicitly. This is also a
+  discipline composition would benefit from but does not enforce.
+- **Static message types.** Each actor's message enum is statically
+  typed. This is more verbose than Erlang's dynamic dispatch but a
+  net positive for a privacy currency where protocol bugs are
+  catastrophic. Compile-time protocol checking is worth the
+  ergonomic cost.
+
+None of these are dealbreakers for our use case. The tradeoff is
+acknowledged: the actor pattern in Rust gives most of the benefits
+with rougher ergonomics than in Erlang, and the upgrade-mechanism
+ceiling is restart-based (V3-V4) or WASM-based (V5+) rather than
+true hot-loading.
+
+The explicit non-decisions (deferred):
+
+- **Actor framework lock-in.** Stage 1 lands framework-agnostic.
+  Stage 2 picks `kameo` as the working framework and validates. If
+  validation fails, switch frameworks (or build in-house) at low
+  cost since only one actor exists. Framework choice is locked at
+  Stage 2 conclusion.
+- **Supervision strategy.** Restart-on-panic,
+  restart-with-state-recovery, fail-the-engine — these are
+  per-actor decisions made during each actor's migration, not a
+  single up-front choice.
+- **Patch distribution mechanism.** The signed-actor-patch-over-P2P
+  vision is V5+ and depends on infrastructure (foundation signing
+  key policy, supply-chain verification, rollback semantics) that
+  does not exist. V3-V4 ships restart-based upgrades; the
+  architecture permits the eventual evolution.
+- **WASM-based actors.** Considered as the long-term path to hot
+  loading; not committed to. Stages 1-5 ship native Rust actors.
+  Any WASM transition is post-Phase-2b and gated on actual
+  upgrade-friction evidence rather than speculation.
+- **Scale-out implementation for stateless actors.**
+  Architecturally enabled by the actor migration; deferred as
+  concrete implementation. V3 ships single-instance actors
+  throughout. Triggering implementations is gated on observed need
+  (load patterns, sync time complaints) rather than speculative
+  optimization. Pool configuration parameters (max workers, idle
+  timeout, backpressure policy) are designed when the first pool
+  is implemented, not now.
+
+**Rejected alternatives.**
+
+- *Stay composition, never migrate.* Forecloses the privacy
+  architecture improvements, the process-isolation path, the
+  long-tier staker upgrade story, the V3.x archival composability,
+  and the horizontal-scaling path for stateless workers. Each is
+  independently load-bearing for the project's design goals. The
+  composition convenience does not outweigh five structural costs.
+- *Single-cutover migration (rebuild now, all-at-once, before any
+  further work).* Discards validated Phase 2a work. Concentrates
+  risk into one large, hard-to-review change. Removes the option to
+  learn from incremental migration and adjust. The staged approach
+  is strictly superior absent ship-pressure (which we do not have).
+- *Migrate to Erlang/Elixir.* Crypto ecosystem maturity gap, FCMP++
+  performance unsupportable in BEAM, two-language project (Rust
+  NIFs for crypto + Elixir for orchestration) doubles the
+  maintenance surface. Considered and rejected; Rust + actor
+  discipline is the right tradeoff.
+- *Use a different Rust paradigm (e.g., async streams,
+  channel-based pipelines without actor framework).* Reinvents
+  actor primitives ad-hoc. The actor frameworks exist; using one
+  is cheaper than rolling our own. Stage 2 evaluates whether
+  `kameo` (or alternative) fits; the framework decision is bounded.
+- *Rename to `Engine` but keep composition.* The rename and the
+  architecture decision are independent in principle. In practice
+  they are co-decided because the rename's "Engine as active
+  processor" framing is grammatically aligned with
+  actor-as-coordinator; keeping composition under the new name
+  would carry a small framing inconsistency. Doing both together
+  is cleaner than doing one without the other.
+- *Per-request RPC engine open (each JSON-RPC request opens the
+  engine file, performs the operation, closes; with in-process
+  cache).* Considered for security properties (bounded secret
+  residency, crash isolation per request, no in-memory state
+  drift). Rejected under actor architecture because spawning the
+  full actor topology per request is expensive, the
+  cache-key-includes-password attack surface is real, and stateful
+  operations (pending-tx build-then-submit, refresh state across
+  calls, multi-actor coordination) fight the per-request model.
+  The shared-handle model with idle eviction and explicit lock
+  captures the security benefits at lower cost. Detailed in the
+  "RPC boundary model under actor architecture" paragraph above.
+- *Make `ArchivalEngine` a sub-actor of `StakeEngine` (parent/child)
+  rather than a sibling.* Rejected on the three structural grounds
+  enumerated above: slashing-boundary integrity requires
+  independent slashing domains; failure isolation requires
+  independent supervision; the Hayekian shard market is
+  conceptually distinct from stake lifecycle. The cross-actor
+  `is_active_staker(entity_id)` query gives sibling actors the
+  eligibility gate they need without coupling state.
+
+**Reference.** Stage 1 commits (post-Branch-2, pre-Phase-2b on
+`dev`); preceding entry *2026-04-27 — `Wallet<S>` renamed to
+`Engine<S>`*; following entry *2026-04-27 — Pending-tx protocol:
+two-phase build/submit/discard*; `docs/FOLLOWUPS.md` Stage 2 /
+Stage 3 / Stage 4 / Stage 5 items, RPC boundary refinements item,
+no-tradeability invariant item, V4+ horizontal scaling, V5+ signed-
+patch distribution; `docs/V3_STAKER_ARCHIVAL.md` (the post-rename
+canonical home for archival mechanism design);
+`docs/V3_SHARD_VISUALIZATION.md` (companion visualization design).
+
+---
+
+## 2026-04-27 — Pending-tx protocol: two-phase build/submit/discard over single-phase callback
+
+**Decision.** The `PendingTxEngine` actor exposes the **two-phase
+pending-transaction protocol** as the canonical API for transaction
+sending: `build(request) -> PendingTx`,
+`submit(id) -> TxHash`, `discard(id) -> ()`, with `inspect(id)`,
+`adjust_fee(id, params)`, `sign_partial(id, share)`,
+`aggregate_signatures(id, shares)`, and `export(id)` as additional
+pending-tx operations. The single-phase
+`send(request, confirm_fn) -> Result<TxHash>` callback model is
+rejected.
+
+**Rationale.** The callback model collapses for use cases beyond
+simple interactive transfer:
+
+- **Air-gapped signing requires the pending tx to be a transferable
+  object that crosses process and machine boundaries.** The
+  callback model assumes the same process holds the request,
+  presents the confirmation, and submits or discards. Air-gapped
+  flow needs the pending tx to be exported to a watch-only machine,
+  signed offline, then re-imported for submission. The callback is
+  not portable.
+- **Multisig coordination requires the pending tx to be
+  inspectable, partially-signable, and aggregable across N
+  participants.** The "yes or no" callback cannot express "I am one
+  of N parties; here is my partial signature." The pending tx is a
+  distributed object whose state evolves through partial signatures
+  from multiple wallets; that is a multi-message protocol, not a
+  single callback.
+- **GUI fee adjustment requires the pending tx to be re-buildable
+  with different fee parameters.** A user reviewing the proposed
+  transaction may want to adjust the fee or re-balance the inputs.
+  The callback would need a richer protocol that ends up being the
+  two-phase model with extra wrapping.
+
+The two-phase model handles the simple case slightly more verbosely
+(three calls instead of one) but handles the complex cases
+naturally. The complex cases are explicit project goals (Phase 2c
+multisig, Phase 2d air-gapped). Optimizing for the simple case at
+the cost of the complex ones is the wrong tradeoff.
+
+Under the actor architecture (preceding entry), the two-phase model
+expresses cleanly as `PendingTxEngine` messages. The actor owns
+pending-tx state and can support partial signatures, fee
+adjustment, and export as additional messages without breaking the
+core build/submit/discard contract.
+
+**Rejected alternatives.**
+
+- *Single-phase send with confirmation callback
+  (`send(request, confirm_fn) -> Result<TxHash>`).* Rejected on the
+  three grounds above. The callback assumes one process, one
+  signer, one fee decision; multisig and air-gapped break all
+  three.
+- *Hybrid (single-phase by default, two-phase only when the caller
+  asks).* Doubles the API surface. Either the simple case uses the
+  two-phase API verbosely (three calls), which is fine, or the
+  simple case is so common it justifies a separate API, which it
+  is not. Pick one model and stay with it.
+
+**Reference.** The earlier *2026-04-25 — `PendingTx` lifecycle:
+chain-state-tagged, reservation-bearing, three-method API* entry
+(above in this log) pinned the build/submit/discard methods on
+`Wallet<S>`. This entry pins the same protocol as the canonical
+`PendingTxEngine` actor message protocol post-Stage-4 and confirms
+the rejection of the alternative single-phase callback model
+surfaced during the actor architecture decision. Preceding entry
+*2026-04-27 — Engine architecture: actor model with staged
+migration from composition*.
 
 ---
 

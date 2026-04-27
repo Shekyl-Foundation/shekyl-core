@@ -69,6 +69,198 @@ citing in a review.
   Target: V3.0 if the upstream change lands in time, otherwise
   rolled into the V3.1 audit-response cleanup batch.
 
+- **Stage 2 — `KeyEngine` migration to actor.** Migrate key material
+  + signing operations from a composed field on `Engine<S>` (post-
+  rename name) into a true actor with its own task and message
+  protocol. The `KeyEngine` actor owns `AllKeysBlob` privately;
+  exposes `sign(payload) -> Signature`,
+  `derive_subaddress(idx) -> Subaddress`, and view-key scan
+  operations via message channels; never reveals raw key material
+  outside its own task. Validates the actor pattern on the
+  smallest, cleanest subsystem (per the three-grounds defense in
+  the 2026-04-27 actor-architecture decision-log entry — smallest
+  internal state, cleanest privacy boundary, framework friction
+  surfaces with bounded blast radius). Sets up the
+  view-key-vs-spend-key separation as a Stage 4 sub-decision. Tests
+  `kameo` (the framework choice locked at Stage 2) against a real
+  subsystem; if framework limitations surface here, the cost of
+  switching is bounded because only one actor exists.
+
+  *Blocks on:* Stage 1 actor-friendly trait boundaries (the
+  framework-agnostic refactor that lands between Branch 2 closing
+  and Phase 2b cutting).
+
+  *Target:* before Phase 2b stake-lifecycle work begins.
+
+  *Definition of done:* `KeyEngine` runs as a `kameo` actor with
+  its own task; `Engine<S>` holds a `KeyEngineHandle` instead of
+  `keys: AllKeysBlob`; all cross-subsystem key access routes
+  through message protocols; the unsafe surface that
+  `AllKeysBlob` lives in is fully contained within the actor's
+  task — no `&AllKeysBlob` escapes; tests cover the actor's
+  protocol (mock receivers, contract tests); message-overhead
+  benchmark establishes the actor signing path within 5% of the
+  composition baseline relative to the underlying FCMP++
+  verification cost (the messaging cost should be lost in the
+  noise of the actual signing work). The benchmark threshold is
+  bench-vs-bench against the composition baseline rather than an
+  absolute latency target; absolute targets at this layer are
+  speculative.
+
+  *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
+  Engine architecture: actor model with staged migration from
+  composition*.
+
+- **Stage 3 — `StakeEngine` native actor build.** Build the Phase
+  2b stake-lifecycle subsystem as a native actor from inception,
+  not as composition-then-migrate. The `StakeEngine` owns the
+  stake state machine (broadcast, unconfirmed, locked, accruing,
+  claimable, unstaking, fully unstaked) for **consensus-bond
+  responsibilities only** (principal lock, lock-tier yield,
+  unstake schedule, principal-yield disbursement). Receives stake
+  registration / claim / unstake messages; produces `StakeEvent`
+  values consumed by `LedgerEngine` via the merge protocol.
+  Archival service responsibilities are deliberately out of scope;
+  they live in the sibling `ArchivalEngine` (V3.x; Stage 5). Phase
+  2b is the natural validation point for "actor-from-inception"
+  vs "composition-then-migrate"; building stake-lifecycle
+  actor-shaped from the start avoids a redundant migration later
+  and lets Phase 2b's design surface inform Stage 4 sequencing.
+
+  *Blocks on:* Stage 2 `KeyEngine` migration complete (validates
+  the pattern); Phase 2b planning session pinning stake
+  state-machine shape.
+
+  *Target:* as the first major commit in Phase 2b.
+
+  *Definition of done:* `StakeEngine` runs as a `kameo` actor with
+  its own task; the stake state machine lives entirely within the
+  actor (no external code holds direct references to stake state);
+  `StakeEvent` flows from `StakeEngine` to `LedgerEngine` via the
+  message protocol; tests cover stake state-machine transitions in
+  isolation (no full `Engine<S>` setup required); refresh-time
+  reconciliation routes through the actor's message protocol (no
+  direct field access); `is_active_staker(entity_id) -> bool`
+  query exposed as a public message for `ArchivalEngine` (Stage 5)
+  consumption.
+
+  *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
+  Engine architecture: actor model with staged migration*.
+
+- **Stage 4 — Remaining-subsystem migrations.** Migrate
+  `LedgerEngine`, `RefreshEngine`, `PendingTxEngine`,
+  `DaemonEngine`, and `PersistenceEngine` from composition to
+  actors, one at a time, each in its own focused commit. End
+  state: `Engine<S>` holds only actor handles plus runtime
+  configuration; all business logic lives in actors. Each
+  migration is independently reviewable; the mid-state always
+  runs.
+
+  *Suggested sequence:*
+    1. `DaemonEngine` — small state, pure I/O wrapper, low risk.
+    2. `PersistenceEngine` — small state, file-bound, naturally
+       isolated.
+    3. `PendingTxEngine` — moderate state, well-defined protocol
+       (per the 2026-04-27 *Pending-tx protocol* decision-log
+       entry).
+    4. `RefreshEngine` — coordinates `LedgerEngine` + `KeyEngine`,
+       tests cross-actor message flow at scale.
+    5. `LedgerEngine` — largest state surface, most consumers;
+       migrate last after everything else is tested.
+
+  *Blocks on:* Stage 3 `StakeEngine` complete; Phase 2b shipped.
+
+  *Target:* post-Phase-2b, incremental. No fixed deadline; each
+  migration lands when the prior one's validation is complete.
+
+  *Definition of done (per migration):* subsystem runs as a
+  `kameo` actor; all consumers route through the actor's message
+  protocol; the composition field on `Engine<S>` is removed; tests
+  validate the actor's protocol in isolation; no regression in
+  end-to-end Engine tests.
+
+  *Definition of done (overall, when all five complete):*
+  `Engine<S>` holds only actor handles + runtime configuration;
+  all business logic lives in actors; **view-key vs spend-key
+  separation across actors is enforced** — the `LedgerEngine`
+  actor receives a derived view-key capability for scanning
+  operations; the spend key never escapes `KeyEngine`'s task;
+  compromise of `LedgerEngine` cannot leak spend authority. This
+  is the privacy-architecture rationale realized as a concrete
+  invariant. Decision log entry confirms the migration is complete
+  and pins the resulting architecture as canonical.
+
+  *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
+  Engine architecture: actor model with staged migration*.
+
+- **RPC boundary refinements — idle eviction, `engine_lock`,
+  multi-engine registry, snapshot reads, multi-peer archival
+  routing.** Implement the refinements to the shared-handle model
+  that the 2026-04-27 actor-architecture decision-log entry pins
+  as architectural commitments:
+
+  1. **Idle eviction.** `shekyl-engine-rpc` server (post-rename
+     name) tears down `Engine` instances after a configurable
+     idle timeout, zeroing secrets via the actor topology
+     shutdown. Subsequent requests re-open from the file (paying
+     the KDF cost once per idle cycle). Bounds secret residency
+     without per-request overhead. **Default interval: TBD with
+     documented rationale at implementation** — chosen against
+     observed open-cost and observed access patterns rather than
+     fixed by speculation.
+  2. **`engine_lock` RPC method.** New method that immediately
+     tears down a specific `Engine` instance and zeros its
+     secrets. Subsequent operations on that engine require
+     re-open. Use case: high-value operations followed by
+     explicit lock-down.
+  3. **Multi-engine registry.** Server holds a
+     `HashMap<EngineId, EngineHandle>` rather than a single shared
+     handle. Each RPC request specifies its target engine. Engines
+     are independently created, opened, locked, and evicted.
+  4. **Snapshot reads from `LedgerEngine`.** Read-only operations
+     (balance queries, transfer history) bypass the actor message
+     queue by reading immutable snapshots that `LedgerEngine`
+     exposes atomically. This is the concurrency-on-read-paths
+     benefit the actor architecture enables, made concrete on the
+     highest-traffic queries.
+  5. **Multi-peer archival routing (Stage 5 dependency).** The
+     wallet's daemon-selection logic supports multi-peer archival
+     routing alongside single-daemon for non-archival use. The
+     `assemble_tree_path_for_output` RPC path is designed against
+     a multi-source model from the start — foundation `--no-prune`
+     archival nodes are the floor; staker peers
+     (`ArchivalEngine` instances per `docs/V3_STAKER_ARCHIVAL.md`)
+     are the primary path. This refinement ships in V3.x with
+     `ArchivalEngine` (Stage 5) but the RPC client surface is
+     designed in Stage 4 so the V3.x ship is purely additive.
+
+  *Blocks on:* items 1-3 require Stage 4 `Engine<S>` to be a thin
+  coordinator over actors. Item 4 requires Stage 4 `LedgerEngine`
+  migration specifically. Item 5 requires Stage 4
+  `DaemonEngine` migration (the multi-peer routing surface) and
+  pairs with Stage 5 (`ArchivalEngine`) when the V3.x archival
+  mechanism ships.
+
+  *Target:* items 1-4 within Stage 4 work or immediately
+  following; load-bearing for V3.0 ship security properties. Item
+  5 client-side surface lands in Stage 4; activation lands with
+  Stage 5 in V3.x.
+
+  *Definition of done:* idle timeout configurable via
+  `shekyl-engine-rpc` config with documented default-rationale;
+  secrets verifiably zeroed on eviction; `engine_lock` JSON-RPC
+  method present, documented in OpenAPI spec, tested; multi-engine
+  registry implemented with integration tests for multiple
+  concurrent engines; `LedgerEngine` snapshot read API exposed
+  with concurrent-read tests verifying queries do not block during
+  writes; multi-peer routing surface designed and tested against
+  a mock multi-source archival oracle (real activation gated on
+  Stage 5).
+
+  *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
+  Engine architecture: actor model with staged migration* §"RPC
+  boundary model under actor architecture"; `docs/V3_STAKER_ARCHIVAL.md`.
+
 ---
 
 ## V3.1 — audit response and stressnet gates
@@ -133,6 +325,65 @@ citing in a review.
   usage will exercise this. Approach: reconstruct historical tree state
   on demand using per-block root snapshots already stored by
   `store_curve_tree_root_at_height`.
+
+- **Resolution: FCMP++ historical-reference cutover via Stage 5
+  `ArchivalEngine` (V3.x).** The bug above ("Historical tree path
+  assembly uses current LMDB state") is resolved by the V3.x staker-
+  distributed archival mechanism, not by an in-place fix to
+  `assemble_tree_path_for_output`. Architecture pin:
+
+  1. **Foundation `--no-prune` archival as floor.** The Foundation
+     runs full-history archival nodes from V3.0 launch. These serve
+     as the always-available floor for historical tree-path queries;
+     the bug's failure mode is masked at the wallet RPC layer
+     because the wallet routes historical reference-block queries to
+     a `--no-prune` source that *does* hold the state at the
+     reference height.
+  2. **Staker-distributed archival via `ArchivalEngine` sibling
+     actor as the primary path.** Stakers opt into archiving shards
+     of chain history (per `docs/V3_STAKER_ARCHIVAL.md`); the
+     `ArchivalEngine` Stage 5 actor (sibling to `StakeEngine`,
+     bifurcated for slashing-domain integrity per the 2026-04-27
+     actor-architecture decision-log entry) responds to historical
+     tree-path queries from wallet clients. As staker archival
+     coverage grows, the Foundation floor recedes from primary path
+     to fallback.
+  3. **`assemble_tree_path_for_output` RPC routing designed against
+     multi-source model from the start.** The wallet client's
+     daemon-selection logic for historical-reference queries
+     supports multi-peer archival routing — it can interrogate
+     multiple staker peers, cross-validate the assembled path
+     against the per-block root from `store_curve_tree_root_at_height`,
+     and prefer staker peers over the Foundation floor when
+     coverage exists. The multi-peer routing client surface is
+     drafted in Stage 4 (`DaemonEngine` migration); activation
+     pairs with Stage 5 (`ArchivalEngine`) shipping in V3.x.
+  4. **Per-block root snapshots remain the verification anchor.**
+     `store_curve_tree_root_at_height` continues to store
+     per-block roots; the verification protocol for an assembled
+     historical path is "the assembled path hashes to the snapshot
+     root for the reference height" — this is unchanged from the
+     bug's proposed approach. The change is *who computes the
+     assembly* (staker peers, not the local LMDB) and *how the
+     wallet routes the query* (multi-peer, not single-daemon).
+
+  *Target:* V3.x — pairs with Stage 5 `ArchivalEngine` ship.
+  Simulation work (per `docs/V3_STAKER_ARCHIVAL.md`) gates the
+  exact V3.x dot-version.
+
+  *Definition of done:* the wallet's
+  `assemble_tree_path_for_output` RPC client routes through the
+  multi-peer archival mechanism; cross-validates against per-block
+  root snapshots; integration tests cover historical-reference
+  queries against multi-source archival mocks; stressnet (Phase
+  7.7) exercises the path against realistic reorg and varied
+  reference-block usage.
+
+  *Reference:* `docs/V3_STAKER_ARCHIVAL.md` (canonical archival-
+  mechanism design home); `docs/V3_WALLET_DECISION_LOG.md`
+  *2026-04-27 — Engine architecture: actor model with staged
+  migration* (Stage 5 `ArchivalEngine`, sibling-not-child
+  rationale, multi-peer RPC routing).
 
 - **Audit FCMP++ integration for paired computations.**
   Five integration bugs were found during the first CI green effort, all
@@ -988,6 +1239,188 @@ one place to confirm each item's relationship to the wallet stack.
   [`.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`](
   ../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)
   Phase 1 deliverables.**
+
+---
+
+## V3.x — staker archival and visualization ship
+
+- **Stage 5 — `ArchivalEngine` native actor build (simulation-
+  gated).** Build the staker-distributed chain-history archival
+  service as a native actor, sibling to `StakeEngine` (not a
+  child). The `ArchivalEngine` owns shard storage + serving + the
+  archival-yield disbursement state machine; receives shard
+  registration, query, and challenge-response messages; produces
+  archival-yield events on a separate slashing domain from
+  principal-yield. Cross-actor query
+  `StakeEngine::is_active_staker(entity_id) -> bool` gates
+  archival eligibility (a non-staker cannot serve archival; the
+  gate is the message, not shared state). The `LedgerEngine`
+  consumes `ArchivalEvent` values via the merge protocol the same
+  way it consumes `StakeEvent` values.
+
+  *Why sibling, not child of `StakeEngine`:* slashing-domain
+  integrity (a bug in archival logic that slashes archival-yield
+  cannot be misrouted to slash principal-yield if the engines
+  share state); failure isolation (`ArchivalEngine` has more
+  failure modes — network partitions on archival queries, shard
+  storage corruption, challenge-response timeouts — and a failing
+  `ArchivalEngine` must not bring down stake state); and the
+  Hayekian shard-market property (the shard market priced by
+  scarcity and opted into by stakers is conceptually distinct
+  from stake lifecycle and benefits from independent supervision
+  + message ordering).
+
+  *Why Stage 5 (own stage), not Stage 3/4:* `ArchivalEngine` has
+  substantially more open design questions than `StakeEngine`
+  (shard granularity, query routing protocol, price curve shape,
+  anonymization integration, foundation-node coordination).
+  Pairing it with `StakeEngine` in Stage 3 would force design
+  closure on archival before the simulation work has produced
+  evidence; Stage 4 sequencing would intermix it with smaller
+  subsystems that don't share its design risk. A dedicated stage
+  with explicit gating ("simulation work has settled the open
+  design questions") is the discipline-correct shape.
+
+  *Blocks on:* simulation work per `docs/V3_STAKER_ARCHIVAL.md`
+  has settled shard granularity, price curve shape, and routing
+  protocol. Stage 4 RPC boundary refinements (multi-peer archival
+  routing client surface) have shipped the client-side
+  groundwork.
+
+  *Target:* V3.x — first dot-release after simulation closes the
+  design questions. No fixed deadline; gated on evidence quality.
+
+  *Definition of done:* `ArchivalEngine` runs as a `kameo` actor
+  with its own task; sibling to `StakeEngine` (no shared state);
+  cross-actor `is_active_staker` query exposed and tested; shard
+  registration, query, and challenge-response message protocols
+  documented and tested; archival-yield slashing domain
+  separated from principal-yield (independently testable);
+  `assemble_tree_path_for_output` RPC routing activates the
+  multi-peer client surface against staker peers; integration
+  tests cover staker-distributed historical reference queries on
+  a multi-staker testnet; stressnet (Phase 7.7) exercises the
+  path. Decision log entry confirms the migration is complete and
+  pins resulting architecture.
+
+  *Reference:* `docs/V3_STAKER_ARCHIVAL.md` (canonical archival-
+  mechanism design home); `docs/V3_WALLET_DECISION_LOG.md`
+  *2026-04-27 — Engine architecture: actor model with staged
+  migration*; `docs/V3_SHARD_VISUALIZATION.md` (companion shard-
+  surface design); the V3.0 V3.0 sibling resolution entry above
+  for `assemble_tree_path_for_output`.
+
+- **No-tradeability invariant codification (placeholder).** The
+  shard visualization in `docs/V3_SHARD_VISUALIZATION.md` is
+  deterministic data art derived from public shard content. It
+  must remain not-tradeable: it is not an NFT, has no
+  per-instance scarcity, no transferable ownership, no
+  on-chain registration. The visualization is reproducible from
+  the shard content alone — possession of the shard is possession
+  of the visual. This is a structurally load-bearing economic
+  invariant (privacy-architecture commitment + economic-shape
+  commitment); its enforcement points must be enumerated and
+  codified when archival/visualization implementation begins.
+
+  *Suggested enforcement point inventory at implementation:*
+    - Library API surface in `shekyl-shard-visual`: no functions
+      that mint, register, sign, or otherwise endorse an instance
+      of a visualization. Pure
+      `(shard_content) -> deterministic_image` only.
+    - Wallet/daemon RPC surface: no methods that "own,"
+      "transfer," "claim," or "register" visualizations.
+    - Foundation messaging discipline: external materials must
+      not market shard visualizations as collectibles or trade-
+      able digital assets.
+    - Block explorer / portfolio integrations: render-on-demand
+      from the shard, not stored-and-served by per-user
+      identifier.
+
+  *Target:* V3.x — codified as enforced constraint when the
+  archival/visualization implementation lands.
+
+  *Definition of done:* enforcement point inventory complete;
+  each enforcement point has a documented mechanism (test, lint,
+  documentation rule, or design-time invariant); decision log
+  entry pins the invariant as canonical.
+
+  *Reference:* `docs/V3_SHARD_VISUALIZATION.md` (canonical
+  visualization design home); `docs/V3_STAKER_ARCHIVAL.md`
+  (companion archival design that produces the shards).
+
+---
+
+## V4+ — horizontal scaling
+
+- **Horizontal scaling via stateless actor pools.** Once the
+  actor architecture is settled and Stage 5 has shipped, scale
+  stateless components (subaddress derivation, scan workers,
+  proof verification) by running multiple instances of the
+  actor and load-balancing requests across them. Stateful actors
+  (`KeyEngine`, `LedgerEngine`, `StakeEngine`, `ArchivalEngine`)
+  remain singletons; stateless ones become pools.
+
+  *Blocks on:* Stage 5 `ArchivalEngine` shipped; production
+  deployment data on which subsystems are CPU-bound vs message-
+  bound. Premature pooling is over-engineering.
+
+  *Target:* V4+ — driven by deployment evidence, not speculation.
+
+  *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
+  Engine architecture: actor model with staged migration*
+  §"Future-version benefits enabled by actor architecture".
+
+---
+
+## V5+ — long-tier staker upgradability
+
+- **Signed actor-patch distribution over staker P2P.** Long-tier
+  stakers (multi-year locks) need an upgrade path that does not
+  require unstake-and-restart for every bug fix or minor protocol
+  evolution; a one-week lock-tier disruption for a one-line
+  patch is operationally untenable at scale. The actor model
+  (settled in V3.x) **enables** signed-patch distribution as the
+  upgrade primitive: individual actors can be replaced
+  independently while the rest of the engine continues running.
+
+  V3 and V4 deliberately use the simpler restart-based upgrade
+  path (operator runs a new binary, stake state recovers from
+  chain). Hot-loading is a V5+ feature; the architecture from
+  V3.0 must not foreclose it, but no V3 or V4 surface depends on
+  it. The cost of getting hot-loading wrong (silent state
+  corruption, signature-bypass, partial-upgrade inconsistency)
+  is severe enough that this lands only when the underlying actor
+  architecture has years of production evidence and the upgrade
+  protocol has its own formal review.
+
+  *Suggested protocol shape (subject to design review at V5
+  planning):*
+    - Foundation (or post-Foundation governance) signs actor
+      patches with a release key.
+    - Patches distribute over the staker P2P network (the same
+      network archival uses).
+    - Stakers verify the signature before loading; verified
+      patches replace the corresponding actor in-place; the
+      rest of the engine continues running.
+    - Patch protocol covers: actor binary delta, message-protocol
+      compatibility metadata (ABI version), and rollback
+      manifest for failed patches.
+    - Slashing-domain isolation property is preserved across
+      patches: a patch to `ArchivalEngine` cannot affect
+      `StakeEngine`'s slashing decisions.
+
+  *Blocks on:* V3 and V4 in production with the actor
+  architecture stable for at least one full V3.x cycle; formal
+  protocol review of signed-patch distribution; threat model
+  covering patch-supply-chain attacks.
+
+  *Target:* V5+ — no fixed deadline; driven by accumulated
+  evidence + governance maturity.
+
+  *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
+  Engine architecture: actor model with staged migration*
+  §"Long-tier staker upgradability" (V5+ benefits enabled,
+  V3/V4 restart-based path).
 
 ---
 

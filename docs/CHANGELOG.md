@@ -429,6 +429,124 @@
   by a subsequent Phase 1 commit (the `RuntimeWalletState` fold
   is the next task in line per the todo list).
 
+- **Engine rename, actor-architecture, and pending-tx protocol
+  decision-log entries appended (2026-04-27).** Three new dated
+  entries land in `docs/V3_WALLET_DECISION_LOG.md` to pin major
+  Phase-2-and-beyond architectural commitments whose rationale
+  must be in tree before the supporting code commits land:
+
+  - *"`Wallet<S>` renamed to `Engine<S>`: privacy-correct framing
+    for the local artifact"* — pins the renaming of the
+    orchestrator type, all related types, all crate paths
+    (`shekyl-wallet-core` → `shekyl-engine-core`,
+    `shekyl-wallet-file` → `shekyl-engine-file`,
+    `shekyl-wallet-state` → `shekyl-engine-state`,
+    `shekyl-wallet-rpc` → `shekyl-engine-rpc`,
+    `shekyl-wallet-prefs` → `shekyl-engine-prefs`), JSON-RPC
+    method strings (`wallet_*` → `engine_*`), CLI subcommand
+    names, file paths (`~/.shekyl/wallets/` → `~/.shekyl/engines/`),
+    and CLI user-facing language ("engine" used consistently in
+    CLI help text). GUI/mobile user-facing language stays a
+    separate marketing decision deferred to post-V3 user-
+    interaction testing. Domain-primitive crates
+    (`shekyl-shard-visual`) and binary/product crates remain as-
+    is. The decision is realized by the immediately-following
+    mechanical rename commit on `shekyl-core` `dev`.
+  - *"Engine architecture: actor model with staged migration from
+    composition"* — pins the migration of `Engine<S>` from
+    composition to an actor model with `kameo` as the framework,
+    over five staged actor builds plus a Stage 1 framework-
+    agnostic preparation pass. Stage 2 introduces `kameo` and
+    builds `KeyEngine` first (smallest internal state, cleanest
+    privacy boundary, framework-friction surfaces with bounded
+    blast radius). Stage 3 builds `StakeEngine` native-as-actor
+    in Phase 2b for consensus-bond responsibilities only. Stage 4
+    migrates remaining subsystems (`DaemonEngine`,
+    `PersistenceEngine`, `PendingTxEngine`, `RefreshEngine`,
+    `LedgerEngine`) one at a time. Stage 5 (V3.x, simulation-
+    gated) builds `ArchivalEngine` as a sibling to `StakeEngine`
+    (not a child) for slashing-domain integrity, failure
+    isolation, and the Hayekian shard-market property. The entry
+    pins the locked stage sequence end-to-end, the framework
+    choice (`kameo`), the privacy benefits realized (view-key vs
+    spend-key separation across actors becomes enforceable), the
+    horizontal-scaling benefits enabled (V4+, stateless actor
+    pools), and the long-tier staker upgradability shape (V5+,
+    signed actor-patch distribution; V3 and V4 use restart-based
+    upgrades). The entry rejects the alternatives explicitly:
+    pure composition (privacy weaker), Stage-1-as-`kameo`
+    (premature framework lock-in), single-cutover migration
+    (review-undeliverable), `ArchivalEngine`-as-child-of-
+    `StakeEngine` (slashing-domain integrity violation).
+  - *"Pending-tx protocol: two-phase build/submit/discard over
+    single-phase callback"* — pins the canonical transaction-
+    sending API as the two-phase pending-transaction protocol
+    (`build` / `submit` / `discard`, with `inspect`,
+    `adjust_fee`, `sign_partial`, `aggregate_signatures`,
+    `export` as additional pending-tx operations). The single-
+    phase `send(request, confirm_fn) -> Result<TxHash>` callback
+    model is rejected. Rationale: explicit lifecycle for
+    multisig and air-gapped signing flows, RPC-friendly across
+    the JSON-RPC boundary, fee-adjustment without rebuild,
+    audit/inspect surface, recovery from partial failure.
+
+  Companion `docs/FOLLOWUPS.md` updates land in the same commit:
+
+  - V3.0 — Stage 2 `KeyEngine` migration; Stage 3 `StakeEngine`
+    native build; Stage 4 remaining-subsystem migrations
+    (`DaemonEngine`, `PersistenceEngine`, `PendingTxEngine`,
+    `RefreshEngine`, `LedgerEngine` in suggested order); RPC
+    boundary refinements (idle eviction with TBD-at-implementation
+    rationale, `engine_lock` JSON-RPC method, multi-engine
+    registry, snapshot reads from `LedgerEngine`, multi-peer
+    archival routing client surface).
+  - V3.1 — sibling resolution entry for the `assemble_tree_path_for_output`
+    bug, locking the resolution architecture (foundation
+    `--no-prune` archival as floor; staker-distributed archival
+    via `ArchivalEngine` as primary path; multi-peer routing
+    against per-block root snapshots). The original bug entry is
+    preserved untouched as historical record.
+  - V3.x — Stage 5 `ArchivalEngine` native build (simulation-
+    gated); no-tradeability invariant codification placeholder
+    cross-referencing `docs/V3_SHARD_VISUALIZATION.md` and
+    `docs/V3_STAKER_ARCHIVAL.md`.
+  - V4+ — horizontal scaling via stateless actor pools.
+  - V5+ — signed actor-patch distribution over staker P2P.
+
+  The 2026-04-25 *"Locking discipline: `RwLock<Wallet>` over
+  `RefCell` / sharded locks / actor model"* sub-section receives a
+  one-line forward-pointer noting that it is partially superseded
+  by the new actor-architecture entry from Stage 2 onward; lock-
+  discipline reasoning still applies during Phase 2b composition.
+
+  This commit is documentation-only. No code, schema, or
+  protocol surface changes here. The mechanical rename commit
+  ships separately as the immediately-following commit on
+  `shekyl-core` `dev`; Stage 1 and beyond ship over subsequent
+  PRs per the locked stage sequence in the actor-architecture
+  decision-log entry.
+
+- **`docs/V3_STAKER_ARCHIVAL.md` and `docs/V3_SHARD_VISUALIZATION.md`
+  added under `shekyl-core/docs/` (relocated and rescoped from
+  `shekyl-dev/docs/V4_*`).** Two design documents covering the
+  staker-distributed chain-history archival mechanism and the
+  deterministic shard visualization surface relocate from the
+  `shekyl-dev` planning workspace to the `shekyl-core` canonical
+  documentation tree, content-checked to reflect their V3 ship
+  scope rather than the V4 ship scope they originally drafted
+  against. Status blocks at the top of each document pin the new
+  ship target and reference the 2026-04-27 actor-architecture
+  decision-log entry that established `ArchivalEngine` as a
+  sibling to `StakeEngine` and `shekyl-shard-visual` as a
+  domain-primitive library crate. The earlier
+  `docs/V4_STAKER_ARCHIVAL.md` and `docs/V4_SHARD_VISUALIZATION.md`
+  copies in `shekyl-core/docs/` (added in commit 9dc44687d) are
+  removed in this commit; the V3-named documents are the canonical
+  homes going forward. The companion `git rm` of the V4-named
+  drafts from `shekyl-dev/docs/` ships as a separate commit on
+  `shekyl-dev` `dev` that references this commit's shekyl-core
+  SHA.
+
 ### Removed
 
 - **`shekyl-scanner::sync` module and `shekyl-scanner::rust-scanner`
