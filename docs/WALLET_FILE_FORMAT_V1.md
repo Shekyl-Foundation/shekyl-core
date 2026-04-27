@@ -230,7 +230,7 @@ reopens the very attack shape the length check was written to
 close.
 
 The adversarial corpus in
-`rust/shekyl-wallet-file/tests/adversarial_corpus.rs` locks this
+`rust/shekyl-engine-file/tests/adversarial_corpus.rs` locks this
 posture in at the integration layer: every `(mode, len)` shape
 outside the closed set is expected to surface a typed refusal, not a
 fallback.

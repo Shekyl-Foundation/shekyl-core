@@ -2,11 +2,74 @@
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+
+- **Wallet → Engine rename across Rust workspace** (decision log
+  *"Wallet → Engine rename"*, 2026-04-27). Mechanical rename of the
+  domain orchestrator type and its supporting crates and modules to
+  consistently use "engine" terminology. The on-chain consensus rules
+  and wire formats are unaffected; this is a source-only API churn.
+
+  - **Crates renamed.** Workspace members and on-disk paths:
+    `shekyl-wallet-core` → `shekyl-engine-core`,
+    `shekyl-wallet-state` → `shekyl-engine-state`,
+    `shekyl-wallet-file` → `shekyl-engine-file`,
+    `shekyl-wallet-prefs` → `shekyl-engine-prefs`,
+    `shekyl-wallet-rpc` → `shekyl-engine-rpc`. The `shekyl-cli`,
+    `shekyl-ffi`, `shekyl-scanner`, `shekyl-tx-builder`,
+    `shekyl-daemon-rpc`, `shekyl-fcmp`, `shekyl-crypto-pq`,
+    `shekyl-proofs`, `shekyl-address`, `shekyl-shard-visual`, and the
+    `monero-oxide` family (`shekyl-oxide`) are unchanged.
+  - **Module renamed.**
+    `shekyl-engine-core::wallet` → `shekyl-engine-core::engine`. The
+    module re-exports retain their semantics through the new path.
+  - **Types renamed.** Orchestrator-shaped types now use `Engine*`:
+    `Wallet<S>` → `Engine<S>`, `WalletSignerKind` → `EngineSignerKind`,
+    `WalletCoreError` → `EngineCoreError`,
+    `OpenedWallet` → `OpenedEngine`,
+    `WalletCreateParams` → `EngineCreateParams`. Domain-shaped types
+    that name file format primitives or generic envelope concepts
+    (`WalletFile`, `WalletLedger`, `WalletPrefs`, `WalletEnvelopeError`,
+    `WalletOutput`) are intentionally retained — they describe a
+    user's set of secrets, not the orchestrator.
+  - **CLI surfaces.** `shekyl-cli` user-facing strings, help text,
+    REPL prompts (`shekyl-cli [engine]>`), and command names
+    (`engine_info` replaces `wallet_info`) now use "engine" terminology
+    throughout per Option α. The `--wallet-dir` / `--wallet-file`
+    flags are renamed to `--engine-dir` / `--engine-file`.
+  - **Filesystem layout.** Default home directory subtree
+    `~/.shekyl/wallets/` is renamed to `~/.shekyl/engines/`. The
+    `.wallet` and `.wallet.keys` file extensions are retained so that
+    existing tooling and the file format documentation in
+    [`docs/WALLET_FILE_FORMAT_V1.md`](WALLET_FILE_FORMAT_V1.md) stay
+    valid.
+  - **What is *not* renamed in this release.**
+    1. **FFI C ABI symbols.** `shekyl_wallet_*` `#[no_mangle]` exports
+       and the `ShekylWallet` opaque-handle struct retain their names.
+       The internal Rust types backing those handles are renamed; the
+       C ABI is held stable until the C++ `wallet2.cpp` retirement
+       work in V3.2 lets us cut both at once. See FOLLOWUPS V3.2.
+    2. **C++ JSON-RPC method names.** `wallet_*` JSON-RPC method
+       strings exposed by the C++ `shekyl-wallet-rpc.exe` binary are
+       not renamed here. They are deleted, not aliased, when the
+       Rust-native JSON-RPC server lands as part of Phase 4b's
+       Shekyl-native RPC method-set work in V3.2. See FOLLOWUPS V3.2.
+    3. **C++ binary names** (`shekyl-wallet-rpc`, `shekyl-wallet-cli`,
+       `shekyl-wallet-bench`) and references to them in
+       `.github/workflows/build.yml`, `scripts/bench/`, and stress-net
+       harnesses. Tied to the same C++ retirement work.
+  - **Migration guidance.** No on-disk migration code is shipped or
+    needed pre-V3 launch (per `15-deletion-and-debt.mdc`). Pre-launch
+    users re-sync from genesis. Tooling that depends on the renamed
+    Rust crates updates `[dependencies]` paths and import paths in
+    one mechanical pass; the FFI C ABI and JSON-RPC wire surfaces are
+    intentionally unchanged.
+
 ### Added
 
 - **`Wallet::refresh` driver and `produce_scan_result` producer
   (Phase 2a `refresh_scan_loop` bundle, Branch 1).** The
-  [`shekyl_wallet_core::wallet::refresh`](../rust/shekyl-wallet-core/src/wallet/refresh.rs)
+  [`shekyl_engine_core::engine::refresh`](../rust/shekyl-engine-core/src/engine/refresh.rs)
   module ships the snapshot-merge-with-retry sync driver that
   replaces the standalone `shekyl-scanner::sync::run_sync_loop`.
   Public surface:
@@ -35,7 +98,7 @@
     `(LedgerBlock, LedgerIndexes)` the producer needs to detect
     reorgs and resume scanning. Cloned (not `Arc`-wrapped) per the
     snapshot benchmark in
-    `rust/shekyl-wallet-core/benches/refresh_snapshot.rs`, which
+    `rust/shekyl-engine-core/benches/refresh_snapshot.rs`, which
     measures clone cost across realistic reorg-window sizes so any
     future `Arc` switch has an empirical baseline.
   - `RefreshOptions { max_retries: u32 }` — caller-supplied knobs
@@ -79,7 +142,7 @@
   synchronous entry point and the producer / merge contract that
   the handle wraps.
 
-  Test coverage lives in `rust/shekyl-wallet-core/src/wallet/refresh.rs`'s
+  Test coverage lives in `rust/shekyl-engine-core/src/wallet/refresh.rs`'s
   `mod tests` (producer-side: smoke / linear-scan / reorg-shallow /
   reorg-deep / reorg-at-tip / RPC-failure-fetch / RPC-failure-tip /
   scanner-failure / cancellation-mid-scan /
@@ -89,20 +152,20 @@
   cancellation-end-to-end, no-progress-when-tip-equal,
   reorg-rewind-then-apply). The `MockRpc` test scaffold and
   `make_synthetic_block` helper live in
-  `rust/shekyl-wallet-core/src/wallet/test_support.rs` for
+  `rust/shekyl-engine-core/src/wallet/test_support.rs` for
   deterministic fault injection across producer and driver suites.
 
 - **`Wallet::create` / `Wallet::open_full` / `Wallet::change_password` /
-  `Wallet::close` lifecycle methods on `shekyl-wallet-core` (Phase 1
+  `Wallet::close` lifecycle methods on `shekyl-engine-core` (Phase 1
   `lifecycle` task).** The new
-  [`shekyl_wallet_core::wallet::lifecycle`](../rust/shekyl-wallet-core/src/wallet/lifecycle.rs)
+  [`shekyl_engine_core::wallet::lifecycle`](../rust/shekyl-engine-core/src/wallet/lifecycle.rs)
   module composes
-  [`shekyl-wallet-file`](../rust/shekyl-wallet-file/src/),
+  [`shekyl-engine-file`](../rust/shekyl-engine-file/src/),
   [`shekyl-crypto-pq::account::rederive_account`](../rust/shekyl-crypto-pq/src/account.rs),
-  [`shekyl-wallet-prefs`](../rust/shekyl-wallet-prefs/src/),
-  [`shekyl-wallet-state::WalletLedger`](../rust/shekyl-wallet-state/src/wallet_ledger.rs),
+  [`shekyl-engine-prefs`](../rust/shekyl-engine-prefs/src/),
+  [`shekyl-engine-state::WalletLedger`](../rust/shekyl-engine-state/src/wallet_ledger.rs),
   and
-  [`shekyl-wallet-state::LedgerIndexes`](../rust/shekyl-wallet-state/src/ledger_indexes.rs)
+  [`shekyl-engine-state::LedgerIndexes`](../rust/shekyl-engine-state/src/ledger_indexes.rs)
   into the `Wallet<S>` orchestrator's open / create / rotate / close
   surface. Public API:
 
@@ -163,7 +226,7 @@
     the matching `shekyl-crypto-pq` `AllKeysBlob` constructors. The
     error variant is deletion-tracked at the code site and in
     `docs/FOLLOWUPS.md` *V3.0 → "View/HW lifecycle bodies in
-    `shekyl-wallet-core`"*. See `docs/V3_WALLET_DECISION_LOG.md`
+    `shekyl-engine-core`"*. See `docs/V3_WALLET_DECISION_LOG.md`
     *"`Wallet<S>` lifecycle: capability scoping for V3.0"* (2026-04-26)
     for the stub-shape rationale.
   - `Wallet::change_password(&old, &new, new_kdf) -> Result<(), OpenError>`
@@ -201,7 +264,7 @@
   `LedgerIndexes::rebuild_from_ledger` output.
 
   The lifecycle commit ships `tracing = "0.1"` as a runtime
-  dependency on `shekyl-wallet-core` (used for the prefs-tamper
+  dependency on `shekyl-engine-core` (used for the prefs-tamper
   warn log only) and `tempfile = "3"` plus `tokio = { version = "1",
   features = ["macros", "rt"] }` as dev-dependencies (lifecycle
   tests construct on-disk fixtures and instantiate a
@@ -211,7 +274,7 @@
 - **`Wallet::build_pending_tx` / `submit_pending_tx` / `discard_pending_tx`
   three-method `PendingTx` lifecycle (Phase 1 `pending_tx` task).** The
   new
-  [`shekyl_wallet_core::wallet::pending`](../rust/shekyl-wallet-core/src/wallet/pending.rs)
+  [`shekyl_engine_core::wallet::pending`](../rust/shekyl-engine-core/src/wallet/pending.rs)
   module lands the runtime-only side of cross-cutting lock 4. Public
   surface:
 
@@ -282,10 +345,10 @@
   decision and the supersession of the original cross-cutting-lock-4
   draft phrasing.
 
-- **`shekyl_wallet_core::scan::ScanResult` typed scanner-output value
+- **`shekyl_engine_core::scan::ScanResult` typed scanner-output value
   and `Wallet::apply_scan_result` merge surface (Phase 1 `scan_result`
   task).** A new
-  [`shekyl_wallet_core::scan`](../rust/shekyl-wallet-core/src/scan.rs)
+  [`shekyl_engine_core::scan`](../rust/shekyl-engine-core/src/scan.rs)
   module defines the additive event vocabulary the Phase 2a
   `Wallet::refresh()` pipeline produces from a scanner pass:
 
@@ -306,7 +369,7 @@
 
   The companion `Wallet::apply_scan_result(&mut self, ScanResult) ->
   Result<(), RefreshError>` lives in
-  [`wallet::merge`](../rust/shekyl-wallet-core/src/wallet/merge.rs) and
+  [`wallet::merge`](../rust/shekyl-engine-core/src/wallet/merge.rs) and
   is the only audited code path that mutates the scanner-derived slice
   of `WalletLedger` plus `LedgerIndexes` during refresh. It enforces
   two snapshot-consistency invariants before applying any events,
@@ -334,7 +397,7 @@
   `Wallet<S>` (whose lifecycle methods land in a follow-up commit).
 
   See `docs/V3_WALLET_DECISION_LOG.md` *"`ScanResult` type"*
-  (2026-04-25, **crate location: `shekyl-wallet-core::scan`**) and
+  (2026-04-25, **crate location: `shekyl-engine-core::scan`**) and
   *"`Wallet::apply_scan_result` invariants and Wallet-side
   `LedgerIndexes`"* (2026-04-26).
 
@@ -358,7 +421,7 @@
   - **Runtime-only derived state** — the `key_images` and `pub_keys`
     lookup maps plus the `staker_pool` accrual aggregate — moves to
     a new `pub struct LedgerIndexes` in
-    `rust/shekyl-wallet-state/src/ledger_indexes.rs`. `LedgerIndexes`
+    `rust/shekyl-engine-state/src/ledger_indexes.rs`. `LedgerIndexes`
     is **never serialized**, has no `Serialize` / `Deserialize`
     derives, and is rebuilt by scanner replay at every wallet open
     via `LedgerIndexes::rebuild_from_ledger`. Cross-cutting
@@ -373,13 +436,13 @@
 
   Live wallet state behind a single mutex is the tuple
   `pub type LiveLedger = (LedgerBlock, LedgerIndexes)` in both
-  `shekyl-wallet-rpc::scanner_state` and the (cfg `rust-scanner`)
+  `shekyl-engine-rpc::scanner_state` and the (cfg `rust-scanner`)
   `shekyl-scanner::sync` background loop. Scanner-specific behavior
   that needs `Timelocked` / `RecoveredWalletOutput` /
   `BalanceSummary` / `ClaimableInfo` lives in extension traits in
   `shekyl-scanner::ledger_ext` (`TransferDetailsExt`,
   `LedgerIndexesExt`, `LedgerBlockExt`); the canonical
-  `shekyl-wallet-state` crate stays scanner-free. The old
+  `shekyl-engine-state` crate stays scanner-free. The old
   `shekyl-scanner::runtime_ext` and `shekyl-scanner::wallet_state`
   modules are deleted.
 
@@ -554,16 +617,16 @@
   Branch 1).** The standalone background-sync surface
   (`run_sync_loop`, `LiveLedger`, `SyncProgress`, `SyncError`) and
   its feature flag are deleted in favor of the
-  `shekyl-wallet-core::Wallet::refresh` driver. `shekyl-scanner`
+  `shekyl-engine-core::Wallet::refresh` driver. `shekyl-scanner`
   becomes a pure scanning library — `Scanner`, extra-field parsing,
   KEM rederivation, the `LedgerBlock` / `LedgerIndexes` extension
   traits, balance, and coin selection — and drops its `tokio` /
   `tokio-util` optional dependencies along with the feature.
-  `shekyl-wallet-rpc::rust-scanner` is **not** affected by this
+  `shekyl-engine-rpc::rust-scanner` is **not** affected by this
   change; that feature gates a JSON-RPC-side
   `(LedgerBlock, LedgerIndexes)` cache (`scanner_state::LiveLedger`,
   a *local* type alias unrelated to the deleted scanner-side
-  alias) which retires in Phase 4b alongside `shekyl-wallet-rpc`'s
+  alias) which retires in Phase 4b alongside `shekyl-engine-rpc`'s
   Rust cutover. See `docs/V3_WALLET_DECISION_LOG.md`
   *"Retire `shekyl-scanner::sync::run_sync_loop` (Phase 2a/4b
   boundary)"* (2026-04-27) for the rationale and Phase boundary.
@@ -701,14 +764,14 @@
 
 ### Added
 
-- **`shekyl-wallet-core::Wallet<S>` struct + `DaemonClient` thin wrapper
+- **`shekyl-engine-core::Wallet<S>` struct + `DaemonClient` thin wrapper
   (Phase 1 of the [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
   cross-cutting locks 1, 3, 4 type-layer realization).** Lands the
   `Wallet<S: WalletSignerKind>` struct itself with its full dependency
-  graph wired in: `file: shekyl_wallet_file::WalletFile`, `keys:
+  graph wired in: `file: shekyl_engine_file::WalletFile`, `keys:
   shekyl_crypto_pq::account::AllKeysBlob`, `ledger:
-  shekyl_wallet_state::WalletLedger`, `prefs:
-  shekyl_wallet_prefs::WalletPrefs`, `daemon: DaemonClient`, `network:
+  shekyl_engine_state::WalletLedger`, `prefs:
+  shekyl_engine_prefs::WalletPrefs`, `daemon: DaemonClient`, `network:
   Network`, `capability: Capability`, plus `_signer: PhantomData<S>`
   for compile-time signer-kind dispatch. `network` and `capability` are
   cached from `WalletFile`'s region 1 (which is write-once after
@@ -731,17 +794,17 @@
   `change_password`, `close`), `RefreshHandle`, `PendingTx`, and
   `ScanResult` each land in their own follow-up commits on this same
   Phase 1 branch. Cargo dependency graph: `shekyl-crypto-pq` is now a
-  non-optional dependency of `shekyl-wallet-core` (the `multisig`
+  non-optional dependency of `shekyl-engine-core` (the `multisig`
   feature flag previously gated it; with `keys: AllKeysBlob` on the
   struct it is mandatory regardless of feature). Full rationale and
   field-by-field justification recorded in
   [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
   §"`Wallet<S>` struct shape and accessor surface".
 
-- **`shekyl-wallet-core::wallet` module skeleton (Phase 1 of the
+- **`shekyl-engine-core::wallet` module skeleton (Phase 1 of the
   [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
   cross-cutting locks 2, 4, 5, 6, 7, 8 type-layer realization).** New
-  module `rust/shekyl-wallet-core/src/wallet/` ships the type-layer
+  module `rust/shekyl-engine-core/src/wallet/` ships the type-layer
   foundations of the V3 wallet orchestrator without yet introducing the
   `Wallet` struct itself: per-domain error enums (`OpenError`,
   `RefreshError`, `SendError`, `PendingTxError`, `KeyError`, `IoError`,
@@ -751,7 +814,7 @@
   `TxError::DaemonFeeUnreasonable`, etc.); a re-export of
   `shekyl_address::Network` (the fourth `Fakechain` variant lands in a
   separate scoped commit on the same branch); a re-export of
-  `shekyl_wallet_file::Capability` (canonical spelling — the plan's
+  `shekyl_engine_file::Capability` (canonical spelling — the plan's
   "`CapabilityMode`" reference is satisfied); and a sealed
   `WalletSignerKind` trait with `SoloSigner` ZST as the V3.0 default.
   V3.1's `MultisigSigner<N, K>` will join behind the existing `multisig`
@@ -763,7 +826,7 @@
   [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
   §"Per-domain `Wallet` error enums + sealed `WalletSignerKind`".
 
-- **`shekyl-wallet-state::LocalLabel` and `SecretStr<'a>` (Phase 1 of the
+- **`shekyl-engine-state::LocalLabel` and `SecretStr<'a>` (Phase 1 of the
   [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
   cross-cutting lock 9 type-layer realization).** Locally-sensitive
   UTF-8 wrappers for every user-supplied string the wallet persists
@@ -841,11 +904,11 @@
 
 - **`shekyl-wallet-file::WalletFileHandle` → `WalletFile`** (PR 0.2 of
   the [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)).
-  Mechanical rename across all call sites in `shekyl-wallet-file`,
-  `shekyl-wallet-prefs`, `shekyl-ffi`, and the C FFI doc-comment in
+  Mechanical rename across all call sites in `shekyl-engine-file`,
+  `shekyl-engine-prefs`, `shekyl-ffi`, and the C FFI doc-comment in
   `src/shekyl/shekyl_ffi.h`. No ABI change (the C-ABI symbols use the
   `shekyl_wallet_*` prefix, not the Rust type name). Frees the
-  `Wallet` identifier for the Phase 1 `shekyl-wallet-core::Wallet`
+  `Wallet` identifier for the Phase 1 `shekyl-engine-core::Wallet`
   orchestrator and aligns the file-orchestrator type name with what it
   actually is — envelope, atomic IO, advisory locking, payload
   framing. Rationale and decision archive in
@@ -937,7 +1000,7 @@
   dedicated `bench-baseline` branch; `postcard-schema` snapshot
   files with CI-enforced `block_version` bump on every drift;
   ripgrep + allowlist secret-wipe discipline for
-  `shekyl-wallet-state` blocks; `WalletLedger::check_invariants()`
+  `shekyl-engine-state` blocks; `WalletLedger::check_invariants()`
   with five cross-block tripwires and a new
   `WalletFileError::InvariantFailed { invariant, detail }` variant;
   adversarial wallet-file corpus covering the three capability-
@@ -1010,7 +1073,7 @@
   extended with the new `wallet_logic_error` subclass carrying
   both the operation name and the keys file path for UX
   rendering. Verified locally: full shekyl-core C++ rebuild
-  clean across `wallet`, `daemon`, `shekyl-wallet-rpc`,
+  clean across `wallet`, `daemon`, `shekyl-engine-rpc`,
   `unit_tests`, `core_tests`, `functional_tests`; no new
   lints introduced.
 
@@ -1072,8 +1135,8 @@
   / `decrypt` are all length-gated, so the post-scrub empty
   vector state is a no-op everywhere it's read. Verified
   locally: full shekyl-core C++ rebuild clean across `wallet`,
-  `daemon`, `shekyl-wallet-rpc`, `unit_tests`, `core_tests`,
-  `functional_tests`; `cargo check -p shekyl-wallet-file -p
+  `daemon`, `shekyl-engine-rpc`, `unit_tests`, `core_tests`,
+  `functional_tests`; `cargo check -p shekyl-engine-file -p
   shekyl-ffi` clean. Test regeneration / wallet2 fixture
   migration deferred to the rewrite-testing phase per the
   user-approved scope split.
@@ -1085,7 +1148,7 @@
   cannot cover: the corpus pins *specific* typed refusals against
   *specific* malformations it was written to check, which says
   nothing about byte patterns nobody thought to enumerate. New
-  [`rust/shekyl-wallet-state/tests/fuzz_region2.rs`](../rust/shekyl-wallet-state/tests/fuzz_region2.rs)
+  [`rust/shekyl-engine-state/tests/fuzz_region2.rs`](../rust/shekyl-engine-state/tests/fuzz_region2.rs)
   is a stable-Rust proptest harness that drives randomized input
   into `WalletLedger::from_postcard_bytes` — the canonical region-2
   decoder used by the wallet-file orchestrator — and asserts the
@@ -1105,10 +1168,10 @@
   exit criterion); cases = 640 total (128 × 5), comfortably inside
   the plan's ~500-iteration budget. Companion local-only
   coverage-guided harness at
-  [`rust/shekyl-wallet-state/fuzz/`](../rust/shekyl-wallet-state/fuzz/):
+  [`rust/shekyl-engine-state/fuzz/`](../rust/shekyl-engine-state/fuzz/):
   a minimal `fuzz_target!` wrapping
   `let _ = WalletLedger::from_postcard_bytes(data)`, excluded from
-  the workspace via new `exclude = ["shekyl-wallet-state/fuzz"]`
+  the workspace via new `exclude = ["shekyl-engine-state/fuzz"]`
   in [`rust/Cargo.toml`](../rust/Cargo.toml) so stable CI never
   tries to resolve `libfuzzer-sys`. Runnable locally with
   `cargo +nightly fuzz run region2_parser`; its README documents
@@ -1116,7 +1179,7 @@
   mainnet-freeze proximity) and why nightly is not in CI today.
   The harness is kept trivial by design so that it cannot itself
   panic and mask a parser regression. Verified locally: 96
-  existing `shekyl-wallet-state` unit tests remain green; 5-test
+  existing `shekyl-engine-state` unit tests remain green; 5-test
   proptest harness passes in 0.06 s; `cargo check --workspace
   --tests` on stable ignores the fuzz crate entirely; clippy is
   clean with `-D warnings`; fmt is clean.
@@ -1126,7 +1189,7 @@
   [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.7).**
   Locks in the "every layer refuses with a typed error, not a panic
   or a silent fallback" posture at the integration boundary. New
-  [`rust/shekyl-wallet-file/tests/adversarial_corpus.rs`](../rust/shekyl-wallet-file/tests/adversarial_corpus.rs)
+  [`rust/shekyl-engine-file/tests/adversarial_corpus.rs`](../rust/shekyl-engine-file/tests/adversarial_corpus.rs)
   drives 16 programmatic attack shapes through
   `WalletFile::open` and asserts the exact `WalletFileError`
   variant each one must surface: envelope header attacks on
@@ -1164,7 +1227,7 @@
   interpretation, each step refusing rather than tolerating — so
   reviewers encountering a "why no new variant?" test can follow
   the trail. New
-  [`rust/shekyl-wallet-file/tests/fixtures/adversarial/`](../rust/shekyl-wallet-file/tests/fixtures/adversarial/)
+  [`rust/shekyl-engine-file/tests/fixtures/adversarial/`](../rust/shekyl-engine-file/tests/fixtures/adversarial/)
   holds a README + one `.md` per attack row documenting the
   construction and the rationale behind each typed refusal
   (including the deliberate
@@ -1172,7 +1235,7 @@
   `InvalidPasswordOrCorrupt`, which the envelope cannot
   distinguish from a seed-block-tag mismatch without running the
   full region-2 verification twice). Verified locally: all 16
-  corpus tests pass; the rest of the `shekyl-wallet-file` suite
+  corpus tests pass; the rest of the `shekyl-engine-file` suite
   remains green; clippy clean with `-D warnings`; fmt clean.
 
 - **`WalletLedger::check_invariants()` aggregator-level gate (commit 6
@@ -1185,7 +1248,7 @@
   tip below a recorded transfer; a key image shared between two
   transfers; an orphan per-tx secret whose transaction has been
   garbage-collected from every live reference). New
-  [`rust/shekyl-wallet-state/src/invariants.rs`](../rust/shekyl-wallet-state/src/invariants.rs)
+  [`rust/shekyl-engine-state/src/invariants.rs`](../rust/shekyl-engine-state/src/invariants.rs)
   owns the closed set of five cross-block invariants with stable
   machine-readable names: `tip-height-not-below-transfer`,
   `tx-keys-no-orphans`, `subaddress-registry-dense`,
@@ -1193,14 +1256,14 @@
   O(n) in the number of transfers or map keys with a single
   `HashSet<[u8; 32]>` allocation, well under 100 µs for a 10 k-transfer
   bundle. New
-  [`WalletLedgerError::InvariantFailed { invariant, detail }`](../rust/shekyl-wallet-state/src/error.rs)
+  [`WalletLedgerError::InvariantFailed { invariant, detail }`](../rust/shekyl-engine-state/src/error.rs)
   variant carries the stable name plus a pointed diagnostic ("missing
   minor index 3 in [1, 4]" rather than "file is corrupt"), which flows
-  through `shekyl-wallet-file`'s `WalletFileError::Ledger` by existing
+  through `shekyl-engine-file`'s `WalletFileError::Ledger` by existing
   `#[from]`. Two call sites wire the checks in: `WalletLedger::from_postcard_bytes`
   runs them after the per-block version gates pass (typed refusal on
   load), and `WalletLedger::preflight_save` runs them ahead of every
-  `save_state` in `shekyl-wallet-file/src/handle.rs` — `debug_assert!`
+  `save_state` in `shekyl-engine-file/src/handle.rs` — `debug_assert!`
   in debug so a runtime-induced invariant break aborts tests loudly,
   typed `Err` in release so a user save never panics mid-write. Two
   invariants (subaddress density, key-image uniqueness) replace the
@@ -1212,8 +1275,8 @@
   outlive any future shape refactor. Verified locally: 16 unit tests
   (one positive + at least one negative per invariant, plus alternate
   reference paths for I-2 proving a pool- or pending-referenced tx
-  passes) all pass; the pre-existing 96-test `shekyl-wallet-state`
-  suite and 51-test `shekyl-wallet-file` suite remain green; clippy
+  passes) all pass; the pre-existing 96-test `shekyl-engine-state`
+  suite and 51-test `shekyl-engine-file` suite remain green; clippy
   clean with `-D warnings`; fmt clean.
 - **Zeroizing-field grep + allowlist CI guard (commit 5 of the
   mid-rewire hardening pass,
@@ -1224,7 +1287,7 @@
   wrapper leaves the snapshot green while silently breaking the
   runtime secret-wipe contract. New
   [`scripts/ci/check_zeroize.sh`](../scripts/ci/check_zeroize.sh)
-  walks `rust/shekyl-wallet-state/src/**/*.rs` and emits every
+  walks `rust/shekyl-engine-state/src/**/*.rs` and emits every
   `[u8; N]` or `Vec<u8>` field declaration: production code only
   (`#[cfg(test)]` modules and everything past the first
   `#[cfg(test)]` in a file are elided), with paren-depth tracking
@@ -1235,7 +1298,7 @@
   `Zeroizing<...>` / `SecretKey<...>` wrapper on the same line
   (auto-pass, no allowlist entry needed) or be enumerated verbatim —
   `<relative-path>|<normalized decl>` — in
-  [`rust/shekyl-wallet-state/.zeroize-allowlist`](../rust/shekyl-wallet-state/.zeroize-allowlist).
+  [`rust/shekyl-engine-state/.zeroize-allowlist`](../rust/shekyl-engine-state/.zeroize-allowlist).
   The allowlist is bi-directional: a new unwrapped field with no
   entry fails with `FATAL: unwrapped byte-shaped field(s) without
   allowlist entry`, and an allowlist line whose field no longer
@@ -1279,7 +1342,7 @@
   (previously policed only by reviewer attention and the prose rule in
   `.cursor/rules/42-serialization-policy.mdc`) into a mechanical check
   that fires on every PR. Adds a `postcard-schema = "0.2"` dependency
-  to `shekyl-wallet-state` (pinned at the same major as the on-disk
+  to `shekyl-engine-state` (pinned at the same major as the on-disk
   `postcard = "1"` wire-format crate, stable schema representation),
   derives `postcard_schema::Schema` on every persisted block
   (`WalletLedger`, `LedgerBlock`, `BookkeepingBlock`, `TxMetaBlock`,
@@ -1297,21 +1360,21 @@
   (both produce length-prefixed byte sequences under postcard) but
   participates in `postcard-schema`'s `NamedType` tree, which is the
   load-bearing part of the check.
-  [`rust/shekyl-wallet-state/src/schema_snapshot.rs`](../rust/shekyl-wallet-state/src/schema_snapshot.rs)
+  [`rust/shekyl-engine-state/src/schema_snapshot.rs`](../rust/shekyl-engine-state/src/schema_snapshot.rs)
   is a new test module that renders each block's `NamedType` tree as
   pretty JSON (via `OwnedNamedType` — `NamedType` holds `&'static`
   references that `serde_json` cannot roundtrip through) and
   diff-compares against a committed `.snap` file under
-  [`rust/shekyl-wallet-state/schemas/`](../rust/shekyl-wallet-state/schemas/).
+  [`rust/shekyl-engine-state/schemas/`](../rust/shekyl-engine-state/schemas/).
   Seven tests: one per block (5) plus a self-parseability roundtrip
   guard and a canonicality check on the schemas-dir path. Running
-  `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-wallet-state schema_snapshot`
+  `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-engine-state schema_snapshot`
   regenerates; running without the env var asserts. Mismatches print a
   line-oriented unified diff, name the file that moved, and spell out
   the three-step fix (bump the constant, regenerate, review).
   [`.github/workflows/schema-snapshot.yml`](../.github/workflows/schema-snapshot.yml)
   wires two jobs. The first runs
-  `cargo test -p shekyl-wallet-state schema_snapshot --no-fail-fast`
+  `cargo test -p shekyl-engine-state schema_snapshot --no-fail-fast`
   against the PR head. The second diffs the PR against the `dev`
   merge-base and, for every `.snap` that changed, insists that both
   (a) the paired source file was touched, and (b) the `pub const` line
@@ -1422,8 +1485,8 @@
   `criterion` binary (wall-clock, Tier-2 metric) and an
   `iai-callgrind` sibling (deterministic instruction-count + cache-
   miss metrics, Tier-1 metric that CI will gate on in commit 3):
-  `shekyl-wallet-state::{ledger, balance}`,
-  `shekyl-wallet-file::open`, `shekyl-scanner::scan_block`,
+  `shekyl-engine-state::{ledger, balance}`,
+  `shekyl-engine-file::open`, `shekyl-scanner::scan_block`,
   `shekyl-tx-builder::transfer_e2e`. Naming convention enforced:
   `crypto_bench_*` (bidirectional ±5% warn / ±15% fail) for
   anything touching curve25519, ML-DSA-65, Argon2id, or ChaCha20-
@@ -1464,8 +1527,8 @@
   a "Capturing the Rust baseline" section and the shipped
   file-layout listing. Workspace impact is dev-dep-only:
   `criterion` + `iai-callgrind` land as `[dev-dependencies]` on
-  the four crates that own a bench (`shekyl-wallet-state`,
-  `shekyl-wallet-file`, `shekyl-scanner`, `shekyl-tx-builder`);
+  the four crates that own a bench (`shekyl-engine-state`,
+  `shekyl-engine-file`, `shekyl-scanner`, `shekyl-tx-builder`);
   the `shekyl-scanner` bench gains a self-referential
   `shekyl-scanner = { path = ".", features = ["test-utils"] }`
   dev-dep so `WalletOutput::new_for_test` +
@@ -1543,7 +1606,7 @@
   `rust/shekyl-ffi/src/wallet_ledger_ffi.rs`,
   `rust/shekyl-scanner/benches/scan_block.rs`,
   `rust/shekyl-tx-builder/benches/transfer_e2e.rs`,
-  `rust/shekyl-wallet-file/src/handle.rs`) had accumulated hand-edited
+  `rust/shekyl-engine-file/src/handle.rs`) had accumulated hand-edited
   formatting drift before this plan started; `cargo fmt --all --check`
   flagged them on `dev`. Mechanical, fmt-only run; no logic, behaviour,
   or API change. Lands before Phase 1 begins so subsequent rewrite PRs
@@ -1627,7 +1690,7 @@
   [`docs/FOLLOWUPS.md`](FOLLOWUPS.md), so the audit's downstream
   consumers are reachable from the audit doc itself; (3) fixed a
   pre-existing `clippy::needless_return` lint in
-  `rust/shekyl-wallet-file/src/handle.rs::is_cross_device_error`
+  `rust/shekyl-engine-file/src/handle.rs::is_cross_device_error`
   (introduced under commit `2l.a`, not by Phase 0) for readability.
   Recorded a follow-up in
   [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) noting that the workspace as a
@@ -1642,7 +1705,7 @@
   Copilot-review finding tracked in `docs/FOLLOWUPS.md` *V3.0 →
   "`apply_scan_result` strict-contract enforcement (refresh
   commit)"* (now retired to *Recently resolved*). The merge in
-  [`rust/shekyl-wallet-core/src/wallet/merge.rs`](../rust/shekyl-wallet-core/src/wallet/merge.rs)
+  [`rust/shekyl-engine-core/src/wallet/merge.rs`](../rust/shekyl-engine-core/src/wallet/merge.rs)
   previously had two defensive-coding gaps:
   1. `block_hashes` was collected via `BTreeMap::insert`, silently
      overwriting duplicate height entries instead of rejecting them.
@@ -1672,12 +1735,12 @@
   `transfer_out_of_range_block_height`,
   `key_image_out_of_range_block_height`.
 
-- **`shekyl-wallet-state` `ledger` / `ledger_iai` benches: pin
+- **`shekyl-engine-state` `ledger` / `ledger_iai` benches: pin
   `BlockchainTip.synced_height` to the synthetic transfers' max
   `block_height`.** The benches under
-  [`rust/shekyl-wallet-state/benches/ledger.rs`](../rust/shekyl-wallet-state/benches/ledger.rs)
+  [`rust/shekyl-engine-state/benches/ledger.rs`](../rust/shekyl-engine-state/benches/ledger.rs)
   and
-  [`rust/shekyl-wallet-state/benches/ledger_iai.rs`](../rust/shekyl-wallet-state/benches/ledger_iai.rs)
+  [`rust/shekyl-engine-state/benches/ledger_iai.rs`](../rust/shekyl-engine-state/benches/ledger_iai.rs)
   were authored against `WalletLedger::empty()` (commit `a9a81a17e`)
   before invariant I-1 (`tip-height-not-below-transfer`) was wired
   into `WalletLedger::from_postcard_bytes` by hardening-pass commit 6

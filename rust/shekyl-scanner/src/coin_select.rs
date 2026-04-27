@@ -175,7 +175,7 @@ mod tests {
     use super::*;
     use crate::ledger_ext::TransferDetailsExt;
     use crate::tests::staking::make_wallet_output;
-    use shekyl_wallet_state::TransferDetails;
+    use shekyl_engine_state::TransferDetails;
 
     fn make_candidate(global_idx: u64, amount: u64, height: u64) -> TransferDetails {
         let mut tx_hash = [0u8; 32];

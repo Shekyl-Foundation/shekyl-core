@@ -7,13 +7,13 @@
 //!
 //! Cold signing workflow:
 //!   1. [online watch-only]   transfer --do-not-relay <amount> <address> -> unsigned_txset
-//!   2. [offline full wallet] describe_transfer <unsigned_txset>         -> inspect
-//!   3. [offline full wallet] sign_transfer <unsigned_txset>             -> signed_txset
+//!   2. [offline full engine] describe_transfer <unsigned_txset>         -> inspect
+//!   3. [offline full engine] sign_transfer <unsigned_txset>             -> signed_txset
 //!   4. [online watch-only]   submit_transfer <signed_txset>            -> broadcast
 
-use crate::wallet::WalletContext;
+use crate::engine::EngineContext;
 
-pub fn cmd_describe_transfer(ctx: &WalletContext, unsigned_hex: &str) {
+pub fn cmd_describe_transfer(ctx: &EngineContext, unsigned_hex: &str) {
     if !super::require_open(ctx) {
         return;
     }
@@ -52,7 +52,7 @@ pub fn cmd_describe_transfer(ctx: &WalletContext, unsigned_hex: &str) {
     }
 }
 
-pub fn cmd_sign_transfer(ctx: &WalletContext, unsigned_hex: &str, file: Option<&str>) {
+pub fn cmd_sign_transfer(ctx: &EngineContext, unsigned_hex: &str, file: Option<&str>) {
     if !super::require_open(ctx) {
         return;
     }
@@ -127,7 +127,7 @@ pub fn cmd_sign_transfer(ctx: &WalletContext, unsigned_hex: &str, file: Option<&
     }
 }
 
-pub fn cmd_submit_transfer(ctx: &WalletContext, signed_hex: &str) {
+pub fn cmd_submit_transfer(ctx: &EngineContext, signed_hex: &str) {
     if !super::require_open(ctx) {
         return;
     }

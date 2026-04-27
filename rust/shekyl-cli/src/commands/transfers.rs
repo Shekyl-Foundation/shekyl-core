@@ -5,9 +5,9 @@
 
 //! Transfer commands: transfer, transfers (list), show_transfer, sweep_all.
 
-use crate::wallet::WalletContext;
+use crate::engine::EngineContext;
 
-pub fn cmd_transfer(ctx: &WalletContext, args: &[&str], account_index: u32) {
+pub fn cmd_transfer(ctx: &EngineContext, args: &[&str], account_index: u32) {
     if !super::require_open(ctx) {
         return;
     }
@@ -56,7 +56,7 @@ pub fn cmd_transfer(ctx: &WalletContext, args: &[&str], account_index: u32) {
     }
 }
 
-pub fn cmd_transfers(ctx: &WalletContext, account_index: u32) {
+pub fn cmd_transfers(ctx: &EngineContext, account_index: u32) {
     if !super::require_open(ctx) {
         return;
     }
@@ -85,7 +85,7 @@ pub fn cmd_transfers(ctx: &WalletContext, account_index: u32) {
     }
 }
 
-pub fn cmd_show_transfer(ctx: &WalletContext, txid: &str) {
+pub fn cmd_show_transfer(ctx: &EngineContext, txid: &str) {
     if !super::require_open(ctx) {
         return;
     }
@@ -106,7 +106,7 @@ pub fn cmd_show_transfer(ctx: &WalletContext, txid: &str) {
 }
 
 pub fn cmd_sweep_all(
-    ctx: &WalletContext,
+    ctx: &EngineContext,
     account_index: u32,
     subaddr_indices: &[u32],
     dest: &str,
@@ -118,7 +118,7 @@ pub fn cmd_sweep_all(
 
     eprintln!(
         "WARNING: Sweeping all outputs to a single address reveals that all\n\
-         listed outputs belong to one wallet. This creates strong on-chain linkage."
+         listed outputs belong to one engine. This creates strong on-chain linkage."
     );
 
     match ctx.get_balance(account_index) {

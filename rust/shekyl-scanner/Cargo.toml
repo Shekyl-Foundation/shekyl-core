@@ -26,7 +26,7 @@ shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-staking = { path = "../shekyl-staking" }
 shekyl-address = { path = "../shekyl-address" }
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
-shekyl-wallet-state = { path = "../shekyl-wallet-state" }
+shekyl-engine-state = { path = "../shekyl-engine-state" }
 
 [features]
 default = ["std"]

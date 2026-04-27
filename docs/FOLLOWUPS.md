@@ -943,8 +943,44 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.2 — Rust cutover and cleanup
 
-- **Retire `shekyl-wallet-rpc::rust-scanner` Cargo feature (Phase 4b).**
-  The `rust-scanner` feature on `shekyl-wallet-rpc` gates a JSON-RPC-side
+- **FFI C ABI symbol rename: `shekyl_wallet_*` → `shekyl_engine_*`,
+  `ShekylWallet` → `ShekylEngine` (paired with `wallet2.cpp` retirement).**
+  The `2026-04-27` Wallet → Engine rename held the FFI C ABI surface
+  stable on purpose: the `#[no_mangle]` exports in
+  [`shekyl-ffi`](../rust/shekyl-ffi/) and the `ShekylWallet` opaque-handle
+  struct remain the contract that the C++ wallet shim and the GUI
+  / mobile bindings consume today. Renaming those symbols requires a
+  coordinated cut across `shekyl-core`, `shekyl-gui-wallet`, and
+  `shekyl-mobile-wallet`, and the cleanest moment to do that cut is
+  the same release where the C++ `wallet2.cpp` shim is retired and
+  the Rust-native lifecycle owns the FFI surface end-to-end. Doing
+  both at once means the symbol churn happens exactly once for
+  downstream embedders, not twice. Target: V3.2 (Phase 5 of the
+  wallet rewrite plan, where `wallet2.cpp` retirement lands). Cross-
+  references: decision log *"Wallet → Engine rename"* (2026-04-27)
+  §"Deferred work" entry 1; CHANGELOG `[Unreleased]` BREAKING block.
+
+- **C++ JSON-RPC method-name rename: `wallet_*` → engine-shaped names
+  (folded into Phase 4b's Shekyl-native RPC method-set work).** The
+  `2026-04-27` Wallet → Engine rename did not touch the C++ JSON-RPC
+  method strings (`wallet_get_balance`, `wallet_create_address`,
+  `change_wallet_password`, ...). Those strings are the externally
+  exposed wire surface today, served by the C++
+  `shekyl-wallet-rpc.exe` binary; the Rust `shekyl-engine-rpc`
+  forwards anonymously to the C++ binary via `Wallet2::json_rpc_call`.
+  Phase 4b of the wallet rewrite plan replaces that binary with a
+  Rust-native JSON-RPC server whose method set is redesigned wholesale
+  (Shekyl-native JSON shapes, OpenAPI spec) — at which point the
+  `wallet_*` method names are *deleted*, not aliased, consistent with
+  the locked "no JSON-RPC compatibility aliases" decision. Renaming
+  the strings in the V3 mechanical rename PR would have pre-empted
+  Phase 4b's redesign call. Target: V3.2 (Phase 4b of the wallet
+  rewrite plan). Cross-references: decision log *"Wallet → Engine
+  rename"* (2026-04-27) §"Deferred work" entry 2; CHANGELOG
+  `[Unreleased]` BREAKING block.
+
+- **Retire `shekyl-engine-rpc::rust-scanner` Cargo feature (Phase 4b).**
+  The `rust-scanner` feature on `shekyl-engine-rpc` gates a JSON-RPC-side
   `(LedgerBlock, LedgerIndexes)` cache (`scanner_state::LiveLedger`,
   the `scanner_*` JSON-RPC handlers) that the daemon RPC server reads
   from while the underlying crate is still routed through `wallet2.cpp`
@@ -952,18 +988,18 @@ one place to confirm each item's relationship to the wallet stack.
   `shekyl-scanner::rust-scanner` feature retired in the Phase 2a
   refresh driver landing — that feature gated the standalone
   `shekyl-scanner::sync::run_sync_loop` driver, which was deleted
-  outright once `shekyl-wallet-core::Wallet::refresh` became the
+  outright once `shekyl-engine-core::Engine::refresh` became the
   single producer of ledger mutations. The two features happen to
   share a name and a `LiveLedger` type alias by historical
-  coincidence, but `shekyl-wallet-rpc::scanner_state::LiveLedger` is
+  coincidence, but `shekyl-engine-rpc::scanner_state::LiveLedger` is
   a local definition inside that crate and is not affected by the
   Phase 2a deletion.
 
-  When `shekyl-wallet-rpc` migrates off `wallet2.cpp` FFI in Phase 4b
+  When `shekyl-engine-rpc` migrates off `wallet2.cpp` FFI in Phase 4b
   (target: V3.2) the JSON-RPC server reads directly from
-  `Wallet<S>` rather than from a side-cache, the
+  `Engine<S>` rather than from a side-cache, the
   `scanner_state` module is deleted along with its handlers, and the
-  `rust-scanner` feature on `shekyl-wallet-rpc` retires alongside.
+  `rust-scanner` feature on `shekyl-engine-rpc` retires alongside.
   See `docs/V3_WALLET_DECISION_LOG.md` *"Retire
   `shekyl-scanner::sync::run_sync_loop` (Phase 2a/4b boundary)"*
   (2026-04-27) for the rationale that pins the boundary. Target:
@@ -1470,7 +1506,7 @@ reference.
   serai/`ciphersuite` internals). A CI grep gate in
   `.github/workflows/build.yml` checks all Shekyl crates
   (`shekyl-ffi`, `shekyl-fcmp`, `shekyl-crypto-pq`, `shekyl-proofs`,
-  `shekyl-tx-builder`, `shekyl-scanner`, `shekyl-wallet-rpc`,
+  `shekyl-tx-builder`, `shekyl-scanner`, `shekyl-engine-rpc`,
   `shekyl-daemon-rpc`) and asserts that none of their normal dependency
   trees pull in 0.4. Direct `dalek_ff_group` usage in source is printed
   for visibility but does not fail (legitimate 0.5 usage is expected).

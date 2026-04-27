@@ -6,7 +6,7 @@
 //! Scanner-side extension traits for [`LedgerBlock`] and [`LedgerIndexes`].
 //!
 //! The canonical [`TransferDetails`], [`LedgerBlock`], and
-//! [`LedgerIndexes`] types live in `shekyl-wallet-state` so they can be
+//! [`LedgerIndexes`] types live in `shekyl-engine-state` so they can be
 //! shared with the wallet-file orchestrator without pulling in the
 //! scanner's `Timelocked` / `RecoveredWalletOutput` / `BalanceSummary` /
 //! `ClaimableInfo` universe.
@@ -33,7 +33,7 @@
 
 use zeroize::Zeroizing;
 
-use shekyl_wallet_state::{LedgerBlock, LedgerIndexes, TransferDetails, SPENDABLE_AGE};
+use shekyl_engine_state::{LedgerBlock, LedgerIndexes, TransferDetails, SPENDABLE_AGE};
 
 use crate::{
     balance::BalanceSummary, claim::ClaimableInfo, output::WalletOutput, scan::Timelocked,
@@ -149,7 +149,7 @@ pub trait LedgerBlockExt {
     /// `max_claim_range` is the protocol's `MAX_CLAIM_RANGE` constant.
     /// The accrual aggregate lives on [`LedgerIndexes::staker_pool`] and is
     /// rebuilt by scanner replay at wallet open — see the module-level
-    /// docs on [`crate::ledger_indexes`](shekyl_wallet_state::ledger_indexes)
+    /// docs on [`crate::ledger_indexes`](shekyl_engine_state::ledger_indexes)
     /// for why it is not persisted.
     fn claimable_rewards_summary<F>(
         &self,

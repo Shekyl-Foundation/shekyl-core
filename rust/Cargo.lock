@@ -2860,8 +2860,8 @@ dependencies = [
  "rustyline",
  "serde",
  "serde_json",
+ "shekyl-engine-rpc",
  "shekyl-logging",
- "shekyl-wallet-rpc",
  "tokio",
  "tracing",
  "ureq",
@@ -2955,6 +2955,115 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-engine-core"
+version = "2.0.0"
+dependencies = [
+ "chacha20poly1305",
+ "criterion",
+ "curve25519-dalek",
+ "hex",
+ "hkdf",
+ "modular-frost",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shekyl-address",
+ "shekyl-crypto-hash",
+ "shekyl-crypto-pq",
+ "shekyl-engine-file",
+ "shekyl-engine-prefs",
+ "shekyl-engine-state",
+ "shekyl-fcmp",
+ "shekyl-oxide",
+ "shekyl-rpc",
+ "shekyl-scanner",
+ "shekyl-simple-request-rpc",
+ "shekyl-staking",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "shekyl-engine-file"
+version = "3.1.0"
+dependencies = [
+ "criterion",
+ "fd-lock",
+ "iai-callgrind",
+ "shekyl-address",
+ "shekyl-crypto-pq",
+ "shekyl-engine-prefs",
+ "shekyl-engine-state",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "shekyl-engine-prefs"
+version = "3.1.0"
+dependencies = [
+ "hkdf",
+ "hmac",
+ "rustix",
+ "serde",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "toml 0.8.23",
+ "tracing",
+ "windows-sys 0.60.2",
+ "zeroize",
+]
+
+[[package]]
+name = "shekyl-engine-rpc"
+version = "3.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "hex",
+ "serde",
+ "serde_json",
+ "shekyl-engine-core",
+ "shekyl-fcmp",
+ "shekyl-logging",
+ "shekyl-scanner",
+ "shekyl-tx-builder",
+ "tokio",
+ "tower-http",
+ "tracing",
+]
+
+[[package]]
+name = "shekyl-engine-state"
+version = "3.1.0"
+dependencies = [
+ "criterion",
+ "curve25519-dalek",
+ "hex",
+ "iai-callgrind",
+ "postcard",
+ "postcard-schema",
+ "proptest",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "shekyl-address",
+ "shekyl-oxide",
+ "shekyl-scanner",
+ "shekyl-staking",
+ "thiserror",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
 name = "shekyl-fcmp"
 version = "3.1.0"
 dependencies = [
@@ -3029,15 +3138,15 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-economics",
  "shekyl-encoding",
+ "shekyl-engine-file",
+ "shekyl-engine-prefs",
+ "shekyl-engine-state",
  "shekyl-fcmp",
  "shekyl-fcmp-plus-plus",
  "shekyl-generators",
  "shekyl-proofs",
  "shekyl-staking",
  "shekyl-tx-builder",
- "shekyl-wallet-file",
- "shekyl-wallet-prefs",
- "shekyl-wallet-state",
  "tempfile",
  "tracing",
  "zeroize",
@@ -3163,12 +3272,12 @@ dependencies = [
  "shekyl-address",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-engine-state",
  "shekyl-generators",
  "shekyl-oxide",
  "shekyl-rpc",
  "shekyl-scanner",
  "shekyl-staking",
- "shekyl-wallet-state",
  "thiserror",
  "tokio",
  "tracing",
@@ -3219,115 +3328,6 @@ dependencies = [
  "shekyl-io",
  "shekyl-primitives",
  "thiserror",
- "zeroize",
-]
-
-[[package]]
-name = "shekyl-wallet-core"
-version = "2.0.0"
-dependencies = [
- "chacha20poly1305",
- "criterion",
- "curve25519-dalek",
- "hex",
- "hkdf",
- "modular-frost",
- "serde",
- "serde_json",
- "sha2",
- "shekyl-address",
- "shekyl-crypto-hash",
- "shekyl-crypto-pq",
- "shekyl-fcmp",
- "shekyl-oxide",
- "shekyl-rpc",
- "shekyl-scanner",
- "shekyl-simple-request-rpc",
- "shekyl-staking",
- "shekyl-wallet-file",
- "shekyl-wallet-prefs",
- "shekyl-wallet-state",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-util",
- "tracing",
- "zeroize",
-]
-
-[[package]]
-name = "shekyl-wallet-file"
-version = "3.1.0"
-dependencies = [
- "criterion",
- "fd-lock",
- "iai-callgrind",
- "shekyl-address",
- "shekyl-crypto-pq",
- "shekyl-wallet-prefs",
- "shekyl-wallet-state",
- "tempfile",
- "thiserror",
- "tracing",
- "zeroize",
-]
-
-[[package]]
-name = "shekyl-wallet-prefs"
-version = "3.1.0"
-dependencies = [
- "hkdf",
- "hmac",
- "rustix",
- "serde",
- "sha2",
- "tempfile",
- "thiserror",
- "toml 0.8.23",
- "tracing",
- "windows-sys 0.60.2",
- "zeroize",
-]
-
-[[package]]
-name = "shekyl-wallet-rpc"
-version = "3.1.0"
-dependencies = [
- "axum",
- "clap",
- "hex",
- "serde",
- "serde_json",
- "shekyl-fcmp",
- "shekyl-logging",
- "shekyl-scanner",
- "shekyl-tx-builder",
- "shekyl-wallet-core",
- "tokio",
- "tower-http",
- "tracing",
-]
-
-[[package]]
-name = "shekyl-wallet-state"
-version = "3.1.0"
-dependencies = [
- "criterion",
- "curve25519-dalek",
- "hex",
- "iai-callgrind",
- "postcard",
- "postcard-schema",
- "proptest",
- "serde",
- "serde_bytes",
- "serde_json",
- "shekyl-address",
- "shekyl-oxide",
- "shekyl-scanner",
- "shekyl-staking",
- "thiserror",
- "tracing",
  "zeroize",
 ]
 

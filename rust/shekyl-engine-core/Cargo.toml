@@ -1,0 +1,88 @@
+[package]
+name = "shekyl-engine-core"
+version = "2.0.0"
+edition = "2021"
+license = "BSD-3-Clause"
+description = "Shekyl engine core: orchestrator and transaction builders for stake, unstake, and claim operations"
+
+[dependencies]
+shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-scanner = { path = "../shekyl-scanner" }
+shekyl-staking = { path = "../shekyl-staking" }
+shekyl-address = { path = "../shekyl-address" }
+shekyl-engine-file = { path = "../shekyl-engine-file" }
+shekyl-engine-state = { path = "../shekyl-engine-state" }
+shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-simple-request-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc/simple-request" }
+shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+shekyl-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc", features = ["std"] }
+modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
+chacha20poly1305 = { version = "0.10", optional = true }
+hkdf = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+hex = { version = "0.4", optional = true }
+thiserror = "2"
+tracing = "0.1"
+# `produce_scan_result` (the snapshot-merge producer driving
+# `Engine::refresh`) is async and uses `tokio::time::sleep` for retry
+# backoff and `tokio::select!` for cancel-or-sleep races. Refresh is
+# inherently async because it polls the daemon, so tokio is an
+# unconditional wallet-core dep (not feature-gated).
+tokio = { version = "1", features = ["time", "macros"] }
+# Cancellation token for cooperative shutdown of the producer between
+# blocks. Callers pass the token through `RefreshOptions` so a single
+# token can govern the whole driver from the binary boundary down.
+tokio-util = { version = "0.7" }
+# `Engine::refresh` constructs a `shekyl_scanner::Scanner` from
+# `AllKeysBlob`, which requires assembling a `ViewPair` over
+# `(EdwardsPoint, Scalar, [u8; 32], Vec<u8>)`. Decompressing the
+# stored 32-byte spend public key into an `EdwardsPoint` and
+# parsing the view secret as a `Scalar` are the only direct uses;
+# the rest of curve arithmetic stays inside the scanner / fcmp
+# crates. `curve25519-dalek` is transitively present through
+# `shekyl-scanner` already, so promoting it to a direct dep adds no
+# new crate to the build graph.
+curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
+# `Engine::refresh` wraps spend / view / KEM secret material in
+# `Zeroizing<…>` for the brief window between unpacking from
+# `AllKeysBlob` and handing ownership to `Scanner` / `ViewPair`.
+# `AllKeysBlob` already wipes its own copy on `Drop`; the wrapper
+# ensures the scanner's local copies do the same.
+zeroize = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3"
+# `test-util` enables `#[tokio::test(start_paused = true)]` and the
+# in-test `tokio::time` virtualization that `wallet::refresh`'s
+# retry-backoff tests use to make exponential delays instantaneous
+# without sacrificing determinism.
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "test-util"] }
+
+[[bench]]
+name = "multisig_v31"
+harness = false
+required-features = ["multisig"]
+
+[[bench]]
+name = "refresh_snapshot"
+harness = false
+required-features = ["bench-internals"]
+
+[features]
+default = []
+multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "serde_json", "hex", "chacha20poly1305", "hkdf", "sha2"]
+# Internal feature: re-exports otherwise-`pub(crate)` types under a
+# `__bench_internals` module so external Criterion harnesses can
+# measure them. Not part of the public API; consumers must not depend
+# on this feature.
+bench-internals = []
+
+[lints]
+workspace = true

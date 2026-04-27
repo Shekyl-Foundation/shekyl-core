@@ -6,9 +6,9 @@
 //! Key display commands: seed, viewkey, spendkey, export/import key images.
 //! Terminal safety (display.rs) is applied to all secret-displaying commands.
 
-use crate::wallet::WalletContext;
+use crate::engine::EngineContext;
 
-pub fn cmd_seed(ctx: &WalletContext) {
+pub fn cmd_seed(ctx: &EngineContext) {
     if !super::require_open(ctx) {
         return;
     }
@@ -38,7 +38,7 @@ pub fn cmd_seed(ctx: &WalletContext) {
     }
 }
 
-pub fn cmd_viewkey(ctx: &WalletContext) {
+pub fn cmd_viewkey(ctx: &EngineContext) {
     if !super::require_open(ctx) {
         return;
     }
@@ -65,7 +65,7 @@ pub fn cmd_viewkey(ctx: &WalletContext) {
     }
 }
 
-pub fn cmd_spendkey(ctx: &WalletContext) {
+pub fn cmd_spendkey(ctx: &EngineContext) {
     if !super::require_open(ctx) {
         return;
     }
@@ -115,7 +115,7 @@ pub fn cmd_spendkey(ctx: &WalletContext) {
 }
 
 pub fn cmd_export_key_images(
-    ctx: &WalletContext,
+    ctx: &EngineContext,
     filename: &str,
     all: bool,
     _since_height: Option<u64>,
@@ -180,7 +180,7 @@ pub fn cmd_export_key_images(
     }
 }
 
-pub fn cmd_import_key_images(ctx: &WalletContext, filename: &str) {
+pub fn cmd_import_key_images(ctx: &EngineContext, filename: &str) {
     if !super::require_open(ctx) {
         return;
     }

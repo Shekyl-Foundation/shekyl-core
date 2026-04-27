@@ -19,7 +19,7 @@ pub(crate) mod staking {
         scan::{RecoveredWalletOutput, Timelocked},
         transfer::TransferDetails,
     };
-    use shekyl_wallet_state::{LedgerBlock, LedgerIndexes};
+    use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 
     fn tier_lock(tier: u8) -> u64 {
         shekyl_staking::tiers::tier_by_id(tier).unwrap().lock_blocks
@@ -803,7 +803,7 @@ mod ledger_proptest {
         output::*,
         scan::{RecoveredWalletOutput, Timelocked},
     };
-    use shekyl_wallet_state::{LedgerBlock, LedgerIndexes};
+    use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
         let mut bytes = [0u8; 32];
@@ -976,7 +976,7 @@ mod ledger_proptest {
 /// Originally written against `shekyl-scanner::sync::run_sync_loop`
 /// (retired 2026-04 with the Phase 2a refresh-driver landing); the
 /// tests target the ledger-mutation primitives that the producer side
-/// of `Wallet::refresh` now drives, so they remain load-bearing
+/// of `Engine::refresh` now drives, so they remain load-bearing
 /// regardless of who owns the outer loop.
 #[cfg(test)]
 mod sync_bookkeeping {
@@ -989,7 +989,7 @@ mod sync_bookkeeping {
         output::*,
         scan::{RecoveredWalletOutput, Timelocked},
     };
-    use shekyl_wallet_state::{LedgerBlock, LedgerIndexes};
+    use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
         let mut bytes = [0u8; 32];

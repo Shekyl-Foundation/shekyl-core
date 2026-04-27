@@ -20,7 +20,7 @@ monero-oxide wallet library, extended with Shekyl-specific features:
 
 The scanner is a pure scanning library: block fetch, daemon polling,
 reorg handling, and wallet-state mutation are owned by
-`shekyl-wallet-core::Wallet::refresh` (Phase 2a snapshot-merge driver).
+`shekyl-engine-core::Engine::refresh` (Phase 2a snapshot-merge driver).
 
 ## Architecture
 
@@ -56,7 +56,7 @@ shekyl-scanner
 
 ## Usage
 
-The scanner is consumed by `shekyl-wallet-core::Wallet::refresh` (the
+The scanner is consumed by `shekyl-engine-core::Engine::refresh` (the
 production refresh driver), `shekyl-wallet-rpc` (behind its
 `rust-scanner` feature flag, slated for retirement in Phase 4b), and the
 GUI wallet's `wallet_bridge.rs`. It is not intended to be used directly
@@ -94,9 +94,9 @@ let balance = ledger.balance(current_height);
 ### Driving sync
 
 The block-fetch / poll / reorg-detect / wallet-state-mutate loop is owned
-by `shekyl-wallet-core::Wallet::refresh`, which calls
+by `shekyl-engine-core::Engine::refresh`, which calls
 `produce_scan_result` against a borrowed `LedgerSnapshot` and merges via
-`Wallet::apply_scan_result` under a brief `&mut self` window. See the
+`Engine::apply_scan_result` under a brief `&mut self` window. See the
 Phase 2a refresh-driver decision-log entries (2026-04-25 / 2026-04-26)
 in `docs/V3_WALLET_DECISION_LOG.md` for the snapshot-merge rationale.
 This crate intentionally provides no top-level driver of its own —

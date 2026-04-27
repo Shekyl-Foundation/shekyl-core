@@ -18,9 +18,9 @@ use curve25519_dalek::edwards::EdwardsPoint;
 
 use shekyl_oxide::io::*;
 
-// PaymentId moved to `shekyl-wallet-state`; re-exported here so `crate::extra::PaymentId`
+// PaymentId moved to `shekyl-engine-state`; re-exported here so `crate::extra::PaymentId`
 // and `use crate::extra::PaymentId` continue to resolve while the migration is in flight.
-pub use shekyl_wallet_state::PaymentId;
+pub use shekyl_engine_state::PaymentId;
 
 pub(crate) const MAX_TX_EXTRA_PADDING_COUNT: usize = 255;
 const MAX_TX_EXTRA_NONCE_SIZE: usize = 255;

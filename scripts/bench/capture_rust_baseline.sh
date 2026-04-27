@@ -56,9 +56,9 @@ need python3
 # the iai snapshot; the script treats each row as self-contained.
 
 BENCHES=(
-  "shekyl-wallet-state:ledger:ledger_iai"
-  "shekyl-wallet-state:balance:balance_iai"
-  "shekyl-wallet-file:open:open_iai"
+  "shekyl-engine-state:ledger:ledger_iai"
+  "shekyl-engine-state:balance:balance_iai"
+  "shekyl-engine-file:open:open_iai"
   "shekyl-scanner:scan_block:scan_block_iai"
   "shekyl-tx-builder:transfer_e2e:transfer_e2e_iai"
 )

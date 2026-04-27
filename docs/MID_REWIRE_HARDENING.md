@@ -23,8 +23,8 @@ landed) and the C++ consumer rewire (commits 2k.5a onward, deferred).
 ## 1. Motivation
 
 The wallet2 → Rust migration is at the structural midpoint. The
-Rust-side pieces are in: `shekyl-wallet-state`, `shekyl-wallet-file`,
-`shekyl-wallet-prefs`, and the `shekyl-ffi` consumer surface
+Rust-side pieces are in: `shekyl-engine-state`, `shekyl-engine-file`,
+`shekyl-engine-prefs`, and the `shekyl-ffi` consumer surface
 (`shekyl_wallet_{create,open,save_state,rotate_password,prefs_*,
 export_ledger_postcard,get_metadata,free}`). The C++ consumer —
 `wallet2.cpp` — has not been rewired yet: the old `keys_file_data` /
@@ -255,9 +255,9 @@ Rust stack, mirroring the Five from commit 1. No CI integration yet
 
 **Deliverable artifacts.**
 
-- `rust/shekyl-wallet-state/benches/ledger.rs` — postcard round-trip.
-- `rust/shekyl-wallet-state/benches/balance.rs` — balance compute.
-- `rust/shekyl-wallet-file/benches/open.rs` — cold open.
+- `rust/shekyl-engine-state/benches/ledger.rs` — postcard round-trip.
+- `rust/shekyl-engine-state/benches/balance.rs` — balance compute.
+- `rust/shekyl-engine-file/benches/open.rs` — cold open.
 - `rust/shekyl-scanner/benches/scan_block.rs` — scan-block.
 - `rust/shekyl-tx-builder/benches/transfer_e2e.rs` — transfer E2E.
 - `scripts/bench/capture_rust_baseline.sh` — convenience runner
@@ -545,7 +545,7 @@ commit. That commit also:
   re-center once 2m-keys deletes the legacy JSON parse. Balance
   compute should stay roughly flat (the 1000-output loop is not on
   the rewire path). `BM_balance_compute` / staking selection are
-  unchanged — they run entirely in the post-2a `shekyl-wallet-state`
+  unchanged — they run entirely in the post-2a `shekyl-engine-state`
   crate.
 - PR comment deltas are **informational only during the window**.
   Reviewers should still eyeball them — anything that regresses a
@@ -593,11 +593,11 @@ trait-object serialization and solves a different problem.
 
 **Deliverable artifacts.**
 
-- `rust/shekyl-wallet-state/schemas/ledger_block.snap`,
+- `rust/shekyl-engine-state/schemas/ledger_block.snap`,
   `bookkeeping_block.snap`, `tx_meta_block.snap`,
   `sync_state_block.snap`, `wallet_ledger.snap`. Pretty JSON, stable
   ordering, committed to the repo.
-- `rust/shekyl-wallet-state/src/schema_snapshot.rs` — a test module
+- `rust/shekyl-engine-state/src/schema_snapshot.rs` — a test module
   containing a single test per block that writes the live schema to
   the corresponding `.snap` file **if `UPDATE_SNAPSHOTS=1` is set**,
   and otherwise asserts byte-equality with the committed `.snap`.
@@ -664,8 +664,8 @@ snapshot-assertion test passes on a clean checkout; a deliberate
 field rename in a block produces a failing test with a diff pointing
 at the changed node; the CI workflow fails on a PR that edits a
 `.snap` file without touching the corresponding version constant.
-All four conditions met at landing: `rust/shekyl-wallet-state/schemas/`
-holds the five files; `cargo test -p shekyl-wallet-state schema_snapshot`
+All four conditions met at landing: `rust/shekyl-engine-state/schemas/`
+holds the five files; `cargo test -p shekyl-engine-state schema_snapshot`
 is green; a scratch `#[serde(rename = "restore_height")]` on
 `SyncStateBlock::restore_from_height` produced the expected unified
 diff (`- "name": "restore_from_height"` / `+ "name": "restore_height"`);
@@ -678,18 +678,18 @@ line untouched.
 **Status.** Landed. Pointer in §7 below.
 
 **Scope.** Last-line-of-defense check that secret-bearing fields in
-`shekyl-wallet-state` are wrapped in `Zeroizing<...>` or a typed
+`shekyl-engine-state` are wrapped in `Zeroizing<...>` or a typed
 secret wrapper. Mechanical, opt-out via allowlist.
 
 **Approach.** ripgrep-based CI job. Scans
-`rust/shekyl-wallet-state/src/**/*.rs` for `[u8; N]`, `[u8; _]`, and
+`rust/shekyl-engine-state/src/**/*.rs` for `[u8; N]`, `[u8; _]`, and
 `Vec<u8>` field declarations. Each hit must be either wrapped in
 `Zeroizing<...>` / `SecretKey<...>` / a typed wrapper over one, or
 present in a frozen allowlist file.
 
 **Deliverable artifacts.**
 
-- `rust/shekyl-wallet-state/.zeroize-allowlist` — newline-separated
+- `rust/shekyl-engine-state/.zeroize-allowlist` — newline-separated
   list of `path:field_name` entries that are deliberately not
   `Zeroizing` (public keys, addresses, commitments, hashes).
   Reviewer-facing; every entry has a comment explaining why the
@@ -742,7 +742,7 @@ public-bytes entries across six files with per-entry rationale.
 ### 3.6 `feat(wallet-state): WalletLedger::check_invariants()`
 
 **Status: Landed.** Module
-[`rust/shekyl-wallet-state/src/invariants.rs`](../rust/shekyl-wallet-state/src/invariants.rs)
+[`rust/shekyl-engine-state/src/invariants.rs`](../rust/shekyl-engine-state/src/invariants.rs)
 owns the closed set of five cross-block invariants, each with a
 stable machine-readable name constant
 (`INV_TIP_NOT_BELOW_TRANSFER`, `INV_TX_KEYS_NO_ORPHANS`,
@@ -752,7 +752,7 @@ stable machine-readable name constant
 variant; `WalletLedger::check_invariants` runs on the load path
 (inside `from_postcard_bytes`, after the version gates) and
 `WalletLedger::preflight_save` runs on the save path (called from
-`shekyl_wallet_file::handle::WalletHandle::save_state` before the
+`shekyl_engine_file::handle::WalletHandle::save_state` before the
 Argon2id-backed seal). Two of the plan's rows below are adjusted to
 match actual block shapes, as the plan explicitly sanctioned:
 there is no `BookkeepingBlock::spent_images` set (spend state lives
@@ -807,10 +807,10 @@ does not trip the commit-3 thresholds.
 
 **Deliverable artifacts.**
 
-- `rust/shekyl-wallet-state/src/invariants.rs` — the five checks.
-- `rust/shekyl-wallet-state/src/error.rs` (or equivalent) — new
+- `rust/shekyl-engine-state/src/invariants.rs` — the five checks.
+- `rust/shekyl-engine-state/src/error.rs` (or equivalent) — new
   variant `InvariantFailed { invariant: &'static str, detail: String }`.
-- `rust/shekyl-wallet-state/src/ledger.rs` — call sites.
+- `rust/shekyl-engine-state/src/ledger.rs` — call sites.
 - Tests: one per invariant, each constructing a minimal
   invariant-violating `WalletLedger` and asserting the expected
   `InvariantFailed` with the expected `invariant` string.
@@ -831,8 +831,8 @@ cover: one positive case on `WalletLedger::empty()`, one positive
 case on a populated 3-transfer / 3-block reorg-trail ledger, and at
 least one negative case per invariant plus alternate reference paths
 for I-2 (pending-tx-hash and scanned-pool references both satisfy the
-check). The pre-existing 96-test `shekyl-wallet-state` suite and
-51-test `shekyl-wallet-file` suite both remain green; clippy is
+check). The pre-existing 96-test `shekyl-engine-state` suite and
+51-test `shekyl-engine-file` suite both remain green; clippy is
 clean with `-D warnings`; fmt is clean. The release-build preflight
 path is exercised by a `#[cfg(not(debug_assertions))]`-gated
 assertion in `preflight_save_returns_typed_error_without_panicking`
@@ -841,7 +841,7 @@ so the same test drives both profiles.
 ### 3.7 `test(wallet-file): adversarial corpus`
 
 **Status: Landed.** New
-[`rust/shekyl-wallet-file/tests/adversarial_corpus.rs`](../rust/shekyl-wallet-file/tests/adversarial_corpus.rs)
+[`rust/shekyl-engine-file/tests/adversarial_corpus.rs`](../rust/shekyl-engine-file/tests/adversarial_corpus.rs)
 drives 16 programmatic attack shapes through the orchestrator's
 `WalletFile::open` entry point. Each test assembles its
 adversarial input in-process from a real `WalletFile::create`
@@ -852,7 +852,7 @@ helper), so the corpus stays green across future format-field
 renames and AEAD-parameter changes without needing a
 deterministic-seal escape hatch in the crypto crate. Per-attack
 narrative and reproduction notes live under
-[`rust/shekyl-wallet-file/tests/fixtures/adversarial/`](../rust/shekyl-wallet-file/tests/fixtures/adversarial/)
+[`rust/shekyl-engine-file/tests/fixtures/adversarial/`](../rust/shekyl-engine-file/tests/fixtures/adversarial/)
 (README + one `.md` per row). The code-posture rule called for
 below now lives in
 [`docs/WALLET_FILE_FORMAT_V1.md`](WALLET_FILE_FORMAT_V1.md) §2.5
@@ -900,7 +900,7 @@ matrix, with rationale:
 
 All other planned rows (D / E / H / I and the new invariant-gate
 attack from commit 6) land with the expected typed refusals. The
-16 corpus tests pass; the rest of the `shekyl-wallet-file` suite
+16 corpus tests pass; the rest of the `shekyl-engine-file` suite
 remains green; clippy is clean with `-D warnings`; fmt is clean.
 
 **Scope.** A corpus of hand-crafted malformed wallet files exercising
@@ -950,10 +950,10 @@ commit, not papered over.
 
 **Deliverable artifacts.**
 
-- `rust/shekyl-wallet-file/tests/fixtures/adversarial/` — binary
+- `rust/shekyl-engine-file/tests/fixtures/adversarial/` — binary
   corpus files, one per attack row. Accompanying `.md` files
   describe how each was constructed (reproducibility).
-- `rust/shekyl-wallet-file/tests/adversarial_corpus.rs` — one test
+- `rust/shekyl-engine-file/tests/adversarial_corpus.rs` — one test
   per corpus entry, asserting the exact typed error.
 - New `WalletFileError::CapabilityPayloadMismatch` variant (if not
   already present).
@@ -978,15 +978,15 @@ patterns in the capability-decode path.
 ### 3.8 `test(wallet-state): fuzz harness`
 
 **Status: Landed.** Two harnesses exercising
-[`WalletLedger::from_postcard_bytes`](../rust/shekyl-wallet-state/src/wallet_ledger.rs)
+[`WalletLedger::from_postcard_bytes`](../rust/shekyl-engine-state/src/wallet_ledger.rs)
 (the canonical name for what the plan called
 `deserialize_postcard`). The stable-Rust proptest harness at
-[`rust/shekyl-wallet-state/tests/fuzz_region2.rs`](../rust/shekyl-wallet-state/tests/fuzz_region2.rs)
-runs on every PR via `cargo test -p shekyl-wallet-state`; the
+[`rust/shekyl-engine-state/tests/fuzz_region2.rs`](../rust/shekyl-engine-state/tests/fuzz_region2.rs)
+runs on every PR via `cargo test -p shekyl-engine-state`; the
 cargo-fuzz harness at
-[`rust/shekyl-wallet-state/fuzz/`](../rust/shekyl-wallet-state/fuzz/)
+[`rust/shekyl-engine-state/fuzz/`](../rust/shekyl-engine-state/fuzz/)
 ships as a checked-in local-only tool excluded from the workspace
-(see the new `exclude = ["shekyl-wallet-state/fuzz"]` entry in
+(see the new `exclude = ["shekyl-engine-state/fuzz"]` entry in
 [`rust/Cargo.toml`](../rust/Cargo.toml)). The proptest harness
 runs five strategies at 128 cases each (640 cases total —
 comfortably inside the plan's ~500-iteration budget): point
@@ -1012,7 +1012,7 @@ documents the `cargo +nightly fuzz run region2_parser`
 invocation, the two-condition graduation plan (nightly
 stabilisation OR mainnet-freeze proximity), and why nightly is
 not in CI today. Verified locally: all 96 existing
-`shekyl-wallet-state` unit tests remain green; the new 5-test
+`shekyl-engine-state` unit tests remain green; the new 5-test
 proptest harness passes in 0.06 s wall-clock; `cargo check
 --workspace --tests` on stable ignores the fuzz crate entirely
 (the `exclude` entry works); clippy is clean with `-D warnings`;
@@ -1036,10 +1036,10 @@ input.
   successfully or returns a typed error (no panics, no aborts).
   ~500 iterations per PR; cheap.
 - **cargo-fuzz** (nightly Rust, not CI-integrated) — checked-in
-  harness at `rust/shekyl-wallet-state/fuzz/fuzz_targets/
+  harness at `rust/shekyl-engine-state/fuzz/fuzz_targets/
   region2_parser.rs`, runnable locally with
   `cargo +nightly fuzz run region2_parser`. Documented in
-  `rust/shekyl-wallet-state/fuzz/README.md` as a local-only tool
+  `rust/shekyl-engine-state/fuzz/README.md` as a local-only tool
   until mainnet-freeze, at which point it graduates to a nightly
   sidecar job. No CI integration in this pass.
 
@@ -1056,9 +1056,9 @@ pre-freeze. If the pass must be cut, keep proptest, drop cargo-fuzz.
 
 **Deliverable artifacts.**
 
-- `rust/shekyl-wallet-state/tests/fuzz_region2.rs` — proptest
+- `rust/shekyl-engine-state/tests/fuzz_region2.rs` — proptest
   harness.
-- `rust/shekyl-wallet-state/fuzz/` — cargo-fuzz harness
+- `rust/shekyl-engine-state/fuzz/` — cargo-fuzz harness
   (workspace-excluded, local-only).
 
 **Dependencies.** Benefits from 3.6 landing first so that

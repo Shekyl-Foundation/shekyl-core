@@ -7,12 +7,12 @@
 # check_zeroize.sh — mid-rewire hardening-pass commit 5, §3.5.
 #
 # Last-line-of-defense that every `[u8; N]` or `Vec<u8>` field
-# declared inside `rust/shekyl-wallet-state/src/**/*.rs` (production
+# declared inside `rust/shekyl-engine-state/src/**/*.rs` (production
 # code — test modules are elided) is either:
 #
 #   1. Wrapped in a zeroize-on-drop type (`Zeroizing<...>` or
 #      `SecretKey<...>`) at the same-line declaration site, OR
-#   2. Enumerated in `rust/shekyl-wallet-state/.zeroize-allowlist`
+#   2. Enumerated in `rust/shekyl-engine-state/.zeroize-allowlist`
 #      as a deliberate public-bytes field (public keys, block
 #      hashes, tx hashes, key images, mirror-struct schema fields,
 #      runtime-only indexes).
@@ -32,7 +32,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CRATE_DIR="${REPO_ROOT}/rust/shekyl-wallet-state"
+CRATE_DIR="${REPO_ROOT}/rust/shekyl-engine-state"
 SRC_DIR="${CRATE_DIR}/src"
 ALLOWLIST="${CRATE_DIR}/.zeroize-allowlist"
 
@@ -162,7 +162,7 @@ if [ -n "${MISSING}" ]; then
   echo
   echo "${MISSING}" | sed 's/^/  /'
   echo
-  echo "Every [u8; N] or Vec<u8> field in shekyl-wallet-state must"
+  echo "Every [u8; N] or Vec<u8> field in shekyl-engine-state must"
   echo "either be wrapped in Zeroizing<...> / SecretKey<...>, OR be"
   echo "listed in:"
   echo "  ${ALLOWLIST#${REPO_ROOT}/}"

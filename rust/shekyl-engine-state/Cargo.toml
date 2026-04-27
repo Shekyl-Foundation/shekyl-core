@@ -1,0 +1,73 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-engine-state"
+description = "Canonical Shekyl engine state types: TransferDetails, RuntimeWalletState, StakerPoolState, and the blocks persisted to the wallet file ledger section."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zeroize = { version = "^1.5", features = ["zeroize_derive"] }
+curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
+hex = { version = "0.4", features = ["alloc"] }
+serde.workspace = true
+serde_bytes = "0.11"
+thiserror.workspace = true
+tracing = "0.1"
+postcard = { version = "1", features = ["alloc"] }
+
+# Hardening-pass commit 3.4 (`docs/MID_REWIRE_HARDENING.md` §3.4):
+# `postcard-schema` turns the `block_version` discipline from cultural
+# invariant into a mechanical check. Every persisted block derives
+# `Schema`; `src/schema_snapshot.rs` snapshots the resulting `NamedType`
+# tree to JSON and CI diffs that snapshot on every PR. Pinned at
+# `0.2` (same major as `postcard = "1"`, stable schema representation).
+postcard-schema = { version = "0.2", default-features = false, features = ["derive", "use-std"] }
+
+shekyl-address = { path = "../shekyl-address" }
+shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-staking = { path = "../shekyl-staking" }
+
+[dev-dependencies]
+serde_json = "1"
+proptest = "1"
+
+# Hardening-pass commit 2 (`docs/MID_REWIRE_HARDENING.md` §3.2): criterion for
+# wall-clock metrics on the two engine-state hot paths (`ledger`, `balance`),
+# and iai-callgrind for deterministic instruction-count metrics mirroring the
+# same hot paths (suffix `_iai`). The criterion harness runs on any host;
+# iai-callgrind requires Valgrind plus `cargo install iai-callgrind-runner`
+# and is the metric the §3.3 CI gate enforces against.
+criterion = { version = "0.5", features = ["html_reports"] }
+iai-callgrind = "0.16"
+
+# Used only by `benches/balance.rs` — the canonical `BalanceSummary::compute`
+# lives in the scanner crate; the bench lives in `shekyl-engine-state` because
+# that is where the `TransferDetails` input type is defined. Dev-only, does
+# not widen the crate's runtime dep graph.
+shekyl-scanner = { path = "../shekyl-scanner" }
+shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
+
+[[bench]]
+name = "ledger"
+harness = false
+
+[[bench]]
+name = "ledger_iai"
+harness = false
+
+[[bench]]
+name = "balance"
+harness = false
+
+[[bench]]
+name = "balance_iai"
+harness = false
+
+[lints]
+workspace = true

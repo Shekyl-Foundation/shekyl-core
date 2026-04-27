@@ -628,7 +628,7 @@ jobs:
             echo "$DIRECT"
           fi
           # Fail if any shekyl crate has a normal dependency on the 0.4 line
-          for crate in shekyl-ffi shekyl-fcmp shekyl-crypto-pq shekyl-proofs shekyl-tx-builder shekyl-scanner shekyl-wallet-rpc shekyl-daemon-rpc; do
+          for crate in shekyl-ffi shekyl-fcmp shekyl-crypto-pq shekyl-proofs shekyl-tx-builder shekyl-scanner shekyl-engine-rpc shekyl-daemon-rpc; do
             if cargo tree -p "$crate" --edges normal 2>/dev/null \
                | grep 'dalek-ff-group v0\.4'; then
               echo "FATAL: $crate has a normal (non-dev) dependency on dalek-ff-group 0.4"

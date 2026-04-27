@@ -9,7 +9,7 @@ members = [
     "shekyl-economics",
     "shekyl-staking",
     "shekyl-economics-sim",
-    "shekyl-wallet-rpc",
+    "shekyl-engine-rpc",
     "shekyl-tx-builder",
     "shekyl-daemon-rpc",
     "shekyl-encoding",
@@ -34,22 +34,22 @@ members = [
     # Shekyl-native scanner crate
     "shekyl-scanner",
 
-    # Canonical wallet state types (transfers, runtime state, staker pool)
-    "shekyl-wallet-state",
+    # Canonical engine state types (transfers, runtime state, staker pool)
+    "shekyl-engine-state",
 
     # v1 two-file wallet envelope orchestrator (.wallet.keys + .wallet)
-    "shekyl-wallet-file",
+    "shekyl-engine-file",
 
     # Plaintext-with-HMAC user preferences (layer 2 of WALLET_PREFS.md)
-    "shekyl-wallet-prefs",
+    "shekyl-engine-prefs",
 
     # V3 proof protocol (tx_proof, reserve_proof)
     "shekyl-proofs",
 
-    # Shekyl wallet core: transaction builders
-    "shekyl-wallet-core",
+    # Shekyl engine core: orchestrator and transaction builders
+    "shekyl-engine-core",
 
-    # Interactive CLI wallet (replacement for simplewallet)
+    # Interactive CLI engine (replacement for simplewallet)
     "shekyl-cli",
 
     # Unified tracing-based logger init for all Rust binaries
@@ -62,7 +62,7 @@ members = [
 # only builds under `cargo +nightly fuzz build`. Hardening-pass
 # commit 8 (`docs/MID_REWIRE_HARDENING.md` §3.8).
 exclude = [
-    "shekyl-wallet-state/fuzz",
+    "shekyl-engine-state/fuzz",
 ]
 resolver = "2"
 

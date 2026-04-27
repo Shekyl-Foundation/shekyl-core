@@ -10,14 +10,14 @@
 # wallet-state source tree, the allowlist, or this workflow itself.
 # The script:
 #
-#   - scans `rust/shekyl-wallet-state/src/**/*.rs` for `[u8; N]` and
+#   - scans `rust/shekyl-engine-state/src/**/*.rs` for `[u8; N]` and
 #     `Vec<u8>` field declarations (production code; `#[cfg(test)]`
 #     modules and multi-line function-signature parameters are
 #     excluded via paren-depth tracking);
 #   - treats any hit wrapped in `Zeroizing<...>` / `SecretKey<...>`
 #     as auto-passing;
 #   - requires every remaining hit to be enumerated in
-#     `rust/shekyl-wallet-state/.zeroize-allowlist`;
+#     `rust/shekyl-engine-state/.zeroize-allowlist`;
 #   - fails with a pinpoint message on either a missing entry (new
 #     unwrapped field) or a stale entry (allowlisted field removed
 #     without also removing the line).
@@ -34,8 +34,8 @@ on:
   pull_request:
     branches: [dev]
     paths:
-      - "rust/shekyl-wallet-state/src/**"
-      - "rust/shekyl-wallet-state/.zeroize-allowlist"
+      - "rust/shekyl-engine-state/src/**"
+      - "rust/shekyl-engine-state/.zeroize-allowlist"
       - "scripts/ci/check_zeroize.sh"
       - ".github/workflows/zeroize-check.yml"
 

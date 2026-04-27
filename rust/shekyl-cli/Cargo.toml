@@ -1,6 +1,6 @@
 [package]
 name = "shekyl-cli"
-description = "Interactive CLI wallet for Shekyl"
+description = "Interactive CLI engine for Shekyl"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,7 +10,7 @@ name = "shekyl-cli"
 path = "src/main.rs"
 
 [dependencies]
-shekyl-wallet-rpc = { path = "../shekyl-wallet-rpc", features = ["rust-scanner", "native-sign"] }
+shekyl-engine-rpc = { path = "../shekyl-engine-rpc", features = ["rust-scanner", "native-sign"] }
 clap = { version = "4", features = ["derive"] }
 rustyline = "15"
 tokio = { version = "1", features = ["full"] }

@@ -10,14 +10,14 @@
 //! shown to users, while routing raw details to a safe location when --debug
 //! is active.
 
-use shekyl_wallet_rpc::WalletError;
+use shekyl_engine_rpc::EngineError;
 use std::io::{IsTerminal, Write};
 
 /// Known-safe error codes whose full message can be shown to the user.
 const SAFE_ERROR_CODES: &[i32] = &[
     -1,  // unknown method
-    -2,  // wallet not open
-    -3,  // wallet already open
+    -2,  // engine not open
+    -3,  // engine already open
     -4,  // invalid address
     -5,  // invalid payment id
     -6,  // transfer error (insufficient balance etc.)
@@ -25,14 +25,14 @@ const SAFE_ERROR_CODES: &[i32] = &[
     -9,  // daemon not connected
 ];
 
-/// Produce a user-safe error message from a WalletError.
-pub fn sanitize_error(err: &WalletError) -> String {
+/// Produce a user-safe error message from a EngineError.
+pub fn sanitize_error(err: &EngineError) -> String {
     if SAFE_ERROR_CODES.contains(&err.code) {
         let cleaned = strip_paths(&err.message);
         return format!("Error: {cleaned}");
     }
     format!(
-        "Wallet error (code {}). Run with --debug for details.",
+        "Engine error (code {}). Run with --debug for details.",
         err.code
     )
 }
@@ -43,9 +43,9 @@ pub fn sanitize_error(err: &WalletError) -> String {
 /// - Otherwise: write to ~/.shekyl/debug.log with 0600 permissions.
 ///
 /// Never writes raw errors to stdout.
-pub fn emit_debug_error(err: &WalletError) {
+pub fn emit_debug_error(err: &EngineError) {
     let detail = format!(
-        "[DEBUG] Wallet error code={} message={:?}",
+        "[DEBUG] Engine error code={} message={:?}",
         err.code, err.message
     );
 
@@ -62,9 +62,9 @@ pub fn emit_debug_error(err: &WalletError) {
     }
 }
 
-/// Handle a WalletError: always print the sanitized version to stdout,
+/// Handle a EngineError: always print the sanitized version to stdout,
 /// and if debug mode is on, also emit the raw details.
-pub fn report_wallet_error(err: &WalletError, debug: bool) {
+pub fn report_engine_error(err: &EngineError, debug: bool) {
     eprintln!("{}", sanitize_error(err));
     if debug {
         emit_debug_error(err);
@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_safe_code_shows_message() {
-        let err = WalletError {
+        let err = EngineError {
             code: -4,
             message: "Invalid destination address".to_string(),
         };
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn test_unknown_code_hides_message() {
-        let err = WalletError {
+        let err = EngineError {
             code: -999,
             message: "internal panic at /home/user/src/wallet.rs:42".to_string(),
         };

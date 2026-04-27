@@ -64,14 +64,14 @@ use std::sync::Mutex;
 // them.
 pub mod account_ffi;
 
-// Wallet-file envelope (WALLET_FILE_FORMAT_V1) FFI surface. Six entry points
+// Engine-file envelope (WALLET_FILE_FORMAT_V1) FFI surface. Six entry points
 // matching `shekyl_crypto_pq::wallet_envelope`:
 //   - shekyl_wallet_keys_inspect    (AAD-only header view)
 //   - shekyl_wallet_keys_seal       (create .wallet.keys)
 //   - shekyl_wallet_keys_open       (decrypt .wallet.keys)
 //   - shekyl_wallet_keys_rewrap_password (rotate wrapping password)
-//   - shekyl_wallet_state_seal      (seal .wallet)
-//   - shekyl_wallet_state_open      (open .wallet)
+//   - shekyl_engine_state_seal      (seal .wallet)
+//   - shekyl_engine_state_open      (open .wallet)
 // Each function follows the two-call sizing + zeroize-on-failure + narrow
 // error-code discipline documented in the module header. Consumed by
 // wallet2.cpp in the commit 2 slice.
@@ -83,7 +83,7 @@ pub mod wallet_envelope_ffi;
 // module exposes a single lifecycle surface (create / open / save /
 // rotate / free) plus a non-secret metadata getter and a postcard ledger
 // export. Consumed by wallet2.cpp in the 2k/2l rewire slices.
-pub mod wallet_file_ffi;
+pub mod engine_file_ffi;
 
 static CONSENSUS_REGISTRY: Mutex<Option<shekyl_consensus::ConsensusRegistry>> = Mutex::new(None);
 
@@ -4002,7 +4002,7 @@ pub unsafe extern "C" fn shekyl_derive_proof_secrets(
     true
 }
 
-// ─── Wallet cache AEAD encryption ────────────────────────────────────────────
+// ─── Engine cache AEAD encryption ────────────────────────────────────────────
 
 /// Encrypt wallet cache plaintext with XChaCha20-Poly1305 AEAD.
 ///
@@ -4094,7 +4094,7 @@ pub unsafe extern "C" fn shekyl_decrypt_wallet_cache(
     }
 }
 
-// ─── Wallet proof FFI exports ────────────────────────────────────────────────
+// ─── Engine proof FFI exports ────────────────────────────────────────────────
 //
 // These FFI wrappers delegate to shekyl_proofs::{tx_proof, reserve_proof}.
 // The C++ caller gathers wallet/blockchain data into flat byte arrays; Rust

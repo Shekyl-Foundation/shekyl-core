@@ -11,8 +11,8 @@
 //! - `shekyl_wallet_keys_seal` — create a fresh `.wallet.keys`
 //! - `shekyl_wallet_keys_open` — decrypt `.wallet.keys`
 //! - `shekyl_wallet_keys_rewrap_password` — rotate the wrapping password
-//! - `shekyl_wallet_state_seal` — seal `.wallet` state bytes
-//! - `shekyl_wallet_state_open` — open `.wallet` state bytes
+//! - `shekyl_engine_state_seal` — seal `.wallet` state bytes
+//! - `shekyl_engine_state_open` — open `.wallet` state bytes
 //!
 //! # Discipline
 //!
@@ -552,12 +552,12 @@ pub unsafe extern "C" fn shekyl_wallet_keys_rewrap_password(
 }
 
 // ---------------------------------------------------------------------------
-// shekyl_wallet_state_seal / open
+// shekyl_engine_state_seal / open
 // ---------------------------------------------------------------------------
 
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn shekyl_wallet_state_seal(
+pub unsafe extern "C" fn shekyl_engine_state_seal(
     password_ptr: *const u8,
     password_len: usize,
     keys_file_ptr: *const u8,
@@ -596,7 +596,7 @@ pub unsafe extern "C" fn shekyl_wallet_state_seal(
 
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn shekyl_wallet_state_open(
+pub unsafe extern "C" fn shekyl_engine_state_open(
     password_ptr: *const u8,
     password_len: usize,
     keys_file_ptr: *const u8,

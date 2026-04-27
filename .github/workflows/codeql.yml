@@ -32,7 +32,7 @@ jobs:
           config-file: ./.github/codeql/config.yml
 
       - name: Build Rust workspace
-        run: cargo build --release --workspace --exclude shekyl-cli --exclude shekyl-wallet-rpc
+        run: cargo build --release --workspace --exclude shekyl-cli --exclude shekyl-engine-rpc
         working-directory: rust
 
       - name: Perform CodeQL Analysis

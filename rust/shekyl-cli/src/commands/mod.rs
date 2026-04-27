@@ -15,22 +15,22 @@ mod staking;
 mod transfers;
 
 use crate::daemon::DaemonClient;
-use crate::wallet::WalletContext;
+use crate::engine::EngineContext;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
 const HELP_TEXT: &str = "\
-Wallet lifecycle:
-  create <filename>                   Create a new wallet
-  open <filename>                     Open an existing wallet
-  close                               Close the current wallet
-  restore <filename> <seed...>        Restore wallet from mnemonic seed
-  password                            Change wallet password
+Engine lifecycle:
+  create <filename>                   Create a new engine
+  open <filename>                     Open an existing engine
+  close                               Close the current engine
+  restore <filename> <seed...>        Restore engine from mnemonic seed
+  password                            Change engine password
   rescan [hard]                       Rescan blockchain (hard = lose metadata)
   refresh                             Sync with the daemon
-  save                                Save wallet to disk
-  status                              Show sync height and wallet state
-  wallet_info                         Show wallet info (no filename)
+  save                                Save engine to disk
+  status                              Show sync height and engine state
+  engine_info                         Show engine info (no filename)
 
 Accounts and addresses:
   account show                        List accounts (default marked with *)
@@ -81,9 +81,9 @@ Signing:
   NOTE: Signatures use Shekyl-specific domain separation
         (ShekylMessageSignature) and are NOT compatible with Monero.
 
-Offline signing (cold-wallet workflow):
+Offline signing (cold-engine workflow):
   describe_transfer <unsigned_hex>    Inspect an unsigned transaction
-  sign_transfer <hex> [--file path]   Sign an unsigned transaction (full wallet)
+  sign_transfer <hex> [--file path]   Sign an unsigned transaction (full engine)
   submit_transfer <signed_hex>        Broadcast a signed transaction
 
 Meta:
@@ -97,7 +97,7 @@ Global flags (use with any command):
   --subaddr-indices N,M,...           Multiple source subaddresses";
 
 pub fn repl(
-    ctx: WalletContext,
+    ctx: EngineContext,
     _daemon_client: Option<DaemonClient>,
     _debug: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -137,7 +137,7 @@ pub fn repl(
                     ResolvedCommand::Exit => {
                         if ctx.is_open() {
                             if let Err(e) = ctx.close() {
-                                eprintln!("Warning: failed to close wallet: {e}");
+                                eprintln!("Warning: failed to close engine: {e}");
                             }
                         }
                         break;
@@ -268,7 +268,7 @@ pub fn repl(
                     // Keys
                     ResolvedCommand::Seed => keys::cmd_seed(&ctx),
 
-                    // Wallet ops
+                    // Engine ops
                     ResolvedCommand::Password => lifecycle::cmd_password(&ctx),
                     ResolvedCommand::Rescan { hard } => lifecycle::cmd_rescan(&ctx, hard),
                     ResolvedCommand::ShowTransfer { txid } => {
@@ -411,7 +411,7 @@ pub fn repl(
 
                     // Meta
                     ResolvedCommand::Version => sign::cmd_version(),
-                    ResolvedCommand::WalletInfo => sign::cmd_wallet_info(&ctx),
+                    ResolvedCommand::EngineInfo => sign::cmd_engine_info(&ctx),
 
                     ResolvedCommand::Unknown { cmd } => {
                         eprintln!("Unknown command: {cmd}. Type \"help\" for available commands.");
@@ -421,7 +421,7 @@ pub fn repl(
             Err(ReadlineError::Interrupted | ReadlineError::Eof) => {
                 if ctx.is_open() {
                     if let Err(e) = ctx.close() {
-                        eprintln!("Warning: failed to close wallet: {e}");
+                        eprintln!("Warning: failed to close engine: {e}");
                     }
                 }
                 break;
@@ -480,17 +480,17 @@ fn history_path() -> Option<String> {
     })
 }
 
-pub(crate) fn require_open(ctx: &WalletContext) -> bool {
+pub(crate) fn require_open(ctx: &EngineContext) -> bool {
     if !ctx.is_open() {
-        eprintln!("No wallet is open. Use \"open <filename>\" or \"create <filename>\" first.");
+        eprintln!("No engine is open. Use \"open <filename>\" or \"create <filename>\" first.");
         return false;
     }
     true
 }
 
-pub(crate) fn require_closed(ctx: &WalletContext) -> bool {
+pub(crate) fn require_closed(ctx: &EngineContext) -> bool {
     if ctx.is_open() {
-        eprintln!("A wallet is already open. Use \"close\" first.");
+        eprintln!("An engine is already open. Use \"close\" first.");
         return false;
     }
     true

@@ -108,10 +108,10 @@ use crate::kem::{ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN};
 // ---------------------------------------------------------------------------
 
 /// ASCII magic for `.wallet.keys`. Eight bytes so it aligns cleanly and so
-/// `file(1)` can detect it. "WT" = Wallet Keys.
+/// `file(1)` can detect it. "WT" = Engine Keys.
 pub const KEYS_FILE_MAGIC: &[u8; 8] = b"SHEKYLWT";
 
-/// ASCII magic for `.wallet`. "WS" = Wallet State.
+/// ASCII magic for `.wallet`. "WS" = Engine State.
 pub const STATE_FILE_MAGIC: &[u8; 8] = b"SHEKYLWS";
 
 /// Version of the file format emitted by this implementation. Bumps on any
@@ -395,7 +395,7 @@ pub struct OpenedKeysFile {
     /// The recovered 32-byte `file_kek` that decrypted region 1 — the
     /// same value that is stored re-encrypted under the wrap key on
     /// disk. Exposed so higher layers (notably
-    /// [`shekyl_wallet_prefs`](https://docs.rs/shekyl-wallet-prefs))
+    /// [`shekyl_engine_prefs`](https://docs.rs/shekyl-engine-prefs))
     /// can derive per-wallet subkeys under HKDF-Expand without a
     /// second Argon2id run, and without this crate having to know
     /// about their key-schedule labels.
@@ -815,7 +815,7 @@ pub fn open_keys_file(
         cap_content: cap_content_buf,
         seed_block_tag: region1_tag,
         // Hand the caller the recovered `file_kek` so it can derive
-        // per-wallet subkeys (e.g. `shekyl-wallet-prefs`' HMAC key)
+        // per-wallet subkeys (e.g. `shekyl-engine-prefs`' HMAC key)
         // without a second Argon2id run. `file_kek_z` was already a
         // `Zeroizing` container above; we move it straight into the
         // struct so the wipe semantics are preserved end-to-end.

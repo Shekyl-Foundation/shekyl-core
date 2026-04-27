@@ -26,9 +26,9 @@ shekyl-economics = { path = "../shekyl-economics" }
 shekyl-staking = { path = "../shekyl-staking" }
 shekyl-proofs = { path = "../shekyl-proofs" }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
-shekyl-wallet-file = { path = "../shekyl-wallet-file" }
-shekyl-wallet-prefs = { path = "../shekyl-wallet-prefs" }
-shekyl-wallet-state = { path = "../shekyl-wallet-state" }
+shekyl-engine-file = { path = "../shekyl-engine-file" }
+shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
+shekyl-engine-state = { path = "../shekyl-engine-state" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }
 # OsRng for the testnet/fakechain raw-seed generation FFI. The feature set is

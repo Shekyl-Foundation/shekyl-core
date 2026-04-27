@@ -186,10 +186,10 @@ pub struct Config {
     /// binary crates that call [`crate::init`] directly:
     ///
     /// * `shekyl-cli` — always `None` (stderr-only).
-    /// * `shekyl-wallet-rpc` (Rust variant) — `None` by default;
+    /// * `shekyl-engine-rpc` (Rust variant) — `None` by default;
     ///   populated with `Some(FileSink::unrotated(...))` when the user
     ///   passes `--log-file <path>`. See
-    ///   `rust/shekyl-wallet-rpc/src/main.rs` for the exact mapping.
+    ///   `rust/shekyl-engine-rpc/src/main.rs` for the exact mapping.
     ///
     /// The C++ daemon (`shekyld`) does **not** consume this struct. It
     /// routes through the raw FFI entry point `shekyl_log_init_file`

@@ -3,10 +3,10 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! shekyl-cli: interactive CLI wallet for Shekyl.
+//! shekyl-cli: interactive CLI engine for Shekyl.
 //!
-//! Thin REPL frontend over `shekyl-wallet-rpc` (library mode). Uses the same
-//! Rust wallet stack as the GUI: wallet2 via FFI for lifecycle, Rust scanner
+//! Thin REPL frontend over `shekyl-engine-rpc` (library mode). Uses the same
+//! Rust engine stack as the GUI: wallet2 via FFI for lifecycle, Rust scanner
 //! for reads, and native-sign for transaction construction.
 
 pub mod commands;
@@ -16,12 +16,12 @@ pub mod errors;
 pub mod resolve;
 pub mod session;
 pub mod validate;
-mod wallet;
+mod engine;
 
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = "shekyl-cli", about = "Shekyl interactive CLI wallet", version)]
+#[command(name = "shekyl-cli", about = "Shekyl interactive CLI engine", version)]
 pub struct Cli {
     /// Daemon address (host:port or full URL)
     #[arg(long, default_value = "localhost:11028")]
@@ -39,13 +39,13 @@ pub struct Cli {
     #[arg(long, default_value = "mainnet")]
     network: String,
 
-    /// Directory for wallet files
+    /// Directory for engine files
     #[arg(long, default_value = ".")]
-    wallet_dir: String,
+    engine_dir: String,
 
-    /// Open a wallet file immediately on startup
+    /// Open an engine file immediately on startup
     #[arg(long)]
-    wallet_file: Option<String>,
+    engine_file: Option<String>,
 
     /// SOCKS5 proxy for daemon connections (e.g. socks5://127.0.0.1:9050).
     /// Uses distinct SOCKS auth for Tor stream isolation.
@@ -87,13 +87,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (cli.daemon_login, String::new())
     };
 
-    let ctx = wallet::WalletContext::new(
+    let ctx = engine::EngineContext::new(
         nettype,
         &cli.daemon_address,
         &daemon_user,
         &daemon_pass,
         cli.trusted_daemon,
-        &cli.wallet_dir,
+        &cli.engine_dir,
     )?;
 
     let daemon_client = match daemon::DaemonClient::new(
@@ -109,10 +109,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    if let Some(ref filename) = cli.wallet_file {
-        let password = prompt_password("Wallet password: ")?;
+    if let Some(ref filename) = cli.engine_file {
+        let password = prompt_password("Engine password: ")?;
         ctx.open(filename, &password)?;
-        println!("Opened wallet: {filename}");
+        println!("Opened engine: {filename}");
     }
 
     commands::repl(ctx, daemon_client, cli.debug)

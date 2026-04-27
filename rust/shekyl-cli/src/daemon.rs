@@ -8,7 +8,7 @@
 //! Privacy-critical: this client is **independent** of the wallet2 FFI
 //! connection. It uses a separate TCP connection (and a separate Tor circuit
 //! when SOCKS is configured) so that unauthenticated daemon queries like
-//! `get_info` are not correlated with the wallet session.
+//! `get_info` are not correlated with the engine session.
 
 use serde_json::Value;
 use std::fmt;

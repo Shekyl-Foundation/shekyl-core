@@ -6,9 +6,9 @@
 //! Staking commands: stake, unstake, claim, staking_info, chain_health.
 
 use crate::daemon::DaemonClient;
-use crate::wallet::WalletContext;
+use crate::engine::EngineContext;
 
-pub fn cmd_stake(ctx: &WalletContext, account_index: u32, tier: Option<u8>, amount: u64) {
+pub fn cmd_stake(ctx: &EngineContext, account_index: u32, tier: Option<u8>, amount: u64) {
     if !super::require_open(ctx) {
         return;
     }
@@ -45,7 +45,7 @@ pub fn cmd_stake(ctx: &WalletContext, account_index: u32, tier: Option<u8>, amou
     }
 }
 
-pub fn cmd_unstake(ctx: &WalletContext, account_index: u32) {
+pub fn cmd_unstake(ctx: &EngineContext, account_index: u32) {
     if !super::require_open(ctx) {
         return;
     }
@@ -69,7 +69,7 @@ pub fn cmd_unstake(ctx: &WalletContext, account_index: u32) {
     }
 }
 
-pub fn cmd_claim(ctx: &WalletContext, account_index: u32) {
+pub fn cmd_claim(ctx: &EngineContext, account_index: u32) {
     if !super::require_open(ctx) {
         return;
     }
@@ -93,7 +93,7 @@ pub fn cmd_claim(ctx: &WalletContext, account_index: u32) {
     }
 }
 
-pub fn cmd_staking_info(ctx: &WalletContext, account_index: u32) {
+pub fn cmd_staking_info(ctx: &EngineContext, account_index: u32) {
     if !super::require_open(ctx) {
         return;
     }

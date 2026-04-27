@@ -6,7 +6,7 @@ name: "Shekyl CodeQL config"
 #
 # `rust/hard-coded-cryptographic-value` (CWE-321 / CWE-798).
 #
-# Wallet test fixtures throughout `shekyl-wallet-core`, `shekyl-chacha`,
+# Wallet test fixtures throughout `shekyl-engine-core`, `shekyl-chacha`,
 # and any future crate that exercises a credential / KDF / KEM path
 # necessarily embed literal byte-strings as test vectors and password
 # fixtures (e.g. `b"correct horse battery staple"` inside
@@ -22,7 +22,7 @@ name: "Shekyl CodeQL config"
 # string-literal lint:
 #
 #   1. The `Credentials<'a>` type (see
-#      `rust/shekyl-wallet-core/src/wallet/lifecycle.rs`) is the only
+#      `rust/shekyl-engine-core/src/engine/lifecycle.rs`) is the only
 #      shape the orchestrator accepts for authentication material.
 #      Every construction goes through `Credentials::password_only`
 #      (or, in V3.1, `password_with_authenticator`); no other path

@@ -574,7 +574,7 @@ with `extern "C"` linkage in the header.
 above) exist in the Rust `shekyl-ffi` crate behind
 `#[cfg(feature = "multisig")]` but their C header declarations in
 `shekyl_ffi.h` have been removed. FROST multisig is consumed exclusively
-through the Rust wallet crates (`shekyl-wallet-core`, `shekyl-wallet-rpc`),
+through the Rust wallet crates (`shekyl-engine-core`, `shekyl-wallet-rpc`),
 not through C++ code.
 
 ### Build Integration
@@ -1244,10 +1244,10 @@ order, enforced alongside the existing `txin_to_key` sort check.
 | Daemon RPC `chunk_outputs_blob` in `get_curve_tree_path` | **Done** | `core_rpc_server.cpp`, `core_rpc_server_commands_defs.h` |
 | Wallet `fcmp_precomputed_path` stores `leaf_chunk_entries` | **Done** | `wallet2.h/cpp` |
 | C++ wallet FROST code removed | **Done** | `wallet2.h/cpp`, `wallet2_ffi.cpp`, `shekyl_ffi.h` (SHEKYL_MULTISIG blocks deleted) |
-| Rust FROST DKG ceremony (`MultisigDkgSession`) | **Done** | `rust/shekyl-wallet-core/src/multisig/dkg.rs` |
-| Rust FROST signing orchestration (`MultisigSigningSession`) | **Done** | `rust/shekyl-wallet-core/src/multisig/signing.rs` |
+| Rust FROST DKG ceremony (`MultisigDkgSession`) | **Done** | `rust/shekyl-engine-core/src/multisig/dkg.rs` |
+| Rust FROST signing orchestration (`MultisigSigningSession`) | **Done** | `rust/shekyl-engine-core/src/multisig/signing.rs` |
 | `FrostSigningCoordinator` (nonce aggregation + share collection) | **Done** | `rust/shekyl-fcmp/src/frost_sal.rs` |
-| Rust multisig group management (`MultisigGroup`) | **Done** | `rust/shekyl-wallet-core/src/multisig/group.rs` |
+| Rust multisig group management (`MultisigGroup`) | **Done** | `rust/shekyl-engine-core/src/multisig/group.rs` |
 | FROST multisig RPC endpoints (signing only) | **Done** | `rust/shekyl-wallet-rpc/src/multisig_handlers.rs` |
 | FROST SAL unit tests (4 tests) | **Done** | `rust/shekyl-fcmp/src/frost_sal.rs` |
 | FROST DKG unit tests (4 tests) | **Done** | `rust/shekyl-fcmp/src/frost_dkg.rs` |

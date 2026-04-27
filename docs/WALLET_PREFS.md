@@ -50,7 +50,7 @@ Every setting lands in exactly one of three layers:
 
 | Layer                  | Where                                       | Who modifies         | Integrity                     | Evolution policy                                    |
 |------------------------|---------------------------------------------|----------------------|-------------------------------|-----------------------------------------------------|
-| **Hardcoded**          | `shekyl_wallet_state::safety_constants`     | Rust source, per network | Compile-time                  | Changed by release; never by a user or a data file. |
+| **Hardcoded**          | `shekyl_engine_state::safety_constants`     | Rust source, per network | Compile-time                  | Changed by release; never by a user or a data file. |
 | **Plaintext TOML**     | `<base>.prefs.toml` + `<base>.prefs.toml.hmac` | GUI, CLI, or text editor | HMAC-SHA256 over file bytes   | Add/remove fields freely; missing fields use defaults. |
 | **CLI-ephemeral override** | `shekyl-cli` command-line flags         | User at invocation time  | None (never persisted)        | N/A — not stored.                                   |
 
@@ -100,7 +100,7 @@ editor.
   share a `file_kek`; same pattern as `seed_block_tag` binding
   `.wallet` to `.wallet.keys` in `WALLET_FILE_FORMAT_V1`.
 - **Failure semantics** — see §5.
-- **Schema:** defined by the `shekyl-wallet-prefs` crate.
+- **Schema:** defined by the `shekyl-engine-prefs` crate.
   `#[serde(deny_unknown_fields)]` on every nested struct; file-size
   cap at parse time; per-field rejection messages for any name that
   collides with a CLI-override field name (see §6).
@@ -132,7 +132,7 @@ in. Rows are grouped by layer for readability.
 
 ### 3.1 Hardcoded constants
 
-Implemented in `shekyl_wallet_state::safety_constants::NetworkSafetyConstants`
+Implemented in `shekyl_engine_state::safety_constants::NetworkSafetyConstants`
 (commit 2k.1). Fields marked **invariant** admit no CLI override at any
 layer; fields marked **base** supply the per-network default that the
 `SafetyOverrides` struct from §3.3 overlays on at wallet open.
@@ -390,13 +390,13 @@ open-time `WARN` lines still give the user a chance to notice.
 
 ## 8. Reference implementation pointer
 
-- `shekyl_wallet_state::safety_constants::NetworkSafetyConstants` —
-  §2.1 / §3.1 constants (`2k.1`). Landed in `shekyl-wallet-state`
+- `shekyl_engine_state::safety_constants::NetworkSafetyConstants` —
+  §2.1 / §3.1 constants (`2k.1`). Landed in `shekyl-engine-state`
   rather than `shekyl-consensus` because
   `70-modular-consensus.mdc` scopes the latter to PoW proof validation;
   per-network wallet safety policy is wallet-state concern.
-- `shekyl_wallet_file::SafetyOverrides` — §2.3 runtime type (`2k.2`).
-- `shekyl-wallet-prefs` crate — §2.2 TOML types, HMAC, parser (`2k.3`).
+- `shekyl_engine_file::SafetyOverrides` — §2.3 runtime type (`2k.2`).
+- `shekyl-engine-prefs` crate — §2.2 TOML types, HMAC, parser (`2k.3`).
 - `shekyl_ffi::wallet_prefs_ffi` — C ABI for the TOML layer (`2k.4`).
 - `wallet2.cpp` rewire consuming the above — `2k.5`.
 

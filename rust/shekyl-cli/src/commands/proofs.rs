@@ -5,9 +5,9 @@
 
 //! Transaction proof commands via json_rpc pass-through.
 
-use crate::wallet::WalletContext;
+use crate::engine::EngineContext;
 
-pub fn cmd_get_tx_key(ctx: &WalletContext, txid: &str) {
+pub fn cmd_get_tx_key(ctx: &EngineContext, txid: &str) {
     if !super::require_open(ctx) {
         return;
     }
@@ -24,7 +24,7 @@ pub fn cmd_get_tx_key(ctx: &WalletContext, txid: &str) {
     }
 }
 
-pub fn cmd_check_tx_key(ctx: &WalletContext, txid: &str, tx_key: &str, address: &str) {
+pub fn cmd_check_tx_key(ctx: &EngineContext, txid: &str, tx_key: &str, address: &str) {
     if !super::require_open(ctx) {
         return;
     }
@@ -55,7 +55,7 @@ pub fn cmd_check_tx_key(ctx: &WalletContext, txid: &str, tx_key: &str, address: 
     }
 }
 
-pub fn cmd_get_tx_proof(ctx: &WalletContext, txid: &str, address: &str, message: Option<&str>) {
+pub fn cmd_get_tx_proof(ctx: &EngineContext, txid: &str, address: &str, message: Option<&str>) {
     if !super::require_open(ctx) {
         return;
     }
@@ -79,7 +79,7 @@ pub fn cmd_get_tx_proof(ctx: &WalletContext, txid: &str, address: &str, message:
 }
 
 pub fn cmd_check_tx_proof(
-    ctx: &WalletContext,
+    ctx: &EngineContext,
     txid: &str,
     address: &str,
     signature: &str,
@@ -118,7 +118,7 @@ pub fn cmd_check_tx_proof(
 }
 
 pub fn cmd_get_reserve_proof(
-    ctx: &WalletContext,
+    ctx: &EngineContext,
     account_index: u32,
     amount: Option<u64>,
     message: Option<&str>,
@@ -150,7 +150,7 @@ pub fn cmd_get_reserve_proof(
 }
 
 pub fn cmd_check_reserve_proof(
-    ctx: &WalletContext,
+    ctx: &EngineContext,
     address: &str,
     signature: &str,
     message: Option<&str>,

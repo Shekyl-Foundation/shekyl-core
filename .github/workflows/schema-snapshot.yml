@@ -11,12 +11,12 @@
 #
 #   pull_request → dev
 #     - assert-snapshots:       runs the `schema_snapshot` tests in
-#                               `shekyl-wallet-state`. Fails with a
+#                               `shekyl-engine-state`. Fails with a
 #                               unified diff if any persisted block's
 #                               postcard wire schema drifts from its
 #                               committed `.snap`.
 #     - enforce-version-bump:   cross-checks the PR diff: if any
-#                               `.snap` under `rust/shekyl-wallet-state/
+#                               `.snap` under `rust/shekyl-engine-state/
 #                               schemas/` changed, the matching version
 #                               constant in the paired source file
 #                               (`WALLET_LEDGER_FORMAT_VERSION`,
@@ -35,7 +35,7 @@ on:
   pull_request:
     branches: [dev]
     paths:
-      - "rust/shekyl-wallet-state/**"
+      - "rust/shekyl-engine-state/**"
       - "rust/Cargo.lock"
       - "rust/Cargo.toml"
       - ".github/workflows/schema-snapshot.yml"
@@ -71,10 +71,10 @@ jobs:
         working-directory: rust
         run: |
           # The snapshot test machinery lives in
-          # `shekyl-wallet-state/src/schema_snapshot.rs`. Filtering by
+          # `shekyl-engine-state/src/schema_snapshot.rs`. Filtering by
           # module name keeps this job fast and isolates the failure
           # signal from unrelated unit tests.
-          cargo test -p shekyl-wallet-state schema_snapshot --no-fail-fast
+          cargo test -p shekyl-engine-state schema_snapshot --no-fail-fast
 
   enforce-version-bump:
     name: "Enforce paired block_version bump"
@@ -96,15 +96,15 @@ jobs:
 
           # Snapshot → source-file + version-constant pairing. Must
           # match `docs/MID_REWIRE_HARDENING.md` §3.4 and the doc-link
-          # table in `rust/shekyl-wallet-state/src/schema_snapshot.rs`.
+          # table in `rust/shekyl-engine-state/src/schema_snapshot.rs`.
           #
           # Each entry: <snap-stem>|<source-file>|<version-constant>
           PAIRS=(
-            "wallet_ledger|rust/shekyl-wallet-state/src/wallet_ledger.rs|WALLET_LEDGER_FORMAT_VERSION"
-            "ledger_block|rust/shekyl-wallet-state/src/ledger_block.rs|LEDGER_BLOCK_VERSION"
-            "bookkeeping_block|rust/shekyl-wallet-state/src/bookkeeping_block.rs|BOOKKEEPING_BLOCK_VERSION"
-            "tx_meta_block|rust/shekyl-wallet-state/src/tx_meta_block.rs|TX_META_BLOCK_VERSION"
-            "sync_state_block|rust/shekyl-wallet-state/src/sync_state_block.rs|SYNC_STATE_BLOCK_VERSION"
+            "wallet_ledger|rust/shekyl-engine-state/src/wallet_ledger.rs|WALLET_LEDGER_FORMAT_VERSION"
+            "ledger_block|rust/shekyl-engine-state/src/ledger_block.rs|LEDGER_BLOCK_VERSION"
+            "bookkeeping_block|rust/shekyl-engine-state/src/bookkeeping_block.rs|BOOKKEEPING_BLOCK_VERSION"
+            "tx_meta_block|rust/shekyl-engine-state/src/tx_meta_block.rs|TX_META_BLOCK_VERSION"
+            "sync_state_block|rust/shekyl-engine-state/src/sync_state_block.rs|SYNC_STATE_BLOCK_VERSION"
           )
 
           # The PR's full diff, source-relative. `git diff --name-only
@@ -118,7 +118,7 @@ jobs:
           FAIL=0
           for entry in "${PAIRS[@]}"; do
             IFS='|' read -r stem src const <<< "${entry}"
-            snap="rust/shekyl-wallet-state/schemas/${stem}.snap"
+            snap="rust/shekyl-engine-state/schemas/${stem}.snap"
 
             if echo "${CHANGED}" | grep -Fxq "${snap}"; then
               echo "::group::${stem}: snapshot changed, checking paired version bump"
@@ -171,7 +171,7 @@ jobs:
             1. Decide whether the schema change is intentional.
             2. If yes, bump the paired `*_VERSION` / `*_FORMAT_VERSION`
                constant in the same PR and regenerate the snapshot:
-                 UPDATE_SNAPSHOTS=1 cargo test -p shekyl-wallet-state \
+                 UPDATE_SNAPSHOTS=1 cargo test -p shekyl-engine-state \
                    schema_snapshot
             3. If no, revert the change to the block struct.
 

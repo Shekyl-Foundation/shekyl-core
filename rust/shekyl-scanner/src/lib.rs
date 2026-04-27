@@ -22,7 +22,7 @@
 //! [`TransferDetails`], [`LedgerBlock`], [`LedgerIndexes`],
 //! [`SubaddressIndex`], [`PaymentId`], [`StakerPoolState`], [`AccrualRecord`],
 //! [`FcmpPrecomputedPath`], and [`SPENDABLE_AGE`] are owned by the
-//! [`shekyl_wallet_state`] crate; this crate re-exports them explicitly (no glob)
+//! [`shekyl_engine_state`] crate; this crate re-exports them explicitly (no glob)
 //! so existing `use shekyl_scanner::…` imports keep resolving. Scanner-only
 //! methods on those types (`TransferDetails::from_wallet_output`,
 //! `LedgerIndexes::process_scanned_outputs`, `LedgerBlock::balance`,
@@ -32,7 +32,7 @@
 //!
 //! ```ignore
 //! use shekyl_scanner::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt};
-//! use shekyl_wallet_state::{LedgerBlock, LedgerIndexes};
+//! use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 //!
 //! let mut ledger = LedgerBlock::empty();
 //! let mut indexes = LedgerIndexes::empty();
@@ -70,12 +70,12 @@ pub use scan::{GuaranteedScanner, RecoveredWalletOutput, ScanError, Scanner, Tim
 pub use shared_key::SharedKeyDerivations;
 pub use view_pair::{GuaranteedViewPair, ViewPair, ViewPairError};
 
-// ── Explicit (non-glob) re-exports of types moved to `shekyl-wallet-state`. ──
+// ── Explicit (non-glob) re-exports of types moved to `shekyl-engine-state`. ──
 //
-// Listing them by name (rather than `pub use shekyl_wallet_state::*;`) pins the
+// Listing them by name (rather than `pub use shekyl_engine_state::*;`) pins the
 // scanner's public API surface in commit-diffable form: adding a new type in
-// `shekyl-wallet-state` does NOT silently expand the scanner's API.
-pub use shekyl_wallet_state::{
+// `shekyl-engine-state` does NOT silently expand the scanner's API.
+pub use shekyl_engine_state::{
     AccrualRecord, ConservationCheck, FcmpPrecomputedPath, LedgerBlock, LedgerIndexes, PaymentId,
     StakerPoolState, SubaddressIndex, TransferDetails, SPENDABLE_AGE,
 };

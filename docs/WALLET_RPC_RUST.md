@@ -6,7 +6,7 @@ The Rust wallet RPC layer replaces the C++ `wallet_rpc_server` with a Rust
 implementation that calls the existing C++ `wallet2` library through a C FFI
 facade. This provides:
 
-- **Standalone binary**: `shekyl-wallet-rpc`, a drop-in replacement for the
+- **Standalone binary**: `shekyl-engine-rpc`, a drop-in replacement for the
   legacy C++ wallet RPC server
 - **Embedded library**: Linked directly into the Tauri GUI wallet for
   zero-overhead wallet operations without HTTP or process spawning
@@ -23,7 +23,7 @@ facade. This provides:
 └──────────┼──────────────────────────────────────────────────┘
            │ (in-process Rust call)
 ┌──────────▼──────────────────────────────────────────────────┐
-│              shekyl-wallet-rpc (Rust crate)                  │
+│              shekyl-engine-rpc (Rust crate)                  │
 │  ┌─────────┐  ┌──────────┐  ┌───────┐  ┌───────────────┐  │
 │  │ wallet.rs│  │handlers.rs│  │server │  │ types.rs      │  │
 │  │(Wallet2) │  │(dispatch) │  │(axum) │  │(serde structs)│  │
@@ -85,7 +85,7 @@ application state (both the axum server's `AppState` and the Tauri `AppState`).
 ## Crate Structure
 
 ```
-rust/shekyl-wallet-rpc/
+rust/shekyl-engine-rpc/
 ├── Cargo.toml
 └── src/
     ├── lib.rs               # Library entry point, re-exports
@@ -101,7 +101,7 @@ rust/shekyl-wallet-rpc/
 
 ## GUI Wallet Integration
 
-The GUI wallet (`shekyl-gui-wallet`) depends on `shekyl-wallet-rpc` as a Rust
+The GUI wallet (`shekyl-gui-wallet`) depends on `shekyl-engine-rpc` as a Rust
 library. The integration layer is in `wallet_bridge.rs`:
 
 - **`WalletHandle`**: `Mutex<Option<Wallet2>>` — lazily initialized
@@ -195,7 +195,7 @@ build.
 
 | File | Purpose | Replacement |
 |------|---------|-------------|
-| `wallet_process.rs` | Spawn/manage `shekyl-wallet-rpc` child process | Direct FFI via `wallet_bridge.rs` |
+| `wallet_process.rs` | Spawn/manage `shekyl-engine-rpc` child process | Direct FFI via `wallet_bridge.rs` |
 | `wallet_rpc.rs` | HTTP JSON-RPC client to wallet-rpc process | Direct FFI via `wallet_bridge.rs` |
 
 ## RPC Method Coverage
@@ -235,24 +235,24 @@ FROST multisig is handled by native Rust handlers, see below):
 
 ## Scanner Integration (`rust-scanner` feature)
 
-When `shekyl-wallet-rpc` is compiled with `--features rust-scanner`, the RPC
+When `shekyl-engine-rpc` is compiled with `--features rust-scanner`, the RPC
 server uses split routing:
 
 - **Scanner-backed methods** are handled natively in Rust against the
-  `(LedgerBlock, LedgerIndexes)` pair that `shekyl-wallet-state`
+  `(LedgerBlock, LedgerIndexes)` pair that `shekyl-engine-state`
   exposes:
   `get_balance`, `get_transfers`, `incoming_transfers`,
   `get_transfer_by_txid`, `get_payments`, `get_bulk_payments`,
   `get_height`, `get_staked_outputs`, `get_staked_balance`
 - **All other methods** continue routing through the C++ FFI
 
-> **Note on the feature name.** `shekyl-wallet-rpc::rust-scanner` is a
+> **Note on the feature name.** `shekyl-engine-rpc::rust-scanner` is a
 > *read-side* JSON-RPC cache feature distinct from the now-retired
 > `shekyl-scanner::rust-scanner` feature (which gated the standalone
 > `run_sync_loop` driver, deleted with the Phase 2a refresh-driver
 > landing). The two features happen to share a name by historical
 > coincidence; the JSON-RPC cache stays alive until Phase 4b cuts
-> `shekyl-wallet-rpc` over to a `Wallet<S>` handle and the
+> `shekyl-engine-rpc` over to a `Wallet<S>` handle and the
 > `scanner_state` module is deleted. See
 > [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
 > *"Retire `shekyl-scanner::sync::run_sync_loop` (Phase 2a/4b
@@ -263,7 +263,7 @@ server uses split routing:
 ```
 HTTP POST /json_rpc → handlers::dispatch_with_scanner(method)
   │
-  ├── scanner-backed methods → shekyl-wallet-state (native Rust)
+  ├── scanner-backed methods → shekyl-engine-state (native Rust)
   │     LedgerBlock + LedgerIndexes via shekyl-scanner extension traits
   │     (BalanceSummary, TransferDetailsExt)
   │
@@ -280,12 +280,12 @@ HTTP POST /json_rpc → handlers::dispatch_with_scanner(method)
 |--------|------|---------|
 | `shekyl-scanner` | `Scanner` | Hybrid PQC KEM block/tx/output scan pipeline |
 | `shekyl-scanner` | `RecoveredWalletOutput` | Scan result with all KEM-derived secrets + key image |
-| `shekyl-wallet-state` | `LedgerBlock` | Persisted on-disk wallet state (transfers, claim watermarks, block hashes) |
-| `shekyl-wallet-state` | `LedgerIndexes` | Runtime-derived indexes (`key_images`, `pub_keys`, `staker_pool`); rebuilt at open |
+| `shekyl-engine-state` | `LedgerBlock` | Persisted on-disk wallet state (transfers, claim watermarks, block hashes) |
+| `shekyl-engine-state` | `LedgerIndexes` | Runtime-derived indexes (`key_images`, `pub_keys`, `staker_pool`); rebuilt at open |
 | `shekyl-scanner::ledger_ext` | `TransferDetailsExt`, `LedgerBlockExt`, `LedgerIndexesExt` | Scanner-flavored extension methods (staking, PQC fields, `eligible_height`) |
 | `shekyl-scanner::balance` | `BalanceSummary` | Staking-aware balance breakdown over `(LedgerBlock, LedgerIndexes)` |
-| `shekyl-wallet-rpc` | `LiveLedger` | Local alias for `(LedgerBlock, LedgerIndexes)` |
-| `shekyl-wallet-rpc` | `ScannerState` | Thread-safe wrapper around `LiveLedger` (Phase 4b deletion target) |
+| `shekyl-engine-rpc` | `LiveLedger` | Local alias for `(LedgerBlock, LedgerIndexes)` |
+| `shekyl-engine-rpc` | `ScannerState` | Thread-safe wrapper around `LiveLedger` (Phase 4b deletion target) |
 
 ### GUI Integration
 
@@ -308,7 +308,7 @@ without blocking wallet queries.
 
 **DKG is not exposed over RPC.** The `dkg-pedpop` crate's round message types
 do not implement `serde::Serialize`/`Deserialize`, making direct RPC transport
-impractical. DKG is handled through the `shekyl-wallet-core` API with
+impractical. DKG is handled through the `shekyl-engine-core` API with
 file-based message exchange (air-gap compatible). See `docs/PQC_MULTISIG.md`
 for the DKG ceremony flow.
 
@@ -330,12 +330,12 @@ All byte fields are hex-encoded in request/response JSON.
 
 ## Sync Driver
 
-Background sync is driven by `shekyl-wallet-core::Wallet::refresh`, which
+Background sync is driven by `shekyl-engine-core::Wallet::refresh`, which
 runs the snapshot-merge-with-retry pattern: a snapshot of `(LedgerBlock,
 LedgerIndexes)` is taken under a brief read borrow, the long-running
 `produce_scan_result` async function fetches blocks and scans them
 against the snapshot without holding any wallet borrow, and the
-resulting [`ScanResult`](../rust/shekyl-wallet-core/src/scan.rs) is
+resulting [`ScanResult`](../rust/shekyl-engine-core/src/scan.rs) is
 merged back into the wallet under `&mut self` via
 `apply_scan_result_to_state`. Reorg detection (parent-hash compare,
 `find_fork_point` walk) lives inside `produce_scan_result`; the
@@ -344,7 +344,7 @@ ledger-mutating rewind-then-apply runs atomically inside the merge.
 The standalone `shekyl-scanner::sync::run_sync_loop` driver and its
 `shekyl-scanner::rust-scanner` feature were retired in the Phase 2a
 landing. JSON-RPC server reads continue to flow through
-`shekyl-wallet-rpc::scanner_state` until Phase 4b cuts the crate over
+`shekyl-engine-rpc::scanner_state` until Phase 4b cuts the crate over
 to `Wallet<S>` directly. See
 [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
 *"Retire `shekyl-scanner::sync::run_sync_loop` (Phase 2a/4b

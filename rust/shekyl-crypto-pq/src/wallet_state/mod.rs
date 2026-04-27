@@ -16,7 +16,7 @@
 //! Everything else that historically lived here — the transfers cache,
 //! subaddress/address-book/account tags, tx keys/notes, and the
 //! confirmed/unconfirmed sync state — is deliberately *not* part of this
-//! type. Those live in [`shekyl_wallet_state`] as `postcard`-serialized
+//! type. Those live in [`shekyl_engine_state`] as `postcard`-serialized
 //! ledger blocks that fit in the `.wallet` (region 3) of the two-file
 //! envelope, and they follow their own per-block versioning there. This
 //! separation keeps the keys-file metadata small and JSON-friendly (human
@@ -82,7 +82,7 @@ pub const CURRENT_METADATA_FORMAT_VERSION: u32 = 1;
 /// identity surface serialized into region 2 of the `.wallet.keys` file.
 /// Runtime ledger state (transfers, blockchain tip, sync bookkeeping,
 /// subaddress registry, tx notes / keys) lives separately in
-/// [`shekyl_wallet_state`] and is persisted as postcard-encoded blocks
+/// [`shekyl_engine_state`] and is persisted as postcard-encoded blocks
 /// in the `.wallet` file via the wallet-file orchestrator (commit 2h).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WalletMetadata {

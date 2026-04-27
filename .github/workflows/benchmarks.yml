@@ -56,8 +56,8 @@ on:
   pull_request:
     branches: [dev]
     paths:
-      - "rust/shekyl-wallet-state/**"
-      - "rust/shekyl-wallet-file/**"
+      - "rust/shekyl-engine-state/**"
+      - "rust/shekyl-engine-file/**"
       - "rust/shekyl-scanner/**"
       - "rust/shekyl-tx-builder/**"
       - "rust/shekyl-oxide/**"
@@ -70,8 +70,8 @@ on:
   push:
     branches: [dev]
     paths:
-      - "rust/shekyl-wallet-state/**"
-      - "rust/shekyl-wallet-file/**"
+      - "rust/shekyl-engine-state/**"
+      - "rust/shekyl-engine-file/**"
       - "rust/shekyl-scanner/**"
       - "rust/shekyl-tx-builder/**"
       - "rust/shekyl-oxide/**"

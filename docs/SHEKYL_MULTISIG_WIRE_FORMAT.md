@@ -6,7 +6,7 @@
 >
 > **Parent spec:** `PQC_MULTISIG.md`
 >
-> **Reference implementation:** `rust/shekyl-wallet-core/src/multisig/v31/`
+> **Reference implementation:** `rust/shekyl-engine-core/src/multisig/v31/`
 
 This document defines the portable binary wire format for Shekyl V3.1
 multisig inter-participant communication. A third-party wallet

@@ -6,9 +6,9 @@
 //! Message signing commands: sign, verify.
 //! Uses Shekyl-specific domain separation (ShekylMessageSignature).
 
-use crate::wallet::WalletContext;
+use crate::engine::EngineContext;
 
-pub fn cmd_sign(ctx: &WalletContext, message: &str) {
+pub fn cmd_sign(ctx: &EngineContext, message: &str) {
     if !super::require_open(ctx) {
         return;
     }
@@ -25,7 +25,7 @@ pub fn cmd_sign(ctx: &WalletContext, message: &str) {
     }
 }
 
-pub fn cmd_verify(ctx: &WalletContext, address: &str, message: &str, signature: &str) {
+pub fn cmd_verify(ctx: &EngineContext, address: &str, message: &str, signature: &str) {
     if !super::require_open(ctx) {
         return;
     }
@@ -51,13 +51,13 @@ pub fn cmd_version() {
     println!("shekyl-cli {}", env!("CARGO_PKG_VERSION"));
 }
 
-pub fn cmd_wallet_info(ctx: &WalletContext) {
+pub fn cmd_engine_info(ctx: &EngineContext) {
     if !super::require_open(ctx) {
         return;
     }
 
     let height = ctx.get_height();
-    println!("Wallet info:");
+    println!("Engine info:");
     println!("  Height: {height}");
 
     if let Ok(val) = ctx.get_address(0) {

@@ -6,7 +6,7 @@
 //! EXIT CRITERION: tx_proof V3 10-point round-trip.
 //!
 //! Tests 1-8: Pure Rust, exercising the proof crate directly.
-//! Tests 9-10: Wallet-state tests. Stubbed here for checklist completeness;
+//! Tests 9-10: Engine-state tests. Stubbed here for checklist completeness;
 //! the definitive implementations are C++/FFI core_tests that exercise
 //! wallet2's tx_key absence error paths.
 //!
@@ -561,7 +561,7 @@ fn test_08_wrong_view_key_inbound_rejected() {
 // Tests 9 and 10 (watch-only / restored wallet outbound proof errors) are
 // wallet-state tests that belong in the C++ core_test suite exercising
 // wallet2's m_tx_keys absence path. They will be implemented as part of
-// the Wallet State Migration project (see docs/WALLET_STATE_MIGRATION.md).
+// the Engine State Migration project (see docs/WALLET_STATE_MIGRATION.md).
 
 // --------------------------------------------------------------------------
 // Wire format size assertions

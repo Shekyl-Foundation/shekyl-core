@@ -6,8 +6,8 @@
 //! REPL session state.
 //!
 //! `ReplSession` lives on the REPL loop's stack frame. It is never shared,
-//! never `Send`, and never leaks into wallet-level or RPC-level state.
-//! The wallet RPC layer is stateless with respect to accounts -- every call
+//! never `Send`, and never leaks into engine-level or RPC-level state.
+//! The engine RPC layer is stateless with respect to accounts -- every call
 //! takes an explicit `account_index`. The session default is purely a UI
 //! convenience resolved at parse time.
 
@@ -30,14 +30,14 @@ impl ReplSession {
     }
 
     /// Build the REPL prompt string, reflecting the current default account.
-    pub fn prompt(&self, wallet_open: bool) -> String {
-        if !wallet_open {
+    pub fn prompt(&self, engine_open: bool) -> String {
+        if !engine_open {
             return "shekyl-cli> ".to_string();
         }
         if self.default_account == 0 {
-            "shekyl-cli [wallet]> ".to_string()
+            "shekyl-cli [engine]> ".to_string()
         } else {
-            format!("shekyl-cli [wallet@acct{}]> ", self.default_account)
+            format!("shekyl-cli [engine@acct{}]> ", self.default_account)
         }
     }
 }
