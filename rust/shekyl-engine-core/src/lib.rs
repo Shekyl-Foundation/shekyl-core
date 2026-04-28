@@ -25,7 +25,8 @@ pub use claim_builder::{ClaimTxBuilder, ClaimTxPlan};
 pub use engine::{
     Capability, CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams,
     EngineSignerKind, FeePriority, IoError, KeyError, Network, OpenError, OpenedEngine, PendingTx,
-    PendingTxError, RefreshError, ReservationId, SendError, SoloSigner, TxError, TxHash,
+    PendingTxError, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
+    RefreshReorgEvent, RefreshSummary, ReservationId, SendError, SoloSigner, TxError, TxHash,
     TxRecipient, TxRecipientSummary, TxRequest,
 };
 pub use error::EngineCoreError;
