@@ -536,6 +536,32 @@
 
 ### Documentation
 
+- **Stage 1 trait-boundaries spec, Round 1 draft
+  ([`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)).**
+  First draft of the Stage 1 design document called for by the
+  decision-log entry *"Engine architecture: actor model with staged
+  migration from composition"* (2026-04-27) and the
+  `phase_2b_prep_stage_1_trait_boundaries` plan. Pins six trait
+  surfaces (`KeyEngine`, `LedgerEngine`, `RefreshEngine`,
+  `PendingTxEngine`, `DaemonEngine`, `PersistenceEngine`), the
+  composition shape (`Engine<S, K, L, R, P, D, F>` with default type
+  parameters; concrete fields, generic-bounded methods, no
+  `Box<dyn>`), the per-trait async story, the per-trait error model
+  (per-trait families with a single shared `EngineError` aggregate),
+  the test boundary unlocked by `MockKeyEngine` /
+  `MockDaemonEngine` / etc. (closes today's gap that there is no way
+  to plug `MockRpc` into `start_refresh` end-to-end), the Stage 4
+  transition guarantee (the trait surface in §2 does not change at
+  Stage 4; `kameo` actors implement the same traits with the same
+  signatures), the Stage 1 migration order (`DaemonEngine` first to
+  unlock integration tests; `LedgerEngine` second; the other four
+  in any reviewer-convenient order), and a consolidated 15-item
+  open-questions list as the Round 2 agenda. **Markdown-only; no
+  code changes.** Per
+  [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc),
+  the document runs through 4–6 review rounds against `dev` before
+  any Rust lands. Round 1 draft only — open questions are written
+  down with tentative answers, not closed.
 - **Engine binary boundary pinned as pure message-passing
   (decision log *"Engine binary boundary: pure message-passing
   over shared handle"*, 2026-04-27).** The post-Stage-4 binary
