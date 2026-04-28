@@ -32,10 +32,21 @@ tracing = "0.1"
 # backoff and `tokio::select!` for cancel-or-sleep races. Refresh is
 # inherently async because it polls the daemon, so tokio is an
 # unconditional wallet-core dep (not feature-gated).
-tokio = { version = "1", features = ["time", "macros"] }
-# Cancellation token for cooperative shutdown of the producer between
-# blocks. Callers pass the token through `RefreshOptions` so a single
-# token can govern the whole driver from the binary boundary down.
+#
+# `sync` enables `watch`, `oneshot`, and `RwLock` used by
+# `Engine::start_refresh` (Branch 2): progress emission to subscribers,
+# completion delivery to the `RefreshHandle::join` future, and the
+# transitional `Arc<RwLock<Engine<S>>>` wrapper that lets the producer
+# task hold the engine across `await` points (replaced by actor message
+# passing at Stage 4). `rt` enables `tokio::spawn` for the producer
+# task.
+tokio = { version = "1", features = ["time", "macros", "sync", "rt"] }
+# Cancellation token for cooperative shutdown of the refresh producer
+# between blocks. `Engine::start_refresh` constructs and owns the token
+# internally; callers fire it through `RefreshHandle::cancel` (or by
+# dropping the handle, which delegates to the same token).
+# `CancellationToken` is part of the unconditional surface in
+# tokio-util 0.7 (no feature gate); no explicit feature list needed.
 tokio-util = { version = "0.7" }
 # `Engine::refresh` constructs a `shekyl_scanner::Scanner` from
 # `AllKeysBlob`, which requires assembling a `ViewPair` over

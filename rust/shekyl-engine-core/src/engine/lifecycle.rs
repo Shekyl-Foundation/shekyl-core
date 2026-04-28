@@ -651,6 +651,7 @@ impl Engine<SoloSigner> {
             daemon,
             network,
             capability,
+            refresh_slot: super::refresh::RefreshSlot::new(),
             _signer: std::marker::PhantomData,
         }
     }

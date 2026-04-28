@@ -137,12 +137,12 @@
   (2026-04-27).
 
   The `RefreshHandle` async surface (cancel-on-drop, watch-based
-  `SyncProgress`, `AlreadyRunning` enforcement, `start_refresh`
-  spawning) lands in Branch 2 of the bundle; this branch is the
-  synchronous entry point and the producer / merge contract that
-  the handle wraps.
+  `RefreshProgress`, `AlreadyRunning` enforcement, `start_refresh`
+  spawning) lands in Branch 2 of the bundle (immediately below);
+  this branch is the synchronous entry point and the producer /
+  merge contract that the handle wraps.
 
-  Test coverage lives in `rust/shekyl-engine-core/src/wallet/refresh.rs`'s
+  Test coverage lives in `rust/shekyl-engine-core/src/engine/refresh.rs`'s
   `mod tests` (producer-side: smoke / linear-scan / reorg-shallow /
   reorg-deep / reorg-at-tip / RPC-failure-fetch / RPC-failure-tip /
   scanner-failure / cancellation-mid-scan /
@@ -152,8 +152,89 @@
   cancellation-end-to-end, no-progress-when-tip-equal,
   reorg-rewind-then-apply). The `MockRpc` test scaffold and
   `make_synthetic_block` helper live in
-  `rust/shekyl-engine-core/src/wallet/test_support.rs` for
+  `rust/shekyl-engine-core/src/engine/test_support.rs` for
   deterministic fault injection across producer and driver suites.
+
+- **`Engine::start_refresh` async refresh handle (Phase 2a
+  `refresh_scan_loop` bundle, Branch 2).** The
+  [`shekyl_engine_core::engine::refresh`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  module ships the cancel-on-drop / one-at-a-time / progress-
+  channel handle that wraps the snapshot-merge driver from Branch
+  1. The handle spawns the long-running scan onto a tokio runtime
+  the caller does not have to manage, and threads cancellation
+  and progress through typed channels. Public surface:
+
+  - `Engine::start_refresh(self_arc: Arc<tokio::sync::RwLock<Self>>,
+    opts: RefreshOptions) -> Result<RefreshHandle, RefreshError>` —
+    async constructor on `Engine<S>`. Claims a `RefreshSlot` under
+    a brief read borrow, spawns a producer task, and returns a
+    handle observing the running task. A second call while a
+    handle is alive returns `RefreshError::AlreadyRunning`. The
+    `Arc<RwLock<Engine<S>>>` shape is the transitional shared-
+    handle realization of the message-passing boundary decided in
+    *2026-04-27 — Engine binary boundary: pure message-passing
+    over shared handle*; the actor migration replaces the
+    parameter without changing the handle's external surface.
+  - `RefreshHandle` — RAII handle for the running refresh.
+    Methods: `progress() -> watch::Receiver<RefreshProgress>`
+    (clonable observer of phase / height / blocks-processed /
+    blocks-total updates), `cancel()` (idempotent; fires the
+    shared `CancellationToken`), `is_running() -> bool` (non-
+    blocking poll of the producer's `JoinHandle::is_finished`),
+    `async fn join(self) -> Result<RefreshSummary, RefreshError>`
+    (push-completion via internal `oneshot`; consumes the handle).
+    `Drop for RefreshHandle` is cancel-only — slot release lives
+    on producer task exit, not on handle drop, so the cancel
+    contract is `Drop`-scoped while the slot is self-healing
+    across success / error / cancellation paths.
+  - `RefreshProgress { height, blocks_processed, blocks_total,
+    phase: RefreshPhase }` — `#[non_exhaustive]` snapshot
+    delivered through a `tokio::sync::watch` channel. Per-attempt
+    semantics: `blocks_total` is the per-retry total, not a
+    cumulative running count. The watch channel is seeded by
+    `Engine::start_refresh` with the wallet's current
+    `synced_height` (and zeroed counters) so subscribers observe
+    a baseline matching the wallet state before the producer
+    publishes its first per-attempt update.
+  - `RefreshPhase { Scanning, Merging, Retrying, Cancelled }` —
+    coarse-grained producer state. `Scanning` covers fetch + scan
+    of a per-block batch; `Merging` covers the brief write-locked
+    `apply_scan_result` call; `Retrying` is published when the
+    merge returned `ConcurrentMutation` and the loop is about to
+    retake the snapshot; `Cancelled` is published before the
+    handle's completion `oneshot` fires `Err(Cancelled)`.
+  - `RefreshOptions` extended with no new fields in Branch 2;
+    `max_retries` (Branch 1) is the only public knob.
+    `#[non_exhaustive]` so future progress / batching knobs do
+    not break call sites.
+  - `RefreshError::AlreadyRunning` becomes load-bearing in this
+    branch (Branch 1 reserved the variant); other variants
+    propagate unchanged.
+
+  Test coverage lives in three new modules:
+  `mod refresh_handle_tests` (six unit tests pinning the handle's
+  channel-shaped surface in isolation: progress baseline,
+  progress propagation, cancel + is_running flip, join success,
+  join error, dropped-sender → `MalformedScanResult`),
+  `mod refresh_slot_tests` (four unit tests pinning single-flight
+  semantics: claim-when-unheld, claim-fails-when-held, release-on-
+  guard-drop, clone-shares-flag), and `mod start_refresh_integration_tests`
+  (three integration tests against the real engine + unreachable-
+  daemon: `start_refresh` propagates `IoError::Daemon` via `join`,
+  concurrent `start_refresh` returns `AlreadyRunning`, drop
+  releases the slot for a subsequent `start_refresh`). A
+  `pub(crate) fn for_test(...)` constructor on `RefreshHandle`
+  is the testability seam that lets the surface tests run without
+  spinning up an `Engine<S>`.
+
+  The decision-log scope-closing entry is *2026-04-27 —
+  `RefreshHandle` (Phase 2a Branch 2) ships transitional
+  `Arc<RwLock<Engine>>` under Path B*; the upstream handle-shape
+  entry is *2026-04-25 — `RefreshHandle`: cancel-on-drop RAII,
+  one-at-a-time, scanner checkpoints between blocks*. Wider
+  scenario coverage of `start_refresh` against synthetic block
+  batches lands when `DaemonClient` is generic (deferred outside
+  Branch 2; tracked under V3.1 in `docs/FOLLOWUPS.md`).
 
 - **`Wallet::create` / `Wallet::open_full` / `Wallet::change_password` /
   `Wallet::close` lifecycle methods on `shekyl-engine-core` (Phase 1

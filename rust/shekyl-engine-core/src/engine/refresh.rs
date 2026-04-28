@@ -332,6 +332,575 @@ pub struct RefreshReorgEvent {
     pub fork_height: u64,
 }
 
+// ── Branch 2: async refresh driver surface ─────────────────────────
+//
+// The types in this section are the public face of the in-task
+// snapshot-merge driver introduced by Branch 2's
+// [`Engine::start_refresh`]. They sit on top of the synchronous
+// [`Engine::refresh`] / [`Engine::refresh_with`] primitives and add
+// cancel-on-drop, single-flight enforcement, push-delivered
+// completion (oneshot), and per-block progress emission (watch).
+//
+// The shared-handle parameter shape (`Arc<RwLock<Engine<S>>>`) is
+// transitional infrastructure; it is removed at Stage 4 (kameo
+// actor cutover) in a single API-call-site change. See
+// [`docs/V3_WALLET_DECISION_LOG.md`] entry
+// `Path B engine binary boundary as pure message-passing`
+// (2026-04-27) for the rationale.
+
+/// Phase of an in-flight refresh.
+///
+/// Reported via [`RefreshProgress::phase`] and updated by the
+/// producer task as it walks the per-attempt state machine. The
+/// phase is a coarse classifier — fine-grained per-block progress
+/// rides alongside it as `blocks_processed` / `blocks_total`.
+///
+/// `#[non_exhaustive]` reserves the right to add phases (e.g.
+/// `FetchingTip`, `MergingPostSync`) without breaking matches. UI
+/// consumers should treat unknown discriminants as
+/// `Scanning`-equivalent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RefreshPhase {
+    /// Producer is fetching blocks from the daemon and feeding them
+    /// to the scanner. The dominant phase of a refresh; per-batch
+    /// progress updates land here.
+    Scanning,
+
+    /// Producer has finished scanning and is acquiring the engine
+    /// write-lock to merge the [`ScanResult`]. Brief — bounded by
+    /// the merge's compute (no I/O).
+    Merging,
+
+    /// A merge attempt observed
+    /// [`RefreshError::ConcurrentMutation`]; the loop is pulling a
+    /// fresh snapshot and re-scanning. `blocks_total` updates on
+    /// the retry boundary to reflect the new tip.
+    Retrying,
+
+    /// The cancel token fired and the producer is winding down. No
+    /// further progress will be published; the next observation by
+    /// the receiver after seeing `Cancelled` is `RecvError`
+    /// (Sender dropped on task exit).
+    Cancelled,
+}
+
+/// Snapshot of refresh progress published per-batch by the producer.
+///
+/// Delivered via [`tokio::sync::watch`]: subscribers always observe
+/// the **latest** value, never an intermediate one. This is the
+/// correct semantics for UI — a dashboard wants "where are we now",
+/// not "every batch we ever processed."
+///
+/// All fields are intentionally `Copy`-friendly (`u64`s and a
+/// `Copy` enum) so cloning is trivial; the watch channel clones on
+/// every `borrow().clone()` from a subscriber.
+///
+/// # Field semantics
+///
+/// - `height`: the height the producer most recently completed
+///   scanning (i.e. `synced_height + blocks_processed`). On
+///   initial publish this is `synced_height` itself.
+/// - `blocks_processed`: count of blocks the producer has fed to
+///   the scanner during the **current attempt**. Resets to `0` on
+///   `RefreshPhase::Retrying`.
+/// - `blocks_total`: the per-attempt scan range size — the count
+///   of blocks the producer plans to fetch and scan during this
+///   attempt. Concretely, `blocks_total =
+///   daemon.get_height().saturating_sub(synced_height + 1)` at
+///   attempt start, where `daemon.get_height()` returns the count
+///   of blocks (one past the tip-block index). Saturates to `0`
+///   when the wallet is at-or-above the daemon tip. Updates on
+///   retry boundaries because each attempt re-fetches the tip;
+///   static within an attempt.
+/// - `phase`: see [`RefreshPhase`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RefreshProgress {
+    /// Height the producer most recently completed scanning.
+    pub height: u64,
+
+    /// Blocks processed in the current attempt (resets on retry).
+    pub blocks_processed: u64,
+
+    /// Total blocks in the current attempt's scan range. Updates on
+    /// retry boundaries.
+    pub blocks_total: u64,
+
+    /// Current phase of the refresh.
+    pub phase: RefreshPhase,
+}
+
+impl RefreshProgress {
+    /// Synthetic zero-height baseline. **Test helpers only** —
+    /// production seeders (today: [`Engine::start_refresh`])
+    /// override `height` with the wallet's current `synced_height`
+    /// so the contract on [`RefreshProgress::height`] ("on initial
+    /// publish this is `synced_height` itself") holds even before
+    /// the producer publishes its first per-attempt update.
+    /// Tests that don't care about height accuracy use this as a
+    /// blank starting value.
+    #[cfg(test)]
+    pub(crate) const fn initial() -> Self {
+        Self {
+            height: 0,
+            blocks_processed: 0,
+            blocks_total: 0,
+            phase: RefreshPhase::Scanning,
+        }
+    }
+}
+
+/// RAII handle to a refresh task spawned by
+/// [`Engine::start_refresh`].
+///
+/// Cancellation is RAII: dropping the handle fires the
+/// cancel token; the producer observes it at the next batch
+/// boundary, returns `Err(Cancelled)`, and exits. The handle does
+/// not block in `Drop` — the wind-down happens on the runtime that
+/// owns the task.
+///
+/// Single-flight is enforced via [`RefreshSlot`]: at most one
+/// refresh task per `Engine<S>` exists at a time. A racing
+/// `start_refresh` returns
+/// [`RefreshError::AlreadyRunning`](super::RefreshError::AlreadyRunning).
+///
+/// # Methods
+///
+/// - [`progress()`](Self::progress) — subscribe to per-batch
+///   progress updates. Returns a [`tokio::sync::watch::Receiver`].
+/// - [`cancel()`](Self::cancel) — fire the cancel token explicitly;
+///   idempotent. Equivalent to dropping the handle, but lets the
+///   caller continue to observe progress and `join()` the result.
+/// - [`is_running()`](Self::is_running) — non-blocking check
+///   whether the producer task has completed.
+/// - [`join()`](Self::join) — async — await the terminal
+///   [`RefreshSummary`] or [`RefreshError`]. Consumes the handle.
+///
+/// # Stage-4 invariance
+///
+/// `RefreshHandle`'s public surface — `progress()`, `cancel()`,
+/// `is_running()`, `join()`, and `Drop` semantics — is invariant
+/// across the Stage 4 actor cutover. Today, `start_refresh` takes
+/// `Arc<RwLock<Self>>` and returns this type directly. After Stage
+/// 4, `actor.ask(StartRefresh { opts }).send().await?` returns the
+/// same `RefreshHandle`; the actor message-passing replaces the
+/// shared-handle plumbing inside the type, but every method
+/// signature on the handle stays bit-identical. Callers above the
+/// engine binary boundary do not change.
+///
+/// This invariance is the contract that lets Branch 2 ship before
+/// the actor cutover without forcing an API break later.
+///
+/// [`RefreshSlot`]: RefreshSlot
+pub struct RefreshHandle {
+    /// Receive-end of the oneshot the producer task sends its
+    /// terminal result on. `join()` consumes the handle and awaits
+    /// this. `Some(_)` until `join()` is called; `None` after
+    /// `join()` consumes it (handle is also consumed at that point,
+    /// so this isn't really observable post-`join`, but the option
+    /// shape keeps the field's lifetime story explicit).
+    completion_rx: Option<tokio::sync::oneshot::Receiver<Result<RefreshSummary, RefreshError>>>,
+
+    /// Cancel token shared with the producer task. `cancel()` and
+    /// `Drop` both fire it. The token is internally `Arc`'d so
+    /// dropping the handle's clone after firing does not abort the
+    /// producer's observation; the token's `Arc` stays alive as
+    /// long as the producer holds its clone.
+    cancel_token: CancellationToken,
+
+    /// Receive-end of the watch channel the producer publishes
+    /// per-batch progress on. Cloned out of the handle by
+    /// [`progress()`](Self::progress); the original lives here so
+    /// callers that don't subscribe still keep the channel from
+    /// closing prematurely on the producer's side.
+    progress_rx: tokio::sync::watch::Receiver<RefreshProgress>,
+
+    /// `JoinHandle` of the spawned producer task. Retained for two
+    /// reasons:
+    ///
+    /// 1. Test wind-down assertions: corner-case unit tests
+    ///    (commit 5) need to await the producer's exit to assert
+    ///    that the slot was released, the progress channel closed,
+    ///    etc. The `JoinHandle` is the only way to do that
+    ///    deterministically.
+    /// 2. Stage-4 transition reference: the actor cutover replaces
+    ///    `tokio::spawn` with `kameo::actor::spawn`, which returns
+    ///    an `ActorRef` that is observable similarly. Keeping the
+    ///    field on the handle marks the migration site explicitly.
+    ///
+    /// Not used for primary synchronization — `join()` awaits
+    /// `completion_rx`, not this. The producer task's lifecycle
+    /// extends slightly past `completion_tx.send(...)` (slot guard
+    /// drop, etc.); awaiting `JoinHandle` would observe a different
+    /// completion semantic than the user-visible "the refresh is
+    /// done" point.
+    producer_join: tokio::task::JoinHandle<()>,
+
+    /// Snapshot of the [`RefreshOptions`] the handle was started
+    /// with. Retained for diagnostics (debug printing, test
+    /// assertions) and Stage-4 actor-message reconstruction (the
+    /// actor's `StartRefresh` message must carry the same opts so
+    /// the actor can re-invoke the same loop logic). Not used by
+    /// the methods on the handle today.
+    #[allow(dead_code)] // Stage-4 reference + diagnostics
+    opts: RefreshOptions,
+}
+
+impl RefreshHandle {
+    /// Subscribe to per-batch progress updates.
+    ///
+    /// The returned [`tokio::sync::watch::Receiver`] always observes
+    /// the **latest** [`RefreshProgress`] — never an intermediate
+    /// one. Subscribers may clone the receiver freely; the channel
+    /// stays open as long as the producer task is alive.
+    ///
+    /// When the producer exits (success, error, or cancellation),
+    /// its `Sender` drops and subsequent `changed().await` calls
+    /// return `Err(_)` ("the producer is done; no more progress").
+    pub fn progress(&self) -> tokio::sync::watch::Receiver<RefreshProgress> {
+        self.progress_rx.clone()
+    }
+
+    /// Fire the cancel token. Idempotent — multiple calls are
+    /// no-ops after the first.
+    ///
+    /// The producer observes the token at the next batch boundary
+    /// or backoff `select!`, returns
+    /// [`RefreshError::Cancelled`], and exits. After cancellation,
+    /// `join().await` surfaces `Err(Cancelled)`.
+    ///
+    /// Equivalent to dropping the handle, except that the caller
+    /// can continue to observe `progress()` and await `join()`.
+    pub fn cancel(&self) {
+        self.cancel_token.cancel();
+    }
+
+    /// Non-blocking check whether the producer task has completed.
+    ///
+    /// Returns `true` while the task is alive (scanning, merging,
+    /// retrying, or cancelling), `false` once it has exited and
+    /// the `JoinHandle` is finished. UI code can poll this on a
+    /// timer to drive a "Refresh in progress" indicator without
+    /// blocking on `join()`.
+    pub fn is_running(&self) -> bool {
+        !self.producer_join.is_finished()
+    }
+
+    /// Await the terminal result of the refresh.
+    ///
+    /// Consumes the handle. Returns the [`RefreshSummary`] on
+    /// success, or the terminal [`RefreshError`] on failure or
+    /// cancellation.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic in normal operation. If the producer task
+    /// panicked (which would be an internal-consistency bug), the
+    /// oneshot's `Sender` is dropped without sending; this surface
+    /// returns
+    /// [`RefreshError::MalformedScanResult`] with a static reason
+    /// pointing at the panic site so audit reads a typed contract
+    /// failure rather than a silent loss.
+    pub async fn join(mut self) -> Result<RefreshSummary, RefreshError> {
+        let rx = self
+            .completion_rx
+            .take()
+            .expect("RefreshHandle::join is called at most once: the type consumes self");
+        match rx.await {
+            Ok(result) => result,
+            Err(_) => Err(RefreshError::MalformedScanResult {
+                reason:
+                    "RefreshHandle::join: producer task dropped completion sender without delivery",
+            }),
+        }
+    }
+
+    /// Test-only constructor that injects pre-built channels and a
+    /// stand-in `JoinHandle`.
+    ///
+    /// `RefreshHandle`'s production constructor lives entirely
+    /// inside [`Engine::start_refresh`], which spawns a real
+    /// producer task driving an `Arc<RwLock<Engine<S>>>`. Unit tests
+    /// of the handle's public surface (`progress`, `cancel`,
+    /// `is_running`, `join`, `Drop`) do not need a real engine and
+    /// would not benefit from one — the surface is a thin wrapper
+    /// around the four channel ends. This constructor lets a test
+    /// supply each end directly so it can drive the handle's
+    /// observable state deterministically.
+    ///
+    /// `producer_join` is conventionally either:
+    /// - `tokio::spawn(async move { /* loop on cancel */ })` for
+    ///   tests that need `is_running()` to start `true`, or
+    /// - `tokio::spawn(async {})` (already-finished) for tests that
+    ///   just want to assert on the join's terminal state.
+    ///
+    /// Single-flight semantics are out-of-scope for handle-level
+    /// unit tests: the slot is owned by `Engine<S>`, not the
+    /// handle, and is exercised via the integration tests in
+    /// commit 6 that go through the real `start_refresh`.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        completion_rx: tokio::sync::oneshot::Receiver<Result<RefreshSummary, RefreshError>>,
+        cancel_token: CancellationToken,
+        progress_rx: tokio::sync::watch::Receiver<RefreshProgress>,
+        producer_join: tokio::task::JoinHandle<()>,
+        opts: RefreshOptions,
+    ) -> Self {
+        Self {
+            completion_rx: Some(completion_rx),
+            cancel_token,
+            progress_rx,
+            producer_join,
+            opts,
+        }
+    }
+}
+
+impl std::fmt::Debug for RefreshHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RefreshHandle")
+            .field("opts", &self.opts)
+            .field("is_running", &self.is_running())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for RefreshHandle {
+    /// Cancel-on-drop. Sequence:
+    ///
+    /// 1. Fire the cancel token. The producer task observes it at
+    ///    the next batch boundary or backoff `select!`, returns
+    ///    [`RefreshError::Cancelled`], and exits.
+    /// 2. Remaining handle fields drop in declaration order:
+    ///    `completion_rx` (the oneshot receive end goes away),
+    ///    `progress_rx`, `producer_join`. Dropping
+    ///    `producer_join` detaches the task without aborting it
+    ///    (tokio semantics): the task continues running until it
+    ///    observes the cancel token and exits naturally. Note that
+    ///    the progress `Sender` lives on the producer task, not on
+    ///    the handle, so dropping the handle does not close the
+    ///    progress channel — the producer's final `Cancelled`
+    ///    publish still reaches any retained `Receiver` clones.
+    ///
+    /// The wind-down between `cancel.cancel()` and task exit is
+    /// bounded by the longest-running operation in the task (one
+    /// block fetch's RPC timeout, ~30 s worst case). During this
+    /// window, a racing [`Engine::start_refresh`] returns
+    /// [`RefreshError::AlreadyRunning`] because the producer's
+    /// [`SlotGuard`] is still held. Callers that want to spawn a
+    /// new refresh immediately after dropping a handle should hold
+    /// the previous handle and `await join()` instead of relying on
+    /// `Drop`.
+    fn drop(&mut self) {
+        self.cancel_token.cancel();
+    }
+}
+
+// ── Single-flight slot ─────────────────────────────────────────────
+//
+// The slot is a per-Engine `Arc<AtomicBool>` kept on the engine
+// struct. `start_refresh` claims the flag (CAS false → true) under
+// a brief read borrow of the engine; if the CAS fails, another
+// refresh is in flight and the call returns
+// `RefreshError::AlreadyRunning`. The producer task holds a
+// `SlotGuard` for the duration of the refresh; dropping the guard
+// releases the flag (RAII).
+//
+// Independent of the engine's cross-cutting RwLock — the slot is
+// its own atomic, so `start_refresh` does not need a write borrow
+// of `Engine<S>` to claim it. This keeps the slot-claim path lock-
+// free against the producer task's per-attempt read/write borrows.
+
+/// Per-engine single-flight slot for [`Engine::start_refresh`].
+///
+/// Cloneable; the slot itself is reference-counted, so cloning a
+/// `RefreshSlot` produces another handle to the same underlying
+/// flag. The engine struct owns one; the producer task's
+/// [`SlotGuard`] holds another for its lifetime.
+#[derive(Clone, Debug)]
+pub(crate) struct RefreshSlot {
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl RefreshSlot {
+    /// Build a fresh slot in the released state. Called once at
+    /// `Engine::assemble` time.
+    pub(crate) fn new() -> Self {
+        Self {
+            flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Attempt to claim the slot. Returns `Some(SlotGuard)` on
+    /// success (the slot is now held; `Drop` will release it).
+    /// Returns `None` if the slot is already held by another
+    /// refresh task.
+    ///
+    /// Implemented as a single CAS (Acquire on success, Relaxed on
+    /// failure) so claim and release pair across threads without
+    /// needing a stronger fence.
+    pub(crate) fn try_claim(&self) -> Option<SlotGuard> {
+        match self.flag.compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::Acquire,
+            std::sync::atomic::Ordering::Relaxed,
+        ) {
+            Ok(_) => Some(SlotGuard {
+                flag: self.flag.clone(),
+            }),
+            Err(_) => None,
+        }
+    }
+
+    /// Read the slot's current state without claiming it. Used by
+    /// the redacted `Debug` impl on `Engine<S>` to surface "is a
+    /// refresh in flight" without taking a guard.
+    pub(crate) fn is_claimed(&self) -> bool {
+        self.flag.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// RAII guard for the [`RefreshSlot`] flag. Held by the producer
+/// task; dropping it releases the flag.
+///
+/// Deliberately not `Clone`: the guard's whole purpose is to
+/// uniquely own the claim, so cloning it would defeat single-
+/// flight enforcement. The producer task receives the guard from
+/// [`Engine::start_refresh`] and holds it through `run_refresh_task`'s
+/// full lifetime; the `Drop` releases the slot whether the task
+/// returned successfully, errored, or was cancelled.
+#[derive(Debug)]
+pub(crate) struct SlotGuard {
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        // Release: pair with `Acquire` on the matching `try_claim`.
+        // Idempotent — if the slot was double-released somehow, the
+        // store is a no-op (the second release would still write
+        // `false` to a flag that's already `false`).
+        self.flag.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Per-block progress emitter handed to [`produce_scan_result`].
+///
+/// The producer publishes a [`RefreshProgress`] update after every
+/// successfully scanned block so the watch-channel subscribers see
+/// monotonic per-block progress within an attempt. The wrapping
+/// `drive_refresh_loop` (above the producer) handles the
+/// per-attempt baseline (`Scanning` / `Retrying` phase transitions
+/// and the `blocks_total` reset on retry).
+///
+/// # Two construction paths
+///
+/// - [`ProgressEmitter::noop`] — used by the synchronous
+///   [`Engine::refresh`] entry point (no progress channel exists
+///   on that path; the watch-channel surface is a Branch 2-only
+///   feature).
+/// - [`ProgressEmitter::new`] — used by `drive_refresh_loop`,
+///   wired to the producer task's sole `watch::Sender`.
+///
+/// # Lifetime
+///
+/// Borrows the `Sender` for at most a single
+/// `produce_scan_result` call (per-attempt). The wrapping loop
+/// owns the `Sender` and re-builds the emitter per attempt with
+/// the new `blocks_total`.
+pub(crate) struct ProgressEmitter<'a> {
+    sender: Option<&'a tokio::sync::watch::Sender<RefreshProgress>>,
+    /// `daemon_tip - synced_height` for this attempt. Static for
+    /// the duration of one `produce_scan_result` call; updated by
+    /// the loop on retry boundaries before constructing a new
+    /// emitter.
+    blocks_total: u64,
+}
+
+impl<'a> ProgressEmitter<'a> {
+    /// No-op emitter: per-block calls are silently dropped.
+    /// Used by the synchronous `Engine::refresh` path and by every
+    /// test that exercises `produce_scan_result` directly without
+    /// asserting on progress channel content.
+    pub(crate) const fn noop() -> Self {
+        Self {
+            sender: None,
+            blocks_total: 0,
+        }
+    }
+
+    /// Construct an emitter wired to a real watch sender. Used by
+    /// the async producer task (`drive_refresh_loop` →
+    /// `produce_scan_result`).
+    pub(crate) const fn new(
+        sender: &'a tokio::sync::watch::Sender<RefreshProgress>,
+        blocks_total: u64,
+    ) -> Self {
+        Self {
+            sender: Some(sender),
+            blocks_total,
+        }
+    }
+
+    /// Publish a per-block progress snapshot.
+    ///
+    /// `height` is the height the producer most recently completed
+    /// scanning; `blocks_processed` is the count of blocks
+    /// successfully fed to the scanner during the **current
+    /// attempt** (starts at 0, increments per block, drops back on
+    /// reorg-rewind discard, never exceeds `blocks_total` outside
+    /// reorg transients).
+    ///
+    /// Best-effort: [`tokio::sync::watch::Sender::send`] returns
+    /// `Err(_)` only when **every** receiver — including the one
+    /// retained on [`RefreshHandle`] — has been dropped. In
+    /// practice that means the handle was dropped without any
+    /// `progress()` clones surviving; the producer's
+    /// cancel-on-drop discipline is already tearing the task down
+    /// in that case, so silently dropping the publish is correct.
+    /// While the handle is alive the watch channel always has at
+    /// least one receiver, so `send` cannot fail for the common
+    /// "UI hasn't subscribed" case. Progress is observational, not
+    /// load-bearing.
+    fn publish(&self, height: u64, blocks_processed: u64, phase: RefreshPhase) {
+        if let Some(s) = self.sender {
+            let _ = s.send(RefreshProgress {
+                height,
+                blocks_processed,
+                blocks_total: self.blocks_total,
+                phase,
+            });
+        }
+    }
+}
+
+// Static asserts: trait bounds the Branch 2 surface depends on.
+// Failure here means a downstream type lost its Send/Sync/Clone
+// invariant; surface the violation at the engine-core build rather
+// than at the spawn / channel-construction site in start_refresh.
+const _: fn() = || {
+    fn assert_send<T: Send>() {}
+    fn assert_clone_send_sync<T: Clone + Send + Sync>() {}
+    assert_send::<RefreshHandle>();
+    assert_clone_send_sync::<RefreshProgress>();
+    // RefreshOptions: Clone is required for opts.clone() at task
+    // spawn (start_refresh body retains a copy on the handle for
+    // diagnostics). Verified: refresh.rs derives Clone on
+    // RefreshOptions (line ~241).
+    fn assert_clone<T: Clone>() {}
+    assert_clone::<RefreshOptions>();
+    // RefreshError: Send + Sync is required for the oneshot
+    // payload to cross the spawn boundary. Trivially holds —
+    // every variant carries primitive types or owned strings; the
+    // `ConcurrentMutation` variant's `wallet: u64, result: u64`
+    // does not bleed engine state into the error.
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<RefreshError>();
+    assert_send_sync::<RefreshSummary>();
+};
+
 /// Walk the requested height range, scanning each block and
 /// accumulating the findings into a [`ScanResult`].
 ///
@@ -380,6 +949,7 @@ pub(crate) async fn produce_scan_result<R: Rpc>(
     snapshot: &LedgerSnapshot,
     height_range: Range<u64>,
     cancel: &CancellationToken,
+    progress: &ProgressEmitter<'_>,
 ) -> Result<ScanResult, ProduceError> {
     let original_start = height_range.start;
     let end = height_range.end;
@@ -483,6 +1053,13 @@ pub(crate) async fn produce_scan_result<R: Rpc>(
                 output,
             });
         }
+
+        // Publish per-block progress for the watch-channel
+        // subscribers. `block_hashes.len()` is the count of blocks
+        // successfully fed to the scanner this attempt — drops on
+        // reorg-rewind because the rewind path retains-by-height
+        // truncates the vec before the next iteration.
+        progress.publish(h, block_hashes.len() as u64, RefreshPhase::Scanning);
 
         h += 1;
     }
@@ -701,6 +1278,360 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
     Ok(Scanner::new(view_pair, spend_secret))
 }
 
+/// Producer task entry point.
+///
+/// Spawned by [`Engine::start_refresh`]. Drives the snapshot-merge
+/// loop end-to-end: fetch tip, snapshot, scan (without holding the
+/// engine lock), merge under write lock, retry on
+/// `ConcurrentMutation` until `opts.max_retries` is reached, and
+/// publish a terminal result on `completion`.
+///
+/// ## Parameters
+///
+/// - `engine_arc`: shared handle to the engine. The task holds the
+///   read lock briefly per attempt for the snapshot, drops it
+///   across the network-bound scan, then re-acquires the write
+///   lock for the merge. Stage 4 replaces this with actor message
+///   passing.
+/// - `opts`: the same `RefreshOptions` `start_refresh` was called
+///   with. Carries `max_retries` for the snapshot-race retry
+///   budget.
+/// - `cancel`: cooperative cancel token; observed at every batch
+///   boundary and during retry-backoff `select!`s. Fired by
+///   `RefreshHandle::cancel()` and by `Drop`.
+/// - `progress`: the producer's sole `Sender` for the watch
+///   channel. Published per-batch while scanning; the final
+///   `Cancelled` / terminal phase publish runs before the task
+///   exits.
+/// - `completion`: oneshot the producer sends its terminal result
+///   on. Awaited by `RefreshHandle::join`.
+/// - `_slot_guard`: held by name only — the parameter exists so
+///   the slot stays claimed for the **full lifetime** of this
+///   function, including post-`completion.send(...)` wind-down.
+///   When the function returns (success, error, or cancellation),
+///   the guard drops and releases the engine's `RefreshSlot` flag.
+///   This is the mechanism that ensures single-flight semantics:
+///   the slot stays claimed until the task exits, so a racing
+///   `start_refresh` returns `AlreadyRunning` even during cancel-
+///   then-cleanup wind-down. The `_` prefix is the standard Rust
+///   idiom for "RAII guard, intentionally unused in the function
+///   body but held for `Drop` semantics."
+///
+/// Drive the asynchronous snapshot–scan–merge–retry loop on behalf of
+/// [`Engine::start_refresh`].
+///
+/// # Locking topology
+///
+/// Per attempt:
+/// 1. **Read lock** — acquired briefly to clone [`DaemonClient`] (for the
+///    network calls below) and to take a fresh [`LedgerSnapshot`]. The
+///    lock is released before any I/O.
+/// 2. **No lock** — daemon `get_height`, scanner construction (first
+///    attempt only), and [`produce_scan_result`] run with no engine
+///    borrow held. This is the long phase, on the order of network
+///    round-trips per block, and is exactly why the function exists in
+///    the first place.
+/// 3. **Write lock** — acquired briefly to call
+///    [`Engine::apply_scan_result`]. The merge fails with
+///    [`RefreshError::ConcurrentMutation`] iff another writer
+///    interleaved between the snapshot and the merge; that variant
+///    is the loop's signal to retry, not a terminal error.
+///
+/// # `_slot_guard`
+///
+/// The [`SlotGuard`] returned by [`RefreshSlot::try_claim`] in
+/// [`Engine::start_refresh`] is moved into this task and held by name
+/// for the task's entire body. Its [`Drop`] impl flips the
+/// `refresh_slot` flag back to `false`, releasing single-flight
+/// exclusion. Releasing on task exit (rather than on
+/// [`RefreshHandle::drop`]) is what guarantees a fresh
+/// [`Engine::start_refresh`] cannot observe `AlreadyRunning` after a
+/// cancelled handle is dropped but before the producer task has
+/// actually noticed the cancellation and unwound — which would race
+/// the task against the next refresh on the same engine. The
+/// underscore prefix is a deliberate signal that the binding is held
+/// for its `Drop` side-effect, not read.
+///
+/// # Cancellation
+///
+/// The cancellation token is checked at four points:
+///
+/// 1. **Top of each attempt** — covers the boundary between attempts,
+///    including the gap between a `Retrying` publish and the next
+///    snapshot.
+/// 2. **Post-tip-fetch**, immediately after `daemon.get_height()`
+///    returns `Ok` — covers cancels that fire during the daemon RPC
+///    itself. The RPC isn't cancel-aware, so the await runs to
+///    completion; this checkpoint is what makes a cancel-during-tip-
+///    fetch deterministically surface as `Cancelled` rather than
+///    leak into the per-block scan.
+/// 3. **Mid-scan**, inside [`produce_scan_result`] — covers between
+///    blocks during the long scan, which is where the bulk of the
+///    elapsed time lives.
+/// 4. **Pre-merge**, between [`produce_scan_result`] returning `Ok`
+///    and the write-lock acquisition for [`Engine::apply_scan_result`]
+///    — covers the post-scan window where the producer holds a
+///    valid `ScanResult` but has not yet mutated wallet state. A
+///    cancel observed here is honoured because the merge has not
+///    committed; the in-flight `ScanResult` is discarded along with
+///    the work that produced it. This is the trade-off cancellation
+///    asks us to make.
+///
+/// On observation at any of the four points, a final `Cancelled`
+/// progress update is best-effort emitted — preserving the last
+/// published `height` / `blocks_processed` / `blocks_total` so
+/// subscribers don't observe a misleading rollback to zero — and
+/// `RefreshError::Cancelled` is delivered via the completion
+/// oneshot.
+///
+/// There is **no** post-merge cancel checkpoint. Once
+/// [`Engine::apply_scan_result`] commits under the write lock the
+/// state mutation is authoritative, and a cancel token observed
+/// after that point cannot un-mutate the wallet. The post-merge
+/// path always delivers `Ok(summary)`; consumers that want to
+/// abandon a successful refresh in flight have to drop the handle
+/// and reconcile against the next `progress().borrow()`.
+async fn run_refresh_task<S: EngineSignerKind>(
+    engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S>>>,
+    opts: RefreshOptions,
+    cancel: CancellationToken,
+    progress: tokio::sync::watch::Sender<RefreshProgress>,
+    completion: tokio::sync::oneshot::Sender<Result<RefreshSummary, RefreshError>>,
+    _slot_guard: SlotGuard,
+) where
+    S: Send + Sync + 'static,
+    Engine<S>: Send + Sync,
+{
+    // Build the scanner once (keys are immutable for the lifetime of
+    // the open engine; rebuilding per attempt would only repeat
+    // EdwardsPoint decompression). Briefly take the read lock to
+    // borrow `keys()`.
+    let scanner_init = {
+        let g = engine_arc.read().await;
+        build_scanner_from_keys(g.keys())
+    };
+    let mut scanner = match scanner_init {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = completion.send(Err(e));
+            return;
+        }
+    };
+
+    let mut last_concurrent_mutation: Option<RefreshError> = None;
+
+    for attempt in 1..=opts.max_retries.saturating_add(1) {
+        if cancel.is_cancelled() {
+            // Best-effort terminal progress. Preserve the last
+            // published baseline (height / counters) and override
+            // only `phase`, so subscribers don't observe a
+            // misleading rollback to `height: 0` when the wallet
+            // was already synced above zero. `Receiver::changed`
+            // wakes once before the channel closes.
+            let mut terminal = progress.borrow().clone();
+            terminal.phase = RefreshPhase::Cancelled;
+            let _ = progress.send(terminal);
+            let _ = completion.send(Err(RefreshError::Cancelled));
+            return;
+        }
+
+        // Snapshot + daemon clone. The producer does not hold the
+        // daemon between attempts: the engine state — including the
+        // live daemon reference — is re-snapshotted at the start of
+        // every attempt, so re-cloning is the same cost as
+        // re-borrowing and avoids leaking the borrow across the
+        // intervening write-lock.
+        let (snapshot, daemon) = {
+            let g = engine_arc.read().await;
+            (
+                LedgerSnapshot::from_ledger(&g.ledger.ledger),
+                g.daemon().clone(),
+            )
+        };
+        let current_synced = snapshot.synced_height;
+
+        // First network call. The underlying RPC isn't cancel-aware,
+        // so a cancel fired during the await runs to RPC completion.
+        // We re-check `cancel` immediately after the call returns
+        // (see the post-await checkpoint just below) so a cancelled
+        // refresh deterministically reports `Cancelled` rather than
+        // proceeding into the per-block scan or surfacing as an
+        // unrelated daemon error.
+        let daemon_tip = match daemon.inner().get_height().await {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = completion.send(Err(RefreshError::Io(IoError::Daemon {
+                    detail: format!("get_height failed: {e}"),
+                })));
+                return;
+            }
+        };
+
+        // Post-tip-fetch cancel checkpoint. Honours a cancel that
+        // fired during the daemon RPC before we kick off the per-
+        // block scan. State is unmutated; the just-returned tip is
+        // discarded along with the (small) RPC cost. See the
+        // function's `# Cancellation` section for the full
+        // checkpoint layout.
+        if cancel.is_cancelled() {
+            let mut terminal = progress.borrow().clone();
+            terminal.phase = RefreshPhase::Cancelled;
+            let _ = progress.send(terminal);
+            let _ = completion.send(Err(RefreshError::Cancelled));
+            return;
+        }
+
+        let daemon_tip_u64 =
+            u64::try_from(daemon_tip).expect("daemon height fits in u64 on 64-bit targets");
+
+        // `get_height` returns the **count** of blocks (one past the
+        // tip-block index), so the producer's exclusive-end range
+        // `synced_height + 1 .. count` scans heights
+        // `[synced_height + 1, count - 1]` inclusive — i.e. it
+        // includes the tip block. This mirrors the synchronous
+        // [`Engine::refresh`] driver above; the symmetry is load-
+        // bearing because both paths share `produce_scan_result`.
+        let start = current_synced.saturating_add(1);
+        let end = daemon_tip_u64;
+        let blocks_total = end.saturating_sub(start);
+        let height_range = start..end;
+
+        // Re-baseline `blocks_total` for this attempt before the per-
+        // block emitter starts publishing `Scanning` updates. Reorg
+        // rewinds inside `produce_scan_result` may transiently push
+        // `blocks_processed` down; the watch channel preserves
+        // latest-only semantics so subscribers see the restated
+        // total.
+        let _ = progress.send(RefreshProgress {
+            height: current_synced,
+            blocks_processed: 0,
+            blocks_total,
+            phase: RefreshPhase::Scanning,
+        });
+
+        let emitter = ProgressEmitter::new(&progress, blocks_total);
+        let produced = produce_scan_result(
+            daemon.inner(),
+            &mut scanner,
+            &snapshot,
+            height_range,
+            &cancel,
+            &emitter,
+        )
+        .await;
+
+        let result = match map_produce_error(produced) {
+            Ok(r) => r,
+            Err(RefreshError::Cancelled) => {
+                // Mid-scan cancel: the producer noticed `cancel`
+                // between blocks and bailed. Mirror the top-of-
+                // attempt cancel emission — preserve the last
+                // published baseline (which the per-block
+                // `ProgressEmitter` advanced as the scan ran) and
+                // override only `phase`. This is the third of the
+                // four cancel checkpoints documented on this
+                // function.
+                let mut terminal = progress.borrow().clone();
+                terminal.phase = RefreshPhase::Cancelled;
+                let _ = progress.send(terminal);
+                let _ = completion.send(Err(RefreshError::Cancelled));
+                return;
+            }
+            Err(e) => {
+                let _ = completion.send(Err(e));
+                return;
+            }
+        };
+
+        let summary = summarize(&result, attempt);
+
+        // Pre-merge cancel checkpoint (the fourth of four documented
+        // on this function). The producer returned a valid
+        // `ScanResult`, but the user fired `cancel` between the last
+        // per-block check inside `produce_scan_result` and now. The
+        // merge has not yet acquired the write lock, so wallet state
+        // is unmutated and we can still honour the cancellation
+        // without rolling anything back. After this point the merge
+        // is authoritative — see the function docstring.
+        if cancel.is_cancelled() {
+            let mut terminal = progress.borrow().clone();
+            terminal.phase = RefreshPhase::Cancelled;
+            let _ = progress.send(terminal);
+            let _ = completion.send(Err(RefreshError::Cancelled));
+            return;
+        }
+
+        // Best-effort `Merging` ping right before the write-lock. The
+        // merge is bounded by compute (no I/O), so subscribers
+        // observing this phase are usually about to immediately
+        // observe success or a retry.
+        let _ = progress.send(RefreshProgress {
+            height: summary
+                .processed_height_range
+                .end
+                .saturating_sub(1)
+                .max(current_synced),
+            blocks_processed: summary.blocks_processed,
+            blocks_total,
+            phase: RefreshPhase::Merging,
+        });
+
+        // Merge under the write lock. The merge is the single audited
+        // mutation point; on `ConcurrentMutation` we loop with a fresh
+        // snapshot.
+        let merge = {
+            let mut g = engine_arc.write().await;
+            g.apply_scan_result(result)
+        };
+
+        match merge {
+            Ok(()) => {
+                // No terminal `Done` progress phase: the completion
+                // oneshot is the authoritative success signal. Once
+                // we drop `progress` on return, the receiver's next
+                // `changed().await` returns `RecvError`, which is
+                // the watch-channel idiom for "no further updates."
+                let _ = completion.send(Ok(summary));
+                return;
+            }
+            Err(RefreshError::ConcurrentMutation { wallet, result }) => {
+                debug!(
+                    attempt,
+                    max_retries = opts.max_retries,
+                    wallet,
+                    result,
+                    "run_refresh_task: snapshot race, retrying with fresh snapshot",
+                );
+                let _ = progress.send(RefreshProgress {
+                    height: current_synced,
+                    blocks_processed: 0,
+                    blocks_total,
+                    phase: RefreshPhase::Retrying,
+                });
+                last_concurrent_mutation =
+                    Some(RefreshError::ConcurrentMutation { wallet, result });
+                continue;
+            }
+            Err(other) => {
+                let _ = completion.send(Err(other));
+                return;
+            }
+        }
+    }
+
+    // Retry budget exhausted on `ConcurrentMutation`. Mirror
+    // `Engine::refresh_with`: surface the last observed race;
+    // falling through with `None` would mean the loop body itself is
+    // broken, which we surface as `MalformedScanResult` so audit
+    // reads a typed contract failure rather than silent retry
+    // exhaustion.
+    let terminal = last_concurrent_mutation.unwrap_or(RefreshError::MalformedScanResult {
+        reason: "run_refresh_task retry loop exited without an observed ConcurrentMutation",
+    });
+    let _ = completion.send(Err(terminal));
+    // _slot_guard drops here, releasing the slot.
+}
+
 /// Build a [`RefreshSummary`] from a producer-emitted [`ScanResult`]
 /// (just before the merge consumes it) and the loop bookkeeping. The
 /// merge takes the value by-move; this helper runs first so the merge
@@ -720,6 +1651,126 @@ fn summarize(result: &ScanResult, merge_attempts: u32) -> RefreshSummary {
 }
 
 impl<S: EngineSignerKind> Engine<S> {
+    /// Spawn an async refresh task and return a [`RefreshHandle`]
+    /// for observing and controlling it.
+    ///
+    /// The handle exposes a [`tokio::sync::watch`] receiver for
+    /// progress updates, an `async fn join` future for the terminal
+    /// `Result<RefreshSummary, RefreshError>`, an explicit
+    /// [`RefreshHandle::cancel`] hook, and cancel-on-drop semantics.
+    /// Single-flight is enforced by the engine's `RefreshSlot`:
+    /// concurrent calls return [`RefreshError::AlreadyRunning`].
+    ///
+    /// # Shape
+    ///
+    /// Takes `Arc<RwLock<Self>>` (a "self-arc") rather than `&self`
+    /// or `&mut self` because the spawned producer task needs to
+    /// outlive any borrow of `Engine<S>` taken at the call site —
+    /// the task acquires the read lock per-attempt for snapshot,
+    /// drops it across the network-bound scan, then takes the write
+    /// lock briefly for the merge. The shared-handle parameter shape
+    /// is transitional infrastructure; at Stage 4 it becomes
+    /// `actor.ask(StartRefresh { opts }).send().await?`. See the
+    /// `Path B engine binary boundary as pure message-passing`
+    /// decision-log entry (2026-04-27).
+    ///
+    /// # No I/O in this method
+    ///
+    /// `start_refresh` does not call the daemon, does not scan, and
+    /// does not lock for longer than the slot-claim. The first
+    /// network call (`daemon.get_height` for tip) happens inside the
+    /// spawned producer task, so a slow or unreachable daemon does
+    /// not stall slot claim or the caller's `start_refresh.await`.
+    ///
+    /// # Errors
+    ///
+    /// - [`RefreshError::AlreadyRunning`] if another refresh is
+    ///   already in flight (slot was already claimed). All other
+    ///   `RefreshError` variants are surfaced via
+    ///   [`RefreshHandle::join`], not from this method.
+    ///
+    /// # Trait bounds
+    ///
+    /// `Engine<S>: Send + Sync` (and `S: Send + Sync + 'static`) is
+    /// required for the `Arc<RwLock<Engine<S>>>` to cross the
+    /// `tokio::spawn` boundary into the producer task. The bound is
+    /// surfaced here at the API rather than at the spawn site so
+    /// violations show up at a callable signature.
+    pub async fn start_refresh(
+        self_arc: std::sync::Arc<tokio::sync::RwLock<Self>>,
+        opts: RefreshOptions,
+    ) -> Result<RefreshHandle, RefreshError>
+    where
+        S: EngineSignerKind + Send + Sync + 'static,
+        Self: Send + Sync,
+    {
+        // Brief shared read borrow to clone the slot **and** capture
+        // the wallet's current `synced_height`. The slot is its own
+        // `Arc<AtomicBool>`, independent of the engine's RwLock, so
+        // the read borrow only lives long enough to copy out the
+        // values needed to seed the refresh task. CAS happens after
+        // the borrow drops.
+        //
+        // `synced_height` is captured here (rather than re-read
+        // inside the producer's first attempt) so the watch
+        // channel's seed value matches the wallet baseline that the
+        // contract on `RefreshProgress::height` promises: "on
+        // initial publish this is `synced_height` itself." A caller
+        // that does `progress().borrow()` before the producer
+        // emits its first per-attempt `Scanning` update sees an
+        // accurate baseline rather than a misleading `height: 0`.
+        let (slot, synced_height) = {
+            let engine = self_arc.read().await;
+            (engine.refresh_slot.clone(), engine.synced_height())
+        };
+        let slot_guard = slot.try_claim().ok_or(RefreshError::AlreadyRunning)?;
+
+        // Channels:
+        // - `progress`: watch (latest-only); seeded with the
+        //   wallet's current `synced_height` so the first
+        //   `progress().borrow()` returns a usable baseline before
+        //   the producer publishes its first per-attempt update.
+        //   `blocks_processed` and `blocks_total` are zero because
+        //   no work has been done on this attempt yet; the producer
+        //   re-bases `blocks_total` against `daemon_tip` before any
+        //   per-block emission begins.
+        // - `completion`: oneshot for the terminal
+        //   `RefreshSummary` / `RefreshError`. `RefreshHandle::join`
+        //   awaits this.
+        let (progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress {
+            height: synced_height,
+            blocks_processed: 0,
+            blocks_total: 0,
+            phase: RefreshPhase::Scanning,
+        });
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        let cancel_token = CancellationToken::new();
+
+        let task_arc = self_arc.clone();
+        let task_cancel = cancel_token.clone();
+        // `progress_tx` moves into the task — the producer is the
+        // sole `Sender`. The handle keeps only a `Receiver` clone;
+        // when the task exits, its `Sender` drops, and downstream
+        // `Receiver::changed().await` returns `Err(_)` to signal
+        // "no more progress."
+        let producer_join = tokio::spawn(run_refresh_task(
+            task_arc,
+            opts.clone(),
+            task_cancel,
+            progress_tx,
+            completion_tx,
+            slot_guard,
+        ));
+
+        Ok(RefreshHandle {
+            completion_rx: Some(completion_rx),
+            cancel_token,
+            progress_rx,
+            producer_join,
+            opts,
+        })
+    }
+
     /// Drive a refresh against the configured daemon: pull a snapshot
     /// of the wallet's ledger, ask the producer to scan
     /// `synced_height + 1 .. daemon_tip + 1`, and merge the result
@@ -819,6 +1870,7 @@ impl<S: EngineSignerKind> Engine<S> {
                 snapshot,
                 height_range,
                 &cancel,
+                &ProgressEmitter::noop(),
             ));
             map_produce_error(produced)
         })
@@ -1188,7 +2240,16 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 5..5, &cancel).await {
+        let result = match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            5..5,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        {
             Ok(r) => r,
             Err(e) => panic!("empty range returns Ok, got {e:?}"),
         };
@@ -1210,7 +2271,16 @@ mod tests {
         let cancel = CancellationToken::new();
         cancel.cancel();
 
-        match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..3, &cancel).await {
+        match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..3,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        {
             Err(ProduceError::Cancelled) => {}
             Err(other) => panic!("expected Cancelled, got {other:?}"),
             Ok(_) => panic!("expected Cancelled, got Ok"),
@@ -1236,7 +2306,15 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..101, &cancel).await
+        let result = match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..101,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
         {
             Ok(r) => r,
             Err(e) => panic!("expected Ok, got {e:?}"),
@@ -1260,7 +2338,15 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..51, &cancel).await
+        let result = match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..51,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
         {
             Ok(r) => r,
             Err(e) => panic!("expected Ok, got {e:?}"),
@@ -1284,7 +2370,16 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..2, &cancel).await {
+        let result = match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..2,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        {
             Ok(r) => r,
             Err(e) => panic!("expected Ok, got {e:?}"),
         };
@@ -1351,7 +2446,15 @@ mod tests {
         let mut scanner = dummy_scanner();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 11..13, &cancel).await
+        let result = match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            11..13,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
         {
             Ok(r) => r,
             Err(e) => panic!("expected Ok, got {e:?}"),
@@ -1431,7 +2534,15 @@ mod tests {
         let mut scanner = dummy_scanner();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 11..12, &cancel).await
+        let result = match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            11..12,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
         {
             Ok(r) => r,
             Err(e) => panic!("expected Ok, got {e:?}"),
@@ -1462,7 +2573,16 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let result = match produce_scan_result(&rpc, &mut scanner, &snapshot, 1..4, &cancel).await {
+        let result = match produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..4,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        {
             Ok(r) => r,
             Err(e) => panic!("expected Ok after transient recovery, got {e:?}"),
         };
@@ -1486,10 +2606,17 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..4, &cancel)
-            .await
-            .err()
-            .expect("expected MaxRetriesExhausted");
+        let err = produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..4,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        .err()
+        .expect("expected MaxRetriesExhausted");
 
         match err {
             ProduceError::MaxRetriesExhausted { attempts, last } => {
@@ -1513,10 +2640,17 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..4, &cancel)
-            .await
-            .err()
-            .expect("expected MaxRetriesExhausted");
+        let err = produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..4,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        .err()
+        .expect("expected MaxRetriesExhausted");
 
         match err {
             ProduceError::MaxRetriesExhausted { last, attempts } => {
@@ -1542,10 +2676,17 @@ mod tests {
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
 
-        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..2, &cancel)
-            .await
-            .err()
-            .expect("expected ProduceError::Scan");
+        let err = produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..2,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        .err()
+        .expect("expected ProduceError::Scan");
 
         match err {
             ProduceError::Scan { height, .. } => assert_eq!(height, 1),
@@ -1572,10 +2713,17 @@ mod tests {
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
 
-        let err = produce_scan_result(&rpc, &mut scanner, &snapshot, 1..6, &cancel)
-            .await
-            .err()
-            .expect("expected Cancelled after first block fetch");
+        let err = produce_scan_result(
+            &rpc,
+            &mut scanner,
+            &snapshot,
+            1..6,
+            &cancel,
+            &ProgressEmitter::noop(),
+        )
+        .await
+        .err()
+        .expect("expected Cancelled after first block fetch");
 
         match err {
             ProduceError::Cancelled => {}
@@ -1605,15 +2753,15 @@ mod refresh_driver_tests {
     use tempfile::TempDir;
     use tokio::runtime::Runtime;
 
-    use crate::scan::ScanResult;
     use crate::engine::lifecycle::EngineCreateParams;
     use crate::engine::{
-        Credentials, DaemonClient, IoError, RefreshError, RefreshOptions, SoloSigner, Engine,
+        Credentials, DaemonClient, Engine, IoError, RefreshError, RefreshOptions, SoloSigner,
     };
+    use crate::scan::ScanResult;
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+    use shekyl_engine_state::{BlockchainTip, LedgerBlock, ReorgBlocks};
     use shekyl_rpc::RpcError;
     use shekyl_scanner::ScanError;
-    use shekyl_engine_state::{BlockchainTip, LedgerBlock, ReorgBlocks};
 
     use super::{map_produce_error, summarize, LedgerSnapshot, ProduceError, RefreshReorgEvent};
 
@@ -2126,5 +3274,581 @@ mod refresh_driver_tests {
         assert_eq!(snap.reorg_blocks.blocks.len(), 2);
         assert_eq!(snap.block_hash_at(1234), Some([0xAA; 32]));
         assert_eq!(snap.block_hash_at(1232), None);
+    }
+}
+
+#[cfg(test)]
+mod refresh_handle_tests {
+    //! Unit tests for the [`RefreshHandle`] public surface.
+    //!
+    //! Every test here builds a handle via
+    //! [`RefreshHandle::for_test`] with hand-rolled channel ends
+    //! and a stand-in `JoinHandle`. No real producer task or
+    //! `Engine<S>` is involved — this module exercises the handle
+    //! itself, which is a thin wrapper around four channel ends
+    //! plus the cancel token.
+    //!
+    //! Corner-case tests (cancel-on-drop, concurrent
+    //! `start_refresh`, idempotent cancel, `mem::forget` leak
+    //! semantics) live in commit 5. Integration coverage for the
+    //! real producer through `Engine::start_refresh` lives in
+    //! commit 6 and currently uses an unreachable `DaemonClient`
+    //! to assert handle-shape invariants and the daemon-IO error
+    //! mapping; `MockRpc`-driven coverage is deferred (see
+    //! `docs/FOLLOWUPS.md`: "Generic `DaemonClient` so `MockRpc`
+    //! can drive `start_refresh`").
+    use super::{
+        RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshSummary,
+    };
+    use tokio_util::sync::CancellationToken;
+
+    /// Build a handle whose channels are entirely caller-owned, so
+    /// the test can fire each one explicitly. Returns a separate
+    /// observation `JoinHandle` (parked on the same cancel token
+    /// as the one inside the handle) for assertions about producer
+    /// wind-down — the handle's own `JoinHandle` is consumed by
+    /// `is_running()` checks and may not be awaited directly
+    /// without breaking the move-out story.
+    fn handle_with(
+        opts: RefreshOptions,
+    ) -> (
+        RefreshHandle,
+        tokio::sync::oneshot::Sender<Result<RefreshSummary, RefreshError>>,
+        tokio::sync::watch::Sender<RefreshProgress>,
+        CancellationToken,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        let (progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress::initial());
+        let cancel = CancellationToken::new();
+
+        // Stand-in producer: park forever on the cancel token, so
+        // `is_running()` reads `true` until the test fires cancel
+        // (or drops the handle, which fires it via `Drop`).
+        let producer_cancel = cancel.clone();
+        let producer = tokio::spawn(async move {
+            producer_cancel.cancelled().await;
+        });
+        let producer_for_assert = tokio::spawn({
+            let observe = cancel.clone();
+            async move { observe.cancelled().await }
+        });
+
+        let handle =
+            RefreshHandle::for_test(completion_rx, cancel.clone(), progress_rx, producer, opts);
+        (
+            handle,
+            completion_tx,
+            progress_tx,
+            cancel,
+            producer_for_assert,
+        )
+    }
+
+    /// `progress()` returns a receiver that observes the seeded
+    /// `RefreshProgress::initial()` baseline before any update is
+    /// published. `borrow()` is non-blocking and always sees the
+    /// latest value.
+    #[tokio::test]
+    async fn progress_returns_seeded_baseline() {
+        let (handle, _completion, _progress, _cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        let rx = handle.progress();
+        let snap = rx.borrow().clone();
+        assert_eq!(snap.height, 0);
+        assert_eq!(snap.blocks_processed, 0);
+        assert_eq!(snap.blocks_total, 0);
+        // `RefreshProgress::initial()` seeds the phase as
+        // `Scanning` so callers don't see `Cancelled` before the
+        // producer has run.
+        assert!(matches!(snap.phase, RefreshPhase::Scanning));
+    }
+
+    /// `progress()` updates land on every cloned receiver.
+    #[tokio::test]
+    async fn progress_updates_propagate_to_subscribers() {
+        let (handle, _completion, progress_tx, _cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        let mut rx = handle.progress();
+        progress_tx
+            .send(RefreshProgress {
+                height: 42,
+                blocks_processed: 7,
+                blocks_total: 100,
+                phase: RefreshPhase::Scanning,
+            })
+            .expect("subscriber alive");
+        rx.changed().await.expect("update delivered");
+        let snap = rx.borrow().clone();
+        assert_eq!(snap.height, 42);
+        assert_eq!(snap.blocks_processed, 7);
+        assert_eq!(snap.blocks_total, 100);
+    }
+
+    /// `cancel()` fires the shared cancel token, which the
+    /// producer task observes. `is_running()` flips to `false`
+    /// once the producer task has exited.
+    #[tokio::test]
+    async fn cancel_fires_token_and_is_running_flips() {
+        let (handle, _completion, _progress, cancel, producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        assert!(
+            handle.is_running(),
+            "producer is parked on cancel; should be running"
+        );
+        assert!(!cancel.is_cancelled(), "no cancel observed yet");
+
+        handle.cancel();
+        assert!(cancel.is_cancelled(), "cancel() fires the shared token");
+
+        producer_assert.await.expect("producer wakes on cancel");
+        tokio::task::yield_now().await;
+        assert!(!handle.is_running(), "JoinHandle has finished");
+    }
+
+    /// `join()` consumes the handle and returns the value sent on
+    /// the completion oneshot.
+    #[tokio::test]
+    async fn join_delivers_summary_from_completion_oneshot() {
+        let (handle, completion, _progress, _cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        let summary = RefreshSummary {
+            processed_height_range: 100..105,
+            blocks_processed: 5,
+            transfers_detected: 0,
+            key_images_observed: 0,
+            stake_events: 0,
+            reorg: None,
+            merge_attempts: 1,
+        };
+        completion
+            .send(Ok(summary.clone()))
+            .expect("oneshot receiver still alive on handle");
+
+        let returned = handle.join().await.expect("Ok delivered");
+        assert_eq!(
+            returned.processed_height_range,
+            summary.processed_height_range
+        );
+        assert_eq!(returned.blocks_processed, summary.blocks_processed);
+        assert_eq!(returned.merge_attempts, summary.merge_attempts);
+    }
+
+    /// `join()` propagates a terminal error sent on the
+    /// completion oneshot unchanged.
+    #[tokio::test]
+    async fn join_propagates_terminal_error() {
+        let (handle, completion, _progress, _cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        completion
+            .send(Err(RefreshError::Cancelled))
+            .expect("oneshot receiver still alive on handle");
+
+        let result = handle.join().await;
+        assert!(matches!(result, Err(RefreshError::Cancelled)));
+    }
+
+    /// If the producer task drops its completion sender without
+    /// sending (which would only happen on a panic — a contract
+    /// violation), `join()` surfaces a typed
+    /// `MalformedScanResult` rather than panicking.
+    #[tokio::test]
+    async fn join_maps_dropped_sender_to_malformed_scan_result() {
+        let (handle, completion, _progress, _cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+        drop(completion);
+
+        let result = handle.join().await;
+        match result {
+            Err(RefreshError::MalformedScanResult { reason }) => {
+                assert!(
+                    reason.contains("dropped completion sender"),
+                    "reason was: {reason}"
+                );
+            }
+            other => panic!("expected MalformedScanResult, got {other:?}"),
+        }
+    }
+
+    // ── Corner-case tests (commit 5) ────────────────────────────
+
+    /// Dropping the handle fires the shared cancel token. The
+    /// `Drop` impl is the cancel-on-drop contract: anyone holding
+    /// a clone of the token (the producer task in production)
+    /// observes it and unwinds.
+    #[tokio::test]
+    async fn drop_fires_cancel_token() {
+        let (handle, _completion, _progress, cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+        assert!(!cancel.is_cancelled(), "no cancel observed pre-drop");
+
+        drop(handle);
+        assert!(cancel.is_cancelled(), "Drop fires cancel token");
+    }
+
+    /// Calling `cancel()` twice is a no-op after the first.
+    /// `CancellationToken::cancel` is documented as idempotent;
+    /// this test pins the contract at the [`RefreshHandle`]
+    /// surface so a future internal change cannot regress it
+    /// silently.
+    #[tokio::test]
+    async fn idempotent_cancel_is_no_op() {
+        let (handle, _completion, _progress, cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        handle.cancel();
+        assert!(cancel.is_cancelled());
+        // Second call returns without panicking and without
+        // re-firing (the token tracks its own state internally).
+        handle.cancel();
+        assert!(cancel.is_cancelled());
+    }
+
+    /// `mem::forget` skips the `Drop` impl entirely. The cancel
+    /// token does not fire and the producer task continues running
+    /// — exactly the leak semantics any Rust handle has under
+    /// `forget`. The test pins this so a reviewer reading the
+    /// code can confirm the cancel-on-drop contract is `Drop`-
+    /// scoped, not embedded in another method that runs
+    /// implicitly.
+    ///
+    /// Operational note: in production this would leak the
+    /// `_slot_guard` held by the producer task too — `forget` is
+    /// a programmer error, not a supported flow. We test the
+    /// behaviour to make the leak surface explicit, not to
+    /// endorse it.
+    #[tokio::test]
+    async fn mem_forget_does_not_fire_cancel() {
+        let (handle, _completion, _progress, cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        std::mem::forget(handle);
+        assert!(!cancel.is_cancelled(), "Drop did not run; token unfired");
+
+        // Manually fire the token to clean up the parked
+        // observation tasks.
+        cancel.cancel();
+    }
+
+    /// When the producer observes cancellation mid-scan and bails,
+    /// it publishes a terminal `RefreshPhase::Cancelled` progress
+    /// update **before** the watch sender drops, and that update
+    /// preserves the last published `height` / counters so
+    /// subscribers don't observe a misleading rollback to zero.
+    ///
+    /// This test mirrors the production sequence exactly: the
+    /// per-block `ProgressEmitter` advances `height` during the
+    /// scan, and on `Err(RefreshError::Cancelled)` from
+    /// `produce_scan_result`, `run_refresh_task` clones the latest
+    /// published progress, overrides only `phase`, and sends. We
+    /// drive the same shape through the test's caller-owned
+    /// `progress_tx` so the assertion lands on the public surface
+    /// (`progress().borrow()`) rather than internals.
+    #[tokio::test]
+    async fn cancel_during_scan_emits_terminal_cancelled_phase() {
+        let (handle, _completion, progress_tx, _cancel, _producer_assert) =
+            handle_with(RefreshOptions::default());
+
+        let mut rx = handle.progress();
+
+        progress_tx
+            .send(RefreshProgress {
+                height: 100,
+                blocks_processed: 50,
+                blocks_total: 200,
+                phase: RefreshPhase::Scanning,
+            })
+            .expect("subscriber alive");
+        rx.changed().await.expect("scanning update delivered");
+        let mid = rx.borrow().clone();
+        assert_eq!(mid.height, 100);
+        assert!(matches!(mid.phase, RefreshPhase::Scanning));
+
+        let mut terminal = progress_tx.borrow().clone();
+        terminal.phase = RefreshPhase::Cancelled;
+        progress_tx.send(terminal).expect("subscriber alive");
+        rx.changed().await.expect("terminal update delivered");
+
+        let last = rx.borrow().clone();
+        assert!(
+            matches!(last.phase, RefreshPhase::Cancelled),
+            "phase preserved as Cancelled"
+        );
+        assert_eq!(
+            last.height, 100,
+            "height preserved across the Scanning→Cancelled transition"
+        );
+        assert_eq!(
+            last.blocks_processed, 50,
+            "blocks_processed preserved across the transition"
+        );
+        assert_eq!(
+            last.blocks_total, 200,
+            "blocks_total preserved across the transition"
+        );
+    }
+}
+
+#[cfg(test)]
+mod refresh_slot_tests {
+    //! Unit tests for [`RefreshSlot`] — the single-flight
+    //! primitive [`Engine::start_refresh`] uses to gate concurrent
+    //! refreshes.
+    //!
+    //! These tests exercise the slot in isolation; concurrent
+    //! `start_refresh` against a real `Engine<S>` (the integration
+    //! surface that surfaces `RefreshError::AlreadyRunning`) is
+    //! covered by commit 6.
+    use super::RefreshSlot;
+
+    /// Fresh slot is unclaimed; `try_claim` succeeds and returns
+    /// a guard.
+    #[test]
+    fn claim_succeeds_when_unheld() {
+        let slot = RefreshSlot::new();
+        assert!(!slot.is_claimed());
+        let guard = slot.try_claim().expect("fresh slot is claimable");
+        assert!(slot.is_claimed());
+        drop(guard);
+    }
+
+    /// A second `try_claim` returns `None` while the first guard
+    /// is alive. This is the surface that surfaces
+    /// `RefreshError::AlreadyRunning` at the `start_refresh`
+    /// layer.
+    #[test]
+    fn claim_fails_when_held() {
+        let slot = RefreshSlot::new();
+        let _guard = slot.try_claim().expect("first claim succeeds");
+        assert!(slot.try_claim().is_none(), "second claim fails");
+        assert!(slot.is_claimed());
+    }
+
+    /// Dropping the guard releases the slot; a subsequent claim
+    /// then succeeds. This is the contract that makes the
+    /// `_slot_guard` discipline in `run_refresh_task` self-
+    /// healing across success / error / cancellation exits.
+    #[test]
+    fn release_on_guard_drop() {
+        let slot = RefreshSlot::new();
+        {
+            let _guard = slot.try_claim().expect("first claim succeeds");
+            assert!(slot.is_claimed());
+        }
+        assert!(!slot.is_claimed(), "guard drop released the flag");
+        let _second = slot
+            .try_claim()
+            .expect("slot reclaimable after first guard dropped");
+    }
+
+    /// Cloning the slot returns another handle to the same flag —
+    /// so the engine's stored slot and the producer task's clone
+    /// observe the same state. This is the property that makes
+    /// the slot-claim path lock-free against the producer's read/
+    /// write borrows of the engine.
+    #[test]
+    fn clone_shares_underlying_flag() {
+        let slot_a = RefreshSlot::new();
+        let slot_b = slot_a.clone();
+        let _guard = slot_a.try_claim().expect("first claim succeeds");
+        assert!(slot_b.is_claimed(), "clone observes the same flag");
+        assert!(slot_b.try_claim().is_none(), "clone cannot re-claim");
+    }
+}
+
+#[cfg(test)]
+mod start_refresh_integration_tests {
+    //! End-to-end tests for [`Engine::start_refresh`] that drive the
+    //! real producer task against a real [`Engine<SoloSigner>`].
+    //!
+    //! Note on RPC fixturing: [`DaemonClient`] currently wraps a
+    //! concrete [`SimpleRequestRpc`], not a generic `Rpc` trait, so
+    //! the integration surface available to us is the unreachable-
+    //! URL daemon (`get_height` fails fast with [`IoError::Daemon`])
+    //! rather than a [`MockRpc`]-driven scenario. Producer-side
+    //! retry / classification behaviour is already pinned at the
+    //! synchronous-driver layer in [`refresh_driver_tests`]; what
+    //! these tests pin is the *handle* layer:
+    //!
+    //! - completion delivery on `get_height` failure,
+    //! - `RefreshError::AlreadyRunning` on concurrent claim,
+    //! - slot-release after the producer task winds down.
+    //!
+    //! Wider scenario coverage (synthetic block batches, scanner
+    //! transitions, reorg events) lives in the synchronous-driver
+    //! tests; making `DaemonClient` generic so `MockRpc` can drive
+    //! `start_refresh` directly is tracked separately and does not
+    //! gate Branch 2.
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+    use shekyl_simple_request_rpc::SimpleRequestRpc;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
+
+    use crate::engine::lifecycle::EngineCreateParams;
+    use crate::engine::{
+        Credentials, DaemonClient, Engine, IoError, RefreshError, RefreshOptions, SoloSigner,
+    };
+
+    /// Build a `DaemonClient` whose underlying RPC points at an
+    /// unreachable URL, on the *current* tokio runtime. Async
+    /// because [`SimpleRequestRpc::new`] is async; safe to call
+    /// from inside `#[tokio::test]` because we await it directly
+    /// rather than driving a separate runtime via `block_on`.
+    /// Hyper's connection-pool background tasks live on the test's
+    /// runtime; the test awaits all work before returning so
+    /// nothing is orphaned at runtime drop.
+    async fn unreachable_daemon() -> DaemonClient {
+        let rpc = SimpleRequestRpc::new("http://127.0.0.1:1".to_string())
+            .await
+            .expect("construct SimpleRequestRpc against unreachable URL (no connect attempt yet)");
+        DaemonClient::new(rpc)
+    }
+
+    /// Build a fresh `Engine<SoloSigner>` wrapped in
+    /// `Arc<RwLock<…>>` so the shape matches
+    /// `Engine::start_refresh`'s receiver. Returns the `TempDir`
+    /// alongside so the caller keeps the wallet file alive for the
+    /// test's scope.
+    async fn make_engine_arc() -> (Arc<RwLock<Engine<SoloSigner>>>, TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_path = tmp.path().join("wallet");
+        let creds = Credentials::password_only(b"start-refresh integration tests");
+        let mut seed = [0u8; MASTER_SEED_BYTES];
+        for (i, b) in seed.iter_mut().enumerate() {
+            *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(13);
+        }
+        let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
+        let daemon = unreachable_daemon().await;
+        let wallet = Engine::<SoloSigner>::create(params, daemon)
+            .expect("create FULL wallet for start_refresh integration tests");
+        (Arc::new(RwLock::new(wallet)), tmp)
+    }
+
+    /// `start_refresh` against the unreachable dummy daemon
+    /// produces a runnable handle; the producer's `get_height`
+    /// call fails fast, and the failure surfaces through
+    /// `join().await` as `RefreshError::Io(IoError::Daemon)`.
+    /// The slot is released once the producer task exits.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn start_refresh_propagates_daemon_io_error_via_join() {
+        let (arc, _tmp) = make_engine_arc().await;
+
+        let handle = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("first start_refresh claims the slot");
+
+        let result = handle.join().await;
+        match result {
+            Err(RefreshError::Io(IoError::Daemon { detail })) => {
+                assert!(
+                    !detail.is_empty(),
+                    "Daemon error carries a non-empty detail string"
+                );
+            }
+            other => panic!("expected Io(Daemon), got {other:?}"),
+        }
+
+        // The completion oneshot resolves before the producer
+        // task's `_slot_guard` drops (sender is fired inside the
+        // task, slot guard drops as the function returns). Poll
+        // briefly for slot release; bounded so a regression does
+        // not hang the suite.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            tokio::task::yield_now().await;
+            let g = arc.read().await;
+            if !g.refresh_slot.is_claimed() {
+                break;
+            }
+            drop(g);
+            if Instant::now() > deadline {
+                panic!("slot still claimed 5s after join() resolved");
+            }
+        }
+    }
+
+    /// A second `start_refresh` while the first handle is alive
+    /// returns `RefreshError::AlreadyRunning`. Uses the
+    /// `current_thread` flavour so the first producer task does
+    /// not run until we explicitly await — guaranteeing the slot
+    /// is still claimed at the time of the second call without
+    /// relying on RPC timing.
+    #[tokio::test(flavor = "current_thread")]
+    async fn concurrent_start_refresh_returns_already_running() {
+        let (arc, _tmp) = make_engine_arc().await;
+
+        let h1 = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("first claim succeeds");
+        // Producer for h1 is queued but not yet polled (single-
+        // threaded runtime, no intervening yield).
+        let h2 = Engine::start_refresh(arc.clone(), RefreshOptions::default()).await;
+        assert!(
+            matches!(h2, Err(RefreshError::AlreadyRunning)),
+            "second claim returns AlreadyRunning, got {h2:?}"
+        );
+
+        // Cleanup: drop h1 so the producer wakes on cancel and
+        // releases the slot before the test ends.
+        drop(h1);
+        // Yield until the producer task has actually run and exited;
+        // bounded so a regression doesn't hang the suite.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            tokio::task::yield_now().await;
+            let g = arc.read().await;
+            if !g.refresh_slot.is_claimed() {
+                break;
+            }
+            drop(g);
+            if Instant::now() > deadline {
+                panic!("producer task did not exit within 5s of handle drop");
+            }
+        }
+    }
+
+    /// Dropping the handle fires the cancel token; the producer
+    /// task winds down and releases the slot. After the slot is
+    /// observably free, a fresh `start_refresh` succeeds — i.e.
+    /// the slot really is reusable, not merely "not held by *this*
+    /// reference".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn drop_releases_slot_for_subsequent_start_refresh() {
+        let (arc, _tmp) = make_engine_arc().await;
+
+        let h1 = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("first claim succeeds");
+        drop(h1);
+
+        // Spin briefly until the slot is released. Bounded so a
+        // regression does not hang the suite.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            tokio::task::yield_now().await;
+            let g = arc.read().await;
+            if !g.refresh_slot.is_claimed() {
+                break;
+            }
+            drop(g);
+            if Instant::now() > deadline {
+                panic!("slot still claimed 5s after handle drop");
+            }
+        }
+
+        // Slot is free; a second `start_refresh` reclaims it.
+        let h2 = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("slot is reusable after producer wind-down");
+        // Drain the second handle to keep the suite clean.
+        let _ = h2.join().await;
     }
 }

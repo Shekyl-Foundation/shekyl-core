@@ -3495,4 +3495,90 @@ discipline above.
 
 ---
 
+## 2026-04-27 — `RefreshHandle` (Phase 2a Branch 2) ships transitional `Arc<RwLock<Engine>>` under Path B
+
+**Status.** Decided 2026-04-27 (scope-closing entry for Phase 2a
+Branch 2). Implements the cancel-on-drop / one-at-a-time / progress-
+channel / push-completion handle decided in *2026-04-25 —
+`RefreshHandle`: cancel-on-drop RAII, one-at-a-time, scanner
+checkpoints between blocks*. Lands under the message-passing
+boundary decided in *2026-04-27 — Engine binary boundary: pure
+message-passing over shared handle*; this entry pins the
+transitional shape.
+
+**Decision.** Branch 2's `Engine::start_refresh` ships against
+`Arc<tokio::sync::RwLock<Engine<S>>>` rather than against a kameo
+`ActorRef<Engine<S>>`. The handle's external surface
+(`progress`, `cancel`, `is_running`, `async fn join`) is locked in
+its Stage-4 form — it is not changing across the actor migration.
+The internal seam is the only thing migrating.
+
+**Concretely.**
+
+- The producer task spawned by `start_refresh` takes
+  `Arc<RwLock<Engine<S>>>`. It acquires the read lock briefly
+  (clone the daemon, take a `LedgerSnapshot`), drops the lock,
+  runs `produce_scan_result` without holding any borrow, then
+  acquires the write lock to call `apply_scan_result`. The lock is
+  never held across an `await` of the long-running scan. This is
+  the snapshot-merge contract from *2026-04-26 — Snapshot-merge-
+  with-retry semantics for `Wallet::refresh`* expressed under the
+  shared-handle.
+- The handle's four channel ends (completion `oneshot`, progress
+  `watch`, `CancellationToken`, producer `JoinHandle`) and its
+  `RefreshOptions` carry no reference to the engine — they are the
+  primitives that the future actor migration will plumb through
+  kameo's `ask` and effect channels. Nothing on the
+  `RefreshHandle` API changes when the seam moves.
+- `RefreshSlot` (newtype around `Arc<AtomicBool>`) is owned by the
+  engine and cloned into the producer task as `_slot_guard`. The
+  guard releases the slot on task exit (success / error /
+  cancellation), so the slot is self-healing across all task-exit
+  paths. Concurrent `start_refresh` returns
+  `RefreshError::AlreadyRunning` deterministically.
+- `Drop for RefreshHandle` is cancel-only: it fires the shared
+  `CancellationToken` and lets fields drop in declaration order.
+  Slot release lives on task exit, not on handle drop, so a forced
+  `mem::forget` leaks the slot guard but the cancel contract
+  remains `Drop`-scoped (corner-case test coverage in
+  `mod refresh_handle_tests`).
+
+**Why ship transitional rather than wait for the actor.** The
+actor-architecture entry calls for staged migration; the binary-
+boundary entry retires the wrapper at the binary surface only.
+Stage-1/Stage-2 internal call sites (which is everything in V3.0)
+remain inside the engine library, where a shared handle is the
+natural compositional shape. Forcing a kameo `ActorRef` for in-
+process callers before the binary surface is even built would
+both invert the migration order and pin handle semantics against
+a runtime contract that hasn't been chosen yet. The transitional
+shape lets Branch 2 close on the handle surface, which is what
+downstream code (the cli, the rpc, the gui) needs to compile
+against; the actor migration replaces the `Arc<RwLock<Engine>>`
+parameter without touching any of that downstream code.
+
+**What is not decided here.** The kameo cutover timing, the
+mailbox sizing, the per-message error envelope shape, and the
+`EngineSnapshot` accessor for read-only observers — all of those
+are tracked in `docs/FOLLOWUPS.md` against the actor-migration
+work. This entry only pins what Branch 2 ships now.
+
+**Cross-references.**
+
+- *2026-04-25 — `RefreshHandle`: cancel-on-drop RAII, one-at-a-
+  time, scanner checkpoints between blocks*: the handle-shape
+  decision Branch 2 implements.
+- *2026-04-26 — Snapshot-merge-with-retry semantics for
+  `Wallet::refresh`*: the producer/merge contract the handle
+  wraps; Branch 1 shipped the synchronous entry point, Branch 2
+  ships the async handle around the same contract.
+- *2026-04-27 — Engine binary boundary: pure message-passing over
+  shared handle*: the boundary this transitional shape lives
+  under.
+- *2026-04-27 — Engine architecture: actor model with staged
+  migration from composition*: the future seam this transitional
+  shape closes the gap toward.
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->
