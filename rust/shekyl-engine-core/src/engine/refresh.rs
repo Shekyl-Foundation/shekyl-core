@@ -1317,11 +1317,6 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
 ///   idiom for "RAII guard, intentionally unused in the function
 ///   body but held for `Drop` semantics."
 ///
-/// **Stub for commit 2 of Branch 2; full body lands in commit 3.**
-/// Today this immediately publishes `Cancelled` on `progress`,
-/// sends `Err(RefreshError::Cancelled)` on `completion`, and
-/// returns. The signature is fixed so commit 3 can drop in the
-/// real loop without the spawn site changing.
 /// Drive the asynchronous snapshot–scan–merge–retry loop on behalf of
 /// [`Engine::start_refresh`].
 ///
@@ -1359,15 +1354,21 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
 ///
 /// # Cancellation
 ///
-/// The cancellation token is checked at three points:
+/// The cancellation token is checked at four points:
 ///
 /// 1. **Top of each attempt** — covers the boundary between attempts,
 ///    including the gap between a `Retrying` publish and the next
 ///    snapshot.
-/// 2. **Mid-scan**, inside [`produce_scan_result`] — covers between
+/// 2. **Post-tip-fetch**, immediately after `daemon.get_height()`
+///    returns `Ok` — covers cancels that fire during the daemon RPC
+///    itself. The RPC isn't cancel-aware, so the await runs to
+///    completion; this checkpoint is what makes a cancel-during-tip-
+///    fetch deterministically surface as `Cancelled` rather than
+///    leak into the per-block scan.
+/// 3. **Mid-scan**, inside [`produce_scan_result`] — covers between
 ///    blocks during the long scan, which is where the bulk of the
 ///    elapsed time lives.
-/// 3. **Pre-merge**, between [`produce_scan_result`] returning `Ok`
+/// 4. **Pre-merge**, between [`produce_scan_result`] returning `Ok`
 ///    and the write-lock acquisition for [`Engine::apply_scan_result`]
 ///    — covers the post-scan window where the producer holds a
 ///    valid `ScanResult` but has not yet mutated wallet state. A
@@ -1376,7 +1377,7 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
 ///    the work that produced it. This is the trade-off cancellation
 ///    asks us to make.
 ///
-/// On observation at any of the three points, a final `Cancelled`
+/// On observation at any of the four points, a final `Cancelled`
 /// progress update is best-effort emitted — preserving the last
 /// published `height` / `blocks_processed` / `blocks_total` so
 /// subscribers don't observe a misleading rollback to zero — and
@@ -1449,11 +1450,13 @@ async fn run_refresh_task<S: EngineSignerKind>(
         };
         let current_synced = snapshot.synced_height;
 
-        // First network call. Cancellation observed here surfaces as
-        // a daemon error from the underlying RPC; we don't have a
-        // selectable cancel-aware variant on `get_height`, so we map
-        // a cancel-during-tip-fetch to `Cancelled` post-hoc once the
-        // call returns.
+        // First network call. The underlying RPC isn't cancel-aware,
+        // so a cancel fired during the await runs to RPC completion.
+        // We re-check `cancel` immediately after the call returns
+        // (see the post-await checkpoint just below) so a cancelled
+        // refresh deterministically reports `Cancelled` rather than
+        // proceeding into the per-block scan or surfacing as an
+        // unrelated daemon error.
         let daemon_tip = match daemon.inner().get_height().await {
             Ok(t) => t,
             Err(e) => {
@@ -1463,6 +1466,21 @@ async fn run_refresh_task<S: EngineSignerKind>(
                 return;
             }
         };
+
+        // Post-tip-fetch cancel checkpoint. Honours a cancel that
+        // fired during the daemon RPC before we kick off the per-
+        // block scan. State is unmutated; the just-returned tip is
+        // discarded along with the (small) RPC cost. See the
+        // function's `# Cancellation` section for the full
+        // checkpoint layout.
+        if cancel.is_cancelled() {
+            let mut terminal = progress.borrow().clone();
+            terminal.phase = RefreshPhase::Cancelled;
+            let _ = progress.send(terminal);
+            let _ = completion.send(Err(RefreshError::Cancelled));
+            return;
+        }
+
         let daemon_tip_u64 =
             u64::try_from(daemon_tip).expect("daemon height fits in u64 on 64-bit targets");
 
@@ -1510,8 +1528,8 @@ async fn run_refresh_task<S: EngineSignerKind>(
                 // attempt cancel emission — preserve the last
                 // published baseline (which the per-block
                 // `ProgressEmitter` advanced as the scan ran) and
-                // override only `phase`. This is the second of the
-                // three cancel checkpoints documented on this
+                // override only `phase`. This is the third of the
+                // four cancel checkpoints documented on this
                 // function.
                 let mut terminal = progress.borrow().clone();
                 terminal.phase = RefreshPhase::Cancelled;
@@ -1527,7 +1545,7 @@ async fn run_refresh_task<S: EngineSignerKind>(
 
         let summary = summarize(&result, attempt);
 
-        // Pre-merge cancel checkpoint (the third of three documented
+        // Pre-merge cancel checkpoint (the fourth of four documented
         // on this function). The producer returned a valid
         // `ScanResult`, but the user fired `cancel` between the last
         // per-block check inside `produce_scan_result` and now. The
@@ -1633,14 +1651,15 @@ fn summarize(result: &ScanResult, merge_attempts: u32) -> RefreshSummary {
 }
 
 impl<S: EngineSignerKind> Engine<S> {
-    /// Spawn an async refresh task; return a [`RefreshHandle`]
-    /// observing it.
+    /// Spawn an async refresh task and return a [`RefreshHandle`]
+    /// for observing and controlling it.
     ///
-    /// **Stub for commit 1; full body lands in commit 2 of Branch
-    /// 2.** Today this returns `unimplemented!()`; the signature is
-    /// fixed so commit 2's implementation can land without an API
-    /// shape change, and so the rest of Branch 2's commits can
-    /// reference the API via a real method node.
+    /// The handle exposes a [`tokio::sync::watch`] receiver for
+    /// progress updates, an `async fn join` future for the terminal
+    /// `Result<RefreshSummary, RefreshError>`, an explicit
+    /// [`RefreshHandle::cancel`] hook, and cancel-on-drop semantics.
+    /// Single-flight is enforced by the engine's `RefreshSlot`:
+    /// concurrent calls return [`RefreshError::AlreadyRunning`].
     ///
     /// # Shape
     ///
@@ -3271,8 +3290,13 @@ mod refresh_handle_tests {
     //!
     //! Corner-case tests (cancel-on-drop, concurrent
     //! `start_refresh`, idempotent cancel, `mem::forget` leak
-    //! semantics) live in commit 5. Integration tests that drive
-    //! the real producer through a `MockRpc` live in commit 6.
+    //! semantics) live in commit 5. Integration coverage for the
+    //! real producer through `Engine::start_refresh` lives in
+    //! commit 6 and currently uses an unreachable `DaemonClient`
+    //! to assert handle-shape invariants and the daemon-IO error
+    //! mapping; `MockRpc`-driven coverage is deferred (see
+    //! `docs/FOLLOWUPS.md`: "Generic `DaemonClient` so `MockRpc`
+    //! can drive `start_refresh`").
     use super::{
         RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshSummary,
     };

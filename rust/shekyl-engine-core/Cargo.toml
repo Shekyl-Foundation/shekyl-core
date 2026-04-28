@@ -41,9 +41,10 @@ tracing = "0.1"
 # passing at Stage 4). `rt` enables `tokio::spawn` for the producer
 # task.
 tokio = { version = "1", features = ["time", "macros", "sync", "rt"] }
-# Cancellation token for cooperative shutdown of the producer between
-# blocks. Callers pass the token through `RefreshOptions` so a single
-# token can govern the whole driver from the binary boundary down.
+# Cancellation token for cooperative shutdown of the refresh producer
+# between blocks. `Engine::start_refresh` constructs and owns the token
+# internally; callers fire it through `RefreshHandle::cancel` (or by
+# dropping the handle, which delegates to the same token).
 # `CancellationToken` is part of the unconditional surface in
 # tokio-util 0.7 (no feature gate); no explicit feature list needed.
 tokio-util = { version = "0.7" }

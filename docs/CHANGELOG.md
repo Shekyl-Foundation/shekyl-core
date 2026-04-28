@@ -191,9 +191,11 @@
     phase: RefreshPhase }` — `#[non_exhaustive]` snapshot
     delivered through a `tokio::sync::watch` channel. Per-attempt
     semantics: `blocks_total` is the per-retry total, not a
-    cumulative running count. Seeded with `RefreshProgress::initial()`
-    so subscribers observe a baseline before the producer
-    publishes its first update.
+    cumulative running count. The watch channel is seeded by
+    `Engine::start_refresh` with the wallet's current
+    `synced_height` (and zeroed counters) so subscribers observe
+    a baseline matching the wallet state before the producer
+    publishes its first per-attempt update.
   - `RefreshPhase { Scanning, Merging, Retrying, Cancelled }` —
     coarse-grained producer state. `Scanning` covers fetch + scan
     of a per-block batch; `Merging` covers the brief write-locked
