@@ -1427,6 +1427,56 @@ one place to confirm each item's relationship to the wallet stack.
   ../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)
   Phase 1 deliverables.**
 
+- **Re-examine `/FIiso646.h` and `rct::` → `ct::` deferrals.** Both
+  deferrals rest on the same "upstream cherry-pick preservation"
+  framing that
+  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md) §"Why this matters
+  more than it used to" calls largely notional given Shekyl's actual
+  divergence from Monero (~3 substantive commits across 8 inherited
+  files in the last 2 years; several files 88–100% diverged by line
+  count). At V3.2 the question is no longer "cherry-pick risk vs.
+  rename cost" but "do these mechanical changes earn their place in
+  the V3.2 release on their own merits."
+
+  Two items in scope, evaluated independently against the V3.2 release
+  window:
+
+  1. **`/FIiso646.h` MSVC workaround** — hundreds of call sites use
+     `not` / `and` / `or` instead of `!` / `&&` / `||`. The workaround
+     in `CMAKE_CXX_FLAGS` is the simplest disposition but fragile;
+     the audit-discovered alternatives are (a) `/permissive-` for
+     full C++ conformance on MSVC, or (b) mechanical replacement
+     across the call sites. Disposition rule for V3.2: pick (a), (b),
+     or "stay on the workaround" by name; `[[deprecated]] without a
+     deletion date is debt that compounds`
+     ([`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)),
+     so a fourth "defer again to V3.3" disposition is allowed only
+     with a written reason that does not reduce to cherry-pick-risk.
+
+  2. **`rct::` → `ct::` namespace rename** — the type-alias bridge
+     `using ct_signatures = rct::rctSig;` ships today
+     ([`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md):578–584); the
+     full caller migration and the namespace rename in
+     `src/fcmp/rctTypes.h` / `rctOps.h` / `rctSigs.h` are currently
+     V4-targeted on the same "end of Monero upstream activity"
+     premise. Disposition rule for V3.2: confirm or revise the V4
+     target. If the framing-note premise holds, the rename is
+     orthogonal to V3.2 ship-readiness and can stay V4. If the V3.x
+     line accumulates more `rct::` sightings in fresh code, the
+     rename's deferral cost is rising and the V4 target should
+     compress to V3.x.
+
+  Cross-references:
+  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md):17–18 (framing
+  note),
+  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md):24–38 (alternative
+  tokens decision),
+  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md):565–600 (rct/ct
+  rename status). Exit criteria: each of the two items has a written
+  V3.2 disposition (do, defer-with-reason, or stay-on-workaround); the
+  STRUCTURAL_TODO citations point at a real section header. Target:
+  V3.2.
+
 ---
 
 ## V3.x — staker archival and visualization ship
