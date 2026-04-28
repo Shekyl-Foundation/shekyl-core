@@ -67,16 +67,16 @@
 
 ### Added
 
-- **`Wallet::refresh` driver and `produce_scan_result` producer
+- **`Engine::refresh` driver and `produce_scan_result` producer
   (Phase 2a `refresh_scan_loop` bundle, Branch 1).** The
   [`shekyl_engine_core::engine::refresh`](../rust/shekyl-engine-core/src/engine/refresh.rs)
   module ships the snapshot-merge-with-retry sync driver that
   replaces the standalone `shekyl-scanner::sync::run_sync_loop`.
   Public surface:
 
-  - `Wallet::refresh(&mut self, opts: &RefreshOptions, runtime:
+  - `Engine::refresh(&mut self, opts: &RefreshOptions, runtime:
     &tokio::runtime::Handle) -> Result<RefreshSummary, RefreshError>`
-    — synchronous entry point on `Wallet<S>`. Captures a
+    — synchronous entry point on `Engine<S>`. Captures a
     `LedgerSnapshot` of the wallet's current `(synced_height,
     reorg_blocks)` under a brief read borrow, drops the borrow,
     drives the async producer on `runtime`, and merges the result
@@ -236,10 +236,10 @@
   batches lands when `DaemonClient` is generic (deferred outside
   Branch 2; tracked under V3.1 in `docs/FOLLOWUPS.md`).
 
-- **`Wallet::create` / `Wallet::open_full` / `Wallet::change_password` /
-  `Wallet::close` lifecycle methods on `shekyl-engine-core` (Phase 1
+- **`Engine::create` / `Engine::open_full` / `Engine::change_password` /
+  `Engine::close` lifecycle methods on `shekyl-engine-core` (Phase 1
   `lifecycle` task).** The new
-  [`shekyl_engine_core::wallet::lifecycle`](../rust/shekyl-engine-core/src/wallet/lifecycle.rs)
+  [`shekyl_engine_core::engine::lifecycle`](../rust/shekyl-engine-core/src/engine/lifecycle.rs)
   module composes
   [`shekyl-engine-file`](../rust/shekyl-engine-file/src/),
   [`shekyl-crypto-pq::account::rederive_account`](../rust/shekyl-crypto-pq/src/account.rs),
@@ -247,7 +247,7 @@
   [`shekyl-engine-state::WalletLedger`](../rust/shekyl-engine-state/src/wallet_ledger.rs),
   and
   [`shekyl-engine-state::LedgerIndexes`](../rust/shekyl-engine-state/src/ledger_indexes.rs)
-  into the `Wallet<S>` orchestrator's open / create / rotate / close
+  into the `Engine<S>` orchestrator's open / create / rotate / close
   surface. Public API:
 
   - `Credentials<'a>` — forward-compatible authentication parameter.
@@ -258,8 +258,8 @@
     breaking existing call sites. See `docs/V3_WALLET_DECISION_LOG.md`
     *"Wallet authentication: V3.0 password-only; MFA is V3.1 via
     format-version bump"* (2026-04-26) for the API shape rationale.
-  - `OpenedWallet<S>` typed-sum return for `open_full`.
-    `Loaded(Wallet<S>)` indicates the persisted ledger file decoded
+  - `OpenedEngine<S>` typed-sum return for `open_full`.
+    `Loaded(Engine<S>)` indicates the persisted ledger file decoded
     cleanly; `Restored { wallet, from_height }` indicates the keys
     file was intact but the ledger file was missing or unreadable —
     the wallet was reconstructed against an empty ledger anchored at
@@ -267,17 +267,17 @@
     refresh to rebuild state. See `docs/V3_WALLET_DECISION_LOG.md`
     *"`Wallet::open_full`: lost-state surfacing via typed
     `OpenedWallet` sum"* (2026-04-26).
-  - `WalletCreateParams<'a>` (9 public fields) and
+  - `EngineCreateParams<'a>` (9 public fields) and
     `CapabilityInput<'a>::Full { master_seed_64, seed_format }` for
-    `Wallet::create`. ViewOnly / HardwareOffload `CapabilityInput`
+    `Engine::create`. ViewOnly / HardwareOffload `CapabilityInput`
     variants are deferred alongside the matching `open_*` bodies;
     the FULL variant ships end-to-end. A `#[cfg(test)]
-    WalletCreateParams::for_test_full(base_path, password,
+    EngineCreateParams::for_test_full(base_path, password,
     master_seed_64)` helper pins all eight non-essential fields to
     known-good defaults for unit-test fixtures; production callers
     (CLI / RPC) construct the struct literal so the field set is
     explicit at every call site.
-  - `Wallet::create(params) -> Result<Wallet<SoloSigner>, OpenError>` —
+  - `Engine::create(params) -> Result<Engine<SoloSigner>, OpenError>` —
     delegates to `WalletFile::create` with derived
     `DerivationNetwork` / `SeedFormat`, runs `rederive_account` to
     populate `AllKeysBlob`, cross-checks
@@ -285,9 +285,9 @@
     `expected_classical_address` (failure → `KeyError::PublicBytesMismatch`),
     initializes `WalletLedger::empty()` and `LedgerIndexes::empty()`,
     persists initial prefs via `WalletFile::save_prefs`, and assembles
-    the `Wallet<SoloSigner>` instance.
-  - `Wallet::open_full(base_path, &credentials, network, daemon,
-    overrides) -> Result<OpenedWallet<SoloSigner>, OpenError>` — opens
+    the `Engine<SoloSigner>` instance.
+  - `Engine::open_full(base_path, &credentials, network, daemon,
+    overrides) -> Result<OpenedEngine<SoloSigner>, OpenError>` — opens
     the envelope (mapping `WalletEnvelopeError::InvalidPasswordOrCorrupt`
     to `OpenError::IncorrectPassword`,
     `RequiresMultisigSupport` to `OpenError::RequiresMultisig`, and
@@ -301,7 +301,7 @@
     `LedgerIndexes` from the persisted `LedgerBlock`, and returns
     `Loaded` or `Restored { from_height }` based on the
     `WalletFile::open` outcome.
-  - `Wallet::open_view_only(...)` / `Wallet::open_hardware_offload(...)`
+  - `Engine::open_view_only(...)` / `Engine::open_hardware_offload(...)`
     — signature-only stubs that return
     `OpenError::CapabilityNotYetImplemented { capability }` pending
     the matching `shekyl-crypto-pq` `AllKeysBlob` constructors. The
@@ -310,13 +310,13 @@
     `shekyl-engine-core`"*. See `docs/V3_WALLET_DECISION_LOG.md`
     *"`Wallet<S>` lifecycle: capability scoping for V3.0"* (2026-04-26)
     for the stub-shape rationale.
-  - `Wallet::change_password(&old, &new, new_kdf) -> Result<(), OpenError>`
+  - `Engine::change_password(&old, &new, new_kdf) -> Result<(), OpenError>`
     — delegates to `WalletFile::rotate_password`, mapping
     `WalletEnvelopeError::InvalidPasswordOrCorrupt` to
     `OpenError::IncorrectPassword`. Available on every signer kind
     (FULL / ViewOnly / HardwareOffload / multisig) since the
     underlying envelope rewrap is capability-agnostic.
-  - `Wallet::close(self, &credentials) -> Result<(), OpenError>` —
+  - `Engine::close(self, &credentials) -> Result<(), OpenError>` —
     refuses with `OpenError::OutstandingPendingTx { count }` when
     `outstanding_pending_txs() > 0` (drives cross-cutting lock 4's
     "no clean close while reservations are live" invariant).
@@ -326,7 +326,7 @@
     `WalletFile::Drop` releases the advisory lock on `<base>.keys`;
     `AllKeysBlob::Drop` zeroizes `spend_sk` / `view_sk` /
     `ml_kem_dk` and the public-key fields. The chain is
-    single-level (`Wallet<S>.keys: AllKeysBlob` directly, no
+    single-level (`Engine<S>.keys: AllKeysBlob` directly, no
     wrapper), and the underlying `Drop` semantics are tested in
     `shekyl-crypto-pq`'s own unit tests.
 
@@ -335,7 +335,7 @@
   old, `OpenError::IncorrectPassword`, `OpenError::NetworkMismatch`,
   the `Restored { from_height }` lost-state path (state file deleted
   between create and open), `OpenError::OutstandingPendingTx` (close
-  refused while a synthetic reservation is in `Wallet::reservations`),
+  refused while a synthetic reservation is in `Engine::reservations`),
   the structured `tracing::warn!` on prefs HMAC tamper events, and
   the typed `OpenError::CapabilityNotYetImplemented` returns from
   the view-only and hardware-offload stubs. The
@@ -352,10 +352,10 @@
   `SimpleRequestRpc` against an unreachable URL for the dummy
   `DaemonClient`).
 
-- **`Wallet::build_pending_tx` / `submit_pending_tx` / `discard_pending_tx`
+- **`Engine::build_pending_tx` / `submit_pending_tx` / `discard_pending_tx`
   three-method `PendingTx` lifecycle (Phase 1 `pending_tx` task).** The
   new
-  [`shekyl_engine_core::wallet::pending`](../rust/shekyl-engine-core/src/wallet/pending.rs)
+  [`shekyl_engine_core::engine::pending`](../rust/shekyl-engine-core/src/engine/pending.rs)
   module lands the runtime-only side of cross-cutting lock 4. Public
   surface:
 
@@ -369,16 +369,16 @@
     `FeePriority { Economy, Standard, Priority, Custom(NonZeroU64) }`,
     `TxRecipientSummary`, `ReservationId(u64)`, `TxHash([u8; 32])` —
     the strongly-typed input/handle/summary newtypes.
-  - `Wallet::build_pending_tx(&request) -> Result<PendingTx, SendError>` —
+  - `Engine::build_pending_tx(&request) -> Result<PendingTx, SendError>` —
     selects largest-amount-first spendable outputs from
     `LedgerIndexes`/`LedgerBlock` (excluding outputs already reserved
     by another in-flight `PendingTx`), captures real chain state
     (`synced_height` + `block_hash_at(synced_height)`), bumps a
     monotonic `next_reservation_id`, and inserts a `Reservation` into
-    `Wallet::reservations`. Phase 1 uses a fixed
+    `Engine::reservations`. Phase 1 uses a fixed
     `STUB_FEE_ATOMIC_UNITS = 1_000` stub fee; Phase 2a will replace
     it with a `daemon.get_fee_estimates()` call.
-  - `Wallet::submit_pending_tx(id) -> Result<TxHash, PendingTxError>` —
+  - `Engine::submit_pending_tx(id) -> Result<TxHash, PendingTxError>` —
     runs the cross-cutting-lock-4 invariants
     (`PendingTxError::TooOld { built, current, max_reorg }` against
     `NetworkSafetyConstants::for_network(network).max_reorg_depth`,
@@ -390,15 +390,15 @@
     proper in Phase 2a once daemon broadcast confirmation arrives),
     and returns a stub `TxHash` whose first 8 bytes encode the
     `ReservationId`.
-  - `Wallet::discard_pending_tx(id) -> Result<(), PendingTxError>` —
+  - `Engine::discard_pending_tx(id) -> Result<(), PendingTxError>` —
     idempotent: returns `Ok(())` regardless of whether `id` is
     currently recognized, releases the reservation entry so the
     referenced outputs become selectable by a subsequent build.
-  - `Wallet::outstanding_pending_txs() -> usize` — count accessor used
-    by `Wallet::close` (lifecycle commit) to refuse closing while any
+  - `Engine::outstanding_pending_txs() -> usize` — count accessor used
+    by `Engine::close` (lifecycle commit) to refuse closing while any
     reservation is active.
 
-  Reservations live exclusively on `Wallet<S>` as a runtime-only
+  Reservations live exclusively on `Engine<S>` as a runtime-only
   `BTreeMap<ReservationId, Reservation>` field alongside the
   existing runtime-only `indexes: LedgerIndexes`. They are not
   persisted in `WalletLedger.bookkeeping`; `BOOKKEEPING_BLOCK_VERSION`
@@ -412,7 +412,7 @@
   `submit_pending_tx_in_state`, `discard_pending_tx_in_state`)
   operating on `(&LedgerBlock, &mut BTreeMap<ReservationId,
   Reservation>, ...)` so unit tests can drive the full lifecycle
-  without standing up a `Wallet<S>` (whose constructors land in the
+  without standing up an `Engine<S>` (whose constructors land in the
   lifecycle commit). Twelve unit tests cover output reservation, the
   reserved-output filter, insufficient-funds, the no-block-yet
   `SendError::CannotSign`, all three `PendingTxError` paths, the
@@ -427,11 +427,11 @@
   draft phrasing.
 
 - **`shekyl_engine_core::scan::ScanResult` typed scanner-output value
-  and `Wallet::apply_scan_result` merge surface (Phase 1 `scan_result`
+  and `Engine::apply_scan_result` merge surface (Phase 1 `scan_result`
   task).** A new
   [`shekyl_engine_core::scan`](../rust/shekyl-engine-core/src/scan.rs)
   module defines the additive event vocabulary the Phase 2a
-  `Wallet::refresh()` pipeline produces from a scanner pass:
+  `Engine::refresh()` pipeline produces from a scanner pass:
 
   - `ScanResult { processed_height_range, parent_hash, block_hashes,
     new_transfers, spent_key_images, stake_events, reorg_rewind }`.
@@ -448,9 +448,9 @@
   - `ScanResult::empty_at(start, parent_hash)` for the
     nothing-changed-at-tip case and tests.
 
-  The companion `Wallet::apply_scan_result(&mut self, ScanResult) ->
+  The companion `Engine::apply_scan_result(&mut self, ScanResult) ->
   Result<(), RefreshError>` lives in
-  [`wallet::merge`](../rust/shekyl-engine-core/src/wallet/merge.rs) and
+  [`engine::merge`](../rust/shekyl-engine-core/src/engine/merge.rs) and
   is the only audited code path that mutates the scanner-derived slice
   of `WalletLedger` plus `LedgerIndexes` during refresh. It enforces
   two snapshot-consistency invariants before applying any events,
@@ -468,14 +468,14 @@
   per-height ingest (`process_scanned_outputs` + `detect_spends`)
   driven by `block_hashes` so `synced_height` advances exactly once
   per scanned block — even when the block had no events — then
-  staker-pool aggregate events. `Wallet<S>` now carries
+  staker-pool aggregate events. `Engine<S>` now carries
   `indexes: LedgerIndexes` as a direct field so the merge can mutate
   both the persisted `LedgerBlock` (via `WalletLedger.ledger`) and
   the runtime indexes under a single `&mut self` borrow without
   needing an inner lock. The full merge body is exposed `pub(crate)`
   as `apply_scan_result_to_state(&mut LedgerBlock, &mut LedgerIndexes,
   ScanResult)` so tests can drive it without standing up a full
-  `Wallet<S>` (whose lifecycle methods land in a follow-up commit).
+  `Engine<S>` (whose lifecycle methods land in a follow-up commit).
 
   See `docs/V3_WALLET_DECISION_LOG.md` *"`ScanResult` type"*
   (2026-04-25, **crate location: `shekyl-engine-core::scan`**) and
@@ -579,8 +579,8 @@
     re-derived"* — pins the rule that per-tx randomness lives in
     `TxMetaBlock::tx_keys: BTreeMap<TxHash, TxSecretKeys>`
     (already shipped in schema), is never reconstructed from any
-    other state, and that `Wallet::tx_proof` /
-    `Wallet::reserve_proof` (Phase 2) read it by `txid` lookup
+    other state, and that `Engine::tx_proof` /
+    `Engine::reserve_proof` (Phase 2) read it by `txid` lookup
     with a typed `ProofError::TxKeyNotPersisted` on miss.
   - *"Daemon-side `tracing` install:
     `shekyl_log_install_tracing_forwarder` under
@@ -724,7 +724,7 @@
   Branch 1).** The standalone background-sync surface
   (`run_sync_loop`, `LiveLedger`, `SyncProgress`, `SyncError`) and
   its feature flag are deleted in favor of the
-  `shekyl-engine-core::Wallet::refresh` driver. `shekyl-scanner`
+  `shekyl-engine-core::Engine::refresh` driver. `shekyl-scanner`
   becomes a pure scanning library — `Scanner`, extra-field parsing,
   KEM rederivation, the `LedgerBlock` / `LedgerIndexes` extension
   traits, balance, and coin selection — and drops its `tokio` /
@@ -741,7 +741,7 @@
   retained: it exercises the `(LedgerBlock, LedgerIndexes)`
   state-management primitives (progress monotonicity, reorg
   handling, spend-detection tracking) that the producer side of
-  `Wallet::refresh` now drives, and remains load-bearing
+  `Engine::refresh` now drives, and remains load-bearing
   regardless of who owns the outer loop.
 
 - **`rust/shekyl-ffi/src/wallet_ledger_ffi.rs` deleted as a Phase 5
@@ -871,10 +871,10 @@
 
 ### Added
 
-- **`shekyl-engine-core::Wallet<S>` struct + `DaemonClient` thin wrapper
+- **`shekyl-engine-core::Engine<S>` struct + `DaemonClient` thin wrapper
   (Phase 1 of the [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
   cross-cutting locks 1, 3, 4 type-layer realization).** Lands the
-  `Wallet<S: WalletSignerKind>` struct itself with its full dependency
+  `Engine<S: EngineSignerKind>` struct itself with its full dependency
   graph wired in: `file: shekyl_engine_file::WalletFile`, `keys:
   shekyl_crypto_pq::account::AllKeysBlob`, `ledger:
   shekyl_engine_state::WalletLedger`, `prefs:
@@ -888,12 +888,12 @@
   proof code paths. Redacted `Debug` impl: `keys` prints as
   `<redacted: AllKeysBlob>`, `ledger` / `prefs` print as `<…>`, `file`
   and `daemon` delegate to their own already-redacting impls. No
-  `Drop` impl on `Wallet<S>` itself: `AllKeysBlob` and `WalletFile`
+  `Drop` impl on `Engine<S>` itself: `AllKeysBlob` and `WalletFile`
   each ship their own `Drop` for the secret bytes / KEK / advisory
   lock; composing types that already wipe correctly is sound, and a
   wrapper `Drop` would risk shadowing the inner ones. New
   `DaemonClient` thin wrapper around
-  `shekyl_simple_request_rpc::SimpleRequestRpc` insulates `Wallet`'s
+  `shekyl_simple_request_rpc::SimpleRequestRpc` insulates `Engine`'s
   public API from the transport choice and gives Phase 2a a single
   audited site for `get_info` network verification, `get_fee_estimates`
   fee-priority resolution, and tx submission. The six lifecycle methods
@@ -908,12 +908,12 @@
   [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
   §"`Wallet<S>` struct shape and accessor surface".
 
-- **`shekyl-engine-core::wallet` module skeleton (Phase 1 of the
+- **`shekyl-engine-core::engine` module skeleton (Phase 1 of the
   [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
   cross-cutting locks 2, 4, 5, 6, 7, 8 type-layer realization).** New
-  module `rust/shekyl-engine-core/src/wallet/` ships the type-layer
+  module `rust/shekyl-engine-core/src/engine/` ships the type-layer
   foundations of the V3 wallet orchestrator without yet introducing the
-  `Wallet` struct itself: per-domain error enums (`OpenError`,
+  `Engine` struct itself: per-domain error enums (`OpenError`,
   `RefreshError`, `SendError`, `PendingTxError`, `KeyError`, `IoError`,
   `TxError`) with the plan-locked variants pinned by name
   (`OpenError::NetworkMismatch`, `RefreshError::ConcurrentMutation`,
@@ -923,7 +923,7 @@
   separate scoped commit on the same branch); a re-export of
   `shekyl_engine_file::Capability` (canonical spelling — the plan's
   "`CapabilityMode`" reference is satisfied); and a sealed
-  `WalletSignerKind` trait with `SoloSigner` ZST as the V3.0 default.
+  `EngineSignerKind` trait with `SoloSigner` ZST as the V3.0 default.
   V3.1's `MultisigSigner<N, K>` will join behind the existing `multisig`
   Cargo feature without changing call sites. `#[from]` impls for upstream
   errors (`WalletFileError`, `CryptoError`, `WalletLedgerError`, etc.)
@@ -1009,13 +1009,13 @@
   recording the metadata-only finding so future readers don't replay
   the base58-content review against vendored paths that don't have it.
 
-- **`shekyl-wallet-file::WalletFileHandle` → `WalletFile`** (PR 0.2 of
+- **`shekyl-engine-file::WalletFileHandle` → `WalletFile`** (PR 0.2 of
   the [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)).
   Mechanical rename across all call sites in `shekyl-engine-file`,
   `shekyl-engine-prefs`, `shekyl-ffi`, and the C FFI doc-comment in
   `src/shekyl/shekyl_ffi.h`. No ABI change (the C-ABI symbols use the
   `shekyl_wallet_*` prefix, not the Rust type name). Frees the
-  `Wallet` identifier for the Phase 1 `shekyl-engine-core::Wallet`
+  `Engine` identifier for the Phase 1 `shekyl-engine-core::Engine`
   orchestrator and aligns the file-orchestrator type name with what it
   actually is — envelope, atomic IO, advisory locking, payload
   framing. Rationale and decision archive in
@@ -1863,7 +1863,7 @@
   Copilot-review finding tracked in `docs/FOLLOWUPS.md` *V3.0 →
   "`apply_scan_result` strict-contract enforcement (refresh
   commit)"* (now retired to *Recently resolved*). The merge in
-  [`rust/shekyl-engine-core/src/wallet/merge.rs`](../rust/shekyl-engine-core/src/wallet/merge.rs)
+  [`rust/shekyl-engine-core/src/engine/merge.rs`](../rust/shekyl-engine-core/src/engine/merge.rs)
   previously had two defensive-coding gaps:
   1. `block_hashes` was collected via `BTreeMap::insert`, silently
      overwriting duplicate height entries instead of rejecting them.
