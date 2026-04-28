@@ -1812,20 +1812,44 @@ impl<S: EngineSignerKind> Engine<S> {
     ///   exhausted on snapshot races.
     /// - [`RefreshError::MalformedScanResult`] — producer-contract
     ///   violation; not retried.
-    /// - [`RefreshError::Cancelled`] — the cancellation token fired.
-    ///   This signature does not yet expose a token argument; the
-    ///   variant exists for branch 2's `RefreshHandle`. In branch 1,
-    ///   this method always uses an internal token that never fires.
+    /// - [`RefreshError::Cancelled`] — surfaced when the producer is
+    ///   driven through [`Engine::start_refresh`]'s cancel-on-drop
+    ///   [`RefreshHandle`]. The synchronous [`Engine::refresh`]
+    ///   signature itself never returns this variant in V3.0+: by
+    ///   design, the sync path uses an internal token that never
+    ///   fires. Cooperative cancellation is the async surface's
+    ///   responsibility, not the sync surface's. See the
+    ///   *Cancellation contract* section below.
     /// - [`RefreshError::Io`] — daemon RPC budget exhausted, or
     ///   scanner rejected a block as structurally invalid.
     ///
-    /// # Cancellation (branch 2)
+    /// # Cancellation contract (long-term, not transitional)
     ///
-    /// This synchronous signature does not take a cancellation token.
-    /// The internal token is created fresh per call and never fires;
-    /// callers that need cooperative cancellation will use
-    /// `RefreshHandle::start_refresh` from branch 2, which threads a
-    /// caller-provided token through the producer.
+    /// The synchronous signature does **not** take a cancellation
+    /// token, and the split between the sync and async surfaces is
+    /// pinned for the lifetime of `Engine`:
+    ///
+    /// - **Sync path ([`Engine::refresh`], this method):**
+    ///   cancel-internal. The token is created fresh per call and
+    ///   never fires. Callers driving this from a sync context (CLI,
+    ///   JSON-RPC handler running under `spawn_blocking`) accept that
+    ///   they wait for the producer to settle naturally — typically
+    ///   at the next scanner block boundary in the underlying loop.
+    /// - **Async path ([`Engine::start_refresh`] returning
+    ///   [`RefreshHandle`]):** the cancellation surface. The handle's
+    ///   `cancel()` method and cancel-on-drop `Drop` impl fire the
+    ///   shared [`CancellationToken`] that the producer observes at
+    ///   every await point and at the four documented checkpoints in
+    ///   `run_refresh_task`.
+    ///
+    /// This is a deliberate split, not a TBD. Threading a token
+    /// argument into the sync signature would push cancellation
+    /// plumbing into every caller for no design win — the async
+    /// surface already exists for any caller that needs cooperative
+    /// shutdown. The two surfaces compose: the async handle drives
+    /// the producer directly, and the sync method drives the same
+    /// producer behind an inert internal token. Both share one
+    /// implementation; they differ only in who owns the token.
     pub fn refresh(
         &mut self,
         opts: &RefreshOptions,
