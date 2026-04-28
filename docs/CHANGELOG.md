@@ -717,6 +717,75 @@
   `shekyl-dev` `dev` that references this commit's shekyl-core
   SHA.
 
+- **Phase 2b prep — Track 1 audit-hygiene pass (2026-04-28).** Five
+  small editorial / re-export commits close the loose ends surfaced
+  by the Phase 2a Branch 2 audit before Stage 1 spec work begins.
+  None of the five touch consensus, secret-handling, persisted
+  format, or wire format; they are pure plumbing / docs / re-exports.
+
+  1. **`shekyl-engine-core` crate-root re-exports for `Refresh*`
+     types.** [`rust/shekyl-engine-core/src/lib.rs`](../rust/shekyl-engine-core/src/lib.rs)
+     now re-exports `RefreshHandle`, `RefreshOptions`, `RefreshPhase`,
+     `RefreshProgress`, `RefreshReorgEvent`, and `RefreshSummary`
+     alongside the `RefreshError` it already re-exported.
+     Downstream callers (CLI, JSON-RPC server, benches, FFI) no
+     longer have to reach through `engine::refresh::*`. The
+     `engine` module itself already re-exported the full set
+     ([`engine/mod.rs:168–170`](../rust/shekyl-engine-core/src/engine/mod.rs)).
+
+  2. **CHANGELOG `[Unreleased]` editorial sweep — `Wallet` →
+     `Engine` running prose.** Phase 1 and Phase 2a Branch 1 bullets
+     (lifecycle, pending-tx, scan-result, refresh-driver, struct,
+     module-skeleton) carried `Wallet<S>` / `Wallet::*` /
+     `OpenedWallet` / `WalletSignerKind` / `WalletCreateParams` /
+     `shekyl_engine_core::wallet::*` references that pre-dated the
+     2026-04-27 rename bullet at the top of `[Unreleased]`. The sweep
+     normalizes the running prose. Decision-log title citations and
+     the rename bullet's mapping enumeration are intentionally
+     preserved verbatim — the cited
+     `docs/V3_WALLET_DECISION_LOG.md` entries still carry their
+     historical titles.
+
+  3. **`docs/FOLLOWUPS.md` V3.1 row added — `transfer_details` Rust
+     migration.** [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+     cites `transfer_details` Rust migration as V3.1 scope; the row
+     now exists. Rewrites each C++ consumer of `struct
+     transfer_details` (balance, output selection, key-image / spend
+     tracking, payment-id surface, password rotation, persistent
+     wallet-cache I/O) to drive
+     `shekyl-engine-state::TransferDetails` through FFI, then deletes
+     the C++ struct from
+     [`src/wallet/wallet2.h`](../src/wallet/wallet2.h) and
+     [`src/wallet/wallet_rpc_server_commands_defs.h`](../src/wallet/wallet_rpc_server_commands_defs.h).
+     Closes either at V3.1 or by superseding deletion in the V3.2
+     `wallet2.cpp` retirement.
+
+  4. **`docs/FOLLOWUPS.md` V3.2 row added — *"Re-examine
+     `/FIiso646.h` and `rct::` → `ct::` deferrals."*** Reconciles a
+     dead citation in [`docs/STRUCTURAL_TODO.md`](STRUCTURAL_TODO.md):17–18,
+     37–38. Both deferrals rest on the same upstream-cherry-pick-risk
+     framing the STRUCTURAL_TODO calls "largely notional"; the V3.2
+     row pins per-item disposition rules (`/FIiso646.h`: `/permissive-`
+     vs. mechanical replacement vs. stay-on-workaround;
+     `rct::`→`ct::`: confirm or compress the V4 target).
+
+  5. **`Engine::refresh` cancellation contract pinned in the
+     docstring at
+     [`rust/shekyl-engine-core/src/engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)**
+     (lines 1815–1827 in the pre-edit revision). Sync path stays
+     cancel-internal (the token is created fresh per call and never
+     fires); async path (`Engine::start_refresh` returning
+     `RefreshHandle`) owns cooperative cancellation. The split is
+     deliberate, not a TBD: threading a token through every sync
+     caller is design churn for no win, and the async surface
+     already exists for callers that need shutdown.
+
+  Audit reference:
+  [`.cursor/plans/phase_2b_prep_stage_1_trait_boundaries_0d37a30e.plan.md`](
+  ../.cursor/plans/phase_2b_prep_stage_1_trait_boundaries_0d37a30e.plan.md)
+  Track B items 1–5. Track 2 (Stage 1 trait-boundaries spec, V3.2)
+  begins after this hygiene pass lands.
+
 ### Removed
 
 - **`shekyl-scanner::sync` module and `shekyl-scanner::rust-scanner`
