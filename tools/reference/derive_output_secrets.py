@@ -9,16 +9,13 @@ This script is the single source of truth for the derivation spec.
 Any change is a consensus change requiring explicit review.
 """
 
+import hashlib
+import hmac
 import json
 import os
 import struct
 import sys
 from pathlib import Path
-
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF, HKDFExpand
-import hmac
-import hashlib
 
 # Ed25519 scalar field order
 ED25519_L = (1 << 252) + 27742317777372353535851937790883648493
