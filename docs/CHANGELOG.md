@@ -1807,6 +1807,57 @@
 
 ### Fixed
 
+- **`shekyl_account_public_address_check` argument-order mismatch
+  between Rust definition and C-side declaration** (Track 0a CI
+  triage, 2026-04-28). The Rust definition in
+  [`rust/shekyl-ffi/src/account_ffi.rs`](../rust/shekyl-ffi/src/account_ffi.rs)
+  takes `(pqc_pk_ptr, view_pk_ptr)`; the C header in
+  [`src/shekyl/shekyl_ffi.h`](../src/shekyl/shekyl_ffi.h) declared
+  `(view_pub_ptr, pqc_public_key_ptr)`, and the one C++ caller in
+  [`src/cryptonote_basic/cryptonote_basic_impl.cpp`](../src/cryptonote_basic/cryptonote_basic_impl.cpp)
+  followed the wrong order. Every decode therefore ran the FIPS-203
+  well-formedness check on garbage bytes, surfacing in CI as 14
+  `uri.*` unit_tests failures with the log line
+  `cn: Address failed v1 canonical invariant check (view_pub <->
+  X25519 prefix or malformed ML-KEM-768 encapsulation key)`.
+  Introduced in commit `0092a8da1` ("ffi,cryptonote_basic: pin
+  m_pqc_public_key format and publish v1 account FFI"); reached
+  `dev` only at the `feat/wallet-account-rewire` merge `30db140fe`
+  (2026-04-22). The Rust unit tests at
+  `rust/shekyl-ffi/src/account_ffi.rs:954,975` use the correct
+  `(pqc, view)` order and never caught the C-side divergence. Per
+  `.cursor/rules/10-shekyl-first.mdc`, Rust is the source of truth;
+  the fix aligns the C header and the C++ caller. Two files
+  touched, no fixture regeneration; the previously-failing 14
+  `uri.*` tests are themselves the regression test (FAIL → PASS).
+  Local verification: 858/870 unit_tests passing after the fix
+  (was 854/870), the 2 remaining failures are
+  `wallet_storage.{store_to_mem2file, change_password_mem2file}`
+  tracked in `docs/CI_BASELINE.md` Cluster B and
+  `docs/FOLLOWUPS.md` (V3.1, wallet2 hardening-pass close).
+
+- **CI baseline established as
+  [`docs/CI_BASELINE.md`](./CI_BASELINE.md)** (Track 0e CI triage,
+  2026-04-28). Records the documented list of known-failing C++
+  tests with diagnoses, close conditions, and FOLLOWUPS row
+  pointers (Cluster A — `uri.*`, fixed; Cluster B —
+  `wallet_storage`, deferred to V3.1 wallet2 hardening-pass;
+  Cluster C — `core_tests gen_*`, deferred to V3.1 chaingen-harness
+  rewrite or V3.2 `wallet2.cpp` removal; Cluster D —
+  `shekyl-oxide divergence` canary, currently green). The document
+  also pins the interim `shekyl-oxide` divergence-sync policy
+  (explicit trust assumption + spot-check discipline scaling with
+  window size) and the **pre-enforcement noise-floor rule** that
+  reviewers apply today: any failure outside the documented list
+  blocks PR merges to `dev` until investigated, with mechanical
+  enforcement (a required-status-check on the failing-test set)
+  tracked separately as a follow-up. Linked from
+  [`docs/CONTRIBUTING.md`](./CONTRIBUTING.md) under "CI baseline";
+  CI status is contributor surface, not first-impression surface,
+  so the link does not appear in the top-level README. The full
+  Track 0 plan (CI triage ahead of audit hygiene and Stage 1 spec)
+  is the source of these entries.
+
 - **`apply_scan_result_to_state` strict-contract enforcement (Phase
   2a `refresh_scan_loop` bundle, Branch 1).** Closes the PR #16
   Copilot-review finding tracked in `docs/FOLLOWUPS.md` *V3.0 →

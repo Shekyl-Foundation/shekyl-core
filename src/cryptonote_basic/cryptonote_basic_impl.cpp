@@ -269,9 +269,15 @@ namespace cryptonote {
       // suffix is a well-formed FIPS-203 encapsulation key). If this fails
       // the decoded bytes look syntactically valid but the triple is not a
       // legal canonical address, so we must not hand it to the wallet.
+      //
+      // Argument order: pqc_public_key (1216 B) first, view_pub (32 B)
+      // second — matches the Rust definition. The original landing of this
+      // call site (commit 0092a8da1) had the order reversed, which let
+      // every decode trip the FIPS-203 well-formedness check on garbage
+      // bytes; the 14 `uri.*` regressions were the symptom.
       if (!shekyl_account_public_address_check(
-              reinterpret_cast<const uint8_t*>(&info.address.m_view_public_key),
-              info.address.m_pqc_public_key.data()))
+              info.address.m_pqc_public_key.data(),
+              reinterpret_cast<const uint8_t*>(&info.address.m_view_public_key)))
       {
         LOG_PRINT_L1("Address failed v1 canonical invariant check (view_pub ↔ "
                      "X25519 prefix or malformed ML-KEM-768 encapsulation key)");

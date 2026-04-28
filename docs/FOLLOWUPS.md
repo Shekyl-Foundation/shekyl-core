@@ -492,6 +492,78 @@ citing in a review.
   it implements) so `MockRpc` can be substituted for
   `SimpleRequestRpc` in tests of `start_refresh`. Target: V3.1.
 
+- **`wallet_storage` tests pinned to wallet2 hardening-pass `2l /
+  2m-keys / 2m-cache`.** (Track 0 CI triage, 2026-04-28.)
+  `wallet_storage.store_to_mem2file` and
+  `wallet_storage.change_password_mem2file` throw
+  `boost::system::system_error` from
+  `epee::net_utils::direct_connect::operator()` during what should
+  be a pure file-storage test. Stack origin:
+  `wallet2::generate("", password)` →
+  `estimate_blockchain_height()` → `NodeRPCProxy::get_target_height()`
+  → `get_info()`. The default-constructed `wallet2` has
+  `m_offline = false` so the offline short-circuit at
+  `node_rpc_proxy.cpp:140` doesn't fire; with no daemon configured,
+  the resolver throws. Investigation confirms this is **not** a
+  rewire-introduced behavior change — `estimate_blockchain_height()`
+  has called the daemon since the Monero era (commits `a2e4b5a96`,
+  `5e18005ff`); the test is fragile because it constructs a default
+  wallet without `set_offline(true)` on a host with no daemon. A
+  test-only `set_offline(true)` band-aid was considered and rejected
+  per `15-deletion-and-debt.mdc` ("treat as structural and defer"):
+  the CHANGELOG already pins commits `2l / 2m-keys / 2m-cache` as
+  the structural close target (commit `8167c1502`), and a band-aid
+  here would mask the regressions the hardening pass exists to
+  address end-to-end. Close condition: passes after V3.1
+  hardening-pass lands, OR closes with `wallet2.cpp` removal at
+  V3.2 — whichever lands first. See
+  [`docs/CI_BASELINE.md`](./CI_BASELINE.md) Cluster B for the full
+  diagnosis. Target: V3.1.
+
+- **`core_tests` synthetic-block harness rewrite for v3-only
+  flows.** (Track 0 CI triage, 2026-04-28.) 19 `core_tests` tests
+  (`gen_tx_*` × 11, `gen_fcmp_*` × 5, `gen_staking_*` × 3) fail with
+  `couldn't fill transaction sources` and `Block <hash> failed to
+  pass prevalidation`, often preceded by `cn: Shekyl requires tx
+  version >= 3`. The harness in
+  [`tests/core_tests/chaingen.cpp`](../tests/core_tests/chaingen.cpp)
+  constructs synthetic blocks against pre-rewire flows: it mines
+  v1/v2 transactions that v3-from-genesis prevalidation rejects,
+  and relies on outputs that the v3 scan path no longer recovers.
+  The Track 0a working hypothesis ("Cluster A and Cluster C share
+  one canonical-invariant root cause") was tested with a
+  predict-then-recheck step on `gen_tx_big_version` and falsified —
+  Cluster C remains red after the Track 0a fix because the harness
+  never calls `shekyl_account_public_address_check`. Rebuilding the
+  harness against v3-only flows is a planned activity for the
+  wallet2 hardening / wallet2 removal cycle, not a Track 0 fix.
+  Close condition: turns green after the chaingen harness is
+  rewritten for v3 flows, OR closes with `wallet2.cpp` removal at
+  V3.2 — whichever lands first. See
+  [`docs/CI_BASELINE.md`](./CI_BASELINE.md) Cluster C. Target: V3.1.
+
+- **Define formal escalation policy for `shekyl-oxide` divergence
+  canary.** (Track 0 CI triage, 2026-04-28.) Today the canary in
+  `.github/workflows/shekyl-oxide-divergence.yml` only fires on SHA
+  divergence between the vendored snapshot and the upstream
+  `Shekyl-Foundation/monero-oxide` `fcmp++` tip; it does not flag
+  security-relevant upstream changes inside a divergence window. The
+  interim spot-check policy recorded in
+  [`docs/CI_BASELINE.md`](./CI_BASELINE.md) ("Interim shekyl-oxide
+  divergence policy") is the floor — every sync includes a spot-check
+  of the diff for security-flavored commit messages, dependency
+  bumps, and changes to `unsafe` / cryptographic / consensus-relevant
+  code, with delay-and-escalate on anything concerning — but it is
+  **not** a substitute for a formal policy. The follow-up: design and
+  land an escalation policy that (a) categorizes upstream commits by
+  risk class (advisory-tagged commits flip the canary from
+  informational to blocking), (b) names the maintainer(s) on rotation
+  for divergence review, and (c) defines the grace-period contract
+  the spot-check imposes today. Replacement condition for the interim
+  policy: divergence frequency rises above ~one bump per quarter, OR
+  upstream ships a security advisory inside a divergence window we
+  hadn't yet synced. Target: V3.1.
+
 ---
 
 ## V3.1.x — dependency migrations

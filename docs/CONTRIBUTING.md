@@ -51,6 +51,24 @@ are conflicts (even trivially resolvable ones).
 PGP signing commits is strongly encouraged. That should explain why
 the previous paragraph is here.
 
+## CI baseline
+
+Some C++ tests are documented as known-failing on `dev` while their
+deletion targets are reached (notably `wallet_storage.{store_to_mem2file,
+change_password_mem2file}` and the `core_tests gen_tx_* / gen_fcmp_* /
+gen_staking_*` synthetic-block harness; both close at the wallet2
+hardening pass / removal). Reviewers and contributors should consult
+[`docs/CI_BASELINE.md`](./CI_BASELINE.md) before treating a CI failure
+as "expected." The pre-enforcement noise-floor rule is recorded there:
+**any failure outside the documented list is treated by reviewers as
+blocking PR merges to `dev` until investigated.** Mechanical enforcement
+(a required-status-check that compares the failing-test set against the
+baseline) is tracked separately as a follow-up.
+
+The same document records the interim policy for syncing the vendored
+`rust/shekyl-oxide` snapshot from the upstream `monero-oxide` fork,
+including the spot-check discipline applied to every divergence sync.
+
 ## Branch protection on `dev`
 
 The `dev` branch is the integration branch for all work. It is
