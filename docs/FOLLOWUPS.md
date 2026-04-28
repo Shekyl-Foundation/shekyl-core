@@ -564,6 +564,44 @@ citing in a review.
   upstream ships a security advisory inside a divergence window we
   hadn't yet synced. Target: V3.1.
 
+- **Migrate C++ `transfer_details` consumers to
+  `shekyl-engine-state::TransferDetails`.** ([`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  cites *"V3.1: transfer_details Rust migration, audit response"* as
+  V3.1 scope; this row makes the work item explicit.) Today two parallel
+  representations of "a wallet's view of one of its own outputs" coexist:
+  the inherited C++ `struct transfer_details` in
+  [`src/wallet/wallet2.h`](../src/wallet/wallet2.h) and
+  [`src/wallet/wallet_rpc_server_commands_defs.h`](../src/wallet/wallet_rpc_server_commands_defs.h)
+  (Monero-genesis layout, owns the wallet2 spend-detection / balance /
+  payment-id-matching / change-password / store-load paths), and the
+  Rust `TransferDetails` in
+  [`rust/shekyl-engine-state/src/transfer.rs`](../rust/shekyl-engine-state/src/transfer.rs)
+  (V3-native layout, owned by `shekyl-engine-state::WalletLedger` and
+  driven by the Phase 1 lifecycle / Phase 2a `Engine::refresh` pipeline).
+  Both are secret-bearing — `transfer_details` carries the recovered
+  output secret material, `TransferDetails` carries the ZeroizeOnDrop
+  Rust equivalent — so per [`20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+  rule 1 the long-term home is unambiguously Rust. Scope: rewrite each
+  C++ consumer to drive the Rust type through FFI (balance, output
+  selection, key-image / spend tracking, payment-id surface, password
+  rotation, persistent wallet-cache load/store), then delete the C++
+  `struct transfer_details` definitions and their epee serialization
+  paths from both headers. Dependencies: depends on the wallet2 storage
+  rewire (CHANGELOG commits 2l / 2m-keys / 2m-cache; close target
+  commit `8167c1502`) being far enough along that there is a single
+  canonical persistent representation; depends on
+  [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md) §V3.1 *"`wallet_storage` test
+  fragility"* (Cluster B) being closed by the same hardening pass so
+  the migration can verify the round-trip end-to-end. Exit criteria:
+  `struct transfer_details` removed from both C++ headers; every
+  surviving C++ caller in `wallet2.cpp` and `wallet_rpc_server.cpp`
+  routes through the FFI to the Rust `TransferDetails`; the JSON-RPC
+  `get_transfers`/`get_payments` responses are serialized from the
+  Rust type's already-defined wire format. Close condition: lands on
+  V3.1, OR — if the V3.2 wallet2 removal lands first — closes by
+  superseding deletion of the C++ surface entirely (the migration is
+  a stepping stone; the deletion is the destination). Target: V3.1.
+
 ---
 
 ## V3.1.x — dependency migrations
