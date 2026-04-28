@@ -962,9 +962,16 @@ bool shekyl_account_public_address_build(
 /// key, and the ML-KEM encapsulation key is a well-formed fixed-length
 /// suffix. Returns true iff the triple (view_pub, pqc_public_key) is a legal
 /// canonical address. Used by every decoder as a post-assembly tripwire.
+///
+/// Parameter order matches the Rust definition in
+/// `rust/shekyl-ffi/src/account_ffi.rs::shekyl_account_public_address_check`:
+/// the 1216-byte `pqc_public_key` comes first, the 32-byte `view_pub` second.
+/// Swapping the order silently passes garbage through the FIPS-203
+/// well-formedness check; that mistake produced the 14 `uri.*` regressions
+/// in commit 0092a8da1 (surfaced at merge 30db140fe).
 bool shekyl_account_public_address_check(
-    const uint8_t* view_pub_ptr,
-    const uint8_t* pqc_public_key_ptr);
+    const uint8_t* pqc_public_key_ptr,
+    const uint8_t* view_pub_ptr);
 
 // ─── FCMP++: Curve tree hash operations ─────────────────────────────────────
 
