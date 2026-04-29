@@ -1,6 +1,6 @@
 # V3 Engine Trait Boundaries (Stage 1)
 
-**Status.** Round 3 of 4–6 design-review rounds (markdown-only,
+**Status.** Round 4a of 6 design-review rounds (markdown-only,
 against `dev`). PR [#20](https://github.com/Shekyl-Foundation/shekyl-core/pull/20)
 is the live review surface; each round appends a commit, the PR
 absorbs the diff, and the merge to `dev` happens when the spec is
@@ -15,24 +15,60 @@ accepted. **No code changes are gated on this document yet.**
   actor-shape discipline, §2.3 `RefreshEngine` collapse to
   producer/driver, §2.5 two-trait `DaemonEngine`, §3.2 async-cascade
   framing, §6.2 deterministic RNG injection).
-- **Round 3 record:** the commit landing this state on the chore
-  branch; commit message captures the structural gap closures.
+- **Round 3 record:** `3e38b26cf` — structural gap closures (§2.8
+  lifecycle, §3.3 concurrency, §3.4 cancellation, §2 `&mut self →
+  &self` sweep, §5.1 `RuntimeFailure`, §4 idempotency column) plus
+  the in-round `EconomicsEngine` augmentation (seven traits).
+- **Round 4a record:** the commit landing this state on the chore
+  branch; commit message captures the design-closure work in 13
+  items.
 
-**Planned trajectory.** Round 3 closes structural gaps (lifecycle
-methods §2.8, concurrency model §3.3, cancellation discipline §3.4,
-the trait-surface sweep `&mut self → &self` across §2, per-trait
-`RuntimeFailure` error variant in §5, idempotency-column in §4's
-async story table, plus the §1.4 / §2.5 / §3.2 refinements from
-Round 2 review). Round 4 is framework fill-in — per-method
-classification tables (drop-cancellation class, idempotency
-conditions), policy pins (`pub(crate)` visibility, mocks-vs-contract,
-panic-rustdoc requirement), and a §10 "Out of scope / Deferred"
-subsection. Round 5 is acceptance, near-empty outside fallout from
-Round 4 review. The "what are we missing" check runs between every
-round; the check between Round 3 and Round 4 is framed as *"what
-did writing Round 3 surface that we didn't anticipate?"* rather
-than *"what general gaps remain?"* The first framing catches
-drafting-induced discoveries; the second misses them.
+**Planned trajectory.** Round 4 is split into 4a and 4b.
+
+- **Round 4a — design closure (20 items, current round).**
+  Phase 1 (4 foundational pins): lifecycle async resolution,
+  `EconomicsError` pinning, `EconomicsParametersSnapshot`
+  Resolution C, `EngineConfig` pinning. Phase 2a (9 in-place
+  refinements): §2.7 trio (discipline-test (d) clause,
+  prescriptive `parameters_snapshot` docstring,
+  consensus-as-truth pin), §2.8.2 drop-order softening,
+  per-trait `RuntimeFailure` enumeration, §5.1 draining-ordering
+  clarity, §2.8.4 timeout configurability surface, §2 preamble
+  `pub(crate)` visibility, §3.3.4 unsafe-pattern revisit.
+  Phase 2c (7 design-closure additions): §3.3 interior-mutability
+  measurement gate, §1.5 criteria for trait identity (with
+  scope-guard meta-pattern), §5.1 `RuntimeFailure` ×
+  cancellation composition, §2.7 consumer-driven justification
+  rule, §3.5 observability-via-tracing rejection, §2.7
+  `EconomicsEngine` scope guard, §2.7 `DESIGN_CONCEPTS.md`
+  cross-reference. Phase 2b (1 synthesis): §10 deferred
+  subsection.
+- **Round 4b — mechanical fill-in (~12 items).** Per-method
+  drop-cancellation classification (a/b/c per §3.4.3), §6
+  mocks-vs-contract framing, §1.2 six-traits-Stage-1-only
+  amendment co-landing rule, §6.2 `from_seed` reference, §4.2
+  `#[tokio::test]` rustdoc, panic-semantics rustdoc requirement,
+  `FOLLOWUPS.md` Stage-4-cutover-CHANGELOG-flagging entry,
+  `FOLLOWUPS.md` performance-baseline entry (per §3.3 gate),
+  `docs/PERFORMANCE_BASELINE.md` template stub, and cleanups
+  against Round 4a's framework.
+- **Round 5 — acceptance.** Near-empty outside fallout from
+  Round 4b review.
+
+**Round-discipline meta-pattern (named in Round 4a).** Each
+round so far has introduced one or more *over-comfortable
+claims* — load-bearing premises articulated under-strongly that
+read as comforting on first review and require correction in the
+next round. Round 3 had three such claims (§7's invariant scope,
+§2.7's `Result` ceremony, §3.3.6's snapshot leak), all caught in
+Round 4a. The "what are we missing" check between rounds is
+framed as *"what did writing the previous round surface that we
+didn't anticipate?"* rather than *"what general gaps remain?"* —
+the first framing catches drafting-induced discoveries; the
+second misses them. Round 4a's drafting discipline applies the
+lens internally: when a section's claim depends on a load-bearing
+premise, articulate the premise explicitly rather than leaving it
+implicit.
 
 **Round 3 trait-count expansion (within Round 3, pre-commit).**
 The "what are we missing" check applied during Round 3 drafting
@@ -235,6 +271,113 @@ trait; any "passing the talking stick" smell is grounds for
 re-shaping the method or splitting orchestration off into
 `Engine<S>`.
 
+### 1.5 Criteria for trait identity (Round 4a — Item 15)
+
+§1.4 names the discipline that governs *method shape*. §1.5
+names the discipline that governs *trait existence* — what
+makes something a trait vs an inherent method on `Engine<S>`
+vs a free function in a module. Without this discipline, a
+future contributor proposing an 8th trait (or proposing to
+merge two existing ones) has no spec-articulated criterion to
+evaluate against; reviewers fall back on aesthetic judgment
+rather than load-bearing criteria.
+
+A trait exists iff it satisfies all three of:
+
+1. **Distinct state ownership at Stage 4** — the trait owns
+   state that becomes one actor's mailbox-private state at
+   Stage 4. Two traits sharing the same Stage 4 actor's state
+   collapse to one trait; a "trait" whose state lives on
+   another trait's actor is not a trait, it's a method on the
+   actual owner.
+2. **Distinct failure-isolation domain** — the trait can fail
+   independently under Stage 4's supervisor strategy without
+   taking down the rest of the engine. A trait whose failure
+   semantics are inseparable from another trait's (e.g., its
+   crash means the engine is dead anyway) doesn't earn its own
+   supervisor strategy and therefore doesn't earn its own
+   trait.
+3. **Either** *(a)* **a cross-cutting concern that multiple
+   consumers need** — the trait is consumed by two or more
+   other traits or `Engine<S>`-level operations, and
+   re-implementing the cross-cutting derivation per consumer
+   invites the scattered-derivation bug class — **or**
+   *(b)* **an isolatable subsystem with explicit lifecycle** —
+   the trait has a single consumer (typically `Engine<S>`'s
+   orchestration) but its work is naturally separated by its
+   own lifecycle (start, pause/resume, cancel, close) such that
+   bundling it into the consumer would conflate two different
+   concurrency stories.
+
+The OR clause in (3) reflects that two distinct shapes drive
+trait existence: cross-cutting reuse (clause 3a) and
+isolatable lifecycle (clause 3b). Both are load-bearing; either
+alone, combined with (1) and (2), justifies trait status.
+
+**Applied to the seven traits.**
+
+| Trait | (1) Distinct state at Stage 4 | (2) Failure isolation | (3) Justification |
+|---|---|---|---|
+| `KeyEngine` | yes — `AllKeysBlob` and KEK material | yes — key actor crash is recoverable; supervisor restarts and re-derives via passphrase | 3a — cross-cutting (consumed by `RefreshEngine` for output-decoding, `PendingTxEngine` for signing, `Engine<S>` for address rendering) |
+| `LedgerEngine` | yes — `LedgerState`, `LedgerSnapshot` | yes — ledger actor crash is recoverable from persistence | 3a — cross-cutting (consumed by `RefreshEngine` for tip checks, `PendingTxEngine` for output selection, `Engine<S>` for balance and history) |
+| `RefreshEngine` | yes — producer-side scan-cursor state | yes — refresh actor crash is recoverable; supervisor restarts and re-issues from current ledger tip | 3b — isolatable subsystem (single consumer `Engine<S>`; explicit lifecycle: start, pause via cancellation token, resume on next call, close) |
+| `EconomicsEngine` | yes — at V3.x, adaptive-burn observation state; at V3.0, no state but the surface is fixed | yes — economics actor crash at V3.x surfaces `RuntimeFailure`; consumers continue with last-good snapshot | 3a — cross-cutting (consumed by `Engine<S>` for fee computation, `PendingTxEngine` for burn-fraction inputs, V3.x's `StakeEngine` and `ArchivalEngine` for parameter queries) |
+| `DaemonEngine` | yes — connection state, request queue | yes — daemon actor crash is recoverable; supervisor restarts and re-establishes connection | 3a — cross-cutting (consumed by `RefreshEngine` for chain queries, `PendingTxEngine` for fee estimates and submit, `Engine<S>` for direct RPC calls) |
+| `PersistenceEngine` | yes — `WalletFile` handle, advisory lock, IO buffers | yes — persistence actor crash signals "wallet may be in inconsistent on-disk state"; supervisor strategy is non-recoverable for this trait specifically | 3b — isolatable subsystem (single *runtime* consumer `Engine<S>`; spawn-time consumer for `LedgerEngine` and `KeyEngine` hydration is a lifecycle dependency on the §2.8.1 spawn-graph, not a runtime consumption on the call-graph; explicit lifecycle: open, save, rotate-password, close-with-flush) |
+| `PendingTxEngine` | yes — reservation tracker, in-flight txn state | yes — pending-tx actor crash is recoverable; supervisor restarts; in-flight reservations are cleared per restart-and-fail-pending semantics | 3b — isolatable subsystem (single consumer `Engine<S>`; explicit lifecycle: build, submit, discard, status-query) |
+
+**Hypothetical 8th-trait evaluation.** Two negative examples
+demonstrate the criteria mechanically:
+
+- **`MiningEngine`** (proposed for in-wallet mining-pool
+  monitoring). Fails (1) — no Stage 4 state distinct from
+  `DaemonEngine`'s pool RPC connection. Fails (3) — no
+  cross-cutting consumers (mining is a single-consumer concern
+  for the mining UI surface) and no isolatable lifecycle
+  (operations are RPC fan-out via `DaemonEngine`). Correct
+  shape: methods on `DaemonEngine` or inherent on `Engine<S>`.
+- **`SubaddressEngine`** (proposed for subaddress-management
+  workflows). Fails (1) — subaddress data lives in
+  `PersistenceEngine` via `WalletPrefs` and is derived via
+  `KeyEngine`. Fails (2) — no independent failure domain;
+  subaddress operations fail when key or persistence fails.
+  Correct shape: methods on `KeyEngine` (derivation) and
+  `PersistenceEngine` (persistence of named-subaddress
+  metadata).
+
+Both negative examples illustrate clause (1) as the strictest
+gate: trait proposals that don't own distinct Stage 4 actor
+state are not traits, regardless of how cohesive the
+"subsystem" feels conceptually.
+
+**Scope-guard meta-pattern.** The spec uses *scope guards* —
+explicit "no, here's why" rejections with named reasoning — to
+prevent recurring pull-outside-scope patterns:
+
+- **Consensus-as-truth** (in §2.7) rejects wallet-side
+  enforcement of consensus rules.
+- **Observability-via-tracing** (in §3) rejects trait-level
+  observability hooks.
+- **Economic-rationale-in-DESIGN_CONCEPTS** (in §2.7's
+  cross-references) rejects the trait spec as the catalog of
+  industry economic failures.
+- **Lifecycle-as-inherent** (in §2.8.7) rejects lifecycle
+  methods as trait methods.
+- **Consumer-driven justification** (in §2.7's discipline
+  test) rejects speculative method additions to
+  `EconomicsEngine`.
+
+Scope guards are the spec's most durable structural feature.
+Silent omission ("the spec doesn't mention X") invites future
+contributors to propose X; explicit rejection with named
+reasoning closes the question. New trait proposals or method
+additions that would violate a scope guard require *explicit
+revisit of the guard*, not silent extension; the revisit
+either updates the guard with new rationale or rejects the
+proposal. The same discipline applies to (1)/(2)/(3) above:
+proposals that fail any clause are rejected as "not a trait,"
+not folded into the existing trait set without examination.
+
 ---
 
 ## 2. The seven traits (Stage 1 surface, pinned for Stage 4)
@@ -248,6 +391,38 @@ preserve:
    preserves the trait surface verbatim. New methods may be added;
    existing methods may not change signature without a new design
    round.
+
+**Visibility (Round 4a — Item 13 pin).** The seven traits ship
+**`pub(crate)` until JSON-RPC server cutover** (V3.2 per
+`docs/FOLLOWUPS.md`'s `wallet_rpc_server` Rust migration
+target). The traits are internal contracts of `shekyl-engine-core`
+that consumers (the wallet binaries, the `shekyl-engine-rpc`
+JSON-RPC server) reach via `Engine<S>`'s inherent methods, not
+via direct trait dispatch. `pub(crate)` keeps the trait surfaces
+*internally* reviewable while the implementations stabilize and
+the JSON-RPC contract solidifies; promoting to `pub` happens
+when a downstream consumer — the JSON-RPC server, an embedding
+library, or a non-CLI binary — needs to dispatch through trait
+references rather than `Engine<S>` calls.
+
+This visibility decision shapes the test boundary (§6). With
+`pub(crate)` traits, integration tests against fully-mocked
+engines must live *in-crate* at
+`rust/shekyl-engine-core/tests/` or use `#[cfg(test)] pub(crate)`
+re-exports; tests in a separate crate cannot import the trait
+or its `Mock*` implementors. §6 follows this: the `Mock*`
+implementors are `#[cfg(test)] pub(crate)` in
+`engine::test_support`, and the integration tests that drive a
+fully-mocked `Engine<SoloSigner, MockKey, …>` live in-crate.
+
+Promoting traits to `pub` later is *additive* and does not
+require trait-surface changes — only visibility relaxation. The
+Round 4a pin is "`pub(crate)` for V3.0; revisable to `pub` at
+V3.2 alongside `wallet_rpc_server` Rust migration"; future
+rounds adjust visibility, not surface.
+
+The `Mock*` implementors are `pub(crate)` for the same reason:
+they're test-only support, not consumer-facing types.
 
 **Round 3 — `&mut self` → `&self` sweep across §2.** Originally
 some trait methods took `&mut self` (`LedgerEngine::apply_scan_result`,
@@ -821,6 +996,21 @@ this by putting the canonical-derivation surface on a trait
 whose Stage 4 implementation owns the (possibly stateful)
 derivation.
 
+**External validation (Round 4a — Item 20).** The
+canonical-derivation framing addresses a class of failure
+observed across crypto economies where scattered economic
+computations produce divergent results — fee-only fragility,
+adaptive-policy drift between consumers, governance-token
+parameter inconsistency. The economic *design* that
+`EconomicsEngine` consumes — transaction-responsive release,
+adaptive burn, decaying staker emission share — is documented
+in [`DESIGN_CONCEPTS.md`](DESIGN_CONCEPTS.md) and
+[`STAKER_REWARD_DISBURSEMENT.md`](STAKER_REWARD_DISBURSEMENT.md);
+the trait spec implements the structural shape that makes the
+economic design enforceable and auditable inside the wallet.
+The trait spec does not re-articulate the economic design; it
+consumes it.
+
 **Ownership.** The static economics parameters (lock tier
 multipliers, base burn rate, ESF, release bounds, pool-share
 constants, emission-decay constants) and the canonical
@@ -836,6 +1026,78 @@ Phase 2b's `StakeEngine`, a separate trait that consumes
 `EconomicsEngine`), per-archival-shard state (V3.x's
 `ArchivalEngine`, similarly separate), or any state machines.
 The trait is canonical-derivation only.
+
+**Consensus-as-truth: explicit pin (Round 4a — Item 3).**
+`EconomicsEngine` vends derived values that are also
+computable from chain state by any other wallet implementation.
+**Wallet-side enforcement of consensus rules is out of scope
+and out of charter; the chain is the source of truth for
+cross-engine eligibility** (e.g., "stakers must archive,"
+"archivers must stake," activation thresholds, slashing
+conditions, parameter-update activation timing).
+
+Three reasons this pin is load-bearing for the spec:
+
+1. **Cryptocurrency-correctness.** Wallet-side enforcement of
+   consensus rules is meaningless because alternative wallets
+   won't enforce it and the chain accepts whatever consensus
+   accepts. A wallet that "enforces" rules the chain doesn't
+   creates the illusion of safety while providing none. The
+   MMORPG analogy understates this: in an MMORPG, client-side
+   enforcement is bypassable but the game can still function
+   with cheaters; in a cryptocurrency, the chain is the only
+   layer that matters for consensus rules. Anything on the
+   client computer is suspect to the network.
+2. **Scope-discipline.** `EconomicsEngine`'s charter is
+   *canonical derivation* — a single source of truth for
+   computing values from parameters and chain state.
+   Orchestration of cross-engine invariants is a distinct
+   responsibility, and folding it into `EconomicsEngine`
+   would re-introduce the supertrait-composition pattern
+   that §2.7's *consumers, not subsumes* framing rejected,
+   plus a kameo-foreign multi-actor coordination shape at
+   Stage 4.
+3. **Bug-class prevention.** The Bug 2 / 7 / 13 class
+   `EconomicsEngine` exists to prevent is *scattered
+   canonical derivation*. Adding orchestration would extend
+   the trait's responsibility into *cross-engine
+   enforcement*, which is a different bug class with a
+   different correct home (consensus rules in
+   `shekyl-consensus`, not wallet code).
+
+The cross-engine coupling questions for Phase 2b's
+`StakeEngine` design are pinned in §10's deferred subsection:
+the design must specify whether "stakers must archive" is
+consensus-enforced (chain rule), economics-incentivized (no
+hard rule, math makes the right behavior emerge), or
+wallet-orchestrated. The Round 3 / Round 4a `EconomicsEngine`
+canonical-derivation framing assumes consensus-or-incentive;
+if Phase 2b's design surfaces a wallet-orchestration
+requirement, `EconomicsEngine`'s role expands and the trait
+surface is revisited at that point — but the consensus-as-truth
+principle remains the spec-level default.
+
+**Scope guard for `EconomicsEngine` (Round 4a — Item 19).**
+The recurring-pattern observation that prompted this guard:
+two distinct framings have proposed pulling `EconomicsEngine`
+outside its proper scope (orchestrator-as-cross-engine-enforcer
+in Round 3; failure-mode-contrast-surface in Round 4a). The
+named scope is:
+
+> `EconomicsEngine` is a wallet-side canonical-derivation
+> surface for chain-derived values; it is **not** the place for
+> consensus enforcement, network-wide observability, or
+> economic-rationale documentation. Consensus enforcement lives
+> in `shekyl-consensus`; network-wide observability lives in
+> chain RPC consumed via `DaemonEngine` or in tracing-based
+> observability per §3; economic rationale lives in
+> [`DESIGN_CONCEPTS.md`](DESIGN_CONCEPTS.md).
+
+Future proposals that would extend `EconomicsEngine` into any
+of those territories require explicit revisit of this scope
+guard, not silent extension. See §1.5's scope-guard
+meta-pattern for the broader discipline this instance
+participates in.
 
 **Stage 1 surface.**
 
@@ -868,10 +1130,25 @@ pub trait EconomicsEngine {
     /// pool sizes.
     fn pool_weighted_total(&self) -> u128;
 
-    /// Parameter snapshot for governance / display. At V3.0
-    /// the snapshot is constants-derived and stable; at V3.x
-    /// Component 3 the snapshot reflects the current
-    /// adaptive-burn state.
+    /// Parameter snapshot for governance / display.
+    ///
+    /// At V3.0 the snapshot is constants-derived and stable in
+    /// practice. At V3.x Component 3 the snapshot reflects the
+    /// current adaptive-burn state and may change between
+    /// calls.
+    ///
+    /// **Callers must not cache the snapshot beyond the
+    /// immediate use.** Even at V3.0 where the value is stable,
+    /// the contract permits per-call variation; callers that
+    /// cache the snapshot break at V3.x adoption. Treat each
+    /// call as fresh; if you need stability across a logical
+    /// operation, capture the snapshot at the start of the
+    /// operation and use that captured value for its duration,
+    /// then discard.
+    ///
+    /// This is the same forward-compatibility discipline as
+    /// §3.4's drop-cancellation: write Stage-4-ready code at
+    /// Stage 1 and V3.x-ready code at V3.0.
     fn parameters_snapshot(&self) -> EconomicsParametersSnapshot;
 }
 ```
@@ -942,8 +1219,24 @@ canonical derivation surface. The unification is at the
 *consumed-trait* layer; the state-ownership / actor-topology
 layer keeps the existing sibling-actor model.
 
-**Discipline test for new methods on `EconomicsEngine`.** New
-methods proposed for this trait must satisfy:
+**Discipline test for new methods on `EconomicsEngine`
+(Round 4a — four clauses + consumer-driven justification).**
+New methods proposed for this trait must satisfy both:
+
+- **All four clauses (a)/(b)/(c)/(d) below**, AND
+- **A named consuming trait that drives the addition** (Round
+  4a — Item 17). Proposals lacking a named consumer are
+  rejected as speculative; speculative additions accumulate
+  trait surface that no consumer needs and that future
+  consumers may have to work around. The named-consumer rule
+  is workflow discipline, not just ergonomic discipline:
+  a method addition that names "Phase 2b's `StakeEngine`
+  needs `pool_weighted_total_at_height(height) -> u128` for
+  historical-yield queries" is a legitimate proposal; a
+  method addition that says "this might be useful to expose"
+  is not.
+
+The four clauses:
 
 1. **Read-only from caller's perspective** — no mutation
    visible across the call boundary.
@@ -955,14 +1248,34 @@ methods proposed for this trait must satisfy:
    tracking, per-account economic history all live on
    `StakeEngine` / `ArchivalEngine` / `LedgerEngine`, not
    here.
+4. **The result is a function of inputs and observable state,
+   not of caller-provided context** (Round 4a addition) — the
+   method's correctness must not depend on per-entity state
+   lookup. A method that takes a `StakeId`, `ShardId`, or
+   account-keyed selector and returns a value derived from
+   that entity's state fails this clause regardless of how
+   the parameters look syntactically. *Worked example:*
+   `yield_for_stake(stake_id) -> u64` looks like canonical
+   derivation but is actually `StakeEngine` territory: the
+   correctness of the return value depends on per-stake state
+   (lock tier, principal, accrued rewards) that the
+   `EconomicsEngine` does not own. The canonical-derivation
+   shape is `EconomicsEngine::stake_yield_rate(lock_tier,
+   pool_total) -> u64` (parameters and snapshot inputs), not
+   `EconomicsEngine::yield_for_stake(stake_id) -> u64` (entity
+   selector).
 
 This discipline prevents `EconomicsEngine` from accreting
 domain-specific state (per-stake, per-shard,
 per-archival-portfolio) that would defeat the
 dependency-not-subsumption shape and re-introduce the Bug 2 /
 7 / 13 class via "this method combines economics with
-X-specific state" surface pollution. Reviewers proposing
-methods that fail any of the three criteria should re-target
+X-specific state" surface pollution. Clause (d) makes the
+StakeEngine / EconomicsEngine boundary mechanically testable
+rather than relying on reviewer judgment: any method whose
+parameter list contains an entity selector belongs on the
+consuming trait, not on `EconomicsEngine`. Reviewers proposing
+methods that fail any of the four criteria should re-target
 the proposal to whichever consuming trait owns the
 per-entity state.
 
@@ -1035,11 +1348,47 @@ constructed inline in the existing pattern (per current
 `Engine::create` / `Engine::open_full` / etc. bodies). Drop is
 sufficient for cleanup — all trait fields hold owned state
 (`WalletFile`, `AllKeysBlob`, `LocalLedger`, `LocalPendingTx`,
-`LocalRefresh`, `DaemonClient`, `LocalEconomics`). Drop runs in
-field declaration order; declaration order on `Engine<S>` mirrors
-dependency-reverse (traits that depend on others declared first,
-traits depended on declared last) so that drop matches the
-teardown graph.
+`LocalRefresh`, `DaemonClient`, `LocalEconomics`).
+
+**Stage 1 destructor independence (Round 4a — Item 7
+softening, supersedes the Round 3 "drop matches teardown"
+claim).** Stage 1 trait fields hold owned state with no
+teardown-time inter-dependency: each destructor cleans up its
+own state without calling into other trait fields. `WalletFile`'s
+`Drop` flushes pending writes and closes the file handle without
+reading from `LocalLedger`; `AllKeysBlob`'s `ZeroizeOnDrop`
+clears key material without coordinating with anyone;
+`LocalLedger`'s `Drop` frees in-memory state without writing to
+`WalletFile`. Drop in any order is correct because the
+destructors are *individually correct*, not because the order
+happens to match a teardown graph.
+
+The teardown graph (§2.8.5) becomes load-bearing only at
+**Stage 4** where actor `stop_gracefully` cascades have
+ordering requirements (Persistence absorbs Ledger's final
+flush before closing; Ledger waits for Refresh and PendingTx
+to release their handles). At Stage 4, `Engine::close`
+orchestrates the ordered teardown explicitly per §2.8.6's
+drop-vs-close asymmetry; relying on field-declaration drop
+order would be incorrect because Stage 4 actors *do* have
+inter-actor cleanup dependencies that drop alone cannot
+satisfy.
+
+Round 3's claim that "declaration order on `Engine<S>` mirrors
+dependency-reverse … so that drop matches the teardown graph"
+conflated two distinct properties: *independent destructor
+correctness* (Stage 1) and *ordered teardown coordination*
+(Stage 4). The properties are different; flattening them under
+a single "drop matches teardown" framing read as comforting but
+was over-strong. The Round 4a softening separates them: Stage 1
+relies on independence; Stage 4 relies on `Engine::close`'s
+orchestrated cascade.
+
+The field declaration order on `Engine<S>` (per §3) is a
+*type-parameter ordering* decision (dependency-leaves first,
+compound traits last; narrative-coherent ordering within each
+group), not a Drop-order decision. Two different orderings
+doing different jobs.
 
 `Engine::close` at Stage 1 is functionally equivalent to drop
 with explicit ordering; no actor coordination needed.
@@ -1057,14 +1406,58 @@ actor spawning is async. Two options for the public API:
   `block_on`s the async construction. Mirrors §4.2's pattern;
   multi-thread runtime precondition applies.
 
-**Lean (Round 3): sync-public via `Handle::block_on`.** Keeps the
-public API surface stable across Stage 1 → Stage 4 (callers don't
-absorb async at construction); leverages the existing
-multi-thread-runtime discipline already required for
-`Engine::refresh`. Trade-off: the `Handle::block_on` is paid once
-at construction (cheap) and its precondition is documented in the
-same place as `Engine::refresh`'s. Re-opens for Round 5+ if
-review surfaces a stronger case for async-public.
+**Decision (Round 4a, reverses Round 3 lean): async-public.** At
+Stage 4 `Engine::create` (and the `open_*` constructors) returns
+`impl Future<Output = Result<Engine<S>, EngineError>>`; callers
+absorb `await` at construction. Three reasons the Round 3 lean
+toward sync-public-via-`Handle::block_on` does not survive review:
+
+1. **§7's invariant scope is trait surfaces, not inherent methods.**
+   §7.1 names "the trait method signatures in §2"; lifecycle
+   methods are inherent on `Engine<S>`, not trait methods. The
+   "trait surface doesn't change at Stage 4" discipline does not
+   extend to inherent methods. Round 3's sync-public lean
+   implicitly extended it; Round 4a corrects the over-extension.
+2. **Async-native operation forced through a sync boundary is
+   contortive.** The spawn graph below is `tokio::try_join!` over
+   actor spawns — async-native by construction. Wrapping it in
+   `Handle::block_on` to expose a sync surface, then immediately
+   re-entering async at the trait calls inside, carries the
+   multi-thread-runtime precondition cost (per §4.2) without the
+   ergonomic justification. `Engine::refresh` justifies the
+   pattern because it is hot-path and called from sync contexts
+   that genuinely cannot restructure; `Engine::create` is one-shot
+   at startup and its callers are binary entry points that can
+   absorb async with no friction.
+3. **Library-embedding compatibility.** A library consumer that
+   wants to construct an `Engine` without first setting up a
+   multi-thread tokio runtime cannot, under the Round 3 lean,
+   because sync-public-via-`Handle::block_on` requires one.
+   Async-public `Engine::create` lets the consumer choose: their
+   own runtime, `tokio::main`, or `block_on` at the call site if
+   they truly need sync. This is the same discipline V3.0's
+   internal binaries already follow; making it the public surface
+   matches the contract to the actual call-pattern.
+
+**The Stage 1 → Stage 4 signature change is documented as a known
+divergence with rationale.** Stage 1's `Engine::create` is sync
+(no actors to spawn, all construction is in-process). Stage 4's
+`Engine::create` is async (actor spawn graph is async-native).
+Callers that move from Stage 1 to Stage 4 add `.await` at the
+construction call site. This is a one-shot adjustment at binary
+startup; it does not propagate through hot paths. The adjustment
+is named in `CHANGELOG.md` at the Stage 4 cutover so consumers
+know to expect it.
+
+**The §4.2 multi-thread-runtime precondition does not extend to
+`Engine::create`.** §4.2's precondition exists for
+`Engine::refresh`, which uses `Handle::block_on` internally to
+preserve its sync surface. Async-public `Engine::create` does not
+use `Handle::block_on`; it runs on whatever runtime the caller
+provides. A single-thread runtime can drive `tokio::try_join!`
+correctly because join is at the scheduler level, not the
+`block_on` level. The multi-thread-runtime precondition stays
+where it lives today (`Engine::refresh`'s rustdoc).
 
 `Engine::create` at Stage 4 implements the spawn graph as
 `tokio::join!`-ed independent groups in topological order:
@@ -1131,23 +1524,54 @@ are correct.
 
 #### 2.8.4 Timeout discipline
 
-Per-actor spawn timeouts are configurable; default 5 seconds per
-actor. Spawn timeout exceeded → partial-construction failure →
-cleanup cascade per §2.8.5.
+Per-actor spawn timeouts are configurable via
+`EngineConfig::spawn_timeouts: SpawnTimeouts` (per §2.8.8); the
+struct carries one `Duration` per actor with a 5-second default
+across the board. Spawn timeout exceeded → partial-construction
+failure → cleanup cascade per §2.8.5.
 
-**Why 5s default**: covers slow file I/O for `PersistenceEngine`
-(a cold-cache disk read of an encrypted wallet file may take
-seconds), slow daemon connection establishment for `DaemonEngine`
-(TLS handshake against an unreachable peer), slow KEK derivation
-for `KeyEngine` (Argon2id with conservative parameters). Pathological
-cases (network outage, disk failure) should fail in bounded time
-rather than appear-to-hang; 5s is the minimum that doesn't
-false-positive on legitimate slow paths and is bounded enough that
-the user-visible failure mode is a clear "couldn't open" rather
-than an indefinite spinner.
+**Why 5s default (estimate, not measurement).** The 5-second
+default is an **estimate** based on covering pathological-case
+latency for the slowest legitimate operations: cold-cache disk
+I/O for `PersistenceEngine` (encrypted wallet file read), TLS
+handshake for `DaemonEngine` (against a possibly-distant peer),
+and Argon2id KDF for `KeyEngine` (with conservative parameters).
+The estimate is *revisable based on field data*; the spec does
+not pretend the 5s is empirically measured.
+
+The user-visible failure mode at 5s is a clear "couldn't open"
+rather than an indefinite spinner; that's the design goal. If
+field data shows legitimate slow paths exceeding 5s on
+constrained devices (low-end phones, embedded systems with
+slow flash), the per-actor defaults extend or callers configure
+overrides via the builder pattern in §2.8.8 — no recompile
+required.
+
+**Why per-actor over uniform.** The three pathological-latency
+distributions are different: slow disk vs. slow network vs.
+slow CPU manifest as different bug patterns at the failure
+boundary. A uniform timeout that fires identically across all
+three loses diagnostic information at the failure boundary
+("which actor was slow?"); per-actor timeouts let the failure
+mode be specific. Per-actor with `#[non_exhaustive]` builder
+overrides preserves the specificity while letting callers
+override individual fields ergonomically (see §2.8.8 for the
+`SpawnTimeouts::with_<actor>` pattern).
+
+**Configurability surface (Round 4a — Item 12 pin).**
+
+| Aspect | Resolution |
+|---|---|
+| Config field | `EngineConfig::spawn_timeouts: SpawnTimeouts` (per §2.8.8) |
+| Per-actor vs uniform | Per-actor (one `Duration` per trait); uniform is rejected on diagnostic-information grounds |
+| Override mechanism | Builder pattern: `SpawnTimeouts::default().with_daemon(d)…` (per §2.8.8 sketch) |
+| Default-vs-custom | `Default` impl returns 5s for every field; callers override via builder |
+| Empirical revisability | The 5s default is documented as an estimate; revisable based on V3.x field-data without spec amendment |
+| Stage 1 relevance | Ignored; lifecycle is sync at Stage 1 with no actor spawn |
+| Stage 4 relevance | Live; consumed by `spawn_with_timeout` in §2.8.3's spawn graph |
 
 V3.x revisits if real-world latency surfaces longer-than-5s
-legitimate paths.
+legitimate paths; the revisit changes defaults, not surface.
 
 #### 2.8.5 Partial-failure cleanup
 
@@ -1191,22 +1615,185 @@ more explicit." Stage 4 reviewers thinking "drop is fine, we don't
 need close" will hit the same surprising-side-effect failure mode
 that the discipline exists to prevent.
 
-#### 2.8.7 Round 3 dispositions
+#### 2.8.7 Round 3 / Round 4a dispositions
 
 - **The trait surface in §2 does not change for lifecycle
   concerns.** Lifecycle stays inherent on `Engine<S>`; the trait
   surface only sees the actors after they're alive. (Q9.11 closed
   no for `load_state()` on `PersistenceEngine`; lifecycle
   construction is the orchestrator's concern.)
+- **§7's invariant scope is trait surfaces, not inherent methods
+  (Round 4a clarification).** The "trait method signatures in §2
+  do not change at Stage 4" invariant covers the traits in §§2.1
+  through §2.7. Inherent methods on `Engine<S>` (the lifecycle
+  constructors, `Engine::refresh`, etc.) are *not* covered by
+  §7.1; their signatures may change at Stage 4 with explicit
+  rationale and CHANGELOG documentation. The Stage 1 sync /
+  Stage 4 async lifecycle divergence is one such case (per
+  §2.8.3); `Engine::refresh` keeping its sync signature with
+  internal `Handle::block_on` is another (per §4.2).
 - **The spawn graph is part of the spec (§2.8.3); the landing
   graph is a separate concern (§8.1).** Both graphs are pinned;
   reviewers conflating them risk arguing for the wrong
   parallelism in either context.
+- **Stage 4 lifecycle is async-public (Round 4a, reverses Round 3
+  lean).** `Engine::create` and the `open_*` constructors return
+  `impl Future<…>`; callers absorb `.await` at construction.
+  Rationale per §2.8.3.
 - **Default per-actor spawn timeout: 5 seconds.** Configurable via
   `EngineConfig`; documented as such in `Engine::create`'s
-  rustdoc at Stage 4.
+  rustdoc at Stage 4. `EngineConfig`'s shape and Stage 1 / Stage 4
+  field-relevance are pinned in §2.8.8 below.
 - **Drop semantics are best-effort at Stage 4; explicit
   `Engine::close` is required.** Pinned in §2.8.6.
+- **Stage 1 destructor independence vs Stage 4 ordered teardown
+  (Round 4a — Item 7 softening).** Round 3's "drop matches the
+  teardown graph" framing conflated two distinct properties:
+  Stage 1 destructors are *individually correct* without
+  inter-field coordination, while Stage 4 actor stop cascades
+  require *ordered teardown* via `Engine::close`'s explicit
+  cascade. Field declaration order on `Engine<S>` is a
+  type-parameter-ordering decision (per §3), not a Drop-order
+  decision; the Stage 4 teardown graph (§2.8.5) is the
+  load-bearing ordering. See §2.8.2 for the full softening.
+
+#### 2.8.8 `EngineConfig` (Round 4a — Item 9 pin)
+
+`EngineConfig` is the construction-time configuration struct
+threaded through the lifecycle constructors and into actor spawn
+at Stage 4. Round 4a pins its origin, lifetime, and Stage 1 /
+Stage 4 field-relevance shift.
+
+**Origin.** `EngineConfig` exists at Stage 1 with all fields
+defined; lives in [`engine/config.rs`](../rust/shekyl-engine-core/src/engine/config.rs)
+(new module, sibling to `engine/error.rs`). The struct is
+`#[non_exhaustive]` so future fields (V3.1 multisig, V3.x
+Component 3 adaptive-burn knobs) extend additively without
+breaking V3.0 callers.
+
+**Lifetime.** Constructed once by the binary entry point (or by
+the test harness in `engine::test_support`); passed by value
+into `Engine::create` / `Engine::open_*` constructors;
+`Engine<S>` retains a clone for runtime reference. At Stage 4
+each spawned actor receives the relevant subset of fields at
+spawn time (Persistence gets the file-related fields; Daemon
+gets the network-related fields; etc.).
+
+**Stage 1 / Stage 4 field-relevance shift.** The struct shape is
+the same across stages; the *relevance* of individual fields
+shifts. At Stage 1, actor-specific fields (per-actor spawn
+timeouts, mailbox sizes, supervisor-strategy hints) are unused —
+construction is in-process and there are no actors to spawn.
+Stage 1 implementations ignore those fields; tests can leave them
+at defaults. At Stage 4, every field is live.
+
+```rust
+#[non_exhaustive]
+#[derive(Clone, Debug)]
+pub struct EngineConfig {
+    // Used at all stages.
+    pub network: Network,
+    pub capability: Capability,
+    pub wallet_file: PathBuf,
+    pub daemon_url: String,
+
+    // Stage-4-relevant; ignored at Stage 1.
+    pub spawn_timeouts: SpawnTimeouts,
+    // Future: mailbox sizes, supervisor strategy, observability hooks.
+}
+
+#[non_exhaustive]
+#[derive(Clone, Debug)]
+pub struct SpawnTimeouts {
+    pub daemon: Duration,
+    pub persistence: Duration,
+    pub economics: Duration,
+    pub key: Duration,
+    pub ledger: Duration,
+    pub refresh: Duration,
+    pub pending_tx: Duration,
+    // Future: stake (Phase 2b), archival (V3.x).
+}
+
+impl Default for SpawnTimeouts {
+    fn default() -> Self {
+        let d = Duration::from_secs(5);
+        Self { daemon: d, persistence: d, economics: d, key: d,
+               ledger: d, refresh: d, pending_tx: d }
+    }
+}
+
+impl SpawnTimeouts {
+    /// Builder-style override for the daemon spawn timeout.
+    /// Same pattern (`with_<actor>`) for each field; lets callers
+    /// override one timeout without specifying all of them.
+    pub fn with_daemon(mut self, d: Duration) -> Self {
+        self.daemon = d;
+        self
+    }
+    // … with_persistence, with_economics, with_key, with_ledger,
+    //     with_refresh, with_pending_tx
+}
+```
+
+**Per-actor over uniform.** `SpawnTimeouts` carries one
+`Duration` per actor rather than a single uniform timeout
+because the actors have materially different legitimate latency
+profiles. `PersistenceEngine`'s spawn cost includes
+cold-cache disk I/O for an encrypted wallet file; `DaemonEngine`'s
+spawn cost includes TLS handshake against a possibly-distant
+peer; `KeyEngine`'s spawn cost includes Argon2id KDF — three
+distinct latency distributions. A uniform timeout that fires
+identically across all three loses diagnostic information at
+the failure boundary ("which actor was slow?"). Per-actor
+timeouts let the failure mode be specific. The
+`#[non_exhaustive]` discipline plus builder-style overrides
+preserves the per-actor specificity while letting callers
+override individual fields ergonomically.
+
+**`EngineConfig` lifetime revisability (V3.0 by-value;
+revisable to `Arc` at V3.1+).** At V3.0 the struct is small
+(network enum, capability enum, wallet_file path, daemon_url,
+SpawnTimeouts); cloning is essentially free, and `Arc` would
+add reference-counting overhead with ergonomic friction
+(`config.daemon_url` becomes `(*config).daemon_url` or
+`&config.daemon_url`). By-value is the V3.0 lean.
+
+The decision is *revisable* at V3.1+ if `EngineConfig` grows
+substantially — multisig parameters, archival policy, V3.x
+adaptive-burn knobs, anonymity-network-coordination configs.
+The transition is mechanical: change the field type from
+`EngineConfig` to `Arc<EngineConfig>` in `Engine<S>` and at
+actor spawn sites; callers continue to pass `EngineConfig`
+because `Arc::new` construction is internal.
+
+This pre-positions for the change without committing to it now.
+Same pattern as the V3.0 unbounded-mailbox decision (revisit at
+V3.x if backpressure surfaces). Pinning the revisability lets
+future readers see the planned evolution rather than
+re-deriving the decision when growth makes it necessary.
+
+**Why a single struct rather than per-actor configs.** Per-actor
+configs would require separate plumbing for each actor at the
+constructor boundary, which (a) makes V3.0's Stage 1 / Stage 4
+transition noisier (each new actor at Stage 4 adds a new
+constructor parameter) and (b) makes test harness construction
+more verbose. A single `EngineConfig` keeps the surface small;
+fields' relevance is documented per-field; actors at Stage 4
+extract the slice they need at spawn time.
+
+**Why `#[non_exhaustive]`.** V3.1 multisig, V3.x adaptive-burn,
+and V3.x anonymity-network-coordination will all want
+construction-time parameters. `#[non_exhaustive]` lets V3.0 ship
+a fixed shape that V3.1+ extends without consumer-side breakage.
+
+**Test-harness construction.** `EngineConfig::test_default()`
+(in `#[cfg(test)] pub(crate)`) returns a config with safe
+test-friendly defaults: `Network::Testnet`, in-memory daemon URL
+stub, ephemeral wallet path, and `SpawnTimeouts::default()`.
+Tests that need to override specific fields use
+`EngineConfig { … ..EngineConfig::test_default() }` struct-update
+syntax.
 
 ---
 
@@ -1365,6 +1952,89 @@ concurrently — they share no state — but Stage 1's outer lock
 serializes them anyway. The over-serialization is invisible to
 correctness; it just leaves performance on the table.
 
+**Stage 1 interior-mutability measurement gate (Round 4a —
+Item 14).** Per the §2 sweep, Stage 1 implementing types use
+interior mutability (`RwLock<LedgerState>`,
+`Mutex<ReservationTracker>`, `Mutex<WalletFileState>`) so the
+trait methods can be `&self`. Under the outer
+`Arc<RwLock<Engine>>` lock at Stage 1 these inner locks are
+*redundant* — the outer lock has already serialized access —
+but they are paid for on every read-path call. The "redundant"
+characterization is structurally correct but **the cost is
+unmeasured**, and the spec does not get to claim the cost is
+acceptable without evidence.
+
+The gate has three pinned components:
+
+1. **Measurement requirement.** Before any Stage 1
+   implementation PR is merged to `dev`, read-path overhead is
+   measured against the existing baseline using `criterion`.
+   The hot paths under measurement are at minimum
+   `KeyEngine::account_public_address`,
+   `LedgerEngine::balance`, `LedgerEngine::synced_height`,
+   `EconomicsEngine::current_emission`, and
+   `EconomicsEngine::parameters_snapshot`. Additional paths
+   are measured if reviewer judgment identifies them as
+   hot-path during PR review (UI render-loop callers,
+   high-frequency API surfaces).
+2. **Documentation requirement.** Measurements land in
+   `docs/PERFORMANCE_BASELINE.md` (new at Round 4a) before
+   Stage 1 PR review begins. The document names the
+   measurement methodology (`criterion` configuration,
+   sampling discipline, host conditions), the baseline
+   numbers, the post-interior-lock numbers, and the percentage
+   delta per path. Reviewers cite the document during Stage 1
+   PR review.
+3. **Threshold of concern.** Two thresholds, calibrated to
+   typical `criterion` noise floor (1–3% under good
+   conditions) and to the cost realities of hot-path overhead:
+   - **>10% on any hot path** requires explicit justification
+     in the PR description naming the source of overhead and
+     why the cost is acceptable (e.g., "the additional
+     critical section is amortized across the operation's
+     larger work; the relative overhead at the operation's
+     full cost is <2%"). PR review may accept the justification
+     or send the PR back for optimization.
+   - **>25% on any hot path** requires optimization before
+     merge; the gate is binding, not advisory.
+
+Below 10%, the cost is accepted and the documented numbers
+land in `CHANGELOG.md` alongside the Stage 1 cutover.
+
+**Candidate optimizations for the revisit case.** If the
+threshold is exceeded, the response space is constrained
+(rather than open-ended) to keep the revisit actionable:
+
+- **Narrowing critical sections** — restructuring the
+  implementing type so the inner lock guards only the
+  mutation-prone subset of state, with cached read-only
+  values exposed via `&self` methods that don't acquire the
+  lock at all.
+- **`parking_lot::RwLock` substitution** — `parking_lot`'s
+  read lock is materially cheaper than `std::sync::RwLock`
+  under uncontended conditions (the V3.0 case under the
+  outer lock); the substitution is a one-line change at the
+  Stage 1 implementing-type level.
+- **`Arc`-published snapshots for cached read-only values** —
+  values that are stable across a logical operation (e.g.,
+  `synced_height` between scan ticks, the `AccountPublicAddress`
+  for the engine's lifetime) move to `Arc<T>` published once
+  and read lock-free thereafter. The same pattern as the §3.3.6
+  `EconomicsParametersSnapshot` mailbox-bypass at Stage 4,
+  applied earlier to Stage 1 hot paths.
+
+The choice depends on the specific overhead source identified
+by the benchmark; the spec does not pre-commit to a specific
+optimization, only to the candidate set.
+
+The gate's relationship to Path B: Path B's per-actor mailbox
+cutover removes the outer lock entirely, so Stage 4 has *no*
+redundant interior-mutability cost. The Stage 1 gate exists
+because Path B is months away and the redundant cost is paid
+in the interim. The spec acknowledging the cost is unmeasured
+is the difference between a documented assumption and an
+implicit assertion.
+
 #### 3.3.2 Stage 4: per-actor mailbox FIFO, no cross-actor ordering
 
 Stage 4's per-actor mailboxes give each actor FIFO ordering for
@@ -1402,24 +2072,59 @@ discipline tells contributors what to write.
 **Unsafe pattern (silently broken at Stage 4):**
 
 ```rust
-// Safe at Stage 1 (outer lock serializes the join);
-// unsafe at Stage 4 (separate mailboxes, no cross-actor ordering).
+// Stale-snapshot persistence: the snapshot is captured at
+// argument-evaluation time, *before* either join! arm runs.
+// At Stage 1 the outer RwLock makes the apply complete before
+// save_state runs anyway (the lock acquire serializes the arms),
+// so the saved snapshot is post-apply by accident. At Stage 4
+// no such serialization exists; save_state persists the
+// pre-apply snapshot it was handed and the arms do overlap.
 let (apply_result, persist_result) = tokio::join!(
     engine.ledger.apply_scan_result(scan),
     engine.persist.save_state(&engine.ledger.snapshot()),
-    // The persist call reads ledger state. At Stage 4 the
-    // snapshot read can land before, during, or after the apply
-    // completes — race condition that Stage 1 silently prevents.
 );
 ```
 
-At Stage 1, the outer `RwLock` means `tokio::join!`'d operations
-actually serialize — one acquires the write lock, the other
-waits, no race. At Stage 4, `LedgerEngine` and `PersistenceEngine`
-are separate actors with separate mailboxes; the persist call's
-internal `snapshot()` read goes through `LedgerEngine`'s mailbox
-on a separate channel; the read may observe pre-apply or
-post-apply state non-deterministically.
+The unsafety is **stale-snapshot persistence**, not a race
+condition in the conventional sense. `tokio::join!`'s arms
+start polling eagerly, but the inner `engine.ledger.snapshot()`
+*expression* is evaluated at argument-construction time — once,
+before either arm runs. So the snapshot value passed to
+`save_state` is whatever the ledger held at the moment the
+`tokio::join!` macro expanded its arguments, and at Stage 4
+that's *before* the apply has had a chance to run. The persist
+arm dutifully writes the pre-apply snapshot to disk; the apply
+arm then mutates the ledger; the on-disk state is now older
+than the in-memory state by exactly one apply.
+
+At Stage 1 the bug is hidden: the outer `RwLock` serializes the
+two arms (one acquires the write lock, the other waits), so by
+the time `save_state` runs, the snapshot it was handed has been
+*overwritten* — both arms touch the same lock guard, and the
+last-writer-wins ordering happens to land post-apply state into
+the saved file. This is *accidental correctness*: the lock
+prevents the bug by accident, not by design.
+
+At Stage 4 the accidental correctness disappears: separate
+mailboxes, separate channels, no cross-actor lock to enforce
+the serialization. The persist arm proceeds with the captured
+pre-apply snapshot, and the on-disk state diverges from the
+in-memory state silently. There is no panic, no error, no log
+line — just a subtle persistence-staleness bug that surfaces
+as "wallet state on disk lags one apply behind in-memory state
+under some conditions."
+
+The lesson is twofold:
+
+1. *`tokio::join!` evaluates argument expressions before
+   polling arms.* Cross-trait reads embedded in a join arm's
+   argument are captured at expansion time, not at arm-run
+   time — independent of any lock or actor boundary.
+2. *Stage 4 removes the accidental serialization* that an
+   outer Stage-1 lock provides. A pattern that "happens to
+   work" at Stage 1 because the lock structure makes it work
+   may break silently at Stage 4 because the lock structure
+   is gone.
 
 **Safe pattern (works identically at Stage 1 and Stage 4):**
 
@@ -1471,19 +2176,60 @@ tooling, heavier than vibes. Reviewers reading PRs that touch
 trait orchestration apply this check; PR descriptions that don't
 address it are sent back for amendment.
 
-#### 3.3.6 EconomicsEngine reads at Stage 4
+#### 3.3.6 EconomicsEngine reads at Stage 4 (Round 4a Resolution C)
 
 `EconomicsEngine` reads (`current_emission`, `burn_fraction`,
 `pool_weighted_total`, `parameters_snapshot`) are pure-function
-or pure-snapshot at V3.0; at Stage 4 callers may bypass the
-actor mailbox by holding an `Arc<EconomicsParametersSnapshot>`
-captured at construction (analogous to `LedgerEngine` snapshot
-patterns). The `parameters_snapshot()` call returns an owned
-`Arc<EconomicsParametersSnapshot>`; callers can clone the `Arc`
-freely without re-entering the actor. This avoids
-serializing-through-the-mailbox for the hot read path while
-preserving authoritative-source semantics for snapshot
-acquisition.
+or pure-snapshot at V3.0. The trait surface in §2.7 returns the
+**value type** `EconomicsParametersSnapshot` (no `Arc` in the
+trait return); the implementation choice of how to make that
+return cheap is a Stage 4 implementation detail that does not
+leak into the trait.
+
+This matches the §4.1 `LedgerSnapshot` pattern: the `Snapshot`
+type is `Clone` with cheap-clone semantics (it contains owned
+small fields directly, and any large state is held behind
+internal `Arc`s within the struct definition). At Stage 4 the
+`EconomicsActor` publishes an `Arc<EconomicsParametersSnapshot>`
+internally and serves `parameters_snapshot()` requests by
+returning a clone of the inner value (which is itself cheap
+because the struct's large state is `Arc`-wrapped); callers
+receive a value-typed `EconomicsParametersSnapshot` and work
+against it without mailbox round-trips for repeated reads.
+
+The Round 3 §3.3.6 wording leaked `Arc<EconomicsParametersSnapshot>`
+into caller-visible territory; Round 4a corrects this so the
+trait surface expresses *what the operation does* (return a
+snapshot) rather than *how the implementation optimizes shared
+access* (return an `Arc`). Trait surfaces don't leak storage
+decisions; the LedgerSnapshot pattern is preserved verbatim for
+EconomicsParametersSnapshot.
+
+**Deliberate "value type with implementation flexibility"
+pattern.** The trait surface returning a value-typed
+`EconomicsParametersSnapshot` accommodates two implementations
+with materially different storage strategies, both satisfying
+the same contract:
+
+- **Stage 1 `LocalEconomics`** returns a snapshot whose internal
+  representation has *no* `Arc`s — the struct holds owned small
+  fields directly, because the state is constants-derived and
+  small. Cheap-clone is "memcpy of a few fields"; no
+  reference-counting overhead.
+- **Stage 4 `EconomicsActor`** returns a snapshot whose internal
+  representation *does* hold `Arc`s for any large state
+  (parameter blob, observation history at V3.x), because the
+  state is published once and read many times via mailbox-bypass.
+  Cheap-clone is "Arc::clone"; reference-counting overhead is
+  amortized across the bypass benefit.
+
+This is a *deliberate* design pattern, not an accident of the
+trait surface. The trait expresses the contract (a snapshot is
+returned, cheaply, of stable type); the implementation chooses
+the storage strategy that fits its access pattern. Future
+trait surfaces that return cheap-clone value types follow the
+same pattern — `LedgerSnapshot` already does, and Phase 2b's
+`StakeEngine` snapshot returns will too.
 
 V3.x Component 3 adaptive-burn changes the actor's *internal
 state* (it observes activity and updates derivation parameters)
@@ -1602,6 +2348,75 @@ mechanical fill-in once the framework is pinned.
   side-effect on drop use in-band cancellation tokens.
 - **Three-class framework** (a / b / c) is pinned (per §3.4.3);
   the per-method classification table is a Round 4 fill-in.
+
+### 3.5 Observability: tracing at call sites, not on trait surfaces (Round 4a — Item 18)
+
+**Observability is provided via the `tracing` crate at call
+sites; trait methods do not expose metrics or introspection on
+their surfaces.** This is intentional and rejects a class of
+"add observability hooks to traits" proposals before they
+recur.
+
+The argument for trait-level observability hooks runs: opaque
+incentive systems breed centralization and attacks; therefore
+the wallet should expose introspection on its incentive-relevant
+state via methods like `KeyEngine::metrics()`,
+`LedgerEngine::stats()`, `EconomicsEngine::observability_snapshot()`.
+The argument is mis-scoped to the wallet trait spec for two
+reasons:
+
+1. **The wallet's observability of its own state is already
+   adequate.** `LedgerEngine::balance` exposes how much this
+   wallet has; `EconomicsEngine::parameters_snapshot` exposes
+   the currently-observable economic state; `LedgerEngine::transfers`
+   exposes per-transaction history. A user can already see
+   what's happening to their own funds. The proposed
+   observability hooks are about *network-wide* visibility
+   (staking centralization patterns, MEV extraction, fee
+   distribution) — and that's not wallet observability, it's
+   chain observability. The wallet can fetch chain-wide
+   metrics via daemon RPC consumed through `DaemonEngine` if
+   needed, but the trait spec should not pin it because it's
+   not a wallet-engine concern.
+2. **Trait-level observability invites scope drift.** Once
+   `KeyEngine` has `metrics()`, future contributors propose
+   `LedgerEngine::metrics()`, `RefreshEngine::metrics()`, etc.
+   Each addition is justified individually; collectively they
+   expand the trait surface in ways the §1.4 actor-shape
+   discipline cannot easily evaluate (a `metrics()` method
+   that returns "how busy was this actor" is implicitly
+   per-entity-state cross-cutting an entity selector that the
+   trait does not own — the same drift class clause (d) of
+   §2.7's discipline test rejects).
+
+**The right pattern is `tracing` spans at call sites.**
+Operations get spans (`#[instrument]` on the inherent
+`Engine<S>` method, or explicit `tracing::info_span!` at the
+call site); spans carry context (operation name, key
+parameters, duration); observers consume spans externally via
+subscribers (file logging, OpenTelemetry exporter, a future
+in-process metrics sink). This is the established Rust
+pattern, it doesn't require trait-level observability hooks,
+and it composes orthogonally with the §1.4 discipline because
+it's cross-cutting via attribute, not via method surface.
+
+**Stage 4 actor instrumentation** uses the same pattern:
+`kameo` actors are instrumented at the message-handler level,
+not the trait-method level. Spans wrap the message receive,
+capture the message variant, and propagate to any nested
+operations the handler invokes. This gives Stage 4 the same
+observability shape as Stage 1 (call-site spans) without
+trait-surface changes.
+
+The economic-design observability that DESIGN_CONCEPTS.md
+references — visibility into release-multiplier behavior,
+adaptive-burn parameter trajectories, stake-tier distribution
+— lives at the chain layer (consumed via `DaemonEngine` RPC)
+and at the design-document layer (DESIGN_CONCEPTS.md itself
+documents the parameters and their dynamics). The trait spec
+does not extend into either layer. See §1.5's scope-guard
+meta-pattern for the broader discipline this rejection
+participates in.
 
 ---
 
@@ -1746,12 +2561,48 @@ Existing error enums (`KeyError`, `OpenError`, `RefreshError`,
 they are in [`engine/error.rs`](../rust/shekyl-engine-core/src/engine/error.rs).
 The `EngineError` aggregate is new; it's the type that
 `Engine<S>`-level methods return and that the JSON-RPC server
-converts to wire errors. `EconomicsError` is new alongside
-`EconomicsEngine` (§2.7); at V3.0 the only constructed variant
-is `RuntimeFailure { actor, reason }` (per §5.1) since the V3.0
-`LocalEconomics` is stateless and pure-function. Variants for
-adaptive-burn / parameter-update failure paths land at V3.x with
-Component 3.
+converts to wire errors.
+
+**`EconomicsError` (Round 4a — Item 5 pin).** New alongside
+`EconomicsEngine` (§2.7); lives in the same `engine/error.rs`
+module as the other per-trait error enums. V3.0 shape:
+
+```rust
+#[non_exhaustive]
+pub enum EconomicsError {
+    /// Stage 4 actor crash. Stage 1 implementations never produce
+    /// this variant; `LocalEconomics` is pure-function over
+    /// `shekyl-economics` constants and cannot crash in the
+    /// actor sense.
+    RuntimeFailure { actor: &'static str, reason: ActorCrashReason },
+}
+```
+
+A single variant at V3.0; `#[non_exhaustive]` carries the
+extension permission for V3.x's adaptive-burn observation
+failure modes (e.g., observation-window-corruption) without
+breaking V3.0 callers. Stage 1's `LocalEconomics` cannot
+construct the variant — it's pure-function over
+`shekyl-economics` constants and call-time inputs — so the
+`Result<T, EconomicsError>` return type's `Err` arm is
+unreachable at Stage 1 and trivially-handleable at Stage 4 where
+the supervisor strategy of §5.1 is what produces the variant.
+
+**Why `Result<T, Self::Error>` at V3.0 despite Stage 1
+infallibility (load-bearing premise).** The `Result` ceremony in
+the §2.7 trait method signatures exists for §7's
+trait-surface-stability invariant: trait method signatures do
+not change at Stage 4. A V3.0 surface that returned `T`
+directly (because Stage 1 infallibility is structural) would
+have to break the §7 invariant at Stage 4 cutover when
+`RuntimeFailure` becomes constructible. The Result ceremony at
+V3.0 is *Stage 4 surface stability paid forward*, not
+defensive error handling against impossible failures. The §2.7
+rustdoc on each method names this explicitly so future
+contributors don't read `Result<T, EconomicsError>`, see
+"V3.0 never returns Err," and write dead-code error-handling
+branches; the correct V3.0 caller pattern is `?`-propagation,
+not exhaustive `match` on the unreachable variant.
 
 `RefreshError::ConcurrentMutation` stays on `LedgerEngine`'s
 `apply_scan_result` return — it's the contract signal between
@@ -1795,8 +2646,45 @@ pub enum ActorCrashReason {
     /// Subsequent calls on the trait surface will surface the
     /// same variant until the engine is reconstructed.
     Permanent,
+
+    /// Pending message drained during supervisor cascade;
+    /// see §5.1's draining ordering discussion below.
+    DrainedDuringSupervisorCascade,
 }
 ```
+
+**Per-trait error-enum enumeration (Round 4a — Item 10 pin).**
+The seven trait-error families that gain the `RuntimeFailure`
+variant at Stage 4 are explicitly:
+
+| Trait | Error family | V3.0 origin |
+|---|---|---|
+| `KeyEngine` | `KeyError` | existing in `engine/error.rs` |
+| `LedgerEngine` | `RefreshError` (shared with `RefreshEngine`) | existing |
+| `RefreshEngine` | `RefreshError` | existing |
+| `PendingTxEngine` | `PendingTxError` | existing |
+| `DaemonEngine` | inherits per-method (e.g., `RpcError`); aggregated via `Send` / per-method paths | existing |
+| `PersistenceEngine` | `IoError` (per §5's mapping) | existing |
+| `EconomicsEngine` | `EconomicsError` | new in Round 4a (per Item 5 above) |
+
+All seven enums are `#[non_exhaustive]` (where they aren't
+already) and gain the `RuntimeFailure` variant alongside the
+domain-specific variants they already carry. The variant is
+*unreachable* at Stage 1 — Stage 1 implementations have no
+actors and cannot construct it — but exists in the type so the
+trait surface doesn't change at Stage 4 cutover. Per §5.1's
+"Stage 1 implications" paragraph below, debug builds use
+`debug_assert!(false)` in Stage 1 impls' error-construction
+paths to catch any accidental construction.
+
+**`RefreshError` is shared between `LedgerEngine` and
+`RefreshEngine`.** This is intentional (per §2.2's Q9.5
+disposition: `ConcurrentMutation` is the contract signal between
+ledger and refresh, not a refresh-private error). The shared
+family means a single `RuntimeFailure` variant on `RefreshError`
+serves both traits; the `actor` field on the variant
+distinguishes whether the failure originated in the ledger
+actor or the refresh actor.
 
 **Supervisor strategy: restart-and-fail-pending, no automatic
 retry.** When an actor crashes mid-handler:
@@ -1804,12 +2692,55 @@ retry.** When an actor crashes mid-handler:
 1. The pending message returns `RuntimeFailure { actor: …,
    reason: PanickedDuringHandler }` to its caller.
 2. All other pending messages on the same actor's mailbox are
-   drained and returned as `RuntimeFailure` to their respective
-   callers — the supervisor does not re-deliver them after
-   restart, because re-delivery would risk message-level
-   non-idempotency cascading into observable double-effects.
+   drained and returned as `RuntimeFailure { reason:
+   DrainedDuringSupervisorCascade }` to their respective callers
+   — the supervisor does not re-deliver them after restart,
+   because re-delivery would risk message-level non-idempotency
+   cascading into observable double-effects.
 3. The supervisor restarts the actor in a clean state.
 4. New messages sent after the restart are processed normally.
+
+**Draining ordering — observable contract (Round 4a — Item 11
+pin).** When N pending messages are drained from a crashed
+actor's mailbox, the order in which their callers observe the
+`RuntimeFailure` return is **mailbox-FIFO**: the first message
+to be drained corresponds to the next message that would have
+been processed had the actor not crashed. Callers of multiple
+pending messages on the same actor see returns in the same
+order the messages were enqueued.
+
+The crash-handler's own message is distinguished from the
+drained messages by its `ActorCrashReason`:
+
+- The message being processed when the crash happened returns
+  `RuntimeFailure { reason: PanickedDuringHandler }`.
+- All other pending messages return `RuntimeFailure { reason:
+  DrainedDuringSupervisorCascade }`.
+
+This lets a caller that sent N messages distinguish "messages
+1..K-1 succeeded; message K was being processed when the crash
+happened (and returns `PanickedDuringHandler`); messages K+1..N
+were drained without being processed (and return
+`DrainedDuringSupervisorCascade`)." The split-by-reason
+disambiguation gives caller logic a concrete recovery surface:
+the `PanickedDuringHandler` message *might* have side-effected;
+the `DrainedDuringSupervisorCascade` messages definitely did
+not.
+
+**What "mailbox-FIFO observable" does not mean.** Two
+clarifications:
+
+- The supervisor does not guarantee ordering across
+  *different* actors' drains during a multi-actor failure
+  cascade. If KeyActor and LedgerActor both crash in the same
+  scheduler tick, callers waiting on both see returns in
+  interleaved order; no cross-actor ordering is contracted.
+- The observable order is the order callers' awaited futures
+  *resolve*, not the order the supervisor *processes* the
+  drain. In practice these are the same under tokio's
+  default scheduler, but a multi-thread runtime may interleave
+  the resolutions across worker threads. Callers must not
+  assume strict-real-time ordering of `await` returns.
 
 Idempotency at the trait level (per §4's Idempotency column)
 governs whether *callers* can safely retry on
@@ -1858,6 +2789,24 @@ Production builds that observe a `RuntimeFailure` from a Stage 1
 implementor have hit a logic error. A clippy-warnable
 `unreachable!()` or `debug_assert!(false)` in Stage 1 impls'
 error-construction paths catches this in debug builds.
+
+**Composition with §7's cancellation contract (Round 4a —
+Item 16).** The `RuntimeFailure` path interacts cleanly with
+§7's cancellation checkpoint contract. A crash during
+`LedgerEngine::apply_scan_result` returns
+`RuntimeFailure { reason: PanickedDuringHandler }` to the
+orchestrator without completing the merge; the supervisor
+restarts the actor in a clean state, which re-hydrates from
+`PersistenceEngine` and resumes processing against the
+post-restart (pre-merge) state. The orchestrator's pre-merge
+checkpoint (per §7 invariant 4) is satisfied in this path
+because no merge occurred, and the conditional-idempotency of
+`apply_scan_result` (per §4) makes caller-driven retry safe.
+The composition relies on three layered guarantees that all
+exist already: §5.1's restart-and-fail-pending supervisor,
+§4's idempotency column, and §7's checkpoint ownership split.
+No structural addition is needed — only the composition's
+explicit articulation here.
 
 ---
 
@@ -2082,29 +3031,697 @@ message). The single Round 1 open item still pending is:
   borrow-then-spawn patterns that would hold `&D` past the call
   frame.
 
-**Round 4 agenda (pinned in the PR description; tracked here
-only by category):**
+**Round 4a closure (this round).** Twenty design-closure items
+landed across Phases 1, 2a, 2c, and 2b/3. The §10 deferred
+subsection (Item 8) is the final substantial Round 4a
+deliverable; with it landed, the spec's forward-work map is
+authoritative and Round 4b's mechanical fill-in proceeds against
+a stable framework.
+
+**Round 4b agenda (mechanical fill-in against Round 4a's
+framework):**
 
 - Per-method drop-cancellation classification (a / b / c per
   §3.4.3) added as a column to §4's async-story table.
-- `pub(crate)` visibility pin in §2 preamble.
 - Stage-1-amendment co-landing rule (separate-commit form) in
   §8.
 - Mocks-vs-contract pin in §6.
 - Seven-traits-Stage-1-only / Phase-2b-additive pin in §1.2.
-- Observability scope pin in §3.
 - `#[tokio::test]` rustdoc clarification in §4.2.
 - Panic-rustdoc requirement pin in §1 or §3.
-- New §10 "Out of scope / Deferred" subsection consolidating
-  the deferred items: Stage 1→2 transition mechanics, JSON-RPC
-  implications, multi-engine server, V3.1 multisig assumption,
-  FCMP++ progress trigger, bounded-mailbox conditions,
-  Stage-4 behavioral-equivalence verification,
-  tracing/observability tooling, anonymity-network-coordination
-  trait (Tor/I2P transport for `ArchivalEngine` queries; V3.x).
+- §1.5 hypothetical-evaluation block: add `StakeEngine` as
+  a positive example clearing all three trait-identity
+  clauses (Phase 2c review carry-forward).
+- §3.5 long-running-operation paragraph addressing FCMP++
+  proof-generation as the natural counter-question to the
+  observability rejection (Phase 2c review carry-forward).
+- `docs/PERFORMANCE_BASELINE.md` template stub plus
+  `docs/FOLLOWUPS.md` V3.0 entry referencing §3.3's
+  measurement gate (binding before Stage 1 PRs land).
+- `docs/FOLLOWUPS.md` V3.x entry: "Stage 4 lifecycle async
+  cutover requires `CHANGELOG.md` flagging per
+  V3_ENGINE_TRAIT_BOUNDARIES.md §2.8.7" (Phase 1 review
+  carry-forward).
 
-Round 5 is acceptance; near-empty outside fallout from Round 4
+Round 5 is acceptance; near-empty outside fallout from Round 4b
 review.
+
+---
+
+## 10. Out of scope / Deferred (Round 4a — Item 8)
+
+This section is the spec's authoritative forward-work map. Each
+entry pins (a) what is deferred, (b) the trigger that closes
+the entry, (c) the structural decision in this spec that
+governs the deferred work, and (d) the dependencies that gate
+it. Entries grouped by axis; intra-group ordering reflects
+dependency flow.
+
+### 10.0 Dependency overview
+
+The dependency graph below shows how the 16 deferred entries
+chain. Each axis names the Round 4a section(s) governing it;
+each entry within an axis has dependencies on prior entries
+(intra-group) or on other axes (inter-group). The graph is
+rendered as ASCII art optimized for GitHub markdown, which is
+this spec's primary review surface (PR #20). Non-GitHub
+viewers may strip whitespace; the source markdown carries the
+graph faithfully.
+
+```
+Round 4a closure (the ground truth)
+    │
+    ├──► §10.1 Stage transitions axis  (governed by §1.4, §2.8, §3.3, §3.4, §5.1)
+    │      §10.1.1 Stage 1 → 2 transition mechanics
+    │         └──► §10.1.2 Stage 4 per-actor mailbox cutover (Path B)
+    │                 ├──► §10.1.3 Stage 4 behavioral-equivalence verification
+    │                 ├──► §10.2.2 Stage 4 cost characterization
+    │                 ├──► §10.4.1-design Adaptive-burn observation design hook
+    │                 └──► §10.4.3 Bounded-mailbox triggers
+    │
+    ├──► §10.2 Performance characterization axis  (governed by §3.3 measurement gate)
+    │      §10.2.1 Stage 1 baseline (V3.0; gates Stage 1 PR review)
+    │      §10.2.2 Stage 4 cost characterization (depends on §10.1.2)
+    │
+    ├──► §10.3 V3.1 / V3.2 expansion axis  (governed by §2 trait surfaces, §2 preamble visibility)
+    │      §10.3.1 Multisig support (V3.1)
+    │         └──► §10.3.2 Multi-engine server (V3.1+)
+    │                 └──► §10.3.3 JSON-RPC server cutover (V3.2; promotes pub(crate)→pub)
+    │
+    ├──► §10.4 V3.x enhancement axis  (governed by §2.7, §2.8, §3.4, §7)
+    │      §10.4.1 Adaptive-burn observation feeding (design hook on §10.1.2)
+    │      §10.4.2 FCMP++ progress trigger (evidence-gated)
+    │      §10.4.3 Bounded-mailbox triggers (depends on §10.1.2)
+    │      §10.4.4 Anonymity-network coordination
+    │
+    └──► §10.5 Phase 2b trait expansion axis  (governed by §1.5 criteria)
+           §10.5.1 StakeEngine design (validates §1.5 against an additive trait)
+
+─── (separator) ───
+
+§10.6 Scope-guard revisit-trigger entries  (target: remain rejected
+unless threshold met; closure is not the success state)
+    §10.6.1 8th-trait proposals beyond Phase 2b (governed by §1.5 + scope-guard meta-pattern)
+    §10.6.2 Trait-level observability re-litigation (revisits §3.5)
+    §10.6.3 Consensus-rule enforcement re-litigation (revisits §2.7 scope guard)
+```
+
+The visual separator below §10.5 is load-bearing: §10.6's
+entries follow a fundamentally different format and represent
+a different category of deferred work. The five version-gated
+axes (§10.1–§10.5) target *closure* — every entry is intended
+to complete and be removed from §10 when it ships. §10.6's
+three entries target *remaining rejected* — every entry's
+success state is "the rejection still holds; revisit not
+warranted." Conflating these two categories visually invites
+reviewers to read §10.6 as "things that will eventually
+happen, just at unknown times," which is the wrong reading.
+
+**Entry lifecycle.** Trigger-firing schedules the work for the
+appropriate stage; trigger-firing is *not* the same as
+work-completion. Each entry remains in §10 until the work
+ships, at which point it moves to `CHANGELOG.md` and is
+removed from §10. §10.6 entries do not have a ship event in
+the same sense; they remain in §10 as long as the rejection
+holds, and would only be removed if the revisit threshold is
+met and the rejected proposal is adopted.
+
+**Trigger discipline (external vs internal).** Each entry's
+trigger is annotated as either *external* (owned by a document
+or phase outside this spec — e.g., "Phase 2b design phase
+begins" is external) or *internal* (produced by this spec's
+own machinery — e.g., "§3.3 measurement gate produces
+out-of-threshold result" is internal). External triggers
+require periodic checking against the named owner's status;
+internal triggers fire when the spec's own work reaches the
+named milestone. The annotation makes the tracking story
+visible.
+
+**Format note.** Entries in §10.1–§10.5 use a **closure-targeted
+format**: Description / Trigger / Structural cross-reference /
+Dependencies, with an optional fifth *Design start vs ship
+distinction* block on entries where the design happens before
+the ship. Entries in §10.6 use a **revisit-threshold format**:
+Description / Original rejection / Revisit threshold (three
+named requirements). The format split is structural — different
+question, different answer shape — not stylistic. §10.6's
+sub-subsection introduction repeats this distinction inline so
+readers reaching §10.6 directly do not miss it.
+
+### 10.1 Stage transitions
+
+Three entries on the path from Stage 1's `Arc<RwLock<Engine>>`
+to Stage 4's per-actor mailbox cutover (Path B). Sequential
+dependencies: each entry depends on the prior.
+
+#### 10.1.1 Stage 1 → 2 transition mechanics (target: Stage 2)
+
+*Description.* The gradual move from outer-`RwLock` (Stage 1)
+to per-trait inner locking that prepares the surface for
+mailbox cutover (Stage 2). Stage 2 is an intermediate state
+where each implementing type owns its own internal locks at
+operational granularity — what the §2 sweep already pinned at
+the trait surface — but the outer `Arc<RwLock<Engine>>` is
+still in place. This intermediate state lets the migration to
+Stage 4 happen incrementally rather than as a flag-day cutover.
+
+*Trigger.* "Stage 1 ships and the §3.3 measurement gate's
+results are documented in `docs/PERFORMANCE_BASELINE.md`."
+(Internal — produced by §3.3 measurement gate completion.)
+
+*Structural cross-reference.* §3.3.1 Stage 1 outer-lock
+sequential consistency; §3.3.2 Stage 4 per-actor mailbox FIFO;
+the `RefreshHandle ships transitional Arc-RwLock-Engine under
+Path B` decision-log entry (2026-04-27).
+
+*Dependencies.* Stage 1 implementation lands and §10.2.1
+performance baseline measurements are documented (the
+measurement gate's results inform whether Stage 2 needs to
+defer specific lock reductions or can proceed broadly).
+
+#### 10.1.2 Stage 4 per-actor mailbox cutover (Path B) (target: Stage 4)
+
+*Description.* The cutover from outer-`RwLock` to per-actor
+`kameo` mailboxes with supervisor strategies. Stage 4
+activates the spawn graph (§2.8.3), the supervisor model
+(§5.1), the cancellation discipline at actor boundaries (§3.4),
+the lifecycle async-public surface (§2.8.3), and the
+per-method drop-cancellation classifications (§3.4.3, with
+Round 4b's per-method table). The trait surfaces are
+preserved verbatim per §7's invariants; the implementing
+types swap from `Local*` (interior-mutability over owned
+state) to `*Actor` (per-actor mailbox) at this boundary.
+
+*Trigger.* "Stage 1 → 2 transition mechanics complete and
+Stage 4 design document settles." (Internal — produced by
+§10.1.1 completion plus the explicit design-document
+settlement.)
+
+*Structural cross-reference.* §1.4 actor-shape discipline
+(the constraint that survives the cutover); §2.8 lifecycle
+(the spawn / landing / teardown graphs that activate);
+§3.3.2 Stage 4 mailbox semantics; §3.4 cancellation
+discipline; §5.1 supervisor strategy and `RuntimeFailure`;
+§7 trait surface stability invariants.
+
+*Dependencies.* §10.1.1 (Stage 2 prepares the per-trait
+locking surface that Stage 4 then swaps to mailboxes); the
+`shekyl-engine-core` codebase having a `kameo` integration
+that doesn't currently exist (separate implementation work).
+
+#### 10.1.3 Stage 4 behavioral-equivalence verification (target: Stage 4 cutover-time)
+
+*Description.* The Stage 4 cutover changes the
+implementation surface (mailboxes vs locks) but is constrained
+by §7 to preserve the trait surface verbatim. Verification
+that the cutover actually preserves observed behavior across
+§7's checkpoints (post-tip-fetch ownership, four-checkpoint
+cancellation discipline, idempotency conditions per §4) is
+not automatic — the implementations are different, and
+"identical behavior" must be demonstrated, not assumed.
+
+The verification methodology is open at Round 4a: candidate
+approaches include property-based testing with shared
+`Mock*` implementors driving both Stage 1 and Stage 4
+implementations through identical scenarios; differential
+testing where Stage 1 traces and Stage 4 traces are diffed
+under deterministic seeds; manual code-review
+correspondence per §3.2's call-site disposition table. The
+chosen methodology is part of the Stage 4 cutover PR's
+review discipline, not part of this spec.
+
+*Trigger.* "Stage 4 per-actor mailbox cutover begins." (Internal
+— produced by §10.1.2 starting; verification runs
+concurrently with cutover work.)
+
+*Structural cross-reference.* §7 invariants 1–4
+(trait-surface stability, post-tip-fetch checkpoint
+ownership, four-checkpoint cancellation discipline,
+checkpoint ownership split); §6 test boundary (the mock
+infrastructure that makes shared-driver testing possible);
+§3.2 call-site disposition table.
+
+*Dependencies.* §10.1.2 (the cutover whose behavior is being
+verified) plus a methodology choice (currently open; resolution
+required at Stage 4 design phase).
+
+### 10.2 Performance characterization
+
+Two entries split by stage. Stage 1's gate is V3.0 (binding
+before Stage 1 PRs land per §3.3); Stage 4's characterization
+is cutover-time and structurally distinct.
+
+#### 10.2.1 Stage 1 baseline measurement (target: V3.0 — gates Stage 1 PR review)
+
+*Description.* The §3.3 measurement gate operationalized:
+`criterion`-driven benchmarks of read-path overhead for the
+hot paths enumerated in §3.3 (`KeyEngine::account_public_address`,
+`LedgerEngine::balance`, `LedgerEngine::synced_height`,
+`EconomicsEngine::current_emission`,
+`EconomicsEngine::parameters_snapshot`), plus any additional
+hot paths reviewer judgment identifies during PR review.
+Results land in `docs/PERFORMANCE_BASELINE.md` (template
+stub from Round 4b) with methodology, baseline numbers,
+post-interior-lock numbers, and percentage delta per path.
+Reviewers cite the document during Stage 1 PR review;
+§3.3's threshold-of-concern (>10% requires PR-description
+justification; >25% requires optimization before merge)
+governs disposition.
+
+*Trigger.* "First Stage 1 implementation PR opens." (Internal
+— produced by Stage 1 implementation work beginning.)
+
+*Structural cross-reference.* §3.3 interior-mutability
+measurement gate (the three pinned components: measurement,
+documentation, threshold); §2 sweep (the interior-mutability
+choices being measured).
+
+*Dependencies.* `docs/PERFORMANCE_BASELINE.md` template stub
+(Round 4b); a `criterion` benchmark harness in the
+`shekyl-engine-core` test directory (separate
+implementation work).
+
+#### 10.2.2 Stage 4 cost characterization (target: Stage 4 cutover-time)
+
+*Description.* The Stage 4 cutover introduces costs
+the §3.3 Stage 1 gate does not measure: per-actor mailbox
+message-passing overhead, supervisor restart cost on
+`RuntimeFailure`, mailbox depth under burst load, and the
+Path B cost-savings (the redundant interior locks of §3.3
+disappear). Characterization at cutover lets the release
+decision weigh "did we save what we expected; did we
+introduce costs we didn't expect." Comparison baseline is
+Stage 1's `PERFORMANCE_BASELINE.md` numbers.
+
+*Trigger.* "Stage 4 per-actor mailbox cutover reaches
+implementation-stable state." (Internal — produced by
+§10.1.2 reaching review-ready state.)
+
+*Structural cross-reference.* §3.3 (the Stage 1 baseline this
+characterization compares against); §3.3.2 Stage 4 mailbox
+semantics (the costs being characterized); §5.1 supervisor
+strategy (restart costs).
+
+*Dependencies.* §10.1.2 implementation reaching stable state;
+§10.2.1 baseline numbers in hand for comparison.
+
+### 10.3 V3.1 / V3.2 expansion
+
+Three entries in version-sequential order. V3.1's multisig
+adds structural complexity to two traits; V3.1+ multi-engine
+server changes the assumed engine-per-process model; V3.2's
+JSON-RPC cutover promotes the trait visibility per §2
+preamble. Sequential dependencies: each entry depends on the
+prior settling.
+
+#### 10.3.1 Multisig support (target: V3.1)
+
+*Description.* Stage 1's surface assumes single-signer flows.
+Multisig adds round-trip signature aggregation, partial-sign
+protocols, and threshold-handshake state that materially
+extends `KeyEngine` (multi-party signing primitives) and
+`PendingTxEngine` (partial-signature collection, multi-round
+build phases). The multisig design phase produces a separate
+design document; the trait surface implications land here as
+additive methods that respect §2.7's consumer-driven
+justification rule and the §1.5 trait-identity criteria
+(specifically: multisig may justify a `MultisigEngine` as
+the 8th trait if it clears §1.5; or it may live as method
+extensions on `KeyEngine` and `PendingTxEngine` if it
+doesn't).
+
+*Trigger.* "V3.1 multisig design phase begins." (External —
+owned by V3.1 release planning; tracked against project plan.)
+
+*Structural cross-reference.* §2.1 `KeyEngine`; §2.6
+`PendingTxEngine`; §1.5 trait-identity criteria (for
+evaluating whether multisig is its own trait); §2.7's
+consumer-driven justification rule (for any new methods).
+
+*Dependencies.* V3.0 ship (Stage 1 lifecycle firm); V3.1
+multisig economic / consensus design (separate document; not
+in this spec).
+
+#### 10.3.2 Multi-engine server (target: V3.1+)
+
+*Description.* `Engine<S>` currently assumes one wallet per
+engine instance (one process embeds one engine; one engine
+serves one wallet). Server use cases (custodial wallets,
+multi-tenant hosted wallets) want N engines per process. The
+question whether N engines share actors (e.g., one
+`DaemonActor` serving all engines' RPC needs) or each engine
+is fully isolated is open; the choice affects supervisor
+strategy at Stage 4 (per-engine vs shared-actor failure
+domains) and the §5.1 `RuntimeFailure` enumeration's `actor`
+field (which actor failed: engine A's, engine B's, or the
+shared one?).
+
+*Trigger.* "V3.1+ multi-engine-server design phase begins."
+(External — owned by V3.1+ release planning; depends on
+multisig settling first because multi-engine adds isolation
+concerns on top of the multisig surface.)
+
+*Structural cross-reference.* §3 composition (`Engine<S>`'s
+type-parameter ordering and Stage 4 transition); §2.8
+lifecycle (the spawn graph activates per-engine or
+per-shared-actor); §5.1 supervisor strategy (the failure
+isolation question).
+
+*Dependencies.* §10.3.1 multisig (the multi-engine isolation
+concerns are materially affected by whether each engine has
+multisig state); V3.0 ship.
+
+#### 10.3.3 JSON-RPC server cutover (target: V3.2)
+
+*Description.* The `wallet_rpc_server` Rust migration per
+`docs/FOLLOWUPS.md` V3.2 target. At cutover, the seven
+traits promote from `pub(crate)` (per §2 preamble Item 13)
+to `pub`; the trait surface becomes part of the public API.
+Promotion is additive and does not require trait-surface
+changes — only visibility relaxation — but it changes the
+test-boundary discipline (per §6, integration tests against
+`Mock*` implementors no longer need to live in-crate).
+
+*Trigger.* "V3.2 `wallet_rpc_server` Rust migration phase
+begins." (External — owned by V3.2 release planning per
+`docs/FOLLOWUPS.md`.)
+
+*Structural cross-reference.* §2 preamble visibility pin
+(Round 4a Item 13); §6 test boundary; `docs/FOLLOWUPS.md`
+V3.2 entry.
+
+*Dependencies.* §10.3.1 multisig and §10.3.2 multi-engine
+server (both feed into the public API surface); V3.0 ship.
+
+### 10.4 V3.x enhancements
+
+Four entries that ship at V3.x but vary in design-start
+timing. Entries with Stage 4 design hooks carry the optional
+fifth block (*Design start vs ship distinction*).
+
+#### 10.4.1 Adaptive-burn observation feeding (target: V3.x; design hook: Stage 4)
+
+*Description.* Component 3's adaptive burn requires
+`EconomicsEngine` to observe network activity (transaction
+throughput, fee distribution, congestion metrics). The
+"who feeds the observation" question — `LedgerActor`
+publishing block-event subscriptions that the
+`EconomicsActor` consumes; an explicit
+`EconomicsEngine::observe_block(block)` method on the trait
+surface; a background subscription managed by `Engine<S>`
+orchestration — is open at V3.0. The `EconomicsEngine`
+trait surface is preserved verbatim per §7's invariants
+regardless of the resolution.
+
+*Trigger.* "Component 3 adaptive-burn design phase begins."
+(External — owned by Component 3 economic-design phase
+planning.)
+
+*Design start vs ship distinction.* The *ship* is V3.x. The
+*design hook* is Stage 4 cutover: any "background
+subscription from `LedgerActor` to `EconomicsActor`"
+mechanic requires Stage 4's per-actor mailbox framework to
+be operational, and the inter-actor message-passing surface
+for that subscription is a Stage 4 design-time decision.
+Deferring the design entirely to V3.x risks the Stage 4
+cutover landing without the message-passing surface in
+place.
+
+*Structural cross-reference.* §2.7 `EconomicsEngine`
+ownership block and adaptive-burn note; §7 trait surface
+stability invariants; §1.5 consumer-driven justification rule
+(applies to any new method on `EconomicsEngine`); §2.7
+scope guard (consensus-as-truth: activity input is observed
+from chain state, not from a wallet-side oracle);
+[`DESIGN_CONCEPTS.md`](DESIGN_CONCEPTS.md) Component 3
+specification.
+
+*Dependencies.* §10.1.2 Stage 4 per-actor mailbox cutover
+(for the design hook); §2.7's consensus-as-truth pin and
+`EconomicsEngine` scope guard governing the design space;
+the Component 3 economic specification in
+`DESIGN_CONCEPTS.md`.
+
+#### 10.4.2 FCMP++ progress trigger (target: V3.x — evidence-gated)
+
+*Description.* If `KeyEngine::sign_with_spend`'s FCMP++
+proof generation becomes user-perceptible at V3.x (current
+target sub-second per single-output proof, revisable on
+benchmark data), `KeyEngine` grows an in-band progress
+channel per the §2.3 `RefreshEngine::produce_scan_result`
+pattern (cancellation token plus progress reporter as
+explicit method parameters). The progress channel preserves
+the §1.4 actor-shape discipline because progress reporting
+is an explicit method parameter, not an implicit
+trait-surface observability hook (per §3.5's
+observability-via-tracing rejection).
+
+*Trigger.* "FCMP++ proof-time benchmark data shows
+sign-time exceeds [user-perceptibility threshold]."
+(Internal — produced by FCMP++ benchmark suite, which is
+itself separate Round 4b / V3.x work.) The threshold is
+operationally "noticeable to a UI user," typically
+~200ms on interactive paths; the spec does not pin the
+exact number because perception is workload-dependent.
+
+*Structural cross-reference.* §2.1 `KeyEngine`; §2.3
+`RefreshEngine::produce_scan_result` (the existing pattern
+to follow); §1.4 actor-shape discipline; §3.5
+observability-via-tracing rejection (the discipline that
+forces in-band progress channels rather than trait-level
+observability hooks).
+
+*Dependencies.* FCMP++ proof-time benchmark suite (separate
+implementation work); evidence that single-output proof
+time exceeds the user-perceptibility threshold.
+
+#### 10.4.3 Bounded-mailbox triggers (target: V3.x — evidence-gated)
+
+*Description.* Stage 4 V3.0 ships with unbounded mailboxes
+(per Round 3 disposition). Bounded mailboxes are revisited
+if backpressure surfaces in production load: pathological
+producer-consumer asymmetry where one trait's mailbox grows
+unboundedly relative to consumption rate; OOM under burst
+load attributable to mailbox backlog; message-queue stat
+anomalies in observability traces. Bounded mailbox design
+introduces backpressure semantics (caller blocks or fails on
+full mailbox) that materially affect §3.4's cancellation
+discipline and §5.1's supervisor strategy.
+
+*Trigger.* "Production observation shows mailbox backlog
+exceeds named threshold." (Internal — produced by §10.2.2
+Stage 4 cost characterization or by post-Stage-4 production
+operation.) The threshold is open; candidate metrics
+include peak mailbox depth as fraction of available memory,
+sustained mailbox depth above queue-stat anomaly thresholds,
+or specific OOM events traceable to mailbox backlog.
+
+*Structural cross-reference.* §3.3.2 Stage 4 mailbox FIFO
+(the surface bounded mailboxes modify); §3.4 cancellation
+discipline (bounded mailboxes change drop semantics); §5.1
+supervisor strategy (bounded mailboxes change drain
+semantics).
+
+*Dependencies.* §10.1.2 Stage 4 per-actor mailbox cutover
+(must ship first to produce backpressure observations);
+§10.2.2 Stage 4 cost characterization (provides the
+observation infrastructure that surfaces backpressure
+evidence).
+
+#### 10.4.4 Anonymity-network coordination (target: V3.x)
+
+*Description.* Onion-routing / mixnet integration for
+transaction submission and refresh queries. The integration
+lives at a layer above `DaemonEngine` (a transport layer that
+wraps daemon RPC calls in onion routing or mixnet
+messaging), not on `EconomicsEngine`. The trait spec
+assumes Stage 1's existing transport pattern (direct daemon
+RPC via `DaemonClient`); V3.x design adds the
+anonymity-coordination shape, potentially as an 8th trait
+(`AnonymityNetworkEngine` or similar) if it clears §1.5's
+trait-identity criteria, or as an interception layer
+between `Engine<S>` and `DaemonEngine` if it doesn't.
+
+*Trigger.* "V3.x archival design phase mandates
+anonymization for archive queries." (External — owned by
+V3.x archival design; the archival-anonymization
+requirement is what brings this work into scope.)
+
+*Design start vs ship distinction.* The *ship* is V3.x. The
+*design start* is when V3.x archival design begins, which
+is itself V3.x but earlier than feature-complete V3.x.
+Specific timing depends on V3.x archival design phase
+planning.
+
+*Structural cross-reference.* §2.5 `DaemonEngine` (the
+trait being wrapped or extended); §1.5 trait-identity
+criteria (for evaluating whether `AnonymityNetworkEngine`
+is its own trait); §2.7's consensus-as-truth pin (the
+anonymity layer must not change consensus-derived values).
+
+*Dependencies.* V3.x archival design (separate design
+document); V3.0 ship; possibly §10.3.2 multi-engine server
+(depending on whether anonymity is per-engine or
+shared-transport).
+
+### 10.5 Phase 2b trait expansion
+
+One entry currently. Phase 2b is the structurally distinct
+phase that expands the seven traits to eight (or more) via
+the §1.5 criteria. Expansions in subsequent phases would land
+here as additional entries.
+
+#### 10.5.1 StakeEngine design (target: Phase 2b)
+
+*Description.* `StakeEngine` is the canonical
+candidate for Phase 2b's additive trait — it owns per-stake
+records, the stake FSM state, and the principal-pool
+aggregation state at Stage 4; it consumes `EconomicsEngine`
+via the canonical-derivation surface (§2.7); it has explicit
+cross-cutting consumers (`Engine<S>` for stake-aware
+operations, future `ArchivalEngine` for sibling-actor
+queries via `is_active_staker(entity_id)`, external
+observers via JSON-RPC). The Phase 2b design phase produces
+a separate design document; the trait surface implications
+land here as the validation that §1.5's criteria correctly
+predict the design's trait-existence justification.
+
+*Trigger.* "Phase 2b design phase begins." (External — owned
+by Phase 2b release planning.)
+
+*Structural cross-reference.* §1.5 trait-identity criteria
+(the framework Phase 2b validates against); §2.7
+`EconomicsEngine` (the trait `StakeEngine` consumes); §2.7
+scope guard (the consensus-as-truth principle constrains
+`StakeEngine`'s wallet-side enforcement scope); the Phase 2b
+design document (separate).
+
+*Dependencies.* V3.0 ship; §1.5 criteria settled (Round 4a);
+[`DESIGN_CONCEPTS.md`](DESIGN_CONCEPTS.md) and
+[`STAKER_REWARD_DISBURSEMENT.md`](STAKER_REWARD_DISBURSEMENT.md)
+specifying the staking economics that `StakeEngine`
+implements.
+
+---
+
+### 10.6 Scope-guard revisit-trigger entries
+
+These three entries follow a **revisit-threshold format**
+rather than the closure-targeted format used in §10.1–§10.5.
+Their target is to *remain rejected* unless the threshold is
+met; closure is not the success state. A scope guard that's
+never revisited is a scope guard that worked.
+
+The threshold for revisiting any scope guard requires all
+three of:
+
+1. **Concrete demonstration that one of the original
+   rejection's load-bearing premises no longer holds.**
+   Premise abstractions ("what if X changes?") do not
+   qualify; specific demonstrations against named premises do.
+2. **Named alternative not considered in the original
+   rejection.** Re-proposing the same alternative the
+   rejection already considered is conjectural; surfacing
+   an alternative the rejection did not consider is
+   substantive.
+3. **At least one specific use case the current design
+   fails to serve.** The use case must be concrete and
+   documentable; "users might want X" without an instance
+   does not qualify.
+
+Revisit absent any one of these is rejected as conjectural
+and the scope guard stands.
+
+#### 10.6.1 Eighth-trait proposals beyond Phase 2b (target: remain rejected unless threshold met)
+
+*Description.* The §1.5 criteria for trait identity govern
+trait-existence proposals. Once Phase 2b's `StakeEngine`
+lands as the eighth trait (per §10.5.1), subsequent
+trait-existence proposals (a hypothetical
+`ArchivalEngine` at V3.x; a `MultisigEngine`,
+`AnonymityNetworkEngine`, or other) must clear §1.5's three
+clauses. This entry exists to remember that the rejection
+of *speculative* trait additions is a recurring discipline,
+not a one-time decision.
+
+*Original rejection.* §1.5 trait-identity criteria; §2.7
+consumer-driven justification rule.
+
+*Revisit threshold.* (1) Concrete demonstration that the
+proposed trait owns Stage 4 actor state distinct from any
+existing trait, has independent failure-isolation domain,
+and either has named cross-cutting consumers or has an
+explicit lifecycle that bundling into a consumer would
+conflate; (2) named alternative not considered (e.g., "this
+work belongs as method extensions on existing traits X and
+Y" is the typical alternative to consider); (3) at least
+one specific operational scenario the current
+seven-or-eight-trait design fails to serve. Revisit absent
+any one of these is rejected as conjectural.
+
+#### 10.6.2 Trait-level observability re-litigation (target: remain rejected unless threshold met)
+
+*Description.* §3.5 rejects trait-level observability hooks
+in favor of `tracing`-at-call-sites. The rejection's
+load-bearing premises are: (a) the wallet's observability of
+its own state is already adequate via existing read methods;
+(b) trait-level observability invites scope drift the §1.4
+actor-shape discipline cannot easily evaluate. This entry
+exists to remember that the rejection has named premises
+that future contributors may attempt to revisit.
+
+*Original rejection.* §3.5 observability-via-tracing
+rejection; §1.5 scope-guard meta-pattern enumeration.
+
+*Revisit threshold.* (1) Concrete demonstration that one of
+§3.5's premises no longer holds — e.g., a specific class of
+operation that genuinely cannot be served by tracing at
+call sites and that requires trait-level introspection;
+(2) named alternative not considered in §3.5 (the §3.5
+rejection considered tracing spans, in-band progress
+channels per §2.3, and chain-RPC for network-wide
+observability — alternatives outside this set may be
+substantive); (3) at least one specific use case the
+tracing-at-call-sites pattern fails to serve, with the
+failure mode named operationally rather than abstractly.
+Revisit absent any one of these is rejected as conjectural.
+
+#### 10.6.3 Consensus-rule enforcement re-litigation (target: remain rejected unless threshold met)
+
+*Description.* §2.7's consensus-as-truth scope guard rejects
+wallet-side enforcement of consensus rules (e.g., "stakers
+must archive," activation thresholds, slashing conditions).
+The rejection's load-bearing premises are:
+(a) cryptocurrency-correctness — wallet-side enforcement is
+meaningless because alternative wallets won't enforce it
+and the chain accepts whatever consensus accepts;
+(b) scope-discipline — `EconomicsEngine`'s charter is
+canonical derivation, not orchestration;
+(c) bug-class prevention — wallet-side enforcement creates
+an attack surface that the chain layer is designed to
+absorb. This entry exists to remember that the rejection
+has named premises that future contributors may attempt to
+revisit (the orchestrator-framing pattern recurred twice
+during Round 3 and Round 4a; future iterations are
+expected).
+
+*Original rejection.* §2.7 consensus-as-truth pin (Round 4a
+Item 3); §2.7 `EconomicsEngine` scope guard (Round 4a
+Item 19); §1.5 scope-guard meta-pattern enumeration.
+
+*Revisit threshold.* (1) Concrete demonstration that one of
+§2.7's three premises no longer holds — e.g., a consensus
+mechanism where wallet-side enforcement is genuinely
+meaningful (such mechanisms are vanishingly rare in
+cryptocurrency design); (2) named alternative not
+considered in §2.7 (the §2.7 rejection considered
+chain-side enforcement, economic incentivization, and
+hybrid mechanisms — alternatives outside this set may be
+substantive); (3) at least one specific use case the
+consensus-as-truth model fails to serve, with the failure
+mode named at consensus-protocol level rather than at
+client-convenience level. Revisit absent any one of these
+is rejected as conjectural.
 
 ---
 
