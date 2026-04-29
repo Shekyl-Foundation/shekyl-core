@@ -122,6 +122,20 @@ must preserve.
 
 ### 1.2 Out of charter (deferred to later stages)
 
+**Seven traits is the V3.0 trait surface; subsequent expansion is
+additive (Round 4b — Item 4).** The Stage 1 surface stabilizes at
+exactly seven traits (`KeyEngine`, `LedgerEngine`, `RefreshEngine`,
+`PendingTxEngine`, `DaemonEngine`, `PersistenceEngine`,
+`EconomicsEngine`). Phase 2b's `StakeEngine` (per §10.5.1) and
+V3.x's `ArchivalEngine` (and any anonymity-network-coordination
+trait per §10.4.4) are *additive* — they extend the trait set
+without restructuring the seven traits or their surfaces. Any
+proposed change to the seven traits' shape (rather than additions
+alongside them) is structural revision and re-opens this spec for
+a new round per §7's invariants. The §1.5 trait-identity criteria
+govern additive proposals; the §7 invariants govern structural
+preservation. The two are complementary disciplines.
+
 | Concern | Lands in |
 |---|---|
 | `kameo` dependency in `Cargo.toml` | Stage 2 (`KeyEngine` migration) |
@@ -350,6 +364,33 @@ gate: trait proposals that don't own distinct Stage 4 actor
 state are not traits, regardless of how cohesive the
 "subsystem" feels conceptually.
 
+A positive example demonstrates the criteria validating an
+additive proposal:
+
+- **`StakeEngine`** (Phase 2b additive trait per §10.5.1).
+  Clears (1) — owns per-stake records, the stake FSM state,
+  and the principal-pool aggregation state at Stage 4; this
+  state is distinct from `LedgerEngine`'s ledger state and
+  from `EconomicsEngine`'s parameter-derivation state.
+  Clears (2) — independent failure-isolation domain. A stake
+  actor crash is recoverable by re-hydrating from chain
+  state (the principal pool is consensus-derived; per-stake
+  records reconstruct from chain history); a permanent
+  stake failure surfaces `RuntimeFailure` to claim/unstake
+  callers without taking down `LedgerEngine` or
+  `EconomicsEngine`. Clears (3a) — cross-cutting concern
+  with named consumers: `Engine<S>` for stake-aware
+  operations (registering a stake, claiming yield),
+  V3.x's `ArchivalEngine` for sibling-actor queries via
+  `is_active_staker(entity_id)`, and external observers via
+  JSON-RPC at V3.2+. Trait status validated; Phase 2b
+  design proceeds against the §1.5 framework.
+
+The positive example confirms the criteria don't only reject
+inappropriate proposals — they also validate appropriate
+ones, providing a structural framework for Phase 2b's
+design phase to operate against.
+
 **Scope-guard meta-pattern.** The spec uses *scope guards* —
 explicit "no, here's why" rejections with named reasoning — to
 prevent recurring pull-outside-scope patterns:
@@ -377,6 +418,47 @@ either updates the guard with new rationale or rejects the
 proposal. The same discipline applies to (1)/(2)/(3) above:
 proposals that fail any clause are rejected as "not a trait,"
 not folded into the existing trait set without examination.
+
+### 1.6 Documentation discipline (Round 4b — Item 6)
+
+§1.4 governs method *shape*; §1.5 governs trait *existence*;
+§1.6 governs method *documentation*. Three rustdoc disciplines
+apply to every trait method in §2:
+
+1. **Panic conditions are documented.** Any trait method that
+   *can* panic — including via debug assertion, via integer
+   overflow under `debug_assertions`, via `expect`/`unwrap` on
+   internal invariants, or via explicit `panic!` — must
+   document the panic condition in a `# Panics` rustdoc
+   section. Methods that cannot panic under any input
+   (genuinely panic-free) say so in a brief "Never panics"
+   note where the absence of a `# Panics` section would
+   otherwise be ambiguous. Stage 4 actor-backed
+   implementations carry the same discipline: an actor's
+   message handler that panics surfaces as
+   `RuntimeFailure { reason: ActorCrashReason::Panic, … }`
+   per §5.1, and the *trait method's* rustdoc must name the
+   panic condition that produces this `RuntimeFailure`.
+2. **Cancellation behavior is documented.** Per §3.4.3, every
+   async trait method belongs to one of three cancellation
+   classes (a / b / c). The method's rustdoc names its class
+   explicitly. Round 4b's per-method classification (Item 1)
+   in §4's async-story table is the canonical mapping;
+   rustdoc text references the table rather than re-stating
+   the classification per method.
+3. **Idempotency is documented.** Per §4's idempotency
+   column, methods marked "yes," "conditionally," or "no"
+   carry the explanation as a one-line rustdoc note. The
+   "conditionally" case names the explicit condition (e.g.,
+   "idempotent given the same `ScanResult` against the same
+   starting `synced_height`").
+
+The disciplines are documentation-as-contract: a method's
+rustdoc names what callers can rely on. Stage 4 cutover does
+not change rustdoc — the documented contract persists across
+the implementation swap. Round 4b's mechanical fill-in
+applies these disciplines per-method as the per-method
+classifications land in §4 (Item 1).
 
 ---
 
@@ -2418,45 +2500,77 @@ does not extend into either layer. See §1.5's scope-guard
 meta-pattern for the broader discipline this rejection
 participates in.
 
+**Long-running operations (Round 4b — Item 8 carry-forward).**
+The natural counter-question to this rejection is: what about
+operations that genuinely take long enough to need progress
+reporting? The canonical V3.x case is `KeyEngine::sign_with_spend`
+if FCMP++ proof generation becomes user-perceptible at scale (the
+target sub-second per single-output proof is revisable on
+benchmark data per §10.4.2). The answer is: **long-running trait
+operations use in-band progress channels per the §2.3
+`RefreshEngine::produce_scan_result` pattern, not trait-level
+observability hooks.** Progress reporting becomes an explicit
+method parameter (a `mpsc::Sender<Progress>` or equivalent
+channel) alongside the existing `CancellationToken` parameter;
+the channel sends progress updates that the caller drains and
+exposes to the UI. This pattern preserves the §1.4 actor-shape
+discipline because progress reporting is an explicit value
+flowing through the method signature, not an implicit hook on
+the trait surface. §3.4.4's long-running-operation cancellation
+pattern (Round 4b — Item 16; forthcoming in Round 4b Phase 2,
+see PR #20 description for round structure) covers the
+cancellation half of the same shape; the two together specify
+how a long-running trait method is structured.
+
 ---
 
 ## 4. Async story
 
 The table below replaces the Round 1/2 sync-vs-async split with a
 fuller per-method view. Round 3 adds the **Idempotency** column;
-Round 4 adds a *Cancel class* column (a / b / c per §3.4.3) once
-the per-method classifications are filled in.
+Round 4b adds the **Cancel class** column (a / b / c per
+§3.4.3). Sync methods do not carry a cancel class because they
+cannot be cancelled mid-call — they're listed as `n/a`.
 
-| Trait | Method | Async/Sync | Idempotent? |
-|---|---|---|---|
-| `KeyEngine` | `account_public_address` | sync | yes (read-only) |
-| `KeyEngine` | `derive_subaddress_public` | sync | yes (deterministic; pure derivation) |
-| `KeyEngine` | `sign_with_spend` | async | no (RNG-driven; each call yields a fresh signature) |
-| `KeyEngine` | `view_ecdh` | async | yes (deterministic ECDH; same `tx_pub_key` → same shared secret) |
-| `KeyEngine` | `ml_kem_decapsulate` | async | yes (deterministic decap; same encapsulation → same shared secret) |
-| `LedgerEngine` | `synced_height` | sync | yes (read-only) |
-| `LedgerEngine` | `snapshot` | sync | yes (read-only; returns owned snapshot) |
-| `LedgerEngine` | `balance` | sync | yes (read-only) |
-| `LedgerEngine` | `transfers` | sync | yes (read-only) |
-| `LedgerEngine` | `apply_scan_result` | async | **conditionally** — idempotent given the same `ScanResult` against the same starting `synced_height`; if the height has advanced (because a concurrent merge landed), the second apply returns `RefreshError::ConcurrentMutation` deterministically. Never produces a double-applied state. |
-| `RefreshEngine` | `produce_scan_result` | async | no (each call observes the daemon's current tip; tip advances over time) |
-| `PendingTxEngine` | `build` | async | no (each build picks fresh decoys; reservation IDs are monotonic) |
-| `PendingTxEngine` | `submit` | async | **conditionally** — daemon dedupes by tx hash; calling `submit` twice on the same `ReservationId` produces one mempool submission |
-| `PendingTxEngine` | `discard` | async | yes (discarding an already-discarded reservation is a no-op error variant the caller can treat as success) |
-| `PendingTxEngine` | `outstanding` | sync | yes (read-only) |
-| `DaemonEngine` | `get_fee_estimates` | async | yes (read-only; fee state is a snapshot at call time) |
-| `DaemonEngine` | `submit_transaction` | async | **conditionally** — daemon dedupes by tx hash (same tx bytes → same submission outcome) |
-| `DaemonEngine` | `Rpc` supertrait methods | async | per-method (inherits `Rpc`'s spec) |
-| `PersistenceEngine` | `base_path` | sync | yes (read-only; returns immutable cached path) |
-| `PersistenceEngine` | `network` | sync | yes (read-only) |
-| `PersistenceEngine` | `capability` | sync | yes (read-only) |
-| `PersistenceEngine` | `save_state` | async | yes (last-write-wins; saving the same state twice yields the same final on-disk bytes) |
-| `PersistenceEngine` | `save_prefs` | async | yes (last-write-wins) |
-| `PersistenceEngine` | `rotate_password` | async | no (state changes per call; old credentials are no longer valid after a successful rotation) |
-| `EconomicsEngine` | `current_emission` | sync | yes (read-only; deterministic given height at V3.0; deterministic given height plus observed-activity state at V3.x — observable via `parameters_snapshot`) |
-| `EconomicsEngine` | `burn_fraction` | sync | yes (read-only; deterministic given inputs at V3.0; deterministic given inputs plus state at V3.x) |
-| `EconomicsEngine` | `pool_weighted_total` | sync | yes (read-only; canonical derivation from current pool state) |
-| `EconomicsEngine` | `parameters_snapshot` | sync | yes (read-only; returns owned snapshot) |
+Cancel classes (§3.4.3 recap): **a** = side-effect-free (drop is
+cancel-equivalent at all stages); **b** = side-effect-eventual
+(drop at Stage 1 is cancel-equivalent because the work happens
+in the caller's task; drop at Stage 4 is *observation-only*
+because the actor's mailbox already received the message and
+the handler may complete asynchronously); **c** = explicitly
+token-cancellable via `CancellationToken` parameter (drop is
+not the cancellation surface; the token is).
+
+| Trait | Method | Async/Sync | Idempotent? | Cancel class |
+|---|---|---|---|---|
+| `KeyEngine` | `account_public_address` | sync | yes (read-only) | n/a |
+| `KeyEngine` | `derive_subaddress_public` | sync | yes (deterministic; pure derivation) | n/a |
+| `KeyEngine` | `sign_with_spend` | async | no (RNG-driven; each call yields a fresh signature) | **a** (no observable side effect outside the returned signature; signing-then-not-using is invisible to others) |
+| `KeyEngine` | `view_ecdh` | async | yes (deterministic ECDH; same `tx_pub_key` → same shared secret) | **a** |
+| `KeyEngine` | `ml_kem_decapsulate` | async | yes (deterministic decap; same encapsulation → same shared secret) | **a** |
+| `LedgerEngine` | `synced_height` | sync | yes (read-only) | n/a |
+| `LedgerEngine` | `snapshot` | sync | yes (read-only; returns owned snapshot) | n/a |
+| `LedgerEngine` | `balance` | sync | yes (read-only) | n/a |
+| `LedgerEngine` | `transfers` | sync | yes (read-only) | n/a |
+| `LedgerEngine` | `apply_scan_result` | async | **conditionally** — idempotent given the same `ScanResult` against the same starting `synced_height`; if the height has advanced (because a concurrent merge landed), the second apply returns `RefreshError::ConcurrentMutation` deterministically. Never produces a double-applied state. | **b** (mutates ledger state; Stage 4 drop after enqueue is observation-only — the merge may complete asynchronously) |
+| `RefreshEngine` | `produce_scan_result` | async | no (each call observes the daemon's current tip; tip advances over time) | **c** (explicit `CancellationToken` parameter; four-checkpoint cancellation per §7) |
+| `PendingTxEngine` | `build` | async | no (each build picks fresh decoys; reservation IDs are monotonic) | **b** (allocates a reservation and mutates the reservation tracker; Stage 4 drop after enqueue is observation-only) |
+| `PendingTxEngine` | `submit` | async | **conditionally** — daemon dedupes by tx hash; calling `submit` twice on the same `ReservationId` produces one mempool submission | **b** (network side effect via `DaemonEngine`; Stage 4 drop after enqueue is observation-only) |
+| `PendingTxEngine` | `discard` | async | yes (discarding an already-discarded reservation is a no-op error variant the caller can treat as success) | **b** (mutates reservation tracker) |
+| `PendingTxEngine` | `outstanding` | sync | yes (read-only) | n/a |
+| `DaemonEngine` | `get_fee_estimates` | async | yes (read-only; fee state is a snapshot at call time) | **a** (network read; no wallet-side side effect) |
+| `DaemonEngine` | `submit_transaction` | async | **conditionally** — daemon dedupes by tx hash (same tx bytes → same submission outcome) | **b** (network side effect; daemon may receive and act on the transaction even if the wallet drops the await) |
+| `DaemonEngine` | `Rpc` supertrait methods | async | per-method (inherits `Rpc`'s spec) | per-method (read-only RPCs are class **a**; mutating RPCs are class **b**) |
+| `PersistenceEngine` | `base_path` | sync | yes (read-only; returns immutable cached path) | n/a |
+| `PersistenceEngine` | `network` | sync | yes (read-only) | n/a |
+| `PersistenceEngine` | `capability` | sync | yes (read-only) | n/a |
+| `PersistenceEngine` | `save_state` | async | yes (last-write-wins; saving the same state twice yields the same final on-disk bytes) | **b** (writes file; Stage 4 drop after enqueue is observation-only) |
+| `PersistenceEngine` | `save_prefs` | async | yes (last-write-wins) | **b** |
+| `PersistenceEngine` | `rotate_password` | async | no (state changes per call; old credentials are no longer valid after a successful rotation) | **b** (writes file; Stage 4 drop is observation-only — rotation may complete after caller drops) |
+| `EconomicsEngine` | `current_emission` | sync | yes (read-only; deterministic given height at V3.0; deterministic given height plus observed-activity state at V3.x — observable via `parameters_snapshot`) | n/a |
+| `EconomicsEngine` | `burn_fraction` | sync | yes (read-only; deterministic given inputs at V3.0; deterministic given inputs plus state at V3.x) | n/a |
+| `EconomicsEngine` | `pool_weighted_total` | sync | yes (read-only; canonical derivation from current pool state) | n/a |
+| `EconomicsEngine` | `parameters_snapshot` | sync | yes (read-only; returns owned snapshot) | n/a |
 
 The "**conditionally**" entries name the explicit condition for
 Stage 4 retry safety. Per §5.1's supervisor strategy
@@ -2533,6 +2647,27 @@ assertion converts the deadlock into a clear panic at the right
 call site with negligible runtime cost. Production builds skip
 the assertion; debug builds catch the misconfiguration before the
 hang.
+
+**`#[tokio::test]` test-attribute selection (Round 4b — Item 5).**
+Tests that exercise `Engine::refresh` (or any sync surface that
+reaches `Handle::block_on` against an async trait method) must
+use `#[tokio::test(flavor = "multi_thread")]` rather than the
+default `#[tokio::test]`. The bare `#[tokio::test]` attribute
+creates a `RuntimeFlavor::CurrentThread` runtime by default,
+which trips the same deadlock the production rustdoc warns
+about: the test thread blocks on `Handle::block_on`, the
+single-threaded runtime cannot make progress, and the test
+hangs (often manifesting as a CI timeout rather than a clear
+failure). The `flavor = "multi_thread"` argument creates a
+multi-thread runtime with the default worker count, which
+matches the production runtime requirement. Tests that
+exclusively exercise async surfaces (no sync `Engine::refresh`
+or analog) may use the default `#[tokio::test]` because
+no `Handle::block_on` is invoked. The §6 test-boundary section
+inherits this requirement: `MockDaemon`-driven `start_refresh`
+integration tests are async-throughout and use the default
+attribute; tests that drive sync `Engine::refresh` against
+mocks use the multi-thread flavor explicitly.
 
 ---
 
@@ -2853,6 +2988,25 @@ ceremony, which today add ~50–200 ms per test.
   test scenarios (Phase 2b `StakeEngine` precursor tests, V3.x
   `ArchivalEngine` precursor tests) from `shekyl-economics`
   constant changes.
+- **`Mock*` types implement the trait *contract*, not just the
+  syntactic surface (Round 4b — Item 3).** Each `Mock*` honors
+  the semantic guarantees the trait promises: `MockLedger::apply_scan_result`
+  produces the conditional idempotency per §4 (same `ScanResult`
+  against same starting `synced_height` → same outcome; advanced
+  height → `RefreshError::ConcurrentMutation`); `MockDaemon::submit_transaction`
+  produces the daemon's tx-hash dedup behavior so retry-safety
+  semantics match production; `MockKey::sign_with_spend` consumes
+  RNG bytes from its seeded `ChaCha20Rng` so signature shapes are
+  deterministic given the same inputs but distinct across calls.
+  Tests that assume a `Mock*` returns arbitrary plausible values
+  fail to test the production code's behavior — they test the
+  test harness's behavior. The contract-fidelity discipline
+  applies to error variants, idempotency conditions,
+  cancellation classes, and any state observable through the
+  trait surface; it does not apply to performance characteristics
+  (mocks are intentionally faster than production
+  implementations) or to internal state representations
+  (mocks may hold simpler internal data than production types).
 
 ### 6.2 Deterministic RNG injection (Round 2 — pinned)
 
@@ -2978,6 +3132,48 @@ off-the-critical-path and can interleave wherever convenient.
 each other once their prerequisites are met, but there is no
 dependency justifying parallel-with-each-other landing of any
 other pair.
+
+### 8.2 Stage-1-amendment co-landing rule (Round 4b — Item 2)
+
+If a Stage 1 implementation surfaces the need for a trait-method
+addition that wasn't pinned in this spec — e.g., during the
+`DaemonEngine` PR's implementation, the author discovers that
+`Rpc::get_block_header` lacks an overload that the
+`RefreshEngine` consumer needs — the addition follows a
+**two-commit form** within the same PR:
+
+1. **Trait amendment commit.** Adds the new trait method to
+   §2's surface, updates relevant rustdoc, updates the §4
+   async-story table with a row for the new method (including
+   cancel class and idempotency per §1.6 documentation
+   discipline), updates the `Mock*` implementor with a default
+   that satisfies the trait contract per §6.1, and adds a
+   "Round N amendment" sub-bullet to the relevant §2.X section
+   explaining why the addition was needed.
+2. **Consumer commit.** Implements the consumer code that uses
+   the new trait method.
+
+Why two commits, not one combined: trait additions affect every
+implementor (Stage 1 default impl, every `Mock*`, future Stage 4
+actor) by virtue of the `T: KeyEngine` bound now requiring the
+new method. Bundling the amendment with consumer changes makes
+the diff hard to review (the amendment's effect on existing
+implementors gets buried in consumer-specific code) and hard to
+revert (a consumer-side bug forces the trait amendment to revert
+too). Splitting the two commits lets the trait amendment land
+clean and the consumer code land separately, with bisection
+working at trait-amendment granularity if a regression surfaces
+later.
+
+The PR description must explicitly call out the trait amendment
+("This PR adds `Rpc::get_block_header_at_hash` to satisfy
+`RefreshEngine`'s reorg-detection path") so reviewers know the
+trait-surface change exists and can scope their attention to the
+spec impact (§7's invariants govern: amendments are additive;
+they must not change existing method signatures, async-ness,
+error type, or ownership semantics — only add new methods).
+Amendments that violate §7 are not amendments — they re-open
+this spec for a new round.
 
 ---
 
@@ -3117,10 +3313,13 @@ Round 4a closure (the ground truth)
     └──► §10.5 Phase 2b trait expansion axis  (governed by §1.5 criteria)
            §10.5.1 StakeEngine design (validates §1.5 against an additive trait)
 
-─── (separator) ───
+═══════════════════════════════════════════════════════════════════════════
+                  SCOPE-GUARD REVISIT-TRIGGER ENTRIES
+              (target: REMAIN REJECTED unless threshold met;
+                   closure is NOT the success state)
+═══════════════════════════════════════════════════════════════════════════
 
-§10.6 Scope-guard revisit-trigger entries  (target: remain rejected
-unless threshold met; closure is not the success state)
+§10.6 Scope-guard revisit-trigger entries
     §10.6.1 8th-trait proposals beyond Phase 2b (governed by §1.5 + scope-guard meta-pattern)
     §10.6.2 Trait-level observability re-litigation (revisits §3.5)
     §10.6.3 Consensus-rule enforcement re-litigation (revisits §2.7 scope guard)
