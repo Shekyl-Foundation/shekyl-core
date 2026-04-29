@@ -1,6 +1,6 @@
 # V3 Engine Trait Boundaries (Stage 1)
 
-**Status.** Round 4a of 6 design-review rounds (markdown-only,
+**Status.** Round 4b of 6 design-review rounds (markdown-only,
 against `dev`). PR [#20](https://github.com/Shekyl-Foundation/shekyl-core/pull/20)
 is the live review surface; each round appends a commit, the PR
 absorbs the diff, and the merge to `dev` happens when the spec is
@@ -19,13 +19,32 @@ accepted. **No code changes are gated on this document yet.**
   lifecycle, §3.3 concurrency, §3.4 cancellation, §2 `&mut self →
   &self` sweep, §5.1 `RuntimeFailure`, §4 idempotency column) plus
   the in-round `EconomicsEngine` augmentation (seven traits).
-- **Round 4a record:** the commit landing this state on the chore
-  branch; commit message captures the design-closure work in 13
-  items.
+- **Round 4a record:** `d103d8447` — design closure across 20
+  items in four phases (Phase 1 / Phase 2a / Phase 2c / Phase 2b);
+  see Round 4a description below.
+- **Round 4b Phase 1 record:** `143b965bc` — mechanical fill-in
+  carry-forwards (11 items): §1.2 seven-traits-Stage-1-only pin,
+  §1.5 `StakeEngine` positive example, new §1.6 documentation
+  discipline, §3.5 long-running observability, §4 cancel-class
+  column, §4.2 `#[tokio::test]` clarification, §6.1
+  mocks-vs-contract bullet, new §8.2 amendment co-landing rule,
+  §10.0 separator strengthening, new `docs/PERFORMANCE_BASELINE.md`,
+  `FOLLOWUPS.md` baseline + cutover entries.
+- **Round 4b Phase 2 record:** the commit landing this state on
+  the chore branch; commit message captures the seven gap-check
+  additions (§1.4 `Send`-on-parameters; §1.6↔§5.2 cross-reference;
+  §3.3.1 baseline definition; new §3.4.4 long-running cancellation
+  pattern with §3.4.4→§3.4.5 renumber; §5.1 supervisor restart
+  budget; new §5.2 caller retry contract with PendingTx/Daemon
+  layered-call pinning; new §6.3 hybrid construction discipline;
+  §8.2 PR-description bullet elevation; §10.1.3 verification
+  gates + orthogonal-properties exclusion).
 
-**Planned trajectory.** Round 4 is split into 4a and 4b.
+**Planned trajectory.** Round 4 is split into 4a and 4b; 4b is
+further split into Phase 1 (carry-forwards) and Phase 2
+(gap-check additions).
 
-- **Round 4a — design closure (20 items, current round).**
+- **Round 4a — design closure (20 items).**
   Phase 1 (4 foundational pins): lifecycle async resolution,
   `EconomicsError` pinning, `EconomicsParametersSnapshot`
   Resolution C, `EngineConfig` pinning. Phase 2a (9 in-place
@@ -43,17 +62,26 @@ accepted. **No code changes are gated on this document yet.**
   `EconomicsEngine` scope guard, §2.7 `DESIGN_CONCEPTS.md`
   cross-reference. Phase 2b (1 synthesis): §10 deferred
   subsection.
-- **Round 4b — mechanical fill-in (~12 items).** Per-method
-  drop-cancellation classification (a/b/c per §3.4.3), §6
-  mocks-vs-contract framing, §1.2 six-traits-Stage-1-only
-  amendment co-landing rule, §6.2 `from_seed` reference, §4.2
-  `#[tokio::test]` rustdoc, panic-semantics rustdoc requirement,
-  `FOLLOWUPS.md` Stage-4-cutover-CHANGELOG-flagging entry,
-  `FOLLOWUPS.md` performance-baseline entry (per §3.3 gate),
-  `docs/PERFORMANCE_BASELINE.md` template stub, and cleanups
-  against Round 4a's framework.
+- **Round 4b — mechanical fill-in + operational refinement
+  (18 items, current round).** Phase 1 (11 carry-forwards;
+  committed at `143b965bc`): see Phase 1 record above. Phase 2
+  (7 gap-check additions; this commit): §1.4 `Send`-on-parameters
+  discipline, §3.3.1 baseline definition tightening, new §3.4.4
+  long-running cancellation pattern (renumbers existing
+  dispositions to §3.4.5), §5.1 supervisor restart-budget
+  acknowledgement, new §5.2 caller retry contract (with
+  layered-call PendingTx/Daemon pinning), new §6.3 hybrid
+  construction discipline, §10.1.3 verification gates +
+  orthogonal-properties exclusion. Plus two cross-reference
+  closures from Phase 1 (§1.6→§5.2; §3.5↔§3.4.4) and one polish
+  (§8.2 PR-description third bullet).
 - **Round 5 — acceptance.** Near-empty outside fallout from
-  Round 4b review.
+  Round 4b review. Pre-drafting gap-check (per the Round 4b
+  meta-pattern) looks for additional "implicit but discoverable
+  late" instances — current candidates: tokio runtime config,
+  allocator behavior, TLS implementation choice. If two-three
+  produce material yield, Round 5 expands; if none, Round 6 is
+  unnecessary and the spec is accepted on Round 5.
 
 **Round-discipline meta-pattern (named in Round 4a).** Each
 round so far has introduced one or more *over-comfortable
@@ -260,10 +288,43 @@ static `Arc<AccountPublicAddress>` whose `&` reference is
 satisfy this property (transient, internal-state-borrowing, or
 mutation-implying borrows) cannot appear in returns.
 
+**Parameter discipline (Round 4b — Item 18).** Trait method
+parameters that the Stage 4 actor receives across the mailbox
+boundary must also be `Send + 'static`. Stage 1's concrete
+in-process structs accept any parameter shape — there is no
+mailbox to cross — but Stage 4's actor mailbox is a typed
+message channel: a parameter that isn't `Send + 'static` cannot
+cross the boundary. The discipline is therefore "shape Stage 1
+parameters as if they had to satisfy the Stage 4 mailbox today."
+The alternative (discovering non-`Send` parameters at Stage 4
+cutover) forces signature changes that §7's invariants forbid;
+the time to enforce the property is at trait declaration, not
+at cutover. Concrete implications: parameters cannot hold
+`&dyn Trait` borrows whose underlying data is non-`Send`; cannot
+hold `MutexGuard<'_, T>` (lock guards aren't `Send` across most
+lock types); cannot hold raw pointers (`*const T` / `*mut T`);
+cannot hold `Rc<T>` (use `Arc<T>` instead). Owned values,
+`Arc<T>` where `T: Send + Sync`, `&T: Sync + 'static` (e.g.,
+`&'static str`, references to data behind `Arc`), and trait
+references constrained `Clone + Send + Sync + 'static` (per the
+existing §2.5 `DaemonEngine` pattern) all clear the discipline.
+Applying the test to §2: every trait method's parameter list
+satisfies this property today — `Amount`, `SubaddressIndex`,
+`LedgerSnapshot`, `Reservation`, `TransactionSubmission` are all
+owned `Send + 'static`; the `&D: DaemonEngine` parameter on
+`RefreshEngine::produce_scan_result` clears the discipline
+because §2.5 pins `DaemonEngine: Clone + Send + Sync + 'static`,
+making the borrow Stage-4-equivalent to a cloned actor handle.
+The discipline is "implicit but discoverable late" — Stage 1
+compilation succeeds without it; Stage 4 compilation fails after
+the trait surface is committed. Pinning at Stage 1 declaration
+prevents the late discovery.
+
 Stage 4 makes the discipline operational: an `&self` trait method
 against a `kameo` actor is a `tell`/`ask`-shaped message
 round-trip; an `&mut OtherTrait` parameter has no Stage-4
-equivalent; a return that borrows internal state has no Stage-4
+equivalent; a parameter that isn't `Send + 'static` cannot enter
+the mailbox; a return that borrows internal state has no Stage-4
 representation across the actor boundary.
 
 **Applying the test to §2's traits.** `KeyEngine`, `LedgerEngine`,
@@ -451,7 +512,12 @@ apply to every trait method in §2:
    carry the explanation as a one-line rustdoc note. The
    "conditionally" case names the explicit condition (e.g.,
    "idempotent given the same `ScanResult` against the same
-   starting `synced_height`").
+   starting `synced_height`"). The §4 classification is the
+   *property* the method offers; §5.2 is the *operational
+   retry contract* callers derive from it (when to retry, when
+   not to retry, how the layered-call relationships compose).
+   Method rustdoc names the §4 classification; callers consult
+   §5.2 for the retry behavior to adopt.
 
 The disciplines are documentation-as-contract: a method's
 rustdoc names what callers can rely on. Stage 4 cutover does
@@ -2051,7 +2117,18 @@ The gate has three pinned components:
 1. **Measurement requirement.** Before any Stage 1
    implementation PR is merged to `dev`, read-path overhead is
    measured against the existing baseline using `criterion`.
-   The hot paths under measurement are at minimum
+   *The baseline is the existing monolithic `Engine<S>`
+   implementation immediately prior to the first Stage 1
+   trait-extraction PR — i.e., the `dev` HEAD at the moment
+   trait extraction begins, with `criterion` benches captured
+   at that commit and frozen as the comparison reference.*
+   PR-specific deltas are measured against this frozen
+   reference, not against an earlier or later commit; the
+   baseline is re-captured only if a non-Stage-1 change
+   materially shifts hot-path cost (in which case the
+   re-capture is itself a baseline-bumping commit, named in
+   `PERFORMANCE_BASELINE.md` and announced in PR review). The
+   hot paths under measurement are at minimum
    `KeyEngine::account_public_address`,
    `LedgerEngine::balance`, `LedgerEngine::synced_height`,
    `EconomicsEngine::current_emission`, and
@@ -2421,7 +2498,64 @@ the split: classifying every method requires examining every
 method's side-effect surface and Stage 4 behavior, which is
 mechanical fill-in once the framework is pinned.
 
-#### 3.4.4 Round 3 dispositions
+#### 3.4.4 Long-running operation cancellation pattern (Round 4b — Item 16)
+
+Long-running operations — currently `RefreshEngine::produce_scan_result`,
+prospectively V3.x's FCMP++ proof generation per §10.4.2 — fall
+in §3.4.3's class c. The pattern for class-c methods extends the
+async signature with two independent channels:
+
+```rust
+async fn long_running_op(
+    &self,
+    inputs: Inputs,
+    cancel: CancellationToken,
+    progress: Option<mpsc::Sender<Progress>>,
+) -> Result<Output, EngineError>;
+```
+
+`cancel` is the caller's signal to abandon work. The implementor
+checks `cancel.is_cancelled()` at controlled checkpoints (per
+§7's four-checkpoint discipline) and returns a cancellation-shaped
+error — `EngineError::Cancelled` or trait-specific equivalent —
+not a partial result. The cancellation error is structurally
+distinct from `RuntimeFailure` per §5.1: cancellation is a
+caller-driven, expected outcome; `RuntimeFailure` is an actor
+crash. Callers handling `Result` distinguish the two for §5.2's
+retry contract.
+
+`progress` is the operation's visibility channel (per §3.5). When
+`None`, the implementor skips progress emission; when `Some`, the
+implementor sends progress events at the same checkpoints where
+it checks `cancel`. `progress.send` returning `Err` (the receiver
+was dropped) is treated as "no listener, continue silently" — *not*
+as cancellation. Conflating progress-receiver-dropped with cancel
+re-introduces the talking-stick smell §1.4 rejects: the
+implementor would have to peek at the progress channel's state to
+infer caller intent, which is the shape that breaks at Stage 4
+actor boundaries. Cancel and progress are independent values
+flowing through the method signature, not implicit hooks coupled
+through their failure modes.
+
+**Drop interaction** (per §3.4.2): dropping the awaited future is
+observation-only at Stage 4 — the message is already in the
+actor's mailbox; the actor will run the operation to completion
+even though the reply is discarded. To cancel observably at
+Stage 4, the caller signals `cancel` *before* dropping the
+future. At Stage 1 the future-drop additionally aborts the task,
+so dropping is sufficient to cancel — but Stage-4-ready code
+signals `cancel` regardless, because the trait surface is
+identical at both stages and the discipline that survives Stage 4
+also works at Stage 1.
+
+The pattern preserves §1.4's actor-shape discipline at Stage 4:
+`cancel` maps to a tell-style mailbox message that sets a flag
+the actor checks at checkpoints; `progress` maps to an `mpsc`
+forwarded from the actor to the caller. The trait surface is
+unchanged across the cutover; the implementation behind it shifts
+from in-process awaits to actor-mailbox tells, transparently.
+
+#### 3.4.5 Round 3 dispositions
 
 - **Drop-cancellation is the default contract** for async trait
   methods (per §3.4.1). Implementors document deviations.
@@ -2430,6 +2564,8 @@ mechanical fill-in once the framework is pinned.
   side-effect on drop use in-band cancellation tokens.
 - **Three-class framework** (a / b / c) is pinned (per §3.4.3);
   the per-method classification table is a Round 4 fill-in.
+- **Class-c long-running pattern** (per §3.4.4) extends the
+  framework with the cancel + progress dual-channel signature.
 
 ### 3.5 Observability: tracing at call sites, not on trait surfaces (Round 4a — Item 18)
 
@@ -2517,10 +2653,11 @@ exposes to the UI. This pattern preserves the §1.4 actor-shape
 discipline because progress reporting is an explicit value
 flowing through the method signature, not an implicit hook on
 the trait surface. §3.4.4's long-running-operation cancellation
-pattern (Round 4b — Item 16; forthcoming in Round 4b Phase 2,
-see PR #20 description for round structure) covers the
-cancellation half of the same shape; the two together specify
-how a long-running trait method is structured.
+pattern (Round 4b — Item 16) covers the cancellation half of
+the same shape; the two together specify how a long-running
+trait method is structured — `cancel` for caller-driven
+abandonment, `progress` for operation-driven visibility, both
+explicit in the signature.
 
 ---
 
@@ -2903,6 +3040,33 @@ checks:
 The choice between recoverable and non-recoverable per actor is
 declared in the actor's `kameo` `SupervisorStrategy` at Stage 4.
 
+**Restart budget — exhaustion converts recoverable to permanent
+(Round 4b — Item 17).** Stage 4's `kameo` supervisor accepts a
+per-actor restart budget: an upper bound on restarts within a
+sliding window (e.g., "5 restarts in 60s"). Budget exhaustion
+converts a recoverable failure into a permanent one — the
+supervisor stops restarting the actor, the mailbox is closed,
+and subsequent callers see `RuntimeFailure { reason: Permanent }`
+exactly as they would for an actor declared non-recoverable at
+spawn. The trait surface does not distinguish budget-exhaustion
+from explicit non-recoverable strategy: `Permanent` is
+`Permanent` either way, and callers branching on `RuntimeFailure`
+need only the variant. Operationally, however, budget exhaustion
+is a *signal* — the actor's panic source is recurrent, not
+transient (a panic-loop driven by stuck input, a poisoned
+invariant, an unforeseen runtime condition that returns
+deterministically), and the operator's appropriate response is
+manual intervention rather than re-construction-and-retry. The
+budget value is a Stage 4 deployment parameter, not a
+trait-surface concern; defaults and tuning live in the Stage 4
+supervisor configuration documentation, alongside the
+`SupervisorStrategy` choices. The property the spec pins is:
+budget exhaustion is observable to callers as `Permanent`, never
+silently swallowed; the operator-visible distinction (recurring
+crashes vs first-time crash promoted to non-recoverable by
+strategy choice) lives in operator-side observability, not in
+the trait surface.
+
 **No `Engine::is_healthy()` method.** The discipline is
 error-driven: permanent actor death surfaces as
 `RuntimeFailure { reason: Permanent }` on every subsequent call
@@ -2942,6 +3106,134 @@ exist already: §5.1's restart-and-fail-pending supervisor,
 §4's idempotency column, and §7's checkpoint ownership split.
 No structural addition is needed — only the composition's
 explicit articulation here.
+
+### 5.2 Caller retry contract for `RuntimeFailure` (Round 4b — Item 13)
+
+§5.1 pins what `RuntimeFailure` *means* at the trait surface.
+§5.2 pins what callers should *do* when they observe one — the
+operational retry contract derived from §3.4.3's class framework
+and §4's per-method idempotency column. Without this section,
+callers either over-retry (re-issuing non-idempotent operations
+and producing observable double-effects) or under-retry
+(surfacing recoverable failures as user-facing errors when retry
+would have succeeded). §5.2 closes the gap by mapping each
+{class, idempotency, `RuntimeFailure` reason} triple to a
+specific caller action.
+
+**Class-a methods (read-style, no side effect).** Retry is
+trivially safe: multiple invocations produce identical observable
+behavior. Callers retry without consulting the idempotency column.
+Examples: `LedgerEngine::balance`, `LedgerEngine::synced_height`,
+`KeyEngine::account_public_address`,
+`EconomicsEngine::current_emission`,
+`EconomicsEngine::parameters_snapshot`. The class-a contract is
+"retry until success or `Permanent`."
+
+**Class-b methods (mutating, drop-observation-only at Stage 4).**
+Retry safety depends on the §4 idempotency entry and the §5.1
+`ActorCrashReason`:
+
+| Caller observes | §4 idempotency | Retry action |
+|---|---|---|
+| `PanickedDuringHandler` | yes | retry against post-restart actor |
+| `PanickedDuringHandler` | conditionally | check the §4-named condition; retry if held, surface otherwise |
+| `PanickedDuringHandler` | no | surface to user; operation may have side-effected externally |
+| `DrainedDuringSupervisorCascade` | any | retry; the operation definitely did not side-effect |
+| `Permanent` | any | surface to user with operator-action prompt; engine must be reconstructed |
+
+The split between `PanickedDuringHandler` and
+`DrainedDuringSupervisorCascade` (per §5.1's draining ordering)
+gives callers actionable distinction: drained messages definitely
+did not run, so retry is safe regardless of idempotency; the
+panicked message *might* have side-effected, so retry safety
+follows §4's classification. The split is what makes the table's
+"any" entries safe: drained messages don't depend on idempotency
+because the operation never executed.
+
+**Class-c methods (in-band cancellable).** Two error variants
+distinguish caller-driven cancellation from actor-driven failure:
+
+- `EngineError::Cancelled` (per §3.4.4) is the caller's expected
+  outcome from signaling `cancel`. Retry semantics don't apply —
+  the caller signaled cancel; the operation returned the
+  cancellation-shaped error; there is nothing to retry. Callers
+  handling `Result` distinguish `Cancelled` from `RuntimeFailure`
+  for exactly this reason.
+- `RuntimeFailure { … }` returned from a class-c method follows
+  the class-b retry contract (the table above): the actor
+  crashed; the cancel signal is irrelevant to the retry decision;
+  idempotency and the `ActorCrashReason` determine the action.
+
+**Layered-call relationships compose through idempotency
+conditions.** Some trait methods call other trait methods
+internally. The outer method's retry contract derives from the
+inner method's idempotency: when both methods share an
+idempotency property (e.g., a shared dedup key), the outer
+method inherits the inner's safety, and callers can retry the
+outer without knowing which layer crashed.
+
+The clearest example today is `PendingTxEngine::submit` and
+`DaemonEngine::submit_transaction`. The layered call:
+
+- `PendingTxEngine::submit` looks up a reservation's transaction
+  bytes from local state, constructs the submission payload,
+  calls `DaemonEngine::submit_transaction` to submit to the
+  daemon's mempool, and post-processes the daemon's response
+  (marks the reservation submitted, records the tx hash).
+- `DaemonEngine::submit_transaction` posts the transaction to
+  the daemon's RPC; the daemon dedupes by tx hash on receipt —
+  submitting the same tx twice produces a single on-chain
+  effect because the daemon recognizes the duplicate and
+  returns its existing-pool acknowledgment.
+- §4 marks both methods as "conditionally idempotent (daemon
+  dedupes by tx hash)" — the *same condition* applies at both
+  layers because the layering is transparent to the dedup
+  property.
+
+Three crash cases under retry:
+
+1. **`PendingTxEngine::submit`'s actor crashed *before* calling
+   `DaemonEngine::submit_transaction`.** The daemon never
+   received the tx. Retry calls into the post-restart actor,
+   which calls the daemon for the first time. Net: single
+   submission.
+2. **`PendingTxEngine::submit`'s actor crashed *after* the
+   inner daemon call returned successfully but before
+   post-processing completed.** The daemon already has the tx;
+   the local reservation state may or may not be marked
+   submitted. Retry calls the daemon again; the daemon's dedup
+   recognizes the tx hash and returns its existing-pool ack;
+   the retry's post-processing completes. Net: single
+   submission, post-processing applied exactly once after the
+   retry succeeds.
+3. **`DaemonEngine::submit_transaction`'s actor crashed
+   mid-RPC.** The daemon may or may not have received the tx
+   (network race). Retry hits the daemon; if the original had
+   reached mempool, the retry hits dedup; if not, the retry
+   submits for the first time. Net: single submission either
+   way.
+
+In all three cases, the layered idempotency (`daemon dedupes by
+tx hash`) produces a single observable submission. The condition
+is layered: `PendingTxEngine::submit`'s safety derives from
+`DaemonEngine::submit_transaction`'s safety, which derives from
+the daemon's hash-dedup property. **Callers consulting §5.2 do
+not need to know which layer crashed** — they retry the outer
+method, and the layered idempotency makes the retry safe under
+all three failure modes. This is the operational value of the
+cross-method pinning: callers reason about the trait surface's
+documented condition, not about per-layer failure modes.
+
+The pattern is general. Any trait method that calls another
+trait method internally derives its retry contract from the
+inner method's idempotency. Idempotency conditions compose
+through layering: when an outer method's retry safety depends
+on an inner method's idempotency, both `RuntimeFailure` paths
+(outer crash before inner call; outer crash after inner call) are
+covered by the inner method's condition. Reviewers checking new
+trait methods that call other trait methods confirm the
+layered-condition holds; if it doesn't, the outer method needs
+its own dedup mechanism rather than inheriting the inner's.
 
 ---
 
@@ -3034,6 +3326,79 @@ commits its seed.
 Parallel-test safety follows from no-shared-state by
 construction: each test's `Mock*` has its own seed, its own
 `ChaCha20Rng`, no cross-test interaction.
+
+### 6.3 Hybrid construction across stage migrations (Round 4b — Item 12)
+
+The seven traits admit *hybrid* test compositions: real
+implementing types for some traits, `Mock*` types for others.
+The clearest motivating case is integration-flavored tests that
+exercise the real `KeyEngine` (because the real key arithmetic
+is what's being tested) against a `MockLedger` and `MockDaemon`
+(because the test is not exercising chain state or RPC). The
+hybrid is valuable: it tests a production code path with
+production crypto without standing up the full chain-and-network
+infrastructure.
+
+The hybrid is also where the §6.1 mock-vs-contract discipline
+compounds. When all engines are real, the trait surface's
+contract is what the production implementations satisfy. When
+all engines are mocked, the trait surface's contract is what the
+test scaffolding declares. **In a hybrid, the real engines
+interact with mock engines through the trait surface, and they
+do so under the assumption that the mocks satisfy the contract
+the real engines would have offered to their real counterparts.**
+Mock engines that satisfy syntactic surface but not semantic
+contract produce hybrids that compile but fail to test the real
+engine's behavior — the real engine's retry logic, error
+handling, or idempotency assumptions silently break against a
+mock that doesn't honor the contract.
+
+The discipline is therefore: **`Mock*` types in any hybrid
+composition must satisfy the full §6.1 contract.** Specifically:
+
+- Idempotency conditions documented in §4 hold for the `Mock*`
+  implementor: `MockDaemon::submit_transaction` dedupes by tx
+  hash exactly as the real daemon does, because that is the
+  documented condition `PendingTxEngine::submit` (real or mock)
+  derives its retry safety from per §5.2.
+- `RuntimeFailure` semantics per §5.1 hold: a `Mock*` that
+  produces `RuntimeFailure` (deliberately, in a failure-injection
+  test) preserves the `ActorCrashReason` distinctions
+  (`PanickedDuringHandler` vs `DrainedDuringSupervisorCascade`
+  vs `Permanent`), so the hybrid exercises real-engine retry
+  paths against realistic failure modes.
+- Cancellation contracts per §3.4.3/§3.4.4 hold: `Mock*`
+  implementors of class-c methods honor the `cancel` parameter
+  semantics; `Mock*` implementors of class-b methods do not
+  silently cancel on drop in violation of the documented
+  drop-observation-only contract.
+
+Authors of hybrid tests document which engines are real vs mock
+in the test's setup, and reviewers confirm the contract
+discipline holds for the mocked engines. Hybrid tests are not a
+shortcut around the contract; they are a focused application of
+it that depends on the contract being honored at every mock
+seam.
+
+**Cross-stage applicability.** The discipline holds across
+Stage 1 → Stage 4: at Stage 1 the `Mock*` types substitute for
+concrete in-process implementations; at Stage 4 the same
+`Mock*` types substitute for actor-backed implementations. The
+trait surface is preserved across the cutover (per §7), and the
+contract the `Mock*` types satisfy is the same contract in both
+stages. Hybrid tests written against Stage 1's traits continue
+to compile and pass at Stage 4 without modification, because
+the contract — not the implementation — is what the test
+exercises.
+
+This is the operational reason §6.1's mock-vs-contract bullet
+exists: hybrids are where contract violations cease to be
+hypothetical. A `Mock*` that drifts from the contract works in
+all-mock tests (because nothing real depends on the contract)
+and breaks in hybrid tests (where a real engine depends on the
+mock honoring the contract). Pinning the discipline at §6.1 and
+operationalizing it at §6.3 is the trait-spec-side prevention
+of this drift.
 
 ---
 
@@ -3152,6 +3517,18 @@ addition that wasn't pinned in this spec — e.g., during the
    explaining why the addition was needed.
 2. **Consumer commit.** Implements the consumer code that uses
    the new trait method.
+3. **PR description names the amendment explicitly.** The PR
+   description identifies the trait amendment by method name
+   and motivation ("This PR adds
+   `Rpc::get_block_header_at_hash` to satisfy `RefreshEngine`'s
+   reorg-detection path"), so reviewers can scope their
+   attention to the spec impact and confirm §7's invariants
+   hold (amendments are additive only; they must not change
+   existing method signatures, async-ness, error type, or
+   ownership semantics). Amendments that violate §7 are not
+   amendments — they re-open this spec for a new round, and
+   the PR description must surface that explicitly rather than
+   buried in commit-message bodies.
 
 Why two commits, not one combined: trait additions affect every
 implementor (Stage 1 default impl, every `Mock*`, future Stage 4
@@ -3165,15 +3542,15 @@ clean and the consumer code land separately, with bisection
 working at trait-amendment granularity if a regression surfaces
 later.
 
-The PR description must explicitly call out the trait amendment
-("This PR adds `Rpc::get_block_header_at_hash` to satisfy
-`RefreshEngine`'s reorg-detection path") so reviewers know the
-trait-surface change exists and can scope their attention to the
-spec impact (§7's invariants govern: amendments are additive;
-they must not change existing method signatures, async-ness,
-error type, or ownership semantics — only add new methods).
-Amendments that violate §7 are not amendments — they re-open
-this spec for a new round.
+Why the PR-description bullet is structurally separate from the
+commits: the two-commit form is a *bisection* discipline — small
+commits with clear scope. The PR description is a *review-scope*
+discipline — telling reviewers where the spec impact lives. They
+serve different audiences (bisecting tools vs human reviewers),
+operate at different granularities (commit vs PR), and would
+silently degrade if conflated. Reviewers applying §8.2
+mechanically check all three bullets; missing any one weakens
+the discipline's enforcement.
 
 ---
 
@@ -3234,33 +3611,47 @@ deliverable; with it landed, the spec's forward-work map is
 authoritative and Round 4b's mechanical fill-in proceeds against
 a stable framework.
 
-**Round 4b agenda (mechanical fill-in against Round 4a's
-framework):**
+**Round 4b dispositions (18 items across two phases — all
+landed).**
 
-- Per-method drop-cancellation classification (a / b / c per
-  §3.4.3) added as a column to §4's async-story table.
-- Stage-1-amendment co-landing rule (separate-commit form) in
-  §8.
-- Mocks-vs-contract pin in §6.
-- Seven-traits-Stage-1-only / Phase-2b-additive pin in §1.2.
-- `#[tokio::test]` rustdoc clarification in §4.2.
-- Panic-rustdoc requirement pin in §1 or §3.
-- §1.5 hypothetical-evaluation block: add `StakeEngine` as
-  a positive example clearing all three trait-identity
-  clauses (Phase 2c review carry-forward).
-- §3.5 long-running-operation paragraph addressing FCMP++
-  proof-generation as the natural counter-question to the
-  observability rejection (Phase 2c review carry-forward).
-- `docs/PERFORMANCE_BASELINE.md` template stub plus
-  `docs/FOLLOWUPS.md` V3.0 entry referencing §3.3's
-  measurement gate (binding before Stage 1 PRs land).
-- `docs/FOLLOWUPS.md` V3.x entry: "Stage 4 lifecycle async
-  cutover requires `CHANGELOG.md` flagging per
-  V3_ENGINE_TRAIT_BOUNDARIES.md §2.8.7" (Phase 1 review
-  carry-forward).
+*Phase 1 — carry-forwards (11 items, committed at `143b965bc`):*
+
+- Per-method drop-cancellation classification → §4 cancel-class column (Item 1).
+- Stage-1-amendment co-landing rule → new §8.2 (Item 2; Phase 2 polish: PR-description third bullet).
+- Mocks-vs-contract pin → §6.1 bullet (Item 3).
+- Seven-traits-Stage-1-only / Phase-2b-additive pin → §1.2 preamble (Item 4).
+- `#[tokio::test]` rustdoc clarification → §4.2 (Item 5).
+- Panic-rustdoc requirement → new §1.6 documentation discipline (Item 6).
+- §1.5 `StakeEngine` positive example → §1.5 hypothetical-evaluation block (Item 7).
+- §3.5 long-running-operation paragraph → §3.5 (Item 8).
+- `docs/PERFORMANCE_BASELINE.md` template stub → new file (Item 9).
+- `docs/FOLLOWUPS.md` V3.0 baseline entry → FOLLOWUPS V3.0 (Item 9).
+- `docs/FOLLOWUPS.md` V3.x cutover-CHANGELOG entry → FOLLOWUPS V3.x (Item 10).
+- §10.0 separator visual-weight strengthening → §10.0 (Item 11).
+
+*Phase 2 — gap-check additions (7 items, this commit):*
+
+- §1.4 `Send`-on-parameters discipline → §1.4 paragraph addition (Item 18).
+- §3.3.1 baseline definition → §3.3.1 in-place tightening (Item 14).
+- §3.4.4 long-running cancellation pattern → new §3.4.4 (renumbers existing dispositions to §3.4.5; Item 16).
+- §5.1 supervisor restart-budget acknowledgement → §5.1 paragraph addition (Item 17).
+- §5.2 caller retry contract → new §5.2 (with PendingTx/Daemon layered-call pinning; Item 13).
+- §6.3 hybrid construction discipline → new §6.3 (Item 12).
+- §10.1.3 verification gates + orthogonal-properties exclusion → §10.1.3 in-place extension (Item 15).
+
+*Phase 1 cross-reference closures landed in Phase 2:*
+
+- §1.6 idempotency bullet → §5.2 cross-reference (closes the Phase 1 forward-reference once §5.2 lands).
+- §3.5 long-running paragraph → §3.4.4 reference cleanup (drops the "forthcoming in Round 4b Phase 2" parenthetical now that §3.4.4 lands).
 
 Round 5 is acceptance; near-empty outside fallout from Round 4b
-review.
+review. Pre-drafting gap-check applies the meta-pattern (§5.1
+"Round-discipline meta-pattern" framing): looks specifically for
+"implicit but discoverable late" instances. Current candidates:
+tokio runtime config, allocator behavior, TLS implementation
+choice. If two-three produce material yield, Round 5 expands
+beyond pure acceptance; if none, the spec is complete on the
+operational-refinement dimension and Round 6 is unnecessary.
 
 ---
 
@@ -3448,6 +3839,67 @@ under deterministic seeds; manual code-review
 correspondence per §3.2's call-site disposition table. The
 chosen methodology is part of the Stage 4 cutover PR's
 review discipline, not part of this spec.
+
+**Gates (Round 4b — Item 15).** Verification is *binding*
+before Stage 4 cutover merges to `dev`. The cutover PR
+(§10.1.2) cannot land until the chosen methodology has
+produced evidence that the gated properties hold:
+
+- §7 invariants 1–4 are demonstrated against the cutover
+  implementation under the methodology's test scenarios
+  (trait surface stability, post-tip-fetch checkpoint
+  ownership, four-checkpoint cancellation discipline,
+  checkpoint ownership split).
+- Per-method idempotency conditions per §4 are verified —
+  methods marked "yes" produce identical observable outcomes
+  on repeat invocation against the actor-backed
+  implementation; methods marked "conditionally" honor the
+  documented condition; methods marked "no" are exercised
+  with single invocation only.
+- §5.1's `RuntimeFailure` semantics — `PanickedDuringHandler`
+  vs `DrainedDuringSupervisorCascade` vs `Permanent`; the
+  mailbox-FIFO draining ordering — are exercised through
+  deliberate panic injection in the test methodology.
+
+The verification evidence (test logs, property-based
+assertions, differential traces, methodology-specific
+artifacts) lands in the Stage 4 cutover PR's review surface
+so reviewers confirm the gate's discharge before approving
+merge.
+
+**Orthogonal properties explicitly excluded from §10.1.3
+(Round 4b — Item 15).** Verification gates the properties §7
+makes invariant — *behavioral equivalence on the trait
+surface*. The following are *not* part of behavioral
+equivalence and are gated separately:
+
+- *Performance characterization.* Stage 4 latency and
+  throughput are gated by §10.2.2; performance regression
+  detection has its own evidence-and-disposition mechanism.
+- *Observability output.* Tracing emissions per §3.5 may
+  legitimately differ between Stage 1 (synchronous spans)
+  and Stage 4 (actor-handler spans). Observability shape is
+  call-site-driven (per §3.5's rejection of trait-level
+  observability hooks); it is not part of the trait surface.
+- *Operational characteristics.* Restart-budget values per
+  §5.1, mailbox-bounding triggers per §10.4.3,
+  supervision-strategy choices per §5.1 — these are
+  deployment parameters and operator-tuned settings, not
+  trait-surface properties.
+- *Resource consumption.* Memory footprint, file-descriptor
+  count, thread/task count differ between stages by
+  construction (Stage 1 has no actor tasks; Stage 4 has one
+  task per actor). These are implementation-orthogonal to
+  behavioral equivalence.
+
+Each excluded property has its own verification path —
+separate gate, separate documentation, separate review
+discipline. The exclusion is structural, not dismissive:
+folding these into §10.1.3 would conflate "the trait surface
+preserves behavior" with "the implementation has acceptable
+operational characteristics" — two distinct properties with
+two distinct verification mechanisms. §10.1.3 governs the
+former; the named cross-references govern the latter.
 
 *Trigger.* "Stage 4 per-actor mailbox cutover begins." (Internal
 — produced by §10.1.2 starting; verification runs
