@@ -32,15 +32,21 @@
 //! principle applies to all subsequent Stage 1 per-trait PR bench
 //! fixtures.
 //!
-//! # Setup-cost and teardown-cost vs measurement region (symmetry rule)
+//! # Measurement-region discipline (symmetry rule + boundary rule)
 //!
-//! Per `docs/design/STAGE_0_HARNESS.md` §4.2 "The symmetry rule
-//! (criterion-vs-iai-callgrind asymmetry)": **setup and teardown are
-//! both excluded from the measured region; measurement is the call
-//! only.** Both halves are mechanized explicitly; the criterion and
-//! iai-callgrind harnesses use different mechanisms because they
-//! handle drop cost differently (criterion amortizes; iai-callgrind
-//! does not — see §4.2 for the asymmetry's structural cause).
+//! Per `docs/design/STAGE_0_HARNESS.md` §4.2, two rules keep the
+//! bench-function measurement bounded to the call only. Both rules
+//! are operationalized through this fixture's shape and the
+//! companion bench files' function signatures.
+//!
+//! ## Symmetry rule (criterion-vs-iai-callgrind asymmetry)
+//!
+//! **Setup and teardown are both excluded from the measured region;
+//! measurement is the call only.** Both halves are mechanized
+//! explicitly; the criterion and iai-callgrind harnesses use
+//! different mechanisms because they handle drop cost differently
+//! (criterion amortizes; iai-callgrind does not — see §4.2 for the
+//! asymmetry's structural cause).
 //!
 //! [`build_engine_fixture`] performs the full production lifecycle:
 //! Argon2id KDF (relaxed `KdfParams { m_log2 = 0x08, t = 1, p = 1 }`
@@ -51,7 +57,7 @@
 //!
 //! - criterion's `b.iter` closure boundary (the fixture is built once
 //!   outside `b.iter`; the closure body borrows the engine by
-//!   reference);
+//!   reference, dereferencing through `Box` transparently);
 //! - iai-callgrind's `#[bench::*(setup = build_engine_fixture)]`
 //!   attribute (the macro emits the setup call outside the measured
 //!   region).
@@ -70,17 +76,52 @@
 //! same property — drop cost outside the measurement — through
 //! different mechanisms.**
 //!
-//! Per §4.2 measurement-region discipline, post-fixture iai-callgrind
-//! instructions for the `synced_height` workload should be in the
-//! single-digit-to-low-tens range. The diagnostic signal for a
-//! symmetry-rule violation is **order-of-magnitude divergence between
-//! the criterion and iai-callgrind harnesses on the same workload**:
-//! criterion reporting nanoseconds-per-iter consistent with a few
-//! cycles while iai-callgrind reports tens-of-thousands of
-//! instructions is the textbook sign that fixture `Drop` has leaked
-//! into iai's measured region. The order-of-magnitude check in §4.4
-//! catches this at the workflow_dispatch capture step before the
-//! number is transcribed into `PERFORMANCE_BASELINE.md`.
+//! ## Boundary rule (iai-callgrind measures function-boundary value movement)
+//!
+//! Per §4.2's boundary rule subsection, iai-callgrind measures the
+//! *entire* bench function body, including memcpy at function entry
+//! (when arguments are passed by value) and at function exit (when
+//! return values are returned by value). **`Engine<SoloSigner>` is
+//! 6,296 bytes** at this fixture's HEAD; passing the engine through
+//! the bench function by value would produce ~600 instructions of
+//! boundary memcpy cost (Valgrind models memcpy as instructions
+//! proportional to bytes moved), dominating the measured number for
+//! a `synced_height`-class workload whose actual call cost is ~5–10
+//! instructions.
+//!
+//! The fix is pointer-sized indirection at the boundary: the fixture
+//! returns `(Box<Engine<SoloSigner>>, TempDir)`. Total boundary
+//! memcpy is `8 + sizeof::<TempDir>()` ≈ 32 bytes — well below the
+//! 64-byte cutoff §4.2 names — and the iai-callgrind measurement's
+//! residual boundary cost is ~5–10 instructions instead of ~600.
+//! The criterion sibling is not directly affected (closure capture
+//! by reference makes value-pass-at-boundary moot for criterion),
+//! but the unified fixture shape lets both harnesses share one
+//! [`build_engine_fixture`] / [`drop_fixture`] pair.
+//!
+//! ## Diagnostic signals
+//!
+//! Per §4.4's static check, post-fixture iai-callgrind instructions
+//! for the `synced_height` workload should be in the **20–40 range**
+//! (4–6 for the call body + 5–10 for the unified-fixture-shape
+//! boundary memcpy + small wiring overhead). Two diagnostic signals:
+//!
+//! - **Order-of-magnitude divergence between the criterion and
+//!   iai-callgrind harnesses on the same workload** — criterion
+//!   reporting nanoseconds-per-iter consistent with a few cycles
+//!   while iai-callgrind reports tens-of-thousands of instructions
+//!   is the textbook sign that fixture `Drop` has leaked into iai's
+//!   measured region (symmetry-rule violation).
+//! - **An iai-callgrind number in §4.4's warning territory (50–300
+//!   instructions) without the workload itself justifying that
+//!   range** — most likely indicates a boundary-rule violation
+//!   (some fixture component crossing the boundary by value with
+//!   size > 64 bytes) or a workload genuinely larger than the model
+//!   assumed. Per §4.4, three reviewer checks resolve this.
+//!
+//! The static check in §4.4 catches both at the workflow_dispatch
+//! capture step before the number is transcribed into
+//! `PERFORMANCE_BASELINE.md`.
 //!
 //! # Tokio runtime locality
 //!
@@ -106,13 +147,14 @@
 //! (or introduces a sibling fixture under `benches/common/` per
 //! §4.2's two-caller justification rule).
 //!
-//! # Returned guard shape
+//! # Returned guard shape (unified across both harnesses)
 //!
-//! [`build_engine_fixture`] returns `(Engine<SoloSigner>, TempDir)`.
-//! The `TempDir` lives across the bench function's measured region,
-//! holding the wallet's filesystem footprint until measurement
-//! completes. The Tokio runtime is fixture-internal — dropped before
-//! return — and is **not** part of the guard tuple.
+//! [`build_engine_fixture`] returns `(Box<Engine<SoloSigner>>,
+//! TempDir)` per the boundary rule above. The `TempDir` lives
+//! across the bench function's measured region, holding the wallet's
+//! filesystem footprint until measurement completes. The Tokio
+//! runtime is fixture-internal — dropped before return — and is
+//! **not** part of the guard tuple.
 //!
 //! Per the symmetry rule (§4.2), the iai-callgrind bench function
 //! takes the tuple by value, performs its measured workload, and
@@ -120,7 +162,18 @@
 //! parameter can invoke `Drop` outside the measured region. The
 //! criterion sibling does not return the tuple because the engine and
 //! tempdir live in the outer function scope across `b.iter`'s
-//! iteration loop.
+//! iteration loop; the criterion closure body dereferences through
+//! `Box`'s auto-deref (`engine.synced_height()` resolves to
+//! `(*engine).synced_height()`) at zero pointer-chase cost beyond
+//! the one Valgrind already attributes to the call.
+//!
+//! The unified `(Box<Engine<SoloSigner>>, TempDir)` shape is the
+//! **canonical fixture shape for the `engine_trait_bench_*` family**.
+//! Subsequent Stage 1 per-trait PRs that add additional fixture
+//! components (e.g., a state-populated `Vec<Transfer>` for the
+//! LedgerEngine PR's `balance` bench) follow the same pattern: any
+//! fixture field exceeding 64 bytes goes behind `Box<T>` so the
+//! bench-function boundary moves only pointer-sized data.
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
@@ -138,11 +191,18 @@ use tempfile::TempDir;
 const BENCH_PASSWORD: &[u8] = b"shekyl-bench-fixture-password";
 
 /// Construct a freshly-created `Engine<SoloSigner>` with deterministic
-/// state, returning the engine and a `TempDir` guard.
+/// state, returning the boxed engine and a `TempDir` guard.
+///
+/// The engine is heap-allocated through `Box::new` per the boundary
+/// rule (`docs/design/STAGE_0_HARNESS.md` §4.2): `Engine<SoloSigner>`
+/// is 6,296 bytes and would dominate the iai-callgrind measurement's
+/// boundary memcpy if passed by value. The boxed shape moves only an
+/// 8-byte pointer across the bench function boundary.
 ///
 /// Drop order is well-defined: tuple fields drop in declaration order,
-/// so the engine drops before the temp directory and the wallet's
-/// locks release before the directory is removed.
+/// so the box (and the engine inside it) drops before the temp
+/// directory, and the wallet's locks release before the directory is
+/// removed.
 ///
 /// # Panics
 ///
@@ -150,7 +210,7 @@ const BENCH_PASSWORD: &[u8] = b"shekyl-bench-fixture-password";
 /// tokio runtime build, `SimpleRequestRpc::new`, `Engine::create`).
 /// All five are deterministic on a healthy CI worker; failure is a
 /// bench-environment problem, not a measurement to surface.
-pub fn build_engine_fixture() -> (Engine<SoloSigner>, TempDir) {
+pub fn build_engine_fixture() -> (Box<Engine<SoloSigner>>, TempDir) {
     let tmp = tempfile::tempdir().expect("tempdir for bench fixture");
     let base_path = tmp.path().join("bench-wallet");
 
@@ -183,7 +243,7 @@ pub fn build_engine_fixture() -> (Engine<SoloSigner>, TempDir) {
     let engine = Engine::<SoloSigner>::create(params, daemon)
         .expect("Engine::create succeeded for the bench fixture");
 
-    (engine, tmp)
+    (Box::new(engine), tmp)
 }
 
 /// Teardown helper for iai-callgrind's `teardown = drop_fixture`
@@ -200,27 +260,27 @@ pub fn build_engine_fixture() -> (Engine<SoloSigner>, TempDir) {
 /// # Why this is concrete and not generic
 ///
 /// Stage 0 PR-2 ships exactly one engine-trait bench fixture shape
-/// (`(Engine<SoloSigner>, TempDir)`). A generic `drop_fixture<T>`
-/// would not save complexity here, and it would fight iai-callgrind's
-/// macro expansion (the `teardown =` argument is resolved at
-/// macro-expansion time and prefers a fully-applied function path).
-/// Stage 1 per-trait PRs that introduce additional fixture shapes
-/// (e.g., a state-populated balance fixture carrying a transfer
-/// vector) add their own concrete `drop_*` siblings rather than
-/// generalizing this one.
+/// (`(Box<Engine<SoloSigner>>, TempDir)`, per the boundary rule in
+/// §4.2). A generic `drop_fixture<T>` would not save complexity here,
+/// and it would fight iai-callgrind's macro expansion (the `teardown =`
+/// argument is resolved at macro-expansion time and prefers a
+/// fully-applied function path). Stage 1 per-trait PRs that introduce
+/// additional fixture shapes (e.g., a state-populated balance fixture
+/// carrying a `Box<Vec<Transfer>>` alongside the boxed engine) add
+/// their own concrete `drop_*` siblings rather than generalizing this
+/// one.
 ///
 /// # Dead-code suppression
 ///
 /// `#[allow(dead_code)]` is required because the criterion sibling
 /// bench does not need `drop_fixture` — criterion's `b.iter`
 /// amortizes drop cost implicitly (see file-level docstring's
-/// "Setup-cost and teardown-cost vs measurement region" section).
-/// Each per-bench target compiles `mod common;` independently, and
-/// the criterion target sees `drop_fixture` as unused. This is
-/// expected and load-bearing: the symmetry rule's mechanism differs
-/// across harnesses.
+/// "Symmetry rule" subsection). Each per-bench target compiles
+/// `mod common;` independently, and the criterion target sees
+/// `drop_fixture` as unused. This is expected and load-bearing:
+/// the symmetry rule's mechanism differs across harnesses.
 #[allow(dead_code)]
-pub fn drop_fixture(_fixture: (Engine<SoloSigner>, TempDir)) {}
+pub fn drop_fixture(_fixture: (Box<Engine<SoloSigner>>, TempDir)) {}
 
 /// Deterministic 64-byte master seed for the bench fixture.
 ///

@@ -39,6 +39,21 @@
 //! ML-KEM keygen, envelope encryption, filesystem layout) is **setup**,
 //! held outside `b.iter`. Only the [`Engine::synced_height`] call is
 //! measured.
+//!
+//! # Unified fixture shape (`(Box<Engine<S>>, TempDir)`)
+//!
+//! [`build_engine_fixture`] returns `(Box<Engine<SoloSigner>>,
+//! TempDir)` per §4.2's boundary rule (the boxed shape keeps the
+//! iai-callgrind sibling's bench-function boundary memcpy negligible
+//! by passing only a pointer rather than the 6,296-byte engine
+//! struct). Criterion is not directly affected by the boundary rule
+//! — closure capture by reference makes value-pass-at-boundary moot
+//! for criterion's measurement model — but the unified shape lets
+//! both harnesses share one fixture helper. The `b.iter` closure
+//! body dereferences the box transparently: `engine.synced_height()`
+//! resolves to `(*engine).synced_height()` via `Box`'s auto-deref at
+//! zero pointer-chase cost beyond the one Valgrind already attributes
+//! to the call.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 

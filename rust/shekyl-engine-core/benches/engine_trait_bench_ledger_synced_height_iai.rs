@@ -19,29 +19,59 @@
 //!
 //! # Expected post-fixture instructions
 //!
-//! Per `docs/design/STAGE_0_HARNESS.md` §4.2 measurement-region
-//! discipline and the symmetry rule subsection: the post-fixture
-//! `instructions` count for this bench is expected to be in the
-//! **single-digit-to-low-tens range** — `Engine::synced_height`
-//! resolves to a chain of field accesses returning `u64`
-//! (`self.ledger.ledger.height()`), wrapped in `black_box`, with
-//! both fixture construction and fixture teardown excluded from the
-//! measured region.
+//! Per `docs/design/STAGE_0_HARNESS.md` §4.4's static check
+//! (component model): the post-fixture `instructions` count for
+//! this bench is expected to be in the **20–40 range** —
+//! `Engine::synced_height` resolves to a chain of field accesses
+//! returning `u64` (`self.ledger.ledger.height()`), wrapped in
+//! `black_box` (4–6 instructions for the call body), plus the
+//! unified-fixture-shape boundary memcpy (5–10 instructions for an
+//! 8-byte `Box<Engine<S>>` pointer + `TempDir` ≈ 32 bytes total),
+//! plus a small wiring overhead iai-callgrind doesn't fully exclude.
 //!
-//! Orders-of-magnitude-larger values (thousands, millions) indicate
-//! a symmetry-rule violation — fixture setup or teardown has leaked
-//! into the measured region. Investigation order per §4.4's static
-//! sanity-check:
+//! The fixture's `(Box<Engine<SoloSigner>>, TempDir)` shape is
+//! required by the boundary rule (§4.2): `Engine<SoloSigner>` is
+//! 6,296 bytes; passing it by value across the bench function
+//! boundary would produce ~600 instructions of memcpy cost, putting
+//! the measurement in §4.4's warning territory (50–300) without the
+//! workload itself justifying that range.
 //!
-//! 1. **Teardown leakage** — the bench function returns the fixture
-//!    and `teardown = drop_fixture` lifts `Drop` outside the measured
-//!    region. If the function consumes the fixture without returning
-//!    it (or the `teardown =` parameter is missing), `Drop` runs
-//!    inside the measurement and dominates the count. The criterion
-//!    sibling reports nanoseconds-per-iter consistent with a few
-//!    cycles when the workload itself is measured cleanly; an
-//!    iai-callgrind / criterion divergence of orders of magnitude on
-//!    the same workload is the textbook diagnostic.
+//! ## Investigation order per §4.4's static check
+//!
+//! Numbers in **§4.4's warning territory (50–300 instructions)**
+//! trigger three reviewer checks:
+//!
+//! 1. **Boundary-rule violation** — some fixture component crossing
+//!    the bench-function boundary by value with size > 64 bytes.
+//!    Verify the bench function's parameter and return types use
+//!    the unified `(Box<Engine<SoloSigner>>, TempDir)` shape; any
+//!    additional fixture field exceeding the 64-byte cutoff goes
+//!    behind `Box<T>`.
+//! 2. **Hardware-RNG leakage** — `RDRAND`-class instructions during
+//!    setup that Valgrind models non-deterministically. Move
+//!    RNG-touching code into the fixture build, outside the measured
+//!    region.
+//! 3. **Workload genuinely larger than the model assumed** — e.g.,
+//!    the trait method dispatches through a vtable that touches
+//!    additional indirection beyond a direct field-access chain.
+//!    Tighten the model with the additional component; refresh the
+//!    expected range; document the refinement in the PR description
+//!    so subsequent per-trait PRs inherit the corrected model.
+//!
+//! Numbers above the **invalid threshold (>300 instructions)**
+//! require investigation closure before transcription. Investigation
+//! order for invalid numbers:
+//!
+//! 1. **Teardown leakage (symmetry-rule violation)** — the bench
+//!    function returns the fixture and `teardown = drop_fixture`
+//!    lifts `Drop` outside the measured region. If the function
+//!    consumes the fixture without returning it (or the
+//!    `teardown =` parameter is missing), `Drop` runs inside the
+//!    measurement and dominates the count. The criterion sibling
+//!    reports nanoseconds-per-iter consistent with a few cycles when
+//!    the workload itself is measured cleanly; an iai-callgrind /
+//!    criterion divergence of orders of magnitude on the same
+//!    workload is the textbook diagnostic.
 //! 2. **Setup leakage** — the `#[bench::fresh_engine(setup =
 //!    build_engine_fixture, ...)]` attribute must keep the fixture
 //!    build outside the measured function body. If the build moves
@@ -74,8 +104,8 @@ use common::engine_fixture::{build_engine_fixture, drop_fixture};
 #[library_benchmark]
 #[bench::fresh_engine(setup = build_engine_fixture, teardown = drop_fixture)]
 fn engine_trait_bench_ledger_synced_height(
-    fixture: (Engine<SoloSigner>, TempDir),
-) -> (Engine<SoloSigner>, TempDir) {
+    fixture: (Box<Engine<SoloSigner>>, TempDir),
+) -> (Box<Engine<SoloSigner>>, TempDir) {
     let (engine, tmp) = fixture;
     let _ = black_box(engine.synced_height());
     (engine, tmp)
