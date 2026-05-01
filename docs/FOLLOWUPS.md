@@ -11,6 +11,23 @@ citing in a review.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Stage 1 performance baseline measurement before Stage 1 PRs land.**
+  The §3.3 *interior-mutability measurement gate* in
+  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+  is binding: [`docs/PERFORMANCE_BASELINE.md`](PERFORMANCE_BASELINE.md)
+  must be populated with measured baseline numbers and post-interior-lock
+  numbers before any Stage 1 trait-implementation PR opens.
+  The baseline = current `dev`-branch monolithic `Engine`
+  performance (outer `RwLock` only, no interior locks); post-interior-lock
+  numbers are compared to that, with thresholds-of-concern of 10%
+  (justification required) and 25% (optimization required) per
+  §3.3.1's Round 4b refinement. Reviewer responsibility: per
+  §3.3.1, the Stage 1 PR reviewer confirms the baseline document's
+  `dev` SHA matches a recent tip (within ~30 days) or triggers
+  re-measurement. Close-condition: baseline + post-interior-lock
+  numbers populated in `PERFORMANCE_BASELINE.md`; first Stage 1
+  PR review consumes the document. Target: V3.0, pre-Stage-1-PRs.
+
 - **`kameo` dependency pin and MSRV alignment before Stage 2 cuts.**
   The Path B boundary decision (*2026-04-27 — Engine binary boundary:
   pure message-passing over shared handle* in
@@ -1480,6 +1497,33 @@ one place to confirm each item's relationship to the wallet stack.
 ---
 
 ## V3.x — staker archival and visualization ship
+
+- **Stage 4 lifecycle async cutover requires `CHANGELOG.md`
+  flagging.** Per
+  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.8.7 (lifecycle async-public reversal at Stage 4), the Stage 4
+  cutover PR changes `Engine::create` and the `open_*` constructors
+  from sync-public to async-public. This is a public-API signature
+  change, even though it preserves the trait-surface invariants per
+  §7 (lifecycle is inherent, not trait, so §7's invariants don't
+  apply to it). The cutover commit must include a `CHANGELOG.md`
+  `[Unreleased]` entry under "Changed" calling out the signature
+  change explicitly:
+
+  > ```
+  > ### Changed
+  > - **BREAKING:** `Engine::create`, `Engine::open_existing`,
+  >   `Engine::open_view_only`, and `Engine::open_hardware_offload`
+  >   are now `async fn` (previously sync). Callers must `.await`
+  >   these constructors. Path B / Stage 4 cutover; see
+  >   `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.8.7.
+  > ```
+
+  This entry exists so the Stage 4 cutover author remembers to
+  update `CHANGELOG.md` at the cutover commit specifically — not
+  later, not implicitly. Close-condition: Stage 4 cutover ships
+  with the `CHANGELOG.md` entry above (or equivalent). Target:
+  V3.x (Stage 4 cutover phase).
 
 - **Stage 5 — `ArchivalEngine` native actor build (simulation-
   gated).** Build the staker-distributed chain-history archival
