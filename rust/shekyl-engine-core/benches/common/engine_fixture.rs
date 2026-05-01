@@ -32,21 +32,55 @@
 //! principle applies to all subsequent Stage 1 per-trait PR bench
 //! fixtures.
 //!
-//! # Setup-cost vs measurement region
+//! # Setup-cost and teardown-cost vs measurement region (symmetry rule)
+//!
+//! Per `docs/design/STAGE_0_HARNESS.md` §4.2 "The symmetry rule
+//! (criterion-vs-iai-callgrind asymmetry)": **setup and teardown are
+//! both excluded from the measured region; measurement is the call
+//! only.** Both halves are mechanized explicitly; the criterion and
+//! iai-callgrind harnesses use different mechanisms because they
+//! handle drop cost differently (criterion amortizes; iai-callgrind
+//! does not — see §4.2 for the asymmetry's structural cause).
 //!
 //! [`build_engine_fixture`] performs the full production lifecycle:
 //! Argon2id KDF (relaxed `KdfParams { m_log2 = 0x08, t = 1, p = 1 }`
 //! per `for_test_full`), ML-KEM keygen, classical-keypair derivation,
 //! envelope encryption, filesystem layout, and lock acquisition. Each
-//! call costs ~1–2 seconds wall-clock. **All of this is bench setup**,
-//! excluded from the measured region by criterion's `b.iter` closure
-//! boundary and iai-callgrind's `#[bench::*(setup = ...)]` attribute.
+//! call costs ~1–2 seconds wall-clock. **All of this is setup**,
+//! excluded from the measured region by:
+//!
+//! - criterion's `b.iter` closure boundary (the fixture is built once
+//!   outside `b.iter`; the closure body borrows the engine by
+//!   reference);
+//! - iai-callgrind's `#[bench::*(setup = build_engine_fixture)]`
+//!   attribute (the macro emits the setup call outside the measured
+//!   region).
+//!
+//! Symmetrically, [`drop_fixture`] is the teardown helper that
+//! iai-callgrind's `teardown = drop_fixture` parameter invokes
+//! **outside** the measured region. Without this explicit teardown,
+//! the fixture's `Drop` would run inside iai-callgrind's measured
+//! region (it measures the full bench function body in a single shot),
+//! and the cost of unwinding the engine, dropping its Arc-wrapped
+//! components, and removing the `TempDir`'s files would inflate the
+//! measured `instructions` count by orders of magnitude. The
+//! corresponding criterion bench does not need an explicit teardown
+//! because criterion's `b.iter` amortizes drop cost across millions
+//! of iterations and rounds to zero. **Both harnesses arrive at the
+//! same property — drop cost outside the measurement — through
+//! different mechanisms.**
 //!
 //! Per §4.2 measurement-region discipline, post-fixture iai-callgrind
 //! instructions for the `synced_height` workload should be in the
-//! single-to-double-digits; orders-of-magnitude larger numbers
-//! indicate the fixture has leaked into the measured region and the
-//! bench is invalid.
+//! single-digit-to-low-tens range. The diagnostic signal for a
+//! symmetry-rule violation is **order-of-magnitude divergence between
+//! the criterion and iai-callgrind harnesses on the same workload**:
+//! criterion reporting nanoseconds-per-iter consistent with a few
+//! cycles while iai-callgrind reports tens-of-thousands of
+//! instructions is the textbook sign that fixture `Drop` has leaked
+//! into iai's measured region. The order-of-magnitude check in §4.4
+//! catches this at the workflow_dispatch capture step before the
+//! number is transcribed into `PERFORMANCE_BASELINE.md`.
 //!
 //! # Tokio runtime locality
 //!
@@ -75,10 +109,18 @@
 //! # Returned guard shape
 //!
 //! [`build_engine_fixture`] returns `(Engine<SoloSigner>, TempDir)`.
-//! The `TempDir` lives until the bench function's scope ends,
+//! The `TempDir` lives across the bench function's measured region,
 //! holding the wallet's filesystem footprint until measurement
 //! completes. The Tokio runtime is fixture-internal — dropped before
 //! return — and is **not** part of the guard tuple.
+//!
+//! Per the symmetry rule (§4.2), the iai-callgrind bench function
+//! takes the tuple by value, performs its measured workload, and
+//! **returns the tuple** so iai-callgrind's `teardown = drop_fixture`
+//! parameter can invoke `Drop` outside the measured region. The
+//! criterion sibling does not return the tuple because the engine and
+//! tempdir live in the outer function scope across `b.iter`'s
+//! iteration loop.
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
@@ -143,6 +185,42 @@ pub fn build_engine_fixture() -> (Engine<SoloSigner>, TempDir) {
 
     (engine, tmp)
 }
+
+/// Teardown helper for iai-callgrind's `teardown = drop_fixture`
+/// parameter.
+///
+/// The function body is empty — taking ownership of the tuple is
+/// sufficient to schedule `Drop` execution on its members. iai-callgrind
+/// invokes this helper **outside** the measured region (per the
+/// symmetry rule in `docs/design/STAGE_0_HARNESS.md` §4.2), so the
+/// engine teardown (Arc decrements, ML-KEM key zeroization, lock
+/// release) and the `TempDir`'s `unlink` syscalls do not contaminate
+/// the bench's `instructions` count.
+///
+/// # Why this is concrete and not generic
+///
+/// Stage 0 PR-2 ships exactly one engine-trait bench fixture shape
+/// (`(Engine<SoloSigner>, TempDir)`). A generic `drop_fixture<T>`
+/// would not save complexity here, and it would fight iai-callgrind's
+/// macro expansion (the `teardown =` argument is resolved at
+/// macro-expansion time and prefers a fully-applied function path).
+/// Stage 1 per-trait PRs that introduce additional fixture shapes
+/// (e.g., a state-populated balance fixture carrying a transfer
+/// vector) add their own concrete `drop_*` siblings rather than
+/// generalizing this one.
+///
+/// # Dead-code suppression
+///
+/// `#[allow(dead_code)]` is required because the criterion sibling
+/// bench does not need `drop_fixture` — criterion's `b.iter`
+/// amortizes drop cost implicitly (see file-level docstring's
+/// "Setup-cost and teardown-cost vs measurement region" section).
+/// Each per-bench target compiles `mod common;` independently, and
+/// the criterion target sees `drop_fixture` as unused. This is
+/// expected and load-bearing: the symmetry rule's mechanism differs
+/// across harnesses.
+#[allow(dead_code)]
+pub fn drop_fixture(_fixture: (Engine<SoloSigner>, TempDir)) {}
 
 /// Deterministic 64-byte master seed for the bench fixture.
 ///

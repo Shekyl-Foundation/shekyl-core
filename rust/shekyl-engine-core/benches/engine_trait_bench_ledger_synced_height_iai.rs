@@ -20,16 +20,34 @@
 //! # Expected post-fixture instructions
 //!
 //! Per `docs/design/STAGE_0_HARNESS.md` §4.2 measurement-region
-//! discipline: the post-fixture `instructions` count for this bench
-//! is expected to be in the single-digit-to-low-tens range —
-//! `Engine::synced_height` resolves to a chain of field accesses
-//! returning `u64` (`self.ledger.ledger.height()`), wrapped in
-//! `black_box`. Orders-of-magnitude-larger values (thousands,
-//! millions) indicate the fixture has leaked into the measured region
-//! and the bench is invalid; investigate the
-//! `#[bench::fresh_engine(setup = …)]` attribute and the function
-//! body's `black_box` placement before transcribing into
-//! `PERFORMANCE_BASELINE.md`.
+//! discipline and the symmetry rule subsection: the post-fixture
+//! `instructions` count for this bench is expected to be in the
+//! **single-digit-to-low-tens range** — `Engine::synced_height`
+//! resolves to a chain of field accesses returning `u64`
+//! (`self.ledger.ledger.height()`), wrapped in `black_box`, with
+//! both fixture construction and fixture teardown excluded from the
+//! measured region.
+//!
+//! Orders-of-magnitude-larger values (thousands, millions) indicate
+//! a symmetry-rule violation — fixture setup or teardown has leaked
+//! into the measured region. Investigation order per §4.4's static
+//! sanity-check:
+//!
+//! 1. **Teardown leakage** — the bench function returns the fixture
+//!    and `teardown = drop_fixture` lifts `Drop` outside the measured
+//!    region. If the function consumes the fixture without returning
+//!    it (or the `teardown =` parameter is missing), `Drop` runs
+//!    inside the measurement and dominates the count. The criterion
+//!    sibling reports nanoseconds-per-iter consistent with a few
+//!    cycles when the workload itself is measured cleanly; an
+//!    iai-callgrind / criterion divergence of orders of magnitude on
+//!    the same workload is the textbook diagnostic.
+//! 2. **Setup leakage** — the `#[bench::fresh_engine(setup =
+//!    build_engine_fixture, ...)]` attribute must keep the fixture
+//!    build outside the measured function body. If the build moves
+//!    inside, the Argon2id KDF + ML-KEM keygen + envelope encryption
+//!    cost (~1–2 seconds wall-clock) appears as billions of
+//!    instructions.
 //!
 //! # Naming alignment
 //!
@@ -51,20 +69,16 @@ use shekyl_engine_core::{Engine, SoloSigner};
 
 mod common;
 
-use common::engine_fixture::build_engine_fixture;
+use common::engine_fixture::{build_engine_fixture, drop_fixture};
 
 #[library_benchmark]
-#[bench::fresh_engine(setup = build_engine_fixture)]
-fn engine_trait_bench_ledger_synced_height(fixture: (Engine<SoloSigner>, TempDir)) {
-    let (engine, _tmp) = fixture;
-    black_box(engine.synced_height());
-    // Keep the TempDir alive past the measured call so the wallet's
-    // file footprint is not torn down mid-measurement. Belt-and-
-    // suspenders: `_tmp` lives to scope end already, but `black_box`
-    // makes the liveness explicit against any future compiler-level
-    // dead-store elimination on bindings the function does not visibly
-    // consume.
-    black_box(_tmp);
+#[bench::fresh_engine(setup = build_engine_fixture, teardown = drop_fixture)]
+fn engine_trait_bench_ledger_synced_height(
+    fixture: (Engine<SoloSigner>, TempDir),
+) -> (Engine<SoloSigner>, TempDir) {
+    let (engine, tmp) = fixture;
+    let _ = black_box(engine.synced_height());
+    (engine, tmp)
 }
 
 library_benchmark_group!(
