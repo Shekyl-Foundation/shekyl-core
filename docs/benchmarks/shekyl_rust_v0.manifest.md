@@ -19,6 +19,23 @@ baseline today; one (`ledger_postcard_roundtrip`) is the canonical
 canary for the format-layer regression the C++ `BM_cache_roundtrip`
 was designed to catch before it was skipped.
 
+**V3 engine trait spec extension (Stage 0 PR-2 onward).** This
+manifest is also the prose specification for the
+`engine_trait_bench_*` class — a separate, Rust-only measurement
+gate from the V3 engine trait spec (see
+`docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §3.3.1, with the harness
+design pinned in `docs/design/STAGE_0_HARNESS.md`). The
+`engine_trait_bench_*` benches measure the cost of the Engine
+read paths that Stage 1's per-trait extraction will route through
+`DaemonEngine`, `LedgerEngine`, `KeyEngine`, and `EconomicsEngine`
+trait dispatch. They are evaluated against **per-bench frozen
+baselines**, not the rolling `bench-baseline` branch (see
+`STAGE_0_HARNESS.md` §3 for the freeze-vs-rolling reconciliation).
+Stage 0 PR-2 ships one populated section in this class
+(`engine_trait_bench_ledger_synced_height`); the other four are
+documented as placeholder sections below and are populated by
+their respective Stage 1 per-trait PRs.
+
 **Schema version.** `shekyl_rust_v0`. A schema bump is required
 whenever any benchmark's operation list, argument set, or measurement
 boundary changes; whenever a KAT profile (e.g. the iai-callgrind
@@ -45,6 +62,16 @@ Naming convention:
   constant-time property drifted.
 - `hot_path_bench_*` — slowdown-only threshold (+5% warn, +15% fail).
   Speedups are unambiguously good.
+- `engine_trait_bench_*` — bidirectional threshold (±10% warn,
+  ±25% fail). V3 engine trait spec read paths
+  (`V3_ENGINE_TRAIT_BOUNDARIES.md` §3.3.1). Bidirectional because
+  a large negative delta against the monolithic-engine baseline
+  likely indicates the bench fixture broke or measured the wrong
+  call path, not a real speed-up on a read-path that's already a
+  few field accesses. Looser thresholds than `crypto_bench_*`
+  because trait-dispatch overhead is allowed more headroom than
+  crypto control flow. Per-bench frozen baseline rather than the
+  rolling `bench-baseline` (per `STAGE_0_HARNESS.md` §3).
 
 ## 1. `hot_path_bench_ledger_postcard_roundtrip`
 
@@ -450,7 +477,7 @@ The criterion sibling keeps the production path (`scheme.sign(..)`,
 `keypair_generate()`, `OsRng` for BP+) because wall-clock averaging
 absorbs the rejection-sampling variance at the per-iteration level;
 only the instruction-count metric needs determinism. Both halves of
-the split are documented as §6.3 "known gap" because neither fully
+the split are documented as §11.3 "known gap" because neither fully
 exercises the production hedged-randomized sign path in a stable
 way — the criterion half measures it but with variance, the iai
 half measures a fips204-compliant deterministic variant.
@@ -463,7 +490,7 @@ curve-tree fixture is its own scope of work (the tree root is
 chain-dependent; synthesizing a valid fixture from scratch requires
 either a snapshot from the live daemon or a deterministic regtest
 chain of useful depth, neither of which is cheap). It is tracked as
-**§6.1 below**. In the interim, a delta in this bench is
+**§11.1 below**. In the interim, a delta in this bench is
 interpretable as a regression in **Bulletproofs+ or ML-DSA-65 only**;
 membership-proof cost is tracked separately once the fixture lands.
 
@@ -476,7 +503,193 @@ fast across the rewire" gate — FCMP++ excluded, with both directions
 of the bidirectional `crypto_bench_*` threshold enforced once the CI
 wiring lands in commit 3.
 
-## 6. Known gaps
+## 6. `engine_trait_bench_ledger_synced_height`
+
+**Crate.** `shekyl-engine-core`.
+**Binaries.** `benches/engine_trait_bench_ledger_synced_height.rs`
+(criterion), `benches/engine_trait_bench_ledger_synced_height_iai.rs`
+(iai-callgrind). Shared fixture in `benches/common/engine_fixture.rs`.
+
+**Class.** `engine_trait_bench_*` — bidirectional ±10% warn /
+±25% fail (per the naming-convention list above and
+`STAGE_0_HARNESS.md` §4.3).
+
+**Threshold disposition.** **Per-bench frozen baseline.** The
+baseline is captured at the merge SHA of the introducing PR
+(Stage 0 PR-2) and is **not** refreshed by the rolling
+`bench-baseline` branch. The captured numbers live in
+`docs/PERFORMANCE_BASELINE.md` along with the host manifest. See
+`STAGE_0_HARNESS.md` §3 for the freeze-vs-rolling reconciliation.
+
+**What it measures.** A single call to `Engine::synced_height()`
+on an `Engine<SoloSigner>` constructed via `Engine::create` (per
+Path A of `STAGE_0_HARNESS.md` §4.2). This is the
+"today-equivalent" call path for what becomes the trait-method
+call `<Engine<…> as LedgerEngine>::synced_height(&engine)` after
+the Stage 1 LedgerEngine PR; no surface change is needed for
+that migration since `synced_height` is a direct field-read of
+the ledger header (see `engine/merge.rs:86`).
+
+**Operation list — every step exercised in the measured region.**
+
+- Single `Engine::synced_height()` call, which dispatches to
+  `self.ledger.ledger.height()` per `engine/merge.rs:86`. That
+  resolves to two field accesses + one method call, where the
+  inner method is itself a `u64` field read on the underlying
+  `WalletLedger`. The full measured region is on the order of
+  single-to-double-digit instructions; see
+  `STAGE_0_HARNESS.md` §4.4 for the sanity-check expectation.
+
+**Fixture shape.** A real `Engine<SoloSigner>` constructed via
+`Engine::create`, using `EngineCreateParams::for_test_full`'s
+body **intentionally duplicated** in
+`benches/common/engine_fixture.rs` rather than widening
+`#[cfg(test)]` visibility (per Path A's visibility-expansion
+principle, `STAGE_0_HARNESS.md` §4.2). The fixture:
+
+- Allocates a `tempfile::TempDir` for filesystem state,
+  returned from the fixture as a guard so it lives through the
+  bench iteration.
+- Spins up a current-thread `tokio::runtime` locally,
+  constructs a `DaemonClient` against an unreachable URL
+  (`http://127.0.0.1:1`) so no network egress occurs, and
+  drops the runtime before returning.
+- Generates a `SoloSigner` from a deterministic test seed
+  (Argon2id KDF + ML-DSA-65 / Ed25519 keygen). KDF and keygen
+  cost is **setup**, excluded from the measured region.
+- Calls `Engine::create` with the assembled params.
+- Returns `(Engine<SoloSigner>, TempDir)`. The `TempDir` guard
+  is `black_box`-ed at the bench site to prevent dead-store
+  elimination of the temp directory ahead of the measured call.
+
+**Measurement boundary.** The criterion inner closure wraps
+`engine.synced_height()` in `black_box(...)`. The iai-callgrind
+sibling annotates the `#[library_benchmark]` with
+`#[bench::fresh_engine(setup = build_engine_fixture)]`; setup
+is **explicitly excluded** from the measured region per
+iai-callgrind's `setup =` semantics and per
+`STAGE_0_HARNESS.md` §4.2's measurement-region discipline. The
+TempDir guard is `black_box(_tmp)`-ed at the function tail so
+the compiler cannot release the temp directory ahead of the
+measured call.
+
+**Counters.**
+
+- criterion: ns/op (single call; no `Throughput::Elements`
+  scaling because the workload is constant-size).
+- iai-callgrind: `instructions`, `l1_hits`, `ll_hits`,
+  `ram_hits`, `total_read+write`, `estimated_cycles`. The
+  Stage 0 frozen baseline pins `instructions`; the others are
+  retained for human triage of a tripped gate.
+
+**Known gaps.** None for this bench. The workload is
+state-size-insensitive (always two field reads), so a fresh
+`Engine` from `Engine::create` is a representative fixture. The
+sanity-check expectation (single-to-double-digit instructions
+post-fixture) is documented in `STAGE_0_HARNESS.md` §4.4 and
+verified at PR-2 via the iai-callgrind determinism check.
+
+**Apples-to-oranges against C++.** N/A. The V3 engine trait
+spec (`V3_ENGINE_TRAIT_BOUNDARIES.md` §3.3.1) is a Rust-only
+post-extraction measurement gate; there is no C++ wallet2
+counterpart in the cross-stack manifest discipline.
+
+## 7. `engine_trait_bench_ledger_balance` *(deferred to Stage 1 LedgerEngine PR)*
+
+**Crate.** `shekyl-engine-core` (planned).
+**Binaries.** `benches/engine_trait_bench_ledger_balance.rs`,
+`benches/engine_trait_bench_ledger_balance_iai.rs` (planned).
+**Class.** `engine_trait_bench_*` (bidirectional ±10% / ±25%).
+
+**Disposition.** **Deferred** to the **Stage 1 LedgerEngine PR**
+(per `STAGE_0_HARNESS.md` §4.6's per-bench deferred assignment).
+The workload exists today as
+`engine.ledger().balance(synced_height)` through
+`LedgerBlockExt::balance` in `shekyl-scanner/src/ledger_ext.rs`,
+but a representative measurement requires a state-populated
+fixture (thousands of `transfers`), which requires the
+`MockDaemon` infrastructure introduced by Stage 1 PR 1
+(DaemonEngine, per `V3_ENGINE_TRAIT_BOUNDARIES.md` §6.1). The
+LedgerEngine PR introduces both the `LedgerEngine::balance`
+trait method and this bench, freezing the baseline at that PR's
+merge SHA against a state-populated fixture. The relevant
+state-population shape (depth and width of `transfers`) is
+documented in the introducing PR's manifest section update.
+
+**Section status.** Placeholder. The introducing PR replaces
+this section's body with the populated content (operation list,
+fixture shape, measurement boundary, counters, known gaps)
+following the §6 template above; the heading drops the
+*(deferred to …)* parenthetical at that point.
+
+## 8. `engine_trait_bench_key_account_public_address` *(deferred to Stage 1 KeyEngine PR)*
+
+**Crate.** `shekyl-engine-core` (planned).
+**Binaries.** `benches/engine_trait_bench_key_account_public_address.rs`,
+`benches/engine_trait_bench_key_account_public_address_iai.rs` (planned).
+**Class.** `engine_trait_bench_*` (bidirectional ±10% / ±25%).
+
+**Disposition.** **Deferred** to the **Stage 1 KeyEngine PR**
+(per `STAGE_0_HARNESS.md` §4.6's per-bench deferred assignment).
+The workload has **no today-equivalent call path** — no Rust
+function in the V3.0 codebase derives a wallet's primary account
+public address from key material as a single operation. Per
+`STAGE_0_HARNESS.md` §4.1, the workload first exists as a
+measurable unit when the `KeyEngine` trait method is introduced;
+the per-trait PR introduces both the trait method and this bench,
+freezing the baseline at that PR's merge SHA.
+
+**Section status.** Placeholder. The introducing PR replaces
+this section's body with the populated content following the §6
+template above.
+
+## 9. `engine_trait_bench_economics_current_emission` *(deferred to Stage 1 EconomicsEngine PR)*
+
+**Crate.** `shekyl-engine-core` (planned).
+**Binaries.** `benches/engine_trait_bench_economics_current_emission.rs`,
+`benches/engine_trait_bench_economics_current_emission_iai.rs` (planned).
+**Class.** `engine_trait_bench_*` (bidirectional ±10% / ±25%).
+
+**Disposition.** **Deferred** to the **Stage 1 EconomicsEngine PR**
+(per `STAGE_0_HARNESS.md` §4.6's per-bench deferred assignment).
+The workload has **no today-equivalent call path** — its
+components live in `shekyl-economics` (`calc_release_multiplier`,
+`split_block_emission`, `apply_release_multiplier`,
+`calc_effective_emission_share`) but no aggregating "emission at
+height H" function exists. Per `STAGE_0_HARNESS.md` §4.1, the
+workload first exists as a measurable unit when the
+`EconomicsEngine::current_emission` trait method is introduced;
+the per-trait PR introduces both the trait method and this bench,
+freezing the baseline at that PR's merge SHA.
+
+**Section status.** Placeholder. The introducing PR replaces
+this section's body with the populated content following the §6
+template above.
+
+## 10. `engine_trait_bench_economics_parameters_snapshot` *(deferred to Stage 1 EconomicsEngine PR)*
+
+**Crate.** `shekyl-engine-core` (planned).
+**Binaries.** `benches/engine_trait_bench_economics_parameters_snapshot.rs`,
+`benches/engine_trait_bench_economics_parameters_snapshot_iai.rs` (planned).
+**Class.** `engine_trait_bench_*` (bidirectional ±10% / ±25%).
+
+**Disposition.** **Deferred** to the **Stage 1 EconomicsEngine PR**
+(per `STAGE_0_HARNESS.md` §4.6's per-bench deferred assignment).
+The workload has **no today-equivalent call path** — the
+`EconomicParams` struct exists but no snapshot-constructor
+operation does. Per `STAGE_0_HARNESS.md` §4.1, the workload first
+exists as a measurable unit when the
+`EconomicsEngine::parameters_snapshot` trait method is introduced.
+The EconomicsEngine PR introduces both
+`current_emission` and `parameters_snapshot` trait methods and
+both their benches together, freezing each bench's baseline at
+that PR's merge SHA.
+
+**Section status.** Placeholder. The introducing PR replaces
+this section's body with the populated content following the §6
+template above.
+
+## 11. Known gaps
 
 The v0 baseline is explicit about what it does not measure:
 
@@ -551,7 +764,7 @@ lives asymmetrically between the two stacks — this is the
 apples-to-oranges manifest discipline the hardening document
 prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
 
-## 7. Cross-references
+## 12. Cross-references
 
 - `docs/MID_REWIRE_HARDENING.md` §3.1 — C++ scope, Five-path list,
   daemon-coupling rationale.
@@ -561,17 +774,39 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   table, rolling baseline, profile-on-fail (upcoming commit 3).
 - `docs/MID_REWIRE_HARDENING.md` §4.3 — apples-to-oranges manifest
   discipline.
+- `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §3.3.1 — V3 engine trait
+  spec measurement gate (the spec contract for the
+  `engine_trait_bench_*` class).
+- `docs/design/STAGE_0_HARNESS.md` — harness design doc for the
+  `engine_trait_bench_*` class. §3 freeze-vs-rolling
+  reconciliation; §4.2 fixture / measurement-region discipline;
+  §4.3 threshold class definition; §4.4 sanity-check
+  expectations; §4.6 per-bench deferred assignment to Stage 1
+  per-trait PRs.
+- `docs/PERFORMANCE_BASELINE.md` — frozen-baseline numbers for
+  `engine_trait_bench_*` (one populated row per merged
+  introducing PR).
 - `docs/benchmarks/wallet2_baseline_v0.manifest.md` — C++ sibling
   manifest.
 - `scripts/bench/capture_rust_baseline.sh` — authoritative local
   runner. Emits `shekyl_rust_v0.json` and
   `shekyl_rust_v0.iai.snapshot` into this directory.
 
-## 8. Change log for this manifest
+## 13. Change log for this manifest
 
 - `v0` (commit 2 of the mid-rewire hardening pass, a.k.a.
   `bench(wallet-state)`): initial Rust baseline. Live measurements:
   all five hot paths (`ledger_postcard_roundtrip`, `balance_compute`,
   `wallet_open_cold`, `scan_block`, `transfer_e2e_1in_2out`). Known
-  gaps documented in §6 (FCMP++ membership proof, hot-spend ledger
+  gaps documented in §11 (FCMP++ membership proof, hot-spend ledger
   shape, Argon2id production profile under Valgrind).
+- Stage 0 PR-2 of the V3 engine trait spec measurement gate (see
+  `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §3.3.1 and
+  `docs/design/STAGE_0_HARNESS.md`): introduced the
+  `engine_trait_bench_*` class and added §6
+  (`engine_trait_bench_ledger_synced_height`, populated) plus
+  four placeholder sections (§§7–10) for the deferred per-trait
+  benches. Schema version unchanged (`shekyl_rust_v0`); the new
+  class is additive routing in `compare.py` over the same JSON
+  envelope. Sections previously numbered §6–§8 (Known gaps,
+  Cross-references, Change log) renumbered to §§11–13.
