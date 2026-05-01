@@ -682,8 +682,11 @@ bench, `engine.synced_height()` (per §4.1). Engine construction
 ML-KEM keygen, filesystem layout, advisory lock acquisition,
 schema initialization) is **setup**, excluded from the measured
 region by `#[benches::with_setup]` (iai-callgrind) and `b.iter`'s
-closure scope (criterion). Reviewers verify the boundary in PR
-review:
+closure scope (criterion). Two further rules — the **symmetry
+rule** and the **boundary rule**, each with its own subsection
+below — keep fixture teardown and fixture value-movement at the
+bench-function boundary out of the measured region. Reviewers
+verify the boundaries in PR review:
 
 - The `b.iter` closure body / iai-callgrind benchmark function
   body contains only the trait-method-equivalent expression
@@ -691,19 +694,24 @@ review:
 - The Engine and any pre-derived state live outside the measured
   region (in `b.iter`'s outer scope or iai-callgrind's
   `setup = ...` argument).
+- The bench function's fixture parameter is the unified
+  `(Box<Engine<S>>, TempDir)` shape (per the boundary rule
+  below); the bench function returns the fixture rather than
+  consuming it (per the symmetry rule below).
 
-The threshold sanity-check (§5) catches fixture leakage by
+The threshold sanity-check (§4.4) catches fixture leakage by
 verifying the iai-callgrind `instructions` count is in the
-expected order of magnitude post-fixture: single-to-double-digit
-instructions for `synced_height`-class workloads (a few field
-accesses + one method call); proportional-to-N instructions for
-`balance`-class workloads (linear walk over `transfers`) at the
-LedgerEngine PR. Orders-of-magnitude-larger numbers — for
-example, millions of instructions for `synced_height` — indicate
-either the Engine construction or the fixture teardown leaked
-into the measured region; the bench is invalid pending
-fixture-shape investigation. See §4.4 for the
-order-of-magnitude check's two-cause resolution path.
+expected range post-fixture: 20–40 instructions for
+`synced_height`-class workloads (a few field accesses + one
+method call, plus the unified-fixture-shape boundary cost);
+proportional-to-N instructions for `balance`-class workloads
+(linear walk over `transfers`) at the LedgerEngine PR.
+Orders-of-magnitude-larger numbers — for example, millions of
+instructions for `synced_height` — indicate either Engine
+construction, fixture teardown, or fixture value-movement at
+the boundary leaked into the measured region; the bench is
+invalid pending fixture-shape investigation. See §4.4 for the
+static check's three-cause resolution path.
 
 **The symmetry rule (criterion-vs-iai-callgrind asymmetry).**
 Setup and teardown are both excluded from the measured region;
@@ -727,16 +735,18 @@ on the same workload:
 The asymmetry is structural — both harnesses are correct for
 their measurement model — but it means the iai-callgrind side
 needs explicit care to match what criterion does implicitly.
-The mechanism is iai-callgrind's `teardown =` parameter:
+The mechanism is iai-callgrind's `teardown =` parameter, paired
+with the `Box<Engine<S>>` indirection that the boundary rule
+(below) requires:
 
 ```rust
-fn drop_fixture(_f: (Engine<SoloSigner>, TempDir)) {}
+fn drop_fixture(_f: (Box<Engine<SoloSigner>>, TempDir)) {}
 
 #[library_benchmark]
 #[bench::fresh_engine(setup = build_engine_fixture, teardown = drop_fixture)]
 fn engine_trait_bench_ledger_synced_height(
-    fixture: (Engine<SoloSigner>, TempDir),
-) -> (Engine<SoloSigner>, TempDir) {
+    fixture: (Box<Engine<SoloSigner>>, TempDir),
+) -> (Box<Engine<SoloSigner>>, TempDir) {
     let (engine, tmp) = fixture;
     let _ = black_box(engine.synced_height());
     (engine, tmp) // hand back to teardown
@@ -748,7 +758,10 @@ it; iai-callgrind's `teardown` runs `drop_fixture` on the
 returned value, and the actual `Drop` of `Engine` / `TempDir`
 happens outside the measured region. The pattern is: **setup
 builds; bench measures; bench returns the fixture; teardown
-drops outside measurement.**
+drops outside measurement.** The `Box<Engine<S>>` shape is
+required by the boundary rule below; the symmetry rule and
+the boundary rule together produce the unified fixture shape
+`(Box<Engine<S>>, TempDir)` that both harnesses consume.
 
 The diagnostic signal for a violation of this rule:
 **order-of-magnitude divergence between the criterion and
@@ -766,11 +779,107 @@ value that doesn't drop expensively) before approving. The
 shared `benches/common/engine_fixture.rs` provides a reusable
 `drop_fixture` helper that the template above references.
 
+**The boundary rule (iai-callgrind measures function-boundary
+value movement).** iai-callgrind measures the *entire* bench
+function body, including the memcpy that runs at function
+entry (when arguments are passed by value) and at function
+exit (when return values are returned by value). For small
+fixtures this cost is negligible; for large fixtures it
+dominates the measured number and obscures the call's actual
+instruction count. The rule pairs with the symmetry rule:
+where the symmetry rule excludes setup and teardown by moving
+their *cost* outside the measured region, the boundary rule
+keeps fixture *movement* outside the measured region by
+ensuring what crosses the boundary is pointer-sized.
+
+The mechanism: Valgrind models memcpy as a sequence of
+instructions proportional to the bytes moved. At the
+bench-function boundary, passing a value-typed fixture in
+(and returning it out, per the symmetry rule's teardown
+pattern) produces two memcpys whose instruction count scales
+with the fixture's struct size. **`Engine<SoloSigner>` is
+6,296 bytes at Stage 0 PR-2's HEAD** (load-bearing context
+for fixture-shape decisions throughout Stage 1: every
+per-trait PR's bench fixture inherits the same engine shape;
+boundary cost would scale identically). Passing the engine
+by value through the bench function produces ~600 instructions
+of boundary cost — orders of magnitude larger than a
+`synced_height`-class workload's actual ~5–10 instruction
+cost.
+
+**Resolution: pointer-sized indirection at the boundary.**
+Wrap large fixture components in `Box<T>` so the
+bench-function boundary moves only an 8-byte pointer (plus
+any non-Box-wrapped siblings in the fixture tuple). The
+fixture's type is `(Box<Engine<S>>, TempDir)`; total boundary
+memcpy is `8 + sizeof::<TempDir>()` ≈ 32 bytes, well below
+the modern x86-64 AVX-line-scale 64-byte heuristic (tighten
+to 32 bytes if running on a runner with smaller vector units,
+e.g. NEON/SSE-only hardware). The unified fixture shape
+`(Box<Engine<S>>, TempDir)` is consumed transparently by both
+harnesses:
+
+- **iai-callgrind** receives the tuple by value through the
+  bench function boundary at pointer cost (per the template
+  in the symmetry rule above).
+- **Criterion** captures `&fixture` by reference inside its
+  `b.iter` closure; the closure body dereferences through
+  the box (`engine.synced_height()` resolves through
+  `Box`'s auto-deref) at zero pointer-chase cost beyond the
+  one Valgrind already attributes to the call.
+
+Criterion is not directly affected by the boundary rule
+(closure capture by reference makes value-pass-at-boundary
+moot for criterion's measurement model), but the unified
+fixture shape means both harnesses share one
+`build_engine_fixture` helper and one `drop_fixture` helper.
+
+**Diagnostic signal for a violation of this rule:** the
+order-of-magnitude check (§4.4) passes but the iai-callgrind
+number sits in §4.4's "warning territory" (50–300 instructions
+for `synced_height`-class workloads) without the workload
+itself justifying that range. A reviewer who sees a number
+in warning territory checks: was the fixture passed by value
+across the bench-function boundary with any field exceeding
+the 64-byte cutoff? If yes, the boundary rule applies; resolve
+via `Box<T>` indirection.
+
+**Fixture size matters: prefer `Box<T>` for large `T` at the
+bench-function boundary.** Subsequent per-trait PRs follow
+this template. The criterion for "large" is the 64-byte
+heuristic at modern x86-64 AVX-line scale; any field of a
+fixture tuple exceeding 64 bytes goes behind `Box`. Reviewers
+verify each new bench's fixture-tuple total size against the
+rule before approving.
+
+**Stage 1 trait-extraction implications.** When `synced_height`
+migrates from inherent method on `Engine<S>` to trait method
+on `LedgerEngine`, the dispatched call receives `&self`
+(`&Engine<S>`) by reference and the boundary cost is unchanged
+— the trait-method dispatch doesn't move the engine across
+the boundary. The boundary rule's relevance shifts from
+"large fixture struct crosses the bench boundary" (current
+concern) to "trait-method dispatch adds vtable indirection
+inside the measured region" (Stage 1 concern, addressed by
+§4.4's model-refinement path). The unified fixture shape
+remains correct across the migration; the model's components
+gain a vtable-indirection term.
+
+**This rule applies to all subsequent Stage 1 per-trait PR
+benches.** Authors copy the template above and reviewers
+verify (a) the fixture tuple's total size, (b) the
+Box-or-not declaration for any field exceeding 64 bytes,
+and (c) the bench function's signature accepts and returns
+the unified fixture shape. The shared
+`benches/common/engine_fixture.rs` provides the
+`build_engine_fixture` and `drop_fixture` helpers in the
+canonical shape.
+
 **Why this distribution (gap-check meta-pattern).** Stage 0
-PR-2's scope is the result of five structural findings the
-pre-drafting gap-check (Findings 1–4) and the threshold
-sanity-check on the first capture (Finding 5) produced before
-the baseline was transcribed:
+PR-2's scope is the result of six structural findings the
+pre-drafting gap-check (Findings 1–4) and threshold
+sanity-checks on successive captures (Findings 5–6) produced
+before the baseline was transcribed:
 
 1. **Finding 1** (resolved at the first design-doc tightening,
    §4.1): the §3.3.1 hot paths label trait-method surfaces that
@@ -810,7 +919,8 @@ the baseline was transcribed:
    §4.4's order-of-magnitude check): the first
    `workflow_dispatch` capture of
    `engine_trait_bench_ledger_synced_height` reported 60,033
-   instructions where §4.4 expected single-digit-to-low-tens.
+   instructions where §4.4's component model predicted 20–40
+   (a 1,500–3,000× divergence).
    Investigation traced the contamination to fixture `Drop`
    running inside iai-callgrind's measured region — a
    structural property of iai-callgrind's single-shot
@@ -827,8 +937,30 @@ the baseline was transcribed:
    every `engine_trait_bench_*` bench inherits the symmetry
    rule and the `drop_fixture` helper from
    `benches/common/engine_fixture.rs`, not just `synced_height`.
+6. **Finding 6** (resolved here, §4.2's boundary rule and
+   §4.4's warning-territory check): the second
+   `workflow_dispatch` capture of
+   `engine_trait_bench_ledger_synced_height` (after Finding 5's
+   symmetry-rule fix landed) reported 637 instructions where
+   §4.4's tightened expectation predicted 20–40. Investigation
+   traced the contamination to memcpy at the bench-function
+   boundary — passing the 6,296-byte `Engine<SoloSigner>`
+   struct by value into and out of the bench function produced
+   ~600 instructions of boundary cost. The criterion sibling
+   reported a stable few-nanoseconds-per-iter, confirming the
+   call's actual cost remained on the model's predicted order;
+   iai-callgrind's measurement was capturing a structural
+   property of value-pass-at-boundary that criterion's
+   by-reference closure capture doesn't experience. Resolution:
+   §4.2's "boundary rule" — pointer-sized indirection at the
+   bench-function boundary, via `Box<T>` for large fixture
+   components — operationalized through the unified fixture
+   shape `(Box<Engine<S>>, TempDir)`. The fix is
+   **class-level**: every `engine_trait_bench_*` bench inherits
+   the boundary rule and the boxed-engine fixture shape from
+   `benches/common/engine_fixture.rs`, not just `synced_height`.
 
-The five findings share a structural feature: each is a case
+The six findings share a structural feature: each is a case
 of "the discipline named a property, and the operational
 mechanism did not preserve the property by default." This is
 not a flaw in the discipline or the design doc — the
@@ -836,39 +968,52 @@ discipline's purpose is to name the property, and the design
 doc's purpose is to operationalize it. The pre-drafting
 gap-check between PR-1 (design) and PR-2 (implementation) is
 the verification step where future-state claims meet today's
-code (Findings 1–4); the threshold sanity-check at the first
-`workflow_dispatch` capture is the verification step where
-the design's claims meet the harness's actual behavior
-(Finding 5).
+code (Findings 1–4); threshold sanity-checks at successive
+`workflow_dispatch` captures (Findings 5–6) are the
+verification steps where the design's claims meet the
+harness's actual behavior — each capture's sanity-check
+surfaces a contamination layer; closing each layer matures
+the substrate. Findings 5 and 6 were surfaced by *successive*
+captures because each fix changed the shape of what the next
+capture could measure: with `Drop` excluded (Finding 5
+resolved), the previously-hidden boundary memcpy became the
+dominant cost (Finding 6 surfaced); with both excluded, the
+measured number sits at the model's predicted order.
 
 **Pre-stated expectations are load-bearing.** Without §4.4's
-explicit "single-digit-to-low-tens for `synced_height`-class
-workloads" expectation, 60,033 instructions could have been
-silently transcribed into `PERFORMANCE_BASELINE.md` as the
-frozen baseline; the rolling discipline would inherit the
-contamination and every per-trait PR's cumulative-delta
-computation would be diffing against a Drop-dominated number.
-The pre-stated expectation is what makes a divergence
-*meaningful*; the number alone says nothing. Per §4.4's
-per-trait PR design-note obligation, every new
-`engine_trait_bench_*` bench pre-states an expected order of
-magnitude in its design notes and bench file header.
+explicit component-model expectation (20–40 for
+`synced_height`-class workloads with the unified-fixture-shape
+boundary cost; proportional-to-N for `balance`-class workloads),
+60,033 instructions (Finding 5) and 637 instructions (Finding 6)
+could each have been silently transcribed into
+`PERFORMANCE_BASELINE.md` as the frozen baseline; the rolling
+discipline would inherit the contamination and every per-trait
+PR's cumulative-delta computation would be diffing against a
+Drop-dominated or boundary-memcpy-dominated number. The
+pre-stated expectation is what makes a divergence *meaningful*;
+the number alone says nothing. Per §4.4's per-trait PR
+description checklist, every new `engine_trait_bench_*` bench
+pre-states an expected range (with component model) in its PR
+description and the bench file's header comment.
 
-**Resolutions are class-level, not one-off.** Findings 2–5
+**Resolutions are class-level, not one-off.** Findings 2–6
 each surfaced through one specific bench (the workload-size
 question for `balance`; the test-helper-visibility question
 for the `synced_height` fixture; the workload-doesn't-exist
 question for the three deferred benches; the
-Drop-contamination question for the `synced_height` capture),
-but the resolution in each case is a class-level rule that
-every bench in the family inherits. This is deliberate: a
-one-off patch on the surfacing bench would leave the next
-per-trait PR author rediscovering the same problem. Z (the
-disposition for Finding 5) is consistent with this pattern —
-the symmetry rule applies to all `engine_trait_bench_*`
-benches, not just the one whose capture surfaced it.
+Drop-contamination question for the `synced_height` capture;
+the boundary-memcpy question for the `synced_height`
+re-capture), but the resolution in each case is a class-level
+rule that every bench in the family inherits. This is
+deliberate: a one-off patch on the surfacing bench would
+leave the next per-trait PR author rediscovering the same
+problem. The symmetry rule (Finding 5) and the boundary rule
+(Finding 6) both apply to all `engine_trait_bench_*` benches,
+not just the one whose capture surfaced them; the unified
+fixture shape `(Box<Engine<S>>, TempDir)` operationalizes
+both rules for every per-trait PR's bench at once.
 
-The **single principle** that resolved all five findings: *a
+The **single principle** that resolved all six findings: *a
 measurement that pretends to be more than it is corrupts the
 discipline depending on it.* A baseline that re-baselines
 isn't a baseline (Finding 2); a fixture that bypasses
@@ -876,13 +1021,15 @@ production isn't a fixture (Finding 3); a number measured
 against fresh-engine isn't a representative number for
 state-dependent workloads (Finding 4); a measurement
 dominated by Drop cost isn't a measurement of the call
-(Finding 5). The design's scope is the result of this
-principle applied uniformly: **benches measure their
-workloads at the SHA where those workloads first exist as
-measurable units through representative fixtures with
-correctly-bounded measurement regions**, not earlier and
-not against synthetic compositions, and with neither
-construction nor teardown leaking into the measurement.
+(Finding 5); a measurement dominated by boundary memcpy
+isn't a measurement of the call either (Finding 6). The
+design's scope is the result of this principle applied
+uniformly: **benches measure their workloads at the SHA
+where those workloads first exist as measurable units
+through representative fixtures with correctly-bounded
+measurement regions**, not earlier and not against synthetic
+compositions, and with neither construction, nor teardown,
+nor boundary value-movement leaking into the measurement.
 
 Stage 0 PR-2 ships the harness substrate
 (criterion + iai-callgrind discipline; new bench class; routing;
@@ -969,15 +1116,69 @@ how it varies; the determinism check is the **dynamic** test
 (N numbers, equality comparison) and runs against the validated
 shape.
 
-**Static check: order-of-magnitude expected-value comparison.**
-Verify the captured iai-callgrind `instructions` count is in
-the expected order of magnitude per §4.2's measurement-region
-discipline: single-digit-to-low-tens for `synced_height`-class
-workloads (a few field accesses + one method call);
-proportional-to-N for `balance`-class workloads (linear walk
-over `transfers`). When the actual count exceeds the expected
-value by **more than one order of magnitude**, the bench is
-invalid. The two most common causes, in order of likelihood:
+**Static check: expected-value comparison against a component
+model.** Verify the captured iai-callgrind `instructions`
+count is in the expected range per §4.2's measurement-region
+discipline. The expected range is computed from a
+**component model** of the call's actual cost plus the
+unified-fixture-shape boundary cost, not a single
+order-of-magnitude estimate; with both the symmetry rule
+and the boundary rule in force, the residual cost is
+predictable to within a small constant.
+
+**`synced_height`-class workloads (a few field accesses +
+one method call) plus a unified-fixture bench-function
+boundary:**
+
+- **Expected (~20–40 instructions).** Component model: 4–6
+  instructions for the call body (a chain of field accesses
+  returning `u64`, with `black_box` on the result); 5–10 for
+  the bench-function boundary memcpy (8-byte
+  `Box<Engine<S>>` pointer plus `TempDir` plus alignment;
+  passing the fixture tuple in and returning it out per the
+  symmetry rule); a small overhead for setup/teardown wiring
+  that iai-callgrind doesn't fully exclude. The 20–40 range
+  bounds the model's components plus reasonable
+  per-runner-architecture variance in instruction
+  decomposition.
+- **Warning territory (50–300 instructions).** Worth
+  investigating before transcription. Three reviewer checks
+  apply when a measurement lands here:
+  1. **Did the fixture cross the bench-function boundary by
+     value with any field exceeding 64 bytes?** (The 64-byte
+     cutoff is a heuristic at modern x86-64 AVX-line scale;
+     tighten to 32 bytes if running on a runner with smaller
+     vector units, e.g. NEON/SSE-only hardware.) → likely
+     boundary-rule violation; resolve via `Box<T>`
+     indirection per §4.2's boundary rule.
+  2. **Did fixture setup involve hardware-RNG instructions
+     that leaked into the measured region?** → likely
+     `RDRAND` leakage (cause 2 below); move RNG-touching
+     code into setup, outside the measured region.
+  3. **Is the called workload genuinely larger than the
+     model assumed** (e.g., the trait method dispatches
+     through a vtable that touches additional instructions
+     of indirection beyond a direct field-access chain)?
+     → tighten the model with the additional component;
+     refresh the expected range; document the refinement
+     in the PR description so subsequent per-trait PRs
+     inherit the corrected model.
+- **Invalid (>300 instructions).** The gap from prediction
+  to measurement is too large for the number to represent
+  the workload at the predicted shape. Investigation must
+  close before transcription. The number does not enter
+  `PERFORMANCE_BASELINE.md`.
+
+**`balance`-class workloads (linear walk over `transfers`):**
+Proportional to N where N is the number of `transfers` in
+the fixture. The per-trait PR's design notes pre-state both
+the expected per-element instruction cost and the fixture's
+N; the static check verifies the captured count against
+`N × per_element_cost + boundary_cost`. Same warning-territory
+and invalid bands apply, scaled by N.
+
+**Three causes for static-check failures, in order of
+likelihood:**
 
 1. **Fixture teardown leaking into the measured region** —
    the bench function takes ownership of the fixture and
@@ -995,41 +1196,174 @@ invalid. The two most common causes, in order of likelihood:
    measured call; if the bench function does, the
    RNG-touching code lives in the fixture build and needs
    to move outside the measured region.
+3. **Value-passing of large structs through the
+   bench-function boundary** — iai-callgrind measures the
+   memcpy at function entry and exit. A fixture tuple field
+   exceeding the 64-byte cutoff that crosses the boundary by
+   value adds boundary cost proportional to the bytes
+   moved. Per the boundary rule in §4.2, large fixture
+   components go behind `Box<T>` so the boundary moves only
+   an 8-byte pointer.
 
-The order-of-magnitude check is **only meaningful with a
-pre-stated expectation**: 60,033 instructions on its own says
-nothing; 60,033 instructions against a pre-stated expectation
-of "single-digit-to-low-tens" is a 3,000× divergence that
-forces investigation. Without the pre-stated expectation, an
-invalid measurement transcribes silently into
-`PERFORMANCE_BASELINE.md` and the discipline depending on it
-inherits the contamination. **Per-trait PR design-note
-obligation:** every Stage 1 per-trait PR introducing a new
-`engine_trait_bench_*` bench must pre-state the expected
-order-of-magnitude for the iai-callgrind instruction count in
-the PR description (and in the bench file's
-"Expected post-fixture instructions" header comment, mirroring
-the convention established by
-`engine_trait_bench_ledger_synced_height_iai.rs`). Reviewers
-apply the order-of-magnitude check at the workflow_dispatch
-capture step using the pre-stated expectation as the anchor;
-a bench whose design notes do not pre-state an expectation
-fails review on the missing anchor before a baseline is
-captured.
+**The model is a prediction, not a contract.** The 20–40
+range is the design's prediction of the workload's actual
+cost given the model components above. It is not a target
+benches must hit; it is an expectation the discipline
+validates or refines. A measurement that lands in the
+expected range is a *necessary-but-not-sufficient* condition
+for transcription — the discipline still requires the
+determinism check (below) and the per-trait PR's structural
+review against the substrate's accumulated rules. A
+measurement that lands outside the range forces
+investigation; investigation may refine the model (if the
+workload is genuinely larger than predicted) or close a
+contamination (if the workload is the predicted size and
+the boundary or teardown is leaking). Pinning the model as
+"prediction, not contract" prevents the fast-path acceptance
+pattern where a measurement lands in the upper edge of the
+expected range and ships without scrutiny; the model is a
+sanity check, not a passing grade.
+
+**Pre-stated expectations are load-bearing.** The static
+check is **only meaningful with a pre-stated expectation**:
+60,033 instructions on its own says nothing; 60,033
+instructions against a pre-stated expectation of "20–40
+per the synced_height-class model" is a 3,000× divergence
+that forces investigation. Without the pre-stated
+expectation, an invalid measurement transcribes silently
+into `PERFORMANCE_BASELINE.md` and the discipline depending
+on it inherits the contamination. The per-trait PR
+description checklist (below) operationalizes this
+obligation as a normative requirement.
+
+**Per-trait PR description checklist (normative).** Every
+Stage 1 per-trait PR introducing a new
+`engine_trait_bench_*` bench must include the following four
+items in its PR description; reviewers gate on all four. A
+PR description missing any item is not reviewable until the
+missing item is added.
+
+1. **Pre-stated expected order-of-magnitude (or range) for
+   iai-callgrind `instructions`.** Either a single number
+   (e.g., "expected ~25 instructions") or a range (e.g.,
+   "expected 20–40 per the synced_height-class model"),
+   with the component model named. The pre-stated
+   expectation is the anchor against which the static check
+   applies; a bench whose design notes do not pre-state an
+   expectation fails review on the missing anchor before a
+   baseline is captured.
+2. **Fixture tuple total size in bytes**, with explicit
+   Box-or-not declaration for any field exceeding the
+   64-byte cutoff. The total boundary cost (~5–10
+   instructions for an all-pointer-sized tuple) is part of
+   the model in item 1; a fixture whose fields cross the
+   64-byte threshold without `Box<T>` indirection violates
+   §4.2's boundary rule and must be revised before capture.
+3. **Capture sequence.** N=3 `workflow_dispatch` runs on
+   the PR's branch tip; iai-callgrind determinism asserted
+   as ±0% across the runs (per §4.4's dynamic check). The
+   PR description records the three numbers; the static
+   check runs against any one of them (they're equal); the
+   dynamic check runs against the trio.
+4. **Known sources of contamination this PR's bench cannot
+   hit.** Enumerate the inherited substrate rules
+   (symmetry rule per §4.2; boundary rule per §4.2;
+   per-bench frozen-baseline-SHA alignment per §4.2 / §4.5;
+   visibility-expansion principle per §4.2; today-equivalent
+   call path per §4.1) and assert non-violation for each.
+   The PR description records the assertions; reviewers
+   verify each assertion against the bench file's actual
+   shape. This bullet is the load-bearing one — it forces
+   each PR author to enumerate the substrate's accumulated
+   state and confirm their bench is outside each rule's
+   failure surface, producing a *positive verification*
+   rather than absence-of-finding.
+
+The bench file's header comment mirrors items 1 and 2 (the
+"Expected post-fixture instructions" section, per the
+convention established by
+`engine_trait_bench_ledger_synced_height_iai.rs`). Items 3
+and 4 live in the PR description only.
 
 **Dynamic check: iai-callgrind determinism across N runs.**
 Re-run iai-callgrind across N runs on `ubuntu-latest`.
 **Confirm** variance is ±0% (Valgrind is deterministic for
 typical code); do not assert it. Non-zero variance with the
-order-of-magnitude check passing typically points to
-hardware-RNG leakage (cause 2 above) — the bench itself is
-shape-correct but the fixture is touching `RDRAND`-class
-instructions during setup that Valgrind models as
-non-deterministic. Re-run criterion across N runs; record the
-wall-clock variance for the host manifest. The dynamic check
-confirms the gate-metric is coherent against the thresholds;
-it does not aim to prove criterion wall-clock is precise
-(it isn't, on shared runners).
+static check passing typically points to hardware-RNG leakage
+(cause 2 above) — the bench itself is shape-correct but the
+fixture is touching `RDRAND`-class instructions during setup
+that Valgrind models as non-deterministic. Re-run criterion
+across N runs; record the wall-clock variance for the host
+manifest. The dynamic check confirms the gate-metric is
+coherent against the thresholds; it does not aim to prove
+criterion wall-clock is precise (it isn't, on shared runners).
+
+**Per-capture finding budget (substrate maturation, not
+discipline failure).** The threshold sanity-check is *expected*
+to surface findings — not because the discipline is broken,
+but because the substrate has accumulated contamination layers
+that successive captures peel off. Each finding closes one
+layer; the substrate matures toward a steady state of zero
+findings per capture. The trajectory is monotonic:
+contamination layers don't regenerate once closed at
+class-level (per the "Resolutions are class-level" principle
+in §4.2).
+
+Stage 0 PR-2's substrate-maturation cost paid up front: two
+sanity-check captures surfaced two contamination layers
+(Drop, then memcpy boundary), each closed at design-doc
+level with class-wide rules that subsequent benches inherit.
+Future per-trait PRs are expected to surface fewer findings
+per capture as the substrate matures. **Both directions of
+the signal are load-bearing**: a clean first capture
+*late* in Stage 1 validates the substrate's maturation; a
+clean first capture *now* would suggest the sanity-checks
+are too weak to find what's there. If four deferred per-trait
+PRs all produce clean first captures, that's news worth
+investigating; if they each produce one or two findings that
+close cleanly, that's the expected substrate-maturation
+rhythm.
+
+The discipline's failure mode under wrong framing would be:
+"the gap-check produces N findings per capture; therefore the
+gap-check is broken; therefore we should weaken the
+sanity-checks or accept results without them." Each step is
+wrong, but the wrongness compounds — and the resulting
+steady state would be weakened sanity-checks that miss real
+contamination. The right framing makes findings *and* their
+absence carry information, and prevents the reasoning failure
+under future "but we're surfacing too many findings" pressure.
+
+**Gap-check shifts with PR scope.** The pre-drafting
+gap-check's findings shift across PRs as the substrate
+matures and as the surface under measurement changes:
+
+- **Stage 0 PR-1 (design)** surfaced design→discipline gaps:
+  did the design's framing match the discipline it was
+  operationalizing? Findings were documentation-level and
+  closed at design-doc-tightening rounds.
+- **Stage 0 PR-2 (implementation)** surfaced
+  design→implementation gaps (Findings 1–4) and
+  design→harness-behavior gaps (Findings 5–6 — the symmetry
+  rule and the boundary rule, respectively). Findings closed
+  at design-doc level (rule additions) and propagated through
+  implementation in the per-bench fix commits.
+- **Stage 1 per-trait PRs** inherit the closed substrate.
+  Their gap-checks surface trait-specific gaps:
+  trait-method-dispatch overhead vs. the predicted model;
+  fixture-state-population shape gaps (LedgerEngine PR's
+  `balance` fixture); fixture-construction gaps for new
+  trait surfaces (KeyEngine PR's account-address fixture).
+  The substrate's accumulated rules apply by default; the
+  per-trait PR's gap-check focuses on the trait's
+  incremental surface.
+
+Each PR's gap-check is bounded by what the substrate's
+accumulated state has already named. Future per-trait PRs
+are expected to surface different finding *shapes* than
+Stage 0 PR-2's Findings 1–6; the per-capture-finding-budget
+paragraph above quantifies the expected *number*, but the
+*kind* of finding shifts with each PR's scope.
 
 **If criterion variance is unexpectedly high on the gate-metric
 benches.** PR-2 may surface a small framing tightening to
@@ -1268,35 +1602,74 @@ PR", "deferred to: KeyEngine PR", or "deferred to: EconomicsEngine
 PR") into populated rows with the captured numbers and the PR's
 merge SHA.
 
-**Pre-drafting gap-check as workflow discipline.** The four
+**Pre-drafting gap-check as workflow discipline.** Six
 structural findings enumerated in §4.2's "Why this distribution"
-were each surfaced by a pre-drafting gap-check between the
-design doc (Stage 0 PR-1) and the implementation (Stage 0
-PR-2): the design's operational claims were verified against
-today's code before any commits were drafted. This pattern is
-not specific to Stage 0 PR-2; it applies recursively to Stage 1
-per-trait PRs and to V3.1+ spec/design-doc work:
+were each surfaced by a verification step between the design
+doc and the harness's actual behavior: the pre-drafting
+gap-check between Stage 0 PR-1 (design) and Stage 0 PR-2
+(implementation) surfaced Findings 1–4; threshold sanity-checks
+on successive `workflow_dispatch` captures surfaced Findings
+5–6. The design's operational claims were verified against
+today's code before any commits were drafted, and against the
+harness's measured behavior before any baseline was
+transcribed. This pattern is not specific to Stage 0 PR-2; it
+applies recursively to Stage 1 per-trait PRs and to V3.1+
+spec/design-doc work:
 
 - **Each Stage 1 per-trait PR** runs a pre-drafting gap-check
   against today's code (which now includes prior Stage 1 PRs'
-  changes) before drafting its first commit. Structural findings
-  resolve at design-doc-tightening level (or at the per-trait
-  PR's commit-1 design-doc tightening if a separate tightening
-  is appropriate); code drafting begins against the cleaned-up
-  plan.
+  changes) before drafting its first commit, and applies the
+  threshold sanity-check at each `workflow_dispatch` capture.
+  Structural findings resolve at design-doc-tightening level
+  (per the design-doc-first preparatory PR pattern below); code
+  drafting begins against the cleaned-up plan.
 - **V3.1+ spec/design-doc work** (V3.1 multisig per §10.3.1;
   V3.x archival; Phase 2b StakeEngine; future trait surfaces)
   inherits the same discipline. Spec rounds name the future-state
   surface; design-doc rounds verify each operational claim
   against today's code; pre-drafting gap-checks do the
-  verification before commits.
+  verification before commits; sanity-checks at first capture
+  do the verification before transcription.
 
-The cost is bounded (one investigation pass per design doc,
-producing a small finite number of structural findings); the
-benefit is the same principle that anchored Stage 0 PR-2 — *a
-measurement (or implementation) that pretends to be more than
-it is corrupts the discipline depending on it*. Future
-implementers inherit the discipline through this paragraph.
+The cost is bounded (one investigation pass per design doc and
+one sanity-check per capture, each producing a small finite
+number of structural findings per the per-capture finding budget
+in §4.4); the benefit is the same principle that anchored
+Stage 0 PR-2 — *a measurement (or implementation) that pretends
+to be more than it is corrupts the discipline depending on it*.
+Future implementers inherit the discipline through this paragraph.
+
+**Design-doc-first preparatory PRs (γ pattern).** When a
+per-trait PR's pre-drafting gap-check or threshold sanity-check
+surfaces a finding that requires a design-doc tightening, the
+tightening lands in a **separate preparatory PR** (off `dev`,
+design-doc only) before the per-trait PR's implementation
+commits land. The implementation references the merged rule;
+the design-doc rule exists independently and is testable in
+isolation ("does the rule's framing hold up to scrutiny without
+an implementation alongside?").
+
+This pattern is policy-aligned with `06-branching.mdc`'s
+"preparatory work lands on dev so subsequent work has a stable
+base"; it operationalizes `05-system-thinking.mdc`'s
+"specification first, code second." Stacking the design-doc
+tightening as a commit *within* the per-trait PR (rather than
+landing it as a separate preparatory PR) creates a temporal
+entanglement where the implementation references a rule landing
+simultaneously, weakening the rule's testability-in-isolation
+property; the design-doc-first pattern breaks that entanglement.
+
+Stage 0 PR-2's symmetry rule (Finding 5) and boundary rule
+(Finding 6) both followed this pattern: each rule landed in a
+preparatory PR as a design-doc tightening; the per-bench fix
+commits in PR-2 referenced the merged rules. Subsequent
+per-trait PRs apply the same pattern when their own findings
+surface — design-doc tightenings are not folded inline as
+commits within the per-trait PR; they land as their own
+preparatory PRs off `dev`. This precedent makes future per-trait
+PRs simpler to scope: "our PR doesn't need to also land
+design-doc tightenings inline; we surface, tighten in a
+preparatory PR, then implement."
 
 **Stage 2+ method additions.** When a future PR adds a new
 hot-path method to an existing trait, that PR adds the bench
@@ -1452,16 +1825,20 @@ PR-2 reviewers verify against this design:
       the measured region). The deferred four benches'
       sanity-checks are carried out at their respective per-trait
       PRs per §4.6's per-bench deferred assignment.
-  - **Order-of-magnitude sanity check** (per §4.2's
-    Measurement region discipline). Verify post-fixture
-    iai-callgrind `instructions` are in the expected order:
-    single-to-double-digit for `synced_height`-class workloads;
-    proportional-to-N for `balance`-class workloads at the
-    LedgerEngine PR. Orders-of-magnitude-larger numbers indicate
-    the `Engine` construction leaked into the measured region;
-    the bench is invalid pending fixture-shape investigation.
-    This sub-check runs at PR-2 for the Stage-0-frozen bench
-    and at every per-trait PR introducing a deferred bench.
+  - **Static check: expected-value comparison against the
+    component model** (per §4.2's Measurement region
+    discipline and §4.4's static check). Verify post-fixture
+    iai-callgrind `instructions` are in the expected range:
+    20–40 for `synced_height`-class workloads (call body +
+    unified-fixture-shape boundary cost); proportional-to-N
+    for `balance`-class workloads at the LedgerEngine PR.
+    Numbers in §4.4's warning territory (50–300) trigger the
+    three reviewer checks (boundary rule violation, hardware-RNG
+    leakage, model-refinement); numbers above the invalid
+    threshold (>300) require investigation closure before
+    transcription. This sub-check runs at PR-2 for the
+    Stage-0-frozen bench and at every per-trait PR introducing
+    a deferred bench.
 - [ ] **Threshold sanity-check: criterion variance documentation**
       (Stage-0-frozen bench). Re-run criterion N times across a
       fresh `ubuntu-latest` runner for the Stage-0-frozen bench;
