@@ -97,6 +97,20 @@ name = "refresh_snapshot"
 harness = false
 required-features = ["bench-internals"]
 
+# `engine_trait_bench_*` benches: the Stage 0 frozen-baseline pair for
+# the future `LedgerEngine::synced_height` trait method's today-
+# equivalent call path. See `docs/design/STAGE_0_HARNESS.md` §4.2.
+# Both benches share `benches/common/engine_fixture.rs`, which is a
+# helper module (not a bench target — cargo does not auto-discover
+# subdirectories of `benches/`).
+[[bench]]
+name = "engine_trait_bench_ledger_synced_height"
+harness = false
+
+[[bench]]
+name = "engine_trait_bench_ledger_synced_height_iai"
+harness = false
+
 [features]
 default = []
 multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "serde_json", "hex", "chacha20poly1305", "hkdf", "sha2"]
