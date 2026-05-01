@@ -230,19 +230,38 @@ path to the trait-method path — typically a few lines: accessor
 disappears, inner-state call becomes trait dispatch. The fixture
 is unchanged; the measured work is unchanged.
 
-**Note on the today-equivalent call path.** Four of the five
-§3.3.1 hot paths (`KeyEngine::account_public_address`,
-`LedgerEngine::balance`, `EconomicsEngine::current_emission`,
-`EconomicsEngine::parameters_snapshot`) do not exist as inherent
-methods on `Engine<S>` at the Stage 0 baseline SHA; only
-`LedgerEngine::synced_height` does (`engine/merge.rs:86`). The
-Stage 0 bench fixtures call the today-equivalent operation
-through whatever surface exists — typically the `engine.ledger()`
-/ `engine.file()` / `engine.daemon()` accessor pattern combined
-with the inner-state crate's API.
+**Note on the today-equivalent call path.** Of the five §3.3.1
+hot paths, **two** have today-equivalent call paths at the Stage 0
+baseline SHA:
 
-Two alternatives for closing the gap were considered and
-rejected:
+- `LedgerEngine::synced_height`: `Engine<S>::synced_height()` at
+  `engine/merge.rs:86`. Direct call.
+- `LedgerEngine::balance`: `engine.ledger().balance(synced_height)`
+  through `LedgerBlockExt::balance` in
+  `shekyl-scanner/src/ledger_ext.rs:166`, which dispatches to
+  `BalanceSummary::compute(transfers, height)`. Accessor +
+  extension trait + state-layer compute.
+
+The other three (`KeyEngine::account_public_address`,
+`EconomicsEngine::current_emission`,
+`EconomicsEngine::parameters_snapshot`) **have no today-equivalent
+call path** because the workloads they label do not exist as
+identifiable units in the V3.0 codebase: `account_public_address`
+exists in C++ FFI (`shekyl-ffi/src/account_ffi.rs`) and as
+docstring references but no Rust function derives a wallet's
+primary account public address from key material as a single
+operation; `current_emission`'s components live in
+`shekyl-economics` (`calc_release_multiplier`,
+`split_block_emission`, `apply_release_multiplier`,
+`calc_effective_emission_share`) but no aggregating
+"emission at height H" function exists; `parameters_snapshot`'s
+`EconomicParams` struct exists but no snapshot-constructor
+operation does. Per §4.2's per-bench frozen-baseline framing,
+those three benches are **deferred** to their respective Stage 1
+per-trait PRs.
+
+For the two Stage-0-frozen benches (where today-equivalent paths
+exist), two alternatives were considered and rejected:
 
 - **Add thin shim `pub fn` methods to `Engine<S>` at Stage 0
   with the trait-method names**, replaced by trait impls at
@@ -262,12 +281,17 @@ rejected:
   Stage 0 is the harness, Stage 1 is the trait extractions;
   mixing the two defeats the two-stage structure.
 
-The accepted approach (today-equivalent call paths at Stage 0;
-trait dispatch at Stage 1) also produces a side-benefit: PR-2
-discovers the today-equivalent surface concretely as part of
-fixture authoring (e.g., "where does `current_emission` actually
-compute today?"), which is information Stage 1's per-trait PRs
-would otherwise have to surface from scratch.
+The accepted approach for the Stage-0-frozen pair
+(today-equivalent call paths at Stage 0; trait dispatch at
+Stage 1) produces a side-benefit: PR-2 discovers the
+today-equivalent surface concretely as part of fixture authoring
+(e.g., the `engine.ledger().balance(...)` dispatch path), which
+is information Stage 1's per-trait PRs would otherwise have to
+surface from scratch. For the deferred three, the per-trait PR
+is itself the moment the workload first exists as a unit; the
+bench is authored together with the trait method. The
+disposition discussion (compose-inline vs introduce-helper vs
+defer) for the deferred three lives in §4.2.
 
 **Note on trait-method disambiguation.** Once a Stage 1 PR
 introduces the trait, `Engine<S, …>` may carry both an inherent
@@ -292,17 +316,29 @@ not the Stage 0 frozen baseline.
 benches** (criterion + iai-callgrind sibling) following the
 existing `MID_REWIRE_HARDENING.md` §3.2 tool split. New
 threshold-routing class introduced for these benches:
-`engine_trait_bench_*`.
+`engine_trait_bench_*`. Per the per-bench frozen-baseline framing
+below, **two** of the five pairs ship at Stage 0 PR-2 (the
+Stage-0-frozen pair); the other **three** ship at their respective
+Stage 1 per-trait PR (per §4.6's per-bench deferred assignment).
+The `engine_trait_bench_*` class definition and the threshold
+routing apply to all five regardless of which PR introduces them;
+class membership is the unifying contract.
 
-**Hot paths, bench filenames, and iai routing function names:**
+**Hot paths, bench filenames, iai routing function names, and
+Stage 0 disposition:**
 
-| Hot path | Bench file (criterion) | Bench file (iai-callgrind) | iai `#[library_benchmark]` function |
-|---|---|---|---|
-| `KeyEngine::account_public_address` | `benches/engine_trait_bench_key_account_public_address.rs` | `benches/engine_trait_bench_key_account_public_address_iai.rs` | `engine_trait_bench_key_account_public_address` |
-| `LedgerEngine::balance` | `benches/engine_trait_bench_ledger_balance.rs` | `benches/engine_trait_bench_ledger_balance_iai.rs` | `engine_trait_bench_ledger_balance` |
-| `LedgerEngine::synced_height` | `benches/engine_trait_bench_ledger_synced_height.rs` | `benches/engine_trait_bench_ledger_synced_height_iai.rs` | `engine_trait_bench_ledger_synced_height` |
-| `EconomicsEngine::current_emission` | `benches/engine_trait_bench_economics_current_emission.rs` | `benches/engine_trait_bench_economics_current_emission_iai.rs` | `engine_trait_bench_economics_current_emission` |
-| `EconomicsEngine::parameters_snapshot` | `benches/engine_trait_bench_economics_parameters_snapshot.rs` | `benches/engine_trait_bench_economics_parameters_snapshot_iai.rs` | `engine_trait_bench_economics_parameters_snapshot` |
+| Hot path | Bench file (criterion) | Bench file (iai-callgrind) | iai `#[library_benchmark]` function | Stage 0 disposition |
+|---|---|---|---|---|
+| `KeyEngine::account_public_address` | `benches/engine_trait_bench_key_account_public_address.rs` | `benches/engine_trait_bench_key_account_public_address_iai.rs` | `engine_trait_bench_key_account_public_address` | Deferred to KeyEngine PR |
+| `LedgerEngine::balance` | `benches/engine_trait_bench_ledger_balance.rs` | `benches/engine_trait_bench_ledger_balance_iai.rs` | `engine_trait_bench_ledger_balance` | Stage-0-frozen |
+| `LedgerEngine::synced_height` | `benches/engine_trait_bench_ledger_synced_height.rs` | `benches/engine_trait_bench_ledger_synced_height_iai.rs` | `engine_trait_bench_ledger_synced_height` | Stage-0-frozen |
+| `EconomicsEngine::current_emission` | `benches/engine_trait_bench_economics_current_emission.rs` | `benches/engine_trait_bench_economics_current_emission_iai.rs` | `engine_trait_bench_economics_current_emission` | Deferred to EconomicsEngine PR |
+| `EconomicsEngine::parameters_snapshot` | `benches/engine_trait_bench_economics_parameters_snapshot.rs` | `benches/engine_trait_bench_economics_parameters_snapshot_iai.rs` | `engine_trait_bench_economics_parameters_snapshot` | Deferred to EconomicsEngine PR |
+
+Stage 0 PR-2 ships the two Stage-0-frozen pair (four bench files
+total: two criterion + two iai-callgrind siblings); the three
+deferred benches enter the harness at their respective Stage 1
+per-trait PR (per §4.6's per-bench deferred assignment).
 
 **Function-name routing discipline.** `compare.py`'s `classify()`
 routes on the iai-callgrind `#[library_benchmark]` *function*
@@ -334,13 +370,91 @@ These are the trait-spec §3.3.1 thresholds verbatim, applied
 bidirectionally for the same reason `crypto_bench_*` is
 bidirectional.
 
-**Surface measured at Stage 0:** today-equivalent call path
-(per §4.1; typically an `Engine<S>` accessor + inner-state
-method).
-**Surface measured after the relevant Stage 1 PR:** trait method
-through `<Engine<S, …> as TraitName>` dispatch. The fixture is
-identical across the migration; the call site reshapes (per
-§4.1's *Implementation hooks*).
+**Per-bench frozen baseline.** The trait-spec §3.3.1 frozen
+baseline is **per-bench**, not uniform across all five hot paths.
+Each bench's frozen-baseline SHA is the SHA at which the bench's
+measured workload first exists as an identifiable unit:
+
+- **Stage-0-frozen benches** (`engine_trait_bench_ledger_balance`,
+  `engine_trait_bench_ledger_synced_height`): frozen baseline
+  captured at Stage 0 PR-2's merge SHA. The workload exists as a
+  unit at Stage 0 (today-equivalent call path per §4.1); PR-2
+  captures the iai-callgrind `instructions` and criterion
+  `median_ns` numbers and freezes them.
+- **Deferred benches** (`engine_trait_bench_key_account_public_address`,
+  `engine_trait_bench_economics_current_emission`,
+  `engine_trait_bench_economics_parameters_snapshot`): frozen
+  baseline captured at the introducing Stage 1 per-trait PR's
+  merge SHA. The workload first exists as a unit when the
+  trait method is introduced; the per-trait PR introduces the
+  bench alongside the method and freezes its baseline at that
+  PR's merge SHA. Per §4.6's per-bench deferred assignment, the
+  KeyEngine PR introduces the `account_public_address` bench and
+  the EconomicsEngine PR introduces both economics benches.
+
+Stage 1 PR descriptions cite cumulative delta against each
+bench's frozen-baseline SHA (per §4.5's per-bench-SHA
+disposition); the temporal anchor shifts per-bench, but the
+§3.3.1 cumulative-budget contract applies uniformly per bench.
+
+**Surface measured at Stage 0** (Stage-0-frozen pair only):
+today-equivalent call path (per §4.1; for `synced_height`, direct
+`Engine<S>` method; for `balance`, accessor + extension trait +
+state-layer compute).
+**Surface measured after the relevant Stage 1 PR** (any bench in
+scope at that PR): trait method through
+`<Engine<S, …> as TraitName>` dispatch. The fixture is identical
+across the migration; the call site reshapes (per §4.1's
+*Implementation hooks*).
+
+**Why the deferred three are deferred.** The Stage 0 PR-2
+pre-drafting gap-check found that three of the five §3.3.1 hot
+paths label workloads that do not exist as identifiable units in
+the V3.0 codebase (per §4.1's enumeration:
+`account_public_address`, `current_emission`,
+`parameters_snapshot`). Three options to close the gap were
+considered:
+
+- **Compose the today-equivalent inline in the Stage 0 bench
+  file.** The bench's setup composes the underlying functions
+  into the workload; the measured region calls the composition.
+  Rejected: the Stage 0 composition may not match what Stage 1's
+  trait impl actually does. If they diverge, the cumulative-delta
+  number against the Stage 0 baseline compares different
+  workloads — a number that looks legitimate but isn't.
+  Mitigation via "may re-baseline at Stage 1" weakens the §3.3.1
+  frozen-baseline contract for 60% of its rows; the
+  cumulative-delta semantics depend on the baseline being stable.
+- **Introduce helper functions in inner-state crates at Stage 0**
+  (e.g., `pub fn current_emission(...)` in `shekyl-economics`,
+  `pub fn primary_account_address(...)` in the keys layer). The
+  bench calls the helper; Stage 1's trait impl wraps it.
+  Rejected on the same grounds as §4.1's shim alternative,
+  displaced to a different crate. The
+  "no-code-with-bench-as-only-caller" rule from
+  `15-deletion-and-debt.mdc` is not Engine-specific. Worse on a
+  subtler axis: at the inner-state layer, the helpers read as
+  plausible APIs (someone might want `current_emission(height)`
+  outside the trait context), which makes them harder to remove
+  when Stage 1's trait-impl duplicates them. Inner-state crates
+  accumulate near-duplicate API surface; nobody cleans up
+  because "maybe someone uses it."
+- **Defer to the introducing per-trait PR** (selected). The
+  Stage 1 per-trait PR is the moment the workload first exists
+  as a unit; that PR introduces both the trait method and the
+  bench, with the bench's frozen baseline captured at the PR's
+  merge SHA. The §3.3.1 spec's "at minimum" wording allows
+  reviewer judgment to defer specific paths; this option uses
+  that allowance, and is consistent with §4.6's general
+  "bench-with-method PR" discipline applied to Stage 1's
+  surface-introduction PRs.
+
+The selected approach is honest about what Stage 0 measures
+(today-equivalent paths for the two hot paths whose workload
+exists; capture-when-real for the three whose workload arrives
+later) and preserves the §3.3.1 cumulative-delta semantics
+uniformly per bench (the temporal anchor shifts; the contract
+shape is the same).
 
 **Fixture shape (qualitative).** Each bench constructs an
 `Engine<S>` with a pre-populated state mimicking a typical wallet
@@ -524,28 +638,41 @@ pipeline, gated through the new `engine_trait_bench_*` class.
    No additional first-commit-with-placeholder-baselines step is
    required; the existing harness handles new-bench introduction
    correctly without it.
-2. **Capture script.** Add five rows to the `BENCHES` array in
+2. **Capture script.** Add **two** rows to the `BENCHES` array in
    [`scripts/bench/capture_rust_baseline.sh`](../../scripts/bench/capture_rust_baseline.sh)
-   following the existing `crate:criterion-target:iai-callgrind-target`
-   shape. Each new bench compiles to its own criterion +
+   for the Stage-0-frozen pair, following the existing
+   `crate:criterion-target:iai-callgrind-target` shape. Each
+   Stage-0-frozen bench compiles to its own criterion +
    iai-callgrind sibling pair under the new naming convention.
+   Each Stage 1 per-trait PR that introduces a deferred bench
+   appends its own `BENCHES` row at that PR.
 3. **Compare classifier.** Add a third branch to the `classify()`
    function in
    [`scripts/bench/compare.py`](../../scripts/bench/compare.py)
    matching `engine_trait_bench_*`, with `verdict_for()` extended
    to apply the bidirectional ±10% warn / ±25% fail thresholds.
+   The classifier change covers all five benches by class
+   membership; per-trait PRs introducing deferred benches do not
+   need to touch the classifier.
 4. **PR-comment surface.** No change. The existing
    `post_comment.py` renders all entries from the report; new
    entries appear automatically.
 5. **Manifest extension.** Add a new section to
    [`docs/benchmarks/shekyl_rust_v0.manifest.md`](../benchmarks/shekyl_rust_v0.manifest.md)
-   for each of the five new benches, following the existing
-   manifest section template (operation list, fixture shape, known
-   gaps).
+   for each of the **two Stage-0-frozen benches**, following the
+   existing manifest section template (operation list, fixture
+   shape, known gaps). Add **three placeholder sections** for the
+   deferred benches naming the target Stage 1 per-trait PR (per
+   §4.6's per-bench deferred assignment); each per-trait PR
+   replaces its placeholder section with the populated content
+   when the deferred bench enters the harness.
 
 **Freeze-vs-rolling baseline reconciliation.** Trait-spec §3.3.1
-requires a **frozen** baseline at Stage 0 PR-2's SHA, unchanged
-through all Stage 1 PRs. The existing `bench-baseline` is
+requires a **frozen** baseline (per-bench, per §4.2's per-bench
+frozen-baseline framing — Stage 0 PR-2's SHA for the
+Stage-0-frozen pair; the introducing per-trait PR's SHA for the
+three deferred benches), unchanged through all Stage 1 PRs after
+each bench's introducing SHA. The existing `bench-baseline` is
 **rolling**, refreshed on every push to `dev`. Two readings of
 "the per-PR delta" coexist:
 
@@ -556,13 +683,33 @@ through all Stage 1 PRs. The existing `bench-baseline` is
   PR's post-merge state (the rolling baseline). The gate catches
   per-PR regressions but does not show cumulative delta across
   all Stage 1 PRs.
-- **Cumulative-delta citation** (frozen): each Stage 1 PR's
-  description cites both numbers — the CI-gate delta against the
-  rolling baseline (gated; what the workflow says), and the
-  cumulative delta against
+- **Cumulative-delta citation** (frozen, per-bench): each Stage
+  1 PR's description cites both numbers — the CI-gate delta
+  against the rolling baseline (gated; what the workflow says),
+  and the cumulative delta against
   [`docs/PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md)'s
-  Stage-0-frozen numbers (citation only; what reviewers consult
-  for "did the trait extraction as a whole stay within budget").
+  frozen numbers (citation only; what reviewers consult for "did
+  the trait extraction as a whole stay within budget"). Per
+  §4.2's per-bench frozen-baseline framing, the frozen-baseline
+  SHA is **per-bench**:
+  - **Stage 0 PR-2's merge SHA** for the two Stage-0-frozen
+    benches (`engine_trait_bench_ledger_balance`,
+    `engine_trait_bench_ledger_synced_height`).
+  - **The introducing per-trait PR's merge SHA** for the three
+    deferred benches: KeyEngine PR's SHA for
+    `engine_trait_bench_key_account_public_address`;
+    EconomicsEngine PR's SHA for
+    `engine_trait_bench_economics_current_emission` and
+    `engine_trait_bench_economics_parameters_snapshot`.
+
+  The §3.3.1 cumulative-delta contract ("no extraction adds more
+  than 25% read-path overhead, cumulatively, across Stage 1")
+  applies per-bench: for each bench, "cumulatively" sums the
+  deltas across all Stage 1 PRs starting from the bench's
+  introducing SHA. The temporal anchor shifts per-bench; the
+  contract shape is uniform. Stage 1 PR descriptions list one
+  cumulative-delta line per bench currently in scope at that PR,
+  each citing the bench's specific frozen-baseline SHA.
 
 Why both. The CI gate is the per-PR enforcement signal; it
 catches a single PR introducing a >25% regression even if prior
@@ -573,27 +720,52 @@ necessary; they answer different questions.
 
 `PERFORMANCE_BASELINE.md`'s post-interior-lock table
 (per-Stage-1-PR delta column) records the frozen-baseline delta
-each PR introduces, computed against the Stage-0-frozen numbers.
-Reviewers cite the table during Stage 1 PR review; the document
-is the canonical source of cumulative delta.
+each PR introduces, computed against each bench's frozen numbers
+(per the per-bench-SHA disposition above; Stage 0 PR-2's SHA for
+the Stage-0-frozen pair, the introducing per-trait PR's SHA for
+the deferred three). Reviewers cite the table during Stage 1 PR
+review; the document is the canonical source of cumulative delta.
 
-**Worked example (illustrative).** Suppose Stage 1 PR 1
-(DaemonEngine) lands at +5% against the frozen baseline; PR 2
-(LedgerEngine) adds another +6% against the post-PR-1 rolling
-baseline (which is +5% above frozen, so PR 2's cumulative is
-+11%); PR 3 (KeyEngine) lands at +4% rolling, +15% cumulative.
-Stage 1 PR 3's description reads: "CI-gate delta against rolling
-baseline: +4% (passes ±10% warn, ±25% fail). Cumulative delta
-against frozen baseline at
-[`docs/PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md):
-+15% (between 10% warn threshold and 25% fail threshold;
-justification per trait-spec §3.3.1: combined trait-dispatch
-overhead is within budgeted total)." Both numbers cited; the
-gate enforces the rolling delta; the cumulative number is
-visible to reviewers without requiring a separate computation.
-Stage 1 PR 4's description, in turn, cites its own +N%
-(rolling) and the new running cumulative against the same
-frozen baseline.
+**Worked example, Stage-0-frozen bench (illustrative).** Suppose
+the cumulative deltas are tracked for `engine_trait_bench_ledger_balance`
+across Stage 1. PR 1 (DaemonEngine) lands at +5% against
+PR-2's frozen baseline; PR 2 (LedgerEngine) adds another +6%
+against the post-PR-1 rolling baseline (which is +5% above
+frozen, so PR 2's cumulative is +11%); PR 3 (KeyEngine) lands at
++4% rolling, +15% cumulative. Stage 1 PR 3's description reads:
+"CI-gate delta against rolling baseline: +4% (passes ±10% warn,
+±25% fail). Cumulative delta against
+`engine_trait_bench_ledger_balance` frozen baseline at Stage 0
+PR-2's SHA: +15% (between 10% warn threshold and 25% fail
+threshold; justification per trait-spec §3.3.1: combined
+trait-dispatch overhead is within budgeted total)." Both numbers
+cited; the gate enforces the rolling delta; the cumulative number
+is visible to reviewers without requiring a separate computation.
+Stage 1 PR 4's description, in turn, cites its own +N% (rolling)
+and the new running cumulative against the same frozen baseline.
+
+**Worked example, deferred bench (illustrative).** Suppose
+EconomicsEngine PR is Stage 1 PR 4. PR 4 introduces both the
+trait methods (`current_emission`, `parameters_snapshot`) and
+the two new benches (`engine_trait_bench_economics_current_emission`,
+`engine_trait_bench_economics_parameters_snapshot`). PR 4's CI
+gate runs against the rolling baseline, encounters the new
+entries with no baseline counterpart, and routes them into
+`added_in_pr` (informational; non-gating per §4.5 item 1). PR
+4's description cites cumulative delta against PR 4's own merge
+SHA, which is **zero by definition**: the bench just got
+introduced. After PR 4 merges, `update-baseline` seeds the new
+entries into `bench-baseline/baseline.json`. Stage 1 PR 5
+(suppose RefreshEngine) re-runs the deferred benches against the
+seeded rolling baseline and cites their cumulative delta against
+PR 4's SHA — a non-zero number for the first time. The
+Stage-0-frozen benches' cumulative-delta numbers in PR 5's
+description still cite Stage 0 PR-2's SHA per the per-bench-SHA
+disposition. PR 5's description carries up to five
+cumulative-delta lines (one per bench currently in scope), each
+against its bench's specific frozen-baseline SHA: two against
+PR-2, two against PR 4 (EconomicsEngine PR), and — once the
+KeyEngine PR has landed — one against the KeyEngine PR's SHA.
 
 **Why not lock the rolling baseline during Stage 1.** Plausible
 alternative: suspend `update-baseline` for `shekyl-engine-core`
@@ -627,6 +799,35 @@ LedgerEngine, …) owns the migration of its benched methods from
 the inherent-method call site to the trait-method call site. The
 PR also owns the manifest update and any threshold-class
 adjustment if needed for that trait's specific surface.
+
+**Per-bench deferred assignment.** Per §4.2's per-bench
+frozen-baseline framing, three of the §3.3.1 hot paths defer
+their bench introduction to their per-trait PR (because the
+workload doesn't exist as a unit at Stage 0; see §4.1's "Note on
+the today-equivalent call path"). Explicit assignment:
+
+- **KeyEngine PR** introduces
+  `engine_trait_bench_key_account_public_address` (criterion +
+  iai-callgrind sibling) along with the trait method. The bench's
+  frozen baseline is captured at the KeyEngine PR's merge SHA per
+  §4.5's per-bench-SHA disposition.
+- **EconomicsEngine PR** introduces both
+  `engine_trait_bench_economics_current_emission` and
+  `engine_trait_bench_economics_parameters_snapshot` (criterion +
+  iai-callgrind sibling for each, four bench files total) along
+  with the trait methods. Both benches' frozen baselines are
+  captured at the EconomicsEngine PR's merge SHA.
+
+The bench-with-method discipline (this section's general rule)
+applies uniformly: the per-trait PR is the surface introduction
+and carries the bench. Each per-trait PR's threshold sanity-check
+(per §4.4 / §5) covers its newly-introduced bench(es) at the
+PR's merge SHA, mirroring Stage 0 PR-2's sanity-check for the
+Stage-0-frozen pair. Each per-trait PR's
+`PERFORMANCE_BASELINE.md` update converts the placeholder rows
+seeded by Stage 0 PR-2 (formatted as "deferred to: KeyEngine PR"
+or "deferred to: EconomicsEngine PR") into populated rows with
+the captured numbers and the PR's merge SHA.
 
 **Stage 2+ method additions.** When a future PR adds a new
 hot-path method to an existing trait, that PR adds the bench
@@ -666,12 +867,15 @@ inherent-method to trait-method during a Stage 1 PR is a
 and requires a schema bump per the existing discipline. The
 schema bump goes in the same Stage 1 PR that does the migration.
 
-**Manifest stewardship.** The five new bench sections in
-`shekyl_rust_v0.manifest.md` (added by Stage 0 PR-2) are owned by
-the trait-extraction work for the duration of Stage 1. After
-Stage 1 closes, ownership transfers to whoever maintains the
-trait surface (default: the engine-core crate maintainers; not a
-named role at V3.0).
+**Manifest stewardship.** The five `engine_trait_bench_*` sections
+in `shekyl_rust_v0.manifest.md` are owned by the trait-extraction
+work for the duration of Stage 1 — Stage 0 PR-2 seeds two
+populated sections (Stage-0-frozen pair) and three placeholder
+sections (deferred); each Stage 1 per-trait PR converts its
+placeholder section(s) to populated content per §4.6's per-bench
+deferred assignment. After Stage 1 closes, ownership transfers to
+whoever maintains the trait surface (default: the engine-core
+crate maintainers; not a named role at V3.0).
 
 ---
 
@@ -680,21 +884,32 @@ named role at V3.0).
 Concrete handoff list, in commit order. Each item is a checkbox
 PR-2 reviewers verify against this design:
 
-- [ ] Five criterion bench files under
-      `rust/shekyl-engine-core/benches/engine_trait_bench_*.rs`
-      (today-equivalent call sites per §4.1; today's monolithic
-      surface).
-- [ ] Five iai-callgrind sibling bench files under
-      `rust/shekyl-engine-core/benches/engine_trait_bench_*_iai.rs`
+- [ ] **Two** criterion bench files (Stage-0-frozen pair, per
+      §4.2's per-bench frozen-baseline framing) under
+      `rust/shekyl-engine-core/benches/`:
+      `engine_trait_bench_ledger_balance.rs`,
+      `engine_trait_bench_ledger_synced_height.rs`
+      (today-equivalent call sites per §4.1).
+- [ ] **Two** iai-callgrind sibling bench files under
+      `rust/shekyl-engine-core/benches/`:
+      `engine_trait_bench_ledger_balance_iai.rs`,
+      `engine_trait_bench_ledger_synced_height_iai.rs`
       (same call sites, deterministic instruction counts).
-- [ ] `[[bench]]` entries for each new bench in
+- [ ] `[[bench]]` entries for the Stage-0-frozen pair (four total
+      entries: two criterion + two iai-callgrind) in
       `rust/shekyl-engine-core/Cargo.toml` (`harness = false` per
       the existing convention).
-- [ ] Five new sections in
+- [ ] **Two** new sections in
       `docs/benchmarks/shekyl_rust_v0.manifest.md` documenting
-      operation list, fixture shape, known gaps for each bench.
+      operation list, fixture shape, known gaps for each
+      Stage-0-frozen bench. **Three** placeholder sections marked
+      as deferred with target Stage 1 per-trait PR named (per
+      §4.6's per-bench deferred assignment): KeyEngine PR for
+      `account_public_address`; EconomicsEngine PR for
+      `current_emission` and `parameters_snapshot`.
 - [ ] `BENCHES` array extension in
-      `scripts/bench/capture_rust_baseline.sh`.
+      `scripts/bench/capture_rust_baseline.sh` for the
+      Stage-0-frozen pair (four target lines).
 - [ ] `classify()` + `verdict_for()` extension in
       `scripts/bench/compare.py` for the new
       `engine_trait_bench_*` class.
@@ -709,39 +924,52 @@ PR-2 reviewers verify against this design:
       (`workflow_dispatch:`) but no job currently runs on
       dispatch; this enables the (iii) capture mechanism below.
 - [ ] **Frozen baseline captured on the reference runner before
-      review.** PR-2 author triggers a one-shot
-      `workflow_dispatch` against PR-2's branch (a fresh
+      review** (Stage-0-frozen pair only). PR-2 author triggers a
+      one-shot `workflow_dispatch` against PR-2's branch (a fresh
       `ubuntu-latest` GHA runner per the §4.4 reference
       environment); downloads the `shekyl_rust_v0.json` artifact;
       transcribes the iai-callgrind `instructions` and criterion
-      `median_ns` / `mean_ns` numbers into
+      `median_ns` / `mean_ns` numbers for the **two
+      Stage-0-frozen benches** into
       `docs/PERFORMANCE_BASELINE.md` along with the host manifest
       and the SHA at which the capture ran; commits before
-      opening PR-2 for review. The CI gate on PR-2 itself
-      verifies the numbers match: iai-callgrind to deterministic
-      tolerance (±0% modulo the §4.4 hardware-RNG exception),
-      criterion to within the documented variance. Drift beyond
-      tolerance is grounds for re-running the capture.
+      opening PR-2 for review. **Three placeholder rows** in
+      `PERFORMANCE_BASELINE.md` are seeded marking the deferred
+      benches with their target per-trait PR named (per §4.6's
+      per-bench deferred assignment); the rows convert from
+      placeholder to populated when each per-trait PR captures
+      its own frozen baseline at its merge SHA. The CI gate on
+      PR-2 itself verifies the Stage-0-frozen numbers match:
+      iai-callgrind to deterministic tolerance (±0% modulo the
+      §4.4 hardware-RNG exception), criterion to within the
+      documented variance. Drift beyond tolerance is grounds for
+      re-running the capture.
 - [ ] Single-line in-place tightening of trait-spec §3.3.1
       Component 1 placeholder to name Stage 0 PR-2's SHA and
       this design doc as the harness's design contract. This is
       contextual tightening (timing-of-when-harness-lands shifts
       from "first Stage 1 PR" to "Stage 0 PR-2"); the substantive
       §3.3.1 content is unchanged.
-- [ ] **Threshold sanity-check: iai-callgrind determinism.**
-      Re-run iai-callgrind N times across a fresh `ubuntu-latest`
-      runner; confirm variance is ±0% and record the result in
+- [ ] **Threshold sanity-check: iai-callgrind determinism**
+      (Stage-0-frozen pair). Re-run iai-callgrind N times across a
+      fresh `ubuntu-latest` runner for the two Stage-0-frozen
+      benches; confirm variance is ±0% and record the result in
       the `PERFORMANCE_BASELINE.md` host manifest. Non-zero
       variance triggers fixture-setup investigation per §4.4
       (most likely cause: hardware-RNG instruction leakage into
-      the measured region).
-- [ ] **Threshold sanity-check: criterion variance documentation.**
-      Re-run criterion N times across a fresh `ubuntu-latest`
-      runner; document the wall-clock variance (median, mean,
+      the measured region). The deferred three benches' sanity-
+      checks are carried out at their respective per-trait PRs
+      per §4.6's per-bench deferred assignment.
+- [ ] **Threshold sanity-check: criterion variance documentation**
+      (Stage-0-frozen pair). Re-run criterion N times across a
+      fresh `ubuntu-latest` runner for the two Stage-0-frozen
+      benches; document the wall-clock variance (median, mean,
       std-dev) in the `PERFORMANCE_BASELINE.md` host manifest.
       Criterion is informational; the documentation is for
       reviewers comparing future per-PR criterion deltas against
-      noise floor.
+      noise floor. Per the per-bench framing, each per-trait PR
+      that introduces a deferred bench documents its own variance
+      at that PR's merge SHA.
 - [ ] **Conditional: standalone §3.3.1 tightening commit.** If
       the criterion variance documentation surfaces a §3.3.1
       framing issue (e.g., the spec's threshold framing reads
