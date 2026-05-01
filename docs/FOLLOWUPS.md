@@ -1094,6 +1094,23 @@ one place to confirm each item's relationship to the wallet stack.
   stabilizes; doing it earlier conflicts with the rewrite's own
   churn).**
 
+  *2026-05-01 update (Stage 0 PR-2 commit 2):* Stage 0 PR-2's bench
+  work observed approximately 30 additional clippy sites in
+  `rust/shekyl-engine-core/src/engine/refresh.rs` — primarily
+  `clippy::clone_on_copy` on `RefreshProgress` and
+  `clippy::let_underscore_must_use` on `tokio::sync::watch::Sender::send`
+  / oneshot `Sender::send` results. These accumulated through the
+  refresh-driver work after the 2026-04-25 audit and are correctly
+  scoped out of Stage 0 PR-2 per `15-deletion-and-debt.mdc`. The
+  observation validates this item's "earlier conflicts with the
+  rewrite's own churn" reasoning in real time: each Stage 1 per-trait
+  PR will continue producing similar drift in the engine subsystem,
+  and the V3.1.x cleanup PR is the right place to absorb it all at
+  once. The future cleanup PR drafter should re-run the workspace
+  clippy command above to get the current full list rather than
+  treating either the 2026-04-25 or 2026-05-01 enumerations as
+  exhaustive.
+
 - **`monero-oxide` un-pin / fork-and-attribute / drop-unused-crates
   (Operation B).** The vendor work splits into two distinct
   operations with different risk/value profiles, and the rewrite
