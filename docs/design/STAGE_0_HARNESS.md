@@ -193,13 +193,21 @@ the dependency order.
 
 ### 4.1 Decision 6 — Stage 0 ↔ Stage 4 forward-extension
 
-**Decision.** Stage 0 measures **today's monolithic `Engine<S>`
-surface** (inherent methods on `Engine<S>`). Stage 1 per-trait
-PRs migrate each bench to call the **trait method** as part of
-the per-trait extraction work. Stage 4 actor-backed implementations
-inherit the same trait-surface benches with no harness code change;
-the runtime cost shifts (mailbox round-trip + actor handler) but
-the measured surface is invariant.
+**Decision.** Stage 0 measures **the today-equivalent call paths
+through whatever surface exists at the baseline SHA** (typically
+an `Engine<S>` accessor + inner-state method, e.g.,
+`engine.ledger().compute_balance(...)`). The §3.3.1 trait-method
+names (`KeyEngine::account_public_address`, `LedgerEngine::balance`,
+etc.) are workload labels naming *which workloads to measure*,
+not literal call-site requirements; the spec is silent on the
+exact call-site shape at Stage 0 because the trait extraction is
+Stage 1's substantive deliverable. Stage 1 per-trait PRs migrate
+each bench's call site from the today-equivalent path to the
+**trait-method path** as part of the per-trait extraction work.
+Stage 4 actor-backed implementations inherit the same
+trait-surface benches with no harness code change; the runtime
+cost shifts (mailbox round-trip + actor handler) but the measured
+surface is invariant.
 
 **Why this framing matters.** A naïve framing — "Stage 0 must
 ship trait-surface-shaped benches from the start so they're
@@ -212,10 +220,54 @@ the call site as part of the same PR that introduces the trait;
 Stage 4 inherits unchanged.
 
 **Implementation hooks.** Each bench file's measured-surface
-comment records what surface it currently calls (inherent method
-on `Engine<S>` at Stage 0; trait method on `Engine<S, …>` after
-the relevant Stage 1 PR). The migration is a one-line bench-code
-change per per-trait PR; the fixture is unchanged.
+comment records what surface it currently calls (the
+today-equivalent call path at Stage 0, e.g.,
+`engine.ledger().compute_balance(...)`; the trait method on
+`Engine<S, …>` after the relevant Stage 1 PR, e.g.,
+`<Engine<…> as LedgerEngine>::balance(&engine, ...)`). The Stage 1
+migration reshapes the bench's call site from the today-equivalent
+path to the trait-method path — typically a few lines: accessor
+disappears, inner-state call becomes trait dispatch. The fixture
+is unchanged; the measured work is unchanged.
+
+**Note on the today-equivalent call path.** Four of the five
+§3.3.1 hot paths (`KeyEngine::account_public_address`,
+`LedgerEngine::balance`, `EconomicsEngine::current_emission`,
+`EconomicsEngine::parameters_snapshot`) do not exist as inherent
+methods on `Engine<S>` at the Stage 0 baseline SHA; only
+`LedgerEngine::synced_height` does (`engine/merge.rs:86`). The
+Stage 0 bench fixtures call the today-equivalent operation
+through whatever surface exists — typically the `engine.ledger()`
+/ `engine.file()` / `engine.daemon()` accessor pattern combined
+with the inner-state crate's API.
+
+Two alternatives for closing the gap were considered and
+rejected:
+
+- **Add thin shim `pub fn` methods to `Engine<S>` at Stage 0
+  with the trait-method names**, replaced by trait impls at
+  Stage 1. Rejected on two grounds. First, it introduces public
+  methods on `Engine<S>` whose only Stage-0 caller is the bench
+  file, violating `15-deletion-and-debt.mdc`'s
+  "no-code-with-bench-as-only-caller" rule (the shims would
+  exist for one Stage 1 PR's lifetime each, then be replaced by
+  trait-impl methods of the same name). Second, it dilutes
+  Stage 1's first-class trait-introduction framing —
+  per-trait PRs would read as "rename a method and add a trait
+  declaration around it" rather than "introduce the abstraction
+  surface, the impl, the type-parameter discipline." Reviewers
+  would see a smaller-than-real change.
+- **Extract the trait at Stage 0 (move trait-definition work
+  from Stage 1 PR 1 into Stage 0 PR-2).** Rejected on its face:
+  Stage 0 is the harness, Stage 1 is the trait extractions;
+  mixing the two defeats the two-stage structure.
+
+The accepted approach (today-equivalent call paths at Stage 0;
+trait dispatch at Stage 1) also produces a side-benefit: PR-2
+discovers the today-equivalent surface concretely as part of
+fixture authoring (e.g., "where does `current_emission` actually
+compute today?"), which is information Stage 1's per-trait PRs
+would otherwise have to surface from scratch.
 
 **Note on trait-method disambiguation.** Once a Stage 1 PR
 introduces the trait, `Engine<S, …>` may carry both an inherent
@@ -242,15 +294,26 @@ existing `MID_REWIRE_HARDENING.md` §3.2 tool split. New
 threshold-routing class introduced for these benches:
 `engine_trait_bench_*`.
 
-**Hot paths and bench filenames:**
+**Hot paths, bench filenames, and iai routing function names:**
 
-| Hot path | Bench file (criterion) | Bench file (iai-callgrind) |
-|---|---|---|
-| `KeyEngine::account_public_address` | `benches/engine_trait_bench_key_account_public_address.rs` | `benches/engine_trait_bench_key_account_public_address_iai.rs` |
-| `LedgerEngine::balance` | `benches/engine_trait_bench_ledger_balance.rs` | `benches/engine_trait_bench_ledger_balance_iai.rs` |
-| `LedgerEngine::synced_height` | `benches/engine_trait_bench_ledger_synced_height.rs` | `benches/engine_trait_bench_ledger_synced_height_iai.rs` |
-| `EconomicsEngine::current_emission` | `benches/engine_trait_bench_economics_current_emission.rs` | `benches/engine_trait_bench_economics_current_emission_iai.rs` |
-| `EconomicsEngine::parameters_snapshot` | `benches/engine_trait_bench_economics_parameters_snapshot.rs` | `benches/engine_trait_bench_economics_parameters_snapshot_iai.rs` |
+| Hot path | Bench file (criterion) | Bench file (iai-callgrind) | iai `#[library_benchmark]` function |
+|---|---|---|---|
+| `KeyEngine::account_public_address` | `benches/engine_trait_bench_key_account_public_address.rs` | `benches/engine_trait_bench_key_account_public_address_iai.rs` | `engine_trait_bench_key_account_public_address` |
+| `LedgerEngine::balance` | `benches/engine_trait_bench_ledger_balance.rs` | `benches/engine_trait_bench_ledger_balance_iai.rs` | `engine_trait_bench_ledger_balance` |
+| `LedgerEngine::synced_height` | `benches/engine_trait_bench_ledger_synced_height.rs` | `benches/engine_trait_bench_ledger_synced_height_iai.rs` | `engine_trait_bench_ledger_synced_height` |
+| `EconomicsEngine::current_emission` | `benches/engine_trait_bench_economics_current_emission.rs` | `benches/engine_trait_bench_economics_current_emission_iai.rs` | `engine_trait_bench_economics_current_emission` |
+| `EconomicsEngine::parameters_snapshot` | `benches/engine_trait_bench_economics_parameters_snapshot.rs` | `benches/engine_trait_bench_economics_parameters_snapshot_iai.rs` | `engine_trait_bench_economics_parameters_snapshot` |
+
+**Function-name routing discipline.** `compare.py`'s `classify()`
+routes on the iai-callgrind `#[library_benchmark]` *function*
+name, not the bench-target file name. Each new iai bench's
+function must start with `engine_trait_bench_` — matching the
+class name — or the entry lands in `unrouted` and the threshold
+gate doesn't apply. The function name is what the existing
+classes (`crypto_bench_*`, `hot_path_bench_*`) match against,
+and the same convention extends to the new class without
+infrastructure change. Reviewers verify the function name in
+each new iai bench file matches the table above.
 
 **Naming convention rationale.** The existing harness uses
 `crypto_bench_*` (bidirectional) and `hot_path_bench_*`
@@ -271,10 +334,13 @@ These are the trait-spec §3.3.1 thresholds verbatim, applied
 bidirectionally for the same reason `crypto_bench_*` is
 bidirectional.
 
-**Surface measured at Stage 0:** `Engine<S>` inherent method.
+**Surface measured at Stage 0:** today-equivalent call path
+(per §4.1; typically an `Engine<S>` accessor + inner-state
+method).
 **Surface measured after the relevant Stage 1 PR:** trait method
 through `<Engine<S, …> as TraitName>` dispatch. The fixture is
-identical across the migration; only the call site changes.
+identical across the migration; the call site reshapes (per
+§4.1's *Implementation hooks*).
 
 **Fixture shape (qualitative).** Each bench constructs an
 `Engine<S>` with a pre-populated state mimicking a typical wallet
@@ -311,6 +377,20 @@ to make the derivation auditable:
   to whether the fixture fits in L2/L3 cache. A fixture chosen
   to "fit nicely" would understate real-world cost; a fixture
   chosen for "stress test" would overstate it.
+- **Cross-bench surface distinction.** When a bench measures an
+  engine-surface call that dispatches to an existing
+  state-layer bench's measured operation (e.g.,
+  `engine_trait_bench_ledger_balance` measures the engine
+  surface whose underlying compute is also benched by
+  `shekyl-engine-state`'s `hot_path_bench_balance_compute`),
+  the manifest entry names both benches and explains the
+  surface distinction. The engine-surface cost is gate-class
+  `engine_trait_bench_*` (bidirectional ±10% / ±25%); the
+  state-layer cost remains gate-class `hot_path_bench_*`
+  (slowdown-only +5% / +15%). The two benches are not redundant
+  — they measure different layers of the same logical
+  operation — but reviewers should be able to find that
+  distinction without reconstructing it.
 
 PR-2 lands the fixture along with the bench files; reviewers
 gate the manifest's representativeness rationale separately
@@ -602,7 +682,8 @@ PR-2 reviewers verify against this design:
 
 - [ ] Five criterion bench files under
       `rust/shekyl-engine-core/benches/engine_trait_bench_*.rs`
-      (inherent-method call sites; today's monolithic surface).
+      (today-equivalent call sites per §4.1; today's monolithic
+      surface).
 - [ ] Five iai-callgrind sibling bench files under
       `rust/shekyl-engine-core/benches/engine_trait_bench_*_iai.rs`
       (same call sites, deterministic instruction counts).
