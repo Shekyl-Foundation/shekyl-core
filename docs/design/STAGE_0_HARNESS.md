@@ -700,12 +700,77 @@ accesses + one method call); proportional-to-N instructions for
 `balance`-class workloads (linear walk over `transfers`) at the
 LedgerEngine PR. Orders-of-magnitude-larger numbers — for
 example, millions of instructions for `synced_height` — indicate
-the Engine construction leaked into the measured region; the
-bench is invalid pending fixture-shape investigation.
+either the Engine construction or the fixture teardown leaked
+into the measured region; the bench is invalid pending
+fixture-shape investigation. See §4.4 for the
+order-of-magnitude check's two-cause resolution path.
+
+**The symmetry rule (criterion-vs-iai-callgrind asymmetry).**
+Setup and teardown are both excluded from the measured region;
+measurement is the call only. This applies symmetrically to
+fixture construction (already named above) and fixture
+destruction. The two harnesses handle teardown differently,
+which is the most common source of cross-harness divergence
+on the same workload:
+
+- **Criterion** amortizes drop cost implicitly. The fixture is
+  built once outside `b.iter`; the closure body borrows it by
+  reference; `Drop` runs at outer-function exit *after*
+  `b.iter` returns; per-iteration time excludes drop because
+  it's divided across millions of iterations and rounds to
+  zero.
+- **iai-callgrind** measures the full bench function body in
+  a single shot. Any value moved into the bench function is
+  dropped *inside* the measured region by default, and that
+  drop is fully counted.
+
+The asymmetry is structural — both harnesses are correct for
+their measurement model — but it means the iai-callgrind side
+needs explicit care to match what criterion does implicitly.
+The mechanism is iai-callgrind's `teardown =` parameter:
+
+```rust
+fn drop_fixture(_f: (Engine<SoloSigner>, TempDir)) {}
+
+#[library_benchmark]
+#[bench::fresh_engine(setup = build_engine_fixture, teardown = drop_fixture)]
+fn engine_trait_bench_ledger_synced_height(
+    fixture: (Engine<SoloSigner>, TempDir),
+) -> (Engine<SoloSigner>, TempDir) {
+    let (engine, tmp) = fixture;
+    let _ = black_box(engine.synced_height());
+    (engine, tmp) // hand back to teardown
+}
+```
+
+The bench function returns the fixture rather than consuming
+it; iai-callgrind's `teardown` runs `drop_fixture` on the
+returned value, and the actual `Drop` of `Engine` / `TempDir`
+happens outside the measured region. The pattern is: **setup
+builds; bench measures; bench returns the fixture; teardown
+drops outside measurement.**
+
+The diagnostic signal for a violation of this rule:
+**order-of-magnitude divergence between the criterion and
+iai-callgrind harnesses on the same workload.** If criterion
+reports nanoseconds-per-iter consistent with a few cycles and
+iai-callgrind reports tens-of-thousands of instructions, the
+divergence is the fixture's `Drop` leaking into iai's
+measurement. The order-of-magnitude check in §4.4 catches this
+explicitly at the threshold-sanity-check step.
+
+**This rule applies to all subsequent Stage 1 per-trait PR
+benches.** Authors copy the template above and reviewers
+verify the bench function returns its fixture (or returns a
+value that doesn't drop expensively) before approving. The
+shared `benches/common/engine_fixture.rs` provides a reusable
+`drop_fixture` helper that the template above references.
 
 **Why this distribution (gap-check meta-pattern).** Stage 0
-PR-2's scope is the result of four structural findings the
-pre-drafting gap-check produced before code drafting began:
+PR-2's scope is the result of five structural findings the
+pre-drafting gap-check (Findings 1–4) and the threshold
+sanity-check on the first capture (Finding 5) produced before
+the baseline was transcribed:
 
 1. **Finding 1** (resolved at the first design-doc tightening,
    §4.1): the §3.3.1 hot paths label trait-method surfaces that
@@ -741,27 +806,85 @@ pre-drafting gap-check produced before code drafting began:
    (post-PR-1, with MockDaemon available); its frozen baseline
    is captured at the LedgerEngine PR's merge SHA against a
    state-populated fixture.
+5. **Finding 5** (resolved here, §4.2's symmetry rule and
+   §4.4's order-of-magnitude check): the first
+   `workflow_dispatch` capture of
+   `engine_trait_bench_ledger_synced_height` reported 60,033
+   instructions where §4.4 expected single-digit-to-low-tens.
+   Investigation traced the contamination to fixture `Drop`
+   running inside iai-callgrind's measured region — a
+   structural property of iai-callgrind's single-shot
+   measurement model that doesn't amortize cleanup the way
+   criterion's `b.iter` does. The criterion sibling reported
+   0.62 ns/iter (consistent with a few cycles), confirming the
+   actual `synced_height` call cost is on the expected order
+   and that the divergence between the two harnesses is the
+   diagnostic signal §4.2 names. Resolution: §4.2's "symmetry
+   rule" — setup and teardown are both excluded from the
+   measured region — operationalized through iai-callgrind's
+   `teardown =` parameter, with a concrete template that
+   subsequent per-trait PRs copy. The fix is **class-level**:
+   every `engine_trait_bench_*` bench inherits the symmetry
+   rule and the `drop_fixture` helper from
+   `benches/common/engine_fixture.rs`, not just `synced_height`.
 
-The four findings share a structural feature: each is a case of
-"the spec named a future-state surface, and the design doc
-operationalized it without verifying the surface exists today."
-This is not a flaw in the spec or the design doc — the spec's
-purpose is to name the future-state surface, and the design
-doc's purpose is to operationalize the spec. The pre-drafting
-gap-check between PR-1 (design) and PR-2 (implementation) is the
-verification step where future-state claims meet today's code.
+The five findings share a structural feature: each is a case
+of "the discipline named a property, and the operational
+mechanism did not preserve the property by default." This is
+not a flaw in the discipline or the design doc — the
+discipline's purpose is to name the property, and the design
+doc's purpose is to operationalize it. The pre-drafting
+gap-check between PR-1 (design) and PR-2 (implementation) is
+the verification step where future-state claims meet today's
+code (Findings 1–4); the threshold sanity-check at the first
+`workflow_dispatch` capture is the verification step where
+the design's claims meet the harness's actual behavior
+(Finding 5).
 
-The **single principle** that resolved all four findings: *a
+**Pre-stated expectations are load-bearing.** Without §4.4's
+explicit "single-digit-to-low-tens for `synced_height`-class
+workloads" expectation, 60,033 instructions could have been
+silently transcribed into `PERFORMANCE_BASELINE.md` as the
+frozen baseline; the rolling discipline would inherit the
+contamination and every per-trait PR's cumulative-delta
+computation would be diffing against a Drop-dominated number.
+The pre-stated expectation is what makes a divergence
+*meaningful*; the number alone says nothing. Per §4.4's
+per-trait PR design-note obligation, every new
+`engine_trait_bench_*` bench pre-states an expected order of
+magnitude in its design notes and bench file header.
+
+**Resolutions are class-level, not one-off.** Findings 2–5
+each surfaced through one specific bench (the workload-size
+question for `balance`; the test-helper-visibility question
+for the `synced_height` fixture; the workload-doesn't-exist
+question for the three deferred benches; the
+Drop-contamination question for the `synced_height` capture),
+but the resolution in each case is a class-level rule that
+every bench in the family inherits. This is deliberate: a
+one-off patch on the surfacing bench would leave the next
+per-trait PR author rediscovering the same problem. Z (the
+disposition for Finding 5) is consistent with this pattern —
+the symmetry rule applies to all `engine_trait_bench_*`
+benches, not just the one whose capture surfaced it.
+
+The **single principle** that resolved all five findings: *a
 measurement that pretends to be more than it is corrupts the
-discipline depending on it.* A baseline that re-baselines isn't
-a baseline (Finding 2); a fixture that bypasses production isn't
-a fixture (Finding 3); a number measured against fresh-engine
-isn't a representative number for state-dependent workloads
-(Finding 4). The design's scope is the result of this principle
-applied uniformly: **benches measure their workloads at the SHA
-where those workloads first exist as measurable units through
-representative fixtures**, not earlier and not against
-synthetic compositions. Stage 0 PR-2 ships the harness substrate
+discipline depending on it.* A baseline that re-baselines
+isn't a baseline (Finding 2); a fixture that bypasses
+production isn't a fixture (Finding 3); a number measured
+against fresh-engine isn't a representative number for
+state-dependent workloads (Finding 4); a measurement
+dominated by Drop cost isn't a measurement of the call
+(Finding 5). The design's scope is the result of this
+principle applied uniformly: **benches measure their
+workloads at the SHA where those workloads first exist as
+measurable units through representative fixtures with
+correctly-bounded measurement regions**, not earlier and
+not against synthetic compositions, and with neither
+construction nor teardown leaking into the measurement.
+
+Stage 0 PR-2 ships the harness substrate
 (criterion + iai-callgrind discipline; new bench class; routing;
 CI integration; `workflow_dispatch` enablement; the shared
 `benches/common/` fixture) plus one populated bench
@@ -837,23 +960,76 @@ is materially higher (5–15% common). Three options to reconcile:
    environment. Loosening to fit a noisy runner conflates "the
    change cost N%" with "the runner happened to vary by N%."
 
-**Threshold sanity-check (Stage 0 PR-2 part 4).** Re-run
-iai-callgrind across N runs on `ubuntu-latest`. **Confirm**
-variance is ±0% (Valgrind is deterministic for typical code);
-do not assert it. The known exception is hardware-RNG
-instructions (e.g., `RDRAND`) — Valgrind models them
-non-deterministically across runs, which leaks into the
-measured `instructions` count. None of the five hot paths
-(`balance`, `synced_height`, `current_emission`,
-`parameters_snapshot`, `account_public_address`) should hit
-hardware RNG on the read path; if non-zero variance appears,
-the most likely cause is fixture setup leaking RNG-using code
-into the measured region, indicating the fixture build needs
-to move outside the bench's measured `iai_benchmark!` block.
-Re-run criterion across N runs; record the wall-clock variance
-for the host manifest. The sanity-check confirms the gate-metric
-is coherent against the thresholds; it does not aim to prove
-criterion wall-clock is precise (it isn't, on shared runners).
+**Threshold sanity-check (Stage 0 PR-2 part 4).** Two checks
+required for a valid baseline; both run at the
+`workflow_dispatch` capture. The order-of-magnitude check is
+the **static** test (one number, one comparison) and runs
+first because a number that fails it is invalid regardless of
+how it varies; the determinism check is the **dynamic** test
+(N numbers, equality comparison) and runs against the validated
+shape.
+
+**Static check: order-of-magnitude expected-value comparison.**
+Verify the captured iai-callgrind `instructions` count is in
+the expected order of magnitude per §4.2's measurement-region
+discipline: single-digit-to-low-tens for `synced_height`-class
+workloads (a few field accesses + one method call);
+proportional-to-N for `balance`-class workloads (linear walk
+over `transfers`). When the actual count exceeds the expected
+value by **more than one order of magnitude**, the bench is
+invalid. The two most common causes, in order of likelihood:
+
+1. **Fixture teardown leaking into the measured region** —
+   the bench function takes ownership of the fixture and
+   `Drop` runs inside the measured region. Verify the bench
+   function returns its fixture (or returns a value that
+   doesn't drop expensively) and uses iai-callgrind's
+   `teardown =` parameter for the actual cleanup. Per the
+   symmetry rule in §4.2, setup and teardown are both
+   excluded from the measured region.
+2. **Hardware-RNG instruction leakage** — `RDRAND`-class
+   instructions are modeled non-deterministically by
+   Valgrind, which inflates the measured count and also
+   defeats the determinism check below. None of the five
+   §3.3.1 read paths should hit hardware RNG on the
+   measured call; if the bench function does, the
+   RNG-touching code lives in the fixture build and needs
+   to move outside the measured region.
+
+The order-of-magnitude check is **only meaningful with a
+pre-stated expectation**: 60,033 instructions on its own says
+nothing; 60,033 instructions against a pre-stated expectation
+of "single-digit-to-low-tens" is a 3,000× divergence that
+forces investigation. Without the pre-stated expectation, an
+invalid measurement transcribes silently into
+`PERFORMANCE_BASELINE.md` and the discipline depending on it
+inherits the contamination. **Per-trait PR design-note
+obligation:** every Stage 1 per-trait PR introducing a new
+`engine_trait_bench_*` bench must pre-state the expected
+order-of-magnitude for the iai-callgrind instruction count in
+the PR description (and in the bench file's
+"Expected post-fixture instructions" header comment, mirroring
+the convention established by
+`engine_trait_bench_ledger_synced_height_iai.rs`). Reviewers
+apply the order-of-magnitude check at the workflow_dispatch
+capture step using the pre-stated expectation as the anchor;
+a bench whose design notes do not pre-state an expectation
+fails review on the missing anchor before a baseline is
+captured.
+
+**Dynamic check: iai-callgrind determinism across N runs.**
+Re-run iai-callgrind across N runs on `ubuntu-latest`.
+**Confirm** variance is ±0% (Valgrind is deterministic for
+typical code); do not assert it. Non-zero variance with the
+order-of-magnitude check passing typically points to
+hardware-RNG leakage (cause 2 above) — the bench itself is
+shape-correct but the fixture is touching `RDRAND`-class
+instructions during setup that Valgrind models as
+non-deterministic. Re-run criterion across N runs; record the
+wall-clock variance for the host manifest. The dynamic check
+confirms the gate-metric is coherent against the thresholds;
+it does not aim to prove criterion wall-clock is precise
+(it isn't, on shared runners).
 
 **If criterion variance is unexpectedly high on the gate-metric
 benches.** PR-2 may surface a small framing tightening to
