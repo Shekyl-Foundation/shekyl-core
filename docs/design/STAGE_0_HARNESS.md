@@ -172,6 +172,16 @@ The watched-path list does **not** currently include
 `rust/shekyl-engine-core/**`. Adding it is part of Stage 0 PR-2's
 implementation work.
 
+**`update-baseline` job behavior on PR-2's merge.** The
+`update-baseline` job (gated on `push` to `dev`) runs against
+PR-2's merge commit. Because PR-2 also lands the watched-path
+addition for `rust/shekyl-engine-core/**`, the merge commit is
+within scope; the job re-captures and absorbs the new
+`engine_trait_bench_*` entries into `bench-baseline/baseline.json`.
+Subsequent Stage 1 PR gates measure against this updated rolling
+baseline; the §4.5 freeze-vs-rolling reconciliation depends on
+this single absorption step.
+
 ---
 
 ## 4. Six decisions
@@ -206,6 +216,18 @@ comment records what surface it currently calls (inherent method
 on `Engine<S>` at Stage 0; trait method on `Engine<S, …>` after
 the relevant Stage 1 PR). The migration is a one-line bench-code
 change per per-trait PR; the fixture is unchanged.
+
+**Note on trait-method disambiguation.** Once a Stage 1 PR
+introduces the trait, `Engine<S, …>` may carry both an inherent
+method and a trait method with the same signature for the
+trait's transitional period. Method-call syntax
+(`engine.account_public_address(0, 0)`) resolves to the inherent
+method when both exist, which would silently keep the bench on
+the pre-migration surface. The migrating PR uses fully-qualified
+trait dispatch (`<Engine<…> as KeyEngine>::account_public_address(&engine, 0, 0)`)
+so the call site is unambiguous, and updates the bench file's
+measured-surface comment to record which surface is in scope.
+Reviewers verify the comment matches the actual call.
 
 **Cross-reference.** §10.2.2 *Stage 4 cost characterization*
 inherits this harness as-is at Stage 4 cutover. Comparison
@@ -254,23 +276,44 @@ bidirectional.
 through `<Engine<S, …> as TraitName>` dispatch. The fixture is
 identical across the migration; only the call site changes.
 
-**Fixture shape.** Each bench constructs an `Engine<S>` with a
-pre-populated state mimicking a typical wallet workload:
+**Fixture shape (qualitative).** Each bench constructs an
+`Engine<S>` with a pre-populated state mimicking a typical wallet
+workload:
 
-- 10 000-entry `transfers` vec (realistic for `LedgerEngine::balance`).
+- A `transfers` vec sized to a representative workload (single
+  digits of thousands of entries; specific count derived in PR-2).
 - Pre-derived `account_public_address` (single read, no derivation
   in the measured region).
 - Mock daemon (no network I/O in the measured region; daemon RPC
   is not on these read paths anyway).
 - No filesystem I/O in the measured region.
 
-The fixture's exact layout lives in the Stage 0 PR-2 manifest
-(see Decision 5 for manifest discipline).
+**Stage 0 PR-1 scope guard.** This document does **not** pin
+specific entry counts or fixture sizes. Pinning numbers here
+would create synthetic precision the design cannot justify
+(actual entry counts are an empirical question PR-2 answers
+during fixture derivation). However, the manifest is required
+to make the derivation auditable:
 
-**Stage 0 PR-1 scope guard.** This document does **not** pin the
-fixture layout. PR-2 lands the fixture along with the bench files
-and adds a manifest section for each bench naming the operation
-list and fixture shape; reviewers gate PR-2's manifest separately
+- **Manifest requirement.** Each bench's manifest section
+  documents specific entry counts, account counts, output counts,
+  and block heights, **with derivation rationale** (one or two
+  sentences naming the user-population shape the fixture
+  represents).
+- **Reviewer gate.** Reviewers verify the manifest's derivation
+  rationale produces a workload **representative of a typical
+  user wallet at six months of normal use**. The criterion is
+  representativeness, not specific numerical targets.
+- **Why this matters.** Fixture shape is load-bearing for
+  threshold sanity. iai-callgrind's `instructions` is largely
+  insensitive to working-set size (cache misses don't add
+  instructions), but criterion `median_ns` is highly sensitive
+  to whether the fixture fits in L2/L3 cache. A fixture chosen
+  to "fit nicely" would understate real-world cost; a fixture
+  chosen for "stress test" would overstate it.
+
+PR-2 lands the fixture along with the bench files; reviewers
+gate the manifest's representativeness rationale separately
 from this design.
 
 ### 4.3 Decision 2 — Baseline statistics
@@ -341,12 +384,22 @@ is materially higher (5–15% common). Three options to reconcile:
    change cost N%" with "the runner happened to vary by N%."
 
 **Threshold sanity-check (Stage 0 PR-2 part 4).** Re-run
-iai-callgrind across N runs on `ubuntu-latest`; expect ±0%
-(Valgrind is deterministic). Re-run criterion across N runs;
-record the wall-clock variance for the host manifest. The
-sanity-check confirms the gate-metric is coherent against the
-thresholds; it does not aim to prove criterion wall-clock is
-precise (it isn't, on shared runners).
+iai-callgrind across N runs on `ubuntu-latest`. **Confirm**
+variance is ±0% (Valgrind is deterministic for typical code);
+do not assert it. The known exception is hardware-RNG
+instructions (e.g., `RDRAND`) — Valgrind models them
+non-deterministically across runs, which leaks into the
+measured `instructions` count. None of the five hot paths
+(`balance`, `synced_height`, `current_emission`,
+`parameters_snapshot`, `account_public_address`) should hit
+hardware RNG on the read path; if non-zero variance appears,
+the most likely cause is fixture setup leaking RNG-using code
+into the measured region, indicating the fixture build needs
+to move outside the bench's measured `iai_benchmark!` block.
+Re-run criterion across N runs; record the wall-clock variance
+for the host manifest. The sanity-check confirms the gate-metric
+is coherent against the thresholds; it does not aim to prove
+criterion wall-clock is precise (it isn't, on shared runners).
 
 **If criterion variance is unexpectedly high on the gate-metric
 benches.** PR-2 may surface a small framing tightening to
@@ -370,6 +423,27 @@ pipeline, gated through the new `engine_trait_bench_*` class.
    [`.github/workflows/benchmarks.yml`](../../.github/workflows/benchmarks.yml)
    for both `pull_request` and `push` triggers. Without this, PRs
    touching `shekyl-engine-core` do not trigger the gate.
+
+   **Stage 0 PR-2's own gate run on first introduction.** PR-2
+   touches both watched paths and `scripts/bench/` (routing
+   entries) and adds the bench files in the same commit, so the
+   `pull_request` gate runs on PR-2 itself and encounters the new
+   `engine_trait_bench_*` entries with no baseline counterpart.
+   The existing `compare.py` (lines 165–255) routes such entries
+   into the `added_in_pr` list, which is **informational**:
+   `has_fail = (fail > 0) OR bool(missing_in_pr)`, so added
+   entries do **not** trip the gate. This is also documented in
+   [`docs/benchmarks/README.md`](../benchmarks/README.md):
+   "An entry present in the PR but not the baseline is
+   informational; the first merge to `dev` seeds it into the
+   rolling baseline." On PR-2's merge to `dev`, the
+   `update-baseline` job absorbs the new entries into
+   `bench-baseline/baseline.json`. From the next Stage 1 PR
+   onward, the gate runs against the seeded rolling baseline.
+
+   No additional first-commit-with-placeholder-baselines step is
+   required; the existing harness handles new-bench introduction
+   correctly without it.
 2. **Capture script.** Add five rows to the `BENCHES` array in
    [`scripts/bench/capture_rust_baseline.sh`](../../scripts/bench/capture_rust_baseline.sh)
    following the existing `crate:criterion-target:iai-callgrind-target`
@@ -423,6 +497,24 @@ each PR introduces, computed against the Stage-0-frozen numbers.
 Reviewers cite the table during Stage 1 PR review; the document
 is the canonical source of cumulative delta.
 
+**Worked example (illustrative).** Suppose Stage 1 PR 1
+(DaemonEngine) lands at +5% against the frozen baseline; PR 2
+(LedgerEngine) adds another +6% against the post-PR-1 rolling
+baseline (which is +5% above frozen, so PR 2's cumulative is
++11%); PR 3 (KeyEngine) lands at +4% rolling, +15% cumulative.
+Stage 1 PR 3's description reads: "CI-gate delta against rolling
+baseline: +4% (passes ±10% warn, ±25% fail). Cumulative delta
+against frozen baseline at
+[`docs/PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md):
++15% (between 10% warn threshold and 25% fail threshold;
+justification per trait-spec §3.3.1: combined trait-dispatch
+overhead is within budgeted total)." Both numbers cited; the
+gate enforces the rolling delta; the cumulative number is
+visible to reviewers without requiring a separate computation.
+Stage 1 PR 4's description, in turn, cites its own +N%
+(rolling) and the new running cumulative against the same
+frozen baseline.
+
 **Why not lock the rolling baseline during Stage 1.** Plausible
 alternative: suspend `update-baseline` for `shekyl-engine-core`
 benches during Stage 1 (lock the baseline at Stage 0 PR-2's SHA
@@ -458,12 +550,18 @@ adjustment if needed for that trait's specific surface.
 
 **Stage 2+ method additions.** When a future PR adds a new
 hot-path method to an existing trait, that PR adds the bench
-alongside the method. Reviewer responsibility: flag any new method
-on `KeyEngine` / `LedgerEngine` / `EconomicsEngine` /
-`DaemonEngine` / `RefreshEngine` / `PendingTxEngine` /
-`PersistenceEngine` that does not have an accompanying bench, on
-the same justification as the trait-spec §3.3.1 gate (read-path
-overhead must be measured before merge).
+alongside the method. Reviewer responsibility: flag any new
+method on **the trait surfaces named in
+[`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
+§3** (currently `KeyEngine`, `LedgerEngine`, `EconomicsEngine`,
+`DaemonEngine`, `RefreshEngine`, `PendingTxEngine`,
+`PersistenceEngine`; subject to refinement during Stage 1 if a
+per-trait extraction surfaces a justified split or rename) that
+does not have an accompanying bench, on the same justification
+as the trait-spec §3.3.1 gate (read-path overhead must be
+measured before merge). The spec is the source of truth for
+the trait list; this design's enumeration is convenience for
+current readers.
 
 **Stage 4 cutover.** The harness measures the trait surface,
 which is invariant across Stage 1 ↔ Stage 4 (per spec §7
@@ -522,23 +620,57 @@ PR-2 reviewers verify against this design:
 - [ ] `paths:` extension in `.github/workflows/benchmarks.yml`
       for `rust/shekyl-engine-core/**` (both `pull_request` and
       `push` triggers).
-- [ ] Captured frozen baseline numbers landed in
-      `docs/PERFORMANCE_BASELINE.md` at Stage 0 PR-2's SHA, with
-      host manifest filled in.
+- [ ] **Workflow-dispatch enablement on `capture-pr` job.** Add
+      `|| github.event_name == 'workflow_dispatch'` to the
+      `capture-pr` job's `if:` gate in
+      [`.github/workflows/benchmarks.yml`](../../.github/workflows/benchmarks.yml).
+      The trigger is already declared at the workflow level
+      (`workflow_dispatch:`) but no job currently runs on
+      dispatch; this enables the (iii) capture mechanism below.
+- [ ] **Frozen baseline captured on the reference runner before
+      review.** PR-2 author triggers a one-shot
+      `workflow_dispatch` against PR-2's branch (a fresh
+      `ubuntu-latest` GHA runner per the §4.4 reference
+      environment); downloads the `shekyl_rust_v0.json` artifact;
+      transcribes the iai-callgrind `instructions` and criterion
+      `median_ns` / `mean_ns` numbers into
+      `docs/PERFORMANCE_BASELINE.md` along with the host manifest
+      and the SHA at which the capture ran; commits before
+      opening PR-2 for review. The CI gate on PR-2 itself
+      verifies the numbers match: iai-callgrind to deterministic
+      tolerance (±0% modulo the §4.4 hardware-RNG exception),
+      criterion to within the documented variance. Drift beyond
+      tolerance is grounds for re-running the capture.
 - [ ] Single-line in-place tightening of trait-spec §3.3.1
       Component 1 placeholder to name Stage 0 PR-2's SHA and
       this design doc as the harness's design contract. This is
       contextual tightening (timing-of-when-harness-lands shifts
       from "first Stage 1 PR" to "Stage 0 PR-2"); the substantive
       §3.3.1 content is unchanged.
-- [ ] Threshold sanity-check: re-run iai-callgrind N times across
-      a fresh `ubuntu-latest` runner; record variance in the
-      `PERFORMANCE_BASELINE.md` host manifest. Confirm
-      iai-callgrind variance is ±0% (deterministic) and criterion
-      wall-clock variance is documented. If criterion variance
-      surfaces a §3.3.1 framing issue, ship the standalone
-      tightening commit alongside PR-2 (per Push 4 disposition;
-      not §8.2 co-landed with Stage 1 PR 1).
+- [ ] **Threshold sanity-check: iai-callgrind determinism.**
+      Re-run iai-callgrind N times across a fresh `ubuntu-latest`
+      runner; confirm variance is ±0% and record the result in
+      the `PERFORMANCE_BASELINE.md` host manifest. Non-zero
+      variance triggers fixture-setup investigation per §4.4
+      (most likely cause: hardware-RNG instruction leakage into
+      the measured region).
+- [ ] **Threshold sanity-check: criterion variance documentation.**
+      Re-run criterion N times across a fresh `ubuntu-latest`
+      runner; document the wall-clock variance (median, mean,
+      std-dev) in the `PERFORMANCE_BASELINE.md` host manifest.
+      Criterion is informational; the documentation is for
+      reviewers comparing future per-PR criterion deltas against
+      noise floor.
+- [ ] **Conditional: standalone §3.3.1 tightening commit.** If
+      the criterion variance documentation surfaces a §3.3.1
+      framing issue (e.g., the spec's threshold framing reads
+      ambiguously about whether 10%/25% applies to gate-metric
+      or wall-clock), ship a **standalone** spec-amendment
+      commit alongside PR-2 with the framing tightening — per
+      Push 4 disposition, this is **never** §8.2 co-landed with
+      Stage 1 PR 1. If criterion surfaces no framing issue,
+      this checkbox is "N/A — no tightening needed" and the
+      commit is omitted.
 
 PR-2 does not modify trait-spec §3.3 substantive content; only
 the in-place placeholder tightening at Component 1 is permitted,
