@@ -62,24 +62,37 @@ from typing import Any
 SCHEMA_VERSION_IN = "shekyl_rust_v0"
 SCHEMA_VERSION_OUT = "shekyl_rust_v0_compare_v1"
 
-# Threshold table — see `docs/MID_REWIRE_HARDENING.md` §3.3, §4.1. The
+# Threshold table — see `docs/MID_REWIRE_HARDENING.md` §3.3, §4.1, and
+# `docs/design/STAGE_0_HARNESS.md` §4.3 (engine_trait_bench_*). The
 # thresholds are intentionally round-numbered and percentage-of-
 # baseline (not raw instruction counts) so the rule is the same across
 # benches with wildly different absolute counts.
 #
-# `crypto_bench_*`  : bidirectional  (±5% warn, ±15% fail).
-#                     Speed-ups are suspicious too: a curve25519
-#                     short-circuit, an ML-DSA-65 rejection-loop
-#                     shortcut, or an Argon2id parameter drop all
-#                     manifest as large negative deltas on a
-#                     `crypto_bench_*` line.
-# `hot_path_bench_*`: slowdown-only (+5% warn, +15% fail).
-#                     Faster is unambiguously better for postcard
-#                     serde, balance compute, scanner bookkeeping.
+# `crypto_bench_*`        : bidirectional  (±5% warn, ±15% fail).
+#                           Speed-ups are suspicious too: a curve25519
+#                           short-circuit, an ML-DSA-65 rejection-loop
+#                           shortcut, or an Argon2id parameter drop all
+#                           manifest as large negative deltas on a
+#                           `crypto_bench_*` line.
+# `hot_path_bench_*`      : slowdown-only (+5% warn, +15% fail).
+#                           Faster is unambiguously better for postcard
+#                           serde, balance compute, scanner bookkeeping.
+# `engine_trait_bench_*`  : bidirectional  (±10% warn, ±25% fail).
+#                           Trait-extraction read paths from the V3
+#                           engine trait spec §3.3.1. Bidirectional
+#                           because a -50% speed-up against the
+#                           monolithic engine likely indicates the
+#                           bench fixture broke or measured the wrong
+#                           thing rather than a real optimization.
+#                           Looser thresholds than `crypto_bench_*`
+#                           because trait-dispatch overhead is allowed
+#                           more headroom than crypto control flow.
 CRYPTO_WARN = 0.05
 CRYPTO_FAIL = 0.15
 HOT_PATH_WARN = 0.05
 HOT_PATH_FAIL = 0.15
+ENGINE_TRAIT_WARN = 0.10
+ENGINE_TRAIT_FAIL = 0.25
 
 # The iai-callgrind metric the gate runs on. "instructions" is the
 # most stable Tier-1 counter across kernel versions / valgrind patch
@@ -91,16 +104,20 @@ GATE_METRIC = "instructions"
 def classify(function_name: str) -> str:
     """Route a bench function name to its threshold class.
 
-    The naming convention is enforced at bench-commit time (see
-    manifest §2-§5): every iai bench function starts with exactly
-    one of `crypto_bench_` or `hot_path_bench_`. Anything else is
-    an un-routed bench and lands in the `unrouted` list for human
-    review.
+    The naming convention is enforced at bench-commit time (see the
+    Rust manifest sections — `docs/benchmarks/shekyl_rust_v0.manifest.md`
+    for the existing `crypto_bench_*` / `hot_path_bench_*` benches and
+    the `engine_trait_bench_*` section added by Stage 0 PR-2): every
+    iai bench function starts with exactly one of `crypto_bench_`,
+    `hot_path_bench_`, or `engine_trait_bench_`. Anything else is an
+    un-routed bench and lands in the `unrouted` list for human review.
     """
     if function_name.startswith("crypto_bench_"):
         return "crypto_bench"
     if function_name.startswith("hot_path_bench_"):
         return "hot_path_bench"
+    if function_name.startswith("engine_trait_bench_"):
+        return "engine_trait_bench"
     return "unrouted"
 
 
@@ -117,6 +134,19 @@ def verdict_for(cls: str, delta_pct: float) -> str:
         if delta_pct >= HOT_PATH_FAIL:
             return "fail"
         if delta_pct >= HOT_PATH_WARN:
+            return "warn"
+        return "ok"
+    if cls == "engine_trait_bench":
+        # Bidirectional: a large negative delta against the
+        # monolithic-engine baseline likely indicates the bench
+        # fixture broke or measured the wrong call path, not a real
+        # speed-up on a read-path that's already a few field
+        # accesses. Mirror the crypto_bench bidirectional shape with
+        # the looser engine_trait thresholds.
+        abs_d = abs(delta_pct)
+        if abs_d >= ENGINE_TRAIT_FAIL:
+            return "fail"
+        if abs_d >= ENGINE_TRAIT_WARN:
             return "warn"
         return "ok"
     return "unrouted"

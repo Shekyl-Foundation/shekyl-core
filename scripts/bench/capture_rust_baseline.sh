@@ -50,10 +50,17 @@ need valgrind
 need iai-callgrind-runner
 need python3
 
-# ---- five benches: crate : criterion-target : iai-callgrind-target ----------
+# ---- benches: crate : criterion-target : iai-callgrind-target --------------
 #
 # Order matters only for human readability in the JSON envelope and
 # the iai snapshot; the script treats each row as self-contained.
+#
+# The first five rows are the original mid-rewire-hardening pass
+# (`docs/MID_REWIRE_HARDENING.md` §3.2 / §3.3); the trailing
+# `engine_trait_bench_*` rows are the V3 engine trait spec §3.3.1
+# measurement gate, added by Stage 0 PR-2 per
+# `docs/design/STAGE_0_HARNESS.md` §4.6. Stage 1 per-trait PRs append
+# their own rows here as each deferred bench is introduced.
 
 BENCHES=(
   "shekyl-engine-state:ledger:ledger_iai"
@@ -61,6 +68,7 @@ BENCHES=(
   "shekyl-engine-file:open:open_iai"
   "shekyl-scanner:scan_block:scan_block_iai"
   "shekyl-tx-builder:transfer_e2e:transfer_e2e_iai"
+  "shekyl-engine-core:engine_trait_bench_ledger_synced_height:engine_trait_bench_ledger_synced_height_iai"
 )
 
 # Clean criterion output so the envelope reflects this run only.

@@ -58,6 +58,7 @@ on:
     paths:
       - "rust/shekyl-engine-state/**"
       - "rust/shekyl-engine-file/**"
+      - "rust/shekyl-engine-core/**"
       - "rust/shekyl-scanner/**"
       - "rust/shekyl-tx-builder/**"
       - "rust/shekyl-oxide/**"
@@ -72,6 +73,7 @@ on:
     paths:
       - "rust/shekyl-engine-state/**"
       - "rust/shekyl-engine-file/**"
+      - "rust/shekyl-engine-core/**"
       - "rust/shekyl-scanner/**"
       - "rust/shekyl-tx-builder/**"
       - "rust/shekyl-oxide/**"
@@ -94,7 +96,16 @@ env:
 jobs:
   capture-pr:
     name: capture shekyl_rust_v0 (PR head)
-    if: github.event_name == 'pull_request'
+    # `workflow_dispatch` is the (iii) capture mechanism for
+    # frozen baselines per `docs/design/STAGE_0_HARNESS.md` §5: the
+    # PR-2 author manually triggers a one-shot capture against the
+    # PR branch on a fresh `ubuntu-latest` runner, downloads the
+    # `shekyl_rust_v0-pr` artifact, and transcribes the numbers
+    # into `PERFORMANCE_BASELINE.md` before opening review. The
+    # downstream `compare` / `profile-on-fail` jobs are still
+    # gated on `pull_request` (no baseline diff is meaningful for
+    # a manual capture), so dispatch only runs `capture-pr`.
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
