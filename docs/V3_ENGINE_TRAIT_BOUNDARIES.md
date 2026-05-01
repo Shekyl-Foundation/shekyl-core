@@ -1,10 +1,16 @@
 # V3 Engine Trait Boundaries (Stage 1)
 
-**Status.** Round 4b of 6 design-review rounds (markdown-only,
-against `dev`). PR [#20](https://github.com/Shekyl-Foundation/shekyl-core/pull/20)
-is the live review surface; each round appends a commit, the PR
-absorbs the diff, and the merge to `dev` happens when the spec is
-accepted. **No code changes are gated on this document yet.**
+**Status.** Round 5 (acceptance round) of design-review rounds
+(markdown-only, against `dev`). PR
+[#20](https://github.com/Shekyl-Foundation/shekyl-core/pull/20) is the
+live review surface; each round appends a commit, the PR absorbs
+the diff, and the merge to `dev` happens when the spec is
+accepted. The Round 5 pre-drafting gap-check confirmed Case A
+(spec is structurally complete; Round 6 is unnecessary unless
+post-draft review surfaces unexpected items); the round count
+lands at 5 (Rounds 1, 2, 3, 4a, 4b, 5) — at the upper bound of
+the 4–6 review-rounds rule. **No code changes are gated on this
+document yet.**
 
 - **Round 1 record:** `d387bff1d` (initial draft on this branch);
   content originally landed on `dev` outside the review-round
@@ -30,15 +36,19 @@ accepted. **No code changes are gated on this document yet.**
   mocks-vs-contract bullet, new §8.2 amendment co-landing rule,
   §10.0 separator strengthening, new `docs/PERFORMANCE_BASELINE.md`,
   `FOLLOWUPS.md` baseline + cutover entries.
-- **Round 4b Phase 2 record:** the commit landing this state on
-  the chore branch; commit message captures the seven gap-check
-  additions (§1.4 `Send`-on-parameters; §1.6↔§5.2 cross-reference;
-  §3.3.1 baseline definition; new §3.4.4 long-running cancellation
+- **Round 4b Phase 2 record:** `0d8ff9ef0` — seven gap-check
+  additions + two cross-reference closures + one polish: §1.4
+  `Send`-on-parameters; §1.6↔§5.2 cross-reference; §3.3.1
+  baseline definition; new §3.4.4 long-running cancellation
   pattern with §3.4.4→§3.4.5 renumber; §5.1 supervisor restart
   budget; new §5.2 caller retry contract with PendingTx/Daemon
   layered-call pinning; new §6.3 hybrid construction discipline;
   §8.2 PR-description bullet elevation; §10.1.3 verification
-  gates + orthogonal-properties exclusion).
+  gates + orthogonal-properties exclusion.
+- **Round 5 record:** the commit landing this state on the chore
+  branch; commit message captures nine operational-tightening
+  items plus the panic-strategy enumeration extension surfaced
+  by the Round 5 pre-drafting gap-check.
 
 **Planned trajectory.** Round 4 is split into 4a and 4b; 4b is
 further split into Phase 1 (carry-forwards) and Phase 2
@@ -75,13 +85,25 @@ further split into Phase 1 (carry-forwards) and Phase 2
   orthogonal-properties exclusion. Plus two cross-reference
   closures from Phase 1 (§1.6→§5.2; §3.5↔§3.4.4) and one polish
   (§8.2 PR-description third bullet).
-- **Round 5 — acceptance.** Near-empty outside fallout from
-  Round 4b review. Pre-drafting gap-check (per the Round 4b
-  meta-pattern) looks for additional "implicit but discoverable
-  late" instances — current candidates: tokio runtime config,
-  allocator behavior, TLS implementation choice. If two-three
-  produce material yield, Round 5 expands; if none, Round 6 is
-  unnecessary and the spec is accepted on Round 5.
+- **Round 5 — operational tightening + acceptance (current
+  round; 9 items + panic-strategy enumeration extension).**
+  Items: §3.3.1 re-baseline frozen-numbers / per-PR-deltas /
+  Stage-1-close policy; §3.4.4 progress-channel backpressure
+  with §10.4.3 consistency; §5.2 layered-call error preservation
+  (verbatim-not-wrapping) + three-case walk table-form polish;
+  §6.2 master-seed-derivation contract for hybrid tests; §8.2
+  two "Why" paragraphs consolidation; §10.1.3 fifth bullet
+  (deployment-context properties incl. panic strategy) +
+  resource-consumption cross-reference to §10.2.2; new §10.6.4
+  deployment-configuration pinning re-litigation (4 enumeration
+  items: allocator, TLS, tokio runtime config, panic strategy);
+  §1.5 enumeration update (sixth scope guard, back-filled from
+  §10.6.4). Round 5 pre-drafting gap-check ran against three
+  framings ("implicit but discoverable late" in unaddressed
+  domains; "what would Stage 2's first PR reviewer ask?"; "what
+  would Phase 2b's `StakeEngine` spec author cite?") and yielded
+  one strong candidate (panic strategy) absorbed via §10.1.3 +
+  §10.6.4 enumeration extensions. Case A confirmed.
 
 **Round-discipline meta-pattern (named in Round 4a).** Each
 round so far has introduced one or more *over-comfortable
@@ -468,6 +490,19 @@ prevent recurring pull-outside-scope patterns:
 - **Consumer-driven justification** (in §2.7's discipline
   test) rejects speculative method additions to
   `EconomicsEngine`.
+- **Deployment-configuration-as-binary-concern (Round 5 —
+  Item 9; in §10.1.3 fifth bullet and §10.6.4)** rejects
+  spec-level pinning of allocator, TLS, tokio runtime config,
+  and panic strategy. Three are spec-indifferent; the fourth
+  (panic strategy) is spec-dependent — §5.1 assumes
+  `panic=unwind` — but the *enforcement* of the configuration
+  is a deployment concern, not a trait-surface concern. The
+  scope guard prevents the recurring proposal pattern of
+  "should the spec pin allocator X / TLS Y / runtime config
+  Z?"; the answer is "no, those are deployment-context
+  properties; revisit only if a property's choice has trait-
+  surface consequences not yet captured here" (per §10.6.4's
+  threshold).
 
 Scope guards are the spec's most durable structural feature.
 Silent omission ("the spec doesn't mention X") invites future
@@ -2127,7 +2162,21 @@ The gate has three pinned components:
    baseline is re-captured only if a non-Stage-1 change
    materially shifts hot-path cost (in which case the
    re-capture is itself a baseline-bumping commit, named in
-   `PERFORMANCE_BASELINE.md` and announced in PR review). The
+   `PERFORMANCE_BASELINE.md` and announced in PR review).
+   *Per-PR delta tracking across the Stage 1 series (Round 5 —
+   Item 2):* baseline numbers are measured once at the SHA of
+   the first Stage 1 PR that lands the measurement harness and
+   committed to `PERFORMANCE_BASELINE.md` at that SHA.
+   Subsequent Stage 1 PRs measure their own changes against the
+   committed baseline numbers, *not* by re-measuring the baseline
+   SHA. Each PR's measurement records the delta its changes
+   introduce; the cumulative Stage 1 delta is the sum of per-PR
+   deltas. Reviewers consult per-PR deltas during review; the
+   baseline numbers themselves are frozen until Stage 1 closes.
+   At Stage 1's end (when the last per-trait PR merges) the
+   "redundant against outer lock" cost becomes the new normal,
+   and re-baselining for Stage 2/3/4 work is a separate
+   decision tracked at that boundary, not by this gate. The
    hot paths under measurement are at minimum
    `KeyEngine::account_public_address`,
    `LedgerEngine::balance`, `LedgerEngine::synced_height`,
@@ -2554,6 +2603,29 @@ the actor checks at checkpoints; `progress` maps to an `mpsc`
 forwarded from the actor to the caller. The trait surface is
 unchanged across the cutover; the implementation behind it shifts
 from in-process awaits to actor-mailbox tells, transparently.
+
+**Progress-channel backpressure (Round 5 — Item 3).** Progress
+channels follow the same unbounded-by-default pattern as Stage 4
+actor mailboxes (§3.3.2) and the bounded-mailbox-trigger
+threshold framework (§10.4.3): unbounded `mpsc::Sender<Progress>`
+at V3.0; the implementor sends progress events without
+backpressure-blocking; receiver-dropped is observed via
+`progress.send` returning `Err`, treated per the paragraph above
+as "no listener, continue silently"; and the long-running
+operation itself never blocks on progress emission because the
+channel cannot fill. Bounded progress channels — which would
+introduce a third blocking surface alongside `cancel` and the
+operation's own work — are deferred to V3.x under the *same*
+trigger conditions as §10.4.3: production observation of
+pathological progress-channel accumulation (UI receivers
+chronically slow relative to producer cadence), plus a
+security-posture review confirming the unbounded channel has not
+become an OOM surface in practice. Until either trigger fires,
+the unbounded channel is the contract; implementors do not
+"defensively" add a bounded variant. The §10.4.3 framework
+governs both axes uniformly so the discipline of "channel
+boundedness is evidence-gated, not preemptive" applies to the
+mailbox surface and the progress surface in lockstep.
 
 #### 3.4.5 Round 3 dispositions
 
@@ -3190,7 +3262,14 @@ The clearest example today is `PendingTxEngine::submit` and
   layers because the layering is transparent to the dedup
   property.
 
-Three crash cases under retry:
+Three crash cases under retry, summarized at a glance and then
+walked individually below:
+
+| Crash point | Inner (daemon) state at crash | Outer (post-processing) state at crash | Retry behavior |
+|---|---|---|---|
+| Before inner call | unsubmitted | not started | first daemon call; clean post-processing |
+| After inner returned | submitted | partial / not started | dedup ack; post-processing applies |
+| Mid-RPC inside inner | indeterminate (network race) | not started | dedup or first submit; post-processing applies |
 
 1. **`PendingTxEngine::submit`'s actor crashed *before* calling
    `DaemonEngine::submit_transaction`.** The daemon never
@@ -3223,6 +3302,44 @@ method, and the layered idempotency makes the retry safe under
 all three failure modes. This is the operational value of the
 cross-method pinning: callers reason about the trait surface's
 documented condition, not about per-layer failure modes.
+
+**Layered errors preserve the inner `RuntimeFailure` verbatim
+(Round 5 — Item 4).** Although the retry decision does not require
+knowing *which* layer crashed, callers that *do* care — for
+diagnostics, logging, alerting, or operator-action prompts —
+need a structured way to identify the innermost failing actor
+without private API access into the outer trait. The discipline
+is **verbatim preservation**: when an outer trait method
+propagates a `RuntimeFailure` from an inner trait method, the
+outer return value carries the inner trait's error variant
+*unchanged*, with `actor` naming the *innermost* failing actor
+rather than a wrapping outer actor. The natural carrier is
+§5.1's `EngineError` aggregate: `EngineError::Daemon(daemon_err)`,
+`EngineError::Persistence(persistence_err)`, etc. — a typed
+distinction that pre-empts the wrapping pattern.
+
+The wrapping pattern (e.g., a hypothetical
+`PendingTxError::DaemonFailed { reason: String }` variant that
+flattens the inner `ActorCrashReason` into a string) is rejected:
+flattening destroys the structured `ActorCrashReason` that the
+§5.2 retry table consults, and forces callers to string-parse to
+recover retry semantics. Verbatim preservation keeps the §5.1
+type structure intact across layer boundaries, so the §5.2 retry
+contract continues to hold mechanically — the
+`PanickedDuringHandler` / `DrainedDuringSupervisorCascade` /
+`Permanent` distinction remains a typed value the table rows can
+match on, regardless of which layer originated the failure.
+
+This rule has a structural consequence for outer error types:
+they must be able to express any inner-trait `RuntimeFailure`
+variant they propagate. `EngineError`'s `#[non_exhaustive]`
+aggregate (per §5.1) makes this expressible without forcing each
+outer trait to enumerate every possible inner failure source in
+its own error type — outer methods that propagate inner failures
+return the `EngineError` aggregate, and consumers downcast or
+match as needed. Reviewers checking new layered methods confirm
+that propagation uses the aggregate (or a similarly structured
+inner-preserving carrier) rather than a flattening variant.
 
 The pattern is general. Any trait method that calls another
 trait method internally derives its retry contract from the
@@ -3327,6 +3444,54 @@ Parallel-test safety follows from no-shared-state by
 construction: each test's `Mock*` has its own seed, its own
 `ChaCha20Rng`, no cross-test interaction.
 
+**Master-seed-derivation contract for hybrid composition (Round 5
+— Item 5).** When a single test composes multiple `Mock*`
+instances — and especially when §6.3's hybrid construction puts
+real engines and mock engines into the same test — independent
+seeds per component create a reproducibility hazard: the test's
+behavior depends on the *combination* of seeds, but only the
+seeds passed to mocks are surface-visible (real engines'
+internal randomness sources are not test-controlled in the same
+way). A test that asserts on aggregate behavior across several
+mocked components becomes hard to reproduce because the failure
+hinges on a seed combination, not a single seed.
+
+The discipline is therefore: **a single master seed per test
+case, deterministically derived into per-component seeds.** The
+test harness owns the master seed (a literal in the test
+function, recorded in CI logs); per-component seeds are derived
+from the master via a documented derivation function — typically
+a domain-separated HKDF or BLAKE2b expansion keyed by the
+component's role:
+
+```rust
+let master_seed: [u8; 32] = [0xde, 0xad, 0xbe, 0xef, /* … */];
+let key_seed     = derive_seed(&master_seed, b"role/key");
+let ledger_seed  = derive_seed(&master_seed, b"role/ledger");
+let daemon_seed  = derive_seed(&master_seed, b"role/daemon");
+let key    = MockKey::with_seed(key_seed);
+let ledger = MockLedger::with_seed(ledger_seed);
+let daemon = MockDaemon::with_seed(daemon_seed);
+```
+
+The role tag is a stable byte string per component slot; the
+derivation function lives in `engine::test_support` so all
+hybrid tests use the same construction. Reproducibility then
+depends on the master seed alone — recording the master seed in
+test names or CI logs (per the §6.2 single-mock rule) is
+sufficient to reproduce hybrid behavior. Cross-component seed
+exchange is unnecessary because the derivation pins the
+relationship; per-component seed editing is unnecessary because
+changing the master seed re-derives all components consistently.
+
+This rule does *not* require per-test bespoke derivation
+plumbing — the helper lives once in `test_support`; tests call
+it with their literal master seed and the published role tags.
+Reviewers checking new hybrid tests confirm the derivation
+helper is used (rather than independent literal seeds per
+mock), and confirm that role tags are not re-bound to different
+component slots across tests.
+
 ### 6.3 Hybrid construction across stage migrations (Round 4b — Item 12)
 
 The seven traits admit *hybrid* test compositions: real
@@ -3378,7 +3543,13 @@ in the test's setup, and reviewers confirm the contract
 discipline holds for the mocked engines. Hybrid tests are not a
 shortcut around the contract; they are a focused application of
 it that depends on the contract being honored at every mock
-seam.
+seam. Determinism in hybrid composition is governed by §6.2's
+master-seed-derivation contract: real engines whose internal
+randomness sources accept seeds (e.g., a real
+`KeyEngine::with_seed` constructor in test mode) draw their seed
+from the same master seed via the published role-tag derivation,
+keeping reproducibility a function of the master seed alone
+across the real/mock boundary.
 
 **Cross-stage applicability.** The discipline holds across
 Stage 1 → Stage 4: at Stage 1 the `Mock*` types substitute for
@@ -3530,27 +3701,29 @@ addition that wasn't pinned in this spec — e.g., during the
    the PR description must surface that explicitly rather than
    buried in commit-message bodies.
 
-Why two commits, not one combined: trait additions affect every
-implementor (Stage 1 default impl, every `Mock*`, future Stage 4
-actor) by virtue of the `T: KeyEngine` bound now requiring the
-new method. Bundling the amendment with consumer changes makes
-the diff hard to review (the amendment's effect on existing
-implementors gets buried in consumer-specific code) and hard to
-revert (a consumer-side bug forces the trait amendment to revert
-too). Splitting the two commits lets the trait amendment land
-clean and the consumer code land separately, with bisection
-working at trait-amendment granularity if a regression surfaces
-later.
-
-Why the PR-description bullet is structurally separate from the
-commits: the two-commit form is a *bisection* discipline — small
-commits with clear scope. The PR description is a *review-scope*
-discipline — telling reviewers where the spec impact lives. They
-serve different audiences (bisecting tools vs human reviewers),
-operate at different granularities (commit vs PR), and would
-silently degrade if conflated. Reviewers applying §8.2
+Why these three are structurally separate (Round 5 — Item 6).
+The two-commit form is a **bisection discipline**: trait
+additions affect every implementor (Stage 1 default impl, every
+`Mock*`, future Stage 4 actor) by virtue of the `T: KeyEngine`
+bound now requiring the new method, so trait amendments must be
+revertible independently of consumer changes for bisection to
+land at the right granularity if a regression surfaces later.
+The PR-description bullet is a **review-scope discipline**: it
+tells human reviewers where the spec impact lives so they can
+confirm §7's invariants hold without reading the entire diff.
+Together the three bullets cover three audiences operating at
+three granularities — bisecting tools at commit granularity, PR
+reviewers at PR granularity, and future readers at spec-amendment
+granularity via the §2.X "Round N amendment" sub-bullet. Each
+bullet serves an audience the others cannot: bundling commits
+would conflate the bisection discipline; omitting the
+PR-description bullet would conflate the review-scope discipline;
+omitting the §2.X amendment sub-bullet would conflate the
+spec-archaeology discipline (future readers asking "when was
+this method added and why?" would have to grep commit history
+rather than reading the spec). Reviewers applying §8.2
 mechanically check all three bullets; missing any one weakens
-the discipline's enforcement.
+the discipline's enforcement against the corresponding audience.
 
 ---
 
@@ -3644,14 +3817,69 @@ landed).**
 - §1.6 idempotency bullet → §5.2 cross-reference (closes the Phase 1 forward-reference once §5.2 lands).
 - §3.5 long-running paragraph → §3.4.4 reference cleanup (drops the "forthcoming in Round 4b Phase 2" parenthetical now that §3.4.4 lands).
 
-Round 5 is acceptance; near-empty outside fallout from Round 4b
-review. Pre-drafting gap-check applies the meta-pattern (§5.1
-"Round-discipline meta-pattern" framing): looks specifically for
-"implicit but discoverable late" instances. Current candidates:
-tokio runtime config, allocator behavior, TLS implementation
-choice. If two-three produce material yield, Round 5 expands
-beyond pure acceptance; if none, the spec is complete on the
-operational-refinement dimension and Round 6 is unnecessary.
+**Round 5 dispositions (9 items + panic-strategy enumeration
+extension — all landed in this commit).**
+
+*Pre-drafting gap-check.* Three framings applied: ("implicit but
+discoverable late" in unaddressed domains), ("what would Stage
+2's first PR reviewer ask?"), ("what would Phase 2b's
+`StakeEngine` spec author cite?"). All three produced zero
+structural items, confirming the spec's structural decisions
+remained settled across multiple lenses. One strong operational
+candidate — **panic strategy** (`panic=abort` vs `panic=unwind`)
+— surfaced from the first framing as a deployment-context
+property the spec implicitly depends on (§5.1's supervisor
+design assumes `panic=unwind`); absorbed via enumeration
+extensions in §10.1.3 and §10.6.4 rather than added as a tenth
+agenda item. One weak candidate (TLS in trait implementations)
+deferred — §1.4's actor-shape discipline already prevents it
+implicitly. **Case A confirmed**: spec is structurally complete;
+Round 6 is unnecessary; Round 5 is the acceptance round.
+
+*Items 1–9 (this commit):*
+
+- Status block SHA update for Round 4b Phase 2 record →
+  `0d8ff9ef0` (Item 1).
+- §3.3.1 re-baseline policy → §3.3.1 in-place extension
+  (frozen-numbers-at-first-Stage-1-PR; per-PR-deltas; Stage-1-close
+  framing; Item 2).
+- §3.4.4 progress-channel backpressure with §10.4.3 consistency →
+  §3.4.4 paragraph addition (unbounded-by-default at V3.0;
+  V3.x-deferred with the same trigger conditions as §10.4.3;
+  Item 3).
+- §5.2 layered-call error preservation (verbatim-not-wrapping) +
+  three-case walk table-form polish → §5.2 in-place extension
+  (table summary precedes prose; verbatim preservation rule
+  elevates `EngineError` aggregate as the natural carrier;
+  Item 4).
+- §6.2 master-seed-derivation contract for hybrid composition +
+  §6.3 cross-reference → §6.2 paragraph addition + §6.3 closing
+  paragraph (master seed in `engine::test_support`; per-component
+  seeds derived via stable role tags; Item 5).
+- §8.2 two "Why" paragraphs consolidated into single
+  "Why these three are structurally separate" framing → §8.2
+  in-place rewrite (three audiences × three granularities;
+  bisecting tools / PR reviewers / spec archaeology; Item 6).
+- §10.1.3 fifth bullet for deployment-context properties (incl.
+  panic strategy with spec-dependent honesty pin) +
+  resource-consumption cross-reference to §10.2.2 → §10.1.3
+  in-place extension (Item 7).
+- New §10.6.4 deployment-configuration pinning re-litigation
+  entry (4 enumeration items: allocator, TLS, tokio runtime
+  config, panic strategy; spec-indifferent vs spec-dependent
+  distinction; Item 8).
+- §1.5 sixth scope guard
+  (deployment-configuration-as-binary-concern), back-filled from
+  §10.6.4 final framing → §1.5 enumeration addition (Item 9).
+
+*Round-count.* Five rounds (1, 2, 3, 4a, 4b, 5) at the upper
+bound of the 4–6 review-rounds rule. The structural depth (seven
+traits × Stage 1/2/4 surfaces × V3.0/V3.1/V3.2/V3.x/Phase 2b
+lifecycle horizons) earned the thorough pressure-testing across
+nine "what are we missing" cycles; yield trended structural →
+design-closure → operational-refinement, with the late-round
+yield staying low in count and impact (the diminishing-returns
+signal the round count was designed to surface).
 
 ---
 
@@ -3714,6 +3942,7 @@ Round 4a closure (the ground truth)
     §10.6.1 8th-trait proposals beyond Phase 2b (governed by §1.5 + scope-guard meta-pattern)
     §10.6.2 Trait-level observability re-litigation (revisits §3.5)
     §10.6.3 Consensus-rule enforcement re-litigation (revisits §2.7 scope guard)
+    §10.6.4 Deployment-configuration pinning re-litigation (revisits §10.1.3 fifth bullet)
 ```
 
 The visual separator below §10.5 is load-bearing: §10.6's
@@ -3890,7 +4119,31 @@ equivalence and are gated separately:
   count, thread/task count differ between stages by
   construction (Stage 1 has no actor tasks; Stage 4 has one
   task per actor). These are implementation-orthogonal to
-  behavioral equivalence.
+  behavioral equivalence; resource-consumption deltas
+  attributable to Stage 4's actor model (per-actor task
+  overhead, mailbox memory, additional FD usage from
+  supervision plumbing) are gated by §10.2.2 alongside
+  performance characterization, not by §10.1.3.
+- *Deployment-context properties (Round 5 — Item 7).*
+  Allocator behavior (system, jemalloc, mimalloc), TLS
+  implementation choice (rustls vs native-tls), tokio
+  runtime configuration (worker thread count, blocking pool
+  size), and panic strategy (`panic=abort` vs `panic=unwind`)
+  are properties of the deployment context outside the
+  wallet engine's trait surface. Three of these (allocator,
+  TLS, tokio runtime config) are spec-indifferent; the
+  fourth (panic strategy) is spec-dependent — §5.1's
+  supervisor design assumes `panic=unwind` so that
+  `PanickedDuringHandler` semantics are observable, but the
+  spec does not enforce the binary build configuration that
+  satisfies the assumption. §10.6.4 names the assumption
+  explicitly so binaries built with `panic=abort` are known
+  to be out of contract for the supervisor mechanism. All
+  four are governed by binary-level build configuration and
+  operator-tuned settings, not by trait-level invariants;
+  effects on performance or observability are gated by
+  §10.2.2 (performance) or §3.5 (observability), not by
+  §10.1.3.
 
 Each excluded property has its own verification path —
 separate gate, separate documentation, separate review
@@ -4373,6 +4626,66 @@ consensus-as-truth model fails to serve, with the failure
 mode named at consensus-protocol level rather than at
 client-convenience level. Revisit absent any one of these
 is rejected as conjectural.
+
+#### 10.6.4 Deployment-configuration pinning re-litigation (target: remain rejected unless threshold met)
+
+*Description.* Four properties of the deployment context — the
+host process's allocator, TLS implementation, tokio runtime
+configuration, and panic strategy — are governed by binary-level
+build configuration and operator-tuned runtime settings, not by
+the wallet engine's trait surface (per §10.1.3's fifth bullet).
+The spec does not pin defaults for these; deployment-level
+review (and the build/run-time configuration) governs them. This
+entry exists to remember that future contributors may attempt to
+pin one of these in the spec (e.g., "the wallet shall use
+jemalloc"; "the wallet shall use rustls"; "the wallet shall
+configure tokio with N worker threads"; "the wallet shall be
+built with `panic=abort`"); the rejection of speculative
+spec-level pinning is a recurring discipline.
+
+*Spec-indifferent vs spec-dependent properties.* Three of the
+four (allocator, TLS, tokio runtime config) are
+**spec-indifferent**: the trait surface and §7 invariants do
+not change behavior depending on which choice the binary makes.
+The fourth — **panic strategy** — is **spec-dependent**:
+§5.1's supervisor design assumes `panic=unwind` so that
+`PanickedDuringHandler` semantics are observable (under
+`panic=abort` the process terminates instead of unwinding into
+the supervisor, which means the `RuntimeFailure` variant
+distinction §5.2's retry contract relies on cannot be produced
+at all). The spec names the assumption explicitly here so that
+binaries built with `panic=abort` are *known to be out of
+contract* for the §5.1 supervisor mechanism — the spec does not
+enforce the build configuration, but it does name the
+configuration the spec depends on. Future contributors who
+configure `panic=abort` should expect §5.1's
+`PanickedDuringHandler` path to be unreachable; the existence of
+this dependency is documented rather than discovered late at
+Stage 4 cutover.
+
+*Original rejection.* §10.1.3 fifth bullet
+(deployment-context-properties exclusion); §1.5 scope-guard
+meta-pattern enumeration.
+
+*Revisit threshold.* (1) Concrete demonstration that a deployment
+property's choice has *trait-surface* consequences not yet
+captured in the spec — i.e., the property is no longer
+deployment-context-only because some trait method's documented
+behavior depends on it; (2) named alternative not considered
+(e.g., "the trait surface should expose an allocator
+configuration parameter" must consider whether the same
+parameter could be passed at binary configuration level
+instead); (3) at least one specific scenario where the
+unconstrained-by-spec status causes a concrete operational
+failure that pinning a default would prevent, with the failure
+mode named operationally rather than abstractly. The
+panic-strategy entry is partially closed by the
+spec-dependent-assumption pin above (the dependency is
+documented; what remains open is whether to *enforce* it via
+`build.rs` checks or `Cargo.toml` profile settings); a revisit
+of the panic-strategy property argues for enforcement, not
+re-pinning of the assumption itself. Revisit absent any one of
+the threshold conditions is rejected as conjectural.
 
 ---
 
