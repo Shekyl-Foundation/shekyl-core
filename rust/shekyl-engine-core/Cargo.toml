@@ -69,6 +69,17 @@ zeroize = { version = "1", features = ["derive"] }
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 criterion = { version = "0.5", features = ["html_reports"] }
+# `iai-callgrind` is the deterministic-instructions sibling for the
+# criterion wall-clock benches in this crate. The CI gate
+# (`ci/benchmarks` workflow) routes through iai-callgrind
+# `instructions` for percentage-threshold checking; criterion stays
+# as the Tier-2 informational column. Engine-surface benches
+# (`engine_trait_bench_*`) ship as criterion + iai-callgrind pairs
+# per `docs/design/STAGE_0_HARNESS.md`. Pinned to "0.16" matching
+# the workspace consensus (shekyl-engine-state, shekyl-engine-file,
+# shekyl-scanner, shekyl-tx-builder) and the runner version the
+# `ci/benchmarks` workflow installs (`^0.16`).
+iai-callgrind = "0.16"
 tempfile = "3"
 # `test-util` enables `#[tokio::test(start_paused = true)]` and the
 # in-test `tokio::time` virtualization that `wallet::refresh`'s

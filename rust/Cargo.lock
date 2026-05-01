@@ -2963,6 +2963,7 @@ dependencies = [
  "curve25519-dalek",
  "hex",
  "hkdf",
+ "iai-callgrind",
  "modular-frost",
  "serde",
  "serde_json",
