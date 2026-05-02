@@ -177,9 +177,21 @@ pub(crate) struct MockDaemon {
 }
 
 struct State {
-    /// Canonical chain. Index `i` is the block at height `i + 1`
-    /// (height 0 is unused; the daemon protocol's first block is
-    /// height 1).
+    /// Canonical chain in real-daemon convention: `chain[h]` is the
+    /// block at height `h`, with `chain[0]` being the genesis block.
+    /// `chain.len()` is the count of blocks the daemon serves;
+    /// matches `get_height`'s "count of blocks (one past tip-block
+    /// index)" contract that [`super::refresh::start_refresh`] and
+    /// [`super::Engine::refresh`] rely on for range derivation.
+    ///
+    /// Tests that need to exercise an end-to-end refresh build their
+    /// chain so [`make_synthetic_block`]`(0, _)` is at index 0
+    /// (genesis); tests that drive [`super::refresh::produce_scan_result`]
+    /// directly with an explicit `height_range` are equivalently
+    /// served by either ordering — the height numbers in the explicit
+    /// range select chain entries by index, so chain[h] = block at
+    /// height h is the only convention that keeps producer-side
+    /// height labels and chain indices in agreement.
     chain: Vec<ScannableBlock>,
     /// When `Some`, caps the height returned by `get_height` at
     /// `min(chain.len(), cap)`. Models a daemon whose reported
@@ -289,8 +301,13 @@ impl MockDaemon {
         }
     }
 
-    /// Append a block to the canonical chain. The block at index
-    /// `chain.len()` is served from height `chain.len() + 1`.
+    /// Append a block to the canonical chain. With the real-daemon
+    /// convention `chain[h] = block at height h`, the appended block
+    /// is served from height `chain.len()` *prior* to the push (i.e.
+    /// the height that becomes valid once it lands). The first
+    /// `push_block` against an empty chain should be a genesis-style
+    /// block at height 0 if the test downstream calls
+    /// `get_scannable_block_by_number(0)`.
     pub(crate) fn push_block(&self, block: ScannableBlock) {
         self.state
             .lock()
@@ -300,33 +317,34 @@ impl MockDaemon {
     }
 
     /// Replace the canonical chain at and above `fork_height` with
-    /// `new_blocks` (1-indexed; `fork_height = 1` discards the entire
-    /// chain). Models a daemon reorg from the test driver's view.
+    /// `new_blocks`. Models a daemon reorg from the test driver's
+    /// view. With the real-daemon convention `chain[h] = block at
+    /// height h`, `fork_height` is the first height that diverges:
+    /// blocks at heights `0..fork_height` survive; heights
+    /// `fork_height..` are replaced by `new_blocks` (whose first
+    /// entry should be a block at height `fork_height`).
+    ///
+    /// `fork_height = 0` discards the entire chain (genesis included);
+    /// the test then has to install a fresh genesis as `new_blocks[0]`.
     ///
     /// Subsequent `get_scannable_block_by_number(h)` for
     /// `h >= fork_height` returns the corresponding entry of
     /// `new_blocks`; `h < fork_height` is unaffected. The reported
     /// daemon height (via `get_height`) becomes
-    /// `(fork_height - 1) + new_blocks.len()`, modulo
-    /// `daemon_height_cap`.
+    /// `fork_height + new_blocks.len()`, modulo `daemon_height_cap`.
     ///
     /// # Panics
     ///
-    /// Panics if `fork_height == 0` (heights are 1-indexed) or if
-    /// `fork_height > chain.len() + 1` (the truncation point lies
-    /// past the chain end).
+    /// Panics if `fork_height > chain.len()` (the truncation point
+    /// lies past the chain end).
     pub(crate) fn replace_chain_from(&self, fork_height: u64, new_blocks: Vec<ScannableBlock>) {
-        assert!(
-            fork_height >= 1,
-            "MockDaemon::replace_chain_from: fork_height must be 1-indexed (>= 1)"
-        );
         let mut state = self.state.lock().expect("MockDaemon state poisoned");
-        let keep = usize::try_from(fork_height - 1)
+        let keep = usize::try_from(fork_height)
             .expect("MockDaemon::replace_chain_from: fork_height fits in usize");
         assert!(
             keep <= state.chain.len(),
             "MockDaemon::replace_chain_from: fork_height {fork_height} exceeds chain length {}",
-            state.chain.len() + 1
+            state.chain.len()
         );
         state.chain.truncate(keep);
         state.chain.extend(new_blocks);
@@ -381,8 +399,9 @@ impl MockDaemon {
             .insert(height);
     }
 
-    /// Number of blocks in the canonical chain. Each block at
-    /// index `i` lives at height `i + 1`.
+    /// Number of blocks in the canonical chain. With the real-daemon
+    /// convention `chain[h] = block at height h`, this equals the
+    /// `get_height` count: tip-block height + 1.
     pub(crate) fn chain_len(&self) -> u64 {
         self.state
             .lock()
@@ -497,12 +516,13 @@ impl Rpc for MockDaemon {
                 }
             }
 
-            if height == 0 {
-                return Err(RpcError::InvalidNode(
-                    "MockDaemon: requested height 0 is invalid".to_string(),
-                ));
-            }
-            let idx = usize::try_from(height - 1).map_err(|_| {
+            // chain[h] = block at height h (real-daemon convention).
+            // Out-of-range heights surface as `InvalidNode` to mirror
+            // the real daemon's "no block at this height yet"
+            // response — the producer's `fetch_block_with_retry`
+            // classifier treats this as transient-retryable, which
+            // is what the daemon-chain-too-short tests assert.
+            let idx = usize::try_from(height).map_err(|_| {
                 RpcError::InvalidNode("MockDaemon: height did not fit in usize".to_string())
             })?;
 
@@ -603,11 +623,17 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> Scanna
 mod tests {
     use super::*;
 
+    /// Build a linear chain of `n` synthetic blocks at heights
+    /// `0..n`, with `chain[0]` as the genesis-style block parented
+    /// from `[0u8; 32]`. Real-daemon convention: `chain[h] = block at
+    /// height h`. `linear_chain(n).len() == n`, so
+    /// `MockDaemon::with_seed_and_chain(_, linear_chain(n)).get_height()`
+    /// returns `n`.
     fn linear_chain(n: u64) -> Vec<ScannableBlock> {
         let mut chain =
             Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));
         let mut parent = [0u8; 32];
-        for h in 1..=n {
+        for h in 0..n {
             let block = make_synthetic_block(h, parent);
             parent = block.block.hash();
             chain.push(block);
@@ -629,8 +655,9 @@ mod tests {
 
     #[tokio::test]
     async fn block_fetch_returns_correct_height() {
+        // chain[h] = block at height h (real-daemon convention).
         let chain = linear_chain(3);
-        let expected_h2 = chain[1].block.hash();
+        let expected_h2 = chain[2].block.hash();
         let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
 
         let block = rpc.get_scannable_block_by_number(2).await.unwrap();
@@ -639,15 +666,17 @@ mod tests {
 
     #[tokio::test]
     async fn parent_hash_chains_correctly() {
+        // 3-block chain has heights 0, 1, 2; verify h=2 parents from h=1.
         let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
+        let h1 = rpc.get_scannable_block_by_number(1).await.unwrap();
         let h2 = rpc.get_scannable_block_by_number(2).await.unwrap();
-        let h3 = rpc.get_scannable_block_by_number(3).await.unwrap();
-        assert_eq!(h3.block.header.previous, h2.block.hash());
+        assert_eq!(h2.block.header.previous, h1.block.hash());
     }
 
     #[tokio::test]
     async fn replace_chain_from_truncates_and_extends() {
         let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(5));
+        // Fork at height 3: chain heights 0, 1, 2 survive; replace 3+.
         let parent_h2 = rpc
             .get_scannable_block_by_number(2)
             .await
@@ -666,7 +695,7 @@ mod tests {
         }
         rpc.replace_chain_from(3, alt);
 
-        assert_eq!(rpc.chain_len(), 4, "fork_height=3 + 2 new blocks => len 4");
+        assert_eq!(rpc.chain_len(), 5, "keep 3 + 2 new blocks => len 5");
         let h3 = rpc.get_scannable_block_by_number(3).await.unwrap();
         assert_eq!(h3.block.header.previous, parent_h2);
         assert_eq!(h3.block.header.timestamp, 9_003);
@@ -700,14 +729,17 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_block_errors_persistently() {
-        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
-        rpc.set_block_returns_malformed(2);
+        // 4-block chain (heights 0..=3); mark height 1 malformed and
+        // verify other heights still serve normally.
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(4));
+        rpc.set_block_returns_malformed(1);
 
         for _ in 0..3 {
-            let err = rpc.get_scannable_block_by_number(2).await.unwrap_err();
+            let err = rpc.get_scannable_block_by_number(1).await.unwrap_err();
             assert!(matches!(err, RpcError::InvalidNode(_)));
         }
-        assert!(rpc.get_scannable_block_by_number(1).await.is_ok());
+        assert!(rpc.get_scannable_block_by_number(0).await.is_ok());
+        assert!(rpc.get_scannable_block_by_number(2).await.is_ok());
         assert!(rpc.get_scannable_block_by_number(3).await.is_ok());
     }
 
@@ -715,21 +747,30 @@ mod tests {
     async fn clones_share_state() {
         let rpc = MockDaemon::with_seed(DEFAULT_TEST_SEED);
         let clone = rpc.clone();
-        rpc.push_block(make_synthetic_block(1, [0u8; 32]));
+        // Push genesis at height 0; clone observes get_height=1.
+        rpc.push_block(make_synthetic_block(0, [0u8; 32]));
         assert_eq!(clone.get_height().await.unwrap(), 1);
     }
 
     #[tokio::test]
-    async fn fetching_height_zero_is_an_error() {
-        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(1));
-        let err = rpc.get_scannable_block_by_number(0).await.unwrap_err();
-        assert!(matches!(err, RpcError::InvalidNode(_)));
+    async fn fetching_genesis_returns_chain_index_zero() {
+        // Real-daemon convention: chain[0] is genesis at height 0.
+        // The pre-fix MockDaemon refused height-0 fetches; that
+        // refusal was the artifact of a 1-indexed chain layout that
+        // didn't match the daemon protocol. With the fix in place,
+        // height 0 is a first-class fetch.
+        let chain = linear_chain(1);
+        let expected = chain[0].block.hash();
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
+        let h0 = rpc.get_scannable_block_by_number(0).await.unwrap();
+        assert_eq!(h0.block.hash(), expected);
     }
 
     #[tokio::test]
     async fn fetching_past_chain_end_is_an_error() {
+        // 2-block chain has heights 0, 1; height 2 is past the tip.
         let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(2));
-        let err = rpc.get_scannable_block_by_number(3).await.unwrap_err();
+        let err = rpc.get_scannable_block_by_number(2).await.unwrap_err();
         assert!(matches!(err, RpcError::InvalidNode(_)));
     }
 

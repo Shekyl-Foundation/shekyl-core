@@ -2109,16 +2109,19 @@ mod tests {
     }
 
     /// Build a [`LedgerSnapshot`] whose `reorg_blocks` records every
-    /// `(height, hash)` pair from `chain`. Used by reorg tests where
-    /// the producer needs the full snapshot window to walk back the
-    /// fork point.
+    /// `(height, hash)` pair from `chain`. Real-daemon convention:
+    /// `chain[h]` is the block at height `h`, so the recorded
+    /// snapshot maps height `h` to `chain[h].hash()`. The snapshot's
+    /// `synced_height` is the tip-block height — i.e. `chain.len() - 1`
+    /// for non-empty chains. (An empty chain shouldn't reach here;
+    /// reorg tests always supply at least a genesis block.)
     fn snapshot_recording_chain(chain: &[ScannableBlock]) -> LedgerSnapshot {
         let blocks: Vec<(u64, [u8; 32])> = chain
             .iter()
             .enumerate()
-            .map(|(i, b)| (i as u64 + 1, b.block.hash()))
+            .map(|(i, b)| (i as u64, b.block.hash()))
             .collect();
-        let synced_height = chain.len() as u64;
+        let synced_height = chain.len().saturating_sub(1) as u64;
         LedgerSnapshot {
             synced_height,
             reorg_blocks: ReorgBlocks { blocks },
@@ -2322,11 +2325,12 @@ mod tests {
     /// no reorg rewind.
     #[tokio::test]
     async fn linear_scan_100_blocks_accumulates_block_hashes() {
-        let chain = linear_chain(100);
-        let expected: Vec<(u64, [u8; 32])> = chain
-            .iter()
-            .enumerate()
-            .map(|(i, b)| (i as u64 + 1, b.block.hash()))
+        // Real-daemon convention: chain[h] = block at height h, with
+        // chain[0] as genesis. To scan heights 1..=100 (100 post-genesis
+        // blocks), the chain needs heights 0..=100 — i.e. linear_chain(101).
+        let chain = linear_chain(101);
+        let expected: Vec<(u64, [u8; 32])> = (1..=100)
+            .map(|h| (h, chain[h as usize].block.hash()))
             .collect();
 
         let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
@@ -2392,8 +2396,11 @@ mod tests {
     #[tokio::test]
     async fn key_image_collected_from_non_miner_input() {
         let key_image_bytes = [0xAB; 32];
-        let block = make_block_with_spending_tx(1, [0u8; 32], key_image_bytes);
-        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, vec![block]);
+        // chain[0] = genesis at h=0; chain[1] = spending tx at h=1.
+        let genesis = make_synthetic_block(0, [0u8; 32]);
+        let parent_h0 = genesis.block.hash();
+        let spending = make_block_with_spending_tx(1, parent_h0, key_image_bytes);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, vec![genesis, spending]);
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
@@ -2434,10 +2441,13 @@ mod tests {
     /// originally requested `11..13`.
     #[tokio::test]
     async fn reorg_at_depth_3_walks_back_to_fork_point() {
-        // Shared prefix h1..=h7 (identical between original and new).
+        // Real-daemon convention: chain[0] = genesis at h=0. The shared
+        // prefix here covers h0..=h7 so heights 1..=7 still parent off
+        // a real chain[0] entry, keeping the test's height literals
+        // (fork_height = 8, processed_height_range = 8..13) unchanged.
         let mut shared = Vec::new();
         let mut parent = [0u8; 32];
-        for h in 1..=7u64 {
+        for h in 0..=7u64 {
             let block = make_synthetic_block(h, parent);
             parent = block.block.hash();
             shared.push(block);
@@ -2518,9 +2528,12 @@ mod tests {
     #[tokio::test]
     async fn reorg_below_snapshot_window_rewinds_to_window_edge() {
         // Snapshot only records h5..=h10 (window length 6).
+        // Real-daemon convention: chain[0] = genesis at h=0, so the
+        // build loop starts at h=0 and the daemon-side chain has
+        // chain[h] = block at height h.
         let mut shared_5 = Vec::new();
         let mut parent = [0u8; 32];
-        for h in 1..=4u64 {
+        for h in 0..=4u64 {
             let block = make_synthetic_block(h, parent);
             parent = block.block.hash();
             shared_5.push(block);
@@ -2548,12 +2561,13 @@ mod tests {
             },
         };
 
-        // Daemon serves an alt chain h1..=h11 where the divergence
+        // Daemon serves an alt chain h0..=h11 where the divergence
         // point is at h=2 — far below the snapshot window's earliest
-        // entry (h=5).
+        // entry (h=5). Genesis at h=0 is required so chain[h] = block
+        // at height h.
         let mut alt = Vec::new();
         let mut p_alt = [0u8; 32];
-        for h in 1..=11u64 {
+        for h in 0..=11u64 {
             let block = make_alt_block(h, p_alt);
             p_alt = block.block.hash();
             alt.push(block);
@@ -2593,7 +2607,9 @@ mod tests {
     /// is paused so the exponential backoff is virtual.
     #[tokio::test(start_paused = true)]
     async fn transient_rpc_errors_recover_within_budget() {
-        let chain = linear_chain(3);
+        // 4-block chain (heights 0..=3) so the range `1..4` fetches
+        // post-genesis heights 1, 2, 3.
+        let chain = linear_chain(4);
         let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
         rpc.inject_block_fetch_failure(2, RpcError::ConnectionError("flake-1".into()));
         rpc.inject_block_fetch_failure(2, RpcError::ConnectionError("flake-2".into()));
@@ -2625,7 +2641,9 @@ mod tests {
     /// preserved.
     #[tokio::test(start_paused = true)]
     async fn persistent_rpc_errors_yield_max_retries_exhausted() {
-        let chain = linear_chain(3);
+        // 4-block chain (heights 0..=3) so the range `1..4` reaches
+        // height 2 where the failures are injected.
+        let chain = linear_chain(4);
         let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
         for i in 0..MAX_BLOCK_FETCH_RETRIES {
             rpc.inject_block_fetch_failure(2, RpcError::ConnectionError(format!("persist-{i}")));
@@ -2698,8 +2716,11 @@ mod tests {
     /// this is **not retried** — re-fetching returns the same bytes.
     #[tokio::test]
     async fn malformed_scannable_yields_scan_error() {
-        let block = make_malformed_scannable(1, [0u8; 32]);
-        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, vec![block]);
+        // chain[0] = genesis at h=0; chain[1] = malformed at h=1.
+        let genesis = make_synthetic_block(0, [0u8; 32]);
+        let parent_h0 = genesis.block.hash();
+        let malformed = make_malformed_scannable(1, parent_h0);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, vec![genesis, malformed]);
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
