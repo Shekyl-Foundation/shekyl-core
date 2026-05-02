@@ -86,6 +86,24 @@ tempfile = "3"
 # retry-backoff tests use to make exponential delays instantaneous
 # without sacrificing determinism.
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "test-util"] }
+# `MockDaemon` (in `engine::test_support`) holds an internal
+# `ChaCha20Rng` seeded from its constructor seed per
+# `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.2 (deterministic RNG
+# injection). The seed plus a stable PRNG implementation is what
+# makes hybrid-test reproducibility a function of the master seed
+# alone. Workspace consensus version is `0.3` (matches
+# `shekyl-crypto-pq`, `shekyl-fcmp`, `shekyl-oxide/.../fcmp++`).
+rand_chacha = "0.3"
+# `derive_seed` (in `engine::test_support`) implements the §6.2
+# master-seed-derivation contract via HKDF-SHA256: hybrid tests
+# pass a literal master seed plus a role tag to derive each
+# `Mock*::with_seed` argument deterministically, so cross-run
+# reproducibility depends on the master seed alone. The same
+# versions are already gated behind the `multisig` feature for
+# production paths; dev-deps coexist without conflict and don't
+# affect the production crate graph.
+hkdf = "0.12"
+sha2 = "0.10"
 
 [[bench]]
 name = "multisig_v31"

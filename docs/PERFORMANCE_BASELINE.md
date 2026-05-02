@@ -171,6 +171,33 @@ not directly compare to iai's per-call cost for this workload class.*
 | PR | SHA | iai instructions | criterion median_ns | Δ vs frozen (iai) | Δ vs frozen (criterion) |
 |---|---|---|---|---|---|
 | Stage 0 PR-2 | `0276d210e` | `10` | `0.6221` | baseline | baseline |
+| Stage 1 PR 1 | `6c6ecbd67` | `10` | `0.6224` | `0%` (no change) | `+0.05%` |
+
+Stage 1 PR 1 (`DaemonEngine` extraction; `Engine<S, D: DaemonEngine
+= DaemonClient>` parameterization) was N=3 invariance-verified per
+[`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.4
+dynamic check: GHA `workflow_dispatch` runs `25256332992`,
+`25256334848`, and `25256336611` against PR-tip `6c6ecbd67`
+produced byte-identical iai-callgrind output for `synced_height`
+(`instructions=10`, `l1_hits=16`, `ll_hits=0`, `ram_hits=2`,
+`total_read_write=18`, `estimated_cycles=86` — matching env-`0276d210`
+exactly). Toolchain matched env-`0276d210` row-for-row (rustc
+1.95.0 / valgrind 3.22.0 / iai-callgrind-runner v0.16.1), so no
+new capture-environment block was added. CPU varied across the
+three runs (runs `25256332992` and `25256336611` on AMD EPYC 9V74;
+run `25256334848` on AMD EPYC 7763, matching the frozen
+baseline's CPU model) with no observed effect on the iai gate
+metric — confirming Valgrind's hardware-independent VEX IR. The
+criterion `median_ns` value cited above is from run `25256334848`
+(same CPU as frozen baseline, so most directly comparable); the
+two EPYC-9V74 runs measured `0.5453` and `0.7030` respectively,
+a 30% spread that is consistent with the §4.4 hoisting-rule
+caveat for trivial pure-read workloads where criterion's number
+reflects optimizer amortization rather than per-call cost. The
+cumulative `Δ vs frozen (iai)` is `0%`, well within the §3.3.1
+10% warn threshold; the trait extraction monomorphizes the
+`D: DaemonEngine` type parameter away on the `synced_height`
+call path as expected.
 
 Subsequent Stage 1 PRs append one row per merge, computed against
 the frozen-baseline row. The §3.3.1 threshold-of-concern check

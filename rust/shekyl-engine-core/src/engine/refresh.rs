@@ -70,16 +70,17 @@ use std::time::Duration;
 
 use curve25519_dalek::{edwards::CompressedEdwardsY, scalar::Scalar};
 use shekyl_crypto_pq::account::AllKeysBlob;
+use shekyl_engine_state::{LedgerBlock, ReorgBlocks};
 use shekyl_oxide::transaction::Input;
 use shekyl_rpc::{Rpc, RpcError, ScannableBlock};
 use shekyl_scanner::{ScanError, Scanner, ViewPair};
-use shekyl_engine_state::{LedgerBlock, ReorgBlocks};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 use zeroize::Zeroizing;
 
 use super::error::{IoError, RefreshError};
 use super::signer::EngineSignerKind;
+use super::traits::DaemonEngine;
 use super::Engine;
 use crate::scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
 
@@ -1391,8 +1392,8 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
 /// path always delivers `Ok(summary)`; consumers that want to
 /// abandon a successful refresh in flight have to drop the handle
 /// and reconcile against the next `progress().borrow()`.
-async fn run_refresh_task<S: EngineSignerKind>(
-    engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S>>>,
+async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
+    engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S, D>>>,
     opts: RefreshOptions,
     cancel: CancellationToken,
     progress: tokio::sync::watch::Sender<RefreshProgress>,
@@ -1400,7 +1401,7 @@ async fn run_refresh_task<S: EngineSignerKind>(
     _slot_guard: SlotGuard,
 ) where
     S: Send + Sync + 'static,
-    Engine<S>: Send + Sync,
+    Engine<S, D>: Send + Sync,
 {
     // Build the scanner once (keys are immutable for the lifetime of
     // the open engine; rebuilding per attempt would only repeat
@@ -1457,7 +1458,7 @@ async fn run_refresh_task<S: EngineSignerKind>(
         // refresh deterministically reports `Cancelled` rather than
         // proceeding into the per-block scan or surfacing as an
         // unrelated daemon error.
-        let daemon_tip = match daemon.inner().get_height().await {
+        let daemon_tip = match daemon.get_height().await {
             Ok(t) => t,
             Err(e) => {
                 let _ = completion.send(Err(RefreshError::Io(IoError::Daemon {
@@ -1511,7 +1512,7 @@ async fn run_refresh_task<S: EngineSignerKind>(
 
         let emitter = ProgressEmitter::new(&progress, blocks_total);
         let produced = produce_scan_result(
-            daemon.inner(),
+            &daemon,
             &mut scanner,
             &snapshot,
             height_range,
@@ -1650,7 +1651,10 @@ fn summarize(result: &ScanResult, merge_attempts: u32) -> RefreshSummary {
     }
 }
 
-impl<S: EngineSignerKind> Engine<S> {
+// `D: DaemonEngine` private-bound: see the rationale on the
+// `pub struct Engine` definition in `engine/mod.rs`.
+#[allow(private_bounds)]
+impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     /// Spawn an async refresh task and return a [`RefreshHandle`]
     /// for observing and controlling it.
     ///
@@ -1872,7 +1876,7 @@ impl<S: EngineSignerKind> Engine<S> {
         let scanner_cell = std::cell::RefCell::new(scanner);
 
         self.refresh_with(opts, |_attempt, snapshot| {
-            let daemon_tip = runtime.block_on(daemon.inner().get_height()).map_err(|e| {
+            let daemon_tip = runtime.block_on(daemon.get_height()).map_err(|e| {
                 RefreshError::Io(IoError::Daemon {
                     detail: format!("get_height failed: {e}"),
                 })
@@ -1889,7 +1893,7 @@ impl<S: EngineSignerKind> Engine<S> {
 
             let mut scanner = scanner_cell.borrow_mut();
             let produced = runtime.block_on(produce_scan_result(
-                daemon.inner(),
+                &daemon,
                 &mut scanner,
                 snapshot,
                 height_range,
@@ -2051,7 +2055,7 @@ mod tests {
     use zeroize::Zeroizing;
 
     use super::*;
-    use crate::engine::test_support::{make_synthetic_block, MockRpc};
+    use crate::engine::test_support::{make_synthetic_block, MockDaemon, DEFAULT_TEST_SEED};
 
     // ── Helpers ────────────────────────────────────────────────
 
@@ -2105,16 +2109,19 @@ mod tests {
     }
 
     /// Build a [`LedgerSnapshot`] whose `reorg_blocks` records every
-    /// `(height, hash)` pair from `chain`. Used by reorg tests where
-    /// the producer needs the full snapshot window to walk back the
-    /// fork point.
+    /// `(height, hash)` pair from `chain`. Real-daemon convention:
+    /// `chain[h]` is the block at height `h`, so the recorded
+    /// snapshot maps height `h` to `chain[h].hash()`. The snapshot's
+    /// `synced_height` is the tip-block height — i.e. `chain.len() - 1`
+    /// for non-empty chains. (An empty chain shouldn't reach here;
+    /// reorg tests always supply at least a genesis block.)
     fn snapshot_recording_chain(chain: &[ScannableBlock]) -> LedgerSnapshot {
         let blocks: Vec<(u64, [u8; 32])> = chain
             .iter()
             .enumerate()
-            .map(|(i, b)| (i as u64 + 1, b.block.hash()))
+            .map(|(i, b)| (i as u64, b.block.hash()))
             .collect();
-        let synced_height = chain.len() as u64;
+        let synced_height = chain.len().saturating_sub(1) as u64;
         LedgerSnapshot {
             synced_height,
             reorg_blocks: ReorgBlocks { blocks },
@@ -2212,7 +2219,7 @@ mod tests {
     /// real timing.
     #[derive(Clone)]
     struct CancelAfterNFetches {
-        inner: MockRpc,
+        inner: MockDaemon,
         cancel: CancellationToken,
         counter: Arc<Mutex<u32>>,
         cancel_after: u32,
@@ -2259,7 +2266,7 @@ mod tests {
     /// a typed no-op result.
     #[tokio::test]
     async fn empty_range_returns_typed_noop() {
-        let rpc = MockRpc::with_chain(linear_chain(3));
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
@@ -2289,7 +2296,7 @@ mod tests {
     /// the typed `Cancelled` variant.
     #[tokio::test]
     async fn pre_cancel_returns_cancelled() {
-        let rpc = MockRpc::with_chain(linear_chain(3));
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
@@ -2318,14 +2325,15 @@ mod tests {
     /// no reorg rewind.
     #[tokio::test]
     async fn linear_scan_100_blocks_accumulates_block_hashes() {
-        let chain = linear_chain(100);
-        let expected: Vec<(u64, [u8; 32])> = chain
-            .iter()
-            .enumerate()
-            .map(|(i, b)| (i as u64 + 1, b.block.hash()))
+        // Real-daemon convention: chain[h] = block at height h, with
+        // chain[0] as genesis. To scan heights 1..=100 (100 post-genesis
+        // blocks), the chain needs heights 0..=100 — i.e. linear_chain(101).
+        let chain = linear_chain(101);
+        let expected: Vec<(u64, [u8; 32])> = (1..=100)
+            .map(|h| (h, chain[h as usize].block.hash()))
             .collect();
 
-        let rpc = MockRpc::with_chain(chain);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
@@ -2357,7 +2365,7 @@ mod tests {
     #[tokio::test]
     async fn range_truncation_respects_end_bound() {
         let chain = linear_chain(100);
-        let rpc = MockRpc::with_chain(chain);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
@@ -2388,8 +2396,11 @@ mod tests {
     #[tokio::test]
     async fn key_image_collected_from_non_miner_input() {
         let key_image_bytes = [0xAB; 32];
-        let block = make_block_with_spending_tx(1, [0u8; 32], key_image_bytes);
-        let rpc = MockRpc::with_chain(vec![block]);
+        // chain[0] = genesis at h=0; chain[1] = spending tx at h=1.
+        let genesis = make_synthetic_block(0, [0u8; 32]);
+        let parent_h0 = genesis.block.hash();
+        let spending = make_block_with_spending_tx(1, parent_h0, key_image_bytes);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, vec![genesis, spending]);
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
@@ -2430,10 +2441,13 @@ mod tests {
     /// originally requested `11..13`.
     #[tokio::test]
     async fn reorg_at_depth_3_walks_back_to_fork_point() {
-        // Shared prefix h1..=h7 (identical between original and new).
+        // Real-daemon convention: chain[0] = genesis at h=0. The shared
+        // prefix here covers h0..=h7 so heights 1..=7 still parent off
+        // a real chain[0] entry, keeping the test's height literals
+        // (fork_height = 8, processed_height_range = 8..13) unchanged.
         let mut shared = Vec::new();
         let mut parent = [0u8; 32];
-        for h in 1..=7u64 {
+        for h in 0..=7u64 {
             let block = make_synthetic_block(h, parent);
             parent = block.block.hash();
             shared.push(block);
@@ -2466,7 +2480,7 @@ mod tests {
         let snapshot = snapshot_recording_chain(&original);
 
         // Daemon serves the NEW chain.
-        let rpc = MockRpc::with_chain(new_chain);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, new_chain);
         let mut scanner = dummy_scanner();
         let cancel = CancellationToken::new();
 
@@ -2514,9 +2528,12 @@ mod tests {
     #[tokio::test]
     async fn reorg_below_snapshot_window_rewinds_to_window_edge() {
         // Snapshot only records h5..=h10 (window length 6).
+        // Real-daemon convention: chain[0] = genesis at h=0, so the
+        // build loop starts at h=0 and the daemon-side chain has
+        // chain[h] = block at height h.
         let mut shared_5 = Vec::new();
         let mut parent = [0u8; 32];
-        for h in 1..=4u64 {
+        for h in 0..=4u64 {
             let block = make_synthetic_block(h, parent);
             parent = block.block.hash();
             shared_5.push(block);
@@ -2544,17 +2561,18 @@ mod tests {
             },
         };
 
-        // Daemon serves an alt chain h1..=h11 where the divergence
+        // Daemon serves an alt chain h0..=h11 where the divergence
         // point is at h=2 — far below the snapshot window's earliest
-        // entry (h=5).
+        // entry (h=5). Genesis at h=0 is required so chain[h] = block
+        // at height h.
         let mut alt = Vec::new();
         let mut p_alt = [0u8; 32];
-        for h in 1..=11u64 {
+        for h in 0..=11u64 {
             let block = make_alt_block(h, p_alt);
             p_alt = block.block.hash();
             alt.push(block);
         }
-        let rpc = MockRpc::with_chain(alt);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, alt);
         let mut scanner = dummy_scanner();
         let cancel = CancellationToken::new();
 
@@ -2589,8 +2607,10 @@ mod tests {
     /// is paused so the exponential backoff is virtual.
     #[tokio::test(start_paused = true)]
     async fn transient_rpc_errors_recover_within_budget() {
-        let chain = linear_chain(3);
-        let rpc = MockRpc::with_chain(chain);
+        // 4-block chain (heights 0..=3) so the range `1..4` fetches
+        // post-genesis heights 1, 2, 3.
+        let chain = linear_chain(4);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
         rpc.inject_block_fetch_failure(2, RpcError::ConnectionError("flake-1".into()));
         rpc.inject_block_fetch_failure(2, RpcError::ConnectionError("flake-2".into()));
         let mut scanner = dummy_scanner();
@@ -2621,8 +2641,10 @@ mod tests {
     /// preserved.
     #[tokio::test(start_paused = true)]
     async fn persistent_rpc_errors_yield_max_retries_exhausted() {
-        let chain = linear_chain(3);
-        let rpc = MockRpc::with_chain(chain);
+        // 4-block chain (heights 0..=3) so the range `1..4` reaches
+        // height 2 where the failures are injected.
+        let chain = linear_chain(4);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
         for i in 0..MAX_BLOCK_FETCH_RETRIES {
             rpc.inject_block_fetch_failure(2, RpcError::ConnectionError(format!("persist-{i}")));
         }
@@ -2659,7 +2681,7 @@ mod tests {
     /// "daemon-height-shrinks-mid-loop" path.
     #[tokio::test(start_paused = true)]
     async fn daemon_chain_too_short_yields_max_retries_exhausted() {
-        let rpc = MockRpc::with_chain(linear_chain(2));
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(2));
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
@@ -2694,8 +2716,11 @@ mod tests {
     /// this is **not retried** — re-fetching returns the same bytes.
     #[tokio::test]
     async fn malformed_scannable_yields_scan_error() {
-        let block = make_malformed_scannable(1, [0u8; 32]);
-        let rpc = MockRpc::with_chain(vec![block]);
+        // chain[0] = genesis at h=0; chain[1] = malformed at h=1.
+        let genesis = make_synthetic_block(0, [0u8; 32]);
+        let parent_h0 = genesis.block.hash();
+        let malformed = make_malformed_scannable(1, parent_h0);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, vec![genesis, malformed]);
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
@@ -2726,7 +2751,7 @@ mod tests {
     /// [`ProduceError::Cancelled`] before fetching block 2.
     #[tokio::test]
     async fn cancel_observed_between_blocks() {
-        let inner = MockRpc::with_chain(linear_chain(5));
+        let inner = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(5));
         let cancel = CancellationToken::new();
         let rpc = CancelAfterNFetches {
             inner,
@@ -3316,11 +3341,13 @@ mod refresh_handle_tests {
     //! `start_refresh`, idempotent cancel, `mem::forget` leak
     //! semantics) live in commit 5. Integration coverage for the
     //! real producer through `Engine::start_refresh` lives in
-    //! commit 6 and currently uses an unreachable `DaemonClient`
-    //! to assert handle-shape invariants and the daemon-IO error
-    //! mapping; `MockRpc`-driven coverage is deferred (see
-    //! `docs/FOLLOWUPS.md`: "Generic `DaemonClient` so `MockRpc`
-    //! can drive `start_refresh`").
+    //! `start_refresh_integration_tests` below, which carries
+    //! both fixture flavours: an unreachable-`DaemonClient`
+    //! flavour for handle-shape invariants and daemon-IO error
+    //! mapping, and a `MockDaemon`-driven hybrid flavour
+    //! (added in Stage 1 PR 1, per
+    //! `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.3) that exercises
+    //! the producer end-to-end against synthetic chain state.
     use super::{
         RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshSummary,
     };
@@ -3690,24 +3717,37 @@ mod start_refresh_integration_tests {
     //! End-to-end tests for [`Engine::start_refresh`] that drive the
     //! real producer task against a real [`Engine<SoloSigner>`].
     //!
-    //! Note on RPC fixturing: [`DaemonClient`] currently wraps a
-    //! concrete [`SimpleRequestRpc`], not a generic `Rpc` trait, so
-    //! the integration surface available to us is the unreachable-
-    //! URL daemon (`get_height` fails fast with [`IoError::Daemon`])
-    //! rather than a [`MockRpc`]-driven scenario. Producer-side
-    //! retry / classification behaviour is already pinned at the
-    //! synchronous-driver layer in [`refresh_driver_tests`]; what
-    //! these tests pin is the *handle* layer:
+    //! Two flavours of fixture cover the surface:
     //!
-    //! - completion delivery on `get_height` failure,
-    //! - `RefreshError::AlreadyRunning` on concurrent claim,
-    //! - slot-release after the producer task winds down.
+    //! - **Unreachable-daemon scenarios** wire a [`DaemonClient`]
+    //!   pointed at an unreachable URL; the producer's `get_height`
+    //!   fails fast with [`IoError::Daemon`] and the failure
+    //!   surfaces through `join().await`. These tests pin handle-
+    //!   layer behaviour (`AlreadyRunning` on concurrent claim,
+    //!   slot-release after the producer task winds down,
+    //!   completion delivery on RPC failure) without modelling
+    //!   any chain state.
+    //! - **Hybrid scenarios** wire a [`MockDaemon`] in place of the
+    //!   real `DaemonClient` via
+    //!   [`Engine::replace_daemon`](super::Engine::replace_daemon),
+    //!   per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.3 hybrid-
+    //!   construction discipline. These tests exercise
+    //!   `start_refresh` end-to-end against synthetic chain state;
+    //!   the trait abstractions from Stage 1 PR 1 (the
+    //!   `DaemonEngine` surface, the `MockDaemon: Rpc + DaemonEngine`
+    //!   impl, the `derive_seed` master-seed helper) are what makes
+    //!   this coverage possible — Stage 0 had no path for a synthetic
+    //!   chain to drive `start_refresh` because `DaemonClient`
+    //!   wrapped a concrete `SimpleRequestRpc`.
     //!
-    //! Wider scenario coverage (synthetic block batches, scanner
-    //! transitions, reorg events) lives in the synchronous-driver
-    //! tests; making `DaemonClient` generic so `MockRpc` can drive
-    //! `start_refresh` directly is tracked separately and does not
-    //! gate Branch 2.
+    //! Hybrid fixtures use the §6.2 master-seed-derivation contract:
+    //! each test owns a single literal `master_seed` recorded in the
+    //! test name; the daemon's seed is derived via
+    //! `derive_seed(&master, ROLE_DAEMON)`. Reproducibility hinges on
+    //! the master seed alone — changing the master re-derives the
+    //! daemon seed consistently. (The wallet-side `Engine::create`
+    //! master-seed input is independent of the daemon seed by
+    //! design; mixing them would model a non-existent leak channel.)
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -3717,6 +3757,7 @@ mod start_refresh_integration_tests {
     use tokio::sync::RwLock;
 
     use crate::engine::lifecycle::EngineCreateParams;
+    use crate::engine::test_support::{derive_seed, MockDaemon, ROLE_DAEMON};
     use crate::engine::{
         Credentials, DaemonClient, Engine, IoError, RefreshError, RefreshOptions, SoloSigner,
     };
@@ -3874,5 +3915,170 @@ mod start_refresh_integration_tests {
             .expect("slot is reusable after producer wind-down");
         // Drain the second handle to keep the suite clean.
         let _ = h2.join().await;
+    }
+
+    // ── Hybrid scenarios: real Engine<SoloSigner> + MockDaemon ──────────
+    //
+    // The construction discipline (§6.3):
+    //
+    // 1. Build a real `Engine<SoloSigner>` via `Engine::create` using
+    //    an unreachable `DaemonClient`. Pays for the file-handle,
+    //    keys, ledger, refresh-slot, and preferences setup once.
+    // 2. Swap the daemon component for a `MockDaemon` via
+    //    `Engine::replace_daemon`. The result is
+    //    `Engine<SoloSigner, MockDaemon>`; the dummy daemon is
+    //    dropped.
+    // 3. Wrap in `Arc<RwLock<…>>` and call `Engine::start_refresh`.
+
+    /// Build an `Engine<SoloSigner, MockDaemon>` ready for hybrid
+    /// `start_refresh` tests. Returns the `TempDir` alongside so the
+    /// caller keeps the wallet file alive for the lifetime of the
+    /// engine.
+    async fn make_hybrid_engine_arc(
+        mock: MockDaemon,
+    ) -> (Arc<RwLock<Engine<SoloSigner, MockDaemon>>>, TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_path = tmp.path().join("wallet");
+        let creds = Credentials::password_only(b"start-refresh hybrid integration tests");
+        let mut wallet_seed = [0u8; MASTER_SEED_BYTES];
+        for (i, b) in wallet_seed.iter_mut().enumerate() {
+            *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(17);
+        }
+        let params = EngineCreateParams::for_test_full(&base_path, &creds, &wallet_seed);
+
+        let dummy_rpc = SimpleRequestRpc::new("http://127.0.0.1:1".to_string())
+            .await
+            .expect("construct SimpleRequestRpc against unreachable URL (no connect attempt yet)");
+        let dummy_daemon = DaemonClient::new(dummy_rpc);
+
+        let real = Engine::<SoloSigner>::create(params, dummy_daemon)
+            .expect("create FULL wallet for hybrid start_refresh test");
+        let hybrid = real.replace_daemon(mock);
+        (Arc::new(RwLock::new(hybrid)), tmp)
+    }
+
+    /// Build a linear chain of `n` synthetic blocks at heights
+    /// `0..n`, with `chain[0]` as the genesis-style block
+    /// (parented from `[0u8; 32]`). Real-daemon convention:
+    /// `chain[h] = block at height h`. Mirrors the helper in
+    /// [`super::test_support`] but is duplicated here rather than
+    /// promoted to `pub(crate)` because the two modules' test
+    /// surfaces are otherwise independent.
+    fn linear_chain(n: u64) -> Vec<shekyl_rpc::ScannableBlock> {
+        use crate::engine::test_support::make_synthetic_block;
+        let mut chain =
+            Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));
+        let mut parent = [0u8; 32];
+        for h in 0..n {
+            let block = make_synthetic_block(h, parent);
+            parent = block.block.hash();
+            chain.push(block);
+        }
+        chain
+    }
+
+    /// Linear-scan baseline for the hybrid surface. With a 6-block
+    /// `MockDaemon` chain (heights 0..=5; `chain[0]` is genesis,
+    /// `chain[1..=5]` are post-genesis) and a fresh wallet at
+    /// `synced_height = 0`, `start_refresh` runs producer → merge
+    /// to completion: the producer derives the range
+    /// `synced_height + 1 .. get_height = 1..6`, scans the 5
+    /// post-genesis heights, and the merge advances the wallet's
+    /// `synced_height` to 5. The producer task releases the
+    /// refresh slot once it winds down.
+    ///
+    /// What this pins (Stage 1 PR 1):
+    ///
+    /// - `Engine<SoloSigner, MockDaemon>` is a real, callable shape —
+    ///   the `D: DaemonEngine` parameterization isn't a phantom type;
+    ///   `MockDaemon` actually drives the producer.
+    /// - The mock's `Rpc` impl (`get_height`,
+    ///   `get_scannable_block_by_number`) is wired through every
+    ///   layer that the real `start_refresh` traverses (handle →
+    ///   producer task → scanner → merge), so future Stage 1 PRs can
+    ///   add scenario coverage by composing additional `Mock*`
+    ///   components without re-validating the wiring itself.
+    /// - `replace_daemon` preserves engine state across the swap:
+    ///   ledger, indexes, reservations, refresh slot, and capability
+    ///   come through the move-rebuild unchanged. Successful
+    ///   slot-release after a *successful* refresh (as opposed to
+    ///   the unreachable-daemon failure path's release) is observed
+    ///   only here — the unreachable-daemon tests never reach the
+    ///   merge.
+    ///
+    /// Master seed (`MASTER_SEED` below) is recorded as a literal
+    /// in the test body per §6.2; the daemon seed is
+    /// `derive_seed(&master, ROLE_DAEMON)`. §6.2's "embed the seed
+    /// in the test name" guidance applies only to tests that
+    /// exercise RNG-driven mock behaviour (fee jitter, synthetic-
+    /// fork randomization). This test doesn't — it wires
+    /// `MockDaemon`'s pure chain-serving surface, so the master
+    /// seed lives in the body alone and the test name stays
+    /// descriptive.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn hybrid_linear_scan_5_blocks_advances_synced_height() {
+        const MASTER_SEED: [u8; 32] = [
+            0x5a, 0x1e, 0x71, 0x70, 0x71, 0x01, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe,
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f, 0x10, 0x11,
+        ];
+
+        let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+        // 6 blocks at heights 0..=5: chain[0] = genesis; chain[1..=5]
+        // are the 5 post-genesis blocks the producer scans.
+        let mock = MockDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
+
+        // Sanity-check the pre-refresh invariant: the wallet starts
+        // at height 0; if it didn't, the post-refresh assertion
+        // below would carry a confounded claim.
+        {
+            let g = arc.read().await;
+            assert_eq!(
+                g.synced_height(),
+                0,
+                "fresh hybrid engine starts at synced_height 0"
+            );
+        }
+
+        let handle = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("start_refresh claims the slot on the hybrid engine");
+
+        let summary = handle
+            .join()
+            .await
+            .expect("hybrid refresh against a 6-block MockDaemon chain joins successfully");
+        assert_eq!(summary.processed_height_range, 1..6);
+        assert_eq!(summary.blocks_processed, 5);
+
+        // Merge has run by the time `join().await` returned; the
+        // engine's persisted view of the chain matches the daemon.
+        {
+            let g = arc.read().await;
+            assert_eq!(
+                g.synced_height(),
+                5,
+                "post-refresh synced_height matches the producer's range upper bound"
+            );
+        }
+
+        // The producer task signals completion *before* its
+        // `_slot_guard` is dropped (sender fires inside the task,
+        // slot guard drops as the function returns). Poll briefly
+        // for slot release; bounded so a regression does not hang
+        // the suite.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            tokio::task::yield_now().await;
+            let g = arc.read().await;
+            if !g.refresh_slot.is_claimed() {
+                break;
+            }
+            drop(g);
+            if Instant::now() > deadline {
+                panic!("slot still claimed 5s after hybrid refresh joined");
+            }
+        }
     }
 }

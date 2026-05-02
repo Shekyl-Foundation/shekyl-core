@@ -68,6 +68,7 @@ use shekyl_engine_prefs::{LoadOutcome as PrefsLoadOutcome, WalletPrefs};
 use shekyl_engine_state::{LedgerIndexes, WalletLedger};
 
 use super::error::{IoError, KeyError, OpenError};
+use super::traits::DaemonEngine;
 use super::{Capability, DaemonClient, SoloSigner, Engine, EngineSignerKind};
 
 // ---------------------------------------------------------------------------
@@ -126,10 +127,13 @@ impl<'a> Credentials<'a> {
 /// observe the recovery path explicitly: a UI can prompt "your wallet
 /// state was rebuilt; resync from height N" rather than silently
 /// presenting an empty wallet.
-pub enum OpenedEngine<S: EngineSignerKind> {
+// `D: DaemonEngine` private-bound: see the rationale on the
+// `pub struct Engine` definition in `engine/mod.rs`.
+#[allow(private_bounds)]
+pub enum OpenedEngine<S: EngineSignerKind, D: DaemonEngine = DaemonClient> {
     /// `.wallet` was present and decoded successfully. The wallet is
     /// fully loaded against the persisted ledger.
-    Loaded(Engine<S>),
+    Loaded(Engine<S, D>),
 
     /// `.wallet` was missing. The keys file was intact and the wallet
     /// was reconstructed with an empty ledger anchored at
@@ -137,14 +141,16 @@ pub enum OpenedEngine<S: EngineSignerKind> {
     /// state, then `save_state` the rebuilt ledger.
     Restored {
         /// The reconstructed wallet, ready for refresh.
-        wallet: Engine<S>,
+        wallet: Engine<S, D>,
         /// Block height the synthesized ledger anchors at; equals the
         /// keys-file's `restore_height_hint` widened to `u64`.
         from_height: u64,
     },
 }
 
-impl<S: EngineSignerKind> std::fmt::Debug for OpenedEngine<S> {
+impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug> std::fmt::Debug
+    for OpenedEngine<S, D>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Loaded(w) => f.debug_tuple("Loaded").field(w).finish(),
@@ -160,9 +166,12 @@ impl<S: EngineSignerKind> std::fmt::Debug for OpenedEngine<S> {
     }
 }
 
-impl<S: EngineSignerKind> OpenedEngine<S> {
+// `D: DaemonEngine` private-bound: see the rationale on the
+// `pub struct Engine` definition in `engine/mod.rs`.
+#[allow(private_bounds)]
+impl<S: EngineSignerKind, D: DaemonEngine> OpenedEngine<S, D> {
     /// Borrow the underlying wallet regardless of the variant.
-    pub fn wallet(&self) -> &Engine<S> {
+    pub fn wallet(&self) -> &Engine<S, D> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -170,7 +179,7 @@ impl<S: EngineSignerKind> OpenedEngine<S> {
     }
 
     /// Mutably borrow the underlying wallet regardless of the variant.
-    pub fn wallet_mut(&mut self) -> &mut Engine<S> {
+    pub fn wallet_mut(&mut self) -> &mut Engine<S, D> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -180,7 +189,7 @@ impl<S: EngineSignerKind> OpenedEngine<S> {
     /// Consume the outcome and return the wallet, discarding the
     /// recovery-path signal. Use only when the caller has already
     /// surfaced the lost-state branch through some other channel.
-    pub fn into_wallet(self) -> Engine<S> {
+    pub fn into_wallet(self) -> Engine<S, D> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -657,6 +666,87 @@ impl Engine<SoloSigner> {
     }
 }
 
+#[cfg(test)]
+#[allow(private_bounds)]
+impl<S: EngineSignerKind, D1: DaemonEngine> Engine<S, D1> {
+    /// Test-only constructor: rebuild the engine with `daemon`
+    /// substituted in place of the existing one, leaving every
+    /// other field unchanged.
+    ///
+    /// Intended for hybrid tests (per
+    /// `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.3) that need a
+    /// fully-constructed `Engine<SoloSigner>` — file, keys,
+    /// preferences, ledger, refresh slot — but want to drive
+    /// `start_refresh` (or any other daemon-touching method)
+    /// against a `MockDaemon` rather than a `DaemonClient` pointed
+    /// at an unreachable URL. The pattern is:
+    ///
+    /// ```ignore
+    /// let real = Engine::<SoloSigner>::create(params, dummy_daemon())?;
+    /// let mock = MockDaemon::with_seed(derive_seed(&master, ROLE_DAEMON));
+    /// let hybrid: Engine<SoloSigner, MockDaemon> = real.replace_daemon(mock);
+    /// ```
+    ///
+    /// The original `D1` daemon is dropped; the returned engine's
+    /// daemon field is the supplied `D2`. Net effect is that one
+    /// real `Engine::create` ceremony pays for as many hybrid
+    /// scenarios as the test composes.
+    ///
+    /// # Cleanup target (V3.2)
+    ///
+    /// V3.2 generalizes `Engine::create` and `Engine::open_full`
+    /// over `D: DaemonEngine` (default `DaemonClient`) alongside
+    /// the `DaemonEngine`-to-`pub` promotion. At that point the
+    /// production constructors accept any `D` directly, hybrid
+    /// tests construct their `Engine<SoloSigner, MockDaemon>` via
+    /// the public path without intermediate dummy-daemon ceremony,
+    /// and this `#[cfg(test)] pub(crate)` helper retires. The
+    /// retirement commit deletes both `replace_daemon` and the
+    /// dummy-daemon construction in `make_hybrid_engine_arc` (and
+    /// any sibling helpers that arrive in later Stage 1 PRs);
+    /// production paths are unaffected because they never named
+    /// this method.
+    ///
+    /// Pre-V3.2, the public `Engine::create` and `Engine::open_full`
+    /// constructors are concrete-typed (`daemon: DaemonClient`)
+    /// because their callers — `shekyl-cli`, `shekyl-engine-rpc`,
+    /// the upcoming JSON-RPC server cutover — only ever wire a
+    /// real daemon transport. Until V3.2, `replace_daemon` is the
+    /// test surface; production paths cannot reach it because
+    /// `pub(crate) #[cfg(test)]` excludes them from the published
+    /// API and from the non-test build.
+    pub(crate) fn replace_daemon<D2: DaemonEngine>(self, daemon: D2) -> Engine<S, D2> {
+        let Engine {
+            file,
+            keys,
+            ledger,
+            indexes,
+            reservations,
+            next_reservation_id,
+            prefs,
+            daemon: _old,
+            network,
+            capability,
+            refresh_slot,
+            _signer,
+        } = self;
+        Engine {
+            file,
+            keys,
+            ledger,
+            indexes,
+            reservations,
+            next_reservation_id,
+            prefs,
+            daemon,
+            network,
+            capability,
+            refresh_slot,
+            _signer,
+        }
+    }
+}
+
 /// Render a `shekyl-crypto-pq::CryptoError` into the static-string
 /// detail expected by [`KeyError::Primitive`]. The message shape is
 /// stable across the `shekyl-crypto-pq` API; we list the primitives
@@ -692,10 +782,13 @@ fn is_default_overrides(overrides: &SafetyOverrides) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Engine<S> :: change_password / close (signer-kind-agnostic)
+// Engine<S, D> :: change_password / close (signer-kind-agnostic)
 // ---------------------------------------------------------------------------
 
-impl<S: EngineSignerKind> Engine<S> {
+// `D: DaemonEngine` private-bound: see the rationale on the
+// `pub struct Engine` definition in `engine/mod.rs`.
+#[allow(private_bounds)]
+impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     /// Rotate the wallet password, optionally also rotating the KDF
     /// parameters of the on-disk envelope wrap.
     ///

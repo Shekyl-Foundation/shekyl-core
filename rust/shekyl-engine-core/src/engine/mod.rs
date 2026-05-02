@@ -153,6 +153,7 @@ pub mod network;
 pub mod pending;
 pub mod refresh;
 pub mod signer;
+pub(crate) mod traits;
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -177,6 +178,8 @@ use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_prefs::WalletPrefs;
 use shekyl_engine_state::{LedgerIndexes, WalletLedger};
+
+use crate::engine::traits::DaemonEngine;
 
 /// The Shekyl V3 wallet domain orchestrator.
 ///
@@ -233,7 +236,21 @@ use shekyl_engine_state::{LedgerIndexes, WalletLedger};
 /// inner ones at compile time without changing behavior at run time.
 ///
 /// [`PendingTx`]: error::PendingTxError
-pub struct Engine<S: EngineSignerKind> {
+// `D: DaemonEngine` is more private than this `pub` item: per
+// `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2 preamble, the Stage 1
+// trait surfaces are `pub(crate)` for V3.0 and revisable to `pub`
+// at V3.2 alongside the JSON-RPC server cutover. External callers
+// reach the daemon surface via inherent methods on `Engine<S>`
+// (the default `D = DaemonClient` plugs in transparently); they
+// cannot name `D` themselves and never need to. Stage 4's trait
+// promotion deletes this allow attribute together with the seven
+// sibling annotations (mod.rs inherent impl; lifecycle.rs's
+// `OpenedEngine` / `OpenedEngine` inherent impl / signer-agnostic
+// `Engine` impl; merge.rs / pending.rs / refresh.rs inherent
+// impls) in a single sweep — they're all the same architectural
+// relationship surfacing at each `pub` site.
+#[allow(private_bounds)]
+pub struct Engine<S: EngineSignerKind, D: DaemonEngine = DaemonClient> {
     /// On-disk envelope: `.wallet.keys` (region 1) +
     /// `.wallet` (region 2). Owns the advisory lock and the
     /// per-session `prefs_hmac_key`. Region 1 is write-once after
@@ -303,7 +320,14 @@ pub struct Engine<S: EngineSignerKind> {
     /// Engine → daemon connection. Cloneable; shared by clone with the
     /// scanner and the tx-submission paths so each can issue daemon
     /// RPCs without touching the wallet's state.
-    daemon: DaemonClient,
+    ///
+    /// Generic over `D: DaemonEngine`. Production code defaults `D` to
+    /// [`DaemonClient`] (a thin wrapper over
+    /// `shekyl_simple_request_rpc::SimpleRequestRpc`); crate-internal
+    /// tests substitute `MockDaemon` to drive failure-injection and
+    /// deduplication scenarios against the same orchestration logic.
+    /// See `crate::engine::traits::daemon` for the trait contract.
+    daemon: D,
 
     /// Cached from `file.network()` for O(1) accessor speed. The
     /// wallet-file region 1 is the source of truth and never changes
@@ -343,7 +367,7 @@ pub struct Engine<S: EngineSignerKind> {
     _signer: PhantomData<S>,
 }
 
-impl<S: EngineSignerKind> std::fmt::Debug for Engine<S> {
+impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug> std::fmt::Debug for Engine<S, D> {
     /// Redacted debug output. Specific reasons each field is or is not
     /// printed:
     ///
@@ -393,7 +417,10 @@ impl<S: EngineSignerKind> std::fmt::Debug for Engine<S> {
     }
 }
 
-impl<S: EngineSignerKind> Engine<S> {
+// `D: DaemonEngine` private-bound: see the rationale on the
+// `pub struct Engine` definition in this file.
+#[allow(private_bounds)]
+impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     /// Network this wallet is bound to. Cached from
     /// [`WalletFile`]'s region 1 at construction; stable for the life
     /// of the open wallet.
@@ -432,9 +459,13 @@ impl<S: EngineSignerKind> Engine<S> {
     }
 
     /// Borrow the daemon RPC client. Cloneable for handing to the
-    /// scanner; see [`DaemonClient::inner`] for the underlying
-    /// transport.
-    pub fn daemon(&self) -> &DaemonClient {
+    /// scanner / tx-submission paths.
+    ///
+    /// The return type is `&D`, the type-parameter slot for the
+    /// daemon. The production default `D = DaemonClient` resolves
+    /// this to `&DaemonClient`; crate-internal tests substitute
+    /// `MockDaemon` and observe the same accessor shape.
+    pub fn daemon(&self) -> &D {
         &self.daemon
     }
 
