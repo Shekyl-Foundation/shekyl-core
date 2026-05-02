@@ -1429,7 +1429,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
             // misleading rollback to `height: 0` when the wallet
             // was already synced above zero. `Receiver::changed`
             // wakes once before the channel closes.
-            let mut terminal = progress.borrow().clone();
+            let mut terminal = *progress.borrow();
             terminal.phase = RefreshPhase::Cancelled;
             let _ = progress.send(terminal);
             let _ = completion.send(Err(RefreshError::Cancelled));
@@ -1475,7 +1475,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
         // function's `# Cancellation` section for the full
         // checkpoint layout.
         if cancel.is_cancelled() {
-            let mut terminal = progress.borrow().clone();
+            let mut terminal = *progress.borrow();
             terminal.phase = RefreshPhase::Cancelled;
             let _ = progress.send(terminal);
             let _ = completion.send(Err(RefreshError::Cancelled));
@@ -1532,7 +1532,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
                 // override only `phase`. This is the third of the
                 // four cancel checkpoints documented on this
                 // function.
-                let mut terminal = progress.borrow().clone();
+                let mut terminal = *progress.borrow();
                 terminal.phase = RefreshPhase::Cancelled;
                 let _ = progress.send(terminal);
                 let _ = completion.send(Err(RefreshError::Cancelled));
@@ -1555,7 +1555,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
         // without rolling anything back. After this point the merge
         // is authoritative — see the function docstring.
         if cancel.is_cancelled() {
-            let mut terminal = progress.borrow().clone();
+            let mut terminal = *progress.borrow();
             terminal.phase = RefreshPhase::Cancelled;
             let _ = progress.send(terminal);
             let _ = completion.send(Err(RefreshError::Cancelled));
@@ -3406,7 +3406,7 @@ mod refresh_handle_tests {
             handle_with(RefreshOptions::default());
 
         let rx = handle.progress();
-        let snap = rx.borrow().clone();
+        let snap = *rx.borrow();
         assert_eq!(snap.height, 0);
         assert_eq!(snap.blocks_processed, 0);
         assert_eq!(snap.blocks_total, 0);
@@ -3432,7 +3432,7 @@ mod refresh_handle_tests {
             })
             .expect("subscriber alive");
         rx.changed().await.expect("update delivered");
-        let snap = rx.borrow().clone();
+        let snap = *rx.borrow();
         assert_eq!(snap.height, 42);
         assert_eq!(snap.blocks_processed, 7);
         assert_eq!(snap.blocks_total, 100);
@@ -3616,16 +3616,16 @@ mod refresh_handle_tests {
             })
             .expect("subscriber alive");
         rx.changed().await.expect("scanning update delivered");
-        let mid = rx.borrow().clone();
+        let mid = *rx.borrow();
         assert_eq!(mid.height, 100);
         assert!(matches!(mid.phase, RefreshPhase::Scanning));
 
-        let mut terminal = progress_tx.borrow().clone();
+        let mut terminal = *progress_tx.borrow();
         terminal.phase = RefreshPhase::Cancelled;
         progress_tx.send(terminal).expect("subscriber alive");
         rx.changed().await.expect("terminal update delivered");
 
-        let last = rx.borrow().clone();
+        let last = *rx.borrow();
         assert!(
             matches!(last.phase, RefreshPhase::Cancelled),
             "phase preserved as Cancelled"

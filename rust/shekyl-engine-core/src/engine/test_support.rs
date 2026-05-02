@@ -819,7 +819,7 @@ mod tests {
             TxSubmitOutcome::Submitted { hash } => {
                 assert_eq!(hash, TxHash(shekyl_crypto_hash::cn_fast_hash(&bytes)));
             }
-            other => panic!("expected Submitted, got {:?}", other),
+            other => panic!("expected Submitted, got {other:?}"),
         }
         assert_eq!(daemon.submitted_count(), 1);
     }
@@ -851,11 +851,11 @@ mod tests {
         let beta = daemon.submit_transaction(b"beta".to_vec()).await.unwrap();
         let alpha_hash = match alpha {
             TxSubmitOutcome::Submitted { hash } => hash,
-            other => panic!("expected Submitted for alpha, got {:?}", other),
+            other => panic!("expected Submitted for alpha, got {other:?}"),
         };
         let beta_hash = match beta {
             TxSubmitOutcome::Submitted { hash } => hash,
-            other => panic!("expected Submitted for beta, got {:?}", other),
+            other => panic!("expected Submitted for beta, got {other:?}"),
         };
         assert_ne!(alpha_hash, beta_hash);
         assert_eq!(daemon.submitted_count(), 2);
