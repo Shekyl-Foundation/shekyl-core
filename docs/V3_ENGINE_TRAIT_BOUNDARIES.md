@@ -2151,33 +2151,37 @@ The gate has three pinned components:
 
 1. **Measurement requirement.** Before any Stage 1
    implementation PR is merged to `dev`, read-path overhead is
-   measured against the existing baseline using `criterion`.
-   *The baseline is the existing monolithic `Engine<S>`
-   implementation immediately prior to the first Stage 1
-   trait-extraction PR — i.e., the `dev` HEAD at the moment
-   trait extraction begins, with `criterion` benches captured
-   at that commit and frozen as the comparison reference.*
-   PR-specific deltas are measured against this frozen
-   reference, not against an earlier or later commit; the
-   baseline is re-captured only if a non-Stage-1 change
-   materially shifts hot-path cost (in which case the
-   re-capture is itself a baseline-bumping commit, named in
+   measured against the existing baseline using `criterion`
+   and `iai-callgrind`.
+   *The baseline is per-bench and frozen at each bench's
+   introducing-PR merge SHA: `engine_trait_bench_ledger_synced_height`
+   is frozen at Stage 0 PR-2's merge SHA (the harness PR); each
+   deferred bench is frozen at the merge SHA of the per-trait PR
+   that introduces it (refined in Stage 0 PR-B; see
+   [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)
+   §4.5 for the per-bench operationalization).*
+   PR-specific deltas are measured against each bench's frozen
+   reference, not against an earlier or later commit; a bench's
+   frozen baseline is re-captured only if a non-Stage-1 change
+   materially shifts that bench's hot-path cost (in which case
+   the re-capture is itself a baseline-bumping commit, named in
    `PERFORMANCE_BASELINE.md` and announced in PR review).
    *Per-PR delta tracking across the Stage 1 series (Round 5 —
-   Item 2):* baseline numbers are measured once at the SHA of
-   the first Stage 1 PR that lands the measurement harness and
-   committed to `PERFORMANCE_BASELINE.md` at that SHA.
-   Subsequent Stage 1 PRs measure their own changes against the
-   committed baseline numbers, *not* by re-measuring the baseline
-   SHA. Each PR's measurement records the delta its changes
-   introduce; the cumulative Stage 1 delta is the sum of per-PR
-   deltas. Reviewers consult per-PR deltas during review; the
-   baseline numbers themselves are frozen until Stage 1 closes.
-   At Stage 1's end (when the last per-trait PR merges) the
-   "redundant against outer lock" cost becomes the new normal,
-   and re-baselining for Stage 2/3/4 work is a separate
-   decision tracked at that boundary, not by this gate. The
-   hot paths under measurement are at minimum
+   Item 2; refined in Stage 0 PR-B):* each Stage 1 PR's
+   description carries one cumulative-delta line per bench
+   currently in scope at that PR, each computed against that
+   bench's specific frozen-baseline SHA. The cumulative delta
+   for a given bench is the sum of per-PR deltas accumulated
+   from that bench's introducing SHA through the current PR;
+   each bench's cumulative delta is independent (cumulative
+   deltas do not sum across benches). Reviewers consult
+   per-bench cumulative deltas during review; the frozen
+   baseline numbers themselves are not re-measured until
+   Stage 1 closes. At Stage 1's end (when the last per-trait PR
+   merges) the "redundant against outer lock" cost becomes the
+   new normal, and re-baselining for Stage 2/3/4 work is a
+   separate decision tracked at that boundary, not by this
+   gate. The hot paths under measurement are at minimum
    `KeyEngine::account_public_address`,
    `LedgerEngine::balance`, `LedgerEngine::synced_height`,
    `EconomicsEngine::current_emission`, and

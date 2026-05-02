@@ -14,19 +14,48 @@ citing in a review.
 - **Stage 1 performance baseline measurement before Stage 1 PRs land.**
   The §3.3 *interior-mutability measurement gate* in
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
-  is binding: [`docs/PERFORMANCE_BASELINE.md`](PERFORMANCE_BASELINE.md)
-  must be populated with measured baseline numbers and post-interior-lock
-  numbers before any Stage 1 trait-implementation PR opens.
-  The baseline = current `dev`-branch monolithic `Engine`
-  performance (outer `RwLock` only, no interior locks); post-interior-lock
-  numbers are compared to that, with thresholds-of-concern of 10%
-  (justification required) and 25% (optimization required) per
-  §3.3.1's Round 4b refinement. Reviewer responsibility: per
-  §3.3.1, the Stage 1 PR reviewer confirms the baseline document's
-  `dev` SHA matches a recent tip (within ~30 days) or triggers
-  re-measurement. Close-condition: baseline + post-interior-lock
-  numbers populated in `PERFORMANCE_BASELINE.md`; first Stage 1
+  is binding:
+  [`docs/PERFORMANCE_BASELINE.md`](PERFORMANCE_BASELINE.md) must
+  carry per-bench frozen baselines (one per bench, captured at the
+  bench's introducing-PR merge SHA per §4.5 of
+  [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md))
+  before any Stage 1 trait-implementation PR opens. As of Stage 0
+  PR-2's merge, `engine_trait_bench_ledger_synced_height` is
+  populated; the four deferred benches
+  (`engine_trait_bench_ledger_balance`,
+  `engine_trait_bench_economics_current_emission`,
+  `engine_trait_bench_economics_parameters_snapshot`,
+  `engine_trait_bench_key_account_public_address`) populate at
+  their introducing per-trait PRs. Cumulative-delta thresholds
+  (10% warn / 25% fail) apply per-bench against each bench's
+  frozen-baseline SHA per §3.3.1's Round 4b refinement (further
+  refined in Stage 0 PR-B). Reviewer responsibility: per §3.3.1
+  and `PERFORMANCE_BASELINE.md`'s Reviewer-responsibility section,
+  the Stage 1 PR reviewer confirms each in-scope bench's
+  cumulative-delta row is appended with PR-current's measurements
+  and that the §3.3.1 threshold-of-concern check is satisfied (or
+  justified per the responsibility-allocation rule). Close-condition:
+  the four deferred-bench sections in `PERFORMANCE_BASELINE.md` are
+  populated by their introducing per-trait PRs; the first Stage 1
   PR review consumes the document. Target: V3.0, pre-Stage-1-PRs.
+
+- **CHANGELOG backfill for Stage 0 PR-A and PR-C.** Stage 0
+  preparatory PRs PR-A (`3d313256c` — symmetry rule),
+  PR-A-extension (`2e5309ad3` — boundary rule), and PR-C
+  (`93d515123` — hoisting rule) merged to `dev` without
+  `## [Unreleased] / ### Documentation` entries in
+  [`docs/CHANGELOG.md`](CHANGELOG.md). Per
+  [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)
+  the CHANGELOG is part of the documentation update each PR owes;
+  these three PRs left a process-discipline gap that was surfaced
+  during Stage 0 PR-B drafting. Close-condition: backfill commit
+  on `dev` adds three entries under the existing `## [Unreleased]
+  / ### Documentation` section covering (1) §4.2 symmetry rule
+  and §4.4 sanity-check restructure, (2) §4.2 boundary rule and
+  §4.4 component-model framing, (3) §4.2 hoisting rule and §4.4
+  two-anchor static check. Each entry references its merge SHA
+  and the structural finding it closes. Target: V3.0, can land
+  any time before V3.0 cut.
 
 - **`kameo` dependency pin and MSRV alignment before Stage 2 cuts.**
   The Path B boundary decision (*2026-04-27 — Engine binary boundary:

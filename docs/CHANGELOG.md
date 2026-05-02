@@ -536,6 +536,75 @@
 
 ### Documentation
 
+- **Performance baseline document restructured for per-bench
+  frozen baselines + §3.3.1 spec amendment + responsibility-
+  allocation and toolchain-bump policies (Stage 0 PR-B).**
+  [`docs/PERFORMANCE_BASELINE.md`](./PERFORMANCE_BASELINE.md) is
+  rewritten from the Round 4b template stub into the per-bench
+  frozen-baseline shape that
+  [`docs/design/STAGE_0_HARNESS.md`](./design/STAGE_0_HARNESS.md)
+  §4.5 operationalizes (one populated section for
+  `engine_trait_bench_ledger_synced_height` frozen at Stage 0
+  PR-2's merge SHA; four deferred-bench placeholder sections for
+  `engine_trait_bench_ledger_balance`,
+  `engine_trait_bench_economics_current_emission`,
+  `engine_trait_bench_economics_parameters_snapshot`, and
+  `engine_trait_bench_key_account_public_address`, each pinned to
+  its introducing per-trait PR per §4.6's per-bench deferred
+  assignment). The new document shape carries: per-bench
+  frozen-baseline source (introducing PR + merge SHA), workload
+  class (per §4.2 hoisting rule), iai-callgrind gate metric
+  (`instructions`) isolated in its own table from the
+  hardware-dependent informational rows (`l1_hits`, `ll_hits`,
+  `ram_hits`, `total_read_write`, `estimated_cycles`), criterion
+  metrics (`median_ns`, `std_dev_ns`) with hoisting-rule note,
+  capture-environment cross-reference (`env-<short-SHA>`), and a
+  cumulative-delta table with one row representing the introducing
+  capture itself. The threshold-of-concern disposition is restated
+  to apply per-bench (cumulative deltas do not sum across benches)
+  and to the iai-instructions gate metric only (criterion
+  `median_ns` is informational and does not gate). Two new policy
+  sections close gaps surfaced during PR-B drafting:
+  **responsibility allocation** pins that the PR which pushes
+  cumulative delta past 10% (warn) or 25% (fail) is responsible
+  for the breach regardless of its own per-PR contribution size
+  (closes the slow-bleed failure mode where N PRs each at +9%
+  cumulatively breach +25%); **toolchain-bump policy** pins that
+  rustc / valgrind / iai-callgrind-runner version changes during
+  Stage 1 trigger a per-bench rebaseline (re-capture each in-scope
+  bench at its introducing PR's tree state under the new toolchain;
+  reset the cumulative-delta column; CHANGELOG entry; the
+  rebaseline commit is itself a non-Stage-1 change and does not
+  count toward any bench's cumulative-delta column). A new in-tree
+  reference capture
+  ([`docs/benchmarks/reference-captures/stage-0-pr-2-c4c-shekyl_rust_v0.json`](./benchmarks/reference-captures/stage-0-pr-2-c4c-shekyl_rust_v0.json),
+  with explanatory README) supports PR-B's review-surface
+  verification gate against a stable in-tree artifact rather than
+  a transient GHA artifact path.
+  [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §3.3.1 Component 1 is amended to match: replaces the
+  single-SHA / "first Stage 1 PR" / "cumulative-is-sum" framing
+  with per-bench introducing-PR-merge-SHA framing, per-bench
+  cumulative-delta independence, and a §4.5 back-pointer for
+  operational details. The amendment bundles with the
+  `PERFORMANCE_BASELINE.md` rewrite per the bundling exception
+  codified in §4.6 of the design doc (correction of existing
+  wrong text, fully derived from already-merged design content,
+  ~27 lines within an existing ~36-line component — above the
+  ~15-line soft anchor but below the 50-line "structural rewrite"
+  cutoff, with content qualifying as mechanical-derivation rather
+  than re-framing per the codification's allowance). Numbers and
+  in-tree iai-callgrind snapshot refresh are deferred to Stage 0
+  PR-2 commit 5 per the framing-vs-numbers split.
+  [`FOLLOWUPS.md`](./FOLLOWUPS.md) §"V3.0" gets two updates:
+  the existing Stage 1 baseline-measurement row is rewritten to
+  the per-bench framing (replacing the single-SHA / 30-day-tip
+  language with the four-deferred-benches close-condition); a new
+  row tracks the CHANGELOG-backfill discipline gap surfaced during
+  PR-B (PR-A `3d313256c`, PR-A-extension `2e5309ad3`, and PR-C
+  `93d515123` merged without `## [Unreleased] / ### Documentation`
+  entries). The CHANGELOG-backfill row is targeted at V3.0 and can
+  land any time before V3.0 cut.
 - **Stage 1 trait-boundaries spec, Round 1 draft
   ([`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)).**
   First draft of the Stage 1 design document called for by the

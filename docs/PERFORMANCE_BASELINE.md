@@ -1,98 +1,279 @@
 # Performance baseline
 
-This document holds the empirical performance baseline for the Stage 1
-trait-boundaries migration ([`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+This document holds the per-bench frozen performance baselines for
+the Stage 1 trait-boundaries migration
+([`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
 §3.3 *interior-mutability measurement gate*).
 
-The §3.3 gate is **binding before Stage 1 PRs land**: this document
-must be populated with measured baseline numbers and post-interior-lock
-numbers before any Stage 1 trait-implementation PR opens. Reviewers
-cite this document during PR review per §3.3.1's threshold-of-concern
-discipline (>10% requires PR-description justification; >25% requires
-optimization before merge).
+The §3.3 gate is **binding before Stage 1 PRs land**: each Stage 1
+PR's description cites the cumulative delta of each in-scope bench
+against that bench's frozen baseline recorded in this document.
+Reviewers cite this document during PR review per §3.3.1's
+threshold-of-concern discipline (>10% requires PR-description
+justification; >25% requires optimization before merge).
 
-This file is a template stub at Round 4b. The first Stage 1 PR fills
-in the baseline numbers and the post-interior-lock numbers as part of
-the PR's review surface.
+## Per-bench frozen-baseline framing
 
-## Methodology
+Per [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)
+§4.5 (per-bench frozen-baseline disposition):
 
-Benchmarks are `criterion`-driven and live under
-`rust/shekyl-engine-core/benches/` (path stub; the actual harness
-lands in the first Stage 1 PR alongside the baseline numbers).
+- **Each bench has its own frozen-baseline SHA**, captured at the
+  merge SHA of the PR that introduces the bench.
+- **Frozen baselines are not re-measured** during Stage 1.
+  Cumulative-delta computations diff against the frozen number;
+  the frozen number does not move.
+- **Per-bench cumulative deltas are independent.** The §3.3.1
+  threshold-of-concern check (10% warn / 25% fail) applies
+  per-bench, not summed across benches.
+- **Two delta signals coexist.** The CI-gate delta against the
+  rolling `bench-baseline/baseline.json` is a per-PR enforcement
+  signal (what the workflow asserts). The frozen-baseline
+  cumulative delta in this document is the §3.3.1
+  cumulative-delta signal (what reviewers cite). Both are
+  necessary; they answer different questions.
 
-Each benchmark measures a single trait-method invocation under a
-controlled scenario (no daemon RPC; no filesystem I/O; mocked
-inputs sized to typical wallet workloads). The full set of
-hot-path benchmarks per [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
-§3.3 is enumerated below; the Stage 1 PR may add additional hot
-paths if reviewer judgment identifies them.
+## Measurement gate vs informational metric
 
-### Hot paths under measurement
+Per [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)
+§4.4 (two-anchor static check):
 
-| Trait | Method | Why hot | Baseline scenario |
+- **Gate metric: `iai-callgrind` instructions.** Hardware-independent
+  (Valgrind's VEX IR), deterministic across runners (±0% variance
+  on the reference runner). The §3.3.1 threshold-of-concern
+  thresholds (10% warn / 25% fail) apply to this metric.
+- **Informational metric: `criterion` median_ns.** Hardware-dependent
+  (wall-clock on the runner), with workload-class qualification per
+  §4.2's hoisting rule. Recorded for context but does not gate.
+- **Hardware-dependent iai metrics** (`l1_hits`, `ll_hits`, `ram_hits`,
+  `total_read_write`, `estimated_cycles`) are recorded for completeness
+  but are not portable across runner hardware. Future per-trait PR
+  captures may report different cache/cycle numbers without that
+  being a regression — only the `instructions` count gates.
+
+The hoisting rule applies asymmetrically by workload class:
+
+- **Trivial pure-read** (e.g., `synced_height`): criterion's
+  per-iteration time can be reduced below per-call cost by optimizer
+  amortization across the `b.iter` loop. The criterion `median_ns`
+  reflects the optimizer's success at amortizing the call across
+  iterations, not per-call cost. iai-callgrind is immune (Valgrind
+  cannot legally amortize across iterations).
+- **State-dependent compute** (e.g., `balance` over N transfers):
+  criterion's per-iteration time approximates per-call cost.
+  Optimizer amortization does not apply meaningfully because each
+  iteration measures meaningful work.
+
+Each bench section records its workload-class assignment explicitly
+(per §4.4's per-trait PR description checklist item 5).
+
+## Scope of this document and forward-references
+
+This document operationalizes the §3.3.1 single-threaded
+instruction-count gate, which defends against per-call latency
+regressions on hot-path engine trait methods. The broader
+threat-model framing for the §3.3 measurement-gate apparatus —
+naming the failure modes the gate apparatus collectively
+defends, and motivating which anchors defend which modes — is
+deferred to a subsequent preparatory PR (Stage 0 PR-D)
+alongside the third-anchor (concurrent-throughput) bench
+design. Concurrent-load benches and loom-style concurrency
+correctness tests are not part of this document; they land in
+Stage 0 PR-D and PR-D2 respectively, before Stage 1 PR 2
+(LedgerEngine, the first substantive interior-mutability
+surface). Until those PRs land, the discipline this document
+encodes addresses one class of risk (per-call latency
+regression); the broader risk surface is acknowledged here
+only to make the scope boundary explicit.
+
+## Hot paths under measurement
+
+Per [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+§3.3.1, the minimum hot paths:
+
+| Trait | Method | Bench name | Frozen at |
 |---|---|---|---|
-| `KeyEngine` | `account_public_address` | Read on every UI render of the address bar; called repeatedly by send-flow address validation | Pre-derived address; single read |
-| `LedgerEngine` | `balance` | Read on every UI render of the balance display; called repeatedly during send-flow input validation | 10 000-entry transfer history |
-| `LedgerEngine` | `synced_height` | Read on refresh-progress polling; called every refresh-cycle iteration | (no preconditions) |
-| `EconomicsEngine` | `current_emission` | Read during fee computation in send-flow (per output, per build retry); read during refresh-result aggregation | Height parameter only |
-| `EconomicsEngine` | `parameters_snapshot` | Read for the V3.x adaptive-burn observation surface; called whenever observation state is queried | (no preconditions) |
+| `LedgerEngine` | `synced_height` | `engine_trait_bench_ledger_synced_height` | Stage 0 PR-2 |
+| `LedgerEngine` | `balance` | `engine_trait_bench_ledger_balance` | Deferred to LedgerEngine PR |
+| `EconomicsEngine` | `current_emission` | `engine_trait_bench_economics_current_emission` | Deferred to EconomicsEngine PR |
+| `EconomicsEngine` | `parameters_snapshot` | `engine_trait_bench_economics_parameters_snapshot` | Deferred to EconomicsEngine PR |
+| `KeyEngine` | `account_public_address` | `engine_trait_bench_key_account_public_address` | Deferred to KeyEngine PR |
 
-## Baseline (current `dev` monolithic Engine, outer `RwLock` only)
+Reviewers may identify additional hot paths during Stage 1 PR
+review; new benches enter the harness per §4.6's harness-update
+discipline.
 
-**Status: TO BE MEASURED.** First Stage 1 PR populates these
-numbers.
+## Bench: `engine_trait_bench_ledger_synced_height`
 
-Baseline measurement protocol per
-[`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
-§3.3.1 (Round 4b — Item 14 baseline definition):
+**Status:** Frozen at Stage 0 PR-2.
 
-- Baseline = current `dev`-branch monolithic `Engine` performance
-  (outer `RwLock` only, no interior locks) measured at the time of
-  baseline-document creation.
-- Baseline numbers are committed to this document with the commit
-  SHA of `dev` at measurement time.
-- If `dev` performance shifts substantively between baseline
-  measurement and Stage 1 PR review (e.g., due to unrelated
-  optimizations or regressions), the baseline is re-measured against
-  the new `dev` and percentage deltas are recomputed.
+**Frozen-baseline source.**
 
-| Hot path | Mean (ns) | p99 (ns) | Sample size | Notes |
-|---|---|---|---|---|
-| `KeyEngine::account_public_address` | TBD | TBD | TBD | (pending Stage 1 PR) |
-| `LedgerEngine::balance` | TBD | TBD | TBD | |
-| `LedgerEngine::synced_height` | TBD | TBD | TBD | |
-| `EconomicsEngine::current_emission` | TBD | TBD | TBD | |
-| `EconomicsEngine::parameters_snapshot` | TBD | TBD | TBD | |
+| Field | Value |
+|---|---|
+| Introducing PR | Stage 0 PR-2 (`shekyl-engine-core` engine-trait benchmark harness) |
+| Merge SHA | `<filled by Stage 0 PR-2 commit 5 at merge>` |
+| Date | `<filled by Stage 0 PR-2 commit 5 at merge>` |
 
-`dev`-branch SHA at baseline measurement: `TBD`
+**Workload class:** Trivial pure-read.
 
-## Post-interior-lock measurements
+The bench measures `Engine::synced_height()` — a deref-chain field
+read of a `u64` through the `LedgerState` chain — over a freshly
+constructed `Engine<SoloSigner>` fixture. The call body is a
+short field-access chain with no state-dependent compute; the
+optimizer can hoist the call across criterion's iteration loop
+(per §4.2 hoisting rule).
 
-**Status: TO BE MEASURED.** First Stage 1 PR populates these numbers.
+**iai-callgrind gate metric.**
 
-Post-interior-lock numbers reflect the same hot paths under the
-Stage 1 trait-extracted implementations (per-trait interior locks,
-outer `Arc<RwLock<Engine>>` still in place; per
-[`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
-§3.3.1 *Stage 1 outer-lock sequential consistency*).
+| Metric | Value |
+|---|---|
+| `instructions` | `<filled by commit 5>` |
 
-| Hot path | Mean (ns) | p99 (ns) | Sample size | Δ vs baseline (mean) | Δ vs baseline (p99) |
+The §3.3.1 threshold-of-concern check (10% warn / 25% fail) applies
+to this row only. The instruction count is portable across runner
+hardware (Valgrind's VEX IR is hardware-independent) but **not**
+portable across toolchain versions; see [Toolchain-bump
+policy](#toolchain-bump-policy) for what happens when rustc /
+valgrind / iai-callgrind-runner versions change during Stage 1.
+
+**iai-callgrind hardware-dependent metrics (informational).**
+
+These rows are recorded for completeness from the same capture but
+do not gate. Different runner hardware reports different numbers;
+the gate-metric `instructions` row above is the only iai value
+that should be compared across captures or against the threshold.
+
+| Metric | Value |
+|---|---|
+| `l1_hits` | `<filled by commit 5>` |
+| `ll_hits` | `<filled by commit 5>` |
+| `ram_hits` | `<filled by commit 5>` |
+| `total_read_write` | `<filled by commit 5>` |
+| `estimated_cycles` | `<filled by commit 5>` |
+
+**criterion metrics (informational).**
+
+| Metric | Value |
+|---|---|
+| `median_ns` | `<filled by commit 5>` |
+| `std_dev_ns` | `<filled by commit 5>` |
+
+*criterion median_ns reflects optimizer amortization (per §4.4
+hoisting rule); per-call cost approximation: see iai instructions
+× hardware-dependent ns-per-instruction. The criterion number does
+not directly compare to iai's per-call cost for this workload class.*
+
+**Capture environment:** see `env-<filled by commit 5>` in
+[Capture environments](#capture-environments).
+
+**Cumulative-delta table.**
+
+| PR | Merge SHA | iai instructions | criterion median_ns | Δ vs frozen (iai) | Δ vs frozen (criterion) |
 |---|---|---|---|---|---|
-| `KeyEngine::account_public_address` | TBD | TBD | TBD | TBD% | TBD% |
-| `LedgerEngine::balance` | TBD | TBD | TBD | TBD% | TBD% |
-| `LedgerEngine::synced_height` | TBD | TBD | TBD | TBD% | TBD% |
-| `EconomicsEngine::current_emission` | TBD | TBD | TBD | TBD% | TBD% |
-| `EconomicsEngine::parameters_snapshot` | TBD | TBD | TBD | TBD% | TBD% |
+| Stage 0 PR-2 | `<filled by commit 5>` | `<filled by commit 5>` | `<filled by commit 5>` | baseline | baseline |
 
-Stage 1 PR commit / branch at measurement: `TBD`
+Subsequent Stage 1 PRs append one row per merge, computed against
+the frozen-baseline row. The §3.3.1 threshold-of-concern check
+applies to the running `Δ vs frozen (iai)` column.
 
-## Threshold-of-concern disposition per
-[`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md) §3.3
+## Bench: `engine_trait_bench_ledger_balance`
 
-For each hot path, the percentage delta against baseline (mean) is
-the canonical signal. The p99 column is an additional check for
-worst-case regression that the mean might hide.
+**Status:** Deferred to LedgerEngine PR.
+
+This bench section is authored when the LedgerEngine PR's
+introducing commit lands. The LedgerEngine PR populates the
+frozen-baseline source, workload class, iai/criterion metrics,
+capture environment, and cumulative-delta table per the template
+established by `engine_trait_bench_ledger_synced_height` above.
+
+Per §4.6's per-bench deferred assignment, this bench is introduced
+alongside the `LedgerEngine::balance` trait method's first measurable
+surface on a state-populated fixture using the LedgerEngine PR's
+MockDaemon infrastructure. Expected workload class: state-dependent
+compute (criterion median_ns approximates per-call cost; non-hoisted).
+
+## Bench: `engine_trait_bench_economics_current_emission`
+
+**Status:** Deferred to EconomicsEngine PR.
+
+This bench section is authored when the EconomicsEngine PR's
+introducing commit lands; same template as
+`engine_trait_bench_ledger_synced_height` above.
+
+Per §4.6's per-bench deferred assignment, this bench is introduced
+alongside the `EconomicsEngine::current_emission(height)` trait
+method on a fixture appropriate to economics-layer state. Workload
+class is determined when the bench is authored (likely
+state-dependent compute given the `height` parameter dependency,
+but pre-stated formally in the introducing PR's description per
+§4.4's normative checklist item 5).
+
+## Bench: `engine_trait_bench_economics_parameters_snapshot`
+
+**Status:** Deferred to EconomicsEngine PR.
+
+This bench section is authored when the EconomicsEngine PR's
+introducing commit lands; same template as
+`engine_trait_bench_ledger_synced_height` above.
+
+Per §4.6's per-bench deferred assignment, this bench is introduced
+alongside the `EconomicsEngine::parameters_snapshot()` trait method.
+Expected workload class: trivial pure-read if the snapshot returns
+the same value every iteration (criterion median_ns reflects
+optimizer amortization); confirmed at authoring time per §4.4's
+checklist item 5.
+
+## Bench: `engine_trait_bench_key_account_public_address`
+
+**Status:** Deferred to KeyEngine PR.
+
+This bench section is authored when the KeyEngine PR's introducing
+commit lands; same template as
+`engine_trait_bench_ledger_synced_height` above.
+
+Per §4.6's per-bench deferred assignment, this bench is introduced
+alongside the `KeyEngine::account_public_address()` trait method on
+a fixture appropriate to key-layer state. Expected workload class:
+trivial pure-read (the address is stable across iterations);
+confirmed at authoring time per §4.4's checklist item 5.
+
+## Capture environments
+
+Capture environments are deduplicated by introducing-PR merge SHA
+(the `git_rev` field in the `shekyl_rust_v0.json` envelope's
+`captured_on` block). Each environment block records the toolchain
+and runner state that produced the benchmark numbers in bench
+sections that cite it.
+
+When two captures land at different SHAs but on identical runner
+images (same kernel, rustc, valgrind, iai-callgrind-runner versions),
+they get separate environment blocks keyed by their respective SHAs;
+the toolchain rows happen to match. When a single SHA was captured
+on two different runner images, the SHA-keyed block records the
+canonical runner; cross-runner divergence (per §4.4's dynamic check)
+is investigated rather than recorded as two parallel environments.
+
+### `env-<filled by commit 5>`
+
+| Field | Value |
+|---|---|
+| `git_rev` | `<filled by Stage 0 PR-2 commit 5 at merge>` |
+| `git_dirty` | `<filled by commit 5>` |
+| `kernel` | `<filled by commit 5>` |
+| `cpu_model` | `<filled by commit 5>` |
+| `rustc_version` | `<filled by commit 5>` |
+| `cargo_version` | `<filled by commit 5>` |
+| `valgrind_version` | `<filled by commit 5>` |
+| `iai_callgrind_runner_version` | `<filled by commit 5>` |
+
+This environment will be captured on `ubuntu-latest` GHA runner via
+the post-merge `bench-baseline` workflow run, with the values copied
+from `shekyl_rust_v0.json`'s `captured_on` block.
+
+## Threshold-of-concern disposition per §3.3.1
+
+The §3.3.1 threshold-of-concern check applies per-bench to the
+cumulative `Δ vs frozen (iai)` column.
 
 - **Δ ≤ 10%**: cost is acceptable. No further action; PR proceeds
   to merge once other review concerns are addressed.
@@ -100,34 +281,180 @@ worst-case regression that the mean might hide.
   justification. The PR description names the source of the
   overhead (e.g., specific lock acquisition adding observed
   contention) and either argues that it's intrinsic to Stage 1's
-  interior-mutability shape and will disappear at Stage 4 (when
-  the outer `RwLock` retires per Path B), or names a specific
-  Stage 1 optimization that's deferred to a follow-up PR.
+  interior-mutability shape and will disappear at Stage 4 (when the
+  outer `RwLock` retires per Path B), or names a specific Stage 1
+  optimization deferred to a follow-up PR.
 - **Δ > 25%**: cost is not acceptable as-is. The PR is sent back
   for optimization before merge. Candidate optimizations per
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
   §3.3.5: narrowing critical sections; substituting
-  `parking_lot::RwLock` for `std::sync::RwLock`; moving
-  cached read-only values to `Arc`-published snapshots that
-  bypass the lock entirely.
+  `parking_lot::RwLock` for `std::sync::RwLock`; moving cached
+  read-only values to `Arc`-published snapshots that bypass the
+  lock entirely.
+
+The check applies to **iai instructions**, not criterion `median_ns`.
+criterion's number is informational and does not gate. For trivial
+pure-read benches, criterion's median_ns may show a much larger
+relative shift than iai instructions because optimizer amortization
+changes non-linearly with code shape (e.g., adding a single
+non-hoistable call inside a previously fully-hoisted bench can
+multiply criterion's reported time without a corresponding
+multiplication of iai instructions). The iai-instructions metric
+remains the gate; criterion's number is consulted for context.
+
+### Responsibility allocation across cumulative-delta breaches
+
+The threshold-of-concern check applies to the **cumulative** `Δ vs
+frozen (iai)` column, not to the per-PR delta. Two cases:
+
+- **The PR's own per-PR delta exceeds the threshold.** The PR fails
+  on its own merits: if a single PR's contribution is ≥10% the PR
+  description owes the warn-tier justification; if ≥25% the PR is
+  sent back for optimization. This is the standard case.
+- **The PR's own per-PR delta is small but the cumulative breaches
+  the threshold.** The PR is responsible for the breach regardless
+  of its own contribution size. The rationale: Stage 1 has a
+  per-bench cost budget, and that budget is the cumulative delta
+  against the frozen baseline; the PR that breaches the budget owns
+  the breach. *Worked example:* PRs 1–4 each add +9% per-PR delta;
+  by PR 4 the cumulative is `(1.09)^4 − 1 ≈ +41%`, exceeding the
+  fail threshold. PR 4 is sent back for optimization even though
+  its own +9% looked typical against PRs 1–3, because PR 4 is the
+  PR that pushed the cumulative past +25%.
+
+The operational consequence: **authors of late-Stage-1 PRs verify
+cumulative-delta headroom before measuring their own change**. If
+the cumulative for a bench is at +22% and the PR's natural change
+is expected to add +5%, the PR must either find +2% of optimization
+elsewhere in scope, split into two PRs (with cumulative re-checked
+after the first lands), or budget the work as a `parking_lot`-or-
+`Arc`-snapshot optimization that brings cumulative back under
+threshold before adding the trait-extraction delta. The threshold
+is not a guideline that the PR author can argue around by pointing
+to their own small contribution; it is a budget that the breaching
+PR must close.
+
+## Toolchain-bump policy
+
+iai-callgrind's `instructions` count is portable across runner
+*hardware* (Valgrind's VEX IR makes the measurement
+hardware-independent for the measured code) but **not** portable
+across *toolchain versions*. rustc codegen changes (including
+LLVM-version-driven changes downstream of rustc) shift instruction
+counts; valgrind/VEX-IR version changes can shift them; even a
+patch-version iai-callgrind-runner bump can shift the per-call
+wrapper-instrumentation overhead by a few instructions.
+
+This means the cumulative `Δ vs frozen (iai)` column is only
+meaningful when the toolchain at PR-current matches the toolchain
+recorded in the bench's capture-environment block. If any of
+`rustc_version`, `valgrind_version`, or `iai_callgrind_runner_version`
+changes between the frozen baseline and PR-current, the cumulative
+delta mixes Stage-1-attributable shifts with toolchain-attributable
+shifts, and the threshold check stops measuring what §3.3.1 says it
+measures.
+
+**On toolchain bump during Stage 1, frozen baselines are
+re-captured at the new toolchain.** Mechanics:
+
+1. **Identify in-scope frozen baselines.** Every bench currently
+   in `PERFORMANCE_BASELINE.md` whose status is "Frozen" (not
+   "Deferred") is in scope. As of Stage 0 PR-2's merge,
+   `engine_trait_bench_ledger_synced_height` is the only
+   in-scope bench; later Stage 1 PRs add more.
+2. **Re-capture at the introducing PR's tree state.** For each
+   in-scope bench, check out the introducing-PR's merge SHA,
+   build with the new toolchain, run the bench's `iai-callgrind`
+   and `criterion` captures on the reference runner via the
+   same `workflow_dispatch` path used for the original capture,
+   and replace the bench section's gate-metric, hardware-
+   dependent, and criterion rows with the new numbers.
+3. **Update the capture-environment block.** The `env-<short-SHA>`
+   block's toolchain rows update to the new versions; the
+   `git_rev` row is unchanged (still points to the introducing
+   PR's merge SHA — what was re-measured is the same source
+   tree, with a different toolchain).
+4. **Reset the cumulative-delta column.** Each in-scope bench's
+   cumulative-delta table is truncated to the one row representing
+   the re-captured introducing capture (delta = baseline).
+   Subsequent Stage 1 PRs append rows from there. Cumulative-delta
+   history before the rebaseline is preserved in git (`git log -p`
+   of this document) but is no longer consulted by the threshold
+   check.
+5. **CHANGELOG entry.** The rebaseline commit gets its own
+   `## [Unreleased] / ### Documentation` entry naming the bumped
+   toolchain versions, the rebaselined benches, and the rationale
+   (security patch, MSRV bump, dependency requirement, etc.). The
+   commit is its own PR, not bundled with substantive Stage 1
+   work.
+
+The rebaseline commit is itself a "non-Stage-1 change" per §3.3.1
+("the baseline is re-captured only if a non-Stage-1 change
+materially shifts that bench's hot-path cost") and does not count
+toward any bench's cumulative-delta column.
+
+**What does not trigger a rebaseline.** Bumps to dependencies that
+the bench's workload does not touch (e.g., `tokio`, `criterion`
+itself when its harness changes don't shift `iai-callgrind`'s
+measured instruction count, async runtime updates) are not
+rebaseline triggers. The trigger is specifically codegen-affecting
+toolchain changes (rustc/LLVM, valgrind/VEX IR, iai-callgrind-runner)
+and only those. Reviewers presented with an ambiguous case (a
+dependency bump that *might* affect codegen for the measured code)
+re-run the affected bench's iai-callgrind capture: if the
+instruction count is unchanged, no rebaseline is needed; if it
+shifts, the bump is treated as a rebaseline trigger.
 
 ## Reviewer responsibility
 
 Per [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
-§3.3.1 (Round 4b — Item 14):
+§3.3.1 (Round 4b — Item 14; refined in Stage 0 PR-B):
 
-- The Stage 1 PR reviewer confirms the baseline document's commit
-  SHA matches a recent `dev` tip (within ~30 days), or triggers
-  re-measurement.
-- The reviewer is the named owner of this check; the PR author is
-  not expected to re-measure unprompted.
-- If the baseline document has not been populated at all (still
-  shows `TBD` placeholders in the relevant tables), the PR is not
-  reviewable — measurement is the gate, not optional metadata.
+- The Stage 1 PR reviewer confirms that each in-scope bench's
+  cumulative-delta row in this document is appended with the PR's
+  iai-instructions and criterion-median_ns numbers, computed
+  against the frozen baseline row.
+- For deferred benches not yet introduced, the reviewer confirms
+  the bench section is still in deferred state (no premature
+  population).
+- For the introducing PR of a deferred bench, the reviewer confirms
+  the bench section is populated per the
+  `engine_trait_bench_ledger_synced_height` template
+  (frozen-baseline source, workload class, iai/criterion metrics,
+  capture environment, cumulative-delta table with one row).
+- The reviewer is the named owner of these checks; the PR author
+  is not expected to re-measure unprompted.
+- If the cumulative-delta tables for in-scope benches are not
+  populated, the PR is not reviewable — measurement is the gate,
+  not optional metadata.
 
 ## Cross-references
 
-- [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md) §3.3 — interior-mutability measurement gate (governs this document).
-- [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md) §3.3.1 — Stage 1 outer-lock sequential consistency (the implementation surface measured against).
-- [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md) §10.2.1 — Stage 1 baseline measurement deferred entry (this document is the deliverable).
-- [`FOLLOWUPS.md`](FOLLOWUPS.md) §"V3.0" — performance baseline FOLLOWUPS row (close-condition: this document populated and Stage 1 PR review consumes it).
+- [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §3.3 — interior-mutability measurement gate (governs this document).
+- [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §3.3.1 — Stage 1 outer-lock sequential consistency (the
+  implementation surface measured against; per-bench frozen-baseline
+  framing refined in Stage 0 PR-B).
+- [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)
+  §4.4 — two-anchor static check (gate metric vs informational
+  metric framing).
+- [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)
+  §4.5 — per-bench frozen-baseline disposition (the operationalization
+  this document implements).
+- [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)
+  §4.6 — harness update discipline (per-bench deferred assignment
+  for the four deferred benches).
+- [`docs/benchmarks/reference-captures/stage-0-pr-2-c4c-shekyl_rust_v0.json`](benchmarks/reference-captures/stage-0-pr-2-c4c-shekyl_rust_v0.json)
+  — the post-Q invariance-verified capture from Stage 0 PR-2 commit
+  4c (GHA run 25239954863). Cited by Stage 0 PR-B's review-surface
+  verification gate as the column-shape reference for this
+  document's rewrite. Stage 0 PR-2 commit 5 will produce the actual
+  frozen baseline against the merge SHA; that capture supersedes
+  this one for transcription purposes but the c4c capture stays
+  in-tree as the PR-B review-time reference (see
+  [`docs/benchmarks/reference-captures/README.md`](benchmarks/reference-captures/README.md)).
+- [`FOLLOWUPS.md`](FOLLOWUPS.md) §"V3.0" — performance baseline
+  FOLLOWUPS row (close-condition: the four deferred-bench sections
+  in this document are populated by their introducing per-trait
+  PRs; the first Stage 1 PR review consumes the document).
