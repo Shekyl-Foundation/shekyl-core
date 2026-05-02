@@ -867,7 +867,7 @@ impl<'a> ProgressEmitter<'a> {
     /// load-bearing.
     fn publish(&self, height: u64, blocks_processed: u64, phase: RefreshPhase) {
         if let Some(s) = self.sender {
-            let _ = s.send(RefreshProgress {
+            _ = s.send(RefreshProgress {
                 height,
                 blocks_processed,
                 blocks_total: self.blocks_total,
@@ -1414,7 +1414,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
     let mut scanner = match scanner_init {
         Ok(s) => s,
         Err(e) => {
-            let _ = completion.send(Err(e));
+            _ = completion.send(Err(e));
             return;
         }
     };
@@ -1431,8 +1431,8 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
             // wakes once before the channel closes.
             let mut terminal = *progress.borrow();
             terminal.phase = RefreshPhase::Cancelled;
-            let _ = progress.send(terminal);
-            let _ = completion.send(Err(RefreshError::Cancelled));
+            _ = progress.send(terminal);
+            _ = completion.send(Err(RefreshError::Cancelled));
             return;
         }
 
@@ -1461,7 +1461,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
         let daemon_tip = match daemon.get_height().await {
             Ok(t) => t,
             Err(e) => {
-                let _ = completion.send(Err(RefreshError::Io(IoError::Daemon {
+                _ = completion.send(Err(RefreshError::Io(IoError::Daemon {
                     detail: format!("get_height failed: {e}"),
                 })));
                 return;
@@ -1477,8 +1477,8 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
         if cancel.is_cancelled() {
             let mut terminal = *progress.borrow();
             terminal.phase = RefreshPhase::Cancelled;
-            let _ = progress.send(terminal);
-            let _ = completion.send(Err(RefreshError::Cancelled));
+            _ = progress.send(terminal);
+            _ = completion.send(Err(RefreshError::Cancelled));
             return;
         }
 
@@ -1503,7 +1503,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
         // `blocks_processed` down; the watch channel preserves
         // latest-only semantics so subscribers see the restated
         // total.
-        let _ = progress.send(RefreshProgress {
+        _ = progress.send(RefreshProgress {
             height: current_synced,
             blocks_processed: 0,
             blocks_total,
@@ -1534,12 +1534,12 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
                 // function.
                 let mut terminal = *progress.borrow();
                 terminal.phase = RefreshPhase::Cancelled;
-                let _ = progress.send(terminal);
-                let _ = completion.send(Err(RefreshError::Cancelled));
+                _ = progress.send(terminal);
+                _ = completion.send(Err(RefreshError::Cancelled));
                 return;
             }
             Err(e) => {
-                let _ = completion.send(Err(e));
+                _ = completion.send(Err(e));
                 return;
             }
         };
@@ -1557,8 +1557,8 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
         if cancel.is_cancelled() {
             let mut terminal = *progress.borrow();
             terminal.phase = RefreshPhase::Cancelled;
-            let _ = progress.send(terminal);
-            let _ = completion.send(Err(RefreshError::Cancelled));
+            _ = progress.send(terminal);
+            _ = completion.send(Err(RefreshError::Cancelled));
             return;
         }
 
@@ -1566,7 +1566,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
         // merge is bounded by compute (no I/O), so subscribers
         // observing this phase are usually about to immediately
         // observe success or a retry.
-        let _ = progress.send(RefreshProgress {
+        _ = progress.send(RefreshProgress {
             height: summary
                 .processed_height_range
                 .end
@@ -1592,7 +1592,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
                 // we drop `progress` on return, the receiver's next
                 // `changed().await` returns `RecvError`, which is
                 // the watch-channel idiom for "no further updates."
-                let _ = completion.send(Ok(summary));
+                _ = completion.send(Ok(summary));
                 return;
             }
             Err(RefreshError::ConcurrentMutation { wallet, result }) => {
@@ -1603,7 +1603,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
                     result,
                     "run_refresh_task: snapshot race, retrying with fresh snapshot",
                 );
-                let _ = progress.send(RefreshProgress {
+                _ = progress.send(RefreshProgress {
                     height: current_synced,
                     blocks_processed: 0,
                     blocks_total,
@@ -1614,7 +1614,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
                 continue;
             }
             Err(other) => {
-                let _ = completion.send(Err(other));
+                _ = completion.send(Err(other));
                 return;
             }
         }
@@ -1629,7 +1629,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
     let terminal = last_concurrent_mutation.unwrap_or(RefreshError::MalformedScanResult {
         reason: "run_refresh_task retry loop exited without an observed ConcurrentMutation",
     });
-    let _ = completion.send(Err(terminal));
+    _ = completion.send(Err(terminal));
     // _slot_guard drops here, releasing the slot.
 }
 
@@ -3914,7 +3914,7 @@ mod start_refresh_integration_tests {
             .await
             .expect("slot is reusable after producer wind-down");
         // Drain the second handle to keep the suite clean.
-        let _ = h2.join().await;
+        _ = h2.join().await;
     }
 
     // ── Hybrid scenarios: real Engine<SoloSigner> + MockDaemon ──────────
