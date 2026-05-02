@@ -153,6 +153,7 @@ pub mod network;
 pub mod pending;
 pub mod refresh;
 pub mod signer;
+pub(crate) mod traits;
 
 #[cfg(test)]
 pub(crate) mod test_support;

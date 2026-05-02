@@ -39,7 +39,12 @@
 //! the wallet file's region 1 declaration. Mismatches surface as
 //! [`OpenError::NetworkMismatch`](super::error::OpenError::NetworkMismatch).
 
+use std::future::Future;
+
+use shekyl_rpc::{Rpc, RpcError};
 use shekyl_simple_request_rpc::SimpleRequestRpc;
+
+use crate::engine::traits::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
 
 /// Engine's view of the daemon RPC connection.
 ///
@@ -47,6 +52,13 @@ use shekyl_simple_request_rpc::SimpleRequestRpc;
 /// `shekyl-scanner` and the tx-submission path. The underlying
 /// [`SimpleRequestRpc`] is `Clone + Send + Sync`; cloning it is cheap
 /// (an `Arc`-wrapped HTTP client + URL string).
+///
+/// `DaemonClient` implements [`shekyl_rpc::Rpc`] (delegating `post` to
+/// the wrapped transport) and the crate-internal `DaemonEngine` Stage 1
+/// trait (in `crate::engine::traits`); callers reach the upstream
+/// `Rpc` methods (block / height / output / mempool) via the
+/// supertrait bound on `DaemonEngine` rather than going through the
+/// underlying transport directly.
 #[derive(Clone, Debug)]
 pub struct DaemonClient {
     inner: SimpleRequestRpc,
@@ -73,5 +85,53 @@ impl DaemonClient {
     /// changes signature and the migration commit announces it.
     pub fn inner(&self) -> &SimpleRequestRpc {
         &self.inner
+    }
+}
+
+impl Rpc for DaemonClient {
+    fn post(
+        &self,
+        route: &str,
+        body: Vec<u8>,
+    ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
+        self.inner.post(route, body)
+    }
+}
+
+impl DaemonEngine for DaemonClient {
+    type Error = RpcError;
+
+    /// Phase 2a target. The Stage 1 surface defines the contract; the
+    /// production wiring composes [`Rpc::get_fee_rate`] for each of
+    /// the three non-`Custom`
+    /// [`FeePriority`](super::FeePriority) tiers and assembles the
+    /// [`FeeEstimates`] snapshot. Phase 2a lands the body alongside
+    /// `Engine::build_pending_tx`'s fee-priority resolution.
+    fn get_fee_estimates(&self) -> impl Send + Future<Output = Result<FeeEstimates, Self::Error>> {
+        async move {
+            todo!(
+                "Phase 2a: compose three Rpc::get_fee_rate calls (Economy/Standard/Priority) \
+                 into a FeeEstimates snapshot per docs/V3_ENGINE_TRAIT_BOUNDARIES.md §2.5"
+            )
+        }
+    }
+
+    /// Phase 2a target. The Stage 1 surface defines the contract; the
+    /// production wiring parses `tx_bytes`, calls
+    /// [`Rpc::publish_transaction`], and observes the daemon's response
+    /// to distinguish [`TxSubmitOutcome::Submitted`] from
+    /// [`TxSubmitOutcome::AlreadyKnown`]. Phase 2a lands the body
+    /// alongside `Engine::submit_pending_tx`'s real-broadcast wiring.
+    fn submit_transaction(
+        &self,
+        tx_bytes: Vec<u8>,
+    ) -> impl Send + Future<Output = Result<TxSubmitOutcome, Self::Error>> {
+        async move {
+            let _ = tx_bytes;
+            todo!(
+                "Phase 2a: parse tx_bytes, call Rpc::publish_transaction, observe daemon response \
+                 for AlreadyKnown vs Submitted distinction per docs/V3_ENGINE_TRAIT_BOUNDARIES.md §2.5"
+            )
+        }
     }
 }
