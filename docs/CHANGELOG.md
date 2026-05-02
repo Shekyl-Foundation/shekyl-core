@@ -72,14 +72,18 @@
     `DaemonEngine` implementor** in
     [`engine::test_support`](../rust/shekyl-engine-core/src/engine/test_support.rs).
     Adds `submit_transaction` deduplication by deterministic tx
-    hash, `get_fee_estimates` with seeded jitter, fee-error
-    queueing, submit-error queueing, and the `with_seed` /
+    hash, `get_fee_estimates` returning a fixed snapshot
+    (configurable via `set_fee_estimates`), fee-error queueing,
+    submit-error queueing, and the `with_seed` /
     `with_seed_and_chain` constructors that carry a
-    `ChaCha20Rng` for reproducibility. Failure-injection contract
-    fidelity per §6.1 is exercised by a new test suite in the
-    same module (deterministic submit hashing across clones,
-    submit dedup behaviour, fee jitter pinning, queued-error
-    drain semantics).
+    `ChaCha20Rng` reserved for future RNG-driven affordances per
+    §6.2 (fee jitter, synthetic-fork randomization) — held but
+    not yet consumed at this PR's contract surface.
+    Failure-injection contract fidelity per §6.1 is exercised
+    by a new test suite in the same module (deterministic
+    submit hashing across clones, submit dedup behaviour,
+    fee-snapshot-override persistence, queued-error drain
+    semantics).
   - **`MockDaemon` chain-indexing convention now matches the
     real-daemon protocol** (`chain[0]` is genesis at height 0;
     `chain[h]` is the block at height `h`; `get_height` returns
