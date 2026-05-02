@@ -33,8 +33,8 @@
 //! `Mock*` test-support implementors find their contract in one place.
 //!
 //! [`Engine<S>`]: super::Engine
-//! [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`]: ../../../../docs/V3_ENGINE_TRAIT_BOUNDARIES.md
-//! [`docs/FOLLOWUPS.md`]: ../../../../docs/FOLLOWUPS.md
+//! [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`]: ../../../../../docs/V3_ENGINE_TRAIT_BOUNDARIES.md
+//! [`docs/FOLLOWUPS.md`]: ../../../../../docs/FOLLOWUPS.md
 
 pub(crate) mod daemon;
 

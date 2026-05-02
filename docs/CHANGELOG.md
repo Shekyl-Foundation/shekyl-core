@@ -10,10 +10,18 @@
   [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
   §2.5).** The Phase 2a `DaemonEngine` slice of the Stage 1
   trait-extraction work lands as `pub(crate)` on
-  `shekyl-engine-core`. Every change in this PR is internal to the
-  crate; the public API surface (`Engine`, `OpenedEngine`,
-  `DaemonClient`, the lifecycle / refresh / pending re-exports
-  in `lib.rs`) is unchanged for non-test consumers.
+  `shekyl-engine-core`. The PR's primary surface — the
+  `DaemonEngine` trait and the `Engine<S, D>` /
+  `OpenedEngine<S, D>` parameterization — is `pub(crate)` and
+  only visible to crate-internal callers; existing public types
+  (`Engine`, `OpenedEngine`, `DaemonClient`, the lifecycle /
+  refresh / pending re-exports in `lib.rs`) keep their existing
+  shapes for non-test consumers via the `D = DaemonClient`
+  default. The one externally-visible surface change is the
+  removal of the previously-public `DaemonClient::inner()`
+  accessor (called out under "Removed" below); cross-workspace
+  audit found zero remaining callers, and the functionality is
+  preserved via `DaemonClient`'s direct `Rpc` impl.
 
   - **`pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync +
     'static`** in
@@ -130,6 +138,24 @@
   a follow-up commit on this branch before merge per the
   "do-not-transcribe-laptop-captures" discipline established
   during Stage 0 PR-2.
+
+### Removed
+
+- **`DaemonClient::inner()` accessor** in
+  [`engine::daemon`](../rust/shekyl-engine-core/src/engine/daemon.rs).
+  The method exposed the wrapped `SimpleRequestRpc` so callers
+  could invoke `Rpc` methods through it; with the Stage 1 PR 1
+  parameterization, `DaemonClient` implements `Rpc` directly and
+  the indirection is dead. Cross-workspace audit
+  (`shekyl-core`, `shekyl-gui-wallet`, `shekyl-dev`, `shekyl-web`,
+  `shekyl-mobile-wallet`, `monero-oxide`) found zero remaining
+  callers; per `15-deletion-and-debt.mdc` "default: delete" and
+  the no-`#[deprecated]`-without-deletion-target rule, the
+  accessor is removed outright rather than retained as a
+  deprecation shim. Any downstream caller can replace
+  `client.inner().get_height()` with `client.get_height()`
+  (the `Rpc` supertrait is in scope wherever `DaemonClient` is)
+  with no functional difference.
 
 ### Changed (BREAKING)
 
