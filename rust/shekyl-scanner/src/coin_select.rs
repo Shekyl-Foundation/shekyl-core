@@ -111,8 +111,8 @@ pub fn select_outputs(
     }
 
     // Sort non-dust by amount descending (greedy: big outputs first)
-    non_dust.sort_by(|a, b| b.1.cmp(&a.1));
-    dust.sort_by(|a, b| b.1.cmp(&a.1));
+    non_dust.sort_by_key(|b| std::cmp::Reverse(b.1));
+    dust.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     let mut selected: Vec<usize> = Vec::new();
     let mut total: u64 = 0;
