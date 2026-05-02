@@ -75,11 +75,14 @@ use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 
 use crate::{
-    engine::{Engine, EngineSignerKind, RefreshError},
+    engine::{traits::DaemonEngine, Engine, EngineSignerKind, RefreshError},
     scan::{ScanResult, StakeEvent},
 };
 
-impl<S: EngineSignerKind> Engine<S> {
+// `D: DaemonEngine` private-bound: see the rationale on the
+// `pub struct Engine` definition in `engine/mod.rs`.
+#[allow(private_bounds)]
+impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     /// Current scanned-chain height: the highest block height the
     /// wallet's persisted ledger has fully ingested. `0` for a
     /// freshly-created wallet that has never refreshed.

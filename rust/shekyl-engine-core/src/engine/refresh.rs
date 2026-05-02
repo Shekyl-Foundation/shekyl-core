@@ -80,6 +80,7 @@ use zeroize::Zeroizing;
 
 use super::error::{IoError, RefreshError};
 use super::signer::EngineSignerKind;
+use super::traits::DaemonEngine;
 use super::Engine;
 use crate::scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
 
@@ -1391,8 +1392,8 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
 /// path always delivers `Ok(summary)`; consumers that want to
 /// abandon a successful refresh in flight have to drop the handle
 /// and reconcile against the next `progress().borrow()`.
-async fn run_refresh_task<S: EngineSignerKind>(
-    engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S>>>,
+async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
+    engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S, D>>>,
     opts: RefreshOptions,
     cancel: CancellationToken,
     progress: tokio::sync::watch::Sender<RefreshProgress>,
@@ -1400,7 +1401,7 @@ async fn run_refresh_task<S: EngineSignerKind>(
     _slot_guard: SlotGuard,
 ) where
     S: Send + Sync + 'static,
-    Engine<S>: Send + Sync,
+    Engine<S, D>: Send + Sync,
 {
     // Build the scanner once (keys are immutable for the lifetime of
     // the open engine; rebuilding per attempt would only repeat
@@ -1650,7 +1651,10 @@ fn summarize(result: &ScanResult, merge_attempts: u32) -> RefreshSummary {
     }
 }
 
-impl<S: EngineSignerKind> Engine<S> {
+// `D: DaemonEngine` private-bound: see the rationale on the
+// `pub struct Engine` definition in `engine/mod.rs`.
+#[allow(private_bounds)]
+impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     /// Spawn an async refresh task and return a [`RefreshHandle`]
     /// for observing and controlling it.
     ///

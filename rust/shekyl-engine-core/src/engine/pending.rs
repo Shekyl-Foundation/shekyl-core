@@ -92,6 +92,7 @@ use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SubaddressIndex};
 
 use crate::engine::{
     error::{PendingTxError, SendError},
+    traits::DaemonEngine,
     Engine, EngineSignerKind,
 };
 
@@ -450,7 +451,10 @@ pub(crate) fn discard_pending_tx_in_state(
 // `Engine<S>` methods.
 // ---------------------------------------------------------------------------
 
-impl<S: EngineSignerKind> Engine<S> {
+// `D: DaemonEngine` private-bound: see the rationale on the
+// `pub struct Engine` definition in `engine/mod.rs`.
+#[allow(private_bounds)]
+impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     /// Number of in-flight reservations on this wallet handle.
     ///
     /// `Engine::close` (lifecycle commit) calls this and refuses with
