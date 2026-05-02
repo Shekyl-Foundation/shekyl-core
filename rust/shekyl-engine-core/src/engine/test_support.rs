@@ -66,8 +66,10 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
+use hkdf::Hkdf;
 use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha20Rng;
+use sha2::Sha256;
 
 use shekyl_oxide::block::{Block, BlockHeader};
 use shekyl_oxide::transaction::{Input, Timelock, Transaction, TransactionPrefix};
@@ -87,6 +89,47 @@ use crate::engine::traits::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
 /// instead and embed the seed in their test name (e.g.
 /// `_seed_0xdeadbeef`) for cross-run reproducibility.
 pub(crate) const DEFAULT_TEST_SEED: [u8; 32] = [0u8; 32];
+
+// ---- Role-tag registry for §6.2 master-seed derivation -------------------
+//
+// Each `Mock*` slot in a hybrid composition gets a stable byte string
+// that names its role. Hybrid tests pass `(master_seed, ROLE_X)` to
+// [`derive_seed`] to produce the per-component seed that goes into
+// `MockX::with_seed(...)`. The registry pins the role-tag-to-component
+// mapping in one audited site so reviewers can confirm hybrid tests
+// don't re-bind a tag to a different component slot.
+//
+// PR 1 lands `ROLE_DAEMON` only (the only mock implementor that exists
+// at this stage). Subsequent Stage 1 PRs add `ROLE_KEY`, `ROLE_LEDGER`,
+// `ROLE_ECONOMICS`, `ROLE_PERSISTENCE`, `ROLE_REFRESH`, `ROLE_PENDING_TX`
+// alongside their corresponding `Mock*` types.
+
+/// Role tag for the [`MockDaemon`] slot in §6.2 master-seed derivation.
+pub(crate) const ROLE_DAEMON: &[u8] = b"role/daemon";
+
+/// Derive a per-component 32-byte seed from a master seed and a role
+/// tag via HKDF-SHA256, per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.2's
+/// master-seed-derivation contract.
+///
+/// Hybrid tests own a single literal `master_seed` (recorded in the
+/// test name or CI logs); each `Mock*` they construct gets its
+/// `with_seed` argument from `derive_seed(&master, ROLE_X)`. This
+/// keeps cross-run reproducibility a function of the master seed
+/// alone — changing the master re-derives every component
+/// consistently; per-component edits are unnecessary.
+///
+/// Construction: HKDF-SHA256 with `salt = None` (defaults to a
+/// hash-block-length zero salt per RFC 5869), `ikm = master_seed`,
+/// `info = role`, `OKM = 32 bytes`. The 32-byte output is well
+/// within HKDF-SHA256's `255 * HashLen = 8160` byte OKM limit, so
+/// the expand step is infallible.
+pub(crate) fn derive_seed(master: &[u8; 32], role: &[u8]) -> [u8; 32] {
+    let hkdf = Hkdf::<Sha256>::new(None, master);
+    let mut output = [0u8; 32];
+    hkdf.expand(role, &mut output)
+        .expect("32-byte OKM is well within HKDF-SHA256's 255 * HashLen limit");
+    output
+}
 
 /// In-memory implementor of [`shekyl_rpc::Rpc`] **and** the
 /// crate-internal `DaemonEngine` trait for refresh / scan-loop /
@@ -812,6 +855,75 @@ mod tests {
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
         assert!(
             matches!(second_via_clone, TxSubmitOutcome::AlreadyKnown { hash } if hash == expected)
+        );
+    }
+
+    // ---- §6.2 derive_seed contract ----
+
+    /// Master seed used in derive_seed contract tests. Recorded as a
+    /// literal so a future failure can reproduce the exact derivation.
+    const TEST_MASTER_SEED: [u8; 32] = [
+        0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+        0x17, 0x18,
+    ];
+
+    #[test]
+    fn derive_seed_is_deterministic() {
+        let seed_a = derive_seed(&TEST_MASTER_SEED, ROLE_DAEMON);
+        let seed_b = derive_seed(&TEST_MASTER_SEED, ROLE_DAEMON);
+        assert_eq!(
+            seed_a, seed_b,
+            "same (master, role) must derive the same seed across calls"
+        );
+    }
+
+    #[test]
+    fn derive_seed_distinct_roles_yield_distinct_seeds() {
+        // The whole point of §6.2's role-tag separation: per-component
+        // seeds are independent so a failure in one component's RNG
+        // path can't masquerade as another's.
+        let daemon_seed = derive_seed(&TEST_MASTER_SEED, ROLE_DAEMON);
+        let probe_seed = derive_seed(&TEST_MASTER_SEED, b"role/probe-not-yet-bound");
+        assert_ne!(
+            daemon_seed, probe_seed,
+            "distinct role tags must derive distinct seeds"
+        );
+    }
+
+    #[test]
+    fn derive_seed_distinct_masters_yield_distinct_seeds() {
+        let alt_master = [0x42u8; 32];
+        let from_test = derive_seed(&TEST_MASTER_SEED, ROLE_DAEMON);
+        let from_alt = derive_seed(&alt_master, ROLE_DAEMON);
+        assert_ne!(
+            from_test, from_alt,
+            "distinct master seeds must derive distinct per-role seeds"
+        );
+    }
+
+    #[test]
+    fn derive_seed_pinned_fixture_for_role_daemon() {
+        // Defense against upstream `hkdf` / `sha2` library drift or
+        // an accidental change to `ROLE_DAEMON`'s byte string. If
+        // this fixture changes, hybrid-test reproducibility for
+        // recorded master seeds breaks silently — the literal here
+        // catches that at the helper boundary, before any hybrid
+        // test sees the new derived seed.
+        //
+        // Computed on first run with the stable inputs above; a
+        // future deliberate change to either the role tag or the
+        // derivation primitive must update this fixture in the same
+        // commit so the substitution is visible in review.
+        let seed = derive_seed(&TEST_MASTER_SEED, ROLE_DAEMON);
+        let expected: [u8; 32] = [
+            0xc9, 0xf2, 0xb0, 0xa6, 0xa4, 0x1c, 0xf4, 0x8c, 0x43, 0x13, 0xdd, 0x74, 0x68, 0x3a,
+            0xe0, 0x4c, 0xc2, 0x19, 0xcc, 0x67, 0xd3, 0x29, 0x41, 0x2b, 0x61, 0x90, 0x3b, 0x19,
+            0x14, 0xda, 0x6b, 0x36,
+        ];
+        assert_eq!(
+            seed, expected,
+            "derive_seed(TEST_MASTER_SEED, ROLE_DAEMON) drifted from pinned fixture"
         );
     }
 }
