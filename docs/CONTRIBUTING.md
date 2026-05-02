@@ -69,6 +69,69 @@ The same document records the interim policy for syncing the vendored
 `rust/shekyl-oxide` snapshot from the upstream `monero-oxide` fork,
 including the spot-check discipline applied to every divergence sync.
 
+## Rust code style and lints
+
+Two CI gates run on every PR touching `rust/`, both inside the existing
+`Rust: audit, test, determinism` job in
+[`.github/workflows/build.yml`](../.github/workflows/build.yml). They
+land immediately after `cargo audit` so style/lint regressions surface
+at the cheapest stage of the pipeline:
+
+* **`cargo fmt --all -- --check`** — fails CI on any unformatted Rust
+  file across the workspace. There is no deferred-fmt-debt path. From
+  the chore/workspace-fmt-clippy-baseline PR forward, the previous
+  practice of explicitly noting "pre-existing fmt debt in <files> is
+  unmodified per the deletion-and-debt rule" is no longer applicable
+  — fmt-clean is the gate, not a per-PR option to defer.
+
+* **`cargo clippy --workspace --all-targets --keep-going -- -D
+  warnings`** — fails CI on any clippy finding of any severity. The
+  workspace already configures many lints at deny-level via
+  [`rust/Cargo.toml`](../rust/Cargo.toml) `[workspace.lints.clippy]`
+  (`let_underscore_must_use`, `cast_possible_truncation`,
+  `uninlined_format_args`, et al.); the `-D warnings` flag extends
+  enforcement to the default-warn lints (`clone_on_copy`,
+  `type_complexity`, `dead_code`, `bound_in_more_than_one_place`, …).
+  `--keep-going` collects findings across the full workspace in one
+  pass so reviewers see the complete triage in the CI log instead of
+  iterating per-crate.
+
+### Suppressing a clippy finding
+
+When a lint is genuinely misleading or buggy for the project's use
+case, prefer a workspace-level `[workspace.lints.clippy]` `allow`
+entry in `rust/Cargo.toml` with a docstring rationale (three such
+entries already exist: `incompatible_msrv`, `unwrap_or_default`,
+`map_unwrap_or`).
+
+When a lint warrants suppression at one specific site (a
+single-instance test fixture, a Phase-Nx-stub trait surface ahead of
+its production callers, etc.), use a **per-item** `#[allow(lint_name)]`
+with a one-line rationale comment matching the existing project
+convention. Examples:
+
+```rust
+#[allow(dead_code)] // Stage-4 reference + diagnostics
+fn unused_until_stage_4() { /* ... */ }
+```
+
+Module-level `#![allow(...)]` and crate-level allows are reserved for
+genuine project-wide decisions and require explicit reviewer sign-off,
+because they silently swallow future findings of the same lint in the
+same scope.
+
+### "Leave the file you touched fmt-clean"
+
+Per the carve-out in
+[`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc),
+the "while we're here is the enemy" rule does **not** preclude the
+disciplined practice of fixing mechanical formatting and clippy
+findings inside files you are already editing for substantive reasons.
+The going-forward expectation is: every file your PR touches is
+fmt-clean and clippy-clean by the time the PR lands. Fixing
+mechanical findings in files your PR does not otherwise touch remains
+an out-of-scope change; record those for a separate cleanup pass.
+
 ## Branch protection on `dev`
 
 The `dev` branch is the integration branch for all work. It is
@@ -82,7 +145,10 @@ protected with the following GitHub branch-protection rules:
 * **Status checks must pass** before merge: at minimum, the full
   `cargo test --workspace --include-ignored` suite (which runs the
   KAT regression corpus, including `#[ignore]`-gated slow KATs), the
-  benchmark gate (see
+  Rust style and lint gates (`cargo fmt --all -- --check` and
+  `cargo clippy --workspace --all-targets --keep-going -- -D
+  warnings`; see "Rust code style and lints" above), the benchmark
+  gate (see
   [`docs/MID_REWIRE_HARDENING.md`](./MID_REWIRE_HARDENING.md) §3.3),
   and any other CI jobs configured at the time.
 * **No force-push, no history rewrite.** Per the branch policy
