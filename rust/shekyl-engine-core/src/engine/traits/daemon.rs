@@ -73,6 +73,7 @@ use crate::engine::pending::TxHash;
 /// [`docs/V3_WALLET_DECISION_LOG.md`]: ../../../../../docs/V3_WALLET_DECISION_LOG.md
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Phase 2a-stub: production callers land with §3.1 fee policy.
 pub(crate) struct FeeEstimates {
     /// Fee rate corresponding to
     /// [`FeePriority::Economy`](super::super::FeePriority::Economy):
@@ -122,6 +123,7 @@ pub(crate) struct FeeEstimates {
 /// second attempt; that is success, not duplicate work.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Phase 2a-stub: production callers land with §5.2 retry contract.
 pub(crate) enum TxSubmitOutcome {
     /// The daemon accepted this transaction as a fresh submission.
     /// Subsequent submission of the same bytes returns
@@ -198,6 +200,7 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     /// [`Self::Error`] (mappable to
     /// [`IoError::Daemon`]) per §5.1's `RuntimeFailure` discipline,
     /// not as a panic of this method.
+    #[allow(dead_code)] // Phase 2a-stub: production callers land with §3.1 fee policy.
     fn get_fee_estimates(
         &self,
     ) -> impl std::future::Future<Output = Result<FeeEstimates, Self::Error>> + Send;
@@ -225,6 +228,7 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     /// # Panics
     ///
     /// Never panics. Per `get_fee_estimates`'s panic note.
+    #[allow(dead_code)] // Phase 2a-stub: production callers land with §5.2 retry contract.
     fn submit_transaction(
         &self,
         tx_bytes: Vec<u8>,

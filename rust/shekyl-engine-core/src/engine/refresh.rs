@@ -1392,7 +1392,7 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
 /// path always delivers `Ok(summary)`; consumers that want to
 /// abandon a successful refresh in flight have to drop the handle
 /// and reconcile against the next `progress().borrow()`.
-async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
+async fn run_refresh_task<S, D: DaemonEngine>(
     engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S, D>>>,
     opts: RefreshOptions,
     cancel: CancellationToken,
@@ -1400,7 +1400,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
     completion: tokio::sync::oneshot::Sender<Result<RefreshSummary, RefreshError>>,
     _slot_guard: SlotGuard,
 ) where
-    S: Send + Sync + 'static,
+    S: EngineSignerKind + Send + Sync + 'static,
     Engine<S, D>: Send + Sync,
 {
     // Build the scanner once (keys are immutable for the lifetime of
@@ -2329,8 +2329,11 @@ mod tests {
         // chain[0] as genesis. To scan heights 1..=100 (100 post-genesis
         // blocks), the chain needs heights 0..=100 — i.e. linear_chain(101).
         let chain = linear_chain(101);
-        let expected: Vec<(u64, [u8; 32])> = (1..=100)
-            .map(|h| (h, chain[h as usize].block.hash()))
+        let expected: Vec<(u64, [u8; 32])> = (1u64..=100)
+            .map(|h| {
+                let idx = usize::try_from(h).expect("test height fits in usize");
+                (h, chain[idx].block.hash())
+            })
             .collect();
 
         let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
@@ -3353,6 +3356,19 @@ mod refresh_handle_tests {
     };
     use tokio_util::sync::CancellationToken;
 
+    /// Test-fixture return shape for [`handle_with`]: the
+    /// caller-owned channel ends and observation join handle paired
+    /// with a [`RefreshHandle`] whose internal channels point at
+    /// them. Extracted as a type alias to keep `handle_with`'s
+    /// signature within `clippy::type_complexity`'s threshold.
+    type RefreshHandleFixture = (
+        RefreshHandle,
+        tokio::sync::oneshot::Sender<Result<RefreshSummary, RefreshError>>,
+        tokio::sync::watch::Sender<RefreshProgress>,
+        CancellationToken,
+        tokio::task::JoinHandle<()>,
+    );
+
     /// Build a handle whose channels are entirely caller-owned, so
     /// the test can fire each one explicitly. Returns a separate
     /// observation `JoinHandle` (parked on the same cancel token
@@ -3360,15 +3376,7 @@ mod refresh_handle_tests {
     /// wind-down — the handle's own `JoinHandle` is consumed by
     /// `is_running()` checks and may not be awaited directly
     /// without breaking the move-out story.
-    fn handle_with(
-        opts: RefreshOptions,
-    ) -> (
-        RefreshHandle,
-        tokio::sync::oneshot::Sender<Result<RefreshSummary, RefreshError>>,
-        tokio::sync::watch::Sender<RefreshProgress>,
-        CancellationToken,
-        tokio::task::JoinHandle<()>,
-    ) {
+    fn handle_with(opts: RefreshOptions) -> RefreshHandleFixture {
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
         let (progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress::initial());
         let cancel = CancellationToken::new();
