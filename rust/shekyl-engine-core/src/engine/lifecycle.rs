@@ -666,6 +666,87 @@ impl Engine<SoloSigner> {
     }
 }
 
+#[cfg(test)]
+#[allow(private_bounds)]
+impl<S: EngineSignerKind, D1: DaemonEngine> Engine<S, D1> {
+    /// Test-only constructor: rebuild the engine with `daemon`
+    /// substituted in place of the existing one, leaving every
+    /// other field unchanged.
+    ///
+    /// Intended for hybrid tests (per
+    /// `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.3) that need a
+    /// fully-constructed `Engine<SoloSigner>` — file, keys,
+    /// preferences, ledger, refresh slot — but want to drive
+    /// `start_refresh` (or any other daemon-touching method)
+    /// against a `MockDaemon` rather than a `DaemonClient` pointed
+    /// at an unreachable URL. The pattern is:
+    ///
+    /// ```ignore
+    /// let real = Engine::<SoloSigner>::create(params, dummy_daemon())?;
+    /// let mock = MockDaemon::with_seed(derive_seed(&master, ROLE_DAEMON));
+    /// let hybrid: Engine<SoloSigner, MockDaemon> = real.replace_daemon(mock);
+    /// ```
+    ///
+    /// The original `D1` daemon is dropped; the returned engine's
+    /// daemon field is the supplied `D2`. Net effect is that one
+    /// real `Engine::create` ceremony pays for as many hybrid
+    /// scenarios as the test composes.
+    ///
+    /// # Cleanup target (V3.2)
+    ///
+    /// V3.2 generalizes `Engine::create` and `Engine::open_full`
+    /// over `D: DaemonEngine` (default `DaemonClient`) alongside
+    /// the `DaemonEngine`-to-`pub` promotion. At that point the
+    /// production constructors accept any `D` directly, hybrid
+    /// tests construct their `Engine<SoloSigner, MockDaemon>` via
+    /// the public path without intermediate dummy-daemon ceremony,
+    /// and this `#[cfg(test)] pub(crate)` helper retires. The
+    /// retirement commit deletes both `replace_daemon` and the
+    /// dummy-daemon construction in `make_hybrid_engine_arc` (and
+    /// any sibling helpers that arrive in later Stage 1 PRs);
+    /// production paths are unaffected because they never named
+    /// this method.
+    ///
+    /// Pre-V3.2, the public `Engine::create` and `Engine::open_full`
+    /// constructors are concrete-typed (`daemon: DaemonClient`)
+    /// because their callers — `shekyl-cli`, `shekyl-engine-rpc`,
+    /// the upcoming JSON-RPC server cutover — only ever wire a
+    /// real daemon transport. Until V3.2, `replace_daemon` is the
+    /// test surface; production paths cannot reach it because
+    /// `pub(crate) #[cfg(test)]` excludes them from the published
+    /// API and from the non-test build.
+    pub(crate) fn replace_daemon<D2: DaemonEngine>(self, daemon: D2) -> Engine<S, D2> {
+        let Engine {
+            file,
+            keys,
+            ledger,
+            indexes,
+            reservations,
+            next_reservation_id,
+            prefs,
+            daemon: _old,
+            network,
+            capability,
+            refresh_slot,
+            _signer,
+        } = self;
+        Engine {
+            file,
+            keys,
+            ledger,
+            indexes,
+            reservations,
+            next_reservation_id,
+            prefs,
+            daemon,
+            network,
+            capability,
+            refresh_slot,
+            _signer,
+        }
+    }
+}
+
 /// Render a `shekyl-crypto-pq::CryptoError` into the static-string
 /// detail expected by [`KeyError::Primitive`]. The message shape is
 /// stable across the `shekyl-crypto-pq` API; we list the primitives
