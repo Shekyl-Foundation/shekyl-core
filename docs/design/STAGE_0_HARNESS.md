@@ -682,11 +682,30 @@ bench, `engine.synced_height()` (per §4.1). Engine construction
 ML-KEM keygen, filesystem layout, advisory lock acquisition,
 schema initialization) is **setup**, excluded from the measured
 region by `#[benches::with_setup]` (iai-callgrind) and `b.iter`'s
-closure scope (criterion). Two further rules — the **symmetry
-rule** and the **boundary rule**, each with its own subsection
-below — keep fixture teardown and fixture value-movement at the
-bench-function boundary out of the measured region. Reviewers
-verify the boundaries in PR review:
+closure scope (criterion). Three rules — each with its own
+subsection below — govern harness-measurement subtleties beyond
+the basic setup-exclusion above. They split along two axes:
+
+- Two rules address **iai-callgrind contamination** — work
+  counted that the bench author did not mean to count. The
+  **symmetry rule** keeps fixture teardown out of the measured
+  region; the **boundary rule** keeps fixture value-movement at
+  the bench-function boundary pointer-sized so memcpy cost does
+  not dominate.
+- One rule addresses **criterion amortization** — work elided
+  that the bench author *did* mean to count. The **hoisting
+  rule** names criterion's iter-amortization model: trivial
+  pure-read benches may produce per-iteration times below the
+  per-call cost because the optimizer legally hoists the call
+  out of `b.iter`'s inner loop.
+
+The three rules share one predictive structure: each names a
+relationship between what the bench source code looks like and
+what the harness actually measures. Together they let §4.4's
+two-anchor component model predict both numbers — iai
+instructions and criterion median_ns — from the same workload
+primitives, with the rules as the bridge terms. Reviewers verify
+the boundaries in PR review:
 
 - The `b.iter` closure body / iai-callgrind benchmark function
   body contains only the trait-method-equivalent expression
@@ -698,6 +717,10 @@ verify the boundaries in PR review:
   `(Box<Engine<S>>, TempDir)` shape (per the boundary rule
   below); the bench function returns the fixture rather than
   consuming it (per the symmetry rule below).
+- The PR description pre-states the workload's amortizability
+  class (per the hoisting rule below) so reviewers can verify
+  criterion's reported median_ns is consistent with the
+  pre-stated class.
 
 The threshold sanity-check (§4.4) catches fixture leakage by
 verifying the iai-callgrind `instructions` count is in the
@@ -875,10 +898,90 @@ the unified fixture shape. The shared
 `build_engine_fixture` and `drop_fixture` helpers in the
 canonical shape.
 
+**The hoisting rule (criterion's iter-amortization model).**
+Criterion's `b.iter` reports the **per-iteration time of the
+inner loop**, which the optimizer may legally reduce below the
+cost of a single call. For trivial pure-read benches (calls
+that return a value from unchanging fixture state with no side
+effects), the optimizer can hoist the call out of the loop —
+common subexpression elimination, loop-invariant code motion —
+leaving criterion's median_ns dominated by loop overhead rather
+than call cost. This is **correct behavior**, documented by
+`b.iter`'s contract: the harness reports per-iteration time of
+the inner loop, which the compiler is permitted to optimize.
+
+The two harnesses measure different things:
+
+- **Criterion** runs the bench body inside an N-iteration loop
+  to amortize timing overhead. The number is informative as
+  "the optimizer can hoist this across N iterations"; it is
+  *not* informative as "one call costs N picoseconds."
+  `black_box` prevents the optimizer from eliminating the
+  result entirely but does not prevent it from hoisting the
+  call's *body* out of the loop.
+- **iai-callgrind** invokes the bench function once per
+  measurement and instruments at the assembly level. Valgrind
+  counts every executed instruction; the optimizer cannot
+  amortize *executed* instructions across measurements that do
+  not loop. iai is amortization-immune by construction.
+
+This is why iai is the Tier-1 gate metric and criterion is
+Tier-2 informational: a future reader reconciling a criterion
+median_ns of 622 ps with an iai instruction count of 10 (the
+60 ps-per-instruction implication, ~16 GHz IPC, implausible)
+should reach for the hoisting rule first — the two harnesses
+are measuring different things, not the same thing with one of
+them broken.
+
+**Workload purity classes determine expected hoisting
+behavior.** The per-trait PR author pre-states the workload's
+class as part of §4.4's normative checklist:
+
+- **Trivial pure-read class** (criterion is hoisted; per-iter
+  time can be ≪ per-call cost). Examples: `synced_height`
+  (returns a `u64` field through a chain of immutable
+  references); `parameters_snapshot` (returns a value computed
+  from fixture state that does not change between iterations
+  on the same fixture). Criterion's median_ns is informative
+  about amortization success, not call cost.
+- **State-dependent compute class** (criterion is not hoisted;
+  per-iter time ≈ per-call cost). Examples: `balance` (linear
+  walk over `transfers` whose result depends on the fixture's
+  populated state); `current_emission(height)` with `height`
+  varying per-iteration via `b.iter_batched`. Criterion's
+  median_ns is informative about call cost, converted to
+  wall-clock time.
+
+The classification is not always binary.
+`current_emission(height)` with constant `height` is hoistable;
+with varying `height` (via `b.iter_batched`) it is not. The
+per-trait PR author chooses the criterion harness mode (`b.iter`
+vs `b.iter_batched`) and pre-states the resulting class so
+reviewers verify the actual capture matches.
+
+**Diagnostic signal for a violation of this rule:** captured
+criterion median_ns and iai-callgrind instructions disagree on
+their workload-class implications. If criterion's number
+suggests trivial-pure-read (per-iter time ≪ per-call cost
+converted to time) but iai's instruction count suggests
+state-dependent compute (proportional to N for some N implied
+by the fixture), the harness mode is wrong: the author picked
+`b.iter` for a class that wants `b.iter_batched`, or vice-versa.
+Reviewers verify the harness-mode choice matches the workload's
+actual amortizability.
+
+**This rule applies to all subsequent Stage 1 per-trait PR
+benches.** Authors copy the workload-class taxonomy when
+drafting their PR description's pre-stated expectations;
+reviewers verify the captured criterion behavior matches the
+pre-stated class before approving. The §4.4 normative
+checklist's "Pre-stated expected criterion behavior" item
+operationalizes the verification.
+
 **Why this distribution (gap-check meta-pattern).** Stage 0
-PR-2's scope is the result of six structural findings the
+PR-2's scope is the result of seven structural findings the
 pre-drafting gap-check (Findings 1–4) and threshold
-sanity-checks on successive captures (Findings 5–6) produced
+sanity-checks on successive captures (Findings 5–7) produced
 before the baseline was transcribed:
 
 1. **Finding 1** (resolved at the first design-doc tightening,
@@ -959,26 +1062,64 @@ before the baseline was transcribed:
    **class-level**: every `engine_trait_bench_*` bench inherits
    the boundary rule and the boxed-engine fixture shape from
    `benches/common/engine_fixture.rs`, not just `synced_height`.
+7. **Finding 7** (resolved here, §4.2's hoisting rule and
+   §4.4's two-anchor component model): the third
+   `workflow_dispatch` capture of
+   `engine_trait_bench_ledger_synced_height` (after Findings 5
+   and 6's symmetry- and boundary-rule fixes landed) reported
+   10 instructions, matching §4.4's component-model prediction
+   at the lower bound. The criterion sibling reported 622 ps
+   median per iteration, which implies ~16 GHz instructions per
+   second at the iai-derived 10 instructions per call —
+   implausible on the runner hardware. Investigation traced
+   the disagreement to criterion's `b.iter` amortizing the
+   trivial pure-read across N iterations: the optimizer hoists
+   `synced_height`'s field-access chain out of the inner loop,
+   leaving per-iteration time dominated by loop overhead
+   rather than call cost. The disagreement is not a
+   contamination but a structural property of criterion's
+   measurement model — per `b.iter`'s contract, the optimizer
+   is permitted to amortize work across iterations. Resolution:
+   §4.2's "hoisting rule" — criterion's iter-amortization
+   model is named explicitly, workload purity classes (trivial
+   pure-read vs state-dependent compute) are pinned, and §4.4's
+   component model becomes two-anchor (predicts both iai
+   instructions and criterion median_ns from the same workload
+   primitives, with hoisting amortization as the bridge term).
+   The fix is **class-level**: every `engine_trait_bench_*`
+   bench inherits the hoisting-rule classification, and the
+   per-trait PR description checklist gains a fifth item
+   ("Pre-stated expected criterion behavior") that forces each
+   per-trait PR author to name the workload's amortizability
+   class up front.
 
-The six findings share a structural feature: each is a case
-of "the discipline named a property, and the operational
-mechanism did not preserve the property by default." This is
-not a flaw in the discipline or the design doc — the
-discipline's purpose is to name the property, and the design
-doc's purpose is to operationalize it. The pre-drafting
-gap-check between PR-1 (design) and PR-2 (implementation) is
-the verification step where future-state claims meet today's
-code (Findings 1–4); threshold sanity-checks at successive
-`workflow_dispatch` captures (Findings 5–6) are the
-verification steps where the design's claims meet the
+The seven findings share a structural feature: each is a case
+of "the discipline named a measurement model; investigation
+revealed a structural mechanism affecting that model; the
+design had not named the mechanism, and the captured number
+diverged from the predicted shape until the mechanism was
+named." This is not a flaw in the discipline or the design
+doc — the discipline's purpose is to name the property, the
+design doc's purpose is to operationalize it, and both depend
+on iterative verification against today's code (Findings 1–4)
+and the harness's actual behavior (Findings 5–7). The
+pre-drafting gap-check between PR-1 (design) and PR-2
+(implementation) is the verification step where future-state
+claims meet today's code; threshold sanity-checks at
+successive `workflow_dispatch` captures (Findings 5–7) are
+the verification steps where the design's claims meet the
 harness's actual behavior — each capture's sanity-check
-surfaces a contamination layer; closing each layer matures
-the substrate. Findings 5 and 6 were surfaced by *successive*
-captures because each fix changed the shape of what the next
+surfaces a structural property the design had not named, and
+closing each by naming the property matures the substrate.
+Findings 5, 6, and 7 were surfaced by *successive* captures
+because each closure changed the shape of what the next
 capture could measure: with `Drop` excluded (Finding 5
 resolved), the previously-hidden boundary memcpy became the
-dominant cost (Finding 6 surfaced); with both excluded, the
-measured number sits at the model's predicted order.
+dominant cost (Finding 6 surfaced); with both excluded
+(Finding 6 resolved), the previously-hidden criterion-vs-iai
+magnitude disagreement became visible (Finding 7 surfaced);
+with all three named, both numbers sit at the model's
+predicted order under the two-anchor component model.
 
 **Pre-stated expectations are load-bearing.** Without §4.4's
 explicit component-model expectation (20–40 for
@@ -996,40 +1137,54 @@ description checklist, every new `engine_trait_bench_*` bench
 pre-states an expected range (with component model) in its PR
 description and the bench file's header comment.
 
-**Resolutions are class-level, not one-off.** Findings 2–6
+**Resolutions are class-level, not one-off.** Findings 2–7
 each surfaced through one specific bench (the workload-size
 question for `balance`; the test-helper-visibility question
 for the `synced_height` fixture; the workload-doesn't-exist
 question for the three deferred benches; the
 Drop-contamination question for the `synced_height` capture;
 the boundary-memcpy question for the `synced_height`
-re-capture), but the resolution in each case is a class-level
-rule that every bench in the family inherits. This is
-deliberate: a one-off patch on the surfacing bench would
-leave the next per-trait PR author rediscovering the same
-problem. The symmetry rule (Finding 5) and the boundary rule
-(Finding 6) both apply to all `engine_trait_bench_*` benches,
-not just the one whose capture surfaced them; the unified
-fixture shape `(Box<Engine<S>>, TempDir)` operationalizes
-both rules for every per-trait PR's bench at once.
+re-capture; the criterion-iai-disagreement question for the
+post-Box re-capture), but the resolution in each case is a
+class-level rule that every bench in the family inherits.
+This is deliberate: a one-off patch on the surfacing bench
+would leave the next per-trait PR author rediscovering the
+same problem. The symmetry rule (Finding 5), the boundary
+rule (Finding 6), and the hoisting rule (Finding 7) all
+apply to all `engine_trait_bench_*` benches, not just the
+one whose capture surfaced them; the unified fixture shape
+`(Box<Engine<S>>, TempDir)` operationalizes the symmetry and
+boundary rules at the fixture layer, and §4.4's normative
+checklist operationalizes the hoisting rule at the
+PR-description layer, both for every per-trait PR's bench at
+once.
 
-The **single principle** that resolved all six findings: *a
-measurement that pretends to be more than it is corrupts the
-discipline depending on it.* A baseline that re-baselines
+The **single principle** that resolved all seven findings:
+*a measurement that doesn't measure what it claims to measure
+corrupts the discipline depending on it.* The principle is
+verifiable: compare what the bench's name, the gate's
+contract, and the predictive model claim it measures against
+what the actual capture demonstrates it measures; the
+discipline catches divergence. A baseline that re-baselines
 isn't a baseline (Finding 2); a fixture that bypasses
 production isn't a fixture (Finding 3); a number measured
 against fresh-engine isn't a representative number for
 state-dependent workloads (Finding 4); a measurement
 dominated by Drop cost isn't a measurement of the call
 (Finding 5); a measurement dominated by boundary memcpy
-isn't a measurement of the call either (Finding 6). The
-design's scope is the result of this principle applied
-uniformly: **benches measure their workloads at the SHA
-where those workloads first exist as measurable units
-through representative fixtures with correctly-bounded
-measurement regions**, not earlier and not against synthetic
-compositions, and with neither construction, nor teardown,
-nor boundary value-movement leaking into the measurement.
+isn't a measurement of the call either (Finding 6); a
+measurement amortized across iterations isn't a per-call
+measurement (Finding 7). The design's scope is the result of
+this principle applied uniformly: **benches measure their
+workloads at the SHA where those workloads first exist as
+measurable units through representative fixtures with
+correctly-bounded measurement regions and explicitly-classified
+amortization shape**, not earlier and not against synthetic
+compositions, with neither construction, nor teardown, nor
+boundary value-movement leaking into the iai measurement, and
+with the criterion measurement's amortization shape pre-stated
+so the cumulative-delta discipline knows what its baseline
+represents.
 
 Stage 0 PR-2 ships the harness substrate
 (criterion + iai-callgrind discipline; new bench class; routing;
@@ -1116,15 +1271,19 @@ how it varies; the determinism check is the **dynamic** test
 (N numbers, equality comparison) and runs against the validated
 shape.
 
-**Static check: expected-value comparison against a component
-model.** Verify the captured iai-callgrind `instructions`
-count is in the expected range per §4.2's measurement-region
-discipline. The expected range is computed from a
-**component model** of the call's actual cost plus the
-unified-fixture-shape boundary cost, not a single
-order-of-magnitude estimate; with both the symmetry rule
-and the boundary rule in force, the residual cost is
-predictable to within a small constant.
+**Static check: two-anchor expected-value comparison against
+a component model.** Verify both captured numbers are
+consistent with the predicted shape per §4.2's
+measurement-region discipline: the iai-callgrind `instructions`
+count's absolute range (the **iai anchor**), and criterion's
+median_ns relative to iai's per-call cost (the **criterion
+anchor**, with the relationship determined by the workload's
+amortizability class per §4.2's hoisting rule). The expected
+ranges are computed from a **component model** of the call's
+actual cost plus the unified-fixture-shape boundary cost, not
+a single order-of-magnitude estimate; with the symmetry rule,
+boundary rule, and hoisting rule all in force, both anchors
+are predictable to within a small constant.
 
 **`synced_height`-class workloads (a few field accesses +
 one method call) plus a unified-fixture bench-function
@@ -1177,7 +1336,42 @@ N; the static check verifies the captured count against
 `N × per_element_cost + boundary_cost`. Same warning-territory
 and invalid bands apply, scaled by N.
 
-**Three causes for static-check failures, in order of
+**Criterion anchor: per-iteration time relationship to iai
+per-call cost.** Criterion's median_ns is predicted from iai's
+instruction count via
+`(instructions × per-instruction-time-on-runner) / amortization_factor`,
+where `per-instruction-time-on-runner` is ~0.3–0.5 ns on
+`ubuntu-latest` (typical x86-64 IPC under release-mode
+optimization) and `amortization_factor` is set by the workload's
+purity class (per §4.2's hoisting rule):
+
+- **Trivial pure-read class** (synced_height,
+  parameters_snapshot if returning a snapshot):
+  amortization_factor can be ≫ 1. Criterion's median_ns may be
+  ≪ iai's per-call time. *Example:* iai 10 instructions ×
+  0.3–0.5 ns ≈ 3–5 ns per call; criterion reports 622 ps
+  (0.6 ns), implying amortization_factor ≈ 5–8×. This is the
+  expected shape for the class; a number close to iai-derived
+  per-call time would be the *unexpected* shape and forces
+  investigation.
+- **State-dependent compute class** (balance,
+  current_emission with varying input): amortization_factor ≈ 1.
+  Criterion's median_ns should be ~iai-derived per-call time.
+  A significantly lower number indicates the harness mode is
+  wrong (the bench uses `b.iter` for a class that wants
+  `b.iter_batched`).
+
+The criterion anchor is verified **qualitatively** (right
+relationship for the class), not quantitatively (exact
+amortization_factor). Per-runner instruction-time variance
+plus per-runner amortization-factor variance compound; setting
+a tight criterion threshold against the iai number would
+conflict with the runner-portability framing in §4.5
+(criterion median_ns is recorded for completeness but is not
+the gate metric and is not expected to be portable across
+runner hardware).
+
+**Four causes for static-check failures, in order of
 likelihood:**
 
 1. **Fixture teardown leaking into the measured region** —
@@ -1204,6 +1398,22 @@ likelihood:**
    moved. Per the boundary rule in §4.2, large fixture
    components go behind `Box<T>` so the boundary moves only
    an 8-byte pointer.
+4. **Criterion median_ns and iai instructions disagree on
+   workload class** — criterion reports a per-iteration time
+   suggesting trivial pure-read (≪ iai-derived per-call cost
+   converted to time) but iai's instruction count suggests
+   state-dependent compute (proportional to the fixture's N
+   for a non-trivial N), or vice-versa. The bench's harness
+   mode is inconsistent with the workload: `b.iter` is being
+   used for a state-dependent compute class (so the
+   optimizer-pressure that `b.iter_batched` would prevent
+   leaks into the measurement), or `b.iter_batched` is being
+   used for a trivial pure-read class (so per-iteration
+   batching overhead obscures the actual amortization shape).
+   Per the hoisting rule in §4.2, the per-trait PR author
+   chooses the harness mode based on the workload's
+   amortizability class and pre-states the resulting expected
+   relationship; reviewers verify the actual capture matches.
 
 **The model is a prediction, not a contract.** The 20–40
 range is the design's prediction of the workload's actual
@@ -1238,8 +1448,8 @@ obligation as a normative requirement.
 
 **Per-trait PR description checklist (normative).** Every
 Stage 1 per-trait PR introducing a new
-`engine_trait_bench_*` bench must include the following four
-items in its PR description; reviewers gate on all four. A
+`engine_trait_bench_*` bench must include the following five
+items in its PR description; reviewers gate on all five. A
 PR description missing any item is not reviewable until the
 missing item is added.
 
@@ -1268,21 +1478,43 @@ missing item is added.
 4. **Known sources of contamination this PR's bench cannot
    hit.** Enumerate the inherited substrate rules
    (symmetry rule per §4.2; boundary rule per §4.2;
-   per-bench frozen-baseline-SHA alignment per §4.2 / §4.5;
-   visibility-expansion principle per §4.2; today-equivalent
-   call path per §4.1) and assert non-violation for each.
-   The PR description records the assertions; reviewers
-   verify each assertion against the bench file's actual
-   shape. This bullet is the load-bearing one — it forces
-   each PR author to enumerate the substrate's accumulated
-   state and confirm their bench is outside each rule's
-   failure surface, producing a *positive verification*
-   rather than absence-of-finding.
+   hoisting rule per §4.2; per-bench frozen-baseline-SHA
+   alignment per §4.2 / §4.5; visibility-expansion principle
+   per §4.2; today-equivalent call path per §4.1) and assert
+   non-violation for each. The PR description records the
+   assertions; reviewers verify each assertion against the
+   bench file's actual shape. This bullet is the load-bearing
+   one — it forces each PR author to enumerate the
+   substrate's accumulated state and confirm their bench is
+   outside each rule's failure surface, producing a *positive
+   verification* rather than absence-of-finding.
+5. **Pre-stated expected criterion behavior.** Name the
+   workload's amortizability class (trivial pure-read or
+   state-dependent compute, per §4.2's hoisting rule) and
+   pre-state criterion's expected median_ns relative to iai's
+   per-call cost. Two example forms:
+   - *"Trivial pure-read class: criterion median_ns expected
+     ≪ iai-derived per-call time (estimate: amortization_factor
+     of 5–10×, criterion median_ns < 1 ns for a synced_height-
+     class workload)."*
+   - *"State-dependent compute class: criterion median_ns
+     expected ≈ iai-derived per-call time (estimate:
+     amortization_factor ≈ 1, criterion median_ns ≈
+     instructions × 0.3–0.5 ns)."*
 
-The bench file's header comment mirrors items 1 and 2 (the
-"Expected post-fixture instructions" section, per the
-convention established by
-`engine_trait_bench_ledger_synced_height_iai.rs`). Items 3
+   The pre-statement names the harness-mode choice (`b.iter`
+   vs `b.iter_batched`) explicitly. Reviewers verify the
+   captured criterion behavior matches the pre-stated class;
+   a divergence forces investigation per §4.2's hoisting-rule
+   diagnostic before transcription. This item is the
+   criterion-side counterpart of item 1 (which pre-states
+   the iai expectation); together they anchor §4.4's
+   two-anchor static check at the PR-description layer.
+
+The bench file's header comment mirrors items 1, 2, and 5
+(the "Expected post-fixture instructions" + "Expected
+criterion behavior" sections, per the convention established
+by `engine_trait_bench_ledger_synced_height_iai.rs`). Items 3
 and 4 live in the PR description only.
 
 **Dynamic check: iai-callgrind determinism across N runs.**
@@ -1659,17 +1891,99 @@ entanglement where the implementation references a rule landing
 simultaneously, weakening the rule's testability-in-isolation
 property; the design-doc-first pattern breaks that entanglement.
 
-Stage 0 PR-2's symmetry rule (Finding 5) and boundary rule
-(Finding 6) both followed this pattern: each rule landed in a
-preparatory PR as a design-doc tightening; the per-bench fix
-commits in PR-2 referenced the merged rules. Subsequent
+Stage 0 PR-2's symmetry rule (Finding 5), boundary rule
+(Finding 6), and hoisting rule (Finding 7) all followed this
+pattern: each rule landed in a preparatory PR as a design-doc
+tightening before PR-2's implementation referenced it. Three
+preparatory PRs preceded PR-2's commit 5:
+
+- **PR-A** codified the symmetry rule + boundary rule and the
+  `Box<Engine<S>>` fixture pattern; closed Findings 5 and 6
+  at design-doc level so PR-2's commit 4c could reference the
+  merged rules.
+- **PR-B** rewrote `PERFORMANCE_BASELINE.md` to match §4.5's
+  per-bench frozen-baseline framing and amended
+  `V3_ENGINE_TRAIT_BOUNDARIES.md` §3.3.1 Component 1 to
+  correct wrong text (correction-of-existing-design, not new
+  substantive content); operationalized Findings 1–4 for the
+  document layer.
+- **PR-C** codified the hoisting rule and §4.4's two-anchor
+  component model; closed Finding 7 at design-doc level so
+  PR-2's commit 5 could transcribe both numbers (iai
+  instructions + criterion median_ns) into the post-PR-B
+  baseline document with workload-class context.
+
+Each preparatory PR closed a real finding the gap-checks
+surfaced; the cumulative result is that PR-2's implementation
+is straightforward application of merged rules rather than
+parallel discovery and codification of new ones. Subsequent
 per-trait PRs apply the same pattern when their own findings
 surface — design-doc tightenings are not folded inline as
 commits within the per-trait PR; they land as their own
-preparatory PRs off `dev`. This precedent makes future per-trait
-PRs simpler to scope: "our PR doesn't need to also land
-design-doc tightenings inline; we surface, tighten in a
+preparatory PRs off `dev`. This precedent makes future
+per-trait PRs simpler to scope: "our PR doesn't need to also
+land design-doc tightenings inline; we surface, tighten in a
 preparatory PR, then implement."
+
+**Bundling exception for corrections-of-existing-design.** PR-B
+demonstrates a narrow exception to the design-doc-first
+discipline: when a preparatory PR's content is a correction of
+text that's wrong as written (rather than introduction of new
+substantive content), the correction can bundle with its
+implementation rather than landing standalone. PR-B's §3.3.1
+Component 1 amendment was a correction of factually-wrong text
+fully determined by §4.5's already-merged per-bench framing; a
+standalone Round-N micro-review would have produced no
+information beyond "yes, it matches §4.5." The bundling cost
+was small (~10 lines added to PR-B's review surface) and the
+unbundling cost would have been a full review cycle for derived
+content.
+
+Future preparatory PRs can apply this exception **only** when
+the content meets all three conditions, each tight enough to
+prevent scope creep:
+
+a. **Correction of existing wrong text, not new content.** The
+   text being changed must already exist and be factually wrong
+   as written. Adding a paragraph that introduces new framing,
+   new rules, or new operationalization is *not* a correction
+   — it is new substantive content, which warrants its own
+   review cycle. The test: if the section being amended
+   currently says nothing about the topic the amendment
+   introduces, the amendment is new content.
+b. **Fully derived from already-merged design content.** The
+   correction's content must follow from design content that
+   has already been through its own review cycle and merged.
+   Corrections that re-interpret ambiguous design content —
+   picking one of multiple defensible readings — are *not*
+   derivations; they are substantive choices requiring their
+   own review. The test: would two reviewers reading the
+   merged design content arrive at the same correction
+   independently? If yes, derivation; if no, substantive
+   choice.
+c. **Small enough that bundling cost is genuinely lower than
+   a standalone review cycle.** PR-B's ~10-line amendment is
+   the operative example. As a soft anchor, treat ~15 lines as
+   the upper bound where bundling remains clearly cheaper than
+   a standalone cycle; structural rewrites of 50+ lines almost
+   always indicate that more is being changed than just text,
+   even if the changed text was technically wrong as written.
+   The threshold is judgment-bound, not numerical: a 20-line
+   correction whose content is mechanical may still bundle; a
+   12-line "correction" that re-frames a section may not.
+
+**Corrections that do not meet all three conditions land as
+standalone amendments before their implementation.** This
+clause is the load-bearing one — it prevents the exception
+from becoming the rule. The default discipline is
+design-doc-first; the exception is narrow and conjunctive;
+future authors who find their content failing any one of
+(a)–(c) treat that failure as a signal to land standalone, not
+a signal to argue the condition into compliance.
+
+Amendments introducing new substantive content remain bound by
+the design-doc-first discipline regardless of size or
+derivation pattern.
 
 **Stage 2+ method additions.** When a future PR adds a new
 hot-path method to an existing trait, that PR adds the bench
@@ -1825,20 +2139,33 @@ PR-2 reviewers verify against this design:
       the measured region). The deferred four benches'
       sanity-checks are carried out at their respective per-trait
       PRs per §4.6's per-bench deferred assignment.
-  - **Static check: expected-value comparison against the
-    component model** (per §4.2's Measurement region
-    discipline and §4.4's static check). Verify post-fixture
-    iai-callgrind `instructions` are in the expected range:
-    20–40 for `synced_height`-class workloads (call body +
-    unified-fixture-shape boundary cost); proportional-to-N
-    for `balance`-class workloads at the LedgerEngine PR.
-    Numbers in §4.4's warning territory (50–300) trigger the
-    three reviewer checks (boundary rule violation, hardware-RNG
-    leakage, model-refinement); numbers above the invalid
-    threshold (>300) require investigation closure before
-    transcription. This sub-check runs at PR-2 for the
-    Stage-0-frozen bench and at every per-trait PR introducing
-    a deferred bench.
+  - **Static check: two-anchor expected-value comparison
+    against the component model** (per §4.2's Measurement
+    region discipline and §4.4's static check). Verify both
+    anchors:
+    1. **iai anchor.** Post-fixture iai-callgrind
+       `instructions` are in the expected range: 20–40 for
+       `synced_height`-class workloads (call body +
+       unified-fixture-shape boundary cost); proportional-to-N
+       for `balance`-class workloads at the LedgerEngine PR.
+       Numbers in §4.4's warning territory (50–300) trigger
+       the three reviewer checks (boundary rule violation,
+       hardware-RNG leakage, model-refinement); numbers above
+       the invalid threshold (>300) require investigation
+       closure before transcription.
+    2. **Criterion anchor.** Captured criterion median_ns
+       relationship to iai's per-call cost is consistent with
+       the workload's amortizability class (per §4.2's
+       hoisting rule): trivial-pure-read class expects
+       criterion ≪ iai-derived per-call time; state-dependent
+       compute class expects criterion ≈ iai-derived per-call
+       time. A class-disagreement (cause 4 in §4.4's four
+       causes) indicates the harness mode is wrong for the
+       workload and forces investigation closure before
+       transcription.
+
+    This sub-check runs at PR-2 for the Stage-0-frozen bench
+    and at every per-trait PR introducing a deferred bench.
 - [ ] **Threshold sanity-check: criterion variance documentation**
       (Stage-0-frozen bench). Re-run criterion N times across a
       fresh `ubuntu-latest` runner for the Stage-0-frozen bench;
