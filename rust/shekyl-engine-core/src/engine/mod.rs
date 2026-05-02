@@ -161,7 +161,7 @@ pub(crate) mod test_support;
 pub use capability::Capability;
 pub use daemon::DaemonClient;
 pub use error::{IoError, KeyError, OpenError, PendingTxError, RefreshError, SendError, TxError};
-pub use lifecycle::{CapabilityInput, Credentials, OpenedEngine, EngineCreateParams};
+pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 pub use network::Network;
 pub use pending::{
     FeePriority, PendingTx, ReservationId, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
@@ -169,7 +169,7 @@ pub use pending::{
 pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
 };
-pub use signer::{SoloSigner, EngineSignerKind};
+pub use signer::{EngineSignerKind, SoloSigner};
 
 use std::collections::BTreeMap;
 use std::marker::PhantomData;

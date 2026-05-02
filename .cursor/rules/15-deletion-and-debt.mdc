@@ -45,6 +45,11 @@ even when they're obvious improvements. Reviewer attention is finite;
 bisection requires small commits. When you spot something worth fixing
 outside scope, write it down in `FOLLOWUPS.md` and keep going.
 
+However, this does not preclude disciplined "the file I'm editing for
+substantive reasons should be left in good shape after my edit." It's entirely
+appropriate and responsible to fix mechanical formatting errors in a file that 
+already being modified.
+
 ## V3.x as the long-term platform
 
 V3 ships with FCMP++ and hybrid PQC from genesis. V4 (lattice-only) is gated

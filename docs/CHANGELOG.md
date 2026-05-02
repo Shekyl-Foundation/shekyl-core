@@ -156,10 +156,84 @@
   callers; per `15-deletion-and-debt.mdc` "default: delete" and
   the no-`#[deprecated]`-without-deletion-target rule, the
   accessor is removed outright rather than retained as a
-  deprecation shim. Any downstream caller can replace
+  deprecation shim.   Any downstream caller can replace
   `client.inner().get_height()` with `client.get_height()`
   (the `Rpc` supertrait is in scope wherever `DaemonClient` is)
   with no functional difference.
+
+### Changed
+
+- **Rust workspace clippy and rustfmt CI gates** in
+  [`.github/workflows/build.yml`](../.github/workflows/build.yml)
+  (`Rust: audit, test, determinism` job, immediately after `cargo
+  audit`). Two gates added:
+
+  - `cargo fmt --all -- --check` — fails CI on any unformatted
+    Rust file across the 14-crate workspace.
+  - `cargo clippy --workspace --all-targets --keep-going --
+    -D warnings` — fails CI on any clippy finding of any
+    severity. The workspace already configured many lints at
+    deny-level via [`rust/Cargo.toml`](../rust/Cargo.toml)
+    `[workspace.lints.clippy]` (`let_underscore_must_use`,
+    `cast_possible_truncation`, `uninlined_format_args`, et al.);
+    `-D warnings` extends enforcement to the default-warn lints
+    (`clone_on_copy`, `type_complexity`, `dead_code`,
+    `bound_in_more_than_one_place`, …).
+
+  The pre-existing fmt and clippy debt was discharged in this PR's
+  preceding commits before the gates were wired:
+
+  - `cargo fmt --all` over 15 Rust files (mechanical
+    import-sort and module-declaration reordering, zero behavior
+    change).
+  - 12 machine-applicable clippy auto-fixes (9 `clone_on_copy`
+    deref + 3 `uninlined_format_args` inlines).
+  - 19 `let_underscore_must_use` cures via destructuring
+    assignment (`let _ = expr;` → `_ = expr;`) at best-effort
+    channel-send and join-drain sites.
+  - 7 substantive clippy findings cured with per-site rationale:
+    bound consolidation in `run_refresh_task`, `usize::try_from`
+    at the test-loop cast site, `RefreshHandleFixture` typedef,
+    and per-item `#[allow(dead_code)]` on the Phase 2a-stub
+    `DaemonEngine` trait surface.
+
+- **`.cursor/rules/15-deletion-and-debt.mdc` "While we're here"
+  carve-out.** New paragraph in the rule clarifying that the
+  "while we're here is the enemy" prohibition does not preclude
+  the disciplined practice of leaving files you are *already*
+  editing for substantive reasons in fmt-clean and clippy-clean
+  shape. The carve-out distinguishes:
+
+  - Undisciplined "while we're here" creep (still prohibited):
+    fixing arbitrary out-of-scope issues in unrelated files.
+  - Disciplined "leave the file you touched in good shape" (now
+    explicitly permitted): mechanical fmt/clippy cleanup *within
+    the substantive-edit set* such that the post-PR file is
+    fmt-clean and clippy-clean.
+
+  The cleanup-PR pattern this project ran for Stage 1 PR 1's
+  fmt-debt is now a one-time discharge, not a recurring practice.
+  Going forward, every file your PR touches is fmt-clean and
+  clippy-clean by the time the PR lands; mechanical findings in
+  files your PR does not otherwise touch remain out-of-scope.
+
+- **`docs/CONTRIBUTING.md` Rust style and lints section.** New
+  section between "CI baseline" and "Branch protection on `dev`"
+  documenting the two new gates, the workspace-vs-per-item-vs-
+  module suppression hierarchy (`[workspace.lints.clippy] allow`
+  in `rust/Cargo.toml` for project-wide misleading lints;
+  `#[allow(lint_name)]` with one-line rationale comment for
+  site-specific suppressions matching the existing project
+  convention; module-level allows reserved for explicit
+  reviewer sign-off), and the carve-out reference. The
+  "Status checks must pass" bullet under "Branch protection on
+  `dev`" was updated to enumerate the two new gates explicitly.
+
+  Discipline reversal recorded for future readers: from this PR
+  forward, the previous practice of noting "pre-existing fmt
+  debt in <files> is unmodified per the deletion-and-debt rule"
+  is no longer applicable. Fmt-clean is the gate, not a per-PR
+  option to defer.
 
 ### Changed (BREAKING)
 

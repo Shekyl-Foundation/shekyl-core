@@ -69,7 +69,7 @@ use shekyl_engine_state::{LedgerIndexes, WalletLedger};
 
 use super::error::{IoError, KeyError, OpenError};
 use super::traits::DaemonEngine;
-use super::{Capability, DaemonClient, SoloSigner, Engine, EngineSignerKind};
+use super::{Capability, DaemonClient, Engine, EngineSignerKind, SoloSigner};
 
 // ---------------------------------------------------------------------------
 // Credentials

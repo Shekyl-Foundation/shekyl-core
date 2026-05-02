@@ -867,7 +867,7 @@ impl<'a> ProgressEmitter<'a> {
     /// load-bearing.
     fn publish(&self, height: u64, blocks_processed: u64, phase: RefreshPhase) {
         if let Some(s) = self.sender {
-            let _ = s.send(RefreshProgress {
+            _ = s.send(RefreshProgress {
                 height,
                 blocks_processed,
                 blocks_total: self.blocks_total,
@@ -1392,7 +1392,7 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
 /// path always delivers `Ok(summary)`; consumers that want to
 /// abandon a successful refresh in flight have to drop the handle
 /// and reconcile against the next `progress().borrow()`.
-async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
+async fn run_refresh_task<S, D: DaemonEngine>(
     engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S, D>>>,
     opts: RefreshOptions,
     cancel: CancellationToken,
@@ -1400,7 +1400,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
     completion: tokio::sync::oneshot::Sender<Result<RefreshSummary, RefreshError>>,
     _slot_guard: SlotGuard,
 ) where
-    S: Send + Sync + 'static,
+    S: EngineSignerKind + Send + Sync + 'static,
     Engine<S, D>: Send + Sync,
 {
     // Build the scanner once (keys are immutable for the lifetime of
@@ -1414,7 +1414,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
     let mut scanner = match scanner_init {
         Ok(s) => s,
         Err(e) => {
-            let _ = completion.send(Err(e));
+            _ = completion.send(Err(e));
             return;
         }
     };
@@ -1429,10 +1429,10 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
             // misleading rollback to `height: 0` when the wallet
             // was already synced above zero. `Receiver::changed`
             // wakes once before the channel closes.
-            let mut terminal = progress.borrow().clone();
+            let mut terminal = *progress.borrow();
             terminal.phase = RefreshPhase::Cancelled;
-            let _ = progress.send(terminal);
-            let _ = completion.send(Err(RefreshError::Cancelled));
+            _ = progress.send(terminal);
+            _ = completion.send(Err(RefreshError::Cancelled));
             return;
         }
 
@@ -1461,7 +1461,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
         let daemon_tip = match daemon.get_height().await {
             Ok(t) => t,
             Err(e) => {
-                let _ = completion.send(Err(RefreshError::Io(IoError::Daemon {
+                _ = completion.send(Err(RefreshError::Io(IoError::Daemon {
                     detail: format!("get_height failed: {e}"),
                 })));
                 return;
@@ -1475,10 +1475,10 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
         // function's `# Cancellation` section for the full
         // checkpoint layout.
         if cancel.is_cancelled() {
-            let mut terminal = progress.borrow().clone();
+            let mut terminal = *progress.borrow();
             terminal.phase = RefreshPhase::Cancelled;
-            let _ = progress.send(terminal);
-            let _ = completion.send(Err(RefreshError::Cancelled));
+            _ = progress.send(terminal);
+            _ = completion.send(Err(RefreshError::Cancelled));
             return;
         }
 
@@ -1503,7 +1503,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
         // `blocks_processed` down; the watch channel preserves
         // latest-only semantics so subscribers see the restated
         // total.
-        let _ = progress.send(RefreshProgress {
+        _ = progress.send(RefreshProgress {
             height: current_synced,
             blocks_processed: 0,
             blocks_total,
@@ -1532,14 +1532,14 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
                 // override only `phase`. This is the third of the
                 // four cancel checkpoints documented on this
                 // function.
-                let mut terminal = progress.borrow().clone();
+                let mut terminal = *progress.borrow();
                 terminal.phase = RefreshPhase::Cancelled;
-                let _ = progress.send(terminal);
-                let _ = completion.send(Err(RefreshError::Cancelled));
+                _ = progress.send(terminal);
+                _ = completion.send(Err(RefreshError::Cancelled));
                 return;
             }
             Err(e) => {
-                let _ = completion.send(Err(e));
+                _ = completion.send(Err(e));
                 return;
             }
         };
@@ -1555,10 +1555,10 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
         // without rolling anything back. After this point the merge
         // is authoritative — see the function docstring.
         if cancel.is_cancelled() {
-            let mut terminal = progress.borrow().clone();
+            let mut terminal = *progress.borrow();
             terminal.phase = RefreshPhase::Cancelled;
-            let _ = progress.send(terminal);
-            let _ = completion.send(Err(RefreshError::Cancelled));
+            _ = progress.send(terminal);
+            _ = completion.send(Err(RefreshError::Cancelled));
             return;
         }
 
@@ -1566,7 +1566,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
         // merge is bounded by compute (no I/O), so subscribers
         // observing this phase are usually about to immediately
         // observe success or a retry.
-        let _ = progress.send(RefreshProgress {
+        _ = progress.send(RefreshProgress {
             height: summary
                 .processed_height_range
                 .end
@@ -1592,7 +1592,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
                 // we drop `progress` on return, the receiver's next
                 // `changed().await` returns `RecvError`, which is
                 // the watch-channel idiom for "no further updates."
-                let _ = completion.send(Ok(summary));
+                _ = completion.send(Ok(summary));
                 return;
             }
             Err(RefreshError::ConcurrentMutation { wallet, result }) => {
@@ -1603,7 +1603,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
                     result,
                     "run_refresh_task: snapshot race, retrying with fresh snapshot",
                 );
-                let _ = progress.send(RefreshProgress {
+                _ = progress.send(RefreshProgress {
                     height: current_synced,
                     blocks_processed: 0,
                     blocks_total,
@@ -1614,7 +1614,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
                 continue;
             }
             Err(other) => {
-                let _ = completion.send(Err(other));
+                _ = completion.send(Err(other));
                 return;
             }
         }
@@ -1629,7 +1629,7 @@ async fn run_refresh_task<S: EngineSignerKind, D: DaemonEngine>(
     let terminal = last_concurrent_mutation.unwrap_or(RefreshError::MalformedScanResult {
         reason: "run_refresh_task retry loop exited without an observed ConcurrentMutation",
     });
-    let _ = completion.send(Err(terminal));
+    _ = completion.send(Err(terminal));
     // _slot_guard drops here, releasing the slot.
 }
 
@@ -2329,8 +2329,11 @@ mod tests {
         // chain[0] as genesis. To scan heights 1..=100 (100 post-genesis
         // blocks), the chain needs heights 0..=100 — i.e. linear_chain(101).
         let chain = linear_chain(101);
-        let expected: Vec<(u64, [u8; 32])> = (1..=100)
-            .map(|h| (h, chain[h as usize].block.hash()))
+        let expected: Vec<(u64, [u8; 32])> = (1u64..=100)
+            .map(|h| {
+                let idx = usize::try_from(h).expect("test height fits in usize");
+                (h, chain[idx].block.hash())
+            })
             .collect();
 
         let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
@@ -3353,6 +3356,19 @@ mod refresh_handle_tests {
     };
     use tokio_util::sync::CancellationToken;
 
+    /// Test-fixture return shape for [`handle_with`]: the
+    /// caller-owned channel ends and observation join handle paired
+    /// with a [`RefreshHandle`] whose internal channels point at
+    /// them. Extracted as a type alias to keep `handle_with`'s
+    /// signature within `clippy::type_complexity`'s threshold.
+    type RefreshHandleFixture = (
+        RefreshHandle,
+        tokio::sync::oneshot::Sender<Result<RefreshSummary, RefreshError>>,
+        tokio::sync::watch::Sender<RefreshProgress>,
+        CancellationToken,
+        tokio::task::JoinHandle<()>,
+    );
+
     /// Build a handle whose channels are entirely caller-owned, so
     /// the test can fire each one explicitly. Returns a separate
     /// observation `JoinHandle` (parked on the same cancel token
@@ -3360,15 +3376,7 @@ mod refresh_handle_tests {
     /// wind-down — the handle's own `JoinHandle` is consumed by
     /// `is_running()` checks and may not be awaited directly
     /// without breaking the move-out story.
-    fn handle_with(
-        opts: RefreshOptions,
-    ) -> (
-        RefreshHandle,
-        tokio::sync::oneshot::Sender<Result<RefreshSummary, RefreshError>>,
-        tokio::sync::watch::Sender<RefreshProgress>,
-        CancellationToken,
-        tokio::task::JoinHandle<()>,
-    ) {
+    fn handle_with(opts: RefreshOptions) -> RefreshHandleFixture {
         let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
         let (progress_tx, progress_rx) = tokio::sync::watch::channel(RefreshProgress::initial());
         let cancel = CancellationToken::new();
@@ -3406,7 +3414,7 @@ mod refresh_handle_tests {
             handle_with(RefreshOptions::default());
 
         let rx = handle.progress();
-        let snap = rx.borrow().clone();
+        let snap = *rx.borrow();
         assert_eq!(snap.height, 0);
         assert_eq!(snap.blocks_processed, 0);
         assert_eq!(snap.blocks_total, 0);
@@ -3432,7 +3440,7 @@ mod refresh_handle_tests {
             })
             .expect("subscriber alive");
         rx.changed().await.expect("update delivered");
-        let snap = rx.borrow().clone();
+        let snap = *rx.borrow();
         assert_eq!(snap.height, 42);
         assert_eq!(snap.blocks_processed, 7);
         assert_eq!(snap.blocks_total, 100);
@@ -3616,16 +3624,16 @@ mod refresh_handle_tests {
             })
             .expect("subscriber alive");
         rx.changed().await.expect("scanning update delivered");
-        let mid = rx.borrow().clone();
+        let mid = *rx.borrow();
         assert_eq!(mid.height, 100);
         assert!(matches!(mid.phase, RefreshPhase::Scanning));
 
-        let mut terminal = progress_tx.borrow().clone();
+        let mut terminal = *progress_tx.borrow();
         terminal.phase = RefreshPhase::Cancelled;
         progress_tx.send(terminal).expect("subscriber alive");
         rx.changed().await.expect("terminal update delivered");
 
-        let last = rx.borrow().clone();
+        let last = *rx.borrow();
         assert!(
             matches!(last.phase, RefreshPhase::Cancelled),
             "phase preserved as Cancelled"
@@ -3914,7 +3922,7 @@ mod start_refresh_integration_tests {
             .await
             .expect("slot is reusable after producer wind-down");
         // Drain the second handle to keep the suite clean.
-        let _ = h2.join().await;
+        _ = h2.join().await;
     }
 
     // ── Hybrid scenarios: real Engine<SoloSigner> + MockDaemon ──────────
