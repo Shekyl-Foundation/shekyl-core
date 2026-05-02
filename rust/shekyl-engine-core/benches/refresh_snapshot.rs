@@ -35,7 +35,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
-use shekyl_oxide::primitives::Commitment;
 use shekyl_engine_core::__bench_internals::LedgerSnapshot;
 use shekyl_engine_state::{
     payment_id::PaymentId,
@@ -43,6 +42,7 @@ use shekyl_engine_state::{
     transfer::{TransferDetails, SPENDABLE_AGE},
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
+use shekyl_oxide::primitives::Commitment;
 use zeroize::Zeroizing;
 
 /// Mirrors `shekyl-engine-state::ledger_block::tests::sample_transfer`

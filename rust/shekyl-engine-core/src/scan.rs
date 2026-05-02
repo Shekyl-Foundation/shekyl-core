@@ -73,8 +73,8 @@
 
 use std::ops::Range;
 
-use shekyl_scanner::RecoveredWalletOutput;
 use shekyl_engine_state::staker_pool::AccrualRecord;
+use shekyl_scanner::RecoveredWalletOutput;
 
 /// Typed value produced by a scanner pass and consumed by
 /// [`Engine::apply_scan_result`](crate::engine::Engine).

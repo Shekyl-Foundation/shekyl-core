@@ -10,7 +10,7 @@
 //! natively in Rust via `shekyl-scanner`. All other methods route through
 //! the C++ wallet2 FFI dispatcher.
 
-use crate::engine::{Wallet2, EngineError};
+use crate::engine::{EngineError, Wallet2};
 use serde_json::Value;
 use tracing::debug;
 

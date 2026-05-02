@@ -25,9 +25,9 @@ use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use curve25519_dalek::Scalar;
 
+use shekyl_engine_state::{transfer::SPENDABLE_AGE, TransferDetails};
 use shekyl_oxide::primitives::Commitment;
 use shekyl_scanner::BalanceSummary;
-use shekyl_engine_state::{transfer::SPENDABLE_AGE, TransferDetails};
 
 fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
     let mut tx_hash = [0u8; 32];

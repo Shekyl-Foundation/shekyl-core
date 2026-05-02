@@ -71,8 +71,8 @@
 
 use std::collections::BTreeMap;
 
-use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
+use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 
 use crate::{
     engine::{traits::DaemonEngine, Engine, EngineSignerKind, RefreshError},
@@ -355,8 +355,8 @@ mod tests {
         staker_pool::AccrualRecord, LedgerBlock, LedgerIndexes, RecoveredWalletOutput, WalletOutput,
     };
 
-    use crate::scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
     use crate::engine::RefreshError;
+    use crate::scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
 
     use super::apply_scan_result_to_state;
 

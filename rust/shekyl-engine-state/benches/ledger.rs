@@ -28,10 +28,10 @@ use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use curve25519_dalek::Scalar;
 
-use shekyl_oxide::primitives::Commitment;
 use shekyl_engine_state::{
     transfer::SPENDABLE_AGE, BlockchainTip, LedgerBlock, TransferDetails, WalletLedger,
 };
+use shekyl_oxide::primitives::Commitment;
 
 /// Build a deterministic synthetic `TransferDetails` at `(seed, height)`.
 ///

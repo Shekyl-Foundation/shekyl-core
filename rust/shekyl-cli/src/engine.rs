@@ -5,7 +5,7 @@
 
 //! Engine context: owns the Wallet2 FFI handle and provides command-friendly methods.
 
-use shekyl_engine_rpc::{Wallet2, EngineError};
+use shekyl_engine_rpc::{EngineError, Wallet2};
 use std::path::PathBuf;
 
 pub struct EngineContext {

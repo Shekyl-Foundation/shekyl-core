@@ -12,9 +12,9 @@
 //! When the `rust-scanner` feature is enabled, scanner-backed read methods
 //! are routed to the native Rust scanner instead of the C++ FFI.
 
+use crate::engine::Wallet2;
 use crate::handlers;
 use crate::types::{JsonRpcRequest, JsonRpcResponse};
-use crate::engine::Wallet2;
 
 #[cfg(feature = "rust-scanner")]
 use crate::scanner_state::ScannerState;

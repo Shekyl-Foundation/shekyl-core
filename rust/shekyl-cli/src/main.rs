@@ -12,11 +12,11 @@
 pub mod commands;
 pub mod daemon;
 pub mod display;
+mod engine;
 pub mod errors;
 pub mod resolve;
 pub mod session;
 pub mod validate;
-mod engine;
 
 use clap::Parser;
 
