@@ -2,6 +2,135 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`DaemonEngine` trait extracted; `Engine<S>` parameterized over
+  the daemon implementor (Stage 1 PR 1, the first
+  trait-boundaries PR per
+  [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.5).** The Phase 2a `DaemonEngine` slice of the Stage 1
+  trait-extraction work lands as `pub(crate)` on
+  `shekyl-engine-core`. Every change in this PR is internal to the
+  crate; the public API surface (`Engine`, `OpenedEngine`,
+  `DaemonClient`, the lifecycle / refresh / pending re-exports
+  in `lib.rs`) is unchanged for non-test consumers.
+
+  - **`pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync +
+    'static`** in
+    [`engine::traits::daemon`](../rust/shekyl-engine-core/src/engine/traits/daemon.rs).
+    `type Error: Into<IoError>`. Stage 1 surface per §2.5: two
+    method signatures (`get_fee_estimates`,
+    `submit_transaction`) defined as `impl Future` (the
+    in-trait-async stable form) so the trait is dyn-incompatible
+    by design and every consumer monomorphizes against a concrete
+    `D`. Method bodies on `DaemonClient` are `todo!()` stubs
+    pending Phase 2a fee-policy / submit-policy work; the trait
+    surface is what's load-bearing for this PR.
+  - **`#[non_exhaustive] FeeEstimates { economy, standard,
+    priority: FeeRate }`** and **`#[non_exhaustive] enum
+    TxSubmitOutcome { Submitted { hash }, AlreadyKnown { hash }
+    }`** colocated with the trait. Both types are `pub(crate)`
+    and grow additively; Phase 2a may extend `FeeEstimates` with
+    `estimated_block_height` / `estimation_timestamp` etc. and
+    `TxSubmitOutcome` with richer dedup context without breaking
+    callers.
+  - **`Engine<S, D: DaemonEngine = DaemonClient>` and
+    `OpenedEngine<S, D: DaemonEngine = DaemonClient>`.** The
+    daemon component becomes a generic parameter with a default
+    that preserves the existing concrete-typed shape for
+    production callers (`shekyl-cli`, `shekyl-engine-rpc`, the
+    forthcoming Rust JSON-RPC server), while making the
+    daemon-touching surface substitutable for hybrid tests. The
+    parameterization compiles to identical code via monomorphization;
+    expected iai-callgrind delta on
+    `engine_trait_bench_ledger_synced_height` is 0% (10 → 10
+    instructions) since the bench's call path doesn't observe
+    the daemon parameter.
+    Each `pub` item bounded by the `pub(crate)` `DaemonEngine`
+    trait carries an `#[allow(private_bounds)]` annotation with a
+    centralized rationale on the `Engine` struct definition; the
+    annotations clear at Stage 4 when the trait promotes to `pub`
+    per `V3_ENGINE_TRAIT_BOUNDARIES.md` §1.4.
+  - **`DaemonClient` now implements `Rpc` directly** by
+    delegating each method to its inner `SimpleRequestRpc`. The
+    previous `DaemonClient::inner()` accessor is removed; in-tree
+    callers (`engine::refresh::*`) bind against `DaemonEngine`
+    or `Rpc` instead of reaching through to the wrapped
+    transport. `From<RpcError> for IoError` lands in
+    [`engine::error`](../rust/shekyl-engine-core/src/engine/error.rs)
+    to satisfy `DaemonEngine::Error: Into<IoError>` for the
+    `DaemonClient` impl.
+  - **`MockDaemon` (renamed from `MockRpc`) extends to a full
+    `DaemonEngine` implementor** in
+    [`engine::test_support`](../rust/shekyl-engine-core/src/engine/test_support.rs).
+    Adds `submit_transaction` deduplication by deterministic tx
+    hash, `get_fee_estimates` with seeded jitter, fee-error
+    queueing, submit-error queueing, and the `with_seed` /
+    `with_seed_and_chain` constructors that carry a
+    `ChaCha20Rng` for reproducibility. Failure-injection contract
+    fidelity per §6.1 is exercised by a new test suite in the
+    same module (deterministic submit hashing across clones,
+    submit dedup behaviour, fee jitter pinning, queued-error
+    drain semantics).
+  - **`MockDaemon` chain-indexing convention now matches the
+    real-daemon protocol** (`chain[0]` is genesis at height 0;
+    `chain[h]` is the block at height `h`; `get_height` returns
+    `chain.len()`). The previous off-by-one convention
+    (`chain[i]` was the block at height `i + 1`) was a latent
+    contradiction that surfaced as soon as a hybrid test
+    composed `MockDaemon` with the production producer's range
+    derivation. Aligning the conventions removes the
+    bug-attractor; the existing `refresh_driver_tests` were
+    re-arithmetic'd in the same commit so the test substrate has
+    one convention going forward.
+  - **`derive_seed(master: &[u8; 32], role: &[u8]) -> [u8; 32]`**
+    in `engine::test_support` (HKDF-SHA256 per
+    `V3_ENGINE_TRAIT_BOUNDARIES.md` §6.2). The first role tag
+    `ROLE_DAEMON = b"role/daemon"` lands in this PR; per-trait
+    roles join as their owning trait extracts. Pinned by a
+    fixture-based unit test so accidental changes to the role
+    tag or KDF construction surface as test failures.
+  - **`#[cfg(test)] pub(crate) Engine::replace_daemon<D2>(self,
+    daemon: D2) -> Engine<S, D2>`** in
+    [`engine::lifecycle`](../rust/shekyl-engine-core/src/engine/lifecycle.rs).
+    Move-rebuild helper for the §6.3 hybrid-construction
+    discipline: real `Engine::create` with a dummy `DaemonClient`
+    pays the lifecycle cost once (file lock, KDF, ledger init,
+    refresh slot), then `replace_daemon(mock)` swaps in the
+    `MockDaemon` for the measured region. Test-only visibility;
+    cleanup target is V3.2 alongside the production-constructor
+    generalization over `D: DaemonEngine` (documented at the
+    method site).
+  - **First end-to-end hybrid test under
+    `start_refresh_integration_tests::hybrid_linear_scan_5_blocks_advances_synced_height`.**
+    Wires `MockDaemon` as the engine's daemon component for a
+    real `start_refresh` invocation (fresh wallet at
+    `synced_height = 0`, six-block chain at heights 0..=5),
+    asserting (a) the producer derives `processed_height_range
+    == 1..6`, (b) `blocks_processed == 5` (post-genesis only),
+    (c) post-refresh `synced_height() == 5`, (d) the refresh
+    slot releases within 5s of `join().await` returning. This
+    is the §5.2 retry-contract reachability proof — the slot
+    release timing observation is the first coverage of the
+    success-path lifecycle for the refresh slot (the existing
+    `start_refresh_integration_tests` module exercises only the
+    unreachable-daemon error path).
+  - **Closes the FOLLOWUPS.md V3.1 row "Generic `DaemonClient`
+    so `MockRpc` can drive `start_refresh`".** The row's
+    close-condition (handle-layer end-to-end scenarios against
+    a synthetic block batch via a substitutable daemon
+    transport) is satisfied by the parameterization plus the
+    hybrid test above.
+
+  Performance gate per `V3_ENGINE_TRAIT_BOUNDARIES.md` §3.3.1:
+  the `engine_trait_bench_ledger_synced_height` cumulative-delta
+  row for this PR's tip is captured via GHA `workflow_dispatch`
+  (N=3 invariance) and appended to
+  [`docs/PERFORMANCE_BASELINE.md`](./PERFORMANCE_BASELINE.md) in
+  a follow-up commit on this branch before merge per the
+  "do-not-transcribe-laptop-captures" discipline established
+  during Stage 0 PR-2.
+
 ### Changed (BREAKING)
 
 - **Wallet → Engine rename across Rust workspace** (decision log

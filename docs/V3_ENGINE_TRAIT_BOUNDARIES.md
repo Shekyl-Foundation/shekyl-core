@@ -198,7 +198,7 @@ preservation. The two are complementary disciplines.
 | `ArchivalEngine` trait surface (per-shard state, archival operations) | V3.x — separate trait that consumes `EconomicsEngine` |
 | Anonymity-network-coordination trait (Tor/I2P transport for archival queries) | V3.x — currently flagged in §9 as a future-trait candidate; trait shape not designed |
 | View-only / hardware-offload `open_*` bodies | V3.0 follow-up; orthogonal |
-| Generic `DaemonClient` *implementation* | V3.1 — but its trait shape is pinned here so Stage 1's mocked-`Engine` test surface is not blocked on it |
+| Generic `DaemonClient` *implementation* | Stage 1 PR 1 landed the `Engine<S, D: DaemonEngine = DaemonClient>` parameterization (per §2.5; `MockDaemon`-driven `start_refresh` coverage now exists end-to-end via `Engine::replace_daemon`). V3.2 generalizes the production constructors (`Engine::create`, `Engine::open_full`) over `D` alongside the `DaemonEngine`-to-`pub` promotion, retiring the `#[cfg(test)] pub(crate) replace_daemon` helper. |
 
 ### 1.3 Why "concrete fields + generic-bounded methods" is the Stage 1 shape
 
@@ -1014,8 +1014,16 @@ code that uses `Rpc` methods (`get_height`,
 `get_scannable_block_by_number`) gets them through this constraint
 without re-importing. The wallet-specific methods
 (`get_fee_estimates`, `submit_transaction`) live on `DaemonEngine`
-itself, never on `Rpc`. `MockRpc` already implements `Rpc`; tests
-add `impl DaemonEngine for MockRpc` with the two extra methods.
+itself, never on `Rpc`. The test-support mock implements `Rpc`
+directly (rather than wrapping `SimpleRequestRpc`) and carries an
+`impl DaemonEngine for MockDaemon` that satisfies the trait
+contract — including the `submit_transaction` per-tx-hash dedup
+clause from §6.1 and the fee-estimate / submit error-queue surface
+that producer-and-driver tests inject failures through. The mock
+is `MockDaemon` in
+[`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
+(renamed from `MockRpc` when its surface widened to a full
+`DaemonEngine` implementor in Stage 1 PR 1).
 
 **Why `Clone + Send + Sync + 'static`** — same as Round 1: the
 daemon handle is shared by clone with the producer task in
@@ -3368,20 +3376,23 @@ material, and no filesystem.
 
 Today's test coverage:
 
-- **Producer-only:** `MockRpc` in [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
+- **Producer-only:** `MockDaemon` in [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
   drives `produce_scan_result` directly. Twelve producer tests
   cover the linear-scan / reorg / RPC-failure / cancellation paths.
 - **Driver-only with partial mocking:** the driver-side tests in
   `engine/refresh.rs` build a real `Engine<SoloSigner>` against an
   unreachable `SimpleRequestRpc` URL and assert error-path
-  behavior. No tests exercise `start_refresh` against a synthetic
-  chain end-to-end because there is no way to plug a `MockRpc`
-  into `DaemonClient`.
-
-Stage 1 closes this gap. With `DaemonEngine` as a trait
-(`MockRpc: DaemonEngine`), the existing chain-injection harness
-(`replace_chain_from`, `queue_height_error`, `queue_block_error`)
-becomes available to `start_refresh` integration tests directly.
+  behavior. Stage 1 PR 1 (`DaemonEngine`) closes the
+  end-to-end-against-synthetic-chain gap that previously existed:
+  with `MockDaemon: DaemonEngine` and `Engine<S, D: DaemonEngine =
+  DaemonClient>`, the existing chain-injection harness
+  (`replace_chain_from`, `queue_height_error`, `queue_block_error`)
+  is now available to `start_refresh` integration tests directly,
+  via the `#[cfg(test)] pub(crate) Engine::replace_daemon` helper
+  that swaps the daemon component on a real-engine fixture
+  post-construction. The first hybrid test under
+  `start_refresh_integration_tests::hybrid_linear_scan_5_blocks_advances_synced_height`
+  exercises this path end-to-end.
 `MockKey` and `MockPersistence` in particular let tests skip the
 `AllKeysBlob` rederivation cost and the file-open advisory-lock
 ceremony, which today add ~50–200 ms per test.
@@ -4701,8 +4712,8 @@ the threshold conditions is rejected as conjectural.
 - [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md) §*"Pending-tx protocol: two-phase build/submit/discard over single-phase callback"* (2026-04-27) — the `PendingTxEngine` surface.
 - [`rust/shekyl-engine-core/src/engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs) `run_refresh_task` rustdoc — the four-checkpoint cancellation contract reproduced inline in §7.
 - [`rust/shekyl-engine-core/src/engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs) `Engine::refresh` rustdoc (post-2026-04-28) — the sync-vs-async cancellation split.
-- [`rust/shekyl-engine-core/src/engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs) — current `MockRpc` and `make_synthetic_block` scaffolding.
-- [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) "Generic `DaemonClient`" — closed in spec by §2.5 (two-trait shape); implementation V3.1.
+- [`rust/shekyl-engine-core/src/engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs) — current `MockDaemon` (renamed from `MockRpc` in Stage 1 PR 1, extended into a full `DaemonEngine` implementor with submit dedup, fee-jitter, and queued-error injection per §6.1) and `make_synthetic_block` scaffolding; `derive_seed` helper per §6.2.
+- [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) "Generic `DaemonClient`" — closed: spec by §2.5 (two-trait shape); Stage 1 implementation by PR 1 (§2.5 surface + `Engine<S, D>` parameterization + first hybrid test); production-constructor generalization deferred to V3.2 alongside the `DaemonEngine`-to-`pub` promotion.
 - [`docs/CI_BASELINE.md`](CI_BASELINE.md) — `shekyl-oxide` divergence-canary policy referenced in §2.5's upstream/downstream rationale.
 - [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc) — the "4–6 review rounds before any Rust" rule this document is run against.
 - [PR #20](https://github.com/Shekyl-Foundation/shekyl-core/pull/20) — the live review surface for this spec (Interpretation D: linear-append commits per round).

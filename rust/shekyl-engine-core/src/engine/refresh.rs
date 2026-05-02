@@ -3341,11 +3341,13 @@ mod refresh_handle_tests {
     //! `start_refresh`, idempotent cancel, `mem::forget` leak
     //! semantics) live in commit 5. Integration coverage for the
     //! real producer through `Engine::start_refresh` lives in
-    //! commit 6 and currently uses an unreachable `DaemonClient`
-    //! to assert handle-shape invariants and the daemon-IO error
-    //! mapping; `MockDaemon`-driven coverage is deferred (see
-    //! `docs/FOLLOWUPS.md`: "Generic `DaemonClient` so `MockDaemon`
-    //! can drive `start_refresh`").
+    //! `start_refresh_integration_tests` below, which carries
+    //! both fixture flavours: an unreachable-`DaemonClient`
+    //! flavour for handle-shape invariants and daemon-IO error
+    //! mapping, and a `MockDaemon`-driven hybrid flavour
+    //! (added in Stage 1 PR 1, per
+    //! `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.3) that exercises
+    //! the producer end-to-end against synthetic chain state.
     use super::{
         RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshSummary,
     };
