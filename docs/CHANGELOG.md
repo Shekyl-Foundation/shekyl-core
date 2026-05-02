@@ -2426,6 +2426,65 @@
   branches with a `v*` tag in their ancestry, which is every branch
   off `dev` since the first release tag.
 
+### Security
+
+- **`rand` 0.8.5 → 0.8.6** in
+  [`rust/Cargo.lock`](../rust/Cargo.lock) (RUSTSEC-2026-0097 /
+  GHSA-cq8v-f236-94qc, severity Low). The advisory describes an
+  unsoundness in `ThreadRng::TryRng` that can produce aliased
+  mutable references — Undefined Behaviour — when all of the
+  following hold simultaneously: (a) the `log` and `thread_rng`
+  features are enabled, (b) a custom `log::Logger` is installed,
+  (c) the custom logger calls `rand::rng()` /
+  `rand::thread_rng()` and any `TryRng` (formerly `RngCore`)
+  method on it, and (d) `ThreadRng` reseeds while called from
+  inside the logger.
+
+  This bump is **defense-in-depth, not active-vulnerability fix**:
+  the project's custom logger lives in
+  [`shekyl-logging`](../rust/shekyl-logging/) and a workspace-wide
+  audit confirmed it does not call `rand::rng()` or
+  `rand::thread_rng()` from any logger code path. The exploit
+  precondition (c) is therefore not reachable from current shekyl
+  code. The bump still lands so that future logger work does not
+  accidentally reach into the unsoundness window.
+
+  Application is a one-line `Cargo.lock` change
+  (`cargo update --precise 0.8.6 -p rand@0.8.5`) plus the
+  cascading edge updates in seven downstream consumers'
+  dependency blocks (`monero-rpc-utils`, `chacha20poly1305`,
+  `shekyl-crypto-pq`, `shekyl-engine-core`, `shekyl-fcmp`,
+  `shekyl-staking`, `fcmp_pp`). No source changes; the workspace
+  constraints (`rand = "0.8"`, caret-bounded) accept the bump
+  without Cargo.toml edits.
+
+  The companion advisory `RUSTSEC-2026-0097` against the
+  fuzz-only lockfile
+  ([`rust/shekyl-crypto-pq/fuzz/Cargo.lock`](../rust/shekyl-crypto-pq/fuzz/Cargo.lock))
+  is intentionally **not** addressed in this PR. That lockfile
+  is stale relative to the workspace (path-dep version markers
+  still at `v2.0.0` pre-Wallet→Engine rename); a precise rand
+  bump there cascades into ~50 lines of unrelated lockfile
+  refresh churn. The exploit precondition is equally
+  unreachable from fuzz harness code, and the cleanup belongs
+  with the next routine fuzz-Cargo.lock hygiene pass rather
+  than slipped into this focused security bump.
+
+  `cargo audit` exits clean against the bumped lockfile (the
+  RUSTSEC entry no longer matches any resolved version);
+  Cargo.toml constraints unchanged; `cargo check --workspace
+  --tests`, `cargo fmt --all -- --check`, and
+  `cargo clippy --workspace --all-targets --keep-going --
+  -D warnings` all exit 0.
+
+  Two further open dependabot alerts on
+  `Shekyl-Foundation/shekyl-core` are stale and self-clear on the
+  next `main` rescan: `rustls-webpki` GHSA-82j2-j2ch-gfr8
+  (already at the patched `0.103.13` in the workspace lockfile)
+  and `cryptography` (pip) CVE-2026-39892 (the alert points at
+  `tools/reference/requirements.txt`, which no longer exists in
+  the repo). Neither requires a code change.
+
 ## [3.1.0-alpha.5] - 2026-04-22
 
 ### Security
