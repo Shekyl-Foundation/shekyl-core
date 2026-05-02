@@ -235,6 +235,65 @@
   is no longer applicable. Fmt-clean is the gate, not a per-PR
   option to defer.
 
+### Fixed
+
+- **Workspace clippy gate green on Rust toolchain 1.95.0.** Three
+  newly-deny-able clippy 1.95 findings cured with mechanical,
+  behavior-identical fixes after the toolchain on the
+  `ubuntu-latest` GitHub Actions runner advanced past 1.94.0 (which
+  is what the preceding `chore/workspace-fmt-clippy-baseline` PR
+  was triaged against). Without this fix the
+  `cargo clippy --workspace --all-targets --keep-going --
+  -D warnings` gate added in that PR rejects every push to `dev`.
+
+  - `clippy::useless_conversion` (×3 in vendored
+    `rust/shekyl-oxide/`):
+    `for (a, b) in xs.into_iter().zip(ys.into_iter())` →
+    `for (a, b) in xs.into_iter().zip(ys)`. `Iterator::zip`
+    accepts any `IntoIterator`, so the inner `.into_iter()` was
+    redundant. Sites:
+    - [`rust/shekyl-oxide/crypto/generalized-bulletproofs/src/inner_product.rs`](../rust/shekyl-oxide/crypto/generalized-bulletproofs/src/inner_product.rs)
+      lines 216 and 220 (BP++ inner-product reduction
+      `g_bold` / `h_bold` recursion).
+    - [`rust/shekyl-oxide/shekyl-oxide/fcmp/bulletproofs/src/plus/weighted_inner_product.rs`](../rust/shekyl-oxide/shekyl-oxide/fcmp/bulletproofs/src/plus/weighted_inner_product.rs)
+      line 380 (verifier folding loop over commitment pairs
+      `(L_i, R_i)`).
+  - `clippy::unnecessary_sort_by` (×2 in Shekyl-native
+    `shekyl-scanner`):
+    [`rust/shekyl-scanner/src/coin_select.rs`](../rust/shekyl-scanner/src/coin_select.rs)
+    lines 114–115. Both calls sort descending by the second
+    tuple element; rewrote to
+    `sort_by_key(|b| std::cmp::Reverse(b.1))` per clippy's
+    suggestion. Behavior-identical sort key, no change in
+    coin-selection ordering.
+
+  Vendored-divergence framing (in keeping with `10-shekyl-first.mdc`):
+  the vendored copies under `rust/shekyl-oxide/` are already
+  Shekyl-modified relative to the `monero-oxide` fork pin
+  (`UPSTREAM_MONERO_OXIDE_COMMIT=3933664`, sync 2026-04-25); a
+  prior commit (`44fe03453 chore: resolve all clippy warnings
+  across the Rust workspace`) rewrote `inner_product.rs` with
+  +360/-332 against upstream for clippy compliance under
+  toolchain 1.94. There is no upstream fix to cherry-pick — the
+  same pattern exists at the same lines in upstream
+  (`monero-oxide` `crypto/generalized-bulletproofs/src/inner_product.rs:204,208`),
+  last touched 2025-08-30, and would fail the same lint under
+  clippy 1.95. This PR continues the precedent of treating
+  `rust/shekyl-oxide/` as Shekyl-customized vendored code rather
+  than a frozen mirror.
+
+  Affected-crate test runs locally (release profile, toolchain
+  1.95.0):
+
+  | Crate | Tests passing |
+  | --- | --- |
+  | `generalized-bulletproofs` (with `--features tests`) | 5 / 5 |
+  | `shekyl-bulletproofs` | 5 / 5 |
+  | `shekyl-scanner` | 47 / 47 (1 ignored, pre-existing) |
+
+  Local `cargo clippy --workspace --all-targets --keep-going --
+  -D warnings` on toolchain 1.95.0 returns exit 0 after the fixes.
+
 ### Changed (BREAKING)
 
 - **Wallet → Engine rename across Rust workspace** (decision log
