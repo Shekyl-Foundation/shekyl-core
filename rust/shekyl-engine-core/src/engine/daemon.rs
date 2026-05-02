@@ -75,17 +75,6 @@ impl DaemonClient {
     pub fn new(inner: SimpleRequestRpc) -> Self {
         Self { inner }
     }
-
-    /// Borrow the underlying RPC client. Intended for internal use by
-    /// `shekyl-engine-core`'s scan / send paths and for advanced callers
-    /// that need to issue daemon RPCs not yet exposed as wallet methods.
-    ///
-    /// Stable across V3.x: the inner type is `SimpleRequestRpc` until a
-    /// transport migration plan ships, at which point this accessor
-    /// changes signature and the migration commit announces it.
-    pub fn inner(&self) -> &SimpleRequestRpc {
-        &self.inner
-    }
 }
 
 impl Rpc for DaemonClient {

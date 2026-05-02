@@ -1457,7 +1457,7 @@ async fn run_refresh_task<S: EngineSignerKind>(
         // refresh deterministically reports `Cancelled` rather than
         // proceeding into the per-block scan or surfacing as an
         // unrelated daemon error.
-        let daemon_tip = match daemon.inner().get_height().await {
+        let daemon_tip = match daemon.get_height().await {
             Ok(t) => t,
             Err(e) => {
                 let _ = completion.send(Err(RefreshError::Io(IoError::Daemon {
@@ -1511,7 +1511,7 @@ async fn run_refresh_task<S: EngineSignerKind>(
 
         let emitter = ProgressEmitter::new(&progress, blocks_total);
         let produced = produce_scan_result(
-            daemon.inner(),
+            &daemon,
             &mut scanner,
             &snapshot,
             height_range,
@@ -1872,7 +1872,7 @@ impl<S: EngineSignerKind> Engine<S> {
         let scanner_cell = std::cell::RefCell::new(scanner);
 
         self.refresh_with(opts, |_attempt, snapshot| {
-            let daemon_tip = runtime.block_on(daemon.inner().get_height()).map_err(|e| {
+            let daemon_tip = runtime.block_on(daemon.get_height()).map_err(|e| {
                 RefreshError::Io(IoError::Daemon {
                     detail: format!("get_height failed: {e}"),
                 })
@@ -1889,7 +1889,7 @@ impl<S: EngineSignerKind> Engine<S> {
 
             let mut scanner = scanner_cell.borrow_mut();
             let produced = runtime.block_on(produce_scan_result(
-                daemon.inner(),
+                &daemon,
                 &mut scanner,
                 snapshot,
                 height_range,
