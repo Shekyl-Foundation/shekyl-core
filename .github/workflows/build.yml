@@ -543,6 +543,28 @@ jobs:
           done
           echo "cargo audit failed after 3 attempts" >&2
           exit 1
+      - name: cargo fmt --check (workspace)
+        working-directory: rust
+        # Fails CI on any unformatted Rust file. Pairs with the clippy
+        # gate below; both land together in chore/workspace-fmt-clippy-
+        # baseline. Pre-existing fmt debt was discharged in that PR's
+        # first commit (`cargo fmt --all` over the whole workspace) and
+        # the .cursor/rules/15-deletion-and-debt.mdc carve-out
+        # (refined in the same commit) makes "leave the file you
+        # touched fmt-clean" the going-forward expectation.
+        run: cargo fmt --all -- --check
+      - name: cargo clippy -D warnings (workspace, all targets)
+        working-directory: rust
+        # Fails CI on any clippy finding (warning or error). The
+        # workspace's [lints.clippy] section in rust/Cargo.toml already
+        # configures many lints at deny-level (let_underscore_must_use,
+        # cast_possible_truncation, uninlined_format_args, …); this
+        # gate adds `-D warnings` so the remaining default-warn lints
+        # (clone_on_copy, type_complexity, dead_code, …) are equally
+        # enforced. `--keep-going` collects findings across the whole
+        # workspace in one pass instead of stopping at the first crate's
+        # first error, so reviewers see the full triage in one log.
+        run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp
