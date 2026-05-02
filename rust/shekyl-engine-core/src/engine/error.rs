@@ -415,10 +415,17 @@ impl From<shekyl_rpc::RpcError> for IoError {
     /// either leak the upstream type into the wallet-core API or
     /// require duplicating the upstream's variant taxonomy here.
     /// Stringification keeps the boundary clean while preserving the
-    /// failure detail for logs and JSON-RPC error responses.
+    /// failure detail for logs and JSON-RPC error responses. The
+    /// upstream type carries a `thiserror`-derived `Display` impl
+    /// whose `#[error("...")]` attributes produce stable, human-
+    /// readable messages (`"connection error (...)"`,
+    /// `"invalid transaction (...)"`, etc.); `Display` is the
+    /// canonical stringification rather than `Debug`, which would
+    /// leak variant names and bracket-quoted field shapes that are
+    /// brittle to upstream refactors.
     fn from(err: shekyl_rpc::RpcError) -> Self {
         IoError::Daemon {
-            detail: format!("{err:?}"),
+            detail: err.to_string(),
         }
     }
 }
