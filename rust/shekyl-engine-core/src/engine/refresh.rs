@@ -70,10 +70,10 @@ use std::time::Duration;
 
 use curve25519_dalek::{edwards::CompressedEdwardsY, scalar::Scalar};
 use shekyl_crypto_pq::account::AllKeysBlob;
+use shekyl_engine_state::{LedgerBlock, ReorgBlocks};
 use shekyl_oxide::transaction::Input;
 use shekyl_rpc::{Rpc, RpcError, ScannableBlock};
 use shekyl_scanner::{ScanError, Scanner, ViewPair};
-use shekyl_engine_state::{LedgerBlock, ReorgBlocks};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 use zeroize::Zeroizing;
@@ -2055,7 +2055,7 @@ mod tests {
     use zeroize::Zeroizing;
 
     use super::*;
-    use crate::engine::test_support::{make_synthetic_block, MockRpc};
+    use crate::engine::test_support::{make_synthetic_block, MockDaemon, DEFAULT_TEST_SEED};
 
     // ── Helpers ────────────────────────────────────────────────
 
@@ -2216,7 +2216,7 @@ mod tests {
     /// real timing.
     #[derive(Clone)]
     struct CancelAfterNFetches {
-        inner: MockRpc,
+        inner: MockDaemon,
         cancel: CancellationToken,
         counter: Arc<Mutex<u32>>,
         cancel_after: u32,
@@ -2263,7 +2263,7 @@ mod tests {
     /// a typed no-op result.
     #[tokio::test]
     async fn empty_range_returns_typed_noop() {
-        let rpc = MockRpc::with_chain(linear_chain(3));
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
@@ -2293,7 +2293,7 @@ mod tests {
     /// the typed `Cancelled` variant.
     #[tokio::test]
     async fn pre_cancel_returns_cancelled() {
-        let rpc = MockRpc::with_chain(linear_chain(3));
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
@@ -2329,7 +2329,7 @@ mod tests {
             .map(|(i, b)| (i as u64 + 1, b.block.hash()))
             .collect();
 
-        let rpc = MockRpc::with_chain(chain);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
@@ -2361,7 +2361,7 @@ mod tests {
     #[tokio::test]
     async fn range_truncation_respects_end_bound() {
         let chain = linear_chain(100);
-        let rpc = MockRpc::with_chain(chain);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
@@ -2393,7 +2393,7 @@ mod tests {
     async fn key_image_collected_from_non_miner_input() {
         let key_image_bytes = [0xAB; 32];
         let block = make_block_with_spending_tx(1, [0u8; 32], key_image_bytes);
-        let rpc = MockRpc::with_chain(vec![block]);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, vec![block]);
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
@@ -2470,7 +2470,7 @@ mod tests {
         let snapshot = snapshot_recording_chain(&original);
 
         // Daemon serves the NEW chain.
-        let rpc = MockRpc::with_chain(new_chain);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, new_chain);
         let mut scanner = dummy_scanner();
         let cancel = CancellationToken::new();
 
@@ -2558,7 +2558,7 @@ mod tests {
             p_alt = block.block.hash();
             alt.push(block);
         }
-        let rpc = MockRpc::with_chain(alt);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, alt);
         let mut scanner = dummy_scanner();
         let cancel = CancellationToken::new();
 
@@ -2594,7 +2594,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn transient_rpc_errors_recover_within_budget() {
         let chain = linear_chain(3);
-        let rpc = MockRpc::with_chain(chain);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
         rpc.inject_block_fetch_failure(2, RpcError::ConnectionError("flake-1".into()));
         rpc.inject_block_fetch_failure(2, RpcError::ConnectionError("flake-2".into()));
         let mut scanner = dummy_scanner();
@@ -2626,7 +2626,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn persistent_rpc_errors_yield_max_retries_exhausted() {
         let chain = linear_chain(3);
-        let rpc = MockRpc::with_chain(chain);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
         for i in 0..MAX_BLOCK_FETCH_RETRIES {
             rpc.inject_block_fetch_failure(2, RpcError::ConnectionError(format!("persist-{i}")));
         }
@@ -2663,7 +2663,7 @@ mod tests {
     /// "daemon-height-shrinks-mid-loop" path.
     #[tokio::test(start_paused = true)]
     async fn daemon_chain_too_short_yields_max_retries_exhausted() {
-        let rpc = MockRpc::with_chain(linear_chain(2));
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(2));
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
@@ -2699,7 +2699,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_scannable_yields_scan_error() {
         let block = make_malformed_scannable(1, [0u8; 32]);
-        let rpc = MockRpc::with_chain(vec![block]);
+        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, vec![block]);
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
         let cancel = CancellationToken::new();
@@ -2730,7 +2730,7 @@ mod tests {
     /// [`ProduceError::Cancelled`] before fetching block 2.
     #[tokio::test]
     async fn cancel_observed_between_blocks() {
-        let inner = MockRpc::with_chain(linear_chain(5));
+        let inner = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(5));
         let cancel = CancellationToken::new();
         let rpc = CancelAfterNFetches {
             inner,
@@ -3322,8 +3322,8 @@ mod refresh_handle_tests {
     //! real producer through `Engine::start_refresh` lives in
     //! commit 6 and currently uses an unreachable `DaemonClient`
     //! to assert handle-shape invariants and the daemon-IO error
-    //! mapping; `MockRpc`-driven coverage is deferred (see
-    //! `docs/FOLLOWUPS.md`: "Generic `DaemonClient` so `MockRpc`
+    //! mapping; `MockDaemon`-driven coverage is deferred (see
+    //! `docs/FOLLOWUPS.md`: "Generic `DaemonClient` so `MockDaemon`
     //! can drive `start_refresh`").
     use super::{
         RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshSummary,
@@ -3698,7 +3698,7 @@ mod start_refresh_integration_tests {
     //! concrete [`SimpleRequestRpc`], not a generic `Rpc` trait, so
     //! the integration surface available to us is the unreachable-
     //! URL daemon (`get_height` fails fast with [`IoError::Daemon`])
-    //! rather than a [`MockRpc`]-driven scenario. Producer-side
+    //! rather than a [`MockDaemon`]-driven scenario. Producer-side
     //! retry / classification behaviour is already pinned at the
     //! synchronous-driver layer in [`refresh_driver_tests`]; what
     //! these tests pin is the *handle* layer:
@@ -3709,7 +3709,7 @@ mod start_refresh_integration_tests {
     //!
     //! Wider scenario coverage (synthetic block batches, scanner
     //! transitions, reorg events) lives in the synchronous-driver
-    //! tests; making `DaemonClient` generic so `MockRpc` can drive
+    //! tests; making `DaemonClient` generic so `MockDaemon` can drive
     //! `start_refresh` directly is tracked separately and does not
     //! gate Branch 2.
     use std::sync::Arc;
