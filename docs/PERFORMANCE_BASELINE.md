@@ -111,8 +111,8 @@ discipline.
 | Field | Value |
 |---|---|
 | Introducing PR | Stage 0 PR-2 (`shekyl-engine-core` engine-trait benchmark harness) |
-| Merge SHA | `<filled by Stage 0 PR-2 commit 5 at merge>` |
-| Date | `<filled by Stage 0 PR-2 commit 5 at merge>` |
+| Frozen at | `0276d210e7705a5d691e2d85bb9ad5fa340dd633` (PR-2 commit 4c, post-Q `Box<Engine<S>>` fixture; GHA run `25239954863`) |
+| Date | 2026-05-02 |
 
 **Workload class:** Trivial pure-read.
 
@@ -127,7 +127,7 @@ optimizer can hoist the call across criterion's iteration loop
 
 | Metric | Value |
 |---|---|
-| `instructions` | `<filled by commit 5>` |
+| `instructions` | `10` |
 
 The §3.3.1 threshold-of-concern check (10% warn / 25% fail) applies
 to this row only. The instruction count is portable across runner
@@ -145,32 +145,32 @@ that should be compared across captures or against the threshold.
 
 | Metric | Value |
 |---|---|
-| `l1_hits` | `<filled by commit 5>` |
-| `ll_hits` | `<filled by commit 5>` |
-| `ram_hits` | `<filled by commit 5>` |
-| `total_read_write` | `<filled by commit 5>` |
-| `estimated_cycles` | `<filled by commit 5>` |
+| `l1_hits` | `16` |
+| `ll_hits` | `0` |
+| `ram_hits` | `2` |
+| `total_read_write` | `18` |
+| `estimated_cycles` | `86` |
 
 **criterion metrics (informational).**
 
 | Metric | Value |
 |---|---|
-| `median_ns` | `<filled by commit 5>` |
-| `std_dev_ns` | `<filled by commit 5>` |
+| `median_ns` | `0.6221` |
+| `std_dev_ns` | `0.005864` |
 
 *criterion median_ns reflects optimizer amortization (per §4.4
 hoisting rule); per-call cost approximation: see iai instructions
 × hardware-dependent ns-per-instruction. The criterion number does
 not directly compare to iai's per-call cost for this workload class.*
 
-**Capture environment:** see `env-<filled by commit 5>` in
+**Capture environment:** see `env-0276d210` in
 [Capture environments](#capture-environments).
 
 **Cumulative-delta table.**
 
-| PR | Merge SHA | iai instructions | criterion median_ns | Δ vs frozen (iai) | Δ vs frozen (criterion) |
+| PR | SHA | iai instructions | criterion median_ns | Δ vs frozen (iai) | Δ vs frozen (criterion) |
 |---|---|---|---|---|---|
-| Stage 0 PR-2 | `<filled by commit 5>` | `<filled by commit 5>` | `<filled by commit 5>` | baseline | baseline |
+| Stage 0 PR-2 | `0276d210e` | `10` | `0.6221` | baseline | baseline |
 
 Subsequent Stage 1 PRs append one row per merge, computed against
 the frozen-baseline row. The §3.3.1 threshold-of-concern check
@@ -253,22 +253,25 @@ on two different runner images, the SHA-keyed block records the
 canonical runner; cross-runner divergence (per §4.4's dynamic check)
 is investigated rather than recorded as two parallel environments.
 
-### `env-<filled by commit 5>`
+### `env-0276d210`
 
 | Field | Value |
 |---|---|
-| `git_rev` | `<filled by Stage 0 PR-2 commit 5 at merge>` |
-| `git_dirty` | `<filled by commit 5>` |
-| `kernel` | `<filled by commit 5>` |
-| `cpu_model` | `<filled by commit 5>` |
-| `rustc_version` | `<filled by commit 5>` |
-| `cargo_version` | `<filled by commit 5>` |
-| `valgrind_version` | `<filled by commit 5>` |
-| `iai_callgrind_runner_version` | `<filled by commit 5>` |
+| `git_rev` | `0276d210e7705a5d691e2d85bb9ad5fa340dd633` |
+| `git_dirty` | `clean` |
+| `kernel` | `Linux 6.17.0-1010-azure #10~24.04.1-Ubuntu SMP Fri Mar  6 22:00:57 UTC 2026 x86_64 GNU/Linux` |
+| `cpu_model` | `AMD EPYC 7763 64-Core Processor` |
+| `rustc_version` | `rustc 1.95.0 (59807616e 2026-04-14)` |
+| `cargo_version` | `cargo 1.95.0 (f2d3ce0bd 2026-03-21)` |
+| `valgrind_version` | `valgrind-3.22.0` |
+| `iai_callgrind_runner_version` | `v0.16.1` |
 
-This environment will be captured on `ubuntu-latest` GHA runner via
-the post-merge `bench-baseline` workflow run, with the values copied
-from `shekyl_rust_v0.json`'s `captured_on` block.
+Source: GHA `ci/benchmarks` `workflow_dispatch` run `25239954863`
+(`ubuntu-latest`), one of three N=3 invariance-verification captures
+(runs `25239954863`, `25239956447`, `25239958016`) producing
+byte-identical iai-callgrind output (±0% variance on `instructions`).
+The full envelope is committed at
+[`docs/benchmarks/reference-captures/stage-0-pr-2-c4c-shekyl_rust_v0.json`](benchmarks/reference-captures/stage-0-pr-2-c4c-shekyl_rust_v0.json).
 
 ## Threshold-of-concern disposition per §3.3.1
 

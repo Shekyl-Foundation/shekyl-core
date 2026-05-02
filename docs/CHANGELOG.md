@@ -605,6 +605,32 @@
   `93d515123` merged without `## [Unreleased] / ### Documentation`
   entries). The CHANGELOG-backfill row is targeted at V3.0 and can
   land any time before V3.0 cut.
+- **`engine_trait_bench_ledger_synced_height` frozen baseline
+  transcribed (Stage 0 PR-2 commit 5).** The validated CI capture
+  values (iai `instructions=10`, hardware-dependent informational
+  rows `l1_hits=16` / `ll_hits=0` / `ram_hits=2` /
+  `total_read_write=18` / `estimated_cycles=86`, criterion
+  `median_ns=0.6221` / `std_dev_ns=0.005864`) are recorded in
+  [`docs/PERFORMANCE_BASELINE.md`](./PERFORMANCE_BASELINE.md) under
+  the bench's frozen-baseline source, gate metric, informational
+  metric, and cumulative-delta tables. The `env-0276d210` capture
+  environment is populated with the toolchain (`rustc 1.95.0` /
+  `cargo 1.95.0` / `valgrind-3.22.0` / `iai-callgrind-runner 0.16.1`)
+  and runner state (`AMD EPYC 7763` / `Linux 6.17.0-1010-azure`)
+  from the GHA `workflow_dispatch` run `25239954863`, one of the
+  three N=3 invariance-verification captures (runs `25239954863`,
+  `25239956447`, `25239958016`) that produced byte-identical
+  iai-callgrind output (±0% variance on the gate metric per
+  [`STAGE_0_HARNESS.md`](./design/STAGE_0_HARNESS.md) §4.4 dynamic
+  check). The bench's "frozen at" SHA is the capture SHA
+  `0276d210e` (PR-2 commit 4c, post-Q `Box<Engine<S>>` fixture);
+  the in-tree
+  [`reference-captures/stage-0-pr-2-c4c-shekyl_rust_v0.json`](./benchmarks/reference-captures/stage-0-pr-2-c4c-shekyl_rust_v0.json)
+  remains the stable artifact citation. The four deferred bench
+  sections (`balance`, `current_emission`, `parameters_snapshot`,
+  `account_public_address`) are unchanged — each will be populated
+  by its introducing per-trait PR per §4.6's per-bench deferred
+  assignment. Closes Stage 0 PR-2's measurement work.
 - **Stage 1 trait-boundaries spec, Round 1 draft
   ([`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)).**
   First draft of the Stage 1 design document called for by the
