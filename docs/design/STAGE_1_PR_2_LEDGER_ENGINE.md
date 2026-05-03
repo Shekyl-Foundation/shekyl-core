@@ -156,6 +156,34 @@ expected to follow the same template with trait-specific deltas.
 By PR 7 the per-trait template is fully canonized and deviations
 require explicit reasoning.
 
+**Pre-flight spec-drift expectation.** PR 2's pre-flight pass
+surfaced two spec drifts that warranted doc-only amendments before
+substantive work began: §2.2's reservation-tracker ownership claim
+(corrected in PR #22) and §2.2's trait surface declaring removed
+`Balance` / `BalanceFilter` / `TransferFilter` types (corrected in
+PR #23). Both ran as single-commit doc-only PRs against `dev`,
+framed per §8.2 as non-additive amendments re-opening the spec for
+a new round.
+
+Future per-trait PRs should expect the same. Authors of PR 3
+(`KeyEngine` per §8.1) and PRs 4–7 run their own pre-flight
+gap-check (`05-system-thinking.mdc`'s "ask why is this here"
+discipline applied to the trait under extraction); surfacing 1–2
+small spec drifts during pre-flight is the **expected outcome**,
+not a defect. Pre-flight-discovered drifts land as single-commit
+`chore/spec-stage-1-pr<N>-<topic>` PRs against `dev` before the
+per-trait `feat/` branch is cut. Folding drift fixes into the
+substantive PR is rejected: the substantive PR's reviewer attention
+is finite, and a doc-only amendment merits independent review
+against §7 / §8.2's amendment framing. This is the
+template-uniformity mirror of `15-deletion-and-debt.mdc`'s "while
+we're here is the enemy" — applied to spec amendments rather than
+implementation scope.
+
+§2.3 below extends the same forward-template discipline to the
+§5.2 hybrid-test scoping question (each per-trait PR exercises one
+§5.2 property predecessors have not yet covered).
+
 PR 2's PR description states "this PR establishes the per-trait
 PR template that subsequent Stage 1 extractions follow" so
 reviewers and future-template authors find the discipline pinned.
