@@ -263,6 +263,22 @@
   immediately after the Swatinem step, so the cache restore
   reaches it first.
 
+  Measured impact (GHA run id `25265761303`,
+  `chore/ci-cache-tightening` branch tip `911989b24`,
+  toolchain 1.95.0; full breakdown in
+  `docs/CI_TIMING_BASELINE.md`):
+
+  - **Post-run cache UPLOAD**: 8m 44s before → **1m 30s cold**,
+    **0s hot**. Structural; reliably reproduces every run.
+  - **`install cargo-audit`**: 2m 34s before → **0s on hot-cache**.
+    Structural; reliably reproduces every hot-cache run.
+  - **Rust job total wall clock**: 48m 22s before (run
+    `25263753443`, dev tip `1155c1abe`) → 37m 24s cold, 35m 57s
+    hot. Headline numbers are noisy because `cargo test` swings
+    ±~3m run-to-run independently of the cache (24m 20s cold vs
+    27m 16s hot on the same SHA). The structural cache savings
+    above are the durable component of the wall-clock delta.
+
   The PR scope is intentionally tight per the
   `tight_then_iterate` disposition (2026-05-02). APT package
   caching, extending Swatinem to the C++ build matrix's Rust

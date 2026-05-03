@@ -106,41 +106,89 @@ behaviour on lockfile changes.
 
 #### After — `Swatinem/rust-cache@v2`
 
-> _Captured by appending a row to this section once the
-> `chore/ci-cache-tightening` PR's first CI run lands. Same
-> methodology, same job set, same toolchain. Updated in the same PR
-> as the workflow change, so the diff is auditable as a single
-> reviewable unit._
+Captured on the `chore/ci-cache-tightening` branch. Two captures were
+recorded: a cold-cache run (the first run after the cache action was
+swapped, where the new cache layout is being populated for the first
+time) and a hot-cache rerun (re-execution of the Rust job on the same
+commit, where the cache populated by the cold run is restored).
+Run-to-run variance on `cargo test` is non-trivial on dev (the
+baseline section above records 37m 36s on `514015c7c` and 48m 22s on
+`1155c1abe`, an 11-minute swing on adjacent commits), so the rows
+below distinguish "structural" savings (consistent across runs;
+attributable to the cache strategy) from total wall-clock (noisy;
+dominated by `cargo test` variance).
 
 | Metric | Value |
 | --- | --- |
-| dev tip | _pending CI run on `chore/ci-cache-tightening`_ |
-| GHA run id | _pending_ |
-| Toolchain | _pending_ |
+| branch tip | `911989b24` (post-cold-run rerun was on the same SHA) |
+| GHA run id | `25265761303` |
+| Toolchain | `rustc 1.95.0 (59807616e 2026-04-14)` |
 | Cache action | `Swatinem/rust-cache@v2` |
-| Cache key | _action-managed: rustc version + Cargo.lock hash + job id_ |
-| Cache paths | _action-managed: `~/.cargo/{registry,git,bin}` + `rust/target`_ |
+| Cache key | action-managed: rustc version + Cargo.lock hash + job id |
+| Cache paths | action-managed: `~/.cargo/{registry,git,bin}` + `rust/target` |
 
-| Job | Wall clock | Δ vs. before |
-| --- | --- | --- |
-| `Rust: audit, test, determinism` | _pending_ | _pending_ |
+| Job | Cold (first run) | Hot (rerun) | Δ vs. before |
+| --- | --- | --- | --- |
+| `Rust: audit, test, determinism` | 37m 24s | 35m 57s | cold −10m 58s, hot −12m 25s |
 
-The expected delta is dominated by:
+##### Per-step breakdown — Rust job (the caching target)
 
-- **No more 8m 44s cache upload on identical-payload re-runs.**
-  Swatinem skips cache writes when the cache slot is already up to
-  date, and writes only deltas otherwise.
-- **No more 2m 34s `cargo install cargo-audit`** on cache hits.
-- **Smarter `target/` partition.** Swatinem keeps a per-workspace
-  partitioned cache and prunes stale crates between runs, reducing
-  the false-hit rate on the cargo test recompile.
+Step durations from the `Swatinem/rust-cache@v2` runs alongside the
+`actions/cache@v5` baseline. Cells where Swatinem has a structural
+effect are annotated; rows that are dominated by inherent step cost or
+run-to-run variance are marked _noise_.
 
-The `cargo test` step (28m 26s baseline) is dominated by
-recompilation when the cache misses on Cargo.lock changes. Swatinem's
-key strategy (rustc version explicit, Cargo.lock implicit) doesn't
-fundamentally change this; the lockfile cliff is a separate problem
-that is intentionally not addressed in this PR. See "out of scope"
-below.
+| Step | Before (cold) | Cold (Swatinem) | Hot (Swatinem) | Notes |
+| --- | --- | --- | --- | --- |
+| Run cache restore | 1m 10s | 1s | 24s | hot does real cache restore (`~/.cargo/{registry,git,bin}` + `target/`); cold is a no-op miss |
+| `install cargo-audit` | 2m 34s | 2m 38s | **0s** | Swatinem caches `~/.cargo/bin/`; hot is no-op; cold matches before |
+| `cargo audit` | 4s | 4s | 4s | _noise_ |
+| `cargo fmt --check` | 1s | 1s | 1s | _noise_ |
+| `cargo clippy -D warnings` | 1m 16s | 1m 19s | 33s | hot benefits from cached `target/` |
+| `build shekyl-fcmp` | ~30s | 29s | 22s | hot benefits from cached `target/` |
+| `cargo test (all workspace)` | 28m 26s | 24m 20s | 27m 16s | dominated by run-to-run variance, not cache |
+| `Gate 1: proptest --release` | 4m 00s | 4m 29s | 3m 58s | _noise_ |
+| `Bech32m address tests` | 37s | 37s | 25s | _noise_ |
+| `determinism check` | 51s | 51s | 24s | hot benefits from cached `target/` |
+| **Post Run cache upload** | **8m 44s** | **1m 30s** | **0s** | **structural win** — incremental writes vs. full target/ upload; no-op when cache is unchanged |
+
+##### Structural savings (consistent across runs)
+
+The wins below are reproducible per run regardless of `cargo test`
+variance:
+
+- **Post-run cache upload**: 8m 44s → 1m 30s (cold) → 0s (hot).
+  Consistent **−7m 14s on cold**, **−8m 44s on hot**. Compounds across
+  every CI run going forward.
+- **`install cargo-audit`**: 2m 34s → 0s on hot-cache hits.
+  Consistent **−2m 34s** per hot-cache run. Re-pays itself within ~3
+  reruns of the same commit.
+- **No `target/` invalidation on toolchain bumps with stale binaries.**
+  Swatinem's cache key includes `rustc --version`, so the
+  1.94.0 → 1.95.0 bump that motivated `fix/clippy-1-95-vendored-bulletproofs`
+  would have been correctly invalidated rather than silently restoring
+  a 1.94-built `target/`. (Historical fix; not measurable as a delta,
+  but a real correctness win.)
+
+##### Variance accounting
+
+`cargo test` swung from 24m 20s (cold) to 27m 16s (hot) on the same
+SHA. The hot rerun reused all build artifacts (3 of 4 build-adjacent
+steps got faster), so the +2m 56s on the test step is not cache-
+related — it is runner CPU contention or test scheduling variance.
+This matches the dev-tip variance noted in "Before" (37m 36s vs
+48m 22s on adjacent commits, an 11-minute swing). Headline
+wall-clock comparisons should be read with this variance band in
+mind.
+
+The cargo test step is also still subject to the **lockfile cliff**:
+when `Cargo.lock` changes (e.g., `deps/bump-rand-to-0.8.6`), the
+Swatinem cache key changes and the workspace recompiles from scratch.
+Swatinem's `target/` partitioning prunes stale crates more
+aggressively than `actions/cache@v5` did, but does not eliminate the
+cliff. That is a separate problem (incremental rebuilds across
+lockfile changes is a `cargo` limitation, not a cache one) and is
+explicitly out of scope.
 
 ##### Out of scope for this PR (deferred to follow-up `chore/ci-cache-...`)
 
