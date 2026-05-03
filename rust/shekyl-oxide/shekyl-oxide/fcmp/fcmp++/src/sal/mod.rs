@@ -43,12 +43,30 @@ impl core::fmt::Debug for RerandomizedOutput {
 }
 
 impl RerandomizedOutput {
-  /// Re-randomize an output.
+  /// Re-randomize an output with fully random blinds.
   pub fn new(rng: &mut (impl RngCore + CryptoRng), output: Output) -> RerandomizedOutput {
+    let r_c = <Ed25519 as Ciphersuite>::F::random(&mut *rng);
+    Self::with_commitment_blind(rng, output, r_c)
+  }
+
+  /// Re-randomize an output using a caller-specified commitment blind `r_c`.
+  ///
+  /// Shekyl integration patch (not yet upstream): consumers that bind the
+  /// pseudo-output commitment to a wallet-derived value need to supply `r_c`
+  /// explicitly so that `C_tilde = C + r_c G` matches the pre-committed
+  /// pseudo-out across the rest of the proof construction. All other
+  /// rerandomization scalars (`r_o`, `r_i`, `r_r_i`) remain random.
+  ///
+  /// A matching fork PR is tracked for promotion; the divergence is recorded
+  /// in `docs/SHEKYL_OXIDE_VENDORING.md`.
+  pub fn with_commitment_blind(
+    rng: &mut (impl RngCore + CryptoRng),
+    output: Output,
+    r_c: <Ed25519 as Ciphersuite>::F,
+  ) -> RerandomizedOutput {
     let r_o = <Ed25519 as Ciphersuite>::F::random(&mut *rng);
     let r_i = <Ed25519 as Ciphersuite>::F::random(&mut *rng);
     let r_r_i = <Ed25519 as Ciphersuite>::F::random(&mut *rng);
-    let r_c = <Ed25519 as Ciphersuite>::F::random(&mut *rng);
 
     let O_tilde = output.O() + (EdwardsPoint(*T) * r_o);
     let I_tilde = output.I() + (EdwardsPoint(*FCMP_PLUS_PLUS_U) * r_i);

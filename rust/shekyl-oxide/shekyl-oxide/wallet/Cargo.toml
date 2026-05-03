@@ -39,7 +39,7 @@ hex = { version = "0.4", default-features = false, features = ["alloc"] }
 
 shekyl-oxide = { path = "..", default-features = false }
 shekyl-rpc = { path = "../rpc", default-features = false }
-shekyl-address = { path = "./address", default-features = false }
+shekyl-address = { package = "shekyl-oxide-address", path = "./address", default-features = false }
 
 [dev-dependencies]
 serde = { version = "1", default-features = false, features = ["derive", "alloc", "std"] }
