@@ -722,8 +722,42 @@ pub trait KeyEngine {
 **Ownership.** `WalletLedger` (the persistent ledger),
 `LedgerIndexes` (the runtime-only derived indexes rebuilt at every
 open per the *RuntimeWalletState audit* decision-log entry,
-2026-04-25), and the runtime-only `BTreeMap<ReservationId,
-Reservation>` reservation tracker.
+2026-04-25). The reservation tracker is owned by `PendingTxEngine`;
+see §2.4.
+
+Reservations are claims on ledger outputs, so the conceptual
+coupling is real: `PendingTxEngine` consumes `LedgerEngine`'s read
+surface (`snapshot`, `balance`, `transfers`) when building
+reservations. The ownership distinction is operational —
+`PendingTxEngine` mutates the tracker; `LedgerEngine` provides the
+read surface that informs reservation building.
+`LedgerEngine::balance` is reservation-agnostic (it answers "what
+does the ledger say is mine?", not "what is currently spendable
+given in-flight reservations?"); the spendable-balance computation
+is on `PendingTxEngine` or `Engine<S>`, not here.
+
+The semantic split between reservation-agnostic and
+reservation-aware balance is pinned here for `LedgerEngine`'s
+implementation. The structural argument: reservation-aware balance
+computation requires reading both ledger state and reservation
+tracker state; placing it on `LedgerEngine` would invert the
+layering (`PendingTxEngine` consumes `LedgerEngine`, not vice
+versa). If `PendingTxEngine` PR's design surfaces reasons to
+revisit (e.g., common call patterns favor a reservation-aware
+helper, or a `spendable_balance` method on `LedgerEngine` would
+simplify call sites), the spec accommodates revision through the
+standard amendment process. The semantic is pinned as the current
+best understanding, not as a permanent invariant.
+
+Per §1.5's actor-identity test, the reservation tracker stays
+grouped with `PendingTxEngine` rather than becoming its own actor:
+the tracker's consistency requirements bind it tightly to
+in-flight transaction bytes and signing state (a tracker actor
+crashing independently from a pending-tx actor would leave
+reservations referring to transaction bytes that no longer exist),
+so isolating it produces no real failure-isolation benefit. This
+grouping holds until/unless future evidence demonstrates real
+isolation value.
 
 **Stage 1 surface.**
 
@@ -799,6 +833,31 @@ sweep for the full rationale.
   Stage 4 mutations route through the mailbox and are
   intrinsically async; making them async at Stage 1 locks the
   Stage 4 surface verbatim.
+
+**Stage 1 PR 2 spec-clarification (2026-05-03).** The original §2.2
+ownership claim included the reservation tracker, but every other
+location in this spec consistently places the tracker under
+`PendingTxEngine`: the §2.2 trait surface above defines zero
+methods that touch the tracker; §2.4 surfaces `build`/`submit`/
+`discard` on `PendingTxEngine` and ties them to the tracker;
+§1.5's "Applied to the seven traits" actor-or-not table assigns
+the reservation tracker to the `PendingTxEngine` row; §2's Round 3
+trait-surface sweep narrative pairs `Mutex<ReservationTracker>`
+with `LocalPendingTx`; §3.1's "Stage 1 implementing types" table
+describes `LocalPendingTx` as the "new struct wrapping the
+reservation tracker" while the `LedgerEngine` row pairs
+`LocalLedger` with `WalletLedger` + `LedgerIndexes` only; §3.2
+(layered call walk) and §4's idempotency table both treat the
+tracker as `PendingTxEngine`-owned. The §2.2 line
+was a stale conceptual-ownership artifact and has been corrected
+to point readers at §2.4. The amendment additionally pins the
+reservation-agnosticism of `LedgerEngine::balance` (previously
+implicit) and applies §1.5's actor-identity test to the
+reservation tracker, recording why it stays grouped with
+`PendingTxEngine` rather than becoming its own actor. No method
+signatures or trait shapes change; the §2.2 trait surface block,
+the Stage 1 implementing-type note, and the Round 2/Round 3
+disposition blocks above are unchanged.
 
 ### 2.3 `RefreshEngine` (revised in Round 2)
 
