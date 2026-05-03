@@ -883,10 +883,15 @@ PR 2 cut-point: `BalanceSummary` already exists in
 the existing `BalanceSummary::compute(&[TransferDetails], height)`
 helper; no `Balance` type is defined, no `BalanceFilter` /
 `TransferFilter` types are defined, and no current consumer
-threads a filter argument through `Engine::balance` / equivalent
-(consumers reach transfers via `LedgerBlock::transfers()` on the
-`WalletLedger.ledger` field, with no filter parameter — see
-`rust/shekyl-engine-state/src/ledger_block.rs`).
+threads a filter argument through any balance or transfers
+accessor — the in-tree balance API is `LedgerBlockExt::balance`
+(`rust/shekyl-scanner/src/ledger_ext.rs:142`), an extension trait
+on `LedgerBlock` whose signature is
+`fn balance(&self, current_height: u64) -> BalanceSummary` (a
+height parameter, no filter), and consumers reach transfers via
+`LedgerBlock::transfers()` on the `WalletLedger.ledger` field
+(`rust/shekyl-engine-state/src/ledger_block.rs:231`) which takes
+no parameters at all.
 Introducing `Balance` as a parallel type alongside `BalanceSummary`
 would conflict with `docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`
 §7's explicit `BalanceSummary → Balance` rename deferral
@@ -922,6 +927,24 @@ commit 1 alongside the trait. The §2.2 ownership claim, lock
 choice, async story, balance reservation-agnosticism, and
 reservation-tracker actor-identity discussion above are all
 unchanged.
+
+**Cross-doc realignment note.**
+[`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+predates this amendment and currently names the now-removed
+`Balance` / `BalanceFilter` / `TransferFilter` types as
+commit-1 deliverables in two places: §5 (commit-shape table,
+row 1's "Scope" cell) and §6 (handoff list, the
+`engine/traits/ledger.rs` bullet). Those references are
+superseded by this amendment. The design-doc realignment
+co-lands with PR 2 itself, in PR 2's commit 9 (the docs
+commit per design doc §5's nine-commit table), rather than as
+a separate sidecar PR — commit 9 is the existing slot for
+downstream docs effects of the implementation, and the
+realignment is exactly such an effect. PR 2 reviewers reading
+commit 1 first should treat the design doc's filter-type
+references as stale until commit 9 lands the realignment;
+spec authority over the design doc means §2.2 above is the
+binding contract for commit 1's surface.
 
 ### 2.3 `RefreshEngine` (revised in Round 2)
 
