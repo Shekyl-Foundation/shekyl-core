@@ -132,58 +132,6 @@ fmt-clean and clippy-clean by the time the PR lands. Fixing
 mechanical findings in files your PR does not otherwise touch remains
 an out-of-scope change; record those for a separate cleanup pass.
 
-## Vendored shekyl-oxide divergence guard
-
-The `rust/shekyl-oxide/` subtree is a vendored copy of
-[`Shekyl-Foundation/monero-oxide`](https://github.com/Shekyl-Foundation/monero-oxide)
-at the commit pinned in
-[`rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT`](../rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT).
-The two trees are required to be byte-equal under `crypto/` and
-`shekyl-oxide/`. Drift is detected by a layered defense; the layers are
-intentionally redundant rather than ordered, so a silent failure in one
-does not erode coverage of the others.
-
-* **Layer 1 — local pre-commit hook.** Opt in once per clone with
-  `git config core.hooksPath .githooks`. The hook fast-paths when no
-  staged change touches `rust/shekyl-oxide/` and, when it does run,
-  blocks the commit on divergence. It allows commits through on
-  infrastructure errors (exit 2) so working offline does not train
-  contributors to bypass the hook with `--no-verify`.
-
-* **Layer 2 — `oxide-tree-equality` on PRs to `dev`/`main`.** Runs
-  every PR (no path filter — see the workflow comment for why) and
-  surfaces divergence as a status check. Currently observe-only: the
-  check appears in the PR but is **not** in the required-checks list
-  while the remediation plan is in flight. Promotion to required
-  follows Step 4b after Step 2's re-sync lands clean.
-
-* **Layer 3 — `oxide-tree-equality` on push to `dev`/`main`.** Same
-  workflow, runs after merge to catch any late drift introduced by
-  squash/merge mechanics.
-
-* **Layer 4 — daily upstream-tip tripwire.** A separate cron job asks
-  `git ls-remote` whether the fork has moved since we last pinned. It
-  shares no code with Layers 2/3 beyond `git ls-remote` itself, so a
-  silently-broken byte-equality script cannot mask it.
-
-The byte-equality logic lives in
-[`scripts/ci/check_oxide_divergence.sh`](../scripts/ci/check_oxide_divergence.sh).
-The script is SHA-256-pinned inline at the top of
-[`.github/workflows/shekyl-oxide-divergence.yml`](../.github/workflows/shekyl-oxide-divergence.yml)
-(under the `selftest` job's `PINNED_SHA256` env). Intentional changes
-must update the pin in the same commit, which is what makes them
-visible in review. A self-test job in the same workflow runs the
-script against synthetic mutated trees (one deep path, one shallow
-path) and asserts both mutations are reported — that closes the
-"someone authorized-but-broken edits the script and Layer 4 silently
-keeps passing" failure mode that the SHA-256 pin alone cannot catch.
-
-If a divergence report fires legitimately during a sync (e.g. you are
-landing the re-sync itself), the right resolution is to land Step 2
-of the vendored-oxide remediation plan in
-[`docs/SHEKYL_OXIDE_VENDORING.md`](./SHEKYL_OXIDE_VENDORING.md), not
-to silence the check.
-
 ## Branch protection on `dev`
 
 The `dev` branch is the integration branch for all work. It is
