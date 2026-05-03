@@ -165,12 +165,12 @@ PR #23). Both ran as single-commit doc-only PRs against `dev`,
 framed per §8.2 as non-additive amendments re-opening the spec for
 a new round.
 
-Future per-trait PRs should expect the same. PR 3 (`KeyEngine` per
-§8.1) and PRs 4–7 authors run their own pre-flight gap-check
-(`00-system-thinking.mdc`'s "ask why is this here" discipline
-applied to the trait under extraction); surfacing 1–2 small spec
-drifts during pre-flight is the **expected outcome**, not a
-defect. Pre-flight-discovered drifts land as single-commit
+Future per-trait PRs should expect the same. Authors of PR 3
+(`KeyEngine` per §8.1) and PRs 4–7 run their own pre-flight
+gap-check (`05-system-thinking.mdc`'s "ask why is this here"
+discipline applied to the trait under extraction); surfacing 1–2
+small spec drifts during pre-flight is the **expected outcome**,
+not a defect. Pre-flight-discovered drifts land as single-commit
 `chore/spec-stage-1-pr<N>-<topic>` PRs against `dev` before the
 per-trait `feat/` branch is cut. Folding drift fixes into the
 substantive PR is rejected: the substantive PR's reviewer attention
