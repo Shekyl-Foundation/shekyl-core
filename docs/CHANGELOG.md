@@ -235,6 +235,57 @@
   is no longer applicable. Fmt-clean is the gate, not a per-PR
   option to defer.
 
+- **`Swatinem/rust-cache@v2` replaces `actions/cache@v5` in the
+  `rust-audit-and-test` CI job** in
+  [`.github/workflows/build.yml`](../.github/workflows/build.yml).
+  The prior cache strategy had three documented waste modes
+  measured against dev tip `1155c1abe`:
+
+  - ~8m44s post-job cache UPLOAD on every run, regardless of
+    whether the cache key changed (see
+    [`docs/CI_TIMING_BASELINE.md`](./CI_TIMING_BASELINE.md)
+    "Per-step breakdown"). `actions/cache@v5` re-uploads the
+    full path set when the cache key differs from what was
+    restored; `Swatinem/rust-cache@v2` writes deltas only.
+  - No `rustc` version component in the cache key, so a
+    toolchain bump (e.g. 1.94.0 → 1.95.0 as occurred mid-cycle
+    on the `ubuntu-latest` runner) would have silently restored
+    a 1.94-built `target/`. Swatinem's default key includes
+    `rustc --version`.
+  - No `~/.cargo/bin` caching, so `cargo install cargo-audit
+    --locked` recompiled from source every run (~2m34s).
+    Swatinem caches `~/.cargo/bin` by default; combined with
+    `--locked` idempotency, the install becomes a few-second
+    metadata check on cache hits.
+
+  The `install cargo-audit` step also moved from pre-checkout
+  (where the cache had no chance to populate `~/.cargo/bin`) to
+  immediately after the Swatinem step, so the cache restore
+  reaches it first.
+
+  The PR scope is intentionally tight per the
+  `tight_then_iterate` disposition (2026-05-02). APT package
+  caching, extending Swatinem to the C++ build matrix's Rust
+  half (`Ubuntu 22.04`, `Ubuntu 24.04`, `Arch Linux`), ccache
+  effectiveness audits, and `cargo-binstall` migration are
+  enumerated as deferred follow-ups in
+  `docs/CI_TIMING_BASELINE.md` "Out of scope". Each of those is
+  a >1 commit change with its own baseline-then-after capture
+  cycle and lands as its own PR after the Swatinem deltas are
+  observed and documented.
+
+- **`docs/CI_TIMING_BASELINE.md` introduced** to record CI
+  wall-clock per job per dev tip, anchored on the metric being
+  recorded (job-level wall clock, not step durations) so deltas
+  across caching changes are reproducibly comparable. The
+  document captures the `chore/ci-cache-tightening` baseline
+  before/after pair and is the going-forward home for similar
+  captures (CI cache strategy changes, runner-image upgrades,
+  toolchain bumps that affect compile time, etc.). Per
+  `91-documentation-after-plans.mdc`, this file lives under
+  `docs/` rather than scratch so future readers don't have to
+  re-derive baselines from `gh run` logs.
+
 ### Fixed
 
 - **Workspace clippy gate green on Rust toolchain 1.95.0.** Three
