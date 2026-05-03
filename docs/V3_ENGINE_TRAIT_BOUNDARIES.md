@@ -1,16 +1,21 @@
 # V3 Engine Trait Boundaries (Stage 1)
 
-**Status.** Round 5 (acceptance round) of design-review rounds
-(markdown-only, against `dev`). PR
-[#20](https://github.com/Shekyl-Foundation/shekyl-core/pull/20) is the
-live review surface; each round appends a commit, the PR absorbs
-the diff, and the merge to `dev` happens when the spec is
-accepted. The Round 5 pre-drafting gap-check confirmed Case A
-(spec is structurally complete; Round 6 is unnecessary unless
-post-draft review surfaces unexpected items); the round count
-lands at 5 (Rounds 1, 2, 3, 4a, 4b, 5) — at the upper bound of
-the 4–6 review-rounds rule. **No code changes are gated on this
-document yet.**
+**Status.** Round 5 (acceptance round) was the final design-review
+round. PR
+[#20](https://github.com/Shekyl-Foundation/shekyl-core/pull/20)
+absorbed the linear-append review commits per round (Rounds 1, 2,
+3, 4a, 4b, 5 — at the upper bound of the 4–6 review-rounds rule
+per
+[`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc))
+and merged to `dev` on 2026-05-01 (merge commit `40093ac7a`). The
+Round 5 pre-drafting gap-check confirmed Case A (spec is
+structurally complete; Round 6 unnecessary unless post-draft
+review surfaces unexpected items). **Stage 1 PR 1
+([PR #21](https://github.com/Shekyl-Foundation/shekyl-core/pull/21),
+`DaemonEngine` extraction) landed the first per-trait migration
+against this spec on 2026-05-02.** Subsequent per-trait PRs follow
+§8.1's within-stage-1 ordering and §8.2's amendment co-landing
+rule.
 
 - **Round 1 record:** `d387bff1d` (initial draft on this branch);
   content originally landed on `dev` outside the review-round
@@ -4716,4 +4721,4 @@ the threshold conditions is rejected as conjectural.
 - [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) "Generic `DaemonClient`" — closed: spec by §2.5 (two-trait shape); Stage 1 implementation by PR 1 (§2.5 surface + `Engine<S, D>` parameterization + first hybrid test); production-constructor generalization deferred to V3.2 alongside the `DaemonEngine`-to-`pub` promotion.
 - [`docs/CI_BASELINE.md`](CI_BASELINE.md) — `shekyl-oxide` divergence-canary policy referenced in §2.5's upstream/downstream rationale.
 - [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc) — the "4–6 review rounds before any Rust" rule this document is run against.
-- [PR #20](https://github.com/Shekyl-Foundation/shekyl-core/pull/20) — the live review surface for this spec (Interpretation D: linear-append commits per round).
+- [PR #20](https://github.com/Shekyl-Foundation/shekyl-core/pull/20) — the spec's review-and-acceptance PR (merged 2026-05-01, merge commit `40093ac7a`; Interpretation D: linear-append commits per round, Rounds 1–5).
