@@ -214,6 +214,41 @@ pub enum RefreshError {
     Io(#[from] IoError),
 }
 
+// --- Ledger ----------------------------------------------------------------
+
+/// Per-domain error for [`LedgerEngine`](super::traits::LedgerEngine),
+/// the §2.2 trait that owns the wallet's confirmed-chain ledger.
+///
+/// # Empty-enum starter shape
+///
+/// Stage 1 PR 2 ships `LedgerError` with **no variants**. The §2.2
+/// trait surface is structured so that:
+///
+/// - the four read methods (`synced_height`, `snapshot`, `balance`,
+///   `transfers`) are infallible — they return `T`, not
+///   `Result<T, _>`, because reading committed state under the
+///   `RwLock` read guard cannot fail; and
+/// - the lone mutating method (`apply_scan_result`) returns
+///   [`RefreshError`] (specifically [`RefreshError::ConcurrentMutation`])
+///   because the failure mode crosses the `LedgerEngine` /
+///   `RefreshEngine` boundary — a snapshot-disagreement is a
+///   refresh-loop concern, not a ledger-internal concern, per the
+///   §1.5 actor-identity reasoning.
+///
+/// `LedgerError` therefore has no caller-visible variants today; it
+/// exists as the named [`LedgerEngine::Error`] target so the
+/// `type Error: Into<LedgerError>;` bound has somewhere to land. New
+/// variants are additive (§7 / §8.2): a future read method that can
+/// genuinely fail (e.g., a `transfer_details(id)` lookup that may
+/// return "no such transfer") would land its variant here without
+/// re-opening the trait surface.
+///
+/// [`LedgerEngine::Error`]: super::traits::LedgerEngine::Error
+/// [`RefreshError`]: RefreshError
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum LedgerError {}
+
 // --- Send / build / submit / discard --------------------------------------
 
 /// Failures from [`Engine::build_pending_tx`](super::Engine) and the
