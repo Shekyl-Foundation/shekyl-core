@@ -748,11 +748,18 @@ computation requires reading both ledger state and reservation
 tracker state; placing it on `LedgerEngine` would invert the
 layering (`PendingTxEngine` consumes `LedgerEngine`, not vice
 versa). If `PendingTxEngine` PR's design surfaces reasons to
-revisit (e.g., common call patterns favor a reservation-aware
-helper, or a `spendable_balance` method on `LedgerEngine` would
-simplify call sites), the spec accommodates revision through the
-standard amendment process. The semantic is pinned as the current
-best understanding, not as a permanent invariant.
+revisit, the spec distinguishes two paths by §7's additivity
+invariants: an *additive* response (e.g., a new
+`spendable_balance` method on `LedgerEngine` that reads both
+ledger state and the tracker via `Engine<S>`) follows §8.2's
+Stage-1-amendment co-landing rule and lands in the consuming PR
+without re-opening review; a *non-additive* response that
+redefines `balance`'s reservation-agnostic semantic would violate
+§7's invariants ("amendments must not change existing method
+signatures, async-ness, error type, or ownership semantics") and
+re-opens this spec for a new review round per the §8.2 closing
+clause. The semantic is pinned as the current best understanding,
+not as a permanent invariant.
 
 Per §1.5's actor-identity test, the reservation tracker stays
 grouped with `PendingTxEngine` rather than becoming its own actor:
