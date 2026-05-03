@@ -2822,15 +2822,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shekyl-base58"
-version = "0.1.0"
-dependencies = [
- "rand_core 0.6.4",
- "shekyl-primitives",
- "std-shims",
-]
-
-[[package]]
 name = "shekyl-bulletproofs"
 version = "0.1.0"
 dependencies = [
@@ -3226,22 +3217,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shekyl-oxide-address"
-version = "0.1.0"
-dependencies = [
- "curve25519-dalek",
- "hex",
- "hex-literal",
- "rand_core 0.6.4",
- "serde",
- "serde_json",
- "shekyl-base58",
- "shekyl-io",
- "thiserror",
- "zeroize",
-]
-
-[[package]]
 name = "shekyl-primitives"
 version = "0.1.0"
 dependencies = [
@@ -3280,7 +3255,6 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-oxide",
- "shekyl-oxide-address",
  "std-shims",
  "thiserror",
  "zeroize",
@@ -3318,7 +3292,7 @@ version = "0.1.0"
 dependencies = [
  "digest_auth",
  "hex",
- "shekyl-oxide-address",
+ "shekyl-address",
  "shekyl-rpc",
  "simple-request",
  "tokio",

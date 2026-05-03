@@ -73,12 +73,9 @@ members = [
 #     depend on fork code; Shekyl's wallet logic lives in `shekyl-cli`,
 #     `shekyl-engine-core`, and `shekyl-engine-state`. The fork's wallet
 #     is byte-mirrored only to satisfy the divergence guard's
-#     byte-equality invariant. The `shekyl-address` package-name
-#     collision between first-party `shekyl-address` (Bech32m) and the
-#     fork's CryptoNote-style address crate is resolved by an
-#     integration patch that renames the fork's package to
-#     `shekyl-oxide-address` (see `docs/SHEKYL_OXIDE_VENDORING.md` for
-#     the patch and the matching upstream PR target).
+#     byte-equality invariant; cargo workspace discovery must skip it
+#     to avoid the `shekyl-address` package-name collision with the
+#     first-party `shekyl-address` crate.
 exclude = [
     "shekyl-engine-state/fuzz",
     "shekyl-oxide/shekyl-oxide/fuzz",
