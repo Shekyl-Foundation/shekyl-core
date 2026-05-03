@@ -652,8 +652,7 @@ impl Engine<SoloSigner> {
         Self {
             file,
             keys,
-            ledger,
-            indexes,
+            ledger: super::local_ledger::LocalLedger::new(ledger, indexes),
             reservations: std::collections::BTreeMap::new(),
             next_reservation_id: 0,
             prefs,
@@ -720,7 +719,6 @@ impl<S: EngineSignerKind, D1: DaemonEngine> Engine<S, D1> {
             file,
             keys,
             ledger,
-            indexes,
             reservations,
             next_reservation_id,
             prefs,
@@ -734,7 +732,6 @@ impl<S: EngineSignerKind, D1: DaemonEngine> Engine<S, D1> {
             file,
             keys,
             ledger,
-            indexes,
             reservations,
             next_reservation_id,
             prefs,
@@ -849,9 +846,17 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
         // password-keyed (Argon2id every save by design — see the
         // wallet-file spec §4.3); `save_prefs` is HMAC-keyed by the
         // session-cached PrefsHmacKey on `self.file`.
+        //
+        // Acquire a `LocalLedger` read guard for the duration of the
+        // save call so the underlying `WalletLedger` is borrowed
+        // immutably. `Engine::close` consumes `self`, so no concurrent
+        // writers exist at this point; the read guard is structural,
+        // not for contention.
+        let ledger_guard = self.ledger.read();
         self.file
-            .save_state(credentials.password(), &self.ledger)
+            .save_state(credentials.password(), &ledger_guard.ledger)
             .map_err(|e| map_wallet_file_error(e, self.network))?;
+        drop(ledger_guard);
         self.file.save_prefs(&self.prefs).map_err(|e| {
             OpenError::Io(IoError::WalletFile {
                 detail: e.to_string(),

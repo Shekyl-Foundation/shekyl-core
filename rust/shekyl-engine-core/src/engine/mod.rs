@@ -148,6 +148,7 @@ pub mod capability;
 pub mod daemon;
 pub mod error;
 pub mod lifecycle;
+pub(crate) mod local_ledger;
 pub mod merge;
 pub mod network;
 pub mod pending;
@@ -177,7 +178,9 @@ use std::marker::PhantomData;
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_prefs::WalletPrefs;
-use shekyl_engine_state::{LedgerIndexes, WalletLedger};
+use shekyl_engine_state::WalletLedger;
+
+use crate::engine::local_ledger::{LedgerState, LocalLedger};
 
 use crate::engine::traits::DaemonEngine;
 
@@ -268,24 +271,35 @@ pub struct Engine<S: EngineSignerKind, D: DaemonEngine = DaemonClient> {
     /// by Phase 2 sign / proof code paths inside this crate.
     keys: AllKeysBlob,
 
-    /// Persistent wallet state: scanner-derived transfers, bookkeeping
-    /// (subaddress registry, labels, address book, account tags), tx
-    /// metadata (`tx_keys`, scanned pool txs), and the sync-state
-    /// block. Mutated only via the methods on `Engine<S>` that the
-    /// lifecycle / refresh / send commits add. **Reservations do not
-    /// live here** — see `reservations` below and the `pending`
-    /// module's docstring.
-    ledger: WalletLedger,
-
-    /// Runtime-only indexes derived from chain replay: key-image
-    /// and pubkey lookup maps, plus the staker-pool accrual
-    /// aggregate. Per the `RuntimeWalletState audit` Decision Log
-    /// entry (2026-04-25), these fields are reconstructible from
-    /// `self.ledger.ledger` plus daemon block replay and are never
-    /// persisted. Rebuilt at every `Engine::open*` and mutated
-    /// alongside `self.ledger.ledger` by `apply_scan_result` under
-    /// the same `&mut self` borrow.
-    indexes: LedgerIndexes,
+    /// Persistent wallet state plus its runtime-only index projection,
+    /// aggregated under a single [`std::sync::RwLock`] by [`LocalLedger`].
+    ///
+    /// The aggregate carries:
+    ///
+    /// - The [`shekyl_engine_state::WalletLedger`] — scanner-derived
+    ///   transfers, bookkeeping (subaddress registry, labels, address
+    ///   book, account tags), tx metadata (`tx_keys`, scanned pool
+    ///   txs), and the sync-state block. **Reservations do not live
+    ///   here** — see `reservations` below and the `pending` module's
+    ///   docstring.
+    /// - The [`shekyl_engine_state::LedgerIndexes`] — runtime-only
+    ///   indexes derived from chain replay (key-image / pubkey lookup
+    ///   maps, staker-pool accrual aggregate). Per the
+    ///   `RuntimeWalletState audit` Decision Log entry (2026-04-25),
+    ///   these fields are reconstructible from the [`WalletLedger`]
+    ///   plus daemon block replay and are never persisted; they are
+    ///   rebuilt at every `Engine::open*` and mutated together with
+    ///   the `WalletLedger` by `apply_scan_result`.
+    ///
+    /// Stage 1 PR 2 promotes this aggregate from two `&mut self`-gated
+    /// fields to a single `RwLock`-gated [`LocalLedger`] so the
+    /// in-process orchestration can call into [`LedgerEngine`] methods
+    /// through `&self`. The trait surface (commit 1) and the field
+    /// shape (this commit) are co-aligned: [`LocalLedger`] is the
+    /// Stage 1 implementor.
+    ///
+    /// [`LedgerEngine`]: traits::LedgerEngine
+    ledger: LocalLedger,
 
     /// Runtime-only reservation tracker for in-flight
     /// [`PendingTx`](pending::PendingTx) handles. Cross-cutting lock
@@ -377,8 +391,11 @@ impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug> std::fmt::Debug for
     /// - `keys` — never printed. [`AllKeysBlob`] holds spend / view
     ///   secret scalars; the type does not implement `Debug` and
     ///   we do not want a stringly-typed leak path here.
-    /// - `ledger`, `prefs` — printed as opaque `<…>` markers. They
-    ///   contain user labels (already typed as
+    /// - `ledger`, `prefs` — printed as opaque `<…>` markers. The
+    ///   `ledger` field is the [`LocalLedger`] aggregate (the
+    ///   [`shekyl_engine_state::WalletLedger`] plus the rebuilt-on-open
+    ///   [`shekyl_engine_state::LedgerIndexes`]); both halves contain
+    ///   user labels (already typed as
     ///   [`shekyl_engine_state::LocalLabel`] with redacting `Debug`,
     ///   per cross-cutting lock 9), but a wallet-level dump would be
     ///   noisy and add nothing not already available via the per-block
@@ -388,9 +405,6 @@ impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug> std::fmt::Debug for
     ///   [`shekyl_simple_request_rpc::SimpleRequestRpc`]).
     /// - `network`, `capability` — printed verbatim; these are cached
     ///   public values from region 1 of the wallet file.
-    /// - `indexes` — printed as opaque `<…>`; the rebuilt-on-open
-    ///   indexes shadow `ledger` and the same redaction argument
-    ///   applies.
     /// - `reservations` — printed as a count, not contents. The
     ///   reservations carry recipient addresses and amounts; we expose
     ///   only the cardinality so a `Debug` dump cannot leak in-flight
@@ -404,7 +418,6 @@ impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug> std::fmt::Debug for
             .field("file", &self.file)
             .field("keys", &"<redacted: AllKeysBlob>")
             .field("ledger", &"<…>")
-            .field("indexes", &"<…>")
             .field("reservations", &self.reservations.len())
             .field("next_reservation_id", &self.next_reservation_id)
             .field("prefs", &"<…>")
@@ -414,6 +427,36 @@ impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug> std::fmt::Debug for
             .field("refresh_running", &self.refresh_slot.is_claimed())
             .field("signer_kind", &std::any::type_name::<S>())
             .finish()
+    }
+}
+
+/// RAII guard returned by [`Engine::ledger`]: holds a read lock on
+/// the wallet's [`LocalLedger`] and derefs transparently to
+/// [`WalletLedger`].
+///
+/// The guard is opaque: external callers cannot observe the
+/// [`LedgerState`] aggregate or the [`LedgerIndexes`] half. Source
+/// compatibility with the pre-Stage-1 `&WalletLedger` accessor is
+/// preserved by the [`Deref`] impl, so calls of the form
+/// `engine.ledger().some_wallet_ledger_method()` continue to compile
+/// and behave identically.
+///
+/// Hold the guard for the minimum span necessary; concurrent writers
+/// (`apply_scan_result` and the [`pending`]-module mutators) cannot
+/// acquire the write lock while any reader is live.
+///
+/// [`LedgerState`]: local_ledger::LedgerState
+/// [`LedgerIndexes`]: shekyl_engine_state::LedgerIndexes
+/// [`Deref`]: std::ops::Deref
+pub struct LedgerReadGuard<'a> {
+    inner: std::sync::RwLockReadGuard<'a, LedgerState>,
+}
+
+impl std::ops::Deref for LedgerReadGuard<'_> {
+    type Target = WalletLedger;
+
+    fn deref(&self) -> &WalletLedger {
+        &self.inner.ledger
     }
 }
 
@@ -447,8 +490,17 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     /// bookkeeping entries, tx metadata, sync cursor). Mutation goes
     /// through the methods on [`Engine`] that the lifecycle / refresh /
     /// send commits add — never through this borrow.
-    pub fn ledger(&self) -> &WalletLedger {
-        &self.ledger
+    ///
+    /// The return value is a [`LedgerReadGuard`] that holds a
+    /// [`std::sync::RwLockReadGuard`] over [`LocalLedger`]'s state
+    /// for the borrow's lifetime; the guard derefs transparently to
+    /// `&WalletLedger` so existing call sites that read through this
+    /// accessor are source-compatible. Drop the guard to release the
+    /// read lock and allow concurrent writers to acquire it.
+    pub fn ledger(&self) -> LedgerReadGuard<'_> {
+        LedgerReadGuard {
+            inner: self.ledger.read(),
+        }
     }
 
     /// Borrow user preferences. Read-only; preference rotation goes

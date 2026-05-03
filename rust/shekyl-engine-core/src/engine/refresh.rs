@@ -1444,8 +1444,11 @@ async fn run_refresh_task<S, D: DaemonEngine>(
         // intervening write-lock.
         let (snapshot, daemon) = {
             let g = engine_arc.read().await;
+            // Bind the inner LocalLedger read guard so its drop runs
+            // inside this block, before `g` is released.
+            let lg = g.ledger.read();
             (
-                LedgerSnapshot::from_ledger(&g.ledger.ledger),
+                LedgerSnapshot::from_ledger(&lg.ledger.ledger),
                 g.daemon().clone(),
             )
         };
@@ -1946,7 +1949,7 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
         // `1 + max_retries` total tries (the initial attempt plus
         // `max_retries` retries on `ConcurrentMutation`).
         for attempt in 1..=opts.max_retries.saturating_add(1) {
-            let snapshot = LedgerSnapshot::from_ledger(&self.ledger.ledger);
+            let snapshot = LedgerSnapshot::from_ledger(&self.ledger.read().ledger.ledger);
             let result = produce(attempt, &snapshot)?;
             let summary = summarize(&result, attempt);
 

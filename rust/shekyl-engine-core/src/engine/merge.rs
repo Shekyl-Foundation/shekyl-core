@@ -86,8 +86,12 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     /// Current scanned-chain height: the highest block height the
     /// wallet's persisted ledger has fully ingested. `0` for a
     /// freshly-created wallet that has never refreshed.
+    ///
+    /// Acquires a [`LocalLedger`](super::local_ledger::LocalLedger)
+    /// read guard for the duration of the call; the guard is dropped
+    /// before returning so concurrent writers can proceed.
     pub fn synced_height(&self) -> u64 {
-        self.ledger.ledger.height()
+        self.ledger.read().ledger.ledger.height()
     }
 
     /// Apply a scanner-produced [`ScanResult`] to the wallet's
@@ -123,7 +127,9 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     /// every `LedgerIndexes` mutator the merge calls is infallible
     /// once both invariants have been verified.
     pub fn apply_scan_result(&mut self, result: ScanResult) -> Result<(), RefreshError> {
-        apply_scan_result_to_state(&mut self.ledger.ledger, &mut self.indexes, result)
+        let mut guard = self.ledger.write();
+        let state = &mut *guard;
+        apply_scan_result_to_state(&mut state.ledger.ledger, &mut state.indexes, result)
     }
 }
 

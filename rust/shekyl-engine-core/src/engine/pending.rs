@@ -487,12 +487,15 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     /// - [`SendError::InsufficientFunds`] when the available
     ///   non-reserved spendable balance cannot cover `amount + fee`.
     pub fn build_pending_tx(&mut self, request: &TxRequest) -> Result<PendingTx, SendError> {
+        let guard = self.ledger.read();
         build_pending_tx_in_state(
-            &self.ledger.ledger,
+            &guard.ledger.ledger,
             &mut self.reservations,
             &mut self.next_reservation_id,
             request,
         )
+        // `guard` is dropped at end of expression, releasing the
+        // LocalLedger read lock once the result has been computed.
     }
 
     /// Submit a [`PendingTx`] handle.
@@ -509,8 +512,9 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     /// replaces this body with a real broadcast call. The invariant
     /// checks themselves are the same in both phases.
     pub fn submit_pending_tx(&mut self, id: ReservationId) -> Result<TxHash, PendingTxError> {
+        let mut guard = self.ledger.write();
         submit_pending_tx_in_state(
-            &mut self.ledger.ledger,
+            &mut guard.ledger.ledger,
             &mut self.reservations,
             self.network,
             id,
