@@ -421,7 +421,7 @@ alone, combined with (1) and (2), justifies trait status.
 | Trait | (1) Distinct state at Stage 4 | (2) Failure isolation | (3) Justification |
 |---|---|---|---|
 | `KeyEngine` | yes — `AllKeysBlob` and KEK material | yes — key actor crash is recoverable; supervisor restarts and re-derives via passphrase | 3a — cross-cutting (consumed by `RefreshEngine` for output-decoding, `PendingTxEngine` for signing, `Engine<S>` for address rendering) |
-| `LedgerEngine` | yes — `LedgerState`, `LedgerSnapshot` | yes — ledger actor crash is recoverable from persistence | 3a — cross-cutting (consumed by `RefreshEngine` for tip checks, `PendingTxEngine` for output selection, `Engine<S>` for balance and history) |
+| `LedgerEngine` | yes — `LedgerState`, `LedgerSnapshot` | yes — ledger actor crash is recoverable from persistence | 3a — cross-cutting (consumed by `RefreshEngine` for tip checks, `PendingTxEngine` for output selection, `Engine<S>` for balance; per-transaction history is read directly from the underlying `LedgerBlock` rather than through the trait — see §2.2's 2026-05-03 transfer-clone discipline amendment) |
 | `RefreshEngine` | yes — producer-side scan-cursor state | yes — refresh actor crash is recoverable; supervisor restarts and re-issues from current ledger tip | 3b — isolatable subsystem (single consumer `Engine<S>`; explicit lifecycle: start, pause via cancellation token, resume on next call, close) |
 | `EconomicsEngine` | yes — at V3.x, adaptive-burn observation state; at V3.0, no state but the surface is fixed | yes — economics actor crash at V3.x surfaces `RuntimeFailure`; consumers continue with last-good snapshot | 3a — cross-cutting (consumed by `Engine<S>` for fee computation, `PendingTxEngine` for burn-fraction inputs, V3.x's `StakeEngine` and `ArchivalEngine` for parameter queries) |
 | `DaemonEngine` | yes — connection state, request queue | yes — daemon actor crash is recoverable; supervisor restarts and re-establishes connection | 3a — cross-cutting (consumed by `RefreshEngine` for chain queries, `PendingTxEngine` for fee estimates and submit, `Engine<S>` for direct RPC calls) |
@@ -731,19 +731,25 @@ open per the *RuntimeWalletState audit* decision-log entry,
 see §2.4.
 
 Reservations are claims on ledger outputs, so the conceptual
-coupling is real: `PendingTxEngine` consumes `LedgerEngine`'s read
-surface (`snapshot`, `balance`) when building reservations
-(plus the `LedgerBlock` borrow obtained through
-`Engine::ledger()` for spendable-output enumeration; see §2.2's
-2026-05-03 transfer-clone discipline amendment for why no
-trait-level transfer-enumeration method exists at Stage 1). The
-ownership distinction is operational —
-`PendingTxEngine` mutates the tracker; `LedgerEngine` provides the
-read surface that informs reservation building.
-`LedgerEngine::balance` is reservation-agnostic (it answers "what
-does the ledger say is mine?", not "what is currently spendable
-given in-flight reservations?"); the spendable-balance computation
-is on `PendingTxEngine` or `Engine<S>`, not here.
+coupling is structural: `PendingTxEngine`'s build path reads the
+underlying `LedgerBlock` state that `LedgerEngine` owns —
+specifically `LedgerBlock::height`, `LedgerBlock::block_hash_at`,
+and `LedgerBlock::spendable_outputs` — not the
+`LedgerEngine::balance` or `LedgerEngine::snapshot` trait methods.
+See `rust/shekyl-engine-core/src/engine/pending.rs`'s
+`build_pending_tx_in_state` for the actual build-path call sites,
+and §2.2's 2026-05-03 transfer-clone discipline amendment for
+why no trait-level transfer-enumeration method exists at Stage 1.
+The Stage 1 access path is the `Engine::ledger()` guard wrapper
+(queued for V3.1 audit per commit 2's pre-flight); the Stage 4
+access path is whatever shape the actor refactor establishes.
+The ownership distinction is operational — `PendingTxEngine`
+mutates the tracker; `LedgerEngine` owns the ledger state that
+the build path reads. `LedgerEngine::balance` is
+reservation-agnostic (it answers "what does the ledger say is
+mine?", not "what is currently spendable given in-flight
+reservations?"); the spendable-balance computation is on
+`PendingTxEngine` or `Engine<S>`, not here.
 
 The semantic split between reservation-agnostic and
 reservation-aware balance is pinned here for `LedgerEngine`'s
@@ -1075,26 +1081,44 @@ realignment template.
 **Cross-doc realignment note.**
 [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
 predates this amendment and the Phase 0b amendment above, and
-currently names (a) the now-removed `Balance` / `BalanceFilter` /
-`TransferFilter` types as commit-1 deliverables in two places:
-§5 (commit-shape table, row 1's "Scope" cell) and §6 (handoff
-list, the `engine/traits/ledger.rs` bullet); and (b) a now-removed
-`transfers()` method as part of commit 1's trait declaration in
-the same two places. Those references are superseded by this and
-the prior Phase 0b amendment. The design-doc realignment co-lands
-with PR 2 itself, in PR 2's commit 9 (the docs commit per design
-doc §5's nine-commit table), rather than as a separate sidecar PR
-— commit 9 is the existing slot for downstream docs effects of
-the implementation, and the realignment is exactly such an
-effect. The same commit 9 also lands the refinement of PR #24's
+carries stale references to the now-removed `Balance` /
+`BalanceFilter` / `TransferFilter` types and the now-removed
+`transfers()` method in multiple sections:
+
+- §1.2 (Phase 1 implementation overview): trait surface bullet
+  lists `transfers` among the read methods.
+- §2.1 (Contract vs implementation): the trait method list
+  references `transfers`, and the "contract does not pin"
+  enumeration references the `Balance` / `BalanceFilter` /
+  `TransferFilter` filter types.
+- §3.2 (`RwLock<LedgerState>` lock-shape rationale): the readers
+  list includes `transfers`.
+- §5 (commit-shape table, row 1 "Scope" cell): names `Balance` /
+  `BalanceFilter` / `TransferFilter` as commit-1 deliverables.
+- §6 (handoff list, `engine/traits/ledger.rs` bullet): names
+  the same three filter types and lists `transfers` as part of
+  the surface.
+- §7 (out-of-scope rename deferral): the
+  `BalanceSummary` → `Balance` rename framing is moot
+  post-Phase-0b (the rename is no longer required, so the §7
+  entry needs refinement rather than the original "defer"
+  disposition).
+
+Those references are superseded by this and the prior Phase 0b
+amendment. The design-doc realignment co-lands with PR 2 itself,
+in PR 2's commit 9 (the docs commit per design doc §5's
+nine-commit table), rather than as a separate sidecar PR —
+commit 9 is the existing slot for downstream docs effects of the
+implementation, and the realignment is exactly such an effect.
+The same commit 9 also lands the refinement of PR #24's
 "pre-flight drift expectation" template language to cover drifts
 that surface throughout the per-trait PR lifecycle (pre-flight,
 commit drafting, review feedback) rather than pre-flight alone.
 PR 2 reviewers reading commit 1 first should treat the design
 doc's filter-type and `transfers()` references as stale until
 commit 9 lands the realignment; spec authority over the design
-doc means §2.2 above is the binding contract for the post-Phase-0c
-surface.
+doc means §2.2 above is the binding contract for the
+post-Phase-0c surface.
 
 ### 2.3 `RefreshEngine` (revised in Round 2)
 
@@ -3967,7 +3991,7 @@ The dependency graph dictates the strict-prerequisite chain:
 | Trait | Depends on | When can it land? |
 |---|---|---|
 | `DaemonEngine` | (none) | First. Closes the test-boundary gap (§6); unlocks integration tests for every other trait. |
-| `LedgerEngine` | (none) | Second. Required by `RefreshEngine` (snapshot/merge) and `PendingTxEngine` (balance + spendable-output enumeration via the `LedgerBlock` borrow obtained through `Engine::ledger()`; see §2.2's 2026-05-03 transfer-clone discipline amendment). |
+| `LedgerEngine` | (none) | Second. Required by `RefreshEngine` (snapshot/merge) and `PendingTxEngine` (which depends on `LedgerEngine`'s ownership of the underlying `LedgerBlock` state used for output selection — the prerequisite is structural state-ownership, not trait-method consumption from the build path; see §2.2 for the access-path framing and §2.2's 2026-05-03 transfer-clone discipline amendment for why no trait-level transfer-enumeration method exists). |
 | `KeyEngine` | (none) | Any time after Stage 1 begins. Wallet-level methods that compose `KeyEngine` with other traits are on `Engine<S>`, not on `KeyEngine` itself. |
 | `PersistenceEngine` | (none) | Any time after Stage 1 begins. |
 | `EconomicsEngine` | (none) | Any time after Stage 1 begins. Off-the-critical-path: `EconomicsEngine`'s consumers (Phase 2b `StakeEngine`, V3.x `ArchivalEngine`) are out-of-charter for Stage 1, so the surface is established without a downstream-trait blocker. Landing it alongside the others establishes the type-parameter slot in `Engine<S, K, L, E, D, F, R, P>` so V3.x consumers find it pre-wired. |
