@@ -304,6 +304,48 @@
 
 ### Fixed
 
+- **CI Post Run cleanup no longer surfaces `##[error]ENOENT` on
+  `rust/target/tests/target` for the `Rust: audit, test, determinism`
+  job.** The `Swatinem/rust-cache@v2` post-run cleanup walker
+  ([`src/cleanup.ts` `cleanProfileTarget`](https://github.com/Swatinem/rust-cache/blob/v2.7.5/src/cleanup.ts#L41-L51))
+  treats any `target/` subdirectory named `tests` as a
+  [`kaos`](https://github.com/vertexclique/kaos) /
+  [`macrotest`](https://github.com/eupn/macrotest) /
+  [`trybuild`](https://github.com/dtolnay/trybuild)
+  nested-workspace layout and recursively cleans both
+  `tests/target/` and `tests/trybuild/`. The recursive
+  `cleanTargetDir` calls are not awaited, so async ENOENT
+  rejections on missing paths escape the synchronous `try`/`catch`
+  and surface as `##[error]ENOENT: opendir
+  rust/target/tests/target` annotations in the run summary. The
+  job concludes success (the action continues), but the
+  annotation pollutes the run summary and obscures real errors.
+
+  Why we hit it:
+  [`rust/shekyl-logging/tests/trybuild.rs`](../rust/shekyl-logging/tests/trybuild.rs)
+  uses `dtolnay/trybuild`, which creates
+  `rust/target/tests/trybuild/`. We do not use `kaos`/`macrotest`,
+  so `rust/target/tests/target/` never gets created — the walker
+  tries it anyway. Confirmed against
+  [Swatinem/rust-cache#144](https://github.com/Swatinem/rust-cache/issues/144)
+  (open since 2023; the user-proposed
+  `if (e.code === "ENOENT") continue;` patch never landed).
+
+  Workaround: a defensive `mkdir -p rust/target/tests/target`
+  step runs as the last pre-cleanup step in the job, ensuring the
+  walker's `opendir` call succeeds and finds an empty directory
+  to clean. Cache cost: a single empty directory entry,
+  negligible. The new step's comment documents the upstream
+  issue, the removal condition (delete the step in the same PR
+  that bumps the action pin once Swatinem merges either the
+  ENOENT-skip patch or adds `await` to the recursive
+  `cleanTargetDir` calls), and the dependency chain
+  (`shekyl-logging` `trybuild` test → `target/tests/trybuild/`
+  → walker → `target/tests/target/` ENOENT). Files touched:
+  [`.github/workflows/build.yml`](../.github/workflows/build.yml)
+  in the `Rust: audit, test, determinism` job (one new step
+  after `determinism check`).
+
 - **Workspace clippy gate green on Rust toolchain 1.95.0.** Three
   newly-deny-able clippy 1.95 findings cured with mechanical,
   behavior-identical fixes after the toolchain on the

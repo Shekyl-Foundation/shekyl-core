@@ -685,3 +685,36 @@ jobs:
           echo "=== Build 2 ===" && cat /tmp/build2.sha256
           diff /tmp/build1.sha256 /tmp/build2.sha256 || (echo "FATAL: non-deterministic Rust build" && exit 1)
           echo "Determinism check PASSED"
+      - name: "rust-cache post-run ENOENT workaround (Swatinem/rust-cache#144)"
+        # Swatinem/rust-cache@v2's post-run cleanup walker
+        # (src/cleanup.ts cleanProfileTarget) treats any subdirectory
+        # of `target/` named `tests` as a kaos/macrotest/trybuild
+        # nested-workspace layout and recursively cleans both
+        # `tests/target/` and `tests/trybuild/`. The recursive
+        # cleanTargetDir calls are NOT awaited, so async ENOENT
+        # rejections on missing paths escape the synchronous
+        # try/catch and surface as `##[error]ENOENT: opendir
+        # rust/target/tests/target` annotations in the job summary.
+        #
+        # The error is non-fatal (the action continues, the job
+        # concludes success), but the annotation pollutes the run
+        # summary and obscures real errors. Upstream issue:
+        #   https://github.com/Swatinem/rust-cache/issues/144 (open
+        #   since 2023, no merged fix)
+        #
+        # Why we hit it: rust/shekyl-logging/tests/trybuild.rs uses
+        # dtolnay/trybuild, which creates rust/target/tests/trybuild/.
+        # We do NOT use kaos/macrotest, so rust/target/tests/target/
+        # never gets created. Swatinem's walker tries it anyway.
+        #
+        # Workaround: pre-create the empty directory so the action's
+        # opendir call succeeds (and finds nothing to clean). Cache
+        # cost: a single empty directory entry, negligible.
+        #
+        # Removal condition: when Swatinem/rust-cache merges either
+        # the proposed `if (e.code === "ENOENT") continue;` patch or
+        # adds `await` to the recursive cleanTargetDir calls in
+        # cleanProfileTarget, this step can be deleted in the same
+        # PR that bumps the action pin.
+        if: always()
+        run: mkdir -p rust/target/tests/target
