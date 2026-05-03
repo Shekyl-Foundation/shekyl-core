@@ -456,8 +456,6 @@ jobs:
         run: apt -y install build-essential git curl pkg-config libssl-dev
       - name: install Rust
         run: ${{env.INSTALL_RUST}}
-      - name: install cargo-audit
-        run: cargo install cargo-audit --locked
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
@@ -514,14 +512,31 @@ jobs:
             exit 1
           fi
           echo "Fuzz harness inventory smoke gate passed (${#REQUIRED_TARGETS[@]} targets present)."
-      - uses: actions/cache@v5
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: rust-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: rust-
+          # Workspace at rust/ with target dir at rust/target/.
+          # Swatinem auto-caches ~/.cargo/{registry,git,bin} plus the
+          # workspace target/. The default cache key already mixes
+          # rustc version + Cargo.lock hash + a per-job component, so
+          # toolchain bumps (e.g. 1.94.0 -> 1.95.0) and lockfile-only
+          # diffs (e.g. deps/bump-rand-to-0.8.6) get correctly-scoped
+          # invalidation. Replaces the prior actions/cache@v5 block,
+          # which had three known waste modes documented in
+          # docs/CI_TIMING_BASELINE.md:
+          #   - ~8m post-job upload of the entire target/ even when
+          #     only a few crates changed (Swatinem only writes deltas).
+          #   - No rustc-version key component (so a 1.94 -> 1.95 bump
+          #     would have silently restored a 1.94-built target/).
+          #   - No ~/.cargo/bin caching (cargo-audit reinstalled from
+          #     source every run, ~2m30s).
+          workspaces: rust -> target
+      - name: install cargo-audit
+        # `cargo install --locked` is idempotent: on Swatinem cache
+        # hits the binary is already present in ~/.cargo/bin and this
+        # step exits in a few seconds rather than recompiling from
+        # source. Moved here from pre-checkout so the cache restore
+        # has a chance to populate ~/.cargo/bin first.
+        run: cargo install cargo-audit --locked
       - name: cargo audit
         working-directory: rust
         run: |
