@@ -1,0 +1,27 @@
+[package]
+name = "shekyl-oxide-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+shekyl-oxide = { path = ".." }
+
+[[bin]]
+name = "fuzz_rct_prunable_read"
+path = "fuzz_targets/fuzz_rct_prunable_read.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_transaction_read"
+path = "fuzz_targets/fuzz_transaction_read.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_rct_base_read"
+path = "fuzz_targets/fuzz_rct_base_read.rs"
+doc = false

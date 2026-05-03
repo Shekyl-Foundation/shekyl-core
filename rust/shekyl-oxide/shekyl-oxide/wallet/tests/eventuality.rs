@@ -1,0 +1,79 @@
+use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+
+use shekyl_oxide::{transaction::Transaction, io::CompressedPoint};
+use shekyl_wallet::{
+  rpc::Rpc,
+  address::{AddressType, ShekylAddress},
+};
+
+mod runner;
+
+test!(
+  eventuality,
+  (
+    |_, mut builder: Builder, _| async move {
+      // Add a standard address, a payment ID address, a subaddress, and a guaranteed address
+      // Each have their own slight implications to eventualities
+      builder.add_payment(
+        ShekylAddress::new(
+          Network::Mainnet,
+          AddressType::Legacy,
+          ED25519_BASEPOINT_POINT,
+          ED25519_BASEPOINT_POINT,
+        ),
+        1,
+      );
+      builder.add_payment(
+        ShekylAddress::new(
+          Network::Mainnet,
+          AddressType::LegacyIntegrated([0xaa; 8]),
+          ED25519_BASEPOINT_POINT,
+          ED25519_BASEPOINT_POINT,
+        ),
+        2,
+      );
+      builder.add_payment(
+        ShekylAddress::new(
+          Network::Mainnet,
+          AddressType::Subaddress,
+          ED25519_BASEPOINT_POINT,
+          ED25519_BASEPOINT_POINT,
+        ),
+        3,
+      );
+      builder.add_payment(
+        ShekylAddress::new(
+          Network::Mainnet,
+          AddressType::Featured { subaddress: false, payment_id: None, guaranteed: true },
+          ED25519_BASEPOINT_POINT,
+          ED25519_BASEPOINT_POINT,
+        ),
+        4,
+      );
+      let tx = builder.build().unwrap();
+      let eventuality = Eventuality::from(tx.clone());
+      assert_eq!(eventuality, Eventuality::read(&mut eventuality.serialize().as_slice()).unwrap());
+      (tx, eventuality)
+    },
+    |_, _, mut tx: Transaction, _, eventuality: Eventuality| async move {
+      // 4 explicitly outputs added and one change output
+      assert_eq!(tx.prefix().outputs.len(), 5);
+
+      // The eventuality's available extra should be the actual TX's
+      assert_eq!(tx.prefix().extra, eventuality.extra());
+
+      // The TX should match
+      assert!(eventuality.matches(&tx.clone().into()));
+
+      // Mutate the TX
+      let Transaction::V2 { proofs: Some(ref mut proofs), .. } = tx else {
+        panic!("TX had no proofs")
+      };
+      proofs.base.commitments[0] = CompressedPoint::from(
+        (proofs.base.commitments[0].decompress().unwrap() + ED25519_BASEPOINT_POINT).compress(),
+      );
+      // Verify it no longer matches
+      assert!(!eventuality.matches(&tx.clone().into()));
+    },
+  ),
+);

@@ -78,5 +78,5 @@ std = [
   "transcript?/std",
 ]
 compile-time-generators = []
-multisig = ["std", "transcript", "modular-frost", "rand_chacha"]
+multisig = ["std", "transcript", "modular-frost"]
 default = ["std", "compile-time-generators"]

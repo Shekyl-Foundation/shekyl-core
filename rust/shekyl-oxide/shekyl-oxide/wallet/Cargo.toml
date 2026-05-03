@@ -1,0 +1,73 @@
+[package]
+name = "shekyl-wallet"
+version = "0.1.0"
+description = "Wallet functionality for the Shekyl protocol, built around shekyl-oxide"
+license = "MIT"
+repository = "https://github.com/Shekyl-Foundation/shekyl-oxide/tree/main/shekyl-oxide/wallet"
+authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
+edition = "2021"
+rust-version = "1.89"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dependencies]
+std-shims = { version = "0.1.5", default-features = false }
+
+thiserror = { version = "2", default-features = false }
+
+zeroize = { version = "^1.5", default-features = false, features = ["zeroize_derive"] }
+
+rand_core = { version = "0.6", default-features = false }
+# Used to send transactions
+rand = { version = "0.8", default-features = false }
+rand_chacha = { version = "0.3", default-features = false }
+# Used to select decoys
+rand_distr = { version = "0.4", default-features = false }
+
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize", "group"] }
+
+# Multisig dependencies
+transcript = { package = "flexible-transcript", version = "0.3", default-features = false, features = ["recommended"], optional = true }
+frost = { package = "modular-frost", version = "0.11", default-features = false, features = ["ed25519"], optional = true }
+
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+
+shekyl-oxide = { path = "..", default-features = false }
+shekyl-rpc = { path = "../rpc", default-features = false }
+shekyl-address = { path = "./address", default-features = false }
+
+[dev-dependencies]
+serde = { version = "1", default-features = false, features = ["derive", "alloc", "std"] }
+serde_json = { version = "1", default-features = false, features = ["alloc", "std"] }
+
+frost = { package = "modular-frost", version = "0.11", default-features = false, features = ["ed25519", "tests"] }
+
+tokio = { version = "1", features = ["sync", "macros"] }
+
+shekyl-simple-request-rpc = { path = "../rpc/simple-request", default-features = false }
+
+[features]
+std = [
+  "std-shims/std",
+
+  "thiserror/std",
+
+  "zeroize/std",
+
+  "rand_core/std",
+  "rand/std",
+  "rand_chacha/std",
+  "rand_distr/std",
+
+  "shekyl-oxide/std",
+  "shekyl-rpc/std",
+  "shekyl-address/std",
+]
+compile-time-generators = ["curve25519-dalek/precomputed-tables", "shekyl-oxide/compile-time-generators"]
+multisig = ["std", "transcript", "frost"]
+default = ["std", "compile-time-generators"]

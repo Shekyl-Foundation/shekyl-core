@@ -28,6 +28,7 @@ serde_json = { version = "1", default-features = false, features = ["alloc"] }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 
 shekyl-oxide = { path = "..", default-features = false }
+shekyl-address = { path = "../wallet/address", default-features = false }
 
 [features]
 std = [
@@ -41,5 +42,6 @@ std = [
   "serde_json/std",
 
   "shekyl-oxide/std",
+  "shekyl-address/std",
 ]
 default = ["std"]

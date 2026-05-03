@@ -1,3 +1,3 @@
-# Generalized Bulletproofs EC Gadgets
+# Generalized Bulletproofs Circuit Abstraction
 
-Elliptic-curve gadgets for `generalized-bulletproofs`, including an on-curve constraint and incomplete addition gadgets.
+A circuit abstraction around `generalized-bulletproofs`.

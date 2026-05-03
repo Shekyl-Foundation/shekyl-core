@@ -61,8 +61,25 @@ members = [
 # --workspace` on stable never tries to resolve libfuzzer-sys, which
 # only builds under `cargo +nightly fuzz build`. Hardening-pass
 # commit 8 (`docs/MID_REWIRE_HARDENING.md` §3.8).
+#
+# The shekyl-oxide/* exclusions cover fork-side code that exists in the
+# byte-equal vendored tree but is not consumed by shekyl-core:
+#
+#   - `shekyl-oxide/shekyl-oxide/fuzz`: fork's libfuzzer harnesses (same
+#     reasoning as `shekyl-engine-state/fuzz`).
+#   - `shekyl-oxide/shekyl-oxide/wallet`: fork's standalone demonstrator
+#     wallet (and its `address`/`base58` subcrates). Per the Shekyl-First
+#     rule (`.cursor/rules/10-shekyl-first.mdc`), shekyl-core must not
+#     depend on fork code; Shekyl's wallet logic lives in `shekyl-cli`,
+#     `shekyl-engine-core`, and `shekyl-engine-state`. The fork's wallet
+#     is byte-mirrored only to satisfy the divergence guard's
+#     byte-equality invariant; cargo workspace discovery must skip it
+#     to avoid the `shekyl-address` package-name collision with the
+#     first-party `shekyl-address` crate.
 exclude = [
     "shekyl-engine-state/fuzz",
+    "shekyl-oxide/shekyl-oxide/fuzz",
+    "shekyl-oxide/shekyl-oxide/wallet",
 ]
 resolver = "2"
 
