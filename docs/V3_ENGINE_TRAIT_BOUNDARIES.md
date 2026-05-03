@@ -884,7 +884,9 @@ the existing `BalanceSummary::compute(&[TransferDetails], height)`
 helper; no `Balance` type is defined, no `BalanceFilter` /
 `TransferFilter` types are defined, and no current consumer
 threads a filter argument through `Engine::balance` / equivalent
-(consumers iterate `WalletLedger::transfers()` directly).
+(consumers reach transfers via `LedgerBlock::transfers()` on the
+`WalletLedger.ledger` field, with no filter parameter — see
+`rust/shekyl-engine-state/src/ledger_block.rs`).
 Introducing `Balance` as a parallel type alongside `BalanceSummary`
 would conflict with `docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`
 §7's explicit `BalanceSummary → Balance` rename deferral
@@ -906,9 +908,10 @@ qualify under §8.2's Stage-1-amendment co-landing rule (which
 covers additive method additions only). Per the §8.2 closing
 clause, "amendments that violate §7 are not amendments — they
 re-open this spec for a new round." The amendment lands as a
-focused doc-only PR (the same shape as the 2026-05-03 reservation-
-ownership amendment block above) so the §7 invariants are honored
-explicitly rather than by accident-of-implementation. Filter
+focused doc-only PR (the same shape as the 2026-05-03
+reservation-ownership amendment block above) so the §7
+invariants are honored explicitly rather than by
+accident-of-implementation. Filter
 types remain available as future *additive* §8.2 amendments when
 a concrete consumer surfaces a filter need (e.g.,
 `PendingTxEngine`'s output-selection path may want to thread a
