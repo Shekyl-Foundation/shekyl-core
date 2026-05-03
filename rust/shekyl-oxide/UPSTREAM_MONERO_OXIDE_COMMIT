@@ -1,4 +1,4 @@
 upstream_repo=https://github.com/Shekyl-Foundation/monero-oxide
 upstream_branch=fcmp++
-upstream_commit=2618f225cbb222ac8083db5b07d12787cea5b6cf
-sync_date=2026-05-02
+upstream_commit=3933664d0851871c976f07298b862373d1c6fec0
+sync_date=2026-04-25

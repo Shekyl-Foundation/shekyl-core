@@ -4,8 +4,8 @@
 #![deny(unsafe_code)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
-pub use shekyl_io as io;
 pub use shekyl_generators as generators;
+pub use shekyl_io as io;
 pub use shekyl_primitives as primitives;
 
 /// Merkle tree functionality.
@@ -14,10 +14,10 @@ pub mod merkle;
 /// FCMP++ proof types and supporting structures (range proofs, encrypted amounts, etc.).
 pub mod fcmp;
 
-/// Transaction structs and functionality.
-pub mod transaction;
 /// Block structs and functionality.
 pub mod block;
+/// Transaction structs and functionality.
+pub mod transaction;
 
 #[cfg(test)]
 mod tests;
