@@ -779,8 +779,8 @@ pub trait LedgerEngine {
 
     fn synced_height(&self) -> u64;
     fn snapshot(&self) -> LedgerSnapshot;
-    fn balance(&self, filter: BalanceFilter) -> Balance;
-    fn transfers(&self, filter: TransferFilter) -> Vec<TransferDetails>;
+    fn balance(&self) -> BalanceSummary;
+    fn transfers(&self) -> Vec<TransferDetails>;
 
     /// Apply a producer-emitted `ScanResult`. Returns
     /// `RefreshError::ConcurrentMutation` iff the scan result's
@@ -870,6 +870,55 @@ reservation tracker, recording why it stays grouped with
 signatures or trait shapes change; the §2.2 trait surface block,
 the Stage 1 implementing-type note, and the Round 2/Round 3
 disposition blocks above are unchanged.
+
+**Stage 1 PR 2 surface narrowing (2026-05-03).** The original §2.2
+trait surface declared `fn balance(&self, filter: BalanceFilter)
+-> Balance` and `fn transfers(&self, filter: TransferFilter) ->
+Vec<TransferDetails>`, naming three types — `Balance`,
+`BalanceFilter`, `TransferFilter` — that appeared nowhere else
+in the spec, carried no rationale text, and corresponded to no
+caller need at PR 2 implementation time. Rust-side reality at the
+PR 2 cut-point: `BalanceSummary` already exists in
+`shekyl-scanner` as the result type that callers consume from
+the existing `BalanceSummary::compute(&[TransferDetails], height)`
+helper; no `Balance` type is defined, no `BalanceFilter` /
+`TransferFilter` types are defined, and no current consumer
+threads a filter argument through `Engine::balance` / equivalent
+(consumers iterate `WalletLedger::transfers()` directly).
+Introducing `Balance` as a parallel type alongside `BalanceSummary`
+would conflict with `docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`
+§7's explicit `BalanceSummary → Balance` rename deferral
+("cosmetic; defer to a separate cleanup if naming churn is
+wanted"), and introducing empty `BalanceFilter` / `TransferFilter`
+placeholder types would import design pressure into PR 2 with no
+caller pulling on the filter shape. The amendment narrows the
+two signatures accordingly:
+
+```text
+- fn balance(&self, filter: BalanceFilter) -> Balance;
++ fn balance(&self) -> BalanceSummary;
+- fn transfers(&self, filter: TransferFilter) -> Vec<TransferDetails>;
++ fn transfers(&self) -> Vec<TransferDetails>;
+```
+
+This is a non-additive trait-shape change and therefore does not
+qualify under §8.2's Stage-1-amendment co-landing rule (which
+covers additive method additions only). Per the §8.2 closing
+clause, "amendments that violate §7 are not amendments — they
+re-open this spec for a new round." The amendment lands as a
+focused doc-only PR (the same shape as the 2026-05-03 reservation-
+ownership amendment block above) so the §7 invariants are honored
+explicitly rather than by accident-of-implementation. Filter
+types remain available as future *additive* §8.2 amendments when
+a concrete consumer surfaces a filter need (e.g.,
+`PendingTxEngine`'s output-selection path may want to thread a
+`spendable-only` filter; that addition co-lands with the
+`PendingTxEngine` PR per §8.2's two-commit form). `LedgerError`
+remains as declared — it is a new error enum introduced in PR 2's
+commit 1 alongside the trait. The §2.2 ownership claim, lock
+choice, async story, balance reservation-agnosticism, and
+reservation-tracker actor-identity discussion above are all
+unchanged.
 
 ### 2.3 `RefreshEngine` (revised in Round 2)
 
