@@ -224,10 +224,10 @@ pub enum RefreshError {
 /// Stage 1 PR 2 ships `LedgerError` with **no variants**. The §2.2
 /// trait surface is structured so that:
 ///
-/// - the four read methods (`synced_height`, `snapshot`, `balance`,
-///   `transfers`) are infallible — they return `T`, not
-///   `Result<T, _>`, because reading committed state under the
-///   `RwLock` read guard cannot fail; and
+/// - the three read methods (`synced_height`, `snapshot`, `balance`)
+///   are infallible — they return `T`, not `Result<T, _>`, because
+///   reading committed state under the `RwLock` read guard cannot
+///   fail; and
 /// - the lone mutating method (`apply_scan_result`) returns
 ///   [`RefreshError`] (specifically [`RefreshError::ConcurrentMutation`])
 ///   because the failure mode crosses the `LedgerEngine` /

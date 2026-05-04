@@ -8,11 +8,13 @@
 //! Per [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`] §2.2, `LedgerEngine` is
 //! the wallet-side trait that owns the confirmed-chain ledger:
 //! `LedgerBlock` (the chain projection scanned out of daemon blocks),
-//! the matured-output index, the balance projection, and the
-//! transfer history. It is the reservation-agnostic half of the
-//! wallet's spendable-state surface; the spendable-balance projection
-//! that subtracts in-flight `PendingTx` reservations lives on
-//! `PendingTxEngine` (§2.6) per the Round 3 ownership decision.
+//! the matured-output index, and the balance projection. It is the
+//! reservation-agnostic half of the wallet's spendable-state surface;
+//! the spendable-balance projection that subtracts in-flight
+//! `PendingTx` reservations lives on `PendingTxEngine` (§2.6) per
+//! the Round 3 ownership decision. Per-transaction history is read
+//! directly from the underlying `LedgerBlock` rather than through
+//! the trait — see the Phase 0c section below.
 //!
 //! # Round 3 disposition: `&self` over `&mut self`
 //!
@@ -59,12 +61,32 @@
 //! existing aggregate as-is to keep the trait extraction small and
 //! reviewable.
 //!
+//! # No `transfers()` trait method (Phase 0c)
+//!
+//! Per the §2.2 Phase 0c amendment landed in PR #25, the trait
+//! surface does **not** include a `transfers()` method.
+//! `TransferDetails` is deliberately non-`Clone` per the privacy/
+//! security discipline pinned at
+//! `rust/shekyl-engine-state/src/transfer.rs` (cloning would
+//! duplicate `Zeroizing<[u8; N]>` secrets into a heap allocation
+//! the compiler cannot track). A `fn transfers(&self) ->
+//! Vec<TransferDetails>` ownership-transfer signature is therefore
+//! unsatisfiable without breaking that discipline; per
+//! `.cursor/rules/00-mission.mdc` priority 1 ("security and
+//! quantum resilience are preconditions"), the trait method is
+//! removed rather than the discipline relaxed. Wallet-internal
+//! callers consume the `LedgerBlock::transfers(&self) ->
+//! &[TransferDetails]` slice accessor directly (the borrow is
+//! `Clone`-discipline-respecting by construction); a future
+//! Stage 4 actor consumer that needs trait-level enumeration can
+//! re-introduce the surface via a non-secret view type designed
+//! against its concrete threat model.
+//!
 //! [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`]: ../../../../../docs/V3_ENGINE_TRAIT_BOUNDARIES.md
 //! [`LocalLedger`]: super::super::ledger::LocalLedger
 //! [`PendingTxEngine`]: super::super::pending::PendingTxEngine
 //! [`BalanceSummary`]: shekyl_scanner::BalanceSummary
 
-use shekyl_engine_state::TransferDetails;
 use shekyl_scanner::BalanceSummary;
 
 use crate::engine::error::{LedgerError, RefreshError};
@@ -76,9 +98,9 @@ use crate::scan::ScanResult;
 /// Implementors carry the wallet's [`LedgerBlock`] (and the matured-
 /// output index it projects) under interior mutability. Callers
 /// ([`Engine<S>`](super::super::Engine) orchestration,
-/// `RefreshEngine::merge_into_ledger`, balance / transfer accessors)
-/// bind against the trait, not the concrete type, so the Stage 4
-/// swap-in does not require call-site changes.
+/// `RefreshEngine::merge_into_ledger`, balance accessors) bind
+/// against the trait, not the concrete type, so the Stage 4 swap-in
+/// does not require call-site changes.
 ///
 /// # Supertrait bounds
 ///
@@ -98,7 +120,7 @@ use crate::scan::ScanResult;
 ///
 /// The trait declares an [`Self::Error`] associated type for
 /// forward compatibility. None of the Stage 1 methods surface
-/// `Self::Error` today: the four read methods are infallible and
+/// `Self::Error` today: the three read methods are infallible and
 /// `apply_scan_result` returns [`RefreshError`] because the
 /// failure mode crosses the `LedgerEngine` / `RefreshEngine`
 /// boundary (§1.5). The bound is the named landing pad for
@@ -185,31 +207,6 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     /// Never panics. Per [`Self::synced_height`]'s panic note.
     #[allow(dead_code)] // Stage 1 PR 2: production call sites migrate in commit 5.
     fn balance(&self) -> BalanceSummary;
-
-    /// Full confirmed-chain transfer history.
-    ///
-    /// Per the §2.2 Phase 0b amendment, this method returns the
-    /// full transfer list with no filter parameter; filtering is a
-    /// caller concern, layered on top, and lives outside the
-    /// trait surface to keep the orchestrator-facing contract
-    /// minimal.
-    ///
-    /// # Cancellation
-    ///
-    /// Class **a** per §4: a synchronous read.
-    ///
-    /// # Idempotency
-    ///
-    /// **Yes** per §4: a deterministic projection over the
-    /// `LedgerBlock`'s transfer index. Repeated calls return
-    /// equivalent vectors until the next
-    /// [`Self::apply_scan_result`] write.
-    ///
-    /// # Panics
-    ///
-    /// Never panics. Per [`Self::synced_height`]'s panic note.
-    #[allow(dead_code)] // Stage 1 PR 2: production call sites migrate in commit 5.
-    fn transfers(&self) -> Vec<TransferDetails>;
 
     /// Apply a producer-emitted [`ScanResult`] to the ledger,
     /// advancing `synced_height` and folding new transfers /
