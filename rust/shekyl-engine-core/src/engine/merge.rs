@@ -8,10 +8,14 @@
 //!
 //! [`Engine::apply_scan_result`] is the only audited code path that
 //! mutates `WalletLedger`'s scanner-derived slice and the runtime
-//! `LedgerIndexes` during refresh. It runs under the wallet's
-//! `&mut self` borrow (which is the type-layer single-flight
-//! enforcement; the JSON-RPC binary additionally wraps `Engine<S>`
-//! in `Arc<RwLock<…>>` for cross-thread access).
+//! `LedgerIndexes` during refresh. As of Stage 1 PR 2, it takes
+//! `&self` and the interior [`super::LocalLedger`] `RwLock` provides
+//! the audited single-flight enforcement: each merge call acquires
+//! the LocalLedger write guard for the duration of the merge, then
+//! drops it before returning. The JSON-RPC binary wraps `Engine<S>`
+//! in `Arc<RwLock<…>>` for cross-thread access; the outer borrow is
+//! shared (`read`) for the merge call because mutation is now
+//! interior to `LocalLedger`.
 //!
 //! # Three-stage merge
 //!
@@ -66,8 +70,9 @@
 //! `pub(crate)` so tests can drive it against a free
 //! `(LedgerBlock, LedgerIndexes)` pair without standing up a full
 //! `Engine<S>` (whose lifecycle methods land in a later commit).
-//! `Engine::apply_scan_result` is a one-line wrapper that calls it
-//! against `&mut self.ledger.ledger` and `&mut self.indexes`.
+//! `Engine::apply_scan_result` is a one-line wrapper that acquires
+//! the [`super::LocalLedger`] write guard and calls the helper
+//! against the guarded `(LedgerBlock, LedgerIndexes)` pair.
 
 use std::collections::BTreeMap;
 
@@ -76,31 +81,39 @@ use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 
 use crate::{
     engine::{
-        local_ledger::LocalLedger, traits::DaemonEngine, Engine, EngineSignerKind, RefreshError,
+        local_ledger::LocalLedger,
+        traits::{DaemonEngine, LedgerEngine},
+        Engine, EngineSignerKind, RefreshError,
     },
     scan::{ScanResult, StakeEvent},
 };
 
 // `D: DaemonEngine` private-bound: see the rationale on the
 // `pub struct Engine` definition in `engine/mod.rs`. The
-// `L = LocalLedger` specialization is intentional: this impl block
-// drives the merge body via `self.ledger.write()` (a `LocalLedger`
-// inherent method), and exposes `synced_height` via
-// `self.ledger.read()`. PR 2 commit 5 migrates these call sites to
-// the `LedgerEngine` trait surface (`apply_scan_result(&self).await`
-// / `synced_height(&self)` / `snapshot(&self)`) and generalizes the
-// block to `impl<S, D, L: LedgerEngine>`.
+// `L = LocalLedger` specialization remains because
+// [`Engine::apply_scan_result`] drives the merge body via
+// `self.ledger.write()` — a `LocalLedger` inherent method — to
+// acquire the synchronous write guard. As of PR 2 commit 5,
+// [`Engine::synced_height`] has been migrated to the
+// [`LedgerEngine::synced_height`] trait method (no longer a direct
+// inherent call), and `apply_scan_result` flipped from `&mut self`
+// to `&self` (the interior `LocalLedger` `RwLock` provides the
+// audited mutation point). Full generalization of this block to
+// `impl<S, D, L: LedgerEngine>` is deferred until the trait surface
+// gains a sync mutator wrapper (the trait's `apply_scan_result` is
+// async, and driving it from a sync `&self` wrapper without a
+// runtime in scope is not currently viable).
 #[allow(private_bounds)]
 impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
     /// Current scanned-chain height: the highest block height the
     /// wallet's persisted ledger has fully ingested. `0` for a
     /// freshly-created wallet that has never refreshed.
     ///
-    /// Acquires a [`LocalLedger`](super::local_ledger::LocalLedger)
-    /// read guard for the duration of the call; the guard is dropped
-    /// before returning so concurrent writers can proceed.
+    /// Delegates to [`LedgerEngine::synced_height`] on the
+    /// implementor field; the implementor manages its own guard
+    /// acquisition and projection.
     pub fn synced_height(&self) -> u64 {
-        self.ledger.read().ledger.ledger.height()
+        self.ledger.synced_height()
     }
 
     /// Apply a scanner-produced [`ScanResult`] to the wallet's
@@ -135,7 +148,7 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
     /// every event. Per-event errors do not currently exist —
     /// every `LedgerIndexes` mutator the merge calls is infallible
     /// once both invariants have been verified.
-    pub fn apply_scan_result(&mut self, result: ScanResult) -> Result<(), RefreshError> {
+    pub fn apply_scan_result(&self, result: ScanResult) -> Result<(), RefreshError> {
         let mut guard = self.ledger.write();
         let state = &mut *guard;
         apply_scan_result_to_state(&mut state.ledger.ledger, &mut state.indexes, result)
