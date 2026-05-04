@@ -740,10 +740,13 @@ See `rust/shekyl-engine-core/src/engine/pending.rs`'s
 `build_pending_tx_in_state` for the actual build-path call sites,
 and §2.2's 2026-05-03 transfer-clone discipline amendment for
 why no trait-level transfer-enumeration method exists at Stage 1.
-The Stage 1 access path is the `Engine::ledger()` guard wrapper
-(queued for V3.1 audit per commit 2's pre-flight); the Stage 4
-access path is whatever shape the actor refactor establishes.
-The ownership distinction is operational — `PendingTxEngine`
+On `dev` today the access path is `Engine::ledger()` (which
+returns `&WalletLedger`) followed by descent into the nested
+`WalletLedger.ledger` field; the post-Stage-1 access path is
+whatever shape PR 2's implementation establishes (PR 2 commit 2
+narrows it to a guard wrapper); the post-Stage-4 path is whatever
+shape the actor refactor establishes. The ownership distinction
+is operational — `PendingTxEngine`
 mutates the tracker; `LedgerEngine` owns the ledger state that
 the build path reads. `LedgerEngine::balance` is
 reservation-agnostic (it answers "what does the ledger say is
@@ -982,27 +985,34 @@ surface.** Three independent grounds:
    discipline the view type itself requires) that belongs to the
    consumer that requests it, not to a speculative spec
    amendment.
-2. **No current Rust caller exists.** RPC routes through C++
-   `wallet2_ffi_get_transfers` today; the in-tree
-   `LedgerBlock::transfers(&self) -> &[TransferDetails]` accessor
-   (see
-   [`rust/shekyl-engine-state/src/ledger_block.rs`](../rust/shekyl-engine-state/src/ledger_block.rs))
-   handles in-tree borrowing where needed. The
-   `LedgerEngine::transfers` trait method exists in the spec but
-   no Rust consumer pulls on it. Per
+2. **No current Rust caller needs the trait method.** The
+   existing transfer-history consumers borrow the
+   `LedgerBlock::transfers(&self) -> &[TransferDetails]` slice
+   accessor (see
+   [`rust/shekyl-engine-state/src/ledger_block.rs`](../rust/shekyl-engine-state/src/ledger_block.rs)),
+   which returns a borrowed view rather than an owned `Vec`:
+   `shekyl-engine-rpc`'s `scanner_get_transfers` /
+   `scanner_incoming_transfers` (gated on the `rust-scanner`
+   feature) call `ledger.transfers().iter().filter().map().collect()`
+   into `Vec<Value>`; without `rust-scanner` the same RPCs route
+   through C++ `wallet2_ffi_get_transfers`. Either way no caller
+   asks for owned `Vec<TransferDetails>` from the trait — the
+   slice borrow is sufficient and is `Clone`-discipline-respecting
+   by construction. Per
    [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
-   ("default: delete") applied at trait-surface granularity, dead
-   trait methods get removed.
+   ("default: delete") applied at trait-surface granularity, a
+   trait method that no caller needs gets removed.
 
-   The asymmetry is worth pinning: when dead surface meets a hard
-   constraint, the disposition tilts toward removal rather than
-   preservation. Compare the `Engine::ledger()` accessor finding
-   from PR 2's commit 2 pre-flight — also dead surface, but
-   preserved via a guard wrapper with a V3.1 `FOLLOWUPS.md` audit
-   row because no hard constraint forced a decision. Here the
-   `Clone` discipline is the hard constraint that converts the
-   default ("delete") from one of several options into the only
-   option.
+   The asymmetry is worth pinning: when no-caller-needs-it surface
+   meets a hard constraint, the disposition tilts toward removal
+   rather than preservation. Compare the `Engine::ledger()`
+   accessor finding from PR 2's commit 2 pre-flight — also dead
+   surface (zero in-tree callers on `dev` today), but PR 2 commit 2
+   preserves it via a guard wrapper with a V3.1 `FOLLOWUPS.md`
+   audit row because no hard constraint forced a decision. Here
+   the `Clone` discipline is the hard constraint that converts
+   the default ("delete") from one of several options into the
+   only option.
 3. **The Stage 4 design space is preserved.** Future re-introduction
    of transfer enumeration on the trait — when a concrete actor
    consumer surfaces the requirement — happens against that

@@ -1,5 +1,21 @@
 # Stage 1 PR 2 — `LedgerEngine` extraction — design
 
+> **⚠ Staleness notice (post-Phase-0c).** Phase 0b
+> ([PR #23](https://github.com/Shekyl-Foundation/shekyl-core/pull/23))
+> and Phase 0c
+> ([PR #25](https://github.com/Shekyl-Foundation/shekyl-core/pull/25))
+> amended `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.2 after this design doc
+> was written. Inline references in §1.2, §2.1, §3.2, §5, §6, and §7
+> below to (a) the now-removed `Balance` / `BalanceFilter` /
+> `TransferFilter` types and (b) the now-removed `transfers()` trait
+> method are **stale**. The binding contract for PR 2's surface is
+> the spec at `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.2 (post-Phase-0c
+> four-method surface: `synced_height` / `snapshot` / `balance` /
+> `apply_scan_result`); the design-doc realignment co-lands in PR 2's
+> commit 9 per the alt-(c') template precedent established in PR #23.
+> Reviewers reading this doc before commit 9 lands should treat it as
+> spec-authority-supersedes for the affected sections.
+
 **Status.** Stage 1 PR 2 of the seven-trait extraction chain pinned in
 [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
 §8.1. Phase 0 (a doc-only spec amendment to §2.2 correcting the
