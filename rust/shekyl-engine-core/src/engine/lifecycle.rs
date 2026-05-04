@@ -747,6 +747,86 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine> Engine<S, D1, L> {
             _signer,
         }
     }
+
+    /// Test-only constructor: rebuild the engine with `ledger`
+    /// substituted in place of the existing one, leaving every
+    /// other field unchanged.
+    ///
+    /// Mirrors [`Self::replace_daemon`] for the `LedgerEngine` slot
+    /// added in PR 2 (per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md`
+    /// §6.3). Hybrid tests that need a fully-constructed
+    /// `Engine<SoloSigner>` but want to drive
+    /// [`super::Engine::apply_scan_result`] (or any other ledger-
+    /// touching path) against a deterministic `MockLedger` rather
+    /// than the canonical `LocalLedger` use this method:
+    ///
+    /// ```ignore
+    /// let real = Engine::<SoloSigner>::create(params, dummy_daemon())?;
+    /// let mock_ledger = MockLedger::with_seed(derive_seed(&master, ROLE_LEDGER));
+    /// let hybrid: Engine<SoloSigner, DaemonClient, MockLedger> =
+    ///     real.replace_ledger(mock_ledger);
+    /// ```
+    ///
+    /// Composes with [`Self::replace_daemon`]: a hybrid test that
+    /// exercises both slots calls `replace_daemon` then
+    /// `replace_ledger` (or vice versa) in sequence. The two
+    /// methods are independent — each consumes `self` and returns a
+    /// reparameterized engine — so the test driver picks the
+    /// composition order that reads cleanest at the call site.
+    ///
+    /// The original `L1` ledger is dropped; the returned engine's
+    /// ledger field is the supplied `L2`. Net effect is that one
+    /// real `Engine::create` ceremony pays for as many hybrid
+    /// scenarios as the test composes.
+    ///
+    /// # Cleanup target (V3.2)
+    ///
+    /// Same trajectory as [`Self::replace_daemon`]: V3.2 generalizes
+    /// `Engine::create` and `Engine::open_full` over `L:
+    /// LedgerEngine` (default `LocalLedger`) alongside the
+    /// `LedgerEngine`-to-`pub` promotion. At that point production
+    /// constructors accept any `L` directly, hybrid tests construct
+    /// their `Engine<SoloSigner, _, MockLedger>` via the public
+    /// path without the intermediate dummy-ledger ceremony, and
+    /// this `#[cfg(test)] pub(crate)` helper retires. The retirement
+    /// commit deletes both `replace_daemon` and `replace_ledger`
+    /// together; production paths are unaffected because they never
+    /// named these methods.
+    ///
+    /// `#[allow(dead_code)]` is load-bearing across the PR 2 commit
+    /// boundary: commit 6 lands `replace_ledger` alongside
+    /// [`MockLedger`] itself; the first caller is the hybrid retry
+    /// test landing in commit 7. The marker drops when that test
+    /// composes `real.replace_ledger(mock)` end-to-end.
+    #[allow(dead_code)]
+    pub(crate) fn replace_ledger<L2: LedgerEngine>(self, ledger: L2) -> Engine<S, D1, L2> {
+        let Engine {
+            file,
+            keys,
+            ledger: _old,
+            reservations,
+            next_reservation_id,
+            prefs,
+            daemon,
+            network,
+            capability,
+            refresh_slot,
+            _signer,
+        } = self;
+        Engine {
+            file,
+            keys,
+            ledger,
+            reservations,
+            next_reservation_id,
+            prefs,
+            daemon,
+            network,
+            capability,
+            refresh_slot,
+            _signer,
+        }
+    }
 }
 
 /// Render a `shekyl-crypto-pq::CryptoError` into the static-string
