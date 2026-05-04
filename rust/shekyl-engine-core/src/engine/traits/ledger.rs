@@ -247,7 +247,6 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     /// Lock-poisoning is the only panic source — a previous holder
     /// of the write guard panicked mid-merge — and is treated as
     /// an unrecoverable wallet-state defect per §5.1.
-    #[allow(dead_code)] // Stage 1 PR 2: production call sites migrate in commit 5.
     fn apply_scan_result(
         &self,
         scan_result: ScanResult,

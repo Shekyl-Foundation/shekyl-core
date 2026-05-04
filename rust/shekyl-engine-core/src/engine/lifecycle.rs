@@ -792,13 +792,6 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine> Engine<S, D1, L> {
     /// commit deletes both `replace_daemon` and `replace_ledger`
     /// together; production paths are unaffected because they never
     /// named these methods.
-    ///
-    /// `#[allow(dead_code)]` is load-bearing across the PR 2 commit
-    /// boundary: commit 6 lands `replace_ledger` alongside
-    /// [`MockLedger`] itself; the first caller is the hybrid retry
-    /// test landing in commit 7. The marker drops when that test
-    /// composes `real.replace_ledger(mock)` end-to-end.
-    #[allow(dead_code)]
     pub(crate) fn replace_ledger<L2: LedgerEngine>(self, ledger: L2) -> Engine<S, D1, L2> {
         let Engine {
             file,

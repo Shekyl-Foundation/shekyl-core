@@ -137,13 +137,6 @@ pub(crate) const ROLE_DAEMON: &[u8] = b"role/daemon";
 /// `derive_seed(&master, ROLE_LEDGER)`; the two seeds are
 /// HKDF-SHA256-distinct by construction (different `info` strings)
 /// even though they share the same master.
-///
-/// `#[allow(dead_code)]` is load-bearing across the PR 2 commit
-/// boundary: commit 6 lands the constant alongside [`MockLedger`]
-/// itself, but the first caller is the hybrid retry test in commit 7.
-/// The marker drops when commit 7 references the constant via
-/// `derive_seed(&master, ROLE_LEDGER)`.
-#[allow(dead_code)]
 pub(crate) const ROLE_LEDGER: &[u8] = b"role/ledger";
 
 /// Derive a per-component 32-byte seed from a master seed and a role
@@ -1296,6 +1289,33 @@ mod tests {
         assert_eq!(
             seed, expected,
             "derive_seed(TEST_MASTER_SEED, ROLE_DAEMON) drifted from pinned fixture"
+        );
+    }
+
+    #[test]
+    fn derive_seed_pinned_fixture_for_role_ledger() {
+        // Sibling of `derive_seed_pinned_fixture_for_role_daemon`.
+        // The two role tags must produce distinct, stable seeds under
+        // the same master so a hybrid test composing both `MockDaemon`
+        // and `MockLedger` against one literal master gets independent
+        // per-component RNG state. Drift in either fixture (upstream
+        // `hkdf` / `sha2` change, accidental edit to either role byte
+        // string, accidental rebind of `derive_seed`) is caught here
+        // before any hybrid test sees the new derived seed.
+        //
+        // Computed on first run with the stable inputs above; a
+        // future deliberate change to either the role tag or the
+        // derivation primitive must update this fixture in the same
+        // commit so the substitution is visible in review.
+        let seed = derive_seed(&TEST_MASTER_SEED, ROLE_LEDGER);
+        let expected: [u8; 32] = [
+            0x78, 0xbd, 0x0e, 0x22, 0xee, 0x92, 0x44, 0xd1, 0xaa, 0xb4, 0xe2, 0x18, 0x15, 0xd8,
+            0x71, 0x2d, 0x43, 0xed, 0xd1, 0x31, 0xad, 0x4b, 0xb9, 0x8d, 0x5f, 0x0c, 0x3a, 0x6d,
+            0xc2, 0xec, 0x1f, 0x96,
+        ];
+        assert_eq!(
+            seed, expected,
+            "derive_seed(TEST_MASTER_SEED, ROLE_LEDGER) drifted from pinned fixture"
         );
     }
 }
