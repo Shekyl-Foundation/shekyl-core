@@ -556,3 +556,41 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
         }
     }
 }
+
+// ── Bench-internals helpers (gated; see `lib.rs`'s `__bench_internals`)
+//
+// These free functions live in this module so they can name the
+// otherwise-private `Engine.ledger` field; they are re-exported through
+// `crate::__bench_internals` for `engine_trait_bench_ledger_balance{,_iai}.rs`
+// without widening the field's production visibility. The pattern is
+// the same one PR 1 uses for `LedgerSnapshot::from_ledger_for_bench`:
+// the hot-path code stays in its production module while the bench
+// surface is unlocked with a focused feature flag.
+
+/// Borrow the engine's [`LocalLedger`] field directly. See
+/// [`crate::__bench_internals::engine_local_ledger_for_bench`] for the
+/// public-facing wrapper and the use-site rationale.
+#[cfg(feature = "bench-internals")]
+pub fn engine_local_ledger_for_bench(
+    engine: &Engine<SoloSigner, DaemonClient, LocalLedger>,
+) -> &LocalLedger {
+    &engine.ledger
+}
+
+/// Project the wallet's balance through the
+/// [`LedgerEngine::balance`](traits::LedgerEngine::balance) trait
+/// method, dispatched on `engine.ledger`. See
+/// [`crate::__bench_internals::engine_balance_for_bench`] for the
+/// public-facing wrapper and the use-site rationale.
+///
+/// The trait surface is `pub(crate)`, so this thin wrapper performs
+/// the trait call inside the crate (where the trait is visible) and
+/// surfaces the [`shekyl_scanner::BalanceSummary`] result across the
+/// bench-target boundary.
+#[cfg(feature = "bench-internals")]
+pub fn engine_balance_for_bench(
+    engine: &Engine<SoloSigner, DaemonClient, LocalLedger>,
+) -> shekyl_scanner::BalanceSummary {
+    use crate::engine::traits::LedgerEngine;
+    engine.ledger.balance()
+}

@@ -181,6 +181,43 @@ impl LocalLedger {
     }
 }
 
+#[cfg(feature = "bench-internals")]
+impl LocalLedger {
+    /// **Bench internals only.** Replace the inner persisted
+    /// [`LedgerBlock`](shekyl_engine_state::LedgerBlock) with
+    /// `ledger_block` and reset the indexes to empty.
+    ///
+    /// The `engine_trait_bench_ledger_balance` pair feeds a
+    /// [`WalletLedger`]-shaped state-populated fixture into
+    /// [`LedgerEngine::balance`](super::traits::LedgerEngine::balance)
+    /// without going through the producer/scanner ceremony that
+    /// production state acquires through `Engine::apply_scan_result`.
+    /// The bench measures per-call cost over a fixed transfer count;
+    /// the indexes are not consulted on the `balance` read path
+    /// (per `local_ledger.rs`'s implementor — the read body
+    /// projects `ledger.balance(ledger.height())` directly), so
+    /// resetting them to empty keeps the fixture aligned with the
+    /// `balance` workload alone.
+    ///
+    /// Bench fixtures that exercise index-touching paths (e.g., a
+    /// future `claimable_rewards` bench) populate indexes through
+    /// a separate sibling helper rather than overloading this one.
+    ///
+    /// # Why this is bench-internals, not `pub(crate)` test surface
+    ///
+    /// External bench targets compile against `shekyl-engine-core`'s
+    /// public surface only; `pub(crate)` items are not visible. This
+    /// helper lifts to `pub` under the `bench-internals` feature
+    /// flag (gated through [`crate::__bench_internals`]) so the
+    /// bench fixture can populate state without weakening the
+    /// crate-local visibility for production callers.
+    pub fn populate_for_bench(&self, ledger_block: shekyl_engine_state::LedgerBlock) {
+        let mut guard = self.write();
+        guard.ledger.ledger = ledger_block;
+        guard.indexes = shekyl_engine_state::LedgerIndexes::empty();
+    }
+}
+
 /// Stage 1 in-process implementation of [`LedgerEngine`].
 ///
 /// Each method acquires its own [`RwLock`] guard for the duration of

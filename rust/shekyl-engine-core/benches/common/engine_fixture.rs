@@ -186,6 +186,28 @@ use shekyl_engine_prefs::WalletPrefs;
 use shekyl_simple_request_rpc::SimpleRequestRpc;
 use tempfile::TempDir;
 
+// `engine_trait_bench_ledger_balance{,_iai}.rs` require the
+// `bench-internals` feature for state-injection on `LocalLedger`;
+// the imports below stay feature-gated so the existing
+// `engine_trait_bench_ledger_synced_height{,_iai}.rs` pair (which
+// does *not* require `bench-internals`) compiles cleanly when this
+// shared module is included from those targets.
+#[cfg(feature = "bench-internals")]
+use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+#[cfg(feature = "bench-internals")]
+use shekyl_engine_core::__bench_internals::engine_local_ledger_for_bench;
+#[cfg(feature = "bench-internals")]
+use shekyl_engine_state::{
+    payment_id::PaymentId,
+    subaddress::SubaddressIndex,
+    transfer::{TransferDetails, SPENDABLE_AGE},
+    BlockchainTip, LedgerBlock, ReorgBlocks,
+};
+#[cfg(feature = "bench-internals")]
+use shekyl_oxide::primitives::Commitment;
+#[cfg(feature = "bench-internals")]
+use zeroize::Zeroizing;
+
 /// Bench-fixture password. Bench-only; never written to disk outside
 /// the temp directory the fixture cleans up on drop.
 const BENCH_PASSWORD: &[u8] = b"shekyl-bench-fixture-password";
@@ -312,4 +334,160 @@ fn construct_dummy_daemon() -> DaemonClient {
         .block_on(SimpleRequestRpc::new("http://127.0.0.1:1".to_string()))
         .expect("SimpleRequestRpc::new (no connection attempted)");
     DaemonClient::new(rpc)
+}
+
+/// Default transfer count for the `engine_trait_bench_ledger_balance`
+/// state-populated fixture.
+#[cfg(feature = "bench-internals")]
+///
+/// `1024` is large enough that
+/// [`shekyl_scanner::BalanceSummary::compute`]'s linear scan over the
+/// transfer slice dominates per-call cost (so the workload classifies
+/// as "state-dependent compute" per
+/// [`docs/PERFORMANCE_BASELINE.md`](../../docs/PERFORMANCE_BASELINE.md)
+/// §4.4) and small enough that the iai-callgrind Valgrind run
+/// completes within the §4.4 dynamic-check budget on a CI runner.
+/// Power-of-two so the numerical relationship between fixture size
+/// and measured instruction count is reviewable on inspection.
+///
+/// If a future workload-characterization PR (e.g., the
+/// transfer-count-scaling investigation §4.6 reserves) needs a
+/// different N, it adds a sibling builder
+/// (`build_engine_fixture_with_balance_n`) rather than mutating this
+/// constant — the frozen baseline pins to the workload at the merge
+/// SHA, not to the constant's identifier.
+///
+/// Per-bench-target `mod common;` inclusion means each target only
+/// uses a subset of this module's items; `#[allow(dead_code)]` on
+/// the unused side is the same discipline applied to `drop_fixture`
+/// elsewhere in this file.
+#[allow(dead_code)]
+pub const BENCH_BALANCE_TRANSFER_COUNT: usize = 1024;
+
+/// Construct a freshly-created `Engine<SoloSigner>` whose persistent
+/// ledger is pre-populated with `n` synthetic transfers, returning
+/// the boxed engine and a `TempDir` guard. Sibling of
+/// [`build_engine_fixture`] for state-dependent benches.
+///
+/// Workload class: state-dependent compute. The
+/// `LedgerEngine::balance` trait method walks the transfer slice
+/// once per call (per [`shekyl_scanner::BalanceSummary::compute`]),
+/// so per-call cost scales linearly with `n`.
+///
+/// # State-injection path (PR 2 commit 8)
+///
+/// Production `Engine::create` (called inside
+/// [`build_engine_fixture`]) returns an engine with an empty
+/// `WalletLedger`. To populate state for the balance bench without
+/// running a full producer/scanner ceremony, this builder:
+///
+/// 1. Constructs `n` synthetic [`TransferDetails`] via
+///    [`sample_transfer`] (deterministic by-index seed pattern,
+///    matching the precedent in `refresh_snapshot.rs`).
+/// 2. Wraps them in a fresh [`LedgerBlock::new`] with a fixed
+///    10-entry reorg window and an arbitrary tip.
+/// 3. Uses
+///    [`shekyl_engine_core::__bench_internals::LocalLedger::populate_for_bench`]
+///    to swap the engine's empty ledger for the populated one.
+///    The helper is gated behind the `bench-internals` feature so
+///    production callers cannot reach it.
+///
+/// # Drop order, panics, and Tokio locality
+///
+/// Same as [`build_engine_fixture`]: the box drops before the temp
+/// directory; production lifecycle failures panic; the Tokio runtime
+/// is fixture-internal and dropped before return.
+#[cfg(feature = "bench-internals")]
+#[allow(dead_code)]
+pub fn build_engine_fixture_with_balance(
+    n: usize,
+) -> (
+    Box<Engine<SoloSigner, DaemonClient, shekyl_engine_core::__bench_internals::LocalLedger>>,
+    TempDir,
+) {
+    let (engine, tmp) = build_engine_fixture();
+
+    let mut transfers = Vec::with_capacity(n);
+    for i in 0..n {
+        transfers.push(sample_transfer(i as u64));
+    }
+    let tip = BlockchainTip::new(1_000_000, [0xAA; 32]);
+    let reorg_blocks = ReorgBlocks {
+        blocks: (999_990..=1_000_000)
+            .map(|h| (h, [(h & 0xff) as u8; 32]))
+            .collect(),
+    };
+    let ledger_block = LedgerBlock::new(transfers, tip, reorg_blocks);
+
+    engine_local_ledger_for_bench(&engine).populate_for_bench(ledger_block);
+
+    (engine, tmp)
+}
+
+/// No-arg wrapper around [`build_engine_fixture_with_balance`] for
+/// iai-callgrind's `#[bench::name(setup = …)]` attribute, which
+/// resolves at macro-expansion time and prefers a fully-applied
+/// function path over a closure or a parameterized call. Same
+/// constant-arg pattern documented for `drop_fixture`.
+#[cfg(feature = "bench-internals")]
+#[allow(dead_code)]
+pub fn build_engine_fixture_with_default_balance() -> (
+    Box<Engine<SoloSigner, DaemonClient, shekyl_engine_core::__bench_internals::LocalLedger>>,
+    TempDir,
+) {
+    build_engine_fixture_with_balance(BENCH_BALANCE_TRANSFER_COUNT)
+}
+
+/// Teardown for the balance fixture; mirrors [`drop_fixture`].
+///
+/// `Engine<SoloSigner, DaemonClient, LocalLedger>` is the same shape
+/// `build_engine_fixture_with_balance` returns. iai-callgrind requires
+/// a concrete `teardown =` symbol per fixture shape.
+#[cfg(feature = "bench-internals")]
+#[allow(dead_code)]
+pub fn drop_balance_fixture(
+    _fixture: (
+        Box<Engine<SoloSigner, DaemonClient, shekyl_engine_core::__bench_internals::LocalLedger>>,
+        TempDir,
+    ),
+) {
+}
+
+/// Mirrors `shekyl-engine-state::ledger_block::tests::sample_transfer`
+/// — the canonical "lightweight transfer for tests" shape. Reproduced
+/// here (and in `refresh_snapshot.rs`) because the test helper is
+/// `cfg(test)` inside a different crate. Keep this in lockstep across
+/// the two bench files if the test helper grows new fields: drift
+/// between bench fixtures and test helpers would let regressions
+/// hide behind shape mismatches.
+#[cfg(feature = "bench-internals")]
+#[allow(dead_code)]
+fn sample_transfer(seed: u64) -> TransferDetails {
+    let lo = (seed & 0xff) as u8;
+    TransferDetails {
+        tx_hash: [lo; 32],
+        internal_output_index: seed,
+        global_output_index: 1_000 + seed,
+        block_height: 100,
+        key: ED25519_BASEPOINT_POINT,
+        key_offset: Scalar::ONE,
+        commitment: Commitment::new(Scalar::ONE, 1_000_000 + seed),
+        subaddress: Some(SubaddressIndex::new((seed & 0xffff_ffff) as u32)),
+        payment_id: Some(PaymentId([lo; 8])),
+        spent: false,
+        spent_height: None,
+        key_image: Some([lo ^ 0xFF; 32]),
+        staked: false,
+        stake_tier: 0,
+        stake_lock_until: 0,
+        last_claimed_height: 0,
+        combined_shared_secret: Some(Zeroizing::new([lo.wrapping_add(1); 64])),
+        ho: Some(Zeroizing::new([lo.wrapping_add(2); 32])),
+        y: Some(Zeroizing::new([lo.wrapping_add(3); 32])),
+        z: Some(Zeroizing::new([lo.wrapping_add(4); 32])),
+        k_amount: Some(Zeroizing::new([lo.wrapping_add(5); 32])),
+        eligible_height: 100 + SPENDABLE_AGE,
+        frozen: false,
+        fcmp_precomputed_path: None,
+    }
 }

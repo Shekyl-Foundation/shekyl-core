@@ -205,19 +205,30 @@ applies to the running `Δ vs frozen (iai)` column.
 
 ## Bench: `engine_trait_bench_ledger_balance`
 
-**Status:** Deferred to LedgerEngine PR.
-
-This bench section is authored when the LedgerEngine PR's
-introducing commit lands. The LedgerEngine PR populates the
-frozen-baseline source, workload class, iai/criterion metrics,
-capture environment, and cumulative-delta table per the template
-established by `engine_trait_bench_ledger_synced_height` above.
+**Status:** Authored at Stage 1 PR 2 commit 8; frozen baseline pending
+CI `workflow_dispatch` capture per §4.4 dynamic check (N=3 invariance
+verification). Frozen-baseline source, iai/criterion metrics, capture
+environment, and cumulative-delta table are populated in this PR's
+docs commit (commit 9) once the captured numbers are transcribed,
+following the template established by
+`engine_trait_bench_ledger_synced_height` above.
 
 Per §4.6's per-bench deferred assignment, this bench is introduced
 alongside the `LedgerEngine::balance` trait method's first measurable
-surface on a state-populated fixture using the LedgerEngine PR's
-MockDaemon infrastructure. Expected workload class: state-dependent
-compute (criterion median_ns approximates per-call cost; non-hoisted).
+surface on a state-populated fixture. The bench fixture builds the
+engine through the production `Engine::create` lifecycle — the same
+path `engine_trait_bench_ledger_synced_height`'s fixture uses
+(`benches/common/engine_fixture.rs::build_engine_fixture`) — and then
+injects 1024 [`TransferDetails`] entries into the engine's
+[`WalletLedger`] directly via the `bench-internals`-gated
+[`LocalLedger::populate_for_bench`] helper. The measured region
+exercises `LedgerEngine::balance` (trait dispatch on
+`engine.ledger.balance()`, post-commit-5 production call shape)
+against the pre-populated state without running a full
+producer/scanner ceremony. Expected workload class: state-dependent
+compute (criterion median_ns approximates per-call cost; non-hoisted
+because the per-iteration body walks the transfer slice via
+`BalanceSummary::compute`).
 
 ## Bench: `engine_trait_bench_economics_current_emission`
 
