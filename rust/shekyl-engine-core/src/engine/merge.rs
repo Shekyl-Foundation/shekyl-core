@@ -75,14 +75,23 @@ use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 
 use crate::{
-    engine::{traits::DaemonEngine, Engine, EngineSignerKind, RefreshError},
+    engine::{
+        local_ledger::LocalLedger, traits::DaemonEngine, Engine, EngineSignerKind, RefreshError,
+    },
     scan::{ScanResult, StakeEvent},
 };
 
 // `D: DaemonEngine` private-bound: see the rationale on the
-// `pub struct Engine` definition in `engine/mod.rs`.
+// `pub struct Engine` definition in `engine/mod.rs`. The
+// `L = LocalLedger` specialization is intentional: this impl block
+// drives the merge body via `self.ledger.write()` (a `LocalLedger`
+// inherent method), and exposes `synced_height` via
+// `self.ledger.read()`. PR 2 commit 5 migrates these call sites to
+// the `LedgerEngine` trait surface (`apply_scan_result(&self).await`
+// / `synced_height(&self)` / `snapshot(&self)`) and generalizes the
+// block to `impl<S, D, L: LedgerEngine>`.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
+impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
     /// Current scanned-chain height: the highest block height the
     /// wallet's persisted ledger has fully ingested. `0` for a
     /// freshly-created wallet that has never refreshed.

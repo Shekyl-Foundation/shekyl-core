@@ -79,6 +79,7 @@ use tracing::{debug, error, warn};
 use zeroize::Zeroizing;
 
 use super::error::{IoError, RefreshError};
+use super::local_ledger::LocalLedger;
 use super::signer::EngineSignerKind;
 use super::traits::DaemonEngine;
 use super::Engine;
@@ -1655,9 +1656,16 @@ fn summarize(result: &ScanResult, merge_attempts: u32) -> RefreshSummary {
 }
 
 // `D: DaemonEngine` private-bound: see the rationale on the
-// `pub struct Engine` definition in `engine/mod.rs`.
+// `pub struct Engine` definition in `engine/mod.rs`. The
+// `L = LocalLedger` specialization is intentional: `refresh_with`
+// builds its `LedgerSnapshot` via `self.ledger.read()` (a
+// `LocalLedger` inherent method) and `apply_scan_result` is the
+// `&mut self` sync merge body. PR 2 commit 5 migrates these call
+// sites to `LedgerEngine::snapshot(&self)` /
+// `LedgerEngine::apply_scan_result(&self).await` and generalizes
+// the block to `impl<S, D, L: LedgerEngine>`.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
+impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
     /// Spawn an async refresh task and return a [`RefreshHandle`]
     /// for observing and controlling it.
     ///

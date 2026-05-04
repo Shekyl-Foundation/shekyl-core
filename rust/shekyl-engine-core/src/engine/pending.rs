@@ -92,6 +92,7 @@ use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SubaddressIndex};
 
 use crate::engine::{
     error::{PendingTxError, SendError},
+    local_ledger::LocalLedger,
     traits::DaemonEngine,
     Engine, EngineSignerKind,
 };
@@ -452,9 +453,17 @@ pub(crate) fn discard_pending_tx_in_state(
 // ---------------------------------------------------------------------------
 
 // `D: DaemonEngine` private-bound: see the rationale on the
-// `pub struct Engine` definition in `engine/mod.rs`.
+// `pub struct Engine` definition in `engine/mod.rs`. The
+// `L = LocalLedger` specialization is intentional: `build_pending_tx`
+// and `submit_pending_tx` borrow the `WalletLedger` directly through
+// `self.ledger.read()` / `self.ledger.write()`, which are
+// `LocalLedger` inherent methods. The `LedgerEngine` trait surface
+// does not yet expose borrowed-state read/write accessors; once a
+// future commit (Stage 4 design space — see the Phase 0c amendment
+// in `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.2) adds them, this
+// block generalizes to `impl<S, D, L: LedgerEngine>`.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
+impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
     /// Number of in-flight reservations on this wallet handle.
     ///
     /// `Engine::close` (lifecycle commit) calls this and refuses with

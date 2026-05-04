@@ -117,16 +117,31 @@ pub(crate) struct LedgerState {
 /// `Engine<S, D>` call sites can read and write the wallet ledger
 /// through `&self` rather than `&mut self`.
 ///
-/// # Why `pub(crate)`
+/// # Visibility (PR 2 commit 4 drift, design-doc realignment in commit 9)
 ///
-/// Stage 1 holds external visibility of the trait at `pub(crate)`
-/// per the design doc §1.4 visibility policy. Once Stage 1 is
-/// complete and the `Engine<S, D, L: LedgerEngine>` generic surface
-/// is promoted to `pub` in V3.2, [`LocalLedger`] is promoted
-/// alongside it — at which point external callers constructing an
-/// `Engine` choose between [`LocalLedger`] (the default) and
-/// `ActorRef<LedgerActor>` (Stage 4).
-pub(crate) struct LocalLedger {
+/// `LocalLedger` ships `pub` rather than the originally-planned
+/// `pub(crate)`: the type appears as the default for the third
+/// generic parameter of [`Engine`], a `pub` item, so external
+/// compilation units (benches, doctests, downstream Rust callers
+/// that name `Engine<SoloSigner>`) must be able to resolve the
+/// default. The design doc §3.4 originally framed the default as
+/// `pub(crate)`-preservable; commit 4 surfaced the visibility
+/// requirement when the bench targets failed compilation against
+/// `private_interfaces`. Same discipline as PR 1's `DaemonClient`
+/// (also `pub` for the same reason it serves as `D`'s default).
+///
+/// The trait [`LedgerEngine`](super::traits::LedgerEngine) itself
+/// stays `pub(crate)` per the design doc §1.4 visibility policy —
+/// `LocalLedger`'s implementor type is the only piece that needs
+/// `pub` for the default to resolve. Stage 4's actor swap-in
+/// retires `LocalLedger` regardless; the visibility lift here does
+/// not change the deletion target.
+///
+/// V3.2 promotes the trait alongside the JSON-RPC server cutover,
+/// at which point external callers constructing an `Engine` choose
+/// between [`LocalLedger`] (the default) and `ActorRef<LedgerActor>`
+/// (Stage 4) by naming the trait directly.
+pub struct LocalLedger {
     state: RwLock<LedgerState>,
 }
 

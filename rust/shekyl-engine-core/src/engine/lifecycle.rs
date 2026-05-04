@@ -68,7 +68,8 @@ use shekyl_engine_prefs::{LoadOutcome as PrefsLoadOutcome, WalletPrefs};
 use shekyl_engine_state::{LedgerIndexes, WalletLedger};
 
 use super::error::{IoError, KeyError, OpenError};
-use super::traits::DaemonEngine;
+use super::local_ledger::LocalLedger;
+use super::traits::{DaemonEngine, LedgerEngine};
 use super::{Capability, DaemonClient, Engine, EngineSignerKind, SoloSigner};
 
 // ---------------------------------------------------------------------------
@@ -127,13 +128,17 @@ impl<'a> Credentials<'a> {
 /// observe the recovery path explicitly: a UI can prompt "your wallet
 /// state was rebuilt; resync from height N" rather than silently
 /// presenting an empty wallet.
-// `D: DaemonEngine` private-bound: see the rationale on the
-// `pub struct Engine` definition in `engine/mod.rs`.
+// `D: DaemonEngine` and `L: LedgerEngine` private-bound: see the
+// rationale on the `pub struct Engine` definition in `engine/mod.rs`.
 #[allow(private_bounds)]
-pub enum OpenedEngine<S: EngineSignerKind, D: DaemonEngine = DaemonClient> {
+pub enum OpenedEngine<
+    S: EngineSignerKind,
+    D: DaemonEngine = DaemonClient,
+    L: LedgerEngine = LocalLedger,
+> {
     /// `.wallet` was present and decoded successfully. The wallet is
     /// fully loaded against the persisted ledger.
-    Loaded(Engine<S, D>),
+    Loaded(Engine<S, D, L>),
 
     /// `.wallet` was missing. The keys file was intact and the wallet
     /// was reconstructed with an empty ledger anchored at
@@ -141,15 +146,15 @@ pub enum OpenedEngine<S: EngineSignerKind, D: DaemonEngine = DaemonClient> {
     /// state, then `save_state` the rebuilt ledger.
     Restored {
         /// The reconstructed wallet, ready for refresh.
-        wallet: Engine<S, D>,
+        wallet: Engine<S, D, L>,
         /// Block height the synthesized ledger anchors at; equals the
         /// keys-file's `restore_height_hint` widened to `u64`.
         from_height: u64,
     },
 }
 
-impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug> std::fmt::Debug
-    for OpenedEngine<S, D>
+impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine> std::fmt::Debug
+    for OpenedEngine<S, D, L>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -166,12 +171,12 @@ impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug> std::fmt::Debug
     }
 }
 
-// `D: DaemonEngine` private-bound: see the rationale on the
-// `pub struct Engine` definition in `engine/mod.rs`.
+// `D: DaemonEngine` and `L: LedgerEngine` private-bound: see the
+// rationale on the `pub struct Engine` definition in `engine/mod.rs`.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine> OpenedEngine<S, D> {
+impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine> OpenedEngine<S, D, L> {
     /// Borrow the underlying wallet regardless of the variant.
-    pub fn wallet(&self) -> &Engine<S, D> {
+    pub fn wallet(&self) -> &Engine<S, D, L> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -179,7 +184,7 @@ impl<S: EngineSignerKind, D: DaemonEngine> OpenedEngine<S, D> {
     }
 
     /// Mutably borrow the underlying wallet regardless of the variant.
-    pub fn wallet_mut(&mut self) -> &mut Engine<S, D> {
+    pub fn wallet_mut(&mut self) -> &mut Engine<S, D, L> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -189,7 +194,7 @@ impl<S: EngineSignerKind, D: DaemonEngine> OpenedEngine<S, D> {
     /// Consume the outcome and return the wallet, discarding the
     /// recovery-path signal. Use only when the caller has already
     /// surfaced the lost-state branch through some other channel.
-    pub fn into_wallet(self) -> Engine<S, D> {
+    pub fn into_wallet(self) -> Engine<S, D, L> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -667,7 +672,7 @@ impl Engine<SoloSigner> {
 
 #[cfg(test)]
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D1: DaemonEngine> Engine<S, D1> {
+impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine> Engine<S, D1, L> {
     /// Test-only constructor: rebuild the engine with `daemon`
     /// substituted in place of the existing one, leaving every
     /// other field unchanged.
@@ -714,7 +719,7 @@ impl<S: EngineSignerKind, D1: DaemonEngine> Engine<S, D1> {
     /// test surface; production paths cannot reach it because
     /// `pub(crate) #[cfg(test)]` excludes them from the published
     /// API and from the non-test build.
-    pub(crate) fn replace_daemon<D2: DaemonEngine>(self, daemon: D2) -> Engine<S, D2> {
+    pub(crate) fn replace_daemon<D2: DaemonEngine>(self, daemon: D2) -> Engine<S, D2, L> {
         let Engine {
             file,
             keys,
@@ -779,13 +784,19 @@ fn is_default_overrides(overrides: &SafetyOverrides) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Engine<S, D> :: change_password / close (signer-kind-agnostic)
+// Engine<S, D, LocalLedger> :: change_password / close (signer-kind-agnostic)
 // ---------------------------------------------------------------------------
 
 // `D: DaemonEngine` private-bound: see the rationale on the
-// `pub struct Engine` definition in `engine/mod.rs`.
+// `pub struct Engine` definition in `engine/mod.rs`. The
+// `L = LocalLedger` specialization is intentional: [`Engine::close`]
+// acquires a [`LocalLedger`] read guard to hand `&WalletLedger` to
+// [`WalletFile::save_state`]; the trait surface does not yet expose
+// a borrowed-state read accessor (Stage 4 design space — see the
+// Phase 0c amendment block in
+// `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.2).
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
+impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
     /// Rotate the wallet password, optionally also rotating the KDF
     /// parameters of the on-disk envelope wrap.
     ///
