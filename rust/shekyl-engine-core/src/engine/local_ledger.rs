@@ -33,9 +33,13 @@
 //! - The merge body in `apply_scan_result_to_state` is purely
 //!   synchronous: it computes invariants, applies per-height events,
 //!   and returns. No `.await` runs while the write guard is held.
-//! - The read paths (`synced_height`, `snapshot`, `balance`,
-//!   `transfers`) are pure projections over the borrowed state and
-//!   never `.await` either.
+//! - The read paths (`synced_height`, `snapshot`, `balance`) are
+//!   pure projections over the borrowed state and never `.await`
+//!   either. Per-transaction history is read directly from the
+//!   underlying [`LedgerBlock`](shekyl_engine_state::LedgerBlock)'s
+//!   `transfers()` slice accessor rather than through the trait
+//!   surface — see the Phase 0c amendment in
+//!   `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.2.
 //!
 //! Holding a `std::sync::RwLock` guard across `.await` would risk a
 //! deadlock once Stage 4's actor surface introduces async handlers;
@@ -76,6 +80,15 @@
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use shekyl_engine_state::{LedgerIndexes, WalletLedger};
+use shekyl_scanner::{BalanceSummary, LedgerBlockExt};
+
+use super::{
+    error::{LedgerError, RefreshError},
+    merge::apply_scan_result_to_state,
+    refresh::LedgerSnapshot,
+    traits::LedgerEngine,
+};
+use crate::scan::ScanResult;
 
 /// The wallet's confirmed-chain state, paired with the runtime-only
 /// [`LedgerIndexes`] derived from it.
@@ -90,8 +103,7 @@ use shekyl_engine_state::{LedgerIndexes, WalletLedger};
 /// the lock disappears because the actor mailbox serializes access.
 pub(crate) struct LedgerState {
     /// The persisted wallet-state slice the merge body writes and
-    /// the projection methods (`balance`, `transfers`, `snapshot`)
-    /// read.
+    /// the projection methods (`balance`, `snapshot`) read.
     pub(crate) ledger: WalletLedger,
     /// Runtime indexes derived from `ledger`. Mutated together with
     /// `ledger` under the write guard; rebuilt on every
@@ -151,5 +163,45 @@ impl LocalLedger {
     /// policy.
     pub(crate) fn write(&self) -> RwLockWriteGuard<'_, LedgerState> {
         self.state.write().expect("LocalLedger lock poisoned")
+    }
+}
+
+/// Stage 1 in-process implementation of [`LedgerEngine`].
+///
+/// Each method acquires its own [`RwLock`] guard for the duration of
+/// the call. The three read methods take a [`RwLockReadGuard`] and
+/// project owned values (`u64`, [`LedgerSnapshot`],
+/// [`BalanceSummary`]); the lone mutator takes a
+/// [`RwLockWriteGuard`] and delegates to
+/// [`apply_scan_result_to_state`], the merge body shared with
+/// [`Engine::apply_scan_result`](super::Engine::apply_scan_result).
+///
+/// The mutator returns an `impl Future` rather than `async fn` to
+/// match the trait declaration verbatim. The future body is wholly
+/// synchronous — no `.await` runs while the write guard is held —
+/// so the synchronous [`std::sync::RwLock`] is sound (per the
+/// module-level lock-shape rationale).
+impl LedgerEngine for LocalLedger {
+    type Error = LedgerError;
+
+    fn synced_height(&self) -> u64 {
+        self.read().ledger.ledger.height()
+    }
+
+    fn snapshot(&self) -> LedgerSnapshot {
+        let guard = self.read();
+        LedgerSnapshot::from_ledger(&guard.ledger.ledger)
+    }
+
+    fn balance(&self) -> BalanceSummary {
+        let guard = self.read();
+        let ledger = &guard.ledger.ledger;
+        ledger.balance(ledger.height())
+    }
+
+    async fn apply_scan_result(&self, scan_result: ScanResult) -> Result<(), RefreshError> {
+        let mut guard = self.write();
+        let state = &mut *guard;
+        apply_scan_result_to_state(&mut state.ledger.ledger, &mut state.indexes, scan_result)
     }
 }
