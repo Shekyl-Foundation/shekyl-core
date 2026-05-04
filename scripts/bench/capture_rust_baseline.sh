@@ -50,7 +50,19 @@ need valgrind
 need iai-callgrind-runner
 need python3
 
-# ---- benches: crate : criterion-target : iai-callgrind-target --------------
+# ---- benches: crate : criterion-target : iai-callgrind-target [: features] -
+#
+# Row format is `:`-delimited:
+#
+#   <crate> : <criterion-bench> : <iai-bench> [ : <cargo-features> ]
+#
+# The optional fourth field is a comma-separated list of cargo
+# features to enable for both `cargo bench` invocations of that row;
+# leave it empty (or omit the trailing colon) when no features are
+# required. This lets bench targets gated on `required-features` (e.g.
+# `bench-internals`-only fixtures that need access to otherwise
+# `pub(crate)` state-injection helpers) participate in the rolling
+# baseline without expanding production visibility.
 #
 # Order matters only for human readability in the JSON envelope and
 # the iai snapshot; the script treats each row as self-contained.
@@ -78,12 +90,16 @@ rm -rf "${RUST_ROOT}/target/criterion"
 # ---- criterion runs (wall-clock, Tier-2) -----------------------------------
 
 for row in "${BENCHES[@]}"; do
-  IFS=':' read -r CRATE CRIT_BENCH IAI_BENCH <<<"${row}"
+  IFS=':' read -r CRATE CRIT_BENCH IAI_BENCH FEATURES <<<"${row}"
+  FEATURE_ARGS=()
+  if [[ -n "${FEATURES:-}" ]]; then
+    FEATURE_ARGS=(--features "${FEATURES}")
+  fi
   echo
-  echo "[capture_rust_baseline] criterion : ${CRATE}::${CRIT_BENCH}"
+  echo "[capture_rust_baseline] criterion : ${CRATE}::${CRIT_BENCH}${FEATURES:+ (features=${FEATURES})}"
   (
     cd "${RUST_ROOT}"
-    cargo bench -p "${CRATE}" --bench "${CRIT_BENCH}" -- --noplot
+    cargo bench -p "${CRATE}" "${FEATURE_ARGS[@]}" --bench "${CRIT_BENCH}" -- --noplot
   )
 done
 
@@ -93,9 +109,13 @@ IAI_STDOUT_TMP="$(mktemp)"
 trap 'rm -f "${IAI_STDOUT_TMP}"' EXIT
 
 for row in "${BENCHES[@]}"; do
-  IFS=':' read -r CRATE CRIT_BENCH IAI_BENCH <<<"${row}"
+  IFS=':' read -r CRATE CRIT_BENCH IAI_BENCH FEATURES <<<"${row}"
+  FEATURE_ARGS=()
+  if [[ -n "${FEATURES:-}" ]]; then
+    FEATURE_ARGS=(--features "${FEATURES}")
+  fi
   echo
-  echo "[capture_rust_baseline] iai       : ${CRATE}::${IAI_BENCH}"
+  echo "[capture_rust_baseline] iai       : ${CRATE}::${IAI_BENCH}${FEATURES:+ (features=${FEATURES})}"
   {
     printf '\n==== %s::%s ====\n' "${CRATE}" "${IAI_BENCH}"
     (
@@ -103,7 +123,7 @@ for row in "${BENCHES[@]}"; do
       # iai-callgrind colors its output. Disabling via env keeps the
       # snapshot and the parser input plain-text.
       IAI_CALLGRIND_COLOR=never \
-        cargo bench -p "${CRATE}" --bench "${IAI_BENCH}"
+        cargo bench -p "${CRATE}" "${FEATURE_ARGS[@]}" --bench "${IAI_BENCH}"
     )
   } | tee -a "${IAI_STDOUT_TMP}"
 done
