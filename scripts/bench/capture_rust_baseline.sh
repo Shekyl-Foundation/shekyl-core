@@ -81,6 +81,7 @@ BENCHES=(
   "shekyl-scanner:scan_block:scan_block_iai"
   "shekyl-tx-builder:transfer_e2e:transfer_e2e_iai"
   "shekyl-engine-core:engine_trait_bench_ledger_synced_height:engine_trait_bench_ledger_synced_height_iai"
+  "shekyl-engine-core:engine_trait_bench_ledger_balance:engine_trait_bench_ledger_balance_iai:bench-internals"
 )
 
 # Clean criterion output so the envelope reflects this run only.
