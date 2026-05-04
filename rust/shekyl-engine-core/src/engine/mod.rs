@@ -8,12 +8,20 @@
 //! `shekyl-engine-core::engine` is the home of the [`Engine`](Engine) type
 //! that composes the file envelope ([`shekyl_engine_file::WalletFile`]),
 //! identity material ([`shekyl_crypto_pq::account::AllKeysBlob`]), the
-//! ledger ([`shekyl_engine_state::WalletLedger`]), preferences
-//! ([`shekyl_engine_prefs::WalletPrefs`]), the daemon RPC client, and
-//! the per-process scanning surface into a single audited domain
-//! orchestrator. The CLI ([`shekyl-cli`]) and the JSON-RPC server
-//! ([`shekyl-engine-rpc`]) sit on top of this surface, never reaching
-//! around it.
+//! ledger ([`crate::engine::local_ledger::LocalLedger`] aggregating
+//! [`shekyl_engine_state::WalletLedger`] and
+//! [`shekyl_engine_state::LedgerIndexes`] under interior-mutability
+//! `RwLock` per the `LedgerEngine` trait contract — the trait itself
+//! is `pub(crate)` per `V3_ENGINE_TRAIT_BOUNDARIES.md` §1.4),
+//! preferences ([`shekyl_engine_prefs::WalletPrefs`]), the daemon RPC
+//! client (via the `DaemonEngine` trait, default `D = DaemonClient`,
+//! also `pub(crate)` per §1.4), and the per-process scanning
+//! surface into a single audited domain orchestrator. `Engine<S, D, L>`
+//! is generic over signer / daemon / ledger trait implementors, with
+//! defaults that preserve the existing concrete-typed shape for
+//! production callers — the CLI ([`shekyl-cli`]) and the JSON-RPC
+//! server ([`shekyl-engine-rpc`]) sit on top of this surface, never
+//! reaching around it.
 //!
 //! # What this module rejects on purpose
 //!

@@ -13,7 +13,19 @@ structurally complete; Round 6 unnecessary unless post-draft
 review surfaces unexpected items). **Stage 1 PR 1
 ([PR #21](https://github.com/Shekyl-Foundation/shekyl-core/pull/21),
 `DaemonEngine` extraction) landed the first per-trait migration
-against this spec on 2026-05-02.** Subsequent per-trait PRs follow
+against this spec on 2026-05-02.** **Stage 1 PR 2
+(`LedgerEngine` extraction) landed the second per-trait migration
+against this spec on 2026-05-04**, with three pre-flight doc-only
+spec amendments threaded through the lifecycle: Phase 0
+([PR #22](https://github.com/Shekyl-Foundation/shekyl-core/pull/22),
+reservation-tracker ownership correction), Phase 0b
+([PR #23](https://github.com/Shekyl-Foundation/shekyl-core/pull/23),
+trait surface narrowing), and Phase 0c
+([PR #25](https://github.com/Shekyl-Foundation/shekyl-core/pull/25),
+drop `transfers()` for `!Clone` discipline). The
+[Stage 1 PR 2 design doc](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+§2.2 captures the lifecycle-not-just-pre-flight discipline pattern
+that this drift count surfaced. Subsequent per-trait PRs follow
 §8.1's within-stage-1 ordering and §8.2's amendment co-landing
 rule.
 
@@ -204,6 +216,7 @@ preservation. The two are complementary disciplines.
 | Anonymity-network-coordination trait (Tor/I2P transport for archival queries) | V3.x — currently flagged in §9 as a future-trait candidate; trait shape not designed |
 | View-only / hardware-offload `open_*` bodies | V3.0 follow-up; orthogonal |
 | Generic `DaemonClient` *implementation* | Stage 1 PR 1 landed the `Engine<S, D: DaemonEngine = DaemonClient>` parameterization (per §2.5; `MockDaemon`-driven `start_refresh` coverage now exists end-to-end via `Engine::replace_daemon`). V3.2 generalizes the production constructors (`Engine::create`, `Engine::open_full`) over `D` alongside the `DaemonEngine`-to-`pub` promotion, retiring the `#[cfg(test)] pub(crate) replace_daemon` helper. |
+| Generic `LocalLedger` *implementation* | Stage 1 PR 2 landed the `Engine<S, D = DaemonClient, L: LedgerEngine = LocalLedger>` parameterization (per §2.2 post-Phase-0c surface; `MockLedger`-driven `apply_scan_result` retry coverage now exists end-to-end via `Engine::replace_ledger`). The `pub(crate) trait LedgerEngine` declares four methods (`synced_height`, `snapshot`, `balance`, `apply_scan_result`); `Engine::start_refresh` and the producer task `run_refresh_task` are generalized over `L`. The synchronous wrappers `Engine::refresh` / `Engine::refresh_with` remain `LocalLedger`-specialized because the trait's `apply_scan_result` is `async fn` and the sync entry points cannot dispatch through it without a runtime-handle threading story (queued at V3.x in `FOLLOWUPS.md`). V3.2 generalizes the production constructors (`Engine::create`, `Engine::open_full`) over `L` alongside the `LedgerEngine`-to-`pub` promotion, retiring the `#[cfg(test)] pub(crate) replace_ledger` helper. The `LocalLedger` aggregate landed as `pub` (not `pub(crate)`) because Rust requires every default type parameter on a `pub` type to be at least as visible as the type itself; the trait `LedgerEngine` itself stays `pub(crate)` per §1.4. |
 
 ### 1.3 Why "concrete fields + generic-bounded methods" is the Stage 1 shape
 

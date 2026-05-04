@@ -338,6 +338,27 @@ citing in a review.
 
 ## V3.1 — audit response and stressnet gates
 
+- **`Engine::ledger()` accessor cleanup.** Stage 1 PR 2 (commit
+  `8632b8692`) preserved the previously-public `Engine::ledger()
+  -> &WalletLedger` accessor by replacing the field projection
+  with a `pub fn ledger(&self) -> LedgerReadGuard<'_>` wrapper
+  that holds the `LocalLedger`'s read lock for the borrow's
+  lifetime. Pre-flight surveyed every Rust workspace
+  (`shekyl-core`, `shekyl-gui-wallet`, `shekyl-dev`,
+  `shekyl-web`, `shekyl-mobile-wallet`, `monero-oxide`) and found
+  zero remaining callers; the wrapper exists to absorb any
+  external downstream binder that might still reference the
+  accessor by name. At V3.1, re-survey the workspace and (a) if
+  no caller has emerged, delete `Engine::ledger()` and
+  `LedgerReadGuard` outright per
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)'s
+  "default: delete" rule; (b) if a caller has emerged, document
+  the use case in this file and re-evaluate the lifetime of the
+  wrapper. The path of least surprise is (a). Cross-references:
+  Stage 1 PR 2 commit 2 pre-flight survey;
+  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  §7. Target: V3.1.
+
 - **PQC Multisig V3.1: external adversarial review (Phase 5).**
   Round 4 wargame against the V3.1 multisig implementation per
   `PQC_MULTISIG_V3_1_ANALYSIS.md` §5.4. Review targets:
@@ -1529,6 +1550,30 @@ one place to confirm each item's relationship to the wallet stack.
 ---
 
 ## V3.x — staker archival and visualization ship
+
+- **Sync refresh wrapper generalization over `L: LedgerEngine`.**
+  Stage 1 PR 2 generalized `Engine::start_refresh` and the
+  producer task `run_refresh_task` over `L: LedgerEngine` —
+  sufficient generalization for the hybrid retry test to dispatch
+  through the trait against `MockLedger`. The synchronous wrappers
+  `Engine::refresh` and `Engine::refresh_with` retain their
+  `LocalLedger`-specialized impl block because the trait method
+  `LedgerEngine::apply_scan_result` is `async fn` and the sync
+  entry points use `LocalLedger::write()`'s inherent (synchronous)
+  guard directly. Threading a Tokio runtime handle through the
+  sync wrappers, or alternatively introducing a sync-mutator
+  surface on the trait (`fn apply_scan_result_blocking(&self,
+  …)`), would generalize the wrappers over `L`. Either path
+  requires its own design pass — neither is required for any
+  Stage 1 PR's hybrid coverage, and both would expand the
+  trait-surface attack area without an immediate consumer. Queued
+  at V3.x; resolved by either a runtime-handle threading story
+  (likely co-landing with Stage 4 actor wiring, where `kameo` is
+  already in scope and the runtime handle is available) or an
+  alternative trait-shape decision. Cross-references:
+  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  §1.2 (partial-generalization framing) and §7 (out-of-scope
+  refinement). Target: V3.x.
 
 - **Stage 4 lifecycle async cutover requires `CHANGELOG.md`
   flagging.** Per

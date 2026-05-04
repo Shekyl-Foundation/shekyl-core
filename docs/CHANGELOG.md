@@ -4,6 +4,128 @@
 
 ### Added
 
+- **`LedgerEngine` trait extracted; `Engine<S, D>` parameterized
+  over `L: LedgerEngine` with default `LocalLedger` (Stage 1 PR 2,
+  the second trait-boundaries PR per
+  [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.2).** The Phase 2a `LedgerEngine` slice of the Stage 1
+  trait-extraction work lands as `pub(crate)` on
+  `shekyl-engine-core`. The PR's primary surface — the
+  `LedgerEngine` trait, the `LocalLedger` aggregate, and the
+  `Engine<S, D, L>` / `OpenedEngine<S, D, L>` parameterization —
+  preserves every existing public type's shape for non-test
+  consumers via the `D = DaemonClient, L = LocalLedger` defaults.
+  The PR's lifecycle threaded three pre-flight doc-only spec
+  amendments (PRs #22, #23, #25) before the implementation work
+  began — see
+  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](./design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  §1.1 / §2.2 for the discipline pattern.
+
+  - **`pub(crate) trait LedgerEngine`** in
+    [`engine::traits::ledger`](../rust/shekyl-engine-core/src/engine/traits/ledger.rs).
+    Post-Phase-0c four-method surface: `synced_height(&self) ->
+    u64`, `snapshot(&self) -> LedgerSnapshot`, `balance(&self) ->
+    BalanceSummary` (sync, infallible reads), and
+    `apply_scan_result(&self, ScanResult) -> Result<(),
+    RefreshError>` (async, mutating; signals
+    `RefreshError::ConcurrentMutation` for the §5.2 retry
+    contract). The async `&self` mutation is enabled by interior
+    `RwLock<LedgerState>` per §2.2's Round 3 disposition; this is
+    the Stage-4-correct call shape, landed Stage-1-early so the
+    actor cutover becomes a no-op for this concern. `LedgerError`
+    is reserved as an empty starter type for Phase-2a-specific
+    error variants the trait does not currently emit.
+  - **`pub struct LocalLedger { state: RwLock<LedgerState> }`** in
+    [`engine::local_ledger`](../rust/shekyl-engine-core/src/engine/local_ledger.rs).
+    `LedgerState` bundles `WalletLedger` + `LedgerIndexes` (the
+    two fields previously held flat on `Engine`); reservations
+    stay on `Engine` for now and migrate to `LocalPendingTx` when
+    the `PendingTxEngine` PR ships. The aggregate is `pub` (not
+    the originally-planned `pub(crate)`) because Rust requires
+    every default type parameter on a `pub` type to be at least as
+    visible as the type itself; the trait `LedgerEngine` itself
+    stays `pub(crate)` per §1.4 of the contract. See
+    [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](./design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+    §3.4 for the visibility-lift rationale.
+  - **`Engine<S, D: DaemonEngine = DaemonClient, L: LedgerEngine
+    = LocalLedger>`** and **`OpenedEngine<S, D, L>`**. The ledger
+    component becomes a third generic parameter with a default
+    that preserves the existing concrete-typed shape for
+    production callers, while making the ledger surface
+    substitutable for hybrid tests. The parameterization compiles
+    to identical code via monomorphization; expected
+    iai-callgrind delta on `engine_trait_bench_ledger_*` benches
+    is 0% (trait dispatch monomorphizes to the same call shape
+    the `LocalLedger` inherent impl produced previously). Each
+    `pub` item bounded by the `pub(crate)` `LedgerEngine` trait
+    carries an `#[allow(private_bounds)]` annotation paralleling
+    the `DaemonEngine` annotations from PR 1; both clear at
+    Stage 4 when both traits promote to `pub` per §1.4.
+  - **Refresh path migrated to `&self` interior mutation.**
+    `Engine::synced_height` now dispatches through
+    `LedgerEngine::synced_height`; `Engine::apply_scan_result`,
+    `Engine::refresh`, and `Engine::refresh_with` flip from
+    `&mut self` to `&self`; the producer task `run_refresh_task`'s
+    outer `Arc<RwLock<Engine>>` write-lock guard becomes a
+    read-lock per the §3.3 over-serialization framing. The
+    synchronous wrappers `refresh` / `refresh_with` retain their
+    `LocalLedger`-specialized impl block because the trait method
+    `apply_scan_result` is `async fn` and the sync entry points
+    use `LocalLedger::write()` directly without a Tokio runtime
+    in scope (queued at V3.x in
+    [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md) for full sync-wrapper
+    generalization). `Engine::start_refresh` and
+    `run_refresh_task` *are* generalized over `L: LedgerEngine`,
+    sufficient for the hybrid retry test to dispatch through the
+    trait against `MockLedger`.
+  - **`MockLedger` deterministic in-memory `LedgerEngine`
+    implementor** in
+    [`engine::test_support`](../rust/shekyl-engine-core/src/engine/test_support.rs).
+    Holds `WalletLedger` + `LedgerIndexes` + a queued-failure
+    pump (`ConcurrentMutation`) + a `ChaCha20Rng` reserved for
+    future RNG-driven fixtures. Constructors mirror PR 1's
+    `MockDaemon`: `with_seed(master, ROLE_LEDGER)`,
+    `with_seed_and_state`, plus a `queue_concurrent_mutation`
+    helper for failure injection. `ROLE_LEDGER` was reserved in
+    PR 1's `test_support.rs` and is now consumed.
+  - **`Engine::replace_ledger<L2: LedgerEngine>(self, ledger: L2)
+    -> Engine<S, D, L2>`** mirrors `Engine::replace_daemon` from
+    PR 1. `#[cfg(test)] pub(crate)` for now; retires alongside the
+    Stage 4 trait-promotion / production-constructor
+    generalization at V3.2 per the
+    [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §1.2 row.
+  - **Hybrid retry test
+    `hybrid_apply_scan_result_retries_on_concurrent_mutation`** —
+    end-to-end coverage of the §5.2 retry contract via
+    `MockLedger.queue_concurrent_mutation`. PR 1 covered the §5.2
+    happy path (`hybrid_linear_scan_5_blocks_advances_synced_
+    height`); PR 2 covers the failure-path retry contract; PR 3+
+    pick up the remaining §5.2 properties under the
+    "each per-trait PR exercises one §5.2 property predecessors
+    have not yet covered" template pinned in
+    [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](./design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+    §2.3.
+  - **`engine_trait_bench_ledger_balance` criterion +
+    iai-callgrind bench pair** under
+    `rust/shekyl-engine-core/benches/`, gated on the existing
+    `bench-internals` Cargo feature. Measures the
+    `LedgerEngine::balance` trait method against a 1024-
+    `TransferDetails` state-populated fixture
+    (`LocalLedger::populate_for_bench` injects state through a
+    `bench-internals`-only escape hatch; production state remains
+    behind the trait-dispatched mutating path). The
+    `engine_trait_bench_ledger_synced_height` pair from Stage 0
+    PR-2 carries forward unchanged; PR 2 adds a cumulative-delta
+    row at the PR-merge SHA per §3.3.1 of the trait-boundaries
+    spec. Frozen-baseline + iai-callgrind gate metric + criterion
+    metrics + capture-environment blocks for
+    `engine_trait_bench_ledger_balance` are populated in
+    [`docs/PERFORMANCE_BASELINE.md`](./PERFORMANCE_BASELINE.md)
+    after CI `workflow_dispatch` capture under N=3 invariance,
+    following the "do-not-transcribe-laptop-captures" discipline
+    established during Stage 0 PR-2.
+
 - **`DaemonEngine` trait extracted; `Engine<S>` parameterized over
   the daemon implementor (Stage 1 PR 1, the first
   trait-boundaries PR per
