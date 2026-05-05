@@ -225,7 +225,10 @@ static_assert(FCMP_REFERENCE_BLOCK_MAX_AGE > FCMP_REFERENCE_BLOCK_MIN_AGE,
 // proposers' reference blocks. If you genuinely need to change either,
 // edit `config/consensus_constants.json`, update the Decision 14
 // rationale in the changelog, and only then bump these sentinel
-// values. The Rust side has matching `const_assert!` sentinels in
+// values. The Rust side has matching const-evaluated `assert!` sentinels
+// (`const _: () = assert!(...)` blocks; the `static_assertions` crate's
+// `const_assert!` macro is intentionally not used so no extra dependency
+// is pulled in for a single sentinel call site) in
 // `rust/shekyl-engine-core/src/multisig/v31/intent.rs`.
 static_assert(FCMP_REFERENCE_BLOCK_MIN_AGE == 5,
   "FCMP_REFERENCE_BLOCK_MIN_AGE diverged from Decision 14 baseline (5); review consensus implications before updating the sentinel");

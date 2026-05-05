@@ -6,15 +6,18 @@ consensus subset of cross-language constants identified by the
 2026-05-05 FFI constant-drift audit
 (`docs/audit_trail/2026-05-ffi-constant-drift-audit.md`). The Rust side
 consumes the same JSON via `rust/shekyl-engine-core/build.rs`; both
-sides are stamped against the JSON authority by `static_assert` /
-`const_assert!` sentinels at the original definition sites, so a
-hand-edit on either side fails the build with a clear message.
+sides are stamped against the JSON authority by `static_assert` (C++)
+and `const _: () = assert!(...)` (Rust, the const-evaluated form of
+`assert!` — `static_assertions::const_assert!` is intentionally not
+pulled in for a single-call-site sentinel) at the original definition
+sites, so a hand-edit on either side fails the build with a clear
+message.
 
 Adding a constant: extend `KEYS_INTEGER`, add the `#define` line in
 `emit_header`, mirror the consumption in
-`rust/shekyl-engine-core/build.rs`, and add a `static_assert` /
-`const_assert!` sentinel at every site that previously hand-defined
-the value.
+`rust/shekyl-engine-core/build.rs`, and add a `static_assert` (C++) or
+`const _: () = assert!(...)` (Rust) sentinel at every site that
+previously hand-defined the value.
 """
 
 import json

@@ -42,8 +42,13 @@
   **Fixture update:** `intent.rs::tests::validate_temporal_rejects_ref_block_too_fresh`
   changed from `tip = 905` (age = 5, the boundary value `age < 5`
   evaluates false under the post-fix `MIN_AGE = 5`) to `tip = 903`
-  (age = 3, unambiguously rejected). This survives any future
-  conservative tightening of `MIN_AGE` up to 4.
+  (age = 3, unambiguously rejected). The test exercises the
+  rejection branch (`age < MIN_AGE`) and stays correct as long as
+  `MIN_AGE > 3` — i.e. it survives any tightening (`MIN_AGE`
+  increasing above 5) and any loosening down to and including
+  `MIN_AGE = 4`. Only a loosening to `MIN_AGE = 3` or lower would
+  invalidate the fixture, which itself would warrant the consensus
+  re-review the sentinel demands.
 
   **Out of scope:** `ADDRESS_VERSION_V1` is single-source in Rust
   with no C++ duplicate, so there's nothing to align. The

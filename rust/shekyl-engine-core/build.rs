@@ -7,9 +7,11 @@
 //!
 //! Mirrors the pattern of `rust/shekyl-staking/build.rs`
 //! (economics-params JSON → generated `tier_params_generated.rs`).
-//! The `multisig` module `include!`s the emitted file; sentinel
-//! `const_assert!`s at the consumption sites pin meaning across
-//! changes.
+//! The `multisig` module `include!`s the emitted file; const-evaluated
+//! `assert!` blocks (`const _: () = assert!(...)`) at the consumption
+//! sites pin meaning across changes. We intentionally avoid a
+//! `static_assertions::const_assert!` dependency for a single sentinel
+//! call site; the const-eval `assert!` form is equivalent and dependency-free.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -44,11 +46,16 @@ fn main() {
 
     let min_age = get_u64(&map, "fcmp_reference_block_min_age");
     let max_age = get_u64(&map, "fcmp_reference_block_max_age");
-    let rct_type = get_u64(&map, "rct_type_fcmp_plus_plus_pqc");
-    assert!(
-        rct_type <= u64::from(u8::MAX),
-        "rct_type_fcmp_plus_plus_pqc must fit in u8 (got {rct_type})"
-    );
+    // Convert to the destination type at the boundary so the generator's
+    // type contract is enforced in Rust (not just by the literal inferred
+    // in the `format!` template). A JSON value > 255 fails the build here
+    // with a clear message rather than silently emitting an out-of-range
+    // literal that the consumer would reject. Mirrors the type-aware
+    // range check in `cmake/generate_consensus_constants.py`.
+    let rct_type_raw = get_u64(&map, "rct_type_fcmp_plus_plus_pqc");
+    let rct_type: u8 = u8::try_from(rct_type_raw).unwrap_or_else(|_| {
+        panic!("rct_type_fcmp_plus_plus_pqc must fit in u8 (got {rct_type_raw})")
+    });
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
     let out_file = out_dir.join("consensus_constants_generated.rs");
