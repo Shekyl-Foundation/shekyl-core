@@ -4,6 +4,29 @@
 
 ### Fixed
 
+- **`FCMP_REFERENCE_BLOCK_MIN_AGE` aligned to consensus authority (5).**
+  `rust/shekyl-engine-core/src/multisig/v31/intent.rs` defined
+  `FCMP_REFERENCE_BLOCK_MIN_AGE = 10` while
+  `src/cryptonote_config.h` defines it as `5` (locked by Decision 14
+  in commit `6561278d9`, asserted by `tests/unit_tests/fcmp.cpp:668`,
+  documented in `docs/FCMP_PLUS_PLUS.md:432`). The Rust multisig
+  `SpendIntent` was added in `744ab6407` 23 days after Decision 14
+  and copied the pre-Decision-14 value `10`. Bug 3 of the 2026-05-05
+  FFI constant-drift audit. Failure mode: a multisig wallet would
+  reject reference blocks at heights `tip-9..tip-5` that the daemon
+  consensus accepts — fail-closed at the wallet's own pre-broadcast
+  validation, no path to silent acceptance, but still a real bug
+  (UX: legitimate intents rejected by the proposer's own check).
+  Fixed by aligning the Rust value to `5`, with a doc-comment that
+  cross-references the C++ authority and the audit. Test
+  `validate_temporal_rejects_ref_block_too_fresh` updated to use
+  `tip = 903` (age = 3) instead of `tip = 905` (age = 5, which was
+  the boundary value that masked the regression — age = 5 is not
+  `< 5`). `docs/SHEKYL_MULTISIG_WIRE_FORMAT.md` aligned. The
+  `chore/cbindgen-consensus-constants` follow-up generates this
+  value from the Rust authority into the C++ build to prevent
+  recurrence. See `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+
 - **C++/Rust FFI constant disagreement broke every wallet round-trip
   on every network.** `src/shekyl/shekyl_ffi.h` defined
   `SHEKYL_CLASSICAL_ADDRESS_BYTES = 64` while authoritative
