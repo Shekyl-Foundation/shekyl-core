@@ -297,7 +297,7 @@ trait surfaces; no single discovery point is sufficient.
 
 Future per-trait PRs should expect the same. PR 3 (`KeyEngine` per
 §8.1) and PRs 4–7 authors run their own pre-flight gap-check
-([`00-system-thinking.mdc`](../../.cursor/rules/00-system-thinking.mdc)'s
+([`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc)'s
 "ask why is this here" discipline applied to the trait under
 extraction); surfacing 1–2 small spec drifts somewhere in the
 lifecycle is the **expected outcome**, not a defect. The discovery

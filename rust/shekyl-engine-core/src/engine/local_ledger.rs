@@ -228,11 +228,17 @@ impl LocalLedger {
 /// [`apply_scan_result_to_state`], the merge body shared with
 /// [`Engine::apply_scan_result`](super::Engine::apply_scan_result).
 ///
-/// The mutator returns an `impl Future` rather than `async fn` to
-/// match the trait declaration verbatim. The future body is wholly
-/// synchronous — no `.await` runs while the write guard is held —
-/// so the synchronous [`std::sync::RwLock`] is sound (per the
-/// module-level lock-shape rationale).
+/// The mutator is written as `async fn`; Rust desugars this to the
+/// trait's `-> impl Future<Output = Result<(), RefreshError>> +
+/// Send` RPITIT signature (the two forms are interchangeable for
+/// implementing in-trait async per Rust 1.75+). The future body is
+/// wholly synchronous — no `.await` runs while the write guard is
+/// held — so the synchronous [`std::sync::RwLock`] is sound (per
+/// the module-level lock-shape rationale). The `Send` bound on
+/// the trait method's return type is satisfied automatically: the
+/// future captures only `&self` (which is `Sync`) and an owned
+/// `ScanResult`, both `Send`, and the body's local `RwLockWrite-
+/// Guard` is dropped before the function returns.
 impl LedgerEngine for LocalLedger {
     type Error = LedgerError;
 

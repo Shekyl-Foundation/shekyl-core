@@ -41,7 +41,7 @@
 //! # Reservation tracker placement
 //!
 //! Per the §2.2 / §2.6 amendment landed in PR #22, the
-//! `PendingReservations` tracker is owned by [`PendingTxEngine`],
+//! `PendingReservations` tracker is owned by `PendingTxEngine`,
 //! not [`LedgerEngine`]. [`LedgerEngine::balance`] returns the
 //! reservation-agnostic [`BalanceSummary`] computed from
 //! `LedgerBlock` alone; the spendable-balance projection that
@@ -83,9 +83,14 @@
 //! against its concrete threat model.
 //!
 //! [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`]: ../../../../../docs/V3_ENGINE_TRAIT_BOUNDARIES.md
-//! [`LocalLedger`]: super::super::ledger::LocalLedger
-//! [`PendingTxEngine`]: super::super::pending::PendingTxEngine
+//! [`LocalLedger`]: super::super::local_ledger::LocalLedger
 //! [`BalanceSummary`]: shekyl_scanner::BalanceSummary
+//!
+//! `PendingTxEngine` is referenced as plain code (not as an
+//! intra-doc link) because the type does not yet exist in this
+//! workspace; it lands in a future per-trait PR per §2.6 of the
+//! contract document. References below render as backticked code
+//! rather than rustdoc links until that PR is merged.
 
 use shekyl_scanner::BalanceSummary;
 
@@ -151,12 +156,23 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     ///
     /// # Panics
     ///
-    /// Never panics. Implementors that route through actor message
-    /// handlers (Stage 4) surface handler panics as
-    /// [`Self::Error`] (mappable to [`LedgerError`]) per §5.1's
-    /// `RuntimeFailure` discipline, not as a panic of this method.
+    /// The Stage 1 implementor `LocalLedger` panics on
+    /// [`RwLock`] poisoning (the inner `expect("LocalLedger lock
+    /// poisoned")` in `LocalLedger::read`). The synchronous
+    /// infallible return type of this method (`u64`, no
+    /// [`Result`]) is deliberate per §2.2's Round-3 disposition
+    /// — poisoning indicates a deeper invariant violation upstream
+    /// (a panic while a write guard was held) rather than a
+    /// recoverable error worth threading through every call site.
+    ///
+    /// Stage 4's actor implementor will route handler panics
+    /// through the supervisor's restart mechanism per §5.1's
+    /// `RuntimeFailure` discipline; the trait surface is unchanged
+    /// at that point, so callers continue to treat this method as
+    /// "panics on actor-level failure, returns a `u64` otherwise."
     ///
     /// [`LedgerBlock::height()`]: shekyl_engine_state::LedgerBlock::height
+    /// [`RwLock`]: std::sync::RwLock
     #[allow(dead_code)] // Stage 1 PR 2: production call sites migrate in commit 5.
     fn synced_height(&self) -> u64;
 
@@ -176,7 +192,9 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     ///
     /// # Panics
     ///
-    /// Never panics. Per [`Self::synced_height`]'s panic note.
+    /// Same as [`Self::synced_height`] — the Stage 1 `LocalLedger`
+    /// implementor panics on `RwLock` poisoning; sync infallible
+    /// return is by design.
     #[allow(dead_code)] // Stage 1 PR 2: production call sites migrate in commit 5.
     fn snapshot(&self) -> LedgerSnapshot;
 
@@ -186,9 +204,9 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     /// Per the §2.2 / §2.6 split, this method returns the
     /// committed-chain projection without subtracting in-flight
     /// `PendingTx` reservations. The reservation-aware
-    /// "spendable balance" projection lives on
-    /// [`PendingTxEngine`](super::super::pending::PendingTxEngine)
-    /// (§2.6, lands in PR 6).
+    /// "spendable balance" projection lives on `PendingTxEngine`
+    /// (§2.6, lands in PR 6; type does not yet exist in this
+    /// workspace, so the reference renders as plain code).
     ///
     /// # Cancellation
     ///
@@ -204,7 +222,9 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     ///
     /// # Panics
     ///
-    /// Never panics. Per [`Self::synced_height`]'s panic note.
+    /// Same as [`Self::synced_height`] — the Stage 1 `LocalLedger`
+    /// implementor panics on `RwLock` poisoning; sync infallible
+    /// return is by design.
     #[allow(dead_code)] // Stage 1 PR 2: production call sites migrate in commit 5.
     fn balance(&self) -> BalanceSummary;
 
