@@ -734,29 +734,38 @@ mod tests {
         );
     }
 
-    /// Pin the FFI re-export of `CLASSICAL_ADDRESS_BYTES` to the authoritative
-    /// Rust constant. Drift here corrupts every later field of
-    /// `ShekylAllKeysBlob` because the FFI is `#[repr(C)]` with byte-aligned
-    /// `[u8; N]` arrays — exactly the bug class that produced the Bug 1
-    /// `wallet_storage` failure (header had `64`, Rust had `65`). The C++
-    /// header has a `static_assert` mirror; this Rust-side test catches the
-    /// drift on every Rust-side change to either `account.rs` or the FFI
-    /// re-export, before the C++ build even runs. See
-    /// `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+    /// Pin the FFI re-export of `CLASSICAL_ADDRESS_BYTES` to the
+    /// authoritative `shekyl-crypto-pq::account::CLASSICAL_ADDRESS_BYTES`.
+    ///
+    /// **Scope (read carefully):** this assertion compares two *Rust*
+    /// values — the FFI re-export `SHEKYL_CLASSICAL_ADDRESS_BYTES` and
+    /// the authoritative `account::CLASSICAL_ADDRESS_BYTES`. It does
+    /// not read the C++ header `src/shekyl/shekyl_ffi.h`. A future
+    /// hand-edit to the C++ `#define` *alone* — the exact drift that
+    /// produced Bug 1 — would still leave this test green. The
+    /// cross-boundary check is the explicit job of the
+    /// `chore/cbindgen-consensus-constants` sibling branch, which
+    /// generates `shekyl_ffi_constants.h` from the Rust constants so
+    /// the C++ side has no separately-maintained value to drift from.
+    /// What this test *does* catch: any divergence between the
+    /// authoritative constant and the FFI re-export inside the
+    /// Rust workspace.
+    ///
+    /// See `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
     #[test]
     fn ffi_classical_address_bytes_matches_rust_authority() {
         assert_eq!(SHEKYL_CLASSICAL_ADDRESS_BYTES, CLASSICAL_ADDRESS_BYTES);
         assert_eq!(SHEKYL_CLASSICAL_ADDRESS_BYTES, 1 + 32 + 32);
     }
 
-    /// Pin the FFI re-export of `SEED_FORMAT_*` to the authoritative Rust
-    /// constants. Drift here causes the on-disk `m_seed_format` byte to be
-    /// silently misinterpreted on read — exactly the Bug 2 mechanism that
-    /// produced "(network, seed_format) pair disallowed" failures on every
-    /// `(Fakechain, Raw32)` round-trip. The two assertions below would have
-    /// failed against the broken header at the FFI re-export layer; the
-    /// equivalent C++ static_assert (or generated-header check, when the
-    /// `cbindgen` follow-up lands) catches it on the C side.
+    /// Pin the FFI re-export of `SEED_FORMAT_*` to the authoritative
+    /// `shekyl-crypto-pq::account::SeedFormat::{Bip39, Raw32}.as_u8()`.
+    ///
+    /// **Scope:** Rust-internal only — see the docstring on
+    /// `ffi_classical_address_bytes_matches_rust_authority` above.
+    /// Cross-boundary drift detection (catching a hand-edit of the
+    /// C++ `#define`) is the `chore/cbindgen-consensus-constants`
+    /// sibling branch's job.
     #[test]
     fn ffi_seed_format_constants_match_rust_authority() {
         assert_eq!(SHEKYL_SEED_FORMAT_BIP39, SeedFormat::Bip39.as_u8());

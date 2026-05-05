@@ -69,20 +69,25 @@
 
 ### Added
 
-- **Mechanical FFI constant equality-assertion tests
+- **Rust-internal FFI constant equality-assertion tests
   (`rust/shekyl-ffi/src/account_ffi.rs::tests`).**
   `ffi_classical_address_bytes_matches_rust_authority` and
   `ffi_seed_format_constants_match_rust_authority` pin the FFI
   re-exports to the authoritative
-  `rust/shekyl-crypto-pq/src/account.rs` constants. These run on
-  every `cargo test -p shekyl-ffi` and would have caught Bug 1 / Bug
-  2 the moment either side was edited. Reduced-scope `cbindgen`-style
-  generator follow-up (`chore/cbindgen-consensus-constants`) extends
-  the same prevention to the consensus-affecting constants
-  (`RCTTypeFcmpPlusPlusPqc`, `FCMP_REFERENCE_BLOCK_*_AGE`,
-  `ADDRESS_VERSION_V1`); full migration of the remaining ~40 fail-
-  closed-on-misuse constants is filed as FOLLOWUPS V3.0 (target
-  pre-audit-final).
+  `rust/shekyl-crypto-pq/src/account.rs` constants. **Scope (honest):**
+  these tests compare two Rust-side values; they do not read
+  `src/shekyl/shekyl_ffi.h`. A hand-edit to the C++ `#define` alone —
+  the exact drift that produced Bugs 1 and 2 — would still leave
+  them green. They catch a different and narrower bug class:
+  divergence introduced inside the Rust workspace between
+  authoritative and re-exported constants, before the C++ build
+  runs. Cross-boundary detection (catching C++-side drift) is the
+  explicit job of the reduced-scope generator in the sibling branch
+  `chore/cbindgen-consensus-constants`, which generates a header
+  from the Rust constants for `RCTTypeFcmpPlusPlusPqc`,
+  `FCMP_REFERENCE_BLOCK_*_AGE`, and `ADDRESS_VERSION_V1`. Full
+  migration of the remaining ~40 fail-closed-on-misuse constants is
+  filed as FOLLOWUPS V3.0 (target pre-audit-final).
 
 - **`tests/unit_tests/account.cpp` — BIP-39 + MAINNET coverage.**
   Four new tests close the only path Bug 2 broke that the existing

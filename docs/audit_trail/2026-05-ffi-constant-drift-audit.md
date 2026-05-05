@@ -51,8 +51,8 @@ The audit-quality story it supports:
 | --- | --- |
 | C++ | `src/shekyl/shekyl_ffi.h` defined `SHEKYL_SEED_FORMAT_BIP39 = 0`, `_RAW32 = 1` |
 | Rust | `rust/shekyl-crypto-pq/src/account.rs` defines `SEED_FORMAT_BIP39 = 0x01`, `SEED_FORMAT_RAW32 = 0x02` (with `0` reserved for "unset") |
-| Mechanism | C++ wrote `m_seed_format = 1` to disk meaning RAW32; on `wallet2::load`, the FFI `shekyl_account_rederive` received `seed_format = 1` and decoded `1` as `Bip39`; `permitted_seed_format(Fakechain, Bip39)` returned `false`; rederive returned `false`; load failed with `"(network, seed_format) pair disallowed or derivation inconsistent"`. The BIP-39 path accidentally appeared to round-trip in the buggy era because both sides held `0` for it (and `fmt_from_u8(0)` in Rust returned `None`, which also failed but for a different reason). |
-| Failure mode | Fail-closed at every wallet load on the RAW32 path (Testnet, Fakechain). The BIP-39 path was equally broken but had no test exercising it. No path to silent corruption. |
+| Mechanism | C++ wrote `m_seed_format = 1` to disk meaning RAW32; on `wallet2::load`, the FFI `shekyl_account_rederive` received `seed_format = 1` and decoded `1` as `Bip39`; `permitted_seed_format(Fakechain, Bip39)` returned `false`; rederive returned `false`; load failed with `"(network, seed_format) pair disallowed or derivation inconsistent"`. The BIP-39 path was broken too, but in a different way: C++ wrote `0`, and `SeedFormat::from_u8(0)` returns `None` (Rust reserves `0` for "unset"), so a BIP-39 wallet would have failed at `wallet2::load` with an FFI decode error. The reason this went undetected is *not* that BIP-39 round-tripped — it's that no C++/FFI-layer test exercised the BIP-39 path at all. |
+| Failure mode | Fail-closed at every wallet load on both the RAW32 path (Testnet, Fakechain) and the BIP-39 path (any network). No path to silent corruption. |
 | Detection | Caught only because Bug 1's fix exposed it. Was actively undetected in `dev` for the entire window during which Bug 1 was masking it. |
 | Fix | `SHEKYL_SEED_FORMAT_BIP39 = 1`, `_RAW32 = 2` in the header. |
 | Mechanical regression test added | `rust/shekyl-ffi/src/account_ffi.rs::tests::ffi_seed_format_constants_match_rust_authority` |
@@ -138,12 +138,22 @@ C++ side against `git grep -E '^pub const SHEKYL_|^pub const SEED_FORMAT_|^pub c
 Per the Bug-2 post-mortem, hand-maintained constants on both sides of the
 FFI are the bug class. Two things are landing to close it:
 
-1. **Mechanical equality-assertion tests for the two consensus-adjacent
+1. **Rust-internal equality-assertion tests for the two consensus-adjacent
    constants** (`SHEKYL_CLASSICAL_ADDRESS_BYTES`, `SHEKYL_SEED_FORMAT_*`)
-   landed inside `fix/wallet-storage-test` itself. These run on every
-   `cargo test -p shekyl-ffi` and catch drift in CI on the next PR rather
-   than at audit. (Cost: 5 minutes. Benefit: would have caught Bug 1 and
-   Bug 2 the moment either side was edited.)
+   landed inside `fix/wallet-storage-test` itself. **Honest scope:** these
+   tests compare the FFI re-export in `rust/shekyl-ffi/src/account_ffi.rs`
+   to the authoritative constants in `rust/shekyl-crypto-pq/src/account.rs`.
+   Both values are Rust-side. The tests *do not* read the C++ header
+   `src/shekyl/shekyl_ffi.h`, so a future hand-edit to the C++ `#define`
+   alone — the exact drift that produced Bugs 1 and 2 — would still leave
+   them green. What they *do* catch: any divergence introduced inside the
+   Rust workspace between authoritative and re-exported constants, before
+   the C++ build runs.
+
+   The cross-boundary detection (catching drift in the C++ `#define`
+   itself) is the explicit job of #2 below. The post-mortem framing was
+   originally that #1 alone closed the bug class; that was wrong, and is
+   corrected here.
 
 2. **A reduced-scope `build.rs`-style header generator** (`chore/cbindgen-consensus-constants`)
    covers only the constants where drift would cause silent wrong-output
