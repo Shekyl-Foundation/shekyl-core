@@ -734,6 +734,21 @@ mod tests {
         );
     }
 
+    /// Pin the FFI re-export of `CLASSICAL_ADDRESS_BYTES` to the authoritative
+    /// Rust constant. Drift here corrupts every later field of
+    /// `ShekylAllKeysBlob` because the FFI is `#[repr(C)]` with byte-aligned
+    /// `[u8; N]` arrays — exactly the bug class that produced the Bug 1
+    /// `wallet_storage` failure (header had `64`, Rust had `65`). The C++
+    /// header has a `static_assert` mirror; this Rust-side test catches the
+    /// drift on every Rust-side change to either `account.rs` or the FFI
+    /// re-export, before the C++ build even runs. See
+    /// `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+    #[test]
+    fn ffi_classical_address_bytes_matches_rust_authority() {
+        assert_eq!(SHEKYL_CLASSICAL_ADDRESS_BYTES, CLASSICAL_ADDRESS_BYTES);
+        assert_eq!(SHEKYL_CLASSICAL_ADDRESS_BYTES, 1 + 32 + 32);
+    }
+
     #[test]
     fn bip39_validate_accepts_good_mnemonic() {
         let entropy = [0u8; 32];
