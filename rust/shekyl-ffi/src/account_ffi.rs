@@ -734,6 +734,49 @@ mod tests {
         );
     }
 
+    /// Pin the FFI re-export of `CLASSICAL_ADDRESS_BYTES` to the
+    /// authoritative `shekyl-crypto-pq::account::CLASSICAL_ADDRESS_BYTES`.
+    ///
+    /// **Scope (read carefully):** this assertion compares two *Rust*
+    /// values — the FFI re-export `SHEKYL_CLASSICAL_ADDRESS_BYTES` and
+    /// the authoritative `account::CLASSICAL_ADDRESS_BYTES`. It does
+    /// not read the C++ header `src/shekyl/shekyl_ffi.h`. A future
+    /// hand-edit to the C++ `#define` *alone* — the exact drift that
+    /// produced Bug 1 — would still leave this test green. The
+    /// cross-boundary check is the explicit job of the
+    /// `chore/cbindgen-consensus-constants` sibling branch, which
+    /// generates `shekyl_ffi_constants.h` from the Rust constants so
+    /// the C++ side has no separately-maintained value to drift from.
+    /// What this test *does* catch: any divergence between the
+    /// authoritative constant and the FFI re-export inside the
+    /// Rust workspace.
+    ///
+    /// See `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+    #[test]
+    fn ffi_classical_address_bytes_matches_rust_authority() {
+        assert_eq!(SHEKYL_CLASSICAL_ADDRESS_BYTES, CLASSICAL_ADDRESS_BYTES);
+        assert_eq!(SHEKYL_CLASSICAL_ADDRESS_BYTES, 1 + 32 + 32);
+    }
+
+    /// Pin the FFI re-export of `SEED_FORMAT_*` to the authoritative
+    /// `shekyl-crypto-pq::account::SeedFormat::{Bip39, Raw32}.as_u8()`.
+    ///
+    /// **Scope:** Rust-internal only — see the docstring on
+    /// `ffi_classical_address_bytes_matches_rust_authority` above.
+    /// Cross-boundary drift detection (catching a hand-edit of the
+    /// C++ `#define`) is the `chore/cbindgen-consensus-constants`
+    /// sibling branch's job.
+    #[test]
+    fn ffi_seed_format_constants_match_rust_authority() {
+        assert_eq!(SHEKYL_SEED_FORMAT_BIP39, SeedFormat::Bip39.as_u8());
+        assert_eq!(SHEKYL_SEED_FORMAT_RAW32, SeedFormat::Raw32.as_u8());
+        // Sanity: 0 is reserved for "unset" on both sides; an FFI input of 0
+        // must never decode as a valid SeedFormat.
+        assert_ne!(SHEKYL_SEED_FORMAT_BIP39, 0);
+        assert_ne!(SHEKYL_SEED_FORMAT_RAW32, 0);
+        assert_ne!(SHEKYL_SEED_FORMAT_BIP39, SHEKYL_SEED_FORMAT_RAW32);
+    }
+
     #[test]
     fn bip39_validate_accepts_good_mnemonic() {
         let entropy = [0u8; 32];

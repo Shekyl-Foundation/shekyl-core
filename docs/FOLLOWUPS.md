@@ -11,6 +11,61 @@ citing in a review.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Full `cbindgen`-style migration of `SHEKYL_*` FFI constants
+  (target: post-stressnet, pre-audit-final).** The 2026-05-05
+  FFI constant-drift audit (`docs/audit_trail/2026-05-ffi-constant-drift-audit.md`)
+  found two real bugs (Bug 1: `SHEKYL_CLASSICAL_ADDRESS_BYTES`
+  off-by-one, Bug 2: `SHEKYL_SEED_FORMAT_*` 0/1 vs 1/2) where
+  hand-maintained `#define` constants in `src/shekyl/shekyl_ffi.h`
+  had drifted from authoritative `pub const` constants in the Rust
+  crates. The reduced-scope sibling branch
+  `chore/cbindgen-consensus-constants` covers the silent-wrong-output
+  subset (`RCTTypeFcmpPlusPlusPqc`, `FCMP_REFERENCE_BLOCK_*_AGE`,
+  `ADDRESS_VERSION_V1`, the four locked economic parameters) before
+  audit. The remaining ~40 constants are all fail-closed-on-misuse
+  (drift causes load failure or assertion failure, never silent
+  corruption), so their migration to the generated header can land
+  post-stressnet without audit-window pressure. Scope: extend the
+  `build.rs` from the consensus-subset branch to cover all
+  `SHEKYL_WALLET_ERR_*` (29), `SHEKYL_WALLET_CAPABILITY_*` (4),
+  `SHEKYL_WALLET_KDF_*` and `_FILE_FORMAT_VERSION` (5), all
+  `SHEKYL_LOG_LEVEL_*` and `_ERR_*` (~17), and the byte-length
+  constants (`MASTER_SEED_BYTES`, `RAW_SEED_BYTES`,
+  `PQC_PUBLIC_KEY_BYTES`, `ML_KEM_768_*_BYTES`, `BIP39_*_BYTES`,
+  etc.). Delete the now-redundant C++ `#define`s; replace each with
+  a `static_assert` sentinel against the generated value. Close-
+  condition: every `SHEKYL_*` constant in `src/shekyl/shekyl_ffi.h`
+  is either generated or an authoritatively-Rust-valued
+  `static_assert` mirror, and `git grep '^#define SHEKYL_' src/shekyl/shekyl_ffi.h`
+  returns only the generated header's include guard. Target: V3.0,
+  post-stressnet, pre-audit-final.
+
+- **`wallet_storage`: cover loaded-wallet save-as branches in
+  `wallet2::store_to`.** When `fix/wallet-storage-test` deleted the
+  three Monero-era keys-file fixtures and their `GTEST_SKIP()`-gated
+  tests (`store_to_file2file`, `change_password_same_file`,
+  `change_password_different_file`), two `store_to` branches lost
+  their only direct unit-test coverage even though the surviving
+  `store_to_mem2file` / `change_password_mem2file` /
+  `change_password_in_memory` cases superficially look similar:
+    - `!same_file && !force_rewrite_keys` save-as on a *loaded*
+      wallet (the surviving tests run on freshly-`generate()`'d
+      wallets only).
+    - `same_file && force_rewrite_keys` rewrite-keys-in-place on a
+      *loaded* wallet.
+  Both branches still execute on the production load → re-store
+  path, but no unit test exercises them directly. Add two new tests
+  that (a) `generate()` a wallet to disk under SHKW1, (b) `load()`
+  it into a fresh `wallet2`, then (c) drive each branch. Block on
+  this *only if* it doesn't conflict with the V3.2 wallet2 → Rust
+  cutover schedule; if the cutover lands first, the gap retires
+  with `wallet2.cpp` itself and the entry closes as won't-fix.
+  Cross-references: `tests/unit_tests/wallet_storage.cpp` deletion
+  comment around line 126; `docs/CI_BASELINE.md` Cluster B; the
+  Copilot review on PR #27 that surfaced the gap. Target: V3.0
+  pre-stressnet, or retired by the V3.2 cutover, whichever comes
+  first.
+
 - **Stage 1 performance baseline measurement before Stage 1 PRs land.**
   The §3.3 *interior-mutability measurement gate* in
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
@@ -545,33 +600,24 @@ citing in a review.
   constructor; existing `password_only` call sites compile unchanged.
   Target: V3.1.
 
-- **`wallet_storage` tests pinned to wallet2 hardening-pass `2l /
-  2m-keys / 2m-cache`.** (Track 0 CI triage, 2026-04-28.)
-  `wallet_storage.store_to_mem2file` and
-  `wallet_storage.change_password_mem2file` throw
-  `boost::system::system_error` from
-  `epee::net_utils::direct_connect::operator()` during what should
-  be a pure file-storage test. Stack origin:
-  `wallet2::generate("", password)` →
-  `estimate_blockchain_height()` → `NodeRPCProxy::get_target_height()`
-  → `get_info()`. The default-constructed `wallet2` has
-  `m_offline = false` so the offline short-circuit at
-  `node_rpc_proxy.cpp:140` doesn't fire; with no daemon configured,
-  the resolver throws. Investigation confirms this is **not** a
-  rewire-introduced behavior change — `estimate_blockchain_height()`
-  has called the daemon since the Monero era (commits `a2e4b5a96`,
-  `5e18005ff`); the test is fragile because it constructs a default
-  wallet without `set_offline(true)` on a host with no daemon. A
-  test-only `set_offline(true)` band-aid was considered and rejected
-  per `15-deletion-and-debt.mdc` ("treat as structural and defer"):
-  the CHANGELOG already pins commits `2l / 2m-keys / 2m-cache` as
-  the structural close target (commit `8167c1502`), and a band-aid
-  here would mask the regressions the hardening pass exists to
-  address end-to-end. Close condition: passes after V3.1
-  hardening-pass lands, OR closes with `wallet2.cpp` removal at
-  V3.2 — whichever lands first. See
-  [`docs/CI_BASELINE.md`](./CI_BASELINE.md) Cluster B for the full
-  diagnosis. Target: V3.1.
+- ~~**`wallet_storage` tests pinned to wallet2 hardening-pass `2l /
+  2m-keys / 2m-cache`.**~~ **CLOSED 2026-05-05 by fix, not by the
+  hardening pass.** Three earlier triage rounds attached this failure
+  to wrong root causes (daemon-fragility in `estimate_blockchain_height`;
+  later, rederive-step view-secret corruption). The actual root cause
+  was two C++/Rust constant disagreements in `src/shekyl/shekyl_ffi.h`:
+  `SHEKYL_CLASSICAL_ADDRESS_BYTES` was `64` but Rust's
+  `CLASSICAL_ADDRESS_BYTES` is `65`, shifting every later field of
+  `ShekylAllKeysBlob` by one byte and feeding non-canonical scalars
+  into `secret_key_to_public_key`; `SHEKYL_SEED_FORMAT_BIP39 / RAW32`
+  were `0 / 1` but authoritative Rust uses `1 / 2`, so a stored RAW32
+  seed format silently round-tripped as BIP39 and was rejected by
+  `permitted_seed_format(Fakechain, Bip39)`. The tests additionally
+  needed `tools::wallet2 w(cryptonote::FAKECHAIN, 1, true)` to match
+  `account_base::generate()`'s legacy hardcoded FAKECHAIN derivation.
+  See [`docs/CI_BASELINE.md`](./CI_BASELINE.md) Cluster B for the
+  full post-mortem of the three falsified hypotheses. No on-disk
+  wallets exist pre-V3 launch; no migration code is required.
 
 - **Rust replacements for chaingen-deleted validation invariants.**
   (Test hygiene Δ1, 2026-05-05.) Closed `core_tests/{tx_validation,
@@ -966,6 +1012,46 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 `wallet2.cpp` wholesale at its Phase 5 — these items name the
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
+
+- **`wallet2` has no `generate_from_bip39` entry point — by design;
+  do not add one.** Surfaced 2026-05-05 (Bug 4 in
+  `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`) when an
+  attempt to add C++/FFI coverage for the wallet2 BIP-39 round-trip
+  uncovered that the wrapper has never existed: the Rust derivation
+  (`shekyl-crypto-pq::generate_account_from_bip39`), the FFI
+  (`shekyl_account_generate_from_bip39`), and the lower-level C++
+  glue (`account_base::generate_from_bip39`) all exist and are
+  tested, but the `wallet2`-level wrapper was never wired through
+  when the original wallet2-from-Electrum-mnemonic path was retired.
+  Pre-mainnet, no production caller is broken by the absence; this
+  is a coverage-gap report against a layer that is being deleted by
+  the Rust rewrite at Phase 5, not a bug in the conventional sense.
+
+  **Architectural decision (2026-05-05):** new BIP-39 wallet
+  creation will happen via the Rust wallet path post-migration. The
+  wallet2-level wrapper will not be added pre-migration, because:
+  (a) any wallet2 wrapper added now will be deleted by Phase 5 of
+  the Rust rewrite — a transitional API that becomes a removal-as-
+  breaking-change rather than a removal-as-no-op; (b) the Rust
+  derivation path is the actual functional guarantee and is tested
+  end-to-end (`shekyl-crypto-pq::tests::generate_from_bip39_mainnet_roundtrips_to_rederive`);
+  (c) no mainnet wallets exist yet, so no production user is
+  affected by the absence; (d) the next beta ships before the Rust
+  rewrite lands, so any "transitional" wrapper would have a
+  lifespan shorter than its review burden.
+
+  **CI tripwire:** `tests/unit_tests/wallet_storage.cpp` carries a
+  `static_assert` against a SFINAE detector for
+  `wallet2::generate_from_bip39`. If a future contributor adds the
+  wrapper without thinking about the migration, the build fails
+  with a message pointing back at this entry. The tripwire is
+  designed to delete itself when the Rust rewrite Phase 5 lands and
+  `wallet2.cpp` goes away.
+
+  **Closure point:** Phase 5 of the Rust rewrite (the wallet2.cpp
+  deletion). At that point this entry retires; the tripwire deletes
+  with `wallet_storage.cpp`; the Rust BIP-39 round-trip test is the
+  only remaining functional artifact, which is correct.
 
 **Index of how each follow-up interacts with the rewrite** (entries
 themselves carry the detail; this table is the at-a-glance view used
