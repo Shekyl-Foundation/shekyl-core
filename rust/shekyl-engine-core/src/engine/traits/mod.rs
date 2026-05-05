@@ -40,5 +40,4 @@ pub(crate) mod daemon;
 pub(crate) mod ledger;
 
 pub(crate) use daemon::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
-#[allow(unused_imports)] // Stage 1 PR 2: production call sites migrate in commit 5.
 pub(crate) use ledger::LedgerEngine;

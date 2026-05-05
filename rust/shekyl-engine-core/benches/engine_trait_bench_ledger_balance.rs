@@ -3,7 +3,7 @@
 // BSD-3-Clause
 
 //! Stage 1 PR 2 frozen-baseline criterion bench for the
-//! [`LedgerEngine::balance`] trait method on a state-populated
+//! `LedgerEngine::balance` trait method on a state-populated
 //! fixture.
 //!
 //! Companion to `engine_trait_bench_ledger_balance_iai.rs`. See
@@ -12,14 +12,20 @@
 //! `engine_trait_bench_ledger_balance` section for the harness
 //! integration this bench plugs into.
 //!
+//! `LedgerEngine` is `pub(crate)` in `shekyl-engine-core`, so the
+//! type is not in scope from a bench-target compilation unit and
+//! cannot be referenced via rustdoc intra-doc links here.
+//! References to `LedgerEngine` and `LedgerEngine::balance` render
+//! as plain backticked code throughout this file by design.
+//!
 //! # What this measures
 //!
 //! `engine.ledger.balance() -> BalanceSummary`, dispatched through
-//! the [`LedgerEngine`] trait surface (commit 5 migrated `Engine`'s
+//! the `LedgerEngine` trait surface (commit 5 migrated `Engine`'s
 //! production read paths to trait dispatch; this bench measures the
 //! same call shape that production callers hit). On a fixture
 //! pre-populated with [`BENCH_BALANCE_TRANSFER_COUNT`] = 1024
-//! [`TransferDetails`] entries, [`shekyl_scanner::BalanceSummary::compute`]
+//! `TransferDetails` entries, `shekyl_scanner::BalanceSummary::compute`
 //! walks the transfer slice once per call. Workload class:
 //! **state-dependent compute** — per-call cost scales linearly with
 //! the populated transfer count, so criterion's `median_ns` cleanly
@@ -47,9 +53,7 @@
 //! Per §4.2: the engine-construction work in
 //! [`build_engine_fixture_with_balance`] (`Engine::create` ceremony +
 //! 1024-transfer state injection) is **setup**, held outside `b.iter`.
-//! Only the [`LedgerEngine::balance`] trait call is measured.
-//!
-//! [`LedgerEngine::balance`]: shekyl-engine-core/src/engine/traits/ledger.rs
+//! Only the `LedgerEngine::balance` trait call is measured.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use shekyl_engine_core::__bench_internals::engine_balance_for_bench;

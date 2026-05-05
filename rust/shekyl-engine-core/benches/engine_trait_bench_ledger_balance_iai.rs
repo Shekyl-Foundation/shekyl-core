@@ -5,9 +5,14 @@
 //! iai-callgrind companion to
 //! `engine_trait_bench_ledger_balance.rs`.
 //!
-//! Same workload (a single
-//! [`LedgerEngine::balance`](shekyl-engine-core/src/engine/traits/ledger.rs)
-//! call against a 1024-transfer state-populated fixture) measured via
+//! `LedgerEngine` is `pub(crate)` in `shekyl-engine-core`, so the
+//! type is not in scope from a bench-target compilation unit and
+//! cannot be referenced via rustdoc intra-doc links here. References
+//! to `LedgerEngine` and `LedgerEngine::balance` render as plain
+//! backticked code throughout this file by design.
+//!
+//! Same workload (a single `LedgerEngine::balance` call against a
+//! 1024-transfer state-populated fixture) measured via
 //! Valgrind's Callgrind for deterministic instruction-count metrics.
 //! This is the bench whose `instructions` value the CI gate
 //! (`ci/benchmarks` workflow) uses for the pass/fail signal under the

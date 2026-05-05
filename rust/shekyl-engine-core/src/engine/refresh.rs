@@ -1599,6 +1599,23 @@ async fn run_refresh_task<S, D: DaemonEngine, L>(
         // lets `Engine<S, D, MockLedger>` flow through the same
         // refresh path that `Engine<S, D, LocalLedger>` uses, which
         // is the foundation for the §5.2 hybrid retry test.
+        //
+        // Lock-hold-across-await note: the engine read-guard `g` is
+        // held for the duration of `apply_scan_result.await`. This is
+        // benign for Stage 1's `LocalLedger` and `MockLedger`
+        // implementors (both have wholly synchronous future bodies,
+        // so the await completes in synchronous-merge time) but will
+        // need restructuring at Stage 4 when an actor-backed
+        // implementor's `apply_scan_result` future genuinely awaits a
+        // `kameo` ask: extending the outer engine read-guard across
+        // an arbitrary actor round-trip can starve writers needing
+        // the engine write-lock. The refactor (decouple the merge
+        // future from the outer guard via `Arc<L>` cloning) co-lands
+        // with the Stage 4 `LedgerEngine` actor cutover, where the
+        // ownership rework happens once for all per-trait
+        // implementors. Tracked in `docs/FOLLOWUPS.md` →
+        // "`run_refresh_task` holds the engine read-guard across
+        // `apply_scan_result.await`" under V3.x.
         let merge = {
             let g = engine_arc.read().await;
             g.ledger.apply_scan_result(result).await
