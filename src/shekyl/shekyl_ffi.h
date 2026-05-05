@@ -77,9 +77,12 @@
 #define SHEKYL_DERIVATION_NETWORK_FAKECHAIN 3
 
 /// Bind symbolic `SeedFormat` values to their u8 wire representation. Matches
-/// Rust `account::SeedFormat`.
-#define SHEKYL_SEED_FORMAT_BIP39 0
-#define SHEKYL_SEED_FORMAT_RAW32 1
+/// authoritative Rust `account::SEED_FORMAT_*` constants in
+/// `shekyl-crypto-pq` (re-exported as `SHEKYL_SEED_FORMAT_*` from
+/// `shekyl-ffi`). The header values are 1-based, not 0-based, because Rust
+/// reserves 0 for "unset"; a 0 received over the FFI is rejected.
+#define SHEKYL_SEED_FORMAT_BIP39 1
+#define SHEKYL_SEED_FORMAT_RAW32 2
 
 // Pin the address invariant shared with Rust `account::PQC_PUBLIC_KEY_BYTES`.
 // If these constants ever drift, the freeze is broken and the assembler in

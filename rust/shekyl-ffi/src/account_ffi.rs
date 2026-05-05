@@ -749,6 +749,25 @@ mod tests {
         assert_eq!(SHEKYL_CLASSICAL_ADDRESS_BYTES, 1 + 32 + 32);
     }
 
+    /// Pin the FFI re-export of `SEED_FORMAT_*` to the authoritative Rust
+    /// constants. Drift here causes the on-disk `m_seed_format` byte to be
+    /// silently misinterpreted on read — exactly the Bug 2 mechanism that
+    /// produced "(network, seed_format) pair disallowed" failures on every
+    /// `(Fakechain, Raw32)` round-trip. The two assertions below would have
+    /// failed against the broken header at the FFI re-export layer; the
+    /// equivalent C++ static_assert (or generated-header check, when the
+    /// `cbindgen` follow-up lands) catches it on the C side.
+    #[test]
+    fn ffi_seed_format_constants_match_rust_authority() {
+        assert_eq!(SHEKYL_SEED_FORMAT_BIP39, SeedFormat::Bip39.as_u8());
+        assert_eq!(SHEKYL_SEED_FORMAT_RAW32, SeedFormat::Raw32.as_u8());
+        // Sanity: 0 is reserved for "unset" on both sides; an FFI input of 0
+        // must never decode as a valid SeedFormat.
+        assert_ne!(SHEKYL_SEED_FORMAT_BIP39, 0);
+        assert_ne!(SHEKYL_SEED_FORMAT_RAW32, 0);
+        assert_ne!(SHEKYL_SEED_FORMAT_BIP39, SHEKYL_SEED_FORMAT_RAW32);
+    }
+
     #[test]
     fn bip39_validate_accepts_good_mnemonic() {
         let entropy = [0u8; 32];
