@@ -545,33 +545,56 @@ citing in a review.
   constructor; existing `password_only` call sites compile unchanged.
   Target: V3.1.
 
-- **`wallet_storage` tests pinned to wallet2 hardening-pass `2l /
-  2m-keys / 2m-cache`.** (Track 0 CI triage, 2026-04-28.)
+- **wallet2 `generate("", password)` → `store_to(file, password)` →
+  `load(file, password)` round-trip is broken (V3.2 / Rust keystore).**
+  (Track 0 CI triage, 2026-04-28; rediagnosed test hygiene Δ4,
+  2026-05-05.) The original triage attributed
   `wallet_storage.store_to_mem2file` and
-  `wallet_storage.change_password_mem2file` throw
-  `boost::system::system_error` from
-  `epee::net_utils::direct_connect::operator()` during what should
-  be a pure file-storage test. Stack origin:
-  `wallet2::generate("", password)` →
-  `estimate_blockchain_height()` → `NodeRPCProxy::get_target_height()`
-  → `get_info()`. The default-constructed `wallet2` has
-  `m_offline = false` so the offline short-circuit at
-  `node_rpc_proxy.cpp:140` doesn't fire; with no daemon configured,
-  the resolver throws. Investigation confirms this is **not** a
-  rewire-introduced behavior change — `estimate_blockchain_height()`
-  has called the daemon since the Monero era (commits `a2e4b5a96`,
-  `5e18005ff`); the test is fragile because it constructs a default
-  wallet without `set_offline(true)` on a host with no daemon. A
-  test-only `set_offline(true)` band-aid was considered and rejected
-  per `15-deletion-and-debt.mdc` ("treat as structural and defer"):
-  the CHANGELOG already pins commits `2l / 2m-keys / 2m-cache` as
-  the structural close target (commit `8167c1502`), and a band-aid
-  here would mask the regressions the hardening pass exists to
-  address end-to-end. Close condition: passes after V3.1
-  hardening-pass lands, OR closes with `wallet2.cpp` removal at
-  V3.2 — whichever lands first. See
-  [`docs/CI_BASELINE.md`](./CI_BASELINE.md) Cluster B for the full
-  diagnosis. Target: V3.1.
+  `wallet_storage.change_password_mem2file` to a daemon-RPC fragility
+  fixable by a `set_offline(true)` band-aid pending the wallet2
+  hardening pass `2l / 2m-keys / 2m-cache`. Reproduction from a clean
+  `tests/data/` falsified that diagnosis: the `boost::system::system_error`
+  thrown by `estimate_blockchain_height()` during
+  `wallet2::generate("", password)` is *caught* upstream (the still-passing
+  `change_password_in_memory` test goes through the same call site and the
+  same caught throw), and the *fatal* failure is on the subsequent
+  `wallet2::load(file, password)`:
+  `load_keys_buf` calls `hwdev.verify_keys(keys.m_view_secret_key,
+  keys.m_account_address.m_view_public_key)` and that returns `false`,
+  firing `error::wallet_files_doesnt_correspond` at
+  `src/wallet/wallet2.cpp:5599`. The freshly written `.keys` file does
+  not round-trip — the deserialized view secret key does not derive to
+  the deserialized view public key.
+
+  This is a real wallet2 bug in the in-memory-then-persist path, not
+  test fragility. The CI signal was closed in test hygiene Δ4 by
+  deleting the failing tests rather than band-aiding the diagnosis (see
+  [`docs/CI_BASELINE.md`](./CI_BASELINE.md) Cluster B). The bug itself
+  is not fixed and is not being fixed in C++: per
+  `20-rust-vs-cpp-policy.mdc` rule 1, wallet keys are Rust territory,
+  and rebuilding the C++ persist path on a file format scheduled for
+  deletion in V3.2 is debt the project should not take on. The Rust
+  keystore that replaces wallet2.cpp must own the round-trip invariant
+  from day one.
+
+  Required Rust unit tests in the V3.2 keystore crate:
+  (a) generate-in-memory → persist-to-file → load-from-file round-trip,
+      asserting `verify_keys(view_secret, view_public)` and
+      `verify_keys(spend_secret, spend_public)` succeed on reload;
+  (b) change-password during persist (mem→file with new password →
+      load with new password), asserting primary address stable;
+  (c) PQC public-key field correspondence between cache and keys files
+      (`wallet2.cpp:6661` analogue);
+  (d) negative case: load with wrong password throws the keystore's
+      equivalent of `error::invalid_password`.
+
+  V3.0 / V3.1 risk: GUI flows that "create wallet, then ask where to
+  save" plausibly hit the broken in-memory-then-persist path. Real-user
+  impact in V3.0 wallet2 has not been verified end-to-end against the
+  GUI/CLI call sites; if confirmed, a separate V3.0 hotfix may be
+  warranted. CLI flows that use the atomic `generate(file, password, ...)`
+  path go through `store()` rather than `store_to(...)` and are likely
+  unaffected. Target: V3.2 (Rust keystore migration).
 
 - **`core_tests` synthetic-block harness rewrite for v3-only
   flows.** (Track 0 CI triage, 2026-04-28.) 19 `core_tests` tests

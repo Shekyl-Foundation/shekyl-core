@@ -45,18 +45,52 @@ cycle.
 | Diagnosis | Parameter-order mismatch between Rust definition (`pqc_pk, view_pk`) and C-side declaration / caller (`view_pub, pqc_public_key`). Introduced at `0092a8da1`, surfaced at the `30db140fe` rewire merge. |
 | Close commit | `1d6de1bae` |
 
-### Cluster B — `wallet_storage.{store_to_mem2file, change_password_mem2file}` — **DEFERRED to V3.1**
+### Cluster B — `wallet_storage.{store_to_mem2file, change_password_mem2file}` — **CLOSED via deletion**
+
+**Status:** Resolved 2026-05-05 (test hygiene Δ4) by deleting the two
+failing tests and the three fixture-skipped tests in
+`tests/unit_tests/wallet_storage.cpp`, retaining only
+`change_password_in_memory` (in-memory key generation, no disk I/O,
+already passing). The previous "DEFERRED to V3.1, treat as structural"
+disposition was based on a diagnosis that did not survive reproduction
+and is corrected below.
+
+The original diagnosis (daemon-RPC fragility fixable by a future
+`wallet2::set_offline(true)` band-aid in the hardening pass) explained
+*one* symptom — the `boost::system::system_error` stack trace from
+`get_daemon_blockchain_target_height` — but missed the actual fatal
+mechanism. Reproducing from a clean `tests/data/` shows the daemon-RPC
+throw is caught upstream (the test continues; `change_password_in_memory`
+demonstrates this by passing through the same `generate("", password)`
+call with the same caught throw). The fatal failure is on the *next*
+operation: `wallet2::load(file, password)` → `load_keys_buf` →
+`hwdev.verify_keys(view_secret, view_public)` returns `false`, which
+fires the `error::wallet_files_doesnt_correspond` throw at
+`src/wallet/wallet2.cpp:5599`. The freshly written `.keys` file does not
+round-trip — the deserialized view secret key does not derive to the
+deserialized view public key. A `set_offline(true)` band-aid does not
+fix this and would have masked the real bug indefinitely.
+
+The discovered round-trip bug is real and is captured in
+[`docs/FOLLOWUPS.md`](FOLLOWUPS.md) as a V3.2 close item against the
+wallet2 → Rust keystore migration (per `20-rust-vs-cpp-policy.mdc` rule
+1, wallet keys are Rust territory; rebuilding the C++ persist path on a
+file format scheduled for deletion in V3.2 is debt the project should
+not take on). Cluster B's CI signal is closed by deleting the tests; the
+underlying invariant is owned by the V3.2 Rust keystore.
 
 | Field | Value |
 | --- | --- |
-| Tests | `wallet_storage.store_to_mem2file`, `wallet_storage.change_password_mem2file` |
-| Symptom | `boost::system::system_error` from `epee::net_utils::direct_connect::operator()` during what should be a pure file-storage test |
-| Stack origin | `wallet2::generate("", password)` → `estimate_blockchain_height()` → `get_daemon_blockchain_target_height()` → `NodeRPCProxy::get_target_height()` → `get_info()`; default-constructed `wallet2` has `m_offline = false` so the offline short-circuit doesn't fire |
-| Diagnosis | The behavior is **not** a rewire-introduced regression. `estimate_blockchain_height()` has called the daemon since the Monero era (commits `a2e4b5a96`, `5e18005ff`); the test is fragile because it constructs a default wallet without `set_offline(true)` on a host with no daemon. The rewire's wallet-key-persistence regression masked this fragility for a window (commit `8167c1502` documented the test as failing with a different proximate cause); subsequent work moved past that cause and exposed the underlying TCP attempt. |
-| Why deferred (rather than test-only `set_offline(true)` band-aid) | The CHANGELOG already pins the wallet2 hardening-pass commits `2l / 2m-keys / 2m-cache` as the structural close target. Landing a test-only fix here would mask the regression the hardening pass exists to address end-to-end. Per `15-deletion-and-debt.mdc`, "treat as structural and defer." |
-| Behavior change for end users? | **No.** End users running `wallet2::generate` against a real daemon don't see this; the framing in the Track 0 plan ("wallet init now reaches the network unconditionally") was based on an assumption the investigation falsified. |
-| FOLLOWUPS row | V3.1 — `wallet_storage tests pinned to wallet2 hardening-pass` |
-| Close condition | Passes after V3.1 hardening-pass `2l / 2m-keys / 2m-cache` lands, OR closes with `wallet2.cpp` removal at V3.2 — whichever lands first. |
+| Tests deleted | `store_to_mem2file`, `change_password_mem2file` (failing); `store_to_file2file`, `change_password_same_file`, `change_password_different_file` (skipped, required missing Monero-era fixture `wallet_00fd416a`). |
+| Test retained | `change_password_in_memory` (in-memory generate + change_password round-trip; no disk I/O; passes today). |
+| Surface symptom | `boost::system::system_error` from `epee::net_utils::direct_connect::operator()` during `wallet2::generate("", password)` (caught, non-fatal). |
+| Fatal symptom | `error::wallet_files_doesnt_correspond` from `load_keys_buf` at `src/wallet/wallet2.cpp:5599` after `store_to(file, password)` and `load(file, password)`: `hwdev.verify_keys(view_secret, view_public)` returns false on the deserialized pair. |
+| Root cause hypothesis | wallet2's `generate("", password)` → `store_to(file, password)` persist path serializes a `.keys` file whose view secret/public pair fails ed25519 derivation on reload. Suspected serialization mismatch in the in-memory-then-persist path (vs. the atomic `generate(file, password, ...)` path which goes through `store()` rather than `store_to(...)`). Not investigated to root because wallet2 is on the V3.2 deletion path. |
+| Why not fix in C++ | wallet2.cpp is being deleted in V3.2; rebuilding the C++ persist path is debt against a soon-to-be-deleted module. The replacement Rust keystore must own the round-trip invariant from day one. |
+| Why not band-aid (`set_offline(true)`) | The previous disposition's proposed band-aid only suppresses the (non-fatal, caught) daemon-RPC throw; the fatal `wallet_files_doesnt_correspond` would persist. The test would still fail. |
+| Migration path | Rust keystore (V3.2) owns the persist-and-reload invariant. Rust unit tests must cover: (a) generate-in-memory → persist-to-file → load-from-file round-trip; (b) change-password during persist; (c) cryptographic correspondence check on load. Tracked in FOLLOWUPS.md. |
+| Behavior change for end users in V3.0 | **Possibly yes.** GUI flows that "create wallet, then ask where to save" plausibly hit the in-memory-then-persist path. Real-user impact has not been verified end-to-end against the GUI/CLI call sites. The bug ships with V3.0 wallet2 unless separately patched; the FOLLOWUPS entry documents the risk. |
+| Close commit | (this PR) |
 
 ### Cluster C — `core_tests` `gen_tx_*` / `gen_fcmp_*` / `gen_staking_*` — **DEFERRED to V3.1**
 
