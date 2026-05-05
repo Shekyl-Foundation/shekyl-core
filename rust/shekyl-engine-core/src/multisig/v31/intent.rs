@@ -33,7 +33,10 @@ pub const MAX_VALIDITY_SECS: u64 = 86400;
 // `RCT_TYPE_FCMP_PLUS_PLUS_PQC` is also generated; the `shekyl-oxide`
 // `ProofType` enum's `From<ProofType> for u8` is single-source within
 // that crate and is `const_assert!`-pinned to this generated value.
-include!(concat!(env!("OUT_DIR"), "/consensus_constants_generated.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/consensus_constants_generated.rs"
+));
 
 // Sentinel against silent loss-of-meaning if the JSON authority is
 // bumped without thinking. `MIN_AGE = 5` was locked by Decision 14

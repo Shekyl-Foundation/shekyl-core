@@ -19,9 +19,7 @@ use std::path::PathBuf;
 fn get_u64(map: &BTreeMap<String, serde_json::Value>, key: &str) -> u64 {
     map.get(key)
         .and_then(serde_json::Value::as_u64)
-        .unwrap_or_else(|| {
-            panic!("missing or invalid u64 key in consensus_constants.json: {key}")
-        })
+        .unwrap_or_else(|| panic!("missing or invalid u64 key in consensus_constants.json: {key}"))
 }
 
 fn main() {
