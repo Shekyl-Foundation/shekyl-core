@@ -108,8 +108,17 @@ TEST(wallet_storage, store_to_mem2file)
 
     epee::wipeable_string password("beepbeep2");
 
+    // FAKECHAIN nettype must match the network the legacy `account_base::generate()`
+    // wrapper hardcodes for raw-seed derivation. A default-constructed wallet2
+    // inherits MAINNET, which doesn't permit RAW32, so the rederive on `load`
+    // would fail with "(network, seed_format) pair disallowed". The hardcoded
+    // FAKECHAIN inside `account_base::generate()` is itself a P0 production
+    // footgun on `wallet2::generate(name, password [, recovery, ...])` for
+    // mainnet/testnet/stagenet; it is fixed in sibling branch
+    // `fix/legacy-account-generate-network-guard` (Bug 4 in
+    // `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`).
     {
-        tools::wallet2 w;
+        tools::wallet2 w(cryptonote::FAKECHAIN, 1, true);
         w.generate("", password);
         w.store_to(target_wallet_file.string(), password);
 
@@ -121,7 +130,7 @@ TEST(wallet_storage, store_to_mem2file)
     EXPECT_TRUE(is_file_exist(target_wallet_file.string() + ".keys"));
 
     {
-        tools::wallet2 w;
+        tools::wallet2 w(cryptonote::FAKECHAIN, 1, true);
         w.load(target_wallet_file.string(), password);
 
         EXPECT_TRUE(is_file_exist(target_wallet_file.string()));
@@ -250,8 +259,11 @@ TEST(wallet_storage, change_password_mem2file)
         "https://csrc.nist.gov/csrc/media/projects/crypto-standards-development-process/documents/dualec_in_x982_and_sp800-90.pdf");
     
     std::string primary_address_1, primary_address_2;
+    // FAKECHAIN nettype must match the network the legacy
+    // `account_base::generate()` wrapper hardcodes for raw-seed derivation
+    // (see the comment on `wallet_storage.store_to_mem2file` above).
     {
-        tools::wallet2 w;
+        tools::wallet2 w(cryptonote::FAKECHAIN, 1, true);
         w.generate("", password1);
         primary_address_1 = w.get_address_as_str();
         w.change_password(target_wallet_file.string(), password1, password2);
@@ -261,7 +273,7 @@ TEST(wallet_storage, change_password_mem2file)
     EXPECT_TRUE(is_file_exist(target_wallet_file.string() + ".keys"));
 
     {
-        tools::wallet2 w;
+        tools::wallet2 w(cryptonote::FAKECHAIN, 1, true);
         w.load(target_wallet_file.string(), password2);
         primary_address_2 = w.get_address_as_str();
     }
