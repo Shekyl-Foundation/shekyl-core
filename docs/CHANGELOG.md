@@ -104,14 +104,21 @@
   end-to-end does not exist **by design** — see Bug 4 below.
 
 - **CI tripwire defending the `wallet2::generate_from_bip39` absence
-  (`tests/unit_tests/wallet_storage.cpp`).** SFINAE detector +
-  `static_assert` that fires at build time if a future contributor
-  adds `wallet2::generate_from_bip39`. Includes a positive-control
-  self-test (`tripwire_self_test::synthetic_has_member`) so a
-  detector regression fails its own assertion rather than silently
-  letting the negative one pass for the wrong reason. Tripwire
-  deletes itself with `wallet2.cpp` at Phase 5 of the Rust rewrite.
-  Architectural decision recorded in `docs/FOLLOWUPS.md`
+  (`tests/unit_tests/wallet_storage.cpp`).** Three SFINAE detectors +
+  one combined `static_assert` that fires at build time if a future
+  contributor adds `wallet2::generate_from_bip39` with any of the
+  three most plausible signatures (`(std::string&, std::string&,
+  network_type)`, `(epee::wipeable_string&, epee::wipeable_string&,
+  network_type)`, or `(std::string&, network_type)` — the
+  defaulted-passphrase shorthand). The honest scope: an exotic
+  signature could still slip past the detectors, so the
+  load-bearing artifact remains the FOLLOWUPS architectural decision,
+  not the tripwire itself. Includes per-detector positive-control
+  self-tests (`tripwire_self_test::synthetic_has_member_*`) so a
+  refactor that breaks any detector fails its own assertion rather
+  than silently letting the negative one pass for the wrong reason.
+  Tripwire deletes itself with `wallet2.cpp` at Phase 5 of the Rust
+  rewrite. Architectural decision recorded in `docs/FOLLOWUPS.md`
   §"V3.1+ Legacy C++ → Rust rewrite scope". See
   `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` Bug 4.
 

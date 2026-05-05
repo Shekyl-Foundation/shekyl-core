@@ -74,53 +74,114 @@ using namespace epee::file_io_utils;
 // See docs/audit_trail/2026-05-ffi-constant-drift-audit.md for the
 // Bug 4 framing and the discovery pattern that surfaced it.
 //
-// SFINAE detector: `has_generate_from_bip39<T>` is `true_type` iff
-// `T::generate_from_bip39(const std::string&, const std::string&,
-// cryptonote::network_type)` is callable. The mnemonic + passphrase +
-// nettype signature mirrors `account_base::generate_from_bip39`; if a
-// future wrapper uses a different signature, the detector misses it
-// and a fresh detector overload is the right response.
+// SFINAE detectors. **Honest scope (read carefully):** the FOLLOWUPS
+// architectural decision forbids *any* `wallet2::generate_from_bip39`
+// entry point. C++ doesn't make "any member named X" easy to detect at
+// compile time without ADL gymnastics or reflection, so this tripwire
+// is *targeted at the most plausible future signatures*, not exhaustive.
+// A contributor who genuinely wants to slip in a wrapper with an
+// exotic signature could still get past the detector — the FOLLOWUPS
+// entry is the load-bearing artifact, not the SFINAE.
+//
+// What's covered:
+//
+//   1. `(const std::string&, const std::string&, network_type)` —
+//      mirrors `account_base::generate_from_bip39`.
+//   2. `(const epee::wipeable_string&, const epee::wipeable_string&,
+//       network_type)` — the most plausible variant given that
+//      `wallet2::generate(name, password)` already takes
+//      `epee::wipeable_string` for the password.
+//   3. `(const std::string&, network_type)` — single-string variant
+//      (mnemonic only, defaulted passphrase).
+//
+// If a wrapper appears with a different signature, the right response
+// is to (a) delete the wrapper per the FOLLOWUPS decision, or (b) reopen
+// the architectural question in FOLLOWUPS and, if the wrapper is being
+// kept, add a fresh detector overload for the new signature.
 
 template <typename, typename = void>
-struct has_generate_from_bip39_wallet2_member : std::false_type {};
+struct has_generate_from_bip39_wallet2_string : std::false_type {};
 
 template <typename T>
-struct has_generate_from_bip39_wallet2_member<
+struct has_generate_from_bip39_wallet2_string<
     T,
     std::void_t<decltype(std::declval<T &>().generate_from_bip39(
         std::declval<const std::string &>(),
         std::declval<const std::string &>(),
         std::declval<cryptonote::network_type>()))>> : std::true_type {};
 
+template <typename, typename = void>
+struct has_generate_from_bip39_wallet2_wipeable : std::false_type {};
+
+template <typename T>
+struct has_generate_from_bip39_wallet2_wipeable<
+    T,
+    std::void_t<decltype(std::declval<T &>().generate_from_bip39(
+        std::declval<const epee::wipeable_string &>(),
+        std::declval<const epee::wipeable_string &>(),
+        std::declval<cryptonote::network_type>()))>> : std::true_type {};
+
+template <typename, typename = void>
+struct has_generate_from_bip39_wallet2_string_only : std::false_type {};
+
+template <typename T>
+struct has_generate_from_bip39_wallet2_string_only<
+    T,
+    std::void_t<decltype(std::declval<T &>().generate_from_bip39(
+        std::declval<const std::string &>(),
+        std::declval<cryptonote::network_type>()))>> : std::true_type {};
+
 static_assert(
-    !has_generate_from_bip39_wallet2_member<tools::wallet2>::value,
+    !has_generate_from_bip39_wallet2_string<tools::wallet2>::value &&
+    !has_generate_from_bip39_wallet2_wipeable<tools::wallet2>::value &&
+    !has_generate_from_bip39_wallet2_string_only<tools::wallet2>::value,
     "wallet2::generate_from_bip39 must not exist; BIP-39 wallet creation "
     "lives in the Rust wallet path post-migration. See "
     "docs/FOLLOWUPS.md §\"V3.1+ Legacy C++ → Rust rewrite scope\" entry "
-    "on `wallet2 has no generate_from_bip39 entry point` before adding it.");
+    "on `wallet2 has no generate_from_bip39 entry point` before adding it. "
+    "(The detectors above cover the three most plausible signatures; an "
+    "exotic signature could slip past them, in which case the FOLLOWUPS "
+    "entry — not this assertion — is the load-bearing artifact.)");
 
-// Compile-time positive control for the SFINAE detector itself. Without
-// this, a refactor that breaks the detector (e.g. typo in the SFINAE
+// Compile-time positive controls for the SFINAE detectors. Without
+// these, a refactor that breaks any detector (e.g. typo in the SFINAE
 // signature, missing #include) would silently make the static_assert
-// above pass for the wrong reason. The synthetic type below has the
-// member, so the detector must report `true`; any failure here is a
-// detector bug, not a wallet2 bug.
+// above pass for the wrong reason. Each synthetic type has the
+// corresponding member; each detector must report `true`. Any failure
+// here is a detector bug, not a wallet2 bug.
 namespace tripwire_self_test {
-struct synthetic_has_member {
+struct synthetic_has_member_string {
     void generate_from_bip39(
         const std::string &, const std::string &, cryptonote::network_type) {}
 };
+struct synthetic_has_member_wipeable {
+    void generate_from_bip39(
+        const epee::wipeable_string &, const epee::wipeable_string &,
+        cryptonote::network_type) {}
+};
+struct synthetic_has_member_string_only {
+    void generate_from_bip39(const std::string &, cryptonote::network_type) {}
+};
 struct synthetic_lacks_member {};
+
 static_assert(
-    has_generate_from_bip39_wallet2_member<synthetic_has_member>::value,
-    "SFINAE detector is broken: must report `true` for a type that "
-    "actually has the member. Fix the detector before trusting the "
-    "negative assertion above.");
+    has_generate_from_bip39_wallet2_string<synthetic_has_member_string>::value,
+    "SFINAE detector (string overload) is broken: must report `true` for "
+    "a type that has the member.");
 static_assert(
-    !has_generate_from_bip39_wallet2_member<synthetic_lacks_member>::value,
-    "SFINAE detector is broken: must report `false` for a type that "
-    "lacks the member. Fix the detector before trusting the negative "
-    "assertion above.");
+    has_generate_from_bip39_wallet2_wipeable<synthetic_has_member_wipeable>::value,
+    "SFINAE detector (wipeable_string overload) is broken: must report "
+    "`true` for a type that has the member.");
+static_assert(
+    has_generate_from_bip39_wallet2_string_only<synthetic_has_member_string_only>::value,
+    "SFINAE detector (single-string overload) is broken: must report "
+    "`true` for a type that has the member.");
+static_assert(
+    !has_generate_from_bip39_wallet2_string<synthetic_lacks_member>::value &&
+    !has_generate_from_bip39_wallet2_wipeable<synthetic_lacks_member>::value &&
+    !has_generate_from_bip39_wallet2_string_only<synthetic_lacks_member>::value,
+    "SFINAE detectors are broken: must report `false` for a type that "
+    "lacks all three members.");
 } // namespace tripwire_self_test
 
 // Three Monero-era keys-file round-trip tests (`store_to_file2file`,
