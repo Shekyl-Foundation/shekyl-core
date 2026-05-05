@@ -273,7 +273,19 @@ TEST(wallet_storage, change_password_in_memory)
     const epee::wipeable_string password2("means money");
     const epee::wipeable_string password_wrong("is traceable");
 
-    tools::wallet2 w;
+    // FAKECHAIN nettype: same reasoning as `store_to_mem2file` /
+    // `change_password_mem2file` above. `wallet2::generate("", password)`
+    // now routes through the `nettype`-aware
+    // `account_base::generate(..., m_nettype)` overload, which rejects
+    // (MAINNET, RAW32) at the FFI's `permitted_seed_format` check.
+    // Pre-Bug-4-adjacent fix the legacy 3-arg overload silently hardcoded
+    // FAKECHAIN; this test was implicitly relying on that footgun. See
+    // `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` Bug 4-adjacent.
+    //
+    // `unattended=false` (per Copilot Round 2 finding B) so `change_password`
+    // exercises real password verification, which is the whole point of the
+    // test.
+    tools::wallet2 w(cryptonote::FAKECHAIN, 1, false);
     w.generate("", password1);
     const std::string primary_address_1 = w.get_address_as_str();
     w.change_password("", password1, password2);

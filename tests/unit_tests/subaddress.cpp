@@ -40,6 +40,25 @@
 class WalletSubaddress : public ::testing::Test 
 {
   protected:
+    // FAKECHAIN nettype is required because the test exercises raw-seed
+    // wallet generation (`recovery_key` is a zero `crypto::secret_key`,
+    // which routes through the RAW32 derivation path inside
+    // `account_base::generate_from_raw_seed`). Per
+    // `shekyl_account_permitted_seed_format`, RAW32 is only permitted on
+    // FAKECHAIN / TESTNET. Pre-Bug-4-adjacent fix the legacy 3-arg
+    // `account_base::generate(...)` overload silently hardcoded FAKECHAIN
+    // regardless of the wallet's `m_nettype`, so this fixture default-
+    // constructed `wallet2` (which defaults to MAINNET) and "got away with
+    // it" because the salt was always FAKECHAIN under the hood. The
+    // `nettype`-aware overload now correctly throws on (MAINNET, RAW32),
+    // surfacing this latent test-fixture inconsistency. Constructing on
+    // FAKECHAIN preserves the test's actual intent (exercise subaddress
+    // bookkeeping with a deterministic-from-zero-seed wallet) without
+    // depending on the deleted footgun. Same pattern as
+    // `tests/unit_tests/wallet_storage.cpp` and
+    // `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` Bug 4-adjacent.
+    WalletSubaddress() : w1(cryptonote::FAKECHAIN, 1, false) {}
+
     virtual void SetUp() 
     {
       try
