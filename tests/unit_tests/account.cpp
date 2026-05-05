@@ -111,13 +111,17 @@ TEST(account, rederive_from_raw_seed_reproduces_account)
 // closes that gap end-to-end through the lower-level account_base API. See
 // docs/audit_trail/2026-05-ffi-constant-drift-audit.md.
 //
-// Note: there is intentionally no `wallet2`-level wrapper exercised here. As
-// of this branch, `wallet2` exposes no `generate_from_bip39` entry point —
-// the only public from-seed path is `wallet2::generate(name, password, ...)`
-// which routes through the legacy `account_base::generate()` wrapper that
-// hardcodes FAKECHAIN. Adding a `wallet2::generate_from_bip39` mainnet entry
-// point is tracked separately as `fix/legacy-account-generate-network-guard`
-// and FOLLOWUPS V3.0.
+// Note: there is intentionally no `wallet2`-level wrapper exercised here.
+// `wallet2` exposes no `generate_from_bip39` entry point **by design**: the
+// wallet2 layer is being deleted at Phase 5 of the Rust wallet rewrite, and
+// new BIP-39 wallet creation will live in the Rust wallet path post-
+// migration. A `static_assert` tripwire in
+// `tests/unit_tests/wallet_storage.cpp` defends the absence against drift;
+// the architectural decision is recorded in `docs/FOLLOWUPS.md`
+// §"V3.1+ Legacy C++ → Rust rewrite scope". This account_base-layer test
+// is the deepest C++ surface that still exercises the BIP-39 + MAINNET
+// FFI round-trip; the primary functional guarantee is the Rust test
+// `shekyl-crypto-pq::tests::generate_from_bip39_mainnet_roundtrips_to_rederive`.
 TEST(account, rederive_from_bip39_reproduces_account_mainnet)
 {
   // BIP-39 §A.1 canonical test vector: 32-byte all-zero entropy → 24-word

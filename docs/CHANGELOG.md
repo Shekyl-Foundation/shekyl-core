@@ -46,10 +46,10 @@
   which doesn't permit `RAW32`. Tests now use `tools::wallet2
   w(cryptonote::FAKECHAIN, 1, true)` to keep the in-memory derivation
   network and the on-disk rederive network aligned. The same
-  hardcoded-FAKECHAIN footgun in `account_base::generate()`'s
-  production callers (`wallet2::generate(name, password [, recovery,
-  ...])` and `wallet_rpc_server::stop_background_sync`) is tracked
-  separately as **Bug 4** in
+  hardcoded-FAKECHAIN footgun in `account_base::generate()`'s callers
+  (the `wallet2::generate("", password)` test path and
+  `wallet_rpc_server::stop_background_sync`) is the **Bug 4-adjacent**
+  finding in
   `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`, slated for
   the sibling branch `fix/legacy-account-generate-network-guard`.
 
@@ -94,7 +94,27 @@
   `generate_from_raw_seed_rejects_mainnet` (consensus-level
   `(network, format)` matrix invariants). The `wallet2`-level
   BIP-39 entry point that would let the test use the production API
-  end-to-end does not yet exist — see Bug 4 above.
+  end-to-end does not exist **by design** — see Bug 4 below.
+
+- **CI tripwire defending the `wallet2::generate_from_bip39` absence
+  (`tests/unit_tests/wallet_storage.cpp`).** SFINAE detector +
+  `static_assert` that fires at build time if a future contributor
+  adds `wallet2::generate_from_bip39`. Includes a positive-control
+  self-test (`tripwire_self_test::synthetic_has_member`) so a
+  detector regression fails its own assertion rather than silently
+  letting the negative one pass for the wrong reason. Tripwire
+  deletes itself with `wallet2.cpp` at Phase 5 of the Rust rewrite.
+  Architectural decision recorded in `docs/FOLLOWUPS.md`
+  §"V3.1+ Legacy C++ → Rust rewrite scope". See
+  `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` Bug 4.
+
+- **Cross-reference comment in
+  `shekyl-crypto-pq::tests::generate_from_bip39_mainnet_roundtrips_to_rederive`.**
+  Identifies the Rust test as the primary functional guarantee for
+  BIP-39 wallet creation on Mainnet and points forward at the C++
+  tripwire and the FOLLOWUPS architectural-decision entry. A future
+  investigator asking "where is BIP-39 wallet creation tested?"
+  finds the answer here, not in C++.
 
 - **`docs/audit_trail/2026-05-ffi-constant-drift-audit.md` — one-page
   audit record.** Documents the wallet_storage failure trace, the

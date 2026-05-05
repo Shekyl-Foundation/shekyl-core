@@ -12,8 +12,11 @@ in `rust/shekyl-ffi/`, with the two sides "agreeing" only via comments.
 This audit was triggered by the obvious follow-up question: *what else?*
 Forty-seven cross-language constants live across the FFI boundary. This
 document records the result of going through every one by hand on
-2026-05-05 — three real findings (Bug 1, Bug 2, Bug 3) plus one missing
-API (Bug 4), with the remaining 43 constants confirmed aligned.
+2026-05-05 — three real findings (Bug 1, Bug 2, Bug 3), one
+documented architectural gap against a layer being deleted by the Rust
+rewrite (Bug 4 — the wallet2 BIP-39 wrapper does not exist, by design),
+plus one related raw-seed footgun in the legacy `account_base::generate()`
+test wrapper, with the remaining 43 constants confirmed aligned.
 
 The audit-quality story it supports:
 
@@ -71,17 +74,36 @@ fixed in sibling branch `fix/fcmp-min-age-multisig-drift`.**
 
 ### Bug 4 — `wallet2::generate_from_bip39` does not exist
 
-Not strictly a constant-drift bug, surfaced during the same audit. **Not in
-scope of `fix/wallet-storage-test`; tracked under
-`fix/legacy-account-generate-network-guard` and FOLLOWUPS V3.0.**
+**Not a bug in the conventional sense; documented architectural gap
+against a layer that is being deleted by the Rust wallet rewrite at
+Phase 5.** The original Bug 4 framing on first surfacing (below the
+revised section) was "the C++ wallet2 BIP-39 path is broken because the
+glue is missing." That framing was correct under the assumption that
+the C++ layer was load-bearing. After surfacing the gap and confirming
+no production caller exists pre-mainnet, the framing was revised:
 
 | Field | Value |
 | --- | --- |
-| Symptom | The user-facing wallet2 from-seed API (`wallet2::generate(name, password, recovery_param, recover, two_random, create_address_file)`) calls `m_account.generate(recovery_param, recover, two_random)`, which routes through the legacy `account_base::generate()` wrapper. That wrapper hardcodes `cryptonote::FAKECHAIN` regardless of the wallet's `m_nettype`. |
-| Result on mainnet/testnet/stagenet | Wallet stores keys derived under `FAKECHAIN` salt with `m_nettype = MAINNET/TESTNET/STAGENET`. On reload, `rederive_from_master_seed(m_nettype)` returns `false` because `MAINNET/STAGENET` don't permit `RAW32`. **Every from-seed wallet on mainnet is currently fail-closed-on-reload** and has been the entire time Bug 1 was masking it. |
-| Why no production caller noticed | Bug 1 was masking it universally — no wallet on any network could load. After Bug 1 + Bug 2 fixes, FAKECHAIN works; mainnet still doesn't. |
-| Form of fix (sibling branch) | Add `account_base::generate(recovery, recover, two_random, nettype)` overload + `account_base::generate_from_bip39_with_passphrase` plumbing through `wallet2`. The 3-arg legacy overload gets a transitional `THROW_WALLET_EXCEPTION_IF(nettype != FAKECHAIN, ...)` guard, then is deleted once callers migrate. The second non-test caller (`wallet_rpc_server::stop_background_sync` at `src/wallet/wallet_rpc_server.cpp:2339`) is also covered by the same fix. |
-| Coverage added in this branch | `tests/unit_tests/account.cpp::rederive_from_bip39_reproduces_account_mainnet` exercises BIP-39+MAINNET at the `account_base` layer. The full `wallet2` storage round-trip on BIP-39+MAINNET cannot be exercised until the API exists. |
+| Symptom | `wallet2` exposes no `generate_from_bip39` entry point. The Rust derivation (`shekyl-crypto-pq::generate_account_from_bip39`), the FFI (`shekyl_account_generate_from_bip39`), and the lower-level C++ glue (`account_base::generate_from_bip39`) all exist and are tested; the wallet2-level wrapper was never wired through when the original wallet2-from-Electrum-mnemonic path was retired. The user-facing `wallet2::generate(name, password, recovery_param, ...)` API only routes raw-seed derivation through `account_base::generate()`, which hardcodes `FAKECHAIN`. |
+| Severity | Pre-mainnet: zero production users affected. The Rust derivation path is the actual functional guarantee and is tested end-to-end. The wallet2 layer is dead-code-walking — Phase 5 of the Rust rewrite deletes `wallet2.cpp` wholesale. |
+| Decision (2026-05-05) | Do **not** add the wallet2 wrapper pre-migration. Rationale: (a) any wrapper added now is deleted by Phase 5 as a removal-as-breaking-change rather than removal-as-no-op; (b) the Rust path is the actual guarantee; (c) no mainnet exists yet, so no user is affected; (d) the next beta ships before Phase 5 lands, so any "transitional" wrapper would have a lifespan shorter than its review burden. See `docs/FOLLOWUPS.md` §"V3.1+ Legacy C++ → Rust rewrite scope". |
+| CI tripwire | `tests/unit_tests/wallet_storage.cpp` carries a `static_assert` on a SFINAE detector for `wallet2::generate_from_bip39`. If a future contributor adds the wrapper, the build fails with a message pointing at the FOLLOWUPS entry. The tripwire deletes itself when `wallet2.cpp` is removed at Phase 5. |
+| Coverage added in this branch | `tests/unit_tests/account.cpp::rederive_from_bip39_reproduces_account_mainnet` exercises BIP-39+MAINNET end-to-end through the FFI at the `account_base` layer (the C++ hop the wallet2 wrapper would have made internally). The Rust-side primary functional guarantee is `shekyl-crypto-pq::tests::generate_from_bip39_mainnet_roundtrips_to_rederive`, which carries a doc-comment cross-referencing the C++ tripwire. |
+| Discovery pattern | Bug 4 surfaced not from runtime failure but from attempting to add C++ coverage for a path that turned out not to exist. The compiler told us `wallet2::generate_from_bip39` was undefined; we stopped, surfaced the gap, and made the absence load-bearing in the audit trail rather than papering over it. **Keep this discovery pattern: writing tests for assumed APIs is a cheap audit technique, especially for "obvious" functionality nobody has tried to use.** |
+
+### Bug 4-adjacent — `account_base::generate()` legacy 3-arg overload hardcodes `FAKECHAIN`
+
+A separate finding from the same audit pass, distinct from the Bug 4
+absence above. **Not in scope of `fix/wallet-storage-test`; tracked
+under `fix/legacy-account-generate-network-guard` for the raw-seed
+path.**
+
+| Field | Value |
+| --- | --- |
+| Symptom | The legacy `account_base::generate(recovery_key, recover, two_random)` wrapper hardcodes `cryptonote::FAKECHAIN` for raw-seed derivation regardless of caller network. Test wrapper, not user-facing API; called by `wallet2::generate("", password)` (the no-name in-process generate path) and by `wallet_rpc_server::stop_background_sync` at `src/wallet/wallet_rpc_server.cpp:2339`. |
+| Result on testnet | A `wallet2::generate("", password)` instantiated on `TESTNET` derives keys under `FAKECHAIN` salt; on reload, `rederive_from_master_seed(TESTNET)` returns `false` because the master seed disagrees. Test-side: addressed in this branch by constructing tests with `cryptonote::FAKECHAIN` (commit 3). |
+| Result on mainnet/stagenet | The same path on `MAINNET/STAGENET` is doubly broken: (a) `FAKECHAIN`-derived keys disagree with `MAINNET/STAGENET` rederive salt; (b) `MAINNET/STAGENET` don't permit `RAW32` at all. But the user-facing path on mainnet is BIP-39 only, which routes through the missing wrapper above (Bug 4), so this code path is never reached on mainnet today and won't be reached pre-rewrite. |
+| Form of fix (sibling branch) | Add `account_base::generate(recovery, recover, two_random, nettype)` overload taking nettype explicitly. Migrate the two callers (`wallet2::generate("", password)` test path and `wallet_rpc_server::stop_background_sync`). The 3-arg legacy overload gets a transitional `THROW_WALLET_EXCEPTION_IF(nettype != FAKECHAIN, ...)` guard, then is deleted once callers migrate. Re-check `stop_background_sync` for mainnet test coverage. |
 
 ---
 
@@ -157,9 +179,9 @@ This is the audit landing pattern across four branches:
 
 | Branch | Findings addressed | Status |
 | --- | --- | --- |
-| `fix/wallet-storage-test` (this) | Bug 1 fix, Bug 2 fix, equality-assertion tests for both, BIP-39 + MAINNET account-layer round-trip test (closes the only path Bug 2 broke that wasn't already covered), Monero-era wallet fixture deletion, this audit doc, CI_BASELINE / FOLLOWUPS / CHANGELOG updates. | This commit |
+| `fix/wallet-storage-test` (this) | Bug 1 fix, Bug 2 fix, equality-assertion tests for both, BIP-39 + MAINNET account-layer round-trip test (closes the only path Bug 2 broke that wasn't already covered), Monero-era wallet fixture deletion, **Bug 4 absence + CI tripwire (commits 8–10): FOLLOWUPS architectural-decision entry, `static_assert` SFINAE detector against `wallet2::generate_from_bip39`, Rust mainnet BIP-39 test cross-reference**, this audit doc, CI_BASELINE / FOLLOWUPS / CHANGELOG updates. | This commit |
 | `fix/fcmp-min-age-multisig-drift` (sibling) | Bug 3 fix in `rust/shekyl-engine-core/src/multisig/v31/intent.rs` and `docs/SHEKYL_MULTISIG_WIRE_FORMAT.md`, after `git log -S "10"` confirms the canonical value. Single-line value fix + doc. | Pending |
-| `fix/legacy-account-generate-network-guard` (sibling) | Bug 4 fix: add `account_base::generate(.., nettype)` overload, plumb through `wallet2::generate`, throw-guard on the legacy 3-arg overload, audit `wallet_rpc_server::stop_background_sync` for the same shape of break on mainnet. | Pending |
+| `fix/legacy-account-generate-network-guard` (sibling) | Bug 4-adjacent: `account_base::generate(.., nettype)` overload for the *raw-seed* path (testnet/fakechain). Plumbs nettype through `wallet2::generate("", password)` test path and `wallet_rpc_server::stop_background_sync`. Throw-guard on the legacy 3-arg overload. Note: this branch does **not** add a `wallet2::generate_from_bip39` wrapper — that absence is by design (Bug 4 above) and defended by the `static_assert` tripwire on `fix/wallet-storage-test`. | Pending |
 | `chore/cbindgen-consensus-constants` (sibling) | Reduced-scope generator. Closes the bug class for the consensus-affecting subset of constants before audit. | Pending |
 
 The full-scope cbindgen migration of the remaining ~40 constants is

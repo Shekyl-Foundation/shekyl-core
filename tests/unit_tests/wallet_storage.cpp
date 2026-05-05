@@ -152,11 +152,15 @@ TEST(wallet_storage, store_to_mem2file)
     // wrapper hardcodes for raw-seed derivation. A default-constructed wallet2
     // inherits MAINNET, which doesn't permit RAW32, so the rederive on `load`
     // would fail with "(network, seed_format) pair disallowed". The hardcoded
-    // FAKECHAIN inside `account_base::generate()` is itself a P0 production
-    // footgun on `wallet2::generate(name, password [, recovery, ...])` for
-    // mainnet/testnet/stagenet; it is fixed in sibling branch
-    // `fix/legacy-account-generate-network-guard` (Bug 4 in
-    // `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`).
+    // FAKECHAIN inside `account_base::generate()` is itself a footgun on the
+    // raw-seed path used by `wallet2::generate("", password)` test code and by
+    // `wallet_rpc_server::stop_background_sync`; it is fixed in sibling branch
+    // `fix/legacy-account-generate-network-guard` (the "Bug 4-adjacent"
+    // finding in `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`).
+    // Bug 4 itself — the absent `wallet2::generate_from_bip39` wrapper — is
+    // resolved by an architectural decision NOT to add the wrapper pre-
+    // migration, defended by a static_assert tripwire at the top of this
+    // file; see the corresponding FOLLOWUPS.md entry.
     {
         tools::wallet2 w(cryptonote::FAKECHAIN, 1, true);
         w.generate("", password);
