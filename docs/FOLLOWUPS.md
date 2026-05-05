@@ -1053,6 +1053,75 @@ its wake.
   with `wallet_storage.cpp`; the Rust BIP-39 round-trip test is the
   only remaining functional artifact, which is correct.
 
+- **Delete `account_base::generate(recovery, recover, two_random)`
+  3-arg overload alongside `wallet2.cpp` cutover.** Bug 4-adjacent
+  in `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`. The
+  3-arg overload hardcoded `FAKECHAIN` for the raw-seed derivation
+  salt and was a permanent loaded gun pointed at any production
+  caller (it bit `wallet2::generate` and
+  `wallet_rpc_server::on_stop_background_sync` for the entire
+  pre-V3 window). The 4-arg overload
+  `generate(recovery, recover, two_random, network_type nettype)`
+  is now the canonical API for all production callers; the 3-arg
+  overload remains only because ~25 unit / integration / performance
+  tests across `tests/{unit_tests,core_tests,performance_tests,daemon_tests,trezor}`
+  are FAKECHAIN-only and the FAKECHAIN-hardcoded behaviour is
+  correct for them. Mechanical to delete: replace each test's
+  `account.generate()` with `account.generate({}, false, false,
+  cryptonote::FAKECHAIN)`.
+
+  **Closure point:** Phase 5 of the Rust rewrite (the wallet2.cpp
+  deletion). At that point all of `tests/{unit_tests,core_tests,
+  daemon_tests,trezor}/wallet*` and the C++ wallet-stack tests get
+  swept; the 3-arg overload deletes with the test fleet.
+
+- **`wallet2` 0-change dummy-destination address generation needs a
+  network-aware path or migration to a deterministic burn address.**
+  `src/wallet/wallet2.cpp:8269` (line numbers as of 2026-05-05) calls
+  the FAKECHAIN-only legacy 3-arg `account_base::generate()` to
+  produce a dummy `account_public_address` for 0-change destinations
+  (a one-shot transient: only the address is used, secret keys
+  discarded). On non-FAKECHAIN wallets this produces a
+  FAKECHAIN-formatted address embedded in a non-FAKECHAIN
+  transaction's destination field. It does NOT break consensus (the
+  daemon doesn't validate destination address network membership)
+  but it does leak a network-mismatch tell to anyone parsing the
+  output. Migration to the 4-arg overload would throw on
+  MAINNET / STAGENET (RAW32 isn't permitted there), regressing
+  transfers with exactly-zero change. The fix wants either (a) a
+  BIP-39 path here, (b) a deterministic burn address per network
+  (preferable: removes the per-tx randomness and saves a derivation),
+  or (c) an architectural change that removes the 0-change-dummy
+  pattern entirely.
+
+  **Closure point:** Phase 4 of the Rust rewrite (transaction
+  construction migration). The `splitted_dsts` 0-change path lives
+  in the C++ tx-construction code that gets rewritten in Rust;
+  whatever the Rust transfer pipeline picks for this slot replaces
+  the C++ dummy.
+
+- **Replace `wallet_rpc_server::on_stop_background_sync`'s
+  Electrum-words seed-recovery with a BIP-39 entry.** The RPC
+  recovers a `spend_secret_key` from a user-supplied seed via
+  `crypto::ElectrumWords::words_to_bytes` followed by
+  `account_base::generate(recovery_key, true, false, nettype)`.
+  The Electrum-words encoding is itself defunct post-Monero-fork
+  (per `account_base::generate`'s doc comment: "the Electrum-style
+  25-word / keccak-chain recovery path is gone"); on top of that,
+  the post-Bug-4-adjacent fix means the call now throws on
+  MAINNET / STAGENET because RAW32 isn't permitted there. So the
+  seed-recovery half of `stop_background_sync` is currently
+  mainnet-broken-with-clear-error rather than mainnet-broken-with-
+  silent-key-mismatch. Functionally equivalent to "this RPC is
+  defunct on mainnet," which is the correct fail-closed posture for
+  a defunct API but isn't a finished feature. The fix is to take a
+  BIP-39 mnemonic + passphrase instead of Electrum words and route
+  through `account_base::generate_from_bip39`.
+
+  **Closure point:** V3.2 alongside the `shekyl-wallet-rpc` Rust
+  cutover. The Rust JSON-RPC server gets to define the recovery API
+  from scratch; the C++ shim retires with `wallet_rpc_server.cpp`.
+
 **Index of how each follow-up interacts with the rewrite** (entries
 themselves carry the detail; this table is the at-a-glance view used
 by the rewrite plan's half-day review gate, item 3):

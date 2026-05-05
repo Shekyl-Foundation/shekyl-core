@@ -184,15 +184,41 @@ namespace cryptonote
     /// only wipes the pre-derivation input.
     void forget_master_seed();
 
-    // --- compatibility / transitional entry points --------------------------
+    // --- legacy raw-seed generation entry points ----------------------------
     //
-    // These wrappers retain the original Monero-lineage signatures so the
-    // ~20 existing test callers continue to build while commit 2+ migrate
-    // production consumers. They internally route through
-    // generate_from_raw_seed on `DerivationNetwork::Fakechain` and therefore
-    // are **not** safe for mainnet restore: the Electrum 25-word flow is
-    // gone and there is no equivalent in v1. Mainnet / stagenet restore
-    // MUST use generate_from_bip39.
+    // These overloads exist so existing test callers continue to build while
+    // production consumers migrate to the explicit nettype-aware API. Both
+    // route through `generate_from_raw_seed`. RAW32 is only permitted on
+    // `Testnet` and `Fakechain`; for `Mainnet`/`Stagenet` callers must use
+    // `generate_from_bip39` instead.
+
+    /// Production-safe raw-seed generation. The `nettype` argument selects
+    /// the derivation salt and is the consensus-level network for the
+    /// resulting account (must be `TESTNET` or `FAKECHAIN`; `MAINNET` and
+    /// `STAGENET` reject because RAW32 isn't a permitted seed format on
+    /// those networks — this is a programming error, not user input). All
+    /// production callers (`wallet2::generate`, the
+    /// `stop_background_sync` RPC seed-recovery path, and the dummy
+    /// 0-change destination address) call this overload, passing the
+    /// wallet's `m_nettype`. Bug 4-adjacent in
+    /// `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+    crypto::secret_key generate(
+        const crypto::secret_key& recovery_key,
+        bool recover,
+        bool two_random,
+        network_type nettype);
+
+    /// FAKECHAIN-only test-convenience wrapper. Equivalent to
+    /// `generate(recovery_key, recover, two_random, FAKECHAIN)`.
+    /// Production callers MUST use the 4-arg overload above so the
+    /// derivation salt matches the wallet's actual network. Pre-V3.2 this
+    /// overload exists only because ~25 unit / integration / performance
+    /// tests across `tests/{unit_tests,core_tests,performance_tests,daemon_tests,trezor}`
+    /// were written before the API was nettype-aware; all of them run on
+    /// FAKECHAIN and the FAKECHAIN-hardcoded behaviour is correct for
+    /// them. Scheduled for deletion at V3.2 alongside the wallet2 → Rust
+    /// cutover (FOLLOWUPS V3.2 entry: "delete account_base::generate
+    /// 3-arg overload along with wallet2.cpp").
     crypto::secret_key generate(
         const crypto::secret_key& recovery_key = crypto::secret_key(),
         bool recover = false,

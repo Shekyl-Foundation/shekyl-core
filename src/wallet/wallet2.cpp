@@ -5943,7 +5943,12 @@ crypto::secret_key wallet2::generate(const std::string& wallet_, const epee::wip
     THROW_WALLET_EXCEPTION_IF(boost::filesystem::exists(m_keys_file,   ignored_ec), error::file_exists, m_keys_file);
   }
 
-  crypto::secret_key retval = m_account.generate(recovery_param, recover, two_random);
+  // Pass `m_nettype` so the raw-seed derivation salt matches the wallet's
+  // network. Previously the legacy 3-arg overload hardcoded FAKECHAIN,
+  // which silently produced wallets that failed to round-trip on
+  // `wallet2::load` for any non-FAKECHAIN nettype. See
+  // `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` (Bug 4-adjacent).
+  crypto::secret_key retval = m_account.generate(recovery_param, recover, two_random, m_nettype);
 
   init_type(hw::device::device_type::SOFTWARE);
   setup_keys(password);
@@ -8266,6 +8271,19 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       // real one in our rings
       LOG_PRINT_L2("generating dummy address for 0 change");
       cryptonote::account_base dummy;
+      // Intentionally calls the FAKECHAIN-only legacy 3-arg overload.
+      // This dummy account is a one-shot transient — only its
+      // `m_account_address` is used (as a stand-in 0-amount destination
+      // to avoid revealing which input is real). The secret keys are
+      // discarded and never need to round-trip. On MAINNET / STAGENET
+      // the resulting address is FAKECHAIN-format, which would be
+      // visible on-wire but doesn't break consensus (the daemon doesn't
+      // validate destination address network membership). Properly
+      // network-matching the dummy would require a BIP-39 path here
+      // (RAW32 isn't permitted on MAINNET / STAGENET) — out of scope
+      // for the Bug 4-adjacent fix. Tracked in FOLLOWUPS V3.2:
+      // "wallet2 0-change dummy address generation needs network-aware
+      // path or migration to a deterministic burn address".
       dummy.generate();
       change_dts.addr = dummy.get_keys().m_account_address;
       LOG_PRINT_L2("generated dummy address for 0 change");

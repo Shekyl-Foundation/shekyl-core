@@ -28,6 +28,8 @@
 
 #include "gtest/gtest.h"
 
+#include <cstring>
+
 #include "cryptonote_basic/account.h"
 #include "shekyl/shekyl_ffi.h"
 
@@ -299,4 +301,72 @@ TEST(account, generate_from_raw_seed_rejects_mainnet_and_stagenet)
   cryptonote::account_base account;
   EXPECT_ANY_THROW(account.generate_from_raw_seed(raw_seed, cryptonote::MAINNET));
   EXPECT_ANY_THROW(account.generate_from_raw_seed(raw_seed, cryptonote::STAGENET));
+}
+
+// Bug 4-adjacent regression test (audit 2026-05-05). Pre-fix,
+// `account_base::generate(recovery, recover, two_random)` hardcoded
+// `FAKECHAIN` for the derivation salt regardless of the wallet's actual
+// network. `wallet2::generate` and `wallet_rpc_server::on_stop_background_sync`
+// both called this overload, silently producing FAKECHAIN-salted accounts on
+// non-FAKECHAIN wallets. The 4-arg overload added in the fix takes the
+// network type explicitly. This test pins:
+//   1. The 4-arg overload is wired through to `generate_from_raw_seed` with
+//      the provided `nettype` (TESTNET-derived account differs from
+//      FAKECHAIN-derived account for the same raw seed).
+//   2. The 4-arg overload rejects (MAINNET, RAW32) and (STAGENET, RAW32) at
+//      the same point `generate_from_raw_seed` does — i.e. the
+//      `permitted_seed_format()` check is in front of the salt selection
+//      and there's no way to smuggle a MAINNET-salted raw-seed account
+//      through the 4-arg API.
+//   3. The 3-arg overload remains FAKECHAIN-only (legacy test convenience).
+// See `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+TEST(account, legacy_generate_4arg_overload_uses_nettype_argument)
+{
+  uint8_t raw_seed[SHEKYL_RAW_SEED_BYTES] = {
+      0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
+      0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50,
+      0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,
+      0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x60,
+  };
+  crypto::secret_key recovery;
+  std::memcpy(recovery.data, raw_seed, sizeof(recovery.data));
+
+  // 4-arg overload on TESTNET produces a TESTNET-salted account.
+  cryptonote::account_base testnet_4arg;
+  testnet_4arg.generate(recovery, /*recover=*/true, /*two_random=*/false,
+                        cryptonote::TESTNET);
+
+  // Reference TESTNET account from the lower-level API; the 4-arg overload
+  // must produce the same result.
+  cryptonote::account_base testnet_reference;
+  testnet_reference.generate_from_raw_seed(raw_seed, cryptonote::TESTNET);
+  ASSERT_EQ(testnet_4arg.get_keys().m_account_address,
+            testnet_reference.get_keys().m_account_address);
+  ASSERT_EQ(testnet_4arg.get_keys().m_spend_secret_key,
+            testnet_reference.get_keys().m_spend_secret_key);
+  ASSERT_EQ(testnet_4arg.get_keys().m_view_secret_key,
+            testnet_reference.get_keys().m_view_secret_key);
+
+  // The 3-arg legacy overload, by contract, hardcodes FAKECHAIN. Same raw
+  // seed on FAKECHAIN must NOT match TESTNET (different HKDF salt).
+  cryptonote::account_base fakechain_3arg;
+  fakechain_3arg.generate(recovery, /*recover=*/true, /*two_random=*/false);
+  ASSERT_NE(testnet_4arg.get_keys().m_account_address,
+            fakechain_3arg.get_keys().m_account_address);
+  ASSERT_NE(testnet_4arg.get_keys().m_spend_secret_key,
+            fakechain_3arg.get_keys().m_spend_secret_key);
+
+  // 4-arg overload rejects MAINNET / STAGENET (RAW32 is not permitted on
+  // those networks; the throw happens inside `generate_from_raw_seed`'s
+  // FFI permitted-seed-format check). This is the failure mode that fixes
+  // Bug 4-adjacent on the production paths: a `wallet2::generate(...)`
+  // caller on MAINNET, after migration to the 4-arg overload, fails loud
+  // here rather than silently producing a FAKECHAIN-salted unspendable
+  // wallet.
+  cryptonote::account_base mainnet_account;
+  EXPECT_ANY_THROW(mainnet_account.generate(
+      recovery, /*recover=*/true, /*two_random=*/false, cryptonote::MAINNET));
+  cryptonote::account_base stagenet_account;
+  EXPECT_ANY_THROW(stagenet_account.generate(
+      recovery, /*recover=*/true, /*two_random=*/false, cryptonote::STAGENET));
 }
