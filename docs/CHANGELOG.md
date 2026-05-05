@@ -95,8 +95,10 @@
   `rederive_from_bip39_reproduces_account_mainnet` (full BIP-39
   derive + rederive round-trip via `account_base`),
   `bip39_passphrase_changes_account_mainnet` (passphrase isolation),
-  `generate_from_bip39_rejects_fakechain_and_testnet` and
-  `generate_from_raw_seed_rejects_mainnet_and_stagenet` (consensus-level
+  `generate_from_bip39_rejects_fakechain_and_testnet`,
+  `generate_from_raw_seed_rejects_mainnet_and_stagenet`,
+  `rederive_from_bip39_reproduces_account_stagenet`, and
+  `rederive_from_raw_seed_reproduces_account_testnet` (consensus-level
   `(network, format)` matrix invariants). The `wallet2`-level
   BIP-39 entry point that would let the test use the production API
   end-to-end does not exist **by design** — see Bug 4 below.

@@ -196,6 +196,84 @@ TEST(account, bip39_passphrase_changes_account_mainnet)
             with_pass.get_keys().m_account_address);
 }
 
+// Cover the other two permitted (network, format) pairs end-to-end:
+// (Stagenet, Bip39) and (Testnet, Raw32). Together with
+// `rederive_from_bip39_reproduces_account_mainnet` and
+// `rederive_from_raw_seed_reproduces_account` (Fakechain), these four
+// tests exercise every cell of `permitted_seed_format()`'s positive
+// matrix and pin the C++ `derivation_network_from_nettype()` mapping
+// (`src/cryptonote_basic/account.cpp:66-75`) for all four networks at
+// the FFI boundary. Without these two cases, a regression in the
+// STAGENET- or TESTNET-byte mapping would only surface via the
+// rejection paths, which can pass for the wrong reason. Surfaced by
+// Copilot's PR #27 round-2 review.
+TEST(account, rederive_from_bip39_reproduces_account_stagenet)
+{
+  static constexpr const char *kZeroEntropyMnemonic =
+      "abandon abandon abandon abandon abandon abandon "
+      "abandon abandon abandon abandon abandon abandon "
+      "abandon abandon abandon abandon abandon abandon "
+      "abandon abandon abandon abandon abandon art";
+
+  cryptonote::account_base first;
+  first.generate_from_bip39(kZeroEntropyMnemonic, std::string{}, cryptonote::STAGENET);
+  const auto first_keys = first.get_keys();
+
+  ASSERT_EQ(first_keys.m_seed_format,
+            static_cast<uint8_t>(SHEKYL_SEED_FORMAT_BIP39));
+  ASSERT_EQ(first_keys.m_master_seed_64.size(),
+            static_cast<size_t>(SHEKYL_MASTER_SEED_BYTES));
+
+  cryptonote::account_base rederived = first;
+  rederived.rederive_from_master_seed(cryptonote::STAGENET);
+  const auto rederived_keys = rederived.get_keys();
+
+  ASSERT_EQ(first_keys.m_account_address, rederived_keys.m_account_address);
+  ASSERT_EQ(first_keys.m_spend_secret_key, rederived_keys.m_spend_secret_key);
+  ASSERT_EQ(first_keys.m_view_secret_key,  rederived_keys.m_view_secret_key);
+  ASSERT_EQ(first_keys.m_ml_kem_decap_key, rederived_keys.m_ml_kem_decap_key);
+
+  // Cross-network HKDF-salt invariant: the same mnemonic on MAINNET vs
+  // STAGENET must derive different accounts. This is the property that
+  // protects against a stagenet-test-fixture key colliding with a real
+  // mainnet key (per the comment on `derivation_network_from_nettype`).
+  cryptonote::account_base mainnet;
+  mainnet.generate_from_bip39(kZeroEntropyMnemonic, std::string{}, cryptonote::MAINNET);
+  ASSERT_NE(first_keys.m_account_address, mainnet.get_keys().m_account_address);
+}
+
+TEST(account, rederive_from_raw_seed_reproduces_account_testnet)
+{
+  uint8_t raw_seed[SHEKYL_RAW_SEED_BYTES] = {
+      0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
+      0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30,
+      0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
+      0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40,
+  };
+
+  cryptonote::account_base first;
+  first.generate_from_raw_seed(raw_seed, cryptonote::TESTNET);
+  const auto first_keys = first.get_keys();
+
+  ASSERT_EQ(first_keys.m_seed_format,
+            static_cast<uint8_t>(SHEKYL_SEED_FORMAT_RAW32));
+
+  cryptonote::account_base rederived = first;
+  rederived.rederive_from_master_seed(cryptonote::TESTNET);
+  const auto rederived_keys = rederived.get_keys();
+
+  ASSERT_EQ(first_keys.m_account_address, rederived_keys.m_account_address);
+  ASSERT_EQ(first_keys.m_spend_secret_key, rederived_keys.m_spend_secret_key);
+  ASSERT_EQ(first_keys.m_view_secret_key,  rederived_keys.m_view_secret_key);
+  ASSERT_EQ(first_keys.m_ml_kem_decap_key, rederived_keys.m_ml_kem_decap_key);
+
+  // Cross-network HKDF-salt invariant: same raw seed on TESTNET vs
+  // FAKECHAIN must derive different accounts.
+  cryptonote::account_base fakechain;
+  fakechain.generate_from_raw_seed(raw_seed, cryptonote::FAKECHAIN);
+  ASSERT_NE(first_keys.m_account_address, fakechain.get_keys().m_account_address);
+}
+
 // (Network, format) matrix: FAKECHAIN/TESTNET refuse BIP-39, MAINNET/STAGENET
 // refuse RAW32. The FFI returns false on a disallowed pair; account_base
 // throws. This test pins the consensus-level acceptance matrix at the C++
