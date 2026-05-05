@@ -33,8 +33,95 @@
 #include "wallet/wallet2.h"
 #include "common/util.h"
 
+#include <type_traits>
+#include <string>
+
 using namespace boost::filesystem;
 using namespace epee::file_io_utils;
+
+// ===========================================================================
+// CI tripwire: wallet2 must NOT have a `generate_from_bip39` member.
+// ===========================================================================
+//
+// Bug 4 (audit 2026-05-05): wallet2 has no BIP-39 entry point by design.
+// The Rust derivation path (shekyl-crypto-pq::generate_account_from_bip39)
+// and the FFI (shekyl_account_generate_from_bip39) and the lower-level C++
+// glue (account_base::generate_from_bip39) all exist and are tested. The
+// wallet2-level wrapper is intentionally absent because:
+//
+//   - wallet2.cpp is scheduled for wholesale deletion at Phase 5 of the
+//     Rust wallet rewrite; any wrapper added now would be deleted by that
+//     phase as a removal-as-breaking-change rather than removal-as-no-op.
+//   - The Rust derivation path is the actual functional guarantee
+//     (shekyl-crypto-pq::tests::generate_from_bip39_mainnet_roundtrips_to_rederive).
+//   - No mainnet wallets exist yet; the next beta ships before the Rust
+//     rewrite lands, so any "transitional" wrapper would have a lifespan
+//     shorter than its review burden.
+//
+// If the static_assert below starts failing, either:
+//
+//   (a) The Rust wallet rewrite Phase 5 has landed and wallet2.cpp is
+//       being deleted — in which case this entire file is being removed
+//       and this tripwire goes with it. Action: just delete the assert
+//       along with the rest of wallet2.cpp test scaffolding.
+//
+//   (b) Someone added wallet2::generate_from_bip39 without first reading
+//       docs/FOLLOWUPS.md §"V3.1+ Legacy C++ → Rust rewrite scope"
+//       entry on this exact decision. Action: remove the wrapper, read
+//       the FOLLOWUPS entry, and reopen the architectural question
+//       there if you still think the wrapper should exist.
+//
+// See docs/audit_trail/2026-05-ffi-constant-drift-audit.md for the
+// Bug 4 framing and the discovery pattern that surfaced it.
+//
+// SFINAE detector: `has_generate_from_bip39<T>` is `true_type` iff
+// `T::generate_from_bip39(const std::string&, const std::string&,
+// cryptonote::network_type)` is callable. The mnemonic + passphrase +
+// nettype signature mirrors `account_base::generate_from_bip39`; if a
+// future wrapper uses a different signature, the detector misses it
+// and a fresh detector overload is the right response.
+
+template <typename, typename = void>
+struct has_generate_from_bip39_wallet2_member : std::false_type {};
+
+template <typename T>
+struct has_generate_from_bip39_wallet2_member<
+    T,
+    std::void_t<decltype(std::declval<T &>().generate_from_bip39(
+        std::declval<const std::string &>(),
+        std::declval<const std::string &>(),
+        std::declval<cryptonote::network_type>()))>> : std::true_type {};
+
+static_assert(
+    !has_generate_from_bip39_wallet2_member<tools::wallet2>::value,
+    "wallet2::generate_from_bip39 must not exist; BIP-39 wallet creation "
+    "lives in the Rust wallet path post-migration. See "
+    "docs/FOLLOWUPS.md §\"V3.1+ Legacy C++ → Rust rewrite scope\" entry "
+    "on `wallet2 has no generate_from_bip39 entry point` before adding it.");
+
+// Compile-time positive control for the SFINAE detector itself. Without
+// this, a refactor that breaks the detector (e.g. typo in the SFINAE
+// signature, missing #include) would silently make the static_assert
+// above pass for the wrong reason. The synthetic type below has the
+// member, so the detector must report `true`; any failure here is a
+// detector bug, not a wallet2 bug.
+namespace tripwire_self_test {
+struct synthetic_has_member {
+    void generate_from_bip39(
+        const std::string &, const std::string &, cryptonote::network_type) {}
+};
+struct synthetic_lacks_member {};
+static_assert(
+    has_generate_from_bip39_wallet2_member<synthetic_has_member>::value,
+    "SFINAE detector is broken: must report `true` for a type that "
+    "actually has the member. Fix the detector before trusting the "
+    "negative assertion above.");
+static_assert(
+    !has_generate_from_bip39_wallet2_member<synthetic_lacks_member>::value,
+    "SFINAE detector is broken: must report `false` for a type that "
+    "lacks the member. Fix the detector before trusting the negative "
+    "assertion above.");
+} // namespace tripwire_self_test
 
 // Three Monero-era keys-file round-trip tests (`store_to_file2file`,
 // `change_password_same_file`, `change_password_different_file`) and their
