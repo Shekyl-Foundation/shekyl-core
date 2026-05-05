@@ -36,7 +36,7 @@ class uri : public ::testing::Test
 protected:
   void SetUp() override
   {
-    acc.generate();
+    acc.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
     test_address = cryptonote::get_account_address_as_str(cryptonote::MAINNET, false, acc.get_keys().m_account_address);
   }
 

@@ -41,7 +41,7 @@ public:
   {
     using namespace cryptonote;
 
-    m_bob.generate();
+    m_bob.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
 
     if (!construct_miner_tx(0, 0, 0, 2, 0, m_bob.get_keys().m_account_address, m_tx))
       return false;

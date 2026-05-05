@@ -613,8 +613,10 @@ citing in a review.
   were `0 / 1` but authoritative Rust uses `1 / 2`, so a stored RAW32
   seed format silently round-tripped as BIP39 and was rejected by
   `permitted_seed_format(Fakechain, Bip39)`. The tests additionally
-  needed `tools::wallet2 w(cryptonote::FAKECHAIN, 1, true)` to match
-  `account_base::generate()`'s legacy hardcoded FAKECHAIN derivation.
+  needed `tools::wallet2 w(cryptonote::FAKECHAIN, 1, false)` because
+  `wallet2::generate("", password)` routes through
+  `account_base::generate(..., m_nettype)`, which the post-Bug-4-adjacent
+  fix correctly rejects on `(MAINNET, RAW32)`.
   See [`docs/CI_BASELINE.md`](./CI_BASELINE.md) Cluster B for the
   full post-mortem of the three falsified hypotheses. No on-disk
   wallets exist pre-V3 launch; no migration code is required.
@@ -1053,46 +1055,24 @@ its wake.
   with `wallet_storage.cpp`; the Rust BIP-39 round-trip test is the
   only remaining functional artifact, which is correct.
 
-- **Delete `account_base::generate(recovery, recover, two_random)`
-  3-arg overload alongside `wallet2.cpp` cutover.** Bug 4-adjacent
-  in `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`. The
-  3-arg overload hardcoded `FAKECHAIN` for the raw-seed derivation
-  salt and was a permanent loaded gun pointed at any production
-  caller (it bit `wallet2::generate` and
-  `wallet_rpc_server::on_stop_background_sync` for the entire
-  pre-V3 window). The 4-arg overload
-  `generate(recovery, recover, two_random, network_type nettype)`
-  is now the canonical API for all production callers; the 3-arg
-  overload remains only because ~25 unit / integration / performance
-  tests across `tests/{unit_tests,core_tests,performance_tests,daemon_tests,trezor}`
-  are FAKECHAIN-only and the FAKECHAIN-hardcoded behaviour is
-  correct for them. Mechanical to delete: replace each test's
-  `account.generate()` with `account.generate({}, false, false,
-  cryptonote::FAKECHAIN)`.
-
-  **Closure point:** Phase 5 of the Rust rewrite (the wallet2.cpp
-  deletion). At that point all of `tests/{unit_tests,core_tests,
-  daemon_tests,trezor}/wallet*` and the C++ wallet-stack tests get
-  swept; the 3-arg overload deletes with the test fleet.
-
 - **`wallet2` 0-change dummy-destination address generation needs a
   network-aware path or migration to a deterministic burn address.**
-  `src/wallet/wallet2.cpp:8269` (line numbers as of 2026-05-05) calls
-  the FAKECHAIN-only legacy 3-arg `account_base::generate()` to
-  produce a dummy `account_public_address` for 0-change destinations
-  (a one-shot transient: only the address is used, secret keys
-  discarded). On non-FAKECHAIN wallets this produces a
-  FAKECHAIN-formatted address embedded in a non-FAKECHAIN
-  transaction's destination field. It does NOT break consensus (the
-  daemon doesn't validate destination address network membership)
-  but it does leak a network-mismatch tell to anyone parsing the
-  output. Migration to the 4-arg overload would throw on
-  MAINNET / STAGENET (RAW32 isn't permitted there), regressing
-  transfers with exactly-zero change. The fix wants either (a) a
-  BIP-39 path here, (b) a deterministic burn address per network
-  (preferable: removes the per-tx randomness and saves a derivation),
-  or (c) an architectural change that removes the 0-change-dummy
-  pattern entirely.
+  `src/wallet/wallet2.cpp::transfer_selected_rct` calls the
+  network-aware `account_base::generate(...)` overload with
+  `cryptonote::FAKECHAIN` hardcoded to produce a dummy
+  `account_public_address` for 0-change destinations (a one-shot
+  transient: only the address is used, secret keys discarded). On
+  non-FAKECHAIN wallets this produces a FAKECHAIN-formatted address
+  embedded in a non-FAKECHAIN transaction's destination field. It
+  does NOT break consensus (the daemon doesn't validate destination
+  address network membership) but it does leak a network-mismatch
+  tell to anyone parsing the output. Properly network-matching the
+  dummy would require a BIP-39 path here (RAW32 isn't permitted on
+  MAINNET / STAGENET), regressing transfers with exactly-zero
+  change. The fix wants either (a) a BIP-39 path here, (b) a
+  deterministic burn address per network (preferable: removes the
+  per-tx randomness and saves a derivation), or (c) an architectural
+  change that removes the 0-change-dummy pattern entirely.
 
   **Closure point:** Phase 4 of the Rust rewrite (transaction
   construction migration). The `splitted_dsts` 0-change path lives
@@ -1121,6 +1101,33 @@ its wake.
   **Closure point:** V3.2 alongside the `shekyl-wallet-rpc` Rust
   cutover. The Rust JSON-RPC server gets to define the recovery API
   from scratch; the C++ shim retires with `wallet_rpc_server.cpp`.
+
+- **Replace `wallet_rpc_server::on_create_wallet` and
+  `wallet2_ffi::create` raw-seed wallet creation with a BIP-39
+  entry on MAINNET / STAGENET.** Bug 4-adjacent in
+  `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`. Both RPCs
+  call `wallet2::generate(name, password, dummy_key, /*recover=*/false,
+  ...)` which routes through `account_base::generate(..., m_nettype)`.
+  Pre-fix the call silently produced FAKECHAIN-salted accounts on
+  MAINNET / STAGENET that failed to round-trip on `wallet2::load`;
+  post-fix it throws cleanly with a clear FFI error pointing at the
+  `(network, seed_format)` rejection (RAW32 isn't permitted on
+  MAINNET / STAGENET). Both paths were already broken on MAINNET
+  pre-fix; the post-fix behaviour is a strict improvement (fail-loud
+  vs fail-silent) but it is not a finished feature: fresh-wallet
+  creation on MAINNET / STAGENET via these RPCs simply does not work
+  by design. The proper fix is the wallet2 BIP-39 entry point (Bug
+  4 in the audit, deferred per the Rust wallet migration). Until
+  then, MAINNET / STAGENET wallet creation must go through the
+  view-only / spend+view restore paths
+  (`wallet2::generate(name, password, address, viewkey, ...)` and
+  `wallet2::generate(name, password, address, spendkey, viewkey, ...)`)
+  which bypass `account_base::generate` entirely.
+
+  **Closure point:** V3.2 alongside the `shekyl-wallet-rpc` Rust
+  cutover. The Rust wallet-RPC will expose BIP-39 wallet creation as
+  the MAINNET / STAGENET native flow; the C++ raw-seed RPCs retire
+  with `wallet_rpc_server.cpp` / `wallet2_ffi.cpp`.
 
 **Index of how each follow-up interacts with the rewrite** (entries
 themselves carry the detail; this table is the at-a-glance view used

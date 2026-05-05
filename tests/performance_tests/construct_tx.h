@@ -57,7 +57,7 @@ public:
     if (!base_class::init())
       return false;
 
-    m_alice.generate();
+    m_alice.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
 
     for (size_t i = 0; i < out_count; ++i)
     {

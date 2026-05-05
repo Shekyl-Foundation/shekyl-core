@@ -44,22 +44,22 @@ bool test_transaction_generation_and_ring_signature()
 {
 
   account_base miner_acc1;
-  miner_acc1.generate();
+  miner_acc1.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
   account_base miner_acc2;
-  miner_acc2.generate();
+  miner_acc2.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
   account_base miner_acc3;
-  miner_acc3.generate();
+  miner_acc3.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
   account_base miner_acc4;
-  miner_acc4.generate();
+  miner_acc4.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
   account_base miner_acc5;
-  miner_acc5.generate();
+  miner_acc5.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
   account_base miner_acc6;
-  miner_acc6.generate();
+  miner_acc6.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
 
   account_base rv_acc;
-  rv_acc.generate();
+  rv_acc.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
   account_base rv_acc2;
-  rv_acc2.generate();
+  rv_acc2.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
   transaction tx_mine_1;
   construct_miner_tx(0, 0, 0, 10, 0, miner_acc1.get_keys().m_account_address, tx_mine_1);
   transaction tx_mine_2;

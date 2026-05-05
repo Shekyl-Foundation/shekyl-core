@@ -8271,20 +8271,23 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       // real one in our rings
       LOG_PRINT_L2("generating dummy address for 0 change");
       cryptonote::account_base dummy;
-      // Intentionally calls the FAKECHAIN-only legacy 3-arg overload.
-      // This dummy account is a one-shot transient — only its
-      // `m_account_address` is used (as a stand-in 0-amount destination
-      // to avoid revealing which input is real). The secret keys are
-      // discarded and never need to round-trip. On MAINNET / STAGENET
-      // the resulting address is FAKECHAIN-format, which would be
-      // visible on-wire but doesn't break consensus (the daemon doesn't
-      // validate destination address network membership). Properly
-      // network-matching the dummy would require a BIP-39 path here
-      // (RAW32 isn't permitted on MAINNET / STAGENET) — out of scope
-      // for the Bug 4-adjacent fix. Tracked in FOLLOWUPS V3.2:
+      // Intentionally derives on FAKECHAIN regardless of the wallet's
+      // `m_nettype`. This dummy account is a one-shot transient — only
+      // its `m_account_address` is used (as a stand-in 0-amount
+      // destination to avoid revealing which input is real). The secret
+      // keys are discarded and never need to round-trip. On MAINNET /
+      // STAGENET the resulting address is FAKECHAIN-format, which would
+      // be visible on-wire but doesn't break consensus (the daemon
+      // doesn't validate destination address network membership).
+      // Properly network-matching the dummy would require a BIP-39 path
+      // here (RAW32 isn't permitted on MAINNET / STAGENET) — out of
+      // scope for the Bug 4-adjacent fix. Tracked in FOLLOWUPS V3.2:
       // "wallet2 0-change dummy address generation needs network-aware
-      // path or migration to a deterministic burn address".
-      dummy.generate();
+      // path or migration to a deterministic burn address". The 4-arg
+      // call form with explicit FAKECHAIN replaced the legacy 3-arg
+      // overload's hidden default at V3.0; behavior is identical.
+      dummy.generate(crypto::secret_key{}, /*recover=*/false,
+                     /*two_random=*/false, cryptonote::FAKECHAIN);
       change_dts.addr = dummy.get_keys().m_account_address;
       LOG_PRINT_L2("generated dummy address for 0 change");
       splitted_dsts.push_back(change_dts);

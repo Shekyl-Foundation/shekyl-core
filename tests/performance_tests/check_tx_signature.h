@@ -60,7 +60,7 @@ public:
     if (!base_class::init())
       return false;
 
-    m_alice.generate();
+    m_alice.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
 
     std::vector<tx_destination_entry> destinations;
     destinations.push_back(tx_destination_entry(this->m_source_amount - outputs + 1, m_alice.get_keys().m_account_address, false));
@@ -116,7 +116,7 @@ public:
     if (!base_class::init())
       return false;
 
-    m_alice.generate();
+    m_alice.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
 
     std::vector<tx_destination_entry> destinations;
     destinations.push_back(tx_destination_entry(this->m_source_amount - outputs + 1, m_alice.get_keys().m_account_address, false));

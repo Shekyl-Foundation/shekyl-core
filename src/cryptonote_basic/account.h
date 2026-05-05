@@ -184,45 +184,40 @@ namespace cryptonote
     /// only wipes the pre-derivation input.
     void forget_master_seed();
 
-    // --- legacy raw-seed generation entry points ----------------------------
+    // --- raw-seed generation entry point ------------------------------------
     //
-    // These overloads exist so existing test callers continue to build while
-    // production consumers migrate to the explicit nettype-aware API. Both
-    // route through `generate_from_raw_seed`. RAW32 is only permitted on
+    // Routes through `generate_from_raw_seed`. RAW32 is only permitted on
     // `Testnet` and `Fakechain`; for `Mainnet`/`Stagenet` callers must use
-    // `generate_from_bip39` instead.
+    // `generate_from_bip39` instead. There is no longer a default-nettype
+    // overload: every caller — production and test — must spell its
+    // network out explicitly. The previous default-FAKECHAIN overload
+    // existed only as a transitional bridge during the Bug 4-adjacent
+    // fix and was deleted at V3.0 along with its ~28 test callers, all
+    // of which now pass `cryptonote::FAKECHAIN` explicitly.
+    // See `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
 
-    /// Production-safe raw-seed generation. The `nettype` argument selects
-    /// the derivation salt and is the consensus-level network for the
-    /// resulting account (must be `TESTNET` or `FAKECHAIN`; `MAINNET` and
-    /// `STAGENET` reject because RAW32 isn't a permitted seed format on
-    /// those networks — this is a programming error, not user input). All
-    /// production callers (`wallet2::generate`, the
-    /// `stop_background_sync` RPC seed-recovery path, and the dummy
-    /// 0-change destination address) call this overload, passing the
-    /// wallet's `m_nettype`. Bug 4-adjacent in
-    /// `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+    /// Raw-seed account generation. The `nettype` argument selects the
+    /// derivation salt and is the consensus-level network for the
+    /// resulting account. Must be `TESTNET` or `FAKECHAIN`; `MAINNET`
+    /// and `STAGENET` throw at the FFI's `permitted_seed_format` check
+    /// because RAW32 isn't a permitted seed format on those networks
+    /// (use `generate_from_bip39` instead).
+    ///
+    /// Failure modes:
+    /// - `(MAINNET, *)` and `(STAGENET, *)` — throws (programming error).
+    /// - `(TESTNET, *)` and `(FAKECHAIN, *)` with `recover=true` — derives
+    ///   from `recovery_key.data` as 32 raw bytes.
+    /// - `(TESTNET, *)` and `(FAKECHAIN, *)` with `recover=false` —
+    ///   generates a fresh seed via the OS CSPRNG.
+    ///
+    /// `two_random` is unused; it remains in the signature for legacy-API
+    /// compatibility with the v0 Electrum-style flow that has been
+    /// removed (.cursor/rules/36-secret-locality.mdc).
     crypto::secret_key generate(
         const crypto::secret_key& recovery_key,
         bool recover,
         bool two_random,
         network_type nettype);
-
-    /// FAKECHAIN-only test-convenience wrapper. Equivalent to
-    /// `generate(recovery_key, recover, two_random, FAKECHAIN)`.
-    /// Production callers MUST use the 4-arg overload above so the
-    /// derivation salt matches the wallet's actual network. Pre-V3.2 this
-    /// overload exists only because ~25 unit / integration / performance
-    /// tests across `tests/{unit_tests,core_tests,performance_tests,daemon_tests,trezor}`
-    /// were written before the API was nettype-aware; all of them run on
-    /// FAKECHAIN and the FAKECHAIN-hardcoded behaviour is correct for
-    /// them. Scheduled for deletion at V3.2 alongside the wallet2 → Rust
-    /// cutover (FOLLOWUPS V3.2 entry: "delete account_base::generate
-    /// 3-arg overload along with wallet2.cpp").
-    crypto::secret_key generate(
-        const crypto::secret_key& recovery_key = crypto::secret_key(),
-        bool recover = false,
-        bool two_random = false);
 
     void create_from_device(const std::string &device_name);
     void create_from_device(hw::device &hwdev);

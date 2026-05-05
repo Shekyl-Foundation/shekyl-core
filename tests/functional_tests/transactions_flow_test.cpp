@@ -119,7 +119,10 @@ bool transactions_flow_test(std::string& working_folder,
   uint64_t amount_to_transfer, size_t mix_in_factor, size_t transactions_count, size_t transactions_per_second)
 {
   LOG_PRINT_L0("-----------------------STARTING TRANSACTIONS FLOW TEST-----------------------");
-  tools::wallet2 w1, w2;
+  // FAKECHAIN nettype required: `wallet2::generate(file, "")` routes through
+  // `account_base::generate(..., m_nettype)` which throws on (MAINNET, RAW32)
+  // at the FFI's `permitted_seed_format` check. Bug 4-adjacent.
+  tools::wallet2 w1{cryptonote::FAKECHAIN, 1, false}, w2{cryptonote::FAKECHAIN, 1, false};
   if(path_source_wallet.empty())
     path_source_wallet = generate_random_wallet_name();
 

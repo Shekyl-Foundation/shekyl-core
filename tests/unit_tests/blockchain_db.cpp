@@ -100,7 +100,7 @@ protected:
   BlockchainDBTest() : m_db(new T()), m_hardfork(*m_db, 1, 0)
   {
     account_base miner_acc;
-    miner_acc.generate();
+    miner_acc.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
 
     auto make_block = [&](const crypto::hash& prev_id) -> std::pair<block, blobdata> {
       block bl;

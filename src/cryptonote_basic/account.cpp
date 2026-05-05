@@ -438,18 +438,24 @@ DISABLE_VS_WARNINGS(4244 4345)
       network_type nettype)
   {
     // The Electrum-style 25-word / keccak-chain recovery path is gone; see
-    // .cursor/rules/36-secret-locality.mdc. This wrapper treats
+    // .cursor/rules/36-secret-locality.mdc. This entry point treats
     // `recovery_key.data` as a 32-byte raw seed and routes through
-    // `generate_from_raw_seed` with the caller's `nettype`. Pre-fix
-    // (Bug 4-adjacent), `nettype` was hardcoded to `FAKECHAIN`, so any
-    // production caller on `MAINNET`/`STAGENET`/`TESTNET` would silently
-    // derive a FAKECHAIN-salted account that fails to round-trip on
-    // wallet reload (the rederive on `load` runs against `m_nettype`,
-    // not FAKECHAIN). The bool `two_random` is ignored; it was never
-    // true in the wallet path. RAW32 is only permitted on `TESTNET` /
-    // `FAKECHAIN`; `generate_from_raw_seed` enforces that and throws on
-    // a disallowed pair, so a `MAINNET` / `STAGENET` caller fails loud
-    // rather than silently mis-deriving.
+    // `generate_from_raw_seed` with the caller's `nettype`. RAW32 is only
+    // permitted on `TESTNET` / `FAKECHAIN`; `generate_from_raw_seed`
+    // enforces that and throws on a disallowed pair, so a `MAINNET` /
+    // `STAGENET` caller fails loudly rather than silently mis-deriving.
+    //
+    // Pre-Bug-4-adjacent fix, the legacy 3-arg overload of this function
+    // hardcoded `nettype = FAKECHAIN`, so any production caller on
+    // `MAINNET`/`STAGENET`/`TESTNET` would silently derive a FAKECHAIN-
+    // salted account that failed to round-trip on wallet reload (the
+    // rederive on `load` runs against `m_nettype`, not FAKECHAIN). Both
+    // production callers (`wallet2::generate` and the
+    // `stop_background_sync` RPC seed-recovery path) and ~28 test
+    // callers now pass `nettype` explicitly. The
+    // `two_random` arg is unused; it was never true in the wallet path
+    // and is preserved only for signature compatibility with the legacy
+    // Electrum flow.
     (void)two_random;
 
     std::array<uint8_t, SHEKYL_RAW_SEED_BYTES> raw_seed{};
@@ -476,18 +482,6 @@ DISABLE_VS_WARNINGS(4244 4345)
     // expectations meaningful.
     crypto::secret_key first = m_keys.m_spend_secret_key;
     return first;
-  }
-  //-----------------------------------------------------------------
-  crypto::secret_key account_base::generate(
-      const crypto::secret_key& recovery_key,
-      bool recover,
-      bool two_random)
-  {
-    // FAKECHAIN-only test-convenience overload. See the doxygen on
-    // account.h for the deletion target (V3.2, with wallet2.cpp
-    // cutover). All production callers route through the 4-arg
-    // overload above with the wallet's `m_nettype`.
-    return generate(recovery_key, recover, two_random, FAKECHAIN);
   }
   //-----------------------------------------------------------------
   void account_base::create_from_keys(const cryptonote::account_public_address& address, const crypto::secret_key& spendkey, const crypto::secret_key& viewkey)

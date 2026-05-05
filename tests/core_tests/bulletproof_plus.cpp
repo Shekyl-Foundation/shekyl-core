@@ -56,7 +56,7 @@ bool gen_bpp_tx_validation_base::generate_with(std::vector<test_event_entry>& ev
   const cryptonote::block *prev_block = &blk_0;
   cryptonote::block blocks[12 + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW];
   for (size_t n = 0; n < 12; ++n) {
-    miner_accounts[n].generate();
+    miner_accounts[n].generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
     CHECK_AND_ASSERT_MES(generator.construct_block_manually(blocks[n], *prev_block, miner_accounts[n],
         test_generator::bf_major_ver | test_generator::bf_minor_ver | test_generator::bf_timestamp | test_generator::bf_hf_version,
         1, 1, prev_block->timestamp + DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN * 2,

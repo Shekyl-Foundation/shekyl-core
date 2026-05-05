@@ -5,59 +5,74 @@
 ### Fixed
 
 - **`account_base::generate(...)` no longer hardcodes `FAKECHAIN`;
-  production callers route through a new nettype-aware overload.**
-  The legacy three-argument
-  `account_base::generate(recovery_key, recover, two_random)` was
-  introduced as a transitional wrapper for ~25 unit / integration
-  tests but hardcoded `DerivationNetwork::Fakechain` as the
-  raw-seed derivation salt regardless of the wallet's actual
-  `network_type`. Three production callers reached it:
-  `wallet2::generate(name, password, recovery, recover, ...)` (the
-  CLI / RPC wallet-creation entry), `wallet2`'s 0-change dummy-
-  destination address generator, and
+  the legacy 3-arg overload is deleted entirely and every caller
+  spells its network out explicitly.**
+  Pre-fix, the 3-arg `account_base::generate(recovery_key, recover,
+  two_random)` overload (with default args `secret_key{} / false /
+  false`) hardcoded `DerivationNetwork::Fakechain` as the raw-seed
+  derivation salt regardless of the wallet's actual `network_type`.
+  Three production callers reached it via the implicit FAKECHAIN
+  default: `wallet2::generate(name, password, recovery, recover,
+  ...)` (the CLI / RPC wallet-creation and recovery entry),
+  `wallet2`'s 0-change dummy-destination address generator
+  (`transfer_selected_rct`), and
   `wallet_rpc_server::on_stop_background_sync`'s seed-recovery
-  path. On `MAINNET` / `STAGENET` / `TESTNET`, every from-seed
-  wallet creation produced a `FAKECHAIN`-salted account that
-  failed `wallet2::load`'s rederive (which uses `m_nettype`,
-  not `FAKECHAIN`) — fail-closed, but the whole code path was
-  silently broken on every network it was supposed to support.
-  This footgun was masked the entire window during which Bug 1's
-  off-by-one was preventing any wallet from loading. Bug 4-adjacent
-  in the 2026-05-05 FFI constant-drift audit.
+  path. On TESTNET, every from-seed wallet creation produced a
+  FAKECHAIN-salted account that failed `wallet2::load`'s rederive
+  (which uses `m_nettype`, not FAKECHAIN). On MAINNET / STAGENET,
+  the call was doubly broken: the FAKECHAIN-derived keys disagreed
+  with the rederive salt, and RAW32 isn't a permitted seed format
+  on those networks anyway. This footgun was masked for the entire
+  window during which Bug 1's off-by-one was preventing any wallet
+  from loading. Bug 4-adjacent in the 2026-05-05 FFI constant-
+  drift audit.
 
-  **Fix:** new
+  **Fix:** the new
   `account_base::generate(recovery_key, recover, two_random,
   network_type nettype)` overload threads the caller's network
-  through `generate_from_raw_seed`. `wallet2::generate` and
+  through `generate_from_raw_seed`, and is now the **only**
+  `generate(...)` overload — the legacy 3-arg form is deleted
+  entirely. `wallet2::generate(...)` and
   `wallet_rpc_server::on_stop_background_sync` migrated to pass
-  `m_nettype` / `m_wallet->nettype()`. The 3-arg overload remains
-  as a FAKECHAIN-only test convenience (FOLLOWUPS V3.2: delete with
-  `wallet2.cpp` cutover). The 0-change dummy-destination caller is
-  intentionally still on the 3-arg overload — it's a transient one-
-  shot whose secret keys are discarded; properly network-matching
-  the dummy address requires a BIP-39 path on MAINNET / STAGENET
-  (RAW32 isn't permitted there) and is out of scope for the
-  Bug 4-adjacent fix (separate FOLLOWUPS V3.2 item).
+  `m_nettype` / `m_wallet->nettype()`. The 0-change dummy-
+  destination caller in `wallet2::transfer_selected_rct` migrated
+  to the same 4-arg form with `cryptonote::FAKECHAIN` hardcoded —
+  it's a transient one-shot whose secret keys are discarded;
+  properly network-matching the dummy address requires a BIP-39
+  path on MAINNET / STAGENET (RAW32 isn't permitted there) and is
+  filed under FOLLOWUPS V3.2. All 28 test callers across
+  `tests/{unit_tests,core_tests,performance_tests,trezor,
+  functional_tests,wallet_bench}` migrated to pass
+  `cryptonote::FAKECHAIN` explicitly. The structural deletion
+  eliminates the "one omitted argument away from FAKECHAIN"
+  footgun class entirely — there is no longer a `generate(...)`
+  overload that can pick a network silently.
 
-  **Failure-mode change:** on MAINNET / STAGENET, the migrated
-  callers now throw cleanly via the FFI's `permitted_seed_format`
-  check instead of silently producing FAKECHAIN-salted unspendable
-  wallets. On TESTNET, the migrated callers now produce
-  TESTNET-salted accounts that round-trip through `wallet2::load`,
-  which they couldn't before. `wallet_rpc_server::on_stop_background_sync`
-  on MAINNET / STAGENET still fails (RAW32 is not permitted), but
-  with a clear error rather than a key-mismatch — the underlying
-  Electrum-words seed-recovery API is itself defunct post-Monero-
-  fork and is filed for V3.2 replacement with a BIP-39 entry.
+  **Failure-mode change:** on MAINNET / STAGENET, every
+  `wallet2`-routed raw-seed creation path now throws cleanly via
+  the FFI's `permitted_seed_format` check instead of silently
+  producing FAKECHAIN-salted unspendable wallets. The throw scope
+  is wider than just the recovery path: `wallet_rpc_server::on_create_wallet`
+  (fresh CSPRNG-seed wallet creation) and `wallet2_ffi::create`
+  (FFI wallet creation) also throw on MAINNET / STAGENET. Both
+  paths were already silently broken pre-fix — the post-fix
+  behaviour is a strict improvement (fail-loud over fail-silent),
+  but neither becomes a finished feature: fresh-seed wallet
+  creation on MAINNET / STAGENET via `wallet2` simply does not
+  work by design until the wallet2 BIP-39 entry point lands (Bug
+  4 in the audit, deferred per the Rust wallet migration). On
+  TESTNET / FAKECHAIN, every migrated caller produces correctly-
+  network-salted accounts that round-trip through `wallet2::load`.
 
   **New regression test:** `tests/unit_tests/account.cpp` ::
-  `legacy_generate_4arg_overload_uses_nettype_argument` pins (a)
-  the 4-arg overload produces the same TESTNET-salted account as
-  `generate_from_raw_seed(..., TESTNET)`, (b) the 3-arg overload
-  remains FAKECHAIN-salted (and therefore differs from the 4-arg
-  TESTNET account), and (c) the 4-arg overload throws on
-  `(MAINNET, RAW32)` and `(STAGENET, RAW32)`. See
-  `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+  `generate_uses_explicit_nettype_argument` pins (a) `generate(...,
+  TESTNET)` matches `generate_from_raw_seed(..., TESTNET)`, (b)
+  `generate(..., FAKECHAIN)` produces a distinct account (different
+  HKDF salt), and (c) `generate(..., MAINNET / STAGENET)` throws
+  for **both** `recover=true` (recovery) and `recover=false` (fresh
+  CSPRNG seed). See
+  `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` Bug
+  4-adjacent.
 
 - **C++/Rust FFI constant disagreement broke every wallet round-trip
   on every network.** `src/shekyl/shekyl_ffi.h` defined
