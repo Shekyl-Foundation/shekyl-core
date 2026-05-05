@@ -11,7 +11,7 @@
 //! the matured-output index, and the balance projection. It is the
 //! reservation-agnostic half of the wallet's spendable-state surface;
 //! the spendable-balance projection that subtracts in-flight
-//! `PendingTx` reservations lives on `PendingTxEngine` (§2.6) per
+//! `PendingTx` reservations lives on `PendingTxEngine` (§2.4) per
 //! the Round 3 ownership decision. Per-transaction history is read
 //! directly from the underlying `LedgerBlock` rather than through
 //! the trait — see the Phase 0c section below.
@@ -40,13 +40,13 @@
 //!
 //! # Reservation tracker placement
 //!
-//! Per the §2.2 / §2.6 amendment landed in PR #22, the
+//! Per the §2.2 / §2.4 amendment landed in PR #22, the
 //! `PendingReservations` tracker is owned by `PendingTxEngine`,
 //! not [`LedgerEngine`]. [`LedgerEngine::balance`] returns the
 //! reservation-agnostic [`BalanceSummary`] computed from
 //! `LedgerBlock` alone; the spendable-balance projection that
 //! subtracts in-flight reservations lives on `PendingTxEngine`
-//! (§2.6 surface, lands in PR 6). The split keeps `LedgerEngine`
+//! (§2.4 surface, lands in PR 6). The split keeps `LedgerEngine`
 //! identifiable as the §1.5 actor that owns confirmed-chain state
 //! and lets `PendingTxEngine` own all reservation lifecycle in one
 //! place.
@@ -88,7 +88,7 @@
 //!
 //! `PendingTxEngine` is referenced as plain code (not as an
 //! intra-doc link) because the type does not yet exist in this
-//! workspace; it lands in a future per-trait PR per §2.6 of the
+//! workspace; it lands in a future per-trait PR per §2.4 of the
 //! contract document. References below render as backticked code
 //! rather than rustdoc links until that PR is merged.
 
@@ -201,7 +201,7 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     /// Reservation-agnostic balance computed from `LedgerBlock`
     /// alone.
     ///
-    /// Per the §2.2 / §2.6 split, this method returns the
+    /// Per the §2.2 / §2.4 split, this method returns the
     /// committed-chain projection without subtracting in-flight
     /// `PendingTx` reservations. The reservation-aware
     /// "spendable balance" projection lives on `PendingTxEngine`
