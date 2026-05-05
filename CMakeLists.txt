@@ -726,6 +726,19 @@ endif()
 set(SHEKYL_CONSENSUS_CONFIG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/config/consensus_constants.json")
 set(SHEKYL_CONSENSUS_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_consensus_constants.py")
 set(SHEKYL_CONSENSUS_GENERATED_HEADER "${MONERO_GENERATED_HEADERS_DIR}/shekyl/consensus_constants_generated.h")
+
+# `CMAKE_CONFIGURE_DEPENDS` makes CMake auto-reconfigure (and therefore
+# re-run the `execute_process` below) whenever the JSON authority or
+# the generator script changes. Without this, an edit to the JSON
+# would not regenerate the C++ header on incremental builds — only the
+# Rust side (`build.rs` with `cargo:rerun-if-changed`) would pick the
+# change up, and the two sides would silently diverge until a clean
+# build. That divergence is exactly the bug class this branch exists
+# to close, so the configure-time generation must track both inputs.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${SHEKYL_CONSENSUS_CONFIG_JSON}"
+  "${SHEKYL_CONSENSUS_GENERATOR}"
+)
 execute_process(
   COMMAND ${Python3_EXECUTABLE} "${SHEKYL_CONSENSUS_GENERATOR}" "${SHEKYL_CONSENSUS_CONFIG_JSON}" "${SHEKYL_CONSENSUS_GENERATED_HEADER}"
   RESULT_VARIABLE SHEKYL_CONSENSUS_GEN_RESULT

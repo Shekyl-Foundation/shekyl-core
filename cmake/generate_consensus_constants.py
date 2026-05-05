@@ -22,11 +22,29 @@ import pathlib
 import sys
 
 
-KEYS_INTEGER = [
-    "fcmp_reference_block_min_age",
-    "fcmp_reference_block_max_age",
-    "rct_type_fcmp_plus_plus_pqc",
-]
+# Per-key declared C++ type. Drives both the value-range validation
+# below and the macro emission. `u64` keys are emitted with `UINT64_C`,
+# `u8` keys with `UINT8_C`, so a JSON value that overflows the declared
+# type fails the build at the generator rather than silently wrapping
+# inside a `static_cast<uint8_t>(...)`.
+KEYS_INTEGER = {
+    "fcmp_reference_block_min_age": "u64",
+    "fcmp_reference_block_max_age": "u64",
+    "rct_type_fcmp_plus_plus_pqc": "u8",
+}
+
+# Inclusive [min, max] range for each declared type.
+TYPE_RANGES = {
+    "u8": (0, 0xFF),
+    "u64": (0, 0xFFFF_FFFF_FFFF_FFFF),
+}
+
+# Emit prefix per declared type; values are JSON ints which Python emits
+# decimal so the suffix macros get the correct fixed-width literal.
+TYPE_EMIT = {
+    "u8": "UINT8_C",
+    "u64": "UINT64_C",
+}
 
 
 def main() -> int:
@@ -49,13 +67,27 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
-    for k in KEYS_INTEGER:
-        if not isinstance(data[k], int) or data[k] < 0:
-            print(f"key {k} must be a non-negative integer (got {data[k]!r})",
+    for k, ctype in KEYS_INTEGER.items():
+        v = data[k]
+        if not isinstance(v, int) or isinstance(v, bool):
+            print(f"key {k} must be an integer (got {type(v).__name__}: {v!r})",
                   file=sys.stderr)
+            return 1
+        lo, hi = TYPE_RANGES[ctype]
+        if not (lo <= v <= hi):
+            print(
+                f"key {k} value {v} out of range for {ctype} [{lo}, {hi}]",
+                file=sys.stderr,
+            )
             return 1
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def emit(name_lower: str) -> str:
+        ctype = KEYS_INTEGER[name_lower]
+        macro = TYPE_EMIT[ctype]
+        return f"{macro}({data[name_lower]})"
+
     content = f"""// @generated from {in_path.name} by cmake/generate_consensus_constants.py
 // Do not edit manually. The JSON file is the single source of truth.
 #pragma once
@@ -65,13 +97,17 @@ def main() -> int:
 // Values bracketed `SHEKYL_*` to make their generated origin obvious at
 // every consumer; original symbols (`FCMP_REFERENCE_BLOCK_MIN_AGE`,
 // `FCMP_REFERENCE_BLOCK_MAX_AGE`, `RCTTypeFcmpPlusPlusPqc`) are now
-// `static_assert`-pinned to these.
+// `static_assert`-pinned to these. The emitted fixed-width literal
+// macros (`UINT8_C` / `UINT64_C`) are validated against the declared
+// type's range at generator time, so a JSON value that overflows
+// (e.g. `rct_type_fcmp_plus_plus_pqc` > 255) fails the build at
+// CMake configure rather than truncating silently.
 #define SHEKYL_FCMP_REFERENCE_BLOCK_MIN_AGE \
-    UINT64_C({data["fcmp_reference_block_min_age"]})
+    {emit("fcmp_reference_block_min_age")}
 #define SHEKYL_FCMP_REFERENCE_BLOCK_MAX_AGE \
-    UINT64_C({data["fcmp_reference_block_max_age"]})
+    {emit("fcmp_reference_block_max_age")}
 #define SHEKYL_RCT_TYPE_FCMP_PLUS_PLUS_PQC \
-    static_cast<uint8_t>({data["rct_type_fcmp_plus_plus_pqc"]})
+    {emit("rct_type_fcmp_plus_plus_pqc")}
 """
     out_path.write_text(content, encoding="utf-8")
     return 0

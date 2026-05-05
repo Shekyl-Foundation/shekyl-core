@@ -32,19 +32,25 @@ pub const MAX_VALIDITY_SECS: u64 = 86400;
 //
 // `RCT_TYPE_FCMP_PLUS_PLUS_PQC` is also generated; the `shekyl-oxide`
 // `ProofType` enum's `From<ProofType> for u8` is single-source within
-// that crate and is `const_assert!`-pinned to this generated value.
+// that crate and is pinned to this generated value at the
+// const-evaluated `assert!` block below (see "Sentinel against silent
+// loss-of-meaning" notes).
 include!(concat!(
     env!("OUT_DIR"),
     "/consensus_constants_generated.rs"
 ));
 
 // Sentinel against silent loss-of-meaning if the JSON authority is
-// bumped without thinking. `MIN_AGE = 5` was locked by Decision 14
-// (commit `6561278d9`, 2026-04-04) once universal deferred curve-tree
-// insertion made the value a reorg-safety margin only. Loosening below
-// 5 needs a fresh consensus review; tightening above ~10 starts
-// rejecting legitimate proposers' reference blocks. The C++ side has
-// matching `static_assert` sentinels in `src/cryptonote_config.h`.
+// bumped without thinking. Implemented as `const _: () = assert!(...)`
+// blocks (the const-evaluated form, not the `static_assertions::const_assert!`
+// macro) so no extra dependency is needed and the failure is a
+// compile-time error rather than a test failure. `MIN_AGE = 5` was
+// locked by Decision 14 (commit `6561278d9`, 2026-04-04) once universal
+// deferred curve-tree insertion made the value a reorg-safety margin
+// only. Loosening below 5 needs a fresh consensus review; tightening
+// above ~10 starts rejecting legitimate proposers' reference blocks.
+// The C++ side has matching `static_assert` sentinels in
+// `src/cryptonote_config.h`.
 const _: () = assert!(
     FCMP_REFERENCE_BLOCK_MIN_AGE == 5,
     "FCMP_REFERENCE_BLOCK_MIN_AGE diverged from Decision 14 baseline (5); review consensus implications before updating the sentinel"
@@ -588,12 +594,14 @@ mod tests {
 
     #[test]
     fn consensus_constants_match_baselines() {
-        // Runtime cross-check on the JSON authority (the const_assert!
-        // sentinels at the top of the module catch the same drift at
-        // build time). Documents the values at the test surface so
-        // searches for "MIN_AGE" / "MAX_AGE" / "RCT_TYPE" land here.
-        // Pre-Bug-3 fix this Rust value was 10 while C++ was 5; the
-        // JSON authority closes the drift class.
+        // Runtime cross-check on the JSON authority (the
+        // const-evaluated `assert!` sentinels at the top of the
+        // module catch the same drift at build time, but emit
+        // const-evaluation errors rather than test failures).
+        // Documents the values at the test surface so searches for
+        // "MIN_AGE" / "MAX_AGE" / "RCT_TYPE" land here. Pre-Bug-3
+        // fix this Rust value was 10 while C++ was 5; the JSON
+        // authority closes the drift class.
         assert_eq!(FCMP_REFERENCE_BLOCK_MIN_AGE, 5);
         assert_eq!(FCMP_REFERENCE_BLOCK_MAX_AGE, 100);
         assert_eq!(RCT_TYPE_FCMP_PLUS_PLUS_PQC, 7);
@@ -603,10 +611,11 @@ mod tests {
     fn shekyl_oxide_proof_type_matches_consensus_authority() {
         // `shekyl-oxide::fcmp::ProofType::FcmpPlusPlusPqc` encodes its
         // u8 wire value via runtime `From` (not const-evaluable), so
-        // the const_assert! at the top of the module can't reach it.
-        // This runtime check is the next-cheapest tripwire: if anyone
-        // edits the `ProofType => 7` arms in shekyl-oxide without also
-        // updating `config/consensus_constants.json`, this test fires.
+        // the const-evaluated `assert!` block at the top of the
+        // module can't reach it. This runtime check is the
+        // next-cheapest tripwire: if anyone edits the `ProofType => 7`
+        // arms in shekyl-oxide without also updating
+        // `config/consensus_constants.json`, this test fires.
         // shekyl-oxide is the disposable Monero fork (per
         // `10-shekyl-first.mdc`); the consensus authority lives in the
         // Shekyl-core JSON, and shekyl-oxide must follow.
