@@ -183,7 +183,7 @@ TEST(wallet_storage, store_to_mem2file)
     // migration, defended by a static_assert tripwire at the top of this
     // file; see the corresponding FOLLOWUPS.md entry.
     {
-        tools::wallet2 w(cryptonote::FAKECHAIN, 1, true);
+        tools::wallet2 w(cryptonote::FAKECHAIN, 1, false);
         w.generate("", password);
         w.store_to(target_wallet_file.string(), password);
 
@@ -195,7 +195,7 @@ TEST(wallet_storage, store_to_mem2file)
     EXPECT_TRUE(is_file_exist(target_wallet_file.string() + ".keys"));
 
     {
-        tools::wallet2 w(cryptonote::FAKECHAIN, 1, true);
+        tools::wallet2 w(cryptonote::FAKECHAIN, 1, false);
         w.load(target_wallet_file.string(), password);
 
         EXPECT_TRUE(is_file_exist(target_wallet_file.string()));
@@ -241,8 +241,13 @@ TEST(wallet_storage, change_password_mem2file)
     // FAKECHAIN nettype must match the network the legacy
     // `account_base::generate()` wrapper hardcodes for raw-seed derivation
     // (see the comment on `wallet_storage.store_to_mem2file` above).
+    //
+    // `unattended = false` is load-bearing here: with `unattended = true`,
+    // `wallet2::change_password()` skips the `decrypt_keys(original_password)`
+    // call (`src/wallet/wallet2.cpp` ~line 5046) and the test would no longer
+    // verify that the old password is actually checked before the rotation.
     {
-        tools::wallet2 w(cryptonote::FAKECHAIN, 1, true);
+        tools::wallet2 w(cryptonote::FAKECHAIN, 1, false);
         w.generate("", password1);
         primary_address_1 = w.get_address_as_str();
         w.change_password(target_wallet_file.string(), password1, password2);
@@ -252,7 +257,7 @@ TEST(wallet_storage, change_password_mem2file)
     EXPECT_TRUE(is_file_exist(target_wallet_file.string() + ".keys"));
 
     {
-        tools::wallet2 w(cryptonote::FAKECHAIN, 1, true);
+        tools::wallet2 w(cryptonote::FAKECHAIN, 1, false);
         w.load(target_wallet_file.string(), password2);
         primary_address_2 = w.get_address_as_str();
     }
