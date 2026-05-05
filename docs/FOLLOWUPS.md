@@ -987,6 +987,46 @@ surface for a file scheduled for deletion. The rewrite plan deletes
 scoped follow-ups that ride alongside that deletion or land in
 its wake.
 
+- **`wallet2` has no `generate_from_bip39` entry point — by design;
+  do not add one.** Surfaced 2026-05-05 (Bug 4 in
+  `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`) when an
+  attempt to add C++/FFI coverage for the wallet2 BIP-39 round-trip
+  uncovered that the wrapper has never existed: the Rust derivation
+  (`shekyl-crypto-pq::generate_account_from_bip39`), the FFI
+  (`shekyl_account_generate_from_bip39`), and the lower-level C++
+  glue (`account_base::generate_from_bip39`) all exist and are
+  tested, but the `wallet2`-level wrapper was never wired through
+  when the original wallet2-from-Electrum-mnemonic path was retired.
+  Pre-mainnet, no production caller is broken by the absence; this
+  is a coverage-gap report against a layer that is being deleted by
+  the Rust rewrite at Phase 5, not a bug in the conventional sense.
+
+  **Architectural decision (2026-05-05):** new BIP-39 wallet
+  creation will happen via the Rust wallet path post-migration. The
+  wallet2-level wrapper will not be added pre-migration, because:
+  (a) any wallet2 wrapper added now will be deleted by Phase 5 of
+  the Rust rewrite — a transitional API that becomes a removal-as-
+  breaking-change rather than a removal-as-no-op; (b) the Rust
+  derivation path is the actual functional guarantee and is tested
+  end-to-end (`shekyl-crypto-pq::tests::generate_from_bip39_mainnet_roundtrips_to_rederive`);
+  (c) no mainnet wallets exist yet, so no production user is
+  affected by the absence; (d) the next beta ships before the Rust
+  rewrite lands, so any "transitional" wrapper would have a
+  lifespan shorter than its review burden.
+
+  **CI tripwire:** `tests/unit_tests/wallet_storage.cpp` carries a
+  `static_assert` against a SFINAE detector for
+  `wallet2::generate_from_bip39`. If a future contributor adds the
+  wrapper without thinking about the migration, the build fails
+  with a message pointing back at this entry. The tripwire is
+  designed to delete itself when the Rust rewrite Phase 5 lands and
+  `wallet2.cpp` goes away.
+
+  **Closure point:** Phase 5 of the Rust rewrite (the wallet2.cpp
+  deletion). At that point this entry retires; the tripwire deletes
+  with `wallet_storage.cpp`; the Rust BIP-39 round-trip test is the
+  only remaining functional artifact, which is correct.
+
 **Index of how each follow-up interacts with the rewrite** (entries
 themselves carry the detail; this table is the at-a-glance view used
 by the rewrite plan's half-day review gate, item 3):
