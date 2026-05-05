@@ -52,15 +52,28 @@
     component becomes a third generic parameter with a default
     that preserves the existing concrete-typed shape for
     production callers, while making the ledger surface
-    substitutable for hybrid tests. The parameterization compiles
-    to identical code via monomorphization; expected
-    iai-callgrind delta on `engine_trait_bench_ledger_*` benches
-    is 0% (trait dispatch monomorphizes to the same call shape
-    the `LocalLedger` inherent impl produced previously). Each
-    `pub` item bounded by the `pub(crate)` `LedgerEngine` trait
-    carries an `#[allow(private_bounds)]` annotation paralleling
-    the `DaemonEngine` annotations from PR 1; both clear at
-    Stage 4 when both traits promote to `pub` per §1.4.
+    substitutable for hybrid tests. The trait-dispatch shape
+    monomorphizes away as expected, but the parameterization
+    intentionally pairs with the `LocalLedger` interior-mutability
+    refactor below; the measured iai-callgrind cost of the
+    combined change on `engine_trait_bench_ledger_synced_height`
+    is `+390%` (10 → 49 instructions, sourced entirely from the
+    `RwLock::read()` acquisition in `LocalLedger::read()`, not
+    from trait dispatch). Per the
+    [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §3.3.1 disposition (a) — intrinsic to Stage 1's interior-
+    mutability shape and retiring at Stage 4 when Path B replaces
+    `RwLock<LedgerState>` with `Arc`-published snapshots for read
+    paths — the cumulative-delta breach is acknowledged as
+    structural rather than as a regression to optimize within
+    PR 2; full reasoning in
+    [`docs/PERFORMANCE_BASELINE.md`](./PERFORMANCE_BASELINE.md)'s
+    `engine_trait_bench_ledger_synced_height` cumulative-delta
+    footnote. Each `pub` item bounded by the `pub(crate)`
+    `LedgerEngine` trait carries an `#[allow(private_bounds)]`
+    annotation paralleling the `DaemonEngine` annotations from
+    PR 1; both clear at Stage 4 when both traits promote to `pub`
+    per §1.4.
   - **Refresh path migrated to `&self` interior mutation.**
     `Engine::synced_height` now dispatches through
     `LedgerEngine::synced_height`; `Engine::apply_scan_result`,
@@ -116,15 +129,24 @@
     `bench-internals`-only escape hatch; production state remains
     behind the trait-dispatched mutating path). The
     `engine_trait_bench_ledger_synced_height` pair from Stage 0
-    PR-2 carries forward unchanged; PR 2 adds a cumulative-delta
-    row at the PR-merge SHA per §3.3.1 of the trait-boundaries
-    spec. Frozen-baseline + iai-callgrind gate metric + criterion
-    metrics + capture-environment blocks for
-    `engine_trait_bench_ledger_balance` are populated in
+    PR-2 carries forward and gains a cumulative-delta row at the
+    PR-tip SHA `8efae3a40` per §3.3.1 of the trait-boundaries
+    spec. Frozen-baseline source, iai-callgrind gate metric,
+    iai informational metrics, criterion metrics, and capture-
+    environment cross-references for
+    `engine_trait_bench_ledger_balance` (instructions=20580 on
+    a 1024-`TransferDetails` fixture) are now transcribed into
     [`docs/PERFORMANCE_BASELINE.md`](./PERFORMANCE_BASELINE.md)
-    after CI `workflow_dispatch` capture under N=3 invariance,
+    from N=3-invariant CI `workflow_dispatch` runs `25307774464`,
+    `25307777614`, `25307781436` against PR-tip `8efae3a40`,
     following the "do-not-transcribe-laptop-captures" discipline
-    established during Stage 0 PR-2.
+    established during Stage 0 PR-2. The PR-tip SHA
+    `8efae3a40` includes two preparatory script commits
+    (`80d913ea2`: extend `BENCHES` row format to thread cargo
+    `--features`; `8efae3a40`: append the balance bench row with
+    `:bench-internals`) that landed after the design doc's nine-
+    commit plan to surface the new bench to the rolling-baseline
+    harness.
 
 - **`DaemonEngine` trait extracted; `Engine<S>` parameterized over
   the daemon implementor (Stage 1 PR 1, the first

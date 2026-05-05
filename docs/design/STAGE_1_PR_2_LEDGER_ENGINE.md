@@ -697,10 +697,39 @@ Per [`.cursor/rules/15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-a
 7. **Performance baseline captured from CI** (`workflow_dispatch`,
    N=3 invariance), transcribed to
    [`docs/PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md)
-   in commit 9 (or a follow-up commit on the feat branch) before
-   the PR opens for review. The transcription follows the
-   "do-not-transcribe-laptop-captures" discipline established
-   during Stage 0 PR-2.
+   in a follow-up commit on the feat branch before the PR opens
+   for review. The transcription follows the "do-not-transcribe-
+   laptop-captures" discipline established during Stage 0 PR-2.
+
+   In practice, the follow-up path was taken (commit 9 deliberately
+   reserves only the section structure in `PERFORMANCE_BASELINE.md`
+   so the post-commit-9 dispatch numbers can be transcribed
+   without re-touching commit 9's diff). Two preparatory commits
+   landed before the dispatch could surface the new bench:
+   `80d913ea2` extended the `BENCHES` row format in
+   `scripts/bench/capture_rust_baseline.sh` to thread cargo
+   `--features` through the criterion + iai invocations, and
+   `8efae3a40` appended the `engine_trait_bench_ledger_balance`
+   row with `:bench-internals` so the new bench appears in the
+   captured envelope. The first dispatch attempt (against
+   `2dcacd46e`, the docs commit) confirmed the gap: the artifact
+   contained only the `synced_height` row. This pattern (script-
+   row append at commit-8 time, not commit-9) is the lesson for
+   subsequent per-trait PRs and lives in §2.2's lifecycle-not-
+   just-pre-flight refinement.
+
+   Final transcription cleanup commit lands on the feat branch
+   after the post-script dispatch (against `8efae3a40`) is
+   N=3-invariant. The cumulative-delta row for
+   `engine_trait_bench_ledger_synced_height` exposes a `+390%`
+   structural delta sourced entirely from the `RwLock::read()`
+   acquisition in `LocalLedger::read()` — disposition (a) per
+   `V3_ENGINE_TRAIT_BOUNDARIES.md` §3.3.1 (intrinsic to Stage 1's
+   interior-mutability shape; retires at Stage 4 when Path B
+   replaces the lock with `Arc`-published snapshots for read
+   paths). The disposition is documented inline in the
+   cumulative-delta footnote so future readers do not re-litigate
+   it as a regression.
 8. **PR opens for review.** Description states "this PR
    establishes the per-trait PR template that subsequent Stage 1
    extractions follow" so reviewers and future-template authors

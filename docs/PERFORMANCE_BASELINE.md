@@ -93,7 +93,7 @@ Per [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
 | Trait | Method | Bench name | Frozen at |
 |---|---|---|---|
 | `LedgerEngine` | `synced_height` | `engine_trait_bench_ledger_synced_height` | Stage 0 PR-2 |
-| `LedgerEngine` | `balance` | `engine_trait_bench_ledger_balance` | Deferred to LedgerEngine PR |
+| `LedgerEngine` | `balance` | `engine_trait_bench_ledger_balance` | Stage 1 PR 2 |
 | `EconomicsEngine` | `current_emission` | `engine_trait_bench_economics_current_emission` | Deferred to EconomicsEngine PR |
 | `EconomicsEngine` | `parameters_snapshot` | `engine_trait_bench_economics_parameters_snapshot` | Deferred to EconomicsEngine PR |
 | `KeyEngine` | `account_public_address` | `engine_trait_bench_key_account_public_address` | Deferred to KeyEngine PR |
@@ -172,6 +172,59 @@ not directly compare to iai's per-call cost for this workload class.*
 |---|---|---|---|---|---|
 | Stage 0 PR-2 | `0276d210e` | `10` | `0.6221` | baseline | baseline |
 | Stage 1 PR 1 | `6c6ecbd67` | `10` | `0.6224` | `0%` (no change) | `+0.05%` |
+| Stage 1 PR 2 | `8efae3a40` | `49` | `5.5117` | `+390%` | `+786%` |
+
+Stage 1 PR 2 (`LedgerEngine` extraction; `Engine<S, D, L: LedgerEngine
+= LocalLedger>` parameterization with `LocalLedger` wrapping
+`RwLock<LedgerState>` for interior mutability per §2.2) was N=3
+invariance-verified per
+[`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.4
+dynamic check: GHA `workflow_dispatch` runs `25307774464`,
+`25307777614`, and `25307781436` against PR-tip `8efae3a40` produced
+byte-identical iai-callgrind output for `synced_height`
+(`instructions=49`, `l1_hits=72`, `ll_hits=1`, `ram_hits=5`,
+`total_read_write=78`, `estimated_cycles=252` — same across all three
+runs to the digit). Toolchain matched env-`0276d210` row-for-row
+(rustc 1.95.0 / valgrind 3.22.0 / iai-callgrind-runner v0.16.1), so
+no new capture-environment block was added. CPU varied across the
+three runs (runs `25307774464` and `25307777614` on AMD EPYC 7763,
+matching the frozen baseline's CPU model; run `25307781436` on Intel
+Xeon Platinum 8370C @ 2.80GHz) with no observed effect on the iai
+gate metric — confirming Valgrind's hardware-independent VEX IR
+once again. The criterion `median_ns` value cited above is from run
+`25307774464` (matching-CPU; most directly comparable to the frozen
+baseline); run `25307777614` measured `5.5123` (essentially identical)
+and run `25307781436` measured `16.7389` (a 3x outlier on the
+different CPU). The 3x criterion spread on the matching/non-matching
+CPU pair is consistent with the §4.4 hoisting-rule caveat for
+trivial pure-read workloads where criterion's number reflects
+optimizer amortization rather than per-call cost.
+
+The cumulative `Δ vs frozen (iai)` is `+390%`, exceeding the §3.3.1
+25% fail threshold. **Disposition: §3.3.1 case (a) — intrinsic to
+Stage 1's interior-mutability shape and will disappear at Stage 4.**
+The +39-instruction delta is the `RwLock::read()` lock acquisition
+introduced by `LocalLedger`'s interior-mutability shape. After PR 2,
+the `synced_height` call path is `engine.synced_height()` →
+`engine.ledger.synced_height()` → `<LocalLedger as
+LedgerEngine>::synced_height()` → `LocalLedger::read()` →
+`RwLock::read().expect(...)` → `WalletLedger.ledger.height()`. The
+`RwLock::read()` uncontended fast path costs ~39 instructions
+(loaded-acquire CAS on the lock state, guard construction, drop on
+return); the original deref-chain field read is preserved underneath
+at its prior 10-instruction cost. The §2.2 Round-3 disposition
+adopted interior mutability deliberately — the producer task in
+`run_refresh_task` relaxes from outer write-lock to read-lock per
+§3.3, and the `apply_scan_result` async mutation runs against `&self`
+without serializing readers, both of which are wins that pay for
+the per-read lock cost under contention. Stage 4's Path B retires
+the outer `RwLock<LedgerState>` in favor of `Arc`-published snapshots
+for read paths (committed at the per-PR cost reviewed during the
+trait-promotion PR per `V3_ENGINE_TRAIT_BOUNDARIES.md` §3.3.5),
+returning `synced_height` to its 10-instruction deref-chain cost.
+The +786% criterion `Δ vs frozen` is informational only and does not
+gate per the §3.3.1 closing paragraph; the gate is the iai
+instructions column.
 
 Stage 1 PR 1 (`DaemonEngine` extraction; `Engine<S, D: DaemonEngine
 = DaemonClient>` parameterization) was N=3 invariance-verified per
@@ -205,13 +258,17 @@ applies to the running `Δ vs frozen (iai)` column.
 
 ## Bench: `engine_trait_bench_ledger_balance`
 
-**Status:** Authored at Stage 1 PR 2 commit 8; frozen baseline pending
-CI `workflow_dispatch` capture per §4.4 dynamic check (N=3 invariance
-verification). Frozen-baseline source, iai/criterion metrics, capture
-environment, and cumulative-delta table are populated in this PR's
-docs commit (commit 9) once the captured numbers are transcribed,
-following the template established by
-`engine_trait_bench_ledger_synced_height` above.
+**Status:** Frozen at Stage 1 PR 2.
+
+**Frozen-baseline source.**
+
+| Field | Value |
+|---|---|
+| Introducing PR | Stage 1 PR 2 (`LedgerEngine` trait extraction; `Engine<S, D, L: LedgerEngine = LocalLedger>` parameterization) |
+| Frozen at | `8efae3a402b7a872ab5044ec4f69d2190fa34940` (PR-tip post-bench-row append; GHA runs `25307774464`, `25307777614`, `25307781436`) |
+| Date | 2026-05-04 |
+
+**Workload class:** State-dependent compute.
 
 Per §4.6's per-bench deferred assignment, this bench is introduced
 alongside the `LedgerEngine::balance` trait method's first measurable
@@ -219,16 +276,92 @@ surface on a state-populated fixture. The bench fixture builds the
 engine through the production `Engine::create` lifecycle — the same
 path `engine_trait_bench_ledger_synced_height`'s fixture uses
 (`benches/common/engine_fixture.rs::build_engine_fixture`) — and then
-injects 1024 [`TransferDetails`] entries into the engine's
-[`WalletLedger`] directly via the `bench-internals`-gated
-[`LocalLedger::populate_for_bench`] helper. The measured region
+injects 1024 `TransferDetails` entries into the engine's
+`WalletLedger` directly via the `bench-internals`-gated
+`LocalLedger::populate_for_bench` helper. The measured region
 exercises `LedgerEngine::balance` (trait dispatch on
 `engine.ledger.balance()`, post-commit-5 production call shape)
 against the pre-populated state without running a full
-producer/scanner ceremony. Expected workload class: state-dependent
-compute (criterion median_ns approximates per-call cost; non-hoisted
-because the per-iteration body walks the transfer slice via
-`BalanceSummary::compute`).
+producer/scanner ceremony. The per-iteration body walks the transfer
+slice via `BalanceSummary::compute` and is non-hoistable, so
+criterion's `median_ns` approximates per-call cost rather than
+amortized cost (in contrast to `synced_height`'s trivial-pure-read
+hoisting behavior).
+
+**iai-callgrind gate metric.**
+
+| Metric | Value |
+|---|---|
+| `instructions` | `20580` |
+
+The §3.3.1 threshold-of-concern check (10% warn / 25% fail) applies
+to this row only. The instruction count is portable across runner
+hardware (Valgrind's VEX IR is hardware-independent) but **not**
+portable across toolchain versions; see [Toolchain-bump
+policy](#toolchain-bump-policy) for what happens when rustc /
+valgrind / iai-callgrind-runner versions change during Stage 1.
+
+**iai-callgrind hardware-dependent metrics (informational).**
+
+These rows are recorded for completeness from the same capture but
+do not gate. Different runner hardware reports different numbers;
+the gate-metric `instructions` row above is the only iai value
+that should be compared across captures or against the threshold.
+
+| Metric | Value |
+|---|---|
+| `l1_hits` | `22408` |
+| `ll_hits` | `3342` |
+| `ram_hits` | `11` |
+| `total_read_write` | `25761` |
+| `estimated_cycles` | `39503` |
+
+**criterion metrics (informational).**
+
+| Metric | Value |
+|---|---|
+| `median_ns` | `2394.6` |
+| `std_dev_ns` | `38.06` |
+
+*criterion median_ns approximates per-call cost for this state-
+dependent compute workload (the `BalanceSummary::compute` walk over
+1024 transfers is non-hoistable). Per-call cost ratio to iai
+instructions: `2394.6 ns / 20580 instr ≈ 0.116 ns/instr`, consistent
+with a ~2.8 GHz host running ~1 IPC on a memory-walking workload —
+no over-amortization signal.*
+
+**Capture environment:** see `env-0276d210` in
+[Capture environments](#capture-environments). Toolchain matches
+env-`0276d210` row-for-row (rustc 1.95.0 / valgrind 3.22.0 /
+iai-callgrind-runner v0.16.1, kernel `Linux 6.17.0-1010-azure`); no
+new env block is added per the deduplication discipline. CPU varied
+across the N=3 runs (runs `25307774464` and `25307777614` on AMD
+EPYC 7763, matching env-`0276d210`; run `25307781436` on Intel Xeon
+Platinum 8370C @ 2.80GHz) with no observed effect on the iai gate
+metric.
+
+**Cumulative-delta table.**
+
+| PR | SHA | iai instructions | criterion median_ns | Δ vs frozen (iai) | Δ vs frozen (criterion) |
+|---|---|---|---|---|---|
+| Stage 1 PR 2 | `8efae3a40` | `20580` | `2394.6` | baseline | baseline |
+
+Stage 1 PR 2 freezes this bench's baseline; subsequent Stage 1 PRs
+append one row per merge, computed against the frozen-baseline row.
+The §3.3.1 threshold-of-concern check applies to the running `Δ vs
+frozen (iai)` column. N=3 invariance: all three runs produced
+byte-identical iai-callgrind output for this bench
+(`instructions=20580`, `l1_hits=22408`, `ll_hits=3342`,
+`ram_hits=11`, `total_read_write=25761`, `estimated_cycles=39503`).
+criterion `median_ns` for the table row is from run `25307774464`
+(matching-CPU); the matching-CPU pair (`25307774464` / `25307777614`)
+measured `2394.6` and `2418.3` ns respectively (a ~1% spread); run
+`25307781436` on the Intel Xeon measured `1949.1` ns (a 19% lower
+median, consistent with the different CPU's per-instruction cost
+profile on a memory-walking workload). The state-populated workload
+is markedly more stable than `synced_height`'s trivial pure-read
+across CPUs because the per-call body's compute dominates the
+optimizer-amortization noise floor.
 
 ## Bench: `engine_trait_bench_economics_current_emission`
 
