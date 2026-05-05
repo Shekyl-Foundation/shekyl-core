@@ -766,6 +766,26 @@ mod tests {
         assert!(rederive_account(&seed, DerivationNetwork::Testnet, SeedFormat::Bip39).is_err());
     }
 
+    /// Primary functional guarantee for BIP-39 wallet creation on Mainnet.
+    ///
+    /// **There is no equivalent of this test at the C++ `wallet2` layer
+    /// by design.** The `wallet2`-level `generate_from_bip39` wrapper does
+    /// not exist; new BIP-39 wallet creation will happen via the Rust
+    /// wallet path post-migration. See:
+    ///
+    /// - `docs/FOLLOWUPS.md` §"V3.1+ Legacy C++ → Rust rewrite scope"
+    ///   entry on `wallet2 has no generate_from_bip39 entry point` for
+    ///   the architectural decision and rationale.
+    /// - `tests/unit_tests/wallet_storage.cpp`'s
+    ///   `has_generate_from_bip39_wallet2_member` `static_assert` for
+    ///   the CI tripwire that defends the decision against drift.
+    /// - `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` (Bug 4)
+    ///   for the discovery context.
+    ///
+    /// If you reach this test looking for "where is BIP-39 wallet
+    /// creation tested?", the answer is here, not in C++. If you reach
+    /// it because you're about to add a C++ `wallet2` wrapper for BIP-39,
+    /// read the FOLLOWUPS entry first.
     #[test]
     fn generate_from_bip39_mainnet_roundtrips_to_rederive() {
         let entropy = [0u8; 32];
