@@ -35,6 +35,7 @@
 #include <string>
 #include <boost/uuid/uuid.hpp>
 #include "shekyl/economics_params_generated.h"
+#include "shekyl/consensus_constants_generated.h"
 
 #define CRYPTONOTE_DNS_TIMEOUT_MS                       20000
 
@@ -200,12 +201,36 @@
 // (coinbase: MINED_MONEY_UNLOCK_WINDOW, regular: DEFAULT_TX_SPENDABLE_AGE,
 // staked: max(effective_lock_until, DEFAULT_TX_SPENDABLE_AGE)).  MIN_AGE is a reorg
 // safety margin ensuring the referenced tree state is stable.
-#define FCMP_REFERENCE_BLOCK_MAX_AGE            100  // ~3.3 hours at 2-min blocks; max referenceBlock staleness
-#define FCMP_REFERENCE_BLOCK_MIN_AGE            5    // reorg safety margin; maturity enforced by deferred tree insertion
+//
+// `FCMP_REFERENCE_BLOCK_{MIN,MAX}_AGE` come from the JSON authority at
+// `config/consensus_constants.json` (generated into
+// `shekyl/consensus_constants_generated.h` by
+// `cmake/generate_consensus_constants.py`). The Rust multisig wallet
+// at `rust/shekyl-engine-core/src/multisig/v31/intent.rs` consumes the
+// same JSON via `rust/shekyl-engine-core/build.rs` so the two sides
+// cannot drift. Bug 3 of the 2026-05-05 FFI constant-drift audit
+// motivated the JSON authority; see
+// `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+#define FCMP_REFERENCE_BLOCK_MAX_AGE            SHEKYL_FCMP_REFERENCE_BLOCK_MAX_AGE
+#define FCMP_REFERENCE_BLOCK_MIN_AGE            SHEKYL_FCMP_REFERENCE_BLOCK_MIN_AGE
 #define FCMP_MAX_INPUTS_PER_TX                  8    // bounds proof generation time and tx size
 constexpr uint64_t FCMP_CURVE_TREE_CHECKPOINT_INTERVAL = 10000;
 static_assert(FCMP_REFERENCE_BLOCK_MAX_AGE > FCMP_REFERENCE_BLOCK_MIN_AGE,
   "FCMP_REFERENCE_BLOCK_MAX_AGE must be > MIN_AGE to give wallets a valid reference block window");
+// Sentinel against silent loss-of-meaning if the JSON authority is bumped
+// without thinking. Decision 14 (commit `6561278d9`, 2026-04-04) locked
+// MIN_AGE = 5 once universal deferred curve-tree insertion made the
+// value a reorg-safety margin only. Loosening below 5 needs a fresh
+// consensus review; tightening above ~10 starts rejecting legitimate
+// proposers' reference blocks. If you genuinely need to change either,
+// edit `config/consensus_constants.json`, update the Decision 14
+// rationale in the changelog, and only then bump these sentinel
+// values. The Rust side has matching `const_assert!` sentinels in
+// `rust/shekyl-engine-core/src/multisig/v31/intent.rs`.
+static_assert(FCMP_REFERENCE_BLOCK_MIN_AGE == 5,
+  "FCMP_REFERENCE_BLOCK_MIN_AGE diverged from Decision 14 baseline (5); review consensus implications before updating the sentinel");
+static_assert(FCMP_REFERENCE_BLOCK_MAX_AGE == 100,
+  "FCMP_REFERENCE_BLOCK_MAX_AGE diverged from baseline (100); review consensus implications before updating the sentinel");
 
 #define PER_KB_FEE_QUANTIZATION_DECIMALS        6 // Keep fee quantization at 1e-6 SKL while display precision is 1e-9 SKL.
 #define CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES 2

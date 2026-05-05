@@ -718,6 +718,22 @@ if(NOT SHEKYL_ECONOMICS_GEN_RESULT EQUAL 0)
   message(FATAL_ERROR "Failed generating economics constants header from ${SHEKYL_ECONOMICS_CONFIG_JSON}")
 endif()
 
+# Single source of truth for the consensus-affecting constant subset
+# identified by the 2026-05-05 FFI constant-drift audit
+# (`docs/audit_trail/2026-05-ffi-constant-drift-audit.md`). Same JSON
+# is consumed by `rust/shekyl-engine-core/build.rs` so neither side
+# can drift.
+set(SHEKYL_CONSENSUS_CONFIG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/config/consensus_constants.json")
+set(SHEKYL_CONSENSUS_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_consensus_constants.py")
+set(SHEKYL_CONSENSUS_GENERATED_HEADER "${MONERO_GENERATED_HEADERS_DIR}/shekyl/consensus_constants_generated.h")
+execute_process(
+  COMMAND ${Python3_EXECUTABLE} "${SHEKYL_CONSENSUS_GENERATOR}" "${SHEKYL_CONSENSUS_CONFIG_JSON}" "${SHEKYL_CONSENSUS_GENERATED_HEADER}"
+  RESULT_VARIABLE SHEKYL_CONSENSUS_GEN_RESULT
+)
+if(NOT SHEKYL_CONSENSUS_GEN_RESULT EQUAL 0)
+  message(FATAL_ERROR "Failed generating consensus constants header from ${SHEKYL_CONSENSUS_CONFIG_JSON}")
+endif()
+
 # As of OpenBSD 6.8, -march=<anything> breaks the build
 function(set_default_arch)
   if (OPENBSD)

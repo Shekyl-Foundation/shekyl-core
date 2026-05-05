@@ -11,34 +11,49 @@ citing in a review.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **Full `cbindgen`-style migration of `SHEKYL_*` FFI constants
-  (target: post-stressnet, pre-audit-final).** The 2026-05-05
-  FFI constant-drift audit (`docs/audit_trail/2026-05-ffi-constant-drift-audit.md`)
-  found two real bugs (Bug 1: `SHEKYL_CLASSICAL_ADDRESS_BYTES`
-  off-by-one, Bug 2: `SHEKYL_SEED_FORMAT_*` 0/1 vs 1/2) where
-  hand-maintained `#define` constants in `src/shekyl/shekyl_ffi.h`
-  had drifted from authoritative `pub const` constants in the Rust
-  crates. The reduced-scope sibling branch
-  `chore/cbindgen-consensus-constants` covers the silent-wrong-output
-  subset (`RCTTypeFcmpPlusPlusPqc`, `FCMP_REFERENCE_BLOCK_*_AGE`,
-  `ADDRESS_VERSION_V1`, the four locked economic parameters) before
-  audit. The remaining ~40 constants are all fail-closed-on-misuse
-  (drift causes load failure or assertion failure, never silent
-  corruption), so their migration to the generated header can land
-  post-stressnet without audit-window pressure. Scope: extend the
-  `build.rs` from the consensus-subset branch to cover all
-  `SHEKYL_WALLET_ERR_*` (29), `SHEKYL_WALLET_CAPABILITY_*` (4),
-  `SHEKYL_WALLET_KDF_*` and `_FILE_FORMAT_VERSION` (5), all
-  `SHEKYL_LOG_LEVEL_*` and `_ERR_*` (~17), and the byte-length
-  constants (`MASTER_SEED_BYTES`, `RAW_SEED_BYTES`,
-  `PQC_PUBLIC_KEY_BYTES`, `ML_KEM_768_*_BYTES`, `BIP39_*_BYTES`,
-  etc.). Delete the now-redundant C++ `#define`s; replace each with
-  a `static_assert` sentinel against the generated value. Close-
-  condition: every `SHEKYL_*` constant in `src/shekyl/shekyl_ffi.h`
-  is either generated or an authoritatively-Rust-valued
-  `static_assert` mirror, and `git grep '^#define SHEKYL_' src/shekyl/shekyl_ffi.h`
-  returns only the generated header's include guard. Target: V3.0,
-  post-stressnet, pre-audit-final.
+- **Full migration of remaining `SHEKYL_*` FFI constants to the
+  JSON-authority pattern (target: post-stressnet, pre-audit-final).**
+  The 2026-05-05 FFI constant-drift audit
+  (`docs/audit_trail/2026-05-ffi-constant-drift-audit.md`) found two
+  real bugs (Bug 1: `SHEKYL_CLASSICAL_ADDRESS_BYTES` off-by-one,
+  Bug 2: `SHEKYL_SEED_FORMAT_*` 0/1 vs 1/2) where hand-maintained
+  `#define` constants in `src/shekyl/shekyl_ffi.h` had drifted from
+  authoritative `pub const` constants in the Rust crates. The
+  reduced-scope sibling branch `chore/cbindgen-consensus-constants`
+  introduced `config/consensus_constants.json` as a JSON authority
+  for the silent-wrong-output subset (`FCMP_REFERENCE_BLOCK_*_AGE`,
+  `RCT_TYPE_FCMP_PLUS_PLUS_PQC`) and shipped before audit, sharing
+  the Python-generator + Rust-build.rs pattern with
+  `config/economics_params.json`. `ADDRESS_VERSION_V1` is single-
+  source in Rust with no C++ duplicate, so there's nothing to
+  align today; would join the JSON only if a C++ duplicate appears.
+
+  The remaining ~40 constants are all fail-closed-on-misuse (drift
+  causes load failure or assertion failure, never silent corruption),
+  so their migration to the JSON authority can land post-stressnet
+  without audit-window pressure. Scope: extend `consensus_constants.json`
+  (or split into `wallet_constants.json` if the file gets too large
+  for a single audit-quality review) to cover all `SHEKYL_WALLET_ERR_*`
+  (29), `SHEKYL_WALLET_CAPABILITY_*` (4), `SHEKYL_WALLET_KDF_*` and
+  `_FILE_FORMAT_VERSION` (5), all `SHEKYL_LOG_LEVEL_*` and `_ERR_*`
+  (~17), and the byte-length constants (`MASTER_SEED_BYTES`,
+  `RAW_SEED_BYTES`, `PQC_PUBLIC_KEY_BYTES`, `ML_KEM_768_*_BYTES`,
+  `BIP39_*_BYTES`, etc.). Delete the now-redundant C++ `#define`s
+  and Rust `pub const`s; replace each with a `static_assert` /
+  `const _: () = assert!(...)` sentinel against the generated value.
+  Close-condition: every `SHEKYL_*` constant in
+  `src/shekyl/shekyl_ffi.h` is either generated or an
+  authoritatively-JSON-valued `static_assert` mirror, and
+  `git grep '^#define SHEKYL_' src/shekyl/shekyl_ffi.h` returns only
+  the generated header's include guard. Target: V3.0, post-
+  stressnet, pre-audit-final.
+
+  **Open question for V3.x:** the JSON-as-authority direction is a
+  pragmatic middle ground between the current C++/Rust dual-source
+  pattern and the longer-term "Rust-as-authority + cbindgen-emitted
+  C headers" direction implied by `20-rust-vs-cpp-policy.mdc`.
+  Whether to advance to Rust-as-authority is a separate V3.x agenda
+  item; it doesn't gate this followup.
 
 - **`wallet_storage`: cover loaded-wallet save-as branches in
   `wallet2::store_to`.** When `fix/wallet-storage-test` deleted the
