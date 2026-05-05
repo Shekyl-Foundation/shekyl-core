@@ -289,6 +289,35 @@
 
 ### Removed
 
+- **Chaingen-dependent C++ test surface (`tx_validation`,
+  `fcmp_tests`, `staking`).** Test hygiene Δ1 (2026-05-05) deletes
+  `tests/core_tests/{tx_validation,fcmp_tests,staking}.{cpp,h}`
+  (~2200 lines, 32 registered tests + 7 already-disabled struct
+  decls), the `chaingen_main.cpp` registrations, and the dead
+  helpers `apply_fcmp_pipeline` / `construct_fcmp_tx` /
+  `construct_fcmp_staked_tx` in `chaingen.cpp` (no callers remain
+  after the test deletion). Root cause: the chaingen synthetic-block
+  mining infrastructure (`MAKE_GENESIS_BLOCK`, `REWIND_BLOCKS_N`,
+  `MAKE_NEXT_BLOCK`) produces v1 coinbase transactions that
+  `cryptonote_format_utils.cpp:295` rejects under v3-from-genesis
+  ("Shekyl requires tx version >= 3"); no chain ever materializes
+  on the synthetic side, so `fill_tx_sources_and_destinations`
+  returns no spendable outputs and every test that needs to construct
+  a user transaction fails at chain setup. The CI baseline previously
+  flagged 19 failures (cluster C); a full survey (this PR) confirmed
+  the same root cause hits all 32 chaingen-dependent tests including
+  `gen_fcmp_tx_valid`. The invariants those tests covered migrate to
+  Rust per [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md) — three target-V3.x
+  entries (tx-validation, FCMP++ tx-pool, staking lifecycle), each
+  landing with the corresponding Rust port of the daemon-side
+  validation path. Per `.cursor/rules/20-rust-vs-cpp-policy.mdc`, tx
+  validation defines a cryptographic contract → Rust. Per
+  `.cursor/rules/15-deletion-and-debt.mdc` "default: delete," dead
+  code goes; the V3.1 disposition that previously deferred this work
+  to "wallet2 hardening / V3.2 wallet2 removal" is closed by this
+  deletion. Closes
+  [`docs/CI_BASELINE.md`](./CI_BASELINE.md) cluster C.
+
 - **`DaemonClient::inner()` accessor** in
   [`engine::daemon`](../rust/shekyl-engine-core/src/engine/daemon.rs).
   The method exposed the wrapped `SimpleRequestRpc` so callers

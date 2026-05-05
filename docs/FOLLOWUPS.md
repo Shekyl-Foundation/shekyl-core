@@ -573,14 +573,42 @@ citing in a review.
   [`docs/CI_BASELINE.md`](./CI_BASELINE.md) Cluster B for the full
   diagnosis. Target: V3.1.
 
-- **`core_tests` synthetic-block harness rewrite for v3-only
-  flows.** (Track 0 CI triage, 2026-04-28.) 19 `core_tests` tests
-  (`gen_tx_*` × 11, `gen_fcmp_*` × 5, `gen_staking_*` × 3) fail with
-  `couldn't fill transaction sources` and `Block <hash> failed to
-  pass prevalidation`, often preceded by `cn: Shekyl requires tx
-  version >= 3`. The harness in
-  [`tests/core_tests/chaingen.cpp`](../tests/core_tests/chaingen.cpp)
-  constructs synthetic blocks against pre-rewire flows: it mines
+- **Rust replacements for chaingen-deleted validation invariants.**
+  (Test hygiene Δ1, 2026-05-05.) Closed `core_tests/{tx_validation,
+  fcmp_tests, staking}` by deletion (see CI_BASELINE.md cluster C). The
+  invariants those tests covered need to land as Rust unit tests once
+  the corresponding daemon validation paths exist in Rust. Per cluster:
+  - **tx-validation invariants** (9 worth-keeping from the 11 deleted
+    `gen_tx_*` — the 2 dropped, `gen_tx_invalid_input_amount` and
+    `gen_tx_output_with_zero_amount`, encode pre-RingCT semantics that
+    don't apply in v3): tx-version-check, input-type-must-be-`txin_to_key`,
+    empty-vin rejection, missing-key-offsets rejection, key-offset-out-of-
+    range rejection, key-image-must-derive-from-input-key, key-image-must-
+    be-on-curve, output-key-must-be-on-curve, output-type-must-be-
+    `txout_to_key`/`txout_to_tagged_key`. Spec-anchors live in
+    `cryptonote_format_utils.cpp` (line 295 et al.) and `fcmp::rctSigs.cpp`.
+    Target: V3.x — lands with the `cryptonote_core` Rust port, since the
+    invariants are daemon-side.
+  - **FCMP++ tx-pool invariants** (from the 5 deleted `gen_fcmp_*`):
+    valid FCMP++ tx accepted, double-spend rejected, reference-block-too-
+    old rejected, reference-block-too-recent rejected, timestamp-unlock
+    rejected. Spec-anchors in `tx_pool.cpp::add_tx`. Target: V3.x — lands
+    with the tx-pool Rust port.
+  - **Staking lifecycle / claim invariants** (from the 16 deleted
+    staking tests): full lifecycle, claim range bounds, claim height
+    bounds, claim watermark, claim amount, claim output type, claim
+    pool exhaustion, claim key-image double-spend, tier validation,
+    rollback restoration, mempool key-image dedup, sorted-input
+    requirement. Spec-anchors in `staking/`. Target: V3.x — lands with
+    the staking Rust port.
+- **(Closed by deletion 2026-05-05.) `core_tests` synthetic-block
+  harness rewrite for v3-only flows.** Original framing retained for
+  audit-trail context: 19 `core_tests` tests (`gen_tx_*` × 11,
+  `gen_fcmp_*` × 5, `gen_staking_*` × 3) failed with `couldn't fill
+  transaction sources` and `Block <hash> failed to pass prevalidation`,
+  often preceded by `cn: Shekyl requires tx version >= 3`. The harness
+  in [`tests/core_tests/chaingen.cpp`](../tests/core_tests/chaingen.cpp)
+  constructed synthetic blocks against pre-rewire flows: it mined
   v1/v2 transactions that v3-from-genesis prevalidation rejects,
   and relies on outputs that the v3 scan path no longer recovers.
   The Track 0a working hypothesis ("Cluster A and Cluster C share

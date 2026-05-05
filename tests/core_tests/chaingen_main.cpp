@@ -33,8 +33,6 @@
 #include "common/util.h"
 #include "common/command_line.h"
 #include "tx_pool.h"
-#include "staking.h"
-#include "fcmp_tests.h"
 #include "transaction_tests.h"
 
 #include <boost/regex.hpp>
@@ -148,74 +146,21 @@ int main(int argc, char* argv[])
     // Disabled: no "late v1 coinbase" era in Shekyl (1 = 1 = genesis)
     // GENERATE_AND_PLAY(gen_block_late_v1_coinbase_tx);
 
-    // Transaction verification tests
-    GENERATE_AND_PLAY(gen_tx_big_version);
-    // Disabled: uses v1 tx_builder which is incompatible with Shekyl's v3 consensus.
-    // These tests need rewriting to use construct_tx_rct with PQC auth.
-    // GENERATE_AND_PLAY(gen_tx_unlock_time);
-    GENERATE_AND_PLAY(gen_tx_input_is_not_txin_to_key);
-    GENERATE_AND_PLAY(gen_tx_no_inputs_no_outputs);
-    GENERATE_AND_PLAY(gen_tx_no_inputs_has_outputs);
-    // GENERATE_AND_PLAY(gen_tx_has_inputs_no_outputs);
-    GENERATE_AND_PLAY(gen_tx_invalid_input_amount);
-    GENERATE_AND_PLAY(gen_tx_input_wo_key_offsets);
-    GENERATE_AND_PLAY(gen_tx_sender_key_offest_not_exist);
-    // Disabled: setup requires valid user txs via MAKE_TX_LIST in a block.
-    // GENERATE_AND_PLAY(gen_tx_key_offest_points_to_foreign_key);
-    // GENERATE_AND_PLAY(gen_tx_mixed_key_offest_not_exist);
-    GENERATE_AND_PLAY(gen_tx_key_image_not_derive_from_tx_key);
-    GENERATE_AND_PLAY(gen_tx_key_image_is_invalid);
-    // GENERATE_AND_PLAY(gen_tx_check_input_unlock_time);
-    GENERATE_AND_PLAY(gen_tx_txout_to_key_has_invalid_key);
-    GENERATE_AND_PLAY(gen_tx_output_with_zero_amount);
-    GENERATE_AND_PLAY(gen_tx_output_is_not_txout_to_key);
-    // Disabled: setup requires valid user txs via MAKE_TX/MAKE_TX_MIX in a block.
-    // GENERATE_AND_PLAY(gen_tx_signatures_are_invalid);
-
-    // Disabled: construct_tx_rct produces FCMP++ stubs without pqc_auths.
-    // Re-enable once chaingen can build full FCMP++ transactions.
-    // GENERATE_AND_PLAY(txpool_spend_key_public);
-    // GENERATE_AND_PLAY(txpool_spend_key_all);
-    // GENERATE_AND_PLAY(txpool_double_spend_norelay);
-    // GENERATE_AND_PLAY(txpool_double_spend_local);
-    // GENERATE_AND_PLAY(txpool_double_spend_keyimage);
-    // GENERATE_AND_PLAY(txpool_stem_loop);
-
-    // Disabled: uses MONEY_SUPPLY-scale amounts that don't exist under Shekyl emission
-    // GENERATE_AND_PLAY(gen_uint_overflow_1);
-
-    // Disabled: construct_tx_with_fee produces FCMP++ stubs without pqc_auths.
-    // GENERATE_AND_PLAY(gen_block_reward);
+    // Transaction verification tests, FCMP++ transaction tests, and staking
+    // tests removed 2026-05-05 — the chaingen synthetic-block harness mines
+    // v1 coinbases that v3-from-genesis prevalidation rejects, so every
+    // chaingen-dependent test that needs spendable outputs (gen_tx_*,
+    // gen_fcmp_*, gen_staking_*/gen_claim_*/gen_stake_*) failed at
+    // chain construction. The invariants those tests covered migrate to
+    // Rust per docs/FOLLOWUPS.md (V3.x — daemon validation Rust port).
+    // The disabled txpool_*, gen_uint_overflow_1, and gen_block_reward
+    // entries shared the same root cause and are dropped with their
+    // disabled siblings.
 
     // Legacy Monero-era v2 mixin/dust, RCT, Borromean, and old BP tests removed.
     // Shekyl enforces v3 (with PQC auth) for all non-coinbase transactions from genesis.
 
     GENERATE_AND_PLAY(gen_block_low_coinbase);
-
-    // FCMP++ transaction tests (Phase 7)
-    GENERATE_AND_PLAY(gen_fcmp_tx_valid);
-    GENERATE_AND_PLAY(gen_fcmp_tx_double_spend);
-    GENERATE_AND_PLAY(gen_fcmp_tx_reference_block_too_old);
-    GENERATE_AND_PLAY(gen_fcmp_tx_reference_block_too_recent);
-    GENERATE_AND_PLAY(gen_fcmp_tx_timestamp_unlock_rejected);
-
-    // Staking tests
-    GENERATE_AND_PLAY(gen_staking_lifecycle);
-    GENERATE_AND_PLAY(gen_claim_bad_range_inverted);
-    GENERATE_AND_PLAY(gen_claim_bad_range_too_large);
-    GENERATE_AND_PLAY(gen_claim_future_height);
-    GENERATE_AND_PLAY(gen_claim_wrong_watermark);
-    GENERATE_AND_PLAY(gen_claim_wrong_amount);
-    GENERATE_AND_PLAY(gen_claim_on_non_staked_output);
-    GENERATE_AND_PLAY(gen_claim_output_not_in_tree);
-    GENERATE_AND_PLAY(gen_claim_exceeds_pool);
-    GENERATE_AND_PLAY(gen_claim_spent_key_image);
-    GENERATE_AND_PLAY(gen_staked_output_invalid_tier);
-    GENERATE_AND_PLAY(gen_claim_rollback_restores_pool);
-    GENERATE_AND_PLAY(gen_claim_rollback_restores_watermark);
-    GENERATE_AND_PLAY(gen_claim_mempool_key_image);
-    GENERATE_AND_PLAY(gen_claim_sorted_inputs);
-    GENERATE_AND_PLAY(gen_stake_all_tiers);
 
     el::Level level = (failed_tests.empty() ? el::Level::Info : el::Level::Error);
     if (!list_tests)

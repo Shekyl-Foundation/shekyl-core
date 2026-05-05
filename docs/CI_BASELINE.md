@@ -58,16 +58,35 @@ cycle.
 | FOLLOWUPS row | V3.1 — `wallet_storage tests pinned to wallet2 hardening-pass` |
 | Close condition | Passes after V3.1 hardening-pass `2l / 2m-keys / 2m-cache` lands, OR closes with `wallet2.cpp` removal at V3.2 — whichever lands first. |
 
-### Cluster C — `core_tests` `gen_tx_*` / `gen_fcmp_*` / `gen_staking_*` — **DEFERRED to V3.1**
+### Cluster C — `core_tests` `gen_tx_*` / `gen_fcmp_*` / `gen_staking_*` — **CLOSED via deletion**
+
+**Status:** Resolved 2026-05-05 by deleting the entire chaingen-dependent test
+surface (`tests/core_tests/{tx_validation,fcmp_tests,staking}.{cpp,h}` and the
+dead `construct_fcmp_tx` / `construct_fcmp_staked_tx` / `apply_fcmp_pipeline`
+helpers in `chaingen.cpp`). Rationale: the cluster's root cause was that the
+chaingen synthetic-block mining infrastructure produces v1 coinbases that
+v3-from-genesis prevalidation rejects, so `fill_tx_sources_and_destinations`
+returns no spendable outputs and no chaingen-dependent test that needs sources
+can construct a transaction. Verified by running `gen_fcmp_tx_valid` (which
+the prior CI baseline did not flag but in fact fails identically) — every
+chaingen-dependent test that exercises tx construction is dead under v3.
+
+The deletion was not a "defer to wallet2 removal" disposition; it is a
+decision to consolidate validation-invariant coverage in Rust (per
+`.cursor/rules/20-rust-vs-cpp-policy.mdc` — tx validation defines a
+cryptographic contract → Rust). Each invariant the deleted tests covered has
+a tracked Rust replacement entry in [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) under
+the V3.x daemon-validation port.
 
 | Field | Value |
 | --- | --- |
-| Tests | `gen_tx_*` (11), `gen_fcmp_*` (5), `gen_staking_*` (3); 19 total |
-| Symptom | `couldn't fill transaction sources` (from `tests/core_tests/chaingen.cpp::fill_tx_sources_and_destinations`) and / or `Block <hash> failed to pass prevalidation`, often preceded by `cn: Shekyl requires tx version >= 3` |
-| Diagnosis | Working hypothesis ("A and C share one root cause") was tested and falsified: spot-check on `gen_tx_big_version` confirmed Cluster C remains red after the Track 0a fix. The harness in `chaingen.cpp` constructs synthetic blocks against pre-rewire flows (mining v1/v2 transactions that v3-from-genesis prevalidation rejects, and relying on outputs that the v3 scan path no longer recovers). It never calls `shekyl_account_public_address_check`. |
-| Why deferred | The chaingen synthetic-block harness is on the wallet2 deletion path. Rebuilding it against v3-only flows is a planned activity for the wallet2 hardening / wallet2 removal cycle, not a Track 0 fix. |
-| FOLLOWUPS row | V3.1 — `core_tests synthetic-block harness rewrite for v3-only flows` |
-| Close condition | Turns green after the chaingen harness is rewritten for v3 flows, OR closes with `wallet2.cpp` removal at V3.2 — whichever lands first. |
+| Tests deleted | All 11 `gen_tx_*`, all 5 `gen_fcmp_*`, all 16 `gen_staking_* / gen_claim_* / gen_stake_*`. 32 tests, ~2200 lines. |
+| Files deleted | `tests/core_tests/{tx_validation,fcmp_tests,staking}.{cpp,h}` |
+| Helpers deleted | `apply_fcmp_pipeline` (static, ~340 lines), `construct_fcmp_tx`, `construct_fcmp_staked_tx` from `chaingen.cpp` (no remaining callers after test deletions). |
+| Original symptom | `couldn't fill transaction sources` (from `tests/core_tests/chaingen.cpp::fill_tx_sources_and_destinations`) and / or `Block <hash> failed to pass prevalidation`, preceded by `cn: Shekyl requires tx version >= 3`. |
+| Root cause | `MAKE_GENESIS_BLOCK` / `REWIND_BLOCKS_N` / `MAKE_NEXT_BLOCK` produce v1 coinbase transactions; the daemon rejects them at `cryptonote_format_utils.cpp:295` (Shekyl requires tx version >= 3). No block ever lands; no spendable output ever exists; no chaingen-dependent test that constructs a tx can pass. |
+| Migration path | Rust unit tests in `shekyl-engine-state` / `shekyl-tx-builder` / `shekyl-fcmp` for the user-facing invariants; daemon-side prevalidation invariants land when wallet2 / cryptonote_core migrate to Rust (V3.x). Tracked per-cluster in FOLLOWUPS.md. |
+| Close commit | (this PR) |
 
 ### Cluster D — `shekyl-oxide divergence` canary — **GREEN as of dev HEAD**
 
