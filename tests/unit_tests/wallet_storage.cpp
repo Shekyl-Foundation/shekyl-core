@@ -36,64 +36,17 @@
 using namespace boost::filesystem;
 using namespace epee::file_io_utils;
 
-static constexpr const char WALLET_00fd416a_PRIMARY_ADDRESS[] =
-    "45p2SngJAPSJbqSiUvYfS3BfhEdxZmv8pDt25oW1LzxrZv9Uq6ARagiFViMGUE3gJk5VPWingCXVf1p2tyAy6SUeSHPhbve";
-
-TEST(wallet_storage, store_to_file2file)
-{
-    GTEST_SKIP() << "Requires missing wallet fixture wallet_00fd416a in tests/data.";
-    const path source_wallet_file = unit_test::data_dir / "wallet_00fd416a";
-    const path interm_wallet_file = unit_test::data_dir / "wallet_00fd416a_copy_file2file";
-    const path target_wallet_file = unit_test::data_dir / "wallet_00fd416a_new_file2file";
-
-    ASSERT_TRUE(is_file_exist(source_wallet_file.string()));
-    ASSERT_TRUE(is_file_exist(source_wallet_file.string() + ".keys"));
-
-    tools::copy_file(source_wallet_file.string(), interm_wallet_file.string());
-    tools::copy_file(source_wallet_file.string() + ".keys", interm_wallet_file.string() + ".keys");
-
-    ASSERT_TRUE(is_file_exist(interm_wallet_file.string()));
-    ASSERT_TRUE(is_file_exist(interm_wallet_file.string() + ".keys"));
-
-    if (is_file_exist(target_wallet_file.string()))
-        remove(target_wallet_file);
-    if (is_file_exist(target_wallet_file.string() + ".keys"))
-        remove(target_wallet_file.string() + ".keys");
-    ASSERT_FALSE(is_file_exist(target_wallet_file.string()));
-    ASSERT_FALSE(is_file_exist(target_wallet_file.string() + ".keys"));
-
-    epee::wipeable_string password("beepbeep");
-
-    const auto files_are_expected = [&]()
-    {
-        EXPECT_FALSE(is_file_exist(interm_wallet_file.string()));
-        EXPECT_FALSE(is_file_exist(interm_wallet_file.string() + ".keys"));
-        EXPECT_TRUE(is_file_exist(target_wallet_file.string()));
-        EXPECT_TRUE(is_file_exist(target_wallet_file.string() + ".keys"));
-    };
-
-    {
-        tools::wallet2 w;
-        w.load(interm_wallet_file.string(), password);
-        const std::string primary_address = w.get_address_as_str();
-        EXPECT_EQ(WALLET_00fd416a_PRIMARY_ADDRESS, primary_address);
-        w.store_to(target_wallet_file.string(), password);
-        files_are_expected();
-    }
-
-    files_are_expected();
-
-    {
-        tools::wallet2 w;
-        w.load(target_wallet_file.string(), password);
-        const std::string primary_address = w.get_address_as_str();
-        EXPECT_EQ(WALLET_00fd416a_PRIMARY_ADDRESS, primary_address);
-        w.store_to("", "");
-        files_are_expected();
-    }
-
-    files_are_expected();
-}
+// Three Monero-era keys-file round-trip tests (`store_to_file2file`,
+// `change_password_same_file`, `change_password_different_file`) and their
+// `wallet_00fd416a` / `wallet_9svHk1` fixtures were removed in this commit.
+// Rationale (per `.cursor/rules/15-deletion-and-debt.mdc`'s "default: delete"):
+// the fixtures are pre-master-seed Monero v0/v1 keys files inherited from
+// upstream; v3-from-genesis Shekyl reads SHKW1 envelopes only, so these
+// fixtures cannot be loaded under any version of the current keystore. The
+// tests had been gated behind `GTEST_SKIP()` for that reason and were
+// providing zero coverage. The mem2file / change_password_mem2file /
+// change_password_in_memory tests below cover the same in-process
+// round-trip paths against fixtures generated under SHKW1.
 
 TEST(wallet_storage, store_to_mem2file)
 {
@@ -139,92 +92,6 @@ TEST(wallet_storage, store_to_mem2file)
 
     EXPECT_TRUE(is_file_exist(target_wallet_file.string()));
     EXPECT_TRUE(is_file_exist(target_wallet_file.string() + ".keys"));
-}
-
-TEST(wallet_storage, change_password_same_file)
-{
-    GTEST_SKIP() << "Requires missing wallet fixture wallet_00fd416a in tests/data.";
-    const path source_wallet_file = unit_test::data_dir / "wallet_00fd416a";
-    const path interm_wallet_file = unit_test::data_dir / "wallet_00fd416a_copy_change_password_same";
-
-    ASSERT_TRUE(is_file_exist(source_wallet_file.string()));
-    ASSERT_TRUE(is_file_exist(source_wallet_file.string() + ".keys"));
-
-    tools::copy_file(source_wallet_file.string(), interm_wallet_file.string());
-    tools::copy_file(source_wallet_file.string() + ".keys", interm_wallet_file.string() + ".keys");
-
-    ASSERT_TRUE(is_file_exist(interm_wallet_file.string()));
-    ASSERT_TRUE(is_file_exist(interm_wallet_file.string() + ".keys"));
-
-    epee::wipeable_string old_password("beepbeep");
-    epee::wipeable_string new_password("meepmeep");
-
-    {
-        tools::wallet2 w;
-        w.load(interm_wallet_file.string(), old_password);
-        const std::string primary_address = w.get_address_as_str();
-        EXPECT_EQ(WALLET_00fd416a_PRIMARY_ADDRESS, primary_address);
-        w.change_password(w.get_wallet_file(), old_password, new_password);
-    }
-
-    {
-        tools::wallet2 w;
-        w.load(interm_wallet_file.string(), new_password);
-        const std::string primary_address = w.get_address_as_str();
-        EXPECT_EQ(WALLET_00fd416a_PRIMARY_ADDRESS, primary_address);
-    }
-
-    {
-        tools::wallet2 w;
-        EXPECT_THROW(w.load(interm_wallet_file.string(), old_password), tools::error::invalid_password);
-    }
-}
-
-TEST(wallet_storage, change_password_different_file)
-{
-    GTEST_SKIP() << "Requires missing wallet fixture wallet_00fd416a in tests/data.";
-    const path source_wallet_file = unit_test::data_dir / "wallet_00fd416a";
-    const path interm_wallet_file = unit_test::data_dir / "wallet_00fd416a_copy_change_password_diff";
-    const path target_wallet_file = unit_test::data_dir / "wallet_00fd416a_new_change_password_diff";
-
-    ASSERT_TRUE(is_file_exist(source_wallet_file.string()));
-    ASSERT_TRUE(is_file_exist(source_wallet_file.string() + ".keys"));
-
-    tools::copy_file(source_wallet_file.string(), interm_wallet_file.string());
-    tools::copy_file(source_wallet_file.string() + ".keys", interm_wallet_file.string() + ".keys");
-
-    ASSERT_TRUE(is_file_exist(interm_wallet_file.string()));
-    ASSERT_TRUE(is_file_exist(interm_wallet_file.string() + ".keys"));
-
-    if (is_file_exist(target_wallet_file.string()))
-        remove(target_wallet_file);
-    if (is_file_exist(target_wallet_file.string() + ".keys"))
-        remove(target_wallet_file.string() + ".keys");
-    ASSERT_FALSE(is_file_exist(target_wallet_file.string()));
-    ASSERT_FALSE(is_file_exist(target_wallet_file.string() + ".keys"));
-
-    epee::wipeable_string old_password("beepbeep");
-    epee::wipeable_string new_password("meepmeep");
-
-    {
-        tools::wallet2 w;
-        w.load(interm_wallet_file.string(), old_password);
-        const std::string primary_address = w.get_address_as_str();
-        EXPECT_EQ(WALLET_00fd416a_PRIMARY_ADDRESS, primary_address);
-        w.change_password(target_wallet_file.string(), old_password, new_password);
-    }
-
-    EXPECT_FALSE(is_file_exist(interm_wallet_file.string()));
-    EXPECT_FALSE(is_file_exist(interm_wallet_file.string() + ".keys"));
-    EXPECT_TRUE(is_file_exist(target_wallet_file.string()));
-    EXPECT_TRUE(is_file_exist(target_wallet_file.string() + ".keys"));
-
-    {
-        tools::wallet2 w;
-        w.load(target_wallet_file.string(), new_password);
-        const std::string primary_address = w.get_address_as_str();
-        EXPECT_EQ(WALLET_00fd416a_PRIMARY_ADDRESS, primary_address);
-    }
 }
 
 TEST(wallet_storage, change_password_in_memory)
