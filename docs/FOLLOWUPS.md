@@ -40,6 +40,32 @@ citing in a review.
   returns only the generated header's include guard. Target: V3.0,
   post-stressnet, pre-audit-final.
 
+- **`wallet_storage`: cover loaded-wallet save-as branches in
+  `wallet2::store_to`.** When `fix/wallet-storage-test` deleted the
+  three Monero-era keys-file fixtures and their `GTEST_SKIP()`-gated
+  tests (`store_to_file2file`, `change_password_same_file`,
+  `change_password_different_file`), two `store_to` branches lost
+  their only direct unit-test coverage even though the surviving
+  `store_to_mem2file` / `change_password_mem2file` /
+  `change_password_in_memory` cases superficially look similar:
+    - `!same_file && !force_rewrite_keys` save-as on a *loaded*
+      wallet (the surviving tests run on freshly-`generate()`'d
+      wallets only).
+    - `same_file && force_rewrite_keys` rewrite-keys-in-place on a
+      *loaded* wallet.
+  Both branches still execute on the production load → re-store
+  path, but no unit test exercises them directly. Add two new tests
+  that (a) `generate()` a wallet to disk under SHKW1, (b) `load()`
+  it into a fresh `wallet2`, then (c) drive each branch. Block on
+  this *only if* it doesn't conflict with the V3.2 wallet2 → Rust
+  cutover schedule; if the cutover lands first, the gap retires
+  with `wallet2.cpp` itself and the entry closes as won't-fix.
+  Cross-references: `tests/unit_tests/wallet_storage.cpp` deletion
+  comment around line 126; `docs/CI_BASELINE.md` Cluster B; the
+  Copilot review on PR #27 that surfaced the gap. Target: V3.0
+  pre-stressnet, or retired by the V3.2 cutover, whichever comes
+  first.
+
 - **Stage 1 performance baseline measurement before Stage 1 PRs land.**
   The §3.3 *interior-mutability measurement gate* in
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)

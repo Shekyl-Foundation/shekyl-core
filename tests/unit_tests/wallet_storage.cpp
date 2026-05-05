@@ -131,9 +131,30 @@ static_assert(
 // upstream; v3-from-genesis Shekyl reads SHKW1 envelopes only, so these
 // fixtures cannot be loaded under any version of the current keystore. The
 // tests had been gated behind `GTEST_SKIP()` for that reason and were
-// providing zero coverage. The mem2file / change_password_mem2file /
-// change_password_in_memory tests below cover the same in-process
-// round-trip paths against fixtures generated under SHKW1.
+// providing zero coverage.
+//
+// **Residual coverage gap (acknowledged, not closed by this branch):** the
+// deleted tests were the only coverage for two `wallet2::store_to`
+// branches, even gated/skipped:
+//
+//   - `store_to_file2file` exercised `store_to(target, password, false)`
+//     with `target != m_wallet_file` on a wallet that had been *loaded*
+//     from disk (not just generated in-memory). This is the
+//     `!same_file && force_rewrite_keys == false` save-as-from-loaded
+//     branch, which the surviving `store_to_mem2file` test does not
+//     reach — that test uses a wallet that was just `generate()`'d.
+//   - `change_password_same_file` exercised `store_to(m_wallet_file,
+//     new_password, true)` on a loaded wallet — the
+//     `same_file && force_rewrite_keys == true` rewrite-keys-in-place
+//     branch. The surviving `change_password_mem2file` is also from a
+//     freshly-generated wallet, not a loaded one.
+//
+// Both branches still execute on the production load→re-store path; they
+// are simply uncovered by direct unit test. Filed as a V3.0 entry under
+// FOLLOWUPS.md ("wallet_storage: cover loaded-wallet save-as branches"),
+// targeted to land before the wallet2 → Rust cutover deletes wallet2.cpp
+// outright (V3.2). At that point the residual gap retires with the
+// surrounding code.
 
 TEST(wallet_storage, store_to_mem2file)
 {
