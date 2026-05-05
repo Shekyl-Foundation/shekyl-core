@@ -2,7 +2,107 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **C++/Rust FFI constant disagreement broke every wallet round-trip
+  on every network.** `src/shekyl/shekyl_ffi.h` defined
+  `SHEKYL_CLASSICAL_ADDRESS_BYTES = 64` while authoritative
+  `rust/shekyl-crypto-pq/src/account.rs::CLASSICAL_ADDRESS_BYTES =
+  1 + 32 + 32 = 65`. Because `ShekylAllKeysBlob` is `#[repr(C)]` with
+  byte-aligned `[u8; N]` arrays, the 1-byte deficit shifted every
+  later field's offset by one. C++ `populate_account_from_blob` read
+  `spend_sk` and `view_sk` from the wrong bytes; the resulting
+  non-canonical Ed25519 scalars failed `sc_check` inside
+  `secret_key_to_public_key`, so `verify_keys` returned false and
+  every `wallet2::load` threw `error::wallet_files_doesnt_correspond`.
+  Header constant set to `65`. **Bug 1 of 2 surfaced by
+  `wallet_storage.{store_to_mem2file, change_password_mem2file}`.**
+  See `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+
+- **C++/Rust FFI constant disagreement caused every RAW32 wallet to
+  silently mis-encode its `seed_format` byte.** `src/shekyl/shekyl_ffi.h`
+  defined `SHEKYL_SEED_FORMAT_BIP39 = 0` / `_RAW32 = 1` while
+  authoritative `rust/shekyl-crypto-pq/src/account.rs` defines
+  `SEED_FORMAT_BIP39 = 0x01` / `SEED_FORMAT_RAW32 = 0x02` (with `0`
+  reserved for "unset"). C++ wrote `m_seed_format = 1` to disk
+  meaning RAW32; on `wallet2::load`, the FFI received `seed_format =
+  1` and Rust decoded it as `Bip39`; `permitted_seed_format(Fakechain,
+  Bip39)` returned `false`; the rederive returned `false` with
+  `"(network, seed_format) pair disallowed or derivation
+  inconsistent"`. The BIP-39 path was equally broken (both sides
+  held `0`, which Rust rejected as "unset") but had no test
+  exercising it at the C++/FFI layer — the bug went undetected for
+  the entire window during which Bug 1 was masking it. Header
+  constants set to `1` / `2`. **Bug 2 of 2.** Pre-V3 launch: no
+  on-disk wallets exist, so no migration code is required. See
+  `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+
+- **`wallet_storage` round-trip tests now construct `wallet2` with
+  `cryptonote::FAKECHAIN`.** `wallet2::generate(name, password)`
+  routes through the legacy `account_base::generate()` test wrapper,
+  which hardcodes `FAKECHAIN` for raw-seed derivation regardless of
+  the wallet's `m_nettype`. The default-constructed `wallet2`
+  inherited `MAINNET`, so the rederive on `load` passed `MAINNET`,
+  which doesn't permit `RAW32`. Tests now use `tools::wallet2
+  w(cryptonote::FAKECHAIN, 1, true)` to keep the in-memory derivation
+  network and the on-disk rederive network aligned. The same
+  hardcoded-FAKECHAIN footgun in `account_base::generate()`'s
+  production callers (`wallet2::generate(name, password [, recovery,
+  ...])` and `wallet_rpc_server::stop_background_sync`) is tracked
+  separately as **Bug 4** in
+  `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`, slated for
+  the sibling branch `fix/legacy-account-generate-network-guard`.
+
+### Removed
+
+- **Monero-era keys-file fixtures and unconditionally-skipped
+  `wallet_storage` tests deleted.** The `tests/data/wallet_00fd416a*`
+  and `tests/data/wallet_9svHk1*` fixtures were inherited from
+  upstream Monero and predate the SHKW1 master-seed envelope
+  entirely; they cannot be loaded under any version of the
+  v3-from-genesis keystore. The three tests that referenced them
+  (`wallet_storage.{store_to_file2file, change_password_same_file,
+  change_password_different_file}`) had been gated behind
+  `GTEST_SKIP()` for that reason and were providing zero coverage.
+  Per `.cursor/rules/15-deletion-and-debt.mdc`'s "default: delete":
+  4 fixture files (~2.3 MB) and 3 skipped tests removed.
+
 ### Added
+
+- **Mechanical FFI constant equality-assertion tests
+  (`rust/shekyl-ffi/src/account_ffi.rs::tests`).**
+  `ffi_classical_address_bytes_matches_rust_authority` and
+  `ffi_seed_format_constants_match_rust_authority` pin the FFI
+  re-exports to the authoritative
+  `rust/shekyl-crypto-pq/src/account.rs` constants. These run on
+  every `cargo test -p shekyl-ffi` and would have caught Bug 1 / Bug
+  2 the moment either side was edited. Reduced-scope `cbindgen`-style
+  generator follow-up (`chore/cbindgen-consensus-constants`) extends
+  the same prevention to the consensus-affecting constants
+  (`RCTTypeFcmpPlusPlusPqc`, `FCMP_REFERENCE_BLOCK_*_AGE`,
+  `ADDRESS_VERSION_V1`); full migration of the remaining ~40 fail-
+  closed-on-misuse constants is filed as FOLLOWUPS V3.0 (target
+  pre-audit-final).
+
+- **`tests/unit_tests/account.cpp` — BIP-39 + MAINNET coverage.**
+  Four new tests close the only path Bug 2 broke that the existing
+  test surface didn't exercise:
+  `rederive_from_bip39_reproduces_account_mainnet` (full BIP-39
+  derive + rederive round-trip via `account_base`),
+  `bip39_passphrase_changes_account_mainnet` (passphrase isolation),
+  `generate_from_bip39_rejects_fakechain` and
+  `generate_from_raw_seed_rejects_mainnet` (consensus-level
+  `(network, format)` matrix invariants). The `wallet2`-level
+  BIP-39 entry point that would let the test use the production API
+  end-to-end does not yet exist — see Bug 4 above.
+
+- **`docs/audit_trail/2026-05-ffi-constant-drift-audit.md` — one-page
+  audit record.** Documents the wallet_storage failure trace, the
+  Bug 1 / Bug 2 / Bug 3 / Bug 4 findings, the 43 constants confirmed
+  aligned, and the prevention work pattern (per-PR equality
+  assertions in this branch, reduced-scope generated header in the
+  cbindgen sibling, full migration in V3.0). Audit-quality artifact
+  for the August external review.
 
 - **`LedgerEngine` trait extracted; `Engine<S, D>` parameterized
   over `L: LedgerEngine` with default `LocalLedger` (Stage 1 PR 2,

@@ -45,18 +45,29 @@ cycle.
 | Diagnosis | Parameter-order mismatch between Rust definition (`pqc_pk, view_pk`) and C-side declaration / caller (`view_pub, pqc_public_key`). Introduced at `0092a8da1`, surfaced at the `30db140fe` rewire merge. |
 | Close commit | `1d6de1bae` |
 
-### Cluster B — `wallet_storage.{store_to_mem2file, change_password_mem2file}` — **DEFERRED to V3.1**
+### Cluster B — `wallet_storage.{store_to_mem2file, change_password_mem2file}` — **CLOSED via fix**
+
+**Status:** Resolved 2026-05-05 by fixing two C++/Rust constant disagreements
+in `src/shekyl/shekyl_ffi.h`. Earlier triage rounds (2026-04-28 daemon-fragility
+hypothesis; 2026-05-04 wallet2-hardening-pass deferral; 2026-05-05 morning
+view-secret-rederive hypothesis) were each falsified by closer inspection.
+The actual root cause was discovered by tracing `shekyl_account_rederive`
+inside the FFI: C++ passed `seed_format=1` meaning RAW32, Rust decoded `1`
+as BIP39, the `(Fakechain, Bip39)` pair is correctly rejected by
+`permitted_seed_format`, and the rederive returned `false`.
 
 | Field | Value |
 | --- | --- |
 | Tests | `wallet_storage.store_to_mem2file`, `wallet_storage.change_password_mem2file` |
-| Symptom | `boost::system::system_error` from `epee::net_utils::direct_connect::operator()` during what should be a pure file-storage test |
-| Stack origin | `wallet2::generate("", password)` → `estimate_blockchain_height()` → `get_daemon_blockchain_target_height()` → `NodeRPCProxy::get_target_height()` → `get_info()`; default-constructed `wallet2` has `m_offline = false` so the offline short-circuit doesn't fire |
-| Diagnosis | The behavior is **not** a rewire-introduced regression. `estimate_blockchain_height()` has called the daemon since the Monero era (commits `a2e4b5a96`, `5e18005ff`); the test is fragile because it constructs a default wallet without `set_offline(true)` on a host with no daemon. The rewire's wallet-key-persistence regression masked this fragility for a window (commit `8167c1502` documented the test as failing with a different proximate cause); subsequent work moved past that cause and exposed the underlying TCP attempt. |
-| Why deferred (rather than test-only `set_offline(true)` band-aid) | The CHANGELOG already pins the wallet2 hardening-pass commits `2l / 2m-keys / 2m-cache` as the structural close target. Landing a test-only fix here would mask the regression the hardening pass exists to address end-to-end. Per `15-deletion-and-debt.mdc`, "treat as structural and defer." |
-| Behavior change for end users? | **No.** End users running `wallet2::generate` against a real daemon don't see this; the framing in the Track 0 plan ("wallet init now reaches the network unconditionally") was based on an assumption the investigation falsified. |
-| FOLLOWUPS row | V3.1 — `wallet_storage tests pinned to wallet2 hardening-pass` |
-| Close condition | Passes after V3.1 hardening-pass `2l / 2m-keys / 2m-cache` lands, OR closes with `wallet2.cpp` removal at V3.2 — whichever lands first. |
+| Final symptom | C++ exception `"shekyl_account_rederive failed: (network, seed_format) pair disallowed or derivation inconsistent"` thrown from `account_base::rederive_from_master_seed` during `wallet2::load`. |
+| Root cause #1 | `SHEKYL_CLASSICAL_ADDRESS_BYTES = 64` in `src/shekyl/shekyl_ffi.h` vs `CLASSICAL_ADDRESS_BYTES = 65` (`1 (version) || 32 (spend_pk) || 32 (view_pk)`) in `rust/shekyl-crypto-pq/src/account.rs`. Because `ShekylAllKeysBlob` is `#[repr(C)]` with byte-aligned `[u8; N]` arrays, the 1-byte deficit shifted every later field's offset. C++ read `spend_sk` and `view_sk` from the wrong bytes; the resulting non-canonical scalars failed `sc_check` inside `secret_key_to_public_key`. |
+| Root cause #2 | `SHEKYL_SEED_FORMAT_BIP39 = 0`, `SHEKYL_SEED_FORMAT_RAW32 = 1` in `src/shekyl/shekyl_ffi.h` vs authoritative Rust `SEED_FORMAT_BIP39 = 0x01`, `SEED_FORMAT_RAW32 = 0x02` in `rust/shekyl-crypto-pq/src/account.rs`. C++ stored `m_seed_format = 1` meaning RAW32; on `wallet2::load` the FFI passed `1` to Rust, which decoded `1` as BIP39 and rejected `(Fakechain, Bip39)`. The BIP-39 path accidentally round-tripped (both sides held `0` for that case) which is why the bug went unnoticed in earlier mainnet-shaped tests. |
+| Test-side root cause | `wallet2::generate("", password)` routes through `account_base::generate()`, the legacy 0-arg test wrapper that hardcodes `FAKECHAIN` for raw-seed derivation. The tests had previously instantiated `tools::wallet2 w;` (default-constructed → `MAINNET`), so the rederive on `load` passed `MAINNET`, which doesn't permit `RAW32`. Now uses `tools::wallet2 w(cryptonote::FAKECHAIN, 1, true)`. |
+| Why earlier hypotheses were wrong | (a) The original 2026-04-28 daemon-fragility narrative misread a stack trace from a window when commit `8167c1502` had a separate wallet-key-persistence bug. Adding `set_offline(true)` does not fix the failure on current `dev`. (b) The 2026-05-04 deferral to the wallet2 hardening-pass attached the failure to unrelated upcoming work. (c) The intermediate "view_secret does not derive to view_public on round-trip" hypothesis correctly identified a corrupted `ShekylAllKeysBlob` but mis-located it in the rederive step rather than in the FFI struct layout itself. |
+| Verification | `wallet_storage.*` 3 PASSED, 0 SKIPPED, 0 failed (the three previously-skipped Monero-era keys-file fixtures and their tests were deleted in the same branch — see CHANGELOG `### Removed`). `account.*` 6 PASSED, 0 failed (the 4 new entries cover BIP-39 + MAINNET — `rederive_from_bip39_reproduces_account_mainnet`, `bip39_passphrase_changes_account_mainnet`, `generate_from_bip39_rejects_fakechain`, `generate_from_raw_seed_rejects_mainnet`). Rust: `shekyl-crypto-pq` 215/215, `shekyl-ffi` (incl. signing FFI round-trip and the two new FFI constant equality assertions, `ffi_classical_address_bytes_matches_rust_authority` and `ffi_seed_format_constants_match_rust_authority`) all green, `shekyl-engine-file` 55/55. |
+| Migration concern? | None. Pre-V3 launch (per `15-deletion-and-debt.mdc`), no on-disk wallets exist. The BIP-39 path was previously by-luck self-consistent (`0 == 0` on both sides) and is now still self-consistent under the corrected `1` value, so nothing pre-existing needs migration. |
+| Audit-trail doc | [`docs/audit_trail/2026-05-ffi-constant-drift-audit.md`](./audit_trail/2026-05-ffi-constant-drift-audit.md) records the full hand-audit of all 47 cross-language constants performed at the same time, plus Bug 3 (`FCMP_REFERENCE_BLOCK_MIN_AGE` 5/10 drift, sibling branch `fix/fcmp-min-age-multisig-drift`) and Bug 4 (no `wallet2::generate_from_bip39` entry point — `account_base::generate()` hardcodes `FAKECHAIN`, sibling branch `fix/legacy-account-generate-network-guard`). Reduced-scope `cbindgen`-style prevention work in `chore/cbindgen-consensus-constants`; full migration tracked under FOLLOWUPS V3.0. |
+| Close commit | (this PR) |
 
 ### Cluster C — `core_tests` `gen_tx_*` / `gen_fcmp_*` / `gen_staking_*` — **CLOSED via deletion**
 
