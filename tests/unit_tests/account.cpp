@@ -200,7 +200,7 @@ TEST(account, bip39_passphrase_changes_account_mainnet)
 // refuse RAW32. The FFI returns false on a disallowed pair; account_base
 // throws. This test pins the consensus-level acceptance matrix at the C++
 // boundary so a future "loosen the matrix" change has to update the test.
-TEST(account, generate_from_bip39_rejects_fakechain)
+TEST(account, generate_from_bip39_rejects_fakechain_and_testnet)
 {
   static constexpr const char *kZeroEntropyMnemonic =
       "abandon abandon abandon abandon abandon abandon "
@@ -215,7 +215,7 @@ TEST(account, generate_from_bip39_rejects_fakechain)
       kZeroEntropyMnemonic, std::string{}, cryptonote::TESTNET));
 }
 
-TEST(account, generate_from_raw_seed_rejects_mainnet)
+TEST(account, generate_from_raw_seed_rejects_mainnet_and_stagenet)
 {
   uint8_t raw_seed[SHEKYL_RAW_SEED_BYTES] = {};
   cryptonote::account_base account;
