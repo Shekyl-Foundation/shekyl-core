@@ -8273,19 +8273,26 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       cryptonote::account_base dummy;
       // Intentionally derives on FAKECHAIN regardless of the wallet's
       // `m_nettype`. This dummy account is a one-shot transient — only
-      // its `m_account_address` is used (as a stand-in 0-amount
-      // destination to avoid revealing which input is real). The secret
-      // keys are discarded and never need to round-trip. On MAINNET /
-      // STAGENET the resulting address is FAKECHAIN-format, which would
-      // be visible on-wire but doesn't break consensus (the daemon
-      // doesn't validate destination address network membership).
-      // Properly network-matching the dummy would require a BIP-39 path
-      // here (RAW32 isn't permitted on MAINNET / STAGENET) — out of
-      // scope for the Bug 4-adjacent fix. Tracked in FOLLOWUPS V3.2:
-      // "wallet2 0-change dummy address generation needs network-aware
-      // path or migration to a deterministic burn address". The 4-arg
-      // call form with explicit FAKECHAIN replaced the legacy 3-arg
-      // overload's hidden default at V3.0; behavior is identical.
+      // its public keys (view_pk, spend_pk, pqc_pk) are used to derive
+      // the 0-amount output's one-time output key + ML-KEM ciphertext;
+      // the dummy's secret keys are discarded immediately after.
+      //
+      // The transaction serializes the derived output key and the PQC
+      // ciphertext, not any human-readable address or network prefix —
+      // so the FAKECHAIN-vs-other-network choice has no observable
+      // on-wire effect. It only selects which HKDF salt drives the
+      // dummy's internal key derivation; the resulting output is
+      // unspendable for everyone (the dummy's secret keys are never
+      // retained by anyone), which is the whole point of a 0-change
+      // dummy destination.
+      //
+      // FAKECHAIN is required here because RAW32 is not permitted on
+      // MAINNET / STAGENET by `account_base::generate(..., nettype)`.
+      // A future refactor to a deterministic per-network burn address
+      // would remove the per-tx randomness from this call and save a
+      // derivation; tracked in FOLLOWUPS V3.2. The 4-arg call form
+      // with explicit FAKECHAIN replaced the legacy 3-arg overload's
+      // hidden default at V3.0; behavior is identical.
       dummy.generate(crypto::secret_key{}, /*recover=*/false,
                      /*two_random=*/false, cryptonote::FAKECHAIN);
       change_dts.addr = dummy.get_keys().m_account_address;

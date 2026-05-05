@@ -1055,24 +1055,28 @@ its wake.
   with `wallet_storage.cpp`; the Rust BIP-39 round-trip test is the
   only remaining functional artifact, which is correct.
 
-- **`wallet2` 0-change dummy-destination address generation needs a
-  network-aware path or migration to a deterministic burn address.**
+- **`wallet2` 0-change dummy-destination address generation should
+  migrate to a deterministic per-network burn address.**
   `src/wallet/wallet2.cpp::transfer_selected_rct` calls the
   network-aware `account_base::generate(...)` overload with
   `cryptonote::FAKECHAIN` hardcoded to produce a dummy
   `account_public_address` for 0-change destinations (a one-shot
-  transient: only the address is used, secret keys discarded). On
-  non-FAKECHAIN wallets this produces a FAKECHAIN-formatted address
-  embedded in a non-FAKECHAIN transaction's destination field. It
-  does NOT break consensus (the daemon doesn't validate destination
-  address network membership) but it does leak a network-mismatch
-  tell to anyone parsing the output. Properly network-matching the
-  dummy would require a BIP-39 path here (RAW32 isn't permitted on
-  MAINNET / STAGENET), regressing transfers with exactly-zero
-  change. The fix wants either (a) a BIP-39 path here, (b) a
-  deterministic burn address per network (preferable: removes the
-  per-tx randomness and saves a derivation), or (c) an architectural
-  change that removes the 0-change-dummy pattern entirely.
+  transient: only the public keys feed the output's one-time key +
+  ML-KEM ciphertext derivation; the dummy's secret keys are
+  discarded). The transaction serializes only the derived output
+  key and PQC ciphertext, not any human-readable address or network
+  prefix, so the FAKECHAIN-vs-other-network choice has **no
+  observable on-wire effect** — it only selects the HKDF salt
+  driving the dummy's internal key derivation, and the resulting
+  output is unspendable for everyone (the dummy's secret keys are
+  never retained). FAKECHAIN is required here today because RAW32
+  isn't permitted on MAINNET / STAGENET by the network-aware
+  generator. The fix wants either (a) a deterministic per-network
+  burn address (preferable: removes the per-tx randomness from the
+  dummy slot and saves a derivation per transfer), or (b) an
+  architectural change that removes the 0-change-dummy pattern
+  entirely. This is an efficiency / cleanliness item, not a
+  correctness or privacy bug.
 
   **Closure point:** Phase 4 of the Rust rewrite (transaction
   construction migration). The `splitted_dsts` 0-change path lives
