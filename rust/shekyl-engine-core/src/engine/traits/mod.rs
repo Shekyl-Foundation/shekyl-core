@@ -37,5 +37,7 @@
 //! [`docs/FOLLOWUPS.md`]: ../../../../../docs/FOLLOWUPS.md
 
 pub(crate) mod daemon;
+pub(crate) mod ledger;
 
 pub(crate) use daemon::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
+pub(crate) use ledger::LedgerEngine;

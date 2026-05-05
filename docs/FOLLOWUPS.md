@@ -338,6 +338,27 @@ citing in a review.
 
 ## V3.1 — audit response and stressnet gates
 
+- **`Engine::ledger()` accessor cleanup.** Stage 1 PR 2 (commit
+  `8632b8692`) preserved the previously-public `Engine::ledger()
+  -> &WalletLedger` accessor by replacing the field projection
+  with a `pub fn ledger(&self) -> LedgerReadGuard<'_>` wrapper
+  that holds the `LocalLedger`'s read lock for the borrow's
+  lifetime. Pre-flight surveyed every Rust workspace
+  (`shekyl-core`, `shekyl-gui-wallet`, `shekyl-dev`,
+  `shekyl-web`, `shekyl-mobile-wallet`, `monero-oxide`) and found
+  zero remaining callers; the wrapper exists to absorb any
+  external downstream binder that might still reference the
+  accessor by name. At V3.1, re-survey the workspace and (a) if
+  no caller has emerged, delete `Engine::ledger()` and
+  `LedgerReadGuard` outright per
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)'s
+  "default: delete" rule; (b) if a caller has emerged, document
+  the use case in this file and re-evaluate the lifetime of the
+  wrapper. The path of least surprise is (a). Cross-references:
+  Stage 1 PR 2 commit 2 pre-flight survey;
+  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  §7. Target: V3.1.
+
 - **PQC Multisig V3.1: external adversarial review (Phase 5).**
   Round 4 wargame against the V3.1 multisig implementation per
   `PQC_MULTISIG_V3_1_ANALYSIS.md` §5.4. Review targets:
@@ -1529,6 +1550,107 @@ one place to confirm each item's relationship to the wallet stack.
 ---
 
 ## V3.x — staker archival and visualization ship
+
+- **Sync refresh wrapper generalization over `L: LedgerEngine`.**
+  Stage 1 PR 2 generalized `Engine::start_refresh` and the
+  producer task `run_refresh_task` over `L: LedgerEngine` —
+  sufficient generalization for the hybrid retry test to dispatch
+  through the trait against `MockLedger`. The synchronous wrappers
+  `Engine::refresh` and `Engine::refresh_with` retain their
+  `LocalLedger`-specialized impl block because the trait method
+  `LedgerEngine::apply_scan_result` is `async fn` and the sync
+  entry points use `LocalLedger::write()`'s inherent (synchronous)
+  guard directly. Threading a Tokio runtime handle through the
+  sync wrappers, or alternatively introducing a sync-mutator
+  surface on the trait (`fn apply_scan_result_blocking(&self,
+  …)`), would generalize the wrappers over `L`. Either path
+  requires its own design pass — neither is required for any
+  Stage 1 PR's hybrid coverage, and both would expand the
+  trait-surface attack area without an immediate consumer. Queued
+  at V3.x; resolved by either a runtime-handle threading story
+  (likely co-landing with Stage 4 actor wiring, where `kameo` is
+  already in scope and the runtime handle is available) or an
+  alternative trait-shape decision.   Cross-references:
+  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  §1.2 (partial-generalization framing) and §7 (out-of-scope
+  refinement). Target: V3.x.
+
+- **`run_refresh_task` holds the engine read-guard across
+  `apply_scan_result.await`.** Stage 1 PR 2's `run_refresh_task`
+  in `engine/refresh.rs` performs the merge dispatch as
+  `{ let g = engine_arc.read().await; g.ledger.apply_scan_result
+  (result).await }`, holding the outer `tokio::sync::RwLock` read
+  guard on `Engine` for the duration of the trait-method future.
+  This is correct for Stage 1's `LocalLedger` and `MockLedger`
+  implementors, both of whose `apply_scan_result` futures are
+  wholly synchronous bodies (no `.await`) so the engine read-guard
+  is held only as long as a synchronous merge call would take.
+  Stage 4's actor-backed `LedgerEngine` implementor (per
+  [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §1.5 / §2.8) will route through a `kameo` `ask` that genuinely
+  awaits, which would extend the engine read-guard hold time and
+  could starve writers waiting on the engine write-lock. The fix
+  shape is to decouple the merge-future construction from the
+  outer engine guard: clone an `Arc<L>` (where `L: LedgerEngine`
+  is reachable through the `Engine` field via shared ownership) so
+  the outer guard can be dropped before the trait-method future is
+  awaited. Today the `Engine` owns `L` directly rather than through
+  `Arc<L>`, so the refactor lands with Stage 4's actor wiring
+  (where the `Arc<ActorRef<…>>` shape is the natural fit and the
+  ownership rework happens once for all per-trait implementors,
+  not per-trait). Surfaced via Copilot review on PR #26 (Stage 1
+  PR 2). Cross-references:
+  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  §3.4 (engine ownership of `L`) and §5 commit-7 row
+  (refresh-path generalization scope). Target: V3.x — co-lands
+  with Stage 4 `LedgerEngine` actor cutover.
+
+- **`LedgerReadGuard` field type leaks crate-private
+  `LedgerState`.** Stage 1 PR 2's `LedgerReadGuard` in
+  `engine/mod.rs` carries a `std::sync::RwLockReadGuard<'a,
+  LedgerState>` field, where `LedgerState` is `pub(crate)` in
+  `engine/local_ledger.rs`. The field itself is private (no
+  `pub`), so the `private_interfaces` lint does not fire today —
+  the `pub(crate)` type only appears in private field positions,
+  not in the public API surface. However, two related concerns
+  remain visible: (a) `cargo doc --document-private-items` emits
+  a "public documentation for `LedgerReadGuard` links to private
+  item `local_ledger::LedgerState`" warning when the doc comment
+  references `LedgerState` via intra-doc link (the doc-link was
+  removed in the Copilot review-2 commit, but the underlying
+  field-type structure still names the private type); and (b) a
+  future stricter Rust edition or lint-policy change could promote
+  `private_interfaces` to flag any private-type appearance in a
+  public struct's body, including private fields. The fix shape
+  is to project the inner guard directly to `WalletLedger` so
+  `LedgerState` no longer appears in the field type. Two
+  candidate paths:
+
+  1. **`std::sync::RwLockReadGuard::map`** — once the
+     `mapped_lock_guards` feature stabilizes (tracked at
+     [rust-lang/rust#117108](https://github.com/rust-lang/rust/issues/117108)),
+     `MappedRwLockReadGuard<'a, WalletLedger>` becomes the
+     stable-only field type and the structural concern is
+     fully resolved without adding a dependency.
+  2. **`parking_lot::RwLock`** — switching `LocalLedger`'s
+     state lock to `parking_lot::RwLock` gives us
+     `MappedRwLockReadGuard` immediately, but adds a new direct
+     dependency to the engine crate (today `parking_lot` is a
+     transitive dep only). The dependency cost is borderline
+     acceptable for a single guard projection; if other
+     parking_lot features prove useful (e.g., poisoning-free
+     locks, fairness controls) the case strengthens.
+
+  Surfaced via Copilot review on PR #26 (Stage 1 PR 2). The
+  workaround in PR 2 is the doc-only fix: drop the broken
+  intra-doc link target so the rustdoc warning silences while
+  the field-type structure stays the same. Cross-references:
+  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  §3.4 (engine ownership / visibility decision tree).
+  Target: V3.x — gated on `mapped_lock_guards` stabilization
+  (preferred) or a separate decision to adopt
+  `parking_lot::RwLock` workspace-wide (alternative). No
+  hard deadline; not blocking any consumer or audit finding.
 
 - **Stage 4 lifecycle async cutover requires `CHANGELOG.md`
   flagging.** Per

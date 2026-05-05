@@ -92,6 +92,7 @@ use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SubaddressIndex};
 
 use crate::engine::{
     error::{PendingTxError, SendError},
+    local_ledger::LocalLedger,
     traits::DaemonEngine,
     Engine, EngineSignerKind,
 };
@@ -452,9 +453,17 @@ pub(crate) fn discard_pending_tx_in_state(
 // ---------------------------------------------------------------------------
 
 // `D: DaemonEngine` private-bound: see the rationale on the
-// `pub struct Engine` definition in `engine/mod.rs`.
+// `pub struct Engine` definition in `engine/mod.rs`. The
+// `L = LocalLedger` specialization is intentional: `build_pending_tx`
+// and `submit_pending_tx` borrow the `WalletLedger` directly through
+// `self.ledger.read()` / `self.ledger.write()`, which are
+// `LocalLedger` inherent methods. The `LedgerEngine` trait surface
+// does not yet expose borrowed-state read/write accessors; once a
+// future commit (Stage 4 design space — see the Phase 0c amendment
+// in `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.2) adds them, this
+// block generalizes to `impl<S, D, L: LedgerEngine>`.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
+impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
     /// Number of in-flight reservations on this wallet handle.
     ///
     /// `Engine::close` (lifecycle commit) calls this and refuses with
@@ -487,12 +496,15 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     /// - [`SendError::InsufficientFunds`] when the available
     ///   non-reserved spendable balance cannot cover `amount + fee`.
     pub fn build_pending_tx(&mut self, request: &TxRequest) -> Result<PendingTx, SendError> {
+        let guard = self.ledger.read();
         build_pending_tx_in_state(
-            &self.ledger.ledger,
+            &guard.ledger.ledger,
             &mut self.reservations,
             &mut self.next_reservation_id,
             request,
         )
+        // `guard` is dropped at end of expression, releasing the
+        // LocalLedger read lock once the result has been computed.
     }
 
     /// Submit a [`PendingTx`] handle.
@@ -509,8 +521,9 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     /// replaces this body with a real broadcast call. The invariant
     /// checks themselves are the same in both phases.
     pub fn submit_pending_tx(&mut self, id: ReservationId) -> Result<TxHash, PendingTxError> {
+        let mut guard = self.ledger.write();
         submit_pending_tx_in_state(
-            &mut self.ledger.ledger,
+            &mut guard.ledger.ledger,
             &mut self.reservations,
             self.network,
             id,

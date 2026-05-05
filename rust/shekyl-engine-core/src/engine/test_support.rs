@@ -24,6 +24,21 @@
 //!   (consumed as `&MockDaemon: Rpc` by `produce_scan_result`)
 //!   and the hybrid `Engine<SoloSigner, MockDaemon>` tests
 //!   (consumed as the engine's `D: DaemonEngine` slot).
+//! - [`MockLedger`]: deterministic in-memory implementor of the
+//!   crate-internal `LedgerEngine` Stage 1 trait. Holds the same
+//!   `(WalletLedger, LedgerIndexes)` aggregate as
+//!   [`super::local_ledger::LocalLedger`] and runs the same merge
+//!   body via [`super::merge::apply_scan_result_to_state`], so
+//!   `synced_height` / `snapshot` / `balance` projections behave
+//!   functionally identically. The added affordance is failure
+//!   injection: `queue_concurrent_mutation` enqueues one
+//!   `RefreshError::ConcurrentMutation` for the next
+//!   `apply_scan_result` call (drained FIFO), which is the §5.2
+//!   retry-contract surface PR 2's hybrid test exercises (commit
+//!   7). Per design doc §3.5, richer failure modes (sequenced
+//!   queues, terminal errors, delayed responses) are deliberately
+//!   out of scope: they are added when a later PR's hybrid test
+//!   needs them.
 //! - [`make_synthetic_block`]: minimal-valid `ScannableBlock`
 //!   constructor (V2 miner transaction with `Input::Gen`, no
 //!   regular outputs, no non-miner transactions). Tests that need
@@ -71,12 +86,18 @@ use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use sha2::Sha256;
 
+use shekyl_engine_state::{LedgerIndexes, WalletLedger};
 use shekyl_oxide::block::{Block, BlockHeader};
 use shekyl_oxide::transaction::{Input, Timelock, Transaction, TransactionPrefix};
 use shekyl_rpc::{FeeRate, Rpc, RpcError, ScannableBlock};
+use shekyl_scanner::{BalanceSummary, LedgerBlockExt};
 
+use crate::engine::error::{LedgerError, RefreshError};
+use crate::engine::merge::apply_scan_result_to_state;
 use crate::engine::pending::TxHash;
-use crate::engine::traits::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
+use crate::engine::refresh::LedgerSnapshot;
+use crate::engine::traits::{DaemonEngine, FeeEstimates, LedgerEngine, TxSubmitOutcome};
+use crate::scan::ScanResult;
 
 /// Default 32-byte seed for tests that don't exercise the
 /// `ChaCha20Rng`-driven paths of [`MockDaemon`].
@@ -99,13 +120,24 @@ pub(crate) const DEFAULT_TEST_SEED: [u8; 32] = [0u8; 32];
 // mapping in one audited site so reviewers can confirm hybrid tests
 // don't re-bind a tag to a different component slot.
 //
-// PR 1 lands `ROLE_DAEMON` only (the only mock implementor that exists
-// at this stage). Subsequent Stage 1 PRs add `ROLE_KEY`, `ROLE_LEDGER`,
-// `ROLE_ECONOMICS`, `ROLE_PERSISTENCE`, `ROLE_REFRESH`, `ROLE_PENDING_TX`
-// alongside their corresponding `Mock*` types.
+// PR 1 lands `ROLE_DAEMON` only. PR 2 adds `ROLE_LEDGER` alongside
+// [`MockLedger`]. Subsequent Stage 1 PRs add `ROLE_KEY`,
+// `ROLE_ECONOMICS`, `ROLE_PERSISTENCE`, `ROLE_REFRESH`,
+// `ROLE_PENDING_TX` alongside their corresponding `Mock*` types.
 
 /// Role tag for the [`MockDaemon`] slot in §6.2 master-seed derivation.
 pub(crate) const ROLE_DAEMON: &[u8] = b"role/daemon";
+
+/// Role tag for the [`MockLedger`] slot in §6.2 master-seed derivation.
+///
+/// Hybrid tests that compose a `MockDaemon` and a `MockLedger` against
+/// the same `Engine<SoloSigner, MockDaemon, MockLedger>` derive
+/// independent per-component seeds via
+/// `derive_seed(&master, ROLE_DAEMON)` and
+/// `derive_seed(&master, ROLE_LEDGER)`; the two seeds are
+/// HKDF-SHA256-distinct by construction (different `info` strings)
+/// even though they share the same master.
+pub(crate) const ROLE_LEDGER: &[u8] = b"role/ledger";
 
 /// Derive a per-component 32-byte seed from a master seed and a role
 /// tag via HKDF-SHA256, per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.2's
@@ -569,6 +601,213 @@ impl DaemonEngine for MockDaemon {
     }
 }
 
+/// In-memory implementor of the crate-internal [`LedgerEngine`] trait
+/// for the Stage 1 hybrid tests (per
+/// `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.3) and forthcoming PR 2
+/// retry-contract coverage.
+///
+/// Holds the same `(WalletLedger, LedgerIndexes)` aggregate as
+/// [`super::local_ledger::LocalLedger`] and runs the same merge body
+/// via [`apply_scan_result_to_state`], so the read projections
+/// (`synced_height`, `snapshot`, `balance`) and the merge semantics
+/// match the production implementor exactly. The added affordance is
+/// failure injection: `queue_concurrent_mutation` enqueues one
+/// [`RefreshError::ConcurrentMutation`] for the next
+/// `apply_scan_result` call (FIFO drain), which is the §5.2
+/// retry-contract surface PR 2's hybrid test exercises in commit 7.
+///
+/// Cheaply cloneable (`Arc<Mutex<…>>` internally) so a hybrid test
+/// driver can hold one handle to inject failures while another handle
+/// is owned by the engine. Cloning shares state by design; the same
+/// aliasing semantics as [`MockDaemon`].
+///
+/// Locking is `std::sync::Mutex` rather than `tokio::sync::Mutex`
+/// because every guarded critical section is non-`await`. The merge
+/// body in [`apply_scan_result_to_state`] is wholly synchronous — no
+/// `.await` runs while the guard is held — and the read projections
+/// are pure data lookups. Holding a `std::sync::Mutex` across an
+/// `await` would be a defect; the implementation below does not.
+///
+/// # Lock primitive choice (`Mutex` vs. `RwLock`)
+///
+/// [`super::local_ledger::LocalLedger`] uses `RwLock<LedgerState>`
+/// because production read paths are concurrent (refresh-loop
+/// snapshot acquisition concurrent with RPC-handler queries).
+/// `MockLedger` uses `Mutex<MockLedgerState>` because hybrid tests
+/// drive a single sequential refresh loop against the mock; the
+/// many-readers shape carries no test signal and `Mutex` keeps the
+/// guard handling syntactically identical to [`MockDaemon`]'s.
+///
+/// # Determinism contract (§6.2)
+///
+/// The constructor takes a 32-byte seed which initializes a
+/// `ChaCha20Rng` held in state. The current PR 2 trait surface does
+/// not consume the RNG; the field is held for §6.2 compliance and
+/// reserved for future RNG-driven affordances (e.g., randomized
+/// failure scheduling, synthetic-state perturbation). Tests that
+/// don't exercise RNG-driven behavior pass [`DEFAULT_TEST_SEED`].
+#[derive(Clone)]
+pub(crate) struct MockLedger {
+    state: Arc<Mutex<MockLedgerState>>,
+}
+
+struct MockLedgerState {
+    /// Persisted wallet-state slice. Same field as
+    /// [`super::local_ledger::LedgerState::ledger`]; the merge body
+    /// in [`apply_scan_result_to_state`] mutates `ledger.ledger`
+    /// (the inner [`shekyl_engine_state::LedgerBlock`]) and, on
+    /// success, advances `synced_height`.
+    ledger: WalletLedger,
+    /// Runtime indexes paired with `ledger`. Mutated together under
+    /// the write guard; same pairing as `LedgerState::indexes`.
+    indexes: LedgerIndexes,
+    /// Failure-injection queue: each entry triggers one
+    /// [`RefreshError::ConcurrentMutation`] response from the next
+    /// `apply_scan_result` call (FIFO). When the queue is empty,
+    /// `apply_scan_result` runs the canonical merge body. Per design
+    /// doc §3.5, this is the only failure mode PR 2's `MockLedger`
+    /// supports; richer modes (terminal errors, sequenced mixes) are
+    /// added when later PRs' hybrid tests need them.
+    concurrent_mutation_queue: VecDeque<()>,
+
+    /// Deterministic RNG seeded from the constructor seed. Held for
+    /// §6.2 compliance; the current trait surface does not consume
+    /// it. Same shape as [`MockDaemon`]'s `rng` field.
+    #[allow(dead_code)]
+    rng: ChaCha20Rng,
+}
+
+impl MockLedgerState {
+    fn new(seed: [u8; 32]) -> Self {
+        Self {
+            ledger: WalletLedger::empty(),
+            indexes: LedgerIndexes::empty(),
+            concurrent_mutation_queue: VecDeque::new(),
+            rng: ChaCha20Rng::from_seed(seed),
+        }
+    }
+}
+
+impl MockLedger {
+    /// Construct a `MockLedger` with empty wallet state and the
+    /// given 32-byte seed. The seed initializes the internal
+    /// `ChaCha20Rng` per §6.2.
+    pub(crate) fn with_seed(seed: [u8; 32]) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(MockLedgerState::new(seed))),
+        }
+    }
+
+    /// Construct a `MockLedger` with a pre-filled `(WalletLedger,
+    /// LedgerIndexes)` pair and the given seed. Equivalent to
+    /// [`Self::with_seed`] followed by direct mutation of the inner
+    /// state, but exposed as a constructor so common cases stay
+    /// one-line. Mirrors [`MockDaemon::with_seed_and_chain`].
+    #[allow(dead_code)]
+    pub(crate) fn with_seed_and_state(
+        seed: [u8; 32],
+        ledger: WalletLedger,
+        indexes: LedgerIndexes,
+    ) -> Self {
+        let mut state = MockLedgerState::new(seed);
+        state.ledger = ledger;
+        state.indexes = indexes;
+        Self {
+            state: Arc::new(Mutex::new(state)),
+        }
+    }
+
+    /// Queue one [`RefreshError::ConcurrentMutation`] response for
+    /// the next `apply_scan_result` call. Multiple invocations
+    /// queue multiple failures (FIFO drain). Once the queue empties,
+    /// subsequent `apply_scan_result` calls run the canonical merge
+    /// body.
+    ///
+    /// The injected variant carries placeholder
+    /// `wallet`/`result` heights matching the §5.2 contract shape;
+    /// the hybrid test asserts on the variant tag, not the
+    /// per-field heights, so the placeholders are sufficient to
+    /// exercise the retry path. If a future test needs realistic
+    /// per-attempt heights, this method can grow a typed parameter
+    /// without breaking existing callers.
+    pub(crate) fn queue_concurrent_mutation(&self) {
+        self.state
+            .lock()
+            .expect("MockLedger state poisoned")
+            .concurrent_mutation_queue
+            .push_back(());
+    }
+
+    /// Number of failure injections still queued. Tests assert
+    /// against this to confirm the engine drained the queue (i.e.,
+    /// retried after the injected failure).
+    #[allow(dead_code)]
+    pub(crate) fn queued_failures(&self) -> usize {
+        self.state
+            .lock()
+            .expect("MockLedger state poisoned")
+            .concurrent_mutation_queue
+            .len()
+    }
+}
+
+/// `MockLedger` honors the *contract* of [`LedgerEngine`], not just
+/// the syntactic surface:
+///
+/// - The three read methods project from the same
+///   `(WalletLedger, LedgerIndexes)` aggregate the canonical
+///   implementor projects from. After a successful
+///   `apply_scan_result`, `synced_height` advances exactly as it
+///   does for [`super::local_ledger::LocalLedger`].
+/// - `apply_scan_result` either drains one queued
+///   `RefreshError::ConcurrentMutation` (returning it without
+///   touching state) or runs the canonical merge body via
+///   [`apply_scan_result_to_state`]. The variant choice is the
+///   only deviation from the canonical implementor; the merge
+///   body itself is identical.
+/// - Lock-poisoning policy matches [`super::local_ledger::LocalLedger`]'s:
+///   a poisoned guard panics rather than surfacing the
+///   [`std::sync::PoisonError`], because by definition the previous
+///   holder panicked mid-merge and wallet state is in an ambiguous
+///   condition that no recovery path can disambiguate.
+impl LedgerEngine for MockLedger {
+    type Error = LedgerError;
+
+    fn synced_height(&self) -> u64 {
+        let state = self.state.lock().expect("MockLedger state poisoned");
+        state.ledger.ledger.height()
+    }
+
+    fn snapshot(&self) -> LedgerSnapshot {
+        let state = self.state.lock().expect("MockLedger state poisoned");
+        LedgerSnapshot::from_ledger(&state.ledger.ledger)
+    }
+
+    fn balance(&self) -> BalanceSummary {
+        let state = self.state.lock().expect("MockLedger state poisoned");
+        let ledger = &state.ledger.ledger;
+        ledger.balance(ledger.height())
+    }
+
+    async fn apply_scan_result(&self, scan_result: ScanResult) -> Result<(), RefreshError> {
+        let mut state = self.state.lock().expect("MockLedger state poisoned");
+        if state.concurrent_mutation_queue.pop_front().is_some() {
+            // Synthesize a §5.2-shaped ConcurrentMutation. The
+            // hybrid test asserts on the variant tag (the engine's
+            // retry classifier branches on variant, not on the
+            // height fields); placeholder heights are sufficient
+            // to exercise the retry path without parsing
+            // scan_result for "realistic" boundaries.
+            return Err(RefreshError::ConcurrentMutation {
+                wallet: state.ledger.ledger.height(),
+                result: scan_result.processed_height_range.start,
+            });
+        }
+        let state = &mut *state;
+        apply_scan_result_to_state(&mut state.ledger.ledger, &mut state.indexes, scan_result)
+    }
+}
+
 /// Build a minimal-valid `ScannableBlock` for `height` with the
 /// chosen `parent_hash`. The produced block has:
 ///
@@ -943,6 +1182,91 @@ mod tests {
         );
     }
 
+    // ---- MockLedger contract ----
+
+    #[tokio::test]
+    async fn mock_ledger_empty_state_reports_zero_height() {
+        let ledger = MockLedger::with_seed(DEFAULT_TEST_SEED);
+        assert_eq!(ledger.synced_height(), 0);
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.synced_height, 0);
+    }
+
+    #[tokio::test]
+    async fn mock_ledger_apply_empty_result_advances_through_no_failure() {
+        let ledger = MockLedger::with_seed(DEFAULT_TEST_SEED);
+        // start = synced_height + 1 = 1; parent_hash = None (genesis case
+        // per ScanResult::empty_at's semantics).
+        let result = ScanResult::empty_at(1, None);
+        ledger
+            .apply_scan_result(result)
+            .await
+            .expect("empty result against empty wallet must apply cleanly");
+        // Empty range applies as a no-op; synced_height does not advance.
+        assert_eq!(ledger.synced_height(), 0);
+    }
+
+    #[tokio::test]
+    async fn mock_ledger_queue_concurrent_mutation_returns_failure_then_drains() {
+        let ledger = MockLedger::with_seed(DEFAULT_TEST_SEED);
+        ledger.queue_concurrent_mutation();
+        assert_eq!(ledger.queued_failures(), 1);
+
+        let injected = ledger
+            .apply_scan_result(ScanResult::empty_at(1, None))
+            .await
+            .expect_err("queued failure must surface as ConcurrentMutation");
+        assert!(matches!(injected, RefreshError::ConcurrentMutation { .. }));
+        assert_eq!(
+            ledger.queued_failures(),
+            0,
+            "queue must drain FIFO after one failure pop"
+        );
+
+        // Subsequent call sees an empty queue and runs the canonical
+        // merge body, succeeding.
+        ledger
+            .apply_scan_result(ScanResult::empty_at(1, None))
+            .await
+            .expect("post-drain apply must run merge body cleanly");
+        assert_eq!(
+            ledger.synced_height(),
+            0,
+            "empty range merges as no-op; height unchanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn mock_ledger_failure_queue_is_fifo() {
+        let ledger = MockLedger::with_seed(DEFAULT_TEST_SEED);
+        ledger.queue_concurrent_mutation();
+        ledger.queue_concurrent_mutation();
+        assert_eq!(ledger.queued_failures(), 2);
+
+        let _ = ledger
+            .apply_scan_result(ScanResult::empty_at(1, None))
+            .await
+            .expect_err("first queued failure surfaces");
+        assert_eq!(ledger.queued_failures(), 1);
+
+        let _ = ledger
+            .apply_scan_result(ScanResult::empty_at(1, None))
+            .await
+            .expect_err("second queued failure surfaces");
+        assert_eq!(ledger.queued_failures(), 0);
+    }
+
+    #[tokio::test]
+    async fn mock_ledger_state_is_shared_across_clones() {
+        let ledger = MockLedger::with_seed(DEFAULT_TEST_SEED);
+        let clone = ledger.clone();
+        ledger.queue_concurrent_mutation();
+        // The clone observes the failure queued via the original handle;
+        // that is the §6.3-equivalent aliasing semantics that match
+        // [`MockDaemon`]'s `submit_dedup_state_is_shared_across_clones`.
+        assert_eq!(clone.queued_failures(), 1);
+    }
+
     #[test]
     fn derive_seed_pinned_fixture_for_role_daemon() {
         // Defense against upstream `hkdf` / `sha2` library drift or
@@ -965,6 +1289,33 @@ mod tests {
         assert_eq!(
             seed, expected,
             "derive_seed(TEST_MASTER_SEED, ROLE_DAEMON) drifted from pinned fixture"
+        );
+    }
+
+    #[test]
+    fn derive_seed_pinned_fixture_for_role_ledger() {
+        // Sibling of `derive_seed_pinned_fixture_for_role_daemon`.
+        // The two role tags must produce distinct, stable seeds under
+        // the same master so a hybrid test composing both `MockDaemon`
+        // and `MockLedger` against one literal master gets independent
+        // per-component RNG state. Drift in either fixture (upstream
+        // `hkdf` / `sha2` change, accidental edit to either role byte
+        // string, accidental rebind of `derive_seed`) is caught here
+        // before any hybrid test sees the new derived seed.
+        //
+        // Computed on first run with the stable inputs above; a
+        // future deliberate change to either the role tag or the
+        // derivation primitive must update this fixture in the same
+        // commit so the substitution is visible in review.
+        let seed = derive_seed(&TEST_MASTER_SEED, ROLE_LEDGER);
+        let expected: [u8; 32] = [
+            0x78, 0xbd, 0x0e, 0x22, 0xee, 0x92, 0x44, 0xd1, 0xaa, 0xb4, 0xe2, 0x18, 0x15, 0xd8,
+            0x71, 0x2d, 0x43, 0xed, 0xd1, 0x31, 0xad, 0x4b, 0xb9, 0x8d, 0x5f, 0x0c, 0x3a, 0x6d,
+            0xc2, 0xec, 0x1f, 0x96,
+        ];
+        assert_eq!(
+            seed, expected,
+            "derive_seed(TEST_MASTER_SEED, ROLE_LEDGER) drifted from pinned fixture"
         );
     }
 }

@@ -79,8 +79,9 @@ use tracing::{debug, error, warn};
 use zeroize::Zeroizing;
 
 use super::error::{IoError, RefreshError};
+use super::local_ledger::LocalLedger;
 use super::signer::EngineSignerKind;
-use super::traits::DaemonEngine;
+use super::traits::{DaemonEngine, LedgerEngine};
 use super::Engine;
 use crate::scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
 
@@ -1392,8 +1393,8 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
 /// path always delivers `Ok(summary)`; consumers that want to
 /// abandon a successful refresh in flight have to drop the handle
 /// and reconcile against the next `progress().borrow()`.
-async fn run_refresh_task<S, D: DaemonEngine>(
-    engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S, D>>>,
+async fn run_refresh_task<S, D: DaemonEngine, L>(
+    engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S, D, L>>>,
     opts: RefreshOptions,
     cancel: CancellationToken,
     progress: tokio::sync::watch::Sender<RefreshProgress>,
@@ -1401,7 +1402,8 @@ async fn run_refresh_task<S, D: DaemonEngine>(
     _slot_guard: SlotGuard,
 ) where
     S: EngineSignerKind + Send + Sync + 'static,
-    Engine<S, D>: Send + Sync,
+    L: LedgerEngine + Send + Sync + 'static,
+    Engine<S, D, L>: Send + Sync,
 {
     // Build the scanner once (keys are immutable for the lifetime of
     // the open engine; rebuilding per attempt would only repeat
@@ -1441,13 +1443,17 @@ async fn run_refresh_task<S, D: DaemonEngine>(
         // live daemon reference — is re-snapshotted at the start of
         // every attempt, so re-cloning is the same cost as
         // re-borrowing and avoids leaking the borrow across the
-        // intervening write-lock.
+        // intervening read-lock.
+        //
+        // Snapshot acquisition goes through [`LedgerEngine::snapshot`]
+        // on the implementor field (the trait-dispatch path); the
+        // implementor manages its own guard internally. Outer engine
+        // borrow is shared (`read().await`) per the §5 commit-5
+        // relaxation: with mutation interior to `LocalLedger`, the
+        // refresh driver no longer needs an exclusive engine borrow.
         let (snapshot, daemon) = {
             let g = engine_arc.read().await;
-            (
-                LedgerSnapshot::from_ledger(&g.ledger.ledger),
-                g.daemon().clone(),
-            )
+            (g.ledger.snapshot(), g.daemon().clone())
         };
         let current_synced = snapshot.synced_height;
 
@@ -1577,12 +1583,42 @@ async fn run_refresh_task<S, D: DaemonEngine>(
             phase: RefreshPhase::Merging,
         });
 
-        // Merge under the write lock. The merge is the single audited
-        // mutation point; on `ConcurrentMutation` we loop with a fresh
-        // snapshot.
+        // Merge under the **read** lock on the outer engine: per the
+        // §5 commit-5 outer-lock relaxation, the wallet-state mutation
+        // is now interior to the `LedgerEngine` implementor's own
+        // write guard — the outer `Arc<RwLock<Engine<S, D, L>>>` only
+        // needs a shared borrow for the merge call. The interior
+        // write guard serializes mutation against any concurrent
+        // reader on the same engine. On `ConcurrentMutation` we loop
+        // with a fresh snapshot.
+        //
+        // The merge dispatches through the [`LedgerEngine`] trait
+        // surface (commit 7) rather than the LocalLedger-specialized
+        // [`Engine::apply_scan_result`] sync wrapper. The trait method
+        // is `async`, so the future is awaited inline; this is what
+        // lets `Engine<S, D, MockLedger>` flow through the same
+        // refresh path that `Engine<S, D, LocalLedger>` uses, which
+        // is the foundation for the §5.2 hybrid retry test.
+        //
+        // Lock-hold-across-await note: the engine read-guard `g` is
+        // held for the duration of `apply_scan_result.await`. This is
+        // benign for Stage 1's `LocalLedger` and `MockLedger`
+        // implementors (both have wholly synchronous future bodies,
+        // so the await completes in synchronous-merge time) but will
+        // need restructuring at Stage 4 when an actor-backed
+        // implementor's `apply_scan_result` future genuinely awaits a
+        // `kameo` ask: extending the outer engine read-guard across
+        // an arbitrary actor round-trip can starve writers needing
+        // the engine write-lock. The refactor (decouple the merge
+        // future from the outer guard via `Arc<L>` cloning) co-lands
+        // with the Stage 4 `LedgerEngine` actor cutover, where the
+        // ownership rework happens once for all per-trait
+        // implementors. Tracked in `docs/FOLLOWUPS.md` →
+        // "`run_refresh_task` holds the engine read-guard across
+        // `apply_scan_result.await`" under V3.x.
         let merge = {
-            let mut g = engine_arc.write().await;
-            g.apply_scan_result(result)
+            let g = engine_arc.read().await;
+            g.ledger.apply_scan_result(result).await
         };
 
         match merge {
@@ -1651,10 +1687,23 @@ fn summarize(result: &ScanResult, merge_attempts: u32) -> RefreshSummary {
     }
 }
 
-// `D: DaemonEngine` private-bound: see the rationale on the
-// `pub struct Engine` definition in `engine/mod.rs`.
+// `D: DaemonEngine` and `L: LedgerEngine` private-bound: see the
+// rationale on the `pub struct Engine` definition in `engine/mod.rs`.
+// This block is generic over `L: LedgerEngine` because
+// [`Engine::start_refresh`] dispatches the snapshot read and the
+// merge through the [`LedgerEngine`] trait surface (commit 7 finished
+// the migration: `synced_height` and `snapshot` were already
+// trait-dispatched as of commit 5; the merge call inside
+// `run_refresh_task` switched to `g.ledger.apply_scan_result(...).await`
+// in commit 7). The sync `Engine::refresh` and `Engine::refresh_with`
+// wrappers further down still specialize to `LocalLedger` because
+// they drive the async trait method from synchronous code via
+// `LocalLedger`'s inherent `.write()` guard rather than threading a
+// runtime through every sync call site; that specialization is
+// retained until the sync entry points either acquire a runtime
+// handle path or are themselves migrated to `async fn`.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
+impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine> Engine<S, D, L> {
     /// Spawn an async refresh task and return a [`RefreshHandle`]
     /// for observing and controlling it.
     ///
@@ -1725,7 +1774,7 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
         // accurate baseline rather than a misleading `height: 0`.
         let (slot, synced_height) = {
             let engine = self_arc.read().await;
-            (engine.refresh_slot.clone(), engine.synced_height())
+            (engine.refresh_slot.clone(), engine.ledger.synced_height())
         };
         let slot_guard = slot.try_claim().ok_or(RefreshError::AlreadyRunning)?;
 
@@ -1774,7 +1823,20 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
             opts,
         })
     }
+}
 
+// `L = LocalLedger` specialization remains for the synchronous
+// refresh entry points: [`Engine::refresh`] and
+// [`Engine::refresh_with`] drive an async merge from synchronous
+// code via [`Engine::apply_scan_result`] (in `engine/merge.rs`),
+// which acquires the merge guard through `LocalLedger`'s inherent
+// `.write()` rather than awaiting the [`LedgerEngine`] trait method.
+// Generalizing this block would require either a sync mutator on the
+// trait surface or threading a `tokio::runtime::Handle` through every
+// sync call site; the cost is not currently justified by a consumer
+// of `Engine::refresh` against a non-`LocalLedger` ledger.
+#[allow(private_bounds)]
+impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
     /// Drive a refresh against the configured daemon: pull a snapshot
     /// of the wallet's ledger, ask the producer to scan
     /// `synced_height + 1 .. daemon_tip + 1`, and merge the result
@@ -1787,13 +1849,17 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     ///
     /// # Why synchronous, why a runtime handle
     ///
-    /// `Engine::refresh` is `&mut self` because the merge mutates
-    /// wallet state under the cross-cutting locking discipline (lock
-    /// 3): mutators take `&mut self`, queries take `&self`. An
-    /// `async fn refresh(&mut self, …)` would mean callers could
-    /// `await` other futures while the borrow is held — including
-    /// futures that already hold the wallet lock — which trivially
-    /// deadlocks `Arc<RwLock<Engine<S>>>` topologies.
+    /// `Engine::refresh` takes `&self`: as of Stage 1 PR 2 commit 5,
+    /// wallet-state mutation lives inside [`LocalLedger`]'s interior
+    /// `RwLock`, so the merge no longer needs an exclusive borrow on
+    /// the outer engine. The cross-cutting locking discipline still
+    /// applies — the implementor's write guard is the audited
+    /// mutation point — but the engine surface itself takes `&self`
+    /// for both queries and the refresh primitive. The signature
+    /// stays synchronous: an `async fn refresh(&self, …)` would mean
+    /// callers could `await` other futures across a refresh in
+    /// progress, complicating cancellation and cooperative scheduling
+    /// without a corresponding design win for the sync entry point.
     ///
     /// Instead, the synchronous entry point takes a
     /// [`tokio::runtime::Handle`] and runs the producer's async work
@@ -1855,7 +1921,7 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     /// producer behind an inert internal token. Both share one
     /// implementation; they differ only in who owns the token.
     pub fn refresh(
-        &mut self,
+        &self,
         opts: &RefreshOptions,
         runtime: &tokio::runtime::Handle,
     ) -> Result<RefreshSummary, RefreshError> {
@@ -1933,7 +1999,7 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
     /// - Merge returns `Err(MalformedScanResult { … })` or any other
     ///   `RefreshError` → propagate immediately.
     pub(crate) fn refresh_with<F>(
-        &mut self,
+        &self,
         opts: &RefreshOptions,
         mut produce: F,
     ) -> Result<RefreshSummary, RefreshError>
@@ -1946,7 +2012,12 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D> {
         // `1 + max_retries` total tries (the initial attempt plus
         // `max_retries` retries on `ConcurrentMutation`).
         for attempt in 1..=opts.max_retries.saturating_add(1) {
-            let snapshot = LedgerSnapshot::from_ledger(&self.ledger.ledger);
+            // Snapshot via [`LedgerEngine::snapshot`] on the
+            // implementor field; the implementor manages its own
+            // read guard internally. `&self` on the outer engine is
+            // sufficient because mutation lives inside the
+            // implementor's write guard.
+            let snapshot = self.ledger.snapshot();
             let result = produce(attempt, &snapshot)?;
             let summary = summarize(&result, attempt);
 
@@ -2942,7 +3013,7 @@ mod refresh_driver_tests {
     /// `merge_attempts == 1`.
     #[test]
     fn smoke_single_attempt_returns_summary() {
-        let mut fix = make_wallet();
+        let fix = make_wallet();
         let opts = RefreshOptions::default();
 
         let mut produced = false;
@@ -2973,7 +3044,7 @@ mod refresh_driver_tests {
     /// merge succeeds. `summary.merge_attempts` records `3`.
     #[test]
     fn concurrent_mutation_retry_succeeds_after_two_races() {
-        let mut fix = make_wallet();
+        let fix = make_wallet();
         let opts = RefreshOptions { max_retries: 8 };
 
         // `drain` pops from the back; storing attempts in reverse
@@ -3005,7 +3076,7 @@ mod refresh_driver_tests {
     /// last [`RefreshError::ConcurrentMutation`].
     #[test]
     fn retry_budget_exhausted_returns_last_concurrent_mutation() {
-        let mut fix = make_wallet();
+        let fix = make_wallet();
         let opts = RefreshOptions { max_retries: 2 };
 
         let observed_attempts: RefCell<Vec<u32>> = RefCell::new(Vec::new());
@@ -3040,7 +3111,7 @@ mod refresh_driver_tests {
     /// violation. The error surfaces immediately.
     #[test]
     fn malformed_scan_result_is_not_retried() {
-        let mut fix = make_wallet();
+        let fix = make_wallet();
         let opts = RefreshOptions { max_retries: 8 };
 
         let observed_attempts: RefCell<u32> = RefCell::new(0);
@@ -3068,7 +3139,7 @@ mod refresh_driver_tests {
     /// `ConcurrentMutation` is possible).
     #[test]
     fn producer_io_error_propagates_immediately() {
-        let mut fix = make_wallet();
+        let fix = make_wallet();
         let opts = RefreshOptions { max_retries: 8 };
 
         let observed_attempts: RefCell<u32> = RefCell::new(0);
@@ -3098,7 +3169,7 @@ mod refresh_driver_tests {
     /// that signals it on the synchronous refresh.)
     #[test]
     fn producer_cancelled_propagates() {
-        let mut fix = make_wallet();
+        let fix = make_wallet();
         let opts = RefreshOptions::default();
 
         let err = fix
@@ -3116,7 +3187,7 @@ mod refresh_driver_tests {
     /// immediately without any retry.
     #[test]
     fn max_retries_zero_runs_exactly_one_attempt() {
-        let mut fix = make_wallet();
+        let fix = make_wallet();
         let opts = RefreshOptions { max_retries: 0 };
 
         let observed_attempts: RefCell<u32> = RefCell::new(0);
@@ -3152,7 +3223,7 @@ mod refresh_driver_tests {
     /// This test pins that the snapshot is in fact re-taken.
     #[test]
     fn snapshot_is_refreshed_between_retries() {
-        let mut fix = make_wallet();
+        let fix = make_wallet();
         let opts = RefreshOptions { max_retries: 4 };
 
         let snapshots_seen: RefCell<Vec<u64>> = RefCell::new(Vec::new());
@@ -3241,7 +3312,7 @@ mod refresh_driver_tests {
     /// terminal, not race-class.
     #[test]
     fn production_refresh_against_unreachable_daemon_returns_io_daemon() {
-        let mut fix = make_wallet();
+        let fix = make_wallet();
         let opts = RefreshOptions { max_retries: 0 };
         // Same runtime that built the daemon's RPC client; running on
         // a different runtime would hang because hyper's connection
@@ -3765,7 +3836,10 @@ mod start_refresh_integration_tests {
     use tokio::sync::RwLock;
 
     use crate::engine::lifecycle::EngineCreateParams;
-    use crate::engine::test_support::{derive_seed, MockDaemon, ROLE_DAEMON};
+    use crate::engine::test_support::{
+        derive_seed, MockDaemon, MockLedger, ROLE_DAEMON, ROLE_LEDGER,
+    };
+    use crate::engine::traits::LedgerEngine;
     use crate::engine::{
         Credentials, DaemonClient, Engine, IoError, RefreshError, RefreshOptions, SoloSigner,
     };
@@ -4086,6 +4160,178 @@ mod start_refresh_integration_tests {
             drop(g);
             if Instant::now() > deadline {
                 panic!("slot still claimed 5s after hybrid refresh joined");
+            }
+        }
+    }
+
+    /// Build an `Engine<SoloSigner, MockDaemon, MockLedger>` ready for
+    /// hybrid retry tests. Composes
+    /// [`Engine::replace_daemon`] (PR 1) with [`Engine::replace_ledger`]
+    /// (PR 2 commit 6): one real `Engine::create` ceremony pays for
+    /// the file-handle / keys / refresh-slot / preferences setup, and
+    /// then both engine slots are swapped out for deterministic
+    /// in-memory mocks. Returns the [`TempDir`] alongside so the
+    /// caller keeps the wallet file alive for the engine's lifetime.
+    async fn make_hybrid_engine_arc_with_ledger(
+        mock_daemon: MockDaemon,
+        mock_ledger: MockLedger,
+    ) -> (
+        Arc<RwLock<Engine<SoloSigner, MockDaemon, MockLedger>>>,
+        TempDir,
+    ) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_path = tmp.path().join("wallet");
+        let creds = Credentials::password_only(b"start-refresh hybrid retry integration tests");
+        let mut wallet_seed = [0u8; MASTER_SEED_BYTES];
+        for (i, b) in wallet_seed.iter_mut().enumerate() {
+            *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(19);
+        }
+        let params = EngineCreateParams::for_test_full(&base_path, &creds, &wallet_seed);
+
+        let dummy_rpc = SimpleRequestRpc::new("http://127.0.0.1:1".to_string())
+            .await
+            .expect("construct SimpleRequestRpc against unreachable URL (no connect attempt yet)");
+        let dummy_daemon = DaemonClient::new(dummy_rpc);
+
+        let real = Engine::<SoloSigner>::create(params, dummy_daemon)
+            .expect("create FULL wallet for hybrid retry test");
+        // Compose the two slot swaps. Order is independent — both are
+        // consume-and-rebuild — but daemon-then-ledger reads
+        // most-naturally as "first wire the chain source, then wire
+        // the merge target."
+        let with_daemon = real.replace_daemon(mock_daemon);
+        let hybrid = with_daemon.replace_ledger(mock_ledger);
+        (Arc::new(RwLock::new(hybrid)), tmp)
+    }
+
+    /// Exercise the §5.2 retry contract end-to-end. Composition: a
+    /// 6-block `MockDaemon` chain (heights 0..=5) drives the producer
+    /// from `synced_height = 0`; the paired `MockLedger` has one
+    /// queued [`RefreshError::ConcurrentMutation`] response from
+    /// [`MockLedger::queue_concurrent_mutation`], so the first merge
+    /// attempt observes the injected race and the producer retries
+    /// with a fresh snapshot. The second attempt finds the failure
+    /// queue empty, runs the canonical merge body, and advances the
+    /// `MockLedger`'s `synced_height` to 5.
+    ///
+    /// What this pins (Stage 1 PR 2):
+    ///
+    /// - `Engine<SoloSigner, MockDaemon, MockLedger>` is a real,
+    ///   callable shape — the `L: LedgerEngine` parameterization
+    ///   isn't a phantom type; `MockLedger` actually drives the
+    ///   merge. Composes the PR 1 daemon-slot swap with the PR 2
+    ///   ledger-slot swap on a single engine instance.
+    /// - The §5.2 retry contract is exercised through the *real*
+    ///   refresh path (`Engine::start_refresh` → `run_refresh_task`
+    ///   producer/merge loop), not a unit test of
+    ///   `apply_scan_result` in isolation. The merge dispatches
+    ///   through the [`LedgerEngine`] trait surface, so the same
+    ///   call site that production `LocalLedger` traverses also
+    ///   accepts `MockLedger` for failure injection.
+    /// - Failure-queue draining is FIFO and bounded: queueing a
+    ///   single `ConcurrentMutation` produces exactly one retry
+    ///   (`merge_attempts == 2`), and the post-test queue length is
+    ///   zero. `MockLedger`'s state aliases through `Arc<Mutex<…>>`
+    ///   so the per-engine clone the producer holds and the test
+    ///   handle observe the same drain.
+    /// - `replace_ledger` preserves engine state across the swap,
+    ///   composing cleanly with `replace_daemon`: keys, ledger
+    ///   *handle reference* (now the mock), reservations, refresh
+    ///   slot, and capability all flow through the move-rebuild
+    ///   unchanged, and the produced engine is `Send + Sync`
+    ///   (required for `Arc<RwLock<…>>` + `tokio::spawn`).
+    ///
+    /// Master seed is recorded as a literal in the test body per
+    /// §6.2; the per-component seeds are
+    /// `derive_seed(&master, ROLE_DAEMON)` for `MockDaemon` and
+    /// `derive_seed(&master, ROLE_LEDGER)` for `MockLedger`. The two
+    /// `derive_seed_pinned_fixture_*` tests in `test_support` lock
+    /// down those derivations against upstream library drift.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn hybrid_apply_scan_result_retries_on_concurrent_mutation() {
+        const MASTER_SEED: [u8; 32] = [
+            0xa5, 0xa5, 0x5a, 0x5a, 0xfe, 0xed, 0xfa, 0xce, 0xc0, 0x01, 0xd0, 0x0d, 0xba, 0xad,
+            0xf0, 0x0d, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0, 0xc0,
+            0xd0, 0xe0, 0xf0, 0x00,
+        ];
+
+        let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+        let ledger_seed = derive_seed(&MASTER_SEED, ROLE_LEDGER);
+
+        // 6-block linear chain; producer scans heights 1..=5 starting
+        // from a fresh `MockLedger` at `synced_height = 0`.
+        let mock_daemon = MockDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let mock_ledger = MockLedger::with_seed(ledger_seed);
+
+        // Inject exactly one `ConcurrentMutation` so the first merge
+        // observes the race and the second runs the canonical body.
+        mock_ledger.queue_concurrent_mutation();
+        assert_eq!(
+            mock_ledger.queued_failures(),
+            1,
+            "pre-refresh: one ConcurrentMutation queued"
+        );
+
+        // Hold an aliasing handle for post-refresh assertions —
+        // `MockLedger` clones share state through `Arc<Mutex<…>>`,
+        // so the engine's internal handle and this one observe the
+        // same drain.
+        let ledger_handle = mock_ledger.clone();
+
+        let (arc, _tmp) = make_hybrid_engine_arc_with_ledger(mock_daemon, mock_ledger).await;
+
+        // Sanity-check the pre-refresh invariant on the mocked ledger
+        // surface (trait dispatch via the engine's `ledger` field).
+        {
+            let g = arc.read().await;
+            assert_eq!(
+                g.ledger.synced_height(),
+                0,
+                "fresh hybrid engine starts at MockLedger synced_height 0"
+            );
+        }
+
+        let handle = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("start_refresh claims the slot on the hybrid engine");
+
+        let summary = handle.join().await.expect(
+            "hybrid retry refresh against a 6-block MockDaemon chain joins after one retry",
+        );
+        assert_eq!(
+            summary.merge_attempts, 2,
+            "first attempt drains the injected ConcurrentMutation; second attempt succeeds"
+        );
+        assert_eq!(summary.processed_height_range, 1..6);
+        assert_eq!(summary.blocks_processed, 5);
+
+        // Failure queue drained exactly once.
+        assert_eq!(
+            ledger_handle.queued_failures(),
+            0,
+            "the single queued ConcurrentMutation was consumed by the retry"
+        );
+
+        // Post-merge state is authoritative on the mock ledger: the
+        // canonical merge body ran on attempt 2 and advanced the
+        // `MockLedger`'s `synced_height` to the chain tip.
+        assert_eq!(
+            ledger_handle.synced_height(),
+            5,
+            "post-retry MockLedger synced_height matches the producer's range upper bound"
+        );
+
+        // Slot release: same shape as the linear-scan hybrid test.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            tokio::task::yield_now().await;
+            let g = arc.read().await;
+            if !g.refresh_slot.is_claimed() {
+                break;
+            }
+            drop(g);
+            if Instant::now() > deadline {
+                panic!("slot still claimed 5s after hybrid retry refresh joined");
             }
         }
     }

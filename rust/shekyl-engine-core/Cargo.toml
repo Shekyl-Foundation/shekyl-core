@@ -129,6 +129,21 @@ harness = false
 name = "engine_trait_bench_ledger_synced_height_iai"
 harness = false
 
+# Stage 1 PR 2 commit 8: state-populated `LedgerEngine::balance`
+# pair. Workload class is "state-dependent compute" (1024-transfer
+# fixture + per-call walk through `BalanceSummary::compute`); the
+# bench-internals feature unlocks `LocalLedger::populate_for_bench`
+# for state injection without expanding production visibility.
+[[bench]]
+name = "engine_trait_bench_ledger_balance"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_ledger_balance_iai"
+harness = false
+required-features = ["bench-internals"]
+
 [features]
 default = []
 multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "serde_json", "hex", "chacha20poly1305", "hkdf", "sha2"]
