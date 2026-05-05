@@ -92,7 +92,15 @@ def main() -> int:
 // Do not edit manually. The JSON file is the single source of truth.
 #pragma once
 
+// `<stdint.h>` is the canonical home of the `UINT*_C` fixed-width
+// literal macros (C99 §7.18.4). C++11 §17.6.1.2 also requires that
+// `<cstdint>` expose them, but including the C header explicitly is
+// the belt-and-suspenders form that does not depend on the standard
+// library implementation honouring that guarantee on every platform
+// Shekyl is built for. Both headers are kept so the emitted file
+// works whether consumers use `std::uint8_t` or `uint8_t`.
 #include <cstdint>
+#include <stdint.h>
 
 // Values bracketed `SHEKYL_*` to make their generated origin obvious at
 // every consumer; original symbols (`FCMP_REFERENCE_BLOCK_MIN_AGE`,
