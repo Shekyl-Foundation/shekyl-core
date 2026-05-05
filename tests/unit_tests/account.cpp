@@ -29,6 +29,7 @@
 #include "gtest/gtest.h"
 
 #include "cryptonote_basic/account.h"
+#include "shekyl/shekyl_ffi.h"
 
 TEST(account, encrypt_keys)
 {
@@ -100,4 +101,120 @@ TEST(account, rederive_from_raw_seed_reproduces_account)
   ASSERT_EQ(first_keys.m_seed_format,      second_keys.m_seed_format);
   ASSERT_EQ(first_keys.m_account_address.m_pqc_public_key.size(),
             static_cast<size_t>(SHEKYL_PQC_PUBLIC_KEY_BYTES));
+}
+
+// BIP-39 + MAINNET coverage. The constants the wallet_storage failure surfaced
+// (SHEKYL_CLASSICAL_ADDRESS_BYTES off-by-one and the SHEKYL_SEED_FORMAT_*
+// disagreement) bit the (Fakechain, Raw32) path in production; the (Mainnet,
+// BIP-39) path was equally broken under the same constants but had zero test
+// coverage at the C++/FFI layer, so the audit had no signal there. This test
+// closes that gap end-to-end through the lower-level account_base API. See
+// docs/audit_trail/2026-05-ffi-constant-drift-audit.md.
+//
+// Note: there is intentionally no `wallet2`-level wrapper exercised here. As
+// of this branch, `wallet2` exposes no `generate_from_bip39` entry point —
+// the only public from-seed path is `wallet2::generate(name, password, ...)`
+// which routes through the legacy `account_base::generate()` wrapper that
+// hardcodes FAKECHAIN. Adding a `wallet2::generate_from_bip39` mainnet entry
+// point is tracked separately as `fix/legacy-account-generate-network-guard`
+// and FOLLOWUPS V3.0.
+TEST(account, rederive_from_bip39_reproduces_account_mainnet)
+{
+  // BIP-39 §A.1 canonical test vector: 32-byte all-zero entropy → 24-word
+  // English mnemonic ending in "art". Hardcoding rather than generating
+  // through the FFI keeps the test self-describing for future readers.
+  static constexpr const char *kZeroEntropyMnemonic =
+      "abandon abandon abandon abandon abandon abandon "
+      "abandon abandon abandon abandon abandon abandon "
+      "abandon abandon abandon abandon abandon abandon "
+      "abandon abandon abandon abandon abandon art";
+
+  cryptonote::account_base first;
+  first.generate_from_bip39(kZeroEntropyMnemonic, std::string{}, cryptonote::MAINNET);
+  const auto first_keys = first.get_keys();
+
+  // Every BIP-39 account must populate the same fields raw-seed accounts do.
+  ASSERT_EQ(first_keys.m_master_seed_64.size(),
+            static_cast<size_t>(SHEKYL_MASTER_SEED_BYTES));
+  ASSERT_EQ(first_keys.m_seed_format,
+            static_cast<uint8_t>(SHEKYL_SEED_FORMAT_BIP39));
+  ASSERT_EQ(first_keys.m_account_address.m_pqc_public_key.size(),
+            static_cast<size_t>(SHEKYL_PQC_PUBLIC_KEY_BYTES));
+
+  // Same mnemonic + same passphrase on the same network must produce a
+  // bit-identical account. Determinism check.
+  cryptonote::account_base second;
+  second.generate_from_bip39(kZeroEntropyMnemonic, std::string{}, cryptonote::MAINNET);
+  const auto second_keys = second.get_keys();
+  ASSERT_EQ(first_keys.m_account_address, second_keys.m_account_address);
+  ASSERT_EQ(first_keys.m_spend_secret_key, second_keys.m_spend_secret_key);
+  ASSERT_EQ(first_keys.m_view_secret_key,  second_keys.m_view_secret_key);
+  ASSERT_EQ(first_keys.m_ml_kem_decap_key, second_keys.m_ml_kem_decap_key);
+  ASSERT_EQ(first_keys.m_master_seed_64,   second_keys.m_master_seed_64);
+
+  // Round-trip via rederive_from_master_seed: simulate the wallet-open hot
+  // path. This is the exact call site that Bug 2 broke — wallet2::load
+  // reads m_master_seed_64 / m_seed_format from the encrypted keys file and
+  // calls rederive_from_master_seed(m_nettype). For Mainnet+BIP39, the
+  // (Mainnet, Bip39) pair is permitted; the rederive must succeed and
+  // reproduce every key bit-for-bit.
+  cryptonote::account_base rederived = first;
+  rederived.rederive_from_master_seed(cryptonote::MAINNET);
+  const auto rederived_keys = rederived.get_keys();
+
+  ASSERT_EQ(first_keys.m_account_address, rederived_keys.m_account_address);
+  ASSERT_EQ(first_keys.m_spend_secret_key, rederived_keys.m_spend_secret_key);
+  ASSERT_EQ(first_keys.m_view_secret_key,  rederived_keys.m_view_secret_key);
+  ASSERT_EQ(first_keys.m_ml_kem_decap_key, rederived_keys.m_ml_kem_decap_key);
+}
+
+// Same passphrase-vs-no-passphrase isolation as BIP-39 §C: a non-empty
+// passphrase must produce a different account from the empty passphrase.
+// (Cheap to add and protects against a future "passphrase ignored" bug
+// in the FFI plumbing.)
+TEST(account, bip39_passphrase_changes_account_mainnet)
+{
+  static constexpr const char *kZeroEntropyMnemonic =
+      "abandon abandon abandon abandon abandon abandon "
+      "abandon abandon abandon abandon abandon abandon "
+      "abandon abandon abandon abandon abandon abandon "
+      "abandon abandon abandon abandon abandon art";
+
+  cryptonote::account_base no_pass;
+  no_pass.generate_from_bip39(kZeroEntropyMnemonic, std::string{}, cryptonote::MAINNET);
+
+  cryptonote::account_base with_pass;
+  with_pass.generate_from_bip39(kZeroEntropyMnemonic, "TREZOR", cryptonote::MAINNET);
+
+  ASSERT_NE(no_pass.get_keys().m_master_seed_64,
+            with_pass.get_keys().m_master_seed_64);
+  ASSERT_NE(no_pass.get_keys().m_account_address,
+            with_pass.get_keys().m_account_address);
+}
+
+// (Network, format) matrix: FAKECHAIN/TESTNET refuse BIP-39, MAINNET/STAGENET
+// refuse RAW32. The FFI returns false on a disallowed pair; account_base
+// throws. This test pins the consensus-level acceptance matrix at the C++
+// boundary so a future "loosen the matrix" change has to update the test.
+TEST(account, generate_from_bip39_rejects_fakechain)
+{
+  static constexpr const char *kZeroEntropyMnemonic =
+      "abandon abandon abandon abandon abandon abandon "
+      "abandon abandon abandon abandon abandon abandon "
+      "abandon abandon abandon abandon abandon abandon "
+      "abandon abandon abandon abandon abandon art";
+
+  cryptonote::account_base account;
+  EXPECT_ANY_THROW(account.generate_from_bip39(
+      kZeroEntropyMnemonic, std::string{}, cryptonote::FAKECHAIN));
+  EXPECT_ANY_THROW(account.generate_from_bip39(
+      kZeroEntropyMnemonic, std::string{}, cryptonote::TESTNET));
+}
+
+TEST(account, generate_from_raw_seed_rejects_mainnet)
+{
+  uint8_t raw_seed[SHEKYL_RAW_SEED_BYTES] = {};
+  cryptonote::account_base account;
+  EXPECT_ANY_THROW(account.generate_from_raw_seed(raw_seed, cryptonote::MAINNET));
+  EXPECT_ANY_THROW(account.generate_from_raw_seed(raw_seed, cryptonote::STAGENET));
 }
