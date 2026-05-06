@@ -43,11 +43,12 @@ required adversarial review to surface.
   `RecipientSubaddress`, `SubaddressKeyPair`, `ViewTag`).
   Purpose-decomposed subaddress derivation. No-Mock test substrate
   pattern (§2.1.2). Trust-class A/B classification deferred.
-- **Round 3 (in-flight; commits 3a, 3a-review-pass, 3b landed
-  to date).** Adversarial wargaming pass surfaced 12 findings
-  clustered into 7 threat patterns (4 generalizing to PR 4–7's
-  pre-flight checklist; 3 KeyEngine-specific). Round-3
-  dispositions land across five sequential commits (3a–3e):
+- **Round 3 (in-flight; commits 3a, 3a-review-pass, 3b, 3c
+  landed to date).** Adversarial wargaming pass surfaced 12
+  findings clustered into 7 threat patterns (4 generalizing
+  to PR 4–7's pre-flight checklist; 3 KeyEngine-specific).
+  Round-3 dispositions land across five sequential commits
+  (3a–3e):
   - **3a (commit `8553ae297`).** Handle-indirected workflow
     contract per A1's α disposition; `OutputClaim` reshape;
     seven-bullet "deliberately does not expose" subsection;
@@ -59,13 +60,13 @@ required adversarial review to surface.
     discipline (bullet 5); §7.11 option-space expanded to four
     candidates (split (2) into 2a / 2b); §6.4 orphan-absence
     verification mechanism deferred to commit 3d.
-  - **3b (this commit).** A2 → β disposition: per-subaddress
-    `kem_pk` derivation specification. New §3.1.3 walks the
-    priority-hierarchy decomposition showing β is rule-forced
-    (α decomposes into (P1) X25519-only / (P2) wallet-level
-    ML-KEM PK in encoding / (P3) out-of-band PK delivery, each
-    violating a priority-hierarchy rule). §3.3 Sub-bundle A
-    pins `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT =
+  - **3b (commit `b020a33cc`).** A2 → β disposition: per-
+    subaddress `kem_pk` derivation specification. New §3.1.3
+    walks the priority-hierarchy decomposition showing β is
+    rule-forced (α decomposes into (P1) X25519-only / (P2)
+    wallet-level ML-KEM PK in encoding / (P3) out-of-band PK
+    delivery, each violating a priority-hierarchy rule). §3.3
+    Sub-bundle A pins `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT =
     b"shekyl/subaddr-mlkem-keygen-v1"` and the
     `derive_subaddress_kem_keypair` primitive. Sub-bundle B
     `RecipientSubaddress` doc-comment refresh (E1) makes the
@@ -74,16 +75,51 @@ required adversarial review to surface.
     with the same primitive. §4 `derive_subaddress`
     doc-comment names the per-call cost regime (~50 µs
     dominated by ML-KEM-768 KeyGen).
-  - **3c–3e (forthcoming).** 3c — Pattern-2 spec-silent
-    junctions cluster (A3 `tx_context_hash` derivation; A4
-    `VIEW_TAG_BYTES` pin; A5 → ζ marker trait + associated
-    const; D1 `sign_transaction` validation contract). 3d —
-    Pattern-3 / Pattern-4 cluster (B1 three-layer test-substrate
-    discipline; B2 handle-storage discipline post-A1; visibility
-    discipline on message types). 3e — residual + forward-
-    template content (Trust-class A/B classification; A8
-    DESIGN_CONCEPTS.md cross-reference; four-pattern checklist
-    for PR 4–7 pre-flight; trajectory note).
+  - **3c (this commit).** Pattern-2 spec-silent junctions
+    cluster (Sub-bundle E). New §3.1.4 frames the threat-pattern
+    shape ("load-bearing cryptographic junctions whose
+    specification lives in implementation lore rather than at
+    the spec level") and lands the Pattern-2 generalization
+    checklist for PR 4–7 pre-flight. Four findings closed:
+    **A3** — per-output HKDF derivation pinned by reference to
+    the canonical `shekyl-crypto-pq::derivation` registry
+    (`HKDF_SALT_OUTPUT_DERIVE`,
+    `HKDF_SALT_VIEW_TAG_X25519`, `SALT_KEM_DERIVE_V1`,
+    per-secret labels), with the "tx_context_hash" wargaming
+    framing reframed as overspecified (per-output uniqueness
+    is delivered by `combined_ss` being per-output-unique by
+    construction). **A4** — `VIEW_TAG_BYTES = 1` pinned at the
+    spec level, matching `derive_view_tag_x25519`'s `u8`
+    return type and the existing `SharedKey::view_tag` shape.
+    **A5 → ζ** — method-to-domain binding via `SignsInDomain`
+    marker trait + per-domain unit-struct markers
+    (`SignTransactionDomain`, `OutputSecretDerivationDomain`,
+    `FcmpPlusPlusWitnessDomain`, `MlKemChallengeDomain`) plus
+    the generic `derive_signing_key<D: SignsInDomain>`
+    primitive; cross-domain reuse becomes a compile-time-
+    inspectable action rather than a copy-paste accident. **D1**
+    — `sign_transaction` validation contract pinned with
+    impl-side responsibilities (handle resolution, per-input
+    signature production, FCMP++ witness production) and
+    caller-side preconditions (amount accounting, fee
+    correctness, address validity, structural well-formedness)
+    explicit. §3.3 Sub-bundle A grows by five rows
+    (`VIEW_TAG_BYTES`, `OUTPUT_DERIVE_HKDF_REGISTRY` reference,
+    `SignsInDomain` trait, four per-domain markers,
+    `derive_signing_key` primitive); §3.3 Sub-bundle B's
+    `ViewTag` doc updates the `VIEW_TAG_BYTES` pin language;
+    §4's `try_claim_output` doc-comment adds the A3 derivation
+    reference; §4's `sign_transaction` doc-comment adds the D1
+    validation contract and inlines the A5 → ζ disposition.
+  - **3d–3e (forthcoming).** 3d — Pattern-3 / Pattern-4
+    cluster (B1 three-layer test-substrate discipline; B2
+    handle-storage discipline post-A1; visibility discipline
+    on message types; the §6.4 orphan-absence verification
+    mechanism deferred from the 3a review pass). 3e —
+    residual + forward-template content (Trust-class A/B
+    classification; A8 DESIGN_CONCEPTS.md cross-reference;
+    four-pattern checklist for PR 4–7 pre-flight; trajectory
+    note).
 - **Round 4+ (forthcoming).** Adversarial pass against the
   handle-model emergent attack surface (A6, A7, persistence
   option-space, concurrency-quality / Pattern-5 cluster). Per
@@ -114,11 +150,11 @@ additive and absorb under §8.2's two-commit form.
 |---|---|---|---|
 | 0 | Workflow-shape pivot (primitive-shape `view_ecdh` / `hybrid_decapsulate` / `sign_with_spend` replaced by workflow-shape `try_claim_output` / `sign_transaction`; hybrid-framework reconciliation absorbed) | Doc-only spec amendment | **Re-opens §7** |
 | 0b | `KeyError` / `KeyEngineError` split | Doc-only spec amendment | **Re-opens §7** |
-| 0c | Workflow-internal types + message shapes for cross-boundary travel (Sub-bundle A: `pub(crate)` impl-internals — `SignDomain`, `AccountPublicAddress`, `HandleTable`, `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT`, `derive_subaddress_kem_keypair` primitive; Sub-bundle B: trait-surface message shapes — `OutputDetectionInput`, `OutputHandle`, `OutputClaimResult`, `OutputClaim`, `TxToSign`, `TxSignatures`, `SubaddressPurpose`, `SubaddressFor`, `RecipientSubaddress`, `SubaddressKeyPair`, `ViewTag`; Sub-bundle C: handle-indirected workflow contract — `OutputHandle` is opaque to the orchestrator with inner shape pinned in Round 4; Sub-bundle D: per-subaddress `kem_pk` derivation — `RecipientSubaddress.kem_pk` derives deterministically from view secret + subaddress index per §3.1.3, β disposition rule-forced by `00-mission.mdc`'s priority hierarchy) | Doc-only spec amendment | Additive |
+| 0c | Workflow-internal types + message shapes for cross-boundary travel (Sub-bundle A: `pub(crate)` impl-internals — `SignDomain`, `AccountPublicAddress`, `HandleTable`, `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT`, `derive_subaddress_kem_keypair` primitive, `VIEW_TAG_BYTES`, `OUTPUT_DERIVE_HKDF_REGISTRY` reference, `SignsInDomain` marker trait + per-domain markers (`SignTransactionDomain`, `OutputSecretDerivationDomain`, `FcmpPlusPlusWitnessDomain`, `MlKemChallengeDomain`), `derive_signing_key<D: SignsInDomain>` primitive; Sub-bundle B: trait-surface message shapes — `OutputDetectionInput`, `OutputHandle`, `OutputClaimResult`, `OutputClaim`, `TxToSign`, `TxSignatures`, `SubaddressPurpose`, `SubaddressFor`, `RecipientSubaddress`, `SubaddressKeyPair`, `ViewTag`; Sub-bundle C: handle-indirected workflow contract — `OutputHandle` is opaque to the orchestrator with inner shape pinned in Round 4; Sub-bundle D: per-subaddress `kem_pk` derivation — `RecipientSubaddress.kem_pk` derives deterministically from view secret + subaddress index per §3.1.3, β disposition rule-forced by `00-mission.mdc`'s priority hierarchy; Sub-bundle E: Pattern-2 spec-silent junctions — A3 per-output HKDF derivation reference, A4 `VIEW_TAG_BYTES = 1` pin, A5 → ζ marker-trait domain-binding, D1 `sign_transaction` validation contract, all per §3.1.4) | Doc-only spec amendment | Additive |
 | 0d | `pub(crate)` visibility + `Send + Sync + 'static` super-bound + Q9.3 disposition correction | Doc-only spec amendment | Additive |
 | 0e (optional, code) | `AllKeysBlob` migrated to `#[derive(Zeroize, ZeroizeOnDrop)]` | Code PR in `shekyl-crypto-pq` | Out of §2.1 scope (precondition correction) |
 
-**Phase 0c sub-bundle structure.** Sub-bundle A (workflow-internal types) lives behind the trait surface as `pub(crate)` impl-internals — `SignDomain` is no longer a trait-level concept; it cryptographically separates HKDF contexts inside `LocalKeys`'s impl. `HandleTable` (added in Round-3 commit 3a) is the workflow-internal state mapping `OutputHandle` → per-output secret material; concurrent-access shape pinned in Round 4. `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT` and the `derive_subaddress_kem_keypair` primitive (added in Round-3 commit 3b) pin the per-subaddress deterministic ML-KEM-768 keygen path that `derive_subaddress(_, Recipient)` consumes. Sub-bundle B (message shapes) is the actor-message granularity at which `KeyEngine` exposes work; each shape is a structured non-secret bundle that crosses the trait boundary in place of the primitive-shape signatures the pre-amendment §2.1 named. Sub-bundle C (handle-indirected workflow contract) is the post-Round-3 disposition: per-output spending material does not cross the trait boundary; the orchestrator receives an opaque `OutputHandle` and references it in subsequent `sign_transaction` calls. Sub-bundle D (per-subaddress `kem_pk` derivation, added in Round-3 commit 3b per §3.1.3) pins the rule-forced disposition that `RecipientSubaddress.kem_pk` derives deterministically from view secret + subaddress index — α (drop per-subaddress `kem_pk`) decomposes into three sub-options each violating a priority-hierarchy rule, leaving β as the only admissible disposition. Stub-quality shapes landed in commit 1 of this design-doc round; concrete field sets landed in commit 2; the handle-indirected reshape lands in Round-3 commit 3a; the per-subaddress `kem_pk` derivation specification lands in Round-3 commit 3b (and accepts Round-4+ refinement against the handle-table internal disposition).
+**Phase 0c sub-bundle structure.** Sub-bundle A (workflow-internal types) lives behind the trait surface as `pub(crate)` impl-internals — `SignDomain` is no longer a trait-level concept; it cryptographically separates HKDF contexts inside `LocalKeys`'s impl. `HandleTable` (added in Round-3 commit 3a) is the workflow-internal state mapping `OutputHandle` → per-output secret material; concurrent-access shape pinned in Round 4. `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT` and the `derive_subaddress_kem_keypair` primitive (added in Round-3 commit 3b) pin the per-subaddress deterministic ML-KEM-768 keygen path that `derive_subaddress(_, Recipient)` consumes. Sub-bundle B (message shapes) is the actor-message granularity at which `KeyEngine` exposes work; each shape is a structured non-secret bundle that crosses the trait boundary in place of the primitive-shape signatures the pre-amendment §2.1 named. Sub-bundle C (handle-indirected workflow contract) is the post-Round-3 disposition: per-output spending material does not cross the trait boundary; the orchestrator receives an opaque `OutputHandle` and references it in subsequent `sign_transaction` calls. Sub-bundle D (per-subaddress `kem_pk` derivation, added in Round-3 commit 3b per §3.1.3) pins the rule-forced disposition that `RecipientSubaddress.kem_pk` derives deterministically from view secret + subaddress index — α (drop per-subaddress `kem_pk`) decomposes into three sub-options each violating a priority-hierarchy rule, leaving β as the only admissible disposition. Sub-bundle E (Pattern-2 spec-silent junctions, added in Round-3 commit 3c per §3.1.4) closes four load-bearing cryptographic junctions whose specification previously lived in implementation lore: A3 pins the per-output HKDF derivation by reference to the canonical `shekyl-crypto-pq::derivation` registry; A4 pins `VIEW_TAG_BYTES = 1` at the spec level; A5 → ζ pins method-to-domain binding via the `SignsInDomain` marker trait + associated const for compile-time cross-domain-reuse prevention; D1 pins the `sign_transaction` validation contract, separating impl-side responsibilities (handle resolution, per-input signature production, FCMP++ witness production) from caller-side preconditions (amount accounting, fee correctness, address validity, structural well-formedness). Stub-quality shapes landed in commit 1 of this design-doc round; concrete field sets landed in commit 2; the handle-indirected reshape lands in Round-3 commit 3a; the per-subaddress `kem_pk` derivation specification lands in Round-3 commit 3b; the spec-silent-junctions cluster lands in Round-3 commit 3c (and accepts Round-4+ refinement against the handle-table internal disposition).
 
 §3 below names each bundle's substantive content. §5 names the
 sequencing.
@@ -872,6 +908,122 @@ indirection completion prose).**
 > ML-KEM keypairs on demand from view secret + index; senders
 > extract precomputed `kem_pk` from `RecipientSubaddress`.
 
+### 3.1.4 Pattern-2 spec-silent junctions cluster
+
+Round 3's adversarial pass surfaced four findings that share a
+structural shape: **load-bearing cryptographic junctions whose
+specification lives in implementation lore rather than at the
+spec level**. Each finding names a junction the implementation
+already handles correctly today but whose spec-level pin is
+missing or ambiguous. The cluster's threat-pattern shape:
+
+> **Pattern 2 — Spec-silent load-bearing junctions.** When a
+> trait's contract describes _what_ the impl produces but not
+> _how_ the impl binds context into the production, an
+> adversary's probe target shifts from "find a primitive that
+> leaks" to "find a junction the spec doesn't pin and nudge the
+> impl into binding the wrong context." Future maintainers
+> rebuilding the impl from the spec alone may rebuild the
+> binding differently than the original; cross-version
+> verifiers reading the spec alone may accept an output the
+> original would reject.
+
+The four findings landed by commit 3c:
+
+- **A3 — per-output HKDF context binding.** The spec names
+  `try_claim_output` as performing "HKDF chain" but does not
+  pin which HKDF labels, salts, and per-output index-binding
+  bytes the chain uses. Disposition: pin the canonical
+  derivation reference (`shekyl-crypto-pq::derivation`'s
+  `derive_output_secrets` and `derive_view_tag_x25519` salt
+  / label registry) at the spec level; explain the per-output
+  uniqueness argument (uniqueness comes from `combined_ss`
+  being per-output-unique, not from an explicit
+  transaction-context hash; the wargaming pass's
+  "tx_context_hash" framing was overspecified — the actual
+  binding is via unique-per-output `combined_ss`).
+- **A4 — `VIEW_TAG_BYTES` width.** The spec names a
+  `ViewTag(pub(crate) [u8; VIEW_TAG_BYTES])` newtype but does
+  not pin the constant's value. Disposition: pin
+  `VIEW_TAG_BYTES = 1` (matching the existing `u8` shape in
+  `shekyl-crypto-pq::derivation::derive_view_tag_x25519`'s
+  return type and `shekyl-scanner::shared_key::SharedKey::view_tag`'s
+  field); the 1-byte width is consistent with classical Monero's
+  view-tag width and bounds the false-positive rate the
+  pre-filter trades for the pre-filter's cheap-path benefit.
+- **A5 → ζ — Method-to-domain binding via marker trait.**
+  Cross-domain signature reuse prevention via per-domain HKDF
+  chains (the impl's `SignDomain` enumeration) is currently
+  enforced by convention — each call site asserts the domain
+  it's signing in, and a future maintainer copying a
+  `sign_transaction` body to add `sign_governance_proposal`
+  could reuse the same domain by accident. Disposition: ζ
+  (marker trait + associated const). A `SignsInDomain` trait
+  with an associated `const DOMAIN: SignDomain` plus per-domain
+  unit-struct markers (`SignTransactionDomain`,
+  `OutputSecretDerivationDomain`, etc.) bound to the
+  `derive_signing_key<D: SignsInDomain>` primitive. Reusing a
+  domain becomes a deliberate inspection-visible action;
+  introducing a new domain requires deliberately introducing a
+  new marker. Compile-time enforcement of a load-bearing
+  security property at minimal cost.
+- **D1 — `sign_transaction` validation contract.** The
+  `sign_transaction` doc-comment names the workflow but does
+  not specify which validations are the impl's responsibility
+  versus the orchestrator's. Disposition: pin the validation
+  boundary explicitly. The impl validates: handle resolution
+  succeeds; per-input signature can be produced (per-output
+  secret recoverable); FCMP++ witness can be produced. The
+  impl does **not** validate amount accounting (orchestrator's
+  responsibility, established at `TxToSign` construction time),
+  fee calculation (orchestrator), or recipient-address validity
+  (already validated at `TxToSign` construction). The
+  validation boundary defines which `KeyEngineError` variants
+  surface from `sign_transaction` versus which conditions are
+  caller-side preconditions. See §4 for the doc-comment
+  amendment.
+
+**Pattern-2 generalization for PR 4–7.** Per-trait PRs land
+spec-silent junctions whenever the trait's contract describes
+_capability_ ("produce a signature") without pinning _binding_
+("what context binds into the signature challenge?"). PR 4–7
+authors should run a spec-silent-junction sweep at pre-flight:
+
+1. Read the trait's doc-comments. List every load-bearing
+   cryptographic operation named.
+2. For each, ask: "if a future maintainer rebuilt this from the
+   spec alone, would they bind the same context into the
+   primitive?" If no, the junction is spec-silent and worth
+   pinning.
+3. For each, ask: "if a cross-version verifier consumed the
+   spec alone, would they reject outputs the impl rejects?"
+   If no, the junction is spec-silent.
+4. Pin junctions at the per-trait PR design-doc stage; do not
+   defer to implementation.
+
+The four landings above are an instance of this checklist
+applied retrospectively. PR 4–7's pre-flight should produce the
+checklist eagerly rather than waiting for adversarial review to
+surface findings.
+
+**Amendment-block framing (to land in §2.1's "Stage 1 PR 3
+spec-clarification" provenance subsection).**
+
+> The Round-3 commit 3c lands four spec-silent junction
+> dispositions: A3 — per-output HKDF derivation pinned to the
+> canonical `shekyl-crypto-pq::derivation` reference; A4 —
+> `VIEW_TAG_BYTES = 1` pinned at the spec level; A5 → ζ —
+> method-to-domain binding via `SignsInDomain` marker trait +
+> associated const for compile-time cross-domain-reuse
+> prevention; D1 — `sign_transaction` validation contract
+> pinned with the impl-side / orchestrator-side validation
+> boundary explicit. None of these change the trait's
+> capability surface; all close junctions whose specification
+> currently lives in implementation lore rather than at the
+> spec level. The Pattern-2 generalization checklist (above)
+> is the contribution PR 3 makes to PR 4–7's pre-flight
+> discipline.
+
 ### 3.2 Phase 0b — `KeyError` / `KeyEngineError` split (§7-non-compliant)
 
 **Drift.** Existing `KeyError`
@@ -993,6 +1145,11 @@ the trait surface's parameters and return types.
 | `HandleTable` | `pub(crate) struct HandleTable { /* concurrent-access shape pinned in Round 4 */ }` | Workflow-internal state owned by `LocalKeys`. Maps `OutputHandle` → per-output secret material (`output_secret_key`, `amount_blinding_factor`) for outputs the wallet has claimed but not yet spent. Lives behind interior mutability (the `KeyEngine` trait is `&self` async; concurrent `try_claim_output` calls insert; `sign_transaction` looks up). The exact concurrent-access shape (sharded `RwLock`, lock-free hashmap, fair-queued single-writer, etc.) is **Round 4 work**; the shape selection couples to A6 (memory-pressure attack surface) and the Round-3 Pattern-5 cluster (cross-call state correlation as side-channel). The trait surface is unchanged regardless of inner shape. |
 | `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT` | `pub(crate) const SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT: &[u8] = b"shekyl/subaddr-mlkem-keygen-v1";` | HKDF-Expand info-string prefix for the per-subaddress ML-KEM-768 keygen path (per §3.1.3). The `-v1` suffix is the versioning axis: a future hard fork that migrates the derivation (e.g., V4 lattice-only swap from ML-KEM-768 to a successor primitive) bumps the suffix and lives alongside the v1 path until the migration completes. The constant is `pub(crate)` because it's consumed inside `derive_subaddress`'s impl (and the symmetric recipient-side spend path that resolves an output against the same per-index ML-KEM secret); no trait-surface caller observes it. Consumed in conjunction with `subaddress_index_le_bytes` to form the full HKDF info string per the §3.1.3 byte-layout. |
 | `derive_subaddress_kem_keypair` (workflow-internal primitive) | `pub(crate) fn derive_subaddress_kem_keypair(view_secret: &ViewSecret, idx: SubaddressIndex) -> (HybridKemPublicKey, ZeroizingMlKemSecretKey)` (or signature pinned at impl time) | Deterministic per-subaddress ML-KEM-768 keypair derivation per §3.1.3. Workflow-internal; lives in `shekyl-crypto-pq` (or, if cleaner, in a `LocalKeys`-private module that re-exports the underlying ML-KEM-768 KeyGen against an HKDF-seeded byte stream). Consumed by `derive_subaddress(_, SubaddressPurpose::Recipient)` to populate `RecipientSubaddress.kem_pk` (returning the public component) and by `try_claim_output`'s impl to recover the per-subaddress ML-KEM SK during hybrid decap (re-deriving the keypair from view secret + the candidate index). The `ZeroizingMlKemSecretKey` return wrap (or equivalent) is per `35-secure-memory.mdc`'s structural-memwipe rule for SK material. The exact return-tuple shape, name, and module location are pinned at PR 3 implementation time; the §3.1.3 spec pins the inputs, the byte-layout of the HKDF info string, and the output-keypair determinism. |
+| `VIEW_TAG_BYTES` (A4 disposition) | `pub(crate) const VIEW_TAG_BYTES: usize = 1;` | Width of the on-wire view tag (`ViewTag(pub(crate) [u8; VIEW_TAG_BYTES])` per §3.3 Sub-bundle B). Pinned at `1` to match `shekyl-crypto-pq::derivation::derive_view_tag_x25519`'s `u8` return type and `shekyl-scanner::shared_key::SharedKey::view_tag`'s field shape. The 1-byte width is consistent with classical Monero's view-tag width; it bounds the false-positive rate of the X25519-only pre-filter to 2⁻⁸ per output, which is the chosen trade-off between filter selectivity and on-wire bloat. The constant is `pub(crate)` because it's consumed inside `try_claim_output`'s pre-filter machinery; no trait-surface caller observes it directly (the `ViewTag` newtype hides the width). Pinning the value at the spec level closes the A4 spec-silent junction (Round 3 §3.1.4 finding) so cross-version verifiers and future maintainers reading the spec alone share the same width as the impl. The `-v1` framing for view-tag derivation lives at the salt level (`HKDF_SALT_VIEW_TAG_X25519 = b"shekyl-view-tag-x25519-v1"`), not at the constant; a future migration that widens the tag would bump the salt suffix and the `VIEW_TAG_BYTES` value together as a coupled spec amendment. |
+| `OUTPUT_DERIVE_HKDF_REGISTRY` (A3 reference, not a Rust item) | The canonical HKDF salt + label registry living in `shekyl-crypto-pq::derivation`: `HKDF_SALT_OUTPUT_DERIVE = b"shekyl-output-derive-v1"`, `HKDF_SALT_VIEW_TAG_X25519 = b"shekyl-view-tag-x25519-v1"`, `SALT_KEM_DERIVE_V1 = b"shekyl-output-kem-v1"`; per-secret labels `shekyl-output-x`, `shekyl-output-y`, `shekyl-output-mask`, `shekyl-output-amount-key`, `shekyl-output-view-tag-combined`, `shekyl-output-amount-tag`, `shekyl-pqc-output`, `shekyl-pqc-ed25519`, `shekyl-view-tag-x25519`. | Per-output HKDF chain that `try_claim_output`'s impl uses to derive output-spending secrets, view-tag-combined cross-check, amount key, ML-DSA seed, and Ed25519-PQC seed. The spec's pre-Round-3 framing said "HKDF chain" without pinning the binding; A3's disposition (Round 3 §3.1.4) is to **reference the canonical registry** rather than restate it here. The single source of truth is `shekyl-crypto-pq::derivation` (alongside `tools/reference/derive_output_secrets.py` and the locked `docs/test_vectors/PQC_OUTPUT_SECRETS.json`); `KeyEngine`'s impl consumes those constants directly. **Per-output uniqueness argument:** the wargaming pass framed the concern as "cross-output replay needs explicit `tx_context_hash` binding"; this was overspecified. The actual binding is via `combined_ss = X25519(eph_sk, view_pk) ‖ ML-KEM-Decap(kem_sk, ct)` which is per-output-unique by construction (each output has a unique X25519 ephemeral and unique ML-KEM ciphertext). The `output_index_le64` byte-suffix on every label provides intra-tx separation; the per-output `combined_ss` provides cross-tx and cross-output separation. No `tx_context_hash` is required; the registry's existing salt + label + index-suffix layout already binds the full context. **Future-proofing:** a future hard fork that bundles a tx-level context (e.g., binding the FCMP++ root hash into the per-output derivation) would be a coupled `-v2` salt + label migration (the `-v1` suffixes are the versioning axis) and lives alongside the v1 path until the migration completes. The trait surface absorbs the migration through the impl; the trait's contract is unchanged. |
+| `SignsInDomain` (A5 → ζ) | `pub(crate) trait SignsInDomain { const DOMAIN: SignDomain; }` | Marker trait pinning the cryptographic domain a workflow-internal signing operation operates in. Implemented by per-domain unit-struct markers (`SignTransactionDomain`, `OutputSecretDerivationDomain`, `FcmpPlusPlusWitnessDomain`, `MlKemChallengeDomain`); each marker's `impl SignsInDomain` sets `const DOMAIN` to the matching `SignDomain` variant. Consumed by the workflow-internal `derive_signing_key<D: SignsInDomain>` primitive (and by future per-domain HKDF-context-derivation sites) — the type parameter forces the call site to name the domain, and the impl's HKDF context derivation reads `D::DOMAIN` to drive per-domain salt selection. Cross-domain reuse becomes a deliberate inspection-visible action: a future maintainer copying `sign_transaction`'s body to add `sign_governance_proposal` must change the type parameter to a new marker (introducing `SignGovernanceDomain` against the existing `SignDomain` enum), or reuse `SignTransactionDomain` against a non-transaction-signing call (an inspection-visible mismatch a reviewer flags). Compile-time enforcement of a load-bearing security property at minimal cost (~10–15 LOC for the trait + four markers); the discipline transfers from convention (every call site asserts) to type system (rustc enforces). The trait + markers are `pub(crate)` because no trait-surface caller observes them; they live entirely behind `LocalKeys`'s impl boundary. The `#[non_exhaustive]` on `SignDomain` (existing) keeps the enum extensible; new domains added per Q9.2's additive-amendment discipline land alongside their per-domain marker structs. |
+| `SignTransactionDomain` / `OutputSecretDerivationDomain` / `FcmpPlusPlusWitnessDomain` / `MlKemChallengeDomain` (A5 → ζ markers) | `pub(crate) struct SignTransactionDomain;` (and three siblings) with `impl SignsInDomain for SignTransactionDomain { const DOMAIN: SignDomain = SignDomain::TransactionSignature; }` (and three siblings, each binding to its matching `SignDomain` variant) | The four per-domain markers, one per `SignDomain` variant. Unit structs with no runtime cost; the `const DOMAIN` is monomorphized at compile time. Each call site that consumes `derive_signing_key<D: SignsInDomain>(...)` instantiates with the appropriate marker, naming the domain at the call site rather than passing it as a runtime argument. Stage 4's multisig variants (multisig witness, partial signature, etc.) add new `SignDomain` variants and corresponding new markers additively, per Q9.2's `#[non_exhaustive]` disposition. PR 4–7 trait extractions that introduce new signing workflows (e.g., a `PendingTxEngine`-internal partial-signature path) follow the same pattern: a new `SignDomain` variant, a new marker, the new workflow's impl uses the marker. |
+| `derive_signing_key` (workflow-internal primitive) | `pub(crate) fn derive_signing_key<D: SignsInDomain>(keys: &AllKeysBlob, msg_context: &[u8], /* additional inputs pinned at impl time */) -> SigningKeyMaterial` (signature pinned at impl time) | Generic over `D: SignsInDomain`. Reads `D::DOMAIN` to select the per-domain HKDF salt (or label, or context byte-string — the exact mapping is pinned at impl time per the existing per-domain HKDF-context discipline). Returns the signing material (or signature output, depending on whether the primitive splits into "derive key" + "sign with key" or fuses them — pinned at impl time). The **load-bearing property** is that the type parameter `D` is the **only** way to select a domain: there is no runtime `domain: SignDomain` argument; there is no default; there is no fallback. A call site must name the marker; the marker pins the domain. Future maintainers extending the primitive's signature add additional inputs (e.g., the FCMP++ witness root hash); the domain-selection axis is fixed by the type parameter and cannot drift. |
 
 #### Why a workflow-internal handle table — the handle-indirected workflow shape
 
@@ -1116,11 +1273,20 @@ impl OutputDetectionInput {
 pub struct ViewTag(pub(crate) [u8; VIEW_TAG_BYTES]);
 ```
 
-`VIEW_TAG_BYTES` is a workspace-level constant (FCMP++ output
-format pins the value); the `[u8; N]` shape rather than a typed
-hash output is intentional — view tags are short
-publicly-comparable bytestrings, not opaque hashes that need
-verification machinery.
+`VIEW_TAG_BYTES = 1` (pinned in §3.3 Sub-bundle A's
+`VIEW_TAG_BYTES` row, A4 disposition Round 3 §3.1.4). The
+1-byte width matches `shekyl-crypto-pq::derivation::derive_view_tag_x25519`'s
+`u8` return type and `shekyl-scanner::shared_key::SharedKey::view_tag`'s
+field shape; consistent with classical Monero's view-tag width;
+bounds the X25519-only pre-filter false-positive rate to 2⁻⁸
+per output. The `[u8; N]` shape rather than a typed hash output
+is intentional — view tags are short publicly-comparable
+bytestrings, not opaque hashes that need verification machinery.
+A future migration that widens the tag would bump
+`VIEW_TAG_BYTES` and the underlying HKDF salt suffix
+(`HKDF_SALT_VIEW_TAG_X25519`'s `-v1`) together as a coupled
+spec amendment; the `ViewTag` newtype absorbs the width change
+behind its constructor.
 
 ##### `OutputHandle`
 
@@ -1722,6 +1888,30 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// property the handle-indirected workflow shape delivers;
     /// see §3.1.1 / §3.3 / §4-deliberately-does-not-expose for
     /// the structural argument.
+    ///
+    /// **HKDF derivation reference (A3 disposition, Round 3 §3.1.4).**
+    /// The per-output HKDF chain consumes the canonical salt + label
+    /// registry pinned in `shekyl-crypto-pq::derivation`:
+    /// `HKDF_SALT_OUTPUT_DERIVE = b"shekyl-output-derive-v1"` for the
+    /// post-decap output-secret derivation;
+    /// `HKDF_SALT_VIEW_TAG_X25519 = b"shekyl-view-tag-x25519-v1"` for
+    /// the X25519-only pre-filter tag; per-secret labels
+    /// `shekyl-output-x`, `shekyl-output-y`, `shekyl-output-mask`,
+    /// `shekyl-output-amount-key`,
+    /// `shekyl-output-view-tag-combined`,
+    /// `shekyl-output-amount-tag`, `shekyl-pqc-output`,
+    /// `shekyl-pqc-ed25519`, each suffixed with `output_index_le64`.
+    /// Per-output uniqueness is delivered by `combined_ss = X25519(eph_sk,
+    /// view_pk) ‖ ML-KEM-Decap(kem_sk, ct)` being per-output-unique by
+    /// construction (each output has a unique X25519 ephemeral and unique
+    /// ML-KEM ciphertext); the `output_index_le64` byte-suffix provides
+    /// intra-tx separation. No explicit `tx_context_hash` binding is
+    /// required at this layer. The single source of truth is
+    /// `shekyl-crypto-pq::derivation` (alongside
+    /// `tools/reference/derive_output_secrets.py` and the locked
+    /// `docs/test_vectors/PQC_OUTPUT_SECRETS.json`); the trait surface
+    /// references the registry rather than restating it. See §3.3
+    /// Sub-bundle A's `OUTPUT_DERIVE_HKDF_REGISTRY` row.
     async fn try_claim_output(
         &self,
         input: &OutputDetectionInput,
@@ -1760,13 +1950,55 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// the per-method replay-behavior contract — see §7's
     /// Pattern-6 cluster).
     ///
+    /// **Validation contract (D1 disposition, Round 3 §3.1.4).**
+    /// The impl validates: (i) handle resolution succeeds for every
+    /// `TxInputSigningContext.handle` in `tx.inputs`; (ii) the
+    /// per-input signature can be produced from the resolved
+    /// per-output secret material (the cryptographic primitives
+    /// don't fail mid-signing on well-formed inputs, but
+    /// resource-class faults — exhausted entropy, missing PQC
+    /// backend, etc. — surface here); (iii) the FCMP++ witness can
+    /// be produced from the resolved spending material against
+    /// `tx.fcmp_context`. The impl does **not** validate: amount
+    /// accounting (sum of input amounts == sum of output amounts +
+    /// fee — orchestrator's responsibility, established at
+    /// `TxToSign` construction time per PR 5's `PendingTxEngine`
+    /// contract); fee calculation (orchestrator); recipient-address
+    /// validity (already validated at the address-decoding boundary
+    /// before `TxToSign` was constructed); transaction structural
+    /// well-formedness beyond what the type system enforces
+    /// (orchestrator). This boundary is load-bearing: it pins
+    /// which `KeyEngineError` variants surface from this method
+    /// (handle-resolution-class + signing-resource-class) versus
+    /// which conditions are **caller-side preconditions** that
+    /// must hold before invocation (amount accounting, fee
+    /// correctness, address validity, structural well-formedness).
+    /// A future maintainer adding a validation responsibility to
+    /// this method must justify why the validation belongs
+    /// inside the engine boundary rather than at the orchestrator
+    /// layer; the default is the orchestrator. See §3.1.4 for the
+    /// Pattern-2 spec-silent-junctions framing this contract closes.
+    ///
     /// **Cross-domain signature reuse is prevented cryptographically
-    /// inside the impl** via per-domain HKDF chains. The
-    /// `SignDomain` enumeration (§3.3 Sub-bundle A) is no longer
-    /// a trait-level concept; the binding from workflow method
-    /// to `SignDomain` variant is a Round-3 pattern-2 cluster
-    /// item with an A5 disposition pinned in commit 3c (marker
-    /// trait + associated const for compile-time enforcement).
+    /// inside the impl** via per-domain HKDF chains plus
+    /// **compile-time type-system enforcement** (A5 → ζ
+    /// disposition, Round 3 §3.1.4). The `SignDomain` enumeration
+    /// (§3.3 Sub-bundle A) is no longer a trait-level concept; the
+    /// binding from workflow method to `SignDomain` variant is
+    /// pinned via the `SignsInDomain` marker trait (§3.3 Sub-bundle
+    /// A) plus per-domain unit-struct markers
+    /// (`SignTransactionDomain`, `OutputSecretDerivationDomain`,
+    /// `FcmpPlusPlusWitnessDomain`, `MlKemChallengeDomain`). The
+    /// impl's call sites consume the workflow-internal
+    /// `derive_signing_key::<SignTransactionDomain>(...)` (and
+    /// per-domain siblings) — the type parameter is the only way
+    /// to select a domain; there is no runtime `domain: SignDomain`
+    /// argument. A future maintainer copying this method's body
+    /// to add a new signing workflow must change the marker (or
+    /// introduce a new one) — cross-domain reuse becomes a
+    /// deliberate inspection-visible action, not a copy-paste
+    /// accident. The discipline transfers from convention (every
+    /// call site asserts) to type system (rustc enforces).
     async fn sign_transaction(
         &self,
         tx: &TxToSign,
