@@ -16,12 +16,17 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-fn get_u64(map: &BTreeMap<String, serde_json::Value>, key: &str) -> u64 {
+fn get_u64(map: &BTreeMap<String, serde_json::Value>, key: &str, source: &Path) -> u64 {
     map.get(key)
         .and_then(serde_json::Value::as_u64)
-        .unwrap_or_else(|| panic!("missing or invalid u64 key in consensus_constants.json: {key}"))
+        .unwrap_or_else(|| {
+            panic!(
+                "missing or invalid u64 key {key:?} in {source}",
+                source = source.display()
+            )
+        })
 }
 
 fn main() {
@@ -41,20 +46,23 @@ fn main() {
 
     let raw = fs::read_to_string(&config_path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", config_path.display()));
-    let map: BTreeMap<String, serde_json::Value> =
-        serde_json::from_str(&raw).expect("invalid JSON in consensus_constants.json");
+    let map: BTreeMap<String, serde_json::Value> = serde_json::from_str(&raw)
+        .unwrap_or_else(|e| panic!("invalid JSON in {}: {e}", config_path.display()));
 
-    let min_age = get_u64(&map, "fcmp_reference_block_min_age");
-    let max_age = get_u64(&map, "fcmp_reference_block_max_age");
+    let min_age = get_u64(&map, "fcmp_reference_block_min_age", &config_path);
+    let max_age = get_u64(&map, "fcmp_reference_block_max_age", &config_path);
     // Convert to the destination type at the boundary so the generator's
     // type contract is enforced in Rust (not just by the literal inferred
     // in the `format!` template). A JSON value > 255 fails the build here
     // with a clear message rather than silently emitting an out-of-range
     // literal that the consumer would reject. Mirrors the type-aware
     // range check in `cmake/generate_consensus_constants.py`.
-    let rct_type_raw = get_u64(&map, "rct_type_fcmp_plus_plus_pqc");
+    let rct_type_raw = get_u64(&map, "rct_type_fcmp_plus_plus_pqc", &config_path);
     let rct_type: u8 = u8::try_from(rct_type_raw).unwrap_or_else(|_| {
-        panic!("rct_type_fcmp_plus_plus_pqc must fit in u8 (got {rct_type_raw})")
+        panic!(
+            "rct_type_fcmp_plus_plus_pqc must fit in u8 (got {rct_type_raw}) in {}",
+            config_path.display()
+        )
     });
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));

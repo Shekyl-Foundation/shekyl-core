@@ -66,20 +66,24 @@ def main() -> int:
 
     missing = [k for k in KEYS_INTEGER if k not in data]
     if missing:
-        print(f"missing keys in consensus_constants.json: {', '.join(missing)}",
+        print(f"missing keys in {in_path}: {', '.join(missing)}",
               file=sys.stderr)
         return 1
 
     for k, ctype in KEYS_INTEGER.items():
         v = data[k]
         if not isinstance(v, int) or isinstance(v, bool):
-            print(f"key {k} must be an integer (got {type(v).__name__}: {v!r})",
-                  file=sys.stderr)
+            print(
+                f"key {k} in {in_path} must be an integer "
+                f"(got {type(v).__name__}: {v!r})",
+                file=sys.stderr,
+            )
             return 1
         lo, hi = TYPE_RANGES[ctype]
         if not (lo <= v <= hi):
             print(
-                f"key {k} value {v} out of range for {ctype} [{lo}, {hi}]",
+                f"key {k} in {in_path} value {v} out of range "
+                f"for {ctype} [{lo}, {hi}]",
                 file=sys.stderr,
             )
             return 1
