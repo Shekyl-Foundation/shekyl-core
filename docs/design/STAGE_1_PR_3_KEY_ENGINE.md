@@ -700,24 +700,319 @@ the trait surface's parameters and return types.
 
 The workflow-shape trait surface needs structured non-secret
 parameter and return types for `try_claim_output`,
-`sign_transaction`, and `derive_subaddress`. **Stub rows here for
-commit 1 of this design-doc round; concrete field sets land in
-commit 2.** Each row's "shape" cell carries enough information
-for reviewers to confirm the pivot direction without committing
-to every field-level decision:
+`sign_transaction`, and `derive_subaddress`. Concrete shapes
+pinned below; doc-comment prose is normative for the Phase 0c
+amendment block. Round 3+ may refine field details against PR 5
+(`PendingTxEngine`) consumer constraints.
 
-| Type | Shape (stub for commit 1; pinned in commit 2) | Source / rationale |
-|---|---|---|
-| `OutputDetectionInput` | Bundles `HybridCiphertext` + `ViewTag` + `output_index` (and possibly block-context fields) for `try_claim_output`'s input | Single message struct so `try_claim_output`'s impl receives all source-correct fields together; constructor-enforced source correctness (see commit 2's `from_block_output(&LedgerBlock, u64) -> Option<Self>` shape). |
-| `OutputClaimResult` | `#[non_exhaustive] enum OutputClaimResult { Mine(OutputClaim), NotMine }` | Workflow output; structured non-secret. The `Mine` variant carries the `OutputClaim` payload; `NotMine` carries no data (most outputs are NotMine in real scanning). |
-| `OutputClaim` | Structured non-secret claim data: per-output spend secret material derivative, key image, amount-blinding-factor, decrypted amount (and any additional FCMP++-scanner fields) | The structured non-secret payload from a successful output detection. Secret intermediates (raw shared secrets, HKDF intermediates) are confined to `try_claim_output`'s stack frame; the claim type carries only what downstream balance / spend-tx-construction code needs. |
-| `TxToSign` | Bundles per-input signing context, per-output context, and any FCMP++ context the signing pass needs | Single message struct so `sign_transaction`'s impl receives all signing inputs together; the type's exact shape depends on FCMP++ context details and is pinned in commit 2 (with deferral to PR 5's `PendingTxEngine` design doc for the per-input context details). |
-| `TxSignatures` | Per-input signature bundle returned by `sign_transaction` | Structured non-secret payload of the signing pass. Carries hybrid signatures per-input, FCMP++ witnesses, and any other signature-class output the signing produced. |
-| `SubaddressPurpose` | `#[non_exhaustive] enum SubaddressPurpose { Recipient, Audit }` | Purpose-decomposed subaddress derivation per L2.2's design pivot. New purposes accrete additively in V3.x (e.g., `PqcRecipient` for hybrid-augmented subaddresses); the `#[non_exhaustive]` annotation gives existing call sites a compile-time signal when new variants land. |
-| `SubaddressFor` | `#[non_exhaustive] enum SubaddressFor { Recipient(RecipientSubaddress), Audit(SubaddressKeyPair) }` | Discriminated union over `SubaddressPurpose`. New variants accrete in lockstep with `SubaddressPurpose`. |
-| `RecipientSubaddress` | `{ encoded: Address, kem_pk: HybridKemPublicKey }` | The recipient-context payload: encoded address (Bech32m for Shekyl) + KEM public key for senders to encapsulate against. Used by payment-URI / QR-code generation paths. |
-| `SubaddressKeyPair` | `{ spend_pk: [u8; 32], view_pk: [u8; 32] }` | The audit-context payload: canonical key pairs for backup/inspection. Used by export paths. PQC-augmented subaddresses are a V3.x extension that lands as an additional `SubaddressFor::PqcRecipient` variant carrying its own message shape. |
-| `ViewTag` | Newtype wrapping `[u8; N]` for the view-tag bytes | Carries the view tag from a hybrid ciphertext into `OutputDetectionInput`'s constructor. Stub size pinned in commit 2 against the FCMP++ output-format. |
+##### `OutputDetectionInput`
+
+```rust
+/// Input to `KeyEngine::try_claim_output`.
+///
+/// Bundles the per-output detection context the scanner extracts
+/// from a single on-chain output: the hybrid ciphertext (carrying
+/// the X25519 ephemeral and ML-KEM ciphertext), the view tag (for
+/// the cheap pre-filter), and the output's index within its
+/// containing block (used for HKDF context binding).
+///
+/// Constructed via `from_block_output(&LedgerBlock, u64)` (the
+/// scanner's natural source-of-truth path) or `from_components`
+/// (for fixture / replay paths where the source is reconstructed
+/// from primitives).
+pub struct OutputDetectionInput {
+    /// The hybrid ciphertext (X25519 ephemeral + ML-KEM ciphertext).
+    /// Public on-chain data.
+    ciphertext: HybridCiphertext,
+    /// The view tag, used by `try_claim_output`'s impl for the
+    /// X25519 pre-filter check.
+    view_tag: ViewTag,
+    /// The output's index within its containing block, used for
+    /// HKDF context binding inside `try_claim_output`'s impl.
+    output_index: u64,
+}
+
+impl OutputDetectionInput {
+    /// Construct from a ledger block + output index.
+    ///
+    /// **Coupling note.** This constructor is intentionally
+    /// coupled to `LedgerBlock`'s field shape because that is
+    /// where the source-correctness invariants live: the X25519
+    /// ephemeral, the hybrid ciphertext, and the view tag are
+    /// co-located in the on-chain output and must be sourced
+    /// together to remain consistent. If `LedgerBlock` changes —
+    /// e.g., FCMP++ scanner work refactors block structure, or
+    /// PR 4–7 surface changes ripple back to ledger types — this
+    /// constructor is one of the constraint sites that updates
+    /// with it. This coupling is **expected and documented, not
+    /// surprise**; the alternative (a `from_components(ciphertext,
+    /// view_tag, output_index)`-only construction surface) would
+    /// distribute source-correctness responsibility back to the
+    /// caller, which the workflow-shape pivot specifically
+    /// prevents.
+    pub(crate) fn from_block_output(
+        block: &LedgerBlock,
+        output_index: u64,
+    ) -> Option<Self>;
+
+    /// Construct from already-extracted components.
+    ///
+    /// For fixture / replay paths where the source is being
+    /// reconstructed from primitives. **Production scanner code
+    /// should use `from_block_output` instead** — this constructor
+    /// is exposed because tests need to build inputs against
+    /// known-good components without going through full block
+    /// construction.
+    #[cfg(test)]
+    pub(crate) fn from_components(
+        ciphertext: HybridCiphertext,
+        view_tag: ViewTag,
+        output_index: u64,
+    ) -> Self;
+}
+```
+
+##### `ViewTag`
+
+```rust
+/// View tag bytes from a hybrid ciphertext.
+///
+/// Newtype around `[u8; N]` where `N` is pinned against the
+/// FCMP++ output format. The view-tag size is a property of the
+/// scanner's pre-filter design; the type's purpose at the
+/// `KeyEngine` boundary is to type-distinguish view-tag bytes
+/// from arbitrary 1-byte (or N-byte) fields in the surrounding
+/// types.
+pub struct ViewTag(pub(crate) [u8; VIEW_TAG_BYTES]);
+```
+
+`VIEW_TAG_BYTES` is a workspace-level constant (FCMP++ output
+format pins the value); the `[u8; N]` shape rather than a typed
+hash output is intentional — view tags are short
+publicly-comparable bytestrings, not opaque hashes that need
+verification machinery.
+
+##### `OutputClaimResult` and `OutputClaim`
+
+```rust
+/// Result of a `KeyEngine::try_claim_output` call.
+///
+/// Mine carries the structured non-secret claim payload; NotMine
+/// carries no data. Most outputs are NotMine in real scanning;
+/// the X25519 pre-filter rejects them cheaply inside
+/// `try_claim_output`'s impl.
+#[non_exhaustive]
+pub enum OutputClaimResult {
+    Mine(OutputClaim),
+    NotMine,
+}
+
+/// Structured non-secret claim payload from a successful output
+/// detection.
+///
+/// **Cryptographic intermediates** (the X25519 raw 32-byte
+/// shared secret, the 64-byte hybrid shared secret, HKDF
+/// intermediate keying material) are **not** carried by this
+/// type — they are zeroized in-place inside `try_claim_output`'s
+/// stack frame. The fields below are the structured non-secret
+/// payload downstream balance / spend-tx-construction code
+/// needs.
+pub struct OutputClaim {
+    /// The output's per-output secret-key material derivative
+    /// (used by spend-construction to produce the per-input
+    /// signing key for this output). Wrapped in `Zeroizing<...>`
+    /// because while the value is the *key* the wallet uses to
+    /// spend, it is bound to the per-output context (output
+    /// index + transaction context) rather than the wallet's
+    /// long-term spend secret. Rotation / churn across outputs
+    /// is what makes this distinct from the long-term
+    /// `AllKeysBlob` material.
+    pub output_secret_key: Zeroizing<[u8; 32]>,
+    /// The output's key image. Public; used by both wallet-side
+    /// double-spend tracking and consensus-side double-spend
+    /// detection.
+    pub key_image: KeyImage,
+    /// The amount-blinding factor (Pedersen-commitment blinder).
+    /// Used by spend-construction to balance commitments across
+    /// the transaction. Not strictly secret (the receiver can
+    /// recompute it from the shared secret), but treated with
+    /// `Zeroizing` discipline to match the surrounding type's
+    /// security posture.
+    pub amount_blinding_factor: Zeroizing<[u8; 32]>,
+    /// The decrypted output amount (atomic units).
+    ///
+    /// Open question for Round 3: should `OutputClaim` carry the
+    /// already-decrypted amount, or only the
+    /// `amount_blinding_factor` and let downstream code recompute
+    /// the amount? Decrypting at `try_claim_output` time is the
+    /// natural single-pass shape (the impl already has the shared
+    /// secret in scope); requiring downstream re-decryption forces
+    /// the secret-derivation path to run twice. Pinned here as
+    /// "decrypt at claim time, return the value" pending Round 3
+    /// pushback.
+    pub amount_atomic_units: u64,
+}
+```
+
+##### `TxToSign` and `TxSignatures`
+
+```rust
+/// Input to `KeyEngine::sign_transaction`.
+///
+/// Bundles all per-input signing context, per-output context,
+/// and FCMP++ context the signing pass needs. **The exact field
+/// shape depends on FCMP++ context details and is finalized in
+/// PR 5 (`PendingTxEngine`)** alongside that trait's
+/// transaction-build workflow; the shape pinned below is
+/// PR-3-side stub adequate for trait extraction but not for
+/// actual transaction construction.
+///
+/// Consumers: PR 5's transaction-build workflow constructs a
+/// `TxToSign` and passes it to `sign_transaction` as the final
+/// step before broadcast.
+pub struct TxToSign {
+    /// Per-input signing context. Each entry carries the input's
+    /// FCMP++ membership-proof context, the per-input signing
+    /// message bytes, and any per-input HKDF binding context.
+    /// The exact shape is pinned in PR 5.
+    pub inputs: Vec<TxInputSigningContext>,
+    /// Per-output context (commitment, amount-blinding factor,
+    /// destination subaddress kem_pk). Used by the signing pass
+    /// to bind output commitments into the per-input signature
+    /// challenges.
+    pub outputs: Vec<TxOutputContext>,
+    /// FCMP++ transaction-level context (reference block, anchor
+    /// data, etc). Pinned in PR 5.
+    pub fcmp_plus_plus_context: FcmpPlusPlusContext,
+}
+
+/// Output of `KeyEngine::sign_transaction`.
+///
+/// Carries hybrid signatures per-input, FCMP++ witnesses, and
+/// any other signature-class output the signing pass produces.
+/// All fields are public (signatures are public by definition);
+/// no `Zeroizing` discipline applies.
+pub struct TxSignatures {
+    /// Per-input hybrid signature bundle.
+    pub per_input: Vec<TxInputSignature>,
+    /// FCMP++ membership-proof witnesses, one per input.
+    pub fcmp_plus_plus_witnesses: Vec<FcmpPlusPlusWitness>,
+}
+```
+
+> **Open questions for Round 3 / PR 5 hand-off.** The shapes
+> `TxInputSigningContext`, `TxOutputContext`, `FcmpPlusPlusContext`,
+> `TxInputSignature`, and `FcmpPlusPlusWitness` are referenced
+> here as forward declarations. PR 5 (`PendingTxEngine`) is the
+> design doc that pins them. PR 3's spec amendment block will
+> name them as "shape pinned in PR 5"; PR 3's implementation work
+> uses minimal stub shapes adequate for trait extraction. The
+> workflow boundary stays stable across PR 5's pinning — only the
+> message-shape internals change.
+
+##### `SubaddressPurpose` and `SubaddressFor`
+
+```rust
+/// Purpose argument to `KeyEngine::derive_subaddress`.
+///
+/// Selects which `SubaddressFor` variant the trait method
+/// returns. New purposes accrete additively in V3.x (e.g.,
+/// `PqcRecipient` for hybrid-augmented subaddresses); the
+/// `#[non_exhaustive]` annotation gives existing call sites a
+/// compile-time signal when new variants land.
+#[non_exhaustive]
+pub enum SubaddressPurpose {
+    /// Recipient context: encoded address + KEM public key for
+    /// senders to encapsulate against. Used by payment-URI /
+    /// QR-code generation paths.
+    Recipient,
+    /// Audit context: canonical spend / view public-key pair.
+    /// Used by export / backup / inspection paths.
+    Audit,
+}
+
+/// Discriminated return type from `KeyEngine::derive_subaddress`.
+///
+/// Each variant pairs with a `SubaddressPurpose` variant; the
+/// `#[non_exhaustive]` annotation accretes additively with
+/// `SubaddressPurpose`.
+#[non_exhaustive]
+pub enum SubaddressFor {
+    Recipient(RecipientSubaddress),
+    Audit(SubaddressKeyPair),
+}
+```
+
+##### `RecipientSubaddress` and `SubaddressKeyPair`
+
+```rust
+/// Recipient-context subaddress payload.
+///
+/// Returned by `derive_subaddress(idx, SubaddressPurpose::Recipient)`.
+/// Carries everything a sender needs to encapsulate to this
+/// subaddress: the encoded address (for display / UI / parsing
+/// at recipient input) and the KEM public key (for hybrid
+/// encapsulation at transaction-build time).
+pub struct RecipientSubaddress {
+    /// Encoded address. Whether this is a parsed structured
+    /// `Address` or a `String` representation is an open question
+    /// (see "open questions" below); pinned here as `Address`
+    /// (parsed structured) so the type system catches encoding
+    /// errors at compile time.
+    pub encoded: Address,
+    /// The hybrid KEM public key (X25519+ML-KEM-768) the sender
+    /// encapsulates against. Public; not zeroized.
+    pub kem_pk: HybridKemPublicKey,
+}
+
+/// Audit-context subaddress payload.
+///
+/// Returned by `derive_subaddress(idx, SubaddressPurpose::Audit)`.
+/// Carries the canonical classical spend / view public-key pair
+/// for the subaddress index; used by export / backup paths.
+///
+/// **Today's classical-only shape.** Per `30-cryptography.mdc`'s
+/// hybrid-by-default rule, a future V3.x shape may extend the
+/// audit payload with the hybrid KEM PK (mirroring
+/// `RecipientSubaddress.kem_pk`). The extension lands as an
+/// additional field on `SubaddressKeyPair` (or as a new variant
+/// on `SubaddressFor` + `SubaddressPurpose`) when designed.
+pub struct SubaddressKeyPair {
+    pub spend_pk: [u8; 32],
+    pub view_pk: [u8; 32],
+}
+```
+
+##### Open questions for Round 3 / commit 3+
+
+The shapes above pin enough structure to confirm the workflow-
+shape direction at Round 2 review. Several field-level questions
+remain open and will be pinned in Round 3 or in PR 3's
+implementation work:
+
+- **`TxInputSigningContext` and `TxOutputContext` shapes.** Pinned
+  in PR 5's design doc, not PR 3's. The forward-declaration shape
+  in `TxToSign` is adequate for PR 3's trait extraction; PR 5's
+  consumer-constraint analysis pins the field-level details.
+- **`FcmpPlusPlusContext` shape.** Same; pinned in PR 5.
+- **`Address` type provenance.** Whether the workspace already
+  carries a parsed structured `Address` type (likely in
+  `shekyl-wallet-core` or similar), or whether PR 3 / commit 3+
+  needs to introduce one as an additional Phase 0c row. If the
+  workspace has it, cite the path; if not, add the Phase 0c row.
+- **`KeyImage` type provenance.** Same as `Address`. The
+  workspace likely has a `KeyImage` newtype somewhere; cite the
+  path or add the Phase 0c row.
+- **`OutputClaim::amount_atomic_units` decryption-at-claim-time
+  vs decrypt-on-demand.** Pinned here as "decrypt at claim time,
+  return the value"; reviewers may push back on the security-
+  surface argument (the decrypted amount is shaped like a
+  trait-surface secret-bearing field even though it isn't a
+  secret).
+- **`RecipientSubaddress::encoded` parsed vs string.** Pinned here
+  as parsed structured `Address`; reviewers may prefer a
+  `String` representation if the structural typing imposes
+  parsing overhead at unwanted points.
 
 **Reuse notes.** `HybridPublicKey` and `HybridKemPublicKey` exist
 in the workspace
@@ -730,11 +1025,6 @@ parameter or return — they cross the trait boundary only as fields
 inside Sub-bundle B message shapes. Reviewers asking "why doesn't
 the trait surface name primitives?" find the answer in §3.1.1's
 workflow-orchestration framing.
-
-`Address` (the encoded-address type used by `RecipientSubaddress`)
-and `KeyImage` (used by `OutputClaim`) are existing or to-be-added
-workspace types; commit 2 pins their provenance (workspace path or
-new Phase 0c row).
 
 ### 3.4 Phase 0d — bundled small fixes (visibility + super-bound + Q9.3)
 
@@ -911,14 +1201,18 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// Derive a subaddress for a specific purpose.
     ///
     /// The `purpose` argument selects the `SubaddressFor` variant
-    /// returned: `SubaddressPurpose::Recipient` produces an encoded
-    /// address + KEM public key for senders to encapsulate against
-    /// (used by payment-URI / QR-code generation paths);
-    /// `SubaddressPurpose::Audit` produces canonical key pairs for
-    /// backup / inspection (used by export paths). Both enums are
+    /// returned: `SubaddressPurpose::Recipient` returns
+    /// `SubaddressFor::Recipient(RecipientSubaddress { encoded,
+    /// kem_pk })` (encoded address + hybrid KEM public key for
+    /// senders to encapsulate against; used by payment-URI /
+    /// QR-code generation paths); `SubaddressPurpose::Audit`
+    /// returns `SubaddressFor::Audit(SubaddressKeyPair { spend_pk,
+    /// view_pk })` (canonical classical spend / view PK pair; used
+    /// by export / backup / inspection paths). Both enums are
     /// `#[non_exhaustive]`; new purposes accrete additively in
-    /// V3.x (e.g., `PqcRecipient` for hybrid-augmented subaddresses)
-    /// per Q9.2 / §8.2.
+    /// V3.x (e.g., `PqcRecipient` for hybrid-augmented subaddresses
+    /// extending the audit payload with the hybrid KEM PK) per
+    /// Q9.2 / §8.2.
     ///
     /// The classical spend/view subaddress derivation has no
     /// concrete failure mode at today's surface (the classical
@@ -941,18 +1235,27 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     ///
     /// Bundles X25519 view-tag pre-filter + hybrid decap + HKDF
     /// chain + key-image computation behind a single trait
-    /// boundary. Returns a structured non-secret claim
-    /// (`OutputClaimResult::Mine(OutputClaim)`) on a successful
-    /// detection, or `OutputClaimResult::NotMine` for outputs that
-    /// don't claim. Most outputs are `NotMine` in real scanning;
-    /// the X25519 pre-filter rejects them cheaply.
+    /// boundary. The `OutputDetectionInput` carries the per-output
+    /// detection context (hybrid ciphertext, view tag, output
+    /// index) sourced via `OutputDetectionInput::from_block_output`
+    /// at the scanner call site. Returns
+    /// `OutputClaimResult::Mine(OutputClaim)` on a successful
+    /// detection, carrying the per-output secret-key derivative,
+    /// key image, amount-blinding factor, and decrypted amount;
+    /// or `OutputClaimResult::NotMine` for outputs that don't
+    /// claim. Most outputs are `NotMine` in real scanning; the
+    /// X25519 pre-filter rejects them cheaply.
     ///
     /// **Cryptographic intermediates never cross the trait
     /// boundary.** The X25519 raw shared secret (32 bytes), the
     /// 64-byte hybrid shared secret, and HKDF intermediate keying
     /// material exist only transiently inside this method's stack
     /// frame and are zeroized on drop per the workspace's
-    /// `Zeroize` / `ZeroizeOnDrop` discipline.
+    /// `Zeroize` / `ZeroizeOnDrop` discipline. The `OutputClaim`'s
+    /// secret-bearing fields (`output_secret_key`,
+    /// `amount_blinding_factor`) are wrapped in `Zeroizing<...>`;
+    /// the orchestrator owns the zeroize-on-drop discipline once
+    /// the claim crosses the boundary.
     async fn try_claim_output(
         &self,
         input: &OutputDetectionInput,
@@ -961,12 +1264,18 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// Workflow: sign a fully-prepared transaction.
     ///
     /// The `TxToSign` parameter bundles all per-input signing
-    /// context (signing key derivation paths, FCMP++ context, any
-    /// per-input message bytes). The implementor handles per-input
-    /// hybrid signature production, FCMP++ witness generation, and
-    /// any other signature-class work the transaction requires.
-    /// Returns `TxSignatures` carrying the structured non-secret
-    /// signature bundle.
+    /// context (`Vec<TxInputSigningContext>`), per-output context
+    /// (`Vec<TxOutputContext>`), and FCMP++ transaction-level
+    /// context (`FcmpPlusPlusContext`). The exact field shapes
+    /// for the per-input / per-output / per-tx context types are
+    /// pinned in PR 5 (`PendingTxEngine`) alongside that trait's
+    /// transaction-build workflow; PR 3 carries forward
+    /// declarations adequate for trait extraction. The implementor
+    /// handles per-input hybrid signature production, FCMP++
+    /// witness generation, and any other signature-class work the
+    /// transaction requires. Returns `TxSignatures` carrying the
+    /// `Vec<TxInputSignature>` and `Vec<FcmpPlusPlusWitness>`
+    /// bundle.
     ///
     /// **Cross-domain signature reuse is prevented cryptographically
     /// inside the impl** via per-domain HKDF chains (the impl's
@@ -1188,8 +1497,12 @@ arguments — same property PR 1 and PR 2 preserved.
 PR 3 exercises **(a) layered-call error preservation** — a runtime
 key-op error injected through a `FaultInjecting<LocalKeys>` wrapper
 propagates through `Engine<S>`'s wallet-level workflow methods
-(`try_claim_output`, `sign_transaction`) with the error variant
-intact and the layered-call structure preserved.
+(`try_claim_output(&OutputDetectionInput)`,
+`sign_transaction(&TxToSign)`) with the error variant intact, the
+`OutputClaimResult` / `TxSignatures` return types not produced
+(the error short-circuits before construction), and the
+layered-call structure preserved across the wallet-level method's
+internal trait dispatch.
 
 **Rationale (recorded verbatim).**
 
@@ -1291,68 +1604,76 @@ the workflow-shape trait surface:
   infallible-read hot path; `LedgerEngine`'s `synced_height` is
   the structural analog. The cheapest method on the trait;
   measures trait-dispatch overhead with no cryptographic work.
-- `engine_trait_bench_key_try_claim_output` — async workflow
-  hot path; **the highest-leverage benchmark on the entire
-  trait** because the scanner's per-output cost dominates
-  wallet-refresh time. Most wallet operations spend most of
-  their wall-clock time inside this method (or its impl-internal
-  X25519 view-tag pre-filter, which rejects most outputs cheaply).
-  Commit 1 lists this as a single bench placeholder; **commit 2
-  splits it into two benches** measuring structurally distinct
-  workloads (see "Bench refinements queued for commit 2" below).
+  No fixture beyond a `LocalKeys::from_test_seed` instance.
+- `engine_trait_bench_key_try_claim_output_not_mine` — async
+  workflow path for the **dominant scanning case**: an output
+  whose X25519 view-tag pre-filter rejects. Measures the
+  X25519 ECDH + view-tag derivation + tag-comparison + early-
+  return path, which is what runs ~99%+ of the time during a
+  full wallet rescan. The highest-leverage benchmark on the
+  trait for total-wall-clock-time terms.
+- `engine_trait_bench_key_try_claim_output_mine` — async
+  workflow path for the **rare-but-expensive** case: an output
+  whose pre-filter accepts and triggers the full hybrid decap
+  + HKDF chain + key-image computation. Measures the full
+  output-detection-and-claim cost. Less time-dominant than the
+  NotMine path in aggregate scanning but worth a separate bench
+  because the workloads are structurally distinct (combining
+  them into one bench produces a number whose meaning depends
+  on the test data's Mine:NotMine ratio — uninformative).
 - `engine_trait_bench_key_sign_transaction` — async workflow
   hot path for the spend path; potentially deferred to Phase-2a
   if hybrid-signature setup cost dwarfs the trait-dispatch
   overhead measurement, or if the bench fixture (a complete
   `TxToSign` with FCMP++ context) is structurally too heavy to
-  set up at PR 3 cut-point.
+  set up at PR 3 cut-point. The fixture-construction work
+  shares substrate with PR 5 (`PendingTxEngine`) and may land
+  there instead.
 
 The frozen baselines and cumulative-delta documentation pattern
 established in PR 2's `docs/PERFORMANCE_BASELINE.md` extend to
-PR 3; the post-PR-3 row count grows by 2–4 (one for
-`account_public_address`; two for the `try_claim_output` split
-once commit 2 lands; optionally one for `sign_transaction`).
+PR 3; the post-PR-3 row count grows by 3–4 (one for
+`account_public_address`, two for the `try_claim_output` split,
+optionally one for `sign_transaction`).
 
-**Bench refinements queued for commit 2.** Two refinements from
-Round-2 review must land alongside commit 2's message-shape
-detailed design:
+**Bench fixture shape.** `try_claim_output_not_mine` and
+`try_claim_output_mine` need different fixture inputs:
 
-- **X25519 ephemeral reuse vs double-compute.** The X25519
-  ephemeral (`HybridCiphertext.x25519`) is public on-chain data;
-  both the view-tag pre-filter (impl-internal step 1) and the
-  full hybrid decap (impl-internal step 2) need an ECDH against
-  it. Question: does `LocalKeys`'s `try_claim_output` impl
-  compute X25519 ECDH twice (once for view-tag check, once as
-  part of hybrid decap), or is the pre-filter result reused as
-  input to the full decap? `try_claim_output`'s measured cost
-  depends on the answer. Not a trait-surface concern (impl
-  detail), but commit 2's bench commentary will pin the assumed
-  shape so the benchmark numbers are interpretable, and so the
-  implementer doesn't accidentally double-compute when the
-  pre-filter result is already in scope. If the implementation
-  discovers reuse is structurally impossible (e.g., the hybrid
-  decap's X25519 ECDH is bundled with ML-KEM operations in a
-  way that doesn't expose the intermediate), the bench commentary
-  updates accordingly.
-- **NotMine vs Mine bench split (option (c)).**
-  `engine_trait_bench_key_try_claim_output` measures structurally
-  distinct workloads depending on whether the test input is a
-  Mine output (X25519 pre-filter accepts; full hybrid decap
-  runs; HKDF chain runs; key image computes) or a NotMine output
-  (X25519 pre-filter rejects; full hybrid decap doesn't run).
-  Combined into one bench, the measurement's meaning depends on
-  the test data's Mine:NotMine ratio — uninformative. The
-  disposition is **(c) separate benches**:
-  `engine_trait_bench_key_try_claim_output_not_mine` (the
-  dominant case in real scanning — most outputs aren't yours)
-  and `engine_trait_bench_key_try_claim_output_mine`
-  (rare-but-expensive). Each measures a structurally distinct
-  workload; both are needed to characterize scanner cost.
-  Fixture setup is non-trivial (a `LocalKeys::from_test_seed`
-  wallet plus a test block carrying one Mine output and N
-  NotMine outputs, where NotMine outputs target distinct test
-  wallets so their view-tag pre-filter rejects); commit 2 pins
-  the fixture-shape requirement alongside the bench-target list.
+- **`_not_mine` fixture.** A `LocalKeys::from_test_seed("a")`
+  wallet under test, plus a single `OutputDetectionInput`
+  constructed via `from_components(...)` carrying a hybrid
+  ciphertext and view tag derived from a *different* test wallet
+  (`from_test_seed("b")`)'s spend / view secret. The view-tag
+  pre-filter rejects; the bench measures the rejection path's
+  cost.
+- **`_mine` fixture.** A `LocalKeys::from_test_seed("a")` wallet
+  under test, plus a single `OutputDetectionInput` constructed
+  from a hybrid ciphertext / view tag derived against the same
+  test wallet's KEM public key. The pre-filter accepts; the
+  bench measures the full hybrid-decap + HKDF + key-image path.
+
+Both fixtures are deterministic and reproducible across runs.
+The construction surface is `OutputDetectionInput::from_components`
+(the `#[cfg(test)]`-gated alternative to `from_block_output`,
+introduced specifically for fixture-construction without going
+through full block construction).
+
+**X25519 ephemeral reuse vs double-compute (impl-internal note
+for bench-cost interpretability).** The X25519 ephemeral
+(`HybridCiphertext.x25519`) is public on-chain data; both the
+view-tag pre-filter (impl-internal step 1) and the full hybrid
+decap (impl-internal step 2) need an ECDH against it. The bench
+commentary assumes the pre-filter's ECDH result is **reused** as
+input to the full hybrid decap rather than recomputed: the impl
+holds a `Zeroizing<[u8; 32]>` X25519 SS scratch local across the
+view-tag check and the hybrid decap entry point, eliminating the
+~50 µs X25519 round trip that a naive double-compute would add
+to the Mine path. If implementation surfaces a structural reason
+the reuse is impossible (e.g., the hybrid decap's X25519 ECDH is
+internally bundled with ML-KEM operations in a way that doesn't
+expose the intermediate scalar), the `_mine` bench's measured
+cost rises by the X25519 round-trip cost; the bench commentary
+updates with the actual disposition once Phase 1 lands.
 
 ### 6.6 Docs propagation
 
