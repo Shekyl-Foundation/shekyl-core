@@ -470,9 +470,24 @@ DISABLE_VS_WARNINGS(4244 4345)
           "shekyl_raw_seed_generate failed (OS CSPRNG unavailable)");
     }
 
-    generate_from_raw_seed(raw_seed.data(), nettype);
-    // Wipe the local copy of the seed before returning; the authoritative
-    // copy lives in m_keys.m_master_seed_64 under mlock.
+    // Wipe the local copy of the seed on every exit path. `raw_seed` is
+    // 32 bytes of CSPRNG output (recover=false) or caller-supplied
+    // recovery material (recover=true) sitting on an unprotected stack
+    // slot; `generate_from_raw_seed` now throws on disallowed
+    // (network, seed_format) pairs (Bug-4-adjacent fix), so a naked
+    // post-call wipe would leak the seed into stack residue on every
+    // MAINNET / STAGENET RAW32 throw. Use a try/rethrow so the wipe
+    // runs whether the inner call returns or throws; the authoritative
+    // post-success copy lives in m_keys.m_master_seed_64 under mlock.
+    try
+    {
+      generate_from_raw_seed(raw_seed.data(), nettype);
+    }
+    catch (...)
+    {
+      shekyl_memwipe(raw_seed.data(), raw_seed.size());
+      throw;
+    }
     shekyl_memwipe(raw_seed.data(), raw_seed.size());
 
     // Legacy callers expect the spend secret key back so they can re-encode

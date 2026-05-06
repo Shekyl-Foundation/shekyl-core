@@ -8274,8 +8274,16 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       // Intentionally derives on FAKECHAIN regardless of the wallet's
       // `m_nettype`. This dummy account is a one-shot transient — only
       // its public keys (view_pk, spend_pk, pqc_pk) are used to derive
-      // the 0-amount output's one-time output key + ML-KEM ciphertext;
-      // the dummy's secret keys are discarded immediately after.
+      // the 0-amount output's one-time output key + ML-KEM ciphertext.
+      // The dummy's secret keys are never used to sign anything, never
+      // returned to a caller, and never reconstruct any wallet state;
+      // they live in the local `dummy` stack object until it goes out of
+      // scope a few statements below (`account_base` has no destructor
+      // wipe, so they persist as ordinary stack residue until reused).
+      // No `set_null` / `forget_master_seed` is issued here because the
+      // dummy itself goes away with the enclosing block; if a future
+      // refactor extends the dummy's lifetime, reconsider explicit
+      // wiping at that point.
       //
       // The transaction serializes the derived output key and the PQC
       // ciphertext, not any human-readable address or network prefix —
