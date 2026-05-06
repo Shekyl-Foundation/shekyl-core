@@ -109,6 +109,50 @@ citing in a review.
   populated by their introducing per-trait PRs; the first Stage 1
   PR review consumes the document. Target: V3.0, pre-Stage-1-PRs.
 
+- **Stage 1 retroactive Mock-X cleanup: `MockLedger` →
+  `LocalLedger::from_test_blocks(...)` + `FaultInjecting<LocalLedger>`.**
+  Stage 1 PR 3 (`KeyEngine`) Round 2 review surfaced that the
+  Mock-X test-substrate pattern is wrong as a category: parallel
+  test-only implementations conflate test-controlled inputs to
+  real implementations with substitute implementations, add
+  attack surface, don't compose with future implementors, and
+  encourage tests to verify against fake semantics rather than
+  real semantics. PR 3 lands the no-Mock pattern at its own
+  cut-point (production-only `LocalKeys` with `from_seed` /
+  `#[cfg(test)] from_test_seed` constructors + a composable
+  `FaultInjecting<K: KeyEngine>` wrapper). The retroactive
+  cleanup of PR 2's `MockLedger` follows the same pattern but is
+  not worth retroactive churn within PR 2's already-merged
+  branch; instead it lands alongside Stage 1 PR 4 (`PendingTxEngine`)
+  or PR 5 (whichever per-trait PR's pre-flight surfaces the
+  cleanup naturally). The structurally-correct shape is a
+  production-only `LocalLedger` with a `#[cfg(test)]`-gated
+  `from_test_blocks(...)` constructor (deterministic test-block
+  fixtures) plus a composable `FaultInjecting<L: LedgerEngine>`
+  wrapper (failure injection on top of any `L: LedgerEngine`
+  impl). Cross-references:
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §2.1.2 (broader Mock-X rejection rationale), §6.4 (per-PR-3
+  substrate disposition), §7.9 (test-substrate disposition open
+  question). Target: V3.0 baseline alongside Stage 1 PR 4 or
+  PR 5.
+
+- **Stage 1 retroactive Mock-X cleanup: `MockDaemon` → `TestDaemon`
+  rename.** The `MockDaemon` case (Stage 1 PR 1 substrate) is
+  structurally different from `MockLedger`: real `DaemonClient`
+  requires network connectivity, so the test-substitute is a
+  legitimate alternative real implementation that serves canned
+  / cached test responses without network. The structural shape
+  is fine; the "Mock" naming is the bug — it inherits the
+  conflation that the broader Mock-X rejection identifies. The
+  fix is a rename to `TestDaemon` (signaling "alternative real
+  implementation for tests" rather than "fake of an
+  implementation") with the same shape. Lower-priority than the
+  `MockLedger` cleanup because the structural pattern is
+  correct; only the naming is wrong. Cross-references:
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §2.1.2. Target: V3.0 baseline alongside Stage 1 PR 4 or PR 5.
+
 - **CHANGELOG backfill for Stage 0 PR-A and PR-C.** Stage 0
   preparatory PRs PR-A (`3d313256c` — symmetry rule),
   PR-A-extension (`2e5309ad3` — boundary rule), and PR-C
