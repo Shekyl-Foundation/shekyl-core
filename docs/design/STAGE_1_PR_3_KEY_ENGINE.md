@@ -168,10 +168,18 @@ covered. The cumulative state going into PR 3:
 |---|---|
 | PR 1 (`DaemonEngine`) | Happy-path producer/consumer plumbing under failure-injection-free conditions |
 | PR 2 (`LedgerEngine`) | Retry-contract failure path with explicit failure injection via `MockLedger` |
-| **PR 3 (`KeyEngine`) — candidate properties** | (a) Layered-call error preservation when a runtime key-op error propagates through `Engine<S>`'s wallet-level methods; **or** (b) Cancel-class verification: an in-flight `sign_with_spend` is dropped before completion and the next call observes no residual state. |
+| **PR 3 (`KeyEngine`)** | Layered-call error preservation when a runtime key-op error propagates through `Engine<S>`'s wallet-level methods. |
 
-§6.4 selects between (a) and (b) once the trait surface is final;
-the selection is part of Round 2's review.
+§6.4 records the rationale for selecting layered-call error
+preservation over the alternative cancel-class candidate that
+appeared in earlier Round-1 drafts. The cancel-class candidate is
+**not** preserved here as a forward-looking row for a future
+per-trait PR — if a subsequent per-trait PR's pre-flight surfaces
+a concrete observable-residual story justifying it, that PR's
+design doc introduces the candidate then. Anti-pattern of
+preserving "speculative future may exercise" rows in the cumulative
+table (rejected for the same reason as PR 2's `BalanceSummary →
+Balance` rename deferral row).
 
 ### 2.3 This document is the source-of-truth for PR 3's scope
 
@@ -281,6 +289,105 @@ spec-clarification" provenance subsection).**
 > This amendment reconciles §2.1 with the post-hybrid-framework
 > reality. The trait's signatures change shape; the underlying
 > capability ("produce a signature on this message") is unchanged.
+
+### 3.1.1 Structural distinction: `view_ecdh` and `hybrid_decapsulate` are not redundant
+
+A naive read of the post-amendment §2.1 surface might ask: "if
+both `view_ecdh` and `hybrid_decapsulate` are part of the hybrid
+output-decryption flow, isn't one of them redundant after the
+hybrid-framework reconciliation?" The answer — and the reason both
+methods stay at the trait surface — is structural. The pre-amendment
+spec was naming two operations with one signature; that conflation
+is itself the drift Phase 0 surfaces.
+
+**The scanner's two-step output-detection pattern.** The actual
+scanner code in
+[`shekyl-crypto-pq::output::scan_output`](../../rust/shekyl-crypto-pq/src/output.rs)
+(lines 297–317) reveals the structural shape:
+
+- **Step 1 (`view_ecdh` analog).** Classical X25519 ECDH against
+  the X25519 ephemeral from `HybridCiphertext.x25519`. Produces a
+  32-byte raw shared secret. Used as input to view-tag derivation,
+  which serves as a cheap pre-filter: most outputs aren't yours,
+  view-tag mismatches reject them without doing the expensive PQC
+  half.
+- **Step 2 (`hybrid_decapsulate`).** Full hybrid KEM decap against
+  the entire `HybridCiphertext`. Produces a 64-byte hybrid shared
+  secret. Only runs for outputs that passed the step-1 view-tag
+  check.
+
+**Why both stay at the trait surface (recorded verbatim).**
+
+> 1. **The two operations have different security-discipline
+>    implications.** Step 1's 32-byte raw X25519 SS is not the
+>    kind of secret that flows into long-term derivation; it's an
+>    ephemeral computation feeding into a tag check. Step 2's
+>    64-byte hybrid SS is a substantive secret that derives output
+>    keys downstream. Type-distinguishing them at the trait surface
+>    (different return types — `X25519SharedSecret` vs.
+>    `SharedSecret`) signals the security-discipline distinction.
+>    Collapsing them into one composite operation hides the
+>    distinction from reviewers who'd otherwise see different types
+>    and ask different questions.
+>
+> 2. **The trait surface should expose the operations, not the
+>    orchestration.** The scanner's two-step pattern is a
+>    performance optimization — most outputs aren't yours, so do
+>    the cheap check first. That's scanner orchestration logic,
+>    not key-engine internal logic. The key engine should expose
+>    the primitives; the scanner composes them. A single
+>    `scan_output_secrets(...)` method that returns both would
+>    make the key engine responsible for the orchestration; future
+>    implementors (HSM-backed, hardware-key) would have to
+>    replicate the orchestration internally even if their
+>    performance characteristics make the two-step optimization
+>    unnecessary or counterproductive.
+>
+> 3. **"Lift `view_ecdh` out of the trait" doesn't actually work**
+>    because the X25519 view secret is itself a secret the key
+>    engine owns. The scanner can't do the X25519 pre-filter
+>    "directly" without access to the view secret, which is
+>    exactly what `KeyEngine` is supposed to encapsulate. The
+>    view-tag pre-filter has to go through the key engine; the
+>    question is just what shape the method takes.
+
+**Amendment-block framing (to land in §2.1's "Stage 1 PR 3
+spec-clarification" provenance subsection, alongside §3.1's hybrid
+reconciliation prose).**
+
+> The pre-amendment §2.1 named `view_ecdh` and `ml_kem_decapsulate`
+> as parallel operations on the classical and PQC halves. The
+> post-amendment §2.1 names `view_ecdh` (classical X25519 ECDH
+> producing 32-byte raw shared secret, used as input to the
+> view-tag pre-filter) and `hybrid_decapsulate` (full hybrid KEM
+> decap producing 64-byte hybrid shared secret, used for full
+> output-secret derivation). These are not redundant operations
+> after the hybrid-framework reconciliation — they serve
+> structurally different ends in the scanner's two-step
+> output-detection pattern. The view-tag pre-filter rejects most
+> outputs cheaply against the 32-byte raw SS; only outputs passing
+> the tag check trigger the full hybrid decap.
+
+**Round-2-confirm: `view_ecdh` parameter shape.** This draft uses
+`eph_x25519: &[u8; 32]` rather than the prior round's
+`tx_pub: &HybridPublicKey` text. The prior round's phrasing
+carried a classical-Monero-model assumption that the X25519
+component for ECDH lives in a signing-side public key. In the
+hybrid framework, the X25519 ephemeral lives in
+`HybridCiphertext.x25519` (the per-tx ephemeral packaged in the
+KEM ciphertext, structurally analogous to classical
+`tx_pub_key = r*G` in tx_extra); it has no relationship to a
+signing key. The scanner's `scan_output` at lines 297–317 confirms
+this — the X25519 ephemeral is sourced from `kem_ct_x25519`, not
+from a signing public key. **Round 2 reviewer to confirm the
+parameter shape;** if the alternative shape
+`ciphertext: &HybridCiphertext` (pass the whole ciphertext, access
+`.x25519` internally) is preferred for trait-surface consistency
+with `hybrid_decapsulate`, the amendment lands that instead. The
+narrower `&[u8; 32]` is preferred here because the trait method's
+contract is "do X25519 ECDH against this ephemeral"; passing the
+whole ciphertext when only one field is used misleads reviewers
+about what the method depends on.
 
 ### 3.2 Phase 0b — `KeyError` / `KeyEngineError` split (§7-non-compliant)
 
@@ -396,7 +503,24 @@ rename the spec to use the existing two.
 | `SignDomain` | `#[non_exhaustive] pub enum SignDomain { OutputSecretDerivation, TransactionSignature, FcmpPlusPlusWitness, MlKemChallenge }` | Per Q9.2's `#[non_exhaustive]` disposition. Variants cover the substantive cases. **Binding-parameter framing:** `SignDomain` is what prevents cross-domain signature reuse — each call site asserts the domain it's signing in, and the trait verifies (via an internal `assert_sign_domain` mechanism) that the call's domain matches the key's authorized domains. Stage 4 adds multisig witness / partial signature variants additively without re-opening the trait per Q9.2. |
 | `SubaddressPublic` | `pub struct SubaddressPublic { pub spend_pk: [u8; 32], pub view_pk: [u8; 32] }` | Standard Monero subaddress public-key pair; today's shape because subaddresses derive from the classical spend/view keys via standard Monero machinery. **PQC-augmented subaddresses are V3.x.** Worth being explicit in the amendment: PR 3's `SubaddressPublic` reflects the post-PR-3 implementation reality (classical-derived subaddresses); the PQC-augmented subaddress shape is a V3.x design open question and lands as an additive `SubaddressPublic` extension when designed. |
 | `MlKemEncapsulation` (spec name) | Reuse existing `shekyl-crypto-pq::kem::HybridCiphertext` | Spec was inventing a name for a type that already exists. Rename in the amendment. |
-| `MlKemSharedSecret` (spec name) | Reuse existing `shekyl-crypto-pq::kem::SharedSecret` | Same. The 64-byte hybrid shared secret is what `HybridX25519MlKem::decapsulate` produces. |
+| `MlKemSharedSecret` (spec name) | Reuse existing `shekyl-crypto-pq::kem::SharedSecret` (64-byte hybrid combined secret) | Same. The 64-byte hybrid shared secret is what `HybridX25519MlKem::decapsulate` produces. Used as the post-decap return type for `hybrid_decapsulate`. |
+| `HybridSignature` (existing, cite) | Reuse existing `shekyl-crypto-pq::signature::HybridSignature` | The post-Phase-0 return type for `sign_with_spend`. Already exists in the workspace; the amendment cites the existing path rather than re-introducing a name. |
+| `X25519SharedSecret` (**net-new**) | `pub struct X25519SharedSecret(pub [u8; 32])` with `#[derive(Zeroize, ZeroizeOnDrop)]` | Confirmed via grep that no existing 32-byte raw-ECDH-output newtype exists in `shekyl-crypto-pq::kem` (the workspace currently uses raw `MontgomeryPoint` and accesses `.0` for `[u8; 32]` inline at scanner call sites). Introduced to type the 32-byte raw X25519 shared secret returned by `view_ecdh`'s step-1 view-tag pre-filter; structurally distinct from `SharedSecret([u8; 64])` (full hybrid combined secret used by `hybrid_decapsulate`). The newtype carries its security-discipline anchor in its type — reviewers seeing two distinct return types at the trait surface ask different questions about each per §3.1.1's structural-distinction framing. |
+
+**Reuse note — `HybridPublicKey` and `HybridKemPublicKey`.** Both
+types exist in the workspace
+([`shekyl-crypto-pq::signature::HybridPublicKey`](../../rust/shekyl-crypto-pq/src/signature.rs)
+for Ed25519+ML-DSA-65 signing,
+[`shekyl-crypto-pq::kem::HybridKemPublicKey`](../../rust/shekyl-crypto-pq/src/kem.rs)
+for X25519+ML-KEM-768 KEM). **Neither appears in the post-amendment
+§2.1 trait surface.** `HybridSignature` is the trait-surface return
+type for `sign_with_spend`; `HybridCiphertext` is the parameter
+for `hybrid_decapsulate`; `view_ecdh` takes `&[u8; 32]` (the X25519
+ephemeral component sourced from `HybridCiphertext.x25519` at the
+call site, not a hybrid public key). Reviewers asking "why doesn't
+the trait surface name `HybridPublicKey` or `HybridKemPublicKey`?"
+find the answer in §3.1.1's structural-distinction subsection
+above.
 
 The cascading consequence of Phase 0's hybrid rewrite is that
 `Ed25519Signature` and `EdwardsPoint` references vanish from the
@@ -416,8 +540,16 @@ because each is too small to warrant its own:
    to V3.2 alongside `LedgerEngine` and `DaemonEngine`.
 2. **`Send + Sync + 'static` super-bound.** `LedgerEngine` and
    `DaemonEngine` both pin it for Stage-4-actor compat;
-   `KeyEngine` as written has no super-bound. Editorial drift —
-   adds `: Send + Sync + 'static`.
+   `KeyEngine` as written has no super-bound. The super-bound is
+   what makes `KeyEngine` usable across `Arc<dyn KeyEngine>`
+   boundaries in Stage 4's actor abstraction; its absence in §2.1
+   is a Round-1-spec drafting oversight that subsequent per-trait
+   extractions (`LedgerEngine`, `DaemonEngine`) corrected. The
+   amendment adds the super-bound consistent with the per-trait
+   template; the property it encodes — Stage 4 actor-compatibility
+   at the trait surface — is **substantive, not editorial**. If
+   Round 2 challenges Phase 0d on the super-bound, the substantive
+   framing holds; an "editorial drift" framing wouldn't have.
 3. **Q9.3 `ZeroizeOnDrop` disposition.** Q9.3 cites
    `AllKeysBlob: ZeroizeOnDrop`. Per Decision 3, the disposition
    is fixed by **(i) migrating `AllKeysBlob` to
@@ -567,13 +699,24 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
         message: &[u8],
     ) -> Result<HybridSignature, Self::Error>;
 
-    /// Compute the view-side ECDH shared secret for an output's
-    /// hybrid transaction-key. Used by the scanner; never returns
-    /// the raw view scalar.
+    /// ECDH against the X25519 ephemeral from a hybrid ciphertext.
+    /// Caller passes `HybridCiphertext.x25519`; the trait is
+    /// structurally accepting `&[u8; 32]` because step-1 view-tag
+    /// pre-filtering doesn't need the ML-KEM half. Returns the
+    /// 32-byte raw shared secret used as input to view-tag
+    /// derivation. For full output-secret derivation, see
+    /// [`KeyEngine::hybrid_decapsulate`]. The parameter is not a
+    /// generic "any 32 bytes" — it is specifically the X25519
+    /// component sourced from a hybrid ciphertext at the call site;
+    /// passing arbitrary 32 bytes (e.g., from outside the scanner's
+    /// source-correct extraction) would produce a meaningless
+    /// shared secret. See §3.1.1 for the structural rationale that
+    /// keeps `view_ecdh` and `hybrid_decapsulate` as distinct
+    /// trait-surface methods rather than collapsing them.
     async fn view_ecdh(
         &self,
-        tx_pub_key: &HybridPublicKey,
-    ) -> Result<SharedSecret, Self::Error>;
+        eph_x25519: &[u8; 32],
+    ) -> Result<X25519SharedSecret, Self::Error>;
 
     /// Hybrid X25519+ML-KEM-768 decapsulate against an incoming
     /// output's hybrid encapsulation. Returns the 64-byte hybrid
@@ -584,10 +727,19 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
         ciphertext: &HybridCiphertext,
     ) -> Result<SharedSecret, Self::Error>;
 
-    /// Derive a subaddress public-key pair. Pure derivation; reads
-    /// the view secret but produces only public material. The PQC
-    /// extension to subaddresses is V3.x; today's surface returns
-    /// the classical spend/view public-key pair.
+    /// Derive a subaddress public-key pair. At today's surface
+    /// this is pure derivation: reads the view secret, produces
+    /// only public material, and the classical spend/view
+    /// subaddress derivation has no concrete failure mode (the
+    /// classical path's only failure modes are RNG-failure-class
+    /// events, essentially impossible during pure derivation from
+    /// existing key material). The `Result<...>` shape is reserved
+    /// for the V3.x PQC-augmented subaddress extension, where the
+    /// hybrid derivation path can fail with non-negligible
+    /// probability in ways the classical path cannot (e.g.,
+    /// ML-KEM keypair derivation has a defined failure surface).
+    /// Trait stability across the V3.x extension is the rationale
+    /// for the `Result` shape now.
     fn derive_subaddress_public(
         &self,
         index: SubaddressIndex,
@@ -601,11 +753,22 @@ Notable changes vs. the pre-amendment shape:
 - **`: Send + Sync + 'static` super-bound** (Phase 0d).
 - **`type Error: Into<KeyEngineError>`** instead of `Into<KeyError>` (Phase 0b).
 - **`HybridSignature`** instead of `Ed25519Signature` (Phase 0).
-- **`view_ecdh` takes `&HybridPublicKey`** instead of `&EdwardsPoint` (Phase 0).
+- **`view_ecdh` takes `&[u8; 32]`** (the X25519 ephemeral sourced
+  from `HybridCiphertext.x25519` at the call site) instead of
+  `&EdwardsPoint` (Phase 0); returns the new 32-byte
+  `X25519SharedSecret` newtype rather than the 64-byte
+  `SharedSecret`. See §3.1.1 for the structural distinction
+  rationale (the pre-amendment spec named two operations with one
+  return type; that conflation is itself the drift).
 - **`hybrid_decapsulate(HybridCiphertext)`** instead of
-  `ml_kem_decapsulate(MlKemEncapsulation)` (Phase 0).
-- **`SharedSecret`** as the unified post-decap / post-ECDH
-  shared-secret type (Phase 0c renames).
+  `ml_kem_decapsulate(MlKemEncapsulation)` (Phase 0); returns the
+  64-byte hybrid `SharedSecret`.
+- **Two distinct shared-secret return types** at the trait
+  surface: `X25519SharedSecret` (32-byte, from `view_ecdh`'s
+  step-1 pre-filter) and `SharedSecret` (64-byte hybrid combined
+  secret, from `hybrid_decapsulate`'s step-2 full decap). The
+  type distinction signals the security-discipline distinction
+  per §3.1.1.
 - **`AccountPublicAddress`** is concretely shaped (Phase 0c).
 - **`SubaddressPublic`** is concretely shaped (Phase 0c).
 - **`SignDomain`** is concretely enumerated (Phase 0c).
@@ -636,6 +799,29 @@ single-file code change in 0e's case), independently reviewable,
 and bisectable. The author commits to landing them on `dev` over
 ~5 working days; PR 3's feat branch cuts off the post-Phase-0d
 dev tip.
+
+**Phase 0e ↔ Phase 0d coupled-pair landing (disposition α).**
+Phase 0e (the `AllKeysBlob` `ZeroizeOnDrop` migration code PR)
+lands first; Phase 0d's spec amendment (which cross-references the
+post-migration state via Q9.3) lands immediately after. **The
+half-state where the spec's Q9.3 cross-reference language doesn't
+yet match the post-migration code is bounded to hours, not days.**
+This matches PR 2's Phase 0/0b precedent (small bounded amendments
+landing in tight sequence). Disposition (α) is preferred over (β)
+documenting the half-state and (γ) inverting spec-and-code
+authority; (γ) was rejected because it has the spec asserting a
+property that is not yet literally true at the moment the
+amendment lands, which inverts the discipline of "spec describes
+the code" into "spec promises the code will become."
+
+**Operational fallback.** If Phase 0d's review introduces a delay
+(CI lag, reviewer availability, additional review pass), the
+responsibility falls to the PR author to update Phase 0e's PR
+description retroactively to name the transient half-state
+explicitly and point at the pending Phase 0d PR for closure. The
+fallback is the author's action — not an automatic property of
+the system — and should be documented in the post-merge
+realignment subsection of this design doc if it triggers.
 
 ### 5.2 PR 3 feat branch
 
@@ -695,17 +881,42 @@ arguments — same property PR 1 and PR 2 preserved.
 
 ### 6.4 Hybrid test (one §5.2 property)
 
-PR 3 selects between **(a) layered-call error preservation** and
-**(b) cancel-class verification** per §2.2 above. Round 2 review
-makes the selection final; current lean is **(b)** because:
+PR 3 exercises **(a) layered-call error preservation** — a runtime
+key-op error injected through `MockKeys` propagates through
+`Engine<S>`'s wallet-level methods with the error variant intact
+and the layered-call structure preserved.
 
-- (a) is more naturally exercised when the next critical-chain
-  trait (`PendingTxEngine`, blocked on PR 3) lands — that PR has
-  multiple cross-trait error-propagation paths to verify.
-- (b) is a §5.2 property unique to async-`&self` traits with
-  in-flight runtime work; `KeyEngine`'s `sign_with_spend` is the
-  first per-trait PR where dropping a future before completion
-  has observable trait-shape implications.
+**Rationale (recorded verbatim).**
+
+> `&self` async drops local state when the future drops; nothing
+> residual that the next call observes; the cancel-class
+> implication is speculative until a concrete observable-residual
+> story exists. (a) layered-call error preservation has concrete
+> behavior at PR 3 cut-point; the "`PendingTxEngine` has more
+> cross-trait paths" argument doesn't preclude PR 3 exercising
+> its single cross-trait path; `PendingTxEngine` PR can exercise
+> its more complex paths additionally.
+
+The earlier Round-1 draft leaned toward cancel-class verification
+on the framing that `KeyEngine`'s `sign_with_spend` is the first
+per-trait PR where dropping a future before completion has
+observable trait-shape implications. That framing assumed
+cancel-class verification has observable trait-shape implications
+specific to `KeyEngine`, but two questions undermine the
+assumption: (1) what residual state could a dropped
+`sign_with_spend` future leave that the next call could observe?
+`KeyEngine` is `&self` async; the future captures `&self` and any
+local state. If the future is dropped mid-await, the local state
+is dropped too; `&self` is unchanged from the caller's perspective.
+(2) If there is residual state in some future implementation
+(e.g., HKDF context state; intermediate scalar arithmetic state in
+a hardware-key implementation), is the test exercising current
+`LocalKeys` behavior or future-implementor behavior? If the latter,
+the test is exercising a property that isn't yet observable.
+Layered-call error preservation has concrete observable behavior
+at PR 3 cut-point; cancel-class verification doesn't, and is
+deferred to a future per-trait PR whose pre-flight surfaces a
+concrete observable-residual story.
 
 ### 6.5 Benchmark harness
 
