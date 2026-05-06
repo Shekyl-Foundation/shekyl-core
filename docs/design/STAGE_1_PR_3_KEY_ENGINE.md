@@ -43,9 +43,9 @@ required adversarial review to surface.
   `RecipientSubaddress`, `SubaddressKeyPair`, `ViewTag`).
   Purpose-decomposed subaddress derivation. No-Mock test substrate
   pattern (§2.1.2). Trust-class A/B classification deferred.
-- **Round 3 (in-flight; commits 3a, 3a-review-pass, 3b, 3c
-  landed to date).** Adversarial wargaming pass surfaced 12
-  findings clustered into 7 threat patterns (4 generalizing
+- **Round 3 (in-flight; commits 3a, 3a-review-pass, 3b, 3c,
+  3d landed to date).** Adversarial wargaming pass surfaced
+  12 findings clustered into 7 threat patterns (4 generalizing
   to PR 4–7's pre-flight checklist; 3 KeyEngine-specific).
   Round-3 dispositions land across five sequential commits
   (3a–3e):
@@ -111,15 +111,39 @@ required adversarial review to surface.
     §4's `try_claim_output` doc-comment adds the A3 derivation
     reference; §4's `sign_transaction` doc-comment adds the D1
     validation contract and inlines the A5 → ζ disposition.
-  - **3d–3e (forthcoming).** 3d — Pattern-3 / Pattern-4
-    cluster (B1 three-layer test-substrate discipline; B2
-    handle-storage discipline post-A1; visibility discipline
-    on message types; the §6.4 orphan-absence verification
-    mechanism deferred from the 3a review pass). 3e —
-    residual + forward-template content (Trust-class A/B
-    classification; A8 DESIGN_CONCEPTS.md cross-reference;
-    four-pattern checklist for PR 4–7 pre-flight; trajectory
-    note).
+  - **3d (this commit).** Pattern-3 / Pattern-4 cluster
+    (Sub-bundle F). New §3.1.5 frames the cluster's
+    threat-pattern shape (Pattern 3: test substrate
+    visibility leakage; Pattern 4: external-implementor
+    trust + visibility discipline). Three findings closed:
+    **B1** — three-layer discipline for test-only constructors
+    and inspection accessors (`#[cfg(test)]` cfg-gate +
+    `pub(crate)` visibility + CI gate); applies to
+    `LocalKeys::from_test_seed` and the new
+    `LocalKeys::handle_table_size` accessor; pinned in §6.6.
+    **B2** — handle-storage hygiene replaces the pre-A1
+    lifetime-of-secret-material framing post-A1's
+    handle-indirection; three hygiene properties (orphan
+    absence, entry deletion on consumption, bounded growth)
+    anchored against the workflow-internal `HandleTable`;
+    pinned in §6.7. **Attack 4.2** — per-message-type
+    visibility table with explicit rationale for the
+    Sub-bundle B types; Trust-class B classification confirms
+    the `pub` visibilities; new "Visibility discipline for
+    Sub-bundle B message types" subsection lands in §3.3.
+    §6.4's deferred orphan-absence verification mechanism is
+    pinned to option (i) — the test-inspection accessor under
+    the three-layer discipline — closing the Round-4
+    prerequisite for the post-A1 hygiene tests. The Pattern-3
+    and Pattern-4 generalization checklists are forward-
+    template content for PR 4–7's pre-flight discipline (per
+    §3.1.5).
+  - **3e (forthcoming).** Residual + forward-template content
+    (Trust-class A/B classification across all per-trait PRs;
+    A8 DESIGN_CONCEPTS.md cross-reference for Pattern-7
+    economic-incentive emergence; four-pattern checklist for
+    PR 4–7 pre-flight bundled into the §2.1.x forward-template
+    section; trajectory note).
 - **Round 4+ (forthcoming).** Adversarial pass against the
   handle-model emergent attack surface (A6, A7, persistence
   option-space, concurrency-quality / Pattern-5 cluster). Per
@@ -154,7 +178,7 @@ additive and absorb under §8.2's two-commit form.
 | 0d | `pub(crate)` visibility + `Send + Sync + 'static` super-bound + Q9.3 disposition correction | Doc-only spec amendment | Additive |
 | 0e (optional, code) | `AllKeysBlob` migrated to `#[derive(Zeroize, ZeroizeOnDrop)]` | Code PR in `shekyl-crypto-pq` | Out of §2.1 scope (precondition correction) |
 
-**Phase 0c sub-bundle structure.** Sub-bundle A (workflow-internal types) lives behind the trait surface as `pub(crate)` impl-internals — `SignDomain` is no longer a trait-level concept; it cryptographically separates HKDF contexts inside `LocalKeys`'s impl. `HandleTable` (added in Round-3 commit 3a) is the workflow-internal state mapping `OutputHandle` → per-output secret material; concurrent-access shape pinned in Round 4. `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT` and the `derive_subaddress_kem_keypair` primitive (added in Round-3 commit 3b) pin the per-subaddress deterministic ML-KEM-768 keygen path that `derive_subaddress(_, Recipient)` consumes. Sub-bundle B (message shapes) is the actor-message granularity at which `KeyEngine` exposes work; each shape is a structured non-secret bundle that crosses the trait boundary in place of the primitive-shape signatures the pre-amendment §2.1 named. Sub-bundle C (handle-indirected workflow contract) is the post-Round-3 disposition: per-output spending material does not cross the trait boundary; the orchestrator receives an opaque `OutputHandle` and references it in subsequent `sign_transaction` calls. Sub-bundle D (per-subaddress `kem_pk` derivation, added in Round-3 commit 3b per §3.1.3) pins the rule-forced disposition that `RecipientSubaddress.kem_pk` derives deterministically from view secret + subaddress index — α (drop per-subaddress `kem_pk`) decomposes into three sub-options each violating a priority-hierarchy rule, leaving β as the only admissible disposition. Sub-bundle E (Pattern-2 spec-silent junctions, added in Round-3 commit 3c per §3.1.4) closes four load-bearing cryptographic junctions whose specification previously lived in implementation lore: A3 pins the per-output HKDF derivation by reference to the canonical `shekyl-crypto-pq::derivation` registry; A4 pins `VIEW_TAG_BYTES = 1` at the spec level; A5 → ζ pins method-to-domain binding via the `SignsInDomain` marker trait + associated const for compile-time cross-domain-reuse prevention; D1 pins the `sign_transaction` validation contract, separating impl-side responsibilities (handle resolution, per-input signature production, FCMP++ witness production) from caller-side preconditions (amount accounting, fee correctness, address validity, structural well-formedness). Stub-quality shapes landed in commit 1 of this design-doc round; concrete field sets landed in commit 2; the handle-indirected reshape lands in Round-3 commit 3a; the per-subaddress `kem_pk` derivation specification lands in Round-3 commit 3b; the spec-silent-junctions cluster lands in Round-3 commit 3c (and accepts Round-4+ refinement against the handle-table internal disposition).
+**Phase 0c sub-bundle structure.** Sub-bundle A (workflow-internal types) lives behind the trait surface as `pub(crate)` impl-internals — `SignDomain` is no longer a trait-level concept; it cryptographically separates HKDF contexts inside `LocalKeys`'s impl. `HandleTable` (added in Round-3 commit 3a) is the workflow-internal state mapping `OutputHandle` → per-output secret material; concurrent-access shape pinned in Round 4. `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT` and the `derive_subaddress_kem_keypair` primitive (added in Round-3 commit 3b) pin the per-subaddress deterministic ML-KEM-768 keygen path that `derive_subaddress(_, Recipient)` consumes. Sub-bundle B (message shapes) is the actor-message granularity at which `KeyEngine` exposes work; each shape is a structured non-secret bundle that crosses the trait boundary in place of the primitive-shape signatures the pre-amendment §2.1 named. Sub-bundle C (handle-indirected workflow contract) is the post-Round-3 disposition: per-output spending material does not cross the trait boundary; the orchestrator receives an opaque `OutputHandle` and references it in subsequent `sign_transaction` calls. Sub-bundle D (per-subaddress `kem_pk` derivation, added in Round-3 commit 3b per §3.1.3) pins the rule-forced disposition that `RecipientSubaddress.kem_pk` derives deterministically from view secret + subaddress index — α (drop per-subaddress `kem_pk`) decomposes into three sub-options each violating a priority-hierarchy rule, leaving β as the only admissible disposition. Sub-bundle E (Pattern-2 spec-silent junctions, added in Round-3 commit 3c per §3.1.4) closes four load-bearing cryptographic junctions whose specification previously lived in implementation lore: A3 pins the per-output HKDF derivation by reference to the canonical `shekyl-crypto-pq::derivation` registry; A4 pins `VIEW_TAG_BYTES = 1` at the spec level; A5 → ζ pins method-to-domain binding via the `SignsInDomain` marker trait + associated const for compile-time cross-domain-reuse prevention; D1 pins the `sign_transaction` validation contract, separating impl-side responsibilities (handle resolution, per-input signature production, FCMP++ witness production) from caller-side preconditions (amount accounting, fee correctness, address validity, structural well-formedness). Sub-bundle F (Pattern-3 / Pattern-4 test-substrate + visibility discipline, added in Round-3 commit 3d per §3.1.5) lands three dispositions: B1 — three-layer discipline (`#[cfg(test)]` cfg-gate + `pub(crate)` visibility + CI gate) for test-only constructors and inspection accessors (§6.6); B2 — handle-storage hygiene replaces the pre-A1 lifetime-of-secret-material framing, with three test properties (orphan absence, entry deletion on consumption, bounded growth) anchored against the workflow-internal `HandleTable` (§6.7); Attack 4.2 — per-message-type visibility table with explicit rationale for Sub-bundle B types and Trust-class B classification (§3.3 "Visibility discipline for Sub-bundle B message types" subsection). §6.4's orphan-absence verification mechanism (deferred from the 3a review pass) is pinned to option (i) — the `handle_table_size` test-inspection accessor under the three-layer discipline. Stub-quality shapes landed in commit 1 of this design-doc round; concrete field sets landed in commit 2; the handle-indirected reshape lands in Round-3 commit 3a; the per-subaddress `kem_pk` derivation specification lands in Round-3 commit 3b; the spec-silent-junctions cluster lands in Round-3 commit 3c; the test-substrate + visibility discipline cluster lands in Round-3 commit 3d (and accepts Round-4+ refinement against the handle-table internal disposition).
 
 §3 below names each bundle's substantive content. §5 names the
 sequencing.
@@ -1024,6 +1048,132 @@ spec-clarification" provenance subsection).**
 > is the contribution PR 3 makes to PR 4–7's pre-flight
 > discipline.
 
+### 3.1.5 Pattern-3 (test substrate) + Pattern-4 (visibility) cluster
+
+Round 3's adversarial pass surfaced three findings that share a
+structural shape: **trait-surface and impl-internal disciplines
+that the type system cannot enforce alone, and that the spec
+must pin so future maintainers and reviewers share the same
+mental model**. The cluster spans two threat-pattern axes:
+
+> **Pattern 3 — Test substrate visibility leakage.** Test-only
+> constructors and inspection accessors that exist on
+> production types must be structurally inaccessible from
+> production code paths. A test-only constructor that compiles
+> in production (because the gate is convention rather than
+> structure) is a class of finding the type system can prevent
+> by construction; the cost is a small discipline on every
+> test-only addition.
+>
+> **Pattern 4 — External-implementor trust model and visibility
+> discipline.** The trait surface defines what implementors must
+> publicly support; it does not define implementor-internal
+> discipline (per the §3.1.2 / §4 "deliberately does not
+> expose" bullet 5 honesty). Where the spec's visibility
+> decisions cannot be enforced by the type system alone (for
+> example, a `pub` struct that should not be constructed
+> outside the crate), the spec must pin the rationale so
+> reviewers see the discipline rather than infer it from
+> grep-output.
+
+The three findings landed by commit 3d:
+
+- **B1 — Three-layer discipline for test-only constructors and
+  inspection accessors.** Layer 1 — `#[cfg(test)]` gating
+  ensures the symbol does not exist in non-test compilation.
+  Layer 2 — `pub(crate)` (or tighter) visibility ensures even
+  in test compilation the symbol is reachable only from the
+  same crate's test code, not from downstream test crates that
+  depend on the production surface. Layer 3 — a CI gate (a
+  small `xtask` or shell-grep step in the existing CI workflow)
+  asserts the symbol does not appear in non-`cfg(test)`
+  reachable code; this is the residual defense against a
+  future maintainer accidentally widening the gate. The three
+  layers are independent: if one fails, the next catches; if
+  two fail, the third catches. The discipline applies to
+  `LocalKeys::from_test_seed`, `LocalKeys::handle_table_size`
+  (introduced for B2 / §6.4), and any future test-only
+  constructor or accessor that lands on a production type.
+- **B2 — Handle-storage hygiene replaces lifetime-of-secret-
+  material framing.** The pre-Round-3 framing said tests verify
+  wipe-on-drop of secret bytes that crossed the trait boundary
+  (e.g., `OutputClaim`'s `output_secret_key`). After A1's
+  handle-indirection pivot, no secrets cross the boundary;
+  there is nothing for the orchestrator's wipe discipline to
+  protect. The test discipline shifts: instead of verifying
+  secret-material wipe-on-drop at the boundary, tests verify
+  **handle-storage hygiene** — orphan absence (no entry
+  present without a successful claim), entry deletion on
+  consumption (a successful `sign_transaction` removes the
+  consumed handle's entry), bounded growth (repeated
+  `try_claim_output` calls don't accumulate stale entries).
+  The hygiene properties are the post-A1 analog of the
+  wipe-on-drop properties; both target the question "does the
+  engine retain state it shouldn't?" but the answer relocates
+  from boundary-crossing types to the workflow-internal
+  `HandleTable`.
+- **Attack 4.2 — Message-type visibility discipline.** Each
+  Sub-bundle B message type's visibility (`pub`, `pub(crate)`,
+  `pub(super)`, plus per-field visibility) is a deliberate
+  decision with rationale. The Round-3 finding: pin each
+  decision and its rationale at the spec level, so reviewers
+  reading the visibility table see the discipline rather than
+  needing to reconstruct it from the production code. All
+  Sub-bundle B types are **Trust-class B** (handle public
+  state only — the handle itself is opaque, but the surrounding
+  message types carry public on-chain metadata, addresses, or
+  references); no message type is Trust-class A (handles
+  long-term secret material directly). The visibility table
+  lands in §3.3 Sub-bundle B's new "Visibility discipline"
+  subsection.
+
+**Pattern-3 generalization for PR 4–7.** Per-trait PRs land
+test-only constructors and inspection accessors whenever a
+production type needs deterministic test fixtures or
+correctness-property verification beyond what the trait surface
+exposes. The three-layer discipline is the forward-template
+content PR 4–7 inherit:
+
+1. Identify every test-only addition to a production type.
+2. Apply Layer 1 (`#[cfg(test)]`), Layer 2 (`pub(crate)`),
+   Layer 3 (CI gate).
+3. Document the addition in the per-trait PR's design doc with
+   the rationale for needing a test-only addition rather than
+   refactoring to expose the property at the trait surface.
+4. The default answer when in doubt is "this should be
+   trait-surface-observable, not test-only-observable"; the
+   test-only addition is a fallback when trait-surface
+   observability would weaken the trait's contract.
+
+**Pattern-4 generalization for PR 4–7.** Per-trait PRs cross a
+crate boundary (the trait is `pub(crate)` until V3.2 promotion
+per §3.4, and the message types are `pub` because they
+participate in the actor abstraction at Stage 4). Each
+visibility decision has rationale; the per-trait PR design doc
+lists the message types with `pub` / `pub(crate)` / `pub(super)`
+visibilities and per-field visibilities, with explicit rationale
+for each. The default visibility is the **tightest** that
+satisfies the trait's contract; widening to `pub` requires
+naming the consumer that needs the wider visibility.
+
+**Amendment-block framing (to land in §2.1's "Stage 1 PR 3
+spec-clarification" provenance subsection).**
+
+> The Round-3 commit 3d lands three Pattern-3 / Pattern-4
+> dispositions: B1 — three-layer discipline (`#[cfg(test)]` +
+> `pub(crate)` + CI gate) for test-only constructors and
+> inspection accessors; B2 — handle-storage hygiene replacing
+> lifetime-of-secret-material framing post-A1; Attack 4.2 —
+> per-message-type visibility table with explicit rationale
+> for Sub-bundle B types. §6.4's orphan-absence verification
+> mechanism (deferred from the 3a review pass) is pinned to
+> option (i) — the `handle_table_size` test-inspection
+> accessor under the three-layer discipline — closing the
+> Round-4 prerequisite for the post-A1 hygiene tests. The
+> Pattern-3 and Pattern-4 generalization checklists (above)
+> are the contributions PR 3 makes to PR 4–7's pre-flight
+> discipline.
+
 ### 3.2 Phase 0b — `KeyError` / `KeyEngineError` split (§7-non-compliant)
 
 **Drift.** Existing `KeyError`
@@ -1618,6 +1768,66 @@ parameter or return — they cross the trait boundary only as fields
 inside Sub-bundle B message shapes. Reviewers asking "why doesn't
 the trait surface name primitives?" find the answer in §3.1.1's
 workflow-orchestration framing.
+
+#### Visibility discipline for Sub-bundle B message types (Attack 4.2 disposition)
+
+Each Sub-bundle B message type has a deliberate visibility
+shape — both the type-level visibility (`pub`, `pub(crate)`,
+`pub(super)`) and the per-field visibility. Round 3's
+adversarial pass surfaced that these decisions, while
+internally coherent, were not pinned at the spec level with
+rationale; reviewers had to reconstruct the discipline from
+the production code rather than read it from the design doc.
+The Attack 4.2 disposition pins each decision and its
+rationale here.
+
+**Trust class.** All Sub-bundle B message types are
+**Trust-class B** (handle public state only). No message type
+is Trust-class A (handles long-term secret material directly):
+`OutputHandle` is opaque (the inner shape's secret material
+lives in `LocalKeys`'s `HandleTable`, not in the handle); all
+other message types carry public on-chain metadata, addresses,
+or references. The Trust-class B classification is what
+permits the `pub` visibilities below; a Trust-class A type
+would default to `pub(crate)` until external-implementor
+trust models are concrete (§7.7).
+
+**Default discipline.** The default visibility is the
+**tightest that satisfies the trait's contract**; widening
+to `pub` requires naming the consumer that needs the wider
+visibility. Per-field visibility defaults tighter than the
+type-level visibility — fields are `pub` only when the
+orchestrator's contract requires field access; otherwise
+`pub(crate)` (so the impl constructs them) and constructors
+expose the safe construction surface.
+
+| Type | Type-level visibility | Per-field visibility | Rationale |
+|---|---|---|---|
+| `OutputDetectionInput` | `pub` | private (`ciphertext`, `view_tag`, `output_index`) | Crosses the trait boundary as a `&Self` parameter on `try_claim_output`; orchestrator constructs via `from_block_output(&LedgerBlock, u64) -> Option<Self>` (the source-correctness path) or `from_components(...)` (the fixture / replay path). Field privacy enforces that all construction goes through one of the two named constructors; arbitrary byte-soup construction (which would defeat the source-correctness invariant per §3.3 Sub-bundle B's coupling note) is impossible. Constructor visibility is `pub(crate)` for `from_block_output` (only the scanner / impl crate needs it) and `pub` for `from_components` (test fixtures and replay paths cross crate boundaries; not security-load-bearing because the caller is responsible for source correctness in those scopes). |
+| `OutputHandle` | `pub` | private (inner shape opaque, pinned in Round 4) | Opaque reference type. Crosses the trait boundary in `OutputClaim` and in `TxInputSigningContext`. Field privacy is structural: an `OutputHandle` is meaningful **only** to the `LocalKeys` that issued it (the `HandleTable` keys against the inner shape); orchestrator code can store, persist, and reference handles but cannot inspect them. The opacity is the load-bearing security property the handle-indirected workflow shape delivers (§3.1.2). Future implementors (HSM-backed, hardware-key) inherit the opacity by adopting the trait surface. The `pub` type-level visibility is needed because the message types referencing `OutputHandle` (themselves `pub`) are crate-boundary-crossing; tightening to `pub(crate)` would constrain the trait surface to a single crate. |
+| `OutputClaimResult` | `pub` | `pub` variants (`NotMine`, `Mine(OutputClaim)`) | Returned by `try_claim_output`. The orchestrator pattern-matches on the variant; that requires `pub` at the variant level. The discriminant carries no secret material (NotMine vs Mine is on-chain-public information after the orchestrator has the X25519 ephemeral and view tag). `#[non_exhaustive]` per Q9.2's additive-amendment discipline. |
+| `OutputClaim` | `pub` | `pub` (`handle: OutputHandle`, `key_image: KeyImage`, `amount_atomic_units: u64`) | Returned inside `OutputClaimResult::Mine`. All three fields are public-state: `handle` is opaque per the row above; `key_image` is on-chain-public after the eventual spend; `amount_atomic_units` is wallet-state but not consensus-secret (the orchestrator's wallet view exposes balances anyway). Field visibility is `pub` because orchestrator code consumes all three: `handle` for later `sign_transaction` calls; `key_image` for double-spend tracking; `amount_atomic_units` for balance computation. |
+| `TxToSign` | `pub` | `pub` (per-field shapes pinned at PR 5 implementation time) | Crosses as a `&Self` parameter on `sign_transaction`. Constructed by the orchestrator (or `PendingTxEngine` per PR 5) at transaction-build time; consumed by `KeyEngine` at signing time. All fields are public structural data plus opaque `OutputHandle` references; no secret material. |
+| `TxSignatures` | `pub` | `pub` (per-field shapes pinned at PR 5 implementation time) | Returned by `sign_transaction`. All fields are signature-class data (publicly verifiable; no `Zeroize` discipline applies). |
+| `SubaddressPurpose` | `pub` | `#[non_exhaustive]`; `pub` variants (`Recipient`, `Audit`, future variants) | Crosses as a parameter on `derive_subaddress`. Variants are a stable enumeration the orchestrator names at the call site. `#[non_exhaustive]` per Q9.2. |
+| `SubaddressFor` | `pub` | `#[non_exhaustive]`; `pub` variants (`Recipient(RecipientSubaddress)`, `Audit(SubaddressKeyPair)`, future variants) | Returned by `derive_subaddress`. Variants are pattern-matched by the orchestrator; `pub` at the variant level is needed. The inner-type visibilities apply per row below. |
+| `RecipientSubaddress` | `pub` | `pub` (`encoded: Address`, `kem_pk: HybridKemPublicKey`) | Sender-facing payment-URI / QR-code shape. Both fields are public: `encoded` is the address string the recipient publishes; `kem_pk` is the per-subaddress hybrid KEM public key the sender encapsulates against (per §3.1.3's β disposition). No secret material. |
+| `SubaddressKeyPair` | `pub` | `pub` (`spend_pk: [u8; 32]`, `view_pk: [u8; 32]`) | Audit / backup shape. Both fields are public-key bytes. The "key pair" naming is a Monero-inherited convention referring to the spend / view distinction at the public-key level, not to a secret-key pair. No secret material; backup-context code that exports subaddress structure consumes these. |
+| `ViewTag` | `pub` | `pub(crate) [u8; VIEW_TAG_BYTES]` (single tuple field) | Type wraps a 1-byte view-tag value (per §3.3 Sub-bundle A's `VIEW_TAG_BYTES` row, A4 disposition). Type-level `pub` because it appears in `OutputDetectionInput`'s field set (which is `pub` at the type level, private at the field level — `ViewTag` reaches the trait surface only via `OutputDetectionInput::from_*` constructors). Field-level `pub(crate)` because only the scanner / impl crate constructs a `ViewTag` from raw bytes; orchestrator code that manipulates `ViewTag` values reads through trait-bounded APIs (or doesn't manipulate the inner bytes at all). The width-pinning in §3.3 Sub-bundle A absorbs future migrations behind the newtype. |
+
+**Pattern-4 generalization for PR 4–7.** Per-trait PRs that
+introduce message types document each type's visibility
+decision and rationale at the design-doc level. The format
+above (a table with type / type-level visibility / per-field
+visibility / rationale columns) is the forward-template; PR
+4–7 inherit it. The Trust-class A/B classification (§3.1.5)
+gates the default visibility — Trust-class A types start
+`pub(crate)` until external-implementor trust models are
+concrete; Trust-class B types may ship `pub` from V3.0 with
+the standard external-implementor caveats. The `KeyEngine`
+trait itself is currently `pub(crate)` per §3.4 Decision 4
+(trait-level visibility distinct from message-type
+visibility); the V3.2 promotion bundle reconciles both.
 
 ### 3.4 Phase 0d — bundled small fixes (visibility + super-bound + Q9.3)
 
@@ -2343,35 +2553,35 @@ two specific error-propagation paths:
   reaches the handle-table insertion path; the wallet-level
   method observes the error without producing an `OutputHandle`
   in any return value. The substantive correctness property
-  the test would ideally check — that **no orphan entry
-  persists in the handle table after the failed call** — has
-  two candidate verification mechanisms, both deferred to
-  commit 3d (test substrate / visibility / lifetime cluster):
-  - **(i) Test-inspection accessor.** A `#[cfg(test)] pub(crate)
-    fn handle_table_size(&self) -> usize` (or similar) on
-    `LocalKeys`, allowing the test to assert table-size
-    invariants directly. Same three-layer discipline that
-    protects `from_test_seed`: `cfg(test)` (compile-time
-    elision in production), `pub(crate)` (crate-scope only),
-    and a CI gate verifying the symbol does not appear in
-    non-test builds. More rigorous; requires committing to a
-    test-only inspection surface on the production type.
-  - **(ii) Indirect-observation claim.** The test verifies that
-    "subsequent `sign_transaction` calls fail to resolve
-    handles that should have been issued" — a weaker but
-    trait-surface-only property that doesn't require an
-    inspection accessor. More honest about what the trait
-    surface alone supports; doesn't catch orphan entries that
-    are present-but-not-referenced.
+  the test checks — that **no orphan entry persists in the
+  handle table after the failed call** — is pinned in
+  commit 3d's B1 disposition to **option (i)**: a
+  `#[cfg(test)] pub(crate) fn handle_table_size(&self) ->
+  usize` (or equivalent) test-inspection accessor on
+  `LocalKeys`. The accessor is protected by the three-layer
+  discipline (§6.6 B1 disposition — `#[cfg(test)]` cfg-gate +
+  `pub(crate)` visibility + CI gate). Rationale for picking
+  (i) over the rejected (ii) "indirect observation" claim:
+  orphan-absence is a substantive correctness property of the
+  handle-storage hygiene contract (§3.1.5 B2 / §6.7). The (ii)
+  weaker claim ("subsequent `sign_transaction` calls fail to
+  resolve handles that should have been issued") cannot
+  distinguish "no orphan present" from "orphan present but
+  never referenced"; a slow-leak failure mode (a subset of
+  failure paths leave orphans, eventually exhausting memory)
+  passes (ii) but fails (i). The test-only inspection surface
+  is bounded — one accessor, three-layer-protected, with a
+  named consumer (the §6.4 fault-injection tests and the
+  §6.7 B2 handle-storage hygiene tests) — and the
+  forward-template discipline (§3.1.5 Pattern-3) is explicit
+  about when test-only additions are admissible.
 
-  Until commit 3d pins one disposition, the PR 3 hybrid test
-  asserts the **trait-surface-observable property only**: no
-  `OutputHandle` is returned in the `OutputClaim` (because
-  the failed call returns `Err(...)`, not `Ok(OutputClaimResult::
-  Mine(...))`). The orphan-absence property is a Round-4 or
-  commit-3d concern; the Round-3 commit 3a doc only commits to
-  what the test can verify with the post-Round-3 trait surface
-  as currently shaped.
+  The PR 3 hybrid test asserts both the trait-surface-observable
+  property (no `OutputHandle` returned in any `OutputClaim`
+  because the failed call returns `Err(...)`, not `Ok(...
+  ::Mine(...))`) and the orphan-absence property (the
+  table size before and after the failed call is unchanged,
+  asserted via `handle_table_size`).
 - **`sign_transaction` failure with handle resolution** — the
   test seeds the handle table via a successful prior
   `try_claim_output` call, then injects a `KeyEngineError`
@@ -2573,7 +2783,160 @@ expose the intermediate scalar), the `_mine` bench's measured
 cost rises by the X25519 round-trip cost; the bench commentary
 updates with the actual disposition once Phase 1 lands.
 
-### 6.6 Docs propagation
+### 6.6 Three-layer discipline for test-only additions (B1 disposition)
+
+Test-only constructors and inspection accessors that exist on
+production types must be **structurally inaccessible from
+production code paths**. The discipline applies to
+`LocalKeys::from_test_seed` (already named in §6.4),
+`LocalKeys::handle_table_size` (introduced for §6.4 + §6.7),
+and any future test-only addition to a production type.
+
+**Layer 1 — `#[cfg(test)]` cfg-gate.** The symbol is gated on
+`cfg(test)` so it does not exist in non-test compilation. This
+is the strongest of the three layers: the symbol is literally
+absent from the production binary's symbol table and cannot be
+called even via dynamic-dispatch tricks. The gate is structural,
+not conventional; rustc enforces it.
+
+```rust
+impl LocalKeys {
+    /// Production constructor.
+    pub fn from_seed(seed: &WalletSeed) -> Result<Self, KeyError> {
+        // ...
+    }
+
+    /// Test-only constructor; deterministic seed derivation.
+    /// The `test_label` argument feeds a deterministic
+    /// derivation; any wallet derived from a test seed has
+    /// publicly-derivable secret keys, which is acceptable in
+    /// test scope and unacceptable in production scope.
+    #[cfg(test)]
+    pub(crate) fn from_test_seed(test_label: &str) -> Self {
+        // ...
+    }
+
+    /// Test-only handle-table size accessor for orphan-absence
+    /// and bounded-growth assertions in §6.4 / §6.7.
+    #[cfg(test)]
+    pub(crate) fn handle_table_size(&self) -> usize {
+        // ...
+    }
+}
+```
+
+**Layer 2 — `pub(crate)` (or tighter) visibility.** Even in
+test compilation, the symbol is reachable only from the same
+crate's test code. A downstream test crate that depends on the
+production crate cannot reach the symbol; this prevents the
+test-only addition from accreting a downstream-test consumer
+that constrains future evolution. `pub(crate)` is the typical
+choice; `pub(super)` or unrestricted private (no `pub` modifier)
+applies where tighter visibility is admissible.
+
+**Layer 3 — CI gate.** A small CI step (an `xtask`, a
+shell-grep on the build artifacts, or a `cargo-deny`-style
+custom lint) asserts that test-only symbols do not appear in
+non-`cfg(test)` reachable code. The exact mechanism is pinned
+at PR 3 implementation time; the structural property is **the
+gate exists, fails the build on violation, and runs on every
+push to `dev`**. The gate is the residual defense against a
+future maintainer accidentally widening Layer 1 (deleting the
+`#[cfg(test)]`) or Layer 2 (widening `pub(crate)` to `pub`)
+without noticing the consequence.
+
+**Three layers, independent.** The discipline's strength is
+that the layers are independent: if Layer 1 fails (the cfg-gate
+is removed by accident or rebase mishap), Layer 2 still
+prevents downstream-test reachability; if Layers 1 + 2 both
+fail, Layer 3's CI gate catches the regression before merge.
+Defense-in-depth at the code-review boundary; the cost is one
+CI step plus a one-line cfg-gate per addition.
+
+**Forward-template content for PR 4–7.** The discipline applies
+to any per-trait PR that lands a test-only addition on a
+production type. Per-trait PRs that don't need test-only
+additions (the trait surface alone supports the test
+correctness properties) skip the discipline; per-trait PRs
+that do need them inherit the three-layer pattern. The default
+when in doubt is **trait-surface-observable, not test-only-
+observable**; the test-only addition is a fallback when the
+trait-surface alternative would weaken the trait's contract
+(see §3.1.5 Pattern-3).
+
+### 6.7 Handle-storage hygiene (B2 disposition)
+
+Pre-Round-3 framing said tests verify wipe-on-drop of secret
+bytes that crossed the trait boundary (e.g., `OutputClaim`'s
+`output_secret_key` field). Post-A1 (handle-indirected
+workflow), no secrets cross the boundary; the orchestrator's
+wipe discipline has nothing to protect. The test discipline
+shifts to **handle-storage hygiene** — the post-A1 analog of
+the pre-A1 wipe-on-drop discipline; both target the question
+"does the engine retain state it shouldn't?" but the answer
+relocates from boundary-crossing types to the workflow-internal
+`HandleTable`.
+
+**Three hygiene properties tested.**
+
+1. **Orphan absence.** A failed `try_claim_output` call leaves
+   the handle table size unchanged. Tested via
+   `FaultInjecting<LocalKeys>` injecting a `KeyEngineError`
+   variant before the impl reaches the handle-table insertion
+   path; the test asserts `handle_table_size()` before == after.
+   See §6.4 for the full test scenario.
+2. **Entry deletion on consumption.** A successful
+   `sign_transaction` call against a `TxToSign` whose inputs
+   reference handles `H1`, `H2`, ..., `Hn` reduces the handle
+   table size by `n`. Tested via setup
+   (`try_claim_output` for `n` distinct outputs, asserting
+   `handle_table_size() == n`), execution
+   (`sign_transaction(&tx)` succeeds), and verification
+   (`handle_table_size() == 0` post-call). Round 4's handle-
+   persistence option-space disposition (§7.11) may refine this
+   property — if persisted handles are retained across spend
+   for audit purposes, the post-call size may not be zero
+   immediately and the test refines accordingly.
+3. **Bounded growth.** Repeated `try_claim_output` calls for
+   the same output (idempotency) do not accumulate duplicate
+   entries. Tested via repeated calls with identical input;
+   the test asserts the table size grows by 1 (first call
+   inserts, subsequent calls observe the existing entry) or by
+   0 (subsequent calls are pure no-ops). The exact disposition
+   (insert-once-then-no-op vs. error-on-duplicate) is a
+   §7's Pattern-6 cluster (replay/idempotency) item; the test
+   adapts to the chosen disposition.
+
+**Test-substrate dependencies.** All three hygiene tests
+require `handle_table_size()` (§6.6 B1 disposition, three-layer
+protected). They also require `FaultInjecting<LocalKeys>` for
+property (1). They do not require a `MockKeys` substitute; the
+production `LocalKeys` impl runs authentic crypto, and the
+test inputs are deterministic-seed-derived per §6.4.
+
+**Trait-surface-observable vs. inspection-required.** The three
+properties split:
+
+- **Property (2)** is partially trait-surface-observable: a
+  successful `sign_transaction` followed by a second
+  `sign_transaction` against the same handles fails (the
+  handles were consumed by the first call). The test-surface
+  version of (2) catches "handles aren't consumed" failures
+  but not "handles are consumed but the table grows" failures
+  (e.g., a buggy impl that adds a "spent" entry instead of
+  deleting); the inspection-required version
+  (`handle_table_size`) catches both.
+- **Properties (1) and (3)** are not trait-surface-observable
+  in any meaningful way and require the inspection accessor.
+
+The default discipline (§3.1.5 Pattern-3) is "trait-surface-
+observable when possible"; for the handle-storage hygiene
+properties, that default fails — the inspection accessor is
+the load-bearing discipline, and the three-layer protection
+(§6.6) is the structural defense against the test-only surface
+leaking to production.
+
+### 6.8 Docs propagation
 
 Mirrors PR 2's commit 9. Updates:
 
