@@ -2,6 +2,59 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Single-source-of-truth JSON authority for the consensus-affecting
+  constant subset: `config/consensus_constants.json`.** Mirrors the
+  existing `config/economics_params.json` pattern. The JSON is the
+  authority; `cmake/generate_consensus_constants.py` emits
+  `shekyl/consensus_constants_generated.h` for the C++ build, and
+  `rust/shekyl-engine-core/build.rs` reads the same file and emits
+  a `consensus_constants_generated.rs` module that
+  `rust/shekyl-engine-core/src/multisig/v31/intent.rs` consumes via
+  `include!()`. Closes the C++/Rust drift class for the constants
+  where drift causes silent wrong-output (vs. fail-closed-on-load).
+
+  Constants in scope (per `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`):
+
+  - `FCMP_REFERENCE_BLOCK_MIN_AGE = 5` — reorg-safety margin locked
+    by Decision 14. Pre-fix, hand-defined as `5` in
+    `src/cryptonote_config.h` and as `10` in
+    `rust/shekyl-engine-core/src/multisig/v31/intent.rs`. The
+    drift was Bug 3 of the audit and silently rejected legitimate
+    multisig intents at the wallet layer.
+  - `FCMP_REFERENCE_BLOCK_MAX_AGE = 100` — same shape, no observed
+    drift but in the same value class and migrated together.
+  - `RCT_TYPE_FCMP_PLUS_PLUS_PQC = 7` — single-source on each side
+    today (`enum RCTType` in C++; `ProofType::FcmpPlusPlusPqc => 7`
+    in `shekyl-oxide`); both sides now stamped against the JSON via
+    `static_assert` (C++ in `src/fcmp/rctTypes.cpp`) and a runtime
+    test (Rust, in `intent.rs::tests::shekyl_oxide_proof_type_matches_consensus_authority`).
+
+  **Sentinel discipline:** every consumption site that previously
+  hand-defined a value now carries either a `static_assert` (C++) or
+  a `const _: () = assert!(...)` (Rust) sentinel pinning the value
+  to a Decision-14-era baseline. Bumping the sentinel requires
+  updating both the JSON and the consumption-site comment, so a
+  silent value drift through the JSON alone fails the build with a
+  clear message.
+
+  **Fixture update:** `intent.rs::tests::validate_temporal_rejects_ref_block_too_fresh`
+  changed from `tip = 905` (age = 5, the boundary value `age < 5`
+  evaluates false under the post-fix `MIN_AGE = 5`) to `tip = 903`
+  (age = 3, unambiguously rejected). The test exercises the
+  rejection branch (`age < MIN_AGE`) and stays correct as long as
+  `MIN_AGE > 3` — i.e. it survives any tightening (`MIN_AGE`
+  increasing above 5) and any loosening down to and including
+  `MIN_AGE = 4`. Only a loosening to `MIN_AGE = 3` or lower would
+  invalidate the fixture, which itself would warrant the consensus
+  re-review the sentinel demands.
+
+  **Out of scope:** `ADDRESS_VERSION_V1` is single-source in Rust
+  with no C++ duplicate, so there's nothing to align. The
+  full-migration follow-up for the remaining `SHEKYL_*` fail-closed-
+  on-misuse constants (~40) stays as FOLLOWUPS V3.0.
+
 ### Fixed
 
 - **`account_base::generate(...)` no longer hardcodes `FAKECHAIN`;

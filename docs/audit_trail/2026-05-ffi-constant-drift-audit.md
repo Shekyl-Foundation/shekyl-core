@@ -59,18 +59,21 @@ The audit-quality story it supports:
 
 ### Bug 3 — `FCMP_REFERENCE_BLOCK_MIN_AGE` 5 vs 10
 
-Found during the post-Bug-2 sweep. **Not in scope of `fix/wallet-storage-test`;
-fixed in sibling branch `fix/fcmp-min-age-multisig-drift`.**
+Found during the post-Bug-2 sweep. **Fixed in two complementary
+branches: `fix/fcmp-min-age-multisig-drift` (immediate value
+alignment) and `chore/cbindgen-consensus-constants` (structural
+fix via a JSON authority that prevents recurrence).**
 
 | Field | Value |
 | --- | --- |
 | C++ (consensus) | `src/cryptonote_config.h:204` defines `FCMP_REFERENCE_BLOCK_MIN_AGE = 5` (asserted by `tests/unit_tests/fcmp.cpp:668`, documented in `docs/FCMP_PLUS_PLUS.md:432`, locked by Decision 14 per `docs/CHANGELOG.md:5788`). |
-| Rust (multisig wallet) | `rust/shekyl-engine-core/src/multisig/v31/intent.rs:20` defines `FCMP_REFERENCE_BLOCK_MIN_AGE = 10` with the same comment ("Minimum reference block age in blocks behind tip"). |
-| Doc (also stale) | `docs/SHEKYL_MULTISIG_WIRE_FORMAT.md:90` lists `10`. |
-| Mechanism | A v31 multisig proposer generating a `SpendIntent` with `ref_height = tip - {5..9}` (valid per consensus) is rejected by every co-signer's wallet with `RefBlockTooFresh`. Wallet-side bug; not a consensus split. |
+| Rust (multisig wallet) | `rust/shekyl-engine-core/src/multisig/v31/intent.rs:20` defined `FCMP_REFERENCE_BLOCK_MIN_AGE = 10` with the same comment text as the C++ consensus value, indicating an inadvertent typo or pre-Decision-14 copy rather than a deliberate wallet-side choice. |
+| Doc (also stale pre-fix) | `docs/SHEKYL_MULTISIG_WIRE_FORMAT.md:90` listed `10`. |
+| Mechanism | A v31 multisig proposer generating a `SpendIntent` with `ref_height = tip - {5..9}` (valid per consensus) was rejected by every co-signer's wallet with `RefBlockTooFresh`. Wallet-side bug; not a consensus split. |
 | Failure mode | Fail-closed at the multisig wallet boundary. No silent acceptance, no consensus risk. |
-| Detection | Caught by hand audit. No automated detection existed. |
-| Status | Fixed in sibling branch, after `git log -S "10"` confirms which value was intentional. (Per discussion, almost certainly the Rust side is the typo: the comment text matches the consensus-side comment exactly, so it is unlikely to have been a deliberate wallet-side conservativeness choice.) |
+| Detection | Caught by hand audit. No automated detection existed pre-fix. |
+| Form of fix (immediate) | `fix/fcmp-min-age-multisig-drift`: aligned the Rust value to `5`, updated the doc, fixed the test fixture (`tip = 905` → `tip = 903`) so the `_too_fresh` test stays robust to a future-conservative `MIN_AGE` tightening. |
+| Form of fix (structural) | `chore/cbindgen-consensus-constants`: introduced `config/consensus_constants.json` as the single source of truth, with `cmake/generate_consensus_constants.py` emitting the C++ header and `rust/shekyl-engine-core/build.rs` emitting the Rust module. Both consumption sites now stamp the JSON value against Decision-14-era baselines via `static_assert` / `const _: () = assert!(...)` sentinels. The Bug 3 drift class can no longer recur for these constants. |
 
 ### Bug 4 — `wallet2::generate_from_bip39` does not exist
 
@@ -159,25 +162,52 @@ FFI are the bug class. Two things are landing to close it:
    originally that #1 alone closed the bug class; that was wrong, and is
    corrected here.
 
-2. **A reduced-scope `build.rs`-style header generator** (`chore/cbindgen-consensus-constants`)
-   covers only the constants where drift would cause silent wrong-output
-   rather than fail-closed-on-load:
+2. **A reduced-scope JSON-authority + build-time generator pair**
+   (`chore/cbindgen-consensus-constants`) covers the subset of
+   constants where drift would cause silent wrong-output rather than
+   fail-closed-on-load:
 
-   - `RCTTypeFcmpPlusPlusPqc` (consensus-affecting)
-   - `FCMP_REFERENCE_BLOCK_MIN_AGE`, `FCMP_REFERENCE_BLOCK_MAX_AGE` (just
-     bit us in the form of Bug 3)
-   - `ADDRESS_VERSION_V1` (silent address mismatch)
+   - `FCMP_REFERENCE_BLOCK_MIN_AGE` (just bit us in the form of Bug 3)
+   - `FCMP_REFERENCE_BLOCK_MAX_AGE` (same value class)
+   - `RCT_TYPE_FCMP_PLUS_PLUS_PQC` (consensus-affecting; pinned by
+     sentinel rather than fully generated to keep enum-tag stability)
+
+   Out of initial scope (justifiable):
+
+   - `ADDRESS_VERSION_V1` is single-source in Rust with no C++
+     duplicate, so there's nothing to align today; it would be added
+     to the JSON only if a C++ duplicate appears.
    - The four locked economic parameters (ESF, burn_base_rate,
-     `staker_pool_share`, `staker_emission_share`) if any are duplicated
-     across the FFI
+     `staker_pool_share`, `staker_emission_share`) already live in
+     `config/economics_params.json` with the established generator
+     pattern; nothing to do.
 
-   Mechanism: a `build.rs` in `shekyl-ffi` reads the authoritative Rust
-   constants and emits a generated `shekyl_ffi_constants.h` with `#define`s.
-   The hand-written `shekyl_ffi.h` `#include`s the generated header and
-   adds `static_assert` sentinels so a future hand-edit of either side
-   fails the build with an explicit message. Pattern precedent:
-   `rust/shekyl-staking/build.rs` already generates Rust from
-   `config/economics_params.json`; this is the inverse direction.
+   Mechanism shipped (different from the original audit-doc proposal,
+   which speculated about Rust-as-authority + cbindgen-style C
+   header generation): JSON file at `config/consensus_constants.json`
+   is the single source of truth. `cmake/generate_consensus_constants.py`
+   emits `shekyl/consensus_constants_generated.h` (consumed by
+   `src/cryptonote_config.h` and `src/fcmp/rctTypes.cpp`).
+   `rust/shekyl-engine-core/build.rs` reads the same JSON and emits a
+   Rust constants module that `intent.rs` consumes via `include!()`.
+   At every consumption site, a `static_assert` (C++) or
+   `const _: () = assert!(...)` (Rust) sentinel pins the JSON value
+   to a Decision-14-era baseline so a silent value drift through the
+   JSON alone fails the build with a clear message. Pattern
+   precedent: `cmake/generate_economics_params.py` +
+   `rust/shekyl-staking/build.rs` already share `config/economics_params.json`
+   the same way; this commit extends the model to consensus-class
+   constants.
+
+   Trade-off accepted: the JSON authority direction (neither C++ nor
+   Rust owns the value) sidesteps the bigger consensus-authority-
+   migration question (Rust-as-authority per
+   `20-rust-vs-cpp-policy.mdc`) for now. That migration stays an
+   open V3.x agenda item but doesn't gate audit; today's pattern is
+   strictly safer than the pre-audit hand-maintained duplicates and
+   is reversible (the JSON could become Rust-`pub const`s with
+   cbindgen-emitted C headers later without touching the consumption
+   sites' sentinels).
 
 3. **Full migration of the remaining `SHEKYL_*` constants** to the
    generator is filed as FOLLOWUPS V3.0 (target: pre-audit-final). The
@@ -194,9 +224,9 @@ This is the audit landing pattern across four branches:
 | Branch | Findings addressed | Status |
 | --- | --- | --- |
 | `fix/wallet-storage-test` (this) | Bug 1 fix, Bug 2 fix, equality-assertion tests for both, BIP-39 + MAINNET account-layer round-trip test (closes the only path Bug 2 broke that wasn't already covered), Monero-era wallet fixture deletion, **Bug 4 absence + CI tripwire (commits 8–10): FOLLOWUPS architectural-decision entry, `static_assert` SFINAE detector against `wallet2::generate_from_bip39`, Rust mainnet BIP-39 test cross-reference**, this audit doc, CI_BASELINE / FOLLOWUPS / CHANGELOG updates. | This commit |
-| `fix/fcmp-min-age-multisig-drift` (sibling) | Bug 3 fix in `rust/shekyl-engine-core/src/multisig/v31/intent.rs` and `docs/SHEKYL_MULTISIG_WIRE_FORMAT.md`, after `git log -S "10"` confirms the canonical value. Single-line value fix + doc. | Pending |
-| `fix/legacy-account-generate-network-guard` (sibling) | Bug 4-adjacent fix: `account_base::generate(.., nettype)` 4-arg overload added; legacy 3-arg overload **deleted entirely**; production callers migrated (`wallet2::generate(...)`, `wallet_rpc_server::on_stop_background_sync`, and the `transfer_selected_rct` 0-change dummy with explicit `FAKECHAIN`); all 28 test callers migrated to pass `cryptonote::FAKECHAIN` explicitly; `tests/unit_tests/account.cpp::generate_uses_explicit_nettype_argument` regression test added covering both `recover=true` and `recover=false` paths on MAINNET / STAGENET. Note: this branch does **not** add a `wallet2::generate_from_bip39` wrapper — that absence is by design (Bug 4 above) and defended by the `static_assert` tripwire on `fix/wallet-storage-test`. The `on_create_wallet` / `wallet2_ffi::create` MAINNET/STAGENET regression (these RPCs were already broken pre-fix; now throw cleanly instead of silently miscompiling) is filed as FOLLOWUPS V3.0 deferred to the wallet2 BIP-39 entry point. | Delivered |
-| `chore/cbindgen-consensus-constants` (sibling) | Reduced-scope generator. Closes the bug class for the consensus-affecting subset of constants before audit. | Pending |
+| `fix/fcmp-min-age-multisig-drift` (sibling) | Bug 3 immediate fix in `rust/shekyl-engine-core/src/multisig/v31/intent.rs` and `docs/SHEKYL_MULTISIG_WIRE_FORMAT.md`, after `git log -S "10"` confirms the canonical value. Single-line value fix + doc + test-fixture update. Superseded by the `chore/cbindgen-consensus-constants` JSON-authority structural fix below; kept as the immediate value alignment that landed first. | Delivered (PR #28) |
+| `fix/legacy-account-generate-network-guard` (sibling) | Bug 4-adjacent fix: `account_base::generate(.., nettype)` 4-arg overload added; legacy 3-arg overload **deleted entirely**; production callers migrated (`wallet2::generate(...)`, `wallet_rpc_server::on_stop_background_sync`, and the `transfer_selected_rct` 0-change dummy with explicit `FAKECHAIN`); all 28 test callers migrated to pass `cryptonote::FAKECHAIN` explicitly; `tests/unit_tests/account.cpp::generate_uses_explicit_nettype_argument` regression test added covering both `recover=true` and `recover=false` paths on MAINNET / STAGENET. Note: this branch does **not** add a `wallet2::generate_from_bip39` wrapper — that absence is by design (Bug 4 above) and defended by the `static_assert` tripwire on `fix/wallet-storage-test`. The `on_create_wallet` / `wallet2_ffi::create` MAINNET/STAGENET regression (these RPCs were already broken pre-fix; now throw cleanly instead of silently miscompiling) is filed as FOLLOWUPS V3.0 deferred to the wallet2 BIP-39 entry point. | Delivered (PR #29) |
+| `chore/cbindgen-consensus-constants` (sibling, this) | Reduced-scope generator. JSON authority at `config/consensus_constants.json` for `FCMP_REFERENCE_BLOCK_{MIN,MAX}_AGE` and `RCT_TYPE_FCMP_PLUS_PLUS_PQC`; both languages consume via build-time generation (`rust/shekyl-engine-core/build.rs` and `cmake/generate_consensus_constants.py`); sentinel `static_assert` / `const _: () = assert!(...)` at every consumption site pins meaning to Decision-14-era baselines. Supersedes `fix/fcmp-min-age-multisig-drift`'s value alignment with a structural fix that prevents recurrence. | Pending (PR #30) |
 
 The full-scope cbindgen migration of the remaining ~40 constants is
 deferred to FOLLOWUPS V3.0 with target post-stressnet, pre-audit-final.
