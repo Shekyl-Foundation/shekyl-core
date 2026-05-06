@@ -43,19 +43,47 @@ required adversarial review to surface.
   `RecipientSubaddress`, `SubaddressKeyPair`, `ViewTag`).
   Purpose-decomposed subaddress derivation. No-Mock test substrate
   pattern (§2.1.2). Trust-class A/B classification deferred.
-- **Round 3 (in-flight; this commit lands 3a).** Adversarial
-  wargaming pass surfaced 12 findings clustered into 7 threat
-  patterns (4 generalizing to PR 4–7's pre-flight checklist; 3
-  KeyEngine-specific). Round-3 dispositions land across five
-  sequential commits (3a–3e); this commit (3a) lands the
-  handle-indirected workflow contract per A1's α disposition,
-  reshapes `OutputClaim` to drop secret-bearing fields in favor
-  of an opaque `OutputHandle`, expands the "deliberately does not
-  expose" subsection to seven bullets, and pins emergent attack
-  surface (A6, A7, handle persistence, concurrency-quality) as
-  Round-4 candidates. Subsequent commits (3b–3e) land the
-  remaining Round-3 dispositions per the synthesis recorded in
-  the long-form plan.
+- **Round 3 (in-flight; commits 3a, 3a-review-pass, 3b landed
+  to date).** Adversarial wargaming pass surfaced 12 findings
+  clustered into 7 threat patterns (4 generalizing to PR 4–7's
+  pre-flight checklist; 3 KeyEngine-specific). Round-3
+  dispositions land across five sequential commits (3a–3e):
+  - **3a (commit `8553ae297`).** Handle-indirected workflow
+    contract per A1's α disposition; `OutputClaim` reshape;
+    seven-bullet "deliberately does not expose" subsection;
+    Round-4 candidates pinned (A6, A7, handle persistence,
+    concurrency-quality).
+  - **3a review pass (commit `32057219f`).** Capability-vs-
+    material honesty for active attacker (bullet 4); softer
+    framing of trait-surface scope vs implementor-internal
+    discipline (bullet 5); §7.11 option-space expanded to four
+    candidates (split (2) into 2a / 2b); §6.4 orphan-absence
+    verification mechanism deferred to commit 3d.
+  - **3b (this commit).** A2 → β disposition: per-subaddress
+    `kem_pk` derivation specification. New §3.1.3 walks the
+    priority-hierarchy decomposition showing β is rule-forced
+    (α decomposes into (P1) X25519-only / (P2) wallet-level
+    ML-KEM PK in encoding / (P3) out-of-band PK delivery, each
+    violating a priority-hierarchy rule). §3.3 Sub-bundle A
+    pins `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT =
+    b"shekyl/subaddr-mlkem-keygen-v1"` and the
+    `derive_subaddress_kem_keypair` primitive. Sub-bundle B
+    `RecipientSubaddress` doc-comment refresh (E1) makes the
+    dual-derivation contract explicit; `SubaddressKeyPair`
+    tightened to note V3.x audit-payload extension composes
+    with the same primitive. §4 `derive_subaddress`
+    doc-comment names the per-call cost regime (~50 µs
+    dominated by ML-KEM-768 KeyGen).
+  - **3c–3e (forthcoming).** 3c — Pattern-2 spec-silent
+    junctions cluster (A3 `tx_context_hash` derivation; A4
+    `VIEW_TAG_BYTES` pin; A5 → ζ marker trait + associated
+    const; D1 `sign_transaction` validation contract). 3d —
+    Pattern-3 / Pattern-4 cluster (B1 three-layer test-substrate
+    discipline; B2 handle-storage discipline post-A1; visibility
+    discipline on message types). 3e — residual + forward-
+    template content (Trust-class A/B classification; A8
+    DESIGN_CONCEPTS.md cross-reference; four-pattern checklist
+    for PR 4–7 pre-flight; trajectory note).
 - **Round 4+ (forthcoming).** Adversarial pass against the
   handle-model emergent attack surface (A6, A7, persistence
   option-space, concurrency-quality / Pattern-5 cluster). Per
@@ -86,11 +114,11 @@ additive and absorb under §8.2's two-commit form.
 |---|---|---|---|
 | 0 | Workflow-shape pivot (primitive-shape `view_ecdh` / `hybrid_decapsulate` / `sign_with_spend` replaced by workflow-shape `try_claim_output` / `sign_transaction`; hybrid-framework reconciliation absorbed) | Doc-only spec amendment | **Re-opens §7** |
 | 0b | `KeyError` / `KeyEngineError` split | Doc-only spec amendment | **Re-opens §7** |
-| 0c | Workflow-internal types + message shapes for cross-boundary travel (Sub-bundle A: `pub(crate)` impl-internals — `SignDomain`, `AccountPublicAddress`, `HandleTable`; Sub-bundle B: trait-surface message shapes — `OutputDetectionInput`, `OutputHandle`, `OutputClaimResult`, `OutputClaim`, `TxToSign`, `TxSignatures`, `SubaddressPurpose`, `SubaddressFor`, `RecipientSubaddress`, `SubaddressKeyPair`, `ViewTag`; Sub-bundle C: handle-indirected workflow contract — `OutputHandle` is opaque to the orchestrator with inner shape pinned in Round 4) | Doc-only spec amendment | Additive |
+| 0c | Workflow-internal types + message shapes for cross-boundary travel (Sub-bundle A: `pub(crate)` impl-internals — `SignDomain`, `AccountPublicAddress`, `HandleTable`, `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT`, `derive_subaddress_kem_keypair` primitive; Sub-bundle B: trait-surface message shapes — `OutputDetectionInput`, `OutputHandle`, `OutputClaimResult`, `OutputClaim`, `TxToSign`, `TxSignatures`, `SubaddressPurpose`, `SubaddressFor`, `RecipientSubaddress`, `SubaddressKeyPair`, `ViewTag`; Sub-bundle C: handle-indirected workflow contract — `OutputHandle` is opaque to the orchestrator with inner shape pinned in Round 4; Sub-bundle D: per-subaddress `kem_pk` derivation — `RecipientSubaddress.kem_pk` derives deterministically from view secret + subaddress index per §3.1.3, β disposition rule-forced by `00-mission.mdc`'s priority hierarchy) | Doc-only spec amendment | Additive |
 | 0d | `pub(crate)` visibility + `Send + Sync + 'static` super-bound + Q9.3 disposition correction | Doc-only spec amendment | Additive |
 | 0e (optional, code) | `AllKeysBlob` migrated to `#[derive(Zeroize, ZeroizeOnDrop)]` | Code PR in `shekyl-crypto-pq` | Out of §2.1 scope (precondition correction) |
 
-**Phase 0c sub-bundle structure.** Sub-bundle A (workflow-internal types) lives behind the trait surface as `pub(crate)` impl-internals — `SignDomain` is no longer a trait-level concept; it cryptographically separates HKDF contexts inside `LocalKeys`'s impl. `HandleTable` (added in Round-3 commit 3a) is the workflow-internal state mapping `OutputHandle` → per-output secret material; concurrent-access shape pinned in Round 4. Sub-bundle B (message shapes) is the actor-message granularity at which `KeyEngine` exposes work; each shape is a structured non-secret bundle that crosses the trait boundary in place of the primitive-shape signatures the pre-amendment §2.1 named. Sub-bundle C (handle-indirected workflow contract) is the post-Round-3 disposition: per-output spending material does not cross the trait boundary; the orchestrator receives an opaque `OutputHandle` and references it in subsequent `sign_transaction` calls. Stub-quality shapes landed in commit 1 of this design-doc round; concrete field sets landed in commit 2; the handle-indirected reshape lands in Round-3 commit 3a (and accepts Round-4+ refinement against the handle-table internal disposition).
+**Phase 0c sub-bundle structure.** Sub-bundle A (workflow-internal types) lives behind the trait surface as `pub(crate)` impl-internals — `SignDomain` is no longer a trait-level concept; it cryptographically separates HKDF contexts inside `LocalKeys`'s impl. `HandleTable` (added in Round-3 commit 3a) is the workflow-internal state mapping `OutputHandle` → per-output secret material; concurrent-access shape pinned in Round 4. `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT` and the `derive_subaddress_kem_keypair` primitive (added in Round-3 commit 3b) pin the per-subaddress deterministic ML-KEM-768 keygen path that `derive_subaddress(_, Recipient)` consumes. Sub-bundle B (message shapes) is the actor-message granularity at which `KeyEngine` exposes work; each shape is a structured non-secret bundle that crosses the trait boundary in place of the primitive-shape signatures the pre-amendment §2.1 named. Sub-bundle C (handle-indirected workflow contract) is the post-Round-3 disposition: per-output spending material does not cross the trait boundary; the orchestrator receives an opaque `OutputHandle` and references it in subsequent `sign_transaction` calls. Sub-bundle D (per-subaddress `kem_pk` derivation, added in Round-3 commit 3b per §3.1.3) pins the rule-forced disposition that `RecipientSubaddress.kem_pk` derives deterministically from view secret + subaddress index — α (drop per-subaddress `kem_pk`) decomposes into three sub-options each violating a priority-hierarchy rule, leaving β as the only admissible disposition. Stub-quality shapes landed in commit 1 of this design-doc round; concrete field sets landed in commit 2; the handle-indirected reshape lands in Round-3 commit 3a; the per-subaddress `kem_pk` derivation specification lands in Round-3 commit 3b (and accepts Round-4+ refinement against the handle-table internal disposition).
 
 §3 below names each bundle's substantive content. §5 names the
 sequencing.
@@ -679,6 +707,171 @@ surfaces new questions that the next round resolves.
 > change (`OutputClaim`'s field set; `TxInputSigningContext`'s
 > handle reference); the underlying capability is unchanged.
 
+### 3.1.3 Per-subaddress `kem_pk` derivation is rule-forced, not stylistic
+
+Round 3's adversarial pass (A2) probed whether `RecipientSubaddress`
+must carry a per-subaddress `kem_pk: HybridKemPublicKey` for
+V3.0, or whether the trait could ship without per-subaddress ML-KEM
+material at the V3.0 cut-point and accrete it as a V3.x
+extension. The Round-3 disposition is **per-subaddress `kem_pk`
+in V3.0**, dispositioned **β** in the A2 option-space. The
+disposition is **rule-forced by `00-mission.mdc`'s priority
+hierarchy**, not stylistic — α (drop per-subaddress `kem_pk` for
+V3.0) decomposes into three sub-options each violating a
+priority-hierarchy rule.
+
+**The α decomposition.** Where would the sender obtain the
+ML-KEM public key to encapsulate against, if `RecipientSubaddress`
+did not carry one?
+
+- **(P1) X25519-only encryption.** Drop ML-KEM encapsulation
+  entirely and encrypt outputs against the X25519 component
+  alone. **Violates `00-mission.mdc` priority 1** (security and
+  quantum resilience are preconditions). No PQC in the
+  encryption path means no quantum resilience for received
+  outputs. The hybrid-by-default rule
+  ([`30-cryptography.mdc`](../../.cursor/rules/30-cryptography.mdc))
+  is itself an instance of priority 1 at the rule level.
+  Rejected unconditionally.
+- **(P2) Wallet-level ML-KEM PK in the encoded subaddress.**
+  Each subaddress encoding embeds the wallet-level (root) ML-KEM
+  PK in addition to the per-subaddress X25519 component. Senders
+  encapsulate against the wallet-level ML-KEM PK; the receiver
+  decapsulates with the wallet-level ML-KEM SK and routes the
+  result via the per-subaddress X25519 derivation. **Violates
+  priority 2** (privacy is the product; never weaken privacy to
+  add a feature of any kind other than security): two
+  subaddress encodings from the same wallet share their
+  ML-KEM PK component byte-for-byte; an observer who has two
+  subaddress encodings can compare them directly and learn
+  "same wallet" without observing any on-chain activity. This
+  is direct subaddress-encoding linkability — not a
+  ciphertext-correlation degradation, not an
+  observation-window-bound privacy leak, but a literal byte
+  comparison that any party in possession of two encodings
+  performs trivially. Subaddress unlinkability is the
+  privacy-class property the receiver designs around;
+  collapsing it for a deferral convenience is rejected.
+- **(P3) Out-of-band ML-KEM PK delivery.** The encoded
+  subaddress carries only the X25519 component and a wallet
+  identifier; the sender obtains the ML-KEM PK out-of-band
+  (lookup service, pinned-key directory, manual exchange).
+  **Breaks the self-contained-address UX**: payment URIs / QR
+  codes are no longer fully addressable; the sender cannot
+  send without an additional resolution step; the wallet-pair
+  introduces a coordination dependency that the entire
+  subaddress design specifically eliminates. Not viable for
+  V3.0; not viable in V3.x either, because re-introducing
+  out-of-band coordination contradicts the privacy property
+  the self-contained-address provides (third-party PK
+  resolvers observe sender intent before the transaction
+  exists).
+
+There is no fourth option. α decomposes into (P1) ∨ (P2) ∨ (P3),
+and each sub-option violates a priority-hierarchy rule. **β is
+the only admissible disposition**: per-subaddress `kem_pk`
+derives deterministically from view secret + index, lives in
+`RecipientSubaddress` as a precomputed value the sender
+extracts, and is regenerated by the recipient on demand from
+the same inputs.
+
+**Disposition (β specification).** `RecipientSubaddress.kem_pk`
+is a `HybridKemPublicKey` carrying both the X25519 and ML-KEM-768
+public-key components per-subaddress index:
+
+- **X25519 component.** Derives per-index from the view secret
+  per the existing classical-Monero subaddress derivation
+  machinery (the same path that produces the classical
+  spend / view subaddress key pair). No new primitive needed;
+  the derivation is already in the workspace.
+- **ML-KEM-768 component.** Derives via deterministic ML-KEM-768
+  keygen, where the keygen RNG is replaced by an HKDF-derived
+  byte stream:
+
+  ```text
+  rng_bytes = HKDF-Expand(
+      prk = HKDF-Extract(
+          salt = "", // salt-less; HKDF-Extract reduces to a
+                     // single PRF call against view_secret
+          ikm  = view_secret_bytes,
+      ),
+      info = "shekyl/subaddr-mlkem-keygen-v1"
+              || subaddress_index_le_bytes,
+      L    = ML_KEM_768_KEYGEN_RNG_BYTES,
+  )
+  (mlkem_pk_i, mlkem_sk_i) = ML-KEM-768.KeyGen(rng_bytes)
+  ```
+
+  The HKDF context string `"shekyl/subaddr-mlkem-keygen-v1"`
+  domain-separates the kem-keygen path from any other HKDF
+  consumer of the view secret (per
+  [`30-cryptography.mdc`](../../.cursor/rules/30-cryptography.mdc)'s
+  domain-separator rule). The `-v1` suffix reserves a versioning
+  axis if a future hard fork ever needs to migrate the
+  derivation while preserving wallet-level continuity.
+  `subaddress_index_le_bytes` is the canonical encoding the rest
+  of the subaddress derivation uses, so two subaddress consumers
+  on the same view secret + index always produce the same
+  keypair.
+
+**Sender-vs-recipient asymmetry.**
+
+- **Sender side**: zero per-encapsulation cost — `kem_pk` is a
+  precomputed field of `RecipientSubaddress`; the sender extracts
+  it and feeds it into the existing `HybridX25519MlKem::encapsulate`
+  path. The HKDF + ML-KEM-keygen work happens once at
+  subaddress-creation / address-display time on the recipient's
+  side.
+- **Recipient side**: ~50 µs per derivation (dominated by
+  ML-KEM-768 KeyGen, not HKDF; HKDF is a small constant). Called
+  rarely — once per subaddress index, cacheable in a
+  subaddress-derivation cache if the same index is hit
+  repeatedly during a scan window. Across a wallet's full
+  subaddress space, the cost is bounded by the number of
+  subaddress indices the wallet has actually created, not the
+  total scan workload.
+- **Encoding overhead**: ~1216 bytes per encoded address (the
+  ML-KEM-768 PK is 1184 bytes plus a small framing overhead).
+  Relative to the existing classical-encoding bloat of
+  hybrid-typed addresses, the additive cost is small; the
+  encoding's self-contained-address property is preserved.
+
+**Rationale framing (recorded for the V3.x-churn audit anchor).**
+β is explicitly **rule-forced**, not "the best stylistic option
+considered." Future readers tracing "why does V3.0 ship
+per-subaddress ML-KEM derivation rather than wallet-level?" find
+the priority-hierarchy decomposition above as the binding
+argument. If a future hard fork reaches a state where one of
+(P1) / (P2) / (P3) is admissible (e.g., a future ciphertext-
+correlation-resistant ML-KEM variant that defangs the (P2)
+linkability concern, or a fully-PQC encryption primitive that
+defangs (P1)'s classical-only failure), the disposition can be
+re-opened — but only against a concrete change to the
+priority-hierarchy-rule landscape, not as a stylistic
+re-litigation. The `-v1` suffix in the HKDF context string is
+the versioning anchor for any such future migration.
+
+**Amendment-block framing (to land in §2.1's "Stage 1 PR 3
+spec-clarification" provenance subsection alongside §3.1's
+hybrid-framework reconciliation prose and §3.1.2's handle-
+indirection completion prose).**
+
+> The Round-3 commit 3b lands the per-subaddress `kem_pk`
+> derivation specification: `RecipientSubaddress.kem_pk` is a
+> `HybridKemPublicKey` whose X25519 component derives per-index
+> via classical-Monero subaddress derivation and whose
+> ML-KEM-768 component derives via deterministic ML-KEM-768
+> keygen seeded by `HKDF-Expand(view_secret, "shekyl/
+> subaddr-mlkem-keygen-v1" || subaddress_index_le_bytes)`. The
+> disposition is rule-forced by `00-mission.mdc`'s priority
+> hierarchy: dropping per-subaddress `kem_pk` would either
+> break the PQC commitment (P1, violating priority 1) or break
+> subaddress unlinkability (P2, violating priority 2) or break
+> the self-contained-address UX (P3, not viable). β is the only
+> admissible disposition; the recipient regenerates per-subaddress
+> ML-KEM keypairs on demand from view secret + index; senders
+> extract precomputed `kem_pk` from `RecipientSubaddress`.
+
 ### 3.2 Phase 0b — `KeyError` / `KeyEngineError` split (§7-non-compliant)
 
 **Drift.** Existing `KeyError`
@@ -798,6 +991,8 @@ the trait surface's parameters and return types.
 | `SignDomain` | `pub(crate) #[non_exhaustive] enum SignDomain { OutputSecretDerivation, TransactionSignature, FcmpPlusPlusWitness, MlKemChallenge }` | No longer a trait-level concept; lives inside `LocalKeys`'s impl. The cryptographic enforcement (preventing cross-domain signature reuse via per-domain HKDF chains) is unchanged from Round 1's framing — each impl-internal call site asserts the domain it's signing in, and the impl's `assert_sign_domain` (or equivalent) machinery rejects mismatches. The audit-grep argument shifts: reviewers grep for "internal HKDF-context derivation sites" rather than "trait-surface call sites." Stage 4 adds multisig witness / partial signature variants additively per Q9.2's `#[non_exhaustive]` disposition. |
 | `AccountPublicAddress` | `pub struct AccountPublicAddress { pub pqc_public_key: [u8; PQC_PUBLIC_KEY_BYTES], pub classical_address_bytes: [u8; CLASSICAL_ADDRESS_BYTES] }` | Mirror `AllKeysBlob`'s public side. Returned by `account_public_address` (the one trait method that hands out a borrowed reference rather than an owned message — addresses are stable for the wallet's lifetime, so a `&AccountPublicAddress` is honest). The 1216-byte ML-KEM PK + 65-byte classical address bytes shape is consistent with what ML-KEM-768 + the existing classical-address representation produces. |
 | `HandleTable` | `pub(crate) struct HandleTable { /* concurrent-access shape pinned in Round 4 */ }` | Workflow-internal state owned by `LocalKeys`. Maps `OutputHandle` → per-output secret material (`output_secret_key`, `amount_blinding_factor`) for outputs the wallet has claimed but not yet spent. Lives behind interior mutability (the `KeyEngine` trait is `&self` async; concurrent `try_claim_output` calls insert; `sign_transaction` looks up). The exact concurrent-access shape (sharded `RwLock`, lock-free hashmap, fair-queued single-writer, etc.) is **Round 4 work**; the shape selection couples to A6 (memory-pressure attack surface) and the Round-3 Pattern-5 cluster (cross-call state correlation as side-channel). The trait surface is unchanged regardless of inner shape. |
+| `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT` | `pub(crate) const SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT: &[u8] = b"shekyl/subaddr-mlkem-keygen-v1";` | HKDF-Expand info-string prefix for the per-subaddress ML-KEM-768 keygen path (per §3.1.3). The `-v1` suffix is the versioning axis: a future hard fork that migrates the derivation (e.g., V4 lattice-only swap from ML-KEM-768 to a successor primitive) bumps the suffix and lives alongside the v1 path until the migration completes. The constant is `pub(crate)` because it's consumed inside `derive_subaddress`'s impl (and the symmetric recipient-side spend path that resolves an output against the same per-index ML-KEM secret); no trait-surface caller observes it. Consumed in conjunction with `subaddress_index_le_bytes` to form the full HKDF info string per the §3.1.3 byte-layout. |
+| `derive_subaddress_kem_keypair` (workflow-internal primitive) | `pub(crate) fn derive_subaddress_kem_keypair(view_secret: &ViewSecret, idx: SubaddressIndex) -> (HybridKemPublicKey, ZeroizingMlKemSecretKey)` (or signature pinned at impl time) | Deterministic per-subaddress ML-KEM-768 keypair derivation per §3.1.3. Workflow-internal; lives in `shekyl-crypto-pq` (or, if cleaner, in a `LocalKeys`-private module that re-exports the underlying ML-KEM-768 KeyGen against an HKDF-seeded byte stream). Consumed by `derive_subaddress(_, SubaddressPurpose::Recipient)` to populate `RecipientSubaddress.kem_pk` (returning the public component) and by `try_claim_output`'s impl to recover the per-subaddress ML-KEM SK during hybrid decap (re-deriving the keypair from view secret + the candidate index). The `ZeroizingMlKemSecretKey` return wrap (or equivalent) is per `35-secure-memory.mdc`'s structural-memwipe rule for SK material. The exact return-tuple shape, name, and module location are pinned at PR 3 implementation time; the §3.1.3 spec pins the inputs, the byte-layout of the HKDF info string, and the output-keypair determinism. |
 
 #### Why a workflow-internal handle table — the handle-indirected workflow shape
 
@@ -1142,8 +1337,47 @@ pub struct RecipientSubaddress {
     /// (parsed structured) so the type system catches encoding
     /// errors at compile time.
     pub encoded: Address,
-    /// The hybrid KEM public key (X25519+ML-KEM-768) the sender
+    /// The hybrid KEM public key (X25519 + ML-KEM-768) the sender
     /// encapsulates against. Public; not zeroized.
+    ///
+    /// **Per-subaddress derivation (§3.1.3 / §3.3 Sub-bundle A).**
+    /// Both components are bound to `(view_secret,
+    /// subaddress_index)`:
+    ///
+    /// - **X25519 component.** Derives per-index from the view
+    ///   secret per the existing classical-Monero subaddress
+    ///   derivation machinery — the same path that produces
+    ///   `SubaddressKeyPair { spend_pk, view_pk }` under the
+    ///   `Audit` purpose. No new primitive needed.
+    /// - **ML-KEM-768 component.** Derives via deterministic
+    ///   ML-KEM-768 keygen seeded by `HKDF-Expand(view_secret,
+    ///   SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT ||
+    ///   subaddress_index_le_bytes)`. The HKDF context string is
+    ///   pinned in §3.3 Sub-bundle A
+    ///   (`SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT =
+    ///   b"shekyl/subaddr-mlkem-keygen-v1"`); the `-v1` suffix
+    ///   reserves a versioning axis for future migration.
+    ///
+    /// **Sender vs. recipient asymmetry.** The sender extracts
+    /// the precomputed `kem_pk` from `RecipientSubaddress` and
+    /// feeds it into `HybridX25519MlKem::encapsulate` — zero
+    /// per-encapsulation derivation cost. The recipient
+    /// regenerates the per-subaddress ML-KEM keypair on demand
+    /// from `(view_secret, subaddress_index)` (~50 µs per
+    /// derivation, dominated by ML-KEM-768 KeyGen rather than
+    /// HKDF, called rarely; cacheable in a subaddress-derivation
+    /// cache if hot).
+    ///
+    /// **Why per-subaddress and not wallet-level.** Carrying a
+    /// wallet-level ML-KEM PK in the encoded subaddress would
+    /// make any two encodings from the same wallet trivially
+    /// linkable via direct byte comparison of the embedded PK.
+    /// Per-subaddress derivation is rule-forced by
+    /// `00-mission.mdc`'s priority hierarchy; see §3.1.3 for the
+    /// full priority-hierarchy decomposition (P1 X25519-only
+    /// breaks PQC; P2 wallet-level PK breaks subaddress
+    /// unlinkability; P3 out-of-band delivery breaks the
+    /// self-contained-address UX).
     pub kem_pk: HybridKemPublicKey,
 }
 
@@ -1156,9 +1390,20 @@ pub struct RecipientSubaddress {
 /// **Today's classical-only shape.** Per `30-cryptography.mdc`'s
 /// hybrid-by-default rule, a future V3.x shape may extend the
 /// audit payload with the hybrid KEM PK (mirroring
-/// `RecipientSubaddress.kem_pk`). The extension lands as an
-/// additional field on `SubaddressKeyPair` (or as a new variant
-/// on `SubaddressFor` + `SubaddressPurpose`) when designed.
+/// `RecipientSubaddress.kem_pk`). The extension composes
+/// cleanly with the deterministic per-subaddress ML-KEM-768
+/// derivation now landing in §3.1.3 / §3.3 Sub-bundle A: the
+/// audit-extended payload would surface the same `kem_pk:
+/// HybridKemPublicKey` produced by the same
+/// `derive_subaddress_kem_keypair(view_secret, idx)` primitive
+/// — no separate keygen path needed; the audit purpose just
+/// publishes more of the per-subaddress derived material than
+/// the recipient purpose does. The extension lands as an
+/// additional field on `SubaddressKeyPair` (or, if the audit
+/// payload's V3.x shape diverges further, as a new variant on
+/// `SubaddressFor` + `SubaddressPurpose`) when designed; the
+/// `#[non_exhaustive]` annotation on the enums absorbs the
+/// additive variant without breaking existing call sites.
 pub struct SubaddressKeyPair {
     pub spend_pk: [u8; 32],
     pub view_pk: [u8; 32],
@@ -1396,17 +1641,43 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// extending the audit payload with the hybrid KEM PK) per
     /// Q9.2 / §8.2.
     ///
+    /// **Recipient purpose — derivation cost.** The X25519
+    /// component of `kem_pk` derives via the existing
+    /// classical-Monero subaddress-derivation machinery (cheap;
+    /// scalar arithmetic). The ML-KEM-768 component derives via
+    /// deterministic keygen seeded by `HKDF-Expand(view_secret,
+    /// SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT ||
+    /// subaddress_index_le_bytes)` — see §3.1.3 / §3.3 Sub-bundle A
+    /// for the byte-layout. Total cost is dominated by ML-KEM-768
+    /// KeyGen (~50 µs on commodity hardware as of V3.0; HKDF is
+    /// a small constant on top), so per-call cost is bounded by
+    /// the ML-KEM keygen cost regardless of HKDF overhead. The
+    /// method is called rarely in normal wallet operation
+    /// (subaddress-creation, address-display, payment-URI
+    /// generation); implementations may cache resolved
+    /// subaddresses by `(idx, purpose)` if a caller's workload
+    /// hits the same index repeatedly. **Audit purpose** has the
+    /// same X25519-derivation cost as Recipient and skips the
+    /// ML-KEM-keygen path entirely.
+    ///
+    /// **Why per-subaddress ML-KEM-768 derivation rather than
+    /// wallet-level.** Rule-forced by `00-mission.mdc`'s priority
+    /// hierarchy — embedding a wallet-level ML-KEM PK in encoded
+    /// subaddresses would make any two encodings trivially
+    /// linkable via direct byte comparison. See §3.1.3 for the
+    /// full priority-hierarchy decomposition.
+    ///
     /// The classical spend/view subaddress derivation has no
     /// concrete failure mode at today's surface (the classical
     /// path's only failure modes are RNG-failure-class events,
     /// essentially impossible during pure derivation from existing
-    /// key material). The `Result<...>` shape is reserved for the
-    /// V3.x PQC-augmented subaddress extension, where the hybrid
-    /// derivation path can fail with non-negligible probability
-    /// in ways the classical path cannot (e.g., ML-KEM keypair
-    /// derivation has a defined failure surface). Trait stability
-    /// across the V3.x extension is the rationale for the `Result`
-    /// shape now.
+    /// key material). The deterministic ML-KEM-768 keygen path
+    /// has a defined failure surface (rejection-sampling internal
+    /// to ML-KEM-768 KeyGen, vanishing probability in practice
+    /// against any single index, but well-defined as a possibility
+    /// at the spec level); trait stability across the V3.x
+    /// PQC-augmented audit-payload extension is also part of the
+    /// rationale for the `Result` shape now.
     fn derive_subaddress(
         &self,
         idx: SubaddressIndex,
