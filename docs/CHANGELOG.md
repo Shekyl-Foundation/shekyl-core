@@ -291,9 +291,23 @@
   trait-extraction work lands as `pub(crate)` on
   `shekyl-engine-core`. The PR's primary surface — the
   `LedgerEngine` trait, the `LocalLedger` aggregate, and the
-  `Engine<S, D, L>` / `OpenedEngine<S, D, L>` parameterization —
-  preserves every existing public type's shape for non-test
-  consumers via the `D = DaemonClient, L = LocalLedger` defaults.
+  `Engine<S, D, L>` / `OpenedEngine<S, D, L>` parameterization.
+  The new type parameters carry default arguments (`D =
+  DaemonClient, L = LocalLedger`) so non-test consumers continue
+  to name `Engine<S>` / `OpenedEngine<S>` exactly as before; the
+  default-argument shape preserves the *names* of the public
+  types, not every method signature underneath them. The one
+  observable public-API signature change is `Engine::ledger()`,
+  which now returns `LedgerReadGuard<'_>` (a wrapper around
+  `RwLockReadGuard<'_, LedgerState>`) instead of `&WalletLedger`;
+  `LedgerReadGuard` derefs to `WalletLedger`, so call-style read
+  access (`engine.ledger().balance()`, etc.) is
+  source-compatible. Code that named the previous return type
+  explicitly (`let r: &WalletLedger = engine.ledger();`) or
+  stored the method as a function item must update — see the
+  `Engine::ledger()` doc-comment in
+  [`rust/shekyl-engine-core/src/engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs)
+  for the explicit upgrade path.
   The PR's lifecycle threaded three pre-flight doc-only spec
   amendments (PRs #22, #23, #25) before the implementation work
   began — see

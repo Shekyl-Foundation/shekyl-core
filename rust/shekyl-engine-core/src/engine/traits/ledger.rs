@@ -205,7 +205,7 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     /// committed-chain projection without subtracting in-flight
     /// `PendingTx` reservations. The reservation-aware
     /// "spendable balance" projection lives on `PendingTxEngine`
-    /// (§2.6, lands in PR 6; type does not yet exist in this
+    /// (§2.4, lands in PR 6; type does not yet exist in this
     /// workspace, so the reference renders as plain code).
     ///
     /// # Cancellation

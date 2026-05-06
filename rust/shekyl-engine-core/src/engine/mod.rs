@@ -566,6 +566,25 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
     /// accessor are source-compatible. Drop the guard to release the
     /// read lock and allow concurrent writers to acquire it.
     ///
+    /// # Public-API signature change vs. pre-Stage-1
+    ///
+    /// Pre-Stage-1 this method returned `&WalletLedger`; Stage 1 PR 2
+    /// changes the return type to `LedgerReadGuard<'_>` so the borrow
+    /// is tied to a [`std::sync::RwLock`] read guard rather than a
+    /// flat field. Source-compatible upgrade paths:
+    ///
+    /// - **Call-style read access** (`engine.ledger().balance()`,
+    ///   `engine.ledger().transfers()`, …) keeps working unchanged
+    ///   via the [`std::ops::Deref`] impl on [`LedgerReadGuard`].
+    /// - **Code that named the old return type explicitly** — e.g.
+    ///   `let l: &WalletLedger = engine.ledger();` or `fn(&WalletLedger)
+    ///   = Engine::ledger;` — must change either to bind the guard
+    ///   (`let l = engine.ledger(); let l: &WalletLedger = &*l;`) or
+    ///   accept `LedgerReadGuard<'_>` as the named type.
+    /// - **Long-lived borrows held across `.await`** are no longer
+    ///   sound: holding the guard across an await blocks writers, so
+    ///   refactor such call sites to drop the guard before awaiting.
+    ///
     /// Specialized to `L = LocalLedger` because the guard is tied
     /// to that implementor's lock; mocked-`L` tests (commit 6) do
     /// not exercise this accessor.
