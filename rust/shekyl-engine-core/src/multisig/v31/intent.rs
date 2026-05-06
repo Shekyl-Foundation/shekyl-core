@@ -17,9 +17,32 @@ pub const SPEND_INTENT_VERSION: u8 = 1;
 pub const MAX_VALIDITY_SECS: u64 = 86400;
 
 /// Minimum reference block age in blocks behind tip.
-pub const FCMP_REFERENCE_BLOCK_MIN_AGE: u64 = 10;
+///
+/// **Must match `FCMP_REFERENCE_BLOCK_MIN_AGE` in `src/cryptonote_config.h`**
+/// (currently `5`). The C++ value is the consensus authority — the daemon
+/// rejects any FCMP++ tx whose `reference_block_height > tip - MIN_AGE`
+/// (`src/cryptonote_core/blockchain.cpp` ~line 3632). A wallet that proposes
+/// a fresher reference block is fail-closed at submission, so drift only
+/// causes UX failure, not silent acceptance — but it still matters: a
+/// wallet with `MIN_AGE = 10` would needlessly reject reference blocks
+/// at heights `tip-9..tip-5` that the daemon would accept.
+///
+/// Reduced to `5` by Decision 14 (commit `6561278d9`) once universal
+/// deferred curve-tree insertion made `MIN_AGE` a reorg-safety margin
+/// only; pre-Decision-14 it was `10`. The Rust multisig SpendIntent
+/// (added in `744ab6407`, 23 days after Decision 14) initially copied
+/// the pre-Decision-14 value `10`. The 2026-05-05 FFI constant-drift
+/// audit (`docs/audit_trail/2026-05-ffi-constant-drift-audit.md` Bug 3)
+/// surfaced the disagreement; this constant now matches the consensus
+/// authority. The `chore/cbindgen-consensus-constants` follow-up
+/// generates this value from the Rust authority into the C++ build to
+/// prevent the drift from recurring.
+pub const FCMP_REFERENCE_BLOCK_MIN_AGE: u64 = 5;
 
 /// Maximum reference block age in blocks behind tip.
+///
+/// Must match `FCMP_REFERENCE_BLOCK_MAX_AGE` in `src/cryptonote_config.h`
+/// (currently `100`).
 pub const FCMP_REFERENCE_BLOCK_MAX_AGE: u64 = 100;
 
 /// Maximum recipients per intent (bounds allocation from untrusted input).
@@ -528,8 +551,16 @@ mod tests {
     #[test]
     fn validate_temporal_rejects_ref_block_too_fresh() {
         let intent = make_test_intent();
+        // intent.reference_block_height = 900, tip = 903 → age = 3.
+        // FCMP_REFERENCE_BLOCK_MIN_AGE = 5, so age 3 is too fresh and the
+        // call must reject. (Pre-Decision-14, MIN_AGE was 10 and this test
+        // used tip = 905; a hand-edit of MIN_AGE to a smaller value
+        // would have masked the regression. Picking age = 3 keeps the
+        // rejection unambiguous and tolerates a future reduction down
+        // to MIN_AGE = 4 without false-passing — go below that and this
+        // test must be reviewed.)
         assert!(matches!(
-            intent.validate_temporal(5, 905, &[0xCC; 32]),
+            intent.validate_temporal(5, 903, &[0xCC; 32]),
             Err(SpendIntentError::RefBlockTooFresh { .. })
         ));
     }
