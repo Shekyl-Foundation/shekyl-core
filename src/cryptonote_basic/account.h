@@ -184,19 +184,40 @@ namespace cryptonote
     /// only wipes the pre-derivation input.
     void forget_master_seed();
 
-    // --- compatibility / transitional entry points --------------------------
+    // --- raw-seed generation entry point ------------------------------------
     //
-    // These wrappers retain the original Monero-lineage signatures so the
-    // ~20 existing test callers continue to build while commit 2+ migrate
-    // production consumers. They internally route through
-    // generate_from_raw_seed on `DerivationNetwork::Fakechain` and therefore
-    // are **not** safe for mainnet restore: the Electrum 25-word flow is
-    // gone and there is no equivalent in v1. Mainnet / stagenet restore
-    // MUST use generate_from_bip39.
+    // Routes through `generate_from_raw_seed`. RAW32 is only permitted on
+    // `Testnet` and `Fakechain`; for `Mainnet`/`Stagenet` callers must use
+    // `generate_from_bip39` instead. There is no longer a default-nettype
+    // overload: every caller — production and test — must spell its
+    // network out explicitly. The previous default-FAKECHAIN overload
+    // existed only as a transitional bridge during the Bug 4-adjacent
+    // fix and was deleted at V3.0 along with its ~28 test callers, all
+    // of which now pass `cryptonote::FAKECHAIN` explicitly.
+    // See `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+
+    /// Raw-seed account generation. The `nettype` argument selects the
+    /// derivation salt and is the consensus-level network for the
+    /// resulting account. Must be `TESTNET` or `FAKECHAIN`; `MAINNET`
+    /// and `STAGENET` throw at the FFI's `permitted_seed_format` check
+    /// because RAW32 isn't a permitted seed format on those networks
+    /// (use `generate_from_bip39` instead).
+    ///
+    /// Failure modes:
+    /// - `(MAINNET, *)` and `(STAGENET, *)` — throws (programming error).
+    /// - `(TESTNET, *)` and `(FAKECHAIN, *)` with `recover=true` — derives
+    ///   from `recovery_key.data` as 32 raw bytes.
+    /// - `(TESTNET, *)` and `(FAKECHAIN, *)` with `recover=false` —
+    ///   generates a fresh seed via the OS CSPRNG.
+    ///
+    /// `two_random` is unused; it remains in the signature for legacy-API
+    /// compatibility with the v0 Electrum-style flow that has been
+    /// removed (.cursor/rules/36-secret-locality.mdc).
     crypto::secret_key generate(
-        const crypto::secret_key& recovery_key = crypto::secret_key(),
-        bool recover = false,
-        bool two_random = false);
+        const crypto::secret_key& recovery_key,
+        bool recover,
+        bool two_random,
+        network_type nettype);
 
     void create_from_device(const std::string &device_name);
     void create_from_device(hw::device &hwdev);

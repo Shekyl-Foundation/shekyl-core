@@ -585,7 +585,7 @@ TEST(JsonSerialization, InvalidVectorBytes)
 TEST(JsonSerialization, MinerTransaction)
 {
     cryptonote::account_base acct;
-    acct.generate();
+    acct.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
     const auto miner_tx = test::make_miner_transaction(acct.get_keys().m_account_address);
 
     crypto::hash tx_hash{};

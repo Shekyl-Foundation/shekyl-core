@@ -690,13 +690,13 @@ void gen_trezor_base::add_shared_events(std::vector<test_event_entry>& events)
 
 void gen_trezor_base::init_fields()
 {
-  m_miner_account.generate();
+  m_miner_account.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
   DEFAULT_HARDFORKS(m_hard_forks);
 
   crypto::secret_key master_seed{};
   CHECK_AND_ASSERT_THROW_MES(epee::string_tools::hex_to_pod(m_master_seed_str, master_seed), "Hexdecode fails");
 
-  m_alice_account.generate(master_seed, true);
+  m_alice_account.generate(master_seed, true, false, cryptonote::FAKECHAIN);
   m_alice_account.set_createtime(m_wallet_ts);
 }
 
@@ -733,8 +733,8 @@ bool gen_trezor_base::generate(std::vector<test_event_entry>& events)
   generator.add_block(blk_gen, 0, block_weights, 0, rew);
 
   // First event has to be the genesis block
-  m_bob_account.generate();
-  m_eve_account.generate();
+  m_bob_account.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
+  m_eve_account.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
   m_bob_account.set_createtime(m_wallet_ts);
   m_eve_account.set_createtime(m_wallet_ts);
   cryptonote::account_base * accounts[] = {TREZOR_ACCOUNT_ORDERING};

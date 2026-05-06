@@ -845,11 +845,11 @@ inline bool do_replay_file(const std::string& filename)
 
 #define GENERATE_ACCOUNT(account) \
     cryptonote::account_base account; \
-    account.generate();
+    account.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
 
 #define MAKE_ACCOUNT(VEC_EVENTS, account) \
   cryptonote::account_base account; \
-  account.generate(); \
+  account.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN); \
   VEC_EVENTS.push_back(account);
 
 #define DO_CALLBACK(VEC_EVENTS, CB_NAME) \

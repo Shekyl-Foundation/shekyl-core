@@ -28,6 +28,8 @@
 
 #include "gtest/gtest.h"
 
+#include <cstring>
+
 #include "cryptonote_basic/account.h"
 #include "shekyl/shekyl_ffi.h"
 
@@ -35,7 +37,8 @@ TEST(account, encrypt_keys)
 {
   cryptonote::keypair recovery_key = cryptonote::keypair::generate(hw::get_device("default"));
   cryptonote::account_base account;
-  crypto::secret_key key = account.generate(recovery_key.sec);
+  crypto::secret_key key = account.generate(
+      recovery_key.sec, /*recover=*/false, /*two_random=*/false, cryptonote::FAKECHAIN);
   const cryptonote::account_keys keys = account.get_keys();
 
   ASSERT_EQ(account.get_keys().m_account_address, keys.m_account_address);
@@ -299,4 +302,94 @@ TEST(account, generate_from_raw_seed_rejects_mainnet_and_stagenet)
   cryptonote::account_base account;
   EXPECT_ANY_THROW(account.generate_from_raw_seed(raw_seed, cryptonote::MAINNET));
   EXPECT_ANY_THROW(account.generate_from_raw_seed(raw_seed, cryptonote::STAGENET));
+}
+
+// Bug 4-adjacent regression test (audit 2026-05-05).
+//
+// Pre-fix, the legacy 3-arg `account_base::generate(recovery, recover,
+// two_random)` hardcoded `FAKECHAIN` for the derivation salt regardless of
+// the wallet's actual network. `wallet2::generate` and
+// `wallet_rpc_server::on_stop_background_sync` both called this overload,
+// silently producing FAKECHAIN-salted accounts on non-FAKECHAIN wallets,
+// which then failed to round-trip through `wallet2::load`'s rederive
+// (rederive uses `m_nettype`, not FAKECHAIN).
+//
+// Fix: a single `generate(recovery, recover, two_random, nettype)` overload
+// that requires every caller — production and test — to spell its network
+// out explicitly. The default-FAKECHAIN overload is deleted entirely so
+// the footgun cannot be reintroduced by omitting an argument.
+//
+// This test pins:
+//   1. `generate(..., nettype)` is wired through to `generate_from_raw_seed`
+//      with the provided `nettype` (TESTNET-derived account matches the
+//      lower-level API's output, and differs from FAKECHAIN-derived
+//      account for the same raw seed — distinct HKDF salt).
+//   2. `generate(..., MAINNET)` and `generate(..., STAGENET)` throw at the
+//      FFI's `permitted_seed_format` check. This is the failure mode that
+//      replaces the pre-fix silent miscompile: production paths
+//      (`wallet2::generate`, `on_create_wallet` RPC, `on_stop_background_sync`)
+//      now fail loudly on (MAINNET, RAW32) / (STAGENET, RAW32) rather than
+//      silently producing FAKECHAIN-salted unspendable wallets.
+// See `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+TEST(account, generate_uses_explicit_nettype_argument)
+{
+  uint8_t raw_seed[SHEKYL_RAW_SEED_BYTES] = {
+      0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
+      0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50,
+      0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,
+      0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x60,
+  };
+  crypto::secret_key recovery;
+  std::memcpy(recovery.data, raw_seed, sizeof(recovery.data));
+
+  // generate(..., TESTNET) produces a TESTNET-salted account.
+  cryptonote::account_base testnet_account;
+  testnet_account.generate(recovery, /*recover=*/true, /*two_random=*/false,
+                           cryptonote::TESTNET);
+
+  // Reference TESTNET account from the lower-level `generate_from_raw_seed`
+  // API; the high-level `generate(..., TESTNET)` must produce identical keys.
+  cryptonote::account_base testnet_reference;
+  testnet_reference.generate_from_raw_seed(raw_seed, cryptonote::TESTNET);
+  ASSERT_EQ(testnet_account.get_keys().m_account_address,
+            testnet_reference.get_keys().m_account_address);
+  ASSERT_EQ(testnet_account.get_keys().m_spend_secret_key,
+            testnet_reference.get_keys().m_spend_secret_key);
+  ASSERT_EQ(testnet_account.get_keys().m_view_secret_key,
+            testnet_reference.get_keys().m_view_secret_key);
+
+  // generate(..., FAKECHAIN) produces a FAKECHAIN-salted account distinct
+  // from the TESTNET one — the HKDF salt is per-network so the same raw
+  // seed cannot produce the same address across networks. This is the
+  // invariant that protects against a fakechain-regression test
+  // accidentally publishing a real mainnet-or-testnet key.
+  cryptonote::account_base fakechain_account;
+  fakechain_account.generate(recovery, /*recover=*/true, /*two_random=*/false,
+                             cryptonote::FAKECHAIN);
+  ASSERT_NE(testnet_account.get_keys().m_account_address,
+            fakechain_account.get_keys().m_account_address);
+  ASSERT_NE(testnet_account.get_keys().m_spend_secret_key,
+            fakechain_account.get_keys().m_spend_secret_key);
+
+  // generate(..., MAINNET / STAGENET) throws (RAW32 not permitted on those
+  // networks; the throw happens inside `generate_from_raw_seed`'s FFI
+  // `permitted_seed_format` check). Both `recover=true` (restoring from a
+  // user-supplied seed) and `recover=false` (fresh-CSPRNG seed) reject —
+  // i.e. there is no production path through this overload that produces
+  // a MAINNET / STAGENET wallet, by design. MAINNET / STAGENET wallets
+  // must be created via `generate_from_bip39`.
+  cryptonote::account_base mainnet_recover;
+  EXPECT_ANY_THROW(mainnet_recover.generate(
+      recovery, /*recover=*/true, /*two_random=*/false, cryptonote::MAINNET));
+  cryptonote::account_base mainnet_fresh;
+  EXPECT_ANY_THROW(mainnet_fresh.generate(
+      crypto::secret_key{}, /*recover=*/false, /*two_random=*/false,
+      cryptonote::MAINNET));
+  cryptonote::account_base stagenet_recover;
+  EXPECT_ANY_THROW(stagenet_recover.generate(
+      recovery, /*recover=*/true, /*two_random=*/false, cryptonote::STAGENET));
+  cryptonote::account_base stagenet_fresh;
+  EXPECT_ANY_THROW(stagenet_fresh.generate(
+      crypto::secret_key{}, /*recover=*/false, /*two_random=*/false,
+      cryptonote::STAGENET));
 }

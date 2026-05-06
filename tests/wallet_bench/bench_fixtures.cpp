@@ -168,11 +168,15 @@ void populate_synthetic_transfers(tools::wallet2& w,
 
 void generate_fresh_wallet_to_disk(const std::string& wallet_base)
 {
-  // Match the working pattern in tests/unit_tests/wallet_storage.cpp
-  // (store_to_mem2file): default-construct wallet2, generate("", password)
-  // in-memory, then store_to(path, password). The on-disk `base` + `.keys`
-  // pair produced this way round-trips cleanly through load(path, password).
-  tools::wallet2 w;
+  // Match the pattern in tests/unit_tests/wallet_storage.cpp
+  // (store_to_mem2file): construct wallet2 on FAKECHAIN, generate("",
+  // password) in-memory, then store_to(path, password). FAKECHAIN is
+  // required because `wallet2::generate(...)` routes through
+  // `account_base::generate(..., m_nettype)` which now correctly throws
+  // on (MAINNET, RAW32) at the FFI's `permitted_seed_format` check
+  // (Bug 4-adjacent). The on-disk base + .keys pair produced this way
+  // round-trips cleanly through load(path, password).
+  tools::wallet2 w(cryptonote::FAKECHAIN, 1, false);
   const epee::wipeable_string password(kBenchPassword);
   (void)w.generate("", password);
   w.store_to(wallet_base, password);

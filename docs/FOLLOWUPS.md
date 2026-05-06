@@ -613,8 +613,10 @@ citing in a review.
   were `0 / 1` but authoritative Rust uses `1 / 2`, so a stored RAW32
   seed format silently round-tripped as BIP39 and was rejected by
   `permitted_seed_format(Fakechain, Bip39)`. The tests additionally
-  needed `tools::wallet2 w(cryptonote::FAKECHAIN, 1, true)` to match
-  `account_base::generate()`'s legacy hardcoded FAKECHAIN derivation.
+  needed `tools::wallet2 w(cryptonote::FAKECHAIN, 1, false)` because
+  `wallet2::generate("", password)` routes through
+  `account_base::generate(..., m_nettype)`, which the post-Bug-4-adjacent
+  fix correctly rejects on `(MAINNET, RAW32)`.
   See [`docs/CI_BASELINE.md`](./CI_BASELINE.md) Cluster B for the
   full post-mortem of the three falsified hypotheses. No on-disk
   wallets exist pre-V3 launch; no migration code is required.
@@ -1052,6 +1054,112 @@ its wake.
   deletion). At that point this entry retires; the tripwire deletes
   with `wallet_storage.cpp`; the Rust BIP-39 round-trip test is the
   only remaining functional artifact, which is correct.
+
+- **`wallet2` 0-change dummy-destination address generation should
+  migrate to a deterministic per-network burn address.**
+  `src/wallet/wallet2.cpp::transfer_selected_rct` calls the
+  network-aware `account_base::generate(...)` overload with
+  `cryptonote::FAKECHAIN` hardcoded to produce a dummy
+  `account_public_address` for 0-change destinations (a one-shot
+  transient: only the public keys feed the output's one-time key +
+  ML-KEM ciphertext derivation; the dummy's secret keys are
+  discarded). The transaction serializes only the derived output
+  key and PQC ciphertext, not any human-readable address or network
+  prefix, so the FAKECHAIN-vs-other-network choice has **no
+  observable on-wire effect** — it only selects the HKDF salt
+  driving the dummy's internal key derivation, and the resulting
+  output is unspendable for everyone (the dummy's secret keys are
+  never retained). FAKECHAIN is required here today because RAW32
+  isn't permitted on MAINNET / STAGENET by the network-aware
+  generator. The fix wants either (a) a deterministic per-network
+  burn address (preferable: removes the per-tx randomness from the
+  dummy slot and saves a derivation per transfer), or (b) an
+  architectural change that removes the 0-change-dummy pattern
+  entirely. This is an efficiency / cleanliness item, not a
+  correctness or privacy bug.
+
+  **Closure point:** Phase 4 of the Rust rewrite (transaction
+  construction migration). The `splitted_dsts` 0-change path lives
+  in the C++ tx-construction code that gets rewritten in Rust;
+  whatever the Rust transfer pipeline picks for this slot replaces
+  the C++ dummy.
+
+- **Replace `wallet_rpc_server::on_stop_background_sync`'s
+  Electrum-words seed-recovery with a BIP-39 entry.** The RPC
+  recovers a `spend_secret_key` from a user-supplied seed via
+  `crypto::ElectrumWords::words_to_bytes` followed by
+  `account_base::generate(recovery_key, true, false, nettype)`.
+  The Electrum-words encoding is itself defunct post-Monero-fork
+  (per `account_base::generate`'s doc comment: "the Electrum-style
+  25-word / keccak-chain recovery path is gone"); on top of that,
+  the post-Bug-4-adjacent fix means the call now throws on
+  MAINNET / STAGENET because RAW32 isn't permitted there. So the
+  seed-recovery half of `stop_background_sync` is currently
+  mainnet-broken-with-clear-error rather than mainnet-broken-with-
+  silent-key-mismatch. Functionally equivalent to "this RPC is
+  defunct on mainnet," which is the correct fail-closed posture for
+  a defunct API but isn't a finished feature. The fix is to take a
+  BIP-39 mnemonic + passphrase instead of Electrum words and route
+  through `account_base::generate_from_bip39`.
+
+  **Closure point:** V3.2 alongside the `shekyl-wallet-rpc` Rust
+  cutover. The Rust JSON-RPC server gets to define the recovery API
+  from scratch; the C++ shim retires with `wallet_rpc_server.cpp`.
+
+- **Replace `wallet_rpc_server::on_create_wallet` and
+  `wallet2_ffi::create` raw-seed wallet creation with a BIP-39
+  entry on MAINNET / STAGENET.** Bug 4-adjacent in
+  `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`. Both RPCs
+  call `wallet2::generate(name, password, dummy_key, /*recover=*/false,
+  ...)` which routes through `account_base::generate(..., m_nettype)`.
+  Pre-fix the call silently produced FAKECHAIN-salted accounts on
+  MAINNET / STAGENET that failed to round-trip on `wallet2::load`;
+  post-fix it throws cleanly with a clear FFI error pointing at the
+  `(network, seed_format)` rejection (RAW32 isn't permitted on
+  MAINNET / STAGENET). Both paths were already broken on MAINNET
+  pre-fix; the post-fix behaviour is a strict improvement (fail-loud
+  vs fail-silent) but it is not a finished feature: fresh-wallet
+  creation on MAINNET / STAGENET via these RPCs simply does not work
+  by design. The proper fix is the wallet2 BIP-39 entry point (Bug
+  4 in the audit, deferred per the Rust wallet migration). Until
+  then, MAINNET / STAGENET wallet creation must go through the
+  view-only / spend+view restore paths
+  (`wallet2::generate(name, password, address, viewkey, ...)` and
+  `wallet2::generate(name, password, address, spendkey, viewkey, ...)`)
+  which bypass `account_base::generate` entirely.
+
+  **Closure point:** V3.2 alongside the `shekyl-wallet-rpc` Rust
+  cutover. The Rust wallet-RPC will expose BIP-39 wallet creation as
+  the MAINNET / STAGENET native flow; the C++ raw-seed RPCs retire
+  with `wallet_rpc_server.cpp` / `wallet2_ffi.cpp`.
+
+- **`wallet2::get_daemon_blockchain_target_height` lets asio
+  `system_error` escape the `err`-string contract.**
+  `tools::wallet2::get_daemon_blockchain_target_height(string& err)`
+  documents an `err`-out-parameter contract: on RPC failure, `err`
+  is populated and the function returns 0 cleanly. In practice the
+  inner `m_node_rpc_proxy.get_target_height(target_height)` call
+  reaches `epee::net_utils::http::http_simple_client_template::invoke`
+  → `blocked_mode_client::connect`, where asio raises
+  `boost::system::system_error` directly on a connect failure. The
+  exception bypasses the `err`-string code path and propagates up
+  through `estimate_blockchain_height()` and into every caller of
+  `wallet2::generate(name, password)` with `recover = false`. CI
+  flakes on `tests/unit_tests/wallet_storage.cpp::change_password_*`
+  surfaced this in May 2026 (PR #29 CI run 25407980061); the tests
+  were deflaked by pre-setting `m_refresh_from_block_height = 1` to
+  short-circuit the daemon call, but the underlying robustness gap
+  remains: any caller of `wallet2::generate(...)` on a host without
+  a reachable daemon can have an unhandled asio exception escape.
+  The fix is to wrap `m_node_rpc_proxy.get_target_height` (and any
+  other `NodeRPCProxy` call inside `get_daemon_blockchain_*`) in a
+  try/catch that converts the asio exception into the documented
+  `err` string return path.
+
+  **Closure point:** Either V3.1 wallet hardening pass (cheap fix
+  in `wallet2.cpp`), or naturally with Phase 5 of the Rust rewrite
+  when the equivalent Rust path uses `Result` propagation by
+  construction.
 
 **Index of how each follow-up interacts with the rewrite** (entries
 themselves carry the detail; this table is the at-a-glance view used

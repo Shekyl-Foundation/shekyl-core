@@ -5943,7 +5943,12 @@ crypto::secret_key wallet2::generate(const std::string& wallet_, const epee::wip
     THROW_WALLET_EXCEPTION_IF(boost::filesystem::exists(m_keys_file,   ignored_ec), error::file_exists, m_keys_file);
   }
 
-  crypto::secret_key retval = m_account.generate(recovery_param, recover, two_random);
+  // Pass `m_nettype` so the raw-seed derivation salt matches the wallet's
+  // network. Previously the legacy 3-arg overload hardcoded FAKECHAIN,
+  // which silently produced wallets that failed to round-trip on
+  // `wallet2::load` for any non-FAKECHAIN nettype. See
+  // `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` (Bug 4-adjacent).
+  crypto::secret_key retval = m_account.generate(recovery_param, recover, two_random, m_nettype);
 
   init_type(hw::device::device_type::SOFTWARE);
   setup_keys(password);
@@ -8266,7 +8271,38 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       // real one in our rings
       LOG_PRINT_L2("generating dummy address for 0 change");
       cryptonote::account_base dummy;
-      dummy.generate();
+      // Intentionally derives on FAKECHAIN regardless of the wallet's
+      // `m_nettype`. This dummy account is a one-shot transient — only
+      // its public keys (view_pk, spend_pk, pqc_pk) are used to derive
+      // the 0-amount output's one-time output key + ML-KEM ciphertext.
+      // The dummy's secret keys are never used to sign anything, never
+      // returned to a caller, and never reconstruct any wallet state;
+      // they live in the local `dummy` stack object until it goes out of
+      // scope a few statements below (`account_base` has no destructor
+      // wipe, so they persist as ordinary stack residue until reused).
+      // No `set_null` / `forget_master_seed` is issued here because the
+      // dummy itself goes away with the enclosing block; if a future
+      // refactor extends the dummy's lifetime, reconsider explicit
+      // wiping at that point.
+      //
+      // The transaction serializes the derived output key and the PQC
+      // ciphertext, not any human-readable address or network prefix —
+      // so the FAKECHAIN-vs-other-network choice has no observable
+      // on-wire effect. It only selects which HKDF salt drives the
+      // dummy's internal key derivation; the resulting output is
+      // unspendable for everyone (the dummy's secret keys are never
+      // retained by anyone), which is the whole point of a 0-change
+      // dummy destination.
+      //
+      // FAKECHAIN is required here because RAW32 is not permitted on
+      // MAINNET / STAGENET by `account_base::generate(..., nettype)`.
+      // A future refactor to a deterministic per-network burn address
+      // would remove the per-tx randomness from this call and save a
+      // derivation; tracked in FOLLOWUPS V3.2. The 4-arg call form
+      // with explicit FAKECHAIN replaced the legacy 3-arg overload's
+      // hidden default at V3.0; behavior is identical.
+      dummy.generate(crypto::secret_key{}, /*recover=*/false,
+                     /*two_random=*/false, cryptonote::FAKECHAIN);
       change_dts.addr = dummy.get_keys().m_account_address;
       LOG_PRINT_L2("generated dummy address for 0 change");
       splitted_dsts.push_back(change_dts);

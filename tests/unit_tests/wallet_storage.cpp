@@ -245,6 +245,15 @@ TEST(wallet_storage, store_to_mem2file)
     // file; see the corresponding FOLLOWUPS.md entry.
     {
         tools::wallet2 w(cryptonote::FAKECHAIN, 1, false);
+        // Pre-set the refresh height so `wallet2::generate(name, password)`
+        // does not run `estimate_blockchain_height()`, which performs a
+        // daemon HTTP call. In CI the asio layer occasionally lets
+        // `boost::system::system_error` escape on a connection failure
+        // rather than returning the error code path that wallet2 expects,
+        // making the test flaky. The wallet under test never refreshes
+        // (no daemon is configured); only the in-memory store/load
+        // round-trip matters here.
+        w.set_refresh_from_block_height(1);
         w.generate("", password);
         w.store_to(target_wallet_file.string(), password);
 
@@ -273,7 +282,22 @@ TEST(wallet_storage, change_password_in_memory)
     const epee::wipeable_string password2("means money");
     const epee::wipeable_string password_wrong("is traceable");
 
-    tools::wallet2 w;
+    // FAKECHAIN nettype: same reasoning as `store_to_mem2file` /
+    // `change_password_mem2file` above. `wallet2::generate("", password)`
+    // routes through `account_base::generate(..., m_nettype)`, which
+    // rejects (MAINNET, RAW32) at the FFI's `permitted_seed_format`
+    // check. See `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`
+    // Bug 4-adjacent.
+    //
+    // `unattended=false` so `change_password` performs the password-
+    // verification round-trip rather than skipping it, which is the
+    // behaviour this test exercises.
+    tools::wallet2 w(cryptonote::FAKECHAIN, 1, false);
+    // Skip `estimate_blockchain_height()` inside `wallet2::generate(...)` to
+    // avoid the asio HTTP-connect flake described in `store_to_mem2file`
+    // above. The test only exercises in-memory password rotation; no
+    // daemon refresh is involved.
+    w.set_refresh_from_block_height(1);
     w.generate("", password1);
     const std::string primary_address_1 = w.get_address_as_str();
     w.change_password("", password1, password2);
@@ -309,6 +333,11 @@ TEST(wallet_storage, change_password_mem2file)
     // verify that the old password is actually checked before the rotation.
     {
         tools::wallet2 w(cryptonote::FAKECHAIN, 1, false);
+        // Skip `estimate_blockchain_height()` inside `wallet2::generate(...)`
+        // to avoid the asio HTTP-connect flake described in
+        // `store_to_mem2file` above. The test only exercises password
+        // rotation + on-disk persistence; no daemon refresh is involved.
+        w.set_refresh_from_block_height(1);
         w.generate("", password1);
         primary_address_1 = w.get_address_as_str();
         w.change_password(target_wallet_file.string(), password1, password2);

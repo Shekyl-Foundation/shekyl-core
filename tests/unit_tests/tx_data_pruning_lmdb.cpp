@@ -180,7 +180,7 @@ TEST(tx_data_pruning_lmdb, empty_chain_prune_is_noop)
 TEST(tx_data_pruning_lmdb, prune_clears_verification_data_and_is_idempotent)
 {
   account_base miner;
-  miner.generate();
+  miner.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
   block b0{}, b1{};
   ASSERT_TRUE(build_two_miner_only_blocks(miner, b0, b1));
 

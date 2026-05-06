@@ -434,17 +434,28 @@ DISABLE_VS_WARNINGS(4244 4345)
   crypto::secret_key account_base::generate(
       const crypto::secret_key& recovery_key,
       bool recover,
-      bool two_random)
+      bool two_random,
+      network_type nettype)
   {
     // The Electrum-style 25-word / keccak-chain recovery path is gone; see
-    // .cursor/rules/36-secret-locality.mdc and the wallet-account-rewire
-    // commit on feat/wallet-account-rewire. This wrapper exists only so
-    // unit / integration tests that historically called
-    //   account.generate()
-    //   account.generate(recovery_key, true, false)
-    // keep building. It treats `recovery_key.data` as a 32-byte raw seed
-    // on DerivationNetwork::Fakechain (not mainnet, not testnet). The bool
-    // `two_random` is ignored; it was never true in the wallet path.
+    // .cursor/rules/36-secret-locality.mdc. This entry point treats
+    // `recovery_key.data` as a 32-byte raw seed and routes through
+    // `generate_from_raw_seed` with the caller's `nettype`. RAW32 is only
+    // permitted on `TESTNET` / `FAKECHAIN`; `generate_from_raw_seed`
+    // enforces that and throws on a disallowed pair, so a `MAINNET` /
+    // `STAGENET` caller fails loudly rather than silently mis-deriving.
+    //
+    // Pre-Bug-4-adjacent fix, the legacy 3-arg overload of this function
+    // hardcoded `nettype = FAKECHAIN`, so any production caller on
+    // `MAINNET`/`STAGENET`/`TESTNET` would silently derive a FAKECHAIN-
+    // salted account that failed to round-trip on wallet reload (the
+    // rederive on `load` runs against `m_nettype`, not FAKECHAIN). Both
+    // production callers (`wallet2::generate` and the
+    // `stop_background_sync` RPC seed-recovery path) and ~28 test
+    // callers now pass `nettype` explicitly. The
+    // `two_random` arg is unused; it was never true in the wallet path
+    // and is preserved only for signature compatibility with the legacy
+    // Electrum flow.
     (void)two_random;
 
     std::array<uint8_t, SHEKYL_RAW_SEED_BYTES> raw_seed{};
@@ -459,9 +470,24 @@ DISABLE_VS_WARNINGS(4244 4345)
           "shekyl_raw_seed_generate failed (OS CSPRNG unavailable)");
     }
 
-    generate_from_raw_seed(raw_seed.data(), FAKECHAIN);
-    // Wipe the local copy of the seed before returning; the authoritative
-    // copy lives in m_keys.m_master_seed_64 under mlock.
+    // Wipe the local copy of the seed on every exit path. `raw_seed` is
+    // 32 bytes of CSPRNG output (recover=false) or caller-supplied
+    // recovery material (recover=true) sitting on an unprotected stack
+    // slot; `generate_from_raw_seed` now throws on disallowed
+    // (network, seed_format) pairs (Bug-4-adjacent fix), so a naked
+    // post-call wipe would leak the seed into stack residue on every
+    // MAINNET / STAGENET RAW32 throw. Use a try/rethrow so the wipe
+    // runs whether the inner call returns or throws; the authoritative
+    // post-success copy lives in m_keys.m_master_seed_64 under mlock.
+    try
+    {
+      generate_from_raw_seed(raw_seed.data(), nettype);
+    }
+    catch (...)
+    {
+      shekyl_memwipe(raw_seed.data(), raw_seed.size());
+      throw;
+    }
     shekyl_memwipe(raw_seed.data(), raw_seed.size());
 
     // Legacy callers expect the spend secret key back so they can re-encode

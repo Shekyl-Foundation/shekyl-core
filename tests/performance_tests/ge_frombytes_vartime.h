@@ -52,7 +52,7 @@ public:
     cryptonote::account_base m_alice;
     cryptonote::transaction m_tx;
 
-    m_alice.generate();
+    m_alice.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
 
     std::vector<tx_destination_entry> destinations;
     destinations.push_back(tx_destination_entry(1, m_alice.get_keys().m_account_address, false));
