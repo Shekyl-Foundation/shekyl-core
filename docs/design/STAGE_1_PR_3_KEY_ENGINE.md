@@ -1560,31 +1560,73 @@ X?" review questions.
   The orchestrator's address space sees only structured non-
   secret outputs (`OutputClaim`'s `handle` + `key_image` +
   `amount_atomic_units`; `TxSignatures`'s public signature
-  bundle). Handle disclosure leaks "this output belongs to this
-  wallet" (a privacy concern, see §7's Pattern-7 cluster) but
-  does **not** leak the underlying spending secret — a leaked
-  handle is meaningless without `LocalKeys`'s table, the same
-  property session tokens deliver vs. session keys. **This is
-  the load-bearing security property the handle-indirected
-  workflow shape delivers and primitive-shape surfaces (e.g., a
-  hypothetical `view_ecdh -> X25519SharedSecret`) or
-  Round-2-shape returns (e.g., the deleted
-  `OutputClaim.output_secret_key: Zeroizing<[u8; 32]>` field)
-  violate.** The "Round 3 reviewer asks 'what's the security
-  difference between primitive-shape and workflow-shape?'"
-  question is answered here, in the doc, not derived during
-  review.
-- **(5) Direct access to long-term key material.** No
-  `get_view_secret(...)`, no `get_spend_secret(...)`, no
-  byte-level view of `AllKeysBlob`. The workflow-shape boundary
-  depends structurally on these accessors not existing — once
-  long-term key material is reachable through the trait, the
-  orchestrator can orchestrate its own primitives outside the
-  impl and the boundary collapses. Future implementors
-  (HSM-backed, hardware-key) inherit the property by adopting
-  the trait surface; an HSM that exposes raw key bytes to the
-  client is not a valid `KeyEngine` impl regardless of how it
-  implements the workflow methods.
+  bundle).
+
+  **What handle disclosure leaks** is the wallet's
+  received-output enumeration over the disclosure window
+  (a privacy concern; see §7's Pattern-7 cluster). For a
+  long-lived wallet, that enumeration combined with the
+  orchestrator's other state (transaction history, address
+  book, balance presentation) produces a substantial privacy
+  fingerprint — the leak is not a single fact ("this output
+  belongs to this wallet") but the cumulative set of
+  detected-output observations across whatever time window the
+  handles are held. This is unavoidable for orchestrator-side
+  state; the handle model does not eliminate the privacy
+  surface, only the spending-secret surface.
+
+  **What handle disclosure does not leak** is the underlying
+  spending secret — a leaked handle is meaningless to a
+  **passive** attacker without `LocalKeys`'s table (memory
+  scraping, log leakage, persistence-to-disk-without-engine-
+  access). An **active** attacker who has compromised the
+  orchestrator and can submit messages to `LocalKeys` can use
+  leaked handles to obtain signatures via `sign_transaction`,
+  gaining the spending capability without the spending material;
+  this is the inherent capability-vs-material trade-off for
+  handle-based designs and is the same property session tokens
+  have. Defense against active orchestrator compromise is at
+  the orchestrator's integrity boundary, not at the trait
+  surface; Stage 4's actor isolation is the structural defense
+  once it lands. The "leaked handle is meaningless" claim is
+  correct for passive disclosure and weaker for active
+  orchestrator compromise.
+
+  **This is the load-bearing security property the handle-
+  indirected workflow shape delivers and primitive-shape
+  surfaces (e.g., a hypothetical `view_ecdh ->
+  X25519SharedSecret`) or Round-2-shape returns (e.g., the
+  deleted `OutputClaim.output_secret_key: Zeroizing<[u8; 32]>`
+  field) violate.** Primitive-shape and Round-2-shape surfaces
+  leak the spending material to passive attackers, which the
+  handle model closes; closing the active-orchestrator-compromise
+  surface is Stage 4's actor-isolation work, not PR 3's. The
+  "Round 3 reviewer asks 'what's the security difference between
+  primitive-shape and workflow-shape?'" question is answered
+  here, in the doc, not derived during review.
+- **(5) Direct access to long-term key material at the trait
+  surface.** No `get_view_secret(...)`, no `get_spend_secret(...)`,
+  no byte-level view of `AllKeysBlob`. The workflow-shape
+  boundary depends structurally on **no trait method exposing
+  long-term key material directly** — once long-term key
+  material is reachable through the trait, the orchestrator can
+  orchestrate its own primitives outside the impl and the
+  boundary collapses.
+
+  The trait surface is **silent on what implementors do outside
+  the trait methods**. An HSM-backed or hardware-key implementor
+  that respects the trait surface but additionally exposes raw
+  key bytes via a side-channel (debug interface, structured
+  logging, configuration export, telemetry path) is not
+  constrained by the trait — the trait can only define what the
+  implementor must publicly support, not what the implementor
+  must not do beyond the trait. External-implementor trust is a
+  separate property whose disposition lives with §3.4 / Phase 0d's
+  `pub(crate)` visibility decision and the V3.2 promotion-bundle
+  commitment that defers external-implementor trust until the
+  actor abstraction surfaces concrete external consumers. The
+  trait surface enforces what the trait surface can enforce; the
+  rest is policy at the implementor-trust boundary.
 - **(6) Key rotation, revocation, derivation-reset.** V3.0 does
   not support these. Wallet-key rotation is handled by wallet
   re-creation (rebuild from new seed; manually transfer
@@ -1794,20 +1836,51 @@ Under the handle-indirected workflow contract, the test exercises
 two specific error-propagation paths:
 
 - **`try_claim_output` failure** — `FaultInjecting<LocalKeys>`
-  injects a `KeyEngineError` variant before the real impl reaches
-  the handle-table insertion path; the wallet-level method
-  observes the error without producing an `OutputHandle`. The
-  test verifies that no leaked handle escapes the failed call
-  (no orphan entry in the handle table; no partially-constructed
-  `OutputClaim` returned to the orchestrator).
+  injects a `KeyEngineError` variant before the real impl
+  reaches the handle-table insertion path; the wallet-level
+  method observes the error without producing an `OutputHandle`
+  in any return value. The substantive correctness property
+  the test would ideally check — that **no orphan entry
+  persists in the handle table after the failed call** — has
+  two candidate verification mechanisms, both deferred to
+  commit 3d (test substrate / visibility / lifetime cluster):
+  - **(i) Test-inspection accessor.** A `#[cfg(test)] pub(crate)
+    fn handle_table_size(&self) -> usize` (or similar) on
+    `LocalKeys`, allowing the test to assert table-size
+    invariants directly. Same three-layer discipline that
+    protects `from_test_seed`: `cfg(test)` (compile-time
+    elision in production), `pub(crate)` (crate-scope only),
+    and a CI gate verifying the symbol does not appear in
+    non-test builds. More rigorous; requires committing to a
+    test-only inspection surface on the production type.
+  - **(ii) Indirect-observation claim.** The test verifies that
+    "subsequent `sign_transaction` calls fail to resolve
+    handles that should have been issued" — a weaker but
+    trait-surface-only property that doesn't require an
+    inspection accessor. More honest about what the trait
+    surface alone supports; doesn't catch orphan entries that
+    are present-but-not-referenced.
+
+  Until commit 3d pins one disposition, the PR 3 hybrid test
+  asserts the **trait-surface-observable property only**: no
+  `OutputHandle` is returned in the `OutputClaim` (because
+  the failed call returns `Err(...)`, not `Ok(OutputClaimResult::
+  Mine(...))`). The orphan-absence property is a Round-4 or
+  commit-3d concern; the Round-3 commit 3a doc only commits to
+  what the test can verify with the post-Round-3 trait surface
+  as currently shaped.
 - **`sign_transaction` failure with handle resolution** — the
   test seeds the handle table via a successful prior
   `try_claim_output` call, then injects a `KeyEngineError`
   variant on the subsequent `sign_transaction` call. The test
   verifies that the handle remains valid post-failure
-  (signature failure does not consume the handle; the orchestrator
-  can retry) and that the layered-call error path preserves the
-  variant intact.
+  (signature failure does not consume the handle; the
+  orchestrator can retry) and that the layered-call error path
+  preserves the variant intact. The "handle remains valid"
+  property is trait-surface-observable: a follow-up
+  `sign_transaction` call against the same handle without the
+  fault injected succeeds, demonstrating the handle was not
+  consumed by the failed call.
 
 **Rationale (recorded verbatim).**
 
@@ -2210,10 +2283,11 @@ selects.
 
 ### 7.11 Handle persistence across wallet restart
 
-**Round-4 disposition required.** Three option-space candidates
-surfaced in Round 3 synthesis; PR 3's Round-3 lean is **(1)** for
-V3.0 with explicit deferral of (2) to V3.x as the performance
-optimization when restart cost matters.
+**Round-4 disposition required.** Four option-space candidates
+surfaced in Round 3 synthesis (option (2) splits into 2a / 2b
+with structurally different trade-offs); PR 3's Round-3 lean is
+**(1)** for V3.0 with explicit deferral of (2b) to V3.x as the
+performance optimization when restart cost matters.
 
 - **(1) Ephemeral handles, restart-rescan.** Wallet startup
   re-runs `try_claim_output` against persisted ciphertexts;
@@ -2222,15 +2296,33 @@ optimization when restart cost matters.
   ~100 µs/decap) but conceptually simple. No persistence-layer
   security boundary to get wrong. Cross-restart consistency is
   trivial because the table is rebuilt from scratch.
-- **(2) Persisted handle → ciphertext mapping.** The handle
-  table persists alongside the wallet's transfer-details
-  storage; restart loads it without re-scanning. The
-  persistence layer must be wallet-encryption-aware; if the
-  table includes references to secret material directly, the
-  table itself becomes a persistence-secret. The natural shape
-  is "table persists handle → ciphertext-pointer pairs and
-  re-derives secrets from view secret + ciphertext on demand"
-  — equivalent to (3) at a higher level.
+- **(2a) Persisted handle → ciphertext-pointer; secrets
+  re-derived on demand.** Persists the handle table's index
+  shape (handle → on-chain-ciphertext locator) but not the
+  secret material; on resolution, the impl reads the locator,
+  fetches the ciphertext, and re-runs decap to recover the
+  secret. Restart skips the rescan but pays a per-spend
+  decap cost; effectively (3) with a redirect step. Limited
+  benefit over (3) given the doubled decap path is the same in
+  both; the redirect adds storage complexity without
+  proportionate benefit. Worth naming as a discrete option so
+  Round 4 can reject it explicitly rather than leave it ambient.
+- **(2b) Persisted handle → encrypted-secret-storage.**
+  Persists the handle table with the per-output secrets
+  encrypted under a key derived from the wallet password (or
+  whatever wallet-encryption discipline lives in the
+  persistence layer); on restart, after the user provides the
+  password, decrypt the persisted secrets and load them into
+  the in-memory table. **Cheap restart after password unlock
+  with no re-scan and no doubled decap cost** — the
+  optimization (1) and (3) both lack. Cost: persistence-layer
+  complexity (encryption discipline; key-derivation
+  consistency; on-disk format versioning); the table itself
+  becomes a persistence-secret subject to the wallet-encryption
+  invariants; cross-restart consistency requires wallet-
+  encryption-key derivation to be deterministic across
+  sessions. Most complex of the four options; delivers the
+  strongest restart-cost property.
 - **(3) Handle is deterministic from ciphertext.** `handle =
   HKDF(view_secret, "shekyl/output-handle-v1", ciphertext_hash)`.
   Stateless: no table; lookup at spend time = re-decap. Pays
@@ -2242,12 +2334,17 @@ Round-3 lean: **(1)**. Reasoning: simplest correctness story
 for V3.0; the ~1 s startup cost is acceptable for desktop and
 server wallets; mobile wallets typically have fewer outputs and
 constrained CPU but the bound stays operationally manageable.
-**(2)** introduces a persistence-layer security boundary that
-PR 4–7 work has to consume correctly — premature commitment.
-**(3)** is structurally cleanest but doubles the per-output
-detection cost, and the bench impact is direct (`_mine` bench
-absorbs the decap-twice cost). Round 4 ratifies the Round-3
-lean or amends.
+**(2a)** introduces persistence-layer complexity without a
+proportionate benefit over (3); probably rejected at Round 4.
+**(2b)** delivers cheap restart but requires committing to
+persistence-layer security discipline that PR 4–7 work has to
+consume correctly — premature commitment for V3.0 but the
+natural V3.x optimization when wallets accumulate enough
+outputs that (1)'s startup cost matters. **(3)** is
+structurally cleanest but doubles the per-output detection
+cost, and the bench impact is direct (`_mine` bench absorbs the
+decap-twice cost). Round 4 ratifies the Round-3 lean or
+amends.
 
 ### 7.12 Handle unforgeability (A7)
 
