@@ -1133,6 +1133,34 @@ its wake.
   the MAINNET / STAGENET native flow; the C++ raw-seed RPCs retire
   with `wallet_rpc_server.cpp` / `wallet2_ffi.cpp`.
 
+- **`wallet2::get_daemon_blockchain_target_height` lets asio
+  `system_error` escape the `err`-string contract.**
+  `tools::wallet2::get_daemon_blockchain_target_height(string& err)`
+  documents an `err`-out-parameter contract: on RPC failure, `err`
+  is populated and the function returns 0 cleanly. In practice the
+  inner `m_node_rpc_proxy.get_target_height(target_height)` call
+  reaches `epee::net_utils::http::http_simple_client_template::invoke`
+  → `blocked_mode_client::connect`, where asio raises
+  `boost::system::system_error` directly on a connect failure. The
+  exception bypasses the `err`-string code path and propagates up
+  through `estimate_blockchain_height()` and into every caller of
+  `wallet2::generate(name, password)` with `recover = false`. CI
+  flakes on `tests/unit_tests/wallet_storage.cpp::change_password_*`
+  surfaced this in May 2026 (PR #29 CI run 25407980061); the tests
+  were deflaked by pre-setting `m_refresh_from_block_height = 1` to
+  short-circuit the daemon call, but the underlying robustness gap
+  remains: any caller of `wallet2::generate(...)` on a host without
+  a reachable daemon can have an unhandled asio exception escape.
+  The fix is to wrap `m_node_rpc_proxy.get_target_height` (and any
+  other `NodeRPCProxy` call inside `get_daemon_blockchain_*`) in a
+  try/catch that converts the asio exception into the documented
+  `err` string return path.
+
+  **Closure point:** Either V3.1 wallet hardening pass (cheap fix
+  in `wallet2.cpp`), or naturally with Phase 5 of the Rust rewrite
+  when the equivalent Rust path uses `Result` propagation by
+  construction.
+
 **Index of how each follow-up interacts with the rewrite** (entries
 themselves carry the detail; this table is the at-a-glance view used
 by the rewrite plan's half-day review gate, item 3):
