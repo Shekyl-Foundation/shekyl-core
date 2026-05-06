@@ -43,12 +43,12 @@ required adversarial review to surface.
   `RecipientSubaddress`, `SubaddressKeyPair`, `ViewTag`).
   Purpose-decomposed subaddress derivation. No-Mock test substrate
   pattern (§2.1.2). Trust-class A/B classification deferred.
-- **Round 3 (in-flight; commits 3a, 3a-review-pass, 3b, 3c,
-  3d landed to date).** Adversarial wargaming pass surfaced
-  12 findings clustered into 7 threat patterns (4 generalizing
-  to PR 4–7's pre-flight checklist; 3 KeyEngine-specific).
-  Round-3 dispositions land across five sequential commits
-  (3a–3e):
+- **Round 3 (substantive content complete; commits 3a,
+  3a-review-pass, 3b, 3c, 3d, 3e landed).** Adversarial
+  wargaming pass surfaced 12 findings clustered into 7
+  threat patterns (4 generalizing to PR 4–7's pre-flight
+  checklist; 3 KeyEngine-specific). Round-3 dispositions
+  landed across five sequential commits (3a–3e):
   - **3a (commit `8553ae297`).** Handle-indirected workflow
     contract per A1's α disposition; `OutputClaim` reshape;
     seven-bullet "deliberately does not expose" subsection;
@@ -138,19 +138,61 @@ required adversarial review to surface.
     and Pattern-4 generalization checklists are forward-
     template content for PR 4–7's pre-flight discipline (per
     §3.1.5).
-  - **3e (forthcoming).** Residual + forward-template content
-    (Trust-class A/B classification across all per-trait PRs;
-    A8 DESIGN_CONCEPTS.md cross-reference for Pattern-7
-    economic-incentive emergence; four-pattern checklist for
-    PR 4–7 pre-flight bundled into the §2.1.x forward-template
-    section; trajectory note).
-- **Round 4+ (forthcoming).** Adversarial pass against the
-  handle-model emergent attack surface (A6, A7, persistence
-  option-space, concurrency-quality / Pattern-5 cluster). Per
+  - **3e (this commit).** Residual + forward-template
+    content (Sub-bundle G). New §3.1.6 frames the Pattern-6
+    replay/idempotency cluster and lands the KeyEngine
+    method-by-method contract table (per-method idempotency,
+    side-effect, and retry-safety columns for
+    `account_public_address`, `derive_subaddress`,
+    `try_claim_output`, `sign_transaction`). The Pattern-5
+    cross-call-state pattern is acknowledged as adjacent but
+    distinct; KeyEngine's specific Pattern-5 disposition stays
+    in §7.13 as Round-4 work. **§2.1.3** lifts the Trust-class
+    A/B classification from a Stage-4 promotion-time debate to
+    a per-trait PR design-doc decision: PR 1 = B; PR 2 = B;
+    PR 3 = A; PR 4–7 classify at design time. **§2.1.4** lands
+    the Pattern-7 economic-incentive emergence cross-reference
+    rule: per-trait PRs that surface resource-asymmetry
+    concerns escalate to project-level economic-design review
+    via FOLLOWUPS / `docs/DESIGN_CONCEPTS.md` rather than
+    embedding the analysis in the trait scope. **§2.1.5**
+    consolidates the four-pattern checklist for PR 4–7
+    pre-flight (Pattern 2 spec-silent junctions; Pattern 3
+    test substrate visibility; Pattern 4 visibility / external-
+    implementor trust; Pattern 6 replay/idempotency contract);
+    Pattern 1 (workflow-shape) is upstream and Pattern 5
+    (cross-call state) is downstream-deferred; Pattern 7 is
+    the escalation rule from §2.1.4. **§2.1.6** lands the
+    trajectory meta-note on accumulated adversarial intuition
+    as forward-template content; PR 4–7's pre-flight is
+    bootstrapped with the patterns rather than starting from
+    scratch, and per-trait PR rounds budgets are likely to be
+    smaller because the substrate is more substantial.
+    **§7.9** (Mock-X disposition) marked closed for PR 3
+    with cross-references to §2.1.5's Pattern-3 forward-
+    template; **§7.14** added as a closure cross-reference
+    for the Pattern-6 disposition table. §1.1 Phase 0c prose
+    grew Sub-bundle G mention. Round trajectory updated to
+    mark Round 3 substantive content complete.
+- **Round 4+ (forthcoming).** Substantive Round-3 content
+  is complete; Round-4+ work focuses on the handle-model
+  emergent attack surface that Round 3 surfaced as
+  deferral candidates: A6 (handle-table memory-pressure
+  / §7.10), A7 (handle unforgeability / §7.12), handle
+  persistence across wallet restart (§7.11 four-option-space),
+  and Pattern-5 cluster (handle-table concurrency quality /
+  §7.13 with explicit timing-channel analysis). Round 4 also
+  ratifies or amends Round-3 dispositions that may surface
+  pushback (e.g., §7.11's Round-3 lean toward option (1) for
+  V3.0). Per
   [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)'s
-  4–6-rounds-before-implementation rule for crypto-critical trait
-  migrations, PR 3 cannot cut a feat branch until at least
-  Round 4's acceptance signal lands.
+  4–6-rounds-before-implementation rule for crypto-critical
+  trait migrations, PR 3 cannot cut a feat branch until at
+  least Round 4's acceptance signal lands; the substrate
+  Round 3 produced (the four-pattern checklist; the
+  Trust-class A/B classification; the Pattern-7 escalation
+  rule) is forward-template content for PR 4–7 regardless of
+  Round-4+ outcomes on the handle-model emergent surface.
 
 The long-form draft history will live ephemerally in
 `.cursor/plans/stage_1_pr_3_plan_*.plan.md`; this document is the
@@ -178,7 +220,7 @@ additive and absorb under §8.2's two-commit form.
 | 0d | `pub(crate)` visibility + `Send + Sync + 'static` super-bound + Q9.3 disposition correction | Doc-only spec amendment | Additive |
 | 0e (optional, code) | `AllKeysBlob` migrated to `#[derive(Zeroize, ZeroizeOnDrop)]` | Code PR in `shekyl-crypto-pq` | Out of §2.1 scope (precondition correction) |
 
-**Phase 0c sub-bundle structure.** Sub-bundle A (workflow-internal types) lives behind the trait surface as `pub(crate)` impl-internals — `SignDomain` is no longer a trait-level concept; it cryptographically separates HKDF contexts inside `LocalKeys`'s impl. `HandleTable` (added in Round-3 commit 3a) is the workflow-internal state mapping `OutputHandle` → per-output secret material; concurrent-access shape pinned in Round 4. `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT` and the `derive_subaddress_kem_keypair` primitive (added in Round-3 commit 3b) pin the per-subaddress deterministic ML-KEM-768 keygen path that `derive_subaddress(_, Recipient)` consumes. Sub-bundle B (message shapes) is the actor-message granularity at which `KeyEngine` exposes work; each shape is a structured non-secret bundle that crosses the trait boundary in place of the primitive-shape signatures the pre-amendment §2.1 named. Sub-bundle C (handle-indirected workflow contract) is the post-Round-3 disposition: per-output spending material does not cross the trait boundary; the orchestrator receives an opaque `OutputHandle` and references it in subsequent `sign_transaction` calls. Sub-bundle D (per-subaddress `kem_pk` derivation, added in Round-3 commit 3b per §3.1.3) pins the rule-forced disposition that `RecipientSubaddress.kem_pk` derives deterministically from view secret + subaddress index — α (drop per-subaddress `kem_pk`) decomposes into three sub-options each violating a priority-hierarchy rule, leaving β as the only admissible disposition. Sub-bundle E (Pattern-2 spec-silent junctions, added in Round-3 commit 3c per §3.1.4) closes four load-bearing cryptographic junctions whose specification previously lived in implementation lore: A3 pins the per-output HKDF derivation by reference to the canonical `shekyl-crypto-pq::derivation` registry; A4 pins `VIEW_TAG_BYTES = 1` at the spec level; A5 → ζ pins method-to-domain binding via the `SignsInDomain` marker trait + associated const for compile-time cross-domain-reuse prevention; D1 pins the `sign_transaction` validation contract, separating impl-side responsibilities (handle resolution, per-input signature production, FCMP++ witness production) from caller-side preconditions (amount accounting, fee correctness, address validity, structural well-formedness). Sub-bundle F (Pattern-3 / Pattern-4 test-substrate + visibility discipline, added in Round-3 commit 3d per §3.1.5) lands three dispositions: B1 — three-layer discipline (`#[cfg(test)]` cfg-gate + `pub(crate)` visibility + CI gate) for test-only constructors and inspection accessors (§6.6); B2 — handle-storage hygiene replaces the pre-A1 lifetime-of-secret-material framing, with three test properties (orphan absence, entry deletion on consumption, bounded growth) anchored against the workflow-internal `HandleTable` (§6.7); Attack 4.2 — per-message-type visibility table with explicit rationale for Sub-bundle B types and Trust-class B classification (§3.3 "Visibility discipline for Sub-bundle B message types" subsection). §6.4's orphan-absence verification mechanism (deferred from the 3a review pass) is pinned to option (i) — the `handle_table_size` test-inspection accessor under the three-layer discipline. Stub-quality shapes landed in commit 1 of this design-doc round; concrete field sets landed in commit 2; the handle-indirected reshape lands in Round-3 commit 3a; the per-subaddress `kem_pk` derivation specification lands in Round-3 commit 3b; the spec-silent-junctions cluster lands in Round-3 commit 3c; the test-substrate + visibility discipline cluster lands in Round-3 commit 3d (and accepts Round-4+ refinement against the handle-table internal disposition).
+**Phase 0c sub-bundle structure.** Sub-bundle A (workflow-internal types) lives behind the trait surface as `pub(crate)` impl-internals — `SignDomain` is no longer a trait-level concept; it cryptographically separates HKDF contexts inside `LocalKeys`'s impl. `HandleTable` (added in Round-3 commit 3a) is the workflow-internal state mapping `OutputHandle` → per-output secret material; concurrent-access shape pinned in Round 4. `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT` and the `derive_subaddress_kem_keypair` primitive (added in Round-3 commit 3b) pin the per-subaddress deterministic ML-KEM-768 keygen path that `derive_subaddress(_, Recipient)` consumes. Sub-bundle B (message shapes) is the actor-message granularity at which `KeyEngine` exposes work; each shape is a structured non-secret bundle that crosses the trait boundary in place of the primitive-shape signatures the pre-amendment §2.1 named. Sub-bundle C (handle-indirected workflow contract) is the post-Round-3 disposition: per-output spending material does not cross the trait boundary; the orchestrator receives an opaque `OutputHandle` and references it in subsequent `sign_transaction` calls. Sub-bundle D (per-subaddress `kem_pk` derivation, added in Round-3 commit 3b per §3.1.3) pins the rule-forced disposition that `RecipientSubaddress.kem_pk` derives deterministically from view secret + subaddress index — α (drop per-subaddress `kem_pk`) decomposes into three sub-options each violating a priority-hierarchy rule, leaving β as the only admissible disposition. Sub-bundle E (Pattern-2 spec-silent junctions, added in Round-3 commit 3c per §3.1.4) closes four load-bearing cryptographic junctions whose specification previously lived in implementation lore: A3 pins the per-output HKDF derivation by reference to the canonical `shekyl-crypto-pq::derivation` registry; A4 pins `VIEW_TAG_BYTES = 1` at the spec level; A5 → ζ pins method-to-domain binding via the `SignsInDomain` marker trait + associated const for compile-time cross-domain-reuse prevention; D1 pins the `sign_transaction` validation contract, separating impl-side responsibilities (handle resolution, per-input signature production, FCMP++ witness production) from caller-side preconditions (amount accounting, fee correctness, address validity, structural well-formedness). Sub-bundle F (Pattern-3 / Pattern-4 test-substrate + visibility discipline, added in Round-3 commit 3d per §3.1.5) lands three dispositions: B1 — three-layer discipline (`#[cfg(test)]` cfg-gate + `pub(crate)` visibility + CI gate) for test-only constructors and inspection accessors (§6.6); B2 — handle-storage hygiene replaces the pre-A1 lifetime-of-secret-material framing, with three test properties (orphan absence, entry deletion on consumption, bounded growth) anchored against the workflow-internal `HandleTable` (§6.7); Attack 4.2 — per-message-type visibility table with explicit rationale for Sub-bundle B types and Trust-class B classification (§3.3 "Visibility discipline for Sub-bundle B message types" subsection). §6.4's orphan-absence verification mechanism (deferred from the 3a review pass) is pinned to option (i) — the `handle_table_size` test-inspection accessor under the three-layer discipline. Sub-bundle G (Pattern-6 replay/idempotency cluster + forward-template content, added in Round-3 commit 3e per §3.1.6) lands the KeyEngine method-by-method replay/idempotency contract table (`account_public_address` and `derive_subaddress` pure-read / pure-derivation; `try_claim_output` workflow-level idempotent with handle-table insertion side effect; `sign_transaction` handle-consuming with deliberate replay rejection at the trait surface), plus the four-pattern forward-template content for PR 4–7 pre-flight (§2.1.5), the Trust-class A/B classification (§2.1.3), the Pattern-7 economic-incentive emergence cross-reference rule (§2.1.4), and the trajectory meta-note on accumulated adversarial intuition (§2.1.6). Stub-quality shapes landed in commit 1 of this design-doc round; concrete field sets landed in commit 2; the handle-indirected reshape lands in Round-3 commit 3a; the per-subaddress `kem_pk` derivation specification lands in Round-3 commit 3b; the spec-silent-junctions cluster lands in Round-3 commit 3c; the test-substrate + visibility discipline cluster lands in Round-3 commit 3d; the replay/idempotency cluster + forward-template content lands in Round-3 commit 3e (concluding Round 3 substantive content; further refinement accepts at Round 4+ against the handle-table internal disposition).
 
 §3 below names each bundle's substantive content. §5 names the
 sequencing.
@@ -403,6 +445,265 @@ The scheduling is concrete, not aspirational: see
 [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) entries (added in this
 spec round) carrying explicit V3.0-baseline targets per
 `15-deletion-and-debt.mdc`'s "no graveyard" rule.
+
+#### 2.1.3 Trust-class A/B classification across per-trait PRs
+
+Per-trait PRs handle either **secret material directly**
+(long-term keys, per-output secrets, signing material —
+Trust-class A) or **public state only** (block heights,
+transaction hashes, public addresses, opaque references like
+`OutputHandle` — Trust-class B). The classification has
+visibility-promotion implications: Trust-class A traits stay
+`pub(crate)` until external-implementor trust models are
+concrete (the V3.2 visibility-promotion bundle at the
+earliest); Trust-class B traits may ship `pub` from V3.0 with
+the standard external-implementor caveats.
+
+Round 3 lifts the classification from a Stage-4 promotion-time
+debate to a per-trait PR design-doc decision. The per-trait
+PR design doc names the trust class at the design stage and
+records the rationale; the V3.2 visibility-promotion bundle
+becomes a ratification exercise rather than a debate.
+
+| Per-trait PR | Trust class | Trait-level visibility (V3.0) | Rationale |
+|---|---|---|---|
+| PR 1 (`DaemonEngine`) | **B** | `pub(crate)` per Stage-1 default | Handles public on-chain queries; no secret material. May promote at V3.2 alongside `KeyEngine` and `LedgerEngine` per the unified bundle. |
+| PR 2 (`LedgerEngine`) | **B** | `pub(crate)` per Stage-1 default | Handles ledger snapshots, balance summaries, height queries; no secret material directly. Wallet-state values pass through but are public-derivable from the trait's inputs. |
+| PR 3 (`KeyEngine`) | **A** | `pub(crate)` per Stage-1 default | Handles long-term wallet keys (`AllKeysBlob`), per-output spending material (in `HandleTable`), signature production. The handle-indirected workflow shape (§3.1.2) keeps secret material confined to the engine's address space, but the engine itself is Trust-class A. The `pub(crate)` visibility prevents external implementors from materializing before the trust-model framework is concrete. |
+| PR 4 (forthcoming) | (TBD at design time) | `pub(crate)` per Stage-1 default | Per-PR design doc names. |
+| PR 5 (`PendingTxEngine`, forthcoming) | (TBD at design time) | `pub(crate)` per Stage-1 default | Per-PR design doc names. |
+| PR 6 / PR 7 (forthcoming) | (TBD at design time) | `pub(crate)` per Stage-1 default | Per-PR design doc names. |
+
+**Forward-template instruction.** Each PR 4–7 design doc
+includes a one-line classification: "Trust class: A (handles
+long-term secret material) [or B (handles public state only)].
+V3.2 promotion implications: [...]." The classification is
+named at the same time the trait's primary purpose is named,
+not at promotion time. Where a trait's classification is
+ambiguous (e.g., Trust-class B for the trait's primary methods,
+Trust-class A for an additive method that handles secrets), the
+default disposition is **classify as A**: the unified V3.2
+promotion bundle handles the visibility decision, not the
+per-method decisions.
+
+**V3.2 visibility-promotion bundle.** Per [§7.7](#77-v3x-fullpqc-trait-churn-acknowledgement)
+and the existing follow-up entries, the V3.2 bundle promotes
+Trust-class B traits to `pub` (or per the per-PR rationale)
+based on materialized external-consumer trust models. Trust-
+class A traits remain `pub(crate)` until external-implementor
+trust models are themselves concrete (a separate Stage-4
+question; the lifecycle is "make the actor abstraction work
+across `Arc<dyn KeyEngine>` boundaries first; expose to
+external implementors only when the abstraction is hardened").
+
+#### 2.1.4 Pattern-7 economic-incentive emergence — cross-reference rule
+
+A trait surface that introduces resource asymmetry (some
+operations cheap, others expensive; some operations bounded,
+others unbounded; some operations free, others rate-limited)
+creates an attack vector orthogonal to the trait's primary
+correctness contract: **adversaries who can drive the wallet
+into the expensive-operation regime asymmetrically cost the
+defender**. KeyEngine's A6 finding (handle-table memory-
+pressure, §7.10) is an instance — an adversary who can inject
+many crafted outputs that pass the X25519 pre-filter forces
+the `HandleTable` to grow without bound, asymmetrically
+costing the defender's memory.
+
+> **Pattern 7 — Economic-incentive emergence.** A trait method
+> whose cost differs significantly across input regimes creates
+> an asymmetric-cost lever. Adversaries who can shape the
+> input distribution can shape the cost imposed on the
+> defender. The pattern is not a per-trait correctness
+> finding — the trait's primary contract is unaffected; the
+> impact is at the project-level economic-design layer (the
+> defender's resource budget under adversarial workload).
+
+**Cross-reference rule for per-trait PRs.** When a per-trait
+PR's pre-flight surfaces a resource-asymmetry concern, the
+per-trait PR **does not** embed the project-level economic-
+design analysis in the trait scope. Instead, the per-trait PR:
+
+1. Records the asymmetry as a finding at the per-trait
+   design-doc level (e.g., §7.10 for KeyEngine's A6), with
+   Round-4 candidate dispositions named.
+2. Opens a coordination ticket against the project-level
+   `docs/DESIGN_CONCEPTS.md` economic-design section (or the
+   equivalent project-level doc) referencing the per-trait
+   finding.
+3. Per-trait PR ships with the Round-4 disposition placeholder;
+   project-level analysis lands at the project-level pace.
+
+The discipline keeps per-trait PR review surfaces bounded and
+aligns the analysis location with the analysis level. Per-
+trait PR reviewers verify "the asymmetry is named and
+escalated"; project-level reviewers verify "the asymmetry's
+economic-design implications are dispositioned."
+
+**KeyEngine A6 cross-reference.** A6 (handle-table memory-
+pressure) is named at §7.10 with Round-4 candidate
+dispositions (hard size cap with eviction; backpressure /
+orchestrator-cooperative pruning; persistence-bounded growth).
+The cross-reference to project-level economic-design lives in
+the FOLLOWUPS entry seeded by this commit; the project-level
+analysis lands when the V3.x economic-design framework is
+written.
+
+#### 2.1.5 Four-pattern checklist for PR 4–7 pre-flight
+
+Round 3's adversarial pass produced four threat patterns whose
+shape generalizes beyond KeyEngine. Each pattern is a class of
+finding the per-trait PR pre-flight catches systematically
+rather than relying on adversarial review to surface them
+case-by-case. PR 4–7 inherit the checklist as forward-template
+content; the per-trait PR design doc records the disposition
+for each pattern at the design stage.
+
+**Checklist (apply to every per-trait PR's pre-flight):**
+
+1. **Pattern 2 — Spec-silent load-bearing junctions.**
+   Read the trait's doc-comments. List every load-bearing
+   cryptographic operation named. For each, ask:
+   (a) "If a future maintainer rebuilt this from the spec
+   alone, would they bind the same context into the
+   primitive?" and
+   (b) "If a cross-version verifier consumed the spec alone,
+   would they reject outputs the impl rejects?"
+   If either answer is no, the junction is spec-silent and
+   worth pinning at the per-trait PR design-doc level. See
+   §3.1.4 for the pattern's full framing and KeyEngine's
+   instances (A3 per-output HKDF derivation, A4
+   `VIEW_TAG_BYTES` pin, A5 → ζ method-to-domain marker
+   trait, D1 `sign_transaction` validation contract).
+2. **Pattern 3 — Test substrate visibility leakage.**
+   For each test-only addition to a production type
+   (constructors, inspection accessors, fault-injection
+   wrappers), apply the three-layer discipline:
+   `#[cfg(test)]` cfg-gate (Layer 1) + `pub(crate)` or
+   tighter visibility (Layer 2) + CI gate (Layer 3). The
+   default when in doubt is **trait-surface-observable, not
+   test-only-observable**; the test-only addition is a
+   fallback when the trait-surface alternative would weaken
+   the trait's contract. See §3.1.5 for the pattern's full
+   framing and §6.6 for KeyEngine's instances.
+3. **Pattern 4 — External-implementor trust + visibility
+   discipline.** For each message type that crosses the
+   trait boundary, pin the type-level and per-field
+   visibility with explicit rationale at the per-trait PR
+   design-doc level. The default visibility is the
+   **tightest that satisfies the trait's contract**;
+   widening to `pub` requires naming the consumer that
+   needs the wider visibility. The trait-level visibility
+   couples to the Trust-class A/B classification (§2.1.3);
+   message types are typically Trust-class B (the opaque-
+   reference pattern keeps secret material confined to
+   workflow internals). See §3.1.5 for the pattern's full
+   framing and §3.3 Sub-bundle B's visibility-discipline
+   subsection for KeyEngine's instances.
+4. **Pattern 6 — Replay / idempotency contract.**
+   For each trait method, pin the (i) idempotency contract,
+   (ii) side-effect contract, and (iii) retry safety in a
+   per-method table at the per-trait PR design-doc level.
+   The default disposition for new trait methods is
+   **explicit contract specification**; spec-silent on this
+   axis is a finding the pre-flight catches. See §3.1.6 for
+   the pattern's full framing and KeyEngine's instances
+   (`account_public_address`, `derive_subaddress`,
+   `try_claim_output`, `sign_transaction`).
+
+**Pattern 1 (workflow-shape vs. primitive-shape) and Pattern
+5 (cross-call state) cross-references.** Pattern 1 is
+fundamental and pre-dates the Round-3 cluster — every per-
+trait PR's pre-flight should already validate against it per
+§2.1.1's framing. Pattern 5 (cross-call state correlation as
+side-channel) is per-trait-PR-conditional: per-trait PRs
+whose methods are stateless dispose of it trivially; per-trait
+PRs whose methods carry concurrent-access state (KeyEngine's
+`HandleTable`; potentially future per-trait-PR concurrent-
+access shapes) defer to Round-4 disposition with explicit
+timing-channel analysis. Neither is part of the four-pattern
+pre-flight checklist (Pattern 1 is upstream; Pattern 5 is
+downstream); both are acknowledged as adjacent.
+
+**Pattern 7 (economic-incentive emergence) cross-reference.**
+Pattern 7 is the escalation rule (§2.1.4) rather than a
+pre-flight checklist item. Per-trait PRs that surface
+resource-asymmetry concerns escalate to project-level
+economic-design review; the per-trait PR design doc records
+the finding and the cross-reference, not the analysis.
+
+**Format for per-trait PR design docs.** Each PR 4–7 design
+doc includes a "Pattern checklist" subsection (or equivalent;
+the placement is per-PR judgment) with the four checks above
+applied. The expected output is one of: "no finding for this
+pattern" (with one-sentence rationale); "finding pinned at §X
+disposition Y" (with cross-reference to where the disposition
+lives in the design doc); "finding deferred to Round-N" (with
+cross-reference to the §7-equivalent open-question entry).
+The discipline is **systematic**: every pattern is checked,
+every check produces an output, no pattern is silently
+skipped.
+
+#### 2.1.6 Trajectory note — accumulated adversarial intuition as forward-template
+
+Round 1's adversarial pass against the pre-amendment §2.1
+surface produced 12 findings clustered into 7 threat patterns.
+Round 3's dispositions across commits 3a–3e closed the
+findings, but the more durable contribution is **the patterns
+themselves**: Patterns 2, 3, 4, 6 are now forward-template
+content (§2.1.5) rather than ad-hoc adversarial-pass output.
+PR 4–7's pre-flight does not need to rederive them; the
+pre-flight applies the checklist and produces dispositions
+systematically.
+
+This is what the substrate-quality investment buys at the
+trait-extraction layer. The first per-trait PR (PR 1) had no
+pattern-shaped pre-flight content; the second per-trait PR
+(PR 2) inherited PR 1's commit-9 docs propagation precedent
+plus the Phase 0/0b/0c amendment cadence; the third per-trait
+PR (PR 3) inherited PR 2's amendment-shape precedent plus the
+no-Mock test substrate framing plus the four-pattern Round-3
+discipline.
+
+Each per-trait PR's substrate-quality contribution compounds.
+By PR 7's pre-flight, the discipline includes:
+
+- The amendment-shape precedent (PR 1).
+- The commit-9 docs propagation precedent (PR 2).
+- The no-Mock test substrate pattern (PR 2 / PR 3).
+- The four-pattern checklist (PR 3, this commit).
+- The Trust-class A/B classification (PR 3, §2.1.3).
+- The Pattern-7 escalation rule (PR 3, §2.1.4).
+- The amendment-block provenance discipline (PR 3, §2.1's
+  spec-clarification subsection lifecycle).
+- Whatever PR 4 / PR 5 / PR 6 / PR 7's own pre-flight passes
+  surface as new pattern-shaped content.
+
+The cost of each per-trait PR's pre-flight investment is
+front-loaded; the benefit accrues to every subsequent
+per-trait PR. By Stage-4 cutover, the cumulative discipline
+shapes whether the actor abstraction can ship cleanly or has
+to navigate around inadequately-pre-flighted per-trait
+extractions; the Round-3 discipline is part of the cumulative
+investment.
+
+**Round-budget implication for PR 4–7.** Per-trait PRs that
+inherit the four-pattern checklist as forward-template content
+should require **fewer rounds** before implementation than
+PR 3 did. PR 3 ran Rounds 1–3 with substantive design-doc
+revisions in each; PR 4 / PR 5's pre-flight produces
+pattern-shaped findings against the inherited checklist
+methodically rather than discovering them adversarially. The
+4–6-rounds-before-implementation rule from
+[`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+remains the discipline; the rounds are likely to be shorter
+because the substrate is more substantial.
+
+This trajectory note is itself the forward-template content:
+PR 4–7's design docs cite §2.1.6 as the "what does
+substrate-quality investment compound to?" anchor, and PR 4–7's
+own trajectory notes record what new substrate the per-trait
+PR contributed to the cumulative pile.
 
 ### 2.2 Cumulative §5.2 hybrid-test coverage so far
 
@@ -1173,6 +1474,86 @@ spec-clarification" provenance subsection).**
 > Pattern-3 and Pattern-4 generalization checklists (above)
 > are the contributions PR 3 makes to PR 4–7's pre-flight
 > discipline.
+
+### 3.1.6 Pattern-6 (replay/idempotency) cluster
+
+Round 3's adversarial pass surfaced a pattern that the
+pre-Round-3 spec did not pin: **for each trait method, what is
+the contract under repeated invocation with the same input?**
+The contract has structural consequences for the orchestrator
+(retry behavior on transient failure; deduplication of
+in-flight requests at higher layers; persistence-layer
+interactions if the method's effects must be journaled), and a
+future maintainer rebuilding the impl from the spec alone may
+rebuild the contract differently than the original.
+
+> **Pattern 6 — Replay / idempotency contract.** A trait
+> method's behavior on repeated invocation with the same input
+> is part of the trait's contract; spec-silent on this axis
+> means the behavior is implementation-defined and may drift
+> across impls or across time. The contract dimensions to pin
+> are: (i) does the method have observable side effects that
+> persist across calls? (ii) is repeated invocation safe
+> (idempotent), error-producing (replay-rejecting), or
+> undefined? (iii) does the orchestrator's retry pattern
+> interact with the method's failure modes (e.g., a successful
+> operation that returns a network error before the response
+> arrives)? Workflow-shape methods like `try_claim_output` and
+> `sign_transaction` have different replay contracts than each
+> other; the difference must be pinned at the spec.
+
+**KeyEngine method-by-method dispositions.**
+
+| Method | Idempotency contract | Side-effect contract | Retry safety |
+|---|---|---|---|
+| `account_public_address` | Pure read; idempotent by construction. | None. | Trivially safe to retry. |
+| `derive_subaddress` | Pure derivation; idempotent — same `(SubaddressIndex, SubaddressPurpose)` returns the same `SubaddressFor`. | None — no `HandleTable` mutation; no persistent state change. | Trivially safe to retry. The ML-KEM-768 KeyGen step (per §3.1.3 / §3.3 Sub-bundle A `derive_subaddress_kem_keypair`) is deterministic; the cost (~50 µs / call) makes orchestrator-level caching attractive but does not change the contract. |
+| `try_claim_output` | **Idempotent at the workflow level.** Calling `try_claim_output(input)` twice with the same `OutputDetectionInput` returns equivalent `OutputClaimResult`s; the second call observes the existing handle-table entry and returns the same `OutputHandle` (or returns `NotMine` deterministically). The exact insertion-policy question — "subsequent calls are pure no-ops" vs. "subsequent calls return the existing handle" — is pinned at impl time and tested per §6.7's bounded-growth property. | Inserts a new entry into `HandleTable` on first successful detection; subsequent calls observe the existing entry without modifying it. | Safe to retry on transient errors; the orchestrator can replay an interrupted scan against the same block range without producing duplicate handles. Exception: a `KeyEngineError` returned by a partial-failure path should not leave an orphan entry per §6.7's orphan-absence property. |
+| `sign_transaction` | **Handle-consuming, not idempotent.** A successful `sign_transaction` removes consumed handles from the `HandleTable` (per §6.7's entry-deletion property). A second call against the same `TxToSign` fails with a handle-resolution error because the consumed handles are no longer present. **This is deliberate replay rejection at the trait surface:** double-spend prevention is a structural property of the method, not a discipline imposed at a higher layer. | Removes consumed handles from `HandleTable`; produces signature material that is subsequently broadcast as part of the signed transaction. | Retry semantics are caller-driven: the orchestrator must distinguish "transaction broadcast succeeded but acknowledgment lost" (no retry — the consumed handles are gone; rebuilding the transaction with replacement inputs is necessary) from "signing failed before any persistent state change" (retry against the original `TxToSign` with the original handles is admissible). The `KeyEngineError` taxonomy (§3.2 / §7.2) surfaces variants whose distinction supports this caller-driven discrimination. |
+
+**Cross-cutting: `FaultInjecting<LocalKeys>` and replay.** The
+fault-injection wrapper preserves the underlying impl's
+idempotency contract — a fault injected before the impl runs
+leaves no handle-table state change; a fault injected after the
+impl runs but before the wrapper returns the result leaves the
+impl's state change in place (orphan entry). The orphan-absence
+test (§6.4) exercises the second case under `try_claim_output`;
+the wrapper's contract for `sign_transaction` faults requires
+either pinning the fault-injection point relative to the impl's
+table-mutation (so the test can distinguish "fault before
+mutation" from "fault after mutation") or accepting that some
+fault-injected scenarios produce orphaned consumed-handle state
+that the orchestrator must reconcile. The exact wrapper contract
+is pinned at PR 3 implementation time.
+
+**Pattern-5 cross-reference.** Pattern 5 (cross-call state
+correlation as side-channel) and Pattern 6 (replay/idempotency)
+are structurally adjacent — both concern the trait method's
+behavior across multiple invocations — but address different
+adversary models. Pattern 5 addresses **timing-channel
+observability** of state changes; Pattern 6 addresses
+**functional-contract** behavior under repeated invocation.
+KeyEngine's Pattern-5 disposition is Round-4-deferred (§7.13);
+Pattern-6 dispositions land in this commit (3e). Per-trait PRs
+that surface concurrent-access sensitivity should pin both
+patterns; per-trait PRs whose methods are stateless can dispose
+of Pattern 6 trivially and defer Pattern 5 if no concurrent-
+access shape is on the trait surface.
+
+**Amendment-block framing (to land in §2.1's "Stage 1 PR 3
+spec-clarification" provenance subsection).**
+
+> The Round-3 commit 3e lands the Pattern-6 replay/idempotency
+> dispositions for KeyEngine's four trait methods, plus the
+> forward-template content (§2.1.3 Trust-class A/B
+> classification; §2.1.4 Pattern-7 economic-incentive
+> cross-reference rule; §2.1.5 four-pattern checklist for PR
+> 4–7 pre-flight; §2.1.6 trajectory meta-note on accumulated
+> adversarial intuition). The per-method contract table is the
+> format PR 4–7 inherit for their own pre-flight discipline.
+> Pattern 5 (cross-call state) is acknowledged as adjacent but
+> distinct; KeyEngine's specific Pattern-5 disposition stays in
+> §7.13 as Round-4 work.
 
 ### 3.2 Phase 0b — `KeyError` / `KeyEngineError` split (§7-non-compliant)
 
@@ -3089,27 +3470,27 @@ PQC evolution may surface trait churn.
 
 ### 7.9 Test-substrate disposition — Mock-X pattern broader rejection
 
-§2.1.2 names the broader rejection of Mock-X parallel
-implementations; §6.4 lands the per-PR-3 substrate (no
-`MockKeys`; production-only `LocalKeys::from_test_seed` +
-composable `FaultInjecting<K: KeyEngine>` wrapper).
+**Closed for PR 3.** §2.1.2 names the broader rejection of
+Mock-X parallel implementations; §6.4 lands the per-PR-3
+substrate (no `MockKeys`; production-only
+`LocalKeys::from_test_seed` + composable
+`FaultInjecting<K: KeyEngine>` wrapper); §6.6 (commit 3d) pins
+the three-layer discipline that protects the test-only
+constructors and accessors; §2.1.5 (commit 3e) elevates the
+no-Mock substrate shape to forward-template content for PR 4–7.
 
-The disposition has implications that propagate to PR 4–7's
-per-trait-PR template content:
+The cross-references for the surviving forward-looking work:
 
 - **PR 4 / PR 5 substrate work** lands `MockLedger` →
   `LocalLedger::from_test_blocks` + `FaultInjecting<LocalLedger>`
   and `MockDaemon` → `TestDaemon` rename alongside their own
-  trait-extraction work. See
+  trait-extraction work; see
   [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) for the explicit
   V3.0-baseline schedule.
-- **PR 6 / PR 7 trait extractions** start without a `MockX`
-  proposal at all; the no-Mock pattern is the default substrate
-  shape. The pre-flight checklist for those PRs should include
-  "what does the test substrate look like?" with the expected
-  answer being `LocalX::from_test_*` constructors plus
-  `FaultInjecting<X>` composability, not "introduce `MockX` +
-  `replace_x` analog of PR 2."
+- **PR 6 / PR 7 trait extractions** apply §2.1.5's four-pattern
+  pre-flight checklist (Pattern 3 catches Mock-X regressions);
+  the no-Mock pattern is the default substrate shape with no
+  per-PR debate needed.
 
 (L3.3)
 
@@ -3272,6 +3653,41 @@ Round-4 selects, with explicit timing-channel analysis under
 concurrent-load benchmarks. The selection feeds the
 `engine_trait_bench_key_sign_transaction_resolve_handle` bench's
 expected cost regime.
+
+### 7.14 Pattern-6 replay/idempotency contract (KeyEngine)
+
+**Closed for PR 3.** §3.1.6 (commit 3e) lands the per-method
+replay/idempotency contract table for KeyEngine's four trait
+methods. Summary cross-reference for Round-4+ readers:
+
+- `account_public_address` and `derive_subaddress`: pure
+  reads / pure derivations; idempotent; no side effects;
+  trivially safe to retry.
+- `try_claim_output`: idempotent at the workflow level
+  (subsequent calls observe the existing handle-table entry);
+  inserts into `HandleTable` on first successful detection;
+  safe to retry on transient errors (orphan absence per §6.7
+  property (1)).
+- `sign_transaction`: handle-consuming, **not** idempotent;
+  replay is rejected at the trait surface via handle-resolution
+  failure (consumed handles are gone from the table). Caller-
+  driven retry semantics: distinguish "broadcast succeeded but
+  acknowledgment lost" (no retry; rebuild with replacement
+  inputs) from "signing failed before any state change" (retry
+  admissible).
+
+The `FaultInjecting<LocalKeys>` wrapper's interaction with the
+contract — particularly the fault-injection point relative to
+the impl's table-mutation — is pinned at PR 3 implementation
+time. Round-4+ refines the wrapper's exact contract once the
+implementation surface is concrete.
+
+This entry is a closure cross-reference rather than an open
+question; preserved here per `15-deletion-and-debt.mdc`'s
+"items get a target version or get closed" rule. Listed under
+§7 because the underlying property (replay/idempotency
+contract) is a structural concern that Round-4+ readers
+auditing the trait surface will look for here.
 
 ### 7.5 `AllKeysBlob: Clone` derive — audit or delete
 
