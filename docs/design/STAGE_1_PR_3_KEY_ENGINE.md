@@ -1,6 +1,6 @@
 # Stage 1 PR 3 — `KeyEngine` extraction — design
 
-**Status.** Round 1 (in-flight). Stage 1 PR 3 of the seven-trait
+**Status.** Round 3 (in-flight). Stage 1 PR 3 of the seven-trait
 extraction chain pinned in
 [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
 §8.1, named explicitly as PR 3 in
@@ -13,30 +13,56 @@ amendments and substantive implementation. It mirrors
 [`STAGE_1_PR_2_LEDGER_ENGINE.md`](STAGE_1_PR_2_LEDGER_ENGINE.md)'s
 structure but is keyed to a substantially larger pre-flight drift
 surface than PR 2's: PR 2 surfaced 3 amendments across pre-flight
-+ commit-time + post-merge; PR 3's pre-flight pass surfaces 5
-amendments at the design-doc stage, with 2 of them §7-non-compliant
-(re-opening the spec for a new round). The drift count is not a
-defect — it is the discipline working as designed against a trait
-whose §2.1 surface predates the workspace's hybrid-cryptography
-framework solidification (see §2.1 below).
++ commit-time + post-merge; PR 3's pre-flight pass surfaced 5
+amendments at the design-doc stage (Round 1), Round 2 surfaced a
+substantive workflow-shape pivot, and Round 3 surfaced a handle-
+indirected contract pivot completing the workflow-shape pivot's
+"no secrets cross the trait boundary" property. The accumulating
+drift count is not a defect — it is the discipline working as
+designed against a trait whose pre-Round-1 §2.1 surface predates
+the workspace's hybrid-cryptography framework solidification (see
+§2.1 below) and whose security-claim-vs-message-shape mismatch
+required adversarial review to surface.
 
 ## Round trajectory
 
-- **Round 1 (this commit).** Pre-flight gap-check captures all 5
-  drift bundles below; substantive design choices pinned per the
-  user's Decision-1-through-Decision-5 reasoning recorded in §3;
+- **Round 1 (commit `24a936e4f`).** Pre-flight gap-check captured
+  5 drift bundles; substantive design choices pinned per the user's
+  Decision-1-through-Decision-5 reasoning recorded in §3;
   trait-surface diff for the post-amendment §2.1 shape staged in
   §4; sequencing for preparatory amendment PRs and the optional
   preparatory code PR (`AllKeysBlob` `ZeroizeOnDrop` migration)
-  staged in §5.
-- **Round 2+ (forthcoming).** Reviewer challenges to the trait
-  surface diff and the per-bundle dispositions; the negative-space
-  anchor for `KeyEngineError` (§3.2) is the most likely site for
-  Round 2 surfacing. Per
+  staged in §5. Round 1 review pass landed as commit `85f90994e`.
+- **Round 2 (commits `1c20fb7ee`, `3e3cb292c`).** Substantive
+  workflow-shape pivot replacing primitive-shape methods
+  (`view_ecdh`, `hybrid_decapsulate`, `sign_with_spend`) with
+  workflow-shape methods (`try_claim_output`, `sign_transaction`).
+  Concrete message-shape definitions pinned for Sub-bundle B
+  (`OutputDetectionInput`, `OutputClaimResult`, `OutputClaim`,
+  `TxToSign`, `TxSignatures`, `SubaddressPurpose`, `SubaddressFor`,
+  `RecipientSubaddress`, `SubaddressKeyPair`, `ViewTag`).
+  Purpose-decomposed subaddress derivation. No-Mock test substrate
+  pattern (§2.1.2). Trust-class A/B classification deferred.
+- **Round 3 (in-flight; this commit lands 3a).** Adversarial
+  wargaming pass surfaced 12 findings clustered into 7 threat
+  patterns (4 generalizing to PR 4–7's pre-flight checklist; 3
+  KeyEngine-specific). Round-3 dispositions land across five
+  sequential commits (3a–3e); this commit (3a) lands the
+  handle-indirected workflow contract per A1's α disposition,
+  reshapes `OutputClaim` to drop secret-bearing fields in favor
+  of an opaque `OutputHandle`, expands the "deliberately does not
+  expose" subsection to seven bullets, and pins emergent attack
+  surface (A6, A7, handle persistence, concurrency-quality) as
+  Round-4 candidates. Subsequent commits (3b–3e) land the
+  remaining Round-3 dispositions per the synthesis recorded in
+  the long-form plan.
+- **Round 4+ (forthcoming).** Adversarial pass against the
+  handle-model emergent attack surface (A6, A7, persistence
+  option-space, concurrency-quality / Pattern-5 cluster). Per
   [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)'s
   4–6-rounds-before-implementation rule for crypto-critical trait
-  migrations, PR 3 cannot cut a feat branch until at least Round 2's
-  acceptance signal lands.
+  migrations, PR 3 cannot cut a feat branch until at least
+  Round 4's acceptance signal lands.
 
 The long-form draft history will live ephemerally in
 `.cursor/plans/stage_1_pr_3_plan_*.plan.md`; this document is the
@@ -60,11 +86,11 @@ additive and absorb under §8.2's two-commit form.
 |---|---|---|---|
 | 0 | Workflow-shape pivot (primitive-shape `view_ecdh` / `hybrid_decapsulate` / `sign_with_spend` replaced by workflow-shape `try_claim_output` / `sign_transaction`; hybrid-framework reconciliation absorbed) | Doc-only spec amendment | **Re-opens §7** |
 | 0b | `KeyError` / `KeyEngineError` split | Doc-only spec amendment | **Re-opens §7** |
-| 0c | Workflow-internal types + message shapes for cross-boundary travel (Sub-bundle A: `pub(crate)` impl-internals — `SignDomain`, `AccountPublicAddress`; Sub-bundle B: trait-surface message shapes — `OutputDetectionInput`, `OutputClaimResult`, `OutputClaim`, `TxToSign`, `TxSignatures`, `SubaddressPurpose`, `SubaddressFor`, `RecipientSubaddress`, `SubaddressKeyPair`, `ViewTag`) | Doc-only spec amendment | Additive |
+| 0c | Workflow-internal types + message shapes for cross-boundary travel (Sub-bundle A: `pub(crate)` impl-internals — `SignDomain`, `AccountPublicAddress`, `HandleTable`; Sub-bundle B: trait-surface message shapes — `OutputDetectionInput`, `OutputHandle`, `OutputClaimResult`, `OutputClaim`, `TxToSign`, `TxSignatures`, `SubaddressPurpose`, `SubaddressFor`, `RecipientSubaddress`, `SubaddressKeyPair`, `ViewTag`; Sub-bundle C: handle-indirected workflow contract — `OutputHandle` is opaque to the orchestrator with inner shape pinned in Round 4) | Doc-only spec amendment | Additive |
 | 0d | `pub(crate)` visibility + `Send + Sync + 'static` super-bound + Q9.3 disposition correction | Doc-only spec amendment | Additive |
 | 0e (optional, code) | `AllKeysBlob` migrated to `#[derive(Zeroize, ZeroizeOnDrop)]` | Code PR in `shekyl-crypto-pq` | Out of §2.1 scope (precondition correction) |
 
-**Phase 0c sub-bundle structure.** Sub-bundle A (workflow-internal types) lives behind the trait surface as `pub(crate)` impl-internals — `SignDomain` is no longer a trait-level concept; it cryptographically separates HKDF contexts inside `LocalKeys`'s impl. Sub-bundle B (message shapes) is the actor-message granularity at which `KeyEngine` exposes work; each shape is a structured non-secret bundle that crosses the trait boundary in place of the primitive-shape signatures the pre-amendment §2.1 named. Stub-quality shapes land in commit 1 of this design-doc round; concrete field sets land in commit 2 (and accept Round-3+ refinement against PR 5's `PendingTxEngine` constraints).
+**Phase 0c sub-bundle structure.** Sub-bundle A (workflow-internal types) lives behind the trait surface as `pub(crate)` impl-internals — `SignDomain` is no longer a trait-level concept; it cryptographically separates HKDF contexts inside `LocalKeys`'s impl. `HandleTable` (added in Round-3 commit 3a) is the workflow-internal state mapping `OutputHandle` → per-output secret material; concurrent-access shape pinned in Round 4. Sub-bundle B (message shapes) is the actor-message granularity at which `KeyEngine` exposes work; each shape is a structured non-secret bundle that crosses the trait boundary in place of the primitive-shape signatures the pre-amendment §2.1 named. Sub-bundle C (handle-indirected workflow contract) is the post-Round-3 disposition: per-output spending material does not cross the trait boundary; the orchestrator receives an opaque `OutputHandle` and references it in subsequent `sign_transaction` calls. Stub-quality shapes landed in commit 1 of this design-doc round; concrete field sets landed in commit 2; the handle-indirected reshape lands in Round-3 commit 3a (and accepts Round-4+ refinement against the handle-table internal disposition).
 
 §3 below names each bundle's substantive content. §5 names the
 sequencing.
@@ -555,6 +581,104 @@ hybrid-framework reconciliation prose).**
 > for an incoming output"; "produce all signatures for a
 > transaction") is unchanged.
 
+### 3.1.2 Handle-indirected workflow shape — completing the workflow-shape pivot
+
+Round 3's adversarial pass surfaced a property gap that the
+Round-2 workflow-shape pivot did not fully close. §3.1's pivot
+established that **cryptographic primitives** never cross the
+trait surface — raw shared secrets, HKDF intermediates, and the
+hybrid types themselves stay confined to `LocalKeys`'s stack
+frame. But the Round-2 `OutputClaim` shape carried
+`output_secret_key: Zeroizing<[u8; 32]>` and
+`amount_blinding_factor: Zeroizing<[u8; 32]>` as `pub` fields,
+which meant the orchestrator's address space held **per-output
+derived secrets** across the (potentially months-long) interval
+between claim and spend. The "no secrets cross" claim was
+**quantitatively true** (high-cardinality intermediates absorbed)
+but **qualitatively false** (per-output derived secrets crossed
+anyway).
+
+`Zeroizing<...>` is wipe-on-drop, not wipe-on-read: any consumer
+that observes the bytes during the value's lifetime can copy
+them. Long lifetimes (storage in `transfer_details`, persistence
+to disk via wallet encryption layer, sharing across Stage-4
+actor channels) multiply the surface area. The Round-2 shape
+relied on the orchestrator inheriting a Zeroize discipline that
+flowed from the trait method's stack through every downstream
+consumer; one break in that chain (a misbehaving log, an
+unencrypted persistence path, an over-eager debug print) leaks
+the secret.
+
+**Disposition (per Round 3's A1 → α):** the trait-surface
+contract ships **handle-indirected**. `try_claim_output`'s impl
+inserts the per-output spending material into a workflow-internal
+`HandleTable` (Sub-bundle A) and returns an opaque `OutputHandle`
+(Sub-bundle B) to the orchestrator. The orchestrator's
+`OutputClaim` carries the handle alongside non-secret on-chain
+metadata (`key_image`, `amount_atomic_units`); the spending
+secrets stay confined to the engine's address space. Spending
+later: the orchestrator passes the handle into `sign_transaction`
+via `TxToSign.inputs[i].handle`; the impl resolves the handle
+internally, signs using the per-output secret, and returns
+`TxSignatures` carrying no secret material.
+
+**The structural property the table delivers** is the same
+property session tokens deliver vs. session keys: a leaked handle
+is meaningless without the engine's internal mapping. Handle-only
+disclosure does not compromise the underlying spending secret.
+The orchestrator's persistence, debug-print paths, log paths, and
+Stage-4 actor-channel boundaries can all carry handles without
+inheriting the wipe-on-drop discipline that secret bytes would
+impose. The "no secrets cross the trait boundary" claim becomes
+**literal**, not quantitative.
+
+**Trajectory cost.** The handle-indirected pivot adds workflow-
+internal state to `LocalKeys` (the table is held behind interior
+mutability for the `&self` async trait surface). Several emergent
+attack vectors and design questions surface that the Round-3
+disposition explicitly defers to Round 4:
+
+- **A6 — handle-table memory-pressure attack.** Unbounded growth
+  under adversarial scanning load. Eviction discipline (LRU,
+  orchestrator-pinning, persistence-aware aging) is Round 4 work.
+- **A7 — handle-collision / handle-forgery.** Predictable handle
+  IDs invite cross-context misuse. Unforgeability disposition
+  (counter vs UUID vs cryptographic random ID) is Round 4 work.
+- **Handle persistence across wallet restart.** Three option-space
+  candidates (ephemeral + restart-rescan; persisted handle →
+  ciphertext mapping; deterministic handle from ciphertext);
+  Round-3 lean is "ephemeral + restart-rescan for V3.0 with
+  performance optimization deferred to V3.x." Round 4 ratifies.
+- **Concurrency-quality / cross-call state correlation.** The
+  table's interior mutability shape (sharded `RwLock`, lock-free
+  hashmap, fair-queued single-writer) determines side-channel
+  observability. Pattern-5 cluster work, Round 4 disposition.
+
+These are pinned in §7. The Round-3 cut-point lands the trait-
+surface contract — opaque-handle-bearing — and exposes the table-
+internal questions to Round 4's adversarial pass against the
+handle model itself. This is the rounds-budget compounding the
+discipline anticipates: each round's structural disposition
+surfaces new questions that the next round resolves.
+
+**Amendment-block framing (handle-indirection completion).**
+
+> The Round-2 workflow-shape pivot established that primitives
+> do not cross the trait surface. Round 3's adversarial pass
+> identified a residual: per-output derived secrets
+> (`output_secret_key`, `amount_blinding_factor`) crossed the
+> boundary as `Zeroizing<...>`-wrapped fields in `OutputClaim`,
+> imposing a long-lifetime wipe-discipline on every downstream
+> consumer that the trait could not enforce. The post-Round-3
+> §2.1 ships a handle-indirected contract: `try_claim_output`
+> returns an opaque `OutputHandle` rather than secret bytes;
+> `sign_transaction` resolves handles internally; per-output
+> secrets stay confined to `LocalKeys`'s workflow-internal
+> `HandleTable`. The "no secrets cross the trait boundary"
+> property becomes literal. The trait surface's signatures
+> change (`OutputClaim`'s field set; `TxInputSigningContext`'s
+> handle reference); the underlying capability is unchanged.
+
 ### 3.2 Phase 0b — `KeyError` / `KeyEngineError` split (§7-non-compliant)
 
 **Drift.** Existing `KeyError`
@@ -673,6 +797,17 @@ the trait surface's parameters and return types.
 |---|---|---|
 | `SignDomain` | `pub(crate) #[non_exhaustive] enum SignDomain { OutputSecretDerivation, TransactionSignature, FcmpPlusPlusWitness, MlKemChallenge }` | No longer a trait-level concept; lives inside `LocalKeys`'s impl. The cryptographic enforcement (preventing cross-domain signature reuse via per-domain HKDF chains) is unchanged from Round 1's framing — each impl-internal call site asserts the domain it's signing in, and the impl's `assert_sign_domain` (or equivalent) machinery rejects mismatches. The audit-grep argument shifts: reviewers grep for "internal HKDF-context derivation sites" rather than "trait-surface call sites." Stage 4 adds multisig witness / partial signature variants additively per Q9.2's `#[non_exhaustive]` disposition. |
 | `AccountPublicAddress` | `pub struct AccountPublicAddress { pub pqc_public_key: [u8; PQC_PUBLIC_KEY_BYTES], pub classical_address_bytes: [u8; CLASSICAL_ADDRESS_BYTES] }` | Mirror `AllKeysBlob`'s public side. Returned by `account_public_address` (the one trait method that hands out a borrowed reference rather than an owned message — addresses are stable for the wallet's lifetime, so a `&AccountPublicAddress` is honest). The 1216-byte ML-KEM PK + 65-byte classical address bytes shape is consistent with what ML-KEM-768 + the existing classical-address representation produces. |
+| `HandleTable` | `pub(crate) struct HandleTable { /* concurrent-access shape pinned in Round 4 */ }` | Workflow-internal state owned by `LocalKeys`. Maps `OutputHandle` → per-output secret material (`output_secret_key`, `amount_blinding_factor`) for outputs the wallet has claimed but not yet spent. Lives behind interior mutability (the `KeyEngine` trait is `&self` async; concurrent `try_claim_output` calls insert; `sign_transaction` looks up). The exact concurrent-access shape (sharded `RwLock`, lock-free hashmap, fair-queued single-writer, etc.) is **Round 4 work**; the shape selection couples to A6 (memory-pressure attack surface) and the Round-3 Pattern-5 cluster (cross-call state correlation as side-channel). The trait surface is unchanged regardless of inner shape. |
+
+#### Why a workflow-internal handle table — the handle-indirected workflow shape
+
+The Round-2 workflow-shape pivot (§3.1) established that **primitives** never cross the trait surface — raw shared secrets, HKDF intermediates, and the hybrid types themselves stay confined to `LocalKeys`'s stack frame. Round 3's adversarial pass surfaced that **derived secrets** still crossed: the original Round-2 `OutputClaim` shape carried `output_secret_key: Zeroizing<[u8; 32]>` and `amount_blinding_factor: Zeroizing<[u8; 32]>` as `pub` fields, which meant the orchestrator's address space held per-output spending secrets across the (potentially months-long) interval between claim and spend. The "secret intermediates never cross" claim was quantitatively true (high-cardinality intermediates absorbed) but qualitatively false (per-output derived secrets crossed anyway).
+
+The handle-indirected disposition completes the workflow-shape pivot's promise. `try_claim_output`'s impl inserts the per-output secret material into the workflow-internal `HandleTable` and returns an opaque `OutputHandle` to the orchestrator. The orchestrator's `OutputClaim` carries the handle alongside non-secret metadata (`key_image`, `amount_atomic_units`); the orchestrator never observes the secrets themselves. Spending later: the orchestrator passes the handle into `sign_transaction` via `TxToSign`'s inputs; the impl resolves the handle internally, signs using the per-output secret, and returns `TxSignatures` carrying no secret material. End-to-end, **no secret crosses the trait boundary** — neither intermediates nor derived secrets.
+
+The structural property the table delivers: a leaked `OutputHandle` is meaningless without `LocalKeys`'s table (the same property session tokens deliver vs. session keys). Handle-only disclosure does not compromise the underlying spending secret. The orchestrator's persistence layer, debug-print paths, and Stage-4 actor-channel boundaries can all carry handles without inheriting the wipe-on-drop discipline that secret bytes would impose.
+
+The cost is internal-to-`KeyEngine` complexity: a handle table to manage, a concurrent-access shape to choose, a lifecycle to define, a persistence story to pin. These concerns are deliberately scoped as Round 4 work (see §7); the Round-3 disposition lands the trait-surface contract — opaque-handle-bearing — and surfaces the table-internal questions as Round-4 candidates.
 
 > **Note on removed rows.** `X25519SharedSecret` (the net-new
 > Round 1 newtype for the 32-byte raw X25519 ECDH output),
@@ -792,6 +927,38 @@ hash output is intentional — view tags are short
 publicly-comparable bytestrings, not opaque hashes that need
 verification machinery.
 
+##### `OutputHandle`
+
+```rust
+/// Opaque reference to a per-output spending capability held
+/// inside `LocalKeys`'s workflow-internal `HandleTable`.
+///
+/// **Carries no secret material itself.** A leaked `OutputHandle`
+/// is meaningless without the originating engine's table; an
+/// attacker who observes a handle (via memory disclosure, debug
+/// print, or unencrypted persistence) cannot derive the
+/// underlying spending secret without the engine's internal
+/// mapping.
+///
+/// The orchestrator stores `OutputHandle` against per-output
+/// metadata (`key_image`, `amount_atomic_units`) inside whatever
+/// long-lived structure tracks claimed-but-unspent outputs
+/// (`transfer_details`, the wallet ledger). At spend time, the
+/// handle is referenced inside `TxToSign.inputs[i].handle`;
+/// `sign_transaction`'s impl resolves the handle internally to
+/// recover the per-output secret material and produce the
+/// signature.
+///
+/// **Inner shape (Round 4).** Whether the handle is a counter,
+/// a UUID, a 16-byte random ID, or a cryptographic commitment
+/// is pinned in Round 4 against the unforgeability requirement
+/// (per A7) and the persistence model selected (per the
+/// handle-persistence option-space, §7). The type stays opaque
+/// to the trait surface regardless of inner shape; downstream
+/// callers treat it as `Hash + Eq + Clone` only.
+pub struct OutputHandle(/* opaque inner shape; pinned in Round 4 */);
+```
+
 ##### `OutputClaimResult` and `OutputClaim`
 
 ```rust
@@ -810,49 +977,57 @@ pub enum OutputClaimResult {
 /// Structured non-secret claim payload from a successful output
 /// detection.
 ///
-/// **Cryptographic intermediates** (the X25519 raw 32-byte
-/// shared secret, the 64-byte hybrid shared secret, HKDF
-/// intermediate keying material) are **not** carried by this
-/// type — they are zeroized in-place inside `try_claim_output`'s
-/// stack frame. The fields below are the structured non-secret
-/// payload downstream balance / spend-tx-construction code
-/// needs.
+/// **No fields are secret-bearing.** The per-output spending
+/// secrets (the secret-key derivative, the amount-blinding
+/// factor, and any HKDF-derived intermediate material) live
+/// inside `LocalKeys`'s workflow-internal `HandleTable` keyed
+/// by `handle`; they are not exposed to the orchestrator. The
+/// only fields below are public on-chain data (`key_image`)
+/// and balance-display data (`amount_atomic_units`); neither
+/// imposes a `Zeroize` discipline on the receiver.
 pub struct OutputClaim {
-    /// The output's per-output secret-key material derivative
-    /// (used by spend-construction to produce the per-input
-    /// signing key for this output). Wrapped in `Zeroizing<...>`
-    /// because while the value is the *key* the wallet uses to
-    /// spend, it is bound to the per-output context (output
-    /// index + transaction context) rather than the wallet's
-    /// long-term spend secret. Rotation / churn across outputs
-    /// is what makes this distinct from the long-term
-    /// `AllKeysBlob` material.
-    pub output_secret_key: Zeroizing<[u8; 32]>,
-    /// The output's key image. Public; used by both wallet-side
-    /// double-spend tracking and consensus-side double-spend
-    /// detection.
+    /// Opaque reference to the per-output spending capability.
+    /// Stored by the orchestrator against the claimed output's
+    /// long-lived record; passed back into `sign_transaction`
+    /// via `TxToSign.inputs[i].handle` at spend time. Carries
+    /// no secret material; safe to log, persist, or transmit
+    /// across non-`KeyEngine` boundaries (subject to the
+    /// privacy concern that the handle's *existence* leaks
+    /// "this output belongs to this wallet" — observers should
+    /// not see handles for outputs they don't already know
+    /// belong to the wallet).
+    pub handle: OutputHandle,
+    /// The output's key image. Public on-chain after spend; used
+    /// by wallet-side double-spend tracking and consensus-side
+    /// double-spend detection.
     pub key_image: KeyImage,
-    /// The amount-blinding factor (Pedersen-commitment blinder).
-    /// Used by spend-construction to balance commitments across
-    /// the transaction. Not strictly secret (the receiver can
-    /// recompute it from the shared secret), but treated with
-    /// `Zeroizing` discipline to match the surrounding type's
-    /// security posture.
-    pub amount_blinding_factor: Zeroizing<[u8; 32]>,
-    /// The decrypted output amount (atomic units).
+    /// The decrypted output amount (atomic units). Non-secret;
+    /// the orchestrator displays it as part of the wallet's
+    /// balance presentation and uses it to drive transaction-
+    /// build amount accounting.
     ///
-    /// Open question for Round 3: should `OutputClaim` carry the
-    /// already-decrypted amount, or only the
-    /// `amount_blinding_factor` and let downstream code recompute
-    /// the amount? Decrypting at `try_claim_output` time is the
-    /// natural single-pass shape (the impl already has the shared
-    /// secret in scope); requiring downstream re-decryption forces
-    /// the secret-derivation path to run twice. Pinned here as
-    /// "decrypt at claim time, return the value" pending Round 3
-    /// pushback.
+    /// Decrypted at `try_claim_output` time (the impl already
+    /// has the shared secret in scope); requiring downstream
+    /// re-decryption would force the secret-derivation path to
+    /// run twice. The decrypted-at-claim-time disposition is
+    /// stable post-handle-pivot — the shared secret remains
+    /// confined to the impl's stack frame either way; only the
+    /// resulting `u64` crosses the boundary.
     pub amount_atomic_units: u64,
 }
 ```
+
+> **Round-3 deletion note.** The Round-2 `OutputClaim` shape
+> carried `output_secret_key: Zeroizing<[u8; 32]>` and
+> `amount_blinding_factor: Zeroizing<[u8; 32]>` as `pub` fields.
+> Both are deleted by the handle-indirected pivot. The
+> spending-secret material lives behind `handle` inside
+> `LocalKeys`'s `HandleTable`; the amount-blinding factor lives
+> there too (the impl regenerates it at sign time from the
+> per-output shared secret accessible via the handle, or stores
+> it in the table alongside the secret-key derivative — the
+> exact internal layout is impl freedom). The orchestrator's
+> address space no longer holds either secret.
 
 ##### `TxToSign` and `TxSignatures`
 
@@ -871,10 +1046,17 @@ pub struct OutputClaim {
 /// `TxToSign` and passes it to `sign_transaction` as the final
 /// step before broadcast.
 pub struct TxToSign {
-    /// Per-input signing context. Each entry carries the input's
-    /// FCMP++ membership-proof context, the per-input signing
-    /// message bytes, and any per-input HKDF binding context.
-    /// The exact shape is pinned in PR 5.
+    /// Per-input signing context. Each entry carries an
+    /// `OutputHandle` referencing the per-output spending
+    /// capability (resolved by `sign_transaction`'s impl
+    /// internally to the per-output secret material), plus the
+    /// input's FCMP++ membership-proof context, per-input
+    /// signing message bytes, and per-input HKDF binding
+    /// context. The exact shape — including the precise
+    /// placement of the handle inside `TxInputSigningContext`
+    /// — is pinned in PR 5; PR 3 forward-declares the type
+    /// with the constraint that one of its fields is `handle:
+    /// OutputHandle`.
     pub inputs: Vec<TxInputSigningContext>,
     /// Per-output context (commitment, amount-blinding factor,
     /// destination subaddress kem_pk). Used by the signing pass
@@ -1234,28 +1416,41 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// Workflow: try to claim an on-chain output for this wallet.
     ///
     /// Bundles X25519 view-tag pre-filter + hybrid decap + HKDF
-    /// chain + key-image computation behind a single trait
-    /// boundary. The `OutputDetectionInput` carries the per-output
-    /// detection context (hybrid ciphertext, view tag, output
-    /// index) sourced via `OutputDetectionInput::from_block_output`
-    /// at the scanner call site. Returns
-    /// `OutputClaimResult::Mine(OutputClaim)` on a successful
-    /// detection, carrying the per-output secret-key derivative,
-    /// key image, amount-blinding factor, and decrypted amount;
-    /// or `OutputClaimResult::NotMine` for outputs that don't
-    /// claim. Most outputs are `NotMine` in real scanning; the
-    /// X25519 pre-filter rejects them cheaply.
+    /// chain + key-image computation + handle-table insertion
+    /// behind a single trait boundary. The `OutputDetectionInput`
+    /// carries the per-output detection context (hybrid
+    /// ciphertext, view tag, output index) sourced via
+    /// `OutputDetectionInput::from_block_output` at the scanner
+    /// call site.
     ///
-    /// **Cryptographic intermediates never cross the trait
-    /// boundary.** The X25519 raw shared secret (32 bytes), the
-    /// 64-byte hybrid shared secret, and HKDF intermediate keying
-    /// material exist only transiently inside this method's stack
-    /// frame and are zeroized on drop per the workspace's
-    /// `Zeroize` / `ZeroizeOnDrop` discipline. The `OutputClaim`'s
-    /// secret-bearing fields (`output_secret_key`,
-    /// `amount_blinding_factor`) are wrapped in `Zeroizing<...>`;
-    /// the orchestrator owns the zeroize-on-drop discipline once
-    /// the claim crosses the boundary.
+    /// On a successful detection, the impl inserts the per-output
+    /// spending material (secret-key derivative, amount-blinding
+    /// factor, any HKDF-derived intermediates needed for spend
+    /// construction) into `LocalKeys`'s workflow-internal
+    /// `HandleTable` and returns
+    /// `OutputClaimResult::Mine(OutputClaim { handle, key_image,
+    /// amount_atomic_units })` — the orchestrator receives the
+    /// opaque handle plus public metadata; the spending secrets
+    /// stay confined to the engine's address space. On a rejected
+    /// detection (X25519 pre-filter mismatch, or post-decap
+    /// validity check failure), returns
+    /// `OutputClaimResult::NotMine`. Most outputs are `NotMine`
+    /// in real scanning; the X25519 pre-filter rejects them
+    /// cheaply without entering the handle-table insertion path.
+    ///
+    /// **No secret material crosses the trait boundary.** The
+    /// X25519 raw shared secret (32 bytes), the 64-byte hybrid
+    /// shared secret, HKDF intermediate keying material, the
+    /// per-output secret-key derivative, and the amount-blinding
+    /// factor all stay inside this method's stack frame or
+    /// inside `LocalKeys`'s `HandleTable`; none cross the trait
+    /// boundary. The `OutputClaim` returned to the orchestrator
+    /// carries only an opaque `handle: OutputHandle` reference
+    /// plus non-secret on-chain metadata (`key_image`,
+    /// `amount_atomic_units`). This is the load-bearing security
+    /// property the handle-indirected workflow shape delivers;
+    /// see §3.1.1 / §3.3 / §4-deliberately-does-not-expose for
+    /// the structural argument.
     async fn try_claim_output(
         &self,
         input: &OutputDetectionInput,
@@ -1266,22 +1461,41 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// The `TxToSign` parameter bundles all per-input signing
     /// context (`Vec<TxInputSigningContext>`), per-output context
     /// (`Vec<TxOutputContext>`), and FCMP++ transaction-level
-    /// context (`FcmpPlusPlusContext`). The exact field shapes
+    /// context (`FcmpPlusPlusContext`). Each
+    /// `TxInputSigningContext` references its per-output spending
+    /// capability via `handle: OutputHandle` (the opaque reference
+    /// returned by an earlier `try_claim_output` call); the
+    /// implementor resolves the handle internally against
+    /// `LocalKeys`'s `HandleTable` to recover the per-output
+    /// secret-key derivative and amount-blinding factor needed
+    /// to produce the per-input signature. The exact field shapes
     /// for the per-input / per-output / per-tx context types are
     /// pinned in PR 5 (`PendingTxEngine`) alongside that trait's
     /// transaction-build workflow; PR 3 carries forward
-    /// declarations adequate for trait extraction. The implementor
-    /// handles per-input hybrid signature production, FCMP++
-    /// witness generation, and any other signature-class work the
-    /// transaction requires. Returns `TxSignatures` carrying the
+    /// declarations adequate for trait extraction with the
+    /// constraint that `TxInputSigningContext` carries an
+    /// `OutputHandle`. Returns `TxSignatures` carrying the
     /// `Vec<TxInputSignature>` and `Vec<FcmpPlusPlusWitness>`
-    /// bundle.
+    /// bundle; all returned material is signature-class
+    /// (publicly verifiable; no `Zeroize` discipline applies).
+    ///
+    /// **Handle resolution failure modes** (Round-4 follow-on:
+    /// concrete `KeyEngineError` variants land at implementation
+    /// time): handle not present in table (caller bug or
+    /// post-eviction reference); handle from a different engine
+    /// instance (cross-engine reference); handle present but the
+    /// underlying output has already been consumed by an
+    /// earlier `sign_transaction` call (replay rejection per
+    /// the per-method replay-behavior contract — see §7's
+    /// Pattern-6 cluster).
     ///
     /// **Cross-domain signature reuse is prevented cryptographically
-    /// inside the impl** via per-domain HKDF chains (the impl's
-    /// `SignDomain` enumeration); not at the trait surface, because
-    /// `SignDomain` is no longer a trait-level concept (see §3.3
-    /// Sub-bundle A).
+    /// inside the impl** via per-domain HKDF chains. The
+    /// `SignDomain` enumeration (§3.3 Sub-bundle A) is no longer
+    /// a trait-level concept; the binding from workflow method
+    /// to `SignDomain` variant is a Round-3 pattern-2 cluster
+    /// item with an A5 disposition pinned in commit 3c (marker
+    /// trait + associated const for compile-time enforcement).
     async fn sign_transaction(
         &self,
         tx: &TxToSign,
@@ -1298,22 +1512,23 @@ rationale; surfacing the rationale here keeps the structural
 choice legible against future "shouldn't `KeyEngine` also expose
 X?" review questions.
 
-- **Hybrid encapsulation against external recipient public keys.**
-  The sender's `KeyEngine` does not mediate hybrid encapsulation;
-  `HybridX25519MlKem::encapsulate` is a free function in
-  `shekyl-crypto-pq` consumed at transaction-build time outside
-  the `KeyEngine` boundary. A `KeyEngine::encapsulate(...)` method
-  would expose nothing the free function doesn't already expose
-  and would conflate "operations that touch the wallet's secret
-  keys" with "operations that don't" at the same trait. (L1.1)
-- **Signature verification.** Verification needs only public
+- **(1) Hybrid encapsulation against external recipient public
+  keys.** The sender's `KeyEngine` does not mediate hybrid
+  encapsulation; `HybridX25519MlKem::encapsulate` is a free
+  function in `shekyl-crypto-pq` consumed at transaction-build
+  time outside the `KeyEngine` boundary. A
+  `KeyEngine::encapsulate(...)` method would expose nothing the
+  free function doesn't already expose and would conflate
+  "operations that touch the wallet's secret keys" with
+  "operations that don't" at the same trait. (L1.1)
+- **(2) Signature verification.** Verification needs only public
   material; not a `KeyEngine` concern. Lives in
   `shekyl-crypto-pq::signature::HybridEd25519MlDsa::verify` (free
   function) or in the verification call sites themselves.
   Including verification at the trait surface would invite a
   generic-signing-oracle abuse pattern that the workflow shape
   specifically prevents. (L1.3)
-- **Wallet creation seed-derivation.** Runs once before the
+- **(3) Wallet creation seed-derivation.** Runs once before the
   `KeyEngine` exists. `LocalKeys::from_seed(seed: &WalletSeed) ->
   Result<Self, KeyError>` is the wallet-create path's
   responsibility (and `LocalKeys::from_test_seed(test_label: &str)`
@@ -1322,27 +1537,76 @@ X?" review questions.
   wallet-open / derivation error type stays as the existing
   `KeyError` (per §3.2's split); it does not leak into
   `KeyEngineError`. (L1.5)
-- **Secret intermediates never cross the trait boundary.** The
-  X25519 raw shared secret (32 bytes), the 64-byte hybrid shared
-  secret, and HKDF intermediate keying material exist only
-  transiently inside `try_claim_output`'s and `sign_transaction`'s
-  stack frames. They are zeroized on drop per the workspace's
-  `Zeroize` / `ZeroizeOnDrop` discipline
-  ([`35-secure-memory.mdc`](../../.cursor/rules/35-secure-memory.mdc)).
-  The orchestrator's address space sees only the structured
-  non-secret outputs (`OutputClaimResult`'s `OutputClaim`,
-  `TxSignatures`); secret intermediates are not exposed, not
-  borrowed across `await` points to non-`KeyEngine` callers, and
-  not returned. **This is the load-bearing security property that
-  workflow-shape trait surfaces deliver and primitive-shape
-  surfaces (e.g., a hypothetical `view_ecdh -> X25519SharedSecret`)
-  violate.** A primitive-shape trait would force the orchestrator's
-  address space to hold a secret across the trait boundary; the
-  workflow-shape trait keeps the secret confined to the
-  `KeyEngine` impl's stack frame. The "Round 3 reviewer asks
-  'what's the security difference between primitive-shape and
-  workflow-shape?'" question is answered here, in the doc, not
-  derived during review.
+- **(4) Secret material in any form across the trait boundary.**
+  The handle-indirected workflow shape makes this property
+  literal, not quantitative. Three classes of secret stay inside
+  the `KeyEngine` impl:
+  - **Long-term key material** (`AllKeysBlob`'s spend / view
+    secrets, the wallet-level ML-KEM secret) — owned exclusively
+    by `LocalKeys`; never crosses the boundary at all.
+  - **Per-output derived secrets** (the per-output secret-key
+    derivative, the amount-blinding factor) — held inside
+    `LocalKeys`'s workflow-internal `HandleTable`, keyed by
+    `OutputHandle`; the orchestrator sees only the opaque
+    handle. Spend-time access is mediated by `sign_transaction`
+    resolving the handle internally and never returning the
+    underlying secret bytes.
+  - **Cryptographic intermediates** (the X25519 raw 32-byte
+    shared secret, the 64-byte hybrid shared secret, HKDF
+    intermediate keying material) — exist only transiently in
+    the workflow methods' stack frames; zeroized on drop per
+    the workspace's `Zeroize` / `ZeroizeOnDrop` discipline
+    ([`35-secure-memory.mdc`](../../.cursor/rules/35-secure-memory.mdc)).
+  The orchestrator's address space sees only structured non-
+  secret outputs (`OutputClaim`'s `handle` + `key_image` +
+  `amount_atomic_units`; `TxSignatures`'s public signature
+  bundle). Handle disclosure leaks "this output belongs to this
+  wallet" (a privacy concern, see §7's Pattern-7 cluster) but
+  does **not** leak the underlying spending secret — a leaked
+  handle is meaningless without `LocalKeys`'s table, the same
+  property session tokens deliver vs. session keys. **This is
+  the load-bearing security property the handle-indirected
+  workflow shape delivers and primitive-shape surfaces (e.g., a
+  hypothetical `view_ecdh -> X25519SharedSecret`) or
+  Round-2-shape returns (e.g., the deleted
+  `OutputClaim.output_secret_key: Zeroizing<[u8; 32]>` field)
+  violate.** The "Round 3 reviewer asks 'what's the security
+  difference between primitive-shape and workflow-shape?'"
+  question is answered here, in the doc, not derived during
+  review.
+- **(5) Direct access to long-term key material.** No
+  `get_view_secret(...)`, no `get_spend_secret(...)`, no
+  byte-level view of `AllKeysBlob`. The workflow-shape boundary
+  depends structurally on these accessors not existing — once
+  long-term key material is reachable through the trait, the
+  orchestrator can orchestrate its own primitives outside the
+  impl and the boundary collapses. Future implementors
+  (HSM-backed, hardware-key) inherit the property by adopting
+  the trait surface; an HSM that exposes raw key bytes to the
+  client is not a valid `KeyEngine` impl regardless of how it
+  implements the workflow methods.
+- **(6) Key rotation, revocation, derivation-reset.** V3.0 does
+  not support these. Wallet-key rotation is handled by wallet
+  re-creation (rebuild from new seed; manually transfer
+  balances). Stage-4 / V4 reviewers asking "what's the migration
+  story when a wallet's classical half is compromised?" find the
+  answer here: there is no in-engine rotation surface; the
+  recovery path is operational, not cryptographic. Future
+  rotation-as-runtime-operation is V4-territory pending the
+  lattice-only transition; if it lands, it does so as a new
+  workflow method, not as a primitive on the existing surface.
+- **(7) View-only / spend-only mode runtime distinction.**
+  Handled at construction: `LocalKeys::from_view_only_seed(...)`
+  returns a `KeyEngine` whose `sign_transaction` returns
+  `Err(KeyEngineError::SpendKeyUnavailable)` while
+  `try_claim_output` and `account_public_address` /
+  `derive_subaddress(_, Audit)` work normally. The trait does
+  not expose a runtime mode flag or separate trait-method
+  variants; the construction-time discrimination is sufficient,
+  and the runtime error path lives in `KeyEngineError` rather
+  than in trait-shape. (Auditing nodes, exchange listeners,
+  multi-party-hosted view nodes consume this construction path;
+  the trait's contract is identical regardless of mode.)
 
 ### Notable changes vs. the pre-amendment shape
 
@@ -1437,25 +1701,47 @@ to Round 2 refinement):
    (production) and `#[cfg(test)] from_test_seed` (test fixture)
    constructors.
 3. Sub-bundle B message types (`OutputDetectionInput`,
-   `OutputClaimResult`, `OutputClaim`, `TxToSign`, `TxSignatures`,
-   `SubaddressPurpose`, `SubaddressFor`, `RecipientSubaddress`,
-   `SubaddressKeyPair`, `ViewTag`); pinned shapes from commit 2 of
-   this design-doc round.
-4. `Engine<S, D, L, K>` parameterization.
-5. Migrate consumers from `engine.keys` direct field access to
+   `OutputHandle`, `OutputClaimResult`, `OutputClaim`, `TxToSign`,
+   `TxSignatures`, `SubaddressPurpose`, `SubaddressFor`,
+   `RecipientSubaddress`, `SubaddressKeyPair`, `ViewTag`); pinned
+   shapes from commit 2 + Round-3 commit 3a of this design-doc
+   round.
+4. **`HandleTable` workflow-internal state inside `LocalKeys`.**
+   Per Round 3's handle-indirected pivot (§3.1.2). Concurrent-
+   access shape, eviction policy, persistence story, handle-ID
+   unforgeability shape — all Round-4 dispositions. PR 3
+   implementation lands the simplest viable shape (per §7.11's
+   Round-3 lean: ephemeral handles + restart-rescan;
+   sharded-`RwLock` table; counter-with-engine-ID handles) and
+   updates against Round-4 outcomes if the dispositions change
+   before the feat branch cuts.
+5. `try_claim_output` impl: X25519 view-tag pre-filter + hybrid
+   decap + HKDF chain + key-image computation + handle-table
+   insertion; returns handle-bearing `OutputClaim`.
+6. `sign_transaction` impl: per-input handle resolution against
+   the table + per-domain HKDF derivation (per Round-3 A5
+   disposition: marker trait + associated const, lands in commit
+   3c of this design-doc round) + hybrid signature production +
+   FCMP++ witness generation.
+7. `Engine<S, D, L, K>` parameterization.
+8. Migrate consumers from `engine.keys` direct field access to
    `K: KeyEngine` trait dispatch.
-6. `FaultInjecting<K: KeyEngine>` test wrapper in `test_support`
+9. `FaultInjecting<K: KeyEngine>` test wrapper in `test_support`
    (or wherever the test substrate accumulates); `#[cfg(test)]`-
-   gated. **No `MockKeys`** (per §6.4 / §2.1.2).
-7. Hybrid test exercising one §5.2 property predecessors haven't
-   covered (selection per §6.4 — (a) layered-call error
-   preservation, exercised via `FaultInjecting<LocalKeys>`).
-8. Benchmark harness for `KeyEngine` hot-path methods (selection
-   per §6.5; `account_public_address` plus the `try_claim_output`
-   bench split queued for commit 2 of this design-doc round).
-9. Docs propagation (this design doc's realignment + CHANGELOG
-   entry + `V3_ENGINE_TRAIT_BOUNDARIES.md` post-PR-3 cross-anchor
-   updates).
+   gated (visibility discipline per Round-3 commit 3d). **No
+   `MockKeys`** (per §6.4 / §2.1.2).
+10. Hybrid test exercising one §5.2 property predecessors haven't
+    covered (selection per §6.4 — (a) layered-call error
+    preservation, exercised via `FaultInjecting<LocalKeys>` against
+    handle-bearing message shapes).
+11. Benchmark harness for `KeyEngine` hot-path methods (selection
+    per §6.5; `account_public_address` plus the `try_claim_output`
+    Mine/NotMine split plus optional handle-resolution and
+    sign-transaction-full benches per Round 4's table-shape
+    disposition).
+12. Docs propagation (this design doc's realignment + CHANGELOG
+    entry + `V3_ENGINE_TRAIT_BOUNDARIES.md` post-PR-3 cross-anchor
+    updates).
 
 The synchronous wrappers question (PR 2's `Engine::refresh` /
 `refresh_with` `LocalLedger`-specialized impl block) does not
@@ -1497,12 +1783,31 @@ arguments — same property PR 1 and PR 2 preserved.
 PR 3 exercises **(a) layered-call error preservation** — a runtime
 key-op error injected through a `FaultInjecting<LocalKeys>` wrapper
 propagates through `Engine<S>`'s wallet-level workflow methods
-(`try_claim_output(&OutputDetectionInput)`,
-`sign_transaction(&TxToSign)`) with the error variant intact, the
-`OutputClaimResult` / `TxSignatures` return types not produced
-(the error short-circuits before construction), and the
-layered-call structure preserved across the wallet-level method's
-internal trait dispatch.
+(`try_claim_output(&OutputDetectionInput) -> OutputClaimResult`,
+`sign_transaction(&TxToSign) -> TxSignatures`) with the error
+variant intact, the `OutputClaimResult` / `TxSignatures` return
+types not produced (the error short-circuits before construction),
+and the layered-call structure preserved across the wallet-level
+method's internal trait dispatch.
+
+Under the handle-indirected workflow contract, the test exercises
+two specific error-propagation paths:
+
+- **`try_claim_output` failure** — `FaultInjecting<LocalKeys>`
+  injects a `KeyEngineError` variant before the real impl reaches
+  the handle-table insertion path; the wallet-level method
+  observes the error without producing an `OutputHandle`. The
+  test verifies that no leaked handle escapes the failed call
+  (no orphan entry in the handle table; no partially-constructed
+  `OutputClaim` returned to the orchestrator).
+- **`sign_transaction` failure with handle resolution** — the
+  test seeds the handle table via a successful prior
+  `try_claim_output` call, then injects a `KeyEngineError`
+  variant on the subsequent `sign_transaction` call. The test
+  verifies that the handle remains valid post-failure
+  (signature failure does not consume the handle; the orchestrator
+  can retry) and that the layered-call error path preserves the
+  variant intact.
 
 **Rationale (recorded verbatim).**
 
@@ -1615,26 +1920,43 @@ the workflow-shape trait surface:
 - `engine_trait_bench_key_try_claim_output_mine` — async
   workflow path for the **rare-but-expensive** case: an output
   whose pre-filter accepts and triggers the full hybrid decap
-  + HKDF chain + key-image computation. Measures the full
-  output-detection-and-claim cost. Less time-dominant than the
-  NotMine path in aggregate scanning but worth a separate bench
-  because the workloads are structurally distinct (combining
-  them into one bench produces a number whose meaning depends
-  on the test data's Mine:NotMine ratio — uninformative).
-- `engine_trait_bench_key_sign_transaction` — async workflow
-  hot path for the spend path; potentially deferred to Phase-2a
-  if hybrid-signature setup cost dwarfs the trait-dispatch
-  overhead measurement, or if the bench fixture (a complete
-  `TxToSign` with FCMP++ context) is structurally too heavy to
-  set up at PR 3 cut-point. The fixture-construction work
-  shares substrate with PR 5 (`PendingTxEngine`) and may land
-  there instead.
+  + HKDF chain + key-image computation + handle-table insertion.
+  Measures the full output-detection-and-claim cost including
+  the workflow-internal handle-table insertion. Less time-
+  dominant than the NotMine path in aggregate scanning but
+  worth a separate bench because the workloads are structurally
+  distinct (combining them into one bench produces a number
+  whose meaning depends on the test data's Mine:NotMine ratio
+  — uninformative; reviewers familiar with criterion's
+  parameterized bench shape may ask why not parameterize over
+  the ratio — the answer is that the workloads have different
+  cost regimes that warrant per-regime measurement, with system-
+  level wallet-refresh modeling deferred to higher-level benches
+  in PR 4 or PR 5).
+- `engine_trait_bench_key_sign_transaction_resolve_handle` —
+  amortized handle-table lookup cost for `sign_transaction`'s
+  per-input handle resolution. Round-4 candidate; the actual
+  cost depends on the handle-table's concurrent-access shape
+  (sharded `RwLock` vs lock-free hashmap vs fair-queued) which
+  is itself Round 4 work. The bench may land alongside Round 4's
+  table-shape disposition rather than at PR 3 cut-point if the
+  shape isn't pinned by then.
+- `engine_trait_bench_key_sign_transaction_full` — async
+  workflow hot path for the spend path: handle resolution +
+  per-input hybrid signature production + FCMP++ witness
+  generation. Potentially deferred to Phase-2a if hybrid-
+  signature setup cost dwarfs the trait-dispatch overhead
+  measurement, or if the bench fixture (a complete `TxToSign`
+  with FCMP++ context) is structurally too heavy to set up at
+  PR 3 cut-point. The fixture-construction work shares substrate
+  with PR 5 (`PendingTxEngine`) and may land there instead.
 
 The frozen baselines and cumulative-delta documentation pattern
 established in PR 2's `docs/PERFORMANCE_BASELINE.md` extend to
-PR 3; the post-PR-3 row count grows by 3–4 (one for
+PR 3; the post-PR-3 row count grows by 3–5 (one for
 `account_public_address`, two for the `try_claim_output` split,
-optionally one for `sign_transaction`).
+optionally one for `sign_transaction_resolve_handle` once Round 4
+pins the table-shape, optionally one for `sign_transaction_full`).
 
 **Bench fixture shape.** `try_claim_output_not_mine` and
 `try_claim_output_mine` need different fixture inputs:
@@ -1851,6 +2173,142 @@ per-trait-PR template content:
   `replace_x` analog of PR 2."
 
 (L3.3)
+
+### 7.10 Handle-table memory-pressure attack (A6)
+
+**Round-4 disposition required.** A6 from Round 3's adversarial
+pass. An adversary who can make the wallet scan a large block
+range (broadcasting many crafted outputs that pass the X25519
+pre-filter, or otherwise inflating the Mine-output count) can
+force the workflow-internal `HandleTable` to grow without bound
+between successful claims and eventual spends. Long-lived wallets
+with infrequent spends accumulate handles indefinitely.
+
+**Round-4 candidate dispositions:**
+
+- **Hard size cap with eviction.** The table grows up to a
+  configured cap; insertions past the cap evict according to a
+  documented policy (LRU; orchestrator-pinned-vs-unpinned;
+  persistence-aware aging). Eviction-policy choice itself is a
+  Round-4 design question; the orchestrator's interaction with
+  evicted handles (silent re-claim via re-scan? error variant?)
+  affects the trait surface's `KeyEngineError` enumeration.
+- **Backpressure / orchestrator-cooperative pruning.** The
+  trait surface gains a method (`release_handle(OutputHandle)`
+  or similar) that the orchestrator calls when an output is
+  permanently spent or a wallet is closed. The table stays
+  bounded by orchestrator discipline rather than internal
+  policy.
+- **Persistence-bounded growth.** If handle persistence ships
+  as the disk-mapping option (per §7.11 below), the table's
+  growth is bounded by available disk rather than memory.
+  Memory-pressure becomes a non-issue at the cost of disk
+  pressure and persistence-layer security discipline.
+
+The disposition couples to §7.11 (handle persistence). Round 4
+selects.
+
+### 7.11 Handle persistence across wallet restart
+
+**Round-4 disposition required.** Three option-space candidates
+surfaced in Round 3 synthesis; PR 3's Round-3 lean is **(1)** for
+V3.0 with explicit deferral of (2) to V3.x as the performance
+optimization when restart cost matters.
+
+- **(1) Ephemeral handles, restart-rescan.** Wallet startup
+  re-runs `try_claim_output` against persisted ciphertexts;
+  rebuilds handle table from scratch. Operationally heavy at
+  startup (linear in claim count: ~1 s for 10K outputs at
+  ~100 µs/decap) but conceptually simple. No persistence-layer
+  security boundary to get wrong. Cross-restart consistency is
+  trivial because the table is rebuilt from scratch.
+- **(2) Persisted handle → ciphertext mapping.** The handle
+  table persists alongside the wallet's transfer-details
+  storage; restart loads it without re-scanning. The
+  persistence layer must be wallet-encryption-aware; if the
+  table includes references to secret material directly, the
+  table itself becomes a persistence-secret. The natural shape
+  is "table persists handle → ciphertext-pointer pairs and
+  re-derives secrets from view secret + ciphertext on demand"
+  — equivalent to (3) at a higher level.
+- **(3) Handle is deterministic from ciphertext.** `handle =
+  HKDF(view_secret, "shekyl/output-handle-v1", ciphertext_hash)`.
+  Stateless: no table; lookup at spend time = re-decap. Pays
+  the decap cost twice (claim + spend) but the V3.0
+  implementation is structurally cleanest. Memory-pressure
+  attack (A6) is dissolved.
+
+Round-3 lean: **(1)**. Reasoning: simplest correctness story
+for V3.0; the ~1 s startup cost is acceptable for desktop and
+server wallets; mobile wallets typically have fewer outputs and
+constrained CPU but the bound stays operationally manageable.
+**(2)** introduces a persistence-layer security boundary that
+PR 4–7 work has to consume correctly — premature commitment.
+**(3)** is structurally cleanest but doubles the per-output
+detection cost, and the bench impact is direct (`_mine` bench
+absorbs the decap-twice cost). Round 4 ratifies the Round-3
+lean or amends.
+
+### 7.12 Handle unforgeability (A7)
+
+**Round-4 disposition required.** A7 from Round 3's adversarial
+pass. If handles are predictable (e.g., monotonic counter), an
+attacker who can inject controlled outputs into the wallet's
+scan stream might predict assigned handle IDs and reference them
+in unrelated contexts (cross-engine references, cross-session
+replay, etc.).
+
+**Round-4 candidate dispositions:**
+
+- **Counter-based handles** (8 bytes, monotonic per engine
+  instance). Cheap; predictable; vulnerable to A7 unless the
+  trait contract enforces "handle was issued by this engine
+  instance" at resolution time (e.g., engine-instance ID bound
+  into the handle).
+- **UUID-based handles** (16 bytes; v4 random). Unpredictable;
+  collision-resistant under birthday bound; standard library
+  support. Probably the V3.0-proportional choice.
+- **Cryptographic handles** (16 bytes from a CSPRNG, or HKDF-
+  derived from view secret + per-handle nonce). Unforgeable
+  under standard cryptographic assumptions; closes A7
+  completely. Cost is similar to UUID at the storage-and-
+  comparison level; the unforgeability property is structurally
+  stronger.
+
+Round-4 selects. The choice couples to §7.11's persistence
+disposition: under (1), handle uniqueness only needs to hold per
+session, so counter-with-engine-ID is sufficient. Under (2)/(3),
+handles persist across sessions or are deterministic from
+ciphertext, which constrains the choice differently.
+
+### 7.13 Handle-table concurrency quality (Pattern-5 cluster)
+
+**Round-4 disposition required.** Per Round 3 Pattern-5 cluster
+(cross-call state correlation as side-channel). The handle
+table's concurrent-access shape is interior mutability behind
+the `&self` async trait surface. Side-channel observers can
+infer table state changes by measuring response-time variance
+(insertion vs no-op), lock-contention patterns, and cache-miss
+patterns under concurrent load.
+
+**Round-4 candidate dispositions:**
+
+- **Sharded `RwLock<HashMap<...>>`.** Bounded contention; standard
+  pattern; observable contention under sustained adversarial
+  load.
+- **Lock-free hashmap.** Higher complexity; lower contention
+  observability; depends on a vetted dependency
+  (`dashmap`, `crossbeam`, etc.).
+- **Fair-queued single-writer.** Eliminates contention timing
+  channels at the cost of per-call queue overhead. Useful if
+  the hot-path is read-dominated (lookups during
+  `sign_transaction`) with rare writes (insertions during
+  `try_claim_output`).
+
+Round-4 selects, with explicit timing-channel analysis under
+concurrent-load benchmarks. The selection feeds the
+`engine_trait_bench_key_sign_transaction_resolve_handle` bench's
+expected cost regime.
 
 ### 7.5 `AllKeysBlob: Clone` derive — audit or delete
 
