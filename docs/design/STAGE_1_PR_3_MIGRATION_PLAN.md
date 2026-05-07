@@ -562,9 +562,9 @@ removal of the source the fallback would have read.
 
 ```
 M3a (foundation)
- ├─→ 3b (scanner reroute + source switch)
- │    └─→ 3d (schema cleanup; property activates) ──→ 3e (docs)
- └─→ 3c (additive test caller)              ──→ 3d
+ ├─→ M3b (scanner reroute + source switch)
+ │    └─→ M3d (schema cleanup; property activates) ──→ M3e (docs)
+ └─→ M3c (additive test caller)              ──→ M3d
 ```
 
 M3b and M3c can merge in parallel. Both depend on M3a; both
