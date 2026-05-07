@@ -22,7 +22,7 @@
 //! trajectory visible to future readers — "everything subaddress-related"
 //! lives here.
 //!
-//! ## Distinction from "classical-Monero"
+//! ## "Classical Edwards-curve", not "classical-Monero"
 //!
 //! The functions below are **classical Edwards-curve** in the
 //! pre-quantum-vs-PQC sense, not Monero-inherited. The pattern

@@ -552,8 +552,8 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// # Recipient purpose — derivation cost
     ///
     /// The X25519 component of `kem_pk` derives via the existing
-    /// classical-Monero subaddress-derivation machinery (cheap;
-    /// scalar arithmetic). The ML-KEM-768 component derives via
+    /// classical Edwards-curve subaddress-derivation machinery
+    /// (cheap; scalar arithmetic). The ML-KEM-768 component derives via
     /// deterministic keygen seeded by
     /// `HKDF-Expand(view_secret, SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT
     /// || subaddress_index_le_bytes)` per

@@ -452,30 +452,6 @@ citing in a review.
 
 ## V3.1 — audit response and stressnet gates
 
-- **Rename "classical-Monero" → "classical Edwards-curve" project-wide.**
-  The phrase "classical-Monero" appears in `STAGE_1_PR_3_KEY_ENGINE.md`
-  (~12 instances) and `rust/shekyl-engine-core/src/engine/traits/key.rs`
-  (line 525, doc-comment for `KeyEngine::derive_subaddress`). It misframes
-  Shekyl-genesis-locked subaddress derivation as Monero-inherited, which
-  contradicts `60-no-monero-legacy.mdc` ("no Monero-era compatibility code
-  exists at all"). The structural similarity to upstream Monero's pattern
-  is intentional, but the parameters (`shekyl-subaddr-v1\0` domain tag,
-  flat `u32` namespace per `V3_WALLET_DECISION_LOG.md`, Shekyl's byte
-  encoding) are forward Shekyl crypto, not legacy compat. Replace with
-  "classical Edwards-curve" (the pre-quantum-vs-PQC sense, paired with
-  the hybrid KEM component that lives alongside in
-  `shekyl-crypto-pq::subaddress`). Spot-fixed in M3a Commit 4a within
-  that commit's scope (`shekyl-crypto-pq/Cargo.toml`,
-  `shekyl-crypto-pq/src/subaddress.rs`,
-  `shekyl-engine-state/src/subaddress.rs`,
-  `shekyl-scanner/src/view_pair.rs`); the broader project-wide sweep
-  (design doc + landed `key.rs` doc-comment) folds into M3a Commit 5's
-  documentation realignment per `91-documentation-after-plans.mdc`.
-  Cross-references: M3a Commit 4a (`subaddress.rs`'s "Distinction from
-  classical-Monero" section), `60-no-monero-legacy.mdc`,
-  `STAGE_1_PR_3_KEY_ENGINE.md`. Target: V3.1 (lands as part of M3a
-  Commit 5).
-
 - **`derive_output_handle` Python reference script.** Stage 1 PR 3
   M3a commit 2 lands the Rust implementation of `derive_output_handle`
   (cSHAKE256, per `STAGE_1_PR_3_KEY_ENGINE.md` §7.12) with self-generated

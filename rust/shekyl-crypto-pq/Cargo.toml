@@ -71,8 +71,8 @@ shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
 # intermediate `ViewPair` state-bearing object). The derivation is
 # Shekyl-genesis-locked; the structural similarity to upstream Monero's
 # subaddress derivation is intentional but is not a Monero-compatibility
-# shim — see `crate::subaddress`'s "Distinction from classical-Monero"
-# section and `60-no-monero-legacy.mdc`.
+# shim — see `crate::subaddress`'s "Classical Edwards-curve, not
+# classical-Monero" section and `60-no-monero-legacy.mdc`.
 shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
 # Typed wallet-state JSON ser/des (WALLET_FILE_FORMAT_V1 region 2). Versioned
 # by `state_schema_version`; mismatched version refuses to load, never silently

@@ -347,6 +347,146 @@ possible.
 files edited including re-exports and the `Cargo.toml` feature
 flip.
 
+#### Landing notes (M3a closed)
+
+M3a landed on `feat/stage-1-pr3-m3a` as six commits and diverged
+from the estimate above in three structural ways. Each divergence
+is recorded against the discipline that drove it.
+
+**Sub-commit breakdown.**
+
+1. *`crypto-pq: enable sha3 zeroize feature for cSHAKE256 wipe-on-drop`*
+   — direct-dep `Cargo.toml` change wiring `Sha3State`'s `Zeroize`
+   impl into the `shekyl-crypto-pq` build graph. Pre-cursor for
+   sub-commit 2.
+2. *`crypto-pq: add OutputHandle and ViewSecret newtypes (cSHAKE256, §7.12)`*
+   — `OutputHandle` newtype, `ViewSecret` newtype (`#[repr(transparent)]`,
+   FFI-layout-stable with `shekyl_ffi::ShekylAllKeysBlob.view_sk`),
+   `derive_output_handle` cSHAKE256 derivation per §7.12 with locked
+   reference vectors.
+3. *`engine: introduce KeyEngine trait surface and KeyImage newtype (M3a §4)`*
+   — `KeyEngine` trait surface in `shekyl-engine-core/src/engine/traits/key.rs`,
+   supporting message types (`AccountPublicAddress`, `OutputDetectionInput`,
+   `OutputClaim`, `OutputClaimResult`, `SubaddressFor`, `SubaddressPurpose`,
+   `SubaddressKeyPair`, `RecipientSubaddress`, `TxInputSigningContext`,
+   `SourceSecretsBundle`, `TxToSign`/`TxOutputContext`/
+   `FcmpPlusPlusContext`, `TxSignatures`, `TxInputSignature`,
+   `FcmpPlusPlusWitness`, `ViewTag`), `KeyEngineError` (empty
+   `#[non_exhaustive]` starter shape), and the `KeyImage` newtype
+   in `shekyl-crypto-pq::key_image`.
+4. *`crypto-pq: relocate subaddress derivation from shekyl-scanner (M3a §6.4)`*
+   — classical Edwards-curve subaddress derivation (`subaddress_derivation_scalar`,
+   `subaddress_keys`) relocated from `shekyl-scanner` to
+   `shekyl-crypto-pq::subaddress`; `SubaddressIndex::to_canonical_bytes`
+   accessor and `PRIMARY` constant added; `ViewPair::subaddress_keys`
+   converted to a thin call-through.
+5. *`engine: implement LocalKeys (M3a §4.1, KeyEngine in-process actor)`*
+   — `LocalKeys` struct (private `AllKeysBlob`, cached
+   `AccountPublicAddress`, pre-computed `DerivedScalars`, `RwLock`-guarded
+   subaddress registry); production constructor `from_keys_blob`
+   and `#[cfg(test)] from_test_seed`; real implementations of
+   `account_public_address`, `derive_subaddress(_, Audit)`, and
+   `try_claim_output`; named-infrastructure-gap stubs for
+   `derive_subaddress(_, Recipient)` and `sign_transaction` with
+   their `KeyEngineError` variants
+   (`RecipientSubaddressKemKeygenNotImplemented`,
+   `SignTransactionTraitSurfaceIncomplete`); 11 unit / integration
+   tests including end-to-end claim paths driven by
+   `construct_output`.
+6. *`docs: M3a landing realignment (PR-3 Commit 5)`* — this commit.
+
+**Divergence 1 — `OutputHandle` placement.** Plan estimate said
+new `rust/shekyl-engine-core/src/engine/handle.rs` (~80 lines).
+Actual: `OutputHandle` and `derive_output_handle` live in
+`rust/shekyl-crypto-pq/src/handle.rs`. The placement decision was
+driven by `.cursor/rules/18-type-placement.mdc`'s
+transform-vs-state classification: `OutputHandle` is
+**transform-shaped** (defined by `derive_output_handle`'s
+function), and the rule places transform-shaped types with their
+defining function rather than with any state-shaped consumer that
+happens to store them. The engine-side import is a one-line
+re-export rather than the original placement.
+
+**Divergence 2 — `KeyImage` newtype + classical Edwards-curve
+subaddress relocation.** Plan estimate did not separately enumerate
+`KeyImage` or the subaddress-derivation relocation. Both surfaced
+during M3a as discipline-grounded additions:
+
+- `KeyImage` was upgraded from a raw `[u8; 32]` to a typed newtype
+  in `shekyl-crypto-pq::key_image` per the "type each thing when
+  it surfaces" disposition (sub-commit 3). The newtype carries the
+  privacy-correlation discipline mirroring `OutputHandle`'s
+  (truncated `Debug`, no `Display`, no `Zeroize`).
+- Classical Edwards-curve subaddress derivation
+  (`subaddress_derivation_scalar`, `subaddress_keys`) was relocated
+  from `shekyl-scanner::view_pair` to
+  `shekyl-crypto-pq::subaddress` (sub-commit 4) per the
+  path-stateless discipline (extension to the stateless-actor
+  framing): paths from trait surface to cryptographic primitive
+  must be stateless end-to-end, not just at their endpoints. The
+  module is structured to also house future
+  `derive_subaddress_kem_keypair` (per-subaddress hybrid X25519 +
+  ML-KEM-768 keygen, §6.4) when its infrastructure lands.
+
+**Divergence 3 — `sign_transaction` is stubbed with named gap.**
+Plan estimate said `sign_transaction` would bridge through to
+`shekyl_tx_builder::sign_transaction` via `SourceSecretsBundle`-
+populated `SpendInput`s. Actual: `LocalKeys::sign_transaction`
+returns `KeyEngineError::SignTransactionTraitSurfaceIncomplete`.
+The gap: `TxToSign`'s `outputs: Vec<TxOutputContext>` and
+`fcmp_plus_plus_context: FcmpPlusPlusContext` are PR-5-pinned
+forward-declared as empty stubs (per the design doc's "TxToSign's
+exact field shape is finalized in PR 5" framing), so the bridge
+cannot reach `shekyl_tx_builder::sign_transaction`'s public-data
+inputs (`output_key`, `commitment`, `amount`, `h_pqc`,
+tree-branch context). The bridge lands when PR 5 (`PendingTxEngine`)
+finalizes `TxToSign`'s shape; the `KeyEngineError` variant's
+doc-comment names the gap and the landing target. Test substrate
+exercises the stub-validation path (`sign_transaction` returns the
+named-gap error).
+
+**Files actually touched (M3a sub-commits 1–5; sub-commit 6 is
+this docs commit).**
+
+- New: `rust/shekyl-crypto-pq/src/handle.rs` (~210 lines —
+  `OutputHandle` newtype, `derive_output_handle`, locked reference
+  vectors).
+- New: `rust/shekyl-crypto-pq/src/keys.rs` (`ViewSecret` newtype).
+- New: `rust/shekyl-crypto-pq/src/key_image.rs` (`KeyImage` newtype).
+- New: `rust/shekyl-crypto-pq/src/subaddress.rs` (~210 lines —
+  relocated derivation primitives + module-level discipline doc).
+- New: `rust/shekyl-engine-core/src/engine/local_keys.rs` (~720
+  lines — `LocalKeys` struct, `KeyEngine` impl, 11 tests).
+- Edit: `rust/shekyl-engine-core/src/engine/traits/key.rs` (~700
+  lines — full trait surface + supporting message shapes).
+- Edit: `rust/shekyl-engine-core/src/engine/error.rs` —
+  `KeyEngineError` extension with two named-gap variants.
+- Edit: `rust/shekyl-engine-core/src/engine/mod.rs` —
+  `local_keys` module exposure.
+- Edit: `rust/shekyl-engine-state/src/subaddress.rs` —
+  `to_canonical_bytes` accessor + `PRIMARY` constant.
+- Edit: `rust/shekyl-scanner/src/view_pair.rs` — methods converted
+  to thin call-throughs over the relocated primitives.
+- Edit: `rust/shekyl-crypto-pq/Cargo.toml` — `sha3` zeroize feature
+  + `shekyl-primitives` direct dep for relocated derivation.
+- Edit: `rust/shekyl-crypto-pq/src/lib.rs` — `subaddress`,
+  `handle`, `keys`, `key_image` module exposure.
+
+The total review surface is ~2.2× the planned ~900 lines, driven
+mostly by the discipline-grounded additions in Divergence 2 and
+the comprehensive test substrate for `LocalKeys` (11 tests, each
+exercising the real-impl methods end-to-end via
+`construct_output`-produced inputs rather than synthetic
+fixtures).
+
+**Deferred to between M3a and M3b.** Per the in-flight
+disposition, the typed-wrapper migration for the remaining
+`AllKeysBlob` fields (`spend_sk` → `SpendSecret`,
+`view_pk` → `ViewPublicKey`, `spend_pk` → `SpendPublicKey`, plus
+sweeping existing raw `[u8; 32]` `KeyImage` sites to the newtype)
+lands as a separate short-lived branch off `dev` before M3b
+cuts.
+
 ---
 
 ### §3.2 M3b — scanner reroute + bridge source switch
