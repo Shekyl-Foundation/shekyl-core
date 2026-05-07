@@ -1,8 +1,12 @@
-//! Keccak-256 hashing matching Monero/Shekyl's `cn_fast_hash`.
+//! Keccak-256 hashing for Shekyl's `cn_fast_hash` primitive.
 //!
 //! Uses original Keccak padding (0x01), NOT NIST SHA3 padding (0x06).
 //! This is consensus-critical: the output must be byte-identical to the
-//! C implementation in `src/crypto/keccak.c`.
+//! C implementation in `src/crypto/keccak.c`. The primitive is byte-
+//! identical to upstream Monero's `cn_fast_hash` (same Keccak variant,
+//! same padding) — that compatibility is incidental to the genesis-
+//! locked Shekyl spec, not a Monero-compatibility requirement; see
+//! `60-no-monero-legacy.mdc`.
 
 #![deny(unsafe_code)]
 
