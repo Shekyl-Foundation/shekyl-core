@@ -131,23 +131,53 @@ pub(crate) struct ViewTag(pub(crate) [u8; VIEW_TAG_BYTES]);
 /// Input to [`KeyEngine::try_claim_output`].
 ///
 /// Bundles the per-output detection context the scanner extracts from a
-/// single on-chain output: the hybrid ciphertext (carrying the X25519
-/// ephemeral and ML-KEM ciphertext), the view tag (for the cheap
-/// pre-filter), and the output's index within its containing
-/// transaction (used for HKDF context binding).
+/// single on-chain output. The fields group into four cohorts; the
+/// implementor consumes each cohort by routing it to a specific
+/// cryptographic primitive.
+///
+/// All fields are public on-chain data (or per-output public encodings
+/// thereof); none impose a `Zeroize` discipline on the receiver.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct OutputDetectionInput {
+    // --- Cryptographic inputs to `scan_output_recover` ---------------------
     /// The hybrid ciphertext (X25519 ephemeral + ML-KEM ciphertext).
-    /// Public on-chain data; not zeroized.
     pub ciphertext: HybridCiphertext,
+    /// The output's public key `O` (32-byte compressed Edwards point).
+    /// Consumed by `scan_output_recover` for the `B' = O - ho*G - y*T`
+    /// recovered-spend-key computation.
+    pub output_key: [u8; 32],
+    /// The Pedersen commitment `C` (32-byte compressed Edwards point).
+    /// Consumed by `scan_output_recover` for `C == z*G + amount*H`
+    /// commitment verification.
+    pub commitment: [u8; 32],
+
+    // --- Pre-filter optimization ------------------------------------------
     /// The view tag, used by `try_claim_output`'s impl for the X25519
     /// pre-filter check.
     pub view_tag: ViewTag,
-    /// The output's index within its containing transaction, used for
-    /// HKDF context binding inside `try_claim_output`'s impl.
+
+    // --- On-chain context for amount recovery and per-output identity ----
+    /// Encrypted amount bytes (8-byte XOR-encrypted little-endian u64).
+    pub enc_amount: [u8; 8],
+    /// Amount-tag byte from the on-chain encrypted-amounts proof; used
+    /// by `scan_output_recover` to validate amount integrity.
+    pub amount_tag_on_chain: u8,
+    /// The output's index within its containing transaction. Used for
+    /// HKDF context binding inside `try_claim_output`'s impl and as
+    /// part of the `OutputHandle` derivation context.
     pub output_index: u64,
+
+    // --- Transaction-level context for OutputHandle derivation -----------
+    /// The containing transaction's hash, consumed by
+    /// [`shekyl_crypto_pq::handle::derive_output_handle`] alongside the
+    /// view secret and `output_index` to produce the deterministic
+    /// 16-byte handle. Raw `[u8; 32]` (rather than a typed `TxHash`
+    /// newtype) for consistency with the workspace-wide raw-bytes
+    /// pattern for transaction hashes; introducing a
+    /// workspace-wide `TxHash` newtype is tracked separately.
+    pub tx_hash: [u8; 32],
 }
 
 /// Result of a [`KeyEngine::try_claim_output`] call.

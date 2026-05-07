@@ -400,16 +400,56 @@ pub enum KeyError {
 /// `docs/design/STAGE_1_PR_3_KEY_ENGINE.md` — they accumulate on a
 /// future cross-trait error type when concrete triggers materialize.
 ///
-/// # Empty starter shape
+/// # Variant accretion
 ///
-/// Variants accrete from the implementor's actual failure modes
-/// during M3a Commit 4's `LocalKeys` work. Per §7.2 of
-/// `STAGE_1_PR_3_KEY_ENGINE.md`, this mirrors PR 2's `LedgerError`
-/// introduction: variants land at implementation time, not
-/// speculatively in the spec round.
+/// Per §7.2 of `STAGE_1_PR_3_KEY_ENGINE.md`, this mirrors PR 2's
+/// `LedgerError` introduction: variants land at implementation
+/// time, not speculatively in the spec round. The variants below
+/// were surfaced by M3a Commit 4b's `LocalKeys` impl; further
+/// variants accrete as later trait surfaces (M3b–M3e, PR 5+) reveal
+/// additional failure modes.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum KeyEngineError {}
+pub(crate) enum KeyEngineError {
+    /// [`KeyEngine::sign_transaction`](super::traits::key::KeyEngine::sign_transaction)
+    /// cannot be bridged in M3a: the public on-chain per-input data
+    /// (`output_key`, `commitment`, `amount`, `h_pqc`) and the
+    /// FCMP++ tree-branch context required by
+    /// [`shekyl_tx_builder::sign_transaction`] are carried on
+    /// `TxToSign` fields (`outputs: Vec<TxOutputContext>`,
+    /// `fcmp_plus_plus_context: FcmpPlusPlusContext`) that are
+    /// forward-declared as empty stubs in M3a Commit 3 and pinned
+    /// in PR 5 (`PendingTxEngine`) per
+    /// `STAGE_1_PR_3_KEY_ENGINE.md`'s "TxToSign's exact field shape
+    /// … is finalized in PR 5" framing.
+    /// [`LocalKeys::sign_transaction`](super::local_keys::LocalKeys::sign_transaction)
+    /// returns this variant until PR 5's shape lands.
+    #[error(
+        "sign_transaction trait surface is PR-5-pinned; LocalKeys cannot bridge in M3a (TxToSign's public-data and FCMP++ branch carriers are forward-declared)"
+    )]
+    SignTransactionTraitSurfaceIncomplete,
+
+    /// [`KeyEngine::derive_subaddress`](super::traits::key::KeyEngine::derive_subaddress)
+    /// with [`SubaddressPurpose::Recipient`](super::traits::key::SubaddressPurpose::Recipient)
+    /// requires per-subaddress hybrid KEM keypair derivation
+    /// (X25519 + ML-KEM-768 keyed by `(view_secret, subaddress_idx)`),
+    /// which is **not yet implemented** in `shekyl-crypto-pq`. The
+    /// account-level KEM keypair derivation
+    /// (`shekyl_crypto_pq::account::ml_kem_keypair_from_d_z`) does
+    /// not parameterize over a subaddress index. Per
+    /// `STAGE_1_PR_3_KEY_ENGINE.md` §3.1.3 / §6.4, the
+    /// per-subaddress derivation lands alongside the relocated
+    /// classical Edwards-curve primitives in
+    /// `shekyl_crypto_pq::subaddress` as
+    /// `derive_subaddress_kem_keypair` once its infrastructure
+    /// exists; until then,
+    /// [`LocalKeys::derive_subaddress`](super::local_keys::LocalKeys::derive_subaddress)
+    /// with `Recipient` purpose returns this variant.
+    #[error(
+        "recipient-context subaddress derivation requires per-subaddress hybrid KEM keygen (shekyl_crypto_pq::subaddress::derive_subaddress_kem_keypair, not yet implemented)"
+    )]
+    RecipientSubaddressKemKeygenNotImplemented,
+}
 
 // --- IO --------------------------------------------------------------------
 

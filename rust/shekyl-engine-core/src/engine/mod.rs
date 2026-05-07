@@ -156,6 +156,7 @@ pub mod capability;
 pub mod daemon;
 pub mod error;
 pub mod lifecycle;
+pub(crate) mod local_keys;
 pub(crate) mod local_ledger;
 pub mod merge;
 pub mod network;
