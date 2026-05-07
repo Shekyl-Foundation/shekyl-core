@@ -372,7 +372,7 @@ fn test_04_reserve_proof_round_trip() {
             "[test_04] output {}: amount={}, ki={}",
             v.output_index,
             v.amount,
-            hex::encode(&v.key_image[..8])
+            hex::encode(&v.key_image.as_bytes()[..8])
         );
     }
     assert_eq!(total, 10_000_000 + 10_000_001 + 10_000_002);

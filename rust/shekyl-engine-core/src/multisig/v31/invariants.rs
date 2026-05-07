@@ -285,7 +285,7 @@ mod tests {
             fcmp_proofs: vec![ProverInputProof {
                 input_global_index: 42,
                 fcmp_proof: vec![0xEE; 100],
-                key_image: [0xFF; 32],
+                key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([0xFF; 32]),
             }],
             prover_sig: vec![0; 64],
         }

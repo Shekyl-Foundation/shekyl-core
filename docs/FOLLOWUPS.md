@@ -11,6 +11,40 @@ citing in a review.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **`RecoveredWalletOutput.key_image`: promote to `Option<KeyImage>`
+  (target: V3.1).** Today the field is typed `KeyImage` and the test
+  helper `RecoveredWalletOutput::new_for_test` produces a zero
+  `KeyImage` to mean "no key image computed yet." The boundary in
+  `shekyl-scanner::ledger_ext` filters that zero out before
+  populating `TransferDetails.key_image: Option<KeyImage>`, so the
+  no-image-yet semantics propagate one hop. The runtime scanner path
+  always computes a real key image, so the sentinel exists purely to
+  serve the test fixture and a hypothetical view-only path that
+  doesn't currently flow through `RecoveredWalletOutput`. Promoting
+  the scanner field to `Option<KeyImage>` (and updating the test
+  helper to `key_image: None`) lets us delete the
+  `if ki.as_bytes() != &[0u8; 32]` filter at the boundary and aligns
+  the wire-state shape with `TransferDetails`. Tracked here because
+  the Stage 1 PR 3 sweep that landed `KeyImage` newtypes deliberately
+  preserved the existing semantics rather than changing two contracts
+  (typing + Option-promotion) in one commit. Target: V3.1, alongside
+  the `transfer_details` Rust migration that will already be touching
+  every consumer of `TransferDetails.key_image`.
+
+- **`shekyl-fcmp`: resolve `useless_conversion` clippy warnings in
+  `frost_sal.rs` (target: V3.1).** `cargo clippy --workspace
+  --all-targets --features multisig` (or `--all-features`) surfaces
+  ~12 `useless_conversion` warnings in `shekyl-fcmp/src/frost_sal.rs`
+  (e.g. `(*bytes).into()` where `*bytes` is already `[u8; 32]`,
+  `c.to_bytes().into()` likewise). Default `cargo clippy --workspace
+  --all-targets` (without features) is clean — these only fire under
+  the multisig feature combination. Pre-existing on `dev`; the
+  Stage 1 PR 3 KeyImage call-site sweep did not introduce them and
+  did not fix them per `15-deletion-and-debt.mdc`'s "while we're
+  here is the enemy" rule. Scope: drop the redundant `.into()` calls
+  on already-sized arrays under the `multisig` feature path. Target:
+  V3.1, as a focused clippy-cleanup PR scoped to `shekyl-fcmp`.
+
 - **Full migration of remaining `SHEKYL_*` FFI constants to the
   JSON-authority pattern (target: post-stressnet, pre-audit-final).**
   The 2026-05-05 FFI constant-drift audit

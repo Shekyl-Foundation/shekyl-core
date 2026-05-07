@@ -22,6 +22,7 @@ tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1"
 shekyl-logging = { path = "../shekyl-logging" }
 clap = { version = "4", features = ["derive"] }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", optional = true }
 shekyl-scanner = { path = "../shekyl-scanner", optional = true }
 shekyl-tx-builder = { path = "../shekyl-tx-builder", optional = true }
 shekyl-engine-core = { path = "../shekyl-engine-core", optional = true }
@@ -30,6 +31,6 @@ hex = { version = "0.4", optional = true }
 
 [features]
 default = []
-rust-scanner = ["shekyl-scanner", "hex"]
+rust-scanner = ["shekyl-scanner", "shekyl-crypto-pq", "hex"]
 native-sign = ["shekyl-tx-builder"]
 multisig = ["shekyl-engine-core/multisig", "shekyl-fcmp/multisig", "hex"]

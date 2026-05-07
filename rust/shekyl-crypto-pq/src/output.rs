@@ -854,26 +854,25 @@ pub fn decrypt_amount(
 }
 
 /// Result of key image computation.
+///
+/// The `key_image` field carries the typed [`KeyImage`](crate::key_image::KeyImage)
+/// newtype rather than raw `[u8; 32]`: at the producer boundary the
+/// derivation `I = x · H_p(O)` has just been performed, so the
+/// canonical-bytes wrap is the most localised place to attach the
+/// type-system label.
 pub struct KeyImageResult {
     /// Key image `I = x * Hp(O)` where `x = ho + b`.
-    pub key_image: [u8; 32],
+    pub key_image: crate::key_image::KeyImage,
     /// Output spend secret `x = ho + b` (needed by `inSk[i].dest` at signing).
     pub spend_secret_x: zeroize::Zeroizing<[u8; 32]>,
 }
 
 impl std::fmt::Debug for KeyImageResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        struct HexBytes<'a>(&'a [u8]);
-        impl std::fmt::Debug for HexBytes<'_> {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                for b in self.0 {
-                    write!(f, "{b:02x}")?;
-                }
-                Ok(())
-            }
-        }
+        // `KeyImage` already implements truncated `Debug`
+        // (privacy-correlation discipline; see its doc-comment).
         f.debug_struct("KeyImageResult")
-            .field("key_image", &HexBytes(&self.key_image))
+            .field("key_image", &self.key_image)
             .field("spend_secret_x", &"[REDACTED]")
             .finish()
     }
@@ -911,7 +910,8 @@ pub fn compute_output_key_image(
         .ok_or(CryptoError::InvalidKeyMaterial)?;
 
     let x = ho + b_scalar;
-    let key_image = (x * hp_point).compress().to_bytes();
+    let key_image =
+        crate::key_image::KeyImage::from_canonical_bytes((x * hp_point).compress().to_bytes());
 
     let mut x_bytes = zeroize::Zeroizing::new(x.to_bytes());
 
@@ -951,7 +951,8 @@ pub fn compute_output_key_image_from_ho(
         .ok_or(CryptoError::InvalidKeyMaterial)?;
 
     let x = ho_scalar + b_scalar;
-    let key_image = (x * hp_point).compress().to_bytes();
+    let key_image =
+        crate::key_image::KeyImage::from_canonical_bytes((x * hp_point).compress().to_bytes());
 
     let mut x_bytes = zeroize::Zeroizing::new(x.to_bytes());
 
@@ -1949,10 +1950,14 @@ mod tests {
         let ki_result =
             compute_output_key_image(&ss_re.0, idx, &spend_scalar.to_bytes(), &hp_point).unwrap();
 
-        assert_ne!(ki_result.key_image, [0u8; 32], "key image must not be zero");
+        assert_ne!(
+            ki_result.key_image.as_bytes(),
+            &[0u8; 32],
+            "key image must not be zero"
+        );
         eprintln!(
             "[pipeline] key_image computed: {}",
-            hex::encode(ki_result.key_image)
+            hex::encode(ki_result.key_image.as_bytes())
         );
 
         // Verify x = ho + b
@@ -1969,7 +1974,8 @@ mod tests {
         let hp_pt = CompressedEdwardsY(hp_point).decompress().unwrap();
         let expected_ki = (expected_x * hp_pt).compress().to_bytes();
         assert_eq!(
-            ki_result.key_image, expected_ki,
+            ki_result.key_image.as_bytes(),
+            &expected_ki,
             "key image must equal x * Hp(O)"
         );
         eprintln!("[pipeline] key image algebraically verified: I = x * Hp(O)");

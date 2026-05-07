@@ -54,6 +54,8 @@
 
 use std::collections::{BTreeSet, HashSet};
 
+use shekyl_crypto_pq::key_image::KeyImage;
+
 use crate::{
     bookkeeping_block::BookkeepingBlock, error::WalletLedgerError, ledger_block::LedgerBlock,
     sync_state_block::SyncStateBlock, transfer::TransferDetails, tx_meta_block::TxMetaBlock,
@@ -328,7 +330,7 @@ fn check_reorg_trail_monotonic(ledger: &LedgerBlock) -> Result<(), WalletLedgerE
 /// fine on multiple transfers (an output observed before the key
 /// image has been derived).
 fn check_spent_state_consistent(ledger: &LedgerBlock) -> Result<(), WalletLedgerError> {
-    let mut seen_images: HashSet<[u8; 32]> = HashSet::with_capacity(ledger.transfers.len());
+    let mut seen_images: HashSet<KeyImage> = HashSet::with_capacity(ledger.transfers.len());
     for (i, t) in ledger.transfers.iter().enumerate() {
         check_spend_triple(i, t)?;
         if let Some(k) = t.key_image {
@@ -338,7 +340,7 @@ fn check_spent_state_consistent(ledger: &LedgerBlock) -> Result<(), WalletLedger
                     format!(
                         "transfers[{i}] reuses key_image {} already observed on an earlier \
                          transfer; key images must be unique across transfers",
-                        hex::encode(k)
+                        hex::encode(k.as_bytes())
                     ),
                 ));
             }
@@ -665,7 +667,7 @@ mod tests {
         let mut t = mk_transfer(1, 10);
         t.spent = true;
         t.spent_height = None;
-        t.key_image = Some([1; 32]);
+        t.key_image = Some(KeyImage::from_canonical_bytes([1; 32]));
         let ledger = LedgerBlock::new(
             vec![t],
             BlockchainTip::new(100, [0xAA; 32]),
@@ -734,10 +736,10 @@ mod tests {
         let mut t2 = mk_transfer(2, 15);
         t1.spent = true;
         t1.spent_height = Some(20);
-        t1.key_image = Some([0xCC; 32]);
+        t1.key_image = Some(KeyImage::from_canonical_bytes([0xCC; 32]));
         t2.spent = true;
         t2.spent_height = Some(30);
-        t2.key_image = Some([0xCC; 32]);
+        t2.key_image = Some(KeyImage::from_canonical_bytes([0xCC; 32]));
         let ledger = LedgerBlock::new(
             vec![t1, t2],
             BlockchainTip::new(100, [0xAA; 32]),

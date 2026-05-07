@@ -168,10 +168,13 @@ pub struct KeyImageObserved {
     /// Block height the spend was observed in.
     pub block_height: u64,
 
-    /// Compressed key-image bytes as they appear on-wire in
+    /// Per-input key image as it appears on-wire in
     /// `Input::ToKey { key_image, .. }` and
-    /// `Input::StakeClaim { key_image, .. }`.
-    pub key_image: [u8; 32],
+    /// `Input::StakeClaim { key_image, .. }`. Wrapped in
+    /// [`shekyl_crypto_pq::key_image::KeyImage`] for type-system
+    /// protection at consumer sites; the wire bytes are unchanged
+    /// (`KeyImage` is `#[serde(transparent)]`).
+    pub key_image: shekyl_crypto_pq::key_image::KeyImage,
 }
 
 /// A staker-pool aggregate state event. The variant set is

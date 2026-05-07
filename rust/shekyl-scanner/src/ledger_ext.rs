@@ -127,8 +127,16 @@ impl LedgerIndexesExt for LedgerIndexes {
             td.z = Some(Zeroizing::new(*output.z()));
             td.k_amount = Some(Zeroizing::new(*output.k_amount()));
             td.combined_shared_secret = Some(Zeroizing::new(*output.combined_shared_secret()));
+            // The zero-bytes value is the test-fixture sentinel for "no
+            // key image computed yet" (`RecoveredWalletOutput::new_for_test`).
+            // The runtime scanner path always computes a real image, so a
+            // zero here means we should leave `td.key_image = None` and let
+            // an offline-derivation path (`set_key_image`) populate it later
+            // — the same shape view-only wallets use. FOLLOWUPS: promote
+            // `RecoveredWalletOutput.key_image` to `Option<KeyImage>` and
+            // delete this sentinel comparison (V3.1).
             let ki = *output.key_image();
-            if ki != [0u8; 32] {
+            if ki.as_bytes() != &[0u8; 32] {
                 td.key_image = Some(ki);
             }
             batch.push(td);

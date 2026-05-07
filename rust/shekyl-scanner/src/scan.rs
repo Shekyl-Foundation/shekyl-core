@@ -27,6 +27,7 @@ use shekyl_rpc::ScannableBlock;
 
 use shekyl_crypto_pq::{
     kem::ML_KEM_768_CT_LEN,
+    key_image::KeyImage,
     output::{compute_output_key_image, scan_output_recover},
 };
 use shekyl_generators::hash_to_point;
@@ -50,7 +51,14 @@ pub struct RecoveredWalletOutput {
     pub(crate) z: Zeroizing<[u8; 32]>,
     pub(crate) k_amount: Zeroizing<[u8; 32]>,
     pub(crate) combined_shared_secret: Zeroizing<[u8; 64]>,
-    pub(crate) key_image: [u8; 32],
+    /// Per-output key image. Public on-chain double-spend identifier;
+    /// see [`KeyImage`]'s doc-comment — public derivative of a secret,
+    /// the secret is the wipe-on-drop concern (the typed wrapper does
+    /// **not** impl [`Zeroize`] for that reason). `#[zeroize(skip)]`
+    /// matches the `amount` field's pattern: structurally non-secret
+    /// values that survive `Drop`'s wipe pass.
+    #[zeroize(skip)]
+    pub(crate) key_image: KeyImage,
     /// Recovered amount from KEM decryption.
     #[zeroize(skip)]
     pub(crate) amount: u64,
@@ -64,8 +72,10 @@ impl Zeroize for RecoveredWalletOutput {
         self.z.zeroize();
         self.k_amount.zeroize();
         self.combined_shared_secret.zeroize();
-        self.key_image.zeroize();
-        self.amount.zeroize();
+        // `self.key_image` is public on-chain data, not secret.
+        // `self.amount` is structurally non-secret as well.
+        // Both deliberately skip wipe per the field-level
+        // `#[zeroize(skip)]` discipline above.
     }
 }
 
@@ -88,7 +98,7 @@ impl RecoveredWalletOutput {
     pub fn combined_shared_secret(&self) -> &[u8; 64] {
         &self.combined_shared_secret
     }
-    pub fn key_image(&self) -> &[u8; 32] {
+    pub fn key_image(&self) -> &KeyImage {
         &self.key_image
     }
     pub fn amount(&self) -> u64 {
@@ -104,7 +114,7 @@ impl RecoveredWalletOutput {
             z: Zeroizing::new([0u8; 32]),
             k_amount: Zeroizing::new([0u8; 32]),
             combined_shared_secret: Zeroizing::new([0u8; 64]),
-            key_image: [0u8; 32],
+            key_image: KeyImage::from_canonical_bytes([0u8; 32]),
             amount,
         }
     }

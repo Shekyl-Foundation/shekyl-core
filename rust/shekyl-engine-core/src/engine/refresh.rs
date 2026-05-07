@@ -1026,7 +1026,9 @@ pub(crate) async fn produce_scan_result<R: Rpc>(
             if let Input::ToKey { key_image, .. } | Input::StakeClaim { key_image, .. } = input {
                 spent_key_images.push(KeyImageObserved {
                     block_height: h,
-                    key_image: key_image.0,
+                    key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
+                        key_image.0,
+                    ),
                 });
             }
         }
@@ -1036,7 +1038,9 @@ pub(crate) async fn produce_scan_result<R: Rpc>(
                 {
                     spent_key_images.push(KeyImageObserved {
                         block_height: h,
-                        key_image: key_image.0,
+                        key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
+                            key_image.0,
+                        ),
                     });
                 }
             }
@@ -2504,7 +2508,7 @@ mod tests {
         assert_eq!(result.spent_key_images.len(), 1);
         let observed = &result.spent_key_images[0];
         assert_eq!(observed.block_height, 1);
-        assert_eq!(observed.key_image, key_image_bytes);
+        assert_eq!(observed.key_image.as_bytes(), &key_image_bytes);
     }
 
     // ── Reorg detection tests ──────────────────────────────────
@@ -3360,11 +3364,11 @@ mod refresh_driver_tests {
         result.spent_key_images = vec![
             crate::scan::KeyImageObserved {
                 block_height: 5,
-                key_image: [9; 32],
+                key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([9; 32]),
             },
             crate::scan::KeyImageObserved {
                 block_height: 7,
-                key_image: [8; 32],
+                key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([8; 32]),
             },
         ];
         result.stake_events = vec![/* StakeEvent::Accrual omitted: test only counts */];

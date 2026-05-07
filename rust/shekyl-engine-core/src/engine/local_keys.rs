@@ -98,7 +98,6 @@ use zeroize::Zeroizing;
 use shekyl_address::Network;
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::handle::derive_output_handle;
-use shekyl_crypto_pq::key_image::KeyImage;
 use shekyl_crypto_pq::keys::{SpendPublicKey, ViewPublicKey};
 use shekyl_crypto_pq::output::{compute_output_key_image, scan_output_recover};
 use shekyl_crypto_pq::subaddress::subaddress_keys;
@@ -380,7 +379,7 @@ impl KeyEngine for LocalKeys {
         ) else {
             return Ok(OutputClaimResult::NotMine);
         };
-        let key_image = KeyImage::from_canonical_bytes(ki_result.key_image);
+        let key_image = ki_result.key_image;
 
         // Stage 4: deterministic OutputHandle derivation. cSHAKE256
         // keyed by the view secret; same `(view_secret, tx_hash,

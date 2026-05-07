@@ -3873,7 +3873,7 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
         let Ok(ki_result) = compute_output_key_image_from_ho(&recovered.ho, b_key, hp) else {
             return false;
         };
-        std::ptr::copy_nonoverlapping(ki_result.key_image.as_ptr(), key_image_out, 32);
+        std::ptr::copy_nonoverlapping(ki_result.key_image.as_bytes().as_ptr(), key_image_out, 32);
     } else {
         std::ptr::write_bytes(key_image_out, 0, 32);
     }
@@ -3921,7 +3921,7 @@ pub unsafe extern "C" fn shekyl_compute_output_key_image(
 
     match shekyl_crypto_pq::output::compute_output_key_image(&ss, output_index, &b, &hp) {
         Ok(result) => {
-            std::ptr::copy_nonoverlapping(result.key_image.as_ptr(), out_ki, 32);
+            std::ptr::copy_nonoverlapping(result.key_image.as_bytes().as_ptr(), out_ki, 32);
             true
         }
         Err(_) => false,
@@ -3958,7 +3958,7 @@ pub unsafe extern "C" fn shekyl_compute_output_key_image_from_ho(
 
     match shekyl_crypto_pq::output::compute_output_key_image_from_ho(&ho_arr, &b, &hp) {
         Ok(result) => {
-            std::ptr::copy_nonoverlapping(result.key_image.as_ptr(), out_ki, 32);
+            std::ptr::copy_nonoverlapping(result.key_image.as_bytes().as_ptr(), out_ki, 32);
             true
         }
         Err(_) => false,
@@ -4560,7 +4560,7 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
 
             shekyl_proofs::reserve_proof::ReserveOutputEntry {
                 proof_secrets: shekyl_crypto_pq::output::ProofSecrets { ho, y, z, k_amount },
-                key_image: ki,
+                key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
                 spend_secret: ss,
                 output_key: ok,
             }

@@ -24,7 +24,7 @@ pub struct ProverOutput {
 pub struct ProverInputProof {
     pub input_global_index: u64,
     pub fcmp_proof: Vec<u8>,
-    pub key_image: [u8; 32],
+    pub key_image: shekyl_crypto_pq::key_image::KeyImage,
 }
 
 impl ProverOutput {
@@ -38,7 +38,7 @@ impl ProverOutput {
             buf.extend_from_slice(&proof.input_global_index.to_le_bytes());
             buf.extend_from_slice(&(proof.fcmp_proof.len() as u32).to_le_bytes());
             buf.extend_from_slice(&proof.fcmp_proof);
-            buf.extend_from_slice(&proof.key_image);
+            buf.extend_from_slice(proof.key_image.as_bytes());
         }
         buf
     }
@@ -143,7 +143,7 @@ mod tests {
             fcmp_proofs: vec![ProverInputProof {
                 input_global_index: 42,
                 fcmp_proof: vec![0xBB; 100],
-                key_image: [0xCC; 32],
+                key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([0xCC; 32]),
             }],
             prover_sig: vec![0; 64],
         };
@@ -161,7 +161,7 @@ mod tests {
             fcmp_proofs: vec![ProverInputProof {
                 input_global_index: 42,
                 fcmp_proof: vec![0xBB; 100],
-                key_image: [0xCC; 32],
+                key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([0xCC; 32]),
             }],
             prover_sig: vec![0; 64],
         };
@@ -178,7 +178,7 @@ mod tests {
             fcmp_proofs: vec![ProverInputProof {
                 input_global_index: 42,
                 fcmp_proof: vec![0xBB; 100],
-                key_image: [0xCC; 32],
+                key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([0xCC; 32]),
             }],
             prover_sig: vec![0; 64],
         };
@@ -202,7 +202,7 @@ mod tests {
             fcmp_proofs: vec![ProverInputProof {
                 input_global_index: 42,
                 fcmp_proof: vec![0xBB; 100],
-                key_image: [0xCC; 32],
+                key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([0xCC; 32]),
             }],
             prover_sig: vec![0; 64],
         };
