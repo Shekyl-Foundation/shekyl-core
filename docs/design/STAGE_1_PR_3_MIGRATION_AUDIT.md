@@ -2,7 +2,7 @@
 
 **Status.** Audit artifact, precursor to `STAGE_1_PR_3_MIGRATION_PLAN.md`.
 **Scope.** Workspace audit of the surface affected by the Stage 1 PR 3
-architectural-inheritance migration (PRs 3a–3e per the 5-PR sequence
+architectural-inheritance migration (M3a–M3e per the 5-PR sequence
 adopted in the migration plan; an earlier 6-PR shape collapsed once
 the audit confirmed no separate `SpendInput`-construction-migration PR
 was needed) per `STAGE_1_PR_3_KEY_ENGINE.md` and
@@ -16,7 +16,7 @@ HEAD = `ffcaa62e9` (commit landing `16-architectural-inheritance.mdc`).
 
 The audit's headline finding: **the migration surface is markedly smaller
 than the per-PR scope tables in earlier rounds estimated**, and **the
-additive caller PR (3c) is not a migration of an existing path** — there
+additive caller PR (M3c) is not a migration of an existing path** — there
 is no current non-wallet2-bridged orchestrator path to
 `tx_builder::sign_transaction` to migrate.
 
@@ -27,7 +27,7 @@ is no current non-wallet2-bridged orchestrator path to
 `shekyl_tx_builder::SpendInput` is the input record consumed by
 `tx_builder::sign_transaction`. The handle-indirected migration places
 `SpendInput` construction inside `KeyEngine::sign_transaction` from
-PR 3a's bridge impl onward; this table enumerates every existing
+M3a's bridge impl onward; this table enumerates every existing
 construction site so the construction surface is bounded.
 
 | Site | File:Line | Class | Disposition | PR |
@@ -51,11 +51,11 @@ migration keeps the library tests intact; engine-side tests construct
 via the engine wrapper. This isolates the pure-function surface from
 the secret-flow architecture migration cleanly.
 
-**Implication for PR 3a.** The bridge impl introduced in PR 3a
+**Implication for M3a.** The bridge impl introduced in M3a
 constructs `SpendInput` engine-internally from the start, sourcing
 secrets from `TransferDetails`'s existing secret-bearing fields
-(transitional). PR 3b switches the source to `HandleTable` (with
-`TransferDetails` fallback); PR 3d removes the fallback when the
+(transitional). M3b switches the source to `HandleTable` (with
+`TransferDetails` fallback); M3d removes the fallback when the
 fields go away. There is no separate "move construction into the
 engine" PR — the construction is engine-internal from inception, and
 the audit confirms there are no extant non-deletion-target sites to
@@ -68,19 +68,19 @@ six PRs to five.)
 
 The handle-indirected migration moves derived per-output secrets out of
 `TransferDetails` and into the engine's handle table, with `TransferDetails`
-holding `source_ciphertext` + `output_handle` post-PR 3d.
+holding `source_ciphertext` + `output_handle` post-M3d.
 
 ### §2.1 Schema
 
 | Field | File:Line | Class |
 |---|---|---|
-| `combined_shared_secret: Option<Zeroizing<[u8; 64]>>` | `rust/shekyl-engine-state/src/transfer.rs:86` | Removed in PR 3d |
-| `ho: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:89` | Removed in PR 3d |
-| `y: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:92` | Removed in PR 3d |
-| `z: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:95` | Removed in PR 3d |
-| `k_amount: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:98` | Removed in PR 3d |
+| `combined_shared_secret: Option<Zeroizing<[u8; 64]>>` | `rust/shekyl-engine-state/src/transfer.rs:86` | Removed in M3d |
+| `ho: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:89` | Removed in M3d |
+| `y: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:92` | Removed in M3d |
+| `z: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:95` | Removed in M3d |
+| `k_amount: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:98` | Removed in M3d |
 
-PR 3d adds `source_ciphertext: HybridCiphertext` and
+M3d adds `source_ciphertext: HybridCiphertext` and
 `output_handle: OutputHandle` in their place (final field set per
 `STAGE_1_PR_3_KEY_ENGINE.md` Round 3 schema).
 
@@ -88,7 +88,7 @@ PR 3d adds `source_ciphertext: HybridCiphertext` and
 
 | Site | File:Line | Class | Disposition | PR |
 |---|---|---|---|---|
-| Scanner output ingestion | `rust/shekyl-scanner/src/ledger_ext.rs:125–129` | Production | Reroute: scanner emits `OutputClaim` to `KeyEngine::try_claim_output`; engine populates handle table; orchestrator persists `TransferDetails` with `source_ciphertext + output_handle` only | 3b |
+| Scanner output ingestion | `rust/shekyl-scanner/src/ledger_ext.rs:125–129` | Production | Reroute: scanner emits `OutputClaim` to `KeyEngine::try_claim_output`; engine populates handle table; orchestrator persists `TransferDetails` with `source_ciphertext + output_handle` only | M3b |
 
 **Production write sites of secret fields: exactly one.** The migration's
 data-flow rerouting happens at this single point.
@@ -104,31 +104,31 @@ which carries its own copies.
 
 This is the audit's strongest finding for migration-cost bounding: **the
 secret-bearing fields on `TransferDetails` are write-only from
-production code's perspective.** Removing them in PR 3d affects no
+production code's perspective.** Removing them in M3d affects no
 production read site. The compile-time fallout is confined to:
 
-- The schema (`transfer.rs`) — PR 3d edits.
-- The write site (`ledger_ext.rs`) — PR 3b reroutes.
-- Test/bench fixtures (see §2.4) — PR 3d cleans up.
+- The schema (`transfer.rs`) — M3d edits.
+- The write site (`ledger_ext.rs`) — M3b reroutes.
+- Test/bench fixtures (see §2.4) — M3d cleans up.
 
 ### §2.4 Test- and bench-only secret-field touches
 
 | Site | File:Line | Class | Disposition | PR |
 |---|---|---|---|---|
-| Schema roundtrip test | `rust/shekyl-engine-state/src/transfer.rs:322–340` | Test | Rewrite for new schema | 3d |
-| Scanner test fixtures | `rust/shekyl-scanner/src/tests.rs:77, 855, 1037` | Test | Rewrite for new flow | 3b |
-| Scanner staging struct | `rust/shekyl-scanner/src/scan.rs:52, 106, 341` | Production (engine-internal post-3b) | Stays internal to scanner→engine path | 3b |
-| Ledger-block test | `rust/shekyl-engine-state/src/ledger_block.rs:425, 486–511` | Test (`#[cfg(test)]`) | Rewrite for new schema | 3d |
-| Ledger-indexes test | `rust/shekyl-engine-state/src/ledger_indexes.rs:523` | Test | Rewrite for new schema | 3d |
-| Invariants test | `rust/shekyl-engine-state/src/invariants.rs:424` | Test | Rewrite for new schema | 3d |
-| Engine-core bench fixture | `rust/shekyl-engine-core/benches/common/engine_fixture.rs:484` | Bench | Rewrite for new schema | 3d |
-| Refresh-snapshot bench | `rust/shekyl-engine-core/benches/refresh_snapshot.rs:73` | Bench | Rewrite for new schema | 3d |
-| Ledger benches | `rust/shekyl-engine-state/benches/{ledger,ledger_iai,balance,balance_iai}.rs` (init `None` only) | Bench | Migration-transparent (default-init pattern; `Option` removal cascades) | 3d |
-| Scanner balance test | `rust/shekyl-scanner/src/balance.rs:98` (init `None` only) | Test | Migration-transparent | 3d |
+| Schema roundtrip test | `rust/shekyl-engine-state/src/transfer.rs:322–340` | Test | Rewrite for new schema | M3d |
+| Scanner test fixtures | `rust/shekyl-scanner/src/tests.rs:77, 855, 1037` | Test | Rewrite for new flow | M3b |
+| Scanner staging struct | `rust/shekyl-scanner/src/scan.rs:52, 106, 341` | Production (engine-internal post-M3b) | Stays internal to scanner→engine path | M3b |
+| Ledger-block test | `rust/shekyl-engine-state/src/ledger_block.rs:425, 486–511` | Test (`#[cfg(test)]`) | Rewrite for new schema | M3d |
+| Ledger-indexes test | `rust/shekyl-engine-state/src/ledger_indexes.rs:523` | Test | Rewrite for new schema | M3d |
+| Invariants test | `rust/shekyl-engine-state/src/invariants.rs:424` | Test | Rewrite for new schema | M3d |
+| Engine-core bench fixture | `rust/shekyl-engine-core/benches/common/engine_fixture.rs:484` | Bench | Rewrite for new schema | M3d |
+| Refresh-snapshot bench | `rust/shekyl-engine-core/benches/refresh_snapshot.rs:73` | Bench | Rewrite for new schema | M3d |
+| Ledger benches | `rust/shekyl-engine-state/benches/{ledger,ledger_iai,balance,balance_iai}.rs` (init `None` only) | Bench | Migration-transparent (default-init pattern; `Option` removal cascades) | M3d |
+| Scanner balance test | `rust/shekyl-scanner/src/balance.rs:98` (init `None` only) | Test | Migration-transparent | M3d |
 
 The non-test write sites in `scan.rs` are the scanner's own staging
 struct (`ScannedOutput` or equivalent), separate from `TransferDetails`.
-Post-PR 3b it remains the scanner's internal carrier between recovery
+Post-M3b it remains the scanner's internal carrier between recovery
 and engine handoff. Its lifetime ends at the engine boundary; it is
 not persisted.
 
@@ -154,12 +154,12 @@ no version bump; no client coordination required.
 **Non-wallet2-bridged orchestrator callers of `tx_builder::sign_transaction`:
 zero.** All current callers cross the wallet2 FFI in either direction.
 
-### §3.1 Implication for PR 3c
+### §3.1 Implication for M3c
 
-PR 3c as previously framed ("orchestrator signing pipeline migration",
-under the prior 6-PR sequence's PR 3d label) overstated its scope.
+M3c as previously framed ("orchestrator signing pipeline migration",
+under the prior 6-PR sequence's M3d label) overstated its scope.
 There is no orchestrator signing pipeline independent of wallet2 to
-migrate. PR 3c's actual content is:
+migrate. M3c's actual content is:
 
 1. Introduce a new caller (test path in `shekyl-engine-core/tests/`)
    that exercises `KeyEngine::sign_transaction(&[OutputHandle], ...)`
@@ -170,12 +170,12 @@ migrate. PR 3c's actual content is:
    replaces the wallet2-bridged callers with a production caller of
    the same API.
 
-**This reframes PR 3c as additive, not migrational.** The scope and
+**This reframes M3c as additive, not migrational.** The scope and
 risk profile drop significantly.
 
 The pre-cutover orchestrator (today's `shekyl-engine-rpc` + wallet2)
 continues to use the legacy path until the RPC server cutover; that
-cutover is not in PR 3a–3e scope.
+cutover is not in M3a–M3e scope.
 
 ---
 
@@ -196,7 +196,7 @@ session containers. **No concurrent migration required.** v31 is an
 instance of the post-CryptoNote design discipline applied during initial
 design, per `16-architectural-inheritance.mdc` §"Density expectations".
 
-A pre-flight verification step at PR 3a confirms the structure has not
+A pre-flight verification step at M3a confirms the structure has not
 drifted between this audit's snapshot and the merge of 3a; expected
 outcome unchanged.
 
@@ -224,42 +224,42 @@ migration's load-bearing single-site change is `ledger_ext.rs:125–129`.
 
 ## §6 Implications for the migration plan
 
-The 5-PR sequence (3a/3b/3c/3d/3e) collapsed an earlier 6-PR shape
+The 5-PR sequence (M3a/M3b/M3c/M3d/M3e) collapsed an earlier 6-PR shape
 once this audit confirmed there is no separate "move `SpendInput`
 construction" migration to do. The implications below are written
 against the 5-PR sequence; the migration plan doc carries the scope
 tables.
 
-1. **PR 3a scope absorbs engine-internal `SpendInput` construction.**
+1. **M3a scope absorbs engine-internal `SpendInput` construction.**
    The bridge impl constructs `SpendInput` from inception, sourcing
    secrets from `TransferDetails`'s existing secret-bearing fields.
    No call-site migration; pure-function `tx-builder` library tests
    remain intact.
 
-2. **PR 3b scope is pinpoint.** Single-site reroute at
+2. **M3b scope is pinpoint.** Single-site reroute at
    `shekyl-scanner/src/ledger_ext.rs:125–129` plus the scanner's
    `ScannedOutput`-to-engine handoff and the bridge impl secret-source
    switch (with `TransferDetails` fallback). Test fixtures in
    `scanner/tests.rs` move with it.
 
-3. **PR 3c scope is additive, not migrational.** No existing
-   non-wallet2 orchestrator path to migrate. PR 3c introduces a test
+3. **M3c scope is additive, not migrational.** No existing
+   non-wallet2 orchestrator path to migrate. M3c introduces a test
    caller exercising end-to-end against the new API; production
    callers land during the wallet RPC cutover.
 
-4. **PR 3d scope is schema cleanup + test rewrite.** Five field
+4. **M3d scope is schema cleanup + test rewrite.** Five field
    removals on `TransferDetails`, two field additions, removal of the
    bridge impl's transitional fallback, and the test/bench fixture
    rewrites enumerated in §2.4. No production read-site fallout.
    **"Secrets confined to engine" property activates here.**
 
-5. **PR 3e scope is documentation-only** (design-doc realignment plus
+5. **M3e scope is documentation-only** (design-doc realignment plus
    `CHANGELOG.md` per `91-documentation-after-plans.mdc`).
 
-6. **`dev` branch freeze duration.** PR 3a–3d are short; with the
+6. **`dev` branch freeze duration.** M3a–M3d are short; with the
    audit confirming bounded scope, freeze duration estimates from
    earlier rounds (multi-week) should be revisited. Best estimate now:
-   3a–3d land within the 5-working-day target of `06-branching.mdc`'s
+   M3a–M3d land within the 5-working-day target of `06-branching.mdc`'s
    short-lived-branch discipline if sequenced without cross-PR
    coordination overhead.
 
@@ -277,7 +277,7 @@ tables.
 
 1. **Static-only.** The audit does not exercise runtime paths. A
    feature flag combination not visible to `rg` could enable a code
-   path the audit missed. Mitigation: PR 3a CI runs the full test
+   path the audit missed. Mitigation: M3a CI runs the full test
    matrix including `native-sign` and FFI test suites; any missed
    call site surfaces as a compile or test failure.
 
@@ -298,6 +298,6 @@ tables.
 
 4. **Snapshot stability.** Audit holds against
    `chore/spec-stage-1-pr3-keyengine-round` HEAD `ffcaa62e9`. If `dev`
-   advances before PR 3a opens, the audit re-runs as part of PR 3a's
+   advances before M3a opens, the audit re-runs as part of M3a's
    pre-flight. The freeze on `dev` (per migration plan) is the
    structural mitigation; this section is the residual fallback.

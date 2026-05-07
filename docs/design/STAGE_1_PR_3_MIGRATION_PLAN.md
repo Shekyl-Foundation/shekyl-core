@@ -1,7 +1,7 @@
 # Stage 1 PR 3 — Migration Plan
 
 **Status.** Operational plan for the Stage 1 PR 3 architectural-
-inheritance migration (PRs 3a–3e). Companion document to
+inheritance migration (M3a–M3e). Companion document to
 `STAGE_1_PR_3_KEY_ENGINE.md` (design rationale) and
 `STAGE_1_PR_3_MIGRATION_AUDIT.md` (workspace surface audit).
 **Scope.** Operational details — per-PR scope, dependencies, schema
@@ -14,10 +14,32 @@ discipline rule that produced this migration).
 
 ---
 
+## Label disambiguation
+
+This document and the audit (`STAGE_1_PR_3_MIGRATION_AUDIT.md`) refer to
+the migration's five PRs as **M3a, M3b, M3c, M3d, M3e** (the "M" prefix
+denotes migration). The forward-looking PRs themselves will land on
+`dev` from short-lived feature branches when drafting begins.
+
+This naming avoids a collision with the design-document Round 3 commit
+sub-series (commits `3a`–`3e` on the
+`chore/spec-stage-1-pr3-keyengine-round` branch, which produced
+`STAGE_1_PR_3_KEY_ENGINE.md` Round 3). Those sub-commits are landed
+history on the design-doc branch; the M-labels denote forward-looking
+migration PRs. Future references should use `M3a`/`M3b`/… for the
+migration PRs and `Round 3 commit 3a`/`Round 3 commit 3b`/… (or the
+commit SHA) when referring to the design-doc commits.
+
+The broader project-level identifier "PR 3" (the `KeyEngine` per-trait
+extraction effort, of which this migration is a component) is unchanged
+and refers to the umbrella work covered by `STAGE_1_PR_3_KEY_ENGINE.md`.
+
+---
+
 ## 🔒 FREEZE NOTICE
 
 > **`dev` branch is frozen for non-migration work for the duration of
-> PRs 3a–3e.** Per `06-branching.mdc` discipline against long-lived
+> M3a–M3e.** Per `06-branching.mdc` discipline against long-lived
 > feature branches, the migration sequences as short-lived PRs landing
 > on `dev` directly, but each PR's review and merge expects a stable
 > base. Non-migration commits to `dev` during the freeze window
@@ -31,12 +53,12 @@ discipline rule that produced this migration).
 > repairs, and explicitly-coordinated work that the migration plan
 > annotates as compatible.
 >
-> **Freeze duration.** Best estimate per audit §6.6: PRs 3a–3d land
-> within 5 working days. PR 3e (docs) lands the same day or next.
+> **Freeze duration.** Best estimate per audit §6.6: M3a–M3d land
+> within 5 working days. M3e (docs) lands the same day or next.
 > Total freeze: ~5–7 working days. Updated as PRs land.
 >
-> **Lift condition.** PR 3d merges (the property-activating PR);
-> PR 3e is doc-only and can land in parallel with the freeze lift.
+> **Lift condition.** M3d merges (the property-activating PR);
+> M3e is doc-only and can land in parallel with the freeze lift.
 
 ---
 
@@ -45,21 +67,21 @@ discipline rule that produced this migration).
 ### §1.1 In scope
 
 - Introduction of the `KeyEngine` trait and the `LocalKeys` bridge
-  implementation (PR 3a).
+  implementation (M3a).
 - Reroute of the scanner's secret-emit path from
-  `TransferDetails` write to `KeyEngine::try_claim_output` (PR 3b).
+  `TransferDetails` write to `KeyEngine::try_claim_output` (M3b).
 - Bridge-implementation secret-source switch from `TransferDetails`
   fields to `HandleTable` lookups, with `TransferDetails` retained as
-  transitional fallback (PR 3b).
+  transitional fallback (M3b).
 - Additive end-to-end test caller validating `KeyEngine::sign_transaction`
   produces byte-identical output to the legacy direct-secret path
-  (PR 3c).
+  (M3c).
 - Removal of secret-bearing fields from `TransferDetails`; addition of
   `source_ciphertext` and `output_handle`; removal of bridge-impl
-  fallback (PR 3d).
+  fallback (M3d).
 - Documentation realignment across `STAGE_1_PR_3_KEY_ENGINE.md`,
   `STAGE_1_PR_3_MIGRATION_AUDIT.md`, `CHANGELOG.md`, and
-  `docs/FOLLOWUPS.md` (PR 3e).
+  `docs/FOLLOWUPS.md` (M3e).
 
 ### §1.2 Out of scope
 
@@ -100,7 +122,7 @@ would mean migrating a path whose only forward state is deletion.
 
 ## §3 Per-PR specifications
 
-### §3.1 PR 3a — trait + bridge impl + engine-internal SpendInput
+### §3.1 M3a — trait + bridge impl + engine-internal SpendInput
 
 **Title.** `feat(engine): introduce KeyEngine trait and LocalKeys bridge impl`
 
@@ -116,10 +138,10 @@ would mean migrating a path whose only forward state is deletion.
 - Implement engine-internal `SpendInput` construction inside
   `LocalKeys::sign_transaction`. Bridge sources secrets from
   `TransferDetails`'s existing secret-bearing fields (transitional;
-  PR 3b switches the source).
+  M3b switches the source).
 - Introduce `HandleTable` (16-shard `std::sync::RwLock` cache;
-  FIFO eviction) per Round 3 §3.1.6. Empty at PR 3a; populated at
-  PR 3b.
+  FIFO eviction) per Round 3 §3.1.6. Empty at M3a; populated at
+  M3b.
 - Introduce `OutputHandle` deterministic-derivation
   (`HMAC(view_secret, canonical(tx_hash || output_index))[..16]`) per
   Round 3 §7.12.
@@ -159,7 +181,7 @@ files edited including re-exports.
 
 ---
 
-### §3.2 PR 3b — scanner reroute + bridge source switch
+### §3.2 M3b — scanner reroute + bridge source switch
 
 **Title.** `feat(engine): reroute scanner secrets via KeyEngine handle table`
 
@@ -171,7 +193,7 @@ files edited including re-exports.
   populating `TransferDetails`'s secret-bearing fields directly.
 - Engine populates `HandleTable` from the claim; orchestrator
   receives `OutputHandle` and `source_ciphertext` to persist on
-  `TransferDetails`. (The schema additions land in PR 3d; for PR 3b,
+  `TransferDetails`. (The schema additions land in M3d; for M3b,
   the secret-bearing fields remain populated as before to keep the
   bridge-impl fallback live.)
 - Switch `LocalKeys::sign_transaction`'s primary secret source from
@@ -195,7 +217,7 @@ files edited including re-exports.
 - New: `rust/shekyl-engine-core/tests/byte_identical_derivation.rs`
   (~100 lines).
 
-**Dependencies.** PR 3a (trait + bridge impl + handle table).
+**Dependencies.** M3a (trait + bridge impl + handle table).
 
 **Schema state at PR boundary.** `TransferDetails` carries both old
 secret-bearing fields (still populated) and is referenced by
@@ -219,7 +241,7 @@ site moved; one new property test.
 
 ---
 
-### §3.3 PR 3c — additive test caller
+### §3.3 M3c — additive test caller
 
 **Title.** `test(engine): exercise KeyEngine::sign_transaction end-to-end`
 
@@ -247,14 +269,14 @@ site moved; one new property test.
   accessible from the engine-core tests. (Cross-crate test fixture
   visibility — flag if friction.)
 
-**Dependencies.** PR 3a (trait + bridge). Independent of PR 3b in
+**Dependencies.** M3a (trait + bridge). Independent of M3b in
 scope (test populates `HandleTable` directly via fixture, not via
-scanner reroute), so PR 3c can merge in parallel with PR 3b.
+scanner reroute), so M3c can merge in parallel with M3b.
 
 **Schema state at PR boundary.** Unchanged from incoming.
 
 **Property delivery.** Validation milestone. Not a property delivery,
-but the precondition for trusting PR 3d's removal of fallback paths.
+but the precondition for trusting M3d's removal of fallback paths.
 
 **Success criteria.**
 
@@ -268,7 +290,7 @@ cross-crate friction.
 
 ---
 
-### §3.4 PR 3d — schema cleanup; property activates
+### §3.4 M3d — schema cleanup; property activates
 
 **Title.** `feat(engine): remove TransferDetails secret fields; secrets confined to engine`
 
@@ -287,12 +309,12 @@ cross-crate friction.
 - Update `Zeroize` / `Drop` impls; update postcard schema; update
   serde helpers.
 - Remove the bridge impl's `TransferDetails`-fallback path in
-  `LocalKeys::sign_transaction`. Post-PR 3d, handles are the only
+  `LocalKeys::sign_transaction`. Post-M3d, handles are the only
   secret source.
 - Rewrite test/bench fixtures per audit §2.4 (10 sites).
 - Update the scanner's `TransferDetailsExt::populate_*` helpers
   in `ledger_ext.rs` to write the new fields instead of the removed
-  ones (the write site moved to engine in PR 3b; the helper now
+  ones (the write site moved to engine in M3b; the helper now
   populates `source_ciphertext` and `output_handle` only).
 
 **Files touched (estimated).**
@@ -316,7 +338,7 @@ cross-crate friction.
 - Edit: `rust/shekyl-engine-core/src/engine/local_keys.rs` (remove
   fallback; ~50 lines deleted).
 
-**Dependencies.** PR 3a, 3b, 3c. PR 3c is a hard dependency: removing
+**Dependencies.** M3a, M3b, M3c. M3c is a hard dependency: removing
 the fallback without the byte-identical-derivation property test
 having validated the engine path is unsafe.
 
@@ -336,7 +358,7 @@ per Round 3 §7.10/§7.11 framing).
 - Workspace compiles; all tests green; all benches run.
 - `transfer.rs:322–340` (postcard roundtrip test) rewritten and passes
   for the new schema.
-- The byte-identical-derivation property test from PR 3b continues to
+- The byte-identical-derivation property test from M3b continues to
   pass (now exercising only the handle path, since fallback is gone).
 - `git grep -E 'combined_shared_secret|\\.ho\\b|\\.k_amount'` returns
   zero hits in `rust/` excluding `shekyl-crypto-pq` (which owns the
@@ -349,7 +371,7 @@ change is the bridge impl's fallback removal (~50 lines).
 
 ---
 
-### §3.5 PR 3e — documentation realignment
+### §3.5 M3e — documentation realignment
 
 **Title.** `docs: STAGE_1_PR_3 — post-migration realignment`
 
@@ -360,9 +382,9 @@ change is the bridge impl's fallback removal (~50 lines).
   handle-indirected workflow becomes the sole architecture; pre-
   migration framing moves to a "history" section or is deleted).
 - Update `docs/design/STAGE_1_PR_3_MIGRATION_AUDIT.md` snapshot
-  reference to the post-3d HEAD.
+  reference to the post-M3d HEAD.
 - Update `docs/CHANGELOG.md` per `91-documentation-after-plans.mdc`
-  with one entry per merged PR (3a, 3b, 3c, 3d).
+  with one entry per merged PR (M3a, M3b, M3c, M3d).
 - Update `docs/FOLLOWUPS.md`:
   - Close: any open V3.0 entries that reference the pre-migration
     architecture (review §V3.0 entries cross-referencing
@@ -385,10 +407,10 @@ change is the bridge impl's fallback removal (~50 lines).
 - Edit: `docs/FOLLOWUPS.md` (close + update entries).
 - Edit: `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` (cross-reference update).
 
-**Dependencies.** PR 3d (post-migration architecture must be the
+**Dependencies.** M3d (post-migration architecture must be the
 operative one before docs realign to it).
 
-**Schema state at PR boundary.** Unchanged from PR 3d.
+**Schema state at PR boundary.** Unchanged from M3d.
 
 **Property delivery.** None (doc-only).
 
@@ -403,8 +425,8 @@ operative one before docs realign to it).
   per audit §2.5; the CHANGELOG entries note this explicitly).
 
 **Estimated review surface.** Doc-only; depends on `KEY_ENGINE.md`'s
-post-migration update size. PR 3e can land same-day or next-day
-after PR 3d; freeze lifts at PR 3d's merge.
+post-migration update size. M3e can land same-day or next-day
+after M3d; freeze lifts at M3d's merge.
 
 ---
 
@@ -414,15 +436,15 @@ after PR 3d; freeze lifts at PR 3d's merge.
 
 | PR | Property state |
 |---|---|
-| 3a | Substrate. No property delivered. |
-| 3b | Engine cache populated. Property partial: orchestrator copy still present. |
-| 3c | Validation milestone. No property change. |
-| 3d | **"Secrets confined to engine" activates.** |
-| 3e | None (doc-only). |
+| M3a | Substrate. No property delivered. |
+| M3b | Engine cache populated. Property partial: orchestrator copy still present. |
+| M3c | Validation milestone. No property change. |
+| M3d | **"Secrets confined to engine" activates.** |
+| M3e | None (doc-only). |
 
-The "secrets confined to engine" property activates at PR 3d's
-merge. Earlier framing in design rounds anchored this to PR 3a;
-the audit and the 5-PR collapse moved it to PR 3d, which is honest
+The "secrets confined to engine" property activates at M3d's
+merge. Earlier framing in design rounds anchored this to M3a;
+the audit and the 5-PR collapse moved it to M3d, which is honest
 about when the orchestrator's `TransferDetails` actually stops
 carrying derived secrets.
 
@@ -430,54 +452,54 @@ carrying derived secrets.
 
 | PR | Primary source | Fallback | Both populated? |
 |---|---|---|---|
-| 3a | `TransferDetails` fields | — | n/a (only `TransferDetails` exists) |
-| 3b | `HandleTable` | `TransferDetails` fields | Yes (transitional) |
-| 3c | (unchanged from 3b) | (unchanged) | Yes |
-| 3d | `HandleTable` | — | No (`TransferDetails` fields removed) |
+| M3a | `TransferDetails` fields | — | n/a (only `TransferDetails` exists) |
+| M3b | `HandleTable` | `TransferDetails` fields | Yes (transitional) |
+| M3c | (unchanged from M3b) | (unchanged) | Yes |
+| M3d | `HandleTable` | — | No (`TransferDetails` fields removed) |
 
-The fallback at PR 3b is feature-detected, not feature-flagged: if
+The fallback at M3b is feature-detected, not feature-flagged: if
 the handle resolves, use it; if not, fall through. This means the
-fallback does not require any explicit "switch" at PR 3d — just the
+fallback does not require any explicit "switch" at M3d — just the
 removal of the source the fallback would have read.
 
 ### §4.3 Schema state at each PR boundary
 
 | PR | `TransferDetails` carries |
 |---|---|
-| Pre-3a | 5 secret-bearing fields (legacy) |
-| 3a | (unchanged) |
-| 3b | 5 secret-bearing fields (legacy, still populated; transitional fallback live) |
-| 3c | (unchanged) |
-| 3d | `source_ciphertext` + `output_handle` (only). 5 legacy fields removed. |
-| 3e | (unchanged) |
+| Pre-M3a | 5 secret-bearing fields (legacy) |
+| M3a | (unchanged) |
+| M3b | 5 secret-bearing fields (legacy, still populated; transitional fallback live) |
+| M3c | (unchanged) |
+| M3d | `source_ciphertext` + `output_handle` (only). 5 legacy fields removed. |
+| M3e | (unchanged) |
 
 ### §4.4 Test substrate evolution
 
-- **PR 3a.** New unit tests for `LocalKeys`, handle table, handle
+- **M3a.** New unit tests for `LocalKeys`, handle table, handle
   derivation. Existing scanner / engine-state tests untouched.
-- **PR 3b.** Scanner test fixtures rewrite to engine-mediated flow.
+- **M3b.** Scanner test fixtures rewrite to engine-mediated flow.
   New byte-identical-derivation property test.
-- **PR 3c.** New end-to-end engine signing test against `tx-builder`
+- **M3c.** New end-to-end engine signing test against `tx-builder`
   vectors.
-- **PR 3d.** `engine-state` test fixtures rewrite for new schema (10
+- **M3d.** `engine-state` test fixtures rewrite for new schema (10
   sites). Byte-identical-derivation test simplifies (no fallback
   branch).
-- **PR 3e.** No test changes (doc-only).
+- **M3e.** No test changes (doc-only).
 
 ### §4.5 PR sequencing & parallelism
 
 ```
-3a (foundation)
+M3a (foundation)
  ├─→ 3b (scanner reroute + source switch)
  │    └─→ 3d (schema cleanup; property activates) ──→ 3e (docs)
  └─→ 3c (additive test caller)              ──→ 3d
 ```
 
-PR 3b and PR 3c can merge in parallel. Both depend on PR 3a; both
-are prerequisites for PR 3d. PR 3e depends on PR 3d only.
+M3b and M3c can merge in parallel. Both depend on M3a; both
+are prerequisites for M3d. M3e depends on M3d only.
 
-The honest critical path is `3a → 3b → 3d → 3e` (4 PRs serial); 3c
-can land any time between 3a and 3d without blocking the path.
+The honest critical path is `M3a → M3b → M3d → M3e` (4 PRs serial); 3c
+can land any time between M3a and M3d without blocking the path.
 
 ---
 
@@ -487,9 +509,9 @@ can land any time between 3a and 3d without blocking the path.
 
 See top-of-document FREEZE NOTICE. Restated for completeness:
 
-- **Window.** PR 3a opens → PR 3d merges. (PR 3e is exempt; doc-only.)
+- **Window.** M3a opens → M3d merges. (M3e is exempt; doc-only.)
 - **Estimated duration.** 5–7 working days per audit §6.
-- **Lift condition.** PR 3d merges to `dev`.
+- **Lift condition.** M3d merges to `dev`.
 - **Exemptions.** Critical security fixes; CI infrastructure repairs.
 - **Authoring discipline.** Per `06-branching.mdc`, no contributor
   pushes to `dev` during the freeze without explicit migration-plan-
@@ -511,9 +533,9 @@ The cutover will:
 - Introduce production callers of `KeyEngine::sign_transaction` to
   replace what the wallet2 paths did.
 
-If the cutover begins before PR 3d merges, the cutover work plans
+If the cutover begins before M3d merges, the cutover work plans
 against the post-migration `KeyEngine` API (the trait surface stable
-at PR 3a's merge). If the cutover begins after PR 3d, the
+at M3a's merge). If the cutover begins after M3d, the
 "removed paths" set is unambiguous.
 
 **No cross-workstream changes are required by either side during the
@@ -522,29 +544,29 @@ freeze window.**
 ### §5.3 v31 multisig pre-flight
 
 Audit §4 confirmed structural alignment; expected outcome is "no
-concurrent migration required." PR 3a includes a pre-flight
+concurrent migration required." M3a includes a pre-flight
 verification step:
 
-- Re-inspect `rust/shekyl-engine-core/src/multisig/` at PR 3a HEAD.
+- Re-inspect `rust/shekyl-engine-core/src/multisig/` at M3a HEAD.
 - Confirm public types still carry public material only.
 - Confirm per-signer secret state still resides in session-scoped
   containers.
 - Confirm message-passing surfaces still carry public material only.
 
-If the inspection finds drift, PR 3a's description records the
+If the inspection finds drift, M3a's description records the
 finding and the migration plan adds a small concurrent-migration
-sub-PR (sequenced before PR 3d). Expected outcome: no drift.
+sub-PR (sequenced before M3d). Expected outcome: no drift.
 
 ### §5.4 `docs/FOLLOWUPS.md` entries
 
 This migration plan implies the following `FOLLOWUPS.md` updates,
-landing in PR 3e:
+landing in M3e:
 
 **Add (V3.0 close-records, audit trail):**
-- "PR 3 architectural-inheritance migration complete (PRs 3a–3e
+- "PR 3 architectural-inheritance migration complete (M3a–M3e
   per `STAGE_1_PR_3_MIGRATION_PLAN.md`)."
 - "TransferDetails secret-bearing fields removed; secrets confined
-  to engine via HandleTable (PR 3d)."
+  to engine via HandleTable (M3d)."
 
 **Update:**
 - §V3.1 line 259 (`Stage 2 — KeyEngine migration to actor`):
@@ -556,47 +578,47 @@ landing in PR 3e:
 
 **Close (if present):**
 - Any V3.0 entry that references the pre-migration `TransferDetails`
-  schema as the open question (the schema is settled at PR 3d).
+  schema as the open question (the schema is settled at M3d).
 
-PR 3a and PR 3b do not edit `FOLLOWUPS.md`; the entries land at
-PR 3e with the rest of the documentation realignment.
+M3a and M3b do not edit `FOLLOWUPS.md`; the entries land at
+M3e with the rest of the documentation realignment.
 
 ---
 
 ## §6 Open questions / explicit deferrals
 
-1. **Cross-crate test-fixture visibility for PR 3c.** PR 3c needs
+1. **Cross-crate test-fixture visibility for M3c.** M3c needs
    access to `tx-builder`'s test vectors from `engine-core` tests.
-   If `pub(crate)` visibility prevents this, PR 3c either (a) moves
+   If `pub(crate)` visibility prevents this, M3c either (a) moves
    the vectors to a shared `dev-dependencies` test-utility crate, or
    (b) duplicates a small fixture into `engine-core`'s test tree.
-   Decision deferred to PR 3c's draft phase; either resolution is
+   Decision deferred to M3c's draft phase; either resolution is
    acceptable.
 
 2. **`HandleTable` size bound.** Round 3 §7.10 framed this as a
    capacity-bounded FIFO eviction policy. The exact bound is not
-   set by this plan; PR 3a draws a default (suggested: 4096 handles
+   set by this plan; M3a draws a default (suggested: 4096 handles
    per shard × 16 shards = 65k handles, ample for typical wallets)
    and the migration-plan-final review can revisit. Bound changes
-   are non-breaking post-3a (cache-internal).
+   are non-breaking post-M3a (cache-internal).
 
-3. **Byte-identical-derivation test scope (PR 3b property).** The
+3. **Byte-identical-derivation test scope (M3b property).** The
    test must be deterministic across shards (the `HandleTable`'s
    shard assignment is content-addressed by handle, so deterministic).
    If a future change introduces non-determinism (e.g., parallel
    eviction), the property test catches it. No deferral needed.
 
-4. **PR 3c → cutover handoff documentation.** PR 3c's test caller
+4. **M3c → cutover handoff documentation.** M3c's test caller
    is the canonical example of how the post-cutover production
-   caller will look. PR 3e's docs should anchor this with a "the
+   caller will look. M3e's docs should anchor this with a "the
    wallet RPC cutover replaces the wallet2-bridged paths with a
    production caller of the same shape as `key_engine_sign_e2e.rs`"
    note. Light touch; not a deferral, just an explicit documentation
    item.
 
 5. **Audit re-run trigger.** Per `MIGRATION_AUDIT.md` §7.4, the
-   audit re-runs as PR 3a pre-flight if `dev` has advanced beyond
-   `ffcaa62e9` when PR 3a opens. The freeze (§5.1) is the structural
+   audit re-runs as M3a pre-flight if `dev` has advanced beyond
+   `ffcaa62e9` when M3a opens. The freeze (§5.1) is the structural
    mitigation; the re-run is the residual fallback. Re-run takes
    <30 minutes per audit's documented methodology.
 
@@ -620,7 +642,7 @@ This plan's substantive findings derive from
   audit §6.
 
 If the audit's findings change (e.g., a runtime path the static
-audit missed surfaces during PR 3a's CI), the migration plan's
+audit missed surfaces during M3a's CI), the migration plan's
 scope tables reopen for revision before the affected PR drafts.
 
 ---
@@ -630,9 +652,9 @@ scope tables reopen for revision before the affected PR drafts.
 This document is operational; its lifetime is the migration's
 duration. Per `15-deletion-and-debt.mdc`:
 
-- **Active phase.** PRs 3a–3e in flight. Document is the source of
+- **Active phase.** M3a–M3e in flight. Document is the source of
   truth on per-PR scope and sequencing.
-- **Post-migration.** PR 3e closes the migration. This document
+- **Post-migration.** M3e closes the migration. This document
   is retained as historical record (the migration's audit trail)
   alongside `STAGE_1_PR_3_KEY_ENGINE.md` (now the operative design
   doc) and `STAGE_1_PR_3_MIGRATION_AUDIT.md` (now the historical
