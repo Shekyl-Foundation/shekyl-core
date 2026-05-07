@@ -1,6 +1,8 @@
 # Stage 1 PR 3 — `KeyEngine` extraction — design
 
-**Status.** Round 4 closed; M3a pre-flight pending. Stage 1 PR 3 of the seven-trait
+**Status.** Round 4 closed; M3a pre-flight closed (§7.10–§7.13
+dispositions resolved; see closures below); M3a feat branch
+cleared to cut. Stage 1 PR 3 of the seven-trait
 extraction chain pinned in
 [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
 §8.1, named explicitly as PR 3 in
@@ -201,21 +203,34 @@ required adversarial review to surface.
   the new shape's open questions resolve to" implementation
   concern keeps each PR's review surface bounded.
 
-- **M3a pre-flight (forthcoming).** Per the migration plan, M3a's
-  pre-flight investigation closes §7.10–§7.13 dispositions
-  (concurrent-access shape; handle-derivation formula and its
-  coupling to §7.11's persistence disposition; memory-pressure
-  bound). The migration plan §3.1 currently defers these to
-  M3a pre-flight rather than over-specifying them; M3a's PR will
-  amend the migration plan to cite the closures. Per
+- **M3a pre-flight (closed).** Per the migration plan, M3a's
+  pre-flight investigation closed the §7.10–§7.13 disposition
+  cluster — the handle-model emergent attack surface Round 3
+  surfaced. Resolutions:
+  - **§7.11 (handle persistence) = option (3) deterministic.**
+    Round-3 lean toward (1) ephemeral amended; the four-question
+    coupled cluster collapses from one disposition.
+  - **§7.12 (handle unforgeability) = cSHAKE256-based
+    deterministic derivation.** A7 closed by construction.
+    Implementation crate: `sha3 = "0.10"` (already a workspace
+    dep) with `zeroize` feature flag enabled.
+  - **§7.10 (memory-pressure / A6) = dissolved by §7.11=(3).**
+    No table; no growth target.
+  - **§7.13 (concurrency / Pattern-5) = dissolved by §7.11=(3).**
+    No shared mutable state; pure per-call sponge-state mutation
+    only.
+
+  The migration plan §3.1 amends to cite the closures and
+  revises the M3a scope to drop the handle-table data structure
+  and the concurrency-primitive selection from M3a's
+  files-touched estimate. Per
   [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)'s
   4–6-rounds-before-implementation rule for crypto-critical
-  trait migrations, M3a does not cut a feat branch until the
-  pre-flight closes the deferred questions; the substrate
-  Round 3 produced (the four-pattern checklist; the Trust-class
-  A/B classification; the Pattern-7 escalation rule) is
-  forward-template content for PR 4–7 regardless of how the
-  handle-model emergent surface resolves.
+  trait migrations, M3a is now cleared to cut its feat branch
+  off `dev` at this commit's parent. The substrate Round 3
+  produced (the four-pattern checklist; the Trust-class A/B
+  classification; the Pattern-7 escalation rule) is
+  forward-template content for PR 4–7 regardless.
 
 The long-form draft history will live ephemerally in
 `.cursor/plans/stage_1_pr_3_plan_*.plan.md`; this document is the
@@ -3554,45 +3569,195 @@ The cross-references for the surviving forward-looking work:
 
 ### 7.10 Handle-table memory-pressure attack (A6)
 
-**Round-4 disposition required.** A6 from Round 3's adversarial
-pass. An adversary who can make the wallet scan a large block
-range (broadcasting many crafted outputs that pass the X25519
-pre-filter, or otherwise inflating the Mine-output count) can
-force the workflow-internal `HandleTable` to grow without bound
-between successful claims and eventual spends. Long-lived wallets
-with infrequent spends accumulate handles indefinitely.
+**Closed at M3a pre-flight: dissolved by §7.11=(3).** Under §7.11's
+deterministic-handle disposition, the engine holds no in-memory
+handle table; the A6 attack surface (adversary inflates Mine-output
+count to grow an unbounded table between claims and spends) has no
+target. No size cap, no eviction policy, no `KeyEngineError`
+variants for evicted-handle resolution, and no `release_handle`
+trait method are required for V3.0. See
+`STAGE_1_PR_3_MIGRATION_PLAN.md` §3.1 for the operational
+consequence and §7.11 for the gating disposition.
 
-**Round-4 candidate dispositions:**
+#### Why this dissolves rather than just shrinking
+
+The Round-3 framing of A6 named three candidate dispositions —
+hard size cap with eviction; backpressure / orchestrator-cooperative
+pruning; persistence-bounded growth — each of which would have
+shipped real M3a code (data structure + policy + error variants +
+tests). §7.11=(3) eliminates the data structure; without a table,
+none of the three candidates apply.
+
+#### Residual concern named for the record
+
+The engine still holds short-lived per-call decap state during
+`try_claim_output` (HKDF chain inputs, candidate-ciphertext bytes,
+derived secret material before it is wrapped in the returned
+`OutputClaim`). That state lives in stack frames during the call
+and does not accumulate across calls, so it is not an A6-class
+memory-pressure surface. A6 named the *cross-call accumulation*
+attack specifically; per-call stack state is bounded by call depth,
+not by adversarial output count, and is wiped per
+`35-secure-memory.mdc`'s structural-memwipe rule.
+
+#### Original analysis (preserved for forward-reader context)
+
+A6 from Round 3's adversarial pass. An adversary who can make the
+wallet scan a large block range (broadcasting many crafted outputs
+that pass the X25519 pre-filter, or otherwise inflating the
+Mine-output count) can force the workflow-internal `HandleTable`
+to grow without bound between successful claims and eventual
+spends. Long-lived wallets with infrequent spends accumulate
+handles indefinitely.
+
+Round-4 candidate dispositions surfaced before the §7.11 closure:
 
 - **Hard size cap with eviction.** The table grows up to a
   configured cap; insertions past the cap evict according to a
   documented policy (LRU; orchestrator-pinned-vs-unpinned;
-  persistence-aware aging). Eviction-policy choice itself is a
+  persistence-aware aging). Eviction-policy choice itself was a
   Round-4 design question; the orchestrator's interaction with
   evicted handles (silent re-claim via re-scan? error variant?)
-  affects the trait surface's `KeyEngineError` enumeration.
-- **Backpressure / orchestrator-cooperative pruning.** The
-  trait surface gains a method (`release_handle(OutputHandle)`
+  would have affected the trait surface's `KeyEngineError`
+  enumeration.
+- **Backpressure / orchestrator-cooperative pruning.** The trait
+  surface would have gained a method (`release_handle(OutputHandle)`
   or similar) that the orchestrator calls when an output is
-  permanently spent or a wallet is closed. The table stays
-  bounded by orchestrator discipline rather than internal
-  policy.
-- **Persistence-bounded growth.** If handle persistence ships
-  as the disk-mapping option (per §7.11 below), the table's
-  growth is bounded by available disk rather than memory.
-  Memory-pressure becomes a non-issue at the cost of disk
-  pressure and persistence-layer security discipline.
+  permanently spent or a wallet is closed. The table stays bounded
+  by orchestrator discipline rather than internal policy.
+- **Persistence-bounded growth.** If handle persistence had shipped
+  as the disk-mapping option per §7.11's now-rejected (2a)/(2b)
+  branches, the table's growth would have been bounded by available
+  disk rather than memory. Memory-pressure would have become a
+  non-issue at the cost of disk pressure and persistence-layer
+  security discipline.
 
-The disposition couples to §7.11 (handle persistence). Round 4
-selects.
+§7.11=(3) makes all three moot.
 
 ### 7.11 Handle persistence across wallet restart
 
-**Round-4 disposition required.** Four option-space candidates
-surfaced in Round 3 synthesis (option (2) splits into 2a / 2b
-with structurally different trade-offs); PR 3's Round-3 lean is
-**(1)** for V3.0 with explicit deferral of (2b) to V3.x as the
-performance optimization when restart cost matters.
+**Closed at M3a pre-flight: option (3) — handle is deterministic
+from ciphertext.** V3.0 disposition pins
+`handle = cSHAKE256(view_secret || tx_hash || output_index_le_bytes(8))`
+with customization `"shekyl/output-handle-v1"`, 16-byte output. The
+engine holds no in-memory handle table, no persistence layer, no
+eviction policy. See `STAGE_1_PR_3_MIGRATION_PLAN.md` §3.1 for the
+operational consequence; see §7.12 for the cSHAKE256 derivation
+specification.
+
+#### Why (3) over the Round-3 lean toward (1)
+
+The Round-3 synthesis preferred (1) ephemeral on the basis that
+"~1 s startup cost is acceptable and (3) doubles per-output
+detection cost." That framing weighed (1) and (3) head-to-head.
+M3a pre-flight re-evaluates against the full four-question coupled
+cluster (§7.10 / §7.12 / §7.13) and tilts toward (3):
+
+- **(3) dissolves §7.10 (memory-pressure / A6) entirely.** No
+  table exists; no growth target for the attacker to inflate.
+- **(3) dissolves §7.13 (concurrency / Pattern-5) entirely.** No
+  shared mutable state; no contention-timing side channel; no
+  concurrent-access shape to choose; no Pattern-5 cluster
+  analysis required.
+- **(3) closes §7.12 (unforgeability / A7) by construction.**
+  `handle = cSHAKE256(view_secret, ...)` is unforgeable without
+  `view_secret` under cSHAKE256's standard PRF assumptions; A7
+  vanishes without a separate disposition.
+
+Three of the four open questions collapse from one disposition.
+
+#### Cost trade-off
+
+(3)'s cost: per-spend re-decap to recover spending material from
+`(view_secret, source_ciphertext)` rather than reading from a
+cached handle-table entry. Concrete cost:
+
+- ~100 µs ML-KEM-768 decap × inputs per spend (typically 1–3).
+- Total per-spend overhead: 100–300 µs.
+- Compared to BP+ range proof (tens of ms) and FCMP++ witness
+  (tens of ms) at spend time, the re-decap is well below 1% of
+  total spend-construction latency.
+
+(1)'s cost (the trade): startup cost ~100 µs × `#mine_persisted`.
+For an active wallet with 10K outputs, ~1 s. Avoided under (3).
+
+The per-spend overhead is bounded, small, and predictable. The
+startup-cost avoidance under (1) is a real but rare-event win.
+The structural benefits of dissolving §7.10 / §7.13 / §7.12
+substantially outweigh the per-spend re-decap cost.
+
+#### Side benefits of (3)
+
+- **Idempotent across reorgs and re-syncs.** Same `(tx_hash,
+  output_index)` always produces the same handle; the
+  orchestrator's stored handle never goes stale across
+  reorg-and-resync sequences. Under (1), reorg-then-resync
+  produces a fresh ephemeral handle and the orchestrator's prior
+  reference is invalidated.
+- **Pattern-6 (replay/idempotency) trivially satisfied for
+  `try_claim_output`.** The `try_claim_output` workflow becomes a
+  pure function of `(view_secret, ciphertext)`; replay produces
+  the same handle. Pattern-6's "subsequent calls observe the
+  existing handle-table entry" framing in §7.14 becomes
+  "subsequent calls produce the same deterministic handle" —
+  strictly stronger guarantee.
+- **Audit-surface reduction.** The Round-3 test substrate items
+  (concurrent-insert correctness, eviction-policy correctness,
+  bounded-growth invariants, timing-channel benchmarks under
+  concurrent load) collapse to pure-function determinism +
+  cSHAKE256 derivation tests.
+
+#### Rejected alternatives
+
+- **(1) Ephemeral handles, restart-rescan.** Round-3 lean.
+  Rejected at M3a pre-flight in favor of (3) per the structural
+  reduction above. The Round-3 reasoning was not wrong; it was
+  framed before the four-question coupled cluster was synthesized
+  as a single disposition surface.
+- **(2a) Persisted handle → ciphertext-pointer.** Rejected.
+  (2a)'s benefit over (3) is restart-skipping the rescan; (2a)'s
+  cost is added persistence-layer indirection without
+  proportionate benefit given (2a) still pays per-spend decap
+  (effectively (3) with a redirect). The Round-3 framing already
+  named this as "reject explicitly rather than leave it ambient."
+- **(2b) Persisted handle → encrypted-secret-storage.** Deferred
+  to V3.x as a performance-optimization candidate. (2b)'s value
+  is cheap restart with no re-scan and no doubled decap; (2b)'s
+  cost is persistence-layer encryption discipline (key-derivation
+  consistency across wallet sessions, on-disk format versioning,
+  encrypted-secret wipe-on-drop in the persistence layer). For
+  V3.0 with discipline-budget pressure and audit-clarity
+  priority, (2b)'s complexity is not justified; the per-spend
+  re-decap cost in (3) is not measurably user-visible. If (3)'s
+  per-spend overhead ever surfaces as a measured bottleneck
+  (post-V3.0 telemetry), V3.x revisits with (2b).
+
+#### One residual concern named for the record
+
+(3) commits to "spending material is always recoverable from
+`(view_secret, source_ciphertext)`." This is true today (it's how
+the workflow already works) but (3) makes the property
+load-bearing for spending, not just for detection. A future
+protocol amendment that breaks recoverability-from-ciphertext
+would also break (3)'s handle resolution at spend time. Under
+(1), the same amendment would break detection but the cached
+spending material in the handle table would survive across the
+change.
+
+The objection is weak because (a) protocol amendments that break
+secret-recoverability-from-ciphertext are inherently consensus
+changes that require wallet rescanning anyway, and (b)
+handle-table state under (1) would not survive such an amendment
+without explicit migration code (which `15-deletion-and-debt.mdc`
+argues against adding pre-genesis). Naming the residual for
+forward-reader honesty.
+
+#### Original analysis (preserved for forward-reader context)
+
+Round-3 synthesis surfaced four candidates; PR 3's Round-3 lean
+was **(1)** for V3.0 with explicit deferral of (2b) to V3.x as the
+performance optimization when restart cost matters. M3a pre-flight
+amended the lean per the closure analysis above.
 
 - **(1) Ephemeral handles, restart-rescan.** Wallet startup
   re-runs `try_claim_output` against persisted ciphertexts;
@@ -3606,61 +3771,191 @@ performance optimization when restart cost matters.
   shape (handle → on-chain-ciphertext locator) but not the
   secret material; on resolution, the impl reads the locator,
   fetches the ciphertext, and re-runs decap to recover the
-  secret. Restart skips the rescan but pays a per-spend
-  decap cost; effectively (3) with a redirect step. Limited
-  benefit over (3) given the doubled decap path is the same in
-  both; the redirect adds storage complexity without
-  proportionate benefit. Worth naming as a discrete option so
-  Round 4 can reject it explicitly rather than leave it ambient.
-- **(2b) Persisted handle → encrypted-secret-storage.**
-  Persists the handle table with the per-output secrets
-  encrypted under a key derived from the wallet password (or
-  whatever wallet-encryption discipline lives in the
-  persistence layer); on restart, after the user provides the
-  password, decrypt the persisted secrets and load them into
-  the in-memory table. **Cheap restart after password unlock
-  with no re-scan and no doubled decap cost** — the
-  optimization (1) and (3) both lack. Cost: persistence-layer
-  complexity (encryption discipline; key-derivation
-  consistency; on-disk format versioning); the table itself
-  becomes a persistence-secret subject to the wallet-encryption
-  invariants; cross-restart consistency requires wallet-encryption-key
-  derivation to be deterministic across
-  sessions. Most complex of the four options; delivers the
-  strongest restart-cost property.
-- **(3) Handle is deterministic from ciphertext.** `handle =
-  HKDF(view_secret, "shekyl/output-handle-v1", ciphertext_hash)`.
-  Stateless: no table; lookup at spend time = re-decap. Pays
-  the decap cost twice (claim + spend) but the V3.0
-  implementation is structurally cleanest. Memory-pressure
-  attack (A6) is dissolved.
-
-Round-3 lean: **(1)**. Reasoning: simplest correctness story
-for V3.0; the ~1 s startup cost is acceptable for desktop and
-server wallets; mobile wallets typically have fewer outputs and
-constrained CPU but the bound stays operationally manageable.
-**(2a)** introduces persistence-layer complexity without a
-proportionate benefit over (3); probably rejected at Round 4.
-**(2b)** delivers cheap restart but requires committing to
-persistence-layer security discipline that PR 4–7 work has to
-consume correctly — premature commitment for V3.0 but the
-natural V3.x optimization when wallets accumulate enough
-outputs that (1)'s startup cost matters. **(3)** is
-structurally cleanest but doubles the per-output detection
-cost, and the bench impact is direct (`_mine` bench absorbs the
-decap-twice cost). Round 4 ratifies the Round-3 lean or
-amends.
+  secret. Restart skips the rescan but pays a per-spend decap
+  cost; effectively (3) with a redirect step. Limited benefit
+  over (3) given the doubled decap path is the same in both;
+  the redirect adds storage complexity without proportionate
+  benefit. Worth naming as a discrete option so Round 4 can
+  reject it explicitly rather than leave it ambient.
+- **(2b) Persisted handle → encrypted-secret-storage.** Persists
+  the handle table with the per-output secrets encrypted under a
+  key derived from the wallet password (or whatever
+  wallet-encryption discipline lives in the persistence layer);
+  on restart, after the user provides the password, decrypt the
+  persisted secrets and load them into the in-memory table.
+  **Cheap restart after password unlock with no re-scan and no
+  doubled decap cost** — the optimization (1) and (3) both
+  lack. Cost: persistence-layer complexity (encryption
+  discipline; key-derivation consistency; on-disk format
+  versioning); the table itself becomes a persistence-secret
+  subject to the wallet-encryption invariants; cross-restart
+  consistency requires wallet-encryption-key derivation to be
+  deterministic across sessions. Most complex of the four
+  options; delivers the strongest restart-cost property.
+- **(3) Handle is deterministic from ciphertext.** Stateless: no
+  table; lookup at spend time = re-decap. Pays the decap cost
+  twice (claim + spend) but the V3.0 implementation is
+  structurally cleanest. Memory-pressure attack (A6) is
+  dissolved. **Selected at M3a pre-flight; specification pinned
+  in §7.12.**
 
 ### 7.12 Handle unforgeability (A7)
 
-**Round-4 disposition required.** A7 from Round 3's adversarial
-pass. If handles are predictable (e.g., monotonic counter), an
-attacker who can inject controlled outputs into the wallet's
-scan stream might predict assigned handle IDs and reference them
-in unrelated contexts (cross-engine references, cross-session
-replay, etc.).
+**Closed at M3a pre-flight: cSHAKE256-based deterministic handle
+derivation.** Closure inherits structurally from §7.11=(3): the
+deterministic handle is unforgeable without `view_secret` under
+cSHAKE256's standard PRF assumptions; A7 closes by construction.
+See `STAGE_1_PR_3_MIGRATION_PLAN.md` §3.1 for the operational
+consequence and §7.11 for the gating disposition.
 
-**Round-4 candidate dispositions:**
+#### Disposition
+
+```text
+handle = cSHAKE256(
+    function_name = "",                      // SP 800-185 §3.2:
+                                             // empty for non-NIST
+                                             // applications
+    customization = "shekyl/output-handle-v1",
+    input         = view_secret
+                 || tx_hash
+                 || output_index_le_bytes(8),
+    output_length = 16 bytes
+)
+```
+
+Inputs:
+- `view_secret` — wallet's view-key material as bytes
+  (`zeroize`-managed in caller frame).
+- `tx_hash` — 32-byte canonical hash of the on-chain transaction
+  containing the output.
+- `output_index_le_bytes(8)` — output position within the
+  transaction, little-endian-encoded as 8 bytes.
+
+#### Implementation crate: `sha3 = "0.10"` with `zeroize` feature
+
+- Already a workspace dependency via `shekyl-crypto-pq`'s ML-KEM
+  bindings; no new direct dependency added.
+- Provides `CShake256::new(customization: &[u8])` matching
+  SP 800-185 §3.2 idiomatic usage (function-name slot empty;
+  non-NIST domain separation via the customization slot).
+- `Sha3State` (the inner sponge state inside the `CShake256Core`
+  wrapper) implements `Zeroize + ZeroizeOnDrop` under the
+  `zeroize` cargo feature. M3a enables the feature on the
+  `shekyl-crypto-pq` import. View-secret bytes that pass through
+  the hasher's input phase are wiped on drop without a wrapper
+  newtype, satisfying `35-secure-memory.mdc`'s
+  structural-memwipe rule for secret-bearing intermediate state.
+
+The `tiny-keccak` + `cshake` alternative was investigated and
+rejected on memory-wipe grounds: `tiny_keccak::CShake`'s inner
+`KeccakState` is private, has no `Zeroize` impl, no `Drop` impl,
+no `reset()` method, and no public path to overwrite the sponge
+state. Wipe-on-drop discipline under that crate would require
+unsafe transmute against a private type's layout (brittle,
+layout-dependent) or a fork. `sha3` removes the gap structurally.
+
+#### Why cSHAKE256 over HMAC-SHA-256 / HKDF-SHA512
+
+- **PQC alignment.** SHAKE family is the NIST-recommended
+  KDF-from-Keccak primitive for PQC-era constructions per
+  SP 800-56C Rev 2 and SP 800-185. New cryptographic
+  constructions in `shekyl-core` should align with the PQC-era
+  primitive choice rather than continuing to compose SHA-2
+  family functions inherited from pre-PQC work, per the
+  architectural-inheritance discipline in
+  `.cursor/rules/16-architectural-inheritance.mdc`.
+- **Native domain separation.** cSHAKE256's `customization`
+  parameter provides spec-defined domain separation per
+  SP 800-185 §3.2; HMAC-SHA-256 would require ad-hoc input
+  prefixing convention that future readers parse from
+  implementation rather than spec.
+- **Full-output collision resistance.** cSHAKE256 produces
+  arbitrary-length output without truncation artifacts;
+  HMAC-SHA-256 produces 32 bytes that we'd truncate to 16,
+  leaving an unused upper-half whose security argument is
+  implicit.
+- **Different KDF for different jobs.** HKDF-SHA512 is retained
+  where its multi-purpose extract-then-expand structure is
+  load-bearing (combined-shared-secret chain, per-output secret
+  derivation, signing seeds). cSHAKE256 is the right primitive
+  for single-purpose XOF identifier derivation; using the right
+  tool for the job is structurally better than uniform tool
+  choice.
+
+#### Length rationale: 16 bytes
+
+128-bit security exceeds practical attack thresholds:
+
+- Birthday collision at 2^64 distinct outputs (unreachable;
+  would require 2^64 outputs ever produced for the wallet's
+  `view_secret`).
+- Forgery resistance at 2^128 attempts under cSHAKE256's
+  standard PRF assumptions.
+
+Size advantages at 16 bytes vs 32:
+
+- Cache footprint for 65K handles: 1 MB vs 2 MB.
+- Cross-boundary message size for `OutputClaim` and `TxToSign`
+  payloads: halved per handle.
+
+Future versioning via the customization-string suffix
+(`shekyl/output-handle-v2`) up-sizes if quantum threats to
+128-bit security ever materialize. The versioning axis is in the
+customization string, not the function-name; both are
+deterministic inputs to the cSHAKE256 invocation, so a `v2`
+customization string produces a different handle for the same
+`(view_secret, tx_hash, output_index)` triple, providing
+migration-by-customization-bump semantics.
+
+#### Binding rationale: `(tx_hash, output_index)`, not subaddress
+
+The handle's job is identifying the on-chain output. Subaddress
+identity is detection-context metadata stored alongside (in
+`OutputClaim`, in `TransferDetails` post-migration); it is not
+the handle's identity. Subaddress binding was rejected on two
+grounds:
+
+- **Privacy.** An orchestrator-visible handle that encodes
+  subaddress identity could leak which subaddress detected the
+  output to a passive observer of orchestrator state.
+- **Determinism under subaddress rotation.** A wallet that
+  rotates its subaddress set should not lose handle stability
+  for outputs detected before the rotation; subaddress-bound
+  handles would invalidate.
+
+The `(tx_hash, output_index)` pair is the chain's canonical
+identifier for an output position and the natural binding axis.
+
+#### A7 closure (forgery resistance argument)
+
+Without `view_secret`, an attacker observing `(tx_hash,
+output_index)` cannot compute the handle: cSHAKE256 with
+`view_secret` in the input phase is a PRF in `view_secret`
+(standard assumption). The orchestrator-visible handle is
+therefore pseudorandom from any party's perspective without
+`view_secret`; cross-engine references, cross-session replay,
+and predicted-handle injection attacks A7 named are foreclosed
+by construction.
+
+#### Impl-time naming nit
+
+The customization-string constant in M3a's impl should be named
+to match SP 800-185 vocabulary (e.g.,
+`OUTPUT_HANDLE_CUSTOMIZATION` or `OUTPUT_HANDLE_DOMAIN_SEP`)
+rather than something suggesting "function name" — the
+function-name slot is empty and reserved for NIST-defined
+functions; the domain-separation string occupies the
+customization slot.
+
+#### Original analysis (preserved for forward-reader context)
+
+A7 from Round 3's adversarial pass. If handles were predictable
+(e.g., monotonic counter), an attacker who can inject controlled
+outputs into the wallet's scan stream might predict assigned
+handle IDs and reference them in unrelated contexts
+(cross-engine references, cross-session replay, etc.).
+
+Round-4 candidate dispositions surfaced before the §7.11 closure:
 
 - **Counter-based handles** (8 bytes, monotonic per engine
   instance). Cheap; predictable; vulnerable to A7 unless the
@@ -3669,48 +3964,89 @@ replay, etc.).
   into the handle).
 - **UUID-based handles** (16 bytes; v4 random). Unpredictable;
   collision-resistant under birthday bound; standard library
-  support. Probably the V3.0-proportional choice.
-- **Cryptographic handles** (16 bytes from a CSPRNG, or HKDF-derived
-  from view secret + per-handle nonce). Unforgeable
-  under standard cryptographic assumptions; closes A7
-  completely. Cost is similar to UUID at the storage-and-comparison
-  level; the unforgeability property is structurally
-  stronger.
+  support.
+- **Cryptographic handles** (16 bytes from a CSPRNG, or
+  HKDF-derived from view secret + per-handle nonce).
+  Unforgeable under standard cryptographic assumptions; closes
+  A7 completely.
 
-Round-4 selects. The choice couples to §7.11's persistence
-disposition: under (1), handle uniqueness only needs to hold per
-session, so counter-with-engine-ID is sufficient. Under (2)/(3),
-handles persist across sessions or are deterministic from
-ciphertext, which constrains the choice differently.
+The choice coupled to §7.11's persistence disposition. M3a
+pre-flight selected §7.11=(3), which constrained the choice to
+deterministic-from-ciphertext; the cryptographic-handle branch
+above narrows further to cSHAKE256 per the analysis in this
+section.
 
 ### 7.13 Handle-table concurrency quality (Pattern-5 cluster)
 
-**Round-4 disposition required.** Per Round 3 Pattern-5 cluster
-(cross-call state correlation as side-channel). The handle
-table's concurrent-access shape is interior mutability behind
-the `&self` async trait surface. Side-channel observers can
-infer table state changes by measuring response-time variance
-(insertion vs no-op), lock-contention patterns, and cache-miss
-patterns under concurrent load.
+**Closed at M3a pre-flight: dissolved by §7.11=(3).** Under
+§7.11's deterministic-handle disposition, the engine holds no
+shared mutable state at the handle layer; `try_claim_output` and
+`sign_transaction` are pure functions of their inputs (modulo
+the `&self` borrow of the long-term key material, which is
+read-only). The Pattern-5 cluster's concurrent-access-shape
+question, eviction-policy contention question, and
+timing-channel-under-load question all have no subject. See
+`STAGE_1_PR_3_MIGRATION_PLAN.md` §3.1 for the operational
+consequence and §7.11 for the gating disposition.
 
-**Round-4 candidate dispositions:**
+#### Why this dissolves rather than just trivializing
 
-- **Sharded `RwLock<HashMap<...>>`.** Bounded contention; standard
-  pattern; observable contention under sustained adversarial
-  load.
+The Round-3 framing of Pattern-5 named three concurrent-access
+shapes (sharded `RwLock<HashMap>`; lock-free hashmap; fair-queued
+single-writer), each of which would have shipped real M3a code
+(data structure + concurrency primitive + concurrent-load
+benchmarks + explicit timing-channel analysis). §7.11=(3)
+eliminates the shared mutable state; without state to share,
+none of the three shapes apply. The
+`engine_trait_bench_key_sign_transaction_resolve_handle` bench
+that the Round-3 framing planned to feed becomes "measure
+deterministic-derivation cost" — a single-thread microbench, not
+a contention benchmark.
+
+#### Residual concern named for the record
+
+cSHAKE256 is itself implemented as sponge-state mutation inside
+the hasher instance during the call. For `&self`-style
+invocation, the implementor constructs a fresh hasher per call
+(no sharing of hasher state across calls), so each invocation
+has its own thread-local-equivalent state. Cross-call state
+correlation as a side channel does not arise.
+
+The remaining timing-channel concern is constant-time-ness of
+cSHAKE256 itself (the Keccak-f permutation) — a primitive-level
+concern covered by the `sha3` crate's audit posture and the
+workspace's existing constant-time-or-explicit-rejection
+discipline for crypto-primitive choice. This is
+`35-secure-memory.mdc` / `30-cryptography.mdc` territory rather
+than M3a-specific.
+
+#### Original analysis (preserved for forward-reader context)
+
+Per Round 3 Pattern-5 cluster (cross-call state correlation as
+side-channel). The handle table's concurrent-access shape was
+interior mutability behind the `&self` async trait surface;
+side-channel observers could have inferred table state changes
+by measuring response-time variance (insertion vs no-op),
+lock-contention patterns, and cache-miss patterns under
+concurrent load.
+
+Round-4 candidate dispositions surfaced before the §7.11
+closure:
+
+- **Sharded `RwLock<HashMap<...>>`.** Bounded contention;
+  standard pattern; observable contention under sustained
+  adversarial load.
 - **Lock-free hashmap.** Higher complexity; lower contention
-  observability; depends on a vetted dependency
-  (`dashmap`, `crossbeam`, etc.).
+  observability; depends on a vetted dependency (`dashmap`,
+  `crossbeam`, etc.).
 - **Fair-queued single-writer.** Eliminates contention timing
   channels at the cost of per-call queue overhead. Useful if
-  the hot-path is read-dominated (lookups during
+  the hot-path was read-dominated (lookups during
   `sign_transaction`) with rare writes (insertions during
   `try_claim_output`).
 
-Round-4 selects, with explicit timing-channel analysis under
-concurrent-load benchmarks. The selection feeds the
-`engine_trait_bench_key_sign_transaction_resolve_handle` bench's
-expected cost regime.
+§7.11=(3) makes all three moot; M3a ships no shared mutable
+handle-layer state.
 
 ### 7.14 Pattern-6 replay/idempotency contract (KeyEngine)
 
