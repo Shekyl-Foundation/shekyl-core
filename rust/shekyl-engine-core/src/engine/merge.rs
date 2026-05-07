@@ -304,7 +304,8 @@ pub(crate) fn apply_scan_result_to_state(
             .push(dt.output);
     }
 
-    let mut key_images_by_height: BTreeMap<u64, Vec<[u8; 32]>> = BTreeMap::new();
+    let mut key_images_by_height: BTreeMap<u64, Vec<shekyl_crypto_pq::key_image::KeyImage>> =
+        BTreeMap::new();
     for ki in spent_key_images {
         if !processed_height_range.contains(&ki.block_height) {
             return Err(RefreshError::MalformedScanResult {
@@ -545,7 +546,7 @@ mod tests {
         // here we use `LedgerIndexes::set_key_image` to put a known
         // value in place so we can drive `detect_spends` through the
         // `ScanResult` surface.
-        let key_image = [0xCC; 32];
+        let key_image = shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([0xCC; 32]);
         indexes.set_key_image(&mut ledger, 0, key_image);
 
         let result = ScanResult {
@@ -732,7 +733,7 @@ mod tests {
             new_transfers: Vec::new(),
             spent_key_images: vec![KeyImageObserved {
                 block_height: 9,
-                key_image: [0xCC; 32],
+                key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([0xCC; 32]),
             }],
             stake_events: Vec::new(),
             reorg_rewind: None,

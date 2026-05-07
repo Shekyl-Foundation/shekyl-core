@@ -274,7 +274,7 @@ fn scanner_get_unstakeable_outputs(scanner: &ScannerState) -> Result<Value, Engi
 }
 
 #[cfg(feature = "rust-scanner")]
-fn parse_key_image(params: &Value) -> Result<[u8; 32], EngineError> {
+fn parse_key_image(params: &Value) -> Result<shekyl_crypto_pq::key_image::KeyImage, EngineError> {
     let key_image = params
         .get("key_image")
         .and_then(|v| v.as_str())
@@ -294,7 +294,9 @@ fn parse_key_image(params: &Value) -> Result<[u8; 32], EngineError> {
     }
     let mut ki = [0u8; 32];
     ki.copy_from_slice(&ki_bytes);
-    Ok(ki)
+    Ok(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
+        ki,
+    ))
 }
 
 #[cfg(feature = "rust-scanner")]

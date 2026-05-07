@@ -10,6 +10,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use shekyl_crypto_pq::key_image::KeyImage;
+
 /// CounterProof: chain evidence for tx_counter advancement (SS13.4).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CounterProof {
@@ -19,7 +21,7 @@ pub struct CounterProof {
     pub block_height: u64,
     pub block_hash: [u8; 32],
     pub tx_position: u16,
-    pub consumed_inputs: Vec<[u8; 32]>,
+    pub consumed_inputs: Vec<KeyImage>,
     pub resulting_outputs: Vec<[u8; 32]>,
     pub intent_hash: [u8; 32],
     pub sender_sig: Vec<u8>,
@@ -36,7 +38,7 @@ impl CounterProof {
         buf.extend_from_slice(&self.tx_position.to_le_bytes());
         buf.extend_from_slice(&(self.consumed_inputs.len() as u32).to_le_bytes());
         for ki in &self.consumed_inputs {
-            buf.extend_from_slice(ki);
+            buf.extend_from_slice(ki.as_bytes());
         }
         buf.extend_from_slice(&(self.resulting_outputs.len() as u32).to_le_bytes());
         for op in &self.resulting_outputs {
@@ -80,7 +82,7 @@ pub trait CounterProofChainView {
     fn tx_all_scheme_id_2(&self, tx_hash: &[u8; 32]) -> Option<bool>;
 
     /// Check if a key image is tracked as an unspent output for the group.
-    fn is_tracked_unspent(&self, key_image: &[u8; 32], group_id: &[u8; 32]) -> bool;
+    fn is_tracked_unspent(&self, key_image: &KeyImage, group_id: &[u8; 32]) -> bool;
 }
 
 /// Verify a CounterProof against local chain view (SS13.4 rules 1-7).
@@ -171,7 +173,7 @@ mod tests {
             }
         }
 
-        fn is_tracked_unspent(&self, _key_image: &[u8; 32], _group_id: &[u8; 32]) -> bool {
+        fn is_tracked_unspent(&self, _key_image: &KeyImage, _group_id: &[u8; 32]) -> bool {
             self.tracked
         }
     }
@@ -184,7 +186,7 @@ mod tests {
             block_height: 1000,
             block_hash: [0xBB; 32],
             tx_position: 3,
-            consumed_inputs: vec![[0xCC; 32]],
+            consumed_inputs: vec![KeyImage::from_canonical_bytes([0xCC; 32])],
             resulting_outputs: vec![[0xDD; 32]],
             intent_hash: [0xEE; 32],
             sender_sig: vec![0; 64],

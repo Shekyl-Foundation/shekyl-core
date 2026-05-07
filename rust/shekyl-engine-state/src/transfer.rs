@@ -10,6 +10,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use curve25519_dalek::{EdwardsPoint, Scalar};
 
+use shekyl_crypto_pq::key_image::KeyImage;
 use shekyl_oxide::primitives::Commitment;
 
 use crate::{
@@ -71,7 +72,11 @@ pub struct TransferDetails {
     // ── Spend tracking ──
     pub spent: bool,
     pub spent_height: Option<u64>,
-    pub key_image: Option<[u8; 32]>,
+    /// Per-output key image. Wrapped in [`KeyImage`] for type-system
+    /// protection at the engine boundary; `KeyImage` is
+    /// `#[serde(transparent)]` over `[u8; 32]` so the on-disk wire
+    /// format is unchanged from `Option<[u8; 32]>`.
+    pub key_image: Option<KeyImage>,
 
     // ── Staking fields ──
     pub staked: bool,
@@ -324,7 +329,7 @@ mod tests {
         td.z = Some(Zeroizing::new([3u8; 32]));
         td.k_amount = Some(Zeroizing::new([4u8; 32]));
         td.combined_shared_secret = Some(Zeroizing::new([5u8; 64]));
-        td.key_image = Some([7u8; 32]);
+        td.key_image = Some(KeyImage::from_canonical_bytes([7u8; 32]));
         td.spent = true;
         td.spent_height = Some(200);
 

@@ -217,8 +217,9 @@ mod lifecycle {
     #[test]
     fn claim_and_unstake_rejects_spent() {
         let (mut ledger, mut indexes) = setup_wallet_with_staked_output(5_000_000_000, 0, 1000);
-        indexes.set_key_image(&mut ledger, 0, [0xFF; 32]);
-        indexes.detect_spends(&mut ledger, 15000, &[[0xFF; 32]]);
+        let test_ki = shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([0xFF; 32]);
+        indexes.set_key_image(&mut ledger, 0, test_ki);
+        indexes.detect_spends(&mut ledger, 15000, &[test_ki]);
 
         let result =
             plan_claim_and_unstake(&ledger, &indexes, &[0], 15000, 10000, simple_weight_fn);

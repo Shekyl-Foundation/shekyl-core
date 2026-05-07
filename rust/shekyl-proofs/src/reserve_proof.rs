@@ -31,6 +31,7 @@ use shekyl_generators::T as T_LAZY;
 
 use crate::dleq::{self, DleqProof};
 use crate::error::ProofError;
+use shekyl_crypto_pq::key_image::KeyImage;
 use shekyl_crypto_pq::output::ProofSecrets;
 
 pub const CURRENT_PROOF_VERSION: u8 = 1;
@@ -45,7 +46,7 @@ const HEADER_SIZE: usize = 69; // version[1]+sig[64]+count[4]
 /// Input data for one output in a reserve proof (prover side).
 pub struct ReserveOutputEntry {
     pub proof_secrets: ProofSecrets,
-    pub key_image: [u8; 32],
+    pub key_image: KeyImage,
     pub spend_secret: [u8; 32],
     pub output_key: [u8; 32],
 }
@@ -54,20 +55,20 @@ pub struct ReserveOutputEntry {
 #[derive(Debug)]
 pub struct VerifiedReserveOutput {
     pub output_index: usize,
-    pub key_image: [u8; 32],
+    pub key_image: KeyImage,
     pub amount: u64,
 }
 
 fn write_per_output(
     ps: &ProofSecrets,
-    key_image: &[u8; 32],
+    key_image: &KeyImage,
     dleq_proof: &DleqProof,
     buf: &mut Vec<u8>,
 ) {
     buf.extend_from_slice(&ps.ho);
     buf.extend_from_slice(&ps.y);
     buf.extend_from_slice(&ps.k_amount);
-    buf.extend_from_slice(key_image);
+    buf.extend_from_slice(key_image.as_bytes());
     buf.extend_from_slice(&dleq_proof.to_bytes());
 }
 
@@ -169,7 +170,7 @@ pub fn generate_reserve_proof(
         let ki_point = x * hp_of_o;
 
         let expected_ki = ki_point.compress().to_bytes();
-        if expected_ki != entry.key_image {
+        if &expected_ki != entry.key_image.as_bytes() {
             return Err(ProofError::VerificationFailed(
                 "key_image does not match (ho+b)*Hp(O)".into(),
             ));
@@ -350,7 +351,7 @@ pub fn verify_reserve_proof(
 
         results.push(VerifiedReserveOutput {
             output_index: i,
-            key_image,
+            key_image: KeyImage::from_canonical_bytes(key_image),
             amount,
         });
     }

@@ -75,7 +75,7 @@ pub(crate) mod staking {
             z: Zeroizing::new([0u8; 32]),
             k_amount: Zeroizing::new([0u8; 32]),
             combined_shared_secret: Zeroizing::new([0u8; 64]),
-            key_image: ki,
+            key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
             amount,
         }
     }
@@ -568,7 +568,7 @@ pub(crate) mod staking {
         )];
         indexes.process_scanned_outputs(&mut ledger, 100, [0xA1; 32], make_timelocked(outputs));
 
-        let bogus_ki = [0xFFu8; 32];
+        let bogus_ki = shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([0xFFu8; 32]);
         let unmarked = indexes.unmark_spent(&mut ledger, &[bogus_ki]);
         assert_eq!(unmarked, 0);
         assert!(!ledger.transfers()[0].spent);
@@ -853,7 +853,7 @@ mod ledger_proptest {
             z: Zeroizing::new([0u8; 32]),
             k_amount: Zeroizing::new([0u8; 32]),
             combined_shared_secret: Zeroizing::new([0u8; 64]),
-            key_image: ki,
+            key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
             amount,
         }
     }
@@ -1035,7 +1035,7 @@ mod sync_bookkeeping {
             z: Zeroizing::new([0u8; 32]),
             k_amount: Zeroizing::new([0u8; 32]),
             combined_shared_secret: Zeroizing::new([0u8; 64]),
-            key_image: ki,
+            key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
             amount,
         }
     }
