@@ -128,6 +128,76 @@ trait surface is correct but the data flow contradicts it," the
 per-trait PR is not the fix — the fix is an architecture migration
 that the per-trait PR documents and triggers.
 
+## Continuous discipline as inheritance prevention
+
+The rule's primary statement governs what to do when inherited
+architecture contradicts Shekyl's commitments: migrate. Its corollary,
+demonstrated empirically by the PR 3 audit, is that **continuous
+application of the discipline produces the same outcome as retroactive
+migration at substantially lower total cost.** New code written under
+the discipline doesn't need migration; migration applies only where
+inherited code wasn't yet under the discipline. As the project's
+discipline-application timeline extends, the migration scope shrinks.
+
+The discipline operates with three properties that aren't visible in
+single-PR review and become visible only over time:
+
+1. **Distributed application.** No single PR is "the secret-handling
+   discipline PR." The discipline applies at every PR's design time
+   as part of the priority-hierarchy calculus per `00-mission.mdc`.
+   Each individual application is small; the aggregate effect is large.
+
+2. **Asymmetric coverage.** The discipline boundary aligns with the
+   "designed-for-Shekyl" / "inherited-from-CryptoNote" boundary. New
+   Rust code adopts the discipline; inherited C++ code is left alone
+   with deletion targets per `15-deletion-and-debt.mdc`. The result
+   is a codebase where post-discipline surfaces are clean and pre-
+   discipline surfaces are scheduled for deletion.
+
+3. **Compounding payoff.** Each PR's small discipline application
+   doesn't pay back in that PR; it pays back when subsequent PRs'
+   design work doesn't have to migrate previously-accumulated drift.
+   The PR 3 architectural-inheritance migration is paying back
+   accumulated decisions across the Rust components: zero production
+   read sites for the field-removal target, zero non-deletion-target
+   `SpendInput` construction sites, one production write site (per
+   `STAGE_1_PR_3_MIGRATION_AUDIT.md` §5). The audit's smaller-than-
+   anticipated scope is the corollary made measurable.
+
+### Operational implication for forward extractions
+
+Pre-flight architectural-inheritance checks transition from
+discoveries to confirmations as the discipline's coverage extends.
+PR 3's audit was a discovery — the audit's results were unknown
+before running it. PR 4 onward's audits are increasingly likely to
+be confirmations — the expected outcome is minimal migration; the
+audit verifies the expectation. The check's value shifts from
+finding migration work to catching the cases where the expectation
+breaks.
+
+The pre-flight template should accommodate both shapes: when the
+audit confirms minimal migration, PR scope is bounded as anticipated;
+when the audit surfaces unexpected migration work, PR scope expands
+and design rounds extend. The migration-plan-doc shape
+(`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md` is the first instance)
+is reusable as the template for either outcome — the per-PR scope
+tables and excluded-sites tables work whether they are short or long.
+
+### The "audits-are-clean-so-compress" anti-pattern
+
+A failure mode adjacent to the cost-benefit-defer-to-later anti-
+pattern above: when audits across multiple PRs confirm minimal
+migration, the temptation arises to under-invest in the discipline
+check itself ("the audits keep coming back clean; we can skip
+ahead"). This is exactly wrong. The audits come back clean *because*
+the discipline has been continuous; relaxing the check is the
+failure mode that produces the next audit's discovery.
+
+The discipline doesn't get to coast on past success. Each PR's rigor
+produces the substrate that makes the next PR's rigor easier;
+relaxing in any single PR breaks the pattern. The check's continued
+strength is itself the property that future audits depend on.
+
 ## Density expectations
 
 Architectural-inheritance findings concentrate where Shekyl's threat
