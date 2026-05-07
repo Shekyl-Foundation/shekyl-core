@@ -179,6 +179,38 @@ would mean migrating a path whose only forward state is deletion.
 
 **Title.** `feat(engine): introduce KeyEngine trait and LocalKeys bridge impl`
 
+**Pre-flight investigation (prerequisite to cutting the feat
+branch).** M3a closes the four open dispositions Round 4
+deliberately deferred — the handle-model emergent attack surface
+that Round 3 surfaced. The design doc's open-question status on
+each section is preserved unchanged until M3a's pre-flight
+investigation produces the V3.0 closure:
+
+- **§7.10 (handle-table memory-pressure / A6 attack surface).**
+  Bound selection (cap, eviction trigger, orchestrator-pinning).
+  Couples to §7.13's concurrent-access shape.
+- **§7.11 (handle persistence across wallet restart).** Round-3
+  lean was option (1) for V3.0 (no persistence; rebuild on
+  restart); ratify or amend.
+- **§7.12 (handle unforgeability).** Derivation choice
+  (counter-based, UUID-based, or cryptographically-derived from
+  view secret + per-handle nonce). Couples to §7.11's persistence
+  option.
+- **§7.13 (handle-table concurrency quality / Pattern-5 cluster).**
+  Concurrent-access shape (sharded `RwLock` vs. lock-free hashmap
+  vs. fair-queued single-writer) plus explicit timing-channel
+  analysis under the chosen shape.
+
+The pre-flight produces a single-commit amendment to this section
+(citing each closure's resolution and the test surface that
+follows) before M3a's feat branch is cut. Per
+[`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)'s
+4–6-rounds-before-implementation rule for crypto-critical trait
+migrations, this pre-flight is not optional; it's the round-budget
+work the migration plan deliberately separates from the planning
+artifacts Round 4 produced so each PR's review surface stays
+bounded.
+
 **Scope.**
 
 - Define `KeyEngine` trait in `shekyl-engine-core/src/engine/traits/key.rs`
@@ -192,17 +224,34 @@ would mean migrating a path whose only forward state is deletion.
   `LocalKeys::sign_transaction`. Bridge sources secrets from
   `TransferDetails`'s existing secret-bearing fields (transitional;
   M3b switches the source).
-- Introduce `HandleTable` (16-shard `std::sync::RwLock` cache;
-  FIFO eviction) per Round 3 §3.1.6. Empty at M3a; populated at
-  M3b.
-- Introduce `OutputHandle` deterministic-derivation
-  (`HMAC(view_secret, canonical(tx_hash || output_index))[..16]`) per
-  Round 3 §7.12.
+- Introduce `HandleTable` per the M3a pre-flight disposition of
+  `STAGE_1_PR_3_KEY_ENGINE.md` §7.13 (handle-table concurrency
+  quality / Pattern-5 cluster). The exact concurrent-access shape
+  (sharded `RwLock` vs. lock-free hashmap vs. fair-queued
+  single-writer) and the eviction policy (if any) are M3a
+  pre-flight decisions, not pre-pinned by this plan; the M3a PR
+  amends this section to cite the closure. Empty at M3a; populated
+  at M3b.
+- Introduce `OutputHandle` per the M3a pre-flight disposition of
+  `STAGE_1_PR_3_KEY_ENGINE.md` §7.12 (handle unforgeability) and
+  §7.11 (handle persistence across wallet restart). The
+  derivation choice (counter-based, UUID-based, or
+  cryptographically-derived from view secret + per-handle nonce)
+  couples to §7.11's persistence option selection and is pinned at
+  M3a pre-flight, not pre-pinned by this plan.
+- Memory-pressure bound per `STAGE_1_PR_3_KEY_ENGINE.md` §7.10
+  (A6 — handle-table memory-pressure attack surface). Bound
+  selection (cap, eviction trigger, orchestrator-pinning) is M3a
+  pre-flight work; couples to the §7.13 concurrent-access shape.
 - v31 multisig pre-flight verification: confirm the audit's §4
   structural-alignment finding still holds at HEAD; produce a one-
   line confirmation comment in the PR description.
 - Initial test substrate: unit tests for `LocalKeys::from_test_seed`
-  determinism, handle-table sharding, handle deterministic derivation.
+  determinism plus the test surface that the §7.10–§7.13 closures
+  produce (e.g., concurrent-insert correctness for the chosen
+  concurrent-access shape; derivation determinism / unforgeability
+  for the chosen handle shape; bounded-growth invariants for the
+  chosen memory-pressure bound).
 
 **Files touched (estimated).**
 
@@ -244,8 +293,16 @@ possible.
 - Workspace compiles; existing tests green.
 - `LocalKeys` production-only (`#[cfg(not(test))]` paths exclude any
   test-only constructor).
-- Handle-table sharding test exercises ≥2 shards under contention.
+- Handle-table test surface exercises the closure-of-§7.13's chosen
+  concurrent-access shape under contention (≥2 concurrent writers
+  for sharded designs; appropriate equivalent for non-sharded
+  designs).
 - v31 multisig pre-flight comment in PR description.
+- M3a pre-flight closures cited: design doc §7.10 (memory-pressure),
+  §7.11 (persistence), §7.12 (handle unforgeability), §7.13
+  (concurrency quality) all advanced from "open" to "closed for
+  V3.0" with disposition recorded in design doc and migration plan
+  §3.1 amended to cite the closures.
 - No public API change to existing crates outside `shekyl-engine-core`.
 
 **Estimated review surface.** ~1300 lines added; zero deleted; ~5
