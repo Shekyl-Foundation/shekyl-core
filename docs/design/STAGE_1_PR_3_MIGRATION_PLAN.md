@@ -185,7 +185,26 @@ would mean migrating a path whose only forward state is deletion.
 **Schema state at PR boundary.** `TransferDetails` unchanged. Bridge
 impl reads secrets from `TransferDetails`'s existing fields.
 
-**Property delivery.** None. Substrate.
+**Property delivery.** None directly. M3a is the architectural
+foundation against which the "secrets confined to engine" property
+activates at M3d. Specifically, M3a establishes:
+
+- The `KeyEngine` trait surface that the property eventually
+  attaches to (the boundary across which secrets do not flow once
+  the property is live).
+- The `HandleTable` infrastructure that holds the property's runtime
+  state (the cache of derived secrets, populated by `try_claim_output`
+  and consumed by `sign_transaction`).
+- The production-only discipline (no Mock-X; bridge impl is real
+  code reading real secrets from existing fields) that the property's
+  implementation respects.
+- The test substrate (handle-table sharding, derivation
+  determinism, byte-identical signing) against which M3b/M3c/M3d
+  validate the property's behavior.
+
+The property does not activate until M3d removes the
+`TransferDetails` secret fields. M3a is what makes that activation
+possible.
 
 **Success criteria.**
 
