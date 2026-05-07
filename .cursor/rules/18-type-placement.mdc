@@ -47,7 +47,7 @@ Examples:
   the canonical home; they do not redefine.
 - **State-shaped types live in the crate of their semantic owner.**
   `SubaddressIndex` lives in the wallet-state-owning crate
-  (`shekyl-engine-core` for V3.0) because the wallet allocates
+  (`shekyl-engine-state` for V3.0) because the wallet allocates
   and persists subaddress positions. Cryptographic crates that
   consume the state's bytes do not own the type.
 
@@ -143,7 +143,7 @@ commit body. PR 3 (`KeyEngine`) sets the precedent for V3.x:
 
 - `OutputHandle` — transform-shaped — `shekyl-crypto-pq` with
   `derive_output_handle`.
-- `SubaddressIndex` — state-shaped — `shekyl-engine-core` with a
+- `SubaddressIndex` — state-shaped — `shekyl-engine-state` with a
   `to_canonical_bytes() -> [u8; 4]` accessor.
 
 PR 4–7 pre-flight investigations (and any work in V3.x or beyond
