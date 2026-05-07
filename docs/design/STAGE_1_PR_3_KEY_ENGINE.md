@@ -15,8 +15,8 @@ structure but is keyed to a substantially larger pre-flight drift
 surface than PR 2's: PR 2 surfaced 3 amendments across pre-flight
 + commit-time + post-merge; PR 3's pre-flight pass surfaced 5
 amendments at the design-doc stage (Round 1), Round 2 surfaced a
-substantive workflow-shape pivot, and Round 3 surfaced a handle-
-indirected contract pivot completing the workflow-shape pivot's
+substantive workflow-shape pivot, and Round 3 surfaced a handle-indirected
+contract pivot completing the workflow-shape pivot's
 "no secrets cross the trait boundary" property. The accumulating
 drift count is not a defect — it is the discipline working as
 designed against a trait whose pre-Round-1 §2.1 surface predates
@@ -54,14 +54,14 @@ required adversarial review to surface.
     seven-bullet "deliberately does not expose" subsection;
     Round-4 candidates pinned (A6, A7, handle persistence,
     concurrency-quality).
-  - **3a review pass (commit `32057219f`).** Capability-vs-
-    material honesty for active attacker (bullet 4); softer
+  - **3a review pass (commit `32057219f`).** Capability-vs-material
+    honesty for active attacker (bullet 4); softer
     framing of trait-surface scope vs implementor-internal
     discipline (bullet 5); §7.11 option-space expanded to four
     candidates (split (2) into 2a / 2b); §6.4 orphan-absence
     verification mechanism deferred to commit 3d.
-  - **3b (commit `b020a33cc`).** A2 → β disposition: per-
-    subaddress `kem_pk` derivation specification. New §3.1.3
+  - **3b (commit `b020a33cc`).** A2 → β disposition: per-subaddress
+    `kem_pk` derivation specification. New §3.1.3
     walks the priority-hierarchy decomposition showing β is
     rule-forced (α decomposes into (P1) X25519-only / (P2)
     wallet-level ML-KEM PK in encoding / (P3) out-of-band PK
@@ -96,8 +96,8 @@ required adversarial review to surface.
     (`SignTransactionDomain`, `OutputSecretDerivationDomain`,
     `FcmpPlusPlusWitnessDomain`, `MlKemChallengeDomain`) plus
     the generic `derive_signing_key<D: SignsInDomain>`
-    primitive; cross-domain reuse becomes a compile-time-
-    inspectable action rather than a copy-paste accident. **D1**
+    primitive; cross-domain reuse becomes a compile-time-inspectable
+    action rather than a copy-paste accident. **D1**
     — `sign_transaction` validation contract pinned with
     impl-side responsibilities (handle resolution, per-input
     signature production, FCMP++ witness production) and
@@ -135,8 +135,8 @@ required adversarial review to surface.
     pinned to option (i) — the test-inspection accessor under
     the three-layer discipline — closing the Round-4
     prerequisite for the post-A1 hygiene tests. The Pattern-3
-    and Pattern-4 generalization checklists are forward-
-    template content for PR 4–7's pre-flight discipline (per
+    and Pattern-4 generalization checklists are forward-template
+    content for PR 4–7's pre-flight discipline (per
     §3.1.5).
   - **3e (this commit).** Residual + forward-template
     content (Sub-bundle G). New §3.1.6 frames the Pattern-6
@@ -158,8 +158,8 @@ required adversarial review to surface.
     embedding the analysis in the trait scope. **§2.1.5**
     consolidates the four-pattern checklist for PR 4–7
     pre-flight (Pattern 2 spec-silent junctions; Pattern 3
-    test substrate visibility; Pattern 4 visibility / external-
-    implementor trust; Pattern 6 replay/idempotency contract);
+    test substrate visibility; Pattern 4 visibility / external-implementor
+    trust; Pattern 6 replay/idempotency contract);
     Pattern 1 (workflow-shape) is upstream and Pattern 5
     (cross-call state) is downstream-deferred; Pattern 7 is
     the escalation rule from §2.1.4. **§2.1.6** lands the
@@ -169,8 +169,8 @@ required adversarial review to surface.
     scratch, and per-trait PR rounds budgets are likely to be
     smaller because the substrate is more substantial.
     **§7.9** (Mock-X disposition) marked closed for PR 3
-    with cross-references to §2.1.5's Pattern-3 forward-
-    template; **§7.14** added as a closure cross-reference
+    with cross-references to §2.1.5's Pattern-3 forward-template;
+    **§7.14** added as a closure cross-reference
     for the Pattern-6 disposition table. §1.1 Phase 0c prose
     grew Sub-bundle G mention. Round trajectory updated to
     mark Round 3 substantive content complete.
@@ -371,8 +371,8 @@ surfaces force the orchestrator's address space to hold those
 intermediates across the trait boundary, which is exactly the
 property `35-secure-memory.mdc`'s zeroize-discipline is fighting.
 Stage 4's actor abstraction (`Arc<dyn KeyEngine>` across a
-message-passing channel) makes the cost concrete: every primitive-
-grain method becomes a separate channel send/receive carrying a
+message-passing channel) makes the cost concrete: every primitive-grain
+method becomes a separate channel send/receive carrying a
 secret-bearing message; every workflow-grain method bundles the
 primitive sequence into one round-trip carrying only structured
 non-secret outputs.
@@ -512,8 +512,8 @@ per-method decisions.
 **V3.2 visibility-promotion bundle.** Per [§7.7](#77-v3x-fullpqc-trait-churn-acknowledgement)
 and the existing follow-up entries, the V3.2 bundle promotes
 Trust-class B traits to `pub` (or per the per-PR rationale)
-based on materialized external-consumer trust models. Trust-
-class A traits remain `pub(crate)` until external-implementor
+based on materialized external-consumer trust models. Trust-class
+A traits remain `pub(crate)` until external-implementor
 trust models are themselves concrete (a separate Stage-4
 question; the lifecycle is "make the actor abstraction work
 across `Arc<dyn KeyEngine>` boundaries first; expose to
@@ -527,8 +527,8 @@ others unbounded; some operations free, others rate-limited)
 creates an attack vector orthogonal to the trait's primary
 correctness contract: **adversaries who can drive the wallet
 into the expensive-operation regime asymmetrically cost the
-defender**. KeyEngine's A6 finding (handle-table memory-
-pressure, §7.10) is an instance — an adversary who can inject
+defender**. KeyEngine's A6 finding (handle-table memory-pressure,
+§7.10) is an instance — an adversary who can inject
 many crafted outputs that pass the X25519 pre-filter forces
 the `HandleTable` to grow without bound, asymmetrically
 costing the defender's memory.
@@ -544,8 +544,8 @@ costing the defender's memory.
 
 **Cross-reference rule for per-trait PRs.** When a per-trait
 PR's pre-flight surfaces a resource-asymmetry concern, the
-per-trait PR **does not** embed the project-level economic-
-design analysis in the trait scope. Instead, the per-trait PR:
+per-trait PR **does not** embed the project-level economic-design
+analysis in the trait scope. Instead, the per-trait PR:
 
 1. Records the asymmetry as a finding at the per-trait
    design-doc level (e.g., §7.10 for KeyEngine's A6), with
@@ -558,13 +558,13 @@ design analysis in the trait scope. Instead, the per-trait PR:
    project-level analysis lands at the project-level pace.
 
 The discipline keeps per-trait PR review surfaces bounded and
-aligns the analysis location with the analysis level. Per-
-trait PR reviewers verify "the asymmetry is named and
+aligns the analysis location with the analysis level. Per-trait
+PR reviewers verify "the asymmetry is named and
 escalated"; project-level reviewers verify "the asymmetry's
 economic-design implications are dispositioned."
 
-**KeyEngine A6 cross-reference.** A6 (handle-table memory-
-pressure) is named at §7.10 with Round-4 candidate
+**KeyEngine A6 cross-reference.** A6 (handle-table memory-pressure)
+is named at §7.10 with Round-4 candidate
 dispositions (hard size cap with eviction; backpressure /
 orchestrator-cooperative pruning; persistence-bounded growth).
 The cross-reference to project-level economic-design lives in
@@ -618,8 +618,8 @@ for each pattern at the design stage.
    widening to `pub` requires naming the consumer that
    needs the wider visibility. The trait-level visibility
    couples to the Trust-class A/B classification (§2.1.3);
-   message types are typically Trust-class B (the opaque-
-   reference pattern keeps secret material confined to
+   message types are typically Trust-class B (the opaque-reference
+   pattern keeps secret material confined to
    workflow internals). See §3.1.5 for the pattern's full
    framing and §3.3 Sub-bundle B's visibility-discipline
    subsection for KeyEngine's instances.
@@ -636,14 +636,14 @@ for each pattern at the design stage.
 
 **Pattern 1 (workflow-shape vs. primitive-shape) and Pattern
 5 (cross-call state) cross-references.** Pattern 1 is
-fundamental and pre-dates the Round-3 cluster — every per-
-trait PR's pre-flight should already validate against it per
+fundamental and pre-dates the Round-3 cluster — every per-trait
+PR's pre-flight should already validate against it per
 §2.1.1's framing. Pattern 5 (cross-call state correlation as
 side-channel) is per-trait-PR-conditional: per-trait PRs
 whose methods are stateless dispose of it trivially; per-trait
 PRs whose methods carry concurrent-access state (KeyEngine's
-`HandleTable`; potentially future per-trait-PR concurrent-
-access shapes) defer to Round-4 disposition with explicit
+`HandleTable`; potentially future per-trait-PR concurrent-access
+shapes) defer to Round-4 disposition with explicit
 timing-channel analysis. Neither is part of the four-pattern
 pre-flight checklist (Pattern 1 is upstream; Pattern 5 is
 downstream); both are acknowledged as adjacent.
@@ -809,8 +809,8 @@ post-amendment trait surface.
 **Reasoning (recorded verbatim).**
 
 > 1. **Rule-compliance is a hard constraint, not a preference.**
->    `30-cryptography.mdc` "hybrid is the default" is workspace-
->    policy at the rule level, the same way `00-mission.mdc`
+>    `30-cryptography.mdc` "hybrid is the default" is
+>    workspace-policy at the rule level, the same way `00-mission.mdc`
 >    priority 1 is mission-level. Trait surfaces that violate
 >    workspace policy are wrong by precondition. The spec's
 >    classical-primitive language is a stale artifact of pre-hybrid
@@ -1044,8 +1044,8 @@ inheriting the wipe-on-drop discipline that secret bytes would
 impose. The "no secrets cross the trait boundary" claim becomes
 **literal**, not quantitative.
 
-**Trajectory cost.** The handle-indirected pivot adds workflow-
-internal state to `LocalKeys` (the table is held behind interior
+**Trajectory cost.** The handle-indirected pivot adds workflow-internal
+state to `LocalKeys` (the table is held behind interior
 mutability for the `&self` async trait surface). Several emergent
 attack vectors and design questions surface that the Round-3
 disposition explicitly defers to Round 4:
@@ -1066,9 +1066,9 @@ disposition explicitly defers to Round 4:
   hashmap, fair-queued single-writer) determines side-channel
   observability. Pattern-5 cluster work, Round 4 disposition.
 
-These are pinned in §7. The Round-3 cut-point lands the trait-
-surface contract — opaque-handle-bearing — and exposes the table-
-internal questions to Round 4's adversarial pass against the
+These are pinned in §7. The Round-3 cut-point lands the trait-surface
+contract — opaque-handle-bearing — and exposes the table-internal
+questions to Round 4's adversarial pass against the
 handle model itself. This is the rounds-budget compounding the
 discipline anticipates: each round's structural disposition
 surfaces new questions that the next round resolves.
@@ -1108,8 +1108,8 @@ residue of that direct port.
 
 The architectural-inheritance disposition
 (`16-architectural-inheritance.mdc` §"The inherited-architecture
-rule") asks: where inherited architecture contradicts a Shekyl-
-specific commitment (here, `36-secret-locality.mdc`'s "engine owns
+rule") asks: where inherited architecture contradicts a Shekyl-specific
+commitment (here, `36-secret-locality.mdc`'s "engine owns
 secrets"), migrate. The handle-indirected workflow shape is that
 migration. The discipline being applied is the same discipline
 already operative in the vendored proof-system surfaces, applied
@@ -1260,8 +1260,8 @@ considered." Future readers tracing "why does V3.0 ship
 per-subaddress ML-KEM derivation rather than wallet-level?" find
 the priority-hierarchy decomposition above as the binding
 argument. If a future hard fork reaches a state where one of
-(P1) / (P2) / (P3) is admissible (e.g., a future ciphertext-
-correlation-resistant ML-KEM variant that defangs the (P2)
+(P1) / (P2) / (P3) is admissible (e.g., a future ciphertext-correlation-resistant
+ML-KEM variant that defangs the (P2)
 linkability concern, or a fully-PQC encryption primitive that
 defangs (P1)'s classical-only failure), the disposition can be
 re-opened — but only against a concrete change to the
@@ -1271,8 +1271,8 @@ the versioning anchor for any such future migration.
 
 **Amendment-block framing (to land in §2.1's "Stage 1 PR 3
 spec-clarification" provenance subsection alongside §3.1's
-hybrid-framework reconciliation prose and §3.1.2's handle-
-indirection completion prose).**
+hybrid-framework reconciliation prose and §3.1.2's handle-indirection
+completion prose).**
 
 > The Round-3 commit 3b lands the per-subaddress `kem_pk`
 > derivation specification: `RecipientSubaddress.kem_pk` is a
@@ -1452,8 +1452,8 @@ The three findings landed by commit 3d:
   `LocalKeys::from_test_seed`, `LocalKeys::handle_table_size`
   (introduced for B2 / §6.4), and any future test-only
   constructor or accessor that lands on a production type.
-- **B2 — Handle-storage hygiene replaces lifetime-of-secret-
-  material framing.** The pre-Round-3 framing said tests verify
+- **B2 — Handle-storage hygiene replaces lifetime-of-secret-material
+  framing.** The pre-Round-3 framing said tests verify
   wipe-on-drop of secret bytes that crossed the trait boundary
   (e.g., `OutputClaim`'s `output_secret_key`). After A1's
   handle-indirection pivot, no secrets cross the boundary;
@@ -1594,8 +1594,8 @@ KeyEngine's Pattern-5 disposition is Round-4-deferred (§7.13);
 Pattern-6 dispositions land in this commit (3e). Per-trait PRs
 that surface concurrent-access sensitivity should pin both
 patterns; per-trait PRs whose methods are stateless can dispose
-of Pattern 6 trivially and defer Pattern 5 if no concurrent-
-access shape is on the trait surface.
+of Pattern 6 trivially and defer Pattern 5 if no concurrent-access
+shape is on the trait surface.
 
 **Amendment-block framing (to land in §2.1's "Stage 1 PR 3
 spec-clarification" provenance subsection).**
@@ -1952,8 +1952,8 @@ pub struct OutputClaim {
     pub key_image: KeyImage,
     /// The decrypted output amount (atomic units). Non-secret;
     /// the orchestrator displays it as part of the wallet's
-    /// balance presentation and uses it to drive transaction-
-    /// build amount accounting.
+    /// balance presentation and uses it to drive
+    /// transaction-build amount accounting.
     ///
     /// Decrypted at `try_claim_output` time (the impl already
     /// has the shared secret in scope); requiring downstream
@@ -2166,8 +2166,8 @@ pub struct SubaddressKeyPair {
 
 ##### Open questions for Round 3 / commit 3+
 
-The shapes above pin enough structure to confirm the workflow-
-shape direction at Round 2 review. Several field-level questions
+The shapes above pin enough structure to confirm the workflow-shape
+direction at Round 2 review. Several field-level questions
 remain open and will be pinned in Round 3 or in PR 3's
 implementation work:
 
@@ -2186,8 +2186,8 @@ implementation work:
   path or add the Phase 0c row.
 - **`OutputClaim::amount_atomic_units` decryption-at-claim-time
   vs decrypt-on-demand.** Pinned here as "decrypt at claim time,
-  return the value"; reviewers may push back on the security-
-  surface argument (the decrypted amount is shaped like a
+  return the value"; reviewers may push back on the security-surface
+  argument (the decrypted amount is shaped like a
   trait-surface secret-bearing field even though it isn't a
   secret).
 - **`RecipientSubaddress::encoded` parsed vs string.** Pinned here
@@ -2708,8 +2708,8 @@ X?" review questions.
     the workflow methods' stack frames; zeroized on drop per
     the workspace's `Zeroize` / `ZeroizeOnDrop` discipline
     ([`35-secure-memory.mdc`](../../.cursor/rules/35-secure-memory.mdc)).
-  The orchestrator's address space sees only structured non-
-  secret outputs (`OutputClaim`'s `handle` + `key_image` +
+  The orchestrator's address space sees only structured non-secret
+  outputs (`OutputClaim`'s `handle` + `key_image` +
   `amount_atomic_units`; `TxSignatures`'s public signature
   bundle).
 
@@ -2729,8 +2729,8 @@ X?" review questions.
   **What handle disclosure does not leak** is the underlying
   spending secret — a leaked handle is meaningless to a
   **passive** attacker without `LocalKeys`'s table (memory
-  scraping, log leakage, persistence-to-disk-without-engine-
-  access). An **active** attacker who has compromised the
+  scraping, log leakage, persistence-to-disk-without-engine-access).
+  An **active** attacker who has compromised the
   orchestrator and can submit messages to `LocalKeys` can use
   leaked handles to obtain signatures via `sign_transaction`,
   gaining the spending capability without the spending material;
@@ -2743,8 +2743,8 @@ X?" review questions.
   correct for passive disclosure and weaker for active
   orchestrator compromise.
 
-  **This is the load-bearing security property the handle-
-  indirected workflow shape delivers and primitive-shape
+  **This is the load-bearing security property the handle-indirected
+  workflow shape delivers and primitive-shape
   surfaces (e.g., a hypothetical `view_ecdh ->
   X25519SharedSecret`) or Round-2-shape returns (e.g., the
   deleted `OutputClaim.output_secret_key: Zeroizing<[u8; 32]>`
@@ -2900,8 +2900,8 @@ to Round 2 refinement):
    shapes from commit 2 + Round-3 commit 3a of this design-doc
    round.
 4. **`HandleTable` workflow-internal state inside `LocalKeys`.**
-   Per Round 3's handle-indirected pivot (§3.1.2). Concurrent-
-   access shape, eviction policy, persistence story, handle-ID
+   Per Round 3's handle-indirected pivot (§3.1.2). Concurrent-access
+   shape, eviction policy, persistence story, handle-ID
    unforgeability shape — all Round-4 dispositions. PR 3
    implementation lands the simplest viable shape (per §7.11's
    Round-3 lean: ephemeral handles + restart-rescan;
@@ -3138,8 +3138,8 @@ the workflow-shape trait surface:
 - `engine_trait_bench_key_try_claim_output_not_mine` — async
   workflow path for the **dominant scanning case**: an output
   whose X25519 view-tag pre-filter rejects. Measures the
-  X25519 ECDH + view-tag derivation + tag-comparison + early-
-  return path, which is what runs ~99%+ of the time during a
+  X25519 ECDH + view-tag derivation + tag-comparison + early-return
+  path, which is what runs ~99%+ of the time during a
   full wallet rescan. The highest-leverage benchmark on the
   trait for total-wall-clock-time terms.
 - `engine_trait_bench_key_try_claim_output_mine` — async
@@ -3147,16 +3147,16 @@ the workflow-shape trait surface:
   whose pre-filter accepts and triggers the full hybrid decap
   + HKDF chain + key-image computation + handle-table insertion.
   Measures the full output-detection-and-claim cost including
-  the workflow-internal handle-table insertion. Less time-
-  dominant than the NotMine path in aggregate scanning but
+  the workflow-internal handle-table insertion. Less time-dominant
+  than the NotMine path in aggregate scanning but
   worth a separate bench because the workloads are structurally
   distinct (combining them into one bench produces a number
   whose meaning depends on the test data's Mine:NotMine ratio
   — uninformative; reviewers familiar with criterion's
   parameterized bench shape may ask why not parameterize over
   the ratio — the answer is that the workloads have different
-  cost regimes that warrant per-regime measurement, with system-
-  level wallet-refresh modeling deferred to higher-level benches
+  cost regimes that warrant per-regime measurement, with system-level
+  wallet-refresh modeling deferred to higher-level benches
   in PR 4 or PR 5).
 - `engine_trait_bench_key_sign_transaction_resolve_handle` —
   amortized handle-table lookup cost for `sign_transaction`'s
@@ -3169,8 +3169,8 @@ the workflow-shape trait surface:
 - `engine_trait_bench_key_sign_transaction_full` — async
   workflow hot path for the spend path: handle resolution +
   per-input hybrid signature production + FCMP++ witness
-  generation. Potentially deferred to Phase-2a if hybrid-
-  signature setup cost dwarfs the trait-dispatch overhead
+  generation. Potentially deferred to Phase-2a if hybrid-signature
+  setup cost dwarfs the trait-dispatch overhead
   measurement, or if the bench fixture (a complete `TxToSign`
   with FCMP++ context) is structurally too heavy to set up at
   PR 3 cut-point. The fixture-construction work shares substrate
@@ -3298,8 +3298,8 @@ production type. Per-trait PRs that don't need test-only
 additions (the trait surface alone supports the test
 correctness properties) skip the discipline; per-trait PRs
 that do need them inherit the three-layer pattern. The default
-when in doubt is **trait-surface-observable, not test-only-
-observable**; the test-only addition is a fallback when the
+when in doubt is **trait-surface-observable, not test-only-observable
+**; the test-only addition is a fallback when the
 trait-surface alternative would weaken the trait's contract
 (see §3.1.5 Pattern-3).
 
@@ -3331,8 +3331,8 @@ relocates from boundary-crossing types to the workflow-internal
    (`try_claim_output` for `n` distinct outputs, asserting
    `handle_table_size() == n`), execution
    (`sign_transaction(&tx)` succeeds), and verification
-   (`handle_table_size() == 0` post-call). Round 4's handle-
-   persistence option-space disposition (§7.11) may refine this
+   (`handle_table_size() == 0` post-call). Round 4's handle-persistence
+   option-space disposition (§7.11) may refine this
    property — if persisted handles are retained across spend
    for audit purposes, the post-call size may not be zero
    immediately and the test refines accordingly.
@@ -3368,8 +3368,8 @@ properties split:
 - **Properties (1) and (3)** are not trait-surface-observable
   in any meaningful way and require the inspection accessor.
 
-The default discipline (§3.1.5 Pattern-3) is "trait-surface-
-observable when possible"; for the handle-storage hygiene
+The default discipline (§3.1.5 Pattern-3) is "trait-surface-observable
+when possible"; for the handle-storage hygiene
 properties, that default fails — the inspection accessor is
 the load-bearing discipline, and the three-layer protection
 (§6.6) is the structural defense against the test-only surface
@@ -3488,8 +3488,8 @@ clause:
   `MlKem768PublicKey`.
 
 **The workflow-shape pivot makes this churn substantially
-smaller than it would be on a primitive-shape trait.** Message-
-shape internals change (e.g., `RecipientSubaddress` swaps
+smaller than it would be on a primitive-shape trait.** Message-shape
+internals change (e.g., `RecipientSubaddress` swaps
 `HybridKemPublicKey` for `MlKem768PublicKey`); the workflow
 boundary stays. The `try_claim_output` and `sign_transaction`
 signatures don't change; only the message shapes' fields churn,
@@ -3504,8 +3504,8 @@ need V3.x churn. (L2.1, L2.3)
 ### 7.8 Account-address stability assumption
 
 `account_public_address` returns `&AccountPublicAddress` with a
-"stable for wallet lifetime" doc-comment. **This is a classical-
-Monero assumption, not a structural necessity.** PQC schemes with
+"stable for wallet lifetime" doc-comment. **This is a classical-Monero
+assumption, not a structural necessity.** PQC schemes with
 key-rotation properties (e.g., forward-secure signature schemes)
 might not have a stable account-address concept in the same form.
 
@@ -3624,8 +3624,8 @@ performance optimization when restart cost matters.
   complexity (encryption discipline; key-derivation
   consistency; on-disk format versioning); the table itself
   becomes a persistence-secret subject to the wallet-encryption
-  invariants; cross-restart consistency requires wallet-
-  encryption-key derivation to be deterministic across
+  invariants; cross-restart consistency requires wallet-encryption-key
+  derivation to be deterministic across
   sessions. Most complex of the four options; delivers the
   strongest restart-cost property.
 - **(3) Handle is deterministic from ciphertext.** `handle =
@@ -3670,11 +3670,11 @@ replay, etc.).
 - **UUID-based handles** (16 bytes; v4 random). Unpredictable;
   collision-resistant under birthday bound; standard library
   support. Probably the V3.0-proportional choice.
-- **Cryptographic handles** (16 bytes from a CSPRNG, or HKDF-
-  derived from view secret + per-handle nonce). Unforgeable
+- **Cryptographic handles** (16 bytes from a CSPRNG, or HKDF-derived
+  from view secret + per-handle nonce). Unforgeable
   under standard cryptographic assumptions; closes A7
-  completely. Cost is similar to UUID at the storage-and-
-  comparison level; the unforgeability property is structurally
+  completely. Cost is similar to UUID at the storage-and-comparison
+  level; the unforgeability property is structurally
   stronger.
 
 Round-4 selects. The choice couples to §7.11's persistence
@@ -3728,8 +3728,8 @@ methods. Summary cross-reference for Round-4+ readers:
   property (1)).
 - `sign_transaction`: handle-consuming, **not** idempotent;
   replay is rejected at the trait surface via handle-resolution
-  failure (consumed handles are gone from the table). Caller-
-  driven retry semantics: distinguish "broadcast succeeded but
+  failure (consumed handles are gone from the table). Caller-driven
+  retry semantics: distinguish "broadcast succeeded but
   acknowledgment lost" (no retry; rebuild with replacement
   inputs) from "signing failed before any state change" (retry
   admissible).
