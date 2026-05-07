@@ -388,6 +388,43 @@
     multisig tests), and `shekyl-scanner` updated to construct
     `KeyImage::from_canonical_bytes(...)` explicitly.
 
+  **Cascade closure (verify API + tests).** Final pass on the
+  cascade — the public verifier surface and the last test-helper
+  seams:
+  - **`shekyl-fcmp::proof::verify`:** `key_images: &[[u8; 32]]` →
+    `&[KeyImage]`. `pseudo_outs: &[[u8; 32]]` stays raw — pseudo-
+    output commitments are a different concept, and the type-system
+    protection is specifically for the key-image slot. The verifier
+    consumes typed inputs via `.as_bytes()` exactly once at the
+    point where the function downcasts to the upstream FCMP++
+    library's byte-shaped API. New `shekyl-fcmp` regular dependency
+    on `shekyl-crypto-pq` (cycle-free: `shekyl-crypto-pq` references
+    `shekyl-fcmp` only as a `[dev-dependencies]` entry). The type is
+    re-exported as `pub use shekyl_crypto_pq::key_image::KeyImage`
+    from `shekyl-fcmp::proof` so callers (fuzz harnesses) can name
+    it without taking a direct dep.
+  - **`shekyl-ffi::lib`'s `shekyl_fcmp_verify` marshaling:** rebuilds
+    `Vec<KeyImage>` via `KeyImage::from_canonical_bytes` from the
+    C-supplied `*const u8` buffer; `pseudo_outs` marshaling is
+    unchanged.
+  - **`shekyl-fcmp` fuzz targets** (`fuzz_tx_deserialize_fcmp_type7`,
+    `fuzz_fcmp_proof_deserialize`) updated their key-image
+    generators to `Vec<KeyImage>` since they call `verify` directly.
+  - **`shekyl-engine-core::engine::refresh::tests::make_block_with_spending_tx`:**
+    `key_image: [u8; 32]` → `key_image: KeyImage`; the typed value
+    is unwrapped via `.as_bytes()` exactly once at the
+    `Input::ToKey { key_image: CompressedPoint(...) }` construction
+    site (the on-wire `CompressedPoint` is the raw-byte boundary).
+  - **`shekyl-ffi/tests/signing_round_trip::ScannedSecrets.key_image`:**
+    intentionally remains `[u8; 32]`. This is a C-ABI scratch
+    buffer: `shekyl_scan_and_recover` writes via
+    `key_image.as_mut_ptr()` and the bytes are re-handed to a later
+    FFI call via `.as_ptr()`. The C ABI is the authoritative raw-
+    byte boundary on both sides; wrapping in `KeyImage` here would
+    inject `from_canonical_bytes` / `as_bytes` shuffles at every
+    seam without adding type protection. A doc-comment on the
+    struct records the rationale.
+
   **Property-delivery framing.** This sweep is structural — no
   consensus rule, no wire format, no FFI layout changes. The
   type-system protection is the deliverable: every secret-bearing
