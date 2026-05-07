@@ -35,8 +35,8 @@ derived per-output secrets directly (combined shared secret, HKDF-derived
 scalars, amount-encryption key). The code is well-tested in Monero's
 threat model where memory disclosure isn't a primary concern. Shekyl's
 threat model (per `30-cryptography.mdc` and `35-secure-memory.mdc`)
-makes memory disclosure a primary concern; secrets in orchestrator-
-persisted storage contradicts this commitment. The Monero code is
+makes memory disclosure a primary concern; secrets in orchestrator-persisted
+storage contradict this commitment. The Monero code is
 correct for Monero; carrying it forward unchanged is wrong for Shekyl.
 The disposition is to migrate the data model, not to rationalize the
 inheritance.
@@ -77,8 +77,8 @@ the codebase is pre-genesis.
 ## The "cost-benefit-defer-to-later" anti-pattern
 
 Conventional design discipline weighs immediate cost against immediate
-benefit and defers work whose benefit accrues later. For security-load-
-bearing structural work, this discipline systematically underweights
+benefit and defers work whose benefit accrues later. For security-load-bearing
+structural work, this discipline systematically underweights
 the deferred benefit: the cost of fixing structural problems compounds
 faster than linearly with each layer of code that depends on the broken
 shape, and the value of architectural integrity compounds with each
@@ -87,8 +87,8 @@ audit cycle that doesn't have to re-litigate the same finding.
 When a discipline review surfaces "this could be fixed structurally
 now, or worked around now and fixed structurally later," the default
 disposition for security-load-bearing work is **fix structurally now**
-unless the cost is genuinely prohibitive (multi-quarter scope; cross-
-component coordination that breaks the project's discipline budget).
+unless the cost is genuinely prohibitive (multi-quarter scope; cross-component
+coordination that breaks the project's discipline budget).
 
 **Recurrence pattern.** This anti-pattern surfaces in adversarial
 design rounds when conventional cost-benefit analysis recommends
@@ -100,8 +100,8 @@ migration that produced this rule (V3.0 M3a–M3e, per
 `docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`) are three instances
 within a single per-trait PR's design rounds.
 The pattern's persistence justifies naming it explicitly: when
-reviewing a design disposition, ask "is this the cost-benefit-
-defer-to-later answer?" If yes, the architectural-integrity-now
+reviewing a design disposition, ask "is this the cost-benefit-defer-to-later
+answer?" If yes, the architectural-integrity-now
 answer is the default unless cost is genuinely prohibitive.
 
 ## Discovery cadence
@@ -151,8 +151,8 @@ single-PR review and become visible only over time:
    "designed-for-Shekyl" / "inherited-from-CryptoNote" boundary. New
    Rust code adopts the discipline; inherited C++ code is left alone
    with deletion targets per `15-deletion-and-debt.mdc`. The result
-   is a codebase where post-discipline surfaces are clean and pre-
-   discipline surfaces are scheduled for deletion.
+   is a codebase where post-discipline surfaces are clean and pre-discipline
+   surfaces are scheduled for deletion.
 
 3. **Compounding payoff.** Each PR's small discipline application
    doesn't pay back in that PR; it pays back when subsequent PRs'
@@ -161,8 +161,8 @@ single-PR review and become visible only over time:
    accumulated decisions across the Rust components: zero production
    read sites for the field-removal target, zero non-deletion-target
    `SpendInput` construction sites, one production write site (per
-   `STAGE_1_PR_3_MIGRATION_AUDIT.md` §5). The audit's smaller-than-
-   anticipated scope is the corollary made measurable.
+   `STAGE_1_PR_3_MIGRATION_AUDIT.md` §5). The audit's smaller-than-anticipated
+   scope is the corollary made measurable.
 
 ### Operational implication for forward extractions
 
@@ -185,8 +185,8 @@ tables and excluded-sites tables work whether they are short or long.
 
 ### The "audits-are-clean-so-compress" anti-pattern
 
-A failure mode adjacent to the cost-benefit-defer-to-later anti-
-pattern above: when audits across multiple PRs confirm minimal
+A failure mode adjacent to the cost-benefit-defer-to-later anti-pattern
+above: when audits across multiple PRs confirm minimal
 migration, the temptation arises to under-invest in the discipline
 check itself ("the audits keep coming back clean; we can skip
 ahead"). This is exactly wrong. The audits come back clean *because*
@@ -202,9 +202,9 @@ strength is itself the property that future audits depend on.
 
 Architectural-inheritance findings concentrate where Shekyl's threat
 model differs most from Monero's. Cryptographic surfaces (`KeyEngine`,
-the eventual signing engines) carry the highest concentration; data-
-flow surfaces (`LedgerEngine`, `RefreshEngine`) carry less; pure-
-utility surfaces (`DaemonEngine`) probably carry none. PR pre-flight
+the eventual signing engines) carry the highest concentration; data-flow
+surfaces (`LedgerEngine`, `RefreshEngine`) carry less; pure-utility
+surfaces (`DaemonEngine`) probably carry none. PR pre-flight
 investigations should weight the architectural-inheritance check
 proportional to the trait's intersection with Shekyl-specific
 threat-model surfaces; trait surfaces with low cryptographic
@@ -213,14 +213,14 @@ intersection don't need exhaustive inheritance audits.
 The v31 multisig design is an instance of the post-CryptoNote design
 discipline being applied correctly during initial design (data types
 sync-primitive-free; secrets live in per-signer session state;
-message-passing surface carries public material only). Designed-for-
-Shekyl architecture passes the inheritance audit by construction;
+message-passing surface carries public material only). Designed-for-Shekyl
+architecture passes the inheritance audit by construction;
 inherited-from-CryptoNote architecture requires audit and disposition.
 
 ## Related rules
 
-- **`00-mission.mdc`** — priority hierarchy. The architectural-
-  inheritance rule operates within priority-1 (security) and
+- **`00-mission.mdc`** — priority hierarchy. The architectural-inheritance
+  rule operates within priority-1 (security) and
   priority-2 (privacy) constraints; inherited architecture that
   contradicts these priorities is rejected per the hierarchy.
 - **`05-system-thinking.mdc`** — "why is this here?" rule for
@@ -235,8 +235,8 @@ inherited-from-CryptoNote architecture requires audit and disposition.
   against. Memory-disclosure and zeroization disciplines are the
   threat-model anchors for the secret-flow inheritance findings.
 - **`36-secret-locality.mdc`** — "Rust owns secrets" at the C++/Rust
-  boundary. This rule extends that principle to which-Rust-component-
-  owns-secrets at the orchestrator/engine boundary.
+  boundary. This rule extends that principle to which-Rust-component-owns-secrets
+  at the orchestrator/engine boundary.
 - **`60-no-monero-legacy.mdc`** — removal-not-preservation rule for
   pre-genesis Monero behavior. This rule (architectural-inheritance)
   is the broader principle; `60-no-monero-legacy.mdc` is its specific
