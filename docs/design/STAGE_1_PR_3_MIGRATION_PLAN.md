@@ -214,9 +214,11 @@ bounded.
 **Scope.**
 
 - Define `KeyEngine` trait in `shekyl-engine-core/src/engine/traits/key.rs`
-  per `STAGE_1_PR_3_KEY_ENGINE.md` Round 3 surface
-  (workflow-shaped methods including `try_claim_output`,
-  `sign_transaction`, `sign_pqc_auth`, `address_for_subaddress`).
+  per `STAGE_1_PR_3_KEY_ENGINE.md` Round 3 surface — the four
+  workflow-shaped methods `account_public_address`,
+  `derive_subaddress`, `try_claim_output`, and `sign_transaction`
+  (per the design doc's §6 trait-surface IDL and the supporting
+  message shapes in §0c Sub-bundle B).
 - Implement `LocalKeys` (production-only, `from_seed` /
   `#[cfg(test)] from_test_seed` constructors per the no-Mock pattern
   from `KEY_ENGINE.md` §2.1.2).
