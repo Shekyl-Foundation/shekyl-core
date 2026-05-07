@@ -298,14 +298,39 @@ tables.
    premise that the FFI path remains until the cutover removes it
    wholesale; if that premise changes, the audit must be re-run.
 
-3. **No quantitative comparison to `monero-oxide`.** The audit assumes
-   the architectural-inheritance findings are Shekyl-specific (i.e. the
-   structural drift exists in Shekyl because Shekyl's threat model
-   differs, not because the upstream has the same drift). A spot-check
-   against `monero-oxide`'s `transfer_details` confirms the secret-
-   carrying pattern is inherited; the structural-drift framing per
-   `16-architectural-inheritance.mdc` §"The inherited-architecture rule"
-   stands.
+3. **Provenance of the secret-carrying pattern: the C++ `wallet2`
+   struct, not `monero-oxide`.** Earlier audit drafts asserted the
+   pattern was inherited from `monero-oxide`'s `transfer_details`.
+   A concrete spot-check against the fork at
+   `monero-oxide/shekyl-oxide/wallet/src/output.rs:91–95` shows the
+   `monero-oxide` analogue (`pub(crate) struct OutputData`) carries
+   only `key: EdwardsPoint`, `key_offset: Scalar`, and
+   `commitment: Commitment` — no HKDF-derived per-output secrets,
+   no combined-shared-secret. Intermediate scan-time secrets are
+   derived and discarded; only the final spend-relevant scalar is
+   persisted.
+
+   The pattern Shekyl's Rust `TransferDetails` exhibits is inherited
+   from the C++ `wallet2` struct, not from `monero-oxide`.
+   Specifically, `src/wallet/wallet2.h:327–453` defines
+   `struct transfer_details` carrying `m_mask` (Pedersen commitment
+   mask), `m_y` (HKDF-derived T-component scalar), `m_k_amount`
+   (HKDF-derived amount key), and `m_combined_shared_secret` (KEM
+   combined secret) — the same shape Shekyl's Rust mirrored when the
+   data model was first ported.
+
+   This refines the structural-drift framing rather than weakening
+   it: the inheritance chain is `wallet2.h` → Shekyl-Rust
+   `TransferDetails`, with `monero-oxide` representing a cleaner
+   alternative the port could have followed but didn't. The
+   migration moves Shekyl's Rust toward a pattern that is closer in
+   shape to `monero-oxide`'s persistence-of-final-scalars-only, with
+   handle indirection layered on top per Round 3's design. Far from
+   undermining the architectural-inheritance rule, this strengthens
+   the rule's primary statement: there was a designed-cleaner Rust
+   alternative available throughout, and `wallet2.h`'s shape was
+   inherited regardless. The migration is the rule's discipline
+   applied retroactively to that inheritance.
 
 4. **Snapshot stability.** Audit holds against
    `chore/spec-stage-1-pr3-keyengine-round` HEAD `ffcaa62e9`. If `dev`
