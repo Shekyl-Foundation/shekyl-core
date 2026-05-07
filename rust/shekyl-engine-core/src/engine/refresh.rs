@@ -2232,7 +2232,7 @@ mod tests {
     fn make_block_with_spending_tx(
         height: u64,
         parent_hash: [u8; 32],
-        key_image: [u8; 32],
+        key_image: shekyl_crypto_pq::key_image::KeyImage,
     ) -> ScannableBlock {
         let header = BlockHeader {
             hardfork_version: 1,
@@ -2258,7 +2258,7 @@ mod tests {
             inputs: vec![Input::ToKey {
                 amount: None,
                 key_offsets: vec![],
-                key_image: CompressedPoint(key_image),
+                key_image: CompressedPoint(*key_image.as_bytes()),
             }],
             outputs: vec![],
             extra: vec![],
@@ -2482,10 +2482,12 @@ mod tests {
     #[tokio::test]
     async fn key_image_collected_from_non_miner_input() {
         let key_image_bytes = [0xAB; 32];
+        let key_image =
+            shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(key_image_bytes);
         // chain[0] = genesis at h=0; chain[1] = spending tx at h=1.
         let genesis = make_synthetic_block(0, [0u8; 32]);
         let parent_h0 = genesis.block.hash();
-        let spending = make_block_with_spending_tx(1, parent_h0, key_image_bytes);
+        let spending = make_block_with_spending_tx(1, parent_h0, key_image);
         let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, vec![genesis, spending]);
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
