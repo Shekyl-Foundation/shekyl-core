@@ -1248,7 +1248,7 @@ fn consistent_against_range(
 /// the scanner's local copies do the same when this `Scanner` is
 /// dropped at the end of the refresh attempt.
 fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> {
-    let spend_pub = CompressedEdwardsY::from_slice(&keys.spend_pk)
+    let spend_pub = CompressedEdwardsY::from_slice(keys.spend_pk.as_canonical_bytes())
         .map_err(|e| {
             RefreshError::Io(IoError::Scanner {
                 detail: format!("AllKeysBlob.spend_pk is not a valid CompressedEdwardsY: {e}"),
@@ -1266,11 +1266,12 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
     // no-op on canonical input but `from_bytes_mod_order` is
     // documented as the safe choice for round-tripping serialized
     // scalars and it costs nothing on the canonical path.
-    // `view_sk` is a `ViewSecret` newtype; deref the canonical bytes
-    // for both consumers. Copying the bytes once into Zeroizing<[u8; 32]>
-    // is the same hygiene as before — the temporary copies are
-    // immediately consumed by the Zeroizing wrappers and the
-    // ViewSecret itself wipes on its own drop.
+    // `view_sk` is a `ViewSecret` newtype and `spend_sk` is a
+    // `SpendSecret` newtype; deref the canonical bytes at the boundary.
+    // Copying the bytes once into `Zeroizing<[u8; 32]>` is the same
+    // hygiene as before — the temporary copies are immediately
+    // consumed by the `Zeroizing` wrappers and the typed wrappers
+    // themselves wipe on their own drop.
     let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(
         *keys.view_sk.as_canonical_bytes(),
     ));
@@ -1283,7 +1284,7 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
         })
     })?;
 
-    let spend_secret: Zeroizing<[u8; 32]> = Zeroizing::new(keys.spend_sk);
+    let spend_secret: Zeroizing<[u8; 32]> = Zeroizing::new(*keys.spend_sk.as_canonical_bytes());
     Ok(Scanner::new(view_pair, spend_secret))
 }
 
