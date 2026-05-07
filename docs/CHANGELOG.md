@@ -437,6 +437,48 @@
   `OutputHandle` is the stateless-shape that replaces a per-call
   handle table by re-deriving spending material at spend time.
 
+  Post-merge fix-ups against the M3a PR's review feedback (PR #32
+  Copilot review, landed before merge):
+
+  - **Redacted `Debug` on secret-bearing message shapes.**
+    `SourceSecretsBundle`, `TxInputSigningContext`, and `TxToSign`
+    each now carry a manual `Debug` impl (no `derive(Debug)`)
+    redacting the four `Zeroizing<…>` secret fields under
+    `[REDACTED]`. Per `35-secure-memory.mdc`, `Zeroizing<T>: Debug`
+    delegates to `T: Debug`, so deriving `Debug` on a secret-bearing
+    struct prints raw secret bytes through `tracing` fields, panic
+    backtraces, or `dbg!()` calls. Three new sentinel-byte tests in
+    `engine::traits::key::tests` pin the redaction.
+  - **PRIMARY special-cased in `derive_subaddress(_, Audit)`.**
+    The encoded primary address packs the wallet's *base* keys
+    (`spend_pk = D`, `view_pk = a*G`) into `classical_address_bytes`
+    directly, and the reverse-lookup registry pre-registers
+    `keys.spend_pk` against `SubaddressIndex::PRIMARY`. The trait
+    method previously routed `PRIMARY` through `subaddress_keys`,
+    returning `(D + m_0*G, a*(D + m_0*G))` — a different point that
+    matched neither the encoded address nor the registry. Special-
+    casing `idx.is_primary()` to return the base account keys
+    aligns the trait with the encoded address; for `idx >= 1`, the
+    per-index derivation is unchanged. New
+    `derive_subaddress_primary_audit_returns_base_account_keys`
+    test pins the contract; docstrings on
+    `shekyl_engine_state::SubaddressIndex`,
+    `shekyl_crypto_pq::subaddress`, and the `subaddress_keys`
+    primitive itself updated to spell out the special-case truth.
+  - **Hard-coded pinned vector for `subaddress_derivation_scalar`.**
+    The prior `derivation_scalar_pinned_vector` test re-ran the
+    same `keccak256_to_scalar` primitive on both sides of the
+    equality, so any drift inside that primitive flowed through
+    both arms. Replaced with a true known-answer test (32-byte
+    expected vector hard-coded for
+    `(view = 0x0102_0304_0506_0708, idx = 1)`) plus a renamed
+    formula-lock companion test that retains the prior coverage.
+    The pair fails in different classes of regression and pins
+    both the spec output bytes and the implementation composition.
+  - **Type-placement rule corrected.** `.cursor/rules/18-type-placement.mdc`
+    named `SubaddressIndex`'s home as `shekyl-engine-core` (twice);
+    the type actually lives in `shekyl-engine-state`. Updated.
+
 - **`LedgerEngine` trait extracted; `Engine<S, D>` parameterized
   over `L: LedgerEngine` with default `LocalLedger` (Stage 1 PR 2,
   the second trait-boundaries PR per
