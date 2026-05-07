@@ -1068,6 +1068,40 @@ surfaces new questions that the next round resolves.
 > change (`OutputClaim`'s field set; `TxInputSigningContext`'s
 > handle reference); the underlying capability is unchanged.
 
+#### Continuity-of-discipline framing
+
+The handle-indirected workflow shape isn't novel discipline — it
+applies a discipline already operative elsewhere in the codebase to
+wallet-side state. `rust/shekyl-oxide/` is the artifact of Shekyl's
+discipline applied to upstream proof-system code: legacy proofs
+removed; FCMP++ and PQC primitives added; `#![deny(unsafe_code)]`
+across the vendored crates; `RELEASE-BLOCKER` items tracked per
+`SHEKYL_READINESS.md`. Wallet-side state was not vendored; it was
+ported from C++ `wallet2.h::struct transfer_details` directly into
+`shekyl-core`'s Rust without the same discipline pass. The
+secret-bearing fields on `TransferDetails`
+(`combined_shared_secret`, `ho`, `y`, `z`, `k_amount`) are the
+residue of that direct port.
+
+The architectural-inheritance disposition
+(`16-architectural-inheritance.mdc` §"The inherited-architecture
+rule") asks: where inherited architecture contradicts a Shekyl-
+specific commitment (here, `36-secret-locality.mdc`'s "engine owns
+secrets"), migrate. The handle-indirected workflow shape is that
+migration. The discipline being applied is the same discipline
+already operative in the vendored proof-system surfaces, applied
+retroactively to the part of the codebase where it hadn't been
+applied yet.
+
+This framing matters because it clarifies what the migration is
+*not*: it is not a novel security investment; it is not a
+speculative engineering project; it is not adding discipline that
+the rest of the codebase doesn't already operate under. It is
+continuity-of-discipline. Forward, per-trait PRs 4–7 should expect
+similar continuity-of-discipline opportunities wherever wallet-side
+state ported from C++ benefits from the discipline already operative
+in vendored proof-system surfaces.
+
 ### 3.1.3 Per-subaddress `kem_pk` derivation is rule-forced, not stylistic
 
 Round 3's adversarial pass (A2) probed whether `RecipientSubaddress`

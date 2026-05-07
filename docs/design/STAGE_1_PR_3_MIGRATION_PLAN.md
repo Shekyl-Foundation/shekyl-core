@@ -84,6 +84,39 @@ and refers to the umbrella work covered by `STAGE_1_PR_3_KEY_ENGINE.md`.
 
 ## §1 Scope summary
 
+### §1.0 Framing: continuity of discipline
+
+This migration extends a discipline already operative elsewhere in
+the codebase rather than introducing a new one. `rust/shekyl-oxide/`
+is the artifact of Shekyl's discipline applied to upstream
+proof-system code: legacy proof types (MLSAG, Borromean, CLSAG)
+removed; FCMP++ and PQC primitives added; `#![deny(unsafe_code)]`
+enforced across the vendored crates; release blockers tracked per
+`SHEKYL_READINESS.md`. The vendored subset is deliberately scoped
+(proof primitives, transaction wire format, RPC shim); wallet-side
+state is not vendored.
+
+The wallet-side state in `shekyl-core` was ported from C++
+`wallet2.h::struct transfer_details` without the same discipline pass.
+`TransferDetails`'s secret-bearing fields are the residue of that
+direct port. This migration applies the discipline already operative
+in `shekyl-oxide` to wallet-side state — the same architectural-
+inheritance disposition (`16-architectural-inheritance.mdc`) the
+`shekyl-oxide` rebuild applied to upstream proof-system code,
+applied retroactively to the part of the codebase where it hadn't
+been applied yet.
+
+This framing matters for two reasons. (1) It rules out the "we are
+fixing inherited code in isolation" misreading: the migration is a
+continuity-of-discipline operation, not novel surface work. (2) It
+sets a forward expectation: per-trait PRs 4–7 will likely surface
+similar continuity-of-discipline opportunities, where wallet-side
+state ported from C++ benefits from the same discipline already
+operative in vendored proof-system surfaces. The architectural-
+inheritance check during pre-flight investigations should ask
+"is this the C++-port residue or the discipline-already-applied
+shape?" and apply the rule accordingly.
+
 ### §1.1 In scope
 
 - Introduction of the `KeyEngine` trait and the `LocalKeys` bridge
