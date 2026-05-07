@@ -399,6 +399,41 @@
   to every remaining call site so M3b–M3e don't have to revisit
   the same surface.
 
+- **Monero-reference rename for Shekyl-genesis primitives (sweep
+  branch follow-on; analogous to M3a Commit 5's `classical-Monero`
+  → `classical Edwards-curve` rename per `60-no-monero-legacy.mdc`).**
+  Three call sites in Shekyl-first crates framed Shekyl-genesis-locked
+  primitives as Monero-side artifacts; reframed to put Shekyl
+  primary, with the upstream/CryptoNote provenance noted as
+  context rather than ownership.
+
+  - `rust/shekyl-ffi/Cargo.toml` description: `"FFI bridge between
+    C++ Monero core and Rust modules"` → `"FFI bridge between
+    Shekyl's C++ core and Shekyl's Rust crates"`. The C++ daemon is
+    Shekyl's (forked-and-renamed); the FFI does not bridge to
+    upstream Monero.
+  - `rust/shekyl-crypto-pq/src/derivation.rs` test-helper varint
+    comment: `// Monero varint encoding` → "Shekyl wire varint
+    (7-bit continuation, CryptoNote-style; same shape as upstream
+    Monero's varint, but Shekyl-genesis-locked)". The varint format
+    is the standard 7-bit-continuation shape inherited from
+    CryptoNote, not a Monero-specific construct.
+  - `rust/shekyl-crypto-hash/src/lib.rs` module doc-comment:
+    `Keccak-256 hashing matching Monero/Shekyl's cn_fast_hash` →
+    `Keccak-256 hashing for Shekyl's cn_fast_hash primitive
+    (byte-identical to upstream Monero's; that compatibility is
+    incidental to the genesis-locked Shekyl spec, not a
+    Monero-compatibility requirement)`.
+
+  Out of scope: legitimate provenance pointers (`monero-oxide`'s
+  `hash_to_point`, fork-attribution license headers in
+  `shekyl-scanner`, "Monero mainnet" empirical comparisons,
+  `60-no-monero-legacy.mdc` exclusion notices documenting what
+  Shekyl deliberately rejects from Monero) are preserved as-is —
+  those describe the fork relationship correctly. The earlier
+  M3a Commit 5 sweep cleared the design-doc misframings; this
+  pass closes the remaining Rust-side residue.
+
 - **`KeyEngine` trait surface and `LocalKeys` in-process implementor
   introduced (Stage 1 PR 3 — M3a; the third trait-boundaries PR per
   [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)

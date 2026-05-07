@@ -1,6 +1,6 @@
 [package]
 name = "shekyl-ffi"
-description = "FFI bridge between C++ Monero core and Rust modules"
+description = "FFI bridge between Shekyl's C++ core and Shekyl's Rust crates"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
