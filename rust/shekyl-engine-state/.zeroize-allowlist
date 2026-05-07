@@ -59,13 +59,14 @@ rust/shekyl-engine-state/src/payment_id.rs|pub struct PaymentId(pub [u8; 8]);
 #
 # Runtime indexes are rebuilt from `LedgerBlock::transfers` on every
 # wallet load; they are never serialized to disk (`LedgerIndexes` has
-# no `Serialize` / `Deserialize` derive). Map-key types here (`[u8; 32]`
-# key-image bytes, `[u8; 32]` output-pubkey bytes) are all public by
-# construction: key images are the public spent-marker primitives,
-# output pubkeys are what appears in tx outputs on-chain. See
-# `docs/V3_WALLET_DECISION_LOG.md` *"`RuntimeWalletState` audit"*
-# (2026-04-25) for the runtime-only invariant rationale.
-rust/shekyl-engine-state/src/ledger_indexes.rs|pub(crate) key_images: HashMap<[u8; 32], usize>
+# no `Serialize` / `Deserialize` derive). The `pub_keys` map keys are
+# `[u8; 32]` output-pubkey bytes — public by construction (output
+# pubkeys are what appears in tx outputs on-chain). The `key_images`
+# map was migrated to `HashMap<KeyImage, usize>` in the AllKeysBlob
+# typed-wrapper sweep; the newtype carries the same public-bytes
+# semantics through the type system, so it no longer needs an entry
+# here. See `docs/V3_WALLET_DECISION_LOG.md` *"`RuntimeWalletState`
+# audit"* (2026-04-25) for the runtime-only invariant rationale.
 rust/shekyl-engine-state/src/ledger_indexes.rs|pub(crate) pub_keys: HashMap<[u8; 32], usize>
 
 # ── sync_state_block.rs ───────────────────────────────────────────────
@@ -92,10 +93,11 @@ rust/shekyl-engine-state/src/transfer.rs|pub path_blob: Vec<u8>
 # TransferDetails.tx_hash is the 32-byte hash of the tx this output
 # lives in. Public network-level identifier.
 rust/shekyl-engine-state/src/transfer.rs|pub tx_hash: [u8; 32]
-# TransferDetails.key_image is the published spent-marker when this
-# output has been spent. Key images are public by design — that is
-# what makes double-spend detection possible.
-rust/shekyl-engine-state/src/transfer.rs|pub key_image: Option<[u8; 32]>
+# TransferDetails.key_image was migrated from `Option<[u8; 32]>` to
+# `Option<KeyImage>` in the AllKeysBlob typed-wrapper sweep; the
+# newtype carries the same public-bytes semantics through the type
+# system. The wire-form schema-mirror `key_image: Option<[u8; 32]>`
+# below is still raw and remains allowlisted.
 
 # Mirror-struct `TransferDetailsSchema` — compile-only shadow that
 # drives `postcard_schema::Schema` derivation for `TransferDetails`
