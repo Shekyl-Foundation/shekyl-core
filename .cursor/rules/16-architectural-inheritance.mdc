@@ -96,9 +96,9 @@ incremental work and architectural-integrity analysis recommends
 structural work. Round 2's workflow-shape pivot
 (per `docs/design/STAGE_1_PR_3_KEY_ENGINE.md` §2.1.1), Round 3's
 handle indirection (§3.1.2), and the architectural-inheritance
-migration that produced this rule (V3.0 PRs 3a–3f, per
-`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md` once that doc exists)
-are three instances within a single per-trait PR's design rounds.
+migration that produced this rule (V3.0 M3a–M3e, per
+`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`) are three instances
+within a single per-trait PR's design rounds.
 The pattern's persistence justifies naming it explicitly: when
 reviewing a design disposition, ask "is this the cost-benefit-
 defer-to-later answer?" If yes, the architectural-integrity-now
