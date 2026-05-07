@@ -3060,6 +3060,41 @@
   `tools/reference/requirements.txt`, which no longer exists in
   the repo). Neither requires a code change.
 
+### Documentation
+
+- **Stage 1 PR 3 (`KeyEngine`) M3a pre-flight closures landed.**
+  The four open `STAGE_1_PR_3_KEY_ENGINE.md` dispositions Round 4
+  deliberately deferred — the handle-model emergent attack
+  surface Round 3 surfaced — closed as a coupled disposition
+  cluster:
+
+  - **§7.11 (handle persistence) = option (3) deterministic from
+    ciphertext.** Handle is `cSHAKE256(view_secret || tx_hash ||
+    output_index_le_bytes(8))` with customization
+    `"shekyl/output-handle-v1"`, 16-byte output. The Round-3 lean
+    toward (1) ephemeral was amended; the four-question coupled
+    cluster collapses from this one disposition.
+  - **§7.12 (handle unforgeability / A7) = cSHAKE256-based
+    deterministic derivation.** A7 closes by construction
+    (cSHAKE256 with `view_secret` in the input phase is a PRF in
+    `view_secret` under standard assumptions). Implementation
+    crate: `sha3 = "0.10"` (already a workspace dep) with the
+    `zeroize` feature flag enabled, giving `Sha3State`
+    wipe-on-drop discipline structurally per `35-secure-memory.mdc`.
+  - **§7.10 (memory-pressure / A6) = dissolved by §7.11=(3).** No
+    table; no growth target; no eviction policy.
+  - **§7.13 (concurrency / Pattern-5) = dissolved by §7.11=(3).**
+    No shared mutable state; pure per-call sponge-state mutation
+    only.
+
+  `STAGE_1_PR_3_MIGRATION_PLAN.md` §3.1 amended to cite the
+  closures and revise the M3a scope (no `HandleTable` data
+  structure; `derive_output_handle` pure function instead;
+  `source_ciphertext` + `output_handle` added to
+  `TransferDetails` at M3b alongside the legacy fields, with
+  legacy fields removed at M3d). M3a feat branch cleared to cut.
+  Documentation-only change; no code shipped.
+
 ## [3.1.0-alpha.5] - 2026-04-22
 
 ### Security

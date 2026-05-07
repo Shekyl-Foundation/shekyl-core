@@ -54,21 +54,27 @@ the secret-flow architecture migration cleanly.
 **Implication for M3a.** The bridge impl introduced in M3a
 constructs `SpendInput` engine-internally from the start, sourcing
 secrets from `TransferDetails`'s existing secret-bearing fields
-(transitional). M3b switches the source to `HandleTable` (with
-`TransferDetails` fallback); M3d removes the fallback when the
-fields go away. There is no separate "move construction into the
-engine" PR — the construction is engine-internal from inception, and
-the audit confirms there are no extant non-deletion-target sites to
-move from. (This is the collapse that took the migration sequence from
-six PRs to five.)
+(transitional). M3b switches the source to the deterministic
+handle path — re-derive spend material from
+`(view_secret, source_ciphertext)` per design doc §7.12 (cSHAKE256
+handle derivation; ML-KEM-768 re-decap at spend time) — with the
+legacy `TransferDetails` fields as fallback; M3d removes the
+fallback when the legacy fields go away. There is no separate
+"move construction into the engine" PR — the construction is
+engine-internal from inception, and the audit confirms there are
+no extant non-deletion-target sites to move from. (This is the
+collapse that took the migration sequence from six PRs to five.)
 
 ---
 
 ## §2 TransferDetails secret-field surface
 
-The handle-indirected migration moves derived per-output secrets out of
-`TransferDetails` and into the engine's handle table, with `TransferDetails`
-holding `source_ciphertext` + `output_handle` post-M3d.
+The handle-indirected migration moves derived per-output secrets out
+of `TransferDetails`. Under the M3a-pre-flight closure of design doc
+§7.11=(3), the engine holds no in-memory handle table; spending
+material is re-derived from `(view_secret, source_ciphertext)` at
+spend time per the cSHAKE256 handle derivation in design doc §7.12.
+`TransferDetails` holds `source_ciphertext` + `output_handle` post-M3d.
 
 ### §2.1 Schema
 
@@ -88,7 +94,7 @@ M3d adds `source_ciphertext: HybridCiphertext` and
 
 | Site | File:Line | Class | Disposition | PR |
 |---|---|---|---|---|
-| Scanner output ingestion | `rust/shekyl-scanner/src/ledger_ext.rs:125–129` | Production | Reroute: scanner emits `OutputClaim` to `KeyEngine::try_claim_output`; engine populates handle table; orchestrator persists `TransferDetails` with `source_ciphertext + output_handle` only | M3b |
+| Scanner output ingestion | `rust/shekyl-scanner/src/ledger_ext.rs:125–129` | Production | Reroute: scanner emits `OutputClaim` to `KeyEngine::try_claim_output`; engine returns the deterministic `OutputHandle` (per design doc §7.12); orchestrator persists `TransferDetails` with `source_ciphertext + output_handle` (M3b adds the new fields alongside the legacy ones; M3d removes the legacy fields) | M3b / M3d |
 
 **Production write sites of secret fields: exactly one.** The migration's
 data-flow rerouting happens at this single point.

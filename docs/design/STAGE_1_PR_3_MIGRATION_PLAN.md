@@ -123,15 +123,18 @@ shape?" and apply the rule accordingly.
   implementation (M3a).
 - Reroute of the scanner's secret-emit path from
   `TransferDetails` write to `KeyEngine::try_claim_output` (M3b).
-- Bridge-implementation secret-source switch from `TransferDetails`
-  fields to `HandleTable` lookups, with `TransferDetails` retained as
-  transitional fallback (M3b).
-- Additive end-to-end test caller validating `KeyEngine::sign_transaction`
-  produces byte-identical output to the legacy direct-secret path
-  (M3c).
-- Removal of secret-bearing fields from `TransferDetails`; addition of
-  `source_ciphertext` and `output_handle`; removal of bridge-impl
-  fallback (M3d).
+- Bridge-implementation secret-source switch from
+  `TransferDetails` legacy fields to the deterministic handle path
+  (re-derive spend material from `(view_secret, source_ciphertext)`
+  per design doc §7.12); legacy fields retained as transitional
+  fallback (M3b). Adds `source_ciphertext` and `output_handle` to
+  the `TransferDetails` schema at M3b so the primary path is
+  functional from M3b.
+- Additive end-to-end test caller validating
+  `KeyEngine::sign_transaction` produces byte-identical output to
+  the legacy direct-secret path (M3c).
+- Removal of legacy secret-bearing fields from `TransferDetails`;
+  removal of bridge-impl fallback (M3d).
 - Documentation realignment across `STAGE_1_PR_3_KEY_ENGINE.md`,
   `STAGE_1_PR_3_MIGRATION_AUDIT.md`, `CHANGELOG.md`, and
   `docs/FOLLOWUPS.md` (M3e).
@@ -179,37 +182,48 @@ would mean migrating a path whose only forward state is deletion.
 
 **Title.** `feat(engine): introduce KeyEngine trait and LocalKeys bridge impl`
 
-**Pre-flight investigation (prerequisite to cutting the feat
-branch).** M3a closes the four open dispositions Round 4
+**Pre-flight investigation (closed; M3a feat branch cleared to
+cut).** M3a pre-flight closed the four open dispositions Round 4
 deliberately deferred — the handle-model emergent attack surface
-that Round 3 surfaced. The design doc's open-question status on
-each section is preserved unchanged until M3a's pre-flight
-investigation produces the V3.0 closure:
+that Round 3 surfaced. Resolutions:
 
-- **§7.10 (handle-table memory-pressure / A6 attack surface).**
-  Bound selection (cap, eviction trigger, orchestrator-pinning).
-  Couples to §7.13's concurrent-access shape.
-- **§7.11 (handle persistence across wallet restart).** Round-3
-  lean was option (1) for V3.0 (no persistence; rebuild on
-  restart); ratify or amend.
-- **§7.12 (handle unforgeability).** Derivation choice
-  (counter-based, UUID-based, or cryptographically-derived from
-  view secret + per-handle nonce). Couples to §7.11's persistence
-  option.
-- **§7.13 (handle-table concurrency quality / Pattern-5 cluster).**
-  Concurrent-access shape (sharded `RwLock` vs. lock-free hashmap
-  vs. fair-queued single-writer) plus explicit timing-channel
-  analysis under the chosen shape.
+- **§7.11 (handle persistence across wallet restart) = option (3)
+  deterministic from ciphertext.** Handle is
+  `cSHAKE256(view_secret || tx_hash || output_index_le_bytes(8))`
+  with customization `"shekyl/output-handle-v1"`, 16-byte output.
+  Round-3 lean toward (1) ephemeral amended; the four-question
+  coupled cluster (§7.10 / §7.12 / §7.13) collapses from this one
+  disposition per the structural-reduction analysis in
+  `STAGE_1_PR_3_KEY_ENGINE.md` §7.11. (2a) rejected; (2b)
+  deferred to V3.x as performance-optimization candidate.
+- **§7.12 (handle unforgeability / A7) = cSHAKE256-based
+  deterministic derivation.** A7 closes by construction:
+  cSHAKE256 with `view_secret` in the input phase is a PRF in
+  `view_secret` (standard assumption); cross-engine references
+  and predicted-handle injection attacks are foreclosed.
+  Implementation crate: `sha3 = "0.10"` (already a workspace dep
+  via `shekyl-crypto-pq`) with the `zeroize` feature flag
+  enabled, giving `Sha3State` wipe-on-drop discipline structurally
+  per `35-secure-memory.mdc`. `tiny-keccak` rejected on
+  memory-wipe grounds (private `KeccakState`; no `Zeroize` impl;
+  no public reset path). See design doc §7.12 for full closure.
+- **§7.10 (handle-table memory-pressure / A6) = dissolved by
+  §7.11=(3).** No table; no growth target; no eviction policy;
+  no `release_handle` trait method; no `KeyEngineError` variant
+  for evicted-handle resolution.
+- **§7.13 (handle-table concurrency quality / Pattern-5 cluster)
+  = dissolved by §7.11=(3).** No shared mutable state; pure
+  per-call sponge-state mutation only; no concurrent-access
+  shape to choose; no contention-timing side channel.
 
-The pre-flight produces a single-commit amendment to this section
-(citing each closure's resolution and the test surface that
-follows) before M3a's feat branch is cut. Per
+The closures land as a single commit on `dev` (parent of M3a's
+feat branch). Per
 [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)'s
 4–6-rounds-before-implementation rule for crypto-critical trait
-migrations, this pre-flight is not optional; it's the round-budget
-work the migration plan deliberately separates from the planning
-artifacts Round 4 produced so each PR's review surface stays
-bounded.
+migrations, the pre-flight investigation discharges the
+round-budget work the migration plan deliberately separates from
+Round-4 planning artifacts so each PR's review surface stays
+bounded. M3a is now cleared to cut its feat branch.
 
 **Scope.**
 
@@ -225,44 +239,60 @@ bounded.
 - Implement engine-internal `SpendInput` construction inside
   `LocalKeys::sign_transaction`. Bridge sources secrets from
   `TransferDetails`'s existing secret-bearing fields (transitional;
-  M3b switches the source).
-- Introduce `HandleTable` per the M3a pre-flight disposition of
-  `STAGE_1_PR_3_KEY_ENGINE.md` §7.13 (handle-table concurrency
-  quality / Pattern-5 cluster). The exact concurrent-access shape
-  (sharded `RwLock` vs. lock-free hashmap vs. fair-queued
-  single-writer) and the eviction policy (if any) are M3a
-  pre-flight decisions, not pre-pinned by this plan; the M3a PR
-  amends this section to cite the closure. Empty at M3a; populated
-  at M3b.
-- Introduce `OutputHandle` per the M3a pre-flight disposition of
-  `STAGE_1_PR_3_KEY_ENGINE.md` §7.12 (handle unforgeability) and
-  §7.11 (handle persistence across wallet restart). The
-  derivation choice (counter-based, UUID-based, or
-  cryptographically-derived from view secret + per-handle nonce)
-  couples to §7.11's persistence option selection and is pinned at
-  M3a pre-flight, not pre-pinned by this plan.
-- Memory-pressure bound per `STAGE_1_PR_3_KEY_ENGINE.md` §7.10
-  (A6 — handle-table memory-pressure attack surface). Bound
-  selection (cap, eviction trigger, orchestrator-pinning) is M3a
-  pre-flight work; couples to the §7.13 concurrent-access shape.
+  M3b switches the source via the deterministic-handle pathway).
+- **No `HandleTable` data structure.** Per `STAGE_1_PR_3_KEY_ENGINE.md`
+  §7.11=(3) and §7.13's dissolution, the engine holds no
+  handle-table state; `try_claim_output` returns the deterministic
+  handle directly, and `sign_transaction` re-derives spending
+  material from `(view_secret, source_ciphertext)` at the
+  input-resolution step. No concurrent-access primitive, no
+  eviction policy, no `release_handle` method, no
+  `HandleNotFound` `KeyEngineError` variant.
+- Introduce `OutputHandle` newtype (`[u8; 16]` wrapper) and
+  `derive_output_handle` pure function per
+  `STAGE_1_PR_3_KEY_ENGINE.md` §7.12: cSHAKE256 over
+  `view_secret || tx_hash || output_index_le_bytes(8)` with
+  customization `"shekyl/output-handle-v1"`, 16-byte output.
+  Crate: `sha3 = "0.10"` with the `zeroize` feature flag enabled
+  on the `shekyl-crypto-pq` import; the customization string is a
+  named constant (`OUTPUT_HANDLE_CUSTOMIZATION` or
+  `OUTPUT_HANDLE_DOMAIN_SEP`) per the SP 800-185 vocabulary
+  matching note in design doc §7.12.
+- **No memory-pressure bound required.** Per
+  `STAGE_1_PR_3_KEY_ENGINE.md` §7.10's dissolution, A6's attack
+  surface (cross-call accumulation in an unbounded handle table)
+  has no target; per-call decap state remains stack-frame
+  bounded and wiped per `35-secure-memory.mdc`'s
+  structural-memwipe rule.
 - v31 multisig pre-flight verification: confirm the audit's §4
-  structural-alignment finding still holds at HEAD; produce a one-line
-  confirmation comment in the PR description.
+  structural-alignment finding still holds at HEAD; produce a
+  one-line confirmation comment in the PR description.
 - Initial test substrate: unit tests for `LocalKeys::from_test_seed`
-  determinism plus the test surface that the §7.10–§7.13 closures
-  produce (e.g., concurrent-insert correctness for the chosen
-  concurrent-access shape; derivation determinism / unforgeability
-  for the chosen handle shape; bounded-growth invariants for the
-  chosen memory-pressure bound).
+  determinism; `derive_output_handle` known-answer tests
+  (cross-language reproducible vectors covering several
+  `(view_secret, tx_hash, output_index)` triples);
+  cross-input-divergence tests (different `view_secret` /
+  `tx_hash` / `output_index` produce distinct handles);
+  customization-bump versioning test (`v1` vs. hypothetical `v2`
+  customization strings produce distinct handles for the same
+  other-inputs); view-secret wipe-on-drop smoke test confirming
+  the `Sha3State` `Zeroize` feature is wired correctly at the
+  workspace dep level.
 
 **Files touched (estimated).**
 
 - New: `rust/shekyl-engine-core/src/engine/traits/key.rs` (~300 lines).
-- New: `rust/shekyl-engine-core/src/engine/local_keys.rs` (~600 lines
-  including impl + handle table + tests).
-- New: `rust/shekyl-engine-core/src/engine/handle.rs` (~150 lines).
+- New: `rust/shekyl-engine-core/src/engine/local_keys.rs` (~400 lines
+  including impl + tests; no handle-table management).
+- New: `rust/shekyl-engine-core/src/engine/handle.rs` (~80 lines:
+  `OutputHandle` newtype + `derive_output_handle` pure function +
+  customization-string constant).
 - Edit: `rust/shekyl-engine-core/src/engine/mod.rs` (re-exports).
-- New: `rust/shekyl-engine-core/tests/key_engine_unit.rs` (~200 lines).
+- Edit: `rust/shekyl-crypto-pq/Cargo.toml` (enable `zeroize`
+  feature flag on the `sha3` direct dep so `Sha3State`'s
+  `Zeroize + ZeroizeOnDrop` impls are available downstream).
+- New: `rust/shekyl-engine-core/tests/key_engine_unit.rs` (~150
+  lines).
 
 **Dependencies.** None (foundation PR).
 
@@ -276,15 +306,18 @@ activates at M3d. Specifically, M3a establishes:
 - The `KeyEngine` trait surface that the property eventually
   attaches to (the boundary across which secrets do not flow once
   the property is live).
-- The `HandleTable` infrastructure that holds the property's runtime
-  state (the cache of derived secrets, populated by `try_claim_output`
-  and consumed by `sign_transaction`).
+- The deterministic `OutputHandle` derivation (`derive_output_handle`
+  per design doc §7.12) — the stateless shape that replaces a
+  cached handle table by re-decapping at spend time. The runtime
+  state the property eventually attaches to is the
+  engine-internal long-term key material; no per-output cache.
 - The production-only discipline (no Mock-X; bridge impl is real
-  code reading real secrets from existing fields) that the property's
-  implementation respects.
-- The test substrate (handle-table sharding, derivation
-  determinism, byte-identical signing) against which M3b/M3c/M3d
-  validate the property's behavior.
+  code reading real secrets from existing fields) that the
+  property's implementation respects.
+- The test substrate (`derive_output_handle` known-answer
+  reproducibility, view-secret wipe-on-drop, byte-identical
+  signing) against which M3b/M3c/M3d validate the property's
+  behavior.
 
 The property does not activate until M3d removes the
 `TransferDetails` secret fields. M3a is what makes that activation
@@ -295,26 +328,30 @@ possible.
 - Workspace compiles; existing tests green.
 - `LocalKeys` production-only (`#[cfg(not(test))]` paths exclude any
   test-only constructor).
-- Handle-table test surface exercises the closure-of-§7.13's chosen
-  concurrent-access shape under contention (≥2 concurrent writers
-  for sharded designs; appropriate equivalent for non-sharded
-  designs).
+- `derive_output_handle` known-answer tests pass against
+  cross-language-reproducible vectors (the same
+  `(view_secret, tx_hash, output_index)` triple produces the
+  documented 16-byte output across implementations).
+- View-secret wipe-on-drop wired correctly at the workspace dep
+  level: `sha3 = "0.10"` is configured with the `zeroize` feature
+  on `shekyl-crypto-pq`'s direct dep so downstream `Sha3State`
+  use inherits `Zeroize + ZeroizeOnDrop`. A smoke test confirms
+  the feature is active (a compilation check that
+  `Sha3State: Zeroize` is satisfied; not a re-implementation of
+  the test that lives in `sha3`'s own test suite).
 - v31 multisig pre-flight comment in PR description.
-- M3a pre-flight closures cited: design doc §7.10 (memory-pressure),
-  §7.11 (persistence), §7.12 (handle unforgeability), §7.13
-  (concurrency quality) all advanced from "open" to "closed for
-  V3.0" with disposition recorded in design doc and migration plan
-  §3.1 amended to cite the closures.
-- No public API change to existing crates outside `shekyl-engine-core`.
+- No public API change to existing crates outside
+  `shekyl-engine-core`.
 
-**Estimated review surface.** ~1300 lines added; zero deleted; ~5
-files edited including re-exports.
+**Estimated review surface.** ~900 lines added; zero deleted; ~6
+files edited including re-exports and the `Cargo.toml` feature
+flip.
 
 ---
 
 ### §3.2 M3b — scanner reroute + bridge source switch
 
-**Title.** `feat(engine): reroute scanner secrets via KeyEngine handle table`
+**Title.** `feat(engine): reroute scanner secrets via KeyEngine deterministic handle`
 
 **Scope.**
 
@@ -322,22 +359,29 @@ files edited including re-exports.
   audit's load-bearing single-site change): scanner emits
   `OutputClaim` to `KeyEngine::try_claim_output` instead of
   populating `TransferDetails`'s secret-bearing fields directly.
-- Engine populates `HandleTable` from the claim; orchestrator
-  receives `OutputHandle` and `source_ciphertext` to persist on
-  `TransferDetails`. (The schema additions land in M3d; for M3b,
-  the secret-bearing fields remain populated as before to keep the
-  bridge-impl fallback live.)
-- Switch `LocalKeys::sign_transaction`'s primary secret source from
-  `TransferDetails`'s secret fields to `HandleTable` lookups, with
-  `TransferDetails` as transitional fallback (selected by feature-detection,
-  not feature flag — if the handle resolves, use it; else
-  fall through to `TransferDetails`).
+- Engine returns `OutputHandle` (deterministic per design doc
+  §7.12) to the orchestrator; orchestrator persists the handle
+  and the `source_ciphertext` (the on-chain hybrid ciphertext the
+  scanner detected) on `TransferDetails`. Both fields are added
+  to the schema at this PR so the bridge impl's primary path is
+  functional from M3b; the legacy secret-bearing fields remain
+  populated transitionally to keep the bridge-impl fallback live.
+- Switch `LocalKeys::sign_transaction`'s primary secret source
+  from `TransferDetails`'s legacy secret fields to the
+  deterministic handle path: re-derive spend material from
+  `(view_secret, source_ciphertext)` at the input-resolution
+  step. `TransferDetails` legacy fields remain as transitional
+  fallback (selected by feature-detection, not feature flag — if
+  `source_ciphertext` is present, re-derive from it; else fall
+  through to the legacy fields).
 - Test fixtures in `rust/shekyl-scanner/src/tests.rs:77, 855, 1037`
   rewrite to exercise the engine-mediated flow.
 - Add byte-identical-derivation property test: for the same input
-  ciphertext + tx context, `HandleTable`-resolved secrets must equal
-  `TransferDetails`-resolved secrets bit-for-bit. This is the audit's
-  cross-PR safety property; failure indicates a bug in either path.
+  ciphertext + tx context, deterministic-handle-path-resolved
+  secrets (re-decap from `source_ciphertext`) must equal
+  legacy-`TransferDetails`-resolved secrets bit-for-bit. This is
+  the audit's cross-PR safety property; failure indicates a bug
+  in either path.
 
 **Files touched (estimated).**
 
@@ -348,24 +392,31 @@ files edited including re-exports.
 - New: `rust/shekyl-engine-core/tests/byte_identical_derivation.rs`
   (~100 lines).
 
-**Dependencies.** M3a (trait + bridge impl + handle table).
+**Dependencies.** M3a (trait + bridge impl + `derive_output_handle`).
 
-**Schema state at PR boundary.** `TransferDetails` carries both old
-secret-bearing fields (still populated) and is referenced by
-`OutputHandle` in the handle table. Two parallel sources exist
-transitionally.
+**Schema state at PR boundary.** `TransferDetails` carries both
+the legacy secret-bearing fields (still populated) and the new
+`source_ciphertext` + `output_handle` fields. Two parallel
+secret-recovery sources exist transitionally; the bridge impl's
+primary path uses the new fields, the fallback uses the legacy
+ones.
 
-**Property delivery.** Partial. Engine cache populated; orchestrator
-copy still present. Property "secrets confined to engine" not yet
-active (orchestrator-side copies remain).
+**Property delivery.** Partial. The engine has a functional
+deterministic-handle path; the orchestrator's legacy
+secret-bearing copies remain. Property "secrets confined to
+engine" not yet active (orchestrator-side copies remain).
 
 **Success criteria.**
 
 - Workspace compiles; all existing tests green.
-- Byte-identical-derivation property test passes.
-- `OutputHandle` populated for every output the scanner ingests.
-- Bridge impl exercises `HandleTable` primary path on at least one
-  end-to-end test; fallback path covered by an explicit fallback test.
+- Byte-identical-derivation property test passes (re-decap path
+  produces secrets bit-identical to legacy-field path).
+- `OutputHandle` and `source_ciphertext` populated for every
+  output the scanner ingests.
+- Bridge impl exercises deterministic-handle primary path on at
+  least one end-to-end test; fallback path covered by an explicit
+  fallback test (e.g., a `TransferDetails` with legacy fields
+  populated but `source_ciphertext = None`).
 
 **Estimated review surface.** ~360 lines net; one production write
 site moved; one new property test.
@@ -401,7 +452,8 @@ site moved; one new property test.
   visibility — flag if friction.)
 
 **Dependencies.** M3a (trait + bridge). Independent of M3b in
-scope (test populates `HandleTable` directly via fixture, not via
+scope (test constructs the deterministic handle directly via
+`derive_output_handle` against a synthetic fixture, not via the
 scanner reroute), so M3c can merge in parallel with M3b.
 
 **Schema state at PR boundary.** Unchanged from incoming.
@@ -428,25 +480,25 @@ cross-crate friction.
 **Scope.**
 
 - Remove from `rust/shekyl-engine-state/src/transfer.rs:86–98` the
-  five secret-bearing fields:
+  five legacy secret-bearing fields:
   - `combined_shared_secret: Option<Zeroizing<[u8; 64]>>`
   - `ho: Option<Zeroizing<[u8; 32]>>`
   - `y: Option<Zeroizing<[u8; 32]>>`
   - `z: Option<Zeroizing<[u8; 32]>>`
   - `k_amount: Option<Zeroizing<[u8; 32]>>`
-- Add to the same struct:
-  - `source_ciphertext: HybridCiphertext`
-  - `output_handle: OutputHandle`
+- (`source_ciphertext` and `output_handle` were added to the
+  schema at M3b; M3d removes the legacy fields they superseded.)
 - Update `Zeroize` / `Drop` impls; update postcard schema; update
   serde helpers.
-- Remove the bridge impl's `TransferDetails`-fallback path in
-  `LocalKeys::sign_transaction`. Post-M3d, handles are the only
-  secret source.
+- Remove the bridge impl's legacy-`TransferDetails`-fallback path
+  in `LocalKeys::sign_transaction`. Post-M3d, the deterministic
+  handle path (re-derive from `(view_secret, source_ciphertext)`)
+  is the only secret source.
 - Rewrite test/bench fixtures per audit §2.4 (10 sites).
-- Update the scanner's `TransferDetailsExt::populate_*` helpers
-  in `ledger_ext.rs` to write the new fields instead of the removed
-  ones (the write site moved to engine in M3b; the helper now
-  populates `source_ciphertext` and `output_handle` only).
+- Update the scanner's `TransferDetailsExt::populate_*` helpers in
+  `ledger_ext.rs` to drop the legacy-field writes (the write site
+  moved to engine in M3b; the helper now populates
+  `source_ciphertext` and `output_handle` only).
 
 **Files touched (estimated).**
 
@@ -474,8 +526,10 @@ the fallback without the byte-identical-derivation property test
 having validated the engine path is unsafe.
 
 **Schema state at PR boundary.** `TransferDetails` carries
-`source_ciphertext` + `output_handle` instead of the five secret-bearing
-fields. Bridge impl exclusively uses `HandleTable`.
+`source_ciphertext` + `output_handle` only; the five legacy
+secret-bearing fields are removed. Bridge impl exclusively uses
+the deterministic handle path: re-derive spend material from
+`(view_secret, source_ciphertext)` per design doc §7.12.
 
 **Property delivery.** **"Secrets confined to engine" activates.**
 Orchestrator-side `TransferDetails` no longer carries derived
@@ -583,15 +637,18 @@ carrying derived secrets.
 
 | PR | Primary source | Fallback | Both populated? |
 |---|---|---|---|
-| M3a | `TransferDetails` fields | — | n/a (only `TransferDetails` exists) |
-| M3b | `HandleTable` | `TransferDetails` fields | Yes (transitional) |
+| M3a | legacy `TransferDetails` fields | — | n/a (only legacy fields exist) |
+| M3b | re-derive from `(view_secret, source_ciphertext)` | legacy `TransferDetails` fields | Yes (transitional) |
 | M3c | (unchanged from M3b) | (unchanged) | Yes |
-| M3d | `HandleTable` | — | No (`TransferDetails` fields removed) |
+| M3d | re-derive from `(view_secret, source_ciphertext)` | — | No (legacy fields removed) |
 
 The fallback at M3b is feature-detected, not feature-flagged: if
-the handle resolves, use it; if not, fall through. This means the
-fallback does not require any explicit "switch" at M3d — just the
-removal of the source the fallback would have read.
+`source_ciphertext` is present on the `TransferDetails`, the
+bridge re-derives spend material from it; if not (legacy
+fixture), the bridge falls through to the legacy fields. This
+means the fallback does not require any explicit "switch" at M3d
+— just the removal of the legacy fields the fallback would have
+read.
 
 ### §4.3 Schema state at each PR boundary
 
@@ -599,15 +656,18 @@ removal of the source the fallback would have read.
 |---|---|
 | Pre-M3a | 5 secret-bearing fields (legacy) |
 | M3a | (unchanged) |
-| M3b | 5 secret-bearing fields (legacy, still populated; transitional fallback live) |
+| M3b | 5 legacy secret-bearing fields (still populated; transitional fallback) **plus** `source_ciphertext: HybridCiphertext` and `output_handle: OutputHandle` (new; primary path source) |
 | M3c | (unchanged) |
 | M3d | `source_ciphertext` + `output_handle` (only). 5 legacy fields removed. |
 | M3e | (unchanged) |
 
 ### §4.4 Test substrate evolution
 
-- **M3a.** New unit tests for `LocalKeys`, handle table, handle
-  derivation. Existing scanner / engine-state tests untouched.
+- **M3a.** New unit tests for `LocalKeys` (including
+  `from_test_seed` determinism) and `derive_output_handle`
+  (known-answer vectors, cross-input divergence,
+  customization-bump versioning, `Sha3State` `Zeroize` feature
+  wiring). Existing scanner / engine-state tests untouched.
 - **M3b.** Scanner test fixtures rewrite to engine-mediated flow.
   New byte-identical-derivation property test.
 - **M3c.** New end-to-end engine signing test against `tx-builder`
@@ -715,7 +775,9 @@ landing in M3e:
 - "PR 3 architectural-inheritance migration complete (M3a–M3e
   per `STAGE_1_PR_3_MIGRATION_PLAN.md`)."
 - "TransferDetails secret-bearing fields removed; secrets confined
-  to engine via HandleTable (M3d)."
+  to engine via deterministic handle derivation (cSHAKE256;
+  re-derive from `(view_secret, source_ciphertext)` per design
+  doc §7.12) (M3d)."
 
 **Update:**
 - §V3.1 line 259 (`Stage 2 — KeyEngine migration to actor`):
@@ -744,18 +806,21 @@ M3e with the rest of the documentation realignment.
    Decision deferred to M3c's draft phase; either resolution is
    acceptable.
 
-2. **`HandleTable` size bound.** Round 3 §7.10 framed this as a
-   capacity-bounded FIFO eviction policy. The exact bound is not
-   set by this plan; M3a draws a default (suggested: 4096 handles
-   per shard × 16 shards = 65k handles, ample for typical wallets)
-   and the migration-plan-final review can revisit. Bound changes
-   are non-breaking post-M3a (cache-internal).
+2. **~~`HandleTable` size bound.~~** Closed at M3a pre-flight:
+   dissolved by design doc §7.11=(3). The engine holds no
+   handle-table state; no size bound, eviction policy, or shard
+   layout exists to set. Preserved here as a closure cross-reference
+   per `15-deletion-and-debt.mdc`'s "items get a target version
+   or get closed" rule.
 
 3. **Byte-identical-derivation test scope (M3b property).** The
-   test must be deterministic across shards (the `HandleTable`'s
-   shard assignment is content-addressed by handle, so deterministic).
-   If a future change introduces non-determinism (e.g., parallel
-   eviction), the property test catches it. No deferral needed.
+   test compares re-derive-from-`source_ciphertext` output against
+   legacy-`TransferDetails`-fields output for the same input
+   ciphertext + tx context; both paths are deterministic by
+   construction (cSHAKE256 derivation + ML-KEM-768 decap on the
+   primary path; direct field reads on the fallback path), so the
+   property test is deterministic without further qualification.
+   No deferral needed.
 
 4. **M3c → cutover handoff documentation.** M3c's test caller
    is the canonical example of how the post-cutover production
