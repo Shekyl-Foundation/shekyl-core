@@ -69,6 +69,7 @@ use shekyl_address::ShekylAddress;
 use shekyl_crypto_pq::handle::OutputHandle;
 use shekyl_crypto_pq::kem::{HybridCiphertext, HybridKemPublicKey};
 use shekyl_crypto_pq::key_image::KeyImage;
+use shekyl_crypto_pq::keys::{SpendPublicKey, ViewPublicKey};
 use shekyl_engine_state::SubaddressIndex;
 use zeroize::Zeroizing;
 
@@ -306,8 +307,8 @@ pub(crate) struct RecipientSubaddress {
 #[non_exhaustive]
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct SubaddressKeyPair {
-    pub spend_pk: [u8; 32],
-    pub view_pk: [u8; 32],
+    pub spend_pk: SpendPublicKey,
+    pub view_pk: ViewPublicKey,
 }
 
 // --- Sign-transaction message shapes ---------------------------------------

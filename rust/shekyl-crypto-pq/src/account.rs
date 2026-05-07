@@ -107,7 +107,7 @@ use fips203::traits::{KeyGen, SerDes};
 
 use crate::bip39;
 use crate::kem::{ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN};
-use crate::keys::ViewSecret;
+use crate::keys::{SpendPublicKey, SpendSecret, ViewPublicKey, ViewSecret};
 use crate::montgomery;
 use crate::CryptoError;
 
@@ -438,9 +438,19 @@ pub fn ml_kem_keypair_from_d_z(
 pub struct AllKeysBlob {
     // --- public side (plain-text portion of the wallet) ------------------
     /// Ed25519 spend public key.
-    pub spend_pk: [u8; 32],
+    ///
+    /// Wrapped in [`SpendPublicKey`](crate::keys::SpendPublicKey) for
+    /// type-system protection at sites that distinguish "spend half"
+    /// from "view half" of the account identity. `#[repr(transparent)]`
+    /// preserves the bit-for-bit FFI layout invariant with
+    /// `shekyl_ffi::ShekylAllKeysBlob.spend_pk: [u8; 32]`. Read the
+    /// canonical bytes via `spend_pk.as_canonical_bytes()`.
+    pub spend_pk: SpendPublicKey,
     /// Ed25519 view public key.
-    pub view_pk: [u8; 32],
+    ///
+    /// Wrapped in [`ViewPublicKey`](crate::keys::ViewPublicKey) — see
+    /// `spend_pk` for the FFI-layout / accessor contract.
+    pub view_pk: ViewPublicKey,
     /// ML-KEM-768 encap (public) key, 1184 bytes.
     pub ml_kem_ek: [u8; ML_KEM_768_EK_LEN],
     /// X25519 public key, derived from `view_pk` via the Edwards-to-Montgomery
@@ -455,7 +465,13 @@ pub struct AllKeysBlob {
 
     // --- secret side (held by C++ only as opaque bytes) -------------------
     /// Ed25519 spend secret scalar, in canonical 32-byte little-endian form.
-    pub spend_sk: [u8; 32],
+    ///
+    /// Wrapped in [`SpendSecret`](crate::keys::SpendSecret) for
+    /// type-system protection and structural wipe-on-drop.
+    /// `#[repr(transparent)]` preserves the bit-for-bit FFI layout
+    /// invariant with `shekyl_ffi::ShekylAllKeysBlob.spend_sk: [u8; 32]`.
+    /// Read the canonical bytes via `spend_sk.as_canonical_bytes()`.
+    pub spend_sk: SpendSecret,
     /// Ed25519 view secret scalar, in canonical 32-byte little-endian form.
     /// Also used (unclamped) as the Montgomery scalar at ECDH sites.
     ///
@@ -475,13 +491,13 @@ impl AllKeysBlob {
     /// failure path to guarantee constant-time write patterns.
     pub fn zeroed() -> Self {
         AllKeysBlob {
-            spend_pk: [0u8; 32],
-            view_pk: [0u8; 32],
+            spend_pk: SpendPublicKey::from_canonical_bytes([0u8; 32]),
+            view_pk: ViewPublicKey::from_canonical_bytes([0u8; 32]),
             ml_kem_ek: [0u8; ML_KEM_768_EK_LEN],
             x25519_pk: [0u8; 32],
             pqc_public_key: [0u8; PQC_PUBLIC_KEY_BYTES],
             classical_address_bytes: [0u8; CLASSICAL_ADDRESS_BYTES],
-            spend_sk: [0u8; 32],
+            spend_sk: SpendSecret::from_bytes([0u8; 32]),
             view_sk: ViewSecret::from_bytes([0u8; 32]),
             ml_kem_dk: [0u8; ML_KEM_768_DK_LEN],
         }
@@ -490,14 +506,16 @@ impl AllKeysBlob {
 
 impl Drop for AllKeysBlob {
     fn drop(&mut self) {
-        self.spend_sk.zeroize();
-        // `self.view_sk` (ViewSecret) wipes via field-drop-glue: its
-        // `ZeroizeOnDrop` impl runs after this manual `drop` returns.
-        // Calling `.zeroize()` here would be redundant.
+        // `self.spend_sk` (SpendSecret) and `self.view_sk` (ViewSecret)
+        // wipe via field-drop-glue: their `ZeroizeOnDrop` impls run after
+        // this manual `drop` returns. Calling `.zeroize()` here would be
+        // redundant.
         self.ml_kem_dk.zeroize();
         // Public fields do not need zeroization but we clear them for
         // uniform write patterns and to avoid accidental reuse of stale
         // public material that the caller may consider authoritative.
+        // `SpendPublicKey` / `ViewPublicKey` impl `Zeroize` (without
+        // `ZeroizeOnDrop`, which would conflict with their `Copy` impl).
         self.spend_pk.zeroize();
         self.view_pk.zeroize();
         self.ml_kem_ek.fill(0);
@@ -532,10 +550,9 @@ pub fn rederive_account(
     // Ed25519 spend
     let spend_wide = derive_spend_wide(master_seed, net, fmt);
     let spend_scalar = wide_reduce_to_scalar(&spend_wide);
-    blob.spend_sk.copy_from_slice(spend_scalar.as_bytes());
+    blob.spend_sk = SpendSecret::from_bytes(*spend_scalar.as_bytes());
     let spend_pub = curve25519_dalek::constants::ED25519_BASEPOINT_TABLE * &spend_scalar;
-    blob.spend_pk
-        .copy_from_slice(spend_pub.compress().as_bytes());
+    blob.spend_pk = SpendPublicKey::from_canonical_bytes(*spend_pub.compress().as_bytes());
 
     // Ed25519 view
     let view_wide = derive_view_wide(master_seed, net, fmt);
@@ -543,14 +560,14 @@ pub fn rederive_account(
     blob.view_sk = ViewSecret::from_bytes(*view_scalar.as_bytes());
     let view_pub_edw = curve25519_dalek::constants::ED25519_BASEPOINT_TABLE * &view_scalar;
     let view_pub_compressed = view_pub_edw.compress();
-    blob.view_pk.copy_from_slice(view_pub_compressed.as_bytes());
+    blob.view_pk = ViewPublicKey::from_canonical_bytes(*view_pub_compressed.as_bytes());
 
     // X25519 public via birational. Failure here means the view scalar
     // produced an identity or low-order Ed25519 point; the probability is
     // cryptographically negligible but we surface it cleanly. On error,
     // `blob` is dropped here, which zeroes its secret fields via
     // `AllKeysBlob::drop`.
-    let x25519_pk = montgomery::ed25519_pk_to_x25519_pk(&blob.view_pk)?;
+    let x25519_pk = montgomery::ed25519_pk_to_x25519_pk(blob.view_pk.as_canonical_bytes())?;
     blob.x25519_pk.copy_from_slice(&x25519_pk);
 
     // ML-KEM-768 deterministic keygen
@@ -564,8 +581,8 @@ pub fn rederive_account(
     blob.pqc_public_key[32..].copy_from_slice(&blob.ml_kem_ek);
 
     blob.classical_address_bytes[0] = shekyl_address::ADDRESS_VERSION_V1;
-    blob.classical_address_bytes[1..33].copy_from_slice(&blob.spend_pk);
-    blob.classical_address_bytes[33..65].copy_from_slice(&blob.view_pk);
+    blob.classical_address_bytes[1..33].copy_from_slice(blob.spend_pk.as_canonical_bytes());
+    blob.classical_address_bytes[33..65].copy_from_slice(blob.view_pk.as_canonical_bytes());
 
     Ok(blob)
 }
@@ -761,7 +778,10 @@ mod tests {
         assert_eq!(blob1.x25519_pk, blob2.x25519_pk);
         assert_eq!(blob1.pqc_public_key, blob2.pqc_public_key);
         assert_eq!(blob1.classical_address_bytes, blob2.classical_address_bytes);
-        assert_eq!(blob1.spend_sk, blob2.spend_sk);
+        assert_eq!(
+            blob1.spend_sk.as_canonical_bytes(),
+            blob2.spend_sk.as_canonical_bytes(),
+        );
         assert_eq!(
             blob1.view_sk.as_canonical_bytes(),
             blob2.view_sk.as_canonical_bytes(),
@@ -863,7 +883,8 @@ mod tests {
     fn pqc_public_key_matches_view_roundtrip() {
         let seed = [0x99u8; MASTER_SEED_BYTES];
         let blob = rederive_account(&seed, DerivationNetwork::Mainnet, SeedFormat::Bip39).unwrap();
-        check_pqc_public_key_matches_view(&blob.pqc_public_key, &blob.view_pk).unwrap();
+        check_pqc_public_key_matches_view(&blob.pqc_public_key, blob.view_pk.as_canonical_bytes())
+            .unwrap();
     }
 
     #[test]
@@ -872,7 +893,11 @@ mod tests {
         let mut blob =
             rederive_account(&seed, DerivationNetwork::Mainnet, SeedFormat::Bip39).unwrap();
         blob.pqc_public_key[0] ^= 0x01;
-        assert!(check_pqc_public_key_matches_view(&blob.pqc_public_key, &blob.view_pk).is_err());
+        assert!(check_pqc_public_key_matches_view(
+            &blob.pqc_public_key,
+            blob.view_pk.as_canonical_bytes()
+        )
+        .is_err());
     }
 
     #[test]
