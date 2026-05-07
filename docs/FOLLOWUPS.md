@@ -452,6 +452,29 @@ citing in a review.
 
 ## V3.1 — audit response and stressnet gates
 
+- **`derive_output_handle` Python reference script.** Stage 1 PR 3
+  M3a commit 2 lands the Rust implementation of `derive_output_handle`
+  (cSHAKE256, per `STAGE_1_PR_3_KEY_ENGINE.md` §7.12) with self-generated
+  reference vectors locked in `rust/shekyl-crypto-pq/src/handle.rs`'s
+  test module. A cross-language reference script in
+  `tools/reference/derive_output_handle.py` was the originally-intended
+  companion deliverable, deferred at landing time because Python's
+  `hashlib` does not include cSHAKE (SP 800-185) and the existing
+  `tools/reference/` stdlib-only convention precludes reaching for
+  `pycryptodome`. Resolution path: either (a) implement `KECCAK[c=512]`
+  + cSHAKE construction over `hashlib.shake_256`'s underlying primitive
+  in pure Python (~150 LOC), or (b) update `tools/reference/README.md`
+  to permit `pycryptodome` as a documented dep and use its `cSHAKE256`
+  directly. (a) preserves the stdlib-only invariant; (b) is faster to
+  ship. The script's value is forward-investment — cross-implementation
+  reproducibility for future non-Rust consumers (Python tooling,
+  JavaScript wallet, hardware-wallet integration) — so urgency is
+  bounded by when such a consumer materializes. The Rust implementation
+  remains the canonical version; the Python script documents the
+  byte-exact invocation in a second language. Cross-references:
+  M3a commit 2; `tools/reference/derive_output_secrets.py` (precedent
+  pattern); `STAGE_1_PR_3_KEY_ENGINE.md` §7.12. Target: V3.1.
+
 - **`Engine::ledger()` accessor cleanup.** Stage 1 PR 2 (commit
   `8632b8692`) preserved the previously-public `Engine::ledger()
   -> &WalletLedger` accessor by replacing the field projection
