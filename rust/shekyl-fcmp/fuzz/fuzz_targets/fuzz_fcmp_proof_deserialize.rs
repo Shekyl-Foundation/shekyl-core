@@ -5,7 +5,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use shekyl_fcmp::proof::{verify, ShekylFcmpProof};
+use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
 use shekyl_fcmp::leaf::PqcLeafScalar;
 
 fuzz_target!(|data: &[u8]| {
@@ -17,7 +17,15 @@ fuzz_target!(|data: &[u8]| {
             num_inputs: 1,
             tree_depth: 8,
         };
-        let _ = verify(&proof, &[[0u8; 32]], &[[0u8; 32]], &[PqcLeafScalar([0u8; 32])], &[0u8; 32], 8, [0u8; 32]);
+        let _ = verify(
+            &proof,
+            &[KeyImage::from_canonical_bytes([0u8; 32])],
+            &[[0u8; 32]],
+            &[PqcLeafScalar([0u8; 32])],
+            &[0u8; 32],
+            8,
+            [0u8; 32],
+        );
         return;
     }
 
@@ -38,14 +46,14 @@ fuzz_target!(|data: &[u8]| {
         signable_tx_hash.copy_from_slice(&data[35..67]);
     }
 
-    let key_images: Vec<[u8; 32]> = (0..num_inputs as usize)
+    let key_images: Vec<KeyImage> = (0..num_inputs as usize)
         .map(|i| {
             let mut ki = [0u8; 32];
             let offset = 67 + i * 32;
             if let Some(chunk) = data.get(offset..offset + 32) {
                 ki[..chunk.len()].copy_from_slice(chunk);
             }
-            ki
+            KeyImage::from_canonical_bytes(ki)
         })
         .collect();
 

@@ -35,6 +35,12 @@ use shekyl_fcmp_plus_plus::{
 };
 use shekyl_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
 
+/// Re-export of [`shekyl_crypto_pq::key_image::KeyImage`] so callers of
+/// [`verify`] can name the type without taking a direct dependency on
+/// `shekyl-crypto-pq` (e.g. fuzz harnesses that already depend on
+/// `shekyl-fcmp`).
+pub use shekyl_crypto_pq::key_image::KeyImage;
+
 /// Errors during FCMP++ proof construction.
 #[derive(Debug, Error)]
 pub enum ProveError {
@@ -642,9 +648,14 @@ pub struct ProveInputLeafChunk {
 /// 2. SAL (spend-auth-and-linkability) proof per input
 /// 3. FCMP circuit proof (tree membership + H(pqc_pk) binding)
 /// 4. Finalizes batch verifiers (Ed25519, Selene, Helios)
+///
+/// `key_images` are typed [`KeyImage`]s (re-exported from
+/// [`shekyl_crypto_pq::key_image`]); the type-system guarantee prevents
+/// accidental cross-wiring of pseudo-output commitments or other
+/// 32-byte payloads in the key-image slot.
 pub fn verify(
     proof: &ShekylFcmpProof,
-    key_images: &[[u8; 32]],
+    key_images: &[KeyImage],
     pseudo_outs: &[[u8; 32]],
     pqc_pk_hashes: &[PqcLeafScalar],
     tree_root: &[u8; 32],
@@ -683,7 +694,7 @@ pub fn verify(
 
     let ki_points: Vec<<Ed25519 as Ciphersuite>::G> = key_images
         .iter()
-        .map(decompress_ed25519)
+        .map(|ki| decompress_ed25519(ki.as_bytes()))
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| {
             tracing::debug!("key_image decompression failed");
@@ -816,7 +827,7 @@ mod tests {
         };
         let result = verify(
             &proof,
-            &[[0; 32]],
+            &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32], [0; 32]],
             &[PqcLeafScalar([0; 32]), PqcLeafScalar([0; 32])],
             &[0; 32],
@@ -838,7 +849,7 @@ mod tests {
         };
         let result = verify(
             &proof,
-            &[[0; 32]],
+            &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
             &[PqcLeafScalar([0; 32])],
             &[0; 32],
@@ -929,7 +940,7 @@ mod tests {
         let result = prove(&[input], &tree_root, tree_depth, signable_tx_hash)
             .expect("prove should succeed");
 
-        let key_images = [L.to_bytes()];
+        let key_images = [KeyImage::from_canonical_bytes(L.to_bytes())];
 
         let ok = verify(
             &result.proof,
@@ -944,11 +955,11 @@ mod tests {
         assert!(ok, "valid proof must verify");
 
         // Tampered key image must fail
-        let mut bad_ki = key_images[0];
+        let mut bad_ki = *key_images[0].as_bytes();
         bad_ki[0] ^= 0xFF;
         let tampered = verify(
             &result.proof,
-            &[bad_ki],
+            &[KeyImage::from_canonical_bytes(bad_ki)],
             &result.pseudo_outs,
             &[PqcLeafScalar(h_pqc_bytes)],
             &tree_root,
@@ -1016,7 +1027,7 @@ mod tests {
         };
         let result = verify(
             &proof,
-            &[[0; 32]],
+            &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
             &[PqcLeafScalar([0; 32])],
             &[0; 32],
@@ -1035,7 +1046,7 @@ mod tests {
         };
         let result = verify(
             &proof,
-            &[[0; 32]],
+            &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32], [0; 32]],
             &[PqcLeafScalar([0; 32])],
             &[0; 32],
@@ -1057,7 +1068,7 @@ mod tests {
         };
         let result = verify(
             &proof,
-            &[[0; 32]],
+            &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
             &[PqcLeafScalar([0; 32]), PqcLeafScalar([0; 32])],
             &[0; 32],
@@ -1079,7 +1090,7 @@ mod tests {
         };
         let result = verify(
             &proof,
-            &[[0; 32]],
+            &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
             &[PqcLeafScalar([0; 32])],
             &[0; 32],
@@ -1099,7 +1110,7 @@ mod tests {
         };
         let result = verify(
             &proof,
-            &[[0; 32]],
+            &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
             &[PqcLeafScalar([0; 32])],
             &[0; 32],
@@ -1121,7 +1132,7 @@ mod tests {
         };
         let result = verify(
             &proof,
-            &[[0; 32]],
+            &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
             &[PqcLeafScalar([0; 32])],
             &[0; 32],
@@ -1200,7 +1211,7 @@ mod tests {
         let different_hash = [0xCDu8; 32];
         let wrong_hash = verify(
             &result.proof,
-            &[L.to_bytes()],
+            &[KeyImage::from_canonical_bytes(L.to_bytes())],
             &result.pseudo_outs,
             &[PqcLeafScalar(h_pqc_bytes)],
             &tree_root,
@@ -1343,7 +1354,7 @@ mod tests {
         let result = prove(&[input], &tree_root, tree_depth, signable_tx_hash)
             .expect("prove with O=xG+yT and real y must succeed");
 
-        let key_images = [L.to_bytes()];
+        let key_images = [KeyImage::from_canonical_bytes(L.to_bytes())];
         let ok = verify(
             &result.proof,
             &key_images,
